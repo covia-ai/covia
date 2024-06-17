@@ -3,4 +3,16 @@
   <groupId>ai.covia</groupId>
   <artifactId>covia</artifactId>
   <version>0.0.1-SNAPSHOT</version>
+  <packaging>pom</packaging>
+  
+  	<properties>
+		<maven.compiler.release>21</maven.compiler.release>
+		<maven.compiler.source>21</maven.compiler.source>
+     	<maven.compiler.target>21</maven.compiler.target>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  	</properties>
+  
+	<modules>
+		<module>workbench</module>
+	</modules>
 </project>
