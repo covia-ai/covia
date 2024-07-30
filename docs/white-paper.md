@@ -106,9 +106,9 @@ An agent is a system component that supports the Covia protocol, and can respond
 
 Typically, an agent represents one or more venues, under the control and governance of a single organisation. An organisation may operate many agents, perhaps representing different functions, geographies or IT infrastructure domains.
 
-Agents MAY act as middleware providing access to existing back-end systems such as databases or enterprise services. This role is critical, because it allows existing data assets and infrastructure to be harnessed in the Covia ecosystem. There is significant economic and strategic value in the fact that agents can enable access to such resources *without* requiring significant changes to existing systems.
+Agents provide access to back-end systems such as storage, GPU compute clusters, databases or enterprise services. This role is critical, because it allows existing data assets and infrastructure to be harnessed in the Covia ecosystem. There is significant economic and strategic value in the fact that agents can enable access to such resources *without* requiring significant changes to existing systems.
 
-Existing assets may be exposed as either:
+Assets may be exposed as either:
 - A pure data asset - this is likely to be most appropriate for immutable data, e.g. a specific version of a file or data set
 - An operation, which allows dynamic / real-time access to an underlying data source - this is appropriate for dynamically changing data where an higher level process may need to acquire the latest version
 
@@ -131,7 +131,7 @@ Drivers MUST offer a set of standard functionality, most importantly:
 - Resolve standard references to an asset / venue
 - Retrieve / query an existing asset (or its metadata)
 - Create an asset (with metadata)
-- Upload an asset (to a venue which authorised this)
+- Upload an asset (to a venue which authorises this)
 - Invoke a compute service
 
 Additional, drivers MAY offer additional functionality as extensions
