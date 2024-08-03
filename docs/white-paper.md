@@ -168,7 +168,7 @@ Orchestration is executed by agents, which must also normally include a driver (
 
 Orchestration agents may impose appropriate access controls, as with any agent. The orchestration agent will also usually require appropriate authorisation to execute the underlying operations.
 
-An orchestration MAY be considered as an operation in its own right, and hence used as a composable building block to crate a higher level orchestration.
+An orchestration MAY be considered as an operation in its own right, and hence used as a composable building block to create a higher level orchestration.
 
 It is possible for an orchestration to include assets which are not directly accessible to other parties in the orchestration. This capability is particularly important when access to some assets may be highly restricted (e.g. patient medical records) and it is necessary to send compute operations to the data to be executed in a secure trusted execution environment.
 
