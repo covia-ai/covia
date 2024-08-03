@@ -2,9 +2,9 @@
 
 ## Vision
 
-Covia is a protocol for **federated orchestration** AI supply chains at global scale, the "HTTP for AI".
+Covia is a protocol for **federated orchestration** of AI supply chains at global scale, the "HTTP for AI".
 
-The need for Covia is critical: all organisations will need to adopt AI to secure their competitive advantage in the digital economy of the future. However, most organisations do not have the capabilities to do so. Data assets, skills, compute resources, governance are all essential but only a few large organisations possess all of these assets and the ability to apply them consistently at scale.
+The need for Covia is critical: all organisations will need to adopt AI to secure their competitive advantage in the digital economy of the future. However, most organisations do not have the capabilities to do so. Data assets, skills, compute resources, and governance are all essential but only a few large organisations possess all of these assets and the ability to apply them consistently at scale.
 
 With Covia, organisations of all sizes can orchestrate powerful AI supply chains, harnessing the best resources available in a global ecosystem, using open standard Internet technology.
 
@@ -14,14 +14,14 @@ With Covia, organisations of all sizes can orchestrate powerful AI supply chains
 
 Covia is designed around the concept of a Universal Data Asset (UDA), a model that allows for the representation of *any* compute resource or data set in a standard form.
 
-An asset is defined the following:
+An asset is defined as the following:
 - Immutable metadata that describes the asset
 - Asset Content, defined by the type of asset
 
-Assets are **immutable**. It's possibly to modify assets, but this always creates a new asset version. This property is critical for multiple reasons:
-- Support for full cryptographic verification of asset integrity
-- Support trusted acquisition of assets from decentralised sources using cryptographic hashes as content-addressable IDs
-- Allow reliable distributed caching and replication (immutable data never becomes stale....)
+Assets are **immutable**. It's possible to modify assets, but this always creates a new asset version. This property is critical for multiple reasons:
+- Supports full cryptographic verification of asset integrity
+- Supports trusted acquisition of assets from decentralised sources using cryptographic hashes as content-addressable IDs
+- Allows reliable distributed caching and replication (immutable data never becomes stale....)
 
 Examples of assets:
 - A training data set used for model building
@@ -56,7 +56,7 @@ This ensures that every version of every asset can be uniquely identified and ve
 A venue is a location that manages assets.
 
 Venues, by design, may differ in a number of important ways:
-- The types of compute facilities or services or data services provides
+- The types of compute facilities or services or data services provided
 - Physical limitations, such as storage capacity
 - Different governance arrangements or access control rules
 
@@ -110,7 +110,7 @@ Agents MAY act as middleware providing access to existing back-end systems such 
 
 Existing assets may be exposed as either:
 - A pure data asset - this is likely to be most appropriate for immutable data, e.g. a specific version of a file or data set
-- An operation, which allows dynamic / real-time access to an underlying data source - this is appropriate for dynamically changing data where an higher level process may need to acquire the latest version
+- An operation, which allows dynamic / real-time access to an underlying data source - this is appropriate for dynamically changing data where a higher level process may need to acquire the latest version
 
 Agents SHOULD implement access control appropriate to the venues they represent. There is a spectrum of possible levels of access:
 - Fully open (free public data, information commons)
@@ -119,7 +119,7 @@ Agents SHOULD implement access control appropriate to the venues they represent.
 - Internal (authorised teams within organisations)
 - Restricted (no access to most assets except through highly controlled operations)
 
-Covia provides opens source reference implementations for agents, however any ecosystem participant is free to develop their own custom agents providing these follow the standard protocol.
+Covia provides open source reference implementations for agents, however any ecosystem participant is free to develop their own custom agents providing these follow the standard protocol.
 
 ### Drivers
 
@@ -134,7 +134,7 @@ Drivers MUST offer a set of standard functionality, most importantly:
 - Upload an asset (to a venue which authorised this)
 - Invoke a compute service
 
-Additional, drivers MAY offer additional functionality as extensions
+Additional, drivers MAY offer additional functionality as extensions:
 - Ability to manage access control / governance for specific venues
 - Ability to create a temporary working venue for short term collaboration / development purposes
 - Advanced search capabilities
@@ -160,7 +160,7 @@ Agents which are capable of
 
 Orchestration is the execution of arbitrary graphs of operations across arbitrary sets of participants.
 
-This is possible because of the features of the Covia protocol that ensure data assets and operations are designed behave in a standardised way, and can be composed to build higher level processes.
+This is possible because of the features of the Covia protocol that ensure data assets and operations are designed to behave in a standardised way, and can be composed to build higher level processes.
 
 As it is an operation, an orchestration can define arbitrary inputs and outputs. These are passed to underlying operations as required.
 
@@ -168,11 +168,11 @@ Orchestration is executed by agents, which must also normally include a driver (
 
 Orchestration agents may impose appropriate access controls, as with any agent. The orchestration agent will also usually require appropriate authorisation to execute the underlying operations.
 
-An orchestration MAY be considered as an operation in its own right, and hence used as a composable building block to crate a higher level orchestration.
+An orchestration MAY be considered as an operation in its own right, and hence used as a composable building block to create a higher level orchestration.
 
 It is possible for an orchestration to include assets which are not directly accessible to other parties in the orchestration. This capability is particularly important when access to some assets may be highly restricted (e.g. patient medical records) and it is necessary to send compute operations to the data to be executed in a secure trusted execution environment.
 
-It is possible for any party to validate orchestration results by checking that metadata of output assets corresponds to the orchestration execution graph and any inputs used. This creates an automatic, verifiable provenance chain for any AI process, even where this spans multiple parties.
+It is possible for any party to validate orchestration results by checking that the metadata of output assets corresponds to the orchestration execution graph and any inputs used. This creates an automatic, verifiable provenance chain for any AI process, even where this spans multiple parties.
 
 
 ### Lattice technology
@@ -182,7 +182,7 @@ A lattice is a mathematical, algebraic structure with important properties: They
 The Covia protocol makes use of lattice technology in several areas:
 - For execution of distributed operations required in orchestration
 - For P2P transmission and replication of large verifiable merkle tree based data structures (including DLFS drive)
-- For the consensus mechanism of the Convex public virtual machine (used optionally for smart contracts and decventralised tokenisation of AI services)
+- For the consensus mechanism of the Convex public virtual machine (used optionally for smart contracts and decentralised tokenisation of AI services)
 
 
 
