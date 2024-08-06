@@ -168,11 +168,23 @@ Orchestration is executed by agents, which must also normally include a driver (
 
 Orchestration agents may impose appropriate access controls, as with any agent. The orchestration agent will also usually require appropriate authorisation to execute the underlying operations.
 
-An orchestration MAY be considered as an operation in its own right, and hence used as a composable building block to crate a higher level orchestration.
+An orchestration MAY be considered as an operation in its own right, and hence used as a composable building block to create a higher level orchestration.
 
 It is possible for an orchestration to include assets which are not directly accessible to other parties in the orchestration. This capability is particularly important when access to some assets may be highly restricted (e.g. patient medical records) and it is necessary to send compute operations to the data to be executed in a secure trusted execution environment.
 
-It is possible for any party to validate orchestration results by checking that metadata of output assets corresponds to the orchestration execution graph and any inputs used. This creates an automatic, verifiable provenance chain for any AI process, even where this spans multiple parties.
+It is possible for any party to validate orchestration results by checking that metadata of output assets corresponds to the orchestration execution graph and any inputs used. This creates an automatic, verifiable provenance chain for any AI process, even where this spans multiple parties. This validation process involves several key steps:
+
+**Validation of Orchestration Results**
+
+1. **Metadata Verification**: The metadata associated with each output asset contains detailed information about the orchestration execution graph and the inputs utilized. By examining this metadata, parties can trace back the operations and data sources involved in producing the output.
+
+2. **Execution Graph Analysis**: The orchestration execution graph provides a comprehensive map of the operations performed during the AI process. This includes the sequence of steps, the specific algorithms or models applied, and any intermediate data transformations. By analyzing this graph, parties can verify the procedural integrity of the orchestration.
+
+3. **Input Correlation**: The metadata records the inputs used in the orchestration process. By comparing these recorded inputs with the actual data used, parties can ensure the correctness of the data flow. This step is crucial for confirming that the outputs are based on accurate and intended inputs.
+
+4. **Consistency Checks**: To further ensure the validity of the orchestration results, additional consistency checks can be performed. These checks compare the outputs against expected patterns or benchmarks, identifying any discrepancies that may indicate errors or anomalies.
+
+By following these validation steps, stakeholders can enhance trust and transparency in AI orchestration processes. This robust validation framework ensures that the orchestration results are not only accurate but also auditable, thereby reinforcing confidence in the AI system’s outputs.
 
 
 ### Lattice technology
