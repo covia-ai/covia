@@ -204,9 +204,6 @@ The Covia protocol makes use of lattice technology in several areas:
 - For P2P transmission and replication of large verifiable Merkle tree based data structures (including DLFS drive)
 - For the consensus mechanism of the Convex public virtual machine (used optionally for smart contracts and decentralised tokenisation of AI services)
 
-
-## Economic Aspects
-
 ### Open Ecosystem
 
 The protocol enables an open, peer-to-peer ecosystem of service providers offering an unlimited variety of venues, assets and services. It is an open standard precisely because this is the best model to enable an effective ecosystem.
@@ -218,20 +215,3 @@ As such, the protocol is flexible and can support any business model chosen by p
 - A wide variety of free data assets open to all
 
 It is possible to configure agents to allow access to any existing data assets via the Covia protocol, so that existing data ecosystems are opened up to Covia users in a standard, interoperable way. As such, the protocol serves as a "bridge" between different islands of public and private data. 
-
-### The Covia Token
-
-The Covia Token is a decentralised digital currency for the data economy.
-
-Use of the Covia token is **optional** - The protocol can be operated freely on a P2P basis without any usage of the token. Collaborating organisations may simply choose to utilise each other's venues directly. 
-
-However the token will provide a number of important additional capabilities: 
-- Trade and monetise data assets using decentralised smart contracts
-- Create immutable, public provenance records
-- Register venues to establish a public root of trust
-- Accept payments in tokens, e.g. pre-payment for metered services
-- Allow for decentralised governance mechanisms, such as dispute arbitration
-
-The Covia Token is a CAD29 fungible token running on the Convex protonet / main network. The lattice technology powering Convex makes it extremely well suited as the basis for a decentralised data economy.
-
-
