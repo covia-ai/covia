@@ -1,5 +1,7 @@
 # Covia White Paper
 
+THIS IS A DRAFT OF THE COVIA WHITE PAPER FOR DISCUSSION ONLY. NOT TO BE CONSIDERED FINAL OR AUTHORITATIVE.
+
 ## Vision
 
 Covia is a protocol for **federated orchestration** AI supply chains at global scale, the "HTTP for AI".
@@ -41,36 +43,42 @@ Asset metadata may include:
 - Cryptographic hashes for content (allowing verification and content acquisition)
 - Asset provenance (e.g. references to input data sets used for model training etc.)
 
-Asset metadata is produced by the author of an asset upon asset creation. Normally, this should be automated with the ability for the author to add optional fields if required. 
+Asset metadata is produced by the author of an asset upon asset creation. Typically, this can be automated with the ability for the author to add optional fields if required. 
 
 Relying parties may choose to independently validate claims expressed in the metadata, or alternatively may trust the author. It is important to note that while some metadata can be automatically verified, this is not possible for all forms of metadata, since claims may depend on external information and judgement (e.g. relating to legal IP rights).
 
 ### Asset IDs
 
-All assets are logically identified with a unique ID, which is defined to be the cryptographic hash of the asset metadata.
+All assets are logically identified with a unique ID.
 
-This ensures that every version of every asset can be uniquely identified and verified using its ID alone.
+The ID is defined to be the cryptographic hash of the asset metadata. By also including the hash(es) or any relevant content within the metadata, this effectively forms the root of a Merkle tree, such that all metadata and content can be recursively verified. This also means that the ID can be used to locate the metadata in **content-addressable storage**.
+
+This scheme of identifying assets by a cryptographic ID ensures that every version of every asset can be uniquely identified and verified using its ID alone.
 
 ### Venues
 
-A venue is a location that manages assets.
+A venue is a logical location that manages assets.
+
+Typically, venues are aligned with some organisation or group within an organisation that controls sets of related data. An example might be a predictive modelling team that builds AI models based on consumer behavioural data. The venue would be used for storing training data and predictive models as assets, and offering services that allow other parts of the organisation or trusted partners to request pseudonymised output data sets.
 
 Venues, by design, may differ in a number of important ways:
 - The types of compute facilities or services or data services provides
 - Physical limitations, such as storage capacity
 - Different governance arrangements or access control rules
+- Scale can be anything from a single network connected server up to a global virtual network spanning multiple data centres
 
-Typically, venues are aligned with some organisational unit or function that controls sets of related data. An example might be a predictive modelling team that builds AI models based on consumer behavioural data. The venue would be used for storing training data and predictive models as assets, and offering services that allow other parts of the organisation or trusted partners to request pseudonymised output data sets.
 
 ### References
 
-Being able to utilise an asset requires two pieces of information:
+Utilising an asset through the protocol requires two pieces of information:
 - The asset ID, which identifies the asset (and the means to verify it)
 - A venue which provides access to the asset
 
+Together, this information is a "reference" to an asset.
+
 In most circumstances, this information may safely be made public: the asset ID is a cryptographic hash which by design conveys no useful information about the asset metadata or content contained within, and the venue should enforce appropriate access control to ensure that the asset cannot be accessed by unauthorised users.
 
-It is common for multiple venues to possess a copy of the same asset. This can be recognised by references that contain the same asset ID. Since assets are immutable and verifiable, obtaining an asset from one venue is equivalent to any other. For efficiency reasons, users should prefer utilising a copy of an asset in a local venue if it is already available. 
+It is possible for multiple venues to possess a copy of the same asset. This can be recognised by references that contain the same asset ID. Since assets are immutable and verifiable, obtaining an asset from one venue is equivalent to any other. For efficiency reasons, users should prefer utilising a copy of an asset in a local venue if it is already available. 
 
 References are possible in multiple formats:
 
@@ -104,7 +112,7 @@ dlfs://drive.mycompany.com/venue-assets/101/0c1aee860be175d66152388a6513fd4fa114
 
 An agent is a system component that supports the Covia protocol, and can respond to protocol requests. As such, it represents the "server" aspects of a Covia enabled system in the client/server model.
 
-Typically, an agent represents one or more venues, under the control and governance of a single organisation. An organisation may operate many agents, perhaps representing different functions, geographies or IT infrastructure domains.
+Typically, an agent represents one or more venues, under the control and governance of a single organisation. An organisation may operate multiple agents, perhaps representing different functions, geographies or IT infrastructure domains.
 
 Agents provide access to back-end systems such as storage, GPU compute clusters, databases or enterprise services. This role is critical, because it allows existing data assets and infrastructure to be harnessed in the Covia ecosystem. There is significant economic and strategic value in the fact that agents can enable access to such resources *without* requiring significant changes to existing systems.
 
@@ -194,8 +202,35 @@ A lattice is a mathematical, algebraic structure with important properties: They
 The Covia protocol makes use of lattice technology in several areas:
 - For execution of distributed operations required in orchestration
 - For P2P transmission and replication of large verifiable merkle tree based data structures (including DLFS drive)
-- For the consensus mechanism of the Convex public virtual machine (used optionally for smart contracts and decventralised tokenisation of AI services)
+- For the consensus mechanism of the Convex public virtual machine (used optionally for smart contracts and decentralised tokenisation of AI services)
 
 
+## Economic Aspects
+
+### Open Ecosystem
+
+The protocol enables an open, peer-to-peer ecosystem of service providers offering an unlimited variety of venues, assets and services. It is an open standard precisely because this is the best model to enable an effective ecosystem.
+
+As such, the protocol is flexible and can support any business model chosen by participants. We anticipate:
+- Collaboration between trusted organisations on a contractual basis
+- Services offered publicly on a pay-as-you-go basis
+- Marketplaces of assets with licenses for sale
+- A wide variety of free data assets open to all
+
+It is possible to configure agents to allow access to any existing data assets via the Covia protocol, so that existing data ecosystems are opened up to Covia users in a standard, interoperable way. As such, the protocol serves as a "bridge" between different islands of public and private data. 
+
+### The Covia Token
+
+The Covia Token is a decentralised digital currency for the data economy.
+
+Use of the Covia token is **optional** - The protocol can be operated freely on a P2P basis without any usage of the token. Collaborating organisations may simply choose to utilise each other's venues directly. 
+
+However the token will provide a number of important additional capabilities: 
+- Trade and monetise data assets using decentralised smart contracts
+- Create immutable, public provenance records
+- Register venues to establish a public root of trust
+- Accept payments in tokens, e.g. pre-payment for metered services
+
+The Covia Token is a CAD29 fungible token running on the Convex main network. The lattice technology powering Convex makes it extremely well suited as the basis for a decentralised data economy.
 
 
