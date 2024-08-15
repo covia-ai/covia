@@ -2,7 +2,7 @@
 
 ## Vision
 
-Covia is a protocol for **federated orchestration** AI supply chains at global scale, the "HTTP for AI".
+Covia is a protocol for **federated orchestration** AI supply chains at global scale, the **"HTTP for AI"**.
 
 The need for Covia is critical: all organisations will need to adopt AI to secure their competitive advantage in the digital economy of the future. However, most organisations do not have the capabilities to do so. Data assets, skills, compute resources, governance are all essential but only a few large organisations possess all of these assets and the ability to apply them consistently at scale.
 
