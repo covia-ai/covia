@@ -1,6 +1,6 @@
 # Covia White Paper
 
-THIS IS A DRAFT OF THE COVIA WHITE PAPER FOR DISCUSSION ONLY. NOT TO BE CONSIDERED FINAL OR AUTHORITATIVE.
+THIS IS A DRAFT OF THE COVIA WHITE PAPER FOR DISCUSSION ONLY. NOT TO BE CONSIDERED FINAL.
 
 ## Vision
 
@@ -152,7 +152,7 @@ Driver developers are encouraged to innovate around driver extensions, but signi
 
 ### Operations
 
-An operation is a special form of data asset that can be *invoked*.
+An operation is a special form of data asset that can be *invoked*. A typical operation might be training a model, anonymising a data set, or producing model output in response to a user request.
 
 An operation may define a number of inputs, and a number of outputs. These may be either:
 - Assets
@@ -162,7 +162,7 @@ An operation can be considered similar to a web service, with the important addi
 - Its inputs can include assets anywhere in the Covia ecosystem (since these can be referenced, and accessed using a driver)
 - Its outputs can include the creation of new assets, which can therefore be consumed by subsequent operations
 
-Agents which are capable of 
+Agents may be configured to expose internal services or API functions accessible locally as an operation. By this mechanism, agents make such services available to the broader ecosystem in an interoperable manner, while being able to enforce any additional security checks and access controls that may be required.
 
 ### Orchestration
 
@@ -184,7 +184,7 @@ It is possible for any party to validate orchestration results by checking that 
 
 **Validation of Orchestration Results**
 
-1. **Metadata Verification**: The metadata associated with each output asset contains detailed information about the orchestration execution graph and the inputs utilized. By examining this metadata, parties can trace back the operations and data sources involved in producing the output.
+1. **Metadata Verification**: The metadata associated with each output asset contains detailed information about the orchestration execution graph and the inputs utilised. By examining this metadata, parties can trace back the operations and data sources involved in producing the output.
 
 2. **Execution Graph Analysis**: The orchestration execution graph provides a comprehensive map of the operations performed during the AI process. This includes the sequence of steps, the specific algorithms or models applied, and any intermediate data transformations. By analyzing this graph, parties can verify the procedural integrity of the orchestration.
 
@@ -201,7 +201,7 @@ A lattice is a mathematical, algebraic structure with important properties: They
 
 The Covia protocol makes use of lattice technology in several areas:
 - For execution of distributed operations required in orchestration
-- For P2P transmission and replication of large verifiable merkle tree based data structures (including DLFS drive)
+- For P2P transmission and replication of large verifiable Merkle tree based data structures (including DLFS drive)
 - For the consensus mechanism of the Convex public virtual machine (used optionally for smart contracts and decentralised tokenisation of AI services)
 
 
@@ -230,7 +230,8 @@ However the token will provide a number of important additional capabilities:
 - Create immutable, public provenance records
 - Register venues to establish a public root of trust
 - Accept payments in tokens, e.g. pre-payment for metered services
+- Allow for decentralised governance mechanisms, such as dispute arbitration
 
-The Covia Token is a CAD29 fungible token running on the Convex main network. The lattice technology powering Convex makes it extremely well suited as the basis for a decentralised data economy.
+The Covia Token is a CAD29 fungible token running on the Convex protonet / main network. The lattice technology powering Convex makes it extremely well suited as the basis for a decentralised data economy.
 
 
