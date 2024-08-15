@@ -109,20 +109,20 @@ dlfs://drive.mycompany.com/venue-assets/101/0c1aee860be175d66152388a6513fd4fa114
 
 ### Agents
 
-An agent is a system component that supports the Covia protocol, and can respond to protocol requests. As such, it represents the "server" aspects of a Covia enabled system in the client/server model.
+An agent is a system component that supports the Covia protocol and can respond to protocol requests. As such, it represents the "server" aspects of a Covia enabled system in the client/server model.
 
 Typically, an agent represents one or more venues, under the control and governance of a single organisation. An organisation may operate multiple agents, perhaps representing different functions, geographies or IT infrastructure domains.
 
 Agents provide access to back-end systems such as storage, GPU compute clusters, databases or enterprise services. This role is critical, because it allows existing data assets and infrastructure to be harnessed in the Covia ecosystem. There is significant economic and strategic value in the fact that agents can enable access to such resources *without* requiring significant changes to existing systems.
 
 Assets may be exposed as either:
-- A pure data asset - this is likely to be most appropriate for immutable data, e.g. a specific version of a file or data set
-- An operation, which allows dynamic / real-time access to an underlying data source - this is appropriate for dynamically changing data where an higher level process may need to acquire the latest version
+- A pure data asset - this is likely to be most appropriate for immutable data, e.g. a specific version of a file or data set.
+- An operation, which allows dynamic / real-time access to an underlying data source - this is appropriate for dynamically changing data where a higher level process may need to acquire the latest version.
 
 Agents SHOULD implement access control appropriate to the venues they represent. There is a spectrum of possible levels of access:
 - Fully open (free public data, information commons)
 - Public fee-based (subscription models, tokenised payments etc.)
-- Trusted (research collaborations, trusted business parters)
+- Trusted (research collaborations, trusted business partners)
 - Internal (authorised teams within organisations)
 - Restricted (no access to most assets except through highly controlled operations)
 
@@ -130,9 +130,9 @@ Covia provides opens source reference implementations for agents, however any ec
 
 ### Drivers
 
-A driver is a software module used to access assets and venues via the Covia protocol. Typically this is available as a software library for developers or a plug-in to enterprise software systems. 
+A driver is a software module used to access assets and venues via the Covia protocol. Typically, this is available as a software library for developers or a plug-in to enterprise software systems. 
 
-A driver is the client component of a Covia based system, and communicates directly with agents.
+A driver is the client component of a Covia based system and communicates directly with agents.
 
 Drivers MUST offer a set of standard functionality, most importantly:
 - Resolve standard references to an asset / venue
@@ -141,7 +141,7 @@ Drivers MUST offer a set of standard functionality, most importantly:
 - Upload an asset (to a venue which authorises this)
 - Invoke a compute service
 
-Additional, drivers MAY offer additional functionality as extensions
+Additional, drivers MAY offer additional functionality as extensions:
 - Ability to manage access control / governance for specific venues
 - Ability to create a temporary working venue for short term collaboration / development purposes
 - Advanced search capabilities
@@ -166,7 +166,7 @@ Agents may be configured to expose internal services or API functions accessible
 
 Orchestration is the execution of arbitrary graphs of operations across arbitrary sets of participants.
 
-This is possible because of the features of the Covia protocol that ensure data assets and operations are designed behave in a standardised way, and can be composed to build higher level processes.
+This is possible because of the features of the Covia protocol that ensure data assets and operations are designed to behave in a standardised way and can be composed to build higher level processes.
 
 As it is an operation, an orchestration can define arbitrary inputs and outputs. These are passed to underlying operations as required.
 
@@ -174,9 +174,9 @@ Orchestration is executed by agents, which must also normally include a driver (
 
 Orchestration agents may impose appropriate access controls, as with any agent. The orchestration agent will also usually require appropriate authorisation to execute the underlying operations.
 
-An orchestration MAY be considered as an operation in its own right, and hence used as a composable building block to create a higher level orchestration.
+An orchestration MAY be considered as an operation in its own right, and hence used as a composable building block to create a higher-level orchestration.
 
-It is possible for an orchestration to include assets which are not directly accessible to other parties in the orchestration. This capability is particularly important when access to some assets may be highly restricted (e.g. patient medical records) and it is necessary to send compute operations to the data to be executed in a secure trusted execution environment.
+It is possible for an orchestration to include assets which are not directly accessible to other parties in the orchestration. This capability is particularly important when access to some assets may be highly restricted (e.g. patient medical records), and it is necessary to send compute operations to the data to be executed in a secure trusted execution environment.
 
 It is possible for any party to validate orchestration results by checking that metadata of output assets corresponds to the orchestration execution graph and any inputs used. This creates an automatic, verifiable provenance chain for any AI process, even where this spans multiple parties. This validation process involves several key steps:
 
@@ -184,7 +184,7 @@ It is possible for any party to validate orchestration results by checking that 
 
 1. **Metadata Verification**: The metadata associated with each output asset contains detailed information about the orchestration execution graph and the inputs utilised. By examining this metadata, parties can trace back the operations and data sources involved in producing the output.
 
-2. **Execution Graph Analysis**: The orchestration execution graph provides a comprehensive map of the operations performed during the AI process. This includes the sequence of steps, the specific algorithms or models applied, and any intermediate data transformations. By analyzing this graph, parties can verify the procedural integrity of the orchestration.
+2. **Execution Graph Analysis**: The orchestration execution graph provides a comprehensive map of the operations performed during the AI process. This includes the sequence of steps, the specific algorithms or models applied, and any intermediate data transformations. By analysing this graph, parties can verify the procedural integrity of the orchestration.
 
 3. **Input Correlation**: The metadata records the inputs used in the orchestration process. By comparing these recorded inputs with the actual data used, parties can ensure the correctness of the data flow. This step is crucial for confirming that the outputs are based on accurate and intended inputs.
 
@@ -217,9 +217,11 @@ It is possible to configure agents to allow access to any existing data assets v
 
 The Covia roadmap is based around building interoperable components that implement the Covia protocol.
 
-Many of these will be made available as open source reference implementations, that anyone can user freely or customise for their project. Companies in the ecosystem are free to offer commercially supported versions of these, or create their own solutions as long as they remain consistent with the open standard protocol.
+Many of these will be made available as open source reference implementations, that anyone can user freely or customise for their project. Companies in the ecosystem are free to offer commercially supported versions of these or create their own solutions as long as they remain consistent with the open standard protocol.
 
 ### Universal Protocol Toolbox
+
+The protocol toolbox provides software, tools, and documentation for developers building projects using Covia. 
 
 #### Driver Libraries
 
@@ -240,17 +242,30 @@ We will initially target three major language ecosystems widely used in the ente
 #### Reference Agents
 
 Reference agents are software components that serve as a Covia protocol agent. These are designed to be configured and operated on standard commodity servers, e.g. running Linux. Standard agent features include:
-- Storage
+- Storage on local file systems
 - Metadata management
 - REST API server endpoints
 - Access control mechanisms
 - Ability to invoke operations
+- Ability to proxy and relay operations to other agents
+- Ability to perform decentralised functions on the Convex network
 
 The agents are readily customisable, especially with respect to allowing developers to implement their own custom operations or access control rules.
 
 #### Enterprise adapters
 
-Enterprise adapters are agents that connect to existing systems and allow data assets and services to be utilised via the Covia protocol. As such 
+Enterprise adapters are agents that connect to existing systems and allow data assets and services to be utilised via the Covia protocol. 
+
+Key enterprise adapters will include:
+- AI frameworks (e.g. LangChain)
+- Enterprise storage systems
+- SQL / ODBC databases
+- NoSQL databases
+- GPU / compute clusters
+- Enterprise Service Busses and middleware platforms
+- Enterprise application software (e.g. SAP)
+
+Similar to the reference agents, enterprise adapters offer the ability to customise access control rules. This may be used to offer an additional layer of security on top of the security implemented in the underlying enterprise systems.
 
 #### Standard Documents
 
@@ -269,26 +284,29 @@ Key functionality includes:
 
 ### Data Lattice File System (DLFS)
 
-The Data Lattice file system is a powerful decentralised storage system using Lattice Technology - "Dropbox meets IPFS meets Bittorrent"
+The Data Lattice File System is a powerful decentralised data storage system using Lattice Technology - "Dropbox meets IPFS meets BitTorrent". 
 
 #### DLFS Browser
 
-DLFS Browser is a GUI tools for exploring and managing filesystems on DLFS (local or remote). In addition to standard file management capabilities, the Browser incorporates an embedded driver and tools to interact directly with the Covia protocol, e.g. publishing a DLFS file as a data asset on a venue.
+DLFS Browser is a GUI tool for exploring and managing filesystems on DLFS (local or remote). 
+
+In addition to standard file management capabilities, the Browser incorporates an embedded driver and tools to interact directly with the Covia protocol, e.g. publishing a DLFS file as a data asset on a venue or executing an operation with a given file as input.
 
 #### DLFS Node
 
 The DLFS Node is a back-end storage node for DLFS. This node runs on a server (typically internet connected) and replicates subsets of the DLFS lattice with its peers.
 
-The DLFS Node also serves as a Covia agent, and can be configured to make DLFS based assets accessible to protocol users as a venue with customisable access control rules. 
+The DLFS Node also serves as a Covia agent and can be configured to make DLFS based assets accessible to protocol users as a venue with customisable access control rules. 
 
 ### Decentralised Vector Database
 
 Lattice Technology offers the intriguing possibility of a truly decentralised vector database, allowing the distributed storage, search and retrieval of vector data. Such vector databases are likely to become increasingly important with the demand for AI systems to use data based on vector embeddings.
 
-This solution is based on combining several important technologies
+This solution is based on combining several important technologies:
 - Lattice Technology for replication and validation
 - Kademlia-style P2P routing
 - Locality-sensitive hashing (LSH)
+- Vector similarity search
 
 Decentralised vector database options can also be used directly with the Covia protocol, because database nodes are themselves Covia agents! So a vector similarity search can easily be included in a Covia based orchestration as part a larger AI process pipeline.
 
