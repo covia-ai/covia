@@ -31,7 +31,6 @@ Examples of assets:
 - A compute service backed by a GPU system
 - A Data access service providing extracts
 
-
 ### Metadata
 
 Asset metadata describes assets in their entirety.
@@ -90,7 +89,7 @@ cdp:v/mycompany.analytics.venue-101/a/0c1aee860be175d66152388a6513fd4fa11449c161
 
 // Standard Web URL:
 
-https://data.mycompany.com/cdp/api/v/v/mycompany.analytics.venue-101/a/0c1aee860be175d66152388a6513fd4fa11449c1612cbd04dca92ec92e3d0cca
+https://data.mycompany.com/cdp/api/v1/v/mycompany.analytics.venue-101/a/0c1aee860be175d66152388a6513fd4fa11449c1612cbd04dca92ec92e3d0cca
 
 
 // JSON reference:
@@ -149,7 +148,6 @@ Additional, drivers MAY offer additional functionality as extensions
 
 Driver developers are encouraged to innovate around driver extensions, but significant new developments SHOULD be standardised to help facilitate interoperability and ultimately allow some extensions to become part of the core protocol. 
 
-
 ### Operations
 
 An operation is a special form of data asset that can be *invoked*. A typical operation might be training a model, anonymising a data set, or producing model output in response to a user request.
@@ -194,7 +192,6 @@ It is possible for any party to validate orchestration results by checking that 
 
 By following these validation steps, stakeholders can enhance trust and transparency in AI orchestration processes. This robust validation framework ensures that the orchestration results are not only accurate but also auditable, thereby reinforcing confidence in the AI system’s outputs.
 
-
 ### Lattice technology
 
 A lattice is a mathematical, algebraic structure with important properties: They can be used to form conflict-free replicated data types that automatically converge to consensus. This is a powerful tool for distributed systems, as it allows for consensus to be reached without locking.
@@ -215,3 +212,84 @@ As such, the protocol is flexible and can support any business model chosen by p
 - A wide variety of free data assets open to all
 
 It is possible to configure agents to allow access to any existing data assets via the Covia protocol, so that existing data ecosystems are opened up to Covia users in a standard, interoperable way. As such, the protocol serves as a "bridge" between different islands of public and private data. 
+
+## Solution Roadmap
+
+The Covia roadmap is based around building interoperable components that implement the Covia protocol.
+
+Many of these will be made available as open source reference implementations, that anyone can user freely or customise for their project. Companies in the ecosystem are free to offer commercially supported versions of these, or create their own solutions as long as they remain consistent with the open standard protocol.
+
+### Universal Protocol Toolbox
+
+#### Driver Libraries
+
+Driver libraries are software libraries designed to allow developers to embed the Covia protocol into their products and solutions, while continuing to use their existing preferred tools and programming languages. In effect, they can add a Covia driver to their software with just a few lines of code.
+
+The driver libraries provide client support for all Covia protocol operations. Important examples include:
+- Create and validate metadata
+- Publish / upload an asset to a venue
+- Execute an operation (which could be a complete orchestration) 
+- Read asset metadata 
+- Download asset content
+
+We will initially target three major language ecosystems widely used in the enterprise software / data / AI space:
+- Python
+- Javascript
+- Java
+
+#### Reference Agents
+
+Reference agents are software components that serve as a Covia protocol agent. These are designed to be configured and operated on standard commodity servers, e.g. running Linux. Standard agent features include:
+- Storage
+- Metadata management
+- REST API server endpoints
+- Access control mechanisms
+- Ability to invoke operations
+
+The agents are readily customisable, especially with respect to allowing developers to implement their own custom operations or access control rules.
+
+#### Enterprise adapters
+
+Enterprise adapters are agents that connect to existing systems and allow data assets and services to be utilised via the Covia protocol. As such 
+
+#### Standard Documents
+
+The Covia protocol will be documented and maintained as a public open standard and as a reference for developers.
+
+### Orchestration Engine
+
+The Orchestration Engine is an advanced Covia agent that supports the execution of orchestration graphs.
+
+Key functionality includes:
+- Managing a database of orchestration graphs
+- Executing specific graphs on demand and reporting results
+- Delegating operations within the graph to other Covia agents (possibly remote, or managed in a venue provided by a different organisation)
+- Customisable logging and access controls
+- Making entire orchestrations available as composable operations for others to re-use 
+
+### Data Lattice File System (DLFS)
+
+The Data Lattice file system is a powerful decentralised storage system using Lattice Technology - "Dropbox meets IPFS meets Bittorrent"
+
+#### DLFS Browser
+
+DLFS Browser is a GUI tools for exploring and managing filesystems on DLFS (local or remote). In addition to standard file management capabilities, the Browser incorporates an embedded driver and tools to interact directly with the Covia protocol, e.g. publishing a DLFS file as a data asset on a venue.
+
+#### DLFS Node
+
+The DLFS Node is a back-end storage node for DLFS. This node runs on a server (typically internet connected) and replicates subsets of the DLFS lattice with its peers.
+
+The DLFS Node also serves as a Covia agent, and can be configured to make DLFS based assets accessible to protocol users as a venue with customisable access control rules. 
+
+### Decentralised Vector Database
+
+Lattice Technology offers the intriguing possibility of a truly decentralised vector database, allowing the distributed storage, search and retrieval of vector data. Such vector databases are likely to become increasingly important with the demand for AI systems to use data based on vector embeddings.
+
+This solution is based on combining several important technologies
+- Lattice Technology for replication and validation
+- Kademlia-style P2P routing
+- Locality-sensitive hashing (LSH)
+
+Decentralised vector database options can also be used directly with the Covia protocol, because database nodes are themselves Covia agents! So a vector similarity search can easily be included in a Covia based orchestration as part a larger AI process pipeline.
+
+ 
