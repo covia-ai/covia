@@ -84,12 +84,14 @@ References are possible in multiple formats:
 ```
 // Covia protocol scheme:
 
-cdp:v/mycompany.analytics.venue-101/a/0c1aee860be175d66152388a6513fd4fa11449c1612cbd04dca92ec92e3d0cca
+cdp:v/mycompany.analytics.venue-101
+  /a/0c1aee860be175d66152388a6513fd4fa11449c1612cbd04dca92ec92e3d0cca
 
 
 // Standard Web URL:
 
-https://data.mycompany.com/cdp/api/v1/v/mycompany.analytics.venue-101/a/0c1aee860be175d66152388a6513fd4fa11449c1612cbd04dca92ec92e3d0cca
+https://data.mycompany.com/cdp/api/v1/v/mycompany.analytics.venue-101
+  /a/0c1aee860be175d66152388a6513fd4fa11449c1612cbd04dca92ec92e3d0cca
 
 
 // JSON reference:
@@ -101,10 +103,11 @@ https://data.mycompany.com/cdp/api/v1/v/mycompany.analytics.venue-101/a/0c1aee86
 
 // DLFS Drive path
 
-dlfs://drive.mycompany.com/venue-assets/101/0c1aee860be175d66152388a6513fd4fa11449c1612cbd04dca92ec92e3d0cca 
+dlfs://drive.mycompany.com/venue-assets
+   /101/0c1aee860be175d66152388a6513fd4fa11449c1612cbd04dca92ec92e3d0cca 
 
-// Note: technically a DLFS drive may not be a complete venue, but it can host assets and metadata and drivers
-// may treat therefore utilise it as a venue
+// Note: technically a DLFS drive need not be a complete venue, but it can 
+// host assets and metadata and drivers may therefore utilise it as a venue
 ```
 
 ### Agents
