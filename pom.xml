@@ -14,5 +14,6 @@
   
 	<modules>
 		<module>workbench</module>
+		<module>venue</module>
 	</modules>
 </project>
