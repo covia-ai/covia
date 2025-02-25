@@ -9,9 +9,6 @@
 	</parent>
 	<artifactId>venue</artifactId>
 
-	<build>
-	</build>
-
 	<dependencies>
 		<dependency>
 			<groupId>world.convex</groupId>
