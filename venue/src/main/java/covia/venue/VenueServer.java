@@ -133,7 +133,7 @@ public class VenueServer {
             	DefinitionConfiguration def=definition;
                 def=def.withInfo(
                 		info -> {
-							info.setTitle("TokEngine REST API");
+							info.setTitle("Covia API");
 							info.setVersion("0.1.0");
 		                });
             });
@@ -160,7 +160,9 @@ public class VenueServer {
 
 
 	public void close() {
-		// TODO Auto-generated method stub
-		
+		if (javalin!=null) {
+			javalin.stop();
+			javalin=null;
+		}
 	}
 }

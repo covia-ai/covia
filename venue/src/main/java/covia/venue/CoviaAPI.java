@@ -6,6 +6,7 @@ import static j2html.TagCreator.h1;
 import static j2html.TagCreator.html;
 import static j2html.TagCreator.p;
 
+import covia.api.impl.Ops;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.javalin.openapi.HttpMethod;
@@ -45,5 +46,16 @@ public class CoviaAPI extends ACoviaAPI {
 			ctx.result("404 Not found: "+ctx.path());
 		}
 		ctx.status(404);
+	}
+	
+	@OpenApi(path = ROUTE + "asset", 
+			methods = HttpMethod.GET, 
+			tags = { "Covia"},
+			summary = "Get a quick Covia status report", 
+			operationId = Ops.ADD_ASSET)	
+	protected void addAsset(Context ctx) { 
+		
+		ctx.result("Asset Added");
+		ctx.status(200);
 	}
 }

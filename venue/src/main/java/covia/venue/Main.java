@@ -1,7 +1,5 @@
 package covia.venue;
 
-import covia.venue.VenueServer;
-
 public class Main {
 
 	
