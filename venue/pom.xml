@@ -8,6 +8,69 @@
 		<version>0.0.1-SNAPSHOT</version>
 	</parent>
 	<artifactId>venue</artifactId>
+	
+		<build>
+		<plugins>
+			<plugin>
+				<artifactId>maven-assembly-plugin</artifactId>
+				<version>3.7.1</version>
+				<configuration>
+					<archive>
+						<manifest>
+							<mainClass>covia.venue.Main</mainClass>
+							<!-- Used to add Maven implementation version  -->
+							<addDefaultImplementationEntries>
+								true
+							</addDefaultImplementationEntries>
+						</manifest>
+					</archive>
+					<descriptorRefs>
+						<descriptorRef>jar-with-dependencies</descriptorRef>
+					</descriptorRefs>
+					<outputDirectory>${project.build.directory}</outputDirectory>
+
+					<!-- This creates full covia.jar. We don't want it
+					attached, just built -->
+					<attach>false</attach>
+					<appendAssemblyId>false</appendAssemblyId>
+					<finalName>covia</finalName>
+				</configuration>
+				<executions>
+					<execution>
+						<id>create-archive</id>
+						<!-- Use install phase so it doesn't go in deployed
+						Maven artifacts'  -->
+						<phase>install</phase>
+						<goals>
+							<goal>single</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.14.0</version>
+				<configuration>
+					<annotationProcessorPaths>
+						<annotationProcessorPath>
+							<groupId>io.javalin.community.openapi</groupId>
+							<artifactId>openapi-annotation-processor</artifactId>
+							<version>${javalin.version}</version>
+						</annotationProcessorPath>
+					</annotationProcessorPaths>
+				</configuration>
+				<executions>
+					<execution>
+						<id>default-compile</id>
+						<goals>
+							<goal>compile</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
 
 	<dependencies>
 		<dependency>
@@ -28,6 +91,44 @@
 			<artifactId>junit-jupiter-api</artifactId>
 			<version>${junit.version}</version>
 			<scope>test</scope>
+		</dependency>
+		
+		<dependency>
+			<groupId>world.convex</groupId>
+			<artifactId>convex-peer</artifactId>
+			<version>${convex.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>world.convex</groupId>
+			<artifactId>convex-restapi</artifactId>
+			<version>${convex.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>com.j2html</groupId>
+			<artifactId>j2html</artifactId>
+			<version>1.6.0</version>
+		</dependency>
+
+		<dependency>
+			<groupId>io.javalin</groupId>
+			<artifactId>javalin</artifactId>
+			<version>${javalin.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>io.javalin.community.openapi</groupId>
+			<artifactId>javalin-openapi-plugin</artifactId>
+			<version>${javalin.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>io.javalin.community.openapi</groupId>
+			<artifactId>javalin-swagger-plugin</artifactId>
+			<version>${javalin.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>io.javalin.community.openapi</groupId>
+			<artifactId>javalin-redoc-plugin</artifactId>
+			<version>${javalin.version}</version>
 		</dependency>
 	</dependencies>
 </project>
