@@ -28,7 +28,7 @@ public class Venue {
 
 
 	public Hash storeAsset(ACell meta, ACell content) {
-		AString metaString=JSONUtils.toCVMString(meta);
+		AString metaString=JSONUtils.toJSONString(meta);
 		
 		return storeAsset(metaString,content);
 	}
@@ -44,6 +44,15 @@ public class Venue {
 	public AMap<ABlob, AVector<?>> getAssets() {
 		// TODO Auto-generated method stub
 		return null;
+	}
+
+
+	public static Venue createTemp() {
+		try {
+			return new Venue(EtchStore.createTemp());
+		} catch (IOException e) {
+			throw new Error(e);
+		}
 	}
 	
 	

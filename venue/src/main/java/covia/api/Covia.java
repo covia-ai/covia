@@ -36,7 +36,7 @@ public class Covia {
 	}
 
 	private Future<Result> doAPICall(String opName, ACell data) {
-		SimpleHttpRequest req=SimpleHttpRequest.create(Method.POST, host.resolve("/api/v1/add-asset"));
+		SimpleHttpRequest req=SimpleHttpRequest.create(Method.POST, host.resolve("/api/v1/asset"));
 		req.setBody(JSONUtils.toString(data), ContentType.APPLICATION_JSON);
 		return doRequest(req);
 	}
