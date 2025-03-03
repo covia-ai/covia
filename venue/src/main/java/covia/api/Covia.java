@@ -14,15 +14,12 @@ import convex.core.Result;
 import convex.core.data.ACell;
 import convex.core.util.JSONUtils;
 import convex.java.HTTPClients;
-import covia.api.impl.Ops;
+import convex.restapi.api.ARESTClient;
 
-public class Covia {
-
-	
-	protected final  URI host;
+public class Covia extends ARESTClient  {
 
 	public Covia(URI host) {
-		this.host=host;
+		super(host,"/api/v1/");
 	}
 
 	public Future<Result> addAsset(String jsonString) {
@@ -30,17 +27,11 @@ public class Covia {
 		return addAsset(meta);
 	}
 	public Future<Result> addAsset(ACell meta) {
-		
-		Future<Result> res=doAPICall(Ops.ADD_ASSET,meta);
-		return res;
-	}
-
-	private Future<Result> doAPICall(String opName, ACell data) {
-		SimpleHttpRequest req=SimpleHttpRequest.create(Method.POST, host.resolve("/api/v1/asset"));
-		req.setBody(JSONUtils.toString(data), ContentType.APPLICATION_JSON);
+		SimpleHttpRequest req=SimpleHttpRequest.create(Method.POST, getBaseURI().resolve("asset"));
+		req.setBody(JSONUtils.toString(meta), ContentType.APPLICATION_JSON);
 		return doRequest(req);
 	}
-	
+
 	/**
 	 * Makes a HTTP request as a CompletableFuture
 	 * @param request Request object
