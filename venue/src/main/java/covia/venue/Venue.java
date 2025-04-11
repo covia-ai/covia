@@ -8,6 +8,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
+import convex.core.data.Index;
 import convex.core.store.AStore;
 import convex.core.util.JSONUtils;
 import convex.etch.EtchStore;
@@ -15,6 +16,8 @@ import convex.etch.EtchStore;
 public class Venue {
 
 	protected final AStore store;
+	
+	protected ACell lattice;
 	
 	
 	public Venue() throws IOException {
@@ -36,14 +39,14 @@ public class Venue {
 	public Hash storeAsset(AString meta, ACell content) {
 		Hash id=meta.toBlob().getContentHash();
 		AMap<ABlob,AVector<?>> assets=getAssets();
-		
+		assets=assets.assoc(id, meta); // TODO: asset record design?		
 		return id;
 	}
 
 
 	public AMap<ABlob, AVector<?>> getAssets() {
 		// TODO Auto-generated method stub
-		return null;
+		return Index.none();
 	}
 
 

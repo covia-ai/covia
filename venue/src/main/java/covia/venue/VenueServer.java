@@ -3,6 +3,7 @@ package covia.venue;
 import org.eclipse.jetty.server.ServerConnector;
 
 import convex.api.Convex;
+import covia.venue.auth.LoginProviders;
 import io.javalin.Javalin;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.staticfiles.Location;
@@ -119,10 +120,26 @@ public class VenueServer {
 			}
 		});
 
+		adddLoginRoutes(app);
 		addAPIRoutes(app);	
 		return app;
 	}
 	
+	private void adddLoginRoutes(Javalin app) {
+        // Login route for any provider
+        app.get("/auth/{provider}", LoginProviders::handleLogin);
+ 
+        // Callback route for any provider
+        app.get("/auth/{provider}/callback", LoginProviders::handleCallback);
+        
+        // Simple login page to choose a provider
+        app.get("/login", ctx -> {
+            ctx.html("<h1>Login</h1>" +
+                     "<a href='/auth/google'>Login with Google</a><br>" +
+                     "<a href='/auth/facebook'>Login with Facebook</a>");
+        });
+	}
+
 	protected void addOpenApiPlugins(JavalinConfig config) {
 		String docsPath="openapi-plugin/openapi-default.json";
 		

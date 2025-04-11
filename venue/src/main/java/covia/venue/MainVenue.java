@@ -1,6 +1,6 @@
 package covia.venue;
 
-public class Main {
+public class MainVenue {
 
 	
 	public static void main(String[] args) {
