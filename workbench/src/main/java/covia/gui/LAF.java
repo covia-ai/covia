@@ -5,7 +5,7 @@ import javax.swing.UIManager;
 import javax.swing.UnsupportedLookAndFeelException;
 
 import com.formdev.flatlaf.FlatDarculaLaf;
-import com.formdev.flatlaf.intellijthemes.materialthemeuilite.FlatMaterialOceanicIJTheme;
+import com.formdev.flatlaf.intellijthemes.materialthemeuilite.FlatMTMaterialOceanicIJTheme;
 
 public class LAF {
 
@@ -13,7 +13,7 @@ public class LAF {
 		try {
 			LookAndFeel laf=installFlatLaf();
 			UIManager.setLookAndFeel(laf);
-			FlatMaterialOceanicIJTheme.setup();
+			FlatMTMaterialOceanicIJTheme.setup();
 		} catch (UnsupportedLookAndFeelException e) {
 			e.printStackTrace();
 		}
