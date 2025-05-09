@@ -1,0 +1,12 @@
+{
+  "name": "random",
+  "description":"Produces a random hex String of the specified length",
+  "type":"operation",
+  "operation":{
+      "params" : {"bytes":{"type": "integer",
+	  					     "Description": "The number of bytes of random data to produce",
+                             "position":0,
+                             "required":true}},
+      "results":{"value": {"type": "string"}}
+  },
+}

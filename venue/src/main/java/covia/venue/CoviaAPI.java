@@ -58,7 +58,7 @@ public class CoviaAPI extends ACoviaAPI {
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
 			summary = "Get a quick Covia status report", 
-			operationId = Ops.ADD_ASSET)	
+			operationId = Ops.GET_ASSET)	
 	protected void getAsset(Context ctx) { 
 		
 		ctx.result("Asset Added");

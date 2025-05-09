@@ -23,11 +23,11 @@ public class VenueServerTest {
 	@BeforeAll
 	public void setupServer() {
 		venueServer=VenueServer.create(null);
-		venueServer.start(8080);
+		venueServer.start(8088);
 	}
 	
 	@Test public void testAddAsset() throws InterruptedException, ExecutionException {
-		Covia covia=Covia.create(URI.create("http://localhost:8080"));
+		Covia covia=Covia.create(URI.create("http://localhost:8088"));
 		Future<Result> r=covia.addAsset("{}");
 		
 		Result result=r.get();
