@@ -31,6 +31,7 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 	
 	@OpenApi(path = ROUTE + "status", 
+			versions="covia-v1",
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
 			summary = "Get a quick Covia status report", 
@@ -55,6 +56,7 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 	
 	@OpenApi(path = ROUTE + "asset", 
+			versions="covia-v1",
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
 			summary = "Get a quick Covia status report", 
@@ -66,6 +68,7 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 	
 	@OpenApi(path = ROUTE + "asset", 
+			versions="covia-v1",
 			methods = HttpMethod.POST, 
 			tags = { "Covia"},
 			summary = "Add a Covia asset", 
