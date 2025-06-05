@@ -1,0 +1,21 @@
+{
+	"name":"Iris Dataset",
+	"creator":"UCI Machine Learning Repository",
+	"description":"This is the 'Iris' dataset. Originally published at UCI Machine Learning Repository: Iris Data Set, this small dataset from 1936 is often used for testing out machine learning algorithms and visualizations",
+	"dateCreated":"2025-06-05T06:53:59Z",
+	"dateModified": "2025-06-05T06:53:59Z",
+	"license": {
+	    "name": "CC BY 4.0",
+	    "url": "https://creativecommons.org/licenses/by/4.0/"
+	  },
+	"inLanguage":"en-GB",
+	"keywords":["machine learning", "iris", "dataset", "classification"],
+	"content":{
+		"contentType":"text/csv",
+		"contentHash":"119E30DB8A4EA8B33723603743591A5F8229684E6236D89EF1966A72D7293607",
+		"encoding": "UTF-8"
+	},
+	"additionalInformation":{
+		"notes":["Adopted by Mike Anderson for use as an example Covia Asset"]
+	}
+}
