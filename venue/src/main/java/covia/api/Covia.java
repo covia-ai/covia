@@ -23,7 +23,7 @@ public class Covia extends ARESTClient  {
 		return addAsset(meta);
 	}
 	public Future<Result> addAsset(ACell meta) {
-		SimpleHttpRequest req=SimpleHttpRequest.create(Method.POST, getBaseURI().resolve("asset"));
+		SimpleHttpRequest req=SimpleHttpRequest.create(Method.POST, getBaseURI().resolve("assets"));
 		req.setBody(JSONUtils.toString(meta), ContentType.APPLICATION_JSON);
 		return doRequest(req);
 	}

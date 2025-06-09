@@ -8,25 +8,35 @@ import static j2html.TagCreator.p;
 
 import convex.api.ContentTypes;
 import convex.core.data.ACell;
-import convex.core.util.JSONUtils;
+import convex.core.data.AString;
+import convex.core.data.Hash;
+import convex.core.data.Strings;
 import covia.api.impl.Ops;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.javalin.openapi.HttpMethod;
 import io.javalin.openapi.OpenApi;
+import io.javalin.openapi.OpenApiContent;
+import io.javalin.openapi.OpenApiParam;
+import io.javalin.openapi.OpenApiRequestBody;
+import io.javalin.openapi.OpenApiResponse;
 import j2html.tags.DomContent;
 
 public class CoviaAPI extends ACoviaAPI {
 
 	private static final String ROUTE = "/api/v1/";
 
-	Venue venue=Venue.createTemp();
+	private final Venue venue;
+	
+	public CoviaAPI(Venue venue) {
+		this.venue=venue;
+	}
 
 	@Override
 	public void addRoutes(Javalin javalin) {
 		javalin.get(ROUTE+"status", this::getStatus);
-		javalin.get(ROUTE+"asset", this::getAsset);
-		javalin.post(ROUTE+"asset", this::addAsset);
+		javalin.get(ROUTE+"assets/<id>", this::getAsset);
+		javalin.post(ROUTE+"assets", this::addAsset);
 
 	}
 	
@@ -55,32 +65,64 @@ public class CoviaAPI extends ACoviaAPI {
 		ctx.status(404);
 	}
 	
-	@OpenApi(path = ROUTE + "asset", 
+	@OpenApi(path = ROUTE + "assets/{id}", 
 			versions="covia-v1",
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
-			summary = "Get a quick Covia status report", 
-			operationId = Ops.GET_ASSET)	
+			summary = "Get Covia asset metadata", 
+			operationId = Ops.GET_ASSET,
+			pathParams = {
+					@OpenApiParam(
+							name = "id", 
+							description = "Asset ID, equal to the SHA256 hash of the asset metadata.", 
+							required = true, 
+							type = String.class, 
+							example = "0x1234567812345678123456781234567812345678123456781234567812345678") })	
 	protected void getAsset(Context ctx) { 
+		String id=ctx.pathParam("id");
+		Hash assetID=Hash.parse(ctx.pathParam("id"));
 		
-		ctx.result("Asset Added");
+		AString meta=venue.getMetadata(assetID);
+		if (meta==null) {
+			ctx.status(404);
+			ctx.result("Asset not found: "+id);
+			return;
+		}
+
+		ctx.result(meta.toString());
 		ctx.status(200);
 	}
 	
-	@OpenApi(path = ROUTE + "asset", 
+	@OpenApi(path = ROUTE + "assets", 
 			versions="covia-v1",
 			methods = HttpMethod.POST, 
 			tags = { "Covia"},
 			summary = "Add a Covia asset", 
-			operationId = Ops.ADD_ASSET)	
+			requestBody = @OpenApiRequestBody(
+					description = "Asset metadata",
+					content= @OpenApiContent(
+							type = "application/json" ,
+							from = Object.class
+					)),
+			operationId = Ops.ADD_ASSET,
+			responses = {
+					@OpenApiResponse(
+							status = "201", 
+							description = "Account metadata registered", 
+							content = {
+								@OpenApiContent(
+										type = "application/json", 
+										from = String.class) })
+					})	
 	protected void addAsset(Context ctx) { 
-		ACell body=this.getCVXBody(ctx);
-		venue.storeAsset(body, null);
+		ACell body=null;
+		AString meta=Strings.create(ctx.body());
+		Hash id=venue.storeAsset(meta, body);
 		
 		ctx.header("Content-type", ContentTypes.JSON);
-		ctx.result(JSONUtils.toString(body));
+		ctx.header("Location",ROUTE+"assets/"+id.toHexString());
+		ctx.result("\""+id.toString()+"\"");
 		
-		ctx.header("Location", ROUTE);
 		ctx.status(201);
 	}
 }

@@ -21,14 +21,15 @@ public class VenueServer {
 	protected Javalin javalin;
 
 	protected CoviaWebApp webApp;
-
+	protected Venue venue;
 
 	protected CoviaAPI api;
 
 	public VenueServer(Convex convex) {
 		this.convex=convex;
 		webApp=new CoviaWebApp();
-		api=new CoviaAPI();
+		venue=Venue.createTemp();
+		api=new CoviaAPI(venue);
 	}
 
 	public static VenueServer create(Object object) {
@@ -42,6 +43,10 @@ public class VenueServer {
 		start(null);
 	}
 
+	public Venue getVenue() {
+		return venue;
+	}
+	
 	/**
 	 * Start app with specific port
 	 */
@@ -141,7 +146,7 @@ public class VenueServer {
 	}
 
 	protected void addOpenApiPlugins(JavalinConfig config) {
-		String docsPath="openapi-plugin/openapi-default.json";
+		String docsPath="/openapi-plugin/openapi-covia-v1.json";
 		
 		config.registerPlugin(new OpenApiPlugin(pluginConfig -> {
             pluginConfig

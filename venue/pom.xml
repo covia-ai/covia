@@ -12,6 +12,20 @@
 	<build>
 		<plugins>
 			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.14.0</version>
+				<configuration>
+					<annotationProcessorPaths>
+						<annotationProcessorPath>
+							<groupId>io.javalin.community.openapi</groupId>
+							<artifactId>openapi-annotation-processor</artifactId>
+							<version>${javalin.version}</version>
+						</annotationProcessorPath>
+					</annotationProcessorPaths>
+				</configuration>
+			</plugin>
+			<plugin>
 				<artifactId>maven-assembly-plugin</artifactId>
 				<version>3.7.1</version>
 				<configuration>
@@ -47,30 +61,33 @@
 					</execution>
 				</executions>
 			</plugin>
-			<plugin>
-				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-compiler-plugin</artifactId>
-				<version>3.14.0</version>
-				<configuration>
-					<annotationProcessorPaths>
-						<annotationProcessorPath>
-							<groupId>io.javalin.community.openapi</groupId>
-							<artifactId>openapi-annotation-processor</artifactId>
-							<version>${javalin.version}</version>
-						</annotationProcessorPath>
-					</annotationProcessorPaths>
-				</configuration>
-			</plugin>
+	
 		</plugins>
 	</build>
 
 	<dependencies>
 		<dependency>
+			<groupId>ch.qos.logback</groupId>
+			<artifactId>logback-classic</artifactId>
+			<version>${logback.version}</version>
+		</dependency>
+	
+		<dependency>
 			<groupId>world.convex</groupId>
 			<artifactId>convex-core</artifactId>
 			<version>${convex.version}</version>
 			<scope>compile</scope>
-
+		</dependency>
+		<dependency>
+			<groupId>world.convex</groupId>
+			<artifactId>convex-peer</artifactId>
+			<version>${convex.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>world.convex</groupId>
+			<artifactId>convex-restapi</artifactId>
+			<version>${convex.version}</version>
+			<scope>compile</scope>
 		</dependency>
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>
@@ -97,17 +114,6 @@
 			<version>${mcp.version}</version>
 		</dependency>
 
-
-		<dependency>
-			<groupId>world.convex</groupId>
-			<artifactId>convex-peer</artifactId>
-			<version>${convex.version}</version>
-		</dependency>
-		<dependency>
-			<groupId>world.convex</groupId>
-			<artifactId>convex-restapi</artifactId>
-			<version>${convex.version}</version>
-		</dependency>
 
 		<dependency>
 			<groupId>com.j2html</groupId>
