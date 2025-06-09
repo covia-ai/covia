@@ -1,0 +1,21 @@
+{
+	"name":"Random numbers",
+	"creator":"Mike Anderson",
+	"description":"This is an example operation that generates random numbers.",
+	"dateCreated":"2025-06-09T07:22:59Z",
+	"dateModified": "2025-06-09T07:22:59Z",
+	"operation": {
+		"inputs":{
+			"length":{
+				"type":"string",
+				"description":"Number of random bytes to generate"
+			}
+		},
+		"outputs":{
+			"bytes":{
+				"type":"string",
+				"description":"Hex random output"
+			}
+		}
+	}
+}
