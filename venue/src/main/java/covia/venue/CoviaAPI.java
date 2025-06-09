@@ -12,11 +12,14 @@ import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Strings;
 import covia.api.impl.Ops;
+import covia.venue.model.InvokeRequest;
+import covia.venue.model.InvokeResult;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import io.javalin.openapi.HttpMethod;
 import io.javalin.openapi.OpenApi;
 import io.javalin.openapi.OpenApiContent;
+import io.javalin.openapi.OpenApiExampleProperty;
 import io.javalin.openapi.OpenApiParam;
 import io.javalin.openapi.OpenApiRequestBody;
 import io.javalin.openapi.OpenApiResponse;
@@ -37,6 +40,7 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.get(ROUTE+"status", this::getStatus);
 		javalin.get(ROUTE+"assets/<id>", this::getAsset);
 		javalin.post(ROUTE+"assets", this::addAsset);
+		javalin.post(ROUTE+"invoke", this::invokeOperation);
 
 	}
 	
@@ -93,6 +97,8 @@ public class CoviaAPI extends ACoviaAPI {
 		ctx.status(200);
 	}
 	
+	
+	
 	@OpenApi(path = ROUTE + "assets", 
 			versions="covia-v1",
 			methods = HttpMethod.POST, 
@@ -121,6 +127,46 @@ public class CoviaAPI extends ACoviaAPI {
 		
 		ctx.header("Content-type", ContentTypes.JSON);
 		ctx.header("Location",ROUTE+"assets/"+id.toHexString());
+		ctx.result("\""+id.toString()+"\"");
+		
+		ctx.status(201);
+	}
+	
+	@OpenApi(path = ROUTE + "invoke", 
+			versions="covia-v1",
+			methods = HttpMethod.POST, 
+			tags = { "Covia"},
+			summary = "Invoke a Covia operation", 
+			requestBody = @OpenApiRequestBody(
+					description = "Invoke request",
+					content= @OpenApiContent(
+							type = "application/json" ,
+							from = InvokeRequest.class,
+							exampleObjects = {
+								@OpenApiExampleProperty(name = "operation", value = "random"),
+								@OpenApiExampleProperty(name = "inputs", 
+										objects = {
+												@OpenApiExampleProperty(name = "length", value = "8")
+										})
+							}
+					)),
+			operationId = Ops.INVOKE,
+			responses = {
+					@OpenApiResponse(
+							status = "201", 
+							description = "Operation invoked", 
+							content = {
+								@OpenApiContent(
+										type = "application/json", 
+										from = InvokeResult.class) })
+					})	
+	protected void invokeOperation(Context ctx) { 
+		ACell body=null;
+		AString meta=Strings.create(ctx.body());
+		Hash id=venue.storeAsset(meta, body);
+		
+		ctx.header("Content-type", ContentTypes.JSON);
+		ctx.header("Location",ROUTE+"jobs/"+id.toHexString());
 		ctx.result("\""+id.toString()+"\"");
 		
 		ctx.status(201);
