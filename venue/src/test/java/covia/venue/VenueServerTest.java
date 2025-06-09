@@ -1,5 +1,6 @@
 package covia.venue;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import java.net.URI;
@@ -32,8 +33,11 @@ public class VenueServerTest {
 		
 		Result result=r.get();
 		assertFalse(result.isError(),()->"Bad Result: "+result);
+		assertEquals("0x44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",result.getValue().toString());
+		
+		Future<String> r2=covia.getMeta("0x44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a");
+		assertEquals("{}",r2.get());
 	}
-
 	
 	@AfterAll
 	public void shutDown() {
