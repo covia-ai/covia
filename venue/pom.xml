@@ -31,7 +31,7 @@
 				<configuration>
 					<archive>
 						<manifest>
-							<mainClass>covia.venue.Main</mainClass>
+							<mainClass>covia.venue.MainVenue</mainClass>
 							<!-- Used to add Maven implementation version  -->
 							<addDefaultImplementationEntries>
 								true
@@ -112,6 +112,17 @@
 			<groupId>io.modelcontextprotocol.sdk</groupId>
 			<artifactId>mcp</artifactId>
 			<version>${mcp.version}</version>
+		</dependency>
+		
+		<dependency>
+    		<groupId>dev.langchain4j</groupId>
+   			<artifactId>langchain4j</artifactId>
+			<version>1.0.1</version>
+		</dependency>
+		<dependency>
+    		<groupId>dev.langchain4j</groupId>
+    		<artifactId>langchain4j-ollama</artifactId>
+    		<version>1.0.1-beta6</version>
 		</dependency>
 
 
