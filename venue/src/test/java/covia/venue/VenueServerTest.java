@@ -57,6 +57,16 @@ public class VenueServerTest {
 		SimpleHttpResponse resp=future.get(10000,TimeUnit.MILLISECONDS);
 		assertEquals(200,resp.getCode(),()->"Got error response: "+resp);
 	}
+
+		/**
+	 * Test for presence of MCP interface
+	 */
+	@Test public void testMCPWellKnown() throws URISyntaxException, InterruptedException, ExecutionException, TimeoutException {
+		SimpleHttpRequest req=SimpleHttpRequest.create(Method.GET, new URI("http://localhost:"+PORT+"/.well-known/mcp"));
+		CompletableFuture<SimpleHttpResponse> future=HTTPClients.execute(req);
+		SimpleHttpResponse resp=future.get(10000,TimeUnit.MILLISECONDS);
+		assertEquals(200,resp.getCode(),()->"Got error response: "+resp);
+	}
 	
 	@AfterAll
 	public void shutDown() {
