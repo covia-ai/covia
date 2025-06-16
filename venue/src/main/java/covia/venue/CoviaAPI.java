@@ -41,7 +41,8 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.get(ROUTE+"assets/<id>", this::getAsset);
 		javalin.post(ROUTE+"assets", this::addAsset);
 		javalin.post(ROUTE+"invoke", this::invokeOperation);
-
+		javalin.get("/mcp", this::getMcpServer);
+		javalin.get("/.well-known/mcp", this::getMcpWellKnown);
 	}
 	
 	@OpenApi(path = ROUTE + "status", 
@@ -170,5 +171,40 @@ public class CoviaAPI extends ACoviaAPI {
 		ctx.result("\""+id.toString()+"\"");
 		
 		ctx.status(201);
+	}
+	
+	@OpenApi(path = "/mcp", 
+			versions="covia-v1",
+			methods = HttpMethod.GET, 
+			tags = { "MCP"},
+			summary = "Get MCP server information", 
+			operationId = "mcpServer")	
+	protected void getMcpServer(Context ctx) { 
+		ctx.header("Content-type", ContentTypes.JSON);
+		ctx.result("{\"status\": \"active\", \"version\": \"1.0.0\"}");
+		ctx.status(200);
+	}
+	
+	@OpenApi(path = "/.well-known/mcp", 
+			versions="covia-v1",
+			methods = HttpMethod.GET, 
+			tags = { "MCP"},
+			summary = "Get MCP server capabilities", 
+			operationId = "mcpWellKnown")	
+	protected void getMcpWellKnown(Context ctx) { 
+		ctx.header("Content-type", ContentTypes.JSON);
+		ctx.result("""
+				{	
+					"mcp_version": "1.0",
+					"server_url": "http:localhost:8080/mcp",
+					"description": "MCP server for Covia Venue",
+					"tools_endpoint": "http:localhost:8080/mcp/tools",
+					"auth": {
+						"type": "oauth2",
+						"authorization_endpoint": null
+					}	
+				}
+		""");
+		ctx.status(200);
 	}
 }

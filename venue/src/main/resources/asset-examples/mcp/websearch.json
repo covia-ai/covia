@@ -1,0 +1,16 @@
+{
+  name: "web_search",
+  description: "Search the web for information",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string" }
+    },
+    required: ["query"]
+  },
+  annotations: {
+    title: "Web Search",
+    readOnlyHint: true,
+    openWorldHint: true
+  }
+}
