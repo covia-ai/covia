@@ -41,8 +41,8 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.get(ROUTE+"assets/<id>", this::getAsset);
 		javalin.post(ROUTE+"assets", this::addAsset);
 		javalin.post(ROUTE+"invoke", this::invokeOperation);
-		javalin.get("/mcp", this::getMcpServer);
-		javalin.get("/.well-known/mcp", this::getMcpWellKnown);
+		javalin.post("/mcp", this::postMCP);
+		javalin.get("/.well-known/mcp", this::getMCPWellKnown);
 	}
 	
 	@OpenApi(path = ROUTE + "status", 
@@ -175,13 +175,44 @@ public class CoviaAPI extends ACoviaAPI {
 	
 	@OpenApi(path = "/mcp", 
 			versions="covia-v1",
-			methods = HttpMethod.GET, 
+			methods = HttpMethod.POST, 
 			tags = { "MCP"},
-			summary = "Get MCP server information", 
-			operationId = "mcpServer")	
-	protected void getMcpServer(Context ctx) { 
+			summary = "Handle MCP JSON-RPC requests", 
+			requestBody = @OpenApiRequestBody(
+					description = "JSON-RPC request",
+					content= @OpenApiContent(
+							type = "application/json" ,
+							from = Object.class,
+							exampleObjects = {
+								@OpenApiExampleProperty(name = "jsonrpc", value = "2.0"),
+								@OpenApiExampleProperty(name = "method", value = "getStatus"),
+								@OpenApiExampleProperty(name = "params", value = "{}"),
+								@OpenApiExampleProperty(name = "id", value = "1")
+							}
+					)),
+			operationId = "mcpServer",
+			responses = {
+					@OpenApiResponse(
+							status = "200", 
+							description = "JSON-RPC response", 
+							content = {
+								@OpenApiContent(
+										type = "application/json", 
+										from = Object.class) })
+					})	
+	protected void postMCP(Context ctx) { 
 		ctx.header("Content-type", ContentTypes.JSON);
-		ctx.result("{\"status\": \"active\", \"version\": \"1.0.0\"}");
+		
+		// Parse JSON-RPC request
+		String requestBody = ctx.body();
+		if (requestBody == null || requestBody.isEmpty()) {
+			ctx.status(400);
+			ctx.result("{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32600, \"message\": \"Invalid Request\"}, \"id\": null}");
+			return;
+		}
+		
+		// For now, return a simple response
+		ctx.result("{\"jsonrpc\": \"2.0\", \"result\": {\"status\": \"active\", \"version\": \"1.0.0\"}, \"id\": 1}");
 		ctx.status(200);
 	}
 	
@@ -191,14 +222,14 @@ public class CoviaAPI extends ACoviaAPI {
 			tags = { "MCP"},
 			summary = "Get MCP server capabilities", 
 			operationId = "mcpWellKnown")	
-	protected void getMcpWellKnown(Context ctx) { 
+	protected void getMCPWellKnown(Context ctx) { 
 		ctx.header("Content-type", ContentTypes.JSON);
 		ctx.result("""
 				{	
 					"mcp_version": "1.0",
 					"server_url": "http:localhost:8080/mcp",
 					"description": "MCP server for Covia Venue",
-					"tools_endpoint": "http:localhost:8080/mcp/tools",
+					"tools_endpoint": "http:localhost:8080/mcp",
 					"auth": {
 						"type": "oauth2",
 						"authorization_endpoint": null
