@@ -25,6 +25,7 @@ import convex.core.store.AStore;
 import convex.core.util.JSONUtils;
 import convex.core.util.Utils;
 import convex.etch.EtchStore;
+import covia.adapter.AAdapter;
 
 public class Venue {
 	
@@ -47,6 +48,11 @@ public class Venue {
 	
 	protected ACell lattice=Maps.create(COVIA_KEY, Maps.create(ASSETS_KEY,Index.EMPTY));
 	
+	/**
+	 * Map of named adapters that can handle different types of operations or resources
+	 */
+	protected final HashMap<String, AAdapter> adapters = new HashMap<>();
+	
 	
 	public Venue() throws IOException {
 		this(EtchStore.createTemp());
@@ -55,6 +61,47 @@ public class Venue {
 
 	public Venue(EtchStore store) {
 		this.store=store;
+	}
+
+	/**
+	 * Register an adapter
+	 * @param adapter The adapter instance to register
+	 */
+	public void registerAdapter(AAdapter adapter) {
+		String name = adapter.getName();
+		adapters.put(name, adapter);
+		log.info("Registered adapter: {}", name);
+	}
+	
+	/**
+	 * Get an adapter by name
+	 * @param name The name of the adapter to retrieve
+	 * @return The adapter instance, or null if not found
+	 */
+	public AAdapter getAdapter(String name) {
+		return adapters.get(name);
+	}
+	
+	/**
+	 * Check if an adapter with the given name exists
+	 * @param name The name of the adapter to check
+	 * @return true if the adapter exists, false otherwise
+	 */
+	public boolean hasAdapter(String name) {
+		return adapters.containsKey(name);
+	}
+	
+	/**
+	 * Remove an adapter by name
+	 * @param name The name of the adapter to remove
+	 * @return The removed adapter, or null if not found
+	 */
+	public AAdapter removeAdapter(String name) {
+		AAdapter removed = adapters.remove(name);
+		if (removed != null) {
+			log.info("Removed adapter: {}", name);
+		}
+		return removed;
 	}
 
 
@@ -140,12 +187,32 @@ public class Venue {
 		ACell meta=getMetaValue(opID);
 		if (meta==null) return null;
 		
+		// Get the combined adapter:operation string from metadata
+		ACell adapterCell = RT.getIn(meta, "operation", "adapter");
+		if (adapterCell == null) {
+			throw new IllegalArgumentException("Operation metadata must specify an adapter");
+		}
+		String operation = RT.ensureString(adapterCell).toString();
+		
+		// Extract adapter name from the operation string
+		String adapterName = operation.split(":")[0];
+		
+		// Get the adapter
+		AAdapter adapter = getAdapter(adapterName);
+		if (adapter == null) {
+			throw new IllegalArgumentException("Adapter not found: " + adapterName);
+		}
+		
 		AString jobID=submitJob(opID,input);
 		
 		CompletableFuture.runAsync(()->{
 			AMap<AString,ACell> job=getJobStatus(jobID);
 			try {
-				
+				// Pass the full operation string to the adapter
+				ACell result = adapter.invoke(operation, input);
+				job = job.assoc(JOB_STATUS_FIELD, Strings.create("COMPLETED"));
+				job = job.assoc(Strings.create("result"), result);
+				setJobStatus(jobID, job);
 			} catch (Exception e) {
 				job=job.assoc(JOB_STATUS_FIELD,JOB_FAILED);
 				job=job.assoc(JOB_ERROR_FIELD,Strings.create(e.getMessage()));
@@ -153,7 +220,6 @@ public class Venue {
 			}
 		});
 
-		
 		return getJobStatus(jobID);
 	}
 
