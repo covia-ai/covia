@@ -1,4 +1,4 @@
-package covia.api;
+package covia.client;
 
 import convex.core.data.Hash;
 

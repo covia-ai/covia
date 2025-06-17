@@ -22,7 +22,7 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 
 import convex.core.Result;
 import convex.java.HTTPClients;
-import covia.api.Covia;
+import covia.client.Covia;
  
 @TestInstance(Lifecycle.PER_CLASS)
 public class VenueServerTest {

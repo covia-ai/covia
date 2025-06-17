@@ -11,7 +11,6 @@ import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Strings;
-import covia.api.impl.Ops;
 import covia.venue.model.InvokeRequest;
 import covia.venue.model.InvokeResult;
 import io.javalin.Javalin;
@@ -30,6 +29,12 @@ public class CoviaAPI extends ACoviaAPI {
 	private static final String ROUTE = "/api/v1/";
 
 	private final Venue venue;
+
+	public static final String INVOKE = "invokeOperation";
+
+	public static final String GET_ASSET = "getAsset";
+
+	public static final String ADD_ASSET="addAsset";
 	
 	public CoviaAPI(Venue venue) {
 		this.venue=venue;
@@ -74,8 +79,8 @@ public class CoviaAPI extends ACoviaAPI {
 			versions="covia-v1",
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
-			summary = "Get Covia asset metadata", 
-			operationId = Ops.GET_ASSET,
+			summary = "Get Covia asset metadata gievn an asset ID.", 
+			operationId = CoviaAPI.GET_ASSET,
 			pathParams = {
 					@OpenApiParam(
 							name = "id", 
@@ -111,7 +116,7 @@ public class CoviaAPI extends ACoviaAPI {
 							type = "application/json" ,
 							from = Object.class
 					)),
-			operationId = Ops.ADD_ASSET,
+			operationId = CoviaAPI.ADD_ASSET,
 			responses = {
 					@OpenApiResponse(
 							status = "201", 
@@ -151,7 +156,7 @@ public class CoviaAPI extends ACoviaAPI {
 										})
 							}
 					)),
-			operationId = Ops.INVOKE,
+			operationId = CoviaAPI.INVOKE,
 			responses = {
 					@OpenApiResponse(
 							status = "201", 

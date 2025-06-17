@@ -1,4 +1,4 @@
-package covia.api;
+package covia.client;
 
 import java.net.URI;
 import java.util.concurrent.CompletableFuture;
