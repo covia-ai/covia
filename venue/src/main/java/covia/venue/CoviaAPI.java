@@ -14,6 +14,8 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Strings;
+import convex.core.lang.RT;
+import convex.core.util.JSONUtils;
 import covia.venue.model.InvokeRequest;
 import covia.venue.model.InvokeResult;
 import io.javalin.Javalin;
@@ -193,7 +195,7 @@ public class CoviaAPI extends ACoviaAPI {
 							from = InvokeRequest.class,
 							exampleObjects = {
 								@OpenApiExampleProperty(name = "operation", value = "random"),
-								@OpenApiExampleProperty(name = "inputs", 
+								@OpenApiExampleProperty(name = "input", 
 										objects = {
 												@OpenApiExampleProperty(name = "length", value = "8")
 										})
@@ -210,9 +212,13 @@ public class CoviaAPI extends ACoviaAPI {
 										from = InvokeResult.class) })
 					})	
 	protected void invokeOperation(Context ctx) { 
-		ACell body=null;
-		AString meta=Strings.create(ctx.body());
-		Hash id=venue.storeAsset(meta, body);
+		ACell req=JSONUtils.parse(ctx.body());
+		
+		AString id=RT.ensureString(RT.getIn(req, "operation"));
+		if (id==null) {
+			throw new BadRequestResponse("Invoke request requires an 'operation' parameter as a String");
+		}
+		ACell  input=RT.getIn(req, "input");
 		
 		ctx.header("Content-type", ContentTypes.JSON);
 		ctx.header("Location",ROUTE+"jobs/"+id.toHexString());

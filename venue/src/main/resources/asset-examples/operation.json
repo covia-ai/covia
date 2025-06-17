@@ -6,14 +6,21 @@
 	"dateModified": "2025-06-05T07:22:59Z",
 	"operation": {
 		"input":{
-			"data":{
-				"type":"asset",
-				"description":"The raw data to hash. Can be any binary content."
+			"type":"object",
+			"properties":{
+				"data":{
+					"type":"asset",
+					"description":"The raw data to hash. Can be any binary content."
+				}
 			}
 		},
 		"output":{
-			"hash":{
-				"type":"string"
+			"type":"object",
+			"properties":{
+				"hash":{
+					"type":"string"
+				},
+				"description":"The SHA256 hash of the content"
 			}
 		}
 	}

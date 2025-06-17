@@ -6,5 +6,5 @@ import io.javalin.openapi.OpenApiByFields;
 public class InvokeResult {
 	String id;
 	String status;
-	Object outputs;
+	Object output;
 }
