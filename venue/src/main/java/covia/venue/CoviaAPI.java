@@ -53,6 +53,7 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.get(ROUTE+"assets", this::getAssets);
 		javalin.post(ROUTE+"assets", this::addAsset);
 		javalin.post(ROUTE+"invoke", this::invokeOperation);
+		javalin.get(ROUTE+"jobs/<id>", this::getJobStatus);
 		javalin.post("/mcp", this::postMCP);
 		javalin.get("/.well-known/mcp", this::getMCPWellKnown);
 	}
@@ -214,17 +215,58 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void invokeOperation(Context ctx) { 
 		ACell req=JSONUtils.parse(ctx.body());
 		
-		AString id=RT.ensureString(RT.getIn(req, "operation"));
-		if (id==null) {
+		AString op=RT.ensureString(RT.getIn(req, "operation"));
+		if (op==null) {
 			throw new BadRequestResponse("Invoke request requires an 'operation' parameter as a String");
 		}
-		ACell  input=RT.getIn(req, "input");
+		ACell input=RT.getIn(req, "input");
 		
-		ctx.header("Content-type", ContentTypes.JSON);
-		ctx.header("Location",ROUTE+"jobs/"+id.toHexString());
-		ctx.result("\""+id.toString()+"\"");
+		try {
+			ACell invokeResult=venue.invokeOperation(op,input);
+			if (invokeResult==null) {
+				ctx.result("Operation does not exist");
+				ctx.status(404);
+				return;
+			}
+			
+			ctx.header("Content-type", ContentTypes.JSON);
+			ctx.header("Location",ROUTE+"jobs/"+op.toHexString());
+			ctx.result(JSONUtils.toString(invokeResult));
+			
+			ctx.status(201);
+		} catch (IllegalArgumentException e) {
+			throw new BadRequestResponse(e.getMessage());
+		}
+	}
+	
+	@OpenApi(path = ROUTE + "jobs/{id}", 
+			versions="covia-v1",
+			methods = HttpMethod.GET, 
+			tags = { "Covia"},
+			summary = "Get Covia job status.", 
+			operationId = CoviaAPI.GET_ASSET,
+			pathParams = {
+					@OpenApiParam(
+							name = "id", 
+							description = "Job ID, as created by invoke request.", 
+							required = true, 
+							type = String.class, 
+							example = "0x12345678123456781234567812345678") })	
+	protected void getJobStatus(Context ctx) { 
+		AString id=RT.ensureString(Strings.create(ctx.pathParam("id")));
+		if (id==null) {
+			throw new BadRequestResponse("Job request requires a job ID as a valid hex string");
+		}
 		
-		ctx.status(201);
+		ACell status=venue.getJobStatus(id);
+		if (status==null) {
+			ctx.status(404);
+			ctx.result("Job not found: "+id);
+			return;
+		}
+
+		ctx.result(JSONUtils.toString(status));
+		ctx.status(200);
 	}
 	
 	@OpenApi(path = "/mcp", 
