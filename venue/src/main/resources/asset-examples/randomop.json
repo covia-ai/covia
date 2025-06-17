@@ -1,27 +1,31 @@
 {
-	"name":"Random numbers",
-	"creator":"Mike Anderson",
-	"description":"This is an example operation that generates random numbers.",
+	"name": "Random Bytes Generator",
+	"description": "Generates a specified number of random bytes using a cryptographically secure random number generator",
 	"dateCreated":"2025-06-09T07:22:59Z",
 	"dateModified": "2025-06-09T07:22:59Z",
 	"operation": {
-		"input":{
-			"type":"object",
-			"properties":{
-				"length":{
-					"type":"string",
-					"description":"Number of random bytes to generate"
-				}
-			},
-			"required": ["length"]
+		"adapter": "test:random"
+	},
+	"input": {
+		"type": "object",
+		"properties": {
+			"length": {
+				"type": "string",
+				"description": "Number of random bytes to generate (1-1024)"
+			}
 		},
-		"output":{
-			"type":"object",
-			"properties":{
-				"bytes":{
-					"type":"string",
-					"description":"Hex random output"
-				}
+		"required": ["length"]
+	},
+	"output": {
+		"type": "object",
+		"properties": {
+			"bytes": {
+				"type": "string",
+				"description": "Hex-encoded random bytes"
+			},
+			"length": {
+				"type": "number",
+				"description": "Number of bytes generated"
 			}
 		}
 	}
