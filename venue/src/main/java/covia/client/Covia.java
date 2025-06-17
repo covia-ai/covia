@@ -22,6 +22,9 @@ import convex.java.HTTPClients;
 
 public class Covia extends ARESTClient  {
 
+	private static final double BACKOFF_FACTOR = 1.5;
+	private static final long INITIAL_POLL_DELAY = 300; // 1 second initial delay
+
 	public Covia(URI host) {
 		super(host,"/api/v1/");
 	}
@@ -73,6 +76,79 @@ public class Covia extends ARESTClient  {
 			"input", input
 		);
 		req.setBody(JSONUtils.toString(requestBody), ContentType.APPLICATION_JSON);
-		return doRequest(req);
+		
+		CompletableFuture<Result> result = new CompletableFuture<>();
+		
+		HTTPClients.execute(req).thenAccept(response -> {
+			if (response.getCode() != 201) {
+				result.completeExceptionally(new RuntimeException("Failed to invoke operation: " + response.getCode()));
+				return;
+			}
+			
+			String jobId = response.getFirstHeader("Location").getValue();
+			if (jobId == null) {
+				result.completeExceptionally(new RuntimeException("No job ID returned"));
+				return;
+			}
+			
+			// Extract job ID from Location header
+			jobId = jobId.substring(jobId.lastIndexOf('/') + 1);
+			
+			// Start polling for job status
+			pollJobStatus(jobId, result);
+		}).exceptionally(ex -> {
+			result.completeExceptionally(ex);
+			return null;
+		});
+		
+		return result;
+	}
+	
+	private void pollJobStatus(String jobId, CompletableFuture<Result> result) {
+		Runnable pollingTask = () -> {
+			try {
+				long currentDelay = INITIAL_POLL_DELAY;
+				while (true) {
+					SimpleHttpRequest req = SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("jobs/" + jobId));
+					SimpleHttpResponse response = HTTPClients.execute(req).get();
+					if (response.getCode() != 200) {
+						result.completeExceptionally(new RuntimeException("Failed to get job status: " + response.getCode()));
+						return;
+					}
+					ACell status = JSONUtils.parse(response.getBodyText());
+					String jobStatus = RT.getIn(status, "status").toString();
+					if ("PENDING".equals(jobStatus)) {
+						Thread.sleep(currentDelay);
+						currentDelay = (long) (currentDelay * BACKOFF_FACTOR);
+						continue;
+					} else if ("FAILED".equals(jobStatus)) {
+						String error = RT.getIn(status, "error").toString();
+						result.completeExceptionally(new RuntimeException("Job failed: " + error));
+						return;
+					} else {
+						result.complete(doRequestResult(status));
+						return;
+					}
+				}
+			} catch (Exception e) {
+				result.completeExceptionally(e);
+			}
+		};
+		// Use virtual thread if available, otherwise fallback to regular thread
+		try {
+			Thread.startVirtualThread(pollingTask);
+		} catch (Throwable t) {
+			new Thread(pollingTask).start();
+		}
+	}
+
+	private Result doRequestResult(ACell value) {
+		// Try to use the same pattern as addAsset, which returns a Result from doRequest
+		// If Result cannot be constructed, throw an exception
+		try {
+			return (Result) value;
+		} catch (Exception e) {
+			throw new RuntimeException("Could not convert value to Result", e);
+		}
 	}
 }
