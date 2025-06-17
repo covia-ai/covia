@@ -12,6 +12,10 @@ import org.apache.hc.core5.http.Method;
 import convex.core.Result;
 import convex.core.data.ACell;
 import convex.core.data.Hash;
+import convex.core.data.Keyword;
+import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import convex.java.ARESTClient;
 import convex.java.HTTPClients;
@@ -54,5 +58,21 @@ public class Covia extends ARESTClient  {
 			if (response.getCode()!=200) return null;
 			return response.getBodyText();
 		});
+	}
+
+	/**
+	 * Invokes an operation on the connected venue
+	 * @param operation The name of the operation to invoke
+	 * @param input The input parameters for the operation as an ACell
+	 * @return Future containing the operation execution result
+	 */
+	public Future<Result> invoke(String operation, ACell input) {
+		SimpleHttpRequest req = SimpleHttpRequest.create(Method.POST, getBaseURI().resolve("invoke"));
+		ACell requestBody = Maps.of(
+			"operation", Strings.create(operation),
+			"input", input
+		);
+		req.setBody(JSONUtils.toString(requestBody), ContentType.APPLICATION_JSON);
+		return doRequest(req);
 	}
 }
