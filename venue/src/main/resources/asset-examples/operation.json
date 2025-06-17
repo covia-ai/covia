@@ -5,13 +5,13 @@
 	"dateCreated":"2025-06-05T07:22:59Z",
 	"dateModified": "2025-06-05T07:22:59Z",
 	"operation": {
-		"inputs":{
+		"input":{
 			"data":{
 				"type":"asset",
 				"description":"The raw data to hash. Can be any binary content."
 			}
 		},
-		"outputs":{
+		"output":{
 			"hash":{
 				"type":"string"
 			}

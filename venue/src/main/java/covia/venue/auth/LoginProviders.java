@@ -50,6 +50,7 @@ public class LoginProviders {
 		ctx.redirect(authUrl);
 	}
 
+	@SuppressWarnings("deprecation")
 	public static void handleCallback(Context ctx) throws Exception {
 		String providerName = ctx.pathParam("provider");
 		OAuthProvider provider = PROVIDERS.get(providerName);
