@@ -6,15 +6,22 @@
 	"dateModified": "2025-06-09T07:22:59Z",
 	"operation": {
 		"inputs":{
-			"length":{
-				"type":"string",
-				"description":"Number of random bytes to generate"
-			}
+			"type":"object",
+			"properties":{
+				"length":{
+					"type":"string",
+					"description":"Number of random bytes to generate"
+				}
+			},
+			"required": ["length"]
 		},
 		"outputs":{
-			"bytes":{
-				"type":"string",
-				"description":"Hex random output"
+			"type":"object",
+			"properties":{
+				"bytes":{
+					"type":"string",
+					"description":"Hex random output"
+				}
 			}
 		}
 	}

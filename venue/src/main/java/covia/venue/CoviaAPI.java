@@ -7,13 +7,17 @@ import static j2html.TagCreator.html;
 import static j2html.TagCreator.p;
 
 import convex.api.ContentTypes;
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Strings;
 import covia.venue.model.InvokeRequest;
 import covia.venue.model.InvokeResult;
 import io.javalin.Javalin;
+import io.javalin.http.BadRequestResponse;
 import io.javalin.http.Context;
 import io.javalin.openapi.HttpMethod;
 import io.javalin.openapi.OpenApi;
@@ -44,6 +48,7 @@ public class CoviaAPI extends ACoviaAPI {
 	public void addRoutes(Javalin javalin) {
 		javalin.get(ROUTE+"status", this::getStatus);
 		javalin.get(ROUTE+"assets/<id>", this::getAsset);
+		javalin.get(ROUTE+"assets", this::getAssets);
 		javalin.post(ROUTE+"assets", this::addAsset);
 		javalin.post(ROUTE+"invoke", this::invokeOperation);
 		javalin.post("/mcp", this::postMCP);
@@ -103,7 +108,45 @@ public class CoviaAPI extends ACoviaAPI {
 		ctx.status(200);
 	}
 	
-	
+	@OpenApi(path = ROUTE + "assets", 
+			versions="covia-v1",
+			methods = HttpMethod.GET, 
+			tags = { "Covia"},
+			summary = "Get a list of Covia assets.", 
+			operationId = CoviaAPI.GET_ASSET)
+	protected void getAssets(Context ctx) { 
+		long offset=-1;
+		long limit=-1;
+		try {
+			String off = ctx.queryParam("offset");
+			if (off!=null) offset=Long.parseLong(off);
+			String lim = ctx.queryParam("limit");
+			if (lim!=null) {
+				limit=Long.parseLong(lim);
+				if (limit<0) throw new BadRequestResponse("Negative limit");
+			}
+		} catch (NumberFormatException | NullPointerException e) {
+			throw new BadRequestResponse("Invalid offset or limit");
+		}
+
+		AMap<ABlob, AVector<?>> allAssets = venue.getAssets();  
+		long n=allAssets.count();
+		long start=Math.max(0, offset);
+		long end=(limit<0)?n:start+limit;
+		if (end-start>1000) throw new BadRequestResponse("Too many assets requested: "+(end-start));
+		StringBuilder sb=new StringBuilder();
+		sb.append("[");
+		for (long i=start; i<end; i++) {
+			if (i>start) sb.append(",\n");
+			sb.append('"');
+			sb.append(allAssets.entryAt(i).getKey().toHexString());
+			sb.append('"');
+		}
+		sb.append("]");
+
+		ctx.result(sb.toString());
+		ctx.status(200);
+	}
 	
 	@OpenApi(path = ROUTE + "assets", 
 			versions="covia-v1",

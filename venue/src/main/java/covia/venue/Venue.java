@@ -91,8 +91,8 @@ public class Venue {
 	public static void addDemoAssets(Venue venue) {
 		String BASE="/asset-examples/";
 		try {
-			AString emptyMeta=Strings.create(Utils.readResourceAsString(BASE+"empty.json"));
-			venue.storeAsset(emptyMeta,null);
+			venue.storeAsset(Strings.create(Utils.readResourceAsString(BASE+"empty.json")),null);
+			venue.storeAsset(Strings.create(Utils.readResourceAsString(BASE+"randomop.json")),null);
 		} catch (IOException e) {
 			throw new Error(e);
 		}

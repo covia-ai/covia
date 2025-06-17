@@ -36,16 +36,9 @@ public class VenueTest {
 	
 	@Test
 	public void testTempVenue() throws IOException {
-		
-		
-		
-		
 		Blob content=Blob.EMPTY;
-		
 		Hash id=v.storeAsset(EMPTY_META,content);
-		
 		assertEquals(id,Hashing.sha256(EMPTY_META));
-		
 		ACell md=v.getMetadata(id);
 		assertEquals(EMPTY_META,md);
 		
@@ -57,10 +50,10 @@ public class VenueTest {
 	}
 	
 	@Test public void testOp() throws IOException {
-		String ms=Utils.readResourceAsString("/samples/meta/op1.json");
+		String ms=Utils.readResourceAsString("/asset-examples/randomop.json");
 		assertNotNull(ms);
 		
 		ACell md=JSONUtils.parse(ms);
-		assertEquals("random",RT.getIn(md, "name").toString());
+		assertEquals("Random numbers",RT.getIn(md, "name").toString());
 	}
 }
