@@ -6,6 +6,8 @@ import static j2html.TagCreator.h1;
 import static j2html.TagCreator.html;
 import static j2html.TagCreator.p;
 
+import java.util.List;
+
 import convex.api.ContentTypes;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
@@ -53,6 +55,7 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.post(ROUTE+"assets", this::addAsset);
 		javalin.post(ROUTE+"invoke", this::invokeOperation);
 		javalin.get(ROUTE+"jobs/<id>", this::getJobStatus);
+		javalin.get(ROUTE+"jobs", this::getJobs);
 		javalin.post("/mcp", this::postMCP);
 		javalin.get("/.well-known/mcp", this::getMCPWellKnown);
 	}
@@ -264,6 +267,19 @@ public class CoviaAPI extends ACoviaAPI {
 
 		ctx.header("Content-type", ContentTypes.JSON);
 		ctx.result(JSONUtils.toString(status));
+		ctx.status(200);
+	}
+	
+	@OpenApi(path = ROUTE + "jobs", 
+			methods = HttpMethod.GET, 
+			tags = { "Covia"},
+			summary = "Get Covia jobs.")	
+	protected void getJobs(Context ctx) { 
+		
+		List<AString> jobs = venue.getJobs();
+
+		ctx.header("Content-type", ContentTypes.JSON);
+		ctx.result(JSONUtils.toString(jobs));
 		ctx.status(200);
 	}
 	
