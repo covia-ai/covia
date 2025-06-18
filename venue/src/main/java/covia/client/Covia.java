@@ -11,6 +11,7 @@ import org.apache.hc.core5.http.Method;
 
 import convex.core.Result;
 import convex.core.data.ACell;
+import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -79,22 +80,22 @@ public class Covia extends ARESTClient  {
 		CompletableFuture<Result> result = new CompletableFuture<>();
 		
 		HTTPClients.execute(req).thenAccept(response -> {
+			System.out.println(req);
+			System.out.println(response);
 			if (response.getCode() != 201) {
-				result.completeExceptionally(new RuntimeException("Failed to invoke operation: " + response.getCode()));
+				result.completeExceptionally(new RuntimeException("Failed to invoke operation: " + response));
 				return;
 			}
+			ACell body=JSONUtils.parse(response.getBodyText());
 			
-			String jobId = response.getFirstHeader("Location").getValue();
+			AString jobId=RT.ensureString(RT.getIn(body, "id"));
 			if (jobId == null) {
 				result.completeExceptionally(new RuntimeException("No job ID returned"));
 				return;
 			}
 			
-			// Extract job ID from Location header
-			jobId = jobId.substring(jobId.lastIndexOf('/') + 1);
-			
 			// Start polling for job status
-			pollJobStatus(jobId, result);
+			pollJobStatus(jobId.toString(), result);
 		}).exceptionally(ex -> {
 			result.completeExceptionally(ex);
 			return null;
@@ -111,7 +112,7 @@ public class Covia extends ARESTClient  {
 					SimpleHttpRequest req = SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("jobs/" + jobId));
 					SimpleHttpResponse response = HTTPClients.execute(req).get();
 					if (response.getCode() != 200) {
-						result.completeExceptionally(new RuntimeException("Failed to get job status: " + response.getCode()));
+						result.completeExceptionally(new RuntimeException("Failed to get job status: " + response.getCode()+" for job "+jobId));
 						return;
 					}
 					ACell status = JSONUtils.parse(response.getBodyText());
@@ -121,11 +122,10 @@ public class Covia extends ARESTClient  {
 						currentDelay = (long) (currentDelay * BACKOFF_FACTOR);
 						continue;
 					} else if ("FAILED".equals(jobStatus)) {
-						String error = RT.getIn(status, "error").toString();
-						result.completeExceptionally(new RuntimeException("Job failed: " + error));
+						result.completeExceptionally(new RuntimeException("Job failed: " + status));
 						return;
 					} else {
-						result.complete(doRequestResult(status));
+						result.complete(Result.value(RT.getIn(status, "output")));
 						return;
 					}
 				}
@@ -141,13 +141,4 @@ public class Covia extends ARESTClient  {
 		}
 	}
 
-	private Result doRequestResult(ACell value) {
-		// Try to use the same pattern as addAsset, which returns a Result from doRequest
-		// If Result cannot be constructed, throw an exception
-		try {
-			return (Result) value;
-		} catch (Exception e) {
-			throw new RuntimeException("Could not convert value to Result", e);
-		}
-	}
 }

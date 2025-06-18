@@ -1,5 +1,7 @@
 package covia.client;
 
+import convex.core.crypto.Hashing;
+import convex.core.data.AString;
 import convex.core.data.Hash;
 
 public class Asset {
@@ -20,6 +22,14 @@ public class Asset {
 		
 		if (h==null) throw new IllegalArgumentException("Unable to parse asset ID");
 		return h;
+	}
+	
+	public static Hash calcID(String meta) {
+		return Hashing.sha256(meta.getBytes());
+	}
+	
+	public static Hash calcID(AString meta) {
+		return Hashing.sha256(meta.toBlob().getBytes());
 	}
 
 }

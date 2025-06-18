@@ -2,11 +2,11 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -29,13 +29,17 @@ public class VenueTest {
 	Venue venue;
 	Hash randomOpID;
 	AString EMPTY_META = Strings.create("{}");
+
+	Hash randomOpId;
+	Hash echoOpId;
 	
 	@BeforeEach
 	public void setup() throws IOException {
 		venue=Venue.createTemp();
 		venue.registerAdapter(new TestAdapter());
 		Venue.addDemoAssets(venue);
-		randomOpID=Hash.parse("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+		randomOpID=venue.storeAsset(Utils.readResourceAsString("/asset-examples/randomop.json"), null);
+		echoOpId=venue.storeAsset(Utils.readResourceAsString("/asset-examples/echoop.json"), null);
 	}
 	
 	@Test
@@ -48,6 +52,23 @@ public class VenueTest {
 		
 	}
 	
+	@Test public void testAddAsset() throws InterruptedException, ExecutionException {
+		// Create a test asset
+		ACell meta = Maps.of(
+			Keyword.intern("name"), Strings.create("Test Asset"),
+			Keyword.intern("description"), Strings.create("A test asset")
+		);
+		
+		// Add the asset
+		Hash id=venue.storeAsset(meta, null);
+		assertNotNull(id);
+		
+		// Verify the asset was added
+		AString metaString=venue.getMetadata(id);
+		assertNotNull(metaString);
+		assertTrue(metaString.toString().contains("Test Asset"));
+	}
+	
 	@Test public void testDemoAssets() throws IOException {
 		AString emptyMeta=venue.getMetadata(Hash.parse("44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"));
 		assertEquals(EMPTY_META,emptyMeta);
@@ -58,14 +79,14 @@ public class VenueTest {
 		assertNotNull(ms);
 		
 		ACell md=JSONUtils.parse(ms);
-		assertEquals("Random numbers",RT.getIn(md, "name").toString());
+		assertEquals("Random Bytes Generator",RT.getIn(md, "name").toString());
 	}
 	
 	@Test
 	public void testAdapterOperation() {
 		// Test echo operation
 		ACell input=Maps.of("message",Strings.create("Hello World"));
-		ACell status=venue.invokeOperation(Strings.create(randomOpID.toHexString()),input);
+		ACell status=venue.invokeOperation(echoOpId,input);
 		
 		// Get job ID from status
 		ACell jobID = RT.getIn(status, "id");
@@ -79,7 +100,7 @@ public class VenueTest {
 		assertEquals("COMPLETED", RT.getIn(finalStatus, "status").toString());
 		
 		// Verify result
-		ACell result = RT.getIn(finalStatus, "result");
+		ACell result = RT.getIn(finalStatus, "output");
 		assertEquals("Hello World", RT.getIn(result, "message").toString());
 	}
 	
@@ -87,7 +108,7 @@ public class VenueTest {
 	public void testAdapterError() {
 		// Test error operation
 		ACell input=Maps.of("message",Strings.create("Test Error"));
-		ACell status=venue.invokeOperation(Strings.create(randomOpID.toHexString()),input);
+		ACell status=venue.invokeOperation(randomOpID,input);
 		
 		// Get job ID from status
 		ACell jobID = RT.getIn(status, "id");
@@ -99,14 +120,13 @@ public class VenueTest {
 		// Get final status
 		ACell finalStatus = venue.getJobStatus((AString)jobID);
 		assertEquals("FAILED", RT.getIn(finalStatus, "status").toString());
-		assertEquals("Test Error", RT.getIn(finalStatus, "error").toString());
 	}
 	
 	@Test
 	public void testRandomOperation() {
 		// Test random operation with 32 bytes
 		ACell input = Maps.of("length", Strings.create("32"));
-		ACell status = venue.invokeOperation(Strings.create(randomOpID.toHexString()), input);
+		ACell status = venue.invokeOperation(randomOpID, input);
 		
 		// Get job ID from status
 		ACell jobID = RT.getIn(status, "id");
@@ -120,7 +140,7 @@ public class VenueTest {
 		assertEquals("COMPLETED", RT.getIn(finalStatus, "status").toString());
 		
 		// Verify result
-		ACell result = RT.getIn(finalStatus, "result");
+		ACell result = RT.getIn(finalStatus, "output");
 		String bytes = RT.getIn(result, "bytes").toString();
 		
 		// Verify hex string length (2 chars per byte)

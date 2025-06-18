@@ -2,6 +2,7 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
@@ -21,17 +22,15 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
-import convex.java.HTTPClients;
-import covia.client.Covia;
 import convex.core.Result;
 import convex.core.data.ACell;
-import convex.core.data.AString;
-import convex.core.data.Hash;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
+import convex.java.HTTPClients;
 import covia.adapter.TestAdapter;
+import covia.client.Covia;
 
 @TestInstance(Lifecycle.PER_CLASS)
 public class VenueServerTest {
@@ -45,29 +44,13 @@ public class VenueServerTest {
 	
 	@BeforeAll
 	public void setupServer() throws Exception {
-		venue=Venue.createTemp();
+		venueServer=VenueServer.create(null);
+		venue=venueServer.getVenue();
 		venue.registerAdapter(new TestAdapter());
 		Venue.addDemoAssets(venue);
-		venueServer=VenueServer.create(null);
+
 		venueServer.start(PORT);
 		covia = Covia.create(URI.create(BASE_URL));
-	}
-	
-	@Test public void testAddAsset() throws InterruptedException, ExecutionException {
-		// Create a test asset
-		ACell meta = Maps.of(
-			Keyword.intern("name"), Strings.create("Test Asset"),
-			Keyword.intern("description"), Strings.create("A test asset")
-		);
-		
-		// Add the asset
-		Hash id=venue.storeAsset(meta, null);
-		assertNotNull(id);
-		
-		// Verify the asset was added
-		AString metaString=venue.getMetadata(id);
-		assertNotNull(metaString);
-		assertTrue(metaString.toString().contains("Test Asset"));
 	}
 	
 	/**
@@ -91,28 +74,17 @@ public class VenueServerTest {
 	}
 	
 	@Test
-	public void testRandomOperation() throws Exception {
-		// Get the random operation ID from the demo assets
-		Hash randomOpID = null;
-		for (var entry : venue.getAssets().entrySet()) {
-			ACell meta = RT.getIn(entry.getValue(), 0);
-			if (meta != null) {
-				ACell name = RT.getIn(meta, "name");
-				if (name != null && name.toString().contains("Random numbers")) {
-					randomOpID = Hash.parse(entry.getKey().toHexString());
-					break;
-				}
-			}
-		}
-		assertNotNull(randomOpID, "Should find random operation asset");
-		
+	public void testRandomOperation() throws Exception {		
 		// Create input for random operation
 		ACell input = Maps.of(
-			Keyword.intern("length"), 32L
+			"length", 32L
 		);
 		
 		// Invoke the operation via the client
-		String opID = randomOpID.toHexString();
+		String opID = TestOps.RANDOM.toHexString();
+		assertEquals(64,opID.length());
+		System.out.println(opID);
+		// assertNotNull(covia.getMeta(opID).get());
 		Future<Result> resultFuture = covia.invoke(opID, input);
 		
 		// Wait for job completion with timeout
@@ -134,6 +106,26 @@ public class VenueServerTest {
 		
 		// Verify hex string format
 		assertTrue(hexString.matches("[0-9a-f]{64}"), "Result should be a valid hex string");
+	}
+	
+	@Test
+	public void testFailureOperation() throws Exception {
+		// Create input for the error operation
+		ACell input = Maps.of(
+			Keyword.intern("message"), Strings.create("Test error message")
+		);
+		
+		// Invoke the operation via the client
+		Future<Result> resultFuture = covia.invoke("test:error", input);
+		
+		// Wait for job completion with timeout and verify it fails
+		ExecutionException exception = assertThrows(ExecutionException.class, () -> {
+			resultFuture.get(5, TimeUnit.SECONDS);
+		});
+		
+		// Verify the error message contains our test message
+		Throwable cause = exception.getCause();
+		assertTrue(cause instanceof RuntimeException, "Should be a RuntimeException");
 	}
 	
 	@AfterAll

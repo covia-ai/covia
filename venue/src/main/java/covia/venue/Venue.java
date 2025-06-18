@@ -2,12 +2,10 @@ package covia.venue;
 
 import java.io.IOException;
 import java.util.HashMap;
-import java.util.concurrent.CompletableFuture;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.core.crypto.Hashing;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -26,6 +24,7 @@ import convex.core.util.JSONUtils;
 import convex.core.util.Utils;
 import convex.etch.EtchStore;
 import covia.adapter.AAdapter;
+import covia.client.Asset;
 
 public class Venue {
 	
@@ -107,13 +106,19 @@ public class Venue {
 
 	public Hash storeAsset(ACell meta, ACell content) {
 		AString metaString=JSONUtils.toJSONString(meta);
-		
 		return storeAsset(metaString,content);
+	}
+
+	public Hash storeAsset(String meta, ACell content) {
+		return storeAsset(Strings.create(meta),content);
 	}
 	
 	public synchronized Hash storeAsset(AString meta, ACell content) {
-		Hash id=Hashing.sha256(meta.toBlob().getBytes());
+		Hash id=Asset.calcID(meta);
 		AMap<ABlob,AVector<?>> assets=getAssets();
+		boolean exists=assets.containsKey(id);
+		log.info((exists?"Updated":"Stored")+" asset "+id);
+		
 		setAssets(assets.assoc(id, assetRecord(meta,content))); // TODO: asset record design?		
 		return id;
 	}
@@ -172,20 +177,25 @@ public class Venue {
 	public static void addDemoAssets(Venue venue) {
 		String BASE="/asset-examples/";
 		try {
-			venue.storeAsset(Strings.create(Utils.readResourceAsString(BASE+"empty.json")),null);
-			venue.storeAsset(Strings.create(Utils.readResourceAsString(BASE+"randomop.json")),null);
+			venue.storeAsset(Utils.readResourceAsString(BASE+"empty.json"),null);
+			venue.storeAsset(Utils.readResourceAsString(BASE+"randomop.json"),null);
 		} catch (IOException e) {
 			throw new Error(e);
 		}
 	}
 
-
 	public ACell invokeOperation(AString op, ACell input) {
 		Hash opID=Hash.parse(op);
+		return invokeOperation(opID,input);
+	}
+
+	public ACell invokeOperation(Hash opID, ACell input) {
 		if (opID==null) throw new IllegalArgumentException("Operation must be a valid Hex asset ID");
 		
 		ACell meta=getMetaValue(opID);
-		if (meta==null) return null;
+		if (meta==null) {
+			throw new IllegalStateException("Asset does not exist: "+opID);
+		}
 		
 		// Get the combined adapter:operation string from metadata
 		ACell adapterCell = RT.getIn(meta, "operation", "adapter");
@@ -210,7 +220,7 @@ public class Venue {
 			.thenAccept(result -> {
 				AMap<AString,ACell> job = getJobStatus(jobID);
 				job = job.assoc(JOB_STATUS_FIELD, Strings.create("COMPLETED"));
-				job = job.assoc(Strings.create("result"), result);
+				job = job.assoc(Strings.create("output"), result);
 				setJobStatus(jobID, job);
 			})
 			.exceptionally(e -> {

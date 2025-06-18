@@ -3,6 +3,8 @@ package covia.adapter;
 import convex.core.data.ACell;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.AInteger;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import java.security.SecureRandom;
 import java.util.concurrent.CompletableFuture;
@@ -70,11 +72,11 @@ public class TestAdapter extends AAdapter {
         // Parse length
         int length;
         try {
-            length = Integer.parseInt(RT.ensureString(lengthCell).toString());
+            length = (int)CVMLong.parse(lengthCell).longValue();
             if (length <= 0 || length > 1024) {
                 throw new IllegalArgumentException("Length must be between 1 and 1024");
             }
-        } catch (NumberFormatException e) {
+        } catch (NumberFormatException | NullPointerException e) {
             throw new IllegalArgumentException("Length must be a valid number");
         }
         

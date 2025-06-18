@@ -253,7 +253,11 @@ public class CoviaAPI extends ACoviaAPI {
 							type = String.class, 
 							example = "0x12345678123456781234567812345678") })	
 	protected void getJobStatus(Context ctx) { 
-		AString id=RT.ensureString(Strings.create(ctx.pathParam("id")));
+		String pathID=ctx.pathParam("id");
+		if (pathID==null) {
+			throw new BadRequestResponse("Job request requires a job ID");
+		}
+		AString id=RT.ensureString(Strings.create(pathID));
 		if (id==null) {
 			throw new BadRequestResponse("Job request requires a job ID as a valid hex string");
 		}
