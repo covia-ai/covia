@@ -29,7 +29,6 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.java.HTTPClients;
-import covia.adapter.TestAdapter;
 import covia.client.Covia;
 
 @TestInstance(Lifecycle.PER_CLASS)
@@ -46,7 +45,6 @@ public class VenueServerTest {
 	public void setupServer() throws Exception {
 		venueServer=VenueServer.create(null);
 		venue=venueServer.getVenue();
-		venue.registerAdapter(new TestAdapter());
 		Venue.addDemoAssets(venue);
 
 		venueServer.start(PORT);

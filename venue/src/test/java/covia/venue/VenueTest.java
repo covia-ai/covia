@@ -23,7 +23,6 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import convex.core.util.Utils;
-import covia.adapter.TestAdapter;
 
 public class VenueTest {
 	Venue venue;
@@ -36,7 +35,6 @@ public class VenueTest {
 	@BeforeEach
 	public void setup() throws IOException {
 		venue=Venue.createTemp();
-		venue.registerAdapter(new TestAdapter());
 		Venue.addDemoAssets(venue);
 		randomOpID=venue.storeAsset(Utils.readResourceAsString("/asset-examples/randomop.json"), null);
 		echoOpId=venue.storeAsset(Utils.readResourceAsString("/asset-examples/echoop.json"), null);

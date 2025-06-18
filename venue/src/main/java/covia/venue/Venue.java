@@ -24,6 +24,7 @@ import convex.core.util.JSONUtils;
 import convex.core.util.Utils;
 import convex.etch.EtchStore;
 import covia.adapter.AAdapter;
+import covia.adapter.TestAdapter;
 import covia.client.Asset;
 
 public class Venue {
@@ -177,6 +178,7 @@ public class Venue {
 	public static void addDemoAssets(Venue venue) {
 		String BASE="/asset-examples/";
 		try {
+			venue.registerAdapter(new TestAdapter());
 			venue.storeAsset(Utils.readResourceAsString(BASE+"empty.json"),null);
 			venue.storeAsset(Utils.readResourceAsString(BASE+"randomop.json"),null);
 			venue.storeAsset(Utils.readResourceAsString(BASE+"echoop.json"),null);
