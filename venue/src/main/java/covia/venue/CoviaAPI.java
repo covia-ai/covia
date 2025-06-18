@@ -46,7 +46,6 @@ public class CoviaAPI extends ACoviaAPI {
 		this.venue=venue;
 	}
 
-	@Override
 	public void addRoutes(Javalin javalin) {
 		javalin.get(ROUTE+"status", this::getStatus);
 		javalin.get(ROUTE+"assets/<id>", this::getAsset);
