@@ -179,6 +179,8 @@ public class Venue {
 		try {
 			venue.storeAsset(Utils.readResourceAsString(BASE+"empty.json"),null);
 			venue.storeAsset(Utils.readResourceAsString(BASE+"randomop.json"),null);
+			venue.storeAsset(Utils.readResourceAsString(BASE+"echoop.json"),null);
+			venue.storeAsset(Utils.readResourceAsString(BASE+"randomop.json"),null);
 		} catch (IOException e) {
 			throw new Error(e);
 		}
@@ -210,7 +212,10 @@ public class Venue {
 		// Get the adapter
 		AAdapter adapter = getAdapter(adapterName);
 		if (adapter == null) {
-			throw new IllegalArgumentException("Adapter not found: " + adapterName);
+			AMap<AString,ACell> job = Maps.empty();
+			job = job.assoc(JOB_STATUS_FIELD, JOB_FAILED);
+			job = job.assoc(JOB_ERROR_FIELD, Strings.create("Adapter not available: "+adapterName));
+			return job;
 		}
 		
 		AString jobID=submitJob(opID,input);
