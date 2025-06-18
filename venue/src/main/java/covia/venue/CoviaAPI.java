@@ -262,6 +262,7 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 
+		ctx.header("Content-type", ContentTypes.JSON);
 		ctx.result(JSONUtils.toString(status));
 		ctx.status(200);
 	}

@@ -21,7 +21,7 @@
 				"bytes": {
 					"type": "string",
 					"description": "Hex-encoded random bytes"
-				},
+				}
 			}
 		}
 	}
