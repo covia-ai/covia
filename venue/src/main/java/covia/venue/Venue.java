@@ -205,20 +205,21 @@ public class Venue {
 		
 		AString jobID=submitJob(opID,input);
 		
-		CompletableFuture.runAsync(()->{
-			AMap<AString,ACell> job=getJobStatus(jobID);
-			try {
-				// Pass the full operation string to the adapter
-				ACell result = adapter.invoke(operation, input);
+		// Start the async operation
+		adapter.invoke(operation, input)
+			.thenAccept(result -> {
+				AMap<AString,ACell> job = getJobStatus(jobID);
 				job = job.assoc(JOB_STATUS_FIELD, Strings.create("COMPLETED"));
 				job = job.assoc(Strings.create("result"), result);
 				setJobStatus(jobID, job);
-			} catch (Exception e) {
-				job=job.assoc(JOB_STATUS_FIELD,JOB_FAILED);
-				job=job.assoc(JOB_ERROR_FIELD,Strings.create(e.getMessage()));
-				setJobStatus(jobID,job);
-			}
-		});
+			})
+			.exceptionally(e -> {
+				AMap<AString,ACell> job = getJobStatus(jobID);
+				job = job.assoc(JOB_STATUS_FIELD, JOB_FAILED);
+				job = job.assoc(JOB_ERROR_FIELD, Strings.create(e.getMessage()));
+				setJobStatus(jobID, job);
+				return null;
+			});
 
 		return getJobStatus(jobID);
 	}
