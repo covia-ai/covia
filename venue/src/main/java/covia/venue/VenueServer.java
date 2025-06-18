@@ -149,6 +149,7 @@ public class VenueServer {
 		//String docsPath="/openapi-plugin/openapi-covia-v1.json";
 		
 		config.registerPlugin(new SwaggerPlugin(swaggerConfiguration->{
+			swaggerConfiguration.setDocumentationPath("/openapi");
 			//swaggerConfiguration.setDocumentationPath(docsPath);
 		}));
 

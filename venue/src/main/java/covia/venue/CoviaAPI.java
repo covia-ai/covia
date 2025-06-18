@@ -59,7 +59,6 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 	
 	@OpenApi(path = ROUTE + "status", 
-			versions="covia-v1",
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
 			summary = "Get a quick Covia status report", 
@@ -84,7 +83,6 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 	
 	@OpenApi(path = ROUTE + "assets/{id}", 
-			versions="covia-v1",
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
 			summary = "Get Covia asset metadata gievn an asset ID.", 
@@ -112,7 +110,6 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 	
 	@OpenApi(path = ROUTE + "assets", 
-			versions="covia-v1",
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
 			summary = "Get a list of Covia assets.", 
@@ -152,7 +149,6 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 	
 	@OpenApi(path = ROUTE + "assets", 
-			versions="covia-v1",
 			methods = HttpMethod.POST, 
 			tags = { "Covia"},
 			summary = "Add a Covia asset", 
@@ -185,7 +181,6 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 	
 	@OpenApi(path = ROUTE + "invoke", 
-			versions="covia-v1",
 			methods = HttpMethod.POST, 
 			tags = { "Covia"},
 			summary = "Invoke a Covia operation", 
@@ -240,7 +235,6 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 	
 	@OpenApi(path = ROUTE + "jobs/{id}", 
-			versions="covia-v1",
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
 			summary = "Get Covia job status.", 
@@ -274,7 +268,6 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 	
 	@OpenApi(path = "/mcp", 
-			versions="covia-v1",
 			methods = HttpMethod.POST, 
 			tags = { "MCP"},
 			summary = "Handle MCP JSON-RPC requests", 
@@ -317,7 +310,6 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 	
 	@OpenApi(path = "/.well-known/mcp", 
-			versions="covia-v1",
 			methods = HttpMethod.GET, 
 			tags = { "MCP"},
 			summary = "Get MCP server capabilities", 
