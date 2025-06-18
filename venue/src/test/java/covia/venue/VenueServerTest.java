@@ -57,7 +57,7 @@ public class VenueServerTest {
 	 * Test for presence of Covia API docs
 	 */
 	@Test public void testAPIDoc() throws URISyntaxException, InterruptedException, ExecutionException, TimeoutException {
-		SimpleHttpRequest req=SimpleHttpRequest.create(Method.GET, new URI("http://localhost:"+PORT+"/openapi-plugin/openapi-covia-v1.json?v=covia-v1"));
+		SimpleHttpRequest req=SimpleHttpRequest.create(Method.GET, new URI("http://localhost:"+PORT+"/openapi"));
 		CompletableFuture<SimpleHttpResponse> future=HTTPClients.execute(req);
 		SimpleHttpResponse resp=future.get(10000,TimeUnit.MILLISECONDS);
 		assertEquals(200,resp.getCode(),()->"Got error response: "+resp);

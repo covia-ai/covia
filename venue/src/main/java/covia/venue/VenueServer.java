@@ -146,15 +146,15 @@ public class VenueServer {
 	}
 
 	protected void addOpenApiPlugins(JavalinConfig config) {
-		String docsPath="/openapi-plugin/openapi-covia-v1.json";
+		//String docsPath="/openapi-plugin/openapi-covia-v1.json";
 		
 		config.registerPlugin(new SwaggerPlugin(swaggerConfiguration->{
-			swaggerConfiguration.setDocumentationPath(docsPath);
+			//swaggerConfiguration.setDocumentationPath(docsPath);
 		}));
 
 		config.registerPlugin(new OpenApiPlugin(pluginConfig -> {
             pluginConfig
-            .withDocumentationPath(docsPath)
+            //.withDocumentationPath(docsPath)
             .withDefinitionConfiguration((version, definition) -> {
             	DefinitionConfiguration def=definition;
                 def=def.withInfo(
