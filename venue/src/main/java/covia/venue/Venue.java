@@ -26,6 +26,8 @@ import convex.core.util.JSONUtils;
 import convex.core.util.Utils;
 import convex.etch.EtchStore;
 import covia.adapter.AAdapter;
+import covia.adapter.LangChainAdapter;
+import covia.adapter.Status;
 import covia.adapter.TestAdapter;
 import covia.client.Asset;
 
@@ -41,8 +43,6 @@ public class Venue {
 	
 	public static final AString JOB_STATUS_FIELD = Strings.intern("status");
 	public static final AString JOB_ERROR_FIELD = Strings.intern("error");
-	public static final AString JOB_PENDING = Strings.intern("PENDING");
-	public static final AString JOB_FAILED = Strings.intern("FAILED");
 
 
 	protected final AStore store;
@@ -170,7 +170,7 @@ public class Venue {
 	private ACell getMetaValue(Hash assetID) {
 		AString meta=getMetadata(assetID);
 		try {
-			return JSONUtils.parse(meta.toString());
+			return JSONUtils.parseJSON5(meta.toString());
 		} catch (Exception e) {
 			return null;
 		}
@@ -181,6 +181,8 @@ public class Venue {
 		String BASE="/asset-examples/";
 		try {
 			venue.registerAdapter(new TestAdapter());
+			venue.registerAdapter(new LangChainAdapter());
+			venue.storeAsset(Utils.readResourceAsString(BASE+"qwen.json"),null);
 			venue.storeAsset(Utils.readResourceAsString(BASE+"empty.json"),null);
 			venue.storeAsset(Utils.readResourceAsString(BASE+"randomop.json"),null);
 			venue.storeAsset(Utils.readResourceAsString(BASE+"echoop.json"),null);
@@ -217,7 +219,7 @@ public class Venue {
 		AAdapter adapter = getAdapter(adapterName);
 		if (adapter == null) {
 			AMap<AString,ACell> job = Maps.empty();
-			job = job.assoc(JOB_STATUS_FIELD, JOB_FAILED);
+			job = job.assoc(JOB_STATUS_FIELD, Status.FAILED);
 			job = job.assoc(JOB_ERROR_FIELD, Strings.create("Adapter not available: "+adapterName));
 			return job;
 		}
@@ -225,16 +227,16 @@ public class Venue {
 		AString jobID=submitJob(opID,input);
 		
 		// Start the async operation
-		adapter.invoke(operation, input)
+		adapter.invoke(operation, meta,input)
 			.thenAccept(result -> {
 				AMap<AString,ACell> job = getJobStatus(jobID);
-				job = job.assoc(JOB_STATUS_FIELD, Strings.create("COMPLETED"));
+				job = job.assoc(JOB_STATUS_FIELD, Status.COMPLETE);
 				job = job.assoc(Strings.create("output"), result);
 				setJobStatus(jobID, job);
 			})
 			.exceptionally(e -> {
 				AMap<AString,ACell> job = getJobStatus(jobID);
-				job = job.assoc(JOB_STATUS_FIELD, JOB_FAILED);
+				job = job.assoc(JOB_STATUS_FIELD, Status.FAILED);
 				job = job.assoc(JOB_ERROR_FIELD, Strings.create(e.getMessage()));
 				setJobStatus(jobID, job);
 				return null;
@@ -268,7 +270,7 @@ public class Venue {
 	 */
 	private AString submitJob(Hash opID, ACell input) {
 		AString jobID=Strings.create(Blobs.createRandom(16).toHexString());
-		setJobStatus(jobID, Maps.of("id",jobID,"status",JOB_PENDING));
+		setJobStatus(jobID, Maps.of("id",jobID,"status",Status.PENDING));
 		
 		return jobID;
 	}

@@ -30,7 +30,7 @@ public class Covia extends ARESTClient  {
 	}
 
 	public Future<Result> addAsset(String jsonString) {
-		ACell meta=JSONUtils.parse(jsonString);
+		ACell meta=JSONUtils.parseJSON5(jsonString);
 		return addAsset(meta);
 	}
 	
@@ -86,7 +86,7 @@ public class Covia extends ARESTClient  {
 				result.completeExceptionally(new RuntimeException("Failed to invoke operation: " + response));
 				return;
 			}
-			ACell body=JSONUtils.parse(response.getBodyText());
+			ACell body=JSONUtils.parseJSON5(response.getBodyText());
 			
 			AString jobId=RT.ensureString(RT.getIn(body, "id"));
 			if (jobId == null) {
@@ -115,7 +115,7 @@ public class Covia extends ARESTClient  {
 						result.completeExceptionally(new RuntimeException("Failed to get job status: " + response.getCode()+" for job "+jobId));
 						return;
 					}
-					ACell status = JSONUtils.parse(response.getBodyText());
+					ACell status = JSONUtils.parseJSON5(response.getBodyText());
 					String jobStatus = RT.getIn(status, "status").toString();
 					if ("PENDING".equals(jobStatus)) {
 						Thread.sleep(currentDelay);

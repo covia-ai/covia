@@ -13,8 +13,9 @@ public abstract class AAdapter {
     /**
      * Invoke an operation with the given input
      * @param operation The operation ID in the format "adapter:operation"
+     * @param meta The metadata for the operation
      * @param input The input parameters for the operation
      * @return A CompletableFuture that will complete with the result of the operation
      */
-    public abstract CompletableFuture<ACell> invoke(String operation, ACell input);
+    public abstract CompletableFuture<ACell> invoke(String operation, ACell meta, ACell input);
 }

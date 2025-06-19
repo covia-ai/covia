@@ -210,7 +210,7 @@ public class CoviaAPI extends ACoviaAPI {
 										from = InvokeResult.class) })
 					})	
 	protected void invokeOperation(Context ctx) { 
-		ACell req=JSONUtils.parse(ctx.body());
+		ACell req=JSONUtils.parseJSON5(ctx.body());
 		
 		AString op=RT.ensureString(RT.getIn(req, "operation"));
 		if (op==null) {

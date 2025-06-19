@@ -1,13 +1,13 @@
 package covia.adapter;
 
+import java.security.SecureRandom;
+import java.util.concurrent.CompletableFuture;
+
 import convex.core.data.ACell;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
-import convex.core.data.prim.AInteger;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import java.security.SecureRandom;
-import java.util.concurrent.CompletableFuture;
 
 public class TestAdapter extends AAdapter {
     private final SecureRandom random = new SecureRandom();
@@ -18,7 +18,7 @@ public class TestAdapter extends AAdapter {
     }
 
     @Override
-    public CompletableFuture<ACell> invoke(String operation, ACell input) {
+    public CompletableFuture<ACell> invoke(String operation, ACell meta,ACell input) {
         // Parse the operation to get the specific test operation
         String[] parts = operation.split(":");
         if (parts.length != 2) {

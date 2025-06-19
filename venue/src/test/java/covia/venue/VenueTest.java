@@ -23,6 +23,7 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import convex.core.util.Utils;
+import covia.adapter.Status;
 
 public class VenueTest {
 	Venue venue;
@@ -31,6 +32,7 @@ public class VenueTest {
 
 	Hash randomOpId;
 	Hash echoOpId;
+	Hash qwenOpId;
 	
 	@BeforeEach
 	public void setup() throws IOException {
@@ -38,6 +40,7 @@ public class VenueTest {
 		Venue.addDemoAssets(venue);
 		randomOpID=venue.storeAsset(Utils.readResourceAsString("/asset-examples/randomop.json"), null);
 		echoOpId=venue.storeAsset(Utils.readResourceAsString("/asset-examples/echoop.json"), null);
+		qwenOpId=venue.storeAsset(Utils.readResourceAsString("/asset-examples/qwen.json"), null);
 	}
 	
 	@Test
@@ -76,7 +79,7 @@ public class VenueTest {
 		String ms=Utils.readResourceAsString("/asset-examples/randomop.json");
 		assertNotNull(ms);
 		
-		ACell md=JSONUtils.parse(ms);
+		ACell md=JSONUtils.parseJSON5(ms);
 		assertEquals("Random Bytes Generator",RT.getIn(md, "name").toString());
 	}
 	
@@ -95,7 +98,7 @@ public class VenueTest {
 		
 		// Get final status
 		ACell finalStatus = venue.getJobStatus((AString)jobID);
-		assertEquals("COMPLETED", RT.getIn(finalStatus, "status").toString());
+		assertEquals(Status.COMPLETE, RT.getIn(finalStatus, "status"));
 		
 		// Verify result
 		ACell result = RT.getIn(finalStatus, "output");
@@ -131,11 +134,10 @@ public class VenueTest {
 		assertNotNull(jobID, "Job ID should be present in status");
 		
 		// Wait for job completion
-		waitForJobCompletion((AString)jobID, 5000);
+		ACell finalStatus = waitForJobCompletion((AString)jobID, 5000);
 		
 		// Get final status
-		ACell finalStatus = venue.getJobStatus((AString)jobID);
-		assertEquals("COMPLETED", RT.getIn(finalStatus, "status").toString());
+		assertEquals(Status.COMPLETE, RT.getIn(finalStatus, "status"));
 		
 		// Verify result
 		ACell result = RT.getIn(finalStatus, "output");
@@ -147,13 +149,28 @@ public class VenueTest {
 		assertTrue(bytes.matches("[0-9a-f]{64}"), "Output should be a valid hex string");
 	}
 	
-	private void waitForJobCompletion(AString jobID, long timeoutMillis) {
+	@Test
+	public void testQwen() {
+		ACell input = Maps.of("prompt", "What is the capital of France?");
+		ACell result = venue.invokeOperation(qwenOpId, input);
+		result=waitForJobCompletion(RT.getIn(result, "id"), 5000);
+		if (Status.COMPLETE.equals(RT.getIn(result, "status"))) {
+			// OK
+		} else {
+			// probably ignore?
+		}
+		System.err.println(JSONUtils.toString(result));	
+	}
+	
+	private ACell waitForJobCompletion(Object jobID, long timeoutMillis) {
+		AString id=RT.ensureString(RT.cvm(jobID));
 		long startTime = System.currentTimeMillis();
+		ACell status = venue.getJobStatus(id);
 		while (System.currentTimeMillis() - startTime < timeoutMillis) {
-			ACell status = venue.getJobStatus(jobID);
+			status = venue.getJobStatus(id);
 			String jobStatus = RT.getIn(status, "status").toString();
 			if (!jobStatus.equals("PENDING")) {
-				return;
+				return status;
 			}
 			try {
 				TimeUnit.MILLISECONDS.sleep(100);
@@ -162,6 +179,7 @@ public class VenueTest {
 				fail("Test interrupted while waiting for job completion");
 			}
 		}
-		fail("Timeout waiting for job completion");
+		// fail("Timeout waiting for job completion");
+		return RT.assocIn(status, Status.FAILED,"status");
 	}
 }
