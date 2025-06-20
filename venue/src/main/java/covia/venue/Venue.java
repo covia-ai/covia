@@ -21,6 +21,7 @@ import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.core.util.JSONUtils;
@@ -30,6 +31,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.LangChainAdapter;
 import covia.adapter.Status;
 import covia.adapter.TestAdapter;
+import covia.api.Fields;
 import covia.client.Asset;
 
 public class Venue {
@@ -42,9 +44,6 @@ public class Venue {
 	public static final Keyword ASSETS_KEY = Keyword.intern("assets");
 	public static final Keyword JOBS_KEY = Keyword.intern("jobs");
 	
-	public static final AString JOB_STATUS_FIELD = Strings.intern("status");
-	public static final AString JOB_ERROR_FIELD = Strings.intern("error");
-
 
 	protected final AStore store;
 	
@@ -220,8 +219,8 @@ public class Venue {
 		AAdapter adapter = getAdapter(adapterName);
 		if (adapter == null) {
 			AMap<AString,ACell> job = Maps.empty();
-			job = job.assoc(JOB_STATUS_FIELD, Status.FAILED);
-			job = job.assoc(JOB_ERROR_FIELD, Strings.create("Adapter not available: "+adapterName));
+			job = job.assoc(Fields.JOB_STATUS_FIELD, Status.FAILED);
+			job = job.assoc(Fields.JOB_ERROR_FIELD, Strings.create("Adapter not available: "+adapterName));
 			return job;
 		}
 		
@@ -231,22 +230,23 @@ public class Venue {
 		adapter.invoke(operation, meta,input)
 			.thenAccept(result -> {
 				AMap<AString,ACell> job = getJobStatus(jobID);
-				job = job.assoc(JOB_STATUS_FIELD, Status.COMPLETE);
+				job = job.assoc(Fields.JOB_STATUS_FIELD, Status.COMPLETE);
 				job = job.assoc(Strings.create("output"), result);
-				setJobStatus(jobID, job);
+				updateJobStatus(jobID, job);
 			})
 			.exceptionally(e -> {
 				AMap<AString,ACell> job = getJobStatus(jobID);
-				job = job.assoc(JOB_STATUS_FIELD, Status.FAILED);
-				job = job.assoc(JOB_ERROR_FIELD, Strings.create(e.getMessage()));
-				setJobStatus(jobID, job);
+				job = job.assoc(Fields.JOB_STATUS_FIELD, Status.FAILED);
+				job = job.assoc(Fields.JOB_ERROR_FIELD, Strings.create(e.getMessage()));
+				updateJobStatus(jobID, job);
 				return null;
 			});
 
 		return getJobStatus(jobID);
 	}
 
-	private void setJobStatus(AString jobID, AMap<AString, ACell> job) {
+	private void updateJobStatus(AString jobID, AMap<AString, ACell> job) {
+		job=job.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 		synchronized (jobs) {
 			jobs.put(jobID,job);
 		}
@@ -265,7 +265,7 @@ public class Venue {
 	
 	Random r=new Random();
 	
-	/**
+	/** 
 	 * Start a job and return its ID
 	 * @param opID
 	 * @param input
@@ -280,7 +280,7 @@ public class Venue {
 		Utils.writeLong(bs, 0, ts);
 
 		AString jobID=Strings.create(Blob.wrap(bs).toHexString());
-		setJobStatus(jobID, Maps.of("id",jobID,"status",Status.PENDING,"ts",ts));
+		updateJobStatus(jobID, Maps.of("id",jobID,"status",Status.PENDING,Fields.CREATED,ts));
 		
 		return jobID;
 	}

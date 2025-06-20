@@ -7,6 +7,8 @@ import static j2html.TagCreator.html;
 import static j2html.TagCreator.p;
 
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.Consumer;
 
 import convex.api.ContentTypes;
 import convex.core.data.ABlob;
@@ -23,6 +25,7 @@ import covia.venue.model.InvokeResult;
 import io.javalin.Javalin;
 import io.javalin.http.BadRequestResponse;
 import io.javalin.http.Context;
+import io.javalin.http.sse.SseClient;
 import io.javalin.openapi.HttpMethod;
 import io.javalin.openapi.OpenApi;
 import io.javalin.openapi.OpenApiContent;
@@ -44,8 +47,11 @@ public class CoviaAPI extends ACoviaAPI {
 
 	public static final String ADD_ASSET="addAsset";
 	
+	private final SseServer sseServer;
+	
 	public CoviaAPI(Venue venue) {
 		this.venue=venue;
+		this.sseServer=new SseServer(venue);
 	}
 
 	public void addRoutes(Javalin javalin) {
@@ -55,6 +61,7 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.post(ROUTE+"assets", this::addAsset);
 		javalin.post(ROUTE+"invoke", this::invokeOperation);
 		javalin.get(ROUTE+"jobs/<id>", this::getJobStatus);
+		javalin.sse(ROUTE+"jobs/<id>", sseServer.registerSSE);
 		javalin.get(ROUTE+"jobs", this::getJobs);
 		javalin.post("/mcp", this::postMCP);
 		javalin.get("/.well-known/mcp", this::getMCPWellKnown);
@@ -239,7 +246,7 @@ public class CoviaAPI extends ACoviaAPI {
 	@OpenApi(path = ROUTE + "jobs/{id}", 
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
-			summary = "Get Covia job status.", 
+			summary = "Get the current Covia job status.", 
 			operationId = CoviaAPI.GET_ASSET,
 			pathParams = {
 					@OpenApiParam(
@@ -346,4 +353,7 @@ public class CoviaAPI extends ACoviaAPI {
 		""");
 		ctx.status(200);
 	}
+	
+
+
 }
