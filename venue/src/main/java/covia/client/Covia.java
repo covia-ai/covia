@@ -130,6 +130,7 @@ public class Covia extends ARESTClient  {
 					}
 				}
 			} catch (Exception e) {
+				e.printStackTrace();
 				result.completeExceptionally(e);
 			}
 		};

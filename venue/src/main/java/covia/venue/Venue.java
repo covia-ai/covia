@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Random;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,7 +14,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
-import convex.core.data.Blobs;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
@@ -262,6 +263,8 @@ public class Venue {
 
 	private HashMap<AString,AMap<AString,ACell>> jobs= new HashMap<>();
 	
+	Random r=new Random();
+	
 	/**
 	 * Start a job and return its ID
 	 * @param opID
@@ -269,8 +272,15 @@ public class Venue {
 	 * @return Job ID as a string
 	 */
 	private AString submitJob(Hash opID, ACell input) {
-		AString jobID=Strings.create(Blobs.createRandom(16).toHexString());
-		setJobStatus(jobID, Maps.of("id",jobID,"status",Status.PENDING));
+		byte[] bs=new byte[16];
+		r.nextBytes(bs);
+		
+		// Put timestamp over the first 8 bytes
+		long ts=Utils.getCurrentTimestamp();
+		Utils.writeLong(bs, 0, ts);
+
+		AString jobID=Strings.create(Blob.wrap(bs).toHexString());
+		setJobStatus(jobID, Maps.of("id",jobID,"status",Status.PENDING,"ts",ts));
 		
 		return jobID;
 	}
