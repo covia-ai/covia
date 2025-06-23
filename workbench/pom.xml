@@ -22,6 +22,10 @@
 			<artifactId>flatlaf-intellij-themes</artifactId>
 			<version>${flatlaf.version}</version>
 		</dependency>
-
+		<dependency>
+			<groupId>ai.covia</groupId>
+			<artifactId>venue</artifactId>
+			<version>0.0.1-SNAPSHOT</version>
+		</dependency>
   </dependencies>
 </project>
