@@ -48,9 +48,17 @@ public class ReplPanel extends JPanel {
                     return;
                 }
                 try {
-                    // Parse input as JSON for the 'input' field
                     ACell opInput = null;
-                    if (!input.isBlank()) {
+                    if (opId.toLowerCase().startsWith("langchain:ollama")) {
+                        if (input.isBlank()) {
+                            outputArea.append("Error: Prompt is required for ollama operation.\n\n");
+                            inputField.setText("");
+                            return;
+                        }
+                        // Wrap input as {"prompt": <input>}
+                        String promptJson = "{\"prompt\": " + JSONUtils.toString(input) + "}";
+                        opInput = JSONUtils.parseJSON5(promptJson);
+                    } else if (!input.isBlank()) {
                         opInput = JSONUtils.parseJSON5(input);
                     }
                     ((java.util.concurrent.CompletableFuture<Result>) covia.invoke(opId, opInput)).whenComplete((result, ex) -> {

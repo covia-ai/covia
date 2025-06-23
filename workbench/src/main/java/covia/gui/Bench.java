@@ -12,6 +12,9 @@ import convex.core.util.JSONUtils;
 import java.net.URI;
 import convex.core.lang.RT;
 import covia.venue.VenueServer;
+import java.nio.charset.StandardCharsets;
+import java.io.InputStream;
+import java.util.Scanner;
 
 public class Bench {
 
@@ -22,6 +25,26 @@ public class Bench {
 		new Thread(() -> {
 			VenueServer server = VenueServer.create(null);
 			server.start(8089);
+			// Upload asset after server starts
+			try {
+				Thread.sleep(1000); // Give server a moment to start
+				InputStream is = Bench.class.getClassLoader().getResourceAsStream("ollamaop.json");
+				if (is != null) {
+					String json = new Scanner(is, StandardCharsets.UTF_8).useDelimiter("\\A").next();
+					Covia coviaUpload = Covia.create(java.net.URI.create("http://localhost:8089"));
+					((java.util.concurrent.CompletableFuture<convex.core.Result>) coviaUpload.addAsset(json)).whenComplete((result, ex) -> {
+						if (ex != null) {
+							System.err.println("Asset upload failed: " + ex.getMessage());
+						} else {
+							System.out.println("Asset uploaded: " + (result != null ? result.getValue() : "null"));
+						}
+					});
+				} else {
+					System.err.println("Could not find ollamaop.json in resources");
+				}
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
 		}, "CoviaVenueServer").start();
 		Covia covia = Covia.create(java.net.URI.create("http://localhost:8089"));
 		showMainFrame(new ReplPanel(covia));

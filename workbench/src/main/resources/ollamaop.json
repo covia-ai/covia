@@ -1,0 +1,28 @@
+{
+	"name": "Ollama Qwen3 Chat Operation",
+	"creator": "Workbench Demo",
+	"description": "This is a workbench example operation for the Qwen3 LLM via ollama.",
+	"dateCreated": "2025-06-09T07:22:59Z",
+	"dateModified": "2025-06-09T07:22:59Z",
+	"operation": {
+		"adapter": "langchain:ollama:qwen3",
+		"input": {
+			"type": "object",
+			"properties": {
+				"prompt": {
+					"type": "string",
+					"description": "The prompt for the model."
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"reply": {
+					"type": "string",
+					"description": "The LLM response"
+				}
+			}
+		}
+	}
+} 
