@@ -7,8 +7,6 @@ import static j2html.TagCreator.html;
 import static j2html.TagCreator.p;
 
 import java.util.List;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.function.Consumer;
 
 import convex.api.ContentTypes;
 import convex.core.data.ABlob;
@@ -25,7 +23,6 @@ import covia.venue.model.InvokeResult;
 import io.javalin.Javalin;
 import io.javalin.http.BadRequestResponse;
 import io.javalin.http.Context;
-import io.javalin.http.sse.SseClient;
 import io.javalin.openapi.HttpMethod;
 import io.javalin.openapi.OpenApi;
 import io.javalin.openapi.OpenApiContent;
@@ -61,7 +58,7 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.post(ROUTE+"assets", this::addAsset);
 		javalin.post(ROUTE+"invoke", this::invokeOperation);
 		javalin.get(ROUTE+"jobs/<id>", this::getJobStatus);
-		javalin.sse(ROUTE+"jobs/<id>", sseServer.registerSSE);
+		javalin.sse(ROUTE+"jobs/<id>/sse", sseServer.registerSSE);
 		javalin.get(ROUTE+"jobs", this::getJobs);
 		javalin.post("/mcp", this::postMCP);
 		javalin.get("/.well-known/mcp", this::getMCPWellKnown);
