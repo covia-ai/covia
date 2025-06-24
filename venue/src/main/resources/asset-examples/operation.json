@@ -18,9 +18,9 @@
 			"type":"object",
 			"properties":{
 				"hash":{
-					"type":"string"
-				},
-				"description":"The SHA256 hash of the content"
+					"type":"string",
+					"description":"The SHA256 hash of the content"
+				}
 			}
 		}
 	}
