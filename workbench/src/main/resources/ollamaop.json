@@ -1,5 +1,5 @@
 {
-	"name": "Ollama Qwen3 Chat Operation",
+	"name": "Chat Operation",
 	"creator": "Workbench Demo",
 	"description": "This is a workbench example operation for the Qwen3 LLM via ollama.",
 	"dateCreated": "2025-06-09T07:22:59Z",

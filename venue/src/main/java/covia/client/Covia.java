@@ -90,7 +90,7 @@ public class Covia extends ARESTClient  {
 			
 			AString jobId=RT.ensureString(RT.getIn(body, "id"));
 			if (jobId == null) {
-				result.completeExceptionally(new RuntimeException("No job ID returned"));
+				result.completeExceptionally(new RuntimeException("No job ID returned: "+body));
 				return;
 			}
 			

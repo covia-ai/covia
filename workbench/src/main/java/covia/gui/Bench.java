@@ -5,6 +5,7 @@ import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import covia.client.Covia;
+import covia.venue.Venue;
 import convex.core.Result;
 import convex.core.data.ACell;
 import convex.core.data.Strings;
@@ -22,21 +23,29 @@ public class Bench {
 		
 		LAF.init();
 		// Start Covia VenueServer on port 8089 in a background thread
+		Covia covia = Covia.create(java.net.URI.create("http://localhost:8089"));
+		ReplPanel replPanel = new ReplPanel(covia);
+		showMainFrame(replPanel);
+		// Pass replPanel to the upload thread so we can set the operation ID after upload
 		new Thread(() -> {
 			VenueServer server = VenueServer.create(null);
+			Venue.addDemoAssets(server.getVenue());
 			server.start(8089);
-			// Upload asset after server starts
 			try {
 				Thread.sleep(1000); // Give server a moment to start
 				InputStream is = Bench.class.getClassLoader().getResourceAsStream("ollamaop.json");
 				if (is != null) {
 					String json = new Scanner(is, StandardCharsets.UTF_8).useDelimiter("\\A").next();
-					Covia coviaUpload = Covia.create(java.net.URI.create("http://localhost:8089"));
-					((java.util.concurrent.CompletableFuture<convex.core.Result>) coviaUpload.addAsset(json)).whenComplete((result, ex) -> {
+					((java.util.concurrent.CompletableFuture<convex.core.Result>) covia.addAsset(json)).whenComplete((result, ex) -> {
 						if (ex != null) {
 							System.err.println("Asset upload failed: " + ex.getMessage());
 						} else {
 							System.out.println("Asset uploaded: " + (result != null ? result.getValue() : "null"));
+							// Set the operation ID in the REPL panel if possible
+							if (result != null && result.getValue() != null) {
+								String opId = result.getValue().toString();
+								javax.swing.SwingUtilities.invokeLater(() -> replPanel.setOperationId(opId));
+							}
 						}
 					});
 				} else {
@@ -46,8 +55,6 @@ public class Bench {
 				e.printStackTrace();
 			}
 		}, "CoviaVenueServer").start();
-		Covia covia = Covia.create(java.net.URI.create("http://localhost:8089"));
-		showMainFrame(new ReplPanel(covia));
 	}
 
 	public static void showMainFrame(JComponent comp) {

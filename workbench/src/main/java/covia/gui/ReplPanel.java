@@ -6,13 +6,15 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import covia.client.Covia;
 import convex.core.Result;
-import convex.core.data.ACell;
+import convex.core.data.ACell;  
+import convex.core.data.Maps;
 import convex.core.util.JSONUtils;
 import convex.core.lang.RT;
 import java.net.URI;
 
 public class ReplPanel extends JPanel {
     private final Covia covia;
+    private final JTextField opField;
 
     public ReplPanel(Covia covia) {
         super(new BorderLayout(8, 8));
@@ -26,7 +28,7 @@ public class ReplPanel extends JPanel {
         // Operation ID entry
         JPanel opPanel = new JPanel(new BorderLayout(4, 4));
         JLabel opLabel = new JLabel("Operation ID:");
-        JTextField opField = new JTextField();
+        opField = new JTextField();
         opField.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 14));
         opPanel.add(opLabel, BorderLayout.WEST);
         opPanel.add(opField, BorderLayout.CENTER);
@@ -48,19 +50,8 @@ public class ReplPanel extends JPanel {
                     return;
                 }
                 try {
-                    ACell opInput = null;
-                    if (opId.toLowerCase().startsWith("langchain:ollama")) {
-                        if (input.isBlank()) {
-                            outputArea.append("Error: Prompt is required for ollama operation.\n\n");
-                            inputField.setText("");
-                            return;
-                        }
-                        // Wrap input as {"prompt": <input>}
-                        String promptJson = "{\"prompt\": " + JSONUtils.toString(input) + "}";
-                        opInput = JSONUtils.parseJSON5(promptJson);
-                    } else if (!input.isBlank()) {
-                        opInput = JSONUtils.parseJSON5(input);
-                    }
+                    ACell opInput = Maps.of("prompt",input);
+                    
                     ((java.util.concurrent.CompletableFuture<Result>) covia.invoke(opId, opInput)).whenComplete((result, ex) -> {
                         if (ex != null) {
                             SwingUtilities.invokeLater(() -> {
@@ -87,5 +78,9 @@ public class ReplPanel extends JPanel {
 
         this.add(scrollPane, BorderLayout.CENTER);
         this.add(inputPanel, BorderLayout.SOUTH);
+    }
+
+    public void setOperationId(String opId) {
+        opField.setText(opId);
     }
 } 
