@@ -280,7 +280,7 @@ public class Venue {
 		Utils.writeLong(bs, 0, ts);
 
 		AString jobID=Strings.create(Blob.wrap(bs).toHexString());
-		updateJobStatus(jobID, Maps.of("id",jobID,"status",Status.PENDING,Fields.CREATED,ts));
+		updateJobStatus(jobID, Maps.of(Fields.ID,jobID,Fields.STATUS,Status.PENDING,Fields.CREATED,ts,Fields.INPUT,input));
 		
 		return jobID;
 	}
