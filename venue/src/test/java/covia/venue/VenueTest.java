@@ -46,7 +46,7 @@ public class VenueTest {
 	@Test
 	public void testTempVenue() throws IOException {
 		Blob content=Blob.EMPTY;
-		Hash id=venue.storeAsset(EMPTY_META,content);
+		Hash id=venue.storeAsset(EMPTY_META,content,Maps.empty());
 		assertEquals(id,Hashing.sha256(EMPTY_META));
 		ACell md=venue.getMetadata(id);
 		assertEquals(EMPTY_META,md);

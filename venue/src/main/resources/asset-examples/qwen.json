@@ -22,7 +22,7 @@
 				"reply":{
 					"type":"string",
 					"description":"The LLM response"
-				},
+				}
 			}
 		}
 	}

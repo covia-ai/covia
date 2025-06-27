@@ -22,6 +22,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
+import convex.core.json.JSONReader;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.core.util.JSONUtils;
@@ -106,29 +107,30 @@ public class Venue {
 		return removed;
 	}
 
-
 	public Hash storeAsset(ACell meta, ACell content) {
 		AString metaString=JSONUtils.toJSONString(meta);
-		return storeAsset(metaString,content);
+		return storeAsset(metaString,content,meta);
 	}
 
 	public Hash storeAsset(String meta, ACell content) {
-		return storeAsset(Strings.create(meta),content);
+		@SuppressWarnings("unchecked")
+		AMap<AString,ACell> metaMap=(AMap<AString, ACell>) JSONReader.read(meta);
+		return storeAsset(Strings.create(meta),content,metaMap);
 	}
 	
-	public synchronized Hash storeAsset(AString meta, ACell content) {
+	public synchronized Hash storeAsset(AString meta, ACell content, ACell metaMap) {
 		Hash id=Asset.calcID(meta);
 		AMap<ABlob,AVector<?>> assets=getAssets();
 		boolean exists=assets.containsKey(id);
 		log.info((exists?"Updated":"Stored")+" asset "+id);
 		
-		setAssets(assets.assoc(id, assetRecord(meta,content))); // TODO: asset record design?		
+		setAssets(assets.assoc(id, assetRecord(meta,content,metaMap))); // TODO: asset record design?		
 		return id;
 	}
 
 
-	private AVector<ACell> assetRecord(AString meta, ACell content) {
-		return Vectors.create(meta,content);
+	private AVector<ACell> assetRecord(AString meta, ACell content, ACell metaMap) {
+		return Vectors.create(meta,content,metaMap);
 	}
 
 
@@ -280,7 +282,7 @@ public class Venue {
 		Utils.writeLong(bs, 0, ts);
 
 		AString jobID=Strings.create(Blob.wrap(bs).toHexString());
-		updateJobStatus(jobID, Maps.of(Fields.ID,jobID,Fields.STATUS,Status.PENDING,Fields.CREATED,ts,Fields.INPUT,input));
+		updateJobStatus(jobID, Maps.of(Fields.ID,jobID,Fields.STATUS,Status.PENDING,Fields.UPDATED,ts,Fields.CREATED,ts,Fields.INPUT,input));
 		
 		return jobID;
 	}

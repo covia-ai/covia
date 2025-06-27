@@ -16,6 +16,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Strings;
+import convex.core.exceptions.ParseException;
 import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import covia.venue.model.InvokeRequest;
@@ -176,14 +177,19 @@ public class CoviaAPI extends ACoviaAPI {
 					})	
 	protected void addAsset(Context ctx) { 
 		ACell body=null;
-		AString meta=Strings.create(ctx.body());
-		Hash id=venue.storeAsset(meta, body);
 		
-		ctx.header("Content-type", ContentTypes.JSON);
-		ctx.header("Location",ROUTE+"assets/"+id.toHexString());
-		ctx.result("\""+id.toString()+"\"");
+		String meta=ctx.body();
+		try {
+			Hash id=venue.storeAsset(meta, body);
+			ctx.header("Content-type", ContentTypes.JSON);
+			ctx.header("Location",ROUTE+"assets/"+id.toHexString());
+			ctx.result("\""+id.toString()+"\"");
+			
+			ctx.status(201);
+		} catch (ClassCastException | ParseException e) {
+			throw new BadRequestResponse("Unable to parse asset metadata: "+e.getMessage());
+		}
 		
-		ctx.status(201);
 	}
 	
 	@OpenApi(path = ROUTE + "invoke", 
