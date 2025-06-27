@@ -20,10 +20,11 @@ public class CoviaWebApp  {
 		javalin.get("/index.html", this::indexPage);
 		javalin.get("/", this::indexPage);
 		javalin.get("/404.html", this::missingPage);
+		javalin.get("/status", this::statusPage);
 	}
 	
 	private void indexPage(Context ctx) {
-		DomContent content= html(
+		standardPage(ctx,html(
 				makeHeader("Covia Venue Server"),
 				body(
 					h1("Covia Venue Server"),
@@ -32,10 +33,8 @@ public class CoviaWebApp  {
 
 					p("This is the default web page for a Covia Venue server running the REST API")
 				)
-			);
-		ctx.result(content.render());
-		ctx.header("Content-Type", "text/html");
-		ctx.status(200);
+			)
+		);
 	}
 	
 	protected void missingPage(Context ctx) { 
@@ -62,5 +61,23 @@ public class CoviaWebApp  {
 				title(title),
 		        link().withRel("stylesheet").withHref("/css/pico.min.css")
 		);
+	}
+
+	public void statusPage(Context ctx) {
+		standardPage(ctx,html(
+				makeHeader("Covia Status"),
+				body(
+					h1("Covia Venue Status"),
+					p("Version: "+Utils.getVersion()),
+					p("This is a covia status page. All looks OK.")
+				)
+			)
+		);
+	}
+
+	private void standardPage(Context ctx,DomContent content) {
+		ctx.result(content.render());
+		ctx.header("Content-Type", "text/html");
+		ctx.status(200);
 	}
 }

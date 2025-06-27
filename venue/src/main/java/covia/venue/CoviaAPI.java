@@ -1,11 +1,5 @@
 package covia.venue;
 
-import static j2html.TagCreator.a;
-import static j2html.TagCreator.body;
-import static j2html.TagCreator.h1;
-import static j2html.TagCreator.html;
-import static j2html.TagCreator.p;
-
 import java.util.List;
 
 import convex.api.ContentTypes;
@@ -31,7 +25,6 @@ import io.javalin.openapi.OpenApiExampleProperty;
 import io.javalin.openapi.OpenApiParam;
 import io.javalin.openapi.OpenApiRequestBody;
 import io.javalin.openapi.OpenApiResponse;
-import j2html.tags.DomContent;
 
 public class CoviaAPI extends ACoviaAPI {
 
@@ -71,26 +64,19 @@ public class CoviaAPI extends ACoviaAPI {
 			summary = "Get a quick Covia status report", 
 			operationId = "status")	
 	protected void getStatus(Context ctx) { 
-		String type=ctx.header("Accept");
-		if ((type!=null)&&type.contains("html")) {
-			ctx.header("Content-Type", "text/html");	
-			DomContent content= html(
-				makeHeader("404: Not Found: "+ctx.path()),
-				body(
-					h1("404: not found: "+ctx.path()),
-					p("This is not the page you are looking for."),
-					a("Go back to index").withHref("/index.html")			
-				)
-			);
-			ctx.result(content.render());
-		} else {
-			ctx.result("{\"status\":\"OK\"}");
-			ctx.status(200);
-			return;
-		}
-		ctx.status(404);
+		jsonResult(ctx,"{\"status\":\"OK\"}");
 	}
 	
+	private void jsonResult(Context ctx,String jsonContent) {
+		ctx.header("Content-type", ContentTypes.JSON);
+		ctx.result(jsonContent);
+		ctx.status(200);
+	}
+	
+	private void jsonResult(Context ctx,List<?> jsonList) {
+		jsonResult(ctx,JSONUtils.toString(jsonList));
+	}
+
 	@OpenApi(path = ROUTE + "assets/{id}", 
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
@@ -153,8 +139,7 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		sb.append("]");
 
-		ctx.result(sb.toString());
-		ctx.status(200);
+		jsonResult(ctx,sb.toString());
 	}
 	
 	@OpenApi(path = ROUTE + "assets", 
@@ -290,9 +275,7 @@ public class CoviaAPI extends ACoviaAPI {
 		
 		List<AString> jobs = venue.getJobs();
 
-		ctx.header("Content-type", ContentTypes.JSON);
-		ctx.result(JSONUtils.toString(jobs));
-		ctx.status(200);
+		jsonResult(ctx,jobs);
 	}
 	
 	@OpenApi(path = "/mcp", 
@@ -333,8 +316,7 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		
 		// For now, return a simple response
-		ctx.result("{\"jsonrpc\": \"2.0\", \"result\": {\"status\": \"active\", \"version\": \"1.0.0\"}, \"id\": 1}");
-		ctx.status(200);
+		jsonResult(ctx,"{\"jsonrpc\": \"2.0\", \"result\": {\"status\": \"active\", \"version\": \"1.0.0\"}, \"id\": 1}");
 	}
 	
 	@OpenApi(path = "/.well-known/mcp", 
@@ -343,8 +325,7 @@ public class CoviaAPI extends ACoviaAPI {
 			summary = "Get MCP server capabilities", 
 			operationId = "mcpWellKnown")	
 	protected void getMCPWellKnown(Context ctx) { 
-		ctx.header("Content-type", ContentTypes.JSON);
-		ctx.result("""
+		jsonResult(ctx,"""
 				{	
 					"mcp_version": "1.0",
 					"server_url": "http:localhost:8080/mcp",
@@ -356,7 +337,6 @@ public class CoviaAPI extends ACoviaAPI {
 					}	
 				}
 		""");
-		ctx.status(200);
 	}
 	
 

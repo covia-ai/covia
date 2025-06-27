@@ -122,7 +122,7 @@ public class Venue {
 		Hash id=Asset.calcID(meta);
 		AMap<ABlob,AVector<?>> assets=getAssets();
 		boolean exists=assets.containsKey(id);
-		log.info((exists?"Updated":"Stored")+" asset "+id);
+		log.info((exists?"Updated":"Stored")+" asset "+id +" : "+RT.getIn(metaMap, Fields.NAME));
 		
 		setAssets(assets.assoc(id, assetRecord(meta,content,metaMap))); // TODO: asset record design?		
 		return id;

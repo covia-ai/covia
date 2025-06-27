@@ -13,4 +13,6 @@ public class Fields {
 	public static final AString OUTPUT = Strings.intern("output");
 	public static final AString ID = Strings.intern("id");
 	public static final AString STATUS = Strings.intern("status");
+	
+	public static final AString NAME =  Strings.intern("name");
 }
