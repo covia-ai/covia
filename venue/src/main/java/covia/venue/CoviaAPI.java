@@ -84,7 +84,9 @@ public class CoviaAPI extends ACoviaAPI {
 			);
 			ctx.result(content.render());
 		} else {
-			ctx.result("404 Not found: "+ctx.path());
+			ctx.result("{\"status\":\"OK\"}");
+			ctx.status(200);
+			return;
 		}
 		ctx.status(404);
 	}
