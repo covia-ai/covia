@@ -34,6 +34,7 @@ import covia.adapter.Status;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.client.Asset;
+import java.io.InputStream;
 
 public class Venue {
 	
@@ -44,6 +45,12 @@ public class Venue {
 	public static final Keyword COVIA_KEY = Keyword.intern("covia");
 	public static final Keyword ASSETS_KEY = Keyword.intern("assets");
 	public static final Keyword JOBS_KEY = Keyword.intern("jobs");
+
+
+
+	static final long POS_JSON = 0;
+	static final long POS_CONTENT= 1;
+	static final long POS_META = 2;
 	
 
 	protected final AStore store;
@@ -107,18 +114,20 @@ public class Venue {
 		return removed;
 	}
 
-	public Hash storeAsset(ACell meta, ACell content) {
+	public Hash storeAsset(AMap<AString,ACell> meta, ACell content) {
 		AString metaString=JSONUtils.toJSONString(meta);
 		return storeAsset(metaString,content,meta);
 	}
 
 	public Hash storeAsset(String meta, ACell content) {
-		@SuppressWarnings("unchecked")
-		AMap<AString,ACell> metaMap=(AMap<AString, ACell>) JSONReader.read(meta);
+		AMap<AString,ACell> metaMap=RT.ensureMap(JSONReader.read(meta));
+		if (metaMap==null) {
+			throw new IllegalArgumentException("Metadata is not a valid JSON object");
+		}
 		return storeAsset(Strings.create(meta),content,metaMap);
 	}
 	
-	public synchronized Hash storeAsset(AString meta, ACell content, ACell metaMap) {
+	private synchronized Hash storeAsset(AString meta, ACell content, AMap<AString,ACell> metaMap) {
 		Hash id=Asset.calcID(meta);
 		AMap<ABlob,AVector<?>> assets=getAssets();
 		boolean exists=assets.containsKey(id);
@@ -129,7 +138,7 @@ public class Venue {
 	}
 
 
-	private AVector<ACell> assetRecord(AString meta, ACell content, ACell metaMap) {
+	private AVector<ACell> assetRecord(AString meta, ACell content, AMap<AString,ACell> metaMap) {
 		return Vectors.create(meta,content,metaMap);
 	}
 
@@ -161,7 +170,7 @@ public class Venue {
 	public AString getMetadata(Hash assetID) {
 		AVector<?> arec=getAssets().get(assetID);
 		if (arec==null) return null;
-		return RT.ensureString(arec.get(0));
+		return RT.ensureString(arec.get(POS_JSON));
 	}
 	
 	/**
@@ -169,13 +178,10 @@ public class Venue {
 	 * @param opID
 	 * @return Metadata value, or null if not valid metadata
 	 */
-	private ACell getMetaValue(Hash assetID) {
-		AString meta=getMetadata(assetID);
-		try {
-			return JSONUtils.parseJSON5(meta.toString());
-		} catch (Exception e) {
-			return null;
-		}
+	public AMap<AString,ACell> getMetaValue(Hash assetID) {
+		AVector<?> arec=getAssets().get(assetID);
+		if (arec==null) return null;
+		return RT.ensureMap(arec.get(POS_META));
 	}
 
 
@@ -291,6 +297,18 @@ public class Venue {
 	public List<AString> getJobs() {
 		
 		return new ArrayList<>(jobs.keySet());
+	}
+
+
+	/**
+	 * Gets a content stream for the given asset
+	 * @param assetID
+	 * @return Content stream, or null if no available / does not exist
+	 */
+	public InputStream getContentStream(Hash assetID) {
+		AMap<AString,ACell> meta=getMetaValue(assetID);
+
+		return null;
 	}
 
 	

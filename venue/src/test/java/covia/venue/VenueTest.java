@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
@@ -46,7 +47,8 @@ public class VenueTest {
 	@Test
 	public void testTempVenue() throws IOException {
 		Blob content=Blob.EMPTY;
-		Hash id=venue.storeAsset(EMPTY_META,content,Maps.empty());
+		Hash id=venue.storeAsset("{}",content);
+		assertEquals(EMPTY_META,venue.getMetadata(id));
 		assertEquals(id,Hashing.sha256(EMPTY_META));
 		ACell md=venue.getMetadata(id);
 		assertEquals(EMPTY_META,md);
@@ -55,7 +57,7 @@ public class VenueTest {
 	
 	@Test public void testAddAsset() throws InterruptedException, ExecutionException {
 		// Create a test asset
-		ACell meta = Maps.of(
+		AMap<AString, ACell> meta = Maps.of(
 			Keyword.intern("name"), Strings.create("Test Asset"),
 			Keyword.intern("description"), Strings.create("A test asset")
 		);

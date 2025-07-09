@@ -24,6 +24,7 @@ public class MCP extends ACoviaAPI {
 	public void addRoutes(Javalin javalin) {
 		javalin.post("/mcp", this::postMCP);
 		javalin.get("/.well-known/mcp", this::getMCPWellKnown);
+		javalin.sse("/mcp", sseServer.registerSSE);
 	}
 	
 	@OpenApi(path = "/mcp", 
@@ -78,7 +79,8 @@ public class MCP extends ACoviaAPI {
 					"mcp_version": "1.0",
 					"server_url": "http:localhost:8080/mcp",
 					"description": "MCP server for Covia Venue",
-					"tools_endpoint": "http:localhost:8080/mcp",
+					"tools_endpoint": "/mcp",
+					"endpoint": {"path":"/map","transport":"streamable-http"}
 					"auth": {
 						"type": "oauth2",
 						"authorization_endpoint": null

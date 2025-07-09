@@ -1,5 +1,6 @@
 package covia.venue.api;
 
+import java.io.InputStream;
 import java.util.List;
 
 import convex.api.ContentTypes;
@@ -37,6 +38,11 @@ public class CoviaAPI extends ACoviaAPI {
 	public static final String GET_ASSET = "getAsset";
 
 	public static final String ADD_ASSET="addAsset";
+
+	private static final String GET_CONTENT = "getContent";
+
+	private static final String PUT_CONTENT = "putContent";
+
 	
 	private final SseServer sseServer;
 	
@@ -48,6 +54,8 @@ public class CoviaAPI extends ACoviaAPI {
 	public void addRoutes(Javalin javalin) {
 		javalin.get(ROUTE+"status", this::getStatus);
 		javalin.get(ROUTE+"assets/<id>", this::getAsset);
+		javalin.get(ROUTE+"assets/<id>/content", this::getContent);
+		javalin.put(ROUTE+"assets/<id>/content", this::putContent);
 		javalin.get(ROUTE+"assets", this::getAssets);
 		javalin.post(ROUTE+"assets", this::addAsset);
 		javalin.post(ROUTE+"invoke", this::invokeOperation);
@@ -70,32 +78,6 @@ public class CoviaAPI extends ACoviaAPI {
 		jsonResult(ctx,JSONUtils.toString(jsonList));
 	}
 
-	@OpenApi(path = ROUTE + "assets/{id}", 
-			methods = HttpMethod.GET, 
-			tags = { "Covia"},
-			summary = "Get Covia asset metadata gievn an asset ID.", 
-			operationId = CoviaAPI.GET_ASSET,
-			pathParams = {
-					@OpenApiParam(
-							name = "id", 
-							description = "Asset ID, equal to the SHA256 hash of the asset metadata.", 
-							required = true, 
-							type = String.class, 
-							example = "0x1234567812345678123456781234567812345678123456781234567812345678") })	
-	protected void getAsset(Context ctx) { 
-		String id=ctx.pathParam("id");
-		Hash assetID=Hash.parse(ctx.pathParam("id"));
-		
-		AString meta=venue.getMetadata(assetID);
-		if (meta==null) {
-			ctx.status(404);
-			ctx.result("Asset not found: "+id);
-			return;
-		}
-
-		ctx.result(meta.toString());
-		ctx.status(200);
-	}
 	
 	@OpenApi(path = ROUTE + "assets", 
 			methods = HttpMethod.GET, 
@@ -169,7 +151,85 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (ClassCastException | ParseException e) {
 			throw new BadRequestResponse("Unable to parse asset metadata: "+e.getMessage());
 		}
+	}
+	
+
+	@OpenApi(path = ROUTE + "assets/{id}", 
+			methods = HttpMethod.GET, 
+			tags = { "Covia"},
+			summary = "Get Covia asset metadata gievn an asset ID.", 
+			operationId = CoviaAPI.GET_ASSET,
+			pathParams = {
+					@OpenApiParam(
+							name = "id", 
+							description = "Asset ID, equal to the SHA256 hash of the asset metadata.", 
+							required = true, 
+							type = String.class, 
+							example = "0x1234567812345678123456781234567812345678123456781234567812345678") })	
+	protected void getAsset(Context ctx) { 
+		String id=ctx.pathParam("id");
+		Hash assetID=Hash.parse(ctx.pathParam("id"));
 		
+		AString meta=venue.getMetadata(assetID);
+		if (meta==null) {
+			ctx.status(404);
+			ctx.result("Asset not found: "+id);
+			return;
+		}
+
+		ctx.result(meta.toString());
+		ctx.status(200);
+	}
+	
+	@OpenApi(path = ROUTE + "assets/{id}/content", 
+			methods = HttpMethod.GET, 
+			tags = { "Covia"},
+			summary = "Get the content of a Covia data asset", 
+			operationId = CoviaAPI.GET_CONTENT,
+			responses = {
+					@OpenApiResponse(
+							status = "200", 
+							description = "Content returned")
+					})	
+	protected void getContent(Context ctx) { 
+		String id=ctx.pathParam("id");
+		Hash assetID=Hash.parse(ctx.pathParam("id"));
+		
+		InputStream is=venue.getContentStream(assetID);
+		if (is==null) {
+			ctx.status(404);
+			ctx.result("Asset not found: "+id);
+			return;
+		}
+
+		ctx.result(is);
+		ctx.status(200);
+	}
+	
+	@OpenApi(path = ROUTE + "assets/{id}/content", 
+			methods = HttpMethod.PUT, 
+			tags = { "Covia"},
+			summary = "Put the content of a Covia asset. This must match the content-hash stored in the asset.", 
+			operationId = CoviaAPI.PUT_CONTENT,
+			responses = {
+					@OpenApiResponse(
+							status = "200", 
+							description = "Content stored")
+					})	
+	protected void putContent(Context ctx) { 
+		String idString=ctx.pathParam("id");
+		Hash assetID=Hash.parse(idString);
+		
+		AMap<AString,ACell> meta=venue.getMetaValue(assetID);
+		if (meta==null) {
+			ctx.status(404);
+			ctx.result("Asset not found: "+idString);		
+			return;
+		}
+		
+		
+
+		ctx.status(200);
 	}
 	
 	@OpenApi(path = ROUTE + "invoke", 
