@@ -45,7 +45,7 @@ public class Covia extends ARESTClient  {
 	}
 
 	/**
-	 * Gets metadata for a given asset on the4 connected venue
+	 * Gets metadata for a given asset on the connected venue
 	 * @param asset ID for asset. Can be a full asset DID
 	 * @return Asset metadata as a String, or null if asset is not found
 	 */

@@ -35,21 +35,18 @@ import covia.venue.server.VenueServer;
 @TestInstance(Lifecycle.PER_CLASS)
 public class VenueServerTest {
 	
-	private static final int PORT=8088;
-	private static final String BASE_URL="http://localhost:"+PORT;
+	static final int PORT=TestServer.PORT;
+	static final String BASE_URL=TestServer.BASE_URL;
 	
-	private VenueServer venueServer;
-	private Venue venue;
-	private Covia covia;
+	VenueServer venueServer;
+	Venue venue;
+	Covia covia;
 	
 	@BeforeAll
 	public void setupServer() throws Exception {
-		venueServer=VenueServer.create(null);
-		venue=venueServer.getVenue();
-		Venue.addDemoAssets(venue);
-
-		venueServer.start(PORT);
-		covia = Covia.create(URI.create(BASE_URL));
+		venueServer=TestServer.SERVER;
+		venue=TestServer.VENUE;
+		covia = TestServer.COVIA;
 	}
 	
 	/**
@@ -125,12 +122,5 @@ public class VenueServerTest {
 		// Verify the error message contains our test message
 		Throwable cause = exception.getCause();
 		assertTrue(cause instanceof RuntimeException, "Should be a RuntimeException");
-	}
-	
-	@AfterAll
-	public void cleanup() {
-		if (venueServer!=null) {
-			venueServer.close();
-		}
 	}
 }
