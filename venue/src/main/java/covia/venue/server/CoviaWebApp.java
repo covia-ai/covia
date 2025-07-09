@@ -1,4 +1,4 @@
-package covia.venue;
+package covia.venue.server;
 
 import static j2html.TagCreator.a;
 import static j2html.TagCreator.body;

@@ -30,6 +30,7 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.java.HTTPClients;
 import covia.client.Covia;
+import covia.venue.server.VenueServer;
 
 @TestInstance(Lifecycle.PER_CLASS)
 public class VenueServerTest {

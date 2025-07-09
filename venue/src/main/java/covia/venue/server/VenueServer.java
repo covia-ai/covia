@@ -1,8 +1,11 @@
-package covia.venue;
+package covia.venue.server;
 
 import org.eclipse.jetty.server.ServerConnector;
 
 import convex.api.Convex;
+import covia.venue.Venue;
+import covia.venue.api.CoviaAPI;
+import covia.venue.api.MCP;
 import covia.venue.auth.LoginProviders;
 import io.javalin.Javalin;
 import io.javalin.config.JavalinConfig;
@@ -24,12 +27,14 @@ public class VenueServer {
 	protected Venue venue;
 
 	protected CoviaAPI api;
+	protected MCP mcp;
 
 	public VenueServer(Convex convex) {
 		this.convex=convex;
 		webApp=new CoviaWebApp();
 		venue=Venue.createTemp();
 		api=new CoviaAPI(venue);
+		mcp=new MCP(venue);
 	}
 
 	public static VenueServer create(Object object) {
@@ -53,8 +58,17 @@ public class VenueServer {
 	public synchronized void start(Integer port) {
 		close();
 		javalin=buildApp();
+		addLoginRoutes(javalin);
+		addAPIRoutes(javalin);	
 		start(javalin,port);
 	}
+	
+	private void addAPIRoutes(Javalin javalin) {	
+		api.addRoutes(javalin);
+		webApp.addRoutes(javalin);
+		mcp.addRoutes(javalin);
+	}
+	
 
 	private void start(Javalin app, Integer port) {
 		org.eclipse.jetty.server.Server jettyServer=app.jettyServer().server();
@@ -125,12 +139,11 @@ public class VenueServer {
 			}
 		});
 
-		adddLoginRoutes(app);
-		addAPIRoutes(app);	
+
 		return app;
 	}
 	
-	private void adddLoginRoutes(Javalin app) {
+	private void addLoginRoutes(Javalin app) {
         // Login route for any provider
         app.get("/auth/{provider}", LoginProviders::handleLogin);
  
@@ -172,12 +185,6 @@ public class VenueServer {
 	}
 	
 
-	private void addAPIRoutes(Javalin app) {
-		
-		api.addRoutes(app);
-		webApp.addRoutes(app);
-	}
-	
 
 	
 

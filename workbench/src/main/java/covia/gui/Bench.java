@@ -6,13 +6,14 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import covia.client.Covia;
 import covia.venue.Venue;
+import covia.venue.server.VenueServer;
 import convex.core.Result;
 import convex.core.data.ACell;
 import convex.core.data.Strings;
 import convex.core.util.JSONUtils;
 import java.net.URI;
 import convex.core.lang.RT;
-import covia.venue.VenueServer;
+
 import java.nio.charset.StandardCharsets;
 import java.io.InputStream;
 import java.util.Scanner;

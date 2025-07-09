@@ -1,4 +1,4 @@
-package covia.venue;
+package covia.venue.api;
 
 import java.util.List;
 
@@ -13,8 +13,10 @@ import convex.core.data.Strings;
 import convex.core.exceptions.ParseException;
 import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
+import covia.venue.Venue;
 import covia.venue.model.InvokeRequest;
 import covia.venue.model.InvokeResult;
+import covia.venue.server.SseServer;
 import io.javalin.Javalin;
 import io.javalin.http.BadRequestResponse;
 import io.javalin.http.Context;
@@ -30,8 +32,6 @@ public class CoviaAPI extends ACoviaAPI {
 
 	private static final String ROUTE = "/api/v1/";
 
-	private final Venue venue;
-
 	public static final String INVOKE = "invokeOperation";
 
 	public static final String GET_ASSET = "getAsset";
@@ -41,7 +41,7 @@ public class CoviaAPI extends ACoviaAPI {
 	private final SseServer sseServer;
 	
 	public CoviaAPI(Venue venue) {
-		this.venue=venue;
+		super(venue);
 		this.sseServer=new SseServer(venue);
 	}
 
@@ -54,8 +54,6 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.get(ROUTE+"jobs/<id>", this::getJobStatus);
 		javalin.sse(ROUTE+"jobs/<id>/sse", sseServer.registerSSE);
 		javalin.get(ROUTE+"jobs", this::getJobs);
-		javalin.post("/mcp", this::postMCP);
-		javalin.get("/.well-known/mcp", this::getMCPWellKnown);
 	}
 	
 	@OpenApi(path = ROUTE + "status", 
@@ -66,12 +64,7 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void getStatus(Context ctx) { 
 		jsonResult(ctx,"{\"status\":\"OK\"}");
 	}
-	
-	private void jsonResult(Context ctx,String jsonContent) {
-		ctx.header("Content-type", ContentTypes.JSON);
-		ctx.result(jsonContent);
-		ctx.status(200);
-	}
+
 	
 	private void jsonResult(Context ctx,List<?> jsonList) {
 		jsonResult(ctx,JSONUtils.toString(jsonList));
@@ -277,68 +270,4 @@ public class CoviaAPI extends ACoviaAPI {
 
 		jsonResult(ctx,jobs);
 	}
-	
-	@OpenApi(path = "/mcp", 
-			methods = HttpMethod.POST, 
-			tags = { "MCP"},
-			summary = "Handle MCP JSON-RPC requests", 
-			requestBody = @OpenApiRequestBody(
-					description = "JSON-RPC request",
-					content= @OpenApiContent(
-							type = "application/json" ,
-							from = Object.class,
-							exampleObjects = {
-								@OpenApiExampleProperty(name = "jsonrpc", value = "2.0"),
-								@OpenApiExampleProperty(name = "method", value = "getStatus"),
-								@OpenApiExampleProperty(name = "params", value = "{}"),
-								@OpenApiExampleProperty(name = "id", value = "1")
-							}
-					)),
-			operationId = "mcpServer",
-			responses = {
-					@OpenApiResponse(
-							status = "200", 
-							description = "JSON-RPC response", 
-							content = {
-								@OpenApiContent(
-										type = "application/json", 
-										from = Object.class) })
-					})	
-	protected void postMCP(Context ctx) { 
-		ctx.header("Content-type", ContentTypes.JSON);
-		
-		// Parse JSON-RPC request
-		String requestBody = ctx.body();
-		if (requestBody == null || requestBody.isEmpty()) {
-			ctx.status(400);
-			ctx.result("{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32600, \"message\": \"Invalid Request\"}, \"id\": null}");
-			return;
-		}
-		
-		// For now, return a simple response
-		jsonResult(ctx,"{\"jsonrpc\": \"2.0\", \"result\": {\"status\": \"active\", \"version\": \"1.0.0\"}, \"id\": 1}");
-	}
-	
-	@OpenApi(path = "/.well-known/mcp", 
-			methods = HttpMethod.GET, 
-			tags = { "MCP"},
-			summary = "Get MCP server capabilities", 
-			operationId = "mcpWellKnown")	
-	protected void getMCPWellKnown(Context ctx) { 
-		jsonResult(ctx,"""
-				{	
-					"mcp_version": "1.0",
-					"server_url": "http:localhost:8080/mcp",
-					"description": "MCP server for Covia Venue",
-					"tools_endpoint": "http:localhost:8080/mcp",
-					"auth": {
-						"type": "oauth2",
-						"authorization_endpoint": null
-					}	
-				}
-		""");
-	}
-	
-
-
 }

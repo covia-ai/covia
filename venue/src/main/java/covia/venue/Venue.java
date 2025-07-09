@@ -256,7 +256,7 @@ public class Venue {
 	}
 
 
-	AMap<AString,ACell> getJobStatus(AString jobID) {
+	public AMap<AString,ACell> getJobStatus(AString jobID) {
 		synchronized (jobs) {
 			return jobs.get(jobID);
 		}
