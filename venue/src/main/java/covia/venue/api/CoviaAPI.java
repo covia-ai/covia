@@ -14,6 +14,7 @@ import convex.core.data.Strings;
 import convex.core.exceptions.ParseException;
 import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
+import covia.api.Fields;
 import covia.venue.Venue;
 import covia.venue.model.InvokeRequest;
 import covia.venue.model.InvokeResult;
@@ -195,10 +196,23 @@ public class CoviaAPI extends ACoviaAPI {
 		String id=ctx.pathParam("id");
 		Hash assetID=Hash.parse(ctx.pathParam("id"));
 		
-		InputStream is=venue.getContentStream(assetID);
+		AMap<AString,ACell> meta=venue.getMetaValue(assetID);
+		if (meta==null) {
+			ctx.status(404);
+			ctx.result("Asset not found: "+assetID);		
+			return;
+		}
+		
+		if (!meta.containsKey(Fields.CONTENT)) {
+			ctx.status(404);
+			ctx.result("Asset metadata does not specifiy any content object: "+id);
+			return;
+		}
+		
+		InputStream is=venue.getContentStream(meta);
 		if (is==null) {
 			ctx.status(404);
-			ctx.result("Asset not found: "+id);
+			ctx.result("Asset did not have any content available: "+id);
 			return;
 		}
 
@@ -227,9 +241,21 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 		
+		if (!meta.containsKey(Fields.CONTENT)) {
+			ctx.status(404);
+			ctx.result("Asset metadata does not specifiy any content object: "+assetID);
+			return;
+		}
 		
-
-		ctx.status(200);
+		try {
+			InputStream is=ctx.bodyInputStream();
+			venue.putContent(meta,is);
+			ctx.status(200);
+			
+		} catch (IllegalArgumentException e) {
+			ctx.status(400);
+			ctx.result("Cannot PUT asset content: "+e.getMessage());
+		}
 	}
 	
 	@OpenApi(path = ROUTE + "invoke", 

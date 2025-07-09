@@ -24,7 +24,7 @@ public class MCP extends ACoviaAPI {
 	public void addRoutes(Javalin javalin) {
 		javalin.post("/mcp", this::postMCP);
 		javalin.get("/.well-known/mcp", this::getMCPWellKnown);
-		javalin.sse("/mcp", sseServer.registerSSE);
+		javalin.sse("/mcp/sse", sseServer.registerSSE);
 	}
 	
 	@OpenApi(path = "/mcp", 

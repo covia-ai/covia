@@ -2,7 +2,6 @@ package covia.client;
 
 import java.net.URI;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Future;
 
 import org.apache.hc.client5.http.async.methods.SimpleHttpRequest;
 import org.apache.hc.client5.http.async.methods.SimpleHttpResponse;
@@ -29,12 +28,12 @@ public class Covia extends ARESTClient  {
 		super(host,"/api/v1/");
 	}
 
-	public Future<Result> addAsset(String jsonString) {
+	public CompletableFuture<Result> addAsset(String jsonString) {
 		ACell meta=JSONUtils.parseJSON5(jsonString);
 		return addAsset(meta);
 	}
 	
-	public Future<Result> addAsset(ACell meta) {
+	public CompletableFuture<Result> addAsset(ACell meta) {
 		SimpleHttpRequest req=SimpleHttpRequest.create(Method.POST, getBaseURI().resolve("assets"));
 		req.setBody(JSONUtils.toString(meta), ContentType.APPLICATION_JSON);
 		return doRequest(req);
@@ -49,7 +48,7 @@ public class Covia extends ARESTClient  {
 	 * @param asset ID for asset. Can be a full asset DID
 	 * @return Asset metadata as a String, or null if asset is not found
 	 */
-	public Future<String> getMeta(String asset) {
+	public CompletableFuture<String> getMeta(String asset) {
 		Hash h=Asset.parseAssetID(asset);
 		if (h==null) throw new IllegalArgumentException("Bad asset ID format");
 		
@@ -69,7 +68,7 @@ public class Covia extends ARESTClient  {
 	 * @param input The input parameters for the operation as an ACell
 	 * @return Future containing the operation execution result
 	 */
-	public Future<Result> invoke(String operation, ACell input) {
+	public CompletableFuture<Result> invoke(String operation, ACell input) {
 		SimpleHttpRequest req = SimpleHttpRequest.create(Method.POST, getBaseURI().resolve("invoke"));
 		ACell requestBody = Maps.of(
 			"operation", Strings.create(operation),

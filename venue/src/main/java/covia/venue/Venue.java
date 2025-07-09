@@ -302,13 +302,23 @@ public class Venue {
 
 	/**
 	 * Gets a content stream for the given asset
-	 * @param assetID
+	 * @param meta Metadata of asset
 	 * @return Content stream, or null if no available / does not exist
 	 */
-	public InputStream getContentStream(Hash assetID) {
-		AMap<AString,ACell> meta=getMetaValue(assetID);
+	public InputStream getContentStream(AMap<AString,ACell> meta) {
+		if (meta==null) return null;	
+		AMap<AString,ACell> content=RT.ensureMap(meta.get(Fields.CONTENT));
+		if (content==null) return null;
 
 		return null;
+	}
+
+
+	public void putContent(AMap<AString, ACell> meta, InputStream is) {
+		// TODO Auto-generated method stub
+		if (meta==null) throw new IllegalArgumentException("No metadata");	
+		AMap<AString,ACell> content=RT.ensureMap(meta.get(Fields.CONTENT));
+		if (content==null) throw new IllegalArgumentException("Metadata does not have content object specified");	
 	}
 
 	
