@@ -5,7 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 
 import convex.core.data.ABlob;
-import convex.core.data.Blob;
+import convex.core.data.Blobs;
 
 /**
  * Simple implementation of AContent that wraps a Blob.
@@ -29,8 +29,7 @@ public class BlobContent extends AContent {
      * @throws IOException if reading from the stream fails
      */
     public static BlobContent from(InputStream inputStream) throws IOException {
-        byte[] data = inputStream.readAllBytes();
-        Blob blob = Blob.wrap(data);
+        ABlob blob = Blobs.fromStream(inputStream);
         return new BlobContent(blob);
     }
     

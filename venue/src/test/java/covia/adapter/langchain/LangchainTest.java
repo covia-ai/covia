@@ -26,7 +26,7 @@ public class LangchainTest {
 		        .build();
 
 		
-		System.out.println(model.doChat(chatRequest));
+		// System.out.println(model.doChat(chatRequest));
 	}
 
 }

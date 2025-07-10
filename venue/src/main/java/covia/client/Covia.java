@@ -7,6 +7,8 @@ import org.apache.hc.client5.http.async.methods.SimpleHttpRequest;
 import org.apache.hc.client5.http.async.methods.SimpleHttpResponse;
 import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.Method;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import convex.core.Result;
 import convex.core.data.ACell;
@@ -22,6 +24,8 @@ import covia.exception.ConversionException;
 import covia.venue.storage.AContent;
 
 public class Covia extends ARESTClient  {
+	
+	public static Logger log=LoggerFactory.getLogger(Covia.class);;
 
 	private static final double BACKOFF_FACTOR = 1.5;
 	private static final long INITIAL_POLL_DELAY = 300; // 1 second initial delay
@@ -94,8 +98,8 @@ public class Covia extends ARESTClient  {
 		CompletableFuture<Result> result = new CompletableFuture<>();
 		
 		HTTPClients.execute(req).thenAccept(response -> {
-			System.out.println(req);
-			System.out.println(response);
+			// System.out.println(req);
+			// System.out.println(response);
 			if (response.getCode() != 201) {
 				result.completeExceptionally(new RuntimeException("Failed to invoke operation: " + response));
 				return;
@@ -144,7 +148,7 @@ public class Covia extends ARESTClient  {
 					}
 				}
 			} catch (Exception e) {
-				e.printStackTrace();
+				log.info("Failure during polling: "+e.getMessage(),e);
 				result.completeExceptionally(e);
 			}
 		};

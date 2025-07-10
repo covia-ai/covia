@@ -165,7 +165,7 @@ public class VenueTest {
 		} else {
 			// probably ignore?
 		}
-		System.err.println(JSONUtils.toString(result));	
+		// System.err.println(JSONUtils.toString(result));	
 	}
 	
 	private ACell waitForJobCompletion(Object jobID, long timeoutMillis) {

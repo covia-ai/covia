@@ -1,7 +1,9 @@
 package covia.venue;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,12 +15,11 @@ import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.lang.RT;
 import convex.core.util.FileUtils;
-import convex.core.util.Utils;
 import covia.venue.server.VenueServer;
 
 public class MainVenue {
 
-	public static final Logger log=LoggerFactory.getLogger(MainVenue.class);
+	public static Logger log=LoggerFactory.getLogger(MainVenue.class);;
 
 	public static void main(String[] args) throws Exception {
 		configureLogging(null);
@@ -30,28 +31,34 @@ public class MainVenue {
 	}
 	
 	private static void configureLogging(ACell config) throws JoranException, IOException {
-		JoranConfigurator configurator = new JoranConfigurator();
-		LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
-		configurator.setContext(context);
-		context.reset();
+		// Suppress Logback internal messages before any logging initialisation
+		//ch.qos.logback.classic.Logger rootLogger = 
+		//        (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
+		//rootLogger.setLevel(ch.qos.logback.classic.Level.OFF);
+		
 		
 		// configure logging if specified
 		ACell logFile=RT.getIn(config,"operations","log-config-file");
 		if (logFile instanceof AString) {
 			File logConfigFile=FileUtils.getFile(logFile.toString());
 			if (logConfigFile.exists()) {
-				configurator.doConfigure(logConfigFile);
+				InputStream is=new FileInputStream(logConfigFile);
+				configureLoggingInternal(is);
 				log.info("Logging configured from: ");
 				return;
-			} else {
-				log.info("Logging config file does not exist at "+logConfigFile+", using logback defaults");
-			}
-		} else {
-			log.info("No log config file specified, using logback defaults");
-		}
+			} 
+		} 
 		
 		String resourcePath="/covia/logback-default.xml";
-		configurator.doConfigure(Utils.getResourceAsStream(resourcePath));
+		configureLoggingInternal(MainVenue.class.getResourceAsStream(resourcePath));
 		log.info("Logging configured from default resource: "+resourcePath);
+	}
+
+	private static void configureLoggingInternal(InputStream is) throws JoranException {
+		JoranConfigurator configurator = new JoranConfigurator();
+		LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+		configurator.setContext(context);
+		context.reset();
+		configurator.doConfigure(is);
 	}
 }
