@@ -25,10 +25,9 @@ public abstract class AStorage {
      * 
      * @param hash The hash to use as the key for storing the content
      * @param inputStream The input stream containing the content to store
-     * @param contentType The content type/mime type of the content
      * @throws IOException if storage fails
      */
-    public abstract void store(Hash hash, InputStream inputStream, String contentType) throws IOException;
+    public abstract void store(Hash hash, InputStream inputStream) throws IOException;
     
     /**
      * Retrieve content for the given hash.

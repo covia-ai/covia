@@ -1,22 +1,12 @@
 package covia.gui;
 
-import javax.swing.*;
-import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
+import javax.swing.JComponent;
+import javax.swing.JFrame;
+
+import convex.core.util.Utils;
 import covia.client.Covia;
 import covia.venue.Venue;
 import covia.venue.server.VenueServer;
-import convex.core.Result;
-import convex.core.data.ACell;
-import convex.core.data.Strings;
-import convex.core.util.JSONUtils;
-import java.net.URI;
-import convex.core.lang.RT;
-
-import java.nio.charset.StandardCharsets;
-import java.io.InputStream;
-import java.util.Scanner;
 
 public class Bench {
 
@@ -34,24 +24,19 @@ public class Bench {
 			server.start(8089);
 			try {
 				Thread.sleep(1000); // Give server a moment to start
-				InputStream is = Bench.class.getClassLoader().getResourceAsStream("ollamaop.json");
-				if (is != null) {
-					String json = new Scanner(is, StandardCharsets.UTF_8).useDelimiter("\\A").next();
-					((java.util.concurrent.CompletableFuture<convex.core.Result>) covia.addAsset(json)).whenComplete((result, ex) -> {
-						if (ex != null) {
-							System.err.println("Asset upload failed: " + ex.getMessage());
-						} else {
-							System.out.println("Asset uploaded: " + (result != null ? result.getValue() : "null"));
-							// Set the operation ID in the REPL panel if possible
-							if (result != null && result.getValue() != null) {
-								String opId = result.getValue().toString();
-								javax.swing.SwingUtilities.invokeLater(() -> replPanel.setOperationId(opId));
-							}
-						}
-					});
-				} else {
-					System.err.println("Could not find ollamaop.json in resources");
-				}
+
+				String json = Utils.readResourceAsString("ollamaop.json");
+				covia.addAsset(json).whenComplete((result, ex) -> {
+					if (ex != null) {
+						System.err.println("Asset upload failed: " + ex.getMessage());
+					} else {
+						System.out.println("Asset uploaded: " + result);
+
+						String opId = result.toString();
+						javax.swing.SwingUtilities.invokeLater(() -> replPanel.setOperationId(opId));
+					}
+				});
+
 			} catch (Exception e) {
 				e.printStackTrace();
 			}

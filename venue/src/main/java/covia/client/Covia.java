@@ -18,6 +18,8 @@ import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import convex.java.ARESTClient;
 import convex.java.HTTPClients;
+import covia.exception.ConversionException;
+import covia.venue.storage.AContent;
 
 public class Covia extends ARESTClient  {
 
@@ -28,16 +30,29 @@ public class Covia extends ARESTClient  {
 		super(host,"/api/v1/");
 	}
 
-	public CompletableFuture<Result> addAsset(String jsonString) {
+	/**
+	 * Adds an asset to the connected venue
+	 */
+	public CompletableFuture<Hash> addAsset(String jsonString) {
 		ACell meta=JSONUtils.parseJSON5(jsonString);
 		return addAsset(meta);
 	}
 	
-	public CompletableFuture<Result> addAsset(ACell meta) {
+	/**
+	 * Adds an asset to the connected venue
+	 */
+	public CompletableFuture<Hash> addAsset(ACell meta) {
 		SimpleHttpRequest req=SimpleHttpRequest.create(Method.POST, getBaseURI().resolve("assets"));
-		req.setBody(JSONUtils.toString(meta), ContentType.APPLICATION_JSON);
-		return doRequest(req);
-	}
+		req.setBody(JSONUtils.toJSONPretty(meta).toString(), ContentType.APPLICATION_JSON);
+		return doRequest(req).thenApplyAsync(r->{
+			if (r.isError()) {
+				throw new Error("Asset add failed "+r.getValue());
+			}
+			Hash v=Hash.parse(r.getValue());
+			if (v!=null) return v;
+			throw new ConversionException("Result did not contain a valid Hash"); 
+		});
+	} 
 
 	public static Covia create(URI host) {
 		return new Covia(host);
@@ -56,7 +71,7 @@ public class Covia extends ARESTClient  {
 		SimpleHttpRequest request=SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("assets/"+h.toHexString()));
 		CompletableFuture<SimpleHttpResponse> future=HTTPClients.execute(request);
 		
-		return future.thenApply(response-> {
+		return future.thenApplyAsync(response-> {
 			if (response.getCode()!=200) return null;
 			return response.getBodyText();
 		});
@@ -139,6 +154,66 @@ public class Covia extends ARESTClient  {
 		} catch (Throwable t) {
 			new Thread(pollingTask).start();
 		}
+	}
+
+	/**
+	 * Adds content to an asset using the PUT API endpoint.
+	 * 
+	 * @param assetID The asset ID to add content to
+	 * @param content The content to add
+	 * @return Future that completes when the content is successfully added
+	 */
+	public CompletableFuture<Hash> addContent(String assetID, AContent content) {
+		Hash h = Asset.parseAssetID(assetID);
+		if (h == null) throw new IllegalArgumentException("Bad asset ID format");
+		
+		SimpleHttpRequest req = SimpleHttpRequest.create(Method.PUT, getBaseURI().resolve("assets/" + h.toHexString() + "/content"));
+		req.setBody(content.getBlob().getBytes(), ContentType.APPLICATION_OCTET_STREAM);
+		
+		return  HTTPClients.execute(req).thenApplyAsync(response -> {
+			if (response.getCode() == 200 || response.getCode() == 201) {
+				ACell json=JSONUtils.parse(response.getBodyText());
+				if (json instanceof AString hashString) {
+					Hash hash=Hash.parse(hashString);
+					if (hash!=null) {
+						return hash;
+					}
+				}
+				throw new RuntimeException("Failed to parse result: " + response.getCode() + " - " + response.getBodyText());
+			} else {
+				throw new RuntimeException("Failed to add content: " + response.getCode() + " - " + response.getBodyText());
+			}
+		});
+	
+	}
+	
+	/**
+	 * Gets content for an asset using the GET API endpoint.
+	 * 
+	 * @param assetID The asset ID to get content for
+	 * @return Future containing the content as an AContent, or null if not found
+	 */
+	public CompletableFuture<AContent> getContent(String assetID) {
+		Hash h = Asset.parseAssetID(assetID);
+		if (h == null) throw new IllegalArgumentException("Bad asset ID format");
+		
+		SimpleHttpRequest req = SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("assets/" + h.toHexString() + "/content"));
+		
+		return HTTPClients.execute(req).thenApply(response -> {
+			int code=response.getCode();
+			if (response.getCode() != 200) {
+				throw new RuntimeException("Content get failed with status: " +code+" "+ response.getBodyText()+" -- asset ID: "+assetID);
+			}
+			
+			try {
+				// Create a BlobContent from the response body
+				byte[] data = response.getBodyBytes();
+				convex.core.data.Blob blob = convex.core.data.Blob.wrap(data);
+				return new covia.venue.storage.BlobContent(blob);
+			} catch (Exception e) {
+				throw new RuntimeException("Failed to create content from response", e);
+			}
+		});
 	}
 
 }

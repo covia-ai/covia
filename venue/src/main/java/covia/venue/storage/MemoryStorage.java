@@ -27,9 +27,9 @@ public class MemoryStorage extends AStorage {
         
         storage.put(hash, content);
     }
-    
+     
     @Override
-    public void store(Hash hash, InputStream inputStream, String contentType) throws IOException {
+    public void store(Hash hash, InputStream inputStream) throws IOException  {
         if (!isInitialized()) {
             throw new IllegalStateException("Storage not initialized");
         }

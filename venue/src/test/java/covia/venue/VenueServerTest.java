@@ -23,13 +23,19 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 
 import convex.core.Result;
 import convex.core.data.ACell;
+import convex.core.data.Blob;
+import convex.core.data.Hash;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.crypto.Hashing;
 import convex.core.lang.RT;
 import convex.java.HTTPClients;
 import covia.client.Covia;
 import covia.venue.server.VenueServer;
+import covia.venue.storage.AContent;
+import covia.venue.storage.BlobContent;
+import covia.api.Fields;
 
 @TestInstance(Lifecycle.PER_CLASS)
 public class VenueServerTest {
@@ -121,5 +127,55 @@ public class VenueServerTest {
 		// Verify the error message contains our test message
 		Throwable cause = exception.getCause();
 		assertTrue(cause instanceof RuntimeException, "Should be a RuntimeException");
+	}
+	
+	@Test
+	public void testAssetWithContent() throws Exception {
+		// Create test content
+		String testContent = "Hello, this is test content for the asset!";
+		Blob contentBlob = Blob.wrap(testContent.getBytes());
+		Hash contentHash = Hashing.sha256(contentBlob.getBytes());
+		
+		// Create metadata containing the content hash
+		ACell metadata = Maps.of(
+			Fields.NAME, Strings.create("test-asset-with-content"),
+			Keyword.intern("description"), Strings.create("Test asset with content"),
+			Fields.CONTENT, Maps.of(
+				Fields.SHA256, Strings.create(contentHash.toHexString())
+			)
+		);
+		
+		// Add the asset with metadata
+		Future<Hash> addAssetFuture = covia.addAsset(metadata);
+
+		// Get the asset ID from the result
+		Hash assetId = addAssetFuture.get(5, TimeUnit.SECONDS);
+		assertNotNull(assetId, "Asset ID should be returned");
+		String assetIdString = assetId.toString();
+		assertNotNull(assetIdString, "Asset ID should be a string");
+		
+		
+		// Create content object for upload
+		BlobContent content = new BlobContent(contentBlob);
+		
+		// Add the content to the asset
+		Future<Hash> addContentFuture = covia.addContent(assetIdString, content);
+	
+		Hash returnedHash=addContentFuture.get(5, TimeUnit.SECONDS);
+		assertEquals(contentHash,returnedHash);
+		
+		// Verify the content can be downloaded again
+		Future<AContent> getContentFuture = covia.getContent(assetIdString);
+		AContent retrievedContent = getContentFuture.get(5, TimeUnit.SECONDS);
+		
+		assertNotNull(retrievedContent, "Retrieved content should not be null");
+		assertTrue(retrievedContent instanceof BlobContent, "Retrieved content should be BlobContent");
+		
+		// Verify the content matches
+		convex.core.data.ABlob retrievedBlob = retrievedContent.getBlob();
+		assertNotNull(retrievedBlob, "Retrieved blob should not be null");
+		
+		String retrievedContentString = new String(retrievedBlob.getBytes());
+		assertEquals(testContent, retrievedContentString, "Retrieved content should match original content");
 	}
 }

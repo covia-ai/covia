@@ -60,7 +60,7 @@ class StorageTest {
     void testStoreAndRetrieveInputStream() throws IOException {
         // Store content using InputStream
         InputStream inputStream = new ByteArrayInputStream(testContent.getBytes());
-        storage.store(testHash, inputStream, "text/plain");
+        storage.store(testHash, inputStream);
         
         // Verify content exists
         assertTrue(storage.exists(testHash));
@@ -137,7 +137,7 @@ class StorageTest {
         });
         
         assertThrows(IllegalArgumentException.class, () -> {
-            storage.store(testHash, (InputStream) null, "text/plain");
+            storage.store(testHash, (InputStream) null);
         });
     }
 } 

@@ -34,7 +34,6 @@ public class BlobContent extends AContent {
         return new BlobContent(blob);
     }
     
-    
     @Override
     public ABlob getBlob() {
         return blob;

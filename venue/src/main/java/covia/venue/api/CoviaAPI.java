@@ -1,5 +1,6 @@
 package covia.venue.api;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 
@@ -16,6 +17,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import covia.api.Fields;
 import covia.venue.Venue;
+import covia.venue.model.ErrorResponse;
 import covia.venue.model.InvokeRequest;
 import covia.venue.model.InvokeResult;
 import covia.venue.server.SseServer;
@@ -54,9 +56,10 @@ public class CoviaAPI extends ACoviaAPI {
 
 	public void addRoutes(Javalin javalin) {
 		javalin.get(ROUTE+"status", this::getStatus);
-		javalin.get(ROUTE+"assets/<id>", this::getAsset);
-		javalin.get(ROUTE+"assets/<id>/content", this::getContent);
-		javalin.put(ROUTE+"assets/<id>/content", this::putContent);
+		javalin.get(ROUTE+"assets/{id}", this::getAsset); // note {} doesn't match slashes, <> does
+		javalin.get(ROUTE+"assets/{id}/content", this::getContent);
+		javalin.put(ROUTE+"assets/{id}/content", this::putContent);
+
 		javalin.get(ROUTE+"assets", this::getAssets);
 		javalin.post(ROUTE+"assets", this::addAsset);
 		javalin.post(ROUTE+"invoke", this::invokeOperation);
@@ -75,8 +78,21 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 
 	
-	private void jsonResult(Context ctx,List<?> jsonList) {
-		jsonResult(ctx,JSONUtils.toString(jsonList));
+	private void jsonResult(Context ctx,Object json) {
+		ctx.header("Content-type", ContentTypes.JSON);
+		jsonResult(ctx,JSONUtils.toString(json));
+	}
+	
+	private void jsonResult(Context ctx,int status,Object json) {
+		jsonResult(ctx,json);
+		ctx.status(status);
+	}
+	
+	private void jsonError(Context ctx,int status,String message) {
+		if (status<400) throw new IllegalArgumentException("Unlikely HTTP error code: "+status);
+		jsonResult(ctx,"{\"error\": "+JSONUtils.escape(message)+"}");
+		ctx.header("Content-type", ContentTypes.JSON);
+		ctx.status(status);
 	}
 
 	
@@ -84,7 +100,45 @@ public class CoviaAPI extends ACoviaAPI {
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
 			summary = "Get a list of Covia assets.", 
-			operationId = CoviaAPI.GET_ASSET)
+			operationId = CoviaAPI.GET_ASSET,
+			queryParams = {
+		            @OpenApiParam(
+		                name = "offset",
+		                type = Long.class,
+		                description = "The starting index of the assets to retrieve (0-based). Defaults to 0 if not specified.",
+		                required = false,
+		                example = "0"
+		            ),
+		            @OpenApiParam(
+		                name = "limit",
+		                type = Long.class,
+		                description = "The maximum number of assets to return. Must be non-negative and not exceed 1000. Defaults to all remaining assets if not specified.",
+		                required = false,
+		                example = "100"
+		            )
+		        },
+		        responses = {
+		            @OpenApiResponse(
+		                status = "200",
+		                description = "A JSON array of asset IDs as hexadecimal strings.",
+		                content = {
+		                    @OpenApiContent(
+		                        type = "application/json",
+		                        from = String[].class
+		                    )
+		                }
+		            ),
+		            @OpenApiResponse(
+		                status = "400",
+		                description = "Bad request due to invalid offset, negative limit, or too many assets requested (exceeding 1000).",
+		                content = {
+		                    @OpenApiContent(
+		                        type = "application/json",
+		                        from = ErrorResponse.class
+		                    )
+		                }
+		            )
+		        })
 	protected void getAssets(Context ctx) { 
 		long offset=-1;
 		long limit=-1;
@@ -144,11 +198,8 @@ public class CoviaAPI extends ACoviaAPI {
 		String meta=ctx.body();
 		try {
 			Hash id=venue.storeAsset(meta, body);
-			ctx.header("Content-type", ContentTypes.JSON);
+			jsonResult(ctx,201,id.toHexString());
 			ctx.header("Location",ROUTE+"assets/"+id.toHexString());
-			ctx.result("\""+id.toString()+"\"");
-			
-			ctx.status(201);
 		} catch (ClassCastException | ParseException e) {
 			throw new BadRequestResponse("Unable to parse asset metadata: "+e.getMessage());
 		}
@@ -169,12 +220,12 @@ public class CoviaAPI extends ACoviaAPI {
 							example = "0x1234567812345678123456781234567812345678123456781234567812345678") })	
 	protected void getAsset(Context ctx) { 
 		String id=ctx.pathParam("id");
-		Hash assetID=Hash.parse(ctx.pathParam("id"));
+		Hash assetID=Hash.parse(id);
+		if (assetID==null) throw new BadRequestResponse("Invalid asset ID:" + id);
 		
 		AString meta=venue.getMetadata(assetID);
 		if (meta==null) {
-			ctx.status(404);
-			ctx.result("Asset not found: "+id);
+			jsonError(ctx,404,"Asset not found: "+id);
 			return;
 		}
 
@@ -198,26 +249,28 @@ public class CoviaAPI extends ACoviaAPI {
 		
 		AMap<AString,ACell> meta=venue.getMetaValue(assetID);
 		if (meta==null) {
-			ctx.status(404);
-			ctx.result("Asset not found: "+assetID);		
+			jsonError(ctx,404,"Asset not found: "+assetID);		
 			return;
 		}
 		
 		if (!meta.containsKey(Fields.CONTENT)) {
-			ctx.status(404);
-			ctx.result("Asset metadata does not specifiy any content object: "+id);
+			jsonError(ctx,404,"Asset metadata does not specifiy any content object: "+id);
 			return;
 		}
 		
-		InputStream is=venue.getContentStream(meta);
-		if (is==null) {
-			ctx.status(404);
-			ctx.result("Asset did not have any content available: "+id);
-			return;
-		}
+		InputStream is;
+		try {
+			is = venue.getContentStream(meta);
+			if (is==null) {
+				jsonError(ctx,404,"Asset did not have any content available: "+id);
+				return;
+			}
 
-		ctx.result(is);
-		ctx.status(200);
+			ctx.result(is);
+			ctx.status(200);
+		} catch (IOException e) {
+			ctx.status(500);
+		}
 	}
 	
 	@OpenApi(path = ROUTE + "assets/{id}/content", 
@@ -236,25 +289,26 @@ public class CoviaAPI extends ACoviaAPI {
 		
 		AMap<AString,ACell> meta=venue.getMetaValue(assetID);
 		if (meta==null) {
-			ctx.status(404);
-			ctx.result("Asset not found: "+idString);		
+			jsonError(ctx,404,"Asset not found: "+idString);		
 			return;
 		}
 		
 		if (!meta.containsKey(Fields.CONTENT)) {
-			ctx.status(404);
-			ctx.result("Asset metadata does not specifiy any content object: "+assetID);
+			jsonError(ctx,404,"Asset metadata does not specifiy any content object: "+assetID);
 			return;
 		}
 		
 		try {
 			InputStream is=ctx.bodyInputStream();
-			venue.putContent(meta,is);
-			ctx.status(200);
+			Hash contentHash= venue.putContent(meta,is);
+			jsonResult(ctx,200,contentHash);
 			
 		} catch (IllegalArgumentException e) {
 			ctx.status(400);
 			ctx.result("Cannot PUT asset content: "+e.getMessage());
+		} catch (IOException | OutOfMemoryError e) {
+			ctx.status(400);
+			ctx.result("Storage error trying to PUT asset content: "+e.getMessage());
 		}
 	}
 	
@@ -297,8 +351,7 @@ public class CoviaAPI extends ACoviaAPI {
 		try {
 			ACell invokeResult=venue.invokeOperation(op,input);
 			if (invokeResult==null) {
-				ctx.result("Operation does not exist");
-				ctx.status(404);
+				jsonError(ctx,404,"Operation does not exist");
 				return;
 			}
 			
@@ -336,14 +389,11 @@ public class CoviaAPI extends ACoviaAPI {
 		
 		ACell status=venue.getJobStatus(id);
 		if (status==null) {
-			ctx.status(404);
-			ctx.result("Job not found: "+id);
+			jsonError(ctx,404,"Job not found: "+id);
 			return;
 		}
 
-		ctx.header("Content-type", ContentTypes.JSON);
-		ctx.result(JSONUtils.toString(status));
-		ctx.status(200);
+		jsonResult(ctx,200,status);
 	}
 	
 	@OpenApi(path = ROUTE + "jobs", 
@@ -351,9 +401,7 @@ public class CoviaAPI extends ACoviaAPI {
 			tags = { "Covia"},
 			summary = "Get Covia jobs.")	
 	protected void getJobs(Context ctx) { 
-		
 		List<AString> jobs = venue.getJobs();
-
 		jsonResult(ctx,jobs);
 	}
 }

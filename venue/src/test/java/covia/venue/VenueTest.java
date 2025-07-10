@@ -25,6 +25,9 @@ import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import convex.core.util.Utils;
 import covia.adapter.Status;
+import covia.api.Fields;
+import covia.venue.storage.BlobContent;
+import java.io.InputStream;
 
 public class VenueTest {
 	Venue venue;
@@ -184,5 +187,49 @@ public class VenueTest {
 		}
 		// fail("Timeout waiting for job completion");
 		return RT.assocIn(status, Status.FAILED,"status");
+	}
+	
+	@Test
+	public void testAssetWithContentLocal() throws IOException {
+		// Create test content
+		String testContent = "Hello, this is test content for the local venue!";
+		Blob contentBlob = Blob.wrap(testContent.getBytes());
+		Hash contentHash = Hashing.sha256(contentBlob.getBytes());
+		
+		// Create metadata containing the content hash
+		AMap<AString,ACell> metadata = Maps.of(
+			Fields.NAME, Strings.create("test-asset-with-content-local"),
+			Keyword.intern("description"), Strings.create("Test asset with content using local venue API"),
+			Fields.CONTENT, Maps.of(
+				Fields.SHA256, Strings.create(contentHash.toHexString())
+			)
+		);
+		
+		// Add the asset with metadata using local venue API
+		Hash assetId = venue.storeAsset(metadata, null);
+		assertNotNull(assetId, "Asset ID should be returned");
+		
+		// Create content object for upload
+		BlobContent content = new BlobContent(contentBlob);
+		
+		// Add the content to the asset using local venue API
+		venue.putContent(venue.getMetaValue(assetId), content.getInputStream());
+		
+		// Verify the content can be downloaded again using local venue API
+		InputStream retrievedStream = venue.getContentStream(venue.getMetaValue(assetId));
+		assertNotNull(retrievedStream, "Retrieved content stream should not be null");
+		
+		// Read the content from the stream
+		byte[] retrievedBytes = retrievedStream.readAllBytes();
+		String retrievedContent = new String(retrievedBytes);
+		
+		// Verify the content matches
+		assertEquals(testContent, retrievedContent, "Retrieved content should match original content");
+		
+		// Verify the content hash matches
+		Blob retrievedBlob = Blob.wrap(retrievedBytes);
+		Hash retrievedHash = Hashing.sha256(retrievedBlob.getBytes());
+		assertEquals(contentHash, retrievedHash, "Retrieved content hash should match original hash");
+		
 	}
 }

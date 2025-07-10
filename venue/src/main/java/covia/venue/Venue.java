@@ -34,7 +34,11 @@ import covia.adapter.Status;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.client.Asset;
+import covia.venue.storage.AStorage;
+import covia.venue.storage.MemoryStorage;
+import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import convex.core.crypto.Hashing;
 
 public class Venue {
 	
@@ -55,6 +59,11 @@ public class Venue {
 
 	protected final AStore store;
 	
+	/**
+	 * Storage instance for content associated with assets
+	 */
+	protected final AStorage contentStorage;
+	
 	
 	protected ACell lattice=Maps.create(COVIA_KEY, Maps.create(ASSETS_KEY,Index.EMPTY));
 	
@@ -69,8 +78,10 @@ public class Venue {
 	}
 
 
-	public Venue(EtchStore store) {
+	public Venue(EtchStore store) throws IOException {
 		this.store=store;
+		this.contentStorage = new MemoryStorage();
+		this.contentStorage.initialize();
 	}
 
 	/**
@@ -305,20 +316,42 @@ public class Venue {
 	 * @param meta Metadata of asset
 	 * @return Content stream, or null if no available / does not exist
 	 */
-	public InputStream getContentStream(AMap<AString,ACell> meta) {
+	public InputStream getContentStream(AMap<AString,ACell> meta) throws IOException {
 		if (meta==null) return null;	
 		AMap<AString,ACell> content=RT.ensureMap(meta.get(Fields.CONTENT));
 		if (content==null) return null;
-
-		return null;
+		Hash contentHash=Hash.parse(RT.ensureString(content.get(Fields.SHA256)));
+		if (contentHash==null) {
+			throw new IllegalArgumentException("Metadata does not have valid content hash");
+		}	
+		return contentStorage.retrieve(contentHash).getInputStream();
 	}
 
 
-	public void putContent(AMap<AString, ACell> meta, InputStream is) {
-		// TODO Auto-generated method stub
+	
+	public Hash putContent(AMap<AString, ACell> meta, InputStream is) throws IOException {
 		if (meta==null) throw new IllegalArgumentException("No metadata");	
 		AMap<AString,ACell> content=RT.ensureMap(meta.get(Fields.CONTENT));
 		if (content==null) throw new IllegalArgumentException("Metadata does not have content object specified");	
+		Hash expectedHash=Hash.parse(RT.ensureString(content.get(Fields.SHA256)));
+		if (expectedHash==null) {
+			throw new IllegalArgumentException("Metadata does not have valid content hash");
+		}
+		
+		// Read the input stream to calculate the actual hash
+		byte[] data = is.readAllBytes();
+		Blob contentBlob = Blob.wrap(data);
+		Hash actualHash = Hashing.sha256(contentBlob.getBytes());
+		
+		// Verify the actual hash matches the expected hash from metadata
+		if (!actualHash.equals(expectedHash)) {
+			throw new IllegalArgumentException("Content hash mismatch. Expected: " + expectedHash.toHexString() + ", Actual: " + actualHash.toHexString());
+		}
+		
+		// Store the content using the verified hash
+		contentStorage.store(actualHash, new ByteArrayInputStream(data)); 
+		log.info("Stored content with SHA256: "+actualHash);
+		return actualHash;
 	}
 
 	
