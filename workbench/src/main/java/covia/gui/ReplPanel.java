@@ -18,7 +18,7 @@ import convex.core.data.Maps;
 import covia.client.Covia;
 
 public class ReplPanel extends JPanel {
-    private final Covia covia;
+    protected final Covia covia;
     private final JTextField opField;
 
     public ReplPanel(Covia covia) {

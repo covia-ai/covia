@@ -287,11 +287,9 @@ public class CoviaAPI extends ACoviaAPI {
 			jsonResult(ctx,200,contentHash);
 			
 		} catch (IllegalArgumentException e) {
-			ctx.status(400);
-			ctx.result("Cannot PUT asset content: "+e.getMessage());
+			this.jsonError(ctx, 400, "Cannot PUT asset content: "+e.getMessage());
 		} catch (IOException | OutOfMemoryError e) {
-			ctx.status(400);
-			ctx.result("Storage error trying to PUT asset content: "+e.getMessage());
+			this.jsonError(ctx, 500,"Storage error trying to PUT asset content: "+e.getMessage());
 		}
 	}
 	

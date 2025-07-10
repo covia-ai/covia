@@ -35,6 +35,7 @@ public class MCPTest {
 	
 	McpSyncClient mcp;
 	
+	@SuppressWarnings("unused")
 	@BeforeAll
 	public void setupServer() throws Exception {
 		venue=TestServer.VENUE;

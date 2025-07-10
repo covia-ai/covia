@@ -11,8 +11,6 @@ import io.javalin.Javalin;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.HttpResponseException;
 import io.javalin.http.staticfiles.Location;
-import io.javalin.openapi.JsonSchemaLoader;
-import io.javalin.openapi.JsonSchemaResource;
 import io.javalin.openapi.plugin.DefinitionConfiguration;
 import io.javalin.openapi.plugin.OpenApiPlugin;
 import io.javalin.openapi.plugin.swagger.SwaggerPlugin;
@@ -188,11 +186,6 @@ public class VenueServer {
 	    //    System.out.println(generatedJsonSchema.getName());
 	    //}
 	}
-	
-
-
-	
-
 
 	public void close() {
 		if (javalin!=null) {

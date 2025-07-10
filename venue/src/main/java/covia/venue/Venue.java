@@ -338,7 +338,8 @@ public class Venue {
 			throw new IllegalArgumentException("Metadata does not have valid content hash");
 		}
 		
-		// Read the input stream to calculate the actual hash
+		// Read the input stream to calculate the actual hash. 
+		// TODO: validate while writing? Maybe use DigestInputStream?
 		byte[] data = is.readAllBytes();
 		Blob contentBlob = Blob.wrap(data);
 		Hash actualHash = Hashing.sha256(contentBlob.getBytes());
