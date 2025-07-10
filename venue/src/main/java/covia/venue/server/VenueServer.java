@@ -184,9 +184,9 @@ public class VenueServer {
             });
 		}));
 
-		for (JsonSchemaResource generatedJsonSchema : new JsonSchemaLoader().loadGeneratedSchemes()) {
-	        System.out.println(generatedJsonSchema.getName());
-	    }
+		//for (JsonSchemaResource generatedJsonSchema : new JsonSchemaLoader().loadGeneratedSchemes()) {
+	    //    System.out.println(generatedJsonSchema.getName());
+	    //}
 	}
 	
 

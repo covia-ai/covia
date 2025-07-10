@@ -300,7 +300,7 @@ public class Venue {
 
 		AString jobID=Strings.create(Blob.wrap(bs).toHexString());
 		updateJobStatus(jobID, Maps.of(Fields.ID,jobID,Fields.STATUS,Status.PENDING,Fields.UPDATED,ts,Fields.CREATED,ts,Fields.INPUT,input));
-		
+
 		return jobID;
 	}
 

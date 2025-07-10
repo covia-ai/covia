@@ -84,7 +84,7 @@ public class VenueServerTest {
 		// Invoke the operation via the client
 		String opID = TestOps.RANDOM.toHexString();
 		assertEquals(64,opID.length());
-		System.out.println(opID);
+		// System.out.println(opID);
 		// assertNotNull(covia.getMeta(opID).get());
 		Future<Result> resultFuture = covia.invoke(opID, input);
 		
