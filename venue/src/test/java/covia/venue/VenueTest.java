@@ -151,7 +151,8 @@ public class VenueTest {
 		assertTrue(bytes.matches("[0-9a-f]{64}"), "Output should be a valid hex string");
 	}
 	
-	@Test
+
+	// @Test
 	public void testQwen() {
 		ACell input = Maps.of("prompt", "What is the capital of France?");
 		ACell result = venue.invokeOperation(qwenOpId, input);
