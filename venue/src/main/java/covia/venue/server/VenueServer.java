@@ -9,6 +9,7 @@ import covia.venue.api.MCP;
 import covia.venue.auth.LoginProviders;
 import io.javalin.Javalin;
 import io.javalin.config.JavalinConfig;
+import io.javalin.http.HttpResponseException;
 import io.javalin.http.staticfiles.Location;
 import io.javalin.openapi.JsonSchemaLoader;
 import io.javalin.openapi.JsonSchemaResource;
@@ -110,6 +111,10 @@ public class VenueServer {
 			});
 			
 			config.useVirtualThreads=true;
+		});
+		
+		app.exception(HttpResponseException.class, (e, ctx) -> {
+			VenueServer.this.api.jsonError(ctx,e.getStatus(),e.getMessage());
 		});
 
 		app.exception(Exception.class, (e, ctx) -> {

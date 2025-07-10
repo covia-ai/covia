@@ -1,16 +1,21 @@
 package covia.gui;
 
-import javax.swing.*;
-import java.awt.*;
+import java.awt.BorderLayout;
+import java.awt.Font;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import covia.client.Covia;
+
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
+import javax.swing.JTextField;
+import javax.swing.SwingUtilities;
+
 import convex.core.Result;
-import convex.core.data.ACell;  
+import convex.core.data.ACell;
 import convex.core.data.Maps;
-import convex.core.util.JSONUtils;
-import convex.core.lang.RT;
-import java.net.URI;
+import covia.client.Covia;
 
 public class ReplPanel extends JPanel {
     private final Covia covia;

@@ -39,6 +39,7 @@ public class CoviaAPI extends ACoviaAPI {
 	public static final String INVOKE = "invokeOperation";
 
 	public static final String GET_ASSET = "getAsset";
+	public static final String GET_ASSETS = "getAssets";
 
 	public static final String ADD_ASSET="addAsset";
 
@@ -77,30 +78,13 @@ public class CoviaAPI extends ACoviaAPI {
 		jsonResult(ctx,"{\"status\":\"OK\"}");
 	}
 
-	
-	private void jsonResult(Context ctx,Object json) {
-		ctx.header("Content-type", ContentTypes.JSON);
-		jsonResult(ctx,JSONUtils.toString(json));
-	}
-	
-	private void jsonResult(Context ctx,int status,Object json) {
-		jsonResult(ctx,json);
-		ctx.status(status);
-	}
-	
-	private void jsonError(Context ctx,int status,String message) {
-		if (status<400) throw new IllegalArgumentException("Unlikely HTTP error code: "+status);
-		jsonResult(ctx,"{\"error\": "+JSONUtils.escape(message)+"}");
-		ctx.header("Content-type", ContentTypes.JSON);
-		ctx.status(status);
-	}
 
 	
 	@OpenApi(path = ROUTE + "assets", 
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
 			summary = "Get a list of Covia assets.", 
-			operationId = CoviaAPI.GET_ASSET,
+			operationId = CoviaAPI.GET_ASSETS,
 			queryParams = {
 		            @OpenApiParam(
 		                name = "offset",
@@ -221,7 +205,7 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void getAsset(Context ctx) { 
 		String id=ctx.pathParam("id");
 		Hash assetID=Hash.parse(id);
-		if (assetID==null) throw new BadRequestResponse("Invalid asset ID:" + id);
+		if (assetID==null) throw new BadRequestResponse("Invalid asset ID: " + id);
 		
 		AString meta=venue.getMetadata(assetID);
 		if (meta==null) {
@@ -258,9 +242,8 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 		
-		InputStream is;
 		try {
-			is = venue.getContentStream(meta);
+			InputStream is = venue.getContentStream(meta);
 			if (is==null) {
 				jsonError(ctx,404,"Asset did not have any content available: "+id);
 				return;

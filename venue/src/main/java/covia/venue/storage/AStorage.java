@@ -74,10 +74,8 @@ public abstract class AStorage {
     
     /**
      * Close the storage system and release any resources.
-     * 
-     * @throws IOException if closing fails
      */
-    public abstract void close() throws IOException;
+    public abstract void close();
     
     /**
      * Check if the storage system is initialized and ready for use.

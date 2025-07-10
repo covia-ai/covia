@@ -1,6 +1,7 @@
 package covia.venue.api;
 
 import convex.api.ContentTypes;
+import convex.core.util.JSONUtils;
 import covia.venue.Venue;
 import io.javalin.http.Context;
 
@@ -15,10 +16,25 @@ public abstract class ACoviaAPI  {
 		this.venue=venue;
 	}
 
-	protected void jsonResult(Context ctx,String jsonContent) {
+	public void jsonRawResult(Context ctx,String jsonContent) {
 		ctx.header("Content-type", ContentTypes.JSON);
 		ctx.result(jsonContent);
-		ctx.status(200);
+	}
+	
+	public void jsonResult(Context ctx,Object json) {
+		jsonRawResult(ctx,JSONUtils.toString(json));
+	}
+	
+	public void jsonResult(Context ctx,int status,Object json) {
+		jsonResult(ctx,json);
+		ctx.status(status);
+	}
+	
+	public void jsonError(Context ctx,int status,String message) {
+		if (status<400) throw new IllegalArgumentException("Unlikely HTTP error code: "+status);
+		jsonRawResult(ctx,"{\"error\": \""+JSONUtils.escape(message)+"\"}");
+		ctx.header("Content-type", ContentTypes.JSON);
+		ctx.status(status);
 	}
 
 }

@@ -95,7 +95,7 @@ public class MemoryStorage extends AStorage {
     }
     
     @Override
-    public void close() throws IOException {
+    public void close() {
         storage.clear();
     }
     
