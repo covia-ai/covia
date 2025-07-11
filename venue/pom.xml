@@ -66,12 +66,21 @@
 	</build>
 
 	<dependencies>
+		<!-- Covia deps -->
+		<dependency>
+			<groupId>ai.covia</groupId>
+			<artifactId>covia-core</artifactId>
+			<version>${project.version}</version>
+		</dependency>
+	
+		<!-- Logging -->
 		<dependency>
 			<groupId>ch.qos.logback</groupId>
 			<artifactId>logback-classic</artifactId>
 			<version>${logback.version}</version>
 		</dependency>
 	
+		<!-- Convex / Lattice Tech -->
 		<dependency>
 			<groupId>world.convex</groupId>
 			<artifactId>convex-core</artifactId>
@@ -87,6 +96,8 @@
 			<artifactId>convex-java</artifactId>
 			<version>${convex.version}</version>
 		</dependency>
+		
+		<!-- Testing -->
 		<dependency>
 			<groupId>org.junit.jupiter</groupId>
 			<artifactId>junit-jupiter-engine</artifactId>
@@ -106,12 +117,14 @@
 			<version>${hc.version}</version>
 		</dependency>
 
+		<!-- MCP: Model Context protocol -->
 		<dependency>
 			<groupId>io.modelcontextprotocol.sdk</groupId>
 			<artifactId>mcp</artifactId>
 			<version>${mcp.version}</version>
 		</dependency>
 		
+		<!-- Langchain -->
 		<dependency>
     		<groupId>dev.langchain4j</groupId>
    			<artifactId>langchain4j</artifactId>
@@ -123,20 +136,18 @@
     		<version>1.0.1-beta6</version>
 		</dependency>
 		
+		<!-- Web / application server with Javalin -->
 		<dependency>
 	        <groupId>io.javalin.community.openapi</groupId>
 	        <artifactId>openapi-annotation-processor</artifactId>
 	        <version>${javalin.version}</version>
 	        <scope>provided</scope>
     	</dependency>
-
-
 		<dependency>
 			<groupId>com.j2html</groupId>
 			<artifactId>j2html</artifactId>
 			<version>1.6.0</version>
 		</dependency>
-
 		<dependency>
 			<groupId>io.javalin</groupId>
 			<artifactId>javalin</artifactId>
