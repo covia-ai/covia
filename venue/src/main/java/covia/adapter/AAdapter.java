@@ -20,7 +20,9 @@ public abstract class AAdapter {
     public abstract String getName();
     
     /**
-     * Invoke an operation with the given input
+     * Invoke an operation with the given input, returning a future for the result.
+     * Adapters SHOULD launch an asynchronous task to produce the result
+     * 
      * @param operation The operation ID in the format "adapter:operation"
      * @param meta The metadata for the operation
      * @param input The input parameters for the operation

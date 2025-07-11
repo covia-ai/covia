@@ -80,16 +80,19 @@ public class TestAdapter extends AAdapter {
     }
     
     private CompletableFuture<ACell> handleDelay(ACell input) {
-        try {
-        	Hash op = RT.getIn(input, Fields.OPERATION);
+    	return CompletableFuture.supplyAsync(()->{
+			Hash op = RT.getIn(input, Fields.OPERATION);
         	ACell opInput = RT.getIn(input, Fields.INPUT);
         	CVMLong delay = CVMLong.parse(RT.getIn(input, Fields.DELAY));
+			try {
+				Thread.sleep(delay.longValue());
+			} catch (InterruptedException e) {
+				throw new RuntimeException("Delay operation interrupted while delaying");
+			}
         	ACell result = venue.invokeOperation(op, opInput);
-			Thread.sleep(delay.longValue());
-			return CompletableFuture.completedFuture(result);
-		} catch (InterruptedException e) {
-			return CompletableFuture.failedFuture(e);
-		}
+			return result;
+    	});
+
 	}
 
 	private ACell handleEcho(ACell input) {

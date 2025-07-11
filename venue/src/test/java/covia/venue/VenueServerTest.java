@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -113,7 +114,7 @@ public class VenueServerTest {
 	public void testFailureOperation() throws Exception {
 		// Create input for the error operation
 		ACell input = Maps.of(
-			Keyword.intern("message"), Strings.create("Test error message")
+			Fields.MESSAGE, Strings.create("Test error message")
 		);
 		
 		// Invoke the operation via the client
@@ -127,6 +128,19 @@ public class VenueServerTest {
 		// Verify the error message contains our test message
 		Throwable cause = exception.getCause();
 		assertTrue(cause instanceof RuntimeException, "Should be a RuntimeException");
+	}
+	
+	@Test
+	public void testNeverOperation() throws Exception {
+		// Create input for the error operation
+		ACell input = Maps.of(
+			Fields.MESSAGE, Strings.create("Test error message")
+		);
+		
+		// Invoke the operation via the client. Should not complete
+		Future<Result> resultFuture = covia.invoke(TestOps.NEVER, input);
+		Thread.sleep(50);
+		assertFalse(resultFuture.isDone());
 	}
 	
 	@Test
