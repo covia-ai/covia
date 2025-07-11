@@ -5,6 +5,9 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import convex.api.ContentTypes;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
@@ -34,6 +37,8 @@ import io.javalin.openapi.OpenApiRequestBody;
 import io.javalin.openapi.OpenApiResponse;
 
 public class CoviaAPI extends ACoviaAPI {
+	
+	public static final Logger log=LoggerFactory.getLogger(CoviaAPI.class);
 
 	private static final String ROUTE = "/api/v1/";
 
@@ -336,7 +341,8 @@ public class CoviaAPI extends ACoviaAPI {
 		
 		AString op=RT.ensureString(RT.getIn(req, "operation"));
 		if (op==null) {
-			throw new BadRequestResponse("Invoke request requires an 'operation' parameter as a String");
+			this.buildError(ctx, 400, "Invoke request requires an 'operation' parameter as a String");
+			return;
 		}
 		ACell input=RT.getIn(req, "input");
 		
@@ -347,13 +353,14 @@ public class CoviaAPI extends ACoviaAPI {
 				return;
 			}
 			
-			ctx.header("Content-type", ContentTypes.JSON);
+			this.buildResult(ctx, 201, invokeResult);
 			ctx.header("Location",ROUTE+"jobs/"+op.toHexString());
-			ctx.result(JSONUtils.toString(invokeResult));
-			
-			ctx.status(201);
 		} catch (IllegalArgumentException | IllegalStateException e) {
-			throw new BadRequestResponse(e.getMessage());
+			this.buildError(ctx, 400, "Error invoking operation: "+e);
+			return;
+		} catch (Exception e) {
+			this.buildError(ctx, 500, "Unexpected failure invoking operation: "+e);
+			log.warn("Unexpected exception handling client invoke",e);
 		}
 	}
 	
