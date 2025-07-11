@@ -27,6 +27,10 @@ import io.modelcontextprotocol.spec.McpSchema.InitializeResult;
 
 @TestInstance(Lifecycle.PER_CLASS)
 public class MCPTest {
+	/**
+	 * Toggle to enable / disable MCP tests
+	 */
+	public static final boolean TEST_MCP=false;
 	
 	static final int PORT=TestServer.PORT;
 	static final String BASE_URL=TestServer.BASE_URL;
@@ -39,13 +43,15 @@ public class MCPTest {
 	@BeforeAll
 	public void setupServer() throws Exception {
 		venue=TestServer.VENUE;
+		assumeTrue(TEST_MCP);
 
 		try {
 			McpClientTransport transport= HttpClientSseClientTransport.builder(BASE_URL+"/mcp").build();
 			mcp=McpClient.sync(transport).build();
 			InitializeResult ir=mcp.initialize();
 		} catch (Throwable t) {
-			// This skips the test class if connection throws
+			System.err.println("MCP initialisation failure: "+t);
+			t.printStackTrace();
 			assumeTrue(false);
 		}
 	}

@@ -198,7 +198,7 @@ public class CoviaAPI extends ACoviaAPI {
 			pathParams = {
 					@OpenApiParam(
 							name = "id", 
-							description = "Asset ID, equal to the SHA256 hash of the asset metadata.", 
+							description = "Asset ID, as a hex string.", 
 							required = true, 
 							type = String.class, 
 							example = "0x1234567812345678123456781234567812345678123456781234567812345678") })	
@@ -222,6 +222,13 @@ public class CoviaAPI extends ACoviaAPI {
 			tags = { "Covia"},
 			summary = "Get the content of a Covia data asset", 
 			operationId = CoviaAPI.GET_CONTENT,
+			pathParams = {
+					@OpenApiParam(
+							name = "id", 
+							description = "Asset ID, as a hex string.", 
+							required = true, 
+							type = String.class, 
+							example = "0x1234567812345678123456781234567812345678123456781234567812345678") },
 			responses = {
 					@OpenApiResponse(
 							status = "200", 
@@ -261,6 +268,13 @@ public class CoviaAPI extends ACoviaAPI {
 			tags = { "Covia"},
 			summary = "Put the content of a Covia asset. This must match the content-hash stored in the asset.", 
 			operationId = CoviaAPI.PUT_CONTENT,
+			pathParams = {
+					@OpenApiParam(
+							name = "id", 
+							description = "Asset ID, as a hex string.", 
+							required = true, 
+							type = String.class, 
+							example = "0x1234567812345678123456781234567812345678123456781234567812345678") },
 			responses = {
 					@OpenApiResponse(
 							status = "200", 
