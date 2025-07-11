@@ -1,0 +1,11 @@
+{
+	"name": "Never Operation",
+	"description": "An operation that never completes, i.e. its status will remain PENDING",
+	"dateCreated":"2025-07-11T07:22:59Z",
+	"dateModified": "2025-07-11T07:22:59Z",
+	"operation": {
+		"adapter": "test:never",
+		"input": {},
+		"output": {}
+	}
+}

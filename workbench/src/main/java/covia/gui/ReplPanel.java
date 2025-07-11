@@ -17,6 +17,7 @@ import convex.core.data.ACell;
 import convex.core.data.Maps;
 import covia.grid.client.Covia;
 
+@SuppressWarnings("serial")
 public class ReplPanel extends JPanel {
     protected final Covia covia;
     private final JTextField opField;

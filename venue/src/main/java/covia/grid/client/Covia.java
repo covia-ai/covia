@@ -58,6 +58,11 @@ public class Covia extends ARESTClient  {
 		});
 	} 
 
+	/**
+	 * Create a Covia grid client using the given venue URI
+	 * @param host Host Venue
+	 * @return Covia client instance
+	 */
 	public static Covia create(URI host) {
 		return new Covia(host);
 	}

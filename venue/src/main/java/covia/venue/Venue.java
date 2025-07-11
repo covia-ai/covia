@@ -90,6 +90,7 @@ public class Venue {
 	 */
 	public void registerAdapter(AAdapter adapter) {
 		String name = adapter.getName();
+		adapter.install(this);
 		adapters.put(name, adapter);
 		log.info("Registered adapter: {}", name);
 	}
@@ -202,10 +203,6 @@ public class Venue {
 			venue.registerAdapter(new TestAdapter());
 			venue.registerAdapter(new LangChainAdapter());
 			venue.storeAsset(Utils.readResourceAsString(BASE+"qwen.json"),null);
-			venue.storeAsset(Utils.readResourceAsString(BASE+"empty.json"),null);
-			venue.storeAsset(Utils.readResourceAsString(BASE+"randomop.json"),null);
-			venue.storeAsset(Utils.readResourceAsString(BASE+"echoop.json"),null);
-			venue.storeAsset(Utils.readResourceAsString(BASE+"randomop.json"),null);
 		} catch (IOException e) {
 			throw new Error(e);
 		}

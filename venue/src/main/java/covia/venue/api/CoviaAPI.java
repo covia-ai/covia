@@ -341,7 +341,7 @@ public class CoviaAPI extends ACoviaAPI {
 			ctx.result(JSONUtils.toString(invokeResult));
 			
 			ctx.status(201);
-		} catch (IllegalArgumentException e) {
+		} catch (IllegalArgumentException | IllegalStateException e) {
 			throw new BadRequestResponse(e.getMessage());
 		}
 	}

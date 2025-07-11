@@ -3,13 +3,23 @@ package covia.adapter;
 import java.security.SecureRandom;
 import java.util.concurrent.CompletableFuture;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import convex.core.data.ACell;
+import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.core.util.Utils;
+import covia.api.Fields;
+import covia.venue.Venue;
 
 public class TestAdapter extends AAdapter {
+	
+	public static final Logger log=LoggerFactory.getLogger(TestAdapter.class);
+	
     private final SecureRandom random = new SecureRandom();
     
     @Override
@@ -34,6 +44,10 @@ public class TestAdapter extends AAdapter {
             switch (testOp) {
                 case "echo":
                     return CompletableFuture.completedFuture(handleEcho(input));
+                case "never":
+                    return new CompletableFuture<>();
+                case "delay":
+                    return handleDelay(input);
                 case "error":
                     return CompletableFuture.failedFuture(handleError(input));
                 case "random":
@@ -48,7 +62,37 @@ public class TestAdapter extends AAdapter {
         }
     }
     
-    private ACell handleEcho(ACell input) {
+    @Override public void install(Venue venue) {
+    	super.install(venue);
+		String BASE="/asset-examples/";
+
+		try {
+			venue.storeAsset(Utils.readResourceAsString(BASE+"empty.json"),null);
+			venue.storeAsset(Utils.readResourceAsString(BASE+"randomop.json"),null);
+			venue.storeAsset(Utils.readResourceAsString(BASE+"echoop.json"),null);
+			venue.storeAsset(Utils.readResourceAsString(BASE+"neverop.json"),null);
+			venue.storeAsset(Utils.readResourceAsString(BASE+"delayop.json"),null);
+			venue.storeAsset(Utils.readResourceAsString(BASE+"randomop.json"),null);
+		} catch(Exception e) {
+			log.warn("Failed to install test assets",e);
+		}
+
+    }
+    
+    private CompletableFuture<ACell> handleDelay(ACell input) {
+        try {
+        	Hash op = RT.getIn(input, Fields.OPERATION);
+        	ACell opInput = RT.getIn(input, Fields.INPUT);
+        	CVMLong delay = CVMLong.parse(RT.getIn(input, Fields.DELAY));
+        	ACell result = venue.invokeOperation(op, opInput);
+			Thread.sleep(delay.longValue());
+			return CompletableFuture.completedFuture(result);
+		} catch (InterruptedException e) {
+			return CompletableFuture.failedFuture(e);
+		}
+	}
+
+	private ACell handleEcho(ACell input) {
         // Simply return the input
         return input;
     }

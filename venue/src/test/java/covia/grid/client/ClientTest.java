@@ -24,6 +24,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.crypto.Hashing;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.venue.TestOps;
 import covia.venue.TestServer;
 import covia.venue.storage.AContent;
@@ -201,10 +202,10 @@ public class ClientTest {
 		
 		// Create metadata with content hash
 		ACell metadata = Maps.of(
-			"name", Strings.create("Complete Flow Test Asset"),
-			"description", Strings.create("A test asset for complete flow"),
-			"content", Maps.of(
-				"sha256", Strings.create(contentHash.toHexString())
+			Fields.NAME, Strings.create("Complete Flow Test Asset"),
+			Fields.DESCRIPTION, Strings.create("A test asset for complete flow"),
+			Fields.CONTENT, Maps.of(
+				Fields.SHA256, Strings.create(contentHash.toHexString())
 			)
 		);
 		

@@ -1,0 +1,29 @@
+{
+	"name": "Delay Operation",
+	"description": "Runs another op after a delay",
+	"dateCreated":"2025-06-09T07:22:59Z",
+	"dateModified": "2025-06-09T07:22:59Z",
+	"operation": {
+		"adapter": "test:delay",
+		"input": {
+			"type":"object",
+			"properties":{
+				"operation":{
+					"type":"asset",
+					"description":"The operation to run after a delay."
+				},
+				"delay":{
+					"type":"number",
+					"description":"The number of milliseconds to delay calling the operation."
+				},
+				"input":{
+					"type":"asset",
+					"description":"The input to the target operation."
+				}
+			}	
+		},
+		"output": {
+			"description":"The output of the delayed operation."
+		}
+	}
+}

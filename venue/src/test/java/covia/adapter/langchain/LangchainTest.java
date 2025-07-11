@@ -9,6 +9,7 @@ import dev.langchain4j.model.ollama.OllamaChatModel;
 
 public class LangchainTest {
 	
+	@SuppressWarnings("unused")
 	public static void main(String[] args) {
 		String MODEL="qwen3"; // e.g. qwen3, deepseek-r1
 		

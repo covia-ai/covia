@@ -2,8 +2,17 @@ package covia.adapter;
 
 import java.util.concurrent.CompletableFuture;
 import convex.core.data.ACell;
+import covia.venue.Venue;
 
 public abstract class AAdapter {
+	
+	
+	protected Venue venue;
+
+	public void install(Venue venue) {
+		this.venue=venue;
+	}
+	
     /**
      * Returns the name of this adapter.
      * @return The adapter name (e.g. "mcp")
