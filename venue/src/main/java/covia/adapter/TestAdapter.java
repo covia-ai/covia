@@ -73,10 +73,11 @@ public class TestAdapter extends AAdapter {
 			venue.storeAsset(Utils.readResourceAsString(BASE+"neverop.json"),null);
 			venue.storeAsset(Utils.readResourceAsString(BASE+"delayop.json"),null);
 			venue.storeAsset(Utils.readResourceAsString(BASE+"randomop.json"),null);
+			Hash iris=venue.storeAsset(Utils.readResourceAsString(BASE+"iris.json"),null);
+			venue.putContent(iris,this.getClass().getResourceAsStream(BASE+"iris.csv"));
 		} catch(Exception e) {
 			log.warn("Failed to install test assets",e);
 		}
-
     }
     
     private CompletableFuture<ACell> handleDelay(ACell input) {

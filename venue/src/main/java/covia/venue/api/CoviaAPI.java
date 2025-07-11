@@ -258,6 +258,10 @@ public class CoviaAPI extends ACoviaAPI {
 				buildError(ctx,404,"Asset did not have any content available: "+id);
 				return;
 			}
+			ACell contentType=RT.getIn(meta, Fields.CONTENT,Fields.CONTENT_TYPE);
+			if (contentType instanceof AString ct) {
+				ctx.contentType(ct.toString());
+			} 
 
 			ctx.result(is);
 			ctx.status(200);

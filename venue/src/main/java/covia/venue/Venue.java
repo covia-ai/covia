@@ -329,7 +329,11 @@ public class Venue {
 		return contentStorage.getContent(contentHash).getInputStream();
 	}
 
-
+	public Hash putContent(Hash assetID, InputStream is) throws IOException {
+		AMap<AString, ACell> meta = getMetaValue(assetID);
+		if (meta==null) throw new IllegalArgumentException("No metadata");	
+		return putContent(meta,is);
+	}
 	
 	public Hash putContent(AMap<AString, ACell> meta, InputStream is) throws IOException {
 		if (meta==null) throw new IllegalArgumentException("No metadata");	
