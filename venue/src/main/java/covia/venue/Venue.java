@@ -324,7 +324,7 @@ public class Venue {
 		if (contentHash==null) {
 			throw new IllegalArgumentException("Metadata does not have valid content hash");
 		}	
-		return contentStorage.retrieve(contentHash).getInputStream();
+		return contentStorage.getContent(contentHash).getInputStream();
 	}
 
 

@@ -46,7 +46,7 @@ public class MemoryStorage extends AStorage {
     }
     
     @Override
-    public AContent retrieve(Hash hash) {
+    public AContent getContent(Hash hash) {
         if (!isInitialized()) {
             throw new IllegalStateException("Storage not initialized");
         }
@@ -82,7 +82,7 @@ public class MemoryStorage extends AStorage {
     
     @Override
     public long getSize(Hash hash) throws IllegalStateException {        
-        AContent storedContent = retrieve(hash);
+        AContent storedContent = getContent(hash);
         if (storedContent == null) {
             throw new IllegalStateException("Content does not exist for hash: " + hash);
         }

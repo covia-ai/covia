@@ -42,7 +42,7 @@ class StorageTest {
         assertTrue(storage.exists(testHash));
         
         // Retrieve content
-        AContent retrieved = storage.retrieve(testHash);
+        AContent retrieved = storage.getContent(testHash);
         assertNotNull(retrieved);
         
         // Verify content matches
@@ -66,7 +66,7 @@ class StorageTest {
         assertTrue(storage.exists(testHash));
         
         // Retrieve content
-        AContent retrieved = storage.retrieve(testHash);
+        AContent retrieved = storage.getContent(testHash);
         assertNotNull(retrieved);
         
         // Verify content matches
@@ -94,7 +94,7 @@ class StorageTest {
         
         // Verify content no longer exists
         assertFalse(storage.exists(testHash));
-        assertNull(storage.retrieve(testHash));
+        assertNull(storage.getContent(testHash));
     }
     
     @Test
@@ -124,7 +124,7 @@ class StorageTest {
         });
         
         assertThrows(IllegalArgumentException.class, () -> {
-            storage.retrieve(null);
+            storage.getContent(null);
         });
         
         assertThrows(IllegalArgumentException.class, () -> {

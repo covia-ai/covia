@@ -36,7 +36,7 @@ public abstract class AStorage {
      * @return The content associated with the hash, or null if not found
      * @throws IOException if retrieval fails
      */
-    public abstract AContent retrieve(Hash hash) throws IOException;
+    public abstract AContent getContent(Hash hash) throws IOException;
     
     /**
      * Check if content exists for the given hash.
