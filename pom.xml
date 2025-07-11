@@ -25,6 +25,7 @@
 	<modules>
 		<module>workbench</module>
 		<module>venue</module>
+		<module>covia-core</module>
 	</modules>
 
 	<build>
