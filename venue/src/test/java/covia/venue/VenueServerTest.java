@@ -117,7 +117,7 @@ public class VenueServerTest {
 		);
 		
 		// Invoke the operation via the client
-		Future<Result> resultFuture = covia.invoke("test:error", input);
+		Future<Result> resultFuture = covia.invoke(TestOps.ERROR, input);
 		
 		// Wait for job completion with timeout and verify it fails
 		ExecutionException exception = assertThrows(ExecutionException.class, () -> {

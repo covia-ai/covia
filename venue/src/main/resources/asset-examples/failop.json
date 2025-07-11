@@ -1,0 +1,11 @@
+{
+	"name": "Fail Operation",
+	"description": "always faild, regardless of input",
+	"dateCreated":"2025-06-09T07:22:59Z",
+	"dateModified": "2025-06-09T07:22:59Z",
+	"operation": {
+		"adapter": "test:error",
+		"input": {},
+		"output": {}
+	}
+}

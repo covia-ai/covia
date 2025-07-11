@@ -1,6 +1,5 @@
 package covia.grid.client;
 
-import java.io.IOException;
 import java.net.URI;
 import java.util.concurrent.CompletableFuture;
 
@@ -16,7 +15,6 @@ import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
-import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import convex.java.ARESTClient;
@@ -85,14 +83,25 @@ public class Covia extends ARESTClient  {
 
 	/**
 	 * Invokes an operation on the connected venue
-	 * @param operation The name of the operation to invoke
+	 * @param assetID The AssetID of the operation to invoke
 	 * @param input The input parameters for the operation as an ACell
 	 * @return Future containing the operation execution result
 	 */
-	public CompletableFuture<Result> invoke(String operation, ACell input) {
+	public CompletableFuture<Result> invoke(String assetID, ACell input) {
+		Hash opID=Assets.parseAssetID(assetID);
+		return invoke(opID,input);
+	}
+	
+	/**
+	 * Invokes an operation on the connected venue
+	 * @param assetID The AssetID of the operation to invoke
+	 * @param input The input parameters for the operation as an ACell
+	 * @return Future containing the operation execution result
+	 */
+	public CompletableFuture<Result> invoke(Hash assetID, ACell input) {
 		SimpleHttpRequest req = SimpleHttpRequest.create(Method.POST, getBaseURI().resolve("invoke"));
 		ACell requestBody = Maps.of(
-			"operation", Strings.create(operation),
+			"operation", assetID,
 			"input", input
 		);
 		req.setBody(JSONUtils.toString(requestBody), ContentType.APPLICATION_JSON);
@@ -103,7 +112,7 @@ public class Covia extends ARESTClient  {
 			// System.out.println(req);
 			// System.out.println(response);
 			if (response.getCode() != 201) {
-				result.completeExceptionally(new RuntimeException("Failed to invoke operation: " + response));
+				result.completeExceptionally(new RuntimeException("Failed to invoke operation: " + response+" = "+response.getBodyText()));
 				return;
 			}
 			ACell body=JSONUtils.parseJSON5(response.getBodyText());
