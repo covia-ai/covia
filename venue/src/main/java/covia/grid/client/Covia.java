@@ -1,6 +1,8 @@
 package covia.grid.client;
 
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import org.apache.hc.client5.http.async.methods.SimpleHttpRequest;
@@ -13,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import convex.core.Result;
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.lang.RT;
@@ -133,6 +136,36 @@ public class Covia extends ARESTClient  {
 		}).exceptionally(ex -> {
 			result.completeExceptionally(ex);
 			return null;
+		});
+		
+		return result;
+	}
+	
+	/**
+	 * Invokes an operation on the connected venue
+	 * @return Future containing the operation execution result
+	 */
+	public CompletableFuture<List<Hash>> getAssets() {
+		SimpleHttpRequest req = SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("assets"));
+		
+		CompletableFuture<List<Hash>> result = 
+		HTTPClients.execute(req).thenApply(response -> {
+			int code=response.getCode();
+			if (code != 200) {
+				throw new ConversionException("assets API returned status: "+code);
+			}
+			ACell body=JSONUtils.parseJSON5(response.getBodyText());
+			if (body instanceof AVector v) {
+				ArrayList<Hash> al=new ArrayList<>();
+				long n=v.count();
+				for (int i=0; i<n; i++) {
+					al.add(Hash.parse(v.get(i)));
+				}
+				return al;
+			} else {
+				throw new ConversionException("assets API did not return a list of assets");
+			}
+			
 		});
 		
 		return result;

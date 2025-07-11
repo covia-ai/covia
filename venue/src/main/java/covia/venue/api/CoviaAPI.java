@@ -2,6 +2,7 @@ package covia.venue.api;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.List;
 
 import convex.api.ContentTypes;
@@ -143,17 +144,13 @@ public class CoviaAPI extends ACoviaAPI {
 		long start=Math.max(0, offset);
 		long end=(limit<0)?n:start+limit;
 		if (end-start>1000) throw new BadRequestResponse("Too many assets requested: "+(end-start));
-		StringBuilder sb=new StringBuilder();
-		sb.append("[");
+		ArrayList<Object> assetsList=new ArrayList<>();
 		for (long i=start; i<end; i++) {
-			if (i>start) sb.append(",\n");
-			sb.append('"');
-			sb.append(allAssets.entryAt(i).getKey().toHexString());
-			sb.append('"');
+			AString s=(allAssets.entryAt(i).getKey().toCVMHexString());
+			assetsList.add(s);
 		}
-		sb.append("]");
 
-		buildResult(ctx,sb.toString());
+		buildResult(ctx,assetsList);
 	}
 	
 	@OpenApi(path = ROUTE + "assets", 

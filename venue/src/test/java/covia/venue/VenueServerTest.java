@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -128,6 +129,12 @@ public class VenueServerTest {
 		// Verify the error message contains our test message
 		Throwable cause = exception.getCause();
 		assertTrue(cause instanceof RuntimeException, "Should be a RuntimeException");
+	}
+	
+	@Test public void testGetAllAssets() throws InterruptedException, ExecutionException {
+		// Server should return the test assets
+		CompletableFuture<List<Hash>> result = covia.getAssets();
+		assertTrue(result.get().contains(TestOps.ECHO));
 	}
 	
 	@Test
