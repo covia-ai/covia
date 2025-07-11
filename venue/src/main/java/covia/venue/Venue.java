@@ -269,17 +269,21 @@ public class Venue {
 		log.info("Updated job: "+jobID);
 	}
 
-
+	/**
+	 * Gets a snapshot of the current job status
+	 * @param jobID
+	 * @return Job status record, or null if not found
+	 */
 	public AMap<AString,ACell> getJobStatus(AString jobID) {
 		synchronized (jobs) {
 			return jobs.get(jobID);
 		}
 	}
 
-
 	private HashMap<AString,AMap<AString,ACell>> jobs= new HashMap<>();
 	
-	Random r=new Random();
+	private Random rand=new Random();
+	private long jobCounter=rand.nextLong();
 	
 	/** 
 	 * Start a job and return its ID
@@ -289,24 +293,25 @@ public class Venue {
 	 */
 	private AString submitJob(Hash opID, ACell input) {
 		byte[] bs=new byte[16];
-		r.nextBytes(bs);
 		
-		// Put timestamp over the first 8 bytes
+		// Put timestamp over the first 8 bytes, and an incrementing counter for the remaining 8 bytes. 
+		// This is so that job IDs are usually sorted, but relatively unpredictable and very unlikely to collide
 		long ts=Utils.getCurrentTimestamp();
 		Utils.writeLong(bs, 0, ts);
+		Utils.writeLong(bs, 8, jobCounter);
+		jobCounter+=rand.nextInt()&0xffffffffl; // increment with random 32-bit int
 
-		AString jobID=Strings.create(Blob.wrap(bs).toHexString());
+		AString jobID=Blob.wrap(bs).toCVMHexString();
 		updateJobStatus(jobID, Maps.of(Fields.ID,jobID,Fields.STATUS,Status.PENDING,Fields.UPDATED,ts,Fields.CREATED,ts,Fields.INPUT,input));
 
+		// TODO: very slim chance of JobID collisions?
+		
 		return jobID;
 	}
 
-
 	public List<AString> getJobs() {
-		
 		return new ArrayList<>(jobs.keySet());
 	}
-
 
 	/**
 	 * Gets a content stream for the given asset
@@ -350,6 +355,12 @@ public class Venue {
 		contentStorage.store(actualHash, new ByteArrayInputStream(data)); 
 		log.info("Stored content with SHA256: "+actualHash);
 		return actualHash;
+	}
+
+	private AMap<AString,ACell> STATUS_MAP=Maps.of(Fields.STATUS,Fields.OK);
+
+	public ACell getStatus() {
+		return STATUS_MAP;
 	}
 
 	

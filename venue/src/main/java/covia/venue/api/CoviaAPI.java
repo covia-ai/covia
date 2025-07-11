@@ -8,7 +8,6 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.api.ContentTypes;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -81,7 +80,7 @@ public class CoviaAPI extends ACoviaAPI {
 			summary = "Get a quick Covia status report", 
 			operationId = "status")	
 	protected void getStatus(Context ctx) { 
-		buildResult(ctx,"{\"status\":\"OK\"}");
+		buildResult(ctx,200,venue.getStatus());
 	}
 
 
@@ -141,7 +140,8 @@ public class CoviaAPI extends ACoviaAPI {
 				if (limit<0) throw new BadRequestResponse("Negative limit");
 			}
 		} catch (NumberFormatException | NullPointerException e) {
-			throw new BadRequestResponse("Invalid offset or limit");
+			buildError(ctx,400,"Invalid offset or limit");
+			return;
 		}
 
 		AMap<ABlob, AVector<?>> allAssets = venue.getAssets();  
@@ -330,7 +330,7 @@ public class CoviaAPI extends ACoviaAPI {
 			responses = {
 					@OpenApiResponse(
 							status = "201", 
-							description = "Operation invoked", 
+							description = "Operation invoked, with a job status record returned. Job ID can be any string, but by convention 32 characters hex.", 
 							content = {
 								@OpenApiContent(
 										type = "application/json", 
@@ -379,11 +379,14 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void getJobStatus(Context ctx) { 
 		String pathID=ctx.pathParam("id");
 		if (pathID==null) {
-			throw new BadRequestResponse("Job request requires a job ID");
+			buildError(ctx,400,"Job request requires a job ID");
+			return;
 		}
+		
 		AString id=RT.ensureString(Strings.create(pathID));
 		if (id==null) {
-			throw new BadRequestResponse("Job request requires a job ID as a valid hex string");
+			buildError(ctx,400,"Job request requires a job ID as a valid hex string");
+			return;
 		}
 		
 		ACell status=venue.getJobStatus(id);

@@ -175,7 +175,6 @@ public class VenueServerTest {
 		String assetIdString = assetId.toString();
 		assertNotNull(assetIdString, "Asset ID should be a string");
 		
-		
 		// Create content object for upload
 		BlobContent content = new BlobContent(contentBlob);
 		

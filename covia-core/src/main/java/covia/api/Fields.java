@@ -21,4 +21,5 @@ public class Fields {
 	public static final StringShort CONTENT = Strings.intern("content");
 	
 	public static final StringShort SHA256 =  Strings.intern("sha256");
+	public static final StringShort OK = Strings.intern("OK");
 }
