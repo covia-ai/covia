@@ -33,7 +33,7 @@ import covia.adapter.LangChainAdapter;
 import covia.adapter.Status;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
-import covia.client.Asset;
+import covia.grid.Assets;
 import covia.venue.storage.AStorage;
 import covia.venue.storage.MemoryStorage;
 import java.io.ByteArrayInputStream;
@@ -81,7 +81,7 @@ public class Venue {
 	public Venue(EtchStore store) throws IOException {
 		this.store=store;
 		this.contentStorage = new MemoryStorage();
-		this.contentStorage.initialize();
+		this.contentStorage.initialise();
 	}
 
 	/**
@@ -139,7 +139,7 @@ public class Venue {
 	}
 	
 	private synchronized Hash storeAsset(AString meta, ACell content, AMap<AString,ACell> metaMap) {
-		Hash id=Asset.calcID(meta);
+		Hash id=Assets.calcID(meta);
 		AMap<ABlob,AVector<?>> assets=getAssets();
 		boolean exists=assets.containsKey(id);
 		log.info((exists?"Updated":"Stored")+" asset "+id +" : "+RT.getIn(metaMap, Fields.NAME));

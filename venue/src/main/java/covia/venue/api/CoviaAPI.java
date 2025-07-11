@@ -17,9 +17,9 @@ import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import covia.api.Fields;
 import covia.venue.Venue;
-import covia.venue.model.ErrorResponse;
-import covia.venue.model.InvokeRequest;
-import covia.venue.model.InvokeResult;
+import covia.venue.api.model.ErrorResponse;
+import covia.venue.api.model.InvokeRequest;
+import covia.venue.api.model.InvokeResult;
 import covia.venue.server.SseServer;
 import io.javalin.Javalin;
 import io.javalin.http.BadRequestResponse;
@@ -75,7 +75,7 @@ public class CoviaAPI extends ACoviaAPI {
 			summary = "Get a quick Covia status report", 
 			operationId = "status")	
 	protected void getStatus(Context ctx) { 
-		jsonResult(ctx,"{\"status\":\"OK\"}");
+		buildResult(ctx,"{\"status\":\"OK\"}");
 	}
 
 
@@ -153,7 +153,7 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		sb.append("]");
 
-		jsonResult(ctx,sb.toString());
+		buildResult(ctx,sb.toString());
 	}
 	
 	@OpenApi(path = ROUTE + "assets", 
@@ -182,7 +182,7 @@ public class CoviaAPI extends ACoviaAPI {
 		String meta=ctx.body();
 		try {
 			Hash id=venue.storeAsset(meta, body);
-			jsonResult(ctx,201,id.toHexString());
+			buildResult(ctx,201,id.toHexString());
 			ctx.header("Location",ROUTE+"assets/"+id.toHexString());
 		} catch (ClassCastException | ParseException e) {
 			throw new BadRequestResponse("Unable to parse asset metadata: "+e.getMessage());
@@ -209,7 +209,7 @@ public class CoviaAPI extends ACoviaAPI {
 		
 		AString meta=venue.getMetadata(assetID);
 		if (meta==null) {
-			jsonError(ctx,404,"Asset not found: "+id);
+			buildError(ctx,404,"Asset not found: "+id);
 			return;
 		}
 
@@ -233,19 +233,19 @@ public class CoviaAPI extends ACoviaAPI {
 		
 		AMap<AString,ACell> meta=venue.getMetaValue(assetID);
 		if (meta==null) {
-			jsonError(ctx,404,"Asset not found: "+assetID);		
+			buildError(ctx,404,"Asset not found: "+assetID);		
 			return;
 		}
 		
 		if (!meta.containsKey(Fields.CONTENT)) {
-			jsonError(ctx,404,"Asset metadata does not specifiy any content object: "+id);
+			buildError(ctx,404,"Asset metadata does not specifiy any content object: "+id);
 			return;
 		}
 		
 		try {
 			InputStream is = venue.getContentStream(meta);
 			if (is==null) {
-				jsonError(ctx,404,"Asset did not have any content available: "+id);
+				buildError(ctx,404,"Asset did not have any content available: "+id);
 				return;
 			}
 
@@ -272,24 +272,24 @@ public class CoviaAPI extends ACoviaAPI {
 		
 		AMap<AString,ACell> meta=venue.getMetaValue(assetID);
 		if (meta==null) {
-			jsonError(ctx,404,"Asset not found: "+idString);		
+			buildError(ctx,404,"Asset not found: "+idString);		
 			return;
 		}
 		
 		if (!meta.containsKey(Fields.CONTENT)) {
-			jsonError(ctx,404,"Asset metadata does not specifiy any content object: "+assetID);
+			buildError(ctx,404,"Asset metadata does not specifiy any content object: "+assetID);
 			return;
 		}
 		
 		try {
 			InputStream is=ctx.bodyInputStream();
 			Hash contentHash= venue.putContent(meta,is);
-			jsonResult(ctx,200,contentHash);
+			buildResult(ctx,200,contentHash);
 			
 		} catch (IllegalArgumentException e) {
-			this.jsonError(ctx, 400, "Cannot PUT asset content: "+e.getMessage());
+			this.buildError(ctx, 400, "Cannot PUT asset content: "+e.getMessage());
 		} catch (IOException | OutOfMemoryError e) {
-			this.jsonError(ctx, 500,"Storage error trying to PUT asset content: "+e.getMessage());
+			this.buildError(ctx, 500,"Storage error trying to PUT asset content: "+e.getMessage());
 		}
 	}
 	
@@ -332,7 +332,7 @@ public class CoviaAPI extends ACoviaAPI {
 		try {
 			ACell invokeResult=venue.invokeOperation(op,input);
 			if (invokeResult==null) {
-				jsonError(ctx,404,"Operation does not exist");
+				buildError(ctx,404,"Operation does not exist");
 				return;
 			}
 			
@@ -370,11 +370,11 @@ public class CoviaAPI extends ACoviaAPI {
 		
 		ACell status=venue.getJobStatus(id);
 		if (status==null) {
-			jsonError(ctx,404,"Job not found: "+id);
+			buildError(ctx,404,"Job not found: "+id);
 			return;
 		}
 
-		jsonResult(ctx,200,status);
+		buildResult(ctx,200,status);
 	}
 	
 	@OpenApi(path = ROUTE + "jobs", 
@@ -383,6 +383,6 @@ public class CoviaAPI extends ACoviaAPI {
 			summary = "Get Covia jobs.")	
 	protected void getJobs(Context ctx) { 
 		List<AString> jobs = venue.getJobs();
-		jsonResult(ctx,jobs);
+		buildResult(ctx,jobs);
 	}
 }

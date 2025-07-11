@@ -2,7 +2,7 @@ package covia.venue;
 
 import java.net.URI;
 
-import covia.client.Covia;
+import covia.grid.client.Covia;
 import covia.venue.server.VenueServer;
 
 public class TestServer {

@@ -23,7 +23,7 @@ class StorageTest {
     @BeforeEach
     void setUp() throws IOException {
         storage = new MemoryStorage();
-        storage.initialize();
+        storage.initialise();
         
         testContent = "Hello, World!";
         testBlob = Blob.wrap(testContent.getBytes());

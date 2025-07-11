@@ -65,7 +65,7 @@ public class MCP extends ACoviaAPI {
 		}
 		
 		// For now, return a simple response
-		jsonResult(ctx,"{\"jsonrpc\": \"2.0\", \"result\": {\"status\": \"active\", \"version\": \"1.0.0\"}, \"id\": 1}");
+		buildResult(ctx,"{\"jsonrpc\": \"2.0\", \"result\": {\"status\": \"active\", \"version\": \"1.0.0\"}, \"id\": 1}");
 	}
 	
 	@OpenApi(path = "/.well-known/mcp", 
@@ -74,7 +74,7 @@ public class MCP extends ACoviaAPI {
 			summary = "Get MCP server capabilities", 
 			operationId = "mcpWellKnown")	
 	protected void getMCPWellKnown(Context ctx) { 
-		jsonResult(ctx,"""
+		buildResult(ctx,"""
 				{	
 					"mcp_version": "1.0",
 					"server_url": "http:localhost:8080/mcp",

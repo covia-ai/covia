@@ -1,4 +1,4 @@
-package covia.api.impl;
+package covia.venue.api.impl;
 
 import convex.api.ContentTypes;
 import io.javalin.http.ContentType;

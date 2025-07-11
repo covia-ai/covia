@@ -1,10 +1,10 @@
-package covia.client;
+package covia.grid;
 
 import convex.core.crypto.Hashing;
 import convex.core.data.AString;
 import convex.core.data.Hash;
 
-public class Asset {
+public class Assets {
 
 	/**
 	 * Parse an asset ID from a String. Can extra assetID from a DID with as asset ID at the end of a path

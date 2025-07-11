@@ -30,7 +30,7 @@ public class MemoryStorage extends AStorage {
      
     @Override
     public void store(Hash hash, InputStream inputStream) throws IOException  {
-        if (!isInitialized()) {
+        if (!isInitialised()) {
             throw new IllegalStateException("Storage not initialized");
         }
         
@@ -47,7 +47,7 @@ public class MemoryStorage extends AStorage {
     
     @Override
     public AContent getContent(Hash hash) {
-        if (!isInitialized()) {
+        if (!isInitialised()) {
             throw new IllegalStateException("Storage not initialized");
         }
         
@@ -60,7 +60,7 @@ public class MemoryStorage extends AStorage {
     
     @Override
     public boolean exists(Hash hash) {
-        if (!isInitialized()) {
+        if (!isInitialised()) {
             return false;
         }
         
@@ -69,7 +69,7 @@ public class MemoryStorage extends AStorage {
     
     @Override
     public boolean delete(Hash hash) throws IOException {
-        if (!isInitialized()) {
+        if (!isInitialised()) {
             throw new IllegalStateException("Storage not initialized");
         }
         
@@ -90,7 +90,7 @@ public class MemoryStorage extends AStorage {
     }
     
     @Override
-    public void initialize() {
+    public void initialise() {
         // no initialisation needed
     }
     
@@ -100,7 +100,7 @@ public class MemoryStorage extends AStorage {
     }
     
     @Override
-    public boolean isInitialized() {
+    public boolean isInitialised() {
         return true;
     }
     

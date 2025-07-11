@@ -31,11 +31,11 @@ import convex.core.data.Strings;
 import convex.core.crypto.Hashing;
 import convex.core.lang.RT;
 import convex.java.HTTPClients;
-import covia.client.Covia;
 import covia.venue.server.VenueServer;
 import covia.venue.storage.AContent;
 import covia.venue.storage.BlobContent;
 import covia.api.Fields;
+import covia.grid.client.Covia;
 
 @TestInstance(Lifecycle.PER_CLASS)
 public class VenueServerTest {

@@ -15,7 +15,7 @@ import javax.swing.SwingUtilities;
 import convex.core.Result;
 import convex.core.data.ACell;
 import convex.core.data.Maps;
-import covia.client.Covia;
+import covia.grid.client.Covia;
 
 public class ReplPanel extends JPanel {
     protected final Covia covia;

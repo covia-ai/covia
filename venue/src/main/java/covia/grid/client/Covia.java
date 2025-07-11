@@ -1,5 +1,6 @@
-package covia.client;
+package covia.grid.client;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.concurrent.CompletableFuture;
 
@@ -21,6 +22,7 @@ import convex.core.util.JSONUtils;
 import convex.java.ARESTClient;
 import convex.java.HTTPClients;
 import covia.exception.ConversionException;
+import covia.grid.Assets;
 import covia.venue.storage.AContent;
 
 public class Covia extends ARESTClient  {
@@ -68,7 +70,7 @@ public class Covia extends ARESTClient  {
 	 * @return Asset metadata as a String, or null if asset is not found
 	 */
 	public CompletableFuture<String> getMeta(String asset) {
-		Hash h=Asset.parseAssetID(asset);
+		Hash h=Assets.parseAssetID(asset);
 		if (h==null) throw new IllegalArgumentException("Bad asset ID format");
 		
 		
@@ -168,7 +170,7 @@ public class Covia extends ARESTClient  {
 	 * @return Future that completes when the content is successfully added
 	 */
 	public CompletableFuture<Hash> addContent(String assetID, AContent content) {
-		Hash h = Asset.parseAssetID(assetID);
+		Hash h = Assets.parseAssetID(assetID);
 		if (h == null) throw new IllegalArgumentException("Bad asset ID format");
 		
 		SimpleHttpRequest req = SimpleHttpRequest.create(Method.PUT, getBaseURI().resolve("assets/" + h.toHexString() + "/content"));
@@ -198,7 +200,7 @@ public class Covia extends ARESTClient  {
 	 * @return Future containing the content as an AContent, or null if not found
 	 */
 	public CompletableFuture<AContent> getContent(String assetID) {
-		Hash h = Asset.parseAssetID(assetID);
+		Hash h = Assets.parseAssetID(assetID);
 		if (h == null) throw new IllegalArgumentException("Bad asset ID format");
 		
 		SimpleHttpRequest req = SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("assets/" + h.toHexString() + "/content"));

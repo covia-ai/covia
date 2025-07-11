@@ -70,7 +70,7 @@ public abstract class AStorage {
      * 
      * @throws IOException if initialization fails
      */
-    public abstract void initialize() throws IOException;
+    public abstract void initialise() throws IOException;
     
     /**
      * Close the storage system and release any resources.
@@ -82,5 +82,5 @@ public abstract class AStorage {
      * 
      * @return true if the storage is ready, false otherwise
      */
-    public abstract boolean isInitialized();
+    public abstract boolean isInitialised();
 } 

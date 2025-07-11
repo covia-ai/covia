@@ -4,7 +4,7 @@ import javax.swing.JComponent;
 import javax.swing.JFrame;
 
 import convex.core.util.Utils;
-import covia.client.Covia;
+import covia.grid.client.Covia;
 import covia.venue.Venue;
 import covia.venue.server.VenueServer;
 

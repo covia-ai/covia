@@ -112,7 +112,7 @@ public class VenueServer {
 		});
 		
 		app.exception(HttpResponseException.class, (e, ctx) -> {
-			VenueServer.this.api.jsonError(ctx,e.getStatus(),e.getMessage());
+			VenueServer.this.api.buildError(ctx,e.getStatus(),e.getMessage());
 		});
 
 		app.exception(Exception.class, (e, ctx) -> {

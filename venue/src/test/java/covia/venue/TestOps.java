@@ -4,7 +4,7 @@ import java.io.IOException;
 
 import convex.core.data.Hash;
 import convex.core.util.Utils;
-import covia.client.Asset;
+import covia.grid.Assets;
 
 public class TestOps {
 	
@@ -13,8 +13,8 @@ public class TestOps {
 
 	static {
 		 try {
-			RANDOM=Asset.calcID(Utils.readResourceAsString("/asset-examples/randomop.json"));
-			ECHO=Asset.calcID(Utils.readResourceAsString("/asset-examples/echoop.json"));
+			RANDOM=Assets.calcID(Utils.readResourceAsString("/asset-examples/randomop.json"));
+			ECHO=Assets.calcID(Utils.readResourceAsString("/asset-examples/echoop.json"));
 		 } catch (IOException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();

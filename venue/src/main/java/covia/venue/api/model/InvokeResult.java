@@ -1,4 +1,4 @@
-package covia.venue.model;
+package covia.venue.api.model;
 
 import io.javalin.openapi.OpenApiByFields;
 
