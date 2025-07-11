@@ -150,6 +150,7 @@ public class CoviaAPI extends ACoviaAPI {
 		long end=(limit<0)?n:start+limit;
 		if (end-start>1000) throw new BadRequestResponse("Too many assets requested: "+(end-start));
 		ArrayList<Object> assetsList=new ArrayList<>();
+		end=Math.min(end, n);
 		for (long i=start; i<end; i++) {
 			AString s=(allAssets.entryAt(i).getKey().toCVMHexString());
 			assetsList.add(s);
