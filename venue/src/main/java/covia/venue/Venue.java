@@ -268,7 +268,7 @@ public class Venue {
 		return getJobStatus(jobID);
 	}
 
-	private void updateJobStatus(AString jobID, AMap<AString, ACell> job) {
+	public void updateJobStatus(AString jobID, AMap<AString, ACell> job) {
 		job=job.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 		synchronized (jobs) {
 			AMap<AString, ACell> oldJob = jobs.get(jobID);

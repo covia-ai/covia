@@ -1,7 +1,14 @@
 package covia.adapter;
 
 import java.util.concurrent.CompletableFuture;
+
 import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
+import convex.core.data.Strings;
+import covia.api.Fields;
+import covia.grid.Job;
+import covia.grid.Status;
 import covia.venue.Venue;
 
 public abstract class AAdapter {
@@ -30,4 +37,24 @@ public abstract class AAdapter {
      * @return A CompletableFuture that will complete with the result of the operation
      */
     public abstract CompletableFuture<ACell> invoke(String operation, ACell meta, ACell input);
+    
+    protected void finishJob(AMap<AString,ACell> job, AString statusString) {
+    	AString id=Job.parseID(job.get(Fields.ID));
+    	if (id==null) {
+    		throw new IllegalStateException("Job has no ID");
+    	}
+    	job=job.assoc(Fields.JOB_STATUS_FIELD, statusString);
+    	venue.updateJobStatus(id,job);
+    }
+    
+    protected void completeJobResult(AMap<AString,ACell> job, ACell result) {
+    	job=job.assoc(Fields.OUTPUT, result);
+    	finishJob(job,Status.COMPLETE);
+    }
+    
+    
+    protected void failJobResult(AMap<AString,ACell> job, Object message) {
+    	job=job.assoc(Fields.JOB_ERROR_FIELD, Strings.create(message));
+    	finishJob(job,Status.COMPLETE);
+    }
 }

@@ -17,4 +17,8 @@ public class Job {
 		return false;
 	}
 
+	public static AString parseID(ACell a) {
+		return RT.ensureString(a);
+	}
+
 }
