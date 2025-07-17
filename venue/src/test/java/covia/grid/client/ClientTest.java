@@ -15,16 +15,19 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
-import convex.core.Result;
+import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
-import convex.core.crypto.Hashing;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.grid.Job;
+import covia.grid.Status;
 import covia.venue.TestOps;
 import covia.venue.TestServer;
 import covia.venue.storage.AContent;
@@ -103,16 +106,18 @@ public class ClientTest {
 		);
 		
 		// Invoke the operation
-		CompletableFuture<Result> future = client.invoke(TestOps.ECHO, input);
-		Result result = future.get(10, TimeUnit.SECONDS);
+		CompletableFuture<Job> future = client.invoke(TestOps.ECHO, input);
+		Job job=future.join();
+		assertTrue(client.waitForFinish(job));
 		
-		// Verify the result
-		assertNotNull(result, "Result should be returned");
-		assertTrue(!result.isError(), "Operation should not fail");
+		// Verify the job status
+		assertNotNull(job.getID(), "Job should have a valid ID");
+		 
+		assertEquals(Status.COMPLETE,job.getStatus(),"Job should be COMPLETE");
 		
-		// Get the result value
-		ACell value = result.getValue();
-		assertNotNull(value, "Result should have a value");
+		// Get the result value from the job status
+		ACell value = job.getOutput();
+		assertNotNull(value, "Job should have an output value");
 		
 		// Verify the echo response
 		ACell message = RT.getIn(value, "message");

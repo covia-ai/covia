@@ -3,7 +3,7 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
-import convex.core.Result;
+import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -33,14 +33,15 @@ import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
-import convex.core.crypto.Hashing;
 import convex.core.lang.RT;
 import convex.java.HTTPClients;
+import covia.api.Fields;
+import covia.grid.Job;
+import covia.grid.Status;
+import covia.grid.client.Covia;
 import covia.venue.server.VenueServer;
 import covia.venue.storage.AContent;
 import covia.venue.storage.BlobContent;
-import covia.api.Fields;
-import covia.grid.client.Covia;
 
 @TestInstance(Lifecycle.PER_CLASS)
 public class VenueServerTest {
@@ -91,16 +92,17 @@ public class VenueServerTest {
 		assertEquals(64,opID.length());
 		// System.out.println(opID);
 		// assertNotNull(covia.getMeta(opID).get());
-		Future<Result> resultFuture = covia.invoke(opID, input);
+		Job job = covia.invoke(opID, input).join();
+		boolean success=covia.waitForFinish(job);
+		assertTrue(success);
 		
 		// Wait for job completion with timeout
-		Result result = resultFuture.get(5, TimeUnit.SECONDS);
-		assertNotNull(result, "Should get a result");
-		assertTrue(!result.isError(), "Operation should not fail");
+		AMap<AString, ACell> jobStatus = job.getData();
+		assertNotNull(jobStatus, "Should get a job status");
 		
-		// Get the result value
-		ACell value = result.getValue();
-		assertNotNull(value, "Result should have a value");
+		// Get the result value from the job status
+		ACell value = jobStatus.get(Fields.OUTPUT);
+		assertNotNull(value, "Job should have an output value");
 		
 		// Verify the result
 		ACell bytes = RT.getIn(value, "bytes");
@@ -122,16 +124,9 @@ public class VenueServerTest {
 		);
 		
 		// Invoke the operation via the client
-		Future<Result> resultFuture = covia.invoke(TestOps.ERROR, input);
-		
-		// Wait for job completion with timeout and verify it fails
-		ExecutionException exception = assertThrows(ExecutionException.class, () -> {
-			resultFuture.get(5, TimeUnit.SECONDS);
-		});
-		
-		// Verify the error message contains our test message
-		Throwable cause = exception.getCause();
-		assertTrue(cause instanceof RuntimeException, "Should be a RuntimeException");
+		Job job=covia.invokeAndWait(TestOps.ERROR,input);
+		assertEquals(Status.FAILED,job.getStatus());
+	
 	}
 	
 	@Test public void testGetAllAssets() throws InterruptedException, ExecutionException {
@@ -153,10 +148,55 @@ public class VenueServerTest {
 			Fields.MESSAGE, Strings.create("Test error message")
 		);
 		
-		// Invoke the operation via the client. Should not complete
-		Future<Result> resultFuture = covia.invoke(TestOps.NEVER, input);
+		// Invoke the operation via the client. Should start but not complete
+		Job job = covia.invoke(TestOps.NEVER, input).join();
 		Thread.sleep(50);
-		assertFalse(resultFuture.isDone());
+		covia.updateJobStatus(job);
+		AString status=job.getStatus();
+		assertEquals(Status.PENDING,status);
+		assertFalse(job.isFinished());
+	}
+	
+	@Test
+	public void testJobLifecycleWithNeverOp() throws Exception {
+		// Create input for the never operation
+		ACell input = Maps.of(
+			Fields.MESSAGE, Strings.create("Test message for never operation")
+		);
+		
+		// Step 1: Invoke the operation using Covia client
+		Job job=covia.startJob(TestOps.NEVER, input);
+		assertEquals(Status.PENDING,job.getStatus());
+		
+		// Step 2: Check the status again after a brief pause
+		Thread.sleep(50);
+		covia.updateJobStatus(job);
+	
+		AString jobId = job.getID();
+		assertNotNull(jobId, "Job ID should be returned");
+		String jobIdStr = jobId.toString();
+		
+		// Step 3: Confirm that the status of the job is PENDING using Covia.getJobStatus
+		AMap<AString, ACell> statusMap = covia.getJobStatus(jobIdStr).get(5, TimeUnit.SECONDS);
+		assertNotNull(statusMap, "Job status map should not be null");
+		AString status = RT.ensureString(statusMap.get(Fields.JOB_STATUS_FIELD));
+		assertEquals("PENDING", status.toString(), "Job status should be PENDING");
+		
+		// Step 4: Cancel the job using the Covia client
+		covia.cancelJob(jobIdStr).get(5, TimeUnit.SECONDS);
+		
+		// Step 5: Confirm that the status is CANCELLED using Covia.getJobStatus
+		AMap<AString, ACell> cancelledMap = covia.getJobStatus(jobIdStr).get(5, TimeUnit.SECONDS);
+		assertNotNull(cancelledMap, "Cancelled job status map should not be null");
+		AString cancelledStatus = RT.ensureString(cancelledMap.get(Fields.JOB_STATUS_FIELD));
+		assertEquals("CANCELLED", cancelledStatus.toString(), "Job status should be CANCELLED");
+		
+		// Step 6: Delete the job using the Covia client
+		covia.deleteJob(jobIdStr).get(5, TimeUnit.SECONDS);
+		
+		// Step 7: Confirm that the job no longer exists using Covia.getJobStatus
+		AMap<AString, ACell> deletedMap = covia.getJobStatus(jobIdStr).get(5, TimeUnit.SECONDS);
+		assertNull(deletedMap, "Deleted job status map should be null");
 	}
 	
 	@Test

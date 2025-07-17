@@ -73,6 +73,7 @@ public class TestAdapter extends AAdapter {
 			venue.storeAsset(Utils.readResourceAsString(BASE+"neverop.json"),null);
 			venue.storeAsset(Utils.readResourceAsString(BASE+"delayop.json"),null);
 			venue.storeAsset(Utils.readResourceAsString(BASE+"randomop.json"),null);
+			venue.storeAsset(Utils.readResourceAsString(BASE+"failop.json"),null);
 			Hash iris=venue.storeAsset(Utils.readResourceAsString(BASE+"iris.json"),null);
 			venue.putContent(iris,this.getClass().getResourceAsStream(BASE+"iris.csv"));
 		} catch(Exception e) {

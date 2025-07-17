@@ -272,7 +272,7 @@ public class Venue {
 		job=job.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 		synchronized (jobs) {
 			AMap<AString, ACell> oldJob = jobs.get(jobID);
-			if (oldJob!=null && Job.isComplete(oldJob)) {
+			if (oldJob!=null && Job.isFinished(oldJob)) {
 				// can't update already complete job
 				return;
 			}
@@ -392,6 +392,33 @@ public class Venue {
 		AMap<AString,ACell> status=STATUS_MAP;
 		status=status.assoc(Fields.TS, CVMLong.create(Utils.getCurrentTimestamp()));
 		return status;
+	}
+
+	/**
+	 * Deletes a job permanently
+	 * @param id ID of Job
+	 * @return true if removed, false if did not exist anyway
+	 */
+	public boolean deleteJob(AString id) {
+		synchronized (jobs) {
+			return jobs.remove(id)!=null;
+		}
+	}
+
+	/**
+	 * Cancels a Job if it not already complete
+	 * @param id ID of Job
+	 * @return updates Job status
+	 */
+	public AMap<AString, ACell> cancelJob(AString id) {
+		AMap<AString, ACell> status = getJobStatus(id);
+		if (status==null) return null;
+		if (Job.isFinished(status)) return status;
+		AMap<AString, ACell> newStatus=status.assoc(Fields.JOB_STATUS_FIELD, Status.CANCELLED);
+		synchronized (jobs) {
+			jobs.put(id, newStatus);
+		}
+		return newStatus;
 	}
 
 	

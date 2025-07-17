@@ -58,7 +58,7 @@ public class ReplPanel extends JPanel {
                 try {
                     ACell opInput = Maps.of("prompt",input);
                     
-                    ((java.util.concurrent.CompletableFuture<Result>) covia.invoke(opId, opInput)).whenComplete((result, ex) -> {
+                    covia.invoke(opId, opInput).whenComplete((result, ex) -> {
                         if (ex != null) {
                             SwingUtilities.invokeLater(() -> {
                                 outputArea.append("Error: " + ex.getMessage() + "\n\n");
@@ -66,7 +66,7 @@ public class ReplPanel extends JPanel {
                             });
                         } else {
                             SwingUtilities.invokeLater(() -> {
-                                outputArea.append("Result: " + (result != null ? result.getValue() : "null") + "\n\n");
+                                outputArea.append("Result: " + result + "\n\n");
                                 outputArea.setCaretPosition(outputArea.getDocument().getLength());
                             });
                         }

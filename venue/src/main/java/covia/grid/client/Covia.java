@@ -4,6 +4,9 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.apache.hc.client5.http.async.methods.SimpleHttpRequest;
 import org.apache.hc.client5.http.async.methods.SimpleHttpResponse;
@@ -12,13 +15,13 @@ import org.apache.hc.core5.http.Method;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.core.Result;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
+import convex.core.exceptions.TODOException;
 import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import convex.java.ARESTClient;
@@ -27,6 +30,7 @@ import covia.api.Fields;
 import covia.exception.ConversionException;
 import covia.exception.ResponseException;
 import covia.grid.Assets;
+import covia.grid.Job;
 import covia.venue.storage.AContent;
 
 public class Covia extends ARESTClient  {
@@ -114,52 +118,99 @@ public class Covia extends ARESTClient  {
 	 * Invokes an operation on the connected venue
 	 * @param assetID The AssetID of the operation to invoke
 	 * @param input The input parameters for the operation as an ACell
-	 * @return Future containing the operation execution result
+	 * @return Future containing the job status map
 	 */
-	public CompletableFuture<Result> invoke(String assetID, ACell input) {
+	public CompletableFuture<Job> invoke(String assetID, ACell input) {
 		Hash opID=Assets.parseAssetID(assetID);
 		return invoke(opID,input);
+	}
+	
+	/**
+	 * Invokes an operation, returning a finished Job once complete
+	 * @param opID Operation to invoke 
+	 * @param input
+	 * @return
+	 */
+	public Job invokeSync(String opID, ACell input) {
+		throw new TODOException();
 	}
 	
 	/**
 	 * Invokes an operation on the connected venue
 	 * @param assetID The AssetID of the operation to invoke
 	 * @param input The input parameters for the operation as an ACell
-	 * @return Future containing the operation execution result
+	 * @return Future containing the job status map
 	 */
-	public CompletableFuture<Result> invoke(Hash assetID, ACell input) {
+	public CompletableFuture<Job> invoke(Hash assetID, ACell input) {
 		SimpleHttpRequest req = SimpleHttpRequest.create(Method.POST, getBaseURI().resolve("invoke"));
 		ACell requestBody = Maps.of(
-			"operation", assetID,
+			"operation", assetID.toCVMHexString(),
 			"input", input
 		);
 		req.setBody(JSONUtils.toString(requestBody), ContentType.APPLICATION_JSON);
 		
-		CompletableFuture<Result> result = new CompletableFuture<>();
-		
-		HTTPClients.execute(req).thenAccept(response -> {
-			// System.out.println(req);
-			// System.out.println(response);
+		CompletableFuture<SimpleHttpResponse> responseFuture = HTTPClients.execute(req);
+		CompletableFuture<Job> result= responseFuture.thenApply(response -> {
 			if (response.getCode() != 201) {
-				result.completeExceptionally(new RuntimeException("Failed to invoke operation: " + response+" = "+response.getBodyText()));
-				return;
+				throw new ResponseException("Failed to invoke operation: " + response+" = "+response.getBodyText(),response);
 			}
-			ACell body=JSONUtils.parseJSON5(response.getBodyText());
-			
-			AString jobId=RT.ensureString(RT.getIn(body, "id"));
-			if (jobId == null) {
-				result.completeExceptionally(new RuntimeException("No job ID returned: "+body));
-				return;
+			AMap<AString,ACell> body=RT.ensureMap(JSONUtils.parseJSON5(response.getBodyText()));
+			if (body==null) {
+				throw new ResponseException("Invalid response body",response);
 			}
-			
-			// Start polling for job status
-			pollJobStatus(jobId.toString(), result);
-		}).exceptionally(ex -> {
-			result.completeExceptionally(ex);
-			return null;
+			return Job.create(body);
 		});
-		
 		return result;
+	}
+	
+	/**
+	 * Starts a operation on the Grid.
+	 * @param opID Operation ID
+	 * @param input Operation input
+	 * @return Job instance (likely to be PENDING)
+	 * @throws InterruptedException
+	 * @throws ExecutionException
+	 * @throws TimeoutException
+	 */
+	public Job startJob(Hash opID, ACell input) throws InterruptedException, ExecutionException, TimeoutException {
+		return startJobAsync(opID,input).get(5,TimeUnit.SECONDS);
+	}
+	
+	/**
+	 * Starts an operation on the connected venue
+	 * @param opID The AssetID of the operation to invoke
+	 * @param input The input parameters for the operation as an ACell
+	 * @return Future containing the job status, likely to be PENDING
+	 */
+	public CompletableFuture<Job> startJobAsync(Hash opID, ACell input) {
+		SimpleHttpRequest req = SimpleHttpRequest.create(Method.POST, getBaseURI().resolve("invoke"));
+		ACell requestBody = Maps.of(
+			"operation", opID,
+			"input", input
+		);
+		req.setBody(JSONUtils.toString(requestBody), ContentType.APPLICATION_JSON);
+		
+		CompletableFuture<SimpleHttpResponse> responseFuture = HTTPClients.execute(req);
+		CompletableFuture<Job> result= responseFuture.thenApply(response -> {
+			if (response.getCode() != 201) {
+				throw new ResponseException("Failed to start operation: " + response+" = "+response.getBodyText(),response);
+			}
+			AMap<AString,ACell> body=RT.ensureMap(JSONUtils.parseJSON5(response.getBodyText()));
+			if (body==null) {
+				throw new ResponseException("Invalid response body",response);
+			}
+			return Job.create(body);
+		});
+		return result;
+	}
+	
+	
+	
+	public Job invokeAndWait(Hash opID, ACell input) throws InterruptedException {
+		CompletableFuture<Job> future = invoke(opID,input);
+		Job job=future.join();
+		waitForFinish(job);
+		return job;
 	}
 	
 	/**
@@ -199,42 +250,27 @@ public class Covia extends ARESTClient  {
 		return result;
 	}
 	
-	private void pollJobStatus(String jobId, CompletableFuture<Result> result) {
-		Runnable pollingTask = () -> {
+	/**
+	 * Waits for a job to finish
+	 * @param job
+	 * @return true if successfully completed, false if failed
+	 * @throws InterruptedException if interrupted while waiting
+	 */
+	public boolean waitForFinish(Job job) throws InterruptedException {
+		AString id=job.getID();
+		if (id==null) throw new IllegalStateException("Job has no ID");
+		long currentDelay = INITIAL_POLL_DELAY;
+		while (!job.isFinished()) {
 			try {
-				long currentDelay = INITIAL_POLL_DELAY;
-				while (true) {
-					SimpleHttpRequest req = SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("jobs/" + jobId));
-					SimpleHttpResponse response = HTTPClients.execute(req).get();
-					if (response.getCode() != 200) {
-						result.completeExceptionally(new RuntimeException("Failed to get job status: " + response.getCode()+" for job "+jobId));
-						return;
-					}
-					ACell status = JSONUtils.parseJSON5(response.getBodyText());
-					String jobStatus = RT.getIn(status, "status").toString();
-					if ("PENDING".equals(jobStatus)) {
-						Thread.sleep(currentDelay);
-						currentDelay = (long) (currentDelay * BACKOFF_FACTOR);
-						continue;
-					} else if ("FAILED".equals(jobStatus)) {
-						result.completeExceptionally(new RuntimeException("Job failed: " + status));
-						return;
-					} else {
-						result.complete(Result.value(RT.getIn(status, "output")));
-						return;
-					}
-				}
-			} catch (Exception e) {
-				log.info("Failure during polling: "+e.getMessage(),e);
-				result.completeExceptionally(e);
+				updateJobStatus(job);
+				if (job.isFinished()) break;
+			} catch (ExecutionException | TimeoutException e) {
+				throw new ResponseException("Job status polling failed",e);
 			}
-		};
-		// Use virtual thread if available, otherwise fallback to regular thread
-		try {
-			Thread.startVirtualThread(pollingTask);
-		} catch (Throwable t) {
-			new Thread(pollingTask).start();
+			Thread.sleep(currentDelay);
+			currentDelay = (long) (currentDelay * BACKOFF_FACTOR);
 		}
+		return job.isComplete();
 	}
 
 	/**
@@ -295,6 +331,83 @@ public class Covia extends ARESTClient  {
 				throw new RuntimeException("Failed to create content from response", e);
 			}
 		});
+	}
+
+	/**
+	 * Cancels a job on the connected venue
+	 * @param jobId The job ID to cancel
+	 * @return Future that completes when the job is successfully cancelled, or completes exceptionally if the job doesn't exist
+	 */
+	public CompletableFuture<Void> cancelJob(String jobId) {
+		SimpleHttpRequest req = SimpleHttpRequest.create(Method.PUT, getBaseURI().resolve("jobs/" + jobId + "/cancel"));
+		
+		return HTTPClients.execute(req).thenApply(response -> {
+			int code = response.getCode();
+			if (code == 200) {
+				return null; // Success
+			} else if (code == 404) {
+				throw new RuntimeException("Job not found: " + jobId);
+			} else {
+				throw new RuntimeException("Failed to cancel job: " + code + " - " + response.getBodyText());
+			}
+		});
+	}
+
+	/**
+	 * Deletes a job from the connected venue
+	 * @param jobId The job ID to delete
+	 * @return Future that completes when the job is successfully deleted, or completes exceptionally if the job doesn't exist
+	 */
+	public CompletableFuture<Void> deleteJob(String jobId) {
+		SimpleHttpRequest req = SimpleHttpRequest.create(Method.PUT, getBaseURI().resolve("jobs/" + jobId + "/delete"));
+		
+		return HTTPClients.execute(req).thenApply(response -> {
+			int code = response.getCode();
+			if (code == 200) {
+				return null; // Success
+			} else if (code == 404) {
+				throw new RuntimeException("Job not found: " + jobId);
+			} else {
+				throw new RuntimeException("Failed to delete job: " + code + " - " + response.getBodyText());
+			}
+		});
+	}
+
+	/**
+	 * Gets the status of a job by job ID.
+	 * @param jobID The job ID to check
+	 * @return Future containing the job status as an AMap, or null if not found
+	 */
+	public CompletableFuture<AMap<AString, ACell>> getJobStatus(AString jobID) {
+		SimpleHttpRequest req = SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("jobs/" + jobID));
+		return HTTPClients.execute(req).thenApply(response -> {
+			int code=response.getCode();
+			if (code == 200) {
+				return RT.ensureMap(JSONUtils.parse(response.getBodyText()));
+			} else if (code == 404) {
+				return null;
+			} else {
+				throw new RuntimeException("Failed to get job status: " + response.getCode() + " - " + response.getBodyText());
+			}
+		});
+	}
+	
+	/**
+	 * Gets the status of a job by job ID.
+	 * @param jobID The job ID to check
+	 * @return Future containing the job status as an AMap, or null if not found
+	 */
+	public CompletableFuture<AMap<AString, ACell>> getJobStatus(Object jobID) {
+		return getJobStatus(Job.parseID(jobID));
+	}
+	
+	public void updateJobStatus(Job job) throws InterruptedException, ExecutionException, TimeoutException {
+		AString jobID=job.getID();
+		CompletableFuture<AMap<AString, ACell>> future = getJobStatus(jobID).thenApply(data->{
+			job.setData(data);
+			return data;
+		});
+		future.get(5,TimeUnit.SECONDS);
 	}
 
 }

@@ -53,7 +53,8 @@ public class CoviaAPI extends ACoviaAPI {
 	private static final String GET_CONTENT = "getContent";
 
 	private static final String PUT_CONTENT = "putContent";
-
+	public static final String CANCEL_JOB = "cancelJob";	
+	public static final String DELETE_JOB = "deleteJob";	
 	
 	private final SseServer sseServer;
 	
@@ -72,6 +73,8 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.post(ROUTE+"assets", this::addAsset);
 		javalin.post(ROUTE+"invoke", this::invokeOperation);
 		javalin.get(ROUTE+"jobs/<id>", this::getJobStatus);
+		javalin.put(ROUTE+"jobs/<id>/cancel", this::cancelJob);
+		javalin.put(ROUTE+"jobs/<id>/delete", this::deleteJob);
 		javalin.sse(ROUTE+"jobs/<id>/sse", sseServer.registerSSE);
 		javalin.get(ROUTE+"jobs", this::getJobs);
 	}
@@ -393,13 +396,7 @@ public class CoviaAPI extends ACoviaAPI {
 							type = String.class, 
 							example = "0x12345678123456781234567812345678") })	
 	protected void getJobStatus(Context ctx) { 
-		String pathID=ctx.pathParam("id");
-		if (pathID==null) {
-			buildError(ctx,400,"Job request requires a job ID");
-			return;
-		}
-		
-		AString id=RT.ensureString(Strings.create(pathID));
+		AString id=RT.ensureString(Strings.create(ctx.pathParam("id")));
 		if (id==null) {
 			buildError(ctx,400,"Job request requires a job ID as a valid hex string");
 			return;
@@ -412,6 +409,52 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 
 		buildResult(ctx,200,status);
+	}
+	
+	@OpenApi(path = ROUTE + "jobs/{id}/cancel", 
+			methods = HttpMethod.PUT, 
+			tags = { "Covia"},
+			summary = "Cancels a job.", 
+			operationId = CoviaAPI.CANCEL_JOB,
+			pathParams = {
+					@OpenApiParam(
+							name = "id", 
+							description = "Job ID, as created by invoke request.", 
+							required = true, 
+							type = String.class, 
+							example = "0x12345678123456781234567812345678") })	
+	protected void cancelJob(Context ctx) { 
+		AString id=RT.ensureString(Strings.create(ctx.pathParam("id")));
+		if (id==null) {
+			buildError(ctx,400,"Job cancellation request requires a job ID as a valid hex string");
+			return;
+		}
+		
+		AMap<AString, ACell> status = venue.cancelJob(id);
+		ctx.status((status==null)?404:200);
+	}
+	
+	@OpenApi(path = ROUTE + "jobs/{id}/delete", 
+			methods = HttpMethod.PUT, 
+			tags = { "Covia"},
+			summary = "Cancels a job.", 
+			operationId = CoviaAPI.DELETE_JOB,
+			pathParams = {
+					@OpenApiParam(
+							name = "id", 
+							description = "Job ID, as created by invoke request.", 
+							required = true, 
+							type = String.class, 
+							example = "0x12345678123456781234567812345678") })	
+	protected void deleteJob(Context ctx) { 
+		AString id=RT.ensureString(Strings.create(ctx.pathParam("id")));
+		if (id==null) {
+			buildError(ctx,400,"Job cancellation request requires a job ID as a valid hex string");
+			return;
+		}
+		
+		boolean deleted=venue.deleteJob(id);
+		ctx.status(deleted?200:404);
 	}
 	
 	@OpenApi(path = ROUTE + "jobs", 
