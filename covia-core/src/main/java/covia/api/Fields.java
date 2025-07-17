@@ -16,6 +16,8 @@ public class Fields {
 	public static final StringShort ID = Strings.intern("id");
 	public static final StringShort STATUS = Strings.intern("status");
 	
+	public static final StringShort OP = Strings.intern("op");
+	
 	public static final StringShort ITEMS = Strings.intern("items");
 	public static final StringShort TOTAL = Strings.intern("total");
 	public static final StringShort OFFSET = Strings.intern("offset");

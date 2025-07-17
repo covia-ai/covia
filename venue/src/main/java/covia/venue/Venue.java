@@ -30,6 +30,7 @@ import convex.core.util.Utils;
 import convex.etch.EtchStore;
 import covia.adapter.AAdapter;
 import covia.adapter.LangChainAdapter;
+import covia.adapter.Orchestrator;
 import covia.adapter.Status;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
@@ -201,6 +202,7 @@ public class Venue {
 		String BASE="/asset-examples/";
 		try {
 			venue.registerAdapter(new TestAdapter());
+			venue.registerAdapter(new Orchestrator());
 			venue.registerAdapter(new LangChainAdapter());
 			venue.storeAsset(Utils.readResourceAsString(BASE+"qwen.json"),null);
 		} catch (IOException e) {
@@ -235,6 +237,7 @@ public class Venue {
 		AAdapter adapter = getAdapter(adapterName);
 		if (adapter == null) {
 			AMap<AString,ACell> job = Maps.empty();
+			job = job.assoc(Fields.OP, opID);
 			job = job.assoc(Fields.JOB_STATUS_FIELD, Status.FAILED);
 			job = job.assoc(Fields.JOB_ERROR_FIELD, Strings.create("Adapter not available: "+adapterName));
 			return job;
@@ -302,7 +305,13 @@ public class Venue {
 		jobCounter+=rand.nextInt()&0xffffffffl; // increment with random 32-bit int
 
 		AString jobID=Blob.wrap(bs).toCVMHexString();
-		updateJobStatus(jobID, Maps.of(Fields.ID,jobID,Fields.STATUS,Status.PENDING,Fields.UPDATED,ts,Fields.CREATED,ts,Fields.INPUT,input));
+		updateJobStatus(jobID, Maps.of(
+				Fields.ID,jobID,
+				Fields.OP,opID,
+				Fields.STATUS,Status.PENDING,
+				Fields.UPDATED,ts,
+				Fields.CREATED,ts,
+				Fields.INPUT,input));
 
 		// TODO: very slim chance of JobID collisions?
 		

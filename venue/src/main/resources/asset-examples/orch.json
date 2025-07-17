@@ -1,0 +1,39 @@
+{
+	"name": "Test orchestration",
+	"description": "Runs a sequence of operations",
+	"dateCreated":"2025-07-09T07:22:59Z",
+	"operation": {
+		"adapter": "orchestrator",
+		"input": {
+			"type": "object",
+			"properties": {
+				"length": {
+					"type": "string",
+					"description": "Number of random bytes to generate (1-1024)"
+				}
+			},
+			"required": ["length"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"bytes": {
+					"type": "string",
+					"description": "Hex-encoded random bytes"
+				}
+			}
+		},
+		"steps": [
+			{
+				"op":"test:random",
+				"input": {
+					"length": ["input","length"]
+				}
+		    }
+			{
+				"op":"test:echo",
+				"input": [0]
+			}
+		]
+	}
+}
