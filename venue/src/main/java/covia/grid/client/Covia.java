@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 
 import convex.core.Result;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
@@ -22,6 +23,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import convex.java.ARESTClient;
 import convex.java.HTTPClients;
+import covia.api.Fields;
 import covia.exception.ConversionException;
 import covia.grid.Assets;
 import covia.venue.storage.AContent;
@@ -155,16 +157,23 @@ public class Covia extends ARESTClient  {
 				throw new ConversionException("assets API returned status: "+code);
 			}
 			ACell body=JSONUtils.parseJSON5(response.getBodyText());
+			AVector<?> items=null;
 			if (body instanceof AVector v) {
-				ArrayList<Hash> al=new ArrayList<>();
-				long n=v.count();
-				for (int i=0; i<n; i++) {
-					al.add(Hash.parse(v.get(i)));
-				}
-				return al;
-			} else {
+				items=v;
+			} else if (body instanceof AMap m) {
+				items=RT.ensureVector(m.get(Fields.ITEMS));
+			} 
+			
+			if (items==null) {
 				throw new ConversionException("assets API did not return a list of assets");
 			}
+			
+			ArrayList<Hash> al=new ArrayList<>();
+			long n=items.count();
+			for (int i=0; i<n; i++) {
+				al.add(Hash.parse(items.get(i)));
+			}
+			return al;
 			
 		});
 		

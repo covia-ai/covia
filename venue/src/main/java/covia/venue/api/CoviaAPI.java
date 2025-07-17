@@ -3,7 +3,9 @@ package covia.venue.api;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -131,6 +133,8 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void getAssets(Context ctx) { 
 		long offset=-1;
 		long limit=-1;
+		Map<Object,Object> result=new HashMap<>();
+
 		try {
 			String off = ctx.queryParam("offset");
 			if (off!=null) offset=Long.parseLong(off);
@@ -144,19 +148,26 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 
+		
+		
 		AMap<ABlob, AVector<?>> allAssets = venue.getAssets();  
 		long n=allAssets.count();
+		result.put(Fields.TOTAL, n);
+		
 		long start=Math.max(0, offset);
 		long end=(limit<0)?n:start+limit;
 		if (end-start>1000) throw new BadRequestResponse("Too many assets requested: "+(end-start));
+		result.put(Fields.OFFSET, start);
+		result.put(Fields.LIMIT, end-start);
 		ArrayList<Object> assetsList=new ArrayList<>();
 		end=Math.min(end, n);
 		for (long i=start; i<end; i++) {
 			AString s=(allAssets.entryAt(i).getKey().toCVMHexString());
 			assetsList.add(s);
 		}
-
-		buildResult(ctx,assetsList);
+		result.put(Fields.ITEMS, assetsList);
+		
+		buildResult(ctx,result);
 	}
 	
 	@OpenApi(path = ROUTE + "assets", 

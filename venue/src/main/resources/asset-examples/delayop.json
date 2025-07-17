@@ -17,7 +17,7 @@
 					"description":"The number of milliseconds to delay calling the operation."
 				},
 				"input":{
-					"type":"asset",
+					"type":"object",
 					"description":"The input to the target operation."
 				}
 			}	
