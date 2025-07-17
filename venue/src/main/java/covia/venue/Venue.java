@@ -272,7 +272,7 @@ public class Venue {
 		job=job.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 		synchronized (jobs) {
 			AMap<AString, ACell> oldJob = jobs.get(jobID);
-			if (Job.isComplete(oldJob)) {
+			if (oldJob!=null && Job.isComplete(oldJob)) {
 				// can't update already complete job
 				return;
 			}
