@@ -91,6 +91,9 @@ public class Venue {
 	 */
 	public void registerAdapter(AAdapter adapter) {
 		String name = adapter.getName();
+		if (adapters.containsKey(name) ) {
+			throw new IllegalStateException("Trying to install same adapter twice: "+name);
+		}
 		adapter.install(this);
 		adapters.put(name, adapter);
 		log.info("Registered adapter: {}", name);
@@ -285,9 +288,6 @@ public class Venue {
 
 	private HashMap<AString,AMap<AString,ACell>> jobs= new HashMap<>();
 	
-	private Random rand=new Random();
-	private long jobCounter=rand.nextLong();
-	
 	/** 
 	 * Start a job and return its ID
 	 * @param opID
@@ -295,16 +295,8 @@ public class Venue {
 	 * @return Job ID as a string
 	 */
 	private AString submitJob(Hash opID, ACell input) {
-		byte[] bs=new byte[16];
-		
-		// Put timestamp over the first 8 bytes, and an incrementing counter for the remaining 8 bytes. 
-		// This is so that job IDs are usually sorted, but relatively unpredictable and very unlikely to collide
 		long ts=Utils.getCurrentTimestamp();
-		Utils.writeLong(bs, 0, ts);
-		Utils.writeLong(bs, 8, jobCounter);
-		jobCounter+=rand.nextInt()&0xffffffffl; // increment with random 32-bit int
-
-		AString jobID=Blob.wrap(bs).toCVMHexString();
+		AString jobID = generateJobID(ts);
 		updateJobStatus(jobID, Maps.of(
 				Fields.ID,jobID,
 				Fields.OP,opID,
@@ -314,7 +306,25 @@ public class Venue {
 				Fields.INPUT,input));
 
 		// TODO: very slim chance of JobID collisions?
+		return jobID;
+	}
+
+
+	private Random rand=new Random();
+	private short jobCounter=0;
+	private long lastJobTS=0;
+	/** Internal method to generate job IDs **/
+	private AString generateJobID(long ts) {
+		if (ts>lastJobTS) jobCounter=0; // reset job counter when TS increments
+		byte[] bs=new byte[16];
 		
+		// Put timestamp over the first 8 bytes, and an incrementing counter for the remaining 8 bytes. 
+		// This is so that job IDs are usually sorted, but relatively unpredictable and very unlikely to collide
+		Utils.writeLong(bs, 0, ts<<16); // 48 bits enough for all plausible timestamps
+		Utils.writeShort(bs, 6, jobCounter++);
+		Utils.writeLong(bs, 8, rand.nextLong());
+
+		AString jobID=Blob.wrap(bs).toCVMHexString();
 		return jobID;
 	}
 
