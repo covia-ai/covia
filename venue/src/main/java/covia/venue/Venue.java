@@ -31,10 +31,11 @@ import convex.etch.EtchStore;
 import covia.adapter.AAdapter;
 import covia.adapter.LangChainAdapter;
 import covia.adapter.Orchestrator;
-import covia.adapter.Status;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.grid.Assets;
+import covia.grid.Job;
+import covia.grid.Status;
 import covia.venue.storage.AStorage;
 import covia.venue.storage.MemoryStorage;
 import java.io.ByteArrayInputStream;
@@ -270,6 +271,11 @@ public class Venue {
 	private void updateJobStatus(AString jobID, AMap<AString, ACell> job) {
 		job=job.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 		synchronized (jobs) {
+			AMap<AString, ACell> oldJob = jobs.get(jobID);
+			if (Job.isComplete(oldJob)) {
+				// can't update already complete job
+				return;
+			}
 			jobs.put(jobID,job);
 		}
 		log.info("Updated job: "+jobID);

@@ -21,7 +21,8 @@ public abstract class AAdapter {
     
     /**
      * Invoke an operation with the given input, returning a future for the result.
-     * Adapters SHOULD launch an asynchronous task to produce the result
+     * Adapters SHOULD launch an asynchronous task to produce the result and update the job status accordingly
+     * Adapters MAY return a completed Job immediately if the Job can be completed in O(1) time
      * 
      * @param operation The operation ID in the format "adapter:operation"
      * @param meta The metadata for the operation

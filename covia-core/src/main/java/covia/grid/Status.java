@@ -1,4 +1,4 @@
-package covia.adapter;
+package covia.grid;
 
 import convex.core.data.StringShort;
 import convex.core.data.Strings;
