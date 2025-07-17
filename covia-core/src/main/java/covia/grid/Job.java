@@ -4,7 +4,6 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
-import convex.core.data.Hash;
 import convex.core.lang.RT;
 import covia.api.Fields;
 
@@ -46,6 +45,11 @@ public class Job {
 		return new Job(status);
 	}
 	
+	/**
+	 * Gets the remote ID of the Job. Valid for the venue which is executing it.
+	 * Typically a 32 char (16 byte) hex string
+	 * @return Job ID
+	 */
 	public AString getID() {
 		return (AString)RT.get(data, Fields.ID);
 	}
