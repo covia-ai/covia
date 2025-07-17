@@ -240,21 +240,17 @@ public class Venue {
 		// Get the adapter
 		AAdapter adapter = getAdapter(adapterName);
 		if (adapter == null) {
-			AMap<AString,ACell> job = Maps.empty();
-			job = job.assoc(Fields.OP, opID);
-			job = job.assoc(Fields.JOB_STATUS_FIELD, Status.FAILED);
-			job = job.assoc(Fields.JOB_ERROR_FIELD, Strings.create("Adapter not available: "+adapterName));
-			return job;
+			throw new IllegalStateException("Adapter not available: "+adapterName);
 		}
 		
 		AString jobID=submitJob(opID,input);
 		
-		// Start the async operation
+		// Invoke the operation. Adapter is responsible for completing the Job in the venue
 		adapter.invoke(operation, meta,input)
 			.thenAccept(result -> {
 				AMap<AString,ACell> job = getJobStatus(jobID);
 				job = job.assoc(Fields.JOB_STATUS_FIELD, Status.COMPLETE);
-				job = job.assoc(Strings.create("output"), result);
+				job = job.assoc(Fields.OUTPUT, result);
 				updateJobStatus(jobID, job);
 			})
 			.exceptionally(e -> {
@@ -319,13 +315,18 @@ public class Venue {
 	private Random rand=new Random();
 	private short jobCounter=0;
 	private long lastJobTS=0;
-	/** Internal method to generate job IDs **/
+	/** Internal method to generate job IDs 
+	 * Format is:
+	 * 6 bytes timestamp (low 48 bits of Long)
+	 * 2 bytes incrementing counter for same timestamp
+	 * 8 bytes randomness
+	 * 
+	 * This is so that job IDs are usually sorted, but relatively unpredictable and very unlikely to collide
+	 */
 	private AString generateJobID(long ts) {
 		if (ts>lastJobTS) jobCounter=0; // reset job counter when TS increments
 		byte[] bs=new byte[16];
 		
-		// Put timestamp over the first 8 bytes, and an incrementing counter for the remaining 8 bytes. 
-		// This is so that job IDs are usually sorted, but relatively unpredictable and very unlikely to collide
 		Utils.writeLong(bs, 0, ts<<16); // 48 bits enough for all plausible timestamps
 		Utils.writeShort(bs, 6, jobCounter++);
 		Utils.writeLong(bs, 8, rand.nextLong());
