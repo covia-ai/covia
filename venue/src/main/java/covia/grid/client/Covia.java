@@ -25,6 +25,7 @@ import convex.java.ARESTClient;
 import convex.java.HTTPClients;
 import covia.api.Fields;
 import covia.exception.ConversionException;
+import covia.exception.ResponseException;
 import covia.grid.Assets;
 import covia.venue.storage.AContent;
 
@@ -88,6 +89,24 @@ public class Covia extends ARESTClient  {
 		return future.thenApplyAsync(response-> {
 			if (response.getCode()!=200) return null;
 			return response.getBodyText();
+		});
+	}
+	
+	/**
+	 * Gets status of connected venue
+	 * @return Status map
+	 */
+	public CompletableFuture<AMap<AString,ACell>> getStatus() {
+		
+		SimpleHttpRequest request=SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("status"));
+		CompletableFuture<SimpleHttpResponse> future=HTTPClients.execute(request);
+		
+		return future.thenApplyAsync(response-> {
+			int code=response.getCode();
+			if (code!=200) {
+				throw new ResponseException("getStatus resturned code: "+code,response);
+			}
+			return RT.ensureMap(JSONUtils.parse(response.getBodyText()));
 		});
 	}
 

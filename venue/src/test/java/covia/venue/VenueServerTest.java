@@ -25,11 +25,14 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 
 import convex.core.Result;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMLong;
 import convex.core.crypto.Hashing;
 import convex.core.lang.RT;
 import convex.java.HTTPClients;
@@ -135,6 +138,12 @@ public class VenueServerTest {
 		// Server should return the test assets
 		CompletableFuture<List<Hash>> result = covia.getAssets();
 		assertTrue(result.get().contains(TestOps.ECHO));
+	}
+	
+	@Test
+	public void testStatus() throws InterruptedException, ExecutionException {
+		AMap<AString, ACell> status = covia.getStatus().get();
+		assertTrue(status.get(Fields.TS) instanceof CVMLong);
 	}
 	
 	@Test

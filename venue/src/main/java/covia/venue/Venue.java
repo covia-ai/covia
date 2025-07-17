@@ -382,8 +382,10 @@ public class Venue {
 
 	private AMap<AString,ACell> STATUS_MAP=Maps.of(Fields.STATUS,Fields.OK);
 
-	public ACell getStatus() {
-		return STATUS_MAP;
+	public AMap<AString,ACell> getStatus() {
+		AMap<AString,ACell> status=STATUS_MAP;
+		status=status.assoc(Fields.TS, CVMLong.create(Utils.getCurrentTimestamp()));
+		return status;
 	}
 
 	
