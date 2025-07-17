@@ -34,6 +34,10 @@
 				"op":"test:echo",
 				"input": [0]
 			}
-		]
+		],
+		"result": {
+			"final-output": [1 "bytes"],
+			"original-input":["input"]
+		}
 	}
 }

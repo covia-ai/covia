@@ -246,20 +246,7 @@ public class Venue {
 		AString jobID=submitJob(opID,input);
 		
 		// Invoke the operation. Adapter is responsible for completing the Job in the venue
-		adapter.invoke(operation, meta,input)
-			.thenAccept(result -> {
-				AMap<AString,ACell> job = getJobStatus(jobID);
-				job = job.assoc(Fields.JOB_STATUS_FIELD, Status.COMPLETE);
-				job = job.assoc(Fields.OUTPUT, result);
-				updateJobStatus(jobID, job);
-			})
-			.exceptionally(e -> {
-				AMap<AString,ACell> job = getJobStatus(jobID);
-				job = job.assoc(Fields.JOB_STATUS_FIELD, Status.FAILED);
-				job = job.assoc(Fields.JOB_ERROR_FIELD, Strings.create(e.getMessage()));
-				updateJobStatus(jobID, job);
-				return null;
-			});
+		adapter.invoke(jobID, operation, meta,input);
 
 		return getJobStatus(jobID);
 	}

@@ -29,7 +29,7 @@ public abstract class AAdapter {
     /**
      * Invoke an operation with the given input, returning a future for the result.
      * Adapters SHOULD launch an asynchronous task to produce the result and update the job status accordingly
-     * Adapters MAY return a completed Job immediately if the Job can be completed in O(1) time
+     * Adapters MAY update the Job immediately if the Job can be completed in O(1) time
      * 
      * @param operation The operation ID in the format "adapter:operation"
      * @param meta The metadata for the operation
@@ -37,6 +37,33 @@ public abstract class AAdapter {
      * @return A CompletableFuture that will complete with the result of the operation
      */
     public abstract CompletableFuture<ACell> invoke(String operation, ACell meta, ACell input);
+    
+    /**
+     * Invoke an operation with the given input, returning a future for the result.
+     * Adapters SHOULD launch an asynchronous task to produce the result and update the job status accordingly
+     * Adapters MAY update the Job immediately if the Job can be completed in O(1) time
+     * 
+     * @param jobID ID of the Job within the registered venue
+     * @param operation The operation ID in the format "adapter:operation"
+     * @param meta The metadata for the operation
+     * @param input The input parameters for the operation
+     */
+    public void invoke(AString jobID,String operation, ACell meta, ACell input) {
+		invoke(operation,meta,input).thenAccept(result -> {
+			AMap<AString,ACell> job = venue.getJobStatus(jobID);
+			job = job.assoc(Fields.JOB_STATUS_FIELD, Status.COMPLETE);
+			job = job.assoc(Fields.OUTPUT, result);
+			venue.updateJobStatus(jobID, job);
+		})
+		.exceptionally(e -> {
+			AMap<AString,ACell> job = venue.getJobStatus(jobID);
+			job = job.assoc(Fields.JOB_STATUS_FIELD, Status.FAILED);
+			job = job.assoc(Fields.JOB_ERROR_FIELD, Strings.create(e.getMessage()));
+			venue.updateJobStatus(jobID, job);
+			return null;
+		});
+    }
+
     
     protected void finishJob(AMap<AString,ACell> job, AString statusString) {
     	AString id=Job.parseID(job.get(Fields.ID));
