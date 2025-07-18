@@ -1,5 +1,8 @@
 package covia.grid;
 
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -13,9 +16,12 @@ import covia.api.Fields;
  * Does not access the grid itself: querying should be done via Covia Grid client
  */
 public class Job {
+	// Job status data
 	private AMap<AString, ACell> data;
+	protected boolean cancelled=false;
+	protected CompletableFuture<ACell> resultFuture=null;
 	
-	public Job(AMap<AString, ACell> status) {
+	Job(AMap<AString, ACell> status) {
 		this.data=status;
 	}
 
@@ -62,13 +68,31 @@ public class Job {
 		return isFinished(this.data);
 	}
 
-	public boolean isComplete() {
+	/**
+	 * Checks if this job is COMPLETE, i.e. has a valid result
+	 * @return true if finished
+	 */
+	public synchronized boolean isComplete() {
 		AString value=RT.ensureString(data.get(Fields.JOB_STATUS_FIELD));	
 		return Status.COMPLETE.equals(value);
 	}
 
-	public void setData(AMap<AString, ACell> data) {
+	/**
+	 * Sets the Job data (e.g. after polling for a status result). No effect if Job is already finished.
+	 * @param data
+	 */
+	public synchronized void setData(AMap<AString, ACell> data) {
+		if (isFinished()) return;
 		this.data=data;
+	}
+	
+	/**
+	 * Sets the future for the Job result. Can only be done once.
+	 * @param data
+	 */
+	public synchronized void setFuture(CompletableFuture<ACell> future) {
+		if (resultFuture!=null) throw new IllegalStateException("Result future already set");
+		this.resultFuture=future;
 	}
 
 	public AString getStatus() {
@@ -85,11 +109,20 @@ public class Job {
 
 	/**
 	 * Gets the output of this Job, assuming it is COMPLETE
-	 * @return Job output, or null is not finished
+	 * @return Job output, or throw if not finished
 	 */
 	public ACell getOutput() {
+		if (!isComplete()) throw new IllegalStateException("Job has no output, status is "+getStatus());
 		return RT.get(data, Fields.OUTPUT);
 	}
 
-
+	/**
+	 * Cancel this Job, if it is not already complete
+	 */
+	public synchronized void cancel() {
+		cancelled=true;
+		if (resultFuture!=null) {
+			resultFuture.completeExceptionally(new CancellationException("Job cancelled: "+getID()));
+		}
+	}
 }

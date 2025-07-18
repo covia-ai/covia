@@ -21,7 +21,6 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
-import convex.core.exceptions.TODOException;
 import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import convex.java.ARESTClient;
@@ -115,12 +114,14 @@ public class Covia extends ARESTClient  {
 	}
 
 	/**
-	 * Invokes an operation on the connected venue
+	 * Invokes an operation on the connected venue, returning a Job
+	 * 
 	 * @param assetID The AssetID of the operation to invoke
 	 * @param input The input parameters for the operation as an ACell
-	 * @return Future containing the job status map
+	 * @return Future for the finished Job
+	 * @throws InterruptedException 
 	 */
-	public CompletableFuture<Job> invoke(String assetID, ACell input) {
+	public CompletableFuture<Job> invoke(String assetID, ACell input) throws InterruptedException {
 		Hash opID=Assets.parseAssetID(assetID);
 		return invoke(opID,input);
 	}
@@ -129,42 +130,40 @@ public class Covia extends ARESTClient  {
 	 * Invokes an operation, returning a finished Job once complete
 	 * @param opID Operation to invoke 
 	 * @param input
-	 * @return
+	 * @return Finished Job
+	 * @throws TimeoutException 
+	 * @throws ExecutionException 
+	 * @throws InterruptedException 
 	 */
-	public Job invokeSync(String opID, ACell input) {
-		throw new TODOException();
+	public Job invokeSync(String opID, ACell input) throws InterruptedException, ExecutionException, TimeoutException {
+		Job job=invoke(opID,input).get(5,TimeUnit.MILLISECONDS);
+		waitForFinish(job);
+		return job;
 	}
 	
 	/**
-	 * Invokes an operation on the connected venue
+	 * Invokes an operation on the connected venue. Will start polling for status updates.
 	 * @param assetID The AssetID of the operation to invoke
 	 * @param input The input parameters for the operation as an ACell
 	 * @return Future containing the job status map
 	 */
-	public CompletableFuture<Job> invoke(Hash assetID, ACell input) {
-		SimpleHttpRequest req = SimpleHttpRequest.create(Method.POST, getBaseURI().resolve("invoke"));
-		ACell requestBody = Maps.of(
-			"operation", assetID.toCVMHexString(),
-			"input", input
-		);
-		req.setBody(JSONUtils.toString(requestBody), ContentType.APPLICATION_JSON);
-		
-		CompletableFuture<SimpleHttpResponse> responseFuture = HTTPClients.execute(req);
-		CompletableFuture<Job> result= responseFuture.thenApply(response -> {
-			if (response.getCode() != 201) {
-				throw new ResponseException("Failed to invoke operation: " + response+" = "+response.getBodyText(),response);
+	public CompletableFuture<Job> invoke(Hash assetID, ACell input) throws InterruptedException {
+		CompletableFuture<Job> submit=startJobAsync(assetID,input);
+		CompletableFuture<Job> start=submit.thenApply(job->{
+			try {
+				waitForFinish(job);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				job.cancel();
 			}
-			AMap<AString,ACell> body=RT.ensureMap(JSONUtils.parseJSON5(response.getBodyText()));
-			if (body==null) {
-				throw new ResponseException("Invalid response body",response);
-			}
-			return Job.create(body);
+			return job;
 		});
-		return result;
+		
+		return start;
 	}
 	
 	/**
-	 * Starts a operation on the Grid.
+	 * Starts a operation on the Grid. Does not start polling.
 	 * @param opID Operation ID
 	 * @param input Operation input
 	 * @return Job instance (likely to be PENDING)
@@ -177,7 +176,7 @@ public class Covia extends ARESTClient  {
 	}
 	
 	/**
-	 * Starts an operation on the connected venue
+	 * Starts an operation on the connected venue. Does not start polling.
 	 * @param opID The AssetID of the operation to invoke
 	 * @param input The input parameters for the operation as an ACell
 	 * @return Future containing the job status, likely to be PENDING
@@ -204,8 +203,13 @@ public class Covia extends ARESTClient  {
 		return result;
 	}
 	
-	
-	
+	/**
+	 * Invokes a Job and waits for it to finish
+	 * @param opID Identifier of operation
+	 * @param input Input to the operation
+	 * @return Updates Job in finished state (COMPLETE, FAILED or CANCELLED)
+	 * @throws InterruptedException
+	 */
 	public Job invokeAndWait(Hash opID, ACell input) throws InterruptedException {
 		CompletableFuture<Job> future = invoke(opID,input);
 		Job job=future.join();
@@ -229,6 +233,7 @@ public class Covia extends ARESTClient  {
 			ACell body=JSONUtils.parseJSON5(response.getBodyText());
 			AVector<?> items=null;
 			if (body instanceof AVector v) {
+				// Support for legacy API version that returned a list of asset IDs
 				items=v;
 			} else if (body instanceof AMap m) {
 				items=RT.ensureVector(m.get(Fields.ITEMS));
@@ -251,8 +256,8 @@ public class Covia extends ARESTClient  {
 	}
 	
 	/**
-	 * Waits for a job to finish
-	 * @param job
+	 * Waits for a remote job to finish, polling
+	 * @param job Any Job, presumably not yet finished
 	 * @return true if successfully completed, false if failed
 	 * @throws InterruptedException if interrupted while waiting
 	 */

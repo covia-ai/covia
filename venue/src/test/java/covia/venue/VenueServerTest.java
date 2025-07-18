@@ -148,8 +148,8 @@ public class VenueServerTest {
 			Fields.MESSAGE, Strings.create("Test error message")
 		);
 		
-		// Invoke the operation via the client. Should start but not complete
-		Job job = covia.invoke(TestOps.NEVER, input).join();
+		// Start the operation via the client. Should start but not complete
+		Job job = covia.startJob(TestOps.NEVER, input);
 		Thread.sleep(50);
 		covia.updateJobStatus(job);
 		AString status=job.getStatus();
