@@ -196,7 +196,7 @@ public class Orchestrator extends AAdapter {
 			public void run() {
 				AString opId=RT.getIn(step, Fields.OP);
 				input=computeInput(RT.get(step, Fields.INPUT),Vectors.empty());
-				// venue.invokeOperation(opID, computeInput());
+				// venue.invokeOperation(opID, input);
 				output=null; // TODO
 				completionQueue.add(this);
 			}

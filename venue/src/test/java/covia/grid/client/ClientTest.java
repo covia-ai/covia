@@ -17,8 +17,6 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 
 import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
-import convex.core.data.AMap;
-import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Keyword;
