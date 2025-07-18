@@ -117,6 +117,19 @@ public class VenueServerTest {
 	}
 	
 	@Test
+	public void testOrchOperation() throws Exception {
+		// Create input for the error operation
+		ACell input = Maps.of(
+			"length","10"
+		);
+		
+		// Invoke the operation via the client
+		Job job=covia.invokeAndWait(TestOps.ORCH,input);
+		assertEquals(Status.FAILED,job.getStatus());
+	
+	}
+	
+	@Test
 	public void testFailureOperation() throws Exception {
 		// Create input for the error operation
 		ACell input = Maps.of(

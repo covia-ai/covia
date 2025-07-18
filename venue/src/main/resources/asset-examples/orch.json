@@ -17,9 +17,17 @@
 		"output": {
 			"type": "object",
 			"properties": {
-				"bytes": {
+				"bytes-output": {
+					"type": "object",
+					"description": "The full output of the bytes operations (step 0)"
+				},
+				"final-output": {
 					"type": "string",
-					"description": "Hex-encoded random bytes"
+					"description": "The bytes produced"
+				},
+				"original-input": {
+					"type": "object",
+					"description": "The original input to the orchestration."
 				}
 			}
 		},
@@ -29,15 +37,21 @@
 				"input": {
 					"length": ["input","length"]
 				}
-		    }
+		    },
 			{
 				"op":"test:echo",
 				"input": [0]
+			},
+			{
+				"op":"test:echo",
+				"input": ["const", {"foo":"bar"}]
 			}
 		],
 		"result": {
-			"final-output": [1 "bytes"],
-			"original-input":["input"]
+			"final-output": [1, "bytes"],
+			"bytes-output": [0],
+			"original-input": ["input"],
+			"original-length": ["input","length"]
 		}
 	}
 }

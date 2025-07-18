@@ -13,6 +13,7 @@ public class TestOps {
 	public static Hash ERROR=null;
 	public static Hash NEVER;
 	public static Hash DELAY;
+	public static Hash ORCH;
 
 	static {
 		 try {
@@ -21,6 +22,7 @@ public class TestOps {
 			ERROR=Assets.calcID(Utils.readResourceAsString("/asset-examples/failop.json"));
 			NEVER=Assets.calcID(Utils.readResourceAsString("/asset-examples/neverop.json"));
 			DELAY=Assets.calcID(Utils.readResourceAsString("/asset-examples/delayop.json"));
+			ORCH=Assets.calcID(Utils.readResourceAsString("/asset-examples/orch.json"));
 		 } catch (IOException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
