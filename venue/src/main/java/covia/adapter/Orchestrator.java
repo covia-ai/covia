@@ -36,7 +36,7 @@ public class Orchestrator extends AAdapter {
 	public void invoke(AString jobID, String operation, ACell meta, ACell input) {
 		AVector<?> steps=RT.ensureVector(RT.getIn(meta, Fields.OPERATION, Fields.STEPS));
 		ACell resultSpec=RT.getIn(meta, Fields.OPERATION, Fields.RESULT);
-		Orchestration orch=new Orchestration(jobID,steps,resultSpec);
+		Orchestration orch=new Orchestration(jobID,input,steps,resultSpec);
 		ThreadUtils.runVirtual(orch);
 	}
 	
@@ -47,22 +47,24 @@ public class Orchestrator extends AAdapter {
 		ArrayList<SubTask> subTasks;
 		ACell resultSpec;
 		ACell output=null;
+		BlockingQueue<SubTask> completionQueue;
+		ACell orchInput;
 		
-		public Orchestration(AString jobID, AVector<?> steps, ACell resultSpec) {
+		public Orchestration(AString jobID, ACell input, AVector<?> steps, ACell resultSpec) {
 			this.jobID=jobID;
 			this.steps=steps;
+			this.orchInput=input;
 			this.n=Utils.checkedInt(steps.count());
+			completionQueue=new ArrayBlockingQueue<>(n);
 			this.resultSpec=resultSpec;
 			subTasks=new ArrayList<>();
 			for (int i=0; i<n; i++) {
 				AMap<AString, ACell> step=RT.ensureMap(steps.get(i));
-				if (step==null) throw new IllegalArgumentException("Step must be defined as a map object");
+				if (step==null) throw new IllegalArgumentException("Step must be defined as a map object but was: "+steps.get(i));
 				SubTask task=new SubTask(i,step);
 				subTasks.add(task);
 			}		
 		}
-
-		BlockingQueue<SubTask> completionQueue=new ArrayBlockingQueue<>(n);
 
 		@Override
 		public void run() {
@@ -139,6 +141,9 @@ public class Orchestrator extends AAdapter {
 				} else if (Fields.CONST.equals(code)) {
 					ACell value=v.get(1);
 					return value;
+				} else if (Fields.INPUT.equals(code)) {
+					ACell value=RT.getIn(orchInput, (Object[])path.toArray());
+					return value;
 				} else {
 					throw new IllegalArgumentException("Unrecognised source type in: "+v);
 				}
@@ -168,22 +173,23 @@ public class Orchestrator extends AAdapter {
 
 			public SubTask(int i, AMap<AString, ACell> step) {
 				this.step=step;
-				this.deps=scanDeps(new HashSet<Integer>(),step.get(Fields.INPUT));
 				this.stepNum=i;
+				this.deps=scanDeps(new HashSet<Integer>(),step.get(Fields.INPUT));
 			}
 
-			private HashSet<Integer> scanDeps(HashSet<Integer> accDeps, ACell input) {
-				if (input instanceof AVector v) {
+			private HashSet<Integer> scanDeps(HashSet<Integer> accDeps, ACell inputSpec) {
+				// System.err.println("Scanning deps: "+inputSpec);
+				if (inputSpec instanceof AVector v) {
 					if (v.count()==0) throw new IllegalStateException("Empty vector in input value");
 					ACell code=v.get(0);
 					if (code instanceof CVMLong cvmix) {
 						int ix=Utils.checkedInt(cvmix.longValue());
 						if ((ix<0)||(ix>=stepNum)) {
-							throw new IllegalArgumentException("Step can only refer to previous step(s)");
+							throw new IllegalArgumentException("Step can only refer to previous step(s) but was "+ix+" in step "+stepNum+" for spec "+inputSpec);
 						}
 						accDeps.add(ix);
-					}
-				} else if (input instanceof AMap m) {
+					} 
+				} else if (inputSpec instanceof AMap m) {
 					int c=Utils.checkedInt(m.count());
 					for (int i=0; i<c; i++) {
 						scanDeps(accDeps,m.entryAt(i).getValue());

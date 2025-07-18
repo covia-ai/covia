@@ -8,12 +8,13 @@
 	    "name": "CC BY 4.0",
 	    "url": "https://creativecommons.org/licenses/by/4.0/"
 	  },
-	"inLanguage":"en-GB",
+
 	"keywords":["machine learning", "iris", "dataset", "classification"],
 	"content":{
 		"contentType":"text/csv",
 		"sha256":"119E30DB8A4EA8B33723603743591A5F8229684E6236D89EF1966A72D7293607",
-		"encoding": "UTF-8"
+		"encoding": "UTF-8",
+		"inLanguage":"en-GB"
 	},
 	"additionalInformation":{
 		"notes":["Adopted by Mike Anderson for use as an example Covia Asset"]

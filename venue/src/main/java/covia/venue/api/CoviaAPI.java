@@ -375,7 +375,8 @@ public class CoviaAPI extends ACoviaAPI {
 			this.buildResult(ctx, 201, invokeResult);
 			ctx.header("Location",ROUTE+"jobs/"+op.toHexString());
 		} catch (IllegalArgumentException | IllegalStateException e) {
-			this.buildError(ctx, 400, "Error invoking operation: "+e.getMessage());
+			this.buildError(ctx, 400, "Error invoking operation: "+e.getClass().getSimpleName()+":"+e.getMessage());
+			e.printStackTrace();
 			return;
 		} catch (Exception e) {
 			this.buildError(ctx, 500, "Unexpected failure invoking operation: "+e);
