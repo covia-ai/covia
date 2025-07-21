@@ -41,14 +41,14 @@ public class Orchestrator extends AAdapter {
 	}
 	
 	public class Orchestration implements Runnable {
-		AString jobID;
-		AVector<?> steps;
-		int n;
-		ArrayList<SubTask> subTasks;
-		ACell resultSpec;
-		ACell output=null;
-		BlockingQueue<SubTask> completionQueue;
-		ACell orchInput;
+		final AString jobID;
+		final AVector<?> steps;
+		final int n;
+		final ArrayList<SubTask> subTasks;
+		final ACell resultSpec;
+		final BlockingQueue<SubTask> completionQueue;
+		final ACell orchInput;
+		ACell orchOutput=null;
 		
 		public Orchestration(AString jobID, ACell input, AVector<?> steps, ACell resultSpec) {
 			this.jobID=jobID;
@@ -124,7 +124,7 @@ public class Orchestrator extends AAdapter {
 			
 			// All steps now complete, so can compute final result
 			// this uses the spec from meta.operation.result
-			output=computeInput(resultSpec,Vectors.empty());
+			orchOutput=computeInput(resultSpec,Vectors.empty());
 			
 		}
 		

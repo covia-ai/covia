@@ -182,7 +182,7 @@ public class Venue {
 	/**
 	 * Get metadata as a JSON string
 	 * @param assetID
-	 * @return
+	 * @return Metadata string for the given Asset ID, or null if not found
 	 */
 	public AString getMetadata(Hash assetID) {
 		AVector<?> arec=getAssets().get(assetID);
@@ -192,7 +192,7 @@ public class Venue {
 	
 	/**
 	 * Get metadata as a structured value
-	 * @param opID
+	 * @param assetID Asset ID of operation
 	 * @return Metadata value, or null if not valid metadata
 	 */
 	public AMap<AString,ACell> getMetaValue(Hash assetID) {

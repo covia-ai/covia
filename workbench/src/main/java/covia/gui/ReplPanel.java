@@ -12,7 +12,6 @@ import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 
-import convex.core.Result;
 import convex.core.data.ACell;
 import convex.core.data.Maps;
 import covia.grid.client.Covia;

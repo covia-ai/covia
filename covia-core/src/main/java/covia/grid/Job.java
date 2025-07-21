@@ -88,7 +88,7 @@ public class Job {
 	
 	/**
 	 * Sets the future for the Job result. Can only be done once.
-	 * @param data
+	 * @param future future to set
 	 */
 	public synchronized void setFuture(CompletableFuture<ACell> future) {
 		if (resultFuture!=null) throw new IllegalStateException("Result future already set");
