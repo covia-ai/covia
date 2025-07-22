@@ -28,6 +28,8 @@ import convex.core.store.AStore;
 import convex.core.util.JSONUtils;
 import convex.core.util.Utils;
 import convex.etch.EtchStore;
+import convex.lattice.ACursor;
+import convex.lattice.Cursors;
 import covia.adapter.AAdapter;
 import covia.adapter.LangChainAdapter;
 import covia.adapter.Orchestrator;
@@ -66,8 +68,11 @@ public class Venue {
 	 */
 	protected final AStorage contentStorage;
 	
+	/** Overall Covia lattice */
+	protected ACursor<AMap<Keyword,ACell>> lattice=Cursors.of(Maps.create(COVIA_KEY, Maps.create(ASSETS_KEY,Index.EMPTY)));
 	
-	protected ACell lattice=Maps.create(COVIA_KEY, Maps.create(ASSETS_KEY,Index.EMPTY));
+	/** Lattice for assets data */
+	protected ACursor<Index<AString,AVector<ACell>>> assets=lattice.path(COVIA_KEY, ASSETS_KEY);
 	
 	/**
 	 * Map of named adapters that can handle different types of operations or resources
@@ -161,13 +166,13 @@ public class Venue {
 
 
 	private void setAssets(AMap<ABlob, AVector<?>> assets) {
-		lattice=RT.assocIn(lattice, assets, COVIA_KEY, ASSETS_KEY);
+		this.assets.set(assets);
 	}
 
 
 	public AMap<ABlob, AVector<?>> getAssets() {
-		// Get assets from lattice
-		return RT.ensureMap(RT.getIn(lattice, COVIA_KEY,ASSETS_KEY));
+		// Get assets from lattice cursor
+		return RT.ensureMap(this.assets.get());
 	}
 
 

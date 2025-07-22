@@ -79,7 +79,7 @@ public class Job {
 
 	/**
 	 * Sets the Job data (e.g. after polling for a status result). No effect if Job is already finished.
-	 * @param data
+	 * @param data Job status data
 	 */
 	public synchronized void setData(AMap<AString, ACell> data) {
 		if (isFinished()) return;
