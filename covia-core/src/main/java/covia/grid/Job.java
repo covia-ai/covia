@@ -205,7 +205,11 @@ public class Job {
 		});
 	}
 
-	private synchronized void update(UnaryOperator<AMap<AString,ACell>> updater) {
+	/**
+	 * Updates the job data atomically using the given update function
+	 * @param updater
+	 */
+	public synchronized void update(UnaryOperator<AMap<AString,ACell>> updater) {
 		AMap<AString, ACell> oldData = getData();
 		AMap<AString, ACell> newData=updater.apply(oldData);
 		updateData(newData);

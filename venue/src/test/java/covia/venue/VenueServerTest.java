@@ -128,7 +128,9 @@ public class VenueServerTest {
 		
 		// Invoke the operation via the client
 		Job job=covia.invokeAndWait(TestOps.ORCH,input);
-		System.out.println("testOrchOperation:"+JSONUtils.toJSONPretty(job.getData()));
+		AString ps=JSONUtils.toJSONPretty(job.getData());
+		assertEquals(job.getData(),JSONUtils.parse(ps.toString()));
+		// System.out.println("testOrchOperation:"+JSONUtils.toJSONPretty(job.getData()));
 		assertEquals(Status.COMPLETE,job.getStatus());
 		assertEquals(input,RT.getIn(job.getOutput(),"original-input"));
 	

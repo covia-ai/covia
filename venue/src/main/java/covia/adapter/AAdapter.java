@@ -49,16 +49,16 @@ public abstract class AAdapter {
      * @param input The input parameters for the operation
      */
     public void invoke(Job job, String operation, ACell meta, ACell input) {
-       	AString jobID=job.getID();
     	job.setStatus(Status.STARTED);
  		invokeFuture(operation,meta,input).thenAccept(result -> {
 			job.completeWith(result);
 		})
 		.exceptionally(e -> {
-			AMap<AString,ACell> jd = job.getData();
-			jd = jd.assoc(Fields.JOB_STATUS_FIELD, Status.FAILED);
-			jd = jd.assoc(Fields.JOB_ERROR_FIELD, Strings.create(e.getMessage()));
-			job.updateData(jd);
+			job.update(jd->{
+				jd = jd.assoc(Fields.JOB_STATUS_FIELD, Status.FAILED);
+				jd = jd.assoc(Fields.JOB_ERROR_FIELD, Strings.create(e.getMessage()));
+				return jd;
+			});
 			return null;
 		});
     }

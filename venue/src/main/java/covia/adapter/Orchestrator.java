@@ -124,13 +124,36 @@ public class Orchestrator extends AAdapter {
 					for (SubTask task: newlyComplete) {
 						stepsLeft-=1; // decrement number of steps left to complete
 						
+						if (!task.subJob.isComplete()) {
+							// the subtask finished but was not complete, so the whole orchestration has failed
+							job.fail("Failed due to subtask "+task.stepNum+" ("+task.subJob.getStatus()+")");
+						}
+						
 						// mark dependency as completed for any subsequent steps
 						Integer completedIndex=task.stepNum;
 						for (int i=task.stepNum+1; i<n; i++) {
 							subTasks.get(i).deps.remove(completedIndex);
 						}
 					}
+					
+					// update step status
+					job.update(jd->{
+						AVector<AMap<AString,ACell>> srs=RT.ensureVector(jd.get(Fields.STEPS));
+						if (srs==null) srs=Vectors.repeat(null, n);
+						for (int i=0; i<n; i++) {
+							Job subJob=subTasks.get(i).subJob;
+							if (subJob==null) continue;
+							AMap<AString,ACell> ssd=subJob.getData();
+							ssd=ssd.dissoc(Fields.STEPS); // remove child steps if any
+							srs=srs.assoc(i, ssd);
+						}
+						jd=jd.assoc(Fields.STEPS, srs);
+						return jd;
+					});
 				}
+				
+				// job already finished (cancelled or otherwise failed...)
+				if (job.isFinished()) return;
 				
 				// All steps now complete, so can compute final result
 				// this uses the spec from meta.operation.result
