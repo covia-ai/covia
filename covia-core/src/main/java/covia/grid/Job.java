@@ -21,7 +21,7 @@ public class Job {
 	protected boolean cancelled=false;
 	protected CompletableFuture<ACell> resultFuture=null;
 	
-	Job(AMap<AString, ACell> status) {
+	public Job(AMap<AString, ACell> status) {
 		this.data=status;
 	}
 
@@ -81,11 +81,43 @@ public class Job {
 	 * Sets the Job data (e.g. after polling for a status result). No effect if Job is already finished.
 	 * @param data Job status data
 	 */
-	public synchronized void setData(AMap<AString, ACell> data) {
+	public synchronized void updateData(AMap<AString, ACell> data) {
 		if (isFinished()) return;
+		data=processUpdate(data);
+		if (data==null) return; // update cancelled
 		this.data=data;
+		onUpdate(data);
+		if (isFinished()) {
+			if (resultFuture!=null) resultFuture.complete(getOutput());
+			onFinish(data);
+		};
 	}
 	
+	/**
+	 * Method called to modify data before an update. Subclasses may override to 
+	 * @param newData new status data of the Job
+	 * @return updated version of the data to be stored. Returning null will cancel the update
+	 */
+	public AMap<AString, ACell> processUpdate(AMap<AString, ACell> newData) {
+		return newData;
+	}
+	
+	/**
+	 * Method called after data is updated. Subclasses may override this to provide custom responses
+	 * @param newData new status data of the Job
+	 */
+	public void onUpdate(AMap<AString, ACell> newData) {
+		// Empty to allow overrides
+	}
+	
+	/**
+	 * Method called after job is finished. Subclasses may override this to provide custom responses
+	 * @param finalData final status data of the Job
+	 */
+	public void onFinish(AMap<AString, ACell> finalData) {
+		// Empty to allow overrides
+	}
+
 	/**
 	 * Sets the future for the Job result. Can only be done once.
 	 * @param future future to set
@@ -93,6 +125,11 @@ public class Job {
 	public synchronized void setFuture(CompletableFuture<ACell> future) {
 		if (resultFuture!=null) throw new IllegalStateException("Result future already set");
 		this.resultFuture=future;
+		
+		// complete the future if the job is already finished
+		if (isFinished()) {
+			resultFuture.complete(getOutput());
+		}
 	}
 
 	public AString getStatus() {
@@ -123,6 +160,32 @@ public class Job {
 		cancelled=true;
 		if (resultFuture!=null) {
 			resultFuture.completeExceptionally(new CancellationException("Job cancelled: "+getID()));
+		}
+	}
+
+	public synchronized void setStatus(AString newStatus) {
+		if (isFinished()) throw new IllegalStateException("Job already finished");
+		updateData(data.assoc(Fields.STATUS, newStatus));
+	}
+
+	public synchronized void completeWith(ACell result) {
+		if (isFinished()) throw new IllegalStateException("Job already finished");
+		AMap<AString, ACell> newData = getData();
+		newData=newData.assoc(Fields.STATUS, Status.COMPLETE);
+		newData=newData.assoc(Fields.OUTPUT, result);
+		updateData(newData);
+	}
+
+	public synchronized ACell awaitResult() {
+		return getFuture().join();
+	}
+
+	private CompletableFuture<ACell> getFuture() {
+		if (resultFuture!=null) return resultFuture;
+		synchronized(this) {
+			if (resultFuture!=null) return resultFuture;
+			resultFuture=new CompletableFuture<ACell>();
+			return resultFuture;
 		}
 	}
 }

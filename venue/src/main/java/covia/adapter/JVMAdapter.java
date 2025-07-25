@@ -16,7 +16,7 @@ public class JVMAdapter extends AAdapter {
 	}
 
 	@Override
-	public CompletableFuture<ACell> invoke(String operation, ACell meta, ACell input) {
+	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
 		throw new TODOException();
 		//failJobResult(null,Status.TODO);
 	}

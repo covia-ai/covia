@@ -25,6 +25,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import convex.core.util.Utils;
 import covia.api.Fields;
+import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.storage.BlobContent;
 import java.io.InputStream;
@@ -92,7 +93,8 @@ public class VenueTest {
 	public void testAdapterOperation() {
 		// Test echo operation
 		ACell input=Maps.of("message",Strings.create("Hello World"));
-		ACell status=venue.invokeOperation(echoOpId,input);
+		Job job=venue.invokeOperation("test:echo",input);
+		AMap<AString, ACell> status = job.getData();
 		
 		// Get job ID from status
 		ACell jobID = RT.getIn(status, "id");
@@ -102,7 +104,7 @@ public class VenueTest {
 		waitForJobCompletion((AString)jobID, 5000);
 		
 		// Get final status
-		ACell finalStatus = venue.getJobStatus((AString)jobID);
+		ACell finalStatus = venue.getJobData((AString)jobID);
 		assertEquals(Status.COMPLETE, RT.getIn(finalStatus, "status"));
 		
 		// Verify result
@@ -114,7 +116,8 @@ public class VenueTest {
 	public void testAdapterError() {
 		// Test error operation
 		ACell input=Maps.of("message",Strings.create("Test Error"));
-		ACell status=venue.invokeOperation(randomOpID,input);
+		Job job=venue.invokeOperation("test:random",input);
+		AMap<AString, ACell> status = job.getData();
 		
 		// Get job ID from status
 		ACell jobID = RT.getIn(status, "id");
@@ -124,7 +127,7 @@ public class VenueTest {
 		waitForJobCompletion((AString)jobID, 5000);
 		
 		// Get final status
-		ACell finalStatus = venue.getJobStatus((AString)jobID);
+		ACell finalStatus = venue.getJobData((AString)jobID);
 		assertEquals("FAILED", RT.getIn(finalStatus, "status").toString());
 	}
 	
@@ -132,8 +135,9 @@ public class VenueTest {
 	public void testRandomOperation() {
 		// Test random operation with 32 bytes
 		ACell input = Maps.of("length", Strings.create("32"));
-		ACell status = venue.invokeOperation(randomOpID, input);
-		
+		Job job= venue.invokeOperation(randomOpID, input);
+		ACell status =job.getData();
+				
 		// Get job ID from status
 		ACell jobID = RT.getIn(status, "id");
 		assertNotNull(jobID, "Job ID should be present in status");
@@ -158,7 +162,7 @@ public class VenueTest {
 	// @Test
 	public void testQwen() {
 		ACell input = Maps.of("prompt", "What is the capital of France?");
-		ACell result = venue.invokeOperation(qwenOpId, input);
+		ACell result = venue.invokeOperation(qwenOpId, input).awaitResult();
 		result=waitForJobCompletion(RT.getIn(result, "id"), 5000);
 		if (Status.COMPLETE.equals(RT.getIn(result, "status"))) {
 			// OK
@@ -171,9 +175,9 @@ public class VenueTest {
 	private ACell waitForJobCompletion(Object jobID, long timeoutMillis) {
 		AString id=RT.ensureString(RT.cvm(jobID));
 		long startTime = System.currentTimeMillis();
-		ACell status = venue.getJobStatus(id);
+		ACell status = venue.getJobData(id);
 		while (System.currentTimeMillis() - startTime < timeoutMillis) {
-			status = venue.getJobStatus(id);
+			status = venue.getJobData(id);
 			String jobStatus = RT.getIn(status, "status").toString();
 			if (!jobStatus.equals("PENDING")) {
 				return status;

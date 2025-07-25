@@ -14,7 +14,7 @@ public class MCPAdapter extends AAdapter {
 	}
 
 	@Override
-	public CompletableFuture<ACell> invoke(String operation, ACell meta, ACell input) {
+	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
 		// For now, just return a completed future with a placeholder response
 		// TODO: Implement actual MCP integration
 		return CompletableFuture.completedFuture(

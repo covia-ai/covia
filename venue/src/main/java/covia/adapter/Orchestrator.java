@@ -18,6 +18,7 @@ import convex.core.lang.RT;
 import convex.core.util.ThreadUtils;
 import convex.core.util.Utils;
 import covia.api.Fields;
+import covia.grid.Job;
 
 public class Orchestrator extends AAdapter {
 
@@ -27,16 +28,16 @@ public class Orchestrator extends AAdapter {
 	}
 
 	@Override
-	public CompletableFuture<ACell> invoke(String operation, ACell meta, ACell input) {
+	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
 		throw new UnsupportedOperationException("Invalid call to orchestrator");
 	}
 
 	
 	@Override
-	public void invoke(AString jobID, String operation, ACell meta, ACell input) {
+	public void invoke(Job job, String operation, ACell meta, ACell input) {
 		AVector<?> steps=RT.ensureVector(RT.getIn(meta, Fields.OPERATION, Fields.STEPS));
 		ACell resultSpec=RT.getIn(meta, Fields.OPERATION, Fields.RESULT);
-		Orchestration orch=new Orchestration(jobID,input,steps,resultSpec);
+		Orchestration orch=new Orchestration(job.getID(),input,steps,resultSpec);
 		ThreadUtils.runVirtual(orch);
 	}
 	

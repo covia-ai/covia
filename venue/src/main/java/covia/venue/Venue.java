@@ -219,25 +219,38 @@ public class Venue {
 		}
 	}
 
-	public ACell invokeOperation(AString op, ACell input) {
-		Hash opID=Hash.parse(op);
-		return invokeOperation(opID,input);
+	public Job invokeOperation(String op, ACell input) {
+		return invokeOperation(Strings.create(op),input);
+	}
+	
+	public Job invokeOperation(ACell op, ACell input) {
+		return invokeOperation(Strings.create(op),input);
 	}
 
-	public ACell invokeOperation(Hash opID, ACell input) {
-		if (opID==null) throw new IllegalArgumentException("Operation must be a valid Hex asset ID");
+	public Job invokeOperation(Hash op, ACell input) {
+		return invokeOperation(op.toCVMHexString(),input);
+	}
+
+	public Job invokeOperation(AString op, ACell input) {
+		if (op==null) throw new IllegalArgumentException("Operation must be a valid Hex asset ID");
 		
-		ACell meta=getMetaValue(opID);
-		if (meta==null) {
-			throw new IllegalStateException("Asset does not exist: "+opID);
+		Hash opID=Hash.parse(op);
+		ACell meta=null;
+		AString adapterOp=op;
+		if (opID!=null) {
+			// It's a valid asset ID, so look up the operation
+			meta=getMetaValue(opID);
+			if (meta==null) {
+				throw new IllegalStateException("Asset does not exist: "+opID);
+			}
+			adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
+			if (adapterOp == null) {
+				throw new IllegalArgumentException("Operation metadata must specify an adapter");
+			}
 		}
 		
 		// Get the combined adapter:operation string from metadata
-		ACell adapterCell = RT.getIn(meta, "operation", "adapter");
-		if (adapterCell == null) {
-			throw new IllegalArgumentException("Operation metadata must specify an adapter");
-		}
-		String operation = RT.ensureString(adapterCell).toString();
+		String operation = adapterOp.toString();
 		
 		// Extract adapter name from the operation string
 		String adapterName = operation.split(":")[0];
@@ -248,12 +261,12 @@ public class Venue {
 			throw new IllegalStateException("Adapter not available: "+adapterName);
 		}
 		
-		AString jobID=submitJob(opID,input);
+		Job job=submitJob(op,input);
 		
 		// Invoke the operation. Adapter is responsible for completing the Job in the venue
-		adapter.invoke(jobID, operation, meta,input);
+		adapter.invoke(job, operation, meta,input);
 
-		return getJobStatus(jobID);
+		return job;
 	}
 
 	public void updateJobStatus(AString jobID, AMap<AString, ACell> job) {
@@ -274,7 +287,7 @@ public class Venue {
 	 * @param jobID
 	 * @return Job status record, or null if not found
 	 */
-	public AMap<AString,ACell> getJobStatus(AString jobID) {
+	public AMap<AString,ACell> getJobData(AString jobID) {
 		synchronized (jobs) {
 			return jobs.get(jobID);
 		}
@@ -283,24 +296,31 @@ public class Venue {
 	private HashMap<AString,AMap<AString,ACell>> jobs= new HashMap<>();
 	
 	/** 
-	 * Start a job and return its ID
+	 * Record a Job
 	 * @param opID
 	 * @param input
-	 * @return Job ID as a string
+	 * @return Job record
 	 */
-	private AString submitJob(Hash opID, ACell input) {
+	private Job submitJob(AString opID, ACell input) {
 		long ts=Utils.getCurrentTimestamp();
 		AString jobID = generateJobID(ts);
-		updateJobStatus(jobID, Maps.of(
+		// TODO: check very slim chance of JobID collisions?
+		
+		AMap<AString,ACell> status= Maps.of(
 				Fields.ID,jobID,
 				Fields.OP,opID,
 				Fields.STATUS,Status.PENDING,
 				Fields.UPDATED,ts,
 				Fields.CREATED,ts,
-				Fields.INPUT,input));
-
-		// TODO: very slim chance of JobID collisions?
-		return jobID;
+				Fields.INPUT,input);
+		
+		updateJobStatus(jobID,status);
+		Job job= new Job(status) {
+			@Override public void onUpdate(AMap<AString,ACell> data) {
+				updateJobStatus(getID(),data);
+			}
+		};
+		return job;
 	}
 
 
@@ -404,7 +424,7 @@ public class Venue {
 	 * @return updates Job status
 	 */
 	public AMap<AString, ACell> cancelJob(AString id) {
-		AMap<AString, ACell> status = getJobStatus(id);
+		AMap<AString, ACell> status = getJobData(id);
 		if (status==null) return null;
 		if (Job.isFinished(status)) return status;
 		AMap<AString, ACell> newStatus=status.assoc(Fields.JOB_STATUS_FIELD, Status.CANCELLED);

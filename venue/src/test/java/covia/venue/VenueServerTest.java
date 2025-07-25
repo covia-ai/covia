@@ -167,7 +167,7 @@ public class VenueServerTest {
 		Thread.sleep(50);
 		covia.updateJobStatus(job);
 		AString status=job.getStatus();
-		assertEquals(Status.PENDING,status);
+		assertEquals(Status.STARTED,status);
 		assertFalse(job.isFinished());
 	}
 	
@@ -180,7 +180,7 @@ public class VenueServerTest {
 		
 		// Step 1: Invoke the operation using Covia client
 		Job job=covia.startJob(TestOps.NEVER, input);
-		assertEquals(Status.PENDING,job.getStatus());
+		assertEquals(Status.STARTED,job.getStatus());
 		
 		// Step 2: Check the status again after a brief pause
 		Thread.sleep(50);
@@ -191,16 +191,16 @@ public class VenueServerTest {
 		String jobIdStr = jobId.toString();
 		
 		// Step 3: Confirm that the status of the job is PENDING using Covia.getJobStatus
-		AMap<AString, ACell> statusMap = covia.getJobStatus(jobIdStr).get(5, TimeUnit.SECONDS);
+		AMap<AString, ACell> statusMap = covia.getJobData(jobIdStr).get(5, TimeUnit.SECONDS); 
 		assertNotNull(statusMap, "Job status map should not be null");
 		AString status = RT.ensureString(statusMap.get(Fields.JOB_STATUS_FIELD));
-		assertEquals("PENDING", status.toString(), "Job status should be PENDING");
+		assertEquals("STARTED", status.toString(), "Job status should be PENDING");
 		
 		// Step 4: Cancel the job using the Covia client
 		covia.cancelJob(jobIdStr).get(5, TimeUnit.SECONDS);
 		
 		// Step 5: Confirm that the status is CANCELLED using Covia.getJobStatus
-		AMap<AString, ACell> cancelledMap = covia.getJobStatus(jobIdStr).get(5, TimeUnit.SECONDS);
+		AMap<AString, ACell> cancelledMap = covia.getJobData(jobIdStr).get(5, TimeUnit.SECONDS);
 		assertNotNull(cancelledMap, "Cancelled job status map should not be null");
 		AString cancelledStatus = RT.ensureString(cancelledMap.get(Fields.JOB_STATUS_FIELD));
 		assertEquals("CANCELLED", cancelledStatus.toString(), "Job status should be CANCELLED");
@@ -209,7 +209,7 @@ public class VenueServerTest {
 		covia.deleteJob(jobIdStr).get(5, TimeUnit.SECONDS);
 		
 		// Step 7: Confirm that the job no longer exists using Covia.getJobStatus
-		AMap<AString, ACell> deletedMap = covia.getJobStatus(jobIdStr).get(5, TimeUnit.SECONDS);
+		AMap<AString, ACell> deletedMap = covia.getJobData(jobIdStr).get(5, TimeUnit.SECONDS);
 		assertNull(deletedMap, "Deleted job status map should be null");
 	}
 	

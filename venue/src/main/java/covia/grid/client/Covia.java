@@ -383,7 +383,7 @@ public class Covia extends ARESTClient  {
 	 * @param jobID The job ID to check
 	 * @return Future containing the job status as an AMap, or null if not found
 	 */
-	public CompletableFuture<AMap<AString, ACell>> getJobStatus(AString jobID) {
+	public CompletableFuture<AMap<AString, ACell>> getJobData(AString jobID) {
 		SimpleHttpRequest req = SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("jobs/" + jobID));
 		return HTTPClients.execute(req).thenApply(response -> {
 			int code=response.getCode();
@@ -402,14 +402,14 @@ public class Covia extends ARESTClient  {
 	 * @param jobID The job ID to check
 	 * @return Future containing the job status as an AMap, or null if not found
 	 */
-	public CompletableFuture<AMap<AString, ACell>> getJobStatus(Object jobID) {
-		return getJobStatus(Job.parseID(jobID));
+	public CompletableFuture<AMap<AString, ACell>> getJobData(Object jobID) {
+		return getJobData(Job.parseID(jobID));
 	}
 	
 	public void updateJobStatus(Job job) throws InterruptedException, ExecutionException, TimeoutException {
 		AString jobID=job.getID();
-		CompletableFuture<AMap<AString, ACell>> future = getJobStatus(jobID).thenApply(data->{
-			job.setData(data);
+		CompletableFuture<AMap<AString, ACell>> future = getJobData(jobID).thenApply(data->{
+			job.updateData(data);
 			return data;
 		});
 		future.get(5,TimeUnit.SECONDS);

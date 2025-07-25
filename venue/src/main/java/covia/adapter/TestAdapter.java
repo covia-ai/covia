@@ -28,7 +28,7 @@ public class TestAdapter extends AAdapter {
     }
 
     @Override
-    public CompletableFuture<ACell> invoke(String operation, ACell meta,ACell input) {
+    public CompletableFuture<ACell> invokeFuture(String operation, ACell meta,ACell input) {
         // Parse the operation to get the specific test operation
         String[] parts = operation.split(":");
         if (parts.length != 2) {
@@ -84,7 +84,7 @@ public class TestAdapter extends AAdapter {
     
     private CompletableFuture<ACell> handleDelay(ACell input) {
     	return CompletableFuture.supplyAsync(()->{
-			Hash op = RT.getIn(input, Fields.OPERATION);
+			ACell op = RT.getIn(input, Fields.OPERATION);
         	ACell opInput = RT.getIn(input, Fields.INPUT);
         	CVMLong delay = CVMLong.parse(RT.getIn(input, Fields.DELAY));
 			try {
@@ -92,7 +92,7 @@ public class TestAdapter extends AAdapter {
 			} catch (InterruptedException e) {
 				throw new RuntimeException("Delay operation interrupted while delaying");
 			}
-        	ACell result = venue.invokeOperation(op, opInput);
+        	ACell result = venue.invokeOperation(op, opInput).awaitResult();
 			return result;
     	});
 

@@ -21,6 +21,7 @@ import convex.core.exceptions.ParseException;
 import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import covia.api.Fields;
+import covia.grid.Job;
 import covia.venue.Venue;
 import covia.venue.api.model.ErrorResponse;
 import covia.venue.api.model.InvokeRequest;
@@ -366,13 +367,13 @@ public class CoviaAPI extends ACoviaAPI {
 		ACell input=RT.getIn(req, "input");
 		
 		try {
-			ACell invokeResult=venue.invokeOperation(op,input);
-			if (invokeResult==null) {
+			Job job=venue.invokeOperation(op,input);
+			if (job==null) {
 				buildError(ctx,404,"Operation does not exist");
 				return;
 			}
 			
-			this.buildResult(ctx, 201, invokeResult);
+			this.buildResult(ctx, 201, job.getData());
 			ctx.header("Location",ROUTE+"jobs/"+op.toHexString());
 		} catch (IllegalArgumentException | IllegalStateException e) {
 			this.buildError(ctx, 400, "Error invoking operation: "+e.getClass().getSimpleName()+":"+e.getMessage());
@@ -403,7 +404,7 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 		
-		ACell status=venue.getJobStatus(id);
+		ACell status=venue.getJobData(id);
 		if (status==null) {
 			buildError(ctx,404,"Job not found: "+id);
 			return;
