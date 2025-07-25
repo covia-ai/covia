@@ -34,15 +34,18 @@
 		"steps": [
 			{
 				"op":"test:random",
+				"name":"Random Bytes",
 				"input": {
 					"length": ["input","length"]
 				}
 		    },
 			{
 				"op":"test:echo",
+				"name":"Echo",
 				"input": [0]
 			},
 			{
+				"name":"Echo",
 				"op":"test:echo",
 				"input": ["const", {"foo":"bar"}]
 			}
