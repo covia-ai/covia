@@ -15,10 +15,12 @@ import convex.core.data.MapEntry;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.core.util.JSONUtils;
 import convex.core.util.ThreadUtils;
 import convex.core.util.Utils;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.grid.Status;
 
 public class Orchestrator extends AAdapter {
 
@@ -37,11 +39,12 @@ public class Orchestrator extends AAdapter {
 	public void invoke(Job job, String operation, ACell meta, ACell input) {
 		AVector<?> steps=RT.ensureVector(RT.getIn(meta, Fields.OPERATION, Fields.STEPS));
 		ACell resultSpec=RT.getIn(meta, Fields.OPERATION, Fields.RESULT);
-		Orchestration orch=new Orchestration(job.getID(),input,steps,resultSpec);
+		Orchestration orch=new Orchestration(job,input,steps,resultSpec);
 		ThreadUtils.runVirtual(orch);
 	}
 	
 	public class Orchestration implements Runnable {
+		final Job job;
 		final AString jobID;
 		final AVector<?> steps;
 		final int n;
@@ -51,8 +54,9 @@ public class Orchestrator extends AAdapter {
 		final ACell orchInput;
 		ACell orchOutput=null;
 		
-		public Orchestration(AString jobID, ACell input, AVector<?> steps, ACell resultSpec) {
-			this.jobID=jobID;
+		public Orchestration(Job job, ACell input, AVector<?> steps, ACell resultSpec) {
+			this.job=job;
+			this.jobID=job.getID();
 			this.steps=steps;
 			this.orchInput=input;
 			this.n=Utils.checkedInt(steps.count());
@@ -67,83 +71,92 @@ public class Orchestrator extends AAdapter {
 			}		
 		}
 
+		private static final boolean DEBUG_ORCH=false;
+		
 		@Override
 		public void run() {
-			int n=Utils.checkedInt(steps.count());
-			HashSet<SubTask> todo=new HashSet<>(subTasks);
-			ArrayList<SubTask> newlyComplete=new ArrayList<>();
-			
-			int stepsLeft=n;
-			HashSet<SubTask> ready=new HashSet<>();
-			while (stepsLeft>0) {
-				// clear todo and newlycomplete for each iteration
-				newlyComplete.clear();
-				ready.clear();
+			try {
+				job.setStatus(Status.STARTED);
+				int n=Utils.checkedInt(steps.count());
+				HashSet<SubTask> todo=new HashSet<>(subTasks);
+				ArrayList<SubTask> newlyComplete=new ArrayList<>();
 				
-				// search for ready tasks (waiting on zero dependencies
-				for (SubTask task:todo) {
-					if (task.deps.size()==0) {
-						ready.add(task);
-					}
-				}
-				
-				for (SubTask task:ready) {
-					ThreadUtils.runVirtual(task);
-					todo.remove(task);
-				}
-				
-				// Wait for at least one subtask to complete
-				while (newlyComplete.isEmpty()) {
-					SubTask t;
-					try {
-						t = completionQueue.poll(10,TimeUnit.SECONDS);
-					} catch (InterruptedException e) {
-						Thread.currentThread().interrupt();
-						// TODO: set job status to cancelled
-						return;
-					}
-					if (t==null) {
-						// TODO: check for cancellation
-						continue;
-					}
-					newlyComplete.add(t);
-					completionQueue.drainTo(newlyComplete);
-				}
-				
-				// Handle completed subtasks
-				for (SubTask task: newlyComplete) {
-					stepsLeft-=1; // decrement number of steps left to complete
+				int stepsLeft=n;
+				HashSet<SubTask> ready=new HashSet<>();
+				while (stepsLeft>0) {
+					// clear todo and newlycomplete for each iteration
+					newlyComplete.clear();
+					ready.clear();
 					
-					// mark dependency as completed for any subsequent steps
-					Integer completedIndex=task.stepNum;
-					for (int i=task.stepNum+1; i<n; i++) {
-						subTasks.get(i).deps.remove(completedIndex);
+					// search for ready tasks (waiting on zero dependencies
+					for (SubTask task:todo) {
+						if (task.deps.size()==0) {
+							ready.add(task);
+						}
+					}
+					
+					for (SubTask task:ready) {
+						ThreadUtils.runVirtual(task);
+						if (DEBUG_ORCH) System.err.println("Started subtask "+task.stepNum);
+						todo.remove(task);
+					}
+					
+					// Wait for at least one subtask to complete
+					while (newlyComplete.isEmpty()) {
+						SubTask t;
+						try {
+							t = completionQueue.poll(10,TimeUnit.SECONDS);
+						} catch (InterruptedException e) {
+							Thread.currentThread().interrupt();
+							job.setStatus(Status.CANCELLED);
+							return;
+						}
+						if (t==null) {
+							if (job.isFinished()) return; // this includes CANCELLED, either way we're all done :-)
+							continue;
+						}
+						if (DEBUG_ORCH) System.out.println("Job completed "+JSONUtils.toJSONPretty(t.subJob.getData()));
+						newlyComplete.add(t);
+						completionQueue.drainTo(newlyComplete);
+					}
+					
+					// Handle completed subtasks
+					for (SubTask task: newlyComplete) {
+						stepsLeft-=1; // decrement number of steps left to complete
+						
+						// mark dependency as completed for any subsequent steps
+						Integer completedIndex=task.stepNum;
+						for (int i=task.stepNum+1; i<n; i++) {
+							subTasks.get(i).deps.remove(completedIndex);
+						}
 					}
 				}
 				
+				// All steps now complete, so can compute final result
+				// this uses the spec from meta.operation.result
+				orchOutput=computeInput(resultSpec,Vectors.empty());
+				job.completeWith(orchOutput);
+			} catch (Exception e) {
+				job.fail(e.getMessage());
 			}
-			
-			// All steps now complete, so can compute final result
-			// this uses the spec from meta.operation.result
-			orchOutput=computeInput(resultSpec,Vectors.empty());
-			
 		}
 		
 		@SuppressWarnings("unchecked")
 		private ACell computeInput(ACell inputSpec, AVector<ACell> path) {
 			if (inputSpec instanceof AVector v) {
-				if (v.count()==0) throw new IllegalStateException("Empty vector in input spec");
+				long n=v.count();
+				if (n==0) throw new IllegalStateException("Empty vector in input spec");
 				ACell code=v.get(0);
 				if (code instanceof CVMLong cvmix) {
 					int ix=Utils.checkedInt(cvmix.longValue());
 					SubTask source=subTasks.get(ix);
-					ACell value=RT.getIn(source.output, (Object[])path.toArray());
+					ACell value=RT.getIn(source.output, v.subVector(1,n-1).toCellArray());
 					return value;
 				} else if (Fields.CONST.equals(code)) {
 					ACell value=v.get(1);
 					return value;
 				} else if (Fields.INPUT.equals(code)) {
-					ACell value=RT.getIn(orchInput, (Object[])path.toArray());
+					ACell value=RT.getIn(orchInput, v.subVector(1,n-1).toCellArray());
 					return value;
 				} else {
 					throw new IllegalArgumentException("Unrecognised source type in: "+v);
@@ -171,6 +184,7 @@ public class Orchestrator extends AAdapter {
 			int stepNum;
 			ACell input;
 			ACell output;
+			Job subJob=null;
 
 			public SubTask(int i, AMap<AString, ACell> step) {
 				this.step=step;
@@ -201,11 +215,18 @@ public class Orchestrator extends AAdapter {
 
 			@Override
 			public void run() {
-				AString opId=RT.getIn(step, Fields.OP);
-				input=computeInput(RT.get(step, Fields.INPUT),Vectors.empty());
-				// venue.invokeOperation(opID, input);
-				output=null; // TODO
-				completionQueue.add(this);
+				try {
+					AString opId=RT.getIn(step, Fields.OP);
+					input=computeInput(RT.get(step, Fields.INPUT),Vectors.empty());
+					subJob =venue.invokeOperation(opId, input);
+					output=subJob.awaitResult();
+					completionQueue.add(this);
+				} catch (Exception e) {
+					if (DEBUG_ORCH) System.err.println(e);
+					subJob.fail("Failed to run orchestrator subtask: "+e.getMessage());
+				} finally {
+					subJob.fail("Shouldn't see this, it means the SubJob did not complete properly!");
+				}
 			}
 
 

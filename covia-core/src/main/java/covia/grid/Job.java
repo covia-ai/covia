@@ -2,11 +2,13 @@ package covia.grid;
 
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
+import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
 
@@ -171,12 +173,12 @@ public class Job {
 	public synchronized void completeWith(ACell result) {
 		if (isFinished()) throw new IllegalStateException("Job already finished");
 		AMap<AString, ACell> newData = getData();
-		newData=newData.assoc(Fields.STATUS, Status.COMPLETE);
+		newData=newData.assoc(Fields.JOB_STATUS_FIELD, Status.COMPLETE);
 		newData=newData.assoc(Fields.OUTPUT, result);
 		updateData(newData);
 	}
 
-	public synchronized ACell awaitResult() {
+	public ACell awaitResult() {
 		return getFuture().join();
 	}
 
@@ -185,7 +187,27 @@ public class Job {
 		synchronized(this) {
 			if (resultFuture!=null) return resultFuture;
 			resultFuture=new CompletableFuture<ACell>();
+			if (isFinished()) resultFuture.complete(getOutput());
 			return resultFuture;
 		}
+	}
+
+	/**
+	 * Causes the job to fail, if it is not already finished
+	 * @param message
+	 */
+	public synchronized void fail(String message) {
+		if (isFinished()) return;
+		update(job->{
+			job=job.assoc(Fields.JOB_STATUS_FIELD, Status.FAILED);
+			job=job.assoc(Fields.JOB_ERROR_FIELD, Strings.create(message));
+			return job;
+		});
+	}
+
+	private synchronized void update(UnaryOperator<AMap<AString,ACell>> updater) {
+		AMap<AString, ACell> oldData = getData();
+		AMap<AString, ACell> newData=updater.apply(oldData);
+		updateData(newData);
 	}
 }

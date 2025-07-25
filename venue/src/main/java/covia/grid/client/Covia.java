@@ -406,10 +406,18 @@ public class Covia extends ARESTClient  {
 		return getJobData(Job.parseID(jobID));
 	}
 	
+	/**
+	 * Perform a remote status update for the given job
+	 * @param job Job to update
+	 * @throws InterruptedException
+	 * @throws ExecutionException
+	 * @throws TimeoutException
+	 */
 	public void updateJobStatus(Job job) throws InterruptedException, ExecutionException, TimeoutException {
 		AString jobID=job.getID();
 		CompletableFuture<AMap<AString, ACell>> future = getJobData(jobID).thenApply(data->{
 			job.updateData(data);
+			// System.out.println(JSONUtils.toJSONPretty(data));
 			return data;
 		});
 		future.get(5,TimeUnit.SECONDS);

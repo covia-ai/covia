@@ -241,7 +241,7 @@ public class Venue {
 			// It's a valid asset ID, so look up the operation
 			meta=getMetaValue(opID);
 			if (meta==null) {
-				throw new IllegalStateException("Asset does not exist: "+opID);
+				return null;
 			}
 			adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
 			if (adapterOp == null) {
@@ -263,7 +263,7 @@ public class Venue {
 		
 		Job job=submitJob(op,input);
 		
-		// Invoke the operation. Adapter is responsible for completing the Job in the venue
+		// Invoke the operation. Adapter is responsible for completing the Job
 		adapter.invoke(job, operation, meta,input);
 
 		return job;

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
@@ -34,6 +35,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.core.util.JSONUtils;
 import convex.java.HTTPClients;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -125,8 +127,10 @@ public class VenueServerTest {
 		assertNotNull(input);
 		
 		// Invoke the operation via the client
-		//Job job=covia.invokeAndWait(TestOps.ORCH,input);
-		//assertEquals(Status.FAILED,job.getStatus());
+		Job job=covia.invokeAndWait(TestOps.ORCH,input);
+		System.out.println("testOrchOperation:"+JSONUtils.toJSONPretty(job.getData()));
+		assertEquals(Status.COMPLETE,job.getStatus());
+		assertEquals(input,RT.getIn(job.getOutput(),"original-input"));
 	
 	}
 	
@@ -140,7 +144,18 @@ public class VenueServerTest {
 		// Invoke the operation via the client
 		Job job=covia.invokeAndWait(TestOps.ERROR,input);
 		assertEquals(Status.FAILED,job.getStatus());
+	}
 	
+	@Test
+	public void testFictitiousOp() throws Exception {
+		// Create input for the error operation
+		ACell input = Maps.of(
+			Fields.MESSAGE, Strings.create("Test error message")
+		);
+		
+		// Invoke the operation via the client
+		assertThrows(Exception.class,()->covia.invokeAndWait(Hash.get(CVMLong.ONE),input));
+
 	}
 	
 	@Test public void testGetAllAssets() throws InterruptedException, ExecutionException {
@@ -194,7 +209,7 @@ public class VenueServerTest {
 		AMap<AString, ACell> statusMap = covia.getJobData(jobIdStr).get(5, TimeUnit.SECONDS); 
 		assertNotNull(statusMap, "Job status map should not be null");
 		AString status = RT.ensureString(statusMap.get(Fields.JOB_STATUS_FIELD));
-		assertEquals("STARTED", status.toString(), "Job status should be PENDING");
+		assertEquals("STARTED", status.toString(), "Job status should be STARTED");
 		
 		// Step 4: Cancel the job using the Covia client
 		covia.cancelJob(jobIdStr).get(5, TimeUnit.SECONDS);
