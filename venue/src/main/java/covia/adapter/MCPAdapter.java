@@ -5,6 +5,7 @@ import java.util.concurrent.CompletableFuture;
 import convex.core.data.ACell;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import covia.grid.Status;
 
 public class MCPAdapter extends AAdapter {
 	
@@ -19,7 +20,7 @@ public class MCPAdapter extends AAdapter {
 		// TODO: Implement actual MCP integration
 		return CompletableFuture.completedFuture(
 			Maps.of(
-				"status", Strings.create("NOT_IMPLEMENTED"),
+				"status", Status.FAILED,
 				"message", Strings.create("MCP integration not yet implemented")
 			)
 		);

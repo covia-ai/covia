@@ -54,7 +54,7 @@ public class LangChainAdapter extends AAdapter {
         		}
 	        	
 	        	UserMessage userMessage = UserMessage.from(
-	        		TextContent.from("Say hello in an entertaining way")
+	        		TextContent.from(prompt.toString())
 	        	);
 	        	ChatResponse response = model.chat(SYSTEM_MESSAGE,userMessage);
 	        	

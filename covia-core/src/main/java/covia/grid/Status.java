@@ -9,6 +9,7 @@ public class Status {
 	public static final StringShort STARTED = Strings.intern("STARTED");
 	public static final StringShort COMPLETE = Strings.intern("COMPLETE");
 	public static final StringShort CANCELLED = Strings.intern("CANCELLED");
+	public static final StringShort TIMEOUT = Strings.intern("TIMEOUT");
 	
 	/**
 	 * Not really a valid status, but use this during dev if needed

@@ -22,7 +22,13 @@ public abstract class ACoviaAPI  {
 	}
 	
 	public void buildResult(Context ctx,Object json) {
-		buildRawResult(ctx,JSONUtils.toString(json));
+		try {
+			buildRawResult(ctx,JSONUtils.toString(json));
+		} catch (Exception e) {
+			System.err.println("Error in JSON content building: "+json);
+			e.printStackTrace();
+			throw e;
+		}
 	}
 	
 	public void buildResult(Context ctx,int status,Object json) {

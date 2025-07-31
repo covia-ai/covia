@@ -1,5 +1,6 @@
 package covia.adapter;
 
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 
 import convex.core.data.ACell;
@@ -54,8 +55,14 @@ public abstract class AAdapter {
 			job.completeWith(result);
 		})
 		.exceptionally(e -> {
+			AString newStatus;
+			if (e instanceof CancellationException) {
+				newStatus=Status.CANCELLED;
+			} else {
+				newStatus=Status.FAILED;
+			}
 			job.update(jd->{
-				jd = jd.assoc(Fields.JOB_STATUS_FIELD, Status.FAILED);
+				jd = jd.assoc(Fields.JOB_STATUS_FIELD, newStatus);
 				jd = jd.assoc(Fields.JOB_ERROR_FIELD, Strings.create(e.getMessage()));
 				return jd;
 			});
