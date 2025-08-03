@@ -38,12 +38,12 @@ import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import convex.java.HTTPClients;
 import covia.api.Fields;
+import covia.grid.AContent;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.client.Covia;
+import covia.grid.impl.BlobContent;
 import covia.venue.server.VenueServer;
-import covia.venue.storage.AContent;
-import covia.venue.storage.BlobContent;
 
 @TestInstance(Lifecycle.PER_CLASS)
 public class VenueServerTest {
@@ -256,7 +256,7 @@ public class VenueServerTest {
 		assertNotNull(assetIdString, "Asset ID should be a string");
 		
 		// Create content object for upload
-		BlobContent content = new BlobContent(contentBlob);
+		BlobContent content =  BlobContent.of(contentBlob);
 		
 		// Add the content to the asset
 		Future<Hash> addContentFuture = covia.addContent(assetIdString, content);

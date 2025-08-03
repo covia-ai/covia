@@ -35,12 +35,12 @@ public abstract class AAdapter {
      * @param operation The operation ID in the format "adapter:operation"
      * @param meta The metadata for the operation
      * @param input The input parameters for the operation
-     * @return A CompletableFuture that will complete with the result of the operation
+     * @return A CompletableFuture that will complete with the result of the operation, or fail exceptionally
      */
     public abstract CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input);
     
     /**
-     * Invoke an operation with the given input, returning a future for the result.
+     * Invoke an operation with the given input.
      * Adapters SHOULD launch an asynchronous task to produce the result and update the job status accordingly
      * Adapters MAY update the Job immediately if the Job can be completed in O(1) time
      * 
@@ -69,7 +69,6 @@ public abstract class AAdapter {
 			return null;
 		});
     }
-
     
     protected void finishJob(AMap<AString,ACell> job, AString statusString) {
     	AString id=Job.parseID(job.get(Fields.ID));

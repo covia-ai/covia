@@ -27,7 +27,8 @@ import convex.core.util.Utils;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.venue.storage.BlobContent;
+import covia.grid.impl.BlobContent;
+
 import java.io.InputStream;
 
 public class VenueTest {
@@ -214,7 +215,7 @@ public class VenueTest {
 		assertNotNull(assetId, "Asset ID should be returned");
 		
 		// Create content object for upload
-		BlobContent content = new BlobContent(contentBlob);
+		BlobContent content =  BlobContent.of(contentBlob);
 		
 		// Add the content to the asset using local venue API
 		venue.putContent(venue.getMetaValue(assetId), content.getInputStream());

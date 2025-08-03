@@ -28,9 +28,10 @@ import convex.java.HTTPClients;
 import covia.api.Fields;
 import covia.exception.ConversionException;
 import covia.exception.ResponseException;
+import covia.grid.AContent;
 import covia.grid.Assets;
 import covia.grid.Job;
-import covia.venue.storage.AContent;
+import covia.grid.impl.BlobContent;
 
 public class Covia extends ARESTClient  {
 	
@@ -331,7 +332,7 @@ public class Covia extends ARESTClient  {
 				// Create a BlobContent from the response body
 				byte[] data = response.getBodyBytes();
 				convex.core.data.Blob blob = convex.core.data.Blob.wrap(data);
-				return new covia.venue.storage.BlobContent(blob);
+				return BlobContent.of(blob);
 			} catch (Exception e) {
 				throw new RuntimeException("Failed to create content from response", e);
 			}

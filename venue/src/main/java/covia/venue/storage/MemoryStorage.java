@@ -6,6 +6,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 import convex.core.data.Hash;
+import covia.grid.AContent;
+import covia.grid.impl.BlobContent;
 
 /**
  * Simple in-memory storage implementation for testing and demonstration.

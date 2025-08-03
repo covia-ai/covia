@@ -24,12 +24,12 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.grid.AContent;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.grid.impl.BlobContent;
 import covia.venue.TestOps;
 import covia.venue.TestServer;
-import covia.venue.storage.AContent;
-import covia.venue.storage.BlobContent;
 
 @TestInstance(Lifecycle.PER_CLASS)
 public class ClientTest {
@@ -145,7 +145,7 @@ public class ClientTest {
 		assertNotNull(assetId, "Asset ID should be returned");
 		
 		// Create content object
-		BlobContent content = new BlobContent(contentBlob);
+		BlobContent content = BlobContent.of(contentBlob);
 		
 		// Add the content
 		CompletableFuture<Hash> addContentFuture = client.addContent(assetId.toHexString(), content);
@@ -176,7 +176,7 @@ public class ClientTest {
 		Hash assetId = client.addAsset(metadata).get(5, TimeUnit.SECONDS);
 		
 		// Add the content
-		BlobContent content = new BlobContent(contentBlob);
+		BlobContent content =  BlobContent.of(contentBlob);
 		client.addContent(assetId.toHexString(), content).get(5, TimeUnit.SECONDS);
 		
 		// Get the content
@@ -218,7 +218,7 @@ public class ClientTest {
 		
 		
 		// Add the content
-		BlobContent content = new BlobContent(contentBlob);
+		BlobContent content =  BlobContent.of(contentBlob);
 		Hash storedContentHash = client.addContent(assetId.toHexString(), content).get(5, TimeUnit.SECONDS);
 		assertEquals(contentHash, storedContentHash, "Stored content hash should match");
 		
@@ -246,7 +246,7 @@ public class ClientTest {
 		});
 		
 		assertThrows(IllegalArgumentException.class, () -> {
-			client.addContent("invalid-asset-id", new BlobContent(Blob.EMPTY));
+			client.addContent("invalid-asset-id", BlobContent.of(Blob.EMPTY));
 		});
 		
 		assertThrows(IllegalArgumentException.class, () -> {

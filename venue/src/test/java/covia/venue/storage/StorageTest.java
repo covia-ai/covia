@@ -11,6 +11,8 @@ import org.junit.jupiter.api.Test;
 
 import convex.core.data.Blob;
 import convex.core.data.Hash;
+import covia.grid.AContent;
+import covia.grid.impl.BlobContent;
 import convex.core.crypto.Hashing;
 
 class StorageTest {
@@ -33,7 +35,7 @@ class StorageTest {
     @Test
     void testStoreAndRetrieveContent() throws IOException {
         // Create content
-        BlobContent content = new BlobContent(testBlob);
+        BlobContent content =  BlobContent.of(testBlob);
         
         // Store content
         storage.store(testHash, content);
@@ -82,7 +84,7 @@ class StorageTest {
     @Test
     void testDeleteContent() throws IOException {
         // Store content
-        BlobContent content = new BlobContent(testBlob);
+        BlobContent content =  BlobContent.of(testBlob);
         storage.store(testHash, content);
         
         // Verify content exists
@@ -100,7 +102,7 @@ class StorageTest {
     @Test
     void testGetSize() throws IOException {
         // Store content
-        BlobContent content = new BlobContent(testBlob);
+        BlobContent content = BlobContent.of(testBlob);
         storage.store(testHash, content);
         
         // Verify size
@@ -120,7 +122,7 @@ class StorageTest {
     void testNullParameters() throws IOException {
         // Test null hash
         assertThrows(IllegalArgumentException.class, () -> {
-            storage.store(null, new BlobContent(testBlob));
+            storage.store(null, BlobContent.of(testBlob));
         });
         
         assertThrows(IllegalArgumentException.class, () -> {

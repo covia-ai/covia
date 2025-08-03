@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.io.InputStream;
 
 import convex.core.data.Hash;
+import covia.grid.AContent;
 
 /**
  * Abstract base class for storage adapters.
