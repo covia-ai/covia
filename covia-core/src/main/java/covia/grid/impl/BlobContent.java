@@ -1,11 +1,11 @@
-package covia.venue.storage;
+package covia.grid.impl;
 
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 
 import convex.core.data.ABlob;
 import convex.core.data.Blobs;
+import covia.grid.AContent;
 
 /**
  * Simple implementation of AContent that wraps a Blob.
@@ -18,7 +18,7 @@ public class BlobContent extends AContent {
      * Create a BlobContent with the given blob 
      * @param blob The blob containing the content
      */
-    public BlobContent(ABlob blob) {
+    private BlobContent(ABlob blob) {
         this.blob = blob;
     }
     
@@ -40,11 +40,15 @@ public class BlobContent extends AContent {
     
     @Override
     public InputStream getInputStream() {
-        return new ByteArrayInputStream(blob.getBytes());
+        return blob.getInputStream();
     }
     
     @Override
     public long getSize() {
         return blob != null ? blob.count() : -1;
     }
+
+	public static BlobContent of(ABlob data) {
+		return new BlobContent(data);
+	}
 } 
