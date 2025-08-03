@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -125,7 +126,7 @@ public class ClientTest {
 	}
 	
 	@Test
-	public void testAddContent() throws InterruptedException, ExecutionException, TimeoutException {
+	public void testAddContent() throws InterruptedException, ExecutionException, TimeoutException, IOException {
 		// Create test content
 		String testContent = "Hello, this is test content for the client!";
 		Blob contentBlob = Blob.wrap(testContent.getBytes());
@@ -157,7 +158,7 @@ public class ClientTest {
 	}
 	
 	@Test
-	public void testGetContent() throws InterruptedException, ExecutionException, TimeoutException {
+	public void testGetContent() throws InterruptedException, ExecutionException, TimeoutException, IOException {
 		// Create test content
 		String testContent = "Hello, this is test content for retrieval!";
 		Blob contentBlob = Blob.wrap(testContent.getBytes());
@@ -196,7 +197,7 @@ public class ClientTest {
 	}
 	
 	@Test
-	public void testCompleteAssetWithContentFlow() throws InterruptedException, ExecutionException, TimeoutException {
+	public void testCompleteAssetWithContentFlow() throws InterruptedException, ExecutionException, TimeoutException, IOException {
 		// Create test content
 		String testContent = "Complete flow test content!";
 		Blob contentBlob = Blob.wrap(testContent.getBytes());

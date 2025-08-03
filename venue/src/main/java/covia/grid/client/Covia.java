@@ -1,5 +1,6 @@
 package covia.grid.client;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
@@ -285,8 +286,9 @@ public class Covia extends ARESTClient  {
 	 * @param assetID The asset ID to add content to
 	 * @param content The content to add
 	 * @return Future that completes when the content is successfully added
+	 * @throws IOException If not possible to obtain the content
 	 */
-	public CompletableFuture<Hash> addContent(String assetID, AContent content) {
+	public CompletableFuture<Hash> addContent(String assetID, AContent content) throws IOException {
 		Hash h = Assets.parseAssetID(assetID);
 		if (h == null) throw new IllegalArgumentException("Bad asset ID format");
 		

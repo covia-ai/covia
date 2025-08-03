@@ -1,5 +1,6 @@
 package covia.grid;
 
+import java.io.IOException;
 import java.io.InputStream;
 
 import convex.core.data.ABlob;
@@ -13,8 +14,9 @@ public abstract class AContent {
     /**
      * Get the content as a Blob.
      * @return The content as a Blob, or null if not available
+     * @throws IOException if not possible to get Blob content
      */
-    public abstract ABlob getBlob();
+    public abstract ABlob getBlob() throws IOException;
     
     /**
      * Get the content as an InputStream.
