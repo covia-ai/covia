@@ -31,6 +31,7 @@ import convex.etch.EtchStore;
 import convex.lattice.ACursor;
 import convex.lattice.Cursors;
 import covia.adapter.AAdapter;
+import covia.adapter.HTTPAdapter;
 import covia.adapter.LangChainAdapter;
 import covia.adapter.Orchestrator;
 import covia.adapter.TestAdapter;
@@ -211,6 +212,7 @@ public class Venue {
 		String BASE="/asset-examples/";
 		try {
 			venue.registerAdapter(new TestAdapter());
+			venue.registerAdapter(new HTTPAdapter());
 			venue.registerAdapter(new Orchestrator());
 			venue.registerAdapter(new LangChainAdapter());
 			venue.storeAsset(Utils.readResourceAsString(BASE+"qwen.json"),null);

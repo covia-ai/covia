@@ -5,7 +5,7 @@ import convex.core.data.Strings;
 
 public class Fields {
 	public static final StringShort CREATED=Strings.intern("created");
-	public static final StringShort  UPDATED = Strings.intern("updated");
+	public static final StringShort UPDATED = Strings.intern("updated");
 	public static final StringShort JOB_STATUS_FIELD = Strings.intern("status");
 	public static final StringShort JOB_ERROR_FIELD = Strings.intern("error");
 	public static final StringShort INPUT = Strings.intern("input");
@@ -37,5 +37,9 @@ public class Fields {
 	
 	public static final StringShort STEPS = Strings.intern("steps");
 	public static final StringShort CONST = Strings.intern("const");
-
+	
+	public static final StringShort HEADERS = Strings.intern("headers");
+	public static final StringShort URL = Strings.intern("url");
+	public static final StringShort BODY = Strings.intern("body");
+	public static final StringShort METHOD = Strings.intern("method");
 }

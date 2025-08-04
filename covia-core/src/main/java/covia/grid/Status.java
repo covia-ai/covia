@@ -1,5 +1,9 @@
 package covia.grid;
 
+import convex.core.data.ACell;
+import convex.core.data.AHashMap;
+import convex.core.data.AString;
+import convex.core.data.Maps;
 import convex.core.data.StringShort;
 import convex.core.data.Strings;
 
@@ -15,4 +19,11 @@ public class Status {
 	 * Not really a valid status, but use this during dev if needed
 	 */
 	public static final StringShort TODO = Strings.intern("TODO");
+
+	public static AHashMap<AString, ACell> failure(String message) {
+		return Maps.of(
+			"status", FAILED,
+			"message", Strings.create(message)
+		);
+	}
 }

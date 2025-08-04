@@ -3,6 +3,8 @@ package covia.adapter;
 import java.util.concurrent.CompletableFuture;
 
 import convex.core.data.ACell;
+import convex.core.data.AHashMap;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -39,10 +41,7 @@ public class LangChainAdapter extends AAdapter {
         String[] parts = operation.split(":");
         if (!getName().equals(parts[0])) {
     		return CompletableFuture.completedFuture(
-    			Maps.of(
-    				"status", Status.FAILED,
-    				"message", Strings.create("Bad operation specifier")
-    			)
+    			Status.failure("Bad operation specifier")
     		);	
         }
         
@@ -59,16 +58,24 @@ public class LangChainAdapter extends AAdapter {
 	        	ChatResponse response = model.chat(SYSTEM_MESSAGE,userMessage);
 	        	
 	        	AiMessage reply = response.aiMessage();
-	        	return Maps.of(
-	    			"reply", Strings.create(reply.text())
+	        	String output=reply.text();
+	        	String think=null;
+	        	if (output.contains("</think>")) {
+	        		int split=output.lastIndexOf("</think>");
+	        		think=output.substring(7, split).trim();
+	        		output=output.substring(split+8).trim();
+	        	}
+	        	AMap<AString, ACell> result = Maps.of(
+	    			"reply", Strings.create(output)
 	        	);
+	        	if (think!=null) {
+	        		result=RT.assocIn(result, Strings.create(think), "think");
+	        	}
+	        	return result;
         	});
         } else {
     		return CompletableFuture.completedFuture(
-    			Maps.of(
-    				"status", Status.FAILED,
-    				"message", Strings.create("LangChain implementation not found: "+parts[1])
-    			)
+    			Status.failure("LangChain implementation not found: "+parts[1])
     		);	
         }
 
