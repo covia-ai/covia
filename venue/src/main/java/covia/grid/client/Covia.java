@@ -22,6 +22,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import convex.java.ARESTClient;
@@ -36,10 +37,12 @@ import covia.grid.impl.BlobContent;
 
 public class Covia extends ARESTClient  {
 	
-	public static Logger log=LoggerFactory.getLogger(Covia.class);;
+	public static Logger log=LoggerFactory.getLogger(Covia.class);
 
 	private static final double BACKOFF_FACTOR = 1.5;
 	private static final long INITIAL_POLL_DELAY = 300; // 1 second initial delay
+
+	private long timeout=5000;
 
 	public Covia(URI host) {
 		super(host,"/api/v1/");
@@ -47,9 +50,11 @@ public class Covia extends ARESTClient  {
 
 	/**
 	 * Adds an asset to the connected venue
+	 * 
+	 * @param jsonMeta JSON metadata string for the asset
 	 */
-	public CompletableFuture<Hash> addAsset(String jsonString) {
-		ACell meta=JSONUtils.parseJSON5(jsonString);
+	public CompletableFuture<Hash> addAsset(String jsonMeta) {
+		ACell meta=JSONUtils.parseJSON5(jsonMeta);
 		return addAsset(meta);
 	}
 	
@@ -124,8 +129,20 @@ public class Covia extends ARESTClient  {
 	 * @throws InterruptedException 
 	 */
 	public CompletableFuture<Job> invoke(String assetID, ACell input) throws InterruptedException {
-		Hash opID=Assets.parseAssetID(assetID);
+		AString opID=Strings.create(assetID);
 		return invoke(opID,input);
+	}
+	
+	/**
+	 * Invokes an operation on the connected venue, returning a Job
+	 * 
+	 * @param assetID The AssetID of the operation to invoke
+	 * @param input The input parameters for the operation as an ACell
+	 * @return Future for the finished Job
+	 * @throws InterruptedException 
+	 */
+	public CompletableFuture<Job> invoke(Hash assetID, ACell input) throws InterruptedException {
+		return invoke(assetID.toCVMHexString(),input);
 	}
 	
 	/**
@@ -138,19 +155,34 @@ public class Covia extends ARESTClient  {
 	 * @throws InterruptedException 
 	 */
 	public Job invokeSync(String opID, ACell input) throws InterruptedException, ExecutionException, TimeoutException {
-		Job job=invoke(opID,input).get(5,TimeUnit.MILLISECONDS);
+		Job job=invoke(opID,input).get(timeout,TimeUnit.MILLISECONDS);
+		waitForFinish(job);
+		return job;
+	}
+	
+	/**
+	 * Invokes an operation, returning a finished Job once complete
+	 * @param opID Operation to invoke as an Asset ID or adapter operation alias
+	 * @param input
+	 * @return Finished Job
+	 * @throws TimeoutException 
+	 * @throws ExecutionException 
+	 * @throws InterruptedException 
+	 */
+	public Job invokeSync(Hash opID, ACell input) throws InterruptedException, ExecutionException, TimeoutException {
+		Job job=invoke(opID.toCVMHexString(),input).get(timeout,TimeUnit.MILLISECONDS);
 		waitForFinish(job);
 		return job;
 	}
 	
 	/**
 	 * Invokes an operation on the connected venue. Will start polling for status updates.
-	 * @param assetID The AssetID of the operation to invoke
+	 * @param opID The AssetID of the operation to invoke
 	 * @param input The input parameters for the operation as an ACell
 	 * @return Future containing the job status map
 	 */
-	public CompletableFuture<Job> invoke(Hash assetID, ACell input) throws InterruptedException {
-		CompletableFuture<Job> submit=startJobAsync(assetID,input);
+	public CompletableFuture<Job> invoke(AString opID, ACell input) throws InterruptedException {
+		CompletableFuture<Job> submit=startJobAsync(opID,input);
 		CompletableFuture<Job> start=submit.thenApply(job->{
 			try {
 				waitForFinish(job);
@@ -173,17 +205,30 @@ public class Covia extends ARESTClient  {
 	 * @throws ExecutionException
 	 * @throws TimeoutException
 	 */
-	public Job startJob(Hash opID, ACell input) throws InterruptedException, ExecutionException, TimeoutException {
+	public Job startJob(AString opID, ACell input) throws InterruptedException, ExecutionException, TimeoutException {
 		return startJobAsync(opID,input).get(5,TimeUnit.SECONDS);
 	}
 	
 	/**
+	 * Starts a operation on the Grid. Does not start polling.
+	 * @param opID Operation ID
+	 * @param input Operation input
+	 * @return Job instance (likely to be PENDING)
+	 * @throws InterruptedException
+	 * @throws ExecutionException
+	 * @throws TimeoutException
+	 */
+	public Job startJob(Hash opID, ACell input) throws InterruptedException, ExecutionException, TimeoutException {
+		return startJobAsync(opID.toCVMHexString(),input).get(5,TimeUnit.SECONDS);
+	}
+	
+	/**
 	 * Starts an operation on the connected venue. Does not start polling.
-	 * @param opID The AssetID of the operation to invoke
+	 * @param opID The Asset ID of the operation to invoke
 	 * @param input The input parameters for the operation as an ACell
 	 * @return Future containing the job status, likely to be PENDING
 	 */
-	public CompletableFuture<Job> startJobAsync(Hash opID, ACell input) {
+	public CompletableFuture<Job> startJobAsync(AString opID, ACell input) {
 		SimpleHttpRequest req = SimpleHttpRequest.create(Method.POST, getBaseURI().resolve("invoke"));
 		ACell requestBody = Maps.of(
 			"operation", opID,
@@ -212,11 +257,22 @@ public class Covia extends ARESTClient  {
 	 * @return Updates Job in finished state (COMPLETE, FAILED or CANCELLED)
 	 * @throws InterruptedException
 	 */
-	public Job invokeAndWait(Hash opID, ACell input) throws InterruptedException {
+	public Job invokeAndWait(AString opID, ACell input) throws InterruptedException {
 		CompletableFuture<Job> future = invoke(opID,input);
 		Job job=future.join();
 		waitForFinish(job);
 		return job;
+	}
+	
+	/**
+	 * Invokes a Job and waits for it to finish
+	 * @param opID Identifier of operation
+	 * @param input Input to the operation
+	 * @return Updates Job in finished state (COMPLETE, FAILED or CANCELLED)
+	 * @throws InterruptedException
+	 */
+	public Job invokeAndWait(Hash opID, ACell input) throws InterruptedException {
+		return invokeAndWait(opID.toCVMHexString(),input);
 	}
 	
 	/**
