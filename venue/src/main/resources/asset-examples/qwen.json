@@ -4,6 +4,7 @@
 	"description":"This is an example operation that gets a response from the Qwen3 LLM via ollama",
 	"dateCreated":"2025-06-05T07:22:59Z",
 	"dateModified": "2025-06-05T07:22:59Z",
+	"keywords":["LLM", "model"],
 	"operation": {
 		"adapter": "langchain:ollama:qwen3",
 
@@ -22,6 +23,10 @@
 				"reply":{
 					"type":"string",
 					"description":"The LLM response"
+				},
+				"think":{
+					"type":"string",
+					"description":"Model thought process"
 				}
 			}
 		}

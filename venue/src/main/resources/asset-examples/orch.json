@@ -9,7 +9,8 @@
 			"properties": {
 				"length": {
 					"type": "string",
-					"description": "Number of random bytes to generate (1-1024)"
+					"description": "Number of random bytes to generate (1-1024)",
+					"defaultValue": "32"
 				}
 			},
 			"required": ["length"]

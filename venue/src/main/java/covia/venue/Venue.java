@@ -31,6 +31,8 @@ import convex.etch.EtchStore;
 import convex.lattice.ACursor;
 import convex.lattice.Cursors;
 import covia.adapter.AAdapter;
+import covia.adapter.CoviaAdapter;
+import covia.adapter.GridAdapter;
 import covia.adapter.HTTPAdapter;
 import covia.adapter.LangChainAdapter;
 import covia.adapter.Orchestrator;
@@ -215,6 +217,8 @@ public class Venue {
 			venue.registerAdapter(new HTTPAdapter());
 			venue.registerAdapter(new Orchestrator());
 			venue.registerAdapter(new LangChainAdapter());
+			venue.registerAdapter(new CoviaAdapter());
+			venue.registerAdapter(new GridAdapter());
 			venue.storeAsset(Utils.readResourceAsString(BASE+"qwen.json"),null);
 		} catch (IOException e) {
 			throw new Error(e);
@@ -237,7 +241,7 @@ public class Venue {
 		if (op==null) throw new IllegalArgumentException("Operation must be a valid Hex asset ID");
 		
 		Hash opID=Hash.parse(op);
-		ACell meta=null;
+		AMap<AString,ACell> meta=null;
 		AString adapterOp=op;
 		if (opID!=null) {
 			// It's a valid asset ID, so look up the operation
@@ -263,7 +267,7 @@ public class Venue {
 			throw new IllegalStateException("Adapter not available: "+adapterName);
 		}
 		
-		Job job=submitJob(op,input);
+		Job job=submitJob(op,meta,input);
 		
 		// Invoke the operation. Adapter is responsible for completing the Job
 		adapter.invoke(job, operation, meta,input);
@@ -301,9 +305,10 @@ public class Venue {
 	 * Record a Job
 	 * @param opID
 	 * @param input
+	 * @param meta 
 	 * @return Job record
 	 */
-	private Job submitJob(AString opID, ACell input) {
+	private Job submitJob(AString opID, AMap<AString,ACell> meta, ACell input) {
 		long ts=Utils.getCurrentTimestamp();
 		AString jobID = generateJobID(ts);
 		// TODO: check very slim chance of JobID collisions?
@@ -315,6 +320,11 @@ public class Venue {
 				Fields.UPDATED,ts,
 				Fields.CREATED,ts,
 				Fields.INPUT,input);
+		
+		AString name=RT.ensureString(RT.getIn(meta, Fields.NAME));
+		if (name!=null) {
+			status=status.assoc(Fields.NAME, name);
+		}
 		
 		updateJobStatus(jobID,status);
 		Job job= new Job(status) {
