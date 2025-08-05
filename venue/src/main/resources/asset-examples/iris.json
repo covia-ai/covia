@@ -1,7 +1,7 @@
 {
-	"name":"Iris Dataset",
-	"creator":"UCI Machine Learning Repository",
-	"description":"This is the 'Iris' dataset. Originally published at UCI Machine Learning Repository: Iris Data Set, this small dataset from 1936 is often used for testing out machine learning algorithms and visualizations",
+	"name":"Hamlet",
+	"creator":"William Shakespeare",
+	"description":"A play by a celebrated English playwright.",
 	"dateCreated":"2025-06-05T06:53:59Z",
 	"dateModified": "2025-06-05T06:53:59Z",
 	"license": {
@@ -9,7 +9,7 @@
 	    "url": "https://creativecommons.org/licenses/by/4.0/"
 	  },
 
-	"keywords":["machine learning", "iris", "dataset", "classification"],
+	"keywords":["text", "script", "creative-work"],
 	"content":{
 		"contentType":"text/csv",
 		"sha256":"119E30DB8A4EA8B33723603743591A5F8229684E6236D89EF1966A72D7293607",

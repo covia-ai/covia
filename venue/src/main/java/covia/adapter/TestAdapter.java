@@ -77,6 +77,8 @@ public class TestAdapter extends AAdapter {
 			venue.storeAsset(Utils.readResourceAsString(BASE+"orch.json"),null);
 			Hash iris=venue.storeAsset(Utils.readResourceAsString(BASE+"iris.json"),null);
 			venue.putContent(iris,this.getClass().getResourceAsStream(BASE+"iris.csv"));
+			Hash shake=venue.storeAsset(Utils.readResourceAsString(BASE+"shakespeare.json"),null);
+			venue.putContent(shake,this.getClass().getResourceAsStream(BASE+"iris.csv"));
 		} catch(Exception e) {
 			log.warn("Failed to install test assets",e);
 		}

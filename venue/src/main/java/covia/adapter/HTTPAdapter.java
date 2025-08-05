@@ -87,8 +87,8 @@ public class HTTPAdapter extends AAdapter {
 			for (MapEntry<AString,AString> me:headers.entryVector()) {
 				req.setHeader(me.getKey().toString(), me.getValue().toString());
 			}
-			System.err.println(req);
-			System.err.println(bodyText);
+			//System.err.println(req);
+			//System.err.println(bodyText);
 			
 			CompletableFuture<SimpleHttpResponse> responseFuture = HTTPClients.execute(req);
 			CompletableFuture<ACell> result= responseFuture.thenApply(response -> {

@@ -1,5 +1,5 @@
 {
-	"name": "Random Bytes Generator",
+	"name": "Random Data Generator",
 	"description": "Generates a specified number of random bytes using a cryptographically secure random number generator",
 	"dateCreated":"2025-06-09T07:22:59Z",
 	"dateModified": "2025-06-09T07:22:59Z",

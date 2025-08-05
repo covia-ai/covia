@@ -87,7 +87,7 @@ public class VenueTest {
 		assertNotNull(ms);
 		
 		ACell md=JSONUtils.parseJSON5(ms);
-		assertEquals("Random Bytes Generator",RT.getIn(md, "name").toString());
+		assertEquals("Random Data Generator",RT.getIn(md, "name").toString());
 	}
 	
 	@Test
