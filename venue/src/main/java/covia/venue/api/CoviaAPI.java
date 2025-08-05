@@ -55,7 +55,9 @@ public class CoviaAPI extends ACoviaAPI {
 
 	private static final String PUT_CONTENT = "putContent";
 	public static final String CANCEL_JOB = "cancelJob";	
-	public static final String DELETE_JOB = "deleteJob";	
+	public static final String DELETE_JOB = "deleteJob";
+
+	private static final String GET_JOB = "getJob";	
 	
 	private final SseServer sseServer;
 	
@@ -79,7 +81,7 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.sse(ROUTE+"jobs/<id>/sse", sseServer.registerSSE);
 		javalin.get(ROUTE+"jobs", this::getJobs);
 	}
-	
+	 
 	@OpenApi(path = ROUTE + "status", 
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
@@ -389,7 +391,7 @@ public class CoviaAPI extends ACoviaAPI {
 			methods = HttpMethod.GET, 
 			tags = { "Covia"},
 			summary = "Get the current Covia job status.", 
-			operationId = CoviaAPI.GET_ASSET,
+			operationId = CoviaAPI.GET_JOB,
 			pathParams = {
 					@OpenApiParam(
 							name = "id", 
