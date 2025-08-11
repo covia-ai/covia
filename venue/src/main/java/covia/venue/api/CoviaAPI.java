@@ -242,6 +242,14 @@ public class CoviaAPI extends ACoviaAPI {
 			tags = { "Covia"},
 			summary = "Get the content of a Covia data asset", 
 			operationId = CoviaAPI.GET_CONTENT,
+			queryParams = {
+					@OpenApiParam(
+							name = "inline", 
+							description = "Add if the Content-Disposition should be set to inline", 
+							required = false, 
+							type = String.class, 
+							example = "true")
+			},
 			pathParams = {
 					@OpenApiParam(
 							name = "id", 
@@ -270,15 +278,25 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		
 		try {
+			ACell contentMeta=meta.get(Fields.CONTENT);
 			InputStream is = venue.getContentStream(meta);
 			if (is==null) {
 				buildError(ctx,404,"Asset did not have any content available: "+id);
 				return;
 			}
-			ACell contentType=RT.getIn(meta, Fields.CONTENT,Fields.CONTENT_TYPE);
+			ACell contentType=RT.getIn(contentMeta,Fields.CONTENT_TYPE);
 			if (contentType instanceof AString ct) {
 				ctx.contentType(ct.toString());
 			} 
+			if (ctx.queryParam("inline")!=null) {
+				ctx.header("Content-Disposition","inline");
+			}
+			
+			ACell fileName=RT.getIn(contentMeta,Fields.FILE_NAME); 
+			if (fileName instanceof AString ct) {
+				ctx.header("filename",ct.toString());
+			} 
+
 
 			ctx.result(is);
 			ctx.status(200);

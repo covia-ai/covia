@@ -1,0 +1,85 @@
+{
+	"name": "Advanced Google Search Orchestration",
+	"description": "Performs a Google search using the HTTPAdapter with dynamic query parameters",
+	"dateCreated": "2025-01-27T10:00:00Z",
+	"operation": {
+		"adapter": "orchestrator",
+		"input": {
+			"type": "object",
+			"properties": {
+				"query": {
+					"type": "string",
+					"description": "The search query to perform on Google",
+					"defaultValue": "artificial intelligence"
+				},
+				"num_results": {
+					"type": "string",
+					"description": "Number of search results (1-10)",
+					"defaultValue": "5"
+				},
+				"language": {
+					"type": "string",
+					"description": "Search language (e.g., 'en' for English)",
+					"defaultValue": "en"
+				}
+			},
+			"required": ["query"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"search-query": {
+					"type": "string",
+					"description": "The original search query that was performed"
+				},
+				"search-results": {
+					"type": "object",
+					"description": "The full HTTP response from Google search"
+				},
+				"status-code": {
+					"type": "number",
+					"description": "HTTP status code from the search request"
+				},
+				"constructed-url": {
+					"type": "string",
+					"description": "The constructed Google search URL with parameters"
+				},
+				"response-headers": {
+					"type": "object",
+					"description": "Response headers from Google"
+				}
+			}
+		},
+		"steps": [
+			{
+				"op": "http:GET",
+				"name": "Google Search Request",
+				"input": {
+					"url": ["const", "https://www.google.com/search"],
+					"method": "GET",
+					"headers": {
+						"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+						"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+						"Accept-Language": "en-US,en;q=0.9",
+						"Accept-Encoding": "gzip, deflate, br",
+						"DNT": "1",
+						"Connection": "keep-alive",
+						"Upgrade-Insecure-Requests": "1",
+						"Sec-Fetch-Dest": "document",
+						"Sec-Fetch-Mode": "navigate",
+						"Sec-Fetch-Site": "none",
+						"Sec-Fetch-User": "?1",
+						"Cache-Control": "max-age=0"
+					}
+				}
+			}
+		],
+		"result": {
+			"search-query": ["input", "query"],
+			"search-results": [0],
+			"status-code": [0, "status"],
+			"constructed-url": ["const", "https://www.google.com/search?q=artificial+intelligence&num=5&hl=en"],
+			"response-headers": [0, "headers"]
+		}
+	}
+} 

@@ -154,6 +154,16 @@ public class Job {
 		if (!isComplete()) throw new IllegalStateException("Job has no output, status is "+getStatus());
 		return RT.get(data, Fields.OUTPUT);
 	}
+	
+	/**
+	 * Gets the error message of this Job, if it has FAILED
+	 * @return Error message as a string, or null if no error or job is not failed
+	 */
+	public String getErrorMessage() {
+		if (getStatus() != Status.FAILED) return null;
+		ACell errorField = RT.get(data, Fields.JOB_ERROR_FIELD);
+		return errorField != null ? errorField.toString() : null;
+	}
 
 	/**
 	 * Cancel this Job, if it is not already complete

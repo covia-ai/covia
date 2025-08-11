@@ -15,9 +15,16 @@ import io.javalin.openapi.plugin.DefinitionConfiguration;
 import io.javalin.openapi.plugin.OpenApiPlugin;
 import io.javalin.openapi.plugin.swagger.SwaggerPlugin;
 
+/**
+ * Covia Venue Server
+ * 
+ * Contains:
+ * - Endpoints for REST API
+ * - Javalin HTTP server
+ * - Connection to Convex (for CNS etc.)
+ * 
+ */
 public class VenueServer {
-
-	
 	
 	protected Convex convex;
 	protected Javalin javalin;

@@ -1,0 +1,65 @@
+{
+	"name": "Google Search Orchestration",
+	"description": "Performs a Google search using the HTTPAdapter and returns the search results",
+	"dateCreated": "2025-01-27T10:00:00Z",
+	"operation": {
+		"adapter": "orchestrator",
+		"input": {
+			"type": "object",
+			"properties": {
+				"query": {
+					"type": "string",
+					"description": "The search query to perform on Google",
+					"defaultValue": "artificial intelligence"
+				}
+			},
+			"required": ["query"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"search-query": {
+					"type": "string",
+					"description": "The original search query that was performed"
+				},
+				"search-results": {
+					"type": "object",
+					"description": "The full HTTP response from Google search"
+				},
+				"status-code": {
+					"type": "number",
+					"description": "HTTP status code from the search request"
+				},
+				"search-url": {
+					"type": "string",
+					"description": "The constructed Google search URL"
+				}
+			}
+		},
+		"steps": [
+			{
+				"op": "http:GET",
+				"name": "Google Search",
+				"input": {
+					"url": ["const", "https://www.google.com/search?q=artificial+intelligence&num=5"],
+					"method": "GET",
+					"headers": {
+						"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+						"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+						"Accept-Language": "en-US,en;q=0.5",
+						"Accept-Encoding": "gzip, deflate",
+						"DNT": "1",
+						"Connection": "keep-alive",
+						"Upgrade-Insecure-Requests": "1"
+					}
+				}
+			}
+		],
+		"result": {
+			"search-query": ["input", "query"],
+			"search-results": [0],
+			"status-code": [0, "status"],
+			"search-url": [0, "url"]
+		}
+	}
+} 

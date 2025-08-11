@@ -1,0 +1,69 @@
+{
+	"name": "Practical Google Search Orchestration",
+	"description": "Performs a Google search using the HTTPAdapter - demonstrates proper URL construction",
+	"dateCreated": "2025-01-27T10:00:00Z",
+	"operation": {
+		"adapter": "orchestrator",
+		"input": {
+			"type": "object",
+			"properties": {
+				"search_term": {
+					"type": "string",
+					"description": "The search term to look up on Google",
+					"defaultValue": "machine learning"
+				}
+			},
+			"required": ["search_term"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"input_query": {
+					"type": "string",
+					"description": "The search term that was input"
+				},
+				"http_response": {
+					"type": "object",
+					"description": "Complete HTTP response from Google search"
+				},
+				"response_status": {
+					"type": "number",
+					"description": "HTTP status code from the response"
+				},
+				"response_body": {
+					"type": "string",
+					"description": "The HTML response body from Google"
+				}
+			}
+		},
+		"steps": [
+			{
+				"op": "http:GET",
+				"name": "Google Search",
+				"input": {
+					"url": ["const", "https://www.google.com/search?q=machine+learning&num=10&hl=en"],
+					"method": "GET",
+					"headers": {
+						"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+						"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+						"Accept-Language": "en-US,en;q=0.9",
+						"Accept-Encoding": "gzip, deflate, br",
+						"DNT": "1",
+						"Connection": "keep-alive",
+						"Upgrade-Insecure-Requests": "1",
+						"Sec-Fetch-Dest": "document",
+						"Sec-Fetch-Mode": "navigate",
+						"Sec-Fetch-Site": "none",
+						"Sec-Fetch-User": "?1"
+					}
+				}
+			}
+		],
+		"result": {
+			"input_query": ["input", "search_term"],
+			"http_response": [0],
+			"response_status": [0, "status"],
+			"response_body": [0, "body"]
+		}
+	}
+} 

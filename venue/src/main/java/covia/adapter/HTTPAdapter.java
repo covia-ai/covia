@@ -92,7 +92,7 @@ public class HTTPAdapter extends AAdapter {
 			
 			CompletableFuture<SimpleHttpResponse> responseFuture = HTTPClients.execute(req);
 			CompletableFuture<ACell> result= responseFuture.thenApply(response -> {
-				System.err.println(response);
+				// System.err.println(response);
 				AMap<AString,ACell> output=Maps.empty();
 				int code=response.getCode();
 				output=output.assoc(Fields.STATUS, CVMLong.create(code));
