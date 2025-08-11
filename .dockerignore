@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# Maven
+target/
+!venue/target/covia.jar
+pom.xml
+pom.xml.lock
+
+# IDE
+.vscode/
+.idea/
+*.iml
+.project
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test files
+**/test/
+**/tests/
+
+# Documentation
+README.md
+BUILD.md
+LICENSE
+
+# Build artifacts
+*.class
+*.jar
+!venue/target/covia.jar
+
+# Temporary files
+*.tmp
+*.temp 
