@@ -52,7 +52,7 @@ public class VenueServerTest {
 	static final String BASE_URL=TestServer.BASE_URL;
 	
 	VenueServer venueServer;
-	Venue venue;
+	Engine venue;
 	Covia covia;
 	
 	@BeforeAll

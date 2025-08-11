@@ -241,7 +241,7 @@ public class Orchestrator extends AAdapter {
 				try {
 					AString opId=RT.getIn(step, Fields.OP);
 					input=computeInput(RT.get(step, Fields.INPUT),Vectors.empty());
-					subJob =venue.invokeOperation(opId, input);
+					subJob =engine.invokeOperation(opId, input);
 					output=subJob.awaitResult();
 					completionQueue.add(this);
 				} catch (Exception e) {

@@ -11,13 +11,13 @@ public class TestServer {
 	public static final String BASE_URL="http://localhost:"+PORT;
 	
 	public static final VenueServer SERVER;
-	public static final Venue VENUE;
+	public static final Engine VENUE;
 	public static final Covia COVIA;
 	
 	static {
 		SERVER=VenueServer.create(null);
 		VENUE=SERVER.getVenue();
-		Venue.addDemoAssets(VENUE);
+		Engine.addDemoAssets(VENUE);
 
 		SERVER.start(PORT);
 		COVIA = Covia.create(URI.create(BASE_URL));

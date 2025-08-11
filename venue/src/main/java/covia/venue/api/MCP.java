@@ -1,7 +1,7 @@
 package covia.venue.api;
 
 import convex.api.ContentTypes;
-import covia.venue.Venue;
+import covia.venue.Engine;
 import covia.venue.server.SseServer;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
@@ -16,7 +16,7 @@ public class MCP extends ACoviaAPI {
 
 	protected final SseServer sseServer;
 	
-	public MCP(Venue venue) {
+	public MCP(Engine venue) {
 		super(venue);
 		this.sseServer=new SseServer(venue);
 	}

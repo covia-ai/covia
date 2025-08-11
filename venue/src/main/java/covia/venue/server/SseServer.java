@@ -6,7 +6,7 @@ import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import covia.venue.Venue;
+import covia.venue.Engine;
 import io.javalin.http.sse.SseClient;
 
 public class SseServer {
@@ -19,9 +19,9 @@ public class SseServer {
 		addClient(client);
 	};
 
-	protected Venue venue;
+	protected Engine venue;
 
-	public SseServer(Venue venue) {
+	public SseServer(Engine venue) {
 		this.venue=venue;
 	}
 

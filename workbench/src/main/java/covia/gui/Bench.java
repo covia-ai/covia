@@ -5,7 +5,7 @@ import javax.swing.JFrame;
 
 import convex.core.util.Utils;
 import covia.grid.client.Covia;
-import covia.venue.Venue;
+import covia.venue.Engine;
 import covia.venue.server.VenueServer;
 
 public class Bench {
@@ -20,7 +20,7 @@ public class Bench {
 		// Pass replPanel to the upload thread so we can set the operation ID after upload
 		new Thread(() -> {
 			VenueServer server = VenueServer.create(null);
-			Venue.addDemoAssets(server.getVenue());
+			Engine.addDemoAssets(server.getVenue());
 			server.start(8089);
 			try {
 				Thread.sleep(1000); // Give server a moment to start

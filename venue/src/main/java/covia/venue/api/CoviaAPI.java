@@ -22,7 +22,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
 import covia.api.Fields;
 import covia.grid.Job;
-import covia.venue.Venue;
+import covia.venue.Engine;
 import covia.venue.api.model.ErrorResponse;
 import covia.venue.api.model.InvokeRequest;
 import covia.venue.api.model.InvokeResult;
@@ -61,7 +61,7 @@ public class CoviaAPI extends ACoviaAPI {
 	
 	private final SseServer sseServer;
 	
-	public CoviaAPI(Venue venue) {
+	public CoviaAPI(Engine venue) {
 		super(venue);
 		this.sseServer=new SseServer(venue);
 	}

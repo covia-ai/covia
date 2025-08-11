@@ -3,7 +3,7 @@ package covia.venue.server;
 import org.eclipse.jetty.server.ServerConnector;
 
 import convex.api.Convex;
-import covia.venue.Venue;
+import covia.venue.Engine;
 import covia.venue.api.CoviaAPI;
 import covia.venue.api.MCP;
 import covia.venue.auth.LoginProviders;
@@ -30,7 +30,7 @@ public class VenueServer {
 	protected Javalin javalin;
 
 	protected CoviaWebApp webApp;
-	protected Venue venue;
+	protected Engine engine;
 
 	protected CoviaAPI api;
 	protected MCP mcp;
@@ -38,9 +38,9 @@ public class VenueServer {
 	public VenueServer(Convex convex) {
 		this.convex=convex;
 		webApp=new CoviaWebApp();
-		venue=Venue.createTemp();
-		api=new CoviaAPI(venue);
-		mcp=new MCP(venue);
+		engine=Engine.createTemp();
+		api=new CoviaAPI(engine);
+		mcp=new MCP(engine);
 	}
 
 	public static VenueServer create(Object object) {
@@ -54,8 +54,8 @@ public class VenueServer {
 		start(null);
 	}
 
-	public Venue getVenue() {
-		return venue;
+	public Engine getVenue() {
+		return engine;
 	}
 	
 	/**

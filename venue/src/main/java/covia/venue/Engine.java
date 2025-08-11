@@ -48,9 +48,9 @@ import java.io.InputStream;
 import convex.core.crypto.Hashing;
 import covia.adapter.JVMAdapter;
 
-public class Venue {
+public class Engine {
 	
-	public static final Logger log=LoggerFactory.getLogger(Venue.class);
+	public static final Logger log=LoggerFactory.getLogger(Engine.class);
 
 	
 
@@ -84,12 +84,12 @@ public class Venue {
 	protected final HashMap<String, AAdapter> adapters = new HashMap<>();
 	
 	
-	public Venue() throws IOException {
+	public Engine() throws IOException {
 		this(EtchStore.createTemp());
 	}
 
 
-	public Venue(EtchStore store) throws IOException {
+	public Engine(EtchStore store) throws IOException {
 		this.store=store;
 		this.contentStorage = new MemoryStorage();
 		this.contentStorage.initialise();
@@ -180,9 +180,9 @@ public class Venue {
 	}
 
 
-	public static Venue createTemp() {
+	public static Engine createTemp() {
 		try {
-			return new Venue(EtchStore.createTemp());
+			return new Engine(EtchStore.createTemp());
 		} catch (IOException e) {
 			throw new Error(e);
 		}
@@ -211,7 +211,7 @@ public class Venue {
 	}
 
 
-	public static void addDemoAssets(Venue venue) {
+	public static void addDemoAssets(Engine venue) {
 		String BASE="/asset-examples/";
 		try {
 			venue.registerAdapter(new TestAdapter());

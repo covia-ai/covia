@@ -32,7 +32,7 @@ import covia.grid.impl.BlobContent;
 import java.io.InputStream;
 
 public class VenueTest {
-	Venue venue;
+	Engine venue;
 	Hash randomOpID;
 	AString EMPTY_META = Strings.create("{}");
 
@@ -42,8 +42,8 @@ public class VenueTest {
 	
 	@BeforeEach
 	public void setup() throws IOException {
-		venue=Venue.createTemp();
-		Venue.addDemoAssets(venue);
+		venue=Engine.createTemp();
+		Engine.addDemoAssets(venue);
 		randomOpID=venue.storeAsset(Utils.readResourceAsString("/asset-examples/randomop.json"), null);
 		echoOpId=venue.storeAsset(Utils.readResourceAsString("/asset-examples/echoop.json"), null);
 		qwenOpId=venue.storeAsset(Utils.readResourceAsString("/asset-examples/qwen.json"), null);

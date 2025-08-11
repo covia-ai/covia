@@ -10,15 +10,15 @@ import convex.core.data.Strings;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.venue.Venue;
+import covia.venue.Engine;
 
 public abstract class AAdapter {
 	
 	
-	protected Venue venue;
+	protected Engine engine;
 
-	public void install(Venue venue) {
-		this.venue=venue;
+	public void install(Engine engine) {
+		this.engine=engine;
 		installAssets();
 	}
 	
@@ -37,7 +37,7 @@ public abstract class AAdapter {
 	 */
 	protected void installAsset(String resourcePath, String assetName) {
 		try {
-			venue.storeAsset(convex.core.util.Utils.readResourceAsString(resourcePath), null);
+			engine.storeAsset(convex.core.util.Utils.readResourceAsString(resourcePath), null);
 		} catch (Exception e) {
 			// Log warning but don't fail installation
 			System.err.println("Failed to install asset from " + resourcePath + ": " + e.getMessage());
@@ -99,7 +99,7 @@ public abstract class AAdapter {
     		throw new IllegalStateException("Job has no ID");
     	}
     	job=job.assoc(Fields.JOB_STATUS_FIELD, statusString);
-    	venue.updateJobStatus(id,job);
+    	engine.updateJobStatus(id,job);
     }
     
     protected void completeJobResult(AMap<AString,ACell> job, ACell result) {

@@ -2,7 +2,7 @@ package covia.venue.api;
 
 import convex.api.ContentTypes;
 import convex.core.util.JSONUtils;
-import covia.venue.Venue;
+import covia.venue.Engine;
 import io.javalin.http.Context;
 
 /*
@@ -10,9 +10,9 @@ import io.javalin.http.Context;
  */
 public abstract class ACoviaAPI  {
 	
-	protected Venue venue;
+	protected Engine venue;
 
-	public ACoviaAPI(Venue venue) {
+	public ACoviaAPI(Engine venue) {
 		this.venue=venue;
 	}
 

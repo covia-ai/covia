@@ -35,7 +35,7 @@ public class MCPTest {
 	static final int PORT=TestServer.PORT;
 	static final String BASE_URL=TestServer.BASE_URL;
 	
-	Venue venue;
+	Engine venue;
 	
 	McpSyncClient mcp;
 	
