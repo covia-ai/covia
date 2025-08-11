@@ -2,9 +2,9 @@ name: Build and Deploy to Google Cloud Run
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ master ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ master ]
   workflow_dispatch:
 
 env:
