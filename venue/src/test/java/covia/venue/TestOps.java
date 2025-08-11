@@ -14,6 +14,7 @@ public class TestOps {
 	public static Hash NEVER;
 	public static Hash DELAY;
 	public static Hash ORCH;
+	public static Hash GOOGLESEARCH;
 
 	static {
 		 try {
@@ -23,6 +24,7 @@ public class TestOps {
 			NEVER=Assets.calcID(Utils.readResourceAsString("/asset-examples/neverop.json"));
 			DELAY=Assets.calcID(Utils.readResourceAsString("/asset-examples/delayop.json"));
 			ORCH=Assets.calcID(Utils.readResourceAsString("/asset-examples/orch.json"));
+			GOOGLESEARCH=Assets.calcID(Utils.readResourceAsString("/asset-examples/googlesearch.json"));
 		 } catch (IOException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();

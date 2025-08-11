@@ -8,6 +8,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
@@ -223,5 +224,17 @@ public class Job {
 		AMap<AString, ACell> oldData = getData();
 		AMap<AString, ACell> newData=updater.apply(oldData);
 		updateData(newData);
+	}
+
+	/**
+	 * Create a job with a specific failure message
+	 * @param message
+	 * @return Failed Job
+	 */
+	public static Job failure(String message) {
+		return Job.create(Maps.of(
+					Fields.JOB_STATUS_FIELD, Status.FAILED,
+					Fields.JOB_ERROR_FIELD, Strings.create(message)
+				));
 	}
 }

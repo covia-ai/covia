@@ -1,0 +1,85 @@
+{
+	"name": "Google Search Orchestration",
+	"description": "Performs a Google search by constructing the URL using stringConcat and urlEncode operations",
+	"dateCreated": "2025-01-27T10:00:00Z",
+	"operation": {
+		"adapter": "orchestrator",
+		"input": {
+			"type": "object",
+			"properties": {
+				"query": {
+					"type": "string",
+					"description": "The search query to perform on Google",
+					"defaultValue": "artificial intelligence"
+				}
+			},
+			"required": ["query"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"query": {
+					"type": "string",
+					"description": "The original search query"
+				},
+				"encoded_query": {
+					"type": "string",
+					"description": "The URL encoded version of the query"
+				},
+				"search_url": {
+					"type": "string",
+					"description": "The complete Google search URL"
+				},
+				"status": {
+					"type": "number",
+					"description": "HTTP status code from the response"
+				},
+				"body": {
+					"type": "string",
+					"description": "The HTML response body from Google"
+				},
+				"headers": {
+					"type": "object",
+					"description": "Response headers from Google"
+				}
+			}
+		},
+		"steps": [
+			{
+				"name": "Encode Query",
+				"op": "jvm:urlEncode",
+				"input": {
+					"input": ["input", "query"]
+				}
+			},
+			{
+				"name": "Construct URL",
+				"op": "jvm:stringConcat",
+				"input": {
+					"first": ["const", "https://www.google.com/search?q="],
+					"second": [0, "result"],
+					"separator": ["const", ""]
+				}
+			},
+			{
+				"name": "Perform Search",
+				"op": "http:get",
+				"input": {
+					"url": [1, "result"],
+					"headers": ["const", {
+						"Accept": "application/json",
+						"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+					}]
+				}
+			}
+		],
+		"result": {
+			"query": ["input", "query"],
+			"encoded_query": [0, "result"],
+			"search_url": [1, "result"],
+			"status": [2, "status"],
+			"body": [2, "body"],
+			"headers": [2, "headers"]
+		}
+	}
+} 

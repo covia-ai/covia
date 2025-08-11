@@ -71,7 +71,7 @@ public class Orchestrator extends AAdapter {
 			}		
 		}
 
-		private static final boolean DEBUG_ORCH=false;
+		private static final boolean DEBUG_ORCH=true;
 		
 		@Override
 		public void run() {
@@ -246,9 +246,9 @@ public class Orchestrator extends AAdapter {
 					completionQueue.add(this);
 				} catch (Exception e) {
 					if (DEBUG_ORCH) System.err.println(e);
-					subJob.fail("Failed to run orchestrator subtask: "+e.getMessage());
+					if (subJob!=null) subJob.fail("Failed to run orchestrator subtask: "+e.getMessage());
 				} finally {
-					subJob.fail("Shouldn't see this, it means the SubJob did not complete properly!");
+					if (subJob!=null) subJob.fail("Shouldn't see this, it means the SubJob did not complete properly! "+subJob);
 				}
 			}
 

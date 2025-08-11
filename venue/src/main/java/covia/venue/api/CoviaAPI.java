@@ -273,7 +273,7 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		
 		if (!meta.containsKey(Fields.CONTENT)) {
-			buildError(ctx,404,"Asset metadata does not specifiy any content object: "+id);
+			buildError(ctx,404,"Asset metadata does not specify any content object: "+id);
 			return;
 		}
 		

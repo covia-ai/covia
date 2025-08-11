@@ -1,0 +1,43 @@
+{
+	"name": "HTTP GET Operation",
+	"description": "Performs a simple HTTP GET request using the HTTPAdapter",
+	"dateCreated": "2025-01-27T10:00:00Z",
+	"operation": {
+		"adapter": "http",
+		"input": {
+			"type": "object",
+			"properties": {
+				"url": {
+					"type": "string",
+					"description": "The URL to make a GET request to",
+					"defaultValue": "https://httpbin.org/get"
+				},
+				"headers": {
+					"type": "object",
+					"description": "Optional HTTP headers to include in the request",
+					"defaultValue": {
+						"User-Agent": "Covia-HTTP/1.0"
+					}
+				}
+			},
+			"required": ["url"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"status": {
+					"type": "number",
+					"description": "HTTP status code from the response"
+				},
+				"body": {
+					"type": "string",
+					"description": "The response body from the HTTP request"
+				},
+				"headers": {
+					"type": "object",
+					"description": "Response headers from the server"
+				}
+			}
+		}
+	}
+} 

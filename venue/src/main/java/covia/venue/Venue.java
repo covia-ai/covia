@@ -46,6 +46,7 @@ import covia.venue.storage.MemoryStorage;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import convex.core.crypto.Hashing;
+import covia.adapter.JVMAdapter;
 
 public class Venue {
 	
@@ -215,6 +216,7 @@ public class Venue {
 		try {
 			venue.registerAdapter(new TestAdapter());
 			venue.registerAdapter(new HTTPAdapter());
+			venue.registerAdapter(new JVMAdapter());
 			venue.registerAdapter(new Orchestrator());
 			venue.registerAdapter(new LangChainAdapter());
 			venue.registerAdapter(new CoviaAdapter());
@@ -243,17 +245,20 @@ public class Venue {
 		Hash opID=Hash.parse(op);
 		AMap<AString,ACell> meta=null;
 		AString adapterOp=op;
+		
 		if (opID!=null) {
-			// It's a valid asset ID, so look up the operation
+			// It's a potentially valid asset ID, so look up the operation
 			meta=getMetaValue(opID);
 			if (meta==null) {
-				return null;
+				// no metadata, so assume the op is an explicit adapter op
+				return Job.failure("Unable to find asset metadata for "+op);
+			} else {
+				adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
+				if (adapterOp == null) {
+					throw new IllegalArgumentException("Operation metadata must specify an adapter");
+				}
 			}
-			adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
-			if (adapterOp == null) {
-				throw new IllegalArgumentException("Operation metadata must specify an adapter");
-			}
-		}
+		} 
 		
 		// Get the combined adapter:operation string from metadata
 		String operation = adapterOp.toString();

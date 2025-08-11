@@ -1,0 +1,56 @@
+{
+	"name": "HTTP POST Operation",
+	"description": "Performs an HTTP POST request using the HTTPAdapter",
+	"dateCreated": "2025-01-27T10:00:00Z",
+	"operation": {
+		"adapter": "http",
+		"input": {
+			"type": "object",
+			"properties": {
+				"url": {
+					"type": "string",
+					"description": "The URL to make a POST request to",
+					"defaultValue": "https://httpbin.org/post"
+				},
+				"method": {
+					"type": "string",
+					"description": "HTTP method to use",
+					"defaultValue": "POST"
+				},
+				"headers": {
+					"type": "object",
+					"description": "HTTP headers to include in the request",
+					"defaultValue": {
+						"Content-Type": "application/json",
+						"User-Agent": "Covia-HTTP/1.0"
+					}
+				},
+				"body": {
+					"type": "object",
+					"description": "The request body to send",
+					"defaultValue": {
+						"message": "Hello from Covia HTTP adapter"
+					}
+				}
+			},
+			"required": ["url"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"status": {
+					"type": "number",
+					"description": "HTTP status code from the response"
+				},
+				"body": {
+					"type": "string",
+					"description": "The response body from the HTTP request"
+				},
+				"headers": {
+					"type": "object",
+					"description": "Response headers from the server"
+				}
+			}
+		}
+	}
+} 

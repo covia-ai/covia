@@ -1,0 +1,35 @@
+{
+	"name": "URL Decode",
+	"description": "URL decodes a string using JVM operations",
+	"dateCreated": "2025-01-27T10:00:00Z",
+	"operation": {
+		"adapter": "jvm:urlDecode",
+		"input": {
+			"type": "object",
+			"properties": {
+				"input": {
+					"type": "string",
+					"description": "String to URL decode",
+					"defaultValue": ""
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"result": {
+					"type": "string",
+					"description": "The URL decoded string result"
+				},
+				"originalLength": {
+					"type": "number",
+					"description": "Length of the original input string"
+				},
+				"decodedLength": {
+					"type": "number",
+					"description": "Length of the decoded result"
+				}
+			}
+		}
+	}
+} 

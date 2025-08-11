@@ -1,0 +1,45 @@
+{
+	"name": "JVM String Concatenation",
+	"description": "Concatenates two strings using JVM operations",
+	"dateCreated": "2025-01-27T10:00:00Z",
+	"operation": {
+		"adapter": "jvm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"first": {
+					"type": "string",
+					"description": "First string to concatenate",
+					"defaultValue": ""
+				},
+				"second": {
+					"type": "string",
+					"description": "Second string to concatenate",
+					"defaultValue": ""
+				},
+				"separator": {
+					"type": "string",
+					"description": "Optional separator to insert between strings",
+					"defaultValue": ""
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"result": {
+					"type": "string",
+					"description": "The concatenated string result"
+				},
+				"inputCount": {
+					"type": "number",
+					"description": "Number of input strings processed"
+				},
+				"totalLength": {
+					"type": "number",
+					"description": "Total length of the concatenated result"
+				}
+			}
+		}
+	}
+} 

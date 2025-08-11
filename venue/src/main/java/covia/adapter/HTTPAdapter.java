@@ -12,6 +12,8 @@ import org.apache.hc.client5.http.async.methods.SimpleHttpResponse;
 import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.Header;
 import org.apache.hc.core5.http.Method;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -25,12 +27,32 @@ import convex.core.util.JSONUtils;
 import convex.core.util.Utils;
 import convex.java.HTTPClients;
 import covia.api.Fields;
+import covia.venue.Venue;
 
 public class HTTPAdapter extends AAdapter {
+
+	public static final Logger log = LoggerFactory.getLogger(HTTPAdapter.class);
 
 	@Override
 	public String getName() {
 		return "http";
+	}
+	
+	@Override 
+	protected void installAssets() {
+		String BASE = "/asset-examples/";
+
+		// Install HTTP-related operation assets
+		installAsset(BASE + "httpget.json", null);
+		installAsset(BASE + "httppost.json", null);
+		installAsset(BASE + "googlesearch.json", null);
+		
+		// Install Google search orchestration examples
+		installAsset(BASE + "google-search-orch.json", null);
+		installAsset(BASE + "google-search-advanced-orch.json", null);
+		installAsset(BASE + "google-search-practical-orch.json", null);
+		
+		log.info("HTTP adapter assets installed successfully");
 	}
 	
 	/* Example Gemini request

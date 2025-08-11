@@ -19,6 +19,29 @@ public abstract class AAdapter {
 
 	public void install(Venue venue) {
 		this.venue=venue;
+		installAssets();
+	}
+	
+	/**
+	 * Override this method to install adapter-specific assets.
+	 * Default implementation does nothing.
+	 */
+	protected void installAssets() {
+		// Default implementation - subclasses can override
+	}
+	
+	/**
+	 * Helper method to install a single asset from a resource path.
+	 * @param resourcePath The resource path to read the asset from
+	 * @param assetName Optional name for the asset (can be null)
+	 */
+	protected void installAsset(String resourcePath, String assetName) {
+		try {
+			venue.storeAsset(convex.core.util.Utils.readResourceAsString(resourcePath), null);
+		} catch (Exception e) {
+			// Log warning but don't fail installation
+			System.err.println("Failed to install asset from " + resourcePath + ": " + e.getMessage());
+		}
 	}
 	
     /**

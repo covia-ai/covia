@@ -62,19 +62,18 @@ public class TestAdapter extends AAdapter {
         }
     }
     
-    @Override public void install(Venue venue) {
-    	super.install(venue);
+    @Override public void installAssets() {
 		String BASE="/asset-examples/";
 
 		try {
-			venue.storeAsset(Utils.readResourceAsString(BASE+"empty.json"),null);
-			venue.storeAsset(Utils.readResourceAsString(BASE+"randomop.json"),null);
-			venue.storeAsset(Utils.readResourceAsString(BASE+"echoop.json"),null);
-			venue.storeAsset(Utils.readResourceAsString(BASE+"neverop.json"),null);
-			venue.storeAsset(Utils.readResourceAsString(BASE+"delayop.json"),null);
-			venue.storeAsset(Utils.readResourceAsString(BASE+"randomop.json"),null);
-			venue.storeAsset(Utils.readResourceAsString(BASE+"failop.json"),null);
-			venue.storeAsset(Utils.readResourceAsString(BASE+"orch.json"),null);
+			installAsset(BASE+"empty.json", null);
+			installAsset(BASE+"randomop.json", null);
+			installAsset(BASE+"echoop.json", null);
+			installAsset(BASE+"neverop.json", null);
+			installAsset(BASE+"delayop.json", null);
+			installAsset(BASE+"randomop.json", null);
+			installAsset(BASE+"failop.json", null);
+			installAsset(BASE+"orch.json", null);
 			Hash iris=venue.storeAsset(Utils.readResourceAsString(BASE+"iris.json"),null);
 			venue.putContent(iris,this.getClass().getResourceAsStream(BASE+"iris.csv"));
 			Hash shake=venue.storeAsset(Utils.readResourceAsString(BASE+"shakespeare.json"),null);
