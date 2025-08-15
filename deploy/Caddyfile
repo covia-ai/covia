@@ -1,0 +1,9 @@
+# Global options
+{
+	email admin@covia.ai
+}
+
+venue-test.covia.ai {
+	# Send requests to 8080 (including HTPPs)
+	reverse_proxy :8080
+}
