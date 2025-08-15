@@ -3,7 +3,7 @@
 	"description": "Concatenates two strings using JVM operations",
 	"dateCreated": "2025-01-27T10:00:00Z",
 	"operation": {
-		"adapter": "jvm",
+		"adapter": "jvm:stringConcat",
 		"input": {
 			"type": "object",
 			"properties": {
