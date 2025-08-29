@@ -3,6 +3,12 @@ package covia.venue.server;
 import org.eclipse.jetty.server.ServerConnector;
 
 import convex.api.Convex;
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
+import convex.core.data.prim.AInteger;
+import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.api.CoviaAPI;
 import covia.venue.api.MCP;
@@ -26,6 +32,8 @@ import io.javalin.openapi.plugin.swagger.SwaggerPlugin;
  */
 public class VenueServer {
 	
+	protected final AMap<AString,ACell> config;
+	
 	protected Convex convex;
 	protected Javalin javalin;
 
@@ -35,39 +43,52 @@ public class VenueServer {
 	protected CoviaAPI api;
 	protected MCP mcp;
 
-	public VenueServer(Convex convex) {
-		this.convex=convex;
+	public VenueServer(AMap<AString,ACell> config) {
+		this.config=config;
+		this.convex=null; // TODO:
 		webApp=new CoviaWebApp();
 		engine=Engine.createTemp();
 		api=new CoviaAPI(engine);
 		mcp=new MCP(engine);
 	}
 
-	public static VenueServer create(Object object) {
-		return new VenueServer(null);
+	public static VenueServer launch(AMap<AString,ACell> config) {
+		VenueServer server= new VenueServer(config);
+		server.start();
+		
+		Engine.addDemoAssets(server.getEngine());
+		return server;
 	}
 
 	/**
 	 * Start app with default port
 	 */
 	public void start() {
-		start(null);
+		AInteger port=RT.ensureInteger(RT.getIn(config, Fields.PORT));
+		Integer iport=(port==null)?null:(int)port.longValue();
+		start(iport);
 	}
 
-	public Engine getVenue() {
-		return engine;
-	}
 	
 	/**
 	 * Start app with specific port
 	 */
-	public synchronized void start(Integer port) {
+	private synchronized void start(Integer port) {
 		close();
 		javalin=buildApp();
 		addLoginRoutes(javalin);
 		addAPIRoutes(javalin);	
 		start(javalin,port);
 	}
+	
+	/**
+	 * Get the Engine instance for this venue server
+	 * @return
+	 */
+	public Engine getEngine() {
+		return engine;
+	}
+
 	
 	private void addAPIRoutes(Javalin javalin) {	
 		api.addRoutes(javalin);

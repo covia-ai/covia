@@ -24,10 +24,8 @@ public class MainVenue {
 	public static void main(String[] args) throws Exception {
 		configureLogging(null);
 		
-		VenueServer server=VenueServer.create(null);
-		server.start();
-		
-		Engine.addDemoAssets(server.getVenue());
+		VenueServer server=VenueServer.launch(null);
+
 	}
 	
 	private static void configureLogging(ACell config) throws JoranException, IOException {

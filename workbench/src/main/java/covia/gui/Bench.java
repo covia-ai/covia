@@ -3,25 +3,28 @@ package covia.gui;
 import javax.swing.JComponent;
 import javax.swing.JFrame;
 
+import convex.core.data.Maps;
 import convex.core.util.Utils;
+import covia.api.Fields;
 import covia.grid.client.Covia;
 import covia.venue.Engine;
 import covia.venue.server.VenueServer;
 
 public class Bench {
 
+	public static final int PORT=8089;
+	
 	public static void main(String[] args) {
 		
 		LAF.init();
 		// Start Covia VenueServer on port 8089 in a background thread
-		Covia covia = Covia.create(java.net.URI.create("http://localhost:8089"));
+		Covia covia = Covia.create(java.net.URI.create("http://localhost:"+PORT));
 		ReplPanel replPanel = new ReplPanel(covia);
 		showMainFrame(replPanel);
 		// Pass replPanel to the upload thread so we can set the operation ID after upload
 		new Thread(() -> {
-			VenueServer server = VenueServer.create(null);
-			Engine.addDemoAssets(server.getVenue());
-			server.start(8089);
+			VenueServer server = VenueServer.launch(Maps.of(Fields.PORT,PORT));
+
 			try {
 				Thread.sleep(1000); // Give server a moment to start
 
