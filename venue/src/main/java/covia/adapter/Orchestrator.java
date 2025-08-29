@@ -71,7 +71,7 @@ public class Orchestrator extends AAdapter {
 			}		
 		}
 
-		private static final boolean DEBUG_ORCH=true;
+		private static final boolean DEBUG_ORCH=false;
 		
 		@Override
 		public void run() {

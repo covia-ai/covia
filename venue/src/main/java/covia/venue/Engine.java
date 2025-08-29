@@ -64,6 +64,7 @@ public class Engine {
 	static final long POS_CONTENT= 1;
 	static final long POS_META = 2;
 	
+	protected final AMap<AString, ACell> config;
 
 	protected final AStore store;
 	
@@ -82,14 +83,12 @@ public class Engine {
 	 * Map of named adapters that can handle different types of operations or resources
 	 */
 	protected final HashMap<String, AAdapter> adapters = new HashMap<>();
-	
-	
-	public Engine() throws IOException {
-		this(EtchStore.createTemp());
-	}
 
 
-	public Engine(EtchStore store) throws IOException {
+
+	
+	public Engine(AMap<AString, ACell> config, EtchStore store) throws IOException {
+		this.config=(config==null)?Maps.empty():config;
 		this.store=store;
 		this.contentStorage = new MemoryStorage();
 		this.contentStorage.initialise();
@@ -180,9 +179,9 @@ public class Engine {
 	}
 
 
-	public static Engine createTemp() {
+	public static Engine createTemp(AMap<AString,ACell> config) {
 		try {
-			return new Engine(EtchStore.createTemp());
+			return new Engine(config,EtchStore.createTemp());
 		} catch (IOException e) {
 			throw new Error(e);
 		}
@@ -449,6 +448,10 @@ public class Engine {
 			jobs.put(id, newStatus);
 		}
 		return newStatus;
+	}
+
+	public AMap<AString,ACell> getConfig() {
+		return config;
 	}
 
 	

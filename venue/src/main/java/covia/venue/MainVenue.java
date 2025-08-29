@@ -12,19 +12,30 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.joran.JoranConfigurator;
 import ch.qos.logback.core.joran.spi.JoranException;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.lang.RT;
 import convex.core.util.FileUtils;
+import convex.core.util.JSONUtils;
 import covia.venue.server.VenueServer;
 
 public class MainVenue {
 
 	public static Logger log=LoggerFactory.getLogger(MainVenue.class);;
 
+	@SuppressWarnings("unchecked")
 	public static void main(String[] args) throws Exception {
 		configureLogging(null);
 		
-		VenueServer server=VenueServer.launch(null);
+		AMap<AString,ACell> config=null;
+		if (args.length>0) try {
+			config =(AMap<AString, ACell>) JSONUtils.parseJSON5(FileUtils.loadFileAsString(args[0]));
+		} catch (Exception ex) {
+			log.warn("Error loadi ng config",ex);
+		}
+		
+		
+		VenueServer server=VenueServer.launch(config);
 
 	}
 	

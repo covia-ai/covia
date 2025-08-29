@@ -10,11 +10,19 @@ import static j2html.TagCreator.p;
 import static j2html.TagCreator.title;
 
 import convex.core.util.Utils;
+import covia.venue.Engine;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import j2html.tags.DomContent;
+import covia.api.Fields;
 
 public class CoviaWebApp  {
+
+	protected Engine engine;
+
+	public CoviaWebApp(Engine engine) {
+		this.engine=engine;
+	}
 
 	public void addRoutes(Javalin javalin) {
 		javalin.get("/index.html", this::indexPage);
@@ -29,6 +37,7 @@ public class CoviaWebApp  {
 				body(
 					h1("Covia Venue Server"),
 					p("Version: "+Utils.getVersion()),
+					p("Name: "+engine.getConfig().get(Fields.NAME)),
 					p(a("Swagger API").withHref("swagger")),
 
 					p("This is the default web page for a Covia Venue server running the REST API")

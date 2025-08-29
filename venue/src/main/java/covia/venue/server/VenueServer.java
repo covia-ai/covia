@@ -6,6 +6,7 @@ import convex.api.Convex;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Maps;
 import convex.core.data.prim.AInteger;
 import convex.core.lang.RT;
 import covia.api.Fields;
@@ -46,13 +47,26 @@ public class VenueServer {
 	public VenueServer(AMap<AString,ACell> config) {
 		this.config=config;
 		this.convex=null; // TODO:
-		webApp=new CoviaWebApp();
-		engine=Engine.createTemp();
+		engine=Engine.createTemp(config);
+		webApp=new CoviaWebApp(engine);
 		api=new CoviaAPI(engine);
 		mcp=new MCP(engine);
 	}
 
+	/**
+	 * Launch a Venue server with the specified config. 
+	 * @param config Config, or null for default test config.
+	 * @return Launched Venue Server instance
+	 */
 	public static VenueServer launch(AMap<AString,ACell> config) {
+		if (config==null) {
+			config=Maps.of(
+					Fields.NAME,"Test Venue",
+					Fields.DESCRIPTION,"Unconfigured test venue",
+					Fields.PORT,null // This uses default (find a port)
+			);
+		}
+		
 		VenueServer server= new VenueServer(config);
 		server.start();
 		

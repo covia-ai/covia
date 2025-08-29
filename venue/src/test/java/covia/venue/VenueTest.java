@@ -42,7 +42,7 @@ public class VenueTest {
 	
 	@BeforeEach
 	public void setup() throws IOException {
-		venue=Engine.createTemp();
+		venue=Engine.createTemp(null);
 		Engine.addDemoAssets(venue);
 		randomOpID=venue.storeAsset(Utils.readResourceAsString("/asset-examples/randomop.json"), null);
 		echoOpId=venue.storeAsset(Utils.readResourceAsString("/asset-examples/echoop.json"), null);
