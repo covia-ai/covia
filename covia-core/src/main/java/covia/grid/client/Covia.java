@@ -2,6 +2,10 @@ package covia.grid.client;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -9,10 +13,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import org.apache.hc.client5.http.async.methods.SimpleHttpRequest;
-import org.apache.hc.client5.http.async.methods.SimpleHttpResponse;
-import org.apache.hc.core5.http.ContentType;
-import org.apache.hc.core5.http.Method;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,8 +25,6 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
-import convex.java.ARESTClient;
-import convex.java.HTTPClients;
 import covia.api.Fields;
 import covia.exception.ConversionException;
 import covia.exception.ResponseException;
@@ -35,7 +33,7 @@ import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.impl.BlobContent;
 
-public class Covia extends ARESTClient  {
+public class Covia {
 	
 	public static Logger log=LoggerFactory.getLogger(Covia.class);
 
@@ -43,9 +41,22 @@ public class Covia extends ARESTClient  {
 	private static final long INITIAL_POLL_DELAY = 300; // 1 second initial delay
 
 	private long timeout=5000;
+	private final HttpClient httpClient;
+	private final URI baseURI;
 
 	public Covia(URI host) {
-		super(host,"/api/v1/");
+		this.baseURI = host.resolve("/api/v1/");
+		this.httpClient = HttpClient.newBuilder()
+			.connectTimeout(Duration.ofSeconds(10))
+			.build();
+	}
+	
+	/**
+	 * Gets the base URI for API requests
+	 * @return The base URI
+	 */
+	protected URI getBaseURI() {
+		return baseURI;
 	}
 
 	/**
@@ -62,15 +73,20 @@ public class Covia extends ARESTClient  {
 	 * Adds an asset to the connected venue
 	 */
 	public CompletableFuture<Hash> addAsset(ACell meta) {
-		SimpleHttpRequest req=SimpleHttpRequest.create(Method.POST, getBaseURI().resolve("assets"));
-		req.setBody(JSONUtils.toJSONPretty(meta).toString(), ContentType.APPLICATION_JSON);
-		return doRequest(req).thenApplyAsync(r->{
-			if (r.isError()) {
-				throw new Error("Asset add failed "+r.getValue());
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(getBaseURI().resolve("assets"))
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString(JSONUtils.toJSONPretty(meta).toString()))
+			.build();
+		
+		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response -> {
+			if (response.statusCode() != 201) {
+				throw new ResponseException("Failed to add asset: " + response.statusCode() + " - " + response.body(), response);
 			}
-			Hash v=Hash.parse(r.getValue());
+			ACell body=JSONUtils.parseJSON5(response.body());
+			Hash v=Hash.parse(body);
 			if (v!=null) return v;
-			throw new ConversionException("Result did not contain a valid Hash"); 
+			throw new ConversionException("Result did not contain a valid Hash: got "+body); 
 		});
 	} 
 
@@ -92,13 +108,14 @@ public class Covia extends ARESTClient  {
 		Hash h=Assets.parseAssetID(asset);
 		if (h==null) throw new IllegalArgumentException("Bad asset ID format");
 		
+		HttpRequest request=HttpRequest.newBuilder()
+			.uri(getBaseURI().resolve("assets/"+h.toHexString()))
+			.GET()
+			.build();
 		
-		SimpleHttpRequest request=SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("assets/"+h.toHexString()));
-		CompletableFuture<SimpleHttpResponse> future=HTTPClients.execute(request);
-		
-		return future.thenApplyAsync(response-> {
-			if (response.getCode()!=200) return null;
-			return response.getBodyText();
+		return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response-> {
+			if (response.statusCode()!=200) return null;
+			return response.body();
 		});
 	}
 	
@@ -108,15 +125,17 @@ public class Covia extends ARESTClient  {
 	 */
 	public CompletableFuture<AMap<AString,ACell>> getStatus() {
 		
-		SimpleHttpRequest request=SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("status"));
-		CompletableFuture<SimpleHttpResponse> future=HTTPClients.execute(request);
+		HttpRequest request=HttpRequest.newBuilder()
+			.uri(getBaseURI().resolve("status"))
+			.GET()
+			.build();
 		
-		return future.thenApplyAsync(response-> {
-			int code=response.getCode();
+		return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response-> {
+			int code=response.statusCode();
 			if (code!=200) {
 				throw new ResponseException("getStatus resturned code: "+code,response);
 			}
-			return RT.ensureMap(JSONUtils.parse(response.getBodyText()));
+			return RT.ensureMap(JSONUtils.parse(response.body()));
 		});
 	}
 
@@ -229,25 +248,25 @@ public class Covia extends ARESTClient  {
 	 * @return Future containing the job status, likely to be PENDING
 	 */
 	public CompletableFuture<Job> startJobAsync(AString opID, ACell input) {
-		SimpleHttpRequest req = SimpleHttpRequest.create(Method.POST, getBaseURI().resolve("invoke"));
-		ACell requestBody = Maps.of(
-			"operation", opID,
-			"input", input
-		);
-		req.setBody(JSONUtils.toString(requestBody), ContentType.APPLICATION_JSON);
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(getBaseURI().resolve("invoke"))
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString(JSONUtils.toString(Maps.of(
+				"operation", opID,
+				"input", input
+			))))
+			.build();
 		
-		CompletableFuture<SimpleHttpResponse> responseFuture = HTTPClients.execute(req);
-		CompletableFuture<Job> result= responseFuture.thenApply(response -> {
-			if (response.getCode() != 201) {
-				throw new ResponseException("Failed to start operation: " + response+" = "+response.getBodyText(),response);
+		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+			if (response.statusCode() != 201) {
+				throw new ResponseException("Failed to start operation: " + response+" = "+response.body(),response);
 			}
-			AMap<AString,ACell> body=RT.ensureMap(JSONUtils.parseJSON5(response.getBodyText()));
+			AMap<AString,ACell> body=RT.ensureMap(JSONUtils.parseJSON5(response.body()));
 			if (body==null) {
 				throw new ResponseException("Invalid response body",response);
 			}
 			return Job.create(body);
 		});
-		return result;
 	}
 	
 	/**
@@ -280,15 +299,17 @@ public class Covia extends ARESTClient  {
 	 * @return Future containing the operation execution result
 	 */
 	public CompletableFuture<List<Hash>> getAssets() {
-		SimpleHttpRequest req = SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("assets"));
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(getBaseURI().resolve("assets"))
+			.GET()
+			.build();
 		
-		CompletableFuture<List<Hash>> result = 
-		HTTPClients.execute(req).thenApply(response -> {
-			int code=response.getCode();
+		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+			int code=response.statusCode();
 			if (code != 200) {
 				throw new ConversionException("assets API returned status: "+code);
 			}
-			ACell body=JSONUtils.parseJSON5(response.getBodyText());
+			ACell body=JSONUtils.parseJSON5(response.body());
 			AVector<?> items=null;
 			if (body instanceof AVector v) {
 				// Support for legacy API version that returned a list of asset IDs
@@ -310,7 +331,7 @@ public class Covia extends ARESTClient  {
 			
 		});
 		
-		return result;
+
 	}
 	
 	/**
@@ -348,21 +369,24 @@ public class Covia extends ARESTClient  {
 		Hash h = Assets.parseAssetID(assetID);
 		if (h == null) throw new IllegalArgumentException("Bad asset ID format");
 		
-		SimpleHttpRequest req = SimpleHttpRequest.create(Method.PUT, getBaseURI().resolve("assets/" + h.toHexString() + "/content"));
-		req.setBody(content.getBlob().getBytes(), ContentType.APPLICATION_OCTET_STREAM);
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(getBaseURI().resolve("assets/" + h.toHexString() + "/content"))
+			.header("Content-Type", "application/octet-stream")
+			.PUT(HttpRequest.BodyPublishers.ofByteArray(content.getBlob().getBytes()))
+			.build();
 		
-		return  HTTPClients.execute(req).thenApplyAsync(response -> {
-			if (response.getCode() == 200 || response.getCode() == 201) {
-				ACell json=JSONUtils.parse(response.getBodyText());
+		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response -> {
+			if (response.statusCode() == 200 || response.statusCode() == 201) {
+				ACell json=JSONUtils.parse(response.body());
 				if (json instanceof AString hashString) {
 					Hash hash=Hash.parse(hashString);
 					if (hash!=null) {
 						return hash;
 					}
 				}
-				throw new RuntimeException("Failed to parse result: " + response.getCode() + " - " + response.getBodyText());
+				throw new RuntimeException("Failed to parse result: " + response.statusCode() + " - " + response.body());
 			} else {
-				throw new RuntimeException("Failed to add content: " + response.getCode() + " - " + response.getBodyText());
+				throw new RuntimeException("Failed to add content: " + response.statusCode() + " - " + response.body());
 			}
 		});
 	
@@ -378,17 +402,20 @@ public class Covia extends ARESTClient  {
 		Hash h = Assets.parseAssetID(assetID);
 		if (h == null) throw new IllegalArgumentException("Bad asset ID format");
 		
-		SimpleHttpRequest req = SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("assets/" + h.toHexString() + "/content"));
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(getBaseURI().resolve("assets/" + h.toHexString() + "/content"))
+			.GET()
+			.build();
 		
-		return HTTPClients.execute(req).thenApply(response -> {
-			int code=response.getCode();
-			if (response.getCode() != 200) {
-				throw new RuntimeException("Content get failed with status: " +code+" "+ response.getBodyText()+" -- asset ID: "+assetID);
+		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+			int code=response.statusCode();
+			if (response.statusCode() != 200) {
+				throw new RuntimeException("Content get failed with status: " +code+" "+ response.body()+" -- asset ID: "+assetID);
 			}
 			
 			try {
 				// Create a BlobContent from the response body
-				byte[] data = response.getBodyBytes();
+				byte[] data = response.body().getBytes();
 				convex.core.data.Blob blob = convex.core.data.Blob.wrap(data);
 				return BlobContent.of(blob);
 			} catch (Exception e) {
@@ -403,16 +430,19 @@ public class Covia extends ARESTClient  {
 	 * @return Future that completes when the job is successfully cancelled, or completes exceptionally if the job doesn't exist
 	 */
 	public CompletableFuture<Void> cancelJob(String jobId) {
-		SimpleHttpRequest req = SimpleHttpRequest.create(Method.PUT, getBaseURI().resolve("jobs/" + jobId + "/cancel"));
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(getBaseURI().resolve("jobs/" + jobId + "/cancel"))
+			.PUT(HttpRequest.BodyPublishers.ofString(""))
+			.build();
 		
-		return HTTPClients.execute(req).thenApply(response -> {
-			int code = response.getCode();
+		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+			int code = response.statusCode();
 			if (code == 200) {
 				return null; // Success
 			} else if (code == 404) {
 				throw new RuntimeException("Job not found: " + jobId);
 			} else {
-				throw new RuntimeException("Failed to cancel job: " + code + " - " + response.getBodyText());
+				throw new RuntimeException("Failed to cancel job: " + code + " - " + response.body());
 			}
 		});
 	}
@@ -423,16 +453,19 @@ public class Covia extends ARESTClient  {
 	 * @return Future that completes when the job is successfully deleted, or completes exceptionally if the job doesn't exist
 	 */
 	public CompletableFuture<Void> deleteJob(String jobId) {
-		SimpleHttpRequest req = SimpleHttpRequest.create(Method.PUT, getBaseURI().resolve("jobs/" + jobId + "/delete"));
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(getBaseURI().resolve("jobs/" + jobId + "/delete"))
+			.PUT(HttpRequest.BodyPublishers.ofString(""))
+			.build();
 		
-		return HTTPClients.execute(req).thenApply(response -> {
-			int code = response.getCode();
+		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+			int code = response.statusCode();
 			if (code == 200) {
 				return null; // Success
 			} else if (code == 404) {
 				throw new RuntimeException("Job not found: " + jobId);
 			} else {
-				throw new RuntimeException("Failed to delete job: " + code + " - " + response.getBodyText());
+				throw new RuntimeException("Failed to delete job: " + code + " - " + response.body());
 			}
 		});
 	}
@@ -443,15 +476,18 @@ public class Covia extends ARESTClient  {
 	 * @return Future containing the job status as an AMap, or null if not found
 	 */
 	public CompletableFuture<AMap<AString, ACell>> getJobData(AString jobID) {
-		SimpleHttpRequest req = SimpleHttpRequest.create(Method.GET, getBaseURI().resolve("jobs/" + jobID));
-		return HTTPClients.execute(req).thenApply(response -> {
-			int code=response.getCode();
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(getBaseURI().resolve("jobs/" + jobID))
+			.GET()
+			.build();
+		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+			int code=response.statusCode();
 			if (code == 200) {
-				return RT.ensureMap(JSONUtils.parse(response.getBodyText()));
+				return RT.ensureMap(JSONUtils.parse(response.body()));
 			} else if (code == 404) {
 				return null;
 			} else {
-				throw new RuntimeException("Failed to get job status: " + response.getCode() + " - " + response.getBodyText());
+				throw new RuntimeException("Failed to get job status: " + response.statusCode() + " - " + response.body());
 			}
 		});
 	}
