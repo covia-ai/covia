@@ -41,7 +41,7 @@ import covia.api.Fields;
 import covia.grid.AContent;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.grid.client.CoviaHTTP;
+import covia.grid.client.VenueHTTP;
 import covia.grid.impl.BlobContent;
 import covia.venue.server.VenueServer;
 
@@ -53,12 +53,12 @@ public class VenueServerTest {
 	
 	VenueServer venueServer;
 	Engine venue;
-	CoviaHTTP covia;
+	VenueHTTP covia;
 	
 	@BeforeAll
 	public void setupServer() throws Exception {
 		venueServer=TestServer.SERVER;
-		venue=TestServer.VENUE;
+		venue=TestServer.ENGINE;
 		covia = TestServer.COVIA;
 	}
 	

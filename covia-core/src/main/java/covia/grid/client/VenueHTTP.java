@@ -25,17 +25,21 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
+import covia.api.DID;
 import covia.api.Fields;
 import covia.exception.ConversionException;
 import covia.exception.ResponseException;
 import covia.grid.AContent;
+import covia.grid.Asset;
 import covia.grid.Assets;
 import covia.grid.Job;
+import covia.grid.Venue;
 import covia.grid.impl.BlobContent;
+import covia.grid.impl.RemoteAsset;
 
-public class CoviaHTTP extends AClient {
+public class VenueHTTP extends Venue {
 	
-	public static Logger log=LoggerFactory.getLogger(CoviaHTTP.class);
+	public static Logger log=LoggerFactory.getLogger(VenueHTTP.class);
 
 	private static final double BACKOFF_FACTOR = 1.5;
 	private static final long INITIAL_POLL_DELAY = 300; // 1 second initial delay
@@ -44,7 +48,7 @@ public class CoviaHTTP extends AClient {
 	private final HttpClient httpClient;
 	private final URI baseURI;
 
-	public CoviaHTTP(URI host) {
+	public VenueHTTP(URI host) {
 		this.baseURI = host.resolve("/api/v1/");
 		this.httpClient = HttpClient.newBuilder()
 			.connectTimeout(Duration.ofSeconds(10))
@@ -95,20 +99,9 @@ public class CoviaHTTP extends AClient {
 	 * @param host Host Venue
 	 * @return Covia client instance
 	 */
-	public static CoviaHTTP create(URI host) {
-		return new CoviaHTTP(host);
+	public static VenueHTTP create(URI host) {
+		return new VenueHTTP(host);
 	}
-	
-	/**
-	 * Create a Covia grid client using the given host
-	 * @param uri URI string
-	 * @return Covia client instance
-	 */
-	public static CoviaHTTP create(String host) {
-		// TODO Auto-generated method stub
-		return null;
-	}
-
 
 	/**
 	 * Gets metadata for a given asset on the connected venue
@@ -156,22 +149,14 @@ public class CoviaHTTP extends AClient {
 	 * @param assetID The AssetID of the operation to invoke
 	 * @param input The input parameters for the operation as an ACell
 	 * @return Future for the finished Job
-	 * @throws InterruptedException 
 	 */
-	public CompletableFuture<Job> invoke(String assetID, ACell input) throws InterruptedException {
+	public CompletableFuture<Job> invoke(String assetID, ACell input)  {
 		AString opID=Strings.create(assetID);
 		return invoke(opID,input);
 	}
 	
-	/**
-	 * Invokes an operation on the connected venue, returning a Job
-	 * 
-	 * @param assetID The AssetID of the operation to invoke
-	 * @param input The input parameters for the operation as an ACell
-	 * @return Future for the finished Job
-	 * @throws InterruptedException 
-	 */
-	public CompletableFuture<Job> invoke(Hash assetID, ACell input) throws InterruptedException {
+	@Override
+	public CompletableFuture<Job> invoke(Hash assetID, ACell input)  {
 		return invoke(assetID.toCVMHexString(),input);
 	}
 	
@@ -211,7 +196,7 @@ public class CoviaHTTP extends AClient {
 	 * @param input The input parameters for the operation as an ACell
 	 * @return Future containing the job status map
 	 */
-	public CompletableFuture<Job> invoke(AString opID, ACell input) throws InterruptedException {
+	public CompletableFuture<Job> invoke(AString opID, ACell input)  {
 		CompletableFuture<Job> submit=startJobAsync(opID,input);
 		CompletableFuture<Job> start=submit.thenApply(job->{
 			try {
@@ -527,6 +512,32 @@ public class CoviaHTTP extends AClient {
 			return data;
 		});
 		future.get(5,TimeUnit.SECONDS);
+	}
+
+	@Override
+	public Asset getAsset(Hash id) throws IOException {
+		HttpRequest request=HttpRequest.newBuilder()
+				.uri(getBaseURI().resolve("assets/"+id.toHexString()))
+				.GET()
+				.build();
+			
+		HttpResponse<String> response;
+		try {
+			response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+			if (response.statusCode()!=200) return null;
+			AString metadata=Strings.create(response.body());
+			
+			return new RemoteAsset(id,metadata,this);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			return null;
+		}
+		
+	}
+
+	@Override
+	public DID getDID() {
+		return DID.create("web",baseURI.getHost());
 	}
 
 

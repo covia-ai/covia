@@ -14,7 +14,7 @@ import java.net.URI;
  */
 public class DID {
 
-	private static final String DID_SCHEME = "did";
+	private static final String URI_SCHEME = "did";
 	private static final String DID_START = "did:";
     
     private final String method;
@@ -51,18 +51,20 @@ public class DID {
         }
         
         String scheme=uri.getScheme();
-        if (!DID_SCHEME.equals(scheme)) {
-        	throw new IllegalArgumentException("DID must start with 'did:'");
+        if (!URI_SCHEME.equals(scheme)) {
+        	throw new IllegalArgumentException("DID must start with 'did:' URI scheme");
         }
         
         // URI path contains DID method, ID and DID path
-        String msp=uri.getSchemeSpecificPart();
-        int pathColon=msp.indexOf(':');
+        String ssp=uri.getSchemeSpecificPart();
+        int pathColon=ssp.indexOf(':');
         if (pathColon<0) {
-        	throw new IllegalArgumentException("DID must have a method and id");
+        	throw new IllegalArgumentException("DID must start with 'did:<method>:<id>'");
         }
-        String method=msp.substring(0,pathColon);
-        String idAndPath=msp.substring(pathColon+1);
+        String method=ssp.substring(0,pathColon);
+        if (method.isEmpty()) throw new IllegalArgumentException("DID must have non-empty method");
+        
+        String idAndPath=ssp.substring(pathColon+1);
         int slashPos=idAndPath.indexOf('/');
         if (slashPos<0) {
         	return new DID(method,idAndPath);
@@ -125,4 +127,8 @@ public class DID {
     public String toString() {
         return DID_START+method+":"+id;
     }
+
+	public static DID create(String method, String id) {
+		return new DID(method,id);
+	}
 }

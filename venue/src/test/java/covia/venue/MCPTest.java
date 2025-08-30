@@ -42,7 +42,7 @@ public class MCPTest {
 	@SuppressWarnings("unused")
 	@BeforeAll
 	public void setupServer() throws Exception {
-		venue=TestServer.VENUE;
+		venue=TestServer.ENGINE;
 		assumeTrue(TEST_MCP);
 
 		try {

@@ -31,7 +31,7 @@ public class Benchmark {
 	public static void main(String[] args) {
 		try {
 		// Initialize the client
-		CoviaHTTP client = TestServer.COVIA;
+		VenueHTTP client = TestServer.COVIA;
 		
 		System.out.println("Starting benchmark with " + TEST_NUMBER + " operations...");
 		

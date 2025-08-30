@@ -23,11 +23,15 @@ import convex.core.data.Hash;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.AContent;
+import covia.grid.Asset;
+import covia.grid.Grid;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.grid.Venue;
 import covia.grid.impl.BlobContent;
 import covia.venue.TestOps;
 import covia.venue.TestServer;
@@ -35,7 +39,7 @@ import covia.venue.TestServer;
 @TestInstance(Lifecycle.PER_CLASS)
 public class ClientTest {
 	
-	private CoviaHTTP client;
+	private VenueHTTP client;
 	
 	@BeforeAll
 	public void setup() {
@@ -270,5 +274,18 @@ public class ClientTest {
 		assertThrows(ExecutionException.class, () -> {
 			contentFuture.get(5, TimeUnit.SECONDS);
 		});
+	}
+	
+	@Test 
+	public void testGridConnect() throws IOException {
+		Venue v= Grid.connect(TestServer.BASE_URL);
+		Asset a = v.getAsset(TestOps.ECHO);
+		assertNotNull(a);
+		
+		Job job=a.invoke(Vectors.empty()).join();
+		ACell result=job.awaitResult();
+		assertEquals(Vectors.empty(),result);
+		
+		assertEquals(Maps.empty(),a.run(Maps.empty()));
 	}
 } 

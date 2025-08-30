@@ -37,6 +37,7 @@ import covia.adapter.HTTPAdapter;
 import covia.adapter.LangChainAdapter;
 import covia.adapter.Orchestrator;
 import covia.adapter.TestAdapter;
+import covia.api.DID;
 import covia.api.Fields;
 import covia.grid.Assets;
 import covia.grid.Job;
@@ -452,6 +453,11 @@ public class Engine {
 
 	public AMap<AString,ACell> getConfig() {
 		return config;
+	}
+
+	public DID getDID() {
+		// TODO Auto-generated method stub
+		return null;
 	}
 
 	

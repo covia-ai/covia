@@ -12,6 +12,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.JobFailedException;
 
 /**
  * Class representing a Covia Job
@@ -19,17 +20,18 @@ import covia.api.Fields;
  * Does not access the grid itself: querying should be done via Covia Grid client
  */
 public class Job {
-	// Job status data
+	/** Job status data */
 	private AMap<AString, ACell> data;
+	
 	protected boolean cancelled=false;
 	protected CompletableFuture<ACell> resultFuture=null;
 	
-	public Job(AMap<AString, ACell> status) {
+	protected Job(AMap<AString, ACell> status) {
 		this.data=status;
 	}
 
-	public static boolean isFinished(AMap<AString, ACell> job) {
-		AString status=RT.ensureString(job.get(Fields.JOB_STATUS_FIELD));	
+	public static boolean isFinished(AMap<AString, ACell> jobData) {
+		AString status=RT.ensureString(jobData.get(Fields.JOB_STATUS_FIELD));	
 		if (status==null) throw new Error("Job status should never be null");
 		if (status.equals(Status.COMPLETE)) return true;
 		if (status.equals(Status.FAILED)) return true;
@@ -152,13 +154,14 @@ public class Job {
 	 * @return Job output, or throw if not finished
 	 */
 	public ACell getOutput() {
-		if (!isComplete()) throw new IllegalStateException("Job has no output, status is "+getStatus());
+		if (!isFinished()) throw new IllegalStateException("Job has no output, status is "+getStatus());
+		if (!isComplete()) throw new JobFailedException(this);
 		return RT.get(data, Fields.OUTPUT);
 	}
 	
 	/**
 	 * Gets the error message of this Job, if it has FAILED
-	 * @return Error message as a string, or null if no error or job is not failed
+	 * @return Error message as a string, or null if no message or job is not failed
 	 */
 	public String getErrorMessage() {
 		if (getStatus() != Status.FAILED) return null;
@@ -233,8 +236,8 @@ public class Job {
 	 */
 	public static Job failure(String message) {
 		return Job.create(Maps.of(
-					Fields.JOB_STATUS_FIELD, Status.FAILED,
-					Fields.JOB_ERROR_FIELD, Strings.create(message)
-				));
+			Fields.JOB_STATUS_FIELD, Status.FAILED,
+			Fields.JOB_ERROR_FIELD, Strings.create(message)
+		));
 	}
 }
