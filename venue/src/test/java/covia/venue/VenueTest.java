@@ -44,15 +44,15 @@ public class VenueTest {
 	public void setup() throws IOException {
 		venue=Engine.createTemp(null);
 		Engine.addDemoAssets(venue);
-		randomOpID=venue.storeAsset(Utils.readResourceAsString("/asset-examples/randomop.json"), null);
-		echoOpId=venue.storeAsset(Utils.readResourceAsString("/asset-examples/echoop.json"), null);
-		qwenOpId=venue.storeAsset(Utils.readResourceAsString("/asset-examples/qwen.json"), null);
+		randomOpID=venue.storeAsset(Utils.readResourceAsAString("/asset-examples/randomop.json"), null);
+		echoOpId=venue.storeAsset(Utils.readResourceAsAString("/asset-examples/echoop.json"), null);
+		qwenOpId=venue.storeAsset(Utils.readResourceAsAString("/asset-examples/qwen.json"), null);
 	}
 	
 	@Test
 	public void testTempVenue() throws IOException {
 		Blob content=Blob.EMPTY;
-		Hash id=venue.storeAsset("{}",content);
+		Hash id=venue.storeAsset(EMPTY_META,content);
 		assertEquals(EMPTY_META,venue.getMetadata(id));
 		assertEquals(id,Hashing.sha256(EMPTY_META));
 		ACell md=venue.getMetadata(id);
@@ -68,7 +68,7 @@ public class VenueTest {
 		);
 		
 		// Add the asset
-		Hash id=venue.storeAsset(meta, null);
+		Hash id=venue.storeAsset(JSONUtils.toJSONPretty(meta), null);
 		assertNotNull(id);
 		
 		// Verify the asset was added
@@ -211,7 +211,7 @@ public class VenueTest {
 		);
 		
 		// Add the asset with metadata using local venue API
-		Hash assetId = venue.storeAsset(metadata, null);
+		Hash assetId = venue.storeAsset(JSONUtils.toJSONPretty(metadata), null);
 		assertNotNull(assetId, "Asset ID should be returned");
 		
 		// Create content object for upload

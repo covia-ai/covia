@@ -58,6 +58,7 @@ public class Engine {
 	public static final Keyword COVIA_KEY = Keyword.intern("covia");
 	public static final Keyword ASSETS_KEY = Keyword.intern("assets");
 	public static final Keyword JOBS_KEY = Keyword.intern("jobs");
+	public static final Keyword USERS_KEY = Keyword.intern("users");
 
 
 
@@ -74,8 +75,21 @@ public class Engine {
 	 */
 	protected final AStorage contentStorage;
 	
-	/** Overall Covia lattice */
-	protected ACursor<AMap<Keyword,ACell>> lattice=Cursors.of(Maps.create(COVIA_KEY, Maps.create(ASSETS_KEY,Index.EMPTY)));
+	/** 
+	 * Venue lattice 
+	 * :covia -> Map
+	 *     :assets -> Map
+	 *         <AssetID> -> [Asset Record]
+	 *     :users -> Index
+	 *         <User> -> Map
+	 *             :assets -> Set<AssetID>
+	 *             :jobs -> Index
+	 *                <JobID> -> {Job Status}
+ 	 */
+	protected ACursor<AMap<Keyword,ACell>> lattice=Cursors.of(Maps.create(
+			COVIA_KEY, Maps.of(
+					ASSETS_KEY,Index.EMPTY,
+					USERS_KEY,Index.EMPTY)));
 	
 	/** Lattice for assets data */
 	protected ACursor<Index<AString,AVector<ACell>>> assets=lattice.path(COVIA_KEY, ASSETS_KEY);
@@ -140,13 +154,8 @@ public class Engine {
 		return removed;
 	}
 
-	public Hash storeAsset(AMap<AString,ACell> meta, ACell content) {
-		AString metaString=JSONUtils.toJSONString(meta);
-		return storeAsset(metaString,content,meta);
-	}
-
-	public Hash storeAsset(String meta, ACell content) {
-		AMap<AString,ACell> metaMap=RT.ensureMap(JSONReader.read(meta));
+	public Hash storeAsset(AString meta, ACell content) {
+		AMap<AString,ACell> metaMap=RT.ensureMap(JSONUtils.parse(meta));
 		if (metaMap==null) {
 			throw new IllegalArgumentException("Metadata is not a valid JSON object");
 		}
@@ -221,7 +230,7 @@ public class Engine {
 			venue.registerAdapter(new LangChainAdapter());
 			venue.registerAdapter(new CoviaAdapter());
 			venue.registerAdapter(new GridAdapter());
-			venue.storeAsset(Utils.readResourceAsString(BASE+"qwen.json"),null);
+			venue.storeAsset(Strings.fromStream(Utils.getResourceAsStream(BASE+"qwen.json")),null);
 		} catch (IOException e) {
 			throw new Error(e);
 		}

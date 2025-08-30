@@ -37,7 +37,7 @@ public abstract class AAdapter {
 	 */
 	protected void installAsset(String resourcePath, String assetName) {
 		try {
-			engine.storeAsset(convex.core.util.Utils.readResourceAsString(resourcePath), null);
+			engine.storeAsset(convex.core.util.Utils.readResourceAsAString(resourcePath), null);
 		} catch (Exception e) {
 			// Log warning but don't fail installation
 			System.err.println("Failed to install asset from " + resourcePath + ": " + e.getMessage());

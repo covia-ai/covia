@@ -200,14 +200,12 @@ public class CoviaAPI extends ACoviaAPI {
 										from = String.class) })
 					})	
 	protected void addAsset(Context ctx) { 
-		ACell body=null;
-		
-		String meta=ctx.body();
 		try {
-			Hash id=venue.storeAsset(meta, body);
+			AString meta=Strings.fromStream(ctx.bodyInputStream());
+			Hash id=venue.storeAsset(meta,null);
 			buildResult(ctx,201,id.toHexString());
 			ctx.header("Location",ROUTE+"assets/"+id.toHexString());
-		} catch (ClassCastException | ParseException e) {
+		} catch (ClassCastException | IOException | ParseException e) {
 			throw new BadRequestResponse("Unable to parse asset metadata: "+e.getMessage());
 		}
 	}

@@ -14,7 +14,6 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
 import covia.api.Fields;
-import covia.venue.Engine;
 
 public class TestAdapter extends AAdapter {
 	
@@ -74,9 +73,9 @@ public class TestAdapter extends AAdapter {
 			installAsset(BASE+"randomop.json", null);
 			installAsset(BASE+"failop.json", null);
 			installAsset(BASE+"orch.json", null);
-			Hash iris=engine.storeAsset(Utils.readResourceAsString(BASE+"iris.json"),null);
+			Hash iris=engine.storeAsset(Utils.readResourceAsAString(BASE+"iris.json"),null);
 			engine.putContent(iris,this.getClass().getResourceAsStream(BASE+"iris.csv"));
-			Hash shake=engine.storeAsset(Utils.readResourceAsString(BASE+"shakespeare.json"),null);
+			Hash shake=engine.storeAsset(Utils.readResourceAsAString(BASE+"shakespeare.json"),null);
 			engine.putContent(shake,this.getClass().getResourceAsStream(BASE+"iris.csv"));
 		} catch(Exception e) {
 			log.warn("Failed to install test assets",e);
