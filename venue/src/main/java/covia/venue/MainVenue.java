@@ -31,7 +31,7 @@ public class MainVenue {
 		if (args.length>0) try {
 			config =(AMap<AString, ACell>) JSONUtils.parseJSON5(FileUtils.loadFileAsString(args[0]));
 		} catch (Exception ex) {
-			log.warn("Error loadi ng config",ex);
+			log.warn("Error loading config, defaulting to test setup",ex);
 		}
 		
 		

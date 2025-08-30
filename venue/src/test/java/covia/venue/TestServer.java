@@ -3,7 +3,7 @@ package covia.venue;
 import java.net.URI;
 
 import convex.core.data.Maps;
-import covia.api.Fields;
+import convex.core.data.Strings;
 import covia.grid.client.Covia;
 import covia.venue.server.VenueServer;
 
@@ -17,7 +17,7 @@ public class TestServer {
 	public static final Covia COVIA;
 	
 	static {
-		SERVER=VenueServer.launch(Maps.of(Fields.PORT,PORT));
+		SERVER=VenueServer.launch(Maps.of(Strings.create("port"),PORT));
 		VENUE=SERVER.getEngine();
 
 

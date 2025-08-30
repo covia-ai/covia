@@ -7,6 +7,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.data.prim.AInteger;
 import convex.core.lang.RT;
 import covia.api.Fields;
@@ -63,7 +64,7 @@ public class VenueServer {
 			config=Maps.of(
 					Fields.NAME,"Test Venue",
 					Fields.DESCRIPTION,"Unconfigured test venue",
-					Fields.PORT,null // This uses default (find a port)
+					Strings.create("port"),null // This uses default (find a port)
 			);
 		}
 		
@@ -78,7 +79,7 @@ public class VenueServer {
 	 * Start app with default port
 	 */
 	public void start() {
-		AInteger port=RT.ensureInteger(RT.getIn(config, Fields.PORT));
+		AInteger port=RT.ensureInteger(RT.getIn(config, Strings.create("port")));
 		Integer iport=(port==null)?null:(int)port.longValue();
 		start(iport);
 	}

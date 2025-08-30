@@ -48,7 +48,7 @@ public class Fields {
 	public static final StringShort METHOD = Strings.intern("method");
 	public static final StringShort INLINE = Strings.intern("inline");
 	
-	public static final StringShort PORT = Strings.intern("port");;
+	public static final StringShort PORT = Strings.intern("port");
 	
 
 }
