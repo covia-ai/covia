@@ -14,14 +14,14 @@ import javax.swing.SwingUtilities;
 
 import convex.core.data.ACell;
 import convex.core.data.Maps;
-import covia.grid.client.Covia;
+import covia.grid.client.CoviaHTTP;
 
 @SuppressWarnings("serial")
 public class ReplPanel extends JPanel {
-    protected final Covia covia;
+    protected final CoviaHTTP covia;
     private final JTextField opField;
 
-    public ReplPanel(Covia covia) {
+    public ReplPanel(CoviaHTTP covia) {
         super(new BorderLayout(8, 8));
         this.covia = covia;
 

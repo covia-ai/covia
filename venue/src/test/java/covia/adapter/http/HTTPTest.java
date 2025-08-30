@@ -12,14 +12,14 @@ import convex.core.data.Maps;
 import convex.core.lang.RT;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.grid.client.Covia;
+import covia.grid.client.CoviaHTTP;
 import covia.venue.TestServer;
 import covia.venue.TestOps;
 import covia.adapter.HTTPAdapter;
 
 public class HTTPTest {
 	@Test public void testHTTPGet() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia=TestServer.COVIA;
+		CoviaHTTP covia=TestServer.COVIA;
 		
 		Job result=covia.invokeSync("http:get", Maps.of("url",TestServer.BASE_URL));
 		assertTrue(result.isComplete());
@@ -28,7 +28,7 @@ public class HTTPTest {
 	}
 	
 	@Test public void testGoogleSearch() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia=TestServer.COVIA;
+		CoviaHTTP covia=TestServer.COVIA;
 		
 		// Test the Google search orchestration using the orchestrator adapter
 		Job result=covia.invokeAndWait(TestOps.GOOGLESEARCH, Maps.of(
@@ -67,7 +67,7 @@ public class HTTPTest {
 	}
 	
 	@Test public void testGoogleSearchWithFallback() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia=TestServer.COVIA;
+		CoviaHTTP covia=TestServer.COVIA;
 		
 		// Test Google search orchestration with a different query
 		Job result=covia.invokeAndWait(TestOps.GOOGLESEARCH, Maps.of(
@@ -128,7 +128,7 @@ public class HTTPTest {
 	}
 	
 	@Test public void testHTTPGetInvalidEndpoint() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia = TestServer.COVIA;
+		CoviaHTTP covia = TestServer.COVIA;
 		
 		// Test HTTP GET to an invalid endpoint - should return 404
 		Job result = covia.invokeSync("http:get", Maps.of(

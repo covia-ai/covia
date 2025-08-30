@@ -3,6 +3,9 @@ package covia.api;
 import convex.core.data.StringShort;
 import convex.core.data.Strings;
 
+/**
+ * Static class for constant field name values used in Covia Grid API
+ */
 public class Fields {
 	// Job related
 	public static final StringShort CREATED=Strings.intern("created");

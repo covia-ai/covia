@@ -12,13 +12,13 @@ import convex.core.data.Maps;
 import convex.core.lang.RT;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.grid.client.Covia;
+import covia.grid.client.CoviaHTTP;
 import covia.venue.TestServer;
 
 public class JVMTest {
 	
 	@Test public void testStringConcat() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia = TestServer.COVIA;
+		CoviaHTTP covia = TestServer.COVIA;
 		
 		// Test basic string concatenation
 		Job result = covia.invokeSync("jvm:stringConcat", Maps.of(
@@ -47,7 +47,7 @@ public class JVMTest {
 	}
 	
 	@Test public void testStringConcatWithSeparator() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia = TestServer.COVIA;
+		CoviaHTTP covia = TestServer.COVIA;
 		
 		// Test string concatenation with separator
 		Job result = covia.invokeSync("jvm:stringConcat", Maps.of(
@@ -71,7 +71,7 @@ public class JVMTest {
 	}
 	
 	@Test public void testStringConcatEmptyStrings() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia = TestServer.COVIA;
+		CoviaHTTP covia = TestServer.COVIA;
 		
 		// Test string concatenation with empty strings
 		Job result = covia.invokeSync("jvm:stringConcat", Maps.of(
@@ -94,7 +94,7 @@ public class JVMTest {
 	}
 	
 	@Test public void testStringConcatWithNullInputs() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia = TestServer.COVIA;
+		CoviaHTTP covia = TestServer.COVIA;
 		
 		// Test string concatenation with null inputs (should default to empty strings)
 		Job result = covia.invokeSync("jvm:stringConcat", Maps.of());
@@ -114,7 +114,7 @@ public class JVMTest {
 	}
 	
 	@Test public void testUrlEncode() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia = TestServer.COVIA;
+		CoviaHTTP covia = TestServer.COVIA;
 		
 		// Test URL encoding with special characters
 		Job result = covia.invokeSync("jvm:urlEncode", Maps.of(
@@ -136,7 +136,7 @@ public class JVMTest {
 	}
 	
 	@Test public void testUrlEncodeEmptyString() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia = TestServer.COVIA;
+		CoviaHTTP covia = TestServer.COVIA;
 		
 		// Test URL encoding with empty string
 		Job result = covia.invokeSync("jvm:urlEncode", Maps.of(
@@ -158,7 +158,7 @@ public class JVMTest {
 	}
 	
 	@Test public void testUrlEncodeNullInput() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia = TestServer.COVIA;
+		CoviaHTTP covia = TestServer.COVIA;
 		
 		// Test URL encoding with null input (should default to empty string)
 		Job result = covia.invokeSync("jvm:urlEncode", Maps.of());
@@ -178,7 +178,7 @@ public class JVMTest {
 	}
 	
 	@Test public void testUrlDecode() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia = TestServer.COVIA;
+		CoviaHTTP covia = TestServer.COVIA;
 		
 		// Test URL decoding with encoded string
 		Job result = covia.invokeSync("jvm:urlDecode", Maps.of(
@@ -200,7 +200,7 @@ public class JVMTest {
 	}
 	
 	@Test public void testUrlDecodeEmptyString() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia = TestServer.COVIA;
+		CoviaHTTP covia = TestServer.COVIA;
 		
 		// Test URL decoding with empty string
 		Job result = covia.invokeSync("jvm:urlDecode", Maps.of(
@@ -222,7 +222,7 @@ public class JVMTest {
 	}
 	
 	@Test public void testUrlDecodeNullInput() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia = TestServer.COVIA;
+		CoviaHTTP covia = TestServer.COVIA;
 		
 		// Test URL decoding with null input (should default to empty string)
 		Job result = covia.invokeSync("jvm:urlDecode", Maps.of());
@@ -242,7 +242,7 @@ public class JVMTest {
 	}
 	
 	@Test public void testUrlEncodeDecodeRoundTrip() throws InterruptedException, ExecutionException, TimeoutException {
-		Covia covia = TestServer.COVIA;
+		CoviaHTTP covia = TestServer.COVIA;
 		
 		String original = "Hello World! & Co. + Special/Chars?";
 		

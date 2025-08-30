@@ -33,9 +33,9 @@ import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.impl.BlobContent;
 
-public class Covia {
+public class CoviaHTTP extends AClient {
 	
-	public static Logger log=LoggerFactory.getLogger(Covia.class);
+	public static Logger log=LoggerFactory.getLogger(CoviaHTTP.class);
 
 	private static final double BACKOFF_FACTOR = 1.5;
 	private static final long INITIAL_POLL_DELAY = 300; // 1 second initial delay
@@ -44,7 +44,7 @@ public class Covia {
 	private final HttpClient httpClient;
 	private final URI baseURI;
 
-	public Covia(URI host) {
+	public CoviaHTTP(URI host) {
 		this.baseURI = host.resolve("/api/v1/");
 		this.httpClient = HttpClient.newBuilder()
 			.connectTimeout(Duration.ofSeconds(10))
@@ -95,9 +95,20 @@ public class Covia {
 	 * @param host Host Venue
 	 * @return Covia client instance
 	 */
-	public static Covia create(URI host) {
-		return new Covia(host);
+	public static CoviaHTTP create(URI host) {
+		return new CoviaHTTP(host);
 	}
+	
+	/**
+	 * Create a Covia grid client using the given host
+	 * @param uri URI string
+	 * @return Covia client instance
+	 */
+	public static CoviaHTTP create(String host) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
 
 	/**
 	 * Gets metadata for a given asset on the connected venue
@@ -517,5 +528,6 @@ public class Covia {
 		});
 		future.get(5,TimeUnit.SECONDS);
 	}
+
 
 }

@@ -3,12 +3,14 @@ package covia.api;
 import java.net.URI;
 
 /**
- * Represents a Decentralized Identifier (DID) with method, id, and path components.
+ * Represents a W3C Decentralized Identifier (DID) with method and id
  * 
- * A DID follows the format: did:method:method_specific_id/path where path is optional.
+ * A DID follows the format: did:method:method_specific_id
+ * 
  * Examples:
  * - did:web:example.com
  * - did:web:example.com:8080
+ * - did:convex:user.mike
  */
 public class DID {
 
@@ -35,8 +37,6 @@ public class DID {
         this.method = method;
         this.id = id;
     }
-    
-
     
     /**
      * Constructs a DID from a URI.

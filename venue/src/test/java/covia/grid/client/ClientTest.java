@@ -35,7 +35,7 @@ import covia.venue.TestServer;
 @TestInstance(Lifecycle.PER_CLASS)
 public class ClientTest {
 	
-	private Covia client;
+	private CoviaHTTP client;
 	
 	@BeforeAll
 	public void setup() {
