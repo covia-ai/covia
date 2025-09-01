@@ -510,5 +510,9 @@ public class Engine {
 		
 		return ddo;
 	}
+
+	public AString getName() {
+		return RT.str(config.get(Fields.NAME));
+	}
 	
 }

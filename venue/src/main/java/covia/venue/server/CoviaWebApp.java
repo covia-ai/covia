@@ -7,6 +7,7 @@ import java.util.List;
 import j2html.tags.Text;
 import convex.core.util.Utils;
 import covia.venue.Engine;
+import covia.venue.api.CoviaAPI;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import j2html.tags.DomContent;
@@ -25,13 +26,15 @@ public class CoviaWebApp  {
 		javalin.get("/", this::indexPage);
 		javalin.get("/404.html", this::missingPage);
 		javalin.get("/status", this::statusPage);
+		javalin.get("/llms.txt",this::llmsTxt);
+
 	}
 	
 	private void indexPage(Context ctx) {
 		standardPage(ctx,html(
-				makeHeader("Covia Venue Server"),
+				makeHeader("Covia AI: Decentralised AI grid venue server"),
 				body(
-					h1("Covia Venue Server"),
+					h1("Covia AI: Decentralised AI grid"),
 					aside(makeLinks()).withStyle("float: right"),
 					p("Version: "+Utils.getVersion()),
 					p("Name: "+engine.getConfig().get(Fields.NAME)),
@@ -65,6 +68,8 @@ public class CoviaWebApp  {
 	private DomContent makeHeader(String title) {
 		return head(
 				title(title),
+				meta().attr("description","Covia.ai offers decentralized AI solutions powered by Convex Lattice DLT for secure, scalable applications."),
+				meta().attr("keywords","AI, agent, grid, orchestration, decentralised"),
 		        link().withRel("stylesheet").withHref("/css/pico.min.css")
 		);
 	}
@@ -88,12 +93,12 @@ public class CoviaWebApp  {
 	}
 	
 	static final List<String[]> LINKS = List.of(
-		sa("OpenAPI documentation: ","Swagger API" ,"/swagger"),
-		sa("Covia Documentation: ","Covia Docs" ,"https://docs.covia.ai"),
-		sa("Convex Documentation: ","Convex Docs" ,"https://docs.convex.world"),
-		sa("General information at the ","Covia Website", "https://covia.ai"),
-		sa("Community chat at the ","Covia Discord", "https://discord.com/invite/xfYGq4CT7v"),
-		sa("Join the open source development: ","Covia Dev", "https://github.com/covia-ai")
+		sa("OpenAPI documentation","Swagger API" ,"/swagger"),
+		sa("Covia Documentation","Covia Docs" ,"https://docs.covia.ai"),
+		sa("Convex Documentation","Convex Docs" ,"https://docs.convex.world"),
+		sa("General information","Covia Website", "https://covia.ai"),
+		sa("Community chat","Covia Discord", "https://discord.gg/fywdrKd8QT"),
+		sa("Open source development","Covia Dev", "https://github.com/covia-ai")
 	);
 	
 	private DomContent makeLinks() {
@@ -108,5 +113,27 @@ public class CoviaWebApp  {
 	// Silly helper function
 	private static String[] sa(String... strings) {
 		return strings;
+	}
+	
+	protected void llmsTxt(Context ctx) { 
+		StringBuilder sb=new StringBuilder();
+		sb.append("# Covia Grid Venue Server\n");
+		sb.append("\n");
+		sb.append("> Covia Grid venues provide pluggable access to AI agents and orchstration capabilities.\n");
+		sb.append("\n");
+		sb.append("Name : "+engine.getName()+"\n");
+		sb.append("Web Address : "+CoviaAPI.getExternalBaseUrl(ctx, "")+"\n");
+		sb.append("\n");
+		sb.append("## Links\n");
+		sb.append("\n");
+		for (String[] ss: LINKS) {
+			sb.append("- ["+ss[1]+"]("+ss[2]+"): "+ss[0]+"\n");
+			
+		}
+		
+		
+		ctx.result(sb.toString());
+		ctx.contentType("text/plain");
+		ctx.status(200);
 	}
 }
