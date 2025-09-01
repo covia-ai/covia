@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -21,16 +23,18 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 import convex.java.HTTPClients;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
-import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
+import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
 import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema.InitializeResult;
+import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
+import io.modelcontextprotocol.spec.McpSchema.Tool;
 
 @TestInstance(Lifecycle.PER_CLASS)
 public class MCPTest {
 	/**
 	 * Toggle to enable / disable MCP tests
 	 */
-	public static final boolean TEST_MCP=false;
+	public static final boolean TEST_MCP=true;
 	
 	static final int PORT=TestServer.PORT;
 	static final String BASE_URL=TestServer.BASE_URL;
@@ -46,13 +50,16 @@ public class MCPTest {
 		assumeTrue(TEST_MCP);
 
 		try {
-			McpClientTransport transport= HttpClientSseClientTransport.builder(BASE_URL+"/mcp").build();
-			mcp=McpClient.sync(transport).build();
+			McpClientTransport transport= HttpClientStreamableHttpTransport .builder(BASE_URL+"/mcp")
+					.build();
+			mcp=McpClient.sync(transport)
+					.requestTimeout(Duration.ofSeconds(3))
+					.build();
 			InitializeResult ir=mcp.initialize();
 		} catch (Throwable t) {
 			System.err.println("MCP initialisation failure: "+t);
 			t.printStackTrace();
-			assumeTrue(false);
+			assumeTrue(false,"Aborted due to MCP initialisation failure");
 		}
 	}
 	
@@ -61,8 +68,14 @@ public class MCPTest {
 	@Test public void testPing() {
 		mcp.ping();
 	}
+	
+	@Test public void testToolsList() {
+		ListToolsResult lr=mcp.listTools();
+		List<Tool> tools = lr.tools();
+		assertEquals(0,tools.size());
+	}
 
-		/**
+	/**
 	 * Test for presence of MCP interface
 	 */
 	@Test public void testMCPWellKnown() throws URISyntaxException, InterruptedException, ExecutionException, TimeoutException {

@@ -63,10 +63,11 @@ public class Engine {
 	public static final Keyword USERS_KEY = Keyword.intern("users");
 
 
+    // Structure of asset record
+	public static final long POS_JSON = 0;
+	public static final long POS_CONTENT= 1;
+	public static final long POS_META = 2;
 
-	static final long POS_JSON = 0;
-	static final long POS_CONTENT= 1;
-	static final long POS_META = 2;
 	
 	protected final AMap<AString, ACell> config;
 

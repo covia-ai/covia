@@ -1,5 +1,6 @@
 package covia.api;
 
+import convex.core.data.ACell;
 import convex.core.data.StringShort;
 import convex.core.data.Strings;
 
@@ -55,6 +56,11 @@ public class Fields {
 	public static final StringShort HOSTNAME = Strings.intern("hostname");;
 	public static final StringShort DID = Strings.intern("did");
 	public static final StringShort VENUES = Strings.intern("venues");
+	public static final StringShort ERROR = Strings.intern("error");
+	
+	// MCP stuff
+	public static final StringShort MCP_TOOLNAME = Strings.intern("mcpToolName");
+	public static final StringShort INPUT_SCHEMA = Strings.intern("inputSchema");
 	
 
 }

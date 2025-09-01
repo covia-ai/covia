@@ -6,6 +6,7 @@
 	"operation": {
 		"adapter": "test:echo",
 		"input": {},
-		"output": {}
+		"output": {},
+		"mcpToolName":"echo"
 	}
 }

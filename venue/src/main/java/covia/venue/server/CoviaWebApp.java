@@ -119,7 +119,7 @@ public class CoviaWebApp  {
 		StringBuilder sb=new StringBuilder();
 		sb.append("# Covia Grid Venue Server\n");
 		sb.append("\n");
-		sb.append("> Covia Grid venues provide pluggable access to AI agents and orchstration capabilities.\n");
+		sb.append("> Covia Grid venues provide pluggable access to AI agents and orchestration capabilities.\n");
 		sb.append("\n");
 		sb.append("Name : "+engine.getName()+"\n");
 		sb.append("Web Address : "+CoviaAPI.getExternalBaseUrl(ctx, "")+"\n");

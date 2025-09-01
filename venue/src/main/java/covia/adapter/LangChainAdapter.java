@@ -3,7 +3,6 @@ package covia.adapter;
 import java.util.concurrent.CompletableFuture;
 
 import convex.core.data.ACell;
-import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
