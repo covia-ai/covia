@@ -75,6 +75,6 @@ public class DIDTest {
             "Should contain correct @context");
 
         // Verify DID format
-        assertTrue(body.contains("\"did:web:"), "Should contain did:web format");
+        assertTrue(body.contains("\"did:"), "Should contain did: format");
     }
 }

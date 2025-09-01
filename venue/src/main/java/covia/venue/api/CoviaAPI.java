@@ -518,10 +518,7 @@ public class CoviaAPI extends ACoviaAPI {
 		String did = "did:web:" + host;
 		
 		// Create a complete DID document structure
-		AMap<AString, ACell> didDocument = Maps.of(
-			Strings.create("id"), Strings.create(did),
-			Strings.create("@context"), Strings.create("https://www.w3.org/ns/did/v1")
-		);
+		AMap<AString, ACell> didDocument = venue.getDIDDocument(host);
 		
 		// Set content type to application/did+json
 		ctx.header("Content-Type", "application/did+json");

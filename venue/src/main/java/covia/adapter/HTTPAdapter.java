@@ -27,7 +27,6 @@ import convex.core.util.JSONUtils;
 import convex.core.util.Utils;
 import convex.java.HTTPClients;
 import covia.api.Fields;
-import covia.venue.Engine;
 
 public class HTTPAdapter extends AAdapter {
 

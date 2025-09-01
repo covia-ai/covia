@@ -52,6 +52,9 @@ public class Fields {
 	public static final StringShort INLINE = Strings.intern("inline");
 	
 	public static final StringShort PORT = Strings.intern("port");
+	public static final StringShort HOSTNAME = Strings.intern("hostname");;
+	public static final StringShort DID = Strings.intern("did");
+	public static final StringShort VENUES = Strings.intern("venues");
 	
 
 }

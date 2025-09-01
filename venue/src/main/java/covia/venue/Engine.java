@@ -1,6 +1,8 @@
 package covia.venue;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -9,6 +11,9 @@ import java.util.Random;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.core.crypto.AKeyPair;
+import convex.core.crypto.Hashing;
+import convex.core.crypto.util.Multikey;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -22,7 +27,6 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
-import convex.core.json.JSONReader;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.core.util.JSONUtils;
@@ -34,6 +38,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.adapter.GridAdapter;
 import covia.adapter.HTTPAdapter;
+import covia.adapter.JVMAdapter;
 import covia.adapter.LangChainAdapter;
 import covia.adapter.Orchestrator;
 import covia.adapter.TestAdapter;
@@ -44,10 +49,6 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.storage.AStorage;
 import covia.venue.storage.MemoryStorage;
-import java.io.ByteArrayInputStream;
-import java.io.InputStream;
-import convex.core.crypto.Hashing;
-import covia.adapter.JVMAdapter;
 
 public class Engine {
 	
@@ -69,6 +70,8 @@ public class Engine {
 	protected final AMap<AString, ACell> config;
 
 	protected final AStore store;
+	
+	protected AKeyPair keyPair=AKeyPair.generate();
 	
 	/**
 	 * Storage instance for content associated with assets
@@ -465,10 +468,43 @@ public class Engine {
 	}
 
 	public DID getDID() {
-		// TODO Auto-generated method stub
-		return null;
+		return DID.fromString(getDIDString().toString());
+	}
+	
+	public AString getDIDString() {
+		AString s=RT.ensureString(config.get(Fields.DID));
+		if (s==null) {
+			s=Strings.intern("did:covia:local");
+		}
+		return s;
 	}
 
-	
+	public AMap<AString, ACell> getDIDDocument(String host) {
+		AString did=RT.ensureString(config.get(Fields.DID));;
+		
+		AString key=Multikey.encodePublicKey(keyPair.getAccountKey());
+		AString keyID=Strings.create(did+"#"+key);
+		if (did==null) {
+			did=Strings.create("did:key:"+key);
+		}
+		AVector<AString> keyVector=Vectors.create(keyID);
+		
+		AMap<AString,ACell> ddo=Maps.of(
+			"id", did,
+			"@context", "https://www.w3.org/ns/did/v1",
+			"verificationMethod",Vectors.of(Maps.of(
+						"id",keyID,
+						"type","Multikey",
+						"controller",did,
+						"publicKeyMultibase",key
+					)),
+			"authentication",keyVector,
+			"assertionMethod",keyVector,
+			"capabilityDelegation",keyVector,
+			"capabilityInvocation",keyVector
+		);
+		
+		return ddo;
+	}
 	
 }

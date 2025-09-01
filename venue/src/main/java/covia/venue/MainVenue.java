@@ -14,9 +14,13 @@ import ch.qos.logback.core.joran.spi.JoranException;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
+import convex.core.data.Maps;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.FileUtils;
 import convex.core.util.JSONUtils;
+import covia.api.Fields;
 import covia.venue.server.VenueServer;
 
 public class MainVenue {
@@ -32,11 +36,18 @@ public class MainVenue {
 			config =(AMap<AString, ACell>) JSONUtils.parseJSON5(FileUtils.loadFileAsString(args[0]));
 		} catch (Exception ex) {
 			log.warn("Error loading config, defaulting to test setup",ex);
+			config = Maps.of(
+				Fields.VENUES,Vectors.of(
+						Maps.of(
+								Fields.NAME,"Unconfigured Venue",
+								Fields.DID,"did:covia:local",
+								Fields.HOSTNAME,"localhost")));
 		}
 		
-		
-		VenueServer server=VenueServer.launch(config);
-
+		AVector<AMap<AString,ACell>> venues=RT.getIn(config, Fields.VENUES);
+		for (AMap<AString,ACell> venueConfig: venues) {
+			VenueServer server=VenueServer.launch(venueConfig);
+		}
 	}
 	
 	private static void configureLogging(ACell config) throws JoranException, IOException {
