@@ -1,14 +1,10 @@
 package covia.venue.server;
 
-import static j2html.TagCreator.a;
-import static j2html.TagCreator.body;
-import static j2html.TagCreator.h1;
-import static j2html.TagCreator.head;
-import static j2html.TagCreator.html;
-import static j2html.TagCreator.link;
-import static j2html.TagCreator.p;
-import static j2html.TagCreator.title;
+import static j2html.TagCreator.*;
 
+import java.util.List;
+
+import j2html.tags.Text;
 import convex.core.util.Utils;
 import covia.venue.Engine;
 import io.javalin.Javalin;
@@ -36,9 +32,10 @@ public class CoviaWebApp  {
 				makeHeader("Covia Venue Server"),
 				body(
 					h1("Covia Venue Server"),
+					aside(makeLinks()).withStyle("float: right"),
 					p("Version: "+Utils.getVersion()),
 					p("Name: "+engine.getConfig().get(Fields.NAME)),
-					p(a("Swagger API").withHref("swagger")),
+					p(new Text("DID: "),code(engine.getDID().toString())),
 
 					p("This is the default web page for a Covia Venue server running the REST API")
 				)
@@ -88,5 +85,28 @@ public class CoviaWebApp  {
 		ctx.result(content.render());
 		ctx.header("Content-Type", "text/html");
 		ctx.status(200);
+	}
+	
+	static final List<String[]> LINKS = List.of(
+		sa("OpenAPI documentation: ","Swagger API" ,"/swagger"),
+		sa("Covia Documentation: ","Covia Docs" ,"https://docs.covia.ai"),
+		sa("Convex Documentation: ","Convex Docs" ,"https://docs.convex.world"),
+		sa("General information at the ","Covia Website", "https://covia.ai"),
+		sa("Community chat at the ","Covia Discord", "https://discord.com/invite/xfYGq4CT7v"),
+		sa("Join the open source development: ","Covia Dev", "https://github.com/covia-ai")
+	);
+	
+	private DomContent makeLinks() {
+		return article(
+			h4("Useful links: "),
+			each(LINKS,a->{
+				return div(join(a[0],a(a[1]).withHref(a[2])));
+			})
+		); //.withClass("grid");
+	}
+
+	// Silly helper function
+	private static String[] sa(String... strings) {
+		return strings;
 	}
 }

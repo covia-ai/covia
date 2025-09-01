@@ -47,6 +47,7 @@ import covia.api.Fields;
 import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.api.CoviaAPI;
 import covia.venue.storage.AStorage;
 import covia.venue.storage.MemoryStorage;
 
@@ -474,19 +475,17 @@ public class Engine {
 	public AString getDIDString() {
 		AString s=RT.ensureString(config.get(Fields.DID));
 		if (s==null) {
-			s=Strings.intern("did:covia:local");
+			AString key=Multikey.encodePublicKey(keyPair.getAccountKey());
+			s=Strings.create("did:key:"+key);
 		}
 		return s;
 	}
 
-	public AMap<AString, ACell> getDIDDocument(String host) {
-		AString did=RT.ensureString(config.get(Fields.DID));;
+	public AMap<AString, ACell> getDIDDocument(String host,String endpoint) {
+		AString did=getDIDString();
 		
 		AString key=Multikey.encodePublicKey(keyPair.getAccountKey());
 		AString keyID=Strings.create(did+"#"+key);
-		if (did==null) {
-			did=Strings.create("did:key:"+key);
-		}
 		AVector<AString> keyVector=Vectors.create(keyID);
 		
 		AMap<AString,ACell> ddo=Maps.of(
@@ -501,7 +500,12 @@ public class Engine {
 			"authentication",keyVector,
 			"assertionMethod",keyVector,
 			"capabilityDelegation",keyVector,
-			"capabilityInvocation",keyVector
+			"capabilityInvocation",keyVector,
+			"service",Vectors.of(
+					Maps.of(
+							"type",CoviaAPI.SERVICE_TYPE,
+							"serviceEndpoint",endpoint
+					))
 		);
 		
 		return ddo;

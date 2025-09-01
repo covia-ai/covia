@@ -59,7 +59,9 @@ public class CoviaAPI extends ACoviaAPI {
 	public static final String CANCEL_JOB = "cancelJob";	
 	public static final String DELETE_JOB = "deleteJob";
 
-	private static final String GET_JOB = "getJob";	
+	private static final String GET_JOB = "getJob";
+
+	public static final AString SERVICE_TYPE = Strings.intern("Covia.API.v1");	
 	
 	private final SseServer sseServer;
 	
@@ -518,7 +520,7 @@ public class CoviaAPI extends ACoviaAPI {
 		String did = "did:web:" + host;
 		
 		// Create a complete DID document structure
-		AMap<AString, ACell> didDocument = venue.getDIDDocument(host);
+		AMap<AString, ACell> didDocument = venue.getDIDDocument(host,getExternalBaseUrl(ctx,ROUTE));
 		
 		// Set content type to application/did+json
 		ctx.header("Content-Type", "application/did+json");
@@ -526,4 +528,66 @@ public class CoviaAPI extends ACoviaAPI {
 		// Return the DID document
 		buildResult(ctx, 200, didDocument);
 	}
+	
+	/**
+	 * Utility method to construct the external base URL
+	 * @param ctx Javalin context
+	 * @param basePath
+	 * @return
+	 */
+	public static String getExternalBaseUrl(Context ctx, String basePath) {
+        // Try to get information from forwarded headers
+        String proto = ctx.header("X-Forwarded-Proto");
+        String host = ctx.header("X-Forwarded-Host");
+        String port = ctx.header("X-Forwarded-Port");
+        String prefix = ctx.header("X-Forwarded-Prefix");
+
+        // Fallback to local request info if headers are missing
+        if (proto == null) {
+            proto = ctx.scheme(); // e.g., "http" or "https"
+        }
+        if (host == null) {
+            host = ctx.host(); // e.g., "localhost:8080" or "my-server.org"
+        }
+
+        // Build the base URL
+        StringBuilder baseUrl = new StringBuilder();
+
+        // Append protocol
+        baseUrl.append(proto).append("://");
+
+        // Append host
+        baseUrl.append(host);
+
+        // Append port if non-standard and not already included in host
+        if (port != null && !host.contains(":")) {
+            if (!("https".equalsIgnoreCase(proto) && "443".equals(port)) &&
+                !("http".equalsIgnoreCase(proto) && "80".equals(port))) {
+                baseUrl.append(":").append(port);
+            }
+        }
+
+        // Append base path (e.g., "/api/v1")
+        if (basePath != null && !basePath.isEmpty()) {
+            // Ensure basePath starts with a slash and doesn't end with one
+            String cleanedBasePath = basePath.startsWith("/") ? basePath : "/" + basePath;
+            cleanedBasePath = cleanedBasePath.endsWith("/") ? 
+                              cleanedBasePath.substring(0, cleanedBasePath.length() - 1) : 
+                              cleanedBasePath;
+            baseUrl.append(cleanedBasePath);
+        }
+
+        // Append prefix if provided by proxy
+        if (prefix != null && !prefix.isEmpty()) {
+            // Ensure prefix starts with a slash and doesn't end with one
+            prefix = prefix.startsWith("/") ? prefix : "/" + prefix;
+            prefix = prefix.endsWith("/") ? prefix.substring(0, prefix.length() - 1) : prefix;
+            // Only append prefix if it's not already part of the basePath
+            if (!baseUrl.toString().endsWith(prefix)) {
+                baseUrl.append(prefix);
+            }
+        }
+
+        return baseUrl.toString();
+    }
 }

@@ -36,12 +36,14 @@ public class MainVenue {
 			config =(AMap<AString, ACell>) JSONUtils.parseJSON5(FileUtils.loadFileAsString(args[0]));
 		} catch (Exception ex) {
 			log.warn("Error loading config, defaulting to test setup",ex);
+		}
+		
+		if (config==null) {
 			config = Maps.of(
-				Fields.VENUES,Vectors.of(
-						Maps.of(
-								Fields.NAME,"Unconfigured Venue",
-								Fields.DID,"did:covia:local",
-								Fields.HOSTNAME,"localhost")));
+					Fields.VENUES,Vectors.of(
+							Maps.of(
+									Fields.NAME,"Unconfigured Venue",
+									Fields.HOSTNAME,"localhost")));
 		}
 		
 		AVector<AMap<AString,ACell>> venues=RT.getIn(config, Fields.VENUES);
