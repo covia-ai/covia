@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.net.URI;
@@ -72,7 +73,7 @@ public class MCPTest {
 	@Test public void testToolsList() {
 		ListToolsResult lr=mcp.listTools();
 		List<Tool> tools = lr.tools();
-		assertEquals(0,tools.size());
+		assertTrue(tools.size()>0);
 	}
 
 	/**

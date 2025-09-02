@@ -1,5 +1,7 @@
 package covia.venue.api;
 
+import java.io.IOException;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,9 +15,9 @@ import convex.core.data.AVector;
 import convex.core.data.MapEntry;
 import convex.core.data.Maps;
 import convex.core.data.Vectors;
+import convex.core.exceptions.ParseException;
 import convex.core.json.JSONReader;
 import convex.core.lang.RT;
-import convex.core.util.JSONUtils;
 import convex.core.util.Utils;
 import covia.api.Fields;
 import covia.venue.Engine;
@@ -89,7 +91,13 @@ public class MCP extends ACoviaAPI {
 							content = {
 								@OpenApiContent(
 										type = "application/json", 
-										from = Object.class) })
+										from = Object.class,
+										exampleObjects = {
+											@OpenApiExampleProperty(name = "jsonrpc", value = "2.0"),
+											@OpenApiExampleProperty(name = "result", value = "{}"),
+											@OpenApiExampleProperty(name = "id", value = "1")
+										}
+										) })
 					})	
 	protected void postMCP(Context ctx) { 
 		if (LOG_MCP) {
@@ -99,17 +107,16 @@ public class MCP extends ACoviaAPI {
 		
 		try {
 			// Parse JSON-RPC request
-			String requestBody = ctx.body();
-			if (requestBody == null || requestBody.isEmpty()) {
-				ctx.status(200);
-				ctx.result("{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32700, \"message\": \"Invalid Request\"}, \"id\": null}");
+			ACell req=JSONReader.read(ctx.bodyInputStream());
+			if (req == null) {
+				buildResult(ctx,protocolError(-32700,"Invalid JSON (empty)"));
 				return;
 			}
 			
-			AMap<AString,ACell> req=RT.ensureMap( JSONUtils.parse(requestBody));
 			
-			ACell id=req.getIn(Fields.ID);
-			AString methodAS=(AString) req.getIn(Fields.METHOD);
+			
+			ACell id=RT.getIn(req,Fields.ID);
+			AString methodAS=(AString) RT.getIn(req,Fields.METHOD);
 			String method=methodAS.toString().trim();
 			
 			AMap<AString,ACell> resp;
@@ -135,17 +142,28 @@ public class MCP extends ACoviaAPI {
 
 			// For now, return a simple JSON response
 			buildResult(ctx,resp);
-		} catch (ClassCastException | NullPointerException e) {
+		} catch (ParseException | ClassCastException | NullPointerException | IOException e) {
 			buildResult(ctx,protocolError(-32600,"Invalid JSON request"));
 		} 
 	}
 	
+	/**
+	 * Construct a 'successful' JSON-RPC result response
+	 * @param result Result value
+	 * @return
+	 */
 	private AMap<AString, ACell> protocolResult(AHashMap<ACell, ACell> result) {
 		return BASE_RESPONSE.assoc(Fields.RESULT, result);
 	}
 
 	private static final AMap<AString, ACell> BASE_RESPONSE=Maps.of("jsonrpc", "2.0");
 	
+	/**
+	 * Construct a JSON-RPC error response
+	 * @param rpcErrorCode JSON-RPC error code, see: https://www.jsonrpc.org/specification#error_object
+	 * @param errorMEssage Error message string
+	 * @return
+	 */
 	private AMap<AString, ACell> protocolError(int rpcErrorCode, String errorMessage) {
 		return BASE_RESPONSE.assoc(Fields.ERROR, Maps.of(
 				"code",rpcErrorCode,
@@ -171,12 +189,7 @@ public class MCP extends ACoviaAPI {
 			// ignore this one.
 		}
 		
-		return Maps.of(
-				"jsonrpc", "2.0",
-				"result",Maps.of(
-					"tools",toolsVector
-				)
-		);
+		return protocolResult(Maps.of("tools",toolsVector));
 	}
 
 	private AMap<AString,ACell> checkTool(AMap<AString, ACell> meta) {
@@ -203,25 +216,27 @@ public class MCP extends ACoviaAPI {
 		ctx.status(405); // not allowed. MUST return this if SSE not supported
 	}
 	
+	private ACell WELL_KNOWN=JSONReader.read("""
+			{	
+			"mcp_version": "1.0",
+			"server_url": "http:localhost:8080/mcp",
+			"description": "MCP server for Covia Venue",
+			"tools_endpoint": "/mcp",
+			"endpoint": {"path":"/map","transport":"streamable-http"},
+			"auth": {
+				"type": "oauth2",
+				"authorization_endpoint": null
+			}	
+		}
+""");
+	
 	@OpenApi(path = "/.well-known/mcp", 
 			methods = HttpMethod.GET, 
 			tags = { "MCP"},
 			summary = "Get MCP server capabilities", 
 			operationId = "mcpWellKnown")	
 	protected void getMCPWellKnown(Context ctx) { 
-		buildResult(ctx,JSONReader.read("""
-				{	
-					"mcp_version": "1.0",
-					"server_url": "http:localhost:8080/mcp",
-					"description": "MCP server for Covia Venue",
-					"tools_endpoint": "/mcp",
-					"endpoint": {"path":"/map","transport":"streamable-http"},
-					"auth": {
-						"type": "oauth2",
-						"authorization_endpoint": null
-					}	
-				}
-		"""));
+		buildResult(ctx,WELL_KNOWN);
 	}
 
 }

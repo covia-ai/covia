@@ -30,6 +30,7 @@
 					"description": "Length of the decoded result"
 				}
 			}
-		}
+		},
+		"mcpToolName":"url-decode"
 	}
 } 
