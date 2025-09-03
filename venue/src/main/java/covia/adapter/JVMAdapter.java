@@ -24,6 +24,13 @@ public class JVMAdapter extends AAdapter {
 	}
 	
 	@Override
+	public String getDescription() {
+		return "Provides access to utility function executed on the Java Virtual Machine. " +
+			   "Supports string concatenation, URL encoding/decoding, and other common JVM operations. " +
+			   "Ideal for data processing, text manipulation, and integration with Java-based systems and libraries.";
+	}
+	
+	@Override
 	protected void installAssets() {
 		installAsset("/adapters/jvm/stringConcat.json");
 		installAsset("/adapters/jvm/urlEncode.json");

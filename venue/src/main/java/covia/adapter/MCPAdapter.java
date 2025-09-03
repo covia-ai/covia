@@ -15,6 +15,13 @@ public class MCPAdapter extends AAdapter {
 	}
 	
 	@Override
+	public String getDescription() {
+		return "A Model Context Protocol (MCP) adapter that enables seamless integration with MCP-compatible AI models and tools. " +
+			   "Provides standardised communication protocols for AI agents to interact with external systems and services. " +
+			   "Essential for building sophisticated AI workflows and connecting with modern AI development ecosystems.";
+	}
+	
+	@Override
 	protected void installAssets() {
 		// installAsset("/adapters/jvm/stringConcat.json", null);
 		

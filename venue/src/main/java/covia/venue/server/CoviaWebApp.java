@@ -51,6 +51,7 @@ public class CoviaWebApp  {
 		javalin.get("/404.html", this::missingPage);
 		javalin.get("/status", this::statusPage);
 		javalin.get("/adapters", this::adaptersPage);
+		javalin.get("/adapters/{name}", this::adapterDetailPage);
 		javalin.get("/llms.txt",this::llmsTxt);
 		javalin.get("/sitemap.xml",this::siteMap);
 
@@ -65,6 +66,11 @@ public class CoviaWebApp  {
 					p("Version: "+Utils.getVersion()),
 					p("Name: "+engine.getConfig().get(Fields.NAME)),
 					p(new Text("DID: "),code(engine.getDID().toString())),
+					p(
+						new Text("Registered adapters: "+engine.getAdapterNames().size()+" ("),
+						a("view details").withHref("/adapters"),
+						new Text(")")
+					),
 
 					p("This is the default web page for a Covia Venue server running the REST API")
 				)
@@ -120,6 +126,42 @@ public class CoviaWebApp  {
 					p("The following adapters are currently registered in this Covia venue:"),
 					buildAdaptersTable(),
 					p(a("Back to index").withHref("/index.html"))
+				)
+			)
+		);
+	}
+	
+	public void adapterDetailPage(Context ctx) {
+		String adapterName = ctx.pathParam("name");
+		var adapter = engine.getAdapter(adapterName);
+		
+		if (adapter == null) {
+			// Adapter not found, redirect to 404
+			ctx.redirect("/404.html");
+			return;
+		}
+		
+		standardPage(ctx,html(
+				makeHeader("Adapter: " + adapterName),
+				body(
+					h1("Adapter Details: " + adapterName),
+					div(
+						h4("Description"),
+						p(adapter.getDescription())
+					),
+					div(
+						h4("Basic Information"),
+						table(
+							tr(td("Name:"), td(adapterName)),
+							tr(td("Class:"), td(adapter.getClass().getName())),
+							tr(td("Status:"), td("Active"))
+						).withClass("table")
+					),
+					div(
+						h4("Navigation"),
+						p(a("Back to all adapters").withHref("/adapters")),
+						p(a("Back to index").withHref("/index.html"))
+					)
 				)
 			)
 		);
@@ -207,6 +249,7 @@ public class CoviaWebApp  {
 				tr(
 					th("Adapter Name"),
 					th("Class"),
+					th("Description"),
 					th("Status")
 				)
 			),
@@ -214,8 +257,9 @@ public class CoviaWebApp  {
 				each(engine.getAdapterNames(), adapterName -> {
 					var adapter = engine.getAdapter(adapterName);
 					return tr(
-						td(adapterName),
+						td(a(adapterName).withHref("/adapters/" + adapterName)),
 						td(adapter.getClass().getSimpleName()),
+						td(adapter.getDescription()),
 						td("Active")
 					);
 				})

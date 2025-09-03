@@ -26,6 +26,13 @@ public class LangChainAdapter extends AAdapter {
 	public String getName() {
 		return "langchain";
 	}
+	
+	@Override
+	public String getDescription() {
+		return "Connects to LangChain for advanced language model interactions. " +
+			   "Provides seamless access to local and remote AI models with configurable parameters and system prompts. " +
+			   "Ideal for natural language processing, AI-powered conversations, and intelligent content generation workflows.";
+	}
 
 	ChatModel model = OllamaChatModel.builder()
             .baseUrl("http://localhost:11434")

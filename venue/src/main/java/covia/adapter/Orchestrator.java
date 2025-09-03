@@ -28,6 +28,13 @@ public class Orchestrator extends AAdapter {
 	public String getName() {
 		return "orchestrator";
 	}
+	
+	@Override
+	public String getDescription() {
+		return "Enables complex multi-step orchestration operations with dependency management and parallel execution. " +
+			   "Supports sophisticated job orchestration with step dependencies, result aggregation, and error handling across multiple operations. " +
+			   "Perfect for building complex AI workflows, data processing pipelines, and multi-service integrations with intelligent task coordination.";
+	}
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {

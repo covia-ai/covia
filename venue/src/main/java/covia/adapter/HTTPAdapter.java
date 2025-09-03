@@ -37,6 +37,13 @@ public class HTTPAdapter extends AAdapter {
 		return "http";
 	}
 	
+	@Override
+	public String getDescription() {
+		return "HTTP client enables seamless web API integration and external service communication. " +
+			   "Supports GET, POST, and other HTTP methods with custom headers and request bodies. " +
+			   "Perfect for integrating with REST APIs, web services, and external data sources like Google Search and AI model APIs.";
+	}
+	
 	@Override 
 	protected void installAssets() {
 		String BASE = "/asset-examples/";

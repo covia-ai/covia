@@ -13,6 +13,13 @@ public class GridAdapter extends AAdapter {
 	public String getName() {
 		return "grid";
 	}
+	
+	@Override
+	public String getDescription() {
+		return "Enables distributed processing and resource sharing across the Covia network via grid operations. " +
+			   "Provides access to remote venues, distributed job execution, and collaborative computing capabilities. " +
+			   "Perfect for scaling computational tasks, leveraging distributed resources, and building resilient, distributed AI applications.";
+	}
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {

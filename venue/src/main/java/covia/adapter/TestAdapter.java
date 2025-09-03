@@ -25,6 +25,13 @@ public class TestAdapter extends AAdapter {
     public String getName() {
         return "test";
     }
+    
+    @Override
+    public String getDescription() {
+        return "Provides various test operations for development and debugging. " +
+               "Supports echo operations, random data generation, error simulation, delay operations, and never-completing tasks. " +
+               "Perfect for testing async behavior, error handling, and orchestration workflows in the Covia platform.";
+    }
 
     @Override
     public CompletableFuture<ACell> invokeFuture(String operation, ACell meta,ACell input) {

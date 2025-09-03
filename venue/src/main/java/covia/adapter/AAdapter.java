@@ -63,11 +63,19 @@ public abstract class AAdapter {
 		engine.storeAsset(metaString, null);
     };
 
-	/**
+	    /**
      * Returns the name of this adapter.
      * @return The adapter name (e.g. "mcp")
      */
     public abstract String getName();
+    
+    /**
+     * Returns a description of what this adapter is used for.
+     * This should be a compelling, LLM-friendly description that explains
+     * the adapter's purpose and capabilities.
+     * @return A description of the adapter's functionality
+     */
+    public abstract String getDescription();
     
     /**
      * Invoke an operation with the given input, returning a future for the result.
