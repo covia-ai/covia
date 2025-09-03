@@ -91,6 +91,90 @@ public class ToolPage {
                         )
                     ),
                     
+                    Layout.styledBox(
+                        h4("MCP Tool Usage Examples"),
+                        p("This tool can be called via the MCP (Model Context Protocol) endpoint. Here are examples of how to use it:"),
+                        
+                        div(
+                            h5("JSON-RPC Call Example:"),
+                            pre(code("{\n" +
+                                "  \"jsonrpc\": \"2.0\",\n" +
+                                "  \"id\": 1,\n" +
+                                "  \"method\": \"tools/call\",\n" +
+                                "  \"params\": {\n" +
+                                "    \"name\": \"" + (toolName != null ? toolName.toString() : name.toString()) + "\",\n" +
+                                "    \"arguments\": {\n" +
+                                "      \"input\": \"your input here\"\n" +
+                                "    }\n" +
+                                "  }\n" +
+                                "}"))
+                        ),
+                        
+                        div(
+                            h5("cURL Example:"),
+                            pre(code("curl -X POST http://localhost:8080/mcp \\\\\n" +
+                                "  -H \"Content-Type: application/json\" \\\\\n" +
+                                "  -d '{\n" +
+                                "    \"jsonrpc\": \"2.0\",\n" +
+                                "    \"id\": 1,\n" +
+                                "    \"method\": \"tools/call\",\n" +
+                                "    \"params\": {\n" +
+                                "      \"name\": \"" + (toolName != null ? toolName.toString() : name.toString()) + "\",\n" +
+                                "      \"arguments\": {\n" +
+                                "        \"input\": \"your input here\"\n" +
+                                "      }\n" +
+                                "    }\n" +
+                                "  }'"))
+                        ),
+                        
+                        div(
+                            h5("Python Example:"),
+                            pre(code("import requests\n" +
+                                "import json\n\n" +
+                                "url = \"http://localhost:8080/mcp\"\n" +
+                                "payload = {\n" +
+                                "    \"jsonrpc\": \"2.0\",\n" +
+                                "    \"id\": 1,\n" +
+                                "    \"method\": \"tools/call\",\n" +
+                                "    \"params\": {\n" +
+                                "        \"name\": \"" + (toolName != null ? toolName.toString() : name.toString()) + "\",\n" +
+                                "        \"arguments\": {\n" +
+                                "            \"input\": \"your input here\"\n" +
+                                "        }\n" +
+                                "    }\n" +
+                                "}\n\n" +
+                                "response = requests.post(url, json=payload)\n" +
+                                "result = response.json()\n" +
+                                "print(result)"))
+                        ),
+                        
+                        div(
+                            h5("JavaScript/Node.js Example:"),
+                            pre(code("const fetch = require('node-fetch');\n\n" +
+                                "const url = 'http://localhost:8080/mcp';\n" +
+                                "const payload = {\n" +
+                                "    jsonrpc: '2.0',\n" +
+                                "    id: 1,\n" +
+                                "    method: 'tools/call',\n" +
+                                "    params: {\n" +
+                                "        name: '" + (toolName != null ? toolName.toString() : name.toString()) + "',\n" +
+                                "        arguments: {\n" +
+                                "            input: 'your input here'\n" +
+                                "        }\n" +
+                                "    }\n" +
+                                "};\n\n" +
+                                "fetch(url, {\n" +
+                                "    method: 'POST',\n" +
+                                "    headers: {\n" +
+                                "        'Content-Type': 'application/json'\n" +
+                                "    },\n" +
+                                "    body: JSON.stringify(payload)\n" +
+                                "})\n" +
+                                ".then(response => response.json())\n" +
+                                ".then(data => console.log(data));"))
+                        )
+                    ),
+                    
                     div(
                         h4("Asset Metadata"),
                         pre(code(metaString.toString()))
