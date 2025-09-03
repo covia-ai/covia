@@ -17,6 +17,7 @@ import static j2html.TagCreator.li;
 import static j2html.TagCreator.link;
 import static j2html.TagCreator.meta;
 import static j2html.TagCreator.p;
+import static j2html.TagCreator.pre;
 import static j2html.TagCreator.table;
 import static j2html.TagCreator.tbody;
 import static j2html.TagCreator.td;
@@ -28,6 +29,7 @@ import static j2html.TagCreator.tag;
 import static j2html.TagCreator.title;
 
 import java.text.SimpleDateFormat;
+import java.time.Instant;
 import java.util.Date;
 import java.util.List;
 
@@ -53,6 +55,7 @@ public class CoviaWebApp  {
 		javalin.get("/", this::indexPage);
 		javalin.get("/404.html", this::missingPage);
 		javalin.get("/status", this::statusPage);
+		javalin.get("/config", this::configPage);
 		javalin.get("/adapters", this::adaptersPage);
 		javalin.get("/adapters/{name}", this::adapterDetailPage);
 		javalin.get("/llms.txt",this::llmsTxt);
@@ -67,37 +70,24 @@ public class CoviaWebApp  {
 				body(
 					h1("Covia AI: Decentralised AI grid"),
 					aside(makeLinks()).withStyle("float: right"),
-					p("Version: "+Utils.getVersion()),
-					p("Name: "+engine.getConfig().get(Fields.NAME)),
-					p(new Text("DID: "),code(engine.getDID().toString())),
-					p(
-						new Text("Registered adapters: "+engine.getAdapterNames().size()+" ("),
-						a("view details").withHref("/adapters"),
-						new Text(")")
-					),
+					
+					// Venue overview in a styled box
+					styledBox(div(
+						h4("Venue Overview"),
+						p("Version: "+Utils.getVersion()),
+						p("Name: "+engine.getConfig().get(Fields.NAME)),
+						p(new Text("DID: "),code(engine.getDID().toString())),
+						p(
+							new Text("Registered adapters: "+engine.getAdapterNames().size()+" ("),
+							a("view details").withHref("/adapters"),
+							new Text(")")
+						)
+					)),
 					
 					// Show MCP information only if MCP is configured
-					engine.getConfig().get(Fields.MCP) != null ? div(
-						h4("MCP Server Information"),
-						p("This venue provides Model Context Protocol (MCP) server capabilities for AI agent integration."),
-						div(
-							h5("Available MCP Endpoints:"),
-							ul(
-								li(new Text("MCP JSON-RPC Endpoint: "), code(BASE_URL+ "/mcp")),
-								li(new Text("MCP Server Discovery: "), code(BASE_URL+"/.well-known/mcp"))
-							)
-						),
-						div(
-							h5("MCP Integration:"),
-							p("Connect AI agents and tools using the Model Context Protocol. The MCP server exposes all registered adapters as tools that can be called by compatible AI systems."),
-							p(
-								new Text("For more information about MCP, visit: "),
-								a("Model Context Protocol Documentation").withHref("https://modelcontextprotocol.io").withTarget("_blank")
-							)
-						)
-					) : div(),
+					buildMCPContent(BASE_URL),
 
-					p("This is the default web page for a Covia Venue server running the REST API")
+					p("Covia Venue server - summary page (generated "+new Date()+")")
 				)
 			)
 		);
@@ -138,6 +128,26 @@ public class CoviaWebApp  {
 					h1("Covia Venue Status"),
 					p("Version: "+Utils.getVersion()),
 					p("This is a covia status page. All looks OK.")
+				)
+			)
+		);
+	}
+	
+	public void configPage(Context ctx) {
+		standardPage(ctx,html(
+				makeHeader("Engine Configuration"),
+				body(
+					h1("Engine Configuration"),
+					p("Current configuration for this Covia venue engine:"),
+					div(
+						h4("Configuration Details"),
+						pre(code(engine.getConfig().toString())).withStyle("background-color: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x: auto;")
+					),
+					div(
+						h4("Navigation"),
+						p(a("Back to index").withHref("/index.html")),
+						p(a("View adapters").withHref("/adapters"))
+					)
 				)
 			)
 		);
@@ -201,6 +211,7 @@ public class CoviaWebApp  {
 	static final List<String[]> BASE_LINKS = List.of(
 		sa("OpenAPI documentation","Swagger API" ,"/swagger"),
 		sa("Registered adapters","Adapters" ,"/adapters"),
+		sa("Engine configuration","Config" ,"/config"),
 		sa("Covia Documentation","Covia Docs" ,"https://docs.covia.ai"),
 		sa("Convex Documentation","Convex Docs" ,"https://docs.convex.world"),
 		sa("General information","Covia Website", "https://covia.ai"),
@@ -269,6 +280,53 @@ public class CoviaWebApp  {
 		ctx.result(sb.toString());
 		ctx.contentType("text/plain");
 		ctx.status(200);
+	}
+	
+	/**
+	 * Creates a styled box component with basic inline styling
+	 * @param content The content to wrap in the styled box
+	 * @return DomContent containing the styled box
+	 */
+	private DomContent styledBox(DomContent content) {
+		return div(content).withStyle(
+			"border: 1px solid #ddd; " +
+			"border-radius: 8px; " +
+			"padding: 1.5rem; " +
+			"margin: 1rem 0; " +
+			"background-color: #091929; " +
+			"box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
+		);
+	}
+	
+	/**
+	 * Builds MCP server information content if MCP is configured
+	 * @param baseUrl The base URL for the server
+	 * @return DomContent containing MCP information or empty div if not configured
+	 */
+	private DomContent buildMCPContent(String baseUrl) {
+		if (engine.getConfig().get(Fields.MCP) == null) {
+			return styledBox(div(p("MCP not available")));
+		}
+		
+		return styledBox(div(
+			h4("MCP Server Information"),
+			p("This venue provides Model Context Protocol (MCP) server capabilities for AI agent integration."),
+			div(
+				h5("Available MCP Endpoints:"),
+				ul(
+					li(new Text("MCP JSON-RPC Endpoint: "), code(baseUrl + "/mcp")),
+					li(new Text("MCP Server Discovery: "), code(baseUrl + "/.well-known/mcp"))
+				)
+			),
+			div(
+				h5("MCP Integration:"),
+				p("You can connect AI agents to this grid venue using the Model Context Protocol. The MCP server exposes operations from registered adapters as tools that can be called by compatible AI systems."),
+				p(
+					new Text("For more information about MCP, visit: "),
+					a("Model Context Protocol").withHref("https://modelcontextprotocol.io").withTarget("_blank")
+				)
+			)
+		));
 	}
 	
 	/**
