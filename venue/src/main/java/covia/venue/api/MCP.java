@@ -46,15 +46,18 @@ public class MCP extends ACoviaAPI {
 	private boolean LOG_MCP=false;
 
 	
-	public MCP(Engine venue) {
+	public MCP(Engine venue, AMap<AString, ACell> mcpConfig) {
 		super(venue);
 		this.sseServer=new SseServer(venue);
 		// See: https://zazencodes.com/blog/mcp-server-naming-conventions
-		SERVER_INFO=Maps.of(
+		AMap<AString,ACell> serverInfo = RT.getIn(mcpConfig, "serverInfo");
+		
+		if (serverInfo==null) serverInfo=Maps.of(
 			"name", "covia-grid-mcp",
 			"title", venue.getName(),
 			"version", Utils.getVersion()
 		);
+		SERVER_INFO=serverInfo;
 	}
 
 	

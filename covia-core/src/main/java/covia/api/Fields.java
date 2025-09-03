@@ -62,6 +62,7 @@ public class Fields {
 	public static final StringShort MCP_TOOLNAME = Strings.intern("mcpToolName");
 	public static final StringShort INPUT_SCHEMA = Strings.intern("inputSchema");
 	public static final StringShort TITLE = Strings.intern("title");
+	public static final StringShort MCP = Strings.intern("mcp");
 	
 
 }

@@ -51,7 +51,11 @@ public class VenueServer {
 		engine=Engine.createTemp(config);
 		webApp=new CoviaWebApp(engine);
 		api=new CoviaAPI(engine);
-		mcp=new MCP(engine);
+		
+		AMap<AString,ACell> mcpConfig=RT.getIn(config, Fields.MCP);
+		if (RT.bool(mcpConfig)) {
+			mcp=new MCP(engine,mcpConfig);
+		}
 	}
 
 	/**
@@ -64,7 +68,8 @@ public class VenueServer {
 			config=Maps.of(
 					Fields.NAME,"Test Venue",
 					Fields.DESCRIPTION,"Unconfigured test venue",
-					Strings.create("port"),null // This uses default (find a port)
+					Strings.create("port"),null, // This uses default (find a port)
+					Fields.MCP,Maps.of()
 			);
 		}
 		
@@ -108,7 +113,7 @@ public class VenueServer {
 	private void addAPIRoutes(Javalin javalin) {	
 		api.addRoutes(javalin);
 		webApp.addRoutes(javalin);
-		mcp.addRoutes(javalin);
+		if (mcp!=null) mcp.addRoutes(javalin);
 	}
 	
 

@@ -4,6 +4,7 @@ import java.net.URI;
 
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import covia.api.Fields;
 import covia.grid.client.VenueHTTP;
 import covia.venue.server.VenueServer;
 
@@ -17,7 +18,9 @@ public class TestServer {
 	public static final VenueHTTP COVIA;
 	
 	static {
-		SERVER=VenueServer.launch(Maps.of(Strings.create("port"),PORT));
+		SERVER=VenueServer.launch(Maps.of(
+				Strings.create("port"),PORT,
+				Fields.MCP,Maps.of()));
 		ENGINE=SERVER.getEngine();
 
 
