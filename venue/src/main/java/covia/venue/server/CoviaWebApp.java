@@ -2,7 +2,6 @@ package covia.venue.server;
 
 import static j2html.TagCreator.a;
 import static j2html.TagCreator.article;
-import static j2html.TagCreator.aside;
 import static j2html.TagCreator.body;
 import static j2html.TagCreator.code;
 import static j2html.TagCreator.div;
@@ -29,7 +28,6 @@ import static j2html.TagCreator.tag;
 import static j2html.TagCreator.title;
 
 import java.text.SimpleDateFormat;
-import java.time.Instant;
 import java.util.Date;
 import java.util.List;
 
@@ -69,25 +67,34 @@ public class CoviaWebApp  {
 				makeHeader("Covia AI: Decentralised AI grid"),
 				body(
 					h1("Covia AI: Decentralised AI grid"),
-					aside(makeLinks()).withStyle("float: right"),
-					
-					// Venue overview in a styled box
-					styledBox(div(
-						h4("Venue Overview"),
-						p("Version: "+Utils.getVersion()),
-						p("Name: "+engine.getConfig().get(Fields.NAME)),
-						p(new Text("DID: "),code(engine.getDID().toString())),
-						p(
-							new Text("Registered adapters: "+engine.getAdapterNames().size()+" ("),
-							a("view details").withHref("/adapters"),
-							new Text(")")
-						)
-					)),
-					
-					// Show MCP information only if MCP is configured
-					buildMCPContent(BASE_URL),
+					div(
+						div(
+							// Main content area (70% width)
+							styledBox(div(
+								h4("Venue Overview"),
+								p("Version: "+Utils.getVersion()),
+								p("Name: "+engine.getConfig().get(Fields.NAME)),
+								p(new Text("DID: "),code(engine.getDID().toString())),
+								p(
+									new Text("Registered adapters: "+engine.getAdapterNames().size()+" ("),
+									a("view details").withHref("/adapters"),
+									new Text(")")
+								)
+							)),
+							
+							// Show MCP information only if MCP is configured
+							buildMCPContent(BASE_URL),
 
-					p("Covia Venue server - summary page (generated "+new Date()+")")
+							p("Covia Venue server - summary page (generated "+new Date()+")")
+						).withStyle("width: 70%; float: left; padding-right: 1rem;"),
+						
+						div(
+							// Links sidebar (30% width)
+							makeLinks()
+						).withStyle("width: 30%; float: right;"),
+						
+						div().withStyle("clear: both;") // Clearfix
+					)
 				)
 			)
 		);
