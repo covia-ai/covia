@@ -2,14 +2,18 @@ package covia.venue.server;
 
 import static j2html.TagCreator.*;
 
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.List;
 
 import j2html.tags.Text;
+import j2html.tags.specialized.*;
 import convex.core.util.Utils;
 import covia.venue.Engine;
 import covia.venue.api.CoviaAPI;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
+import j2html.tags.ContainerTag;
 import j2html.tags.DomContent;
 import covia.api.Fields;
 
@@ -27,6 +31,7 @@ public class CoviaWebApp  {
 		javalin.get("/404.html", this::missingPage);
 		javalin.get("/status", this::statusPage);
 		javalin.get("/llms.txt",this::llmsTxt);
+		javalin.get("/sitemap.xml",this::siteMap);
 
 	}
 	
@@ -113,6 +118,19 @@ public class CoviaWebApp  {
 	// Silly helper function
 	private static String[] sa(String... strings) {
 		return strings;
+	}
+	
+	protected void siteMap(Context ctx) { 
+		DomContent content= tag("urlset").with(
+				tag("url").with(
+						tag("loc").withText(CoviaAPI.getExternalBaseUrl(ctx, "")+"/"),
+						tag("lastmod").withText(new SimpleDateFormat("yyyy-MM-dd").format(new Date()))
+				)
+		).attr("xmlns", "http://www.sitemaps.org/schemas/sitemap/0.9");
+				
+		ctx.contentType("application/xml");
+		ctx.result("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"+content.render());
+		ctx.status(200);
 	}
 	
 	protected void llmsTxt(Context ctx) { 
