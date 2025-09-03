@@ -43,7 +43,8 @@ public class MainVenue {
 					Fields.VENUES,Vectors.of(
 							Maps.of(
 									Fields.NAME,"Unconfigured Venue",
-									Fields.HOSTNAME,"localhost")));
+									Fields.HOSTNAME,"localhost",
+									Fields.MCP,Maps.of())));
 		}
 		
 		AVector<AMap<AString,ACell>> venues=RT.getIn(config, Fields.VENUES);

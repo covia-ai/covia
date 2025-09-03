@@ -9,9 +9,11 @@ import static j2html.TagCreator.div;
 import static j2html.TagCreator.each;
 import static j2html.TagCreator.h1;
 import static j2html.TagCreator.h4;
+import static j2html.TagCreator.h5;
 import static j2html.TagCreator.head;
 import static j2html.TagCreator.html;
 import static j2html.TagCreator.join;
+import static j2html.TagCreator.li;
 import static j2html.TagCreator.link;
 import static j2html.TagCreator.meta;
 import static j2html.TagCreator.p;
@@ -21,6 +23,7 @@ import static j2html.TagCreator.td;
 import static j2html.TagCreator.th;
 import static j2html.TagCreator.thead;
 import static j2html.TagCreator.tr;
+import static j2html.TagCreator.ul;
 import static j2html.TagCreator.tag;
 import static j2html.TagCreator.title;
 
@@ -58,6 +61,7 @@ public class CoviaWebApp  {
 	}
 	
 	private void indexPage(Context ctx) {
+		String BASE_URL=CoviaAPI.getExternalBaseUrl(ctx, "");
 		standardPage(ctx,html(
 				makeHeader("Covia AI: Decentralised AI grid"),
 				body(
@@ -71,6 +75,27 @@ public class CoviaWebApp  {
 						a("view details").withHref("/adapters"),
 						new Text(")")
 					),
+					
+					// Show MCP information only if MCP is configured
+					engine.getConfig().get(Fields.MCP) != null ? div(
+						h4("MCP Server Information"),
+						p("This venue provides Model Context Protocol (MCP) server capabilities for AI agent integration."),
+						div(
+							h5("Available MCP Endpoints:"),
+							ul(
+								li(new Text("MCP JSON-RPC Endpoint: "), code(BASE_URL+ "/mcp")),
+								li(new Text("MCP Server Discovery: "), code(BASE_URL+"/.well-known/mcp"))
+							)
+						),
+						div(
+							h5("MCP Integration:"),
+							p("Connect AI agents and tools using the Model Context Protocol. The MCP server exposes all registered adapters as tools that can be called by compatible AI systems."),
+							p(
+								new Text("For more information about MCP, visit: "),
+								a("Model Context Protocol Documentation").withHref("https://modelcontextprotocol.io").withTarget("_blank")
+							)
+						)
+					) : div(),
 
 					p("This is the default web page for a Covia Venue server running the REST API")
 				)
@@ -173,7 +198,7 @@ public class CoviaWebApp  {
 		ctx.status(200);
 	}
 	
-	static final List<String[]> LINKS = List.of(
+	static final List<String[]> BASE_LINKS = List.of(
 		sa("OpenAPI documentation","Swagger API" ,"/swagger"),
 		sa("Registered adapters","Adapters" ,"/adapters"),
 		sa("Covia Documentation","Covia Docs" ,"https://docs.covia.ai"),
@@ -182,11 +207,14 @@ public class CoviaWebApp  {
 		sa("Community chat","Covia Discord", "https://discord.gg/fywdrKd8QT"),
 		sa("Open source development","Covia Dev", "https://github.com/covia-ai")
 	);
-	
+
 	private DomContent makeLinks() {
+		// Build links list conditionally including MCP if available
+		List<String[]> links = new java.util.ArrayList<>(BASE_LINKS);
+		
 		return article(
 			h4("Useful links: "),
-			each(LINKS,a->{
+			each(links,a->{
 				return div(join(a[0],a(a[1]).withHref(a[2])));
 			})
 		); //.withClass("grid");
@@ -228,7 +256,11 @@ public class CoviaWebApp  {
 		sb.append("\n");
 		sb.append("## Links\n");
 		sb.append("\n");
-		for (String[] ss: LINKS) {
+		// Build links list conditionally including MCP if available
+		List<String[]> links = new java.util.ArrayList<>(BASE_LINKS);
+
+		
+		for (String[] ss: links) {
 			sb.append("- ["+ss[1]+"]("+ss[2]+"): "+ss[0]+"\n");
 			
 		}
