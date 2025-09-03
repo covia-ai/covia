@@ -1,6 +1,7 @@
 package covia.venue.api;
 
 import java.io.IOException;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,6 +42,9 @@ public class MCP extends ACoviaAPI {
 	final AMap<AString,ACell> SERVER_INFO;
 
 	protected final SseServer sseServer;
+
+	private boolean LOG_MCP=false;
+
 	
 	public MCP(Engine venue) {
 		super(venue);
@@ -53,7 +57,6 @@ public class MCP extends ACoviaAPI {
 		);
 	}
 
-	private boolean LOG_MCP=true;
 	
 	public void addRoutes(Javalin javalin) {
 		if (LOG_MCP) {
@@ -106,45 +109,57 @@ public class MCP extends ACoviaAPI {
 		ctx.header("Content-type", ContentTypes.JSON);
 		
 		try {
-			// Parse JSON-RPC request
+			// Parse JSON-RPC request. Might throw ParseException
 			ACell req=JSONReader.read(ctx.bodyInputStream());
-			if (req == null) {
-				buildResult(ctx,protocolError(-32700,"Invalid JSON (empty)"));
-				return;
+
+			if (req instanceof AMap) {
+				// Simple JSON response
+				AMap<AString, ACell> resp = createResponse(req);
+				buildResult(ctx,resp);
+			} else if (req instanceof AVector requests){
+				// Batch response
+				@SuppressWarnings("unchecked")
+				List<AMap<AString, ACell>> responses= Utils.map(requests, this::createResponse);
+				buildResult(ctx,responses);
+			} else {
+				buildResult(ctx,protocolError(-32600,"Request must be single request object or batch array"));
 			}
-			
-			
-			
-			ACell id=RT.getIn(req,Fields.ID);
-			AString methodAS=(AString) RT.getIn(req,Fields.METHOD);
+		} catch (ParseException | ClassCastException | NullPointerException | IOException e) {
+			buildResult(ctx,protocolError(-32600,"Invalid JSON request"));
+		} 
+	}
+
+	private AMap<AString, ACell> createResponse(ACell request) {
+		ACell id=RT.getIn(request,Fields.ID);
+		AMap<AString, ACell> response;
+		try {
+			AString methodAS=(AString) RT.getIn(request,Fields.METHOD);
 			String method=methodAS.toString().trim();
 			
-			AMap<AString,ACell> resp;
 			if (method.equals("tools/list")) {
-				resp=listTools();
+				response=listTools();
 			} else if (method.equals("tools/call")) {
-				resp=listTools();
+				response=listTools();
 			} else if (method.equals("initialize")) {
-				resp=protocolResult(Maps.of(
+				response=protocolResult(Maps.of(
 						"protocolVersion", "2025-03-26",
 						"capabilities",Maps.of("tools",Maps.empty()),
 						"serverInfo",SERVER_INFO
 				));
 			} else if (method.equals("ping")) {
-				resp=protocolResult(Maps.empty());
+				response=protocolResult(Maps.empty());
 			} else {
-				resp=protocolError(-32601,"Method not found");
+				response=protocolError(-32601,"Method not found: "+method);
 			}
-
-			if (id!=null) {
-				resp=resp.assoc(Fields.ID, id);
-			}
-
-			// For now, return a simple JSON response
-			buildResult(ctx,resp);
-		} catch (ParseException | ClassCastException | NullPointerException | IOException e) {
-			buildResult(ctx,protocolError(-32600,"Invalid JSON request"));
-		} 
+		} catch (Exception e) {
+			response= protocolError(-32600,"Invalid request for ID "+id);
+		}
+		
+		// Finally restore ID if needed
+		if (id!=null) {
+			response=response.assoc(Fields.ID, id);
+		}
+		return response;
 	}
 	
 	/**
@@ -201,9 +216,13 @@ public class MCP extends ACoviaAPI {
 		
 		AMap<AString,ACell> result= Maps.of(
 				Fields.NAME,toolName,
+				Fields.TITLE,RT.getIn(meta,Fields.NAME),
 				Fields.DESCRIPTION,RT.getIn(meta,Fields.DESCRIPTION),
 				Fields.INPUT_SCHEMA,RT.getIn(op, Fields.INPUT)
 		);		
+		
+		
+		
 		return result;
 	}
 

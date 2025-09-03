@@ -1,12 +1,17 @@
 package covia.adapter;
 
+import java.io.IOException;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Strings;
+import convex.core.util.JSONUtils;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -14,6 +19,8 @@ import covia.venue.Engine;
 
 public abstract class AAdapter {
 	
+	private static final Logger log=LoggerFactory.getLogger(AAdapter.class);
+
 	
 	protected Engine engine;
 
@@ -33,18 +40,30 @@ public abstract class AAdapter {
 	/**
 	 * Helper method to install a single asset from a resource path.
 	 * @param resourcePath The resource path to read the asset from
-	 * @param assetName Optional name for the asset (can be null)
 	 */
-	protected void installAsset(String resourcePath, String assetName) {
+	protected void installAsset(String resourcePath) {
 		try {
-			engine.storeAsset(convex.core.util.Utils.readResourceAsAString(resourcePath), null);
-		} catch (Exception e) {
+			installAsset(convex.core.util.Utils.readResourceAsAString(resourcePath));
+		} catch (IOException e) {
 			// Log warning but don't fail installation
-			System.err.println("Failed to install asset from " + resourcePath + ": " + e.getMessage());
+			log.warn("Failed to install asset from " + resourcePath ,e);
 		}
+		
 	}
 	
-    /**
+	/**
+	 * Helper method to install a constructed asset.
+	 * @param resourcePath The resource path to read the asset from
+	 */
+	protected void installAsset(AMap<AString,ACell> meta) {
+		installAsset(JSONUtils.toJSONPretty(meta));
+	}
+	
+    protected void installAsset(AString metaString) {
+		engine.storeAsset(metaString, null);
+    };
+
+	/**
      * Returns the name of this adapter.
      * @return The adapter name (e.g. "mcp")
      */
@@ -91,25 +110,5 @@ public abstract class AAdapter {
 			});
 			return null;
 		});
-    }
-    
-    protected void finishJob(AMap<AString,ACell> job, AString statusString) {
-    	AString id=Job.parseID(job.get(Fields.ID));
-    	if (id==null) {
-    		throw new IllegalStateException("Job has no ID");
-    	}
-    	job=job.assoc(Fields.JOB_STATUS_FIELD, statusString);
-    	engine.updateJobStatus(id,job);
-    }
-    
-    protected void completeJobResult(AMap<AString,ACell> job, ACell result) {
-    	job=job.assoc(Fields.OUTPUT, result);
-    	finishJob(job,Status.COMPLETE);
-    }
-    
-    
-    protected void failJobResult(AMap<AString,ACell> job, Object message) {
-    	job=job.assoc(Fields.JOB_ERROR_FIELD, Strings.create(message));
-    	finishJob(job,Status.COMPLETE);
     }
 }

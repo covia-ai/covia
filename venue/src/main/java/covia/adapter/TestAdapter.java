@@ -65,14 +65,14 @@ public class TestAdapter extends AAdapter {
 		String BASE="/asset-examples/";
 
 		try {
-			installAsset(BASE+"empty.json", null);
-			installAsset(BASE+"randomop.json", null);
-			installAsset(BASE+"echoop.json", null);
-			installAsset(BASE+"neverop.json", null);
-			installAsset(BASE+"delayop.json", null);
-			installAsset(BASE+"randomop.json", null);
-			installAsset(BASE+"failop.json", null);
-			installAsset(BASE+"orch.json", null);
+			installAsset(BASE+"empty.json");
+			installAsset(BASE+"randomop.json");
+			installAsset(BASE+"echoop.json");
+			installAsset(BASE+"neverop.json");
+			installAsset(BASE+"delayop.json");
+			installAsset(BASE+"randomop.json");
+			installAsset(BASE+"failop.json");
+			installAsset(BASE+"orch.json");
 			Hash iris=engine.storeAsset(Utils.readResourceAsAString(BASE+"iris.json"),null);
 			engine.putContent(iris,this.getClass().getResourceAsStream(BASE+"iris.csv"));
 			Hash shake=engine.storeAsset(Utils.readResourceAsAString(BASE+"shakespeare.json"),null);

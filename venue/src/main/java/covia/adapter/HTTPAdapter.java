@@ -42,14 +42,14 @@ public class HTTPAdapter extends AAdapter {
 		String BASE = "/asset-examples/";
 
 		// Install HTTP-related operation assets
-		installAsset(BASE + "httpget.json", null);
-		installAsset(BASE + "httppost.json", null);
-		installAsset(BASE + "googlesearch.json", null);
+		installAsset(BASE + "httpget.json");
+		installAsset(BASE + "httppost.json");
+		installAsset(BASE + "googlesearch.json");
 		
 		// Install Google search orchestration examples
-		installAsset(BASE + "google-search-orch.json", null);
-		installAsset(BASE + "google-search-advanced-orch.json", null);
-		installAsset(BASE + "google-search-practical-orch.json", null);
+		installAsset(BASE + "google-search-orch.json");
+		installAsset(BASE + "google-search-advanced-orch.json");
+		installAsset(BASE + "google-search-practical-orch.json");
 		
 		log.info("HTTP adapter assets installed successfully");
 	}

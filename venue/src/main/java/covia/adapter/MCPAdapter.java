@@ -13,6 +13,12 @@ public class MCPAdapter extends AAdapter {
 	public String getName() {
 		return "mcp";
 	}
+	
+	@Override
+	protected void installAssets() {
+		// installAsset("/adapters/jvm/stringConcat.json", null);
+		
+	}
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
