@@ -158,6 +158,14 @@ public class Engine {
 		}
 		return removed;
 	}
+	
+	/**
+	 * Get all adapter names
+	 * @return Set of all registered adapter names
+	 */
+	public java.util.Set<String> getAdapterNames() {
+		return adapters.keySet();
+	}
 
 	public Hash storeAsset(AString meta, ACell content) {
 		AMap<AString,ACell> metaMap=RT.ensureMap(JSONUtils.parse(meta));

@@ -1,21 +1,41 @@
 package covia.venue.server;
 
-import static j2html.TagCreator.*;
+import static j2html.TagCreator.a;
+import static j2html.TagCreator.article;
+import static j2html.TagCreator.aside;
+import static j2html.TagCreator.body;
+import static j2html.TagCreator.code;
+import static j2html.TagCreator.div;
+import static j2html.TagCreator.each;
+import static j2html.TagCreator.h1;
+import static j2html.TagCreator.h4;
+import static j2html.TagCreator.head;
+import static j2html.TagCreator.html;
+import static j2html.TagCreator.join;
+import static j2html.TagCreator.link;
+import static j2html.TagCreator.meta;
+import static j2html.TagCreator.p;
+import static j2html.TagCreator.table;
+import static j2html.TagCreator.tbody;
+import static j2html.TagCreator.td;
+import static j2html.TagCreator.th;
+import static j2html.TagCreator.thead;
+import static j2html.TagCreator.tr;
+import static j2html.TagCreator.tag;
+import static j2html.TagCreator.title;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
 
-import j2html.tags.Text;
-import j2html.tags.specialized.*;
 import convex.core.util.Utils;
+import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.api.CoviaAPI;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
-import j2html.tags.ContainerTag;
 import j2html.tags.DomContent;
-import covia.api.Fields;
+import j2html.tags.Text;
 
 public class CoviaWebApp  {
 
@@ -30,6 +50,7 @@ public class CoviaWebApp  {
 		javalin.get("/", this::indexPage);
 		javalin.get("/404.html", this::missingPage);
 		javalin.get("/status", this::statusPage);
+		javalin.get("/adapters", this::adaptersPage);
 		javalin.get("/llms.txt",this::llmsTxt);
 		javalin.get("/sitemap.xml",this::siteMap);
 
@@ -37,7 +58,7 @@ public class CoviaWebApp  {
 	
 	private void indexPage(Context ctx) {
 		standardPage(ctx,html(
-				makeHeader("Covia AI: Decentralised AI grid venue server"),
+				makeHeader("Covia AI: Decentralised AI grid"),
 				body(
 					h1("Covia AI: Decentralised AI grid"),
 					aside(makeLinks()).withStyle("float: right"),
@@ -90,6 +111,19 @@ public class CoviaWebApp  {
 			)
 		);
 	}
+	
+	public void adaptersPage(Context ctx) {
+		standardPage(ctx,html(
+				makeHeader("Covia Adapters"),
+				body(
+					h1("Registered Adapters"),
+					p("The following adapters are currently registered in this Covia venue:"),
+					buildAdaptersTable(),
+					p(a("Back to index").withHref("/index.html"))
+				)
+			)
+		);
+	}
 
 	private void standardPage(Context ctx,DomContent content) {
 		ctx.result(content.render());
@@ -99,6 +133,7 @@ public class CoviaWebApp  {
 	
 	static final List<String[]> LINKS = List.of(
 		sa("OpenAPI documentation","Swagger API" ,"/swagger"),
+		sa("Registered adapters","Adapters" ,"/adapters"),
 		sa("Covia Documentation","Covia Docs" ,"https://docs.covia.ai"),
 		sa("Convex Documentation","Convex Docs" ,"https://docs.convex.world"),
 		sa("General information","Covia Website", "https://covia.ai"),
@@ -124,8 +159,15 @@ public class CoviaWebApp  {
 		DomContent content= tag("urlset").with(
 				tag("url").with(
 						tag("loc").withText(CoviaAPI.getExternalBaseUrl(ctx, "")+"/"),
-						tag("lastmod").withText(new SimpleDateFormat("yyyy-MM-dd").format(new Date()))
+						tag("lastmod").withText(new SimpleDateFormat("yyyy-MM-dd").format(new Date())),
+						tag("priority").withText("1.0")
+				),
+				tag("url").with(
+						tag("loc").withText(CoviaAPI.getExternalBaseUrl(ctx, "")+"/swagger"),
+						tag("lastmod").withText(new SimpleDateFormat("yyyy-MM-dd").format(new Date())),
+						tag("priority").withText("0.7")
 				)
+
 		).attr("xmlns", "http://www.sitemaps.org/schemas/sitemap/0.9");
 				
 		ctx.contentType("application/xml");
@@ -153,5 +195,31 @@ public class CoviaWebApp  {
 		ctx.result(sb.toString());
 		ctx.contentType("text/plain");
 		ctx.status(200);
+	}
+	
+	/**
+	 * Builds an HTML table displaying all adapters in the current Engine
+	 * @return DomContent containing the HTML table
+	 */
+	private DomContent buildAdaptersTable() {
+		return table(
+			thead(
+				tr(
+					th("Adapter Name"),
+					th("Class"),
+					th("Status")
+				)
+			),
+			tbody(
+				each(engine.getAdapterNames(), adapterName -> {
+					var adapter = engine.getAdapter(adapterName);
+					return tr(
+						td(adapterName),
+						td(adapter.getClass().getSimpleName()),
+						td("Active")
+					);
+				})
+			)
+		).withClass("table");
 	}
 }
