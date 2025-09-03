@@ -172,7 +172,7 @@ public class Engine {
 		if (metaMap==null) {
 			throw new IllegalArgumentException("Metadata is not a valid JSON object");
 		}
-		return storeAsset(Strings.create(meta),content,metaMap);
+		return storeAsset(meta,content,metaMap);
 	}
 	
 	private synchronized Hash storeAsset(AString meta, ACell content, AMap<AString,ACell> metaMap) {

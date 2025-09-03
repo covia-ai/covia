@@ -31,9 +31,17 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
 
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
+import convex.core.data.AVector;
+import convex.core.data.Strings;
+import convex.core.lang.RT;
 import convex.core.util.Utils;
+import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.venue.Engine;
+import covia.venue.api.MCP;
 import covia.venue.api.CoviaAPI;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
@@ -43,9 +51,11 @@ import j2html.tags.Text;
 public class CoviaWebApp  {
 
 	protected Engine engine;
+	private ToolPage toolPage;
 
 	public CoviaWebApp(Engine engine) {
 		this.engine=engine;
+		this.toolPage = new ToolPage(engine);
 	}
 
 	public void addRoutes(Javalin javalin) {
@@ -56,6 +66,7 @@ public class CoviaWebApp  {
 		javalin.get("/config", this::configPage);
 		javalin.get("/adapters", this::adaptersPage);
 		javalin.get("/adapters/{name}", this::adapterDetailPage);
+		javalin.get("/tools/{hash}", ctx -> toolPage.toolDetailPage(ctx, ctx.pathParam("hash")));
 		javalin.get("/llms.txt",this::llmsTxt);
 		javalin.get("/sitemap.xml",this::siteMap);
 
@@ -64,13 +75,13 @@ public class CoviaWebApp  {
 	private void indexPage(Context ctx) {
 		String BASE_URL=CoviaAPI.getExternalBaseUrl(ctx, "");
 		standardPage(ctx,html(
-				makeHeader("Covia AI: Decentralised AI grid"),
+				Layout.makeHeader("Covia AI: Decentralised AI grid"),
 				body(
 					h1("Covia AI: Decentralised AI grid"),
 					div(
 						div(
 							// Main content area (70% width)
-							styledBox(div(
+							Layout.styledBox(div(
 								h4("Venue Overview"),
 								p("Version: "+Utils.getVersion()),
 								p("Name: "+engine.getConfig().get(Fields.NAME)),
@@ -105,7 +116,7 @@ public class CoviaWebApp  {
 		if ((type!=null)&&type.contains("html")) {
 			ctx.header("Content-Type", "text/html");	
 			DomContent content= html(
-				makeHeader("404: Not Found: "+ctx.path()),
+				Layout.makeHeader("404: Not Found: "+ctx.path()),
 				body(
 					h1("404: not found: "+ctx.path()),
 					p("This is not the page you are looking for."),
@@ -119,18 +130,10 @@ public class CoviaWebApp  {
 		ctx.status(404);
 	}
 	
-	private DomContent makeHeader(String title) {
-		return head(
-				title(title),
-				meta().attr("description","Covia.ai offers decentralized AI solutions powered by Convex Lattice DLT for secure, scalable applications."),
-				meta().attr("keywords","AI, agent, grid, orchestration, decentralised"),
-		        link().withRel("stylesheet").withHref("/css/pico.min.css")
-		);
-	}
 
 	public void statusPage(Context ctx) {
 		standardPage(ctx,html(
-				makeHeader("Covia Status"),
+				Layout.makeHeader("Covia Status"),
 				body(
 					h1("Covia Venue Status"),
 					p("Version: "+Utils.getVersion()),
@@ -142,7 +145,7 @@ public class CoviaWebApp  {
 	
 	public void configPage(Context ctx) {
 		standardPage(ctx,html(
-				makeHeader("Engine Configuration"),
+				Layout.makeHeader("Engine Configuration"),
 				body(
 					h1("Engine Configuration"),
 					p("Current configuration for this Covia venue engine:"),
@@ -162,7 +165,7 @@ public class CoviaWebApp  {
 	
 	public void adaptersPage(Context ctx) {
 		standardPage(ctx,html(
-				makeHeader("Covia Adapters"),
+				Layout.makeHeader("Covia Adapters"),
 				body(
 					h1("Registered Adapters"),
 					p("The following adapters are currently registered in this Covia venue:"),
@@ -184,7 +187,7 @@ public class CoviaWebApp  {
 		}
 		
 		standardPage(ctx,html(
-				makeHeader("Adapter: " + adapterName),
+				Layout.makeHeader("Adapter: " + adapterName),
 				body(
 					h1("Adapter Details: " + adapterName),
 					div(
@@ -199,6 +202,7 @@ public class CoviaWebApp  {
 							tr(td("Status:"), td("Active"))
 						).withClass("table")
 					),
+					buildMCPToolsTable(adapter),
 					div(
 						h4("Navigation"),
 						p(a("Back to all adapters").withHref("/adapters")),
@@ -290,20 +294,121 @@ public class CoviaWebApp  {
 	}
 	
 	/**
-	 * Creates a styled box component with basic inline styling
-	 * @param content The content to wrap in the styled box
-	 * @return DomContent containing the styled box
+	 * Builds a table of MCP tools for a specific adapter (if MCP is available)
+	 * @param adapter The adapter to get MCP tools from
+	 * @return DomContent containing the MCP tools table or empty div if MCP not available
 	 */
-	private DomContent styledBox(DomContent content) {
-		return div(content).withStyle(
-			"border: 1px solid #ddd; " +
-			"border-radius: 8px; " +
-			"padding: 1.5rem; " +
-			"margin: 1rem 0; " +
-			"background-color: #091929; " +
-			"box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
-		);
+	private DomContent buildMCPToolsTable(AAdapter adapter) {
+		// Check if MCP is available
+		if (engine.getConfig().get(Fields.MCP) == null) {
+			return div(); // Return empty div if MCP not available
+		}
+		
+		try {
+			// Create MCP instance to access the listTools method
+			AMap<AString, ACell> mcpConfig = RT.ensureMap(engine.getConfig().get(Fields.MCP));
+			MCP mcp = new MCP(engine, mcpConfig);
+			
+			// Use reflection to access the private listTools(AAdapter) method
+			java.lang.reflect.Method listToolsMethod = MCP.class.getDeclaredMethod("listTools", AAdapter.class);
+			listToolsMethod.setAccessible(true);
+			
+			@SuppressWarnings("unchecked")
+			AVector<AMap<AString, ACell>> tools = (AVector<AMap<AString, ACell>>) listToolsMethod.invoke(mcp, adapter);
+			
+			if (tools.size() == 0) {
+				return div(
+					h4("MCP Tools"),
+					p("No MCP tools available for this adapter.")
+				);
+			}
+			
+			// Build the tools table
+			return div(
+				h4("MCP Tools"),
+				p("This adapter provides " + tools.size() + " MCP tool(s) for AI agent integration:"),
+				table(
+					thead(
+						tr(
+							th("Tool Name"),
+							th("Description"),
+							th("Input Schema")
+						)
+					),
+					tbody(
+						each(tools, tool -> {
+							AString name = RT.ensureString(tool.get(Strings.create("name")));
+							AString description = RT.ensureString(tool.get(Strings.create("description")));
+							AMap<AString, ACell> inputSchema = RT.ensureMap(tool.get(Strings.create("inputSchema")));
+							
+							// Get the asset hash for this tool
+							String assetHash = getAssetHashForTool(adapter, name.toString());
+							
+							DomContent toolNameCell;
+							if (assetHash != null) {
+								toolNameCell = td(a(name.toString()).withHref("/tools/" + assetHash));
+							} else {
+								toolNameCell = td(name.toString());
+							}
+							
+							return tr(
+								toolNameCell,
+								td(description.toString()),
+								td(code(inputSchema.toString()))
+							);
+						})
+					)
+				).withClass("table")
+			);
+			
+		} catch (Exception e) {
+			// If there's an error accessing MCP tools, return an error message
+			return div(
+				h4("MCP Tools"),
+				p("Error loading MCP tools: " + e.getMessage())
+			);
+		}
 	}
+	
+	/**
+	 * Gets the asset hash for a specific tool name from an adapter's installed assets
+	 * @param adapter The adapter to search
+	 * @param toolName The name of the tool to find
+	 * @return The asset hash as a string, or null if not found
+	 */
+	private String getAssetHashForTool(AAdapter adapter, String toolName) {
+		try {
+			// Get installed assets for this adapter
+			convex.core.data.Index<convex.core.data.Hash, AString> installedAssets = adapter.getInstalledAssets();
+			int n = installedAssets.size();
+			
+			for (int i = 0; i < n; i++) {
+				try {
+					convex.core.data.MapEntry<convex.core.data.Hash, AString> me = installedAssets.entryAt(i);
+					AString metaString = me.getValue();
+					
+					// Parse the metadata string to get the structured metadata
+					AMap<AString, ACell> meta = RT.ensureMap(convex.core.util.JSONUtils.parse(metaString));
+					AMap<AString, ACell> operation = RT.ensureMap(meta.get(Fields.OPERATION));
+					
+					if (operation != null) {
+						AString mcpToolName = RT.ensureString(operation.get(Fields.MCP_TOOLNAME));
+						if (mcpToolName != null && toolName.equals(mcpToolName.toString())) {
+							return me.getKey().toString();
+						}
+					}
+				} catch (Exception e) {
+					// ignore this asset
+				}
+			}
+		} catch (Exception e) {
+			// ignore errors
+		}
+		
+		return null;
+	}
+
+
 	
 	/**
 	 * Builds MCP server information content if MCP is configured
@@ -312,10 +417,10 @@ public class CoviaWebApp  {
 	 */
 	private DomContent buildMCPContent(String baseUrl) {
 		if (engine.getConfig().get(Fields.MCP) == null) {
-			return styledBox(div(p("MCP not available")));
+			return Layout.styledBox(div(p("MCP not available")));
 		}
 		
-		return styledBox(div(
+		return Layout.styledBox(div(
 			h4("MCP Server Information"),
 			p("This venue provides Model Context Protocol (MCP) server capabilities for AI agent integration."),
 			div(
