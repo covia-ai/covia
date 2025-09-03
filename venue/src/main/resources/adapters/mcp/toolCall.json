@@ -1,0 +1,36 @@
+{
+	"name": "MCP Tool Call",
+	"description": "Runs a remote MCP tool via HTTP(s)",
+	"dateCreated": "2025-09-03T23:00:00Z",
+	"operation": {
+		"adapter": "map:toolCall",
+		"mcpToolName": "toolCall",
+		"input": {
+			"type": "object",
+			"properties": {
+				"server": {
+					"type": "string",
+					"description": "The URL or DID for the MCP server",
+					"examples":["https:venue-test.covia.ai","did:web:venue1.covia.ai"],
+				},
+				"name": {
+					"type": "string",
+					"description": "The tool name to call",
+					"examples":["toolCall"],
+				},
+				"arguments": {
+					"type": "any",
+					"description": "Arguments to the MCP tool call",
+				}
+			},
+			"required": ["server"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"type": {},
+				"description": "The MCP tool output. Typically the content array or a structuredContent Object",
+			}
+		}
+	}
+} 

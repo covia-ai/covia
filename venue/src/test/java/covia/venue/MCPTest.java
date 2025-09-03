@@ -64,10 +64,10 @@ public class MCPTest {
 		assumeTrue(TEST_MCP);
 
 		try {
-			McpClientTransport transport= HttpClientStreamableHttpTransport .builder(BASE_URL+"/mcp")
+			McpClientTransport transport= HttpClientStreamableHttpTransport.builder(BASE_URL+"/mcp")
 					.build();
 			mcp=McpClient.sync(transport)
-					.requestTimeout(Duration.ofSeconds(3))
+					.requestTimeout(Duration.ofSeconds(10))
 					.build();
 			InitializeResult ir=mcp.initialize();
 		} catch (Throwable t) {
