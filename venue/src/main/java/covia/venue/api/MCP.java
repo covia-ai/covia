@@ -7,19 +7,22 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.api.ContentTypes;
-import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Hash;
+import convex.core.data.Index;
 import convex.core.data.MapEntry;
 import convex.core.data.Maps;
 import convex.core.data.Vectors;
 import convex.core.exceptions.ParseException;
 import convex.core.json.JSONReader;
 import convex.core.lang.RT;
+import convex.core.util.JSONUtils;
 import convex.core.util.Utils;
+import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.server.SseServer;
@@ -192,22 +195,58 @@ public class MCP extends ACoviaAPI {
 	private AMap<AString, ACell> listTools() {
 		AVector<AMap<AString,ACell>> toolsVector=Vectors.empty();
 		
-		AMap<ABlob, AVector<?>> assets = venue.getAssets();
-		int n=assets.size();
-		for (int i=0; i<n; i++) try {
-			MapEntry<ABlob, AVector<?>> me=assets.entryAt(i);
-			@SuppressWarnings("unchecked")
-			AMap<AString,ACell> meta=(AMap<AString,ACell>)me.getValue().get(Engine.POS_META);
-			AMap<AString,ACell> mcpTool=checkTool(meta);
-			if (mcpTool!=null) {
-				toolsVector=toolsVector.conj(mcpTool);
+		// Iterate through all registered adapters
+		for (String adapterName : venue.getAdapterNames()) {
+			try {
+				var adapter = venue.getAdapter(adapterName);
+				if (adapter == null) continue;
+				
+				// Get tools from this specific adapter
+				AVector<AMap<AString,ACell>> adapterTools = listTools(adapter);
+				toolsVector = toolsVector.concat(adapterTools);
+			} catch (Exception e) {
+				log.warn("Error processing adapter " + adapterName, e);
+				// ignore this adapter
 			}
-		} catch (Exception e) {
-			log.warn("Error in asset entry",e);
-			// ignore this one.
 		}
 		
 		return protocolResult(Maps.of("tools",toolsVector));
+	}
+	
+	/**
+	 * Get MCP tools from a specific adapter's installed assets
+	 * @param adapter The adapter to get tools from
+	 * @return Vector of MCP tools provided by this adapter
+	 */
+	private AVector<AMap<AString,ACell>> listTools(AAdapter adapter) {
+		AVector<AMap<AString,ACell>> toolsVector = Vectors.empty();
+		
+		try {
+			// Get installed assets for this adapter
+			Index<Hash, AString> installedAssets = adapter.getInstalledAssets();
+			int n = installedAssets.size();
+			
+			for (int i = 0; i < n; i++) {
+				try {
+					MapEntry<Hash, AString> me = installedAssets.entryAt(i);
+					AString metaString = me.getValue();
+					
+					// Parse the metadata string to get the structured metadata
+					AMap<AString, ACell> meta = RT.ensureMap(JSONUtils.parse(metaString));
+					AMap<AString, ACell> mcpTool = checkTool(meta);
+					if (mcpTool != null) {
+						toolsVector = toolsVector.conj(mcpTool);
+					}
+				} catch (Exception e) {
+					log.warn("Error processing asset from adapter " + adapter.getName(), e);
+					// ignore this asset
+				}
+			}
+		} catch (Exception e) {
+			log.warn("Error getting installed assets from adapter " + adapter.getName(), e);
+		}
+		
+		return toolsVector;
 	}
 
 	private AMap<AString,ACell> checkTool(AMap<AString, ACell> meta) {

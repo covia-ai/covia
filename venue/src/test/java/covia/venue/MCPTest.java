@@ -30,6 +30,16 @@ import io.modelcontextprotocol.spec.McpSchema.InitializeResult;
 import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
+import convex.core.data.AVector;
+import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.lang.RT;
+import covia.adapter.TestAdapter;
+import covia.venue.api.MCP;
+
 @TestInstance(Lifecycle.PER_CLASS)
 public class MCPTest {
 	/**
@@ -44,10 +54,13 @@ public class MCPTest {
 	
 	McpSyncClient mcp;
 	
+	MCP mcpApi;
+	
 	@SuppressWarnings("unused")
 	@BeforeAll
 	public void setupServer() throws Exception {
 		venue=TestServer.ENGINE;
+		mcpApi = new MCP(venue, Maps.empty());
 		assumeTrue(TEST_MCP);
 
 		try {
@@ -84,5 +97,51 @@ public class MCPTest {
 		CompletableFuture<SimpleHttpResponse> future=HTTPClients.execute(req);
 		SimpleHttpResponse resp=future.get(10000,TimeUnit.MILLISECONDS);
 		assertEquals(200,resp.getCode(),()->"Got error response: "+resp);
+	}
+	
+	/**
+	 * Test that listTools returns specific MCP tools from TestAdapter
+	 */
+	@Test public void testListToolsFromTestAdapter() {
+		// Get the test adapter
+		TestAdapter testAdapter = (TestAdapter) venue.getAdapter("test");
+		assertTrue(testAdapter != null, "TestAdapter should be registered");
+		
+		// Use reflection to access the private listTools(AAdapter) method
+		try {
+			java.lang.reflect.Method listToolsMethod = MCP.class.getDeclaredMethod("listTools", covia.adapter.AAdapter.class);
+			listToolsMethod.setAccessible(true);
+			
+			@SuppressWarnings("unchecked")
+			AVector<AMap<AString, ACell>> tools = (AVector<AMap<AString, ACell>>) listToolsMethod.invoke(mcpApi, testAdapter);
+			
+			// Verify we got some tools
+			assertTrue(tools.size() > 0, "TestAdapter should provide at least one MCP tool");
+			
+			// Look for the "echo" tool specifically
+			boolean foundEchoTool = false;
+			for (int i = 0; i < tools.size(); i++) {
+				AMap<AString, ACell> tool = tools.get(i);
+				AString name = RT.ensureString(tool.get(Strings.create("name")));
+				if ("echo".equals(name.toString())) {
+					foundEchoTool = true;
+					
+					// Verify the tool has the expected structure
+					assertTrue(tool.containsKey(Strings.create("name")), "Tool should have a name");
+					assertTrue(tool.containsKey(Strings.create("description")), "Tool should have a description");
+					assertTrue(tool.containsKey(Strings.create("inputSchema")), "Tool should have an inputSchema");
+					
+					// Verify the name is "echo"
+					assertEquals("echo", name.toString(), "Tool name should be 'echo'");
+					
+					break;
+				}
+			}
+			
+			assertTrue(foundEchoTool, "Should find the 'echo' tool from TestAdapter");
+			
+		} catch (Exception e) {
+			throw new RuntimeException("Failed to test listTools method", e);
+		}
 	}
 }

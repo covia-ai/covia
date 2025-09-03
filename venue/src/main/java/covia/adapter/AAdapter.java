@@ -10,6 +10,8 @@ import org.slf4j.LoggerFactory;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Hash;
+import convex.core.data.Index;
 import convex.core.data.Strings;
 import convex.core.util.JSONUtils;
 import covia.api.Fields;
@@ -23,6 +25,13 @@ public abstract class AAdapter {
 
 	
 	protected Engine engine;
+	
+	/**
+	 * Index of assets installed by this adapter.
+	 * Maps asset Hash to asset metadata (AString).
+	 */
+	@SuppressWarnings("unchecked")
+	protected Index<Hash, AString> installedAssets = (Index<Hash, AString>) Index.EMPTY;
 
 	public void install(Engine engine) {
 		this.engine=engine;
@@ -60,7 +69,8 @@ public abstract class AAdapter {
 	}
 	
     protected void installAsset(AString metaString) {
-		engine.storeAsset(metaString, null);
+		Hash assetHash = engine.storeAsset(metaString, null);
+		installedAssets = installedAssets.assoc(assetHash, metaString);
     };
 
 	    /**
@@ -76,6 +86,14 @@ public abstract class AAdapter {
      * @return A description of the adapter's functionality
      */
     public abstract String getDescription();
+    
+    /**
+     * Returns the index of assets installed by this adapter.
+     * @return Index mapping asset Hash to asset metadata
+     */
+    public Index<Hash, AString> getInstalledAssets() {
+        return installedAssets;
+    }
     
     /**
      * Invoke an operation with the given input, returning a future for the result.
