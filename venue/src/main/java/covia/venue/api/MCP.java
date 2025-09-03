@@ -218,7 +218,7 @@ public class MCP extends ACoviaAPI {
 	 * @param adapter The adapter to get tools from
 	 * @return Vector of MCP tools provided by this adapter
 	 */
-	private AVector<AMap<AString,ACell>> listTools(AAdapter adapter) {
+	public AVector<AMap<AString,ACell>> listTools(AAdapter adapter) {
 		AVector<AMap<AString,ACell>> toolsVector = Vectors.empty();
 		
 		try {

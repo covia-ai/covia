@@ -31,7 +31,7 @@ public class Layout {
      */
     public static DomContent styledBox(DomContent... content) {
         return div(content).withStyle(
-    			"border: 1px solid #ddd; " +
+    			"border: 1px solid #abd; " +
     					"border-radius: 8px; " +
     					"padding: 1.5rem; " +
     					"margin: 1rem 0; " +

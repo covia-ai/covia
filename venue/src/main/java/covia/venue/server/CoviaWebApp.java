@@ -185,17 +185,11 @@ public class CoviaWebApp  {
 				Layout.makeHeader("Adapter: " + adapterName),
 				body(
 					h1("Adapter Details: " + adapterName),
-					div(
-						h4("Description"),
-						p(adapter.getDescription())
-					),
-					div(
-						h4("Basic Information"),
-						table(
-							tr(td("Name:"), td(adapterName)),
-							tr(td("Class:"), td(adapter.getClass().getName())),
-							tr(td("Status:"), td("Active"))
-						).withClass("table")
+					p(adapter.getDescription()),
+
+					table(
+						tr(td("Name:"), td(adapterName)),
+						tr(td("Class:"), td(adapter.getClass().getName()))
 					),
 					buildMCPToolsTable(adapter),
 					div(
@@ -303,13 +297,8 @@ public class CoviaWebApp  {
 			// Create MCP instance to access the listTools method
 			AMap<AString, ACell> mcpConfig = RT.ensureMap(engine.getConfig().get(Fields.MCP));
 			MCP mcp = new MCP(engine, mcpConfig);
-			
-			// Use reflection to access the private listTools(AAdapter) method
-			java.lang.reflect.Method listToolsMethod = MCP.class.getDeclaredMethod("listTools", AAdapter.class);
-			listToolsMethod.setAccessible(true);
-			
-			@SuppressWarnings("unchecked")
-			AVector<AMap<AString, ACell>> tools = (AVector<AMap<AString, ACell>>) listToolsMethod.invoke(mcp, adapter);
+
+			AVector<AMap<AString, ACell>> tools = mcp.listTools(adapter);
 			
 			if (tools.size() == 0) {
 				return div(
@@ -326,15 +315,13 @@ public class CoviaWebApp  {
 					thead(
 						tr(
 							th("Tool Name"),
-							th("Description"),
-							th("Input Schema")
+							th("Description")
 						)
 					),
 					tbody(
 						each(tools, tool -> {
 							AString name = RT.ensureString(tool.get(Strings.create("name")));
 							AString description = RT.ensureString(tool.get(Strings.create("description")));
-							AMap<AString, ACell> inputSchema = RT.ensureMap(tool.get(Strings.create("inputSchema")));
 							
 							// Get the asset hash for this tool
 							String assetHash = getAssetHashForTool(adapter, name.toString());
@@ -348,8 +335,7 @@ public class CoviaWebApp  {
 							
 							return tr(
 								toolNameCell,
-								td(description.toString()),
-								td(code(inputSchema.toString()))
+								td(description.toString())
 							);
 						})
 					)
@@ -446,8 +432,7 @@ public class CoviaWebApp  {
 				tr(
 					th("Adapter Name"),
 					th("Class"),
-					th("Description"),
-					th("Status")
+					th("Description")
 				)
 			),
 			tbody(
@@ -456,11 +441,10 @@ public class CoviaWebApp  {
 					return tr(
 						td(a(adapterName).withHref("/adapters/" + adapterName)),
 						td(adapter.getClass().getSimpleName()),
-						td(adapter.getDescription()),
-						td("Active")
+						td(adapter.getDescription())
 					);
 				})
 			)
-		).withClass("table");
+		);
 	}
 }

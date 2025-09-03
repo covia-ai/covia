@@ -3,6 +3,7 @@ package covia.venue.server;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
@@ -82,11 +83,18 @@ public class ToolPage {
                         )
                     ),
                     
-                    div(
-                        h4("Operation Details"),
-                        table(
-                            tr(td("Adapter Operation:"), td(adapterName.toString())),
-                            tr(td("Input Schema:"), td(pre(code(JSONUtils.toJSONPretty(operation).toString()))))
+                    Layout.styledBox(
+                        h4("Input/Output Schemas"),
+                        div(
+                            div(
+                                h5("Input Schema"),
+                                schemaTable(RT.ensureMap(operation.get(Fields.INPUT)))
+                            ).withStyle("width: 48%; float: left; margin-right: 2%;"),
+                            div(
+                                h5("Output Schema"),
+                                schemaTable(RT.ensureMap(operation.get(Fields.OUTPUT)))
+                            ).withStyle("width: 48%; float: left; margin-left: 2%;"),
+                            div().withStyle("clear: both;") // Clearfix
                         )
                     ),
                     
@@ -174,7 +182,7 @@ public class ToolPage {
                         )
                     ),
                     
-                    div(
+                    Layout.styledBox(
                         h4("Asset Metadata"),
                         pre(code(metaString.toString()))
                     ),
@@ -195,8 +203,60 @@ public class ToolPage {
         }
     }
     
+    /**
+     * Creates a table from a JSON schema showing field types and descriptions
+     * @param schema The schema map to parse
+     * @return DomContent containing the schema table
+     */
+    private DomContent schemaTable(AMap<AString, ACell> schema) {
+        if (schema == null || schema.isEmpty()) {
+            return div(p("<No schema specified>"));
+        }
+        
+        // Check if it's a JSON Schema with properties
+        AMap<AString, ACell> properties = RT.ensureMap(schema.get(Strings.create("properties")));
+        if (properties == null || properties.isEmpty()) {
+            // If no properties, show the schema type
+            AString type = RT.ensureString(schema.get(Strings.create("type")));
+            return div(
+                p("Type: " + (type != null ? type.toString() : "object")),
+                p("Schema: " + code(JSONUtils.toJSONPretty(schema).toString()))
+            );
+        }
+        
+        // Build table for properties
+        return table(
+            thead(
+                tr(
+                    th("Field"),
+                    th("Type"),
+                    th("Description"),
+                    th("Required")
+                )
+            ),
+            tbody(
+                each(properties, entry -> {
+                    AString fieldName = entry.getKey();
+                    AMap<AString, ACell> fieldSchema = RT.ensureMap(entry.getValue());
+                    
+                    AString type = RT.ensureString(fieldSchema.get(Strings.create("type")));
+                    AString description = RT.ensureString(fieldSchema.get(Strings.create("description")));
+                    
+                    // Check if field is required
+                    AVector<AString> required = RT.ensureVector(schema.get(Strings.create("required")));
+                    boolean isRequired = required != null && required.contains(fieldName);
+                    
+                    return tr(
+                        td(code(fieldName.toString())),
+                        td(type != null ? type.toString() : "any"),
+                        td(description != null ? description.toString() : "-"),
+                        td(isRequired ? "Yes" : "No")
+                    );
+                })
+            )
+        ).withClass("table");
+    }
 
-    
     /**
      * Renders a standard page
      * @param ctx The Javalin context
