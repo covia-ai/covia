@@ -55,16 +55,17 @@ public class ToolPage {
             
             // Extract tool information
             AString toolName = RT.ensureString(operation.get(Fields.MCP_TOOLNAME));
-            AString adapterName = RT.ensureString(operation.get(Strings.create("adapter")));
+            AString opAdapter = RT.ensureString(operation.get(Strings.create("adapter")));
             AString description = RT.ensureString(meta.get(Fields.DESCRIPTION));
             AString name = RT.ensureString(meta.get(Fields.NAME));
             
             // Get the adapter
-            AAdapter adapter = engine.getAdapter(adapterName.toString());
+            AAdapter adapter = engine.getAdapter(opAdapter.toString().split(":")[0]);
+            String adapterName=adapter.getName();
             
             // Generate the page
             standardPage(ctx, html(
-                Layout.makeHeader("Tool: " + (toolName != null ? toolName.toString() : name.toString())),
+                Layout.makeHeader("MCP Tool: " + (toolName != null ? toolName.toString() : name.toString())),
                 body(
                     h1("Tool Details: " + (toolName != null ? toolName.toString() : name.toString())),
                     
@@ -75,9 +76,7 @@ public class ToolPage {
                             tr(td("Asset Name:"), td(name.toString())),
                             tr(td("Description:"), td(description.toString())),
                             tr(td("Adapter:"), td(
-                                adapter != null ? 
-                                a(adapterName.toString()).withHref("/adapters/" + adapterName.toString()) :
-                                span(adapterName.toString())
+                                a(adapterName).withHref("/adapters/" + adapterName)
                             )),
                             tr(td("Asset Hash:"), td(code(assetHash)))
                         )
@@ -191,6 +190,7 @@ public class ToolPage {
             
         } catch (Exception e) {
             // If there's an error, redirect to 404
+        	System.err.println(e);
             ctx.redirect("/404.html");
         }
     }
