@@ -4,7 +4,7 @@ import java.util.concurrent.CompletableFuture;
 
 import convex.core.data.ACell;
 import convex.core.data.Hash;
-import covia.api.DID;
+import convex.did.DID;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Venue;

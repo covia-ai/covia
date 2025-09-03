@@ -88,7 +88,7 @@ public class MCP extends ACoviaAPI {
 							exampleObjects = {
 								@OpenApiExampleProperty(name = "jsonrpc", value = "2.0"),
 								@OpenApiExampleProperty(name = "method", value = "initialize"),
-								@OpenApiExampleProperty(name = "params", value = "{}"),
+								@OpenApiExampleProperty(name = "params", value="{}"),
 								@OpenApiExampleProperty(name = "id", value = "1")
 							}
 					)),
@@ -103,7 +103,7 @@ public class MCP extends ACoviaAPI {
 										from = Object.class,
 										exampleObjects = {
 											@OpenApiExampleProperty(name = "jsonrpc", value = "2.0"),
-											@OpenApiExampleProperty(name = "result", value = "{}"),
+											@OpenApiExampleProperty(name = "result", value="{}"),
 											@OpenApiExampleProperty(name = "id", value = "1")
 										}
 										) })

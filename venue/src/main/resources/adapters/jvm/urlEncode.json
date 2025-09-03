@@ -10,9 +10,10 @@
 				"input": {
 					"type": "string",
 					"description": "String to URL encode",
-					"defaultValue": ""
+					"default": ""
 				}
-			}
+			},
+			"required":["input"]
 		},
 		"output": {
 			"type": "object",

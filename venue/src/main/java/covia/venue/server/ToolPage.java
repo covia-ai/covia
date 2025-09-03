@@ -11,8 +11,10 @@ import convex.core.util.JSONUtils;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.venue.Engine;
+import covia.venue.api.CoviaAPI;
 import io.javalin.http.Context;
 import j2html.tags.DomContent;
+import j2html.tags.Text;
 
 import static j2html.TagCreator.*;
 
@@ -64,6 +66,8 @@ public class ToolPage {
             AAdapter adapter = engine.getAdapter(opAdapter.toString().split(":")[0]);
             String adapterName=adapter.getName();
             
+            String mcpURL=CoviaAPI.getExternalBaseUrl(ctx, "/mcp");
+            
             // Generate the page
             standardPage(ctx, html(
                 Layout.makeHeader("MCP Tool: " + (toolName != null ? toolName.toString() : name.toString())),
@@ -84,14 +88,13 @@ public class ToolPage {
                     ),
                     
                     Layout.styledBox(
-                        h4("Input/Output Schemas"),
                         div(
                             div(
-                                h5("Input Schema"),
+                                h5("Input"),
                                 schemaTable(RT.ensureMap(operation.get(Fields.INPUT)))
                             ).withStyle("width: 48%; float: left; margin-right: 2%;"),
                             div(
-                                h5("Output Schema"),
+                                h5("Output"),
                                 schemaTable(RT.ensureMap(operation.get(Fields.OUTPUT)))
                             ).withStyle("width: 48%; float: left; margin-left: 2%;"),
                             div().withStyle("clear: both;") // Clearfix
@@ -104,6 +107,7 @@ public class ToolPage {
                         
                         div(
                             h5("JSON-RPC Call Example:"),
+                            p(code("POST"),text(" to "),code(mcpURL)),
                             pre(code("{\n" +
                                 "  \"jsonrpc\": \"2.0\",\n" +
                                 "  \"id\": 1,\n" +
@@ -119,7 +123,7 @@ public class ToolPage {
                         
                         div(
                             h5("cURL Example:"),
-                            pre(code("curl -X POST http://localhost:8080/mcp \\\\\n" +
+                            pre(code("curl -X POST "+mcpURL+" \\\\\n" +
                                 "  -H \"Content-Type: application/json\" \\\\\n" +
                                 "  -d '{\n" +
                                 "    \"jsonrpc\": \"2.0\",\n" +
@@ -138,7 +142,7 @@ public class ToolPage {
                             h5("Python Example:"),
                             pre(code("import requests\n" +
                                 "import json\n\n" +
-                                "url = \"http://localhost:8080/mcp\"\n" +
+                                "url = \""+mcpURL+"\"\n" +
                                 "payload = {\n" +
                                 "    \"jsonrpc\": \"2.0\",\n" +
                                 "    \"id\": 1,\n" +
@@ -158,7 +162,7 @@ public class ToolPage {
                         div(
                             h5("JavaScript/Node.js Example:"),
                             pre(code("const fetch = require('node-fetch');\n\n" +
-                                "const url = 'http://localhost:8080/mcp';\n" +
+                                "const url = '"+mcpURL+"';\n" +
                                 "const payload = {\n" +
                                 "    jsonrpc: '2.0',\n" +
                                 "    id: 1,\n" +
@@ -210,7 +214,7 @@ public class ToolPage {
      */
     private DomContent schemaTable(AMap<AString, ACell> schema) {
         if (schema == null || schema.isEmpty()) {
-            return div(p("<No schema specified>"));
+            return div(p(i("No schema specified")));
         }
         
         // Check if it's a JSON Schema with properties
@@ -228,10 +232,9 @@ public class ToolPage {
         return table(
             thead(
                 tr(
-                    th("Field"),
+                    th("Property"),
                     th("Type"),
-                    th("Description"),
-                    th("Required")
+                    th("Description")
                 )
             ),
             tbody(
@@ -247,10 +250,9 @@ public class ToolPage {
                     boolean isRequired = required != null && required.contains(fieldName);
                     
                     return tr(
-                        td(code(fieldName.toString())),
+                        td(code(fieldName.toString()),isRequired?new Text("*"):null),
                         td(type != null ? type.toString() : "any"),
-                        td(description != null ? description.toString() : "-"),
-                        td(isRequired ? "Yes" : "No")
+                        td(description != null ? description.toString() : "-")
                     );
                 })
             )

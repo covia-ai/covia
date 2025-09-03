@@ -25,7 +25,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
-import covia.api.DID;
+import convex.did.DID;
 import covia.api.Fields;
 import covia.exception.ConversionException;
 import covia.exception.ResponseException;

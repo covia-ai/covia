@@ -25,8 +25,8 @@ public class JVMAdapter extends AAdapter {
 	
 	@Override
 	public String getDescription() {
-		return "Provides access to utility function executed on the Java Virtual Machine. " +
-			   "Supports string concatenation, URL encoding/decoding, and other common JVM operations. " +
+		return "Provides utility functions executed on the venue's Java Virtual Machine. " +
+			   "Supports string concatenation, URL encoding/decoding, and other common. " +
 			   "Ideal for data processing, text manipulation, and integration with Java-based systems and libraries.";
 	}
 	

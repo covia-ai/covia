@@ -430,7 +430,7 @@ public class CoviaWebApp  {
 		return table(
 			thead(
 				tr(
-					th("Adapter Name"),
+					th("Adapter"),
 					th("Class"),
 					th("Description")
 				)

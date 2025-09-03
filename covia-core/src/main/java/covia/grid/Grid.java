@@ -2,7 +2,7 @@ package covia.grid;
 
 import java.net.URI;
 
-import covia.api.DID;
+import convex.did.DID;
 import covia.grid.client.VenueHTTP;
 
 /**
@@ -18,7 +18,7 @@ public class Grid {
 	public static Venue connect(DID did) {
 		String method=did.getMethod();
 		if (did.getMethod().equals("web")) {
-			return VenueHTTP.create(URI.create("https://"+did.getId()));
+			return VenueHTTP.create(URI.create("https://"+did.getID()));
 		}
 		
 		throw new IllegalArgumentException("Unrecognised DID method: "+method);

@@ -516,9 +516,6 @@ public class CoviaAPI extends ACoviaAPI {
 			host = host.substring(0, host.length() - 4);
 		}
 		
-		// Construct the DID
-		String did = "did:web:" + host;
-		
 		// Create a complete DID document structure
 		AMap<AString, ACell> didDocument = venue.getDIDDocument(host,getExternalBaseUrl(ctx,ROUTE));
 		
