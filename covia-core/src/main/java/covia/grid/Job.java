@@ -2,6 +2,7 @@ package covia.grid;
 
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
@@ -192,8 +193,25 @@ public class Job {
 		updateData(newData);
 	}
 
-	public ACell awaitResult() {
-		return getFuture().join();
+	/**
+	 * Waits for the job to complete and resturns the result. 
+	 * @param <T> Expected type of ACell result, for convenience. Usually an AMap<String,ACell>
+	 * @return Result of job
+	 * @throws JobFailedException if job failed
+	 */
+	@SuppressWarnings("unchecked")
+	public <T extends ACell> T  awaitResult() {
+		try {
+			return (T) getFuture().join();
+		} catch (CompletionException  e) {
+	        Throwable cause = e.getCause();
+	        if (cause instanceof JobFailedException) {
+	            throw (JobFailedException) cause;
+	        }
+	        // Mark the job as failed
+	        fail(cause.getMessage());
+	        throw new JobFailedException(this);
+	    }
 	}
 
 	private CompletableFuture<ACell> getFuture() {

@@ -50,12 +50,13 @@ public abstract class AAdapter {
 	 * Helper method to install a single asset from a resource path.
 	 * @param resourcePath The resource path to read the asset from
 	 */
-	protected void installAsset(String resourcePath) {
+	protected Hash installAsset(String resourcePath) {
 		try {
-			installAsset(convex.core.util.Utils.readResourceAsAString(resourcePath));
-		} catch (IOException e) {
+			return installAsset(convex.core.util.Utils.readResourceAsAString(resourcePath));
+		} catch (Exception e) {
 			// Log warning but don't fail installation
 			log.warn("Failed to install asset from " + resourcePath ,e);
+			return null;
 		}
 		
 	}
@@ -64,13 +65,14 @@ public abstract class AAdapter {
 	 * Helper method to install a constructed asset.
 	 * @param resourcePath The resource path to read the asset from
 	 */
-	protected void installAsset(AMap<AString,ACell> meta) {
-		installAsset(JSONUtils.toJSONPretty(meta));
+	protected Hash installAsset(AMap<AString,ACell> meta) {
+		return installAsset(JSONUtils.toJSONPretty(meta));
 	}
 	
-    protected void installAsset(AString metaString) {
+    protected Hash installAsset(AString metaString) {
 		Hash assetHash = engine.storeAsset(metaString, null);
 		installedAssets = installedAssets.assoc(assetHash, metaString);
+		return assetHash;
     };
 
 	    /**

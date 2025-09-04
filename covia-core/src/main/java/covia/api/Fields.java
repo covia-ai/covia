@@ -59,10 +59,18 @@ public class Fields {
 	public static final StringShort ERROR = Strings.intern("error");
 	
 	// MCP stuff
-	public static final StringShort MCP_TOOLNAME = Strings.intern("mcpToolName");
 	public static final StringShort INPUT_SCHEMA = Strings.intern("inputSchema");
 	public static final StringShort TITLE = Strings.intern("title");
 	public static final StringShort MCP = Strings.intern("mcp");
+	public static final StringShort SERVER = Strings.intern("server");
+	public static final StringShort ARGUMENTS = Strings.intern("arguments");
+	public static final StringShort REMOTE_TOOL_NAME = Strings.intern("remoteToolName");
+	public static final StringShort TOOL_NAME = Strings.intern("toolName");
+	public static final StringShort IS_ERROR = Strings.intern("isError");
+	public static final StringShort TYPE = Strings.intern("type");
+	public static final StringShort TEXT = Strings.intern("text");
+	public static final StringShort STRUCTURED_CONTENT = Strings.intern("structuredContent");
+	public static final StringShort PARAMS = Strings.intern("params");
 	
 
 }

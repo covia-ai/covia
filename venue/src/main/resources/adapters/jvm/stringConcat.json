@@ -41,6 +41,6 @@
 				}
 			}
 		},
-		"mcpToolName":"string-concat"
+		"toolName":"string-concat"
 	}
 } 

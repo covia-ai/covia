@@ -57,7 +57,7 @@ public class ToolPage {
             }
             
             // Extract tool information
-            AString toolName = RT.ensureString(operation.get(Fields.MCP_TOOLNAME));
+            AString toolName = RT.ensureString(operation.get(Fields.TOOL_NAME));
             AString opAdapter = RT.ensureString(operation.get(Strings.create("adapter")));
             AString description = RT.ensureString(meta.get(Fields.DESCRIPTION));
             AString name = RT.ensureString(meta.get(Fields.NAME));

@@ -15,6 +15,10 @@ public class JobFailedException extends CoviaException {
 	public JobFailedException(Exception e) {
 		this(Job.failure(e.toString()));
 	}
+	
+	public JobFailedException(String message) {
+		this(Job.failure(message));
+	}
 
 	public Job getJob() {
 		return job;

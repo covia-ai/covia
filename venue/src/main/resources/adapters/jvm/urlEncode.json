@@ -32,6 +32,6 @@
 				}
 			}
 		},
-		"mcpToolName":"url-encode"
+		"toolName":"url-encode"
 	}
 } 

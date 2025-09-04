@@ -373,7 +373,7 @@ public class CoviaWebApp  {
 					AMap<AString, ACell> operation = RT.ensureMap(meta.get(Fields.OPERATION));
 					
 					if (operation != null) {
-						AString mcpToolName = RT.ensureString(operation.get(Fields.MCP_TOOLNAME));
+						AString mcpToolName = RT.ensureString(operation.get(Fields.TOOL_NAME));
 						if (mcpToolName != null && toolName.equals(mcpToolName.toString())) {
 							return me.getKey().toString();
 						}

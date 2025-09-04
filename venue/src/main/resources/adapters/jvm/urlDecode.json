@@ -31,6 +31,6 @@
 				}
 			}
 		},
-		"mcpToolName":"url-decode"
+		"toolName":"url-decode"
 	}
 } 

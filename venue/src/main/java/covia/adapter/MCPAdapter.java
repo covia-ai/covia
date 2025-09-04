@@ -6,14 +6,18 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Maps;
+import convex.core.data.Hash;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSONUtils;
-import covia.grid.Status;
+import covia.api.Fields;
+import covia.exception.JobFailedException;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
@@ -24,6 +28,11 @@ import io.modelcontextprotocol.spec.McpSchema.InitializeResult;
 
 public class MCPAdapter extends AAdapter {
 	
+	public static final Logger log=LoggerFactory.getLogger(MCPAdapter.class);
+
+	
+	public  Hash TOOL_CALL;
+
 	@Override
 	public String getName() {
 		return "mcp";
@@ -38,7 +47,7 @@ public class MCPAdapter extends AAdapter {
 	
 	@Override
 	protected void installAssets() {
-		installAsset("/adapters/mcp/toolCall.json");
+		TOOL_CALL=installAsset("/adapters/mcp/toolCall.json");
 		
 	}
 
@@ -47,25 +56,27 @@ public class MCPAdapter extends AAdapter {
 		return CompletableFuture.supplyAsync(() -> {
 			try {
 				// Extract operation name from "mcp:operationName" format
-				String operationName = operation.contains(":") ? operation.split(":")[1] : operation;
+				String[] opSpec = operation.split(":");
+				
+				AString remoteToolName=RT.getIn(input, Fields.TOOL_NAME);
+				if (remoteToolName==null) {
+					remoteToolName=RT.getIn(meta, Fields.OPERATION,Fields.REMOTE_TOOL_NAME);
+				}
+				if (remoteToolName==null) {
+					throw new JobFailedException("No remote tool name provided (either in input or operation metadata)");
+				}
 				
 				// Get MCP server URL from metadata or input
-				String serverUrl = getServerUrl(meta, input);
+				AString serverUrl =getServerUrl(meta, input);
 				if (serverUrl == null) {
-					return Maps.of(
-						"status", Status.FAILED,
-						"message", Strings.create("MCP server URL not provided")
-					);
+					throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
 				}
 				
 				// Make the MCP tool call
-				return callMCPTool(serverUrl, operationName, input);
+				return callMCPTool(serverUrl, remoteToolName.toString(), input);
 				
 			} catch (Exception e) {
-				return Maps.of(
-					"status", Status.FAILED,
-					"message", Strings.create("MCP tool call failed: " + e.getMessage())
-				);
+				throw new JobFailedException(e);
 			}
 		});
 	}
@@ -85,22 +96,21 @@ public class MCPAdapter extends AAdapter {
 	 * Extracts the MCP server URL from metadata or input parameters
 	 */
 	@SuppressWarnings("unchecked")
-	private String getServerUrl(ACell meta, ACell input) {
+	private AString getServerUrl(ACell meta, ACell input) {
 		// First try to get from input parameters
 		if (input instanceof AMap) {
-			AMap<AString, ACell> inputMap = (AMap<AString, ACell>) input;
-			ACell serverUrlCell = inputMap.get(Strings.create("serverUrl"));
-			if (serverUrlCell instanceof AString) {
-				return serverUrlCell.toString();
+			ACell serverUrlCell = RT.getIn(input, Fields.SERVER);
+			if (serverUrlCell instanceof AString url) {
+				return url;
 			}
 		}
 		
 		// Then try to get from metadata
 		if (meta instanceof AMap) {
 			AMap<AString, ACell> metaMap = (AMap<AString, ACell>) meta;
-			ACell serverUrlCell = metaMap.get(Strings.create("serverUrl"));
-			if (serverUrlCell instanceof AString) {
-				return serverUrlCell.toString();
+			ACell serverUrlCell = metaMap.get(Strings.create("server"));
+			if (serverUrlCell instanceof AString url) {
+				return url;
 			}
 		}
 		
@@ -110,27 +120,18 @@ public class MCPAdapter extends AAdapter {
 	/**
 	 * Makes an MCP tool call to the specified server
 	 */
-	private ACell callMCPTool(String serverUrl, String toolName, ACell input) throws Exception {
-		McpSyncClient client = connect(serverUrl);
+	public ACell callMCPTool(AString serverUrl, String toolName, ACell input) throws Exception {
+		McpSyncClient client = connect(serverUrl.toString());
 		
 		try {
-			// Convert input to MCP tool call parameters
-			@SuppressWarnings("unchecked")
-			AMap<AString, ACell> inputMap = input instanceof AMap ? (AMap<AString, ACell>) input : Maps.empty();
-			
-			// Remove serverUrl from input parameters if present
-			AMap<AString, ACell> toolParams = inputMap.dissoc(Strings.create("serverUrl"));
+			AMap<AString,ACell> toolArgs=RT.ensureMap(input);
 			
 			// Make the tool call using the MCP client
 			// Note: The actual method name may vary depending on the MCP client library version
 			// This is a placeholder - we'll need to check the actual API
-			ACell result = makeToolCall(client, toolName, toolParams);
+			ACell result = makeToolCall(client, toolName, toolArgs);
 			
-			// Convert result to Covia format
-			return Maps.of(
-				"status", Status.COMPLETE,
-				"result", result 
-			);
+			return result;
 			
 		} finally {
 			// Close the client connection
@@ -138,7 +139,7 @@ public class MCPAdapter extends AAdapter {
 				client.close();
 			} catch (Exception e) {
 				// Log but don't fail the operation
-				System.err.println("Warning: Failed to close MCP client: " + e.getMessage());
+				log.warn("Warning: Failed to close MCP client: " + e.getMessage());
 			}
 		}
 	}
@@ -146,7 +147,7 @@ public class MCPAdapter extends AAdapter {
 	/**
 	 * Makes a tool call using the MCP client
 	 */
-	private ACell makeToolCall(McpSyncClient client, String toolName, AMap<AString, ACell> toolParams) throws Exception {
+	private ACell makeToolCall(McpSyncClient client, String toolName, AMap<AString,ACell> toolParams) throws Exception {
 
 		@SuppressWarnings("unchecked")
 		CallToolRequest request = CallToolRequest.builder()
@@ -155,6 +156,9 @@ public class MCPAdapter extends AAdapter {
 			.build();
 
 		CallToolResult response=client.callTool(request);
+		System.out.println("MCP response: "+response);
+		System.out.println("MCP content: "+response.content());
+		System.out.println("MCP structuredContent: "+response.structuredContent());
 		
 		return RT.cvm(response.structuredContent());
 	}

@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -36,8 +37,15 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.AInteger;
 import convex.core.lang.RT;
+import covia.adapter.AAdapter;
+import covia.adapter.MCPAdapter;
 import covia.adapter.TestAdapter;
+import covia.api.Fields;
+import covia.grid.Grid;
+import covia.grid.Job;
+import covia.grid.Venue;
 import covia.venue.api.MCP;
 
 @TestInstance(Lifecycle.PER_CLASS)
@@ -143,5 +151,28 @@ public class MCPTest {
 		} catch (Exception e) {
 			throw new RuntimeException("Failed to test listTools method", e);
 		}
+	}
+	
+	@Test public void testToolCall() throws Exception {
+		MCPAdapter mcpAdapter=(MCPAdapter) venue.getAdapter("mcp");
+		AMap<AString,ACell> input=Maps.of("foo",2);
+		
+		ACell result=mcpAdapter.callMCPTool(Strings.create(BASE_URL), "echo",input);
+		assertEquals(input,result);
+	}
+	
+	@Test public void testProxyToolCall() {
+		Venue client = Grid.connect(BASE_URL);
+		MCPAdapter mcpAdapter=(MCPAdapter) venue.getAdapter("mcp");
+		assertNotNull(mcpAdapter);
+		
+		Job job=client.invoke(mcpAdapter.TOOL_CALL, 
+				Maps.of(
+					Fields.SERVER,BASE_URL,
+					Fields.TOOL_NAME,"echo",
+					Fields.ARGUMENTS,Maps.of(1,2))).join();
+		
+		AMap<AInteger,AInteger> result=job.awaitResult();
+		System.out.println(result);
 	}
 }

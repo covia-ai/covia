@@ -24,6 +24,7 @@ import convex.core.util.JSONUtils;
 import convex.core.util.Utils;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
+import covia.grid.Job;
 import covia.venue.Engine;
 import covia.venue.server.SseServer;
 import io.javalin.Javalin;
@@ -46,7 +47,7 @@ public class MCP extends ACoviaAPI {
 
 	protected final SseServer sseServer;
 
-	private boolean LOG_MCP=false;
+	private boolean LOG_MCP=true;
 
 	
 	public MCP(Engine venue, AMap<AString, ACell> mcpConfig) {
@@ -65,11 +66,11 @@ public class MCP extends ACoviaAPI {
 
 	
 	public void addRoutes(Javalin javalin) {
-		if (LOG_MCP) {
-			javalin.before("/mcp", ctx->{
-				System.out.println("MCP request: "+ctx.headerMap());
-			});
-		};
+//		if (LOG_MCP) {
+//			javalin.before("/mcp", ctx->{
+//				System.out.println("MCP request: "+ctx.headerMap());
+//			});
+//		};
 		
 		javalin.post("/mcp", this::postMCP);
 		javalin.get("/mcp", this::getMCP);
@@ -109,14 +110,14 @@ public class MCP extends ACoviaAPI {
 										) })
 					})	
 	protected void postMCP(Context ctx) { 
-		if (LOG_MCP) {
-			System.out.println(ctx);
-		}
 		ctx.header("Content-type", ContentTypes.JSON);
 		
 		try {
 			// Parse JSON-RPC request. Might throw ParseException
 			ACell req=JSONReader.read(ctx.bodyInputStream());
+			if (LOG_MCP) {
+				System.out.println("REQ:"+req);
+			}
 
 			if (req instanceof AMap) {
 				// Simple JSON response
@@ -145,13 +146,15 @@ public class MCP extends ACoviaAPI {
 			if (method.equals("tools/list")) {
 				response=listTools();
 			} else if (method.equals("tools/call")) {
-				response=listTools();
+				response=toolCall(RT.getIn(request, Fields.PARAMS));
 			} else if (method.equals("initialize")) {
 				response=protocolResult(Maps.of(
 						"protocolVersion", "2025-03-26",
 						"capabilities",Maps.of("tools",Maps.empty()),
 						"serverInfo",SERVER_INFO
 				));
+			} else if (method.equals("notifications/initialized")) {
+				response=protocolResult(Maps.of());
 			} else if (method.equals("ping")) {
 				response=protocolResult(Maps.empty());
 			} else {
@@ -165,9 +168,66 @@ public class MCP extends ACoviaAPI {
 		if (id!=null) {
 			response=response.assoc(Fields.ID, id);
 		}
+		if (LOG_MCP) {
+			System.out.println("RES:"+response);
+		}
 		return response;
 	}
 	
+	/**
+	 * Function to execute a tool call request received from a remote client
+	 * @param methodAS
+	 * @param in
+	 * @return
+	 */
+	private AMap<AString, ACell> toolCall(AMap<AString,ACell> params) {
+		try {
+			AString toolName=RT.getIn(params, Fields.NAME);
+			Hash opID=findTool(toolName);
+			ACell arguments=RT.getIn(params, Fields.ARGUMENTS);
+			if (opID!=null) {
+					Job job=venue.invokeOperation(opID, arguments);
+					ACell result=job.awaitResult();
+					return protocolResult(Maps.of(
+								Fields.CONTENT,Vectors.of(Maps.of(Fields.TYPE,Fields.TEXT,Fields.TEXT,JSONUtils.toAString(result))),
+								Fields.STRUCTURED_CONTENT,result
+							));
+			} else {
+				return protocolError(-32602, "Unknown tool: "+toolName);
+			}
+		} catch (Exception e) {
+			return protocolToolError(e.getMessage());
+		}
+	}
+
+
+	private Hash findTool(AString methodAS) {
+		// Iterate through all registered adapters
+		for (String adapterName : venue.getAdapterNames()) {
+			try {
+				var adapter = venue.getAdapter(adapterName);
+				if (adapter == null) continue;
+				
+				// Get tools from this specific adapter
+				Index<Hash, AString> adapterTools = adapter.getInstalledAssets();
+				long n=adapterTools.count();
+				for (long i=0; i<n; i++) {
+					Hash h=adapterTools.entryAt(i).getKey();
+					AMap<AString,ACell> meta=venue.getMetaValue(h);
+					if (methodAS.equals(RT.getIn(meta, Fields.OPERATION, Fields.TOOL_NAME))) {
+						return h;
+					}
+				}
+				
+			} catch (Exception e) {
+				log.warn("Error processing adapter " + adapterName, e);
+				// ignore this adapter
+			}
+		}
+		return null; // not found
+	}
+
+
 	/**
 	 * Construct a 'successful' JSON-RPC result response
 	 * @param result Result value
@@ -175,6 +235,22 @@ public class MCP extends ACoviaAPI {
 	 */
 	private AMap<AString, ACell> protocolResult(AHashMap<ACell, ACell> result) {
 		return BASE_RESPONSE.assoc(Fields.RESULT, result);
+	}
+	
+	/**
+	 * Construct a 'successful' JSON-RPC tool result response
+	 * @param result Result value
+	 * @return
+	 */
+	private AMap<AString, ACell> protocolToolError(String message) {
+		return BASE_RESPONSE.assoc(
+				Fields.RESULT, Maps.of(
+						Fields.IS_ERROR,true,
+						Fields.CONTENT, Vectors.of(Maps.of(
+								Fields.TYPE,Fields.TEXT,
+								Fields.TEXT,message
+								))
+					));
 	}
 
 	private static final AMap<AString, ACell> BASE_RESPONSE=Maps.of("jsonrpc", "2.0");
@@ -248,11 +324,13 @@ public class MCP extends ACoviaAPI {
 		
 		return toolsVector;
 	}
+	
+
 
 	private AMap<AString,ACell> checkTool(AMap<AString, ACell> meta) {
 		AMap<AString,ACell> op=RT.getIn(meta,Fields.OPERATION);
 		if (op==null) return null;
-		AString toolName=RT.ensureString(op.get(Fields.MCP_TOOLNAME));
+		AString toolName=RT.ensureString(op.get(Fields.TOOL_NAME));
 		
 		if (toolName==null) return null;
 		

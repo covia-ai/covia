@@ -4,6 +4,8 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +25,9 @@ import convex.core.util.JSONUtils;
 import covia.api.Fields;
 import covia.venue.server.VenueServer;
 
+/**
+ * Main venue server entry point class.
+ */
 public class MainVenue {
 
 	public static Logger log=LoggerFactory.getLogger(MainVenue.class);;
@@ -32,12 +37,22 @@ public class MainVenue {
 		configureLogging(null);
 		
 		AMap<AString,ACell> config=null;
+		
+		// First argument is config file path, if specified
 		if (args.length>0) try {
-			config =(AMap<AString, ACell>) JSONUtils.parseJSON5(FileUtils.loadFileAsString(args[0]));
+			String configPath=args[0];
+			Path cPath=FileUtils.getPath(configPath);
+			if (!Files.exists(cPath)) {
+				log.error("Config file does not exist: "+cPath);
+			}
+			config =(AMap<AString, ACell>) JSONUtils.parseJSON5(FileUtils.loadFileAsString(configPath));
+			log.info("Server startup config loaded from "+cPath);
 		} catch (Exception ex) {
-			log.warn("Error loading config, defaulting to test setup",ex);
+			log.error("Error loading config",ex);
+			System.exit(66); // terminate with EX_NOINPUT
 		}
 		
+		// Default config if no config file is specified
 		if (config==null) {
 			config = Maps.of(
 					Fields.VENUES,Vectors.of(
@@ -49,6 +64,7 @@ public class MainVenue {
 		
 		AVector<AMap<AString,ACell>> venues=RT.getIn(config, Fields.VENUES);
 		for (AMap<AString,ACell> venueConfig: venues) {
+			@SuppressWarnings("unused")
 			VenueServer server=VenueServer.launch(venueConfig);
 		}
 	}
@@ -67,7 +83,7 @@ public class MainVenue {
 			if (logConfigFile.exists()) {
 				InputStream is=new FileInputStream(logConfigFile);
 				configureLoggingInternal(is);
-				log.info("Logging configured from: ");
+				log.info("Logging configured from: "+logConfigFile);
 				return;
 			} 
 		} 
