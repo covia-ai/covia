@@ -53,15 +53,21 @@ public class MCPAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
+		String[] opSpec = operation.split(":");
 		return CompletableFuture.supplyAsync(() -> {
 			try {
-				// Extract operation name from "mcp:operationName" format
-				String[] opSpec = operation.split(":");
 				
 				AString remoteToolName=RT.getIn(input, Fields.TOOL_NAME);
+				
+				// Fallback: see if "remoteToolName" is specified in operation
 				if (remoteToolName==null) {
 					remoteToolName=RT.getIn(meta, Fields.OPERATION,Fields.REMOTE_TOOL_NAME);
 				}
+				
+				// Extract operation name from "mcp:operationName" format
+
+				
+				
 				if (remoteToolName==null) {
 					throw new JobFailedException("No remote tool name provided (either in input or operation metadata)");
 				}
@@ -72,25 +78,19 @@ public class MCPAdapter extends AAdapter {
 					throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
 				}
 				
+				// Get API access token, if provided
+				AString token=RT.getIn(input, Fields.TOKEN);
+				String accessToken=(token==null)?null:token.toString();
+				
 				// Make the MCP tool call
-				return callMCPTool(serverUrl, remoteToolName.toString(), input);
+				return callMCPTool(serverUrl, remoteToolName.toString(), input, accessToken);
 				
 			} catch (Exception e) {
 				throw new JobFailedException(e);
 			}
 		});
 	}
-	
-	public McpSyncClient connect(String baseURL) throws Exception {
-		McpClientTransport transport= HttpClientStreamableHttpTransport.builder(baseURL+"/mcp")
-					.build();
-		McpSyncClient mcp=McpClient.sync(transport)
-					.requestTimeout(Duration.ofSeconds(10))
-					.build();
-		@SuppressWarnings("unused")
-		InitializeResult ir=mcp.initialize();
-		return mcp;
-	}
+
 	
 	/**
 	 * Extracts the MCP server URL from metadata or input parameters
@@ -118,10 +118,33 @@ public class MCPAdapter extends AAdapter {
 	}
 	
 	/**
-	 * Makes an MCP tool call to the specified server
+	 * Connect to an MCP server via a base URL
+	 * @param baseURL
+	 * @return McpSyncClient instance
+	 * @throws Exception
 	 */
-	public ACell callMCPTool(AString serverUrl, String toolName, ACell input) throws Exception {
-		McpSyncClient client = connect(serverUrl.toString());
+	public McpSyncClient connect(String baseURL, String accessToken) throws Exception {
+		McpClientTransport transport= HttpClientStreamableHttpTransport.builder(baseURL+"/mcp")
+					.customizeRequest(b->{
+						if ((accessToken!=null)&&(!accessToken.isEmpty())) {
+							b.header("Authorization", "Bearer "+accessToken);
+						}
+					})
+					.build();
+		McpSyncClient mcp=McpClient.sync(transport)
+					.requestTimeout(Duration.ofSeconds(10))
+					.build();
+		@SuppressWarnings("unused")
+		InitializeResult ir=mcp.initialize();
+		return mcp;
+	}
+	
+	/**
+	 * Makes an MCP tool call to the specified server
+	 * @param accessToken 
+	 */
+	public ACell callMCPTool(AString serverUrl, String toolName, ACell input, String accessToken) throws Exception {
+		McpSyncClient client = connect(serverUrl.toString(),accessToken);
 		
 		try {
 			AMap<AString,ACell> toolArgs=RT.ensureMap(input);
@@ -156,9 +179,7 @@ public class MCPAdapter extends AAdapter {
 			.build();
 
 		CallToolResult response=client.callTool(request);
-		System.out.println("MCP response: "+response);
-		System.out.println("MCP content: "+response.content());
-		System.out.println("MCP structuredContent: "+response.structuredContent());
+		System.out.println("MCPAdapter response: "+response);
 		
 		return RT.cvm(response.structuredContent());
 	}

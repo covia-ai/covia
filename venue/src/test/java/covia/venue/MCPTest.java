@@ -117,11 +117,7 @@ public class MCPTest {
 		
 		// Use reflection to access the private listTools(AAdapter) method
 		try {
-			java.lang.reflect.Method listToolsMethod = MCP.class.getDeclaredMethod("listTools", covia.adapter.AAdapter.class);
-			listToolsMethod.setAccessible(true);
-			
-			@SuppressWarnings("unchecked")
-			AVector<AMap<AString, ACell>> tools = (AVector<AMap<AString, ACell>>) listToolsMethod.invoke(mcpApi, testAdapter);
+			AVector<AMap<AString, ACell>> tools =mcpApi.listTools(testAdapter);
 			
 			// Verify we got some tools
 			assertTrue(tools.size() > 0, "TestAdapter should provide at least one MCP tool");
@@ -157,7 +153,7 @@ public class MCPTest {
 		MCPAdapter mcpAdapter=(MCPAdapter) venue.getAdapter("mcp");
 		AMap<AString,ACell> input=Maps.of("foo",2);
 		
-		ACell result=mcpAdapter.callMCPTool(Strings.create(BASE_URL), "echo",input);
+		ACell result=mcpAdapter.callMCPTool(Strings.create(BASE_URL), "echo",input,null);
 		assertEquals(input,result);
 	}
 	

@@ -10,13 +10,18 @@
 			"properties": {
 				"server": {
 					"type": "string",
-					"description": "The URL or DID for the MCP server",
+					"description": "URL or DID for the MCP server",
 					"examples":["https:venue-test.covia.ai","did:web:venue1.covia.ai"]
 				},
 				"toolName": {
 					"type": "string",
-					"description": "The tool name to call",
+					"description": "MCP tool name to call",
 					"examples":["toolCall"]
+				},
+				"token": {
+					"type": "string",
+					"description": "API access token to use for the delegated MCP request",
+					"examples":["xyzabcdefghj"]
 				},
 				"arguments": {
 					"type": "object",

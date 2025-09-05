@@ -47,7 +47,7 @@ public class MCP extends ACoviaAPI {
 
 	protected final SseServer sseServer;
 
-	private boolean LOG_MCP=true;
+	private boolean LOG_MCP=false;
 
 	
 	public MCP(Engine venue, AMap<AString, ACell> mcpConfig) {
