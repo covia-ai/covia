@@ -97,23 +97,6 @@ The workbench module produces:
 
 - **Standard JAR**: `workbench/target/workbench-0.0.1-SNAPSHOT.jar`
 
-## Key Dependencies
-
-### Venue Module Dependencies
-
-- **Convex Core**: `world.convex:convex-core:0.8.2-SNAPSHOT`
-- **Convex Peer**: `world.convex:convex-peer:0.8.2-SNAPSHOT`
-- **Convex Java**: `world.convex:convex-java:0.8.2-SNAPSHOT`
-- **Javalin**: `io.javalin:javalin:6.6.0` (Web framework)
-- **MCP SDK**: `io.modelcontextprotocol.sdk:mcp:0.10.0`
-- **LangChain4J**: `dev.langchain4j:langchain4j:1.0.1`
-- **HTTP Client**: `org.apache.httpcomponents.client5:httpclient5:5.4.1`
-- **Logging**: `ch.qos.logback:logback-classic:1.5.18`
-
-### Workbench Module Dependencies
-
-- **FlatLaf**: `com.formdev:flatlaf:3.6` (Modern look and feel)
-- **Venue Module**: Internal dependency on the venue module
 
 ## Build Configuration
 

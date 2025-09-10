@@ -83,7 +83,7 @@ public class TestAdapter extends AAdapter {
 			Hash iris=engine.storeAsset(Utils.readResourceAsAString(BASE+"iris.json"),null);
 			engine.putContent(iris,this.getClass().getResourceAsStream(BASE+"iris.csv"));
 			Hash shake=engine.storeAsset(Utils.readResourceAsAString(BASE+"shakespeare.json"),null);
-			engine.putContent(shake,this.getClass().getResourceAsStream(BASE+"iris.csv"));
+			engine.putContent(shake,this.getClass().getResourceAsStream(BASE+"hamlet.txt"));
 		} catch(Exception e) {
 			log.warn("Failed to install test assets",e);
 		}
