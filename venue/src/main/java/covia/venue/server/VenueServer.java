@@ -12,6 +12,7 @@ import convex.core.data.prim.AInteger;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.venue.Engine;
+import covia.venue.api.A2A;
 import covia.venue.api.CoviaAPI;
 import covia.venue.api.MCP;
 import covia.venue.auth.LoginProviders;
@@ -44,6 +45,7 @@ public class VenueServer {
 
 	protected CoviaAPI api;
 	protected MCP mcp;
+	protected A2A a2a;
 
 	public VenueServer(AMap<AString,ACell> config) {
 		this.config=config;
@@ -55,6 +57,11 @@ public class VenueServer {
 		AMap<AString,ACell> mcpConfig=RT.getIn(config, Fields.MCP);
 		if (RT.bool(mcpConfig)) {
 			mcp=new MCP(engine,mcpConfig);
+		}
+		
+		AMap<AString,ACell> a2aConfig=RT.getIn(config, Fields.A2A);
+		if (RT.bool(a2aConfig)) {
+			a2a=new A2A(engine,a2aConfig);
 		}
 	}
 
@@ -69,7 +76,8 @@ public class VenueServer {
 					Fields.NAME,"Test Venue",
 					Fields.DESCRIPTION,"Unconfigured test venue",
 					Strings.create("port"),null, // This uses default (find a port)
-					Fields.MCP,Maps.of()
+					Fields.MCP,Maps.of(),
+					Fields.A2A,Maps.of()
 			);
 		}
 		
@@ -114,6 +122,7 @@ public class VenueServer {
 		api.addRoutes(javalin);
 		webApp.addRoutes(javalin);
 		if (mcp!=null) mcp.addRoutes(javalin);
+		if (a2a!=null) a2a.addRoutes(javalin);
 	}
 	
 

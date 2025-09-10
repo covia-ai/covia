@@ -20,7 +20,8 @@ public class TestServer {
 	static {
 		SERVER=VenueServer.launch(Maps.of(
 				Strings.create("port"),PORT,
-				Fields.MCP,Maps.of()));
+				Fields.MCP,Maps.of(),
+				Fields.A2A,Maps.of()));
 		ENGINE=SERVER.getEngine();
 
 
