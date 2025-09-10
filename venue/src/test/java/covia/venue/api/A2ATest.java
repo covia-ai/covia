@@ -19,7 +19,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
+import convex.core.data.AVector;
+import convex.core.util.JSONUtils;
 import convex.java.HTTPClients;
+import covia.api.Fields;
 import covia.venue.TestServer;
 
 /**
@@ -50,13 +56,22 @@ public class A2ATest {
         assertEquals(200, resp.getCode(), "Expected 200 OK response");
         assertNotNull(resp.getBody(), "Response body should not be null");
         
-        // Verify the response contains expected A2A agent card fields
+        // Parse the JSON response using Convex JSONUtils
         String body = resp.getBodyText();
-        assertTrue(body.contains("\"agentProvider\""), "Should contain agentProvider field");
-        assertTrue(body.contains("\"agentCapabilities\""), "Should contain agentCapabilities field");
-        assertTrue(body.contains("\"agentSkills\""), "Should contain agentSkills field");
-        assertTrue(body.contains("\"agentInterfaces\""), "Should contain agentInterfaces field");
-        assertTrue(body.contains("\"preferredTransport\""), "Should contain preferredTransport field");
+        ACell parsedResponse = JSONUtils.parse(body);
+        assertNotNull(parsedResponse, "Response should be valid JSON");
+        
+        // Verify it's a map (JSON object)
+        assertTrue(parsedResponse instanceof AMap, "Response should be a JSON object");
+        @SuppressWarnings("unchecked")
+        AMap<AString, ACell> agentCard = (AMap<AString, ACell>) parsedResponse;
+        
+        // Verify the response contains expected A2A agent card fields using Fields constants
+        assertTrue(agentCard.containsKey(Fields.AGENT_PROVIDER), "Should contain agentProvider field");
+        assertTrue(agentCard.containsKey(Fields.AGENT_CAPABILITIES), "Should contain agentCapabilities field");
+        assertTrue(agentCard.containsKey(Fields.AGENT_SKILLS), "Should contain agentSkills field");
+        assertTrue(agentCard.containsKey(Fields.AGENT_INTERFACES), "Should contain agentInterfaces field");
+        assertTrue(agentCard.containsKey(Fields.PREFERRED_TRANSPORT), "Should contain preferredTransport field");
     }
     
     @Test
@@ -70,21 +85,62 @@ public class A2ATest {
         
         assertEquals(200, resp.getCode(), "Expected 200 OK response");
         
+        // Parse the JSON response using Convex JSONUtils
         String body = resp.getBodyText();
+        ACell parsedResponse = JSONUtils.parse(body);
+        assertNotNull(parsedResponse, "Response should be valid JSON");
         
-        // Verify it's valid JSON by checking for proper structure
-        assertTrue(body.startsWith("{"), "Should start with JSON object");
-        assertTrue(body.endsWith("}"), "Should end with JSON object");
+        // Verify it's a map (JSON object)
+        assertTrue(parsedResponse instanceof AMap, "Response should be a JSON object");
+        @SuppressWarnings("unchecked")
+        AMap<AString, ACell> agentCard = (AMap<AString, ACell>) parsedResponse;
         
-        // Verify required A2A fields are present
-        assertTrue(body.contains("\"agentProvider\""), "Should contain agentProvider");
-        assertTrue(body.contains("\"agentCapabilities\""), "Should contain agentCapabilities");
-        assertTrue(body.contains("\"agentSkills\""), "Should contain agentSkills");
-        assertTrue(body.contains("\"agentInterfaces\""), "Should contain agentInterfaces");
-        assertTrue(body.contains("\"preferredTransport\""), "Should contain preferredTransport");
+        // Verify required A2A fields are present using Fields constants
+        assertTrue(agentCard.containsKey(Fields.AGENT_PROVIDER), "Should contain agentProvider");
+        assertTrue(agentCard.containsKey(Fields.AGENT_CAPABILITIES), "Should contain agentCapabilities");
+        assertTrue(agentCard.containsKey(Fields.AGENT_SKILLS), "Should contain agentSkills");
+        assertTrue(agentCard.containsKey(Fields.AGENT_INTERFACES), "Should contain agentInterfaces");
+        assertTrue(agentCard.containsKey(Fields.PREFERRED_TRANSPORT), "Should contain preferredTransport");
         
-        // Verify transport information
-        assertTrue(body.contains("\"http+json\""), "Should support http+json transport");
-        assertTrue(body.contains("\"json-rpc\""), "Should support json-rpc transport");
+        // Verify agent provider structure
+        ACell agentProvider = agentCard.get(Fields.AGENT_PROVIDER);
+        assertNotNull(agentProvider, "agentProvider should not be null");
+        assertTrue(agentProvider instanceof AMap, "agentProvider should be an object");
+        @SuppressWarnings("unchecked")
+        AMap<AString, ACell> providerMap = (AMap<AString, ACell>) agentProvider;
+        assertTrue(providerMap.containsKey(Fields.NAME), "agentProvider should have name");
+        assertTrue(providerMap.containsKey(Fields.TITLE), "agentProvider should have title");
+        
+        // Verify agent capabilities structure
+        ACell agentCapabilities = agentCard.get(Fields.AGENT_CAPABILITIES);
+        assertNotNull(agentCapabilities, "agentCapabilities should not be null");
+        assertTrue(agentCapabilities instanceof AMap, "agentCapabilities should be an object");
+        
+        // Verify agent interfaces structure
+        ACell agentInterfaces = agentCard.get(Fields.AGENT_INTERFACES);
+        assertNotNull(agentInterfaces, "agentInterfaces should not be null");
+        assertTrue(agentInterfaces instanceof AVector, "agentInterfaces should be an array");
+        @SuppressWarnings("unchecked")
+        AVector<ACell> interfacesVector = (AVector<ACell>) agentInterfaces;
+        assertTrue(interfacesVector.count() > 0, "agentInterfaces should not be empty");
+        
+        // Verify transport information in interfaces
+        boolean foundHttpJson = false;
+        boolean foundJsonRpc = false;
+        for (long i = 0; i < interfacesVector.count(); i++) {
+            ACell interfaceObj = interfacesVector.get(i);
+            if (interfaceObj instanceof AMap) {
+                @SuppressWarnings("unchecked")
+                AMap<AString, ACell> interfaceMap = (AMap<AString, ACell>) interfaceObj;
+                ACell transport = interfaceMap.get(Fields.TRANSPORT);
+                if (transport != null) {
+                    String transportStr = transport.toString();
+                    if ("http+json".equals(transportStr)) foundHttpJson = true;
+                    if ("json-rpc".equals(transportStr)) foundJsonRpc = true;
+                }
+            }
+        }
+        assertTrue(foundHttpJson, "Should support http+json transport");
+        assertTrue(foundJsonRpc, "Should support json-rpc transport");
     }
 }

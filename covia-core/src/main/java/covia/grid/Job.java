@@ -37,6 +37,7 @@ public class Job {
 		if (status.equals(Status.COMPLETE)) return true;
 		if (status.equals(Status.FAILED)) return true;
 		if (status.equals(Status.CANCELLED)) return true;
+		if (status.equals(Status.REJECTED)) return true;
 		return false;
 	}
 
@@ -81,6 +82,17 @@ public class Job {
 	public synchronized boolean isComplete() {
 		AString value=RT.ensureString(data.get(Fields.JOB_STATUS_FIELD));	
 		return Status.COMPLETE.equals(value);
+	}
+	
+	/**
+	 * Checks if this job is paused (PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED status)
+	 * @return true if paused
+	 */
+	public synchronized boolean isPaused() {
+		AString status = getStatus();
+		return Status.PAUSED.equals(status) || 
+		       Status.INPUT_REQUIRED.equals(status) || 
+		       Status.AUTH_REQUIRED.equals(status);
 	}
 
 	/**
@@ -161,11 +173,12 @@ public class Job {
 	}
 	
 	/**
-	 * Gets the error message of this Job, if it has FAILED
-	 * @return Error message as a string, or null if no message or job is not failed
+	 * Gets the error message of this Job, if it has FAILED or REJECTED
+	 * @return Error message as a string, or null if no message or job is not failed/rejected
 	 */
 	public String getErrorMessage() {
-		if (getStatus() != Status.FAILED) return null;
+		AString status = getStatus();
+		if (status != Status.FAILED && status != Status.REJECTED) return null;
 		ACell errorField = RT.get(data, Fields.JOB_ERROR_FIELD);
 		return errorField != null ? errorField.toString() : null;
 	}
@@ -257,5 +270,30 @@ public class Job {
 			Fields.JOB_STATUS_FIELD, Status.FAILED,
 			Fields.JOB_ERROR_FIELD, Strings.create(message)
 		));
+	}
+	
+	/**
+	 * Create a job with a specific rejection message
+	 * @param message
+	 * @return Rejected Job
+	 */
+	public static Job rejected(String message) {
+		return Job.create(Maps.of(
+			Fields.JOB_STATUS_FIELD, Status.REJECTED,
+			Fields.JOB_ERROR_FIELD, Strings.create(message)
+		));
+	}
+	
+	/**
+	 * Create a job with PAUSED status
+	 * @param message Optional message explaining why the job was paused
+	 * @return Paused Job
+	 */
+	public static Job paused(String message) {
+		AMap<AString, ACell> jobData = Maps.of(Fields.JOB_STATUS_FIELD, Status.PAUSED);
+		if (message != null && !message.isEmpty()) {
+			jobData = jobData.assoc(Fields.MESSAGE, Strings.create(message));
+		}
+		return Job.create(jobData);
 	}
 }
