@@ -71,9 +71,9 @@ We're building this new category together. Join our community to get help, share
 We're excited to see what you'll build.
 
 <p align="center">
-  Powered by covia.ai <br>
-  <a href="https://covia.ai">
+  Powered by <br> 
+  <a> 
     <img src="https://raw.githubusercontent.com/covia-ai/covia-docs/master/static/img/Covia_Logo_Icon_Transp_Big.png"
-         alt="Powered by Covia.ai" width="60">
+         alt="Powered by Covia.ai" width="12.5"> covia.ai
   </a>
 </p>
