@@ -62,6 +62,7 @@ public class CoviaAPI extends ACoviaAPI {
 	private static final String GET_JOB = "getJob";
 
 	public static final AString SERVICE_TYPE = Strings.intern("Covia.API.v1");	
+	public static final AString STATS_FIELD = Strings.intern("stats");	
 	
 	private final SseServer sseServer;
 	
@@ -93,7 +94,16 @@ public class CoviaAPI extends ACoviaAPI {
 			summary = "Get a quick Covia status report", 
 			operationId = "status")	
 	protected void getStatus(Context ctx) { 
-		buildResult(ctx,200,engine.getStatus());
+		AMap<AString,ACell> result=engine.getStatus();
+		
+		// Add the external base URL
+		result=result.assoc(Fields.URL,RT.cvm(getExternalBaseUrl(ctx,null)));
+
+		// Add the external base URL
+		result=result.assoc(STATS_FIELD,engine.getStats());
+
+		
+		buildResult(ctx,200,result);
 	}
 
 

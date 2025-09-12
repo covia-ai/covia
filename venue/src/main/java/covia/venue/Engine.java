@@ -201,6 +201,10 @@ public class Engine {
 		// Get assets from lattice cursor
 		return RT.ensureMap(this.assets.get());
 	}
+	
+	private AMap<ABlob,AVector<?>> getOperations() {
+		return getAssets();
+	}
 
 
 	public static Engine createTemp(AMap<AString,ACell> config) {
@@ -445,6 +449,7 @@ public class Engine {
 	public AMap<AString,ACell> getStatus() {
 		AMap<AString,ACell> status=STATUS_MAP;
 		status=status.assoc(Fields.TS, CVMLong.create(Utils.getCurrentTimestamp()));
+		status=status.assoc(Fields.DID, getDIDString());
 		return status;
 	}
 
@@ -525,5 +530,16 @@ public class Engine {
 	public AString getName() {
 		return RT.str(config.get(Fields.NAME));
 	}
+
+	public AMap<AString, ACell> getStats() {
+		return Maps.of(
+				 "jobs",getJobs().size(),
+				 "assets",getAssets().size(),
+				 "users",101,
+				 "ops",getOperations().size()
+				);
+	}
+
+
 	
 }
