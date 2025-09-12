@@ -15,7 +15,7 @@ import convex.core.data.MapEntry;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import convex.core.util.ThreadUtils;
 import convex.core.util.Utils;
 import covia.api.Fields;
@@ -122,7 +122,7 @@ public class Orchestrator extends AAdapter {
 							if (job.isFinished()) return; // this includes CANCELLED, either way we're all done :-)
 							continue;
 						}
-						if (DEBUG_ORCH) System.out.println("Job completed "+JSONUtils.toJSONPretty(t.subJob.getData()));
+						if (DEBUG_ORCH) System.out.println("Job completed "+JSON.printPretty(t.subJob.getData()));
 						newlyComplete.add(t);
 						completionQueue.drainTo(newlyComplete);
 					}

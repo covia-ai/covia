@@ -20,7 +20,7 @@ import convex.core.data.Vectors;
 import convex.core.exceptions.ParseException;
 import convex.core.json.JSONReader;
 import convex.core.lang.RT;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import convex.core.util.Utils;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
@@ -189,7 +189,7 @@ public class MCP extends ACoviaAPI {
 					Job job=venue.invokeOperation(opID, arguments);
 					ACell result=job.awaitResult();
 					return protocolResult(Maps.of(
-								Fields.CONTENT,Vectors.of(Maps.of(Fields.TYPE,Fields.TEXT,Fields.TEXT,JSONUtils.toAString(result))),
+								Fields.CONTENT,Vectors.of(Maps.of(Fields.TYPE,Fields.TEXT,Fields.TEXT,JSON.toAString(result))),
 								Fields.STRUCTURED_CONTENT,result
 							));
 			} else {
@@ -308,7 +308,7 @@ public class MCP extends ACoviaAPI {
 					AString metaString = me.getValue();
 					
 					// Parse the metadata string to get the structured metadata
-					AMap<AString, ACell> meta = RT.ensureMap(JSONUtils.parse(metaString));
+					AMap<AString, ACell> meta = RT.ensureMap(JSON.parse(metaString));
 					AMap<AString, ACell> mcpTool = checkTool(meta);
 					if (mcpTool != null) {
 						toolsVector = toolsVector.conj(mcpTool);

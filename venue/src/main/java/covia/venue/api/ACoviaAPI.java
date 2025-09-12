@@ -1,7 +1,7 @@
 package covia.venue.api;
 
 import convex.api.ContentTypes;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import covia.venue.Engine;
 import io.javalin.http.Context;
 
@@ -85,7 +85,7 @@ public abstract class ACoviaAPI  {
 	
 	public void buildResult(Context ctx,Object json) {
 		try {
-			buildRawResult(ctx,JSONUtils.toString(json));
+			buildRawResult(ctx,JSON.toString(json));
 		} catch (Exception e) {
 			System.err.println("Error in JSON content building: "+json);
 			e.printStackTrace();
@@ -100,7 +100,7 @@ public abstract class ACoviaAPI  {
 	
 	public void buildError(Context ctx,int status,String message) {
 		if (status<400) throw new IllegalArgumentException("Unlikely HTTP error code: "+status);
-		buildRawResult(ctx,"{\"error\": \""+JSONUtils.escape(message)+"\"}");
+		buildRawResult(ctx,"{\"error\": \""+JSON.escape(message)+"\"}");
 		ctx.header("Content-type", ContentTypes.JSON);
 		ctx.status(status);
 	}

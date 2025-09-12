@@ -23,7 +23,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.java.HTTPClients;
 import covia.api.Fields;
@@ -110,7 +110,7 @@ public class HTTPAdapter extends AAdapter {
 			}
 			
 			SimpleHttpRequest req = SimpleHttpRequest.create(method, new URI(url.toString()));
-			String bodyText=(bodyField==null)?"":JSONUtils.toJSONPretty(bodyField).toString();
+			String bodyText=(bodyField==null)?"":JSON.printPretty(bodyField).toString();
 			req.setBody(bodyText, ContentType.TEXT_PLAIN);
 			for (MapEntry<AString,AString> me:headers.entryVector()) {
 				req.setHeader(me.getKey().toString(), me.getValue().toString());

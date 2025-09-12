@@ -35,7 +35,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import convex.java.HTTPClients;
 import covia.api.Fields;
 import covia.grid.AContent;
@@ -128,8 +128,8 @@ public class VenueServerTest {
 		
 		// Invoke the operation via the client
 		Job job=covia.invokeAndWait(TestOps.ORCH,input);
-		AString ps=JSONUtils.toJSONPretty(job.getData());
-		assertEquals(job.getData(),JSONUtils.parse(ps.toString()));
+		AString ps=JSON.printPretty(job.getData());
+		assertEquals(job.getData(),JSON.parse(ps.toString()));
 		// System.out.println("testOrchOperation:"+JSONUtils.toJSONPretty(job.getData()));
 		assertEquals(Status.COMPLETE,job.getStatus());
 		assertEquals(input,RT.getIn(job.getOutput(),"original-input"));

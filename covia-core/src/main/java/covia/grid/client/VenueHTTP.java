@@ -24,7 +24,7 @@ import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import convex.did.DID;
 import covia.api.Fields;
 import covia.exception.ConversionException;
@@ -69,7 +69,7 @@ public class VenueHTTP extends Venue {
 	 * @param jsonMeta JSON metadata string for the asset
 	 */
 	public CompletableFuture<Hash> addAsset(String jsonMeta) {
-		ACell meta=JSONUtils.parseJSON5(jsonMeta);
+		ACell meta=JSON.parseJSON5(jsonMeta);
 		return addAsset(meta);
 	}
 	
@@ -80,14 +80,14 @@ public class VenueHTTP extends Venue {
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(getBaseURI().resolve("assets"))
 			.header("Content-Type", "application/json")
-			.POST(HttpRequest.BodyPublishers.ofString(JSONUtils.toJSONPretty(meta).toString()))
+			.POST(HttpRequest.BodyPublishers.ofString(JSON.printPretty(meta).toString()))
 			.build();
 		
 		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response -> {
 			if (response.statusCode() != 201) {
 				throw new ResponseException("Failed to add asset: " + response.statusCode() + " - " + response.body(), response);
 			}
-			ACell body=JSONUtils.parseJSON5(response.body());
+			ACell body=JSON.parseJSON5(response.body());
 			Hash v=Hash.parse(body);
 			if (v!=null) return v;
 			throw new ConversionException("Result did not contain a valid Hash: got "+body); 
@@ -139,7 +139,7 @@ public class VenueHTTP extends Venue {
 			if (code!=200) {
 				throw new ResponseException("getStatus resturned code: "+code,response);
 			}
-			return RT.ensureMap(JSONUtils.parse(response.body()));
+			return RT.ensureMap(JSON.parse(response.body()));
 		});
 	}
 
@@ -247,7 +247,7 @@ public class VenueHTTP extends Venue {
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(getBaseURI().resolve("invoke"))
 			.header("Content-Type", "application/json")
-			.POST(HttpRequest.BodyPublishers.ofString(JSONUtils.toString(Maps.of(
+			.POST(HttpRequest.BodyPublishers.ofString(JSON.toString(Maps.of(
 				"operation", opID,
 				"input", input
 			))))
@@ -257,7 +257,7 @@ public class VenueHTTP extends Venue {
 			if (response.statusCode() != 201) {
 				throw new ResponseException("Failed to start operation: " + response+" = "+response.body(),response);
 			}
-			AMap<AString,ACell> body=RT.ensureMap(JSONUtils.parseJSON5(response.body()));
+			AMap<AString,ACell> body=RT.ensureMap(JSON.parseJSON5(response.body()));
 			if (body==null) {
 				throw new ResponseException("Invalid response body",response);
 			}
@@ -305,7 +305,7 @@ public class VenueHTTP extends Venue {
 			if (code != 200) {
 				throw new ConversionException("assets API returned status: "+code);
 			}
-			ACell body=JSONUtils.parseJSON5(response.body());
+			ACell body=JSON.parseJSON5(response.body());
 			AVector<?> items=null;
 			if (body instanceof AVector v) {
 				// Support for legacy API version that returned a list of asset IDs
@@ -373,7 +373,7 @@ public class VenueHTTP extends Venue {
 		
 		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response -> {
 			if (response.statusCode() == 200 || response.statusCode() == 201) {
-				ACell json=JSONUtils.parse(response.body());
+				ACell json=JSON.parse(response.body());
 				if (json instanceof AString hashString) {
 					Hash hash=Hash.parse(hashString);
 					if (hash!=null) {
@@ -479,7 +479,7 @@ public class VenueHTTP extends Venue {
 		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code == 200) {
-				return RT.ensureMap(JSONUtils.parse(response.body()));
+				return RT.ensureMap(JSON.parse(response.body()));
 			} else if (code == 404) {
 				return null;
 			} else {

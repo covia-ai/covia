@@ -19,7 +19,7 @@ import convex.core.data.Hash;
 import convex.core.data.Strings;
 import convex.core.exceptions.ParseException;
 import convex.core.lang.RT;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.Engine;
@@ -380,7 +380,7 @@ public class CoviaAPI extends ACoviaAPI {
 										from = InvokeResult.class) })
 					})	
 	protected void invokeOperation(Context ctx) { 
-		ACell req=JSONUtils.parseJSON5(ctx.body());
+		ACell req=JSON.parseJSON5(ctx.body());
 		
 		AString op=RT.ensureString(RT.getIn(req, "operation"));
 		if (op==null) {

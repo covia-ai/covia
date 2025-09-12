@@ -14,7 +14,7 @@ import convex.core.data.MapEntry;
 import convex.core.data.Maps;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import convex.core.util.Utils;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
@@ -210,7 +210,7 @@ public class A2A extends ACoviaAPI {
 					AString metaString = me.getValue();
 					
 					// Parse the metadata string to get the structured metadata
-					AMap<AString, ACell> meta = RT.ensureMap(JSONUtils.parse(metaString));
+					AMap<AString, ACell> meta = RT.ensureMap(JSON.parse(metaString));
 					AMap<AString, ACell> skill = checkSkill(meta);
 					if (skill != null) {
 						skillsVector = skillsVector.conj(skill);

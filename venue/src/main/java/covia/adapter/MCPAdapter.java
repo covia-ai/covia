@@ -1,7 +1,5 @@
 package covia.adapter;
 
-
-
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -15,7 +13,7 @@ import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import io.modelcontextprotocol.client.McpClient;
@@ -175,7 +173,7 @@ public class MCPAdapter extends AAdapter {
 		@SuppressWarnings("unchecked")
 		CallToolRequest request = CallToolRequest.builder()
 			.name(toolName)
-			.arguments((Map<String,Object>)JSONUtils.json(toolParams))
+			.arguments((Map<String,Object>)JSON.json(toolParams))
 			.build();
 
 		CallToolResult response=client.callTool(request);

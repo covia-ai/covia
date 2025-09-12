@@ -21,7 +21,7 @@ import convex.core.data.Maps;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.FileUtils;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.venue.server.VenueServer;
 
@@ -45,7 +45,7 @@ public class MainVenue {
 			if (!Files.exists(cPath)) {
 				log.error("Config file does not exist: "+cPath);
 			}
-			config =(AMap<AString, ACell>) JSONUtils.parseJSON5(FileUtils.loadFileAsString(configPath));
+			config =(AMap<AString, ACell>) JSON.parseJSON5(FileUtils.loadFileAsString(configPath));
 			log.info("Server startup config loaded from "+cPath);
 		} catch (Exception ex) {
 			log.error("Error loading config",ex);

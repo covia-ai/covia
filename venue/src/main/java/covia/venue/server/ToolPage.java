@@ -7,7 +7,7 @@ import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.venue.Engine;
@@ -47,7 +47,7 @@ public class ToolPage {
             }
             
             // Parse the metadata
-            AMap<AString, ACell> meta = RT.ensureMap(convex.core.util.JSONUtils.parse(metaString));
+            AMap<AString, ACell> meta = RT.ensureMap(convex.core.util.JSON.parse(metaString));
             
             // Get the operation information
             AMap<AString, ACell> operation = RT.ensureMap(meta.get(Fields.OPERATION));
@@ -224,7 +224,7 @@ public class ToolPage {
             AString type = RT.ensureString(schema.get(Strings.create("type")));
             return div(
                 p("Type: " + (type != null ? type.toString() : "object")),
-                p("Schema: " + code(JSONUtils.toJSONPretty(schema).toString()))
+                p("Schema: " + code(JSON.printPretty(schema).toString()))
             );
         }
         

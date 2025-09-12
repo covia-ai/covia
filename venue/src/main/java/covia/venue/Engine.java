@@ -29,7 +29,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.did.DID;
 import convex.etch.EtchStore;
@@ -169,7 +169,7 @@ public class Engine {
 	}
 
 	public Hash storeAsset(AString meta, ACell content) {
-		AMap<AString,ACell> metaMap=RT.ensureMap(JSONUtils.parse(meta));
+		AMap<AString,ACell> metaMap=RT.ensureMap(JSON.parse(meta));
 		if (metaMap==null) {
 			throw new IllegalArgumentException("Metadata is not a valid JSON object");
 		}

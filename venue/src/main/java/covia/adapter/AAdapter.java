@@ -1,6 +1,5 @@
 package covia.adapter;
 
-import java.io.IOException;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 
@@ -13,7 +12,7 @@ import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Strings;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -66,7 +65,7 @@ public abstract class AAdapter {
 	 * @param resourcePath The resource path to read the asset from
 	 */
 	protected Hash installAsset(AMap<AString,ACell> meta) {
-		return installAsset(JSONUtils.toJSONPretty(meta));
+		return installAsset(JSON.printPretty(meta));
 	}
 	
     protected Hash installAsset(AString metaString) {

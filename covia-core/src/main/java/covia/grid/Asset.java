@@ -10,7 +10,7 @@ import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import covia.exception.JobFailedException;
 
 /**
@@ -41,7 +41,7 @@ public class Asset {
 	}
 	
 	public static Asset fromMeta(AMap<AString,ACell> meta) {
-		Asset result= forString(JSONUtils.toJSONPretty(meta));
+		Asset result= forString(JSON.printPretty(meta));
 		result.meta=meta;
 		return result;
 	}
@@ -123,7 +123,7 @@ public class Asset {
 		if (meta!=null) return meta;
 		AString metadata=getMetadata();
 		try {
-			AMap<AString,ACell> result=RT.ensureMap(JSONUtils.parse(metadata));
+			AMap<AString,ACell> result=RT.ensureMap(JSON.parse(metadata));
 			if (result==null) throw new IllegalStateException("Bad asset metadata: "+metadata);
 			meta=result;
 			return result;

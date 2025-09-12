@@ -11,8 +11,7 @@ import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.core5.http.io.entity.EntityUtils;
 import org.apache.hc.core5.http.io.entity.StringEntity;
 
-import convex.core.util.JSONUtils;
-import convex.java.JSON;
+import convex.core.util.JSON;
 import io.javalin.http.Context;
 
 public class LoginProviders {
@@ -73,7 +72,7 @@ public class LoginProviders {
 		params.put("client_secret", provider.clientSecret);
 		params.put("redirect_uri", provider.redirectUri);
 		params.put("grant_type", "authorization_code");
-		tokenRequest.setEntity(new StringEntity(JSONUtils.toString(params)));
+		tokenRequest.setEntity(new StringEntity(JSON.toString(params)));
 
 		try (CloseableHttpResponse response = client.execute(tokenRequest)) {
 			if (response.getCode() != 200) {
@@ -136,7 +135,7 @@ public class LoginProviders {
 
 		@SuppressWarnings("unchecked")
 		public static TokenResponse fromJSON(String json) {
-			Map<String, Object> data = (Map<String, Object>) JSON.from(json);
+			Map<String, Object> data = (Map<String, Object>) JSON.jvm(json);
 			TokenResponse tr = new TokenResponse();
 			tr.accessToken = (String) data.get("accessToken");
 			tr.idToken = (String) data.get("idToken");
@@ -151,7 +150,7 @@ public class LoginProviders {
 
 		public UserInfo(String json) {
 			@SuppressWarnings("unchecked")
-			Map<String, String> data = (Map<String, String>) JSON.from(json);
+			Map<String, String> data = (Map<String, String>) JSON.jvm(json);
 			this.id = data.get("id");
 			this.email = data.get("email");
 			this.name = data.get("name");

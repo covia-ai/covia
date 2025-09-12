@@ -369,7 +369,7 @@ public class CoviaWebApp  {
 					AString metaString = me.getValue();
 					
 					// Parse the metadata string to get the structured metadata
-					AMap<AString, ACell> meta = RT.ensureMap(convex.core.util.JSONUtils.parse(metaString));
+					AMap<AString, ACell> meta = RT.ensureMap(convex.core.util.JSON.parse(metaString));
 					AMap<AString, ACell> operation = RT.ensureMap(meta.get(Fields.OPERATION));
 					
 					if (operation != null) {

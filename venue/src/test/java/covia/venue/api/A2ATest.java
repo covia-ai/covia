@@ -23,7 +23,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import convex.java.HTTPClients;
 import covia.api.Fields;
 import covia.venue.TestServer;
@@ -58,7 +58,7 @@ public class A2ATest {
         
         // Parse the JSON response using Convex JSONUtils
         String body = resp.getBodyText();
-        ACell parsedResponse = JSONUtils.parse(body);
+        ACell parsedResponse = JSON.parse(body);
         assertNotNull(parsedResponse, "Response should be valid JSON");
         
         // Verify it's a map (JSON object)
@@ -87,7 +87,7 @@ public class A2ATest {
         
         // Parse the JSON response using Convex JSONUtils
         String body = resp.getBodyText();
-        ACell parsedResponse = JSONUtils.parse(body);
+        ACell parsedResponse = JSON.parse(body);
         assertNotNull(parsedResponse, "Response should be valid JSON");
         
         // Verify it's a map (JSON object)

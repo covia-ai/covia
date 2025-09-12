@@ -22,7 +22,7 @@ import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
-import convex.core.util.JSONUtils;
+import convex.core.util.JSON;
 import convex.core.util.Utils;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -68,7 +68,7 @@ public class VenueTest {
 		);
 		
 		// Add the asset
-		Hash id=venue.storeAsset(JSONUtils.toJSONPretty(meta), null);
+		Hash id=venue.storeAsset(JSON.printPretty(meta), null);
 		assertNotNull(id);
 		
 		// Verify the asset was added
@@ -86,7 +86,7 @@ public class VenueTest {
 		String ms=Utils.readResourceAsString("/asset-examples/randomop.json");
 		assertNotNull(ms);
 		
-		ACell md=JSONUtils.parseJSON5(ms);
+		ACell md=JSON.parseJSON5(ms);
 		assertEquals("Random Data Generator",RT.getIn(md, "name").toString());
 	}
 	
@@ -211,7 +211,7 @@ public class VenueTest {
 		);
 		
 		// Add the asset with metadata using local venue API
-		Hash assetId = venue.storeAsset(JSONUtils.toJSONPretty(metadata), null);
+		Hash assetId = venue.storeAsset(JSON.printPretty(metadata), null);
 		assertNotNull(assetId, "Asset ID should be returned");
 		
 		// Create content object for upload
