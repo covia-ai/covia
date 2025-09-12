@@ -93,7 +93,7 @@ public class CoviaAPI extends ACoviaAPI {
 			summary = "Get a quick Covia status report", 
 			operationId = "status")	
 	protected void getStatus(Context ctx) { 
-		buildResult(ctx,200,venue.getStatus());
+		buildResult(ctx,200,engine.getStatus());
 	}
 
 
@@ -161,7 +161,7 @@ public class CoviaAPI extends ACoviaAPI {
 
 		
 		
-		AMap<ABlob, AVector<?>> allAssets = venue.getAssets();  
+		AMap<ABlob, AVector<?>> allAssets = engine.getAssets();  
 		long n=allAssets.count();
 		result.put(Fields.TOTAL, n);
 		
@@ -204,7 +204,7 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void addAsset(Context ctx) { 
 		try {
 			AString meta=Strings.fromStream(ctx.bodyInputStream());
-			Hash id=venue.storeAsset(meta,null);
+			Hash id=engine.storeAsset(meta,null);
 			buildResult(ctx,201,id.toHexString());
 			ctx.header("Location",ROUTE+"assets/"+id.toHexString());
 		} catch (ClassCastException | IOException | ParseException e) {
@@ -230,7 +230,7 @@ public class CoviaAPI extends ACoviaAPI {
 		Hash assetID=Hash.parse(id);
 		if (assetID==null) throw new BadRequestResponse("Invalid asset ID: " + id);
 		
-		AString meta=venue.getMetadata(assetID);
+		AString meta=engine.getMetadata(assetID);
 		if (meta==null) {
 			buildError(ctx,404,"Asset not found: "+id);
 			return;
@@ -269,7 +269,7 @@ public class CoviaAPI extends ACoviaAPI {
 		String id=ctx.pathParam("id");
 		Hash assetID=Hash.parse(ctx.pathParam("id"));
 		
-		AMap<AString,ACell> meta=venue.getMetaValue(assetID);
+		AMap<AString,ACell> meta=engine.getMetaValue(assetID);
 		if (meta==null) {
 			buildError(ctx,404,"Asset not found: "+assetID);		
 			return;
@@ -282,7 +282,7 @@ public class CoviaAPI extends ACoviaAPI {
 		
 		try {
 			ACell contentMeta=meta.get(Fields.CONTENT);
-			InputStream is = venue.getContentStream(meta);
+			InputStream is = engine.getContentStream(meta);
 			if (is==null) {
 				buildError(ctx,404,"Asset did not have any content available: "+id);
 				return;
@@ -329,7 +329,7 @@ public class CoviaAPI extends ACoviaAPI {
 		String idString=ctx.pathParam("id");
 		Hash assetID=Hash.parse(idString);
 		
-		AMap<AString,ACell> meta=venue.getMetaValue(assetID);
+		AMap<AString,ACell> meta=engine.getMetaValue(assetID);
 		if (meta==null) {
 			buildError(ctx,404,"Asset not found: "+idString);		
 			return;
@@ -342,7 +342,7 @@ public class CoviaAPI extends ACoviaAPI {
 		
 		try {
 			InputStream is=ctx.bodyInputStream();
-			Hash contentHash= venue.putContent(meta,is);
+			Hash contentHash= engine.putContent(meta,is);
 			buildResult(ctx,200,contentHash);
 			
 		} catch (IllegalArgumentException e) {
@@ -390,7 +390,7 @@ public class CoviaAPI extends ACoviaAPI {
 		ACell input=RT.getIn(req, "input");
 		
 		try {
-			Job job=venue.invokeOperation(op,input);
+			Job job=engine.invokeOperation(op,input);
 			if (job==null) {
 				buildError(ctx,404,"Operation does not exist");
 				return;
@@ -427,7 +427,7 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 		
-		ACell status=venue.getJobData(id);
+		ACell status=engine.getJobData(id);
 		if (status==null) {
 			buildError(ctx,404,"Job not found: "+id);
 			return;
@@ -455,7 +455,7 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 		
-		AMap<AString, ACell> status = venue.cancelJob(id);
+		AMap<AString, ACell> status = engine.cancelJob(id);
 		ctx.status((status==null)?404:200);
 	}
 	
@@ -478,7 +478,7 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 		
-		boolean deleted=venue.deleteJob(id);
+		boolean deleted=engine.deleteJob(id);
 		ctx.status(deleted?200:404);
 	}
 	
@@ -487,7 +487,7 @@ public class CoviaAPI extends ACoviaAPI {
 			tags = { "Covia"},
 			summary = "Get Covia jobs.")	
 	protected void getJobs(Context ctx) { 
-		List<AString> jobs = venue.getJobs();
+		List<AString> jobs = engine.getJobs();
 		buildResult(ctx,jobs);
 	}
 
@@ -517,7 +517,7 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		
 		// Create a complete DID document structure
-		AMap<AString, ACell> didDocument = venue.getDIDDocument(host,getExternalBaseUrl(ctx,ROUTE));
+		AMap<AString, ACell> didDocument = engine.getDIDDocument(host,getExternalBaseUrl(ctx,ROUTE));
 		
 		// Set content type to application/did+json
 		ctx.header("Content-Type", "application/did+json");

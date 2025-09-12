@@ -150,4 +150,41 @@ public class HTTPTest {
 		String bodyStr = body.toString();
 		assertTrue(bodyStr.length() > 0, "Response body should contain content (even if it's an error page)");
 	}
+	
+	@Test public void testHTTPWithQueryParams() throws InterruptedException, ExecutionException, TimeoutException {
+		VenueHTTP covia = TestServer.COVIA;
+		
+		// Test HTTP GET with query parameters using httpbin.org
+		Job result = covia.invokeSync("http:get", Maps.of(
+			"url", "https://httpbin.org/get",
+			"queryParams", Maps.of(
+				"param1", "value1",
+				"param2", "value2",
+				"test", "query parameters"
+			),
+			"headers", Maps.of("User-Agent", "Covia-Test/1.0")
+		));
+		
+		assertTrue(result.isComplete(), "HTTP GET with query params should complete");
+		
+		// Verify we get a 200 status
+		Object status = RT.getIn(result.getOutput(), "status");
+		assertTrue(status != null, "Should have status in output");
+		long statusCode = RT.ensureLong((convex.core.data.ACell)status).longValue();
+		assertEquals(200, statusCode, "Request with query params should return 200 status");
+		
+		// Verify we have a response body
+		Object body = RT.getIn(result.getOutput(), "body");
+		assertTrue(body != null, "Should have body in output");
+		String bodyStr = body.toString();
+		assertTrue(bodyStr.length() > 0, "Response body should contain content");
+		
+		// Verify the response contains our query parameters
+		assertTrue(bodyStr.contains("param1"), "Response should contain param1");
+		assertTrue(bodyStr.contains("value1"), "Response should contain value1");
+		assertTrue(bodyStr.contains("param2"), "Response should contain param2");
+		assertTrue(bodyStr.contains("value2"), "Response should contain value2");
+		assertTrue(bodyStr.contains("test"), "Response should contain test");
+		assertTrue(bodyStr.contains("query parameters"), "Response should contain 'query parameters'");
+	}
 }

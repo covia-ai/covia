@@ -16,6 +16,7 @@ import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.MapEntry;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.exceptions.ParseException;
 import convex.core.json.JSONReader;
@@ -46,19 +47,22 @@ public class MCP extends ACoviaAPI {
 	final AMap<AString,ACell> SERVER_INFO;
 
 	protected final SseServer sseServer;
+	
+	protected final AString  SERVER_URL_FIELD=Strings.intern("server_url");
+
 
 	private boolean LOG_MCP=false;
 
 	
-	public MCP(Engine venue, AMap<AString, ACell> mcpConfig) {
-		super(venue);
-		this.sseServer=new SseServer(venue);
+	public MCP(Engine engine, AMap<AString, ACell> mcpConfig) {
+		super(engine);
+		this.sseServer=new SseServer(engine);
 		// See: https://zazencodes.com/blog/mcp-server-naming-conventions
 		AMap<AString,ACell> serverInfo = RT.getIn(mcpConfig, "serverInfo");
 		
 		if (serverInfo==null) serverInfo=Maps.of(
 			"name", "covia-grid-mcp",
-			"title", venue.getName(),
+			"title", engine.getName(),
 			"version", Utils.getVersion()
 		);
 		SERVER_INFO=serverInfo;
@@ -186,7 +190,7 @@ public class MCP extends ACoviaAPI {
 			Hash opID=findTool(toolName);
 			ACell arguments=RT.getIn(params, Fields.ARGUMENTS);
 			if (opID!=null) {
-					Job job=venue.invokeOperation(opID, arguments);
+					Job job=engine.invokeOperation(opID, arguments);
 					ACell result=job.awaitResult();
 					return protocolResult(Maps.of(
 								Fields.CONTENT,Vectors.of(Maps.of(Fields.TYPE,Fields.TEXT,Fields.TEXT,JSON.toAString(result))),
@@ -203,9 +207,9 @@ public class MCP extends ACoviaAPI {
 
 	private Hash findTool(AString methodAS) {
 		// Iterate through all registered adapters
-		for (String adapterName : venue.getAdapterNames()) {
+		for (String adapterName : engine.getAdapterNames()) {
 			try {
-				var adapter = venue.getAdapter(adapterName);
+				var adapter = engine.getAdapter(adapterName);
 				if (adapter == null) continue;
 				
 				// Get tools from this specific adapter
@@ -213,7 +217,7 @@ public class MCP extends ACoviaAPI {
 				long n=adapterTools.count();
 				for (long i=0; i<n; i++) {
 					Hash h=adapterTools.entryAt(i).getKey();
-					AMap<AString,ACell> meta=venue.getMetaValue(h);
+					AMap<AString,ACell> meta=engine.getMetaValue(h);
 					if (methodAS.equals(RT.getIn(meta, Fields.OPERATION, Fields.TOOL_NAME))) {
 						return h;
 					}
@@ -272,9 +276,9 @@ public class MCP extends ACoviaAPI {
 		AVector<AMap<AString,ACell>> toolsVector=Vectors.empty();
 		
 		// Iterate through all registered adapters
-		for (String adapterName : venue.getAdapterNames()) {
+		for (String adapterName : engine.getAdapterNames()) {
 			try {
-				var adapter = venue.getAdapter(adapterName);
+				var adapter = engine.getAdapter(adapterName);
 				if (adapter == null) continue;
 				
 				// Get tools from this specific adapter
@@ -355,7 +359,8 @@ public class MCP extends ACoviaAPI {
 		ctx.status(405); // not allowed. MUST return this if SSE not supported
 	}
 	
-	private ACell WELL_KNOWN=JSONReader.read("""
+	@SuppressWarnings("unchecked")
+	private AMap<AString,ACell> WELL_KNOWN=(AMap<AString, ACell>) JSON.parse("""
 			{	
 			"mcp_version": "1.0",
 			"server_url": "http:localhost:8080/mcp",
@@ -375,7 +380,10 @@ public class MCP extends ACoviaAPI {
 			summary = "Get MCP server capabilities", 
 			operationId = "mcpWellKnown")	
 	protected void getMCPWellKnown(Context ctx) { 
-		buildResult(ctx,WELL_KNOWN);
+		AMap<AString,ACell> result=WELL_KNOWN;
+		AString mcpURL=Strings.create(getExternalBaseUrl(ctx, "mcp"));
+		result=result.assoc(SERVER_URL_FIELD,mcpURL);
+		buildResult(ctx,result);
 	}
 
 }

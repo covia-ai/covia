@@ -13,8 +13,8 @@ public abstract class ACoviaAPI  {
 	/**
 	 * Utility method to construct the external base URL
 	 * @param ctx Javalin context
-	 * @param basePath
-	 * @return
+	 * @param basePath Path for base URL e.g. "mcp"
+	 * @return Base URL for external use (possible localhost if external URL not available from Context)
 	 */
 	public static String getExternalBaseUrl(Context ctx, String basePath) {
 	    // Try to get information from forwarded headers
@@ -72,10 +72,10 @@ public abstract class ACoviaAPI  {
 	    return baseUrl.toString();
 	}
 
-	protected Engine venue;
+	protected Engine engine;
 
 	public ACoviaAPI(Engine venue) {
-		this.venue=venue;
+		this.engine=venue;
 	}
 
 	public void buildRawResult(Context ctx,String jsonContent) {

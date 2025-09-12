@@ -2,6 +2,8 @@ package covia.adapter;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
@@ -40,7 +42,7 @@ public class HTTPAdapter extends AAdapter {
 	@Override
 	public String getDescription() {
 		return "HTTP client enables seamless web API integration and external service communication. " +
-			   "Supports GET, POST, and other HTTP methods with custom headers and request bodies. " +
+			   "Supports GET, POST, and other HTTP methods with custom headers, query parameters, and request bodies. " +
 			   "Perfect for integrating with REST APIs, web services, and external data sources like Google Search and AI model APIs.";
 	}
 	
@@ -51,6 +53,7 @@ public class HTTPAdapter extends AAdapter {
 		// Install HTTP-related operation assets
 		installAsset(BASE + "httpget.json");
 		installAsset(BASE + "httppost.json");
+		installAsset(BASE + "http-query-example.json");
 		installAsset(BASE + "googlesearch.json");
 		
 		// Install Google search orchestration examples
@@ -61,7 +64,7 @@ public class HTTPAdapter extends AAdapter {
 		log.info("HTTP adapter assets installed successfully");
 	}
 	
-	/* Example Gemini request
+	/* Example Gemini request with query parameters
 	 {
   "operation": "http:any",
 
@@ -71,6 +74,10 @@ public class HTTPAdapter extends AAdapter {
     "headers":{
       "content-type":"application/json",
       "x-goog-api-key":"YOUR-KEY-HERE"
+    },
+    "queryParams": {
+      "key": "YOUR-API-KEY",
+      "alt": "json"
     },
     "body":{
       "contents": [
@@ -99,6 +106,7 @@ public class HTTPAdapter extends AAdapter {
 		}
 		
 		AMap<AString,AString> headers=RT.ensureMap(RT.getIn(input, Fields.HEADERS));
+		AMap<AString,AString> queryParams=RT.ensureMap(RT.getIn(input, Fields.QUERY_PARAMS));
 		ACell bodyField=RT.getIn(input, Fields.BODY);
 		
 		try {
@@ -109,9 +117,31 @@ public class HTTPAdapter extends AAdapter {
 				throw new IllegalArgumentException("Invalid HTTP method specified: "+methodField);
 			}
 			
-			SimpleHttpRequest req = SimpleHttpRequest.create(method, new URI(url.toString()));
+			// Build URL with query parameters
+			String finalUrl = url.toString();
+			if (queryParams != null && !queryParams.isEmpty()) {
+				StringBuilder queryString = new StringBuilder();
+				boolean first = true;
+				
+				for (MapEntry<AString,AString> me : queryParams.entryVector()) {
+					if (!first) {
+						queryString.append("&");
+					}
+					queryString.append(URLEncoder.encode(me.getKey().toString(), StandardCharsets.UTF_8))
+							  .append("=")
+							  .append(URLEncoder.encode(me.getValue().toString(), StandardCharsets.UTF_8));
+					first = false;
+				}
+				
+				if (queryString.length() > 0) {
+					finalUrl += (finalUrl.contains("?") ? "&" : "?") + queryString.toString();
+				}
+			}
+			
+			SimpleHttpRequest req = SimpleHttpRequest.create(method, new URI(finalUrl));
 			String bodyText=(bodyField==null)?"":JSON.printPretty(bodyField).toString();
 			req.setBody(bodyText, ContentType.TEXT_PLAIN);
+			
 			for (MapEntry<AString,AString> me:headers.entryVector()) {
 				req.setHeader(me.getKey().toString(), me.getValue().toString());
 			}

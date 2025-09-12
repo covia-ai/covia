@@ -174,9 +174,9 @@ public class A2A extends ACoviaAPI {
 		AVector<AMap<AString, ACell>> skills = Vectors.empty();
 		
 		// Iterate through all registered adapters to collect skills
-		for (String adapterName : venue.getAdapterNames()) {
+		for (String adapterName : engine.getAdapterNames()) {
 			try {
-				var adapter = venue.getAdapter(adapterName);
+				var adapter = engine.getAdapter(adapterName);
 				if (adapter == null) continue;
 				
 				// Get skills from this specific adapter

@@ -47,6 +47,7 @@ public class Fields {
 	
 	// HTTP related
 	public static final StringShort HEADERS = Strings.intern("headers");
+	public static final StringShort QUERY_PARAMS = Strings.intern("queryParams");
 	public static final StringShort BODY = Strings.intern("body");
 	public static final StringShort METHOD = Strings.intern("method");
 	public static final StringShort INLINE = Strings.intern("inline");

@@ -25,6 +25,13 @@
 						"User-Agent": "Covia-HTTP/1.0"
 					}
 				},
+				"queryParams": {
+					"type": "object",
+					"description": "Optional query parameters to append to the URL",
+					"defaultValue": {
+						"format": "json"
+					}
+				},
 				"body": {
 					"type": "object",
 					"description": "The request body to send",

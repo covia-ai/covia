@@ -1,6 +1,6 @@
 {
-	"name": "HTTP GET Operation",
-	"description": "Performs a simple HTTP GET request using the HTTPAdapter",
+	"name": "HTTP Query Parameters Example",
+	"description": "Demonstrates how to use query parameters with the HTTP adapter for API calls",
 	"dateCreated": "2025-01-27T10:00:00Z",
 	"operation": {
 		"adapter": "http",
@@ -9,22 +9,30 @@
 			"properties": {
 				"url": {
 					"type": "string",
-					"description": "The URL to make a GET request to",
-					"defaultValue": "https://httpbin.org/get"
+					"description": "The base URL for the API endpoint",
+					"defaultValue": "https://api.github.com/search/repositories"
+				},
+				"method": {
+					"type": "string",
+					"description": "HTTP method to use",
+					"defaultValue": "GET"
 				},
 				"headers": {
 					"type": "object",
-					"description": "Optional HTTP headers to include in the request",
+					"description": "HTTP headers to include in the request",
 					"defaultValue": {
+						"Accept": "application/vnd.github.v3+json",
 						"User-Agent": "Covia-HTTP/1.0"
 					}
 				},
 				"queryParams": {
 					"type": "object",
-					"description": "Optional query parameters to append to the URL",
+					"description": "Query parameters to append to the URL",
 					"defaultValue": {
-						"format": "json",
-						"pretty": "true"
+						"q": "java language:java",
+						"sort": "stars",
+						"order": "desc",
+						"per_page": "5"
 					}
 				}
 			},
@@ -48,4 +56,4 @@
 			}
 		}
 	}
-} 
+}
