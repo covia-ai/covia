@@ -4,7 +4,10 @@
 			"name":"Local Test Venue",
 			"did":"did:covia:local",
 			"hostname":"localhost",
-			"port":8080
+			"port":8080,
+			"mcp":{
+				
+			}
 		}
 		
 		

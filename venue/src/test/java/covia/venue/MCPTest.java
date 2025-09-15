@@ -22,15 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
-import convex.java.HTTPClients;
-import io.modelcontextprotocol.client.McpClient;
-import io.modelcontextprotocol.client.McpSyncClient;
-import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
-import io.modelcontextprotocol.spec.McpClientTransport;
-import io.modelcontextprotocol.spec.McpSchema.InitializeResult;
-import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
-import io.modelcontextprotocol.spec.McpSchema.Tool;
-
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -39,7 +30,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.AInteger;
 import convex.core.lang.RT;
-import covia.adapter.AAdapter;
+import convex.java.HTTPClients;
 import covia.adapter.MCPAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
@@ -47,6 +38,13 @@ import covia.grid.Grid;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.api.MCP;
+import io.modelcontextprotocol.client.McpClient;
+import io.modelcontextprotocol.client.McpSyncClient;
+import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
+import io.modelcontextprotocol.spec.McpClientTransport;
+import io.modelcontextprotocol.spec.McpSchema.InitializeResult;
+import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
+import io.modelcontextprotocol.spec.McpSchema.Tool;
 
 @TestInstance(Lifecycle.PER_CLASS)
 public class MCPTest {

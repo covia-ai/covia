@@ -37,8 +37,6 @@ import io.javalin.openapi.OpenApiExampleProperty;
 import io.javalin.openapi.OpenApiParam;
 import io.javalin.openapi.OpenApiRequestBody;
 import io.javalin.openapi.OpenApiResponse;
-import convex.core.data.Maps;
-import convex.core.data.Vectors;
 
 public class CoviaAPI extends ACoviaAPI {
 	

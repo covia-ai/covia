@@ -366,7 +366,7 @@ public class MCP extends ACoviaAPI {
 			"server_url": "http:localhost:8080/mcp",
 			"description": "MCP server for Covia Venue",
 			"tools_endpoint": "/mcp",
-			"endpoint": {"path":"/map","transport":"streamable-http"},
+			"endpoint": {"path":"/mcp","transport":"streamable-http"},
 			"auth": {
 				"type": "oauth2",
 				"authorization_endpoint": null

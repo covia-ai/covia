@@ -20,13 +20,15 @@ sudo apt install -y caddy
 
 ## Run Covia Venue Jar
 
-You will need to obtain the runnable `.jar` file for the Covia Venue.
+You will need to obtscain the runnable `.jar` file for the Covia Venue.
 
 To run normally at the CLI:
 
 ```
-java -jar covia.jar
+java -jar covia.jar ~/.covia/config.json
 ```
+
+You can omit the config file to get default behaviour
 
 To run in a separate screen session (recommended for test/dev where you want to do other stuff on the server):
 
@@ -41,7 +43,7 @@ You can switch then:
 - list screens with `screen -ls`
 - Go back to Covia venue screen with `screen -x co`
 - Terminate the Venue with `Ctrl+C`
-
+- kill current screen with `Ctrl+A,k,y`
 
 ### Checks
 

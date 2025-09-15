@@ -80,7 +80,7 @@ public class CoviaWebApp  {
 								h4("Venue Overview"),
 								p("Version: "+Utils.getVersion()),
 								p("Name: "+engine.getConfig().get(Fields.NAME)),
-								p(new Text("DID: "),code(engine.getDID().toString())),
+								p(new Text("DID: "),code(engine.getDID().toString())), // TODO: venue DID?
 								p(
 									new Text("Registered adapters: "+engine.getAdapterNames().size()+" ("),
 									a("view details").withHref("/adapters"),
