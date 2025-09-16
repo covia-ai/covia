@@ -34,6 +34,14 @@ public class LangChainAdapter extends AAdapter {
 			   "Provides seamless access to local and remote AI models with configurable parameters and system prompts. " +
 			   "Ideal for natural language processing, AI-powered conversations, and intelligent content generation workflows.";
 	}
+
+	@Override
+	public void installAssets() {
+		installAsset("/asset-examples/qwen.json");
+
+		installAsset("/adapters/langchain/ollama.json");
+		installAsset("/adapters/langchain/openai.json");
+	}
 	
 	@Override
 	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
@@ -61,14 +69,24 @@ public class LangChainAdapter extends AAdapter {
         // Get URL parameter
         AString urlParam = RT.ensureString(RT.getIn(input, "url"));
         
-        // Get model parameter from parts[2] if provided
+        // Get model parameter from parts[2] if provided, otherwise from input
         String modelName = (parts.length > 2) ? parts[2] : null;
+        if (modelName == null) {
+            AString modelParam = RT.ensureString(RT.getIn(input, "model"));
+            modelName = (modelParam != null) ? modelParam.toString() : null;
+        }
+        final String finalModelName = modelName;
+        
+        // Get system prompt parameter
+        AString systemPromptParam = RT.ensureString(RT.getIn(input, "systemPrompt"));
+        SystemMessage systemMessage = (systemPromptParam != null) ? 
+            SystemMessage.from(systemPromptParam.toString()) : SYSTEM_MESSAGE;
         
         if ("ollama".equals(parts[1])) {
         	return CompletableFuture.supplyAsync(()->{
         		// Use Ollama defaults if not provided
         		String baseUrl = (urlParam != null) ? urlParam.toString() : "http://localhost:11434";
-        		String model = (modelName != null) ? modelName : "qwen";
+        		String model = (finalModelName != null) ? finalModelName : "qwen";
         		
         		// Create Ollama model dynamically with the specified URL and model
         		ChatModel ollamaModel = OllamaChatModel.builder()
@@ -79,13 +97,13 @@ public class LangChainAdapter extends AAdapter {
         			.modelName(model)
         			.build();
 	        	
-	        	return processChatRequest(ollamaModel, finalPrompt);
+	        	return processChatRequest(ollamaModel, finalPrompt, systemMessage);
         	});
         } else if ("openai".equals(parts[1])) {
         	return CompletableFuture.supplyAsync(()->{
         		// Use OpenAI defaults if not provided
         		String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.openai.com/v1";
-        		String model = (modelName != null) ? modelName : "gpt-3.5-turbo";
+        		String model = (finalModelName != null) ? finalModelName : "gpt-3.5-turbo";
         		
         		// Create OpenAI model dynamically with the specified URL and model
         		ChatModel openaiModel = OpenAiChatModel.builder()
@@ -97,7 +115,7 @@ public class LangChainAdapter extends AAdapter {
         			.modelName(model)
         			.build();
 	        	
-	        	return processChatRequest(openaiModel, finalPrompt);
+	        	return processChatRequest(openaiModel, finalPrompt, systemMessage);
         	});
         } else {
     		return CompletableFuture.completedFuture(
@@ -106,11 +124,11 @@ public class LangChainAdapter extends AAdapter {
         }
 	}
 	
-	private ACell processChatRequest(ChatModel model, AString prompt) {
+	private ACell processChatRequest(ChatModel model, AString prompt, SystemMessage systemMessage) {
 		UserMessage userMessage = UserMessage.from(
 			TextContent.from(prompt.toString())
 		);
-		ChatResponse response = model.chat(SYSTEM_MESSAGE, userMessage);
+		ChatResponse response = model.chat(systemMessage, userMessage);
 		
 		AiMessage reply = response.aiMessage();
 		String output = reply.text();

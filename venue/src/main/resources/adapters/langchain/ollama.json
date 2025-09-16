@@ -1,0 +1,47 @@
+{
+	"name":"Ollama model chat",
+	"creator":"Mike Anderson",
+	"description":"Example operation that chats with a local Ollama-served LLM via LangChainAdapter",
+	"dateCreated":"2025-09-16T00:00:00Z",
+	"dateModified": "2025-09-16T00:00:00Z",
+	"keywords":["LLM", "model", "ollama"],
+	"operation": {
+		"adapter": "langchain:ollama",
+
+		"input":{
+			"type":"object",
+			"properties":{
+				"prompt":{
+					"type":"string",
+					"description":"The prompt for the model."
+				},
+				"model":{
+					"type":"string",
+					"description":"Optional model name (defaults to qwen)"
+				},
+				"systemPrompt":{
+					"type":"string",
+					"description":"Optional system prompt to set the AI's behavior and context"
+				},
+				"url":{
+					"type":"string",
+					"description":"Optional Ollama base URL (defaults to http://localhost:11434)"
+				}
+			}
+		},
+		"output":{
+			"type":"object",
+			"properties":{
+				"reply":{
+					"type":"string",
+					"description":"The LLM response"
+				},
+				"think":{
+					"type":"string",
+					"description":"Model thought process"
+				}
+			}
+		}
+	}
+}
+

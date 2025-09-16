@@ -1,0 +1,47 @@
+{
+	"name":"OpenAI model chat",
+	"creator":"Mike Anderson",
+	"description":"Example operation that chats with an OpenAI-compatible endpoint via LangChainAdapter",
+	"dateCreated":"2025-09-16T00:00:00Z",
+	"dateModified": "2025-09-16T00:00:00Z",
+	"keywords":["LLM", "model", "openai"],
+	"operation": {
+		"adapter": "langchain:openai",
+
+		"input":{
+			"type":"object",
+			"properties":{
+				"prompt":{
+					"type":"string",
+					"description":"The prompt for the model."
+				},
+				"model":{
+					"type":"string",
+					"description":"Optional model name (defaults to gpt-3.5-turbo)"
+				},
+				"systemPrompt":{
+					"type":"string",
+					"description":"Optional system prompt to set the AI's behaviour and context"
+				},
+				"url":{
+					"type":"string",
+					"description":"Optional OpenAI base URL (defaults to https://api.openai.com/v1)"
+				}
+			}
+		},
+		"output":{
+			"type":"object",
+			"properties":{
+				"reply":{
+					"type":"string",
+					"description":"The LLM response"
+				},
+				"think":{
+					"type":"string",
+					"description":"Model thought process"
+				}
+			}
+		}
+	}
+}
+

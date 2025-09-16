@@ -239,20 +239,14 @@ public class Engine {
 
 
 	public static void addDemoAssets(Engine venue) {
-		String BASE="/asset-examples/";
-		try {
-			venue.registerAdapter(new TestAdapter());
-			venue.registerAdapter(new HTTPAdapter());
-			venue.registerAdapter(new JVMAdapter());
-			venue.registerAdapter(new Orchestrator());
-			venue.registerAdapter(new MCPAdapter());
-			venue.registerAdapter(new LangChainAdapter());
-			venue.registerAdapter(new CoviaAdapter());
-			venue.registerAdapter(new GridAdapter());
-			venue.storeAsset(Strings.fromStream(Utils.getResourceAsStream(BASE+"qwen.json")),null);
-		} catch (IOException e) {
-			throw new Error(e);
-		}
+		venue.registerAdapter(new TestAdapter());
+		venue.registerAdapter(new HTTPAdapter());
+		venue.registerAdapter(new JVMAdapter());
+		venue.registerAdapter(new Orchestrator());
+		venue.registerAdapter(new MCPAdapter());
+		venue.registerAdapter(new LangChainAdapter());
+		venue.registerAdapter(new CoviaAdapter());
+		venue.registerAdapter(new GridAdapter());
 	}
 
 	public Job invokeOperation(String op, ACell input) {
