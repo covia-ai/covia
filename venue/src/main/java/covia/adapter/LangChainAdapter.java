@@ -82,6 +82,10 @@ public class LangChainAdapter extends AAdapter {
         SystemMessage systemMessage = (systemPromptParam != null) ? 
             SystemMessage.from(systemPromptParam.toString()) : SYSTEM_MESSAGE;
         
+        // Get API key parameter
+        AString apiKeyParam = RT.ensureString(RT.getIn(input, "apiKey"));
+        final String apiKey = (apiKeyParam != null) ? apiKeyParam.toString() : System.getenv("OPENAI_API_KEY");
+        
         if ("ollama".equals(parts[1])) {
         	return CompletableFuture.supplyAsync(()->{
         		// Use Ollama defaults if not provided
@@ -107,7 +111,7 @@ public class LangChainAdapter extends AAdapter {
         		
         		// Create OpenAI model dynamically with the specified URL and model
         		ChatModel openaiModel = OpenAiChatModel.builder()
-        			.apiKey(System.getenv("OPENAI_API_KEY"))
+        			.apiKey(apiKey)
         			.baseUrl(baseUrl)
         			.temperature(0.7)
         			.logRequests(true)

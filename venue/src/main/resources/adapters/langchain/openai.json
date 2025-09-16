@@ -7,6 +7,7 @@
 	"keywords":["LLM", "model", "openai"],
 	"operation": {
 		"adapter": "langchain:openai",
+        "featured":true,
 
 		"input":{
 			"type":"object",
@@ -22,6 +23,10 @@
 				"systemPrompt":{
 					"type":"string",
 					"description":"Optional system prompt to set the AI's behaviour and context"
+				},
+				"apiKey":{
+					"type":"string",
+					"description":"Optional API key for authentication (if not provided, uses OPENAI_API_KEY environment variable)"
 				},
 				"url":{
 					"type":"string",

@@ -23,6 +23,10 @@
 					"type":"string",
 					"description":"Optional system prompt to set the AI's behavior and context"
 				},
+				"apiKey":{
+					"type":"string",
+					"description":"Optional API key for authentication (if not provided, uses OPENAI_API_KEY environment variable)"
+				},
 				"url":{
 					"type":"string",
 					"description":"Optional Ollama base URL (defaults to http://localhost:11434)"
