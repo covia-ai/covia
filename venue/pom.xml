@@ -128,13 +128,25 @@
 		<dependency>
     		<groupId>dev.langchain4j</groupId>
    			<artifactId>langchain4j</artifactId>
-			<version>1.0.1</version>
+			<version>1.4.0</version>
 		</dependency>
 		<dependency>
     		<groupId>dev.langchain4j</groupId>
     		<artifactId>langchain4j-ollama</artifactId>
-    		<version>1.0.1-beta6</version>
+    		<version>1.4.0</version>
 		</dependency>
+		<dependency>
+   			<groupId>dev.langchain4j</groupId>
+  			<artifactId>langchain4j-open-ai</artifactId>
+ 			<version>1.4.0</version>
+		</dependency>
+		
+		<!-- Gemini -->
+		  <dependency>
+ 		   <groupId>com.google.genai</groupId>
+		    <artifactId>google-genai</artifactId>
+		    <version>1.0.0</version>
+ 		 </dependency>
 		
 		<!-- Web / application server with Javalin -->
 		<dependency>

@@ -2,7 +2,6 @@ package covia.venue;
 
 import convex.core.data.AString;
 import convex.core.data.Hash;
-import covia.grid.Asset;
 import covia.grid.impl.RemoteAsset;
 
 public class LocalAsset extends RemoteAsset {

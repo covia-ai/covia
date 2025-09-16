@@ -16,6 +16,7 @@ import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.ollama.OllamaChatModel;
+import dev.langchain4j.model.openai.OpenAiChatModel;
 
 public class LangChainAdapter extends AAdapter {
 	
@@ -33,14 +34,6 @@ public class LangChainAdapter extends AAdapter {
 			   "Provides seamless access to local and remote AI models with configurable parameters and system prompts. " +
 			   "Ideal for natural language processing, AI-powered conversations, and intelligent content generation workflows.";
 	}
-
-	ChatModel model = OllamaChatModel.builder()
-            .baseUrl("http://localhost:11434")
-            .temperature(0.7)
-            .logRequests(true)
-            .logResponses(true)
-            .modelName("qwen3")
-            .build();
 	
 	@Override
 	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
@@ -51,39 +44,88 @@ public class LangChainAdapter extends AAdapter {
     		);	
         }
         
+        // Check if method is specified
+        if (parts.length < 2) {
+    		return CompletableFuture.completedFuture(
+    			Status.failure("Method not specified. Use 'langchain:ollama:modelName' or 'langchain:openai'")
+    		);	
+        }
+        
+        // Extract common parameters
+        AString prompt = RT.ensureString(RT.getIn(input, "prompt"));
+        if (prompt == null) {
+            prompt = DEFAULT_PROMPT;
+        }
+        final AString finalPrompt = prompt;
+        
+        // Get URL parameter
+        AString urlParam = RT.ensureString(RT.getIn(input, "url"));
+        
+        // Get model parameter from parts[2] if provided
+        String modelName = (parts.length > 2) ? parts[2] : null;
+        
         if ("ollama".equals(parts[1])) {
         	return CompletableFuture.supplyAsync(()->{
-        		AString prompt=RT.ensureString(RT.getIn(input, "prompt"));
-        		if (prompt==null) {
-        			prompt=DEFAULT_PROMPT;
-        		}
+        		// Use Ollama defaults if not provided
+        		String baseUrl = (urlParam != null) ? urlParam.toString() : "http://localhost:11434";
+        		String model = (modelName != null) ? modelName : "qwen";
+        		
+        		// Create Ollama model dynamically with the specified URL and model
+        		ChatModel ollamaModel = OllamaChatModel.builder()
+        			.baseUrl(baseUrl)
+        			.temperature(0.7)
+        			.logRequests(true)
+        			.logResponses(true)
+        			.modelName(model)
+        			.build();
 	        	
-	        	UserMessage userMessage = UserMessage.from(
-	        		TextContent.from(prompt.toString())
-	        	);
-	        	ChatResponse response = model.chat(SYSTEM_MESSAGE,userMessage);
+	        	return processChatRequest(ollamaModel, finalPrompt);
+        	});
+        } else if ("openai".equals(parts[1])) {
+        	return CompletableFuture.supplyAsync(()->{
+        		// Use OpenAI defaults if not provided
+        		String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.openai.com/v1";
+        		String model = (modelName != null) ? modelName : "gpt-3.5-turbo";
+        		
+        		// Create OpenAI model dynamically with the specified URL and model
+        		ChatModel openaiModel = OpenAiChatModel.builder()
+        			.apiKey(System.getenv("OPENAI_API_KEY"))
+        			.baseUrl(baseUrl)
+        			.temperature(0.7)
+        			.logRequests(true)
+        			.logResponses(true)
+        			.modelName(model)
+        			.build();
 	        	
-	        	AiMessage reply = response.aiMessage();
-	        	String output=reply.text();
-	        	String think=null;
-	        	if (output.contains("</think>")) {
-	        		int split=output.lastIndexOf("</think>");
-	        		think=output.substring(7, split).trim();
-	        		output=output.substring(split+8).trim();
-	        	}
-	        	AMap<AString, ACell> result = Maps.of(
-	    			"reply", Strings.create(output)
-	        	);
-	        	if (think!=null) {
-	        		result=RT.assocIn(result, Strings.create(think), "think");
-	        	}
-	        	return result;
+	        	return processChatRequest(openaiModel, finalPrompt);
         	});
         } else {
     		return CompletableFuture.completedFuture(
-    			Status.failure("LangChain implementation not found: "+parts[1])
+    			Status.failure("Unknown method: '"+parts[1]+"'. Supported methods: 'ollama', 'openai'")
     		);	
         }
-
+	}
+	
+	private ACell processChatRequest(ChatModel model, AString prompt) {
+		UserMessage userMessage = UserMessage.from(
+			TextContent.from(prompt.toString())
+		);
+		ChatResponse response = model.chat(SYSTEM_MESSAGE, userMessage);
+		
+		AiMessage reply = response.aiMessage();
+		String output = reply.text();
+		String think = null;
+		if (output.contains("</think>")) {
+			int split = output.lastIndexOf("</think>");
+			think = output.substring(7, split).trim();
+			output = output.substring(split + 8).trim();
+		}
+		AMap<AString, ACell> result = Maps.of(
+			"reply", Strings.create(output)
+		);
+		if (think != null) {
+			result = RT.assocIn(result, Strings.create(think), "think");
+		}
+		return result;
 	}
 }
