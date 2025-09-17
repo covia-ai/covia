@@ -7,7 +7,9 @@
 	"keywords":["LLM", "model", "gemini"],
 	"operation": {
 		"adapter": "langchain:openai",
-		"featured":true,
+		"info":{
+            "featured":true
+        },
 
 		"input":{
 			"type":"object",

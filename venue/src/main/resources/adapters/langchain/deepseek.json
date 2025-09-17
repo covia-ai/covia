@@ -7,7 +7,6 @@
 	"keywords":["LLM", "model", "deepseek"],
 	"operation": {
 		"adapter": "langchain:openai",
-		"featured":true,
 
 		"input":{
 			"type":"object",

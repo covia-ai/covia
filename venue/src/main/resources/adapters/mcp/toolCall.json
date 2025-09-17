@@ -4,6 +4,11 @@
 	"dateCreated": "2025-09-03T23:00:00Z",
 	"operation": {
 		"adapter": "mcp:toolCall",
+		"info":{
+		    "featured":true
+		},
+
+		
 		"toolName": "toolCall",
 		"input": {
 			"type": "object",
