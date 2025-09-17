@@ -18,26 +18,29 @@
 				},
 				"model":{
 					"type":"string",
-					"description":"Optional model name (defaults to gpt-3.5-turbo)"
+					"description":"Optional model name (defaults to gpt-3.5-turbo)",
+					"default":"gpt-3.5-turbo"
 				},
 				"systemPrompt":{
 					"type":"string",
-					"description":"Optional system prompt to set the AI's behaviour and context"
+					"description":"System prompt to set the AI's behaviour and context"
 				},
 				"apiKey":{
 					"type":"string",
-					"description":"Optional API key for authentication (if not provided, uses OPENAI_API_KEY environment variable)"
+					"secret":true,
+					"description":"API key for authentication"
 				},
 				"url":{
 					"type":"string",
-					"description":"Optional OpenAI base URL (defaults to https://api.openai.com/v1)"
+					"description":"OpenAI base URL (defaults to https://api.openai.com/v1)",
+					"default":"https://api.openai.com/v1"
 				}
 			}
 		},
 		"output":{
 			"type":"object",
 			"properties":{
-				"reply":{
+				"response":{
 					"type":"string",
 					"description":"The LLM response"
 				},

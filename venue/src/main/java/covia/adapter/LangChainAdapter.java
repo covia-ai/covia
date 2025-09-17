@@ -41,6 +41,8 @@ public class LangChainAdapter extends AAdapter {
 
 		installAsset("/adapters/langchain/ollama.json");
 		installAsset("/adapters/langchain/openai.json");
+		installAsset("/adapters/langchain/gemini.json");
+		installAsset("/adapters/langchain/deepseek.json");
 	}
 	
 	@Override
@@ -58,6 +60,8 @@ public class LangChainAdapter extends AAdapter {
     			Status.failure("Method not specified. Use 'langchain:ollama:modelName' or 'langchain:openai'")
     		);	
         }
+        
+        System.err.println(input);
         
         // Extract common parameters
         AString prompt = RT.ensureString(RT.getIn(input, "prompt"));
@@ -143,7 +147,7 @@ public class LangChainAdapter extends AAdapter {
 			output = output.substring(split + 8).trim();
 		}
 		AMap<AString, ACell> result = Maps.of(
-			"reply", Strings.create(output)
+			"response", Strings.create(output)
 		);
 		if (think != null) {
 			result = RT.assocIn(result, Strings.create(think), "think");

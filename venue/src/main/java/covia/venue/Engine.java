@@ -444,6 +444,12 @@ public class Engine {
 		AMap<AString,ACell> status=STATUS_MAP;
 		status=status.assoc(Fields.TS, CVMLong.create(Utils.getCurrentTimestamp()));
 		status=status.assoc(Fields.DID, getDIDString());
+
+		AString name=getName();
+		if (name!=null) {
+			status=status.assoc(Fields.NAME, name);
+		}
+
 		return status;
 	}
 

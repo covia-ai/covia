@@ -1,12 +1,13 @@
 {
-	"name":"Ollama model chat",
+	"name":"Gemini model chat",
 	"creator":"Mike Anderson",
-	"description":"Example operation that chats with a local Ollama-served LLM via LangChainAdapter",
+	"description":"Example operation that chats with a Gemini endpoint via LangChainAdapter (OpenAI-compatible route)",
 	"dateCreated":"2025-09-16T00:00:00Z",
 	"dateModified": "2025-09-16T00:00:00Z",
-	"keywords":["LLM", "model", "ollama"],
+	"keywords":["LLM", "model", "gemini"],
 	"operation": {
-		"adapter": "langchain:ollama",
+		"adapter": "langchain:openai",
+		"featured":true,
 
 		"input":{
 			"type":"object",
@@ -17,20 +18,22 @@
 				},
 				"model":{
 					"type":"string",
-					"description":"Optional model name (defaults to qwen)"
+					"description":"Optional model name (defaults to gemini-1.5-flash)",
+					"default":"gemini-1.5-flash"
 				},
 				"systemPrompt":{
 					"type":"string",
-					"description":"Optional system prompt to set the AI's behavior and context"
+					"description":"System prompt to set the AI's behaviour and context"
 				},
 				"apiKey":{
 					"type":"string",
-                    "secret":true,
-					"description":"Optional API key for authentication (if not provided, uses OPENAI_API_KEY environment variable)"
+					"secret":true,
+					"description":"API key for authentication"
 				},
 				"url":{
 					"type":"string",
-					"description":"Optional Ollama base URL (defaults to http://localhost:11434)"
+					"description":"Gemini base URL (defaults to https://generativelanguage.googleapis.com/v1beta)",
+					"default":"https://generativelanguage.googleapis.com/v1beta"
 				}
 			}
 		},
