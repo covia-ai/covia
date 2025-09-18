@@ -59,6 +59,11 @@ public class MCPTest {
 	
 	McpSyncClient mcp;
 	
+	// Shared HttpClient for all tests in this class
+	private static final HttpClient httpClient = HttpClient.newBuilder()
+		.connectTimeout(Duration.ofSeconds(10))
+		.build();
+	
 	MCP mcpApi;
 	
 	@SuppressWarnings("unused")
@@ -98,14 +103,13 @@ public class MCPTest {
 	 * Test for presence of MCP interface
 	 */
 	@Test public void testMCPWellKnown() throws URISyntaxException, InterruptedException, ExecutionException, TimeoutException {
-		HttpClient client = HttpClient.newBuilder().build();
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI(BASE_URL+"/.well-known/mcp"))
 			.GET()
 			.timeout(Duration.ofSeconds(10))
 			.build();
 		
-		CompletableFuture<HttpResponse<String>> future = client.sendAsync(req, HttpResponse.BodyHandlers.ofString());
+		CompletableFuture<HttpResponse<String>> future = httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString());
 		HttpResponse<String> resp = future.get(10000, TimeUnit.MILLISECONDS);
 		assertEquals(200, resp.statusCode(), ()->"Got error response: "+resp);
 	}

@@ -28,6 +28,18 @@ import covia.api.Fields;
 public class HTTPAdapter extends AAdapter {
 
 	public static final Logger log = LoggerFactory.getLogger(HTTPAdapter.class);
+	
+	// Instance-level HttpClient for reuse across requests
+	private final HttpClient httpClient;
+	
+	/**
+	 * Constructor initializes the HttpClient with optimal settings
+	 */
+	public HTTPAdapter() {
+		this.httpClient = HttpClient.newBuilder()
+			.connectTimeout(Duration.ofSeconds(10))
+			.build();
+	}
 
 	@Override
 	public String getName() {
@@ -168,12 +180,8 @@ public class HTTPAdapter extends AAdapter {
 			
 			HttpRequest request = requestBuilder.build();
 			
-			// Create HTTP client and execute request
-			HttpClient client = HttpClient.newBuilder()
-				.connectTimeout(Duration.ofSeconds(10))
-				.build();
-			
-			CompletableFuture<HttpResponse<String>> responseFuture = client.sendAsync(
+			// Execute request using instance-level HttpClient
+			CompletableFuture<HttpResponse<String>> responseFuture = httpClient.sendAsync(
 				request, 
 				HttpResponse.BodyHandlers.ofString()
 			);
