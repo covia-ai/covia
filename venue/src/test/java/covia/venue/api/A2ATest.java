@@ -11,9 +11,10 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import org.apache.hc.client5.http.async.methods.SimpleHttpRequest;
-import org.apache.hc.client5.http.async.methods.SimpleHttpResponse;
-import org.apache.hc.core5.http.Method;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
@@ -24,7 +25,6 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.util.JSON;
-import convex.java.HTTPClients;
 import covia.api.Fields;
 import covia.venue.TestServer;
 
@@ -44,60 +44,68 @@ public class A2ATest {
         assertNotNull(TestServer.SERVER, "Test server should be running");
     }
     
-    @Test
-    public void testA2AAgentCardEndpoint() throws URISyntaxException, InterruptedException, ExecutionException, TimeoutException {
-        // Test the A2A agent card endpoint using HTTP client
-        SimpleHttpRequest req = SimpleHttpRequest.create(Method.GET, 
-            new URI(BASE_URL + "/.well-known/agent-card.json"));
-        
-        CompletableFuture<SimpleHttpResponse> future = HTTPClients.execute(req);
-        SimpleHttpResponse resp = future.get(10000, TimeUnit.MILLISECONDS);
-        
-        assertEquals(200, resp.getCode(), "Expected 200 OK response");
-        assertNotNull(resp.getBody(), "Response body should not be null");
-        
-        // Parse the JSON response using Convex JSONUtils
-        String body = resp.getBodyText();
-        ACell parsedResponse = JSON.parse(body);
-        assertNotNull(parsedResponse, "Response should be valid JSON");
-        
-        // Verify it's a map (JSON object)
-        assertTrue(parsedResponse instanceof AMap, "Response should be a JSON object");
-        @SuppressWarnings("unchecked")
-        AMap<AString, ACell> agentCard = (AMap<AString, ACell>) parsedResponse;
-        
-        // Verify the response contains expected A2A agent card fields using Fields constants
-        assertTrue(agentCard.containsKey(Fields.AGENT_PROVIDER), "Should contain agentProvider field");
-        assertTrue(agentCard.containsKey(Fields.AGENT_CAPABILITIES), "Should contain agentCapabilities field");
-        assertTrue(agentCard.containsKey(Fields.AGENT_SKILLS), "Should contain agentSkills field");
-        assertTrue(agentCard.containsKey(Fields.AGENT_INTERFACES), "Should contain agentInterfaces field");
-        assertTrue(agentCard.containsKey(Fields.PREFERRED_TRANSPORT), "Should contain preferredTransport field");
-    }
+	@Test
+	public void testA2AAgentCardEndpoint() throws URISyntaxException, InterruptedException, ExecutionException, TimeoutException {
+		// Test the A2A agent card endpoint using HTTP client
+		HttpClient client = HttpClient.newBuilder().build();
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL + "/.well-known/agent-card.json"))
+			.GET()
+			.timeout(Duration.ofSeconds(10))
+			.build();
+		
+		CompletableFuture<HttpResponse<String>> future = client.sendAsync(req, HttpResponse.BodyHandlers.ofString());
+		HttpResponse<String> resp = future.get(10000, TimeUnit.MILLISECONDS);
+		
+		assertEquals(200, resp.statusCode(), "Expected 200 OK response");
+		assertNotNull(resp.body(), "Response body should not be null");
+		
+		// Parse the JSON response using Convex JSONUtils
+		String body = resp.body();
+		ACell parsedResponse = JSON.parse(body);
+		assertNotNull(parsedResponse, "Response should be valid JSON");
+		
+		// Verify it's a map (JSON object)
+		assertTrue(parsedResponse instanceof AMap, "Response should be a JSON object");
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> agentCard = (AMap<AString, ACell>) parsedResponse;
+		
+		// Verify the response contains expected A2A agent card fields using Fields constants
+		assertTrue(agentCard.containsKey(Fields.AGENT_PROVIDER), "Should contain agentProvider field");
+		assertTrue(agentCard.containsKey(Fields.AGENT_CAPABILITIES), "Should contain agentCapabilities field");
+		assertTrue(agentCard.containsKey(Fields.AGENT_SKILLS), "Should contain agentSkills field");
+		assertTrue(agentCard.containsKey(Fields.AGENT_INTERFACES), "Should contain agentInterfaces field");
+		assertTrue(agentCard.containsKey(Fields.PREFERRED_TRANSPORT), "Should contain preferredTransport field");
+	}
     
-    @Test
-    public void testA2AAgentCardStructure() throws URISyntaxException, InterruptedException, ExecutionException, TimeoutException {
-        // Test the A2A agent card endpoint and verify JSON structure
-        SimpleHttpRequest req = SimpleHttpRequest.create(Method.GET, 
-            new URI(BASE_URL + "/.well-known/agent-card.json"));
-        
-        CompletableFuture<SimpleHttpResponse> future = HTTPClients.execute(req);
-        SimpleHttpResponse resp = future.get(10000, TimeUnit.MILLISECONDS);
-        
-        assertEquals(200, resp.getCode(), "Expected 200 OK response");
-        
-        // Parse the JSON response using Convex JSONUtils
-        String body = resp.getBodyText();
-        ACell parsedResponse = JSON.parse(body);
-        assertNotNull(parsedResponse, "Response should be valid JSON");
-        
-        // Verify it's a map (JSON object)
-        assertTrue(parsedResponse instanceof AMap, "Response should be a JSON object");
-        @SuppressWarnings("unchecked")
-        AMap<AString, ACell> agentCard = (AMap<AString, ACell>) parsedResponse;
-        
-        // Verify required A2A fields are present using Fields constants
-        assertTrue(agentCard.containsKey(Fields.AGENT_PROVIDER), "Should contain agentProvider");
-        assertTrue(agentCard.containsKey(Fields.AGENT_CAPABILITIES), "Should contain agentCapabilities");
+	@Test
+	public void testA2AAgentCardStructure() throws URISyntaxException, InterruptedException, ExecutionException, TimeoutException {
+		// Test the A2A agent card endpoint and verify JSON structure
+		HttpClient client = HttpClient.newBuilder().build();
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL + "/.well-known/agent-card.json"))
+			.GET()
+			.timeout(Duration.ofSeconds(10))
+			.build();
+		
+		CompletableFuture<HttpResponse<String>> future = client.sendAsync(req, HttpResponse.BodyHandlers.ofString());
+		HttpResponse<String> resp = future.get(10000, TimeUnit.MILLISECONDS);
+		
+		assertEquals(200, resp.statusCode(), "Expected 200 OK response");
+		
+		// Parse the JSON response using Convex JSONUtils
+		String body = resp.body();
+		ACell parsedResponse = JSON.parse(body);
+		assertNotNull(parsedResponse, "Response should be valid JSON");
+		
+		// Verify it's a map (JSON object)
+		assertTrue(parsedResponse instanceof AMap, "Response should be a JSON object");
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> agentCard = (AMap<AString, ACell>) parsedResponse;
+		
+		// Verify required A2A fields are present using Fields constants
+		assertTrue(agentCard.containsKey(Fields.AGENT_PROVIDER), "Should contain agentProvider");
+		assertTrue(agentCard.containsKey(Fields.AGENT_CAPABILITIES), "Should contain agentCapabilities");
         assertTrue(agentCard.containsKey(Fields.AGENT_SKILLS), "Should contain agentSkills");
         assertTrue(agentCard.containsKey(Fields.AGENT_INTERFACES), "Should contain agentInterfaces");
         assertTrue(agentCard.containsKey(Fields.PREFERRED_TRANSPORT), "Should contain preferredTransport");

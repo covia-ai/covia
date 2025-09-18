@@ -14,9 +14,9 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-import org.apache.hc.client5.http.async.methods.SimpleHttpRequest;
-import org.apache.hc.client5.http.async.methods.SimpleHttpResponse;
-import org.apache.hc.core5.http.Method;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
@@ -30,7 +30,6 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.AInteger;
 import convex.core.lang.RT;
-import convex.java.HTTPClients;
 import covia.adapter.MCPAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
@@ -99,10 +98,16 @@ public class MCPTest {
 	 * Test for presence of MCP interface
 	 */
 	@Test public void testMCPWellKnown() throws URISyntaxException, InterruptedException, ExecutionException, TimeoutException {
-		SimpleHttpRequest req=SimpleHttpRequest.create(Method.GET, new URI(BASE_URL+"/.well-known/mcp"));
-		CompletableFuture<SimpleHttpResponse> future=HTTPClients.execute(req);
-		SimpleHttpResponse resp=future.get(10000,TimeUnit.MILLISECONDS);
-		assertEquals(200,resp.getCode(),()->"Got error response: "+resp);
+		HttpClient client = HttpClient.newBuilder().build();
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL+"/.well-known/mcp"))
+			.GET()
+			.timeout(Duration.ofSeconds(10))
+			.build();
+		
+		CompletableFuture<HttpResponse<String>> future = client.sendAsync(req, HttpResponse.BodyHandlers.ofString());
+		HttpResponse<String> resp = future.get(10000, TimeUnit.MILLISECONDS);
+		assertEquals(200, resp.statusCode(), ()->"Got error response: "+resp);
 	}
 	
 	/**

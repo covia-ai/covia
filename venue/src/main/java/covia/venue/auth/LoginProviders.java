@@ -1,15 +1,13 @@
 package covia.venue.auth;
 
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
-
-import org.apache.hc.client5.http.classic.methods.HttpGet;
-import org.apache.hc.client5.http.classic.methods.HttpPost;
-import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
-import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
-import org.apache.hc.client5.http.impl.classic.HttpClients;
-import org.apache.hc.core5.http.io.entity.EntityUtils;
-import org.apache.hc.core5.http.io.entity.StringEntity;
 
 import convex.core.util.JSON;
 import io.javalin.http.Context;
@@ -18,7 +16,9 @@ public class LoginProviders {
 
 	private static final HashMap<String, OAuthProvider> PROVIDERS = new HashMap<>();
 
-	private static final CloseableHttpClient client = HttpClients.createDefault();
+	private static final HttpClient client = HttpClient.newBuilder()
+		.connectTimeout(Duration.ofSeconds(10))
+		.build();
 
 	// Configuration for social login providers
 	static {
@@ -49,7 +49,6 @@ public class LoginProviders {
 		ctx.redirect(authUrl);
 	}
 
-	@SuppressWarnings("deprecation")
 	public static void handleCallback(Context ctx) throws Exception {
 		String providerName = ctx.pathParam("provider");
 		OAuthProvider provider = PROVIDERS.get(providerName);
@@ -65,39 +64,50 @@ public class LoginProviders {
 		}
 
 		// Exchange code for tokens
-		HttpPost tokenRequest = new HttpPost(provider.tokenUrl);
 		HashMap<String, String> params = new HashMap<>();
 		params.put("code", code);
 		params.put("client_id", provider.clientId);
 		params.put("client_secret", provider.clientSecret);
 		params.put("redirect_uri", provider.redirectUri);
 		params.put("grant_type", "authorization_code");
-		tokenRequest.setEntity(new StringEntity(JSON.toString(params)));
+		
+		HttpRequest tokenRequest = HttpRequest.newBuilder()
+			.uri(URI.create(provider.tokenUrl))
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString(JSON.toString(params)))
+			.timeout(Duration.ofSeconds(30))
+			.build();
 
-		try (CloseableHttpResponse response = client.execute(tokenRequest)) {
-			if (response.getCode() != 200) {
-				ctx.status(500).result("Failed to exchange code: " + response.getReasonPhrase());
+		try {
+			HttpResponse<String> response = client.send(tokenRequest, HttpResponse.BodyHandlers.ofString());
+			if (response.statusCode() != 200) {
+				ctx.status(500).result("Failed to exchange code: " + response.statusCode());
 				return;
 			}
-			String json = EntityUtils.toString(response.getEntity());
+			String json = response.body();
 			TokenResponse token = TokenResponse.fromJSON(json);
 
 			// Fetch user info
-			HttpGet userInfoRequest = new HttpGet(provider.userInfoUrl);
-			userInfoRequest.setHeader("Authorization", "Bearer " + token.accessToken);
+			HttpRequest userInfoRequest = HttpRequest.newBuilder()
+				.uri(URI.create(provider.userInfoUrl))
+				.header("Authorization", "Bearer " + token.accessToken)
+				.GET()
+				.timeout(Duration.ofSeconds(30))
+				.build();
 
-			try (var userInfoResponse = client.execute(userInfoRequest)) {
-				if (userInfoResponse.getCode() != 200) {
-					ctx.status(500).result("Failed to fetch user info: " + userInfoResponse.getReasonPhrase());
-					return;
-				}
-				String userJson = EntityUtils.toString(userInfoResponse.getEntity());
-				UserInfo user = new UserInfo(userJson);
-
-				// Store user in session (or generate JWT)
-				ctx.sessionAttribute("user", user.email);
-				ctx.redirect("/dashboard");
+			HttpResponse<String> userInfoResponse = client.send(userInfoRequest, HttpResponse.BodyHandlers.ofString());
+			if (userInfoResponse.statusCode() != 200) {
+				ctx.status(500).result("Failed to fetch user info: " + userInfoResponse.statusCode());
+				return;
 			}
+			String userJson = userInfoResponse.body();
+			UserInfo user = new UserInfo(userJson);
+
+			// Store user in session (or generate JWT)
+			ctx.sessionAttribute("user", user.email);
+			ctx.redirect("/dashboard");
+		} catch (IOException e) {
+			ctx.status(500).result("HTTP request failed: " + e.getMessage());
 		}
 	}
 

@@ -3,17 +3,14 @@ package covia.adapter;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-import java.util.Collection;
+import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-
-import org.apache.hc.client5.http.async.methods.SimpleHttpRequest;
-import org.apache.hc.client5.http.async.methods.SimpleHttpResponse;
-import org.apache.hc.core5.http.ContentType;
-import org.apache.hc.core5.http.Header;
-import org.apache.hc.core5.http.Method;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,8 +23,6 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import convex.core.util.Utils;
-import convex.java.HTTPClients;
 import covia.api.Fields;
 
 public class HTTPAdapter extends AAdapter {
@@ -110,11 +105,10 @@ public class HTTPAdapter extends AAdapter {
 		ACell bodyField=RT.getIn(input, Fields.BODY);
 		
 		try {
-			Method method=Method.GET; // default
-			if (methodField!=null) try {
-				method=Method.valueOf(methodField.toString().trim().toUpperCase());
-			} catch (IllegalArgumentException e) {
-				throw new IllegalArgumentException("Invalid HTTP method specified: "+methodField);
+			HttpRequest.Builder requestBuilder;
+			String method = "GET"; // default
+			if (methodField != null) {
+				method = methodField.toString().trim().toUpperCase();
 			}
 			
 			// Build URL with query parameters
@@ -138,32 +132,70 @@ public class HTTPAdapter extends AAdapter {
 				}
 			}
 			
-			SimpleHttpRequest req = SimpleHttpRequest.create(method, new URI(finalUrl));
-			String bodyText=(bodyField==null)?"":JSON.printPretty(bodyField).toString();
-			req.setBody(bodyText, ContentType.TEXT_PLAIN);
+			// Create HTTP request builder
+			requestBuilder = HttpRequest.newBuilder()
+				.uri(new URI(finalUrl))
+				.timeout(Duration.ofSeconds(30));
 			
-			for (MapEntry<AString,AString> me:headers.entryVector()) {
-				req.setHeader(me.getKey().toString(), me.getValue().toString());
+			// Set method and body
+			String bodyText = (bodyField == null) ? "" : JSON.printPretty(bodyField).toString();
+			switch (method) {
+				case "GET":
+					requestBuilder.GET();
+					break;
+				case "POST":
+					requestBuilder.POST(HttpRequest.BodyPublishers.ofString(bodyText));
+					break;
+				case "PUT":
+					requestBuilder.PUT(HttpRequest.BodyPublishers.ofString(bodyText));
+					break;
+				case "DELETE":
+					requestBuilder.DELETE();
+					break;
+				case "PATCH":
+					requestBuilder.method("PATCH", HttpRequest.BodyPublishers.ofString(bodyText));
+					break;
+				default:
+					throw new IllegalArgumentException("Unsupported HTTP method: " + method);
 			}
-			//System.err.println(req);
-			//System.err.println(bodyText);
 			
-			CompletableFuture<SimpleHttpResponse> responseFuture = HTTPClients.execute(req);
-			CompletableFuture<ACell> result= responseFuture.thenApply(response -> {
-				// System.err.println(response);
-				AMap<AString,ACell> output=Maps.empty();
-				int code=response.getCode();
-				output=output.assoc(Fields.STATUS, CVMLong.create(code));
-				output=output.assoc(Fields.BODY, Strings.create(response.getBodyText()));
+			// Add headers
+			if (headers != null) {
+				for (MapEntry<AString,AString> me : headers.entryVector()) {
+					requestBuilder.header(me.getKey().toString(), me.getValue().toString());
+				}
+			}
+			
+			HttpRequest request = requestBuilder.build();
+			
+			// Create HTTP client and execute request
+			HttpClient client = HttpClient.newBuilder()
+				.connectTimeout(Duration.ofSeconds(10))
+				.build();
+			
+			CompletableFuture<HttpResponse<String>> responseFuture = client.sendAsync(
+				request, 
+				HttpResponse.BodyHandlers.ofString()
+			);
+			
+			CompletableFuture<ACell> result = responseFuture.thenApply(response -> {
+				AMap<AString,ACell> output = Maps.empty();
+				int code = response.statusCode();
+				output = output.assoc(Fields.STATUS, CVMLong.create(code));
+				output = output.assoc(Fields.BODY, Strings.create(response.body()));
 				
-				List<Header> hds=Arrays.asList(response.getHeaders());
-				Collection<MapEntry<AString,AString>> hes=Utils.map(hds,header->{
-					return MapEntry.of(header.getName(),header.getValue());
-				});
-				AMap<AString,AString> rheaders=Maps.fromEntries(hes);
-				output=output.assoc(Fields.HEADERS, RT.cvm(rheaders));
+				// Convert response headers
+				Map<String, List<String>> responseHeaders = response.headers().map();
+				AMap<AString,AString> rheaders = Maps.empty();
+				for (Map.Entry<String, List<String>> entry : responseHeaders.entrySet()) {
+					String key = entry.getKey();
+					String value = String.join(", ", entry.getValue());
+					rheaders = rheaders.assoc(Strings.create(key), Strings.create(value));
+				}
+				output = output.assoc(Fields.HEADERS, RT.cvm(rheaders));
 				return output; // Final result
 			});
+			
 			return result; // Future result
 		
 		} catch (URISyntaxException e) {
