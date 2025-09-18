@@ -8,7 +8,7 @@
   <artifactId>workbench</artifactId>
   
   <properties>
-    <flatlaf.version>3.6</flatlaf.version>
+    <flatlaf.version>3.6.1</flatlaf.version>
   </properties>
   
   <dependencies>
