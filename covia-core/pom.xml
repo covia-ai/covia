@@ -16,6 +16,13 @@
 			<artifactId>convex-core</artifactId>
 			<version>${convex.version}</version>
 		</dependency>
+		
+		<!-- Logging -->
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+			<version>${slf4j.version}</version>
+		</dependency>
 
 		<!-- Testing -->
 		<dependency>
@@ -30,5 +37,6 @@
 			<version>${junit.version}</version>
 			<scope>test</scope>
 		</dependency>
+
   </dependencies>
 </project>
