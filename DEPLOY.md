@@ -18,6 +18,21 @@ sudo apt-get install -y openjdk-25-jdk
 sudo apt install -y caddy
 ```
 
+## Cloud Jar 
+
+To upload the covia.jar to bucket using GCloud CLI:
+
+```
+gsutil cp C:\Users\mike_\git\covia\venue\target\covia.jar gs://covia-jar-bucket/covia.jar
+```
+
+To download the covia.jar on server:
+
+```
+gsutil cp gs://covia-jar-bucket/covia.jar covia.jar
+```
+
+
 ## Run Covia Venue Jar
 
 You will need to obtscain the runnable `.jar` file for the Covia Venue.
