@@ -33,25 +33,6 @@ Covia.ai transforms this fragmentation into a seamless, collaborative grid. We p
 
 ---
 
-## Get Started in 5 Minutes
-
-The easiest way to get started is with our command-line tool.
-
-```bash
-# Install the Covia CLI
-pip install covia
-
-# Initialize a new federated workflow from a template
-covia init my-first-federation --template financial-fraud-detection
-
-# Run your first federated workflow
-covia run my-first-federation
-
-```
-For more details, check out our full [quickstart guide](https://docs.covia.ai/docs/user-guide/quick-start).
-
----
-
 ## For Every AI Team
 
 - **Developers (The Boundary Breakers):** Stop writing glue code. Start building federated agents that just work. Our SDK and CLI are designed to feel instantly familiar.
