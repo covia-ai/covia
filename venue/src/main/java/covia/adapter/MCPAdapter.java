@@ -52,41 +52,61 @@ public class MCPAdapter extends AAdapter {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
 		String[] opSpec = operation.split(":");
-		return CompletableFuture.supplyAsync(() -> {
-			try {
-				
-				AString remoteToolName=RT.getIn(input, Fields.TOOL_NAME);
-				
-				// Fallback: see if "remoteToolName" is specified in operation
-				if (remoteToolName==null) {
-					remoteToolName=RT.getIn(meta, Fields.OPERATION,Fields.REMOTE_TOOL_NAME);
-				}
-				
-				// Extract operation name from "mcp:operationName" format
+		if (opSpec.length<2) {
+			throw new IllegalArgumentException("Insufficient specification for MCP operation: "+operation);
+		}
+		
+		String feature=opSpec[1];
+		if (feature.equals("tools")) {
+			
+			String function=opSpec[2];
+			if (function.equals("call")) {
+				// Standard MCP tool call
+				return CompletableFuture.supplyAsync(() -> {
+					try {
+						// Remote tool name is from input if provided
+						AString remoteToolName=RT.getIn(input, Fields.TOOL_NAME);
+						
+						// Extract operation name from "mcp:tools:call:operationName" format
+						if ((remoteToolName==null)&&(opSpec.length>=3)) {
+							remoteToolName=Strings.create(opSpec[3]);
+						}
 
+						// Fallback: see if "remoteToolName" is specified in operation
+						if (remoteToolName==null) {
+							remoteToolName=RT.getIn(meta, Fields.OPERATION,Fields.REMOTE_TOOL_NAME);
+						}
+						
+						if (remoteToolName==null) {
+							throw new JobFailedException("No remote tool name provided (either in input or operation metadata)");
+						}
+						
+						// Get MCP server URL from metadata or input
+						AString serverUrl =getServerUrl(meta, input);
+						if (serverUrl == null) {
+							throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
+						}
+						
+						// Get API access token, if provided
+						AString token=RT.getIn(input, Fields.TOKEN);
+						String accessToken=(token==null)?null:token.toString();
+						
+						// Make the MCP tool call
+						return callMCPTool(serverUrl, remoteToolName.toString(), input, accessToken);
+						
+					} catch (Exception e) {
+						throw new JobFailedException(e);
+					}
+				});
 				
-				
-				if (remoteToolName==null) {
-					throw new JobFailedException("No remote tool name provided (either in input or operation metadata)");
-				}
-				
-				// Get MCP server URL from metadata or input
-				AString serverUrl =getServerUrl(meta, input);
-				if (serverUrl == null) {
-					throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
-				}
-				
-				// Get API access token, if provided
-				AString token=RT.getIn(input, Fields.TOKEN);
-				String accessToken=(token==null)?null:token.toString();
-				
-				// Make the MCP tool call
-				return callMCPTool(serverUrl, remoteToolName.toString(), input, accessToken);
-				
-			} catch (Exception e) {
-				throw new JobFailedException(e);
+			} else if (function.equals("list")) {
+				throw new UnsupportedOperationException("Unsupported tools function: "+operation);
+			} else {
+				throw new UnsupportedOperationException("Unsupported tools function: "+operation);
 			}
-		});
+		} else {
+			throw new UnsupportedOperationException("Unsupported MCP feature: "+operation);
+		}
 	}
 
 	

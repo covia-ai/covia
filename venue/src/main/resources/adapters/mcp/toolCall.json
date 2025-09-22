@@ -3,7 +3,7 @@
 	"description": "Runs a remote MCP tool via HTTP(s)",
 	"dateCreated": "2025-09-03T23:00:00Z",
 	"operation": {
-		"adapter": "mcp:toolCall",
+		"adapter": "mcp:tools:call",
 		"info":{
 		    "featured":true
 		},

@@ -1,15 +1,33 @@
 {
+	/*
+	 * The core configuration is a list of venues to host on this server.
+	 *
+	 * Each venue gets:
+	 * - It's own port
+	 * - A globally unique DID
+	 * - Separately configured Adapters
+	 *
+	 * Normally, one venue is sufficient. 
+	 */
 	"venues":[
+		// First venue
 		{
 			"name":"Local Test Venue",
 			"did":"did:covia:local",
 			"hostname":"localhost",
 			"port":8080,
+			
+			// Configure MCP server capabilities
 			"mcp":{
+				"enabled":true
+			},
+			
+			// Configure adapters
+			"adapters":{
 				
 			}
 		}
-		
-		
 	]
+	
+	// Whole-server configuration goes here
 }
