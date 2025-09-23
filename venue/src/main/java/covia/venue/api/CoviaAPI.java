@@ -16,6 +16,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.exceptions.ParseException;
 import convex.core.lang.RT;
@@ -83,7 +84,10 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.put(ROUTE+"jobs/<id>/delete", this::deleteJob);
 		javalin.sse(ROUTE+"jobs/<id>/sse", sseServer.registerSSE);
 		javalin.get(ROUTE+"jobs", this::getJobs);
+		
+		// DIDs
 		javalin.get("/.well-known/did.json", this::getDIDDocument);
+		javalin.get("/a/{id}/did.json", this::getAssetDIDDocument);
 	}
 	 
 	@OpenApi(path = ROUTE + "status", 
@@ -510,23 +514,36 @@ public class CoviaAPI extends ACoviaAPI {
 							description = "DID document returned")
 					})	
 	protected void getDIDDocument(Context ctx) { 
-		// Get the host from the request
-		String host = ctx.req().getHeader("Host");
-		if (host == null) {
-			// Fallback to localhost if no host header
-			host = "localhost:8080";
-		}
-		
-		// Remove port if it's the default HTTP/HTTPS port
-		if (host.endsWith(":80")) {
-			host = host.substring(0, host.length() - 3);
-		} else if (host.endsWith(":443")) {
-			host = host.substring(0, host.length() - 4);
-		}
-		
 		// Create a complete DID document structure
-		AMap<AString, ACell> didDocument = engine.getDIDDocument(host,getExternalBaseUrl(ctx,ROUTE));
+		AMap<AString, ACell> didDocument = engine.getDIDDocument(getExternalBaseUrl(ctx,ROUTE));
 		
+		// Set content type to application/did+json
+		ctx.header("Content-Type", "application/did+json");
+		
+		// Return the DID document
+		buildResult(ctx, 200, didDocument);
+	}
+	
+	@OpenApi(path = "/a/{id}/did.json", 
+			methods = HttpMethod.GET, 
+			tags = { "DID"},
+			summary = "Get the DID document for an asset", 
+			operationId = "getAssetDIDDocument",
+			responses = {
+					@OpenApiResponse(
+							status = "200", 
+							description = "DID document returned")
+					})	
+	protected void getAssetDIDDocument(Context ctx) { 
+		String id=ctx.pathParam("id");
+	
+		AString baseDID=engine.getDIDString();
+		AString did=baseDID.append(Strings.create("/a/"+id));
+		
+		AMap<AString, ACell> didDocument = Maps.of(
+				"@context", "https://www.w3.org/ns/did/v1",
+				Fields.ID,did);
+
 		// Set content type to application/did+json
 		ctx.header("Content-Type", "application/did+json");
 		

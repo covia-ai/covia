@@ -497,7 +497,7 @@ public class Engine {
 		return s;
 	}
 
-	public AMap<AString, ACell> getDIDDocument(String host,String endpoint) {
+	public AMap<AString, ACell> getDIDDocument(String endpoint) {
 		AString did=getDIDString();
 		
 		AString key=Multikey.encodePublicKey(keyPair.getAccountKey());
