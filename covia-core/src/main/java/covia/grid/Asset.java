@@ -169,14 +169,14 @@ public class Asset {
 	}
 	
 	/**
-	 * Invokes this asset as an operation. Typically this will trigger an execution on the underlying venue.
+	 * Invokes this asset as an operation. This will trigger an execution on the underlying venue.
 	 * 
 	 * @param input Input to the operation, typically a Map of parameters
 	 * @return Job representing the execution
-	 */
+	 */ 
 	public CompletableFuture<Job> invoke(ACell input) {
 		Venue v=getVenue();		
-		if (v==null) throw new IllegalStateException("Cannot invoke asset with no Venue"); 
+		if (v==null) throw new IllegalStateException("Cannot invoke asset with no attached Venue"); 
 		
 		return v.invoke(getID(), input);
 	}
