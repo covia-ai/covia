@@ -1,11 +1,13 @@
 package covia.venue;
 
+import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.did.DID;
+import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Venue;
@@ -43,6 +45,12 @@ public class LocalVenue extends Venue {
 	@Override
 	public CompletableFuture<Job> invoke(Hash assetID, ACell input) {
 		return CompletableFuture.completedFuture(engine.invokeOperation(assetID, input));
+	}
+
+	@Override
+	protected AContent getAssetContent(Hash id) throws IOException {
+
+		return engine.getContent(id);
 	}
 
 }

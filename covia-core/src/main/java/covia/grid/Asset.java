@@ -1,5 +1,6 @@
 package covia.grid;
 
+import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
@@ -143,8 +144,11 @@ public class Asset {
 	 * Get the content of this asset
 	 * @return Asset content
 	 */
-	public AContent getContent() {
-		throw new UnsupportedOperationException();
+	public AContent getContent() throws IOException {
+		Venue v=getVenue();		
+		if (v==null) throw new IllegalStateException("Cannot get content asset with no Venue"); 
+		
+		return v.getAssetContent(getID());
 	}
 
 	/**

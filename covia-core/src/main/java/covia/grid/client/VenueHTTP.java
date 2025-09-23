@@ -394,11 +394,20 @@ public class VenueHTTP extends Venue {
 	 * @return Future containing the content as an AContent, or null if not found
 	 */
 	public CompletableFuture<AContent> getContent(String assetID) {
-		Hash h = Assets.parseAssetID(assetID);
-		if (h == null) throw new IllegalArgumentException("Bad asset ID format");
+		Hash id = Assets.parseAssetID(assetID);
+		return getContent(id);
+	}
+	
+	/**
+	 * Gets content for an asset using the GET API endpoint.
+	 * 
+	 * @param assetID The asset ID to get content for
+	 * @return Future containing the content as an AContent, or null if not found
+	 */
+	public CompletableFuture<AContent> getContent(Hash assetID) {
 		
 		HttpRequest req = HttpRequest.newBuilder()
-			.uri(getBaseURI().resolve("assets/" + h.toHexString() + "/content"))
+			.uri(getBaseURI().resolve("assets/" + assetID.toHexString() + "/content"))
 			.GET()
 			.build();
 		
@@ -417,6 +426,11 @@ public class VenueHTTP extends Venue {
 				throw new RuntimeException("Failed to create content from response", e);
 			}
 		});
+	}
+	
+	@Override
+	protected AContent getAssetContent(Hash assetID) {
+		return getContent(assetID).join();
 	}
 
 	/**
@@ -540,6 +554,8 @@ public class VenueHTTP extends Venue {
 	public DID getDID() {
 		return DID.create("web",baseURI.getHost());
 	}
+
+
 
 
 }

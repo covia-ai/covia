@@ -45,4 +45,6 @@ public abstract class Venue {
 	public DID getAssetDID(Hash id) {
 		return getDID().withPath("/a/"+id.toHexString());
 	}
+
+	protected abstract AContent getAssetContent(Hash id) throws IOException;
 }

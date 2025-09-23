@@ -45,6 +45,7 @@ import covia.adapter.MCPAdapter;
 import covia.adapter.Orchestrator;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
+import covia.grid.AContent;
 import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -393,7 +394,7 @@ public class Engine {
 	/**
 	 * Gets a content stream for the given asset
 	 * @param meta Metadata of asset
-	 * @return Content stream, or null if no available / does not exist
+	 * @return Content stream, or null if not available / does not exist
 	 */
 	public InputStream getContentStream(AMap<AString,ACell> meta) throws IOException {
 		if (meta==null) return null;	
@@ -404,6 +405,33 @@ public class Engine {
 			throw new IllegalArgumentException("Metadata does not have valid content hash");
 		}	
 		return contentStorage.getContent(contentHash).getInputStream();
+	}
+	
+	/**
+	 * Gets a content stream for the given asset
+	 * @param meta Metadata of asset
+	 * @return Content, or null if not available / does not exist
+	 */
+	public AContent getContent(AMap<AString,ACell> meta) throws IOException {
+		if (meta==null) return null;	
+		AMap<AString,ACell> content=RT.ensureMap(meta.get(Fields.CONTENT));
+		if (content==null) return null;
+		Hash contentHash=Hash.parse(RT.ensureString(content.get(Fields.SHA256)));
+		if (contentHash==null) {
+			throw new IllegalArgumentException("Metadata does not have valid content hash");
+		}	
+		return contentStorage.getContent(contentHash);
+	}
+
+	
+	/**
+	 * Gets a content stream for the given asset ID
+	 * @param assetID Asset ID
+	 * @return Content stream, or null if not available / does not exist
+	 */
+	public AContent getContent(Hash assetID) throws IOException {
+		AMap<AString,ACell> meta=this.getMetaValue(assetID);
+		return getContent(meta);
 	}
 
 	public Hash putContent(Hash assetID, InputStream is) throws IOException {

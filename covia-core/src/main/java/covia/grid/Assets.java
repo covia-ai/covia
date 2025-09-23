@@ -20,7 +20,7 @@ public class Assets {
 			}
 		}
 		
-		if (h==null) throw new IllegalArgumentException("Unable to parse asset ID");
+		if (h==null) throw new IllegalArgumentException("Unable to parse asset ID: "+asset);
 		return h;
 	}
 	
