@@ -41,4 +41,8 @@ public abstract class Venue {
 	 * @return Future for the finished Job
 	 */
 	public abstract CompletableFuture<Job> invoke(Hash assetID, ACell input);
+
+	public DID getAssetDID(Hash id) {
+		return getDID().withPath("/a/"+id.toHexString());
+	}
 }

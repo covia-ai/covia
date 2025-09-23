@@ -35,7 +35,6 @@ import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.grid.impl.BlobContent;
-import covia.grid.impl.RemoteAsset;
 
 public class VenueHTTP extends Venue {
 	
@@ -527,7 +526,9 @@ public class VenueHTTP extends Venue {
 			if (response.statusCode()!=200) return null;
 			AString metadata=Strings.create(response.body());
 			
-			return new RemoteAsset(id,metadata,this);
+			Asset asset=Asset.forString(metadata);
+			asset.setVenue(this);
+			return asset;
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			return null;

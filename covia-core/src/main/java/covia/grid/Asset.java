@@ -11,6 +11,8 @@ import convex.core.data.Hash;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import convex.did.DID;
+import convex.did.DIDURL;
 import covia.exception.JobFailedException;
 
 /**
@@ -26,6 +28,8 @@ public class Asset {
 	
 	/** The asset metadata string. May be null. */
 	AString metaString;
+	
+	protected Venue venue;
 
 
 	/** The asset metadata. May be null if not yet cached */
@@ -93,6 +97,33 @@ public class Asset {
 		id=Hashing.sha256(getMetadata());
 		return id;
 	}
+	
+	/**
+	 * Get the DID URL for this asset
+	 * @return Venue instance
+	 */
+	public DIDURL getDIDURL() {
+		Venue v=getVenue();		
+		if (v==null) throw new IllegalStateException("Cannot get DID for asset with no Venue"); // TODO: custom DID?
+		
+		DID did=v.getDID();
+		return DIDURL.create(did).withPath("/a/"+getID().toHexString());
+	}
+	
+	/**
+	 * Get the venue for this asset
+	 * @return Venue instance, or null if not set
+	 */
+	public Venue getVenue() {
+		return venue;
+	}
+	
+	/**
+	 * Set the venue for this asset
+	 */
+	public void setVenue(Venue newVenue) {
+		this.venue=newVenue;
+	}
 
 	/**
 	 * Gets the asset metadata string
@@ -103,6 +134,7 @@ public class Asset {
 		throw new IllegalStateException("No asset metadata available");
 	}
 	
+	@Override
 	public String toString() {
 		return getID().toString();
 	}
@@ -139,7 +171,10 @@ public class Asset {
 	 * @return Job representing the execution
 	 */
 	public CompletableFuture<Job> invoke(ACell input) {
-		throw new UnsupportedOperationException();
+		Venue v=getVenue();		
+		if (v==null) throw new IllegalStateException("Cannot invoke asset with no Venue"); 
+		
+		return v.invoke(getID(), input);
 	}
 	
 	/**
@@ -147,15 +182,15 @@ public class Asset {
 	 * @param <T> Return type of operation, typically a Map of outputs
 	 * @param input Input to the operation, typically a Map of parameters
 	 * @return Output of the execution
+	 * @throws JobFailedException if unable to execute job successfully
 	 */
 	@SuppressWarnings("unchecked")
 	public <T extends ACell> T run(ACell input) {
-		Job job;
 		try {
-			job = invoke(input).get();
+			Job job = invoke(input).get();
+			return (T) job.getOutput();
 		} catch (InterruptedException | ExecutionException e) {
 			throw new JobFailedException(e);
 		}
-		return (T) job.getOutput();
 	}
  }

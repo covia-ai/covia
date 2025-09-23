@@ -3,6 +3,7 @@ package covia.venue;
 import java.util.concurrent.CompletableFuture;
 
 import convex.core.data.ACell;
+import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.did.DID;
 import covia.grid.Asset;
@@ -23,7 +24,11 @@ public class LocalVenue extends Venue {
 	
 	@Override
 	public Asset getAsset(Hash assetID) {
-		return LocalAsset.create(assetID,this);
+		AString meta=engine.getMetadata(assetID);
+		
+		Asset asset= Asset.forString(meta);
+		asset.setVenue(this);
+		return asset;
 	}
 	
 	public Engine getEngine() {
