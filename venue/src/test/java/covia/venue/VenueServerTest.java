@@ -226,10 +226,9 @@ public class VenueServerTest {
 		assertEquals("STARTED", status.toString(), "Job status should be STARTED");
 		
 		// Step 4: Cancel the job using the Covia client
-		covia.cancelJob(jobIdStr).get(5, TimeUnit.SECONDS);
+		AMap<AString, ACell> cancelledMap=covia.cancelJob(jobIdStr).get(5, TimeUnit.SECONDS);
 		
 		// Step 5: Confirm that the status is CANCELLED using Covia.getJobStatus
-		AMap<AString, ACell> cancelledMap = covia.getJobData(jobIdStr).get(5, TimeUnit.SECONDS);
 		assertNotNull(cancelledMap, "Cancelled job status map should not be null");
 		AString cancelledStatus = RT.ensureString(cancelledMap.get(Fields.JOB_STATUS_FIELD));
 		assertEquals("CANCELLED", cancelledStatus.toString(), "Job status should be CANCELLED");

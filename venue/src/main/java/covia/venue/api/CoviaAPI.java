@@ -468,7 +468,12 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		
 		AMap<AString, ACell> status = engine.cancelJob(id);
-		ctx.status((status==null)?404:200);
+		if (status!=null) {
+			buildResult(ctx,status);
+			ctx.status(200);
+		} else {
+			ctx.status(404);
+		}
 	}
 	
 	@OpenApi(path = ROUTE + "jobs/{id}/delete", 
@@ -491,7 +496,11 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 		
 		boolean deleted=engine.deleteJob(id);
-		ctx.status(deleted?200:404);
+		if (deleted) {
+			ctx.status(200);
+		} else {
+			ctx.status(404);
+		}
 	}
 	
 	@OpenApi(path = ROUTE + "jobs", 

@@ -23,6 +23,7 @@ import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.json.JSONReader;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.did.DID;
@@ -438,7 +439,7 @@ public class VenueHTTP extends Venue {
 	 * @param jobId The job ID to cancel
 	 * @return Future that completes when the job is successfully cancelled, or completes exceptionally if the job doesn't exist
 	 */
-	public CompletableFuture<Void> cancelJob(String jobId) {
+	public CompletableFuture<AMap<AString,ACell>> cancelJob(String jobId) {
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(getBaseURI().resolve("jobs/" + jobId + "/cancel"))
 			.PUT(HttpRequest.BodyPublishers.ofString(""))
@@ -447,7 +448,7 @@ public class VenueHTTP extends Venue {
 		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			int code = response.statusCode();
 			if (code == 200) {
-				return null; // Success
+				return JSON.parse(response.body()); // Success
 			} else if (code == 404) {
 				throw new RuntimeException("Job not found: " + jobId);
 			} else {
