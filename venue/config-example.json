@@ -27,7 +27,10 @@
 				
 			}
 		}
-	]
+	],
 	
 	// Whole-server configuration goes here
+	"convex":{
+		// Config for embedded Convex peer, shared between venue instances
+	}
 }

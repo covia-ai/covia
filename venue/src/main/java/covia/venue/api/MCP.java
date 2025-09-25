@@ -361,7 +361,7 @@ public class MCP extends ACoviaAPI {
 	
 	@SuppressWarnings("unchecked")
 	private AMap<AString,ACell> WELL_KNOWN=(AMap<AString, ACell>) JSON.parse("""
-			{	
+		{	
 			"mcp_version": "1.0",
 			"server_url": "http:localhost:8080/mcp",
 			"description": "MCP server for Covia Venue",
