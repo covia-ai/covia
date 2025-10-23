@@ -30,7 +30,7 @@ import covia.venue.server.VenueServer;
  */
 public class MainVenue {
 
-	public static Logger log=LoggerFactory.getLogger(MainVenue.class);;
+	public static Logger log=LoggerFactory.getLogger(MainVenue.class);
 
 	@SuppressWarnings("unchecked")
 	public static void main(String[] args) throws Exception {
@@ -57,7 +57,7 @@ public class MainVenue {
 			config = Maps.of(
 					Fields.VENUES,Vectors.of(
 							Maps.of(
-									Fields.NAME,"Unconfigured Venue",
+									Fields.NAME,"Local Test Venue",
 									Fields.HOSTNAME,"localhost",
 									Fields.MCP,Maps.of())));
 		}

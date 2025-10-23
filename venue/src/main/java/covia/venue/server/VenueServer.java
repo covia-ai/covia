@@ -1,8 +1,8 @@
 package covia.venue.server;
 
-import java.util.List;
-
 import org.eclipse.jetty.server.ServerConnector;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import convex.api.Convex;
 import convex.core.data.ACell;
@@ -36,6 +36,8 @@ import io.javalin.openapi.plugin.swagger.SwaggerPlugin;
  * 
  */
 public class VenueServer {
+	
+	public static Logger log=LoggerFactory.getLogger(VenueServer.class);;
 	
 	protected final AMap<AString,ACell> config;
 	
@@ -109,6 +111,7 @@ public class VenueServer {
 		addLoginRoutes(javalin);
 		addAPIRoutes(javalin);	
 		start(javalin,port);
+		log.info("Venue server started on port: "+javalin.port());
 	}
 	
 	/**
@@ -151,8 +154,8 @@ public class VenueServer {
 					// replacement for enableCorsForAllOrigins()
 					corsConfig.anyHost();
 					corsConfig.exposeHeader("X-Covia-User");
-					
 				});
+				
 			});
 			
 			addOpenApiPlugins(config);
@@ -172,6 +175,7 @@ public class VenueServer {
 			config.useVirtualThreads=true;
 		});
 		
+		
 		app.exception(HttpResponseException.class, (e, ctx) -> {
 			VenueServer.this.api.buildError(ctx,e.getStatus(),e.getMessage());
 		});
@@ -186,7 +190,7 @@ public class VenueServer {
 		app.options("/*", ctx-> {
 			ctx.status(204); // No context#
 			ctx.removeHeader("Content-type");
-			ctx.header("access-control-allow-headers", "content-type");
+			ctx.header("access-control-allow-headers", "content-type, authorization, x-covia-user");
 			ctx.header("access-control-allow-methods", "GET,HEAD,PUT,PATCH,POST,DELETE");
 			ctx.header("access-control-allow-origin", "*");
 			ctx.header("vary","Origin, Access-Control-Request-Headers");
