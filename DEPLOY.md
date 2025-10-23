@@ -18,6 +18,14 @@ sudo apt-get install -y openjdk-25-jdk
 sudo apt install -y caddy
 ```
 
+Start caddy:
+
+```bash
+sudo systemctl start caddy
+```
+
+Remember to configure the Caddyfile as necessary at `/etc/caddy/CaddyFile`
+
 ## Cloud Jar 
 
 To upload the covia.jar to bucket using GCloud CLI:
@@ -35,7 +43,7 @@ gsutil cp gs://covia-jar-bucket/covia.jar covia.jar
 
 ## Run Covia Venue Jar
 
-You will need to obtscain the runnable `.jar` file for the Covia Venue.
+You will need to obtain the runnable `.jar` file for the Covia Venue.
 
 To run normally at the CLI:
 
@@ -49,7 +57,7 @@ To run in a separate screen session (recommended for test/dev where you want to 
 
 ```
 screen -S covia-venue
-java -jar covia.jar
+java -jar covia.jar ~/.covia.config.json
 ```
 
 You can switch then:

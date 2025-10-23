@@ -21,7 +21,7 @@
 				"model":{
 					"type":"string",
 					"description":"Optional model name (defaults to gemini-1.5-flash)",
-					"default":"gemini-1.5-flash"
+					"default":"gemini-2.5-flash"
 				},
 				"systemPrompt":{
 					"type":"string",

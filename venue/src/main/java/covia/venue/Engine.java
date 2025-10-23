@@ -36,6 +36,7 @@ import convex.etch.EtchStore;
 import convex.lattice.ACursor;
 import convex.lattice.Cursors;
 import covia.adapter.AAdapter;
+import covia.adapter.ConvexAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.adapter.GridAdapter;
 import covia.adapter.HTTPAdapter;
@@ -114,6 +115,18 @@ public class Engine {
 		this.store=store;
 		this.contentStorage = new MemoryStorage();
 		this.contentStorage.initialise();
+	}
+	
+	public static void addDemoAssets(Engine venue) {
+		venue.registerAdapter(new TestAdapter());
+		venue.registerAdapter(new HTTPAdapter());
+		venue.registerAdapter(new JVMAdapter());
+		venue.registerAdapter(new Orchestrator());
+		venue.registerAdapter(new MCPAdapter());
+		venue.registerAdapter(new LangChainAdapter());
+		venue.registerAdapter(new CoviaAdapter());
+		venue.registerAdapter(new GridAdapter());
+		venue.registerAdapter(new ConvexAdapter());
 	}
 
 	/**
@@ -236,18 +249,6 @@ public class Engine {
 		AVector<?> arec=getAssets().get(assetID);
 		if (arec==null) return null;
 		return RT.ensureMap(arec.get(POS_META));
-	}
-
-
-	public static void addDemoAssets(Engine venue) {
-		venue.registerAdapter(new TestAdapter());
-		venue.registerAdapter(new HTTPAdapter());
-		venue.registerAdapter(new JVMAdapter());
-		venue.registerAdapter(new Orchestrator());
-		venue.registerAdapter(new MCPAdapter());
-		venue.registerAdapter(new LangChainAdapter());
-		venue.registerAdapter(new CoviaAdapter());
-		venue.registerAdapter(new GridAdapter());
 	}
 
 	public Job invokeOperation(String op, ACell input) {

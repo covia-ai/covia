@@ -1,9 +1,24 @@
-# Global options
+# This is an example Caddyfile for a Covbia server
+#
+# Most defaults are fine
+# This is usually stored at /etc/caddy/Caddyfile
+
+
 {
-	email admin@covia.ai
+        email admin@covia.ai
 }
 
 venue-test.covia.ai {
-	# Send requests to 8080 (including HTPPs)
-	reverse_proxy :8080
+        # Send requests to 8080 (including HTPPs)
+        reverse_proxy :8080
+}
+
+venue-1.covia.ai {
+        # Send requests to 8081 (including HTPPs)
+        reverse_proxy :8081
+}
+
+venue-2.covia.ai {
+        # Send requests to 8082 (including HTPPs)
+        reverse_proxy :8082
 }

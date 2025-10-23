@@ -26,12 +26,13 @@ import convex.core.util.JSON;
 import convex.core.util.Utils;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.venue.Engine;
 import covia.grid.Status;
-import covia.grid.impl.BlobContent;
+import covia.grid.impl.BlobContent; 
 
 import java.io.InputStream;
 
-public class VenueTest {
+public class EngineTest {
 	Engine venue;
 	Hash randomOpID;
 	AString EMPTY_META = Strings.create("{}");

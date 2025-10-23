@@ -1,5 +1,7 @@
 package covia.venue.server;
 
+import java.util.List;
+
 import org.eclipse.jetty.server.ServerConnector;
 
 import convex.api.Convex;
@@ -148,6 +150,8 @@ public class VenueServer {
 					
 					// replacement for enableCorsForAllOrigins()
 					corsConfig.anyHost();
+					corsConfig.exposeHeader("X-Covia-User");
+					
 				});
 			});
 			
