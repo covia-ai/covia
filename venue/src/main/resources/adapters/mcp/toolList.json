@@ -1,0 +1,60 @@
+{
+	"name": "MCP Tools List",
+	"description": "Lists available MCP tools from a remote server",
+	"dateCreated": "2025-01-27T00:00:00Z",
+	"operation": {
+		"adapter": "mcp:tools:list",
+		"info":{
+		    "featured":true
+		},
+
+		
+		"toolName": "toolList",
+		"input": {
+			"type": "object",
+			"properties": {
+				"server": {
+					"type": "string",
+					"description": "URL or DID for the MCP server",
+					"examples":["https:venue-test.covia.ai","did:web:venue1.covia.ai"]
+				},
+				"token": {
+					"type": "string",
+					"description": "API access token to use for the delegated MCP request",
+					"examples":["xyzabcdefghj"]
+				}
+			},
+			"required": ["server"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"tools": {
+					"type": "array",
+					"description": "Array of available MCP tools",
+					"items": {
+						"type": "object",
+						"properties": {
+							"name": {
+								"type": "string",
+								"description": "Tool name"
+							},
+							"description": {
+								"type": "string",
+								"description": "Tool description"
+							},
+							"inputSchema": {
+								"type": "object",
+								"description": "Tool input schema"
+							}
+						}
+					}
+				},
+				"total": {
+					"type": "integer",
+					"description": "Total number of available tools"
+				}
+			}
+		}
+	}
+}

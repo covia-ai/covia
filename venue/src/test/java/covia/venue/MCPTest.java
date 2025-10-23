@@ -164,6 +164,39 @@ public class MCPTest {
 		assertEquals(input,result);
 	}
 	
+	@Test public void testListMCPTools() throws Exception {
+		MCPAdapter mcpAdapter=(MCPAdapter) venue.getAdapter("mcp");
+		
+		ACell result=mcpAdapter.listMCPTools(Strings.create(BASE_URL), null);
+		assertNotNull(result);
+		
+		// Verify the result is a map with tools and total fields
+		assertTrue(result instanceof AMap, "Result should be a map");
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> resultMap = (AMap<AString, ACell>) result;
+		
+		// Check that we have a tools field
+		ACell tools = resultMap.get(Strings.create("tools"));
+		assertNotNull(tools, "Result should contain tools field");
+		assertTrue(tools instanceof AVector, "Tools should be a vector");
+		
+		// Check that we have a total field
+		ACell total = resultMap.get(Fields.TOTAL);
+		assertNotNull(total, "Result should contain total field");
+		assertTrue(total instanceof AInteger, "Total should be an integer");
+		
+		// Verify we have at least one tool (the echo tool from TestAdapter)
+		@SuppressWarnings("unchecked")
+		AVector<AMap<AString, ACell>> toolsVector = (AVector<AMap<AString, ACell>>) tools;
+		assertTrue(toolsVector.size() > 0, "Should have at least one tool");
+		
+		// Check the structure of the first tool
+		AMap<AString, ACell> firstTool = toolsVector.get(0);
+		assertTrue(firstTool.containsKey(Fields.NAME), "Tool should have a name");
+		assertTrue(firstTool.containsKey(Fields.DESCRIPTION), "Tool should have a description");
+		assertTrue(firstTool.containsKey(Fields.INPUT_SCHEMA), "Tool should have an inputSchema");
+	}
+	
 	@Test public void testProxyToolCall() {
 		Venue client = Grid.connect(BASE_URL);
 		MCPAdapter mcpAdapter=(MCPAdapter) venue.getAdapter("mcp");
@@ -177,5 +210,35 @@ public class MCPTest {
 		
 		AMap<AInteger,AInteger> result=job.awaitResult();
 		System.out.println(result);
+	}
+	
+	@Test public void testProxyToolsList() {
+		Venue client = Grid.connect(BASE_URL);
+		MCPAdapter mcpAdapter=(MCPAdapter) venue.getAdapter("mcp");
+		assertNotNull(mcpAdapter);
+		
+		// Test the tools:list operation through the venue interface
+		Job job=client.invoke(mcpAdapter.TOOLS_LIST, 
+				Maps.of(Fields.SERVER, BASE_URL)).join();
+		
+		ACell result=job.awaitResult();
+		assertNotNull(result);
+		
+		// Verify the result structure
+		assertTrue(result instanceof AMap, "Result should be a map");
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> resultMap = (AMap<AString, ACell>) result;
+		
+		// Check that we have a tools field
+		ACell tools = resultMap.get(Strings.create("tools"));
+		assertNotNull(tools, "Result should contain tools field");
+		assertTrue(tools instanceof AVector, "Tools should be a vector");
+		
+		// Check that we have a total field
+		ACell total = resultMap.get(Fields.TOTAL);
+		assertNotNull(total, "Result should contain total field");
+		assertTrue(total instanceof AInteger, "Total should be an integer");
+		
+		System.out.println("Tools list result: " + result);
 	}
 }
