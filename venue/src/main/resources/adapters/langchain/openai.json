@@ -1,7 +1,7 @@
 {
-	"name":"GPT 5 mini chat",
+	"name":"GPT-5 nano",
 	"creator":"Mike Anderson",
-	"description":"Example operation that chats with an OpenAI-compatible endpoint via LangChainAdapter",
+	"description":"Chat with OpenAI GPT-5 nano",
 	"dateCreated":"2025-09-16T00:00:00Z",
 	"dateModified": "2025-09-16T00:00:00Z",
 	"keywords":["LLM", "model", "openai"],
