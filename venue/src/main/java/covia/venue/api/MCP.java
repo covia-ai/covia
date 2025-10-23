@@ -149,13 +149,15 @@ public class MCP extends ACoviaAPI {
 			
 			if (method.equals("tools/list")) {
 				response=listTools();
+				log.info("tools/list: "+JSON.printPretty(response).toString());
 			} else if (method.equals("tools/call")) {
 				response=toolCall(RT.getIn(request, Fields.PARAMS));
 			} else if (method.equals("initialize")) {
 				response=protocolResult(Maps.of(
 						"protocolVersion", "2025-03-26",
 						"capabilities",Maps.of("tools",Maps.empty()),
-						"serverInfo",SERVER_INFO
+						"serverInfo",SERVER_INFO,
+						"tools",listTools()
 				));
 			} else if (method.equals("notifications/initialized")) {
 				response=protocolResult(Maps.of());
