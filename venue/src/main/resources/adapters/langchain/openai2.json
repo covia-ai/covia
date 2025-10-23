@@ -1,5 +1,5 @@
 {
-	"name":"GPT 5 mini chat",
+	"name":"OpenAI model chat",
 	"creator":"Mike Anderson",
 	"description":"Example operation that chats with an OpenAI-compatible endpoint via LangChainAdapter",
 	"dateCreated":"2025-09-16T00:00:00Z",
@@ -20,8 +20,8 @@
 				},
 				"model":{
 					"type":"string",
-					"description":"Optional model name (defaults to gpt-5-nano)",
-					"default":"gpt-5-nano"
+					"description":"Optional model name (defaults to gpt-3.5-turbo)",
+					"default":"gpt-3.5-turbo"
 				},
 				"systemPrompt":{
 					"type":"string",

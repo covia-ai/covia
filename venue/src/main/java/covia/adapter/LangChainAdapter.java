@@ -41,6 +41,7 @@ public class LangChainAdapter extends AAdapter {
 
 		installAsset("/adapters/langchain/ollama.json");
 		installAsset("/adapters/langchain/openai.json");
+		installAsset("/adapters/langchain/openai2.json");
 		installAsset("/adapters/langchain/gemini.json");
 		installAsset("/adapters/langchain/deepseek.json");
 	}
@@ -99,7 +100,7 @@ public class LangChainAdapter extends AAdapter {
         		// Create Ollama model dynamically with the specified URL and model
         		ChatModel ollamaModel = OllamaChatModel.builder()
         			.baseUrl(baseUrl)
-        			.temperature(0.7)
+        			//.temperature(0.7)
         			.logRequests(true)
         			.logResponses(true)
         			.modelName(model)
@@ -117,7 +118,7 @@ public class LangChainAdapter extends AAdapter {
         		ChatModel openaiModel = OpenAiChatModel.builder()
         			.apiKey(apiKey)
         			.baseUrl(baseUrl)
-        			.temperature(0.7)
+        			//.temperature(0.7)
         			.logRequests(true)
         			.logResponses(true)
         			.modelName(model)
