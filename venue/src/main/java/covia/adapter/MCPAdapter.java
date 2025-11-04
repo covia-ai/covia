@@ -303,7 +303,7 @@ public class MCPAdapter extends AAdapter {
 	}
 	
 	/**
-	 * Helper method to convert Java objects to Convex format
+	 * Helper method to convert JsonSchema objects to Convex format
 	 * @param obj The Java object to convert
 	 * @return ACell representation of the object
 	 */

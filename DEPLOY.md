@@ -57,7 +57,7 @@ To run in a separate screen session (recommended for test/dev where you want to 
 
 ```
 screen -S covia-venue
-java -jar covia.jar ~/.covia.config.json
+java -jar covia.jar ~/.covia/config.json
 ```
 
 You can switch then:
