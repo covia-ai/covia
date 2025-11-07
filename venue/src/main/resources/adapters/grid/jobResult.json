@@ -1,0 +1,27 @@
+{
+	"name": "Grid Job Result",
+	"description": "Wait for a Covia grid job to finish and return its output",
+	"operation": {
+		"adapter": "grid:jobResult",
+		"toolName": "gridJobResult",
+		"input": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string",
+					"description": "Job identifier returned from a previous grid invocation"
+				},
+				"venue": {
+					"type": "string",
+					"description": "Optional remote venue URL or DID to query"
+				}
+			},
+			"required": ["id"]
+		},
+		"output": {
+			"type": "any",
+			"description": "Output value of the referenced job"
+		}
+	}
+}
+

@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 
 import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.did.DID;
 
@@ -58,6 +60,24 @@ public abstract class Venue {
 		}
 		return invoke(assetID, input);
 	}
+
+	public CompletableFuture<Job> getJob(String jobId) {
+		return getJob(Job.parseID(jobId));
+	}
+
+	public abstract CompletableFuture<Job> getJob(AString jobId);
+
+	public CompletableFuture<AMap<AString, ACell>> getJobStatus(String jobId) {
+		return getJobStatus(Job.parseID(jobId));
+	}
+
+	public abstract CompletableFuture<AMap<AString, ACell>> getJobStatus(AString jobId);
+
+	public CompletableFuture<ACell> awaitJobResult(String jobId) {
+		return awaitJobResult(Job.parseID(jobId));
+	}
+
+	public abstract CompletableFuture<ACell> awaitJobResult(AString jobId);
 
 	public DID getAssetDID(Hash id) {
 		return getDID().withPath("/a/"+id.toHexString());

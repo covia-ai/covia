@@ -35,6 +35,7 @@ import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.grid.impl.BlobContent;
+import covia.exception.JobFailedException;
 
 public class VenueHTTP extends Venue {
 	
@@ -153,6 +154,44 @@ public class VenueHTTP extends Venue {
 	public CompletableFuture<Job> invoke(String assetID, ACell input)  {
 		AString opID=Strings.create(assetID);
 		return invoke(opID,input);
+	}
+
+	@Override
+	public CompletableFuture<Job> getJob(AString jobId) {
+		return getJobData(jobId).thenApply(status -> {
+			if (status == null) {
+				throw new IllegalArgumentException("Job not found: " + jobId);
+			}
+			return Job.create(status);
+		});
+	}
+
+	@Override
+	public CompletableFuture<AMap<AString, ACell>> getJobStatus(AString jobId) {
+		return getJobData(jobId).thenApply(status -> {
+			if (status == null) {
+				throw new IllegalArgumentException("Job not found: " + jobId);
+			}
+			return status;
+		});
+	}
+
+	@Override
+	public CompletableFuture<ACell> awaitJobResult(AString jobId) {
+		return CompletableFuture.supplyAsync(() -> {
+			AMap<AString, ACell> status = getJobData(jobId).join();
+			if (status == null) {
+				throw new IllegalArgumentException("Job not found: " + jobId);
+			}
+			Job job = Job.create(status);
+			try {
+				waitForFinish(job);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new JobFailedException(e);
+			}
+			return job.awaitResult();
+		});
 	}
 
 	@Override

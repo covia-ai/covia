@@ -1,0 +1,55 @@
+{
+	"name": "Grid Job Status",
+	"description": "Fetch the current status of a Covia grid job by ID",
+	"operation": {
+		"adapter": "grid:jobStatus",
+		"toolName": "gridJobStatus",
+		"input": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string",
+					"description": "Job identifier returned from a previous grid invocation"
+				},
+				"venue": {
+					"type": "string",
+					"description": "Optional remote venue URL or DID to query"
+				}
+			},
+			"required": ["id"]
+		},
+		"output": {
+			"type": "object",
+			"description": "Job status information returned by the venue",
+			"properties": {
+				"id": {
+					"type": "string",
+					"description": "Remote job identifier"
+				},
+				"status": {
+					"type": "string",
+					"description": "Current job status (e.g. PENDING, STARTED, COMPLETE, FAILED, CANCELLED)"
+				},
+				"created": {
+					"type": "integer",
+					"description": "Timestamp when the job was created (milliseconds since epoch)",
+					"format": "int64"
+				},
+				"updated": {
+					"type": "integer",
+					"description": "Timestamp when the job status was last updated (milliseconds since epoch)",
+					"format": "int64"
+				},
+				"output": {
+					"type": "any",
+					"description": "Operation output, when available"
+				},
+				"error": {
+					"type": "string",
+					"description": "Error message if the job failed"
+				}
+			}
+		}
+	}
+}
+

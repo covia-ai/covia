@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import org.junit.jupiter.api.Test;
 
+import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.lang.RT;
 import covia.api.Fields;
@@ -79,6 +80,48 @@ class GridAdapterTest {
 		assertNotNull(job, "Job should not be null");
 		assertEquals(Status.COMPLETE, job.getStatus());
 		assertNotNull(RT.getIn(job.getOutput(), Fields.ID), "Job output should include a job ID");
+	}
+
+	@Test
+	void jobStatusLocal() throws Exception {
+		VenueHTTP covia = TestServer.COVIA;
+
+		Job job = covia.invokeSync("grid:invoke", Maps.of(
+				Fields.OPERATION, "jvm:stringConcat",
+				Fields.INPUT, Maps.of("first", "status", "second", "check")));
+		AString jobId = RT.ensureString(RT.getIn(job.getOutput(), Fields.ID));
+		assertNotNull(jobId);
+
+		Job statusJob = covia.invokeSync("grid:jobStatus", Maps.of(Fields.ID, jobId));
+		assertEquals(Status.COMPLETE, statusJob.getStatus());
+		assertEquals(Status.COMPLETE, RT.getIn(statusJob.getOutput(), Fields.JOB_STATUS_FIELD));
+	}
+
+	@Test
+	void jobResultLocal() throws Exception {
+		VenueHTTP covia = TestServer.COVIA;
+
+		Job job = covia.invokeSync("grid:invoke", Maps.of(
+				Fields.OPERATION, "jvm:stringConcat",
+				Fields.INPUT, Maps.of("first", "result", "second", "wait")));
+		AString jobId = RT.ensureString(RT.getIn(job.getOutput(), Fields.ID));
+
+		Job resultJob = covia.invokeSync("grid:jobResult", Maps.of(Fields.ID, jobId));
+		assertEquals(Status.COMPLETE, resultJob.getStatus());
+		assertEquals("resultwait", RT.getIn(resultJob.getOutput(), Fields.RESULT).toString());
+	}
+
+	@Test
+	void jobResultLocalFailure() throws Exception {
+		VenueHTTP covia = TestServer.COVIA;
+
+		Job failJob = covia.invokeSync("grid:invoke", Maps.of(
+				Fields.OPERATION, "jvm:alwaysFail"));
+		AString jobId = RT.ensureString(RT.getIn(failJob.getOutput(), Fields.ID));
+
+		Job resultJob = covia.invokeSync("grid:jobResult", Maps.of(Fields.ID, jobId));
+		assertEquals(Status.FAILED, resultJob.getStatus());
+		assertNotNull(resultJob.getErrorMessage());
 	}
 }
 
