@@ -1,0 +1,59 @@
+{
+	"name": "Grid Invoke",
+	"description": "Submit a Covia grid operation and return the job status",
+	"operation": {
+		"adapter": "grid:invoke",
+		"toolName": "gridInvoke",
+		"input": {
+			"type": "object",
+			"properties": {
+				"operation": {
+					"type": "string",
+					"description": "Operation alias or asset ID to invoke"
+				},
+				"input": {
+					"type": "any",
+					"description": "Arguments to pass to the operation"
+				},
+				"venue": {
+					"type": "string",
+					"description": "Optional remote venue URL or DID to connect to"
+				}
+			},
+			"required": ["operation"]
+		},
+		"output": {
+			"type": "object",
+			"description": "Job status information returned by the venue",
+			"properties": {
+				"id": {
+					"type": "string",
+					"description": "Remote job identifier"
+				},
+				"status": {
+					"type": "string",
+					"description": "Current job status (e.g. PENDING, STARTED, COMPLETE, FAILED, CANCELLED)"
+				},
+				"created": {
+					"type": "integer",
+					"description": "Timestamp when the job was created (milliseconds since epoch)",
+					"format": "int64"
+				},
+				"updated": {
+					"type": "integer",
+					"description": "Timestamp when the job status was last updated (milliseconds since epoch)",
+					"format": "int64"
+				},
+				"output": {
+					"type": "any",
+					"description": "Operation output, when available"
+				},
+				"error": {
+					"type": "string",
+					"description": "Error message if the job failed"
+				}
+			}
+		}
+	}
+}
+

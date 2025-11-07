@@ -42,6 +42,23 @@ public abstract class Venue {
 	 */
 	public abstract CompletableFuture<Job> invoke(Hash assetID, ACell input);
 
+	/**
+	 * Invokes an operation specified by a string alias or asset ID.
+	 * Default implementation accepts hexadecimal asset IDs.
+	 * Concrete subclasses should override if they support aliases.
+	 *
+	 * @param operation Operation identifier (alias or asset ID)
+	 * @param input Operation input
+	 * @return Future for the started Job
+	 */
+	public CompletableFuture<Job> invoke(String operation, ACell input) {
+		Hash assetID = Hash.parse(operation);
+		if (assetID == null) {
+			throw new IllegalArgumentException("Operation must be an asset hash for this venue implementation: " + operation);
+		}
+		return invoke(assetID, input);
+	}
+
 	public DID getAssetDID(Hash id) {
 		return getDID().withPath("/a/"+id.toHexString());
 	}

@@ -92,5 +92,6 @@ public class Fields {
 	public static final StringShort ADDRESS = Strings.intern("address");
 	public static final StringShort SOURCE = Strings.intern("source");
 	public static final StringShort SEED = Strings.intern("seed");
+	public static final StringShort VENUE = Strings.intern("venue");
 
 }

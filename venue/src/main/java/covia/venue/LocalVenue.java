@@ -48,6 +48,21 @@ public class LocalVenue extends Venue {
 	}
 
 	@Override
+	public CompletableFuture<Job> invoke(String operation, ACell input) {
+		if (operation == null) {
+			throw new IllegalArgumentException("Operation must not be null");
+		}
+		Hash assetID = Hash.parse(operation);
+		Job job;
+		if (assetID != null) {
+			job = engine.invokeOperation(assetID, input);
+		} else {
+			job = engine.invokeOperation(operation, input);
+		}
+		return CompletableFuture.completedFuture(job);
+	}
+
+	@Override
 	protected AContent getAssetContent(Hash id) throws IOException {
 
 		return engine.getContent(id);

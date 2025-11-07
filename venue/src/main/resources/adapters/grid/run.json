@@ -1,0 +1,31 @@
+{
+	"name": "Grid Run",
+	"description": "Run a Covia grid operation on this venue or an optional remote venue",
+	"operation": {
+		"adapter": "grid:run",
+		"toolName": "gridRun",
+		"input": {
+			"type": "object",
+			"properties": {
+				"operation": {
+					"type": "string",
+					"description": "Operation alias or asset ID to invoke"
+				},
+				"input": {
+					"type": "any",
+					"description": "Arguments to pass to the operation"
+				},
+				"venue": {
+					"type": "string",
+					"description": "Optional remote venue URL or DID to connect to"
+				}
+			},
+			"required": ["operation"]
+		},
+		"output": {
+			"type": "any",
+			"description": "Result of the executed grid operation"
+		}
+	}
+}
+

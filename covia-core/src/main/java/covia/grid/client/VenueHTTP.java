@@ -149,11 +149,12 @@ public class VenueHTTP extends Venue {
 	 * @param input The input parameters for the operation as an ACell
 	 * @return Future for the finished Job
 	 */
+	@Override
 	public CompletableFuture<Job> invoke(String assetID, ACell input)  {
 		AString opID=Strings.create(assetID);
 		return invoke(opID,input);
 	}
-	
+
 	@Override
 	public CompletableFuture<Job> invoke(Hash assetID, ACell input)  {
 		return invoke(assetID.toCVMHexString(),input);
