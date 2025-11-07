@@ -1,0 +1,24 @@
+{
+	"name": "Convex Query",
+	"description": "Execute a read-only query against a Convex peer",
+	"operation": {
+		"adapter": "convex:query",
+		"toolName": "convexQuery",
+		"input": {
+			"type": "object",
+			"properties": {
+				"peer": {
+					"type": "string",
+					"description": "Convex peer endpoint, e.g.: peer.convex.live:18888",
+					"default": "peer.convex.live:18888"
+				}
+			},
+			"required": ["server"]
+		},
+		"output": {
+			"type": "object",
+			"description": "Result of the Convex query"
+		},
+		"peer": "peer.convex.live:18888"
+	}
+}

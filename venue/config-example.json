@@ -30,7 +30,7 @@
 	],
 	
 	// Whole-server configuration goes here
-	"convex":{
+	"convex": {
 		// Config for embedded Convex peer, shared between venue instances
 	}
 }

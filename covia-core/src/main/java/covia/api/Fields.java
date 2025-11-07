@@ -86,6 +86,11 @@ public class Fields {
 	public static final StringShort PREFERRED = Strings.intern("preferred");
 	public static final StringShort CATEGORY = Strings.intern("category");
 	public static final StringShort OUTPUT_SCHEMA = Strings.intern("outputSchema");
+
+	// Convex relater
+	public static final StringShort PEER = Strings.intern("peer");
+	public static final StringShort ADDRESS = Strings.intern("address");
+	public static final StringShort SOURCE = Strings.intern("source");
 	
 
 }
