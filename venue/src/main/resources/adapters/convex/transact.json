@@ -1,0 +1,36 @@
+{
+	"name": "Convex Transact",
+	"description": "Execute a transaction against a Convex peer",
+	"operation": {
+		"adapter": "convex:transact",
+		"toolName": "convexTransact",
+		"input": {
+			"type": "object",
+			"properties": {
+				"peer": {
+					"type": "string",
+					"description": "Convex peer endpoint, e.g.: peer.convex.live:18888"
+				},
+				"address": {
+					"type": "string",
+					"description": "Origin account address to use for the transaction"
+				},
+				"source": {
+					"type": "string",
+					"description": "Convex Lisp source code to transact"
+				},
+				"seed": {
+					"type": "string",
+					"secret":true,
+					"description": "Ed25519 signing seed for the transaction"
+				}
+			},
+			"required": ["peer", "source", "seed"]
+		},
+		"output": {
+			"type": "object",
+			"description": "Result of the Convex transaction"
+		}
+	}
+}
+

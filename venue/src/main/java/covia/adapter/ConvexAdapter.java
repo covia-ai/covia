@@ -12,10 +12,13 @@ import convex.api.Convex;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.ABlob;
+import convex.core.data.Blobs;
 import convex.core.data.Hash;
 import convex.core.lang.RT;
 import convex.core.lang.Reader;
 import convex.core.Result;
+import convex.core.crypto.AKeyPair;
 import convex.core.cvm.Address;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
@@ -31,6 +34,7 @@ public class ConvexAdapter extends AAdapter {
 	private static final Logger log = LoggerFactory.getLogger(ConvexAdapter.class);
 
 	private Hash QUERY_OPERATION;
+	private Hash TRANSACT_OPERATION;
 
 	@Override
 	public String getName() {
@@ -45,6 +49,7 @@ public class ConvexAdapter extends AAdapter {
 	@Override
 	protected void installAssets() {
 		QUERY_OPERATION = installAsset("/adapters/convex/query.json");
+		TRANSACT_OPERATION = installAsset("/adapters/convex/transact.json");
 	}
 
 	@Override
@@ -60,6 +65,7 @@ public class ConvexAdapter extends AAdapter {
 		String op = parts[1];
 		return switch (op) {
 			case "query" -> invokeQuery(meta, input);
+			case "transact" -> invokeTransact(meta, input);
 			default -> CompletableFuture.failedFuture(
 					new UnsupportedOperationException("Unsupported Convex operation: " + operation));
 		};
@@ -67,6 +73,10 @@ public class ConvexAdapter extends AAdapter {
 
 	private CompletableFuture<ACell> invokeQuery(ACell meta, ACell input) {
 		return withConvexClient(meta, input, convex -> executeQuery(convex, meta, input));
+	}
+
+	private CompletableFuture<ACell> invokeTransact(ACell meta, ACell input) {
+		return withConvexClient(meta, input, convex -> executeTransact(convex, meta, input));
 	}
 
 	/**
@@ -84,6 +94,37 @@ public class ConvexAdapter extends AAdapter {
 		ACell code=Reader.read(source.toString());
 
 		CompletableFuture<Result> resultFuture = convex.query(code, address);
+
+		return resultFuture.thenApply(result -> {
+			return RT.cvm(result.toJSON());
+		});
+	}
+
+	protected CompletableFuture<ACell> executeTransact(Convex convex, ACell meta, ACell input) {
+		// Get the address from the input. If not specified
+		Address address = Address.parse(RT.getIn(input, Fields.ADDRESS));
+		if (address==null) {
+			return CompletableFuture.failedFuture(new JobFailedException("No address provided"));
+		}
+		
+		// Get the address from the input. If not specified
+		ABlob seedBlob = Blobs.parse(RT.getIn(input, Fields.SEED));
+		if (seedBlob==null) {
+			return CompletableFuture.failedFuture(new JobFailedException("No signing key provided provided as a Ed25519 seed"));
+		}
+		
+
+		AString source=RT.ensureString(RT.getIn(input, Fields.SOURCE));
+		if (source==null) {
+			return CompletableFuture.failedFuture(new JobFailedException("No query source provided"));
+		}
+
+		ACell code=Reader.read(source.toString());
+
+		convex.setAddress(address);
+		convex.setKeyPair(AKeyPair.create(seedBlob.getBytes()));
+
+		CompletableFuture<Result> resultFuture = convex.transact(code);
 
 		return resultFuture.thenApply(result -> {
 			return RT.cvm(result.toJSON());
@@ -147,5 +188,9 @@ public class ConvexAdapter extends AAdapter {
 
 	public Hash getQueryOperation() {
 		return QUERY_OPERATION;
+	}
+
+	public Hash getTransactOperation() {
+		return TRANSACT_OPERATION;
 	}
 }
