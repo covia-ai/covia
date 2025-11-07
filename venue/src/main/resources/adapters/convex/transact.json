@@ -24,12 +24,26 @@
 					"secret":true,
 					"description": "Ed25519 signing seed for the transaction"
 				}
-			},
-			"required": ["peer", "source", "seed"]
+			}
 		},
 		"output": {
 			"type": "object",
-			"description": "Result of the Convex transaction"
+			"description": "Result of the Convex query",
+			"properties": {
+				"errorCode": {
+					"type": "string",
+					"description": "Error code, if an error occurred",
+					"default": "peer.convex.live:18888"
+				},
+				"result": {
+					"type": "string",
+					"description": "Result of the query, as Convex printed data structure."
+				},
+				"value": {
+					"type": "any",
+					"description": "Result of the query, as JSON (some type distinctions may be lost)."
+				}
+			}
 		}
 	}
 }
