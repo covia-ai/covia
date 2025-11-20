@@ -148,7 +148,7 @@ public class MCP extends ACoviaAPI {
 			String method=methodAS.toString().trim();
 			
 			if (method.equals("tools/list")) {
-				response=listTools();
+				response=listToolsResult();
 				log.info("tools/list: "+JSON.printPretty(response).toString());
 			} else if (method.equals("tools/call")) {
 				response=toolCall(RT.getIn(request, Fields.PARAMS));
@@ -156,8 +156,7 @@ public class MCP extends ACoviaAPI {
 				response=protocolResult(Maps.of(
 						"protocolVersion", "2025-03-26",
 						"capabilities",Maps.of("tools",Maps.empty()),
-						"serverInfo",SERVER_INFO,
-						"tools",listTools()
+						"serverInfo",SERVER_INFO
 				));
 			} else if (method.equals("notifications/initialized")) {
 				response=protocolResult(Maps.of());
@@ -195,9 +194,12 @@ public class MCP extends ACoviaAPI {
 					Job job=engine.invokeOperation(opID, arguments);
 					ACell result=job.awaitResult();
 					return protocolResult(Maps.of(
-								Fields.CONTENT,Vectors.of(Maps.of(Fields.TYPE,Fields.TEXT,Fields.TEXT,JSON.toAString(result))),
-								Fields.STRUCTURED_CONTENT,result
-							));
+						Fields.CONTENT,Vectors.of(
+								Maps.of(Fields.TYPE,Fields.TEXT,
+										Fields.TEXT,JSON.toAString(result)
+								)),
+						Fields.STRUCTURED_CONTENT,result
+					));
 			} else {
 				return protocolError(-32602, "Unknown tool: "+toolName);
 			}
@@ -274,7 +276,7 @@ public class MCP extends ACoviaAPI {
 		));
 	}
 
-	private AMap<AString, ACell> listTools() {
+	private AMap<AString, ACell> listToolsResult() {
 		AVector<AMap<AString,ACell>> toolsVector=Vectors.empty();
 		
 		// Iterate through all registered adapters
