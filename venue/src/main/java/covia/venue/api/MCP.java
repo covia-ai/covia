@@ -359,15 +359,9 @@ public class MCP extends ACoviaAPI {
 
 	private AMap<AString,ACell> ensureSchema(AMap<AString,ACell> schema) {
 		if (schema==null) schema=Maps.empty();
-		if (!schema.containsKey(Fields.TYPE)) {
-			schema=schema.assoc(Fields.TYPE, Fields.ANY);
-		}
-		if (schema.getIn(Fields.TYPE).equals(Fields.OBJECT)) {
-			if (!schema.containsKey(Fields.PROPERTIES)) {
-				schema=schema.assoc(Fields.ADDITIONAL_PROPERTIES, CVMBool.TRUE);
-			}
-			
-		}
+		// Object type is mandatory in MCP spec
+		// see: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-06-18/schema.json
+		schema=schema.assoc(Fields.TYPE, Fields.OBJECT);
 		
 		return schema;
 	}

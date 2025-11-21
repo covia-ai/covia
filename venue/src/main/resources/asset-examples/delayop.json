@@ -23,6 +23,7 @@
 			}	
 		},
 		"output": {
+			"type":"any",
 			"description":"The output of the delayed operation."
 		}
 	}
