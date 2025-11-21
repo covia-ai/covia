@@ -71,6 +71,7 @@ public class Fields {
 	public static final StringShort STRUCTURED_CONTENT = Strings.intern("structuredContent");
 	public static final StringShort PARAMS = Strings.intern("params");
 	public static final StringShort TOKEN = Strings.intern("token");
+	public static final StringShort OBJECT = Strings.intern("object");
 	
 	// A2A stuff
 	public static final StringShort A2A = Strings.intern("a2a");
@@ -93,5 +94,6 @@ public class Fields {
 	public static final StringShort SOURCE = Strings.intern("source");
 	public static final StringShort SEED = Strings.intern("seed");
 	public static final StringShort VENUE = Strings.intern("venue");
+
 
 }

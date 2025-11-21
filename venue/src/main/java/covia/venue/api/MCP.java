@@ -342,16 +342,26 @@ public class MCP extends ACoviaAPI {
 		
 		if (toolName==null) return null;
 		
+		AMap<AString,ACell> inputSchema=ensureSchema(RT.getIn(op, Fields.INPUT));
+		AMap<AString,ACell> outputSchema=ensureSchema(RT.getIn(op, Fields.OUTPUT));
+		
 		AMap<AString,ACell> result= Maps.of(
 				Fields.NAME,toolName,
 				Fields.TITLE,RT.getIn(meta,Fields.NAME),
 				Fields.DESCRIPTION,RT.getIn(meta,Fields.DESCRIPTION),
-				Fields.INPUT_SCHEMA,RT.getIn(op, Fields.INPUT)
+				Fields.INPUT_SCHEMA,inputSchema,
+				Fields.OUTPUT_SCHEMA,outputSchema
 		);		
 		
-		
-		
 		return result;
+	}
+
+	private AMap<AString,ACell> ensureSchema(AMap<AString,ACell> schema) {
+		if (schema==null) schema=Maps.empty();
+		if (!schema.containsKey(Fields.TYPE)) {
+			schema=schema.assoc(Fields.TYPE, Fields.OBJECT);
+		}
+		return schema;
 	}
 
 	@OpenApi(path = "/mcp", 
@@ -370,9 +380,7 @@ public class MCP extends ACoviaAPI {
 			"server_url": "http:localhost:8080/mcp",
 			"description": "MCP server for Covia Venue",
 			"tools_endpoint": "/mcp",
-			"endpoint": {"path":"/mcp","transport":"streamable-http"},
-			"auth": {
-			}	
+			"endpoint": {"path":"/mcp","transport":"streamable-http"}
 		}
 """);
 	
