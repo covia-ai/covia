@@ -150,7 +150,6 @@ public class MCP extends ACoviaAPI {
 			
 			if (method.equals("tools/list")) {
 				response=listToolsResult();
-				log.info("tools/list: "+JSON.printPretty(response).toString());
 			} else if (method.equals("tools/call")) {
 				response=toolCall(RT.getIn(request, Fields.PARAMS));
 			} else if (method.equals("initialize")) {
