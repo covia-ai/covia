@@ -372,8 +372,6 @@ public class MCP extends ACoviaAPI {
 			"tools_endpoint": "/mcp",
 			"endpoint": {"path":"/mcp","transport":"streamable-http"},
 			"auth": {
-				"type": "oauth2",
-				"authorization_endpoint": null
 			}	
 		}
 """);
