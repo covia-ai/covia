@@ -28,8 +28,7 @@
 			"properties": {
 				"errorCode": {
 					"type": "string",
-					"description": "Error code, if an error occurred",
-					"default": "peer.convex.live:18888"
+					"description": "Error code, if an error occurred"
 				},
 				"result": {
 					"type": "string",

@@ -18,6 +18,7 @@ import convex.core.data.MapEntry;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.exceptions.ParseException;
 import convex.core.json.JSONReader;
 import convex.core.lang.RT;
@@ -359,8 +360,15 @@ public class MCP extends ACoviaAPI {
 	private AMap<AString,ACell> ensureSchema(AMap<AString,ACell> schema) {
 		if (schema==null) schema=Maps.empty();
 		if (!schema.containsKey(Fields.TYPE)) {
-			schema=schema.assoc(Fields.TYPE, Fields.OBJECT);
+			schema=schema.assoc(Fields.TYPE, Fields.ANY);
 		}
+		if (schema.getIn(Fields.TYPE).equals(Fields.OBJECT)) {
+			if (!schema.containsKey(Fields.PROPERTIES)) {
+				schema=schema.assoc(Fields.ADDITIONAL_PROPERTIES, CVMBool.TRUE);
+			}
+			
+		}
+		
 		return schema;
 	}
 

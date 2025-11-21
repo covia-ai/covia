@@ -1,5 +1,6 @@
 package covia.api;
 
+import convex.core.data.ACell;
 import convex.core.data.StringShort;
 import convex.core.data.Strings;
 
@@ -72,6 +73,9 @@ public class Fields {
 	public static final StringShort PARAMS = Strings.intern("params");
 	public static final StringShort TOKEN = Strings.intern("token");
 	public static final StringShort OBJECT = Strings.intern("object");
+	public static final StringShort ANY = Strings.intern("any");
+	public static final StringShort PROPERTIES = Strings.intern("properties");
+	public static final StringShort ADDITIONAL_PROPERTIES = Strings.intern("additionalProperties");
 	
 	// A2A stuff
 	public static final StringShort A2A = Strings.intern("a2a");
