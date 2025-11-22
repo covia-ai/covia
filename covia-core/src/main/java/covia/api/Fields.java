@@ -1,6 +1,5 @@
 package covia.api;
 
-import convex.core.data.ACell;
 import convex.core.data.StringShort;
 import convex.core.data.Strings;
 

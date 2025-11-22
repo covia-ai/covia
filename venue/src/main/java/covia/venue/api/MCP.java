@@ -18,7 +18,6 @@ import convex.core.data.MapEntry;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
-import convex.core.data.prim.CVMBool;
 import convex.core.exceptions.ParseException;
 import convex.core.json.JSONReader;
 import convex.core.lang.RT;

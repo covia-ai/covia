@@ -30,6 +30,7 @@ class ConvexAdapterTest {
 		assertNotNull(job, "Job response should not be null");
 		assertEquals(Status.COMPLETE, job.getStatus());
 		assertEquals("6", RT.getIn(job.getOutput(), "result").toString());
+		assertTrue(covia.getDID()!=null);
 	}
 
 	@Test

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
@@ -26,11 +27,8 @@ import convex.core.util.JSON;
 import convex.core.util.Utils;
 import covia.api.Fields;
 import covia.grid.Job;
-import covia.venue.Engine;
 import covia.grid.Status;
-import covia.grid.impl.BlobContent; 
-
-import java.io.InputStream;
+import covia.grid.impl.BlobContent;
 
 public class EngineTest {
 	Engine venue;

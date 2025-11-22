@@ -22,6 +22,7 @@ public class Bench {
 		showMainFrame(replPanel);
 		// Pass replPanel to the upload thread so we can set the operation ID after upload
 		new Thread(() -> {
+			@SuppressWarnings("unused")
 			VenueServer server = VenueServer.launch(Maps.of(Fields.PORT,PORT));
 
 			try {
