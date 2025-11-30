@@ -97,12 +97,17 @@ public class MCPAdapter extends AAdapter {
 							throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
 						}
 						
+						AMap<AString,ACell> toolArguments=RT.getIn(input, Fields.ARGUMENTS);
+						if (toolArguments == null) {
+							throw new JobFailedException("Tool call requires arguments as a JSON object");
+						}
+						
 						// Get API access token, if provided
 						AString token=RT.getIn(input, Fields.TOKEN);
 						String accessToken=(token==null)?null:token.toString();
 						
 						// Make the MCP tool call
-						return callMCPTool(serverUrl, remoteToolName.toString(), input, accessToken);
+						return callMCPTool(serverUrl, remoteToolName.toString(), toolArguments, accessToken);
 						
 					} catch (Exception e) {
 						throw new JobFailedException(e);
@@ -226,7 +231,7 @@ public class MCPAdapter extends AAdapter {
 			.build();
 
 		CallToolResult response=client.callTool(request);
-		System.out.println("MCPAdapter response: "+response);
+		// System.out.println("MCPAdapter response: "+response);
 		
 		return RT.cvm(response.structuredContent());
 	}

@@ -116,7 +116,7 @@ public class VenueServer {
 	
 	/**
 	 * Get the Engine instance for this venue server
-	 * @return
+	 * @return Engine instance
 	 */
 	public Engine getEngine() {
 		return engine;

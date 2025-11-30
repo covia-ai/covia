@@ -202,14 +202,16 @@ public class MCPTest {
 		MCPAdapter mcpAdapter=(MCPAdapter) venue.getAdapter("mcp");
 		assertNotNull(mcpAdapter);
 		
+		AMap<AString,AInteger> arguments=Maps.of("test",2);
+		
 		Job job=client.invoke(mcpAdapter.TOOL_CALL, 
 				Maps.of(
 					Fields.SERVER,BASE_URL,
 					Fields.TOOL_NAME,"echo",
-					Fields.ARGUMENTS,Maps.of(1,2))).join();
+					Fields.ARGUMENTS,arguments)).join();
 		
-		AMap<AInteger,AInteger> result=job.awaitResult();
-		System.out.println(result);
+		AMap<AString,AInteger> result=job.awaitResult();
+		assertEquals(arguments,result);
 	}
 	
 	@Test public void testProxyToolsList() {
@@ -238,7 +240,6 @@ public class MCPTest {
 		ACell total = resultMap.get(Fields.TOTAL);
 		assertNotNull(total, "Result should contain total field");
 		assertTrue(total instanceof AInteger, "Total should be an integer");
-		
-		System.out.println("Tools list result: " + result);
+
 	}
 }

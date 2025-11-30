@@ -113,7 +113,7 @@ public abstract class AAdapter {
      * Adapters SHOULD launch an asynchronous task to produce the result and update the job status accordingly
      * Adapters MAY update the Job immediately if the Job can be completed in O(1) time
      * 
-     * @param Job the Job prepared to run within the registered venue
+     * @param job the Job prepared to run within the registered venue
      * @param operation The operation ID in the format "adapter:operation"
      * @param meta The metadata for the operation
      * @param input The input parameters for the operation
