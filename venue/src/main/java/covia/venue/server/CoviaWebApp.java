@@ -70,7 +70,7 @@ public class CoviaWebApp  {
 	private void indexPage(Context ctx) {
 		String BASE_URL=CoviaAPI.getExternalBaseUrl(ctx, "");
 		standardPage(ctx,html(
-				Layout.makeHeader("Covia AI: Decentralised AI grid"),
+				Layout.makeHeader("Covia AI: Grid Venue"),
 				body(
 					h1("Covia AI: Decentralised AI grid"),
 					div(
