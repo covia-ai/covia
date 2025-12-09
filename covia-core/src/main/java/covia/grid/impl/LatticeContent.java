@@ -7,7 +7,7 @@ import convex.core.cvm.Keywords;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.Hash;
-import convex.lattice.ACursor;
+import convex.lattice.cursor.ACursor;
 import covia.grid.AContent;
 
 /**
