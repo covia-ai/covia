@@ -6,6 +6,10 @@ This guide is for Venue operators who want to deploy a minimal working venue for
 
 Have a VM instance with a modern Linux Distro, e.g. Ubuntu 25
 
+```
+sudo apt update
+```
+
 ## Install Java
 
 ```
@@ -15,7 +19,7 @@ sudo apt-get install -y openjdk-25-jdk
 ## Install Caddy
 
 ```
-sudo apt install -y caddy
+sudo cp 
 ```
 
 Start caddy:

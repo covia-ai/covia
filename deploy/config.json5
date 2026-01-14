@@ -1,0 +1,65 @@
+{
+	/*
+	 * Example config for test venues
+	 */
+	"venues":[
+		// Test venue
+		{
+			"name":"Test Venue",
+			"did":"did:web:venue-test.covia.ai",
+			"hostname":"venue-test.covia.ai",
+			"port":8080,
+			
+			// Configure MCP server capabilities
+			"mcp":{
+				"enabled":true
+			},
+			
+			// Configure adapters
+			"adapters":{
+				
+			}
+		},
+
+    // Venue One
+		{
+			"name":"Venue One",
+			"did":"did:web:venue-1.covia.ai",
+			"hostname":"venue-1.covia.ai",
+			"port":8081,
+			
+			// Configure MCP server capabilities
+			"mcp":{
+				"enabled":true
+			},
+			
+			// Configure adapters
+			"adapters":{
+				
+			}
+		},
+
+    // Venue Two
+		{
+			"name":"Venue Two",
+			"did":"did:web:venue-2.covia.ai",
+			"hostname":"venue-2.covia.ai",
+			"port":8082,
+			
+			// Configure MCP server capabilities
+			"mcp":{
+				"enabled":true
+			},
+			
+			// Configure adapters
+			"adapters":{
+				
+			}
+		}
+	],
+	
+	// Whole-server configuration goes here
+	"convex": {
+		// Config for embedded Convex peer, shared between venue instances
+	}
+}
