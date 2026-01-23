@@ -221,17 +221,40 @@ To create a stable release:
    git pull origin master
    ```
 
-2. **Create and push a version tag** (must be semver format):
+2. **Update the Maven version** in all pom.xml files:
    ```bash
-   git tag 1.0.0
-   git push origin 1.0.0
+   mvn versions:set -DnewVersion=1.0.0
+   mvn versions:commit
+   ```
+   This updates the version in the parent pom.xml and all child modules.
+
+3. **Commit the version change**:
+   ```bash
+   git add -A
+   git commit -m "Release 1.0.0"
    ```
 
-3. **GitHub Actions will automatically**:
-   - Verify the tag is on the master branch
+4. **Create and push a version tag** (must match the Maven version):
+   ```bash
+   git tag 1.0.0
+   git push origin master --tags
+   ```
+
+5. **GitHub Actions will automatically**:
    - Build the project
    - Create a versioned release (e.g., `1.0.0`)
    - Update the `latest` release to point to this version
+
+6. **Prepare for next development cycle** (on develop):
+   ```bash
+   git checkout develop
+   git merge master
+   mvn versions:set -DnewVersion=1.0.1-SNAPSHOT
+   mvn versions:commit
+   git add -A
+   git commit -m "Prepare for next development iteration"
+   git push origin develop
+   ```
 
 ### Release Artifacts
 
