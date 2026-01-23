@@ -171,33 +171,33 @@ public class CoviaTest {
 	public void testFullStateMerge() {
 		// Create two complete states with different venues and meta
 		AMap<Keyword, ACell> venueState1 = Maps.of(
-			VenueLattice.ASSETS, Maps.of(Strings.create("0xasset1"), Maps.of()),
+			VenueLattice.ASSETS, Maps.of("0xasset1", Maps.empty()),
 			VenueLattice.JOBS, Maps.of(
-				Strings.create("job1"), Maps.of(
-					Strings.create("status"), Strings.create("COMPLETE"),
+				"job1", Maps.of(
+					"status", "COMPLETE",
 					VenueLattice.UPDATED, CVMLong.create(1000L)
 				)
 			)
 		);
 
 		AMap<Keyword, ACell> venueState2 = Maps.of(
-			VenueLattice.ASSETS, Maps.of(Strings.create("0xasset2"), Maps.of()),
+			VenueLattice.ASSETS, Maps.of("0xasset2", Maps.empty()),
 			VenueLattice.JOBS, Maps.of(
-				Strings.create("job2"), Maps.of(
-					Strings.create("status"), Strings.create("PENDING"),
+				"job2", Maps.of(
+					"status", "PENDING",
 					VenueLattice.UPDATED, CVMLong.create(2000L)
 				)
 			)
 		);
 
 		AMap<Keyword, ACell> grid1 = Maps.of(
-			GridLattice.VENUES, Maps.of(Strings.create("did:web:venue1.com"), venueState1),
-			GridLattice.META, Index.create(testHash1, Strings.create("{\"name\":\"Asset 1\"}"))
+			GridLattice.VENUES, Index.of("did:web:venue1.com", venueState1),
+			GridLattice.META, Index.of(testHash1, "{\"name\":\"Asset 1\"}")
 		);
 
 		AMap<Keyword, ACell> grid2 = Maps.of(
-			GridLattice.VENUES, Maps.of(Strings.create("did:web:venue2.com"), venueState2),
-			GridLattice.META, Index.create(testHash2, Strings.create("{\"name\":\"Asset 2\"}"))
+			GridLattice.VENUES, Index.of("did:web:venue2.com", venueState2),
+			GridLattice.META, Index.of(testHash2, "{\"name\":\"Asset 2\"}")
 		);
 
 		AMap<Keyword, ACell> state1 = Maps.of(Covia.GRID, grid1);
@@ -207,7 +207,7 @@ public class CoviaTest {
 
 		// Verify merged structure
 		AMap<Keyword, ACell> mergedGrid = (AMap<Keyword, ACell>) merged.get(Covia.GRID);
-		AMap<ACell, ACell> venues = (AMap<ACell, ACell>) mergedGrid.get(GridLattice.VENUES);
+		Index<AString, ACell> venues = (Index<AString, ACell>) mergedGrid.get(GridLattice.VENUES);
 		Index<Hash, AString> meta = (Index<Hash, AString>) mergedGrid.get(GridLattice.META);
 
 		assertEquals(2, venues.count(), "Should have 2 venues");
@@ -225,13 +225,13 @@ public class CoviaTest {
 
 	private AMap<Keyword, ACell> createTestState() {
 		AMap<Keyword, ACell> venueState = Maps.of(
-			VenueLattice.ASSETS, Maps.of(Strings.create("0xtest"), Maps.of()),
+			VenueLattice.ASSETS, Maps.of("0xtest", Maps.empty()),
 			VenueLattice.JOBS, Maps.empty()
 		);
 
 		AMap<Keyword, ACell> grid = Maps.of(
-			GridLattice.VENUES, Maps.of(Strings.create("did:web:test.example.com"), venueState),
-			GridLattice.META, Index.create(testHash1, Strings.create("{\"name\":\"Test\"}"))
+			GridLattice.VENUES, Index.of("did:web:test.example.com", venueState),
+			GridLattice.META, Index.of(testHash1, "{\"name\":\"Test\"}")
 		);
 
 		return Maps.of(Covia.GRID, grid);
@@ -239,8 +239,8 @@ public class CoviaTest {
 
 	private AMap<Keyword, ACell> createStateWithMeta(Hash metaHash, String jsonContent) {
 		AMap<Keyword, ACell> grid = Maps.of(
-			GridLattice.VENUES, Maps.empty(),
-			GridLattice.META, Index.create(metaHash, Strings.create(jsonContent))
+			GridLattice.VENUES, Index.none(),
+			GridLattice.META, Index.of(metaHash, jsonContent)
 		);
 
 		return Maps.of(Covia.GRID, grid);

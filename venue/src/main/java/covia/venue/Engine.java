@@ -89,7 +89,7 @@ public class Engine {
 	protected final AStorage contentStorage;
 	
 	/**
-	 * Venue lattice using Covia.ROOT structure see COGXXX
+	 * Venue lattice using Covia.ROOT structure see COG-004 
  	 */
 	protected ACursor<AMap<Keyword,ACell>> lattice;
 
@@ -195,7 +195,7 @@ public class Engine {
 	private AHashMap<Keyword, ACell> emptyLattice() {
 		return Maps.of(
 			Covia.GRID, Maps.of(
-				GridLattice.VENUES, Maps.of(
+				GridLattice.VENUES, Index.of(
 					getDIDString(), VenueLattice.INSTANCE.zero()
 				)
 			)

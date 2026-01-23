@@ -246,8 +246,8 @@ public class LatticeStorageTest {
 		var venueState = VenueLattice.INSTANCE.zero();
 		var gridState = Maps.of(
 			Covia.GRID, Maps.of(
-				GridLattice.VENUES, Maps.of(
-					Strings.create("did:test:venue"), venueState
+				GridLattice.VENUES, Index.of(
+					"did:test:venue", venueState
 				)
 			)
 		);
