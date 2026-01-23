@@ -3,6 +3,9 @@ package covia.venue;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -56,6 +59,7 @@ import covia.lattice.GridLattice;
 import covia.lattice.VenueLattice;
 import covia.venue.api.CoviaAPI;
 import covia.venue.storage.AStorage;
+import covia.venue.storage.FileStorage;
 import covia.venue.storage.LatticeStorage;
 import covia.venue.storage.MemoryStorage;
 
@@ -95,14 +99,18 @@ public class Engine {
 	 */
 	protected final HashMap<String, AAdapter> adapters = new HashMap<>();
 	
-	/** Storage type configuration key */
+	/** Storage configuration key */
 	public static final AString STORAGE = Strings.create("storage");
-	/** Storage type value key */
-	public static final AString TYPE = Strings.create("type");
+	/** Storage content type key */
+	public static final AString CONTENT = Strings.create("content");
+	/** Storage path key (for file storage) */
+	public static final AString PATH = Strings.create("path");
 	/** Storage type: lattice (CRDT-backed) */
 	public static final String STORAGE_TYPE_LATTICE = "lattice";
 	/** Storage type: memory (in-memory, non-persistent) */
 	public static final String STORAGE_TYPE_MEMORY = "memory";
+	/** Storage type: file (filesystem-based) */
+	public static final String STORAGE_TYPE_FILE = "file";
 
 	public Engine(AMap<AString, ACell> config, AStore store) throws IOException {
 		this.config=(config==null)?Maps.empty():config;
@@ -119,6 +127,7 @@ public class Engine {
 	 * <ul>
 	 *   <li>"lattice" - Uses LatticeStorage backed by venue lattice cursor (default)</li>
 	 *   <li>"memory" - Uses simple in-memory storage</li>
+	 *   <li>"file" - Uses FileStorage with configured path</li>
 	 * </ul>
 	 *
 	 * @return Configured storage instance
@@ -128,11 +137,16 @@ public class Engine {
 		// Get storage config
 		AMap<AString, ACell> storageConfig = RT.ensureMap(config.get(STORAGE));
 		String storageType = STORAGE_TYPE_LATTICE; // default
+		String storagePath = null;
 
 		if (storageConfig != null) {
-			AString typeValue = RT.ensureString(storageConfig.get(TYPE));
-			if (typeValue != null) {
-				storageType = typeValue.toString();
+			AString contentValue = RT.ensureString(storageConfig.get(CONTENT));
+			if (contentValue != null) {
+				storageType = contentValue.toString();
+			}
+			AString pathValue = RT.ensureString(storageConfig.get(PATH));
+			if (pathValue != null) {
+				storagePath = pathValue.toString();
 			}
 		}
 
@@ -140,6 +154,20 @@ public class Engine {
 
 		if (STORAGE_TYPE_MEMORY.equals(storageType)) {
 			return new MemoryStorage();
+		} else if (STORAGE_TYPE_FILE.equals(storageType)) {
+			if (storagePath == null || storagePath.isEmpty()) {
+				throw new IllegalArgumentException("File storage requires 'path' configuration");
+			}
+			Path path = Paths.get(storagePath);
+			if (!Files.exists(path)) {
+				try {
+					Files.createDirectories(path);
+				} catch (IOException e) {
+					throw new IllegalArgumentException("Failed to create storage directory: " + storagePath, e);
+				}
+			}
+			log.info("Using file storage at: {}", storagePath);
+			return new FileStorage(path);
 		} else {
 			// Default to lattice storage
 			if (!STORAGE_TYPE_LATTICE.equals(storageType)) {

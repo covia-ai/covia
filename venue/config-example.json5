@@ -28,10 +28,12 @@
 			},
 
 			// Configure content storage
-			// "type": "lattice" - CRDT-backed storage (default), syncs across venues
-			// "type": "memory" - Simple in-memory storage, data lost on restart
+			// "content": "lattice" - CRDT-backed storage (default), syncs across venues
+			// "content": "memory" - Simple in-memory storage, data lost on restart
+			// "content": "file" - Filesystem storage, requires "path" to be set
 			"storage":{
-				"type":"lattice"
+				"content":"lattice"
+				// "path": "./content"  // Required for "file" storage type
 			}
 		}
 	],
