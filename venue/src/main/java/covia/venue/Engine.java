@@ -56,6 +56,7 @@ import covia.lattice.GridLattice;
 import covia.lattice.VenueLattice;
 import covia.venue.api.CoviaAPI;
 import covia.venue.storage.AStorage;
+import covia.venue.storage.LatticeStorage;
 import covia.venue.storage.MemoryStorage;
 
 public class Engine {
@@ -94,12 +95,63 @@ public class Engine {
 	 */
 	protected final HashMap<String, AAdapter> adapters = new HashMap<>();
 	
-	public Engine(AMap<AString, ACell> config, EtchStore store) throws IOException {
+	/** Storage type configuration key */
+	public static final AString STORAGE = Strings.create("storage");
+	/** Storage type value key */
+	public static final AString TYPE = Strings.create("type");
+	/** Storage type: lattice (CRDT-backed) */
+	public static final String STORAGE_TYPE_LATTICE = "lattice";
+	/** Storage type: memory (in-memory, non-persistent) */
+	public static final String STORAGE_TYPE_MEMORY = "memory";
+
+	public Engine(AMap<AString, ACell> config, AStore store) throws IOException {
 		this.config=(config==null)?Maps.empty():config;
 		this.store=store;
-		this.contentStorage = new MemoryStorage();
-		this.contentStorage.initialise();
 		initialiseLattice();
+		this.contentStorage = createStorage();
+		this.contentStorage.initialise();
+	}
+
+	/**
+	 * Creates the appropriate storage instance based on configuration.
+	 *
+	 * <p>Reads the "storage" config entry to determine storage type:
+	 * <ul>
+	 *   <li>"lattice" - Uses LatticeStorage backed by venue lattice cursor (default)</li>
+	 *   <li>"memory" - Uses simple in-memory storage</li>
+	 * </ul>
+	 *
+	 * @return Configured storage instance
+	 */
+	@SuppressWarnings("unchecked")
+	private AStorage createStorage() {
+		// Get storage config
+		AMap<AString, ACell> storageConfig = RT.ensureMap(config.get(STORAGE));
+		String storageType = STORAGE_TYPE_LATTICE; // default
+
+		if (storageConfig != null) {
+			AString typeValue = RT.ensureString(storageConfig.get(TYPE));
+			if (typeValue != null) {
+				storageType = typeValue.toString();
+			}
+		}
+
+		log.info("Configuring storage type: {}", storageType);
+
+		if (STORAGE_TYPE_MEMORY.equals(storageType)) {
+			return new MemoryStorage();
+		} else {
+			// Default to lattice storage
+			if (!STORAGE_TYPE_LATTICE.equals(storageType)) {
+				log.warn("Unknown storage type '{}', defaulting to lattice", storageType);
+			}
+			// Create lattice storage backed by venue's :storage cursor
+			@SuppressWarnings("unchecked")
+			ACursor<Index<Hash, ABlob>> storageCursor =
+				(ACursor<Index<Hash, ABlob>>) (ACursor<?>) lattice.path(
+					Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.STORAGE);
+			return new LatticeStorage(storageCursor);
+		}
 	}
 
 	/**

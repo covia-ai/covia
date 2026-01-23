@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.Hash;
+import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -275,7 +276,8 @@ public class VenueLatticeTest {
 					Strings.create("status"), Strings.create("COMPLETE"),
 					VenueLattice.UPDATED, CVMLong.create(1000L)
 				)
-			)
+			),
+			VenueLattice.STORAGE, Index.none()
 		);
 	}
 

@@ -1,262 +1,296 @@
 package covia.venue.storage;
 
+import java.io.IOException;
+import java.io.InputStream;
+
 import convex.core.data.ABlob;
-import convex.core.data.ACell;
-import convex.core.data.ABlobLike;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
+import convex.lattice.cursor.ACursor;
+import covia.grid.AContent;
+import covia.grid.impl.BlobContent;
 import covia.lattice.CASLattice;
 
 /**
- * Content-addressed storage backed by a CASLattice.
+ * Content-addressed storage backed by a CASLattice and lattice cursor.
  *
- * <p>LatticeStorage provides a simple key-value storage interface where:
+ * <p>LatticeStorage extends {@link AStorage} to provide content storage that:
  * <ul>
- *   <li>Keys are content hashes (or any blob-like type)</li>
- *   <li>Values are immutable content (any ACell)</li>
- *   <li>Storage is automatically content-addressed (hash of content = key)</li>
- *   <li>State can be merged with other storage instances (CRDT semantics)</li>
+ *   <li>Is backed by a lattice cursor into the venue state</li>
+ *   <li>Uses content hashes as keys (content-addressed)</li>
+ *   <li>Supports CRDT merge semantics via the underlying CASLattice</li>
+ *   <li>Can sync state across distributed venues</li>
  * </ul>
  *
- * <h2>Thread Safety</h2>
- * <p>This class is NOT thread-safe. External synchronization is required for
- * concurrent access. Consider using {@link java.util.concurrent.atomic.AtomicReference}
- * for the cursor if concurrent updates are needed.
+ * <h2>Integration with Venue Lattice</h2>
+ * <p>This storage is designed to use a cursor into the venue's :storage path.
+ * Changes to storage are reflected in the lattice state and can be merged
+ * with other venues.
  *
  * <h2>Example Usage</h2>
  * <pre>
- * // Create storage with empty initial state
- * LatticeStorage&lt;Hash, ABlob&gt; storage = LatticeStorage.create();
+ * // Create storage backed by a lattice cursor
+ * ACursor&lt;Index&lt;Hash, ABlob&gt;&gt; cursor = venueCursor.path(VenueLattice.STORAGE);
+ * LatticeStorage storage = new LatticeStorage(cursor);
  *
- * // Store content (automatically hashed)
- * Blob content = Blob.fromHex("deadbeef");
- * Hash key = storage.store(content);
+ * // Store content
+ * Hash hash = storage.store(contentHash, inputStream);
  *
- * // Retrieve content by hash
- * ABlob retrieved = storage.get(key);
- *
- * // Merge with another storage instance
- * storage.merge(otherStorage.getCursor());
+ * // Retrieve content
+ * AContent content = storage.getContent(hash);
  * </pre>
- *
- * @param <K> Key type extending ABlobLike (typically Hash)
- * @param <V> Value type extending ACell
  */
-public class LatticeStorage<K extends ABlobLike<?>, V extends ACell> {
+public class LatticeStorage extends AStorage {
 
 	/**
 	 * The underlying CASLattice defining merge semantics
 	 */
-	private final CASLattice<K, V> lattice;
+	private final CASLattice<Hash, ABlob> lattice;
 
 	/**
-	 * Current storage state (cursor into the lattice)
+	 * Cursor into the lattice for storage state.
+	 * May be null if using standalone mode without a lattice cursor.
 	 */
-	private Index<K, V> cursor;
+	private final ACursor<Index<Hash, ABlob>> cursor;
 
 	/**
-	 * Private constructor - use factory methods
+	 * Local storage state (used when cursor is null or for caching)
 	 */
-	private LatticeStorage(CASLattice<K, V> lattice, Index<K, V> cursor) {
-		this.lattice = lattice;
+	private Index<Hash, ABlob> localState;
+
+	private boolean initialised = false;
+
+	/**
+	 * Create a LatticeStorage backed by a lattice cursor.
+	 *
+	 * <p>Changes to storage will be reflected in the cursor's lattice state.
+	 *
+	 * @param cursor Cursor into the venue's :storage path
+	 */
+	public LatticeStorage(ACursor<Index<Hash, ABlob>> cursor) {
+		this.lattice = CASLattice.create();
 		this.cursor = cursor;
+		this.localState = null; // Will use cursor
 	}
 
 	/**
-	 * Create a new empty LatticeStorage.
+	 * Create a standalone LatticeStorage without a lattice cursor.
 	 *
-	 * @param <K> Key type extending ABlobLike
-	 * @param <V> Value type extending ACell
-	 * @return New empty LatticeStorage instance
+	 * <p>This mode is useful for testing or when lattice integration
+	 * is not needed. State is stored locally only.
 	 */
-	public static <K extends ABlobLike<?>, V extends ACell> LatticeStorage<K, V> create() {
-		CASLattice<K, V> lattice = CASLattice.create();
-		return new LatticeStorage<>(lattice, lattice.zero());
+	public LatticeStorage() {
+		this.lattice = CASLattice.create();
+		this.cursor = null;
+		this.localState = lattice.zero();
+	}
+
+	@Override
+	public void initialise() throws IOException {
+		initialised = true;
+	}
+
+	@Override
+	public boolean isInitialised() {
+		return initialised;
+	}
+
+	@Override
+	public void store(Hash hash, AContent content) throws IOException {
+		if (!initialised) {
+			throw new IllegalStateException("Storage not initialized");
+		}
+		if (hash == null) {
+			throw new IllegalArgumentException("Hash cannot be null");
+		}
+		if (content == null) {
+			throw new IllegalArgumentException("Content cannot be null");
+		}
+
+		ABlob blob = content.getBlob();
+		storeBlob(hash, blob);
+	}
+
+	@Override
+	public void store(Hash hash, InputStream inputStream) throws IOException {
+		if (!initialised) {
+			throw new IllegalStateException("Storage not initialized");
+		}
+		if (hash == null) {
+			throw new IllegalArgumentException("Hash cannot be null");
+		}
+		if (inputStream == null) {
+			throw new IllegalArgumentException("InputStream cannot be null");
+		}
+
+		byte[] data = inputStream.readAllBytes();
+		ABlob blob = Blob.wrap(data);
+		storeBlob(hash, blob);
 	}
 
 	/**
-	 * Create a LatticeStorage with an initial cursor state.
-	 *
-	 * @param <K> Key type extending ABlobLike
-	 * @param <V> Value type extending ACell
-	 * @param cursor Initial storage state
-	 * @return New LatticeStorage instance with the given state
+	 * Store a blob with the given hash.
 	 */
-	public static <K extends ABlobLike<?>, V extends ACell> LatticeStorage<K, V> create(Index<K, V> cursor) {
-		CASLattice<K, V> lattice = CASLattice.create();
-		return new LatticeStorage<>(lattice, cursor != null ? cursor : lattice.zero());
+	private void storeBlob(Hash hash, ABlob blob) {
+		Index<Hash, ABlob> current = getState();
+		Index<Hash, ABlob> updated = current.assoc(hash, blob);
+		setState(updated);
+	}
+
+	@Override
+	public AContent getContent(Hash hash) throws IOException {
+		if (!initialised) {
+			throw new IllegalStateException("Storage not initialized");
+		}
+		if (hash == null) {
+			throw new IllegalArgumentException("Hash cannot be null");
+		}
+
+		ABlob blob = getState().get(hash);
+		if (blob == null) {
+			return null;
+		}
+		return BlobContent.of(blob);
+	}
+
+	@Override
+	public boolean exists(Hash hash) {
+		if (!initialised) {
+			return false;
+		}
+		return hash != null && getState().containsKey(hash);
+	}
+
+	@Override
+	public boolean delete(Hash hash) throws IOException {
+		if (!initialised) {
+			throw new IllegalStateException("Storage not initialized");
+		}
+		if (hash == null) {
+			throw new IllegalArgumentException("Hash cannot be null");
+		}
+
+		// Note: In a true CRDT, deletes are not supported (grow-only).
+		// This implementation removes locally but may be restored on merge.
+		Index<Hash, ABlob> current = getState();
+		if (!current.containsKey(hash)) {
+			return false;
+		}
+		Index<Hash, ABlob> updated = current.dissoc(hash);
+		setState(updated);
+		return true;
+	}
+
+	@Override
+	public long getSize(Hash hash) throws IllegalStateException {
+		if (!initialised) {
+			throw new IllegalStateException("Storage not initialized");
+		}
+
+		ABlob blob = getState().get(hash);
+		if (blob == null) {
+			throw new IllegalStateException("Content does not exist for hash: " + hash);
+		}
+		return blob.count();
+	}
+
+	@Override
+	public void close() {
+		// Nothing to close for lattice storage
+		initialised = false;
+	}
+
+	// ========== Lattice-specific methods ==========
+
+	/**
+	 * Get the current storage state.
+	 *
+	 * @return Current state as an Index
+	 */
+	public Index<Hash, ABlob> getState() {
+		if (cursor != null) {
+			Index<Hash, ABlob> cursorState = cursor.get();
+			return cursorState != null ? cursorState : lattice.zero();
+		}
+		return localState;
 	}
 
 	/**
-	 * Store a value with an explicit key.
+	 * Set the storage state.
 	 *
-	 * <p>For true content-addressed storage, the key should be derived from
-	 * the value's hash. Use {@link #store(ACell)} for automatic hashing.
-	 *
-	 * @param key The key to store under
-	 * @param value The value to store
-	 * @return The key (for convenience)
+	 * @param state New state
 	 */
-	public K put(K key, V value) {
-		cursor = cursor.assoc(key, value);
-		return key;
-	}
-
-	/**
-	 * Store a value using its content hash as the key.
-	 *
-	 * <p>This is the canonical content-addressed storage operation.
-	 * The hash of the value becomes its key, ensuring that identical
-	 * content always maps to the same key.
-	 *
-	 * @param value The value to store
-	 * @return The content hash (key) of the stored value
-	 */
-	@SuppressWarnings("unchecked")
-	public Hash store(V value) {
-		Hash hash = value.getHash();
-		cursor = (Index<K, V>) cursor.assoc(hash, value);
-		return hash;
-	}
-
-	/**
-	 * Store blob content using its content hash as the key.
-	 *
-	 * <p>Convenience method for storing blob content. The blob's
-	 * content hash becomes its key.
-	 *
-	 * @param blob The blob to store
-	 * @return The content hash of the stored blob
-	 */
-	@SuppressWarnings("unchecked")
-	public Hash storeBlob(ABlob blob) {
-		Hash hash = blob.getContentHash();
-		cursor = (Index<K, V>) cursor.assoc(hash, blob);
-		return hash;
-	}
-
-	/**
-	 * Retrieve a value by key.
-	 *
-	 * @param key The key to look up
-	 * @return The value, or null if not found
-	 */
-	public V get(K key) {
-		return cursor.get(key);
-	}
-
-	/**
-	 * Check if a key exists in storage.
-	 *
-	 * @param key The key to check
-	 * @return true if the key exists, false otherwise
-	 */
-	public boolean containsKey(K key) {
-		return cursor.containsKey(key);
-	}
-
-	/**
-	 * Get the number of entries in storage.
-	 *
-	 * @return Number of stored entries
-	 */
-	public long count() {
-		return cursor.count();
-	}
-
-	/**
-	 * Check if storage is empty.
-	 *
-	 * @return true if no entries are stored
-	 */
-	public boolean isEmpty() {
-		return cursor.isEmpty();
-	}
-
-	/**
-	 * Get the current storage state (cursor).
-	 *
-	 * <p>The cursor is an immutable snapshot of the current state.
-	 * It can be persisted, transmitted, or merged with other cursors.
-	 *
-	 * @return Current storage state as an Index
-	 */
-	public Index<K, V> getCursor() {
-		return cursor;
-	}
-
-	/**
-	 * Set the storage state directly.
-	 *
-	 * <p>This replaces the current state entirely. For CRDT-safe updates,
-	 * use {@link #merge(Index)} instead.
-	 *
-	 * @param newCursor The new storage state
-	 */
-	public void setCursor(Index<K, V> newCursor) {
-		this.cursor = newCursor != null ? newCursor : lattice.zero();
+	private void setState(Index<Hash, ABlob> state) {
+		if (cursor != null) {
+			cursor.set(state);
+		} else {
+			localState = state;
+		}
 	}
 
 	/**
 	 * Merge another storage state into this one.
 	 *
 	 * <p>This is the core CRDT operation. The merge combines entries from
-	 * both states using union semantics - all entries from both are included.
-	 * Since keys are content hashes, the same key always maps to the same
-	 * content, so there are no conflicts.
+	 * both states using union semantics.
 	 *
 	 * @param other The other storage state to merge
-	 * @return This storage instance (for chaining)
 	 */
-	public LatticeStorage<K, V> merge(Index<K, V> other) {
-		cursor = lattice.merge(cursor, other);
-		return this;
+	public void merge(Index<Hash, ABlob> other) {
+		if (other == null) return;
+		Index<Hash, ABlob> current = getState();
+		Index<Hash, ABlob> merged = lattice.merge(current, other);
+		setState(merged);
 	}
 
 	/**
 	 * Merge another LatticeStorage into this one.
 	 *
 	 * @param other The other storage to merge
-	 * @return This storage instance (for chaining)
 	 */
-	public LatticeStorage<K, V> merge(LatticeStorage<K, V> other) {
-		return merge(other.getCursor());
+	public void merge(LatticeStorage other) {
+		merge(other.getState());
 	}
 
 	/**
-	 * Create a snapshot of the current state.
+	 * Get the number of stored items.
 	 *
-	 * <p>Returns a new LatticeStorage instance with the same state.
-	 * Changes to the snapshot do not affect this instance.
-	 *
-	 * @return New LatticeStorage with same state
+	 * @return Number of items in storage
 	 */
-	public LatticeStorage<K, V> snapshot() {
-		return new LatticeStorage<>(lattice, cursor);
+	public long count() {
+		return getState().count();
 	}
 
 	/**
-	 * Clear all entries from storage.
+	 * Check if storage is empty.
 	 *
-	 * <p>Note: This resets to the zero state. In a distributed system,
-	 * this local clear will be overwritten on the next merge with any
-	 * non-empty state (entries cannot be deleted in a grow-only CRDT).
+	 * @return true if no items are stored
 	 */
-	public void clear() {
-		cursor = lattice.zero();
+	public boolean isEmpty() {
+		return getState().isEmpty();
 	}
 
 	/**
-	 * Get the underlying lattice.
+	 * Get the underlying CASLattice.
 	 *
 	 * @return The CASLattice defining merge semantics
 	 */
-	public CASLattice<K, V> getLattice() {
+	public CASLattice<Hash, ABlob> getLattice() {
 		return lattice;
+	}
+
+	/**
+	 * Get the lattice cursor (may be null if standalone mode).
+	 *
+	 * @return The cursor, or null
+	 */
+	public ACursor<Index<Hash, ABlob>> getCursor() {
+		return cursor;
 	}
 
 	@Override
 	public String toString() {
-		return "LatticeStorage[" + cursor.count() + " entries]";
+		return "LatticeStorage[" + count() + " entries]";
 	}
 }

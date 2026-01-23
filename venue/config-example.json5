@@ -24,7 +24,14 @@
 			
 			// Configure adapters
 			"adapters":{
-				
+
+			},
+
+			// Configure content storage
+			// "type": "lattice" - CRDT-backed storage (default), syncs across venues
+			// "type": "memory" - Simple in-memory storage, data lost on restart
+			"storage":{
+				"type":"lattice"
 			}
 		}
 	],
