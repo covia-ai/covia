@@ -22,6 +22,7 @@ import convex.lattice.ALattice;
 /**
  * Tests for Covia.ROOT lattice CRDT properties and structure.
  */
+@SuppressWarnings("unchecked")
 public class CoviaTest {
 
 	// Test hashes
@@ -42,7 +43,7 @@ public class CoviaTest {
 
 	@Test
 	public void testEmptyState() {
-		AMap<Keyword, ACell> empty = Covia.empty();
+		AMap<Keyword, ACell> empty = (AMap<Keyword, ACell>) Covia.empty();
 		assertNotNull(empty);
 		assertTrue(empty.containsKey(Covia.GRID));
 
@@ -55,8 +56,14 @@ public class CoviaTest {
 
 	@Test
 	public void testZeroValue() {
-		AMap<Keyword, ACell> zero = Covia.ROOT.zero();
-		assertEquals(Covia.empty(), zero);
+		// KeyedLattice.zero() returns empty map (the CRDT zero)
+		AMap<Keyword, ACell> zero = (AMap<Keyword, ACell>) Covia.ROOT.zero();
+		assertNotNull(zero);
+		assertEquals(0, zero.count());
+
+		// Covia.empty() returns structured empty state for convenience
+		AMap<Keyword, ACell> empty = Covia.empty();
+		assertTrue(empty.containsKey(Covia.GRID));
 	}
 
 	@Test
@@ -70,7 +77,7 @@ public class CoviaTest {
 
 	@Test
 	public void testMergeWithNull() {
-		AMap<Keyword, ACell> value = Covia.empty();
+		AMap<Keyword, ACell> value = (AMap<Keyword, ACell>) Covia.empty();
 
 		assertSame(value, Covia.ROOT.merge(value, null));
 		assertEquals(value, Covia.ROOT.merge(null, value));
@@ -82,7 +89,7 @@ public class CoviaTest {
 	@Test
 	public void testIdempotency() {
 		AMap<Keyword, ACell> value = createTestState();
-		AMap<Keyword, ACell> merged = Covia.ROOT.merge(value, value);
+		AMap<Keyword, ACell> merged = (AMap<Keyword, ACell>) Covia.ROOT.merge(value, value);
 		assertSame(value, merged, "Merge with self should return same instance");
 	}
 
@@ -93,8 +100,8 @@ public class CoviaTest {
 		AMap<Keyword, ACell> v1 = createStateWithMeta(testHash1, "{\"name\":\"meta1\"}");
 		AMap<Keyword, ACell> v2 = createStateWithMeta(testHash2, "{\"name\":\"meta2\"}");
 
-		AMap<Keyword, ACell> merge12 = Covia.ROOT.merge(v1, v2);
-		AMap<Keyword, ACell> merge21 = Covia.ROOT.merge(v2, v1);
+		AMap<Keyword, ACell> merge12 = (AMap<Keyword, ACell>) Covia.ROOT.merge(v1, v2);
+		AMap<Keyword, ACell> merge21 = (AMap<Keyword, ACell>) Covia.ROOT.merge(v2, v1);
 
 		assertEquals(merge12, merge21, "Merge should be commutative");
 	}
@@ -109,8 +116,8 @@ public class CoviaTest {
 		AMap<Keyword, ACell> v2 = createStateWithMeta(testHash2, "{\"name\":\"meta2\"}");
 		AMap<Keyword, ACell> v3 = createStateWithMeta(hash3, "{\"name\":\"meta3\"}");
 
-		AMap<Keyword, ACell> left = Covia.ROOT.merge(Covia.ROOT.merge(v1, v2), v3);
-		AMap<Keyword, ACell> right = Covia.ROOT.merge(v1, Covia.ROOT.merge(v2, v3));
+		AMap<Keyword, ACell> left = (AMap<Keyword, ACell>) Covia.ROOT.merge(Covia.ROOT.merge(v1, v2), v3);
+		AMap<Keyword, ACell> right = (AMap<Keyword, ACell>) Covia.ROOT.merge(v1, Covia.ROOT.merge(v2, v3));
 
 		assertEquals(left, right, "Merge should be associative");
 	}
@@ -120,7 +127,7 @@ public class CoviaTest {
 	@Test
 	public void testZeroIdentity() {
 		AMap<Keyword, ACell> value = createTestState();
-		AMap<Keyword, ACell> zero = Covia.ROOT.zero();
+		AMap<Keyword, ACell> zero = (AMap<Keyword, ACell>) Covia.ROOT.zero();
 
 		assertEquals(value, Covia.ROOT.merge(value, zero));
 		assertEquals(value, Covia.ROOT.merge(zero, value));
@@ -196,7 +203,7 @@ public class CoviaTest {
 		AMap<Keyword, ACell> state1 = Maps.of(Covia.GRID, grid1);
 		AMap<Keyword, ACell> state2 = Maps.of(Covia.GRID, grid2);
 
-		AMap<Keyword, ACell> merged = Covia.ROOT.merge(state1, state2);
+		AMap<Keyword, ACell> merged = (AMap<Keyword, ACell>) Covia.ROOT.merge(state1, state2);
 
 		// Verify merged structure
 		@SuppressWarnings("unchecked")
