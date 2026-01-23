@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.ExecutionException;
@@ -234,6 +235,46 @@ public class EngineTest {
 		Blob retrievedBlob = Blob.wrap(retrievedBytes);
 		Hash retrievedHash = Hashing.sha256(retrievedBlob.getBytes());
 		assertEquals(contentHash, retrievedHash, "Retrieved content hash should match original hash");
-		
+
+	}
+
+	@Test
+	public void testDLFSStorageConfig() throws IOException {
+		// Create config with DLFS storage
+		AMap<AString, ACell> config = Maps.of(
+			Engine.STORAGE, Maps.of(
+				Engine.CONTENT, Strings.create("dlfs")
+			)
+		);
+
+		// Create engine with DLFS storage
+		Engine dlfsVenue = Engine.createTemp(config);
+		assertNotNull(dlfsVenue);
+
+		// Test storing and retrieving content
+		String testContent = "DLFS storage test content";
+		Blob contentBlob = Blob.wrap(testContent.getBytes());
+		Hash contentHash = Hashing.sha256(contentBlob.getBytes());
+
+		// Create metadata with content hash
+		AMap<AString, ACell> metadata = Maps.of(
+			Fields.NAME, Strings.create("dlfs-test-asset"),
+			Fields.CONTENT, Maps.of(
+				Fields.SHA256, Strings.create(contentHash.toHexString())
+			)
+		);
+
+		// Store asset and content
+		Hash assetId = dlfsVenue.storeAsset(JSON.printPretty(metadata), null);
+		assertNotNull(assetId);
+
+		dlfsVenue.putContent(dlfsVenue.getMetaValue(assetId), new ByteArrayInputStream(testContent.getBytes()));
+
+		// Retrieve and verify content
+		InputStream retrievedStream = dlfsVenue.getContentStream(dlfsVenue.getMetaValue(assetId));
+		assertNotNull(retrievedStream);
+
+		String retrievedContent = new String(retrievedStream.readAllBytes());
+		assertEquals(testContent, retrievedContent);
 	}
 }

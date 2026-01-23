@@ -39,6 +39,8 @@ import convex.did.DID;
 import convex.etch.EtchStore;
 import convex.lattice.cursor.ACursor;
 import convex.lattice.cursor.Cursors;
+import convex.lattice.fs.DLFS;
+import convex.lattice.fs.DLFileSystem;
 import covia.adapter.AAdapter;
 import covia.adapter.ConvexAdapter;
 import covia.adapter.CoviaAdapter;
@@ -130,7 +132,7 @@ public class Engine {
 	 *   <li>"lattice" - Uses LatticeStorage backed by venue lattice cursor (default)</li>
 	 *   <li>"memory" - Uses simple in-memory storage</li>
 	 *   <li>"file" - Uses FileStorage with configured path</li>
-	 *   <li>"dlfs" - Uses FileStorage backed by DLFS lattice filesystem (not yet implemented)</li>
+	 *   <li>"dlfs" - Uses FileStorage backed by local DLFS filesystem</li>
 	 * </ul>
 	 *
 	 * @return Configured storage instance
@@ -172,11 +174,16 @@ public class Engine {
 			log.info("Using file storage at: {}", storagePath);
 			return new FileStorage(path);
 		} else if (STORAGE_TYPE_DLFS.equals(storageType)) {
-			// TODO: Implement DLFS-backed storage once DLFSLattice integration is complete
-			// This will use FileStorage backed by a DLFS filesystem that syncs via lattice
-			// The DLFS filesystem state will be stored in the venue lattice and can replicate
-			// across venues, providing both file-based persistence and CRDT sync capabilities
-			throw new UnsupportedOperationException("DLFS storage not yet implemented - DLFSLattice integration pending");
+			// TODO: DLFS replication - integrate with venue lattice for cross-venue sync
+			// Currently uses a local in-memory DLFS filesystem
+			try {
+				DLFileSystem dlfs = DLFS.createLocal();
+				Path dlfsStorageDir = Files.createDirectory(dlfs.getRoot().resolve("content"));
+				log.info("Using DLFS storage (local)");
+				return new FileStorage(dlfsStorageDir);
+			} catch (IOException e) {
+				throw new IllegalStateException("Failed to create DLFS storage", e);
+			}
 		} else {
 			// Default to lattice storage
 			if (!STORAGE_TYPE_LATTICE.equals(storageType)) {
