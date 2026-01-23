@@ -8,6 +8,11 @@ import convex.core.data.Strings;
  *
  * <p>This class contains all configuration keys used in venue JSON5 config files.
  * All keys are interned AString constants for direct use with CVM data structures.
+ *
+ * <p><b>SECURITY NOTE:</b> {@code Strings.intern()} should ONLY be used for static
+ * compile-time constants as shown here. Never intern externally-obtained or user-provided
+ * strings, as this could lead to memory exhaustion (DoS) since interned strings are
+ * permanently cached. For dynamic strings, use {@code Strings.create()} instead.
  */
 public class Config {
 
