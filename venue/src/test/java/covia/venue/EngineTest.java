@@ -242,8 +242,8 @@ public class EngineTest {
 	public void testDLFSStorageConfig() throws IOException {
 		// Create config with DLFS storage
 		AMap<AString, ACell> config = Maps.of(
-			Engine.STORAGE, Maps.of(
-				Engine.CONTENT, Strings.create("dlfs")
+			Config.STORAGE, Maps.of(
+				Config.CONTENT, Config.STORAGE_TYPE_DLFS
 			)
 		);
 

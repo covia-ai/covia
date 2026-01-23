@@ -100,21 +100,6 @@ public class Engine {
 	 * Map of named adapters that can handle different types of operations or resources
 	 */
 	protected final HashMap<String, AAdapter> adapters = new HashMap<>();
-	
-	/** Storage configuration key */
-	public static final AString STORAGE = Strings.create("storage");
-	/** Storage content type key */
-	public static final AString CONTENT = Strings.create("content");
-	/** Storage path key (for file storage) */
-	public static final AString PATH = Strings.create("path");
-	/** Storage type: lattice (CRDT-backed) */
-	public static final String STORAGE_TYPE_LATTICE = "lattice";
-	/** Storage type: memory (in-memory, non-persistent) */
-	public static final String STORAGE_TYPE_MEMORY = "memory";
-	/** Storage type: file (filesystem-based) */
-	public static final String STORAGE_TYPE_FILE = "file";
-	/** Storage type: dlfs (DLFS lattice-backed filesystem) */
-	public static final String STORAGE_TYPE_DLFS = "dlfs";
 
 	public Engine(AMap<AString, ACell> config, AStore store) throws IOException {
 		this.config=(config==null)?Maps.empty():config;
@@ -140,16 +125,16 @@ public class Engine {
 	@SuppressWarnings("unchecked")
 	private AStorage createStorage() {
 		// Get storage config
-		AMap<AString, ACell> storageConfig = RT.ensureMap(config.get(STORAGE));
-		String storageType = STORAGE_TYPE_LATTICE; // default
+		AMap<AString, ACell> storageConfig = RT.ensureMap(config.get(Config.STORAGE));
+		AString storageType = Config.STORAGE_TYPE_LATTICE; // default
 		String storagePath = null;
 
 		if (storageConfig != null) {
-			AString contentValue = RT.ensureString(storageConfig.get(CONTENT));
+			AString contentValue = RT.ensureString(storageConfig.get(Config.CONTENT));
 			if (contentValue != null) {
-				storageType = contentValue.toString();
+				storageType = contentValue;
 			}
-			AString pathValue = RT.ensureString(storageConfig.get(PATH));
+			AString pathValue = RT.ensureString(storageConfig.get(Config.PATH));
 			if (pathValue != null) {
 				storagePath = pathValue.toString();
 			}
@@ -157,9 +142,9 @@ public class Engine {
 
 		log.info("Configuring storage type: {}", storageType);
 
-		if (STORAGE_TYPE_MEMORY.equals(storageType)) {
+		if (Config.STORAGE_TYPE_MEMORY.equals(storageType)) {
 			return new MemoryStorage();
-		} else if (STORAGE_TYPE_FILE.equals(storageType)) {
+		} else if (Config.STORAGE_TYPE_FILE.equals(storageType)) {
 			if (storagePath == null || storagePath.isEmpty()) {
 				throw new IllegalArgumentException("File storage requires 'path' configuration");
 			}
@@ -173,7 +158,7 @@ public class Engine {
 			}
 			log.info("Using file storage at: {}", storagePath);
 			return new FileStorage(path);
-		} else if (STORAGE_TYPE_DLFS.equals(storageType)) {
+		} else if (Config.STORAGE_TYPE_DLFS.equals(storageType)) {
 			// TODO: DLFS replication - integrate with venue lattice for cross-venue sync
 			// Currently uses a local in-memory DLFS filesystem
 			try {
@@ -186,11 +171,10 @@ public class Engine {
 			}
 		} else {
 			// Default to lattice storage
-			if (!STORAGE_TYPE_LATTICE.equals(storageType)) {
+			if (!Config.STORAGE_TYPE_LATTICE.equals(storageType)) {
 				log.warn("Unknown storage type '{}', defaulting to lattice", storageType);
 			}
 			// Create lattice storage backed by venue's :storage cursor
-			@SuppressWarnings("unchecked")
 			ACursor<Index<Hash, ABlob>> storageCursor =
 				(ACursor<Index<Hash, ABlob>>) (ACursor<?>) lattice.path(
 					Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.STORAGE);
