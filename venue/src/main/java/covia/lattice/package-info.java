@@ -26,5 +26,6 @@
  *
  * @see covia.lattice.GridLattice
  * @see covia.lattice.VenueLattice
+ * @see covia.lattice.CASLattice
  */
 package covia.lattice;

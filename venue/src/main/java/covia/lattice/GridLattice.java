@@ -66,17 +66,17 @@ public class GridLattice extends ALattice<AMap<Keyword, ACell>> {
 	private final ALattice<AMap<ACell, ACell>> venuesLattice;
 
 	/**
-	 * Child lattice for shared metadata (union merge - content-addressed)
-	 * Uses Index&lt;Hash, AString&gt; for type-safe content-addressed storage
+	 * Child lattice for shared metadata (content-addressed storage)
+	 * Uses CASLattice&lt;Hash, AString&gt; for type-safe content-addressed storage
 	 */
-	private final ALattice<Index<Hash, AString>> metaLattice;
+	private final CASLattice<Hash, AString> metaLattice;
 
 	private GridLattice() {
 		// Venues use a custom map lattice that applies VenueLattice to each venue entry
 		this.venuesLattice = new VenuesMapLattice();
 
-		// Meta uses Index<Hash, AString> with union merge - content-addressed, so same hash = same content
-		this.metaLattice = new MetaIndexLattice();
+		// Meta uses CASLattice for content-addressed storage (same hash = same content)
+		this.metaLattice = CASLattice.create();
 	}
 
 	/**
@@ -228,38 +228,4 @@ public class GridLattice extends ALattice<AMap<Keyword, ACell>> {
 		}
 	}
 
-	/**
-	 * Index lattice for metadata - union merge for content-addressed Index&lt;Hash, AString&gt;.
-	 * Since keys are SHA256 hashes, same key always means same content (immutable).
-	 */
-	private static class MetaIndexLattice extends ALattice<Index<Hash, AString>> {
-
-		@SuppressWarnings("unchecked")
-		@Override
-		public Index<Hash, AString> merge(Index<Hash, AString> ownValue, Index<Hash, AString> otherValue) {
-			if (otherValue == null) return ownValue;
-			if (ownValue == null) return otherValue;
-			if (Utils.equals(ownValue, otherValue)) return ownValue;
-
-			// Union: include all entries from both indexes
-			// For content-addressed data, same hash = same content
-			// AMap.merge() adds all entries from otherValue (union semantics)
-			return (Index<Hash, AString>) ownValue.merge(otherValue);
-		}
-
-		@Override
-		public Index<Hash, AString> zero() {
-			return Index.none();
-		}
-
-		@Override
-		public boolean checkForeign(Index<Hash, AString> value) {
-			return value instanceof Index;
-		}
-
-		@Override
-		public <T extends ACell> ALattice<T> path(ACell childKey) {
-			return null; // Leaf lattice
-		}
-	}
 }
