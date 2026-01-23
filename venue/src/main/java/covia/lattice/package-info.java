@@ -24,6 +24,7 @@
  * (keyed by SHA256 hash) and immutable, making it safe to share across venues.
  * This enables deduplication and efficient cross-venue asset references.
  *
+ * @see covia.lattice.Covia
  * @see covia.lattice.GridLattice
  * @see covia.lattice.VenueLattice
  * @see covia.lattice.CASLattice
