@@ -43,12 +43,12 @@ public class CoviaTest {
 
 	@Test
 	public void testEmptyState() {
-		AMap<Keyword, ACell> empty = (AMap<Keyword, ACell>) Covia.empty();
+		// Create an initial structured state like Engine.initialiseLattice() does
+		AMap<Keyword, ACell> empty = createEmptyState();
 		assertNotNull(empty);
 		assertTrue(empty.containsKey(Covia.GRID));
 
 		// Grid should contain venues and meta
-		@SuppressWarnings("unchecked")
 		AMap<Keyword, ACell> grid = (AMap<Keyword, ACell>) empty.get(Covia.GRID);
 		assertTrue(grid.containsKey(GridLattice.VENUES));
 		assertTrue(grid.containsKey(GridLattice.META));
@@ -61,14 +61,14 @@ public class CoviaTest {
 		assertNotNull(zero);
 		assertEquals(0, zero.count());
 
-		// Covia.empty() returns structured empty state for convenience
-		AMap<Keyword, ACell> empty = Covia.empty();
+		// Structured empty state should contain :grid key
+		AMap<Keyword, ACell> empty = createEmptyState();
 		assertTrue(empty.containsKey(Covia.GRID));
 	}
 
 	@Test
 	public void testCheckForeign() {
-		assertTrue(Covia.ROOT.checkForeign(Covia.empty()));
+		assertTrue(Covia.ROOT.checkForeign(createEmptyState()));
 		assertTrue(Covia.ROOT.checkForeign(Maps.empty()));
 		assertEquals(false, Covia.ROOT.checkForeign(null));
 	}
@@ -77,7 +77,7 @@ public class CoviaTest {
 
 	@Test
 	public void testMergeWithNull() {
-		AMap<Keyword, ACell> value = (AMap<Keyword, ACell>) Covia.empty();
+		AMap<Keyword, ACell> value = createEmptyState();
 
 		assertSame(value, Covia.ROOT.merge(value, null));
 		assertEquals(value, Covia.ROOT.merge(null, value));
@@ -206,11 +206,8 @@ public class CoviaTest {
 		AMap<Keyword, ACell> merged = (AMap<Keyword, ACell>) Covia.ROOT.merge(state1, state2);
 
 		// Verify merged structure
-		@SuppressWarnings("unchecked")
 		AMap<Keyword, ACell> mergedGrid = (AMap<Keyword, ACell>) merged.get(Covia.GRID);
-		@SuppressWarnings("unchecked")
 		AMap<ACell, ACell> venues = (AMap<ACell, ACell>) mergedGrid.get(GridLattice.VENUES);
-		@SuppressWarnings("unchecked")
 		Index<Hash, AString> meta = (Index<Hash, AString>) mergedGrid.get(GridLattice.META);
 
 		assertEquals(2, venues.count(), "Should have 2 venues");
@@ -218,6 +215,13 @@ public class CoviaTest {
 	}
 
 	// ========== Helper Methods ==========
+
+	/**
+	 * Creates an empty but structured state, similar to Engine.initialiseLattice()
+	 */
+	private AMap<Keyword, ACell> createEmptyState() {
+		return Maps.of(Covia.GRID, GridLattice.INSTANCE.zero());
+	}
 
 	private AMap<Keyword, ACell> createTestState() {
 		AMap<Keyword, ACell> venueState = Maps.of(

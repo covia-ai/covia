@@ -50,6 +50,9 @@ import covia.grid.AContent;
 import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.lattice.Covia;
+import covia.lattice.GridLattice;
+import covia.lattice.VenueLattice;
 import covia.venue.api.CoviaAPI;
 import covia.venue.storage.AStorage;
 import covia.venue.storage.MemoryStorage;
@@ -59,12 +62,6 @@ public class Engine {
 	public static final Logger log=LoggerFactory.getLogger(Engine.class);
 
 	
-
-	public static final Keyword COVIA_KEY = Keyword.intern("covia");
-	public static final Keyword ASSETS_KEY = Keyword.intern("assets");
-	public static final Keyword JOBS_KEY = Keyword.intern("jobs");
-	public static final Keyword USERS_KEY = Keyword.intern("users");
-
 
     // Structure of asset record
 	public static final long POS_JSON = 0;
@@ -83,24 +80,18 @@ public class Engine {
 	 */
 	protected final AStorage contentStorage;
 	
-	/** 
-	 * Venue lattice 
-	 * :covia -> Map
-	 *     :assets -> Map
-	 *         <AssetID> -> [Asset Record]
-	 *     :users -> Index
-	 *         <User> -> Map
-	 *             :assets -> Set<AssetID>
-	 *             :jobs -> Index
-	 *                <JobID> -> {Job Status}
+	/**
+	 * Venue lattice using Covia.ROOT structure:
+	 * :grid -> GridLattice
+	 *   :venues -> Map<DID, VenueLattice>
+	 *     <venue-did> -> VenueLattice
+	 *       :assets -> Index<Hash, AssetRecord>
+	 *       :jobs -> Index<AString, JobRecord>
  	 */
-	protected ACursor<AMap<Keyword,ACell>> lattice=Cursors.of(Maps.create(
-			COVIA_KEY, Maps.of(
-					ASSETS_KEY,Index.EMPTY,
-					USERS_KEY,Index.EMPTY)));
-	
-	/** Lattice for assets data */
-	protected ACursor<Index<AString,AVector<ACell>>> assets=lattice.path(COVIA_KEY, ASSETS_KEY);
+	protected ACursor<AMap<Keyword,ACell>> lattice;
+
+	/** Lattice cursor for assets data */
+	protected ACursor<Index<AString,AVector<ACell>>> assets;
 	
 	/**
 	 * Map of named adapters that can handle different types of operations or resources
@@ -115,6 +106,23 @@ public class Engine {
 		this.store=store;
 		this.contentStorage = new MemoryStorage();
 		this.contentStorage.initialise();
+		initialiseLattice();
+	}
+
+	/**
+	 * Initialises the lattice with the default venue state structure.
+	 * Sets up the :grid -> :venues -> venue structure using Covia.ROOT.
+	 */
+	protected void initialiseLattice() {
+		AMap<Keyword,ACell> initialState = Maps.of(
+			Covia.GRID, Maps.of(
+				GridLattice.VENUES, Maps.of(
+					getDIDString(), VenueLattice.INSTANCE.zero()
+				)
+			)
+		);
+		this.lattice = Cursors.of(initialState);
+		this.assets = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.ASSETS);
 	}
 	
 	public static void addDemoAssets(Engine venue) {

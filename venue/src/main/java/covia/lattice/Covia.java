@@ -1,9 +1,6 @@
 package covia.lattice;
 
-import convex.core.data.ACell;
-import convex.core.data.AMap;
 import convex.core.data.Keyword;
-import convex.core.data.Maps;
 import convex.lattice.generic.KeyedLattice;
 
 /**
@@ -61,16 +58,4 @@ public final class Covia {
 		// Prevent instantiation - this is a constants/utility class
 	}
 
-	/**
-	 * Get an empty state for a new venue with proper structure.
-	 *
-	 * <p>Unlike {@code ROOT.zero()} which returns an empty map, this method
-	 * returns a fully-structured empty state with the :grid key populated
-	 * with an empty grid state.
-	 *
-	 * @return Empty venue root state with proper structure
-	 */
-	public static AMap<Keyword, ACell> empty() {
-		return Maps.of(GRID, GridLattice.INSTANCE.zero());
-	}
 }
