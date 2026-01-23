@@ -31,9 +31,10 @@
 			// "content": "lattice" - CRDT-backed storage (default), syncs across venues
 			// "content": "memory" - Simple in-memory storage, data lost on restart
 			// "content": "file" - Filesystem storage, requires "path" to be set
+			// "content": "dlfs" - DLFS lattice filesystem (not yet implemented)
 			"storage":{
 				"content":"lattice"
-				// "path": "./content"  // Required for "file" storage type
+				// "path": "./content"  // Required for "file" and "dlfs" storage types
 			}
 		}
 	],

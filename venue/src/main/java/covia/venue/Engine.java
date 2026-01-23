@@ -111,6 +111,8 @@ public class Engine {
 	public static final String STORAGE_TYPE_MEMORY = "memory";
 	/** Storage type: file (filesystem-based) */
 	public static final String STORAGE_TYPE_FILE = "file";
+	/** Storage type: dlfs (DLFS lattice-backed filesystem) */
+	public static final String STORAGE_TYPE_DLFS = "dlfs";
 
 	public Engine(AMap<AString, ACell> config, AStore store) throws IOException {
 		this.config=(config==null)?Maps.empty():config;
@@ -128,6 +130,7 @@ public class Engine {
 	 *   <li>"lattice" - Uses LatticeStorage backed by venue lattice cursor (default)</li>
 	 *   <li>"memory" - Uses simple in-memory storage</li>
 	 *   <li>"file" - Uses FileStorage with configured path</li>
+	 *   <li>"dlfs" - Uses FileStorage backed by DLFS lattice filesystem (not yet implemented)</li>
 	 * </ul>
 	 *
 	 * @return Configured storage instance
@@ -168,6 +171,12 @@ public class Engine {
 			}
 			log.info("Using file storage at: {}", storagePath);
 			return new FileStorage(path);
+		} else if (STORAGE_TYPE_DLFS.equals(storageType)) {
+			// TODO: Implement DLFS-backed storage once DLFSLattice integration is complete
+			// This will use FileStorage backed by a DLFS filesystem that syncs via lattice
+			// The DLFS filesystem state will be stored in the venue lattice and can replicate
+			// across venues, providing both file-based persistence and CRDT sync capabilities
+			throw new UnsupportedOperationException("DLFS storage not yet implemented - DLFSLattice integration pending");
 		} else {
 			// Default to lattice storage
 			if (!STORAGE_TYPE_LATTICE.equals(storageType)) {
