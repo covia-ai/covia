@@ -201,4 +201,46 @@ For CI/CD pipelines, use:
 mvn clean verify
 ```
 
-This ensures all tests pass and the build is ready for deployment. 
+This ensures all tests pass and the build is ready for deployment.
+
+## Releases
+
+### Snapshot Releases
+
+Snapshot builds are automatically created on every push to the `develop` branch. These are available at:
+
+- [latest-snapshot](https://github.com/covia-ai/covia/releases/tag/latest-snapshot)
+
+### Stable Releases
+
+To create a stable release:
+
+1. **Ensure you're on master** with all changes merged from develop:
+   ```bash
+   git checkout master
+   git pull origin master
+   ```
+
+2. **Create and push a version tag** (must be semver format):
+   ```bash
+   git tag 1.0.0
+   git push origin 1.0.0
+   ```
+
+3. **GitHub Actions will automatically**:
+   - Verify the tag is on the master branch
+   - Build the project
+   - Create a versioned release (e.g., `1.0.0`)
+   - Update the `latest` release to point to this version
+
+### Release Artifacts
+
+Both snapshot and stable releases include:
+
+- `covia.jar` - The executable venue server JAR with all dependencies
+
+### Download Links
+
+- **Latest stable**: [latest](https://github.com/covia-ai/covia/releases/tag/latest)
+- **Latest snapshot**: [latest-snapshot](https://github.com/covia-ai/covia/releases/tag/latest-snapshot)
+- **Specific version**: `https://github.com/covia-ai/covia/releases/tag/<version>` 
