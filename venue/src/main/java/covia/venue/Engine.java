@@ -16,6 +16,7 @@ import convex.core.crypto.Hashing;
 import convex.core.crypto.util.Multikey;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
+import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -81,12 +82,7 @@ public class Engine {
 	protected final AStorage contentStorage;
 	
 	/**
-	 * Venue lattice using Covia.ROOT structure:
-	 * :grid -> GridLattice
-	 *   :venues -> Map<DID, VenueLattice>
-	 *     <venue-did> -> VenueLattice
-	 *       :assets -> Index<Hash, AssetRecord>
-	 *       :jobs -> Index<AString, JobRecord>
+	 * Venue lattice using Covia.ROOT structure see COGXXX
  	 */
 	protected ACursor<AMap<Keyword,ACell>> lattice;
 
@@ -97,9 +93,6 @@ public class Engine {
 	 * Map of named adapters that can handle different types of operations or resources
 	 */
 	protected final HashMap<String, AAdapter> adapters = new HashMap<>();
-
-
-
 	
 	public Engine(AMap<AString, ACell> config, EtchStore store) throws IOException {
 		this.config=(config==null)?Maps.empty():config;
@@ -114,15 +107,19 @@ public class Engine {
 	 * Sets up the :grid -> :venues -> venue structure using Covia.ROOT.
 	 */
 	protected void initialiseLattice() {
-		AMap<Keyword,ACell> initialState = Maps.of(
+		AMap<Keyword,ACell> initialState = emptyLattice();
+		this.lattice = Cursors.of(initialState);
+		this.assets = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.ASSETS);
+	}
+
+	private AHashMap<Keyword, ACell> emptyLattice() {
+		return Maps.of(
 			Covia.GRID, Maps.of(
 				GridLattice.VENUES, Maps.of(
 					getDIDString(), VenueLattice.INSTANCE.zero()
 				)
 			)
 		);
-		this.lattice = Cursors.of(initialState);
-		this.assets = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.ASSETS);
 	}
 	
 	public static void addDemoAssets(Engine venue) {
