@@ -27,6 +27,12 @@ jobs:
         key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
         restore-keys: ${{ runner.os }}-m2
 
+    - name: Build Convex dependency from develop branch
+      run: |
+        git clone --depth 1 --branch develop https://github.com/Convex-Dev/convex.git /tmp/convex
+        cd /tmp/convex
+        mvn install -DskipTests -q
+
     - name: Build with Maven
       run: mvn clean install -DskipTests
 
