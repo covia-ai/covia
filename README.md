@@ -41,6 +41,16 @@ Covia.ai transforms this fragmentation into a seamless, collaborative grid. We p
 
 ---
 
+## Download
+
+Get the latest snapshot build to run your own Covia venue:
+
+[![Latest Snapshot](https://img.shields.io/badge/download-latest--snapshot-blue)](https://github.com/covia-ai/covia/releases/tag/latest-snapshot)
+
+See the [Operator Guide](https://docs.covia.ai/docs/operator-guide/) for setup instructions.
+
+---
+
 ## Join the Pioneers
 
 We're building this new category together. Join our community to get help, share your feedback, and connect with the founding team.
