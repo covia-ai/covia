@@ -1,7 +1,6 @@
 package covia.lattice;
 
 import convex.core.data.ACell;
-import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Hash;
@@ -19,14 +18,14 @@ import convex.lattice.LatticeContext;
  * <p>GridLattice manages the global grid state with the following structure:
  * <pre>
  * :grid
- *   :venues    ->  Map&lt;DID-String, VenueLattice&gt;  (per-venue state)
- *   :meta      ->  Index&lt;Hash, AString&gt;           (shared content-addressable metadata as JSON)
+ *   :venues    ->  Index&lt;DID-String, VenueLattice&gt;  (per-venue state, sorted by DID)
+ *   :meta      ->  Index&lt;Hash, AString&gt;             (shared content-addressable metadata as JSON)
  * </pre>
  *
  * <h2>Design Rationale</h2>
  * <ul>
- *   <li><b>:venues</b> - Per-venue state keyed by DID string. Each venue manages its own
- *       assets and jobs independently.</li>
+ *   <li><b>:venues</b> - Per-venue state keyed by DID string. Uses Index for efficient
+ *       sorted access with blob-like keys. Each venue manages its own assets and jobs.</li>
  *   <li><b>:meta</b> - Shared metadata at grid level. Since metadata is content-addressable
  *       (keyed by SHA256 hash), it is immutable and can be safely shared across venues.
  *       This enables deduplication and efficient cross-venue references.</li>
@@ -34,7 +33,7 @@ import convex.lattice.LatticeContext;
  *
  * <h2>Merge Semantics</h2>
  * <ul>
- *   <li><b>:venues</b> - Map merge with VenueLattice for each venue entry</li>
+ *   <li><b>:venues</b> - Index merge with VenueLattice for each venue entry</li>
  *   <li><b>:meta</b> - Union merge (content-addressed, same hash = same content)</li>
  * </ul>
  */
@@ -61,9 +60,9 @@ public class GridLattice extends ALattice<AMap<Keyword, ACell>> {
 	public static final GridLattice INSTANCE = new GridLattice();
 
 	/**
-	 * Child lattice for venues (map of DID -> VenueLattice)
+	 * Child lattice for venues (Index of DID -> VenueLattice)
 	 */
-	private final ALattice<AMap<ACell, ACell>> venuesLattice;
+	private final ALattice<Index<AString, ACell>> venuesLattice;
 
 	/**
 	 * Child lattice for shared metadata (content-addressed storage)
@@ -72,8 +71,8 @@ public class GridLattice extends ALattice<AMap<Keyword, ACell>> {
 	private final CASLattice<Hash, AString> metaLattice;
 
 	private GridLattice() {
-		// Venues use a custom map lattice that applies VenueLattice to each venue entry
-		this.venuesLattice = new VenuesMapLattice();
+		// Venues use a custom Index lattice that applies VenueLattice to each venue entry
+		this.venuesLattice = new VenuesIndexLattice();
 
 		// Meta uses CASLattice for content-addressed storage (same hash = same content)
 		this.metaLattice = CASLattice.create();
@@ -120,12 +119,12 @@ public class GridLattice extends ALattice<AMap<Keyword, ACell>> {
 			AMap<Keyword, ACell> result,
 			AMap<Keyword, ACell> other) {
 
-		AMap<ACell, ACell> ownField = (AMap<ACell, ACell>) result.get(VENUES);
-		AMap<ACell, ACell> otherField = (AMap<ACell, ACell>) other.get(VENUES);
+		Index<AString, ACell> ownField = (Index<AString, ACell>) result.get(VENUES);
+		Index<AString, ACell> otherField = (Index<AString, ACell>) other.get(VENUES);
 
 		if (otherField == null) return result;
 
-		AMap<ACell, ACell> merged = venuesLattice.merge(ownField, otherField);
+		Index<AString, ACell> merged = venuesLattice.merge(ownField, otherField);
 
 		if (!Utils.equals(merged, ownField)) {
 			result = result.assoc(VENUES, merged);
@@ -156,7 +155,7 @@ public class GridLattice extends ALattice<AMap<Keyword, ACell>> {
 	@Override
 	public AMap<Keyword, ACell> zero() {
 		return Maps.of(
-			VENUES, Maps.empty(),
+			VENUES, Index.none(),
 			META, Index.none()
 		);
 	}
@@ -181,14 +180,15 @@ public class GridLattice extends ALattice<AMap<Keyword, ACell>> {
 	}
 
 	/**
-	 * Map lattice for venues - applies VenueLattice merge to each venue entry.
+	 * Index lattice for venues - applies VenueLattice merge to each venue entry.
+	 * Uses Index for efficient sorted access with blob-like DID string keys.
 	 */
-	private static class VenuesMapLattice extends ALattice<AMap<ACell, ACell>> {
+	private static class VenuesIndexLattice extends ALattice<Index<AString, ACell>> {
 
 		private final VenueLattice venueLattice = VenueLattice.INSTANCE;
 		private final MergeFunction<ACell> mergeFunction;
 
-		public VenuesMapLattice() {
+		public VenuesIndexLattice() {
 			this.mergeFunction = (a, b) -> {
 				@SuppressWarnings("unchecked")
 				AMap<Keyword, ACell> va = (AMap<Keyword, ACell>) a;
@@ -198,26 +198,24 @@ public class GridLattice extends ALattice<AMap<Keyword, ACell>> {
 			};
 		}
 
-		@SuppressWarnings("unchecked")
 		@Override
-		public AMap<ACell, ACell> merge(AMap<ACell, ACell> ownValue, AMap<ACell, ACell> otherValue) {
+		public Index<AString, ACell> merge(Index<AString, ACell> ownValue, Index<AString, ACell> otherValue) {
 			if (otherValue == null) return ownValue;
 			if (ownValue == null) return otherValue;
 			if (Utils.equals(ownValue, otherValue)) return ownValue;
 
 			// Use mergeDifferences to apply VenueLattice merge to each venue
-			return ((AHashMap<ACell, ACell>) ownValue).mergeDifferences(
-					(AHashMap<ACell, ACell>) otherValue, mergeFunction);
+			return ownValue.mergeDifferences(otherValue, mergeFunction);
 		}
 
 		@Override
-		public AMap<ACell, ACell> zero() {
-			return Maps.empty();
+		public Index<AString, ACell> zero() {
+			return Index.none();
 		}
 
 		@Override
-		public boolean checkForeign(AMap<ACell, ACell> value) {
-			return value instanceof AMap;
+		public boolean checkForeign(Index<AString, ACell> value) {
+			return value instanceof Index;
 		}
 
 		@SuppressWarnings("unchecked")

@@ -1,7 +1,10 @@
 package covia.lattice;
 
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
+import convex.core.data.Hash;
+import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.util.MergeFunction;
@@ -16,8 +19,9 @@ import convex.lattice.LatticeContext;
  * The state is a keyword-keyed map with the following structure:
  * <pre>
  * {
- *   :assets  ->  Index&lt;Hash, AssetRecord&gt;  (references to metadata in grid :meta)
- *   :jobs    ->  Index&lt;AString, JobRecord&gt;
+ *   :assets   ->  Index&lt;Hash, AssetRecord&gt;  (references to metadata in grid :meta)
+ *   :jobs     ->  Index&lt;AString, JobRecord&gt;
+ *   :storage  ->  Index&lt;Hash, ABlob&gt;         (content-addressed blob storage)
  * }
  * </pre>
  *
@@ -29,6 +33,7 @@ import convex.lattice.LatticeContext;
  * <ul>
  *   <li><b>:assets</b> - Union merge (assets are immutable, identified by content hash)</li>
  *   <li><b>:jobs</b> - Per-job merge using timestamp (newer status wins)</li>
+ *   <li><b>:storage</b> - Union merge via CASLattice (content-addressed, same hash = same content)</li>
  * </ul>
  *
  * <h2>CRDT Properties</h2>
@@ -54,6 +59,11 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 	public static final Keyword JOBS = Keyword.intern("jobs");
 
 	/**
+	 * Keyword for content-addressed storage within venue state
+	 */
+	public static final Keyword STORAGE = Keyword.intern("storage");
+
+	/**
 	 * Keyword for timestamp field (used in merge conflict resolution)
 	 */
 	public static final Keyword UPDATED = Keyword.intern("updated");
@@ -73,12 +83,20 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 	 */
 	private final ALattice<AMap<ACell, ACell>> jobsLattice;
 
+	/**
+	 * Child lattice for content-addressed storage (CASLattice for blob storage)
+	 */
+	private final CASLattice<Hash, ABlob> storageLattice;
+
 	private VenueLattice() {
 		// Assets use union merge - content-addressed, so same ID means same content
 		this.assetsLattice = new UnionMapLattice<>();
 
 		// Jobs use timestamp-based merge per job entry
 		this.jobsLattice = new TimestampMapLattice<>(UPDATED);
+
+		// Storage uses CASLattice - content-addressed blob storage
+		this.storageLattice = CASLattice.create();
 	}
 
 	/**
@@ -106,6 +124,9 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 
 		// Merge jobs
 		result = mergeField(result, otherValue, JOBS, jobsLattice);
+
+		// Merge storage
+		result = mergeStorageField(result, otherValue);
 
 		return result;
 	}
@@ -138,11 +159,31 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 		return result;
 	}
 
+	@SuppressWarnings("unchecked")
+	private AMap<Keyword, ACell> mergeStorageField(
+			AMap<Keyword, ACell> result,
+			AMap<Keyword, ACell> other) {
+
+		Index<Hash, ABlob> ownField = (Index<Hash, ABlob>) result.get(STORAGE);
+		Index<Hash, ABlob> otherField = (Index<Hash, ABlob>) other.get(STORAGE);
+
+		if (otherField == null) return result;
+
+		Index<Hash, ABlob> merged = storageLattice.merge(ownField, otherField);
+
+		if (!Utils.equals(merged, ownField)) {
+			result = result.assoc(STORAGE, merged);
+		}
+
+		return result;
+	}
+
 	@Override
 	public AMap<Keyword, ACell> zero() {
 		return Maps.of(
 			ASSETS, Maps.empty(),
-			JOBS, Maps.empty()
+			JOBS, Maps.empty(),
+			STORAGE, Index.none()
 		);
 	}
 
@@ -162,6 +203,9 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 		}
 		if (JOBS.equals(childKey)) {
 			return (ALattice<T>) jobsLattice;
+		}
+		if (STORAGE.equals(childKey)) {
+			return (ALattice<T>) storageLattice;
 		}
 		return null;
 	}

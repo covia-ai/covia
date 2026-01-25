@@ -3,6 +3,9 @@ package covia.venue;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -36,6 +39,8 @@ import convex.did.DID;
 import convex.etch.EtchStore;
 import convex.lattice.cursor.ACursor;
 import convex.lattice.cursor.Cursors;
+import convex.lattice.fs.DLFS;
+import convex.lattice.fs.DLFileSystem;
 import covia.adapter.AAdapter;
 import covia.adapter.ConvexAdapter;
 import covia.adapter.CoviaAdapter;
@@ -56,6 +61,8 @@ import covia.lattice.GridLattice;
 import covia.lattice.VenueLattice;
 import covia.venue.api.CoviaAPI;
 import covia.venue.storage.AStorage;
+import covia.venue.storage.FileStorage;
+import covia.venue.storage.LatticeStorage;
 import covia.venue.storage.MemoryStorage;
 
 public class Engine {
@@ -82,7 +89,7 @@ public class Engine {
 	protected final AStorage contentStorage;
 	
 	/**
-	 * Venue lattice using Covia.ROOT structure see COGXXX
+	 * Venue lattice using Covia.ROOT structure see COG-004 
  	 */
 	protected ACursor<AMap<Keyword,ACell>> lattice;
 
@@ -93,13 +100,86 @@ public class Engine {
 	 * Map of named adapters that can handle different types of operations or resources
 	 */
 	protected final HashMap<String, AAdapter> adapters = new HashMap<>();
-	
-	public Engine(AMap<AString, ACell> config, EtchStore store) throws IOException {
+
+	public Engine(AMap<AString, ACell> config, AStore store) throws IOException {
 		this.config=(config==null)?Maps.empty():config;
 		this.store=store;
-		this.contentStorage = new MemoryStorage();
-		this.contentStorage.initialise();
 		initialiseLattice();
+		this.contentStorage = createStorage();
+		this.contentStorage.initialise();
+	}
+
+	/**
+	 * Creates the appropriate storage instance based on configuration.
+	 *
+	 * <p>Reads the "storage" config entry to determine storage type:
+	 * <ul>
+	 *   <li>"lattice" - Uses LatticeStorage backed by venue lattice cursor (default)</li>
+	 *   <li>"memory" - Uses simple in-memory storage</li>
+	 *   <li>"file" - Uses FileStorage with configured path</li>
+	 *   <li>"dlfs" - Uses FileStorage backed by local DLFS filesystem</li>
+	 * </ul>
+	 *
+	 * @return Configured storage instance
+	 */
+	@SuppressWarnings("unchecked")
+	private AStorage createStorage() {
+		// Get storage config
+		AMap<AString, ACell> storageConfig = RT.ensureMap(config.get(Config.STORAGE));
+		AString storageType = Config.STORAGE_TYPE_LATTICE; // default
+		String storagePath = null;
+
+		if (storageConfig != null) {
+			AString contentValue = RT.ensureString(storageConfig.get(Config.CONTENT));
+			if (contentValue != null) {
+				storageType = contentValue;
+			}
+			AString pathValue = RT.ensureString(storageConfig.get(Config.PATH));
+			if (pathValue != null) {
+				storagePath = pathValue.toString();
+			}
+		}
+
+		log.info("Configuring storage type: {}", storageType);
+
+		if (Config.STORAGE_TYPE_MEMORY.equals(storageType)) {
+			return new MemoryStorage();
+		} else if (Config.STORAGE_TYPE_FILE.equals(storageType)) {
+			if (storagePath == null || storagePath.isEmpty()) {
+				throw new IllegalArgumentException("File storage requires 'path' configuration");
+			}
+			Path path = Paths.get(storagePath);
+			if (!Files.exists(path)) {
+				try {
+					Files.createDirectories(path);
+				} catch (IOException e) {
+					throw new IllegalArgumentException("Failed to create storage directory: " + storagePath, e);
+				}
+			}
+			log.info("Using file storage at: {}", storagePath);
+			return new FileStorage(path);
+		} else if (Config.STORAGE_TYPE_DLFS.equals(storageType)) {
+			// TODO: DLFS replication - integrate with venue lattice for cross-venue sync
+			// Currently uses a local in-memory DLFS filesystem
+			try {
+				DLFileSystem dlfs = DLFS.createLocal();
+				Path dlfsStorageDir = Files.createDirectory(dlfs.getRoot().resolve("content"));
+				log.info("Using DLFS storage (local)");
+				return new FileStorage(dlfsStorageDir);
+			} catch (IOException e) {
+				throw new IllegalStateException("Failed to create DLFS storage", e);
+			}
+		} else {
+			// Default to lattice storage
+			if (!Config.STORAGE_TYPE_LATTICE.equals(storageType)) {
+				log.warn("Unknown storage type '{}', defaulting to lattice", storageType);
+			}
+			// Create lattice storage backed by venue's :storage cursor
+			ACursor<Index<Hash, ABlob>> storageCursor =
+				(ACursor<Index<Hash, ABlob>>) (ACursor<?>) lattice.path(
+					Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.STORAGE);
+			return new LatticeStorage(storageCursor);
+		}
 	}
 
 	/**
@@ -115,7 +195,7 @@ public class Engine {
 	private AHashMap<Keyword, ACell> emptyLattice() {
 		return Maps.of(
 			Covia.GRID, Maps.of(
-				GridLattice.VENUES, Maps.of(
+				GridLattice.VENUES, Index.of(
 					getDIDString(), VenueLattice.INSTANCE.zero()
 				)
 			)

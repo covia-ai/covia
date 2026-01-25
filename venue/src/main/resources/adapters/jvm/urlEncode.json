@@ -31,7 +31,6 @@
 					"description": "Length of the encoded result"
 				}
 			}
-		},
-		"toolName":"url-encode"
+		}
 	}
 } 

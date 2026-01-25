@@ -129,27 +129,27 @@ public class MCPTest {
 			// Verify we got some tools
 			assertTrue(tools.size() > 0, "TestAdapter should provide at least one MCP tool");
 			
-			// Look for the "echo" tool specifically
+			// Look for the "test:echo" tool specifically (tool name derived from adapter field)
 			boolean foundEchoTool = false;
 			for (int i = 0; i < tools.size(); i++) {
 				AMap<AString, ACell> tool = tools.get(i);
 				AString name = RT.ensureString(tool.get(Strings.create("name")));
-				if ("echo".equals(name.toString())) {
+				if ("test:echo".equals(name.toString())) {
 					foundEchoTool = true;
-					
+
 					// Verify the tool has the expected structure
 					assertTrue(tool.containsKey(Strings.create("name")), "Tool should have a name");
 					assertTrue(tool.containsKey(Strings.create("description")), "Tool should have a description");
 					assertTrue(tool.containsKey(Strings.create("inputSchema")), "Tool should have an inputSchema");
-					
-					// Verify the name is "echo"
-					assertEquals("echo", name.toString(), "Tool name should be 'echo'");
-					
+
+					// Verify the name is "test:echo"
+					assertEquals("test:echo", name.toString(), "Tool name should be 'test:echo'");
+
 					break;
 				}
 			}
-			
-			assertTrue(foundEchoTool, "Should find the 'echo' tool from TestAdapter");
+
+			assertTrue(foundEchoTool, "Should find the 'test:echo' tool from TestAdapter");
 			
 		} catch (Exception e) {
 			throw new RuntimeException("Failed to test listTools method", e);
@@ -159,8 +159,8 @@ public class MCPTest {
 	@Test public void testToolCall() throws Exception {
 		MCPAdapter mcpAdapter=(MCPAdapter) venue.getAdapter("mcp");
 		AMap<AString,ACell> input=Maps.of("foo",2);
-		
-		ACell result=mcpAdapter.callMCPTool(Strings.create(BASE_URL), "echo",input,null);
+
+		ACell result=mcpAdapter.callMCPTool(Strings.create(BASE_URL), "test:echo",input,null);
 		assertEquals(input,result);
 	}
 	
@@ -201,15 +201,15 @@ public class MCPTest {
 		Venue client = Grid.connect(BASE_URL);
 		MCPAdapter mcpAdapter=(MCPAdapter) venue.getAdapter("mcp");
 		assertNotNull(mcpAdapter);
-		
+
 		AMap<AString,AInteger> arguments=Maps.of("test",2);
-		
-		Job job=client.invoke(mcpAdapter.TOOL_CALL, 
+
+		Job job=client.invoke(mcpAdapter.TOOL_CALL,
 				Maps.of(
 					Fields.SERVER,BASE_URL,
-					Fields.TOOL_NAME,"echo",
+					Fields.TOOL_NAME,"test:echo",
 					Fields.ARGUMENTS,arguments)).join();
-		
+
 		AMap<AString,AInteger> result=job.awaitResult();
 		assertEquals(arguments,result);
 	}

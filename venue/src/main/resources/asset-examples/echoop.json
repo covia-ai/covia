@@ -6,7 +6,6 @@
 	"operation": {
 		"adapter": "test:echo",
 		"input": {},
-		"output": {},
-		"toolName":"echo"
+		"output": {}
 	}
 }

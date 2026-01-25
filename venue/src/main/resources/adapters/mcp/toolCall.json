@@ -7,9 +7,6 @@
 		"info":{
 		    "featured":true
 		},
-
-		
-		"toolName": "toolCall",
 		"input": {
 			"type": "object",
 			"properties": {

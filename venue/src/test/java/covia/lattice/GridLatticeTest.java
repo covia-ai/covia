@@ -56,7 +56,7 @@ public class GridLatticeTest {
 		assertTrue(zero.containsKey(GridLattice.VENUES), "Zero should contain :venues");
 		assertTrue(zero.containsKey(GridLattice.META), "Zero should contain :meta");
 
-		assertEquals(Maps.empty(), zero.get(GridLattice.VENUES));
+		assertEquals(Index.none(), zero.get(GridLattice.VENUES));
 		assertEquals(Index.none(), zero.get(GridLattice.META));
 	}
 
@@ -177,7 +177,7 @@ public class GridLatticeTest {
 		AMap<Keyword, ACell> merged = lattice.merge(v1, v2);
 
 		@SuppressWarnings("unchecked")
-		AMap<ACell, ACell> venues = (AMap<ACell, ACell>) merged.get(GridLattice.VENUES);
+		Index<AString, ACell> venues = (Index<AString, ACell>) merged.get(GridLattice.VENUES);
 
 		assertEquals(2, venues.count(), "Merged venues should contain both entries");
 	}
@@ -188,27 +188,27 @@ public class GridLatticeTest {
 		String venueDID = "did:web:venue1.example.com";
 
 		AMap<Keyword, ACell> venueState1 = Maps.of(
-			VenueLattice.ASSETS, Maps.of(Strings.create("0xasset1"), Maps.of(Strings.create("name"), Strings.create("Asset1"))),
+			VenueLattice.ASSETS, Maps.of("0xasset1", Maps.of("name", "Asset1")),
 			VenueLattice.JOBS, Maps.empty()
 		);
 		AMap<Keyword, ACell> venueState2 = Maps.of(
-			VenueLattice.ASSETS, Maps.of(Strings.create("0xasset2"), Maps.of(Strings.create("name"), Strings.create("Asset2"))),
+			VenueLattice.ASSETS, Maps.of("0xasset2", Maps.of("name", "Asset2")),
 			VenueLattice.JOBS, Maps.empty()
 		);
 
 		AMap<Keyword, ACell> v1 = Maps.of(
-			GridLattice.VENUES, Maps.of(Strings.create(venueDID), venueState1),
+			GridLattice.VENUES, Index.of(venueDID, venueState1),
 			GridLattice.META, Index.none()
 		);
 		AMap<Keyword, ACell> v2 = Maps.of(
-			GridLattice.VENUES, Maps.of(Strings.create(venueDID), venueState2),
+			GridLattice.VENUES, Index.of(venueDID, venueState2),
 			GridLattice.META, Index.none()
 		);
 
 		AMap<Keyword, ACell> merged = lattice.merge(v1, v2);
 
 		@SuppressWarnings("unchecked")
-		AMap<ACell, ACell> venues = (AMap<ACell, ACell>) merged.get(GridLattice.VENUES);
+		Index<AString, ACell> venues = (Index<AString, ACell>) merged.get(GridLattice.VENUES);
 		@SuppressWarnings("unchecked")
 		AMap<Keyword, ACell> mergedVenue = (AMap<Keyword, ACell>) venues.get(Strings.create(venueDID));
 		@SuppressWarnings("unchecked")
@@ -253,39 +253,39 @@ public class GridLatticeTest {
 	public void testFullGridMerge() {
 		// Create two grid states with different venues and shared meta
 		AMap<Keyword, ACell> venueState1 = Maps.of(
-			VenueLattice.ASSETS, Maps.of(Strings.create("0xasset1"), Maps.of()),
+			VenueLattice.ASSETS, Maps.of("0xasset1", Maps.empty()),
 			VenueLattice.JOBS, Maps.of(
-				Strings.create("job1"), Maps.of(
-					Strings.create("status"), Strings.create("COMPLETE"),
+				"job1", Maps.of(
+					"status", "COMPLETE",
 					VenueLattice.UPDATED, CVMLong.create(1000L)
 				)
 			)
 		);
 
 		AMap<Keyword, ACell> venueState2 = Maps.of(
-			VenueLattice.ASSETS, Maps.of(Strings.create("0xasset2"), Maps.of()),
+			VenueLattice.ASSETS, Maps.of("0xasset2", Maps.empty()),
 			VenueLattice.JOBS, Maps.of(
-				Strings.create("job2"), Maps.of(
-					Strings.create("status"), Strings.create("PENDING"),
+				"job2", Maps.of(
+					"status", "PENDING",
 					VenueLattice.UPDATED, CVMLong.create(2000L)
 				)
 			)
 		);
 
 		AMap<Keyword, ACell> grid1 = Maps.of(
-			GridLattice.VENUES, Maps.of(Strings.create("did:web:venue1.com"), venueState1),
-			GridLattice.META, Index.create(metaHash1, Strings.create("{\"name\":\"Asset Definition 1\"}"))
+			GridLattice.VENUES, Index.of("did:web:venue1.com", venueState1),
+			GridLattice.META, Index.of(metaHash1, "{\"name\":\"Asset Definition 1\"}")
 		);
 
 		AMap<Keyword, ACell> grid2 = Maps.of(
-			GridLattice.VENUES, Maps.of(Strings.create("did:web:venue2.com"), venueState2),
-			GridLattice.META, Index.create(metaHash2, Strings.create("{\"name\":\"Asset Definition 2\"}"))
+			GridLattice.VENUES, Index.of("did:web:venue2.com", venueState2),
+			GridLattice.META, Index.of(metaHash2, "{\"name\":\"Asset Definition 2\"}")
 		);
 
 		AMap<Keyword, ACell> merged = lattice.merge(grid1, grid2);
 
 		@SuppressWarnings("unchecked")
-		AMap<ACell, ACell> venues = (AMap<ACell, ACell>) merged.get(GridLattice.VENUES);
+		Index<AString, ACell> venues = (Index<AString, ACell>) merged.get(GridLattice.VENUES);
 		@SuppressWarnings("unchecked")
 		Index<Hash, AString> meta = (Index<Hash, AString>) merged.get(GridLattice.META);
 
@@ -297,20 +297,20 @@ public class GridLatticeTest {
 
 	private AMap<Keyword, ACell> createTestGridState() {
 		AMap<Keyword, ACell> venueState = Maps.of(
-			VenueLattice.ASSETS, Maps.of(Strings.create("0xtest"), Maps.of()),
+			VenueLattice.ASSETS, Maps.of("0xtest", Maps.empty()),
 			VenueLattice.JOBS, Maps.empty()
 		);
 
 		return Maps.of(
-			GridLattice.VENUES, Maps.of(Strings.create("did:web:test.example.com"), venueState),
-			GridLattice.META, Index.create(testHash1, Strings.create("{\"name\":\"Test\"}"))
+			GridLattice.VENUES, Index.of("did:web:test.example.com", venueState),
+			GridLattice.META, Index.of(testHash1, "{\"name\":\"Test\"}")
 		);
 	}
 
 	private AMap<Keyword, ACell> createGridStateWithMeta(Hash metaHash, String jsonContent) {
 		return Maps.of(
-			GridLattice.VENUES, Maps.empty(),
-			GridLattice.META, Index.create(metaHash, Strings.create(jsonContent))
+			GridLattice.VENUES, Index.none(),
+			GridLattice.META, Index.of(metaHash, jsonContent)
 		);
 	}
 
@@ -321,7 +321,7 @@ public class GridLatticeTest {
 		);
 
 		return Maps.of(
-			GridLattice.VENUES, Maps.of(Strings.create(venueDID), venueState),
+			GridLattice.VENUES, Index.of(venueDID, venueState),
 			GridLattice.META, Index.none()
 		);
 	}

@@ -3,7 +3,6 @@
 	"description": "Execute a transaction against a Convex peer",
 	"operation": {
 		"adapter": "convex:transact",
-		"toolName": "convexTransact",
 		"input": {
 			"type": "object",
 			"properties": {

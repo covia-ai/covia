@@ -208,24 +208,30 @@ public class MCP extends ACoviaAPI {
 	}
 
 
-	private Hash findTool(AString methodAS) {
+	private Hash findTool(AString toolName) {
 		// Iterate through all registered adapters
 		for (String adapterName : engine.getAdapterNames()) {
 			try {
 				var adapter = engine.getAdapter(adapterName);
 				if (adapter == null) continue;
-				
+
 				// Get tools from this specific adapter
 				Index<Hash, AString> adapterTools = adapter.getInstalledAssets();
 				long n=adapterTools.count();
 				for (long i=0; i<n; i++) {
 					Hash h=adapterTools.entryAt(i).getKey();
 					AMap<AString,ACell> meta=engine.getMetaValue(h);
-					if (methodAS.equals(RT.getIn(meta, Fields.OPERATION, Fields.TOOL_NAME))) {
+					// Match against adapter field first, then toolName for backwards compatibility
+					AString opAdapter=RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER);
+					if (toolName.equals(opAdapter)) {
+						return h;
+					}
+					AString opToolName=RT.getIn(meta, Fields.OPERATION, Fields.TOOL_NAME);
+					if (toolName.equals(opToolName)) {
 						return h;
 					}
 				}
-				
+
 			} catch (Exception e) {
 				log.warn("Error processing adapter " + adapterName, e);
 				// ignore this adapter
@@ -337,21 +343,26 @@ public class MCP extends ACoviaAPI {
 	private AMap<AString,ACell> checkTool(AMap<AString, ACell> meta) {
 		AMap<AString,ACell> op=RT.getIn(meta,Fields.OPERATION);
 		if (op==null) return null;
-		AString toolName=RT.ensureString(op.get(Fields.TOOL_NAME));
-		
+
+		// Derive tool name from operation.adapter field (e.g. "convex:query")
+		// Fall back to explicit toolName if adapter not specified
+		AString toolName=RT.ensureString(op.get(Fields.ADAPTER));
+		if (toolName==null) {
+			toolName=RT.ensureString(op.get(Fields.TOOL_NAME));
+		}
 		if (toolName==null) return null;
-		
+
 		AMap<AString,ACell> inputSchema=ensureSchema(RT.getIn(op, Fields.INPUT));
 		AMap<AString,ACell> outputSchema=ensureSchema(RT.getIn(op, Fields.OUTPUT));
-		
+
 		AMap<AString,ACell> result= Maps.of(
 				Fields.NAME,toolName,
 				Fields.TITLE,RT.getIn(meta,Fields.NAME),
 				Fields.DESCRIPTION,RT.getIn(meta,Fields.DESCRIPTION),
 				Fields.INPUT_SCHEMA,inputSchema,
 				Fields.OUTPUT_SCHEMA,outputSchema
-		);		
-		
+		);
+
 		return result;
 	}
 

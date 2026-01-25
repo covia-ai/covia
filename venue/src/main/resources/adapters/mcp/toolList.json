@@ -7,9 +7,6 @@
 		"info":{
 		    "featured":true
 		},
-
-		
-		"toolName": "toolList",
 		"input": {
 			"type": "object",
 			"properties": {
