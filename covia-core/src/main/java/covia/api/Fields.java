@@ -58,6 +58,7 @@ public class Fields {
 	public static final StringShort ERROR = Strings.intern("error");
 	
 	// MCP stuff
+	public static final StringShort ADAPTER = Strings.intern("adapter");
 	public static final StringShort INPUT_SCHEMA = Strings.intern("inputSchema");
 	public static final StringShort TITLE = Strings.intern("title");
 	public static final StringShort MCP = Strings.intern("mcp");

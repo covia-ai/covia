@@ -3,7 +3,6 @@
 	"description": "Submit a Covia grid operation and return the job status",
 	"operation": {
 		"adapter": "grid:invoke",
-		"toolName": "gridInvoke",
 		"input": {
 			"type": "object",
 			"properties": {

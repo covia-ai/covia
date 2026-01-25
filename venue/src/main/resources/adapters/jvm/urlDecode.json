@@ -30,7 +30,6 @@
 					"description": "Length of the decoded result"
 				}
 			}
-		},
-		"toolName":"url-decode"
+		}
 	}
 } 

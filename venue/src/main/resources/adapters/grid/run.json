@@ -3,7 +3,6 @@
 	"description": "Run a Covia grid operation on this venue or an optional remote venue",
 	"operation": {
 		"adapter": "grid:run",
-		"toolName": "gridRun",
 		"input": {
 			"type": "object",
 			"properties": {

@@ -40,7 +40,6 @@
 					"description": "Total length of the concatenated result"
 				}
 			}
-		},
-		"toolName":"string-concat"
+		}
 	}
 } 
