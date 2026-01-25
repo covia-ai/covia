@@ -106,9 +106,23 @@ public class Job {
 		this.data=data;
 		onUpdate(data);
 		if (isFinished()) {
-			if (resultFuture!=null) resultFuture.complete(getOutput());
+			completeResultFuture();
 			onFinish(data);
 		};
+	}
+
+	/**
+	 * Completes the result future based on job status.
+	 * If COMPLETE, completes with output. If FAILED/CANCELLED/REJECTED, completes exceptionally.
+	 */
+	private void completeResultFuture() {
+		if (resultFuture == null) return;
+		if (isComplete()) {
+			resultFuture.complete(getOutput());
+		} else {
+			// Job finished but not complete - it failed, was cancelled, or rejected
+			resultFuture.completeExceptionally(new JobFailedException(this));
+		}
 	}
 	
 	/**
@@ -143,10 +157,10 @@ public class Job {
 	public synchronized void setFuture(CompletableFuture<ACell> future) {
 		if (resultFuture!=null) throw new IllegalStateException("Result future already set");
 		this.resultFuture=future;
-		
+
 		// complete the future if the job is already finished
 		if (isFinished()) {
-			resultFuture.complete(getOutput());
+			completeResultFuture();
 		}
 	}
 
@@ -184,13 +198,17 @@ public class Job {
 	}
 
 	/**
-	 * Cancel this Job, if it is not already complete
+	 * Cancel this Job, if it is not already finished.
+	 * Sets status to CANCELLED and completes the result future exceptionally.
 	 */
 	public synchronized void cancel() {
+		if (isFinished()) return;
 		cancelled=true;
-		if (resultFuture!=null) {
-			resultFuture.completeExceptionally(new CancellationException("Job cancelled: "+getID()));
-		}
+		update(job->{
+			job=job.assoc(Fields.JOB_STATUS_FIELD, Status.CANCELLED);
+			job=job.assoc(Fields.JOB_ERROR_FIELD, Strings.create("Job cancelled: "+getID()));
+			return job;
+		});
 	}
 
 	public synchronized void setStatus(AString newStatus) {
@@ -232,7 +250,7 @@ public class Job {
 		synchronized(this) {
 			if (resultFuture!=null) return resultFuture;
 			resultFuture=new CompletableFuture<ACell>();
-			if (isFinished()) resultFuture.complete(getOutput());
+			if (isFinished()) completeResultFuture();
 			return resultFuture;
 		}
 	}

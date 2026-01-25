@@ -11,9 +11,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Index;
-import convex.core.data.Strings;
 import convex.core.util.JSON;
-import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
@@ -112,7 +110,7 @@ public abstract class AAdapter {
      * Invoke an operation with the given input.
      * Adapters SHOULD launch an asynchronous task to produce the result and update the job status accordingly
      * Adapters MAY update the Job immediately if the Job can be completed in O(1) time
-     * 
+     *
      * @param job the Job prepared to run within the registered venue
      * @param operation The operation ID in the format "adapter:operation"
      * @param meta The metadata for the operation
@@ -124,17 +122,14 @@ public abstract class AAdapter {
 			job.completeWith(result);
 		})
 		.exceptionally(e -> {
-			AString newStatus;
 			if (e instanceof CancellationException) {
-				newStatus=Status.CANCELLED;
+				job.cancel();
 			} else {
-				newStatus=Status.FAILED;
+				// Unwrap CompletionException to get the actual cause message
+				Throwable cause = (e instanceof java.util.concurrent.CompletionException && e.getCause() != null)
+					? e.getCause() : e;
+				job.fail(cause.getMessage());
 			}
-			job.update(jd->{
-				jd = jd.assoc(Fields.JOB_STATUS_FIELD, newStatus);
-				jd = jd.assoc(Fields.JOB_ERROR_FIELD, Strings.create(e.getMessage()));
-				return jd;
-			});
 			return null;
 		});
     }
