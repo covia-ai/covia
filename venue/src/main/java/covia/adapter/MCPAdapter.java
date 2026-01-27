@@ -108,11 +108,11 @@ public class MCPAdapter extends AAdapter {
 						
 						// Make the MCP tool call
 						return callMCPTool(serverUrl, remoteToolName.toString(), toolArguments, accessToken);
-						
+
 					} catch (Exception e) {
 						throw new JobFailedException(e);
 					}
-				});
+				}, VIRTUAL_EXECUTOR);
 				
 			} else if (function.equals("list")) {
 				// List available MCP tools
@@ -130,11 +130,11 @@ public class MCPAdapter extends AAdapter {
 						
 						// List the MCP tools
 						return listMCPTools(serverUrl, accessToken);
-						
+
 					} catch (Exception e) {
 						throw new JobFailedException(e);
 					}
-				});
+				}, VIRTUAL_EXECUTOR);
 			} else {
 				throw new UnsupportedOperationException("Unsupported tools function: "+operation);
 			}

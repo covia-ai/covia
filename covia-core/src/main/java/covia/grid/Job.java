@@ -27,12 +27,12 @@ public class Job {
 	protected boolean cancelled=false;
 	protected CompletableFuture<ACell> resultFuture=null;
 	
-	protected Job(AMap<AString, ACell> status) {
+	public Job(AMap<AString, ACell> status) {
 		this.data=status;
 	}
 
 	public static boolean isFinished(AMap<AString, ACell> jobData) {
-		AString status=RT.ensureString(jobData.get(Fields.JOB_STATUS_FIELD));	
+		AString status=RT.ensureString(jobData.get(Fields.STATUS));	
 		if (status==null) throw new Error("Job status should never be null");
 		if (status.equals(Status.COMPLETE)) return true;
 		if (status.equals(Status.FAILED)) return true;
@@ -80,7 +80,7 @@ public class Job {
 	 * @return true if finished
 	 */
 	public synchronized boolean isComplete() {
-		AString value=RT.ensureString(data.get(Fields.JOB_STATUS_FIELD));	
+		AString value=RT.ensureString(data.get(Fields.STATUS));	
 		return Status.COMPLETE.equals(value);
 	}
 	
@@ -165,7 +165,7 @@ public class Job {
 	}
 
 	public AString getStatus() {
-		return RT.ensureString(RT.get(data, Fields.JOB_STATUS_FIELD));
+		return RT.ensureString(RT.get(data, Fields.STATUS));
 	}
 
 	/**
@@ -193,7 +193,7 @@ public class Job {
 	public String getErrorMessage() {
 		AString status = getStatus();
 		if (status != Status.FAILED && status != Status.REJECTED) return null;
-		ACell errorField = RT.get(data, Fields.JOB_ERROR_FIELD);
+		ACell errorField = RT.get(data, Fields.ERROR);
 		return errorField != null ? errorField.toString() : null;
 	}
 
@@ -205,8 +205,8 @@ public class Job {
 		if (isFinished()) return;
 		cancelled=true;
 		update(job->{
-			job=job.assoc(Fields.JOB_STATUS_FIELD, Status.CANCELLED);
-			job=job.assoc(Fields.JOB_ERROR_FIELD, Strings.create("Job cancelled: "+getID()));
+			job=job.assoc(Fields.STATUS, Status.CANCELLED);
+			job=job.assoc(Fields.ERROR, Strings.create("Job cancelled: "+getID()));
 			return job;
 		});
 	}
@@ -219,7 +219,7 @@ public class Job {
 	public synchronized void completeWith(ACell result) {
 		if (isFinished()) throw new IllegalStateException("Job already finished");
 		AMap<AString, ACell> newData = getData();
-		newData=newData.assoc(Fields.JOB_STATUS_FIELD, Status.COMPLETE);
+		newData=newData.assoc(Fields.STATUS, Status.COMPLETE);
 		newData=newData.assoc(Fields.OUTPUT, result);
 		updateData(newData);
 	}
@@ -233,7 +233,7 @@ public class Job {
 	@SuppressWarnings("unchecked")
 	public <T extends ACell> T  awaitResult() {
 		try {
-			return (T) getFuture().join();
+			return (T) future().join();
 		} catch (CompletionException  e) {
 	        Throwable cause = e.getCause();
 	        if (cause instanceof JobFailedException) {
@@ -245,7 +245,15 @@ public class Job {
 	    }
 	}
 
-	private CompletableFuture<ACell> getFuture() {
+	/**
+	 * Gets the lazy future for the Job result.
+	 * Creates the future on first call. If the Job is already finished,
+	 * the future will be immediately completed (or completed exceptionally).
+	 *
+	 * @return CompletableFuture that completes with the job output on success,
+	 *         or completes exceptionally with JobFailedException on failure
+	 */
+	public CompletableFuture<ACell> future() {
 		if (resultFuture!=null) return resultFuture;
 		synchronized(this) {
 			if (resultFuture!=null) return resultFuture;
@@ -262,8 +270,8 @@ public class Job {
 	public synchronized void fail(String message) {
 		if (isFinished()) return;
 		update(job->{
-			job=job.assoc(Fields.JOB_STATUS_FIELD, Status.FAILED);
-			job=job.assoc(Fields.JOB_ERROR_FIELD, Strings.create(message));
+			job=job.assoc(Fields.STATUS, Status.FAILED);
+			job=job.assoc(Fields.ERROR, Strings.create(message));
 			return job;
 		});
 	}
@@ -285,8 +293,8 @@ public class Job {
 	 */
 	public static Job failure(String message) {
 		return Job.create(Maps.of(
-			Fields.JOB_STATUS_FIELD, Status.FAILED,
-			Fields.JOB_ERROR_FIELD, Strings.create(message)
+			Fields.STATUS, Status.FAILED,
+			Fields.ERROR, Strings.create(message)
 		));
 	}
 	
@@ -297,8 +305,8 @@ public class Job {
 	 */
 	public static Job rejected(String message) {
 		return Job.create(Maps.of(
-			Fields.JOB_STATUS_FIELD, Status.REJECTED,
-			Fields.JOB_ERROR_FIELD, Strings.create(message)
+			Fields.STATUS, Status.REJECTED,
+			Fields.ERROR, Strings.create(message)
 		));
 	}
 	
@@ -308,7 +316,7 @@ public class Job {
 	 * @return Paused Job
 	 */
 	public static Job paused(String message) {
-		AMap<AString, ACell> jobData = Maps.of(Fields.JOB_STATUS_FIELD, Status.PAUSED);
+		AMap<AString, ACell> jobData = Maps.of(Fields.STATUS, Status.PAUSED);
 		if (message != null && !message.isEmpty()) {
 			jobData = jobData.assoc(Fields.MESSAGE, Strings.create(message));
 		}

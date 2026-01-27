@@ -484,31 +484,40 @@ public class Engine {
 		return job;
 	}
 
-	public void updateJobStatus(AString jobID, AMap<AString, ACell> job) {
-		job=job.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
+	public void updateJobStatus(AString jobID, AMap<AString, ACell> newData) {
+		Job job;
 		synchronized (jobs) {
-			AMap<AString, ACell> oldJob = jobs.get(jobID);
-			if (oldJob!=null && Job.isFinished(oldJob)) {
-				// can't update already complete job
-				return;
-			}
-			jobs.put(jobID,job);
+			job = jobs.get(jobID);
 		}
-		log.info("Updated job: "+jobID);
+		if (job == null) return;
+		job.updateData(newData);
 	}
 
 	/**
-	 * Gets a snapshot of the current job status
+	 * Gets a snapshot of the current job status data
 	 * @param jobID
 	 * @return Job status record, or null if not found
 	 */
 	public AMap<AString,ACell> getJobData(AString jobID) {
+		Job job;
+		synchronized (jobs) {
+			job = jobs.get(jobID);
+		}
+		return (job != null) ? job.getData() : null;
+	}
+
+	/**
+	 * Gets the live Job object for the given job ID
+	 * @param jobID Job ID
+	 * @return Job, or null if not found
+	 */
+	public Job getJob(AString jobID) {
 		synchronized (jobs) {
 			return jobs.get(jobID);
 		}
 	}
 
-	private HashMap<AString,AMap<AString,ACell>> jobs= new HashMap<>();
+	private HashMap<AString, Job> jobs = new HashMap<>();
 	
 	/** 
 	 * Record a Job
@@ -520,27 +529,29 @@ public class Engine {
 	private Job submitJob(AString opID, AMap<AString,ACell> meta, ACell input) {
 		long ts=Utils.getCurrentTimestamp();
 		AString jobID = generateJobID(ts);
-		// TODO: check very slim chance of JobID collisions?
-		
+
 		AMap<AString,ACell> status= Maps.of(
 				Fields.ID,jobID,
 				Fields.OP,opID,
 				Fields.STATUS,Status.PENDING,
-				Fields.UPDATED,ts,
-				Fields.CREATED,ts,
+				Fields.UPDATED,CVMLong.create(ts),
+				Fields.CREATED,CVMLong.create(ts),
 				Fields.INPUT,input);
-		
+
 		AString name=RT.ensureString(RT.getIn(meta, Fields.NAME));
 		if (name!=null) {
 			status=status.assoc(Fields.NAME, name);
 		}
-		
-		updateJobStatus(jobID,status);
-		Job job= new Job(status) {
-			@Override public void onUpdate(AMap<AString,ACell> data) {
-				updateJobStatus(getID(),data);
+
+		Job job = new Job(status) {
+			@Override public AMap<AString,ACell> processUpdate(AMap<AString,ACell> newData) {
+				return newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 			}
 		};
+		synchronized (jobs) {
+			jobs.put(jobID, job);
+		}
+		log.info("Submitted job: "+jobID);
 		return job;
 	}
 
@@ -704,17 +715,16 @@ public class Engine {
 	/**
 	 * Cancels a Job if it not already complete
 	 * @param id ID of Job
-	 * @return updates Job status
+	 * @return updated Job status, or null if not found
 	 */
 	public AMap<AString, ACell> cancelJob(AString id) {
-		AMap<AString, ACell> status = getJobData(id);
-		if (status==null) return null;
-		if (Job.isFinished(status)) return status;
-		AMap<AString, ACell> newStatus=status.assoc(Fields.JOB_STATUS_FIELD, Status.CANCELLED);
+		Job job;
 		synchronized (jobs) {
-			jobs.put(id, newStatus);
+			job = jobs.get(id);
 		}
-		return newStatus;
+		if (job == null) return null;
+		job.cancel();
+		return job.getData();
 	}
 
 	public AMap<AString,ACell> getConfig() {

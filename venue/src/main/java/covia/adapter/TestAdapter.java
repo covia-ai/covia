@@ -101,7 +101,7 @@ public class TestAdapter extends AAdapter {
 			}
         	ACell result = engine.invokeOperation(op, opInput).awaitResult();
 			return result;
-    	});
+    	}, VIRTUAL_EXECUTOR);
 
 	}
 

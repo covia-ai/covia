@@ -10,8 +10,6 @@ public class Fields {
 	// Job related
 	public static final StringShort CREATED=Strings.intern("created");
 	public static final StringShort UPDATED = Strings.intern("updated");
-	public static final StringShort JOB_STATUS_FIELD = Strings.intern("status");
-	public static final StringShort JOB_ERROR_FIELD = Strings.intern("error");
 	public static final StringShort INPUT = Strings.intern("input");
 	public static final StringShort OUTPUT = Strings.intern("output");
 	public static final StringShort RESULT = Strings.intern("result");

@@ -30,7 +30,7 @@ public class JobTest {
 	@Test public void testBuild() {
 		AMap<AString,ACell> data = Maps.of(
 			Fields.ID,"123456",
-			Fields.JOB_STATUS_FIELD,Status.PENDING
+			Fields.STATUS,Status.PENDING
 		);
 		Job job=Job.create(data);
 		assertFalse(job.isComplete());
@@ -40,7 +40,7 @@ public class JobTest {
 	@Test public void testComplete() {
 		AMap<AString,ACell> data = Maps.of(
 			Fields.ID,"123456",
-			Fields.JOB_STATUS_FIELD,Status.COMPLETE,
+			Fields.STATUS,Status.COMPLETE,
 			Fields.OUTPUT,1
 		);
 		Job job=Job.create(data);
@@ -51,7 +51,7 @@ public class JobTest {
 	@Test public void testFailed() {
 		AMap<AString,ACell> data = Maps.of(
 			Fields.ID,"123456",
-			Fields.JOB_STATUS_FIELD,Status.FAILED
+			Fields.STATUS,Status.FAILED
 		);
 		Job job=Job.create(data);
 		assertFalse(job.isComplete());
@@ -64,7 +64,7 @@ public class JobTest {
 	@Test public void testAwaitResultOnComplete() throws Exception {
 		AMap<AString,ACell> data = Maps.of(
 			Fields.ID,"123456",
-			Fields.JOB_STATUS_FIELD,Status.PENDING
+			Fields.STATUS,Status.PENDING
 		);
 		Job job = Job.create(data);
 
@@ -87,7 +87,7 @@ public class JobTest {
 	@Test public void testAwaitResultOnFail() throws Exception {
 		AMap<AString,ACell> data = Maps.of(
 			Fields.ID,"123456",
-			Fields.JOB_STATUS_FIELD,Status.PENDING
+			Fields.STATUS,Status.PENDING
 		);
 		Job job = Job.create(data);
 
@@ -109,7 +109,7 @@ public class JobTest {
 	@Test public void testAwaitResultOnAlreadyFailed() {
 		AMap<AString,ACell> data = Maps.of(
 			Fields.ID,"123456",
-			Fields.JOB_STATUS_FIELD,Status.PENDING
+			Fields.STATUS,Status.PENDING
 		);
 		Job job = Job.create(data);
 
@@ -128,7 +128,7 @@ public class JobTest {
 	@Test public void testRaceConditionFutureAfterFail() throws Exception {
 		AMap<AString,ACell> data = Maps.of(
 			Fields.ID,"123456",
-			Fields.JOB_STATUS_FIELD,Status.PENDING
+			Fields.STATUS,Status.PENDING
 		);
 		Job job = Job.create(data);
 
@@ -150,7 +150,7 @@ public class JobTest {
 	@Test public void testAwaitResultOnCancel() {
 		AMap<AString,ACell> data = Maps.of(
 			Fields.ID,"123456",
-			Fields.JOB_STATUS_FIELD,Status.PENDING
+			Fields.STATUS,Status.PENDING
 		);
 		Job job = Job.create(data);
 
@@ -175,14 +175,14 @@ public class JobTest {
 		// Create outer job (simulates grid:run job)
 		AMap<AString,ACell> outerData = Maps.of(
 			Fields.ID,"outer-123",
-			Fields.JOB_STATUS_FIELD,Status.PENDING
+			Fields.STATUS,Status.PENDING
 		);
 		Job outerJob = Job.create(outerData);
 
 		// Create inner job (simulates test:error job)
 		AMap<AString,ACell> innerData = Maps.of(
 			Fields.ID,"inner-456",
-			Fields.JOB_STATUS_FIELD,Status.PENDING
+			Fields.STATUS,Status.PENDING
 		);
 		Job innerJob = Job.create(innerData);
 
@@ -229,7 +229,7 @@ public class JobTest {
 	@Test public void testFutureCreatedAfterFailure() throws Exception {
 		AMap<AString,ACell> data = Maps.of(
 			Fields.ID,"123456",
-			Fields.JOB_STATUS_FIELD,Status.PENDING
+			Fields.STATUS,Status.PENDING
 		);
 		Job job = Job.create(data);
 

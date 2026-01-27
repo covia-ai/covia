@@ -107,7 +107,7 @@ public class LangChainAdapter extends AAdapter {
         			.build();
 	        	
 	        	return processChatRequest(ollamaModel, finalPrompt, systemMessage);
-        	});
+        	}, VIRTUAL_EXECUTOR);
         } else if ("openai".equals(parts[1])) {
         	return CompletableFuture.supplyAsync(()->{
         		// Use OpenAI defaults if not provided
@@ -125,7 +125,7 @@ public class LangChainAdapter extends AAdapter {
         			.build();
 	        	
 	        	return processChatRequest(openaiModel, finalPrompt, systemMessage);
-        	});
+        	}, VIRTUAL_EXECUTOR);
         } else {
     		return CompletableFuture.completedFuture(
     			Status.failure("Unknown method: '"+parts[1]+"'. Supported methods: 'ollama', 'openai'")

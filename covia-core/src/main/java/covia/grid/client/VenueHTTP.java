@@ -36,7 +36,6 @@ import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.grid.impl.BlobContent;
-import covia.exception.JobFailedException;
 
 public class VenueHTTP extends Venue {
 	
@@ -145,11 +144,13 @@ public class VenueHTTP extends Venue {
 	}
 
 	/**
-	 * Invokes an operation on the connected venue, returning a Job
-	 * 
+	 * Invokes an operation on the connected venue, returning a submitted Job.
+	 * The returned future completes when the job is submitted (typically PENDING).
+	 * Callers can use {@code job.future()} or {@code job.awaitResult()} to wait for completion.
+	 *
 	 * @param assetID The AssetID of the operation to invoke
 	 * @param input The input parameters for the operation as an ACell
-	 * @return Future for the finished Job
+	 * @return Future for the submitted Job (likely PENDING)
 	 */
 	@Override
 	public CompletableFuture<Job> invoke(String assetID, ACell input)  {
@@ -179,19 +180,9 @@ public class VenueHTTP extends Venue {
 
 	@Override
 	public CompletableFuture<ACell> awaitJobResult(AString jobId) {
-		return CompletableFuture.supplyAsync(() -> {
-			AMap<AString, ACell> status = getJobData(jobId).join();
-			if (status == null) {
-				throw new IllegalArgumentException("Job not found: " + jobId);
-			}
-			Job job = Job.create(status);
-			try {
-				waitForFinish(job);
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				throw new JobFailedException(e);
-			}
-			return job.awaitResult();
+		return getJob(jobId).thenCompose(job -> {
+			startBackgroundPolling(job);
+			return job.future();
 		});
 	}
 
@@ -210,45 +201,40 @@ public class VenueHTTP extends Venue {
 	 * @throws InterruptedException 
 	 */
 	public Job invokeSync(String opID, ACell input) throws InterruptedException, ExecutionException, TimeoutException {
-		Job job=invoke(opID,input).get(timeout,TimeUnit.MILLISECONDS);
+		Job job=startJob(Strings.create(opID), input);
 		waitForFinish(job);
 		return job;
 	}
-	
+
 	/**
 	 * Invokes an operation, returning a finished Job once complete
 	 * @param opID Operation to invoke as an Asset ID or adapter operation alias
 	 * @param input
 	 * @return Finished Job
-	 * @throws TimeoutException 
-	 * @throws ExecutionException 
-	 * @throws InterruptedException 
+	 * @throws TimeoutException
+	 * @throws ExecutionException
+	 * @throws InterruptedException
 	 */
 	public Job invokeSync(Hash opID, ACell input) throws InterruptedException, ExecutionException, TimeoutException {
-		Job job=invoke(opID.toCVMHexString(),input).get(timeout,TimeUnit.MILLISECONDS);
+		Job job=startJob(opID, input);
 		waitForFinish(job);
 		return job;
 	}
 	
 	/**
-	 * Invokes an operation on the connected venue. Will start polling for status updates.
+	 * Invokes an operation on the connected venue. Submits the job and starts
+	 * background polling on a virtual thread. The returned future completes when
+	 * the job is submitted (typically PENDING). Callers can use {@code job.future()}
+	 * or {@code job.awaitResult()} to wait for completion.
 	 * @param opID The AssetID of the operation to invoke
 	 * @param input The input parameters for the operation as an ACell
-	 * @return Future containing the job status map
+	 * @return Future containing the submitted Job (likely PENDING)
 	 */
 	public CompletableFuture<Job> invoke(AString opID, ACell input)  {
-		CompletableFuture<Job> submit=startJobAsync(opID,input);
-		CompletableFuture<Job> start=submit.thenApply(job->{
-			try {
-				waitForFinish(job);
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				job.cancel();
-			}
+		return startJobAsync(opID, input).thenApply(job -> {
+			startBackgroundPolling(job);
 			return job;
 		});
-		
-		return start;
 	}
 	
 	/**
@@ -309,12 +295,11 @@ public class VenueHTTP extends Venue {
 	 * Invokes a Job and waits for it to finish
 	 * @param opID Identifier of operation
 	 * @param input Input to the operation
-	 * @return Updates Job in finished state (COMPLETE, FAILED or CANCELLED)
+	 * @return Job in finished state (COMPLETE, FAILED or CANCELLED)
 	 * @throws InterruptedException
 	 */
 	public Job invokeAndWait(AString opID, ACell input) throws InterruptedException {
-		CompletableFuture<Job> future = invoke(opID,input);
-		Job job=future.join();
+		Job job=startJobAsync(opID,input).join();
 		waitForFinish(job);
 		return job;
 	}
@@ -370,6 +355,24 @@ public class VenueHTTP extends Venue {
 
 	}
 	
+	/**
+	 * Starts background polling for job completion on a virtual thread.
+	 * When polling detects the job is finished, the Job's lazy future is completed,
+	 * unblocking any callers awaiting {@code job.future()} or {@code job.awaitResult()}.
+	 * @param job Job to poll for
+	 */
+	private void startBackgroundPolling(Job job) {
+		if (job.isFinished()) return;
+		Thread.ofVirtual().start(() -> {
+			try {
+				waitForFinish(job);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				job.cancel();
+			}
+		});
+	}
+
 	/**
 	 * Waits for a remote job to finish, polling
 	 * @param job Any Job, presumably not yet finished

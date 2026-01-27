@@ -222,7 +222,7 @@ public class VenueServerTest {
 		// Step 3: Confirm that the status of the job is PENDING using Covia.getJobStatus
 		AMap<AString, ACell> statusMap = covia.getJobData(jobIdStr).get(5, TimeUnit.SECONDS); 
 		assertNotNull(statusMap, "Job status map should not be null");
-		AString status = RT.ensureString(statusMap.get(Fields.JOB_STATUS_FIELD));
+		AString status = RT.ensureString(statusMap.get(Fields.STATUS));
 		assertEquals("STARTED", status.toString(), "Job status should be STARTED");
 		
 		// Step 4: Cancel the job using the Covia client
@@ -230,7 +230,7 @@ public class VenueServerTest {
 		
 		// Step 5: Confirm that the status is CANCELLED using Covia.getJobStatus
 		assertNotNull(cancelledMap, "Cancelled job status map should not be null");
-		AString cancelledStatus = RT.ensureString(cancelledMap.get(Fields.JOB_STATUS_FIELD));
+		AString cancelledStatus = RT.ensureString(cancelledMap.get(Fields.STATUS));
 		assertEquals("CANCELLED", cancelledStatus.toString(), "Job status should be CANCELLED");
 		
 		// Step 6: Delete the job using the Covia client

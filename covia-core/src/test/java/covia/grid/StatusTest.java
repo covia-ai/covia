@@ -33,7 +33,7 @@ public class StatusTest {
     public void testRejectedIsFinished() {
         // Test that REJECTED is considered a finished status
         AMap<AString, ACell> jobData = Maps.of(
-            Fields.JOB_STATUS_FIELD, Status.REJECTED
+            Fields.STATUS, Status.REJECTED
         );
         
         assertTrue(Job.isFinished(jobData), "REJECTED should be considered finished");
@@ -43,7 +43,7 @@ public class StatusTest {
     public void testInputRequiredIsNotFinished() {
         // Test that INPUT_REQUIRED is NOT considered finished
         AMap<AString, ACell> jobData = Maps.of(
-            Fields.JOB_STATUS_FIELD, Status.INPUT_REQUIRED
+            Fields.STATUS, Status.INPUT_REQUIRED
         );
         
         assertFalse(Job.isFinished(jobData), "INPUT_REQUIRED should NOT be considered finished");
@@ -53,7 +53,7 @@ public class StatusTest {
     public void testAuthRequiredIsNotFinished() {
         // Test that AUTH_REQUIRED is NOT considered finished
         AMap<AString, ACell> jobData = Maps.of(
-            Fields.JOB_STATUS_FIELD, Status.AUTH_REQUIRED
+            Fields.STATUS, Status.AUTH_REQUIRED
         );
         
         assertFalse(Job.isFinished(jobData), "AUTH_REQUIRED should NOT be considered finished");
@@ -63,7 +63,7 @@ public class StatusTest {
     public void testPausedIsNotFinished() {
         // Test that PAUSED is NOT considered finished
         AMap<AString, ACell> jobData = Maps.of(
-            Fields.JOB_STATUS_FIELD, Status.PAUSED
+            Fields.STATUS, Status.PAUSED
         );
         
         assertFalse(Job.isFinished(jobData), "PAUSED should NOT be considered finished");
@@ -75,13 +75,13 @@ public class StatusTest {
         Job pausedJob = Job.paused("Temporarily paused");
         assertTrue(pausedJob.isPaused(), "PAUSED job should be considered paused");
         
-        Job inputRequiredJob = Job.create(Maps.of(Fields.JOB_STATUS_FIELD, Status.INPUT_REQUIRED));
+        Job inputRequiredJob = Job.create(Maps.of(Fields.STATUS, Status.INPUT_REQUIRED));
         assertTrue(inputRequiredJob.isPaused(), "INPUT_REQUIRED job should be considered paused");
         
-        Job authRequiredJob = Job.create(Maps.of(Fields.JOB_STATUS_FIELD, Status.AUTH_REQUIRED));
+        Job authRequiredJob = Job.create(Maps.of(Fields.STATUS, Status.AUTH_REQUIRED));
         assertTrue(authRequiredJob.isPaused(), "AUTH_REQUIRED job should be considered paused");
         
-        Job completeJob = Job.create(Maps.of(Fields.JOB_STATUS_FIELD, Status.COMPLETE));
+        Job completeJob = Job.create(Maps.of(Fields.STATUS, Status.COMPLETE));
         assertFalse(completeJob.isPaused(), "COMPLETE job should NOT be considered paused");
         
         Job failedJob = Job.failure("Test failure");

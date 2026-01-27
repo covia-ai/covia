@@ -62,7 +62,7 @@ class GridAdapterTest {
 
 		assertNotNull(job, "Job should not be null");
 		assertEquals(Status.COMPLETE, job.getStatus());
-		assertEquals(Status.COMPLETE, RT.ensureString(RT.getIn(job.getOutput(), Fields.JOB_STATUS_FIELD)));
+		assertEquals(Status.COMPLETE, RT.ensureString(RT.getIn(job.getOutput(), Fields.STATUS)));
 	}
 
 	@Test
@@ -94,7 +94,7 @@ class GridAdapterTest {
 
 		Job statusJob = covia.invokeSync("grid:jobStatus", Maps.of(Fields.ID, jobId));
 		assertEquals(Status.COMPLETE, statusJob.getStatus());
-		assertEquals(Status.COMPLETE, RT.getIn(statusJob.getOutput(), Fields.JOB_STATUS_FIELD));
+		assertEquals(Status.COMPLETE, RT.getIn(statusJob.getOutput(), Fields.STATUS));
 	}
 
 	@Test

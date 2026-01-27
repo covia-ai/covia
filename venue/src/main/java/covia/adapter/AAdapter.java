@@ -2,12 +2,14 @@ package covia.adapter;
 
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
+import convex.core.util.ThreadUtils;
 import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Index;
@@ -18,10 +20,15 @@ import covia.grid.Status;
 import covia.venue.Engine;
 
 public abstract class AAdapter {
-	
+
 	private static final Logger log=LoggerFactory.getLogger(AAdapter.class);
 
-	
+	/**
+	 * Virtual thread executor for IO-bound blocking operations.
+	 * Adapters should use this instead of the default ForkJoinPool.
+	 */
+	public static final ExecutorService VIRTUAL_EXECUTOR = ThreadUtils.getVirtualExecutor();
+
 	protected Engine engine;
 	
 	/**

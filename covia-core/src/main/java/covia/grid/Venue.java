@@ -38,22 +38,29 @@ public abstract class Venue {
 	public abstract DID getDID();
 
 	/**
-	 * Invokes an operation on the connected venue, returning a Job
-	 * 
+	 * Submits an operation on the connected venue, returning a Job.
+	 * The returned future completes when the job is submitted (typically PENDING),
+	 * not when the job finishes. Use {@code job.future()} or {@code job.awaitResult()}
+	 * to wait for the job to complete.
+	 *
 	 * @param assetID The AssetID of the operation to invoke
 	 * @param input The input parameters for the operation as an ACell
-	 * @return Future for the finished Job
+	 * @return Future for the submitted Job (likely PENDING)
 	 */
 	public abstract CompletableFuture<Job> invoke(Hash assetID, ACell input);
 
 	/**
-	 * Invokes an operation specified by a string alias or asset ID.
+	 * Submits an operation specified by a string alias or asset ID.
+	 * The returned future completes when the job is submitted (typically PENDING),
+	 * not when the job finishes. Use {@code job.future()} or {@code job.awaitResult()}
+	 * to wait for the job to complete.
+	 * <p>
 	 * Default implementation accepts hexadecimal asset IDs.
 	 * Concrete subclasses should override if they support aliases.
 	 *
 	 * @param operation Operation identifier (alias or asset ID)
 	 * @param input Operation input
-	 * @return Future for the started Job
+	 * @return Future for the submitted Job (likely PENDING)
 	 */
 	public CompletableFuture<Job> invoke(String operation, ACell input) {
 		Hash assetID = Hash.parse(operation);

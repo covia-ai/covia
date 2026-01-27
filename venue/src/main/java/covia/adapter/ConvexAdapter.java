@@ -141,7 +141,7 @@ public class ConvexAdapter extends AAdapter {
 				throw new CompletionException(
 						new JobFailedException("Failed to connect to Convex peer: " + e.getMessage()));
 			}
-		}).thenCompose(convex -> {
+		}, VIRTUAL_EXECUTOR).thenCompose(convex -> {
 			CompletableFuture<ACell> resultFuture;
 			try {
 				resultFuture = action.apply(convex);
