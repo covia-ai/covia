@@ -101,6 +101,13 @@ public class Engine {
 	 */
 	protected final HashMap<String, AAdapter> adapters = new HashMap<>();
 
+	/**
+	 * Registry of named operations mapping operation name (e.g. "test:echo") to canonical asset Hash.
+	 * Populated during adapter registration from each adapter's operation names.
+	 */
+	@SuppressWarnings("unchecked")
+	protected Index<AString, Hash> operations = (Index<AString, Hash>) Index.EMPTY;
+
 	public Engine(AMap<AString, ACell> config, AStore store) throws IOException {
 		this.config=(config==null)?Maps.empty():config;
 		this.store=store;
@@ -225,7 +232,15 @@ public class Engine {
 		}
 		adapter.install(this);
 		adapters.put(name, adapter);
-		log.info("Registered adapter: {}", name);
+
+		// Collect operation names from adapter into engine-level registry
+		Index<AString, Hash> adapterOps = adapter.getOperationNames();
+		long n = adapterOps.count();
+		for (long i = 0; i < n; i++) {
+			var entry = adapterOps.entryAt(i);
+			operations = operations.assoc(entry.getKey(), entry.getValue());
+		}
+		log.info("Registered adapter: {} ({} operations)", name, n);
 	}
 	
 	/**
@@ -301,8 +316,21 @@ public class Engine {
 		return RT.ensureMap(this.assets.get());
 	}
 	
-	private AMap<ABlob,AVector<?>> getOperations() {
-		return getAssets();
+	/**
+	 * Get the operation registry mapping operation names to asset Hashes.
+	 * @return Index of operation name → asset Hash
+	 */
+	public Index<AString, Hash> getOperationRegistry() {
+		return operations;
+	}
+
+	/**
+	 * Resolve an operation name to its canonical asset Hash.
+	 * @param name Operation name (e.g. "test:echo")
+	 * @return Asset Hash, or null if not found
+	 */
+	public Hash resolveOperation(String name) {
+		return operations.get(Strings.create(name));
 	}
 
 
@@ -349,17 +377,16 @@ public class Engine {
 	}
 
 	public Job invokeOperation(AString op, ACell input) {
-		if (op==null) throw new IllegalArgumentException("Operation must be a valid Hex asset ID");
-		
+		if (op==null) throw new IllegalArgumentException("Operation must be specified");
+
 		Hash opID=Hash.parse(op);
 		AMap<AString,ACell> meta=null;
 		AString adapterOp=op;
-		
+
 		if (opID!=null) {
 			// It's a potentially valid asset ID, so look up the operation
 			meta=getMetaValue(opID);
 			if (meta==null) {
-				// no metadata, so assume the op is an explicit adapter op
 				return Job.failure("Unable to find asset metadata for "+op);
 			} else {
 				adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
@@ -367,8 +394,22 @@ public class Engine {
 					throw new IllegalArgumentException("Operation metadata must specify an adapter");
 				}
 			}
-		} 
-		
+		} else {
+			// Not a hex hash - try operation name registry (e.g. "test:echo")
+			Hash resolvedHash = operations.get(op);
+			if (resolvedHash != null) {
+				opID = resolvedHash;
+				meta = getMetaValue(opID);
+				if (meta != null) {
+					adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
+					if (adapterOp == null) {
+						throw new IllegalArgumentException("Operation metadata must specify an adapter");
+					}
+				}
+			}
+			// else: fall through to use op directly as adapter:operation string
+		}
+
 		// Get the combined adapter:operation string from metadata
 		String operation = adapterOp.toString();
 		
@@ -650,7 +691,7 @@ public class Engine {
 				 "jobs",getJobs().size(),
 				 "assets",getAssets().size(),
 				 "users",101,
-				 "ops",getOperations().size()
+				 "ops",operations.count()
 				);
 	}
 

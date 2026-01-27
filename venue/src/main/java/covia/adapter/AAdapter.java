@@ -11,6 +11,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Index;
+import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -29,6 +30,13 @@ public abstract class AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	protected Index<Hash, AString> installedAssets = (Index<Hash, AString>) Index.EMPTY;
+
+	/**
+	 * Index of operation names registered by this adapter.
+	 * Maps operation name (e.g. "test:echo") to the canonical asset Hash.
+	 */
+	@SuppressWarnings("unchecked")
+	protected Index<AString, Hash> operationNames = (Index<AString, Hash>) Index.EMPTY;
 
 	public void install(Engine engine) {
 		this.engine=engine;
@@ -69,8 +77,17 @@ public abstract class AAdapter {
     protected Hash installAsset(AString metaString) {
 		Hash assetHash = engine.storeAsset(metaString, null);
 		installedAssets = installedAssets.assoc(assetHash, metaString);
+
+		// Track operation name → asset hash mapping
+		AMap<AString,ACell> meta = RT.ensureMap(JSON.parse(metaString));
+		if (meta != null) {
+			AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
+			if (adapterOp != null) {
+				operationNames = operationNames.assoc(adapterOp, assetHash);
+			}
+		}
 		return assetHash;
-    };
+    }
 
 	    /**
      * Returns the name of this adapter.
@@ -92,6 +109,14 @@ public abstract class AAdapter {
      */
     public Index<Hash, AString> getInstalledAssets() {
         return installedAssets;
+    }
+
+    /**
+     * Returns the index of operation names registered by this adapter.
+     * @return Index mapping operation name (e.g. "test:echo") to canonical asset Hash
+     */
+    public Index<AString, Hash> getOperationNames() {
+        return operationNames;
     }
     
     /**

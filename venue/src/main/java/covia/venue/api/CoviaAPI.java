@@ -16,6 +16,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
+import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.exceptions.ParseException;
@@ -79,6 +80,8 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.get(ROUTE+"assets", this::getAssets);
 		javalin.post(ROUTE+"assets", this::addAsset);
 		javalin.post(ROUTE+"invoke", this::invokeOperation);
+		javalin.get(ROUTE+"operations", this::getOperations);
+		javalin.get(ROUTE+"operations/{name}", this::getOperation);
 		javalin.get(ROUTE+"jobs/<id>", this::getJobStatus);
 		javalin.put(ROUTE+"jobs/<id>/cancel", this::cancelJob);
 		javalin.put(ROUTE+"jobs/<id>/delete", this::deleteJob);
@@ -512,10 +515,83 @@ public class CoviaAPI extends ACoviaAPI {
 		buildResult(ctx,jobs);
 	}
 
-	@OpenApi(path = "/.well-known/did.json", 
-			methods = HttpMethod.GET, 
+	@OpenApi(path = ROUTE + "operations",
+			methods = HttpMethod.GET,
+			tags = { "Covia"},
+			summary = "List all named operations available on this venue.",
+			operationId = "getOperations")
+	protected void getOperations(Context ctx) {
+		Index<AString, Hash> ops = engine.getOperationRegistry();
+		long n = ops.count();
+		ArrayList<Object> result = new ArrayList<>();
+		for (long i = 0; i < n; i++) {
+			var entry = ops.entryAt(i);
+			AString name = entry.getKey();
+			Hash assetHash = entry.getValue();
+			Map<String, Object> opInfo = new HashMap<>();
+			opInfo.put("name", name.toString());
+			opInfo.put("asset", assetHash.toHexString());
+
+			AMap<AString, ACell> meta = engine.getMetaValue(assetHash);
+			if (meta != null) {
+				ACell desc = meta.get(Fields.DESCRIPTION);
+				if (desc != null) opInfo.put("description", desc.toString());
+				ACell opMeta = meta.get(Fields.OPERATION);
+				if (opMeta instanceof AMap<?,?> opMap) {
+					ACell input = ((AMap<AString,ACell>) opMap).get(Fields.INPUT);
+					if (input != null) opInfo.put("input", input);
+					ACell output = ((AMap<AString,ACell>) opMap).get(Fields.OUTPUT);
+					if (output != null) opInfo.put("output", output);
+				}
+			}
+			result.add(opInfo);
+		}
+		buildResult(ctx, 200, result);
+	}
+
+	@OpenApi(path = ROUTE + "operations/{name}",
+			methods = HttpMethod.GET,
+			tags = { "Covia"},
+			summary = "Get details of a named operation.",
+			operationId = "getOperation",
+			pathParams = {
+					@OpenApiParam(
+							name = "name",
+							description = "Operation name (e.g. test:echo).",
+							required = true,
+							type = String.class,
+							example = "test:echo") })
+	protected void getOperation(Context ctx) {
+		String name = ctx.pathParam("name");
+		Hash assetHash = engine.resolveOperation(name);
+		if (assetHash == null) {
+			buildError(ctx, 404, "Operation not found: " + name);
+			return;
+		}
+
+		Map<String, Object> result = new HashMap<>();
+		result.put("name", name);
+		result.put("asset", assetHash.toHexString());
+
+		AMap<AString, ACell> meta = engine.getMetaValue(assetHash);
+		if (meta != null) {
+			ACell desc = meta.get(Fields.DESCRIPTION);
+			if (desc != null) result.put("description", desc.toString());
+			ACell opMeta = meta.get(Fields.OPERATION);
+			if (opMeta instanceof AMap<?,?> opMap) {
+				ACell input = ((AMap<AString,ACell>) opMap).get(Fields.INPUT);
+				if (input != null) result.put("input", input);
+				ACell output = ((AMap<AString,ACell>) opMap).get(Fields.OUTPUT);
+				if (output != null) result.put("output", output);
+			}
+		}
+		buildResult(ctx, 200, result);
+	}
+
+	@OpenApi(path = "/.well-known/did.json",
+			methods = HttpMethod.GET,
 			tags = { "DID"},
-			summary = "Get the DID document for this venue", 
+			summary = "Get the DID document for this venue",
 			operationId = "getDIDDocument",
 			responses = {
 					@OpenApiResponse(
