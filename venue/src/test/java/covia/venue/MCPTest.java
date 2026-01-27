@@ -70,7 +70,7 @@ public class MCPTest {
 	@BeforeAll
 	public void setupServer() throws Exception {
 		venue=TestServer.ENGINE;
-		mcpApi = new MCP(venue, Maps.empty());
+		mcpApi = new MCP(new LocalVenue(venue), Maps.empty());
 		assumeTrue(TEST_MCP);
 
 		try {

@@ -18,7 +18,7 @@ import convex.core.util.JSON;
 import convex.core.util.Utils;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
-import covia.venue.Engine;
+import covia.grid.Venue;
 import covia.venue.server.SseServer;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
@@ -43,16 +43,16 @@ public class A2A extends ACoviaAPI {
 	protected final SseServer sseServer;
 
 	
-	public A2A(Engine venue, AMap<AString, ACell> a2aConfig) {
+	public A2A(Venue venue, AMap<AString, ACell> a2aConfig) {
 		super(venue);
-		this.sseServer=new SseServer(venue);
-		
+		this.sseServer=new SseServer(engine());
+
 		// Get agent info from config or use defaults
 		AMap<AString,ACell> agentInfo = RT.getIn(a2aConfig, "agentInfo");
-		
+
 		if (agentInfo==null) agentInfo=Maps.of(
 			"name", "covia-venue-agent",
-			"title", venue.getName(),
+			"title", engine().getName(),
 			"version", Utils.getVersion(),
 			"description", "Covia Venue Agent - provides computational capabilities through A2A protocol"
 		);
@@ -174,9 +174,9 @@ public class A2A extends ACoviaAPI {
 		AVector<AMap<AString, ACell>> skills = Vectors.empty();
 		
 		// Iterate through all registered adapters to collect skills
-		for (String adapterName : engine.getAdapterNames()) {
+		for (String adapterName : engine().getAdapterNames()) {
 			try {
-				var adapter = engine.getAdapter(adapterName);
+				var adapter = engine().getAdapter(adapterName);
 				if (adapter == null) continue;
 				
 				// Get skills from this specific adapter

@@ -36,6 +36,7 @@ import convex.core.util.Utils;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.venue.Engine;
+import covia.venue.LocalVenue;
 import covia.venue.api.MCP;
 import covia.venue.api.CoviaAPI;
 import io.javalin.Javalin;
@@ -296,7 +297,7 @@ public class CoviaWebApp  {
 		try {
 			// Create MCP instance to access the listTools method
 			AMap<AString, ACell> mcpConfig = RT.ensureMap(engine.getConfig().get(Fields.MCP));
-			MCP mcp = new MCP(engine, mcpConfig);
+			MCP mcp = new MCP(new LocalVenue(engine), mcpConfig);
 
 			AVector<AMap<AString, ACell>> tools = mcp.listTools(adapter);
 			

@@ -1,11 +1,16 @@
 package covia.venue;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.lang.RT;
 import convex.did.DID;
@@ -31,10 +36,8 @@ public class LocalVenue extends Venue {
 	
 	@Override
 	public Asset getAsset(Hash assetID) {
-		AString meta=engine.getMetadata(assetID);
-		
-		Asset asset= Asset.forString(meta);
-		asset.setVenue(this);
+		Asset asset = engine.getAsset(assetID);
+		if (asset!=null) asset.setVenue(this);
 		return asset;
 	}
 	
@@ -57,13 +60,7 @@ public class LocalVenue extends Venue {
 		if (operation == null) {
 			throw new IllegalArgumentException("Operation must not be null");
 		}
-		Hash assetID = Hash.parse(operation);
-		Job job;
-		if (assetID != null) {
-			job = engine.invokeOperation(assetID, input);
-		} else {
-			job = engine.invokeOperation(operation, input);
-		}
+		Job job = engine.invokeOperation(operation, input);
 		return CompletableFuture.completedFuture(job);
 	}
 
@@ -114,8 +111,69 @@ public class LocalVenue extends Venue {
 
 	@Override
 	protected AContent getAssetContent(Hash id) throws IOException {
-
 		return engine.getContent(id);
+	}
+
+	// ------------------------------------------------------------------
+	// Asset resolution and registration
+	// ------------------------------------------------------------------
+
+	@Override
+	public Asset resolveAsset(String ref) {
+		Asset asset = engine.resolveAsset(ref);
+		if (asset != null) asset.setVenue(this);
+		return asset;
+	}
+
+	@Override
+	public Hash registerAsset(AString metadata) {
+		return engine.storeAsset(metadata, null);
+	}
+
+	@Override
+	public long getAssetCount() {
+		return engine.getAssets().count();
+	}
+
+	@Override
+	public List<Hash> listAssetIDs(long offset, long limit) {
+		AMap<ABlob, AVector<?>> allAssets = engine.getAssets();
+		long n = allAssets.count();
+		long start = Math.max(0, offset);
+		long end = Math.min(n, start + limit);
+		ArrayList<Hash> result = new ArrayList<>();
+		for (long i = start; i < end; i++) {
+			result.add(Hash.wrap(allAssets.entryAt(i).getKey().getBytes()));
+		}
+		return result;
+	}
+
+	// ------------------------------------------------------------------
+	// Content operations
+	// ------------------------------------------------------------------
+
+	@Override
+	public Hash putAssetContent(Asset asset, InputStream content) throws IOException {
+		return engine.putContent(asset, content);
+	}
+
+	// ------------------------------------------------------------------
+	// Job management
+	// ------------------------------------------------------------------
+
+	@Override
+	public AMap<AString, ACell> cancelJob(AString jobId) {
+		return engine.cancelJob(jobId);
+	}
+
+	@Override
+	public boolean deleteJob(AString jobId) {
+		return engine.deleteJob(jobId);
+	}
+
+	@Override
+	public List<AString> listJobs() {
+		return engine.getJobs();
 	}
 
 }

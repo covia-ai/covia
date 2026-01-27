@@ -1,6 +1,8 @@
 package covia.grid;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import convex.core.data.ACell;
@@ -84,4 +86,84 @@ public abstract class Venue {
 	}
 
 	protected abstract AContent getAssetContent(Hash id) throws IOException;
+
+	// ------------------------------------------------------------------
+	// Asset resolution and registration
+	// ------------------------------------------------------------------
+
+	/**
+	 * Resolves an asset reference to an Asset. Default implementation handles
+	 * hex hash and DID URL formats. Subclasses may add additional resolution
+	 * (e.g. operation names).
+	 *
+	 * @param ref Asset reference string (hex hash, DID URL, or implementation-specific)
+	 * @return Resolved Asset, or null if not found
+	 */
+	public Asset resolveAsset(String ref) throws IOException {
+		try {
+			Hash h = Assets.parseAssetID(ref);
+			return getAsset(h);
+		} catch (IllegalArgumentException e) {
+			return null;
+		}
+	}
+
+	/**
+	 * Register a new asset at this venue.
+	 * @param metadata JSON metadata string
+	 * @return The asset ID (SHA256 hash of metadata)
+	 */
+	public abstract Hash registerAsset(AString metadata) throws IOException;
+
+	/**
+	 * Get the total number of assets at this venue.
+	 * @return Asset count
+	 */
+	public abstract long getAssetCount();
+
+	/**
+	 * List asset IDs with pagination.
+	 * @param offset Starting offset (0-based)
+	 * @param limit Maximum number of IDs to return
+	 * @return List of asset Hash IDs
+	 */
+	public abstract List<Hash> listAssetIDs(long offset, long limit);
+
+	// ------------------------------------------------------------------
+	// Content operations
+	// ------------------------------------------------------------------
+
+	/**
+	 * Upload content for an asset. The content hash must match the SHA256
+	 * specified in the asset's metadata.
+	 *
+	 * @param asset Asset to upload content for
+	 * @param content Content data as an input stream
+	 * @return Hash of the stored content
+	 */
+	public abstract Hash putAssetContent(Asset asset, InputStream content) throws IOException;
+
+	// ------------------------------------------------------------------
+	// Job management
+	// ------------------------------------------------------------------
+
+	/**
+	 * Cancel a running job.
+	 * @param jobId Job identifier
+	 * @return Updated job status, or null if job not found
+	 */
+	public abstract AMap<AString, ACell> cancelJob(AString jobId);
+
+	/**
+	 * Delete a job record.
+	 * @param jobId Job identifier
+	 * @return true if the job was deleted, false if not found
+	 */
+	public abstract boolean deleteJob(AString jobId);
+
+	/**
+	 * List all job IDs at this venue.
+	 * @return List of job ID strings
+	 */
+	public abstract List<AString> listJobs();
 }

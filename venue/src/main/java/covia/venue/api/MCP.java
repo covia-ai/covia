@@ -26,7 +26,7 @@ import convex.core.util.Utils;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
-import covia.venue.Engine;
+import covia.grid.Venue;
 import covia.venue.server.SseServer;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
@@ -54,15 +54,15 @@ public class MCP extends ACoviaAPI {
 	private boolean LOG_MCP=false;
 
 	
-	public MCP(Engine engine, AMap<AString, ACell> mcpConfig) {
-		super(engine);
-		this.sseServer=new SseServer(engine);
+	public MCP(Venue venue, AMap<AString, ACell> mcpConfig) {
+		super(venue);
+		this.sseServer=new SseServer(engine());
 		// See: https://zazencodes.com/blog/mcp-server-naming-conventions
 		AMap<AString,ACell> serverInfo = RT.getIn(mcpConfig, "serverInfo");
-		
+
 		if (serverInfo==null) serverInfo=Maps.of(
 			"name", "covia-grid-mcp",
-			"title", engine.getName(),
+			"title", engine().getName(),
 			"version", Utils.getVersion()
 		);
 		SERVER_INFO=serverInfo;
@@ -190,7 +190,7 @@ public class MCP extends ACoviaAPI {
 			Hash opID=findTool(toolName);
 			ACell arguments=RT.getIn(params, Fields.ARGUMENTS);
 			if (opID!=null) {
-					Job job=engine.invokeOperation(opID, arguments);
+					Job job=engine().invokeOperation(opID, arguments);
 					ACell result=job.awaitResult();
 					return protocolResult(Maps.of(
 						Fields.CONTENT,Vectors.of(
@@ -210,9 +210,9 @@ public class MCP extends ACoviaAPI {
 
 	private Hash findTool(AString toolName) {
 		// Iterate through all registered adapters
-		for (String adapterName : engine.getAdapterNames()) {
+		for (String adapterName : engine().getAdapterNames()) {
 			try {
-				var adapter = engine.getAdapter(adapterName);
+				var adapter = engine().getAdapter(adapterName);
 				if (adapter == null) continue;
 
 				// Get tools from this specific adapter
@@ -220,7 +220,7 @@ public class MCP extends ACoviaAPI {
 				long n=adapterTools.count();
 				for (long i=0; i<n; i++) {
 					Hash h=adapterTools.entryAt(i).getKey();
-					AMap<AString,ACell> meta=engine.getMetaValue(h);
+					AMap<AString,ACell> meta=engine().getMetaValue(h);
 					// Match against adapter field first, then toolName for backwards compatibility
 					AString opAdapter=RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER);
 					if (toolName.equals(opAdapter)) {
@@ -285,9 +285,9 @@ public class MCP extends ACoviaAPI {
 		AVector<AMap<AString,ACell>> toolsVector=Vectors.empty();
 		
 		// Iterate through all registered adapters
-		for (String adapterName : engine.getAdapterNames()) {
+		for (String adapterName : engine().getAdapterNames()) {
 			try {
-				var adapter = engine.getAdapter(adapterName);
+				var adapter = engine().getAdapter(adapterName);
 				if (adapter == null) continue;
 				
 				// Get tools from this specific adapter

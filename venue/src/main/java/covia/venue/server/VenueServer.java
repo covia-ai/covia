@@ -14,6 +14,7 @@ import convex.core.data.prim.AInteger;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.venue.Engine;
+import covia.venue.LocalVenue;
 import covia.venue.api.A2A;
 import covia.venue.api.CoviaAPI;
 import covia.venue.api.MCP;
@@ -55,17 +56,18 @@ public class VenueServer {
 		this.config=config;
 		this.convex=null; // TODO:
 		engine=Engine.createTemp(config);
+		LocalVenue localVenue=new LocalVenue(engine);
 		webApp=new CoviaWebApp(engine);
-		api=new CoviaAPI(engine);
-		
+		api=new CoviaAPI(localVenue);
+
 		AMap<AString,ACell> mcpConfig=RT.getIn(config, Fields.MCP);
 		if (RT.bool(mcpConfig)) {
-			mcp=new MCP(engine,mcpConfig);
+			mcp=new MCP(localVenue,mcpConfig);
 		}
-		
+
 		AMap<AString,ACell> a2aConfig=RT.getIn(config, Fields.A2A);
 		if (RT.bool(a2aConfig)) {
-			a2a=new A2A(engine,a2aConfig);
+			a2a=new A2A(localVenue,a2aConfig);
 		}
 	}
 

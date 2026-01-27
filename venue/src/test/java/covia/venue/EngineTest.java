@@ -2,6 +2,7 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -284,6 +285,84 @@ public class EngineTest {
 
 		// awaitResult should still throw, not hang
 		assertThrows(JobFailedException.class, () -> job.awaitResult());
+	}
+
+	@Test
+	public void testResolveAssetHashHex() {
+		// Hex hash should resolve directly
+		Hash resolved = venue.resolveAssetHash(echoOpId.toHexString());
+		assertEquals(echoOpId, resolved);
+	}
+
+	@Test
+	public void testResolveAssetHashDIDKeyURL() {
+		// did:key:.../a/<hash> should extract the hash
+		String didUrl = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK/a/" + echoOpId.toHexString();
+		Hash resolved = venue.resolveAssetHash(didUrl);
+		assertEquals(echoOpId, resolved);
+	}
+
+	@Test
+	public void testResolveAssetHashDIDWebURL() {
+		// did:web:.../a/<hash> should also work
+		String didUrl = "did:web:venue.example.com/a/" + echoOpId.toHexString();
+		Hash resolved = venue.resolveAssetHash(didUrl);
+		assertEquals(echoOpId, resolved);
+	}
+
+	@Test
+	public void testResolveAssetHashOperationName() {
+		// Operation names like test:echo should resolve via registry
+		Hash resolved = venue.resolveAssetHash("test:echo");
+		assertNotNull(resolved, "test:echo should resolve to an asset hash");
+		// The resolved hash should have valid metadata
+		assertNotNull(venue.getMetaValue(resolved));
+	}
+
+	@Test
+	public void testResolveAssetHashUnknown() {
+		// Unknown strings should return null
+		assertNull(venue.resolveAssetHash("nonexistent:op"));
+		assertNull(venue.resolveAssetHash("did:key:z6Mk...no-asset-path"));
+		assertNull(venue.resolveAssetHash(null));
+	}
+
+	@Test
+	public void testInvokeViaDIDURL() {
+		// Invoke using a DID URL should work the same as hex hash
+		String didUrl = venue.getDIDString() + "/a/" + echoOpId.toHexString();
+		ACell input = Maps.of("message", Strings.create("Hello via DID"));
+		Job job = venue.invokeOperation(didUrl, input);
+
+		ACell result = job.awaitResult();
+		assertNotNull(result);
+		assertEquals("Hello via DID", RT.getIn(result, "message").toString());
+	}
+
+	@Test
+	public void testInvokeViaOperationName() {
+		// Invoke using operation name should resolve and work
+		ACell input = Maps.of("message", Strings.create("Hello via name"));
+		Job job = venue.invokeOperation("test:echo", input);
+
+		ACell result = job.awaitResult();
+		assertNotNull(result);
+		assertEquals("Hello via name", RT.getIn(result, "message").toString());
+	}
+
+	@Test
+	public void testOperationRegistry() {
+		// The operation registry should contain operations from all adapters
+		var registry = venue.getOperationRegistry();
+		assertTrue(registry.count() > 0, "Operation registry should not be empty");
+
+		// test:echo should be in the registry
+		Hash echoHash = venue.resolveOperation("test:echo");
+		assertNotNull(echoHash, "test:echo should be registered");
+
+		// test:error should be in the registry
+		Hash errorHash = venue.resolveOperation("test:error");
+		assertNotNull(errorHash, "test:error should be registered");
 	}
 
 	@Test

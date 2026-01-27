@@ -1,6 +1,7 @@
 package covia.grid.client;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -595,7 +596,81 @@ public class VenueHTTP extends Venue {
 		return DID.create("web",baseURI.getHost());
 	}
 
+	// ------------------------------------------------------------------
+	// Abstract Venue method implementations
+	// ------------------------------------------------------------------
 
+	@Override
+	public Hash registerAsset(AString metadata) throws IOException {
+		return addAsset(metadata.toString()).join();
+	}
 
+	@Override
+	public long getAssetCount() {
+		return getAssets().join().size();
+	}
+
+	@Override
+	public List<Hash> listAssetIDs(long offset, long limit) {
+		List<Hash> all = getAssets().join();
+		int start = (int) Math.max(0, offset);
+		int end = (int) Math.min(all.size(), start + limit);
+		if (start >= all.size()) return List.of();
+		return all.subList(start, end);
+	}
+
+	@Override
+	public Hash putAssetContent(Asset asset, InputStream content) throws IOException {
+		byte[] data = content.readAllBytes();
+		convex.core.data.Blob blob = convex.core.data.Blob.wrap(data);
+		AContent acontent = BlobContent.of(blob);
+		return addContent(asset.getID().toHexString(), acontent).join();
+	}
+
+	@Override
+	public AMap<AString, ACell> cancelJob(AString jobId) {
+		return cancelJob(jobId.toString()).join();
+	}
+
+	@Override
+	public boolean deleteJob(AString jobId) {
+		try {
+			deleteJob(jobId.toString()).join();
+			return true;
+		} catch (Exception e) {
+			return false;
+		}
+	}
+
+	@Override
+	public List<AString> listJobs() {
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(getBaseURI().resolve("jobs"))
+			.GET()
+			.build();
+
+		try {
+			HttpResponse<String> response = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+			if (response.statusCode() != 200) {
+				throw new RuntimeException("Failed to list jobs: " + response.statusCode());
+			}
+			ACell body = JSON.parseJSON5(response.body());
+			AVector<?> items = null;
+			if (body instanceof AVector<?> v) {
+				items = v;
+			} else if (body instanceof AMap<?,?> m) {
+				items = RT.ensureVector(m.get(Fields.ITEMS));
+			}
+			ArrayList<AString> result = new ArrayList<>();
+			if (items != null) {
+				for (long i = 0; i < items.count(); i++) {
+					result.add(RT.ensureString(items.get(i)));
+				}
+			}
+			return result;
+		} catch (IOException | InterruptedException e) {
+			throw new RuntimeException("Failed to list jobs", e);
+		}
+	}
 
 }

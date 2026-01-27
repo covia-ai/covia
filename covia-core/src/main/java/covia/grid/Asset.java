@@ -45,6 +45,16 @@ public class Asset {
 		this(null,metadata);
 	}
 	
+	/**
+	 * Create an asset with a known ID and metadata string
+	 * @param id The asset ID (SHA256 hash of metadata)
+	 * @param metadata The JSON metadata string
+	 * @return Asset instance with pre-set ID
+	 */
+	public static Asset create(Hash id, AString metadata) {
+		return new Asset(id, metadata);
+	}
+
 	public static Asset fromMeta(AMap<AString,ACell> meta) {
 		Asset result= forString(JSON.printPretty(meta));
 		result.meta=meta;

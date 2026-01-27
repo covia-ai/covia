@@ -2,7 +2,9 @@ package covia.venue.api;
 
 import convex.api.ContentTypes;
 import convex.core.util.JSON;
+import covia.grid.Venue;
 import covia.venue.Engine;
+import covia.venue.LocalVenue;
 import io.javalin.http.Context;
 
 /*
@@ -72,10 +74,18 @@ public abstract class ACoviaAPI  {
 	    return baseUrl.toString();
 	}
 
-	protected Engine engine;
+	protected final Venue venue;
 
-	public ACoviaAPI(Engine venue) {
-		this.engine=venue;
+	public ACoviaAPI(Venue venue) {
+		this.venue=venue;
+	}
+
+	/**
+	 * Gets the Engine for internal/infrastructure queries.
+	 * Only available when the venue is a LocalVenue.
+	 */
+	protected Engine engine() {
+		return ((LocalVenue)venue).getEngine();
 	}
 
 	public void buildRawResult(Context ctx,String jsonContent) {

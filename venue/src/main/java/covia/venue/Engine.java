@@ -53,6 +53,7 @@ import covia.adapter.Orchestrator;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.grid.AContent;
+import covia.grid.Asset;
 import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -343,6 +344,19 @@ public class Engine {
 	}
 
 	/**
+	 * Get an Asset by its Hash ID.
+	 * @param assetID Asset ID
+	 * @return Asset instance, or null if not found
+	 */
+	public Asset getAsset(Hash assetID) {
+		AVector<?> arec=getAssets().get(assetID);
+		if (arec==null) return null;
+		AString metaString = RT.ensureString(arec.get(POS_JSON));
+		if (metaString==null) return null;
+		return Asset.create(assetID, metaString);
+	}
+
+	/**
 	 * Get metadata as a JSON string
 	 * @param assetID
 	 * @return Metadata string for the given Asset ID, or null if not found
@@ -364,10 +378,56 @@ public class Engine {
 		return RT.ensureMap(arec.get(POS_META));
 	}
 
+	/**
+	 * Resolves an asset reference to an Asset. Supports hex hash, DID URL, and operation name.
+	 * @param ref Asset reference string
+	 * @return Resolved Asset, or null if not resolvable to an asset on this venue
+	 */
+	public Asset resolveAsset(String ref) {
+		Hash h = resolveAssetHash(ref);
+		if (h==null) return null;
+		return getAsset(h);
+	}
+
+	/**
+	 * Resolves an asset reference to a Hash. Supports:
+	 * <ul>
+	 *   <li>Hex hash string (64 chars) — direct asset ID on this venue</li>
+	 *   <li>DID URL with asset path — e.g. "did:key:z6Mk.../a/&lt;hash&gt;" or "did:web:venue.example.com/a/&lt;hash&gt;"</li>
+	 *   <li>Operation name — e.g. "test:echo" (looked up in operation registry)</li>
+	 * </ul>
+	 *
+	 * @param ref Asset reference string
+	 * @return Resolved Hash, or null if not resolvable
+	 */
+	public Hash resolveAssetHash(String ref) {
+		if (ref==null) return null;
+
+		// 1. Try direct hex hash (shorthand for asset on this venue)
+		Hash h = Hash.parse(ref);
+		if (h!=null) return h;
+
+		// 2. Try DID URL with /a/<hash> path (any DID method)
+		if (ref.startsWith("did:")) {
+			int idx = ref.lastIndexOf("/a/");
+			if (idx>=0) {
+				String hashPart = ref.substring(idx+3);
+				Hash parsed = Hash.parse(hashPart);
+				if (parsed!=null) return parsed;
+			}
+		}
+
+		// 3. Try operation name registry
+		Hash opHash = operations.get(Strings.create(ref));
+		if (opHash!=null) return opHash;
+
+		return null;
+	}
+
 	public Job invokeOperation(String op, ACell input) {
 		return invokeOperation(Strings.create(op),input);
 	}
-	
+
 	public Job invokeOperation(ACell op, ACell input) {
 		return invokeOperation(Strings.create(op),input);
 	}
@@ -376,57 +436,51 @@ public class Engine {
 		return invokeOperation(op.toCVMHexString(),input);
 	}
 
-	public Job invokeOperation(AString op, ACell input) {
-		if (op==null) throw new IllegalArgumentException("Operation must be specified");
-
-		Hash opID=Hash.parse(op);
-		AMap<AString,ACell> meta=null;
-		AString adapterOp=op;
-
-		if (opID!=null) {
-			// It's a potentially valid asset ID, so look up the operation
-			meta=getMetaValue(opID);
-			if (meta==null) {
-				return Job.failure("Unable to find asset metadata for "+op);
-			} else {
-				adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
-				if (adapterOp == null) {
-					throw new IllegalArgumentException("Operation metadata must specify an adapter");
-				}
-			}
-		} else {
-			// Not a hex hash - try operation name registry (e.g. "test:echo")
-			Hash resolvedHash = operations.get(op);
-			if (resolvedHash != null) {
-				opID = resolvedHash;
-				meta = getMetaValue(opID);
-				if (meta != null) {
-					adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
-					if (adapterOp == null) {
-						throw new IllegalArgumentException("Operation metadata must specify an adapter");
-					}
-				}
-			}
-			// else: fall through to use op directly as adapter:operation string
+	/**
+	 * Invoke an operation given a resolved Asset.
+	 * @param asset The operation asset (must have an adapter specified in metadata)
+	 * @param input Input parameters
+	 * @return Job tracking the execution
+	 */
+	public Job invokeOperation(Asset asset, ACell input) {
+		if (asset==null) throw new IllegalArgumentException("Asset must be specified");
+		AMap<AString,ACell> meta = asset.meta();
+		AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
+		if (adapterOp == null) {
+			throw new IllegalArgumentException("Asset is not an operation (no adapter specified)");
 		}
 
-		// Get the combined adapter:operation string from metadata
 		String operation = adapterOp.toString();
-		
-		// Extract adapter name from the operation string
 		String adapterName = operation.split(":")[0];
-		
-		// Get the adapter
 		AAdapter adapter = getAdapter(adapterName);
 		if (adapter == null) {
 			throw new IllegalStateException("Adapter not available: "+adapterName);
 		}
-		
-		Job job=submitJob(op,meta,input);
-		
-		// Invoke the operation. Adapter is responsible for completing the Job
-		adapter.invoke(job, operation, meta,input);
 
+		Job job=submitJob(asset.getID().toCVMHexString(),meta,input);
+		adapter.invoke(job, operation, meta, input);
+		return job;
+	}
+
+	public Job invokeOperation(AString op, ACell input) {
+		if (op==null) throw new IllegalArgumentException("Operation must be specified");
+
+		// Resolve the operation reference (hex hash, DID URL, or operation name)
+		Asset asset = resolveAsset(op.toString());
+		if (asset!=null) {
+			return invokeOperation(asset, input);
+		}
+
+		// Fall through: use op directly as adapter:operation string
+		String operation = op.toString();
+		String adapterName = operation.split(":")[0];
+		AAdapter adapter = getAdapter(adapterName);
+		if (adapter == null) {
+			throw new IllegalStateException("Adapter not available: "+adapterName);
+		}
+
+		Job job=submitJob(op,null,input);
+		adapter.invoke(job, operation, null, input);
 		return job;
 	}
 
@@ -559,6 +613,34 @@ public class Engine {
 	public AContent getContent(Hash assetID) throws IOException {
 		AMap<AString,ACell> meta=this.getMetaValue(assetID);
 		return getContent(meta);
+	}
+
+	/**
+	 * Gets the content for the given Asset
+	 * @param asset Asset with metadata
+	 * @return Content, or null if not available / does not exist
+	 */
+	public AContent getContent(Asset asset) throws IOException {
+		return getContent(asset.meta());
+	}
+
+	/**
+	 * Gets a content stream for the given Asset
+	 * @param asset Asset with metadata
+	 * @return Content stream, or null if not available / does not exist
+	 */
+	public InputStream getContentStream(Asset asset) throws IOException {
+		return getContentStream(asset.meta());
+	}
+
+	/**
+	 * Puts content for the given Asset
+	 * @param asset Asset with metadata specifying expected content hash
+	 * @param is Input stream of content data
+	 * @return Hash of verified stored content
+	 */
+	public Hash putContent(Asset asset, InputStream is) throws IOException {
+		return putContent(asset.meta(), is);
 	}
 
 	public Hash putContent(Hash assetID, InputStream is) throws IOException {
