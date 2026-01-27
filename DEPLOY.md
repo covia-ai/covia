@@ -30,6 +30,12 @@ sudo systemctl start caddy
 
 Remember to configure the Caddyfile as necessary at `/etc/caddy/CaddyFile`
 
+Can also do:
+
+```bash
+sudo caddy start --config /etc/caddy/Caddyfile
+```
+
 ## Cloud Jar 
 
 To upload the covia.jar to bucket using GCloud CLI:

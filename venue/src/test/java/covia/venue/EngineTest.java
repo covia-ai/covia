@@ -2,6 +2,7 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -27,6 +28,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
 import covia.api.Fields;
+import covia.exception.JobFailedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.impl.BlobContent;
@@ -236,6 +238,52 @@ public class EngineTest {
 		Hash retrievedHash = Hashing.sha256(retrievedBlob.getBytes());
 		assertEquals(contentHash, retrievedHash, "Retrieved content hash should match original hash");
 
+	}
+
+	/**
+	 * Test that awaitResult() returns immediately for a successful echo operation
+	 */
+	@Test
+	public void testAwaitResultSuccess() {
+		ACell input = Maps.of("message", Strings.create("Hello"));
+		Job job = venue.invokeOperation("test:echo", input);
+
+		// awaitResult should complete and return the result
+		ACell result = job.awaitResult();
+		assertNotNull(result);
+		assertEquals("Hello", RT.getIn(result, "message").toString());
+	}
+
+	/**
+	 * Test that awaitResult() throws JobFailedException for a failing operation
+	 * This tests the fix for the race condition where async failures weren't completing the future
+	 */
+	@Test
+	public void testAwaitResultFailure() {
+		ACell input = Maps.of("message", Strings.create("This should fail"));
+		Job job = venue.invokeOperation("test:error", input);
+
+		// awaitResult should throw JobFailedException, not hang
+		assertThrows(JobFailedException.class, () -> job.awaitResult());
+	}
+
+	/**
+	 * Test that awaitResult() works when called after the async task has already completed
+	 * This specifically tests the race condition fix
+	 */
+	@Test
+	public void testAwaitResultAfterCompletion() throws Exception {
+		ACell input = Maps.of("message", Strings.create("Fail fast"));
+		Job job = venue.invokeOperation("test:error", input);
+
+		// Wait a bit to ensure the async task has completed
+		Thread.sleep(100);
+
+		// The job should be finished now
+		assertTrue(job.isFinished(), "Job should be finished");
+
+		// awaitResult should still throw, not hang
+		assertThrows(JobFailedException.class, () -> job.awaitResult());
 	}
 
 	@Test

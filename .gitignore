@@ -6,3 +6,4 @@
 .clj-kondo
 CLAUDE.local.md
 /.claude/
+/venue_err.log

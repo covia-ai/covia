@@ -123,5 +123,21 @@ class GridAdapterTest {
 		assertEquals(Status.FAILED, resultJob.getStatus());
 		assertNotNull(resultJob.getErrorMessage());
 	}
+
+	/**
+	 * Test that grid:run properly propagates failures from the underlying operation
+	 * This tests the fix for the race condition where async failures weren't completing the future
+	 */
+	@Test
+	void runLocalOperationFailure() throws Exception {
+		VenueHTTP covia = TestServer.COVIA;
+
+		Job job = covia.invokeSync("grid:run", Maps.of(
+				Fields.OPERATION, "test:error",
+				Fields.INPUT, Maps.of("message", "Test failure via grid:run")));
+
+		assertNotNull(job, "Job should not be null");
+		assertEquals(Status.FAILED, job.getStatus(), "grid:run should report failure from underlying operation");
+	}
 }
 
