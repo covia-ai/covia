@@ -140,7 +140,7 @@ The grid operates on a **federated trust model**:
 ### Asset (`covia.grid.Asset`)
 An immutable, content-addressed resource with metadata. Assets can be:
 - **Operations:** Executable capabilities with input/output schemas
-- **Data:** Binary content (files, models, datasets)
+- **Artifacts:** Arbitrary content (files, models, datasets)
 - **References:** Pointers to external resources
 
 ### Operation (`covia.grid.Operation`)
