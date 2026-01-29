@@ -14,6 +14,7 @@ import convex.core.data.AString;
 import convex.core.data.Strings;
 import convex.core.json.JWT;
 import convex.core.lang.RT;
+import covia.venue.Auth;
 import covia.venue.auth.JWKSClient;
 import covia.venue.auth.OAuthConfig;
 import io.javalin.Javalin;
@@ -30,8 +31,9 @@ import io.javalin.http.Context;
  * 3. External provider RS256 JWTs: verified against configured OAuth provider
  *    JWKS endpoints. The email or sub claim is extracted as identity.
  *
- * Anonymous requests (no Authorization header) are allowed — the caller DID
- * is simply null.
+ * Anonymous requests (no Authorization header) are allowed when
+ * {@code auth.public.enabled} is true. Otherwise, requests without a valid
+ * token are rejected with 401.
  */
 public class AuthMiddleware {
 
@@ -44,25 +46,19 @@ public class AuthMiddleware {
 
 	private static AccountKey venueKey;
 	private static Map<String, OAuthConfig> externalProviders;
+	private static boolean publicAccessEnabled;
 
 	/**
 	 * Register auth middleware on API paths.
 	 * @param app Javalin application
 	 * @param venueAccountKey The venue's public key for verifying venue-signed JWTs
+	 * @param auth Auth instance for access control configuration
 	 */
-	public static void register(Javalin app, AccountKey venueAccountKey) {
-		register(app, venueAccountKey, null);
-	}
-
-	/**
-	 * Register auth middleware on API paths with external OAuth provider support.
-	 * @param app Javalin application
-	 * @param venueAccountKey The venue's public key for verifying venue-signed JWTs
-	 * @param providers Configured OAuth providers for RS256 token verification, or null
-	 */
-	public static void register(Javalin app, AccountKey venueAccountKey, Map<String, OAuthConfig> providers) {
+	public static void register(Javalin app, AccountKey venueAccountKey, Auth auth) {
 		venueKey = venueAccountKey;
-		externalProviders = providers;
+		publicAccessEnabled = auth.isPublicAccessEnabled();
+		externalProviders = auth.getLoginProviders().hasProviders()
+			? auth.getLoginProviders().getProviders() : null;
 		app.before("/api/*", AuthMiddleware::extractIdentity);
 		app.before("/a2a", AuthMiddleware::extractIdentity);
 		app.before("/mcp", AuthMiddleware::extractIdentity);
@@ -70,10 +66,22 @@ public class AuthMiddleware {
 
 	static void extractIdentity(Context ctx) {
 		String auth = ctx.header("Authorization");
-		if (auth == null || !auth.startsWith("Bearer ")) return;
+		if (auth == null || !auth.startsWith("Bearer ")) {
+			if (!publicAccessEnabled) {
+				ctx.status(401).result("Authentication required");
+				ctx.skipRemainingHandlers();
+			}
+			return;
+		}
 
 		String token = auth.substring(7).trim();
-		if (token.isEmpty()) return;
+		if (token.isEmpty()) {
+			if (!publicAccessEnabled) {
+				ctx.status(401).result("Authentication required");
+				ctx.skipRemainingHandlers();
+			}
+			return;
+		}
 
 		try {
 			AString jwt = Strings.create(token);
@@ -88,9 +96,17 @@ public class AuthMiddleware {
 				ctx.attribute(CALLER_DID_ATTR, callerDID);
 			} else {
 				log.debug("JWT bearer token failed all verification paths");
+				if (!publicAccessEnabled) {
+					ctx.status(401).result("Invalid or expired token");
+					ctx.skipRemainingHandlers();
+				}
 			}
 		} catch (Exception e) {
 			log.debug("Error processing bearer token", e);
+			if (!publicAccessEnabled) {
+				ctx.status(401).result("Authentication required");
+				ctx.skipRemainingHandlers();
+			}
 		}
 	}
 

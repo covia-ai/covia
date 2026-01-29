@@ -23,6 +23,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.json.JWT;
+import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.TestServer;
@@ -41,11 +42,8 @@ public class OAuthTest {
 
 	@Test
 	void testConfigParsingNoOAuth() {
-		// The default test server has no OAuth config, so LoginProviders should be empty
-		AMap<AString, ACell> config = Maps.of(
-			Strings.create("name"), Strings.create("Test")
-		);
-		LoginProviders lp = new LoginProviders(engine, config);
+		// Null auth config means no providers
+		LoginProviders lp = new LoginProviders(engine, null);
 		assertFalse(lp.hasProviders());
 		assertTrue(lp.getProviders().isEmpty());
 	}
@@ -60,10 +58,11 @@ public class OAuthTest {
 			Config.BASE_URL, Strings.create("https://example.com"),
 			Strings.create("google"), googleConfig
 		);
-		AMap<AString, ACell> config = Maps.of(
+		// LoginProviders now takes the auth config directly (oauth is nested inside)
+		AMap<AString, ACell> authConfig = Maps.of(
 			Config.OAUTH, oauthConfig
 		);
-		LoginProviders lp = new LoginProviders(engine, config);
+		LoginProviders lp = new LoginProviders(engine, authConfig);
 		assertTrue(lp.hasProviders());
 		assertEquals(1, lp.getProviders().size());
 		assertNotNull(lp.getProviders().get("google"));
@@ -81,10 +80,10 @@ public class OAuthTest {
 			Strings.create("microsoft"), creds,
 			Strings.create("github"), creds
 		);
-		AMap<AString, ACell> config = Maps.of(
+		AMap<AString, ACell> authConfig = Maps.of(
 			Config.OAUTH, oauthConfig
 		);
-		LoginProviders lp = new LoginProviders(engine, config);
+		LoginProviders lp = new LoginProviders(engine, authConfig);
 		assertEquals(3, lp.getProviders().size());
 	}
 
@@ -165,7 +164,7 @@ public class OAuthTest {
 			"sub", userDID,
 			"iss", engine.getDIDString(),
 			"iat", nowSecs,
-			"exp", nowSecs + 86400
+			"exp", nowSecs + engine.getAuth().getTokenExpiry()
 		);
 		AString jwt = JWT.signPublic(claims, engine.getKeyPair());
 		assertNotNull(jwt);
@@ -178,10 +177,7 @@ public class OAuthTest {
 
 	@Test
 	void testRenderLoginPageEmpty() {
-		AMap<AString, ACell> config = Maps.of(
-			Strings.create("name"), Strings.create("Test")
-		);
-		LoginProviders lp = new LoginProviders(engine, config);
+		LoginProviders lp = new LoginProviders(engine, null);
 		String html = lp.renderLoginPage();
 		assertTrue(html.contains("No OAuth providers configured"));
 	}
@@ -196,12 +192,51 @@ public class OAuthTest {
 			Config.BASE_URL, Strings.create("https://example.com"),
 			Strings.create("google"), creds
 		);
-		AMap<AString, ACell> config = Maps.of(
+		AMap<AString, ACell> authConfig = Maps.of(
 			Config.OAUTH, oauthConfig
 		);
-		LoginProviders lp = new LoginProviders(engine, config);
+		LoginProviders lp = new LoginProviders(engine, authConfig);
 		String html = lp.renderLoginPage();
 		assertTrue(html.contains("Login with Google"));
 		assertTrue(html.contains("/auth/google"));
+	}
+
+	@Test
+	void testDefaultTokenExpiry() {
+		assertEquals(Auth.DEFAULT_TOKEN_EXPIRY, engine.getAuth().getTokenExpiry());
+	}
+
+	@Test
+	void testAuthFromEngineHasLoginProviders() {
+		assertNotNull(engine.getAuth().getLoginProviders());
+	}
+
+	@Test
+	void testPublicAccessEnabled() {
+		// Test server config has auth.public.enabled = true
+		assertTrue(engine.getAuth().isPublicAccessEnabled());
+	}
+
+	@Test
+	void testPublicAccessDefaultDisabled() {
+		// Engine with no auth config should default to public access disabled
+		Engine tempEngine = Engine.createTemp(Maps.of(
+			Strings.create("name"), Strings.create("no-auth-venue")
+		));
+		assertFalse(tempEngine.getAuth().isPublicAccessEnabled());
+	}
+
+	@Test
+	void testAnonymousAccessAllowedWhenPublic() throws Exception {
+		// Test server has public access enabled, so anonymous API calls should work
+		HttpClient client = HttpClient.newBuilder().build();
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI("http://localhost:" + PORT + "/api/v1/status"))
+			.GET()
+			.timeout(Duration.ofSeconds(10))
+			.build();
+
+		HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, resp.statusCode(), "Anonymous access should be allowed when public is enabled");
 	}
 }

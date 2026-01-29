@@ -13,6 +13,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.AInteger;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.LocalVenue;
 import covia.venue.api.A2A;
@@ -63,7 +64,7 @@ public class VenueServer {
 		webApp=new CoviaWebApp(engine);
 		api=new CoviaAPI(localVenue);
 		userApi=new UserAPI(localVenue);
-		loginProviders=new LoginProviders(engine, config);
+		loginProviders=engine.getAuth().getLoginProviders();
 
 		AMap<AString,ACell> mcpConfig=RT.getIn(config, Fields.MCP);
 		if (RT.bool(mcpConfig)) {
@@ -88,7 +89,10 @@ public class VenueServer {
 					Fields.DESCRIPTION,"Unconfigured test venue",
 					Strings.create("port"),null, // This uses default (find a port)
 					Fields.MCP,Maps.of(),
-					Fields.A2A,Maps.of()
+					Fields.A2A,Maps.of(),
+					Config.AUTH,Maps.of(
+						Config.PUBLIC,Maps.of(Config.ENABLED,true)
+					)
 			);
 		}
 		
@@ -115,8 +119,7 @@ public class VenueServer {
 	private synchronized void start(Integer port) {
 		close();
 		javalin=buildApp();
-		AuthMiddleware.register(javalin, engine.getAccountKey(),
-				loginProviders.hasProviders() ? loginProviders.getProviders() : null);
+		AuthMiddleware.register(javalin, engine.getAccountKey(), engine.getAuth());
 		addLoginRoutes(javalin);
 		addAPIRoutes(javalin);
 		start(javalin,port);

@@ -212,7 +212,7 @@ public class Engine {
 		this.lattice = Cursors.of(initialState);
 		this.assets = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.ASSETS);
 		ACursor<AMap<AString, AMap<AString, ACell>>> usersCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.USERS);
-		this.auth = new Auth(usersCursor);
+		this.auth = new Auth(this, usersCursor, config);
 	}
 
 	private AHashMap<Keyword, ACell> emptyLattice() {

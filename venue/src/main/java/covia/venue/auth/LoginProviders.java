@@ -31,21 +31,13 @@ import io.javalin.http.Context;
  * OAuth-based login for Covia venues.
  *
  * <p>Supports Google, Microsoft, and GitHub OAuth providers.
- * Configuration is read from the venue config under the "oauth" key.
- * After successful OAuth, creates/updates the user in the lattice-backed
- * user database and issues a venue-signed EdDSA JWT.
+ * Configuration is read from the "oauth" section within the venue's
+ * "auth" config. After successful OAuth, creates/updates the user in the
+ * lattice-backed user database and issues a venue-signed EdDSA JWT.
  *
- * <h2>Config format</h2>
- * <pre>
- * {
- *   "oauth": {
- *     "baseUrl": "https://venue.example.com",
- *     "google": { "clientId": "...", "clientSecret": "..." },
- *     "microsoft": { "clientId": "...", "clientSecret": "..." },
- *     "github": { "clientId": "...", "clientSecret": "..." }
- *   }
- * }
- * </pre>
+ * <p>Created and owned by {@link covia.venue.Auth}.
+ *
+ * @see covia.venue.Auth
  */
 public class LoginProviders {
 
@@ -59,18 +51,24 @@ public class LoginProviders {
 		.build();
 
 	/**
-	 * Create LoginProviders from venue config.
-	 * Reads oauth section and registers configured providers.
+	 * Create LoginProviders from auth config.
+	 * Reads the "oauth" sub-section and registers configured providers.
+	 * The base URL for redirect URIs is derived from the venue config
+	 * via {@link Config#getBaseUrl(AMap)}.
+	 *
+	 * @param engine The venue engine
+	 * @param authConfig The "auth" config section, or null if not configured
 	 */
-	public LoginProviders(Engine engine, AMap<AString, ACell> config) {
+	public LoginProviders(Engine engine, AMap<AString, ACell> authConfig) {
 		this.engine = engine;
 		this.providers = new HashMap<>();
 
-		AMap<AString, ACell> oauthConfig = RT.ensureMap(config.get(Config.OAUTH));
+		if (authConfig == null) return;
+
+		AMap<AString, ACell> oauthConfig = RT.ensureMap(authConfig.get(Config.OAUTH));
 		if (oauthConfig == null) return;
 
-		AString baseUrl = RT.ensureString(oauthConfig.get(Config.BASE_URL));
-		String base = baseUrl != null ? baseUrl.toString() : "http://localhost:8080";
+		String base = Config.getBaseUrl(engine.getConfig());
 
 		registerProvider("google", oauthConfig, base, OAuthConfig::google);
 		registerProvider("microsoft", oauthConfig, base, OAuthConfig::microsoft);
@@ -189,7 +187,7 @@ public class LoginProviders {
 				"sub", userDID,
 				"iss", engine.getDIDString(),
 				"iat", nowSecs,
-				"exp", nowSecs + 86400 // 24 hour expiry
+				"exp", nowSecs + engine.getAuth().getTokenExpiry()
 			);
 			if (identity.email != null) {
 				claims = claims.assoc(Strings.create("email"), Strings.create(identity.email));

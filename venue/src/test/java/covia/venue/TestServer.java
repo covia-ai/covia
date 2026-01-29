@@ -21,7 +21,10 @@ public class TestServer {
 		SERVER=VenueServer.launch(Maps.of(
 				Strings.create("port"),PORT,
 				Fields.MCP,Maps.of(),
-				Fields.A2A,Maps.of()));
+				Fields.A2A,Maps.of(),
+				Config.AUTH,Maps.of(
+					Config.PUBLIC,Maps.of(Config.ENABLED,true)
+				)));
 		ENGINE=SERVER.getEngine();
 
 

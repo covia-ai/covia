@@ -16,15 +16,31 @@
 			"did":"did:covia:local",
 			"hostname":"localhost",
 			"port":8080,
-			
+			// "baseUrl": "https://venue.example.com",  // Override base URL (default: derived from hostname + port)
+
 			// Configure MCP server capabilities
 			"mcp":{
 				"enabled":true
 			},
-			
+
 			// Configure adapters
 			"adapters":{
 
+			},
+
+			// Configure authentication and access control
+			"auth":{
+				// Allow unauthenticated access to API endpoints (default: false)
+				"public":{ "enabled": true },
+
+				// "tokenExpiry": 86400,  // JWT expiry in seconds (default 24 hours)
+
+				// Configure OAuth login providers
+				// "oauth":{
+				// 	"google":{ "clientId": "YOUR_GOOGLE_CLIENT_ID", "clientSecret": "YOUR_GOOGLE_CLIENT_SECRET" },
+				// 	"microsoft":{ "clientId": "YOUR_MS_CLIENT_ID", "clientSecret": "YOUR_MS_CLIENT_SECRET" },
+				// 	"github":{ "clientId": "YOUR_GITHUB_CLIENT_ID", "clientSecret": "YOUR_GITHUB_CLIENT_SECRET" }
+				// }
 			},
 
 			// Configure content storage

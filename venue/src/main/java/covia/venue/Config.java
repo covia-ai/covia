@@ -1,7 +1,11 @@
 package covia.venue;
 
+import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
 
 /**
  * Static configuration utilities and constants for Covia venue configuration.
@@ -69,7 +73,18 @@ public class Config {
 	/** Storage type: dlfs (DLFS lattice-backed filesystem) */
 	public static final AString STORAGE_TYPE_DLFS = Strings.intern("dlfs");
 
-	// ========== OAuth config keys ==========
+	// ========== Auth config keys ==========
+
+	/** Key for auth configuration section */
+	public static final AString AUTH = Strings.intern("auth");
+
+	/** Key for JWT token expiry in seconds (default 86400 = 24 hours) */
+	public static final AString TOKEN_EXPIRY = Strings.intern("tokenExpiry");
+
+	/** Key for public (anonymous) access configuration */
+	public static final AString PUBLIC = Strings.intern("public");
+
+	// ========== OAuth config keys (nested under auth) ==========
 
 	/** Key for OAuth providers configuration section */
 	public static final AString OAUTH = Strings.intern("oauth");
@@ -80,13 +95,46 @@ public class Config {
 	/** Key for provider client secret */
 	public static final AString CLIENT_SECRET = Strings.intern("clientSecret");
 
-	/** Key for base URL (used for constructing OAuth redirect URIs) */
+	/** Key for base URL override (if not set, derived from hostname + port) */
 	public static final AString BASE_URL = Strings.intern("baseUrl");
 
 	// ========== MCP config keys ==========
 
 	/** Key for MCP enabled flag */
 	public static final AString ENABLED = Strings.intern("enabled");
+
+	// ========== Utility methods ==========
+
+	/**
+	 * Get the base URL for this venue from config.
+	 *
+	 * <p>Checks for an explicit "baseUrl" first, then derives from "hostname"
+	 * and "port". Port 443 implies https; standard ports (80/443) are omitted
+	 * from the URL. Falls back to {@code http://localhost:8080} if unconfigured.
+	 *
+	 * @param config Venue config map
+	 * @return Base URL string (no trailing slash)
+	 */
+	public static String getBaseUrl(AMap<AString, ACell> config) {
+		if (config == null) return "http://localhost:8080";
+
+		// Explicit baseUrl takes priority
+		AString explicit = RT.ensureString(config.get(BASE_URL));
+		if (explicit != null) return explicit.toString();
+
+		// Derive from hostname + port
+		AString hostname = RT.ensureString(config.get(HOSTNAME));
+		String host = (hostname != null) ? hostname.toString() : "localhost";
+
+		CVMLong portVal = RT.ensureLong(config.get(PORT));
+		int port = (portVal != null) ? (int) portVal.longValue() : 8080;
+
+		String scheme = (port == 443) ? "https" : "http";
+		if ((scheme.equals("http") && port == 80) || (scheme.equals("https") && port == 443)) {
+			return scheme + "://" + host;
+		}
+		return scheme + "://" + host + ":" + port;
+	}
 
 	private Config() {
 		// Prevent instantiation
