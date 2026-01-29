@@ -36,10 +36,11 @@ import covia.grid.Asset;
 import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Venue;
+import covia.grid.auth.VenueAuth;
 import covia.grid.impl.BlobContent;
 
 public class VenueHTTP extends Venue {
-	
+
 	public static Logger log=LoggerFactory.getLogger(VenueHTTP.class);
 
 	private static final double BACKOFF_FACTOR = 1.5;
@@ -48,12 +49,24 @@ public class VenueHTTP extends Venue {
 	private long timeout=5000;
 	private final HttpClient httpClient;
 	private final URI baseURI;
+	private final VenueAuth auth;
 
 	public VenueHTTP(URI host) {
+		this(host, VenueAuth.none());
+	}
+
+	public VenueHTTP(URI host, VenueAuth auth) {
 		this.baseURI = host.resolve("/api/v1/");
 		this.httpClient = HttpClient.newBuilder()
 			.connectTimeout(Duration.ofSeconds(10))
 			.build();
+		this.auth = auth;
+
+		// Auto-set user identity from auth if available
+		String did = auth.getDID();
+		if (did != null) {
+			setUser(did);
+		}
 	}
 	
 	/**
@@ -62,6 +75,26 @@ public class VenueHTTP extends Venue {
 	 */
 	protected URI getBaseURI() {
 		return baseURI;
+	}
+
+	/**
+	 * Create a new HTTP request builder with auth headers applied.
+	 * @param uri The request URI
+	 * @return Pre-authenticated request builder
+	 */
+	private HttpRequest.Builder requestBuilder(URI uri) {
+		HttpRequest.Builder builder = HttpRequest.newBuilder().uri(uri);
+		auth.apply(builder);
+		return builder;
+	}
+
+	/**
+	 * Create a new HTTP request builder for an API path with auth headers applied.
+	 * @param path The API path relative to the base URI
+	 * @return Pre-authenticated request builder
+	 */
+	private HttpRequest.Builder requestBuilder(String path) {
+		return requestBuilder(getBaseURI().resolve(path));
 	}
 
 	/**
@@ -78,8 +111,7 @@ public class VenueHTTP extends Venue {
 	 * Adds an asset to the connected venue
 	 */
 	public CompletableFuture<Hash> addAsset(ACell meta) {
-		HttpRequest req = HttpRequest.newBuilder()
-			.uri(getBaseURI().resolve("assets"))
+		HttpRequest req = requestBuilder("assets")
 			.header("Content-Type", "application/json")
 			.POST(HttpRequest.BodyPublishers.ofString(JSON.printPretty(meta).toString()))
 			.build();
@@ -105,6 +137,16 @@ public class VenueHTTP extends Venue {
 	}
 
 	/**
+	 * Create a Covia grid client with authentication
+	 * @param host Host Venue
+	 * @param auth Authentication provider
+	 * @return Covia client instance
+	 */
+	public static VenueHTTP create(URI host, VenueAuth auth) {
+		return new VenueHTTP(host, auth);
+	}
+
+	/**
 	 * Gets metadata for a given asset on the connected venue
 	 * @param asset ID for asset. Can be a full asset DID
 	 * @return Asset metadata as a String, or null if asset is not found
@@ -113,8 +155,7 @@ public class VenueHTTP extends Venue {
 		Hash h=Assets.parseAssetID(asset);
 		if (h==null) throw new IllegalArgumentException("Bad asset ID format");
 		
-		HttpRequest request=HttpRequest.newBuilder()
-			.uri(getBaseURI().resolve("assets/"+h.toHexString()))
+		HttpRequest request=requestBuilder("assets/"+h.toHexString())
 			.GET()
 			.build();
 		
@@ -130,8 +171,7 @@ public class VenueHTTP extends Venue {
 	 */
 	public CompletableFuture<AMap<AString,ACell>> getStatus() {
 		
-		HttpRequest request=HttpRequest.newBuilder()
-			.uri(getBaseURI().resolve("status"))
+		HttpRequest request=requestBuilder("status")
 			.GET()
 			.build();
 		
@@ -271,8 +311,7 @@ public class VenueHTTP extends Venue {
 	 * @return Future containing the job status, likely to be PENDING
 	 */
 	public CompletableFuture<Job> startJobAsync(AString opID, ACell input) {
-		HttpRequest req = HttpRequest.newBuilder()
-			.uri(getBaseURI().resolve("invoke"))
+		HttpRequest req = requestBuilder("invoke")
 			.header("Content-Type", "application/json")
 			.POST(HttpRequest.BodyPublishers.ofString(JSON.toString(Maps.of(
 				"operation", opID,
@@ -321,8 +360,7 @@ public class VenueHTTP extends Venue {
 	 * @return Future containing the operation execution result
 	 */
 	public CompletableFuture<List<Hash>> getAssets() {
-		HttpRequest req = HttpRequest.newBuilder()
-			.uri(getBaseURI().resolve("assets"))
+		HttpRequest req = requestBuilder("assets")
 			.GET()
 			.build();
 		
@@ -409,8 +447,7 @@ public class VenueHTTP extends Venue {
 		Hash h = Assets.parseAssetID(assetID);
 		if (h == null) throw new IllegalArgumentException("Bad asset ID format");
 		
-		HttpRequest req = HttpRequest.newBuilder()
-			.uri(getBaseURI().resolve("assets/" + h.toHexString() + "/content"))
+		HttpRequest req = requestBuilder("assets/" + h.toHexString() + "/content")
 			.header("Content-Type", "application/octet-stream")
 			.PUT(HttpRequest.BodyPublishers.ofByteArray(content.getBlob().getBytes()))
 			.build();
@@ -451,8 +488,7 @@ public class VenueHTTP extends Venue {
 	 */
 	public CompletableFuture<AContent> getContent(Hash assetID) {
 		
-		HttpRequest req = HttpRequest.newBuilder()
-			.uri(getBaseURI().resolve("assets/" + assetID.toHexString() + "/content"))
+		HttpRequest req = requestBuilder("assets/" + assetID.toHexString() + "/content")
 			.GET()
 			.build();
 		
@@ -484,8 +520,7 @@ public class VenueHTTP extends Venue {
 	 * @return Future that completes when the job is successfully cancelled, or completes exceptionally if the job doesn't exist
 	 */
 	public CompletableFuture<AMap<AString,ACell>> cancelJob(String jobId) {
-		HttpRequest req = HttpRequest.newBuilder()
-			.uri(getBaseURI().resolve("jobs/" + jobId + "/cancel"))
+		HttpRequest req = requestBuilder("jobs/" + jobId + "/cancel")
 			.PUT(HttpRequest.BodyPublishers.ofString(""))
 			.build();
 		
@@ -507,8 +542,7 @@ public class VenueHTTP extends Venue {
 	 * @return Future that completes when the job is successfully deleted, or completes exceptionally if the job doesn't exist
 	 */
 	public CompletableFuture<Void> deleteJob(String jobId) {
-		HttpRequest req = HttpRequest.newBuilder()
-			.uri(getBaseURI().resolve("jobs/" + jobId + "/delete"))
+		HttpRequest req = requestBuilder("jobs/" + jobId + "/delete")
 			.PUT(HttpRequest.BodyPublishers.ofString(""))
 			.build();
 		
@@ -530,8 +564,7 @@ public class VenueHTTP extends Venue {
 	 * @return Future containing the job status as an AMap, or null if not found
 	 */
 	public CompletableFuture<AMap<AString, ACell>> getJobData(AString jobID) {
-		HttpRequest req = HttpRequest.newBuilder()
-			.uri(getBaseURI().resolve("jobs/" + jobID))
+		HttpRequest req = requestBuilder("jobs/" + jobID)
 			.GET()
 			.build();
 		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
@@ -574,8 +607,7 @@ public class VenueHTTP extends Venue {
 
 	@Override
 	public Asset getAsset(Hash id) throws IOException {
-		HttpRequest request=HttpRequest.newBuilder()
-				.uri(getBaseURI().resolve("assets/"+id.toHexString()))
+		HttpRequest request=requestBuilder("assets/"+id.toHexString())
 				.GET()
 				.build();
 			
@@ -648,8 +680,7 @@ public class VenueHTTP extends Venue {
 
 	@Override
 	public List<AString> listJobs() {
-		HttpRequest req = HttpRequest.newBuilder()
-			.uri(getBaseURI().resolve("jobs"))
+		HttpRequest req = requestBuilder("jobs")
 			.GET()
 			.build();
 
@@ -679,8 +710,7 @@ public class VenueHTTP extends Venue {
 
 	@Override
 	public int sendMessage(String jobId, AMap<AString, ACell> message) {
-		HttpRequest req = HttpRequest.newBuilder()
-			.uri(getBaseURI().resolve("jobs/" + jobId))
+		HttpRequest req = requestBuilder("jobs/" + jobId)
 			.header("Content-Type", "application/json")
 			.POST(HttpRequest.BodyPublishers.ofString(JSON.toString(message)))
 			.build();

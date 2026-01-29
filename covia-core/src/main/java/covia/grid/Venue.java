@@ -9,9 +9,37 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Hash;
+import convex.core.data.Strings;
 import convex.did.DID;
 
 public abstract class Venue {
+
+	private AString user;
+
+	/**
+	 * Set the user identity (DID) for this venue client.
+	 * All operations will be associated with this identity.
+	 * @param did User DID, or null for anonymous
+	 */
+	public void setUser(AString did) {
+		this.user = did;
+	}
+
+	/**
+	 * Set the user identity (DID) for this venue client.
+	 * @param did User DID string, or null for anonymous
+	 */
+	public void setUser(String did) {
+		this.user = (did != null) ? Strings.create(did) : null;
+	}
+
+	/**
+	 * Get the current user identity (DID) for this venue client.
+	 * @return User DID, or null if anonymous
+	 */
+	public AString getUser() {
+		return user;
+	}
 
 	/**
 	 * Gets the asset from the connected Venue

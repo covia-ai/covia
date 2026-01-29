@@ -48,7 +48,7 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public CompletableFuture<Job> invoke(Hash assetID, ACell input) {
-		return CompletableFuture.completedFuture(engine.invokeOperation(assetID.toHexString(), input));
+		return CompletableFuture.completedFuture(engine.invokeOperation(assetID.toHexString(), input, getUser()));
 	}
 
 	@Override
@@ -56,7 +56,7 @@ public class LocalVenue extends Venue {
 		if (operation == null) {
 			throw new IllegalArgumentException("Operation must not be null");
 		}
-		Job job = engine.invokeOperation(operation, input);
+		Job job = engine.invokeOperation(operation, input, getUser());
 		return CompletableFuture.completedFuture(job);
 	}
 
@@ -156,6 +156,7 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public int sendMessage(String jobId, AMap<AString, ACell> message) {
-		return engine.deliverMessage(jobId, message, null);
+		AString user = getUser();
+		return engine.deliverMessage(jobId, message, (user != null) ? user.toString() : null);
 	}
 }
