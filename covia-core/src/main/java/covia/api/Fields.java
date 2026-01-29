@@ -90,7 +90,10 @@ public class Fields {
 	public static final StringShort CATEGORY = Strings.intern("category");
 	public static final StringShort OUTPUT_SCHEMA = Strings.intern("outputSchema");
 
-	// Convex relater
+	// Identity
+	public static final StringShort CALLER = Strings.intern("caller");
+
+	// Convex related
 	public static final StringShort PEER = Strings.intern("peer");
 	public static final StringShort ADDRESS = Strings.intern("address");
 	public static final StringShort SOURCE = Strings.intern("source");

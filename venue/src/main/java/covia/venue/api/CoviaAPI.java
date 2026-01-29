@@ -28,6 +28,7 @@ import covia.grid.Venue;
 import covia.venue.api.model.ErrorResponse;
 import covia.venue.api.model.InvokeRequest;
 import covia.venue.api.model.InvokeResult;
+import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
 import io.javalin.Javalin;
 import io.javalin.http.BadRequestResponse;
@@ -413,9 +414,10 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 		ACell input=RT.getIn(req, "input");
+		AString callerDID = AuthMiddleware.getCallerDID(ctx);
 
 		try {
-			Job job=venue.invoke(op.toString(),input).join();
+			Job job=engine().invokeOperation(op.toString(),input,callerDID);
 			if (job==null) {
 				buildError(ctx,404,"Operation does not exist");
 				return;

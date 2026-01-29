@@ -277,6 +277,14 @@ public class Job {
 		return operation;
 	}
 
+	/**
+	 * Gets the caller DID associated with this job, if identified.
+	 * @return Caller DID string, or null if anonymous
+	 */
+	public AString getCaller() {
+		return RT.ensureString(getData().get(Fields.CALLER));
+	}
+
 	// ===== State History =====
 
 	/**

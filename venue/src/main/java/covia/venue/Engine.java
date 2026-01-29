@@ -18,6 +18,7 @@ import convex.core.crypto.AKeyPair;
 import convex.core.crypto.Hashing;
 import convex.core.crypto.util.Multikey;
 import convex.core.data.ABlob;
+import convex.core.data.AccountKey;
 import convex.core.data.ACell;
 import convex.core.data.AHashMap;
 import convex.core.data.AMap;
@@ -99,6 +100,9 @@ public class Engine {
 
 	/** Lattice cursor for assets data */
 	protected ACursor<Index<AString,AVector<ACell>>> assets;
+
+	/** Lattice cursor for users data */
+	protected ACursor<AMap<AString, AMap<AString, ACell>>> users;
 	
 	/**
 	 * Map of named adapters that can handle different types of operations or resources
@@ -207,6 +211,7 @@ public class Engine {
 		AMap<Keyword,ACell> initialState = emptyLattice();
 		this.lattice = Cursors.of(initialState);
 		this.assets = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.ASSETS);
+		this.users = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.USERS);
 	}
 
 	private AHashMap<Keyword, ACell> emptyLattice() {
@@ -324,6 +329,43 @@ public class Engine {
 	public AMap<ABlob, AVector<?>> getAssets() {
 		// Get assets from lattice cursor
 		return RT.ensureMap(this.assets.get());
+	}
+
+	/**
+	 * Get a user record by ID
+	 * @param id User identifier (e.g. "alice")
+	 * @return User record map, or null if not found
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> getUser(String id) {
+		AMap<AString, AMap<AString, ACell>> usersMap = getUsers();
+		if (usersMap == null) return null;
+		return (AMap<AString, ACell>) usersMap.get(Strings.create(id));
+	}
+
+	/**
+	 * Store or update a user record. Adds an :updated timestamp automatically.
+	 * @param id User identifier (e.g. "alice")
+	 * @param record User record map (should contain "did" and any other fields)
+	 */
+	public synchronized void putUser(String id, AMap<AString, ACell> record) {
+		record = record.assoc(Strings.create("updated"), CVMLong.create(Utils.getCurrentTimestamp()));
+		AMap<AString, AMap<AString, ACell>> usersMap = getUsers();
+		if (usersMap == null) usersMap = Maps.empty();
+		setUsers(usersMap.assoc(Strings.create(id), record));
+	}
+
+	/**
+	 * Get all users from the lattice cursor
+	 * @return Map of user ID to user record
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, AMap<AString, ACell>> getUsers() {
+		return (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.ensureMap(this.users.get());
+	}
+
+	private void setUsers(AMap<AString, AMap<AString, ACell>> usersMap) {
+		this.users.set(usersMap);
 	}
 	
 	/**
@@ -463,19 +505,27 @@ public class Engine {
 	}
 
 	/**
+	 * Invoke an operation given a reference string (internal/programmatic use, no caller identity).
+	 */
+	public Job invokeOperation(String ref, ACell input) {
+		return invokeOperation(ref, input, null);
+	}
+
+	/**
 	 * Invoke an operation given a reference string. Supports hex hash, DID URL,
 	 * operation name, and adapter:operation strings.
 	 * @param ref Operation reference string
 	 * @param input Input parameters
+	 * @param callerDID Caller DID string, or null if anonymous
 	 * @return Job tracking the execution
 	 */
-	public Job invokeOperation(String ref, ACell input) {
+	public Job invokeOperation(String ref, ACell input, AString callerDID) {
 		if (ref==null) throw new IllegalArgumentException("Operation must be specified");
 
 		// Resolve the operation reference (hex hash, DID URL, or operation name)
 		Asset asset = resolveAsset(ref);
 		if (asset!=null) {
-			return invokeOperation(asset, input);
+			return invokeOperation(asset, input, callerDID);
 		}
 
 		// Fall through: use ref directly as adapter:operation string
@@ -485,9 +535,16 @@ public class Engine {
 			throw new IllegalStateException("Adapter not available: "+adapterName);
 		}
 
-		Job job=submitJob(Strings.create(ref),null,input);
+		Job job=submitJob(Strings.create(ref),null,input,null,callerDID);
 		adapter.invoke(job, ref, null, input);
 		return job;
+	}
+
+	/**
+	 * Invoke an operation given a resolved Asset (internal/programmatic use, no caller identity).
+	 */
+	public Job invokeOperation(Asset asset, ACell input) {
+		return invokeOperation(asset, input, null);
 	}
 
 	/**
@@ -495,9 +552,10 @@ public class Engine {
 	 * reference, delegates to the remote venue via asset.invoke().
 	 * @param asset The operation asset
 	 * @param input Input parameters
+	 * @param callerDID Caller DID string, or null if anonymous
 	 * @return Job tracking the execution
 	 */
-	public Job invokeOperation(Asset asset, ACell input) {
+	public Job invokeOperation(Asset asset, ACell input, AString callerDID) {
 		if (asset==null) throw new IllegalArgumentException("Asset must be specified");
 
 		// Ensure we have an Operation (not a plain Asset)
@@ -523,7 +581,7 @@ public class Engine {
 			throw new IllegalStateException("Adapter not available: "+adapterName);
 		}
 
-		Job job=submitJob(op,meta,input);
+		Job job=submitJob(op,meta,input,callerDID);
 		adapter.invoke(job, adapterStr, meta, input);
 		return job;
 	}
@@ -647,18 +705,14 @@ public class Engine {
 	/**
 	 * Submit a Job for a resolved Operation.
 	 */
-	private Job submitJob(Operation operation, AMap<AString,ACell> meta, ACell input) {
-		return submitJob(operation.getID().toCVMHexString(), meta, input, operation);
+	private Job submitJob(Operation operation, AMap<AString,ACell> meta, ACell input, AString callerDID) {
+		return submitJob(operation.getID().toCVMHexString(), meta, input, operation, callerDID);
 	}
 
 	/**
 	 * Submit a Job for an unresolved adapter:operation string.
 	 */
-	private Job submitJob(AString opID, AMap<AString,ACell> meta, ACell input) {
-		return submitJob(opID, meta, input, null);
-	}
-
-	private Job submitJob(AString opID, AMap<AString,ACell> meta, ACell input, Operation operation) {
+	private Job submitJob(AString opID, AMap<AString,ACell> meta, ACell input, Operation operation, AString callerDID) {
 		long ts=Utils.getCurrentTimestamp();
 		AString jobID = generateJobID(ts);
 
@@ -669,6 +723,10 @@ public class Engine {
 				Fields.UPDATED,CVMLong.create(ts),
 				Fields.CREATED,CVMLong.create(ts),
 				Fields.INPUT,input);
+
+		if (callerDID!=null) {
+			status=status.assoc(Fields.CALLER, callerDID);
+		}
 
 		AString name=RT.ensureString(RT.getIn(meta, Fields.NAME));
 		if (name!=null) {
@@ -920,15 +978,20 @@ public class Engine {
 		return ddo;
 	}
 
+	public AccountKey getAccountKey() {
+		return keyPair.getAccountKey();
+	}
+
 	public AString getName() {
 		return RT.str(config.get(Fields.NAME));
 	}
 
 	public AMap<AString, ACell> getStats() {
+		AMap<AString, AMap<AString, ACell>> usersMap = getUsers();
 		return Maps.of(
 				 "jobs",getJobs().size(),
 				 "assets",getAssets().size(),
-				 "users",101,
+				 "users",usersMap != null ? usersMap.count() : 0,
 				 "ops",operations.count()
 				);
 	}

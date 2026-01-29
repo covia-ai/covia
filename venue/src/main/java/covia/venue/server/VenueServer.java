@@ -18,6 +18,7 @@ import covia.venue.LocalVenue;
 import covia.venue.api.A2A;
 import covia.venue.api.CoviaAPI;
 import covia.venue.api.MCP;
+import covia.venue.api.UserAPI;
 import covia.venue.auth.LoginProviders;
 import io.javalin.Javalin;
 import io.javalin.config.JavalinConfig;
@@ -51,6 +52,7 @@ public class VenueServer {
 	protected CoviaAPI api;
 	protected MCP mcp;
 	protected A2A a2a;
+	protected UserAPI userApi;
 
 	public VenueServer(AMap<AString,ACell> config) {
 		this.config=config;
@@ -59,6 +61,7 @@ public class VenueServer {
 		LocalVenue localVenue=new LocalVenue(engine);
 		webApp=new CoviaWebApp(engine);
 		api=new CoviaAPI(localVenue);
+		userApi=new UserAPI(localVenue);
 
 		AMap<AString,ACell> mcpConfig=RT.getIn(config, Fields.MCP);
 		if (RT.bool(mcpConfig)) {
@@ -110,8 +113,9 @@ public class VenueServer {
 	private synchronized void start(Integer port) {
 		close();
 		javalin=buildApp();
+		AuthMiddleware.register(javalin, engine.getAccountKey());
 		addLoginRoutes(javalin);
-		addAPIRoutes(javalin);	
+		addAPIRoutes(javalin);
 		start(javalin,port);
 		log.info("Venue server started on port: "+javalin.port());
 	}
@@ -127,6 +131,7 @@ public class VenueServer {
 	
 	private void addAPIRoutes(Javalin javalin) {	
 		api.addRoutes(javalin);
+		userApi.addRoutes(javalin);
 		webApp.addRoutes(javalin);
 		if (mcp!=null) mcp.addRoutes(javalin);
 		if (a2a!=null) a2a.addRoutes(javalin);

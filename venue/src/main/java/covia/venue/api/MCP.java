@@ -27,6 +27,7 @@ import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Venue;
+import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
@@ -123,14 +124,15 @@ public class MCP extends ACoviaAPI {
 				System.out.println("REQ:"+req);
 			}
 
+			AString callerDID = AuthMiddleware.getCallerDID(ctx);
 			if (req instanceof AMap) {
 				// Simple JSON response
-				AMap<AString, ACell> resp = createResponse(req);
+				AMap<AString, ACell> resp = createResponse(req, callerDID);
 				buildResult(ctx,resp);
 			} else if (req instanceof AVector requests){
 				// Batch response
 				@SuppressWarnings("unchecked")
-				List<AMap<AString, ACell>> responses= Utils.map(requests, this::createResponse);
+				List<AMap<AString, ACell>> responses= Utils.map(requests, r -> createResponse((ACell) r, callerDID));
 				buildResult(ctx,responses);
 			} else {
 				buildResult(ctx,protocolError(-32600,"Request must be single request object or batch array"));
@@ -140,17 +142,17 @@ public class MCP extends ACoviaAPI {
 		} 
 	}
 
-	private AMap<AString, ACell> createResponse(ACell request) {
+	private AMap<AString, ACell> createResponse(ACell request, AString callerDID) {
 		ACell id=RT.getIn(request,Fields.ID);
 		AMap<AString, ACell> response;
 		try {
 			AString methodAS=(AString) RT.getIn(request,Fields.METHOD);
 			String method=methodAS.toString().trim();
-			
+
 			if (method.equals("tools/list")) {
 				response=listToolsResult();
 			} else if (method.equals("tools/call")) {
-				response=toolCall(RT.getIn(request, Fields.PARAMS));
+				response=toolCall(RT.getIn(request, Fields.PARAMS), callerDID);
 			} else if (method.equals("initialize")) {
 				response=protocolResult(Maps.of(
 						"protocolVersion", "2025-03-26",
@@ -184,13 +186,13 @@ public class MCP extends ACoviaAPI {
 	 * @param in
 	 * @return
 	 */
-	private AMap<AString, ACell> toolCall(AMap<AString,ACell> params) {
+	private AMap<AString, ACell> toolCall(AMap<AString,ACell> params, AString callerDID) {
 		try {
 			AString toolName=RT.getIn(params, Fields.NAME);
 			Hash opID=findTool(toolName);
 			ACell arguments=RT.getIn(params, Fields.ARGUMENTS);
 			if (opID!=null) {
-					Job job=engine().invokeOperation(opID.toHexString(), arguments);
+					Job job=engine().invokeOperation(opID.toHexString(), arguments, callerDID);
 					ACell result=job.awaitResult();
 					return protocolResult(Maps.of(
 						Fields.CONTENT,Vectors.of(

@@ -21,6 +21,7 @@ import convex.lattice.LatticeContext;
  * {
  *   :assets   ->  Index&lt;Hash, AssetRecord&gt;  (references to metadata in grid :meta)
  *   :jobs     ->  Index&lt;AString, JobRecord&gt;
+ *   :users    ->  Index&lt;AString, UserRecord&gt;  (user database, keyed by user ID)
  *   :storage  ->  Index&lt;Hash, ABlob&gt;         (content-addressed blob storage)
  * }
  * </pre>
@@ -33,6 +34,7 @@ import convex.lattice.LatticeContext;
  * <ul>
  *   <li><b>:assets</b> - Union merge (assets are immutable, identified by content hash)</li>
  *   <li><b>:jobs</b> - Per-job merge using timestamp (newer status wins)</li>
+ *   <li><b>:users</b> - Per-user merge using timestamp (newer record wins)</li>
  *   <li><b>:storage</b> - Union merge via CASLattice (content-addressed, same hash = same content)</li>
  * </ul>
  *
@@ -57,6 +59,11 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 	 * Keyword for jobs index within venue state
 	 */
 	public static final Keyword JOBS = Keyword.intern("jobs");
+
+	/**
+	 * Keyword for users index within venue state
+	 */
+	public static final Keyword USERS = Keyword.intern("users");
 
 	/**
 	 * Keyword for content-addressed storage within venue state
@@ -84,6 +91,11 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 	private final ALattice<AMap<ACell, ACell>> jobsLattice;
 
 	/**
+	 * Child lattice for users (timestamp-based merge - newer record wins)
+	 */
+	private final ALattice<AMap<ACell, ACell>> usersLattice;
+
+	/**
 	 * Child lattice for content-addressed storage (CASLattice for blob storage)
 	 */
 	private final CASLattice<Hash, ABlob> storageLattice;
@@ -94,6 +106,9 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 
 		// Jobs use timestamp-based merge per job entry
 		this.jobsLattice = new TimestampMapLattice<>(UPDATED);
+
+		// Users use timestamp-based merge per user entry
+		this.usersLattice = new TimestampMapLattice<>(UPDATED);
 
 		// Storage uses CASLattice - content-addressed blob storage
 		this.storageLattice = CASLattice.create();
@@ -124,6 +139,9 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 
 		// Merge jobs
 		result = mergeField(result, otherValue, JOBS, jobsLattice);
+
+		// Merge users
+		result = mergeField(result, otherValue, USERS, usersLattice);
 
 		// Merge storage
 		result = mergeStorageField(result, otherValue);
@@ -183,6 +201,7 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 		return Maps.of(
 			ASSETS, Maps.empty(),
 			JOBS, Maps.empty(),
+			USERS, Maps.empty(),
 			STORAGE, Index.none()
 		);
 	}
@@ -203,6 +222,9 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 		}
 		if (JOBS.equals(childKey)) {
 			return (ALattice<T>) jobsLattice;
+		}
+		if (USERS.equals(childKey)) {
+			return (ALattice<T>) usersLattice;
 		}
 		if (STORAGE.equals(childKey)) {
 			return (ALattice<T>) storageLattice;

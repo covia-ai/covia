@@ -277,6 +277,7 @@ public class VenueLatticeTest {
 					VenueLattice.UPDATED, CVMLong.create(1000L)
 				)
 			),
+			VenueLattice.USERS, Maps.empty(),
 			VenueLattice.STORAGE, Index.none()
 		);
 	}
