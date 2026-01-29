@@ -218,10 +218,20 @@ public class OAuthTest {
 	}
 
 	@Test
-	void testPublicAccessDefaultDisabled() {
-		// Engine with no auth config should default to public access disabled
+	void testPublicAccessDefaultEnabled() {
+		// Engine with no auth config should default to public access enabled
 		Engine tempEngine = Engine.createTemp(Maps.of(
 			Strings.create("name"), Strings.create("no-auth-venue")
+		));
+		assertTrue(tempEngine.getAuth().isPublicAccessEnabled());
+	}
+
+	@Test
+	void testPublicAccessExplicitlyDisabled() {
+		Engine tempEngine = Engine.createTemp(Maps.of(
+			Config.AUTH, Maps.of(
+				Config.PUBLIC, Maps.of(Config.ENABLED, false)
+			)
 		));
 		assertFalse(tempEngine.getAuth().isPublicAccessEnabled());
 	}

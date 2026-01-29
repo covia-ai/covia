@@ -25,7 +25,7 @@ import covia.venue.auth.LoginProviders;
  * <h2>Config format</h2>
  * <pre>
  * "auth": {
- *   "public": { "enabled": true },   // allow anonymous access (default: false)
+ *   "public": { "enabled": true },   // allow anonymous access (default: true)
  *   "tokenExpiry": 86400,             // JWT expiry in seconds (default 24h)
  *   "oauth": {
  *     "google": { "clientId": "...", "clientSecret": "..." },
@@ -70,12 +70,17 @@ public class Auth {
 			CVMLong expiry = RT.ensureLong(authConfig.get(Config.TOKEN_EXPIRY));
 			this.tokenExpiry = (expiry != null) ? expiry.longValue() : DEFAULT_TOKEN_EXPIRY;
 
-			// Read public access config: auth.public.enabled (default false)
+			// Read public access config: auth.public.enabled (default true)
 			AMap<AString, ACell> publicConfig = RT.ensureMap(authConfig.get(Config.PUBLIC));
-			this.publicAccessEnabled = (publicConfig != null) && RT.bool(publicConfig.get(Config.ENABLED));
+			if (publicConfig != null) {
+				ACell enabledVal = publicConfig.get(Config.ENABLED);
+				this.publicAccessEnabled = (enabledVal == null) || RT.bool(enabledVal);
+			} else {
+				this.publicAccessEnabled = true;
+			}
 		} else {
 			this.tokenExpiry = DEFAULT_TOKEN_EXPIRY;
-			this.publicAccessEnabled = false;
+			this.publicAccessEnabled = true;
 		}
 
 		// Create login providers from auth config

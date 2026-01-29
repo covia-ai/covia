@@ -30,7 +30,7 @@
 
 			// Configure authentication and access control
 			"auth":{
-				// Allow unauthenticated access to API endpoints (default: false)
+				// Allow unauthenticated access to API endpoints (default: true)
 				"public":{ "enabled": true },
 
 				// "tokenExpiry": 86400,  // JWT expiry in seconds (default 24 hours)
