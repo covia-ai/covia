@@ -12,6 +12,7 @@ import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.MapEntry;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
@@ -63,7 +64,9 @@ public class A2A extends ACoviaAPI {
 	public void addRoutes(Javalin javalin) {
 		// A2A agent card discovery endpoint
 		javalin.get("/.well-known/agent-card.json", this::getAgentCard);
-	} 
+		// A2A JSON-RPC endpoint
+		javalin.post("/a2a", this::handleJsonRpc);
+	}
 	
 	@OpenApi(path = "/.well-known/agent-card.json", 
 			methods = HttpMethod.GET, 
@@ -100,6 +103,91 @@ public class A2A extends ACoviaAPI {
 			log.error("Error generating agent card", e);
 			buildError(ctx, 500, "Error generating agent card: " + e.getMessage());
 		}
+	}
+
+	/**
+	 * Handle A2A JSON-RPC requests.
+	 * Supports method "message/send" for delivering messages to jobs/tasks.
+	 */
+	@SuppressWarnings("unchecked")
+	protected void handleJsonRpc(Context ctx) {
+		AMap<AString, ACell> request = RT.ensureMap(JSON.parseJSON5(ctx.body()));
+		if (request == null) {
+			buildJsonRpcError(ctx, null, -32700, "Parse error");
+			return;
+		}
+
+		AString method = RT.ensureString(request.get(Strings.create("method")));
+		ACell id = request.get(Fields.ID);
+		ACell params = request.get(Fields.PARAMS);
+
+		if (method == null) {
+			buildJsonRpcError(ctx, id, -32600, "Invalid request: missing method");
+			return;
+		}
+
+		switch (method.toString()) {
+			case "message/send":
+				handleMessageSend(ctx, id, (AMap<AString, ACell>) params);
+				break;
+			default:
+				buildJsonRpcError(ctx, id, -32601, "Method not found: " + method);
+		}
+	}
+
+	/**
+	 * Handle A2A message/send method.
+	 * Maps A2A task/message to Covia job message delivery.
+	 */
+	private void handleMessageSend(Context ctx, ACell rpcId, AMap<AString, ACell> params) {
+		if (params == null) {
+			buildJsonRpcError(ctx, rpcId, -32602, "Invalid params: params required");
+			return;
+		}
+
+		// Extract taskId (= Covia job ID) from params
+		AString taskId = RT.ensureString(RT.getIn(params, "taskId"));
+		if (taskId == null) {
+			buildJsonRpcError(ctx, rpcId, -32602, "Invalid params: taskId required");
+			return;
+		}
+
+		// Extract message from params
+		AMap<AString, ACell> message = RT.getIn(params, "message");
+		if (message == null) {
+			buildJsonRpcError(ctx, rpcId, -32602, "Invalid params: message required");
+			return;
+		}
+
+		// Deliver the message
+		try {
+			int depth = engine().deliverMessage(taskId.toString(), message, null);
+			AMap<AString, ACell> response = Maps.of(
+				"jsonrpc", "2.0",
+				Fields.ID, rpcId,
+				"result", Maps.of(
+					"status", Strings.create("queued"),
+					"queueDepth", RT.cvm(depth)
+				)
+			);
+			buildResult(ctx, 200, response);
+		} catch (IllegalArgumentException e) {
+			buildJsonRpcError(ctx, rpcId, -32602, e.getMessage());
+		} catch (IllegalStateException e) {
+			buildJsonRpcError(ctx, rpcId, -32602, e.getMessage());
+		}
+	}
+
+	private void buildJsonRpcError(Context ctx, ACell id, int code, String message) {
+		AMap<AString, ACell> response = Maps.of(
+			"jsonrpc", "2.0",
+			Fields.ID, id,
+			"error", Maps.of(
+				"code", RT.cvm(code),
+				"message", Strings.create(message)
+			)
+		);
+		buildResult(ctx, 200, response);
 	}
 
 	/**

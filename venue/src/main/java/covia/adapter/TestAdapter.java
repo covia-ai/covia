@@ -7,6 +7,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -14,6 +16,8 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
 import covia.api.Fields;
+import covia.grid.Job;
+import covia.grid.Status;
 
 public class TestAdapter extends AAdapter {
 	
@@ -58,6 +62,11 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.failedFuture(handleError(input));
                 case "random":
                     return CompletableFuture.completedFuture(handleRandom(input));
+                case "chat":
+                    // Multi-turn: handled via invoke() override, not invokeFuture()
+                    return CompletableFuture.failedFuture(
+                        new UnsupportedOperationException("chat operation uses multi-turn invoke path")
+                    );
                 default:
                     return CompletableFuture.failedFuture(
                         new IllegalArgumentException("Unknown test operation: " + testOp)
@@ -79,6 +88,7 @@ public class TestAdapter extends AAdapter {
 			installAsset(BASE+"delayop.json");
 			installAsset(BASE+"randomop.json");
 			installAsset(BASE+"failop.json");
+			installAsset(BASE+"chatop.json");
 			installAsset(BASE+"orch.json");
 			Hash iris=engine.storeAsset(Utils.readResourceAsAString(BASE+"iris.json"),null);
 			engine.putContent(iris,this.getClass().getResourceAsStream(BASE+"iris.csv"));
@@ -89,6 +99,43 @@ public class TestAdapter extends AAdapter {
 		}
     }
     
+    @Override
+    public void invoke(Job job, String operation, ACell meta, ACell input) {
+        if (operation.equals("test:chat")) {
+            // Multi-turn: set INPUT_REQUIRED and wait for messages
+            job.setStatus(Status.INPUT_REQUIRED);
+        } else {
+            // Default one-shot path
+            super.invoke(job, operation, meta, input);
+        }
+    }
+
+    @Override
+    public void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
+        ACell message = messageRecord.get(Fields.MESSAGE);
+        ACell content = RT.getIn(message, "content");
+
+        // If message content is "done", complete the job with a summary
+        if (content != null && "done".equals(content.toString())) {
+            job.completeWith(Maps.of("status", Strings.create("conversation complete")));
+        } else {
+            // Echo the message back and stay in INPUT_REQUIRED
+            job.update(data -> {
+                data = data.assoc(Fields.STATUS, Status.INPUT_REQUIRED);
+                data = data.assoc(Fields.OUTPUT, Maps.of(
+                    "echo", content,
+                    "message", Strings.create("Send more messages or 'done' to finish")
+                ));
+                return data;
+            });
+        }
+    }
+
+    @Override
+    public boolean supportsMultiTurn() {
+        return true;
+    }
+
     private CompletableFuture<ACell> handleDelay(ACell input) {
     	return CompletableFuture.supplyAsync(()->{
 			ACell op = RT.getIn(input, Fields.OPERATION);

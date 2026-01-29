@@ -103,6 +103,12 @@ public class Engine {
 	protected final HashMap<String, AAdapter> adapters = new HashMap<>();
 
 	/**
+	 * Optional listener called on every job state update.
+	 * Set by SseServer to enable per-job event broadcasting.
+	 */
+	private java.util.function.Consumer<Job> jobUpdateListener = null;
+
+	/**
 	 * Registry of named operations mapping operation name (e.g. "test:echo") to canonical asset Hash.
 	 * Populated during adapter registration from each adapter's operation names.
 	 */
@@ -517,6 +523,66 @@ public class Engine {
 		}
 	}
 
+	/**
+	 * Gets the live Job object for the given job ID string
+	 * @param jobID Job ID as a String
+	 * @return Job, or null if not found
+	 */
+	public Job getJob(String jobID) {
+		return getJob(Strings.create(jobID));
+	}
+
+	/**
+	 * Delivers a message to a job's message queue.
+	 * Wraps the raw message in an extensible record with metadata.
+	 * @param jobID Job ID as a String
+	 * @param message Raw message content (arbitrary JSON)
+	 * @param source Source identifier (DID or client ID), may be null
+	 * @return Queue depth after enqueue
+	 * @throws IllegalArgumentException if job not found
+	 * @throws IllegalStateException if job is in terminal state
+	 */
+	public int deliverMessage(String jobID, AMap<AString, ACell> message, String source) {
+		Job job = getJob(jobID);
+		if (job == null) throw new IllegalArgumentException("Job not found: " + jobID);
+		if (job.isFinished()) throw new IllegalStateException("Job is in terminal state: " + jobID);
+
+		long ts = Utils.getCurrentTimestamp();
+		AString msgId = generateJobID(ts); // reuse ID generator for unique message IDs
+
+		AMap<AString, ACell> record = Maps.of(
+				Fields.MESSAGE, message,
+				Fields.TS, CVMLong.create(ts),
+				Fields.ID, msgId);
+		if (source != null) {
+			record = record.assoc(Fields.SOURCE, Strings.create(source));
+		}
+
+		job.enqueueMessage(record);
+		int depth = job.getQueueSize();
+
+		// Dispatch to adapter if it supports multi-turn
+		AAdapter adapter = resolveJobAdapter(job);
+		if (adapter != null && adapter.supportsMultiTurn()) {
+			adapter.handleMessage(job, record);
+		}
+
+		return depth;
+	}
+
+	/**
+	 * Resolves the adapter responsible for a job based on its operation field.
+	 * @param job The job
+	 * @return The adapter, or null if not resolvable
+	 */
+	private AAdapter resolveJobAdapter(Job job) {
+		AString op = RT.ensureString(job.getData().get(Fields.OP));
+		if (op == null) return null;
+		String opStr = op.toString();
+		String adapterName = opStr.split(":")[0];
+		return getAdapter(adapterName);
+	}
+
 	private HashMap<AString, Job> jobs = new HashMap<>();
 	
 	/** 
@@ -548,6 +614,12 @@ public class Engine {
 				return newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 			}
 		};
+
+		// Set update listener if configured (e.g. for SSE broadcasting)
+		if (jobUpdateListener != null) {
+			job.setUpdateListener(jobUpdateListener);
+		}
+
 		synchronized (jobs) {
 			jobs.put(jobID, job);
 		}
@@ -577,6 +649,14 @@ public class Engine {
 
 		AString jobID=Blob.wrap(bs).toCVMHexString();
 		return jobID;
+	}
+
+	/**
+	 * Sets a listener to be notified on all job state updates.
+	 * @param listener Update listener, or null to clear
+	 */
+	public void setJobUpdateListener(java.util.function.Consumer<Job> listener) {
+		this.jobUpdateListener = listener;
 	}
 
 	public List<AString> getJobs() {

@@ -1,0 +1,19 @@
+{
+	"name": "Chat Test Operation",
+	"description": "A multi-turn test operation that echoes messages back. Send messages via POST /api/v1/jobs/{id}. Send {\"content\": \"done\"} to complete.",
+	"dateCreated": "2026-01-29T00:00:00Z",
+	"operation": {
+		"adapter": "test:chat",
+		"input": {
+			"type": "object",
+			"description": "Optional initial input"
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"echo": { "type": "string", "description": "Echoed message content" },
+				"message": { "type": "string", "description": "Instructions for next action" }
+			}
+		}
+	}
+}

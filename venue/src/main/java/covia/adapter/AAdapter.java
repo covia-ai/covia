@@ -165,4 +165,24 @@ public abstract class AAdapter {
 			return null;
 		});
     }
+
+    /**
+     * Handles a message delivered to a running job.
+     * Override this method in adapters that support multi-turn interactions.
+     * Default implementation does nothing (message remains in queue).
+     *
+     * @param job The job receiving the message
+     * @param messageRecord The message record (contains "message", "source", "ts", "id" fields)
+     */
+    public void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
+    	// Default: no-op. Message stays in queue for polling by adapter.
+    }
+
+    /**
+     * Returns true if this adapter supports multi-turn message handling.
+     * @return true if handleMessage() is implemented
+     */
+    public boolean supportsMultiTurn() {
+    	return false;
+    }
 }

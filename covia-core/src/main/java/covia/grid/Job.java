@@ -3,6 +3,8 @@ package covia.grid;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
@@ -23,9 +25,18 @@ import covia.exception.JobFailedException;
 public class Job {
 	/** Job status data */
 	private AMap<AString, ACell> data;
-	
+
 	protected boolean cancelled=false;
 	protected CompletableFuture<ACell> resultFuture=null;
+
+	/** Per-job message queue for incoming message records */
+	private final ConcurrentLinkedQueue<AMap<AString, ACell>> messageQueue = new ConcurrentLinkedQueue<>();
+
+	/** Optional listener notified after each state update */
+	private Consumer<Job> updateListener=null;
+
+	/** Key for previous state pointer in job data */
+	public static final AString PREV = Strings.intern("prev");
 	
 	public Job(AMap<AString, ACell> status) {
 		this.data=status;
@@ -103,8 +114,22 @@ public class Job {
 		if (isFinished()) return;
 		data=processUpdate(data);
 		if (data==null) return; // update cancelled
+
+		// Link new state to previous state (prev pointer chain)
+		AMap<AString, ACell> oldData = this.data;
+		if (oldData != null && !oldData.isEmpty()) {
+			data = data.assoc(PREV, oldData);
+		}
+
 		this.data=data;
 		onUpdate(data);
+
+		// Notify update listener
+		Consumer<Job> listener = this.updateListener;
+		if (listener != null) {
+			listener.accept(this);
+		}
+
 		if (isFinished()) {
 			completeResultFuture();
 			onFinish(data);
@@ -195,6 +220,56 @@ public class Job {
 		if (status != Status.FAILED && status != Status.REJECTED) return null;
 		ACell errorField = RT.get(data, Fields.ERROR);
 		return errorField != null ? errorField.toString() : null;
+	}
+
+	// ===== Message Queue =====
+
+	/**
+	 * Enqueues a message record for this job.
+	 * Message records are extensible maps containing at minimum the message content,
+	 * plus metadata such as source, timestamp, and messageId.
+	 * @param record Message record to enqueue
+	 */
+	public void enqueueMessage(AMap<AString, ACell> record) {
+		messageQueue.add(record);
+	}
+
+	/**
+	 * Dequeues the next message record from this job's queue.
+	 * @return Next message record, or null if queue is empty
+	 */
+	public AMap<AString, ACell> dequeueMessage() {
+		return messageQueue.poll();
+	}
+
+	/**
+	 * Gets the current number of messages in this job's queue.
+	 * @return Queue depth
+	 */
+	public int getQueueSize() {
+		return messageQueue.size();
+	}
+
+	// ===== Update Listener =====
+
+	/**
+	 * Sets a listener to be notified after each state update.
+	 * Used by SSE server for per-job event broadcasting.
+	 * @param listener Listener to set, or null to remove
+	 */
+	public void setUpdateListener(Consumer<Job> listener) {
+		this.updateListener = listener;
+	}
+
+	// ===== State History =====
+
+	/**
+	 * Gets the previous state from the current job data's prev chain.
+	 * @return Previous state data, or null if this is the first state
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> getPreviousState() {
+		return (AMap<AString, ACell>) data.get(PREV);
 	}
 
 	/**

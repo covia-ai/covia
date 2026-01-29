@@ -56,8 +56,9 @@ public class CoviaAPI extends ACoviaAPI {
 	private static final String GET_CONTENT = "getContent";
 
 	private static final String PUT_CONTENT = "putContent";
-	public static final String CANCEL_JOB = "cancelJob";	
+	public static final String CANCEL_JOB = "cancelJob";
 	public static final String DELETE_JOB = "deleteJob";
+	public static final String SEND_MESSAGE = "sendMessage";
 
 	private static final String GET_JOB = "getJob";
 
@@ -69,6 +70,14 @@ public class CoviaAPI extends ACoviaAPI {
 	public CoviaAPI(Venue venue) {
 		super(venue);
 		this.sseServer=new SseServer(engine());
+
+		// Wire SSE broadcasting into engine's job update listener
+		engine().setJobUpdateListener(job -> {
+			AString jobId = job.getID();
+			if (jobId != null) {
+				sseServer.broadcastJobUpdate(jobId.toString(), job);
+			}
+		});
 	}
 
 	public void addRoutes(Javalin javalin) {
@@ -83,6 +92,7 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.get(ROUTE+"operations", this::getOperations);
 		javalin.get(ROUTE+"operations/{name}", this::getOperation);
 		javalin.get(ROUTE+"jobs/<id>", this::getJobStatus);
+		javalin.post(ROUTE+"jobs/<id>", this::sendMessage);
 		javalin.put(ROUTE+"jobs/<id>/cancel", this::cancelJob);
 		javalin.put(ROUTE+"jobs/<id>/delete", this::deleteJob);
 		javalin.sse(ROUTE+"jobs/<id>/sse", sseServer.registerSSE);
@@ -449,6 +459,48 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 	}
 	
+	@OpenApi(path = ROUTE + "jobs/{id}",
+			methods = HttpMethod.POST,
+			tags = { "Covia"},
+			summary = "Send a message to a running job. Returns 202 Accepted once the message is queued.",
+			operationId = CoviaAPI.SEND_MESSAGE,
+			pathParams = {
+					@OpenApiParam(
+							name = "id",
+							description = "Job ID, as created by invoke request.",
+							required = true,
+							type = String.class,
+							example = "0x12345678123456781234567812345678") },
+			requestBody = @OpenApiRequestBody(
+					description = "Message content (arbitrary JSON)",
+					content= @OpenApiContent(type = "application/json", from = Object.class)),
+			responses = {
+					@OpenApiResponse(status = "202", description = "Message accepted and queued"),
+					@OpenApiResponse(status = "404", description = "Job not found"),
+					@OpenApiResponse(status = "409", description = "Job is in terminal state")
+					})
+	protected void sendMessage(Context ctx) {
+		String id = ctx.pathParam("id");
+		ACell message = JSON.parseJSON5(ctx.body());
+
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> msgMap = (message instanceof AMap)
+				? (AMap<AString, ACell>) message
+				: Maps.of(Fields.CONTENT, message);
+
+		try {
+			int depth = engine().deliverMessage(id, msgMap, null);
+			Map<String, Object> response = new HashMap<>();
+			response.put("status", "queued");
+			response.put("queueDepth", depth);
+			buildResult(ctx, 202, response);
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 404, e.getMessage());
+		} catch (IllegalStateException e) {
+			buildError(ctx, 409, e.getMessage());
+		}
+	}
+
 	@OpenApi(path = ROUTE + "jobs/{id}/cancel", 
 			methods = HttpMethod.PUT, 
 			tags = { "Covia"},

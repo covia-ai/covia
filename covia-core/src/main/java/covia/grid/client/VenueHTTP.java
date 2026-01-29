@@ -18,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
+import convex.core.data.prim.CVMLong;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -676,4 +677,33 @@ public class VenueHTTP extends Venue {
 		}
 	}
 
+	@Override
+	public int sendMessage(String jobId, AMap<AString, ACell> message) {
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(getBaseURI().resolve("jobs/" + jobId))
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString(JSON.toString(message)))
+			.build();
+
+		try {
+			HttpResponse<String> response = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+			int code = response.statusCode();
+			if (code == 202) {
+				AMap<AString, ACell> body = RT.ensureMap(JSON.parseJSON5(response.body()));
+				if (body != null) {
+					ACell depth = body.get(Strings.create("queueDepth"));
+					CVMLong cl = RT.ensureLong(depth);
+					if (cl != null) return (int) cl.longValue();
+				}
+				return 0;
+			} else if (code == 404) {
+				throw new IllegalArgumentException("Job not found: " + jobId);
+			} else if (code == 409) {
+				throw new IllegalStateException("Job is in terminal state: " + jobId);
+			}
+			throw new RuntimeException("Failed to send message: HTTP " + code);
+		} catch (IOException | InterruptedException e) {
+			throw new RuntimeException("Failed to send message to job " + jobId, e);
+		}
+	}
 }

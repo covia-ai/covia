@@ -154,4 +154,8 @@ public class LocalVenue extends Venue {
 		return engine.getJobs();
 	}
 
+	@Override
+	public int sendMessage(String jobId, AMap<AString, ACell> message) {
+		return engine.deliverMessage(jobId, message, null);
+	}
 }
