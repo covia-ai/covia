@@ -19,8 +19,10 @@ import convex.core.util.JSON;
 import convex.core.util.ThreadUtils;
 import convex.core.util.Utils;
 import covia.api.Fields;
+import covia.grid.Grid;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.grid.Venue;
 
 public class Orchestrator extends AAdapter {
 
@@ -248,14 +250,26 @@ public class Orchestrator extends AAdapter {
 				try {
 					AString opId=RT.getIn(step, Fields.OP);
 					input=computeInput(RT.get(step, Fields.INPUT),Vectors.empty());
-					subJob =engine.invokeOperation(opId, input);
+
+					// Check for venue field (DID or URL) to route to remote venue
+					AString venueSpec = RT.ensureString(step.get(Fields.VENUE));
+					if (venueSpec != null) {
+						Venue venue = Grid.connect(venueSpec.toString());
+						subJob = venue.invoke(opId.toString(), input).join();
+					} else {
+						subJob = engine.invokeOperation(opId, input);
+					}
+
 					output=subJob.awaitResult();
 					completionQueue.add(this);
 				} catch (Exception e) {
 					if (DEBUG_ORCH) System.err.println(e);
-					if (subJob!=null) subJob.fail("Failed to run orchestrator subtask: "+e.getMessage());
-				} finally {
-					if (subJob!=null) subJob.fail("Shouldn't see this, it means the SubJob did not complete properly! "+subJob);
+					if (subJob == null) {
+						subJob = Job.failure("Failed to run orchestrator subtask: " + e.getMessage());
+					} else {
+						subJob.fail("Failed to run orchestrator subtask: " + e.getMessage());
+					}
+					completionQueue.add(this);
 				}
 			}
 
