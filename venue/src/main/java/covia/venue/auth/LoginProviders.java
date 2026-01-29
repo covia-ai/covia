@@ -164,7 +164,7 @@ public class LoginProviders {
 
 			// 3. Create or update user in lattice
 			String userId = identity.toUserId();
-			AMap<AString, ACell> userRecord = engine.getUser(userId);
+			AMap<AString, ACell> userRecord = engine.getAuth().getUser(userId);
 			if (userRecord == null) {
 				userRecord = Maps.empty();
 			}
@@ -181,7 +181,7 @@ public class LoginProviders {
 			// Set DID for user (appended to venue DID)
 			AString userDID = Strings.create(engine.getDIDString() + ":u:" + userId);
 			userRecord = userRecord.assoc(Strings.create("did"), userDID);
-			engine.putUser(userId, userRecord);
+			engine.getAuth().putUser(userId, userRecord);
 
 			// 4. Issue venue-signed EdDSA JWT
 			long nowSecs = System.currentTimeMillis() / 1000;

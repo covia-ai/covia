@@ -101,8 +101,8 @@ public class Engine {
 	/** Lattice cursor for assets data */
 	protected ACursor<Index<AString,AVector<ACell>>> assets;
 
-	/** Lattice cursor for users data */
-	protected ACursor<AMap<AString, AMap<AString, ACell>>> users;
+	/** Authentication and user management */
+	protected Auth auth;
 	
 	/**
 	 * Map of named adapters that can handle different types of operations or resources
@@ -211,7 +211,8 @@ public class Engine {
 		AMap<Keyword,ACell> initialState = emptyLattice();
 		this.lattice = Cursors.of(initialState);
 		this.assets = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.ASSETS);
-		this.users = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.USERS);
+		ACursor<AMap<AString, AMap<AString, ACell>>> usersCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.USERS);
+		this.auth = new Auth(usersCursor);
 	}
 
 	private AHashMap<Keyword, ACell> emptyLattice() {
@@ -332,42 +333,13 @@ public class Engine {
 	}
 
 	/**
-	 * Get a user record by ID
-	 * @param id User identifier (e.g. "alice")
-	 * @return User record map, or null if not found
+	 * Get the Auth instance for user management.
+	 * @return Auth instance
 	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getUser(String id) {
-		AMap<AString, AMap<AString, ACell>> usersMap = getUsers();
-		if (usersMap == null) return null;
-		return (AMap<AString, ACell>) usersMap.get(Strings.create(id));
+	public Auth getAuth() {
+		return auth;
 	}
 
-	/**
-	 * Store or update a user record. Adds an :updated timestamp automatically.
-	 * @param id User identifier (e.g. "alice")
-	 * @param record User record map (should contain "did" and any other fields)
-	 */
-	public synchronized void putUser(String id, AMap<AString, ACell> record) {
-		record = record.assoc(Strings.create("updated"), CVMLong.create(Utils.getCurrentTimestamp()));
-		AMap<AString, AMap<AString, ACell>> usersMap = getUsers();
-		if (usersMap == null) usersMap = Maps.empty();
-		setUsers(usersMap.assoc(Strings.create(id), record));
-	}
-
-	/**
-	 * Get all users from the lattice cursor
-	 * @return Map of user ID to user record
-	 */
-	@SuppressWarnings("unchecked")
-	public AMap<AString, AMap<AString, ACell>> getUsers() {
-		return (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.ensureMap(this.users.get());
-	}
-
-	private void setUsers(AMap<AString, AMap<AString, ACell>> usersMap) {
-		this.users.set(usersMap);
-	}
-	
 	/**
 	 * Get the operation registry mapping operation names to asset Hashes.
 	 * @return Index of operation name → asset Hash
@@ -695,7 +667,6 @@ public class Engine {
 		}
 
 		// Last resort: parse :op as adapter:operation string
-		if (opStr == null) return null;
 		String adapterName = opStr.toString().split(":")[0];
 		return getAdapter(adapterName);
 	}
@@ -996,7 +967,7 @@ public class Engine {
 	}
 
 	public AMap<AString, ACell> getStats() {
-		AMap<AString, AMap<AString, ACell>> usersMap = getUsers();
+		AMap<AString, AMap<AString, ACell>> usersMap = auth.getUsers();
 		return Maps.of(
 				 "jobs",getJobs().size(),
 				 "assets",getAssets().size(),

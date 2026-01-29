@@ -41,7 +41,7 @@ public class UserAPITest {
 	void testUserDIDDocument() throws Exception {
 		// Add a user to the database
 		String userDID = "did:web:example.com:u:alice";
-		engine.putUser("alice", Maps.of(
+		engine.getAuth().putUser("alice", Maps.of(
 			Strings.create("did"), Strings.create(userDID)
 		));
 
@@ -90,16 +90,16 @@ public class UserAPITest {
 	@Test
 	void testUserGetPut() throws Exception {
 		// Verify user doesn't exist yet
-		AMap<AString, ACell> record = engine.getUser("bob");
+		AMap<AString, ACell> record = engine.getAuth().getUser("bob");
 		assertEquals(null, record);
 
 		// Add a user
-		engine.putUser("bob", Maps.of(
+		engine.getAuth().putUser("bob", Maps.of(
 			Strings.create("did"), Strings.create("did:key:z6Mktest123")
 		));
 
 		// Verify user exists
-		record = engine.getUser("bob");
+		record = engine.getAuth().getUser("bob");
 		assertNotNull(record);
 		assertEquals("did:key:z6Mktest123", record.get(Strings.create("did")).toString());
 

@@ -71,7 +71,7 @@ public class UserAPI extends ACoviaAPI {
 		}
 
 		// Look up user from the user database
-		AMap<AString, ACell> userRecord = engine().getUser(userId);
+		AMap<AString, ACell> userRecord = engine().getAuth().getUser(userId);
 		if (userRecord == null) {
 			buildError(ctx, 404, "User not found: " + userId);
 			return;
