@@ -139,7 +139,7 @@ public class EngineTest {
 	public void testRandomOperation() {
 		// Test random operation with 32 bytes
 		ACell input = Maps.of("length", Strings.create("32"));
-		Job job= venue.invokeOperation(randomOpID, input);
+		Job job= venue.invokeOperation(randomOpID.toHexString(), input);
 		ACell status =job.getData();
 				
 		// Get job ID from status
@@ -166,7 +166,7 @@ public class EngineTest {
 	// @Test
 	public void testQwen() {
 		ACell input = Maps.of("prompt", "What is the capital of France?");
-		ACell result = venue.invokeOperation(qwenOpId, input).awaitResult();
+		ACell result = venue.invokeOperation(qwenOpId.toHexString(), input).awaitResult();
 		result=waitForJobCompletion(RT.getIn(result, "id"), 5000);
 		if (Status.COMPLETE.equals(RT.getIn(result, "status"))) {
 			// OK

@@ -190,7 +190,7 @@ public class MCP extends ACoviaAPI {
 			Hash opID=findTool(toolName);
 			ACell arguments=RT.getIn(params, Fields.ARGUMENTS);
 			if (opID!=null) {
-					Job job=engine().invokeOperation(opID, arguments);
+					Job job=engine().invokeOperation(opID.toHexString(), arguments);
 					ACell result=job.awaitResult();
 					return protocolResult(Maps.of(
 						Fields.CONTENT,Vectors.of(

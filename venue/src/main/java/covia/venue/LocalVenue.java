@@ -48,7 +48,7 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public CompletableFuture<Job> invoke(Hash assetID, ACell input) {
-		return CompletableFuture.completedFuture(engine.invokeOperation(assetID, input));
+		return CompletableFuture.completedFuture(engine.invokeOperation(assetID.toHexString(), input));
 	}
 
 	@Override

@@ -257,7 +257,7 @@ public class Orchestrator extends AAdapter {
 						Venue venue = Grid.connect(venueSpec.toString());
 						subJob = venue.invoke(opId.toString(), input).join();
 					} else {
-						subJob = engine.invokeOperation(opId, input);
+						subJob = engine.invokeOperation(opId.toString(), input);
 					}
 
 					output=subJob.awaitResult();

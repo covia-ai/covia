@@ -35,6 +35,9 @@ public class Job {
 	/** Optional listener notified after each state update */
 	private Consumer<Job> updateListener=null;
 
+	/** Transient reference to the Asset being executed, if resolved */
+	private Asset asset=null;
+
 	/** Key for previous state pointer in job data */
 	public static final AString PREV = Strings.intern("prev");
 	
@@ -259,6 +262,22 @@ public class Job {
 	 */
 	public void setUpdateListener(Consumer<Job> listener) {
 		this.updateListener = listener;
+	}
+
+	/**
+	 * Gets the Asset associated with this job, if resolved.
+	 * @return Asset instance, or null
+	 */
+	public Asset getAsset() {
+		return asset;
+	}
+
+	/**
+	 * Sets the Asset associated with this job.
+	 * @param asset Asset instance
+	 */
+	public void setAsset(Asset asset) {
+		this.asset = asset;
 	}
 
 	// ===== State History =====

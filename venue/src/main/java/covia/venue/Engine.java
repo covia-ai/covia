@@ -55,8 +55,10 @@ import covia.api.Fields;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Assets;
+import covia.grid.Grid;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.grid.Venue;
 import covia.lattice.Covia;
 import covia.lattice.GridLattice;
 import covia.lattice.VenueLattice;
@@ -385,26 +387,55 @@ public class Engine {
 	}
 
 	/**
-	 * Resolves an asset reference to an Asset. Supports hex hash, DID URL, and operation name.
+	 * Resolves an asset reference to an Asset. Supports hex hash, DID URL, operation name,
+	 * and remote DID URLs (returns an Asset with a remote venue reference).
 	 * @param ref Asset reference string
-	 * @return Resolved Asset, or null if not resolvable to an asset on this venue
+	 * @return Resolved Asset, or null if not resolvable
 	 */
 	public Asset resolveAsset(String ref) {
-		Hash h = resolveAssetHash(ref);
-		if (h==null) return null;
-		return getAsset(h);
+		if (ref==null) return null;
+
+		// 1. Try direct hex hash (shorthand for asset on this venue)
+		Hash h = Hash.parse(ref);
+		if (h!=null) return getAsset(h);
+
+		// 2. Try DID URL with /a/<hash> path
+		if (ref.startsWith("did:")) {
+			int idx = ref.lastIndexOf("/a/");
+			if (idx>=0) {
+				String didPart = ref.substring(0, idx);
+				String hashPart = ref.substring(idx+3);
+				Hash parsed = Hash.parse(hashPart);
+				if (parsed!=null) {
+					// Check if this DID refers to the local venue or a remote one
+					String localDID = getDIDString().toString();
+					if (localDID.equals(didPart)) {
+						// Local DID — look up asset locally
+						return getAsset(parsed);
+					} else {
+						// Remote DID — create Asset with remote venue reference
+						Venue remoteVenue = Grid.connect(didPart);
+						Asset remoteAsset = Asset.create(parsed, null);
+						remoteAsset.setVenue(remoteVenue);
+						return remoteAsset;
+					}
+				}
+			}
+		}
+
+		// 3. Try operation name registry
+		Hash opHash = operations.get(Strings.create(ref));
+		if (opHash!=null) return getAsset(opHash);
+
+		return null;
 	}
 
 	/**
-	 * Resolves an asset reference to a Hash. Supports:
-	 * <ul>
-	 *   <li>Hex hash string (64 chars) — direct asset ID on this venue</li>
-	 *   <li>DID URL with asset path — e.g. "did:key:z6Mk.../a/&lt;hash&gt;" or "did:web:venue.example.com/a/&lt;hash&gt;"</li>
-	 *   <li>Operation name — e.g. "test:echo" (looked up in operation registry)</li>
-	 * </ul>
+	 * Resolves an asset reference to a local Hash. Supports hex hash, DID URL (local only),
+	 * and operation name. Does not handle remote DIDs — use resolveAsset() for full resolution.
 	 *
 	 * @param ref Asset reference string
-	 * @return Resolved Hash, or null if not resolvable
+	 * @return Resolved Hash, or null if not resolvable locally
 	 */
 	public Hash resolveAssetHash(String ref) {
 		if (ref==null) return null;
@@ -413,7 +444,7 @@ public class Engine {
 		Hash h = Hash.parse(ref);
 		if (h!=null) return h;
 
-		// 2. Try DID URL with /a/<hash> path (any DID method)
+		// 2. Try DID URL with /a/<hash> path (local DID only)
 		if (ref.startsWith("did:")) {
 			int idx = ref.lastIndexOf("/a/");
 			if (idx>=0) {
@@ -430,26 +461,51 @@ public class Engine {
 		return null;
 	}
 
-	public Job invokeOperation(String op, ACell input) {
-		return invokeOperation(Strings.create(op),input);
-	}
+	/**
+	 * Invoke an operation given a reference string. Supports hex hash, DID URL,
+	 * operation name, and adapter:operation strings.
+	 * @param ref Operation reference string
+	 * @param input Input parameters
+	 * @return Job tracking the execution
+	 */
+	public Job invokeOperation(String ref, ACell input) {
+		if (ref==null) throw new IllegalArgumentException("Operation must be specified");
 
-	public Job invokeOperation(ACell op, ACell input) {
-		return invokeOperation(Strings.create(op),input);
-	}
+		// Resolve the operation reference (hex hash, DID URL, or operation name)
+		Asset asset = resolveAsset(ref);
+		if (asset!=null) {
+			return invokeOperation(asset, input);
+		}
 
-	public Job invokeOperation(Hash op, ACell input) {
-		return invokeOperation(op.toCVMHexString(),input);
+		// Fall through: use ref directly as adapter:operation string
+		String adapterName = ref.split(":")[0];
+		AAdapter adapter = getAdapter(adapterName);
+		if (adapter == null) {
+			throw new IllegalStateException("Adapter not available: "+adapterName);
+		}
+
+		Job job=submitJob(Strings.create(ref),null,input);
+		adapter.invoke(job, ref, null, input);
+		return job;
 	}
 
 	/**
-	 * Invoke an operation given a resolved Asset.
-	 * @param asset The operation asset (must have an adapter specified in metadata)
+	 * Invoke an operation given a resolved Asset. If the asset has a remote venue
+	 * reference, delegates to the remote venue via asset.invoke().
+	 * @param asset The operation asset
 	 * @param input Input parameters
 	 * @return Job tracking the execution
 	 */
 	public Job invokeOperation(Asset asset, ACell input) {
 		if (asset==null) throw new IllegalArgumentException("Asset must be specified");
+
+		// Check for remote asset — delegate to the asset's venue
+		Venue assetVenue = asset.getVenue();
+		if (assetVenue != null && !(assetVenue instanceof LocalVenue)) {
+			return asset.invoke(input).join();
+		}
+
+		// Local asset — dispatch via adapter
 		AMap<AString,ACell> meta = asset.meta();
 		AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
 		if (adapterOp == null) {
@@ -463,30 +519,8 @@ public class Engine {
 			throw new IllegalStateException("Adapter not available: "+adapterName);
 		}
 
-		Job job=submitJob(asset.getID().toCVMHexString(),meta,input);
+		Job job=submitJob(asset,meta,input);
 		adapter.invoke(job, operation, meta, input);
-		return job;
-	}
-
-	public Job invokeOperation(AString op, ACell input) {
-		if (op==null) throw new IllegalArgumentException("Operation must be specified");
-
-		// Resolve the operation reference (hex hash, DID URL, or operation name)
-		Asset asset = resolveAsset(op.toString());
-		if (asset!=null) {
-			return invokeOperation(asset, input);
-		}
-
-		// Fall through: use op directly as adapter:operation string
-		String operation = op.toString();
-		String adapterName = operation.split(":")[0];
-		AAdapter adapter = getAdapter(adapterName);
-		if (adapter == null) {
-			throw new IllegalStateException("Adapter not available: "+adapterName);
-		}
-
-		Job job=submitJob(op,null,input);
-		adapter.invoke(job, operation, null, input);
 		return job;
 	}
 
@@ -571,25 +605,51 @@ public class Engine {
 	}
 
 	/**
-	 * Resolves the adapter responsible for a job based on its operation field.
+	 * Resolves the adapter responsible for a job based on its asset or operation field.
 	 * @param job The job
 	 * @return The adapter, or null if not resolvable
 	 */
 	private AAdapter resolveJobAdapter(Job job) {
+		// Prefer the stored asset reference (avoids re-resolution)
+		Asset asset = job.getAsset();
+		if (asset == null) {
+			// Fall back to resolving from the :op field
+			AString op = RT.ensureString(job.getData().get(Fields.OP));
+			if (op == null) return null;
+			asset = resolveAsset(op.toString());
+		}
+
+		if (asset != null) {
+			AString adapterOp = RT.ensureString(RT.getIn(asset.meta(), "operation", "adapter"));
+			if (adapterOp != null) {
+				String adapterName = adapterOp.toString().split(":")[0];
+				return getAdapter(adapterName);
+			}
+		}
+
+		// Last resort: parse :op as adapter:operation string
 		AString op = RT.ensureString(job.getData().get(Fields.OP));
 		if (op == null) return null;
-		String opStr = op.toString();
-		String adapterName = opStr.split(":")[0];
+		String adapterName = op.toString().split(":")[0];
 		return getAdapter(adapterName);
 	}
 
 	private HashMap<AString, Job> jobs = new HashMap<>();
 	
-	/** 
+	/**
+	 * Submit a Job for an Asset-based operation. Stores asset reference on the job.
+	 */
+	private Job submitJob(Asset asset, AMap<AString,ACell> meta, ACell input) {
+		Job job = submitJob(asset.getID().toCVMHexString(), meta, input);
+		job.setAsset(asset);
+		return job;
+	}
+
+	/**
 	 * Record a Job
 	 * @param opID
 	 * @param input
-	 * @param meta 
+	 * @param meta
 	 * @return Job record
 	 */
 	private Job submitJob(AString opID, AMap<AString,ACell> meta, ACell input) {
