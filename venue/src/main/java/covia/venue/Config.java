@@ -69,6 +69,20 @@ public class Config {
 	/** Storage type: dlfs (DLFS lattice-backed filesystem) */
 	public static final AString STORAGE_TYPE_DLFS = Strings.intern("dlfs");
 
+	// ========== OAuth config keys ==========
+
+	/** Key for OAuth providers configuration section */
+	public static final AString OAUTH = Strings.intern("oauth");
+
+	/** Key for provider client ID */
+	public static final AString CLIENT_ID = Strings.intern("clientId");
+
+	/** Key for provider client secret */
+	public static final AString CLIENT_SECRET = Strings.intern("clientSecret");
+
+	/** Key for base URL (used for constructing OAuth redirect URIs) */
+	public static final AString BASE_URL = Strings.intern("baseUrl");
+
 	// ========== MCP config keys ==========
 
 	/** Key for MCP enabled flag */

@@ -982,6 +982,15 @@ public class Engine {
 		return keyPair.getAccountKey();
 	}
 
+	/**
+	 * Get the key pair for this venue engine.
+	 * Used for signing venue-issued JWTs and other cryptographic operations.
+	 * @return The venue's AKeyPair
+	 */
+	public AKeyPair getKeyPair() {
+		return keyPair;
+	}
+
 	public AString getName() {
 		return RT.str(config.get(Fields.NAME));
 	}

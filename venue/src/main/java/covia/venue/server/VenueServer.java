@@ -53,6 +53,7 @@ public class VenueServer {
 	protected MCP mcp;
 	protected A2A a2a;
 	protected UserAPI userApi;
+	protected LoginProviders loginProviders;
 
 	public VenueServer(AMap<AString,ACell> config) {
 		this.config=config;
@@ -62,6 +63,7 @@ public class VenueServer {
 		webApp=new CoviaWebApp(engine);
 		api=new CoviaAPI(localVenue);
 		userApi=new UserAPI(localVenue);
+		loginProviders=new LoginProviders(engine, config);
 
 		AMap<AString,ACell> mcpConfig=RT.getIn(config, Fields.MCP);
 		if (RT.bool(mcpConfig)) {
@@ -113,7 +115,8 @@ public class VenueServer {
 	private synchronized void start(Integer port) {
 		close();
 		javalin=buildApp();
-		AuthMiddleware.register(javalin, engine.getAccountKey());
+		AuthMiddleware.register(javalin, engine.getAccountKey(),
+				loginProviders.hasProviders() ? loginProviders.getProviders() : null);
 		addLoginRoutes(javalin);
 		addAPIRoutes(javalin);
 		start(javalin,port);
@@ -219,17 +222,17 @@ public class VenueServer {
 	}
 	
 	private void addLoginRoutes(Javalin app) {
+		if (!loginProviders.hasProviders()) return;
+
         // Login route for any provider
-        app.get("/auth/{provider}", LoginProviders::handleLogin);
- 
+        app.get("/auth/{provider}", loginProviders::handleLogin);
+
         // Callback route for any provider
-        app.get("/auth/{provider}/callback", LoginProviders::handleCallback);
-        
-        // Simple login page to choose a provider
+        app.get("/auth/{provider}/callback", loginProviders::handleCallback);
+
+        // Simple login page listing configured providers
         app.get("/login", ctx -> {
-            ctx.html("<h1>Login</h1>" +
-                     "<a href='/auth/google'>Login with Google</a><br>" +
-                     "<a href='/auth/facebook'>Login with Facebook</a>");
+            ctx.html(loginProviders.renderLoginPage());
         });
 	}
 
