@@ -35,14 +35,19 @@ public class Job {
 	/** Optional listener notified after each state update */
 	private Consumer<Job> updateListener=null;
 
-	/** Transient reference to the Asset being executed, if resolved */
-	private Asset asset=null;
+	/** Transient reference to the operation being executed, if resolved */
+	private final Operation operation;
 
 	/** Key for previous state pointer in job data */
 	public static final AString PREV = Strings.intern("prev");
-	
+
 	public Job(AMap<AString, ACell> status) {
+		this(status, null);
+	}
+
+	public Job(AMap<AString, ACell> status, Operation operation) {
 		this.data=status;
+		this.operation=operation;
 	}
 
 	public static boolean isFinished(AMap<AString, ACell> jobData) {
@@ -265,19 +270,11 @@ public class Job {
 	}
 
 	/**
-	 * Gets the Asset associated with this job, if resolved.
-	 * @return Asset instance, or null
+	 * Gets the operation associated with this job, if resolved.
+	 * @return Operation, or null if not resolved at creation time
 	 */
-	public Asset getAsset() {
-		return asset;
-	}
-
-	/**
-	 * Sets the Asset associated with this job.
-	 * @param asset Asset instance
-	 */
-	public void setAsset(Asset asset) {
-		this.asset = asset;
+	public Operation getOperation() {
+		return operation;
 	}
 
 	// ===== State History =====

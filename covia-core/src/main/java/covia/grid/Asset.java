@@ -34,7 +34,7 @@ public class Asset {
 
 
 	/** The asset metadata. May be null if not yet cached */
-	private AMap<AString, ACell> meta;
+	AMap<AString, ACell> meta;
 	
 	protected Asset(Hash id, AString metadata) {
 		this.id=id;

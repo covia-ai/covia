@@ -57,6 +57,7 @@ import covia.grid.Asset;
 import covia.grid.Assets;
 import covia.grid.Grid;
 import covia.grid.Job;
+import covia.grid.Operation;
 import covia.grid.Status;
 import covia.grid.Venue;
 import covia.lattice.Covia;
@@ -413,11 +414,11 @@ public class Engine {
 						// Local DID — look up asset locally
 						return getAsset(parsed);
 					} else {
-						// Remote DID — create Asset with remote venue reference
+						// Remote DID — create Operation with remote venue reference
 						Venue remoteVenue = Grid.connect(didPart);
-						Asset remoteAsset = Asset.create(parsed, null);
-						remoteAsset.setVenue(remoteVenue);
-						return remoteAsset;
+						Operation remoteOp = Operation.create(parsed, null);
+						remoteOp.setVenue(remoteVenue);
+						return remoteOp;
 					}
 				}
 			}
@@ -499,28 +500,31 @@ public class Engine {
 	public Job invokeOperation(Asset asset, ACell input) {
 		if (asset==null) throw new IllegalArgumentException("Asset must be specified");
 
-		// Check for remote asset — delegate to the asset's venue
-		Venue assetVenue = asset.getVenue();
-		if (assetVenue != null && !(assetVenue instanceof LocalVenue)) {
-			return asset.invoke(input).join();
+		// Ensure we have an Operation (not a plain Asset)
+		Operation op = Operation.from(asset);
+		if (op==null) {
+			throw new IllegalArgumentException("Asset is not an operation: "+asset.getID());
 		}
 
-		// Local asset — dispatch via adapter
-		AMap<AString,ACell> meta = asset.meta();
+		// Check for remote operation — delegate to the operation's venue
+		Venue opVenue = op.getVenue();
+		if (opVenue != null && !(opVenue instanceof LocalVenue)) {
+			return op.invoke(input).join();
+		}
+
+		// Local operation — dispatch via adapter
+		AMap<AString,ACell> meta = op.meta();
 		AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
-		if (adapterOp == null) {
-			throw new IllegalArgumentException("Asset is not an operation (no adapter specified)");
-		}
 
-		String operation = adapterOp.toString();
-		String adapterName = operation.split(":")[0];
+		String adapterStr = adapterOp.toString();
+		String adapterName = adapterStr.split(":")[0];
 		AAdapter adapter = getAdapter(adapterName);
 		if (adapter == null) {
 			throw new IllegalStateException("Adapter not available: "+adapterName);
 		}
 
-		Job job=submitJob(asset,meta,input);
-		adapter.invoke(job, operation, meta, input);
+		Job job=submitJob(op,meta,input);
+		adapter.invoke(job, adapterStr, meta, input);
 		return job;
 	}
 
@@ -610,15 +614,20 @@ public class Engine {
 	 * @return The adapter, or null if not resolvable
 	 */
 	private AAdapter resolveJobAdapter(Job job) {
-		// Prefer the stored asset reference (avoids re-resolution)
-		Asset asset = job.getAsset();
-		if (asset == null) {
-			// Fall back to resolving from the :op field
-			AString op = RT.ensureString(job.getData().get(Fields.OP));
-			if (op == null) return null;
-			asset = resolveAsset(op.toString());
+		// Prefer the stored Operation reference (avoids re-resolution)
+		Operation operation = job.getOperation();
+		if (operation != null) {
+			AString adapterOp = RT.ensureString(RT.getIn(operation.meta(), "operation", "adapter"));
+			if (adapterOp != null) {
+				String adapterName = adapterOp.toString().split(":")[0];
+				return getAdapter(adapterName);
+			}
 		}
 
+		// Fall back to resolving from the :op field
+		AString opStr = RT.ensureString(job.getData().get(Fields.OP));
+		if (opStr == null) return null;
+		Asset asset = resolveAsset(opStr.toString());
 		if (asset != null) {
 			AString adapterOp = RT.ensureString(RT.getIn(asset.meta(), "operation", "adapter"));
 			if (adapterOp != null) {
@@ -628,31 +637,28 @@ public class Engine {
 		}
 
 		// Last resort: parse :op as adapter:operation string
-		AString op = RT.ensureString(job.getData().get(Fields.OP));
-		if (op == null) return null;
-		String adapterName = op.toString().split(":")[0];
+		if (opStr == null) return null;
+		String adapterName = opStr.toString().split(":")[0];
 		return getAdapter(adapterName);
 	}
 
 	private HashMap<AString, Job> jobs = new HashMap<>();
 	
 	/**
-	 * Submit a Job for an Asset-based operation. Stores asset reference on the job.
+	 * Submit a Job for a resolved Operation.
 	 */
-	private Job submitJob(Asset asset, AMap<AString,ACell> meta, ACell input) {
-		Job job = submitJob(asset.getID().toCVMHexString(), meta, input);
-		job.setAsset(asset);
-		return job;
+	private Job submitJob(Operation operation, AMap<AString,ACell> meta, ACell input) {
+		return submitJob(operation.getID().toCVMHexString(), meta, input, operation);
 	}
 
 	/**
-	 * Record a Job
-	 * @param opID
-	 * @param input
-	 * @param meta
-	 * @return Job record
+	 * Submit a Job for an unresolved adapter:operation string.
 	 */
 	private Job submitJob(AString opID, AMap<AString,ACell> meta, ACell input) {
+		return submitJob(opID, meta, input, null);
+	}
+
+	private Job submitJob(AString opID, AMap<AString,ACell> meta, ACell input, Operation operation) {
 		long ts=Utils.getCurrentTimestamp();
 		AString jobID = generateJobID(ts);
 
@@ -669,7 +675,7 @@ public class Engine {
 			status=status.assoc(Fields.NAME, name);
 		}
 
-		Job job = new Job(status) {
+		Job job = new Job(status, operation) {
 			@Override public AMap<AString,ACell> processUpdate(AMap<AString,ACell> newData) {
 				return newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 			}
