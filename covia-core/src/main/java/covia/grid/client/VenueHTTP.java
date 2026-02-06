@@ -44,9 +44,11 @@ public class VenueHTTP extends Venue {
 	public static Logger log=LoggerFactory.getLogger(VenueHTTP.class);
 
 	private static final double BACKOFF_FACTOR = 1.5;
-	private static final long INITIAL_POLL_DELAY = 300; // 1 second initial delay
+	private static final long INITIAL_POLL_DELAY = 300;
+	private static final long MAX_POLL_DELAY = 10000;
+	private static final long DEFAULT_TIMEOUT = 600000; // 10 minutes, allows for slow LLM responses
 
-	private long timeout=5000;
+	private long timeout=DEFAULT_TIMEOUT;
 	private final HttpClient httpClient;
 	private final URI baseURI;
 	private final VenueAuth auth;
@@ -249,6 +251,22 @@ public class VenueHTTP extends Venue {
 
 	/**
 	 * Invokes an operation, returning a finished Job once complete
+	 * @param opID Operation to invoke
+	 * @param input Input parameters
+	 * @param timeoutMs Maximum time to wait in milliseconds
+	 * @return Finished Job
+	 * @throws TimeoutException
+	 * @throws ExecutionException
+	 * @throws InterruptedException
+	 */
+	public Job invokeSync(String opID, ACell input, long timeoutMs) throws InterruptedException, ExecutionException, TimeoutException {
+		Job job=startJob(Strings.create(opID), input);
+		waitForFinish(job, timeoutMs);
+		return job;
+	}
+
+	/**
+	 * Invokes an operation, returning a finished Job once complete
 	 * @param opID Operation to invoke as an Asset ID or adapter operation alias
 	 * @param input
 	 * @return Finished Job
@@ -259,6 +277,22 @@ public class VenueHTTP extends Venue {
 	public Job invokeSync(Hash opID, ACell input) throws InterruptedException, ExecutionException, TimeoutException {
 		Job job=startJob(opID, input);
 		waitForFinish(job);
+		return job;
+	}
+
+	/**
+	 * Invokes an operation, returning a finished Job once complete
+	 * @param opID Operation to invoke as an Asset ID
+	 * @param input Input parameters
+	 * @param timeoutMs Maximum time to wait in milliseconds
+	 * @return Finished Job
+	 * @throws TimeoutException
+	 * @throws ExecutionException
+	 * @throws InterruptedException
+	 */
+	public Job invokeSync(Hash opID, ACell input, long timeoutMs) throws InterruptedException, ExecutionException, TimeoutException {
+		Job job=startJob(opID, input);
+		waitForFinish(job, timeoutMs);
 		return job;
 	}
 	
@@ -343,16 +377,42 @@ public class VenueHTTP extends Venue {
 		waitForFinish(job);
 		return job;
 	}
-	
+
 	/**
 	 * Invokes a Job and waits for it to finish
 	 * @param opID Identifier of operation
 	 * @param input Input to the operation
-	 * @return Updates Job in finished state (COMPLETE, FAILED or CANCELLED)
+	 * @param timeoutMs Maximum time to wait in milliseconds
+	 * @return Job in finished state (COMPLETE, FAILED or CANCELLED)
+	 * @throws InterruptedException
+	 */
+	public Job invokeAndWait(AString opID, ACell input, long timeoutMs) throws InterruptedException {
+		Job job=startJobAsync(opID,input).join();
+		waitForFinish(job, timeoutMs);
+		return job;
+	}
+
+	/**
+	 * Invokes a Job and waits for it to finish
+	 * @param opID Identifier of operation
+	 * @param input Input to the operation
+	 * @return Job in finished state (COMPLETE, FAILED or CANCELLED)
 	 * @throws InterruptedException
 	 */
 	public Job invokeAndWait(Hash opID, ACell input) throws InterruptedException {
 		return invokeAndWait(opID.toCVMHexString(),input);
+	}
+
+	/**
+	 * Invokes a Job and waits for it to finish
+	 * @param opID Identifier of operation
+	 * @param input Input to the operation
+	 * @param timeoutMs Maximum time to wait in milliseconds
+	 * @return Job in finished state (COMPLETE, FAILED or CANCELLED)
+	 * @throws InterruptedException
+	 */
+	public Job invokeAndWait(Hash opID, ACell input, long timeoutMs) throws InterruptedException {
+		return invokeAndWait(opID.toCVMHexString(), input, timeoutMs);
 	}
 	
 	/**
@@ -413,16 +473,32 @@ public class VenueHTTP extends Venue {
 	}
 
 	/**
-	 * Waits for a remote job to finish, polling
+	 * Waits for a remote job to finish, polling with exponential backoff.
+	 * Uses the default timeout configured via {@link #setTimeout}.
 	 * @param job Any Job, presumably not yet finished
 	 * @return true if successfully completed, false if failed
 	 * @throws InterruptedException if interrupted while waiting
 	 */
 	public boolean waitForFinish(Job job) throws InterruptedException {
+		return waitForFinish(job, timeout);
+	}
+
+	/**
+	 * Waits for a remote job to finish, polling with exponential backoff.
+	 * @param job Any Job, presumably not yet finished
+	 * @param timeoutMs Maximum time to wait in milliseconds
+	 * @return true if successfully completed, false if failed
+	 * @throws InterruptedException if interrupted while waiting
+	 */
+	public boolean waitForFinish(Job job, long timeoutMs) throws InterruptedException {
 		AString id=job.getID();
 		if (id==null) throw new IllegalStateException("Job has no ID");
 		long currentDelay = INITIAL_POLL_DELAY;
+		long deadline = System.currentTimeMillis() + timeoutMs;
 		while (!job.isFinished()) {
+			if (System.currentTimeMillis() > deadline) {
+				throw new ResponseException("Job polling timed out after "+timeoutMs+"ms for job: "+id);
+			}
 			try {
 				updateJobStatus(job);
 				if (job.isFinished()) break;
@@ -430,9 +506,25 @@ public class VenueHTTP extends Venue {
 				throw new ResponseException("Job status polling failed",e);
 			}
 			Thread.sleep(currentDelay);
-			currentDelay = (long) (currentDelay * BACKOFF_FACTOR);
+			currentDelay = Math.min((long) (currentDelay * BACKOFF_FACTOR), MAX_POLL_DELAY);
 		}
 		return job.isComplete();
+	}
+
+	/**
+	 * Sets the timeout in milliseconds for polling operations like {@link #waitForFinish}.
+	 * @param timeoutMs Timeout in milliseconds
+	 */
+	public void setTimeout(long timeoutMs) {
+		this.timeout = timeoutMs;
+	}
+
+	/**
+	 * Gets the timeout in milliseconds for polling operations.
+	 * @return Timeout in milliseconds
+	 */
+	public long getTimeout() {
+		return timeout;
 	}
 
 	/**
@@ -487,25 +579,20 @@ public class VenueHTTP extends Venue {
 	 * @return Future containing the content as an AContent, or null if not found
 	 */
 	public CompletableFuture<AContent> getContent(Hash assetID) {
-		
+
 		HttpRequest req = requestBuilder("assets/" + assetID.toHexString() + "/content")
 			.GET()
 			.build();
-		
-		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+
+		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofByteArray()).thenApply(response -> {
 			int code=response.statusCode();
-			if (response.statusCode() != 200) {
-				throw new RuntimeException("Content get failed with status: " +code+" "+ response.body()+" -- asset ID: "+assetID);
+			if (code != 200) {
+				throw new RuntimeException("Content get failed with status: " +code+" -- asset ID: "+assetID);
 			}
-			
-			try {
-				// Create a BlobContent from the response body
-				byte[] data = response.body().getBytes();
-				convex.core.data.Blob blob = convex.core.data.Blob.wrap(data);
-				return BlobContent.of(blob);
-			} catch (Exception e) {
-				throw new RuntimeException("Failed to create content from response", e);
-			}
+
+			byte[] data = response.body();
+			convex.core.data.Blob blob = convex.core.data.Blob.wrap(data);
+			return BlobContent.of(blob);
 		});
 	}
 	
