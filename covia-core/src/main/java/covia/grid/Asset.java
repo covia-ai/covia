@@ -165,7 +165,7 @@ public class Asset {
 	 * Gets the Asset metadata as an immutable map
 	 * @return Asset metadata map. Guaranteed not to be null
 	 */
-	public AMap<AString,ACell> meta() {
+	public synchronized AMap<AString,ACell> meta() {
 		if (meta!=null) return meta;
 		AString metadata=getMetadata();
 		try {

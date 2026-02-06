@@ -42,7 +42,7 @@ public class VenueServer {
 	
 	public static Logger log=LoggerFactory.getLogger(VenueServer.class);;
 	
-	protected final AMap<AString,ACell> config;
+	protected final Config config;
 	
 	protected Convex convex;
 	protected Javalin javalin;
@@ -57,7 +57,7 @@ public class VenueServer {
 	protected LoginProviders loginProviders;
 
 	public VenueServer(AMap<AString,ACell> config) {
-		this.config=config;
+		this.config=new Config(config);
 		this.convex=null; // TODO:
 		engine=Engine.createTemp(config);
 		LocalVenue localVenue=new LocalVenue(engine);
@@ -66,13 +66,13 @@ public class VenueServer {
 		userApi=new UserAPI(localVenue);
 		loginProviders=engine.getAuth().getLoginProviders();
 
-		AMap<AString,ACell> mcpConfig=RT.getIn(config, Fields.MCP);
-		if (RT.bool(mcpConfig)) {
+		AMap<AString,ACell> mcpConfig=this.config.getMCPConfig();
+		if (mcpConfig!=null) {
 			mcp=new MCP(localVenue,mcpConfig);
 		}
 
-		AMap<AString,ACell> a2aConfig=RT.getIn(config, Fields.A2A);
-		if (RT.bool(a2aConfig)) {
+		AMap<AString,ACell> a2aConfig=this.config.getA2AConfig();
+		if (a2aConfig!=null) {
 			a2a=new A2A(localVenue,a2aConfig);
 		}
 	}
@@ -107,9 +107,8 @@ public class VenueServer {
 	 * Start app with default port
 	 */
 	public void start() {
-		AInteger port=RT.ensureInteger(RT.getIn(config, Strings.create("port")));
-		Integer iport=(port==null)?null:(int)port.longValue();
-		start(iport);
+		int port = config.getPort();
+		start(port);
 	}
 
 	

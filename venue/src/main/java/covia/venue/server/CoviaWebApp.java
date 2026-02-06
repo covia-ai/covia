@@ -80,7 +80,7 @@ public class CoviaWebApp  {
 							Layout.styledBox(div(
 								h4("Venue Overview"),
 								p("Version: "+Utils.getVersion()),
-								p("Name: "+engine.getConfig().get(Fields.NAME)),
+								p("Name: "+engine.config().getName()),
 								p(new Text("DID: "),code(engine.getDID().toString())), // TODO: venue DID?
 								p(
 									new Text("Registered adapters: "+engine.getAdapterNames().size()+" ("),
@@ -140,14 +140,18 @@ public class CoviaWebApp  {
 	}
 	
 	public void configPage(Context ctx) {
+		// Show only non-sensitive configuration (name, DID, storage type)
+		// Secrets like OAuth client secrets and API keys are redacted
 		standardPage(ctx,html(
 				Layout.makeHeader("Engine Configuration"),
 				body(
 					h1("Engine Configuration"),
-					p("Current configuration for this Covia venue engine:"),
+					p("Public configuration for this Covia venue engine:"),
 					div(
-						h4("Configuration Details"),
-						pre(code(engine.getConfig().toString())).withStyle("background-color: #f5f5f5; padding: 1rem; border-radius: 4px; overflow-x: auto;")
+						h4("Venue"),
+						p("Name: " + engine.getName()),
+						p("DID: " + engine.getDIDString()),
+						p("Adapters: " + engine.getAdapterNames().size())
 					),
 					div(
 						h4("Navigation"),
@@ -212,7 +216,6 @@ public class CoviaWebApp  {
 	static final List<String[]> BASE_LINKS = List.of(
 		sa("OpenAPI documentation","Swagger API" ,"/swagger"),
 		sa("Registered adapters","Adapters" ,"/adapters"),
-		sa("Engine configuration","Config" ,"/config"),
 		sa("Covia Documentation","Covia Docs" ,"https://docs.covia.ai"),
 		sa("Convex Documentation","Convex Docs" ,"https://docs.convex.world"),
 		sa("General information","Covia Website", "https://covia.ai"),
@@ -290,13 +293,13 @@ public class CoviaWebApp  {
 	 */
 	private DomContent buildMCPToolsTable(AAdapter adapter) {
 		// Check if MCP is available
-		if (engine.getConfig().get(Fields.MCP) == null) {
+		if (engine.config().getMCPConfig() == null) {
 			return div(); // Return empty div if MCP not available
 		}
 		
 		try {
 			// Create MCP instance to access the listTools method
-			AMap<AString, ACell> mcpConfig = RT.ensureMap(engine.getConfig().get(Fields.MCP));
+			AMap<AString, ACell> mcpConfig = engine.config().getMCPConfig();
 			MCP mcp = new MCP(new LocalVenue(engine), mcpConfig);
 
 			AVector<AMap<AString, ACell>> tools = mcp.listTools(adapter);
@@ -398,7 +401,7 @@ public class CoviaWebApp  {
 	 * @return DomContent containing MCP information or empty div if not configured
 	 */
 	private DomContent buildMCPContent(String baseUrl) {
-		if (engine.getConfig().get(Fields.MCP) == null) {
+		if (engine.config().getMCPConfig() == null) {
 			return Layout.styledBox(div(p("MCP not available")));
 		}
 		

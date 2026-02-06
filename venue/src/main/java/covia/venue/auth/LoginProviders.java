@@ -68,7 +68,7 @@ public class LoginProviders {
 		AMap<AString, ACell> oauthConfig = RT.ensureMap(authConfig.get(Config.OAUTH));
 		if (oauthConfig == null) return;
 
-		String base = Config.getBaseUrl(engine.getConfig());
+		String base = engine.config().getBaseUrl();
 
 		registerProvider("google", oauthConfig, base, OAuthConfig::google);
 		registerProvider("microsoft", oauthConfig, base, OAuthConfig::microsoft);

@@ -3,15 +3,17 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 
 /**
- * Static configuration utilities and constants for Covia venue configuration.
+ * Venue configuration instance wrapping an immutable config map.
  *
- * <p>This class contains all configuration keys used in venue JSON5 config files.
- * All keys are interned AString constants for direct use with CVM data structures.
+ * <p>Each {@link Engine} owns a Config instance that provides typed access
+ * to venue configuration values. Static key constants are retained for
+ * direct use with CVM data structures.
  *
  * <p><b>SECURITY NOTE:</b> {@code Strings.intern()} should ONLY be used for static
  * compile-time constants as shown here. Never intern externally-obtained or user-provided
@@ -45,6 +47,9 @@ public class Config {
 	/** Key for MCP configuration */
 	public static final AString MCP = Strings.intern("mcp");
 
+	/** Key for A2A configuration */
+	public static final AString A2A = Strings.intern("a2a");
+
 	/** Key for adapters configuration */
 	public static final AString ADAPTERS = Strings.intern("adapters");
 
@@ -58,6 +63,12 @@ public class Config {
 
 	/** Key for storage path (for file/dlfs storage) */
 	public static final AString PATH = Strings.intern("path");
+
+	/** Key for maximum content upload size in bytes (default 100MB) */
+	public static final AString MAX_CONTENT_SIZE = Strings.intern("maxContentSize");
+
+	/** Default maximum content upload size in bytes (100MB) */
+	public static final long DEFAULT_MAX_CONTENT_SIZE = 100 * 1024 * 1024;
 
 	// ========== Storage type values ==========
 
@@ -103,31 +114,79 @@ public class Config {
 	/** Key for MCP enabled flag */
 	public static final AString ENABLED = Strings.intern("enabled");
 
-	// ========== Utility methods ==========
+	// ========== Instance fields ==========
+
+	private final AMap<AString, ACell> config;
 
 	/**
-	 * Get the base URL for this venue from config.
+	 * Create a Config wrapping the given venue config map.
+	 * @param config Venue config map, or null for empty defaults
+	 */
+	public Config(AMap<AString, ACell> config) {
+		this.config = (config == null) ? Maps.empty() : config;
+	}
+
+	/**
+	 * Get the raw config map.
+	 * @return Underlying config map (never null)
+	 */
+	public AMap<AString, ACell> getMap() {
+		return config;
+	}
+
+	// ========== Typed accessors ==========
+
+	/**
+	 * Get the venue name.
+	 * @return Venue name, or null if not configured
+	 */
+	public AString getName() {
+		return RT.ensureString(config.get(NAME));
+	}
+
+	/**
+	 * Get the venue DID string from config.
+	 * @return DID string, or null if not configured (Engine generates one from keypair)
+	 */
+	public AString getDID() {
+		return RT.ensureString(config.get(DID));
+	}
+
+	/**
+	 * Get the configured hostname.
+	 * @return Hostname string, defaults to "localhost"
+	 */
+	public String getHostname() {
+		AString hostname = RT.ensureString(config.get(HOSTNAME));
+		return (hostname != null) ? hostname.toString() : "localhost";
+	}
+
+	/**
+	 * Get the configured port.
+	 * @return Port number, defaults to 8080
+	 */
+	public int getPort() {
+		CVMLong portVal = RT.ensureLong(config.get(PORT));
+		return (portVal != null) ? (int) portVal.longValue() : 8080;
+	}
+
+	/**
+	 * Get the base URL for this venue.
 	 *
 	 * <p>Checks for an explicit "baseUrl" first, then derives from "hostname"
 	 * and "port". Port 443 implies https; standard ports (80/443) are omitted
 	 * from the URL. Falls back to {@code http://localhost:8080} if unconfigured.
 	 *
-	 * @param config Venue config map
 	 * @return Base URL string (no trailing slash)
 	 */
-	public static String getBaseUrl(AMap<AString, ACell> config) {
-		if (config == null) return "http://localhost:8080";
-
+	public String getBaseUrl() {
 		// Explicit baseUrl takes priority
 		AString explicit = RT.ensureString(config.get(BASE_URL));
 		if (explicit != null) return explicit.toString();
 
 		// Derive from hostname + port
-		AString hostname = RT.ensureString(config.get(HOSTNAME));
-		String host = (hostname != null) ? hostname.toString() : "localhost";
-
-		CVMLong portVal = RT.ensureLong(config.get(PORT));
-		int port = (portVal != null) ? (int) portVal.longValue() : 8080;
+		String host = getHostname();
+		int port = getPort();
 
 		String scheme = (port == 443) ? "https" : "http";
 		if ((scheme.equals("http") && port == 80) || (scheme.equals("https") && port == 443)) {
@@ -136,7 +195,128 @@ public class Config {
 		return scheme + "://" + host + ":" + port;
 	}
 
-	private Config() {
-		// Prevent instantiation
+	// ========== Storage accessors ==========
+
+	/**
+	 * Get the storage type.
+	 * @return Storage type string, defaults to "lattice"
+	 */
+	public AString getStorageType() {
+		AMap<AString, ACell> storageConfig = RT.ensureMap(config.get(STORAGE));
+		if (storageConfig != null) {
+			AString contentValue = RT.ensureString(storageConfig.get(CONTENT));
+			if (contentValue != null) return contentValue;
+		}
+		return STORAGE_TYPE_LATTICE;
+	}
+
+	/**
+	 * Get the storage path (for file/dlfs storage).
+	 * @return Storage path, or null if not configured
+	 */
+	public String getStoragePath() {
+		AMap<AString, ACell> storageConfig = RT.ensureMap(config.get(STORAGE));
+		if (storageConfig != null) {
+			AString pathValue = RT.ensureString(storageConfig.get(PATH));
+			if (pathValue != null) return pathValue.toString();
+		}
+		return null;
+	}
+
+	/**
+	 * Get the maximum content upload size.
+	 * @return Maximum size in bytes, defaults to 100MB
+	 */
+	public long getMaxContentSize() {
+		CVMLong cv = RT.ensureLong(config.get(MAX_CONTENT_SIZE));
+		if (cv != null) return cv.longValue();
+		return DEFAULT_MAX_CONTENT_SIZE;
+	}
+
+	// ========== Auth accessors ==========
+
+	/**
+	 * Get the auth configuration section.
+	 * @return Auth config map, or null if not configured
+	 */
+	public AMap<AString, ACell> getAuthConfig() {
+		return RT.ensureMap(config.get(AUTH));
+	}
+
+	/**
+	 * Get the JWT token expiry in seconds.
+	 * @return Token expiry in seconds, defaults to 86400 (24 hours)
+	 */
+	public long getTokenExpiry() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		if (authConfig != null) {
+			CVMLong expiry = RT.ensureLong(authConfig.get(TOKEN_EXPIRY));
+			if (expiry != null) return expiry.longValue();
+		}
+		return Auth.DEFAULT_TOKEN_EXPIRY;
+	}
+
+	/**
+	 * Whether public (anonymous) access is enabled.
+	 * Reads auth.public.enabled, defaults to true.
+	 * @return true if public access is enabled
+	 */
+	public boolean isPublicAccess() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		if (authConfig != null) {
+			AMap<AString, ACell> publicConfig = RT.ensureMap(authConfig.get(PUBLIC));
+			if (publicConfig != null) {
+				ACell enabledVal = publicConfig.get(ENABLED);
+				return (enabledVal == null) || RT.bool(enabledVal);
+			}
+		}
+		return true;
+	}
+
+	// ========== Protocol config accessors ==========
+
+	/**
+	 * Get the MCP configuration section.
+	 * @return MCP config map, or null if MCP is not configured
+	 */
+	public AMap<AString, ACell> getMCPConfig() {
+		return RT.ensureMap(config.get(MCP));
+	}
+
+	/**
+	 * Get the A2A configuration section.
+	 * @return A2A config map, or null if A2A is not configured
+	 */
+	public AMap<AString, ACell> getA2AConfig() {
+		return RT.ensureMap(config.get(A2A));
+	}
+
+	/**
+	 * Whether MCP is configured.
+	 * @return true if MCP configuration is present
+	 */
+	public boolean hasMCP() {
+		return getMCPConfig() != null;
+	}
+
+	/**
+	 * Whether A2A is configured.
+	 * @return true if A2A configuration is present
+	 */
+	public boolean hasA2A() {
+		return getA2AConfig() != null;
+	}
+
+	// ========== Static compatibility ==========
+
+	/**
+	 * Get the base URL for a venue from a raw config map.
+	 * @param config Venue config map
+	 * @return Base URL string (no trailing slash)
+	 * @deprecated Use instance method {@link #getBaseUrl()} instead
+	 */
+	@Deprecated
+	public static String getBaseUrl(AMap<AString, ACell> config) {
+		return new Config(config).getBaseUrl();
 	}
 }

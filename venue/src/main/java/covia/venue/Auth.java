@@ -36,7 +36,7 @@ import covia.venue.auth.LoginProviders;
  * </pre>
  *
  * <p>OAuth redirect URIs use the venue's base URL from
- * {@link Config#getBaseUrl(AMap)}.
+ * {@link Config#getBaseUrl()}.
  *
  * <p>Created and owned by {@link Engine}.
  */
@@ -59,32 +59,16 @@ public class Auth {
 	 *
 	 * @param engine The venue engine
 	 * @param users Lattice cursor for the user database
-	 * @param config The full venue config map
 	 */
-	public Auth(Engine engine, ACursor<AMap<AString, AMap<AString, ACell>>> users, AMap<AString, ACell> config) {
+	public Auth(Engine engine, ACursor<AMap<AString, AMap<AString, ACell>>> users) {
 		this.users = users;
 
-		AMap<AString, ACell> authConfig = RT.ensureMap(config.get(Config.AUTH));
-
-		if (authConfig != null) {
-			CVMLong expiry = RT.ensureLong(authConfig.get(Config.TOKEN_EXPIRY));
-			this.tokenExpiry = (expiry != null) ? expiry.longValue() : DEFAULT_TOKEN_EXPIRY;
-
-			// Read public access config: auth.public.enabled (default true)
-			AMap<AString, ACell> publicConfig = RT.ensureMap(authConfig.get(Config.PUBLIC));
-			if (publicConfig != null) {
-				ACell enabledVal = publicConfig.get(Config.ENABLED);
-				this.publicAccessEnabled = (enabledVal == null) || RT.bool(enabledVal);
-			} else {
-				this.publicAccessEnabled = true;
-			}
-		} else {
-			this.tokenExpiry = DEFAULT_TOKEN_EXPIRY;
-			this.publicAccessEnabled = true;
-		}
+		Config config = engine.config();
+		this.tokenExpiry = config.getTokenExpiry();
+		this.publicAccessEnabled = config.isPublicAccess();
 
 		// Create login providers from auth config
-		this.loginProviders = new LoginProviders(engine, authConfig);
+		this.loginProviders = new LoginProviders(engine, config.getAuthConfig());
 
 		log.info("Auth: public access {}, token expiry {}s, {} OAuth provider(s)",
 			publicAccessEnabled ? "enabled" : "disabled", tokenExpiry,

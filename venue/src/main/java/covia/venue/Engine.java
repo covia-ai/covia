@@ -82,7 +82,7 @@ public class Engine {
 	public static final long POS_META = 2;
 
 	
-	protected final AMap<AString, ACell> config;
+	protected final Config config;
 
 	protected final AStore store;
 	
@@ -123,7 +123,7 @@ public class Engine {
 	protected Index<AString, Hash> operations = (Index<AString, Hash>) Index.EMPTY;
 
 	public Engine(AMap<AString, ACell> config, AStore store) throws IOException {
-		this.config=(config==null)?Maps.empty():config;
+		this.config=new Config(config);
 		this.store=store;
 		initialiseLattice();
 		this.contentStorage = createStorage();
@@ -145,21 +145,8 @@ public class Engine {
 	 */
 	@SuppressWarnings("unchecked")
 	private AStorage createStorage() {
-		// Get storage config
-		AMap<AString, ACell> storageConfig = RT.ensureMap(config.get(Config.STORAGE));
-		AString storageType = Config.STORAGE_TYPE_LATTICE; // default
-		String storagePath = null;
-
-		if (storageConfig != null) {
-			AString contentValue = RT.ensureString(storageConfig.get(Config.CONTENT));
-			if (contentValue != null) {
-				storageType = contentValue;
-			}
-			AString pathValue = RT.ensureString(storageConfig.get(Config.PATH));
-			if (pathValue != null) {
-				storagePath = pathValue.toString();
-			}
-		}
+		AString storageType = config.getStorageType();
+		String storagePath = config.getStoragePath();
 
 		log.info("Configuring storage type: {}", storageType);
 
@@ -212,7 +199,7 @@ public class Engine {
 		this.lattice = Cursors.of(initialState);
 		this.assets = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.ASSETS);
 		ACursor<AMap<AString, AMap<AString, ACell>>> usersCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.USERS);
-		this.auth = new Auth(this, usersCursor, config);
+		this.auth = new Auth(this, usersCursor);
 	}
 
 	private AHashMap<Keyword, ACell> emptyLattice() {
@@ -836,17 +823,20 @@ public class Engine {
 	}
 	
 	public Hash putContent(AMap<AString, ACell> meta, InputStream is) throws IOException {
-		if (meta==null) throw new IllegalArgumentException("No metadata");	
+		if (meta==null) throw new IllegalArgumentException("No metadata");
 		AMap<AString,ACell> content=RT.ensureMap(meta.get(Fields.CONTENT));
-		if (content==null) throw new IllegalArgumentException("Metadata does not have content object specified");	
+		if (content==null) throw new IllegalArgumentException("Metadata does not have content object specified");
 		Hash expectedHash=Hash.parse(RT.ensureString(content.get(Fields.SHA256)));
 		if (expectedHash==null) {
 			throw new IllegalArgumentException("Metadata does not have valid content hash");
 		}
-		
-		// Read the input stream to calculate the actual hash. 
-		// TODO: validate while writing? Maybe use DigestInputStream?
-		byte[] data = is.readAllBytes();
+
+		// Read with size limit to prevent OOM from oversized uploads
+		long maxSize = config.getMaxContentSize();
+		byte[] data = is.readNBytes((int) Math.min(maxSize + 1, Integer.MAX_VALUE));
+		if (data.length > maxSize) {
+			throw new IllegalArgumentException("Content exceeds maximum size of " + maxSize + " bytes");
+		}
 		Blob contentBlob = Blob.wrap(data);
 		Hash actualHash = Hashing.sha256(contentBlob.getBytes());
 		
@@ -902,8 +892,22 @@ public class Engine {
 		return job.getData();
 	}
 
-	public AMap<AString,ACell> getConfig() {
+	/**
+	 * Get the Config instance for this engine.
+	 * @return Config instance with typed accessors
+	 */
+	public Config config() {
 		return config;
+	}
+
+	/**
+	 * Get the raw config map.
+	 * @return Config map
+	 * @deprecated Use {@link #config()} for typed access
+	 */
+	@Deprecated
+	public AMap<AString,ACell> getConfig() {
+		return config.getMap();
 	}
 
 	public DID getDID() {
@@ -911,7 +915,7 @@ public class Engine {
 	}
 	
 	public AString getDIDString() {
-		AString s=RT.ensureString(config.get(Fields.DID));
+		AString s=config.getDID();
 		if (s==null) {
 			AString key=Multikey.encodePublicKey(keyPair.getAccountKey());
 			s=Strings.create("did:key:"+key);
@@ -963,7 +967,7 @@ public class Engine {
 	}
 
 	public AString getName() {
-		return RT.str(config.get(Fields.NAME));
+		return config.getName();
 	}
 
 	public AMap<AString, ACell> getStats() {
