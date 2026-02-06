@@ -210,8 +210,13 @@ public class VenueServer {
 			ctx.header("vary","Origin, Access-Control-Request-Headers");
 		});
 
-		app.afterMatched(ctx->{
+		// Use app.after (not afterMatched) so headers are added to ALL responses,
+		// including CORS preflights handled by the Javalin CORS plugin
+		app.after(ctx->{
 			ctx.header("access-control-allow-origin", corsOrigins);
+			// Allow Private Network Access (PNA) so public origins like preview.covia.ai
+			// can reach a locally-running venue on localhost
+			ctx.header("access-control-allow-private-network", "true");
 		});
 
 
