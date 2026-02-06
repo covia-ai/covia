@@ -100,6 +100,7 @@ public class VenueServer {
 		server.start();
 		
 		Engine.addDemoAssets(server.getEngine());
+		server.getEngine().recoverJobs();
 		return server;
 	}
 

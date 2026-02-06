@@ -172,20 +172,20 @@ public class CoviaTest {
 		// Create two complete states with different venues and meta
 		AMap<Keyword, ACell> venueState1 = Maps.of(
 			VenueLattice.ASSETS, Maps.of("0xasset1", Maps.empty()),
-			VenueLattice.JOBS, Maps.of(
+			VenueLattice.JOBS, Index.of(
 				"job1", Maps.of(
 					"status", "COMPLETE",
-					VenueLattice.UPDATED, CVMLong.create(1000L)
+					"updated", CVMLong.create(1000L)
 				)
 			)
 		);
 
 		AMap<Keyword, ACell> venueState2 = Maps.of(
 			VenueLattice.ASSETS, Maps.of("0xasset2", Maps.empty()),
-			VenueLattice.JOBS, Maps.of(
+			VenueLattice.JOBS, Index.of(
 				"job2", Maps.of(
 					"status", "PENDING",
-					VenueLattice.UPDATED, CVMLong.create(2000L)
+					"updated", CVMLong.create(2000L)
 				)
 			)
 		);
@@ -226,7 +226,7 @@ public class CoviaTest {
 	private Index<Keyword, ACell> createTestState() {
 		AMap<Keyword, ACell> venueState = Maps.of(
 			VenueLattice.ASSETS, Maps.of("0xtest", Maps.empty()),
-			VenueLattice.JOBS, Maps.empty()
+			VenueLattice.JOBS, Index.none()
 		);
 
 		AMap<Keyword, ACell> grid = Maps.of(

@@ -48,9 +48,9 @@ public class VenueLatticeTest {
 		assertTrue(zero.containsKey(VenueLattice.ASSETS), "Zero should contain :assets");
 		assertTrue(zero.containsKey(VenueLattice.JOBS), "Zero should contain :jobs");
 
-		// All fields should be empty maps
+		// All fields should be empty
 		assertEquals(Maps.empty(), zero.get(VenueLattice.ASSETS));
-		assertEquals(Maps.empty(), zero.get(VenueLattice.JOBS));
+		assertEquals(Index.none(), zero.get(VenueLattice.JOBS));
 	}
 
 	@Test
@@ -271,10 +271,10 @@ public class VenueLatticeTest {
 					Strings.create("name"), Strings.create("Test Asset")
 				)
 			),
-			VenueLattice.JOBS, Maps.of(
+			VenueLattice.JOBS, Index.of(
 				Strings.create("job123"), Maps.of(
 					Strings.create("status"), Strings.create("COMPLETE"),
-					VenueLattice.UPDATED, CVMLong.create(1000L)
+					Strings.create("updated"), CVMLong.create(1000L)
 				)
 			),
 			VenueLattice.USERS, Maps.empty(),
@@ -289,17 +289,17 @@ public class VenueLatticeTest {
 					Strings.create("name"), Strings.create(name)
 				)
 			),
-			VenueLattice.JOBS, Maps.empty()
+			VenueLattice.JOBS, Index.none()
 		);
 	}
 
 	private AMap<Keyword, ACell> createVenueStateWithJob(String jobId, String status, long timestamp) {
 		return Maps.of(
 			VenueLattice.ASSETS, Maps.empty(),
-			VenueLattice.JOBS, Maps.of(
+			VenueLattice.JOBS, Index.of(
 				Strings.create(jobId), Maps.of(
 					Strings.create("status"), Strings.create(status),
-					VenueLattice.UPDATED, CVMLong.create(timestamp)
+					Strings.create("updated"), CVMLong.create(timestamp)
 				)
 			)
 		);

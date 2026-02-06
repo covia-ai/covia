@@ -189,11 +189,11 @@ public class GridLatticeTest {
 
 		AMap<Keyword, ACell> venueState1 = Maps.of(
 			VenueLattice.ASSETS, Maps.of("0xasset1", Maps.of("name", "Asset1")),
-			VenueLattice.JOBS, Maps.empty()
+			VenueLattice.JOBS, Index.none()
 		);
 		AMap<Keyword, ACell> venueState2 = Maps.of(
 			VenueLattice.ASSETS, Maps.of("0xasset2", Maps.of("name", "Asset2")),
-			VenueLattice.JOBS, Maps.empty()
+			VenueLattice.JOBS, Index.none()
 		);
 
 		AMap<Keyword, ACell> v1 = Maps.of(
@@ -254,20 +254,20 @@ public class GridLatticeTest {
 		// Create two grid states with different venues and shared meta
 		AMap<Keyword, ACell> venueState1 = Maps.of(
 			VenueLattice.ASSETS, Maps.of("0xasset1", Maps.empty()),
-			VenueLattice.JOBS, Maps.of(
+			VenueLattice.JOBS, Index.of(
 				"job1", Maps.of(
 					"status", "COMPLETE",
-					VenueLattice.UPDATED, CVMLong.create(1000L)
+					"updated", CVMLong.create(1000L)
 				)
 			)
 		);
 
 		AMap<Keyword, ACell> venueState2 = Maps.of(
 			VenueLattice.ASSETS, Maps.of("0xasset2", Maps.empty()),
-			VenueLattice.JOBS, Maps.of(
+			VenueLattice.JOBS, Index.of(
 				"job2", Maps.of(
 					"status", "PENDING",
-					VenueLattice.UPDATED, CVMLong.create(2000L)
+					"updated", CVMLong.create(2000L)
 				)
 			)
 		);
@@ -298,7 +298,7 @@ public class GridLatticeTest {
 	private AMap<Keyword, ACell> createTestGridState() {
 		AMap<Keyword, ACell> venueState = Maps.of(
 			VenueLattice.ASSETS, Maps.of("0xtest", Maps.empty()),
-			VenueLattice.JOBS, Maps.empty()
+			VenueLattice.JOBS, Index.none()
 		);
 
 		return Maps.of(
@@ -317,7 +317,7 @@ public class GridLatticeTest {
 	private AMap<Keyword, ACell> createGridStateWithVenue(String venueDID) {
 		AMap<Keyword, ACell> venueState = Maps.of(
 			VenueLattice.ASSETS, Maps.empty(),
-			VenueLattice.JOBS, Maps.empty()
+			VenueLattice.JOBS, Index.none()
 		);
 
 		return Maps.of(

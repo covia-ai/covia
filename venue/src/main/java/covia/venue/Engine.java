@@ -101,6 +101,9 @@ public class Engine {
 	/** Lattice cursor for assets data */
 	protected ACursor<Index<AString,AVector<ACell>>> assets;
 
+	/** Lattice cursor for jobs data (Index for natural time-ordering of timestamp-prefixed IDs) */
+	protected ACursor<Index<AString, ACell>> jobsCursor;
+
 	/** Authentication and user management */
 	protected Auth auth;
 	
@@ -198,6 +201,7 @@ public class Engine {
 		AMap<Keyword,ACell> initialState = emptyLattice();
 		this.lattice = Cursors.of(initialState);
 		this.assets = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.ASSETS);
+		this.jobsCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.JOBS);
 		ACursor<AMap<AString, AMap<AString, ACell>>> usersCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.USERS);
 		this.auth = new Auth(this, usersCursor);
 	}
@@ -313,6 +317,141 @@ public class Engine {
 		this.assets.set(assets);
 	}
 
+
+	/**
+	 * Recovers jobs from the lattice after a restart.
+	 * PENDING jobs are re-fired; in-progress jobs (STARTED, PAUSED, etc.) are marked FAILED.
+	 * Terminal jobs (COMPLETE, FAILED, CANCELLED, REJECTED) are left as-is.
+	 * Should be called after adapters are registered.
+	 */
+	@SuppressWarnings("unchecked")
+	public void recoverJobs() {
+		Index<AString, ACell> jobsIndex = (Index<AString, ACell>) jobsCursor.get();
+		if (jobsIndex == null || jobsIndex.isEmpty()) return;
+
+		long n = jobsIndex.count();
+		int recovered = 0;
+		int failed = 0;
+		for (long i = 0; i < n; i++) {
+			var entry = jobsIndex.entryAt(i);
+			AString jobID = entry.getKey();
+			ACell value = entry.getValue();
+			if (!(value instanceof AMap)) continue;
+			AMap<AString, ACell> record = (AMap<AString, ACell>) value;
+
+			// Skip jobs already in memory (shouldn't happen on fresh start, but safe)
+			synchronized (jobs) {
+				if (jobs.containsKey(jobID)) continue;
+			}
+
+			// Skip terminal jobs
+			if (Job.isFinished(record)) continue;
+
+			AString status = RT.ensureString(record.get(Fields.STATUS));
+			if (Status.PENDING.equals(status)) {
+				// Re-fire PENDING jobs
+				if (refireJob(jobID, record)) {
+					recovered++;
+				} else {
+					failed++;
+				}
+			} else {
+				// STARTED, PAUSED, INPUT_REQUIRED, AUTH_REQUIRED — execution state lost
+				AMap<AString, ACell> failedRecord = record
+						.assoc(Fields.STATUS, Status.FAILED)
+						.assoc(Fields.ERROR, Strings.create("Interrupted by venue restart"))
+						.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
+				persistJobRecord(jobID, failedRecord);
+				failed++;
+			}
+		}
+
+		if (recovered > 0 || failed > 0) {
+			log.info("Job recovery: {} re-fired, {} marked failed", recovered, failed);
+		}
+	}
+
+	/**
+	 * Re-fires a PENDING job from a persisted lattice record.
+	 * Resolves the operation and adapter from the :op field and invokes.
+	 * @return true if successfully re-fired, false if resolution failed
+	 */
+	private boolean refireJob(AString jobID, AMap<AString, ACell> record) {
+		AString opRef = RT.ensureString(record.get(Fields.OP));
+		if (opRef == null) {
+			markJobFailed(jobID, record, "Cannot re-fire: no operation reference");
+			return false;
+		}
+
+		// Resolve operation
+		Asset asset = resolveAsset(opRef.toString());
+		Operation op = (asset != null) ? Operation.from(asset) : null;
+
+		// Resolve adapter
+		AAdapter adapter = resolveAdapterForOp(op, opRef);
+		if (adapter == null) {
+			markJobFailed(jobID, record, "Cannot re-fire: adapter not available for " + opRef);
+			return false;
+		}
+
+		// Create a live Job wrapping the persisted record
+		Job job = new Job(record, op) {
+			@Override public AMap<AString,ACell> processUpdate(AMap<AString,ACell> newData) {
+				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
+				persistJobRecord(getID(), newData);
+				return newData;
+			}
+		};
+
+		if (jobUpdateListener != null) {
+			job.setUpdateListener(jobUpdateListener);
+		}
+
+		synchronized (jobs) {
+			jobs.put(jobID, job);
+		}
+
+		// Determine adapter:operation string for invocation
+		String adapterStr = opRef.toString();
+		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
+		if (meta != null) {
+			AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
+			if (adapterOp != null) adapterStr = adapterOp.toString();
+		}
+
+		adapter.invoke(job, adapterStr, meta, record.get(Fields.INPUT));
+		log.info("Re-fired job: {}", jobID);
+		return true;
+	}
+
+	/**
+	 * Resolves the adapter for an operation, trying the Operation metadata first,
+	 * then falling back to parsing the opRef string as adapter:operation.
+	 */
+	private AAdapter resolveAdapterForOp(Operation op, AString opRef) {
+		// Try operation metadata
+		if (op != null) {
+			AString adapterOp = RT.ensureString(RT.getIn(op.meta(), "operation", "adapter"));
+			if (adapterOp != null) {
+				String adapterName = adapterOp.toString().split(":")[0];
+				AAdapter adapter = getAdapter(adapterName);
+				if (adapter != null) return adapter;
+			}
+		}
+
+		// Fall back to parsing opRef as adapter:operation
+		String adapterName = opRef.toString().split(":")[0];
+		return getAdapter(adapterName);
+	}
+
+	private void markJobFailed(AString jobID, AMap<AString, ACell> record, String reason) {
+		AMap<AString, ACell> failedRecord = record
+				.assoc(Fields.STATUS, Status.FAILED)
+				.assoc(Fields.ERROR, Strings.create(reason))
+				.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
+		persistJobRecord(jobID, failedRecord);
+		log.warn("Job {} failed on recovery: {}", jobID, reason);
+	}
 
 	public AMap<ABlob, AVector<?>> getAssets() {
 		// Get assets from lattice cursor
@@ -555,27 +694,45 @@ public class Engine {
 	}
 
 	/**
-	 * Gets a snapshot of the current job status data
+	 * Gets a snapshot of the current job status data.
+	 * Checks in-memory cache first, falls back to lattice.
 	 * @param jobID
 	 * @return Job status record, or null if not found
 	 */
+	@SuppressWarnings("unchecked")
 	public AMap<AString,ACell> getJobData(AString jobID) {
 		Job job;
 		synchronized (jobs) {
 			job = jobs.get(jobID);
 		}
-		return (job != null) ? job.getData() : null;
+		if (job != null) return job.getData();
+
+		// Fall back to lattice
+		Index<AString, ACell> jobsIndex = (Index<AString, ACell>) jobsCursor.get();
+		if (jobsIndex == null) return null;
+		ACell record = jobsIndex.get(jobID);
+		return (record instanceof AMap) ? (AMap<AString, ACell>) record : null;
 	}
 
 	/**
-	 * Gets the live Job object for the given job ID
+	 * Gets the live Job object for the given job ID.
+	 * Checks in-memory cache first, falls back to constructing a read-only Job from lattice.
 	 * @param jobID Job ID
 	 * @return Job, or null if not found
 	 */
+	@SuppressWarnings("unchecked")
 	public Job getJob(AString jobID) {
 		synchronized (jobs) {
-			return jobs.get(jobID);
+			Job job = jobs.get(jobID);
+			if (job != null) return job;
 		}
+
+		// Fall back to lattice — construct a bare Job from persisted record
+		Index<AString, ACell> jobsIndex = (Index<AString, ACell>) jobsCursor.get();
+		if (jobsIndex == null) return null;
+		ACell record = jobsIndex.get(jobID);
+		if (!(record instanceof AMap)) return null;
+		return new Job((AMap<AString, ACell>) record, null);
 	}
 
 	/**
@@ -693,7 +850,9 @@ public class Engine {
 
 		Job job = new Job(status, operation) {
 			@Override public AMap<AString,ACell> processUpdate(AMap<AString,ACell> newData) {
-				return newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
+				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
+				persistJobRecord(getID(), newData);
+				return newData;
 			}
 		};
 
@@ -705,10 +864,26 @@ public class Engine {
 		synchronized (jobs) {
 			jobs.put(jobID, job);
 		}
+
+		// Persist initial job record to lattice
+		persistJobRecord(jobID, status);
+
 		log.info("Submitted job: "+jobID);
 		return job;
 	}
 
+
+	/**
+	 * Persists a job record to the lattice :jobs index.
+	 * Called on initial submission and every status update via processUpdate().
+	 */
+	@SuppressWarnings("unchecked")
+	private void persistJobRecord(AString jobID, AMap<AString, ACell> record) {
+		jobsCursor.updateAndGet(jobs -> {
+			if (jobs == null) jobs = Index.none();
+			return ((Index<AString, ACell>) jobs).assoc(jobID, record);
+		});
+	}
 
 	private Random rand=new Random();
 	private short jobCounter=0;
@@ -741,8 +916,21 @@ public class Engine {
 		this.jobUpdateListener = listener;
 	}
 
+	/**
+	 * Gets all job IDs. Returns keys from the lattice Index (naturally time-ordered
+	 * since job IDs are timestamp-prefixed).
+	 * @return List of job IDs
+	 */
+	@SuppressWarnings("unchecked")
 	public List<AString> getJobs() {
-		return new ArrayList<>(jobs.keySet());
+		Index<AString, ACell> jobsIndex = (Index<AString, ACell>) jobsCursor.get();
+		if (jobsIndex == null || jobsIndex.isEmpty()) return new ArrayList<>();
+		List<AString> result = new ArrayList<>((int) jobsIndex.count());
+		long n = jobsIndex.count();
+		for (long i = 0; i < n; i++) {
+			result.add(jobsIndex.entryAt(i).getKey());
+		}
+		return result;
 	}
 
 	/**

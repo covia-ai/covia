@@ -233,12 +233,14 @@ public class VenueServerTest {
 		AString cancelledStatus = RT.ensureString(cancelledMap.get(Fields.STATUS));
 		assertEquals("CANCELLED", cancelledStatus.toString(), "Job status should be CANCELLED");
 		
-		// Step 6: Delete the job using the Covia client
+		// Step 6: Delete the job using the Covia client (removes from active tracking)
 		covia.deleteJob(jobIdStr).get(5, TimeUnit.SECONDS);
-		
-		// Step 7: Confirm that the job no longer exists using Covia.getJobStatus
+
+		// Step 7: Job record persists in lattice for audit trail after deletion
 		AMap<AString, ACell> deletedMap = covia.getJobData(jobIdStr).get(5, TimeUnit.SECONDS);
-		assertNull(deletedMap, "Deleted job status map should be null");
+		assertNotNull(deletedMap, "Deleted job record should still exist in lattice");
+		assertEquals("CANCELLED", RT.ensureString(deletedMap.get(Fields.STATUS)).toString(),
+				"Persisted record should retain last status");
 	}
 	
 	@Test
