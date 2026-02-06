@@ -244,6 +244,53 @@ public class VenueServerTest {
 	}
 	
 	@Test
+	public void testPauseAndResumeNeverOp() throws Exception {
+		// Start a never-completing job
+		Job job = covia.startJob(TestOps.NEVER, Maps.of(Fields.MESSAGE, Strings.create("pause test")));
+		Thread.sleep(50);
+		covia.updateJobStatus(job);
+		assertEquals(Status.STARTED, job.getStatus(), "Job should be STARTED");
+		String jobId = job.getID().toString();
+
+		// Pause the running job via API
+		AMap<AString, ACell> pausedStatus = covia.pauseJob(jobId).get(5, TimeUnit.SECONDS);
+		assertNotNull(pausedStatus);
+		assertEquals("PAUSED", RT.ensureString(pausedStatus.get(Fields.STATUS)).toString());
+
+		// Verify job is paused via status check
+		AMap<AString, ACell> check = covia.getJobData(jobId).get(5, TimeUnit.SECONDS);
+		assertEquals("PAUSED", RT.ensureString(check.get(Fields.STATUS)).toString());
+
+		// Resume the job via API
+		AMap<AString, ACell> resumedStatus = covia.resumeJob(jobId).get(5, TimeUnit.SECONDS);
+		assertNotNull(resumedStatus);
+		assertEquals("STARTED", RT.ensureString(resumedStatus.get(Fields.STATUS)).toString());
+
+		// Cancel to clean up
+		covia.cancelJob(jobId).get(5, TimeUnit.SECONDS);
+	}
+
+	@Test
+	public void testPauseOpResumeViaAPI() throws Exception {
+		// Start the auto-pausing operation
+		Job job = covia.startJob(TestOps.PAUSE, Maps.of(Fields.MESSAGE, Strings.create("pause op test")));
+		Thread.sleep(50);
+		covia.updateJobStatus(job);
+		assertEquals(Status.PAUSED, job.getStatus(), "Pause op should auto-pause");
+		String jobId = job.getID().toString();
+
+		// Resume via API — adapter re-invoked, completes with original input
+		AMap<AString, ACell> resumedStatus = covia.resumeJob(jobId).get(5, TimeUnit.SECONDS);
+		assertNotNull(resumedStatus);
+		// After resume, adapter is re-invoked — pause op will pause again
+		assertEquals("PAUSED", RT.ensureString(resumedStatus.get(Fields.STATUS)).toString(),
+				"Pause op re-invocation should pause again");
+
+		// Cancel to clean up
+		covia.cancelJob(jobId).get(5, TimeUnit.SECONDS);
+	}
+
+	@Test
 	public void testAssetWithContent() throws Exception {
 		// Create test content
 		String testContent = "Hello, this is test content for the asset!";

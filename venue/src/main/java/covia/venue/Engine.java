@@ -1148,6 +1148,56 @@ public class Engine {
 	}
 
 	/**
+	 * Pauses a running Job.
+	 * @param id ID of Job
+	 * @return updated Job status, or null if not found
+	 */
+	public AMap<AString, ACell> pauseJob(AString id) {
+		Job job;
+		synchronized (jobs) {
+			job = jobs.get(id);
+		}
+		if (job == null) return null;
+		job.pause();
+		return job.getData();
+	}
+
+	/**
+	 * Resumes a paused Job. Re-engages the adapter to continue execution.
+	 * @param id ID of Job
+	 * @return updated Job status, or null if not found
+	 */
+	public AMap<AString, ACell> resumeJob(AString id) {
+		Job job;
+		synchronized (jobs) {
+			job = jobs.get(id);
+		}
+		if (job == null) return null;
+		job.resume();
+
+		// Re-engage the adapter
+		AAdapter adapter = resolveJobAdapter(job);
+		if (adapter != null) {
+			Operation op = job.getOperation();
+			AMap<AString,ACell> meta = (op != null) ? op.meta() : null;
+			String adapterStr = null;
+			if (meta != null) {
+				AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
+				if (adapterOp != null) adapterStr = adapterOp.toString();
+			}
+			if (adapterStr == null) {
+				AString opRef = RT.ensureString(job.getData().get(Fields.OP));
+				if (opRef != null) adapterStr = opRef.toString();
+			}
+			if (adapterStr != null) {
+				adapter.invoke(job, adapterStr, meta, job.getData().get(Fields.INPUT));
+			}
+		}
+
+		return job.getData();
+	}
+
+	/**
 	 * Get the Config instance for this engine.
 	 * @return Config instance with typed accessors
 	 */

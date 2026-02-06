@@ -310,6 +310,26 @@ public class Job {
 		});
 	}
 
+	/**
+	 * Pause this Job, if it is currently running (STARTED).
+	 * @throws IllegalStateException if the job is already finished
+	 */
+	public synchronized void pause() {
+		if (isFinished()) throw new IllegalStateException("Job already finished");
+		updateData(data.assoc(Fields.STATUS, Status.PAUSED));
+	}
+
+	/**
+	 * Resume this Job from a paused state (PAUSED, INPUT_REQUIRED, AUTH_REQUIRED).
+	 * Sets status back to STARTED.
+	 * @throws IllegalStateException if the job is not paused or is finished
+	 */
+	public synchronized void resume() {
+		if (isFinished()) throw new IllegalStateException("Job already finished");
+		if (!isPaused()) throw new IllegalStateException("Job is not paused: " + getStatus());
+		updateData(data.assoc(Fields.STATUS, Status.STARTED));
+	}
+
 	public synchronized void setStatus(AString newStatus) {
 		if (isFinished()) throw new IllegalStateException("Job already finished");
 		updateData(data.assoc(Fields.STATUS, newStatus));

@@ -58,6 +58,8 @@ public class CoviaAPI extends ACoviaAPI {
 
 	private static final String PUT_CONTENT = "putContent";
 	public static final String CANCEL_JOB = "cancelJob";
+	public static final String PAUSE_JOB = "pauseJob";
+	public static final String RESUME_JOB = "resumeJob";
 	public static final String DELETE_JOB = "deleteJob";
 	public static final String SEND_MESSAGE = "sendMessage";
 
@@ -95,6 +97,8 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.get(ROUTE+"jobs/<id>", this::getJobStatus);
 		javalin.post(ROUTE+"jobs/<id>", this::sendMessage);
 		javalin.put(ROUTE+"jobs/<id>/cancel", this::cancelJob);
+		javalin.put(ROUTE+"jobs/<id>/pause", this::pauseJob);
+		javalin.put(ROUTE+"jobs/<id>/resume", this::resumeJob);
 		javalin.put(ROUTE+"jobs/<id>/delete", this::deleteJob);
 		javalin.sse(ROUTE+"jobs/<id>/sse", sseServer.registerSSE);
 		javalin.get(ROUTE+"jobs", this::getJobs);
@@ -531,10 +535,74 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 	}
 	
-	@OpenApi(path = ROUTE + "jobs/{id}/delete", 
-			methods = HttpMethod.PUT, 
+	@OpenApi(path = ROUTE + "jobs/{id}/pause",
+			methods = HttpMethod.PUT,
 			tags = { "Covia"},
-			summary = "Cancels a job.", 
+			summary = "Pauses a running job.",
+			operationId = CoviaAPI.PAUSE_JOB,
+			pathParams = {
+					@OpenApiParam(
+							name = "id",
+							description = "Job ID, as created by invoke request.",
+							required = true,
+							type = String.class,
+							example = "0x12345678123456781234567812345678") })
+	protected void pauseJob(Context ctx) {
+		AString id=RT.ensureString(Strings.create(ctx.pathParam("id")));
+		if (id==null) {
+			buildError(ctx,400,"Pause request requires a job ID");
+			return;
+		}
+
+		try {
+			AMap<AString, ACell> status = venue.pauseJob(id);
+			if (status!=null) {
+				buildResult(ctx,status);
+				ctx.status(200);
+			} else {
+				ctx.status(404);
+			}
+		} catch (IllegalStateException e) {
+			buildError(ctx, 409, e.getMessage());
+		}
+	}
+
+	@OpenApi(path = ROUTE + "jobs/{id}/resume",
+			methods = HttpMethod.PUT,
+			tags = { "Covia"},
+			summary = "Resumes a paused job.",
+			operationId = CoviaAPI.RESUME_JOB,
+			pathParams = {
+					@OpenApiParam(
+							name = "id",
+							description = "Job ID, as created by invoke request.",
+							required = true,
+							type = String.class,
+							example = "0x12345678123456781234567812345678") })
+	protected void resumeJob(Context ctx) {
+		AString id=RT.ensureString(Strings.create(ctx.pathParam("id")));
+		if (id==null) {
+			buildError(ctx,400,"Resume request requires a job ID");
+			return;
+		}
+
+		try {
+			AMap<AString, ACell> status = venue.resumeJob(id);
+			if (status!=null) {
+				buildResult(ctx,status);
+				ctx.status(200);
+			} else {
+				ctx.status(404);
+			}
+		} catch (IllegalStateException e) {
+			buildError(ctx, 409, e.getMessage());
+		}
+	}
+
+	@OpenApi(path = ROUTE + "jobs/{id}/delete",
+			methods = HttpMethod.PUT,
+			tags = { "Covia"},
+			summary = "Deletes a job.",
 			operationId = CoviaAPI.DELETE_JOB,
 			pathParams = {
 					@OpenApiParam(

@@ -640,6 +640,50 @@ public class VenueHTTP extends Venue {
 	}
 
 	/**
+	 * Pauses a running job on the connected venue
+	 * @param jobId The job ID to pause
+	 * @return Future containing the updated job status
+	 */
+	public CompletableFuture<AMap<AString,ACell>> pauseJob(String jobId) {
+		HttpRequest req = requestBuilder("jobs/" + jobId + "/pause")
+			.PUT(HttpRequest.BodyPublishers.ofString(""))
+			.build();
+
+		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+			int code = response.statusCode();
+			if (code == 200) {
+				return JSON.parse(response.body());
+			} else if (code == 404) {
+				throw new ResponseException("Job not found: " + jobId, response);
+			} else {
+				throw new ResponseException("Failed to pause job: " + code + " - " + response.body(), response);
+			}
+		});
+	}
+
+	/**
+	 * Resumes a paused job on the connected venue
+	 * @param jobId The job ID to resume
+	 * @return Future containing the updated job status
+	 */
+	public CompletableFuture<AMap<AString,ACell>> resumeJob(String jobId) {
+		HttpRequest req = requestBuilder("jobs/" + jobId + "/resume")
+			.PUT(HttpRequest.BodyPublishers.ofString(""))
+			.build();
+
+		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+			int code = response.statusCode();
+			if (code == 200) {
+				return JSON.parse(response.body());
+			} else if (code == 404) {
+				throw new ResponseException("Job not found: " + jobId, response);
+			} else {
+				throw new ResponseException("Failed to resume job: " + code + " - " + response.body(), response);
+			}
+		});
+	}
+
+	/**
 	 * Deletes a job from the connected venue
 	 * @param jobId The job ID to delete
 	 * @return Future that completes when the job is successfully deleted, or completes exceptionally if the job doesn't exist
@@ -769,6 +813,16 @@ public class VenueHTTP extends Venue {
 	@Override
 	public AMap<AString, ACell> cancelJob(AString jobId) {
 		return cancelJob(jobId.toString()).join();
+	}
+
+	@Override
+	public AMap<AString, ACell> pauseJob(AString jobId) {
+		return pauseJob(jobId.toString()).join();
+	}
+
+	@Override
+	public AMap<AString, ACell> resumeJob(AString jobId) {
+		return resumeJob(jobId.toString()).join();
 	}
 
 	@Override

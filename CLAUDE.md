@@ -248,6 +248,7 @@ Adapter Layer
 - [ ] **Signed operations** — Cryptographic attribution for every job submission
 - [ ] **Compliance reporting** — Data lineage tracking and audit log queries
 - [ ] **Workbench expansion** — Currently 3 files / 180 LOC demo; add configuration, multi-operation support, proper logging
+- [ ] **Job restart API** — Consider `PUT /api/v1/jobs/{id}/restart` for re-running failed/cancelled/completed jobs. Semantics need thought: new job with same input? Same job ID? How to handle operations that have changed since original invocation? May be better as a client-side convenience (re-invoke with original params) rather than a server primitive.
 
 ## Module-Specific Guides
 

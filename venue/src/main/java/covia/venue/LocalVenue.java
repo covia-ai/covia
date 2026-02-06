@@ -145,6 +145,16 @@ public class LocalVenue extends Venue {
 	}
 
 	@Override
+	public AMap<AString, ACell> pauseJob(AString jobId) {
+		return engine.pauseJob(jobId);
+	}
+
+	@Override
+	public AMap<AString, ACell> resumeJob(AString jobId) {
+		return engine.resumeJob(jobId);
+	}
+
+	@Override
 	public boolean deleteJob(AString jobId) {
 		return engine.deleteJob(jobId);
 	}

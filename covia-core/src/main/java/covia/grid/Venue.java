@@ -190,6 +190,20 @@ public abstract class Venue {
 	public abstract AMap<AString, ACell> cancelJob(AString jobId);
 
 	/**
+	 * Pause a running job.
+	 * @param jobId Job identifier
+	 * @return Updated job status, or null if job not found
+	 */
+	public abstract AMap<AString, ACell> pauseJob(AString jobId);
+
+	/**
+	 * Resume a paused job.
+	 * @param jobId Job identifier
+	 * @return Updated job status, or null if job not found
+	 */
+	public abstract AMap<AString, ACell> resumeJob(AString jobId);
+
+	/**
 	 * Delete a job record.
 	 * @param jobId Job identifier
 	 * @return true if the job was deleted, false if not found
