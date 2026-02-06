@@ -188,50 +188,40 @@ Adapter Layer
 
 ### P0 — Critical (blocks production use)
 
-- [ ] **Persist jobs to lattice** — Engine stores jobs in `HashMap<AString, Job>` which is lost on restart. Wire up to `VenueLattice :jobs` index using timestamp-based merge. The lattice infrastructure already exists.
-  - Files: `venue/.../venue/Engine.java` (jobs HashMap), `venue/.../lattice/VenueLattice.java` (:jobs index)
+- [x] **Persist jobs to lattice** — Jobs now write-through to VenueLattice `:jobs` Index via `persistJobRecord()`. Recovery on startup re-fires PENDING/STARTED, keeps PAUSED/waiting as-is.
 
 - [ ] **Add authorization enforcement** — AuthMiddleware extracts caller DID but `Engine.invokeOperation()` never checks permissions. Implement capability-based access control so venues can restrict which users/agents can invoke which operations.
   - Files: `venue/.../venue/Engine.java`, `venue/.../venue/Auth.java`, `venue/.../server/AuthMiddleware.java`
 
-- [ ] **Add timeout to VenueHTTP polling** — `waitForFinish()` loops indefinitely with exponential backoff but no maximum wait. Network issues or stuck jobs will hang the client forever. Use the existing unused `timeout` field.
-  - File: `covia-core/.../grid/client/VenueHTTP.java` (waitForFinish method)
+- [x] **Add timeout to VenueHTTP polling** — `waitForFinish()` uses deadline with configurable timeout (default 10 min). `setTimeout()`/`getTimeout()` API.
 
-- [ ] **Fix binary content handling** — `VenueHTTP.getContent()` reads binary HTTP responses as `String` then converts to bytes, corrupting non-text content. Should use `BodyHandlers.ofByteArray()`.
-  - File: `covia-core/.../grid/client/VenueHTTP.java` (getContent method)
+- [x] **Fix binary content handling** — `VenueHTTP.getContent()` uses `BodyHandlers.ofByteArray()`.
 
-- [ ] **Stream content uploads** — `Engine.putContent()` reads entire input stream into memory before storing. No size limits. Large uploads can crash the server. Add streaming with configurable size limits.
-  - File: `venue/.../venue/Engine.java` (putContent method)
+- [x] **Stream content uploads** — `Engine.putContent()` enforces configurable size limit (`Config.getMaxContentSize()`).
 
 ### P1 — High (security and reliability)
 
-- [ ] **URL validation in HTTPAdapter** — Accepts arbitrary URLs with no allowlist or validation, creating SSRF risk. Add configurable URL allowlist/blocklist.
-  - File: `venue/.../adapter/HTTPAdapter.java`
+- [x] **URL validation in HTTPAdapter** — SSRF protection with configurable host allowlist/blocklist.
 
 - [ ] **Secure credential handling in LangChainAdapter** — API keys passed in plaintext JSON input, falls back to env vars. Consider secure credential storage or reference-based lookup.
   - File: `venue/.../adapter/LangChainAdapter.java`
 
-- [ ] **Restrict CORS** — VenueServer accepts `*` origins. Make CORS configurable per venue.
-  - File: `venue/.../venue/server/VenueServer.java`
+- [x] **Restrict CORS** — CORS configurable per venue via `Config.CORS`.
 
-- [ ] **Protect or remove /config endpoint** — Exposes entire engine configuration including potential secrets.
-  - File: `venue/.../venue/server/CoviaWebApp.java`
+- [x] **Protect /config endpoint** — Now shows only public info (name, DID, adapter count); secrets redacted.
 
-- [ ] **Add IO-level timeouts to adapters** — Jobs are long-lived and must NOT have framework-level timeouts (they can run for days/weeks/months). However, individual adapters should apply IO-level timeouts on external network calls to prevent hangs. LangChainAdapter `model.chat()` and ConvexAdapter `query()`/`transact()` currently have no IO timeout. Clients can time out and reconnect; after reconnect they should re-acquire the latest job status.
-  - Files: `venue/.../adapter/LangChainAdapter.java`, `venue/.../adapter/ConvexAdapter.java`
+- [x] **Add IO-level timeouts to adapters** — LangChainAdapter uses configurable IO timeout on `model.chat()`.
 
-- [ ] **Standardize exception handling** — VenueHTTP mixes RuntimeException, ResponseException, and null returns. Define consistent error propagation strategy.
-  - File: `covia-core/.../grid/client/VenueHTTP.java`
+- [x] **Standardize exception handling** — VenueHTTP uses `ResponseException` consistently with HTTP context.
 
 - [ ] **Add rate limiting** — No rate limiting anywhere (operations, uploads, outbound requests). Add per-user and per-operation limits.
   - Files: `venue/.../venue/server/VenueServer.java`, `venue/.../venue/Engine.java`
 
-- [ ] **Thread safety in Asset.meta()** — Metadata field cached without synchronization; concurrent threads may parse redundantly. Add synchronization.
-  - File: `covia-core/.../grid/Asset.java`
+- [x] **Thread safety in Asset.meta()** — `meta()` is now `synchronized`.
 
 ### P2 — Medium (code quality and operability)
 
-- [ ] **Decompose Engine.java** — At 982 lines, Engine handles too many concerns (assets, jobs, adapters, storage, auth, stats). Extract focused classes.
+- [ ] **Decompose Engine.java** — Engine handles too many concerns (assets, jobs, adapters, storage, auth, stats). Extract focused classes.
   - File: `venue/.../venue/Engine.java`
 
 - [ ] **Complete LatticeContent** — Missing constructor and field initialization; cannot be properly instantiated.
@@ -248,10 +238,7 @@ Adapter Layer
 
 - [ ] **Metrics export** — Add Prometheus-compatible metrics for operations, jobs, adapters, storage.
 
-- [ ] **Remove unused timeout field** — VenueHTTP has `timeout = 5000` that is set but never read. Either use it or remove it.
-  - File: `covia-core/.../grid/client/VenueHTTP.java`
-
-- [ ] **Fix typos** — `Fields.java:34` has `fineName` (should be `fileName`), `Asset.java:66` has "must me" (should be "must be"), `VenueHTTP.java` has "resturned" (should be "returned")
+- [x] **Fix typos** — All fixed (`fineName`, "must me", "resturned")
 
 ### P3 — Future (design goals from venue/CLAUDE.md)
 

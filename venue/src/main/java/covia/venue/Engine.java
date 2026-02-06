@@ -34,6 +34,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
+import convex.core.store.Stores;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.did.DID;
@@ -194,16 +195,54 @@ public class Engine {
 	}
 
 	/**
-	 * Initialises the lattice with the default venue state structure.
+	 * Initialises the lattice, loading from the Etch store if state exists,
+	 * otherwise creating a fresh empty structure.
 	 * Sets up the :grid -> :venues -> venue structure using Covia.ROOT.
 	 */
 	protected void initialiseLattice() {
-		AMap<Keyword,ACell> initialState = emptyLattice();
+		AMap<Keyword,ACell> initialState = loadStateFromStore();
+		if (initialState == null) {
+			initialState = emptyLattice();
+		}
 		this.lattice = Cursors.of(initialState);
 		this.assets = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.ASSETS);
 		this.jobsCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.JOBS);
 		ACursor<AMap<AString, AMap<AString, ACell>>> usersCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.USERS);
 		this.auth = new Auth(this, usersCursor);
+	}
+
+	/**
+	 * Attempts to load lattice state from the Etch store.
+	 * @return The stored lattice root, or null if no state exists or loading fails
+	 */
+	private AMap<Keyword,ACell> loadStateFromStore() {
+		AStore saved = Stores.current();
+		try {
+			Stores.setCurrent(store);
+			ACell root = store.getRootData();
+			return RT.ensureMap(root);
+		} catch (Exception e) {
+			log.warn("Could not load state from store", e);
+			return null;
+		} finally {
+			Stores.setCurrent(saved);
+		}
+	}
+
+	/**
+	 * Persists the entire lattice root to the Etch store.
+	 * This writes all lattice data (assets, jobs, users, storage) to durable storage.
+	 * @throws IOException if persistence fails
+	 */
+	public void persistState() throws IOException {
+		ACell latticeRoot = lattice.get();
+		AStore saved = Stores.current();
+		try {
+			Stores.setCurrent(store);
+			store.setRootData(latticeRoot);
+		} finally {
+			Stores.setCurrent(saved);
+		}
 	}
 
 	private AHashMap<Keyword, ACell> emptyLattice() {
