@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import convex.core.data.ABlob;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
@@ -20,7 +21,7 @@ import convex.core.data.Strings;
  */
 public class CASLatticeTest {
 
-	private CASLattice<Hash, AString> lattice;
+	private CASLattice<ABlob, AString> lattice;
 
 	// Test hashes
 	private static final Hash hash1 = Hash.fromHex("1111111111111111111111111111111111111111111111111111111111111111");
@@ -36,14 +37,14 @@ public class CASLatticeTest {
 
 	@Test
 	public void testSingletonInstance() {
-		CASLattice<Hash, AString> l1 = CASLattice.create();
-		CASLattice<Hash, AString> l2 = CASLattice.create();
+		CASLattice<ABlob, AString> l1 = CASLattice.create();
+		CASLattice<ABlob, AString> l2 = CASLattice.create();
 		assertSame(l1, l2, "CASLattice should be a singleton");
 	}
 
 	@Test
 	public void testZeroValue() {
-		Index<Hash, AString> zero = lattice.zero();
+		Index<ABlob, AString> zero = lattice.zero();
 		assertNotNull(zero, "Zero value should not be null");
 		assertEquals(0, zero.count(), "Zero should be empty");
 		assertEquals(Index.none(), zero);
@@ -67,7 +68,7 @@ public class CASLatticeTest {
 
 	@Test
 	public void testMergeWithNull() {
-		Index<Hash, AString> value = Index.create(hash1, Strings.create("data"));
+		Index<ABlob, AString> value = Index.create(hash1, Strings.create("data"));
 
 		assertSame(value, lattice.merge(value, null));
 		assertEquals(value, lattice.merge(null, value));
@@ -78,14 +79,14 @@ public class CASLatticeTest {
 
 	@Test
 	public void testIdempotency() {
-		Index<Hash, AString> value = Index.create(hash1, Strings.create("data"));
-		Index<Hash, AString> merged = lattice.merge(value, value);
+		Index<ABlob, AString> value = Index.create(hash1, Strings.create("data"));
+		Index<ABlob, AString> merged = lattice.merge(value, value);
 		assertSame(value, merged, "Merge with self should return same instance");
 	}
 
 	@Test
 	public void testIdempotencyWithZero() {
-		Index<Hash, AString> zero = lattice.zero();
+		Index<ABlob, AString> zero = lattice.zero();
 		assertSame(zero, lattice.merge(zero, zero));
 	}
 
@@ -93,11 +94,11 @@ public class CASLatticeTest {
 
 	@Test
 	public void testCommutativity() {
-		Index<Hash, AString> v1 = Index.create(hash1, Strings.create("data1"));
-		Index<Hash, AString> v2 = Index.create(hash2, Strings.create("data2"));
+		Index<ABlob, AString> v1 = Index.create(hash1, Strings.create("data1"));
+		Index<ABlob, AString> v2 = Index.create(hash2, Strings.create("data2"));
 
-		Index<Hash, AString> merge12 = lattice.merge(v1, v2);
-		Index<Hash, AString> merge21 = lattice.merge(v2, v1);
+		Index<ABlob, AString> merge12 = lattice.merge(v1, v2);
+		Index<ABlob, AString> merge21 = lattice.merge(v2, v1);
 
 		assertEquals(merge12, merge21, "Merge should be commutative");
 	}
@@ -106,12 +107,12 @@ public class CASLatticeTest {
 
 	@Test
 	public void testAssociativity() {
-		Index<Hash, AString> v1 = Index.create(hash1, Strings.create("data1"));
-		Index<Hash, AString> v2 = Index.create(hash2, Strings.create("data2"));
-		Index<Hash, AString> v3 = Index.create(hash3, Strings.create("data3"));
+		Index<ABlob, AString> v1 = Index.create(hash1, Strings.create("data1"));
+		Index<ABlob, AString> v2 = Index.create(hash2, Strings.create("data2"));
+		Index<ABlob, AString> v3 = Index.create(hash3, Strings.create("data3"));
 
-		Index<Hash, AString> left = lattice.merge(lattice.merge(v1, v2), v3);
-		Index<Hash, AString> right = lattice.merge(v1, lattice.merge(v2, v3));
+		Index<ABlob, AString> left = lattice.merge(lattice.merge(v1, v2), v3);
+		Index<ABlob, AString> right = lattice.merge(v1, lattice.merge(v2, v3));
 
 		assertEquals(left, right, "Merge should be associative");
 	}
@@ -120,8 +121,8 @@ public class CASLatticeTest {
 
 	@Test
 	public void testZeroIdentity() {
-		Index<Hash, AString> value = Index.create(hash1, Strings.create("data"));
-		Index<Hash, AString> zero = lattice.zero();
+		Index<ABlob, AString> value = Index.create(hash1, Strings.create("data"));
+		Index<ABlob, AString> zero = lattice.zero();
 
 		assertEquals(value, lattice.merge(value, zero));
 		assertEquals(value, lattice.merge(zero, value));
@@ -131,10 +132,10 @@ public class CASLatticeTest {
 
 	@Test
 	public void testUnionMerge() {
-		Index<Hash, AString> v1 = Index.create(hash1, Strings.create("data1"));
-		Index<Hash, AString> v2 = Index.create(hash2, Strings.create("data2"));
+		Index<ABlob, AString> v1 = Index.create(hash1, Strings.create("data1"));
+		Index<ABlob, AString> v2 = Index.create(hash2, Strings.create("data2"));
 
-		Index<Hash, AString> merged = lattice.merge(v1, v2);
+		Index<ABlob, AString> merged = lattice.merge(v1, v2);
 
 		assertEquals(2, merged.count(), "Merged index should contain both entries");
 		assertNotNull(merged.get(hash1));
@@ -146,10 +147,10 @@ public class CASLatticeTest {
 	@Test
 	public void testSameKeyNoConflict() {
 		// Same content hash means same content - no conflict possible
-		Index<Hash, AString> v1 = Index.create(hash1, Strings.create("data"));
-		Index<Hash, AString> v2 = Index.create(hash1, Strings.create("data"));
+		Index<ABlob, AString> v1 = Index.create(hash1, Strings.create("data"));
+		Index<ABlob, AString> v2 = Index.create(hash1, Strings.create("data"));
 
-		Index<Hash, AString> merged = lattice.merge(v1, v2);
+		Index<ABlob, AString> merged = lattice.merge(v1, v2);
 
 		assertEquals(1, merged.count(), "Same key should not duplicate");
 		assertEquals(Strings.create("data"), merged.get(hash1));
@@ -178,10 +179,10 @@ public class CASLatticeTest {
 
 	@Test
 	public void testMergeStability() {
-		Index<Hash, AString> v1 = Index.create(hash1, Strings.create("data1"));
-		Index<Hash, AString> v2 = Index.create(hash2, Strings.create("data2"));
+		Index<ABlob, AString> v1 = Index.create(hash1, Strings.create("data1"));
+		Index<ABlob, AString> v2 = Index.create(hash2, Strings.create("data2"));
 
-		Index<Hash, AString> merged = lattice.merge(v1, v2);
+		Index<ABlob, AString> merged = lattice.merge(v1, v2);
 
 		// Merging with the merge result should be stable
 		assertEquals(merged, lattice.merge(v1, merged));

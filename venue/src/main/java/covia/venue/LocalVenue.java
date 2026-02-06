@@ -12,6 +12,8 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
+import convex.core.data.Index;
+import convex.core.data.Strings;
 import convex.did.DID;
 import covia.grid.AContent;
 import covia.grid.Asset;
@@ -49,7 +51,7 @@ public class LocalVenue extends Venue {
 	@Override
 	public CompletableFuture<Job> invoke(Hash assetID, ACell input) {
 		RequestContext rctx = RequestContext.of(getUser());
-		return CompletableFuture.completedFuture(engine.invokeOperation(assetID.toHexString(), input, rctx));
+		return CompletableFuture.completedFuture(engine.invokeOperation(assetID.toCVMHexString(), input, rctx));
 	}
 
 	@Override
@@ -58,7 +60,7 @@ public class LocalVenue extends Venue {
 			throw new IllegalArgumentException("Operation must not be null");
 		}
 		RequestContext rctx = RequestContext.of(getUser());
-		Job job = engine.invokeOperation(operation, input, rctx);
+		Job job = engine.invokeOperation(Strings.create(operation), input, rctx);
 		return CompletableFuture.completedFuture(job);
 	}
 
@@ -100,7 +102,7 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public Asset resolveAsset(String ref) {
-		Asset asset = engine.resolveAsset(ref);
+		Asset asset = engine.resolveAsset(Strings.create(ref));
 		if (asset != null) asset.setVenue(this);
 		return asset;
 	}
@@ -163,11 +165,17 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public List<AString> listJobs() {
-		return engine.getJobs(RequestContext.of(getUser()));
+		Index<AString, ACell> jobs = engine.getJobs(RequestContext.of(getUser()));
+		long n = jobs.count();
+		List<AString> result = new ArrayList<>((int) n);
+		for (long i = 0; i < n; i++) {
+			result.add(jobs.entryAt(i).getKey());
+		}
+		return result;
 	}
 
 	@Override
 	public int sendMessage(String jobId, AMap<AString, ACell> message) {
-		return engine.deliverMessage(jobId, message, RequestContext.of(getUser()));
+		return engine.deliverMessage(Strings.create(jobId), message, RequestContext.of(getUser()));
 	}
 }

@@ -158,7 +158,7 @@ public class TestAdapter extends AAdapter {
 			} catch (InterruptedException e) {
 				throw new RuntimeException("Delay operation interrupted while delaying");
 			}
-        	ACell result = engine.invokeOperation(RT.toString(op), opInput).awaitResult();
+        	ACell result = engine.invokeOperation(RT.ensureString(op), opInput).awaitResult();
 			return result;
     	}, VIRTUAL_EXECUTOR);
 

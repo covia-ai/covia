@@ -79,12 +79,12 @@ public class AccessControlTest {
 	@Test
 	public void testInvokeWithRequestContext() {
 		// Invoke via RequestContext (anonymous)
-		Job job1 = engine.invokeOperation("test:echo", Maps.of("message", "hello"), RequestContext.ANONYMOUS);
+		Job job1 = engine.invokeOperation(Strings.create("test:echo"), Maps.of("message", "hello"), RequestContext.ANONYMOUS);
 		assertNotNull(job1, "Should be able to invoke with anonymous context");
 
 		// Invoke via RequestContext (authenticated)
 		RequestContext authed = RequestContext.of(Strings.create("did:key:z6MkAlice"));
-		Job job2 = engine.invokeOperation("test:echo", Maps.of("message", "hello"), authed);
+		Job job2 = engine.invokeOperation(Strings.create("test:echo"), Maps.of("message", "hello"), authed);
 		assertNotNull(job2, "Should be able to invoke with authenticated context");
 
 		// Verify caller DID flows through to job record
@@ -99,7 +99,7 @@ public class AccessControlTest {
 	public void testJobManagementWithRequestContext() throws Exception {
 		// Create a job via RequestContext
 		RequestContext authed = RequestContext.of(Strings.create("did:key:z6MkBob"));
-		Job job = engine.invokeOperation("test:delay", Maps.of("delay", 10000), authed);
+		Job job = engine.invokeOperation(Strings.create("test:delay"), Maps.of("delay", 10000), authed);
 		assertNotNull(job);
 
 		// Cancel with RequestContext

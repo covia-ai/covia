@@ -4,7 +4,6 @@ import convex.core.data.ABlobLike;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
-import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
@@ -21,10 +20,10 @@ import convex.lattice.LatticeContext;
  * The state is a keyword-keyed map with the following structure:
  * <pre>
  * {
- *   :assets   ->  Index&lt;Hash, AssetRecord&gt;  (references to metadata in grid :meta)
+ *   :assets   ->  Index&lt;ABlob, AssetRecord&gt;  (references to metadata in grid :meta)
  *   :jobs     ->  Index&lt;AString, JobRecord&gt;
  *   :users    ->  Index&lt;AString, UserRecord&gt;  (user database, keyed by user ID)
- *   :storage  ->  Index&lt;Hash, ABlob&gt;         (content-addressed blob storage)
+ *   :storage  ->  Index&lt;ABlob, ABlob&gt;        (content-addressed blob storage)
  * }
  * </pre>
  *
@@ -104,9 +103,10 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 	private final ALattice<AMap<ACell, ACell>> usersLattice;
 
 	/**
-	 * Child lattice for content-addressed storage (CASLattice for blob storage)
+	 * Child lattice for content-addressed storage (CASLattice for blob storage).
+	 * Uses ABlob keys (not Hash) because Hash comes back as Blob after Etch round-trip.
 	 */
-	private final CASLattice<Hash, ABlob> storageLattice;
+	private final CASLattice<ABlob, ABlob> storageLattice;
 
 	/**
 	 * Child lattice for authorization state (timestamp-based merge — venue is authoritative)
@@ -224,12 +224,12 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 			AMap<Keyword, ACell> result,
 			AMap<Keyword, ACell> other) {
 
-		Index<Hash, ABlob> ownField = (Index<Hash, ABlob>) result.get(STORAGE);
-		Index<Hash, ABlob> otherField = (Index<Hash, ABlob>) other.get(STORAGE);
+		Index<ABlob, ABlob> ownField = (Index<ABlob, ABlob>) result.get(STORAGE);
+		Index<ABlob, ABlob> otherField = (Index<ABlob, ABlob>) other.get(STORAGE);
 
 		if (otherField == null) return result;
 
-		Index<Hash, ABlob> merged = storageLattice.merge(ownField, otherField);
+		Index<ABlob, ABlob> merged = storageLattice.merge(ownField, otherField);
 
 		if (!Utils.equals(merged, ownField)) {
 			result = result.assoc(STORAGE, merged);

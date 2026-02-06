@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -136,7 +137,7 @@ public class GridLatticeTest {
 		assertEquals(value, lattice.merge(zero, value));
 	}
 
-	// ========== Meta Merge (Union - Content Addressed Index<Hash, AString>) ==========
+	// ========== Meta Merge (Union - Content Addressed Index<ABlob, AString>) ==========
 
 	@Test
 	public void testMetaMergeUnion() {
@@ -146,7 +147,7 @@ public class GridLatticeTest {
 		AMap<Keyword, ACell> merged = lattice.merge(v1, v2);
 
 		@SuppressWarnings("unchecked")
-		Index<Hash, AString> meta = (Index<Hash, AString>) merged.get(GridLattice.META);
+		Index<ABlob, AString> meta = (Index<ABlob, AString>) merged.get(GridLattice.META);
 
 		assertEquals(2, meta.count(), "Merged meta should contain both entries");
 		assertNotNull(meta.get(testHash1));
@@ -162,7 +163,7 @@ public class GridLatticeTest {
 		AMap<Keyword, ACell> merged = lattice.merge(v1, v2);
 
 		@SuppressWarnings("unchecked")
-		Index<Hash, AString> meta = (Index<Hash, AString>) merged.get(GridLattice.META);
+		Index<ABlob, AString> meta = (Index<ABlob, AString>) merged.get(GridLattice.META);
 
 		assertEquals(1, meta.count(), "Same key should not duplicate");
 	}
@@ -287,7 +288,7 @@ public class GridLatticeTest {
 		@SuppressWarnings("unchecked")
 		Index<AString, ACell> venues = (Index<AString, ACell>) merged.get(GridLattice.VENUES);
 		@SuppressWarnings("unchecked")
-		Index<Hash, AString> meta = (Index<Hash, AString>) merged.get(GridLattice.META);
+		Index<ABlob, AString> meta = (Index<ABlob, AString>) merged.get(GridLattice.META);
 
 		assertEquals(2, venues.count(), "Should have 2 venues");
 		assertEquals(2, meta.count(), "Should have 2 meta entries");

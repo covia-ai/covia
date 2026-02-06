@@ -167,7 +167,7 @@ public class LatticeStorageTest {
 		storage.store(h1, new ByteArrayInputStream(data1));
 		storage.store(h2, new ByteArrayInputStream(data2));
 
-		Index<Hash, ABlob> state = storage.getState();
+		Index<ABlob, ABlob> state = storage.getState();
 		assertNotNull(state);
 		assertEquals(2, state.count());
 	}
@@ -200,9 +200,9 @@ public class LatticeStorageTest {
 		Hash hash = Hashing.sha256(data);
 		storage.store(hash, new ByteArrayInputStream(data));
 
-		Index<Hash, ABlob> before = storage.getState();
+		Index<ABlob, ABlob> before = storage.getState();
 		storage.merge(before);
-		Index<Hash, ABlob> after = storage.getState();
+		Index<ABlob, ABlob> after = storage.getState();
 
 		assertEquals(before, after, "Merging same state should be idempotent");
 	}
@@ -222,8 +222,8 @@ public class LatticeStorageTest {
 		s1.store(h1, new ByteArrayInputStream(data1));
 		s2.store(h2, new ByteArrayInputStream(data2));
 
-		Index<Hash, ABlob> state1 = s1.getState();
-		Index<Hash, ABlob> state2 = s2.getState();
+		Index<ABlob, ABlob> state1 = s1.getState();
+		Index<ABlob, ABlob> state2 = s2.getState();
 
 		LatticeStorage merged12 = new LatticeStorage();
 		merged12.initialise();
@@ -256,8 +256,8 @@ public class LatticeStorageTest {
 		@SuppressWarnings("unchecked")
 		ACursor<ACell> rootCursor = (ACursor<ACell>) (ACursor<?>) Cursors.of(gridState);
 		@SuppressWarnings("unchecked")
-		ACursor<Index<Hash, ABlob>> storageCursor =
-			(ACursor<Index<Hash, ABlob>>) (ACursor<?>) rootCursor.path(
+		ACursor<Index<ABlob, ABlob>> storageCursor =
+			(ACursor<Index<ABlob, ABlob>>) (ACursor<?>) rootCursor.path(
 				Covia.GRID, GridLattice.VENUES, Strings.create("did:test:venue"), VenueLattice.STORAGE);
 
 		// Create storage backed by cursor
@@ -274,7 +274,7 @@ public class LatticeStorageTest {
 		assertEquals(1, cursorStorage.count());
 
 		// Verify data is reflected in cursor
-		Index<Hash, ABlob> cursorState = storageCursor.get();
+		Index<ABlob, ABlob> cursorState = storageCursor.get();
 		assertNotNull(cursorState);
 		assertTrue(cursorState.containsKey(hash));
 	}

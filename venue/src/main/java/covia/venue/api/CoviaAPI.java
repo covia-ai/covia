@@ -422,7 +422,7 @@ public class CoviaAPI extends ACoviaAPI {
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
 		try {
-			Job job=engine().invokeOperation(op.toString(),input,rctx);
+			Job job=engine().invokeOperation(op,input,rctx);
 			if (job==null) {
 				buildError(ctx,404,"Operation does not exist");
 				return;
@@ -496,7 +496,7 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiResponse(status = "409", description = "Job is in terminal state")
 					})
 	protected void sendMessage(Context ctx) {
-		String id = ctx.pathParam("id");
+		AString id = Strings.create(ctx.pathParam("id"));
 		ACell message = JSON.parseJSON5(ctx.body());
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
@@ -662,8 +662,14 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void getJobs(Context ctx) {
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 		try {
-			List<AString> jobs = engine().getJobs(rctx);
-			buildResult(ctx,jobs);
+			Index<AString, ACell> jobs = engine().getJobs(rctx);
+			// Return job IDs as a list
+			long n = jobs.count();
+			ArrayList<Object> result = new ArrayList<>((int) n);
+			for (long i = 0; i < n; i++) {
+				result.add(jobs.entryAt(i).getKey());
+			}
+			buildResult(ctx, result);
 		} catch (SecurityException e) {
 			buildError(ctx, 403, e.getMessage());
 		}

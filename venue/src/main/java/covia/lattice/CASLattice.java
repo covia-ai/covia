@@ -32,11 +32,11 @@ import convex.lattice.ALattice;
  *
  * <h2>Example Usage</h2>
  * <pre>
- * // For SHA256-hashed JSON metadata
- * CASLattice&lt;Hash, AString&gt; metaLattice = CASLattice.create();
+ * // For SHA256-hashed JSON metadata (use ABlob, not Hash — Hash comes back as Blob after Etch)
+ * CASLattice&lt;ABlob, AString&gt; metaLattice = CASLattice.create();
  *
  * // For blob-keyed binary content
- * CASLattice&lt;Blob, ABlob&gt; blobLattice = CASLattice.create();
+ * CASLattice&lt;ABlob, ABlob&gt; blobLattice = CASLattice.create();
  * </pre>
  *
  * @param <K> Key type extending ABlobLike (Hash, Blob, etc.)

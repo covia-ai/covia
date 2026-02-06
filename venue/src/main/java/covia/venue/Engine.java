@@ -190,8 +190,8 @@ public class Engine {
 				log.warn("Unknown storage type '{}', defaulting to lattice", storageType);
 			}
 			// Create lattice storage backed by venue's :storage cursor
-			ACursor<Index<Hash, ABlob>> storageCursor =
-				(ACursor<Index<Hash, ABlob>>) (ACursor<?>) lattice.path(
+			ACursor<Index<ABlob, ABlob>> storageCursor =
+				(ACursor<Index<ABlob, ABlob>>) (ACursor<?>) lattice.path(
 					Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.STORAGE);
 			return new LatticeStorage(storageCursor);
 		}
@@ -426,7 +426,7 @@ public class Engine {
 		}
 
 		// Resolve operation
-		Asset asset = resolveAsset(opRef.toString());
+		Asset asset = resolveAsset(opRef);
 		Operation op = (asset != null) ? Operation.from(asset) : null;
 
 		// Resolve adapter
@@ -503,7 +503,7 @@ public class Engine {
 		AString opRef = RT.ensureString(record.get(Fields.OP));
 		Operation op = null;
 		if (opRef != null) {
-			Asset asset = resolveAsset(opRef.toString());
+			Asset asset = resolveAsset(opRef);
 			op = (asset != null) ? Operation.from(asset) : null;
 		}
 
@@ -550,8 +550,8 @@ public class Engine {
 	 * @param name Operation name (e.g. "test:echo")
 	 * @return Asset Hash, or null if not found
 	 */
-	public Hash resolveOperation(String name) {
-		return operations.get(Strings.create(name));
+	public Hash resolveOperation(AString name) {
+		return operations.get(name);
 	}
 
 
@@ -598,25 +598,31 @@ public class Engine {
 		return RT.ensureMap(arec.get(POS_META));
 	}
 
+	// TODO: Consider whether asset IDs should be AString (hex) or Hash throughout.
+	// Currently assets are keyed by Hash in the lattice but referenced by hex AString
+	// in operation refs, job records, and DID URLs. Unifying on one canonical type
+	// would eliminate conversions.
+
 	/**
 	 * Resolves an asset reference to an Asset. Supports hex hash, DID URL, operation name,
 	 * and remote DID URLs (returns an Asset with a remote venue reference).
-	 * @param ref Asset reference string
+	 * @param ref Asset reference (AString)
 	 * @return Resolved Asset, or null if not resolvable
 	 */
-	public Asset resolveAsset(String ref) {
+	public Asset resolveAsset(AString ref) {
 		if (ref==null) return null;
+		String s = ref.toString();
 
 		// 1. Try direct hex hash (shorthand for asset on this venue)
-		Hash h = Hash.parse(ref);
+		Hash h = Hash.parse(s);
 		if (h!=null) return getAsset(h);
 
 		// 2. Try DID URL with /a/<hash> path
-		if (ref.startsWith("did:")) {
-			int idx = ref.lastIndexOf("/a/");
+		if (s.startsWith("did:")) {
+			int idx = s.lastIndexOf("/a/");
 			if (idx>=0) {
-				String didPart = ref.substring(0, idx);
-				String hashPart = ref.substring(idx+3);
+				String didPart = s.substring(0, idx);
+				String hashPart = s.substring(idx+3);
 				Hash parsed = Hash.parse(hashPart);
 				if (parsed!=null) {
 					// Check if this DID refers to the local venue or a remote one
@@ -636,7 +642,7 @@ public class Engine {
 		}
 
 		// 3. Try operation name registry
-		Hash opHash = operations.get(Strings.create(ref));
+		Hash opHash = operations.get(ref);
 		if (opHash!=null) return getAsset(opHash);
 
 		return null;
@@ -646,56 +652,57 @@ public class Engine {
 	 * Resolves an asset reference to a local Hash. Supports hex hash, DID URL (local only),
 	 * and operation name. Does not handle remote DIDs — use resolveAsset() for full resolution.
 	 *
-	 * @param ref Asset reference string
+	 * @param ref Asset reference (AString)
 	 * @return Resolved Hash, or null if not resolvable locally
 	 */
-	public Hash resolveAssetHash(String ref) {
+	public Hash resolveAssetHash(AString ref) {
 		if (ref==null) return null;
+		String s = ref.toString();
 
 		// 1. Try direct hex hash (shorthand for asset on this venue)
-		Hash h = Hash.parse(ref);
+		Hash h = Hash.parse(s);
 		if (h!=null) return h;
 
 		// 2. Try DID URL with /a/<hash> path (local DID only)
-		if (ref.startsWith("did:")) {
-			int idx = ref.lastIndexOf("/a/");
+		if (s.startsWith("did:")) {
+			int idx = s.lastIndexOf("/a/");
 			if (idx>=0) {
-				String hashPart = ref.substring(idx+3);
+				String hashPart = s.substring(idx+3);
 				Hash parsed = Hash.parse(hashPart);
 				if (parsed!=null) return parsed;
 			}
 		}
 
 		// 3. Try operation name registry
-		Hash opHash = operations.get(Strings.create(ref));
+		Hash opHash = operations.get(ref);
 		if (opHash!=null) return opHash;
 
 		return null;
 	}
 
 	/**
-	 * Invoke an operation given a reference string with request context.
+	 * Invoke an operation given a reference with request context.
 	 */
-	public Job invokeOperation(String ref, ACell input, RequestContext ctx) {
+	public Job invokeOperation(AString ref, ACell input, RequestContext ctx) {
 		return invokeOperation(ref, input, ctx.getCallerDID());
 	}
 
 	/**
-	 * Invoke an operation given a reference string (internal/programmatic use, no caller identity).
+	 * Invoke an operation given a reference (internal/programmatic use, no caller identity).
 	 */
-	public Job invokeOperation(String ref, ACell input) {
+	public Job invokeOperation(AString ref, ACell input) {
 		return invokeOperation(ref, input, (AString) null);
 	}
 
 	/**
-	 * Invoke an operation given a reference string. Supports hex hash, DID URL,
+	 * Invoke an operation given a reference. Supports hex hash, DID URL,
 	 * operation name, and adapter:operation strings.
-	 * @param ref Operation reference string
+	 * @param ref Operation reference (AString)
 	 * @param input Input parameters
 	 * @param callerDID Caller DID string, or null if anonymous
 	 * @return Job tracking the execution
 	 */
-	public Job invokeOperation(String ref, ACell input, AString callerDID) {
+	public Job invokeOperation(AString ref, ACell input, AString callerDID) {
 		if (ref==null) throw new IllegalArgumentException("Operation must be specified");
 
 		// Resolve the operation reference (hex hash, DID URL, or operation name)
@@ -705,14 +712,15 @@ public class Engine {
 		}
 
 		// Fall through: use ref directly as adapter:operation string
-		String adapterName = ref.split(":")[0];
+		String refStr = ref.toString();
+		String adapterName = refStr.split(":")[0];
 		AAdapter adapter = getAdapter(adapterName);
 		if (adapter == null) {
 			throw new IllegalStateException("Adapter not available: "+adapterName);
 		}
 
-		Job job=submitJob(Strings.create(ref),null,input,null,callerDID);
-		adapter.invoke(job, ref, null, input);
+		Job job=submitJob(ref,null,input,null,callerDID);
+		adapter.invoke(job, refStr, null, input);
 		return job;
 	}
 
@@ -821,33 +829,24 @@ public class Engine {
 	}
 
 	/**
-	 * Gets the live Job object for the given job ID string
-	 * @param jobID Job ID as a String
-	 * @return Job, or null if not found
-	 */
-	public Job getJob(String jobID) {
-		return getJob(Strings.create(jobID));
-	}
-
-	/**
 	 * Delivers a message to a job's message queue with request context.
 	 */
-	public int deliverMessage(String jobID, AMap<AString, ACell> message, RequestContext ctx) {
+	public int deliverMessage(AString jobID, AMap<AString, ACell> message, RequestContext ctx) {
 		AString did = ctx.getCallerDID();
-		return deliverMessage(jobID, message, did != null ? did.toString() : null);
+		return deliverMessage(jobID, message, did);
 	}
 
 	/**
 	 * Delivers a message to a job's message queue.
 	 * Wraps the raw message in an extensible record with metadata.
-	 * @param jobID Job ID as a String
+	 * @param jobID Job ID (AString)
 	 * @param message Raw message content (arbitrary JSON)
 	 * @param source Source identifier (DID or client ID), may be null
 	 * @return Queue depth after enqueue
 	 * @throws IllegalArgumentException if job not found
 	 * @throws IllegalStateException if job is in terminal state
 	 */
-	public int deliverMessage(String jobID, AMap<AString, ACell> message, String source) {
+	public int deliverMessage(AString jobID, AMap<AString, ACell> message, AString source) {
 		Job job = getJob(jobID);
 		if (job == null) throw new IllegalArgumentException("Job not found: " + jobID);
 		if (job.isFinished()) throw new IllegalStateException("Job is in terminal state: " + jobID);
@@ -860,7 +859,7 @@ public class Engine {
 				Fields.TS, CVMLong.create(ts),
 				Fields.ID, msgId);
 		if (source != null) {
-			record = record.assoc(Fields.SOURCE, Strings.create(source));
+			record = record.assoc(Fields.SOURCE, source);
 		}
 
 		job.enqueueMessage(record);
@@ -894,7 +893,7 @@ public class Engine {
 		// Fall back to resolving from the :op field
 		AString opStr = RT.ensureString(job.getData().get(Fields.OP));
 		if (opStr == null) return null;
-		Asset asset = resolveAsset(opStr.toString());
+		Asset asset = resolveAsset(opStr);
 		if (asset != null) {
 			AString adapterOp = RT.ensureString(RT.getIn(asset.meta(), "operation", "adapter"));
 			if (adapterOp != null) {
@@ -1010,27 +1009,22 @@ public class Engine {
 	}
 
 	/**
-	 * Gets all job IDs with request context.
+	 * Gets the jobs Index with request context.
 	 */
-	public List<AString> getJobs(RequestContext ctx) {
+	public Index<AString, ACell> getJobs(RequestContext ctx) {
 		return getJobs();
 	}
 
 	/**
-	 * Gets all job IDs. Returns keys from the lattice Index (naturally time-ordered
+	 * Gets the jobs Index directly from the lattice (naturally time-ordered
 	 * since job IDs are timestamp-prefixed).
-	 * @return List of job IDs
+	 * @return Index of job IDs to job records, or empty Index if none
 	 */
 	@SuppressWarnings("unchecked")
-	public List<AString> getJobs() {
+	public Index<AString, ACell> getJobs() {
 		Index<AString, ACell> jobsIndex = (Index<AString, ACell>) jobsCursor.get();
-		if (jobsIndex == null || jobsIndex.isEmpty()) return new ArrayList<>();
-		List<AString> result = new ArrayList<>((int) jobsIndex.count());
-		long n = jobsIndex.count();
-		for (long i = 0; i < n; i++) {
-			result.add(jobsIndex.entryAt(i).getKey());
-		}
-		return result;
+		if (jobsIndex == null) return Index.none();
+		return jobsIndex;
 	}
 
 	/**
@@ -1349,7 +1343,7 @@ public class Engine {
 	public AMap<AString, ACell> getStats() {
 		AMap<AString, AMap<AString, ACell>> usersMap = auth.getUsers();
 		return Maps.of(
-				 "jobs",getJobs().size(),
+				 "jobs",getJobs().count(),
 				 "assets",getAssets().size(),
 				 "users",usersMap != null ? usersMap.count() : 0,
 				 "ops",operations.count()

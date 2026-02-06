@@ -97,7 +97,7 @@ public class EngineTest {
 	public void testAdapterOperation() {
 		// Test echo operation
 		ACell input=Maps.of("message",Strings.create("Hello World"));
-		Job job=venue.invokeOperation("test:echo",input);
+		Job job=venue.invokeOperation(Strings.create("test:echo"),input);
 		AMap<AString, ACell> status = job.getData();
 		
 		// Get job ID from status
@@ -120,7 +120,7 @@ public class EngineTest {
 	public void testAdapterError() {
 		// Test error operation
 		ACell input=Maps.of("message",Strings.create("Test Error"));
-		Job job=venue.invokeOperation("test:random",input);
+		Job job=venue.invokeOperation(Strings.create("test:random"),input);
 		AMap<AString, ACell> status = job.getData();
 		
 		// Get job ID from status
@@ -139,7 +139,7 @@ public class EngineTest {
 	public void testRandomOperation() {
 		// Test random operation with 32 bytes
 		ACell input = Maps.of("length", Strings.create("32"));
-		Job job= venue.invokeOperation(randomOpID.toHexString(), input);
+		Job job= venue.invokeOperation(randomOpID.toCVMHexString(), input);
 		ACell status =job.getData();
 				
 		// Get job ID from status
@@ -166,7 +166,7 @@ public class EngineTest {
 	// @Test
 	public void testQwen() {
 		ACell input = Maps.of("prompt", "What is the capital of France?");
-		ACell result = venue.invokeOperation(qwenOpId.toHexString(), input).awaitResult();
+		ACell result = venue.invokeOperation(qwenOpId.toCVMHexString(), input).awaitResult();
 		result=waitForJobCompletion(RT.getIn(result, "id"), 5000);
 		if (Status.COMPLETE.equals(RT.getIn(result, "status"))) {
 			// OK
@@ -247,7 +247,7 @@ public class EngineTest {
 	@Test
 	public void testAwaitResultSuccess() {
 		ACell input = Maps.of("message", Strings.create("Hello"));
-		Job job = venue.invokeOperation("test:echo", input);
+		Job job = venue.invokeOperation(Strings.create("test:echo"), input);
 
 		// awaitResult should complete and return the result
 		ACell result = job.awaitResult();
@@ -262,7 +262,7 @@ public class EngineTest {
 	@Test
 	public void testAwaitResultFailure() {
 		ACell input = Maps.of("message", Strings.create("This should fail"));
-		Job job = venue.invokeOperation("test:error", input);
+		Job job = venue.invokeOperation(Strings.create("test:error"), input);
 
 		// awaitResult should throw JobFailedException, not hang
 		assertThrows(JobFailedException.class, () -> job.awaitResult());
@@ -275,7 +275,7 @@ public class EngineTest {
 	@Test
 	public void testAwaitResultAfterCompletion() throws Exception {
 		ACell input = Maps.of("message", Strings.create("Fail fast"));
-		Job job = venue.invokeOperation("test:error", input);
+		Job job = venue.invokeOperation(Strings.create("test:error"), input);
 
 		// Wait a bit to ensure the async task has completed
 		Thread.sleep(100);
@@ -290,14 +290,14 @@ public class EngineTest {
 	@Test
 	public void testResolveAssetHashHex() {
 		// Hex hash should resolve directly
-		Hash resolved = venue.resolveAssetHash(echoOpId.toHexString());
+		Hash resolved = venue.resolveAssetHash(echoOpId.toCVMHexString());
 		assertEquals(echoOpId, resolved);
 	}
 
 	@Test
 	public void testResolveAssetHashDIDKeyURL() {
 		// did:key:.../a/<hash> should extract the hash
-		String didUrl = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK/a/" + echoOpId.toHexString();
+		AString didUrl = Strings.create("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK/a/" + echoOpId.toHexString());
 		Hash resolved = venue.resolveAssetHash(didUrl);
 		assertEquals(echoOpId, resolved);
 	}
@@ -305,7 +305,7 @@ public class EngineTest {
 	@Test
 	public void testResolveAssetHashDIDWebURL() {
 		// did:web:.../a/<hash> should also work
-		String didUrl = "did:web:venue.example.com/a/" + echoOpId.toHexString();
+		AString didUrl = Strings.create("did:web:venue.example.com/a/" + echoOpId.toHexString());
 		Hash resolved = venue.resolveAssetHash(didUrl);
 		assertEquals(echoOpId, resolved);
 	}
@@ -313,7 +313,7 @@ public class EngineTest {
 	@Test
 	public void testResolveAssetHashOperationName() {
 		// Operation names like test:echo should resolve via registry
-		Hash resolved = venue.resolveAssetHash("test:echo");
+		Hash resolved = venue.resolveAssetHash(Strings.create("test:echo"));
 		assertNotNull(resolved, "test:echo should resolve to an asset hash");
 		// The resolved hash should have valid metadata
 		assertNotNull(venue.getMetaValue(resolved));
@@ -322,15 +322,15 @@ public class EngineTest {
 	@Test
 	public void testResolveAssetHashUnknown() {
 		// Unknown strings should return null
-		assertNull(venue.resolveAssetHash("nonexistent:op"));
-		assertNull(venue.resolveAssetHash("did:key:z6Mk...no-asset-path"));
+		assertNull(venue.resolveAssetHash(Strings.create("nonexistent:op")));
+		assertNull(venue.resolveAssetHash(Strings.create("did:key:z6Mk...no-asset-path")));
 		assertNull(venue.resolveAssetHash(null));
 	}
 
 	@Test
 	public void testInvokeViaDIDURL() {
 		// Invoke using a DID URL should work the same as hex hash
-		String didUrl = venue.getDIDString() + "/a/" + echoOpId.toHexString();
+		AString didUrl = Strings.create(venue.getDIDString() + "/a/" + echoOpId.toHexString());
 		ACell input = Maps.of("message", Strings.create("Hello via DID"));
 		Job job = venue.invokeOperation(didUrl, input);
 
@@ -343,7 +343,7 @@ public class EngineTest {
 	public void testInvokeViaOperationName() {
 		// Invoke using operation name should resolve and work
 		ACell input = Maps.of("message", Strings.create("Hello via name"));
-		Job job = venue.invokeOperation("test:echo", input);
+		Job job = venue.invokeOperation(Strings.create("test:echo"), input);
 
 		ACell result = job.awaitResult();
 		assertNotNull(result);
@@ -357,11 +357,11 @@ public class EngineTest {
 		assertTrue(registry.count() > 0, "Operation registry should not be empty");
 
 		// test:echo should be in the registry
-		Hash echoHash = venue.resolveOperation("test:echo");
+		Hash echoHash = venue.resolveOperation(Strings.create("test:echo"));
 		assertNotNull(echoHash, "test:echo should be registered");
 
 		// test:error should be in the registry
-		Hash errorHash = venue.resolveOperation("test:error");
+		Hash errorHash = venue.resolveOperation(Strings.create("test:error"));
 		assertNotNull(errorHash, "test:error should be registered");
 	}
 

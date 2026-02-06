@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -208,7 +209,7 @@ public class CoviaTest {
 		// Verify merged structure
 		AMap<Keyword, ACell> mergedGrid = (AMap<Keyword, ACell>) merged.get(Covia.GRID);
 		Index<AString, ACell> venues = (Index<AString, ACell>) mergedGrid.get(GridLattice.VENUES);
-		Index<Hash, AString> meta = (Index<Hash, AString>) mergedGrid.get(GridLattice.META);
+		Index<ABlob, AString> meta = (Index<ABlob, AString>) mergedGrid.get(GridLattice.META);
 
 		assertEquals(2, venues.count(), "Should have 2 venues");
 		assertEquals(2, meta.count(), "Should have 2 meta entries");

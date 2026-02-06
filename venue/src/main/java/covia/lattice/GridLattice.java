@@ -1,9 +1,9 @@
 package covia.lattice;
 
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
@@ -19,7 +19,7 @@ import convex.lattice.LatticeContext;
  * <pre>
  * :grid
  *   :venues    ->  Index&lt;DID-String, VenueLattice&gt;  (per-venue state, sorted by DID)
- *   :meta      ->  Index&lt;Hash, AString&gt;             (shared content-addressable metadata as JSON)
+ *   :meta      ->  Index&lt;ABlob, AString&gt;             (shared content-addressable metadata as JSON)
  * </pre>
  *
  * <h2>Design Rationale</h2>
@@ -65,10 +65,10 @@ public class GridLattice extends ALattice<AMap<Keyword, ACell>> {
 	private final ALattice<Index<AString, ACell>> venuesLattice;
 
 	/**
-	 * Child lattice for shared metadata (content-addressed storage)
-	 * Uses CASLattice&lt;Hash, AString&gt; for type-safe content-addressed storage
+	 * Child lattice for shared metadata (content-addressed storage).
+	 * Uses ABlob keys (not Hash) because Hash comes back as Blob after Etch round-trip.
 	 */
-	private final CASLattice<Hash, AString> metaLattice;
+	private final CASLattice<ABlob, AString> metaLattice;
 
 	private GridLattice() {
 		// Venues use a custom Index lattice that applies VenueLattice to each venue entry
@@ -138,12 +138,12 @@ public class GridLattice extends ALattice<AMap<Keyword, ACell>> {
 			AMap<Keyword, ACell> result,
 			AMap<Keyword, ACell> other) {
 
-		Index<Hash, AString> ownField = (Index<Hash, AString>) result.get(META);
-		Index<Hash, AString> otherField = (Index<Hash, AString>) other.get(META);
+		Index<ABlob, AString> ownField = (Index<ABlob, AString>) result.get(META);
+		Index<ABlob, AString> otherField = (Index<ABlob, AString>) other.get(META);
 
 		if (otherField == null) return result;
 
-		Index<Hash, AString> merged = metaLattice.merge(ownField, otherField);
+		Index<ABlob, AString> merged = metaLattice.merge(ownField, otherField);
 
 		if (!Utils.equals(merged, ownField)) {
 			result = result.assoc(META, merged);

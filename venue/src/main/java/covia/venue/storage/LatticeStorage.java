@@ -31,7 +31,7 @@ import covia.lattice.CASLattice;
  * <h2>Example Usage</h2>
  * <pre>
  * // Create storage backed by a lattice cursor
- * ACursor&lt;Index&lt;Hash, ABlob&gt;&gt; cursor = venueCursor.path(VenueLattice.STORAGE);
+ * ACursor&lt;Index&lt;ABlob, ABlob&gt;&gt; cursor = venueCursor.path(VenueLattice.STORAGE);
  * LatticeStorage storage = new LatticeStorage(cursor);
  *
  * // Store content
@@ -46,18 +46,18 @@ public class LatticeStorage extends AStorage {
 	/**
 	 * The underlying CASLattice defining merge semantics
 	 */
-	private final CASLattice<Hash, ABlob> lattice;
+	private final CASLattice<ABlob, ABlob> lattice;
 
 	/**
 	 * Cursor into the lattice for storage state.
 	 * May be null if using standalone mode without a lattice cursor.
 	 */
-	private final ACursor<Index<Hash, ABlob>> cursor;
+	private final ACursor<Index<ABlob, ABlob>> cursor;
 
 	/**
 	 * Local storage state (used when cursor is null or for caching)
 	 */
-	private Index<Hash, ABlob> localState;
+	private Index<ABlob, ABlob> localState;
 
 	private boolean initialised = false;
 
@@ -68,7 +68,7 @@ public class LatticeStorage extends AStorage {
 	 *
 	 * @param cursor Cursor into the venue's :storage path
 	 */
-	public LatticeStorage(ACursor<Index<Hash, ABlob>> cursor) {
+	public LatticeStorage(ACursor<Index<ABlob, ABlob>> cursor) {
 		this.lattice = CASLattice.create();
 		this.cursor = cursor;
 		this.localState = null; // Will use cursor
@@ -133,8 +133,8 @@ public class LatticeStorage extends AStorage {
 	 * Store a blob with the given hash.
 	 */
 	private void storeBlob(Hash hash, ABlob blob) {
-		Index<Hash, ABlob> current = getState();
-		Index<Hash, ABlob> updated = current.assoc(hash, blob);
+		Index<ABlob, ABlob> current = getState();
+		Index<ABlob, ABlob> updated = current.assoc(hash, blob);
 		setState(updated);
 	}
 
@@ -173,11 +173,11 @@ public class LatticeStorage extends AStorage {
 
 		// Note: In a true CRDT, deletes are not supported (grow-only).
 		// This implementation removes locally but may be restored on merge.
-		Index<Hash, ABlob> current = getState();
+		Index<ABlob, ABlob> current = getState();
 		if (!current.containsKey(hash)) {
 			return false;
 		}
-		Index<Hash, ABlob> updated = current.dissoc(hash);
+		Index<ABlob, ABlob> updated = current.dissoc(hash);
 		setState(updated);
 		return true;
 	}
@@ -208,9 +208,9 @@ public class LatticeStorage extends AStorage {
 	 *
 	 * @return Current state as an Index
 	 */
-	public Index<Hash, ABlob> getState() {
+	public Index<ABlob, ABlob> getState() {
 		if (cursor != null) {
-			Index<Hash, ABlob> cursorState = cursor.get();
+			Index<ABlob, ABlob> cursorState = cursor.get();
 			return cursorState != null ? cursorState : lattice.zero();
 		}
 		return localState;
@@ -221,7 +221,7 @@ public class LatticeStorage extends AStorage {
 	 *
 	 * @param state New state
 	 */
-	private void setState(Index<Hash, ABlob> state) {
+	private void setState(Index<ABlob, ABlob> state) {
 		if (cursor != null) {
 			cursor.set(state);
 		} else {
@@ -237,10 +237,10 @@ public class LatticeStorage extends AStorage {
 	 *
 	 * @param other The other storage state to merge
 	 */
-	public void merge(Index<Hash, ABlob> other) {
+	public void merge(Index<ABlob, ABlob> other) {
 		if (other == null) return;
-		Index<Hash, ABlob> current = getState();
-		Index<Hash, ABlob> merged = lattice.merge(current, other);
+		Index<ABlob, ABlob> current = getState();
+		Index<ABlob, ABlob> merged = lattice.merge(current, other);
 		setState(merged);
 	}
 
@@ -276,7 +276,7 @@ public class LatticeStorage extends AStorage {
 	 *
 	 * @return The CASLattice defining merge semantics
 	 */
-	public CASLattice<Hash, ABlob> getLattice() {
+	public CASLattice<ABlob, ABlob> getLattice() {
 		return lattice;
 	}
 
@@ -285,7 +285,7 @@ public class LatticeStorage extends AStorage {
 	 *
 	 * @return The cursor, or null
 	 */
-	public ACursor<Index<Hash, ABlob>> getCursor() {
+	public ACursor<Index<ABlob, ABlob>> getCursor() {
 		return cursor;
 	}
 

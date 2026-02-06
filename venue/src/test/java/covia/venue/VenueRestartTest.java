@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
@@ -16,6 +15,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
+import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
@@ -79,7 +79,7 @@ public class VenueRestartTest {
 			assertNotNull(engine.getAsset(customAssetId), "Custom asset should exist");
 
 			// Run test:echo → should COMPLETE
-			Job echoJob = engine.invokeOperation(echoOpId.toHexString(),
+			Job echoJob = engine.invokeOperation(echoOpId.toCVMHexString(),
 					Maps.of(Fields.MESSAGE, Strings.create("hello restart")));
 			echoJob.future().get(5, TimeUnit.SECONDS);
 			assertEquals(Status.COMPLETE, echoJob.getStatus(), "Echo job should complete");
@@ -87,7 +87,7 @@ public class VenueRestartTest {
 			echoJobId = echoJob.getID().toString();
 
 			// Run test:error → should FAIL
-			Job errorJob = engine.invokeOperation(errorOpId.toHexString(),
+			Job errorJob = engine.invokeOperation(errorOpId.toCVMHexString(),
 					Maps.of(Fields.MESSAGE, Strings.create("test error")));
 			try {
 				errorJob.future().get(5, TimeUnit.SECONDS);
@@ -98,14 +98,14 @@ public class VenueRestartTest {
 			errorJobId = errorJob.getID().toString();
 
 			// Run test:never → should stay STARTED (never completes)
-			Job neverJob = engine.invokeOperation(neverOpId.toHexString(),
+			Job neverJob = engine.invokeOperation(neverOpId.toCVMHexString(),
 					Maps.of(Fields.MESSAGE, Strings.create("never finishes")));
 			Thread.sleep(50); // Give it a moment to start
 			assertEquals(Status.STARTED, neverJob.getStatus(), "Never job should be STARTED");
 			neverJobId = neverJob.getID().toString();
 
 			// Run test:pause → should auto-pause itself
-			Job pauseJob = engine.invokeOperation(pauseOpId.toHexString(),
+			Job pauseJob = engine.invokeOperation(pauseOpId.toCVMHexString(),
 					Maps.of(Fields.MESSAGE, Strings.create("pause me")));
 			Thread.sleep(50); // Give it a moment to pause
 			assertEquals(Status.PAUSED, pauseJob.getStatus(), "Pause job should be PAUSED");
@@ -148,12 +148,12 @@ public class VenueRestartTest {
 					"Custom asset metadata should contain original name");
 
 			// 4d: All job IDs present in lattice
-			List<AString> jobIds = engine2.getJobs();
-			assertTrue(jobIds.contains(Strings.create(echoJobId)),
+			Index<AString, ACell> jobIds = engine2.getJobs();
+			assertNotNull(jobIds.get(Strings.create(echoJobId)),
 					"Echo job ID should be in job list after restart");
-			assertTrue(jobIds.contains(Strings.create(errorJobId)),
+			assertNotNull(jobIds.get(Strings.create(errorJobId)),
 					"Error job ID should be in job list after restart");
-			assertTrue(jobIds.contains(Strings.create(neverJobId)),
+			assertNotNull(jobIds.get(Strings.create(neverJobId)),
 					"Never job ID should be in job list after restart");
 
 			// 4e: COMPLETE job has correct status and output
@@ -170,7 +170,7 @@ public class VenueRestartTest {
 					"Error job should still be FAILED");
 
 			// 4g: STARTED job was re-fired by recovery (should be in-memory jobs now)
-			Job recoveredNeverJob = engine2.getJob(neverJobId);
+			Job recoveredNeverJob = engine2.getJob(Strings.create(neverJobId));
 			assertNotNull(recoveredNeverJob, "Never job should be recovered after restart");
 			AString neverStatus = recoveredNeverJob.getStatus();
 			assertTrue(Status.STARTED.equals(neverStatus) || Status.PENDING.equals(neverStatus),
@@ -183,9 +183,9 @@ public class VenueRestartTest {
 					"Pause job should still be PAUSED after restart");
 
 			// 4i: Unpause the job by delivering a message → should complete
-			engine2.deliverMessage(pauseJobId, Maps.of("content", Strings.create("resume")), (String) null);
+			engine2.deliverMessage(Strings.create(pauseJobId), Maps.of("content", Strings.create("resume")), (AString) null);
 			Thread.sleep(50); // Give it a moment to process
-			Job unpausedJob = engine2.getJob(pauseJobId);
+			Job unpausedJob = engine2.getJob(Strings.create(pauseJobId));
 			assertNotNull(unpausedJob, "Unpaused job should exist");
 			assertEquals(Status.COMPLETE, unpausedJob.getStatus(),
 					"Unpaused job should be COMPLETE after receiving message");
