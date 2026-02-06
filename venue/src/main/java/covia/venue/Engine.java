@@ -330,7 +330,8 @@ public class Engine {
 		if (jobsIndex == null || jobsIndex.isEmpty()) return;
 
 		long n = jobsIndex.count();
-		int recovered = 0;
+		int refired = 0;
+		int kept = 0;
 		int failed = 0;
 		for (long i = 0; i < n; i++) {
 			var entry = jobsIndex.entryAt(i);
@@ -348,26 +349,21 @@ public class Engine {
 			if (Job.isFinished(record)) continue;
 
 			AString status = RT.ensureString(record.get(Fields.STATUS));
-			if (Status.PENDING.equals(status)) {
-				// Re-fire PENDING jobs
+			if (Status.PENDING.equals(status) || Status.STARTED.equals(status)) {
+				// Re-fire PENDING and STARTED jobs
 				if (refireJob(jobID, record)) {
-					recovered++;
+					refired++;
 				} else {
 					failed++;
 				}
 			} else {
-				// STARTED, PAUSED, INPUT_REQUIRED, AUTH_REQUIRED — execution state lost
-				AMap<AString, ACell> failedRecord = record
-						.assoc(Fields.STATUS, Status.FAILED)
-						.assoc(Fields.ERROR, Strings.create("Interrupted by venue restart"))
-						.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
-				persistJobRecord(jobID, failedRecord);
-				failed++;
+				// PAUSED, INPUT_REQUIRED, AUTH_REQUIRED — keep as-is, awaiting external action
+				kept++;
 			}
 		}
 
-		if (recovered > 0 || failed > 0) {
-			log.info("Job recovery: {} re-fired, {} marked failed", recovered, failed);
+		if (refired > 0 || kept > 0 || failed > 0) {
+			log.info("Job recovery: {} re-fired, {} kept (paused/waiting), {} failed", refired, kept, failed);
 		}
 	}
 
