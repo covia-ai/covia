@@ -475,9 +475,17 @@ public class VenueHTTP extends Venue {
 	/**
 	 * Waits for a remote job to finish, polling with exponential backoff.
 	 * Uses the default timeout configured via {@link #setTimeout}.
+	 *
+	 * <p><b>Timeout semantics:</b> This is a <em>client-side</em> polling timeout only.
+	 * The remote job continues running on the venue regardless of whether this
+	 * client times out. After a timeout, callers can re-acquire the latest job
+	 * status by calling {@link #getJobStatus(AString)} with the job ID — the job
+	 * may have completed, failed, or still be running.
+	 *
 	 * @param job Any Job, presumably not yet finished
 	 * @return true if successfully completed, false if failed
 	 * @throws InterruptedException if interrupted while waiting
+	 * @throws ResponseException if polling times out (job may still be running remotely)
 	 */
 	public boolean waitForFinish(Job job) throws InterruptedException {
 		return waitForFinish(job, timeout);
@@ -485,10 +493,18 @@ public class VenueHTTP extends Venue {
 
 	/**
 	 * Waits for a remote job to finish, polling with exponential backoff.
+	 *
+	 * <p><b>Timeout semantics:</b> This is a <em>client-side</em> polling timeout only.
+	 * The remote job continues running on the venue regardless of whether this
+	 * client times out. After a timeout, callers can re-acquire the latest job
+	 * status by calling {@link #getJobStatus(AString)} with the job ID — the job
+	 * may have completed, failed, or still be running.
+	 *
 	 * @param job Any Job, presumably not yet finished
 	 * @param timeoutMs Maximum time to wait in milliseconds
-	 * @return true if successfully completed, false if failed
+	 * @return true if successfully completed, false if failed or timed out
 	 * @throws InterruptedException if interrupted while waiting
+	 * @throws ResponseException if polling times out (job may still be running remotely)
 	 */
 	public boolean waitForFinish(Job job, long timeoutMs) throws InterruptedException {
 		AString id=job.getID();

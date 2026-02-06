@@ -30,7 +30,7 @@ public abstract class AAdapter {
 	public static final ExecutorService VIRTUAL_EXECUTOR = ThreadUtils.getVirtualExecutor();
 
 	protected Engine engine;
-	
+
 	/**
 	 * Index of assets installed by this adapter.
 	 * Maps asset Hash to asset metadata (AString).
@@ -128,9 +128,13 @@ public abstract class AAdapter {
     
     /**
      * Invoke an operation with the given input, returning a future for the result.
-     * Adapters SHOULD launch an asynchronous task to produce the result and update the job status accordingly
-     * Adapters MAY update the Job immediately if the Job can be completed in O(1) time
-     * 
+     * Adapters SHOULD launch an asynchronous task to produce the result and update the job status accordingly.
+     * Adapters MAY update the Job immediately if the Job can be completed in O(1) time.
+     *
+     * <p>The returned future may remain pending for an extended period (long-running jobs).
+     * Adapters should apply IO-level timeouts on external network calls but must NOT
+     * impose timeouts on the future itself — see {@link #invoke(Job, String, ACell, ACell)}.
+     *
      * @param operation The operation ID in the format "adapter:operation"
      * @param meta The metadata for the operation
      * @param input The input parameters for the operation
@@ -140,8 +144,18 @@ public abstract class AAdapter {
     
     /**
      * Invoke an operation with the given input.
-     * Adapters SHOULD launch an asynchronous task to produce the result and update the job status accordingly
-     * Adapters MAY update the Job immediately if the Job can be completed in O(1) time
+     * Adapters SHOULD launch an asynchronous task to produce the result and update the job status accordingly.
+     * Adapters MAY update the Job immediately if the Job can be completed in O(1) time.
+     *
+     * <p><b>Timeout policy:</b> Jobs intentionally have NO framework-level timeout.
+     * Jobs can be long-running (days, weeks, or months for workflows, orchestrations,
+     * or human-in-the-loop processes). Clients may time out and reconnect, but the
+     * job continues running on the venue. After a client timeout or reconnect, the
+     * client should re-acquire the latest job status.
+     *
+     * <p>Individual adapters SHOULD apply IO-level timeouts on their external calls
+     * (HTTP requests, LLM API calls, etc.) to prevent network-level hangs, but must
+     * not impose blanket timeouts on the job lifecycle.
      *
      * @param job the Job prepared to run within the registered venue
      * @param operation The operation ID in the format "adapter:operation"
@@ -185,4 +199,5 @@ public abstract class AAdapter {
     public boolean supportsMultiTurn() {
     	return false;
     }
+
 }

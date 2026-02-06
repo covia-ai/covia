@@ -106,7 +106,7 @@ Adapter Layer
 
 - **Asset** — Immutable content-addressed resource (SHA256 hash of metadata). Can be an operation, artifact, or reference.
 - **Operation** — An Asset with an `"operation"` field; executable via an adapter with JSON Schema input/output.
-- **Job** — Execution state for an operation invocation. Lifecycle: `PENDING → STARTED → COMPLETE | FAILED | CANCELLED | REJECTED` (also `PAUSED`, `INPUT_REQUIRED`, `AUTH_REQUIRED`).
+- **Job** — Execution state for an operation invocation. Jobs are long-lived and have NO framework-level timeout (they can run for days, weeks, or months). Lifecycle: `PENDING → STARTED → COMPLETE | FAILED | CANCELLED | REJECTED` (also `PAUSED`, `INPUT_REQUIRED`, `AUTH_REQUIRED`). Clients may time out polling and reconnect; after reconnect they re-acquire the latest job status by ID.
 - **Venue** — A grid node that hosts operations and manages state. Identified by DID.
 - **Adapter** — Bridges operations to execution environments. Extends `AAdapter`, implements `invokeFuture()`.
 - **Lattice** — CRDT-based persistent state with merge semantics (commutative, associative, idempotent).
@@ -217,8 +217,8 @@ Adapter Layer
 - [ ] **Protect or remove /config endpoint** — Exposes entire engine configuration including potential secrets.
   - File: `venue/.../venue/server/CoviaWebApp.java`
 
-- [ ] **Add adapter-level timeouts** — No timeout enforcement on adapter execution. Long-running or hung operations block indefinitely. Add `CompletableFuture.orTimeout()`.
-  - File: `venue/.../adapter/AAdapter.java`, `venue/.../venue/Engine.java`
+- [ ] **Add IO-level timeouts to adapters** — Jobs are long-lived and must NOT have framework-level timeouts (they can run for days/weeks/months). However, individual adapters should apply IO-level timeouts on external network calls to prevent hangs. LangChainAdapter `model.chat()` and ConvexAdapter `query()`/`transact()` currently have no IO timeout. Clients can time out and reconnect; after reconnect they should re-acquire the latest job status.
+  - Files: `venue/.../adapter/LangChainAdapter.java`, `venue/.../adapter/ConvexAdapter.java`
 
 - [ ] **Standardize exception handling** — VenueHTTP mixes RuntimeException, ResponseException, and null returns. Define consistent error propagation strategy.
   - File: `covia-core/.../grid/client/VenueHTTP.java`
