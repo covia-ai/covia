@@ -751,14 +751,16 @@ public class Engine {
 	 * @return Content stream, or null if not available / does not exist
 	 */
 	public InputStream getContentStream(AMap<AString,ACell> meta) throws IOException {
-		if (meta==null) return null;	
+		if (meta==null) return null;
 		AMap<AString,ACell> content=RT.ensureMap(meta.get(Fields.CONTENT));
 		if (content==null) return null;
 		Hash contentHash=Hash.parse(RT.ensureString(content.get(Fields.SHA256)));
 		if (contentHash==null) {
 			throw new IllegalArgumentException("Metadata does not have valid content hash");
-		}	
-		return contentStorage.getContent(contentHash).getInputStream();
+		}
+		AContent c = contentStorage.getContent(contentHash);
+		if (c==null) return null;
+		return c.getInputStream();
 	}
 	
 	/**
