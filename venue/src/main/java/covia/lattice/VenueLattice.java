@@ -73,6 +73,11 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 	public static final Keyword STORAGE = Keyword.intern("storage");
 
 	/**
+	 * Keyword for authorization state within venue state
+	 */
+	public static final Keyword AUTH = Keyword.intern("auth");
+
+	/**
 	 * Keyword for timestamp field (used in merge conflict resolution)
 	 */
 	public static final Keyword UPDATED = Keyword.intern("updated");
@@ -103,6 +108,11 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 	 */
 	private final CASLattice<Hash, ABlob> storageLattice;
 
+	/**
+	 * Child lattice for authorization state (timestamp-based merge — venue is authoritative)
+	 */
+	private final ALattice<AMap<ACell, ACell>> authLattice;
+
 	private VenueLattice() {
 		// Assets use union merge - content-addressed, so same ID means same content
 		this.assetsLattice = new UnionMapLattice<>();
@@ -117,6 +127,9 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 
 		// Storage uses CASLattice - content-addressed blob storage
 		this.storageLattice = CASLattice.create();
+
+		// Auth uses timestamp-based merge (venue-authoritative)
+		this.authLattice = new TimestampMapLattice<>(Strings.intern("updated"));
 	}
 
 	/**
@@ -150,6 +163,9 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 
 		// Merge storage
 		result = mergeStorageField(result, otherValue);
+
+		// Merge auth
+		result = mergeField(result, otherValue, AUTH, authLattice);
 
 		return result;
 	}
@@ -228,7 +244,8 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 			ASSETS, Maps.empty(),
 			JOBS, Index.none(),
 			USERS, Maps.empty(),
-			STORAGE, Index.none()
+			STORAGE, Index.none(),
+			AUTH, Maps.empty()
 		);
 	}
 
@@ -254,6 +271,9 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 		}
 		if (STORAGE.equals(childKey)) {
 			return (ALattice<T>) storageLattice;
+		}
+		if (AUTH.equals(childKey)) {
+			return (ALattice<T>) authLattice;
 		}
 		return null;
 	}

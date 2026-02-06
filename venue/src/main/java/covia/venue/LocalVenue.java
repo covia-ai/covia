@@ -48,7 +48,8 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public CompletableFuture<Job> invoke(Hash assetID, ACell input) {
-		return CompletableFuture.completedFuture(engine.invokeOperation(assetID.toHexString(), input, getUser()));
+		RequestContext rctx = RequestContext.of(getUser());
+		return CompletableFuture.completedFuture(engine.invokeOperation(assetID.toHexString(), input, rctx));
 	}
 
 	@Override
@@ -56,7 +57,8 @@ public class LocalVenue extends Venue {
 		if (operation == null) {
 			throw new IllegalArgumentException("Operation must not be null");
 		}
-		Job job = engine.invokeOperation(operation, input, getUser());
+		RequestContext rctx = RequestContext.of(getUser());
+		Job job = engine.invokeOperation(operation, input, rctx);
 		return CompletableFuture.completedFuture(job);
 	}
 
@@ -141,32 +143,31 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public AMap<AString, ACell> cancelJob(AString jobId) {
-		return engine.cancelJob(jobId);
+		return engine.cancelJob(jobId, RequestContext.of(getUser()));
 	}
 
 	@Override
 	public AMap<AString, ACell> pauseJob(AString jobId) {
-		return engine.pauseJob(jobId);
+		return engine.pauseJob(jobId, RequestContext.of(getUser()));
 	}
 
 	@Override
 	public AMap<AString, ACell> resumeJob(AString jobId) {
-		return engine.resumeJob(jobId);
+		return engine.resumeJob(jobId, RequestContext.of(getUser()));
 	}
 
 	@Override
 	public boolean deleteJob(AString jobId) {
-		return engine.deleteJob(jobId);
+		return engine.deleteJob(jobId, RequestContext.of(getUser()));
 	}
 
 	@Override
 	public List<AString> listJobs() {
-		return engine.getJobs();
+		return engine.getJobs(RequestContext.of(getUser()));
 	}
 
 	@Override
 	public int sendMessage(String jobId, AMap<AString, ACell> message) {
-		AString user = getUser();
-		return engine.deliverMessage(jobId, message, (user != null) ? user.toString() : null);
+		return engine.deliverMessage(jobId, message, RequestContext.of(getUser()));
 	}
 }

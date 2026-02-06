@@ -183,7 +183,7 @@ public class VenueRestartTest {
 					"Pause job should still be PAUSED after restart");
 
 			// 4i: Unpause the job by delivering a message → should complete
-			engine2.deliverMessage(pauseJobId, Maps.of("content", Strings.create("resume")), null);
+			engine2.deliverMessage(pauseJobId, Maps.of("content", Strings.create("resume")), (String) null);
 			Thread.sleep(50); // Give it a moment to process
 			Job unpausedJob = engine2.getJob(pauseJobId);
 			assertNotNull(unpausedJob, "Unpaused job should exist");

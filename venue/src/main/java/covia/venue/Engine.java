@@ -107,6 +107,9 @@ public class Engine {
 
 	/** Authentication and user management */
 	protected Auth auth;
+
+	/** Authorization / access control */
+	protected AccessControl accessControl;
 	
 	/**
 	 * Map of named adapters that can handle different types of operations or resources
@@ -209,6 +212,9 @@ public class Engine {
 		this.jobsCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.JOBS);
 		ACursor<AMap<AString, AMap<AString, ACell>>> usersCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.USERS);
 		this.auth = new Auth(this, usersCursor);
+
+		ACursor<AMap<Keyword, ACell>> authCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.AUTH);
+		this.accessControl = new AccessControl(authCursor);
 	}
 
 	/**
@@ -668,10 +674,17 @@ public class Engine {
 	}
 
 	/**
+	 * Invoke an operation given a reference string with request context.
+	 */
+	public Job invokeOperation(String ref, ACell input, RequestContext ctx) {
+		return invokeOperation(ref, input, ctx.getCallerDID());
+	}
+
+	/**
 	 * Invoke an operation given a reference string (internal/programmatic use, no caller identity).
 	 */
 	public Job invokeOperation(String ref, ACell input) {
-		return invokeOperation(ref, input, null);
+		return invokeOperation(ref, input, (AString) null);
 	}
 
 	/**
@@ -759,6 +772,13 @@ public class Engine {
 	}
 
 	/**
+	 * Gets a snapshot of the current job status data with request context.
+	 */
+	public AMap<AString,ACell> getJobData(AString jobID, RequestContext ctx) {
+		return getJobData(jobID);
+	}
+
+	/**
 	 * Gets a snapshot of the current job status data.
 	 * Checks in-memory cache first, falls back to lattice.
 	 * @param jobID
@@ -807,6 +827,14 @@ public class Engine {
 	 */
 	public Job getJob(String jobID) {
 		return getJob(Strings.create(jobID));
+	}
+
+	/**
+	 * Delivers a message to a job's message queue with request context.
+	 */
+	public int deliverMessage(String jobID, AMap<AString, ACell> message, RequestContext ctx) {
+		AString did = ctx.getCallerDID();
+		return deliverMessage(jobID, message, did != null ? did.toString() : null);
 	}
 
 	/**
@@ -982,6 +1010,13 @@ public class Engine {
 	}
 
 	/**
+	 * Gets all job IDs with request context.
+	 */
+	public List<AString> getJobs(RequestContext ctx) {
+		return getJobs();
+	}
+
+	/**
 	 * Gets all job IDs. Returns keys from the lattice Index (naturally time-ordered
 	 * since job IDs are timestamp-prefixed).
 	 * @return List of job IDs
@@ -1122,6 +1157,13 @@ public class Engine {
 	}
 
 	/**
+	 * Deletes a job permanently with request context.
+	 */
+	public boolean deleteJob(AString id, RequestContext ctx) {
+		return deleteJob(id);
+	}
+
+	/**
 	 * Deletes a job permanently
 	 * @param id ID of Job
 	 * @return true if removed, false if did not exist anyway
@@ -1130,6 +1172,13 @@ public class Engine {
 		synchronized (jobs) {
 			return jobs.remove(id)!=null;
 		}
+	}
+
+	/**
+	 * Cancels a Job with request context.
+	 */
+	public AMap<AString, ACell> cancelJob(AString id, RequestContext ctx) {
+		return cancelJob(id);
 	}
 
 	/**
@@ -1148,6 +1197,13 @@ public class Engine {
 	}
 
 	/**
+	 * Pauses a running Job with request context.
+	 */
+	public AMap<AString, ACell> pauseJob(AString id, RequestContext ctx) {
+		return pauseJob(id);
+	}
+
+	/**
 	 * Pauses a running Job.
 	 * @param id ID of Job
 	 * @return updated Job status, or null if not found
@@ -1160,6 +1216,13 @@ public class Engine {
 		if (job == null) return null;
 		job.pause();
 		return job.getData();
+	}
+
+	/**
+	 * Resumes a paused Job with request context.
+	 */
+	public AMap<AString, ACell> resumeJob(AString id, RequestContext ctx) {
+		return resumeJob(id);
 	}
 
 	/**
@@ -1203,6 +1266,14 @@ public class Engine {
 	 */
 	public Config config() {
 		return config;
+	}
+
+	/**
+	 * Get the AccessControl instance for this engine.
+	 * @return AccessControl instance
+	 */
+	public AccessControl getAccessControl() {
+		return accessControl;
 	}
 
 	/**

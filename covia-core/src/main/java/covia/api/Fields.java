@@ -90,8 +90,10 @@ public class Fields {
 	public static final StringShort CATEGORY = Strings.intern("category");
 	public static final StringShort OUTPUT_SCHEMA = Strings.intern("outputSchema");
 
-	// Identity
+	// Identity / authorization
 	public static final StringShort CALLER = Strings.intern("caller");
+	public static final StringShort ROLES = Strings.intern("roles");
+	public static final StringShort REQUIRES = Strings.intern("requires");
 
 	// Convex related
 	public static final StringShort PEER = Strings.intern("peer");

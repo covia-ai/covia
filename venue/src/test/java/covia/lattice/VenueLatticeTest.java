@@ -278,7 +278,8 @@ public class VenueLatticeTest {
 				)
 			),
 			VenueLattice.USERS, Maps.empty(),
-			VenueLattice.STORAGE, Index.none()
+			VenueLattice.STORAGE, Index.none(),
+			VenueLattice.AUTH, Maps.empty()
 		);
 	}
 

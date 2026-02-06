@@ -188,40 +188,16 @@ Adapter Layer
 
 ### P0 — Critical (blocks production use)
 
-- [x] **Persist jobs to lattice** — Jobs now write-through to VenueLattice `:jobs` Index via `persistJobRecord()`. Recovery on startup re-fires PENDING/STARTED, restores PAUSED/waiting as live in-memory Job objects.
-
-- [x] **Etch store persistence** — `persistState()` writes lattice root to Etch store; `loadStateFromStore()` restores on startup. Full round-trip verified by `VenueRestartTest` (create → persist → restart → verify).
-
-- [x] **Pause/resume API** — `PUT /api/v1/jobs/{id}/pause` and `/resume` endpoints. Resume re-engages the adapter. Implemented across Job, Venue, Engine, LocalVenue, VenueHTTP, CoviaAPI. Returns 409 on invalid state transitions.
-
 - [ ] **Add authorization enforcement** — AuthMiddleware extracts caller DID but `Engine.invokeOperation()` never checks permissions. Implement capability-based access control so venues can restrict which users/agents can invoke which operations.
   - Files: `venue/.../venue/Engine.java`, `venue/.../venue/Auth.java`, `venue/.../server/AuthMiddleware.java`
 
-- [x] **Add timeout to VenueHTTP polling** — `waitForFinish()` uses deadline with configurable timeout (default 10 min). `setTimeout()`/`getTimeout()` API.
-
-- [x] **Fix binary content handling** — `VenueHTTP.getContent()` uses `BodyHandlers.ofByteArray()`.
-
-- [x] **Stream content uploads** — `Engine.putContent()` enforces configurable size limit (`Config.getMaxContentSize()`).
-
 ### P1 — High (security and reliability)
-
-- [x] **URL validation in HTTPAdapter** — SSRF protection with configurable host allowlist/blocklist.
 
 - [ ] **Secure credential handling in LangChainAdapter** — API keys passed in plaintext JSON input, falls back to env vars. Consider secure credential storage or reference-based lookup.
   - File: `venue/.../adapter/LangChainAdapter.java`
 
-- [x] **Restrict CORS** — CORS configurable per venue via `Config.CORS`.
-
-- [x] **Protect /config endpoint** — Now shows only public info (name, DID, adapter count); secrets redacted.
-
-- [x] **Add IO-level timeouts to adapters** — LangChainAdapter uses configurable IO timeout on `model.chat()`.
-
-- [x] **Standardize exception handling** — VenueHTTP uses `ResponseException` consistently with HTTP context.
-
 - [ ] **Add rate limiting** — No rate limiting anywhere (operations, uploads, outbound requests). Add per-user and per-operation limits.
   - Files: `venue/.../venue/server/VenueServer.java`, `venue/.../venue/Engine.java`
-
-- [x] **Thread safety in Asset.meta()** — `meta()` is now `synchronized`.
 
 ### P2 — Medium (code quality and operability)
 
@@ -237,12 +213,17 @@ Adapter Layer
 - [ ] **Add auth strategy tests** — No tests for BearerAuth, KeyPairAuth, NoAuth, LocalAuth.
   - Directory: `covia-core/src/test/java/`
 
+- [ ] **Add missing test coverage** — Several implemented features lack dedicated tests:
+  - SSRF protection in HTTPAdapter (URL allowlist/blocklist validation)
+  - CORS configuration (`Config.CORS`)
+  - /config endpoint redaction (public info only)
+  - LangChainAdapter IO timeout
+  - Thread safety of `Asset.meta()` (concurrent access)
+
 - [ ] **Structured logging** — Switch to JSON log format for production observability. Add request ID propagation.
   - File: `venue/src/main/resources/logback.xml`
 
 - [ ] **Metrics export** — Add Prometheus-compatible metrics for operations, jobs, adapters, storage.
-
-- [x] **Fix typos** — All fixed (`fineName`, "must me", "resturned")
 
 ### P3 — Future (design goals from venue/CLAUDE.md)
 

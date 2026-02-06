@@ -28,6 +28,7 @@ import covia.grid.Venue;
 import covia.venue.api.model.ErrorResponse;
 import covia.venue.api.model.InvokeRequest;
 import covia.venue.api.model.InvokeResult;
+import covia.venue.RequestContext;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
 import io.javalin.Javalin;
@@ -418,10 +419,10 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 		ACell input=RT.getIn(req, "input");
-		AString callerDID = AuthMiddleware.getCallerDID(ctx);
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
 		try {
-			Job job=engine().invokeOperation(op.toString(),input,callerDID);
+			Job job=engine().invokeOperation(op.toString(),input,rctx);
 			if (job==null) {
 				buildError(ctx,404,"Operation does not exist");
 				return;
@@ -429,6 +430,8 @@ public class CoviaAPI extends ACoviaAPI {
 
 			this.buildResult(ctx, 201, job.getData());
 			ctx.header("Location",ROUTE+"jobs/"+job.getID());
+		} catch (SecurityException e) {
+			this.buildError(ctx, 403, e.getMessage());
 		} catch (IllegalArgumentException | IllegalStateException e) {
 			this.buildError(ctx, 400, "Error invoking operation: "+e.getClass().getSimpleName()+":"+e.getMessage());
 			return;
@@ -456,10 +459,17 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Job request requires a job ID as a valid hex string");
 			return;
 		}
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
 		try {
-			AMap<AString,ACell> status=venue.getJobStatus(id).join();
+			AMap<AString,ACell> status=engine().getJobData(id, rctx);
+			if (status==null) {
+				buildError(ctx,404,"Job not found: "+id);
+				return;
+			}
 			buildResult(ctx,200,status);
+		} catch (SecurityException e) {
+			buildError(ctx,403,e.getMessage());
 		} catch (Exception e) {
 			buildError(ctx,404,"Job not found: "+id);
 		}
@@ -488,6 +498,7 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void sendMessage(Context ctx) {
 		String id = ctx.pathParam("id");
 		ACell message = JSON.parseJSON5(ctx.body());
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> msgMap = (message instanceof AMap)
@@ -495,11 +506,13 @@ public class CoviaAPI extends ACoviaAPI {
 				: Maps.of(Fields.CONTENT, message);
 
 		try {
-			int depth = engine().deliverMessage(id, msgMap, null);
+			int depth = engine().deliverMessage(id, msgMap, rctx);
 			Map<String, Object> response = new HashMap<>();
 			response.put("status", "queued");
 			response.put("queueDepth", depth);
 			buildResult(ctx, 202, response);
+		} catch (SecurityException e) {
+			buildError(ctx, 403, e.getMessage());
 		} catch (IllegalArgumentException e) {
 			buildError(ctx, 404, e.getMessage());
 		} catch (IllegalStateException e) {
@@ -525,13 +538,18 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Job cancellation request requires a job ID as a valid hex string");
 			return;
 		}
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
-		AMap<AString, ACell> status = venue.cancelJob(id);
-		if (status!=null) {
-			buildResult(ctx,status);
-			ctx.status(200);
-		} else {
-			ctx.status(404);
+		try {
+			AMap<AString, ACell> status = engine().cancelJob(id, rctx);
+			if (status!=null) {
+				buildResult(ctx,status);
+				ctx.status(200);
+			} else {
+				ctx.status(404);
+			}
+		} catch (SecurityException e) {
+			buildError(ctx, 403, e.getMessage());
 		}
 	}
 	
@@ -553,15 +571,18 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Pause request requires a job ID");
 			return;
 		}
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
 		try {
-			AMap<AString, ACell> status = venue.pauseJob(id);
+			AMap<AString, ACell> status = engine().pauseJob(id, rctx);
 			if (status!=null) {
 				buildResult(ctx,status);
 				ctx.status(200);
 			} else {
 				ctx.status(404);
 			}
+		} catch (SecurityException e) {
+			buildError(ctx, 403, e.getMessage());
 		} catch (IllegalStateException e) {
 			buildError(ctx, 409, e.getMessage());
 		}
@@ -585,15 +606,18 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Resume request requires a job ID");
 			return;
 		}
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
 		try {
-			AMap<AString, ACell> status = venue.resumeJob(id);
+			AMap<AString, ACell> status = engine().resumeJob(id, rctx);
 			if (status!=null) {
 				buildResult(ctx,status);
 				ctx.status(200);
 			} else {
 				ctx.status(404);
 			}
+		} catch (SecurityException e) {
+			buildError(ctx, 403, e.getMessage());
 		} catch (IllegalStateException e) {
 			buildError(ctx, 409, e.getMessage());
 		}
@@ -617,12 +641,17 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Job deletion request requires a job ID as a valid hex string");
 			return;
 		}
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
-		boolean deleted=venue.deleteJob(id);
-		if (deleted) {
-			ctx.status(200);
-		} else {
-			ctx.status(404);
+		try {
+			boolean deleted=engine().deleteJob(id, rctx);
+			if (deleted) {
+				ctx.status(200);
+			} else {
+				ctx.status(404);
+			}
+		} catch (SecurityException e) {
+			buildError(ctx, 403, e.getMessage());
 		}
 	}
 	
@@ -631,8 +660,13 @@ public class CoviaAPI extends ACoviaAPI {
 			tags = { "Covia"},
 			summary = "Get Covia jobs.")	
 	protected void getJobs(Context ctx) {
-		List<AString> jobs = venue.listJobs();
-		buildResult(ctx,jobs);
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		try {
+			List<AString> jobs = engine().getJobs(rctx);
+			buildResult(ctx,jobs);
+		} catch (SecurityException e) {
+			buildError(ctx, 403, e.getMessage());
+		}
 	}
 
 	@OpenApi(path = ROUTE + "operations",
