@@ -519,7 +519,7 @@ public class VenueHTTP extends Venue {
 				updateJobStatus(job);
 				if (job.isFinished()) break;
 			} catch (ExecutionException | TimeoutException e) {
-				throw new ResponseException("Job status polling failed",e);
+				throw new ResponseException("Job status polling failed", (Throwable) e);
 			}
 			Thread.sleep(currentDelay);
 			currentDelay = Math.min((long) (currentDelay * BACKOFF_FACTOR), MAX_POLL_DELAY);
@@ -569,9 +569,9 @@ public class VenueHTTP extends Venue {
 						return hash;
 					}
 				}
-				throw new RuntimeException("Failed to parse result: " + response.statusCode() + " - " + response.body());
+				throw new ConversionException("Failed to parse content hash from response: " + response.body());
 			} else {
-				throw new RuntimeException("Failed to add content: " + response.statusCode() + " - " + response.body());
+				throw new ResponseException("Failed to add content: " + response.statusCode() + " - " + response.body(), response);
 			}
 		});
 	
@@ -603,7 +603,7 @@ public class VenueHTTP extends Venue {
 		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofByteArray()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
-				throw new RuntimeException("Content get failed with status: " +code+" -- asset ID: "+assetID);
+				throw new ResponseException("Content get failed with status: " +code+" -- asset ID: "+assetID);
 			}
 
 			byte[] data = response.body();
@@ -632,9 +632,9 @@ public class VenueHTTP extends Venue {
 			if (code == 200) {
 				return JSON.parse(response.body()); // Success
 			} else if (code == 404) {
-				throw new RuntimeException("Job not found: " + jobId);
+				throw new ResponseException("Job not found: " + jobId, response);
 			} else {
-				throw new RuntimeException("Failed to cancel job: " + code + " - " + response.body());
+				throw new ResponseException("Failed to cancel job: " + code + " - " + response.body(), response);
 			}
 		});
 	}
@@ -654,9 +654,9 @@ public class VenueHTTP extends Venue {
 			if (code == 200) {
 				return null; // Success
 			} else if (code == 404) {
-				throw new RuntimeException("Job not found: " + jobId);
+				throw new ResponseException("Job not found: " + jobId, response);
 			} else {
-				throw new RuntimeException("Failed to delete job: " + code + " - " + response.body());
+				throw new ResponseException("Failed to delete job: " + code + " - " + response.body(), response);
 			}
 		});
 	}
@@ -677,7 +677,7 @@ public class VenueHTTP extends Venue {
 			} else if (code == 404) {
 				return null;
 			} else {
-				throw new RuntimeException("Failed to get job status: " + response.statusCode() + " - " + response.body());
+				throw new ResponseException("Failed to get job status: " + response.statusCode() + " - " + response.body(), response);
 			}
 		});
 	}
@@ -790,7 +790,7 @@ public class VenueHTTP extends Venue {
 		try {
 			HttpResponse<String> response = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
 			if (response.statusCode() != 200) {
-				throw new RuntimeException("Failed to list jobs: " + response.statusCode());
+				throw new ResponseException("Failed to list jobs: " + response.statusCode());
 			}
 			ACell body = JSON.parseJSON5(response.body());
 			AVector<?> items = null;
@@ -807,7 +807,7 @@ public class VenueHTTP extends Venue {
 			}
 			return result;
 		} catch (IOException | InterruptedException e) {
-			throw new RuntimeException("Failed to list jobs", e);
+			throw new ResponseException("Failed to list jobs", e);
 		}
 	}
 
@@ -834,9 +834,9 @@ public class VenueHTTP extends Venue {
 			} else if (code == 409) {
 				throw new IllegalStateException("Job is in terminal state: " + jobId);
 			}
-			throw new RuntimeException("Failed to send message: HTTP " + code);
+			throw new ResponseException("Failed to send message: HTTP " + code);
 		} catch (IOException | InterruptedException e) {
-			throw new RuntimeException("Failed to send message to job " + jobId, e);
+			throw new ResponseException("Failed to send message to job " + jobId, e);
 		}
 	}
 }

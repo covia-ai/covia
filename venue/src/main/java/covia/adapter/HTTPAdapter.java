@@ -1,15 +1,19 @@
 package covia.adapter;
 
+import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URLEncoder;
+import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,10 +32,16 @@ import covia.api.Fields;
 public class HTTPAdapter extends AAdapter {
 
 	public static final Logger log = LoggerFactory.getLogger(HTTPAdapter.class);
-	
+
 	// Instance-level HttpClient for reuse across requests
 	private final HttpClient httpClient;
-	
+
+	/** Hosts explicitly allowed (bypass SSRF checks). Empty = no overrides. */
+	private final Set<String> allowList = new HashSet<>();
+
+	/** Hosts explicitly blocked (checked before allowList). */
+	private final Set<String> blockList = new HashSet<>();
+
 	/**
 	 * Constructor initializes the HttpClient with optimal settings
 	 */
@@ -39,6 +49,71 @@ public class HTTPAdapter extends AAdapter {
 		this.httpClient = HttpClient.newBuilder()
 			.connectTimeout(Duration.ofSeconds(10))
 			.build();
+	}
+
+	/**
+	 * Add a host pattern to the allow list (bypasses SSRF checks).
+	 * @param host Hostname to allow (e.g. "internal-api.company.com")
+	 */
+	public void addAllowedHost(String host) {
+		allowList.add(host.toLowerCase());
+	}
+
+	/**
+	 * Add a host pattern to the block list (checked before allow list).
+	 * @param host Hostname to block
+	 */
+	public void addBlockedHost(String host) {
+		blockList.add(host.toLowerCase());
+	}
+
+	/**
+	 * Validates a URL for SSRF safety. Blocks private/internal network addresses
+	 * by default. Allow list entries bypass SSRF checks; block list is checked first.
+	 *
+	 * @param uri URI to validate
+	 * @throws IllegalArgumentException if the URL targets a blocked or private address
+	 */
+	private void validateURL(URI uri) {
+		String host = uri.getHost();
+		if (host == null) {
+			throw new IllegalArgumentException("URL has no host: " + uri);
+		}
+		String lowerHost = host.toLowerCase();
+
+		// Block list always wins
+		if (blockList.contains(lowerHost)) {
+			throw new IllegalArgumentException("Host is blocked: " + host);
+		}
+
+		// Allow list bypasses SSRF checks
+		if (allowList.contains(lowerHost)) {
+			return;
+		}
+
+		// Block private/internal addresses
+		try {
+			InetAddress[] addresses = InetAddress.getAllByName(host);
+			for (InetAddress addr : addresses) {
+				if (addr.isLoopbackAddress()
+						|| addr.isSiteLocalAddress()
+						|| addr.isLinkLocalAddress()
+						|| addr.isAnyLocalAddress()) {
+					throw new IllegalArgumentException(
+						"URL targets a private/internal address: " + host
+						+ " (resolved to " + addr.getHostAddress() + ")"
+						+ ". Add to allowList if this is intentional.");
+				}
+			}
+		} catch (UnknownHostException e) {
+			throw new IllegalArgumentException("Cannot resolve host: " + host);
+		}
+
+		// Block non-HTTP(S) schemes
+		String scheme = uri.getScheme();
+		if (scheme == null || (!scheme.equalsIgnoreCase("http") && !scheme.equalsIgnoreCase("https"))) {
+			throw new IllegalArgumentException("Only HTTP/HTTPS schemes are allowed, got: " + scheme);
+		}
 	}
 
 	@Override
@@ -117,7 +192,6 @@ public class HTTPAdapter extends AAdapter {
 		ACell bodyField=RT.getIn(input, Fields.BODY);
 		
 		try {
-			HttpRequest.Builder requestBuilder;
 			String method = "GET"; // default
 			if (methodField != null) {
 				method = methodField.toString().trim().toUpperCase();
@@ -144,9 +218,13 @@ public class HTTPAdapter extends AAdapter {
 				}
 			}
 			
+			// Validate URL for SSRF safety
+			URI targetUri = new URI(finalUrl);
+			validateURL(targetUri);
+
 			// Create HTTP request builder
-			requestBuilder = HttpRequest.newBuilder()
-				.uri(new URI(finalUrl))
+			HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
+				.uri(targetUri)
 				.timeout(Duration.ofSeconds(30));
 			
 			// Set method and body

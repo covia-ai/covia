@@ -5,6 +5,7 @@ import java.net.URI;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.api.Fields;
+import covia.adapter.HTTPAdapter;
 import covia.grid.client.VenueHTTP;
 import covia.venue.server.VenueServer;
 
@@ -27,6 +28,8 @@ public class TestServer {
 				)));
 		ENGINE=SERVER.getEngine();
 
+		// Allow localhost for HTTP adapter tests (SSRF protection blocks it by default)
+		((HTTPAdapter) ENGINE.getAdapter("http")).addAllowedHost("localhost");
 
 		COVIA = VenueHTTP.create(URI.create(BASE_URL));
 	}

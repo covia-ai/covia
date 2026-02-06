@@ -1,7 +1,11 @@
 package covia.exception;
 
+/**
+ * Exception for HTTP/API response errors in VenueHTTP client operations.
+ * Carries the HTTP response (if available) for inspection by callers.
+ */
 @SuppressWarnings("serial")
-public class ResponseException extends RuntimeException {
+public class ResponseException extends CoviaException {
 
 	public final Object response;
 
@@ -15,4 +19,9 @@ public class ResponseException extends RuntimeException {
 		this.response=response;
 	}
 
+	public ResponseException(String message, Throwable cause) {
+		super(message);
+		this.response=null;
+		initCause(cause);
+	}
 }

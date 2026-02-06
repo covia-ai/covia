@@ -109,6 +109,11 @@ public class Config {
 	/** Key for base URL override (if not set, derived from hostname + port) */
 	public static final AString BASE_URL = Strings.intern("baseUrl");
 
+	// ========== Server config keys ==========
+
+	/** Key for CORS allowed origins (default: "*" = all) */
+	public static final AString CORS_ORIGINS = Strings.intern("corsOrigins");
+
 	// ========== MCP config keys ==========
 
 	/** Key for MCP enabled flag */
@@ -305,6 +310,17 @@ public class Config {
 	 */
 	public boolean hasA2A() {
 		return getA2AConfig() != null;
+	}
+
+	// ========== Server config accessors ==========
+
+	/**
+	 * Get the CORS allowed origins.
+	 * @return Allowed origins string, or "*" if not configured (allow all)
+	 */
+	public String getCorsOrigins() {
+		AString origins = RT.ensureString(config.get(CORS_ORIGINS));
+		return (origins != null) ? origins.toString() : "*";
 	}
 
 	// ========== Static compatibility ==========

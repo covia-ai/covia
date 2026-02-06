@@ -158,16 +158,17 @@ public class VenueServer {
 	}
 
 	private Javalin buildApp() {
+		final String corsOrigins = this.config.getCorsOrigins();
 		Javalin app = Javalin.create(config -> {
 			config.bundledPlugins.enableCors(cors -> {
 				cors.addRule(corsConfig -> {
-					// ?? corsConfig.allowCredentials=true;
-					
-					// replacement for enableCorsForAllOrigins()
-					corsConfig.anyHost();
+					if ("*".equals(corsOrigins)) {
+						corsConfig.anyHost();
+					} else {
+						corsConfig.allowHost(corsOrigins);
+					}
 					corsConfig.exposeHeader("X-Covia-User");
 				});
-				
 			});
 			
 			addOpenApiPlugins(config);
@@ -200,23 +201,16 @@ public class VenueServer {
 		});
 		
 		app.options("/*", ctx-> {
-			ctx.status(204); // No context#
+			ctx.status(204);
 			ctx.removeHeader("Content-type");
 			ctx.header("access-control-allow-headers", "content-type, authorization, x-covia-user");
 			ctx.header("access-control-allow-methods", "GET,HEAD,PUT,PATCH,POST,DELETE");
-			ctx.header("access-control-allow-origin", "*");
+			ctx.header("access-control-allow-origin", corsOrigins);
 			ctx.header("vary","Origin, Access-Control-Request-Headers");
 		});
-		
-		// Header to every response
+
 		app.afterMatched(ctx->{
-			// Reflect CORS origin
-			String origin = ctx.req().getHeader("Origin");
-			if (origin!=null) {
-				ctx.header("access-control-allow-origin", "*");
-			} else {
-				ctx.header("access-control-allow-origin", "*");
-			}
+			ctx.header("access-control-allow-origin", corsOrigins);
 		});
 
 

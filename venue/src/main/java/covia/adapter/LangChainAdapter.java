@@ -1,5 +1,6 @@
 package covia.adapter;
 
+import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 
 import convex.core.data.ACell;
@@ -20,6 +21,9 @@ import dev.langchain4j.model.openai.OpenAiChatModel;
 
 public class LangChainAdapter extends AAdapter {
 	
+	/** IO timeout for LLM API calls */
+	private static final Duration IO_TIMEOUT = Duration.ofSeconds(120);
+
 	private static final AString DEFAULT_PROMPT = Strings.create("Say hello in an entertaining way and remind the user that then need to provide a 'prompt' string input");
 	private static final SystemMessage SYSTEM_MESSAGE = SystemMessage.from("You are an AI agent for the Covia platform. Give concise, clear and accurate responses to any user message you receive.");
 
@@ -62,8 +66,6 @@ public class LangChainAdapter extends AAdapter {
     		);	
         }
         
-        System.err.println(input);
-        
         // Extract common parameters
         AString prompt = RT.ensureString(RT.getIn(input, "prompt"));
         if (prompt == null) {
@@ -104,6 +106,7 @@ public class LangChainAdapter extends AAdapter {
         			.logRequests(true)
         			.logResponses(true)
         			.modelName(model)
+        			.timeout(IO_TIMEOUT)
         			.build();
 	        	
 	        	return processChatRequest(ollamaModel, finalPrompt, systemMessage);
@@ -122,6 +125,7 @@ public class LangChainAdapter extends AAdapter {
         			.logRequests(true)
         			.logResponses(true)
         			.modelName(model)
+        			.timeout(IO_TIMEOUT)
         			.build();
 	        	
 	        	return processChatRequest(openaiModel, finalPrompt, systemMessage);
