@@ -188,7 +188,11 @@ Adapter Layer
 
 ### P0 — Critical (blocks production use)
 
-- [x] **Persist jobs to lattice** — Jobs now write-through to VenueLattice `:jobs` Index via `persistJobRecord()`. Recovery on startup re-fires PENDING/STARTED, keeps PAUSED/waiting as-is.
+- [x] **Persist jobs to lattice** — Jobs now write-through to VenueLattice `:jobs` Index via `persistJobRecord()`. Recovery on startup re-fires PENDING/STARTED, restores PAUSED/waiting as live in-memory Job objects.
+
+- [x] **Etch store persistence** — `persistState()` writes lattice root to Etch store; `loadStateFromStore()` restores on startup. Full round-trip verified by `VenueRestartTest` (create → persist → restart → verify).
+
+- [x] **Pause/resume API** — `PUT /api/v1/jobs/{id}/pause` and `/resume` endpoints. Resume re-engages the adapter. Implemented across Job, Venue, Engine, LocalVenue, VenueHTTP, CoviaAPI. Returns 409 on invalid state transitions.
 
 - [ ] **Add authorization enforcement** — AuthMiddleware extracts caller DID but `Engine.invokeOperation()` never checks permissions. Implement capability-based access control so venues can restrict which users/agents can invoke which operations.
   - Files: `venue/.../venue/Engine.java`, `venue/.../venue/Auth.java`, `venue/.../server/AuthMiddleware.java`

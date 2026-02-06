@@ -270,11 +270,13 @@ If a venue crashes between persistence points, it loses operations since the las
 - Cursor-based state access in Engine
 - 35+ tests verifying merge properties
 
-### Phase 2: Job Persistence
-- Move jobs from `HashMap<AString, Job>` to VenueLattice `:jobs` index
-- Jobs stored at cursor path `[:jobs <job-id>]` within venue state
+### Phase 2: Job Persistence (Complete)
+- Jobs write-through to VenueLattice `:jobs` Index via `persistJobRecord()` on every status update
+- Jobs stored at cursor path `[:grid :venues <did> :jobs <job-id>]` within venue state
 - Status updates via timestamp merge (newer wins)
-- Persist venue state to disk on sync
+- Etch store persistence: `persistState()` writes lattice root to Etch via `store.setRootData()`, `loadStateFromStore()` restores on startup via `store.getRootData()`
+- Job recovery on restart: `recoverJobs()` walks the `:jobs` index — re-fires PENDING/STARTED jobs via adapter, restores PAUSED/INPUT_REQUIRED/AUTH_REQUIRED as live in-memory Job objects via `restoreJob()`
+- Verified by `VenueRestartTest`: create engine → run ops → persist → restart with same store → verify all state survives
 
 ### Phase 3: Signing
 - Wrap venue state in `SignedData` using venue's Ed25519 keypair
