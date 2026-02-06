@@ -264,6 +264,7 @@ Adapter Layer
 
 ## Module-Specific Guides
 
+- **LATTICE-STRATEGY.md** — Lattice architecture: global structure, venue signing, selective sharing, atomic update model, persistence and replication strategy
 - **venue/CLAUDE.md** — Detailed venue module architecture, design objectives, adapter reference, API endpoints, and development guidelines
 - **venue/CLAUDE.local.md** — Working notes on lattice persistence implementation (Phase 1 complete, Phase 2 next)
 
