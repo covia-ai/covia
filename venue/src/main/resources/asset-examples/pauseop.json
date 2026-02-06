@@ -1,0 +1,16 @@
+{
+	"name": "Pause Test Operation",
+	"description": "A test operation that immediately pauses itself. Send any message to unpause and complete the job with the original input as output.",
+	"dateCreated": "2026-02-06T00:00:00Z",
+	"operation": {
+		"adapter": "test:pause",
+		"input": {
+			"type": "object",
+			"description": "Arbitrary input, returned as output on resume"
+		},
+		"output": {
+			"type": "object",
+			"description": "The original input"
+		}
+	}
+}

@@ -396,7 +396,8 @@ public class Engine {
 					failed++;
 				}
 			} else {
-				// PAUSED, INPUT_REQUIRED, AUTH_REQUIRED — keep as-is, awaiting external action
+				// PAUSED, INPUT_REQUIRED, AUTH_REQUIRED — restore as live Job, awaiting external action
+				restoreJob(jobID, record);
 				kept++;
 			}
 		}
@@ -486,6 +487,35 @@ public class Engine {
 				.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 		persistJobRecord(jobID, failedRecord);
 		log.warn("Job {} failed on recovery: {}", jobID, reason);
+	}
+
+	/**
+	 * Restores a paused/waiting job into the in-memory jobs map as a live Job object
+	 * with write-through persistence. Does not re-invoke the adapter.
+	 */
+	private void restoreJob(AString jobID, AMap<AString, ACell> record) {
+		AString opRef = RT.ensureString(record.get(Fields.OP));
+		Operation op = null;
+		if (opRef != null) {
+			Asset asset = resolveAsset(opRef.toString());
+			op = (asset != null) ? Operation.from(asset) : null;
+		}
+
+		Job job = new Job(record, op) {
+			@Override public AMap<AString,ACell> processUpdate(AMap<AString,ACell> newData) {
+				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
+				persistJobRecord(getID(), newData);
+				return newData;
+			}
+		};
+
+		if (jobUpdateListener != null) {
+			job.setUpdateListener(jobUpdateListener);
+		}
+
+		synchronized (jobs) {
+			jobs.put(jobID, job);
+		}
 	}
 
 	public AMap<ABlob, AVector<?>> getAssets() {

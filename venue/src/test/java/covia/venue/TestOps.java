@@ -13,6 +13,7 @@ public class TestOps {
 	public static Hash ERROR=null;
 	public static Hash NEVER;
 	public static Hash DELAY;
+	public static Hash PAUSE;
 	public static Hash ORCH;
 	public static Hash GOOGLESEARCH;
 
@@ -23,6 +24,7 @@ public class TestOps {
 			ERROR=Assets.calcID(Utils.readResourceAsString("/asset-examples/failop.json"));
 			NEVER=Assets.calcID(Utils.readResourceAsString("/asset-examples/neverop.json"));
 			DELAY=Assets.calcID(Utils.readResourceAsString("/asset-examples/delayop.json"));
+			PAUSE=Assets.calcID(Utils.readResourceAsString("/asset-examples/pauseop.json"));
 			ORCH=Assets.calcID(Utils.readResourceAsString("/asset-examples/orch.json"));
 			GOOGLESEARCH=Assets.calcID(Utils.readResourceAsString("/asset-examples/googlesearch.json"));
 		 } catch (IOException e) {

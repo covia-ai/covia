@@ -89,6 +89,7 @@ public class TestAdapter extends AAdapter {
 			installAsset(BASE+"randomop.json");
 			installAsset(BASE+"failop.json");
 			installAsset(BASE+"chatop.json");
+			installAsset(BASE+"pauseop.json");
 			installAsset(BASE+"orch.json");
 			Hash iris=engine.storeAsset(Utils.readResourceAsAString(BASE+"iris.json"),null);
 			engine.putContent(iris,this.getClass().getResourceAsStream(BASE+"iris.csv"));
@@ -104,6 +105,10 @@ public class TestAdapter extends AAdapter {
         if (operation.equals("test:chat")) {
             // Multi-turn: set INPUT_REQUIRED and wait for messages
             job.setStatus(Status.INPUT_REQUIRED);
+        } else if (operation.equals("test:pause")) {
+            // Auto-pause: immediately pauses, stores input for later completion
+            job.update(data -> data.assoc(Fields.INPUT, input));
+            job.setStatus(Status.PAUSED);
         } else {
             // Default one-shot path
             super.invoke(job, operation, meta, input);
@@ -112,6 +117,13 @@ public class TestAdapter extends AAdapter {
 
     @Override
     public void handleMessage(Job job, AMap<AString, ACell> messageRecord) {
+        // If job was paused, resume and complete with original input
+        if (Status.PAUSED.equals(job.getStatus())) {
+            ACell originalInput = job.getData().get(Fields.INPUT);
+            job.completeWith(originalInput);
+            return;
+        }
+
         ACell message = messageRecord.get(Fields.MESSAGE);
         ACell content = RT.getIn(message, "content");
 
