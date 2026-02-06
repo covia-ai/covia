@@ -178,7 +178,7 @@ public class VenueHTTP extends Venue {
 		return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response-> {
 			int code=response.statusCode();
 			if (code!=200) {
-				throw new ResponseException("getStatus resturned code: "+code,response);
+				throw new ResponseException("getStatus returned code: "+code,response);
 			}
 			return RT.ensureMap(JSON.parse(response.body()));
 		});

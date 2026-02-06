@@ -31,7 +31,7 @@ public class Fields {
 	public static final StringShort DESCRIPTION = Strings.intern("description");
 	public static final StringShort CONTENT = Strings.intern("content");
 	public static final StringShort CONTENT_TYPE = Strings.intern("contentType");
-	public static final StringShort FILE_NAME = Strings.intern("fineName");
+	public static final StringShort FILE_NAME = Strings.intern("fileName");
 	public static final StringShort SHA256 =  Strings.intern("sha256");
 	
 	// Misc / general purpose

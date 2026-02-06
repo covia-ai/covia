@@ -59,7 +59,7 @@ public class Benchmark {
 				Hash storedHash =ASSET_IDS.get(index);
 				
 				client.getMeta(storedHash.toHexString()).thenAccept(meta -> {
-					if (meta==null) throw new IllegalStateException("Asset metadata not retreived");
+					if (meta==null) throw new IllegalStateException("Asset metadata not retrieved");
 					onSuccess.accept(null);
 				}).exceptionally(ex -> {
 					onError.accept(ex);

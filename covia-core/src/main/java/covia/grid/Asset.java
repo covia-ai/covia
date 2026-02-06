@@ -63,7 +63,7 @@ public class Asset {
 	
 	public static Asset fromMeta(ACell metaCell) {
 		AMap<AString,ACell> meta=RT.ensureMap(metaCell);
-		if (meta==null) throw new IllegalArgumentException("Metadata for asset must me a map");
+		if (meta==null) throw new IllegalArgumentException("Metadata for asset must be a map");
 		return fromMeta(meta);
 	}
 	

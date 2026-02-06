@@ -44,7 +44,7 @@ public class CoviaTest {
 	@Test
 	public void testEmptyState() {
 		// Create an initial structured state like Engine.initialiseLattice() does
-		AMap<Keyword, ACell> empty = createEmptyState();
+		Index<Keyword, ACell> empty = createEmptyState();
 		assertNotNull(empty);
 		assertTrue(empty.containsKey(Covia.GRID));
 
@@ -56,20 +56,20 @@ public class CoviaTest {
 
 	@Test
 	public void testZeroValue() {
-		// KeyedLattice.zero() returns empty map (the CRDT zero)
-		AMap<Keyword, ACell> zero = (AMap<Keyword, ACell>) Covia.ROOT.zero();
+		// KeyedLattice.zero() returns empty Index (the CRDT zero)
+		Index<Keyword, ACell> zero = Covia.ROOT.zero();
 		assertNotNull(zero);
 		assertEquals(0, zero.count());
 
 		// Structured empty state should contain :grid key
-		AMap<Keyword, ACell> empty = createEmptyState();
+		Index<Keyword, ACell> empty = createEmptyState();
 		assertTrue(empty.containsKey(Covia.GRID));
 	}
 
 	@Test
 	public void testCheckForeign() {
 		assertTrue(Covia.ROOT.checkForeign(createEmptyState()));
-		assertTrue(Covia.ROOT.checkForeign(Maps.empty()));
+		assertTrue(Covia.ROOT.checkForeign(Index.none()));
 		assertEquals(false, Covia.ROOT.checkForeign(null));
 	}
 
@@ -77,7 +77,7 @@ public class CoviaTest {
 
 	@Test
 	public void testMergeWithNull() {
-		AMap<Keyword, ACell> value = createEmptyState();
+		Index<Keyword, ACell> value = createEmptyState();
 
 		assertSame(value, Covia.ROOT.merge(value, null));
 		assertEquals(value, Covia.ROOT.merge(null, value));
@@ -88,8 +88,8 @@ public class CoviaTest {
 
 	@Test
 	public void testIdempotency() {
-		AMap<Keyword, ACell> value = createTestState();
-		AMap<Keyword, ACell> merged = (AMap<Keyword, ACell>) Covia.ROOT.merge(value, value);
+		Index<Keyword, ACell> value = createTestState();
+		Index<Keyword, ACell> merged = Covia.ROOT.merge(value, value);
 		assertSame(value, merged, "Merge with self should return same instance");
 	}
 
@@ -97,11 +97,11 @@ public class CoviaTest {
 
 	@Test
 	public void testCommutativity() {
-		AMap<Keyword, ACell> v1 = createStateWithMeta(testHash1, "{\"name\":\"meta1\"}");
-		AMap<Keyword, ACell> v2 = createStateWithMeta(testHash2, "{\"name\":\"meta2\"}");
+		Index<Keyword, ACell> v1 = createStateWithMeta(testHash1, "{\"name\":\"meta1\"}");
+		Index<Keyword, ACell> v2 = createStateWithMeta(testHash2, "{\"name\":\"meta2\"}");
 
-		AMap<Keyword, ACell> merge12 = (AMap<Keyword, ACell>) Covia.ROOT.merge(v1, v2);
-		AMap<Keyword, ACell> merge21 = (AMap<Keyword, ACell>) Covia.ROOT.merge(v2, v1);
+		Index<Keyword, ACell> merge12 = Covia.ROOT.merge(v1, v2);
+		Index<Keyword, ACell> merge21 = Covia.ROOT.merge(v2, v1);
 
 		assertEquals(merge12, merge21, "Merge should be commutative");
 	}
@@ -112,12 +112,12 @@ public class CoviaTest {
 	public void testAssociativity() {
 		Hash hash3 = Hash.fromHex("3333333333333333333333333333333333333333333333333333333333333333");
 
-		AMap<Keyword, ACell> v1 = createStateWithMeta(testHash1, "{\"name\":\"meta1\"}");
-		AMap<Keyword, ACell> v2 = createStateWithMeta(testHash2, "{\"name\":\"meta2\"}");
-		AMap<Keyword, ACell> v3 = createStateWithMeta(hash3, "{\"name\":\"meta3\"}");
+		Index<Keyword, ACell> v1 = createStateWithMeta(testHash1, "{\"name\":\"meta1\"}");
+		Index<Keyword, ACell> v2 = createStateWithMeta(testHash2, "{\"name\":\"meta2\"}");
+		Index<Keyword, ACell> v3 = createStateWithMeta(hash3, "{\"name\":\"meta3\"}");
 
-		AMap<Keyword, ACell> left = (AMap<Keyword, ACell>) Covia.ROOT.merge(Covia.ROOT.merge(v1, v2), v3);
-		AMap<Keyword, ACell> right = (AMap<Keyword, ACell>) Covia.ROOT.merge(v1, Covia.ROOT.merge(v2, v3));
+		Index<Keyword, ACell> left = Covia.ROOT.merge(Covia.ROOT.merge(v1, v2), v3);
+		Index<Keyword, ACell> right = Covia.ROOT.merge(v1, Covia.ROOT.merge(v2, v3));
 
 		assertEquals(left, right, "Merge should be associative");
 	}
@@ -126,8 +126,8 @@ public class CoviaTest {
 
 	@Test
 	public void testZeroIdentity() {
-		AMap<Keyword, ACell> value = createTestState();
-		AMap<Keyword, ACell> zero = (AMap<Keyword, ACell>) Covia.ROOT.zero();
+		Index<Keyword, ACell> value = createTestState();
+		Index<Keyword, ACell> zero = Covia.ROOT.zero();
 
 		assertEquals(value, Covia.ROOT.merge(value, zero));
 		assertEquals(value, Covia.ROOT.merge(zero, value));
@@ -200,10 +200,10 @@ public class CoviaTest {
 			GridLattice.META, Index.of(testHash2, "{\"name\":\"Asset 2\"}")
 		);
 
-		AMap<Keyword, ACell> state1 = Maps.of(Covia.GRID, grid1);
-		AMap<Keyword, ACell> state2 = Maps.of(Covia.GRID, grid2);
+		Index<Keyword, ACell> state1 = Index.of(Covia.GRID, grid1);
+		Index<Keyword, ACell> state2 = Index.of(Covia.GRID, grid2);
 
-		AMap<Keyword, ACell> merged = (AMap<Keyword, ACell>) Covia.ROOT.merge(state1, state2);
+		Index<Keyword, ACell> merged = Covia.ROOT.merge(state1, state2);
 
 		// Verify merged structure
 		AMap<Keyword, ACell> mergedGrid = (AMap<Keyword, ACell>) merged.get(Covia.GRID);
@@ -219,11 +219,11 @@ public class CoviaTest {
 	/**
 	 * Creates an empty but structured state, similar to Engine.initialiseLattice()
 	 */
-	private AMap<Keyword, ACell> createEmptyState() {
-		return Maps.of(Covia.GRID, GridLattice.INSTANCE.zero());
+	private Index<Keyword, ACell> createEmptyState() {
+		return Index.of(Covia.GRID, GridLattice.INSTANCE.zero());
 	}
 
-	private AMap<Keyword, ACell> createTestState() {
+	private Index<Keyword, ACell> createTestState() {
 		AMap<Keyword, ACell> venueState = Maps.of(
 			VenueLattice.ASSETS, Maps.of("0xtest", Maps.empty()),
 			VenueLattice.JOBS, Maps.empty()
@@ -234,15 +234,15 @@ public class CoviaTest {
 			GridLattice.META, Index.of(testHash1, "{\"name\":\"Test\"}")
 		);
 
-		return Maps.of(Covia.GRID, grid);
+		return Index.of(Covia.GRID, grid);
 	}
 
-	private AMap<Keyword, ACell> createStateWithMeta(Hash metaHash, String jsonContent) {
+	private Index<Keyword, ACell> createStateWithMeta(Hash metaHash, String jsonContent) {
 		AMap<Keyword, ACell> grid = Maps.of(
 			GridLattice.VENUES, Index.none(),
 			GridLattice.META, Index.of(metaHash, jsonContent)
 		);
 
-		return Maps.of(Covia.GRID, grid);
+		return Index.of(Covia.GRID, grid);
 	}
 }
