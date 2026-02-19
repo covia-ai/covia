@@ -49,7 +49,7 @@ public class Orchestrator extends AAdapter {
 		AVector<?> steps=RT.ensureVector(RT.getIn(meta, Fields.OPERATION, Fields.STEPS));
 		ACell resultSpec=RT.getIn(meta, Fields.OPERATION, Fields.RESULT);
 		Orchestration orch=new Orchestration(job,input,steps,resultSpec);
-		ThreadUtils.runVirtual(orch);
+		ThreadUtils.runVirtual("orchestrator thread", orch);
 	}
 	
 	public class Orchestration implements Runnable {
@@ -105,7 +105,7 @@ public class Orchestrator extends AAdapter {
 					}
 					
 					for (SubTask task:ready) {
-						ThreadUtils.runVirtual(task);
+						ThreadUtils.runVirtual("subtask "+task.stepNum,task);
 						if (DEBUG_ORCH) System.err.println("Started subtask "+task.stepNum);
 						todo.remove(task);
 					}

@@ -75,8 +75,8 @@ public class CoviaAPI extends ACoviaAPI {
 		super(venue);
 		this.sseServer=new SseServer(engine());
 
-		// Wire SSE broadcasting into engine's job update listener
-		engine().setJobUpdateListener(job -> {
+		// Wire SSE broadcasting into engine's job update listeners
+		engine().addJobUpdateListener(job -> {
 			AString jobId = job.getID();
 			if (jobId != null) {
 				sseServer.broadcastJobUpdate(jobId.toString(), job);

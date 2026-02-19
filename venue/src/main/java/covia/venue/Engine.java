@@ -34,7 +34,6 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
-import convex.core.store.Stores;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.did.DID;
@@ -117,10 +116,10 @@ public class Engine {
 	protected final HashMap<String, AAdapter> adapters = new HashMap<>();
 
 	/**
-	 * Optional listener called on every job state update.
-	 * Set by SseServer to enable per-job event broadcasting.
+	 * Listeners notified on every job state update.
+	 * Used by SseServer for per-job event broadcasting and MCP SSE notifications.
 	 */
-	private java.util.function.Consumer<Job> jobUpdateListener = null;
+	private final java.util.concurrent.CopyOnWriteArrayList<java.util.function.Consumer<Job>> jobUpdateListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
 	/**
 	 * Registry of named operations mapping operation name (e.g. "test:echo") to canonical asset Hash.
@@ -222,16 +221,12 @@ public class Engine {
 	 * @return The stored lattice root, or null if no state exists or loading fails
 	 */
 	private AMap<Keyword,ACell> loadStateFromStore() {
-		AStore saved = Stores.current();
 		try {
-			Stores.setCurrent(store);
 			ACell root = store.getRootData();
 			return RT.ensureMap(root);
 		} catch (Exception e) {
 			log.warn("Could not load state from store", e);
 			return null;
-		} finally {
-			Stores.setCurrent(saved);
 		}
 	}
 
@@ -242,13 +237,7 @@ public class Engine {
 	 */
 	public void persistState() throws IOException {
 		ACell latticeRoot = lattice.get();
-		AStore saved = Stores.current();
-		try {
-			Stores.setCurrent(store);
-			store.setRootData(latticeRoot);
-		} finally {
-			Stores.setCurrent(saved);
-		}
+		store.setRootData(latticeRoot);
 	}
 
 	private AHashMap<Keyword, ACell> emptyLattice() {
@@ -445,8 +434,8 @@ public class Engine {
 			}
 		};
 
-		if (jobUpdateListener != null) {
-			job.setUpdateListener(jobUpdateListener);
+		if (!jobUpdateListeners.isEmpty()) {
+			job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
 		}
 
 		synchronized (jobs) {
@@ -515,8 +504,8 @@ public class Engine {
 			}
 		};
 
-		if (jobUpdateListener != null) {
-			job.setUpdateListener(jobUpdateListener);
+		if (!jobUpdateListeners.isEmpty()) {
+			job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
 		}
 
 		synchronized (jobs) {
@@ -949,8 +938,8 @@ public class Engine {
 		};
 
 		// Set update listener if configured (e.g. for SSE broadcasting)
-		if (jobUpdateListener != null) {
-			job.setUpdateListener(jobUpdateListener);
+		if (!jobUpdateListeners.isEmpty()) {
+			job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
 		}
 
 		synchronized (jobs) {
@@ -1001,11 +990,20 @@ public class Engine {
 	}
 
 	/**
-	 * Sets a listener to be notified on all job state updates.
-	 * @param listener Update listener, or null to clear
+	 * Adds a listener to be notified on all job state updates.
+	 * Multiple listeners can be registered (e.g. SSE server + MCP notifications).
+	 * @param listener Update listener
 	 */
-	public void setJobUpdateListener(java.util.function.Consumer<Job> listener) {
-		this.jobUpdateListener = listener;
+	public void addJobUpdateListener(java.util.function.Consumer<Job> listener) {
+		this.jobUpdateListeners.add(listener);
+	}
+
+	/**
+	 * Returns the current lattice state root.
+	 * @return Lattice state as ACell, or null if not initialised
+	 */
+	public ACell getLatticeState() {
+		return lattice.get();
 	}
 
 	/**

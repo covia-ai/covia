@@ -1,7 +1,11 @@
 package covia.venue.api;
 
+import static convex.restapi.mcp.McpProtocol.*;
+
 import java.io.IOException;
-import java.util.List;
+import java.io.PrintWriter;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,7 +27,9 @@ import convex.core.json.JSONReader;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
-import covia.adapter.AAdapter;
+import convex.restapi.mcp.McpProtocol;
+import convex.restapi.mcp.McpSession;
+import convex.restapi.mcp.SseConnection;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Venue;
@@ -37,55 +43,93 @@ import io.javalin.openapi.OpenApiContent;
 import io.javalin.openapi.OpenApiExampleProperty;
 import io.javalin.openapi.OpenApiRequestBody;
 import io.javalin.openapi.OpenApiResponse;
+import jakarta.servlet.http.HttpServletResponse;
 
 /**
- * This class implements an MCP server on top of a Covia Venue, as an additional API
+ * MCP server on top of a Covia Venue, supporting Streamable HTTP transport
+ * with SSE notifications.
+ *
+ * <p>Uses shared MCP infrastructure from {@code convex-restapi} for protocol
+ * handling, sessions, and SSE.</p>
  */
 public class MCP extends ACoviaAPI {
-	
-	public static final Logger log=LoggerFactory.getLogger(MCP.class);
-	
-	final AMap<AString,ACell> SERVER_INFO;
+
+	public static final Logger log = LoggerFactory.getLogger(MCP.class);
+
+	final AMap<AString, ACell> SERVER_INFO;
 
 	protected final SseServer sseServer;
-	
-	protected final AString  SERVER_URL_FIELD=Strings.intern("server_url");
 
+	protected final AString SERVER_URL_FIELD = Strings.intern("server_url");
 
-	private boolean LOG_MCP=false;
+	private boolean LOG_MCP = false;
 
-	
+	/** Active MCP sessions, keyed by session ID */
+	private final ConcurrentHashMap<String, McpSession> sessions = new ConcurrentHashMap<>();
+
+	/** ThreadLocal to make the current Javalin Context available during tool handling */
+	static final ThreadLocal<Context> currentContext = new ThreadLocal<>();
+
 	public MCP(Venue venue, AMap<AString, ACell> mcpConfig) {
 		super(venue);
-		this.sseServer=new SseServer(engine());
+		this.sseServer = new SseServer(engine());
 		// See: https://zazencodes.com/blog/mcp-server-naming-conventions
-		AMap<AString,ACell> serverInfo = RT.getIn(mcpConfig, "serverInfo");
+		AMap<AString, ACell> serverInfo = RT.getIn(mcpConfig, "serverInfo");
 
-		if (serverInfo==null) serverInfo=Maps.of(
+		if (serverInfo == null) serverInfo = Maps.of(
 			"name", "covia-grid-mcp",
 			"title", engine().getName(),
 			"version", Utils.getVersion()
 		);
-		SERVER_INFO=serverInfo;
+		SERVER_INFO = serverInfo;
+
+		// Register MCP SSE job notification broadcaster
+		engine().addJobUpdateListener(this::broadcastJobNotification);
 	}
 
-	
+	/**
+	 * Broadcast a job update as an MCP SSE notification to all sessions.
+	 */
+	private void broadcastJobNotification(Job job) {
+		if (sessions.isEmpty()) return;
+		AString jobId = job.getID();
+		if (jobId == null) return;
+
+		AMap<AString, ACell> notification = Maps.of(
+			"jsonrpc", "2.0",
+			"method", "notifications/jobUpdate",
+			"params", Maps.of(
+				"jobId", jobId,
+				"status", job.getStatus()
+			)
+		);
+
+		String data = JSON.print(notification).toString();
+		for (McpSession session : sessions.values()) {
+			for (SseConnection conn : session.sseConnections) {
+				try {
+					conn.sendEvent("message", data);
+				} catch (Exception e) {
+					log.debug("Failed to send MCP SSE notification", e);
+				}
+			}
+		}
+	}
+
+
 	public void addRoutes(Javalin javalin) {
-//		if (LOG_MCP) {
-//			javalin.before("/mcp", ctx->{
-//				System.out.println("MCP request: "+ctx.headerMap());
-//			});
-//		};
-		
 		javalin.post("/mcp", this::postMCP);
-		javalin.get("/mcp", this::getMCP);
+		javalin.get("/mcp", this::handleMcpGet);
+		javalin.delete("/mcp", this::handleMcpDelete);
 		javalin.get("/.well-known/mcp", this::getMCPWellKnown);
-	} 
-	
-	@OpenApi(path = "/mcp", 
-			methods = HttpMethod.POST, 
+	}
+
+	// ===== POST /mcp — JSON-RPC requests =====
+
+	@OpenApi(path = "/mcp",
+			methods = HttpMethod.POST,
 			tags = { "MCP"},
-			summary = "Handle MCP JSON-RPC requests", 
+			summary = "Handle MCP JSON-RPC requests",
 			requestBody = @OpenApiRequestBody(
 					description = "JSON-RPC request",
 					content= @OpenApiContent(
@@ -101,11 +145,11 @@ public class MCP extends ACoviaAPI {
 			operationId = "mcpServer",
 			responses = {
 					@OpenApiResponse(
-							status = "200", 
-							description = "JSON-RPC response", 
+							status = "200",
+							description = "JSON-RPC response",
 							content = {
 								@OpenApiContent(
-										type = "application/json", 
+										type = "application/json",
 										from = Object.class,
 										exampleObjects = {
 											@OpenApiExampleProperty(name = "jsonrpc", value = "2.0"),
@@ -113,216 +157,295 @@ public class MCP extends ACoviaAPI {
 											@OpenApiExampleProperty(name = "id", value = "1")
 										}
 										) })
-					})	
-	protected void postMCP(Context ctx) { 
-		ctx.header("Content-type", ContentTypes.JSON);
-		
+					})
+	protected void postMCP(Context ctx) {
+		currentContext.set(ctx);
 		try {
-			// Parse JSON-RPC request. Might throw ParseException
-			ACell req=JSONReader.read(ctx.bodyInputStream());
+			boolean useSSE = acceptsEventStream(ctx);
+			ACell req = JSONReader.read(ctx.bodyInputStream());
 			if (LOG_MCP) {
-				System.out.println("REQ:"+req);
+				System.out.println("REQ:" + req);
 			}
 
 			AString callerDID = AuthMiddleware.getCallerDID(ctx);
-			if (req instanceof AMap) {
-				// Simple JSON response
+
+			if (req instanceof AMap<?, ?> map) {
+				if (isNotification(map)) {
+					processNotification(map);
+					ctx.status(202).contentType(ContentTypes.JSON);
+					return;
+				}
+
 				AMap<AString, ACell> resp = createResponse(req, callerDID);
-				buildResult(ctx,resp);
-			} else if (req instanceof AVector requests){
-				// Batch response
-				@SuppressWarnings("unchecked")
-				List<AMap<AString, ACell>> responses= Utils.map(requests, r -> createResponse((ACell) r, callerDID));
-				buildResult(ctx,responses);
+
+				// Create session on successful initialize
+				String method = getMethodName(map);
+				if ("initialize".equals(method) && resp.containsKey(FIELD_RESULT)) {
+					McpSession session = new McpSession(UUID.randomUUID().toString());
+					sessions.put(session.id, session);
+					ctx.header(HEADER_SESSION_ID, session.id);
+				}
+
+				sendResponse(ctx, resp, useSSE);
+			} else if (req instanceof AVector<?> requests) {
+				long n = requests.count();
+				if (n == 0) {
+					sendResponse(ctx, protocolError(-32600, "Invalid batch request (empty)"), useSSE);
+					return;
+				}
+				AVector<AMap<AString, ACell>> responses = Vectors.empty();
+				for (long i = 0; i < n; i++) {
+					ACell entry = requests.get(i);
+					if (entry instanceof AMap<?, ?> batchMap) {
+						if (isNotification(batchMap)) {
+							processNotification(batchMap);
+						} else {
+							responses = responses.conj(createResponse(entry, callerDID));
+						}
+					} else {
+						responses = responses.conj(protocolError(-32600, "Invalid Request"));
+					}
+				}
+				if (responses.isEmpty()) {
+					ctx.status(202).contentType(ContentTypes.JSON);
+				} else if (useSSE) {
+					sendSseBatchResponse(ctx, responses);
+				} else {
+					buildResult(ctx, responses);
+				}
 			} else {
-				buildResult(ctx,protocolError(-32600,"Request must be single request object or batch array"));
+				sendResponse(ctx, protocolError(-32600, "Request must be single request object or batch array"), useSSE);
 			}
 		} catch (ParseException | ClassCastException | NullPointerException | IOException e) {
-			buildResult(ctx,protocolError(-32600,"Invalid JSON request"));
-		} 
+			ctx.contentType(ContentTypes.JSON);
+			buildResult(ctx, protocolError(-32600, "Invalid JSON request"));
+		} catch (Exception e) {
+			log.warn("Unexpected error handling MCP request", e);
+			ctx.contentType(ContentTypes.JSON);
+			buildResult(ctx, protocolError(-32603, "Internal error"));
+		} finally {
+			currentContext.remove();
+		}
+	}
+
+	/**
+	 * Process a notification message (no response expected).
+	 */
+	private void processNotification(AMap<?, ?> request) {
+		String method = getMethodName(request);
+		if (method == null) return;
+		switch (method) {
+			case "notifications/initialized", "notifications/cancelled" -> { /* acknowledged */ }
+			default -> log.debug("Unrecognised MCP notification: {}", method);
+		}
 	}
 
 	private AMap<AString, ACell> createResponse(ACell request, AString callerDID) {
-		ACell id=RT.getIn(request,Fields.ID);
+		ACell id = RT.getIn(request, Fields.ID);
 		AMap<AString, ACell> response;
 		try {
-			AString methodAS=(AString) RT.getIn(request,Fields.METHOD);
-			String method=methodAS.toString().trim();
+			AString methodAS = (AString) RT.getIn(request, Fields.METHOD);
+			String method = methodAS.toString().trim();
 
-			if (method.equals("tools/list")) {
-				response=listToolsResult();
-			} else if (method.equals("tools/call")) {
-				response=toolCall(RT.getIn(request, Fields.PARAMS), callerDID);
-			} else if (method.equals("initialize")) {
-				response=protocolResult(Maps.of(
-						"protocolVersion", "2025-03-26",
-						"capabilities",Maps.of("tools",Maps.empty()),
-						"serverInfo",SERVER_INFO
+			response = switch (method) {
+				case "initialize" -> protocolResult(Maps.of(
+					"protocolVersion", "2025-06-18",
+					"capabilities", Maps.of("tools", Maps.empty()),
+					"serverInfo", SERVER_INFO
 				));
-			} else if (method.equals("notifications/initialized")) {
-				response=protocolResult(Maps.of());
-			} else if (method.equals("ping")) {
-				response=protocolResult(Maps.empty());
-			} else {
-				response=protocolError(-32601,"Method not found: "+method);
-			}
+				case "tools/list" -> listToolsResult();
+				case "tools/call" -> toolCall(RT.getIn(request, Fields.PARAMS), callerDID);
+				case "notifications/initialized", "ping" -> protocolResult(Maps.empty());
+				default -> protocolError(-32601, "Method not found: " + method);
+			};
 		} catch (Exception e) {
-			response= protocolError(-32600,"Invalid request for ID "+id);
+			response = protocolError(-32600, "Invalid request for ID " + id);
 		}
-		
-		// Finally restore ID if needed
-		if (id!=null) {
-			response=response.assoc(Fields.ID, id);
-		}
-		if (LOG_MCP) {
-			System.out.println("RES:"+response);
-		}
-		return response;
+
+		return maybeAttachId(response, id);
 	}
-	
+
 	/**
-	 * Function to execute a tool call request received from a remote client
-	 * @param methodAS
-	 * @param in
-	 * @return
+	 * Send a JSON-RPC response as either SSE or JSON, depending on client preference.
 	 */
-	private AMap<AString, ACell> toolCall(AMap<AString,ACell> params, AString callerDID) {
-		try {
-			AString toolName=RT.getIn(params, Fields.NAME);
-			Hash opID=findTool(toolName);
-			ACell arguments=RT.getIn(params, Fields.ARGUMENTS);
-			if (opID!=null) {
-					Job job=engine().invokeOperation(opID.toCVMHexString(), arguments, callerDID);
-					ACell result=job.awaitResult();
-					return protocolResult(Maps.of(
-						Fields.CONTENT,Vectors.of(
-								Maps.of(Fields.TYPE,Fields.TEXT,
-										Fields.TEXT,JSON.toAString(result)
-								)),
-						Fields.STRUCTURED_CONTENT,result
-					));
-			} else {
-				return protocolError(-32602, "Unknown tool: "+toolName);
-			}
-		} catch (Exception e) {
-			return protocolToolError(e.getMessage());
+	private void sendResponse(Context ctx, ACell response, boolean useSSE) {
+		if (useSSE) {
+			McpProtocol.sendResponse(ctx, response, true);
+		} else {
+			buildResult(ctx, response);
 		}
 	}
 
+	// ===== GET /mcp — SSE stream =====
+
+	/**
+	 * GET /mcp — Open SSE stream for server-to-client messages.
+	 * Requires a valid session (Mcp-Session-Id header) and Accept: text/event-stream.
+	 */
+	private void handleMcpGet(Context ctx) {
+		String accept = ctx.header("Accept");
+		if (accept == null || !accept.contains("text/event-stream")) {
+			ctx.status(405);
+			return;
+		}
+
+		String sessionId = ctx.header(HEADER_SESSION_ID);
+		McpSession session = (sessionId != null) ? sessions.get(sessionId) : null;
+		if (session == null) {
+			ctx.status(400);
+			return;
+		}
+
+		try {
+			HttpServletResponse res = ctx.res();
+			res.setContentType("text/event-stream");
+			res.setCharacterEncoding("UTF-8");
+			res.setHeader("Cache-Control", "no-cache");
+			res.setHeader("X-Accel-Buffering", "no");
+			res.flushBuffer();
+
+			PrintWriter writer = res.getWriter();
+			SseConnection conn = new SseConnection(writer);
+			session.sseConnections.add(conn);
+			try {
+				// Keep-alive loop — blocks virtual thread until client disconnects
+				while (!conn.isClosed()) {
+					writer.write(": keepalive\n\n");
+					writer.flush();
+					if (writer.checkError()) break;
+					Thread.sleep(SSE_KEEPALIVE_MS);
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			} finally {
+				conn.close();
+				session.sseConnections.remove(conn);
+				if (session.sseConnections.isEmpty()) {
+					session.clearWatches();
+				}
+			}
+		} catch (IOException e) {
+			log.debug("SSE connection setup failed", e);
+		}
+	}
+
+	// ===== DELETE /mcp — Session termination =====
+
+	/**
+	 * DELETE /mcp — Terminate an MCP session.
+	 */
+	private void handleMcpDelete(Context ctx) {
+		String sessionId = ctx.header(HEADER_SESSION_ID);
+		if (sessionId == null) {
+			ctx.status(400);
+			return;
+		}
+		McpSession session = sessions.remove(sessionId);
+		if (session == null) {
+			ctx.status(404);
+			return;
+		}
+		session.close();
+		ctx.status(200);
+	}
+
+	// ===== Tool handling =====
+
+	/**
+	 * Execute a tool call request received from a remote client
+	 */
+	private AMap<AString, ACell> toolCall(AMap<AString, ACell> params, AString callerDID) {
+		try {
+			AString toolName = RT.getIn(params, Fields.NAME);
+			Hash opID = findTool(toolName);
+			ACell arguments = RT.getIn(params, Fields.ARGUMENTS);
+			if (opID != null) {
+				Job job = engine().invokeOperation(opID.toCVMHexString(), arguments, callerDID);
+				ACell result = job.awaitResult();
+				return toolSuccess(result);
+			} else {
+				return protocolError(-32602, "Unknown tool: " + toolName);
+			}
+		} catch (Exception e) {
+			return toolError(e.getMessage());
+		}
+	}
 
 	private Hash findTool(AString toolName) {
-		// Iterate through all registered adapters
 		for (String adapterName : engine().getAdapterNames()) {
 			try {
 				var adapter = engine().getAdapter(adapterName);
 				if (adapter == null) continue;
 
-				// Get tools from this specific adapter
 				Index<Hash, AString> adapterTools = adapter.getInstalledAssets();
-				long n=adapterTools.count();
-				for (long i=0; i<n; i++) {
-					Hash h=adapterTools.entryAt(i).getKey();
-					AMap<AString,ACell> meta=engine().getMetaValue(h);
-					// Match against adapter field first, then toolName for backwards compatibility
-					AString opAdapter=RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER);
+				long n = adapterTools.count();
+				for (long i = 0; i < n; i++) {
+					Hash h = adapterTools.entryAt(i).getKey();
+					AMap<AString, ACell> meta = engine().getMetaValue(h);
+					AString opAdapter = RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER);
 					if (toolName.equals(opAdapter)) {
 						return h;
 					}
-					AString opToolName=RT.getIn(meta, Fields.OPERATION, Fields.TOOL_NAME);
+					AString opToolName = RT.getIn(meta, Fields.OPERATION, Fields.TOOL_NAME);
 					if (toolName.equals(opToolName)) {
 						return h;
 					}
 				}
-
 			} catch (Exception e) {
 				log.warn("Error processing adapter " + adapterName, e);
-				// ignore this adapter
 			}
 		}
-		return null; // not found
+		return null;
 	}
 
-
-	/**
-	 * Construct a 'successful' JSON-RPC result response
-	 * @param result Result value
-	 * @return
-	 */
-	private AMap<AString, ACell> protocolResult(AHashMap<ACell, ACell> result) {
-		return BASE_RESPONSE.assoc(Fields.RESULT, result);
-	}
-	
-	/**
-	 * Construct a 'successful' JSON-RPC tool result response
-	 * @param result Result value
-	 * @return
-	 */
-	private AMap<AString, ACell> protocolToolError(String message) {
-		return BASE_RESPONSE.assoc(
-				Fields.RESULT, Maps.of(
-						Fields.IS_ERROR,true,
-						Fields.CONTENT, Vectors.of(Maps.of(
-								Fields.TYPE,Fields.TEXT,
-								Fields.TEXT,message
-								))
-					));
-	}
-
-	private static final AMap<AString, ACell> BASE_RESPONSE=Maps.of("jsonrpc", "2.0");
-	
-	/**
-	 * Construct a JSON-RPC error response
-	 * @param rpcErrorCode JSON-RPC error code, see: https://www.jsonrpc.org/specification#error_object
-	 * @param errorMEssage Error message string
-	 * @return
-	 */
-	private AMap<AString, ACell> protocolError(int rpcErrorCode, String errorMessage) {
-		return BASE_RESPONSE.assoc(Fields.ERROR, Maps.of(
-				"code",rpcErrorCode,
-				"message",errorMessage
-		));
-	}
+	// ===== Tool listing =====
 
 	private AMap<AString, ACell> listToolsResult() {
-		AVector<AMap<AString,ACell>> toolsVector=Vectors.empty();
-		
-		// Iterate through all registered adapters
+		AVector<AMap<AString, ACell>> toolsVector = Vectors.empty();
+
 		for (String adapterName : engine().getAdapterNames()) {
 			try {
 				var adapter = engine().getAdapter(adapterName);
 				if (adapter == null) continue;
-				
-				// Get tools from this specific adapter
-				AVector<AMap<AString,ACell>> adapterTools = listTools(adapter);
-				toolsVector = toolsVector.concat(adapterTools);
+
+				Index<Hash, AString> installedAssets = adapter.getInstalledAssets();
+				int n = installedAssets.size();
+
+				for (int i = 0; i < n; i++) {
+					try {
+						MapEntry<Hash, AString> me = installedAssets.entryAt(i);
+						AString metaString = me.getValue();
+						AMap<AString, ACell> meta = RT.ensureMap(JSON.parse(metaString));
+						AMap<AString, ACell> mcpTool = checkTool(meta);
+						if (mcpTool != null) {
+							toolsVector = toolsVector.conj(mcpTool);
+						}
+					} catch (Exception e) {
+						log.warn("Error processing asset from adapter " + adapter.getName(), e);
+					}
+				}
 			} catch (Exception e) {
 				log.warn("Error processing adapter " + adapterName, e);
-				// ignore this adapter
 			}
 		}
-		
-		return protocolResult(Maps.of("tools",toolsVector));
+
+		return protocolResult(Maps.of("tools", toolsVector));
 	}
-	
+
 	/**
-	 * Get MCP tools from a specific adapter's installed assets
+	 * Get MCP tools from a specific adapter's installed assets.
 	 * @param adapter The adapter to get tools from
-	 * @return Vector of MCP tools provided by this adapter
+	 * @return Vector of MCP tool metadata provided by this adapter
 	 */
-	public AVector<AMap<AString,ACell>> listTools(AAdapter adapter) {
-		AVector<AMap<AString,ACell>> toolsVector = Vectors.empty();
-		
+	public AVector<AMap<AString, ACell>> listTools(covia.adapter.AAdapter adapter) {
+		AVector<AMap<AString, ACell>> toolsVector = Vectors.empty();
 		try {
-			// Get installed assets for this adapter
 			Index<Hash, AString> installedAssets = adapter.getInstalledAssets();
 			int n = installedAssets.size();
-			
 			for (int i = 0; i < n; i++) {
 				try {
 					MapEntry<Hash, AString> me = installedAssets.entryAt(i);
 					AString metaString = me.getValue();
-					
-					// Parse the metadata string to get the structured metadata
 					AMap<AString, ACell> meta = RT.ensureMap(JSON.parse(metaString));
 					AMap<AString, ACell> mcpTool = checkTool(meta);
 					if (mcpTool != null) {
@@ -330,65 +453,47 @@ public class MCP extends ACoviaAPI {
 					}
 				} catch (Exception e) {
 					log.warn("Error processing asset from adapter " + adapter.getName(), e);
-					// ignore this asset
 				}
 			}
 		} catch (Exception e) {
 			log.warn("Error getting installed assets from adapter " + adapter.getName(), e);
 		}
-		
 		return toolsVector;
 	}
-	
 
+	private AMap<AString, ACell> checkTool(AMap<AString, ACell> meta) {
+		AMap<AString, ACell> op = RT.getIn(meta, Fields.OPERATION);
+		if (op == null) return null;
 
-	private AMap<AString,ACell> checkTool(AMap<AString, ACell> meta) {
-		AMap<AString,ACell> op=RT.getIn(meta,Fields.OPERATION);
-		if (op==null) return null;
-
-		// Derive tool name from operation.adapter field (e.g. "convex:query")
-		// Fall back to explicit toolName if adapter not specified
-		AString toolName=RT.ensureString(op.get(Fields.ADAPTER));
-		if (toolName==null) {
-			toolName=RT.ensureString(op.get(Fields.TOOL_NAME));
+		AString toolName = RT.ensureString(op.get(Fields.ADAPTER));
+		if (toolName == null) {
+			toolName = RT.ensureString(op.get(Fields.TOOL_NAME));
 		}
-		if (toolName==null) return null;
+		if (toolName == null) return null;
 
-		AMap<AString,ACell> inputSchema=ensureSchema(RT.getIn(op, Fields.INPUT));
-		AMap<AString,ACell> outputSchema=ensureSchema(RT.getIn(op, Fields.OUTPUT));
+		AMap<AString, ACell> inputSchema = ensureSchema(RT.getIn(op, Fields.INPUT));
+		AMap<AString, ACell> outputSchema = ensureSchema(RT.getIn(op, Fields.OUTPUT));
 
-		AMap<AString,ACell> result= Maps.of(
-				Fields.NAME,toolName,
-				Fields.TITLE,RT.getIn(meta,Fields.NAME),
-				Fields.DESCRIPTION,RT.getIn(meta,Fields.DESCRIPTION),
-				Fields.INPUT_SCHEMA,inputSchema,
-				Fields.OUTPUT_SCHEMA,outputSchema
+		return Maps.of(
+			Fields.NAME, toolName,
+			Fields.TITLE, RT.getIn(meta, Fields.NAME),
+			Fields.DESCRIPTION, RT.getIn(meta, Fields.DESCRIPTION),
+			Fields.INPUT_SCHEMA, inputSchema,
+			Fields.OUTPUT_SCHEMA, outputSchema
 		);
-
-		return result;
 	}
 
-	private AMap<AString,ACell> ensureSchema(AMap<AString,ACell> schema) {
-		if (schema==null) schema=Maps.empty();
-		// Object type is mandatory in MCP spec
-		// see: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-06-18/schema.json
-		schema=schema.assoc(Fields.TYPE, Fields.OBJECT);
-		
+	private AMap<AString, ACell> ensureSchema(AMap<AString, ACell> schema) {
+		if (schema == null) schema = Maps.empty();
+		schema = schema.assoc(Fields.TYPE, Fields.OBJECT);
 		return schema;
 	}
 
-	@OpenApi(path = "/mcp", 
-			methods = HttpMethod.GET, 
-			tags = { "MCP"},
-			summary = "Get MCP SSE Stream", 
-			operationId = "mcpWellKnown")	
-	protected void getMCP(Context ctx) { 
-		ctx.status(405); // not allowed. MUST return this if SSE not supported
-	}
-	
+	// ===== Well-known endpoint =====
+
 	@SuppressWarnings("unchecked")
-	private AMap<AString,ACell> WELL_KNOWN=(AMap<AString, ACell>) JSON.parse("""
-		{	
+	private AMap<AString, ACell> WELL_KNOWN = (AMap<AString, ACell>) JSON.parse("""
+		{
 			"mcp_version": "1.0",
 			"server_url": "http:localhost:8080/mcp",
 			"description": "MCP server for Covia Venue",
@@ -396,17 +501,17 @@ public class MCP extends ACoviaAPI {
 			"endpoint": {"path":"/mcp","transport":"streamable-http"}
 		}
 """);
-	
-	@OpenApi(path = "/.well-known/mcp", 
-			methods = HttpMethod.GET, 
+
+	@OpenApi(path = "/.well-known/mcp",
+			methods = HttpMethod.GET,
 			tags = { "MCP"},
-			summary = "Get MCP server capabilities", 
-			operationId = "mcpWellKnown")	
-	protected void getMCPWellKnown(Context ctx) { 
-		AMap<AString,ACell> result=WELL_KNOWN;
-		AString mcpURL=Strings.create(getExternalBaseUrl(ctx, "mcp"));
-		result=result.assoc(SERVER_URL_FIELD,mcpURL);
-		buildResult(ctx,result);
+			summary = "Get MCP server capabilities",
+			operationId = "mcpWellKnown")
+	protected void getMCPWellKnown(Context ctx) {
+		AMap<AString, ACell> result = WELL_KNOWN;
+		AString mcpURL = Strings.create(getExternalBaseUrl(ctx, "mcp"));
+		result = result.assoc(SERVER_URL_FIELD, mcpURL);
+		buildResult(ctx, result);
 	}
 
 }

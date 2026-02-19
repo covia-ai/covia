@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -218,28 +219,162 @@ public class MCPTest {
 		Venue client = Grid.connect(BASE_URL);
 		MCPAdapter mcpAdapter=(MCPAdapter) venue.getAdapter("mcp");
 		assertNotNull(mcpAdapter);
-		
+
 		// Test the tools:list operation through the venue interface
-		Job job=client.invoke(mcpAdapter.TOOLS_LIST, 
+		Job job=client.invoke(mcpAdapter.TOOLS_LIST,
 				Maps.of(Fields.SERVER, BASE_URL)).join();
-		
+
 		ACell result=job.awaitResult();
 		assertNotNull(result);
-		
+
 		// Verify the result structure
 		assertTrue(result instanceof AMap, "Result should be a map");
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> resultMap = (AMap<AString, ACell>) result;
-		
+
 		// Check that we have a tools field
 		ACell tools = resultMap.get(Strings.create("tools"));
 		assertNotNull(tools, "Result should contain tools field");
 		assertTrue(tools instanceof AVector, "Tools should be a vector");
-		
+
 		// Check that we have a total field
 		ACell total = resultMap.get(Fields.TOTAL);
 		assertNotNull(total, "Result should contain total field");
 		assertTrue(total instanceof AInteger, "Total should be an integer");
 
+	}
+
+	// ===== Protocol-level adversarial tests =====
+
+	/** POST raw JSON to /mcp and return the response */
+	private HttpResponse<String> postMcp(String json) throws Exception {
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL + "/mcp"))
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString(json))
+			.timeout(Duration.ofSeconds(10))
+			.build();
+		return httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+	}
+
+	@Test public void testInvalidJson() throws Exception {
+		HttpResponse<String> resp = postMcp("{not valid json!!!");
+		assertEquals(200, resp.statusCode());
+		assertTrue(resp.body().contains("error"), "Should return JSON-RPC error");
+	}
+
+	@Test public void testEmptyBody() throws Exception {
+		HttpResponse<String> resp = postMcp("");
+		assertEquals(200, resp.statusCode());
+		assertTrue(resp.body().contains("error"), "Should return JSON-RPC error");
+	}
+
+	@Test public void testUnknownMethod() throws Exception {
+		HttpResponse<String> resp = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"nonexistent/method\",\"id\":1}");
+		assertEquals(200, resp.statusCode());
+		assertTrue(resp.body().contains("error"), "Should return method-not-found error");
+		assertTrue(resp.body().contains("-32601"), "Error code should be -32601");
+	}
+
+	@Test public void testCallUnknownTool() throws Exception {
+		HttpResponse<String> resp = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"nonexistent:tool\",\"arguments\":{}},\"id\":1}");
+		assertEquals(200, resp.statusCode());
+		assertTrue(resp.body().contains("error"), "Should return error for unknown tool");
+	}
+
+	@Test public void testEmptyBatch() throws Exception {
+		HttpResponse<String> resp = postMcp("[]");
+		assertEquals(200, resp.statusCode());
+		assertTrue(resp.body().contains("error"), "Should return error for empty batch");
+	}
+
+	@Test public void testBatchRequest() throws Exception {
+		HttpResponse<String> resp = postMcp(
+			"[{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}," +
+			"{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":2}]");
+		assertEquals(200, resp.statusCode());
+		// Batch response should be an array
+		String body = resp.body().trim();
+		assertTrue(body.startsWith("["), "Batch response should be an array");
+	}
+
+	@Test public void testNotificationReturns202() throws Exception {
+		// A notification (no "id" field) should return 202
+		HttpResponse<String> resp = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
+		assertEquals(202, resp.statusCode());
+	}
+
+	@Test public void testInitializeReturnsSessionId() throws Exception {
+		HttpResponse<String> resp = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1}");
+		assertEquals(200, resp.statusCode());
+		String sessionId = resp.headers().firstValue("Mcp-Session-Id").orElse(null);
+		assertNotNull(sessionId, "Initialize should return Mcp-Session-Id header");
+		assertFalse(sessionId.isEmpty());
+		assertTrue(resp.body().contains("protocolVersion"), "Should contain protocol version");
+		assertTrue(resp.body().contains("serverInfo"), "Should contain server info");
+	}
+
+	@Test public void testGetSseWithoutSession() throws Exception {
+		// GET /mcp without a valid session should return 400
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL + "/mcp"))
+			.header("Accept", "text/event-stream")
+			.header("Mcp-Session-Id", "bogus-session-id")
+			.GET()
+			.timeout(Duration.ofSeconds(5))
+			.build();
+		HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+		assertEquals(400, resp.statusCode());
+	}
+
+	@Test public void testGetSseWithoutAcceptHeader() throws Exception {
+		// GET /mcp without Accept: text/event-stream should return 405
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL + "/mcp"))
+			.header("Accept", "application/json")
+			.GET()
+			.timeout(Duration.ofSeconds(5))
+			.build();
+		HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+		assertEquals(405, resp.statusCode());
+	}
+
+	@Test public void testDeleteUnknownSession() throws Exception {
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL + "/mcp"))
+			.header("Mcp-Session-Id", "nonexistent-session-id")
+			.DELETE()
+			.timeout(Duration.ofSeconds(5))
+			.build();
+		HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+		assertEquals(404, resp.statusCode());
+	}
+
+	@Test public void testDeleteWithoutSessionHeader() throws Exception {
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL + "/mcp"))
+			.DELETE()
+			.timeout(Duration.ofSeconds(5))
+			.build();
+		HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+		assertEquals(400, resp.statusCode());
+	}
+
+	@Test public void testWellKnownStructure() throws Exception {
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL + "/.well-known/mcp"))
+			.GET()
+			.timeout(Duration.ofSeconds(10))
+			.build();
+		HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, resp.statusCode());
+		String body = resp.body();
+		assertTrue(body.contains("mcp_version"), "Should contain mcp_version");
+		assertTrue(body.contains("streamable-http"), "Should contain transport type");
+		assertTrue(body.contains("server_url"), "Should contain server_url");
 	}
 }

@@ -1,9 +1,9 @@
 package covia.adapter;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,22 +21,20 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
-import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
-import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
-import io.modelcontextprotocol.spec.McpClientTransport;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
-import io.modelcontextprotocol.spec.McpSchema.InitializeResult;
 import io.modelcontextprotocol.spec.McpSchema.JsonSchema;
 import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 
 public class MCPAdapter extends AAdapter {
-	
+
 	public static final Logger log=LoggerFactory.getLogger(MCPAdapter.class);
 
-	
+	/** Persistent client sessions keyed by "serverUrl|token" */
+	private final ConcurrentHashMap<String, McpClientSession> clientSessions = new ConcurrentHashMap<>();
+
 	public  Hash TOOL_CALL;
 	public  Hash TOOLS_LIST;
 
@@ -170,52 +168,41 @@ public class MCPAdapter extends AAdapter {
 	}
 	
 	/**
-	 * Connect to an MCP server via a base URL
-	 * @param baseURL
-	 * @return McpSyncClient instance
-	 * @throws Exception
+	 * Get or create a persistent session for the given server URL and token.
+	 */
+	private McpClientSession getOrConnect(String serverUrl, String accessToken) {
+		String key = serverUrl + "|" + (accessToken != null ? accessToken : "");
+		return clientSessions.computeIfAbsent(key, k -> new McpClientSession(serverUrl, accessToken));
+	}
+
+	/**
+	 * Connect to an MCP server via a base URL. Returns a connected client
+	 * from the session pool.
+	 * @param baseURL Server base URL
+	 * @param accessToken Optional bearer token
+	 * @return McpSyncClient instance (session-managed)
+	 * @throws Exception on connection failure
 	 */
 	public McpSyncClient connect(String baseURL, String accessToken) throws Exception {
-		McpClientTransport transport= HttpClientStreamableHttpTransport.builder(baseURL+"/mcp")
-					.customizeRequest(b->{
-						if ((accessToken!=null)&&(!accessToken.isEmpty())) {
-							b.header("Authorization", "Bearer "+accessToken);
-						}
-					})
-					.build();
-		McpSyncClient mcp=McpClient.sync(transport)
-					.requestTimeout(Duration.ofSeconds(10))
-					.build();
-		@SuppressWarnings("unused")
-		InitializeResult ir=mcp.initialize();
-		return mcp;
+		return getOrConnect(baseURL, accessToken).getClient();
 	}
-	
+
 	/**
-	 * Makes an MCP tool call to the specified server
-	 * @param accessToken 
+	 * Makes an MCP tool call to the specified server using a persistent session.
+	 * @param serverUrl MCP server URL
+	 * @param toolName Tool name to call
+	 * @param input Tool arguments
+	 * @param accessToken Optional access token
 	 */
 	public ACell callMCPTool(AString serverUrl, String toolName, ACell input, String accessToken) throws Exception {
-		McpSyncClient client = connect(serverUrl.toString(),accessToken);
-		
+		McpClientSession session = getOrConnect(serverUrl.toString(), accessToken);
 		try {
-			AMap<AString,ACell> toolArgs=RT.ensureMap(input);
-			
-			// Make the tool call using the MCP client
-			// Note: The actual method name may vary depending on the MCP client library version
-			// This is a placeholder - we'll need to check the actual API
-			ACell result = makeToolCall(client, toolName, toolArgs);
-			
-			return result;
-			
-		} finally {
-			// Close the client connection
-			try {
-				client.close();
-			} catch (Exception e) {
-				// Log but don't fail the operation
-				log.warn("Warning: Failed to close MCP client: " + e.getMessage());
-			}
+			McpSyncClient client = session.getClient();
+			AMap<AString,ACell> toolArgs = RT.ensureMap(input);
+			return makeToolCall(client, toolName, toolArgs);
+		} catch (Exception e) {
+			session.invalidate();
+			throw e;
 		}
 	}
 	
@@ -346,23 +333,20 @@ public class MCPAdapter extends AAdapter {
 	}
 	
 	/**
-	 * Lists available MCP tools from the specified server
+	 * Lists available MCP tools from the specified server using a persistent session.
 	 * @param serverUrl The MCP server URL
 	 * @param accessToken Optional access token for authentication
 	 * @return ACell containing the list of tools
 	 * @throws Exception if the operation fails
 	 */
 	public ACell listMCPTools(AString serverUrl, String accessToken) throws Exception {
-		McpSyncClient client = connect(serverUrl.toString(), accessToken);
-		
+		McpClientSession session = getOrConnect(serverUrl.toString(), accessToken);
 		try {
-			// Get the list of tools from the MCP server
+			McpSyncClient client = session.getClient();
 			ListToolsResult result = client.listTools();
 			List<Tool> tools = result.tools();
-			
-			// Convert the tools to Covia format
+
 			AVector<AMap<AString, ACell>> toolsVector = Vectors.empty();
-			
 			for (Tool tool : tools) {
 				ACell inputSchema = getInputSchema(tool.inputSchema());
 				AMap<AString, ACell> toolMap = Maps.of(
@@ -372,22 +356,25 @@ public class MCPAdapter extends AAdapter {
 				);
 				toolsVector = toolsVector.conj(toolMap);
 			}
-			
-			// Return the tools in a structured format
+
 			return Maps.of(
 				"tools", toolsVector,
 				Fields.TOTAL, AInteger.create(tools.size())
 			);
-			
-		} finally {
-			// Close the client connection
-			try {
-				client.close();
-			} catch (Exception e) {
-				// Log but don't fail the operation
-				log.warn("Warning: Failed to close MCP client: " + e.getMessage());
-			}
+		} catch (Exception e) {
+			session.invalidate();
+			throw e;
 		}
+	}
+
+	/**
+	 * Close all persistent client sessions. Should be called during shutdown.
+	 */
+	public void close() {
+		for (McpClientSession session : clientSessions.values()) {
+			session.close();
+		}
+		clientSessions.clear();
 	}
 	
 }

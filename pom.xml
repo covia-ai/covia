@@ -20,7 +20,7 @@
 		<hc.version>5.5</hc.version>
 		<javalin.version>6.7.0</javalin.version>
 		<langchain.version>1.5.0</langchain.version>
-		<mcp.version>0.12.1</mcp.version>
+		<mcp.version>0.13.0</mcp.version>
 	</properties>
 
 	<modules>
