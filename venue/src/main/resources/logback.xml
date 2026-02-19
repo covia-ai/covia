@@ -14,7 +14,7 @@
 	</root>
 	
 	<!-- hides spurious errors. Revisit later -->
-	<logger name="io.modelcontextprotocol.client" level="OFF" />
+	<logger name="io.modelcontextprotocol" level="OFF" />
 	<logger name="reactor.core.publisher" level="OFF" />
 
 
