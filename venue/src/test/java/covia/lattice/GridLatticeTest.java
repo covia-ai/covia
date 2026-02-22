@@ -9,17 +9,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
+import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AccountKey;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
+import convex.core.data.SignedData;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.ALattice;
+import convex.lattice.LatticeContext;
 
 /**
  * Tests for GridLattice CRDT properties and merge semantics.
@@ -27,6 +32,11 @@ import convex.lattice.ALattice;
 public class GridLatticeTest {
 
 	private GridLattice lattice;
+
+	// Test keypairs for signing venue data
+	private static final AKeyPair kp1 = AKeyPair.generate();
+	private static final AKeyPair kp2 = AKeyPair.generate();
+	private static final AKeyPair kp3 = AKeyPair.generate();
 
 	// Test hashes for content-addressed metadata
 	private static final Hash testHash1 = Hash.fromHex("1111111111111111111111111111111111111111111111111111111111111111");
@@ -57,7 +67,7 @@ public class GridLatticeTest {
 		assertTrue(zero.containsKey(GridLattice.VENUES), "Zero should contain :venues");
 		assertTrue(zero.containsKey(GridLattice.META), "Zero should contain :meta");
 
-		assertEquals(Index.none(), zero.get(GridLattice.VENUES));
+		assertEquals(Maps.empty(), zero.get(GridLattice.VENUES));
 		assertEquals(Index.none(), zero.get(GridLattice.META));
 	}
 
@@ -83,8 +93,9 @@ public class GridLatticeTest {
 
 	@Test
 	public void testIdempotency() {
-		AMap<Keyword, ACell> value = createTestGridState();
-		AMap<Keyword, ACell> merged = lattice.merge(value, value);
+		AMap<Keyword, ACell> value = createTestGridState(kp1);
+		LatticeContext ctx = LatticeContext.create(null, kp1);
+		AMap<Keyword, ACell> merged = lattice.merge(ctx, value, value);
 		assertSame(value, merged, "Merge with self should return same instance");
 	}
 
@@ -103,13 +114,22 @@ public class GridLatticeTest {
 
 	@Test
 	public void testCommutativityWithVenues() {
-		AMap<Keyword, ACell> v1 = createGridStateWithVenue("did:web:venue1.example.com");
-		AMap<Keyword, ACell> v2 = createGridStateWithVenue("did:web:venue2.example.com");
+		LatticeContext ctx1 = LatticeContext.create(null, kp1);
+		LatticeContext ctx2 = LatticeContext.create(null, kp2);
+		AMap<Keyword, ACell> v1 = createGridStateWithVenue(kp1);
+		AMap<Keyword, ACell> v2 = createGridStateWithVenue(kp2);
 
-		AMap<Keyword, ACell> merge12 = lattice.merge(v1, v2);
-		AMap<Keyword, ACell> merge21 = lattice.merge(v2, v1);
+		// OwnerLattice merge needs context for signing
+		AMap<Keyword, ACell> merge12 = lattice.merge(ctx1, v1, v2);
+		AMap<Keyword, ACell> merge21 = lattice.merge(ctx2, v2, v1);
 
-		assertEquals(merge12, merge21, "Merge should be commutative for venues");
+		// Both merges should contain both venues (same owners, same data)
+		@SuppressWarnings("unchecked")
+		AHashMap<ACell, SignedData<?>> venues12 = (AHashMap<ACell, SignedData<?>>) merge12.get(GridLattice.VENUES);
+		@SuppressWarnings("unchecked")
+		AHashMap<ACell, SignedData<?>> venues21 = (AHashMap<ACell, SignedData<?>>) merge21.get(GridLattice.VENUES);
+		assertEquals(2, venues12.count(), "Merge should contain both venues");
+		assertEquals(2, venues21.count(), "Merge should contain both venues");
 	}
 
 	// ========== Associativity ==========
@@ -130,11 +150,12 @@ public class GridLatticeTest {
 
 	@Test
 	public void testZeroIdentity() {
-		AMap<Keyword, ACell> value = createTestGridState();
+		AMap<Keyword, ACell> value = createTestGridState(kp1);
 		AMap<Keyword, ACell> zero = lattice.zero();
+		LatticeContext ctx = LatticeContext.create(null, kp1);
 
-		assertEquals(value, lattice.merge(value, zero));
-		assertEquals(value, lattice.merge(zero, value));
+		assertEquals(value, lattice.merge(ctx, value, zero));
+		assertEquals(value, lattice.merge(ctx, zero, value));
 	}
 
 	// ========== Meta Merge (Union - Content Addressed Index<ABlob, AString>) ==========
@@ -168,54 +189,57 @@ public class GridLatticeTest {
 		assertEquals(1, meta.count(), "Same key should not duplicate");
 	}
 
-	// ========== Venues Merge (Per-Venue with VenueLattice) ==========
+	// ========== Venues Merge (Per-Owner with OwnerLattice) ==========
 
 	@Test
 	public void testVenuesMergeUnion() {
-		AMap<Keyword, ACell> v1 = createGridStateWithVenue("did:web:venue1.example.com");
-		AMap<Keyword, ACell> v2 = createGridStateWithVenue("did:web:venue2.example.com");
+		AMap<Keyword, ACell> v1 = createGridStateWithVenue(kp1);
+		AMap<Keyword, ACell> v2 = createGridStateWithVenue(kp2);
 
-		AMap<Keyword, ACell> merged = lattice.merge(v1, v2);
+		LatticeContext ctx = LatticeContext.create(null, kp1);
+		AMap<Keyword, ACell> merged = lattice.merge(ctx, v1, v2);
 
 		@SuppressWarnings("unchecked")
-		Index<AString, ACell> venues = (Index<AString, ACell>) merged.get(GridLattice.VENUES);
+		AHashMap<ACell, SignedData<?>> venues = (AHashMap<ACell, SignedData<?>>) merged.get(GridLattice.VENUES);
 
 		assertEquals(2, venues.count(), "Merged venues should contain both entries");
 	}
 
 	@Test
-	public void testVenuesMergeSameVenueDifferentAssets() {
-		// Two updates to the same venue should merge venue state
-		String venueDID = "did:web:venue1.example.com";
-
+	public void testVenuesMergeSameOwnerDifferentAssets() {
+		// Two updates to the same venue (same owner) should merge venue state
 		AMap<Keyword, ACell> venueState1 = Maps.of(
-			VenueLattice.ASSETS, Maps.of("0xasset1", Maps.of("name", "Asset1")),
+			VenueLattice.ASSETS, Index.of(Strings.create("0xasset1"), Maps.of(Strings.create("name"), Strings.create("Asset1"))),
 			VenueLattice.JOBS, Index.none()
 		);
 		AMap<Keyword, ACell> venueState2 = Maps.of(
-			VenueLattice.ASSETS, Maps.of("0xasset2", Maps.of("name", "Asset2")),
+			VenueLattice.ASSETS, Index.of(Strings.create("0xasset2"), Maps.of(Strings.create("name"), Strings.create("Asset2"))),
 			VenueLattice.JOBS, Index.none()
 		);
 
+		AccountKey owner = kp1.getAccountKey();
 		AMap<Keyword, ACell> v1 = Maps.of(
-			GridLattice.VENUES, Index.of(venueDID, venueState1),
+			GridLattice.VENUES, Maps.of(owner, kp1.signData(venueState1)),
 			GridLattice.META, Index.none()
 		);
 		AMap<Keyword, ACell> v2 = Maps.of(
-			GridLattice.VENUES, Index.of(venueDID, venueState2),
+			GridLattice.VENUES, Maps.of(owner, kp1.signData(venueState2)),
 			GridLattice.META, Index.none()
 		);
 
-		AMap<Keyword, ACell> merged = lattice.merge(v1, v2);
+		LatticeContext ctx = LatticeContext.create(null, kp1);
+		AMap<Keyword, ACell> merged = lattice.merge(ctx, v1, v2);
 
 		@SuppressWarnings("unchecked")
-		Index<AString, ACell> venues = (Index<AString, ACell>) merged.get(GridLattice.VENUES);
-		@SuppressWarnings("unchecked")
-		AMap<Keyword, ACell> mergedVenue = (AMap<Keyword, ACell>) venues.get(Strings.create(venueDID));
-		@SuppressWarnings("unchecked")
-		AMap<ACell, ACell> assets = (AMap<ACell, ACell>) mergedVenue.get(VenueLattice.ASSETS);
-
+		AHashMap<ACell, SignedData<AMap<Keyword, ACell>>> venues =
+			(AHashMap<ACell, SignedData<AMap<Keyword, ACell>>>) merged.get(GridLattice.VENUES);
 		assertEquals(1, venues.count(), "Should have one venue");
+
+		SignedData<AMap<Keyword, ACell>> signedVenue = venues.get(owner);
+		assertNotNull(signedVenue, "Owner's venue should exist");
+
+		@SuppressWarnings("unchecked")
+		AMap<ACell, ACell> assets = (AMap<ACell, ACell>) signedVenue.getValue().get(VenueLattice.ASSETS);
 		assertEquals(2, assets.count(), "Venue should have both assets merged");
 	}
 
@@ -239,13 +263,13 @@ public class GridLatticeTest {
 
 	@Test
 	public void testPathToVenueLattice() {
-		// Path through :venues to a specific venue should get VenueLattice
+		// Path through :venues returns OwnerLattice
 		ALattice<ACell> venuesLattice = lattice.path(GridLattice.VENUES);
 		assertNotNull(venuesLattice);
 
-		// Any key under venues should return VenueLattice
-		ALattice<ACell> venueLattice = venuesLattice.path(Strings.create("did:web:example.com"));
-		assertNotNull(venueLattice, "Should get VenueLattice for any venue DID");
+		// Any key under OwnerLattice returns SignedLattice
+		ALattice<ACell> signedLattice = venuesLattice.path(kp1.getAccountKey());
+		assertNotNull(signedLattice, "Should get SignedLattice for any owner key");
 	}
 
 	// ========== Full Grid Structure Test ==========
@@ -254,39 +278,40 @@ public class GridLatticeTest {
 	public void testFullGridMerge() {
 		// Create two grid states with different venues and shared meta
 		AMap<Keyword, ACell> venueState1 = Maps.of(
-			VenueLattice.ASSETS, Maps.of("0xasset1", Maps.empty()),
+			VenueLattice.ASSETS, Index.of(Strings.create("0xasset1"), Maps.empty()),
 			VenueLattice.JOBS, Index.of(
-				"job1", Maps.of(
-					"status", "COMPLETE",
-					"updated", CVMLong.create(1000L)
+				Strings.create("job1"), Maps.of(
+					Strings.create("status"), Strings.create("COMPLETE"),
+					Strings.create("updated"), CVMLong.create(1000L)
 				)
 			)
 		);
 
 		AMap<Keyword, ACell> venueState2 = Maps.of(
-			VenueLattice.ASSETS, Maps.of("0xasset2", Maps.empty()),
+			VenueLattice.ASSETS, Index.of(Strings.create("0xasset2"), Maps.empty()),
 			VenueLattice.JOBS, Index.of(
-				"job2", Maps.of(
-					"status", "PENDING",
-					"updated", CVMLong.create(2000L)
+				Strings.create("job2"), Maps.of(
+					Strings.create("status"), Strings.create("PENDING"),
+					Strings.create("updated"), CVMLong.create(2000L)
 				)
 			)
 		);
 
 		AMap<Keyword, ACell> grid1 = Maps.of(
-			GridLattice.VENUES, Index.of("did:web:venue1.com", venueState1),
+			GridLattice.VENUES, Maps.of(kp1.getAccountKey(), kp1.signData(venueState1)),
 			GridLattice.META, Index.of(metaHash1, "{\"name\":\"Asset Definition 1\"}")
 		);
 
 		AMap<Keyword, ACell> grid2 = Maps.of(
-			GridLattice.VENUES, Index.of("did:web:venue2.com", venueState2),
+			GridLattice.VENUES, Maps.of(kp2.getAccountKey(), kp2.signData(venueState2)),
 			GridLattice.META, Index.of(metaHash2, "{\"name\":\"Asset Definition 2\"}")
 		);
 
-		AMap<Keyword, ACell> merged = lattice.merge(grid1, grid2);
+		LatticeContext ctx = LatticeContext.create(null, kp1);
+		AMap<Keyword, ACell> merged = lattice.merge(ctx, grid1, grid2);
 
 		@SuppressWarnings("unchecked")
-		Index<AString, ACell> venues = (Index<AString, ACell>) merged.get(GridLattice.VENUES);
+		AHashMap<ACell, SignedData<?>> venues = (AHashMap<ACell, SignedData<?>>) merged.get(GridLattice.VENUES);
 		@SuppressWarnings("unchecked")
 		Index<ABlob, AString> meta = (Index<ABlob, AString>) merged.get(GridLattice.META);
 
@@ -296,33 +321,33 @@ public class GridLatticeTest {
 
 	// ========== Helper Methods ==========
 
-	private AMap<Keyword, ACell> createTestGridState() {
+	private AMap<Keyword, ACell> createTestGridState(AKeyPair kp) {
 		AMap<Keyword, ACell> venueState = Maps.of(
-			VenueLattice.ASSETS, Maps.of("0xtest", Maps.empty()),
+			VenueLattice.ASSETS, Index.of(Strings.create("0xtest"), Maps.empty()),
 			VenueLattice.JOBS, Index.none()
 		);
 
 		return Maps.of(
-			GridLattice.VENUES, Index.of("did:web:test.example.com", venueState),
+			GridLattice.VENUES, Maps.of(kp.getAccountKey(), kp.signData(venueState)),
 			GridLattice.META, Index.of(testHash1, "{\"name\":\"Test\"}")
 		);
 	}
 
 	private AMap<Keyword, ACell> createGridStateWithMeta(Hash metaHash, String jsonContent) {
 		return Maps.of(
-			GridLattice.VENUES, Index.none(),
+			GridLattice.VENUES, Maps.empty(),
 			GridLattice.META, Index.of(metaHash, jsonContent)
 		);
 	}
 
-	private AMap<Keyword, ACell> createGridStateWithVenue(String venueDID) {
+	private AMap<Keyword, ACell> createGridStateWithVenue(AKeyPair kp) {
 		AMap<Keyword, ACell> venueState = Maps.of(
 			VenueLattice.ASSETS, Maps.empty(),
 			VenueLattice.JOBS, Index.none()
 		);
 
 		return Maps.of(
-			GridLattice.VENUES, Index.of(venueDID, venueState),
+			GridLattice.VENUES, Maps.of(kp.getAccountKey(), kp.signData(venueState)),
 			GridLattice.META, Index.none()
 		);
 	}

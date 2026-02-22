@@ -47,10 +47,12 @@ public class VenueLatticeTest {
 		assertNotNull(zero, "Zero value should not be null");
 		assertTrue(zero.containsKey(VenueLattice.ASSETS), "Zero should contain :assets");
 		assertTrue(zero.containsKey(VenueLattice.JOBS), "Zero should contain :jobs");
+		assertTrue(zero.containsKey(VenueLattice.DID), "Zero should contain :did");
 
 		// All fields should be empty
 		assertEquals(Index.none(), zero.get(VenueLattice.ASSETS));
 		assertEquals(Index.none(), zero.get(VenueLattice.JOBS));
+		assertNull(zero.get(VenueLattice.DID), "DID should be null in zero");
 	}
 
 	@Test
@@ -279,7 +281,8 @@ public class VenueLatticeTest {
 			),
 			VenueLattice.USERS, Maps.empty(),
 			VenueLattice.STORAGE, Index.none(),
-			VenueLattice.AUTH, Maps.empty()
+			VenueLattice.AUTH, Maps.empty(),
+			VenueLattice.DID, Strings.create("did:key:test")
 		);
 	}
 

@@ -63,7 +63,7 @@ public class VenueRestartTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor());
+			Engine engine = new Engine(config, ns.getCursor(), kp);
 			Engine.addDemoAssets(engine);
 
 			// Store a custom asset with content
@@ -132,7 +132,7 @@ public class VenueRestartTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns2 = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns2.launch(); // restores from store
-			Engine engine2 = new Engine(config, ns2.getCursor());
+			Engine engine2 = new Engine(config, ns2.getCursor(), kp);
 			Engine.addDemoAssets(engine2);
 			engine2.recoverJobs();
 

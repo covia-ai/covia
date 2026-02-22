@@ -35,6 +35,8 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.did.DID;
+import convex.core.cvm.Keywords;
+import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ACursor;
 import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.cursor.Cursors;
@@ -129,10 +131,23 @@ public class Engine {
 	/**
 	 * Primary constructor: Engine receives an ALatticeCursor from its caller.
 	 * Engine is agnostic to persistence and replication — it just uses the cursor.
+	 * Generates a new random key pair for this venue.
 	 */
 	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor) throws IOException {
+		this(config, cursor, AKeyPair.generate());
+	}
+
+	/**
+	 * Constructor with explicit key pair. Use when the venue identity must be
+	 * stable across restarts (same AccountKey = same OwnerLattice slot).
+	 */
+	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor, AKeyPair keyPair) throws IOException {
 		this.config=new Config(config);
+		this.keyPair=keyPair;
 		this.lattice=cursor;
+		// Set signing context so SignedCursor can sign writes through OwnerLattice
+		LatticeContext ctx = LatticeContext.create(null, this.keyPair);
+		this.lattice.withContext(ctx);
 		initialiseFromCursor();
 		this.contentStorage = createStorage();
 		this.contentStorage.initialise();
@@ -194,29 +209,36 @@ public class Engine {
 			// Create lattice storage backed by venue's :storage cursor
 			ACursor<Index<ABlob, ABlob>> storageCursor =
 				(ACursor<Index<ABlob, ABlob>>) (ACursor<?>) lattice.path(
-					Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.STORAGE);
+					Covia.GRID, GridLattice.VENUES, getAccountKey(), Keywords.VALUE, VenueLattice.STORAGE);
 			return new LatticeStorage(storageCursor);
 		}
 	}
 
 	/**
 	 * Initialises child cursors and components from the lattice cursor.
-	 * Ensures the venue entry exists at [:grid :venues &lt;did&gt;].
+	 * Ensures the venue entry exists at [:grid :venues &lt;accountKey&gt; :value].
+	 * Venues are keyed by AccountKey in OwnerLattice; the DID is stored inside venue state.
 	 */
 	@SuppressWarnings("unchecked")
 	protected void initialiseFromCursor() {
-		// Ensure venue entry exists (seed with VenueLattice zero if absent)
-		ALatticeCursor<ACell> venueCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString());
+		AccountKey ownerKey = getAccountKey();
+
+		// Navigate through OwnerLattice → SignedLattice → VenueLattice
+		// The :value step crosses the SignedLattice boundary (SignedCursor auto-inserted)
+		ALatticeCursor<ACell> venueCursor = lattice.path(
+			Covia.GRID, GridLattice.VENUES, ownerKey, Keywords.VALUE);
 		if (venueCursor.get() == null) {
-			venueCursor.set(VenueLattice.INSTANCE.zero());
+			AMap<Keyword, ACell> zero = VenueLattice.INSTANCE.zero();
+			zero = zero.assoc(VenueLattice.DID, getDIDString());
+			venueCursor.set(zero);
 		}
 
-		this.assets = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.ASSETS);
-		this.jobsCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.JOBS);
-		ACursor<AMap<AString, AMap<AString, ACell>>> usersCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.USERS);
+		this.assets = lattice.path(Covia.GRID, GridLattice.VENUES, ownerKey, Keywords.VALUE, VenueLattice.ASSETS);
+		this.jobsCursor = lattice.path(Covia.GRID, GridLattice.VENUES, ownerKey, Keywords.VALUE, VenueLattice.JOBS);
+		ACursor<AMap<AString, AMap<AString, ACell>>> usersCursor = lattice.path(Covia.GRID, GridLattice.VENUES, ownerKey, Keywords.VALUE, VenueLattice.USERS);
 		this.auth = new Auth(this, usersCursor);
 
-		ACursor<AMap<Keyword, ACell>> authCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.AUTH);
+		ACursor<AMap<Keyword, ACell>> authCursor = lattice.path(Covia.GRID, GridLattice.VENUES, ownerKey, Keywords.VALUE, VenueLattice.AUTH);
 		this.accessControl = new AccessControl(authCursor);
 	}
 

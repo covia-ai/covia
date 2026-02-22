@@ -77,6 +77,11 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 	public static final Keyword AUTH = Keyword.intern("auth");
 
 	/**
+	 * Keyword for DID string within venue state (set once at venue creation)
+	 */
+	public static final Keyword DID = Keyword.intern("did");
+
+	/**
 	 * Keyword for timestamp field (used in merge conflict resolution)
 	 */
 	public static final Keyword UPDATED = Keyword.intern("updated");
@@ -167,6 +172,9 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 		// Merge auth
 		result = mergeField(result, otherValue, AUTH, authLattice);
 
+		// Merge DID (first-writer-wins: keep own if non-null)
+		result = mergeSimpleField(result, otherValue, DID);
+
 		return result;
 	}
 
@@ -238,6 +246,21 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 		return result;
 	}
 
+	/**
+	 * Merges a simple field using first-writer-wins semantics.
+	 * If own value is non-null, keeps it; otherwise takes other's value.
+	 */
+	private AMap<Keyword, ACell> mergeSimpleField(
+			AMap<Keyword, ACell> result,
+			AMap<Keyword, ACell> other,
+			Keyword key) {
+		ACell ownVal = result.get(key);
+		if (ownVal != null) return result;
+		ACell otherVal = other.get(key);
+		if (otherVal == null) return result;
+		return result.assoc(key, otherVal);
+	}
+
 	@Override
 	public AMap<Keyword, ACell> zero() {
 		return Maps.of(
@@ -245,7 +268,8 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 			JOBS, Index.none(),
 			USERS, Maps.empty(),
 			STORAGE, Index.none(),
-			AUTH, Maps.empty()
+			AUTH, Maps.empty(),
+			DID, null
 		);
 	}
 
