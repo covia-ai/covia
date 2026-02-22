@@ -20,7 +20,6 @@ import convex.core.crypto.util.Multikey;
 import convex.core.data.ABlob;
 import convex.core.data.AccountKey;
 import convex.core.data.ACell;
-import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -33,13 +32,13 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.core.store.AStore;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.did.DID;
-import convex.etch.EtchStore;
 import convex.lattice.cursor.ACursor;
+import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.cursor.Cursors;
+import convex.lattice.cursor.RootLatticeCursor;
 import convex.lattice.fs.DLFS;
 import convex.lattice.fs.DLFileSystem;
 import covia.adapter.AAdapter;
@@ -84,19 +83,18 @@ public class Engine {
 	
 	protected final Config config;
 
-	protected final AStore store;
-	
 	protected AKeyPair keyPair=AKeyPair.generate();
-	
+
 	/**
 	 * Storage instance for content associated with assets
 	 */
 	protected final AStorage contentStorage;
-	
+
 	/**
-	 * Venue lattice using Covia.ROOT structure see COG-004 
+	 * Venue lattice using Covia.ROOT structure see COG-004.
+	 * ALatticeCursor provides lattice-aware merge and sync semantics.
  	 */
-	protected ACursor<AMap<Keyword,ACell>> lattice;
+	protected ALatticeCursor<Index<Keyword,ACell>> lattice;
 
 	/** Lattice cursor for assets data */
 	protected ACursor<Index<AString,AVector<ACell>>> assets;
@@ -128,13 +126,18 @@ public class Engine {
 	@SuppressWarnings("unchecked")
 	protected Index<AString, Hash> operations = (Index<AString, Hash>) Index.EMPTY;
 
-	public Engine(AMap<AString, ACell> config, AStore store) throws IOException {
+	/**
+	 * Primary constructor: Engine receives an ALatticeCursor from its caller.
+	 * Engine is agnostic to persistence and replication — it just uses the cursor.
+	 */
+	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor) throws IOException {
 		this.config=new Config(config);
-		this.store=store;
-		initialiseLattice();
+		this.lattice=cursor;
+		initialiseFromCursor();
 		this.contentStorage = createStorage();
 		this.contentStorage.initialise();
 	}
+
 
 	/**
 	 * Creates the appropriate storage instance based on configuration.
@@ -197,16 +200,17 @@ public class Engine {
 	}
 
 	/**
-	 * Initialises the lattice, loading from the Etch store if state exists,
-	 * otherwise creating a fresh empty structure.
-	 * Sets up the :grid -> :venues -> venue structure using Covia.ROOT.
+	 * Initialises child cursors and components from the lattice cursor.
+	 * Ensures the venue entry exists at [:grid :venues &lt;did&gt;].
 	 */
-	protected void initialiseLattice() {
-		AMap<Keyword,ACell> initialState = loadStateFromStore();
-		if (initialState == null) {
-			initialState = emptyLattice();
+	@SuppressWarnings("unchecked")
+	protected void initialiseFromCursor() {
+		// Ensure venue entry exists (seed with VenueLattice zero if absent)
+		ALatticeCursor<ACell> venueCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString());
+		if (venueCursor.get() == null) {
+			venueCursor.set(VenueLattice.INSTANCE.zero());
 		}
-		this.lattice = Cursors.of(initialState);
+
 		this.assets = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.ASSETS);
 		this.jobsCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.JOBS);
 		ACursor<AMap<AString, AMap<AString, ACell>>> usersCursor = lattice.path(Covia.GRID, GridLattice.VENUES, getDIDString(), VenueLattice.USERS);
@@ -217,37 +221,11 @@ public class Engine {
 	}
 
 	/**
-	 * Attempts to load lattice state from the Etch store.
-	 * @return The stored lattice root, or null if no state exists or loading fails
+	 * Triggers sync on the lattice cursor. What sync does depends on the cursor's
+	 * configuration (e.g. persistence, broadcast). Engine is agnostic.
 	 */
-	private AMap<Keyword,ACell> loadStateFromStore() {
-		try {
-			ACell root = store.getRootData();
-			return RT.ensureMap(root);
-		} catch (Exception e) {
-			log.warn("Could not load state from store", e);
-			return null;
-		}
-	}
-
-	/**
-	 * Persists the entire lattice root to the Etch store.
-	 * This writes all lattice data (assets, jobs, users, storage) to durable storage.
-	 * @throws IOException if persistence fails
-	 */
-	public void persistState() throws IOException {
-		ACell latticeRoot = lattice.get();
-		store.setRootData(latticeRoot);
-	}
-
-	private AHashMap<Keyword, ACell> emptyLattice() {
-		return Maps.of(
-			Covia.GRID, Maps.of(
-				GridLattice.VENUES, Index.of(
-					getDIDString(), VenueLattice.INSTANCE.zero()
-				)
-			)
-		);
+	public void syncState() {
+		lattice.sync();
 	}
 	
 	public static void addDemoAssets(Engine venue) {
@@ -331,13 +309,16 @@ public class Engine {
 		return storeAsset(meta,content,metaMap);
 	}
 	
-	private synchronized Hash storeAsset(AString meta, ACell content, AMap<AString,ACell> metaMap) {
+	@SuppressWarnings({ "unchecked", "rawtypes" })
+	private Hash storeAsset(AString meta, ACell content, AMap<AString,ACell> metaMap) {
 		Hash id=Assets.calcID(meta);
-		AMap<ABlob,AVector<?>> assets=getAssets();
-		boolean exists=assets.containsKey(id);
-		log.info((exists?"Updated":"Stored")+" asset "+id +" : "+RT.getIn(metaMap, Fields.NAME));
-		
-		setAssets(assets.assoc(id, assetRecord(meta,content,metaMap))); // TODO: asset record design?		
+		AVector<ACell> record = assetRecord(meta, content, metaMap);
+		this.assets.updateAndGet(current -> {
+			AMap m = RT.ensureMap(current);
+			if (m == null) m = Index.none();
+			return (Index) m.assoc(id, record);
+		});
+		log.info("Stored asset "+id +" : "+RT.getIn(metaMap, Fields.NAME));
 		return id;
 	}
 
@@ -347,9 +328,6 @@ public class Engine {
 	}
 
 
-	private void setAssets(AMap<ABlob, AVector<?>> assets) {
-		this.assets.set(assets);
-	}
 
 
 	/**
@@ -546,7 +524,8 @@ public class Engine {
 
 	public static Engine createTemp(AMap<AString,ACell> config) {
 		try {
-			return new Engine(config,EtchStore.createTemp());
+			RootLatticeCursor<Index<Keyword,ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+			return new Engine(config, cursor);
 		} catch (IOException e) {
 			throw new Error(e);
 		}

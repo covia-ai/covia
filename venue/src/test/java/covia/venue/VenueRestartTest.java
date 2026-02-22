@@ -16,13 +16,17 @@ import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
+import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.etch.EtchStore;
+import convex.node.NodeConfig;
+import convex.node.NodeServer;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.lattice.Covia;
 
 /**
  * Tests that a Venue can persist its entire lattice state to an Etch store,
@@ -54,10 +58,12 @@ public class VenueRestartTest {
 		String pauseJobId;
 		int assetCount;
 
-		// ========== Stage 1: Create engine, register adapters, run operations ==========
+		// ========== Stage 1: Create engine via NodeServer, register adapters, run operations ==========
 
 		{
-			Engine engine = new Engine(config, store);
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			ns.launch();
+			Engine engine = new Engine(config, ns.getCursor());
 			Engine.addDemoAssets(engine);
 
 			// Store a custom asset with content
@@ -115,16 +121,18 @@ public class VenueRestartTest {
 			assetCount = (int) engine.getAssets().count();
 			assertTrue(assetCount >= 4, "Should have at least 4 assets (echo, error, never, custom)");
 
-			// ========== Stage 2: Persist and shut down ==========
+			// ========== Stage 2: Sync and shut down ==========
 
-			engine.persistState();
-			// engine goes out of scope — simulates shutdown
+			engine.syncState();
+			ns.close(); // persists via triggerAndClose
 		}
 
 		// ========== Stage 3: Restart with the same store ==========
 
 		{
-			Engine engine2 = new Engine(config, store);
+			NodeServer<Index<Keyword, ACell>> ns2 = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			ns2.launch(); // restores from store
+			Engine engine2 = new Engine(config, ns2.getCursor());
 			Engine.addDemoAssets(engine2);
 			engine2.recoverJobs();
 
@@ -190,6 +198,8 @@ public class VenueRestartTest {
 			assertEquals(Status.COMPLETE, unpausedJob.getStatus(),
 					"Unpaused job should be COMPLETE after receiving message");
 			assertNotNull(unpausedJob.getOutput(), "Unpaused job should have output");
+
+			ns2.close();
 		}
 	}
 }

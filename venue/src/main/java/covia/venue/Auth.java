@@ -117,11 +117,16 @@ public class Auth {
 	 * @param id User identifier (e.g. "alice_gmail_com")
 	 * @param record User record map (should contain "did" and any other fields)
 	 */
-	public synchronized void putUser(String id, AMap<AString, ACell> record) {
-		record = record.assoc(Strings.create("updated"), CVMLong.create(Utils.getCurrentTimestamp()));
-		AMap<AString, AMap<AString, ACell>> usersMap = getUsers();
-		if (usersMap == null) usersMap = Maps.empty();
-		setUsers(usersMap.assoc(Strings.create(id), record));
+	public void putUser(String id, AMap<AString, ACell> record) {
+		AString key = Strings.create(id);
+		AMap<AString, ACell> stamped = record.assoc(
+			Strings.create("updated"), CVMLong.create(Utils.getCurrentTimestamp()));
+		users.updateAndGet(current -> {
+			@SuppressWarnings("unchecked")
+			AMap<AString, AMap<AString, ACell>> m = (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.ensureMap(current);
+			if (m == null) m = Maps.empty();
+			return m.assoc(key, stamped);
+		});
 	}
 
 	/**
@@ -133,7 +138,4 @@ public class Auth {
 		return (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.ensureMap(this.users.get());
 	}
 
-	private void setUsers(AMap<AString, AMap<AString, ACell>> usersMap) {
-		this.users.set(usersMap);
-	}
 }

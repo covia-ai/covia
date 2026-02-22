@@ -1,5 +1,7 @@
 package covia.venue.server;
 
+import java.io.IOException;
+
 import org.eclipse.jetty.server.ServerConnector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -8,11 +10,18 @@ import convex.api.Convex;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Index;
+import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.AInteger;
 import convex.core.lang.RT;
+import convex.core.store.AStore;
+import convex.etch.EtchStore;
+import convex.node.NodeConfig;
+import convex.node.NodeServer;
 import covia.api.Fields;
+import covia.lattice.Covia;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.LocalVenue;
@@ -43,9 +52,12 @@ public class VenueServer {
 	public static Logger log=LoggerFactory.getLogger(VenueServer.class);;
 	
 	protected final Config config;
-	
+
 	protected Convex convex;
 	protected Javalin javalin;
+
+	/** NodeServer manages lattice persistence and (future) replication */
+	protected NodeServer<Index<Keyword, ACell>> nodeServer;
 
 	protected CoviaWebApp webApp;
 	protected Engine engine;
@@ -59,7 +71,16 @@ public class VenueServer {
 	public VenueServer(AMap<AString,ACell> config) {
 		this.config=new Config(config);
 		this.convex=null; // TODO:
-		engine=Engine.createTemp(config);
+
+		// Create NodeServer with Covia lattice (local-only, no network port)
+		try {
+			AStore store = EtchStore.createTemp();
+			this.nodeServer = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			engine = new Engine(config, nodeServer.getCursor());
+		} catch (IOException e) {
+			throw new RuntimeException("Failed to create venue engine", e);
+		}
+
 		LocalVenue localVenue=new LocalVenue(engine);
 		webApp=new CoviaWebApp(engine);
 		api=new CoviaAPI(localVenue);
@@ -118,6 +139,14 @@ public class VenueServer {
 	 */
 	private synchronized void start(Integer port) {
 		close();
+
+		// Launch NodeServer (restore from store, start propagator)
+		try {
+			nodeServer.launch();
+		} catch (Exception e) {
+			throw new RuntimeException("NodeServer launch failed", e);
+		}
+
 		javalin=buildApp();
 		AuthMiddleware.register(javalin, engine.getAccountKey(), engine.getAuth());
 		addLoginRoutes(javalin);
@@ -219,6 +248,9 @@ public class VenueServer {
 			ctx.header("access-control-allow-private-network", "true");
 		});
 
+		// Sync lattice state after API mutations to trigger persistence
+		app.after("/api/*", ctx -> engine.syncState());
+
 
 		return app;
 	}
@@ -268,6 +300,13 @@ public class VenueServer {
 		if (javalin!=null) {
 			javalin.stop();
 			javalin=null;
+		}
+		if (nodeServer!=null) {
+			try {
+				nodeServer.close(); // final sync + persist
+			} catch (IOException e) {
+				log.warn("NodeServer close failed", e);
+			}
 		}
 	}
 }

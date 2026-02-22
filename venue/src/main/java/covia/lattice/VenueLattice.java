@@ -241,7 +241,7 @@ public class VenueLattice extends ALattice<AMap<Keyword, ACell>> {
 	@Override
 	public AMap<Keyword, ACell> zero() {
 		return Maps.of(
-			ASSETS, Maps.empty(),
+			ASSETS, Index.none(),
 			JOBS, Index.none(),
 			USERS, Maps.empty(),
 			STORAGE, Index.none(),

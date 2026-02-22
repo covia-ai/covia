@@ -132,10 +132,16 @@ public class LatticeStorage extends AStorage {
 	/**
 	 * Store a blob with the given hash.
 	 */
+	@SuppressWarnings("unchecked")
 	private void storeBlob(Hash hash, ABlob blob) {
-		Index<ABlob, ABlob> current = getState();
-		Index<ABlob, ABlob> updated = current.assoc(hash, blob);
-		setState(updated);
+		if (cursor != null) {
+			cursor.updateAndGet(current -> {
+				Index<ABlob, ABlob> idx = (current != null) ? (Index<ABlob, ABlob>) current : Index.none();
+				return idx.assoc(hash, blob);
+			});
+		} else {
+			localState = localState.assoc(hash, blob);
+		}
 	}
 
 	@Override
@@ -173,12 +179,18 @@ public class LatticeStorage extends AStorage {
 
 		// Note: In a true CRDT, deletes are not supported (grow-only).
 		// This implementation removes locally but may be restored on merge.
-		Index<ABlob, ABlob> current = getState();
-		if (!current.containsKey(hash)) {
+		if (!exists(hash)) {
 			return false;
 		}
-		Index<ABlob, ABlob> updated = current.dissoc(hash);
-		setState(updated);
+		if (cursor != null) {
+			cursor.updateAndGet(current -> {
+				@SuppressWarnings("unchecked")
+				Index<ABlob, ABlob> idx = (current != null) ? (Index<ABlob, ABlob>) current : Index.none();
+				return idx.dissoc(hash);
+			});
+		} else {
+			localState = localState.dissoc(hash);
+		}
 		return true;
 	}
 

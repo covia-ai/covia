@@ -49,7 +49,7 @@ public class VenueLatticeTest {
 		assertTrue(zero.containsKey(VenueLattice.JOBS), "Zero should contain :jobs");
 
 		// All fields should be empty
-		assertEquals(Maps.empty(), zero.get(VenueLattice.ASSETS));
+		assertEquals(Index.none(), zero.get(VenueLattice.ASSETS));
 		assertEquals(Index.none(), zero.get(VenueLattice.JOBS));
 	}
 
@@ -266,7 +266,7 @@ public class VenueLatticeTest {
 
 	private AMap<Keyword, ACell> createTestVenueState() {
 		return Maps.of(
-			VenueLattice.ASSETS, Maps.of(
+			VenueLattice.ASSETS, Index.of(
 				Strings.create("0xabc123"), Maps.of(
 					Strings.create("name"), Strings.create("Test Asset")
 				)
@@ -285,7 +285,7 @@ public class VenueLatticeTest {
 
 	private AMap<Keyword, ACell> createVenueStateWithAsset(String assetId, String name) {
 		return Maps.of(
-			VenueLattice.ASSETS, Maps.of(
+			VenueLattice.ASSETS, Index.of(
 				Strings.create(assetId), Maps.of(
 					Strings.create("name"), Strings.create(name)
 				)
