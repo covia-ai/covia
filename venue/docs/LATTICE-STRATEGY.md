@@ -36,9 +36,9 @@ The global lattice assumes all venues exist within a single logical namespace, i
 
 **Shared metadata pool.** The `:meta` index at grid level is content-addressed (`Hash → JSON string`). Since the same hash always maps to the same content, metadata can be safely deduplicated across venues. Asset records in `:assets` reference metadata by hash rather than embedding it.
 
-> **TODO: Value IDs for metadata.** Currently metadata is hashed as a JSON string. We will likely refactor to use Convex Value IDs (hash of the data structure's root encoding) instead. This gives structural identity rather than string identity — two metadata values with equivalent content but different JSON serialisation would share the same Value ID.
+> **Value IDs for metadata (DONE — Phase 1).** Asset IDs now use Convex Value IDs (CAD3 hash of the data structure's root encoding) instead of SHA256-of-JSON-string. This gives structural identity — two metadata values with equivalent content but different JSON serialisation share the same Value ID. See `Assets.calcID()`.
 
-> **TODO: Per-user structure.** Currently assets, jobs, etc. are flat indexes at the venue level. We will likely restructure to per-user lists (e.g. `:users → Index<UserID, {assets, jobs, ...}>`) so each user's state is grouped together. This enables more natural access control, selective sharing per user, and efficient user-scoped queries.
+> **Per-user structure (planned — Phase 2).** Currently assets, jobs, etc. are flat indexes at the venue level. Phase 2 will restructure to per-user cursors (MapLattice from user DID to per-user KeyedLattice) so each user's state is partitioned. This enables access control, visibility scoping, and efficient user-scoped queries. See GRID_LATTICE_DESIGN.md §12 Phase 2.
 
 ## Venue-Local State
 
@@ -278,20 +278,23 @@ If a venue crashes between persistence points, it loses operations since the las
 - Job recovery on restart: `recoverJobs()` walks the `:jobs` index — re-fires PENDING/STARTED jobs via adapter, restores PAUSED/INPUT_REQUIRED/AUTH_REQUIRED as live in-memory Job objects via `restoreJob()`
 - Verified by `VenueRestartTest`: create engine → run ops → persist → restart with same store → verify all state survives
 
-### Phase 3: Signing
-- Wrap venue state in `SignedData` using venue's Ed25519 keypair
-- Sign on persistence and replication boundaries
-- Verify foreign signatures on merge
+### Phase 3: Signing (Complete)
+- Venue state wrapped in `SignedData` via `OwnerLattice` + `SignedLattice`
+- Sign on sync boundaries (forked cursor → parent merge triggers re-sign)
+- Verify foreign signatures on merge via `SignedLattice.checkForeign()`
+- `LatticeContext` carries keypair for re-signing after merge
 
-### Phase 4: Replication
+### Phase 4: Replication (Future)
 - Protocol for exchanging signed lattice values between venues
 - Selective sharing (choose which components to export)
 - Resilience: backup venue receives and merges primary's state
 
-### Phase 5: Federation
+### Phase 5: Federation (Future)
 - Cross-venue lattice merge for asset discovery
 - Shared `:meta` pool for deduplicated metadata
 - Trust policies: which venues to accept state from
+
+**Note:** Per-user cursors, capability enforcement, and the operations registry are tracked in GRID_LATTICE_DESIGN.md §12 (Phases 2–6). This document covers lattice infrastructure phases; the design doc covers feature phases.
 
 ## Lattice Type Reference
 
@@ -309,11 +312,16 @@ If a venue crashes between persistence points, it loses operations since the las
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 | `ALatticeCursor<V>` | Cursor with lattice-aware fork/sync (merge on sync) |
 
-### Covia Types
+### Covia Definitions
 
-| Type | Extends | Purpose |
-|------|---------|---------|
-| `GridLattice` | `ALattice<AMap<Keyword, ACell>>` | Top-level grid state (venues + meta) |
-| `VenueLattice` | `ALattice<AMap<Keyword, ACell>>` | Per-venue state (assets, jobs, users, storage) |
-| `CASLattice<K,V>` | `ALattice<Index<K,V>>` | Content-addressed union merge |
-| `Covia` | (constants) | Root lattice definition (`Covia.ROOT`) |
+The `covia.lattice.Covia` class defines the complete lattice hierarchy using standard convex-core generics (no custom lattice subclasses):
+
+| Definition | Type | Purpose |
+|------------|------|---------|
+| `Covia.ROOT` | `KeyedLattice` | Root lattice — `:grid` containing `:venues` and `:meta` |
+| `Covia.VENUE` | `KeyedLattice` | Per-venue state — `:assets`, `:jobs`, `:users`, `:storage`, `:auth`, `:did` |
+| `:venues` child | `OwnerLattice` → `SignedLattice` → `KeyedLattice` | Per-AccountKey signed venue state |
+| `:assets`, `:storage`, `:meta` | `CASLattice` | Content-addressed union merge |
+| `:jobs` | `IndexLattice` + `LWWLattice` | Per-job last-writer-wins by `"updated"` timestamp |
+| `:users`, `:auth` | `MapLattice` + `LWWLattice` | Per-entry last-writer-wins by `"updated"` timestamp |
+| `:did` | `FunctionLattice` | First-writer-wins (set once at venue creation) |

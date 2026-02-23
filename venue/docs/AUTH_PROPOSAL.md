@@ -1,6 +1,6 @@
 # Authorization System Proposal
 
-**Status:** Proposal — for discussion, not yet approved for implementation.
+**Status:** Superseded — replaced by the UCAN capability model in GRID_LATTICE_DESIGN.md §6. The role/keyword-set approach described here has been dropped in favour of lattice-native UCAN `with`/`can` pairs from the start, with minimal single-venue enforcement first. This document is retained for historical reference.
 
 ## Problem
 

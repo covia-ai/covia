@@ -133,7 +133,7 @@ This gives human-readable provenance ("which op") and exact reproducibility ("wh
 
 Lifecycle-managed execution records. Created by `invoke()`, transition through a state machine. Jobs are the **caller-facing accountability unit** — they answer "what happened with my request?"
 
-**Lifecycle:** `created → queued → running → complete | failed`
+**Lifecycle:** `PENDING → STARTED → COMPLETE | FAILED | CANCELLED` (also `PAUSED`, `INPUT_REQUIRED`, `AUTH_REQUIRED`)
 
 - `/j/<id>/status` — mutable during execution, enforces valid state transitions only
 - `/j/<id>/inputs` — pinned immutable values at invocation time
@@ -505,7 +505,7 @@ The six namespaces form a natural grid. `/a/` is the universal immutable layer t
 
 Default read postures: `/o/` defaults open (code is inspectable), `/w/` and `/a/` default private (user data), `/s/` read returns ciphertext (decryption requires explicit capability).
 
-### 5.4 Output Convention
+### 5.5 Output Convention
 
 Operation output is arbitrary CAD3. The lattice stores and hashes any valid CAD3 value. However, JSON-like outputs enable path navigation into results, chaining into subsequent operations, human-readable inspection in UIs, and interop with the wider ecosystem.
 
@@ -928,13 +928,13 @@ Changes:
 - `AssetStore.store()` — computes ID from parsed metaMap
 - Content SHA256 verification (`putContent`) is unchanged — that's payload integrity, not identity
 
-### Phase 2: Per-User Cursors
+### Phase 2: Per-User Cursors + Capability Enforcement
 
-Separate venue state into per-user cursors so each user's data is partitioned.
+Separate venue state into per-user cursors and enforce access control using lattice-native UCAN `with`/`can` pairs. These go together — user segregation without enforcement is pointless, and enforcement without user scoping has nothing to protect.
 
-Why next: prerequisite for any meaningful access control. Currently all assets/jobs are in a flat venue-wide index with no user scoping. Per-user cursors partition data by user identity, enable visibility scoping, and provide the foundation for capability-based access.
+**Per-user cursors:** Partition venue state by caller DID so each user's data is isolated. The venue manages user state on users' behalf (users authenticate via OAuth or self-issued JWTs, not necessarily key pairs). Per-user state lives inside the venue's signed boundary — it's a MapLattice from user DID to per-user lattice, NOT a per-user OwnerLattice (the venue can't sign as the user).
 
-The venue manages user state on users' behalf (users authenticate via OAuth, not key pairs). Per-user state lives inside the venue's signed boundary — it's a MapLattice from user DID to per-user lattice, NOT a per-user OwnerLattice (the venue can't sign as the user).
+**Capability enforcement:** Use UCAN-style `with`/`can` pairs as the representation model from the start. Capabilities are lattice-native maps (not JWT/base64) stored directly in venue state. Start with single-venue enforcement — no delegation chains or cross-venue proof walking yet.
 
 Lattice structure change:
 
@@ -946,13 +946,43 @@ Lattice structure change:
       :jobs      → IndexLattice (venue-managed jobs)
       :ops       → MapLattice (venue operation registry)
       :users     → MapLattice (DID → user record/profile)
-      :user-data → MapLattice (DID → per-user KeyedLattice)  ← NEW
+      :caps      → MapLattice (DID → capability set)              ← NEW
+      :user-data → MapLattice (DID → per-user KeyedLattice)       ← NEW
         <user-DID-string> → KeyedLattice
           :workspace → MapLattice (user scratch space)
           :assets    → CASLattice (user-created assets)
           :jobs      → MapLattice (user's job history)
           :ops       → MapLattice (user's named operations)
 ```
+
+**Capability representation (lattice-native):**
+
+```
+:caps → MapLattice (DID → capability set)
+  "did:key:zAlice..." → [
+    { "with": "<venue-did>/o/", "can": "/invoke" },
+    { "with": "<venue-did>/a/", "can": "/crud/read" },
+    { "with": "<venue-did>/w/", "can": "/crud/write" }
+  ]
+  "did:key:zBob..." → [
+    { "with": "<venue-did>/", "can": "/" }           # full access
+  ]
+  :defaults → [                                       # anonymous/public DID
+    { "with": "<venue-did>/o/", "can": "/invoke" },
+    { "with": "<venue-did>/a/", "can": "/crud/read" }
+  ]
+```
+
+Each capability is a `with` (resource URI) + `can` (command) pair — the same UCAN `att` structure from §6. Resources use the DID path scheme. Commands use the slash-delimited hierarchy from §6.2. This representation is forward-compatible with full UCAN tokens (delegation chains, signatures, expiry) without any data model change — a UCAN token wraps the same `att` pairs with additional fields.
+
+**Enforcement (minimal, venue-level):**
+
+- Engine checks caller's capabilities before executing any action
+- Resource matching: path prefix — `<did>/o/` grants access to all operations under that venue
+- Command matching: prefix — `/crud` grants `/crud/read`, `/crud/write`, `/crud/delete`
+- Venue operator configures capabilities per DID via `:caps` in venue state
+- `:defaults` entry applies to unauthenticated/public DID
+- No delegation chains yet — capabilities are granted directly by the venue operator
 
 Venue-level `:assets` and `:jobs` remain for venue-owned state (adapter registrations, system jobs). User-level state holds user-created content and user-initiated jobs.
 
@@ -961,6 +991,8 @@ Key design decisions:
 - No per-user signing — venue signs all state within its OwnerLattice boundary
 - `VenueState` gains `userData(AString did)` accessor returning a per-user cursor
 - API routes scope reads/writes to the caller's user data by default
+- Capabilities are lattice-native maps (AVector of AMaps), not JWT strings
+- Same `with`/`can` representation as full UCAN — forward-compatible
 
 ### Phase 3: Operations Registry (`/o/`)
 
@@ -981,14 +1013,16 @@ On invoke, the current definition is pinned to `/a/` (immutable snapshot). Job r
 
 Lattice: add `:ops` to the venue KeyedLattice (MapLattice with LWW merge). Per-user ops under user cursor.
 
-### Phase 4: UCAN Capabilities
+### Phase 4: UCAN Delegation Chains
 
-Replace the current skeleton AccessControl with UCAN `with`/`can` pairs. Start single-level (no delegation chains).
+Extend the capability model from Phase 2 with full UCAN features: signed tokens, delegation chains, expiry, revocation. The `with`/`can` representation is already in place — this phase adds the cryptographic wrapper.
 
-- Resources: DID paths (`<did>/a/<hash>`, `<did>/o/name`, etc.)
-- Commands: `/crud/read`, `/crud/write`, `/invoke`, `/secret/decrypt`
-- Enforce at Engine invocation boundary
-- UCAN tokens stored as lattice values in `/a/`
+- UCAN tokens stored as content-addressable lattice values in `/a/`
+- Delegation: issuer signs UCAN granting subset of own capabilities to audience
+- Proof chains: each UCAN references parent UCANs via `/a/` hashes
+- Verification: walk chain, verify signatures, check attenuation at each step
+- Revocation: signed revocation records referencing UCAN `/a/` hash
+- Cross-venue: UCAN travels with job submissions, any venue verifies locally
 
 ### Phase 5: Agent Model (`/g/`)
 
