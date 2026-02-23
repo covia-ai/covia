@@ -10,7 +10,7 @@ import convex.core.data.Index;
 import convex.lattice.cursor.ACursor;
 import covia.grid.AContent;
 import covia.grid.impl.BlobContent;
-import covia.lattice.CASLattice;
+import convex.lattice.generic.CASLattice;
 
 /**
  * Content-addressed storage backed by a CASLattice and lattice cursor.

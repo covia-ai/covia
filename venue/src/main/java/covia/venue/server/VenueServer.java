@@ -18,6 +18,7 @@ import convex.core.data.prim.AInteger;
 import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.etch.EtchStore;
+import convex.lattice.LatticeContext;
 import convex.node.NodeConfig;
 import convex.node.NodeServer;
 import covia.api.Fields;
@@ -77,6 +78,8 @@ public class VenueServer {
 			AStore store = EtchStore.createTemp();
 			this.nodeServer = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			engine = new Engine(config, nodeServer.getCursor());
+			// Set merge context so propagator can re-sign after OwnerLattice merge
+			nodeServer.setMergeContext(LatticeContext.create(null, engine.getKeyPair()));
 		} catch (IOException e) {
 			throw new RuntimeException("Failed to create venue engine", e);
 		}

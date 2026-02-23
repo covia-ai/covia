@@ -11,54 +11,42 @@ import org.junit.jupiter.api.Test;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
-import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.ALattice;
+import convex.lattice.generic.KeyedLattice;
 
 /**
- * Tests for VenueLattice CRDT properties and merge semantics.
+ * Tests for Covia venue lattice CRDT properties and merge semantics.
+ *
+ * <p>Uses {@link Covia#VENUE}, a {@link KeyedLattice} that defines per-venue
+ * state with keyword-keyed fields (assets, jobs, users, storage, auth, did).
  */
 public class VenueLatticeTest {
 
-	private VenueLattice lattice;
+	private KeyedLattice lattice;
 
 	@BeforeEach
 	public void setup() {
-		lattice = VenueLattice.create();
+		lattice = Covia.VENUE;
 	}
 
 	// ========== Basic Lattice Properties ==========
 
 	@Test
-	public void testSingletonInstance() {
-		VenueLattice l1 = VenueLattice.create();
-		VenueLattice l2 = VenueLattice.create();
-		assertSame(l1, l2, "VenueLattice should be a singleton");
-		assertSame(VenueLattice.INSTANCE, l1);
-	}
-
-	@Test
 	public void testZeroValue() {
-		AMap<Keyword, ACell> zero = lattice.zero();
+		Index<Keyword, ACell> zero = lattice.zero();
 		assertNotNull(zero, "Zero value should not be null");
-		assertTrue(zero.containsKey(VenueLattice.ASSETS), "Zero should contain :assets");
-		assertTrue(zero.containsKey(VenueLattice.JOBS), "Zero should contain :jobs");
-		assertTrue(zero.containsKey(VenueLattice.DID), "Zero should contain :did");
-
-		// All fields should be empty
-		assertEquals(Index.none(), zero.get(VenueLattice.ASSETS));
-		assertEquals(Index.none(), zero.get(VenueLattice.JOBS));
-		assertNull(zero.get(VenueLattice.DID), "DID should be null in zero");
+		assertTrue(zero.isEmpty(), "Zero value should be an empty Index");
 	}
 
 	@Test
 	public void testCheckForeign() {
 		assertTrue(lattice.checkForeign(lattice.zero()));
-		assertTrue(lattice.checkForeign(Maps.empty()));
+		assertTrue(lattice.checkForeign(Index.none()));
 		assertEquals(false, lattice.checkForeign(null));
 	}
 
@@ -66,7 +54,7 @@ public class VenueLatticeTest {
 
 	@Test
 	public void testMergeWithNull() {
-		AMap<Keyword, ACell> value = lattice.zero();
+		Index<Keyword, ACell> value = lattice.zero();
 
 		// merge(value, null) should return value
 		assertSame(value, lattice.merge(value, null));
@@ -82,16 +70,16 @@ public class VenueLatticeTest {
 
 	@Test
 	public void testIdempotency() {
-		AMap<Keyword, ACell> value = createTestVenueState();
+		Index<Keyword, ACell> value = createTestVenueState();
 
 		// merge(a, a) == a
-		AMap<Keyword, ACell> merged = lattice.merge(value, value);
+		Index<Keyword, ACell> merged = lattice.merge(value, value);
 		assertSame(value, merged, "Merge with self should return same instance");
 	}
 
 	@Test
 	public void testIdempotencyWithZero() {
-		AMap<Keyword, ACell> zero = lattice.zero();
+		Index<Keyword, ACell> zero = lattice.zero();
 
 		// merge(zero, zero) == zero
 		assertSame(zero, lattice.merge(zero, zero));
@@ -101,22 +89,22 @@ public class VenueLatticeTest {
 
 	@Test
 	public void testCommutativity() {
-		AMap<Keyword, ACell> v1 = createVenueStateWithAsset("asset1", "data1");
-		AMap<Keyword, ACell> v2 = createVenueStateWithAsset("asset2", "data2");
+		Index<Keyword, ACell> v1 = createVenueStateWithAsset("asset1", "data1");
+		Index<Keyword, ACell> v2 = createVenueStateWithAsset("asset2", "data2");
 
-		AMap<Keyword, ACell> merge12 = lattice.merge(v1, v2);
-		AMap<Keyword, ACell> merge21 = lattice.merge(v2, v1);
+		Index<Keyword, ACell> merge12 = lattice.merge(v1, v2);
+		Index<Keyword, ACell> merge21 = lattice.merge(v2, v1);
 
 		assertEquals(merge12, merge21, "Merge should be commutative");
 	}
 
 	@Test
 	public void testCommutativityWithJobs() {
-		AMap<Keyword, ACell> v1 = createVenueStateWithJob("job1", "PENDING", 1000L);
-		AMap<Keyword, ACell> v2 = createVenueStateWithJob("job2", "COMPLETE", 2000L);
+		Index<Keyword, ACell> v1 = createVenueStateWithJob("job1", "PENDING", 1000L);
+		Index<Keyword, ACell> v2 = createVenueStateWithJob("job2", "COMPLETE", 2000L);
 
-		AMap<Keyword, ACell> merge12 = lattice.merge(v1, v2);
-		AMap<Keyword, ACell> merge21 = lattice.merge(v2, v1);
+		Index<Keyword, ACell> merge12 = lattice.merge(v1, v2);
+		Index<Keyword, ACell> merge21 = lattice.merge(v2, v1);
 
 		assertEquals(merge12, merge21, "Merge should be commutative for jobs");
 	}
@@ -125,13 +113,13 @@ public class VenueLatticeTest {
 
 	@Test
 	public void testAssociativity() {
-		AMap<Keyword, ACell> v1 = createVenueStateWithAsset("asset1", "data1");
-		AMap<Keyword, ACell> v2 = createVenueStateWithAsset("asset2", "data2");
-		AMap<Keyword, ACell> v3 = createVenueStateWithAsset("asset3", "data3");
+		Index<Keyword, ACell> v1 = createVenueStateWithAsset("asset1", "data1");
+		Index<Keyword, ACell> v2 = createVenueStateWithAsset("asset2", "data2");
+		Index<Keyword, ACell> v3 = createVenueStateWithAsset("asset3", "data3");
 
 		// merge(merge(a,b), c) == merge(a, merge(b,c))
-		AMap<Keyword, ACell> left = lattice.merge(lattice.merge(v1, v2), v3);
-		AMap<Keyword, ACell> right = lattice.merge(v1, lattice.merge(v2, v3));
+		Index<Keyword, ACell> left = lattice.merge(lattice.merge(v1, v2), v3);
+		Index<Keyword, ACell> right = lattice.merge(v1, lattice.merge(v2, v3));
 
 		assertEquals(left, right, "Merge should be associative");
 	}
@@ -140,8 +128,8 @@ public class VenueLatticeTest {
 
 	@Test
 	public void testZeroIdentity() {
-		AMap<Keyword, ACell> value = createTestVenueState();
-		AMap<Keyword, ACell> zero = lattice.zero();
+		Index<Keyword, ACell> value = createTestVenueState();
+		Index<Keyword, ACell> zero = lattice.zero();
 
 		// merge(value, zero) == value
 		assertEquals(value, lattice.merge(value, zero));
@@ -154,13 +142,13 @@ public class VenueLatticeTest {
 
 	@Test
 	public void testAssetsMergeUnion() {
-		AMap<Keyword, ACell> v1 = createVenueStateWithAsset("0x1111", "asset1");
-		AMap<Keyword, ACell> v2 = createVenueStateWithAsset("0x2222", "asset2");
+		Index<Keyword, ACell> v1 = createVenueStateWithAsset("0x1111", "asset1");
+		Index<Keyword, ACell> v2 = createVenueStateWithAsset("0x2222", "asset2");
 
-		AMap<Keyword, ACell> merged = lattice.merge(v1, v2);
+		Index<Keyword, ACell> merged = lattice.merge(v1, v2);
 
 		@SuppressWarnings("unchecked")
-		AMap<ACell, ACell> assets = (AMap<ACell, ACell>) merged.get(VenueLattice.ASSETS);
+		AMap<ACell, ACell> assets = (AMap<ACell, ACell>) merged.get(Covia.ASSETS);
 
 		assertEquals(2, assets.count(), "Merged assets should contain both entries");
 		assertNotNull(assets.get(Strings.create("0x1111")));
@@ -170,13 +158,13 @@ public class VenueLatticeTest {
 	@Test
 	public void testAssetsMergeSameKey() {
 		// Same key should keep the first value (content-addressed means same ID = same content)
-		AMap<Keyword, ACell> v1 = createVenueStateWithAsset("0x1111", "data");
-		AMap<Keyword, ACell> v2 = createVenueStateWithAsset("0x1111", "data");
+		Index<Keyword, ACell> v1 = createVenueStateWithAsset("0x1111", "data");
+		Index<Keyword, ACell> v2 = createVenueStateWithAsset("0x1111", "data");
 
-		AMap<Keyword, ACell> merged = lattice.merge(v1, v2);
+		Index<Keyword, ACell> merged = lattice.merge(v1, v2);
 
 		@SuppressWarnings("unchecked")
-		AMap<ACell, ACell> assets = (AMap<ACell, ACell>) merged.get(VenueLattice.ASSETS);
+		AMap<ACell, ACell> assets = (AMap<ACell, ACell>) merged.get(Covia.ASSETS);
 
 		assertEquals(1, assets.count(), "Same key should not duplicate");
 	}
@@ -185,13 +173,13 @@ public class VenueLatticeTest {
 
 	@Test
 	public void testJobsMergeNewerWins() {
-		AMap<Keyword, ACell> v1 = createVenueStateWithJob("job1", "PENDING", 1000L);
-		AMap<Keyword, ACell> v2 = createVenueStateWithJob("job1", "COMPLETE", 2000L);
+		Index<Keyword, ACell> v1 = createVenueStateWithJob("job1", "PENDING", 1000L);
+		Index<Keyword, ACell> v2 = createVenueStateWithJob("job1", "COMPLETE", 2000L);
 
-		AMap<Keyword, ACell> merged = lattice.merge(v1, v2);
+		Index<Keyword, ACell> merged = lattice.merge(v1, v2);
 
 		@SuppressWarnings("unchecked")
-		AMap<ACell, ACell> jobs = (AMap<ACell, ACell>) merged.get(VenueLattice.JOBS);
+		AMap<ACell, ACell> jobs = (AMap<ACell, ACell>) merged.get(Covia.JOBS);
 		@SuppressWarnings("unchecked")
 		AMap<ACell, ACell> job = (AMap<ACell, ACell>) jobs.get(Strings.create("job1"));
 
@@ -202,13 +190,13 @@ public class VenueLatticeTest {
 	@Test
 	public void testJobsMergeOlderLoses() {
 		// v1 has newer timestamp
-		AMap<Keyword, ACell> v1 = createVenueStateWithJob("job1", "COMPLETE", 2000L);
-		AMap<Keyword, ACell> v2 = createVenueStateWithJob("job1", "PENDING", 1000L);
+		Index<Keyword, ACell> v1 = createVenueStateWithJob("job1", "COMPLETE", 2000L);
+		Index<Keyword, ACell> v2 = createVenueStateWithJob("job1", "PENDING", 1000L);
 
-		AMap<Keyword, ACell> merged = lattice.merge(v1, v2);
+		Index<Keyword, ACell> merged = lattice.merge(v1, v2);
 
 		@SuppressWarnings("unchecked")
-		AMap<ACell, ACell> jobs = (AMap<ACell, ACell>) merged.get(VenueLattice.JOBS);
+		AMap<ACell, ACell> jobs = (AMap<ACell, ACell>) merged.get(Covia.JOBS);
 		@SuppressWarnings("unchecked")
 		AMap<ACell, ACell> job = (AMap<ACell, ACell>) jobs.get(Strings.create("job1"));
 
@@ -218,13 +206,13 @@ public class VenueLatticeTest {
 
 	@Test
 	public void testJobsMergeDifferentJobs() {
-		AMap<Keyword, ACell> v1 = createVenueStateWithJob("job1", "PENDING", 1000L);
-		AMap<Keyword, ACell> v2 = createVenueStateWithJob("job2", "COMPLETE", 2000L);
+		Index<Keyword, ACell> v1 = createVenueStateWithJob("job1", "PENDING", 1000L);
+		Index<Keyword, ACell> v2 = createVenueStateWithJob("job2", "COMPLETE", 2000L);
 
-		AMap<Keyword, ACell> merged = lattice.merge(v1, v2);
+		Index<Keyword, ACell> merged = lattice.merge(v1, v2);
 
 		@SuppressWarnings("unchecked")
-		AMap<ACell, ACell> jobs = (AMap<ACell, ACell>) merged.get(VenueLattice.JOBS);
+		AMap<ACell, ACell> jobs = (AMap<ACell, ACell>) merged.get(Covia.JOBS);
 
 		assertEquals(2, jobs.count(), "Different jobs should both be present");
 	}
@@ -233,14 +221,14 @@ public class VenueLatticeTest {
 
 	@Test
 	public void testPathNavigation() {
-		ALattice<ACell> assetsLattice = lattice.path(VenueLattice.ASSETS);
-		ALattice<ACell> jobsLattice = lattice.path(VenueLattice.JOBS);
+		ALattice<ACell> assetsLattice = Covia.VENUE.path(Covia.ASSETS);
+		ALattice<ACell> jobsLattice = Covia.VENUE.path(Covia.JOBS);
 
 		assertNotNull(assetsLattice, "Should return assets lattice");
 		assertNotNull(jobsLattice, "Should return jobs lattice");
 
 		// Unknown key should return null
-		assertNull(lattice.path(Keyword.intern("unknown")));
+		assertNull(Covia.VENUE.path(Keyword.intern("unknown")));
 	}
 
 	@Test
@@ -252,10 +240,10 @@ public class VenueLatticeTest {
 
 	@Test
 	public void testMergeStability() {
-		AMap<Keyword, ACell> v1 = createTestVenueState();
-		AMap<Keyword, ACell> v2 = createTestVenueState();
+		Index<Keyword, ACell> v1 = createTestVenueState();
+		Index<Keyword, ACell> v2 = createTestVenueState();
 
-		AMap<Keyword, ACell> merged = lattice.merge(v1, v2);
+		Index<Keyword, ACell> merged = lattice.merge(v1, v2);
 
 		// Merging with the merge result should be stable
 		assertEquals(merged, lattice.merge(v1, merged));
@@ -266,46 +254,38 @@ public class VenueLatticeTest {
 
 	// ========== Helper Methods ==========
 
-	private AMap<Keyword, ACell> createTestVenueState() {
-		return Maps.of(
-			VenueLattice.ASSETS, Index.of(
+	private Index<Keyword, ACell> createTestVenueState() {
+		return Covia.VENUE.zero()
+			.assoc(Covia.ASSETS, Index.of(
 				Strings.create("0xabc123"), Maps.of(
 					Strings.create("name"), Strings.create("Test Asset")
 				)
-			),
-			VenueLattice.JOBS, Index.of(
+			))
+			.assoc(Covia.JOBS, Index.of(
 				Strings.create("job123"), Maps.of(
 					Strings.create("status"), Strings.create("COMPLETE"),
 					Strings.create("updated"), CVMLong.create(1000L)
 				)
-			),
-			VenueLattice.USERS, Maps.empty(),
-			VenueLattice.STORAGE, Index.none(),
-			VenueLattice.AUTH, Maps.empty(),
-			VenueLattice.DID, Strings.create("did:key:test")
-		);
+			))
+			.assoc(Covia.DID, Strings.create("did:key:test"));
 	}
 
-	private AMap<Keyword, ACell> createVenueStateWithAsset(String assetId, String name) {
-		return Maps.of(
-			VenueLattice.ASSETS, Index.of(
+	private Index<Keyword, ACell> createVenueStateWithAsset(String assetId, String name) {
+		return Covia.VENUE.zero()
+			.assoc(Covia.ASSETS, Index.of(
 				Strings.create(assetId), Maps.of(
 					Strings.create("name"), Strings.create(name)
 				)
-			),
-			VenueLattice.JOBS, Index.none()
-		);
+			));
 	}
 
-	private AMap<Keyword, ACell> createVenueStateWithJob(String jobId, String status, long timestamp) {
-		return Maps.of(
-			VenueLattice.ASSETS, Maps.empty(),
-			VenueLattice.JOBS, Index.of(
+	private Index<Keyword, ACell> createVenueStateWithJob(String jobId, String status, long timestamp) {
+		return Covia.VENUE.zero()
+			.assoc(Covia.JOBS, Index.of(
 				Strings.create(jobId), Maps.of(
 					Strings.create("status"), Strings.create(status),
 					Strings.create("updated"), CVMLong.create(timestamp)
 				)
-			)
-		);
+			));
 	}
 }

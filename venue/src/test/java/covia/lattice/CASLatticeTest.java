@@ -15,6 +15,7 @@ import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Strings;
+import convex.lattice.generic.CASLattice;
 
 /**
  * Tests for CASLattice (Content-Addressed Storage Lattice) CRDT properties.

@@ -26,7 +26,7 @@ import convex.core.crypto.Hashing;
 import convex.lattice.cursor.ACursor;
 import convex.lattice.cursor.Cursors;
 import covia.grid.AContent;
-import covia.lattice.CASLattice;
+import convex.lattice.generic.CASLattice;
 import covia.lattice.Covia;
 import covia.lattice.GridLattice;
 import covia.lattice.VenueLattice;

@@ -12,7 +12,6 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AHashMap;
-import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Hash;
 import convex.core.data.Index;
@@ -23,12 +22,17 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.lattice.ALattice;
 import convex.lattice.LatticeContext;
+import convex.lattice.generic.KeyedLattice;
 
 /**
  * Tests for Covia.ROOT lattice CRDT properties and structure.
  */
 @SuppressWarnings("unchecked")
 public class CoviaTest {
+
+	// Grid lattice for building state
+	@SuppressWarnings("rawtypes")
+	private static final KeyedLattice gridLattice = (KeyedLattice) (ALattice) Covia.ROOT.path(Covia.GRID);
 
 	// Test keypairs for signing venue data
 	private static final AKeyPair kp1 = AKeyPair.generate();
@@ -58,9 +62,9 @@ public class CoviaTest {
 		assertTrue(empty.containsKey(Covia.GRID));
 
 		// Grid should contain venues and meta
-		AMap<Keyword, ACell> grid = (AMap<Keyword, ACell>) empty.get(Covia.GRID);
-		assertTrue(grid.containsKey(GridLattice.VENUES));
-		assertTrue(grid.containsKey(GridLattice.META));
+		Index<Keyword, ACell> grid = (Index<Keyword, ACell>) empty.get(Covia.GRID);
+		assertTrue(grid.containsKey(Covia.VENUES));
+		assertTrue(grid.containsKey(Covia.META));
 	}
 
 	@Test
@@ -149,7 +153,7 @@ public class CoviaTest {
 	@Test
 	public void testPathToGrid() {
 		ALattice<ACell> gridLattice = Covia.ROOT.path(Covia.GRID);
-		assertNotNull(gridLattice, "Should return GridLattice");
+		assertNotNull(gridLattice, "Should return grid KeyedLattice");
 	}
 
 	@Test
@@ -168,7 +172,7 @@ public class CoviaTest {
 		ALattice<ACell> gridLattice = Covia.ROOT.path(Covia.GRID);
 		assertNotNull(gridLattice);
 
-		ALattice<ACell> venuesLattice = gridLattice.path(GridLattice.VENUES);
+		ALattice<ACell> venuesLattice = gridLattice.path(Covia.VENUES);
 		assertNotNull(venuesLattice);
 
 		// Any owner key under OwnerLattice should return SignedLattice
@@ -181,47 +185,43 @@ public class CoviaTest {
 	@Test
 	public void testFullStateMerge() {
 		// Create two complete states with different venues and meta
-		AMap<Keyword, ACell> venueState1 = Maps.of(
-			VenueLattice.ASSETS, Index.of(Strings.create("0xasset1"), Maps.empty()),
-			VenueLattice.JOBS, Index.of(
+		Index<Keyword, ACell> venueState1 = Covia.VENUE.zero()
+			.assoc(Covia.ASSETS, Index.of(Strings.create("0xasset1"), Maps.empty()))
+			.assoc(Covia.JOBS, Index.of(
 				Strings.create("job1"), Maps.of(
 					Strings.create("status"), Strings.create("COMPLETE"),
 					Strings.create("updated"), CVMLong.create(1000L)
 				)
-			)
-		);
+			));
 
-		AMap<Keyword, ACell> venueState2 = Maps.of(
-			VenueLattice.ASSETS, Index.of(Strings.create("0xasset2"), Maps.empty()),
-			VenueLattice.JOBS, Index.of(
+		Index<Keyword, ACell> venueState2 = Covia.VENUE.zero()
+			.assoc(Covia.ASSETS, Index.of(Strings.create("0xasset2"), Maps.empty()))
+			.assoc(Covia.JOBS, Index.of(
 				Strings.create("job2"), Maps.of(
 					Strings.create("status"), Strings.create("PENDING"),
 					Strings.create("updated"), CVMLong.create(2000L)
 				)
-			)
-		);
+			));
 
-		AMap<Keyword, ACell> grid1 = Maps.of(
-			GridLattice.VENUES, Maps.of(kp1.getAccountKey(), kp1.signData(venueState1)),
-			GridLattice.META, Index.of(testHash1, "{\"name\":\"Asset 1\"}")
-		);
+		Index<Keyword, ACell> grid1 = gridLattice.zero()
+			.assoc(Covia.VENUES, Maps.of(kp1.getAccountKey(), kp1.signData(venueState1)))
+			.assoc(Covia.META, Index.of(testHash1, "{\"name\":\"Asset 1\"}"));
 
-		AMap<Keyword, ACell> grid2 = Maps.of(
-			GridLattice.VENUES, Maps.of(kp2.getAccountKey(), kp2.signData(venueState2)),
-			GridLattice.META, Index.of(testHash2, "{\"name\":\"Asset 2\"}")
-		);
+		Index<Keyword, ACell> grid2 = gridLattice.zero()
+			.assoc(Covia.VENUES, Maps.of(kp2.getAccountKey(), kp2.signData(venueState2)))
+			.assoc(Covia.META, Index.of(testHash2, "{\"name\":\"Asset 2\"}"));
 
-		Index<Keyword, ACell> state1 = Index.of(Covia.GRID, grid1);
-		Index<Keyword, ACell> state2 = Index.of(Covia.GRID, grid2);
+		Index<Keyword, ACell> state1 = Covia.ROOT.zero().assoc(Covia.GRID, grid1);
+		Index<Keyword, ACell> state2 = Covia.ROOT.zero().assoc(Covia.GRID, grid2);
 
 		LatticeContext ctx = LatticeContext.create(null, kp1);
 		Index<Keyword, ACell> merged = Covia.ROOT.merge(ctx, state1, state2);
 
 		// Verify merged structure
-		AMap<Keyword, ACell> mergedGrid = (AMap<Keyword, ACell>) merged.get(Covia.GRID);
+		Index<Keyword, ACell> mergedGrid = (Index<Keyword, ACell>) merged.get(Covia.GRID);
 		AHashMap<ACell, SignedData<?>> venues =
-			(AHashMap<ACell, SignedData<?>>) mergedGrid.get(GridLattice.VENUES);
-		Index<ABlob, AString> meta = (Index<ABlob, AString>) mergedGrid.get(GridLattice.META);
+			(AHashMap<ACell, SignedData<?>>) mergedGrid.get(Covia.VENUES);
+		Index<ABlob, AString> meta = (Index<ABlob, AString>) mergedGrid.get(Covia.META);
 
 		assertEquals(2, venues.count(), "Should have 2 venues");
 		assertEquals(2, meta.count(), "Should have 2 meta entries");
@@ -233,29 +233,25 @@ public class CoviaTest {
 	 * Creates an empty but structured state, similar to Engine.initialiseLattice()
 	 */
 	private Index<Keyword, ACell> createEmptyState() {
-		return Index.of(Covia.GRID, GridLattice.INSTANCE.zero());
+		return Covia.ROOT.zero()
+			.assoc(Covia.GRID, gridLattice.zero()
+				.assoc(Covia.VENUES, Maps.empty())
+				.assoc(Covia.META, Index.none()));
 	}
 
 	private Index<Keyword, ACell> createTestState(AKeyPair kp) {
-		AMap<Keyword, ACell> venueState = Maps.of(
-			VenueLattice.ASSETS, Index.of(Strings.create("0xtest"), Maps.empty()),
-			VenueLattice.JOBS, Index.none()
-		);
+		Index<Keyword, ACell> venueState = Covia.VENUE.zero()
+			.assoc(Covia.ASSETS, Index.of(Strings.create("0xtest"), Maps.empty()));
 
-		AMap<Keyword, ACell> grid = Maps.of(
-			GridLattice.VENUES, Maps.of(kp.getAccountKey(), kp.signData(venueState)),
-			GridLattice.META, Index.of(testHash1, "{\"name\":\"Test\"}")
-		);
-
-		return Index.of(Covia.GRID, grid);
+		return Covia.ROOT.zero()
+			.assoc(Covia.GRID, gridLattice.zero()
+				.assoc(Covia.VENUES, Maps.of(kp.getAccountKey(), kp.signData(venueState)))
+				.assoc(Covia.META, Index.of(testHash1, "{\"name\":\"Test\"}")));
 	}
 
 	private Index<Keyword, ACell> createStateWithMeta(Hash metaHash, String jsonContent) {
-		AMap<Keyword, ACell> grid = Maps.of(
-			GridLattice.VENUES, Maps.empty(),
-			GridLattice.META, Index.of(metaHash, jsonContent)
-		);
-
-		return Index.of(Covia.GRID, grid);
+		return Covia.ROOT.zero()
+			.assoc(Covia.GRID, gridLattice.zero()
+				.assoc(Covia.META, Index.of(metaHash, jsonContent)));
 	}
 }

@@ -35,9 +35,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.did.DID;
-import convex.core.cvm.Keywords;
 import convex.lattice.LatticeContext;
-import convex.lattice.cursor.ACursor;
 import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.cursor.Cursors;
 import convex.lattice.cursor.RootLatticeCursor;
@@ -56,15 +54,12 @@ import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.grid.AContent;
 import covia.grid.Asset;
-import covia.grid.Assets;
 import covia.grid.Grid;
 import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Status;
 import covia.grid.Venue;
 import covia.lattice.Covia;
-import covia.lattice.GridLattice;
-import covia.lattice.VenueLattice;
 import covia.venue.api.CoviaAPI;
 import covia.venue.storage.AStorage;
 import covia.venue.storage.FileStorage;
@@ -77,12 +72,6 @@ public class Engine {
 
 	
 
-    // Structure of asset record
-	public static final long POS_JSON = 0;
-	public static final long POS_CONTENT= 1;
-	public static final long POS_META = 2;
-
-	
 	protected final Config config;
 
 	protected AKeyPair keyPair=AKeyPair.generate();
@@ -98,11 +87,8 @@ public class Engine {
  	 */
 	protected ALatticeCursor<Index<Keyword,ACell>> lattice;
 
-	/** Lattice cursor for assets data */
-	protected ACursor<Index<AString,AVector<ACell>>> assets;
-
-	/** Lattice cursor for jobs data (Index for natural time-ordering of timestamp-prefixed IDs) */
-	protected ACursor<Index<AString, ACell>> jobsCursor;
+	/** Venue state wrapper providing typed access to assets, jobs, and child cursors */
+	protected VenueState venueState;
 
 	/** Authentication and user management */
 	protected Auth auth;
@@ -206,47 +192,55 @@ public class Engine {
 			if (!Config.STORAGE_TYPE_LATTICE.equals(storageType)) {
 				log.warn("Unknown storage type '{}', defaulting to lattice", storageType);
 			}
-			// Create lattice storage backed by venue's :storage cursor
-			ACursor<Index<ABlob, ABlob>> storageCursor =
-				(ACursor<Index<ABlob, ABlob>>) (ACursor<?>) lattice.path(
-					Covia.GRID, GridLattice.VENUES, getAccountKey(), Keywords.VALUE, VenueLattice.STORAGE);
-			return new LatticeStorage(storageCursor);
+			return new LatticeStorage(venueState.storageCursor());
 		}
 	}
 
 	/**
-	 * Initialises child cursors and components from the lattice cursor.
+	 * Initialises venue state wrapper and components from the lattice cursor.
 	 * Ensures the venue entry exists at [:grid :venues &lt;accountKey&gt; :value].
 	 * Venues are keyed by AccountKey in OwnerLattice; the DID is stored inside venue state.
+	 *
+	 * <p>Bootstrap (DID initialisation) is performed on the connected cursor so
+	 * the write is signed immediately — other peers need a signed DID to accept
+	 * the venue. After bootstrap, the cursor is forked: all subsequent writes
+	 * accumulate locally (unsigned) until {@link #syncState()} calls
+	 * {@link VenueState#sync()}, which merges and signs once.</p>
 	 */
-	@SuppressWarnings("unchecked")
 	protected void initialiseFromCursor() {
-		AccountKey ownerKey = getAccountKey();
-
-		// Navigate through OwnerLattice → SignedLattice → VenueLattice
-		// The :value step crosses the SignedLattice boundary (SignedCursor auto-inserted)
-		ALatticeCursor<ACell> venueCursor = lattice.path(
-			Covia.GRID, GridLattice.VENUES, ownerKey, Keywords.VALUE);
-		if (venueCursor.get() == null) {
-			AMap<Keyword, ACell> zero = VenueLattice.INSTANCE.zero();
-			zero = zero.assoc(VenueLattice.DID, getDIDString());
-			venueCursor.set(zero);
+		// Bootstrap with connected VenueState (writes signed immediately).
+		// DID initialisation must be signed so other peers accept it.
+		VenueState connected = VenueState.fromRoot(lattice, getAccountKey());
+		if (connected.get() == null) {
+			connected.set(Covia.VENUE.zero().assoc(Covia.DID, getDIDString()));
 		}
 
-		this.assets = lattice.path(Covia.GRID, GridLattice.VENUES, ownerKey, Keywords.VALUE, VenueLattice.ASSETS);
-		this.jobsCursor = lattice.path(Covia.GRID, GridLattice.VENUES, ownerKey, Keywords.VALUE, VenueLattice.JOBS);
-		ACursor<AMap<AString, AMap<AString, ACell>>> usersCursor = lattice.path(Covia.GRID, GridLattice.VENUES, ownerKey, Keywords.VALUE, VenueLattice.USERS);
-		this.auth = new Auth(this, usersCursor);
+		// Fork: subsequent writes accumulate locally (unsigned).
+		// Engine.syncState() calls venueState.sync() to merge + sign once.
+		this.venueState = connected.fork();
 
-		ACursor<AMap<Keyword, ACell>> authCursor = lattice.path(Covia.GRID, GridLattice.VENUES, ownerKey, Keywords.VALUE, VenueLattice.AUTH);
-		this.accessControl = new AccessControl(authCursor);
+		this.auth = new Auth(this, venueState.usersCursor());
+		this.accessControl = new AccessControl(venueState.authCursor());
 	}
 
 	/**
-	 * Triggers sync on the lattice cursor. What sync does depends on the cursor's
-	 * configuration (e.g. persistence, broadcast). Engine is agnostic.
+	 * Synchronises venue state to the persistent lattice.
+	 *
+	 * <p>Two-phase sync:</p>
+	 * <ol>
+	 *   <li>{@code venueState.sync()} — merges forked (unsigned) writes into
+	 *       the parent cursor chain, triggering a single sign through the
+	 *       SignedCursor boundary.</li>
+	 *   <li>{@code lattice.sync()} — triggers persistence and broadcast via
+	 *       NodeServer callbacks. What sync does depends on the cursor's
+	 *       configuration; Engine is agnostic.</li>
+	 * </ol>
+	 *
+	 * <p>Called by VenueServer's {@code app.after("/api/*")} handler, so all
+	 * writes within a single HTTP request are batched into one sign + persist.</p>
 	 */
 	public void syncState() {
+		venueState.sync();
 		lattice.sync();
 	}
 	
@@ -324,29 +318,9 @@ public class Engine {
 	}
 
 	public Hash storeAsset(AString meta, ACell content) {
-		AMap<AString,ACell> metaMap=RT.ensureMap(JSON.parse(meta));
-		if (metaMap==null) {
-			throw new IllegalArgumentException("Metadata is not a valid JSON object");
-		}
-		return storeAsset(meta,content,metaMap);
-	}
-	
-	@SuppressWarnings({ "unchecked", "rawtypes" })
-	private Hash storeAsset(AString meta, ACell content, AMap<AString,ACell> metaMap) {
-		Hash id=Assets.calcID(meta);
-		AVector<ACell> record = assetRecord(meta, content, metaMap);
-		this.assets.updateAndGet(current -> {
-			AMap m = RT.ensureMap(current);
-			if (m == null) m = Index.none();
-			return (Index) m.assoc(id, record);
-		});
-		log.info("Stored asset "+id +" : "+RT.getIn(metaMap, Fields.NAME));
+		Hash id = venueState.assets().store(meta, content);
+		log.info("Stored asset {} : {}", id, RT.getIn(JSON.parse(meta), Fields.NAME));
 		return id;
-	}
-
-
-	private AVector<ACell> assetRecord(AString meta, ACell content, AMap<AString,ACell> metaMap) {
-		return Vectors.create(meta,content,metaMap);
 	}
 
 
@@ -360,8 +334,8 @@ public class Engine {
 	 */
 	@SuppressWarnings("unchecked")
 	public void recoverJobs() {
-		Index<AString, ACell> jobsIndex = (Index<AString, ACell>) jobsCursor.get();
-		if (jobsIndex == null || jobsIndex.isEmpty()) return;
+		Index<AString, ACell> jobsIndex = venueState.jobs().getAll();
+		if (jobsIndex.isEmpty()) return;
 
 		long n = jobsIndex.count();
 		int refired = 0;
@@ -514,8 +488,7 @@ public class Engine {
 	}
 
 	public AMap<ABlob, AVector<?>> getAssets() {
-		// Get assets from lattice cursor
-		return RT.ensureMap(this.assets.get());
+		return venueState.assets().getAll();
 	}
 
 	/**
@@ -559,9 +532,9 @@ public class Engine {
 	 * @return Asset instance, or null if not found
 	 */
 	public Asset getAsset(Hash assetID) {
-		AVector<?> arec=getAssets().get(assetID);
+		AVector<?> arec=venueState.assets().getRecord(assetID);
 		if (arec==null) return null;
-		AString metaString = RT.ensureString(arec.get(POS_JSON));
+		AString metaString = RT.ensureString(arec.get(AssetStore.POS_JSON));
 		if (metaString==null) return null;
 		return Asset.create(assetID, metaString);
 	}
@@ -572,20 +545,20 @@ public class Engine {
 	 * @return Metadata string for the given Asset ID, or null if not found
 	 */
 	public AString getMetadata(Hash assetID) {
-		AVector<?> arec=getAssets().get(assetID);
+		AVector<?> arec=venueState.assets().getRecord(assetID);
 		if (arec==null) return null;
-		return RT.ensureString(arec.get(POS_JSON));
+		return RT.ensureString(arec.get(AssetStore.POS_JSON));
 	}
-	
+
 	/**
 	 * Get metadata as a structured value
 	 * @param assetID Asset ID of operation
 	 * @return Metadata value, or null if not valid metadata
 	 */
 	public AMap<AString,ACell> getMetaValue(Hash assetID) {
-		AVector<?> arec=getAssets().get(assetID);
+		AVector<?> arec=venueState.assets().getRecord(assetID);
 		if (arec==null) return null;
-		return RT.ensureMap(arec.get(POS_META));
+		return RT.ensureMap(arec.get(AssetStore.POS_META));
 	}
 
 	// TODO: Consider whether asset IDs should be AString (hex) or Hash throughout.
@@ -782,7 +755,6 @@ public class Engine {
 	 * @param jobID
 	 * @return Job status record, or null if not found
 	 */
-	@SuppressWarnings("unchecked")
 	public AMap<AString,ACell> getJobData(AString jobID) {
 		Job job;
 		synchronized (jobs) {
@@ -791,10 +763,7 @@ public class Engine {
 		if (job != null) return job.getData();
 
 		// Fall back to lattice
-		Index<AString, ACell> jobsIndex = (Index<AString, ACell>) jobsCursor.get();
-		if (jobsIndex == null) return null;
-		ACell record = jobsIndex.get(jobID);
-		return (record instanceof AMap) ? (AMap<AString, ACell>) record : null;
+		return venueState.jobs().get(jobID);
 	}
 
 	/**
@@ -803,7 +772,6 @@ public class Engine {
 	 * @param jobID Job ID
 	 * @return Job, or null if not found
 	 */
-	@SuppressWarnings("unchecked")
 	public Job getJob(AString jobID) {
 		synchronized (jobs) {
 			Job job = jobs.get(jobID);
@@ -811,11 +779,9 @@ public class Engine {
 		}
 
 		// Fall back to lattice — construct a bare Job from persisted record
-		Index<AString, ACell> jobsIndex = (Index<AString, ACell>) jobsCursor.get();
-		if (jobsIndex == null) return null;
-		ACell record = jobsIndex.get(jobID);
-		if (!(record instanceof AMap)) return null;
-		return new Job((AMap<AString, ACell>) record, null);
+		AMap<AString, ACell> record = venueState.jobs().get(jobID);
+		if (record == null) return null;
+		return new Job(record, null);
 	}
 
 	/**
@@ -959,12 +925,8 @@ public class Engine {
 	 * Persists a job record to the lattice :jobs index.
 	 * Called on initial submission and every status update via processUpdate().
 	 */
-	@SuppressWarnings("unchecked")
 	private void persistJobRecord(AString jobID, AMap<AString, ACell> record) {
-		jobsCursor.updateAndGet(jobs -> {
-			if (jobs == null) jobs = Index.none();
-			return ((Index<AString, ACell>) jobs).assoc(jobID, record);
-		});
+		venueState.jobs().persist(jobID, record);
 	}
 
 	private Random rand=new Random();
@@ -1019,11 +981,8 @@ public class Engine {
 	 * since job IDs are timestamp-prefixed).
 	 * @return Index of job IDs to job records, or empty Index if none
 	 */
-	@SuppressWarnings("unchecked")
 	public Index<AString, ACell> getJobs() {
-		Index<AString, ACell> jobsIndex = (Index<AString, ACell>) jobsCursor.get();
-		if (jobsIndex == null) return Index.none();
-		return jobsIndex;
+		return venueState.jobs().getAll();
 	}
 
 	/**
