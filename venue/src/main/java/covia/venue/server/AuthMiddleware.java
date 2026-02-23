@@ -47,6 +47,7 @@ public class AuthMiddleware {
 	private static AccountKey venueKey;
 	private static AString venueDID;
 	private static AString publicDID;
+	private static Auth venueAuth;
 	private static Map<String, OAuthConfig> externalProviders;
 	private static boolean publicAccessEnabled;
 
@@ -61,6 +62,7 @@ public class AuthMiddleware {
 		venueKey = venueAccountKey;
 		venueDID = venueDIDString;
 		publicDID = Strings.create(venueDIDString + ":public");
+		venueAuth = auth;
 		publicAccessEnabled = auth.isPublicAccessEnabled();
 		externalProviders = auth.getLoginProviders().hasProviders()
 			? auth.getLoginProviders().getProviders() : null;
@@ -206,21 +208,34 @@ public class AuthMiddleware {
 				if (!parsed.verifyRS256(key)) continue;
 				if (!parsed.validateClaims(provider.issuer, provider.clientId)) continue;
 
-				// Valid — derive venue DID from email or sub
+				// Valid — look up existing user by email to get their DID
 				AMap<AString, ACell> claims = parsed.getClaims();
 				AString email = RT.ensureString(claims.get(EMAIL));
-				String userId;
-				if (email != null) {
-					userId = email.toString().replace("@", "_").replace(".", "_");
-				} else {
-					AString sub = RT.ensureString(claims.get(SUB));
-					if (sub == null) return null;
-					userId = sub.toString();
-				}
-				return Strings.create(venueDID + ":u:" + userId);
+				if (email == null) return null;
+				return findUserDIDByEmail(email);
 			}
 		} catch (Exception e) {
 			log.debug("External provider JWT verification failed", e);
+		}
+		return null;
+	}
+
+	/**
+	 * Look up an existing user by email in the venue's user database.
+	 * Returns the user's DID if found, null otherwise.
+	 */
+	private static AString findUserDIDByEmail(AString email) {
+		if (venueAuth == null) return null;
+		AMap<AString, AMap<AString, ACell>> users = venueAuth.getUsers();
+		if (users == null) return null;
+
+		// Search user records for matching email
+		for (var entry : users.entrySet()) {
+			AMap<AString, ACell> record = entry.getValue();
+			if (email.equals(record.get(EMAIL))) {
+				AString did = RT.ensureString(record.get(Strings.create("did")));
+				if (did != null) return did;
+			}
 		}
 		return null;
 	}
