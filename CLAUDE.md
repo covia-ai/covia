@@ -19,7 +19,7 @@ covia/                          # ai.covia:covia:0.0.2-SNAPSHOT (parent POM)
 ├── venue/                      # Main venue server runtime (produces covia.jar)
 │   └── src/main/java/covia/
 │       ├── adapter/            #   Adapter framework + 9 implementations
-│       ├── lattice/            #   Lattice state types (GridLattice, VenueLattice, CASLattice)
+│       ├── lattice/            #   Lattice definitions (Covia.ROOT, Covia.VENUE)
 │       ├── venue/              #   Engine, MainVenue, Config, Auth, LocalVenue
 │       ├── venue/api/          #   REST API (CoviaAPI), MCP, A2A, UserAPI
 │       ├── venue/server/       #   HTTP server (VenueServer, CoviaWebApp, SSE, AuthMiddleware)
@@ -237,9 +237,9 @@ Adapter Layer
 
 ## Module-Specific Guides
 
-- **LATTICE-STRATEGY.md** — Lattice architecture: global structure, venue signing, selective sharing, atomic update model, persistence and replication strategy
+- **venue/docs/GRID_LATTICE_DESIGN.md** — Grid lattice design: addressing, namespaces, UCAN capabilities, federation, agents, lattice mechanics, implementation phases
 - **venue/CLAUDE.md** — Detailed venue module architecture, design objectives, adapter reference, API endpoints, and development guidelines
-- **venue/CLAUDE.local.md** — Working notes on lattice persistence implementation (Phase 1 complete, Phase 2 next)
+- **venue/CLAUDE.local.md** — Working notes on lattice persistence implementation progress
 
 ## Resources
 

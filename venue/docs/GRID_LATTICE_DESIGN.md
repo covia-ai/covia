@@ -1,8 +1,8 @@
 # Covia Grid Lattice Structure
 
-This is a PROPOSAL for the target state of the Covia venue-backed grid
+Design document for the Covia venue-backed grid. Phases 0–1 are implemented; later phases are target state.
 
-## Design Document — February 2026
+## Design Document — February 2026 (living document)
 
 ---
 
@@ -1035,3 +1035,138 @@ Builds on: per-user cursors (agents are owned by users), operations registry (ag
 Workspace: freely mutable scratch space per user/agent. Already partially enabled by per-user cursors.
 
 Secrets: encrypted at rest, capability-gated decryption. Convergent encryption. Required for secure API key management.
+
+---
+
+## Appendix A: Lattice Mechanics
+
+This appendix describes the operational mechanics of venue lattice state management — how cursors work, how merges happen, how state is signed and persisted, and how venues share state.
+
+### A.1 Cursor Model
+
+Each venue engine holds a **lattice cursor** pointing to its own venue root within the global structure. The cursor provides:
+
+- **`get()`** — Read current state
+- **`set(value)`** — Write new state
+- **`updateAndGet(fn)`** — Atomic read-modify-write
+- **`fork()`** — Create isolated working copy
+- **`sync()`** — Merge working copy back to parent
+
+Sub-cursors navigate to specific fields (e.g. `venueCursor.path(Covia.ASSETS)`). Sub-cursors write through to the venue root atomically — updating a job via the jobs sub-cursor updates the venue root in a single operation.
+
+For day-to-day operations, the venue works directly with its cursor. It does not interact with the global lattice structure unless syncing with other venues.
+
+### A.2 Merge Semantics Per Component
+
+| Component | Lattice Type | Merge Rule | Rationale |
+|-----------|-------------|------------|-----------|
+| `:venues` | OwnerLattice | Per-AccountKey, signature-verified | Each venue merges independently |
+| Venue root | SignedLattice + KeyedLattice | Verify signature, merge contents | Authenticity + convergence |
+| `:assets` | CASLattice (union) | All entries kept | Assets are immutable, content-addressed |
+| `:jobs` | IndexLattice + LWW | Higher `"updated"` timestamp wins | Jobs progress forward |
+| `:users` | MapLattice + LWW | Higher `"updated"` timestamp wins | User records evolve |
+| `:storage` | CASLattice (union) | All entries kept | Same hash = same blob |
+| `:meta` | CASLattice (union) | All entries kept | Same hash = same JSON |
+| `:auth` | MapLattice + LWW | Higher `"updated"` timestamp wins | Auth policy evolves |
+| `:did` | FunctionLattice | First-writer-wins | Set once at creation |
+
+All merges satisfy CRDT properties:
+- **Commutative:** `merge(a, b) == merge(b, a)`
+- **Associative:** `merge(merge(a, b), c) == merge(a, merge(b, c))`
+- **Idempotent:** `merge(a, a) == a`
+
+### A.3 Update Logic
+
+**Fork/sync pattern:** Engine operations that need multiple coordinated writes fork an isolated working copy, perform updates, then sync back:
+
+```
+Request A: fork → update job X → sync
+Request B: fork → update job Y → sync   (no conflict — different keys)
+Request C: fork → update job X → sync   (timestamp merge — later wins)
+```
+
+Fork/sync is always safe because lattice merge is a total function. There are no merge conflicts in the traditional sense — every merge produces a deterministic result.
+
+For simple operations that touch a single record, forking is unnecessary — a direct `updateAndGet` on the appropriate sub-cursor suffices. Fork/sync is valuable when an operation needs multiple coordinated writes that should appear atomically.
+
+### A.4 Signing Strategy: Sign Late, Verify Early
+
+Signatures are applied at **sync boundaries** — when state leaves the venue's local process. This avoids the cost of re-signing on every internal operation.
+
+```
+[Internal operations]  →  unsigned cursor updates (fast)
+           |
+     [Sync boundary]   →  sign venue state with keypair
+           |
+[Persistence / Replication]  →  signed state goes to disk or network
+```
+
+The venue's Ed25519 keypair signs the venue state at the point of **persistence** (writing to durable storage) and **replication** (sending to another venue). Internal cursor operations remain unsigned for performance. The signing overhead is paid once per sync, not once per operation.
+
+**Verification on merge:** When receiving foreign lattice state (from disk recovery, peer replication, or federation), `SignedLattice.merge()` handles verification automatically — verify Ed25519 signature, merge inner state if valid, re-sign the merged result if it differs from both inputs, reject if signature invalid.
+
+**Re-signing after merge:** If a merge combines state from two sources and produces a new value, the merging venue re-signs the result. The merging venue is asserting: "I verified both inputs and computed this merge."
+
+### A.5 Persistence
+
+**Startup:** Load signed state from Etch store via `store.getRootData()`, verify signature (own keypair), initialise cursors, resume operations. Job recovery walks the `:jobs` index — re-fires PENDING/STARTED jobs via adapter, restores PAUSED/INPUT_REQUIRED/AUTH_REQUIRED as live in-memory Job objects.
+
+**Periodic sync:** Sign current venue state, write to Etch via `store.setRootData()`. Frequency is configurable:
+- **On every API request** — Maximum durability, higher IO cost (current default via `app.after("/api/*")`)
+- **Periodic** — Write every N seconds or N operations
+- **On shutdown** — Minimum IO, risk of data loss on crash
+
+**Crash recovery:** If a venue crashes between persistence points, it loses operations since the last sync. This is acceptable because the lattice always converges to a valid state (no partial writes or corruption), clients polling for job status will see the job revert to its last persisted state, and replicated venues can merge in state from peers to recover further.
+
+### A.6 Sharing and Replication
+
+Venues are **not required** to share their lattice state. The default is private — a venue's state lives only in its own process and persistent storage.
+
+**Selective sharing:** Because the lattice is hierarchical, venues can share at different levels:
+
+| Level | What's Shared | Use Case |
+|-------|--------------|----------|
+| Nothing | Only DID document (`.well-known/did.json`) | Private venue, API-only access |
+| `:assets` only | Published operations and artifacts | Discoverable venue, jobs stay private |
+| `:assets` + `:meta` | Operations with full metadata | Federated operation discovery |
+| Full venue state | Everything including jobs and users | Public venue or backup replica |
+
+Selective sharing is implemented by constructing a partial lattice value containing only the components the venue wishes to export, signing it, and publishing or sending to peers.
+
+**Replication protocol:** Two venues exchange signed lattice values and merge. Because merge is commutative and idempotent, it doesn't matter if messages are duplicated, reordered, or if only one direction succeeds. The system converges.
+
+**Public venues** expose their state openly — appropriate for shared infrastructure or transparent AI services. **Private venues** keep state local and participate via API calls only. **Hybrid venues** share some components (e.g. published assets) while keeping others private (e.g. job history, user records).
+
+---
+
+## Appendix B: Lattice Type Reference
+
+### Convex Primitives
+
+| Type | Purpose |
+|------|---------|
+| `ALattice<V>` | Abstract base — defines merge, zero, path, checkForeign |
+| `KeyedLattice` | Maps different keywords to different child lattices |
+| `SignedLattice<V>` | Wraps values in Ed25519 signatures |
+| `OwnerLattice<V>` | Per-owner signed values with authorisation |
+| `IndexLattice<K,V>` | Sorted radix-tree map with recursive value merge |
+| `MapLattice<K,V>` | Hashmap with recursive value merge |
+| `CASLattice<K,V>` | Content-addressed union merge |
+| `LWWLattice<V>` | Last-writer-wins by extracted timestamp |
+| `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
+| `LatticeContext` | Carries timestamp, signing key, owner verifier during merge |
+| `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
+
+### Covia Definitions
+
+The `covia.lattice.Covia` class defines the complete lattice hierarchy using standard convex-core generics (no custom lattice subclasses):
+
+| Definition | Type | Purpose |
+|------------|------|---------|
+| `Covia.ROOT` | `KeyedLattice` | Root lattice — `:grid` containing `:venues` and `:meta` |
+| `Covia.VENUE` | `KeyedLattice` | Per-venue state — `:assets`, `:jobs`, `:users`, `:storage`, `:auth`, `:did` |
+| `:venues` child | `OwnerLattice` → `SignedLattice` → `KeyedLattice` | Per-AccountKey signed venue state |
+| `:assets`, `:storage`, `:meta` | `CASLattice` | Content-addressed union merge |
+| `:jobs` | `IndexLattice` + `LWWLattice` | Per-job last-writer-wins by `"updated"` timestamp |
+| `:users`, `:auth` | `MapLattice` + `LWWLattice` | Per-entry last-writer-wins by `"updated"` timestamp |
+| `:did` | `FunctionLattice` | First-writer-wins (set once at venue creation) |
