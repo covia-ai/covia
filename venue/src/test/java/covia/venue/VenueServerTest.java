@@ -338,4 +338,18 @@ public class VenueServerTest {
 		String retrievedContentString = new String(retrievedBlob.getBytes());
 		assertEquals(testContent, retrievedContentString, "Retrieved content should match original content");
 	}
+
+	@Test
+	public void testAnonymousInvokeGetsPublicDID() throws Exception {
+		// Invoke via HTTP client without auth — should get public DID as caller
+		ACell input = Maps.of("message", Strings.create("anonymous test"));
+		Job job = covia.invokeAndWait(TestOps.ECHO, input);
+		assertEquals(Status.COMPLETE, job.getStatus());
+
+		// Job record should have a :caller field with the venue's public DID
+		AString caller = RT.ensureString(job.getData().get(Fields.CALLER));
+		assertNotNull(caller, "Anonymous invoke should have a caller DID");
+		assertTrue(caller.toString().endsWith(":public"),
+			"Anonymous caller DID should end with :public, got: " + caller);
+	}
 }

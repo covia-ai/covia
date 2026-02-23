@@ -151,7 +151,7 @@ public class VenueServer {
 		}
 
 		javalin=buildApp();
-		AuthMiddleware.register(javalin, engine.getAccountKey(), engine.getAuth());
+		AuthMiddleware.register(javalin, engine.getAccountKey(), engine.getAuth(), engine.getDIDString());
 		addLoginRoutes(javalin);
 		addAPIRoutes(javalin);
 		start(javalin,port);

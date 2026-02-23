@@ -45,6 +45,8 @@ public class AuthMiddleware {
 	private static final AString EMAIL = Strings.create("email");
 
 	private static AccountKey venueKey;
+	private static AString venueDID;
+	private static AString publicDID;
 	private static Map<String, OAuthConfig> externalProviders;
 	private static boolean publicAccessEnabled;
 
@@ -53,9 +55,12 @@ public class AuthMiddleware {
 	 * @param app Javalin application
 	 * @param venueAccountKey The venue's public key for verifying venue-signed JWTs
 	 * @param auth Auth instance for access control configuration
+	 * @param venueDIDString The venue's DID string for deriving user DIDs
 	 */
-	public static void register(Javalin app, AccountKey venueAccountKey, Auth auth) {
+	public static void register(Javalin app, AccountKey venueAccountKey, Auth auth, AString venueDIDString) {
 		venueKey = venueAccountKey;
+		venueDID = venueDIDString;
+		publicDID = Strings.create(venueDIDString + ":public");
 		publicAccessEnabled = auth.isPublicAccessEnabled();
 		externalProviders = auth.getLoginProviders().hasProviders()
 			? auth.getLoginProviders().getProviders() : null;
@@ -70,6 +75,8 @@ public class AuthMiddleware {
 			if (!publicAccessEnabled) {
 				ctx.status(401).result("Authentication required");
 				ctx.skipRemainingHandlers();
+			} else {
+				ctx.attribute(CALLER_DID_ATTR, publicDID);
 			}
 			return;
 		}
@@ -79,6 +86,8 @@ public class AuthMiddleware {
 			if (!publicAccessEnabled) {
 				ctx.status(401).result("Authentication required");
 				ctx.skipRemainingHandlers();
+			} else {
+				ctx.attribute(CALLER_DID_ATTR, publicDID);
 			}
 			return;
 		}
@@ -99,6 +108,8 @@ public class AuthMiddleware {
 				if (!publicAccessEnabled) {
 					ctx.status(401).result("Invalid or expired token");
 					ctx.skipRemainingHandlers();
+				} else {
+					ctx.attribute(CALLER_DID_ATTR, publicDID);
 				}
 			}
 		} catch (Exception e) {
@@ -106,6 +117,8 @@ public class AuthMiddleware {
 			if (!publicAccessEnabled) {
 				ctx.status(401).result("Authentication required");
 				ctx.skipRemainingHandlers();
+			} else {
+				ctx.attribute(CALLER_DID_ATTR, publicDID);
 			}
 		}
 	}
@@ -193,12 +206,18 @@ public class AuthMiddleware {
 				if (!parsed.verifyRS256(key)) continue;
 				if (!parsed.validateClaims(provider.issuer, provider.clientId)) continue;
 
-				// Valid — extract email or sub as identity
+				// Valid — derive venue DID from email or sub
 				AMap<AString, ACell> claims = parsed.getClaims();
 				AString email = RT.ensureString(claims.get(EMAIL));
-				if (email != null) return email;
-				AString sub = RT.ensureString(claims.get(SUB));
-				return sub;
+				String userId;
+				if (email != null) {
+					userId = email.toString().replace("@", "_").replace(".", "_");
+				} else {
+					AString sub = RT.ensureString(claims.get(SUB));
+					if (sub == null) return null;
+					userId = sub.toString();
+				}
+				return Strings.create(venueDID + ":u:" + userId);
 			}
 		} catch (Exception e) {
 			log.debug("External provider JWT verification failed", e);
@@ -207,9 +226,11 @@ public class AuthMiddleware {
 	}
 
 	/**
-	 * Get the caller DID from the request context, if identified.
+	 * Get the caller DID from the request context.
+	 * Always non-null for requests that pass through the middleware when
+	 * public access is enabled (anonymous requests get the venue's public DID).
 	 * @param ctx Javalin context
-	 * @return Caller DID as AString, or null if anonymous
+	 * @return Caller DID as AString, or null if auth was required and missing
 	 */
 	public static AString getCallerDID(Context ctx) {
 		return ctx.attribute(CALLER_DID_ATTR);
