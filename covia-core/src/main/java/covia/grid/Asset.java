@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -100,12 +99,12 @@ public class Asset {
 	}
 
 	/**
-	 * Get the Asset ID
+	 * Get the Asset ID (CAD3 value hash of the parsed metadata map).
 	 * @return Asset ID as a Hash
 	 */
 	public Hash getID() {
 		if (id!=null) return id;
-		id=Hashing.sha256(getMetadata());
+		id = meta().getHash();
 		return id;
 	}
 	

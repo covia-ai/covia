@@ -11,7 +11,6 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.lattice.cursor.ACursor;
-import covia.grid.Assets;
 
 /**
  * Cursor wrapper for the venue's asset store.
@@ -54,7 +53,7 @@ public class AssetStore {
 		if (metaMap == null) {
 			throw new IllegalArgumentException("Metadata is not a valid JSON object");
 		}
-		Hash id = Assets.calcID(meta);
+		Hash id = metaMap.getHash();
 		AVector<ACell> record = Vectors.create(meta, content, metaMap);
 		cursor.updateAndGet(current -> {
 			AMap m = RT.ensureMap(current);

@@ -30,6 +30,7 @@ import convex.core.util.JSON;
 import convex.core.util.Utils;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.impl.BlobContent;
@@ -57,7 +58,7 @@ public class EngineTest {
 		Blob content=Blob.EMPTY;
 		Hash id=venue.storeAsset(EMPTY_META,content);
 		assertEquals(EMPTY_META,venue.getMetadata(id));
-		assertEquals(id,Hashing.sha256(EMPTY_META));
+		assertEquals(id,Assets.calcID(EMPTY_META));
 		ACell md=venue.getMetadata(id);
 		assertEquals(EMPTY_META,md);
 		
@@ -81,7 +82,7 @@ public class EngineTest {
 	}
 	
 	@Test public void testDemoAssets() throws IOException {
-		AString emptyMeta=venue.getMetadata(Hash.parse("44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"));
+		AString emptyMeta=venue.getMetadata(Assets.calcID(EMPTY_META));
 		assertEquals(EMPTY_META,emptyMeta);
 	}
 	

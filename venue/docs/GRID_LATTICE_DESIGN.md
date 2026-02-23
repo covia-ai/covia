@@ -29,10 +29,10 @@ The on-chain CVM layer handles identity anchoring, economic settlement, and trus
 ### 3.1 Global Address Format
 
 ```
-did:venue:<identity> / <namespace> / <path...>
+<DID> / <namespace> / <path...>
 ```
 
-- **DID prefix** — globally unique identity anchoring the lattice context (venue + account).
+- **DID prefix** — globally unique identity anchoring the lattice context (venue + account). Any standard DID method works — `did:key:` for self-certifying identities (venues, agents with key pairs), `did:web:` for server-backed identities, or any method that resolves to a public key for signature verification. The addressing scheme is DID-method-agnostic.
 - **Namespace** — one of the hardcoded typed namespaces (see §4).
 - **Path** — either a content-addressed hash or a mutable cursor path within the namespace.
 
@@ -53,7 +53,7 @@ Within a session, the DID is implicit:
 
 Full qualification is required only when crossing boundaries:
 
-- `did:venue:B:99/o/transform` — referencing another venue's operation
+- `did:key:zBob.../o/transform` — referencing another venue's operation
 
 The lattice resolves implicit context based on the active session identity.
 
@@ -100,13 +100,16 @@ Mutable, schema-enforced registry of operation definitions. Each entry must conf
 
 ```json
 {
+  "name": "My Transform",
   "input": { "schema": "..." },
   "output": { "schema": "..." },
-  "executor": "did:venue:B:99/g/7",
+  "executor": "langchain:openai",
   "cost": 450,
   "permissions": ["..."]
 }
 ```
+
+`/o/` is a **user-controlled naming layer** that decouples stable operation names from underlying adapter implementations. Currently, operations are named by adapter prefix (e.g. `"langchain:openai"`, `"test:echo"`) — these are implementation-dependent. If an adapter is replaced, all operation references break. `/o/` solves this by letting users define stable names that map to changeable executor bindings. The `executor` field inside the definition specifies which adapter handles execution; the name is the user's choice. If the user switches from `langchain:openai` to `langchain:gemini`, only the executor binding changes — callers still reference `/o/my-transform`.
 
 Operations are authored and iterated in `/o/` under stable mutable names (e.g. `/o/my-transform`). When `invoke()` is called, the system **pins the current value to `/a/`** as an immutable content-addressed snapshot. The job record captures both the mutable name and the pinned ref:
 
@@ -120,7 +123,7 @@ Operations are authored and iterated in `/o/` under stable mutable names (e.g. `
 
 This gives human-readable provenance ("which op") and exact reproducibility ("which version") in the same record. The mutable name can be updated without breaking references — callers always get the latest, while past job records are pinned to the exact version that ran.
 
-`invoke()` also accepts operations from other sources — `/w/my-draft-op` (workspace draft, validated and pinned at invoke time), `/a/cafebabe...` (already pinned), or `did:venue:B:99/o/transform` (federated). In all cases the job record contains a pinned `/a/` reference.
+`invoke()` also accepts operations from other sources — `/w/my-draft-op` (workspace draft, validated and pinned at invoke time), `/a/cafebabe...` (already pinned), or `did:key:zBob.../o/transform` (federated). In all cases the job record contains a pinned `/a/` reference.
 
 **Separation from `/w/`:** Both `/o/` and `/w/` are mutable, but `/o/` is a typed registry with schema enforcement, open-read defaults (code is inspectable), and operation-specific indexing (schema matching, dependency graphs, cost/performance tracking). `/w/` is untyped scratch space with private-read defaults.
 
@@ -143,10 +146,10 @@ On completion, the entire job record **freezes** — inputs, outputs, execution 
 {
   "op_name": "/o/my-transform",
   "op_pinned": "/a/cafebabe...",
-  "caller": "did:venue:A:42/g/3",
+  "caller": "did:key:zAlice.../g/3",
   "inputs": { "arg1": "<resolved value>", "arg2": "constant" },
   "caps": ["<ucan token>"],
-  "executor": "did:venue:B:99/g/7",
+  "executor": "did:key:zBob.../g/7",
   "status": "complete",
   "outputs": { "result": "<computed value>" },
   "cost": 450
@@ -219,7 +222,7 @@ Stateful actors with pluggable transition functions. Each agent is a state machi
   status: "sleeping"            # sleeping | waking | running | suspended | terminated
   seq: 5                        # current sequence number
   caps: [<ucan>, ...]           # capability boundary — enforced on all actions
-  owner: "did:venue:A:42"       # who controls this agent
+  owner: "did:key:zAlice..."       # who controls this agent
   name: "my-assistant"          # human-readable name (metadata, queryable)
   description: "Code review agent"
   tags: ["code", "review"]
@@ -354,9 +357,9 @@ The key insight: the agent scratchpad (intermediate tool calls and results durin
 
 **Timeline efficiency:** Each timeline entry is a raw lattice value, not a pinned `/a/` ref. CAD3 structural sharing means unchanged subtrees between transitions share storage automatically. The timeline can grow indefinitely without proportional storage cost.
 
-**Communication:** Sending a message to another agent is writing to their inbox — local: `/g/0x0042/inbox/`, remote: `did:venue:B:99/g/0x0089/inbox/` — with appropriate write capability via UCAN.
+**Communication:** Sending a message to another agent is writing to their inbox — local: `/g/0x0042/inbox/`, remote: `did:key:zBob.../g/0x0089/inbox/` — with appropriate write capability via UCAN.
 
-**Discoverability:** Agents have system-assigned IDs (index keys), not user-chosen names. Human-readable names, descriptions, and tags are metadata in the agent record, queryable for discovery (e.g. "find all agents tagged 'code-review'"). Users can optionally create workspace aliases for convenience (e.g. `/w/agents/my-assistant → /g/0x0042`), but this is a user convention, not a system feature. The canonical reference is always the system ID via DID: `did:venue:A:42/g/0x0042`.
+**Discoverability:** Agents have system-assigned IDs (index keys), not user-chosen names. Human-readable names, descriptions, and tags are metadata in the agent record, queryable for discovery (e.g. "find all agents tagged 'code-review'"). Users can optionally create workspace aliases for convenience (e.g. `/w/agents/my-assistant → /g/0x0042`), but this is a user convention, not a system feature. The canonical reference is always the system ID via DID: `did:key:zAlice.../g/0x0042`.
 
 **Agent mobility and forking:**
 
@@ -374,7 +377,7 @@ Because agent state is an immutable lattice value with no hidden mutable referen
 
 ```
 fork(/g/agent-3, {
-  owner: "did:venue:A:99",           # new owner
+  owner: "did:key:zAlice...",           # new owner
   config: {
     model: "/o/newmodel...",          # different transition function
     llm: { provider: "openai", ... } # different LLM
@@ -390,9 +393,9 @@ This makes **"create a pre-configured agent to do X"** a simple grid operation. 
 
 ```
 invoke("/o/fork-agent", {
-  source: "did:venue:vendor:1/g/smart-assistant",
+  source: "did:web:vendor.example.com/g/smart-assistant",
   overrides: {
-    owner: "did:venue:A:42",
+    owner: "did:key:zAlice...",
     caps: [<my caps>],
     config: {
       llm: { api_key: "/s/my-anthropic-key" }
@@ -419,7 +422,7 @@ The result is a fully configured agent with the vendor's accumulated knowledge a
 ```
 /g/<new-agent-id>/
   provenance: {
-    forked_from: "did:venue:vendor:1/g/smart-assistant",
+    forked_from: "did:web:vendor.example.com/g/smart-assistant",
     fork_point: 42,          # timeline sequence number
     fork_ts: 1719500000
   }
@@ -456,7 +459,7 @@ Operations are invoked with explicit inputs and capabilities:
 ```
 invoke("someop",
   { arg1: lookup(/my/data), arg2: "constant" },
-  [ { with: "did:venue:A:42/a/cafebabe...", can: "/crud/read" } ]
+  [ { with: "did:key:zAlice.../a/cafebabe...", can: "/crud/read" } ]
 )
 ```
 
@@ -516,11 +519,11 @@ Capabilities are expressed as UCAN tokens, represented as lattice-native JSON-li
 
 ```json
 {
-  "iss": "did:venue:A:42",
-  "aud": "did:venue:B:99/g/7",
+  "iss": "did:key:zAlice...",
+  "aud": "did:key:zBob.../g/7",
   "att": [
-    { "with": "did:venue:A:42/w/projects/foo/", "can": "/crud/read" },
-    { "with": "did:venue:A:42/o/cafebabe...", "can": "/invoke" }
+    { "with": "did:key:zAlice.../w/projects/foo/", "can": "/crud/read" },
+    { "with": "did:key:zAlice.../o/cafebabe...", "can": "/invoke" }
   ],
   "exp": 1719500000,
   "nbf": 1719400000,
@@ -547,12 +550,12 @@ Capabilities are expressed as UCAN tokens, represented as lattice-native JSON-li
 
 | Resource URI | Meaning |
 |-------------|---------|
-| `did:venue:A:42/` | Everything in this identity's lattice |
-| `did:venue:A:42/w/` | All workspace data |
-| `did:venue:A:42/w/projects/foo/` | Specific workspace subtree |
-| `did:venue:A:42/a/cafebabe...` | Specific immutable asset |
-| `did:venue:A:42/o/` | All operations |
-| `did:venue:A:42/s/anthropic-key` | Specific secret |
+| `did:key:zAlice.../` | Everything in this identity's lattice |
+| `did:key:zAlice.../w/` | All workspace data |
+| `did:key:zAlice.../w/projects/foo/` | Specific workspace subtree |
+| `did:key:zAlice.../a/cafebabe...` | Specific immutable asset |
+| `did:key:zAlice.../o/` | All operations |
+| `did:key:zAlice.../s/anthropic-key` | Specific secret |
 
 Sub-path URIs are valid attenuations of their parent — `did:.../w/projects/foo/` is a valid delegation from `did:.../w/`.
 
@@ -627,7 +630,7 @@ The DID prefix enables federated execution across venue boundaries.
 An agent in venue A can reference an operation in venue B:
 
 ```
-did:venue:A:42/o/transform → did:venue:B:99/a/cafebabe...
+did:key:zAlice.../o/transform → did:key:zBob.../a/cafebabe...
 ```
 
 - **Immutable refs cross boundaries trivially.** `/a/cafebabe...` is self-verifying regardless of origin. Any peer, any venue — same hash, same data.
@@ -886,7 +889,7 @@ The Covia Grid lattice structure provides a unified data and execution model whe
 
 | Layer | Mechanism |
 |-------|-----------|
-| Addressing | `did:venue:<id>/<namespace>/<path>` |
+| Addressing | `<DID>/<namespace>/<path>` |
 | Immutability | Content-addressed `/a/` refs, frozen job records |
 | Mutability | Named cursors in `/w/`, lifecycle state in `/j/` |
 | Security | UCAN capability tokens, lattice-native |
@@ -894,3 +897,107 @@ The Covia Grid lattice structure provides a unified data and execution model whe
 | Federation | DID-scoped paths, self-verifying immutable refs |
 | Economics | CVM on-chain settlement |
 | Data format | CAD3 universal, JSON-like convention |
+
+---
+
+## 12. Implementation Phases
+
+The target state described above will be achieved incrementally. Each phase builds on the previous, ordered by prerequisite depth and value delivered.
+
+### Phase 0: Lattice Application Wrappers (DONE)
+
+Foundation for all lattice-backed state management.
+
+- `VenueState`, `AssetStore`, `JobStore` wrappers over lattice cursors
+- Forked cursors for batched unsigned writes with single-sign sync
+- `Covia.ROOT` lattice definition with KeyedLattice composition
+- Per-venue OwnerLattice (one signing slot per venue)
+- Job write-through to lattice on every status update
+- Job recovery on restart (re-fire PENDING/STARTED, restore PAUSED/INPUT_REQUIRED)
+- Etch store persistence via `store.setRootData()` / `store.getRootData()`
+
+### Phase 1: CAD3 Value IDs (DONE)
+
+Switch asset IDs from SHA256-of-JSON-string to CAD3 value hash (SHA3-256 of canonical encoding).
+
+Why early: foundational change affecting every asset reference. CAD3 value IDs are canonical — same semantic content produces the same hash regardless of JSON formatting (whitespace, key order). Aligns asset identity with the lattice's native content-addressing.
+
+Changes:
+- `Assets.calcID()` — parses JSON to map, returns `metaMap.getHash()`
+- `Asset.getID()` — uses `meta().getHash()` instead of `Hashing.sha256(getMetadata())`
+- `AssetStore.store()` — computes ID from parsed metaMap
+- Content SHA256 verification (`putContent`) is unchanged — that's payload integrity, not identity
+
+### Phase 2: Per-User Cursors
+
+Separate venue state into per-user cursors so each user's data is partitioned.
+
+Why next: prerequisite for any meaningful access control. Currently all assets/jobs are in a flat venue-wide index with no user scoping. Per-user cursors partition data by user identity, enable visibility scoping, and provide the foundation for capability-based access.
+
+The venue manages user state on users' behalf (users authenticate via OAuth, not key pairs). Per-user state lives inside the venue's signed boundary — it's a MapLattice from user DID to per-user lattice, NOT a per-user OwnerLattice (the venue can't sign as the user).
+
+Lattice structure change:
+
+```
+:venues → OwnerLattice (per-venue)
+  <venue-AccountKey> → SignedLattice
+    :value → KeyedLattice
+      :assets    → CASLattice (venue-owned assets — adapters, shared)
+      :jobs      → IndexLattice (venue-managed jobs)
+      :ops       → MapLattice (venue operation registry)
+      :users     → MapLattice (DID → user record/profile)
+      :user-data → MapLattice (DID → per-user KeyedLattice)  ← NEW
+        <user-DID-string> → KeyedLattice
+          :workspace → MapLattice (user scratch space)
+          :assets    → CASLattice (user-created assets)
+          :jobs      → MapLattice (user's job history)
+          :ops       → MapLattice (user's named operations)
+```
+
+Venue-level `:assets` and `:jobs` remain for venue-owned state (adapter registrations, system jobs). User-level state holds user-created content and user-initiated jobs.
+
+Key design decisions:
+- Users identified by DID string (from OAuth-assigned `did:web:` or self-certifying `did:key:`)
+- No per-user signing — venue signs all state within its OwnerLattice boundary
+- `VenueState` gains `userData(AString did)` accessor returning a per-user cursor
+- API routes scope reads/writes to the caller's user data by default
+
+### Phase 3: Operations Registry (`/o/`)
+
+User-controlled mutable operation naming, decoupled from adapter implementation.
+
+Operations are registered under user-chosen names in `/o/`. Each definition includes executor binding (adapter:op), input/output schema, and metadata. Names persist across adapter changes — if the underlying adapter is replaced, only the executor binding updates, not the operation name.
+
+```json
+{
+  "name": "Code Review",
+  "input": { "type": "object", "properties": {...} },
+  "output": { "type": "object", "properties": {...} },
+  "executor": "langchain:openai"
+}
+```
+
+On invoke, the current definition is pinned to `/a/` (immutable snapshot). Job record captures both the mutable name and the pinned ref.
+
+Lattice: add `:ops` to the venue KeyedLattice (MapLattice with LWW merge). Per-user ops under user cursor.
+
+### Phase 4: UCAN Capabilities
+
+Replace the current skeleton AccessControl with UCAN `with`/`can` pairs. Start single-level (no delegation chains).
+
+- Resources: DID paths (`<did>/a/<hash>`, `<did>/o/name`, etc.)
+- Commands: `/crud/read`, `/crud/write`, `/invoke`, `/secret/decrypt`
+- Enforce at Engine invocation boundary
+- UCAN tokens stored as lattice values in `/a/`
+
+### Phase 5: Agent Model (`/g/`)
+
+Stateful actors with lifecycle, inbox, timeline, wake conditions. The four-layer architecture (runtime → transition fn → tool loop → LLM). Most ambitious phase.
+
+Builds on: per-user cursors (agents are owned by users), operations registry (agents invoke ops), UCAN (agents have capability boundaries).
+
+### Phase 6: Workspace (`/w/`) and Secrets (`/s/`)
+
+Workspace: freely mutable scratch space per user/agent. Already partially enabled by per-user cursors.
+
+Secrets: encrypted at rest, capability-gated decryption. Convergent encryption. Required for secure API key management.
