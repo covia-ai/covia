@@ -9,6 +9,7 @@ import convex.core.data.AString;
 import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ACursor;
 import convex.lattice.cursor.ALatticeCursor;
@@ -61,13 +62,12 @@ import covia.lattice.Covia;
  * forked.sync();                         // merge + sign once
  * }</pre>
  */
-public class VenueState {
+public class VenueState extends ALatticeComponent<ACell> {
 
-	private final ALatticeCursor<ACell> cursor;
 	private final AccountKey ownerKey;
 
 	VenueState(ALatticeCursor<ACell> cursor, AccountKey ownerKey) {
-		this.cursor = cursor;
+		super(cursor);
 		this.ownerKey = ownerKey;
 	}
 
@@ -232,27 +232,4 @@ public class VenueState {
 		return new VenueState(cursor.fork(), ownerKey);
 	}
 
-	/**
-	 * Synchronises this VenueState's cursor back to its parent.
-	 *
-	 * <p>For a <b>forked</b> cursor (created via {@link #fork()}), this
-	 * atomically merges local changes into the parent using CRDT lattice
-	 * merge semantics — always succeeds, never conflicts. The parent's
-	 * SignedCursor signs the merged result once.</p>
-	 *
-	 * <p>For a <b>connected</b> (non-forked) cursor, this delegates to
-	 * the cursor's sync() which handles persistence and broadcast.</p>
-	 */
-	public void sync() {
-		cursor.sync();
-	}
-
-	/**
-	 * Returns the underlying lattice cursor for direct operations.
-	 *
-	 * @return Cursor at the venue state level
-	 */
-	public ALatticeCursor<ACell> cursor() {
-		return cursor;
-	}
 }

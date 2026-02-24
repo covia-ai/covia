@@ -28,8 +28,6 @@ import convex.lattice.cursor.Cursors;
 import covia.grid.AContent;
 import convex.lattice.generic.CASLattice;
 import covia.lattice.Covia;
-import covia.lattice.GridLattice;
-import covia.lattice.VenueLattice;
 
 /**
  * Tests for LatticeStorage - content-addressed storage extending AStorage,
@@ -243,10 +241,10 @@ public class LatticeStorageTest {
 	@Test
 	public void testWithLatticeCursor() throws IOException {
 		// Create a venue lattice state with proper structure
-		var venueState = VenueLattice.INSTANCE.zero();
+		var venueState = Covia.VENUE.zero();
 		var gridState = Maps.of(
 			Covia.GRID, Maps.of(
-				GridLattice.VENUES, Index.of(
+				Covia.VENUES, Index.of(
 					"did:test:venue", venueState
 				)
 			)
@@ -258,7 +256,7 @@ public class LatticeStorageTest {
 		@SuppressWarnings("unchecked")
 		ACursor<Index<ABlob, ABlob>> storageCursor =
 			(ACursor<Index<ABlob, ABlob>>) (ACursor<?>) rootCursor.path(
-				Covia.GRID, GridLattice.VENUES, Strings.create("did:test:venue"), VenueLattice.STORAGE);
+				Covia.GRID, Covia.VENUES, Strings.create("did:test:venue"), Covia.STORAGE);
 
 		// Create storage backed by cursor
 		LatticeStorage cursorStorage = new LatticeStorage(storageCursor);

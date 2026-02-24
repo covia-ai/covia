@@ -2,6 +2,7 @@ package covia.venue;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.lattice.Covia;
 
@@ -22,13 +23,12 @@ import covia.lattice.Covia;
  *
  * <p>Future phases will add :workspace, :assets, :ops.</p>
  */
-public class User {
+public class User extends ALatticeComponent<ACell> {
 
-	private final ALatticeCursor<ACell> cursor;
 	private final AString did;
 
 	User(ALatticeCursor<ACell> cursor, AString did) {
-		this.cursor = cursor;
+		super(cursor);
 		this.did = did;
 	}
 
@@ -59,12 +59,4 @@ public class User {
 		return cursor.get();
 	}
 
-	/**
-	 * Returns the underlying lattice cursor for direct operations.
-	 *
-	 * @return Cursor at the per-user level
-	 */
-	public ALatticeCursor<ACell> cursor() {
-		return cursor;
-	}
 }

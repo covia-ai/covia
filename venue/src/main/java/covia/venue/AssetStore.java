@@ -10,7 +10,8 @@ import convex.core.data.Index;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import convex.lattice.cursor.ACursor;
+import convex.lattice.ALatticeComponent;
+import convex.lattice.cursor.ALatticeCursor;
 
 /**
  * Cursor wrapper for the venue's asset store.
@@ -22,7 +23,7 @@ import convex.lattice.cursor.ACursor;
  *
  * <p>Each asset record is a 3-element vector: [json, content, metaMap].</p>
  */
-public class AssetStore {
+public class AssetStore extends ALatticeComponent<Index<AString, AVector<ACell>>> {
 
 	/** Position of JSON metadata string in asset record vector */
 	public static final long POS_JSON = 0;
@@ -33,10 +34,8 @@ public class AssetStore {
 	/** Position of parsed metadata map in asset record vector */
 	public static final long POS_META = 2;
 
-	private final ACursor<Index<AString, AVector<ACell>>> cursor;
-
-	AssetStore(ACursor<Index<AString, AVector<ACell>>> cursor) {
-		this.cursor = cursor;
+	AssetStore(ALatticeCursor<Index<AString, AVector<ACell>>> cursor) {
+		super(cursor);
 	}
 
 	/**
@@ -93,12 +92,4 @@ public class AssetStore {
 		return (all != null) ? all.count() : 0;
 	}
 
-	/**
-	 * Returns the underlying cursor for direct operations.
-	 *
-	 * @return Cursor at the assets level
-	 */
-	public ACursor<Index<AString, AVector<ACell>>> cursor() {
-		return cursor;
-	}
 }

@@ -4,7 +4,8 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Index;
-import convex.lattice.cursor.ACursor;
+import convex.lattice.ALatticeComponent;
+import convex.lattice.cursor.ALatticeCursor;
 
 /**
  * Cursor wrapper for the venue's job store.
@@ -18,12 +19,10 @@ import convex.lattice.cursor.ACursor;
  * The underlying IndexLattice uses LWW merge on the "updated" timestamp,
  * so the newest update for each job ID always wins.</p>
  */
-public class JobStore {
+public class JobStore extends ALatticeComponent<Index<AString, ACell>> {
 
-	private final ACursor<Index<AString, ACell>> cursor;
-
-	JobStore(ACursor<Index<AString, ACell>> cursor) {
-		this.cursor = cursor;
+	JobStore(ALatticeCursor<Index<AString, ACell>> cursor) {
+		super(cursor);
 	}
 
 	/**
@@ -72,12 +71,4 @@ public class JobStore {
 		return getAll().count();
 	}
 
-	/**
-	 * Returns the underlying cursor for direct operations.
-	 *
-	 * @return Cursor at the jobs level
-	 */
-	public ACursor<Index<AString, ACell>> cursor() {
-		return cursor;
-	}
 }
