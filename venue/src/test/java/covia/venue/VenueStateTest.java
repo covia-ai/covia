@@ -373,13 +373,13 @@ public class VenueStateTest {
 		AString did = Strings.create("did:key:zAlice");
 
 		// ensureUser creates the user state
-		UserState alice = vs.ensureUser(did);
+		User alice = vs.ensureUser(did);
 		assertNotNull(alice);
 		assertEquals(did, alice.getDID());
 		assertNotNull(alice.get(), "User state should be initialised");
 
 		// Subsequent user() call should also return non-null
-		UserState aliceAgain = vs.user(did);
+		User aliceAgain = vs.user(did);
 		assertNotNull(aliceAgain, "user() should return non-null after ensureUser");
 	}
 
@@ -390,8 +390,8 @@ public class VenueStateTest {
 		AString aliceDID = Strings.create("did:key:zAlice");
 		AString bobDID = Strings.create("did:key:zBob");
 
-		UserState alice = vs.ensureUser(aliceDID);
-		UserState bob = vs.ensureUser(bobDID);
+		User alice = vs.ensureUser(aliceDID);
+		User bob = vs.ensureUser(bobDID);
 
 		// Alice writes a job reference
 		alice.jobs().persist(Strings.create("alice-job-01"), Maps.of(

@@ -154,10 +154,10 @@ public class VenueState {
 	 * @param did User DID string
 	 * @return UserState wrapping the per-user cursor, or null
 	 */
-	public UserState user(AString did) {
+	public User user(AString did) {
 		ALatticeCursor<ACell> userCursor = cursor.path(Covia.USER_DATA, did);
 		if (userCursor.get() == null) return null;
-		return new UserState(userCursor, did);
+		return new User(userCursor, did);
 	}
 
 	/**
@@ -168,12 +168,12 @@ public class VenueState {
 	 * @param did User DID string
 	 * @return UserState, never null
 	 */
-	public UserState ensureUser(AString did) {
+	public User ensureUser(AString did) {
 		ALatticeCursor<ACell> userCursor = cursor.path(Covia.USER_DATA, did);
 		if (userCursor.get() == null) {
 			userCursor.set(Covia.USER.zero());
 		}
-		return new UserState(userCursor, did);
+		return new User(userCursor, did);
 	}
 
 	/**

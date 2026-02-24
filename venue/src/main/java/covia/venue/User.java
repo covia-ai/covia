@@ -22,12 +22,12 @@ import covia.lattice.Covia;
  *
  * <p>Future phases will add :workspace, :assets, :ops.</p>
  */
-public class UserState {
+public class User {
 
 	private final ALatticeCursor<ACell> cursor;
 	private final AString did;
 
-	UserState(ALatticeCursor<ACell> cursor, AString did) {
+	User(ALatticeCursor<ACell> cursor, AString did) {
 		this.cursor = cursor;
 		this.did = did;
 	}

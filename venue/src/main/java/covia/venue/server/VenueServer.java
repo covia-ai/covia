@@ -14,8 +14,6 @@ import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
-import convex.core.data.prim.AInteger;
-import convex.core.lang.RT;
 import convex.core.store.AStore;
 import convex.etch.EtchStore;
 import convex.lattice.LatticeContext;

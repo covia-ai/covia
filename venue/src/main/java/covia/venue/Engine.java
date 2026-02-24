@@ -6,9 +6,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Random;
 
 import org.slf4j.Logger;
@@ -18,11 +16,11 @@ import convex.core.crypto.AKeyPair;
 import convex.core.crypto.Hashing;
 import convex.core.crypto.util.Multikey;
 import convex.core.data.ABlob;
-import convex.core.data.AccountKey;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.AccountKey;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
@@ -153,7 +151,6 @@ public class Engine {
 	 *
 	 * @return Configured storage instance
 	 */
-	@SuppressWarnings("unchecked")
 	private AStorage createStorage() {
 		AString storageType = config.getStorageType();
 		String storagePath = config.getStoragePath();
