@@ -33,6 +33,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.did.DID;
+import convex.did.DIDURL;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.cursor.Cursors;
@@ -331,7 +332,7 @@ public class Engine {
 	 */
 	@SuppressWarnings("unchecked")
 	public void recoverJobs() {
-		Index<AString, ACell> jobsIndex = venueState.jobs().getAll();
+		Index<Blob, ACell> jobsIndex = venueState.jobs().getAll();
 		if (jobsIndex.isEmpty()) return;
 
 		long n = jobsIndex.count();
@@ -340,7 +341,7 @@ public class Engine {
 		int failed = 0;
 		for (long i = 0; i < n; i++) {
 			var entry = jobsIndex.entryAt(i);
-			AString jobID = entry.getKey();
+			Blob jobID = (Blob) entry.getKey();
 			ACell value = entry.getValue();
 			if (!(value instanceof AMap)) continue;
 			AMap<AString, ACell> record = (AMap<AString, ACell>) value;
@@ -378,7 +379,7 @@ public class Engine {
 	 * Resolves the operation and adapter from the :op field and invokes.
 	 * @return true if successfully re-fired, false if resolution failed
 	 */
-	private boolean refireJob(AString jobID, AMap<AString, ACell> record) {
+	private boolean refireJob(Blob jobID, AMap<AString, ACell> record) {
 		AString opRef = RT.ensureString(record.get(Fields.OP));
 		if (opRef == null) {
 			markJobFailed(jobID, record, "Cannot re-fire: no operation reference");
@@ -446,7 +447,7 @@ public class Engine {
 		return getAdapter(adapterName);
 	}
 
-	private void markJobFailed(AString jobID, AMap<AString, ACell> record, String reason) {
+	private void markJobFailed(Blob jobID, AMap<AString, ACell> record, String reason) {
 		AMap<AString, ACell> failedRecord = record
 				.assoc(Fields.STATUS, Status.FAILED)
 				.assoc(Fields.ERROR, Strings.create(reason))
@@ -459,7 +460,7 @@ public class Engine {
 	 * Restores a paused/waiting job into the in-memory jobs map as a live Job object
 	 * with write-through persistence. Does not re-invoke the adapter.
 	 */
-	private void restoreJob(AString jobID, AMap<AString, ACell> record) {
+	private void restoreJob(Blob jobID, AMap<AString, ACell> record) {
 		AString opRef = RT.ensureString(record.get(Fields.OP));
 		Operation op = null;
 		if (opRef != null) {
@@ -558,86 +559,144 @@ public class Engine {
 		return RT.ensureMap(arec.get(AssetStore.POS_META));
 	}
 
-	// TODO: Consider whether asset IDs should be AString (hex) or Hash throughout.
-	// Currently assets are keyed by Hash in the lattice but referenced by hex AString
-	// in operation refs, job records, and DID URLs. Unifying on one canonical type
-	// would eliminate conversions.
+	// ========== Reference resolution ==========
+
+	/** Namespace prefix for immutable content-addressed assets */
+	private static final AString NS_ASSET = Strings.intern("/a/");
+	/** Namespace prefix for DID URLs */
+	private static final AString NS_DID   = Strings.intern("did:");
+	// TODO: private static final AString NS_OPS       = Strings.intern("/o/");
+	// TODO: private static final AString NS_WORKSPACE = Strings.intern("/w/");
+	// TODO: private static final AString NS_JOB       = Strings.intern("/j/");
 
 	/**
-	 * Resolves an asset reference to an Asset. Supports hex hash, DID URL, operation name,
-	 * and remote DID URLs (returns an Asset with a remote venue reference).
-	 * @param ref Asset reference (AString)
+	 * Resolves a reference to an Asset. Supports:
+	 * <ul>
+	 *   <li>Bare hex hash — shorthand for {@code /a/<hash>}</li>
+	 *   <li>{@code /a/<hash>} — explicit asset namespace</li>
+	 *   <li>{@code did:.../<namespace>/<path>} — local or remote DID URL</li>
+	 *   <li>Operation name (e.g. "test:echo") — operation registry lookup</li>
+	 * </ul>
+	 *
+	 * @param ref Reference string
+	 * @param ctx Request context (caller identity for future per-user namespace scoping)
 	 * @return Resolved Asset, or null if not resolvable
 	 */
-	public Asset resolveAsset(AString ref) {
-		if (ref==null) return null;
-		String s = ref.toString();
+	public Asset resolveAsset(AString ref, RequestContext ctx) {
+		if (ref == null) return null;
 
-		// 1. Try direct hex hash (shorthand for asset on this venue)
-		Hash h = Hash.parse(s);
-		if (h!=null) return getAsset(h);
+		// 1. Bare hex hash → /a/<hash>
+		Hash h = Hash.parse(ref);
+		if (h != null) return getAsset(h);
 
-		// 2. Try DID URL with /a/<hash> path
-		if (s.startsWith("did:")) {
-			int idx = s.lastIndexOf("/a/");
-			if (idx>=0) {
-				String didPart = s.substring(0, idx);
-				String hashPart = s.substring(idx+3);
-				Hash parsed = Hash.parse(hashPart);
-				if (parsed!=null) {
-					// Check if this DID refers to the local venue or a remote one
-					String localDID = getDIDString().toString();
-					if (localDID.equals(didPart)) {
-						// Local DID — look up asset locally
-						return getAsset(parsed);
-					} else {
-						// Remote DID — create Operation with remote venue reference
-						Venue remoteVenue = Grid.connect(didPart);
-						Operation remoteOp = Operation.create(parsed, null);
-						remoteOp.setVenue(remoteVenue);
-						return remoteOp;
-					}
-				}
-			}
+		// 2. Namespace prefix dispatch
+		if (ref.startsWith(NS_ASSET)) {
+			return resolveAssetRef(ref.slice(3));
+		}
+		// TODO: /o/ — operation registry (Phase 3)
+		// if (ref.startsWith(NS_OPS)) { return resolveOpsRef(ref.slice(3), ctx); }
+		// TODO: /w/ — per-user workspace (Phase 3+)
+		// if (ref.startsWith(NS_WORKSPACE)) { return resolveWorkspaceRef(ref.slice(3), ctx); }
+
+		// 3. DID URL
+		if (ref.startsWith(NS_DID)) {
+			return resolveDIDURL(ref);
 		}
 
-		// 3. Try operation name registry
+		// 4. Operation name registry (legacy — becomes /o/ in Phase 3)
 		Hash opHash = operations.get(ref);
-		if (opHash!=null) return getAsset(opHash);
+		if (opHash != null) return getAsset(opHash);
 
 		return null;
 	}
 
 	/**
-	 * Resolves an asset reference to a local Hash. Supports hex hash, DID URL (local only),
-	 * and operation name. Does not handle remote DIDs — use resolveAsset() for full resolution.
+	 * Resolves a reference to an Asset (internal use, no caller identity).
 	 *
-	 * @param ref Asset reference (AString)
-	 * @return Resolved Hash, or null if not resolvable locally
+	 * @param ref Reference string
+	 * @return Resolved Asset, or null if not resolvable
 	 */
-	public Hash resolveAssetHash(AString ref) {
-		if (ref==null) return null;
-		String s = ref.toString();
+	public Asset resolveAsset(AString ref) {
+		return resolveAsset(ref, RequestContext.INTERNAL);
+	}
 
-		// 1. Try direct hex hash (shorthand for asset on this venue)
-		Hash h = Hash.parse(s);
-		if (h!=null) return h;
+	/**
+	 * Resolves a hash string within the /a/ namespace.
+	 */
+	private Asset resolveAssetRef(AString hashStr) {
+		Hash h = Hash.parse(hashStr);
+		return (h != null) ? getAsset(h) : null;
+	}
 
-		// 2. Try DID URL with /a/<hash> path (local DID only)
-		if (s.startsWith("did:")) {
-			int idx = s.lastIndexOf("/a/");
-			if (idx>=0) {
-				String hashPart = s.substring(idx+3);
-				Hash parsed = Hash.parse(hashPart);
-				if (parsed!=null) return parsed;
-			}
+	/**
+	 * Resolves a DID URL reference using {@link DIDURL} parsing.
+	 * Dispatches on the path namespace prefix. Local DID → local lookup,
+	 * remote DID → remote venue reference.
+	 */
+	private Asset resolveDIDURL(AString ref) {
+		DIDURL didurl;
+		try {
+			didurl = DIDURL.create(ref.toString());
+		} catch (IllegalArgumentException e) {
+			return null;
+		}
+		String path = didurl.getPath();
+		if (path == null || !path.startsWith("/a/")) return null;
+		// TODO: dispatch on other namespace prefixes in path (/o/, /w/, etc.)
+
+		Hash hash = Hash.parse(path.substring(3));
+		if (hash == null) return null;
+
+		// Local vs remote
+		String didStr = didurl.getDID().toString();
+		if (getDIDString().toString().equals(didStr)) {
+			return getAsset(hash);
 		}
 
-		// 3. Try operation name registry
-		Hash opHash = operations.get(ref);
-		if (opHash!=null) return opHash;
+		// Remote DID — create Operation with remote venue reference
+		Venue remoteVenue = Grid.connect(didStr);
+		Operation remoteOp = Operation.create(hash, null);
+		remoteOp.setVenue(remoteVenue);
+		return remoteOp;
+	}
 
-		return null;
+	/**
+	 * Resolves a reference to a local Hash. Does not handle remote DIDs.
+	 * Use {@link #resolveAsset(AString, RequestContext)} for full resolution
+	 * including remote dispatch.
+	 *
+	 * @param ref Reference string
+	 * @return Local Hash, or null if not resolvable
+	 */
+	public Hash resolveHash(AString ref) {
+		if (ref == null) return null;
+
+		// 1. Bare hex hash
+		Hash h = Hash.parse(ref);
+		if (h != null) return h;
+
+		// 2. Namespace prefix
+		if (ref.startsWith(NS_ASSET)) {
+			return Hash.parse(ref.slice(3));
+		}
+		// TODO: /o/ — resolve operation name to pinned /a/ hash (Phase 3)
+
+		// 3. DID URL (local only — no remote dispatch)
+		if (ref.startsWith(NS_DID)) {
+			try {
+				DIDURL didurl = DIDURL.create(ref.toString());
+				String path = didurl.getPath();
+				if (path != null && path.startsWith("/a/")) {
+					return Hash.parse(path.substring(3));
+				}
+			} catch (IllegalArgumentException e) {
+				return null;
+			}
+			return null;
+		}
+
+		// 4. Operation name registry
+		return operations.get(ref);
 	}
 
 	/**
@@ -730,7 +789,7 @@ public class Engine {
 		return job;
 	}
 
-	public void updateJobStatus(AString jobID, AMap<AString, ACell> newData) {
+	public void updateJobStatus(Blob jobID, AMap<AString, ACell> newData) {
 		Job job;
 		synchronized (jobs) {
 			job = jobs.get(jobID);
@@ -744,11 +803,11 @@ public class Engine {
 	 * Enforces access control: caller must own the job (matching :caller DID).
 	 * @throws SecurityException if the caller does not own the job
 	 */
-	public AMap<AString,ACell> getJobData(AString jobID, RequestContext ctx) {
+	public AMap<AString,ACell> getJobData(Blob jobID, RequestContext ctx) {
 		AMap<AString,ACell> data = getJobData(jobID);
 		if (data == null) return null;
 		if (!accessControl.canAccessJob(ctx, data)) {
-			throw new SecurityException("Access denied to job: " + jobID);
+			throw new SecurityException("Access denied to job: " + jobID.toHexString());
 		}
 		return data;
 	}
@@ -756,10 +815,10 @@ public class Engine {
 	/**
 	 * Gets a snapshot of the current job status data.
 	 * Checks in-memory cache first, falls back to lattice.
-	 * @param jobID
+	 * @param jobID Job ID as Blob
 	 * @return Job status record, or null if not found
 	 */
-	public AMap<AString,ACell> getJobData(AString jobID) {
+	public AMap<AString,ACell> getJobData(Blob jobID) {
 		Job job;
 		synchronized (jobs) {
 			job = jobs.get(jobID);
@@ -776,7 +835,7 @@ public class Engine {
 	 * @param jobID Job ID
 	 * @return Job, or null if not found
 	 */
-	public Job getJob(AString jobID) {
+	public Job getJob(Blob jobID) {
 		synchronized (jobs) {
 			Job job = jobs.get(jobID);
 			if (job != null) return job;
@@ -793,10 +852,10 @@ public class Engine {
 	 * Enforces access control: caller must own the job.
 	 * @throws SecurityException if the caller does not own the job
 	 */
-	public int deliverMessage(AString jobID, AMap<AString, ACell> message, RequestContext ctx) {
+	public int deliverMessage(Blob jobID, AMap<AString, ACell> message, RequestContext ctx) {
 		AMap<AString,ACell> data = getJobData(jobID);
 		if (data != null && !accessControl.canAccessJob(ctx, data)) {
-			throw new SecurityException("Access denied to job: " + jobID);
+			throw new SecurityException("Access denied to job: " + jobID.toHexString());
 		}
 		return deliverMessage(jobID, message, ctx.getCallerDID());
 	}
@@ -811,13 +870,13 @@ public class Engine {
 	 * @throws IllegalArgumentException if job not found
 	 * @throws IllegalStateException if job is in terminal state
 	 */
-	public int deliverMessage(AString jobID, AMap<AString, ACell> message, AString source) {
+	public int deliverMessage(Blob jobID, AMap<AString, ACell> message, AString source) {
 		Job job = getJob(jobID);
-		if (job == null) throw new IllegalArgumentException("Job not found: " + jobID);
-		if (job.isFinished()) throw new IllegalStateException("Job is in terminal state: " + jobID);
+		if (job == null) throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
+		if (job.isFinished()) throw new IllegalStateException("Job is in terminal state: " + jobID.toHexString());
 
 		long ts = Utils.getCurrentTimestamp();
-		AString msgId = generateJobID(ts); // reuse ID generator for unique message IDs
+		Blob msgId = generateJobID(ts); // reuse ID generator for unique message IDs
 
 		AMap<AString, ACell> record = Maps.of(
 				Fields.MESSAGE, message,
@@ -872,7 +931,7 @@ public class Engine {
 		return getAdapter(adapterName);
 	}
 
-	private HashMap<AString, Job> jobs = new HashMap<>();
+	private HashMap<Blob, Job> jobs = new HashMap<>();
 	
 	/**
 	 * Submit a Job for a resolved Operation.
@@ -886,7 +945,7 @@ public class Engine {
 	 */
 	private Job submitJob(AString opID, AMap<AString,ACell> meta, ACell input, Operation operation, AString callerDID) {
 		long ts=Utils.getCurrentTimestamp();
-		AString jobID = generateJobID(ts);
+		Blob jobID = generateJobID(ts);
 
 		AMap<AString,ACell> status= Maps.of(
 				Fields.ID,jobID,
@@ -934,7 +993,7 @@ public class Engine {
 	 * Persists a job record to the lattice :jobs index.
 	 * Called on initial submission and every status update via processUpdate().
 	 */
-	private void persistJobRecord(AString jobID, AMap<AString, ACell> record) {
+	private void persistJobRecord(Blob jobID, AMap<AString, ACell> record) {
 		venueState.jobs().persist(jobID, record);
 	}
 
@@ -947,18 +1006,18 @@ public class Engine {
 	 * 2 bytes incrementing counter for same timestamp
 	 * 8 bytes randomness
 	 * 
-	 * This is so that job IDs are usually sorted, but relatively unpredictable and very unlikely to collide
+	 * This is so that job IDs are time-ordered, but relatively unpredictable and very unlikely to collide
 	 */
-	private AString generateJobID(long ts) {
+	private Blob generateJobID(long ts) {
 		if (ts>lastJobTS) jobCounter=0; // reset job counter when TS increments
+		lastJobTS = ts;
 		byte[] bs=new byte[16];
-		
+
 		Utils.writeLong(bs, 0, ts<<16); // 48 bits enough for all plausible timestamps
 		Utils.writeShort(bs, 6, jobCounter++);
 		Utils.writeLong(bs, 8, rand.nextLong());
 
-		AString jobID=Blob.wrap(bs).toCVMHexString();
-		return jobID;
+		return Blob.wrap(bs);
 	}
 
 	/**
@@ -984,12 +1043,12 @@ public class Engine {
 	 * where the :caller field matches their DID.
 	 */
 	@SuppressWarnings("unchecked")
-	public Index<AString, ACell> getJobs(RequestContext ctx) {
-		Index<AString, ACell> all = getJobs();
+	public Index<Blob, ACell> getJobs(RequestContext ctx) {
+		Index<Blob, ACell> all = getJobs();
 		if (ctx.isInternal()) return all;
 
 		AString callerDID = ctx.getCallerDID();
-		Index<AString, ACell> filtered = Index.none();
+		Index<Blob, ACell> filtered = Index.none();
 		long n = all.count();
 		for (long i = 0; i < n; i++) {
 			var entry = all.entryAt(i);
@@ -1007,10 +1066,10 @@ public class Engine {
 
 	/**
 	 * Gets the jobs Index directly from the lattice (naturally time-ordered
-	 * since job IDs are timestamp-prefixed).
+	 * since job IDs are timestamp-prefixed Blobs).
 	 * @return Index of job IDs to job records, or empty Index if none
 	 */
-	public Index<AString, ACell> getJobs() {
+	public Index<Blob, ACell> getJobs() {
 		return venueState.jobs().getAll();
 	}
 
@@ -1142,11 +1201,11 @@ public class Engine {
 	 * Enforces access control: caller must own the job.
 	 * @throws SecurityException if the caller does not own the job
 	 */
-	public boolean deleteJob(AString id, RequestContext ctx) {
+	public boolean deleteJob(Blob id, RequestContext ctx) {
 		AMap<AString,ACell> data = getJobData(id);
 		if (data == null) return false;
 		if (!accessControl.canAccessJob(ctx, data)) {
-			throw new SecurityException("Access denied to job: " + id);
+			throw new SecurityException("Access denied to job: " + id.toHexString());
 		}
 		return deleteJob(id);
 	}
@@ -1156,7 +1215,7 @@ public class Engine {
 	 * @param id ID of Job
 	 * @return true if removed, false if did not exist anyway
 	 */
-	public boolean deleteJob(AString id) {
+	public boolean deleteJob(Blob id) {
 		synchronized (jobs) {
 			return jobs.remove(id)!=null;
 		}
@@ -1167,11 +1226,11 @@ public class Engine {
 	 * Enforces access control: caller must own the job.
 	 * @throws SecurityException if the caller does not own the job
 	 */
-	public AMap<AString, ACell> cancelJob(AString id, RequestContext ctx) {
+	public AMap<AString, ACell> cancelJob(Blob id, RequestContext ctx) {
 		AMap<AString,ACell> data = getJobData(id);
 		if (data == null) return null;
 		if (!accessControl.canAccessJob(ctx, data)) {
-			throw new SecurityException("Access denied to job: " + id);
+			throw new SecurityException("Access denied to job: " + id.toHexString());
 		}
 		return cancelJob(id);
 	}
@@ -1181,7 +1240,7 @@ public class Engine {
 	 * @param id ID of Job
 	 * @return updated Job status, or null if not found
 	 */
-	public AMap<AString, ACell> cancelJob(AString id) {
+	public AMap<AString, ACell> cancelJob(Blob id) {
 		Job job;
 		synchronized (jobs) {
 			job = jobs.get(id);
@@ -1196,11 +1255,11 @@ public class Engine {
 	 * Enforces access control: caller must own the job.
 	 * @throws SecurityException if the caller does not own the job
 	 */
-	public AMap<AString, ACell> pauseJob(AString id, RequestContext ctx) {
+	public AMap<AString, ACell> pauseJob(Blob id, RequestContext ctx) {
 		AMap<AString,ACell> data = getJobData(id);
 		if (data == null) return null;
 		if (!accessControl.canAccessJob(ctx, data)) {
-			throw new SecurityException("Access denied to job: " + id);
+			throw new SecurityException("Access denied to job: " + id.toHexString());
 		}
 		return pauseJob(id);
 	}
@@ -1210,7 +1269,7 @@ public class Engine {
 	 * @param id ID of Job
 	 * @return updated Job status, or null if not found
 	 */
-	public AMap<AString, ACell> pauseJob(AString id) {
+	public AMap<AString, ACell> pauseJob(Blob id) {
 		Job job;
 		synchronized (jobs) {
 			job = jobs.get(id);
@@ -1225,11 +1284,11 @@ public class Engine {
 	 * Enforces access control: caller must own the job.
 	 * @throws SecurityException if the caller does not own the job
 	 */
-	public AMap<AString, ACell> resumeJob(AString id, RequestContext ctx) {
+	public AMap<AString, ACell> resumeJob(Blob id, RequestContext ctx) {
 		AMap<AString,ACell> data = getJobData(id);
 		if (data == null) return null;
 		if (!accessControl.canAccessJob(ctx, data)) {
-			throw new SecurityException("Access denied to job: " + id);
+			throw new SecurityException("Access denied to job: " + id.toHexString());
 		}
 		return resumeJob(id);
 	}
@@ -1239,7 +1298,7 @@ public class Engine {
 	 * @param id ID of Job
 	 * @return updated Job status, or null if not found
 	 */
-	public AMap<AString, ACell> resumeJob(AString id) {
+	public AMap<AString, ACell> resumeJob(Blob id) {
 		Job job;
 		synchronized (jobs) {
 			job = jobs.get(id);

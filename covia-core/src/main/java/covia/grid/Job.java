@@ -7,6 +7,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -60,16 +61,11 @@ public class Job {
 		return false;
 	}
 
-	public static AString parseID(Object a) {
-		if (a instanceof String s) {
-			return Blob.parse(s).toCVMHexString();
-		} else if (a instanceof AString s) {
-			long n=s.count();
-			if ((n>=2)&&s.charAt(0)=='0'&&s.charAt(1)=='x') {
-				s=s.slice(2);
-			}
-			return s;
-		} 
+	public static Blob parseID(Object a) {
+		if (a instanceof Blob b) return b;
+		if (a instanceof ABlob b) return b.toFlatBlob();
+		if (a instanceof String s) return Blob.parse(s);
+		if (a instanceof AString s) return Blob.parse(s.toString());
 		throw new IllegalArgumentException("Unable to convert to Job ID: "+a);
 	}
 
@@ -79,11 +75,13 @@ public class Job {
 	
 	/**
 	 * Gets the remote ID of the Job. Valid for the venue which is executing it.
-	 * Typically a 32 char (16 byte) hex string
-	 * @return Job ID
+	 * A 16-byte Blob (6 bytes timestamp + 2 bytes counter + 8 bytes random).
+	 * @return Job ID as Blob
 	 */
-	public AString getID() {
-		return (AString)RT.get(data, Fields.ID);
+	public Blob getID() {
+		ACell id = RT.get(data, Fields.ID);
+		if (id == null) return null;
+		return parseID(id);
 	}
 
 	/**
@@ -305,7 +303,7 @@ public class Job {
 		cancelled=true;
 		update(job->{
 			job=job.assoc(Fields.STATUS, Status.CANCELLED);
-			job=job.assoc(Fields.ERROR, Strings.create("Job cancelled: "+getID()));
+			job=job.assoc(Fields.ERROR, Strings.create("Job cancelled: "+getID().toHexString()));
 			return job;
 		});
 	}

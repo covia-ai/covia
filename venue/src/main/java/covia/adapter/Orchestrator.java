@@ -11,6 +11,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.MapEntry;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
@@ -54,7 +55,7 @@ public class Orchestrator extends AAdapter {
 	
 	public class Orchestration implements Runnable {
 		final Job job;
-		final AString jobID;
+		final Blob jobID;
 		final AVector<?> steps;
 		final int n;
 		final ArrayList<SubTask> subTasks;

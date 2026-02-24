@@ -8,6 +8,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.MapEntry;
@@ -19,6 +20,7 @@ import convex.core.util.JSON;
 import convex.core.util.Utils;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
+import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
@@ -147,11 +149,12 @@ public class A2A extends ACoviaAPI {
 		}
 
 		// Extract taskId (= Covia job ID) from params
-		AString taskId = RT.ensureString(RT.getIn(params, "taskId"));
-		if (taskId == null) {
+		ACell taskIdCell = RT.getIn(params, "taskId");
+		if (taskIdCell == null) {
 			buildJsonRpcError(ctx, rpcId, -32602, "Invalid params: taskId required");
 			return;
 		}
+		Blob taskId = Job.parseID(taskIdCell);
 
 		// Extract message from params
 		AMap<AString, ACell> message = RT.getIn(params, "message");

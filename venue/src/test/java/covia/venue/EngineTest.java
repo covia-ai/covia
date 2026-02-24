@@ -106,33 +106,33 @@ public class EngineTest {
 		assertNotNull(jobID, "Job ID should be present in status");
 		
 		// Wait for job completion
-		waitForJobCompletion((AString)jobID, 5000);
-		
+		waitForJobCompletion((Blob)jobID, 5000);
+
 		// Get final status
-		ACell finalStatus = venue.getJobData((AString)jobID);
+		ACell finalStatus = venue.getJobData((Blob)jobID);
 		assertEquals(Status.COMPLETE, RT.getIn(finalStatus, "status"));
-		
+
 		// Verify result
 		ACell result = RT.getIn(finalStatus, "output");
 		assertEquals("Hello World", RT.getIn(result, "message").toString());
 	}
-	
+
 	@Test
 	public void testAdapterError() {
 		// Test error operation
 		ACell input=Maps.of("message",Strings.create("Test Error"));
 		Job job=venue.invokeOperation(Strings.create("test:random"),input);
 		AMap<AString, ACell> status = job.getData();
-		
+
 		// Get job ID from status
 		ACell jobID = RT.getIn(status, "id");
 		assertNotNull(jobID, "Job ID should be present in status");
-		
+
 		// Wait for job completion
-		waitForJobCompletion((AString)jobID, 5000);
-		
+		waitForJobCompletion((Blob)jobID, 5000);
+
 		// Get final status
-		ACell finalStatus = venue.getJobData((AString)jobID);
+		ACell finalStatus = venue.getJobData((Blob)jobID);
 		assertEquals("FAILED", RT.getIn(finalStatus, "status").toString());
 	}
 	
@@ -148,7 +148,7 @@ public class EngineTest {
 		assertNotNull(jobID, "Job ID should be present in status");
 		
 		// Wait for job completion
-		ACell finalStatus = waitForJobCompletion((AString)jobID, 5000);
+		ACell finalStatus = waitForJobCompletion((Blob)jobID, 5000);
 		
 		// Get final status
 		assertEquals(Status.COMPLETE, RT.getIn(finalStatus, "status"));
@@ -178,7 +178,7 @@ public class EngineTest {
 	}
 	
 	private ACell waitForJobCompletion(Object jobID, long timeoutMillis) {
-		AString id=RT.ensureString(RT.cvm(jobID));
+		Blob id=Job.parseID(jobID);
 		long startTime = System.currentTimeMillis();
 		ACell status = venue.getJobData(id);
 		while (System.currentTimeMillis() - startTime < timeoutMillis) {
@@ -291,7 +291,7 @@ public class EngineTest {
 	@Test
 	public void testResolveAssetHashHex() {
 		// Hex hash should resolve directly
-		Hash resolved = venue.resolveAssetHash(echoOpId.toCVMHexString());
+		Hash resolved = venue.resolveHash(echoOpId.toCVMHexString());
 		assertEquals(echoOpId, resolved);
 	}
 
@@ -299,7 +299,7 @@ public class EngineTest {
 	public void testResolveAssetHashDIDKeyURL() {
 		// did:key:.../a/<hash> should extract the hash
 		AString didUrl = Strings.create("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK/a/" + echoOpId.toHexString());
-		Hash resolved = venue.resolveAssetHash(didUrl);
+		Hash resolved = venue.resolveHash(didUrl);
 		assertEquals(echoOpId, resolved);
 	}
 
@@ -307,14 +307,14 @@ public class EngineTest {
 	public void testResolveAssetHashDIDWebURL() {
 		// did:web:.../a/<hash> should also work
 		AString didUrl = Strings.create("did:web:venue.example.com/a/" + echoOpId.toHexString());
-		Hash resolved = venue.resolveAssetHash(didUrl);
+		Hash resolved = venue.resolveHash(didUrl);
 		assertEquals(echoOpId, resolved);
 	}
 
 	@Test
 	public void testResolveAssetHashOperationName() {
 		// Operation names like test:echo should resolve via registry
-		Hash resolved = venue.resolveAssetHash(Strings.create("test:echo"));
+		Hash resolved = venue.resolveHash(Strings.create("test:echo"));
 		assertNotNull(resolved, "test:echo should resolve to an asset hash");
 		// The resolved hash should have valid metadata
 		assertNotNull(venue.getMetaValue(resolved));
@@ -323,9 +323,9 @@ public class EngineTest {
 	@Test
 	public void testResolveAssetHashUnknown() {
 		// Unknown strings should return null
-		assertNull(venue.resolveAssetHash(Strings.create("nonexistent:op")));
-		assertNull(venue.resolveAssetHash(Strings.create("did:key:z6Mk...no-asset-path")));
-		assertNull(venue.resolveAssetHash(null));
+		assertNull(venue.resolveHash(Strings.create("nonexistent:op")));
+		assertNull(venue.resolveHash(Strings.create("did:key:z6Mk...no-asset-path")));
+		assertNull(venue.resolveHash(null));
 	}
 
 	@Test

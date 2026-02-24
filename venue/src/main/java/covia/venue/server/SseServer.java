@@ -10,7 +10,7 @@ import org.slf4j.LoggerFactory;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Strings;
+import convex.core.data.Blob;
 import convex.core.util.JSON;
 import covia.grid.Job;
 import covia.venue.Engine;
@@ -38,7 +38,7 @@ public class SseServer {
 		registerClient(jobId, client);
 
 		// Send current job state as initial event
-		Job job = engine.getJob(Strings.create(jobId));
+		Job job = engine.getJob(Blob.parse(jobId));
 		if (job != null) {
 			sendJobEvent(client, job);
 		}

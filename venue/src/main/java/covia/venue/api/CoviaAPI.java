@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Maps;
@@ -77,9 +78,9 @@ public class CoviaAPI extends ACoviaAPI {
 
 		// Wire SSE broadcasting into engine's job update listeners
 		engine().addJobUpdateListener(job -> {
-			AString jobId = job.getID();
+			Blob jobId = job.getID();
 			if (jobId != null) {
-				sseServer.broadcastJobUpdate(jobId.toString(), job);
+				sseServer.broadcastJobUpdate(jobId.toHexString(), job);
 			}
 		});
 	}
@@ -429,7 +430,7 @@ public class CoviaAPI extends ACoviaAPI {
 			}
 
 			this.buildResult(ctx, 201, job.getData());
-			ctx.header("Location",ROUTE+"jobs/"+job.getID());
+			ctx.header("Location",ROUTE+"jobs/"+job.getID().toHexString());
 		} catch (SecurityException e) {
 			this.buildError(ctx, 403, e.getMessage());
 		} catch (IllegalArgumentException | IllegalStateException e) {
@@ -454,7 +455,7 @@ public class CoviaAPI extends ACoviaAPI {
 							type = String.class, 
 							example = "0x12345678123456781234567812345678") })	
 	protected void getJobStatus(Context ctx) {
-		AString id=RT.ensureString(Strings.create(ctx.pathParam("id")));
+		Blob id=Blob.parse(ctx.pathParam("id"));
 		if (id==null) {
 			buildError(ctx,400,"Job request requires a job ID as a valid hex string");
 			return;
@@ -496,7 +497,7 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiResponse(status = "409", description = "Job is in terminal state")
 					})
 	protected void sendMessage(Context ctx) {
-		AString id = Strings.create(ctx.pathParam("id"));
+		Blob id = Blob.parse(ctx.pathParam("id"));
 		ACell message = JSON.parseJSON5(ctx.body());
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
@@ -533,7 +534,7 @@ public class CoviaAPI extends ACoviaAPI {
 							type = String.class, 
 							example = "0x12345678123456781234567812345678") })	
 	protected void cancelJob(Context ctx) {
-		AString id=RT.ensureString(Strings.create(ctx.pathParam("id")));
+		Blob id=Blob.parse(ctx.pathParam("id"));
 		if (id==null) {
 			buildError(ctx,400,"Job cancellation request requires a job ID as a valid hex string");
 			return;
@@ -566,7 +567,7 @@ public class CoviaAPI extends ACoviaAPI {
 							type = String.class,
 							example = "0x12345678123456781234567812345678") })
 	protected void pauseJob(Context ctx) {
-		AString id=RT.ensureString(Strings.create(ctx.pathParam("id")));
+		Blob id=Blob.parse(ctx.pathParam("id"));
 		if (id==null) {
 			buildError(ctx,400,"Pause request requires a job ID");
 			return;
@@ -601,7 +602,7 @@ public class CoviaAPI extends ACoviaAPI {
 							type = String.class,
 							example = "0x12345678123456781234567812345678") })
 	protected void resumeJob(Context ctx) {
-		AString id=RT.ensureString(Strings.create(ctx.pathParam("id")));
+		Blob id=Blob.parse(ctx.pathParam("id"));
 		if (id==null) {
 			buildError(ctx,400,"Resume request requires a job ID");
 			return;
@@ -636,7 +637,7 @@ public class CoviaAPI extends ACoviaAPI {
 							type = String.class, 
 							example = "0x12345678123456781234567812345678") })	
 	protected void deleteJob(Context ctx) {
-		AString id=RT.ensureString(Strings.create(ctx.pathParam("id")));
+		Blob id=Blob.parse(ctx.pathParam("id"));
 		if (id==null) {
 			buildError(ctx,400,"Job deletion request requires a job ID as a valid hex string");
 			return;
@@ -662,12 +663,12 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void getJobs(Context ctx) {
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 		try {
-			Index<AString, ACell> jobs = engine().getJobs(rctx);
+			Index<Blob, ACell> jobs = engine().getJobs(rctx);
 			// Return job IDs as a list
 			long n = jobs.count();
 			ArrayList<Object> result = new ArrayList<>((int) n);
 			for (long i = 0; i < n; i++) {
-				result.add(jobs.entryAt(i).getKey());
+				result.add(jobs.entryAt(i).getKey().toHexString());
 			}
 			buildResult(ctx, result);
 		} catch (SecurityException e) {

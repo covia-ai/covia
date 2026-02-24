@@ -15,6 +15,7 @@ import convex.core.data.ACell;
 import convex.core.data.AHashMap;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Index;
@@ -92,7 +93,7 @@ public class MCP extends ACoviaAPI {
 	 */
 	private void broadcastJobNotification(Job job) {
 		if (sessions.isEmpty()) return;
-		AString jobId = job.getID();
+		Blob jobId = job.getID();
 		if (jobId == null) return;
 
 		AMap<AString, ACell> notification = Maps.of(

@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.api.Fields;
@@ -23,8 +24,8 @@ import covia.exception.JobFailedException;
 public class JobTest {
 
 	@Test public void testIDParse() {
-		assertEquals(Strings.create("1234"),Job.parseID("0x1234"));
-		assertEquals(Strings.create("1234"),Job.parseID(Strings.create("0x1234")));
+		assertEquals(Blob.parse("0x1234"),Job.parseID("0x1234"));
+		assertEquals(Blob.parse("0x1234"),Job.parseID(Strings.create("0x1234")));
 	}
 	
 	@Test public void testBuild() {

@@ -3,6 +3,7 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
@@ -11,7 +12,7 @@ import convex.lattice.cursor.ALatticeCursor;
  * Cursor wrapper for the venue's job store.
  *
  * <p>Wraps a lattice cursor at the {@code :jobs} level
- * ({@code Index<AString, ACell>} with timestamp-prefixed keys).
+ * ({@code Index<Blob, ACell>} with timestamp-prefixed Blob keys).
  * All writes propagate through the cursor chain and are automatically
  * signed at the {@code SignedCursor} boundary.</p>
  *
@@ -19,22 +20,22 @@ import convex.lattice.cursor.ALatticeCursor;
  * The underlying IndexLattice uses LWW merge on the "updated" timestamp,
  * so the newest update for each job ID always wins.</p>
  */
-public class JobStore extends ALatticeComponent<Index<AString, ACell>> {
+public class JobStore extends ALatticeComponent<Index<Blob, ACell>> {
 
-	JobStore(ALatticeCursor<Index<AString, ACell>> cursor) {
+	JobStore(ALatticeCursor<Index<Blob, ACell>> cursor) {
 		super(cursor);
 	}
 
 	/**
 	 * Persists a job record to the lattice.
 	 *
-	 * @param jobID Job ID (timestamp-prefixed hex string)
+	 * @param jobID Job ID (16-byte Blob: timestamp + counter + random)
 	 * @param record Job status record map
 	 */
-	public void persist(AString jobID, AMap<AString, ACell> record) {
+	public void persist(Blob jobID, AMap<AString, ACell> record) {
 		cursor.updateAndGet(jobs -> {
 			if (jobs == null) jobs = Index.none();
-			return ((Index<AString, ACell>) jobs).assoc(jobID, record);
+			return ((Index<Blob, ACell>) jobs).assoc(jobID, record);
 		});
 	}
 
@@ -45,8 +46,8 @@ public class JobStore extends ALatticeComponent<Index<AString, ACell>> {
 	 * @return Job record map, or null if not found
 	 */
 	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> get(AString jobID) {
-		Index<AString, ACell> jobs = getAll();
+	public AMap<AString, ACell> get(Blob jobID) {
+		Index<Blob, ACell> jobs = getAll();
 		ACell record = jobs.get(jobID);
 		return (record instanceof AMap) ? (AMap<AString, ACell>) record : null;
 	}
@@ -56,8 +57,9 @@ public class JobStore extends ALatticeComponent<Index<AString, ACell>> {
 	 *
 	 * @return Index of all job records, never null
 	 */
-	public Index<AString, ACell> getAll() {
-		Index<AString, ACell> jobs = (Index<AString, ACell>) cursor.get();
+	@SuppressWarnings("unchecked")
+	public Index<Blob, ACell> getAll() {
+		Index<Blob, ACell> jobs = (Index<Blob, ACell>) cursor.get();
 		if (jobs == null) return Index.none();
 		return jobs;
 	}

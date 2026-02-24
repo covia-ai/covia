@@ -11,6 +11,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Strings;
@@ -28,17 +29,17 @@ public class LocalVenue extends Venue {
 		this.engine=e;
 	}
 
-	public LocalVenue create(Engine e) {
+	public static LocalVenue create(Engine e) {
 		return new LocalVenue(e);
 	}
-	
+
 	@Override
 	public Asset getAsset(Hash assetID) {
 		Asset asset = engine.getAsset(assetID);
 		if (asset!=null) asset.setVenue(this);
 		return asset;
 	}
-	
+
 	public Engine getEngine() {
 		return engine;
 	}
@@ -65,28 +66,28 @@ public class LocalVenue extends Venue {
 	}
 
 	@Override
-	public CompletableFuture<Job> getJob(AString jobId) {
+	public CompletableFuture<Job> getJob(Blob jobId) {
 		Job job = engine.getJob(jobId);
 		if (job == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId));
+			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId.toHexString()));
 		}
 		return CompletableFuture.completedFuture(job);
 	}
 
 	@Override
-	public CompletableFuture<AMap<AString, ACell>> getJobStatus(AString jobId) {
+	public CompletableFuture<AMap<AString, ACell>> getJobStatus(Blob jobId) {
 		AMap<AString, ACell> status = engine.getJobData(jobId);
 		if (status == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId));
+			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId.toHexString()));
 		}
 		return CompletableFuture.completedFuture(status);
 	}
 
 	@Override
-	public CompletableFuture<ACell> awaitJobResult(AString jobId) {
+	public CompletableFuture<ACell> awaitJobResult(Blob jobId) {
 		Job job = engine.getJob(jobId);
 		if (job == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId));
+			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId.toHexString()));
 		}
 		return job.future();
 	}
@@ -144,38 +145,38 @@ public class LocalVenue extends Venue {
 	// ------------------------------------------------------------------
 
 	@Override
-	public AMap<AString, ACell> cancelJob(AString jobId) {
+	public AMap<AString, ACell> cancelJob(Blob jobId) {
 		return engine.cancelJob(jobId, RequestContext.of(getUser()));
 	}
 
 	@Override
-	public AMap<AString, ACell> pauseJob(AString jobId) {
+	public AMap<AString, ACell> pauseJob(Blob jobId) {
 		return engine.pauseJob(jobId, RequestContext.of(getUser()));
 	}
 
 	@Override
-	public AMap<AString, ACell> resumeJob(AString jobId) {
+	public AMap<AString, ACell> resumeJob(Blob jobId) {
 		return engine.resumeJob(jobId, RequestContext.of(getUser()));
 	}
 
 	@Override
-	public boolean deleteJob(AString jobId) {
+	public boolean deleteJob(Blob jobId) {
 		return engine.deleteJob(jobId, RequestContext.of(getUser()));
 	}
 
 	@Override
-	public List<AString> listJobs() {
-		Index<AString, ACell> jobs = engine.getJobs(RequestContext.of(getUser()));
+	public List<Blob> listJobs() {
+		Index<Blob, ACell> jobs = engine.getJobs(RequestContext.of(getUser()));
 		long n = jobs.count();
-		List<AString> result = new ArrayList<>((int) n);
+		List<Blob> result = new ArrayList<>((int) n);
 		for (long i = 0; i < n; i++) {
-			result.add(jobs.entryAt(i).getKey());
+			result.add((Blob) jobs.entryAt(i).getKey());
 		}
 		return result;
 	}
 
 	@Override
 	public int sendMessage(String jobId, AMap<AString, ACell> message) {
-		return engine.deliverMessage(Strings.create(jobId), message, RequestContext.of(getUser()));
+		return engine.deliverMessage(Blob.parse(jobId), message, RequestContext.of(getUser()));
 	}
 }

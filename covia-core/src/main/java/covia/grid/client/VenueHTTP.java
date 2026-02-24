@@ -22,6 +22,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -202,27 +203,27 @@ public class VenueHTTP extends Venue {
 	}
 
 	@Override
-	public CompletableFuture<Job> getJob(AString jobId) {
+	public CompletableFuture<Job> getJob(Blob jobId) {
 		return getJobData(jobId).thenApply(status -> {
 			if (status == null) {
-				throw new IllegalArgumentException("Job not found: " + jobId);
+				throw new IllegalArgumentException("Job not found: " + jobId.toHexString());
 			}
 			return Job.create(status);
 		});
 	}
 
 	@Override
-	public CompletableFuture<AMap<AString, ACell>> getJobStatus(AString jobId) {
+	public CompletableFuture<AMap<AString, ACell>> getJobStatus(Blob jobId) {
 		return getJobData(jobId).thenApply(status -> {
 			if (status == null) {
-				throw new IllegalArgumentException("Job not found: " + jobId);
+				throw new IllegalArgumentException("Job not found: " + jobId.toHexString());
 			}
 			return status;
 		});
 	}
 
 	@Override
-	public CompletableFuture<ACell> awaitJobResult(AString jobId) {
+	public CompletableFuture<ACell> awaitJobResult(Blob jobId) {
 		return getJob(jobId).thenCompose(job -> {
 			startBackgroundPolling(job);
 			return job.future();
@@ -507,7 +508,7 @@ public class VenueHTTP extends Venue {
 	 * @throws ResponseException if polling times out (job may still be running remotely)
 	 */
 	public boolean waitForFinish(Job job, long timeoutMs) throws InterruptedException {
-		AString id=job.getID();
+		Blob id=job.getID();
 		if (id==null) throw new IllegalStateException("Job has no ID");
 		long currentDelay = INITIAL_POLL_DELAY;
 		long deadline = System.currentTimeMillis() + timeoutMs;
@@ -710,8 +711,8 @@ public class VenueHTTP extends Venue {
 	 * @param jobID The job ID to check
 	 * @return Future containing the job status as an AMap, or null if not found
 	 */
-	public CompletableFuture<AMap<AString, ACell>> getJobData(AString jobID) {
-		HttpRequest req = requestBuilder("jobs/" + jobID)
+	public CompletableFuture<AMap<AString, ACell>> getJobData(Blob jobID) {
+		HttpRequest req = requestBuilder("jobs/" + jobID.toHexString())
 			.GET()
 			.build();
 		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
@@ -743,7 +744,7 @@ public class VenueHTTP extends Venue {
 	 * @throws TimeoutException
 	 */
 	public void updateJobStatus(Job job) throws InterruptedException, ExecutionException, TimeoutException {
-		AString jobID=job.getID();
+		Blob jobID=job.getID();
 		CompletableFuture<AMap<AString, ACell>> future = getJobData(jobID).thenApply(data->{
 			job.updateData(data);
 			// System.out.println(JSONUtils.toJSONPretty(data));
@@ -811,24 +812,24 @@ public class VenueHTTP extends Venue {
 	}
 
 	@Override
-	public AMap<AString, ACell> cancelJob(AString jobId) {
-		return cancelJob(jobId.toString()).join();
+	public AMap<AString, ACell> cancelJob(Blob jobId) {
+		return cancelJob(jobId.toHexString()).join();
 	}
 
 	@Override
-	public AMap<AString, ACell> pauseJob(AString jobId) {
-		return pauseJob(jobId.toString()).join();
+	public AMap<AString, ACell> pauseJob(Blob jobId) {
+		return pauseJob(jobId.toHexString()).join();
 	}
 
 	@Override
-	public AMap<AString, ACell> resumeJob(AString jobId) {
-		return resumeJob(jobId.toString()).join();
+	public AMap<AString, ACell> resumeJob(Blob jobId) {
+		return resumeJob(jobId.toHexString()).join();
 	}
 
 	@Override
-	public boolean deleteJob(AString jobId) {
+	public boolean deleteJob(Blob jobId) {
 		try {
-			deleteJob(jobId.toString()).join();
+			deleteJob(jobId.toHexString()).join();
 			return true;
 		} catch (Exception e) {
 			return false;
@@ -836,7 +837,7 @@ public class VenueHTTP extends Venue {
 	}
 
 	@Override
-	public List<AString> listJobs() {
+	public List<Blob> listJobs() {
 		HttpRequest req = requestBuilder("jobs")
 			.GET()
 			.build();
@@ -853,10 +854,10 @@ public class VenueHTTP extends Venue {
 			} else if (body instanceof AMap<?,?> m) {
 				items = RT.ensureVector(m.get(Fields.ITEMS));
 			}
-			ArrayList<AString> result = new ArrayList<>();
+			ArrayList<Blob> result = new ArrayList<>();
 			if (items != null) {
 				for (long i = 0; i < items.count(); i++) {
-					result.add(RT.ensureString(items.get(i)));
+					result.add(Job.parseID(items.get(i)));
 				}
 			}
 			return result;

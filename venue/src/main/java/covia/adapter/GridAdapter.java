@@ -5,6 +5,7 @@ import java.util.concurrent.CompletableFuture;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.lang.RT;
 import covia.api.Fields;
@@ -106,7 +107,7 @@ public class GridAdapter extends AAdapter {
 	}
 
 	private CompletableFuture<ACell> invokeJobStatus(ACell meta, ACell input) {
-		AString jobId = parseJobId(RT.getIn(input, Fields.ID));
+		Blob jobId = parseJobId(RT.getIn(input, Fields.ID));
 		if (jobId == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Job ID is required"));
 		}
@@ -116,7 +117,7 @@ public class GridAdapter extends AAdapter {
 	}
 
 	private CompletableFuture<ACell> invokeJobResult(ACell meta, ACell input) {
-		AString jobId = parseJobId(RT.getIn(input, Fields.ID));
+		Blob jobId = parseJobId(RT.getIn(input, Fields.ID));
 		if (jobId == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Job ID is required"));
 		}
@@ -131,7 +132,7 @@ public class GridAdapter extends AAdapter {
             : new LocalVenue(engine);
     }
 
-    private AString parseJobId(ACell jobIdCell) {
+    private Blob parseJobId(ACell jobIdCell) {
         if (jobIdCell == null) return null;
         try {
             return Job.parseID(jobIdCell);

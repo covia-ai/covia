@@ -10,6 +10,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
@@ -153,7 +154,7 @@ public class VenueStateTest {
 
 		assertEquals(0, jobs.count());
 
-		AString jobID = Strings.create("job001");
+		Blob jobID = Blob.parse("0x0001");
 		AMap<AString, ACell> record = Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L));
@@ -172,7 +173,7 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 		JobStore jobs = vs.jobs();
 
-		AString jobID = Strings.create("job001");
+		Blob jobID = Blob.parse("0x0001");
 		jobs.persist(jobID, Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
@@ -194,10 +195,10 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 		JobStore jobs = vs.jobs();
 
-		jobs.persist(Strings.create("job001"), Maps.of(
+		jobs.persist(Blob.parse("0x0001"), Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
-		jobs.persist(Strings.create("job002"), Maps.of(
+		jobs.persist(Blob.parse("0x0002"), Maps.of(
 			Fields.STATUS, Status.COMPLETE,
 			Fields.UPDATED, CVMLong.create(2000L)));
 
@@ -210,11 +211,11 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 		JobStore jobs = vs.jobs();
 
-		jobs.persist(Strings.create("job001"), Maps.of(
+		jobs.persist(Blob.parse("0x0001"), Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
 
-		Index<AString, ACell> all = jobs.getAll();
+		Index<Blob, ACell> all = jobs.getAll();
 		assertNotNull(all);
 		assertEquals(1, all.count());
 	}
@@ -224,7 +225,7 @@ public class VenueStateTest {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 
-		assertNull(vs.jobs().get(Strings.create("nonexistent")));
+		assertNull(vs.jobs().get(Blob.parse("0xFFFF")));
 	}
 
 	// ========== Child Cursor Accessors ==========
@@ -310,7 +311,7 @@ public class VenueStateTest {
 		// Write asset and job through the fork
 		Hash assetId = forked.assets().store(
 			Strings.create("{\"name\":\"Synced Asset\"}"), null);
-		forked.jobs().persist(Strings.create("job-sync-01"), Maps.of(
+		forked.jobs().persist(Blob.parse("0x0001"), Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
 
@@ -320,7 +321,7 @@ public class VenueStateTest {
 		// Verify changes visible through the connected VenueState
 		assertNotNull(connected.assets().getRecord(assetId),
 			"Asset should be visible through connected cursor after sync");
-		assertNotNull(connected.jobs().get(Strings.create("job-sync-01")),
+		assertNotNull(connected.jobs().get(Blob.parse("0x0001")),
 			"Job should be visible through connected cursor after sync");
 	}
 
@@ -339,10 +340,10 @@ public class VenueStateTest {
 		forked.assets().store(Strings.create("{\"name\":\"Batch C\"}"), null);
 
 		// Multiple job writes
-		forked.jobs().persist(Strings.create("batch-job-01"), Maps.of(
+		forked.jobs().persist(Blob.parse("0x0001"), Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
-		forked.jobs().persist(Strings.create("batch-job-02"), Maps.of(
+		forked.jobs().persist(Blob.parse("0x0002"), Maps.of(
 			Fields.STATUS, Status.COMPLETE,
 			Fields.UPDATED, CVMLong.create(2000L)));
 
@@ -394,20 +395,20 @@ public class VenueStateTest {
 		User bob = vs.ensureUser(bobDID);
 
 		// Alice writes a job reference
-		alice.jobs().persist(Strings.create("alice-job-01"), Maps.of(
+		alice.jobs().persist(Blob.parse("0x0001"), Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
 
 		// Bob writes a job reference
-		bob.jobs().persist(Strings.create("bob-job-01"), Maps.of(
+		bob.jobs().persist(Blob.parse("0x0002"), Maps.of(
 			Fields.STATUS, Status.COMPLETE,
 			Fields.UPDATED, CVMLong.create(2000L)));
 
 		// Each sees only their own data
 		assertEquals(1, alice.jobs().count(), "Alice should see only her job");
 		assertEquals(1, bob.jobs().count(), "Bob should see only his job");
-		assertNotNull(alice.jobs().get(Strings.create("alice-job-01")));
-		assertNull(alice.jobs().get(Strings.create("bob-job-01")));
+		assertNotNull(alice.jobs().get(Blob.parse("0x0001")));
+		assertNull(alice.jobs().get(Blob.parse("0x0002")));
 	}
 
 	@Test

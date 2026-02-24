@@ -215,9 +215,9 @@ public class VenueServerTest {
 		Thread.sleep(50);
 		covia.updateJobStatus(job);
 	
-		AString jobId = job.getID();
+		Blob jobId = job.getID();
 		assertNotNull(jobId, "Job ID should be returned");
-		String jobIdStr = jobId.toString();
+		String jobIdStr = jobId.toHexString();
 		
 		// Step 3: Confirm that the status of the job is PENDING using Covia.getJobStatus
 		AMap<AString, ACell> statusMap = covia.getJobData(jobIdStr).get(5, TimeUnit.SECONDS); 
@@ -250,7 +250,7 @@ public class VenueServerTest {
 		Thread.sleep(50);
 		covia.updateJobStatus(job);
 		assertEquals(Status.STARTED, job.getStatus(), "Job should be STARTED");
-		String jobId = job.getID().toString();
+		String jobId = job.getID().toHexString();
 
 		// Pause the running job via API
 		AMap<AString, ACell> pausedStatus = covia.pauseJob(jobId).get(5, TimeUnit.SECONDS);
@@ -277,7 +277,7 @@ public class VenueServerTest {
 		Thread.sleep(50);
 		covia.updateJobStatus(job);
 		assertEquals(Status.PAUSED, job.getStatus(), "Pause op should auto-pause");
-		String jobId = job.getID().toString();
+		String jobId = job.getID().toHexString();
 
 		// Resume via API — adapter re-invoked, completes with original input
 		AMap<AString, ACell> resumedStatus = covia.resumeJob(jobId).get(5, TimeUnit.SECONDS);

@@ -8,6 +8,7 @@ import java.util.concurrent.CompletableFuture;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Strings;
 import convex.did.DID;
@@ -45,13 +46,13 @@ public abstract class Venue {
 	 * Gets the asset from the connected Venue
 	 * @param assetID
 	 * @return Asset instance
-	 * @throws IOException 
+	 * @throws IOException
 	 */
 	public Asset getAsset(String assetID) throws IOException {
 		Hash h=Assets.parseAssetID(assetID);
 		return getAsset(h);
 	}
-	
+
 	/**
 	 * Gets an  asset from the connected Venue
 	 * @param assetID The asset ID
@@ -59,7 +60,7 @@ public abstract class Venue {
 	 * @throws IOException If fetching the asset metadata failed
 	 */
 	public abstract Asset getAsset(Hash assetID) throws IOException;
-	
+
 	/**
 	 * Get the DID for this Venue, or null if the Venue has no public DID
 	 */
@@ -102,19 +103,19 @@ public abstract class Venue {
 		return getJob(Job.parseID(jobId));
 	}
 
-	public abstract CompletableFuture<Job> getJob(AString jobId);
+	public abstract CompletableFuture<Job> getJob(Blob jobId);
 
 	public CompletableFuture<AMap<AString, ACell>> getJobStatus(String jobId) {
 		return getJobStatus(Job.parseID(jobId));
 	}
 
-	public abstract CompletableFuture<AMap<AString, ACell>> getJobStatus(AString jobId);
+	public abstract CompletableFuture<AMap<AString, ACell>> getJobStatus(Blob jobId);
 
 	public CompletableFuture<ACell> awaitJobResult(String jobId) {
 		return awaitJobResult(Job.parseID(jobId));
 	}
 
-	public abstract CompletableFuture<ACell> awaitJobResult(AString jobId);
+	public abstract CompletableFuture<ACell> awaitJobResult(Blob jobId);
 
 	public DID getAssetDID(Hash id) {
 		return getDID().withPath("/a/"+id.toHexString());
@@ -187,34 +188,34 @@ public abstract class Venue {
 	 * @param jobId Job identifier
 	 * @return Updated job status, or null if job not found
 	 */
-	public abstract AMap<AString, ACell> cancelJob(AString jobId);
+	public abstract AMap<AString, ACell> cancelJob(Blob jobId);
 
 	/**
 	 * Pause a running job.
 	 * @param jobId Job identifier
 	 * @return Updated job status, or null if job not found
 	 */
-	public abstract AMap<AString, ACell> pauseJob(AString jobId);
+	public abstract AMap<AString, ACell> pauseJob(Blob jobId);
 
 	/**
 	 * Resume a paused job.
 	 * @param jobId Job identifier
 	 * @return Updated job status, or null if job not found
 	 */
-	public abstract AMap<AString, ACell> resumeJob(AString jobId);
+	public abstract AMap<AString, ACell> resumeJob(Blob jobId);
 
 	/**
 	 * Delete a job record.
 	 * @param jobId Job identifier
 	 * @return true if the job was deleted, false if not found
 	 */
-	public abstract boolean deleteJob(AString jobId);
+	public abstract boolean deleteJob(Blob jobId);
 
 	/**
 	 * List all job IDs at this venue.
-	 * @return List of job ID strings
+	 * @return List of job ID Blobs
 	 */
-	public abstract List<AString> listJobs();
+	public abstract List<Blob> listJobs();
 
 	/**
 	 * Sends a message to a running job's message queue.
