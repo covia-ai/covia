@@ -1,15 +1,14 @@
 package covia.venue;
 
 import convex.core.crypto.AKeyPair;
+import convex.core.cvm.Keywords;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.AVector;
 import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
-import convex.core.cvm.Keywords;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ACursor;
 import convex.lattice.cursor.ALatticeCursor;
@@ -40,8 +39,11 @@ import covia.lattice.Covia;
  * <ul>
  *   <li>{@link #assets()} — content-addressed asset store</li>
  *   <li>{@link #jobs()} — timestamp-ordered job store</li>
+ *   <li>{@link #user(AString)} — per-user state (returns null if not exists)</li>
+ *   <li>{@link #ensureUser(AString)} — per-user state (creates if needed)</li>
  *   <li>{@link #usersCursor()} — cursor for Auth</li>
  *   <li>{@link #authCursor()} — cursor for AccessControl</li>
+ *   <li>{@link #capsCursor()} — cursor for capabilities</li>
  *   <li>{@link #storageCursor()} — cursor for LatticeStorage</li>
  * </ul>
  *
@@ -123,7 +125,6 @@ public class VenueState {
 	 *
 	 * @return Cursor at the :users level
 	 */
-	@SuppressWarnings("unchecked")
 	public ACursor<AMap<AString, AMap<AString, ACell>>> usersCursor() {
 		return cursor.path(Covia.USERS);
 	}
@@ -133,7 +134,6 @@ public class VenueState {
 	 *
 	 * @return Cursor at the :auth level
 	 */
-	@SuppressWarnings("unchecked")
 	public ACursor<AMap<Keyword, ACell>> authCursor() {
 		return cursor.path(Covia.AUTH);
 	}
@@ -143,9 +143,46 @@ public class VenueState {
 	 *
 	 * @return Cursor at the :storage level
 	 */
-	@SuppressWarnings("unchecked")
 	public ACursor<Index<ABlob, ABlob>> storageCursor() {
 		return cursor.path(Covia.STORAGE);
+	}
+
+	/**
+	 * Gets the UserState for the given DID, or null if the user
+	 * doesn't exist (no data written at that cursor path).
+	 *
+	 * @param did User DID string
+	 * @return UserState wrapping the per-user cursor, or null
+	 */
+	public UserState user(AString did) {
+		ALatticeCursor<ACell> userCursor = cursor.path(Covia.USER_DATA, did);
+		if (userCursor.get() == null) return null;
+		return new UserState(userCursor, did);
+	}
+
+	/**
+	 * Gets or creates the UserState for the given DID.
+	 * If no data exists at the user's cursor path, initialises it
+	 * with the USER lattice zero value.
+	 *
+	 * @param did User DID string
+	 * @return UserState, never null
+	 */
+	public UserState ensureUser(AString did) {
+		ALatticeCursor<ACell> userCursor = cursor.path(Covia.USER_DATA, did);
+		if (userCursor.get() == null) {
+			userCursor.set(Covia.USER.zero());
+		}
+		return new UserState(userCursor, did);
+	}
+
+	/**
+	 * Gets the capabilities cursor for AccessControl.
+	 *
+	 * @return Cursor at the :caps level
+	 */
+	public ACursor<AMap<AString, ACell>> capsCursor() {
+		return cursor.path(Covia.CAPS);
 	}
 
 	/**

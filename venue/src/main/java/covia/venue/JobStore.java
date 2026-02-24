@@ -32,7 +32,6 @@ public class JobStore {
 	 * @param jobID Job ID (timestamp-prefixed hex string)
 	 * @param record Job status record map
 	 */
-	@SuppressWarnings("unchecked")
 	public void persist(AString jobID, AMap<AString, ACell> record) {
 		cursor.updateAndGet(jobs -> {
 			if (jobs == null) jobs = Index.none();
@@ -58,7 +57,6 @@ public class JobStore {
 	 *
 	 * @return Index of all job records, never null
 	 */
-	@SuppressWarnings("unchecked")
 	public Index<AString, ACell> getAll() {
 		Index<AString, ACell> jobs = (Index<AString, ACell>) cursor.get();
 		if (jobs == null) return Index.none();

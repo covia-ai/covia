@@ -28,12 +28,16 @@ import convex.lattice.generic.OwnerLattice;
  *     :venues  ->  OwnerLattice (per-AccountKey signed state)
  *       &lt;AccountKey&gt;  ->  SignedLattice
  *         :value  ->  KeyedLattice (venue state)
- *           :assets   ->  CASLattice (union merge, content-addressed)
- *           :jobs     ->  IndexLattice + LWW (newer "updated" wins)
- *           :users    ->  MapLattice + LWW (newer "updated" wins)
- *           :storage  ->  CASLattice (union merge, content-addressed blobs)
- *           :auth     ->  MapLattice + LWW (newer "updated" wins)
- *           :did      ->  FunctionLattice (first-writer-wins)
+ *           :assets    ->  CASLattice (union merge, content-addressed)
+ *           :jobs      ->  IndexLattice + LWW (newer "updated" wins)
+ *           :users     ->  MapLattice + LWW (newer "updated" wins)
+ *           :storage   ->  CASLattice (union merge, content-addressed blobs)
+ *           :auth      ->  MapLattice + LWW (newer "updated" wins)
+ *           :did       ->  FunctionLattice (first-writer-wins)
+ *           :caps      ->  MapLattice + LWW (per-DID capability sets)
+ *           :user-data ->  MapLattice (DID -> per-user KeyedLattice)
+ *             &lt;DID-string&gt;  ->  KeyedLattice (USER)
+ *               :jobs  ->  MapLattice + LWW (user's job references)
  *     :meta  ->  CASLattice (shared content-addressable metadata)
  * </pre>
  */
@@ -72,6 +76,12 @@ public final class Covia {
 	/** Keyword for DID string within venue state (set once at venue creation) */
 	public static final Keyword DID = Keyword.intern("did");
 
+	/** Keyword for per-DID capability sets within venue state */
+	public static final Keyword CAPS = Keyword.intern("caps");
+
+	/** Keyword for per-DID user state within venue state */
+	public static final Keyword USER_DATA = Keyword.intern("user-data");
+
 	// ========== Lattice definitions ==========
 
 	/**
@@ -86,10 +96,20 @@ public final class Covia {
 	private static final LWWLattice<ACell> LWW = LWWLattice.create(Covia::extractUpdatedTimestamp);
 
 	/**
+	 * Per-user lattice structure. Each user (identified by DID string) gets
+	 * an independent KeyedLattice. Extensible in future phases with
+	 * :workspace, :assets, :ops.
+	 */
+	public static final KeyedLattice USER = KeyedLattice.create(
+		JOBS, IndexLattice.create(LWW)                    // user's job references (Index, not Map)
+	);
+
+	/**
 	 * Venue lattice — per-venue state with keyword-keyed fields.
 	 *
 	 * <p>Each venue's state is a keyword-keyed Index containing assets, jobs,
-	 * users, storage, auth, and DID fields with appropriate merge semantics.
+	 * users, storage, auth, DID, capabilities, and per-user data with
+	 * appropriate merge semantics.
 	 */
 	public static final KeyedLattice VENUE = KeyedLattice.create(
 		ASSETS, CASLattice.create(),                      // union merge (content-addressed)
@@ -97,7 +117,9 @@ public final class Covia {
 		USERS, MapLattice.create(LWW),                    // per-user LWW by "updated" timestamp
 		STORAGE, CASLattice.create(),                     // union merge (content-addressed blobs)
 		AUTH, MapLattice.create(LWW),                     // per-entry LWW by "updated" timestamp
-		DID, FunctionLattice.create((a, b) -> a)          // first-writer-wins
+		DID, FunctionLattice.create((a, b) -> a),         // first-writer-wins
+		CAPS, MapLattice.create(LWW),                     // per-DID capability sets
+		USER_DATA, MapLattice.create(USER)                // per-DID user state
 	);
 
 	/**

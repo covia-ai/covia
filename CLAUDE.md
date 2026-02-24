@@ -116,11 +116,16 @@ Adapter Layer
 ```
 :grid → GridLattice
   :venues → Index<VenueDID, VenueLattice>
-    :assets  → Index<Hash, AssetRecord>     (union merge)
-    :jobs    → Index<AString, JobRecord>     (timestamp merge)
-    :users   → Index<AString, UserRecord>    (timestamp merge)
-    :storage → Index<Hash, ABlob>            (CAS merge)
-  :meta → Index<Hash, AString>              (shared content-addressed metadata)
+    :assets    → Index<Hash, AssetRecord>     (union merge)
+    :jobs      → Index<AString, JobRecord>    (timestamp merge)
+    :users     → Index<AString, UserRecord>   (timestamp merge)
+    :storage   → Index<Hash, ABlob>           (CAS merge)
+    :auth      → Map<AString, ACell>          (timestamp merge)
+    :did       → AString                      (first-writer-wins)
+    :caps      → Map<AString, ACell>          (per-DID capability sets)
+    :user-data → Map<DID, UserLattice>        (per-user state)
+      :jobs    → Index<AString, JobRecord>    (user's job references)
+  :meta → Index<Hash, AString>               (shared content-addressed metadata)
 ```
 
 ### Protocols
@@ -180,7 +185,7 @@ Adapter Layer
 
 ### In Progress
 
-- **Phase 2: Job persistence to lattice** — VenueLattice has `:jobs` index but Engine still uses volatile HashMap
+- **Phase 3: Capability enforcement** — `:caps` lattice slot present but not yet enforced; UCAN `with`/`can` checking planned for Phase 3/4
 
 ---
 
@@ -188,8 +193,8 @@ Adapter Layer
 
 ### P0 — Critical (blocks production use)
 
-- [ ] **Add authorization enforcement** — AuthMiddleware extracts caller DID but `Engine.invokeOperation()` never checks permissions. Implement capability-based access control so venues can restrict which users/agents can invoke which operations.
-  - Files: `venue/.../venue/Engine.java`, `venue/.../venue/Auth.java`, `venue/.../server/AuthMiddleware.java`
+- [x] **Add authorization enforcement** — Job ownership enforced: users see/manage only their own jobs. `AccessControl.canAccessJob()` checks `:caller` field. Engine methods throw `SecurityException` for non-owners. Internal requests bypass all checks. Per-user cursors via `UserState`. Fine-grained capability enforcement (UCAN `with`/`can`) planned for Phase 3/4.
+  - Files: `venue/.../venue/Engine.java`, `venue/.../venue/AccessControl.java`, `venue/.../venue/UserState.java`, `venue/.../venue/VenueState.java`
 
 ### P1 — High (security and reliability)
 

@@ -355,6 +355,71 @@ public class VenueStateTest {
 			"All 2 jobs should be visible after single sync");
 	}
 
+	// ========== User State ==========
+
+	@Test
+	public void testUserReturnsNullForNonExistent() {
+		AKeyPair kp = AKeyPair.generate();
+		VenueState vs = VenueState.create(kp);
+
+		assertNull(vs.user(Strings.create("did:key:zUnknown")),
+			"user() should return null when no data exists for that DID");
+	}
+
+	@Test
+	public void testEnsureUserCreatesState() {
+		AKeyPair kp = AKeyPair.generate();
+		VenueState vs = VenueState.create(kp);
+		AString did = Strings.create("did:key:zAlice");
+
+		// ensureUser creates the user state
+		UserState alice = vs.ensureUser(did);
+		assertNotNull(alice);
+		assertEquals(did, alice.getDID());
+		assertNotNull(alice.get(), "User state should be initialised");
+
+		// Subsequent user() call should also return non-null
+		UserState aliceAgain = vs.user(did);
+		assertNotNull(aliceAgain, "user() should return non-null after ensureUser");
+	}
+
+	@Test
+	public void testUserDataIsolation() {
+		AKeyPair kp = AKeyPair.generate();
+		VenueState vs = VenueState.create(kp);
+		AString aliceDID = Strings.create("did:key:zAlice");
+		AString bobDID = Strings.create("did:key:zBob");
+
+		UserState alice = vs.ensureUser(aliceDID);
+		UserState bob = vs.ensureUser(bobDID);
+
+		// Alice writes a job reference
+		alice.jobs().persist(Strings.create("alice-job-01"), Maps.of(
+			Fields.STATUS, Status.PENDING,
+			Fields.UPDATED, CVMLong.create(1000L)));
+
+		// Bob writes a job reference
+		bob.jobs().persist(Strings.create("bob-job-01"), Maps.of(
+			Fields.STATUS, Status.COMPLETE,
+			Fields.UPDATED, CVMLong.create(2000L)));
+
+		// Each sees only their own data
+		assertEquals(1, alice.jobs().count(), "Alice should see only her job");
+		assertEquals(1, bob.jobs().count(), "Bob should see only his job");
+		assertNotNull(alice.jobs().get(Strings.create("alice-job-01")));
+		assertNull(alice.jobs().get(Strings.create("bob-job-01")));
+	}
+
+	@Test
+	public void testCapsCursorAccessor() {
+		AKeyPair kp = AKeyPair.generate();
+		VenueState vs = VenueState.create(kp);
+
+		assertNotNull(vs.capsCursor(), "Caps cursor should be available");
+	}
+
+	// ========== Fork / Sync ==========
+
 	@Test
 	public void testForkSyncIdempotent() {
 		AKeyPair kp = AKeyPair.generate();

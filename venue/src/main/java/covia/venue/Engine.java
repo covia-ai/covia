@@ -744,9 +744,16 @@ public class Engine {
 
 	/**
 	 * Gets a snapshot of the current job status data with request context.
+	 * Enforces access control: caller must own the job (matching :caller DID).
+	 * @throws SecurityException if the caller does not own the job
 	 */
 	public AMap<AString,ACell> getJobData(AString jobID, RequestContext ctx) {
-		return getJobData(jobID);
+		AMap<AString,ACell> data = getJobData(jobID);
+		if (data == null) return null;
+		if (!accessControl.canAccessJob(ctx, data)) {
+			throw new SecurityException("Access denied to job: " + jobID);
+		}
+		return data;
 	}
 
 	/**
@@ -786,10 +793,15 @@ public class Engine {
 
 	/**
 	 * Delivers a message to a job's message queue with request context.
+	 * Enforces access control: caller must own the job.
+	 * @throws SecurityException if the caller does not own the job
 	 */
 	public int deliverMessage(AString jobID, AMap<AString, ACell> message, RequestContext ctx) {
-		AString did = ctx.getCallerDID();
-		return deliverMessage(jobID, message, did);
+		AMap<AString,ACell> data = getJobData(jobID);
+		if (data != null && !accessControl.canAccessJob(ctx, data)) {
+			throw new SecurityException("Access denied to job: " + jobID);
+		}
+		return deliverMessage(jobID, message, ctx.getCallerDID());
 	}
 
 	/**
@@ -970,10 +982,30 @@ public class Engine {
 	}
 
 	/**
-	 * Gets the jobs Index with request context.
+	 * Gets the jobs Index filtered by request context.
+	 * Internal requests see all jobs. Authenticated users see only jobs
+	 * where the :caller field matches their DID.
 	 */
+	@SuppressWarnings("unchecked")
 	public Index<AString, ACell> getJobs(RequestContext ctx) {
-		return getJobs();
+		Index<AString, ACell> all = getJobs();
+		if (ctx.isInternal()) return all;
+
+		AString callerDID = ctx.getCallerDID();
+		Index<AString, ACell> filtered = Index.none();
+		long n = all.count();
+		for (long i = 0; i < n; i++) {
+			var entry = all.entryAt(i);
+			ACell value = entry.getValue();
+			if (value instanceof AMap) {
+				AString jobCaller = RT.ensureString(
+					((AMap<AString, ACell>) value).get(Fields.CALLER));
+				if (callerDID != null && callerDID.equals(jobCaller)) {
+					filtered = filtered.assoc(entry.getKey(), value);
+				}
+			}
+		}
+		return filtered;
 	}
 
 	/**
@@ -1110,8 +1142,15 @@ public class Engine {
 
 	/**
 	 * Deletes a job permanently with request context.
+	 * Enforces access control: caller must own the job.
+	 * @throws SecurityException if the caller does not own the job
 	 */
 	public boolean deleteJob(AString id, RequestContext ctx) {
+		AMap<AString,ACell> data = getJobData(id);
+		if (data == null) return false;
+		if (!accessControl.canAccessJob(ctx, data)) {
+			throw new SecurityException("Access denied to job: " + id);
+		}
 		return deleteJob(id);
 	}
 
@@ -1128,8 +1167,15 @@ public class Engine {
 
 	/**
 	 * Cancels a Job with request context.
+	 * Enforces access control: caller must own the job.
+	 * @throws SecurityException if the caller does not own the job
 	 */
 	public AMap<AString, ACell> cancelJob(AString id, RequestContext ctx) {
+		AMap<AString,ACell> data = getJobData(id);
+		if (data == null) return null;
+		if (!accessControl.canAccessJob(ctx, data)) {
+			throw new SecurityException("Access denied to job: " + id);
+		}
 		return cancelJob(id);
 	}
 
@@ -1150,8 +1196,15 @@ public class Engine {
 
 	/**
 	 * Pauses a running Job with request context.
+	 * Enforces access control: caller must own the job.
+	 * @throws SecurityException if the caller does not own the job
 	 */
 	public AMap<AString, ACell> pauseJob(AString id, RequestContext ctx) {
+		AMap<AString,ACell> data = getJobData(id);
+		if (data == null) return null;
+		if (!accessControl.canAccessJob(ctx, data)) {
+			throw new SecurityException("Access denied to job: " + id);
+		}
 		return pauseJob(id);
 	}
 
@@ -1172,8 +1225,15 @@ public class Engine {
 
 	/**
 	 * Resumes a paused Job with request context.
+	 * Enforces access control: caller must own the job.
+	 * @throws SecurityException if the caller does not own the job
 	 */
 	public AMap<AString, ACell> resumeJob(AString id, RequestContext ctx) {
+		AMap<AString,ACell> data = getJobData(id);
+		if (data == null) return null;
+		if (!accessControl.canAccessJob(ctx, data)) {
+			throw new SecurityException("Access denied to job: " + id);
+		}
 		return resumeJob(id);
 	}
 
