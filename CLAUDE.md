@@ -84,11 +84,11 @@ VenueServer (Javalin HTTP, OpenAPI)
     |
 CoviaAPI / UserAPI / MCP / A2A endpoints
     |
-Engine (core execution, lattice state)
-    ├── Asset Registry    (content-addressed by SHA256, lattice-backed)
-    ├── Job Tracker       (status lifecycle, async CompletableFuture)
+Engine (core state, adapters, assets, content, identity)
+    ├── Asset Registry    (content-addressed by CAD3 hash, lattice-backed)
     ├── Adapter Registry  (pluggable execution backends)
-    └── Content Storage   (lattice / file / memory)
+    ├── Content Storage   (lattice / file / memory)
+    └── JobManager        (job lifecycle, per-user persistence, recovery)
     |
 Adapter Layer
     ├── GridAdapter       — cross-venue federation (grid:run, grid:invoke)
@@ -104,7 +104,7 @@ Adapter Layer
 
 ### Core Abstractions
 
-- **Asset** — Immutable content-addressed resource (SHA256 hash of metadata). Can be an operation, artifact, or reference.
+- **Asset** — Immutable content-addressed resource (CAD3 value hash of metadata). Can be an operation, artifact, or reference.
 - **Operation** — An Asset with an `"operation"` field; executable via an adapter with JSON Schema input/output.
 - **Job** — Execution state for an operation invocation. Jobs are long-lived and have NO framework-level timeout (they can run for days, weeks, or months). Lifecycle: `PENDING → STARTED → COMPLETE | FAILED | CANCELLED | REJECTED` (also `PAUSED`, `INPUT_REQUIRED`, `AUTH_REQUIRED`). Clients may time out polling and reconnect; after reconnect they re-acquire the latest job status by ID.
 - **Venue** — A grid node that hosts operations and manages state. Identified by DID.
@@ -113,20 +113,7 @@ Adapter Layer
 
 ### Lattice State Structure
 
-```
-:grid → GridLattice
-  :venues → Index<VenueDID, VenueLattice>
-    :assets    → Index<Hash, AssetRecord>     (union merge)
-    :jobs      → Index<AString, JobRecord>    (timestamp merge)
-    :users     → Index<AString, UserRecord>   (timestamp merge)
-    :storage   → Index<Hash, ABlob>           (CAS merge)
-    :auth      → Map<AString, ACell>          (timestamp merge)
-    :did       → AString                      (first-writer-wins)
-    :caps      → Map<AString, ACell>          (per-DID capability sets)
-    :user-data → Map<DID, UserLattice>        (per-user state)
-      :jobs    → Index<AString, JobRecord>    (user's job references)
-  :meta → Index<Hash, AString>               (shared content-addressed metadata)
-```
+Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design in `venue/docs/GRID_LATTICE_DESIGN.md`.
 
 ### Protocols
 
@@ -142,7 +129,8 @@ Adapter Layer
 - **Constants:** Use `Strings.intern()` for field names and status strings (see `Fields.java`, `Status.java`)
 - **Async:** Return `CompletableFuture` from adapters; use virtual threads for IO-bound work
 - **Immutability:** Use Convex ACell hierarchy for persistent data (AMap, AVector, Index)
-- **Content addressing:** Assets identified by SHA256 hash of metadata JSON string
+- **Content addressing:** Assets identified by CAD3 value hash (SHA3-256 of canonical encoding)
+- **Jobs:** Use `engine.jobs()` accessor for all job operations (submit, query, cancel, etc.)
 - **Tests:** JUnit 6, use `Engine.createTemp()` for test instances
 - **Prefer editing** existing files over creating new ones
 
@@ -175,17 +163,17 @@ Adapter Layer
 ### What Works Well
 
 - Clean adapter abstraction with 9 pluggable backends
-- Lattice foundation with CRDT merge semantics (Phase 1 complete, 35+ tests)
-- Content-addressed assets with SHA256 integrity
+- Lattice foundation with CRDT merge semantics
+- Content-addressed assets (CAD3 value hash)
 - Async job model with CompletableFuture and SSE
+- Per-user job persistence and ownership enforcement
 - Multi-protocol support (REST, MCP, A2A, DID)
-- OpenAPI self-documentation (Swagger/ReDoc)
 - Federated cross-venue invocation via GridAdapter
 - Strategy-pattern auth (NoAuth, Bearer, KeyPair, Local)
 
 ### In Progress
 
-- **Phase 3: Capability enforcement** — `:caps` lattice slot present but not yet enforced; UCAN `with`/`can` checking planned for Phase 3/4
+- **Capability enforcement** — `:caps` lattice slot present but not yet enforced; UCAN `with`/`can` checking planned for Phase 3/4
 
 ---
 
@@ -193,8 +181,7 @@ Adapter Layer
 
 ### P0 — Critical (blocks production use)
 
-- [x] **Add authorization enforcement** — Job ownership enforced: users see/manage only their own jobs. `AccessControl.canAccessJob()` checks `:caller` field. Engine methods throw `SecurityException` for non-owners. Internal requests bypass all checks. Per-user cursors via `UserState`. Fine-grained capability enforcement (UCAN `with`/`can`) planned for Phase 3/4.
-  - Files: `venue/.../venue/Engine.java`, `venue/.../venue/AccessControl.java`, `venue/.../venue/UserState.java`, `venue/.../venue/VenueState.java`
+- [x] **Add authorization enforcement** — Job ownership enforced via `AccessControl` + `JobManager`. Per-user job persistence. Capability enforcement (UCAN `with`/`can`) planned for Phase 3/4.
 
 ### P1 — High (security and reliability)
 
@@ -206,8 +193,7 @@ Adapter Layer
 
 ### P2 — Medium (code quality and operability)
 
-- [ ] **Decompose Engine.java** — Engine handles too many concerns (assets, jobs, adapters, storage, auth, stats). Extract focused classes.
-  - File: `venue/.../venue/Engine.java`
+- [x] **Decompose Engine.java** — `JobManager` extracted for job lifecycle. Callers use `engine.jobs()`.
 
 - [ ] **Complete LatticeContent** — Missing constructor and field initialization; cannot be properly instantiated.
   - File: `covia-core/.../grid/impl/LatticeContent.java`

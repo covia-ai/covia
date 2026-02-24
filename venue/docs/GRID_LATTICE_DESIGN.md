@@ -1,6 +1,6 @@
 # Covia Grid Lattice Structure
 
-Design document for the Covia venue-backed grid. Phases 0–1 are implemented; later phases are target state.
+Design document for the Covia venue-backed grid. Phases 0–2 are implemented (Phase 2 partially — per-user cursors done, capability enforcement pending); later phases are target state.
 
 ## Design Document — February 2026 (living document)
 
@@ -928,13 +928,13 @@ Changes:
 - `AssetStore.store()` — computes ID from parsed metaMap
 - Content SHA256 verification (`putContent`) is unchanged — that's payload integrity, not identity
 
-### Phase 2: Per-User Cursors + Capability Enforcement
+### Phase 2: Per-User Cursors + Capability Enforcement (PARTIALLY DONE)
 
 Separate venue state into per-user cursors and enforce access control using lattice-native UCAN `with`/`can` pairs. These go together — user segregation without enforcement is pointless, and enforcement without user scoping has nothing to protect.
 
-**Per-user cursors:** Partition venue state by caller DID so each user's data is isolated. The venue manages user state on users' behalf (users authenticate via OAuth or self-issued JWTs, not necessarily key pairs). Per-user state lives inside the venue's signed boundary — it's a MapLattice from user DID to per-user lattice, NOT a per-user OwnerLattice (the venue can't sign as the user).
+**Per-user cursors (DONE):** Partition venue state by caller DID so each user's data is isolated. The venue manages user state on users' behalf (users authenticate via OAuth or self-issued JWTs, not necessarily key pairs). Per-user state lives inside the venue's signed boundary — it's a MapLattice from user DID to per-user lattice, NOT a per-user OwnerLattice (the venue can't sign as the user). See `Users.java`, `User.java`, `JobManager.java`.
 
-**Capability enforcement:** Use UCAN-style `with`/`can` pairs as the representation model from the start. Capabilities are lattice-native maps (not JWT/base64) stored directly in venue state. Start with single-venue enforcement — no delegation chains or cross-venue proof walking yet.
+**Capability enforcement (TODO):** Use UCAN-style `with`/`can` pairs as the representation model from the start. Capabilities are lattice-native maps (not JWT/base64) stored directly in venue state. Start with single-venue enforcement — no delegation chains or cross-venue proof walking yet.
 
 Lattice structure change:
 

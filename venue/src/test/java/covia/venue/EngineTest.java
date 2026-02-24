@@ -34,6 +34,7 @@ import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.impl.BlobContent;
+import covia.venue.RequestContext;
 
 public class EngineTest {
 	Engine venue;
@@ -98,18 +99,18 @@ public class EngineTest {
 	public void testAdapterOperation() {
 		// Test echo operation
 		ACell input=Maps.of("message",Strings.create("Hello World"));
-		Job job=venue.invokeOperation(Strings.create("test:echo"),input);
+		Job job=venue.jobs().invokeOperation(Strings.create("test:echo"),input, venue.getDIDString());
 		AMap<AString, ACell> status = job.getData();
-		
+
 		// Get job ID from status
 		ACell jobID = RT.getIn(status, "id");
 		assertNotNull(jobID, "Job ID should be present in status");
-		
+
 		// Wait for job completion
 		waitForJobCompletion((Blob)jobID, 5000);
 
 		// Get final status
-		ACell finalStatus = venue.getJobData((Blob)jobID);
+		ACell finalStatus = venue.jobs().getJobData((Blob)jobID, RequestContext.INTERNAL);
 		assertEquals(Status.COMPLETE, RT.getIn(finalStatus, "status"));
 
 		// Verify result
@@ -121,7 +122,7 @@ public class EngineTest {
 	public void testAdapterError() {
 		// Test error operation
 		ACell input=Maps.of("message",Strings.create("Test Error"));
-		Job job=venue.invokeOperation(Strings.create("test:random"),input);
+		Job job=venue.jobs().invokeOperation(Strings.create("test:random"),input, venue.getDIDString());
 		AMap<AString, ACell> status = job.getData();
 
 		// Get job ID from status
@@ -132,7 +133,7 @@ public class EngineTest {
 		waitForJobCompletion((Blob)jobID, 5000);
 
 		// Get final status
-		ACell finalStatus = venue.getJobData((Blob)jobID);
+		ACell finalStatus = venue.jobs().getJobData((Blob)jobID, RequestContext.INTERNAL);
 		assertEquals("FAILED", RT.getIn(finalStatus, "status").toString());
 	}
 	
@@ -140,7 +141,7 @@ public class EngineTest {
 	public void testRandomOperation() {
 		// Test random operation with 32 bytes
 		ACell input = Maps.of("length", Strings.create("32"));
-		Job job= venue.invokeOperation(randomOpID.toCVMHexString(), input);
+		Job job= venue.jobs().invokeOperation(randomOpID.toCVMHexString(), input, venue.getDIDString());
 		ACell status =job.getData();
 				
 		// Get job ID from status
@@ -167,7 +168,7 @@ public class EngineTest {
 	// @Test
 	public void testQwen() {
 		ACell input = Maps.of("prompt", "What is the capital of France?");
-		ACell result = venue.invokeOperation(qwenOpId.toCVMHexString(), input).awaitResult();
+		ACell result = venue.jobs().invokeOperation(qwenOpId.toCVMHexString(), input, venue.getDIDString()).awaitResult();
 		result=waitForJobCompletion(RT.getIn(result, "id"), 5000);
 		if (Status.COMPLETE.equals(RT.getIn(result, "status"))) {
 			// OK
@@ -180,9 +181,9 @@ public class EngineTest {
 	private ACell waitForJobCompletion(Object jobID, long timeoutMillis) {
 		Blob id=Job.parseID(jobID);
 		long startTime = System.currentTimeMillis();
-		ACell status = venue.getJobData(id);
+		ACell status = venue.jobs().getJobData(id, RequestContext.INTERNAL);
 		while (System.currentTimeMillis() - startTime < timeoutMillis) {
-			status = venue.getJobData(id);
+			status = venue.jobs().getJobData(id, RequestContext.INTERNAL);
 			String jobStatus = RT.getIn(status, "status").toString();
 			if (!jobStatus.equals("PENDING")) {
 				return status;
@@ -248,7 +249,7 @@ public class EngineTest {
 	@Test
 	public void testAwaitResultSuccess() {
 		ACell input = Maps.of("message", Strings.create("Hello"));
-		Job job = venue.invokeOperation(Strings.create("test:echo"), input);
+		Job job = venue.jobs().invokeOperation(Strings.create("test:echo"), input, venue.getDIDString());
 
 		// awaitResult should complete and return the result
 		ACell result = job.awaitResult();
@@ -263,7 +264,7 @@ public class EngineTest {
 	@Test
 	public void testAwaitResultFailure() {
 		ACell input = Maps.of("message", Strings.create("This should fail"));
-		Job job = venue.invokeOperation(Strings.create("test:error"), input);
+		Job job = venue.jobs().invokeOperation(Strings.create("test:error"), input, venue.getDIDString());
 
 		// awaitResult should throw JobFailedException, not hang
 		assertThrows(JobFailedException.class, () -> job.awaitResult());
@@ -276,7 +277,7 @@ public class EngineTest {
 	@Test
 	public void testAwaitResultAfterCompletion() throws Exception {
 		ACell input = Maps.of("message", Strings.create("Fail fast"));
-		Job job = venue.invokeOperation(Strings.create("test:error"), input);
+		Job job = venue.jobs().invokeOperation(Strings.create("test:error"), input, venue.getDIDString());
 
 		// Wait a bit to ensure the async task has completed
 		Thread.sleep(100);
@@ -333,7 +334,7 @@ public class EngineTest {
 		// Invoke using a DID URL should work the same as hex hash
 		AString didUrl = Strings.create(venue.getDIDString() + "/a/" + echoOpId.toHexString());
 		ACell input = Maps.of("message", Strings.create("Hello via DID"));
-		Job job = venue.invokeOperation(didUrl, input);
+		Job job = venue.jobs().invokeOperation(didUrl, input, venue.getDIDString());
 
 		ACell result = job.awaitResult();
 		assertNotNull(result);
@@ -344,7 +345,7 @@ public class EngineTest {
 	public void testInvokeViaOperationName() {
 		// Invoke using operation name should resolve and work
 		ACell input = Maps.of("message", Strings.create("Hello via name"));
-		Job job = venue.invokeOperation(Strings.create("test:echo"), input);
+		Job job = venue.jobs().invokeOperation(Strings.create("test:echo"), input, venue.getDIDString());
 
 		ACell result = job.awaitResult();
 		assertNotNull(result);

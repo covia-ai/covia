@@ -85,7 +85,7 @@ public class MCP extends ACoviaAPI {
 		SERVER_INFO = serverInfo;
 
 		// Register MCP SSE job notification broadcaster
-		engine().addJobUpdateListener(this::broadcastJobNotification);
+		engine().jobs().addJobUpdateListener(this::broadcastJobNotification);
 	}
 
 	/**
@@ -361,7 +361,7 @@ public class MCP extends ACoviaAPI {
 			Hash opID = findTool(toolName);
 			ACell arguments = RT.getIn(params, Fields.ARGUMENTS);
 			if (opID != null) {
-				Job job = engine().invokeOperation(opID.toCVMHexString(), arguments, callerDID);
+				Job job = engine().jobs().invokeOperation(opID.toCVMHexString(), arguments, callerDID);
 				ACell result = job.awaitResult();
 				return toolSuccess(result);
 			} else {

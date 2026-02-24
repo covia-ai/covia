@@ -52,7 +52,7 @@ public class LocalVenue extends Venue {
 	@Override
 	public CompletableFuture<Job> invoke(Hash assetID, ACell input) {
 		RequestContext rctx = RequestContext.of(getUser());
-		return CompletableFuture.completedFuture(engine.invokeOperation(assetID.toCVMHexString(), input, rctx));
+		return CompletableFuture.completedFuture(engine.jobs().invokeOperation(assetID.toCVMHexString(), input, rctx));
 	}
 
 	@Override
@@ -61,13 +61,13 @@ public class LocalVenue extends Venue {
 			throw new IllegalArgumentException("Operation must not be null");
 		}
 		RequestContext rctx = RequestContext.of(getUser());
-		Job job = engine.invokeOperation(Strings.create(operation), input, rctx);
+		Job job = engine.jobs().invokeOperation(Strings.create(operation), input, rctx);
 		return CompletableFuture.completedFuture(job);
 	}
 
 	@Override
 	public CompletableFuture<Job> getJob(Blob jobId) {
-		Job job = engine.getJob(jobId);
+		Job job = engine.jobs().getJob(jobId, RequestContext.of(getUser()));
 		if (job == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId.toHexString()));
 		}
@@ -76,7 +76,7 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public CompletableFuture<AMap<AString, ACell>> getJobStatus(Blob jobId) {
-		AMap<AString, ACell> status = engine.getJobData(jobId);
+		AMap<AString, ACell> status = engine.jobs().getJobData(jobId, RequestContext.of(getUser()));
 		if (status == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId.toHexString()));
 		}
@@ -85,7 +85,7 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public CompletableFuture<ACell> awaitJobResult(Blob jobId) {
-		Job job = engine.getJob(jobId);
+		Job job = engine.jobs().getJob(jobId, RequestContext.of(getUser()));
 		if (job == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId.toHexString()));
 		}
@@ -146,27 +146,27 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public AMap<AString, ACell> cancelJob(Blob jobId) {
-		return engine.cancelJob(jobId, RequestContext.of(getUser()));
+		return engine.jobs().cancelJob(jobId, RequestContext.of(getUser()));
 	}
 
 	@Override
 	public AMap<AString, ACell> pauseJob(Blob jobId) {
-		return engine.pauseJob(jobId, RequestContext.of(getUser()));
+		return engine.jobs().pauseJob(jobId, RequestContext.of(getUser()));
 	}
 
 	@Override
 	public AMap<AString, ACell> resumeJob(Blob jobId) {
-		return engine.resumeJob(jobId, RequestContext.of(getUser()));
+		return engine.jobs().resumeJob(jobId, RequestContext.of(getUser()));
 	}
 
 	@Override
 	public boolean deleteJob(Blob jobId) {
-		return engine.deleteJob(jobId, RequestContext.of(getUser()));
+		return engine.jobs().deleteJob(jobId, RequestContext.of(getUser()));
 	}
 
 	@Override
 	public List<Blob> listJobs() {
-		Index<Blob, ACell> jobs = engine.getJobs(RequestContext.of(getUser()));
+		Index<Blob, ACell> jobs = engine.jobs().getJobs(RequestContext.of(getUser()));
 		long n = jobs.count();
 		List<Blob> result = new ArrayList<>((int) n);
 		for (long i = 0; i < n; i++) {
@@ -177,6 +177,6 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public int sendMessage(String jobId, AMap<AString, ACell> message) {
-		return engine.deliverMessage(Blob.parse(jobId), message, RequestContext.of(getUser()));
+		return engine.jobs().deliverMessage(Blob.parse(jobId), message, RequestContext.of(getUser()));
 	}
 }

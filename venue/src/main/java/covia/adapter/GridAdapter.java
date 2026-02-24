@@ -50,30 +50,53 @@ public class GridAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
+		throw new UnsupportedOperationException("GridAdapter requires Job context for caller DID propagation");
+	}
+
+	@Override
+	public void invoke(Job job, String operation, ACell meta, ACell input) {
 		Objects.requireNonNull(operation, "Operation must not be null");
 		String[] parts = operation.split(":");
 		if (parts.length < 2) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid grid operation format: " + operation));
+			job.fail("Invalid grid operation format: " + operation);
+			return;
 		}
+
+		// Extract caller DID from parent job for propagation to sub-invocations
+		AString callerDID = RT.ensureString(job.getData().get(Fields.CALLER));
+
 		String gridOp = parts[1];
+		CompletableFuture<ACell> future;
         switch (gridOp) {
         case "run":
-            return invokeRun(meta, input);
+            future = invokeRun(meta, input, callerDID);
+            break;
         case "invoke":
-            return invokeAsync(meta, input);
+            future = invokeAsync(meta, input, callerDID);
+            break;
         case "jobStatus":
-            return invokeJobStatus(meta, input);
+            future = invokeJobStatus(meta, input, callerDID);
+            break;
         case "jobResult":
-            return invokeJobResult(meta, input);
+            future = invokeJobResult(meta, input, callerDID);
+            break;
         default:
-            return CompletableFuture.failedFuture(new IllegalArgumentException("Unrecognised grid operation: " + gridOp));
+            job.fail("Unrecognised grid operation: " + gridOp);
+            return;
         }
+		future.whenComplete((result, error) -> {
+			if (error != null) {
+				job.fail(error.getMessage());
+			} else {
+				job.completeWith(result);
+			}
+		});
 	}
 
 	/**
 	 * Executes a grid operation and waits for completion, returning the finished result.
 	 */
-	private CompletableFuture<ACell> invokeRun(ACell meta, ACell input) {
+	private CompletableFuture<ACell> invokeRun(ACell meta, ACell input, AString callerDID) {
 		AString targetOperation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 		if (targetOperation == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("No grid operation specified"));
@@ -82,7 +105,7 @@ public class GridAdapter extends AAdapter {
         ACell operationInput = RT.getIn(input, Fields.INPUT); // might be null, that's ok
         AString venueSpec = resolveVenue(meta, input);
 
-        Venue venue = selectVenue(venueSpec);
+        Venue venue = selectVenue(venueSpec, callerDID);
 
         CompletableFuture<Job> jobFuture = venue.invoke(targetOperation.toString(), operationInput);
         return jobFuture.thenCompose(Job::future);
@@ -91,7 +114,7 @@ public class GridAdapter extends AAdapter {
 	/**
 	 * Submits a grid operation but returns immediately with the job status payload.
 	 */
-	private CompletableFuture<ACell> invokeAsync(ACell meta, ACell input) {
+	private CompletableFuture<ACell> invokeAsync(ACell meta, ACell input, AString callerDID) {
 		AString targetOperation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 		if (targetOperation == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("No grid operation specified"));
@@ -100,36 +123,39 @@ public class GridAdapter extends AAdapter {
         ACell operationInput = RT.getIn(input, Fields.INPUT); // might be null, that's ok
         AString venueSpec = resolveVenue(meta, input);
 
-        Venue venue = selectVenue(venueSpec);
+        Venue venue = selectVenue(venueSpec, callerDID);
 
         CompletableFuture<Job> jobFuture = venue.invoke(targetOperation.toString(), operationInput);
         return jobFuture.thenApply(Job::getData);
 	}
 
-	private CompletableFuture<ACell> invokeJobStatus(ACell meta, ACell input) {
+	private CompletableFuture<ACell> invokeJobStatus(ACell meta, ACell input, AString callerDID) {
 		Blob jobId = parseJobId(RT.getIn(input, Fields.ID));
 		if (jobId == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Job ID is required"));
 		}
 
-		Venue venue = selectVenue(resolveVenue(meta, input));
+		Venue venue = selectVenue(resolveVenue(meta, input), callerDID);
 		return venue.getJobStatus(jobId).thenApply(status -> status);
 	}
 
-	private CompletableFuture<ACell> invokeJobResult(ACell meta, ACell input) {
+	private CompletableFuture<ACell> invokeJobResult(ACell meta, ACell input, AString callerDID) {
 		Blob jobId = parseJobId(RT.getIn(input, Fields.ID));
 		if (jobId == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Job ID is required"));
 		}
 
-		Venue venue = selectVenue(resolveVenue(meta, input));
+		Venue venue = selectVenue(resolveVenue(meta, input), callerDID);
 		return venue.awaitJobResult(jobId);
 	}
 
-    private Venue selectVenue(AString venueSpec) {
-        return (venueSpec != null)
-            ? Grid.connect(venueSpec.toString())
-            : new LocalVenue(engine);
+    private Venue selectVenue(AString venueSpec, AString callerDID) {
+        if (venueSpec != null) {
+            return Grid.connect(venueSpec.toString());
+        }
+        LocalVenue lv = new LocalVenue(engine);
+        lv.setUser(callerDID);
+        return lv;
     }
 
     private Blob parseJobId(ACell jobIdCell) {

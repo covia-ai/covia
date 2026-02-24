@@ -77,7 +77,7 @@ public class CoviaAPI extends ACoviaAPI {
 		this.sseServer=new SseServer(engine());
 
 		// Wire SSE broadcasting into engine's job update listeners
-		engine().addJobUpdateListener(job -> {
+		engine().jobs().addJobUpdateListener(job -> {
 			Blob jobId = job.getID();
 			if (jobId != null) {
 				sseServer.broadcastJobUpdate(jobId.toHexString(), job);
@@ -423,7 +423,7 @@ public class CoviaAPI extends ACoviaAPI {
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
 		try {
-			Job job=engine().invokeOperation(op,input,rctx);
+			Job job=engine().jobs().invokeOperation(op,input,rctx);
 			if (job==null) {
 				buildError(ctx,404,"Operation does not exist");
 				return;
@@ -463,7 +463,7 @@ public class CoviaAPI extends ACoviaAPI {
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
 		try {
-			AMap<AString,ACell> status=engine().getJobData(id, rctx);
+			AMap<AString,ACell> status=engine().jobs().getJobData(id, rctx);
 			if (status==null) {
 				buildError(ctx,404,"Job not found: "+id);
 				return;
@@ -507,7 +507,7 @@ public class CoviaAPI extends ACoviaAPI {
 				: Maps.of(Fields.CONTENT, message);
 
 		try {
-			int depth = engine().deliverMessage(id, msgMap, rctx);
+			int depth = engine().jobs().deliverMessage(id, msgMap, rctx);
 			Map<String, Object> response = new HashMap<>();
 			response.put("status", "queued");
 			response.put("queueDepth", depth);
@@ -542,7 +542,7 @@ public class CoviaAPI extends ACoviaAPI {
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
 		try {
-			AMap<AString, ACell> status = engine().cancelJob(id, rctx);
+			AMap<AString, ACell> status = engine().jobs().cancelJob(id, rctx);
 			if (status!=null) {
 				buildResult(ctx,status);
 				ctx.status(200);
@@ -575,7 +575,7 @@ public class CoviaAPI extends ACoviaAPI {
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
 		try {
-			AMap<AString, ACell> status = engine().pauseJob(id, rctx);
+			AMap<AString, ACell> status = engine().jobs().pauseJob(id, rctx);
 			if (status!=null) {
 				buildResult(ctx,status);
 				ctx.status(200);
@@ -610,7 +610,7 @@ public class CoviaAPI extends ACoviaAPI {
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
 		try {
-			AMap<AString, ACell> status = engine().resumeJob(id, rctx);
+			AMap<AString, ACell> status = engine().jobs().resumeJob(id, rctx);
 			if (status!=null) {
 				buildResult(ctx,status);
 				ctx.status(200);
@@ -645,7 +645,7 @@ public class CoviaAPI extends ACoviaAPI {
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
 		try {
-			boolean deleted=engine().deleteJob(id, rctx);
+			boolean deleted=engine().jobs().deleteJob(id, rctx);
 			if (deleted) {
 				ctx.status(200);
 			} else {
@@ -663,7 +663,7 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void getJobs(Context ctx) {
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 		try {
-			Index<Blob, ACell> jobs = engine().getJobs(rctx);
+			Index<Blob, ACell> jobs = engine().jobs().getJobs(rctx);
 			// Return job IDs as a list
 			long n = jobs.count();
 			ArrayList<Object> result = new ArrayList<>((int) n);

@@ -38,7 +38,7 @@ public class SseServer {
 		registerClient(jobId, client);
 
 		// Send current job state as initial event
-		Job job = engine.getJob(Blob.parse(jobId));
+		Job job = engine.jobs().getJob(Blob.parse(jobId));
 		if (job != null) {
 			sendJobEvent(client, job);
 		}

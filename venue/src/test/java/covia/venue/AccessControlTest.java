@@ -146,21 +146,25 @@ public class AccessControlTest {
 
 	@Test
 	public void testInvokeWithRequestContext() {
-		Job job1 = engine.invokeOperation(
-			Strings.create("test:echo"), Maps.of("message", "hello"), RequestContext.ANONYMOUS);
-		assertNotNull(job1, "Should be able to invoke with anonymous context");
-
 		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
-		Job job2 = engine.invokeOperation(
+		Job job = engine.jobs().invokeOperation(
 			Strings.create("test:echo"), Maps.of("message", "hello"), aliceCtx);
-		assertNotNull(job2, "Should be able to invoke with authenticated context");
+		assertNotNull(job, "Should be able to invoke with authenticated context");
 
 		// Verify caller DID flows through to job record
 		@SuppressWarnings("unchecked")
-		AMap<AString, ACell> jobData = (AMap<AString, ACell>) job2.getData();
+		AMap<AString, ACell> jobData = (AMap<AString, ACell>) job.getData();
 		ACell caller = jobData.get(Fields.CALLER);
 		assertNotNull(caller, "Job record should contain caller field");
 		assertEquals(ALICE_DID, caller);
+	}
+
+	@Test
+	public void testInvokeWithNullCallerThrows() {
+		// callerDID is required — null should throw IllegalArgumentException
+		assertThrows(IllegalArgumentException.class,
+			() -> engine.jobs().invokeOperation(
+				Strings.create("test:echo"), Maps.of("message", "hello"), (AString) null));
 	}
 
 	// ========== Engine Integration: Job Scoping ==========
@@ -171,35 +175,32 @@ public class AccessControlTest {
 		RequestContext bobCtx = RequestContext.of(BOB_DID);
 
 		// Alice creates a job
-		Job aliceJob = engine.invokeOperation(
+		Job aliceJob = engine.jobs().invokeOperation(
 			Strings.create("test:echo"), Maps.of("message", "alice"), aliceCtx);
 		// Bob creates a job
-		Job bobJob = engine.invokeOperation(
+		Job bobJob = engine.jobs().invokeOperation(
 			Strings.create("test:echo"), Maps.of("message", "bob"), bobCtx);
 
 		// Alice sees only her job
-		var aliceJobs = engine.getJobs(aliceCtx);
+		var aliceJobs = engine.jobs().getJobs(aliceCtx);
 		assertEquals(1, aliceJobs.count(), "Alice should see only her own job");
 		assertNotNull(aliceJobs.get(aliceJob.getID()));
 
 		// Bob sees only his job
-		var bobJobs = engine.getJobs(bobCtx);
+		var bobJobs = engine.jobs().getJobs(bobCtx);
 		assertEquals(1, bobJobs.count(), "Bob should see only his own job");
 		assertNotNull(bobJobs.get(bobJob.getID()));
 	}
 
 	@Test
-	public void testInternalSeesAllJobs() {
-		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
-		RequestContext bobCtx = RequestContext.of(BOB_DID);
+	public void testInternalSeesVenueJobs() {
+		// Internal requests see the venue's own DID jobs
+		AString venueDID = engine.getDIDString();
+		engine.jobs().invokeOperation(
+			Strings.create("test:echo"), Maps.of("message", "venue-internal"), venueDID);
 
-		engine.invokeOperation(
-			Strings.create("test:echo"), Maps.of("message", "alice"), aliceCtx);
-		engine.invokeOperation(
-			Strings.create("test:echo"), Maps.of("message", "bob"), bobCtx);
-
-		var allJobs = engine.getJobs(RequestContext.INTERNAL);
-		assertTrue(allJobs.count() >= 2, "Internal should see all jobs");
+		var venueJobs = engine.jobs().getJobs(RequestContext.INTERNAL);
+		assertTrue(venueJobs.count() >= 1, "Internal should see venue's own jobs");
 	}
 
 	@Test
@@ -207,16 +208,20 @@ public class AccessControlTest {
 		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
 		RequestContext bobCtx = RequestContext.of(BOB_DID);
 
-		Job aliceJob = engine.invokeOperation(
-			Strings.create("test:echo"), Maps.of("message", "hello"), aliceCtx);
+		// Use a non-completing job so it stays in activeJobs for access control check
+		Job aliceJob = engine.jobs().invokeOperation(
+			Strings.create("test:never"), Maps.of("message", "hello"), aliceCtx);
 
 		// Alice can see her job
-		assertNotNull(engine.getJobData(aliceJob.getID(), aliceCtx));
+		assertNotNull(engine.jobs().getJobData(aliceJob.getID(), aliceCtx));
 
 		// Bob cannot
 		assertThrows(SecurityException.class,
-			() -> engine.getJobData(aliceJob.getID(), bobCtx),
+			() -> engine.jobs().getJobData(aliceJob.getID(), bobCtx),
 			"Non-owner should get SecurityException");
+
+		// Clean up
+		engine.jobs().cancelJob(aliceJob.getID(), aliceCtx);
 	}
 
 	@Test
@@ -224,33 +229,34 @@ public class AccessControlTest {
 		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
 		RequestContext bobCtx = RequestContext.of(BOB_DID);
 
-		Job aliceJob = engine.invokeOperation(
+		Job aliceJob = engine.jobs().invokeOperation(
 			Strings.create("test:delay"), Maps.of("delay", 10000), aliceCtx);
 
 		// Bob cannot cancel Alice's job
 		assertThrows(SecurityException.class,
-			() -> engine.cancelJob(aliceJob.getID(), bobCtx));
+			() -> engine.jobs().cancelJob(aliceJob.getID(), bobCtx));
 
 		// Alice can cancel her own job
-		assertNotNull(engine.cancelJob(aliceJob.getID(), aliceCtx));
+		assertNotNull(engine.jobs().cancelJob(aliceJob.getID(), aliceCtx));
 	}
 
 	@Test
-	public void testJobWithoutCallerInvisibleToExternal() {
-		// Create a job without caller (internal/programmatic)
-		Job internalJob = engine.invokeOperation(
-			Strings.create("test:echo"), Maps.of("message", "internal"));
+	public void testVenueJobInvisibleToExternalUser() {
+		// Create a job with the venue's own DID (internal/programmatic)
+		AString venueDID = engine.getDIDString();
+		Job venueJob = engine.jobs().invokeOperation(
+			Strings.create("test:echo"), Maps.of("message", "internal"), venueDID);
 
 		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
 
-		// Alice cannot see the internal job
-		var aliceJobs = engine.getJobs(aliceCtx);
-		assertNull(aliceJobs.get(internalJob.getID()),
-			"Venue-internal jobs should not be visible to external callers");
+		// Alice cannot see the venue's job in her job list
+		var aliceJobs = engine.jobs().getJobs(aliceCtx);
+		assertNull(aliceJobs.get(venueJob.getID()),
+			"Venue jobs should not be visible to external callers");
 
-		// Internal can see it
-		var internalJobs = engine.getJobs(RequestContext.INTERNAL);
-		assertNotNull(internalJobs.get(internalJob.getID()),
-			"Internal should see venue-internal jobs");
+		// Internal sees venue's own jobs
+		var internalJobs = engine.jobs().getJobs(RequestContext.INTERNAL);
+		assertNotNull(internalJobs.get(venueJob.getID()),
+			"Internal should see venue's own jobs");
 	}
 }

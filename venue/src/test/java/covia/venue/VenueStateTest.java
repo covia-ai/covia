@@ -363,7 +363,7 @@ public class VenueStateTest {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 
-		assertNull(vs.user(Strings.create("did:key:zUnknown")),
+		assertNull(vs.users().get(Strings.create("did:key:zUnknown")),
 			"user() should return null when no data exists for that DID");
 	}
 
@@ -374,13 +374,13 @@ public class VenueStateTest {
 		AString did = Strings.create("did:key:zAlice");
 
 		// ensureUser creates the user state
-		User alice = vs.ensureUser(did);
+		User alice = vs.users().ensure(did);
 		assertNotNull(alice);
 		assertEquals(did, alice.getDID());
 		assertNotNull(alice.get(), "User state should be initialised");
 
 		// Subsequent user() call should also return non-null
-		User aliceAgain = vs.user(did);
+		User aliceAgain = vs.users().get(did);
 		assertNotNull(aliceAgain, "user() should return non-null after ensureUser");
 	}
 
@@ -391,8 +391,8 @@ public class VenueStateTest {
 		AString aliceDID = Strings.create("did:key:zAlice");
 		AString bobDID = Strings.create("did:key:zBob");
 
-		User alice = vs.ensureUser(aliceDID);
-		User bob = vs.ensureUser(bobDID);
+		User alice = vs.users().ensure(aliceDID);
+		User bob = vs.users().ensure(bobDID);
 
 		// Alice writes a job reference
 		alice.jobs().persist(Blob.parse("0x0001"), Maps.of(

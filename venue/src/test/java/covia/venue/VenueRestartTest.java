@@ -27,6 +27,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.lattice.Covia;
+import covia.venue.RequestContext;
 
 /**
  * Tests that a Venue can persist its entire lattice state to an Etch store,
@@ -85,16 +86,16 @@ public class VenueRestartTest {
 			assertNotNull(engine.getAsset(customAssetId), "Custom asset should exist");
 
 			// Run test:echo → should COMPLETE
-			Job echoJob = engine.invokeOperation(echoOpId.toCVMHexString(),
-					Maps.of(Fields.MESSAGE, Strings.create("hello restart")));
+			Job echoJob = engine.jobs().invokeOperation(echoOpId.toCVMHexString(),
+					Maps.of(Fields.MESSAGE, Strings.create("hello restart")), engine.getDIDString());
 			echoJob.future().get(5, TimeUnit.SECONDS);
 			assertEquals(Status.COMPLETE, echoJob.getStatus(), "Echo job should complete");
 			assertNotNull(echoJob.getOutput(), "Echo job should have output");
 			echoJobId = echoJob.getID().toHexString();
 
 			// Run test:error → should FAIL
-			Job errorJob = engine.invokeOperation(errorOpId.toCVMHexString(),
-					Maps.of(Fields.MESSAGE, Strings.create("test error")));
+			Job errorJob = engine.jobs().invokeOperation(errorOpId.toCVMHexString(),
+					Maps.of(Fields.MESSAGE, Strings.create("test error")), engine.getDIDString());
 			try {
 				errorJob.future().get(5, TimeUnit.SECONDS);
 			} catch (Exception e) {
@@ -104,15 +105,15 @@ public class VenueRestartTest {
 			errorJobId = errorJob.getID().toHexString();
 
 			// Run test:never → should stay STARTED (never completes)
-			Job neverJob = engine.invokeOperation(neverOpId.toCVMHexString(),
-					Maps.of(Fields.MESSAGE, Strings.create("never finishes")));
+			Job neverJob = engine.jobs().invokeOperation(neverOpId.toCVMHexString(),
+					Maps.of(Fields.MESSAGE, Strings.create("never finishes")), engine.getDIDString());
 			Thread.sleep(50); // Give it a moment to start
 			assertEquals(Status.STARTED, neverJob.getStatus(), "Never job should be STARTED");
 			neverJobId = neverJob.getID().toHexString();
 
 			// Run test:pause → should auto-pause itself
-			Job pauseJob = engine.invokeOperation(pauseOpId.toCVMHexString(),
-					Maps.of(Fields.MESSAGE, Strings.create("pause me")));
+			Job pauseJob = engine.jobs().invokeOperation(pauseOpId.toCVMHexString(),
+					Maps.of(Fields.MESSAGE, Strings.create("pause me")), engine.getDIDString());
 			Thread.sleep(50); // Give it a moment to pause
 			assertEquals(Status.PAUSED, pauseJob.getStatus(), "Pause job should be PAUSED");
 			pauseJobId = pauseJob.getID().toHexString();
@@ -134,7 +135,7 @@ public class VenueRestartTest {
 			ns2.launch(); // restores from store
 			Engine engine2 = new Engine(config, ns2.getCursor(), kp);
 			Engine.addDemoAssets(engine2);
-			engine2.recoverJobs();
+			engine2.jobs().recoverJobs();
 
 			// ========== Stage 4: Verify state ==========
 
@@ -155,8 +156,8 @@ public class VenueRestartTest {
 			assertTrue(restoredMeta.toString().contains("restart-test-asset"),
 					"Custom asset metadata should contain original name");
 
-			// 4d: All job IDs present in lattice
-			Index<Blob, ACell> jobIds = engine2.getJobs();
+			// 4d: All job IDs present in per-user lattice (venue DID's jobs)
+			Index<Blob, ACell> jobIds = engine2.jobs().getJobs(RequestContext.INTERNAL);
 			assertNotNull(jobIds.get(Blob.parse(echoJobId)),
 					"Echo job ID should be in job list after restart");
 			assertNotNull(jobIds.get(Blob.parse(errorJobId)),
@@ -165,39 +166,40 @@ public class VenueRestartTest {
 					"Never job ID should be in job list after restart");
 
 			// 4e: COMPLETE job has correct status and output
-			AMap<AString, ACell> echoData = engine2.getJobData(Blob.parse(echoJobId));
+			AMap<AString, ACell> echoData = engine2.jobs().getJobData(Blob.parse(echoJobId), RequestContext.INTERNAL);
 			assertNotNull(echoData, "Echo job data should survive restart");
 			assertEquals(Status.COMPLETE, RT.ensureString(echoData.get(Fields.STATUS)),
 					"Echo job should still be COMPLETE");
 			assertNotNull(echoData.get(Fields.OUTPUT), "Echo job output should survive restart");
 
 			// 4f: FAILED job has correct status
-			AMap<AString, ACell> errorData = engine2.getJobData(Blob.parse(errorJobId));
+			AMap<AString, ACell> errorData = engine2.jobs().getJobData(Blob.parse(errorJobId), RequestContext.INTERNAL);
 			assertNotNull(errorData, "Error job data should survive restart");
 			assertEquals(Status.FAILED, RT.ensureString(errorData.get(Fields.STATUS)),
 					"Error job should still be FAILED");
 
 			// 4g: STARTED job was re-fired by recovery (should be in-memory jobs now)
-			Job recoveredNeverJob = engine2.getJob(Blob.parse(neverJobId));
+			Job recoveredNeverJob = engine2.jobs().getJob(Blob.parse(neverJobId));
 			assertNotNull(recoveredNeverJob, "Never job should be recovered after restart");
 			AString neverStatus = recoveredNeverJob.getStatus();
 			assertTrue(Status.STARTED.equals(neverStatus) || Status.PENDING.equals(neverStatus),
 					"Recovered never job should be STARTED or PENDING, got: " + neverStatus);
 
 			// 4h: PAUSED job remains PAUSED after restart (not re-fired)
-			AMap<AString, ACell> pauseData = engine2.getJobData(Blob.parse(pauseJobId));
+			AMap<AString, ACell> pauseData = engine2.jobs().getJobData(Blob.parse(pauseJobId), RequestContext.INTERNAL);
 			assertNotNull(pauseData, "Pause job data should survive restart");
 			assertEquals(Status.PAUSED, RT.ensureString(pauseData.get(Fields.STATUS)),
 					"Pause job should still be PAUSED after restart");
 
 			// 4i: Unpause the job by delivering a message → should complete
-			engine2.deliverMessage(Blob.parse(pauseJobId), Maps.of("content", Strings.create("resume")), (AString) null);
+			engine2.jobs().deliverMessage(Blob.parse(pauseJobId), Maps.of("content", Strings.create("resume")), engine2.getDIDString());
 			Thread.sleep(50); // Give it a moment to process
-			Job unpausedJob = engine2.getJob(Blob.parse(pauseJobId));
-			assertNotNull(unpausedJob, "Unpaused job should exist");
-			assertEquals(Status.COMPLETE, unpausedJob.getStatus(),
+			// Job completes and is evicted from activeJobs — use lattice fallback
+			AMap<AString, ACell> unpausedData = engine2.jobs().getJobData(Blob.parse(pauseJobId), RequestContext.INTERNAL);
+			assertNotNull(unpausedData, "Unpaused job data should exist in lattice");
+			assertEquals(Status.COMPLETE, RT.ensureString(unpausedData.get(Fields.STATUS)),
 					"Unpaused job should be COMPLETE after receiving message");
-			assertNotNull(unpausedJob.getOutput(), "Unpaused job should have output");
+			assertNotNull(unpausedData.get(Fields.OUTPUT), "Unpaused job should have output");
 
 			ns2.close();
 		}

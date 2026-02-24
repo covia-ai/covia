@@ -7,7 +7,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
-import java.util.Random;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,9 +53,7 @@ import covia.api.Fields;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Grid;
-import covia.grid.Job;
 import covia.grid.Operation;
-import covia.grid.Status;
 import covia.grid.Venue;
 import covia.lattice.Covia;
 import covia.venue.api.CoviaAPI;
@@ -66,10 +63,10 @@ import covia.venue.storage.LatticeStorage;
 import covia.venue.storage.MemoryStorage;
 
 public class Engine {
-	
+
 	public static final Logger log=LoggerFactory.getLogger(Engine.class);
 
-	
+
 
 	protected final Config config;
 
@@ -94,17 +91,14 @@ public class Engine {
 
 	/** Authorization / access control */
 	protected AccessControl accessControl;
-	
+
+	/** Job lifecycle manager (submission, queries, persistence, recovery) */
+	private final JobManager jobManager;
+
 	/**
 	 * Map of named adapters that can handle different types of operations or resources
 	 */
 	protected final HashMap<String, AAdapter> adapters = new HashMap<>();
-
-	/**
-	 * Listeners notified on every job state update.
-	 * Used by SseServer for per-job event broadcasting and MCP SSE notifications.
-	 */
-	private final java.util.concurrent.CopyOnWriteArrayList<java.util.function.Consumer<Job>> jobUpdateListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
 	/**
 	 * Registry of named operations mapping operation name (e.g. "test:echo") to canonical asset Hash.
@@ -134,6 +128,8 @@ public class Engine {
 		LatticeContext ctx = LatticeContext.create(null, this.keyPair);
 		this.lattice.withContext(ctx);
 		initialiseFromCursor();
+		this.jobManager = new JobManager(venueState, accessControl,
+				this::getAdapter, this::resolveAsset, getDIDString());
 		this.contentStorage = createStorage();
 		this.contentStorage.initialise();
 	}
@@ -241,7 +237,7 @@ public class Engine {
 		venueState.sync();
 		lattice.sync();
 	}
-	
+
 	public static void addDemoAssets(Engine venue) {
 		venue.registerAdapter(new TestAdapter());
 		venue.registerAdapter(new HTTPAdapter());
@@ -275,7 +271,7 @@ public class Engine {
 		}
 		log.info("Registered adapter: {} ({} operations)", name, n);
 	}
-	
+
 	/**
 	 * Get an adapter by name
 	 * @param name The name of the adapter to retrieve
@@ -284,7 +280,7 @@ public class Engine {
 	public AAdapter getAdapter(String name) {
 		return adapters.get(name);
 	}
-	
+
 	/**
 	 * Check if an adapter with the given name exists
 	 * @param name The name of the adapter to check
@@ -293,7 +289,7 @@ public class Engine {
 	public boolean hasAdapter(String name) {
 		return adapters.containsKey(name);
 	}
-	
+
 	/**
 	 * Remove an adapter by name
 	 * @param name The name of the adapter to remove
@@ -306,7 +302,7 @@ public class Engine {
 		}
 		return removed;
 	}
-	
+
 	/**
 	 * Get all adapter names
 	 * @return Set of all registered adapter names
@@ -319,170 +315,6 @@ public class Engine {
 		Hash id = venueState.assets().store(meta, content);
 		log.info("Stored asset {} : {}", id, RT.getIn(JSON.parse(meta), Fields.NAME));
 		return id;
-	}
-
-
-
-
-	/**
-	 * Recovers jobs from the lattice after a restart.
-	 * PENDING jobs are re-fired; in-progress jobs (STARTED, PAUSED, etc.) are marked FAILED.
-	 * Terminal jobs (COMPLETE, FAILED, CANCELLED, REJECTED) are left as-is.
-	 * Should be called after adapters are registered.
-	 */
-	@SuppressWarnings("unchecked")
-	public void recoverJobs() {
-		Index<Blob, ACell> jobsIndex = venueState.jobs().getAll();
-		if (jobsIndex.isEmpty()) return;
-
-		long n = jobsIndex.count();
-		int refired = 0;
-		int kept = 0;
-		int failed = 0;
-		for (long i = 0; i < n; i++) {
-			var entry = jobsIndex.entryAt(i);
-			Blob jobID = (Blob) entry.getKey();
-			ACell value = entry.getValue();
-			if (!(value instanceof AMap)) continue;
-			AMap<AString, ACell> record = (AMap<AString, ACell>) value;
-
-			// Skip jobs already in memory (shouldn't happen on fresh start, but safe)
-			synchronized (jobs) {
-				if (jobs.containsKey(jobID)) continue;
-			}
-
-			// Skip terminal jobs
-			if (Job.isFinished(record)) continue;
-
-			AString status = RT.ensureString(record.get(Fields.STATUS));
-			if (Status.PENDING.equals(status) || Status.STARTED.equals(status)) {
-				// Re-fire PENDING and STARTED jobs
-				if (refireJob(jobID, record)) {
-					refired++;
-				} else {
-					failed++;
-				}
-			} else {
-				// PAUSED, INPUT_REQUIRED, AUTH_REQUIRED — restore as live Job, awaiting external action
-				restoreJob(jobID, record);
-				kept++;
-			}
-		}
-
-		if (refired > 0 || kept > 0 || failed > 0) {
-			log.info("Job recovery: {} re-fired, {} kept (paused/waiting), {} failed", refired, kept, failed);
-		}
-	}
-
-	/**
-	 * Re-fires a PENDING job from a persisted lattice record.
-	 * Resolves the operation and adapter from the :op field and invokes.
-	 * @return true if successfully re-fired, false if resolution failed
-	 */
-	private boolean refireJob(Blob jobID, AMap<AString, ACell> record) {
-		AString opRef = RT.ensureString(record.get(Fields.OP));
-		if (opRef == null) {
-			markJobFailed(jobID, record, "Cannot re-fire: no operation reference");
-			return false;
-		}
-
-		// Resolve operation
-		Asset asset = resolveAsset(opRef);
-		Operation op = (asset != null) ? Operation.from(asset) : null;
-
-		// Resolve adapter
-		AAdapter adapter = resolveAdapterForOp(op, opRef);
-		if (adapter == null) {
-			markJobFailed(jobID, record, "Cannot re-fire: adapter not available for " + opRef);
-			return false;
-		}
-
-		// Create a live Job wrapping the persisted record
-		Job job = new Job(record, op) {
-			@Override public AMap<AString,ACell> processUpdate(AMap<AString,ACell> newData) {
-				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
-				persistJobRecord(getID(), newData);
-				return newData;
-			}
-		};
-
-		if (!jobUpdateListeners.isEmpty()) {
-			job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
-		}
-
-		synchronized (jobs) {
-			jobs.put(jobID, job);
-		}
-
-		// Determine adapter:operation string for invocation
-		String adapterStr = opRef.toString();
-		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
-		if (meta != null) {
-			AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
-			if (adapterOp != null) adapterStr = adapterOp.toString();
-		}
-
-		adapter.invoke(job, adapterStr, meta, record.get(Fields.INPUT));
-		log.info("Re-fired job: {}", jobID);
-		return true;
-	}
-
-	/**
-	 * Resolves the adapter for an operation, trying the Operation metadata first,
-	 * then falling back to parsing the opRef string as adapter:operation.
-	 */
-	private AAdapter resolveAdapterForOp(Operation op, AString opRef) {
-		// Try operation metadata
-		if (op != null) {
-			AString adapterOp = RT.ensureString(RT.getIn(op.meta(), "operation", "adapter"));
-			if (adapterOp != null) {
-				String adapterName = adapterOp.toString().split(":")[0];
-				AAdapter adapter = getAdapter(adapterName);
-				if (adapter != null) return adapter;
-			}
-		}
-
-		// Fall back to parsing opRef as adapter:operation
-		String adapterName = opRef.toString().split(":")[0];
-		return getAdapter(adapterName);
-	}
-
-	private void markJobFailed(Blob jobID, AMap<AString, ACell> record, String reason) {
-		AMap<AString, ACell> failedRecord = record
-				.assoc(Fields.STATUS, Status.FAILED)
-				.assoc(Fields.ERROR, Strings.create(reason))
-				.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
-		persistJobRecord(jobID, failedRecord);
-		log.warn("Job {} failed on recovery: {}", jobID, reason);
-	}
-
-	/**
-	 * Restores a paused/waiting job into the in-memory jobs map as a live Job object
-	 * with write-through persistence. Does not re-invoke the adapter.
-	 */
-	private void restoreJob(Blob jobID, AMap<AString, ACell> record) {
-		AString opRef = RT.ensureString(record.get(Fields.OP));
-		Operation op = null;
-		if (opRef != null) {
-			Asset asset = resolveAsset(opRef);
-			op = (asset != null) ? Operation.from(asset) : null;
-		}
-
-		Job job = new Job(record, op) {
-			@Override public AMap<AString,ACell> processUpdate(AMap<AString,ACell> newData) {
-				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
-				persistJobRecord(getID(), newData);
-				return newData;
-			}
-		};
-
-		if (!jobUpdateListeners.isEmpty()) {
-			job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
-		}
-
-		synchronized (jobs) {
-			jobs.put(jobID, job);
-		}
 	}
 
 	public AMap<ABlob, AVector<?>> getAssets() {
@@ -700,377 +532,11 @@ public class Engine {
 	}
 
 	/**
-	 * Invoke an operation given a reference with request context.
-	 */
-	public Job invokeOperation(AString ref, ACell input, RequestContext ctx) {
-		return invokeOperation(ref, input, ctx.getCallerDID());
-	}
-
-	/**
-	 * Invoke an operation given a reference (internal/programmatic use, no caller identity).
-	 */
-	public Job invokeOperation(AString ref, ACell input) {
-		return invokeOperation(ref, input, (AString) null);
-	}
-
-	/**
-	 * Invoke an operation given a reference. Supports hex hash, DID URL,
-	 * operation name, and adapter:operation strings.
-	 * @param ref Operation reference (AString)
-	 * @param input Input parameters
-	 * @param callerDID Caller DID string, or null if anonymous
-	 * @return Job tracking the execution
-	 */
-	public Job invokeOperation(AString ref, ACell input, AString callerDID) {
-		if (ref==null) throw new IllegalArgumentException("Operation must be specified");
-
-		// Resolve the operation reference (hex hash, DID URL, or operation name)
-		Asset asset = resolveAsset(ref);
-		if (asset!=null) {
-			return invokeOperation(asset, input, callerDID);
-		}
-
-		// Fall through: use ref directly as adapter:operation string
-		String refStr = ref.toString();
-		String adapterName = refStr.split(":")[0];
-		AAdapter adapter = getAdapter(adapterName);
-		if (adapter == null) {
-			throw new IllegalStateException("Adapter not available: "+adapterName);
-		}
-
-		Job job=submitJob(ref,null,input,null,callerDID);
-		adapter.invoke(job, refStr, null, input);
-		return job;
-	}
-
-	/**
-	 * Invoke an operation given a resolved Asset (internal/programmatic use, no caller identity).
-	 */
-	public Job invokeOperation(Asset asset, ACell input) {
-		return invokeOperation(asset, input, null);
-	}
-
-	/**
-	 * Invoke an operation given a resolved Asset. If the asset has a remote venue
-	 * reference, delegates to the remote venue via asset.invoke().
-	 * @param asset The operation asset
-	 * @param input Input parameters
-	 * @param callerDID Caller DID string, or null if anonymous
-	 * @return Job tracking the execution
-	 */
-	public Job invokeOperation(Asset asset, ACell input, AString callerDID) {
-		if (asset==null) throw new IllegalArgumentException("Asset must be specified");
-
-		// Ensure we have an Operation (not a plain Asset)
-		Operation op = Operation.from(asset);
-		if (op==null) {
-			throw new IllegalArgumentException("Asset is not an operation: "+asset.getID());
-		}
-
-		// Check for remote operation — delegate to the operation's venue
-		Venue opVenue = op.getVenue();
-		if (opVenue != null && !(opVenue instanceof LocalVenue)) {
-			return op.invoke(input).join();
-		}
-
-		// Local operation — dispatch via adapter
-		AMap<AString,ACell> meta = op.meta();
-		AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
-
-		String adapterStr = adapterOp.toString();
-		String adapterName = adapterStr.split(":")[0];
-		AAdapter adapter = getAdapter(adapterName);
-		if (adapter == null) {
-			throw new IllegalStateException("Adapter not available: "+adapterName);
-		}
-
-		Job job=submitJob(op,meta,input,callerDID);
-		adapter.invoke(job, adapterStr, meta, input);
-		return job;
-	}
-
-	public void updateJobStatus(Blob jobID, AMap<AString, ACell> newData) {
-		Job job;
-		synchronized (jobs) {
-			job = jobs.get(jobID);
-		}
-		if (job == null) return;
-		job.updateData(newData);
-	}
-
-	/**
-	 * Gets a snapshot of the current job status data with request context.
-	 * Enforces access control: caller must own the job (matching :caller DID).
-	 * @throws SecurityException if the caller does not own the job
-	 */
-	public AMap<AString,ACell> getJobData(Blob jobID, RequestContext ctx) {
-		AMap<AString,ACell> data = getJobData(jobID);
-		if (data == null) return null;
-		if (!accessControl.canAccessJob(ctx, data)) {
-			throw new SecurityException("Access denied to job: " + jobID.toHexString());
-		}
-		return data;
-	}
-
-	/**
-	 * Gets a snapshot of the current job status data.
-	 * Checks in-memory cache first, falls back to lattice.
-	 * @param jobID Job ID as Blob
-	 * @return Job status record, or null if not found
-	 */
-	public AMap<AString,ACell> getJobData(Blob jobID) {
-		Job job;
-		synchronized (jobs) {
-			job = jobs.get(jobID);
-		}
-		if (job != null) return job.getData();
-
-		// Fall back to lattice
-		return venueState.jobs().get(jobID);
-	}
-
-	/**
-	 * Gets the live Job object for the given job ID.
-	 * Checks in-memory cache first, falls back to constructing a read-only Job from lattice.
-	 * @param jobID Job ID
-	 * @return Job, or null if not found
-	 */
-	public Job getJob(Blob jobID) {
-		synchronized (jobs) {
-			Job job = jobs.get(jobID);
-			if (job != null) return job;
-		}
-
-		// Fall back to lattice — construct a bare Job from persisted record
-		AMap<AString, ACell> record = venueState.jobs().get(jobID);
-		if (record == null) return null;
-		return new Job(record, null);
-	}
-
-	/**
-	 * Delivers a message to a job's message queue with request context.
-	 * Enforces access control: caller must own the job.
-	 * @throws SecurityException if the caller does not own the job
-	 */
-	public int deliverMessage(Blob jobID, AMap<AString, ACell> message, RequestContext ctx) {
-		AMap<AString,ACell> data = getJobData(jobID);
-		if (data != null && !accessControl.canAccessJob(ctx, data)) {
-			throw new SecurityException("Access denied to job: " + jobID.toHexString());
-		}
-		return deliverMessage(jobID, message, ctx.getCallerDID());
-	}
-
-	/**
-	 * Delivers a message to a job's message queue.
-	 * Wraps the raw message in an extensible record with metadata.
-	 * @param jobID Job ID (AString)
-	 * @param message Raw message content (arbitrary JSON)
-	 * @param source Source identifier (DID or client ID), may be null
-	 * @return Queue depth after enqueue
-	 * @throws IllegalArgumentException if job not found
-	 * @throws IllegalStateException if job is in terminal state
-	 */
-	public int deliverMessage(Blob jobID, AMap<AString, ACell> message, AString source) {
-		Job job = getJob(jobID);
-		if (job == null) throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
-		if (job.isFinished()) throw new IllegalStateException("Job is in terminal state: " + jobID.toHexString());
-
-		long ts = Utils.getCurrentTimestamp();
-		Blob msgId = generateJobID(ts); // reuse ID generator for unique message IDs
-
-		AMap<AString, ACell> record = Maps.of(
-				Fields.MESSAGE, message,
-				Fields.TS, CVMLong.create(ts),
-				Fields.ID, msgId);
-		if (source != null) {
-			record = record.assoc(Fields.SOURCE, source);
-		}
-
-		job.enqueueMessage(record);
-		int depth = job.getQueueSize();
-
-		// Dispatch to adapter if it supports multi-turn
-		AAdapter adapter = resolveJobAdapter(job);
-		if (adapter != null && adapter.supportsMultiTurn()) {
-			adapter.handleMessage(job, record);
-		}
-
-		return depth;
-	}
-
-	/**
-	 * Resolves the adapter responsible for a job based on its asset or operation field.
-	 * @param job The job
-	 * @return The adapter, or null if not resolvable
-	 */
-	private AAdapter resolveJobAdapter(Job job) {
-		// Prefer the stored Operation reference (avoids re-resolution)
-		Operation operation = job.getOperation();
-		if (operation != null) {
-			AString adapterOp = RT.ensureString(RT.getIn(operation.meta(), "operation", "adapter"));
-			if (adapterOp != null) {
-				String adapterName = adapterOp.toString().split(":")[0];
-				return getAdapter(adapterName);
-			}
-		}
-
-		// Fall back to resolving from the :op field
-		AString opStr = RT.ensureString(job.getData().get(Fields.OP));
-		if (opStr == null) return null;
-		Asset asset = resolveAsset(opStr);
-		if (asset != null) {
-			AString adapterOp = RT.ensureString(RT.getIn(asset.meta(), "operation", "adapter"));
-			if (adapterOp != null) {
-				String adapterName = adapterOp.toString().split(":")[0];
-				return getAdapter(adapterName);
-			}
-		}
-
-		// Last resort: parse :op as adapter:operation string
-		String adapterName = opStr.toString().split(":")[0];
-		return getAdapter(adapterName);
-	}
-
-	private HashMap<Blob, Job> jobs = new HashMap<>();
-	
-	/**
-	 * Submit a Job for a resolved Operation.
-	 */
-	private Job submitJob(Operation operation, AMap<AString,ACell> meta, ACell input, AString callerDID) {
-		return submitJob(operation.getID().toCVMHexString(), meta, input, operation, callerDID);
-	}
-
-	/**
-	 * Submit a Job for an unresolved adapter:operation string.
-	 */
-	private Job submitJob(AString opID, AMap<AString,ACell> meta, ACell input, Operation operation, AString callerDID) {
-		long ts=Utils.getCurrentTimestamp();
-		Blob jobID = generateJobID(ts);
-
-		AMap<AString,ACell> status= Maps.of(
-				Fields.ID,jobID,
-				Fields.OP,opID,
-				Fields.STATUS,Status.PENDING,
-				Fields.UPDATED,CVMLong.create(ts),
-				Fields.CREATED,CVMLong.create(ts),
-				Fields.INPUT,input);
-
-		if (callerDID!=null) {
-			status=status.assoc(Fields.CALLER, callerDID);
-		}
-
-		AString name=RT.ensureString(RT.getIn(meta, Fields.NAME));
-		if (name!=null) {
-			status=status.assoc(Fields.NAME, name);
-		}
-
-		Job job = new Job(status, operation) {
-			@Override public AMap<AString,ACell> processUpdate(AMap<AString,ACell> newData) {
-				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
-				persistJobRecord(getID(), newData);
-				return newData;
-			}
-		};
-
-		// Set update listener if configured (e.g. for SSE broadcasting)
-		if (!jobUpdateListeners.isEmpty()) {
-			job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
-		}
-
-		synchronized (jobs) {
-			jobs.put(jobID, job);
-		}
-
-		// Persist initial job record to lattice
-		persistJobRecord(jobID, status);
-
-		log.info("Submitted job: "+jobID);
-		return job;
-	}
-
-
-	/**
-	 * Persists a job record to the lattice :jobs index.
-	 * Called on initial submission and every status update via processUpdate().
-	 */
-	private void persistJobRecord(Blob jobID, AMap<AString, ACell> record) {
-		venueState.jobs().persist(jobID, record);
-	}
-
-	private Random rand=new Random();
-	private short jobCounter=0;
-	private long lastJobTS=0;
-	/** Internal method to generate job IDs 
-	 * Format is:
-	 * 6 bytes timestamp (low 48 bits of Long)
-	 * 2 bytes incrementing counter for same timestamp
-	 * 8 bytes randomness
-	 * 
-	 * This is so that job IDs are time-ordered, but relatively unpredictable and very unlikely to collide
-	 */
-	private Blob generateJobID(long ts) {
-		if (ts>lastJobTS) jobCounter=0; // reset job counter when TS increments
-		lastJobTS = ts;
-		byte[] bs=new byte[16];
-
-		Utils.writeLong(bs, 0, ts<<16); // 48 bits enough for all plausible timestamps
-		Utils.writeShort(bs, 6, jobCounter++);
-		Utils.writeLong(bs, 8, rand.nextLong());
-
-		return Blob.wrap(bs);
-	}
-
-	/**
-	 * Adds a listener to be notified on all job state updates.
-	 * Multiple listeners can be registered (e.g. SSE server + MCP notifications).
-	 * @param listener Update listener
-	 */
-	public void addJobUpdateListener(java.util.function.Consumer<Job> listener) {
-		this.jobUpdateListeners.add(listener);
-	}
-
-	/**
 	 * Returns the current lattice state root.
 	 * @return Lattice state as ACell, or null if not initialised
 	 */
 	public ACell getLatticeState() {
 		return lattice.get();
-	}
-
-	/**
-	 * Gets the jobs Index filtered by request context.
-	 * Internal requests see all jobs. Authenticated users see only jobs
-	 * where the :caller field matches their DID.
-	 */
-	@SuppressWarnings("unchecked")
-	public Index<Blob, ACell> getJobs(RequestContext ctx) {
-		Index<Blob, ACell> all = getJobs();
-		if (ctx.isInternal()) return all;
-
-		AString callerDID = ctx.getCallerDID();
-		Index<Blob, ACell> filtered = Index.none();
-		long n = all.count();
-		for (long i = 0; i < n; i++) {
-			var entry = all.entryAt(i);
-			ACell value = entry.getValue();
-			if (value instanceof AMap) {
-				AString jobCaller = RT.ensureString(
-					((AMap<AString, ACell>) value).get(Fields.CALLER));
-				if (callerDID != null && callerDID.equals(jobCaller)) {
-					filtered = filtered.assoc(entry.getKey(), value);
-				}
-			}
-		}
-		return filtered;
-	}
-
-	/**
-	 * Gets the jobs Index directly from the lattice (naturally time-ordered
-	 * since job IDs are timestamp-prefixed Blobs).
-	 * @return Index of job IDs to job records, or empty Index if none
-	 */
-	public Index<Blob, ACell> getJobs() {
-		return venueState.jobs().getAll();
 	}
 
 	/**
@@ -1090,24 +556,24 @@ public class Engine {
 		if (c==null) return null;
 		return c.getInputStream();
 	}
-	
+
 	/**
 	 * Gets a content stream for the given asset
 	 * @param meta Metadata of asset
 	 * @return Content, or null if not available / does not exist
 	 */
 	public AContent getContent(AMap<AString,ACell> meta) throws IOException {
-		if (meta==null) return null;	
+		if (meta==null) return null;
 		AMap<AString,ACell> content=RT.ensureMap(meta.get(Fields.CONTENT));
 		if (content==null) return null;
 		Hash contentHash=Hash.parse(RT.ensureString(content.get(Fields.SHA256)));
 		if (contentHash==null) {
 			throw new IllegalArgumentException("Metadata does not have valid content hash");
-		}	
+		}
 		return contentStorage.getContent(contentHash);
 	}
 
-	
+
 	/**
 	 * Gets a content stream for the given asset ID
 	 * @param assetID Asset ID
@@ -1148,10 +614,10 @@ public class Engine {
 
 	public Hash putContent(Hash assetID, InputStream is) throws IOException {
 		AMap<AString, ACell> meta = getMetaValue(assetID);
-		if (meta==null) throw new IllegalArgumentException("No metadata");	
+		if (meta==null) throw new IllegalArgumentException("No metadata");
 		return putContent(meta,is);
 	}
-	
+
 	public Hash putContent(AMap<AString, ACell> meta, InputStream is) throws IOException {
 		if (meta==null) throw new IllegalArgumentException("No metadata");
 		AMap<AString,ACell> content=RT.ensureMap(meta.get(Fields.CONTENT));
@@ -1169,14 +635,14 @@ public class Engine {
 		}
 		Blob contentBlob = Blob.wrap(data);
 		Hash actualHash = Hashing.sha256(contentBlob.getBytes());
-		
+
 		// Verify the actual hash matches the expected hash from metadata
 		if (!actualHash.equals(expectedHash)) {
 			throw new IllegalArgumentException("Content hash mismatch. Expected: " + expectedHash.toHexString() + ", Actual: " + actualHash.toHexString());
 		}
-		
+
 		// Store the content using the verified hash
-		contentStorage.store(actualHash, new ByteArrayInputStream(data)); 
+		contentStorage.store(actualHash, new ByteArrayInputStream(data));
 		log.info("Stored content with SHA256: "+actualHash);
 		return actualHash;
 	}
@@ -1194,138 +660,6 @@ public class Engine {
 		}
 
 		return status;
-	}
-
-	/**
-	 * Deletes a job permanently with request context.
-	 * Enforces access control: caller must own the job.
-	 * @throws SecurityException if the caller does not own the job
-	 */
-	public boolean deleteJob(Blob id, RequestContext ctx) {
-		AMap<AString,ACell> data = getJobData(id);
-		if (data == null) return false;
-		if (!accessControl.canAccessJob(ctx, data)) {
-			throw new SecurityException("Access denied to job: " + id.toHexString());
-		}
-		return deleteJob(id);
-	}
-
-	/**
-	 * Deletes a job permanently
-	 * @param id ID of Job
-	 * @return true if removed, false if did not exist anyway
-	 */
-	public boolean deleteJob(Blob id) {
-		synchronized (jobs) {
-			return jobs.remove(id)!=null;
-		}
-	}
-
-	/**
-	 * Cancels a Job with request context.
-	 * Enforces access control: caller must own the job.
-	 * @throws SecurityException if the caller does not own the job
-	 */
-	public AMap<AString, ACell> cancelJob(Blob id, RequestContext ctx) {
-		AMap<AString,ACell> data = getJobData(id);
-		if (data == null) return null;
-		if (!accessControl.canAccessJob(ctx, data)) {
-			throw new SecurityException("Access denied to job: " + id.toHexString());
-		}
-		return cancelJob(id);
-	}
-
-	/**
-	 * Cancels a Job if it not already complete
-	 * @param id ID of Job
-	 * @return updated Job status, or null if not found
-	 */
-	public AMap<AString, ACell> cancelJob(Blob id) {
-		Job job;
-		synchronized (jobs) {
-			job = jobs.get(id);
-		}
-		if (job == null) return null;
-		job.cancel();
-		return job.getData();
-	}
-
-	/**
-	 * Pauses a running Job with request context.
-	 * Enforces access control: caller must own the job.
-	 * @throws SecurityException if the caller does not own the job
-	 */
-	public AMap<AString, ACell> pauseJob(Blob id, RequestContext ctx) {
-		AMap<AString,ACell> data = getJobData(id);
-		if (data == null) return null;
-		if (!accessControl.canAccessJob(ctx, data)) {
-			throw new SecurityException("Access denied to job: " + id.toHexString());
-		}
-		return pauseJob(id);
-	}
-
-	/**
-	 * Pauses a running Job.
-	 * @param id ID of Job
-	 * @return updated Job status, or null if not found
-	 */
-	public AMap<AString, ACell> pauseJob(Blob id) {
-		Job job;
-		synchronized (jobs) {
-			job = jobs.get(id);
-		}
-		if (job == null) return null;
-		job.pause();
-		return job.getData();
-	}
-
-	/**
-	 * Resumes a paused Job with request context.
-	 * Enforces access control: caller must own the job.
-	 * @throws SecurityException if the caller does not own the job
-	 */
-	public AMap<AString, ACell> resumeJob(Blob id, RequestContext ctx) {
-		AMap<AString,ACell> data = getJobData(id);
-		if (data == null) return null;
-		if (!accessControl.canAccessJob(ctx, data)) {
-			throw new SecurityException("Access denied to job: " + id.toHexString());
-		}
-		return resumeJob(id);
-	}
-
-	/**
-	 * Resumes a paused Job. Re-engages the adapter to continue execution.
-	 * @param id ID of Job
-	 * @return updated Job status, or null if not found
-	 */
-	public AMap<AString, ACell> resumeJob(Blob id) {
-		Job job;
-		synchronized (jobs) {
-			job = jobs.get(id);
-		}
-		if (job == null) return null;
-		job.resume();
-
-		// Re-engage the adapter
-		AAdapter adapter = resolveJobAdapter(job);
-		if (adapter != null) {
-			Operation op = job.getOperation();
-			AMap<AString,ACell> meta = (op != null) ? op.meta() : null;
-			String adapterStr = null;
-			if (meta != null) {
-				AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
-				if (adapterOp != null) adapterStr = adapterOp.toString();
-			}
-			if (adapterStr == null) {
-				AString opRef = RT.ensureString(job.getData().get(Fields.OP));
-				if (opRef != null) adapterStr = opRef.toString();
-			}
-			if (adapterStr != null) {
-				adapter.invoke(job, adapterStr, meta, job.getData().get(Fields.INPUT));
-			}
-		}
-
-		return job.getData();
 	}
 
 	/**
@@ -1357,7 +691,7 @@ public class Engine {
 	public DID getDID() {
 		return DID.fromString(getDIDString().toString());
 	}
-	
+
 	public AString getDIDString() {
 		AString s=config.getDID();
 		if (s==null) {
@@ -1369,11 +703,11 @@ public class Engine {
 
 	public AMap<AString, ACell> getDIDDocument(String endpoint) {
 		AString did=getDIDString();
-		
+
 		AString key=Multikey.encodePublicKey(keyPair.getAccountKey());
 		AString keyID=Strings.create(did+"#"+key);
 		AVector<AString> keyVector=Vectors.create(keyID);
-		
+
 		AMap<AString,ACell> ddo=Maps.of(
 			"id", did,
 			"@context", "https://www.w3.org/ns/did/v1",
@@ -1393,7 +727,7 @@ public class Engine {
 							"serviceEndpoint",endpoint
 					))
 		);
-		
+
 		return ddo;
 	}
 
@@ -1417,13 +751,19 @@ public class Engine {
 	public AMap<AString, ACell> getStats() {
 		AMap<AString, AMap<AString, ACell>> usersMap = auth.getUsers();
 		return Maps.of(
-				 "jobs",getJobs().count(),
 				 "assets",getAssets().size(),
 				 "users",usersMap != null ? usersMap.count() : 0,
 				 "ops",operations.count()
 				);
 	}
 
+	/**
+	 * Gets the JobManager for job lifecycle operations.
+	 * @return JobManager instance
+	 */
+	public JobManager jobs() {
+		return jobManager;
+	}
 
-	
+
 }

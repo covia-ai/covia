@@ -40,8 +40,7 @@ import covia.lattice.Covia;
  * <ul>
  *   <li>{@link #assets()} — content-addressed asset store</li>
  *   <li>{@link #jobs()} — timestamp-ordered job store</li>
- *   <li>{@link #user(AString)} — per-user state (returns null if not exists)</li>
- *   <li>{@link #ensureUser(AString)} — per-user state (creates if needed)</li>
+ *   <li>{@link #users()} — per-user data store</li>
  *   <li>{@link #usersCursor()} — cursor for Auth</li>
  *   <li>{@link #authCursor()} — cursor for AccessControl</li>
  *   <li>{@link #capsCursor()} — cursor for capabilities</li>
@@ -148,32 +147,12 @@ public class VenueState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Gets the UserState for the given DID, or null if the user
-	 * doesn't exist (no data written at that cursor path).
+	 * Gets the venue's per-user data store.
 	 *
-	 * @param did User DID string
-	 * @return UserState wrapping the per-user cursor, or null
+	 * @return Users cursor wrapper
 	 */
-	public User user(AString did) {
-		ALatticeCursor<ACell> userCursor = cursor.path(Covia.USER_DATA, did);
-		if (userCursor.get() == null) return null;
-		return new User(userCursor, did);
-	}
-
-	/**
-	 * Gets or creates the UserState for the given DID.
-	 * If no data exists at the user's cursor path, initialises it
-	 * with the USER lattice zero value.
-	 *
-	 * @param did User DID string
-	 * @return UserState, never null
-	 */
-	public User ensureUser(AString did) {
-		ALatticeCursor<ACell> userCursor = cursor.path(Covia.USER_DATA, did);
-		if (userCursor.get() == null) {
-			userCursor.set(Covia.USER.zero());
-		}
-		return new User(userCursor, did);
+	public Users users() {
+		return new Users(cursor.path(Covia.USER_DATA));
 	}
 
 	/**

@@ -57,7 +57,10 @@ public class TestAdapter extends AAdapter {
                 case "never":
                     return new CompletableFuture<>();
                 case "delay":
-                    return handleDelay(input);
+                    // Handled via invoke() override for caller DID propagation
+                    return CompletableFuture.failedFuture(
+                        new UnsupportedOperationException("delay operation uses invoke path for caller DID propagation")
+                    );
                 case "error":
                     return CompletableFuture.failedFuture(handleError(input));
                 case "random":
@@ -109,6 +112,9 @@ public class TestAdapter extends AAdapter {
             // Auto-pause: immediately pauses, stores input for later completion
             job.update(data -> data.assoc(Fields.INPUT, input));
             job.setStatus(Status.PAUSED);
+        } else if (operation.equals("test:delay")) {
+            // Delay: needs Job for caller DID propagation to sub-invocation
+            handleDelay(job, input);
         } else {
             // Default one-shot path
             super.invoke(job, operation, meta, input);
@@ -148,20 +154,23 @@ public class TestAdapter extends AAdapter {
         return true;
     }
 
-    private CompletableFuture<ACell> handleDelay(ACell input) {
-    	return CompletableFuture.supplyAsync(()->{
-			ACell op = RT.getIn(input, Fields.OPERATION);
-        	ACell opInput = RT.getIn(input, Fields.INPUT);
-        	CVMLong delay = CVMLong.parse(RT.getIn(input, Fields.DELAY));
-			try {
+    private void handleDelay(Job job, ACell input) {
+    	CompletableFuture.runAsync(() -> {
+    		try {
+				ACell op = RT.getIn(input, Fields.OPERATION);
+				ACell opInput = RT.getIn(input, Fields.INPUT);
+				CVMLong delay = CVMLong.parse(RT.getIn(input, Fields.DELAY));
 				Thread.sleep(delay.longValue());
-			} catch (InterruptedException e) {
-				throw new RuntimeException("Delay operation interrupted while delaying");
-			}
-        	ACell result = engine.invokeOperation(RT.ensureString(op), opInput).awaitResult();
-			return result;
+				AString callerDID = RT.ensureString(job.getData().get(Fields.CALLER));
+				Job subJob = engine.jobs().invokeOperation(RT.ensureString(op), opInput, callerDID);
+				ACell result = subJob.awaitResult();
+				job.completeWith(result);
+    		} catch (InterruptedException e) {
+    			job.fail("Delay operation interrupted");
+    		} catch (Exception e) {
+    			job.fail(e.getMessage());
+    		}
     	}, VIRTUAL_EXECUTOR);
-
 	}
 
 	private ACell handleEcho(ACell input) {

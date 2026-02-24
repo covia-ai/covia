@@ -14,9 +14,15 @@ The **venue** module is the core runtime server for Covia - a federated AI orche
 venue/
 ├── src/main/java/covia/
 │   ├── venue/           # Core venue runtime
-│   │   ├── Engine.java          # Central engine managing state and operations
+│   │   ├── Engine.java          # Core state: adapters, assets, content, identity (~770 lines)
+│   │   ├── JobManager.java      # Job lifecycle: submit, query, persist, recover (~720 lines)
+│   │   ├── VenueState.java      # Lattice state wrapper (assets, jobs, users, auth cursors)
+│   │   ├── Users.java           # Per-user lattice wrapper (:user-data cursor)
+│   │   ├── User.java            # Single user's lattice state (jobs, workspace)
+│   │   ├── AccessControl.java   # Job ownership enforcement, capability checking
 │   │   ├── MainVenue.java       # Application entry point
-│   │   ├── LocalVenue.java      # Local venue implementation
+│   │   ├── LocalVenue.java      # Local venue implementation (delegates to Engine + JobManager)
+│   │   ├── RequestContext.java   # Caller identity context (INTERNAL, ANONYMOUS, authenticated)
 │   │   ├── api/                 # REST API (CoviaAPI.java)
 │   │   ├── server/              # HTTP server configuration
 │   │   ├── storage/             # Content storage abstractions
@@ -72,19 +78,13 @@ Operations and assets must be **universally exposable** across the federated gri
 Leverage Convex Lattice for **performance, power, and integrity**:
 
 - **Immutable Data Structures:** All state changes use Convex's persistent data structures (AMap, AVector, Index)
-- **Content-Addressed Storage:** Assets identified by SHA256 hash of metadata, ensuring integrity
+- **Content-Addressed Storage:** Assets identified by CAD3 value hash (SHA3-256 of canonical encoding)
 - **Conflict-Free Replication:** Lattice cursors enable distributed state without coordination overhead
 - **Cryptographic Verification:** All data can be verified using Convex's hash-based integrity
 
-**Current Lattice Structure:**
-```
-:covia -> Map
-    :assets -> Index<AssetID, [metadata, content, meta-map]>
-    :users -> Index<User, Map<:assets, :jobs>>
-```
+**Lattice Structure:** Defined in `src/main/java/covia/lattice/Covia.java`. Full design in `docs/GRID_LATTICE_DESIGN.md`.
 
 **Design Goals:**
-- Store job history in lattice for audit trails
 - Enable cross-venue state synchronization via lattice merging
 - Implement asset versioning with lattice-based history
 - Use lattice for distributed consensus on shared operations
@@ -145,7 +145,7 @@ An immutable, content-addressed resource with metadata. Assets can be:
 
 ### Operation (`covia.grid.Operation`)
 A specialized Asset that can be invoked. Operations are:
-- Identified by SHA256 hash of their metadata
+- Identified by CAD3 value hash of their metadata
 - Associated with an adapter that handles execution
 - Self-describing via JSON Schema for inputs/outputs
 
@@ -155,6 +155,10 @@ A running or completed invocation of an operation:
 - Tracks status, input, output, errors
 - Supports async completion via CompletableFuture
 - Can be paused, cancelled, or awaited
+- Every job has an owner (caller DID) — required, never null
+
+### JobManager (`covia.venue.JobManager`)
+Manages the full job lifecycle. Accessed via `engine.jobs()`. Handles submission, queries, per-user lattice persistence, access control, and recovery on restart.
 
 ### Adapter (`covia.adapter.AAdapter`)
 Bridges operations to execution environments:
@@ -229,17 +233,33 @@ Assets are defined as JSON with this structure:
 }
 ```
 
+### Working with Jobs
+
+```java
+// All job operations go through engine.jobs() — never directly on Engine
+Job job = engine.jobs().invokeOperation(opRef, input, callerDID);  // callerDID required
+Job job = engine.jobs().invokeOperation(opRef, input, requestCtx); // or via RequestContext
+ACell result = job.awaitResult();                                   // blocks until complete
+
+// Query jobs (scoped by caller identity)
+Index<Blob, ACell> myJobs = engine.jobs().getJobs(requestCtx);
+AMap<AString, ACell> data = engine.jobs().getJobData(jobID, requestCtx);
+
+// Lifecycle control
+engine.jobs().cancelJob(jobID, requestCtx);
+engine.jobs().pauseJob(jobID, requestCtx);
+engine.jobs().resumeJob(jobID, requestCtx);
+```
+
 ### Working with Lattice State
 
 ```java
-// Access assets via cursor
-ACursor<Index<AString,AVector<ACell>>> assets = lattice.path(COVIA_KEY, ASSETS_KEY);
+// Via VenueState application wrappers (preferred)
+Hash id = engine.storeAsset(metadataString, contentBlob);
 
-// Read current state
-AMap<ABlob, AVector<?>> currentAssets = RT.ensureMap(assets.get());
-
-// Update state (atomic)
-assets.set(currentAssets.assoc(newId, newRecord));
+// Direct cursor access (lower level)
+VenueState vs = engine.getVenueState();
+ALatticeCursor<Index<Blob, ACell>> jobsCursor = vs.jobs().getCursor();
 ```
 
 ### Testing

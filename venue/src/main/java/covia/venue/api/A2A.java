@@ -166,7 +166,7 @@ public class A2A extends ACoviaAPI {
 		// Deliver the message with caller identity as source
 		try {
 			AString callerDID = AuthMiddleware.getCallerDID(ctx);
-			int depth = engine().deliverMessage(taskId, message, callerDID);
+			int depth = engine().jobs().deliverMessage(taskId, message, callerDID);
 			AMap<AString, ACell> response = Maps.of(
 				"jsonrpc", "2.0",
 				Fields.ID, rpcId,

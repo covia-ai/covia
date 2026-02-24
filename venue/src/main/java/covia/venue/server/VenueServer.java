@@ -122,7 +122,7 @@ public class VenueServer {
 		server.start();
 		
 		Engine.addDemoAssets(server.getEngine());
-		server.getEngine().recoverJobs();
+		server.getEngine().jobs().recoverJobs();
 		return server;
 	}
 
