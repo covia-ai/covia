@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
+import convex.auth.did.DID;
+import convex.auth.did.DIDURL;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -11,8 +13,6 @@ import convex.core.data.Hash;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import convex.did.DID;
-import convex.did.DIDURL;
 import covia.exception.JobFailedException;
 
 /**

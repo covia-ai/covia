@@ -9,7 +9,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
-import convex.core.json.JWT;
+import convex.auth.jwt.JWT;
 
 /**
  * Self-issued EdDSA JWT authentication using an Ed25519 key pair.

@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import convex.auth.did.DID;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -15,7 +16,6 @@ import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Strings;
-import convex.did.DID;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Job;

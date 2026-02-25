@@ -11,6 +11,8 @@ import java.util.HashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.auth.did.DID;
+import convex.auth.did.DIDURL;
 import convex.core.crypto.AKeyPair;
 import convex.core.crypto.Hashing;
 import convex.core.crypto.util.Multikey;
@@ -31,8 +33,6 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
-import convex.did.DID;
-import convex.did.DIDURL;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.cursor.Cursors;

@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.core.json.JWKSKeys;
+import convex.auth.jwt.JWKSKeys;
 
 /**
  * JWKS key fetcher with caching for OAuth provider public keys.

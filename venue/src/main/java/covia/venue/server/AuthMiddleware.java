@@ -12,7 +12,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Strings;
-import convex.core.json.JWT;
+import convex.auth.jwt.JWT;
 import convex.core.lang.RT;
 import covia.venue.Auth;
 import covia.venue.auth.JWKSClient;

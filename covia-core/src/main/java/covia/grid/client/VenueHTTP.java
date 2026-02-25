@@ -17,6 +17,7 @@ import java.util.concurrent.TimeoutException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.auth.did.DID;
 import convex.core.data.ACell;
 import convex.core.data.prim.CVMLong;
 import convex.core.data.AMap;
@@ -28,7 +29,6 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
-import convex.did.DID;
 import covia.api.Fields;
 import covia.exception.ConversionException;
 import covia.exception.ResponseException;

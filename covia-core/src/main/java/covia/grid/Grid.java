@@ -2,7 +2,7 @@ package covia.grid;
 
 import java.net.URI;
 
-import convex.did.DID;
+import convex.auth.did.DID;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 
