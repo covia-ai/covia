@@ -14,6 +14,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.venue.RequestContext;
 
 /**
  * Adapter designed for pluggable operations for arbitrary JVM code
@@ -40,16 +41,9 @@ public class JVMAdapter extends AAdapter {
 	}
 
 	@Override
-	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
-		String[] parts = operation.split(":");
-		if (parts.length != 2) {
-			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("Invalid operation format: " + operation)
-			);
-		}
-		
-		String jvmOp = parts[1];
-		
+	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		String jvmOp = getSubOperation(meta);
+
 		switch (jvmOp) {
 			case "stringConcat":
 				return handleStringConcat(input);
@@ -63,7 +57,7 @@ public class JVMAdapter extends AAdapter {
 				);
 		}
 	}
-	
+
 	private CompletableFuture<ACell> handleStringConcat(ACell input) {
 		try {
 			// Extract input parameters

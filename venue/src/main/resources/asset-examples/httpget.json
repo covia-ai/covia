@@ -3,7 +3,7 @@
 	"description": "Performs a simple HTTP GET request using the HTTPAdapter",
 	"dateCreated": "2025-01-27T10:00:00Z",
 	"operation": {
-		"adapter": "http",
+		"adapter": "http:get",
 		"info":{
 		    "featured":true
 		},

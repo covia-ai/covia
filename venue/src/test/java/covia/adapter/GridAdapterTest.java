@@ -116,7 +116,7 @@ class GridAdapterTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		Job failJob = covia.invokeSync("grid:invoke", Maps.of(
-				Fields.OPERATION, "jvm:alwaysFail"));
+				Fields.OPERATION, "test:error"));
 		AString jobId = RT.ensureString(RT.getIn(failJob.getOutput(), Fields.ID));
 
 		Job resultJob = covia.invokeSync("grid:jobResult", Maps.of(Fields.ID, jobId));

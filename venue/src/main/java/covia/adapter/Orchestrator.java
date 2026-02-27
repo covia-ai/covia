@@ -24,6 +24,7 @@ import covia.grid.Grid;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.Venue;
+import covia.venue.RequestContext;
 
 public class Orchestrator extends AAdapter {
 
@@ -40,19 +41,18 @@ public class Orchestrator extends AAdapter {
 	}
 
 	@Override
-	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
+	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		throw new UnsupportedOperationException("Invalid call to orchestrator");
 	}
 
-	
 	@Override
-	public void invoke(Job job, String operation, ACell meta, ACell input) {
+	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		AVector<?> steps=RT.ensureVector(RT.getIn(meta, Fields.OPERATION, Fields.STEPS));
 		ACell resultSpec=RT.getIn(meta, Fields.OPERATION, Fields.RESULT);
-		Orchestration orch=new Orchestration(job,input,steps,resultSpec);
+		Orchestration orch=new Orchestration(job,ctx,input,steps,resultSpec);
 		ThreadUtils.runVirtual("orchestrator thread", orch);
 	}
-	
+
 	public class Orchestration implements Runnable {
 		final Job job;
 		final Blob jobID;
@@ -65,12 +65,12 @@ public class Orchestrator extends AAdapter {
 		final AString callerDID;
 		ACell orchOutput=null;
 
-		public Orchestration(Job job, ACell input, AVector<?> steps, ACell resultSpec) {
+		public Orchestration(Job job, RequestContext ctx, ACell input, AVector<?> steps, ACell resultSpec) {
 			this.job=job;
 			this.jobID=job.getID();
 			this.steps=steps;
 			this.orchInput=input;
-			this.callerDID=RT.ensureString(job.getData().get(Fields.CALLER));
+			this.callerDID=ctx.getCallerDID();
 			this.n=Utils.checkedInt(steps.count());
 			completionQueue=new ArrayBlockingQueue<>(n);
 			this.resultSpec=resultSpec;

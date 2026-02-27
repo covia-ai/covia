@@ -60,9 +60,13 @@ public class LocalVenue extends Venue {
 		if (operation == null) {
 			throw new IllegalArgumentException("Operation must not be null");
 		}
-		RequestContext rctx = RequestContext.of(getUser());
-		Job job = engine.jobs().invokeOperation(Strings.create(operation), input, rctx);
-		return CompletableFuture.completedFuture(job);
+		try {
+			RequestContext rctx = RequestContext.of(getUser());
+			Job job = engine.jobs().invokeOperation(Strings.create(operation), input, rctx);
+			return CompletableFuture.completedFuture(job);
+		} catch (Exception e) {
+			return CompletableFuture.failedFuture(e);
+		}
 	}
 
 	@Override

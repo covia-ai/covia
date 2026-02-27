@@ -19,6 +19,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.AgentState;
+import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
 import dev.langchain4j.data.message.AiMessage;
@@ -124,17 +125,17 @@ public class LLMAgentAdapter extends AAdapter {
 	}
 
 	@Override
-	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
+	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		throw new UnsupportedOperationException(
 			"LLMAgentAdapter requires caller DID — use invoke(Job, ...) path");
 	}
 
 	@Override
-	public void invoke(Job job, String operation, ACell meta, ACell input) {
+	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		job.setStatus(covia.grid.Status.STARTED);
 
 		CompletableFuture.supplyAsync(() -> {
-			AString callerDID = RT.ensureString(job.getData().get(Fields.CALLER));
+			AString callerDID = ctx.getCallerDID();
 			return processChat(callerDID, meta, input);
 		}, VIRTUAL_EXECUTOR)
 		.thenAccept(job::completeWith)

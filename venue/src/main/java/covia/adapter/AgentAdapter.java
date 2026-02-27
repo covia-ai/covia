@@ -20,6 +20,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
+import covia.venue.RequestContext;
 import covia.venue.User;
 import covia.venue.Users;
 
@@ -61,20 +62,20 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	@Override
-	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
+	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		throw new UnsupportedOperationException(
 			"AgentAdapter requires caller DID — use invoke(Job, ...) path");
 	}
 
 	@Override
-	public void invoke(Job job, String operation, ACell meta, ACell input) {
-		AString callerDID = RT.ensureString(job.getData().get(Fields.CALLER));
+	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		AString callerDID = ctx.getCallerDID();
 		if (callerDID == null) {
 			job.fail("Agent operations require an authenticated caller");
 			return;
 		}
 
-		String op = operation.contains(":") ? operation.split(":")[1] : operation;
+		String op = getSubOperation(meta);
 
 		try {
 			switch (op) {

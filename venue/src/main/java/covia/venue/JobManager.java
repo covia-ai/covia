@@ -27,7 +27,6 @@ import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Status;
 import covia.grid.Venue;
-import covia.grid.Grid;
 
 /**
  * Manages job lifecycle, persistence, and in-memory state for active jobs.
@@ -98,7 +97,8 @@ public class JobManager {
 
 	/**
 	 * Invoke an operation given a reference. Supports hex hash, DID URL,
-	 * operation name, and adapter:operation strings.
+	 * operation name, and adapter:operation strings. The reference is always
+	 * resolved to full metadata before dispatching to the adapter.
 	 * @param ref Operation reference (AString)
 	 * @param input Input parameters
 	 * @param callerDID Caller DID string (required, non-null)
@@ -110,21 +110,10 @@ public class JobManager {
 
 		// Resolve the operation reference (hex hash, DID URL, or operation name)
 		Asset asset = assetResolver.apply(ref);
-		if (asset != null) {
-			return invokeOperation(asset, input, callerDID);
+		if (asset == null) {
+			throw new IllegalArgumentException("Cannot resolve operation: " + ref);
 		}
-
-		// Fall through: use ref directly as adapter:operation string
-		String refStr = ref.toString();
-		String adapterName = refStr.split(":")[0];
-		AAdapter adapter = adapterLookup.apply(adapterName);
-		if (adapter == null) {
-			throw new IllegalStateException("Adapter not available: " + adapterName);
-		}
-
-		Job job = submitJob(ref, null, input, null, callerDID);
-		adapter.invoke(job, refStr, null, input);
-		return job;
+		return invokeOperation(asset, input, callerDID);
 	}
 
 	/**
@@ -153,17 +142,48 @@ public class JobManager {
 
 		// Local operation — dispatch via adapter
 		AMap<AString, ACell> meta = op.meta();
-		AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
-
-		String adapterStr = adapterOp.toString();
-		String adapterName = adapterStr.split(":")[0];
+		String adapterName = AAdapter.getAdapterName(meta);
+		if (adapterName == null) {
+			throw new IllegalArgumentException("Operation metadata missing operation.adapter: " + asset.getID());
+		}
 		AAdapter adapter = adapterLookup.apply(adapterName);
 		if (adapter == null) {
 			throw new IllegalStateException("Adapter not available: " + adapterName);
 		}
 
+		RequestContext ctx = RequestContext.of(callerDID);
 		Job job = submitJob(op, meta, input, callerDID);
-		adapter.invoke(job, adapterStr, meta, input);
+		adapter.invoke(job, ctx, meta, input);
+		return job;
+	}
+
+	/**
+	 * Invoke an operation given literal metadata. Skips resolution — uses the
+	 * metadata map directly. The adapter name is extracted from
+	 * {@code meta.operation.adapter}.
+	 *
+	 * @param meta Operation metadata (must contain operation.adapter)
+	 * @param input Input parameters
+	 * @param ctx Request context (caller identity)
+	 * @return Job tracking the execution
+	 */
+	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
+		if (meta == null) throw new IllegalArgumentException("Metadata must be specified");
+		AString callerDID = ctx.isInternal() ? venueDID : ctx.getCallerDID();
+		if (callerDID == null) throw new IllegalArgumentException("callerDID is required");
+
+		String adapterName = AAdapter.getAdapterName(meta);
+		if (adapterName == null) {
+			throw new IllegalArgumentException("Metadata must contain operation.adapter field");
+		}
+		AAdapter adapter = adapterLookup.apply(adapterName);
+		if (adapter == null) {
+			throw new IllegalStateException("Adapter not available: " + adapterName);
+		}
+
+		AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
+		Job job = submitJob(adapterOp, meta, input, null, callerDID);
+		adapter.invoke(job, ctx, meta, input);
 		return job;
 	}
 
@@ -386,19 +406,11 @@ public class JobManager {
 		// Re-engage the adapter
 		AAdapter adapter = resolveJobAdapter(job);
 		if (adapter != null) {
-			Operation op = job.getOperation();
-			AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
-			String adapterStr = null;
+			AMap<AString, ACell> meta = resolveJobMeta(job);
+			AString callerDID = RT.ensureString(job.getData().get(Fields.CALLER));
+			RequestContext ctx = (callerDID != null) ? RequestContext.of(callerDID) : RequestContext.INTERNAL;
 			if (meta != null) {
-				AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
-				if (adapterOp != null) adapterStr = adapterOp.toString();
-			}
-			if (adapterStr == null) {
-				AString opRef = RT.ensureString(job.getData().get(Fields.OP));
-				if (opRef != null) adapterStr = opRef.toString();
-			}
-			if (adapterStr != null) {
-				adapter.invoke(job, adapterStr, meta, job.getData().get(Fields.INPUT));
+				adapter.invoke(job, ctx, meta, job.getData().get(Fields.INPUT));
 			}
 		}
 
@@ -568,15 +580,15 @@ public class JobManager {
 			activeJobs.put(jobID, job);
 		}
 
-		// Determine adapter:operation string for invocation
-		String adapterStr = opRef.toString();
+		// Dispatch via new interface with resolved metadata
 		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
+		RequestContext ctx = RequestContext.of(callerDID);
 		if (meta != null) {
-			AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
-			if (adapterOp != null) adapterStr = adapterOp.toString();
+			adapter.invoke(job, ctx, meta, record.get(Fields.INPUT));
+		} else {
+			markJobFailed(jobID, record, "Cannot re-fire: no operation metadata for " + opRef, callerDID);
+			return false;
 		}
-
-		adapter.invoke(job, adapterStr, meta, record.get(Fields.INPUT));
 		log.info("Re-fired job: {}", jobID);
 		return true;
 	}
@@ -637,49 +649,44 @@ public class JobManager {
 	// ========== Adapter Resolution ==========
 
 	/**
-	 * Resolves the adapter responsible for a job.
+	 * Resolves the metadata for a job, trying the Operation object first,
+	 * then falling back to resolving the operation reference from the job record.
 	 */
-	private AAdapter resolveJobAdapter(Job job) {
+	@SuppressWarnings("unchecked")
+	private AMap<AString, ACell> resolveJobMeta(Job job) {
 		Operation operation = job.getOperation();
-		if (operation != null) {
-			AString adapterOp = RT.ensureString(RT.getIn(operation.meta(), "operation", "adapter"));
-			if (adapterOp != null) {
-				String adapterName = adapterOp.toString().split(":")[0];
-				return adapterLookup.apply(adapterName);
-			}
-		}
+		if (operation != null) return operation.meta();
 
 		AString opStr = RT.ensureString(job.getData().get(Fields.OP));
 		if (opStr == null) return null;
 		Asset asset = assetResolver.apply(opStr);
-		if (asset != null) {
-			AString adapterOp = RT.ensureString(RT.getIn(asset.meta(), "operation", "adapter"));
-			if (adapterOp != null) {
-				String adapterName = adapterOp.toString().split(":")[0];
-				return adapterLookup.apply(adapterName);
-			}
-		}
-
-		String adapterName = opStr.toString().split(":")[0];
-		return adapterLookup.apply(adapterName);
+		return (asset != null) ? asset.meta() : null;
 	}
 
 	/**
-	 * Resolves the adapter for an operation, trying metadata first,
-	 * then falling back to parsing the opRef string.
+	 * Resolves the adapter responsible for a job.
+	 */
+	private AAdapter resolveJobAdapter(Job job) {
+		AMap<AString, ACell> meta = resolveJobMeta(job);
+		if (meta != null) {
+			String adapterName = AAdapter.getAdapterName(meta);
+			if (adapterName != null) return adapterLookup.apply(adapterName);
+		}
+		return null;
+	}
+
+	/**
+	 * Resolves the adapter for an operation from its metadata.
 	 */
 	private AAdapter resolveAdapterForOp(Operation op, AString opRef) {
 		if (op != null) {
-			AString adapterOp = RT.ensureString(RT.getIn(op.meta(), "operation", "adapter"));
-			if (adapterOp != null) {
-				String adapterName = adapterOp.toString().split(":")[0];
+			String adapterName = AAdapter.getAdapterName(op.meta());
+			if (adapterName != null) {
 				AAdapter adapter = adapterLookup.apply(adapterName);
 				if (adapter != null) return adapter;
 			}
 		}
-
-		String adapterName = opRef.toString().split(":")[0];
-		return adapterLookup.apply(adapterName);
+		return null;
 	}
 
 	// ========== Job ID Generation ==========

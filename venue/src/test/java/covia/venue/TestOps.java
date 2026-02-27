@@ -16,7 +16,6 @@ public class TestOps {
 	public static Hash PAUSE;
 	public static Hash ORCH;
 	public static Hash GOOGLESEARCH;
-
 	static {
 		 try {
 			RANDOM=Assets.calcID(Utils.readResourceAsString("/asset-examples/randomop.json"));

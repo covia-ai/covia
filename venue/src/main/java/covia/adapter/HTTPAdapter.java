@@ -28,6 +28,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.venue.RequestContext;
 
 public class HTTPAdapter extends AAdapter {
 
@@ -178,13 +179,13 @@ public class HTTPAdapter extends AAdapter {
 	 */
 
 	@Override
-	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
-		String[] ss=operation.split(":");
-		
+	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		String subOp = getSubOperation(meta);
+
 		AString url=RT.ensureString(RT.getIn(input, Fields.URL));
 		AString methodField=RT.ensureString(RT.getIn(input, Fields.METHOD));
-		if ((methodField==null)&&(ss.length>1)) {
-			methodField=Strings.create(ss[1]);
+		if ((methodField==null)&&(subOp!=null)) {
+			methodField=Strings.create(subOp);
 		}
 		
 		AMap<AString,AString> headers=RT.ensureMap(RT.getIn(input, Fields.HEADERS));

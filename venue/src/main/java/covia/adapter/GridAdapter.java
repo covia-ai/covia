@@ -1,9 +1,9 @@
 package covia.adapter;
 
-import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
@@ -13,6 +13,7 @@ import covia.grid.Grid;
 import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.LocalVenue;
+import covia.venue.RequestContext;
 
 /**
  * Adapter that proxies Covia grid operations to the local engine or a remote venue.
@@ -49,23 +50,21 @@ public class GridAdapter extends AAdapter {
     }
 
 	@Override
-	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
+	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		throw new UnsupportedOperationException("GridAdapter requires Job context for caller DID propagation");
 	}
 
 	@Override
-	public void invoke(Job job, String operation, ACell meta, ACell input) {
-		Objects.requireNonNull(operation, "Operation must not be null");
-		String[] parts = operation.split(":");
-		if (parts.length < 2) {
-			job.fail("Invalid grid operation format: " + operation);
+	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		String gridOp = getSubOperation(meta);
+		if (gridOp == null) {
+			job.fail("Invalid grid operation: no sub-operation in metadata");
 			return;
 		}
 
-		// Extract caller DID from parent job for propagation to sub-invocations
-		AString callerDID = RT.ensureString(job.getData().get(Fields.CALLER));
+		// Extract caller DID from request context
+		AString callerDID = ctx.getCallerDID();
 
-		String gridOp = parts[1];
 		CompletableFuture<ACell> future;
         switch (gridOp) {
         case "run":

@@ -18,6 +18,7 @@ import convex.core.util.Utils;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.RequestContext;
 
 public class TestAdapter extends AAdapter {
 	
@@ -38,17 +39,9 @@ public class TestAdapter extends AAdapter {
     }
 
     @Override
-    public CompletableFuture<ACell> invokeFuture(String operation, ACell meta,ACell input) {
-        // Parse the operation to get the specific test operation
-        String[] parts = operation.split(":");
-        if (parts.length != 2) {
-            return CompletableFuture.failedFuture(
-                new IllegalArgumentException("Invalid operation format: " + operation)
-            );
-        }
-        
-        String testOp = parts[1];
-        
+    public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+        String testOp = getSubOperation(meta);
+
         // Handle different test operations
         try {
             switch (testOp) {
@@ -79,7 +72,7 @@ public class TestAdapter extends AAdapter {
             return CompletableFuture.failedFuture(e);
         }
     }
-    
+
     @Override public void installAssets() {
 		String BASE="/asset-examples/";
 
@@ -104,20 +97,21 @@ public class TestAdapter extends AAdapter {
     }
     
     @Override
-    public void invoke(Job job, String operation, ACell meta, ACell input) {
-        if (operation.equals("test:chat")) {
+    public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+        String subOp = getSubOperation(meta);
+        if ("chat".equals(subOp)) {
             // Multi-turn: set INPUT_REQUIRED and wait for messages
             job.setStatus(Status.INPUT_REQUIRED);
-        } else if (operation.equals("test:pause")) {
+        } else if ("pause".equals(subOp)) {
             // Auto-pause: immediately pauses, stores input for later completion
             job.update(data -> data.assoc(Fields.INPUT, input));
             job.setStatus(Status.PAUSED);
-        } else if (operation.equals("test:delay")) {
+        } else if ("delay".equals(subOp)) {
             // Delay: needs Job for caller DID propagation to sub-invocation
-            handleDelay(job, input);
+            handleDelay(job, ctx, input);
         } else {
             // Default one-shot path
-            super.invoke(job, operation, meta, input);
+            super.invoke(job, ctx, meta, input);
         }
     }
 
@@ -154,14 +148,14 @@ public class TestAdapter extends AAdapter {
         return true;
     }
 
-    private void handleDelay(Job job, ACell input) {
+    private void handleDelay(Job job, RequestContext ctx, ACell input) {
     	CompletableFuture.runAsync(() -> {
     		try {
 				ACell op = RT.getIn(input, Fields.OPERATION);
 				ACell opInput = RT.getIn(input, Fields.INPUT);
 				CVMLong delay = CVMLong.parse(RT.getIn(input, Fields.DELAY));
 				Thread.sleep(delay.longValue());
-				AString callerDID = RT.ensureString(job.getData().get(Fields.CALLER));
+				AString callerDID = ctx.getCallerDID();
 				Job subJob = engine.jobs().invokeOperation(RT.ensureString(op), opInput, callerDID);
 				ACell result = subJob.awaitResult();
 				job.completeWith(result);

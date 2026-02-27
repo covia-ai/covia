@@ -18,6 +18,7 @@ import convex.core.util.JSON;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
+import covia.venue.RequestContext;
 
 public abstract class AAdapter {
 
@@ -49,7 +50,7 @@ public abstract class AAdapter {
 		this.engine=engine;
 		installAssets();
 	}
-	
+
 	/**
 	 * Override this method to install adapter-specific assets.
 	 * Default implementation does nothing.
@@ -57,7 +58,7 @@ public abstract class AAdapter {
 	protected void installAssets() {
 		// Default implementation - subclasses can override
 	}
-	
+
 	/**
 	 * Helper method to install a single asset from a resource path.
 	 * @param resourcePath The resource path to read the asset from
@@ -70,9 +71,9 @@ public abstract class AAdapter {
 			log.warn("Failed to install asset from " + resourcePath ,e);
 			return null;
 		}
-		
+
 	}
-	
+
 	/**
 	 * Helper method to install a constructed asset.
 	 * @param resourcePath The resource path to read the asset from
@@ -80,7 +81,7 @@ public abstract class AAdapter {
 	protected Hash installAsset(AMap<AString,ACell> meta) {
 		return installAsset(JSON.printPretty(meta));
 	}
-	
+
     protected Hash installAsset(AString metaString) {
 		Hash assetHash = engine.storeAsset(metaString, null);
 		installedAssets = installedAssets.assoc(assetHash, metaString);
@@ -101,7 +102,7 @@ public abstract class AAdapter {
      * @return The adapter name (e.g. "mcp")
      */
     public abstract String getName();
-    
+
     /**
      * Returns a description of what this adapter is used for.
      * This should be a compelling, LLM-friendly description that explains
@@ -109,7 +110,7 @@ public abstract class AAdapter {
      * @return A description of the adapter's functionality
      */
     public abstract String getDescription();
-    
+
     /**
      * Returns the index of assets installed by this adapter.
      * @return Index mapping asset Hash to asset metadata
@@ -125,59 +126,124 @@ public abstract class AAdapter {
     public Index<AString, Hash> getOperationNames() {
         return operationNames;
     }
-    
+
+    // ========== Metadata Utility Methods ==========
+
     /**
-     * Invoke an operation with the given input, returning a future for the result.
-     * Adapters SHOULD launch an asynchronous task to produce the result and update the job status accordingly.
-     * Adapters MAY update the Job immediately if the Job can be completed in O(1) time.
+     * Extracts the sub-operation name from operation metadata.
+     * E.g. for metadata with {@code operation.adapter = "test:echo"}, returns {@code "echo"}.
      *
-     * <p>The returned future may remain pending for an extended period (long-running jobs).
-     * Adapters should apply IO-level timeouts on external network calls but must NOT
-     * impose timeouts on the future itself — see {@link #invoke(Job, String, ACell, ACell)}.
-     *
-     * @param operation The operation ID in the format "adapter:operation"
-     * @param meta The metadata for the operation
-     * @param input The input parameters for the operation
-     * @return A CompletableFuture that will complete with the result of the operation, or fail exceptionally
+     * @param meta The operation metadata map
+     * @return The sub-operation name, or null if not found
      */
-    public abstract CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input);
-    
+    public static String getSubOperation(AMap<AString, ACell> meta) {
+        if (meta == null) return null;
+        AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
+        if (adapterOp == null) return null;
+        String s = adapterOp.toString();
+        int colon = s.indexOf(':');
+        return (colon >= 0) ? s.substring(colon + 1) : s;
+    }
+
     /**
-     * Invoke an operation with the given input.
-     * Adapters SHOULD launch an asynchronous task to produce the result and update the job status accordingly.
-     * Adapters MAY update the Job immediately if the Job can be completed in O(1) time.
+     * Extracts the full {@code adapter:operation} string from operation metadata.
+     * E.g. for metadata with {@code operation.adapter = "test:echo"}, returns {@code "test:echo"}.
+     *
+     * @param meta The operation metadata map
+     * @return The full adapter:operation string, or null if not found
+     */
+    public static String getAdapterOperation(AMap<AString, ACell> meta) {
+        if (meta == null) return null;
+        AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
+        return (adapterOp != null) ? adapterOp.toString() : null;
+    }
+
+    /**
+     * Extracts the adapter name from operation metadata.
+     * E.g. for metadata with {@code operation.adapter = "test:echo"}, returns {@code "test"}.
+     *
+     * @param meta The operation metadata map
+     * @return The adapter name, or null if not found
+     */
+    public static String getAdapterName(AMap<AString, ACell> meta) {
+        String full = getAdapterOperation(meta);
+        if (full == null) return null;
+        int colon = full.indexOf(':');
+        return (colon >= 0) ? full.substring(0, colon) : full;
+    }
+
+    // ========== Invocation Interface ==========
+
+    /**
+     * Invoke an operation with resolved metadata and request context, returning a future.
+     *
+     * <p>This is the primary invocation interface. The engine resolves all operation
+     * reference forms to metadata before dispatching — meta is always non-null.
+     * Adapters use {@link #getSubOperation(AMap)} to extract their sub-operation
+     * from the metadata rather than parsing a raw operation string.
+     *
+     * @param ctx Request context (caller identity, internal flag)
+     * @param meta The operation metadata (never null)
+     * @param input The input parameters
+     * @return A CompletableFuture that will complete with the result
+     */
+    public abstract CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input);
+
+    /**
+     * Invoke an operation with resolved metadata, request context, and job.
+     *
+     * <p>This is the primary job-aware invocation interface. The engine resolves all
+     * operation reference forms to metadata before dispatching — meta is always non-null.
+     *
+     * <p>The default implementation wires the {@link #invokeFuture(RequestContext, AMap, ACell)}
+     * result to the job lifecycle. Override for adapters that need direct job control
+     * (e.g. multi-turn, caller DID propagation, orchestration).
      *
      * <p><b>Timeout policy:</b> Jobs intentionally have NO framework-level timeout.
      * Jobs can be long-running (days, weeks, or months for workflows, orchestrations,
-     * or human-in-the-loop processes). Clients may time out and reconnect, but the
-     * job continues running on the venue. After a client timeout or reconnect, the
-     * client should re-acquire the latest job status.
+     * or human-in-the-loop processes). Individual adapters SHOULD apply IO-level timeouts
+     * on their external calls (HTTP requests, LLM API calls, etc.) to prevent network-level
+     * hangs, but must not impose blanket timeouts on the job lifecycle.
      *
-     * <p>Individual adapters SHOULD apply IO-level timeouts on their external calls
-     * (HTTP requests, LLM API calls, etc.) to prevent network-level hangs, but must
-     * not impose blanket timeouts on the job lifecycle.
-     *
-     * @param job the Job prepared to run within the registered venue
-     * @param operation The operation ID in the format "adapter:operation"
-     * @param meta The metadata for the operation
-     * @param input The input parameters for the operation
+     * @param job The Job prepared to run
+     * @param ctx Request context (caller identity, internal flag)
+     * @param meta The operation metadata (never null)
+     * @param input The input parameters
      */
+    public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+        // Default one-shot: wire future to job lifecycle
+        job.setStatus(Status.STARTED);
+        invokeFuture(ctx, meta, input).thenAccept(result -> {
+            job.completeWith(result);
+        })
+        .exceptionally(e -> {
+            if (e instanceof CancellationException) {
+                job.cancel();
+            } else {
+                Throwable cause = (e instanceof java.util.concurrent.CompletionException && e.getCause() != null)
+                    ? e.getCause() : e;
+                job.fail(cause.getMessage());
+            }
+            return null;
+        });
+    }
+
+    // ========== Legacy Invocation Interface (deprecated) ==========
+
+    /**
+     * @deprecated Use {@link #invokeFuture(RequestContext, AMap, ACell)} instead
+     */
+    @Deprecated
+    public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
+        throw new UnsupportedOperationException("Use invokeFuture(RequestContext, AMap, ACell)");
+    }
+
+    /**
+     * @deprecated Use {@link #invoke(Job, RequestContext, AMap, ACell)} instead
+     */
+    @Deprecated
     public void invoke(Job job, String operation, ACell meta, ACell input) {
-    	job.setStatus(Status.STARTED);
- 		invokeFuture(operation,meta,input).thenAccept(result -> {
-			job.completeWith(result);
-		})
-		.exceptionally(e -> {
-			if (e instanceof CancellationException) {
-				job.cancel();
-			} else {
-				// Unwrap CompletionException to get the actual cause message
-				Throwable cause = (e instanceof java.util.concurrent.CompletionException && e.getCause() != null)
-					? e.getCause() : e;
-				job.fail(cause.getMessage());
-			}
-			return null;
-		});
+        throw new UnsupportedOperationException("Use invoke(Job, RequestContext, AMap, ACell)");
     }
 
     /**

@@ -21,6 +21,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.venue.RequestContext;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
@@ -58,52 +59,58 @@ public class MCPAdapter extends AAdapter {
 	}
 
 	@Override
-	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
-		String[] opSpec = operation.split(":");
-		if (opSpec.length<2) {
-			throw new IllegalArgumentException("Insufficient specification for MCP operation: "+operation);
+	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		// getSubOperation returns everything after "mcp:", e.g. "tools:call" or "tools:list"
+		String subOp = getSubOperation(meta);
+		if (subOp == null) {
+			throw new IllegalArgumentException("Insufficient specification for MCP operation");
 		}
-		
-		String feature=opSpec[1];
+
+		String[] subParts = subOp.split(":");
+		String feature = subParts[0];
+
 		if (feature.equals("tools")) {
-			
-			String function=opSpec[2];
+			if (subParts.length < 2) {
+				throw new IllegalArgumentException("MCP tools operation requires function (call/list)");
+			}
+			String function = subParts[1];
+
 			if (function.equals("call")) {
 				// Standard MCP tool call
 				return CompletableFuture.supplyAsync(() -> {
 					try {
 						// Remote tool name is from input if provided
 						AString remoteToolName=RT.getIn(input, Fields.TOOL_NAME);
-						
+
 						// Extract operation name from "mcp:tools:call:operationName" format
-						if ((remoteToolName==null)&&(opSpec.length>=3)) {
-							remoteToolName=Strings.create(opSpec[3]);
+						if ((remoteToolName==null)&&(subParts.length>=3)) {
+							remoteToolName=Strings.create(subParts[2]);
 						}
 
 						// Fallback: see if "remoteToolName" is specified in operation
 						if (remoteToolName==null) {
 							remoteToolName=RT.getIn(meta, Fields.OPERATION,Fields.REMOTE_TOOL_NAME);
 						}
-						
+
 						if (remoteToolName==null) {
 							throw new JobFailedException("No remote tool name provided (either in input or operation metadata)");
 						}
-						
+
 						// Get MCP server URL from metadata or input
 						AString serverUrl =getServerUrl(meta, input);
 						if (serverUrl == null) {
 							throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
 						}
-						
+
 						AMap<AString,ACell> toolArguments=RT.getIn(input, Fields.ARGUMENTS);
 						if (toolArguments == null) {
 							throw new JobFailedException("Tool call requires arguments as a JSON object");
 						}
-						
+
 						// Get API access token, if provided
 						AString token=RT.getIn(input, Fields.TOKEN);
 						String accessToken=(token==null)?null:token.toString();
-						
+
 						// Make the MCP tool call
 						return callMCPTool(serverUrl, remoteToolName.toString(), toolArguments, accessToken);
 
@@ -111,7 +118,7 @@ public class MCPAdapter extends AAdapter {
 						throw new JobFailedException(e);
 					}
 				}, VIRTUAL_EXECUTOR);
-				
+
 			} else if (function.equals("list")) {
 				// List available MCP tools
 				return CompletableFuture.supplyAsync(() -> {
@@ -121,11 +128,11 @@ public class MCPAdapter extends AAdapter {
 						if (serverUrl == null) {
 							throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
 						}
-						
+
 						// Get API access token, if provided
 						AString token = RT.getIn(input, Fields.TOKEN);
 						String accessToken = (token == null) ? null : token.toString();
-						
+
 						// List the MCP tools
 						return listMCPTools(serverUrl, accessToken);
 
@@ -134,14 +141,13 @@ public class MCPAdapter extends AAdapter {
 					}
 				}, VIRTUAL_EXECUTOR);
 			} else {
-				throw new UnsupportedOperationException("Unsupported tools function: "+operation);
+				throw new UnsupportedOperationException("Unsupported tools function: " + function);
 			}
 		} else {
-			throw new UnsupportedOperationException("Unsupported MCP feature: "+operation);
+			throw new UnsupportedOperationException("Unsupported MCP feature: " + feature);
 		}
 	}
 
-	
 	/**
 	 * Extracts the MCP server URL from metadata or input parameters
 	 */

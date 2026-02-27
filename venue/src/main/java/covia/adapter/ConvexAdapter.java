@@ -1,6 +1,5 @@
 package covia.adapter;
 
-import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.function.Function;
@@ -22,6 +21,7 @@ import convex.core.crypto.AKeyPair;
 import convex.core.cvm.Address;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.venue.RequestContext;
 
 /**
  * Adapter for interacting with the Convex network.
@@ -53,21 +53,13 @@ public class ConvexAdapter extends AAdapter {
 	}
 
 	@Override
-	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
-		Objects.requireNonNull(operation, "Operation must not be null");
-
-		String[] parts = operation.split(":");
-		if (parts.length < 2) {
-			return CompletableFuture.failedFuture(
-					new IllegalArgumentException("Invalid Convex operation format: " + operation));
-		}
-
-		String op = parts[1];
+	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		String op = getSubOperation(meta);
 		return switch (op) {
 			case "query" -> invokeQuery(meta, input);
 			case "transact" -> invokeTransact(meta, input);
 			default -> CompletableFuture.failedFuture(
-					new UnsupportedOperationException("Unsupported Convex operation: " + operation));
+					new UnsupportedOperationException("Unsupported Convex operation: " + op));
 		};
 	}
 

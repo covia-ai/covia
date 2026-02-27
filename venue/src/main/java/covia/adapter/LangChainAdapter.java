@@ -10,6 +10,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.grid.Status;
+import covia.venue.RequestContext;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.TextContent;
@@ -51,56 +52,53 @@ public class LangChainAdapter extends AAdapter {
 	}
 	
 	@Override
-	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
-        String[] parts = operation.split(":");
-        if (!getName().equals(parts[0])) {
-    		return CompletableFuture.completedFuture(
-    			Status.failure("Bad operation specifier")
-    		);	
-        }
-        
-        // Check if method is specified
-        if (parts.length < 2) {
+	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+        String subOp = getSubOperation(meta);
+        if (subOp == null) {
     		return CompletableFuture.completedFuture(
     			Status.failure("Method not specified. Use 'langchain:ollama:modelName' or 'langchain:openai'")
-    		);	
+    		);
         }
-        
+
+        // subOp may be "ollama:modelName" or "openai" etc.
+        String[] subParts = subOp.split(":", 2);
+        String provider = subParts[0];
+
         // Extract common parameters
         AString prompt = RT.ensureString(RT.getIn(input, "prompt"));
         if (prompt == null) {
             prompt = DEFAULT_PROMPT;
         }
         final AString finalPrompt = prompt;
-        
+
         // Get URL parameter
         AString urlParam = RT.ensureString(RT.getIn(input, "url"));
-        
-        // Get model parameter from parts[2] if provided, otherwise from input
-        String modelName = (parts.length > 2) ? parts[2] : null;
+
+        // Get model parameter from subParts[1] if provided, otherwise from input
+        String modelName = (subParts.length > 1) ? subParts[1] : null;
         if (modelName == null) {
             AString modelParam = RT.ensureString(RT.getIn(input, "model"));
             modelName = (modelParam != null) ? modelParam.toString() : null;
         }
         final String finalModelName = modelName;
-        
+
         // Get system prompt parameter
         AString systemPromptParam = RT.ensureString(RT.getIn(input, "systemPrompt"));
-        SystemMessage systemMessage = (systemPromptParam != null) ? 
+        SystemMessage systemMessage = (systemPromptParam != null) ?
             SystemMessage.from(systemPromptParam.toString()) : SYSTEM_MESSAGE;
-        
+
         // Get API key parameter
         AString apiKeyParam = RT.ensureString(RT.getIn(input, "apiKey"));
         final String apiKey = (apiKeyParam != null) ? apiKeyParam.toString() : System.getenv("OPENAI_API_KEY");
-        
-        if ("ollama".equals(parts[1])) {
+
+        if ("ollama".equals(provider)) {
         	return CompletableFuture.supplyAsync(()->{
         		String baseUrl = (urlParam != null) ? urlParam.toString() : "http://localhost:11434";
         		String model = (finalModelName != null) ? finalModelName : "qwen";
         		ChatModel ollamaModel = buildOllamaModel(baseUrl, model, IO_TIMEOUT);
 	        	return processChatRequest(ollamaModel, finalPrompt, systemMessage);
         	}, VIRTUAL_EXECUTOR);
-        } else if ("openai".equals(parts[1])) {
+        } else if ("openai".equals(provider)) {
         	return CompletableFuture.supplyAsync(()->{
         		String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.openai.com/v1";
         		String model = (finalModelName != null) ? finalModelName : "gpt-3.5-turbo";
@@ -109,11 +107,11 @@ public class LangChainAdapter extends AAdapter {
         	}, VIRTUAL_EXECUTOR);
         } else {
     		return CompletableFuture.completedFuture(
-    			Status.failure("Unknown method: '"+parts[1]+"'. Supported methods: 'ollama', 'openai'")
-    		);	
+    			Status.failure("Unknown method: '"+provider+"'. Supported methods: 'ollama', 'openai'")
+    		);
         }
 	}
-	
+
 	// ========== Reusable model builders ==========
 
 	/**
