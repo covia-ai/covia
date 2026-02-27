@@ -108,7 +108,7 @@ Adapter Layer
 - **Operation** — An Asset with an `"operation"` field; executable via an adapter with JSON Schema input/output.
 - **Job** — Execution state for an operation invocation. Jobs are long-lived and have NO framework-level timeout (they can run for days, weeks, or months). Lifecycle: `PENDING → STARTED → COMPLETE | FAILED | CANCELLED | REJECTED` (also `PAUSED`, `INPUT_REQUIRED`, `AUTH_REQUIRED`). Clients may time out polling and reconnect; after reconnect they re-acquire the latest job status by ID.
 - **Venue** — A grid node that hosts operations and manages state. Identified by DID.
-- **Adapter** — Bridges operations to execution environments. Extends `AAdapter`, implements `invokeFuture()`.
+- **Adapter** — Bridges operations to execution environments. Extends `AAdapter`, receives resolved metadata and a `RequestContext` for every invocation.
 - **Lattice** — CRDT-based persistent state with merge semantics (commutative, associative, idempotent).
 
 ### Lattice State Structure
@@ -137,10 +137,13 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 ### Adding a New Adapter
 
 1. Create class extending `AAdapter` in `covia.adapter`
-2. Implement `getName()`, `getDescription()`, `invokeFuture()`
-3. Override `installAssets()` to register default operations
-4. Create JSON asset definitions in `venue/src/main/resources/adapters/{name}/`
-5. Register in `Engine.addDemoAssets()` or via configuration
+2. Implement `getName()`, `getDescription()`, and the invocation method (receives `RequestContext`, resolved metadata, and input)
+3. Use `getSubOperation(meta)` to extract the adapter-specific operation name from metadata
+4. Override `installAssets()` to register default operations
+5. Create JSON asset definitions in `venue/src/main/resources/adapters/{name}/`
+6. Register in `Engine.addDemoAssets()` or via configuration
+
+The engine always resolves operation references to metadata before dispatching — adapters never receive null metadata. For adapters that need direct job control (multi-turn, orchestration), override the job-aware invocation method instead.
 
 ### Asset Metadata Format
 

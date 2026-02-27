@@ -163,8 +163,10 @@ Manages the full job lifecycle. Accessed via `engine.jobs()`. Handles submission
 ### Adapter (`covia.adapter.AAdapter`)
 Bridges operations to execution environments:
 - Installs assets on registration
-- Handles invocation dispatch
-- Returns results asynchronously
+- Receives resolved metadata and `RequestContext` for every invocation (meta is never null)
+- Uses `getSubOperation(meta)` to extract the adapter-specific operation name
+- Returns results asynchronously via `CompletableFuture`
+- For multi-turn or orchestration adapters, override the job-aware `invoke` method for direct job control
 
 ## Adapter Reference
 
@@ -198,10 +200,13 @@ Base path: `/api/v1/`
 ### Adding a New Adapter
 
 1. Create a class extending `AAdapter` in `covia.adapter`
-2. Implement `getName()`, `getDescription()`, `invokeFuture()`
-3. Override `installAssets()` to register default operations
-4. Create JSON asset definitions in `src/main/resources/adapters/{name}/`
-5. Register in `Engine.addDemoAssets()` or via configuration
+2. Implement `getName()`, `getDescription()`, and the invocation method (receives `RequestContext`, resolved metadata, and input)
+3. Use `getSubOperation(meta)` to extract the adapter-specific operation name from metadata
+4. Override `installAssets()` to register default operations
+5. Create JSON asset definitions in `src/main/resources/adapters/{name}/`
+6. Register in `Engine.addDemoAssets()` or via configuration
+
+The engine always resolves operation references to metadata before dispatching — adapters never receive null metadata. For adapters that need direct job control (multi-turn, orchestration), override the job-aware invocation method instead of the simple future-returning one.
 
 ### Creating Asset Metadata
 
