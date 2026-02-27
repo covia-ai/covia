@@ -1,0 +1,310 @@
+package covia.adapter;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import convex.core.data.ACell;
+import convex.core.data.AMap;
+import convex.core.data.AString;
+import convex.core.data.AVector;
+import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
+import convex.core.lang.RT;
+import covia.api.Fields;
+import covia.grid.Job;
+import covia.venue.AgentState;
+import covia.venue.User;
+import covia.venue.Users;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.response.ChatResponse;
+
+/**
+ * LLM-backed transition function for agents.
+ *
+ * <p>Invoked by {@code agent:run} as a transition operation ({@code llmagent:chat}).
+ * Maintains conversation history in the agent's {@code state} field and calls an
+ * LLM to generate responses.</p>
+ *
+ * <h3>State structure</h3>
+ * <pre>{@code
+ * { "history": [
+ *     { "role": "system",    "content": "You are..." },
+ *     { "role": "user",      "content": "Hello" },
+ *     { "role": "assistant", "content": "Hi there!" }
+ *   ]
+ * }}</pre>
+ *
+ * <h3>LLM configuration</h3>
+ * <p>Read from the agent record's {@code config} field:</p>
+ * <ul>
+ *   <li>{@code provider} — {@code "openai"} | {@code "ollama"} | {@code "test"} (default: {@code "openai"})</li>
+ *   <li>{@code model} — model name (default: {@code "gpt-4o-mini"})</li>
+ *   <li>{@code systemPrompt} — system message</li>
+ *   <li>{@code apiKey} — API key (falls back to {@code OPENAI_API_KEY} env var)</li>
+ *   <li>{@code url} — base URL override</li>
+ * </ul>
+ */
+public class LLMAgentAdapter extends AAdapter {
+
+	private static final Logger log = LoggerFactory.getLogger(LLMAgentAdapter.class);
+
+	/** IO timeout for LLM API calls */
+	private static final Duration IO_TIMEOUT = Duration.ofSeconds(120);
+
+	private static final AString DEFAULT_SYSTEM_PROMPT = Strings.create(
+		"You are a helpful AI assistant on the Covia platform. "
+		+ "Give concise, clear and accurate responses.");
+
+	// Config field keys
+	private static final AString K_PROVIDER      = Strings.intern("provider");
+	private static final AString K_MODEL         = Strings.intern("model");
+	private static final AString K_SYSTEM_PROMPT = Strings.intern("systemPrompt");
+	private static final AString K_API_KEY       = Strings.intern("apiKey");
+	private static final AString K_URL           = Strings.intern("url");
+
+	// History field keys
+	private static final AString K_HISTORY  = Strings.intern("history");
+	private static final AString K_ROLE     = Strings.intern("role");
+	private static final AString K_CONTENT  = Strings.intern("content");
+	private static final AString K_RESPONSE = Strings.intern("response");
+
+	// Role values
+	private static final AString ROLE_SYSTEM    = Strings.intern("system");
+	private static final AString ROLE_USER      = Strings.intern("user");
+	private static final AString ROLE_ASSISTANT = Strings.intern("assistant");
+
+	@Override
+	public String getName() {
+		return "llmagent";
+	}
+
+	@Override
+	public String getDescription() {
+		return "LLM-backed transition function for agents. Maintains conversation "
+			+ "history in agent state, processes inbox messages as user turns, and "
+			+ "calls an LLM to generate responses. Reads LLM configuration from the "
+			+ "agent's config (provider, model, apiKey, systemPrompt).";
+	}
+
+	@Override
+	protected void installAssets() {
+		installAsset("/adapters/llmagent/chat.json");
+	}
+
+	@Override
+	public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
+		throw new UnsupportedOperationException(
+			"LLMAgentAdapter requires caller DID — use invoke(Job, ...) path");
+	}
+
+	@Override
+	public void invoke(Job job, String operation, ACell meta, ACell input) {
+		job.setStatus(covia.grid.Status.STARTED);
+
+		CompletableFuture.supplyAsync(() -> {
+			AString callerDID = RT.ensureString(job.getData().get(Fields.CALLER));
+			return processChat(callerDID, input);
+		}, VIRTUAL_EXECUTOR)
+		.thenAccept(job::completeWith)
+		.exceptionally(e -> {
+			Throwable cause = (e instanceof java.util.concurrent.CompletionException && e.getCause() != null)
+				? e.getCause() : e;
+			job.fail(cause.getMessage());
+			return null;
+		});
+	}
+
+	/**
+	 * Core transition function logic.
+	 *
+	 * @param callerDID Caller DID for looking up agent config from lattice
+	 * @param input Transition function contract: { agentId, state, messages }
+	 * @return Transition function output: { state, result }
+	 */
+	@SuppressWarnings("unchecked")
+	ACell processChat(AString callerDID, ACell input) {
+		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		ACell state = RT.getIn(input, AgentState.KEY_STATE);
+		AVector<ACell> messages = (AVector<ACell>) RT.getIn(input, Fields.MESSAGES);
+
+		// Read agent config from lattice
+		AMap<AString, ACell> config = readAgentConfig(callerDID, agentId);
+
+		// Extract LLM settings from config
+		String provider = getConfigString(config, K_PROVIDER, "openai");
+		String model = getConfigString(config, K_MODEL, "gpt-4o-mini");
+		String systemPrompt = getConfigString(config, K_SYSTEM_PROMPT, null);
+		String apiKey = getConfigString(config, K_API_KEY, null);
+		String url = getConfigString(config, K_URL, null);
+
+		// Reconstruct conversation history from state
+		AVector<ACell> history = extractHistory(state);
+
+		// If no system prompt in history yet, prepend one
+		if (history.count() == 0 || !ROLE_SYSTEM.equals(RT.getIn(history.get(0), K_ROLE))) {
+			AString sysContent = (systemPrompt != null)
+				? Strings.create(systemPrompt)
+				: DEFAULT_SYSTEM_PROMPT;
+			AMap<AString, ACell> sysEntry = Maps.of(
+				K_ROLE, ROLE_SYSTEM,
+				K_CONTENT, sysContent
+			);
+			history = (AVector<ACell>) Vectors.of(sysEntry).concat(history);
+		}
+
+		// Append each inbox message as a user turn
+		if (messages != null) {
+			for (long i = 0; i < messages.count(); i++) {
+				ACell msg = messages.get(i);
+				AString content = RT.ensureString(RT.getIn(msg, K_CONTENT));
+				if (content == null) {
+					// Fall back to treating the whole message as content
+					content = RT.ensureString(msg);
+				}
+				if (content != null) {
+					history = history.conj(Maps.of(
+						K_ROLE, ROLE_USER,
+						K_CONTENT, content
+					));
+				}
+			}
+		}
+
+		// Call LLM (or test provider)
+		String assistantText;
+		if ("test".equals(provider)) {
+			// Test provider: echo back the last user message
+			assistantText = getLastUserContent(history);
+		} else {
+			// Build ChatModel and call LLM
+			ChatModel chatModel = buildChatModel(provider, model, apiKey, url);
+			List<ChatMessage> chatMessages = toChatMessages(history);
+			ChatResponse response = chatModel.chat(chatMessages);
+			AiMessage reply = response.aiMessage();
+			assistantText = reply.text();
+		}
+
+		// Append assistant response to history
+		history = history.conj(Maps.of(
+			K_ROLE, ROLE_ASSISTANT,
+			K_CONTENT, Strings.create(assistantText)
+		));
+
+		// Return transition function output
+		ACell newState = Maps.of(K_HISTORY, history);
+		ACell result = Maps.of(K_RESPONSE, Strings.create(assistantText));
+		return Maps.of(
+			AgentState.KEY_STATE, newState,
+			Fields.RESULT, result
+		);
+	}
+
+	// ========== Internal helpers ==========
+
+	/**
+	 * Reads the agent's config from the lattice.
+	 */
+	private AMap<AString, ACell> readAgentConfig(AString callerDID, AString agentId) {
+		if (callerDID == null || agentId == null || engine == null) return null;
+		try {
+			Users users = engine.getVenueState().users();
+			User user = users.get(callerDID);
+			if (user == null) return null;
+			AgentState agent = user.agent(agentId);
+			if (agent == null) return null;
+			return agent.getConfig();
+		} catch (Exception e) {
+			log.warn("Failed to read agent config for {}/{}", callerDID, agentId, e);
+			return null;
+		}
+	}
+
+	/**
+	 * Extracts a string config value with a default.
+	 */
+	private String getConfigString(AMap<AString, ACell> config, AString key, String defaultValue) {
+		if (config == null) return defaultValue;
+		AString val = RT.ensureString(config.get(key));
+		return (val != null) ? val.toString() : defaultValue;
+	}
+
+	/**
+	 * Extracts the history vector from the agent state.
+	 */
+	@SuppressWarnings("unchecked")
+	static AVector<ACell> extractHistory(ACell state) {
+		if (state == null) return Vectors.empty();
+		ACell h = RT.getIn(state, K_HISTORY);
+		if (h instanceof AVector) return (AVector<ACell>) h;
+		return Vectors.empty();
+	}
+
+	/**
+	 * Converts history (AVector of AMaps) to LangChain4j ChatMessage list.
+	 */
+	static List<ChatMessage> toChatMessages(AVector<ACell> history) {
+		List<ChatMessage> messages = new ArrayList<>();
+		for (long i = 0; i < history.count(); i++) {
+			ACell entry = history.get(i);
+			AString role = RT.ensureString(RT.getIn(entry, K_ROLE));
+			AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
+			if (role == null || content == null) continue;
+
+			String roleStr = role.toString();
+			String contentStr = content.toString();
+			switch (roleStr) {
+				case "system":
+					messages.add(SystemMessage.from(contentStr));
+					break;
+				case "user":
+					messages.add(UserMessage.from(contentStr));
+					break;
+				case "assistant":
+					messages.add(AiMessage.from(contentStr));
+					break;
+				default:
+					log.warn("Unknown role in history: {}", roleStr);
+			}
+		}
+		return messages;
+	}
+
+	/**
+	 * Builds a ChatModel from config settings.
+	 */
+	private ChatModel buildChatModel(String provider, String model, String apiKey, String url) {
+		if ("ollama".equals(provider)) {
+			String baseUrl = (url != null) ? url : "http://localhost:11434";
+			return LangChainAdapter.buildOllamaModel(baseUrl, model, IO_TIMEOUT);
+		} else {
+			// Default to OpenAI-compatible
+			String key = (apiKey != null) ? apiKey : System.getenv("OPENAI_API_KEY");
+			String baseUrl = (url != null) ? url : "https://api.openai.com/v1";
+			return LangChainAdapter.buildOpenAiModel(key, baseUrl, model, IO_TIMEOUT);
+		}
+	}
+
+	/**
+	 * Gets the content of the last user message in history (for test provider).
+	 */
+	private String getLastUserContent(AVector<ACell> history) {
+		for (long i = history.count() - 1; i >= 0; i--) {
+			ACell entry = history.get(i);
+			if (ROLE_USER.equals(RT.getIn(entry, K_ROLE))) {
+				AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
+				return (content != null) ? content.toString() : "(empty)";
+			}
+		}
+		return "(no user message)";
+	}
+}

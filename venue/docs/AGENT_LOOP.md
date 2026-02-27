@@ -235,15 +235,30 @@ is always a state that genuinely existed on the hosting venue.
 
 ---
 
-## 6. Open Questions
+## 6. Design Decisions and Open Questions
 
-1. **Recovery.** An agent in `"RUNNING"` status after a venue restart was mid-
-   transition. Recovery should set it to `"SUSPENDED"` (not silently resume).
+### 6.1 Recovery (on hold)
 
-2. **Transition function effects.** Should the output include an `actions` field
-   for side effects (send messages to other agents, invoke operations)? Or should the
-   transition function trigger effects through the grid directly during execution?
-   Defining the action vocabulary is a Phase B concern.
+An agent in `"RUNNING"` status after a venue restart was mid-transition.
+`RUNNING` may be resumable if the transition function supports it, so no
+automatic recovery to `"SUSPENDED"` for now. Revisit when transition functions
+can declare resumability.
+
+### 6.2 Effects
+
+Transition functions implement their own effects. A transition function that
+needs to send messages to other agents or invoke grid operations does so
+directly during execution (it has access to the engine like any adapter).
+
+Agent-level effect handling (an `actions` field in the output, processed by the
+framework) is deferred. It may be useful for sandboxed or auditable agents but
+adds complexity that is not needed for the initial LLM agent.
+
+### 6.3 Tool palette
+
+Tools available to an LLM agent are defined in the transition function's
+operation metadata. The initial prototype uses a default set; per-agent tool
+configuration is a Phase C concern.
 
 ---
 
@@ -255,7 +270,7 @@ See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
 |-------|-------|--------|
 | **0** | Per-user namespace (`"g"`, `"s"`), SecretStore | ✓ Complete |
 | **A** | AgentState wrapper, AgentAdapter (create/message/run) | ✓ Complete (needs lattice restructure per this doc) |
-| **B** | Default transition function (LLM + tool palette) | Planned |
+| **B** | Default transition function (LLM + tool palette) | In Progress |
 | **C** | Capability enforcement (UCAN `with`/`can`) | Planned |
 | **D** | Cross-user messaging, advanced wake triggers | Planned |
 | **E** | Agent forking and cross-venue migration | Planned |

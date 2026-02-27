@@ -1,0 +1,24 @@
+{
+	"name": "LLM Agent Chat",
+	"description": "LLM-backed transition function for agents. Maintains conversation history in agent state. Reads LLM configuration from the agent's config (provider, model, apiKey, systemPrompt). Processes all inbox messages as user turns and generates an assistant response.",
+	"dateCreated": "2026-02-27T00:00:00Z",
+	"operation": {
+		"adapter": "llmagent:chat",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Agent identifier" },
+				"state": { "description": "Previous conversation state (null on first run). Contains 'history' array of role/content pairs." },
+				"messages": { "type": "array", "description": "Inbox messages to process as user turns" }
+			},
+			"required": ["agentId"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"state": { "type": "object", "description": "Updated conversation state with appended history" },
+				"result": { "type": "object", "description": "Contains 'response' with the assistant's reply text" }
+			}
+		}
+	}
+}

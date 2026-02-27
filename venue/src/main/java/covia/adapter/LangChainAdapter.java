@@ -95,39 +95,16 @@ public class LangChainAdapter extends AAdapter {
         
         if ("ollama".equals(parts[1])) {
         	return CompletableFuture.supplyAsync(()->{
-        		// Use Ollama defaults if not provided
         		String baseUrl = (urlParam != null) ? urlParam.toString() : "http://localhost:11434";
         		String model = (finalModelName != null) ? finalModelName : "qwen";
-        		
-        		// Create Ollama model dynamically with the specified URL and model
-        		ChatModel ollamaModel = OllamaChatModel.builder()
-        			.baseUrl(baseUrl)
-        			//.temperature(0.7)
-        			.logRequests(true)
-        			.logResponses(true)
-        			.modelName(model)
-        			.timeout(IO_TIMEOUT)
-        			.build();
-	        	
+        		ChatModel ollamaModel = buildOllamaModel(baseUrl, model, IO_TIMEOUT);
 	        	return processChatRequest(ollamaModel, finalPrompt, systemMessage);
         	}, VIRTUAL_EXECUTOR);
         } else if ("openai".equals(parts[1])) {
         	return CompletableFuture.supplyAsync(()->{
-        		// Use OpenAI defaults if not provided
         		String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.openai.com/v1";
         		String model = (finalModelName != null) ? finalModelName : "gpt-3.5-turbo";
-        		
-        		// Create OpenAI model dynamically with the specified URL and model
-        		ChatModel openaiModel = OpenAiChatModel.builder()
-        			.apiKey(apiKey)
-        			.baseUrl(baseUrl)
-        			//.temperature(0.7)
-        			.logRequests(true)
-        			.logResponses(true)
-        			.modelName(model)
-        			.timeout(IO_TIMEOUT)
-        			.build();
-	        	
+        		ChatModel openaiModel = buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
 	        	return processChatRequest(openaiModel, finalPrompt, systemMessage);
         	}, VIRTUAL_EXECUTOR);
         } else {
@@ -137,6 +114,35 @@ public class LangChainAdapter extends AAdapter {
         }
 	}
 	
+	// ========== Reusable model builders ==========
+
+	/**
+	 * Builds an Ollama ChatModel.
+	 */
+	static ChatModel buildOllamaModel(String baseUrl, String model, Duration timeout) {
+		return OllamaChatModel.builder()
+			.baseUrl(baseUrl)
+			.logRequests(true)
+			.logResponses(true)
+			.modelName(model)
+			.timeout(timeout)
+			.build();
+	}
+
+	/**
+	 * Builds an OpenAI-compatible ChatModel.
+	 */
+	static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout) {
+		return OpenAiChatModel.builder()
+			.apiKey(apiKey)
+			.baseUrl(baseUrl)
+			.logRequests(true)
+			.logResponses(true)
+			.modelName(model)
+			.timeout(timeout)
+			.build();
+	}
+
 	private ACell processChatRequest(ChatModel model, AString prompt, SystemMessage systemMessage) {
 		UserMessage userMessage = UserMessage.from(
 			TextContent.from(prompt.toString())

@@ -47,6 +47,7 @@ import covia.adapter.GridAdapter;
 import covia.adapter.HTTPAdapter;
 import covia.adapter.JVMAdapter;
 import covia.adapter.LangChainAdapter;
+import covia.adapter.LLMAgentAdapter;
 import covia.adapter.MCPAdapter;
 import covia.adapter.Orchestrator;
 import covia.adapter.TestAdapter;
@@ -247,6 +248,7 @@ public class Engine {
 		venue.registerAdapter(new GridAdapter());
 		venue.registerAdapter(new ConvexAdapter());
 		venue.registerAdapter(new AgentAdapter());
+		venue.registerAdapter(new LLMAgentAdapter());
 	}
 
 	/**
