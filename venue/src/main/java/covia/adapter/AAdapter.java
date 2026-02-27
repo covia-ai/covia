@@ -228,24 +228,6 @@ public abstract class AAdapter {
         });
     }
 
-    // ========== Legacy Invocation Interface (deprecated) ==========
-
-    /**
-     * @deprecated Use {@link #invokeFuture(RequestContext, AMap, ACell)} instead
-     */
-    @Deprecated
-    public CompletableFuture<ACell> invokeFuture(String operation, ACell meta, ACell input) {
-        throw new UnsupportedOperationException("Use invokeFuture(RequestContext, AMap, ACell)");
-    }
-
-    /**
-     * @deprecated Use {@link #invoke(Job, RequestContext, AMap, ACell)} instead
-     */
-    @Deprecated
-    public void invoke(Job job, String operation, ACell meta, ACell input) {
-        throw new UnsupportedOperationException("Use invoke(Job, RequestContext, AMap, ACell)");
-    }
-
     /**
      * Handles a message delivered to a running job.
      * Override this method in adapters that support multi-turn interactions.

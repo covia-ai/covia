@@ -63,11 +63,11 @@ public class ConvexAdapter extends AAdapter {
 		};
 	}
 
-	private CompletableFuture<ACell> invokeQuery(ACell meta, ACell input) {
+	private CompletableFuture<ACell> invokeQuery(AMap<AString, ACell> meta, ACell input) {
 		return withConvexClient(meta, input, convex -> executeQuery(convex, meta, input));
 	}
 
-	private CompletableFuture<ACell> invokeTransact(ACell meta, ACell input) {
+	private CompletableFuture<ACell> invokeTransact(AMap<AString, ACell> meta, ACell input) {
 		return withConvexClient(meta, input, convex -> executeTransact(convex, meta, input));
 	}
 
@@ -123,7 +123,7 @@ public class ConvexAdapter extends AAdapter {
 		});
 	}
 
-	private CompletableFuture<ACell> withConvexClient(ACell meta, ACell input,
+	private CompletableFuture<ACell> withConvexClient(AMap<AString, ACell> meta, ACell input,
 			Function<Convex, CompletableFuture<ACell>> action) {
 
 		return CompletableFuture.supplyAsync(() -> {
@@ -145,7 +145,7 @@ public class ConvexAdapter extends AAdapter {
 		});
 	}
 
-	private Convex openConvexClient(ACell meta, ACell input) throws Exception {
+	private Convex openConvexClient(AMap<AString, ACell> meta, ACell input) throws Exception {
 		AString endpoint = locateEndpoint(meta, input);
 		if (endpoint == null) {
 			throw new JobFailedException("No Convex endpoint provided (expected in input or metadata)");
@@ -153,16 +153,14 @@ public class ConvexAdapter extends AAdapter {
 		return Convex.connect(endpoint.toString());
 	}
 
-	private AString locateEndpoint(ACell meta, ACell input) {
+	private AString locateEndpoint(AMap<AString, ACell> meta, ACell input) {
 		// Check input first
 		AString endpoint = RT.ensureString(RT.getIn(input, Fields.PEER));
 		if (endpoint != null) return endpoint;
 
 		// Then check metadata for default peer
-		if (meta instanceof AMap<?, ?> map) {
-			@SuppressWarnings("unchecked")
-			AMap<AString, ACell> metaMap = (AMap<AString, ACell>) map;
-			endpoint = RT.ensureString(RT.getIn(metaMap, Fields.OPERATION, Fields.PEER));
+		if (meta != null) {
+			endpoint = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.PEER));
 			if (endpoint != null) return endpoint;
 		}
 

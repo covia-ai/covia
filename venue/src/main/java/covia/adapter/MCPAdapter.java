@@ -149,27 +149,19 @@ public class MCPAdapter extends AAdapter {
 	}
 
 	/**
-	 * Extracts the MCP server URL from metadata or input parameters
+	 * Extracts the MCP server URL from metadata or input parameters.
 	 */
-	@SuppressWarnings("unchecked")
-	private AString getServerUrl(ACell meta, ACell input) {
+	private AString getServerUrl(AMap<AString, ACell> meta, ACell input) {
 		// First try to get from input parameters
-		if (input instanceof AMap) {
-			ACell serverUrlCell = RT.getIn(input, Fields.SERVER);
-			if (serverUrlCell instanceof AString url) {
-				return url;
-			}
+		AString url = RT.ensureString(RT.getIn(input, Fields.SERVER));
+		if (url != null) return url;
+
+		// Then check metadata
+		if (meta != null) {
+			url = RT.ensureString(meta.get(Fields.SERVER));
+			if (url != null) return url;
 		}
-		
-		// Then try to get from metadata
-		if (meta instanceof AMap) {
-			AMap<AString, ACell> metaMap = (AMap<AString, ACell>) meta;
-			ACell serverUrlCell = metaMap.get(Fields.SERVER);
-			if (serverUrlCell instanceof AString url) {
-				return url;
-			}
-		}
-		
+
 		return null;
 	}
 	
