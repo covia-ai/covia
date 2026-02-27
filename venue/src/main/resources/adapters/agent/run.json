@@ -1,0 +1,23 @@
+{
+	"name": "Run Agent",
+	"description": "Runs the agent's transition loop: reads all messages from the inbox, invokes the specified transition operation for each message, increments the sequence number, and appends results to the timeline. The agent transitions from sleeping to running and back to sleeping on completion.",
+	"dateCreated": "2026-02-27T00:00:00Z",
+	"operation": {
+		"adapter": "agent:run",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Agent name to run" },
+				"operation": { "type": "string", "description": "Transition operation reference (e.g. 'test:echo')" }
+			},
+			"required": ["agentId", "operation"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string" },
+				"processed": { "type": "integer", "description": "Number of messages processed" }
+			}
+		}
+	}
+}

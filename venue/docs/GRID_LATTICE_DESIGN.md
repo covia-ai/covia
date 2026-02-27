@@ -76,7 +76,7 @@ Each top-level namespace is hardcoded in the lattice app definition. This is not
 
 ### 4.2 Storage Type Rationale
 
-**Index** — used for all system-managed namespaces. Provides ordered keys, range scans (critical for performance monitoring, garbage collection, auditing), and enforced structure. Keys are typically hashes, IDs, or timestamps (short blob-like values).
+**Index** — used for system-managed namespaces. Provides ordered keys, range scans (critical for performance monitoring, garbage collection, auditing), and enforced structure. Keys are typically hashes, internal IDs, or timestamps (short blob-like values).
 
 **Hashmap** — used for user/agent-managed data. Flexible arbitrary keys, JSON-like navigation, no ordering guarantees. Suitable for workspace and metadata within records.
 
@@ -86,12 +86,11 @@ Each top-level namespace is hardcoded in the lattice app definition. This is not
 
 #### `/a/` — Assets
 
-Immutable, content-addressed blobs. Write-once, reference by CAD3 hash. The universal immutable layer — both data assets and operation snapshots pin here.
+Immutable, content-addressed data. Write-once, reference by CAD3 hash. The universal immutable layer — both data assets and operation snapshots pin here.
 
 - Keys are content hashes
-- Append-only — no mutation, no deletion (except GC)
+- Append-only — no mutation, no deletion (unless purging old records)
 - Self-verifying — any peer can validate data against its hash
-- Range scans support garbage collection and enumeration
 - Operations pin to `/a/` on invoke; jobs freeze to `/a/` on completion
 
 #### `/o/` — Operations
@@ -146,10 +145,10 @@ On completion, the entire job record **freezes** — inputs, outputs, execution 
 {
   "op_name": "/o/my-transform",
   "op_pinned": "/a/cafebabe...",
-  "caller": "did:key:zAlice.../g/3",
+  "caller": "did:key:zAlice.../g/my-assistant",
   "inputs": { "arg1": "<resolved value>", "arg2": "constant" },
   "caps": ["<ucan token>"],
-  "executor": "did:key:zBob.../g/7",
+  "executor": "did:key:zBob.../g/helper",
   "status": "complete",
   "outputs": { "result": "<computed value>" },
   "cost": 450
@@ -163,10 +162,10 @@ This is a critical design distinction. The three execution-related namespaces se
 | | `/o/` Operations | `/j/` Jobs | `/g/` Agents |
 |---|----------------|-----------|-------------|
 | **What** | Transformation definition | Execution record | Persistent actor |
-| **Identity** | User-named (hashmap) | System-assigned ID | System-assigned ID, DID-bound |
+| **Identity** | User-named (hashmap) | System-assigned ID | User-chosen string, DID-bound |
 | **Lifecycle** | Mutable, pins to `/a/` on invoke | Single execution, freezes on complete | Long-lived, many transitions |
 | **State** | Stateless definition | Scoped to one invocation | Accumulates across transitions |
-| **Initiation** | Passive — invoked by others | Created by `invoke()` | Autonomous — wakes on triggers |
+| **Initiation** | Passive — invoked by others | Created by `invoke()` | Triggered via `agent:run` (explicit) |
 | **Audit question** | "What logic ran?" | "What happened with this request?" | "What did this agent do and why?" |
 
 **How they interact:**
@@ -180,18 +179,14 @@ This is a critical design distinction. The three execution-related namespaces se
 **The critical cross-reference:** A job record references the executing agent. An agent's timeline entry references the jobs it created. This dual record provides two audit perspectives on the same work:
 
 ```
-/j/2456543/                          /g/agent-3/timeline/
+/j/2456543/                          /g/my-assistant/timeline/
   op_name: "/o/my-transform"           42: {
-  op_pinned: "/a/cafebabe..."              state: { ... },
-  caller: "/g/agent-3"                     input: [inbox items...],
-  executor: "/g/agent-7"                   actions: [
-  inputs: { ... }                            { type: "invoke",
-  outputs: { ... }                             op: "/o/my-transform",
-  cost: 450                                    job: "/j/2456543",
-                                               inputs: { ... } },
-                                             ...
-                                           ],
-                                           ts: ...
+  op_pinned: "/a/cafebabe..."              start: 1719500000,
+  caller: "/g/my-assistant"                end: 1719500005,
+  executor: "/g/helper"                     op: "test:echo",
+  inputs: { ... }                          state: { ... },
+  outputs: { ... }                         messages: [inbox items...],
+  cost: 450                                result: { ... }
                                          }
 ```
 
@@ -199,13 +194,13 @@ This is a critical design distinction. The three execution-related namespaces se
 
 | Pattern | Mechanism | Creates job? | Use case |
 |---------|-----------|-------------|----------|
-| **Async message** | Write to `/g/<id>/inbox/` | No | Notifications, FYI, loose coordination |
-| **Task assignment** | Create job in `/j/`, add to `/g/<id>/jobs/` | Yes | A2A tasks, delegated work — agent must complete or fail |
+| **Async message** | `agent:message` — appends to agent's `inbox` vector | No | Notifications, FYI, loose coordination |
+| **Task assignment** | Create job in `/j/`, message agent with job ref | Yes | A2A tasks, delegated work — agent must complete or fail |
 | **Task request** | `invoke()` targeting an agent-backed op | Yes | Request-response, tracked work, billable |
 | **Delegation** | `invoke()` with sub-delegated UCAN caps | Yes | Agent delegates subtask to another agent |
 | **Broadcast** | Write to multiple inboxes | No | Announcements, pub-sub patterns |
 
-The key principle: **if you need accountability (cost, result, SLA), assign a job. If you need informal coordination, use inbox messages.** Jobs assigned to an agent appear in its `jobs/` index — the agent is contractually responsible for completing or failing them. Inbox messages are best-effort. Both appear in the agent's timeline for full auditability.
+The key principle: **if you need accountability (cost, result, SLA), assign a job. If you need informal coordination, use inbox messages.** Job assignments are delivered as inbox messages — the agent processes them via its transition function like any other message. Inbox messages are best-effort. Both appear in the agent's timeline for full auditability.
 
 **Agent transitions are not jobs.** When the runtime wakes an agent and runs its transition function, this is not a job — it's an internal lifecycle event recorded in the agent's timeline. The distinction matters: jobs are created explicitly by callers and carry economic weight (cost, billing, caps). Agent transitions are managed by the runtime and are an operational concern of the agent's owner. An agent's transition may create zero, one, or many jobs as part of its processing.
 
@@ -213,60 +208,16 @@ The key principle: **if you need accountability (cost, result, SLA), assign a jo
 
 Stateful actors with pluggable transition functions. Each agent is a state machine managed by the venue runtime, with user-definable behaviour. The agent namespace enforces a four-layer execution architecture.
 
-**Lattice structure:**
+Agent IDs are human-readable strings chosen by the user (e.g. `"my-assistant"`, `"code-reviewer"`). The canonical lattice address is `did:key:zAlice.../g/my-assistant`.
 
-```
-/g/<agent-id>/
-
-  # SYSTEM LAYER — owned by venue runtime
-  status: "sleeping"            # sleeping | waking | running | suspended | terminated
-  seq: 5                        # current sequence number
-  caps: [<ucan>, ...]           # capability boundary — enforced on all actions
-  owner: "did:key:zAlice..."       # who controls this agent
-  name: "my-assistant"          # human-readable name (metadata, queryable)
-  description: "Code review agent"
-  tags: ["code", "review"]
-  wake/
-    schedule: "*/5 * * * *"     # cron-like
-    triggers: [                 # event-driven wake conditions
-      { on: "inbox" },
-      { on: "job-assigned" },
-      { on: "job-complete", job: "/j/..." },
-      { on: "watch", path: "/w/some/path" }
-    ]
-    last_run: 1719500000
-    next_run: 1719500300
-  inbox/                        # index — fire-and-forget messages
-    0x0001: { from: "...", payload: {...}, ts: ... }
-    0x0002: { from: "...", payload: {...}, ts: ... }
-  jobs/                         # index — managed job assignments, system-maintained
-    0x1001: { job: "/j/2456543", status: "pending", assigned: 1719500000 }
-    0x1002: { job: "/j/2456544", status: "running", assigned: 1719500001 }
-  timeline/                     # append-only vector of raw lattice values
-    0: { state: {...}, input: [...], actions: [...], ts: ... }
-    1: { state: {...}, input: [...], actions: [...], ts: ... }
-    5: { state: {...}, input: [...], actions: [...], ts: ... }
-  error: null
-
-  # USER LAYER — owner configures
-  config/
-    model: "/o/my-transition-fn"  # transition function (any grid op)
-    tools: ["/o/abc...", ...]   # grid ops available to tool loop
-    llm/
-      provider: "anthropic"
-      model: "claude-sonnet-4-5-20250929"
-      endpoint: "https://api.anthropic.com/v1"
-      api_key: "/s/anthropic-key"   # ref to secrets namespace
-    framework: "langchain"      # tool loop adapter
-    params: { ... }             # model-specific config
-```
+Each agent is a single atomic LWW value — the entire agent record is replaced on every write, and the record with the latest `ts` wins on merge. All writes are serialised on the hosting venue, so there are no concurrent writers. See AGENT_LOOP.md §2 for the full agent record structure (fields, timeline entries, merge semantics) and §3–4 for the transition function contract and agent update sequence.
 
 **Four-layer execution architecture:**
 
 | Layer | Role | Provided by | Flexibility |
 |-------|------|-------------|-------------|
 | **1. Runtime** | Agent lifecycle, capability enforcement on lattice actions, timeline management, action dispatch | Venue — hardcoded | None. Trust anchor. |
-| **2. Transition function** | Agent behaviour. Receives `(state, inbox, jobs, config)`, returns `(new_state, actions)` | Any grid op (`/o/` ref) | Pluggable. User picks or writes their own. |
+| **2. Transition function** | Agent behaviour. Receives `(agent-id, state, messages)`, returns `(state, result)`. See AGENT_LOOP.md §3.2. | Any grid op (`/o/` ref) | Pluggable. User picks or writes their own. |
 | **3. Tool loop** | ReAct / function-calling cycle within transition function. Calls grid ops, accumulates context. | Framework choice (LangChain, CrewAI, custom) | Flexible adapter. |
 | **4. LLM** | Stateless inference. Pure function: prompt → completion. No lattice access, no side effects. | User's choice. API key in `/s/`. | Any provider. |
 
@@ -292,19 +243,9 @@ The runtime is the **single enforcement point** for all capability checks — la
 
 **Execution loop (runtime-managed):**
 
-1. Evaluate wake conditions → wake if met
-2. `status` → `"running"`
-3. Read current state from latest timeline entry
-4. Drain inbox items (messages)
-5. Read pending jobs from `jobs/` index
-6. Call transition function: `(state, inbox_items, pending_jobs, config)` → `{ new_state, actions }`
-7. Validate all actions against `caps`
-8. Append `{ state: new_state, input: { inbox: inbox_items, jobs: pending_jobs }, actions: actions, ts: now }` to timeline
-9. Dispatch validated actions (invoke ops, complete/fail jobs, send messages, spawn agents)
-10. Update `jobs/` status for any jobs acted on
-11. `status` → `"sleeping"`, update wake conditions
+The agent update sequence — create, message, and run — is defined in AGENT_LOOP.md §4. In summary: when `agent:run` is triggered, the runtime sets `status` → `"running"`, invokes the transition function with the current state and inbox, and on success clears the inbox, appends a timeline entry, and sets `status` → `"sleeping"`. On error, the inbox is preserved and the agent is suspended.
 
-The transition function is responsible for deciding what to retain in `new_state` — accumulated context, conversation history, pending tasks. Anything not written to state is discarded. Layers 3 and 4 are ephemeral; they exist only during execution with no persistent lattice presence.
+The transition function is responsible for deciding what to retain in `state` — accumulated context, conversation history, pending tasks. Anything not written to state is discarded. Layers 3 and 4 are ephemeral; they exist only during execution with no persistent lattice presence.
 
 **Agent tool palette:** During the tool loop (Layer 3), the agent has access to a set of MCP-style tools provided by the venue runtime. These are the agent's interface to the lattice and the outside world. The runtime validates every tool call against the agent's `caps`.
 
@@ -315,10 +256,10 @@ The transition function is responsible for deciding what to retain in `new_state
 | `read` | Read a lattice path | `{ with: "did:.../path", can: "/crud/read" }` |
 | `write` | Write to workspace | `{ with: "did:.../w/path", can: "/crud/write" }` |
 | `list` | List keys at a path | `{ with: "did:.../path", can: "/crud/read" }` |
-| `complete_job` | Complete an assigned job with result | Job must be in agent's `jobs/` index |
-| `fail_job` | Fail an assigned job with reason | Job must be in agent's `jobs/` index |
-| `message` | Send message to another agent's inbox | `{ with: "did:.../g/<id>/inbox/", can: "/agent/message" }` |
-| `assign_job` | Create job and assign to another agent | `{ with: "did:.../g/<id>", can: "/agent/message" }` + invoke caps |
+| `complete_job` | Complete an assigned job with result | Job must be assigned to this agent |
+| `fail_job` | Fail an assigned job with reason | Job must be assigned to this agent |
+| `message` | Send message to another agent's inbox | `{ with: "did:.../g/<id>", can: "/agent/message" }` |
+| `assign_job` | Create job and message another agent | `{ with: "did:.../g/<id>", can: "/agent/message" }` + invoke caps |
 | `read_secret` | Request secret decryption (adapter handles plaintext) | `{ with: "did:.../s/key", can: "/secret/decrypt" }` |
 | `get_state` | Read own current state | Implicit — always available |
 | `log` | Append to agent notes (included in timeline) | Implicit — always available |
@@ -344,22 +285,22 @@ The tool palette maps directly to MCP tool definitions — each tool has a name,
 
 | Standard LLM concept | Covia equivalent | Location |
 |---|---|---|
-| System prompt | Agent config params or baked into transition fn | `/g/<id>/config/params/` or `/o/transition-fn` |
-| Chat history / messages | Reconstructed from agent state | Previous `new_state` in timeline |
+| System prompt | Agent config params or baked into transition fn | `/g/<id>/config` or `/o/transition-fn` |
+| Chat history / messages | Reconstructed from agent state | Previous `state` in agent record |
 | Tool definitions | Agent tool palette (above) + external MCP tools | Runtime-provided + `/g/<id>/config/tools` |
-| User input / task | Inbox messages + pending jobs | Passed to transition fn as `inbox_items` + `pending_jobs` |
+| User input / task | Inbox messages | `messages` parameter passed to transition fn |
 | Agent scratchpad | Ephemeral — lives only during Layer 3 tool loop | Not persisted to lattice |
 | Tool call → result loop | Tool loop calls `read`, `invoke`, `mcp_call`, etc. | Within single transition fn execution |
-| Final answer | `complete_job` / `message` actions in output | Returned as `actions` from transition fn |
-| Persisted memory | `new_state` returned by transition fn | Written to timeline, available next wake |
+| Final answer | `result` returned by transition fn | Recorded in timeline entry |
+| Persisted memory | `state` returned by transition fn | Written to agent record, available next run |
 
-The key insight: the agent scratchpad (intermediate tool calls and results during a single reasoning turn) is **ephemeral within Layer 3**. The lattice only sees the inputs (inbox + jobs), the outputs (new_state + actions), and the tool calls are recorded in the timeline for audit. The LLM (Layer 4) is completely stateless — it receives a prompt and returns a completion. All persistence is managed by the transition function's `new_state`.
+The key insight: the agent scratchpad (intermediate tool calls and results during a single reasoning turn) is **ephemeral within Layer 3**. The lattice only sees the inputs (inbox messages), the outputs (state + result), and the tool calls are recorded in the timeline for audit. The LLM (Layer 4) is completely stateless — it receives a prompt and returns a completion. All persistence is managed by the transition function's returned `state`.
 
 **Timeline efficiency:** Each timeline entry is a raw lattice value, not a pinned `/a/` ref. CAD3 structural sharing means unchanged subtrees between transitions share storage automatically. The timeline can grow indefinitely without proportional storage cost.
 
-**Communication:** Sending a message to another agent is writing to their inbox — local: `/g/0x0042/inbox/`, remote: `did:key:zBob.../g/0x0089/inbox/` — with appropriate write capability via UCAN.
+**Communication:** Sending a message to another agent uses `agent:message`, which appends to the target agent's `inbox` vector — local: `/g/my-assistant`, remote: `did:key:zBob.../g/helper` — with appropriate capability via UCAN.
 
-**Discoverability:** Agents have system-assigned IDs (index keys), not user-chosen names. Human-readable names, descriptions, and tags are metadata in the agent record, queryable for discovery (e.g. "find all agents tagged 'code-review'"). Users can optionally create workspace aliases for convenience (e.g. `/w/agents/my-assistant → /g/0x0042`), but this is a user convention, not a system feature. The canonical reference is always the system ID via DID: `did:key:zAlice.../g/0x0042`.
+**Discoverability:** Agent IDs are human-readable strings chosen by the user (e.g. `"my-assistant"`, `"code-reviewer"`). The canonical reference is via DID: `did:key:zAlice.../g/my-assistant`. Additional metadata (descriptions, tags) can be stored in the agent's `config` for discovery queries (e.g. "find all agents tagged 'code-review'").
 
 **Agent mobility and forking:**
 
@@ -376,14 +317,14 @@ Because agent state is an immutable lattice value with no hidden mutable referen
 **Forking** creates a new agent from an existing agent's state with optionally modified config:
 
 ```
-fork(/g/agent-3, {
+fork(/g/my-assistant, {
   owner: "did:key:zAlice...",           # new owner
   config: {
     model: "/o/newmodel...",          # different transition function
     llm: { provider: "openai", ... } # different LLM
   },
   caps: [<new ucan set>],            # scoped for new owner
-  state: "latest"                     # or specific timeline seq
+  state: "latest"                     # or specific timeline index
 })
 ```
 
@@ -423,7 +364,7 @@ The result is a fully configured agent with the vendor's accumulated knowledge a
 /g/<new-agent-id>/
   provenance: {
     forked_from: "did:web:vendor.example.com/g/smart-assistant",
-    fork_point: 42,          # timeline sequence number
+    fork_point: 42,          # timeline vector index
     fork_ts: 1719500000
   }
 ```
@@ -520,7 +461,7 @@ Capabilities are expressed as UCAN tokens, represented as lattice-native JSON-li
 ```json
 {
   "iss": "did:key:zAlice...",
-  "aud": "did:key:zBob.../g/7",
+  "aud": "did:key:zBob.../g/helper",
   "att": [
     { "with": "did:key:zAlice.../w/projects/foo/", "can": "/crud/read" },
     { "with": "did:key:zAlice.../o/cafebabe...", "can": "/invoke" }
@@ -694,15 +635,15 @@ A2A maps to the runtime layer (Layer 1) — agent discovery and task delegation 
 
 #### 8.2.1 Agent Card Generation
 
-A2A Agent Cards are **generated at request time** by the venue adapter, not stored as a single blob. Most fields are derived from venue infrastructure or agent metadata already present in `/g/`. Only a few fields need to be explicitly stored in the agent record.
+A2A Agent Cards are **generated at request time** by the venue adapter, not stored as a single blob. Most fields are derived from venue infrastructure or agent config already present in `/g/`. Only a few fields need to be explicitly stored in the agent's `config`.
 
-**What the agent stores (in `/g/<id>/`):**
+**What the agent stores (in `/g/<id>/config`):**
 
 | Field | Location | Notes |
 |-------|----------|-------|
-| `name` | `/g/<id>/name` | User-defined, human-readable |
-| `description` | `/g/<id>/description` | User-defined |
-| `tags` | `/g/<id>/tags` | User-defined, queryable |
+| `name` | `/g/<id>/config/name` | User-defined, human-readable |
+| `description` | `/g/<id>/config/description` | User-defined |
+| `tags` | `/g/<id>/config/tags` | User-defined, queryable |
 | `skills` | `/g/<id>/config/skills` | User-defined — the key field (see below) |
 | `defaultInputModes` | `/g/<id>/config/protocols/a2a/inputModes` | Optional override of venue default |
 | `defaultOutputModes` | `/g/<id>/config/protocols/a2a/outputModes` | Optional override of venue default |
@@ -712,7 +653,7 @@ A2A Agent Cards are **generated at request time** by the venue adapter, not stor
 | A2A Field | Derived from | Why not stored |
 |-----------|-------------|----------------|
 | `url` | Venue endpoint + agent ID | Venue knows its own URL |
-| `version` | Agent `seq` or config hash | Changes on every transition |
+| `version` | Agent `ts` or config hash | Changes on every transition |
 | `provider` | Venue identity metadata | Same for all agents in venue |
 | `protocolVersion` | Venue's A2A adapter version | Venue infrastructure |
 | `capabilities.streaming` | Venue runtime capabilities | Venue knows what it supports |
@@ -755,7 +696,7 @@ Skills describe *what* the agent can do, not *how*. How the agent fulfils a skil
 
 When the venue adapter generates an A2A Agent Card, it:
 
-1. Reads `name`, `description`, `tags` from agent metadata
+1. Reads `name`, `description`, `tags` from agent `config`
 2. Copies `skills` directly — they already match the A2A AgentSkill schema
 3. Fills in venue-derived fields (`url`, `provider`, `capabilities`, `securitySchemes`, etc.)
 4. Returns a complete A2A-compliant Agent Card
@@ -786,42 +727,45 @@ Skills are defined at the top level of config (not nested under `a2a/`) because 
 
 All protocol interactions are recorded as structured lattice data within the agent's timeline and the jobs namespace. This ensures full auditability regardless of whether the interaction was native or bridged.
 
-**Inbound interactions** (external → grid) are recorded as inbox items with protocol metadata:
+**Inbound interactions** (external → grid) are recorded as inbox messages with protocol metadata:
 
 ```
-/g/<agent-id>/inbox/
-  0x0042: {
-    protocol: "a2a",
-    type: "task",
-    from: "did:external:agent-xyz",
-    task_id: "a2a-task-9876",
-    payload: { ... },
-    ts: 1719500000
-  }
-  0x0043: {
-    protocol: "mcp",
-    type: "tool_call",
-    from: "did:external:client-abc",
-    method: "transform",
-    params: { ... },
-    ts: 1719500001
-  }
+/g/<agent-id>/inbox (vector)
+  [
+    {
+      protocol: "a2a",
+      type: "task",
+      from: "did:external:agent-xyz",
+      task_id: "a2a-task-9876",
+      payload: { ... },
+      ts: 1719500000
+    },
+    {
+      protocol: "mcp",
+      type: "tool_call",
+      from: "did:external:client-abc",
+      method: "transform",
+      params: { ... },
+      ts: 1719500001
+    }
+  ]
 ```
 
-**Outbound interactions** (grid → external) are recorded as actions in the timeline entry:
+**Outbound interactions** (grid → external) are recorded in the timeline entry (see AGENT_LOOP.md §2.3 for timeline entry structure):
 
 ```
-/g/<agent-id>/timeline/
-  0x0010: {
-    state: { ... },
-    input: [{ protocol: "a2a", task_id: "a2a-task-9876", ... }],
-    actions: [
-      { type: "invoke", op: "/o/abc...", inputs: { ... } },
-      { type: "mcp_call", server: "did:external:tool-server", method: "fetch", params: { ... }, result: { ... } },
-      { type: "a2a_respond", task_id: "a2a-task-9876", status: "completed", artifacts: ["/a/eee..."] }
-    ],
-    ts: 1719500005
-  }
+/g/<agent-id>/timeline (vector)
+  [
+    ...,
+    {
+      start: 1719500000,
+      end: 1719500005,
+      op: "langchain:openai",
+      state: { ... },
+      messages: [{ protocol: "a2a", task_id: "a2a-task-9876", ... }],
+      result: { ... }
+    }
+  ]
 ```
 
 **Jobs created from external requests** carry protocol provenance:
@@ -1026,7 +970,7 @@ Extend the capability model from Phase 2 with full UCAN features: signed tokens,
 
 ### Phase 5: Agent Model (`/g/`)
 
-Stateful actors with lifecycle, inbox, timeline, wake conditions. The four-layer architecture (runtime → transition fn → tool loop → LLM). Most ambitious phase.
+Stateful actors with lifecycle, inbox, timeline, and pluggable transition functions. The four-layer architecture (runtime → transition fn → tool loop → LLM). Agent data structure and transitions are defined in AGENT_LOOP.md.
 
 Builds on: per-user cursors (agents are owned by users), operations registry (agents invoke ops), UCAN (agents have capability boundaries).
 
@@ -1069,6 +1013,7 @@ For day-to-day operations, the venue works directly with its cursor. It does not
 | `:meta` | CASLattice (union) | All entries kept | Same hash = same JSON |
 | `:auth` | MapLattice + LWW | Higher `"updated"` timestamp wins | Auth policy evolves |
 | `:did` | FunctionLattice | First-writer-wins | Set once at creation |
+| Agent record | LWW | Latest `ts` wins | Single venue writes, atomic record |
 
 All merges satisfy CRDT properties:
 - **Commutative:** `merge(a, b) == merge(b, a)`

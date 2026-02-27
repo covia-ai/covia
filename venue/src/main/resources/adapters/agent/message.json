@@ -1,0 +1,23 @@
+{
+	"name": "Message Agent",
+	"description": "Delivers a message to an agent's inbox. The message is queued for processing on the next agent:run invocation. The agent must already exist.",
+	"dateCreated": "2026-02-27T00:00:00Z",
+	"operation": {
+		"adapter": "agent:message",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Target agent name" },
+				"message": { "description": "Message content (any JSON value)" }
+			},
+			"required": ["agentId"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string" },
+				"delivered": { "type": "boolean" }
+			}
+		}
+	}
+}

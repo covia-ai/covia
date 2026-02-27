@@ -14,6 +14,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
+import covia.venue.AgentState;
 
 /**
  * Tests for SecretStore and the extended USER lattice with Namespace keys.
@@ -284,13 +285,17 @@ public class SecretStoreTest {
 	// ========== Agent Cursor ==========
 
 	@Test
-	public void testAgentCursorAccessor() {
+	public void testAgentAccessor() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 
 		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
-		assertNotNull(user.agentCursor(Strings.create("my-agent")),
-			"Agent cursor should be non-null");
+		assertNull(user.agent(Strings.create("my-agent")),
+			"Agent should be null before creation");
+
+		AgentState agent = user.ensureAgent(Strings.create("my-agent"), null);
+		assertNotNull(agent, "ensureAgent should return non-null AgentState");
+		assertTrue(agent.exists(), "Agent should exist after ensureAgent");
 	}
 
 	@Test

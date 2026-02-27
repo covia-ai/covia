@@ -5,6 +5,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
+import covia.lattice.Covia;
 import covia.lattice.Namespace;
 
 /**
@@ -61,17 +62,29 @@ public class User extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Gets a specific agent's state cursor (raw lattice cursor).
-	 *
-	 * <p>Returns a cursor into the user's "g" namespace at the given agent ID.
-	 * The {@code AgentState} typed wrapper is planned for Phase A; this provides
-	 * a clean integration point.</p>
+	 * Gets a specific agent's state, or null if the agent doesn't exist.
 	 *
 	 * @param agentId Agent identifier
-	 * @return Lattice cursor for the agent's state
+	 * @return AgentState wrapper, or null if not initialised
 	 */
-	public ALatticeCursor<ACell> agentCursor(AString agentId) {
-		return cursor.path(Namespace.G, agentId);
+	public AgentState agent(AString agentId) {
+		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
+		if (c.get() == null) return null;
+		return new AgentState(c, agentId);
+	}
+
+	/**
+	 * Gets a specific agent's state, creating and initialising it if needed.
+	 *
+	 * @param agentId Agent identifier
+	 * @param config Optional configuration map, may be null
+	 * @return AgentState wrapper (never null)
+	 */
+	public AgentState ensureAgent(AString agentId, AMap<AString, ACell> config) {
+		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
+		AgentState state = new AgentState(c, agentId);
+		if (!state.exists()) state.initialise(config);
+		return state;
 	}
 
 	/**

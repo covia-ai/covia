@@ -106,7 +106,6 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 * @param id User identifier as AString (e.g. "alice_gmail_com")
 	 * @return User record map, or null if not found
 	 */
-	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getUser(AString id) {
 		AMap<AString, AMap<AString, ACell>> usersMap = getUsers();
 		if (usersMap == null) return null;

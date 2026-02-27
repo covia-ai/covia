@@ -1,0 +1,23 @@
+{
+	"name": "Create Agent",
+	"description": "Creates and initialises a new agent for the authenticated user. Agents are identified by human-readable names and persist in the user's lattice state. Idempotent: creating an existing agent is a no-op.",
+	"dateCreated": "2026-02-27T00:00:00Z",
+	"operation": {
+		"adapter": "agent:create",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Human-readable agent name" },
+				"config": { "type": "object", "description": "Optional agent configuration" }
+			},
+			"required": ["agentId"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string" },
+				"status": { "type": "string" }
+			}
+		}
+	}
+}

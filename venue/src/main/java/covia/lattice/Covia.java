@@ -15,6 +15,7 @@ import convex.lattice.generic.MapLattice;
 import convex.lattice.generic.OwnerLattice;
 import convex.lattice.generic.StringKeyedLattice;
 
+
 /**
  * Root lattice definition for Covia venue state.
  *
@@ -36,24 +37,18 @@ import convex.lattice.generic.StringKeyedLattice;
  *           :auth      ->  MapLattice + LWW (newer "updated" wins)
  *           :did       ->  FunctionLattice (first-writer-wins)
  *           :caps      ->  MapLattice + LWW (per-DID capability sets)
- *           :user-data ->  MapLattice (DID -> per-user KeyedLattice)
+ *           :user-data ->  MapLattice (DID -> per-user StringKeyedLattice)
  *             &lt;DID-string&gt;  ->  StringKeyedLattice (USER, AString keys)
  *               "j"  ->  IndexLattice + LWW (user's job references)
- *               "g"  ->  MapLattice + AGENT (user's agents)
+ *               "g"  ->  MapLattice + LWW (user's agents — single atomic record per agent)
  *               "s"  ->  MapLattice + LWW (user's encrypted credentials)
  *     :meta  ->  CASLattice (shared content-addressable metadata)
- *
- * AGENT  ->  KeyedLattice (per-agent state)
- *   :status   ->  LWW (sleeping | running | suspended | terminated)
- *   :seq      ->  FunctionLattice (monotonically increasing sequence)
- *   :config   ->  MapLattice + LWW (user-configurable settings)
- *   :inbox    ->  IndexLattice + LWW (incoming messages)
- *   :jobs     ->  IndexLattice + LWW (assigned jobs)
- *   :timeline ->  IndexLattice + CAS (append-only transition records)
- *   :caps     ->  MapLattice + LWW (capability sets)
- *   :error    ->  LWW (last error)
  * </pre>
+ *
+ * <p>Agent records are single atomic LWW values (latest "ts" wins).
+ * See {@code AGENT_LOOP.md} for the agent record structure and transitions.</p>
  */
+
 public final class Covia {
 
 	// ========== Root-level keywords ==========
@@ -95,26 +90,6 @@ public final class Covia {
 	/** Keyword for per-DID user state within venue state */
 	public static final Keyword USER_DATA = Keyword.intern("user-data");
 
-	// ========== Agent-level keywords ==========
-
-	/** Agent status (sleeping, running, suspended, terminated) */
-	public static final Keyword STATUS_K = Keyword.intern("status");
-
-	/** Agent sequence number (monotonically increasing) */
-	public static final Keyword SEQ = Keyword.intern("seq");
-
-	/** Agent configuration (user-configurable settings) */
-	public static final Keyword CONFIG = Keyword.intern("config");
-
-	/** Agent inbox (incoming messages) */
-	public static final Keyword INBOX = Keyword.intern("inbox");
-
-	/** Agent transition timeline (append-only records) */
-	public static final Keyword TIMELINE = Keyword.intern("timeline");
-
-	/** Agent last error */
-	public static final Keyword ERROR_K = Keyword.intern("error");
-
 	// ========== Lattice definitions ==========
 
 	/**
@@ -129,24 +104,16 @@ public final class Covia {
 	private static final LWWLattice<ACell> LWW = LWWLattice.create(Covia::extractUpdatedTimestamp);
 
 	/**
-	 * Per-agent lattice structure. Defines the state shape for a single agent.
-	 * Runtime usage in Phase A; structure defined here for lattice merge support.
+	 * Key used for "ts" timestamp in agent records (AString, not Keyword).
 	 */
-	public static final KeyedLattice AGENT = KeyedLattice.create(
-		STATUS_K, LWW,                                    // sleeping | running | suspended | terminated
-		SEQ, FunctionLattice.create((a, b) -> {           // monotonically increasing sequence
-			if (a instanceof CVMLong la && b instanceof CVMLong lb) {
-				return la.longValue() >= lb.longValue() ? la : lb;
-			}
-			return a;
-		}),
-		CONFIG, MapLattice.create(LWW),                   // user-configurable settings
-		INBOX, IndexLattice.create(LWW),                  // incoming messages
-		JOBS, IndexLattice.create(LWW),                   // assigned jobs
-		TIMELINE, IndexLattice.create(CASLattice.create()), // append-only transition records
-		CAPS, MapLattice.create(LWW),                     // capability sets
-		ERROR_K, LWW                                      // last error
-	);
+	private static final AString TS_KEY = Strings.intern("ts");
+
+	/**
+	 * LWW value lattice using the "ts" field as timestamp.
+	 * Used for agent records — single atomic value, latest ts wins.
+	 * See {@code AGENT_LOOP.md} for the agent record structure.
+	 */
+	private static final LWWLattice<ACell> AGENT_LWW = LWWLattice.create(Covia::extractTsTimestamp);
 
 	/**
 	 * Per-user lattice structure. Each user (identified by DID string) gets
@@ -155,9 +122,9 @@ public final class Covia {
 	 * JSON-compliant throughout.
 	 */
 	public static final StringKeyedLattice USER = StringKeyedLattice.create(
-		"j", IndexLattice.create(LWW),    // user's job references
-		"g", MapLattice.create(AGENT),    // user's agents
-		"s", MapLattice.create(LWW)       // user's encrypted credentials
+		"j", IndexLattice.create(LWW),         // user's job references
+		"g", MapLattice.create(AGENT_LWW),     // user's agents (LWW per agent, latest ts wins)
+		"s", MapLattice.create(LWW)            // user's encrypted credentials
 	);
 
 	/**
@@ -199,6 +166,19 @@ public final class Covia {
 	private static long extractUpdatedTimestamp(ACell value) {
 		if (value instanceof AMap<?,?>) {
 			ACell ts = ((AMap<ACell, ACell>) value).get(UPDATED_KEY);
+			if (ts instanceof CVMLong l) return l.longValue();
+		}
+		return 0;
+	}
+
+	/**
+	 * Extracts the "ts" timestamp from a map value for agent LWW merge.
+	 * Agent records use AString "ts" key with CVMLong values.
+	 */
+	@SuppressWarnings("unchecked")
+	private static long extractTsTimestamp(ACell value) {
+		if (value instanceof AMap<?,?>) {
+			ACell ts = ((AMap<ACell, ACell>) value).get(TS_KEY);
 			if (ts instanceof CVMLong l) return l.longValue();
 		}
 		return 0;

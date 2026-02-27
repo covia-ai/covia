@@ -95,6 +95,12 @@ public class Fields {
 	public static final StringShort DEFS = Strings.intern("$defs");
 	public static final StringShort DEFINITIONS = Strings.intern("definitions");
 
+	// Agent related
+	public static final StringShort AGENT_ID = Strings.intern("agentId");
+	public static final StringShort CONFIG = Strings.intern("config");
+	public static final StringShort DELIVERED = Strings.intern("delivered");
+	public static final StringShort MESSAGES = Strings.intern("messages");
+
 	// Identity / authorization
 	public static final StringShort CALLER = Strings.intern("caller");
 	public static final StringShort ROLES = Strings.intern("roles");

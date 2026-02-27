@@ -40,6 +40,7 @@ import convex.lattice.cursor.RootLatticeCursor;
 import convex.lattice.fs.DLFS;
 import convex.lattice.fs.DLFileSystem;
 import covia.adapter.AAdapter;
+import covia.adapter.AgentAdapter;
 import covia.adapter.ConvexAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.adapter.GridAdapter;
@@ -245,6 +246,7 @@ public class Engine {
 		venue.registerAdapter(new CoviaAdapter());
 		venue.registerAdapter(new GridAdapter());
 		venue.registerAdapter(new ConvexAdapter());
+		venue.registerAdapter(new AgentAdapter());
 	}
 
 	/**

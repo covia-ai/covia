@@ -20,6 +20,7 @@ import convex.lattice.cursor.Cursors;
 import covia.api.Fields;
 import covia.grid.Status;
 import covia.lattice.Covia;
+import covia.venue.AgentState;
 
 /**
  * Tests for the cursor-based VenueState application API.
@@ -434,13 +435,19 @@ public class VenueStateTest {
 	}
 
 	@Test
-	public void testUserAgentCursorAccessor() {
+	public void testUserAgentAccessor() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
 
-		assertNotNull(user.agentCursor(Strings.create("agent-1")),
-			"User agentCursor() should return non-null cursor");
+		// agent() returns null for non-existent agent
+		assertNull(user.agent(Strings.create("agent-1")),
+			"User agent() should return null for non-existent agent");
+
+		// ensureAgent() creates and returns a non-null AgentState
+		AgentState agent = user.ensureAgent(Strings.create("agent-1"), null);
+		assertNotNull(agent, "User ensureAgent() should return non-null AgentState");
+		assertTrue(agent.exists(), "ensureAgent() should initialise the agent");
 	}
 
 	// ========== Fork / Sync ==========
