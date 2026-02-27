@@ -445,7 +445,7 @@ public class VenueStateTest {
 			"User agent() should return null for non-existent agent");
 
 		// ensureAgent() creates and returns a non-null AgentState
-		AgentState agent = user.ensureAgent(Strings.create("agent-1"), null);
+		AgentState agent = user.ensureAgent(Strings.create("agent-1"), null, null);
 		assertNotNull(agent, "User ensureAgent() should return non-null AgentState");
 		assertTrue(agent.exists(), "ensureAgent() should initialise the agent");
 	}

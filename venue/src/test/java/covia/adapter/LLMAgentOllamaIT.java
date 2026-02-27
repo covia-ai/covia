@@ -35,17 +35,19 @@ public class LLMAgentOllamaIT {
 
 	@Test
 	public void testOllamaChat() {
-		// Create agent with Ollama config
-		AMap<AString, ACell> config = Maps.of(
-			"provider", Strings.create("ollama"),
-			"model", Strings.create("qwen3"),
-			"systemPrompt", Strings.create("You are a concise assistant. Reply in one sentence.")
+		// Create agent with Ollama config in initial state
+		ACell initialState = Maps.of(
+			"config", Maps.of(
+				"provider", Strings.create("ollama"),
+				"model", Strings.create("qwen3"),
+				"systemPrompt", Strings.create("You are a concise assistant. Reply in one sentence.")
+			)
 		);
 		engine.jobs().invokeOperation(
 			Strings.create("agent:create"),
 			Maps.of(
 				Fields.AGENT_ID, Strings.create("ollama-agent"),
-				Fields.CONFIG, config
+				AgentState.KEY_STATE, initialState
 			),
 			ALICE_DID).awaitResult();
 

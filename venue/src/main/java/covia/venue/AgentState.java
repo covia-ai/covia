@@ -87,11 +87,12 @@ public class AgentState extends ALatticeComponent<ACell> {
 	// ========== Initialisation ==========
 
 	/**
-	 * Initialises this agent with the given config if not already initialised.
+	 * Initialises this agent with the given config and optional initial state.
 	 *
-	 * @param config Optional configuration map, may be null
+	 * @param config Optional framework configuration map, may be null
+	 * @param initialState Optional initial state for the transition function, may be null
 	 */
-	public void initialise(AMap<AString, ACell> config) {
+	public void initialise(AMap<AString, ACell> config, ACell initialState) {
 		if (exists()) return;
 		AMap<AString, ACell> record = Maps.of(
 			K_STATUS, SLEEPING,
@@ -100,6 +101,9 @@ public class AgentState extends ALatticeComponent<ACell> {
 		);
 		if (config != null) {
 			record = record.assoc(K_CONFIG, config);
+		}
+		if (initialState != null) {
+			record = record.assoc(K_STATE, initialState);
 		}
 		putRecord(record);
 	}

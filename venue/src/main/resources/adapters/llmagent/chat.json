@@ -1,6 +1,6 @@
 {
 	"name": "LLM Agent Chat",
-	"description": "LLM-backed transition function for agents. Maintains conversation history in agent state. Reads LLM configuration from the agent's config (provider, model, systemPrompt). The API key is resolved from the user's secret store using the name declared in operation metadata. Processes all inbox messages as user turns and generates an assistant response.",
+	"description": "LLM-backed transition function for agents. Maintains conversation history and LLM configuration in agent state (state.config for provider/model/systemPrompt, state.history for conversation). The API key is resolved from the user's secret store using the name declared in operation metadata. Processes all inbox messages as user turns and generates an assistant response.",
 	"dateCreated": "2026-02-27T00:00:00Z",
 	"operation": {
 		"adapter": "llmagent:chat",
@@ -9,7 +9,7 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent identifier" },
-				"state": { "description": "Previous conversation state (null on first run). Contains 'history' array of role/content pairs." },
+				"state": { "description": "Previous conversation state (null on first run). Contains 'config' map (provider, model, systemPrompt, url) and 'history' array of role/content pairs." },
 				"messages": { "type": "array", "description": "Inbox messages to process as user turns" },
 				"apiKey": { "type": "string", "description": "Optional API key override for testing. WARNING: will appear in plaintext in job results." }
 			},

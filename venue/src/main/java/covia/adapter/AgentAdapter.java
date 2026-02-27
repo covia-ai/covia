@@ -107,10 +107,11 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		AMap<AString, ACell> config = (AMap<AString, ACell>) RT.getIn(input, Fields.CONFIG);
+		ACell initialState = RT.getIn(input, AgentState.KEY_STATE);
 
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(callerDID);
-		user.ensureAgent(agentId, config);
+		user.ensureAgent(agentId, config, initialState);
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(

@@ -91,18 +91,19 @@ public class LLMAgentAdapterTest {
 
 	// ========== Direct invocation with test provider ==========
 
-	@Test
-	public void testFirstRunNullState() {
-		// Create agent with test provider config
-		createTestAgent("first-run-agent");
+	/** State with test provider config for direct processChat calls */
+	private static final ACell TEST_STATE = Maps.of(
+		"config", Maps.of("provider", Strings.create("test"))
+	);
 
-		// Invoke processChat directly via the adapter
+	@Test
+	public void testFirstRunWithConfig() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		assertNotNull(adapter);
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, Strings.create("first-run-agent"),
-			AgentState.KEY_STATE, null,
+			AgentState.KEY_STATE, TEST_STATE,
 			Fields.MESSAGES, Vectors.of(
 				Maps.of("content", Strings.create("Hello world"))
 			)
@@ -132,13 +133,12 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testMultiTurnConversation() {
-		createTestAgent("multi-turn-agent");
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
-		// First turn
+		// First turn — config in state
 		ACell input1 = Maps.of(
 			Fields.AGENT_ID, Strings.create("multi-turn-agent"),
-			AgentState.KEY_STATE, null,
+			AgentState.KEY_STATE, TEST_STATE,
 			Fields.MESSAGES, Vectors.of(
 				Maps.of("content", Strings.create("first message"))
 			)
@@ -169,12 +169,11 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testMultipleInboxMessages() {
-		createTestAgent("batch-agent");
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, Strings.create("batch-agent"),
-			AgentState.KEY_STATE, null,
+			AgentState.KEY_STATE, TEST_STATE,
 			Fields.MESSAGES, Vectors.of(
 				Maps.of("content", Strings.create("message one")),
 				Maps.of("content", Strings.create("message two")),
@@ -196,23 +195,25 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testCustomSystemPrompt() {
-		// Create agent with custom system prompt
-		AMap<AString, ACell> config = Maps.of(
-			"provider", Strings.create("test"),
-			"systemPrompt", Strings.create("You are a pirate")
+		// Create agent with custom system prompt in initial state
+		ACell initialState = Maps.of(
+			"config", Maps.of(
+				"provider", Strings.create("test"),
+				"systemPrompt", Strings.create("You are a pirate")
+			)
 		);
 		engine.jobs().invokeOperation(
 			Strings.create("agent:create"),
 			Maps.of(
 				Fields.AGENT_ID, Strings.create("pirate-agent"),
-				Fields.CONFIG, config
+				AgentState.KEY_STATE, initialState
 			),
 			ALICE_DID).awaitResult();
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, Strings.create("pirate-agent"),
-			AgentState.KEY_STATE, null,
+			AgentState.KEY_STATE, initialState,
 			Fields.MESSAGES, Vectors.of(
 				Maps.of("content", Strings.create("ahoy"))
 			)
@@ -363,31 +364,38 @@ public class LLMAgentAdapterTest {
 	// ========== Config lookup ==========
 
 	@Test
-	public void testConfigLookupFromLattice() {
-		AMap<AString, ACell> config = Maps.of(
-			"provider", Strings.create("test"),
-			"model", Strings.create("custom-model"),
-			"systemPrompt", Strings.create("Custom prompt")
+	public void testConfigFromState() {
+		// Config is now in state, not agent record config
+		ACell initialState = Maps.of(
+			"config", Maps.of(
+				"provider", Strings.create("test"),
+				"model", Strings.create("custom-model"),
+				"systemPrompt", Strings.create("Custom prompt")
+			)
 		);
 		engine.jobs().invokeOperation(
 			Strings.create("agent:create"),
 			Maps.of(
 				Fields.AGENT_ID, Strings.create("config-agent"),
-				Fields.CONFIG, config
+				AgentState.KEY_STATE, initialState
 			),
 			ALICE_DID).awaitResult();
 
-		// Verify the adapter can read the config
+		// Verify the adapter reads config from state
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		// Pass the state that includes config (as the agent update would)
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		ACell agentState = user.agent(Strings.create("config-agent")).getState();
+
 		ACell input = Maps.of(
 			Fields.AGENT_ID, Strings.create("config-agent"),
-			AgentState.KEY_STATE, null,
+			AgentState.KEY_STATE, agentState,
 			Fields.MESSAGES, Vectors.of(
 				Maps.of("content", Strings.create("test"))
 			)
 		);
 
-		// Should not throw — adapter reads config from lattice
 		ACell output = adapter.processChat(ALICE_DID, null, input);
 		assertNotNull(output);
 
@@ -396,50 +404,33 @@ public class LLMAgentAdapterTest {
 			RT.getIn(output, AgentState.KEY_STATE));
 		AString sysContent = RT.ensureString(RT.getIn(history.get(0), "content"));
 		assertEquals("Custom prompt", sysContent.toString());
+
+		// Config should be preserved in returned state
+		AMap<AString, ACell> returnedConfig = LLMAgentAdapter.extractConfig(
+			RT.getIn(output, AgentState.KEY_STATE));
+		assertNotNull(returnedConfig, "Config should be preserved in returned state");
+		assertEquals(Strings.create("test"), returnedConfig.get(Strings.intern("provider")));
 	}
 
 	@Test
 	public void testDefaultConfigFallbacks() {
-		// Agent with no config — should use defaults
-		engine.jobs().invokeOperation(
-			Strings.create("agent:create"),
-			Maps.of(Fields.AGENT_ID, Strings.create("default-agent")),
-			ALICE_DID).awaitResult();
+		// State with only provider=test — other settings should use defaults
+		ACell minimalState = Maps.of(
+			"config", Maps.of(
+				"provider", Strings.create("test")
+			)
+		);
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
-			Fields.AGENT_ID, Strings.create("default-agent"),
-			AgentState.KEY_STATE, null,
-			Fields.MESSAGES, Vectors.of(
-				Maps.of("content", Strings.create("test"))
-			)
-		);
-
-		// With no config, provider defaults to "openai" which would fail without an API key.
-		// But the test just verifies processChat doesn't NPE on null config —
-		// it will throw from the OpenAI builder which is expected.
-		// Instead, let's test with explicit test provider to verify defaults work.
-		// This is covered by other tests; this test verifies null config doesn't NPE.
-
-		// We need to set provider=test to avoid real LLM call
-		// So let's verify config fallback by creating with minimal test config
-		engine.jobs().invokeOperation(
-			Strings.create("agent:create"),
-			Maps.of(
-				Fields.AGENT_ID, Strings.create("minimal-agent"),
-				Fields.CONFIG, Maps.of("provider", Strings.create("test"))
-			),
-			ALICE_DID).awaitResult();
-
-		ACell input2 = Maps.of(
 			Fields.AGENT_ID, Strings.create("minimal-agent"),
-			AgentState.KEY_STATE, null,
+			AgentState.KEY_STATE, minimalState,
 			Fields.MESSAGES, Vectors.of(
 				Maps.of("content", Strings.create("test"))
 			)
 		);
 
-		ACell output = adapter.processChat(ALICE_DID, null, input2);
+		ACell output = adapter.processChat(ALICE_DID, null, input);
 		assertNotNull(output);
 
 		// Should use default system prompt
@@ -448,6 +439,15 @@ public class LLMAgentAdapterTest {
 		AString sysContent = RT.ensureString(RT.getIn(history.get(0), "content"));
 		assertTrue(sysContent.toString().contains("Covia platform"),
 			"Default system prompt should mention Covia");
+	}
+
+	@Test
+	public void testNullConfigUsesDefaults() {
+		// Null state — config defaults apply, but provider defaults to openai
+		// which would fail. This test verifies no NPE on null config.
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		assertNull(LLMAgentAdapter.extractConfig(null));
+		assertNull(LLMAgentAdapter.extractConfig(Maps.empty()));
 	}
 
 	// ========== API key resolution ==========
@@ -472,7 +472,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, Strings.create("secret-agent"),
-			AgentState.KEY_STATE, null,
+			AgentState.KEY_STATE, TEST_STATE,
 			Fields.MESSAGES, Vectors.of(
 				Maps.of("content", Strings.create("test secret"))
 			)
@@ -492,7 +492,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, Strings.create("override-agent"),
-			AgentState.KEY_STATE, null,
+			AgentState.KEY_STATE, TEST_STATE,
 			Fields.MESSAGES, Vectors.of(
 				Maps.of("content", Strings.create("test override"))
 			),
@@ -520,28 +520,33 @@ public class LLMAgentAdapterTest {
 		);
 		ACell input = Maps.of(
 			Fields.AGENT_ID, Strings.create("no-key-agent"),
-			AgentState.KEY_STATE, null,
+			AgentState.KEY_STATE, TEST_STATE,
 			Fields.MESSAGES, Vectors.of(
 				Maps.of("content", Strings.create("test"))
 			)
 		);
 
-		// test provider doesn't need an API key, so this should succeed
+		// test provider doesn't need an API key, so this succeeds
 		ACell output = adapter.processChat(ALICE_DID, meta, input);
 		assertNotNull(output);
 	}
 
 	// ========== Helper ==========
 
+	/**
+	 * Creates a test agent with LLM config in initial state (not agent record config).
+	 */
 	private void createTestAgent(String name) {
-		AMap<AString, ACell> config = Maps.of(
-			"provider", Strings.create("test")
+		ACell initialState = Maps.of(
+			"config", Maps.of(
+				"provider", Strings.create("test")
+			)
 		);
 		engine.jobs().invokeOperation(
 			Strings.create("agent:create"),
 			Maps.of(
 				Fields.AGENT_ID, Strings.create(name),
-				Fields.CONFIG, config
+				AgentState.KEY_STATE, initialState
 			),
 			ALICE_DID).awaitResult();
 	}

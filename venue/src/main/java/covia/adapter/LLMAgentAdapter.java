@@ -21,7 +21,6 @@ import covia.grid.Job;
 import covia.venue.AgentState;
 import covia.venue.SecretStore;
 import covia.venue.User;
-import covia.venue.Users;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
@@ -38,7 +37,12 @@ import dev.langchain4j.model.chat.response.ChatResponse;
  *
  * <h3>State structure</h3>
  * <pre>{@code
- * { "history": [
+ * { "config": {
+ *     "provider": "openai",
+ *     "model": "gpt-4o-mini",
+ *     "systemPrompt": "You are..."
+ *   },
+ *   "history": [
  *     { "role": "system",    "content": "You are..." },
  *     { "role": "user",      "content": "Hello" },
  *     { "role": "assistant", "content": "Hi there!" }
@@ -46,7 +50,11 @@ import dev.langchain4j.model.chat.response.ChatResponse;
  * }}</pre>
  *
  * <h3>LLM configuration</h3>
- * <p>Read from the agent record's {@code config} field:</p>
+ * <p>Read from {@code state.config} — set at agent creation via initial state,
+ * preserved across runs by the transition function. The agent record's framework
+ * {@code config} is not used; LLM settings belong to the transition function's
+ * domain. This allows an agent to switch transition functions without config
+ * conflicts.</p>
  * <ul>
  *   <li>{@code provider} — {@code "openai"} | {@code "ollama"} | {@code "test"} (default: {@code "openai"})</li>
  *   <li>{@code model} — model name (default: {@code "gpt-4o-mini"})</li>
@@ -72,7 +80,8 @@ public class LLMAgentAdapter extends AAdapter {
 		"You are a helpful AI assistant on the Covia platform. "
 		+ "Give concise, clear and accurate responses.");
 
-	// Config field keys (agent record config)
+	// Config field keys (read from state.config, set at agent creation)
+	private static final AString K_CONFIG        = Strings.intern("config");
 	private static final AString K_PROVIDER      = Strings.intern("provider");
 	private static final AString K_MODEL         = Strings.intern("model");
 	private static final AString K_SYSTEM_PROMPT = Strings.intern("systemPrompt");
@@ -103,10 +112,10 @@ public class LLMAgentAdapter extends AAdapter {
 	@Override
 	public String getDescription() {
 		return "LLM-backed transition function for agents. Maintains conversation "
-			+ "history in agent state, processes inbox messages as user turns, and "
-			+ "calls an LLM to generate responses. Reads LLM configuration from the "
-			+ "agent's config (provider, model, systemPrompt). API key resolved from "
-			+ "the user's secret store using the name in operation metadata.";
+			+ "history and LLM configuration in agent state (state.config), processes "
+			+ "inbox messages as user turns, and calls an LLM to generate responses. "
+			+ "API key resolved from the user's secret store using the name in "
+			+ "operation metadata.";
 	}
 
 	@Override
@@ -140,22 +149,24 @@ public class LLMAgentAdapter extends AAdapter {
 	/**
 	 * Core transition function logic.
 	 *
-	 * @param callerDID Caller DID for looking up agent config and secrets
+	 * <p>LLM configuration is read from {@code state.config} (set at agent creation,
+	 * preserved across runs). The agent record's framework config is not used.</p>
+	 *
+	 * @param callerDID Caller DID for secret store access
 	 * @param meta Operation metadata (from chat.json) — contains secretKey
 	 * @param input Transition function contract: { agentId, state, messages, apiKey? }
 	 * @return Transition function output: { state, result }
 	 */
 	@SuppressWarnings("unchecked")
 	ACell processChat(AString callerDID, ACell meta, ACell input) {
-		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		ACell state = RT.getIn(input, AgentState.KEY_STATE);
 		AVector<ACell> messages = (AVector<ACell>) RT.getIn(input, Fields.MESSAGES);
 
-		// Look up user once for config and secret access
+		// Look up user for secret access
 		User user = resolveUser(callerDID);
 
-		// Read agent config from lattice
-		AMap<AString, ACell> config = readAgentConfig(user, agentId);
+		// Read LLM config from state (set at creation, preserved across runs)
+		AMap<AString, ACell> config = extractConfig(state);
 
 		// Extract LLM settings from config
 		String provider = getConfigString(config, K_PROVIDER, "openai");
@@ -217,8 +228,11 @@ public class LLMAgentAdapter extends AAdapter {
 			K_CONTENT, Strings.create(assistantText)
 		));
 
-		// Return transition function output
+		// Return transition function output (preserve config in state)
 		ACell newState = Maps.of(K_HISTORY, history);
+		if (config != null) {
+			newState = ((AMap<AString, ACell>) newState).assoc(K_CONFIG, config);
+		}
 		ACell result = Maps.of(K_RESPONSE, Strings.create(assistantText));
 		return Maps.of(
 			AgentState.KEY_STATE, newState,
@@ -242,18 +256,17 @@ public class LLMAgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Reads the agent's config from the lattice.
+	 * Extracts the LLM config map from agent state.
+	 *
+	 * <p>Config is stored at {@code state.config} — set at agent creation as part
+	 * of initial state, and preserved across runs by the transition function.</p>
 	 */
-	private AMap<AString, ACell> readAgentConfig(User user, AString agentId) {
-		if (user == null || agentId == null) return null;
-		try {
-			AgentState agent = user.agent(agentId);
-			if (agent == null) return null;
-			return agent.getConfig();
-		} catch (Exception e) {
-			log.warn("Failed to read agent config for {}", agentId, e);
-			return null;
-		}
+	@SuppressWarnings("unchecked")
+	static AMap<AString, ACell> extractConfig(ACell state) {
+		if (state == null) return null;
+		ACell c = RT.getIn(state, K_CONFIG);
+		if (c instanceof AMap) return (AMap<AString, ACell>) c;
+		return null;
 	}
 
 	/**

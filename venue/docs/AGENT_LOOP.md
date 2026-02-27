@@ -23,10 +23,11 @@ See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent address
    agent runs, config updates — are serialised on that venue. Cross-venue sync is
    replication: the more-recent state replaces the stale one.
 
-4. **Two levels.** The agent update (framework) manages bookkeeping: status,
-   timeline, inbox. The transition function (user-defined) manages domain logic:
-   receives state and messages, returns new state. The framework never inspects user
-   state; the transition function never manages framework fields.
+4. **Three levels.** The agent update (level 1) manages framework bookkeeping:
+   status, timeline, inbox. The agent transition (level 2) manages domain logic:
+   conversation history, tool call loops, state. The LLM call (level 3) is a single
+   stateless invocation. Each level is a grid operation, pluggable independently.
+   The framework never inspects user state; lower levels never manage framework fields.
 
 5. **Transition function must succeed.** A failing transition function is a severe
    bug — it suspends the entire agent. The agent update restores the inbox and
@@ -57,8 +58,8 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 |-------|------|-------------|
 | `ts` | long | Timestamp of the last write. **The merge discriminator.** Set on every write. |
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"` |
-| `config` | map | User-provided configuration (transition op, LLM settings, etc.) |
-| `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. |
+| `config` | map | Framework-level configuration. Opaque to the transition function. |
+| `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function-specific configuration (e.g. LLM provider, model) lives here, not in `config`. Set at creation via optional initial state. |
 | `inbox` | vector | Messages awaiting processing. Drained on successful run — the timeline is the permanent record. |
 | `timeline` | vector | Append-only log of transition records (§2.3). Grows with each successful agent run. Timestamped for audit. |
 | `caps` | map | Capability sets (placeholder — Phase C enforcement) |
@@ -91,23 +92,76 @@ is preserved for retry.
 
 ---
 
-## 3. Transition Function
+## 3. Three Levels
 
-### 3.1 Two Levels
+The agent system separates concerns into three levels. Each level is a grid
+operation, pluggable and replaceable independently.
 
-The agent loop separates framework bookkeeping from domain logic:
+```
+Level 1: Agent Update          agent:run (AgentAdapter)
+  │  manages inbox, timeline, status
+  │  invokes level 2 as a grid operation
+  ▼
+Level 2: Agent Transition      llmagent:chat (LLMAgentAdapter)
+  │  manages conversation history, tool call loop, state
+  │  invokes level 3 as a grid operation
+  ▼
+Level 3: LLM Call              langchain:openai (LangChainAdapter)
+     single request → response, structured I/O
+```
 
-1. **Agent update** (framework). Reads the inbox, invokes the transition function,
-   records the result in the timeline, manages status, writes the complete agent
-   record. The same for every agent. Defined in §4.3.
+### 3.1 Level 1 — Agent Update (Framework)
 
-2. **Transition function** (user-defined). Receives current state and new messages,
-   returns updated state. This is the pluggable part — different agents use different
-   transition functions (LLM chat, rule engine, workflow, custom code).
+Reads the inbox, invokes the transition function, records the result in the
+timeline, manages status, writes the complete agent record. The same for every
+agent. Defined in §4.3.
 
-The agent update owns the agent record. The transition function owns `state` within it.
+The agent update owns the agent record. The transition function owns `state`
+within it. The agent update never inspects `state`; the transition function never
+manages framework fields.
 
-### 3.2 Contract
+### 3.2 Level 2 — Agent Transition (State Machine)
+
+Receives current state and new messages, returns updated state. This is the
+pluggable part — different agents use different transition functions (LLM chat,
+rule engine, workflow, custom code).
+
+For LLM agents (`llmagent:chat`), level 2:
+- Reads LLM configuration from `state.config`
+- Reconstructs conversation history from `state.history`
+- Appends inbox messages as user turns
+- Invokes level 3 (LLM call) as a grid operation
+- Handles tool call responses: execute tools, feed results back, call level 3
+  again (loop until the LLM returns a text response or a limit is reached)
+- Appends the assistant response to history
+- Returns updated state (with config preserved) and a result summary
+
+Level 2 does not import or depend on any LLM library. It invokes level 3 as a
+grid operation and works with structured input/output. This makes it pluggable:
+swap the level 3 operation to change provider, use a remote venue via federation,
+or a test mock.
+
+The level 3 operation to invoke is part of `state.config` — the agent creator
+picks both the agent loop strategy (level 2) and the LLM backend (level 3).
+
+### 3.3 Level 3 — LLM Call (Single Step)
+
+A single, stateless LLM invocation. Takes a list of messages (with tool
+definitions if applicable), calls a specific LLM API, returns the response.
+The response may be:
+- A text response (assistant message)
+- One or more tool call requests (function name + arguments)
+
+Level 3 is a standard grid operation (e.g. `langchain:openai`, `langchain:ollama`).
+It knows about HTTP clients, API serialisation, authentication, and provider
+quirks. It does not know about agents, conversation history, or tool execution.
+
+This is essentially what `LangChainAdapter` already provides — the existing
+LLM adapter operations serve as level 3.
+
+### 3.4 Transition Function Contract
+
+The contract between level 1 and level 2:
 
 **Input:**
 
@@ -131,16 +185,49 @@ The transition function must handle its own errors internally. If it throws, the
 agent update treats this as a severe failure: the agent is suspended, the inbox is
 preserved, and the error is recorded. No timeline entry is written.
 
-### 3.3 Invocation
+### 3.5 Invocation
 
-The transition function is identified by an operation reference stored in the agent's
-`config`. The runtime invokes it as a grid operation — same dispatch path as any other
-operation in the venue.
+Each level invokes the next as a grid operation — same dispatch path as any other
+operation in the venue. This means any level can be:
+- A local adapter operation (e.g. `llmagent:chat`, `langchain:openai`)
+- A remote venue operation via federation
+- A composite operation via orchestration
+- A test mock (e.g. `test:echo`)
 
-This means transition functions can be:
-- Local adapter operations (e.g. `test:echo`, `langchain:openai`)
-- Remote venue operations via federation
-- Composite operations via orchestration
+The level 2 operation is specified by the caller in the `agent:run` input.
+The level 3 operation is specified by the agent creator in `state.config`.
+
+### 3.6 Credential Access
+
+Operations that need API keys or other secrets resolve them from two sources,
+in order:
+
+1. **Input parameter** (optional `apiKey` field — testing only, will appear in
+   plaintext in job results).
+2. **User's secret store** (`/s/`), using the secret name declared in the
+   operation's metadata (`operation.secretKey`).
+
+The agent's `config` does not contain API keys. The operation metadata owns the
+credential concern — the agent specifies which operation to use, and the
+operation declares which secret it needs. This keeps agent configuration clean
+and credentials in the encrypted secret store.
+
+Credentials are primarily a level 3 concern — the LLM call operation needs
+the API key, not the agent transition. In the current implementation level 2
+resolves credentials (transitional); the target is for level 3 operations to
+declare and resolve their own secrets.
+
+Example operation metadata (level 3):
+
+```json
+{
+  "operation": {
+    "adapter": "langchain:openai",
+    "secretKey": "OPENAI_API_KEY",
+    ...
+  }
+}
+```
 
 ---
 
@@ -152,8 +239,13 @@ Every operation atomically replaces the agent record with a new `ts`.
 
 **Trigger:** `agent:create`
 
-Writes the initial agent record: status=SLEEPING, config from input, state=null,
-empty inbox, empty timeline, no error.
+Writes the initial agent record: status=SLEEPING, config from input, state from
+input (or null), empty inbox, empty timeline, no error.
+
+Initial state allows the creator to seed transition-function-specific configuration
+(e.g. LLM provider, model, system prompt) that the transition function will read
+and preserve across runs. This keeps the framework `config` clean of
+transition-function internals, and allows an agent to switch transition functions.
 
 **Idempotent:** If the agent record already exists, create is a no-op.
 
@@ -256,9 +348,19 @@ adds complexity that is not needed for the initial LLM agent.
 
 ### 6.3 Tool palette
 
-Tools available to an LLM agent are defined in the transition function's
-operation metadata. The initial prototype uses a default set; per-agent tool
-configuration is a Phase C concern.
+Tools available to an LLM agent are managed by level 2 (agent transition).
+Level 2 passes tool definitions to level 3 (LLM call), receives tool call
+requests back, executes the tools, and loops until the LLM returns a text
+response. Tool definitions may come from `state.config` or operation metadata.
+Per-agent tool configuration is a Phase C concern.
+
+### 6.4 Credential resolution
+
+API keys are not stored in agent config. The operation metadata declares a
+`secretKey` name (e.g. `"OPENAI_API_KEY"`); at runtime the adapter looks this
+up in the caller's encrypted secret store (`/s/`). An optional plaintext
+`apiKey` input parameter exists for testing only. No environment variable
+fallback — credentials must be in the secret store for production use.
 
 ---
 
@@ -269,8 +371,9 @@ See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
 | Phase | Focus | Status |
 |-------|-------|--------|
 | **0** | Per-user namespace (`"g"`, `"s"`), SecretStore | ✓ Complete |
-| **A** | AgentState wrapper, AgentAdapter (create/message/run) | ✓ Complete (needs lattice restructure per this doc) |
-| **B** | Default transition function (LLM + tool palette) | In Progress |
-| **C** | Capability enforcement (UCAN `with`/`can`) | Planned |
+| **A** | AgentState wrapper, AgentAdapter (create/message/run), lattice restructure | ✓ Complete |
+| **B** | LLM transition function (`llmagent:chat`), conversation history, secret store integration, three-level architecture (§3) | ✓ Complete |
+| **B2** | Decouple level 2 from LangChain4j — invoke level 3 as grid operation, tool call loop | Next |
+| **C** | Capability enforcement (UCAN `with`/`can`), tool palette | Planned |
 | **D** | Cross-user messaging, advanced wake triggers | Planned |
 | **E** | Agent forking and cross-venue migration | Planned |

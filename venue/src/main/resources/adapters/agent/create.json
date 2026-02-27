@@ -8,7 +8,8 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Human-readable agent name" },
-				"config": { "type": "object", "description": "Optional agent configuration" }
+				"config": { "type": "object", "description": "Optional framework configuration" },
+				"state": { "description": "Optional initial state for the transition function. Use this to seed transition-function-specific configuration (e.g. LLM provider, model, system prompt)." }
 			},
 			"required": ["agentId"]
 		},

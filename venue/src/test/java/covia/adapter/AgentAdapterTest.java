@@ -322,7 +322,7 @@ public class AgentAdapterTest {
 		User user = vs.users().ensure(Strings.create("did:key:zTest"));
 
 		// Create agent
-		AgentState agent = user.ensureAgent(Strings.create("lifecycle-agent"), null);
+		AgentState agent = user.ensureAgent(Strings.create("lifecycle-agent"), null, null);
 		assertTrue(agent.exists());
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
 		assertTrue(agent.getTs() > 0, "Agent should have a ts after creation");

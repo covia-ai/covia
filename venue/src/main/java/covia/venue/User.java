@@ -77,13 +77,14 @@ public class User extends ALatticeComponent<ACell> {
 	 * Gets a specific agent's state, creating and initialising it if needed.
 	 *
 	 * @param agentId Agent identifier
-	 * @param config Optional configuration map, may be null
+	 * @param config Optional framework configuration map, may be null
+	 * @param initialState Optional initial state for the transition function, may be null
 	 * @return AgentState wrapper (never null)
 	 */
-	public AgentState ensureAgent(AString agentId, AMap<AString, ACell> config) {
+	public AgentState ensureAgent(AString agentId, AMap<AString, ACell> config, ACell initialState) {
 		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
 		AgentState state = new AgentState(c, agentId);
-		if (!state.exists()) state.initialise(config);
+		if (!state.exists()) state.initialise(config, initialState);
 		return state;
 	}
 
