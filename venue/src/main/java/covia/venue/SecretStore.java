@@ -114,12 +114,8 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	public AVector<AString> list() {
 		AMap<AString, ACell> all = cursor.get();
 		if (all == null || all.isEmpty()) return Vectors.empty();
+		return all.getKeys();
 
-		ArrayList<AString> names = new ArrayList<>();
-		for (var entry : all.entrySet()) {
-			names.add(entry.getKey());
-		}
-		return Vectors.create(names);
 	}
 
 	/**

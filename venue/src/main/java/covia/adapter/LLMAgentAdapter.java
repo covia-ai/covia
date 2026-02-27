@@ -19,6 +19,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.AgentState;
+import covia.venue.SecretStore;
 import covia.venue.User;
 import covia.venue.Users;
 import dev.langchain4j.data.message.AiMessage;
@@ -50,9 +51,15 @@ import dev.langchain4j.model.chat.response.ChatResponse;
  *   <li>{@code provider} — {@code "openai"} | {@code "ollama"} | {@code "test"} (default: {@code "openai"})</li>
  *   <li>{@code model} — model name (default: {@code "gpt-4o-mini"})</li>
  *   <li>{@code systemPrompt} — system message</li>
- *   <li>{@code apiKey} — API key (falls back to {@code OPENAI_API_KEY} env var)</li>
  *   <li>{@code url} — base URL override</li>
  * </ul>
+ *
+ * <h3>API key resolution</h3>
+ * <ol>
+ *   <li>Optional {@code apiKey} in the transition function input (testing only — plaintext in results!)</li>
+ *   <li>User's secret store, using the name from operation metadata {@code operation.secretKey}
+ *       (default: {@code "OPENAI_API_KEY"})</li>
+ * </ol>
  */
 public class LLMAgentAdapter extends AAdapter {
 
@@ -65,12 +72,17 @@ public class LLMAgentAdapter extends AAdapter {
 		"You are a helpful AI assistant on the Covia platform. "
 		+ "Give concise, clear and accurate responses.");
 
-	// Config field keys
+	// Config field keys (agent record config)
 	private static final AString K_PROVIDER      = Strings.intern("provider");
 	private static final AString K_MODEL         = Strings.intern("model");
 	private static final AString K_SYSTEM_PROMPT = Strings.intern("systemPrompt");
-	private static final AString K_API_KEY       = Strings.intern("apiKey");
 	private static final AString K_URL           = Strings.intern("url");
+
+	// Operation metadata key for the secret name
+	private static final AString K_SECRET_KEY    = Strings.intern("secretKey");
+
+	// Input key for optional testing override
+	private static final AString K_API_KEY       = Strings.intern("apiKey");
 
 	// History field keys
 	private static final AString K_HISTORY  = Strings.intern("history");
@@ -93,7 +105,8 @@ public class LLMAgentAdapter extends AAdapter {
 		return "LLM-backed transition function for agents. Maintains conversation "
 			+ "history in agent state, processes inbox messages as user turns, and "
 			+ "calls an LLM to generate responses. Reads LLM configuration from the "
-			+ "agent's config (provider, model, apiKey, systemPrompt).";
+			+ "agent's config (provider, model, systemPrompt). API key resolved from "
+			+ "the user's secret store using the name in operation metadata.";
 	}
 
 	@Override
@@ -113,7 +126,7 @@ public class LLMAgentAdapter extends AAdapter {
 
 		CompletableFuture.supplyAsync(() -> {
 			AString callerDID = RT.ensureString(job.getData().get(Fields.CALLER));
-			return processChat(callerDID, input);
+			return processChat(callerDID, meta, input);
 		}, VIRTUAL_EXECUTOR)
 		.thenAccept(job::completeWith)
 		.exceptionally(e -> {
@@ -127,24 +140,28 @@ public class LLMAgentAdapter extends AAdapter {
 	/**
 	 * Core transition function logic.
 	 *
-	 * @param callerDID Caller DID for looking up agent config from lattice
-	 * @param input Transition function contract: { agentId, state, messages }
+	 * @param callerDID Caller DID for looking up agent config and secrets
+	 * @param meta Operation metadata (from chat.json) — contains secretKey
+	 * @param input Transition function contract: { agentId, state, messages, apiKey? }
 	 * @return Transition function output: { state, result }
 	 */
 	@SuppressWarnings("unchecked")
-	ACell processChat(AString callerDID, ACell input) {
+	ACell processChat(AString callerDID, ACell meta, ACell input) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		ACell state = RT.getIn(input, AgentState.KEY_STATE);
 		AVector<ACell> messages = (AVector<ACell>) RT.getIn(input, Fields.MESSAGES);
 
+		// Look up user once for config and secret access
+		User user = resolveUser(callerDID);
+
 		// Read agent config from lattice
-		AMap<AString, ACell> config = readAgentConfig(callerDID, agentId);
+		AMap<AString, ACell> config = readAgentConfig(user, agentId);
 
 		// Extract LLM settings from config
 		String provider = getConfigString(config, K_PROVIDER, "openai");
 		String model = getConfigString(config, K_MODEL, "gpt-4o-mini");
 		String systemPrompt = getConfigString(config, K_SYSTEM_PROMPT, null);
-		String apiKey = getConfigString(config, K_API_KEY, null);
+		String apiKey = resolveApiKey(meta, input, user);
 		String url = getConfigString(config, K_URL, null);
 
 		// Reconstruct conversation history from state
@@ -212,19 +229,73 @@ public class LLMAgentAdapter extends AAdapter {
 	// ========== Internal helpers ==========
 
 	/**
+	 * Resolves the User from the lattice, or null if not found.
+	 */
+	private User resolveUser(AString callerDID) {
+		if (callerDID == null || engine == null) return null;
+		try {
+			return engine.getVenueState().users().get(callerDID);
+		} catch (Exception e) {
+			log.warn("Failed to resolve user {}", callerDID, e);
+			return null;
+		}
+	}
+
+	/**
 	 * Reads the agent's config from the lattice.
 	 */
-	private AMap<AString, ACell> readAgentConfig(AString callerDID, AString agentId) {
-		if (callerDID == null || agentId == null || engine == null) return null;
+	private AMap<AString, ACell> readAgentConfig(User user, AString agentId) {
+		if (user == null || agentId == null) return null;
 		try {
-			Users users = engine.getVenueState().users();
-			User user = users.get(callerDID);
-			if (user == null) return null;
 			AgentState agent = user.agent(agentId);
 			if (agent == null) return null;
 			return agent.getConfig();
 		} catch (Exception e) {
-			log.warn("Failed to read agent config for {}/{}", callerDID, agentId, e);
+			log.warn("Failed to read agent config for {}", agentId, e);
+			return null;
+		}
+	}
+
+	/**
+	 * Resolves the API key from input or the user's secret store.
+	 *
+	 * <p>Resolution order:</p>
+	 * <ol>
+	 *   <li>Optional {@code apiKey} in input (testing only — will be plaintext in results)</li>
+	 *   <li>User's secret store, name from {@code operation.secretKey} in metadata</li>
+	 * </ol>
+	 *
+	 * @param meta Operation metadata (contains {@code operation.secretKey})
+	 * @param input Transition function input (may contain {@code apiKey} override)
+	 * @param user User for secret store access
+	 * @return API key string, or null if not available
+	 */
+	private String resolveApiKey(ACell meta, ACell input, User user) {
+		// 1. Optional input override (testing)
+		AString inputKey = RT.ensureString(RT.getIn(input, K_API_KEY));
+		if (inputKey != null) return inputKey.toString();
+
+		// 2. Secret store, name from operation metadata
+		AString secretName = RT.ensureString(RT.getIn(meta, "operation", K_SECRET_KEY));
+		if (secretName != null) {
+			String decrypted = decryptSecret(user, secretName);
+			if (decrypted != null) return decrypted;
+		}
+
+		return null;
+	}
+
+	/**
+	 * Decrypts a secret from the user's secret store, or null if unavailable.
+	 */
+	private String decryptSecret(User user, AString secretName) {
+		if (user == null || engine == null) return null;
+		try {
+			byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
+			AString value = user.secrets().decrypt(secretName, encKey);
+			return (value != null) ? value.toString() : null;
+		} catch (Exception e) {
+			log.debug("Could not decrypt secret '{}': {}", secretName, e.getMessage());
 			return null;
 		}
 	}
@@ -288,9 +359,8 @@ public class LLMAgentAdapter extends AAdapter {
 			return LangChainAdapter.buildOllamaModel(baseUrl, model, IO_TIMEOUT);
 		} else {
 			// Default to OpenAI-compatible
-			String key = (apiKey != null) ? apiKey : System.getenv("OPENAI_API_KEY");
 			String baseUrl = (url != null) ? url : "https://api.openai.com/v1";
-			return LangChainAdapter.buildOpenAiModel(key, baseUrl, model, IO_TIMEOUT);
+			return LangChainAdapter.buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
 		}
 	}
 

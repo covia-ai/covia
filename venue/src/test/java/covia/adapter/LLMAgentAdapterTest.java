@@ -19,6 +19,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.AgentState;
 import covia.venue.Engine;
+import covia.venue.SecretStore;
 import covia.venue.User;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
@@ -107,7 +108,7 @@ public class LLMAgentAdapterTest {
 			)
 		);
 
-		ACell output = adapter.processChat(ALICE_DID, input);
+		ACell output = adapter.processChat(ALICE_DID, null, input);
 		assertNotNull(output);
 
 		// Verify output structure
@@ -142,7 +143,7 @@ public class LLMAgentAdapterTest {
 				Maps.of("content", Strings.create("first message"))
 			)
 		);
-		ACell output1 = adapter.processChat(ALICE_DID, input1);
+		ACell output1 = adapter.processChat(ALICE_DID, null, input1);
 		ACell state1 = RT.getIn(output1, AgentState.KEY_STATE);
 
 		// Second turn — pass state from first turn
@@ -153,7 +154,7 @@ public class LLMAgentAdapterTest {
 				Maps.of("content", Strings.create("second message"))
 			)
 		);
-		ACell output2 = adapter.processChat(ALICE_DID, input2);
+		ACell output2 = adapter.processChat(ALICE_DID, null, input2);
 		ACell state2 = RT.getIn(output2, AgentState.KEY_STATE);
 
 		// Verify history grew
@@ -181,7 +182,7 @@ public class LLMAgentAdapterTest {
 			)
 		);
 
-		ACell output = adapter.processChat(ALICE_DID, input);
+		ACell output = adapter.processChat(ALICE_DID, null, input);
 		AVector<ACell> history = LLMAgentAdapter.extractHistory(
 			RT.getIn(output, AgentState.KEY_STATE));
 
@@ -217,7 +218,7 @@ public class LLMAgentAdapterTest {
 			)
 		);
 
-		ACell output = adapter.processChat(ALICE_DID, input);
+		ACell output = adapter.processChat(ALICE_DID, null, input);
 		AVector<ACell> history = LLMAgentAdapter.extractHistory(
 			RT.getIn(output, AgentState.KEY_STATE));
 
@@ -387,7 +388,7 @@ public class LLMAgentAdapterTest {
 		);
 
 		// Should not throw — adapter reads config from lattice
-		ACell output = adapter.processChat(ALICE_DID, input);
+		ACell output = adapter.processChat(ALICE_DID, null, input);
 		assertNotNull(output);
 
 		// The custom system prompt should be in the history
@@ -438,7 +439,7 @@ public class LLMAgentAdapterTest {
 			)
 		);
 
-		ACell output = adapter.processChat(ALICE_DID, input2);
+		ACell output = adapter.processChat(ALICE_DID, null, input2);
 		assertNotNull(output);
 
 		// Should use default system prompt
@@ -447,6 +448,87 @@ public class LLMAgentAdapterTest {
 		AString sysContent = RT.ensureString(RT.getIn(history.get(0), "content"));
 		assertTrue(sysContent.toString().contains("Covia platform"),
 			"Default system prompt should mention Covia");
+	}
+
+	// ========== API key resolution ==========
+
+	@Test
+	public void testApiKeyFromSecretStoreViaMeta() {
+		// Store a secret for Alice under the name declared in operation metadata
+		User user = engine.getVenueState().users().ensure(ALICE_DID);
+		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
+		user.secrets().store(Strings.create("OPENAI_API_KEY"), Strings.create("sk-from-store"), encKey);
+
+		createTestAgent("secret-agent");
+
+		// Build metadata with secretKey (mimics what chat.json declares)
+		ACell meta = Maps.of(
+			"operation", Maps.of(
+				"adapter", Strings.create("llmagent:chat"),
+				"secretKey", Strings.create("OPENAI_API_KEY")
+			)
+		);
+
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell input = Maps.of(
+			Fields.AGENT_ID, Strings.create("secret-agent"),
+			AgentState.KEY_STATE, null,
+			Fields.MESSAGES, Vectors.of(
+				Maps.of("content", Strings.create("test secret"))
+			)
+		);
+
+		// test provider ignores the key, but the resolution path runs without error
+		ACell output = adapter.processChat(ALICE_DID, meta, input);
+		assertNotNull(output);
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		assertEquals("test secret", response.toString());
+	}
+
+	@Test
+	public void testApiKeyFromInputOverride() {
+		createTestAgent("override-agent");
+
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell input = Maps.of(
+			Fields.AGENT_ID, Strings.create("override-agent"),
+			AgentState.KEY_STATE, null,
+			Fields.MESSAGES, Vectors.of(
+				Maps.of("content", Strings.create("test override"))
+			),
+			"apiKey", Strings.create("sk-plaintext-testing")
+		);
+
+		// Input apiKey takes priority — test provider doesn't use it but path runs
+		ACell output = adapter.processChat(ALICE_DID, null, input);
+		assertNotNull(output);
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		assertEquals("test override", response.toString());
+	}
+
+	@Test
+	public void testApiKeyNullWhenNoSecretAndNoInput() {
+		// No secret stored, no apiKey in input, no env var fallback
+		createTestAgent("no-key-agent");
+
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell meta = Maps.of(
+			"operation", Maps.of(
+				"adapter", Strings.create("llmagent:chat"),
+				"secretKey", Strings.create("MISSING_SECRET")
+			)
+		);
+		ACell input = Maps.of(
+			Fields.AGENT_ID, Strings.create("no-key-agent"),
+			AgentState.KEY_STATE, null,
+			Fields.MESSAGES, Vectors.of(
+				Maps.of("content", Strings.create("test"))
+			)
+		);
+
+		// test provider doesn't need an API key, so this should succeed
+		ACell output = adapter.processChat(ALICE_DID, meta, input);
+		assertNotNull(output);
 	}
 
 	// ========== Helper ==========
