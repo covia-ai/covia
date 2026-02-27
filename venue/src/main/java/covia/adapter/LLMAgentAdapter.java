@@ -208,7 +208,7 @@ public class LLMAgentAdapter extends AAdapter {
 			List<ChatMessage> chatMessages = toChatMessages(history);
 			ChatResponse response = chatModel.chat(chatMessages);
 			AiMessage reply = response.aiMessage();
-			assistantText = reply.text();
+			assistantText = stripThinkTags(reply.text());
 		}
 
 		// Append assistant response to history
@@ -362,6 +362,18 @@ public class LLMAgentAdapter extends AAdapter {
 			String baseUrl = (url != null) ? url : "https://api.openai.com/v1";
 			return LangChainAdapter.buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
 		}
+	}
+
+	/**
+	 * Strips {@code <think>...</think>} tags from model output (e.g. qwen, deepseek-r1).
+	 */
+	static String stripThinkTags(String text) {
+		if (text == null) return null;
+		if (text.contains("</think>")) {
+			int end = text.lastIndexOf("</think>");
+			text = text.substring(end + 8).trim();
+		}
+		return text;
 	}
 
 	/**
