@@ -57,7 +57,6 @@ public class JobStore extends ALatticeComponent<Index<Blob, ACell>> {
 	 *
 	 * @return Index of all job records, never null
 	 */
-	@SuppressWarnings("unchecked")
 	public Index<Blob, ACell> getAll() {
 		Index<Blob, ACell> jobs = (Index<Blob, ACell>) cursor.get();
 		if (jobs == null) return Index.none();

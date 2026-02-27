@@ -13,7 +13,6 @@ import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
-import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
@@ -231,15 +230,14 @@ public class VenueStateTest {
 	// ========== Child Cursor Accessors ==========
 
 	@Test
-	public void testChildCursorAccessors() {
+	public void testChildComponentAccessors() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 
-		assertNotNull(vs.assets().cursor(), "Assets cursor should be available");
-		assertNotNull(vs.jobs().cursor(), "Jobs cursor should be available");
-		assertNotNull(vs.usersCursor(), "Users cursor should be available");
-		assertNotNull(vs.authCursor(), "Auth cursor should be available");
-		assertNotNull(vs.storageCursor(), "Storage cursor should be available");
+		assertNotNull(vs.assets(), "Assets component should be available");
+		assertNotNull(vs.jobs(), "Jobs component should be available");
+		assertNotNull(vs.users(), "Users component should be available");
+		assertNotNull(vs.storage(), "Storage component should be available");
 	}
 
 	// ========== State Bootstrapping ==========
@@ -412,11 +410,37 @@ public class VenueStateTest {
 	}
 
 	@Test
-	public void testCapsCursorAccessor() {
+	public void testInitialise() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 
-		assertNotNull(vs.capsCursor(), "Caps cursor should be available");
+		assertNull(vs.get(), "Uninitialised venue should have null state");
+		vs.initialise(Strings.create("did:key:zTest"));
+		assertNotNull(vs.get(), "Initialised venue should have non-null state");
+
+		// Calling initialise again should be a no-op
+		ACell state = vs.get();
+		vs.initialise(Strings.create("did:key:zDifferent"));
+		assertEquals(state, vs.get(), "Second initialise should be no-op");
+	}
+
+	@Test
+	public void testUserSecretsAccessor() {
+		AKeyPair kp = AKeyPair.generate();
+		VenueState vs = VenueState.create(kp);
+		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
+
+		assertNotNull(user.secrets(), "User secrets() should return non-null SecretStore");
+	}
+
+	@Test
+	public void testUserAgentCursorAccessor() {
+		AKeyPair kp = AKeyPair.generate();
+		VenueState vs = VenueState.create(kp);
+		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
+
+		assertNotNull(user.agentCursor(Strings.create("agent-1")),
+			"User agentCursor() should return non-null cursor");
 	}
 
 	// ========== Fork / Sync ==========

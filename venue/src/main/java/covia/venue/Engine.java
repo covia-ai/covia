@@ -59,7 +59,6 @@ import covia.lattice.Covia;
 import covia.venue.api.CoviaAPI;
 import covia.venue.storage.AStorage;
 import covia.venue.storage.FileStorage;
-import covia.venue.storage.LatticeStorage;
 import covia.venue.storage.MemoryStorage;
 
 public class Engine {
@@ -186,7 +185,7 @@ public class Engine {
 			if (!Config.STORAGE_TYPE_LATTICE.equals(storageType)) {
 				log.warn("Unknown storage type '{}', defaulting to lattice", storageType);
 			}
-			return new LatticeStorage(venueState.storageCursor());
+			return venueState.storage();
 		}
 	}
 
@@ -205,16 +204,14 @@ public class Engine {
 		// Bootstrap with connected VenueState (writes signed immediately).
 		// DID initialisation must be signed so other peers accept it.
 		VenueState connected = VenueState.fromRoot(lattice, getAccountKey());
-		if (connected.get() == null) {
-			connected.set(Covia.VENUE.zero().assoc(Covia.DID, getDIDString()));
-		}
+		connected.initialise(getDIDString());
 
 		// Fork: subsequent writes accumulate locally (unsigned).
 		// Engine.syncState() calls venueState.sync() to merge + sign once.
 		this.venueState = connected.fork();
 
-		this.auth = new Auth(this, venueState.usersCursor());
-		this.accessControl = new AccessControl(venueState.authCursor());
+		this.auth = new Auth(this, venueState.authCursor());
+		this.accessControl = new AccessControl();
 	}
 
 	/**
@@ -742,6 +739,14 @@ public class Engine {
 	 */
 	public AKeyPair getKeyPair() {
 		return keyPair;
+	}
+
+	/**
+	 * Gets the venue state wrapper for direct access to lattice state.
+	 * @return VenueState wrapping this venue's lattice cursor
+	 */
+	public VenueState getVenueState() {
+		return venueState;
 	}
 
 	public AString getName() {

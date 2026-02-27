@@ -11,13 +11,14 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
-import convex.lattice.cursor.ACursor;
+import convex.lattice.ALatticeComponent;
+import convex.lattice.cursor.ALatticeCursor;
 import covia.venue.auth.LoginProviders;
 
 /**
  * Authentication and user management for a Covia venue.
  *
- * <p>Owns the user database backed by a lattice cursor and manages OAuth
+ * <p>Wraps a lattice cursor at the {@code :users} level and manages OAuth
  * login providers. Users are stored as maps keyed by user ID (e.g.
  * "alice_gmail_com") with fields like "did", "email", "name", "provider",
  * "updated".
@@ -40,28 +41,28 @@ import covia.venue.auth.LoginProviders;
  *
  * <p>Created and owned by {@link Engine}.
  */
-public class Auth {
+public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>> {
 
 	private static final Logger log = LoggerFactory.getLogger(Auth.class);
 
 	/** Default token expiry: 24 hours in seconds */
 	public static final long DEFAULT_TOKEN_EXPIRY = 86400;
 
-	private final ACursor<AMap<AString, AMap<AString, ACell>>> users;
 	private final LoginProviders loginProviders;
 	private final long tokenExpiry;
 	private final boolean publicAccessEnabled;
 
 	/**
-	 * Create Auth from an Engine and its venue config.
+	 * Create Auth from an Engine and its venue state.
 	 * Reads the "auth" config section for public access, token expiry,
 	 * and OAuth providers.
 	 *
 	 * @param engine The venue engine
-	 * @param users Lattice cursor for the user database
+	 * @param cursor Lattice cursor at the :users level
 	 */
-	public Auth(Engine engine, ACursor<AMap<AString, AMap<AString, ACell>>> users) {
-		this.users = users;
+	@SuppressWarnings("unchecked")
+	Auth(Engine engine, ALatticeCursor<?> cursor) {
+		super((ALatticeCursor<AMap<AString, AMap<AString, ACell>>>) cursor);
 
 		Config config = engine.config();
 		this.tokenExpiry = config.getTokenExpiry();
@@ -113,7 +114,7 @@ public class Auth {
 	}
 
 	/**
-	 * Store or update a user record. Adds an :updated timestamp automatically.
+	 * Store or update a user record. Adds an "updated" timestamp automatically.
 	 * @param id User identifier (e.g. "alice_gmail_com")
 	 * @param record User record map (should contain "did" and any other fields)
 	 */
@@ -121,7 +122,7 @@ public class Auth {
 		AString key = Strings.create(id);
 		AMap<AString, ACell> stamped = record.assoc(
 			Strings.create("updated"), CVMLong.create(Utils.getCurrentTimestamp()));
-		users.updateAndGet(current -> {
+		cursor.updateAndGet(current -> {
 			@SuppressWarnings("unchecked")
 			AMap<AString, AMap<AString, ACell>> m = (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.ensureMap(current);
 			if (m == null) m = Maps.empty();
@@ -135,7 +136,7 @@ public class Auth {
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, AMap<AString, ACell>> getUsers() {
-		return (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.ensureMap(this.users.get());
+		return (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.ensureMap(cursor.get());
 	}
 
 }

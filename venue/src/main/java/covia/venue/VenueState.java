@@ -2,19 +2,16 @@ package covia.venue;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.cvm.Keywords;
-import convex.core.data.ABlob;
 import convex.core.data.ACell;
-import convex.core.data.AMap;
-import convex.core.data.AString;
 import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.LatticeContext;
-import convex.lattice.cursor.ACursor;
 import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.cursor.Cursors;
 import covia.lattice.Covia;
+import covia.venue.storage.LatticeStorage;
 
 /**
  * Cursor wrapper for a single venue's state.
@@ -36,15 +33,12 @@ import covia.lattice.Covia;
  * for all subsequent request processing. {@code Engine.syncState()} calls
  * {@link #sync()} once per request, batching all writes into a single sign.</p>
  *
- * <p>Provides domain-specific accessors:</p>
+ * <p>Provides domain-specific component accessors:</p>
  * <ul>
  *   <li>{@link #assets()} — content-addressed asset store</li>
  *   <li>{@link #jobs()} — timestamp-ordered job store</li>
  *   <li>{@link #users()} — per-user data store</li>
- *   <li>{@link #usersCursor()} — cursor for Auth</li>
- *   <li>{@link #authCursor()} — cursor for AccessControl</li>
- *   <li>{@link #capsCursor()} — cursor for capabilities</li>
- *   <li>{@link #storageCursor()} — cursor for LatticeStorage</li>
+ *   <li>{@link #storage()} — content-addressed blob storage</li>
  * </ul>
  *
  * <h2>Usage</h2>
@@ -120,33 +114,6 @@ public class VenueState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Gets the users cursor for Auth construction.
-	 *
-	 * @return Cursor at the :users level
-	 */
-	public ACursor<AMap<AString, AMap<AString, ACell>>> usersCursor() {
-		return cursor.path(Covia.USERS);
-	}
-
-	/**
-	 * Gets the auth cursor for AccessControl construction.
-	 *
-	 * @return Cursor at the :auth level
-	 */
-	public ACursor<AMap<Keyword, ACell>> authCursor() {
-		return cursor.path(Covia.AUTH);
-	}
-
-	/**
-	 * Gets the storage cursor for LatticeStorage construction.
-	 *
-	 * @return Cursor at the :storage level
-	 */
-	public ACursor<Index<ABlob, ABlob>> storageCursor() {
-		return cursor.path(Covia.STORAGE);
-	}
-
-	/**
 	 * Gets the venue's per-user data store.
 	 *
 	 * @return Users cursor wrapper
@@ -156,12 +123,21 @@ public class VenueState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Gets the capabilities cursor for AccessControl.
+	 * Gets a lattice cursor at the {@code :users} level for Auth construction.
 	 *
-	 * @return Cursor at the :caps level
+	 * @return Cursor at the :users level
 	 */
-	public ACursor<AMap<AString, ACell>> capsCursor() {
-		return cursor.path(Covia.CAPS);
+	ALatticeCursor<ACell> authCursor() {
+		return cursor.path(Covia.USERS);
+	}
+
+	/**
+	 * Gets the venue's content-addressed blob storage.
+	 *
+	 * @return LatticeStorage instance backed by this venue's cursor
+	 */
+	public LatticeStorage storage() {
+		return new LatticeStorage(cursor.path(Covia.STORAGE));
 	}
 
 	/**
@@ -180,6 +156,18 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 */
 	public void set(ACell value) {
 		cursor.set(value);
+	}
+
+	/**
+	 * Initialises this venue with the given DID if not already initialised.
+	 * Sets the venue state to the VENUE lattice zero value with the DID field.
+	 *
+	 * @param did The venue's DID string
+	 */
+	public void initialise(ACell did) {
+		if (cursor.get() == null) {
+			cursor.set(Covia.VENUE.zero().assoc(Covia.DID, did));
+		}
 	}
 
 	/**

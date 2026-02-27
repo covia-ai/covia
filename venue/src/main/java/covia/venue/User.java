@@ -1,10 +1,11 @@
 package covia.venue;
 
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
-import covia.lattice.Covia;
+import covia.lattice.Namespace;
 
 /**
  * Cursor wrapper for a single user's state within a venue.
@@ -15,13 +16,13 @@ import covia.lattice.Covia;
  * exist) or {@link VenueState#ensureUser(AString)} (creates if needed).</p>
  *
  * <p>Follows the same lattice app wrapper pattern as {@link AssetStore}
- * and {@link JobStore}. The per-user lattice is a KeyedLattice
- * ({@link Covia#USER}) containing:</p>
+ * and {@link JobStore}. The per-user lattice uses short AString-compatible
+ * keys from {@link Namespace} for JSON compliance:</p>
  * <ul>
- *   <li>{@code :jobs} — MapLattice of user's job references (LWW merge)</li>
+ *   <li>{@code "j"} — user's job references (IndexLattice + LWW)</li>
+ *   <li>{@code "g"} — user's agents (MapLattice + AGENT)</li>
+ *   <li>{@code "s"} — user's encrypted credentials (MapLattice + LWW)</li>
  * </ul>
- *
- * <p>Future phases will add :workspace, :assets, :ops.</p>
  */
 public class User extends ALatticeComponent<ACell> {
 
@@ -44,10 +45,44 @@ public class User extends ALatticeComponent<ACell> {
 	/**
 	 * Gets the user's job store (per-user job references, LWW merge).
 	 *
-	 * @return JobStore wrapping the user's :jobs cursor
+	 * @return JobStore wrapping the user's "j" cursor
 	 */
 	public JobStore jobs() {
-		return new JobStore(cursor.path(Covia.JOBS));
+		return new JobStore(cursor.path(Namespace.J));
+	}
+
+	/**
+	 * Gets the user's secret store (per-user encrypted credentials).
+	 *
+	 * @return SecretStore wrapping the user's "s" cursor
+	 */
+	public SecretStore secrets() {
+		return new SecretStore(cursor.path(Namespace.S));
+	}
+
+	/**
+	 * Gets a specific agent's state cursor (raw lattice cursor).
+	 *
+	 * <p>Returns a cursor into the user's "g" namespace at the given agent ID.
+	 * The {@code AgentState} typed wrapper is planned for Phase A; this provides
+	 * a clean integration point.</p>
+	 *
+	 * @param agentId Agent identifier
+	 * @return Lattice cursor for the agent's state
+	 */
+	public ALatticeCursor<ACell> agentCursor(AString agentId) {
+		return cursor.path(Namespace.G, agentId);
+	}
+
+	/**
+	 * Gets all agents as a map for iteration.
+	 *
+	 * @return Map of agent ID to agent state, or null if none
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> getAgents() {
+		ACell value = cursor.path(Namespace.G).get();
+		return (value instanceof AMap) ? (AMap<AString, ACell>) value : null;
 	}
 
 	/**

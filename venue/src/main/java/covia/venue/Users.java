@@ -11,13 +11,14 @@ import covia.lattice.Covia;
  * Cursor wrapper for the venue's user data store.
  *
  * <p>Wraps a lattice cursor at the {@code :user-data} level
- * ({@code MapLattice<AString, KeyedLattice>}). Provides typed
+ * ({@code MapLattice<AString, StringKeyedLattice>}). Provides typed
  * accessors for per-user state, following the same pattern as
  * {@link AssetStore} and {@link JobStore}.</p>
  *
  * <p>Each user is identified by a DID string and gets an independent
- * {@link User} lattice component containing per-user jobs and
- * (in future phases) workspace, assets, and operations.</p>
+ * {@link User} lattice component backed by a
+ * {@link convex.lattice.generic.StringKeyedLattice} with AString keys
+ * for JSON compatibility.</p>
  */
 public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 

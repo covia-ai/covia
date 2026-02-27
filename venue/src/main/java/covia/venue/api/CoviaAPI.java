@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
@@ -30,6 +31,8 @@ import covia.venue.api.model.ErrorResponse;
 import covia.venue.api.model.InvokeRequest;
 import covia.venue.api.model.InvokeResult;
 import covia.venue.RequestContext;
+import covia.venue.SecretStore;
+import covia.venue.User;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
 import io.javalin.Javalin;
@@ -105,6 +108,11 @@ public class CoviaAPI extends ACoviaAPI {
 		javalin.sse(ROUTE+"jobs/<id>/sse", sseServer.registerSSE);
 		javalin.get(ROUTE+"jobs", this::getJobs);
 		
+		// Secrets
+		javalin.get(ROUTE+"secrets", this::listSecrets);
+		javalin.put(ROUTE+"secrets/{name}", this::putSecret);
+		javalin.delete(ROUTE+"secrets/{name}", this::deleteSecret);
+
 		// DIDs
 		javalin.get("/.well-known/did.json", this::getDIDDocument);
 		javalin.get("/a/{id}/did.json", this::getAssetDIDDocument);
@@ -750,6 +758,111 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (IOException e) {
 			buildError(ctx, 500, "Error resolving operation: " + e.getMessage());
 		}
+	}
+
+	// ========== Secret endpoints ==========
+
+	@OpenApi(path = ROUTE + "secrets",
+			methods = HttpMethod.GET,
+			tags = { "Secrets"},
+			summary = "List secret names for the authenticated caller. Returns names only, never values.",
+			operationId = "listSecrets")
+	protected void listSecrets(Context ctx) {
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		AString callerDID = rctx.getCallerDID();
+		if (callerDID == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+
+		User user = engine().getVenueState().users().get(callerDID);
+		if (user == null) {
+			buildResult(ctx, 200, Maps.of("items", Strings.create("[]"), "total", 0));
+			return;
+		}
+
+		AVector<AString> names = user.secrets().list();
+		ArrayList<Object> items = new ArrayList<>();
+		for (long i = 0; i < names.count(); i++) {
+			items.add(names.get(i).toString());
+		}
+		Map<String, Object> result = new HashMap<>();
+		result.put("items", items);
+		result.put("total", items.size());
+		buildResult(ctx, 200, result);
+	}
+
+	@OpenApi(path = ROUTE + "secrets/{name}",
+			methods = HttpMethod.PUT,
+			tags = { "Secrets"},
+			summary = "Store an encrypted secret under the caller's namespace.",
+			operationId = "putSecret",
+			pathParams = {
+					@OpenApiParam(
+							name = "name",
+							description = "Secret name (e.g. openai-key).",
+							required = true,
+							type = String.class) },
+			requestBody = @OpenApiRequestBody(
+					description = "Secret value",
+					content= @OpenApiContent(type = "application/json", from = Object.class)))
+	protected void putSecret(Context ctx) {
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		AString callerDID = rctx.getCallerDID();
+		if (callerDID == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+
+		String name = ctx.pathParam("name");
+		ACell body = JSON.parseJSON5(ctx.body());
+		ACell value = RT.getIn(body, "value");
+		if (!(value instanceof AString plaintext)) {
+			buildError(ctx, 400, "Request body must contain a 'value' string field");
+			return;
+		}
+
+		User user = engine().getVenueState().users().ensure(callerDID);
+		byte[] key = SecretStore.deriveKey(engine().getKeyPair());
+		user.secrets().store(Strings.create(name), plaintext, key);
+
+		ctx.status(200);
+		buildResult(ctx, 200, Maps.of("name", name, "stored", true));
+	}
+
+	@OpenApi(path = ROUTE + "secrets/{name}",
+			methods = HttpMethod.DELETE,
+			tags = { "Secrets"},
+			summary = "Delete a secret from the caller's namespace.",
+			operationId = "deleteSecret",
+			pathParams = {
+					@OpenApiParam(
+							name = "name",
+							description = "Secret name to delete.",
+							required = true,
+							type = String.class) })
+	protected void deleteSecret(Context ctx) {
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		AString callerDID = rctx.getCallerDID();
+		if (callerDID == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+
+		String name = ctx.pathParam("name");
+		User user = engine().getVenueState().users().get(callerDID);
+		if (user == null) {
+			buildError(ctx, 404, "Secret not found");
+			return;
+		}
+
+		AString secretName = Strings.create(name);
+		if (!user.secrets().exists(secretName)) {
+			buildError(ctx, 404, "Secret not found: " + name);
+			return;
+		}
+		user.secrets().delete(secretName);
+		ctx.status(200);
 	}
 
 	@OpenApi(path = "/.well-known/did.json",

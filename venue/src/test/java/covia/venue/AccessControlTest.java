@@ -36,7 +36,6 @@ public class AccessControlTest {
 	public void testAccessControlExists() {
 		AccessControl ac = engine.getAccessControl();
 		assertNotNull(ac, "AccessControl should be initialised");
-		assertNotNull(ac.getCursor(), "Auth cursor should be initialised");
 	}
 
 	@Test

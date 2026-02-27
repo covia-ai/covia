@@ -3,13 +3,11 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.Keyword;
 import convex.core.lang.RT;
-import convex.lattice.cursor.ACursor;
 import covia.api.Fields;
 
 /**
- * Central authorisation for a venue. Backed by the {@code :auth} lattice cursor.
+ * Central authorisation for a venue.
  *
  * <p>Phase 2 enforcement: job ownership check. Authenticated users can
  * access jobs where {@code :caller} matches their DID. Internal requests
@@ -20,12 +18,6 @@ import covia.api.Fields;
  * will be added in Phase 3/4.</p>
  */
 public class AccessControl {
-
-	private final ACursor<AMap<Keyword, ACell>> authCursor;
-
-	public AccessControl(ACursor<AMap<Keyword, ACell>> authCursor) {
-		this.authCursor = authCursor;
-	}
 
 	/**
 	 * Checks if the request can see/manage a specific job.
@@ -64,14 +56,5 @@ public class AccessControl {
 	 */
 	public boolean canAccessOperation(RequestContext ctx, ACell opMeta) {
 		return true;
-	}
-
-	/**
-	 * Gets the raw auth cursor for direct lattice access.
-	 *
-	 * @return Cursor at the :auth level
-	 */
-	public ACursor<AMap<Keyword, ACell>> getCursor() {
-		return authCursor;
 	}
 }

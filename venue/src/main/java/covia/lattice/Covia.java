@@ -13,6 +13,7 @@ import convex.lattice.generic.KeyedLattice;
 import convex.lattice.generic.LWWLattice;
 import convex.lattice.generic.MapLattice;
 import convex.lattice.generic.OwnerLattice;
+import convex.lattice.generic.StringKeyedLattice;
 
 /**
  * Root lattice definition for Covia venue state.
@@ -36,9 +37,21 @@ import convex.lattice.generic.OwnerLattice;
  *           :did       ->  FunctionLattice (first-writer-wins)
  *           :caps      ->  MapLattice + LWW (per-DID capability sets)
  *           :user-data ->  MapLattice (DID -> per-user KeyedLattice)
- *             &lt;DID-string&gt;  ->  KeyedLattice (USER)
- *               :jobs  ->  MapLattice + LWW (user's job references)
+ *             &lt;DID-string&gt;  ->  StringKeyedLattice (USER, AString keys)
+ *               "j"  ->  IndexLattice + LWW (user's job references)
+ *               "g"  ->  MapLattice + AGENT (user's agents)
+ *               "s"  ->  MapLattice + LWW (user's encrypted credentials)
  *     :meta  ->  CASLattice (shared content-addressable metadata)
+ *
+ * AGENT  ->  KeyedLattice (per-agent state)
+ *   :status   ->  LWW (sleeping | running | suspended | terminated)
+ *   :seq      ->  FunctionLattice (monotonically increasing sequence)
+ *   :config   ->  MapLattice + LWW (user-configurable settings)
+ *   :inbox    ->  IndexLattice + LWW (incoming messages)
+ *   :jobs     ->  IndexLattice + LWW (assigned jobs)
+ *   :timeline ->  IndexLattice + CAS (append-only transition records)
+ *   :caps     ->  MapLattice + LWW (capability sets)
+ *   :error    ->  LWW (last error)
  * </pre>
  */
 public final class Covia {
@@ -82,6 +95,26 @@ public final class Covia {
 	/** Keyword for per-DID user state within venue state */
 	public static final Keyword USER_DATA = Keyword.intern("user-data");
 
+	// ========== Agent-level keywords ==========
+
+	/** Agent status (sleeping, running, suspended, terminated) */
+	public static final Keyword STATUS_K = Keyword.intern("status");
+
+	/** Agent sequence number (monotonically increasing) */
+	public static final Keyword SEQ = Keyword.intern("seq");
+
+	/** Agent configuration (user-configurable settings) */
+	public static final Keyword CONFIG = Keyword.intern("config");
+
+	/** Agent inbox (incoming messages) */
+	public static final Keyword INBOX = Keyword.intern("inbox");
+
+	/** Agent transition timeline (append-only records) */
+	public static final Keyword TIMELINE = Keyword.intern("timeline");
+
+	/** Agent last error */
+	public static final Keyword ERROR_K = Keyword.intern("error");
+
 	// ========== Lattice definitions ==========
 
 	/**
@@ -96,12 +129,35 @@ public final class Covia {
 	private static final LWWLattice<ACell> LWW = LWWLattice.create(Covia::extractUpdatedTimestamp);
 
 	/**
-	 * Per-user lattice structure. Each user (identified by DID string) gets
-	 * an independent KeyedLattice. Extensible in future phases with
-	 * :workspace, :assets, :ops.
+	 * Per-agent lattice structure. Defines the state shape for a single agent.
+	 * Runtime usage in Phase A; structure defined here for lattice merge support.
 	 */
-	public static final KeyedLattice USER = KeyedLattice.create(
-		JOBS, IndexLattice.create(LWW)                    // user's job references (Index, not Map)
+	public static final KeyedLattice AGENT = KeyedLattice.create(
+		STATUS_K, LWW,                                    // sleeping | running | suspended | terminated
+		SEQ, FunctionLattice.create((a, b) -> {           // monotonically increasing sequence
+			if (a instanceof CVMLong la && b instanceof CVMLong lb) {
+				return la.longValue() >= lb.longValue() ? la : lb;
+			}
+			return a;
+		}),
+		CONFIG, MapLattice.create(LWW),                   // user-configurable settings
+		INBOX, IndexLattice.create(LWW),                  // incoming messages
+		JOBS, IndexLattice.create(LWW),                   // assigned jobs
+		TIMELINE, IndexLattice.create(CASLattice.create()), // append-only transition records
+		CAPS, MapLattice.create(LWW),                     // capability sets
+		ERROR_K, LWW                                      // last error
+	);
+
+	/**
+	 * Per-user lattice structure. Each user (identified by DID string) gets
+	 * an independent {@link StringKeyedLattice} with short AString keys matching
+	 * {@link Namespace} constants. String keys keep the user lattice
+	 * JSON-compliant throughout.
+	 */
+	public static final StringKeyedLattice USER = StringKeyedLattice.create(
+		"j", IndexLattice.create(LWW),    // user's job references
+		"g", MapLattice.create(AGENT),    // user's agents
+		"s", MapLattice.create(LWW)       // user's encrypted credentials
 	);
 
 	/**
