@@ -120,7 +120,7 @@ public class A2A extends ACoviaAPI {
 			return;
 		}
 
-		AString method = RT.ensureString(request.get(Strings.create("method")));
+		AString method = RT.ensureString(request.get(Fields.METHOD));
 		ACell id = request.get(Fields.ID);
 		ACell params = request.get(Fields.PARAMS);
 
@@ -171,7 +171,7 @@ public class A2A extends ACoviaAPI {
 				"jsonrpc", "2.0",
 				Fields.ID, rpcId,
 				"result", Maps.of(
-					"status", Strings.create("queued"),
+					Fields.STATUS, Strings.intern("queued"),
 					"queueDepth", RT.cvm(depth)
 				)
 			);

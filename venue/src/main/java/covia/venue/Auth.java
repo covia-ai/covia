@@ -7,12 +7,12 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
-import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
+import covia.api.Fields;
 import covia.venue.auth.LoginProviders;
 
 /**
@@ -103,30 +103,29 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 
 	/**
 	 * Get a user record by ID
-	 * @param id User identifier (e.g. "alice_gmail_com")
+	 * @param id User identifier as AString (e.g. "alice_gmail_com")
 	 * @return User record map, or null if not found
 	 */
 	@SuppressWarnings("unchecked")
-	public AMap<AString, ACell> getUser(String id) {
+	public AMap<AString, ACell> getUser(AString id) {
 		AMap<AString, AMap<AString, ACell>> usersMap = getUsers();
 		if (usersMap == null) return null;
-		return (AMap<AString, ACell>) usersMap.get(Strings.create(id));
+		return (AMap<AString, ACell>) usersMap.get(id);
 	}
 
 	/**
 	 * Store or update a user record. Adds an "updated" timestamp automatically.
-	 * @param id User identifier (e.g. "alice_gmail_com")
+	 * @param id User identifier as AString (e.g. "alice_gmail_com")
 	 * @param record User record map (should contain "did" and any other fields)
 	 */
-	public void putUser(String id, AMap<AString, ACell> record) {
-		AString key = Strings.create(id);
+	public void putUser(AString id, AMap<AString, ACell> record) {
 		AMap<AString, ACell> stamped = record.assoc(
-			Strings.create("updated"), CVMLong.create(Utils.getCurrentTimestamp()));
+			Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 		cursor.updateAndGet(current -> {
 			@SuppressWarnings("unchecked")
 			AMap<AString, AMap<AString, ACell>> m = (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.ensureMap(current);
 			if (m == null) m = Maps.empty();
-			return m.assoc(key, stamped);
+			return m.assoc(id, stamped);
 		});
 	}
 

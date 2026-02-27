@@ -90,10 +90,20 @@ public class Fields {
 	public static final StringShort CATEGORY = Strings.intern("category");
 	public static final StringShort OUTPUT_SCHEMA = Strings.intern("outputSchema");
 
+	// JSON Schema
+	public static final StringShort REQUIRED = Strings.intern("required");
+	public static final StringShort DEFS = Strings.intern("$defs");
+	public static final StringShort DEFINITIONS = Strings.intern("definitions");
+
 	// Identity / authorization
 	public static final StringShort CALLER = Strings.intern("caller");
 	public static final StringShort ROLES = Strings.intern("roles");
 	public static final StringShort REQUIRES = Strings.intern("requires");
+	public static final StringShort EMAIL = Strings.intern("email");
+	public static final StringShort PROVIDER = Strings.intern("provider");
+	public static final StringShort PROVIDER_SUB = Strings.intern("providerSub");
+	public static final StringShort SUB = Strings.intern("sub");
+	public static final StringShort KID = Strings.intern("kid");
 
 	// Convex related
 	public static final StringShort PEER = Strings.intern("peer");

@@ -22,6 +22,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.TestServer;
 
@@ -29,6 +30,8 @@ import covia.venue.TestServer;
 public class UserAPITest {
 
 	static final int PORT = TestServer.PORT;
+	static final AString ALICE = Strings.intern("alice");
+	static final AString BOB = Strings.intern("bob");
 	Engine engine;
 
 	@BeforeAll
@@ -41,8 +44,8 @@ public class UserAPITest {
 	void testUserDIDDocument() throws Exception {
 		// Add a user to the database
 		String userDID = "did:web:example.com:u:alice";
-		engine.getAuth().putUser("alice", Maps.of(
-			Strings.create("did"), Strings.create(userDID)
+		engine.getAuth().putUser(ALICE, Maps.of(
+			Fields.DID, Strings.create(userDID)
 		));
 
 		// Fetch the DID document via HTTP
@@ -90,20 +93,20 @@ public class UserAPITest {
 	@Test
 	void testUserGetPut() throws Exception {
 		// Verify user doesn't exist yet
-		AMap<AString, ACell> record = engine.getAuth().getUser("bob");
+		AMap<AString, ACell> record = engine.getAuth().getUser(BOB);
 		assertEquals(null, record);
 
 		// Add a user
-		engine.getAuth().putUser("bob", Maps.of(
-			Strings.create("did"), Strings.create("did:key:z6Mktest123")
+		engine.getAuth().putUser(BOB, Maps.of(
+			Fields.DID, Strings.create("did:key:z6Mktest123")
 		));
 
 		// Verify user exists
-		record = engine.getAuth().getUser("bob");
+		record = engine.getAuth().getUser(BOB);
 		assertNotNull(record);
-		assertEquals("did:key:z6Mktest123", record.get(Strings.create("did")).toString());
+		assertEquals("did:key:z6Mktest123", record.get(Fields.DID).toString());
 
 		// Verify updated timestamp was added
-		assertNotNull(record.get(Strings.create("updated")), "Should have updated timestamp");
+		assertNotNull(record.get(Fields.UPDATED), "Should have updated timestamp");
 	}
 }

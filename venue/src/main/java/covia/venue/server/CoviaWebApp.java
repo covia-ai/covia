@@ -324,8 +324,8 @@ public class CoviaWebApp  {
 					),
 					tbody(
 						each(tools, tool -> {
-							AString name = RT.ensureString(tool.get(Strings.create("name")));
-							AString description = RT.ensureString(tool.get(Strings.create("description")));
+							AString name = RT.ensureString(tool.get(Fields.NAME));
+							AString description = RT.ensureString(tool.get(Fields.DESCRIPTION));
 							
 							// Get the asset hash for this tool
 							String assetHash = getAssetHashForTool(adapter, name.toString());

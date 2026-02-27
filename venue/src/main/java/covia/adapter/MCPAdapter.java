@@ -158,7 +158,7 @@ public class MCPAdapter extends AAdapter {
 		// Then try to get from metadata
 		if (meta instanceof AMap) {
 			AMap<AString, ACell> metaMap = (AMap<AString, ACell>) meta;
-			ACell serverUrlCell = metaMap.get(Strings.create("server"));
+			ACell serverUrlCell = metaMap.get(Fields.SERVER);
 			if (serverUrlCell instanceof AString url) {
 				return url;
 			}
@@ -235,9 +235,9 @@ public class MCPAdapter extends AAdapter {
 			
 			// Add type if present
 			if (jsonSchema.type() != null) {
-				schemaMap = schemaMap.assoc(Strings.create("type"), Strings.create(jsonSchema.type()));
+				schemaMap = schemaMap.assoc(Fields.TYPE, Strings.create(jsonSchema.type()));
 			}
-			
+
 			// Add properties if present
 			if (jsonSchema.properties() != null && !jsonSchema.properties().isEmpty()) {
 				AMap<AString, ACell> propertiesMap = Maps.empty();
@@ -245,23 +245,23 @@ public class MCPAdapter extends AAdapter {
 					ACell value = convertToConvex(entry.getValue());
 					propertiesMap = propertiesMap.assoc(Strings.create(entry.getKey()), value);
 				}
-				schemaMap = schemaMap.assoc(Strings.create("properties"), propertiesMap);
+				schemaMap = schemaMap.assoc(Fields.PROPERTIES, propertiesMap);
 			}
-			
+
 			// Add required fields if present
 			if (jsonSchema.required() != null && !jsonSchema.required().isEmpty()) {
 				AVector<AString> requiredVector = Vectors.empty();
 				for (String required : jsonSchema.required()) {
 					requiredVector = requiredVector.conj(Strings.create(required));
 				}
-				schemaMap = schemaMap.assoc(Strings.create("required"), requiredVector);
+				schemaMap = schemaMap.assoc(Fields.REQUIRED, requiredVector);
 			}
-			
+
 			// Add additionalProperties if present
 			if (jsonSchema.additionalProperties() != null) {
-				schemaMap = schemaMap.assoc(Strings.create("additionalProperties"), RT.cvm(jsonSchema.additionalProperties()));
+				schemaMap = schemaMap.assoc(Fields.ADDITIONAL_PROPERTIES, RT.cvm(jsonSchema.additionalProperties()));
 			}
-			
+
 			// Add $defs if present
 			if (jsonSchema.defs() != null && !jsonSchema.defs().isEmpty()) {
 				AMap<AString, ACell> defsMap = Maps.empty();
@@ -269,9 +269,9 @@ public class MCPAdapter extends AAdapter {
 					ACell value = convertToConvex(entry.getValue());
 					defsMap = defsMap.assoc(Strings.create(entry.getKey()), value);
 				}
-				schemaMap = schemaMap.assoc(Strings.create("$defs"), defsMap);
+				schemaMap = schemaMap.assoc(Fields.DEFS, defsMap);
 			}
-			
+
 			// Add definitions if present (legacy field)
 			if (jsonSchema.definitions() != null && !jsonSchema.definitions().isEmpty()) {
 				AMap<AString, ACell> definitionsMap = Maps.empty();
@@ -279,7 +279,7 @@ public class MCPAdapter extends AAdapter {
 					ACell value = convertToConvex(entry.getValue());
 					definitionsMap = definitionsMap.assoc(Strings.create(entry.getKey()), value);
 				}
-				schemaMap = schemaMap.assoc(Strings.create("definitions"), definitionsMap);
+				schemaMap = schemaMap.assoc(Fields.DEFINITIONS, definitionsMap);
 			}
 			
 			return schemaMap;

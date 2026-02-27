@@ -11,6 +11,7 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import covia.api.Fields;
 import covia.grid.Venue;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
@@ -71,7 +72,7 @@ public class UserAPI extends ACoviaAPI {
 		}
 
 		// Look up user from the user database
-		AMap<AString, ACell> userRecord = engine().getAuth().getUser(userId);
+		AMap<AString, ACell> userRecord = engine().getAuth().getUser(Strings.create(userId));
 		if (userRecord == null) {
 			buildError(ctx, 404, "User not found: " + userId);
 			return;
@@ -101,7 +102,7 @@ public class UserAPI extends ACoviaAPI {
 	 */
 	private AMap<AString, ACell> createUserDIDDocument(String userId, AMap<AString, ACell> userRecord, String baseUrl) {
 		// Use the DID from the user record if available, otherwise derive from venue DID
-		AString userDID = convex.core.lang.RT.ensureString(userRecord.get(Strings.create("did")));
+		AString userDID = convex.core.lang.RT.ensureString(userRecord.get(Fields.DID));
 		AString did;
 		if (userDID != null) {
 			did = userDID;

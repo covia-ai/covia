@@ -14,6 +14,7 @@ import convex.core.data.AString;
 import convex.core.data.Strings;
 import convex.auth.jwt.JWT;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.venue.Auth;
 import covia.venue.auth.JWKSClient;
 import covia.venue.auth.OAuthConfig;
@@ -40,9 +41,9 @@ public class AuthMiddleware {
 	private static final Logger log = LoggerFactory.getLogger(AuthMiddleware.class);
 
 	static final String CALLER_DID_ATTR = "callerDID";
-	private static final AString SUB = Strings.create("sub");
-	private static final AString KID = Strings.create("kid");
-	private static final AString EMAIL = Strings.create("email");
+	private static final AString SUB = Fields.SUB;
+	private static final AString KID = Fields.KID;
+	private static final AString EMAIL = Fields.EMAIL;
 
 	private static AccountKey venueKey;
 	private static AString venueDID;
@@ -233,7 +234,7 @@ public class AuthMiddleware {
 		for (var entry : users.entrySet()) {
 			AMap<AString, ACell> record = entry.getValue();
 			if (email.equals(record.get(EMAIL))) {
-				AString did = RT.ensureString(record.get(Strings.create("did")));
+				AString did = RT.ensureString(record.get(Fields.DID));
 				if (did != null) return did;
 			}
 		}

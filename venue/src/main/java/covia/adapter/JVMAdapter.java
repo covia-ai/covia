@@ -9,6 +9,8 @@ import java.util.concurrent.CompletableFuture;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
@@ -65,19 +67,19 @@ public class JVMAdapter extends AAdapter {
 	private CompletableFuture<ACell> handleStringConcat(ACell input) {
 		try {
 			// Extract input parameters
-			AString first = RT.ensureString(RT.getIn(input, convex.core.data.Strings.create("first")));
-			AString second = RT.ensureString(RT.getIn(input, convex.core.data.Strings.create("second")));
-			AString separator = RT.ensureString(RT.getIn(input, convex.core.data.Strings.create("separator")));
+			AString first = RT.ensureString(RT.getIn(input, Strings.create("first")));
+			AString second = RT.ensureString(RT.getIn(input, Strings.create("second")));
+			AString separator = RT.ensureString(RT.getIn(input, Strings.create("separator")));
 			
 			// Handle null values - default to empty strings
 			if (first == null) {
-				first = convex.core.data.Strings.create("");
+				first = Strings.create("");
 			}
 			if (second == null) {
-				second = convex.core.data.Strings.create("");
+				second = Strings.create("");
 			}
 			if (separator == null) {
-				separator = convex.core.data.Strings.create("");
+				separator = Strings.create("");
 			}
 			
 			// Perform string concatenation using AString.append
@@ -85,10 +87,10 @@ public class JVMAdapter extends AAdapter {
 			int count = 2; // We always have 2 input strings
 			
 			// Create output
-			AMap<AString, ACell> output = convex.core.data.Maps.empty();
+			AMap<AString, ACell> output = Maps.empty();
 			output = output.assoc(Fields.RESULT, result);
-			output = output.assoc(convex.core.data.Strings.create("inputCount"), CVMLong.create(count));
-			output = output.assoc(convex.core.data.Strings.create("totalLength"), CVMLong.create(result.count()));
+			output = output.assoc(Strings.create("inputCount"), CVMLong.create(count));
+			output = output.assoc(Strings.create("totalLength"), CVMLong.create(result.count()));
 			
 			return CompletableFuture.completedFuture(output);
 			
@@ -100,23 +102,23 @@ public class JVMAdapter extends AAdapter {
 	private CompletableFuture<ACell> handleUrlEncode(ACell input) {
 		try {
 			// Extract input parameter
-			AString inputString = RT.ensureString(RT.getIn(input, convex.core.data.Strings.create("input")));
+			AString inputString = RT.ensureString(RT.getIn(input, Fields.INPUT));
 			
 			// Handle null value - default to empty string
 			if (inputString == null) {
-				inputString = convex.core.data.Strings.create("");
+				inputString = Strings.create("");
 			}
 			
 			// Perform URL encoding
 			String javaString = inputString.toString();
 			String encoded = URLEncoder.encode(javaString, StandardCharsets.UTF_8.name());
-			AString result = convex.core.data.Strings.create(encoded);
+			AString result = Strings.create(encoded);
 			
 			// Create output
-			AMap<AString, ACell> output = convex.core.data.Maps.empty();
+			AMap<AString, ACell> output = Maps.empty();
 			output = output.assoc(Fields.RESULT, result);
-			output = output.assoc(convex.core.data.Strings.create("originalLength"), CVMLong.create(inputString.count()));
-			output = output.assoc(convex.core.data.Strings.create("encodedLength"), CVMLong.create(result.count()));
+			output = output.assoc(Strings.create("originalLength"), CVMLong.create(inputString.count()));
+			output = output.assoc(Strings.create("encodedLength"), CVMLong.create(result.count()));
 			
 			return CompletableFuture.completedFuture(output);
 			
@@ -130,23 +132,23 @@ public class JVMAdapter extends AAdapter {
 	private CompletableFuture<ACell> handleUrlDecode(ACell input) {
 		try {
 			// Extract input parameter
-			AString inputString = RT.ensureString(RT.getIn(input, convex.core.data.Strings.create("input")));
+			AString inputString = RT.ensureString(RT.getIn(input, Fields.INPUT));
 			
 			// Handle null value - default to empty string
 			if (inputString == null) {
-				inputString = convex.core.data.Strings.create("");
+				inputString = Strings.create("");
 			}
 			
 			// Perform URL decoding
 			String javaString = inputString.toString();
 			String decoded = URLDecoder.decode(javaString, StandardCharsets.UTF_8.name());
-			AString result = convex.core.data.Strings.create(decoded);
+			AString result = Strings.create(decoded);
 			
 			// Create output
-			AMap<AString, ACell> output = convex.core.data.Maps.empty();
+			AMap<AString, ACell> output = Maps.empty();
 			output = output.assoc(Fields.RESULT, result);
-			output = output.assoc(convex.core.data.Strings.create("originalLength"), CVMLong.create(inputString.count()));
-			output = output.assoc(convex.core.data.Strings.create("decodedLength"), CVMLong.create(result.count()));
+			output = output.assoc(Strings.create("originalLength"), CVMLong.create(inputString.count()));
+			output = output.assoc(Strings.create("decodedLength"), CVMLong.create(result.count()));
 			
 			return CompletableFuture.completedFuture(output);
 			

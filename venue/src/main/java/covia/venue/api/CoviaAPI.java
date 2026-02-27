@@ -777,7 +777,7 @@ public class CoviaAPI extends ACoviaAPI {
 
 		User user = engine().getVenueState().users().get(callerDID);
 		if (user == null) {
-			buildResult(ctx, 200, Maps.of("items", Strings.create("[]"), "total", 0));
+			buildResult(ctx, 200, Maps.of(Fields.ITEMS, Strings.create("[]"), Fields.TOTAL, 0));
 			return;
 		}
 

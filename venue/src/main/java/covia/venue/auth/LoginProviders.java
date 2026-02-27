@@ -23,6 +23,7 @@ import convex.core.data.Strings;
 import convex.auth.jwt.JWT;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.api.Fields;
 import covia.venue.Config;
 import covia.venue.Engine;
 import io.javalin.http.Context;
@@ -161,24 +162,24 @@ public class LoginProviders {
 			}
 
 			// 3. Create or update user in lattice
-			String userId = identity.toUserId();
+			AString userId = Strings.create(identity.toUserId());
 			AMap<AString, ACell> userRecord = engine.getAuth().getUser(userId);
 			if (userRecord == null) {
 				userRecord = Maps.empty();
 			}
 			if (identity.email != null) {
-				userRecord = userRecord.assoc(Strings.create("email"), Strings.create(identity.email));
+				userRecord = userRecord.assoc(Fields.EMAIL, Strings.create(identity.email));
 			}
 			if (identity.name != null) {
-				userRecord = userRecord.assoc(Strings.create("name"), Strings.create(identity.name));
+				userRecord = userRecord.assoc(Fields.NAME, Strings.create(identity.name));
 			}
 			userRecord = userRecord
-				.assoc(Strings.create("provider"), Strings.create(providerName))
-				.assoc(Strings.create("providerSub"), Strings.create(identity.sub));
+				.assoc(Fields.PROVIDER, Strings.create(providerName))
+				.assoc(Fields.PROVIDER_SUB, Strings.create(identity.sub));
 
 			// Set DID for user (appended to venue DID)
 			AString userDID = Strings.create(engine.getDIDString() + ":u:" + userId);
-			userRecord = userRecord.assoc(Strings.create("did"), userDID);
+			userRecord = userRecord.assoc(Fields.DID, userDID);
 			engine.getAuth().putUser(userId, userRecord);
 
 			// 4. Issue venue-signed EdDSA JWT
@@ -190,10 +191,10 @@ public class LoginProviders {
 				"exp", nowSecs + engine.getAuth().getTokenExpiry()
 			);
 			if (identity.email != null) {
-				claims = claims.assoc(Strings.create("email"), Strings.create(identity.email));
+				claims = claims.assoc(Fields.EMAIL, Strings.create(identity.email));
 			}
 			if (identity.name != null) {
-				claims = claims.assoc(Strings.create("name"), Strings.create(identity.name));
+				claims = claims.assoc(Fields.NAME, Strings.create(identity.name));
 			}
 			AString venueJwt = JWT.signPublic(claims, engine.getKeyPair());
 

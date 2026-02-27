@@ -58,7 +58,7 @@ public class ToolPage {
             
             // Extract tool information
             AString toolName = RT.ensureString(operation.get(Fields.TOOL_NAME));
-            AString opAdapter = RT.ensureString(operation.get(Strings.create("adapter")));
+            AString opAdapter = RT.ensureString(operation.get(Fields.ADAPTER));
             AString description = RT.ensureString(meta.get(Fields.DESCRIPTION));
             AString name = RT.ensureString(meta.get(Fields.NAME));
             
@@ -218,10 +218,10 @@ public class ToolPage {
         }
         
         // Check if it's a JSON Schema with properties
-        AMap<AString, ACell> properties = RT.ensureMap(schema.get(Strings.create("properties")));
+        AMap<AString, ACell> properties = RT.ensureMap(schema.get(Fields.PROPERTIES));
         if (properties == null || properties.isEmpty()) {
             // If no properties, show the schema type
-            AString type = RT.ensureString(schema.get(Strings.create("type")));
+            AString type = RT.ensureString(schema.get(Fields.TYPE));
             return div(
                 p("Type: " + (type != null ? type.toString() : "object")),
                 p("Schema: " + code(JSON.printPretty(schema).toString()))
@@ -242,11 +242,11 @@ public class ToolPage {
                     AString fieldName = entry.getKey();
                     AMap<AString, ACell> fieldSchema = RT.ensureMap(entry.getValue());
                     
-                    AString type = RT.ensureString(fieldSchema.get(Strings.create("type")));
-                    AString description = RT.ensureString(fieldSchema.get(Strings.create("description")));
-                    
+                    AString type = RT.ensureString(fieldSchema.get(Fields.TYPE));
+                    AString description = RT.ensureString(fieldSchema.get(Fields.DESCRIPTION));
+
                     // Check if field is required
-                    AVector<AString> required = RT.ensureVector(schema.get(Strings.create("required")));
+                    AVector<AString> required = RT.ensureVector(schema.get(Fields.REQUIRED));
                     boolean isRequired = required != null && required.contains(fieldName);
                     
                     return tr(
