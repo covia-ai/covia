@@ -56,7 +56,7 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | Field | Type | Description |
 |-------|------|-------------|
 | `ts` | long | Timestamp of the last write. **The merge discriminator.** Set on every write. |
-| `status` | string | `"sleeping"` \| `"running"` \| `"suspended"` \| `"terminated"` |
+| `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"` |
 | `config` | map | User-provided configuration (transition op, LLM settings, etc.) |
 | `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. |
 | `inbox` | vector | Messages awaiting processing. Drained on successful run — the timeline is the permanent record. |
@@ -152,7 +152,7 @@ Every operation atomically replaces the agent record with a new `ts`.
 
 **Trigger:** `agent:create`
 
-Writes the initial agent record: status=sleeping, config from input, state=null,
+Writes the initial agent record: status=SLEEPING, config from input, state=null,
 empty inbox, empty timeline, no error.
 
 **Idempotent:** If the agent record already exists, create is a no-op.
@@ -165,7 +165,7 @@ Reads current agent record, appends the message to `inbox`, writes agent record.
 
 The agent is not woken. The message sits in the inbox until the next run.
 
-**Fails if:** the agent does not exist, or status is `"terminated"`.
+**Fails if:** the agent does not exist, or status is `"TERMINATED"`.
 
 ### 4.3 Run — Agent Update
 
@@ -175,7 +175,7 @@ The agent is not woken. The message sits in the inbox until the next run.
 
 1. Read current agent record.
 2. If inbox is empty: no-op.
-3. Set status → `"running"`, write agent record.
+3. Set status → `"RUNNING"`, write agent record.
 4. Invoke the transition function (§3.2) with `agent-id`, current `state`,
    and `inbox`.
 5. On success:
@@ -183,11 +183,11 @@ The agent is not woken. The message sits in the inbox until the next run.
    - Append a timeline entry (op, starting state, inbox, returned `result`,
      start/end timestamps).
    - Clear `inbox`.
-   - Set status → `"sleeping"`.
+   - Set status → `"SLEEPING"`.
    - Write agent record.
 6. On error:
    - Leave `state` and `inbox` unchanged.
-   - Set status → `"suspended"`, set `error`.
+   - Set status → `"SUSPENDED"`, set `error`.
    - Write agent record.
 
 The agent update writes twice: once to mark running (step 3), once to record the
@@ -201,8 +201,8 @@ after the error is resolved and the agent is resumed.
 | Event | Mutation |
 |-------|----------|
 | **Config update** | Read agent record, update `config`, write agent record. |
-| **Terminate** | Set status → `"terminated"`, write agent record. |
-| **Clear error** | Set error → null, status → `"sleeping"`, write agent record. |
+| **Terminate** | Set status → `"TERMINATED"`, write agent record. |
+| **Clear error** | Set error → null, status → `"SLEEPING"`, write agent record. |
 
 All read-modify-write on the single value.
 
@@ -237,8 +237,8 @@ is always a state that genuinely existed on the hosting venue.
 
 ## 6. Open Questions
 
-1. **Recovery.** An agent in `"running"` status after a venue restart was mid-
-   transition. Recovery should set it to `"suspended"` (not silently resume).
+1. **Recovery.** An agent in `"RUNNING"` status after a venue restart was mid-
+   transition. Recovery should set it to `"SUSPENDED"` (not silently resume).
 
 2. **Transition function effects.** Should the output include an `actions` field
    for side effects (send messages to other agents, invoke operations)? Or should the

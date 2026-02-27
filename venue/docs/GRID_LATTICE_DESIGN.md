@@ -243,7 +243,7 @@ The runtime is the **single enforcement point** for all capability checks — la
 
 **Execution loop (runtime-managed):**
 
-The agent update sequence — create, message, and run — is defined in AGENT_LOOP.md §4. In summary: when `agent:run` is triggered, the runtime sets `status` → `"running"`, invokes the transition function with the current state and inbox, and on success clears the inbox, appends a timeline entry, and sets `status` → `"sleeping"`. On error, the inbox is preserved and the agent is suspended.
+The agent update sequence — create, message, and run — is defined in AGENT_LOOP.md §4. In summary: when `agent:run` is triggered, the runtime sets `status` → `"RUNNING"`, invokes the transition function with the current state and inbox, and on success clears the inbox, appends a timeline entry, and sets `status` → `"SLEEPING"`. On error, the inbox is preserved and the agent is suspended.
 
 The transition function is responsible for deciding what to retain in `state` — accumulated context, conversation history, pending tasks. Anything not written to state is discarded. Layers 3 and 4 are ephemeral; they exist only during execution with no persistent lattice presence.
 

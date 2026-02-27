@@ -35,10 +35,10 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_ERROR    = Strings.intern("error");
 
 	// Status constants
-	public static final AString SLEEPING   = Strings.intern("sleeping");
-	public static final AString RUNNING    = Strings.intern("running");
-	public static final AString SUSPENDED  = Strings.intern("suspended");
-	public static final AString TERMINATED = Strings.intern("terminated");
+	public static final AString SLEEPING   = Strings.intern("SLEEPING");
+	public static final AString RUNNING    = Strings.intern("RUNNING");
+	public static final AString SUSPENDED  = Strings.intern("SUSPENDED");
+	public static final AString TERMINATED = Strings.intern("TERMINATED");
 
 	private final AString agentId;
 
