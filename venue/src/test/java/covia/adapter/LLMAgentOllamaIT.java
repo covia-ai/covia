@@ -3,7 +3,9 @@ package covia.adapter;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -20,9 +22,27 @@ import covia.venue.User;
 
 /**
  * Integration test: LLMAgentAdapter against local Ollama.
- * Run manually — requires Ollama running on localhost:11434 with qwen3 model.
+ * Skipped automatically when Ollama is not running on localhost:11434.
  */
+@Tag("integration")
+@EnabledIf("isOllamaAvailable")
 public class LLMAgentOllamaIT {
+
+	static boolean isOllamaAvailable() {
+		try {
+			java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+				.connectTimeout(java.time.Duration.ofSeconds(2)).build();
+			java.net.http.HttpResponse<Void> resp = client.send(
+				java.net.http.HttpRequest.newBuilder()
+					.uri(java.net.URI.create("http://localhost:11434/api/tags"))
+					.timeout(java.time.Duration.ofSeconds(2))
+					.GET().build(),
+				java.net.http.HttpResponse.BodyHandlers.discarding());
+			return resp.statusCode() == 200;
+		} catch (Exception e) {
+			return false;
+		}
+	}
 
 	private Engine engine;
 	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");

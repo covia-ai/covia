@@ -367,6 +367,78 @@ public class EngineTest {
 		assertNotNull(errorHash, "test:error should be registered");
 	}
 
+	// ========== Secret resolution ==========
+
+	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
+	private static final AString BOB_DID = Strings.create("did:key:z6MkBob");
+
+	@Test
+	public void testResolveSecret() {
+		// Store a secret for Alice
+		User alice = venue.getVenueState().users().ensure(ALICE_DID);
+		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+		alice.secrets().store(Strings.create("OPENAI_API_KEY"), Strings.create("sk-test-123"), encKey);
+
+		// Resolve by bare name
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		String resolved = venue.resolveSecret("OPENAI_API_KEY", ctx);
+		assertEquals("sk-test-123", resolved);
+	}
+
+	@Test
+	public void testResolveSecretWithPrefix() {
+		// Store a secret for Alice
+		User alice = venue.getVenueState().users().ensure(ALICE_DID);
+		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+		alice.secrets().store(Strings.create("MY_KEY"), Strings.create("secret-value"), encKey);
+
+		// Resolve using /s/ prefix
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		String resolved = venue.resolveSecret("/s/MY_KEY", ctx);
+		assertEquals("secret-value", resolved);
+	}
+
+	@Test
+	public void testResolveSecretMissing() {
+		// Ensure user exists but has no secrets
+		venue.getVenueState().users().ensure(ALICE_DID);
+
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		assertNull(venue.resolveSecret("NONEXISTENT", ctx));
+		assertNull(venue.resolveSecret("/s/NONEXISTENT", ctx));
+	}
+
+	@Test
+	public void testResolveSecretAnonymous() {
+		// Anonymous context should return null
+		assertNull(venue.resolveSecret("OPENAI_API_KEY", RequestContext.ANONYMOUS));
+	}
+
+	@Test
+	public void testResolveSecretUserIsolation() {
+		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+
+		// Store secret for Alice
+		User alice = venue.getVenueState().users().ensure(ALICE_DID);
+		alice.secrets().store(Strings.create("MY_KEY"), Strings.create("alice-secret"), encKey);
+
+		// Bob should not see Alice's secret
+		venue.getVenueState().users().ensure(BOB_DID);
+		RequestContext bobCtx = RequestContext.of(BOB_DID);
+		assertNull(venue.resolveSecret("MY_KEY", bobCtx));
+
+		// Alice should see her own
+		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
+		assertEquals("alice-secret", venue.resolveSecret("MY_KEY", aliceCtx));
+	}
+
+	@Test
+	public void testResolveSecretNullInputs() {
+		assertNull(venue.resolveSecret(null, RequestContext.of(ALICE_DID)));
+		assertNull(venue.resolveSecret("SOME_KEY", null));
+		assertNull(venue.resolveSecret("/s/", RequestContext.of(ALICE_DID))); // empty name after prefix
+	}
+
 	@Test
 	public void testDLFSStorageConfig() throws IOException {
 		// Create config with DLFS storage

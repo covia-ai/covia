@@ -90,7 +90,7 @@ public class Engine {
 	/** Authentication and user management */
 	protected Auth auth;
 
-	/** Authorization / access control */
+	/** Authorisation / access control */
 	protected AccessControl accessControl;
 
 	/** Job lifecycle manager (submission, queries, persistence, recovery) */
@@ -774,5 +774,39 @@ public class Engine {
 		return jobManager;
 	}
 
+	// ========== Secret resolution ==========
+
+	/**
+	 * Resolves a secret from the caller's secret store.
+	 *
+	 * <p>Accepts both {@code "/s/NAME"} and bare {@code "NAME"} formats.
+	 * The caller's identity is taken from the {@link RequestContext} for
+	 * access control — only the caller's own secrets are accessible.</p>
+	 *
+	 * @param secretRef Secret name or "/s/NAME" reference
+	 * @param ctx Request context (caller identity for access control)
+	 * @return Decrypted plaintext, or null if not found or not authorised
+	 */
+	public String resolveSecret(String secretRef, RequestContext ctx) {
+		if (secretRef == null || ctx == null) return null;
+		AString callerDID = ctx.getCallerDID();
+		if (callerDID == null) return null;
+
+		// Strip /s/ prefix if present
+		String name = secretRef.startsWith("/s/") ? secretRef.substring(3) : secretRef;
+		if (name.isEmpty()) return null;
+
+		User user = venueState.users().get(callerDID);
+		if (user == null) return null;
+
+		try {
+			byte[] encKey = SecretStore.deriveKey(keyPair);
+			AString value = user.secrets().decrypt(Strings.create(name), encKey);
+			return (value != null) ? value.toString() : null;
+		} catch (Exception e) {
+			log.debug("Could not resolve secret '{}': {}", name, e.getMessage());
+			return null;
+		}
+	}
 
 }

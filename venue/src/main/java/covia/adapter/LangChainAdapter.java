@@ -87,9 +87,21 @@ public class LangChainAdapter extends AAdapter {
         SystemMessage systemMessage = (systemPromptParam != null) ?
             SystemMessage.from(systemPromptParam.toString()) : SYSTEM_MESSAGE;
 
-        // Get API key parameter
-        AString apiKeyParam = RT.ensureString(RT.getIn(input, "apiKey"));
-        final String apiKey = (apiKeyParam != null) ? apiKeyParam.toString() : System.getenv("OPENAI_API_KEY");
+        // Resolve API key: input field → secret store → operation metadata secretKey
+        final String apiKey;
+        {
+            AString apiKeyParam = RT.ensureString(RT.getIn(input, "apiKey"));
+            String resolved = null;
+            if (apiKeyParam != null) {
+                resolved = engine.resolveSecret(apiKeyParam.toString(), ctx);
+                if (resolved == null) resolved = apiKeyParam.toString(); // plaintext fallback
+            }
+            if (resolved == null) {
+                AString secretName = RT.ensureString(RT.getIn(meta, "operation", "secretKey"));
+                if (secretName != null) resolved = engine.resolveSecret(secretName.toString(), ctx);
+            }
+            apiKey = resolved;
+        }
 
         if ("ollama".equals(provider)) {
         	return CompletableFuture.supplyAsync(()->{

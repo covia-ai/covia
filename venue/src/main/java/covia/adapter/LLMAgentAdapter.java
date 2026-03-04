@@ -20,8 +20,6 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.AgentState;
 import covia.venue.RequestContext;
-import covia.venue.SecretStore;
-import covia.venue.User;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
@@ -64,10 +62,12 @@ import dev.langchain4j.model.chat.response.ChatResponse;
  * </ul>
  *
  * <h3>API key resolution</h3>
+ * <p>Uses {@link covia.venue.Engine#resolveSecret(String, RequestContext)}:</p>
  * <ol>
- *   <li>Optional {@code apiKey} in the transition function input (testing only — plaintext in results!)</li>
- *   <li>User's secret store, using the name from operation metadata {@code operation.secretKey}
- *       (default: {@code "OPENAI_API_KEY"})</li>
+ *   <li>Optional {@code apiKey} in input — resolved as a secret reference
+ *       ({@code "/s/NAME"} or bare name), falling back to plaintext</li>
+ *   <li>Operation metadata {@code operation.secretKey} — resolved from
+ *       the caller's secret store</li>
  * </ol>
  */
 public class LLMAgentAdapter extends AAdapter {
@@ -135,8 +135,7 @@ public class LLMAgentAdapter extends AAdapter {
 		job.setStatus(covia.grid.Status.STARTED);
 
 		CompletableFuture.supplyAsync(() -> {
-			AString callerDID = ctx.getCallerDID();
-			return processChat(callerDID, meta, input);
+			return processChat(ctx, meta, input);
 		}, VIRTUAL_EXECUTOR)
 		.thenAccept(job::completeWith)
 		.exceptionally(e -> {
@@ -153,18 +152,15 @@ public class LLMAgentAdapter extends AAdapter {
 	 * <p>LLM configuration is read from {@code state.config} (set at agent creation,
 	 * preserved across runs). The agent record's framework config is not used.</p>
 	 *
-	 * @param callerDID Caller DID for secret store access
+	 * @param ctx Request context (caller identity for secret store access)
 	 * @param meta Operation metadata (from chat.json) — contains secretKey
 	 * @param input Transition function contract: { agentId, state, messages, apiKey? }
 	 * @return Transition function output: { state, result }
 	 */
 	@SuppressWarnings("unchecked")
-	ACell processChat(AString callerDID, ACell meta, ACell input) {
+	ACell processChat(RequestContext ctx, ACell meta, ACell input) {
 		ACell state = RT.getIn(input, AgentState.KEY_STATE);
 		AVector<ACell> messages = (AVector<ACell>) RT.getIn(input, Fields.MESSAGES);
-
-		// Look up user for secret access
-		User user = resolveUser(callerDID);
 
 		// Read LLM config from state (set at creation, preserved across runs)
 		AMap<AString, ACell> config = extractConfig(state);
@@ -173,7 +169,7 @@ public class LLMAgentAdapter extends AAdapter {
 		String provider = getConfigString(config, K_PROVIDER, "openai");
 		String model = getConfigString(config, K_MODEL, "gpt-4o-mini");
 		String systemPrompt = getConfigString(config, K_SYSTEM_PROMPT, null);
-		String apiKey = resolveApiKey(meta, input, user);
+		String apiKey = resolveApiKey(meta, input, ctx);
 		String url = getConfigString(config, K_URL, null);
 
 		// Reconstruct conversation history from state
@@ -244,19 +240,6 @@ public class LLMAgentAdapter extends AAdapter {
 	// ========== Internal helpers ==========
 
 	/**
-	 * Resolves the User from the lattice, or null if not found.
-	 */
-	private User resolveUser(AString callerDID) {
-		if (callerDID == null || engine == null) return null;
-		try {
-			return engine.getVenueState().users().get(callerDID);
-		} catch (Exception e) {
-			log.warn("Failed to resolve user {}", callerDID, e);
-			return null;
-		}
-	}
-
-	/**
 	 * Extracts the LLM config map from agent state.
 	 *
 	 * <p>Config is stored at {@code state.config} — set at agent creation as part
@@ -271,47 +254,38 @@ public class LLMAgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Resolves the API key from input or the user's secret store.
+	 * Resolves the API key from input or the user's secret store via
+	 * {@link covia.venue.Engine#resolveSecret(String, RequestContext)}.
 	 *
 	 * <p>Resolution order:</p>
 	 * <ol>
-	 *   <li>Optional {@code apiKey} in input (testing only — will be plaintext in results)</li>
-	 *   <li>User's secret store, name from {@code operation.secretKey} in metadata</li>
+	 *   <li>Optional {@code apiKey} in input — resolved as a secret reference
+	 *       ({@code "/s/NAME"} or bare name), falling back to plaintext</li>
+	 *   <li>Operation metadata {@code operation.secretKey} — resolved from
+	 *       the caller's secret store</li>
 	 * </ol>
 	 *
 	 * @param meta Operation metadata (contains {@code operation.secretKey})
-	 * @param input Transition function input (may contain {@code apiKey} override)
-	 * @param user User for secret store access
+	 * @param input Transition function input (may contain {@code apiKey})
+	 * @param ctx Request context (caller identity for secret store access)
 	 * @return API key string, or null if not available
 	 */
-	private String resolveApiKey(ACell meta, ACell input, User user) {
-		// 1. Optional input override (testing)
+	private String resolveApiKey(ACell meta, ACell input, RequestContext ctx) {
+		// 1. Input apiKey — try secret store first, fall back to plaintext
 		AString inputKey = RT.ensureString(RT.getIn(input, K_API_KEY));
-		if (inputKey != null) return inputKey.toString();
+		if (inputKey != null) {
+			String resolved = engine.resolveSecret(inputKey.toString(), ctx);
+			if (resolved != null) return resolved;
+			return inputKey.toString(); // plaintext fallback
+		}
 
-		// 2. Secret store, name from operation metadata
+		// 2. Operation metadata secretKey — resolve from caller's secret store
 		AString secretName = RT.ensureString(RT.getIn(meta, "operation", K_SECRET_KEY));
 		if (secretName != null) {
-			String decrypted = decryptSecret(user, secretName);
-			if (decrypted != null) return decrypted;
+			return engine.resolveSecret(secretName.toString(), ctx);
 		}
 
 		return null;
-	}
-
-	/**
-	 * Decrypts a secret from the user's secret store, or null if unavailable.
-	 */
-	private String decryptSecret(User user, AString secretName) {
-		if (user == null || engine == null) return null;
-		try {
-			byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
-			AString value = user.secrets().decrypt(secretName, encKey);
-			return (value != null) ? value.toString() : null;
-		} catch (Exception e) {
-			log.debug("Could not decrypt secret '{}': {}", secretName, e.getMessage());
-			return null;
-		}
 	}
 
 	/**

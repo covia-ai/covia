@@ -19,6 +19,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.AgentState;
 import covia.venue.Engine;
+import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
 import dev.langchain4j.data.message.AiMessage;
@@ -109,7 +110,7 @@ public class LLMAgentAdapterTest {
 			)
 		);
 
-		ACell output = adapter.processChat(ALICE_DID, null, input);
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), null, input);
 		assertNotNull(output);
 
 		// Verify output structure
@@ -143,7 +144,7 @@ public class LLMAgentAdapterTest {
 				Maps.of("content", Strings.create("first message"))
 			)
 		);
-		ACell output1 = adapter.processChat(ALICE_DID, null, input1);
+		ACell output1 = adapter.processChat(RequestContext.of(ALICE_DID), null, input1);
 		ACell state1 = RT.getIn(output1, AgentState.KEY_STATE);
 
 		// Second turn — pass state from first turn
@@ -154,7 +155,7 @@ public class LLMAgentAdapterTest {
 				Maps.of("content", Strings.create("second message"))
 			)
 		);
-		ACell output2 = adapter.processChat(ALICE_DID, null, input2);
+		ACell output2 = adapter.processChat(RequestContext.of(ALICE_DID), null, input2);
 		ACell state2 = RT.getIn(output2, AgentState.KEY_STATE);
 
 		// Verify history grew
@@ -181,7 +182,7 @@ public class LLMAgentAdapterTest {
 			)
 		);
 
-		ACell output = adapter.processChat(ALICE_DID, null, input);
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), null, input);
 		AVector<ACell> history = LLMAgentAdapter.extractHistory(
 			RT.getIn(output, AgentState.KEY_STATE));
 
@@ -219,7 +220,7 @@ public class LLMAgentAdapterTest {
 			)
 		);
 
-		ACell output = adapter.processChat(ALICE_DID, null, input);
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), null, input);
 		AVector<ACell> history = LLMAgentAdapter.extractHistory(
 			RT.getIn(output, AgentState.KEY_STATE));
 
@@ -396,7 +397,7 @@ public class LLMAgentAdapterTest {
 			)
 		);
 
-		ACell output = adapter.processChat(ALICE_DID, null, input);
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), null, input);
 		assertNotNull(output);
 
 		// The custom system prompt should be in the history
@@ -430,7 +431,7 @@ public class LLMAgentAdapterTest {
 			)
 		);
 
-		ACell output = adapter.processChat(ALICE_DID, null, input);
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), null, input);
 		assertNotNull(output);
 
 		// Should use default system prompt
@@ -479,7 +480,7 @@ public class LLMAgentAdapterTest {
 		);
 
 		// test provider ignores the key, but the resolution path runs without error
-		ACell output = adapter.processChat(ALICE_DID, meta, input);
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), meta, input);
 		assertNotNull(output);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
 		assertEquals("test secret", response.toString());
@@ -500,7 +501,7 @@ public class LLMAgentAdapterTest {
 		);
 
 		// Input apiKey takes priority — test provider doesn't use it but path runs
-		ACell output = adapter.processChat(ALICE_DID, null, input);
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), null, input);
 		assertNotNull(output);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
 		assertEquals("test override", response.toString());
@@ -527,7 +528,7 @@ public class LLMAgentAdapterTest {
 		);
 
 		// test provider doesn't need an API key, so this succeeds
-		ACell output = adapter.processChat(ALICE_DID, meta, input);
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), meta, input);
 		assertNotNull(output);
 	}
 
