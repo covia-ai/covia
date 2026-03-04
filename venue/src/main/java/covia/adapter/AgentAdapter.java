@@ -86,7 +86,7 @@ public class AgentAdapter extends AAdapter {
 					handleMessage(job, input, callerDID);
 					break;
 				case "run":
-					handleRun(job, input, callerDID);
+					handleRun(job, input, ctx);
 					break;
 				default:
 					job.fail("Unknown agent operation: " + op);
@@ -166,7 +166,7 @@ public class AgentAdapter extends AAdapter {
 	 *
 	 * <p>Follows the agent update sequence from AGENT_LOOP.md §4.3.</p>
 	 */
-	private void handleRun(Job job, ACell input, AString callerDID) {
+	private void handleRun(Job job, ACell input, RequestContext ctx) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) {
 			job.fail("agentId is required");
@@ -179,6 +179,7 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
+		AString callerDID = ctx.getCallerDID();
 		job.setStatus(Status.STARTED);
 
 		CompletableFuture.runAsync(() -> {
@@ -221,7 +222,7 @@ public class AgentAdapter extends AAdapter {
 				);
 
 				Job transitionJob = engine.jobs().invokeOperation(
-					transitionOp, transitionInput, callerDID);
+					transitionOp, transitionInput, ctx);
 				ACell transitionResult = transitionJob.awaitResult();
 
 				// Step 5: On success — update record atomically

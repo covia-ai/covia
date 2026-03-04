@@ -163,7 +163,7 @@ public class AccessControlTest {
 		// callerDID is required — null should throw IllegalArgumentException
 		assertThrows(IllegalArgumentException.class,
 			() -> engine.jobs().invokeOperation(
-				Strings.create("test:echo"), Maps.of("message", "hello"), (AString) null));
+				Strings.create("test:echo"), Maps.of("message", "hello"), RequestContext.ANONYMOUS));
 	}
 
 	// ========== Engine Integration: Job Scoping ==========
@@ -194,9 +194,8 @@ public class AccessControlTest {
 	@Test
 	public void testInternalSeesVenueJobs() {
 		// Internal requests see the venue's own DID jobs
-		AString venueDID = engine.getDIDString();
 		engine.jobs().invokeOperation(
-			Strings.create("test:echo"), Maps.of("message", "venue-internal"), venueDID);
+			Strings.create("test:echo"), Maps.of("message", "venue-internal"), RequestContext.INTERNAL);
 
 		var venueJobs = engine.jobs().getJobs(RequestContext.INTERNAL);
 		assertTrue(venueJobs.count() >= 1, "Internal should see venue's own jobs");
@@ -242,9 +241,8 @@ public class AccessControlTest {
 	@Test
 	public void testVenueJobInvisibleToExternalUser() {
 		// Create a job with the venue's own DID (internal/programmatic)
-		AString venueDID = engine.getDIDString();
 		Job venueJob = engine.jobs().invokeOperation(
-			Strings.create("test:echo"), Maps.of("message", "internal"), venueDID);
+			Strings.create("test:echo"), Maps.of("message", "internal"), RequestContext.INTERNAL);
 
 		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
 

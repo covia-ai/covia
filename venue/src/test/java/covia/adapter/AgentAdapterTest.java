@@ -19,6 +19,7 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
+import covia.venue.RequestContext;
 import covia.venue.User;
 import covia.venue.VenueState;
 
@@ -45,7 +46,7 @@ public class AgentAdapterTest {
 			Fields.AGENT_ID, Strings.create("my-assistant")
 		);
 		Job job = engine.jobs().invokeOperation(
-			Strings.create("agent:create"), input, ALICE_DID);
+			Strings.create("agent:create"), input, RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult();
 
 		assertNotNull(result, "Create should return a result");
@@ -66,7 +67,7 @@ public class AgentAdapterTest {
 			Fields.CONFIG, config
 		);
 		Job job = engine.jobs().invokeOperation(
-			Strings.create("agent:create"), input, ALICE_DID);
+			Strings.create("agent:create"), input, RequestContext.of(ALICE_DID));
 		job.awaitResult();
 
 		// Verify config is stored in lattice
@@ -82,7 +83,7 @@ public class AgentAdapterTest {
 	public void testCreateMissingAgentId() {
 		ACell input = Maps.of("foo", Strings.create("bar"));
 		Job job = engine.jobs().invokeOperation(
-			Strings.create("agent:create"), input, ALICE_DID);
+			Strings.create("agent:create"), input, RequestContext.of(ALICE_DID));
 
 		// Should fail because agentId is missing
 		try {
@@ -101,12 +102,12 @@ public class AgentAdapterTest {
 
 		// First create
 		Job job1 = engine.jobs().invokeOperation(
-			Strings.create("agent:create"), input, ALICE_DID);
+			Strings.create("agent:create"), input, RequestContext.of(ALICE_DID));
 		job1.awaitResult();
 
 		// Second create should succeed (no-op)
 		Job job2 = engine.jobs().invokeOperation(
-			Strings.create("agent:create"), input, ALICE_DID);
+			Strings.create("agent:create"), input, RequestContext.of(ALICE_DID));
 		ACell result2 = job2.awaitResult();
 
 		assertNotNull(result2);
@@ -122,7 +123,7 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation(
 			Strings.create("agent:create"),
 			Maps.of(Fields.AGENT_ID, Strings.create("msg-agent")),
-			ALICE_DID).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult();
 
 		// Send a message
 		ACell msgInput = Maps.of(
@@ -130,7 +131,7 @@ public class AgentAdapterTest {
 			Fields.MESSAGE, Maps.of("content", Strings.create("hello"))
 		);
 		Job msgJob = engine.jobs().invokeOperation(
-			Strings.create("agent:message"), msgInput, ALICE_DID);
+			Strings.create("agent:message"), msgInput, RequestContext.of(ALICE_DID));
 		ACell result = msgJob.awaitResult();
 
 		assertNotNull(result);
@@ -150,14 +151,14 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation(
 			Strings.create("agent:create"),
 			Maps.of(Fields.AGENT_ID, Strings.create("other-agent")),
-			ALICE_DID).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult();
 
 		ACell msgInput = Maps.of(
 			Fields.AGENT_ID, Strings.create("ghost-agent"),
 			Fields.MESSAGE, Maps.of("content", Strings.create("hello"))
 		);
 		Job msgJob = engine.jobs().invokeOperation(
-			Strings.create("agent:message"), msgInput, ALICE_DID);
+			Strings.create("agent:message"), msgInput, RequestContext.of(ALICE_DID));
 
 		try {
 			msgJob.awaitResult();
@@ -173,7 +174,7 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation(
 			Strings.create("agent:create"),
 			Maps.of(Fields.AGENT_ID, Strings.create("term-agent")),
-			ALICE_DID).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult();
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent(Strings.create("term-agent"));
@@ -185,7 +186,7 @@ public class AgentAdapterTest {
 			Fields.MESSAGE, Maps.of("content", Strings.create("hello"))
 		);
 		Job msgJob = engine.jobs().invokeOperation(
-			Strings.create("agent:message"), msgInput, ALICE_DID);
+			Strings.create("agent:message"), msgInput, RequestContext.of(ALICE_DID));
 
 		try {
 			msgJob.awaitResult();
@@ -203,7 +204,7 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation(
 			Strings.create("agent:create"),
 			Maps.of(Fields.AGENT_ID, Strings.create("echo-agent")),
-			ALICE_DID).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult();
 
 		// Send 2 messages
 		for (int i = 0; i < 2; i++) {
@@ -213,7 +214,7 @@ public class AgentAdapterTest {
 					Fields.AGENT_ID, Strings.create("echo-agent"),
 					Fields.MESSAGE, Maps.of("content", Strings.create("msg-" + i))
 				),
-				ALICE_DID).awaitResult();
+				RequestContext.of(ALICE_DID)).awaitResult();
 		}
 
 		// Run with test:echo transition
@@ -223,7 +224,7 @@ public class AgentAdapterTest {
 				Fields.AGENT_ID, Strings.create("echo-agent"),
 				Fields.OPERATION, Strings.create("test:echo")
 			),
-			ALICE_DID);
+			RequestContext.of(ALICE_DID));
 		ACell result = runJob.awaitResult();
 
 		assertNotNull(result);
@@ -254,7 +255,7 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation(
 			Strings.create("agent:create"),
 			Maps.of(Fields.AGENT_ID, Strings.create("empty-agent")),
-			ALICE_DID).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult();
 
 		// Run with no messages — should be a no-op
 		Job runJob = engine.jobs().invokeOperation(
@@ -263,7 +264,7 @@ public class AgentAdapterTest {
 				Fields.AGENT_ID, Strings.create("empty-agent"),
 				Fields.OPERATION, Strings.create("test:echo")
 			),
-			ALICE_DID);
+			RequestContext.of(ALICE_DID));
 		ACell result = runJob.awaitResult();
 
 		assertNotNull(result);
@@ -278,27 +279,27 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation(
 			Strings.create("agent:create"),
 			Maps.of(Fields.AGENT_ID, Strings.create("shared-name")),
-			ALICE_DID).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult();
 		engine.jobs().invokeOperation(
 			Strings.create("agent:message"),
 			Maps.of(
 				Fields.AGENT_ID, Strings.create("shared-name"),
 				Fields.MESSAGE, Maps.of("from", Strings.create("alice"))
 			),
-			ALICE_DID).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult();
 
 		// Bob creates same-named agent and sends message
 		engine.jobs().invokeOperation(
 			Strings.create("agent:create"),
 			Maps.of(Fields.AGENT_ID, Strings.create("shared-name")),
-			BOB_DID).awaitResult();
+			RequestContext.of(BOB_DID)).awaitResult();
 		engine.jobs().invokeOperation(
 			Strings.create("agent:message"),
 			Maps.of(
 				Fields.AGENT_ID, Strings.create("shared-name"),
 				Fields.MESSAGE, Maps.of("from", Strings.create("bob"))
 			),
-			BOB_DID).awaitResult();
+			RequestContext.of(BOB_DID)).awaitResult();
 
 		// Each user's agent should have exactly 1 message
 		User alice = engine.getVenueState().users().get(ALICE_DID);

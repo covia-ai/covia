@@ -101,7 +101,7 @@ public class EngineTest {
 	public void testAdapterOperation() {
 		// Test echo operation
 		ACell input=Maps.of("message",Strings.create("Hello World"));
-		Job job=venue.jobs().invokeOperation(Strings.create("test:echo"),input, venue.getDIDString());
+		Job job=venue.jobs().invokeOperation(Strings.create("test:echo"),input, RequestContext.INTERNAL);
 		AMap<AString, ACell> status = job.getData();
 
 		// Get job ID from status
@@ -124,7 +124,7 @@ public class EngineTest {
 	public void testAdapterError() {
 		// Test error operation
 		ACell input=Maps.of("message",Strings.create("Test Error"));
-		Job job=venue.jobs().invokeOperation(Strings.create("test:random"),input, venue.getDIDString());
+		Job job=venue.jobs().invokeOperation(Strings.create("test:random"),input, RequestContext.INTERNAL);
 		AMap<AString, ACell> status = job.getData();
 
 		// Get job ID from status
@@ -143,7 +143,7 @@ public class EngineTest {
 	public void testRandomOperation() {
 		// Test random operation with 32 bytes
 		ACell input = Maps.of("length", Strings.create("32"));
-		Job job= venue.jobs().invokeOperation(randomOpID.toCVMHexString(), input, venue.getDIDString());
+		Job job= venue.jobs().invokeOperation(randomOpID.toCVMHexString(), input, RequestContext.INTERNAL);
 		ACell status =job.getData();
 				
 		// Get job ID from status
@@ -170,7 +170,7 @@ public class EngineTest {
 	// @Test
 	public void testQwen() {
 		ACell input = Maps.of("prompt", "What is the capital of France?");
-		ACell result = venue.jobs().invokeOperation(qwenOpId.toCVMHexString(), input, venue.getDIDString()).awaitResult();
+		ACell result = venue.jobs().invokeOperation(qwenOpId.toCVMHexString(), input, RequestContext.INTERNAL).awaitResult();
 		result=waitForJobCompletion(RT.getIn(result, "id"), 5000);
 		if (Status.COMPLETE.equals(RT.getIn(result, "status"))) {
 			// OK
@@ -251,7 +251,7 @@ public class EngineTest {
 	@Test
 	public void testAwaitResultSuccess() {
 		ACell input = Maps.of("message", Strings.create("Hello"));
-		Job job = venue.jobs().invokeOperation(Strings.create("test:echo"), input, venue.getDIDString());
+		Job job = venue.jobs().invokeOperation(Strings.create("test:echo"), input, RequestContext.INTERNAL);
 
 		// awaitResult should complete and return the result
 		ACell result = job.awaitResult();
@@ -266,7 +266,7 @@ public class EngineTest {
 	@Test
 	public void testAwaitResultFailure() {
 		ACell input = Maps.of("message", Strings.create("This should fail"));
-		Job job = venue.jobs().invokeOperation(Strings.create("test:error"), input, venue.getDIDString());
+		Job job = venue.jobs().invokeOperation(Strings.create("test:error"), input, RequestContext.INTERNAL);
 
 		// awaitResult should throw JobFailedException, not hang
 		assertThrows(JobFailedException.class, () -> job.awaitResult());
@@ -279,7 +279,7 @@ public class EngineTest {
 	@Test
 	public void testAwaitResultAfterCompletion() throws Exception {
 		ACell input = Maps.of("message", Strings.create("Fail fast"));
-		Job job = venue.jobs().invokeOperation(Strings.create("test:error"), input, venue.getDIDString());
+		Job job = venue.jobs().invokeOperation(Strings.create("test:error"), input, RequestContext.INTERNAL);
 
 		// Wait a bit to ensure the async task has completed
 		Thread.sleep(100);
@@ -336,7 +336,7 @@ public class EngineTest {
 		// Invoke using a DID URL should work the same as hex hash
 		AString didUrl = Strings.create(venue.getDIDString() + "/a/" + echoOpId.toHexString());
 		ACell input = Maps.of("message", Strings.create("Hello via DID"));
-		Job job = venue.jobs().invokeOperation(didUrl, input, venue.getDIDString());
+		Job job = venue.jobs().invokeOperation(didUrl, input, RequestContext.INTERNAL);
 
 		ACell result = job.awaitResult();
 		assertNotNull(result);
@@ -347,7 +347,7 @@ public class EngineTest {
 	public void testInvokeViaOperationName() {
 		// Invoke using operation name should resolve and work
 		ACell input = Maps.of("message", Strings.create("Hello via name"));
-		Job job = venue.jobs().invokeOperation(Strings.create("test:echo"), input, venue.getDIDString());
+		Job job = venue.jobs().invokeOperation(Strings.create("test:echo"), input, RequestContext.INTERNAL);
 
 		ACell result = job.awaitResult();
 		assertNotNull(result);

@@ -62,7 +62,7 @@ public class Orchestrator extends AAdapter {
 		final ACell resultSpec;
 		final BlockingQueue<SubTask> completionQueue;
 		final ACell orchInput;
-		final AString callerDID;
+		final RequestContext ctx;
 		ACell orchOutput=null;
 
 		public Orchestration(Job job, RequestContext ctx, ACell input, AVector<?> steps, ACell resultSpec) {
@@ -70,7 +70,7 @@ public class Orchestrator extends AAdapter {
 			this.jobID=job.getID();
 			this.steps=steps;
 			this.orchInput=input;
-			this.callerDID=ctx.getCallerDID();
+			this.ctx=ctx;
 			this.n=Utils.checkedInt(steps.count());
 			completionQueue=new ArrayBlockingQueue<>(n);
 			this.resultSpec=resultSpec;
@@ -260,7 +260,7 @@ public class Orchestrator extends AAdapter {
 						Venue venue = Grid.connect(venueSpec.toString());
 						subJob = venue.invoke(opId.toString(), input).join();
 					} else {
-						subJob = engine.jobs().invokeOperation(opId, input, callerDID);
+						subJob = engine.jobs().invokeOperation(opId, input, ctx);
 					}
 
 					output=subJob.awaitResult();

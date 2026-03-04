@@ -18,6 +18,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.AgentState;
 import covia.venue.Engine;
+import covia.venue.RequestContext;
 import covia.venue.User;
 
 /**
@@ -69,7 +70,7 @@ public class LLMAgentOllamaIT {
 				Fields.AGENT_ID, Strings.create("ollama-agent"),
 				AgentState.KEY_STATE, initialState
 			),
-			ALICE_DID).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult();
 
 		// Send a message
 		engine.jobs().invokeOperation(
@@ -78,7 +79,7 @@ public class LLMAgentOllamaIT {
 				Fields.AGENT_ID, Strings.create("ollama-agent"),
 				Fields.MESSAGE, Maps.of("content", Strings.create("What is the capital of France?"))
 			),
-			ALICE_DID).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult();
 
 		// Run with llmagent:chat
 		Job runJob = engine.jobs().invokeOperation(
@@ -87,7 +88,7 @@ public class LLMAgentOllamaIT {
 				Fields.AGENT_ID, Strings.create("ollama-agent"),
 				Fields.OPERATION, Strings.create("llmagent:chat")
 			),
-			ALICE_DID);
+			RequestContext.of(ALICE_DID));
 		ACell result = runJob.awaitResult();
 
 		assertNotNull(result);
@@ -122,7 +123,7 @@ public class LLMAgentOllamaIT {
 				Fields.AGENT_ID, Strings.create("ollama-agent"),
 				Fields.MESSAGE, Maps.of("content", Strings.create("And what is its population?"))
 			),
-			ALICE_DID).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult();
 
 		Job run2 = engine.jobs().invokeOperation(
 			Strings.create("agent:run"),
@@ -130,7 +131,7 @@ public class LLMAgentOllamaIT {
 				Fields.AGENT_ID, Strings.create("ollama-agent"),
 				Fields.OPERATION, Strings.create("llmagent:chat")
 			),
-			ALICE_DID);
+			RequestContext.of(ALICE_DID));
 		run2.awaitResult();
 
 		// History should now be system + user1 + assistant1 + user2 + assistant2 = 5

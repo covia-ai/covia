@@ -89,78 +89,42 @@ public class JobManager {
 	// ========== Job Invocation ==========
 
 	/**
-	 * Invoke an operation given a reference with request context.
-	 */
-	public Job invokeOperation(AString ref, ACell input, RequestContext ctx) {
-		return invokeOperation(ref, input, ctx.getCallerDID());
-	}
-
-	/**
 	 * Invoke an operation given a reference. Supports hex hash, DID URL,
-	 * operation name, and adapter:operation strings. The reference is always
-	 * resolved to full metadata before dispatching to the adapter.
+	 * operation name, and adapter:operation strings. Resolves the reference
+	 * to metadata, handles remote delegation, then calls the canonical
+	 * {@link #invokeOperation(AMap, ACell, RequestContext)}.
+	 *
 	 * @param ref Operation reference (AString)
 	 * @param input Input parameters
-	 * @param callerDID Caller DID string (required, non-null)
+	 * @param ctx Request context (caller identity)
 	 * @return Job tracking the execution
 	 */
-	public Job invokeOperation(AString ref, ACell input, AString callerDID) {
+	public Job invokeOperation(AString ref, ACell input, RequestContext ctx) {
 		if (ref == null) throw new IllegalArgumentException("Operation must be specified");
-		if (callerDID == null) throw new IllegalArgumentException("callerDID is required");
 
-		// Resolve the operation reference (hex hash, DID URL, or operation name)
 		Asset asset = assetResolver.apply(ref);
 		if (asset == null) {
 			throw new IllegalArgumentException("Cannot resolve operation: " + ref);
 		}
-		return invokeOperation(asset, input, callerDID);
-	}
 
-	/**
-	 * Invoke an operation given a resolved Asset. If the asset has a remote venue
-	 * reference, delegates to the remote venue via asset.invoke().
-	 * @param asset The operation asset
-	 * @param input Input parameters
-	 * @param callerDID Caller DID string (required, non-null)
-	 * @return Job tracking the execution
-	 */
-	public Job invokeOperation(Asset asset, ACell input, AString callerDID) {
-		if (asset == null) throw new IllegalArgumentException("Asset must be specified");
-		if (callerDID == null) throw new IllegalArgumentException("callerDID is required");
-
-		// Ensure we have an Operation (not a plain Asset)
 		Operation op = Operation.from(asset);
 		if (op == null) {
 			throw new IllegalArgumentException("Asset is not an operation: " + asset.getID());
 		}
 
-		// Check for remote operation — delegate to the operation's venue
+		// Remote delegation
 		Venue opVenue = op.getVenue();
 		if (opVenue != null && !(opVenue instanceof LocalVenue)) {
 			return op.invoke(input).join();
 		}
 
-		// Local operation — dispatch via adapter
-		AMap<AString, ACell> meta = op.meta();
-		String adapterName = AAdapter.getAdapterName(meta);
-		if (adapterName == null) {
-			throw new IllegalArgumentException("Operation metadata missing operation.adapter: " + asset.getID());
-		}
-		AAdapter adapter = adapterLookup.apply(adapterName);
-		if (adapter == null) {
-			throw new IllegalStateException("Adapter not available: " + adapterName);
-		}
-
-		RequestContext ctx = RequestContext.of(callerDID);
-		Job job = submitJob(op, meta, input, callerDID);
-		adapter.invoke(job, ctx, meta, input);
-		return job;
+		// Local — delegate to canonical
+		return invokeOperation(op.meta(), input, ctx);
 	}
 
 	/**
-	 * Invoke an operation given literal metadata. Skips resolution — uses the
-	 * metadata map directly. The adapter name is extracted from
-	 * {@code meta.operation.adapter}.
+	 * Invoke an operation given metadata. This is the canonical dispatch path:
+	 * resolves the adapter, creates a job, and invokes the adapter.
 	 *
 	 * @param meta Operation metadata (must contain operation.adapter)
 	 * @param input Input parameters
@@ -181,8 +145,8 @@ public class JobManager {
 			throw new IllegalStateException("Adapter not available: " + adapterName);
 		}
 
-		AString adapterOp = RT.ensureString(RT.getIn(meta, "operation", "adapter"));
-		Job job = submitJob(adapterOp, meta, input, null, callerDID);
+		AString opID = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER));
+		Job job = submitJob(opID, meta, input, callerDID);
 		adapter.invoke(job, ctx, meta, input);
 		return job;
 	}
@@ -213,19 +177,32 @@ public class JobManager {
 		return map;
 	}
 
-	// ========== Job Submission ==========
-
 	/**
-	 * Submit a Job for a resolved Operation.
+	 * Returns true if the stored input contains any redacted secret values.
 	 */
-	private Job submitJob(Operation operation, AMap<AString, ACell> meta, ACell input, AString callerDID) {
-		return submitJob(operation.getID().toCVMHexString(), meta, input, operation, callerDID);
+	@SuppressWarnings("unchecked")
+	private static boolean hasRedactedSecrets(ACell input, AMap<AString, ACell> meta) {
+		if (!(input instanceof AMap)) return false;
+		ACell sf = RT.getIn(meta, Fields.OPERATION, K_SECRET_FIELDS);
+		if (!(sf instanceof AVector)) return false;
+
+		AMap<AString, ACell> map = (AMap<AString, ACell>) input;
+		AVector<ACell> secretFields = (AVector<ACell>) sf;
+		for (long i = 0; i < secretFields.count(); i++) {
+			AString field = RT.ensureString(secretFields.get(i));
+			if (field != null && Fields.HIDDEN.equals(map.get(field))) {
+				return true;
+			}
+		}
+		return false;
 	}
+
+	// ========== Job Submission ==========
 
 	/**
 	 * Submit a Job for an operation.
 	 */
-	private Job submitJob(AString opID, AMap<AString, ACell> meta, ACell input, Operation operation, AString callerDID) {
+	private Job submitJob(AString opID, AMap<AString, ACell> meta, ACell input, AString callerDID) {
 		if (callerDID == null) throw new IllegalArgumentException("callerDID is required");
 
 		long ts = Utils.getCurrentTimestamp();
@@ -246,7 +223,7 @@ public class JobManager {
 		}
 
 		final AString effectiveCaller = callerDID;
-		Job job = new Job(status, operation) {
+		Job job = new Job(status) {
 			@Override public AMap<AString, ACell> processUpdate(AMap<AString, ACell> newData) {
 				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 				persistJobRecord(getID(), newData, effectiveCaller);
@@ -609,12 +586,18 @@ public class JobManager {
 		// Dispatch via new interface with resolved metadata
 		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
 		RequestContext ctx = RequestContext.of(callerDID);
-		if (meta != null) {
-			adapter.invoke(job, ctx, meta, record.get(Fields.INPUT));
-		} else {
+		if (meta == null) {
 			markJobFailed(jobID, record, "Cannot re-fire: no operation metadata for " + opRef, callerDID);
 			return false;
 		}
+
+		// Fail fast if stored input contains redacted secrets
+		if (hasRedactedSecrets(record.get(Fields.INPUT), meta)) {
+			markJobFailed(jobID, record, "Cannot re-fire: job contains redacted secrets", callerDID);
+			return false;
+		}
+
+		adapter.invoke(job, ctx, meta, record.get(Fields.INPUT));
 		log.info("Re-fired job: {}", jobID);
 		return true;
 	}

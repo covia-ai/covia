@@ -155,8 +155,7 @@ public class TestAdapter extends AAdapter {
 				ACell opInput = RT.getIn(input, Fields.INPUT);
 				CVMLong delay = CVMLong.parse(RT.getIn(input, Fields.DELAY));
 				Thread.sleep(delay.longValue());
-				AString callerDID = ctx.getCallerDID();
-				Job subJob = engine.jobs().invokeOperation(RT.ensureString(op), opInput, callerDID);
+				Job subJob = engine.jobs().invokeOperation(RT.ensureString(op), opInput, ctx);
 				ACell result = subJob.awaitResult();
 				job.completeWith(result);
     		} catch (InterruptedException e) {

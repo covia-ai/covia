@@ -34,6 +34,7 @@ import convex.restapi.mcp.SseConnection;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Venue;
+import covia.venue.RequestContext;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
 import io.javalin.Javalin;
@@ -361,7 +362,7 @@ public class MCP extends ACoviaAPI {
 			Hash opID = findTool(toolName);
 			ACell arguments = RT.getIn(params, Fields.ARGUMENTS);
 			if (opID != null) {
-				Job job = engine().jobs().invokeOperation(opID.toCVMHexString(), arguments, callerDID);
+				Job job = engine().jobs().invokeOperation(opID.toCVMHexString(), arguments, RequestContext.of(callerDID));
 				ACell result = job.awaitResult();
 				return toolSuccess(result);
 			} else {
