@@ -18,7 +18,7 @@ covia/                          # ai.covia:covia:0.0.2-SNAPSHOT (parent POM)
 │       └── grid/impl/          #   Content implementations (BlobContent, LatticeContent)
 ├── venue/                      # Main venue server runtime (produces covia.jar)
 │   └── src/main/java/covia/
-│       ├── adapter/            #   Adapter framework + 9 implementations
+│       ├── adapter/            #   Adapter framework + 12 implementations
 │       ├── lattice/            #   Lattice definitions (Covia.ROOT, Covia.VENUE)
 │       ├── venue/              #   Engine, MainVenue, Config, Auth, LocalVenue
 │       ├── venue/api/          #   REST API (CoviaAPI), MCP, A2A, UserAPI
@@ -99,6 +99,9 @@ Adapter Layer
     ├── Orchestrator      — multi-step workflow coordination
     ├── JVMAdapter        — string utilities
     ├── CoviaAdapter      — internal covia operations
+    ├── AgentAdapter      — agent lifecycle (create, message, run)
+    ├── LLMAgentAdapter   — LLM-backed agent transitions (chat)
+    ├── SecretAdapter      — secret store operations (set, extract)
     └── TestAdapter       — echo, delay, error simulation, chat
 ```
 
@@ -188,8 +191,7 @@ The engine always resolves operation references to metadata before dispatching �
 
 ### P1 — High (security and reliability)
 
-- [ ] **Secure credential handling in LangChainAdapter** — API keys passed in plaintext JSON input, falls back to env vars. Consider secure credential storage or reference-based lookup.
-  - File: `venue/.../adapter/LangChainAdapter.java`
+- [x] **Secure credential handling** — SecretStore provides per-user encrypted storage. `secretFields` in operation metadata redacts sensitive fields in stored job records (both input and output). `secret:set` operation for storing secrets. Secret references (`s/NAME`) resolved at invocation time via `engine.resolveSecret()`. Capability-gated `secret:extract` planned.
 
 - [ ] **Add rate limiting** — No rate limiting anywhere (operations, uploads, outbound requests). Add per-user and per-operation limits.
   - Files: `venue/.../venue/server/VenueServer.java`, `venue/.../venue/Engine.java`

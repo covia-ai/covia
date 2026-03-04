@@ -179,6 +179,9 @@ Bridges operations to execution environments:
 | `http` | HTTP requests | `get`, `post` |
 | `jvm` | JVM utilities | `stringConcat`, `urlEncode`, `urlDecode` |
 | `orchestrator` | Multi-step workflows | Custom orchestration |
+| `agent` | Agent lifecycle | `create`, `message`, `run` |
+| `llmagent` | LLM agent transitions | `chat` |
+| `secret` | Secret store | `set`, `extract` |
 
 ## API Endpoints
 
