@@ -20,11 +20,13 @@ import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
@@ -437,6 +439,94 @@ public class EngineTest {
 		assertNull(venue.resolveSecret(null, RequestContext.of(ALICE_DID)));
 		assertNull(venue.resolveSecret("SOME_KEY", null));
 		assertNull(venue.resolveSecret("/s/", RequestContext.of(ALICE_DID))); // empty name after prefix
+	}
+
+	// ========== Secret field redaction ==========
+
+	/**
+	 * Build inline metadata that routes to test:echo but declares secretFields.
+	 */
+	private AMap<AString, ACell> echoMetaWithSecretFields(String... secrets) {
+		AVector<ACell> sf = Vectors.empty();
+		for (String s : secrets) sf = sf.append(Strings.create(s));
+		return Maps.of(
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("test:echo"),
+				Strings.intern("secretFields"), sf
+			)
+		);
+	}
+
+	@Test
+	public void testSecretFieldRedactedInJobRecord() {
+		AMap<AString, ACell> meta = echoMetaWithSecretFields("apiKey");
+		ACell input = Maps.of(
+			"prompt", Strings.create("hello"),
+			"apiKey", Strings.create("sk-secret-123")
+		);
+
+		Job job = venue.jobs().invokeOperation(meta, input, RequestContext.INTERNAL);
+		ACell result = job.awaitResult();
+		assertNotNull(result);
+
+		// The stored job record should have the apiKey redacted
+		AMap<AString, ACell> record = venue.jobs().getJobData(job.getID(), RequestContext.INTERNAL);
+		ACell storedInput = record.get(Fields.INPUT);
+		assertEquals(Fields.HIDDEN, RT.getIn(storedInput, "apiKey"));
+
+		// Non-secret fields should be preserved
+		assertEquals("hello", RT.getIn(storedInput, "prompt").toString());
+	}
+
+	@Test
+	public void testAdapterReceivesUnredactedInput() {
+		AMap<AString, ACell> meta = echoMetaWithSecretFields("apiKey");
+		ACell input = Maps.of(
+			"prompt", Strings.create("hello"),
+			"apiKey", Strings.create("sk-secret-123")
+		);
+
+		Job job = venue.jobs().invokeOperation(meta, input, RequestContext.INTERNAL);
+		ACell result = job.awaitResult();
+
+		// Echo adapter returns the input it received — should have the original key
+		assertEquals("sk-secret-123", RT.getIn(result, "apiKey").toString());
+	}
+
+	@Test
+	public void testNoSecretFieldsPassesInputUnchanged() {
+		// Metadata without secretFields — input should be stored as-is
+		AMap<AString, ACell> meta = Maps.of(
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("test:echo")
+			)
+		);
+		ACell input = Maps.of(
+			"apiKey", Strings.create("sk-visible-key")
+		);
+
+		Job job = venue.jobs().invokeOperation(meta, input, RequestContext.INTERNAL);
+		job.awaitResult();
+
+		AMap<AString, ACell> record = venue.jobs().getJobData(job.getID(), RequestContext.INTERNAL);
+		ACell storedInput = record.get(Fields.INPUT);
+		assertEquals("sk-visible-key", RT.getIn(storedInput, "apiKey").toString());
+	}
+
+	@Test
+	public void testSecretFieldMissingFromInputIsIgnored() {
+		// secretFields lists "apiKey" but input doesn't contain it — no error
+		AMap<AString, ACell> meta = echoMetaWithSecretFields("apiKey");
+		ACell input = Maps.of("prompt", Strings.create("hello"));
+
+		Job job = venue.jobs().invokeOperation(meta, input, RequestContext.INTERNAL);
+		ACell result = job.awaitResult();
+		assertNotNull(result);
+
+		AMap<AString, ACell> record = venue.jobs().getJobData(job.getID(), RequestContext.INTERNAL);
+		ACell storedInput = record.get(Fields.INPUT);
+		assertEquals("hello", RT.getIn(storedInput, "prompt").toString());
+		assertNull(RT.getIn(storedInput, "apiKey"));
 	}
 
 	@Test

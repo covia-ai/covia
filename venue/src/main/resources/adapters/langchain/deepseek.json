@@ -7,6 +7,7 @@
 	"keywords":["LLM", "model", "deepseek"],
 	"operation": {
 		"adapter": "langchain:openai",
+		"secretFields": ["apiKey"],
 
 		"input":{
 			"type":"object",

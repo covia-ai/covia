@@ -187,6 +187,32 @@ public class JobManager {
 		return job;
 	}
 
+	// ========== Secret Redaction ==========
+
+	private static final AString K_SECRET_FIELDS = Strings.intern("secretFields");
+
+	/**
+	 * Returns a copy of {@code input} with secret fields replaced by {@link Fields#HIDDEN}.
+	 * Secret fields are declared in {@code meta.operation.secretFields} as a vector of field names.
+	 * If there are no secret fields (or input is not a map), returns input unchanged.
+	 */
+	@SuppressWarnings("unchecked")
+	private static ACell redactSecrets(ACell input, AMap<AString, ACell> meta) {
+		if (!(input instanceof AMap)) return input;
+		ACell sf = RT.getIn(meta, Fields.OPERATION, K_SECRET_FIELDS);
+		if (!(sf instanceof AVector)) return input;
+
+		AMap<AString, ACell> map = (AMap<AString, ACell>) input;
+		AVector<ACell> secretFields = (AVector<ACell>) sf;
+		for (long i = 0; i < secretFields.count(); i++) {
+			AString field = RT.ensureString(secretFields.get(i));
+			if (field != null && map.containsKey(field)) {
+				map = map.assoc(field, Fields.HIDDEN);
+			}
+		}
+		return map;
+	}
+
 	// ========== Job Submission ==========
 
 	/**
@@ -211,7 +237,7 @@ public class JobManager {
 				Fields.STATUS, Status.PENDING,
 				Fields.UPDATED, CVMLong.create(ts),
 				Fields.CREATED, CVMLong.create(ts),
-				Fields.INPUT, input,
+				Fields.INPUT, redactSecrets(input, meta),
 				Fields.CALLER, callerDID);
 
 		AString name = RT.ensureString(RT.getIn(meta, Fields.NAME));

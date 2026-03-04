@@ -36,6 +36,7 @@ public class Fields {
 	
 	// Misc / general purpose
 	public static final StringShort OK = Strings.intern("OK");
+	public static final StringShort HIDDEN = Strings.intern("HIDDEN");
 	public static final StringShort TS = Strings.intern("ts");
 	
 	// Orchestration related
