@@ -197,6 +197,18 @@ public class JobManager {
 		return false;
 	}
 
+	/**
+	 * Returns a copy of job data with secret fields in the output redacted.
+	 * Uses the same {@code secretFields} list as input redaction.
+	 */
+	private static AMap<AString, ACell> redactOutputSecrets(AMap<AString, ACell> jobData, AMap<AString, ACell> meta) {
+		ACell output = jobData.get(Fields.OUTPUT);
+		if (output == null) return jobData;
+		ACell redacted = redactSecrets(output, meta);
+		if (redacted == output) return jobData;
+		return jobData.assoc(Fields.OUTPUT, redacted);
+	}
+
 	// ========== Job Submission ==========
 
 	/**
@@ -226,7 +238,7 @@ public class JobManager {
 		Job job = new Job(status) {
 			@Override public AMap<AString, ACell> processUpdate(AMap<AString, ACell> newData) {
 				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
-				persistJobRecord(getID(), newData, effectiveCaller);
+				persistJobRecord(getID(), redactOutputSecrets(newData, meta), effectiveCaller);
 				if (Job.isFinished(newData)) {
 					synchronized (activeJobs) {
 						activeJobs.remove(getID());
@@ -561,11 +573,14 @@ public class JobManager {
 			return false;
 		}
 
+		// Resolve metadata before creating Job (needed for output redaction in processUpdate)
+		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
+
 		// Create a live Job wrapping the persisted record
 		Job job = new Job(record, op) {
 			@Override public AMap<AString, ACell> processUpdate(AMap<AString, ACell> newData) {
 				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
-				persistJobRecord(getID(), newData, callerDID);
+				persistJobRecord(getID(), redactOutputSecrets(newData, meta), callerDID);
 				if (Job.isFinished(newData)) {
 					synchronized (activeJobs) {
 						activeJobs.remove(getID());
@@ -582,9 +597,6 @@ public class JobManager {
 		synchronized (activeJobs) {
 			activeJobs.put(jobID, job);
 		}
-
-		// Dispatch via new interface with resolved metadata
-		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
 		RequestContext ctx = RequestContext.of(callerDID);
 		if (meta == null) {
 			markJobFailed(jobID, record, "Cannot re-fire: no operation metadata for " + opRef, callerDID);

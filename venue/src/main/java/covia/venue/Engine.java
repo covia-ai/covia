@@ -50,6 +50,7 @@ import covia.adapter.LangChainAdapter;
 import covia.adapter.LLMAgentAdapter;
 import covia.adapter.MCPAdapter;
 import covia.adapter.Orchestrator;
+import covia.adapter.SecretAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.grid.AContent;
@@ -248,6 +249,7 @@ public class Engine {
 		venue.registerAdapter(new GridAdapter());
 		venue.registerAdapter(new ConvexAdapter());
 		venue.registerAdapter(new AgentAdapter());
+		venue.registerAdapter(new SecretAdapter());
 		venue.registerAdapter(new LLMAgentAdapter());
 	}
 

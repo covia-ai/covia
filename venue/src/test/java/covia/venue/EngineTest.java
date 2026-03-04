@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -527,6 +528,69 @@ public class EngineTest {
 		ACell storedInput = record.get(Fields.INPUT);
 		assertEquals("hello", RT.getIn(storedInput, "prompt").toString());
 		assertNull(RT.getIn(storedInput, "apiKey"));
+	}
+
+	// ========== Secret operations ==========
+
+	@Test
+	public void testSecretSetOperation() {
+		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
+		ACell input = Maps.of("name", Strings.create("MY_KEY"), "value", Strings.create("my-secret-value"));
+		Job job = venue.jobs().invokeOperation(
+			Strings.create("secret:set"), input, aliceCtx);
+		ACell result = job.awaitResult();
+		assertNotNull(result);
+		assertEquals(Strings.create("MY_KEY"), RT.getIn(result, "name"));
+
+		// Verify the secret was actually stored
+		User alice = venue.getVenueState().users().get(ALICE_DID);
+		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+		assertEquals("my-secret-value", alice.secrets().decrypt(Strings.create("MY_KEY"), encKey).toString());
+
+		// Verify the stored job record has the value redacted
+		AMap<AString, ACell> record = venue.jobs().getJobData(job.getID(), aliceCtx);
+		assertEquals(Fields.HIDDEN, RT.getIn(record.get(Fields.INPUT), "value"));
+	}
+
+	@Test
+	public void testSecretExtractAlwaysDenied() {
+		// Store a secret for Alice
+		User alice = venue.getVenueState().users().ensure(ALICE_DID);
+		byte[] encKey = SecretStore.deriveKey(venue.getKeyPair());
+		alice.secrets().store(Strings.create("STOLEN_KEY"), Strings.create("do-not-leak"), encKey);
+
+		// Attempt to extract via operation — should always fail (no capability)
+		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
+		Job job = venue.jobs().invokeOperation(
+			Strings.create("secret:extract"),
+			Maps.of("name", Strings.create("STOLEN_KEY")),
+			aliceCtx);
+
+		assertThrows(Exception.class, () -> job.awaitResult());
+
+		// Verify the secret value never appears in the job record
+		AMap<AString, ACell> record = venue.jobs().getJobData(job.getID(), aliceCtx);
+		assertNotNull(record);
+		assertNull(record.get(Fields.OUTPUT),
+			"Failed job should have no output");
+	}
+
+	@Test
+	public void testSecretOutputRedactionViaEcho() {
+		// Use echo adapter with secretFields to verify output redaction
+		AMap<AString, ACell> meta = echoMetaWithSecretFields("value");
+		ACell input = Maps.of("value", Strings.create("secret-output-test"));
+
+		Job job = venue.jobs().invokeOperation(meta, input, RequestContext.INTERNAL);
+		ACell result = job.awaitResult();
+
+		// Live result should have the plaintext
+		assertEquals("secret-output-test", RT.getIn(result, "value").toString());
+
+		// Stored output should be redacted (echo returns input as output)
+		AMap<AString, ACell> record = venue.jobs().getJobData(job.getID(), RequestContext.INTERNAL);
+		ACell storedOutput = record.get(Fields.OUTPUT);
+		assertEquals(Fields.HIDDEN, RT.getIn(storedOutput, "value"));
 	}
 
 	@Test

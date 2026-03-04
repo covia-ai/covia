@@ -808,8 +808,7 @@ public class CoviaAPI extends ACoviaAPI {
 					content= @OpenApiContent(type = "application/json", from = Object.class)))
 	protected void putSecret(Context ctx) {
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
-		AString callerDID = rctx.getCallerDID();
-		if (callerDID == null) {
+		if (rctx.getCallerDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
@@ -817,17 +816,19 @@ public class CoviaAPI extends ACoviaAPI {
 		String name = ctx.pathParam("name");
 		ACell body = JSON.parseJSON5(ctx.body());
 		ACell value = RT.getIn(body, "value");
-		if (!(value instanceof AString plaintext)) {
+		if (!(value instanceof AString)) {
 			buildError(ctx, 400, "Request body must contain a 'value' string field");
 			return;
 		}
 
-		User user = engine().getVenueState().users().ensure(callerDID);
-		byte[] key = SecretStore.deriveKey(engine().getKeyPair());
-		user.secrets().store(Strings.create(name), plaintext, key);
-
-		ctx.status(200);
-		buildResult(ctx, 200, Maps.of("name", name, "stored", true));
+		ACell input = Maps.of("name", name, "value", value);
+		Job job = engine().jobs().invokeOperation(Strings.create("secret:set"), input, rctx);
+		ACell result = job.awaitResult();
+		if (result == null) {
+			buildError(ctx, 500, "Failed to store secret");
+			return;
+		}
+		buildResult(ctx, 200, result);
 	}
 
 	@OpenApi(path = ROUTE + "secrets/{name}",
