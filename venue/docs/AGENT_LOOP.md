@@ -58,9 +58,11 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 |-------|------|-------------|
 | `ts` | long | Timestamp of the last write. **The merge discriminator.** Set on every write. |
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"` |
-| `config` | map | Framework-level configuration. Opaque to the transition function. |
+| `config` | map | Framework-level configuration. Includes `operation` (default transition op). |
 | `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function-specific configuration (e.g. LLM provider, model) lives here, not in `config`. Set at creation via optional initial state. |
-| `inbox` | vector | Messages awaiting processing. Drained on successful run — the timeline is the permanent record. |
+| `tasks` | vector | Job IDs for inbound requests assigned to this agent. Persistent until resolved. |
+| `pending` | vector | Job IDs for outbound jobs the agent has invoked and is waiting on. |
+| `inbox` | vector | Ephemeral messages awaiting processing. Drained on successful run. |
 | `timeline` | vector | Append-only log of transition records (§2.3). Grows with each successful agent run. Timestamped for audit. |
 | `caps` | map | Capability sets (placeholder — Phase C enforcement) |
 | `error` | string? | Last error message, or null. Set when the transition function fails. |
@@ -69,26 +71,49 @@ All fields are framework-managed except `state`, which is owned by the transitio
 function. CAD3 structural sharing means the timeline (which only appends) shares
 all existing entries with the previous version.
 
-### 2.3 Timeline Entry
+### 2.3 Tasks vs Messages
 
-Each entry in the `timeline` vector records one successful agent run:
+An agent has two inbound channels with different semantics:
+
+**Tasks** (`tasks`) are formal, persistent requests for the agent to complete.
+Each task is a Job (managed by the venue's JobManager). The agent's `tasks` field
+holds Job IDs. The agent decides when and how to fulfil each task. Tasks persist
+until the agent completes or rejects them — they survive restarts and can span
+days or weeks. Tasks can come from humans (via MCP), other agents, or the system.
+
+**Messages** (`inbox`) are ephemeral notifications. They inform the agent of
+events but do not represent commitments. Messages are consumed on each run and
+recorded in the timeline. They may or may not trigger agent action.
+
+An agent also tracks **pending** outbound jobs — jobs it has invoked
+asynchronously (tool calls, delegated work, HITL requests). When a pending job
+completes, the agent is woken to process the result.
+
+### 2.4 Timeline Entry
+
+Each entry in the `timeline` vector records one successful agent run. The
+timeline is the **complete audit trail** — it captures everything the agent
+received, decided, and accomplished in each run.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `start` | long | Timestamp when the run started (step 3). |
-| `end` | long | Timestamp when the run completed (step 5). |
+| `start` | long | Timestamp when the run started. |
+| `end` | long | Timestamp when the run completed. |
 | `op` | string | The operation reference used for the transition function. |
 | `state` | any | The starting state passed to the transition function. |
+| `tasks` | vector | Resolved task data (jobId, input, status) at run start. |
 | `messages` | vector | The inbox messages passed to the transition function. |
 | `result` | any | The `result` returned by the transition function. |
+| `taskResults` | map? | Task completions from output declarations (§3.4.1). `{<jobId>: {status, output}}`. |
+| `newJobs` | vector? | New outbound jobs invoked during this run. *(Not yet implemented — planned.)* |
 
 The output state is not stored in the timeline entry — it is the `state` field in
 the agent record (for the latest run) or the `state` field in the next timeline
 entry (for earlier runs). This avoids redundant storage.
 
 Timeline entries are only appended on success. On error, no timeline entry is
-written — the error is recorded in the agent record's `error` field and the inbox
-is preserved for retry.
+written — the error is recorded in the agent record's `error` field and all
+queues are preserved for retry.
 
 ---
 
@@ -112,13 +137,17 @@ Level 3: LLM Call              langchain:openai (LangChainAdapter)
 
 ### 3.1 Level 1 — Agent Update (Framework)
 
-Reads the inbox, invokes the transition function, records the result in the
-timeline, manages status, writes the complete agent record. The same for every
-agent. Defined in §4.3.
+Reads inbound tasks, pending job completions, and inbox messages. Invokes the
+transition function, records the result in the timeline, manages status, writes
+the complete agent record. The same for every agent. Defined in §4.3.
 
 The agent update owns the agent record. The transition function owns `state`
 within it. The agent update never inspects `state`; the transition function never
 manages framework fields.
+
+The agent update is triggered by the venue scheduler (§4.5), not by external
+callers. MCP users submit requests via `agent:request`; the scheduler handles
+when the agent runs.
 
 ### 3.2 Level 2 — Agent Transition (State Machine)
 
@@ -177,21 +206,60 @@ The contract between level 1 and level 2:
 |-------|------|-------------|
 | `agent-id` | string | The agent's identifier. |
 | `state` | any | Current `state` from the agent record. Null on first run. |
-| `messages` | vector | The inbox. Each entry is a message record. |
+| `tasks` | vector | Inbound task Job IDs with their current status/input data. |
+| `pending` | vector | Outbound job IDs with their resolved status/results. |
+| `messages` | vector | The inbox. Ephemeral message records. |
 
 **Output:**
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `state` | any | Updated user-defined state. Written back to the agent record. |
-| `result` | any | Summary of what happened. Recorded in the timeline entry by the agent update. |
+| `result` | any | Summary of what happened. Recorded in the timeline entry and returned to callers. |
+| `taskResults` | map? | Optional task completions: `{<jobId>: {status, output}}`. See §3.4.1. |
+| `newJobs` | vector? | New outbound jobs to invoke (added to `pending`). |
 
-The transition function does not manage ts, status, timeline, or inbox. It is a
-pure function from (state, messages) → (state, result).
+The transition function does not manage ts, status, timeline, inbox, or
+scheduling. It declares what it has accomplished and the framework applies the
+changes atomically.
 
 The transition function must handle its own errors internally. If it throws, the
-agent update treats this as a severe failure: the agent is suspended, the inbox is
-preserved, and the error is recorded. No timeline entry is written.
+agent update treats this as a severe failure: the agent is suspended, all queues
+are preserved, and the error is recorded. No timeline entry is written.
+
+#### 3.4.1 Task Completion — Two Mechanisms
+
+Tasks can be completed via two complementary mechanisms:
+
+**1. Tool call during execution (LLM agents).** The transition function (level 2)
+exposes `agent:completeTask` as a tool available to the LLM. When the LLM
+decides to complete a task, it calls the tool during the tool call loop. The tool
+completes the Job via JobManager immediately. This is the natural path for LLM
+agents — task completion is just another tool call.
+
+**2. Output declaration (non-LLM agents).** The transition function returns a
+`taskResults` map in its output. The framework reads this after the transition
+completes and applies each result to the corresponding Job via JobManager. This
+path suits rule engines, workflows, and other transition functions that do not
+use the tool call loop.
+
+Both mechanisms may be used in the same run — tool-call completions happen during
+execution, output-declared completions happen after. If the same task appears in
+both, the tool-call result wins (it was applied first).
+
+**Timeline capture:** All task completions from both mechanisms are merged and
+recorded in the timeline entry's `taskResults` field. This ensures the timeline
+is the complete record of what the agent accomplished in each run, regardless
+of which mechanism was used. The framework collects tool-call completions during
+execution and merges them with output-declared completions before writing the
+timeline entry.
+
+**Side effect semantics:** Task completions via tool calls are side effects —
+they take effect immediately and are not rolled back if the transition function
+subsequently fails. This is intentional: if the agent told a caller "done" then
+crashed, the task *was* completed. The timeline entry will be missing (since the
+run failed), but the Job result is durable. This matches how other side effects
+(tool calls that send emails, invoke external APIs) behave.
 
 ### 3.5 Invocation
 
@@ -202,8 +270,9 @@ operation in the venue. This means any level can be:
 - A composite operation via orchestration
 - A test mock (e.g. `test:echo`)
 
-The level 2 operation is specified by the caller in the `agent:run` input.
-The level 3 operation is specified by the agent creator in `state.config`.
+The level 2 operation is specified in the agent's `config.operation` field
+(default set at creation, overridable per-run). The level 3 operation is
+specified by the agent creator in `state.config.llmOperation`.
 
 ### 3.6 Credential Access
 
@@ -248,7 +317,11 @@ Every operation atomically replaces the agent record with a new `ts`.
 **Trigger:** `agent:create`
 
 Writes the initial agent record: status=SLEEPING, config from input, state from
-input (or null), empty inbox, empty timeline, no error.
+input (or null), empty tasks/pending/inbox, empty timeline, no error.
+
+The `config` map supports:
+- `operation` — default transition operation (e.g. `"llmagent:chat"`)
+- Other framework configuration as needed
 
 Initial state allows the creator to seed transition-function-specific configuration
 (e.g. LLM provider, model, system prompt) that the transition function will read
@@ -257,46 +330,83 @@ transition-function internals, and allows an agent to switch transition function
 
 **Idempotent:** If the agent record already exists, create is a no-op.
 
-### 4.2 Message
+### 4.2 Request
+
+**Trigger:** `agent:request`
+
+Submits a persistent task to an agent. The request Job itself IS the task — it
+is left in STARTED state and its Job ID is added to the agent's `tasks` vector.
+No separate Job is created.
+
+The agent decides when and how to fulfil the request. When the agent completes
+the task (via `taskResults` output or a tool call), the framework completes
+the request Job with the result. The caller can poll or SSE-subscribe to the
+Job for status — the same Job they received from `invoke()`.
+
+**Input:** `{agentId, input, ...}` — the `input` is stored in the Job.
+
+**Output:** The Job stays in STARTED until the agent completes it. The caller
+tracks progress via the Job ID returned by `invoke()`.
+
+**Side effect:** An async `agent:run` is scheduled immediately via the scheduler.
+
+**Fails if:** the agent does not exist, or status is `"TERMINATED"`.
+
+This is the primary MCP-facing operation for interacting with agents.
+
+### 4.3 Message
 
 **Trigger:** `agent:message`
 
 Reads current agent record, appends the message to `inbox`, writes agent record.
 
-The agent is not woken. The message sits in the inbox until the next run.
+Messages are ephemeral notifications — they do not create Jobs and are not
+tracked for completion. Use `agent:request` for work items that need a response.
 
 **Fails if:** the agent does not exist, or status is `"TERMINATED"`.
 
-### 4.3 Run — Agent Update
+### 4.4 Run — Agent Update (Internal)
 
-**Trigger:** `agent:run`
+**Trigger:** venue scheduler (§4.6), not directly by MCP users.
+
+Also callable via `agent:run` for testing and manual control.
 
 **Sequence:**
 
 1. Read current agent record.
-2. If inbox is empty: no-op.
-3. Set status → `"RUNNING"`, write agent record.
-4. Invoke the transition function (§3.2) with `agent-id`, current `state`,
-   and `inbox`.
-5. On success:
+2. Gather inputs for the transition function:
+   - Check `pending` for completed/failed outbound jobs (resolve via JobManager).
+   - Read `tasks` for inbound requests (resolve status/input via JobManager).
+   - Read `inbox` for ephemeral messages.
+3. If nothing to process (no tasks and empty inbox): no-op. Pending jobs are
+   passed through but do not alone trigger a run.
+4. Set status → `"RUNNING"`, write agent record.
+5. Invoke the transition function (§3.2) with `agent-id`, current `state`,
+   `tasks`, `pending` (with resolved statuses), and `inbox`.
+6. On success:
+   - Read `taskResults` from the transition output.
    - Update `state` from the returned value.
-   - Append a timeline entry (op, starting state, inbox, returned `result`,
-     start/end timestamps).
+   - Update `tasks` (remove IDs present in `taskResults`).
+   - Build timeline entry with full audit data (§2.4).
    - Clear `inbox`.
    - Set status → `"SLEEPING"`.
-   - Write agent record.
-6. On error:
-   - Leave `state` and `inbox` unchanged.
+   - Write agent record **before** completing task Jobs (ensures callers who
+     `awaitResult()` on task Jobs see consistent agent state).
+   - Apply `taskResults` to JobManager — complete or fail each task Job.
+7. On error:
+   - Leave `state`, `tasks`, `pending`, and `inbox` unchanged.
    - Set status → `"SUSPENDED"`, set `error`.
    - Write agent record.
+   - Note: task completions made via tool calls during execution are **not**
+     rolled back (§3.4.1).
 
-The agent update writes twice: once to mark running (step 3), once to record the
-outcome (step 5 or 6). Each write is a complete atomic agent record.
+The transition operation comes from `config.operation` (set at creation).
+It can be overridden per-run via the `operation` input parameter.
 
-On error, the inbox is preserved — the same messages will be available for retry
-after the error is resolved and the agent is resumed.
+The run output includes the transition function's `result` field, making
+the response visible to callers without querying agent state separately.
 
-### 4.4 Other Lifecycle Events
+### 4.5 Other Lifecycle Events
 
 | Event | Mutation |
 |-------|----------|
@@ -305,6 +415,27 @@ after the error is resolved and the agent is resumed.
 | **Clear error** | Set error → null, status → `"SLEEPING"`, write agent record. |
 
 All read-modify-write on the single value.
+
+### 4.6 Scheduling
+
+The venue runs a scheduler that determines when agents should wake. An agent
+is eligible to run when any of:
+
+- A new task has been added to `tasks` (via `agent:request`)
+- A pending outbound job has completed or failed
+- A new message has been delivered to `inbox`
+- A configurable sleep timer has expired
+
+**Initial implementation:** simple event-driven wake. When `agent:request` or
+`agent:message` is called, the scheduler queues the agent for a run. When an
+outbound job completes, the scheduler checks if any agent has it in `pending`.
+
+**Configurable sleep:** `config.sleepInterval` (milliseconds). If set, the agent
+wakes periodically even without events. Useful for polling-style agents.
+Exponential backoff when idle is a future refinement.
+
+The scheduler is an internal venue concern — its implementation may change
+without affecting the agent contract or MCP interface.
 
 ---
 
@@ -362,7 +493,46 @@ requests back, executes the tools, and loops until the LLM returns a text
 response. Tool definitions may come from `state.config` or operation metadata.
 Per-agent tool configuration is a Phase C concern.
 
-### 6.4 Credential resolution
+### 6.4 Human-in-the-loop (HITL) requests
+
+When an agent needs human input, it creates an outbound Job targeting the human
+user. This Job appears in the user's **request queue** at `/h/<job-id>` in the
+user's lattice namespace. The human completes the Job (via MCP or REST), which
+appears as a completed pending job on the agent's next wake.
+
+HITL is not a special mechanism — it reuses the same Job infrastructure. The
+difference is that the executor is a human rather than an adapter or agent.
+
+**User request namespace:**
+
+```
+:user-data → <DID> → "h" → <job-id> → job reference
+```
+
+The `/h/` namespace is analogous to `/g/` (agents) and `/s/` (secrets) but
+holds Job IDs for requests that the human user is expected to complete. MCP
+clients can list and respond to these requests.
+
+**TODO:** Define the MCP-facing operations for HITL: listing pending requests,
+responding to requests, rejecting requests. This is a Phase D concern.
+
+### 6.5 MCP-facing agent operations
+
+With the task-based model, MCP users interact with agents through a small set
+of high-level operations. They never call `agent:run` directly.
+
+| MCP Tool | Purpose |
+|----------|---------|
+| `agent:create` | Create and configure an agent |
+| `agent:request` | Submit a task for the agent to complete (returns Job ID) |
+| `agent:message` | Send an ephemeral notification |
+| `agent:query` | Read agent state, tasks, pending jobs |
+| `agent:list` | List user's agents |
+
+The agent's response to a request is the Job result — the MCP client polls or
+subscribes to the Job for status updates, same as any other Covia job.
+
+### 6.6 Credential resolution
 
 API keys are not stored in agent config. The operation metadata declares a
 `secretKey` name (e.g. `"OPENAI_API_KEY"`); at runtime the adapter looks this
@@ -382,7 +552,11 @@ See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
 | **A** | AgentState wrapper, AgentAdapter (create/message/run), lattice restructure | ✓ Complete |
 | **B** | LLM transition function (`llmagent:chat`), conversation history, secret store integration, three-level architecture (§3) | ✓ Complete |
 | **B2** | Decouple level 2 from LangChain4j — level 3 via grid operation, message-format API, tool call loop | ✓ Complete |
-| **B3** | Tool parameter schema mapping (JsonObjectSchema from Convex maps), structured output | Next |
+| **B3a** | Structured output / responseFormat for level 3, LangChainAdapter unit tests | ✓ Complete |
+| **B3b** | Tool parameter schema mapping refinements (enum, array items, nested objects) | ✓ Complete |
+| **B4** | MCP-first agent experience: default transition op from config, result in run output | ✓ Complete |
+| **B5** | Task-based agent model: `agent:request`, tasks/pending queues, scheduling | ✓ Complete |
+| **B6** | Agent query/list operations: `agent:query`, `agent:list` | Planned |
 | **C** | Capability enforcement (UCAN `with`/`can`), tool palette | Planned |
-| **D** | Cross-user messaging, advanced wake triggers | Planned |
+| **D** | HITL requests (`/h/` namespace), cross-user messaging, advanced wake triggers | Planned |
 | **E** | Agent forking and cross-venue migration | Planned |

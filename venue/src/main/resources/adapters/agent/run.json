@@ -1,6 +1,6 @@
 {
 	"name": "Run Agent",
-	"description": "Runs the agent's transition loop: reads all messages from the inbox, invokes the specified transition operation once with the entire inbox, appends the result to the timeline, and clears the inbox. The agent transitions from sleeping to running and back to sleeping on completion.",
+	"description": "Runs the agent's transition loop: reads all messages from the inbox, invokes the specified transition operation once with the entire inbox, appends the result to the timeline, and clears the inbox. The agent transitions from sleeping to running and back to sleeping on completion. If 'operation' is omitted, falls back to the agent's config.operation default.",
 	"dateCreated": "2026-02-27T00:00:00Z",
 	"operation": {
 		"adapter": "agent:run",
@@ -8,15 +8,16 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent name to run" },
-				"operation": { "type": "string", "description": "Transition operation reference (e.g. 'test:echo')" }
+				"operation": { "type": "string", "description": "Transition operation reference (e.g. 'llmagent:chat'). Optional if set in agent config." }
 			},
-			"required": ["agentId", "operation"]
+			"required": ["agentId"]
 		},
 		"output": {
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string" },
-				"status": { "type": "string", "description": "Agent status after run (e.g. 'SLEEPING')" }
+				"status": { "type": "string", "description": "Agent status after run (e.g. 'SLEEPING')" },
+				"result": { "description": "Result returned by the transition function" }
 			}
 		}
 	}

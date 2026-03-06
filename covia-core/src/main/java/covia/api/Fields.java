@@ -102,6 +102,11 @@ public class Fields {
 	public static final StringShort CONFIG = Strings.intern("config");
 	public static final StringShort DELIVERED = Strings.intern("delivered");
 	public static final StringShort MESSAGES = Strings.intern("messages");
+	public static final StringShort TASKS = Strings.intern("tasks");
+	public static final StringShort PENDING = Strings.intern("pending");
+	public static final StringShort TASK_RESULTS = Strings.intern("taskResults");
+	public static final StringShort NEW_JOBS = Strings.intern("newJobs");
+	public static final StringShort JOB_ID = Strings.intern("jobId");
 
 	// Identity / authorization
 	public static final StringShort CALLER = Strings.intern("caller");

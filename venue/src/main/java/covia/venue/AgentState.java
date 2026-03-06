@@ -29,6 +29,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_STATUS   = Strings.intern("status");
 	private static final AString K_CONFIG   = Strings.intern("config");
 	private static final AString K_STATE    = Strings.intern("state");
+	private static final AString K_TASKS    = Strings.intern("tasks");
+	private static final AString K_PENDING  = Strings.intern("pending");
 	private static final AString K_INBOX    = Strings.intern("inbox");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
 	private static final AString K_CAPS     = Strings.intern("caps");
@@ -96,6 +98,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 		if (exists()) return;
 		AMap<AString, ACell> record = Maps.of(
 			K_STATUS, SLEEPING,
+			K_TASKS, Vectors.empty(),
+			K_PENDING, Vectors.empty(),
 			K_INBOX, Vectors.empty(),
 			K_TIMELINE, Vectors.empty()
 		);
@@ -229,12 +233,50 @@ public class AgentState extends ALatticeComponent<ACell> {
 		putRecord(record.assoc(K_INBOX, inbox.conj(message)));
 	}
 
+	/**
+	 * Gets the agent's inbound task Job IDs.
+	 */
+	@SuppressWarnings("unchecked")
+	public AVector<ACell> getTasks() {
+		AMap<AString, ACell> record = getRecord();
+		if (record == null) return Vectors.empty();
+		ACell v = record.get(K_TASKS);
+		return (v instanceof AVector) ? (AVector<ACell>) v : Vectors.empty();
+	}
+
+	/**
+	 * Gets the agent's outbound pending Job IDs.
+	 */
+	@SuppressWarnings("unchecked")
+	public AVector<ACell> getPending() {
+		AMap<AString, ACell> record = getRecord();
+		if (record == null) return Vectors.empty();
+		ACell v = record.get(K_PENDING);
+		return (v instanceof AVector) ? (AVector<ACell>) v : Vectors.empty();
+	}
+
+	/**
+	 * Adds a task Job ID to the agent's tasks. Atomic read-modify-write.
+	 *
+	 * <p><b>Invariant:</b> callers must ensure that {@code jobId} corresponds to
+	 * a real Job in STARTED state awaiting completion. Only
+	 * {@code AgentAdapter.handleRequest} should call this in production.</p>
+	 */
+	public void addTask(ACell jobId) {
+		AMap<AString, ACell> record = getRecord();
+		if (record == null) return;
+		AVector<ACell> tasks = getTasks();
+		putRecord(record.assoc(K_TASKS, tasks.conj(jobId)));
+	}
+
 	// ========== Key constants for external use ==========
 
 	public static final AString KEY_TS       = Strings.intern("ts");
 	public static final AString KEY_STATUS   = Strings.intern("status");
 	public static final AString KEY_CONFIG   = Strings.intern("config");
 	public static final AString KEY_STATE    = Strings.intern("state");
+	public static final AString KEY_TASKS    = Strings.intern("tasks");
+	public static final AString KEY_PENDING  = Strings.intern("pending");
 	public static final AString KEY_INBOX    = Strings.intern("inbox");
 	public static final AString KEY_TIMELINE = Strings.intern("timeline");
 	public static final AString KEY_CAPS     = Strings.intern("caps");

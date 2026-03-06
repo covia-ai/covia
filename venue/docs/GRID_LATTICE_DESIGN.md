@@ -165,7 +165,7 @@ This is a critical design distinction. The three execution-related namespaces se
 | **Identity** | User-named (hashmap) | System-assigned ID | User-chosen string, DID-bound |
 | **Lifecycle** | Mutable, pins to `/a/` on invoke | Single execution, freezes on complete | Long-lived, many transitions |
 | **State** | Stateless definition | Scoped to one invocation | Accumulates across transitions |
-| **Initiation** | Passive — invoked by others | Created by `invoke()` | Triggered via `agent:run` (explicit) |
+| **Initiation** | Passive — invoked by others | Created by `invoke()` | Triggered via `agent:request` (external) or scheduler (internal) |
 | **Audit question** | "What logic ran?" | "What happened with this request?" | "What did this agent do and why?" |
 
 **How they interact:**
@@ -185,8 +185,10 @@ This is a critical design distinction. The three execution-related namespaces se
   caller: "/g/my-assistant"                end: 1719500005,
   executor: "/g/helper"                     op: "test:echo",
   inputs: { ... }                          state: { ... },
-  outputs: { ... }                         messages: [inbox items...],
-  cost: 450                                result: { ... }
+  outputs: { ... }                         tasks: [resolved task data...],
+  cost: 450                                messages: [inbox items...],
+                                           result: { ... },
+                                           taskResults: { ... }
                                          }
 ```
 
@@ -195,59 +197,50 @@ This is a critical design distinction. The three execution-related namespaces se
 | Pattern | Mechanism | Creates job? | Use case |
 |---------|-----------|-------------|----------|
 | **Async message** | `agent:message` — appends to agent's `inbox` vector | No | Notifications, FYI, loose coordination |
-| **Task assignment** | Create job in `/j/`, message agent with job ref | Yes | A2A tasks, delegated work — agent must complete or fail |
-| **Task request** | `invoke()` targeting an agent-backed op | Yes | Request-response, tracked work, billable |
+| **Task request** | `agent:request` — adds Job ID to agent's `tasks` vector. The request Job IS the task. | Yes | Primary mechanism. MCP users, A2A, delegated work. Agent must complete or reject. |
 | **Delegation** | `invoke()` with sub-delegated UCAN caps | Yes | Agent delegates subtask to another agent |
 | **Broadcast** | Write to multiple inboxes | No | Announcements, pub-sub patterns |
 
-The key principle: **if you need accountability (cost, result, SLA), assign a job. If you need informal coordination, use inbox messages.** Job assignments are delivered as inbox messages — the agent processes them via its transition function like any other message. Inbox messages are best-effort. Both appear in the agent's timeline for full auditability.
+The key principle: **if you need accountability (cost, result, SLA), use `agent:request`. If you need informal coordination, use inbox messages.** Tasks persist until the agent explicitly completes or rejects them. Inbox messages are ephemeral and best-effort. Both appear in the agent's timeline for full auditability.
 
-**Agent transitions are not jobs.** When the runtime wakes an agent and runs its transition function, this is not a job — it's an internal lifecycle event recorded in the agent's timeline. The distinction matters: jobs are created explicitly by callers and carry economic weight (cost, billing, caps). Agent transitions are managed by the runtime and are an operational concern of the agent's owner. An agent's transition may create zero, one, or many jobs as part of its processing.
+**Agent runs are internal.** When the runtime wakes an agent and runs its transition function, this is an internal lifecycle event (currently implemented as an `agent:run` Job for infrastructure reasons, but conceptually an operational concern of the runtime). The `agent:run` Job is not visible to external callers — they interact with the agent via `agent:request` and track the request Job. An agent's transition may create zero, one, or many additional jobs as part of its processing.
 
 #### `/g/` — Agents
 
-Stateful actors with pluggable transition functions. Each agent is a state machine managed by the venue runtime, with user-definable behaviour. The agent namespace enforces a four-layer execution architecture.
+Stateful actors with pluggable transition functions. Each agent is a state machine managed by the venue runtime, with user-definable behaviour.
 
 Agent IDs are human-readable strings chosen by the user (e.g. `"my-assistant"`, `"code-reviewer"`). The canonical lattice address is `did:key:zAlice.../g/my-assistant`.
 
-Each agent is a single atomic LWW value — the entire agent record is replaced on every write, and the record with the latest `ts` wins on merge. All writes are serialised on the hosting venue, so there are no concurrent writers. See AGENT_LOOP.md §2 for the full agent record structure (fields, timeline entries, merge semantics) and §3–4 for the transition function contract and agent update sequence.
+Each agent is a single atomic LWW value — the entire agent record is replaced on every write, and the record with the latest `ts` wins on merge. All writes are serialised on the hosting venue, so there are no concurrent writers.
 
-**Four-layer execution architecture:**
+**Agent record fields:**
 
-| Layer | Role | Provided by | Flexibility |
-|-------|------|-------------|-------------|
-| **1. Runtime** | Agent lifecycle, capability enforcement on lattice actions, timeline management, action dispatch | Venue — hardcoded | None. Trust anchor. |
-| **2. Transition function** | Agent behaviour. Receives `(agent-id, state, messages)`, returns `(state, result)`. See AGENT_LOOP.md §3.2. | Any grid op (`/o/` ref) | Pluggable. User picks or writes their own. |
-| **3. Tool loop** | ReAct / function-calling cycle within transition function. Calls grid ops, accumulates context. | Framework choice (LangChain, CrewAI, custom) | Flexible adapter. |
-| **4. LLM** | Stateless inference. Pure function: prompt → completion. No lattice access, no side effects. | User's choice. API key in `/s/`. | Any provider. |
+| Field | Type | Description |
+|-------|------|-------------|
+| `ts` | long | Timestamp of the last write. The LWW merge discriminator. Set automatically on every write. |
+| `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"` |
+| `config` | map | Framework-level configuration. Includes `operation` (default transition op), `name`, `description`, `tags`, `skills` (A2A), protocol settings. |
+| `state` | any | User-defined state. Opaque to the framework — owned entirely by the transition function. |
+| `tasks` | vector | Job IDs for inbound requests assigned to this agent. Persistent until resolved. |
+| `pending` | vector | Job IDs for outbound jobs the agent has invoked and is waiting on. |
+| `inbox` | vector | Ephemeral messages awaiting processing. Drained on each successful run. |
+| `timeline` | vector | Append-only log of transition records. Grows with each successful run. |
+| `caps` | map | Capability sets (placeholder — Phase C enforcement). |
+| `error` | string? | Last error message, or absent. Set when the transition function fails. |
 
-Trust decreases downward, freedom increases downward. The runtime is maximally constrained but fully trusted. The LLM is maximally free but completely untrusted.
+All fields are framework-managed except `state`, which is owned by the transition function.
 
-**Secret handling:** The transition function never sees plaintext secrets. It references secrets by path (e.g. `/s/anthropic-key`). The adapter — venue-provided trusted code sitting between the transition function and external services — manages plaintext on behalf of the agent:
+**Execution architecture, transition function contract, operations, scheduling, and timeline entry structure** are defined in AGENT_LOOP.md. In summary: the venue runtime manages agent lifecycle through a three-level architecture (agent update → transition function → LLM call), where only the transition function is pluggable. See AGENT_LOOP.md §2–§4 for full details.
 
-1. Runtime wakes agent, loads caps into the invoke context
-2. Transition function requests a secret by path (`/s/anthropic-key`)
-3. Adapter requests decryption from runtime within the invoke context
-4. Runtime checks `decrypt(/s/anthropic-key)` against the caps already loaded for this invocation — rejects if not granted
-5. Runtime decrypts and returns plaintext to the adapter
-6. Adapter injects plaintext directly into the LLM call
-7. Transition function receives only the completion, never the key
-
-The runtime is the **single enforcement point** for all capability checks — lattice actions (reads, writes, invokes) and secret decryption alike. It knows the agent's full capability set within the context of each invocation. The adapter is the **trust boundary** that prevents plaintext from leaking to untrusted code — it requests decryption from the runtime within the invoke context, and the runtime enforces at that point.
+**Secret handling:** Agents reference secrets by path (e.g. `/s/anthropic-key`). The runtime is the single enforcement point for capability checks including secret decryption. The adapter is the trust boundary — it handles plaintext on behalf of the agent and injects it into external calls. The transition function never sees plaintext secrets.
 
 | Component | Role |
 |-----------|------|
-| **Runtime** | Holds caps for invoke context. Single enforcement point for all lattice actions and secret decryption |
-| **Adapter** | Trusted handler of plaintext. Requests decryption from runtime within invoke context, injects into external calls |
-| **Transition fn** | Untrusted. References secrets by path only, never sees plaintext |
+| **Runtime** | Holds caps for invoke context. Single enforcement point for all lattice actions and secret decryption. |
+| **Adapter** | Trusted handler of plaintext. Requests decryption from runtime, injects into external calls. |
+| **Transition fn** | Untrusted. References secrets by path only, never sees plaintext. |
 
-**Execution loop (runtime-managed):**
-
-The agent update sequence — create, message, and run — is defined in AGENT_LOOP.md §4. In summary: when `agent:run` is triggered, the runtime sets `status` → `"RUNNING"`, invokes the transition function with the current state and inbox, and on success clears the inbox, appends a timeline entry, and sets `status` → `"SLEEPING"`. On error, the inbox is preserved and the agent is suspended.
-
-The transition function is responsible for deciding what to retain in `state` — accumulated context, conversation history, pending tasks. Anything not written to state is discarded. Layers 3 and 4 are ephemeral; they exist only during execution with no persistent lattice presence.
-
-**Agent tool palette:** During the tool loop (Layer 3), the agent has access to a set of MCP-style tools provided by the venue runtime. These are the agent's interface to the lattice and the outside world. The runtime validates every tool call against the agent's `caps`.
+**Agent tool palette:** During execution, the agent has access to MCP-style tools provided by the venue runtime. The runtime validates every tool call against the agent's `caps`.
 
 *Lattice operations (no job created):*
 
@@ -279,28 +272,13 @@ The transition function is responsible for deciding what to retain in `state` �
 | `fork_agent` | Fork an existing agent | `{ with: "did:.../g/<id>", can: "/agent/fork" }` |
 | `delegate` | Sub-delegate UCAN capabilities | `{ with: "did:...", can: "/ucan/delegate" }` |
 
-The tool palette maps directly to MCP tool definitions — each tool has a name, description, and JSON schema for args. This means the LLM (Layer 4) sees these as standard tool calls, regardless of framework. External MCP servers add additional tools via the adapter.
-
-**Mapping to standard LLM agent patterns (LangChain, OpenAI, etc.):**
-
-| Standard LLM concept | Covia equivalent | Location |
-|---|---|---|
-| System prompt | Agent config params or baked into transition fn | `/g/<id>/config` or `/o/transition-fn` |
-| Chat history / messages | Reconstructed from agent state | Previous `state` in agent record |
-| Tool definitions | Agent tool palette (above) + external MCP tools | Runtime-provided + `/g/<id>/config/tools` |
-| User input / task | Inbox messages | `messages` parameter passed to transition fn |
-| Agent scratchpad | Ephemeral — lives only during Layer 3 tool loop | Not persisted to lattice |
-| Tool call → result loop | Tool loop calls `read`, `invoke`, `mcp_call`, etc. | Within single transition fn execution |
-| Final answer | `result` returned by transition fn | Recorded in timeline entry |
-| Persisted memory | `state` returned by transition fn | Written to agent record, available next run |
-
-The key insight: the agent scratchpad (intermediate tool calls and results during a single reasoning turn) is **ephemeral within Layer 3**. The lattice only sees the inputs (inbox messages), the outputs (state + result), and the tool calls are recorded in the timeline for audit. The LLM (Layer 4) is completely stateless — it receives a prompt and returns a completion. All persistence is managed by the transition function's returned `state`.
+The tool palette maps directly to MCP tool definitions — each tool has a name, description, and JSON schema for args. External MCP servers add additional tools via the adapter.
 
 **Timeline efficiency:** Each timeline entry is a raw lattice value, not a pinned `/a/` ref. CAD3 structural sharing means unchanged subtrees between transitions share storage automatically. The timeline can grow indefinitely without proportional storage cost.
 
 **Communication:** Sending a message to another agent uses `agent:message`, which appends to the target agent's `inbox` vector — local: `/g/my-assistant`, remote: `did:key:zBob.../g/helper` — with appropriate capability via UCAN.
 
-**Discoverability:** Agent IDs are human-readable strings chosen by the user (e.g. `"my-assistant"`, `"code-reviewer"`). The canonical reference is via DID: `did:key:zAlice.../g/my-assistant`. Additional metadata (descriptions, tags) can be stored in the agent's `config` for discovery queries (e.g. "find all agents tagged 'code-review'").
+**Discoverability:** Agent IDs are human-readable strings chosen by the user. The canonical reference is via DID: `did:key:zAlice.../g/my-assistant`. Additional metadata (`name`, `description`, `tags`) in the agent's `config` supports discovery queries (e.g. "find all agents tagged 'code-review'").
 
 **Agent mobility and forking:**
 
@@ -603,7 +581,7 @@ Covia agents interoperate with external AI protocols through venue-provided adap
 
 ### 8.1 MCP (Model Context Protocol)
 
-MCP maps naturally to the tool loop (Layer 3). The adapter bridges between MCP's client-server model and grid ops.
+MCP maps naturally to the tool loop (level 2). The adapter bridges between MCP's client-server model and grid ops.
 
 **Outbound MCP** — Covia agent calls external MCP servers:
 
@@ -970,7 +948,7 @@ Extend the capability model from Phase 2 with full UCAN features: signed tokens,
 
 ### Phase 5: Agent Model (`/g/`)
 
-Stateful actors with lifecycle, inbox, timeline, and pluggable transition functions. The four-layer architecture (runtime → transition fn → tool loop → LLM). Agent data structure and transitions are defined in AGENT_LOOP.md.
+Stateful actors with lifecycle, tasks, pending, inbox, timeline, and pluggable transition functions. The three-level architecture (agent update → transition fn → LLM call). Agent data structure and transitions are defined in AGENT_LOOP.md.
 
 Builds on: per-user cursors (agents are owned by users), operations registry (agents invoke ops), UCAN (agents have capability boundaries).
 

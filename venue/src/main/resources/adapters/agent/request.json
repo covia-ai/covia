@@ -1,0 +1,23 @@
+{
+	"name": "Request Agent Task",
+	"description": "Submits a persistent task to an agent. Creates a Job that the agent will complete or reject during a future run. Returns the Job ID for tracking progress. This is the primary way to interact with agents via MCP.",
+	"dateCreated": "2026-03-06T00:00:00Z",
+	"operation": {
+		"adapter": "agent:request",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Target agent name" },
+				"input": { "description": "Request input data (any JSON value)" }
+			},
+			"required": ["agentId"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string" },
+				"jobId": { "type": "string", "description": "Job ID for tracking task progress" }
+			}
+		}
+	}
+}

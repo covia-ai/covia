@@ -1,0 +1,10 @@
+{
+	"name": "Task Complete Test Operation",
+	"description": "Test transition function that auto-completes all tasks. Returns taskResults with each task's input as output.",
+	"dateCreated": "2026-03-06T00:00:00Z",
+	"operation": {
+		"adapter": "test:taskcomplete",
+		"input": {},
+		"output": {}
+	}
+}

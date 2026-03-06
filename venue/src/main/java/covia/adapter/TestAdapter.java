@@ -49,6 +49,8 @@ public class TestAdapter extends AAdapter {
             switch (testOp) {
                 case "echo":
                     return CompletableFuture.completedFuture(handleEcho(input));
+                case "taskcomplete":
+                    return CompletableFuture.completedFuture(handleTaskComplete(input));
                 case "llm":
                     return CompletableFuture.completedFuture(handleLlm(input));
                 case "toolllm":
@@ -95,6 +97,7 @@ public class TestAdapter extends AAdapter {
 			installAsset(BASE+"chatop.json");
 			installAsset(BASE+"pauseop.json");
 			installAsset(BASE+"orch.json");
+			installAsset(BASE+"taskcomplete.json");
 			Hash iris=engine.storeAsset(Utils.readResourceAsAString(BASE+"iris.json"),null);
 			engine.putContent(iris,this.getClass().getResourceAsStream(BASE+"iris.csv"));
 			Hash shake=engine.storeAsset(Utils.readResourceAsAString(BASE+"shakespeare.json"),null);
@@ -177,6 +180,38 @@ public class TestAdapter extends AAdapter {
 	private ACell handleEcho(ACell input) {
         // Simply return the input
         return input;
+    }
+
+    /**
+     * Test transition function that auto-completes all tasks.
+     * Returns the transition function contract: {state, result, taskResults}.
+     * Each task is completed with its own input as output.
+     */
+    @SuppressWarnings("unchecked")
+    private ACell handleTaskComplete(ACell input) {
+        ACell state = RT.getIn(input, "state");
+        ACell tasksCell = RT.getIn(input, "tasks");
+
+        AMap<AString, ACell> taskResults = Maps.empty();
+        if (tasksCell instanceof AVector) {
+            AVector<ACell> tasks = (AVector<ACell>) tasksCell;
+            for (long i = 0; i < tasks.count(); i++) {
+                AString jobId = RT.ensureString(RT.getIn(tasks.get(i), "jobId"));
+                ACell taskInput = RT.getIn(tasks.get(i), "input");
+                if (jobId != null) {
+                    taskResults = taskResults.assoc(jobId, Maps.of(
+                        "status", Strings.create("COMPLETE"),
+                        "output", Maps.of("completed", taskInput)
+                    ));
+                }
+            }
+        }
+
+        return Maps.of(
+            "state", state,
+            "result", Maps.of("tasksCompleted", CVMLong.create(taskResults.count())),
+            "taskResults", taskResults
+        );
     }
 
     /**

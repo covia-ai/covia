@@ -263,6 +263,286 @@ public class AgentAdapterTest {
 		assertEquals(1, bobAgent.getInbox().count(), "Bob's agent should have 1 message");
 	}
 
+	// ========== Default transition op from config ==========
+
+	@Test
+	public void testRunWithDefaultOperation() {
+		// Create agent with default operation in config
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "default-op-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		engine.jobs().invokeOperation(
+			"agent:message",
+			Maps.of(Fields.AGENT_ID, "default-op-agent", Fields.MESSAGE, Maps.of("content", "hello")),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		// Run without specifying operation — should use config default
+		Job runJob = engine.jobs().invokeOperation(
+			"agent:run",
+			Maps.of(Fields.AGENT_ID, "default-op-agent"),
+			RequestContext.of(ALICE_DID));
+		ACell result = runJob.awaitResult();
+
+		assertNotNull(result);
+		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("default-op-agent");
+		assertEquals(0, agent.getInbox().count(), "Inbox should be cleared");
+		assertEquals(1, agent.getTimeline().count(), "Timeline should have 1 entry");
+	}
+
+	@Test
+	public void testRunExplicitOperationOverridesConfig() {
+		// Create agent with a config default
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "override-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:error")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		engine.jobs().invokeOperation(
+			"agent:message",
+			Maps.of(Fields.AGENT_ID, "override-agent", Fields.MESSAGE, Maps.of("content", "hello")),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		// Explicit operation should override the config default (test:echo succeeds, test:error would fail)
+		Job runJob = engine.jobs().invokeOperation(
+			"agent:run",
+			Maps.of(Fields.AGENT_ID, "override-agent", Fields.OPERATION, "test:echo"),
+			RequestContext.of(ALICE_DID));
+		ACell result = runJob.awaitResult();
+
+		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
+	}
+
+	@Test
+	public void testRunNoOperationAndNoConfigFails() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "no-op-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		engine.jobs().invokeOperation(
+			"agent:message",
+			Maps.of(Fields.AGENT_ID, "no-op-agent", Fields.MESSAGE, Maps.of("content", "hello")),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		// No operation specified and no config default — should fail
+		Job runJob = engine.jobs().invokeOperation(
+			"agent:run",
+			Maps.of(Fields.AGENT_ID, "no-op-agent"),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			runJob.awaitResult();
+			fail("Should fail without operation");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, runJob.getStatus());
+		}
+	}
+
+	// ========== Result in run output ==========
+
+	@Test
+	public void testRunOutputIncludesResult() {
+		// Use the LLMAgentAdapter test pattern: test:llm returns a known response
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "result-agent",
+				AgentState.KEY_STATE, Maps.of(
+					"config", Maps.of(
+						"llmOperation", "test:llm",
+						"systemPrompt", "You are helpful."
+					)
+				)
+			),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		engine.jobs().invokeOperation(
+			"agent:message",
+			Maps.of(Fields.AGENT_ID, "result-agent", Fields.MESSAGE, Maps.of("content", "hello")),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		Job runJob = engine.jobs().invokeOperation(
+			"agent:run",
+			Maps.of(Fields.AGENT_ID, "result-agent", Fields.OPERATION, "llmagent:chat"),
+			RequestContext.of(ALICE_DID));
+		ACell result = runJob.awaitResult();
+
+		// The run output should now include the transition result
+		ACell transitionResult = RT.getIn(result, Fields.RESULT);
+		assertNotNull(transitionResult, "Run output should include the transition result");
+		AString response = RT.ensureString(RT.getIn(transitionResult, "response"));
+		assertNotNull(response, "Result should contain a response");
+		assertTrue(response.toString().length() > 0, "Response should not be empty");
+	}
+
+	// ========== agent:request ==========
+
+	@Test
+	public void testRequestCreatesTask() {
+		// Create agent with default operation
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "task-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		// Submit a request — the job should NOT complete immediately
+		Job requestJob = engine.jobs().invokeOperation(
+			"agent:request",
+			Maps.of(Fields.AGENT_ID, "task-agent", Fields.INPUT, Maps.of("question", "What is 2+2?")),
+			RequestContext.of(ALICE_DID));
+
+		// The task should be in the agent's tasks queue
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("task-agent");
+
+		// Wait for the scheduled run to complete the task
+		ACell result = requestJob.awaitResult();
+		assertNotNull(result, "Request should eventually be completed by the agent");
+
+		// Task should be removed from tasks after completion
+		assertEquals(0, agent.getTasks().count(), "Tasks should be empty after completion");
+	}
+
+	@Test
+	public void testRequestTaskCompletion() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "completing-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		// Submit a request
+		Job requestJob = engine.jobs().invokeOperation(
+			"agent:request",
+			Maps.of(Fields.AGENT_ID, "completing-agent", Fields.INPUT, Maps.of("data", "hello")),
+			RequestContext.of(ALICE_DID));
+
+		// Wait for completion
+		ACell result = requestJob.awaitResult();
+		assertNotNull(result);
+
+		// The output should contain what test:taskcomplete returns
+		ACell completed = RT.getIn(result, "completed");
+		assertNotNull(completed, "Task output should contain 'completed' from test:taskcomplete");
+	}
+
+	@Test
+	public void testRequestToNonExistentAgent() {
+		Job requestJob = engine.jobs().invokeOperation(
+			"agent:request",
+			Maps.of(Fields.AGENT_ID, "ghost-agent", Fields.INPUT, Maps.of("q", "hello")),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			requestJob.awaitResult();
+			fail("Should fail for non-existent agent");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, requestJob.getStatus());
+		}
+	}
+
+	@Test
+	public void testRequestToTerminatedAgent() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "dead-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		user.agent("dead-agent").setStatus(AgentState.TERMINATED);
+
+		Job requestJob = engine.jobs().invokeOperation(
+			"agent:request",
+			Maps.of(Fields.AGENT_ID, "dead-agent", Fields.INPUT, Maps.of("q", "hello")),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			requestJob.awaitResult();
+			fail("Should fail for terminated agent");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, requestJob.getStatus());
+		}
+	}
+
+	@Test
+	public void testRequestTimelineIncludesTaskResults() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "timeline-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		Job requestJob = engine.jobs().invokeOperation(
+			"agent:request",
+			Maps.of(Fields.AGENT_ID, "timeline-agent", Fields.INPUT, Maps.of("task", "audit")),
+			RequestContext.of(ALICE_DID));
+		requestJob.awaitResult();
+
+		// Check the timeline
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("timeline-agent");
+		AVector<ACell> timeline = agent.getTimeline();
+		assertNotNull(timeline, "Timeline should exist");
+		assertEquals(1, timeline.count(), "Should have one timeline entry");
+
+		// Timeline entry should contain taskResults
+		ACell entry = timeline.get(0);
+		ACell taskResults = RT.getIn(entry, Fields.TASK_RESULTS);
+		assertNotNull(taskResults, "Timeline entry should include taskResults");
+	}
+
+	@Test
+	public void testMultipleRequestsProcessed() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "multi-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		// Submit two requests
+		Job req1 = engine.jobs().invokeOperation(
+			"agent:request",
+			Maps.of(Fields.AGENT_ID, "multi-agent", Fields.INPUT, Maps.of("n", "1")),
+			RequestContext.of(ALICE_DID));
+
+		Job req2 = engine.jobs().invokeOperation(
+			"agent:request",
+			Maps.of(Fields.AGENT_ID, "multi-agent", Fields.INPUT, Maps.of("n", "2")),
+			RequestContext.of(ALICE_DID));
+
+		// Both should complete eventually
+		req1.awaitResult();
+		req2.awaitResult();
+
+		assertTrue(req1.isComplete(), "Request 1 should be complete");
+		assertTrue(req2.isComplete(), "Request 2 should be complete");
+
+		// All tasks should be cleared
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("multi-agent");
+		assertEquals(0, agent.getTasks().count(), "All tasks should be cleared");
+	}
+
 	// ========== AgentState lifecycle ==========
 
 	@Test
@@ -275,6 +555,8 @@ public class AgentAdapterTest {
 		assertTrue(agent.exists());
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
 		assertTrue(agent.getTs() > 0, "Agent should have a ts after creation");
+		assertEquals(0, agent.getTasks().count(), "New agent should have empty tasks");
+		assertEquals(0, agent.getPending().count(), "New agent should have empty pending");
 
 		agent.setStatus(AgentState.RUNNING);
 		assertEquals(AgentState.RUNNING, agent.getStatus());
