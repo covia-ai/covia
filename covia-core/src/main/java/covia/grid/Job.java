@@ -4,6 +4,9 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
@@ -342,7 +345,7 @@ public class Job {
 	}
 
 	/**
-	 * Waits for the job to complete and resturns the result. 
+	 * Waits for the job to complete and returns the result. Blocks indefinitely.
 	 * @param <T> Expected type of ACell result, for convenience. Usually an AMap<String,ACell>
 	 * @return Result of job
 	 * @throws JobFailedException if job failed
@@ -360,6 +363,34 @@ public class Job {
 	        fail(cause.getMessage());
 	        throw new JobFailedException(this);
 	    }
+	}
+
+	/**
+	 * Waits for the job to complete and returns the result, with a timeout.
+	 * @param <T> Expected type of ACell result, for convenience
+	 * @param timeoutMillis Maximum time to wait in milliseconds
+	 * @return Result of job
+	 * @throws JobFailedException if job failed or timed out
+	 */
+	@SuppressWarnings("unchecked")
+	public <T extends ACell> T awaitResult(long timeoutMillis) {
+		try {
+			return (T) future().get(timeoutMillis, TimeUnit.MILLISECONDS);
+		} catch (TimeoutException e) {
+			fail("Job timed out after " + timeoutMillis + "ms");
+			throw new JobFailedException(this);
+		} catch (ExecutionException e) {
+			Throwable cause = e.getCause();
+			if (cause instanceof JobFailedException) {
+				throw (JobFailedException) cause;
+			}
+			fail(cause.getMessage());
+			throw new JobFailedException(this);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			fail("Interrupted while waiting for result");
+			throw new JobFailedException(this);
+		}
 	}
 
 	/**

@@ -211,7 +211,7 @@ public class MCPTest {
 					Fields.TOOL_NAME,"test:echo",
 					Fields.ARGUMENTS,arguments)).join();
 
-		AMap<AString,AInteger> result=job.awaitResult();
+		AMap<AString,AInteger> result=job.awaitResult(5000);
 		assertEquals(arguments,result);
 	}
 	
@@ -224,7 +224,7 @@ public class MCPTest {
 		Job job=client.invoke(mcpAdapter.TOOLS_LIST,
 				Maps.of(Fields.SERVER, BASE_URL)).join();
 
-		ACell result=job.awaitResult();
+		ACell result=job.awaitResult(5000);
 		assertNotNull(result);
 
 		// Verify the result structure

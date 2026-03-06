@@ -1,6 +1,7 @@
 package covia.adapter;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,11 +35,15 @@ import covia.venue.Users;
  *   <li>{@code agent:create} — create and initialise an agent</li>
  *   <li>{@code agent:request} — submit a persistent task to an agent</li>
  *   <li>{@code agent:message} — deliver an ephemeral message to an agent's inbox</li>
- *   <li>{@code agent:run} — run the agent update loop (internal / testing)</li>
+ *   <li>{@code agent:trigger} — trigger the agent update loop and wait for completion</li>
  * </ul>
  *
- * <p>All operations atomically replace the agent record with a new {@code ts}.
- * See {@code AGENT_LOOP.md} for design.</p>
+ * <p>Run scheduling is lattice-native: the agent's {@code status} field
+ * (RUNNING / SLEEPING) is the source of truth for run exclusion. A per-agent
+ * lock serialises all record mutations (addTask, deliverMessage, run loop
+ * writes) so there are no lost updates. No separate Java-side flags.</p>
+ *
+ * <p>See {@code AGENT_LOOP.md} for design.</p>
  */
 public class AgentAdapter extends AAdapter {
 
@@ -47,6 +52,16 @@ public class AgentAdapter extends AAdapter {
 	// Timeline entry timestamp keys
 	private static final AString K_START = Strings.intern("start");
 	private static final AString K_END   = Strings.intern("end");
+
+	// Per-agent lock for serialising all record mutations
+	private final ConcurrentHashMap<String, Object> agentLocks = new ConcurrentHashMap<>();
+
+	// Per-agent completion futures — triggers park on these to wait for the current run
+	private final ConcurrentHashMap<String, CompletableFuture<ACell>> runCompletions = new ConcurrentHashMap<>();
+
+	Object agentLock(AString agentId) {
+		return agentLocks.computeIfAbsent(agentId.toString(), k -> new Object());
+	}
 
 	@Override
 	public String getName() {
@@ -66,7 +81,7 @@ public class AgentAdapter extends AAdapter {
 		installAsset(BASE + "create.json");
 		installAsset(BASE + "request.json");
 		installAsset(BASE + "message.json");
-		installAsset(BASE + "run.json");
+		installAsset(BASE + "trigger.json");
 		installAsset(BASE + "query.json");
 		installAsset(BASE + "list.json");
 	}
@@ -97,8 +112,8 @@ public class AgentAdapter extends AAdapter {
 				case "message":
 					handleMessage(job, input, ctx);
 					break;
-				case "run":
-					handleRun(job, input, ctx);
+				case "trigger":
+					handleTrigger(job, input, ctx);
 					break;
 				case "query":
 					handleQuery(job, input, ctx);
@@ -144,7 +159,7 @@ public class AgentAdapter extends AAdapter {
 	 *
 	 * <p>The Job created for this invocation IS the task. It is left in STARTED
 	 * state and added to the agent's tasks queue. The agent will complete or
-	 * reject it during a future run. An async run is scheduled immediately.</p>
+	 * reject it during a future run.</p>
 	 */
 	private void handleRequest(Job job, ACell input, RequestContext ctx) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
@@ -159,12 +174,14 @@ public class AgentAdapter extends AAdapter {
 		// The request job stays in STARTED — agent will complete it
 		job.setStatus(Status.STARTED);
 
-		// Add this job's ID to the agent's task queue with job status snapshot
+		// Add task inside the lock to serialise with run loop writes
 		AMap<AString, ACell> snapshot = engine.jobs().getJobData(job.getID());
-		agent.addTask(job.getID(), snapshot);
+		synchronized (agentLock(agentId)) {
+			agent.addTask(job.getID(), snapshot);
+		}
 
-		// Schedule an async run
-		scheduleRun(agentId, ctx);
+		// Wake the agent
+		wakeAgent(agentId, ctx);
 	}
 
 	/**
@@ -180,7 +197,13 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
 
-		agent.deliverMessage(RT.getIn(input, Fields.MESSAGE));
+		// Deliver inside the lock to serialise with run loop writes
+		synchronized (agentLock(agentId)) {
+			agent.deliverMessage(RT.getIn(input, Fields.MESSAGE));
+		}
+
+		// Wake the agent
+		wakeAgent(agentId, ctx);
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(
@@ -266,149 +289,304 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * agent:run — run the agent update loop.
+	 * agent:trigger — trigger the agent update loop and wait for completion.
 	 *
-	 * <p>Internal operation, triggered by the scheduler after agent:request or
-	 * agent:message. Also callable directly for testing.</p>
+	 * <p>If the agent is SLEEPING with work, starts the run loop and the
+	 * trigger Job completes when the loop finishes. If the agent is already
+	 * RUNNING, the trigger parks on the existing completion future and
+	 * completes when the current run finishes. If there is no work, returns
+	 * immediately with SLEEPING status.</p>
 	 *
-	 * <p>Follows the agent update sequence from AGENT_LOOP.md §4.4.</p>
+	 * <p>The transition operation always comes from the agent's
+	 * {@code config.operation} — callers cannot override it.</p>
 	 */
-	@SuppressWarnings("unchecked")
-	private void handleRun(Job job, ACell input, RequestContext ctx) {
+	private void handleTrigger(Job job, ACell input, RequestContext ctx) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) {
 			job.fail("agentId is required");
 			return;
 		}
 
-		AString callerDID = ctx.getCallerDID();
+		CompletableFuture<ACell> completion0 = null;
+		boolean startRun = false;
+		AString transitionOp = null;
 
-		// Resolve transition operation — explicit input overrides agent config default
-		AString transitionOp = RT.ensureString(RT.getIn(input, Fields.OPERATION));
-		if (transitionOp == null) {
-			AgentState agent = lookupAgent(job, callerDID, agentId);
-			if (agent == null) return;
-			AMap<AString, ACell> config = agent.getConfig();
-			if (config != null) {
-				transitionOp = RT.ensureString(config.get(Fields.OPERATION));
+		synchronized (agentLock(agentId)) {
+			AgentState agent = getAgent(ctx.getCallerDID(), agentId);
+			if (agent == null) {
+				job.fail("Agent not found: " + agentId);
+				return;
+			}
+
+			AString status = agent.getStatus();
+			if (AgentState.SUSPENDED.equals(status)) {
+				job.fail("Agent is suspended: " + agentId);
+				return;
+			}
+
+			if (AgentState.RUNNING.equals(status)) {
+				// Park on existing completion future
+				completion0 = runCompletions.get(agentId.toString());
+				if (completion0 == null) {
+					// Defensive — shouldn't happen if RUNNING was set properly
+					completion0 = new CompletableFuture<>();
+					runCompletions.put(agentId.toString(), completion0);
+				}
+			} else {
+				// SLEEPING
+				if (!hasWork(agent)) {
+					job.setStatus(Status.STARTED);
+					job.completeWith(Maps.of(
+						Fields.AGENT_ID, agentId,
+						Fields.STATUS, AgentState.SLEEPING
+					));
+					return;
+				}
+
+				transitionOp = resolveTransitionOp(ctx.getCallerDID(), agentId);
+				if (transitionOp == null) {
+					job.fail("No transition operation configured for agent: " + agentId);
+					return;
+				}
+
+				completion0 = new CompletableFuture<>();
+				runCompletions.put(agentId.toString(), completion0);
+				agent.setStatus(AgentState.RUNNING);
+				startRun = true;
 			}
 		}
-		if (transitionOp == null) {
-			job.fail("operation is required (not provided and no default in agent config)");
-			return;
-		}
-		final AString finalTransitionOp = transitionOp;
+
+		// Effectively final for lambda capture
+		final CompletableFuture<ACell> completion = completion0;
+		final AString finalOp = transitionOp;
 
 		job.setStatus(Status.STARTED);
 
-		CompletableFuture.runAsync(() -> {
-			try {
-				executeRun(job, agentId, callerDID, finalTransitionOp, ctx);
-			} catch (Exception e) {
-				suspendOnError(callerDID, agentId, e);
-				job.fail(e.getMessage());
+		// Subscribe to completion — fires when the run loop finishes
+		completion.whenComplete((result, ex) -> {
+			if (ex != null) {
+				job.fail(ex.getMessage());
+			} else {
+				job.completeWith(result);
 			}
+		});
+
+		if (startRun) {
+			CompletableFuture.runAsync(() -> {
+				executeRunLoop(agentId, ctx.getCallerDID(), finalOp, ctx, completion);
+			}, VIRTUAL_EXECUTOR);
+		}
+	}
+
+	// ========== Wake and run loop ==========
+
+	/**
+	 * Wakes an agent — checks the lattice status and starts the run loop if
+	 * the agent is SLEEPING and has work.
+	 *
+	 * <p>This is the single entry point for all agent wakes: request, message,
+	 * async job completion. The per-agent lock serialises the status check with
+	 * record mutations, eliminating lost wakeups.</p>
+	 *
+	 * <p>If the agent is already RUNNING, the new work is already in the lattice
+	 * (inbox/tasks) and the running loop will pick it up on its next iteration
+	 * check. No separate wake flag needed.</p>
+	 *
+	 * <p>A completion future is created so that any {@code agent:trigger} that
+	 * arrives while the agent is running can park on it.</p>
+	 *
+	 * <p>Package-private so that {@link LLMAgentAdapter} can call it from async
+	 * completion callbacks.</p>
+	 */
+	void wakeAgent(AString agentId, RequestContext ctx) {
+		AString callerDID = ctx.getCallerDID();
+		AString transitionOp;
+		CompletableFuture<ACell> completion;
+
+		synchronized (agentLock(agentId)) {
+			AgentState agent = getAgent(callerDID, agentId);
+			if (agent == null) return;
+			if (AgentState.RUNNING.equals(agent.getStatus())) return;
+			if (!hasWork(agent)) return;
+
+			transitionOp = resolveTransitionOp(callerDID, agentId);
+			if (transitionOp == null) return;
+
+			agent.setStatus(AgentState.RUNNING);
+			completion = new CompletableFuture<>();
+			runCompletions.put(agentId.toString(), completion);
+		}
+
+		final AString finalTransitionOp = transitionOp;
+		CompletableFuture.runAsync(() -> {
+			executeRunLoop(agentId, callerDID, finalTransitionOp, ctx, completion);
 		}, VIRTUAL_EXECUTOR);
 	}
 
 	/**
-	 * Core agent run logic — reads state, invokes transition, applies results.
+	 * Checks whether an agent has work to do (non-empty inbox or tasks).
+	 */
+	private static boolean hasWork(AgentState agent) {
+		AVector<ACell> inbox = agent.getInbox();
+		if (inbox != null && inbox.count() > 0) return true;
+		Index<Blob, ACell> tasks = agent.getTasks();
+		return tasks != null && tasks.count() > 0;
+	}
+
+	/**
+	 * Core agent run loop — reads state, invokes transition, merges results.
+	 *
+	 * <p>The loop re-reads the current record at write time and merges changes
+	 * to avoid overwriting tasks or messages added concurrently. Only the
+	 * specific messages processed in this iteration are removed; new messages
+	 * appended during the transition are preserved.</p>
+	 *
+	 * <p>Status transitions use the lattice: the caller sets RUNNING before
+	 * entry; the loop sets SLEEPING on exit (inside the lock). If new work
+	 * arrived during the run, the loop continues instead of exiting.</p>
+	 *
+	 * <p>On completion (success or failure), notifies waiting triggers via the
+	 * provided {@code completion} future.</p>
 	 */
 	@SuppressWarnings("unchecked")
-	private void executeRun(Job job, AString agentId, AString callerDID,
-			AString transitionOp, RequestContext ctx) {
-		AgentState agent = lookupAgent(job, callerDID, agentId);
-		if (agent == null) return;
+	private void executeRunLoop(AString agentId, AString callerDID,
+			AString transitionOp, RequestContext ctx,
+			CompletableFuture<ACell> completion) {
+		ACell lastResult = null;
 
-		// Step 1: Read current agent record
-		AMap<AString, ACell> record = agent.getRecord();
-		AVector<ACell> inbox = ensureVector(agent.getInbox());
-		Index<Blob, ACell> tasks = agent.getTasks();
-		Index<Blob, ACell> pending = agent.getPending();
+		try {
+		while (true) {
+			// Snapshot inputs inside the lock for a consistent read
+			AMap<AString, ACell> record;
+			AVector<ACell> inbox;
+			Index<Blob, ACell> tasks;
+			Index<Blob, ACell> pending;
+			ACell currentState;
 
-		// Step 2: Check if there's work to do
-		if (inbox.count() == 0 && tasks.count() == 0) {
-			job.completeWith(Maps.of(
+			synchronized (agentLock(agentId)) {
+				AgentState agent = getAgent(callerDID, agentId);
+				if (agent == null) {
+					completeRunExceptionally(completion, agentId, "Agent not found: " + agentId);
+					return;
+				}
+
+				record = agent.getRecord();
+				inbox = ensureVector(agent.getInbox());
+				tasks = agent.getTasks();
+				pending = agent.getPending();
+				currentState = agent.getState();
+
+				// No work — set SLEEPING and exit
+				if (inbox.count() == 0 && tasks.count() == 0) {
+					agent.setStatus(AgentState.SLEEPING);
+					ACell finalResult = (lastResult != null) ? lastResult : Maps.of(
+						Fields.AGENT_ID, agentId,
+						Fields.STATUS, AgentState.SLEEPING
+					);
+					completeRun(completion, agentId, finalResult);
+					return;
+				}
+			}
+
+			long startTs = Utils.getCurrentTimestamp();
+
+			// Resolve job data (no lock needed — read-only from JobManager)
+			AVector<ACell> resolvedTasks = resolveJobIds(tasks, Fields.INPUT);
+			AVector<ACell> resolvedPending = resolveJobIds(pending, Fields.OUTPUT);
+
+			// Invoke transition function — NO LOCK held during this call
+			AMap<AString, ACell> transitionInput = Maps.of(
 				Fields.AGENT_ID, agentId,
-				Fields.STATUS, agent.getStatus()
-			));
-			return;
+				AgentState.KEY_STATE, currentState,
+				Fields.TASKS, resolvedTasks,
+				Fields.PENDING, resolvedPending,
+				Fields.MESSAGES, inbox
+			);
+
+			Job transitionJob = engine.jobs().invokeOperation(
+				transitionOp, transitionInput, ctx);
+			ACell transitionResult = transitionJob.awaitResult();
+
+			// Process results
+			long endTs = Utils.getCurrentTimestamp();
+			ACell newState = RT.getIn(transitionResult, AgentState.KEY_STATE);
+			ACell result = RT.getIn(transitionResult, Fields.RESULT);
+
+			AMap<AString, ACell> taskResults = null;
+			ACell taskResultsCell = RT.getIn(transitionResult, Fields.TASK_RESULTS);
+			if (taskResultsCell instanceof AMap) {
+				taskResults = (AMap<AString, ACell>) taskResultsCell;
+			}
+
+			AMap<AString, ACell> timelineEntry = Maps.of(
+				K_START, CVMLong.create(startTs),
+				K_END, CVMLong.create(endTs),
+				Fields.OP, transitionOp,
+				AgentState.KEY_STATE, record.get(AgentState.KEY_STATE),
+				Fields.TASKS, resolvedTasks,
+				Fields.MESSAGES, inbox,
+				Fields.RESULT, result
+			);
+			if (taskResults != null) {
+				timelineEntry = timelineEntry.assoc(Fields.TASK_RESULTS, taskResults);
+			}
+
+			// Merge with current state inside the lock
+			boolean hasMoreWork;
+			synchronized (agentLock(agentId)) {
+				AgentState agent = getAgent(callerDID, agentId);
+				if (agent == null) {
+					completeRunExceptionally(completion, agentId, "Agent not found: " + agentId);
+					return;
+				}
+
+				// Remove completed tasks from CURRENT tasks (not stale snapshot)
+				Index<Blob, ACell> currentTasks = agent.getTasks();
+				Index<Blob, ACell> updatedTasks = removeCompletedTasks(currentTasks, taskResults);
+
+				// Preserve messages appended during the transition
+				AVector<ACell> currentInbox = ensureVector(agent.getInbox());
+				long processedCount = inbox.count();
+				AVector<ACell> remainingInbox = Vectors.empty();
+				for (long i = processedCount; i < currentInbox.count(); i++) {
+					remainingInbox = remainingInbox.conj(currentInbox.get(i));
+				}
+
+				AVector<ACell> timeline = ensureVector(agent.getTimeline());
+				hasMoreWork = (updatedTasks.count() > 0 || remainingInbox.count() > 0);
+
+				AMap<AString, ACell> newRecord = agent.getRecord()
+					.assoc(AgentState.KEY_STATE, newState)
+					.assoc(AgentState.KEY_TASKS, updatedTasks)
+					.assoc(AgentState.KEY_INBOX, remainingInbox)
+					.assoc(AgentState.KEY_TIMELINE, timeline.conj(timelineEntry))
+					.assoc(AgentState.KEY_STATUS, hasMoreWork ? AgentState.RUNNING : AgentState.SLEEPING)
+					.dissoc(AgentState.KEY_ERROR);
+				agent.putRecord(newRecord);
+			}
+
+			// Complete task Jobs AFTER releasing the lock
+			if (taskResults != null) {
+				applyTaskResults(taskResults);
+			}
+
+			lastResult = Maps.of(
+				Fields.AGENT_ID, agentId,
+				Fields.STATUS, AgentState.SLEEPING,
+				Fields.RESULT, result
+			);
+
+			if (!hasMoreWork) {
+				completeRun(completion, agentId, lastResult);
+				return;
+			}
 		}
-
-		// Resolve job data from JobManager
-		AVector<ACell> resolvedTasks = resolveJobIds(tasks, Fields.INPUT);
-		AVector<ACell> resolvedPending = resolveJobIds(pending, Fields.OUTPUT);
-
-		// Step 3: Set status to RUNNING
-		long startTs = Utils.getCurrentTimestamp();
-		agent.setStatus(AgentState.RUNNING);
-
-		// Step 4: Invoke transition function
-		AMap<AString, ACell> transitionInput = Maps.of(
-			Fields.AGENT_ID, agentId,
-			AgentState.KEY_STATE, agent.getState(),
-			Fields.TASKS, resolvedTasks,
-			Fields.PENDING, resolvedPending,
-			Fields.MESSAGES, inbox
-		);
-
-		Job transitionJob = engine.jobs().invokeOperation(
-			transitionOp, transitionInput, ctx);
-		ACell transitionResult = transitionJob.awaitResult();
-
-		// Step 5: On success — process results and update record
-		long endTs = Utils.getCurrentTimestamp();
-		ACell newState = RT.getIn(transitionResult, AgentState.KEY_STATE);
-		ACell result = RT.getIn(transitionResult, Fields.RESULT);
-
-		// Collect taskResults from transition output
-		AMap<AString, ACell> taskResults = null;
-		ACell taskResultsCell = RT.getIn(transitionResult, Fields.TASK_RESULTS);
-		if (taskResultsCell instanceof AMap) {
-			taskResults = (AMap<AString, ACell>) taskResultsCell;
+		} catch (Exception e) {
+			synchronized (agentLock(agentId)) {
+				suspendOnError(callerDID, agentId, e);
+			}
+			completeRunExceptionally(completion, agentId, e.getMessage());
 		}
-
-		// Remove completed tasks from the index
-		Index<Blob, ACell> updatedTasks = removeCompletedTasks(tasks, taskResults);
-
-		// Build timeline entry
-		AMap<AString, ACell> timelineEntry = Maps.of(
-			K_START, CVMLong.create(startTs),
-			K_END, CVMLong.create(endTs),
-			Fields.OP, transitionOp,
-			AgentState.KEY_STATE, record.get(AgentState.KEY_STATE),
-			Fields.TASKS, resolvedTasks,
-			Fields.MESSAGES, inbox,
-			Fields.RESULT, result
-		);
-		if (taskResults != null) {
-			timelineEntry = timelineEntry.assoc(Fields.TASK_RESULTS, taskResults);
-		}
-
-		AVector<ACell> timeline = ensureVector(agent.getTimeline());
-
-		// Write complete agent record BEFORE completing task Jobs.
-		// This ensures callers who awaitResult() on task Jobs see
-		// consistent agent state (tasks removed, timeline updated).
-		AMap<AString, ACell> newRecord = record
-			.assoc(AgentState.KEY_STATE, newState)
-			.assoc(AgentState.KEY_TASKS, updatedTasks)
-			.assoc(AgentState.KEY_INBOX, Vectors.empty())
-			.assoc(AgentState.KEY_TIMELINE, timeline.conj(timelineEntry))
-			.assoc(AgentState.KEY_STATUS, AgentState.SLEEPING)
-			.dissoc(AgentState.KEY_ERROR);
-		agent.putRecord(newRecord);
-
-		// Now complete the task Jobs — unblocks callers waiting on them
-		if (taskResults != null) {
-			applyTaskResults(taskResults);
-		}
-
-		job.completeWith(Maps.of(
-			Fields.AGENT_ID, agentId,
-			Fields.STATUS, AgentState.SLEEPING,
-			Fields.RESULT, result
-		));
 	}
 
 	/**
@@ -433,27 +611,40 @@ public class AgentAdapter extends AAdapter {
 	// ========== Agent lookup ==========
 
 	/**
+	 * Looks up an agent, returning null on any failure. No side effects.
+	 */
+	private AgentState getAgent(AString callerDID, AString agentId) {
+		Users users = engine.getVenueState().users();
+		User user = users.get(callerDID);
+		if (user == null) return null;
+		AgentState agent = user.agent(agentId);
+		if (agent == null) return null;
+		if (AgentState.TERMINATED.equals(agent.getStatus())) return null;
+		return agent;
+	}
+
+	/**
 	 * Looks up an agent by ID for the given user, failing the job on error.
 	 *
 	 * @return the AgentState, or null if the job was failed
 	 */
 	private AgentState lookupAgent(Job job, AString callerDID, AString agentId) {
-		Users users = engine.getVenueState().users();
-		User user = users.get(callerDID);
-		if (user == null) {
-			job.fail("User not found: " + callerDID);
-			return null;
-		}
-		AgentState agent = user.agent(agentId);
+		AgentState agent = getAgent(callerDID, agentId);
 		if (agent == null) {
-			job.fail("Agent not found: " + agentId);
-			return null;
-		}
-		if (AgentState.TERMINATED.equals(agent.getStatus())) {
-			job.fail("Agent is terminated: " + agentId);
-			return null;
+			job.fail("Agent not found or terminated: " + agentId);
 		}
 		return agent;
+	}
+
+	/**
+	 * Resolves the default transition operation from the agent's config.
+	 */
+	private AString resolveTransitionOp(AString callerDID, AString agentId) {
+		AgentState agent = getAgent(callerDID, agentId);
+		if (agent == null) return null;
+		AMap<AString, ACell> config = agent.getConfig();
+		if (config == null) return null;
+		return RT.ensureString(config.get(Fields.OPERATION));
 	}
 
 	/**
@@ -552,17 +743,26 @@ public class AgentAdapter extends AAdapter {
 		return remaining;
 	}
 
+	// ========== Run completion ==========
+
 	/**
-	 * Schedules an async agent run after a request or message delivery.
+	 * Notifies waiting triggers that a run completed successfully.
+	 *
+	 * <p>Uses {@code ConcurrentHashMap.remove(key, value)} so that if a new
+	 * completion future was installed by a concurrent wake, only the caller's
+	 * own future is removed.</p>
 	 */
-	private void scheduleRun(AString agentId, RequestContext ctx) {
-		CompletableFuture.runAsync(() -> {
-			try {
-				engine.jobs().invokeOperation(
-					"agent:run", Maps.of(Fields.AGENT_ID, agentId), ctx);
-			} catch (Exception e) {
-				log.warn("Scheduled run failed for agent {}: {}", agentId, e.getMessage());
-			}
-		}, VIRTUAL_EXECUTOR);
+	private void completeRun(CompletableFuture<ACell> completion, AString agentId, ACell result) {
+		runCompletions.remove(agentId.toString(), completion);
+		completion.complete(result);
+	}
+
+	/**
+	 * Notifies waiting triggers that a run failed.
+	 */
+	private void completeRunExceptionally(CompletableFuture<ACell> completion,
+			AString agentId, String message) {
+		runCompletions.remove(agentId.toString(), completion);
+		completion.completeExceptionally(new RuntimeException(message));
 	}
 }

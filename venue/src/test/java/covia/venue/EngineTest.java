@@ -149,7 +149,7 @@ public class EngineTest {
 	// @Test
 	public void testQwen() {
 		ACell input = Maps.of("prompt", "What is the capital of France?");
-		ACell result = venue.jobs().invokeOperation(qwenOpId.toCVMHexString(), input, RequestContext.INTERNAL).awaitResult();
+		ACell result = venue.jobs().invokeOperation(qwenOpId.toCVMHexString(), input, RequestContext.INTERNAL).awaitResult(5000);
 		result=waitForJobCompletion(RT.getIn(result, "id"), 5000);
 		if (Status.COMPLETE.equals(RT.getIn(result, "status"))) {
 			// OK
@@ -215,7 +215,7 @@ public class EngineTest {
 		ACell input = Maps.of("message", "Hello");
 		Job job = venue.jobs().invokeOperation("test:echo", input, RequestContext.INTERNAL);
 
-		ACell result = job.awaitResult();
+		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
 		assertEquals("Hello", RT.getIn(result, "message").toString());
 	}
@@ -225,7 +225,7 @@ public class EngineTest {
 		ACell input = Maps.of("message", "This should fail");
 		Job job = venue.jobs().invokeOperation("test:error", input, RequestContext.INTERNAL);
 
-		assertThrows(JobFailedException.class, () -> job.awaitResult());
+		assertThrows(JobFailedException.class, () -> job.awaitResult(5000));
 	}
 
 	@Test
@@ -237,7 +237,7 @@ public class EngineTest {
 
 		assertTrue(job.isFinished(), "Job should be finished");
 
-		assertThrows(JobFailedException.class, () -> job.awaitResult());
+		assertThrows(JobFailedException.class, () -> job.awaitResult(5000));
 	}
 
 	@Test
@@ -280,7 +280,7 @@ public class EngineTest {
 		ACell input = Maps.of("message", "Hello via DID");
 		Job job = venue.jobs().invokeOperation(didUrl, input, RequestContext.INTERNAL);
 
-		ACell result = job.awaitResult();
+		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
 		assertEquals("Hello via DID", RT.getIn(result, "message").toString());
 	}
@@ -290,7 +290,7 @@ public class EngineTest {
 		ACell input = Maps.of("message", "Hello via name");
 		Job job = venue.jobs().invokeOperation("test:echo", input, RequestContext.INTERNAL);
 
-		ACell result = job.awaitResult();
+		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
 		assertEquals("Hello via name", RT.getIn(result, "message").toString());
 	}
@@ -389,7 +389,7 @@ public class EngineTest {
 		ACell input = Maps.of("prompt", "hello", "apiKey", "sk-secret-123");
 
 		Job job = venue.jobs().invokeOperation(meta, input, RequestContext.INTERNAL);
-		ACell result = job.awaitResult();
+		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
 
 		AMap<AString, ACell> record = venue.jobs().getJobData(job.getID(), RequestContext.INTERNAL);
@@ -405,7 +405,7 @@ public class EngineTest {
 		ACell input = Maps.of("prompt", "hello", "apiKey", "sk-secret-123");
 
 		Job job = venue.jobs().invokeOperation(meta, input, RequestContext.INTERNAL);
-		ACell result = job.awaitResult();
+		ACell result = job.awaitResult(5000);
 
 		assertEquals("sk-secret-123", RT.getIn(result, "apiKey").toString());
 	}
@@ -418,7 +418,7 @@ public class EngineTest {
 		ACell input = Maps.of("apiKey", "sk-visible-key");
 
 		Job job = venue.jobs().invokeOperation(meta, input, RequestContext.INTERNAL);
-		job.awaitResult();
+		job.awaitResult(5000);
 
 		AMap<AString, ACell> record = venue.jobs().getJobData(job.getID(), RequestContext.INTERNAL);
 		ACell storedInput = record.get(Fields.INPUT);
@@ -431,7 +431,7 @@ public class EngineTest {
 		ACell input = Maps.of("prompt", "hello");
 
 		Job job = venue.jobs().invokeOperation(meta, input, RequestContext.INTERNAL);
-		ACell result = job.awaitResult();
+		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
 
 		AMap<AString, ACell> record = venue.jobs().getJobData(job.getID(), RequestContext.INTERNAL);
@@ -447,7 +447,7 @@ public class EngineTest {
 		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
 		ACell input = Maps.of("name", "MY_KEY", "value", "my-secret-value");
 		Job job = venue.jobs().invokeOperation("secret:set", input, aliceCtx);
-		ACell result = job.awaitResult();
+		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
 		assertEquals(Strings.create("MY_KEY"), RT.getIn(result, "name"));
 
@@ -469,7 +469,7 @@ public class EngineTest {
 		Job job = venue.jobs().invokeOperation(
 			"secret:extract", Maps.of("name", "STOLEN_KEY"), aliceCtx);
 
-		assertThrows(Exception.class, () -> job.awaitResult());
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
 
 		AMap<AString, ACell> record = venue.jobs().getJobData(job.getID(), aliceCtx);
 		assertNotNull(record);
@@ -482,7 +482,7 @@ public class EngineTest {
 		ACell input = Maps.of("value", "secret-output-test");
 
 		Job job = venue.jobs().invokeOperation(meta, input, RequestContext.INTERNAL);
-		ACell result = job.awaitResult();
+		ACell result = job.awaitResult(5000);
 
 		assertEquals("secret-output-test", RT.getIn(result, "value").toString());
 

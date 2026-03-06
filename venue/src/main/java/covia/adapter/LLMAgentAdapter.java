@@ -26,7 +26,7 @@ import covia.venue.Users;
 /**
  * LLM-backed transition function for agents (level 2).
  *
- * <p>Invoked by {@code agent:run} as a transition operation ({@code llmagent:chat}).
+ * <p>Invoked by the agent run loop as a transition operation ({@code llmagent:chat}).
  * Maintains conversation history in the agent's {@code state} field and delegates
  * LLM calls to a level 3 grid operation (e.g. {@code langchain:openai}).</p>
  *
@@ -602,9 +602,9 @@ public class LLMAgentAdapter extends AAdapter {
 			AMap<AString, ACell> snapshot = engine.jobs().getJobData(jobId);
 			addToPending(toolCtx.ctx, toolCtx.agentId, jobId, snapshot);
 
-			// Register wake callback — when the job completes, schedule agent:run
+			// Register wake callback — when the job completes, wake the agent
 			opJob.future().whenComplete((result, error) -> {
-				scheduleWake(toolCtx.agentId, toolCtx.ctx);
+				wakeAgent(toolCtx.agentId, toolCtx.ctx);
 			});
 		}
 
@@ -654,38 +654,38 @@ public class LLMAgentAdapter extends AAdapter {
 
 	/**
 	 * Adds a Job ID to the agent's pending index.
+	 * Serialised via the per-agent lock to avoid lost updates.
 	 */
 	private void addToPending(RequestContext ctx, AString agentId, Blob jobId, ACell snapshot) {
+		AgentAdapter agentAdapter = (AgentAdapter) engine.getAdapter("agent");
+		if (agentAdapter == null) return;
 		try {
-			Users users = engine.getVenueState().users();
-			User user = users.get(ctx.getCallerDID());
-			if (user == null) return;
-			AgentState agent = user.agent(agentId);
-			if (agent == null) return;
-			AMap<AString, ACell> record = agent.getRecord();
-			if (record == null) return;
-			@SuppressWarnings("unchecked")
-			convex.core.data.Index<Blob, ACell> pending = agent.getPending();
-			agent.putRecord(record.assoc(AgentState.KEY_PENDING, pending.assoc(jobId, snapshot)));
+			synchronized (agentAdapter.agentLock(agentId)) {
+				Users users = engine.getVenueState().users();
+				User user = users.get(ctx.getCallerDID());
+				if (user == null) return;
+				AgentState agent = user.agent(agentId);
+				if (agent == null) return;
+				AMap<AString, ACell> record = agent.getRecord();
+				if (record == null) return;
+				@SuppressWarnings("unchecked")
+				convex.core.data.Index<Blob, ACell> pending = agent.getPending();
+				agent.putRecord(record.assoc(AgentState.KEY_PENDING, pending.assoc(jobId, snapshot)));
+			}
 		} catch (Exception e) {
 			log.warn("Failed to add pending job {} for agent {}", jobId.toHexString(), agentId, e);
 		}
 	}
 
 	/**
-	 * Schedules an async agent:run for the given agent if it is SLEEPING.
+	 * Wakes the agent via AgentAdapter's wake mechanism. Checks the lattice
+	 * status and starts the run loop if the agent is SLEEPING with work.
 	 */
-	private void scheduleWake(AString agentId, RequestContext ctx) {
-		CompletableFuture.runAsync(() -> {
-			try {
-				engine.jobs().invokeOperation(
-					Strings.create("agent:run"),
-					Maps.of(Fields.AGENT_ID, agentId),
-					ctx);
-			} catch (Exception e) {
-				log.warn("Wake callback failed for agent {}: {}", agentId, e.getMessage());
-			}
-		}, VIRTUAL_EXECUTOR);
+	private void wakeAgent(AString agentId, RequestContext ctx) {
+		AgentAdapter agentAdapter = (AgentAdapter) engine.getAdapter("agent");
+		if (agentAdapter != null) {
+			agentAdapter.wakeAgent(agentId, ctx);
+		}
 	}
 
 	// ========== Internal helpers ==========

@@ -203,7 +203,7 @@ This is a critical design distinction. The three execution-related namespaces se
 
 The key principle: **if you need accountability (cost, result, SLA), use `agent:request`. If you need informal coordination, use inbox messages.** Tasks persist until the agent explicitly completes or rejects them. Inbox messages are ephemeral and best-effort. Both appear in the agent's timeline for full auditability.
 
-**Agent runs are internal.** When the runtime wakes an agent and runs its transition function, this is an internal lifecycle event (currently implemented as an `agent:run` Job for infrastructure reasons, but conceptually an operational concern of the runtime). The `agent:run` Job is not visible to external callers — they interact with the agent via `agent:request` and track the request Job. An agent's transition may create zero, one, or many additional jobs as part of its processing.
+**Agent runs are internal.** When the runtime wakes an agent and runs its transition function, this is an internal lifecycle event (currently implemented as an `agent:trigger` Job for infrastructure reasons, but conceptually an operational concern of the runtime). The `agent:trigger` Job is not visible to external callers — they interact with the agent via `agent:request` and track the request Job. An agent's transition may create zero, one, or many additional jobs as part of its processing.
 
 #### `/g/` — Agents
 

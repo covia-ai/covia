@@ -1,0 +1,23 @@
+{
+	"name": "Trigger Agent",
+	"description": "Triggers the agent's transition loop and waits for completion. If the agent is sleeping with work (tasks or messages), starts the run loop and completes when the loop finishes. If already running, waits for the current run to complete. If there is no work, returns immediately. The transition operation is always taken from the agent's config.operation.",
+	"dateCreated": "2026-03-06T00:00:00Z",
+	"operation": {
+		"adapter": "agent:trigger",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Agent name to trigger" }
+			},
+			"required": ["agentId"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string" },
+				"status": { "type": "string", "description": "Agent status after run (e.g. 'SLEEPING')" },
+				"result": { "description": "Result returned by the transition function" }
+			}
+		}
+	}
+}

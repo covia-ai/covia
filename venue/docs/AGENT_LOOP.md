@@ -2,7 +2,7 @@
 
 Design for Covia agent state and the transitions that mutate it.
 
-**Status:** Draft — February 2026
+**Status:** Draft — March 2026
 
 See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent addressing
 (`/g/<agent-id>`, §4.3.4), secret store (`/s/`, §4.3.6), and implementation phasing (§12).
@@ -20,8 +20,8 @@ See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent address
    monotonic within an agent's lifetime.
 
 3. **Single venue writes.** An agent lives on one venue. All writes — message delivery,
-   agent runs, config updates — are serialised on that venue. Cross-venue sync is
-   replication: the more-recent state replaces the stale one.
+   agent runs, config updates — are serialised on that venue via a per-agent lock.
+   Cross-venue sync is replication: the more-recent state replaces the stale one.
 
 4. **Three levels.** The agent update (level 1) manages framework bookkeeping:
    status, timeline, inbox. The agent transition (level 2) manages domain logic:
@@ -124,7 +124,7 @@ The agent system separates concerns into three levels. Each level is a grid
 operation, pluggable and replaceable independently.
 
 ```
-Level 1: Agent Update          agent:run (AgentAdapter)
+Level 1: Agent Update          agent:trigger (AgentAdapter)
   │  manages inbox, timeline, status
   │  invokes level 2 as a grid operation
   ▼
@@ -270,9 +270,9 @@ run failed), but the Job result is durable. This matches how other side effects
 Level 2 exposes an **async invoke** tool to the LLM. When called, it:
 
 1. Invokes the specified operation asynchronously (creates a Job via JobManager).
-2. Adds the Job ID to the agent's `pending` index.
-3. Registers a completion callback that wakes the agent immediately when the
-   job finishes (schedules `agent:run` if the agent is SLEEPING).
+2. Adds the Job ID to the agent's `pending` index (inside the per-agent lock).
+3. Registers a completion callback that calls `wakeAgent` (§4.6) when the
+   job finishes.
 4. Returns the Job ID to the LLM as the tool result.
 
 The agent does not wait for the result — execution continues. On the next wake,
@@ -445,7 +445,10 @@ Job for status — the same Job they received from `invoke()`.
 **Output:** The Job stays in STARTED until the agent completes it. The caller
 tracks progress via the Job ID returned by `invoke()`.
 
-**Side effect:** An async `agent:run` is scheduled immediately via the scheduler.
+**Side effect:** The agent is woken immediately via `wakeAgent` (§4.6). If the
+agent has a `config.operation` and is SLEEPING, the run loop starts. If the
+agent is already RUNNING, the new task is in the lattice and the running loop
+picks it up on its next iteration.
 
 **Fails if:** the agent does not exist, or status is `"TERMINATED"`.
 
@@ -456,6 +459,8 @@ This is the primary MCP-facing operation for interacting with agents.
 **Trigger:** `agent:message`
 
 Reads current agent record, appends the message to `inbox`, writes agent record.
+Then wakes the agent (§4.6) — if the agent has a `config.operation`, this
+triggers a run automatically.
 
 Messages are ephemeral notifications — they do not create Jobs and are not
 tracked for completion. Use `agent:request` for work items that need a response.
@@ -464,41 +469,61 @@ tracked for completion. Use `agent:request` for work items that need a response.
 
 ### 4.4 Run — Agent Update (Internal)
 
-**Trigger:** venue scheduler (§4.6), not directly by MCP users.
+**Trigger:** `wakeAgent` (§4.6), not directly by MCP users.
 
-Also callable via `agent:run` for testing and manual control.
+Also callable via `agent:trigger` for synchronisation and manual control. The
+trigger has **wait-for-completion** semantics: it returns when the agent has
+finished processing (reached SLEEPING). If the agent is already RUNNING, the
+trigger parks on a completion future and completes when the current run finishes.
+If there is no work, the trigger returns immediately.
 
-**Sequence:**
+**Run exclusion.** The agent's `status` field in the lattice is the source of
+truth for whether a run is active. A per-agent lock serialises the status check
+with all record mutations (`addTask`, `deliverMessage`, run loop writes). There
+are no separate Java-side running/wake flags — all decisions are based on lattice
+data.
 
-1. Read current agent record.
-2. Gather inputs for the transition function:
-   - Check `pending` for completed/failed outbound jobs (resolve via JobManager).
-   - Read `tasks` for inbound requests (resolve status/input via JobManager).
-   - Read `inbox` for ephemeral messages.
-3. If nothing to process (no tasks and empty inbox): no-op. Pending jobs are
-   passed through but do not alone trigger a run.
-4. Set status → `"RUNNING"`, write agent record.
+A per-agent `CompletableFuture` is created when the agent transitions to RUNNING
+(whether via `wakeAgent` or `agent:trigger`). Multiple triggers can park on the
+same future. When the loop finishes, all waiting triggers are notified.
+`ConcurrentHashMap.remove(key, value)` ensures that a new run's future is never
+accidentally completed by an old run.
+
+**Sequence (per iteration):**
+
+1. Acquire the per-agent lock. Read a consistent snapshot of the agent record:
+   `inbox`, `tasks`, `pending`, `state`.
+2. If nothing to process (no tasks and empty inbox): set status → `"SLEEPING"`,
+   release lock, return. Pending jobs are passed through but do not alone
+   trigger a run.
+3. Release the lock.
+4. Resolve job data from JobManager (read-only, no lock needed).
 5. Invoke the transition function (§3.2) with `agent-id`, current `state`,
-   `tasks`, `pending` (with resolved statuses), and `inbox`.
-6. On success:
-   - Read `taskResults` from the transition output.
+   `tasks`, `pending` (with resolved statuses), and `inbox`. **No lock held**
+   during the transition — it may take seconds or minutes.
+6. On success — **merge with current state** (acquire lock):
+   - Re-read the current agent record (not the stale snapshot from step 1).
+   - Remove completed tasks from the **current** `tasks` index (not the stale
+     snapshot). This prevents overwriting tasks added by concurrent `addTask`
+     calls during the transition.
+   - Remove only the **processed** messages from the **current** `inbox`. Messages
+     appended by concurrent `deliverMessage` calls during the transition are
+     preserved (they appear at indices beyond the processed count).
    - Update `state` from the returned value.
-   - Update `tasks` (remove IDs present in `taskResults`).
-   - Build timeline entry with full audit data (§2.4).
-   - Clear `inbox`.
-   - Set status → `"SLEEPING"`.
-   - Write agent record **before** completing task Jobs (ensures callers who
-     `awaitResult()` on task Jobs see consistent agent state).
-   - Apply `taskResults` to JobManager — complete or fail each task Job.
+   - Append timeline entry with full audit data (§2.4).
+   - If remaining work exists (tasks or inbox non-empty after merge): set
+     status → `"RUNNING"`, release lock, loop to step 1.
+   - Otherwise: set status → `"SLEEPING"`, release lock.
+   - Apply `taskResults` to JobManager — complete or fail each task Job
+     (outside the lock).
 7. On error:
    - Leave `state`, `tasks`, `pending`, and `inbox` unchanged.
-   - Set status → `"SUSPENDED"`, set `error`.
-   - Write agent record.
+   - Set status → `"SUSPENDED"`, set `error` (inside the lock).
    - Note: task completions made via tool calls during execution are **not**
      rolled back (§3.4.1).
 
-The transition operation comes from `config.operation` (set at creation).
-It can be overridden per-run via the `operation` input parameter.
+The transition operation always comes from `config.operation` (set at creation).
+Callers cannot override it — to change the transition function, update the config.
 
 The run output includes the transition function's `result` field, making
 the response visible to callers without querying agent state separately.
@@ -513,20 +538,36 @@ the response visible to callers without querying agent state separately.
 
 All read-modify-write on the single value.
 
-### 4.6 Scheduling
+### 4.6 Scheduling — `wakeAgent`
 
-The venue runs a scheduler that determines when agents should wake. An agent
-is eligible to run when any of:
+Scheduling is **lattice-native**: the agent's `status` field and the contents
+of `inbox`/`tasks` are the only inputs to the wake decision. There are no
+separate Java-side running/wake flags that could drift from the lattice.
+
+**`wakeAgent(agentId, ctx)`** is the single entry point for all agent wakes.
+It is called by `agent:request`, `agent:message`, and async job completion
+callbacks. The logic (all inside the per-agent lock):
+
+1. Read the agent's `status` from the lattice.
+2. If RUNNING → return (new work is in the lattice; the loop will see it).
+3. If no work (empty inbox and tasks) → return.
+4. Resolve `config.operation` → if null, return (no transition op configured).
+5. Set status → RUNNING.
+6. Start `executeRunLoop` on a virtual thread.
+
+An agent is eligible to run when any of:
 
 - A new task has been added to `tasks` (via `agent:request`)
 - A pending outbound job has completed or failed
-- A new message has been delivered to `inbox`
-- A configurable sleep timer has expired
+- A new message has been delivered to `inbox` (via `agent:message`)
 
-**Current implementation:** event-driven wake. When `agent:request` or
-`agent:message` is called, the scheduler queues an async `agent:run`. When
-a pending outbound job completes, the completion callback (registered by the
-async invoke tool, §3.4.2) schedules a run directly — no polling needed.
+**No lost wakeups.** The per-agent lock serialises `addTask` / `deliverMessage`
+with the run loop's status check. If work is added before the lock is acquired,
+the loop sees it. If work is added after the loop writes SLEEPING, the
+subsequent `wakeAgent` call sees SLEEPING and starts a new loop.
+
+**No double runs.** The lock serialises the SLEEPING → RUNNING CAS. Only one
+thread can win the transition; all others see RUNNING and return.
 
 **Configurable sleep:** `config.sleepInterval` (milliseconds). If set, the agent
 wakes periodically even without events. Useful for polling-style agents.
@@ -550,14 +591,20 @@ unconditionally.
 
 ### 5.2 Why One Value?
 
-All writes to an agent are serialised on one venue. There are no concurrent writers.
-Message delivery, agent runs, and config updates are all atomic read-modify-write
-on the same value.
+All writes to an agent are serialised on one venue via a per-agent lock. Message
+delivery, task addition, and run loop writes are all guarded by this lock, so
+there are no concurrent writers to the agent record.
+
+The run loop holds the lock only briefly — for reading the snapshot and for
+writing the merged result. The transition invocation (which may take seconds or
+minutes) runs without the lock held. Concurrent `addTask` and `deliverMessage`
+calls proceed while the transition runs; their writes are preserved by the
+merge-at-write-time strategy (§4.4 step 6).
 
 Cross-venue sync is replication: the venue hosting the agent always has the latest
 ts. Replicas receive the complete state.
 
-Per-field merge (the previous design) was wrong because it could produce Frankenstein
+Per-field merge (a previous design) was wrong because it could produce Frankenstein
 states — status from venue A, timeline from venue B, inbox fragments from both. An
 inconsistent state that never actually existed. With a single atomic value, the winner
 is always a state that genuinely existed on the hosting venue.
@@ -609,7 +656,7 @@ responding to requests, rejecting requests. This is a Phase D concern.
 ### 6.4 MCP-facing agent operations
 
 With the task-based model, MCP users interact with agents through a small set
-of high-level operations. They never call `agent:run` directly.
+of high-level operations. They never call `agent:trigger` directly.
 
 | MCP Tool | Purpose |
 |----------|---------|
@@ -647,6 +694,7 @@ See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
 | **B4** | MCP-first agent experience: default transition op from config, result in run output | ✓ Complete |
 | **B5** | Task-based agent model: `agent:request`, tasks/pending queues, scheduling | ✓ Complete |
 | **B6** | Agent query/list operations: `agent:query`, `agent:list`, RequestContext refactor, Index for tasks/pending | ✓ Complete |
+| **B7** | Lattice-native run loop: per-agent lock, status-based exclusion, merge-at-write-time, `wakeAgent`, `Job.awaitResult(timeout)` | ✓ Complete |
 | **C** | Capability enforcement (UCAN `with`/`can`), tool palette | Planned |
 | **D** | HITL requests (`/h/` namespace), cross-user messaging, advanced wake triggers | Planned |
 | **E** | Agent forking and cross-venue migration | Planned |

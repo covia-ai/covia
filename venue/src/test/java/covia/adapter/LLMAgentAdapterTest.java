@@ -175,19 +175,18 @@ public class LLMAgentAdapterTest {
 	// ========== Integration: full agent pipeline ==========
 
 	@Test
-	public void testEndToEndWithAgentRun() {
+	public void testEndToEndWithAgentTrigger() {
 		createTestAgent("e2e-agent");
 
-		engine.jobs().invokeOperation(
-			"agent:message",
-			Maps.of(Fields.AGENT_ID, "e2e-agent", Fields.MESSAGE, Maps.of("content", "Hello from e2e")),
-			RequestContext.of(ALICE_DID)).awaitResult();
+		// Deliver directly to avoid auto-wake race
+		User e2eUser = engine.getVenueState().users().get(ALICE_DID);
+		e2eUser.agent("e2e-agent").deliverMessage(Maps.of("content", "Hello from e2e"));
 
 		Job runJob = engine.jobs().invokeOperation(
-			"agent:run",
-			Maps.of(Fields.AGENT_ID, "e2e-agent", Fields.OPERATION, "llmagent:chat"),
+			"agent:trigger",
+			Maps.of(Fields.AGENT_ID, "e2e-agent"),
 			RequestContext.of(ALICE_DID));
-		ACell result = runJob.awaitResult();
+		ACell result = runJob.awaitResult(5000);
 
 		assertNotNull(result);
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
@@ -208,30 +207,25 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
-	public void testEndToEndMultiRun() {
+	public void testEndToEndMultiTrigger() {
 		createTestAgent("multi-run-agent");
+		User multiUser = engine.getVenueState().users().get(ALICE_DID);
 
-		// First run
-		engine.jobs().invokeOperation(
-			"agent:message",
-			Maps.of(Fields.AGENT_ID, "multi-run-agent", Fields.MESSAGE, Maps.of("content", "Turn 1")),
-			RequestContext.of(ALICE_DID)).awaitResult();
+		// First run — deliver directly to avoid auto-wake race
+		multiUser.agent("multi-run-agent").deliverMessage(Maps.of("content", "Turn 1"));
 
 		engine.jobs().invokeOperation(
-			"agent:run",
-			Maps.of(Fields.AGENT_ID, "multi-run-agent", Fields.OPERATION, "llmagent:chat"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			"agent:trigger",
+			Maps.of(Fields.AGENT_ID, "multi-run-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Second run
-		engine.jobs().invokeOperation(
-			"agent:message",
-			Maps.of(Fields.AGENT_ID, "multi-run-agent", Fields.MESSAGE, Maps.of("content", "Turn 2")),
-			RequestContext.of(ALICE_DID)).awaitResult();
+		multiUser.agent("multi-run-agent").deliverMessage(Maps.of("content", "Turn 2"));
 
 		engine.jobs().invokeOperation(
-			"agent:run",
-			Maps.of(Fields.AGENT_ID, "multi-run-agent", Fields.OPERATION, "llmagent:chat"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			"agent:trigger",
+			Maps.of(Fields.AGENT_ID, "multi-run-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("multi-run-agent");
@@ -247,19 +241,19 @@ public class LLMAgentAdapterTest {
 	public void testEchoStillWorks() {
 		engine.jobs().invokeOperation(
 			"agent:create",
-			Maps.of(Fields.AGENT_ID, "echo-regression"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			Maps.of(Fields.AGENT_ID, "echo-regression",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		engine.jobs().invokeOperation(
-			"agent:message",
-			Maps.of(Fields.AGENT_ID, "echo-regression", Fields.MESSAGE, Maps.of("content", "hello")),
-			RequestContext.of(ALICE_DID)).awaitResult();
+		// Deliver directly to avoid auto-wake
+		User echoUser = engine.getVenueState().users().get(ALICE_DID);
+		echoUser.agent("echo-regression").deliverMessage(Maps.of("content", "hello"));
 
 		Job job = engine.jobs().invokeOperation(
-			Strings.create("agent:run"),
-			Maps.of(Fields.AGENT_ID, "echo-regression", Fields.OPERATION, "test:echo"),
+			"agent:trigger",
+			Maps.of(Fields.AGENT_ID, "echo-regression"),
 			RequestContext.of(ALICE_DID));
-		ACell result = job.awaitResult();
+		ACell result = job.awaitResult(5000);
 
 		assertNotNull(result);
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
@@ -275,7 +269,7 @@ public class LLMAgentAdapterTest {
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "config-agent", AgentState.KEY_STATE, initialState),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
@@ -335,19 +329,20 @@ public class LLMAgentAdapterTest {
 		ACell initialState = Maps.of("config", Maps.of("llmOperation", "test:toolllm"));
 		engine.jobs().invokeOperation(
 			"agent:create",
-			Maps.of(Fields.AGENT_ID, "tool-agent", AgentState.KEY_STATE, initialState),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			Maps.of(Fields.AGENT_ID, "tool-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "llmagent:chat"),
+				AgentState.KEY_STATE, initialState),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		engine.jobs().invokeOperation(
-			"agent:message",
-			Maps.of(Fields.AGENT_ID, "tool-agent", Fields.MESSAGE, Maps.of("content", "use a tool")),
-			RequestContext.of(ALICE_DID)).awaitResult();
+		// Deliver directly to avoid auto-wake
+		User toolUser = engine.getVenueState().users().get(ALICE_DID);
+		toolUser.agent("tool-agent").deliverMessage(Maps.of("content", "use a tool"));
 
 		Job runJob = engine.jobs().invokeOperation(
-			"agent:run",
-			Maps.of(Fields.AGENT_ID, "tool-agent", Fields.OPERATION, "llmagent:chat"),
+			"agent:trigger",
+			Maps.of(Fields.AGENT_ID, "tool-agent"),
 			RequestContext.of(ALICE_DID));
-		ACell result = runJob.awaitResult();
+		ACell result = runJob.awaitResult(5000);
 
 		assertNotNull(result);
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
@@ -478,10 +473,9 @@ public class LLMAgentAdapterTest {
 				AgentState.KEY_STATE, initialState,
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "llmagent:chat")
 			),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Submit a request — use agent:message to add the task, then agent:run explicitly.
-		// We avoid agent:request's async schedule and drive the pipeline synchronously.
+		// Add task directly and trigger — avoid agent:request's async wake
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("task-agent");
 
@@ -490,12 +484,12 @@ public class LLMAgentAdapterTest {
 			"test:never", Maps.empty(), RequestContext.of(ALICE_DID));
 		agent.addTask(requestJob.getID(), Maps.of("question", "What is 2+2?"));
 
-		// Run the agent synchronously — level 2 (test:taskllm) will call complete_task
+		// Trigger the agent — level 2 (test:taskllm) will call complete_task
 		Job runJob = engine.jobs().invokeOperation(
-			"agent:run",
-			Maps.of(Fields.AGENT_ID, "task-agent", Fields.OPERATION, "llmagent:chat"),
+			"agent:trigger",
+			Maps.of(Fields.AGENT_ID, "task-agent"),
 			RequestContext.of(ALICE_DID));
-		runJob.awaitResult();
+		runJob.awaitResult(5000);
 
 		// The request Job should be COMPLETE with the agent's output
 		assertTrue(requestJob.isFinished(), "Request job should be finished");
@@ -595,7 +589,7 @@ public class LLMAgentAdapterTest {
 		engine.jobs().invokeOperation(
 			"agent:message",
 			Maps.of(Fields.AGENT_ID, "receiver-agent", Fields.MESSAGE, Strings.create("hello")),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		assertEquals(1, receiver.getInbox().count());
 	}
@@ -628,7 +622,9 @@ public class LLMAgentAdapterTest {
 		ACell initialState = Maps.of("config", Maps.of("llmOperation", "test:llm"));
 		engine.jobs().invokeOperation(
 			"agent:create",
-			Maps.of(Fields.AGENT_ID, name, AgentState.KEY_STATE, initialState),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			Maps.of(Fields.AGENT_ID, name,
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "llmagent:chat"),
+				AgentState.KEY_STATE, initialState),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 	}
 }

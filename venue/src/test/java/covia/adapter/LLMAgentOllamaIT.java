@@ -64,19 +64,20 @@ public class LLMAgentOllamaIT {
 		);
 		engine.jobs().invokeOperation(
 			"agent:create",
-			Maps.of(Fields.AGENT_ID, "ollama-agent", AgentState.KEY_STATE, initialState),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			Maps.of(Fields.AGENT_ID, "ollama-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "llmagent:chat"),
+				AgentState.KEY_STATE, initialState),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		engine.jobs().invokeOperation(
-			"agent:message",
-			Maps.of(Fields.AGENT_ID, "ollama-agent", Fields.MESSAGE, Maps.of("content", "What is the capital of France?")),
-			RequestContext.of(ALICE_DID)).awaitResult();
+		// Deliver directly to avoid auto-wake race
+		User ollamaUser = engine.getVenueState().users().get(ALICE_DID);
+		ollamaUser.agent("ollama-agent").deliverMessage(Maps.of("content", "What is the capital of France?"));
 
 		Job runJob = engine.jobs().invokeOperation(
-			"agent:run",
-			Maps.of(Fields.AGENT_ID, "ollama-agent", Fields.OPERATION, "llmagent:chat"),
+			"agent:trigger",
+			Maps.of(Fields.AGENT_ID, "ollama-agent"),
 			RequestContext.of(ALICE_DID));
-		ACell result = runJob.awaitResult();
+		ACell result = runJob.awaitResult(5000);
 
 		assertNotNull(result);
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
@@ -100,16 +101,13 @@ public class LLMAgentOllamaIT {
 		System.out.println(timelineResponse);
 
 		// Second turn
-		engine.jobs().invokeOperation(
-			"agent:message",
-			Maps.of(Fields.AGENT_ID, "ollama-agent", Fields.MESSAGE, Maps.of("content", "And what is its population?")),
-			RequestContext.of(ALICE_DID)).awaitResult();
+		ollamaUser.agent("ollama-agent").deliverMessage(Maps.of("content", "And what is its population?"));
 
 		Job run2 = engine.jobs().invokeOperation(
-			"agent:run",
-			Maps.of(Fields.AGENT_ID, "ollama-agent", Fields.OPERATION, "llmagent:chat"),
+			"agent:trigger",
+			Maps.of(Fields.AGENT_ID, "ollama-agent"),
 			RequestContext.of(ALICE_DID));
-		run2.awaitResult();
+		run2.awaitResult(5000);
 
 		AVector<ACell> history2 = LLMAgentAdapter.extractHistory(agent.getState());
 		assertEquals(5, history2.count());

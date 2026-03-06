@@ -24,7 +24,7 @@ import covia.venue.User;
 import covia.venue.VenueState;
 
 /**
- * Tests for the AgentAdapter: create, message, and run operations.
+ * Tests for the AgentAdapter: create, message, trigger, request, query, and list operations.
  */
 public class AgentAdapterTest {
 
@@ -45,7 +45,7 @@ public class AgentAdapterTest {
 		ACell input = Maps.of(Fields.AGENT_ID, "my-assistant");
 		Job job = engine.jobs().invokeOperation(
 			"agent:create", input, RequestContext.of(ALICE_DID));
-		ACell result = job.awaitResult();
+		ACell result = job.awaitResult(5000);
 
 		assertNotNull(result, "Create should return a result");
 		assertEquals(Strings.create("my-assistant"), RT.getIn(result, Fields.AGENT_ID));
@@ -60,7 +60,7 @@ public class AgentAdapterTest {
 		);
 		Job job = engine.jobs().invokeOperation(
 			"agent:create", input, RequestContext.of(ALICE_DID));
-		job.awaitResult();
+		job.awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		assertNotNull(user);
@@ -77,7 +77,7 @@ public class AgentAdapterTest {
 			"agent:create", input, RequestContext.of(ALICE_DID));
 
 		try {
-			job.awaitResult();
+			job.awaitResult(5000);
 			fail("Should have thrown due to missing agentId");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, job.getStatus());
@@ -90,11 +90,11 @@ public class AgentAdapterTest {
 
 		Job job1 = engine.jobs().invokeOperation(
 			"agent:create", input, RequestContext.of(ALICE_DID));
-		job1.awaitResult();
+		job1.awaitResult(5000);
 
 		Job job2 = engine.jobs().invokeOperation(
 			"agent:create", input, RequestContext.of(ALICE_DID));
-		ACell result2 = job2.awaitResult();
+		ACell result2 = job2.awaitResult(5000);
 
 		assertNotNull(result2);
 		assertEquals(Strings.create("idempotent-agent"), RT.getIn(result2, Fields.AGENT_ID));
@@ -107,7 +107,7 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "msg-agent"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		ACell msgInput = Maps.of(
 			Fields.AGENT_ID, "msg-agent",
@@ -115,7 +115,7 @@ public class AgentAdapterTest {
 		);
 		Job msgJob = engine.jobs().invokeOperation(
 			"agent:message", msgInput, RequestContext.of(ALICE_DID));
-		ACell result = msgJob.awaitResult();
+		ACell result = msgJob.awaitResult(5000);
 
 		assertNotNull(result);
 		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.DELIVERED));
@@ -132,7 +132,7 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "other-agent"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		ACell msgInput = Maps.of(
 			Fields.AGENT_ID, "ghost-agent",
@@ -142,7 +142,7 @@ public class AgentAdapterTest {
 			"agent:message", msgInput, RequestContext.of(ALICE_DID));
 
 		try {
-			msgJob.awaitResult();
+			msgJob.awaitResult(5000);
 			fail("Should have thrown for non-existent agent");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, msgJob.getStatus());
@@ -154,7 +154,7 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "term-agent"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("term-agent");
@@ -168,34 +168,34 @@ public class AgentAdapterTest {
 			"agent:message", msgInput, RequestContext.of(ALICE_DID));
 
 		try {
-			msgJob.awaitResult();
+			msgJob.awaitResult(5000);
 			fail("Should have thrown for terminated agent");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, msgJob.getStatus());
 		}
 	}
 
-	// ========== agent:run ==========
+	// ========== agent:trigger ==========
 
 	@Test
-	public void testRunWithEcho() {
+	public void testTriggerWithEcho() {
 		engine.jobs().invokeOperation(
 			"agent:create",
-			Maps.of(Fields.AGENT_ID, "echo-agent"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			Maps.of(Fields.AGENT_ID, "echo-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
+		// Deliver messages directly to avoid auto-wake race
+		User echoUser = engine.getVenueState().users().get(ALICE_DID);
 		for (int i = 0; i < 2; i++) {
-			engine.jobs().invokeOperation(
-				"agent:message",
-				Maps.of(Fields.AGENT_ID, "echo-agent", Fields.MESSAGE, Maps.of("content", "msg-" + i)),
-				RequestContext.of(ALICE_DID)).awaitResult();
+			echoUser.agent("echo-agent").deliverMessage(Maps.of("content", "msg-" + i));
 		}
 
 		Job runJob = engine.jobs().invokeOperation(
-			"agent:run",
-			Maps.of(Fields.AGENT_ID, "echo-agent", Fields.OPERATION, "test:echo"),
+			"agent:trigger",
+			Maps.of(Fields.AGENT_ID, "echo-agent"),
 			RequestContext.of(ALICE_DID));
-		ACell result = runJob.awaitResult();
+		ACell result = runJob.awaitResult(5000);
 
 		assertNotNull(result);
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
@@ -215,17 +215,17 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testRunNoMessages() {
+	public void testTriggerNoWork() {
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "empty-agent"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job runJob = engine.jobs().invokeOperation(
-			"agent:run",
-			Maps.of(Fields.AGENT_ID, "empty-agent", Fields.OPERATION, "test:echo"),
+			"agent:trigger",
+			Maps.of(Fields.AGENT_ID, "empty-agent"),
 			RequestContext.of(ALICE_DID));
-		ACell result = runJob.awaitResult();
+		ACell result = runJob.awaitResult(5000);
 
 		assertNotNull(result);
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
@@ -238,20 +238,20 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "shared-name"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
 			"agent:message",
 			Maps.of(Fields.AGENT_ID, "shared-name", Fields.MESSAGE, Maps.of("from", "alice")),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "shared-name"),
-			RequestContext.of(BOB_DID)).awaitResult();
+			RequestContext.of(BOB_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
 			"agent:message",
 			Maps.of(Fields.AGENT_ID, "shared-name", Fields.MESSAGE, Maps.of("from", "bob")),
-			RequestContext.of(BOB_DID)).awaitResult();
+			RequestContext.of(BOB_DID)).awaitResult(5000);
 
 		User alice = engine.getVenueState().users().get(ALICE_DID);
 		User bob = engine.getVenueState().users().get(BOB_DID);
@@ -266,27 +266,24 @@ public class AgentAdapterTest {
 	// ========== Default transition op from config ==========
 
 	@Test
-	public void testRunWithDefaultOperation() {
-		// Create agent with default operation in config
+	public void testTriggerWithDefaultOperation() {
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(
 				Fields.AGENT_ID, "default-op-agent",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")
 			),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		engine.jobs().invokeOperation(
-			"agent:message",
-			Maps.of(Fields.AGENT_ID, "default-op-agent", Fields.MESSAGE, Maps.of("content", "hello")),
-			RequestContext.of(ALICE_DID)).awaitResult();
+		// Deliver directly to avoid auto-wake race
+		User user0 = engine.getVenueState().users().get(ALICE_DID);
+		user0.agent("default-op-agent").deliverMessage(Maps.of("content", "hello"));
 
-		// Run without specifying operation — should use config default
 		Job runJob = engine.jobs().invokeOperation(
-			"agent:run",
+			"agent:trigger",
 			Maps.of(Fields.AGENT_ID, "default-op-agent"),
 			RequestContext.of(ALICE_DID));
-		ACell result = runJob.awaitResult();
+		ACell result = runJob.awaitResult(5000);
 
 		assertNotNull(result);
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
@@ -298,51 +295,26 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testRunExplicitOperationOverridesConfig() {
-		// Create agent with a config default
-		engine.jobs().invokeOperation(
-			"agent:create",
-			Maps.of(
-				Fields.AGENT_ID, "override-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:error")
-			),
-			RequestContext.of(ALICE_DID)).awaitResult();
-
-		engine.jobs().invokeOperation(
-			"agent:message",
-			Maps.of(Fields.AGENT_ID, "override-agent", Fields.MESSAGE, Maps.of("content", "hello")),
-			RequestContext.of(ALICE_DID)).awaitResult();
-
-		// Explicit operation should override the config default (test:echo succeeds, test:error would fail)
-		Job runJob = engine.jobs().invokeOperation(
-			"agent:run",
-			Maps.of(Fields.AGENT_ID, "override-agent", Fields.OPERATION, "test:echo"),
-			RequestContext.of(ALICE_DID));
-		ACell result = runJob.awaitResult();
-
-		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
-	}
-
-	@Test
-	public void testRunNoOperationAndNoConfigFails() {
+	public void testTriggerNoOperationConfigured() {
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "no-op-agent"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
+		// No config.operation — wakeAgent won't auto-run, message stays in inbox
 		engine.jobs().invokeOperation(
 			"agent:message",
 			Maps.of(Fields.AGENT_ID, "no-op-agent", Fields.MESSAGE, Maps.of("content", "hello")),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// No operation specified and no config default — should fail
+		// Trigger should fail — has work but no transition operation
 		Job runJob = engine.jobs().invokeOperation(
-			"agent:run",
+			"agent:trigger",
 			Maps.of(Fields.AGENT_ID, "no-op-agent"),
 			RequestContext.of(ALICE_DID));
 
 		try {
-			runJob.awaitResult();
+			runJob.awaitResult(5000);
 			fail("Should fail without operation");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, runJob.getStatus());
@@ -352,12 +324,12 @@ public class AgentAdapterTest {
 	// ========== Result in run output ==========
 
 	@Test
-	public void testRunOutputIncludesResult() {
-		// Use the LLMAgentAdapter test pattern: test:llm returns a known response
+	public void testTriggerOutputIncludesResult() {
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(
 				Fields.AGENT_ID, "result-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "llmagent:chat"),
 				AgentState.KEY_STATE, Maps.of(
 					"config", Maps.of(
 						"llmOperation", "test:llm",
@@ -365,22 +337,21 @@ public class AgentAdapterTest {
 					)
 				)
 			),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		engine.jobs().invokeOperation(
-			"agent:message",
-			Maps.of(Fields.AGENT_ID, "result-agent", Fields.MESSAGE, Maps.of("content", "hello")),
-			RequestContext.of(ALICE_DID)).awaitResult();
+		// Deliver directly to avoid auto-wake race
+		User resultUser = engine.getVenueState().users().get(ALICE_DID);
+		resultUser.agent("result-agent").deliverMessage(Maps.of("content", "hello"));
 
 		Job runJob = engine.jobs().invokeOperation(
-			"agent:run",
-			Maps.of(Fields.AGENT_ID, "result-agent", Fields.OPERATION, "llmagent:chat"),
+			"agent:trigger",
+			Maps.of(Fields.AGENT_ID, "result-agent"),
 			RequestContext.of(ALICE_DID));
-		ACell result = runJob.awaitResult();
+		ACell result = runJob.awaitResult(5000);
 
-		// The run output should now include the transition result
+		// The trigger output should include the transition result
 		ACell transitionResult = RT.getIn(result, Fields.RESULT);
-		assertNotNull(transitionResult, "Run output should include the transition result");
+		assertNotNull(transitionResult, "Trigger output should include the transition result");
 		AString response = RT.ensureString(RT.getIn(transitionResult, "response"));
 		assertNotNull(response, "Result should contain a response");
 		assertTrue(response.toString().length() > 0, "Response should not be empty");
@@ -397,7 +368,7 @@ public class AgentAdapterTest {
 				Fields.AGENT_ID, "task-agent",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")
 			),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Submit a request — the job should NOT complete immediately
 		Job requestJob = engine.jobs().invokeOperation(
@@ -410,7 +381,7 @@ public class AgentAdapterTest {
 		AgentState agent = user.agent("task-agent");
 
 		// Wait for the scheduled run to complete the task
-		ACell result = requestJob.awaitResult();
+		ACell result = requestJob.awaitResult(5000);
 		assertNotNull(result, "Request should eventually be completed by the agent");
 
 		// Task should be removed from tasks after completion
@@ -425,7 +396,7 @@ public class AgentAdapterTest {
 				Fields.AGENT_ID, "completing-agent",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")
 			),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Submit a request
 		Job requestJob = engine.jobs().invokeOperation(
@@ -434,7 +405,7 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 
 		// Wait for completion
-		ACell result = requestJob.awaitResult();
+		ACell result = requestJob.awaitResult(5000);
 		assertNotNull(result);
 
 		// The output should contain what test:taskcomplete returns
@@ -450,7 +421,7 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 
 		try {
-			requestJob.awaitResult();
+			requestJob.awaitResult(5000);
 			fail("Should fail for non-existent agent");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, requestJob.getStatus());
@@ -462,7 +433,7 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "dead-agent"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		user.agent("dead-agent").setStatus(AgentState.TERMINATED);
@@ -473,7 +444,7 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 
 		try {
-			requestJob.awaitResult();
+			requestJob.awaitResult(5000);
 			fail("Should fail for terminated agent");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, requestJob.getStatus());
@@ -488,13 +459,13 @@ public class AgentAdapterTest {
 				Fields.AGENT_ID, "timeline-agent",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")
 			),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job requestJob = engine.jobs().invokeOperation(
 			"agent:request",
 			Maps.of(Fields.AGENT_ID, "timeline-agent", Fields.INPUT, Maps.of("task", "audit")),
 			RequestContext.of(ALICE_DID));
-		requestJob.awaitResult();
+		requestJob.awaitResult(5000);
 
 		// Check the timeline
 		User user = engine.getVenueState().users().get(ALICE_DID);
@@ -517,7 +488,7 @@ public class AgentAdapterTest {
 				Fields.AGENT_ID, "multi-agent",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")
 			),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Submit two requests
 		Job req1 = engine.jobs().invokeOperation(
@@ -531,8 +502,8 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 
 		// Both should complete eventually
-		req1.awaitResult();
-		req2.awaitResult();
+		req1.awaitResult(5000);
+		req2.awaitResult(5000);
 
 		assertTrue(req1.isComplete(), "Request 1 should be complete");
 		assertTrue(req2.isComplete(), "Request 2 should be complete");
@@ -555,14 +526,14 @@ public class AgentAdapterTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo"),
 				AgentState.KEY_STATE, Maps.of("counter", 0)
 			),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Query it
 		Job queryJob = engine.jobs().invokeOperation(
 			"agent:query",
 			Maps.of(Fields.AGENT_ID, "query-agent"),
 			RequestContext.of(ALICE_DID));
-		ACell result = queryJob.awaitResult();
+		ACell result = queryJob.awaitResult(5000);
 
 		assertNotNull(result);
 		assertEquals(Strings.create("query-agent"), RT.getIn(result, Fields.AGENT_ID));
@@ -579,7 +550,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "ghost"),
 			RequestContext.of(ALICE_DID));
 		try {
-			queryJob.awaitResult();
+			queryJob.awaitResult(5000);
 			fail("Should fail for non-existent agent");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, queryJob.getStatus());
@@ -592,7 +563,7 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "term-query"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		user.agent("term-query").setStatus(AgentState.TERMINATED);
@@ -602,7 +573,7 @@ public class AgentAdapterTest {
 			"agent:query",
 			Maps.of(Fields.AGENT_ID, "term-query"),
 			RequestContext.of(ALICE_DID));
-		ACell result = queryJob.awaitResult();
+		ACell result = queryJob.awaitResult(5000);
 
 		assertNotNull(result);
 		assertEquals(AgentState.TERMINATED, RT.getIn(result, Fields.STATUS));
@@ -615,7 +586,7 @@ public class AgentAdapterTest {
 		// New user with no agents
 		Job listJob = engine.jobs().invokeOperation(
 			"agent:list", Maps.empty(), RequestContext.of(BOB_DID));
-		ACell result = listJob.awaitResult();
+		ACell result = listJob.awaitResult(5000);
 
 		assertNotNull(result);
 		ACell agents = RT.getIn(result, "agents");
@@ -630,15 +601,15 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "agent-a"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "agent-b"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job listJob = engine.jobs().invokeOperation(
 			"agent:list", Maps.empty(), RequestContext.of(ALICE_DID));
-		ACell result = listJob.awaitResult();
+		ACell result = listJob.awaitResult(5000);
 
 		ACell agents = RT.getIn(result, "agents");
 		assertTrue(agents instanceof AVector);
@@ -661,11 +632,11 @@ public class AgentAdapterTest {
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "alice-only"),
-			RequestContext.of(ALICE_DID)).awaitResult();
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job bobList = engine.jobs().invokeOperation(
 			"agent:list", Maps.empty(), RequestContext.of(BOB_DID));
-		ACell result = bobList.awaitResult();
+		ACell result = bobList.awaitResult(5000);
 
 		ACell agents = RT.getIn(result, "agents");
 		assertEquals(0, ((AVector<?>) agents).count());

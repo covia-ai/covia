@@ -283,7 +283,7 @@ public class ClientTest {
 		assertNotNull(a);
 		
 		Job job=a.invoke(Vectors.empty()).join();
-		ACell result=job.awaitResult();
+		ACell result=job.awaitResult(5000);
 		assertEquals(Vectors.empty(),result);
 		
 		assertEquals(Maps.empty(),a.run(Maps.empty()));

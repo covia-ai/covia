@@ -291,7 +291,7 @@ public class TestAdapter extends AAdapter {
      * Test LLM for task completion: looks for "[Tasks assigned to you]" in user
      * messages, extracts the first job ID, and calls complete_task. After seeing
      * a tool result, returns a text summary. Used for testing the full
-     * agent:request → agent:run → complete_task pipeline.
+     * agent:request → agent:trigger → complete_task pipeline.
      */
     @SuppressWarnings("unchecked")
     private ACell handleTaskLlm(ACell input) {
