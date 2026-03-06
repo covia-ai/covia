@@ -24,6 +24,9 @@ import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.request.ResponseFormat;
+import dev.langchain4j.model.chat.request.ResponseFormatType;
+import dev.langchain4j.model.chat.request.json.JsonSchema;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.request.json.JsonArraySchema;
 import dev.langchain4j.model.chat.request.json.JsonBooleanSchema;
@@ -73,6 +76,8 @@ public class LangChainAdapter extends AAdapter {
 	static final AString K_NAME       = Strings.intern("name");
 	static final AString K_ARGUMENTS  = Strings.intern("arguments");
 	static final AString K_PARAMETERS = Strings.intern("parameters");
+	static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
+	static final AString K_SCHEMA   = Strings.intern("schema");
 
 	// Role constants
 	static final AString ROLE_SYSTEM    = Strings.intern("system");
@@ -160,11 +165,14 @@ public class LangChainAdapter extends AAdapter {
 		@SuppressWarnings("unchecked")
 		AVector<ACell> tools = (AVector<ACell>) ((RT.getIn(input, K_TOOLS) instanceof AVector) ? RT.getIn(input, K_TOOLS) : null);
 
+		// Response format: "json", "text", or {name, schema} map
+		ACell responseFormatCell = RT.getIn(input, K_RESPONSE_FORMAT);
+
 		// Prompt-based callers expect {response: "..."} output
 		final boolean legacyOutput = !(messagesCell instanceof AVector);
 
 		return CompletableFuture.supplyAsync(() -> {
-			ACell result = callModel(chatModel, messages, tools);
+			ACell result = callModel(chatModel, messages, tools, responseFormatCell);
 			if (legacyOutput) {
 				// Wrap assistant message as {response: content}
 				AString content = RT.ensureString(RT.getIn(result, K_CONTENT));
@@ -229,20 +237,28 @@ public class LangChainAdapter extends AAdapter {
 	// ========== LLM invocation ==========
 
 	/**
-	 * Calls the LLM with messages and optional tool definitions.
+	 * Calls the LLM with messages, optional tool definitions, and optional response format.
 	 * Returns an assistant message map: {role, content?, toolCalls?}.
+	 *
+	 * @param responseFormatCell Response format: null (default text), "json" or "text" string,
+	 *        or a map {@code {name: "...", schema: {type: "object", ...}}} for strict schema mode
 	 */
-	private static ACell callModel(ChatModel model, AVector<ACell> messages, AVector<ACell> tools) {
+	private static ACell callModel(ChatModel model, AVector<ACell> messages,
+			AVector<ACell> tools, ACell responseFormatCell) {
 		List<ChatMessage> chatMessages = toChatMessages(messages);
+		ResponseFormat responseFormat = toResponseFormat(responseFormatCell);
 
+		boolean needsRequest = (tools != null && tools.count() > 0) || responseFormat != null;
 		ChatResponse response;
-		if (tools != null && tools.count() > 0) {
-			List<ToolSpecification> toolSpecs = toToolSpecifications(tools);
-			ChatRequest request = ChatRequest.builder()
-				.messages(chatMessages)
-				.toolSpecifications(toolSpecs)
-				.build();
-			response = model.chat(request);
+		if (needsRequest) {
+			ChatRequest.Builder builder = ChatRequest.builder().messages(chatMessages);
+			if (tools != null && tools.count() > 0) {
+				builder.toolSpecifications(toToolSpecifications(tools));
+			}
+			if (responseFormat != null) {
+				builder.responseFormat(responseFormat);
+			}
+			response = model.chat(builder.build());
 		} else {
 			response = model.chat(chatMessages);
 		}
@@ -391,6 +407,60 @@ public class LangChainAdapter extends AAdapter {
 			specs.add(builder.build());
 		}
 		return specs;
+	}
+
+	// ========== Response format conversion ==========
+
+	/**
+	 * Converts a Convex response format specification to a LangChain4j ResponseFormat.
+	 *
+	 * <p>Accepts three forms:</p>
+	 * <ul>
+	 *   <li>{@code null} → returns null (no format constraint, default text)</li>
+	 *   <li>{@code "text"} → returns null (explicit text, same as default)</li>
+	 *   <li>{@code "json"} → {@link ResponseFormat#JSON} (JSON mode, no schema)</li>
+	 *   <li>Map {@code {name: "...", schema: {type: "object", ...}}} →
+	 *       strict JSON schema mode with {@link JsonSchema}</li>
+	 * </ul>
+	 */
+	@SuppressWarnings("unchecked")
+	static ResponseFormat toResponseFormat(ACell cell) {
+		if (cell == null) return null;
+
+		// String shorthand: "json" or "text"
+		AString str = RT.ensureString(cell);
+		if (str != null) {
+			if ("json".equals(str.toString())) return ResponseFormat.JSON;
+			// "text" or anything else → default (no constraint)
+			return null;
+		}
+
+		// Map form: {name: "...", schema: {type: "object", properties: {...}}}
+		if (cell instanceof AMap) {
+			AMap<AString, ACell> map = (AMap<AString, ACell>) cell;
+			AString name = RT.ensureString(map.get(K_NAME));
+			ACell schemaCell = map.get(K_SCHEMA);
+
+			if (schemaCell instanceof AMap) {
+				AMap<AString, ACell> schemaMap = (AMap<AString, ACell>) schemaCell;
+				JsonObjectSchema rootElement = toJsonObjectSchema(schemaMap);
+				if (rootElement != null) {
+					JsonSchema jsonSchema = JsonSchema.builder()
+						.name((name != null) ? name.toString() : "response")
+						.rootElement(rootElement)
+						.build();
+					return ResponseFormat.builder()
+						.type(ResponseFormatType.JSON)
+						.jsonSchema(jsonSchema)
+						.build();
+				}
+			}
+
+			// Map without valid schema → JSON mode (no strict schema)
+			return ResponseFormat.JSON;
+		}
+
+		return null;
 	}
 
 	// ========== JSON Schema conversion ==========

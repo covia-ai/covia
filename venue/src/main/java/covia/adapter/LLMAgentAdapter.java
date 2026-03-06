@@ -72,8 +72,9 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final AString K_LLM_OPERATION = Strings.intern("llmOperation");
 	private static final AString K_MODEL         = Strings.intern("model");
 	private static final AString K_SYSTEM_PROMPT = Strings.intern("systemPrompt");
-	private static final AString K_URL           = Strings.intern("url");
-	private static final AString K_TOOLS         = Strings.intern("tools");
+	private static final AString K_URL             = Strings.intern("url");
+	private static final AString K_TOOLS           = Strings.intern("tools");
+	private static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
 
 	// History / message field keys
 	private static final AString K_HISTORY    = Strings.intern("history");
@@ -235,6 +236,8 @@ public class LLMAgentAdapter extends AAdapter {
 				if (model != null) l3Input = l3Input.assoc(K_MODEL, model);
 				ACell url = config.get(K_URL);
 				if (url != null) l3Input = l3Input.assoc(K_URL, url);
+				ACell responseFormat = config.get(K_RESPONSE_FORMAT);
+				if (responseFormat != null) l3Input = l3Input.assoc(K_RESPONSE_FORMAT, responseFormat);
 			}
 			if (tools != null) {
 				l3Input = l3Input.assoc(K_TOOLS, tools);
