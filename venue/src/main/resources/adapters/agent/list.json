@@ -1,0 +1,29 @@
+{
+	"name": "List Agents",
+	"description": "Lists all agents owned by the authenticated user, with a status summary for each.",
+	"dateCreated": "2026-03-06T00:00:00Z",
+	"operation": {
+		"adapter": "agent:list",
+		"input": {
+			"type": "object",
+			"properties": {}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"agents": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"properties": {
+							"agentId": { "type": "string" },
+							"status": { "type": "string" },
+							"tasks": { "type": "integer", "description": "Number of pending tasks" },
+							"error": { "type": "string", "description": "Last error, if any" }
+						}
+					}
+				}
+			}
+		}
+	}
+}

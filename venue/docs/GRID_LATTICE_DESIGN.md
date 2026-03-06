@@ -197,7 +197,7 @@ This is a critical design distinction. The three execution-related namespaces se
 | Pattern | Mechanism | Creates job? | Use case |
 |---------|-----------|-------------|----------|
 | **Async message** | `agent:message` — appends to agent's `inbox` vector | No | Notifications, FYI, loose coordination |
-| **Task request** | `agent:request` — adds Job ID to agent's `tasks` vector. The request Job IS the task. | Yes | Primary mechanism. MCP users, A2A, delegated work. Agent must complete or reject. |
+| **Task request** | `agent:request` — adds Job ID to agent's `tasks` index. The request Job IS the task. | Yes | Primary mechanism. MCP users, A2A, delegated work. Agent must complete or reject. |
 | **Delegation** | `invoke()` with sub-delegated UCAN caps | Yes | Agent delegates subtask to another agent |
 | **Broadcast** | Write to multiple inboxes | No | Announcements, pub-sub patterns |
 
@@ -221,8 +221,8 @@ Each agent is a single atomic LWW value — the entire agent record is replaced 
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"` |
 | `config` | map | Framework-level configuration. Includes `operation` (default transition op), `name`, `description`, `tags`, `skills` (A2A), protocol settings. |
 | `state` | any | User-defined state. Opaque to the framework — owned entirely by the transition function. |
-| `tasks` | vector | Job IDs for inbound requests assigned to this agent. Persistent until resolved. |
-| `pending` | vector | Job IDs for outbound jobs the agent has invoked and is waiting on. |
+| `tasks` | index | `Index<Blob, ACell>` — inbound request Job IDs. Ordered by Job ID; O(log n) insert/delete. |
+| `pending` | index | `Index<Blob, ACell>` — outbound Job IDs the agent is waiting on. Ordered by Job ID. |
 | `inbox` | vector | Ephemeral messages awaiting processing. Drained on each successful run. |
 | `timeline` | vector | Append-only log of transition records. Grows with each successful run. |
 | `caps` | map | Capability sets (placeholder — Phase C enforcement). |
@@ -240,39 +240,20 @@ All fields are framework-managed except `state`, which is owned by the transitio
 | **Adapter** | Trusted handler of plaintext. Requests decryption from runtime, injects into external calls. |
 | **Transition fn** | Untrusted. References secrets by path only, never sees plaintext. |
 
-**Agent tool palette:** During execution, the agent has access to MCP-style tools provided by the venue runtime. The runtime validates every tool call against the agent's `caps`.
+**Lattice operations on agents:** The following operations are available at the lattice/runtime level to any code running on the venue (adapters, orchestrators, API handlers). These are infrastructure capabilities — not specific to the LLM tool loop. For the subset exposed as LLM tools during agent execution, see AGENT_LOOP.md §3.5.
 
-*Lattice operations (no job created):*
-
-| Tool | Description | Caps required |
-|------|-------------|---------------|
-| `read` | Read a lattice path | `{ with: "did:.../path", can: "/crud/read" }` |
-| `write` | Write to workspace | `{ with: "did:.../w/path", can: "/crud/write" }` |
-| `list` | List keys at a path | `{ with: "did:.../path", can: "/crud/read" }` |
-| `complete_job` | Complete an assigned job with result | Job must be assigned to this agent |
-| `fail_job` | Fail an assigned job with reason | Job must be assigned to this agent |
-| `message` | Send message to another agent's inbox | `{ with: "did:.../g/<id>", can: "/agent/message" }` |
-| `assign_job` | Create job and message another agent | `{ with: "did:.../g/<id>", can: "/agent/message" }` + invoke caps |
-| `read_secret` | Request secret decryption (adapter handles plaintext) | `{ with: "did:.../s/key", can: "/secret/decrypt" }` |
-| `get_state` | Read own current state | Implicit — always available |
-| `log` | Append to agent notes (included in timeline) | Implicit — always available |
-
-*Job-creating operations:*
-
-| Tool | Description | Caps required |
-|------|-------------|---------------|
-| `invoke` | Invoke a grid operation — creates a job in `/j/` | `{ with: "did:.../o/op-name", can: "/invoke" }` |
-| `mcp_call` | Call an external MCP server tool — creates a job for tracking | Caps on the MCP server binding |
-
-*Lifecycle operations:*
-
-| Tool | Description | Caps required |
-|------|-------------|---------------|
-| `spawn_agent` | Create a new agent | `{ with: "did:.../g/", can: "/crud/write" }` |
-| `fork_agent` | Fork an existing agent | `{ with: "did:.../g/<id>", can: "/agent/fork" }` |
-| `delegate` | Sub-delegate UCAN capabilities | `{ with: "did:...", can: "/ucan/delegate" }` |
-
-The tool palette maps directly to MCP tool definitions — each tool has a name, description, and JSON schema for args. External MCP servers add additional tools via the adapter.
+| Operation | Description | Caps required |
+|-----------|-------------|---------------|
+| Read agent record | Read any field of an agent's state | `{ with: "did:.../g/<id>", can: "/crud/read" }` |
+| Write agent workspace | Write to an agent's or user's workspace | `{ with: "did:.../w/path", can: "/crud/write" }` |
+| List agents | Enumerate agents for a user | `{ with: "did:.../g/", can: "/crud/read" }` |
+| Complete/fail task | Complete or fail a Job assigned to an agent | Job must be assigned to the agent |
+| Message agent | Append to an agent's inbox | `{ with: "did:.../g/<id>", can: "/agent/message" }` |
+| Invoke operation | Invoke any grid operation (creates a Job) | `{ with: "did:.../o/op-name", can: "/invoke" }` |
+| Decrypt secret | Decrypt a secret from the user's store | `{ with: "did:.../s/key", can: "/secret/decrypt" }` |
+| Spawn agent | Create a new agent | `{ with: "did:.../g/", can: "/crud/write" }` |
+| Fork agent | Fork an existing agent | `{ with: "did:.../g/<id>", can: "/agent/fork" }` |
+| Delegate caps | Sub-delegate UCAN capabilities | `{ with: "did:...", can: "/ucan/delegate" }` |
 
 **Timeline efficiency:** Each timeline entry is a raw lattice value, not a pinned `/a/` ref. CAD3 structural sharing means unchanged subtrees between transitions share storage automatically. The timeline can grow indefinitely without proportional storage cost.
 

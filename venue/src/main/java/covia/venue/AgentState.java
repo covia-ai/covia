@@ -4,6 +4,8 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
+import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -98,8 +100,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 		if (exists()) return;
 		AMap<AString, ACell> record = Maps.of(
 			K_STATUS, SLEEPING,
-			K_TASKS, Vectors.empty(),
-			K_PENDING, Vectors.empty(),
+			K_TASKS, Index.none(),
+			K_PENDING, Index.none(),
 			K_INBOX, Vectors.empty(),
 			K_TIMELINE, Vectors.empty()
 		);
@@ -234,39 +236,44 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Gets the agent's inbound task Job IDs.
+	 * Gets the agent's inbound task Job IDs as an Index (sorted by Job ID).
 	 */
 	@SuppressWarnings("unchecked")
-	public AVector<ACell> getTasks() {
+	public Index<Blob, ACell> getTasks() {
 		AMap<AString, ACell> record = getRecord();
-		if (record == null) return Vectors.empty();
+		if (record == null) return Index.none();
 		ACell v = record.get(K_TASKS);
-		return (v instanceof AVector) ? (AVector<ACell>) v : Vectors.empty();
+		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
 	}
 
 	/**
-	 * Gets the agent's outbound pending Job IDs.
+	 * Gets the agent's outbound pending Job IDs as an Index (sorted by Job ID).
 	 */
 	@SuppressWarnings("unchecked")
-	public AVector<ACell> getPending() {
+	public Index<Blob, ACell> getPending() {
 		AMap<AString, ACell> record = getRecord();
-		if (record == null) return Vectors.empty();
+		if (record == null) return Index.none();
 		ACell v = record.get(K_PENDING);
-		return (v instanceof AVector) ? (AVector<ACell>) v : Vectors.empty();
+		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
 	}
 
 	/**
-	 * Adds a task Job ID to the agent's tasks. Atomic read-modify-write.
+	 * Adds a task Job ID to the agent's tasks with an initial snapshot.
+	 * Atomic read-modify-write.
+	 *
+	 * <p>The snapshot captures the full job status record at assignment time.
+	 * It serves as a quick reference and a durable fallback if the Job is
+	 * unavailable (e.g. after catastrophic failure).</p>
 	 *
 	 * <p><b>Invariant:</b> callers must ensure that {@code jobId} corresponds to
 	 * a real Job in STARTED state awaiting completion. Only
 	 * {@code AgentAdapter.handleRequest} should call this in production.</p>
 	 */
-	public void addTask(ACell jobId) {
+	public void addTask(Blob jobId, ACell snapshot) {
 		AMap<AString, ACell> record = getRecord();
 		if (record == null) return;
-		AVector<ACell> tasks = getTasks();
-		putRecord(record.assoc(K_TASKS, tasks.conj(jobId)));
+		Index<Blob, ACell> tasks = getTasks();
+		putRecord(record.assoc(K_TASKS, tasks.assoc(jobId, snapshot)));
 	}
 
 	// ========== Key constants for external use ==========

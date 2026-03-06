@@ -10,6 +10,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -66,6 +67,8 @@ public class AgentAdapter extends AAdapter {
 		installAsset(BASE + "request.json");
 		installAsset(BASE + "message.json");
 		installAsset(BASE + "run.json");
+		installAsset(BASE + "query.json");
+		installAsset(BASE + "list.json");
 	}
 
 	@Override
@@ -76,8 +79,7 @@ public class AgentAdapter extends AAdapter {
 
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		AString callerDID = ctx.getCallerDID();
-		if (callerDID == null) {
+		if (ctx.getCallerDID() == null) {
 			job.fail("Agent operations require an authenticated caller");
 			return;
 		}
@@ -87,16 +89,22 @@ public class AgentAdapter extends AAdapter {
 		try {
 			switch (op) {
 				case "create":
-					handleCreate(job, input, callerDID);
+					handleCreate(job, input, ctx);
 					break;
 				case "request":
 					handleRequest(job, input, ctx);
 					break;
 				case "message":
-					handleMessage(job, input, callerDID);
+					handleMessage(job, input, ctx);
 					break;
 				case "run":
 					handleRun(job, input, ctx);
+					break;
+				case "query":
+					handleQuery(job, input, ctx);
+					break;
+				case "list":
+					handleList(job, ctx);
 					break;
 				default:
 					job.fail("Unknown agent operation: " + op);
@@ -110,7 +118,7 @@ public class AgentAdapter extends AAdapter {
 	 * agent:create — create and initialise an agent.
 	 */
 	@SuppressWarnings("unchecked")
-	private void handleCreate(Job job, ACell input, AString callerDID) {
+	private void handleCreate(Job job, ACell input, RequestContext ctx) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) {
 			job.fail("agentId is required");
@@ -121,7 +129,7 @@ public class AgentAdapter extends AAdapter {
 		ACell initialState = RT.getIn(input, AgentState.KEY_STATE);
 
 		Users users = engine.getVenueState().users();
-		User user = users.ensure(callerDID);
+		User user = users.ensure(ctx.getCallerDID());
 		user.ensureAgent(agentId, config, initialState);
 
 		job.setStatus(Status.STARTED);
@@ -151,8 +159,9 @@ public class AgentAdapter extends AAdapter {
 		// The request job stays in STARTED — agent will complete it
 		job.setStatus(Status.STARTED);
 
-		// Add this job's ID to the agent's task queue
-		agent.addTask(job.getID());
+		// Add this job's ID to the agent's task queue with job status snapshot
+		AMap<AString, ACell> snapshot = engine.jobs().getJobData(job.getID());
+		agent.addTask(job.getID(), snapshot);
 
 		// Schedule an async run
 		scheduleRun(agentId, ctx);
@@ -161,14 +170,14 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * agent:message — deliver an ephemeral message to an agent's inbox.
 	 */
-	private void handleMessage(Job job, ACell input, AString callerDID) {
+	private void handleMessage(Job job, ACell input, RequestContext ctx) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) {
 			job.fail("agentId is required");
 			return;
 		}
 
-		AgentState agent = lookupAgent(job, callerDID, agentId);
+		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
 
 		agent.deliverMessage(RT.getIn(input, Fields.MESSAGE));
@@ -178,6 +187,82 @@ public class AgentAdapter extends AAdapter {
 			Fields.AGENT_ID, agentId,
 			Fields.DELIVERED, CVMBool.TRUE
 		));
+	}
+
+	/**
+	 * agent:query — read an agent's full record.
+	 */
+	private void handleQuery(Job job, ACell input, RequestContext ctx) {
+		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		if (agentId == null) {
+			job.fail("agentId is required");
+			return;
+		}
+
+		Users users = engine.getVenueState().users();
+		User user = users.get(ctx.getCallerDID());
+		if (user == null) {
+			job.fail("User not found: " + ctx.getCallerDID());
+			return;
+		}
+
+		AgentState agent = user.agent(agentId);
+		if (agent == null) {
+			job.fail("Agent not found: " + agentId);
+			return;
+		}
+
+		AMap<AString, ACell> record = agent.getRecord();
+		if (record == null) {
+			job.fail("Agent not found: " + agentId);
+			return;
+		}
+
+		// Return the full record with agentId included
+		job.setStatus(Status.STARTED);
+		job.completeWith(record.assoc(Fields.AGENT_ID, agentId));
+	}
+
+	/**
+	 * agent:list — list all agents for the authenticated user.
+	 */
+	@SuppressWarnings("unchecked")
+	private void handleList(Job job, RequestContext ctx) {
+		Users users = engine.getVenueState().users();
+		User user = users.get(ctx.getCallerDID());
+
+		AVector<ACell> agents = Vectors.empty();
+		if (user != null) {
+			AMap<AString, ACell> agentMap = user.getAgents();
+			if (agentMap != null) {
+				for (var entry : agentMap.entrySet()) {
+					AString agentId = entry.getKey();
+					ACell value = entry.getValue();
+					if (!(value instanceof AMap)) continue;
+					AMap<AString, ACell> record = (AMap<AString, ACell>) value;
+
+					long taskCount = 0;
+					ACell tasksCell = record.get(AgentState.KEY_TASKS);
+					if (tasksCell instanceof Index) {
+						taskCount = ((Index<?, ?>) tasksCell).count();
+					}
+
+					AMap<AString, ACell> summary = Maps.of(
+						Fields.AGENT_ID, agentId,
+						Fields.STATUS, record.get(AgentState.KEY_STATUS),
+						Fields.TASKS, CVMLong.create(taskCount)
+					);
+					ACell error = record.get(AgentState.KEY_ERROR);
+					if (error != null) {
+						summary = summary.assoc(Fields.ERROR, error);
+					}
+					agents = agents.conj(summary);
+				}
+			}
+		}
+
+		job.setStatus(Status.STARTED);
+		job.completeWith(Maps.of(Strings.intern("agents"), agents));
 	}
 
 	/**
@@ -238,8 +323,8 @@ public class AgentAdapter extends AAdapter {
 		// Step 1: Read current agent record
 		AMap<AString, ACell> record = agent.getRecord();
 		AVector<ACell> inbox = ensureVector(agent.getInbox());
-		AVector<ACell> tasks = agent.getTasks();
-		AVector<ACell> pending = agent.getPending();
+		Index<Blob, ACell> tasks = agent.getTasks();
+		Index<Blob, ACell> pending = agent.getPending();
 
 		// Step 2: Check if there's work to do
 		if (inbox.count() == 0 && tasks.count() == 0) {
@@ -283,8 +368,8 @@ public class AgentAdapter extends AAdapter {
 			taskResults = (AMap<AString, ACell>) taskResultsCell;
 		}
 
-		// Remove completed tasks from the queue
-		AVector<ACell> updatedTasks = removeCompletedTasks(tasks, taskResults);
+		// Remove completed tasks from the index
+		Index<Blob, ACell> updatedTasks = removeCompletedTasks(tasks, taskResults);
 
 		// Build timeline entry
 		AMap<AString, ACell> timelineEntry = Maps.of(
@@ -392,22 +477,30 @@ public class AgentAdapter extends AAdapter {
 	// ========== Internal helpers ==========
 
 	/**
-	 * Resolves a vector of Job IDs to maps containing jobId, status, and a
-	 * payload field (e.g. {@code Fields.INPUT} for tasks, {@code Fields.OUTPUT}
-	 * for pending).
+	 * Resolves an Index of Job IDs to a vector of maps containing jobId, status,
+	 * and a payload field (e.g. {@code Fields.INPUT} for tasks,
+	 * {@code Fields.OUTPUT} for pending).
+	 *
+	 * <p>Each resolved entry includes the Index snapshot value. If JobManager
+	 * data is unavailable (catastrophic failure), the snapshot provides a
+	 * durable fallback so the agent can observe what was requested/invoked.</p>
 	 */
-	private AVector<ACell> resolveJobIds(AVector<ACell> ids, AString payloadField) {
+	private AVector<ACell> resolveJobIds(Index<Blob, ACell> ids, AString payloadField) {
 		if (ids == null || ids.count() == 0) return Vectors.empty();
 		AVector<ACell> resolved = Vectors.empty();
-		for (long i = 0; i < ids.count(); i++) {
-			Blob jobId = tryParseID(ids.get(i));
-			if (jobId == null) continue;
+		for (var entry : ids.entrySet()) {
+			Blob jobId = entry.getKey();
+			ACell snapshot = entry.getValue();
 			AMap<AString, ACell> jobData = engine.jobs().getJobData(jobId);
+			ACell payload = (jobData != null) ? jobData.get(payloadField) : snapshot;
 			AMap<AString, ACell> info = Maps.of(
 				Fields.JOB_ID, jobIdHex(jobId),
 				Fields.STATUS, (jobData != null) ? jobData.get(Fields.STATUS) : null,
-				payloadField, (jobData != null) ? jobData.get(payloadField) : null
+				payloadField, payload
 			);
+			if (snapshot != null) {
+				info = info.assoc(Fields.SNAPSHOT, snapshot);
+			}
 			resolved = resolved.conj(info);
 		}
 		return resolved;
@@ -444,18 +537,16 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Removes completed/rejected task IDs from the tasks vector.
+	 * Removes completed/rejected task IDs from the tasks index.
 	 */
-	private AVector<ACell> removeCompletedTasks(AVector<ACell> tasks, AMap<AString, ACell> taskResults) {
-		if (taskResults == null || tasks == null) return ensureVector(tasks);
-		AVector<ACell> remaining = Vectors.empty();
-		for (long i = 0; i < tasks.count(); i++) {
-			ACell taskId = tasks.get(i);
-			Blob jobId = tryParseID(taskId);
-			if (jobId == null) continue;
-			// Keep the task if it wasn't in taskResults (key is hex AString)
-			if (taskResults.get(jobIdHex(jobId)) == null) {
-				remaining = remaining.conj(taskId);
+	private Index<Blob, ACell> removeCompletedTasks(Index<Blob, ACell> tasks, AMap<AString, ACell> taskResults) {
+		if (taskResults == null || tasks == null) return (tasks != null) ? tasks : Index.none();
+		Index<Blob, ACell> remaining = tasks;
+		for (var entry : tasks.entrySet()) {
+			Blob jobId = entry.getKey();
+			// Remove the task if it was in taskResults (key is hex AString)
+			if (taskResults.get(jobIdHex(jobId)) != null) {
+				remaining = remaining.dissoc(jobId);
 			}
 		}
 		return remaining;

@@ -543,6 +543,134 @@ public class AgentAdapterTest {
 		assertEquals(0, agent.getTasks().count(), "All tasks should be cleared");
 	}
 
+	// ========== agent:query ==========
+
+	@Test
+	public void testQueryAgent() {
+		// Create an agent with config and state
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "query-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo"),
+				AgentState.KEY_STATE, Maps.of("counter", 0)
+			),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		// Query it
+		Job queryJob = engine.jobs().invokeOperation(
+			"agent:query",
+			Maps.of(Fields.AGENT_ID, "query-agent"),
+			RequestContext.of(ALICE_DID));
+		ACell result = queryJob.awaitResult();
+
+		assertNotNull(result);
+		assertEquals(Strings.create("query-agent"), RT.getIn(result, Fields.AGENT_ID));
+		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
+		assertNotNull(RT.getIn(result, AgentState.KEY_CONFIG));
+		assertNotNull(RT.getIn(result, AgentState.KEY_STATE));
+		assertNotNull(RT.getIn(result, AgentState.KEY_TIMELINE));
+	}
+
+	@Test
+	public void testQueryNonExistentAgent() {
+		Job queryJob = engine.jobs().invokeOperation(
+			"agent:query",
+			Maps.of(Fields.AGENT_ID, "ghost"),
+			RequestContext.of(ALICE_DID));
+		try {
+			queryJob.awaitResult();
+			fail("Should fail for non-existent agent");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, queryJob.getStatus());
+		}
+	}
+
+	@Test
+	public void testQueryTerminatedAgent() {
+		// Create and terminate an agent
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "term-query"),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		user.agent("term-query").setStatus(AgentState.TERMINATED);
+
+		// Query should still work — you can read terminated agents
+		Job queryJob = engine.jobs().invokeOperation(
+			"agent:query",
+			Maps.of(Fields.AGENT_ID, "term-query"),
+			RequestContext.of(ALICE_DID));
+		ACell result = queryJob.awaitResult();
+
+		assertNotNull(result);
+		assertEquals(AgentState.TERMINATED, RT.getIn(result, Fields.STATUS));
+	}
+
+	// ========== agent:list ==========
+
+	@Test
+	public void testListAgentsEmpty() {
+		// New user with no agents
+		Job listJob = engine.jobs().invokeOperation(
+			"agent:list", Maps.empty(), RequestContext.of(BOB_DID));
+		ACell result = listJob.awaitResult();
+
+		assertNotNull(result);
+		ACell agents = RT.getIn(result, "agents");
+		assertNotNull(agents);
+		assertTrue(agents instanceof AVector);
+		assertEquals(0, ((AVector<?>) agents).count());
+	}
+
+	@Test
+	public void testListAgents() {
+		// Create two agents
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "agent-a"),
+			RequestContext.of(ALICE_DID)).awaitResult();
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "agent-b"),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		Job listJob = engine.jobs().invokeOperation(
+			"agent:list", Maps.empty(), RequestContext.of(ALICE_DID));
+		ACell result = listJob.awaitResult();
+
+		ACell agents = RT.getIn(result, "agents");
+		assertTrue(agents instanceof AVector);
+		assertEquals(2, ((AVector<?>) agents).count());
+
+		// Each entry should have agentId, status, tasks count
+		@SuppressWarnings("unchecked")
+		AVector<ACell> agentList = (AVector<ACell>) agents;
+		for (long i = 0; i < agentList.count(); i++) {
+			ACell entry = agentList.get(i);
+			assertNotNull(RT.getIn(entry, Fields.AGENT_ID));
+			assertEquals(AgentState.SLEEPING, RT.getIn(entry, Fields.STATUS));
+			assertNotNull(RT.getIn(entry, Fields.TASKS));
+		}
+	}
+
+	@Test
+	public void testListAgentsIsolation() {
+		// Alice's agents should not appear in Bob's list
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "alice-only"),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		Job bobList = engine.jobs().invokeOperation(
+			"agent:list", Maps.empty(), RequestContext.of(BOB_DID));
+		ACell result = bobList.awaitResult();
+
+		ACell agents = RT.getIn(result, "agents");
+		assertEquals(0, ((AVector<?>) agents).count());
+	}
+
 	// ========== AgentState lifecycle ==========
 
 	@Test

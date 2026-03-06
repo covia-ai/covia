@@ -105,8 +105,8 @@ public class Fields {
 	public static final StringShort TASKS = Strings.intern("tasks");
 	public static final StringShort PENDING = Strings.intern("pending");
 	public static final StringShort TASK_RESULTS = Strings.intern("taskResults");
-	public static final StringShort NEW_JOBS = Strings.intern("newJobs");
 	public static final StringShort JOB_ID = Strings.intern("jobId");
+	public static final StringShort SNAPSHOT = Strings.intern("snapshot");
 
 	// Identity / authorization
 	public static final StringShort CALLER = Strings.intern("caller");

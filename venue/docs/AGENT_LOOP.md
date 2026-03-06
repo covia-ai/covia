@@ -60,8 +60,8 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"` |
 | `config` | map | Framework-level configuration. Includes `operation` (default transition op). |
 | `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function-specific configuration (e.g. LLM provider, model) lives here, not in `config`. Set at creation via optional initial state. |
-| `tasks` | vector | Job IDs for inbound requests assigned to this agent. Persistent until resolved. |
-| `pending` | vector | Job IDs for outbound jobs the agent has invoked and is waiting on. |
+| `tasks` | index | `Index<Blob, ACell>` of inbound request Job IDs. Persistent until resolved. Ordered by Job ID. |
+| `pending` | index | `Index<Blob, ACell>` of outbound Job IDs the agent is waiting on. Ordered by Job ID. |
 | `inbox` | vector | Ephemeral messages awaiting processing. Drained on successful run. |
 | `timeline` | vector | Append-only log of transition records (§2.3). Grows with each successful agent run. Timestamped for audit. |
 | `caps` | map | Capability sets (placeholder — Phase C enforcement) |
@@ -85,9 +85,11 @@ days or weeks. Tasks can come from humans (via MCP), other agents, or the system
 events but do not represent commitments. Messages are consumed on each run and
 recorded in the timeline. They may or may not trigger agent action.
 
-An agent also tracks **pending** outbound jobs — jobs it has invoked
-asynchronously (tool calls, delegated work, HITL requests). When a pending job
-completes, the agent is woken to process the result.
+An agent also tracks **pending** outbound jobs — jobs it has explicitly created
+via the async invoke tool during the tool call loop (level 2). The agent
+chooses which invocations to track; synchronous tool calls and internal
+framework jobs are not tracked. When a pending job completes, the scheduler
+wakes the agent to process the result.
 
 ### 2.4 Timeline Entry
 
@@ -101,11 +103,10 @@ received, decided, and accomplished in each run.
 | `end` | long | Timestamp when the run completed. |
 | `op` | string | The operation reference used for the transition function. |
 | `state` | any | The starting state passed to the transition function. |
-| `tasks` | vector | Resolved task data (jobId, input, status) at run start. |
+| `tasks` | vector | Resolved task data (jobId, input, status) at run start (from the `tasks` index). |
 | `messages` | vector | The inbox messages passed to the transition function. |
 | `result` | any | The `result` returned by the transition function. |
 | `taskResults` | map? | Task completions from output declarations (§3.4.1). `{<jobId>: {status, output}}`. |
-| `newJobs` | vector? | New outbound jobs invoked during this run. *(Not yet implemented — planned.)* |
 
 The output state is not stored in the timeline entry — it is the `state` field in
 the agent record (for the latest run) or the `state` field in the next timeline
@@ -206,8 +207,8 @@ The contract between level 1 and level 2:
 |-------|------|-------------|
 | `agent-id` | string | The agent's identifier. |
 | `state` | any | Current `state` from the agent record. Null on first run. |
-| `tasks` | vector | Inbound task Job IDs with their current status/input data. |
-| `pending` | vector | Outbound job IDs with their resolved status/results. |
+| `tasks` | vector | Inbound task data resolved from the `tasks` index (jobId, input, status). |
+| `pending` | vector | Outbound job data resolved from the `pending` index (jobId, status, result). |
 | `messages` | vector | The inbox. Ephemeral message records. |
 
 **Output:**
@@ -217,11 +218,14 @@ The contract between level 1 and level 2:
 | `state` | any | Updated user-defined state. Written back to the agent record. |
 | `result` | any | Summary of what happened. Recorded in the timeline entry and returned to callers. |
 | `taskResults` | map? | Optional task completions: `{<jobId>: {status, output}}`. See §3.4.1. |
-| `newJobs` | vector? | New outbound jobs to invoke (added to `pending`). |
 
 The transition function does not manage ts, status, timeline, inbox, or
 scheduling. It declares what it has accomplished and the framework applies the
 changes atomically.
+
+Pending outbound jobs are not declared in the output — they are created as
+side effects during execution via the async invoke tool (§3.4.2). Level 2
+adds their Job IDs to `pending` directly.
 
 The transition function must handle its own errors internally. If it throws, the
 agent update treats this as a severe failure: the agent is suspended, all queues
@@ -261,7 +265,100 @@ crashed, the task *was* completed. The timeline entry will be missing (since the
 run failed), but the Job result is durable. This matches how other side effects
 (tool calls that send emails, invoke external APIs) behave.
 
-### 3.5 Invocation
+#### 3.4.2 Async Invoke — Pending Jobs
+
+Level 2 exposes an **async invoke** tool to the LLM. When called, it:
+
+1. Invokes the specified operation asynchronously (creates a Job via JobManager).
+2. Adds the Job ID to the agent's `pending` index.
+3. Registers a completion callback that wakes the agent immediately when the
+   job finishes (schedules `agent:run` if the agent is SLEEPING).
+4. Returns the Job ID to the LLM as the tool result.
+
+The agent does not wait for the result — execution continues. On the next wake,
+the framework resolves `pending` and passes the results to the transition
+function.
+
+Only jobs created through the async invoke tool appear in `pending`. Synchronous
+tool calls, internal framework jobs, and any other jobs created indirectly are
+not tracked — they are invisible to the agent.
+
+This is the mechanism for delegated work, long-running computations, and HITL
+requests (Phase D). The LLM decides what to fire-and-forget vs what to await.
+
+### 3.5 Default Tool Palette
+
+Level 2 provides a set of tools to the LLM during the tool call loop. These are
+the agent's interface to the outside world. Each tool maps directly to an MCP
+tool definition (name, description, JSON schema for args).
+
+The tool palette is split into **default tools** (always available) and
+**capability-gated tools** (require explicit `caps` — Phase C).
+
+#### Default tools
+
+These are provided by the venue runtime to every LLM agent. Level 2 handles
+execution and maps results back to the tool call loop.
+
+**Task management:**
+
+| Tool | Description | Args | Returns |
+|------|-------------|------|---------|
+| `complete_task` | Complete an inbound task with a result | `{jobId, output}` | `{status: "COMPLETE"}` |
+| `fail_task` | Reject/fail an inbound task with a reason | `{jobId, reason}` | `{status: "FAILED"}` |
+
+These are side effects — they complete the Job immediately via JobManager.
+Not rolled back if the transition subsequently fails (§3.4.1).
+
+**Operations:**
+
+| Tool | Description | Args | Returns |
+|------|-------------|------|---------|
+| `invoke` | Invoke a grid operation synchronously | `{operation, input}` | The operation result |
+| `invoke_async` | Invoke a grid operation asynchronously — adds Job ID to `pending`, registers wake callback | `{operation, input}` | `{jobId}` |
+
+`invoke` blocks within the tool loop until the operation completes and returns
+the result directly. Use for fast operations where the agent needs the result
+to continue reasoning.
+
+`invoke_async` returns immediately with the Job ID. The agent continues
+execution. When the job completes, the scheduler wakes the agent (§3.4.2).
+Use for long-running operations, delegation to other agents, and HITL requests.
+
+**Communication:**
+
+| Tool | Description | Args | Returns |
+|------|-------------|------|---------|
+| `message_agent` | Send an ephemeral message to another agent's inbox | `{agentId, message}` | `{delivered: true}` |
+
+#### Capability-gated tools (Phase C)
+
+These require explicit capabilities in the agent's `caps` field. Not available
+until capability enforcement is implemented.
+
+| Tool | Caps required | Description |
+|------|---------------|-------------|
+| `read_lattice` | `/crud/read` | Read a lattice path |
+| `write_lattice` | `/crud/write` on `/w/` | Write to workspace |
+| `list_lattice` | `/crud/read` | List keys at a path |
+| `read_secret` | `/secret/decrypt` | Decrypt a secret (adapter handles plaintext) |
+| `spawn_agent` | `/crud/write` on `/g/` | Create a new agent |
+| `fork_agent` | `/agent/fork` | Fork an existing agent |
+| `delegate` | `/ucan/delegate` | Sub-delegate UCAN capabilities |
+
+#### Additional tools
+
+Level 2 also passes through any **external MCP tools** configured for the agent
+(via `config.tools` or MCP server bindings). These are treated identically to
+default tools in the tool call loop — the LLM sees a flat list of all available
+tools regardless of source.
+
+The agent creator controls the tool set:
+- Default tools are always present (cannot be removed)
+- External MCP tools are added via agent configuration
+- Capability-gated tools appear only when the agent has the required `caps`
+
+### 3.6 Invocation
 
 Each level invokes the next as a grid operation — same dispatch path as any other
 operation in the venue. This means any level can be:
@@ -274,7 +371,7 @@ The level 2 operation is specified in the agent's `config.operation` field
 (default set at creation, overridable per-run). The level 3 operation is
 specified by the agent creator in `state.config.llmOperation`.
 
-### 3.6 Credential Access
+### 3.7 Credential Access
 
 Operations that need API keys or other secrets resolve them from two sources,
 in order:
@@ -317,7 +414,7 @@ Every operation atomically replaces the agent record with a new `ts`.
 **Trigger:** `agent:create`
 
 Writes the initial agent record: status=SLEEPING, config from input, state from
-input (or null), empty tasks/pending/inbox, empty timeline, no error.
+input (or null), empty tasks/pending indices, empty inbox, empty timeline, no error.
 
 The `config` map supports:
 - `operation` — default transition operation (e.g. `"llmagent:chat"`)
@@ -335,7 +432,7 @@ transition-function internals, and allows an agent to switch transition function
 **Trigger:** `agent:request`
 
 Submits a persistent task to an agent. The request Job itself IS the task — it
-is left in STARTED state and its Job ID is added to the agent's `tasks` vector.
+is left in STARTED state and its Job ID is added to the agent's `tasks` index.
 No separate Job is created.
 
 The agent decides when and how to fulfil the request. When the agent completes
@@ -426,9 +523,10 @@ is eligible to run when any of:
 - A new message has been delivered to `inbox`
 - A configurable sleep timer has expired
 
-**Initial implementation:** simple event-driven wake. When `agent:request` or
-`agent:message` is called, the scheduler queues the agent for a run. When an
-outbound job completes, the scheduler checks if any agent has it in `pending`.
+**Current implementation:** event-driven wake. When `agent:request` or
+`agent:message` is called, the scheduler queues an async `agent:run`. When
+a pending outbound job completes, the completion callback (registered by the
+async invoke tool, §3.4.2) schedules a run directly — no polling needed.
 
 **Configurable sleep:** `config.sleepInterval` (milliseconds). If set, the agent
 wakes periodically even without events. Useful for polling-style agents.
@@ -485,15 +583,7 @@ Agent-level effect handling (an `actions` field in the output, processed by the
 framework) is deferred. It may be useful for sandboxed or auditable agents but
 adds complexity that is not needed for the initial LLM agent.
 
-### 6.3 Tool palette
-
-Tools available to an LLM agent are managed by level 2 (agent transition).
-Level 2 passes tool definitions to level 3 (LLM call), receives tool call
-requests back, executes the tools, and loops until the LLM returns a text
-response. Tool definitions may come from `state.config` or operation metadata.
-Per-agent tool configuration is a Phase C concern.
-
-### 6.4 Human-in-the-loop (HITL) requests
+### 6.3 Human-in-the-loop (HITL) requests
 
 When an agent needs human input, it creates an outbound Job targeting the human
 user. This Job appears in the user's **request queue** at `/h/<job-id>` in the
@@ -516,7 +606,7 @@ clients can list and respond to these requests.
 **TODO:** Define the MCP-facing operations for HITL: listing pending requests,
 responding to requests, rejecting requests. This is a Phase D concern.
 
-### 6.5 MCP-facing agent operations
+### 6.4 MCP-facing agent operations
 
 With the task-based model, MCP users interact with agents through a small set
 of high-level operations. They never call `agent:run` directly.
@@ -532,7 +622,7 @@ of high-level operations. They never call `agent:run` directly.
 The agent's response to a request is the Job result — the MCP client polls or
 subscribes to the Job for status updates, same as any other Covia job.
 
-### 6.6 Credential resolution
+### 6.5 Credential resolution
 
 API keys are not stored in agent config. The operation metadata declares a
 `secretKey` name (e.g. `"OPENAI_API_KEY"`); at runtime the adapter looks this
@@ -556,7 +646,7 @@ See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
 | **B3b** | Tool parameter schema mapping refinements (enum, array items, nested objects) | ✓ Complete |
 | **B4** | MCP-first agent experience: default transition op from config, result in run output | ✓ Complete |
 | **B5** | Task-based agent model: `agent:request`, tasks/pending queues, scheduling | ✓ Complete |
-| **B6** | Agent query/list operations: `agent:query`, `agent:list` | Planned |
+| **B6** | Agent query/list operations: `agent:query`, `agent:list`, RequestContext refactor, Index for tasks/pending | ✓ Complete |
 | **C** | Capability enforcement (UCAN `with`/`can`), tool palette | Planned |
 | **D** | HITL requests (`/h/` namespace), cross-user messaging, advanced wake triggers | Planned |
 | **E** | Agent forking and cross-venue migration | Planned |
