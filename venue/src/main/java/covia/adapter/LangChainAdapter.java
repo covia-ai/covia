@@ -30,6 +30,7 @@ import dev.langchain4j.model.chat.request.json.JsonSchema;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.request.json.JsonArraySchema;
 import dev.langchain4j.model.chat.request.json.JsonBooleanSchema;
+import dev.langchain4j.model.chat.request.json.JsonEnumSchema;
 import dev.langchain4j.model.chat.request.json.JsonIntegerSchema;
 import dev.langchain4j.model.chat.request.json.JsonNumberSchema;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
@@ -77,7 +78,11 @@ public class LangChainAdapter extends AAdapter {
 	static final AString K_ARGUMENTS  = Strings.intern("arguments");
 	static final AString K_PARAMETERS = Strings.intern("parameters");
 	static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
-	static final AString K_SCHEMA   = Strings.intern("schema");
+	static final AString K_SCHEMA      = Strings.intern("schema");
+	static final AString K_TYPE        = Strings.intern("type");
+	static final AString K_DESCRIPTION = Strings.intern("description");
+	static final AString K_ENUM        = Strings.intern("enum");
+	static final AString K_ITEMS       = Strings.intern("items");
 
 	// Role constants
 	static final AString ROLE_SYSTEM    = Strings.intern("system");
@@ -476,7 +481,6 @@ public class LangChainAdapter extends AAdapter {
 		AMap<AString, ACell> properties = (AMap<AString, ACell>) propsCell;
 		JsonObjectSchema.Builder builder = JsonObjectSchema.builder();
 
-		// Add properties
 		properties.forEach((key, value) -> {
 			if (key != null && value instanceof AMap) {
 				JsonSchemaElement element = toSchemaElement((AMap<AString, ACell>) value);
@@ -486,7 +490,6 @@ public class LangChainAdapter extends AAdapter {
 			}
 		});
 
-		// Required fields
 		ACell reqCell = schema.get(Strings.intern("required"));
 		if (reqCell instanceof AVector) {
 			AVector<ACell> required = (AVector<ACell>) reqCell;
@@ -498,7 +501,7 @@ public class LangChainAdapter extends AAdapter {
 			if (!reqList.isEmpty()) builder.required(reqList);
 		}
 
-		AString desc = RT.ensureString(schema.get(Strings.intern("description")));
+		AString desc = RT.ensureString(schema.get(K_DESCRIPTION));
 		if (desc != null) builder.description(desc.toString());
 
 		return builder.build();
@@ -506,12 +509,33 @@ public class LangChainAdapter extends AAdapter {
 
 	/**
 	 * Converts a single JSON Schema property map to a JsonSchemaElement.
+	 *
+	 * <p>Supports: string, number, integer, boolean, array (with items), object (nested),
+	 * and enum (string type with {@code enum} array).</p>
 	 */
-	private static JsonSchemaElement toSchemaElement(AMap<AString, ACell> prop) {
-		AString type = RT.ensureString(prop.get(Strings.intern("type")));
-		AString desc = RT.ensureString(prop.get(Strings.intern("description")));
+	@SuppressWarnings("unchecked")
+	static JsonSchemaElement toSchemaElement(AMap<AString, ACell> prop) {
+		AString type = RT.ensureString(prop.get(K_TYPE));
+		AString desc = RT.ensureString(prop.get(K_DESCRIPTION));
 		String typeStr = (type != null) ? type.toString() : "string";
 		String descStr = (desc != null) ? desc.toString() : null;
+
+		// Check for enum values — applies to string type
+		ACell enumCell = prop.get(K_ENUM);
+		if (enumCell instanceof AVector) {
+			AVector<ACell> enumVec = (AVector<ACell>) enumCell;
+			List<String> enumValues = new ArrayList<>();
+			for (long i = 0; i < enumVec.count(); i++) {
+				AString val = RT.ensureString(enumVec.get(i));
+				if (val != null) enumValues.add(val.toString());
+			}
+			if (!enumValues.isEmpty()) {
+				return JsonEnumSchema.builder()
+					.description(descStr)
+					.enumValues(enumValues)
+					.build();
+			}
+		}
 
 		switch (typeStr) {
 			case "string":
@@ -522,8 +546,15 @@ public class LangChainAdapter extends AAdapter {
 				return JsonIntegerSchema.builder().description(descStr).build();
 			case "boolean":
 				return JsonBooleanSchema.builder().description(descStr).build();
-			case "array":
-				return JsonArraySchema.builder().description(descStr).build();
+			case "array": {
+				JsonArraySchema.Builder builder = JsonArraySchema.builder().description(descStr);
+				ACell itemsCell = prop.get(K_ITEMS);
+				if (itemsCell instanceof AMap) {
+					JsonSchemaElement itemSchema = toSchemaElement((AMap<AString, ACell>) itemsCell);
+					if (itemSchema != null) builder.items(itemSchema);
+				}
+				return builder.build();
+			}
 			case "object":
 				return toJsonObjectSchema(prop);
 			default:

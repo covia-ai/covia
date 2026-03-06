@@ -20,6 +20,14 @@ import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.request.ResponseFormatType;
+import dev.langchain4j.model.chat.request.json.JsonArraySchema;
+import dev.langchain4j.model.chat.request.json.JsonBooleanSchema;
+import dev.langchain4j.model.chat.request.json.JsonEnumSchema;
+import dev.langchain4j.model.chat.request.json.JsonIntegerSchema;
+import dev.langchain4j.model.chat.request.json.JsonNumberSchema;
+import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
+import dev.langchain4j.model.chat.request.json.JsonSchemaElement;
+import dev.langchain4j.model.chat.request.json.JsonStringSchema;
 
 import java.util.List;
 
@@ -221,6 +229,368 @@ public class LangChainAdapterTest {
 	public void testToJsonObjectSchemaNoProperties() {
 		AMap<AString, ACell> schema = (AMap<AString, ACell>)(AMap) Maps.of("type", "object");
 		assertNull(LangChainAdapter.toJsonObjectSchema(schema), "Should return null when no properties");
+	}
+
+	// ========== toSchemaElement ==========
+
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	private static AMap<AString, ACell> schemaMap(Object... kv) {
+		return (AMap<AString, ACell>)(AMap) Maps.of(kv);
+	}
+
+	@Test
+	public void testSchemaElementString() {
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(schemaMap("type", "string", "description", "A name"));
+		assertInstanceOf(JsonStringSchema.class, el);
+		assertEquals("A name", ((JsonStringSchema) el).description());
+	}
+
+	@Test
+	public void testSchemaElementInteger() {
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(schemaMap("type", "integer"));
+		assertInstanceOf(JsonIntegerSchema.class, el);
+	}
+
+	@Test
+	public void testSchemaElementNumber() {
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(schemaMap("type", "number"));
+		assertInstanceOf(JsonNumberSchema.class, el);
+	}
+
+	@Test
+	public void testSchemaElementBoolean() {
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(schemaMap("type", "boolean"));
+		assertInstanceOf(JsonBooleanSchema.class, el);
+	}
+
+	@Test
+	public void testSchemaElementDefaultsToString() {
+		// No type specified → defaults to string
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(schemaMap("description", "no type"));
+		assertInstanceOf(JsonStringSchema.class, el);
+	}
+
+	@Test
+	public void testSchemaElementUnknownTypeDefaultsToString() {
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(schemaMap("type", "xml"));
+		assertInstanceOf(JsonStringSchema.class, el);
+	}
+
+	// --- Enum ---
+
+	@Test
+	public void testSchemaElementEnum() {
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(
+			schemaMap("type", "string", "enum", Vectors.of("red", "green", "blue")));
+		assertInstanceOf(JsonEnumSchema.class, el);
+		JsonEnumSchema enumSchema = (JsonEnumSchema) el;
+		assertEquals(3, enumSchema.enumValues().size());
+		assertTrue(enumSchema.enumValues().contains("red"));
+		assertTrue(enumSchema.enumValues().contains("green"));
+		assertTrue(enumSchema.enumValues().contains("blue"));
+	}
+
+	@Test
+	public void testSchemaElementEnumWithDescription() {
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(
+			schemaMap("type", "string", "enum", Vectors.of("low", "high"), "description", "Priority level"));
+		assertInstanceOf(JsonEnumSchema.class, el);
+		assertEquals("Priority level", ((JsonEnumSchema) el).description());
+	}
+
+	@Test
+	public void testSchemaElementEmptyEnumFallsBackToString() {
+		// Empty enum array → no enum values → falls back to string
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(
+			schemaMap("type", "string", "enum", Vectors.empty()));
+		assertInstanceOf(JsonStringSchema.class, el);
+	}
+
+	// --- Array with items ---
+
+	@Test
+	public void testSchemaElementArrayNoItems() {
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(schemaMap("type", "array"));
+		assertInstanceOf(JsonArraySchema.class, el);
+		// LangChain4j may set items to null or a default
+	}
+
+	@Test
+	public void testSchemaElementArrayWithStringItems() {
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(
+			schemaMap("type", "array", "items", Maps.of("type", "string")));
+		assertInstanceOf(JsonArraySchema.class, el);
+		JsonArraySchema arr = (JsonArraySchema) el;
+		assertNotNull(arr.items(), "Array should have items schema");
+		assertInstanceOf(JsonStringSchema.class, arr.items());
+	}
+
+	@Test
+	public void testSchemaElementArrayWithIntegerItems() {
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(
+			schemaMap("type", "array", "items", Maps.of("type", "integer")));
+		assertInstanceOf(JsonArraySchema.class, el);
+		assertInstanceOf(JsonIntegerSchema.class, ((JsonArraySchema) el).items());
+	}
+
+	@Test
+	public void testSchemaElementArrayWithObjectItems() {
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(
+			schemaMap("type", "array", "items", Maps.of(
+				"type", "object",
+				"properties", Maps.of("x", Maps.of("type", "number"))
+			)));
+		assertInstanceOf(JsonArraySchema.class, el);
+		assertInstanceOf(JsonObjectSchema.class, ((JsonArraySchema) el).items());
+	}
+
+	@Test
+	public void testSchemaElementArrayWithEnumItems() {
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(
+			schemaMap("type", "array", "items", Maps.of(
+				"type", "string", "enum", Vectors.of("a", "b")
+			)));
+		assertInstanceOf(JsonArraySchema.class, el);
+		assertInstanceOf(JsonEnumSchema.class, ((JsonArraySchema) el).items());
+	}
+
+	@Test
+	public void testSchemaElementArrayWithDescription() {
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(
+			schemaMap("type", "array", "items", Maps.of("type", "string"), "description", "List of tags"));
+		assertInstanceOf(JsonArraySchema.class, el);
+		assertEquals("List of tags", ((JsonArraySchema) el).description());
+	}
+
+	// --- Nested objects ---
+
+	@Test
+	public void testSchemaElementNestedObject() {
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(
+			schemaMap("type", "object", "properties", Maps.of(
+				"street", Maps.of("type", "string"),
+				"city", Maps.of("type", "string")
+			)));
+		assertInstanceOf(JsonObjectSchema.class, el);
+		JsonObjectSchema obj = (JsonObjectSchema) el;
+		assertEquals(2, obj.properties().size());
+	}
+
+	@Test
+	public void testSchemaElementDeeplyNested() {
+		// object → object → string
+		JsonSchemaElement el = LangChainAdapter.toSchemaElement(
+			schemaMap("type", "object", "properties", Maps.of(
+				"address", Maps.of("type", "object", "properties", Maps.of(
+					"city", Maps.of("type", "string")
+				))
+			)));
+		assertInstanceOf(JsonObjectSchema.class, el);
+		JsonObjectSchema outer = (JsonObjectSchema) el;
+		assertInstanceOf(JsonObjectSchema.class, outer.properties().get("address"));
+		JsonObjectSchema inner = (JsonObjectSchema) outer.properties().get("address");
+		assertInstanceOf(JsonStringSchema.class, inner.properties().get("city"));
+	}
+
+	// ========== toJsonObjectSchema: required + description ==========
+
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	@Test
+	public void testToJsonObjectSchemaDescription() {
+		AMap<AString, ACell> schema = (AMap<AString, ACell>)(AMap) Maps.of(
+			"type", "object",
+			"properties", Maps.of("x", Maps.of("type", "string")),
+			"description", "A point"
+		);
+		var result = LangChainAdapter.toJsonObjectSchema(schema);
+		assertNotNull(result);
+		assertEquals("A point", result.description());
+	}
+
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	@Test
+	public void testToJsonObjectSchemaNoRequired() {
+		AMap<AString, ACell> schema = (AMap<AString, ACell>)(AMap) Maps.of(
+			"type", "object",
+			"properties", Maps.of("x", Maps.of("type", "string"))
+		);
+		var result = LangChainAdapter.toJsonObjectSchema(schema);
+		assertNotNull(result);
+		// required may be null or empty
+		assertTrue(result.required() == null || result.required().isEmpty());
+	}
+
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	@Test
+	public void testToJsonObjectSchemaWithEnumProperty() {
+		AMap<AString, ACell> schema = (AMap<AString, ACell>)(AMap) Maps.of(
+			"type", "object",
+			"properties", Maps.of(
+				"status", Maps.of("type", "string", "enum", Vectors.of("active", "inactive"))
+			),
+			"required", Vectors.of("status")
+		);
+		var result = LangChainAdapter.toJsonObjectSchema(schema);
+		assertNotNull(result);
+		assertInstanceOf(JsonEnumSchema.class, result.properties().get("status"));
+		assertEquals(1, result.required().size());
+	}
+
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	@Test
+	public void testToJsonObjectSchemaWithArrayItems() {
+		AMap<AString, ACell> schema = (AMap<AString, ACell>)(AMap) Maps.of(
+			"type", "object",
+			"properties", Maps.of(
+				"tags", Maps.of("type", "array", "items", Maps.of("type", "string")),
+				"scores", Maps.of("type", "array", "items", Maps.of("type", "number"))
+			)
+		);
+		var result = LangChainAdapter.toJsonObjectSchema(schema);
+		assertNotNull(result);
+		assertEquals(2, result.properties().size());
+
+		JsonArraySchema tags = (JsonArraySchema) result.properties().get("tags");
+		assertInstanceOf(JsonStringSchema.class, tags.items());
+
+		JsonArraySchema scores = (JsonArraySchema) result.properties().get("scores");
+		assertInstanceOf(JsonNumberSchema.class, scores.items());
+	}
+
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	@Test
+	public void testToJsonObjectSchemaNestedObject() {
+		AMap<AString, ACell> schema = (AMap<AString, ACell>)(AMap) Maps.of(
+			"type", "object",
+			"properties", Maps.of(
+				"name", Maps.of("type", "string"),
+				"address", Maps.of("type", "object", "properties", Maps.of(
+					"street", Maps.of("type", "string"),
+					"city", Maps.of("type", "string"),
+					"postcode", Maps.of("type", "string")
+				), "required", Vectors.of("city"))
+			),
+			"required", Vectors.of("name")
+		);
+		var result = LangChainAdapter.toJsonObjectSchema(schema);
+		assertNotNull(result);
+		assertEquals(2, result.properties().size());
+		assertEquals(List.of("name"), result.required());
+
+		JsonObjectSchema address = (JsonObjectSchema) result.properties().get("address");
+		assertNotNull(address);
+		assertEquals(3, address.properties().size());
+		assertEquals(List.of("city"), address.required());
+	}
+
+	// ========== toToolSpecifications with complex parameters ==========
+
+	@Test
+	public void testToolSpecWithEnumAndArrayParams() {
+		var tools = Vectors.of(
+			Maps.of(
+				"name", "create_item",
+				"description", "Create an item",
+				"parameters", Maps.of(
+					"type", "object",
+					"properties", Maps.of(
+						"title", Maps.of("type", "string"),
+						"priority", Maps.of("type", "string", "enum", Vectors.of("low", "medium", "high")),
+						"tags", Maps.of("type", "array", "items", Maps.of("type", "string"))
+					),
+					"required", Vectors.of("title", "priority")
+				)
+			)
+		);
+
+		List<ToolSpecification> specs = LangChainAdapter.toToolSpecifications(tools);
+		assertEquals(1, specs.size());
+		assertNotNull(specs.get(0).parameters());
+
+		JsonObjectSchema params = specs.get(0).parameters();
+		assertEquals(3, params.properties().size());
+		assertInstanceOf(JsonStringSchema.class, params.properties().get("title"));
+		assertInstanceOf(JsonEnumSchema.class, params.properties().get("priority"));
+		assertInstanceOf(JsonArraySchema.class, params.properties().get("tags"));
+
+		JsonArraySchema tags = (JsonArraySchema) params.properties().get("tags");
+		assertInstanceOf(JsonStringSchema.class, tags.items());
+	}
+
+	@Test
+	public void testToolSpecWithNestedObjectParam() {
+		var tools = Vectors.of(
+			Maps.of(
+				"name", "send_email",
+				"description", "Send an email",
+				"parameters", Maps.of(
+					"type", "object",
+					"properties", Maps.of(
+						"to", Maps.of("type", "string"),
+						"body", Maps.of("type", "object", "properties", Maps.of(
+							"text", Maps.of("type", "string"),
+							"html", Maps.of("type", "string")
+						))
+					)
+				)
+			)
+		);
+
+		List<ToolSpecification> specs = LangChainAdapter.toToolSpecifications(tools);
+		assertEquals(1, specs.size());
+
+		JsonObjectSchema params = specs.get(0).parameters();
+		assertInstanceOf(JsonObjectSchema.class, params.properties().get("body"));
+		JsonObjectSchema body = (JsonObjectSchema) params.properties().get("body");
+		assertEquals(2, body.properties().size());
+	}
+
+	// ========== responseFormat with enum and array schemas ==========
+
+	@Test
+	public void testResponseFormatWithEnumProperty() {
+		ACell responseFormat = Maps.of(
+			"name", "Sentiment",
+			"schema", Maps.of(
+				"type", "object",
+				"properties", Maps.of(
+					"sentiment", Maps.of("type", "string", "enum", Vectors.of("positive", "negative", "neutral")),
+					"confidence", Maps.of("type", "number")
+				),
+				"required", Vectors.of("sentiment")
+			)
+		);
+
+		ResponseFormat rf = LangChainAdapter.toResponseFormat(responseFormat);
+		assertNotNull(rf);
+		assertEquals(ResponseFormatType.JSON, rf.type());
+		assertEquals("Sentiment", rf.jsonSchema().name());
+	}
+
+	@Test
+	public void testResponseFormatWithArrayOfObjects() {
+		ACell responseFormat = Maps.of(
+			"name", "SearchResults",
+			"schema", Maps.of(
+				"type", "object",
+				"properties", Maps.of(
+					"results", Maps.of("type", "array", "items", Maps.of(
+						"type", "object",
+						"properties", Maps.of(
+							"title", Maps.of("type", "string"),
+							"url", Maps.of("type", "string")
+						)
+					)),
+					"total", Maps.of("type", "integer")
+				),
+				"required", Vectors.of("results", "total")
+			)
+		);
+
+		ResponseFormat rf = LangChainAdapter.toResponseFormat(responseFormat);
+		assertNotNull(rf);
+		assertEquals("SearchResults", rf.jsonSchema().name());
+		assertNotNull(rf.jsonSchema().rootElement());
 	}
 
 	// ========== stripThinkTags ==========
