@@ -3,6 +3,7 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Strings;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.lattice.Covia;
@@ -33,6 +34,10 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 	 * @param did User DID string
 	 * @return User wrapping the per-user cursor, or null
 	 */
+	public User get(String did) {
+		return get(Strings.create(did));
+	}
+
 	public User get(AString did) {
 		ALatticeCursor<ACell> userCursor = cursor.path(did);
 		if (userCursor.get() == null) return null;
@@ -47,6 +52,10 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 	 * @param did User DID string
 	 * @return User, never null
 	 */
+	public User ensure(String did) {
+		return ensure(Strings.create(did));
+	}
+
 	public User ensure(AString did) {
 		ALatticeCursor<ACell> userCursor = cursor.path(did);
 		if (userCursor.get() == null) {

@@ -345,6 +345,10 @@ public class Engine {
 	 * @param name Operation name (e.g. "test:echo")
 	 * @return Asset Hash, or null if not found
 	 */
+	public Hash resolveOperation(String name) {
+		return resolveOperation(Strings.create(name));
+	}
+
 	public Hash resolveOperation(AString name) {
 		return operations.get(name);
 	}
@@ -503,6 +507,10 @@ public class Engine {
 	 * @param ref Reference string
 	 * @return Local Hash, or null if not resolvable
 	 */
+	public Hash resolveHash(String ref) {
+		return resolveHash(Strings.create(ref));
+	}
+
 	public Hash resolveHash(AString ref) {
 		if (ref == null) return null;
 

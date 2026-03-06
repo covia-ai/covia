@@ -3,6 +3,7 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Strings;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.lattice.Covia;
@@ -67,6 +68,10 @@ public class User extends ALatticeComponent<ACell> {
 	 * @param agentId Agent identifier
 	 * @return AgentState wrapper, or null if not initialised
 	 */
+	public AgentState agent(String agentId) {
+		return agent(Strings.create(agentId));
+	}
+
 	public AgentState agent(AString agentId) {
 		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
 		if (c.get() == null) return null;
@@ -81,6 +86,10 @@ public class User extends ALatticeComponent<ACell> {
 	 * @param initialState Optional initial state for the transition function, may be null
 	 * @return AgentState wrapper (never null)
 	 */
+	public AgentState ensureAgent(String agentId, AMap<AString, ACell> config, ACell initialState) {
+		return ensureAgent(Strings.create(agentId), config, initialState);
+	}
+
 	public AgentState ensureAgent(AString agentId, AMap<AString, ACell> config, ACell initialState) {
 		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
 		AgentState state = new AgentState(c, agentId);

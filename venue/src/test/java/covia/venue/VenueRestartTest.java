@@ -44,7 +44,7 @@ public class VenueRestartTest {
 
 		// Fixed DID so both engines use the same lattice path
 		AKeyPair kp = AKeyPair.generate();
-		AString did = Strings.create("did:key:" + Multikey.encodePublicKey(kp.getAccountKey()));
+		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
 		AMap<AString, ACell> config = Maps.of(Config.DID, did);
 
 		// Track state across restart
@@ -87,7 +87,7 @@ public class VenueRestartTest {
 
 			// Run test:echo → should COMPLETE
 			Job echoJob = engine.jobs().invokeOperation(echoOpId.toCVMHexString(),
-					Maps.of(Fields.MESSAGE, Strings.create("hello restart")), RequestContext.INTERNAL);
+					Maps.of(Fields.MESSAGE, "hello restart"), RequestContext.INTERNAL);
 			echoJob.future().get(5, TimeUnit.SECONDS);
 			assertEquals(Status.COMPLETE, echoJob.getStatus(), "Echo job should complete");
 			assertNotNull(echoJob.getOutput(), "Echo job should have output");
@@ -95,7 +95,7 @@ public class VenueRestartTest {
 
 			// Run test:error → should FAIL
 			Job errorJob = engine.jobs().invokeOperation(errorOpId.toCVMHexString(),
-					Maps.of(Fields.MESSAGE, Strings.create("test error")), RequestContext.INTERNAL);
+					Maps.of(Fields.MESSAGE, "test error"), RequestContext.INTERNAL);
 			try {
 				errorJob.future().get(5, TimeUnit.SECONDS);
 			} catch (Exception e) {
@@ -106,14 +106,14 @@ public class VenueRestartTest {
 
 			// Run test:never → should stay STARTED (never completes)
 			Job neverJob = engine.jobs().invokeOperation(neverOpId.toCVMHexString(),
-					Maps.of(Fields.MESSAGE, Strings.create("never finishes")), RequestContext.INTERNAL);
+					Maps.of(Fields.MESSAGE, "never finishes"), RequestContext.INTERNAL);
 			Thread.sleep(50); // Give it a moment to start
 			assertEquals(Status.STARTED, neverJob.getStatus(), "Never job should be STARTED");
 			neverJobId = neverJob.getID().toHexString();
 
 			// Run test:pause → should auto-pause itself
 			Job pauseJob = engine.jobs().invokeOperation(pauseOpId.toCVMHexString(),
-					Maps.of(Fields.MESSAGE, Strings.create("pause me")), RequestContext.INTERNAL);
+					Maps.of(Fields.MESSAGE, "pause me"), RequestContext.INTERNAL);
 			Thread.sleep(50); // Give it a moment to pause
 			assertEquals(Status.PAUSED, pauseJob.getStatus(), "Pause job should be PAUSED");
 			pauseJobId = pauseJob.getID().toHexString();
@@ -192,7 +192,7 @@ public class VenueRestartTest {
 					"Pause job should still be PAUSED after restart");
 
 			// 4i: Unpause the job by delivering a message → should complete
-			engine2.jobs().deliverMessage(Blob.parse(pauseJobId), Maps.of("content", Strings.create("resume")), engine2.getDIDString());
+			engine2.jobs().deliverMessage(Blob.parse(pauseJobId), Maps.of("content", "resume"), engine2.getDIDString());
 			Thread.sleep(50); // Give it a moment to process
 			// Job completes and is evicted from activeJobs — use lattice fallback
 			AMap<AString, ACell> unpausedData = engine2.jobs().getJobData(Blob.parse(pauseJobId), RequestContext.INTERNAL);

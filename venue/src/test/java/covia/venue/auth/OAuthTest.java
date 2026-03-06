@@ -51,12 +51,12 @@ public class OAuthTest {
 	@Test
 	void testConfigParsingWithProviders() {
 		AMap<AString, ACell> googleConfig = Maps.of(
-			Config.CLIENT_ID, Strings.create("test-client-id"),
-			Config.CLIENT_SECRET, Strings.create("test-client-secret")
+			Config.CLIENT_ID, "test-client-id",
+			Config.CLIENT_SECRET, "test-client-secret"
 		);
 		AMap<AString, ACell> oauthConfig = Maps.of(
-			Config.BASE_URL, Strings.create("https://example.com"),
-			Strings.create("google"), googleConfig
+			Config.BASE_URL, "https://example.com",
+			"google", googleConfig
 		);
 		// LoginProviders now takes the auth config directly (oauth is nested inside)
 		AMap<AString, ACell> authConfig = Maps.of(
@@ -71,14 +71,14 @@ public class OAuthTest {
 	@Test
 	void testConfigParsingMultipleProviders() {
 		AMap<AString, ACell> creds = Maps.of(
-			Config.CLIENT_ID, Strings.create("id"),
-			Config.CLIENT_SECRET, Strings.create("secret")
+			Config.CLIENT_ID, "id",
+			Config.CLIENT_SECRET, "secret"
 		);
 		AMap<AString, ACell> oauthConfig = Maps.of(
-			Config.BASE_URL, Strings.create("https://example.com"),
-			Strings.create("google"), creds,
-			Strings.create("microsoft"), creds,
-			Strings.create("github"), creds
+			Config.BASE_URL, "https://example.com",
+			"google", creds,
+			"microsoft", creds,
+			"github", creds
 		);
 		AMap<AString, ACell> authConfig = Maps.of(
 			Config.OAUTH, oauthConfig
@@ -159,7 +159,7 @@ public class OAuthTest {
 	void testVenueIssuedJWTVerifies() {
 		// Simulate what handleCallback does: issue a venue-signed JWT
 		long nowSecs = System.currentTimeMillis() / 1000;
-		AString userDID = Strings.create(engine.getDIDString() + ":u:test_user");
+		String userDID = engine.getDIDString() + ":u:test_user";
 		AMap<AString, ACell> claims = Maps.of(
 			"sub", userDID,
 			"iss", engine.getDIDString(),
@@ -172,7 +172,7 @@ public class OAuthTest {
 		// Verify it with the venue's public key (same path AuthMiddleware uses)
 		AMap<AString, ACell> verified = JWT.verifyPublic(jwt, engine.getAccountKey());
 		assertNotNull(verified, "Venue-signed JWT should verify with venue's public key");
-		assertEquals(userDID.toString(), verified.get(Strings.create("sub")).toString());
+		assertEquals(userDID, verified.get(Strings.intern("sub")).toString());
 	}
 
 	@Test
@@ -185,12 +185,12 @@ public class OAuthTest {
 	@Test
 	void testRenderLoginPageWithProviders() {
 		AMap<AString, ACell> creds = Maps.of(
-			Config.CLIENT_ID, Strings.create("id"),
-			Config.CLIENT_SECRET, Strings.create("secret")
+			Config.CLIENT_ID, "id",
+			Config.CLIENT_SECRET, "secret"
 		);
 		AMap<AString, ACell> oauthConfig = Maps.of(
-			Config.BASE_URL, Strings.create("https://example.com"),
-			Strings.create("google"), creds
+			Config.BASE_URL, "https://example.com",
+			"google", creds
 		);
 		AMap<AString, ACell> authConfig = Maps.of(
 			Config.OAUTH, oauthConfig
@@ -221,7 +221,7 @@ public class OAuthTest {
 	void testPublicAccessDefaultEnabled() {
 		// Engine with no auth config should default to public access enabled
 		Engine tempEngine = Engine.createTemp(Maps.of(
-			Strings.create("name"), Strings.create("no-auth-venue")
+			"name", "no-auth-venue"
 		));
 		assertTrue(tempEngine.getAuth().isPublicAccessEnabled());
 	}

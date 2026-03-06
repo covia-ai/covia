@@ -63,6 +63,10 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	 * @param encryptionKey 32-byte AES-256 key (from {@link #deriveKey})
 	 */
 	@SuppressWarnings({ "unchecked", "rawtypes" })
+	public void store(String name, String plaintext, byte[] encryptionKey) {
+		store(Strings.create(name), Strings.create(plaintext), encryptionKey);
+	}
+
 	public void store(AString name, AString plaintext, byte[] encryptionKey) {
 		byte[] encrypted = AESGCM.encrypt(encryptionKey, plaintext.toString().getBytes(StandardCharsets.UTF_8));
 		AMap<AString, ACell> record = Maps.of(
@@ -84,6 +88,10 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	 * @return Decrypted plaintext, or null if the secret does not exist
 	 * @throws RuntimeException if decryption fails (wrong key or corrupted data)
 	 */
+	public AString decrypt(String name, byte[] encryptionKey) {
+		return decrypt(Strings.create(name), encryptionKey);
+	}
+
 	public AString decrypt(AString name, byte[] encryptionKey) {
 		AMap<AString, ACell> record = getRecord(name);
 		if (record == null) return null;
@@ -101,6 +109,10 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	 * @param name Secret name
 	 * @return true if the secret exists
 	 */
+	public boolean exists(String name) {
+		return exists(Strings.create(name));
+	}
+
 	public boolean exists(AString name) {
 		return getRecord(name) != null;
 	}
@@ -123,6 +135,10 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 	 * @param name Secret name to delete
 	 */
 	@SuppressWarnings({ "unchecked", "rawtypes" })
+	public void delete(String name) {
+		delete(Strings.create(name));
+	}
+
 	public void delete(AString name) {
 		cursor.updateAndGet(current -> {
 			AMap m = RT.ensureMap(current);

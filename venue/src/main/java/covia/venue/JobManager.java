@@ -99,6 +99,10 @@ public class JobManager {
 	 * @param ctx Request context (caller identity)
 	 * @return Job tracking the execution
 	 */
+	public Job invokeOperation(String ref, ACell input, RequestContext ctx) {
+		return invokeOperation(Strings.create(ref), input, ctx);
+	}
+
 	public Job invokeOperation(AString ref, ACell input, RequestContext ctx) {
 		if (ref == null) throw new IllegalArgumentException("Operation must be specified");
 

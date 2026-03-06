@@ -14,15 +14,14 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.lattice.Covia;
 import covia.lattice.Namespace;
-import covia.venue.AgentState;
 
 /**
  * Tests for SecretStore and the extended USER lattice with Namespace keys.
  */
 public class SecretStoreTest {
 
-	private static final AString SECRET_NAME = Strings.create("openai-key");
-	private static final AString SECRET_VALUE = Strings.create("sk-test-1234567890");
+	private static final String SECRET_NAME = "openai-key";
+	private static final String SECRET_VALUE = "sk-test-1234567890";
 
 	// ========== Roundtrip Encryption ==========
 
@@ -32,13 +31,13 @@ public class SecretStoreTest {
 		VenueState vs = VenueState.create(kp);
 		byte[] key = SecretStore.deriveKey(kp);
 
-		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
+		User user = vs.users().ensure("did:key:zAlice");
 		SecretStore secrets = user.secrets();
 
 		secrets.store(SECRET_NAME, SECRET_VALUE, key);
 		AString decrypted = secrets.decrypt(SECRET_NAME, key);
 
-		assertEquals(SECRET_VALUE.toString(), decrypted.toString(),
+		assertEquals(SECRET_VALUE, decrypted.toString(),
 			"Decrypted value should match original plaintext");
 	}
 
@@ -50,12 +49,12 @@ public class SecretStoreTest {
 		VenueState vs = VenueState.create(kp);
 		byte[] key = SecretStore.deriveKey(kp);
 
-		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
+		User user = vs.users().ensure("did:key:zAlice");
 		SecretStore secrets = user.secrets();
 
-		secrets.store(Strings.create("key1"), Strings.create("value1"), key);
-		secrets.store(Strings.create("key2"), Strings.create("value2"), key);
-		secrets.store(Strings.create("key3"), Strings.create("value3"), key);
+		secrets.store("key1", "value1", key);
+		secrets.store("key2", "value2", key);
+		secrets.store("key3", "value3", key);
 
 		AVector<AString> names = secrets.list();
 		assertEquals(3, names.count(), "Should have 3 secrets");
@@ -69,11 +68,11 @@ public class SecretStoreTest {
 		VenueState vs = VenueState.create(kp);
 		byte[] key = SecretStore.deriveKey(kp);
 
-		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
+		User user = vs.users().ensure("did:key:zAlice");
 		SecretStore secrets = user.secrets();
 
-		secrets.store(SECRET_NAME, Strings.create("old-value"), key);
-		secrets.store(SECRET_NAME, Strings.create("new-value"), key);
+		secrets.store(SECRET_NAME, "old-value", key);
+		secrets.store(SECRET_NAME, "new-value", key);
 
 		AString decrypted = secrets.decrypt(SECRET_NAME, key);
 		assertEquals("new-value", decrypted.toString(),
@@ -91,7 +90,7 @@ public class SecretStoreTest {
 		VenueState vs = VenueState.create(kp);
 		byte[] key = SecretStore.deriveKey(kp);
 
-		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
+		User user = vs.users().ensure("did:key:zAlice");
 		SecretStore secrets = user.secrets();
 
 		assertFalse(secrets.exists(SECRET_NAME), "Should not exist before storing");
@@ -99,7 +98,7 @@ public class SecretStoreTest {
 		secrets.store(SECRET_NAME, SECRET_VALUE, key);
 		assertTrue(secrets.exists(SECRET_NAME), "Should exist after storing");
 
-		assertFalse(secrets.exists(Strings.create("nonexistent")),
+		assertFalse(secrets.exists("nonexistent"),
 			"Nonexistent secret should return false");
 	}
 
@@ -111,7 +110,7 @@ public class SecretStoreTest {
 		VenueState vs = VenueState.create(kp);
 		byte[] key = SecretStore.deriveKey(kp);
 
-		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
+		User user = vs.users().ensure("did:key:zAlice");
 		SecretStore secrets = user.secrets();
 
 		secrets.store(SECRET_NAME, SECRET_VALUE, key);
@@ -130,10 +129,10 @@ public class SecretStoreTest {
 		VenueState vs = VenueState.create(kp);
 		byte[] key = SecretStore.deriveKey(kp);
 
-		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
+		User user = vs.users().ensure("did:key:zAlice");
 		SecretStore secrets = user.secrets();
 
-		secrets.store(Strings.create("api-key"), Strings.create("secret-value"), key);
+		secrets.store("api-key", "secret-value", key);
 		AVector<AString> names = secrets.list();
 
 		assertEquals(1, names.count());
@@ -151,7 +150,7 @@ public class SecretStoreTest {
 		byte[] key1 = SecretStore.deriveKey(kp1);
 		byte[] key2 = SecretStore.deriveKey(kp2);
 
-		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
+		User user = vs.users().ensure("did:key:zAlice");
 		SecretStore secrets = user.secrets();
 
 		secrets.store(SECRET_NAME, SECRET_VALUE, key1);
@@ -170,8 +169,8 @@ public class SecretStoreTest {
 		VenueState vs = VenueState.create(kp);
 		byte[] key = SecretStore.deriveKey(kp);
 
-		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
-		assertNull(user.secrets().decrypt(Strings.create("no-such-key"), key));
+		User user = vs.users().ensure("did:key:zAlice");
+		assertNull(user.secrets().decrypt("no-such-key", key));
 	}
 
 	// ========== Empty List ==========
@@ -181,7 +180,7 @@ public class SecretStoreTest {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 
-		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
+		User user = vs.users().ensure("did:key:zAlice");
 		AVector<AString> names = user.secrets().list();
 
 		assertNotNull(names);
@@ -196,7 +195,7 @@ public class SecretStoreTest {
 		// then merge. Both namespaces should be present after merge.
 		AKeyPair kp = AKeyPair.generate();
 		byte[] encKey = SecretStore.deriveKey(kp);
-		AString did = Strings.create("did:key:zTest");
+		String did = "did:key:zTest";
 
 		// Venue 1: user writes a job
 		VenueState vs1 = VenueState.create(kp);
@@ -208,13 +207,13 @@ public class SecretStoreTest {
 		// Venue 2: user writes a secret
 		VenueState vs2 = VenueState.create(kp);
 		User user2 = vs2.users().ensure(did);
-		user2.secrets().store(Strings.create("key1"), Strings.create("val1"), encKey);
+		user2.secrets().store("key1", "val1", encKey);
 
 		// After merge, both should be present
 		// We verify by reading through component wrappers, not raw Index equality
 		// (which would fail due to AString/Keyword key type normalisation)
 		assertEquals(1, user1.jobs().count(), "Jobs should be accessible via wrapper");
-		assertTrue(user2.secrets().exists(Strings.create("key1")), "Secrets should be accessible via wrapper");
+		assertTrue(user2.secrets().exists("key1"), "Secrets should be accessible via wrapper");
 	}
 
 	@Test
@@ -224,11 +223,11 @@ public class SecretStoreTest {
 		byte[] encKey = SecretStore.deriveKey(kp);
 
 		VenueState vs = VenueState.create(kp);
-		User user = vs.users().ensure(Strings.create("did:key:zTest"));
+		User user = vs.users().ensure("did:key:zTest");
 		user.jobs().persist(Blob.parse("0x0001"), Maps.of(
 			covia.api.Fields.STATUS, covia.grid.Status.PENDING,
 			covia.api.Fields.UPDATED, convex.core.data.prim.CVMLong.create(1000L)));
-		user.secrets().store(Strings.create("key1"), Strings.create("val1"), encKey);
+		user.secrets().store("key1", "val1", encKey);
 
 		long jobCountBefore = user.jobs().count();
 		long secretCountBefore = user.secrets().list().count();
@@ -267,19 +266,19 @@ public class SecretStoreTest {
 		VenueState vs = VenueState.create(kp);
 		byte[] key = SecretStore.deriveKey(kp);
 
-		User alice = vs.users().ensure(Strings.create("did:key:zAlice"));
-		User bob = vs.users().ensure(Strings.create("did:key:zBob"));
+		User alice = vs.users().ensure("did:key:zAlice");
+		User bob = vs.users().ensure("did:key:zBob");
 
-		alice.secrets().store(Strings.create("alice-key"), Strings.create("alice-secret"), key);
-		bob.secrets().store(Strings.create("bob-key"), Strings.create("bob-secret"), key);
+		alice.secrets().store("alice-key", "alice-secret", key);
+		bob.secrets().store("bob-key", "bob-secret", key);
 
 		// Each user sees only their own secrets
 		assertEquals(1, alice.secrets().list().count());
 		assertEquals(1, bob.secrets().list().count());
-		assertTrue(alice.secrets().exists(Strings.create("alice-key")));
-		assertFalse(alice.secrets().exists(Strings.create("bob-key")));
-		assertTrue(bob.secrets().exists(Strings.create("bob-key")));
-		assertFalse(bob.secrets().exists(Strings.create("alice-key")));
+		assertTrue(alice.secrets().exists("alice-key"));
+		assertFalse(alice.secrets().exists("bob-key"));
+		assertTrue(bob.secrets().exists("bob-key"));
+		assertFalse(bob.secrets().exists("alice-key"));
 	}
 
 	// ========== Agent Cursor ==========
@@ -289,11 +288,11 @@ public class SecretStoreTest {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 
-		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
-		assertNull(user.agent(Strings.create("my-agent")),
+		User user = vs.users().ensure("did:key:zAlice");
+		assertNull(user.agent("my-agent"),
 			"Agent should be null before creation");
 
-		AgentState agent = user.ensureAgent(Strings.create("my-agent"), null, null);
+		AgentState agent = user.ensureAgent("my-agent", null, null);
 		assertNotNull(agent, "ensureAgent should return non-null AgentState");
 		assertTrue(agent.exists(), "Agent should exist after ensureAgent");
 	}
@@ -303,7 +302,7 @@ public class SecretStoreTest {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 
-		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
+		User user = vs.users().ensure("did:key:zAlice");
 		assertNull(user.getAgents(), "Agents should be null before any are created");
 	}
 
@@ -314,7 +313,7 @@ public class SecretStoreTest {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 
-		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
+		User user = vs.users().ensure("did:key:zAlice");
 
 		// Jobs should still work with the extended USER lattice
 		user.jobs().persist(

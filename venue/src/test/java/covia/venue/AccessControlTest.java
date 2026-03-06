@@ -147,7 +147,7 @@ public class AccessControlTest {
 	public void testInvokeWithRequestContext() {
 		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
 		Job job = engine.jobs().invokeOperation(
-			Strings.create("test:echo"), Maps.of("message", "hello"), aliceCtx);
+			"test:echo", Maps.of("message", "hello"), aliceCtx);
 		assertNotNull(job, "Should be able to invoke with authenticated context");
 
 		// Verify caller DID flows through to job record
@@ -163,7 +163,7 @@ public class AccessControlTest {
 		// callerDID is required — null should throw IllegalArgumentException
 		assertThrows(IllegalArgumentException.class,
 			() -> engine.jobs().invokeOperation(
-				Strings.create("test:echo"), Maps.of("message", "hello"), RequestContext.ANONYMOUS));
+				"test:echo", Maps.of("message", "hello"), RequestContext.ANONYMOUS));
 	}
 
 	// ========== Engine Integration: Job Scoping ==========
@@ -175,10 +175,10 @@ public class AccessControlTest {
 
 		// Alice creates a job
 		Job aliceJob = engine.jobs().invokeOperation(
-			Strings.create("test:echo"), Maps.of("message", "alice"), aliceCtx);
+			"test:echo", Maps.of("message", "alice"), aliceCtx);
 		// Bob creates a job
 		Job bobJob = engine.jobs().invokeOperation(
-			Strings.create("test:echo"), Maps.of("message", "bob"), bobCtx);
+			"test:echo", Maps.of("message", "bob"), bobCtx);
 
 		// Alice sees only her job
 		var aliceJobs = engine.jobs().getJobs(aliceCtx);
@@ -195,7 +195,7 @@ public class AccessControlTest {
 	public void testInternalSeesVenueJobs() {
 		// Internal requests see the venue's own DID jobs
 		engine.jobs().invokeOperation(
-			Strings.create("test:echo"), Maps.of("message", "venue-internal"), RequestContext.INTERNAL);
+			"test:echo", Maps.of("message", "venue-internal"), RequestContext.INTERNAL);
 
 		var venueJobs = engine.jobs().getJobs(RequestContext.INTERNAL);
 		assertTrue(venueJobs.count() >= 1, "Internal should see venue's own jobs");
@@ -208,7 +208,7 @@ public class AccessControlTest {
 
 		// Use a non-completing job so it stays in activeJobs for access control check
 		Job aliceJob = engine.jobs().invokeOperation(
-			Strings.create("test:never"), Maps.of("message", "hello"), aliceCtx);
+			"test:never", Maps.of("message", "hello"), aliceCtx);
 
 		// Alice can see her job
 		assertNotNull(engine.jobs().getJobData(aliceJob.getID(), aliceCtx));
@@ -228,7 +228,7 @@ public class AccessControlTest {
 		RequestContext bobCtx = RequestContext.of(BOB_DID);
 
 		Job aliceJob = engine.jobs().invokeOperation(
-			Strings.create("test:delay"), Maps.of("delay", 10000), aliceCtx);
+			"test:delay", Maps.of("delay", 10000), aliceCtx);
 
 		// Bob cannot cancel Alice's job
 		assertThrows(SecurityException.class,
@@ -242,7 +242,7 @@ public class AccessControlTest {
 	public void testVenueJobInvisibleToExternalUser() {
 		// Create a job with the venue's own DID (internal/programmatic)
 		Job venueJob = engine.jobs().invokeOperation(
-			Strings.create("test:echo"), Maps.of("message", "internal"), RequestContext.INTERNAL);
+			"test:echo", Maps.of("message", "internal"), RequestContext.INTERNAL);
 
 		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
 

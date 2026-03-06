@@ -65,6 +65,7 @@ public class Fields {
 	public static final StringShort ARGUMENTS = Strings.intern("arguments");
 	public static final StringShort REMOTE_TOOL_NAME = Strings.intern("remoteToolName");
 	public static final StringShort TOOL_NAME = Strings.intern("toolName");
+	public static final StringShort TOOLS = Strings.intern("tools");
 	public static final StringShort IS_ERROR = Strings.intern("isError");
 	public static final StringShort TYPE = Strings.intern("type");
 	public static final StringShort TEXT = Strings.intern("text");

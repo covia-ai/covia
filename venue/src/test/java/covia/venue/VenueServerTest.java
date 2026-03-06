@@ -152,7 +152,7 @@ public class VenueServerTest {
 	public void testFailureOperation() throws Exception {
 		// Create input for the error operation
 		ACell input = Maps.of(
-			Fields.MESSAGE, Strings.create("Test error message")
+			Fields.MESSAGE, "Test error message"
 		);
 		
 		// Invoke the operation via the client
@@ -164,7 +164,7 @@ public class VenueServerTest {
 	public void testFictitiousOp() throws Exception {
 		// Create input for the error operation
 		ACell input = Maps.of(
-			Fields.MESSAGE, Strings.create("Test error message")
+			Fields.MESSAGE, "Test error message"
 		);
 		
 		// Invoke the operation via the client
@@ -188,7 +188,7 @@ public class VenueServerTest {
 	public void testNeverOperation() throws Exception {
 		// Create input for the error operation
 		ACell input = Maps.of(
-			Fields.MESSAGE, Strings.create("Test error message")
+			Fields.MESSAGE, "Test error message"
 		);
 		
 		// Start the operation via the client. Should start but not complete
@@ -204,8 +204,8 @@ public class VenueServerTest {
 	public void testJobLifecycleWithNeverOp() throws Exception {
 		// Create input for the never operation
 		ACell input = Maps.of(
-			Fields.MESSAGE, Strings.create("Test message for never operation")
-		);
+			Fields.MESSAGE,"Test message for never operation"
+		); 
 		
 		// Step 1: Invoke the operation using Covia client
 		Job job=covia.startJob(TestOps.NEVER, input);
@@ -246,7 +246,7 @@ public class VenueServerTest {
 	@Test
 	public void testPauseAndResumeNeverOp() throws Exception {
 		// Start a never-completing job
-		Job job = covia.startJob(TestOps.NEVER, Maps.of(Fields.MESSAGE, Strings.create("pause test")));
+		Job job = covia.startJob(TestOps.NEVER, Maps.of(Fields.MESSAGE, "pause test"));
 		Thread.sleep(50);
 		covia.updateJobStatus(job);
 		assertEquals(Status.STARTED, job.getStatus(), "Job should be STARTED");
@@ -273,7 +273,7 @@ public class VenueServerTest {
 	@Test
 	public void testPauseOpResumeViaAPI() throws Exception {
 		// Start the auto-pausing operation
-		Job job = covia.startJob(TestOps.PAUSE, Maps.of(Fields.MESSAGE, Strings.create("pause op test")));
+		Job job = covia.startJob(TestOps.PAUSE, Maps.of(Fields.MESSAGE, "pause op test"));
 		Thread.sleep(50);
 		covia.updateJobStatus(job);
 		assertEquals(Status.PAUSED, job.getStatus(), "Pause op should auto-pause");
@@ -299,10 +299,10 @@ public class VenueServerTest {
 		
 		// Create metadata containing the content hash
 		ACell metadata = Maps.of(
-			Fields.NAME, Strings.create("test-asset-with-content"),
-			Keyword.intern("description"), Strings.create("Test asset with content"),
+			Fields.NAME, "test-asset-with-content",
+			Keyword.intern("description"), "Test asset with content",
 			Fields.CONTENT, Maps.of(
-				Fields.SHA256, Strings.create(contentHash.toHexString())
+				Fields.SHA256, contentHash.toHexString()
 			)
 		);
 		
@@ -342,7 +342,7 @@ public class VenueServerTest {
 	@Test
 	public void testAnonymousInvokeGetsPublicDID() throws Exception {
 		// Invoke via HTTP client without auth — should get public DID as caller
-		ACell input = Maps.of("message", Strings.create("anonymous test"));
+		ACell input = Maps.of("message", "anonymous test");
 		Job job = covia.invokeAndWait(TestOps.ECHO, input);
 		assertEquals(Status.COMPLETE, job.getStatus());
 

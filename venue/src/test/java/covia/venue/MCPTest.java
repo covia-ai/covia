@@ -134,14 +134,14 @@ public class MCPTest {
 			boolean foundEchoTool = false;
 			for (int i = 0; i < tools.size(); i++) {
 				AMap<AString, ACell> tool = tools.get(i);
-				AString name = RT.ensureString(tool.get(Strings.create("name")));
+				AString name = RT.ensureString(tool.get(Fields.NAME));
 				if ("test:echo".equals(name.toString())) {
 					foundEchoTool = true;
 
 					// Verify the tool has the expected structure
-					assertTrue(tool.containsKey(Strings.create("name")), "Tool should have a name");
-					assertTrue(tool.containsKey(Strings.create("description")), "Tool should have a description");
-					assertTrue(tool.containsKey(Strings.create("inputSchema")), "Tool should have an inputSchema");
+					assertTrue(tool.containsKey(Fields.NAME), "Tool should have a name");
+					assertTrue(tool.containsKey(Fields.DESCRIPTION), "Tool should have a description");
+					assertTrue(tool.containsKey(Fields.INPUT_SCHEMA), "Tool should have an inputSchema");
 
 					// Verify the name is "test:echo"
 					assertEquals("test:echo", name.toString(), "Tool name should be 'test:echo'");
@@ -177,7 +177,7 @@ public class MCPTest {
 		AMap<AString, ACell> resultMap = (AMap<AString, ACell>) result;
 		
 		// Check that we have a tools field
-		ACell tools = resultMap.get(Strings.create("tools"));
+		ACell tools = resultMap.get(Fields.TOOLS);
 		assertNotNull(tools, "Result should contain tools field");
 		assertTrue(tools instanceof AVector, "Tools should be a vector");
 		
@@ -233,7 +233,7 @@ public class MCPTest {
 		AMap<AString, ACell> resultMap = (AMap<AString, ACell>) result;
 
 		// Check that we have a tools field
-		ACell tools = resultMap.get(Strings.create("tools"));
+		ACell tools = resultMap.get(Fields.TOOLS);
 		assertNotNull(tools, "Result should contain tools field");
 		assertTrue(tools instanceof AVector, "Tools should be a vector");
 

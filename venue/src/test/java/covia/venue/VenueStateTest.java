@@ -362,7 +362,7 @@ public class VenueStateTest {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
 
-		assertNull(vs.users().get(Strings.create("did:key:zUnknown")),
+		assertNull(vs.users().get("did:key:zUnknown"),
 			"user() should return null when no data exists for that DID");
 	}
 
@@ -370,12 +370,12 @@ public class VenueStateTest {
 	public void testEnsureUserCreatesState() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
-		AString did = Strings.create("did:key:zAlice");
+		String did = "did:key:zAlice";
 
 		// ensureUser creates the user state
 		User alice = vs.users().ensure(did);
 		assertNotNull(alice);
-		assertEquals(did, alice.getDID());
+		assertEquals(Strings.create(did), alice.getDID());
 		assertNotNull(alice.get(), "User state should be initialised");
 
 		// Subsequent user() call should also return non-null
@@ -387,8 +387,8 @@ public class VenueStateTest {
 	public void testUserDataIsolation() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
-		AString aliceDID = Strings.create("did:key:zAlice");
-		AString bobDID = Strings.create("did:key:zBob");
+		String aliceDID = "did:key:zAlice";
+		String bobDID = "did:key:zBob";
 
 		User alice = vs.users().ensure(aliceDID);
 		User bob = vs.users().ensure(bobDID);
@@ -429,7 +429,7 @@ public class VenueStateTest {
 	public void testUserSecretsAccessor() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
-		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
+		User user = vs.users().ensure("did:key:zAlice");
 
 		assertNotNull(user.secrets(), "User secrets() should return non-null SecretStore");
 	}
@@ -438,14 +438,14 @@ public class VenueStateTest {
 	public void testUserAgentAccessor() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
-		User user = vs.users().ensure(Strings.create("did:key:zAlice"));
+		User user = vs.users().ensure("did:key:zAlice");
 
 		// agent() returns null for non-existent agent
-		assertNull(user.agent(Strings.create("agent-1")),
+		assertNull(user.agent("agent-1"),
 			"User agent() should return null for non-existent agent");
 
 		// ensureAgent() creates and returns a non-null AgentState
-		AgentState agent = user.ensureAgent(Strings.create("agent-1"), null, null);
+		AgentState agent = user.ensureAgent("agent-1", null, null);
 		assertNotNull(agent, "User ensureAgent() should return non-null AgentState");
 		assertTrue(agent.exists(), "ensureAgent() should initialise the agent");
 	}

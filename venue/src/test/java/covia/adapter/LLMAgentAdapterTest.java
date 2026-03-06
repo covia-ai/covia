@@ -179,12 +179,12 @@ public class LLMAgentAdapterTest {
 		createTestAgent("e2e-agent");
 
 		engine.jobs().invokeOperation(
-			Strings.create("agent:message"),
+			"agent:message",
 			Maps.of(Fields.AGENT_ID, "e2e-agent", Fields.MESSAGE, Maps.of("content", "Hello from e2e")),
 			RequestContext.of(ALICE_DID)).awaitResult();
 
 		Job runJob = engine.jobs().invokeOperation(
-			Strings.create("agent:run"),
+			"agent:run",
 			Maps.of(Fields.AGENT_ID, "e2e-agent", Fields.OPERATION, "llmagent:chat"),
 			RequestContext.of(ALICE_DID));
 		ACell result = runJob.awaitResult();
@@ -193,7 +193,7 @@ public class LLMAgentAdapterTest {
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent(Strings.create("e2e-agent"));
+		AgentState agent = user.agent("e2e-agent");
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
 		assertEquals(0, agent.getInbox().count());
 		assertEquals(1, agent.getTimeline().count());
@@ -213,28 +213,28 @@ public class LLMAgentAdapterTest {
 
 		// First run
 		engine.jobs().invokeOperation(
-			Strings.create("agent:message"),
+			"agent:message",
 			Maps.of(Fields.AGENT_ID, "multi-run-agent", Fields.MESSAGE, Maps.of("content", "Turn 1")),
 			RequestContext.of(ALICE_DID)).awaitResult();
 
 		engine.jobs().invokeOperation(
-			Strings.create("agent:run"),
+			"agent:run",
 			Maps.of(Fields.AGENT_ID, "multi-run-agent", Fields.OPERATION, "llmagent:chat"),
 			RequestContext.of(ALICE_DID)).awaitResult();
 
 		// Second run
 		engine.jobs().invokeOperation(
-			Strings.create("agent:message"),
+			"agent:message",
 			Maps.of(Fields.AGENT_ID, "multi-run-agent", Fields.MESSAGE, Maps.of("content", "Turn 2")),
 			RequestContext.of(ALICE_DID)).awaitResult();
 
 		engine.jobs().invokeOperation(
-			Strings.create("agent:run"),
+			"agent:run",
 			Maps.of(Fields.AGENT_ID, "multi-run-agent", Fields.OPERATION, "llmagent:chat"),
 			RequestContext.of(ALICE_DID)).awaitResult();
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent(Strings.create("multi-run-agent"));
+		AgentState agent = user.agent("multi-run-agent");
 
 		assertEquals(2, agent.getTimeline().count());
 
@@ -246,12 +246,12 @@ public class LLMAgentAdapterTest {
 	@Test
 	public void testEchoStillWorks() {
 		engine.jobs().invokeOperation(
-			Strings.create("agent:create"),
+			"agent:create",
 			Maps.of(Fields.AGENT_ID, "echo-regression"),
 			RequestContext.of(ALICE_DID)).awaitResult();
 
 		engine.jobs().invokeOperation(
-			Strings.create("agent:message"),
+			"agent:message",
 			Maps.of(Fields.AGENT_ID, "echo-regression", Fields.MESSAGE, Maps.of("content", "hello")),
 			RequestContext.of(ALICE_DID)).awaitResult();
 
@@ -273,14 +273,14 @@ public class LLMAgentAdapterTest {
 			"config", Maps.of("llmOperation", "test:llm", "systemPrompt", "Custom prompt")
 		);
 		engine.jobs().invokeOperation(
-			Strings.create("agent:create"),
+			"agent:create",
 			Maps.of(Fields.AGENT_ID, "config-agent", AgentState.KEY_STATE, initialState),
 			RequestContext.of(ALICE_DID)).awaitResult();
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
-		ACell agentState = user.agent(Strings.create("config-agent")).getState();
+		ACell agentState = user.agent("config-agent").getState();
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "config-agent",
@@ -334,17 +334,17 @@ public class LLMAgentAdapterTest {
 	public void testToolCallLoop() {
 		ACell initialState = Maps.of("config", Maps.of("llmOperation", "test:toolllm"));
 		engine.jobs().invokeOperation(
-			Strings.create("agent:create"),
+			"agent:create",
 			Maps.of(Fields.AGENT_ID, "tool-agent", AgentState.KEY_STATE, initialState),
 			RequestContext.of(ALICE_DID)).awaitResult();
 
 		engine.jobs().invokeOperation(
-			Strings.create("agent:message"),
+			"agent:message",
 			Maps.of(Fields.AGENT_ID, "tool-agent", Fields.MESSAGE, Maps.of("content", "use a tool")),
 			RequestContext.of(ALICE_DID)).awaitResult();
 
 		Job runJob = engine.jobs().invokeOperation(
-			Strings.create("agent:run"),
+			"agent:run",
 			Maps.of(Fields.AGENT_ID, "tool-agent", Fields.OPERATION, "llmagent:chat"),
 			RequestContext.of(ALICE_DID));
 		ACell result = runJob.awaitResult();
@@ -353,7 +353,7 @@ public class LLMAgentAdapterTest {
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent(Strings.create("tool-agent"));
+		AgentState agent = user.agent("tool-agent");
 
 		// system + user + assistant(toolCall) + tool(result) + assistant(text)
 		AVector<ACell> history = LLMAgentAdapter.extractHistory(agent.getState());
@@ -470,7 +470,7 @@ public class LLMAgentAdapterTest {
 	private void createTestAgent(String name) {
 		ACell initialState = Maps.of("config", Maps.of("llmOperation", "test:llm"));
 		engine.jobs().invokeOperation(
-			Strings.create("agent:create"),
+			"agent:create",
 			Maps.of(Fields.AGENT_ID, name, AgentState.KEY_STATE, initialState),
 			RequestContext.of(ALICE_DID)).awaitResult();
 	}

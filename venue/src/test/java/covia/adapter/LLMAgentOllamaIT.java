@@ -8,7 +8,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 
 import convex.core.data.ACell;
-import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
@@ -56,59 +55,43 @@ public class LLMAgentOllamaIT {
 
 	@Test
 	public void testOllamaChat() {
-		// Create agent with Ollama config in initial state
 		ACell initialState = Maps.of(
 			"config", Maps.of(
-				"llmOperation", Strings.create("langchain:ollama"),
-				"model", Strings.create("qwen3"),
-				"systemPrompt", Strings.create("You are a concise assistant. Reply in one sentence.")
+				"llmOperation", "langchain:ollama",
+				"model", "qwen3",
+				"systemPrompt", "You are a concise assistant. Reply in one sentence."
 			)
 		);
 		engine.jobs().invokeOperation(
-			Strings.create("agent:create"),
-			Maps.of(
-				Fields.AGENT_ID, Strings.create("ollama-agent"),
-				AgentState.KEY_STATE, initialState
-			),
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "ollama-agent", AgentState.KEY_STATE, initialState),
 			RequestContext.of(ALICE_DID)).awaitResult();
 
-		// Send a message
 		engine.jobs().invokeOperation(
-			Strings.create("agent:message"),
-			Maps.of(
-				Fields.AGENT_ID, Strings.create("ollama-agent"),
-				Fields.MESSAGE, Maps.of("content", Strings.create("What is the capital of France?"))
-			),
+			"agent:message",
+			Maps.of(Fields.AGENT_ID, "ollama-agent", Fields.MESSAGE, Maps.of("content", "What is the capital of France?")),
 			RequestContext.of(ALICE_DID)).awaitResult();
 
-		// Run with llmagent:chat
 		Job runJob = engine.jobs().invokeOperation(
-			Strings.create("agent:run"),
-			Maps.of(
-				Fields.AGENT_ID, Strings.create("ollama-agent"),
-				Fields.OPERATION, Strings.create("llmagent:chat")
-			),
+			"agent:run",
+			Maps.of(Fields.AGENT_ID, "ollama-agent", Fields.OPERATION, "llmagent:chat"),
 			RequestContext.of(ALICE_DID));
 		ACell result = runJob.awaitResult();
 
 		assertNotNull(result);
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 
-		// Check agent state
 		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent(Strings.create("ollama-agent"));
+		AgentState agent = user.agent("ollama-agent");
 
-		// History should have system + user + assistant
 		AVector<ACell> history = LLMAgentAdapter.extractHistory(agent.getState());
 		assertEquals(3, history.count());
 
-		// Print the response
 		AString response = RT.ensureString(RT.getIn(history.get(2), "content"));
 		assertNotNull(response);
 		System.out.println("=== Ollama response ===");
 		System.out.println(response);
 
-		// Timeline should have the result
 		AVector<ACell> timeline = agent.getTimeline();
 		assertEquals(1, timeline.count());
 		AString timelineResponse = RT.ensureString(RT.getIn(timeline.get(0), Fields.RESULT, "response"));
@@ -116,25 +99,18 @@ public class LLMAgentOllamaIT {
 		System.out.println("=== Timeline result ===");
 		System.out.println(timelineResponse);
 
-		// Second turn — multi-turn conversation
+		// Second turn
 		engine.jobs().invokeOperation(
-			Strings.create("agent:message"),
-			Maps.of(
-				Fields.AGENT_ID, Strings.create("ollama-agent"),
-				Fields.MESSAGE, Maps.of("content", Strings.create("And what is its population?"))
-			),
+			"agent:message",
+			Maps.of(Fields.AGENT_ID, "ollama-agent", Fields.MESSAGE, Maps.of("content", "And what is its population?")),
 			RequestContext.of(ALICE_DID)).awaitResult();
 
 		Job run2 = engine.jobs().invokeOperation(
-			Strings.create("agent:run"),
-			Maps.of(
-				Fields.AGENT_ID, Strings.create("ollama-agent"),
-				Fields.OPERATION, Strings.create("llmagent:chat")
-			),
+			"agent:run",
+			Maps.of(Fields.AGENT_ID, "ollama-agent", Fields.OPERATION, "llmagent:chat"),
 			RequestContext.of(ALICE_DID));
 		run2.awaitResult();
 
-		// History should now be system + user1 + assistant1 + user2 + assistant2 = 5
 		AVector<ACell> history2 = LLMAgentAdapter.extractHistory(agent.getState());
 		assertEquals(5, history2.count());
 
@@ -143,7 +119,6 @@ public class LLMAgentOllamaIT {
 		System.out.println("=== Turn 2 response ===");
 		System.out.println(response2);
 
-		// Should have 2 timeline entries
 		assertEquals(2, agent.getTimeline().count());
 	}
 }
