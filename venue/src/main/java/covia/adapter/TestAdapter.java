@@ -55,6 +55,8 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.completedFuture(handleLlm(input));
                 case "toolllm":
                     return CompletableFuture.completedFuture(handleToolLlm(input));
+                case "taskllm":
+                    return CompletableFuture.completedFuture(handleTaskLlm(input));
                 case "never":
                     return new CompletableFuture<>();
                 case "delay":
@@ -90,6 +92,7 @@ public class TestAdapter extends AAdapter {
 			installAsset(BASE+"echoop.json");
 			installAsset(BASE+"testllm.json");
 			installAsset(BASE+"testtoolllm.json");
+			installAsset(BASE+"testtaskllm.json");
 			installAsset(BASE+"neverop.json");
 			installAsset(BASE+"delayop.json");
 			installAsset(BASE+"randomop.json");
@@ -284,6 +287,68 @@ public class TestAdapter extends AAdapter {
         return Maps.of("role", Strings.create("assistant"), "content", Strings.create("(no messages)"));
     }
     
+    /**
+     * Test LLM for task completion: looks for "[Tasks assigned to you]" in user
+     * messages, extracts the first job ID, and calls complete_task. After seeing
+     * a tool result, returns a text summary. Used for testing the full
+     * agent:request → agent:run → complete_task pipeline.
+     */
+    @SuppressWarnings("unchecked")
+    private ACell handleTaskLlm(ACell input) {
+        ACell messagesCell = RT.getIn(input, "messages");
+        if (!(messagesCell instanceof AVector)) {
+            return Maps.of("role", Strings.create("assistant"), "content", Strings.create("(no messages)"));
+        }
+        AVector<ACell> messages = (AVector<ACell>) messagesCell;
+
+        // Check if tool results already present — return text summary
+        for (long i = 0; i < messages.count(); i++) {
+            AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+            if (role != null && "tool".equals(role.toString())) {
+                AString toolName = RT.ensureString(RT.getIn(messages.get(i), "name"));
+                AString toolContent = RT.ensureString(RT.getIn(messages.get(i), "content"));
+                return Maps.of(
+                    "role", Strings.create("assistant"),
+                    "content", Strings.create("Task completed via " + toolName + ": " + toolContent)
+                );
+            }
+        }
+
+        // Look for task context in user messages — extract first job ID
+        for (long i = 0; i < messages.count(); i++) {
+            AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+            AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
+            if (role != null && "user".equals(role.toString()) && content != null) {
+                String text = content.toString();
+                if (text.contains("[Tasks assigned to you]")) {
+                    // Extract job ID: "- Task <hexid>: ..."
+                    int idx = text.indexOf("- Task ");
+                    if (idx >= 0) {
+                        String rest = text.substring(idx + 7);
+                        int colon = rest.indexOf(":");
+                        if (colon > 0) {
+                            String jobId = rest.substring(0, colon).trim();
+                            // Call complete_task with this job ID
+                            return Maps.of(
+                                "role", Strings.create("assistant"),
+                                "toolCalls", Vectors.of(Maps.of(
+                                    "id", Strings.create("call_ct"),
+                                    "name", Strings.create("complete_task"),
+                                    "arguments", Strings.create(
+                                        "{\"jobId\":\"" + jobId + "\",\"output\":{\"answer\":\"done\"}}")
+                                ))
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // No tasks found — return text
+        return Maps.of("role", Strings.create("assistant"),
+            "content", Strings.create("No tasks to complete"));
+    }
+
     private RuntimeException handleError(ACell input) {
         // Always throw an error with the input message
         ACell message = RT.getIn(input, "message");

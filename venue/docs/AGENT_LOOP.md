@@ -297,7 +297,7 @@ The tool palette is split into **default tools** (always available) and
 
 #### Default tools
 
-These are provided by the venue runtime to every LLM agent. Level 2 handles
+These are provided by the Level 2 loop to the LLM agent. Level 2 handles
 execution and maps results back to the tool call loop.
 
 **Task management:**

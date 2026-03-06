@@ -1,0 +1,23 @@
+{
+	"name": "Test Task LLM",
+	"description": "Test LLM that completes tasks. Reads task context from user messages, calls complete_task for the first task, then returns a text summary. Used for testing the full agent:request pipeline.",
+	"dateCreated": "2026-03-06T00:00:00Z",
+	"operation": {
+		"adapter": "test:taskllm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": { "type": "array" },
+				"tools": { "type": "array" }
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": { "type": "string" },
+				"content": { "type": "string" },
+				"toolCalls": { "type": "array" }
+			}
+		}
+	}
+}
