@@ -291,11 +291,11 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * agent:trigger — trigger the agent update loop and wait for completion.
 	 *
-	 * <p>If the agent is SLEEPING with work, starts the run loop and the
-	 * trigger Job completes when the loop finishes. If the agent is already
+	 * <p>If the agent is SLEEPING, starts the run loop and the trigger Job
+	 * completes when the loop finishes — even if there is no pending work
+	 * (the transition function decides what to do). If the agent is already
 	 * RUNNING, the trigger parks on the existing completion future and
-	 * completes when the current run finishes. If there is no work, returns
-	 * immediately with SLEEPING status.</p>
+	 * completes when the current run finishes.</p>
 	 *
 	 * <p>The transition operation always comes from the agent's
 	 * {@code config.operation} — callers cannot override it.</p>
@@ -333,16 +333,8 @@ public class AgentAdapter extends AAdapter {
 					runCompletions.put(agentId.toString(), completion0);
 				}
 			} else {
-				// SLEEPING
-				if (!hasWork(agent)) {
-					job.setStatus(Status.STARTED);
-					job.completeWith(Maps.of(
-						Fields.AGENT_ID, agentId,
-						Fields.STATUS, AgentState.SLEEPING
-					));
-					return;
-				}
-
+				// SLEEPING — always start the loop, even with no work.
+				// The transition function decides what to do (may act proactively).
 				transitionOp = resolveTransitionOp(ctx.getCallerDID(), agentId);
 				if (transitionOp == null) {
 					job.fail("No transition operation configured for agent: " + agentId);
@@ -453,6 +445,7 @@ public class AgentAdapter extends AAdapter {
 			AString transitionOp, RequestContext ctx,
 			CompletableFuture<ACell> completion) {
 		ACell lastResult = null;
+		boolean firstIteration = true;
 
 		try {
 		while (true) {
@@ -476,8 +469,9 @@ public class AgentAdapter extends AAdapter {
 				pending = agent.getPending();
 				currentState = agent.getState();
 
-				// No work — set SLEEPING and exit
-				if (inbox.count() == 0 && tasks.count() == 0) {
+				// On subsequent iterations, exit if no more work arrived.
+				// First iteration always runs — the transition decides what to do.
+				if (!firstIteration && inbox.count() == 0 && tasks.count() == 0) {
 					agent.setStatus(AgentState.SLEEPING);
 					ACell finalResult = (lastResult != null) ? lastResult : Maps.of(
 						Fields.AGENT_ID, agentId,
@@ -487,6 +481,7 @@ public class AgentAdapter extends AAdapter {
 					return;
 				}
 			}
+			firstIteration = false;
 
 			long startTs = Utils.getCurrentTimestamp();
 

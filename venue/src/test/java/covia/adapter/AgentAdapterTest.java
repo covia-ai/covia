@@ -216,9 +216,11 @@ public class AgentAdapterTest {
 
 	@Test
 	public void testTriggerNoWork() {
+		// Trigger with no messages/tasks — transition still runs (may act proactively)
 		engine.jobs().invokeOperation(
 			"agent:create",
-			Maps.of(Fields.AGENT_ID, "empty-agent"),
+			Maps.of(Fields.AGENT_ID, "empty-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job runJob = engine.jobs().invokeOperation(
@@ -229,6 +231,11 @@ public class AgentAdapterTest {
 
 		assertNotNull(result);
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
+
+		// Transition was invoked even with no work
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("empty-agent");
+		assertEquals(1, agent.getTimeline().count(), "Transition should have run once");
 	}
 
 	// ========== User isolation ==========

@@ -475,7 +475,8 @@ Also callable via `agent:trigger` for synchronisation and manual control. The
 trigger has **wait-for-completion** semantics: it returns when the agent has
 finished processing (reached SLEEPING). If the agent is already RUNNING, the
 trigger parks on a completion future and completes when the current run finishes.
-If there is no work, the trigger returns immediately.
+The trigger always invokes the transition function, even with no pending work —
+the transition decides what to do (it may act proactively).
 
 **Run exclusion.** The agent's `status` field in the lattice is the source of
 truth for whether a run is active. A per-agent lock serialises the status check
