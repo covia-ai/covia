@@ -1,0 +1,23 @@
+{
+	"name": "Test Tool LLM",
+	"description": "Test LLM that requests tool calls. On first call returns a tool call for test:echo; after tool results arrive returns a text summary. Used for testing the agent tool call loop.",
+	"dateCreated": "2026-03-06T00:00:00Z",
+	"operation": {
+		"adapter": "test:toolllm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": { "type": "array" },
+				"tools": { "type": "array" }
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": { "type": "string" },
+				"content": { "type": "string" },
+				"toolCalls": { "type": "array" }
+			}
+		}
+	}
+}

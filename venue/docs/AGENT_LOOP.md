@@ -137,27 +137,35 @@ For LLM agents (`llmagent:chat`), level 2:
 - Returns updated state (with config preserved) and a result summary
 
 Level 2 does not import or depend on any LLM library. It invokes level 3 as a
-grid operation and works with structured input/output. This makes it pluggable:
+grid operation and works with structured message maps. This makes it pluggable:
 swap the level 3 operation to change provider, use a remote venue via federation,
 or a test mock.
 
-The level 3 operation to invoke is part of `state.config` — the agent creator
-picks both the agent loop strategy (level 2) and the LLM backend (level 3).
+The level 3 operation to invoke is specified in `state.config.llmOperation`
+(default: `langchain:openai`). The agent creator picks both the agent loop
+strategy (level 2) and the LLM backend (level 3).
 
 ### 3.3 Level 3 — LLM Call (Single Step)
 
 A single, stateless LLM invocation. Takes a list of messages (with tool
 definitions if applicable), calls a specific LLM API, returns the response.
-The response may be:
-- A text response (assistant message)
-- One or more tool call requests (function name + arguments)
+
+**Input:** `{messages: [...], tools?: [...], model?: string, url?: string}`
+
+**Output:** An assistant message map:
+```json
+{"role": "assistant", "content": "Hello!"}
+{"role": "assistant", "toolCalls": [{"id": "call_1", "name": "search", "arguments": "{...}"}]}
+```
+
+**Message types in the `messages` array:**
+- `{role: "system"|"user", content: "..."}`
+- `{role: "assistant", content: "...", toolCalls?: [{id, name, arguments}]}`
+- `{role: "tool", id: "...", name: "...", content: "..."}`
 
 Level 3 is a standard grid operation (e.g. `langchain:openai`, `langchain:ollama`).
 It knows about HTTP clients, API serialisation, authentication, and provider
 quirks. It does not know about agents, conversation history, or tool execution.
-
-This is essentially what `LangChainAdapter` already provides — the existing
-LLM adapter operations serve as level 3.
 
 ### 3.4 Transition Function Contract
 
@@ -373,7 +381,8 @@ See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
 | **0** | Per-user namespace (`"g"`, `"s"`), SecretStore | ✓ Complete |
 | **A** | AgentState wrapper, AgentAdapter (create/message/run), lattice restructure | ✓ Complete |
 | **B** | LLM transition function (`llmagent:chat`), conversation history, secret store integration, three-level architecture (§3) | ✓ Complete |
-| **B2** | Decouple level 2 from LangChain4j — invoke level 3 as grid operation, tool call loop | Next |
+| **B2** | Decouple level 2 from LangChain4j — level 3 via grid operation, message-format API, tool call loop | ✓ Complete |
+| **B3** | Tool parameter schema mapping (JsonObjectSchema from Convex maps), structured output | Next |
 | **C** | Capability enforcement (UCAN `with`/`can`), tool palette | Planned |
 | **D** | Cross-user messaging, advanced wake triggers | Planned |
 | **E** | Agent forking and cross-venue migration | Planned |

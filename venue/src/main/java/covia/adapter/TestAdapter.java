@@ -9,9 +9,11 @@ import org.slf4j.LoggerFactory;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
@@ -47,6 +49,10 @@ public class TestAdapter extends AAdapter {
             switch (testOp) {
                 case "echo":
                     return CompletableFuture.completedFuture(handleEcho(input));
+                case "llm":
+                    return CompletableFuture.completedFuture(handleLlm(input));
+                case "toolllm":
+                    return CompletableFuture.completedFuture(handleToolLlm(input));
                 case "never":
                     return new CompletableFuture<>();
                 case "delay":
@@ -80,6 +86,8 @@ public class TestAdapter extends AAdapter {
 			installAsset(BASE+"empty.json");
 			installAsset(BASE+"randomop.json");
 			installAsset(BASE+"echoop.json");
+			installAsset(BASE+"testllm.json");
+			installAsset(BASE+"testtoolllm.json");
 			installAsset(BASE+"neverop.json");
 			installAsset(BASE+"delayop.json");
 			installAsset(BASE+"randomop.json");
@@ -169,6 +177,76 @@ public class TestAdapter extends AAdapter {
 	private ACell handleEcho(ACell input) {
         // Simply return the input
         return input;
+    }
+
+    /**
+     * Test LLM operation: reads the messages array, echoes the last user message
+     * as a response. Returns an assistant message map matching the level 3 contract.
+     */
+    @SuppressWarnings("unchecked")
+    private ACell handleLlm(ACell input) {
+        String text = "(no user message)";
+        ACell messagesCell = RT.getIn(input, "messages");
+        if (messagesCell instanceof AVector) {
+            AVector<ACell> messages = (AVector<ACell>) messagesCell;
+            for (long i = messages.count() - 1; i >= 0; i--) {
+                ACell entry = messages.get(i);
+                AString role = RT.ensureString(RT.getIn(entry, "role"));
+                if (role != null && "user".equals(role.toString())) {
+                    AString content = RT.ensureString(RT.getIn(entry, "content"));
+                    text = (content != null) ? content.toString() : "(empty)";
+                    break;
+                }
+            }
+        }
+        return Maps.of(
+            "role", Strings.create("assistant"),
+            "content", Strings.create(text)
+        );
+    }
+
+    /**
+     * Test LLM with tool calls: if no tool result messages are present, returns
+     * a tool call request for "test:echo". Once tool results appear, returns a
+     * text response summarising them. Used for testing the tool call loop.
+     */
+    @SuppressWarnings("unchecked")
+    private ACell handleToolLlm(ACell input) {
+        ACell messagesCell = RT.getIn(input, "messages");
+        if (messagesCell instanceof AVector) {
+            AVector<ACell> messages = (AVector<ACell>) messagesCell;
+            // Check if any tool result messages exist
+            for (long i = 0; i < messages.count(); i++) {
+                AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+                if (role != null && "tool".equals(role.toString())) {
+                    // Tool results present — return a text response
+                    AString toolContent = RT.ensureString(RT.getIn(messages.get(i), "content"));
+                    return Maps.of(
+                        "role", Strings.create("assistant"),
+                        "content", Strings.create("Tool returned: " + toolContent)
+                    );
+                }
+            }
+            // No tool results — request a tool call
+            String lastUserMsg = "(none)";
+            for (long i = messages.count() - 1; i >= 0; i--) {
+                AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+                if (role != null && "user".equals(role.toString())) {
+                    AString c = RT.ensureString(RT.getIn(messages.get(i), "content"));
+                    if (c != null) lastUserMsg = c.toString();
+                    break;
+                }
+            }
+            return Maps.of(
+                "role", Strings.create("assistant"),
+                "toolCalls", Vectors.of(Maps.of(
+                    "id", Strings.create("call_1"),
+                    "name", Strings.create("test:echo"),
+                    "arguments", Strings.create("{\"echo\":\"" + lastUserMsg + "\"}")
+                ))
+            );
+        }
+        return Maps.of("role", Strings.create("assistant"), "content", Strings.create("(no messages)"));
     }
     
     private RuntimeException handleError(ACell input) {

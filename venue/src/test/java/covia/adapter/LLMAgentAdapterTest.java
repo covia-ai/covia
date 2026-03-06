@@ -2,8 +2,6 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.util.List;
-
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -20,20 +18,23 @@ import covia.grid.Job;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
-import covia.venue.SecretStore;
 import covia.venue.User;
-import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.SystemMessage;
-import dev.langchain4j.data.message.UserMessage;
 
 /**
  * Tests for the LLMAgentAdapter transition function.
+ *
+ * <p>Uses {@code test:llm} as the level 3 operation, which echoes the last
+ * user message as the response — no real LLM needed.</p>
  */
 public class LLMAgentAdapterTest {
 
 	private Engine engine;
 	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
+
+	/** State with test LLM config — points at test:llm for level 3 */
+	private static final ACell TEST_STATE = Maps.of(
+		"config", Maps.of("llmOperation", Strings.create("test:llm"))
+	);
 
 	@BeforeEach
 	public void setup() {
@@ -63,39 +64,7 @@ public class LLMAgentAdapterTest {
 		assertEquals(3, history.count());
 	}
 
-	@Test
-	public void testToChatMessages() {
-		AVector<ACell> history = Vectors.of(
-			Maps.of("role", Strings.create("system"), "content", Strings.create("You are helpful")),
-			Maps.of("role", Strings.create("user"), "content", Strings.create("Hello")),
-			Maps.of("role", Strings.create("assistant"), "content", Strings.create("Hi!"))
-		);
-
-		List<ChatMessage> messages = LLMAgentAdapter.toChatMessages(history);
-		assertEquals(3, messages.size());
-		assertInstanceOf(SystemMessage.class, messages.get(0));
-		assertInstanceOf(UserMessage.class, messages.get(1));
-		assertInstanceOf(AiMessage.class, messages.get(2));
-	}
-
-	@Test
-	public void testToChatMessagesSkipsInvalid() {
-		AVector<ACell> history = Vectors.of(
-			Maps.of("role", Strings.create("user"), "content", Strings.create("Hello")),
-			Maps.of("role", Strings.create("user")), // missing content
-			Maps.of("content", Strings.create("orphan")) // missing role
-		);
-
-		List<ChatMessage> messages = LLMAgentAdapter.toChatMessages(history);
-		assertEquals(1, messages.size(), "Should skip entries with missing role or content");
-	}
-
-	// ========== Direct invocation with test provider ==========
-
-	/** State with test provider config for direct processChat calls */
-	private static final ACell TEST_STATE = Maps.of(
-		"config", Maps.of("provider", Strings.create("test"))
-	);
+	// ========== Direct invocation with test:llm ==========
 
 	@Test
 	public void testFirstRunWithConfig() {
@@ -110,7 +79,7 @@ public class LLMAgentAdapterTest {
 			)
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), null, input);
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
 		// Verify output structure
@@ -119,7 +88,7 @@ public class LLMAgentAdapterTest {
 		ACell result = RT.getIn(output, Fields.RESULT);
 		assertNotNull(result, "Output should contain result");
 
-		// Verify response echoes back (test provider)
+		// Verify response echoes back (test:llm echoes last user message)
 		AString response = RT.ensureString(RT.getIn(result, "response"));
 		assertNotNull(response);
 		assertEquals("Hello world", response.toString());
@@ -136,7 +105,7 @@ public class LLMAgentAdapterTest {
 	public void testMultiTurnConversation() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
-		// First turn — config in state
+		// First turn
 		ACell input1 = Maps.of(
 			Fields.AGENT_ID, Strings.create("multi-turn-agent"),
 			AgentState.KEY_STATE, TEST_STATE,
@@ -144,7 +113,7 @@ public class LLMAgentAdapterTest {
 				Maps.of("content", Strings.create("first message"))
 			)
 		);
-		ACell output1 = adapter.processChat(RequestContext.of(ALICE_DID), null, input1);
+		ACell output1 = adapter.processChat(RequestContext.of(ALICE_DID), input1);
 		ACell state1 = RT.getIn(output1, AgentState.KEY_STATE);
 
 		// Second turn — pass state from first turn
@@ -155,7 +124,7 @@ public class LLMAgentAdapterTest {
 				Maps.of("content", Strings.create("second message"))
 			)
 		);
-		ACell output2 = adapter.processChat(RequestContext.of(ALICE_DID), null, input2);
+		ACell output2 = adapter.processChat(RequestContext.of(ALICE_DID), input2);
 		ACell state2 = RT.getIn(output2, AgentState.KEY_STATE);
 
 		// Verify history grew
@@ -163,7 +132,7 @@ public class LLMAgentAdapterTest {
 		// system + user1 + assistant1 + user2 + assistant2 = 5
 		assertEquals(5, history.count());
 
-		// Verify the response is the last user message (test provider echoes)
+		// Verify the response is the last user message (test:llm echoes)
 		AString response = RT.ensureString(RT.getIn(output2, Fields.RESULT, "response"));
 		assertEquals("second message", response.toString());
 	}
@@ -182,34 +151,26 @@ public class LLMAgentAdapterTest {
 			)
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), null, input);
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		AVector<ACell> history = LLMAgentAdapter.extractHistory(
 			RT.getIn(output, AgentState.KEY_STATE));
 
 		// system + 3 user + 1 assistant = 5
 		assertEquals(5, history.count());
 
-		// Test provider echoes the last user message
+		// test:llm echoes the last user message
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
 		assertEquals("message three", response.toString());
 	}
 
 	@Test
 	public void testCustomSystemPrompt() {
-		// Create agent with custom system prompt in initial state
 		ACell initialState = Maps.of(
 			"config", Maps.of(
-				"provider", Strings.create("test"),
+				"llmOperation", Strings.create("test:llm"),
 				"systemPrompt", Strings.create("You are a pirate")
 			)
 		);
-		engine.jobs().invokeOperation(
-			Strings.create("agent:create"),
-			Maps.of(
-				Fields.AGENT_ID, Strings.create("pirate-agent"),
-				AgentState.KEY_STATE, initialState
-			),
-			RequestContext.of(ALICE_DID)).awaitResult();
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
@@ -220,7 +181,7 @@ public class LLMAgentAdapterTest {
 			)
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), null, input);
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		AVector<ACell> history = LLMAgentAdapter.extractHistory(
 			RT.getIn(output, AgentState.KEY_STATE));
 
@@ -233,10 +194,9 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testEndToEndWithAgentRun() {
-		// Create agent with test provider
 		createTestAgent("e2e-agent");
 
-		// Send messages
+		// Send message
 		engine.jobs().invokeOperation(
 			Strings.create("agent:message"),
 			Maps.of(
@@ -335,7 +295,7 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testEchoStillWorks() {
-		// Regression: test:echo should still work as a transition function
+		// Regression: test:echo should still work as a transition function for agent:run
 		engine.jobs().invokeOperation(
 			Strings.create("agent:create"),
 			Maps.of(Fields.AGENT_ID, Strings.create("echo-regression")),
@@ -362,15 +322,13 @@ public class LLMAgentAdapterTest {
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 	}
 
-	// ========== Config lookup ==========
+	// ========== Config ==========
 
 	@Test
 	public void testConfigFromState() {
-		// Config is now in state, not agent record config
 		ACell initialState = Maps.of(
 			"config", Maps.of(
-				"provider", Strings.create("test"),
-				"model", Strings.create("custom-model"),
+				"llmOperation", Strings.create("test:llm"),
 				"systemPrompt", Strings.create("Custom prompt")
 			)
 		);
@@ -382,10 +340,8 @@ public class LLMAgentAdapterTest {
 			),
 			RequestContext.of(ALICE_DID)).awaitResult();
 
-		// Verify the adapter reads config from state
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
-		// Pass the state that includes config (as the agent update would)
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		ACell agentState = user.agent(Strings.create("config-agent")).getState();
 
@@ -397,7 +353,7 @@ public class LLMAgentAdapterTest {
 			)
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), null, input);
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
 		// The custom system prompt should be in the history
@@ -410,28 +366,23 @@ public class LLMAgentAdapterTest {
 		AMap<AString, ACell> returnedConfig = LLMAgentAdapter.extractConfig(
 			RT.getIn(output, AgentState.KEY_STATE));
 		assertNotNull(returnedConfig, "Config should be preserved in returned state");
-		assertEquals(Strings.create("test"), returnedConfig.get(Strings.intern("provider")));
+		assertEquals(Strings.create("test:llm"),
+			returnedConfig.get(Strings.intern("llmOperation")));
 	}
 
 	@Test
 	public void testDefaultConfigFallbacks() {
-		// State with only provider=test — other settings should use defaults
-		ACell minimalState = Maps.of(
-			"config", Maps.of(
-				"provider", Strings.create("test")
-			)
-		);
-
+		// State with only llmOperation=test:llm — other settings should use defaults
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, Strings.create("minimal-agent"),
-			AgentState.KEY_STATE, minimalState,
+			AgentState.KEY_STATE, TEST_STATE,
 			Fields.MESSAGES, Vectors.of(
 				Maps.of("content", Strings.create("test"))
 			)
 		);
 
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), null, input);
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
 		// Should use default system prompt
@@ -444,103 +395,126 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testNullConfigUsesDefaults() {
-		// Null state — config defaults apply, but provider defaults to openai
-		// which would fail. This test verifies no NPE on null config.
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		assertNull(LLMAgentAdapter.extractConfig(null));
 		assertNull(LLMAgentAdapter.extractConfig(Maps.empty()));
 	}
 
-	// ========== API key resolution ==========
+	// ========== Tool call loop ==========
 
 	@Test
-	public void testApiKeyFromSecretStoreViaMeta() {
-		// Store a secret for Alice under the name declared in operation metadata
-		User user = engine.getVenueState().users().ensure(ALICE_DID);
-		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
-		user.secrets().store(Strings.create("OPENAI_API_KEY"), Strings.create("sk-from-store"), encKey);
-
-		createTestAgent("secret-agent");
-
-		// Build metadata with secretKey (mimics what chat.json declares)
-		ACell meta = Maps.of(
-			"operation", Maps.of(
-				"adapter", Strings.create("llmagent:chat"),
-				"secretKey", Strings.create("OPENAI_API_KEY")
-			)
+	public void testToolCallLoop() {
+		// Create agent pointing at test:toolllm which requests a tool call then resolves
+		ACell initialState = Maps.of(
+			"config", Maps.of("llmOperation", Strings.create("test:toolllm"))
 		);
-
-		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
-		ACell input = Maps.of(
-			Fields.AGENT_ID, Strings.create("secret-agent"),
-			AgentState.KEY_STATE, TEST_STATE,
-			Fields.MESSAGES, Vectors.of(
-				Maps.of("content", Strings.create("test secret"))
-			)
-		);
-
-		// test provider ignores the key, but the resolution path runs without error
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), meta, input);
-		assertNotNull(output);
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
-		assertEquals("test secret", response.toString());
-	}
-
-	@Test
-	public void testApiKeyFromInputOverride() {
-		createTestAgent("override-agent");
-
-		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
-		ACell input = Maps.of(
-			Fields.AGENT_ID, Strings.create("override-agent"),
-			AgentState.KEY_STATE, TEST_STATE,
-			Fields.MESSAGES, Vectors.of(
-				Maps.of("content", Strings.create("test override"))
+		engine.jobs().invokeOperation(
+			Strings.create("agent:create"),
+			Maps.of(
+				Fields.AGENT_ID, Strings.create("tool-agent"),
+				AgentState.KEY_STATE, initialState
 			),
-			"apiKey", Strings.create("sk-plaintext-testing")
-		);
+			RequestContext.of(ALICE_DID)).awaitResult();
 
-		// Input apiKey takes priority — test provider doesn't use it but path runs
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), null, input);
-		assertNotNull(output);
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
-		assertEquals("test override", response.toString());
+		// Send a message
+		engine.jobs().invokeOperation(
+			Strings.create("agent:message"),
+			Maps.of(
+				Fields.AGENT_ID, Strings.create("tool-agent"),
+				Fields.MESSAGE, Maps.of("content", Strings.create("use a tool"))
+			),
+			RequestContext.of(ALICE_DID)).awaitResult();
+
+		// Run — should trigger tool call loop:
+		// 1. LLM returns toolCall for test:echo
+		// 2. test:echo executes and returns result
+		// 3. LLM sees tool result and returns text response
+		Job runJob = engine.jobs().invokeOperation(
+			Strings.create("agent:run"),
+			Maps.of(
+				Fields.AGENT_ID, Strings.create("tool-agent"),
+				Fields.OPERATION, Strings.create("llmagent:chat")
+			),
+			RequestContext.of(ALICE_DID));
+		ACell result = runJob.awaitResult();
+
+		assertNotNull(result);
+		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
+
+		// Verify agent state
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent(Strings.create("tool-agent"));
+
+		// History should contain: system + user + assistant(toolCall) + tool(result) + assistant(text)
+		AVector<ACell> history = LLMAgentAdapter.extractHistory(agent.getState());
+		assertTrue(history.count() >= 5,
+			"Should have system + user + assistant(toolCall) + tool + assistant(text), got " + history.count());
+
+		// The final assistant message should contain the tool result
+		ACell lastMsg = history.get(history.count() - 1);
+		AString lastContent = RT.ensureString(RT.getIn(lastMsg, "content"));
+		assertNotNull(lastContent, "Final assistant message should have content");
+		assertTrue(lastContent.toString().contains("Tool returned:"),
+			"Response should reference tool output: " + lastContent);
+
+		// Timeline result should have the response
+		AVector<ACell> timeline = agent.getTimeline();
+		assertEquals(1, timeline.count());
+		AString response = RT.ensureString(RT.getIn(timeline.get(0), Fields.RESULT, "response"));
+		assertNotNull(response);
+		assertTrue(response.toString().contains("Tool returned:"));
 	}
 
 	@Test
-	public void testApiKeyNullWhenNoSecretAndNoInput() {
-		// No secret stored, no apiKey in input, no env var fallback
-		createTestAgent("no-key-agent");
-
+	public void testToolCallLoopDirect() {
+		// Direct processChat test for the tool loop
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
-		ACell meta = Maps.of(
-			"operation", Maps.of(
-				"adapter", Strings.create("llmagent:chat"),
-				"secretKey", Strings.create("MISSING_SECRET")
-			)
+
+		ACell state = Maps.of(
+			"config", Maps.of("llmOperation", Strings.create("test:toolllm"))
 		);
 		ACell input = Maps.of(
-			Fields.AGENT_ID, Strings.create("no-key-agent"),
-			AgentState.KEY_STATE, TEST_STATE,
+			Fields.AGENT_ID, Strings.create("direct-tool-agent"),
+			AgentState.KEY_STATE, state,
 			Fields.MESSAGES, Vectors.of(
-				Maps.of("content", Strings.create("test"))
+				Maps.of("content", Strings.create("do something"))
 			)
 		);
 
-		// test provider doesn't need an API key, so this succeeds
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), meta, input);
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
+
+		// Result should contain the tool-based response
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		assertNotNull(response);
+		assertTrue(response.toString().contains("Tool returned:"));
+
+		// History should have the full tool call loop recorded
+		AVector<ACell> history = LLMAgentAdapter.extractHistory(
+			RT.getIn(output, AgentState.KEY_STATE));
+		assertTrue(history.count() >= 5);
+
+		// Check that tool result message is in history
+		boolean hasToolMsg = false;
+		for (long i = 0; i < history.count(); i++) {
+			AString role = RT.ensureString(RT.getIn(history.get(i), "role"));
+			if (role != null && "tool".equals(role.toString())) {
+				hasToolMsg = true;
+				break;
+			}
+		}
+		assertTrue(hasToolMsg, "History should contain a tool result message");
 	}
 
 	// ========== Helper ==========
 
 	/**
-	 * Creates a test agent with LLM config in initial state (not agent record config).
+	 * Creates a test agent with config pointing at test:llm for level 3.
 	 */
 	private void createTestAgent(String name) {
 		ACell initialState = Maps.of(
 			"config", Maps.of(
-				"provider", Strings.create("test")
+				"llmOperation", Strings.create("test:llm")
 			)
 		);
 		engine.jobs().invokeOperation(

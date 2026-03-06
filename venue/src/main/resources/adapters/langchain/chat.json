@@ -1,0 +1,50 @@
+{
+	"name": "Simple Chat",
+	"description": "Simple chat operation for testing and basic use. Send a prompt string and get a response. Uses the messages-based path internally.",
+	"dateCreated": "2026-03-06T00:00:00Z",
+	"operation": {
+		"adapter": "langchain:openai",
+		"secretFields": ["apiKey"],
+		"secretKey": "OPENAI_API_KEY",
+		"info": {
+			"featured": true
+		},
+		"input": {
+			"type": "object",
+			"properties": {
+				"prompt": {
+					"type": "string",
+					"description": "The message to send to the LLM"
+				},
+				"model": {
+					"type": "string",
+					"description": "Model name (defaults to gpt-4o-mini)",
+					"default": "gpt-4o-mini"
+				},
+				"systemPrompt": {
+					"type": "string",
+					"description": "System prompt to set the AI's behaviour"
+				},
+				"apiKey": {
+					"type": "string",
+					"secret": true,
+					"description": "API key (resolved from secret store by default)"
+				},
+				"url": {
+					"type": "string",
+					"description": "Base URL (defaults to https://api.openai.com/v1)"
+				}
+			},
+			"required": ["prompt"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"response": {
+					"type": "string",
+					"description": "The LLM response"
+				}
+			}
+		}
+	}
+}

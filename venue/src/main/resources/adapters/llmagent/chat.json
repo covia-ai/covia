@@ -1,18 +1,15 @@
 {
 	"name": "LLM Agent Chat",
-	"description": "LLM-backed transition function for agents. Maintains conversation history and LLM configuration in agent state (state.config for provider/model/systemPrompt, state.history for conversation). The API key is resolved from the user's secret store using the name declared in operation metadata. Processes all inbox messages as user turns and generates an assistant response.",
+	"description": "LLM-backed transition function for agents. Maintains conversation history in agent state (state.config for llmOperation/model/systemPrompt/url, state.history for conversation). Invokes the configured level 3 grid operation for LLM calls — credentials are resolved by the level 3 operation from the user's secret store.",
 	"dateCreated": "2026-02-27T00:00:00Z",
 	"operation": {
 		"adapter": "llmagent:chat",
-		"secretFields": ["apiKey"],
-		"secretKey": "OPENAI_API_KEY",
 		"input": {
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent identifier" },
-				"state": { "description": "Previous conversation state (null on first run). Contains 'config' map (provider, model, systemPrompt, url) and 'history' array of role/content pairs." },
-				"messages": { "type": "array", "description": "Inbox messages to process as user turns" },
-				"apiKey": { "type": "string", "description": "Optional API key override for testing. WARNING: will appear in plaintext in job results." }
+				"state": { "description": "Previous conversation state (null on first run). Contains 'config' map (llmOperation, model, systemPrompt, url) and 'history' array of role/content pairs." },
+				"messages": { "type": "array", "description": "Inbox messages to process as user turns" }
 			},
 			"required": ["agentId"]
 		},

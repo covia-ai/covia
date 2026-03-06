@@ -59,7 +59,7 @@ public class LLMAgentOllamaIT {
 		// Create agent with Ollama config in initial state
 		ACell initialState = Maps.of(
 			"config", Maps.of(
-				"provider", Strings.create("ollama"),
+				"llmOperation", Strings.create("langchain:ollama"),
 				"model", Strings.create("qwen3"),
 				"systemPrompt", Strings.create("You are a concise assistant. Reply in one sentence.")
 			)

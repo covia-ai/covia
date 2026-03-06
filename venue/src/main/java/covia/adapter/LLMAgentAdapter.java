@@ -1,8 +1,5 @@
 package covia.adapter;
 
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import org.slf4j.Logger;
@@ -20,26 +17,38 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.AgentState;
 import covia.venue.RequestContext;
-import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.SystemMessage;
-import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.model.chat.ChatModel;
-import dev.langchain4j.model.chat.response.ChatResponse;
 
 /**
- * LLM-backed transition function for agents.
+ * LLM-backed transition function for agents (level 2).
  *
  * <p>Invoked by {@code agent:run} as a transition operation ({@code llmagent:chat}).
- * Maintains conversation history in the agent's {@code state} field and calls an
- * LLM to generate responses.</p>
+ * Maintains conversation history in the agent's {@code state} field and delegates
+ * LLM calls to a level 3 grid operation (e.g. {@code langchain:openai}).</p>
+ *
+ * <p>This adapter has no LLM library dependencies — it works entirely with
+ * structured message maps and invokes level 3 via the grid operation dispatch.</p>
+ *
+ * <h3>Message format</h3>
+ * <p>All messages in history use a common map format:</p>
+ * <ul>
+ *   <li>{@code {role: "system"|"user", content: "..."}}</li>
+ *   <li>{@code {role: "assistant", content: "...", toolCalls?: [{id, name, arguments}]}}</li>
+ *   <li>{@code {role: "tool", id: "...", name: "...", content: "..."}}</li>
+ * </ul>
+ *
+ * <h3>Tool call loop</h3>
+ * <p>When level 3 returns an assistant message with {@code toolCalls}, level 2
+ * executes each tool as a grid operation, appends tool result messages, and
+ * calls level 3 again. This loops until the LLM returns a text response
+ * (no tool calls) or {@link #MAX_TOOL_ITERATIONS} is reached.</p>
  *
  * <h3>State structure</h3>
  * <pre>{@code
  * { "config": {
- *     "provider": "openai",
+ *     "llmOperation": "langchain:openai",
  *     "model": "gpt-4o-mini",
- *     "systemPrompt": "You are..."
+ *     "systemPrompt": "You are...",
+ *     "tools": [{name, description, parameters}]
  *   },
  *   "history": [
  *     { "role": "system",    "content": "You are..." },
@@ -47,63 +56,44 @@ import dev.langchain4j.model.chat.response.ChatResponse;
  *     { "role": "assistant", "content": "Hi there!" }
  *   ]
  * }}</pre>
- *
- * <h3>LLM configuration</h3>
- * <p>Read from {@code state.config} — set at agent creation via initial state,
- * preserved across runs by the transition function. The agent record's framework
- * {@code config} is not used; LLM settings belong to the transition function's
- * domain. This allows an agent to switch transition functions without config
- * conflicts.</p>
- * <ul>
- *   <li>{@code provider} — {@code "openai"} | {@code "ollama"} | {@code "test"} (default: {@code "openai"})</li>
- *   <li>{@code model} — model name (default: {@code "gpt-4o-mini"})</li>
- *   <li>{@code systemPrompt} — system message</li>
- *   <li>{@code url} — base URL override</li>
- * </ul>
- *
- * <h3>API key resolution</h3>
- * <p>Uses {@link covia.venue.Engine#resolveSecret(String, RequestContext)}:</p>
- * <ol>
- *   <li>Optional {@code apiKey} in input — resolved as a secret reference
- *       ({@code "/s/NAME"} or bare name), falling back to plaintext</li>
- *   <li>Operation metadata {@code operation.secretKey} — resolved from
- *       the caller's secret store</li>
- * </ol>
  */
 public class LLMAgentAdapter extends AAdapter {
 
 	private static final Logger log = LoggerFactory.getLogger(LLMAgentAdapter.class);
 
-	/** IO timeout for LLM API calls */
-	private static final Duration IO_TIMEOUT = Duration.ofSeconds(120);
-
 	private static final AString DEFAULT_SYSTEM_PROMPT = Strings.create(
 		"You are a helpful AI assistant on the Covia platform. "
 		+ "Give concise, clear and accurate responses.");
 
-	// Config field keys (read from state.config, set at agent creation)
+	private static final AString DEFAULT_LLM_OPERATION = Strings.create("langchain:openai");
+
+	// Config field keys (read from state.config)
 	private static final AString K_CONFIG        = Strings.intern("config");
-	private static final AString K_PROVIDER      = Strings.intern("provider");
+	private static final AString K_LLM_OPERATION = Strings.intern("llmOperation");
 	private static final AString K_MODEL         = Strings.intern("model");
 	private static final AString K_SYSTEM_PROMPT = Strings.intern("systemPrompt");
 	private static final AString K_URL           = Strings.intern("url");
+	private static final AString K_TOOLS         = Strings.intern("tools");
 
-	// Operation metadata key for the secret name
-	private static final AString K_SECRET_KEY    = Strings.intern("secretKey");
-
-	// Input key for optional testing override
-	private static final AString K_API_KEY       = Strings.intern("apiKey");
-
-	// History field keys
-	private static final AString K_HISTORY  = Strings.intern("history");
-	private static final AString K_ROLE     = Strings.intern("role");
-	private static final AString K_CONTENT  = Strings.intern("content");
-	private static final AString K_RESPONSE = Strings.intern("response");
+	// History / message field keys
+	private static final AString K_HISTORY    = Strings.intern("history");
+	private static final AString K_ROLE       = Strings.intern("role");
+	private static final AString K_CONTENT    = Strings.intern("content");
+	private static final AString K_RESPONSE   = Strings.intern("response");
+	private static final AString K_MESSAGES   = Strings.intern("messages");
+	private static final AString K_TOOL_CALLS = Strings.intern("toolCalls");
+	private static final AString K_ID         = Strings.intern("id");
+	private static final AString K_NAME       = Strings.intern("name");
+	private static final AString K_ARGUMENTS  = Strings.intern("arguments");
 
 	// Role values
 	private static final AString ROLE_SYSTEM    = Strings.intern("system");
 	private static final AString ROLE_USER      = Strings.intern("user");
 	private static final AString ROLE_ASSISTANT = Strings.intern("assistant");
+	private static final AString ROLE_TOOL      = Strings.intern("tool");
+
+	/** Maximum tool call loop iterations to prevent runaway loops */
+	static final int MAX_TOOL_ITERATIONS = 20;
 
 	@Override
 	public String getName() {
@@ -113,10 +103,10 @@ public class LLMAgentAdapter extends AAdapter {
 	@Override
 	public String getDescription() {
 		return "LLM-backed transition function for agents. Maintains conversation "
-			+ "history and LLM configuration in agent state (state.config), processes "
-			+ "inbox messages as user turns, and calls an LLM to generate responses. "
-			+ "API key resolved from the user's secret store using the name in "
-			+ "operation metadata.";
+			+ "history in agent state, processes inbox messages as user turns, and "
+			+ "invokes a level 3 grid operation for LLM calls. Supports tool call "
+			+ "loops: when the LLM requests tool calls, executes them as grid "
+			+ "operations and feeds results back until a text response is produced.";
 	}
 
 	@Override
@@ -135,7 +125,7 @@ public class LLMAgentAdapter extends AAdapter {
 		job.setStatus(covia.grid.Status.STARTED);
 
 		CompletableFuture.supplyAsync(() -> {
-			return processChat(ctx, meta, input);
+			return processChat(ctx, input);
 		}, VIRTUAL_EXECUTOR)
 		.thenAccept(job::completeWith)
 		.exceptionally(e -> {
@@ -149,42 +139,34 @@ public class LLMAgentAdapter extends AAdapter {
 	/**
 	 * Core transition function logic.
 	 *
-	 * <p>LLM configuration is read from {@code state.config} (set at agent creation,
-	 * preserved across runs). The agent record's framework config is not used.</p>
+	 * <p>Builds conversation history, invokes level 3 (with tool call loop),
+	 * and returns the updated state.</p>
 	 *
-	 * @param ctx Request context (caller identity for secret store access)
-	 * @param meta Operation metadata (from chat.json) — contains secretKey
-	 * @param input Transition function contract: { agentId, state, messages, apiKey? }
+	 * @param ctx Request context (caller identity for level 3 invocation)
+	 * @param input Transition function contract: { agentId, state, messages }
 	 * @return Transition function output: { state, result }
 	 */
 	@SuppressWarnings("unchecked")
-	ACell processChat(RequestContext ctx, ACell meta, ACell input) {
+	ACell processChat(RequestContext ctx, ACell input) {
 		ACell state = RT.getIn(input, AgentState.KEY_STATE);
 		AVector<ACell> messages = (AVector<ACell>) RT.getIn(input, Fields.MESSAGES);
 
-		// Read LLM config from state (set at creation, preserved across runs)
+		// Read LLM config from state
 		AMap<AString, ACell> config = extractConfig(state);
 
-		// Extract LLM settings from config
-		String provider = getConfigString(config, K_PROVIDER, "openai");
-		String model = getConfigString(config, K_MODEL, "gpt-4o-mini");
-		String systemPrompt = getConfigString(config, K_SYSTEM_PROMPT, null);
-		String apiKey = resolveApiKey(meta, input, ctx);
-		String url = getConfigString(config, K_URL, null);
+		// Extract settings from config
+		AString llmOperation = getConfigValue(config, K_LLM_OPERATION, DEFAULT_LLM_OPERATION);
+		AString systemPrompt = getConfigValue(config, K_SYSTEM_PROMPT, null);
 
 		// Reconstruct conversation history from state
 		AVector<ACell> history = extractHistory(state);
 
 		// If no system prompt in history yet, prepend one
 		if (history.count() == 0 || !ROLE_SYSTEM.equals(RT.getIn(history.get(0), K_ROLE))) {
-			AString sysContent = (systemPrompt != null)
-				? Strings.create(systemPrompt)
-				: DEFAULT_SYSTEM_PROMPT;
-			AMap<AString, ACell> sysEntry = Maps.of(
-				K_ROLE, ROLE_SYSTEM,
-				K_CONTENT, sysContent
-			);
-			history = (AVector<ACell>) Vectors.of(sysEntry).concat(history);
+			AString sysContent = (systemPrompt != null) ? systemPrompt : DEFAULT_SYSTEM_PROMPT;
+			history = (AVector<ACell>) Vectors.of(
+				(ACell) Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, sysContent)
+			).concat(history);
 		}
 
 		// Append each inbox message as a user turn
@@ -192,59 +174,132 @@ public class LLMAgentAdapter extends AAdapter {
 			for (long i = 0; i < messages.count(); i++) {
 				ACell msg = messages.get(i);
 				AString content = RT.ensureString(RT.getIn(msg, K_CONTENT));
-				if (content == null) {
-					// Fall back to treating the whole message as content
-					content = RT.ensureString(msg);
-				}
+				if (content == null) content = RT.ensureString(msg);
 				if (content != null) {
-					history = history.conj(Maps.of(
-						K_ROLE, ROLE_USER,
-						K_CONTENT, content
-					));
+					history = history.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, content));
 				}
 			}
 		}
 
-		// Call LLM (or test provider)
-		String assistantText;
-		if ("test".equals(provider)) {
-			// Test provider: echo back the last user message
-			assistantText = getLastUserContent(history);
-		} else {
-			// Build ChatModel and call LLM
-			ChatModel chatModel = buildChatModel(provider, model, apiKey, url);
-			List<ChatMessage> chatMessages = toChatMessages(history);
-			ChatResponse response = chatModel.chat(chatMessages);
-			AiMessage reply = response.aiMessage();
-			assistantText = stripThinkTags(reply.text());
+		// Get tool definitions from config (if any)
+		AVector<ACell> tools = null;
+		if (config != null) {
+			ACell toolsCell = config.get(K_TOOLS);
+			if (toolsCell instanceof AVector) tools = (AVector<ACell>) toolsCell;
 		}
 
-		// Append assistant response to history
-		history = history.conj(Maps.of(
-			K_ROLE, ROLE_ASSISTANT,
-			K_CONTENT, Strings.create(assistantText)
-		));
+		// Invoke level 3 with tool call loop — returns all messages to append
+		AVector<ACell> newMessages = invokeWithToolLoop(llmOperation, config, history, tools, ctx);
+		history = (AVector<ACell>) history.concat(newMessages);
+
+		// Extract text content from the final assistant message
+		ACell lastMsg = newMessages.get(newMessages.count() - 1);
+		AString contentText = RT.ensureString(RT.getIn(lastMsg, K_CONTENT));
+		String responseText = (contentText != null) ? contentText.toString() : "";
 
 		// Return transition function output (preserve config in state)
-		ACell newState = Maps.of(K_HISTORY, history);
+		AMap<AString, ACell> newState = Maps.of(K_HISTORY, history);
 		if (config != null) {
-			newState = ((AMap<AString, ACell>) newState).assoc(K_CONFIG, config);
+			newState = newState.assoc(K_CONFIG, config);
 		}
-		ACell result = Maps.of(K_RESPONSE, Strings.create(assistantText));
+		ACell result = Maps.of(K_RESPONSE, Strings.create(responseText));
 		return Maps.of(
 			AgentState.KEY_STATE, newState,
 			Fields.RESULT, result
 		);
 	}
 
+	/**
+	 * Invokes level 3 with a tool call loop.
+	 *
+	 * <p>Calls the LLM operation. If the response contains {@code toolCalls},
+	 * executes each tool, appends tool result messages, and calls the LLM again.
+	 * Repeats until a text-only response or the iteration limit.</p>
+	 *
+	 * @return Vector of new messages to append to history (includes any tool call
+	 *         assistant messages, tool result messages, and the final text response)
+	 */
+	@SuppressWarnings("unchecked")
+	private AVector<ACell> invokeWithToolLoop(
+			AString llmOperation, AMap<AString, ACell> config,
+			AVector<ACell> history, AVector<ACell> tools, RequestContext ctx) {
+
+		AVector<ACell> newMessages = Vectors.empty();
+
+		for (int iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+			// Build level 3 input (full history including new messages from this loop)
+			AVector<ACell> fullHistory = (AVector<ACell>) history.concat(newMessages);
+			AMap<AString, ACell> l3Input = Maps.of(K_MESSAGES, fullHistory);
+			if (config != null) {
+				ACell model = config.get(K_MODEL);
+				if (model != null) l3Input = l3Input.assoc(K_MODEL, model);
+				ACell url = config.get(K_URL);
+				if (url != null) l3Input = l3Input.assoc(K_URL, url);
+			}
+			if (tools != null) {
+				l3Input = l3Input.assoc(K_TOOLS, tools);
+			}
+
+			// Dispatch to level 3
+			Job l3Job = engine.jobs().invokeOperation(llmOperation, l3Input, ctx);
+			ACell l3Result = l3Job.awaitResult();
+
+			// Level 3 returns an assistant message: {role, content?, toolCalls?}
+			ACell toolCallsCell = RT.getIn(l3Result, K_TOOL_CALLS);
+			boolean hasToolCalls = (toolCallsCell instanceof AVector) && ((AVector<ACell>) toolCallsCell).count() > 0;
+
+			if (!hasToolCalls) {
+				// Text-only response — append and we're done
+				newMessages = newMessages.conj(l3Result);
+				return newMessages;
+			}
+
+			// Tool call response — record assistant message and execute tools
+			newMessages = newMessages.conj(l3Result);
+			AVector<ACell> toolCalls = (AVector<ACell>) toolCallsCell;
+
+			for (long i = 0; i < toolCalls.count(); i++) {
+				ACell tc = toolCalls.get(i);
+				AString id = RT.ensureString(RT.getIn(tc, K_ID));
+				AString name = RT.ensureString(RT.getIn(tc, K_NAME));
+				AString arguments = RT.ensureString(RT.getIn(tc, K_ARGUMENTS));
+
+				// Execute the tool as a grid operation
+				String toolResult;
+				try {
+					ACell toolInput = (arguments != null)
+						? convex.core.util.JSON.parse(arguments.toString())
+						: Maps.empty();
+					Job toolJob = engine.jobs().invokeOperation(name, toolInput, ctx);
+					ACell toolOutput = toolJob.awaitResult();
+					toolResult = (toolOutput != null) ? toolOutput.toString() : "null";
+				} catch (Exception e) {
+					toolResult = "Error: " + e.getMessage();
+					log.warn("Tool execution failed: {} — {}", name, e.getMessage());
+				}
+
+				// Append tool result message
+				AMap<AString, ACell> toolMsg = Maps.of(
+					K_ROLE, ROLE_TOOL,
+					K_NAME, (name != null) ? name : Strings.create("unknown"),
+					K_CONTENT, Strings.create(toolResult)
+				);
+				if (id != null) toolMsg = toolMsg.assoc(K_ID, id);
+				newMessages = newMessages.conj(toolMsg);
+			}
+		}
+
+		// Iteration limit reached
+		log.warn("Tool call loop reached iteration limit ({})", MAX_TOOL_ITERATIONS);
+		newMessages = newMessages.conj(Maps.of(
+			K_ROLE, ROLE_ASSISTANT,
+			K_CONTENT, Strings.create("I reached the maximum number of tool call iterations. Please try again with a simpler request.")
+		));
+		return newMessages;
+	}
+
 	// ========== Internal helpers ==========
 
-	/**
-	 * Extracts the LLM config map from agent state.
-	 *
-	 * <p>Config is stored at {@code state.config} — set at agent creation as part
-	 * of initial state, and preserved across runs by the transition function.</p>
-	 */
 	@SuppressWarnings("unchecked")
 	static AMap<AString, ACell> extractConfig(ACell state) {
 		if (state == null) return null;
@@ -253,53 +308,12 @@ public class LLMAgentAdapter extends AAdapter {
 		return null;
 	}
 
-	/**
-	 * Resolves the API key from input or the user's secret store via
-	 * {@link covia.venue.Engine#resolveSecret(String, RequestContext)}.
-	 *
-	 * <p>Resolution order:</p>
-	 * <ol>
-	 *   <li>Optional {@code apiKey} in input — resolved as a secret reference
-	 *       ({@code "/s/NAME"} or bare name), falling back to plaintext</li>
-	 *   <li>Operation metadata {@code operation.secretKey} — resolved from
-	 *       the caller's secret store</li>
-	 * </ol>
-	 *
-	 * @param meta Operation metadata (contains {@code operation.secretKey})
-	 * @param input Transition function input (may contain {@code apiKey})
-	 * @param ctx Request context (caller identity for secret store access)
-	 * @return API key string, or null if not available
-	 */
-	private String resolveApiKey(ACell meta, ACell input, RequestContext ctx) {
-		// 1. Input apiKey — try secret store first, fall back to plaintext
-		AString inputKey = RT.ensureString(RT.getIn(input, K_API_KEY));
-		if (inputKey != null) {
-			String resolved = engine.resolveSecret(inputKey.toString(), ctx);
-			if (resolved != null) return resolved;
-			return inputKey.toString(); // plaintext fallback
-		}
-
-		// 2. Operation metadata secretKey — resolve from caller's secret store
-		AString secretName = RT.ensureString(RT.getIn(meta, "operation", K_SECRET_KEY));
-		if (secretName != null) {
-			return engine.resolveSecret(secretName.toString(), ctx);
-		}
-
-		return null;
-	}
-
-	/**
-	 * Extracts a string config value with a default.
-	 */
-	private String getConfigString(AMap<AString, ACell> config, AString key, String defaultValue) {
+	private static AString getConfigValue(AMap<AString, ACell> config, AString key, AString defaultValue) {
 		if (config == null) return defaultValue;
 		AString val = RT.ensureString(config.get(key));
-		return (val != null) ? val.toString() : defaultValue;
+		return (val != null) ? val : defaultValue;
 	}
 
-	/**
-	 * Extracts the history vector from the agent state.
-	 */
 	@SuppressWarnings("unchecked")
 	static AVector<ACell> extractHistory(ACell state) {
 		if (state == null) return Vectors.empty();
@@ -308,73 +322,4 @@ public class LLMAgentAdapter extends AAdapter {
 		return Vectors.empty();
 	}
 
-	/**
-	 * Converts history (AVector of AMaps) to LangChain4j ChatMessage list.
-	 */
-	static List<ChatMessage> toChatMessages(AVector<ACell> history) {
-		List<ChatMessage> messages = new ArrayList<>();
-		for (long i = 0; i < history.count(); i++) {
-			ACell entry = history.get(i);
-			AString role = RT.ensureString(RT.getIn(entry, K_ROLE));
-			AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
-			if (role == null || content == null) continue;
-
-			String roleStr = role.toString();
-			String contentStr = content.toString();
-			switch (roleStr) {
-				case "system":
-					messages.add(SystemMessage.from(contentStr));
-					break;
-				case "user":
-					messages.add(UserMessage.from(contentStr));
-					break;
-				case "assistant":
-					messages.add(AiMessage.from(contentStr));
-					break;
-				default:
-					log.warn("Unknown role in history: {}", roleStr);
-			}
-		}
-		return messages;
-	}
-
-	/**
-	 * Builds a ChatModel from config settings.
-	 */
-	private ChatModel buildChatModel(String provider, String model, String apiKey, String url) {
-		if ("ollama".equals(provider)) {
-			String baseUrl = (url != null) ? url : "http://localhost:11434";
-			return LangChainAdapter.buildOllamaModel(baseUrl, model, IO_TIMEOUT);
-		} else {
-			// Default to OpenAI-compatible
-			String baseUrl = (url != null) ? url : "https://api.openai.com/v1";
-			return LangChainAdapter.buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
-		}
-	}
-
-	/**
-	 * Strips {@code <think>...</think>} tags from model output (e.g. qwen, deepseek-r1).
-	 */
-	static String stripThinkTags(String text) {
-		if (text == null) return null;
-		if (text.contains("</think>")) {
-			int end = text.lastIndexOf("</think>");
-			text = text.substring(end + 8).trim();
-		}
-		return text;
-	}
-
-	/**
-	 * Gets the content of the last user message in history (for test provider).
-	 */
-	private String getLastUserContent(AVector<ACell> history) {
-		for (long i = history.count() - 1; i >= 0; i--) {
-			ACell entry = history.get(i);
-			if (ROLE_USER.equals(RT.getIn(entry, K_ROLE))) {
-				AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
-				return (content != null) ? content.toString() : "(empty)";
-			}
-		}
-		return "(no user message)";
-	}
 }

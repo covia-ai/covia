@@ -1,38 +1,90 @@
 package covia.adapter;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.grid.Status;
 import covia.venue.RequestContext;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
-import dev.langchain4j.data.message.TextContent;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.request.json.JsonArraySchema;
+import dev.langchain4j.model.chat.request.json.JsonBooleanSchema;
+import dev.langchain4j.model.chat.request.json.JsonIntegerSchema;
+import dev.langchain4j.model.chat.request.json.JsonNumberSchema;
+import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
+import dev.langchain4j.model.chat.request.json.JsonSchemaElement;
+import dev.langchain4j.model.chat.request.json.JsonStringSchema;
 import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 
+/**
+ * LLM adapter providing level 3 (single LLM call) operations.
+ *
+ * <h3>Messages-based input (used by agent loop)</h3>
+ * <p>When input contains a {@code messages} array, each entry is a message map:</p>
+ * <ul>
+ *   <li>{@code {role: "system"|"user", content: "..."}}</li>
+ *   <li>{@code {role: "assistant", content: "...", toolCalls?: [{id, name, arguments}]}}</li>
+ *   <li>{@code {role: "tool", id: "...", name: "...", content: "..."}}</li>
+ * </ul>
+ *
+ * <p>Optional {@code tools} array defines available tools:</p>
+ * <pre>{@code [{name: "search", description: "...", parameters: {type: "object", properties: {...}}}]}</pre>
+ *
+ * <p>Output is an assistant message map:</p>
+ * <pre>{@code {role: "assistant", content: "Hello!", toolCalls?: [{id, name, arguments}]}}</pre>
+ *
+ * <h3>Legacy prompt-based input</h3>
+ * <p>When input contains {@code prompt} (string), returns {@code {response: "...", think?: "..."}}.</p>
+ */
 public class LangChainAdapter extends AAdapter {
-	
+
 	/** IO timeout for LLM API calls */
 	private static final Duration IO_TIMEOUT = Duration.ofSeconds(120);
 
 	private static final AString DEFAULT_PROMPT = Strings.create("Say hello in an entertaining way and remind the user that then need to provide a 'prompt' string input");
-	private static final SystemMessage SYSTEM_MESSAGE = SystemMessage.from("You are an AI agent for the Covia platform. Give concise, clear and accurate responses to any user message you receive.");
+	private static final AString DEFAULT_SYSTEM_PROMPT = Strings.create("You are an AI agent for the Covia platform. Give concise, clear and accurate responses to any user message you receive.");
+
+	// Message field keys
+	static final AString K_MESSAGES   = Strings.intern("messages");
+	static final AString K_TOOLS      = Strings.intern("tools");
+	static final AString K_ROLE       = Strings.intern("role");
+	static final AString K_CONTENT    = Strings.intern("content");
+	static final AString K_TOOL_CALLS = Strings.intern("toolCalls");
+	static final AString K_ID         = Strings.intern("id");
+	static final AString K_NAME       = Strings.intern("name");
+	static final AString K_ARGUMENTS  = Strings.intern("arguments");
+	static final AString K_PARAMETERS = Strings.intern("parameters");
+
+	// Role constants
+	static final AString ROLE_SYSTEM    = Strings.intern("system");
+	static final AString ROLE_USER      = Strings.intern("user");
+	static final AString ROLE_ASSISTANT = Strings.intern("assistant");
+	static final AString ROLE_TOOL      = Strings.intern("tool");
 
 	@Override
 	public String getName() {
 		return "langchain";
 	}
-	
+
 	@Override
 	public String getDescription() {
 		return "Connects to LangChain for advanced language model interactions. " +
@@ -45,90 +97,98 @@ public class LangChainAdapter extends AAdapter {
 		installAsset("/asset-examples/qwen.json");
 
 		installAsset("/adapters/langchain/ollama.json");
+		installAsset("/adapters/langchain/chat.json");
 		installAsset("/adapters/langchain/openai.json");
-		installAsset("/adapters/langchain/openai2.json");
 		installAsset("/adapters/langchain/gemini.json");
 		installAsset("/adapters/langchain/deepseek.json");
 	}
-	
+
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-        String subOp = getSubOperation(meta);
-        if (subOp == null) {
-    		return CompletableFuture.completedFuture(
-    			Status.failure("Method not specified. Use 'langchain:ollama:modelName' or 'langchain:openai'")
-    		);
-        }
+		String subOp = getSubOperation(meta);
+		if (subOp == null) {
+			return CompletableFuture.completedFuture(
+				Status.failure("Method not specified. Use 'langchain:ollama:modelName' or 'langchain:openai'")
+			);
+		}
 
-        // subOp may be "ollama:modelName" or "openai" etc.
-        String[] subParts = subOp.split(":", 2);
-        String provider = subParts[0];
+		// subOp may be "ollama:modelName" or "openai" etc.
+		String[] subParts = subOp.split(":", 2);
+		String provider = subParts[0];
 
-        // Extract common parameters
-        AString prompt = RT.ensureString(RT.getIn(input, "prompt"));
-        if (prompt == null) {
-            prompt = DEFAULT_PROMPT;
-        }
-        final AString finalPrompt = prompt;
+		// Get URL parameter
+		AString urlParam = RT.ensureString(RT.getIn(input, "url"));
 
-        // Get URL parameter
-        AString urlParam = RT.ensureString(RT.getIn(input, "url"));
+		// Get model parameter from subParts[1] if provided, otherwise from input
+		String modelName = (subParts.length > 1) ? subParts[1] : null;
+		if (modelName == null) {
+			AString modelParam = RT.ensureString(RT.getIn(input, "model"));
+			modelName = (modelParam != null) ? modelParam.toString() : null;
+		}
+		final String finalModelName = modelName;
 
-        // Get model parameter from subParts[1] if provided, otherwise from input
-        String modelName = (subParts.length > 1) ? subParts[1] : null;
-        if (modelName == null) {
-            AString modelParam = RT.ensureString(RT.getIn(input, "model"));
-            modelName = (modelParam != null) ? modelParam.toString() : null;
-        }
-        final String finalModelName = modelName;
+		// Resolve API key
+		final String apiKey = resolveApiKey(meta, input, ctx);
 
-        // Get system prompt parameter
-        AString systemPromptParam = RT.ensureString(RT.getIn(input, "systemPrompt"));
-        SystemMessage systemMessage = (systemPromptParam != null) ?
-            SystemMessage.from(systemPromptParam.toString()) : SYSTEM_MESSAGE;
+		// Build the ChatModel
+		final ChatModel chatModel = buildProviderModel(provider, finalModelName, apiKey, urlParam);
+		if (chatModel == null) {
+			return CompletableFuture.completedFuture(
+				Status.failure("Unknown provider: '" + provider + "'. Supported: 'ollama', 'openai'")
+			);
+		}
 
-        // Resolve API key: input field → secret store → operation metadata secretKey
-        final String apiKey;
-        {
-            AString apiKeyParam = RT.ensureString(RT.getIn(input, "apiKey"));
-            String resolved = null;
-            if (apiKeyParam != null) {
-                resolved = engine.resolveSecret(apiKeyParam.toString(), ctx);
-                if (resolved == null) resolved = apiKeyParam.toString(); // plaintext fallback
-            }
-            if (resolved == null) {
-                AString secretName = RT.ensureString(RT.getIn(meta, "operation", "secretKey"));
-                if (secretName != null) resolved = engine.resolveSecret(secretName.toString(), ctx);
-            }
-            apiKey = resolved;
-        }
+		// Build messages: either from explicit messages array or from prompt string
+		final AVector<ACell> messages;
+		ACell messagesCell = RT.getIn(input, K_MESSAGES);
+		if (messagesCell instanceof AVector) {
+			@SuppressWarnings("unchecked")
+			AVector<ACell> m = (AVector<ACell>) messagesCell;
+			messages = m;
+		} else {
+			// Convert prompt/systemPrompt to messages
+			AString prompt = RT.ensureString(RT.getIn(input, "prompt"));
+			if (prompt == null) prompt = DEFAULT_PROMPT;
+			AString systemPromptParam = RT.ensureString(RT.getIn(input, "systemPrompt"));
+			AString sysContent = (systemPromptParam != null) ? systemPromptParam : DEFAULT_SYSTEM_PROMPT;
+			messages = Vectors.of(
+				(ACell) Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, sysContent),
+				(ACell) Maps.of(K_ROLE, ROLE_USER, K_CONTENT, prompt)
+			);
+		}
 
-        if ("ollama".equals(provider)) {
-        	return CompletableFuture.supplyAsync(()->{
-        		String baseUrl = (urlParam != null) ? urlParam.toString() : "http://localhost:11434";
-        		String model = (finalModelName != null) ? finalModelName : "qwen";
-        		ChatModel ollamaModel = buildOllamaModel(baseUrl, model, IO_TIMEOUT);
-	        	return processChatRequest(ollamaModel, finalPrompt, systemMessage);
-        	}, VIRTUAL_EXECUTOR);
-        } else if ("openai".equals(provider)) {
-        	return CompletableFuture.supplyAsync(()->{
-        		String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.openai.com/v1";
-        		String model = (finalModelName != null) ? finalModelName : "gpt-3.5-turbo";
-        		ChatModel openaiModel = buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
-	        	return processChatRequest(openaiModel, finalPrompt, systemMessage);
-        	}, VIRTUAL_EXECUTOR);
-        } else {
-    		return CompletableFuture.completedFuture(
-    			Status.failure("Unknown method: '"+provider+"'. Supported methods: 'ollama', 'openai'")
-    		);
-        }
+		@SuppressWarnings("unchecked")
+		AVector<ACell> tools = (AVector<ACell>) ((RT.getIn(input, K_TOOLS) instanceof AVector) ? RT.getIn(input, K_TOOLS) : null);
+
+		// Prompt-based callers expect {response: "..."} output
+		final boolean legacyOutput = !(messagesCell instanceof AVector);
+
+		return CompletableFuture.supplyAsync(() -> {
+			ACell result = callModel(chatModel, messages, tools);
+			if (legacyOutput) {
+				// Wrap assistant message as {response: content}
+				AString content = RT.ensureString(RT.getIn(result, K_CONTENT));
+				return (ACell) Maps.of(Strings.intern("response"), (content != null) ? content : Strings.create(""));
+			}
+			return result;
+		}, VIRTUAL_EXECUTOR);
 	}
 
-	// ========== Reusable model builders ==========
+	// ========== Model construction ==========
 
-	/**
-	 * Builds an Ollama ChatModel.
-	 */
+	private ChatModel buildProviderModel(String provider, String modelName, String apiKey, AString urlParam) {
+		if ("ollama".equals(provider)) {
+			String baseUrl = (urlParam != null) ? urlParam.toString() : "http://localhost:11434";
+			String model = (modelName != null) ? modelName : "qwen";
+			return buildOllamaModel(baseUrl, model, IO_TIMEOUT);
+		} else if ("openai".equals(provider)) {
+			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.openai.com/v1";
+			String model = (modelName != null) ? modelName : "gpt-3.5-turbo";
+			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
+		}
+		return null;
+	}
+
 	static ChatModel buildOllamaModel(String baseUrl, String model, Duration timeout) {
 		return OllamaChatModel.builder()
 			.baseUrl(baseUrl)
@@ -139,9 +199,6 @@ public class LangChainAdapter extends AAdapter {
 			.build();
 	}
 
-	/**
-	 * Builds an OpenAI-compatible ChatModel.
-	 */
 	static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout) {
 		return OpenAiChatModel.builder()
 			.apiKey(apiKey)
@@ -153,26 +210,254 @@ public class LangChainAdapter extends AAdapter {
 			.build();
 	}
 
-	private ACell processChatRequest(ChatModel model, AString prompt, SystemMessage systemMessage) {
-		UserMessage userMessage = UserMessage.from(
-			TextContent.from(prompt.toString())
-		);
-		ChatResponse response = model.chat(systemMessage, userMessage);
-		
-		AiMessage reply = response.aiMessage();
-		String output = reply.text();
-		String think = null;
-		if (output.contains("</think>")) {
-			int split = output.lastIndexOf("</think>");
-			think = output.substring(7, split).trim();
-			output = output.substring(split + 8).trim();
+	// ========== API key resolution ==========
+
+	private String resolveApiKey(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
+		AString apiKeyParam = RT.ensureString(RT.getIn(input, "apiKey"));
+		if (apiKeyParam != null) {
+			String resolved = engine.resolveSecret(apiKeyParam.toString(), ctx);
+			if (resolved != null) return resolved;
+			return apiKeyParam.toString();
 		}
-		AMap<AString, ACell> result = Maps.of(
-			"response", Strings.create(output)
-		);
-		if (think != null) {
-			result = RT.assocIn(result, Strings.create(think), "think");
+		AString secretName = RT.ensureString(RT.getIn(meta, "operation", "secretKey"));
+		if (secretName != null) {
+			return engine.resolveSecret(secretName.toString(), ctx);
+		}
+		return null;
+	}
+
+	// ========== LLM invocation ==========
+
+	/**
+	 * Calls the LLM with messages and optional tool definitions.
+	 * Returns an assistant message map: {role, content?, toolCalls?}.
+	 */
+	private static ACell callModel(ChatModel model, AVector<ACell> messages, AVector<ACell> tools) {
+		List<ChatMessage> chatMessages = toChatMessages(messages);
+
+		ChatResponse response;
+		if (tools != null && tools.count() > 0) {
+			List<ToolSpecification> toolSpecs = toToolSpecifications(tools);
+			ChatRequest request = ChatRequest.builder()
+				.messages(chatMessages)
+				.toolSpecifications(toolSpecs)
+				.build();
+			response = model.chat(request);
+		} else {
+			response = model.chat(chatMessages);
+		}
+
+		return toAssistantMessage(response.aiMessage());
+	}
+
+	// ========== Response conversion ==========
+
+	/**
+	 * Converts a LangChain4j AiMessage to a Convex assistant message map.
+	 */
+	static ACell toAssistantMessage(AiMessage ai) {
+		AMap<AString, ACell> msg = Maps.of(K_ROLE, ROLE_ASSISTANT);
+
+		// Text content (strip <think> tags)
+		String text = ai.text();
+		if (text != null) {
+			text = stripThinkTags(text);
+			msg = msg.assoc(K_CONTENT, Strings.create(text));
+		}
+
+		// Tool calls
+		if (ai.hasToolExecutionRequests()) {
+			AVector<ACell> toolCalls = Vectors.empty();
+			for (ToolExecutionRequest req : ai.toolExecutionRequests()) {
+				AMap<AString, ACell> tc = Maps.of(
+					K_NAME, Strings.create(req.name()),
+					K_ARGUMENTS, Strings.create(req.arguments())
+				);
+				if (req.id() != null) {
+					tc = tc.assoc(K_ID, Strings.create(req.id()));
+				}
+				toolCalls = toolCalls.conj(tc);
+			}
+			msg = msg.assoc(K_TOOL_CALLS, toolCalls);
+		}
+
+		return msg;
+	}
+
+	/**
+	 * Strips {@code <think>...</think>} tags from model output.
+	 */
+	static String stripThinkTags(String text) {
+		if (text == null) return null;
+		if (text.contains("</think>")) {
+			int end = text.lastIndexOf("</think>");
+			text = text.substring(end + 8).trim();
+		}
+		return text;
+	}
+
+	// ========== Message conversion ==========
+
+	/**
+	 * Converts Convex message maps to LangChain4j ChatMessage list.
+	 * Supports all message types: system, user, assistant (with toolCalls), tool.
+	 */
+	@SuppressWarnings("unchecked")
+	static List<ChatMessage> toChatMessages(AVector<ACell> messages) {
+		List<ChatMessage> result = new ArrayList<>();
+		for (long i = 0; i < messages.count(); i++) {
+			ACell entry = messages.get(i);
+			AString role = RT.ensureString(RT.getIn(entry, K_ROLE));
+			if (role == null) continue;
+
+			String roleStr = role.toString();
+			switch (roleStr) {
+				case "system": {
+					AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
+					if (content != null) result.add(SystemMessage.from(content.toString()));
+					break;
+				}
+				case "user": {
+					AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
+					if (content != null) result.add(UserMessage.from(content.toString()));
+					break;
+				}
+				case "assistant": {
+					AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
+					ACell tcCell = RT.getIn(entry, K_TOOL_CALLS);
+					if (tcCell instanceof AVector && ((AVector<ACell>) tcCell).count() > 0) {
+						List<ToolExecutionRequest> reqs = new ArrayList<>();
+						AVector<ACell> toolCalls = (AVector<ACell>) tcCell;
+						for (long j = 0; j < toolCalls.count(); j++) {
+							ACell tc = toolCalls.get(j);
+							AString name = RT.ensureString(RT.getIn(tc, K_NAME));
+							AString args = RT.ensureString(RT.getIn(tc, K_ARGUMENTS));
+							AString id = RT.ensureString(RT.getIn(tc, K_ID));
+							if (name != null) {
+								reqs.add(ToolExecutionRequest.builder()
+									.id(id != null ? id.toString() : null)
+									.name(name.toString())
+									.arguments(args != null ? args.toString() : "{}")
+									.build());
+							}
+						}
+						String text = (content != null) ? content.toString() : null;
+						result.add(new AiMessage(text, reqs));
+					} else if (content != null) {
+						result.add(AiMessage.from(content.toString()));
+					}
+					break;
+				}
+				case "tool": {
+					AString id = RT.ensureString(RT.getIn(entry, K_ID));
+					AString name = RT.ensureString(RT.getIn(entry, K_NAME));
+					AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
+					if (id != null && name != null && content != null) {
+						result.add(new ToolExecutionResultMessage(
+							id.toString(), name.toString(), content.toString()));
+					}
+					break;
+				}
+			}
 		}
 		return result;
+	}
+
+	/**
+	 * Converts Convex tool definition maps to LangChain4j ToolSpecification list.
+	 *
+	 * <p>Tool format: {@code {name, description, parameters?}}. Parameters follow
+	 * JSON Schema: {@code {type: "object", properties: {p: {type, description}}, required: [...]}}.</p>
+	 */
+	static List<ToolSpecification> toToolSpecifications(AVector<ACell> tools) {
+		List<ToolSpecification> specs = new ArrayList<>();
+		for (long i = 0; i < tools.count(); i++) {
+			ACell tool = tools.get(i);
+			AString name = RT.ensureString(RT.getIn(tool, K_NAME));
+			if (name == null) continue;
+			AString desc = RT.ensureString(RT.getIn(tool, Strings.intern("description")));
+
+			ToolSpecification.Builder builder = ToolSpecification.builder()
+				.name(name.toString());
+			if (desc != null) builder.description(desc.toString());
+
+			ACell params = RT.getIn(tool, K_PARAMETERS);
+			if (params instanceof AMap) {
+				@SuppressWarnings("unchecked")
+				JsonObjectSchema schema = toJsonObjectSchema((AMap<AString, ACell>) params);
+				if (schema != null) builder.parameters(schema);
+			}
+
+			specs.add(builder.build());
+		}
+		return specs;
+	}
+
+	// ========== JSON Schema conversion ==========
+
+	/**
+	 * Converts a Convex map representing a JSON Schema object to a JsonObjectSchema.
+	 */
+	@SuppressWarnings("unchecked")
+	static JsonObjectSchema toJsonObjectSchema(AMap<AString, ACell> schema) {
+		ACell propsCell = schema.get(Strings.intern("properties"));
+		if (!(propsCell instanceof AMap)) return null;
+
+		AMap<AString, ACell> properties = (AMap<AString, ACell>) propsCell;
+		JsonObjectSchema.Builder builder = JsonObjectSchema.builder();
+
+		// Add properties
+		properties.forEach((key, value) -> {
+			if (key != null && value instanceof AMap) {
+				JsonSchemaElement element = toSchemaElement((AMap<AString, ACell>) value);
+				if (element != null) {
+					builder.addProperty(key.toString(), element);
+				}
+			}
+		});
+
+		// Required fields
+		ACell reqCell = schema.get(Strings.intern("required"));
+		if (reqCell instanceof AVector) {
+			AVector<ACell> required = (AVector<ACell>) reqCell;
+			List<String> reqList = new ArrayList<>();
+			for (long i = 0; i < required.count(); i++) {
+				AString r = RT.ensureString(required.get(i));
+				if (r != null) reqList.add(r.toString());
+			}
+			if (!reqList.isEmpty()) builder.required(reqList);
+		}
+
+		AString desc = RT.ensureString(schema.get(Strings.intern("description")));
+		if (desc != null) builder.description(desc.toString());
+
+		return builder.build();
+	}
+
+	/**
+	 * Converts a single JSON Schema property map to a JsonSchemaElement.
+	 */
+	private static JsonSchemaElement toSchemaElement(AMap<AString, ACell> prop) {
+		AString type = RT.ensureString(prop.get(Strings.intern("type")));
+		AString desc = RT.ensureString(prop.get(Strings.intern("description")));
+		String typeStr = (type != null) ? type.toString() : "string";
+		String descStr = (desc != null) ? desc.toString() : null;
+
+		switch (typeStr) {
+			case "string":
+				return JsonStringSchema.builder().description(descStr).build();
+			case "number":
+				return JsonNumberSchema.builder().description(descStr).build();
+			case "integer":
+				return JsonIntegerSchema.builder().description(descStr).build();
+			case "boolean":
+				return JsonBooleanSchema.builder().description(descStr).build();
+			case "array":
+				return JsonArraySchema.builder().description(descStr).build();
+			case "object":
+				return toJsonObjectSchema(prop);
+			default:
+				return JsonStringSchema.builder().description(descStr).build();
+		}
 	}
 }

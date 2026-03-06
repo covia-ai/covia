@@ -1,0 +1,33 @@
+{
+	"name": "Test LLM",
+	"description": "Test LLM operation that echoes the last user message. Accepts a messages array and returns an assistant message map. Used for testing the agent loop without a real LLM.",
+	"dateCreated": "2026-03-06T00:00:00Z",
+	"operation": {
+		"adapter": "test:llm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": {
+					"type": "array",
+					"description": "Conversation history as message maps"
+				},
+				"tools": {
+					"type": "array",
+					"description": "Tool definitions (ignored by test provider)"
+				},
+				"model": {
+					"type": "string",
+					"description": "Ignored by test provider"
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"description": "Assistant message: {role: 'assistant', content: string}",
+			"properties": {
+				"role": { "type": "string" },
+				"content": { "type": "string" }
+			}
+		}
+	}
+}
