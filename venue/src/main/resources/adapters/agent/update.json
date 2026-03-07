@@ -1,0 +1,24 @@
+{
+	"name": "Update Agent",
+	"description": "Updates an agent's configuration and/or state. Only 'config' and 'state' fields can be updated — framework-managed fields (status, tasks, inbox, timeline) are not affected. Use this to change the transition operation, system prompt, or any other agent configuration without recreating the agent.",
+	"dateCreated": "2026-03-07T00:00:00Z",
+	"operation": {
+		"adapter": "agent:update",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Agent name to update" },
+				"config": { "type": "object", "description": "New framework configuration (replaces existing config entirely)" },
+				"state": { "description": "New state for the transition function (replaces existing state entirely)" }
+			},
+			"required": ["agentId"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string" },
+				"status": { "type": "string" }
+			}
+		}
+	}
+}

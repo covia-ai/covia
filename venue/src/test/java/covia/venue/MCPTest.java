@@ -10,6 +10,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -362,6 +363,100 @@ public class MCPTest {
 			.build();
 		HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
 		assertEquals(400, resp.statusCode());
+	}
+
+	@Test public void testProtocolVersionNegotiation() throws Exception {
+		// Client requesting an older version should get that version back
+		HttpResponse<String> resp = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1," +
+			"\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}");
+		assertEquals(200, resp.statusCode());
+		assertTrue(resp.body().contains("\"2024-11-05\""), "Server should negotiate down to client version");
+
+		// Client requesting the latest version should get the latest back
+		HttpResponse<String> resp2 = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":2," +
+			"\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}");
+		assertEquals(200, resp2.statusCode());
+		assertTrue(resp2.body().contains("\"2025-06-18\""), "Server should return latest when client supports it");
+
+		// Client requesting a future version should get the server's latest
+		HttpResponse<String> resp3 = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":3," +
+			"\"params\":{\"protocolVersion\":\"2099-01-01\",\"capabilities\":{},\"clientInfo\":{\"name\":\"test\",\"version\":\"1.0\"}}}");
+		assertEquals(200, resp3.statusCode());
+		assertTrue(resp3.body().contains("\"2025-06-18\""), "Server should cap at its latest version");
+
+		// No params at all should return latest version
+		HttpResponse<String> resp4 = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":4}");
+		assertEquals(200, resp4.statusCode());
+		assertTrue(resp4.body().contains("\"2025-06-18\""), "Server should return latest when no version specified");
+	}
+
+	/**
+	 * Validate that all MCP tool schemas conform to JSON Schema draft 2020-12.
+	 * Specifically checks that no schemas use invalid type values like "any"
+	 * or contain non-standard keys like "secret" that strict validators reject.
+	 */
+	@Test public void testToolSchemasValid() {
+		Set<String> VALID_TYPES = Set.of(
+			"null", "boolean", "object", "array", "number", "string", "integer"
+		);
+		Set<String> NON_SCHEMA_KEYS = Set.of("secret", "secretFields");
+
+		for (String adapterName : venue.getAdapterNames()) {
+			var adapter = venue.getAdapter(adapterName);
+			if (adapter == null) continue;
+
+			AVector<AMap<AString, ACell>> tools = mcpApi.listTools(adapter);
+			for (long i = 0; i < tools.count(); i++) {
+				AMap<AString, ACell> tool = tools.get(i);
+				AString toolName = RT.ensureString(tool.get(Fields.NAME));
+
+				@SuppressWarnings("unchecked")
+				AMap<AString, ACell> inputSchema = (AMap<AString, ACell>) tool.get(Fields.INPUT_SCHEMA);
+				assertNotNull(inputSchema, "Tool " + toolName + " should have inputSchema");
+				assertSchemaValid(inputSchema, toolName + ".inputSchema", VALID_TYPES, NON_SCHEMA_KEYS);
+			}
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private void assertSchemaValid(AMap<AString, ACell> schema, String path,
+			Set<String> validTypes, Set<String> nonSchemaKeys) {
+		// Check type value is valid
+		ACell typeVal = schema.get(Fields.TYPE);
+		if (typeVal instanceof AString ts) {
+			assertTrue(validTypes.contains(ts.toString()),
+				path + " has invalid type: \"" + ts + "\"");
+		}
+
+		// Check no non-standard keys
+		for (String key : nonSchemaKeys) {
+			assertFalse(schema.containsKey(Strings.create(key)),
+				path + " contains non-standard key: \"" + key + "\"");
+		}
+
+		// Recurse into properties
+		ACell propsCell = schema.get(Fields.PROPERTIES);
+		if (propsCell instanceof AMap<?,?> props) {
+			long n = props.count();
+			for (long i = 0; i < n; i++) {
+				var entry = props.entryAt(i);
+				if (entry.getValue() instanceof AMap<?,?> propSchema) {
+					assertSchemaValid((AMap<AString, ACell>) propSchema,
+						path + ".properties." + entry.getKey(), validTypes, nonSchemaKeys);
+				}
+			}
+		}
+
+		// Recurse into items
+		ACell itemsCell = schema.get(Fields.ITEMS);
+		if (itemsCell instanceof AMap<?,?> itemsMap) {
+			assertSchemaValid((AMap<AString, ACell>) itemsMap,
+				path + ".items", validTypes, nonSchemaKeys);
+		}
 	}
 
 	@Test public void testWellKnownStructure() throws Exception {

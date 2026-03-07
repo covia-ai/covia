@@ -4,6 +4,7 @@ import static convex.restapi.mcp.McpProtocol.*;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -249,9 +250,11 @@ public class MCP extends ACoviaAPI {
 			AString methodAS = (AString) RT.getIn(request, Fields.METHOD);
 			String method = methodAS.toString().trim();
 
+			ACell params = RT.getIn(request, Fields.PARAMS);
+
 			response = switch (method) {
 				case "initialize" -> protocolResult(Maps.of(
-					"protocolVersion", "2025-06-18",
+					"protocolVersion", negotiateProtocolVersion(params),
 					"capabilities", Maps.of("tools", Maps.empty()),
 					"serverInfo", SERVER_INFO
 				));
@@ -265,6 +268,24 @@ public class MCP extends ACoviaAPI {
 		}
 
 		return maybeAttachId(response, id);
+	}
+
+	private static final String LATEST_PROTOCOL_VERSION = "2025-06-18";
+
+	/**
+	 * Negotiate MCP protocol version. Returns the minimum of the client's requested
+	 * version and the server's latest supported version, so older clients get a
+	 * version they understand.
+	 */
+	private static String negotiateProtocolVersion(ACell params) {
+		ACell clientVersion = RT.getIn(params, "protocolVersion");
+		if (clientVersion instanceof AString cv) {
+			String requested = cv.toString();
+			if (requested.compareTo(LATEST_PROTOCOL_VERSION) < 0) {
+				return requested;
+			}
+		}
+		return LATEST_PROTOCOL_VERSION;
 	}
 
 	/**
@@ -487,7 +508,67 @@ public class MCP extends ACoviaAPI {
 
 	private AMap<AString, ACell> ensureSchema(AMap<AString, ACell> schema) {
 		if (schema == null) schema = Maps.empty();
+		schema = sanitiseSchema(schema);
 		schema = schema.assoc(Fields.TYPE, Fields.OBJECT);
+		return schema;
+	}
+
+	/** Valid JSON Schema draft 2020-12 type values */
+	private static final Set<String> VALID_SCHEMA_TYPES = Set.of(
+		"null", "boolean", "object", "array", "number", "string", "integer"
+	);
+
+	/** Non-standard keys to strip from schemas before exposing via MCP */
+	private static final AString SECRET_KEY = Strings.intern("secret");
+	private static final AString SECRET_FIELDS_KEY = Strings.intern("secretFields");
+
+	/**
+	 * Recursively sanitise a JSON Schema to ensure it conforms to draft 2020-12.
+	 * Removes invalid type values (e.g. "any") and non-standard extension keys
+	 * that strict validators (like the Anthropic API) may reject.
+	 */
+	@SuppressWarnings("unchecked")
+	private AMap<AString, ACell> sanitiseSchema(AMap<AString, ACell> schema) {
+		if (schema == null) return Maps.empty();
+
+		// Remove invalid type values
+		ACell typeVal = schema.get(Fields.TYPE);
+		if (typeVal instanceof AString ts && !VALID_SCHEMA_TYPES.contains(ts.toString())) {
+			schema = schema.dissoc(Fields.TYPE);
+		}
+
+		// Remove non-standard keys
+		schema = schema.dissoc(SECRET_KEY);
+		schema = schema.dissoc(SECRET_FIELDS_KEY);
+
+		// Recurse into properties
+		ACell propsCell = schema.get(Fields.PROPERTIES);
+		if (propsCell instanceof AMap<?,?> props) {
+			AMap<AString, ACell> cleanProps = (AMap<AString, ACell>) props;
+			long n = props.count();
+			for (long i = 0; i < n; i++) {
+				MapEntry<AString, ACell> entry = (MapEntry<AString, ACell>) props.entryAt(i);
+				if (entry.getValue() instanceof AMap<?,?> propSchema) {
+					AMap<AString, ACell> cleaned = sanitiseSchema((AMap<AString, ACell>) propSchema);
+					if (cleaned != propSchema) {
+						cleanProps = cleanProps.assoc(entry.getKey(), cleaned);
+					}
+				}
+			}
+			if (cleanProps != props) {
+				schema = schema.assoc(Fields.PROPERTIES, cleanProps);
+			}
+		}
+
+		// Recurse into items (for array schemas)
+		ACell itemsCell = schema.get(Fields.ITEMS);
+		if (itemsCell instanceof AMap<?,?> itemsMap) {
+			AMap<AString, ACell> cleaned = sanitiseSchema((AMap<AString, ACell>) itemsMap);
+			if (cleaned != itemsMap) {
+				schema = schema.assoc(Fields.ITEMS, cleaned);
+			}
+		}
+
 		return schema;
 	}
 

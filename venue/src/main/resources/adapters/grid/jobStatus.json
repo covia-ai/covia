@@ -40,7 +40,6 @@
 					"format": "int64"
 				},
 				"output": {
-					"type": "any",
 					"description": "Operation output, when available"
 				},
 				"error": {

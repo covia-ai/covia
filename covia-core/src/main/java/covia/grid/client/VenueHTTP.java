@@ -47,7 +47,7 @@ public class VenueHTTP extends Venue {
 	private static final double BACKOFF_FACTOR = 1.5;
 	private static final long INITIAL_POLL_DELAY = 300;
 	private static final long MAX_POLL_DELAY = 10000;
-	private static final long DEFAULT_TIMEOUT = 600000; // 10 minutes, allows for slow LLM responses
+	private static final long DEFAULT_TIMEOUT = 30000; // 30 seconds, allows for slowish LLM responses
 
 	private long timeout=DEFAULT_TIMEOUT;
 	private final HttpClient httpClient;

@@ -18,7 +18,6 @@
 			"required": ["id"]
 		},
 		"output": {
-			"type": "any",
 			"description": "Output value of the referenced job"
 		}
 	}

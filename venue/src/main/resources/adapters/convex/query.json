@@ -34,7 +34,6 @@
 					"description": "Result of the query, as Convex printed data structure."
 				},
 				"value": {
-					"type": "any",
 					"description": "Result of the query, as JSON (some type distinctions may be lost)."
 				}
 			}
