@@ -654,24 +654,15 @@ public class LLMAgentAdapter extends AAdapter {
 
 	/**
 	 * Adds a Job ID to the agent's pending index.
-	 * Serialised via the per-agent lock to avoid lost updates.
 	 */
 	private void addToPending(RequestContext ctx, AString agentId, Blob jobId, ACell snapshot) {
-		AgentAdapter agentAdapter = (AgentAdapter) engine.getAdapter("agent");
-		if (agentAdapter == null) return;
 		try {
-			synchronized (agentAdapter.agentLock(agentId)) {
-				Users users = engine.getVenueState().users();
-				User user = users.get(ctx.getCallerDID());
-				if (user == null) return;
-				AgentState agent = user.agent(agentId);
-				if (agent == null) return;
-				AMap<AString, ACell> record = agent.getRecord();
-				if (record == null) return;
-				@SuppressWarnings("unchecked")
-				convex.core.data.Index<Blob, ACell> pending = agent.getPending();
-				agent.putRecord(record.assoc(AgentState.KEY_PENDING, pending.assoc(jobId, snapshot)));
-			}
+			Users users = engine.getVenueState().users();
+			User user = users.get(ctx.getCallerDID());
+			if (user == null) return;
+			AgentState agent = user.agent(agentId);
+			if (agent == null) return;
+			agent.addPending(jobId, snapshot);
 		} catch (Exception e) {
 			log.warn("Failed to add pending job {} for agent {}", jobId.toHexString(), agentId, e);
 		}

@@ -1,5 +1,7 @@
 package covia.venue;
 
+import java.util.function.UnaryOperator;
+
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -18,15 +20,13 @@ import convex.lattice.cursor.ALatticeCursor;
 /**
  * Cursor wrapper for a single agent's state within a user's lattice.
  *
- * <p>Wraps a lattice cursor at {@code :user-data → <did> → "g" → <agentId>}.
- * The agent's value is a single atomic LWW map — every write replaces the
- * entire map with a new {@code ts}. There are no child lattices.</p>
- *
- * <p>See {@code AGENT_LOOP.md} for the agent record structure and transitions.</p>
+ * <p>All mutations use atomic {@code cursor.updateAndGet} — no external
+ * locking needed. The {@code update} method is private; callers use
+ * named mutation methods that encapsulate the record structure.</p>
  */
 public class AgentState extends ALatticeComponent<ACell> {
 
-	// Agent record field keys
+	// Record field keys
 	private static final AString K_TS       = Strings.intern("ts");
 	private static final AString K_STATUS   = Strings.intern("status");
 	private static final AString K_CONFIG   = Strings.intern("config");
@@ -35,7 +35,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_PENDING  = Strings.intern("pending");
 	private static final AString K_INBOX    = Strings.intern("inbox");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
-	private static final AString K_CAPS     = Strings.intern("caps");
 	private static final AString K_ERROR    = Strings.intern("error");
 	private static final AString K_WAKE     = Strings.intern("wake");
 
@@ -45,6 +44,17 @@ public class AgentState extends ALatticeComponent<ACell> {
 	public static final AString SUSPENDED  = Strings.intern("SUSPENDED");
 	public static final AString TERMINATED = Strings.intern("TERMINATED");
 
+	// Public key constants (for transition input/output field names)
+	public static final AString KEY_STATE    = K_STATE;
+	public static final AString KEY_STATUS   = K_STATUS;
+	public static final AString KEY_CONFIG   = K_CONFIG;
+	public static final AString KEY_TASKS    = K_TASKS;
+	public static final AString KEY_PENDING  = K_PENDING;
+	public static final AString KEY_INBOX    = K_INBOX;
+	public static final AString KEY_TIMELINE = K_TIMELINE;
+	public static final AString KEY_ERROR    = K_ERROR;
+	public static final AString KEY_WAKE     = K_WAKE;
+
 	private final AString agentId;
 
 	AgentState(ALatticeCursor<ACell> cursor, AString agentId) {
@@ -52,51 +62,51 @@ public class AgentState extends ALatticeComponent<ACell> {
 		this.agentId = agentId;
 	}
 
-	/**
-	 * Gets the agent's ID string.
-	 */
-	public AString getAgentId() {
-		return agentId;
-	}
+	public AString getAgentId() { return agentId; }
 
-	/**
-	 * Checks whether this agent has been initialised in the lattice.
-	 */
-	public boolean exists() {
-		return cursor.get() != null;
-	}
+	public boolean exists() { return cursor.get() != null; }
 
-	// ========== Atomic record access ==========
+	// ========== Record access ==========
 
-	/**
-	 * Gets the full agent record as a map.
-	 *
-	 * @return Agent record, or null if not initialised
-	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getRecord() {
 		ACell v = cursor.get();
 		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
 	}
 
-	/**
-	 * Atomically replaces the entire agent record. Sets {@code ts} to now.
-	 *
-	 * @param record The new agent record
-	 */
+	/** Replaces the entire record. Use for initialisation only. */
 	public void putRecord(AMap<AString, ACell> record) {
-		record = record.assoc(K_TS, CVMLong.create(Utils.getCurrentTimestamp()));
-		cursor.set(record);
+		cursor.set(record.assoc(K_TS, CVMLong.create(Utils.getCurrentTimestamp())));
+	}
+
+	// ========== Atomic update (private) ==========
+
+	@SuppressWarnings("unchecked")
+	private AMap<AString, ACell> update(UnaryOperator<AMap<AString, ACell>> fn) {
+		ACell result = cursor.updateAndGet(current -> {
+			if (!(current instanceof AMap)) return current;
+			AMap<AString, ACell> r = (AMap<AString, ACell>) current;
+			AMap<AString, ACell> updated = fn.apply(r);
+			if (updated == r) return r;
+			return updated.assoc(K_TS, CVMLong.create(Utils.getCurrentTimestamp()));
+		});
+		return (result instanceof AMap) ? (AMap<AString, ACell>) result : null;
+	}
+
+	@SuppressWarnings("unchecked")
+	private AMap<AString, ACell> getAndUpdate(UnaryOperator<AMap<AString, ACell>> fn) {
+		ACell old = cursor.getAndUpdate(current -> {
+			if (!(current instanceof AMap)) return current;
+			AMap<AString, ACell> r = (AMap<AString, ACell>) current;
+			AMap<AString, ACell> updated = fn.apply(r);
+			if (updated == r) return r;
+			return updated.assoc(K_TS, CVMLong.create(Utils.getCurrentTimestamp()));
+		});
+		return (old instanceof AMap) ? (AMap<AString, ACell>) old : null;
 	}
 
 	// ========== Initialisation ==========
 
-	/**
-	 * Initialises this agent with the given config and optional initial state.
-	 *
-	 * @param config Optional framework configuration map, may be null
-	 * @param initialState Optional initial state for the transition function, may be null
-	 */
 	public void initialise(AMap<AString, ACell> config, ACell initialState) {
 		if (exists()) return;
 		AMap<AString, ACell> record = Maps.of(
@@ -104,237 +114,264 @@ public class AgentState extends ALatticeComponent<ACell> {
 			K_TASKS, Index.none(),
 			K_PENDING, Index.none(),
 			K_INBOX, Vectors.empty(),
-			K_TIMELINE, Vectors.empty()
-		);
-		if (config != null) {
-			record = record.assoc(K_CONFIG, config);
-		}
-		if (initialState != null) {
-			record = record.assoc(K_STATE, initialState);
-		}
+			K_TIMELINE, Vectors.empty());
+		if (config != null) record = record.assoc(K_CONFIG, config);
+		if (initialState != null) record = record.assoc(K_STATE, initialState);
 		putRecord(record);
 	}
 
-	// ========== Convenience field accessors ==========
+	// ========== Read accessors ==========
 
-	/**
-	 * Gets the agent's current status.
-	 */
 	public AString getStatus() {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return null;
-		return RT.ensureString(record.get(K_STATUS));
+		AMap<AString, ACell> r = getRecord();
+		return (r != null) ? RT.ensureString(r.get(K_STATUS)) : null;
 	}
 
-	/**
-	 * Gets the agent's configuration map.
-	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getConfig() {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return null;
-		ACell v = record.get(K_CONFIG);
+		AMap<AString, ACell> r = getRecord();
+		if (r == null) return null;
+		ACell v = r.get(K_CONFIG);
 		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
 	}
 
-	/**
-	 * Gets the agent's user-defined state (opaque to framework).
-	 */
 	public ACell getState() {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return null;
-		return record.get(K_STATE);
+		AMap<AString, ACell> r = getRecord();
+		return (r != null) ? r.get(K_STATE) : null;
 	}
 
-	/**
-	 * Gets the agent's inbox as a vector.
-	 */
 	@SuppressWarnings("unchecked")
 	public AVector<ACell> getInbox() {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return null;
-		ACell v = record.get(K_INBOX);
+		AMap<AString, ACell> r = getRecord();
+		if (r == null) return null;
+		ACell v = r.get(K_INBOX);
 		return (v instanceof AVector) ? (AVector<ACell>) v : null;
 	}
 
-	/**
-	 * Gets the agent's timeline as a vector.
-	 */
 	@SuppressWarnings("unchecked")
 	public AVector<ACell> getTimeline() {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return null;
-		ACell v = record.get(K_TIMELINE);
+		AMap<AString, ACell> r = getRecord();
+		if (r == null) return null;
+		ACell v = r.get(K_TIMELINE);
 		return (v instanceof AVector) ? (AVector<ACell>) v : null;
 	}
 
-	/**
-	 * Gets the agent's last error.
-	 */
-	public AString getError() {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return null;
-		return RT.ensureString(record.get(K_ERROR));
-	}
-
-	/**
-	 * Gets the agent's ts (last write timestamp).
-	 */
-	public long getTs() {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return 0;
-		ACell v = record.get(K_TS);
-		return (v instanceof CVMLong l) ? l.longValue() : 0;
-	}
-
-	// ========== Atomic record mutations ==========
-
-	/**
-	 * Sets the agent's status. Atomic read-modify-write.
-	 */
-	public void setStatus(AString status) {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return;
-		putRecord(record.assoc(K_STATUS, status));
-	}
-
-	/**
-	 * Sets the agent's error. Atomic read-modify-write.
-	 */
-	public void setError(AString error) {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return;
-		putRecord(record.assoc(K_ERROR, error));
-	}
-
-	/**
-	 * Clears the agent's error. Atomic read-modify-write.
-	 */
-	public void clearError() {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return;
-		putRecord(record.dissoc(K_ERROR));
-	}
-
-	/**
-	 * Sets the agent's configuration. Atomic read-modify-write.
-	 */
-	public void setConfig(AMap<AString, ACell> config) {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return;
-		putRecord(record.assoc(K_CONFIG, config));
-	}
-
-	/**
-	 * Appends a message to the agent's inbox. Atomic read-modify-write.
-	 */
-	public void deliverMessage(ACell message) {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return;
-		AVector<ACell> inbox = getInbox();
-		if (inbox == null) inbox = Vectors.empty();
-		putRecord(record.assoc(K_INBOX, inbox.conj(message)));
-	}
-
-	/**
-	 * Gets the agent's inbound task Job IDs as an Index (sorted by Job ID).
-	 */
 	@SuppressWarnings("unchecked")
 	public Index<Blob, ACell> getTasks() {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return Index.none();
-		ACell v = record.get(K_TASKS);
+		AMap<AString, ACell> r = getRecord();
+		if (r == null) return Index.none();
+		ACell v = r.get(K_TASKS);
 		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
 	}
 
-	/**
-	 * Gets the agent's outbound pending Job IDs as an Index (sorted by Job ID).
-	 */
 	@SuppressWarnings("unchecked")
 	public Index<Blob, ACell> getPending() {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return Index.none();
-		ACell v = record.get(K_PENDING);
+		AMap<AString, ACell> r = getRecord();
+		if (r == null) return Index.none();
+		ACell v = r.get(K_PENDING);
 		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
 	}
 
-	/**
-	 * Adds a task Job ID to the agent's tasks with an initial snapshot.
-	 * Atomic read-modify-write.
-	 *
-	 * <p>The snapshot captures the full job status record at assignment time.
-	 * It serves as a quick reference and a durable fallback if the Job is
-	 * unavailable (e.g. after catastrophic failure).</p>
-	 *
-	 * <p><b>Invariant:</b> callers must ensure that {@code jobId} corresponds to
-	 * a real Job in STARTED state awaiting completion. Only
-	 * {@code AgentAdapter.handleRequest} should call this in production.</p>
-	 */
-	public void addTask(Blob jobId, ACell snapshot) {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return;
-		Index<Blob, ACell> tasks = getTasks();
-		putRecord(record.assoc(K_TASKS, tasks.assoc(jobId, snapshot)));
+	public AString getError() {
+		AMap<AString, ACell> r = getRecord();
+		return (r != null) ? RT.ensureString(r.get(K_ERROR)) : null;
 	}
 
-	// ========== Wake flag ==========
-
-	/**
-	 * Sets the wake time on the agent record. The agent should run when
-	 * {@code now >= wakeTime}. Use {@code Utils.getCurrentTimestamp()} for
-	 * immediate wake, or a future timestamp for deferred/scheduled wake.
-	 *
-	 * <p>Uses min(existing, new) so an earlier wake always wins — a later
-	 * event can never delay an already-requested wake.</p>
-	 *
-	 * <p>Called unconditionally when new work arrives (message, task, async
-	 * completion) regardless of agent status. The run loop checks and clears
-	 * this at merge time.</p>
-	 *
-	 * @param wakeTime Timestamp (millis since epoch) when the agent should wake,
-	 *                 or 0 to clear.
-	 */
-	public void setWakeTime(long wakeTime) {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return;
-		if (wakeTime > 0) {
-			long existing = getWakeTime();
-			long effective = (existing > 0) ? Math.min(existing, wakeTime) : wakeTime;
-			putRecord(record.assoc(K_WAKE, CVMLong.create(effective)));
-		} else {
-			putRecord(record.dissoc(K_WAKE));
-		}
-	}
-
-	/**
-	 * Gets the wake time, or 0 if no wake is scheduled.
-	 */
-	public long getWakeTime() {
-		AMap<AString, ACell> record = getRecord();
-		if (record == null) return 0;
-		ACell v = record.get(K_WAKE);
+	public long getTs() {
+		AMap<AString, ACell> r = getRecord();
+		if (r == null) return 0;
+		ACell v = r.get(K_TS);
 		return (v instanceof CVMLong l) ? l.longValue() : 0;
 	}
 
-	/**
-	 * Checks whether the agent should wake now ({@code wakeTime > 0 && now >= wakeTime}).
-	 */
+	public long getWakeTime() {
+		AMap<AString, ACell> r = getRecord();
+		if (r == null) return 0;
+		ACell v = r.get(K_WAKE);
+		return (v instanceof CVMLong l) ? l.longValue() : 0;
+	}
+
 	public boolean shouldWake() {
 		long wt = getWakeTime();
 		return wt > 0 && Utils.getCurrentTimestamp() >= wt;
 	}
 
-	// ========== Key constants for external use ==========
+	// ========== Simple mutations ==========
 
-	public static final AString KEY_TS       = Strings.intern("ts");
-	public static final AString KEY_STATUS   = Strings.intern("status");
-	public static final AString KEY_CONFIG   = Strings.intern("config");
-	public static final AString KEY_STATE    = Strings.intern("state");
-	public static final AString KEY_TASKS    = Strings.intern("tasks");
-	public static final AString KEY_PENDING  = Strings.intern("pending");
-	public static final AString KEY_INBOX    = Strings.intern("inbox");
-	public static final AString KEY_TIMELINE = Strings.intern("timeline");
-	public static final AString KEY_CAPS     = Strings.intern("caps");
-	public static final AString KEY_ERROR    = Strings.intern("error");
-	public static final AString KEY_WAKE     = Strings.intern("wake");
+	public void setStatus(AString status) {
+		update(r -> r.assoc(K_STATUS, status));
+	}
+
+	public void setError(AString error) {
+		update(r -> r.assoc(K_ERROR, error));
+	}
+
+	public void clearError() {
+		update(r -> r.dissoc(K_ERROR));
+	}
+
+	public void deliverMessage(ACell message) {
+		update(r -> {
+			@SuppressWarnings("unchecked")
+			AVector<ACell> inbox = extractInbox(r);
+			return r.assoc(K_INBOX, inbox.conj(message));
+		});
+	}
+
+	public void addTask(Blob taskId, ACell taskData) {
+		update(r -> r.assoc(K_TASKS, extractTasks(r).assoc(taskId, taskData)));
+	}
+
+	public void addPending(Blob jobId, ACell snapshot) {
+		update(r -> r.assoc(K_PENDING, extractPending(r).assoc(jobId, snapshot)));
+	}
+
+	/** Sets wake time using min semantics — an earlier wake always wins. */
+	public void setWakeTime(long wakeTime) {
+		if (wakeTime <= 0) {
+			update(r -> r.dissoc(K_WAKE));
+		} else {
+			update(r -> {
+				ACell v = r.get(K_WAKE);
+				long existing = (v instanceof CVMLong l) ? l.longValue() : 0;
+				long effective = (existing > 0) ? Math.min(existing, wakeTime) : wakeTime;
+				return r.assoc(K_WAKE, CVMLong.create(effective));
+			});
+		}
+	}
+
+	// ========== CAS operations ==========
+
+	/** Atomic CAS: SLEEPING → RUNNING. Returns true if this call won. */
+	public boolean tryStartRunning() {
+		AMap<AString, ACell> before = getAndUpdate(r ->
+			SLEEPING.equals(RT.ensureString(r.get(K_STATUS)))
+				? r.assoc(K_STATUS, RUNNING) : r);
+		return SLEEPING.equals(RT.ensureString(before.get(K_STATUS)));
+	}
+
+	/** Atomic CAS: SUSPENDED → SLEEPING, clear error. Returns true if resumed. */
+	public boolean tryResume() {
+		AMap<AString, ACell> before = getAndUpdate(r ->
+			SUSPENDED.equals(RT.ensureString(r.get(K_STATUS)))
+				? r.assoc(K_STATUS, SLEEPING).dissoc(K_ERROR) : r);
+		return SUSPENDED.equals(RT.ensureString(before.get(K_STATUS)));
+	}
+
+	/** Sets SUSPENDED status with error message. */
+	public void suspend(AString error) {
+		update(r -> r.assoc(K_ERROR, error).assoc(K_STATUS, SUSPENDED));
+	}
+
+	/** Sets SLEEPING status and clears wake. */
+	public void sleep() {
+		update(r -> r.assoc(K_STATUS, SLEEPING).dissoc(K_WAKE));
+	}
+
+	/** Updates config and/or state fields. */
+	public void updateConfigAndState(AMap<AString, ACell> config, ACell state) {
+		update(r -> {
+			AMap<AString, ACell> u = r;
+			if (config != null) u = u.assoc(K_CONFIG, config);
+			if (state != null) u = u.assoc(K_STATE, state);
+			return u;
+		});
+	}
+
+	// ========== Run loop merge ==========
+
+	/**
+	 * Atomically merges run loop results into the agent record.
+	 *
+	 * <p>Reconciles concurrent modifications: preserves messages and tasks
+	 * added during the transition. Determines whether new work arrived
+	 * and sets status to RUNNING or SLEEPING accordingly.</p>
+	 *
+	 * @return The new record (check status to determine if loop should continue)
+	 */
+	public AMap<AString, ACell> mergeRunResult(
+			ACell newState, long processedMsgCount,
+			Index<Blob, ACell> presentedTasks,
+			AMap<AString, ACell> taskResults,
+			AMap<AString, ACell> timelineEntry) {
+		return update(r -> {
+			// Preserve messages added during transition
+			AVector<ACell> currentInbox = extractInbox(r);
+			AVector<ACell> remainingInbox = Vectors.empty();
+			for (long i = processedMsgCount; i < currentInbox.count(); i++) {
+				remainingInbox = remainingInbox.conj(currentInbox.get(i));
+			}
+
+			// Remove completed tasks, detect new ones
+			Index<Blob, ACell> currentTasks = extractTasks(r);
+			Index<Blob, ACell> remainingTasks = removeCompletedTasks(currentTasks, taskResults);
+
+			boolean hasNew = shouldWakeFromRecord(r)
+				|| remainingInbox.count() > 0
+				|| hasNewTasksNotIn(remainingTasks, presentedTasks);
+
+			AVector<ACell> timeline = extractTimeline(r);
+
+			return r
+				.assoc(K_STATE, newState)
+				.assoc(K_TASKS, remainingTasks)
+				.assoc(K_INBOX, remainingInbox)
+				.assoc(K_TIMELINE, timeline.conj(timelineEntry))
+				.assoc(K_STATUS, hasNew ? RUNNING : SLEEPING)
+				.dissoc(K_ERROR)
+				.dissoc(K_WAKE);
+		});
+	}
+
+	// ========== Private helpers ==========
+
+	@SuppressWarnings("unchecked")
+	private static AVector<ACell> extractInbox(AMap<AString, ACell> r) {
+		ACell v = r.get(K_INBOX);
+		return (v instanceof AVector) ? (AVector<ACell>) v : Vectors.empty();
+	}
+
+	@SuppressWarnings("unchecked")
+	private static Index<Blob, ACell> extractTasks(AMap<AString, ACell> r) {
+		ACell v = r.get(K_TASKS);
+		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
+	}
+
+	@SuppressWarnings("unchecked")
+	private static Index<Blob, ACell> extractPending(AMap<AString, ACell> r) {
+		ACell v = r.get(K_PENDING);
+		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AVector<ACell> extractTimeline(AMap<AString, ACell> r) {
+		ACell v = r.get(K_TIMELINE);
+		return (v instanceof AVector) ? (AVector<ACell>) v : Vectors.empty();
+	}
+
+	private static boolean shouldWakeFromRecord(AMap<AString, ACell> r) {
+		ACell v = r.get(K_WAKE);
+		if (!(v instanceof CVMLong l)) return false;
+		return l.longValue() > 0 && Utils.getCurrentTimestamp() >= l.longValue();
+	}
+
+	private static Index<Blob, ACell> removeCompletedTasks(
+			Index<Blob, ACell> tasks, AMap<AString, ACell> taskResults) {
+		if (taskResults == null || tasks == null) return (tasks != null) ? tasks : Index.none();
+		Index<Blob, ACell> remaining = tasks;
+		for (var entry : tasks.entrySet()) {
+			AString hex = Strings.create(entry.getKey().toHexString());
+			if (taskResults.get(hex) != null) remaining = remaining.dissoc(entry.getKey());
+		}
+		return remaining;
+	}
+
+	private static boolean hasNewTasksNotIn(Index<Blob, ACell> current, Index<Blob, ACell> presented) {
+		if (current == null || current.count() == 0) return false;
+		if (presented == null) return current.count() > 0;
+		for (var entry : current.entrySet()) {
+			if (presented.get(entry.getKey()) == null) return true;
+		}
+		return false;
+	}
 }

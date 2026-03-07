@@ -1,6 +1,6 @@
 {
 	"name": "Request Agent Task",
-	"description": "Submits a persistent task to an agent. Creates a Job that the agent will complete or reject during a future run. Returns the Job ID for tracking progress. This is the primary way to interact with agents via MCP.",
+	"description": "Submits a persistent task to an agent. Creates a Job that the agent will complete or reject during a future run. Returns the Job ID for tracking progress. This is the primary way to interact with agents via MCP. By default returns immediately (async); set wait=true to block until the agent completes the task.",
 	"dateCreated": "2026-03-06T00:00:00Z",
 	"operation": {
 		"adapter": "agent:request",
@@ -8,15 +8,19 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Target agent name" },
-				"input": { "description": "Request input data (any JSON value)" }
+				"input": { "description": "Request input data (any JSON value)" },
+				"wait": { "description": "Wait for agent to complete the task. false/absent = return immediately (async). true = block indefinitely. Integer = timeout in milliseconds, returns current status on timeout." }
 			},
 			"required": ["agentId"]
 		},
 		"output": {
 			"type": "object",
+			"description": "Job status object for the task. Same shape as grid:invoke output.",
 			"properties": {
-				"agentId": { "type": "string" },
-				"jobId": { "type": "string", "description": "Job ID for tracking task progress" }
+				"id": { "type": "string", "description": "Task Job ID" },
+				"status": { "type": "string", "description": "Job status (e.g. STARTED, COMPLETE, FAILED)" },
+				"created": { "type": "integer", "description": "Timestamp when the task was created" },
+				"output": { "description": "Task output, present when status is COMPLETE and wait=true" }
 			}
 		}
 	}

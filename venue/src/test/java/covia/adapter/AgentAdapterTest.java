@@ -13,6 +13,7 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -377,19 +378,18 @@ public class AgentAdapterTest {
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Submit a request — the job should NOT complete immediately
+		// Submit a request with wait — blocks until agent completes the task
 		Job requestJob = engine.jobs().invokeOperation(
 			"agent:request",
-			Maps.of(Fields.AGENT_ID, "task-agent", Fields.INPUT, Maps.of("question", "What is 2+2?")),
+			Maps.of(Fields.AGENT_ID, "task-agent", Fields.INPUT, Maps.of("question", "What is 2+2?"),
+				Fields.WAIT, CVMLong.create(5000)),
 			RequestContext.of(ALICE_DID));
 
-		// The task should be in the agent's tasks queue
+		ACell result = requestJob.awaitResult(5000);
+		assertNotNull(result, "Request should be completed by the agent");
+
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("task-agent");
-
-		// Wait for the scheduled run to complete the task
-		ACell result = requestJob.awaitResult(5000);
-		assertNotNull(result, "Request should eventually be completed by the agent");
 
 		// Task should be removed from tasks after completion
 		assertEquals(0, agent.getTasks().count(), "Tasks should be empty after completion");
@@ -405,19 +405,47 @@ public class AgentAdapterTest {
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Submit a request
+		// Submit a request with wait=true (indefinite)
 		Job requestJob = engine.jobs().invokeOperation(
 			"agent:request",
-			Maps.of(Fields.AGENT_ID, "completing-agent", Fields.INPUT, Maps.of("data", "hello")),
+			Maps.of(Fields.AGENT_ID, "completing-agent", Fields.INPUT, Maps.of("data", "hello"),
+				Fields.WAIT, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
 
 		// Wait for completion
 		ACell result = requestJob.awaitResult(5000);
 		assertNotNull(result);
 
-		// The output should contain what test:taskcomplete returns
-		ACell completed = RT.getIn(result, "completed");
+		// Result is the task job data; its output should contain what test:taskcomplete returns
+		ACell completed = RT.getIn(result, Fields.OUTPUT, "completed");
 		assertNotNull(completed, "Task output should contain 'completed' from test:taskcomplete");
+	}
+
+	@Test
+	public void testRequestAsync() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "async-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Submit without wait — should return immediately with task job status
+		Job requestJob = engine.jobs().invokeOperation(
+			"agent:request",
+			Maps.of(Fields.AGENT_ID, "async-agent", Fields.INPUT, Maps.of("data", "async")),
+			RequestContext.of(ALICE_DID));
+
+		ACell result = requestJob.awaitResult(5000);
+		assertNotNull(result, "Async request should complete immediately");
+		assertTrue(requestJob.isComplete(), "Request job should be COMPLETE");
+
+		// Result is the task job data — status may be STARTED (agent hasn't run yet)
+		ACell taskStatus = RT.getIn(result, Fields.STATUS);
+		assertNotNull(taskStatus, "Result should contain task job status");
+		ACell taskId = RT.getIn(result, Fields.ID);
+		assertNotNull(taskId, "Result should contain task job ID");
 	}
 
 	@Test
@@ -470,7 +498,8 @@ public class AgentAdapterTest {
 
 		Job requestJob = engine.jobs().invokeOperation(
 			"agent:request",
-			Maps.of(Fields.AGENT_ID, "timeline-agent", Fields.INPUT, Maps.of("task", "audit")),
+			Maps.of(Fields.AGENT_ID, "timeline-agent", Fields.INPUT, Maps.of("task", "audit"),
+				Fields.WAIT, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
 		requestJob.awaitResult(5000);
 
@@ -497,15 +526,17 @@ public class AgentAdapterTest {
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Submit two requests
+		// Submit two requests with wait
 		Job req1 = engine.jobs().invokeOperation(
 			"agent:request",
-			Maps.of(Fields.AGENT_ID, "multi-agent", Fields.INPUT, Maps.of("n", "1")),
+			Maps.of(Fields.AGENT_ID, "multi-agent", Fields.INPUT, Maps.of("n", "1"),
+				Fields.WAIT, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
 
 		Job req2 = engine.jobs().invokeOperation(
 			"agent:request",
-			Maps.of(Fields.AGENT_ID, "multi-agent", Fields.INPUT, Maps.of("n", "2")),
+			Maps.of(Fields.AGENT_ID, "multi-agent", Fields.INPUT, Maps.of("n", "2"),
+				Fields.WAIT, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
 
 		// Both should complete eventually
