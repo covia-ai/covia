@@ -11,21 +11,23 @@ import covia.venue.server.VenueServer;
 
 public class TestServer {
 
-	public static final int PORT=8099;
-	public static final String BASE_URL="http://localhost:"+PORT;
-	
+	public static final int PORT;
+	public static final String BASE_URL;
+
 	public static final VenueServer SERVER;
 	public static final Engine ENGINE;
 	public static final VenueHTTP COVIA;
-	
+
 	static {
 		SERVER=VenueServer.launch(Maps.of(
-				Strings.create("port"),PORT,
+				Strings.create("port"),0, // ephemeral port
 				Fields.MCP,Maps.of(),
 				Fields.A2A,Maps.of(),
 				Config.AUTH,Maps.of(
 					Config.PUBLIC,Maps.of(Config.ENABLED,true)
 				)));
+		PORT=SERVER.port();
+		BASE_URL="http://localhost:"+PORT;
 		ENGINE=SERVER.getEngine();
 
 		// Allow localhost for HTTP adapter tests (SSRF protection blocks it by default)

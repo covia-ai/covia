@@ -157,6 +157,15 @@ public class VenueServer {
 	}
 	
 	/**
+	 * Get the actual port the server is listening on.
+	 * Useful when launched with port 0 (ephemeral port).
+	 * @return Bound port number
+	 */
+	public int port() {
+		return javalin.port();
+	}
+
+	/**
 	 * Get the Engine instance for this venue server
 	 * @return Engine instance
 	 */
