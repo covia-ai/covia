@@ -1,6 +1,6 @@
 {
 	"name": "Read Lattice Data",
-	"description": "Reads a value from the user's lattice namespace at the given path. Paths use '/' separators (e.g. 'g/my-agent/state', 'g/my-agent/timeline/3', 's/my-secret'). Namespaces: 'g' = agents, 's' = secrets, 'j' = jobs. Returns the value at that path, or null if not found.",
+	"description": "Reads a value from the user's lattice namespace at the given path. Paths use '/' separators (e.g. 'g/my-agent/state', 'g/my-agent/timeline/3', 's/my-secret'). Namespaces: 'g' = agents, 's' = secrets, 'j' = jobs. Path can also be a JSON array for pre-typed keys (e.g. ['g', 'my-agent', 'timeline', 3]). Returns {exists: true, value: <data>} when path has data, or {exists: false, value: null} when path has no data or is invalid.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "covia:read",
@@ -15,7 +15,11 @@
 			"required": ["path"]
 		},
 		"output": {
-			"description": "The value at the given path, or null if not found"
+			"type": "object",
+			"properties": {
+				"exists": { "type": "boolean", "description": "True if data exists at this path" },
+				"value": { "description": "The value at the path, or null if not found" }
+			}
 		}
 	}
 }

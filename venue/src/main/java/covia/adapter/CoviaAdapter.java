@@ -7,10 +7,13 @@ import convex.core.data.ACountable;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.ASet;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
+import convex.core.data.type.Types;
 import convex.core.lang.RT;
 import convex.lattice.ALattice;
 import convex.lattice.cursor.ALatticeCursor;
@@ -54,8 +57,12 @@ import covia.venue.Users;
  */
 public class CoviaAdapter extends AAdapter {
 
-	private static final AString K_KEYS  = Strings.intern("keys");
-	private static final AString K_COUNT = Strings.intern("count");
+	private static final AString K_KEYS   = Strings.intern("keys");
+	private static final AString K_COUNT  = Strings.intern("count");
+	private static final AString K_TYPE   = Strings.intern("type");
+	private static final AString K_VALUE  = Strings.intern("value");
+	private static final AString K_VALUES = Strings.intern("values");
+	private static final AString K_EXISTS = Strings.intern("exists");
 
 	@Override
 	public String getName() {
@@ -96,77 +103,154 @@ public class CoviaAdapter extends AAdapter {
 	 * the key appropriate to its type (e.g. {@code "g"} → {@code :g} in a
 	 * KeyedLattice). The resolved keys are then used to navigate the cursor
 	 * and read the value.</p>
+	 *
+	 * <p>Response always includes {@code exists} (boolean) and {@code value}:</p>
+	 * <ul>
+	 *   <li>{@code {exists: true, value: <value>}} — path has data</li>
+	 *   <li>{@code {exists: false, value: null}} — path is valid in the lattice
+	 *       schema but has no data, OR the path is structurally invalid (e.g.
+	 *       unrecognised key at a KeyedLattice level), OR the user has no state</li>
+	 * </ul>
 	 */
 	private ACell handleRead(RequestContext ctx, ACell input) {
 		ACell pathCell = RT.getIn(input, Fields.PATH);
 		ACell[] jsonKeys = parsePath(pathCell);
 
 		ALatticeCursor<ACell> cursor = getUserCursor(ctx);
-		if (cursor == null) return null;
-		if (jsonKeys.length == 0) return cursor.get();
+		if (cursor == null) return result(null);
+		if (jsonKeys.length == 0) return result(cursor.get());
 
 		// Ask the lattice to translate JSON keys → CVM keys level by level.
-		// Returns null if any key can't be resolved at its lattice level.
+		// Returns null if any key can't be resolved at its lattice level
+		// (e.g. a KeyedLattice with fixed children rejects unknown keys).
+		// A StringKeyedLattice accepts any string key, so resolvePath succeeds
+		// even for non-existent data — the null check on the value handles that.
 		ACell[] resolved = cursor.getLattice().resolvePath(jsonKeys);
-		if (resolved == null) return null;
+		if (resolved == null) return result(null);
 
-		return cursor.path(resolved).get();
+		return result(cursor.path(resolved).get());
+	}
+
+	/** Wraps a value with an exists flag. Null value → exists: false. */
+	private static ACell result(ACell value) {
+		return Maps.of(
+			K_EXISTS, CVMBool.of(value != null),
+			K_VALUE, value);
 	}
 
 	/**
-	 * Lists the keys at a path in the user's lattice, with optional pagination.
+	 * Describes the structure at a path in the user's lattice.
 	 *
-	 * <p>Navigates to the target value (same resolution as read), then extracts
-	 * its keys. Map keys are converted back to JSON-friendly form via
-	 * {@link ALattice#toJSONKey} (Keywords → strings, Blobs → hex strings).
-	 * Countable values (vectors, sequences) return integer indices.</p>
+	 * <p>Returns a structured description of whatever value lives at the path:</p>
+	 * <ul>
+	 *   <li><b>Maps:</b> {@code {type: "map", count: 5, keys: ["status", "config", ...]}}
+	 *       — keys converted to JSON-friendly form via {@link ALattice#toJSONKey}</li>
+	 *   <li><b>Vectors/sequences:</b> {@code {type: "vector", count: 42}} — no keys,
+	 *       use integer indices with {@code covia:read} to access elements</li>
+	 *   <li><b>Scalars:</b> {@code {type: "string"}} or {@code {type: "long"}} etc.</li>
+	 *   <li><b>Null/missing:</b> {@code {type: "null"}}</li>
+	 * </ul>
 	 *
-	 * @return {@code {keys: [...], count: N}} where count is the total before pagination
+	 * <p>For maps with many keys, pagination is supported via {@code limit} (default
+	 * 1000) and {@code offset}. When keys are truncated, {@code offset} is included
+	 * in the response so the caller knows where to continue.</p>
 	 */
 	private ACell handleList(RequestContext ctx, ACell input) {
 		ACell pathCell = RT.getIn(input, Fields.PATH);
 		ACell[] jsonKeys = parsePath(pathCell);
 
 		ALatticeCursor<ACell> cursor = getUserCursor(ctx);
-		if (cursor == null) return emptyList();
+		ACell value = null;
 
-		ACell value;
-		if (jsonKeys.length > 0) {
-			ACell[] resolved = cursor.getLattice().resolvePath(jsonKeys);
-			if (resolved == null) return emptyList();
-			value = cursor.path(resolved).get();
-		} else {
-			value = cursor.get();
-		}
-		if (value == null) return emptyList();
-
-		AVector<ACell> allKeys = extractKeys(value);
-		long total = allKeys.count();
-
-		// Pagination defaults: offset 0, limit 1000
-		long limit = 1000;
-		long offset = 0;
-		ACell limitCell = RT.getIn(input, Fields.LIMIT);
-		ACell offsetCell = RT.getIn(input, Fields.OFFSET);
-		if (limitCell instanceof CVMLong l) limit = Math.max(1, l.longValue());
-		if (offsetCell instanceof CVMLong l) offset = Math.max(0, l.longValue());
-
-		AVector<ACell> page;
-		if (offset == 0 && limit >= total) {
-			page = allKeys;
-		} else {
-			page = Vectors.empty();
-			long end = Math.min(offset + limit, total);
-			for (long i = offset; i < end; i++) {
-				page = page.conj(allKeys.get(i));
+		if (cursor != null) {
+			if (jsonKeys.length > 0) {
+				ACell[] resolved = cursor.getLattice().resolvePath(jsonKeys);
+				if (resolved != null) value = cursor.path(resolved).get();
+			} else {
+				value = cursor.get();
 			}
 		}
 
-		return Maps.of(K_KEYS, page, K_COUNT, CVMLong.create(total));
+		return describeValue(value, input);
 	}
 
-	private static ACell emptyList() {
-		return Maps.of(K_KEYS, Vectors.empty(), K_COUNT, CVMLong.ZERO);
+	/**
+	 * Builds a structured description of a CVM value for the list response.
+	 */
+	/**
+	 * Builds a structured description of a CVM value for the list response.
+	 *
+	 * <p>Always includes {@code exists} (true if value is non-null) and
+	 * {@code type}. Maps additionally include {@code keys} and {@code count};
+	 * vectors/countables include {@code count}; sets include {@code values}.</p>
+	 */
+	/**
+	 * Builds a structured description of a CVM value for the list response.
+	 *
+	 * <p>Always includes {@code exists} (true if value is non-null) and
+	 * {@code type} (standard Convex type name from {@link Types#get}).
+	 * Maps additionally include {@code keys} (paginated) and {@code count};
+	 * vectors/countables include {@code count}; sets include {@code values}.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	private static ACell describeValue(ACell value, ACell input) {
+		// Type name from the Convex type system (e.g. "Map", "Vector", "Nil", "Long")
+		AString typeName = Types.get(value).toAString();
+
+		if (value == null) return Maps.of(K_EXISTS, CVMBool.FALSE, K_TYPE, typeName);
+
+		AMap<AString, ACell> desc;
+
+		if (value instanceof AMap<?,?> map) {
+			AMap<ACell, ACell> m = (AMap<ACell, ACell>) map;
+			long total = m.count();
+
+			// Extract all keys, converting to JSON-friendly form
+			AVector<ACell> allKeys = Vectors.empty();
+			for (var entry : m.entrySet()) {
+				allKeys = allKeys.conj(ALattice.toJSONKey(entry.getKey()));
+			}
+
+			// Pagination
+			long limit = 1000;
+			long offset = 0;
+			ACell limitCell = RT.getIn(input, Fields.LIMIT);
+			ACell offsetCell = RT.getIn(input, Fields.OFFSET);
+			if (limitCell instanceof CVMLong l) limit = Math.max(1, l.longValue());
+			if (offsetCell instanceof CVMLong l) offset = Math.max(0, l.longValue());
+
+			AVector<ACell> page;
+			if (offset == 0 && limit >= total) {
+				page = allKeys;
+			} else {
+				page = Vectors.empty();
+				long end = Math.min(offset + limit, total);
+				for (long i = offset; i < end; i++) {
+					page = page.conj(allKeys.get(i));
+				}
+			}
+
+			desc = Maps.of(K_TYPE, typeName, K_COUNT, CVMLong.create(total), K_KEYS, page);
+			// Include offset when results are truncated so caller knows where to continue
+			if (offset > 0 || page.count() < total) {
+				desc = desc.assoc(Fields.OFFSET, CVMLong.create(offset));
+			}
+		} else if (value instanceof ASet<?> set) {
+			// Sets: values are the elements — return them directly
+			AVector<ACell> values = Vectors.empty();
+			for (ACell elem : set) {
+				values = values.conj(ALattice.toJSONKey(elem));
+			}
+			desc = Maps.of(K_TYPE, typeName, K_COUNT, CVMLong.create(set.count()), K_VALUES, values);
+		} else if (value instanceof ACountable<?> countable) {
+			// Vectors, sequences, Index — just type and count
+			desc = Maps.of(K_TYPE, typeName, K_COUNT, CVMLong.create(countable.count()));
+		} else {
+			// Scalar — type name only
+			desc = Maps.of(K_TYPE, typeName);
+		}
+
+		return desc.assoc(K_EXISTS, CVMBool.TRUE);
 	}
 
 	// ========== Path parsing ==========
@@ -240,33 +324,4 @@ public class CoviaAdapter extends AAdapter {
 		return user.cursor();
 	}
 
-	/**
-	 * Extracts keys from a CVM data structure, converting to JSON-friendly form.
-	 *
-	 * <p>For maps (AMap, Index): returns the map keys, each converted via
-	 * {@link ALattice#toJSONKey} — Keywords become name strings, Blobs become
-	 * hex strings, AStrings and integers pass through unchanged.</p>
-	 *
-	 * <p>For countable values (vectors, sequences): returns integer indices
-	 * {@code [0, 1, 2, ...]}.</p>
-	 */
-	@SuppressWarnings("unchecked")
-	private static AVector<ACell> extractKeys(ACell value) {
-		if (value instanceof AMap<?,?> map) {
-			AVector<ACell> keys = Vectors.empty();
-			for (var entry : ((AMap<ACell, ACell>) map).entrySet()) {
-				keys = keys.conj(ALattice.toJSONKey(entry.getKey()));
-			}
-			return keys;
-		}
-		if (value instanceof ACountable<?> countable) {
-			long n = countable.count();
-			AVector<ACell> keys = Vectors.empty();
-			for (long i = 0; i < n; i++) {
-				keys = keys.conj(CVMLong.create(i));
-			}
-			return keys;
-		}
-		return Vectors.empty();
-	}
 }

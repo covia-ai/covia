@@ -1,6 +1,6 @@
 {
-	"name": "List Lattice Keys",
-	"description": "Lists the keys or indices at a path in the user's lattice namespace. For maps, returns key names. For vectors/sequences, returns integer indices. Supports pagination via limit/offset for large collections (default limit 1000). Paths use '/' separators. Omit path or use '' to list top-level namespaces (g, s, j).",
+	"name": "List Lattice Structure",
+	"description": "Describes the structure at a path in the user's lattice namespace. Returns the type of value at the path (map, vector, index, set, string, etc.) along with type-specific metadata. For maps: includes keys (with pagination). For vectors/countables: includes count. For sets: includes values directly. Always includes 'exists' (boolean) to distinguish missing paths from null values. Paths use '/' separators. Omit path to describe the top-level user namespace.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "covia:list",
@@ -9,23 +9,27 @@
 			"type": "object",
 			"properties": {
 				"path": {
-					"description": "Path to list, e.g. 'g' (all agents), 'g/my-agent/tasks'. Omit to list top-level namespaces."
+					"description": "Path to describe, e.g. 'g' (agents namespace), 'g/my-agent' (agent record). Omit to describe top-level."
 				},
 				"limit": {
 					"type": "integer",
-					"description": "Maximum keys to return (default 1000)"
+					"description": "Maximum map keys to return (default 1000). Only applies to map types."
 				},
 				"offset": {
 					"type": "integer",
-					"description": "Number of keys to skip (default 0)"
+					"description": "Number of map keys to skip (default 0). Only applies to map types."
 				}
 			}
 		},
 		"output": {
 			"type": "object",
 			"properties": {
-				"keys": { "type": "array", "description": "Keys at the given path" },
-				"count": { "type": "integer", "description": "Total number of keys (before pagination)" }
+				"exists": { "type": "boolean", "description": "True if data exists at this path" },
+				"type": { "type": "string", "description": "Value type: map, vector, index, set, string, long, boolean, double, blob, null" },
+				"count": { "type": "integer", "description": "Element count (maps, vectors, sets, indices)" },
+				"keys": { "type": "array", "description": "Map keys (only for map type, may be paginated)" },
+				"values": { "type": "array", "description": "Set elements (only for set type)" },
+				"offset": { "type": "integer", "description": "Current offset (only present when map keys are truncated)" }
 			}
 		}
 	}

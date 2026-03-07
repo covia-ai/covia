@@ -12,6 +12,7 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
@@ -51,8 +52,10 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "g/test-agent"), ALICE);
 		ACell result = job.awaitResult(5000);
 
-		assertNotNull(result, "Should read agent record");
-		assertEquals(AgentState.SLEEPING, RT.getIn(result, AgentState.KEY_STATUS));
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
+		ACell value = RT.getIn(result, "value");
+		assertNotNull(value, "Should read agent record");
+		assertEquals(AgentState.SLEEPING, RT.getIn(value, AgentState.KEY_STATUS));
 	}
 
 	@Test
@@ -61,8 +64,10 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "g/test-agent/state"), ALICE);
 		ACell result = job.awaitResult(5000);
 
-		assertNotNull(result);
-		assertEquals(CVMLong.ZERO, RT.getIn(result, "counter"));
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
+		ACell value = RT.getIn(result, "value");
+		assertNotNull(value);
+		assertEquals(CVMLong.ZERO, RT.getIn(value, "counter"));
 	}
 
 	@Test
@@ -71,8 +76,10 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "g/test-agent/config"), ALICE);
 		ACell result = job.awaitResult(5000);
 
-		assertNotNull(result);
-		assertEquals(Strings.create("gpt-4"), RT.getIn(result, "model"));
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
+		ACell value = RT.getIn(result, "value");
+		assertNotNull(value);
+		assertEquals(Strings.create("gpt-4"), RT.getIn(value, "model"));
 	}
 
 	@Test
@@ -81,7 +88,9 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "g/no-such-agent"), ALICE);
 		ACell result = job.awaitResult(5000);
 
-		assertNull(result);
+		assertNotNull(result);
+		assertEquals(CVMBool.FALSE, RT.getIn(result, "exists"));
+		assertNull(RT.getIn(result, "value"), "Non-existent path should have no value");
 	}
 
 	@Test
@@ -92,7 +101,8 @@ public class CoviaAdapterTest {
 			ALICE);
 		ACell result = job.awaitResult(5000);
 
-		assertEquals(AgentState.SLEEPING, result);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
+		assertEquals(AgentState.SLEEPING, RT.getIn(result, "value"));
 	}
 
 	@Test
@@ -102,7 +112,8 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, ""), ALICE);
 		ACell result = job.awaitResult(5000);
 
-		assertNotNull(result, "Should return user root");
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
+		assertNotNull(RT.getIn(result, "value"), "Should return user root");
 	}
 
 	// ========== covia:list ==========
@@ -114,6 +125,7 @@ public class CoviaAdapterTest {
 		ACell result = job.awaitResult(5000);
 
 		assertNotNull(result);
+		assertEquals(Strings.create("Map"), RT.getIn(result, "type"));
 		AVector<ACell> keys = RT.getIn(result, "keys");
 		assertNotNull(keys);
 		assertEquals(1, keys.count());
@@ -127,10 +139,10 @@ public class CoviaAdapterTest {
 		ACell result = job.awaitResult(5000);
 
 		assertNotNull(result);
+		assertEquals(Strings.create("Map"), RT.getIn(result, "type"));
 		AVector<ACell> keys = RT.getIn(result, "keys");
 		assertNotNull(keys);
 		assertTrue(keys.count() > 0, "Agent record should have fields");
-		// Should include standard fields like status, config, state, etc.
 		CVMLong count = RT.getIn(result, "count");
 		assertEquals(keys.count(), count.longValue());
 	}
@@ -143,6 +155,7 @@ public class CoviaAdapterTest {
 		ACell result = job.awaitResult(5000);
 
 		assertNotNull(result);
+		assertEquals(Strings.create("Map"), RT.getIn(result, "type"));
 		AVector<ACell> keys = RT.getIn(result, "keys");
 		assertNotNull(keys);
 		assertTrue(keys.count() > 0, "Should have at least the 'g' namespace");
@@ -156,7 +169,7 @@ public class CoviaAdapterTest {
 				Maps.of(Fields.AGENT_ID, "agent-" + i), ALICE).awaitResult(5000);
 		}
 
-		// List with limit
+		// List with limit — should include offset in response
 		Job job = engine.jobs().invokeOperation("covia:list",
 			Maps.of(Fields.PATH, "g", Fields.LIMIT, CVMLong.create(3)), ALICE);
 		ACell result = job.awaitResult(5000);
@@ -165,6 +178,8 @@ public class CoviaAdapterTest {
 		CVMLong total = RT.getIn(result, "count");
 		assertEquals(3, keys.count(), "Should respect limit");
 		assertEquals(6, total.longValue(), "Total should include all agents (5 + test-agent)");
+		// offset present because results are truncated
+		assertNotNull(RT.getIn(result, "offset"), "Should include offset when truncated");
 	}
 
 	@Test
@@ -174,8 +189,26 @@ public class CoviaAdapterTest {
 		ACell result = job.awaitResult(5000);
 
 		assertNotNull(result);
-		AVector<ACell> keys = RT.getIn(result, "keys");
-		assertEquals(0, keys.count());
+		assertEquals(CVMBool.FALSE, RT.getIn(result, "exists"));
+	}
+
+	@Test
+	public void testListVector() {
+		// Agent timeline is a vector — should report type and count, no keys
+		// First, deliver a message and trigger to create a timeline entry
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("test-agent");
+		assertNotNull(agent);
+		AVector<ACell> timeline = agent.getTimeline();
+		assertNotNull(timeline);
+
+		Job job = engine.jobs().invokeOperation("covia:list",
+			Maps.of(Fields.PATH, "g/test-agent/timeline"), ALICE);
+		ACell result = job.awaitResult(5000);
+
+		assertNotNull(result);
+		assertEquals(Strings.create("Vector"), RT.getIn(result, "type"));
+		assertNotNull(RT.getIn(result, "count"));
+		assertNull(RT.getIn(result, "keys"), "Vectors should not have keys");
 	}
 
 	// ========== Path parsing ==========
