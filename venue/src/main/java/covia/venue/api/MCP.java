@@ -377,6 +377,9 @@ public class MCP extends ACoviaAPI {
 	/**
 	 * Execute a tool call request received from a remote client
 	 */
+	/** Default timeout for MCP tool calls (120 seconds) */
+	private static final long TOOL_CALL_TIMEOUT_MS = 120_000;
+
 	private AMap<AString, ACell> toolCall(AMap<AString, ACell> params, AString callerDID) {
 		try {
 			AString toolName = RT.getIn(params, Fields.NAME);
@@ -384,7 +387,11 @@ public class MCP extends ACoviaAPI {
 			ACell arguments = RT.getIn(params, Fields.ARGUMENTS);
 			if (opID != null) {
 				Job job = engine().jobs().invokeOperation(opID.toCVMHexString(), arguments, RequestContext.of(callerDID));
-				ACell result = job.awaitResult();
+				ACell result = job.awaitResult(TOOL_CALL_TIMEOUT_MS);
+				if (result == null && !job.isComplete()) {
+					return toolError("Tool call timed out after " + (TOOL_CALL_TIMEOUT_MS / 1000)
+						+ "s. Job ID: " + job.getID().toHexString());
+				}
 				return toolSuccess(result);
 			} else {
 				return protocolError(-32602, "Unknown tool: " + toolName);

@@ -120,10 +120,17 @@ public class AgentAdapter extends AAdapter {
 
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ctx.getCallerDID());
-		user.ensureAgent(agentId, config, initialState);
+		AgentState agent = user.agent(agentId);
+		boolean alreadyExists = (agent != null && agent.exists());
+		agent = user.ensureAgent(agentId, config, initialState);
+
+		AMap<AString, ACell> result = Maps.of(
+			Fields.AGENT_ID, agentId,
+			Fields.STATUS, agent.getStatus(),
+			Fields.CREATED, CVMBool.of(!alreadyExists));
 
 		job.setStatus(Status.STARTED);
-		job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.SLEEPING));
+		job.completeWith(result);
 	}
 
 	/**
