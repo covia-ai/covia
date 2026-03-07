@@ -1,0 +1,32 @@
+{
+	"name": "List Lattice Keys",
+	"description": "Lists the keys or indices at a path in the user's lattice namespace. For maps, returns key names. For vectors/sequences, returns integer indices. Supports pagination via limit/offset for large collections (default limit 1000). Paths use '/' separators. Omit path or use '' to list top-level namespaces (g, s, j).",
+	"dateCreated": "2026-03-07T00:00:00Z",
+	"operation": {
+		"adapter": "covia:list",
+		"toolName": "covia_list",
+		"input": {
+			"type": "object",
+			"properties": {
+				"path": {
+					"description": "Path to list, e.g. 'g' (all agents), 'g/my-agent/tasks'. Omit to list top-level namespaces."
+				},
+				"limit": {
+					"type": "integer",
+					"description": "Maximum keys to return (default 1000)"
+				},
+				"offset": {
+					"type": "integer",
+					"description": "Number of keys to skip (default 0)"
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"keys": { "type": "array", "description": "Keys at the given path" },
+				"count": { "type": "integer", "description": "Total number of keys (before pagination)" }
+			}
+		}
+	}
+}

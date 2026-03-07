@@ -97,6 +97,9 @@ public class Fields {
 	public static final StringShort DEFS = Strings.intern("$defs");
 	public static final StringShort DEFINITIONS = Strings.intern("definitions");
 
+	// Lattice navigation
+	public static final StringShort PATH = Strings.intern("path");
+
 	// Agent related
 	public static final StringShort AGENT_ID = Strings.intern("agentId");
 	public static final StringShort CONFIG = Strings.intern("config");
