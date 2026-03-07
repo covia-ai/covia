@@ -7,22 +7,20 @@ import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import covia.exception.AuthException;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
-import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
-import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Operation;
@@ -535,7 +533,6 @@ public class JobManager {
 	/**
 	 * Re-fires a PENDING/STARTED job from a persisted lattice record.
 	 */
-	@SuppressWarnings("unchecked")
 	private boolean refireJob(Blob jobID, AMap<AString, ACell> record, AString callerDID) {
 		AString opRef = RT.ensureString(record.get(Fields.OP));
 		if (opRef == null) {
@@ -646,7 +643,6 @@ public class JobManager {
 	 * Resolves the metadata for a job, trying the Operation object first,
 	 * then falling back to resolving the operation reference from the job record.
 	 */
-	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> resolveJobMeta(Job job) {
 		Operation operation = job.getOperation();
 		if (operation != null) return operation.meta();

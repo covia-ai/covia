@@ -1,6 +1,7 @@
 package covia.adapter;
 
 import java.time.Duration;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,7 +15,9 @@ import io.modelcontextprotocol.spec.McpClientTransport;
  * Persistent MCP client session that wraps a {@link McpSyncClient} for reuse
  * across multiple tool calls to the same server.
  *
- * <p>Sessions are lazily connected on first use and auto-reconnect on failure.</p>
+ * <p>Sessions are lazily connected on first use and auto-reconnect on failure.
+ * Uses {@link ReentrantLock} instead of {@code synchronized} to avoid pinning
+ * virtual threads during network I/O (connection handshake).</p>
  */
 public class McpClientSession implements AutoCloseable {
 
@@ -22,6 +25,7 @@ public class McpClientSession implements AutoCloseable {
 
 	private final String serverUrl;
 	private final String accessToken;
+	private final ReentrantLock lock = new ReentrantLock();
 
 	private McpSyncClient client;
 	private volatile boolean connected = false;
@@ -37,14 +41,18 @@ public class McpClientSession implements AutoCloseable {
 	 * @return Connected McpSyncClient
 	 * @throws Exception if connection fails
 	 */
-	public synchronized McpSyncClient getClient() throws Exception {
-		if (client != null && connected) {
-			lastActivity = System.currentTimeMillis();
-			return client;
+	public McpSyncClient getClient() throws Exception {
+		lock.lock();
+		try {
+			if (client != null && connected) {
+				lastActivity = System.currentTimeMillis();
+				return client;
+			}
+			closeQuietly();
+			return doConnect();
+		} finally {
+			lock.unlock();
 		}
-		// Close any stale client
-		closeQuietly();
-		return doConnect();
 	}
 
 	private McpSyncClient doConnect() throws Exception {
@@ -70,8 +78,13 @@ public class McpClientSession implements AutoCloseable {
 	 * Mark this session as disconnected (e.g. after an error), so next
 	 * {@link #getClient()} will reconnect.
 	 */
-	public synchronized void invalidate() {
-		connected = false;
+	public void invalidate() {
+		lock.lock();
+		try {
+			connected = false;
+		} finally {
+			lock.unlock();
+		}
 	}
 
 	/**
@@ -94,8 +107,13 @@ public class McpClientSession implements AutoCloseable {
 	}
 
 	@Override
-	public synchronized void close() {
-		closeQuietly();
-		log.debug("MCP client session closed for {}", serverUrl);
+	public void close() {
+		lock.lock();
+		try {
+			closeQuietly();
+			log.debug("MCP client session closed for {}", serverUrl);
+		} finally {
+			lock.unlock();
+		}
 	}
 }

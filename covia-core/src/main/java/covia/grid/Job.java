@@ -1,12 +1,12 @@
 package covia.grid;
 
-import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
@@ -22,22 +22,29 @@ import covia.api.Fields;
 import covia.exception.JobFailedException;
 
 /**
- * Class representing a Covia Job
- * 
- * Does not access the grid itself: querying should be done via Covia Grid client
+ * Class representing a Covia Job.
+ *
+ * <p>Thread-safe without locks: uses {@link AtomicReference} for the job data
+ * so virtual threads are never pinned to carrier threads. All side effects
+ * in the update path (lattice persistence, future completion) are idempotent,
+ * so concurrent updates are safe — the CAS ensures terminal states are
+ * sticky (once finished, the data reference never changes).</p>
  */
 public class Job {
-	/** Job status data */
-	private AMap<AString, ACell> data;
 
-	protected boolean cancelled=false;
-	protected CompletableFuture<ACell> resultFuture=null;
+	/** Job status data — atomic for lock-free concurrent updates */
+	private final AtomicReference<AMap<AString, ACell>> data;
+
+	protected volatile boolean cancelled = false;
+
+	/** Lazy result future — atomic for safe publication */
+	private final AtomicReference<CompletableFuture<ACell>> resultFuture = new AtomicReference<>();
 
 	/** Per-job message queue for incoming message records */
 	private final ConcurrentLinkedQueue<AMap<AString, ACell>> messageQueue = new ConcurrentLinkedQueue<>();
 
 	/** Optional listener notified after each state update */
-	private Consumer<Job> updateListener=null;
+	private volatile Consumer<Job> updateListener = null;
 
 	/** Transient reference to the operation being executed, if resolved */
 	private final Operation operation;
@@ -50,18 +57,17 @@ public class Job {
 	}
 
 	public Job(AMap<AString, ACell> status, Operation operation) {
-		this.data=status;
-		this.operation=operation;
+		this.data = new AtomicReference<>(status);
+		this.operation = operation;
 	}
 
 	public static boolean isFinished(AMap<AString, ACell> jobData) {
-		AString status=RT.ensureString(jobData.get(Fields.STATUS));	
-		if (status==null) throw new Error("Job status should never be null");
-		if (status.equals(Status.COMPLETE)) return true;
-		if (status.equals(Status.FAILED)) return true;
-		if (status.equals(Status.CANCELLED)) return true;
-		if (status.equals(Status.REJECTED)) return true;
-		return false;
+		AString status = RT.ensureString(jobData.get(Fields.STATUS));
+		if (status == null) throw new Error("Job status should never be null");
+		return status.equals(Status.COMPLETE)
+			|| status.equals(Status.FAILED)
+			|| status.equals(Status.CANCELLED)
+			|| status.equals(Status.REJECTED);
 	}
 
 	public static Blob parseID(Object a) {
@@ -69,137 +75,156 @@ public class Job {
 		if (a instanceof ABlob b) return b.toFlatBlob();
 		if (a instanceof String s) return Blob.parse(s);
 		if (a instanceof AString s) return Blob.parse(s.toString());
-		throw new IllegalArgumentException("Unable to convert to Job ID: "+a);
+		throw new IllegalArgumentException("Unable to convert to Job ID: " + a);
 	}
 
-	public static Job create(AMap<AString,ACell> status) {
+	public static Job create(AMap<AString, ACell> status) {
 		return new Job(status);
 	}
-	
+
 	/**
 	 * Gets the remote ID of the Job. Valid for the venue which is executing it.
 	 * A 16-byte Blob (6 bytes timestamp + 2 bytes counter + 8 bytes random).
 	 * @return Job ID as Blob
 	 */
 	public Blob getID() {
-		ACell id = RT.get(data, Fields.ID);
+		ACell id = RT.get(data.get(), Fields.ID);
 		if (id == null) return null;
 		return parseID(id);
 	}
 
 	/**
-	 * Checks if this job is finished (COMPLETE, FAILED or CANCELLED status)
+	 * Checks if this job is finished (COMPLETE, FAILED, CANCELLED or REJECTED)
 	 * @return true if finished
 	 */
 	public boolean isFinished() {
-		return isFinished(this.data);
+		return isFinished(data.get());
 	}
 
 	/**
 	 * Checks if this job is COMPLETE, i.e. has a valid result
-	 * @return true if finished
+	 * @return true if complete
 	 */
-	public synchronized boolean isComplete() {
-		AString value=RT.ensureString(data.get(Fields.STATUS));	
-		return Status.COMPLETE.equals(value);
+	public boolean isComplete() {
+		return Status.COMPLETE.equals(RT.ensureString(data.get().get(Fields.STATUS)));
 	}
-	
+
 	/**
-	 * Checks if this job is paused (PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED status)
+	 * Checks if this job is paused (PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED)
 	 * @return true if paused
 	 */
-	public synchronized boolean isPaused() {
+	public boolean isPaused() {
 		AString status = getStatus();
-		return Status.PAUSED.equals(status) || 
-		       Status.INPUT_REQUIRED.equals(status) || 
-		       Status.AUTH_REQUIRED.equals(status);
+		return Status.PAUSED.equals(status)
+			|| Status.INPUT_REQUIRED.equals(status)
+			|| Status.AUTH_REQUIRED.equals(status);
 	}
 
 	/**
-	 * Sets the Job data (e.g. after polling for a status result). No effect if Job is already finished.
-	 * @param data Job status data
+	 * Updates the job data atomically. No effect if job is already finished.
+	 *
+	 * <p>Lock-free: {@link #processUpdate} runs first (side effects like
+	 * lattice persistence are idempotent via CRDT merge), then a CAS on the
+	 * {@link AtomicReference} ensures terminal states are sticky. Post-update
+	 * hooks (listener, future completion) run only if the update took effect.</p>
+	 *
+	 * @param newData New job status data
 	 */
-	public synchronized void updateData(AMap<AString, ACell> data) {
-		if (isFinished()) return;
-		data=processUpdate(data);
-		if (data==null) return; // update cancelled
+	public void updateData(AMap<AString, ACell> newData) {
+		// Pre-process: may add timestamp, persist to lattice (all idempotent)
+		newData = processUpdate(newData);
+		if (newData == null) return;
 
-		// Link new state to previous state (prev pointer chain)
-		AMap<AString, ACell> oldData = this.data;
-		if (oldData != null && !oldData.isEmpty()) {
-			data = data.assoc(PREV, oldData);
-		}
+		// Atomic state transition — terminal states are sticky
+		final AMap<AString, ACell> prepared = newData;
+		AMap<AString, ACell> prev = data.getAndUpdate(current -> {
+			if (isFinished(current)) return current;
+			AMap<AString, ACell> d = prepared;
+			if (current != null && !current.isEmpty()) {
+				d = d.assoc(PREV, current);
+			}
+			return d;
+		});
 
-		this.data=data;
-		onUpdate(data);
+		// CAS was a no-op if already finished
+		if (isFinished(prev)) return;
 
-		// Notify update listener
+		// Post-update side effects
+		AMap<AString, ACell> current = data.get();
+		onUpdate(current);
+
 		Consumer<Job> listener = this.updateListener;
 		if (listener != null) {
 			listener.accept(this);
 		}
 
-		if (isFinished()) {
+		if (isFinished(current)) {
 			completeResultFuture();
-			onFinish(data);
-		};
+			onFinish(current);
+		}
 	}
 
 	/**
 	 * Completes the result future based on job status.
-	 * If COMPLETE, completes with output. If FAILED/CANCELLED/REJECTED, completes exceptionally.
+	 * Idempotent: CompletableFuture.complete() returns false on second call.
 	 */
 	private void completeResultFuture() {
-		if (resultFuture == null) return;
+		CompletableFuture<ACell> f = resultFuture.get();
+		if (f == null) return;
 		if (isComplete()) {
-			resultFuture.complete(getOutput());
+			f.complete(getOutput());
 		} else {
-			// Job finished but not complete - it failed, was cancelled, or rejected
-			resultFuture.completeExceptionally(new JobFailedException(this));
+			f.completeExceptionally(new JobFailedException(this));
 		}
 	}
-	
+
 	/**
-	 * Method called to modify data before an update. Subclasses may override to 
+	 * Hook called before the atomic data update. Subclasses may override to
+	 * modify data or perform side effects (e.g. lattice persistence).
+	 *
+	 * <p><b>Side effects MUST be idempotent</b> — concurrent callers may invoke
+	 * this for data that is ultimately discarded by the CAS (e.g. if the job
+	 * reached a terminal state between processUpdate and the CAS). Lattice
+	 * persistence is naturally idempotent via CRDT merge.</p>
+	 *
+	 * TODO: consider is this is sensible
+	 *
 	 * @param newData new status data of the Job
-	 * @return updated version of the data to be stored. Returning null will cancel the update
+	 * @return updated version of the data, or null to cancel the update
 	 */
 	public AMap<AString, ACell> processUpdate(AMap<AString, ACell> newData) {
 		return newData;
 	}
-	
+
 	/**
-	 * Method called after data is updated. Subclasses may override this to provide custom responses
+	 * Hook called after data is updated. Subclasses may override.
 	 * @param newData new status data of the Job
 	 */
 	public void onUpdate(AMap<AString, ACell> newData) {
-		// Empty to allow overrides
 	}
-	
+
 	/**
-	 * Method called after job is finished. Subclasses may override this to provide custom responses
+	 * Hook called after job reaches a terminal state. Subclasses may override.
 	 * @param finalData final status data of the Job
 	 */
 	public void onFinish(AMap<AString, ACell> finalData) {
-		// Empty to allow overrides
 	}
 
 	/**
 	 * Sets the future for the Job result. Can only be done once.
 	 * @param future future to set
 	 */
-	public synchronized void setFuture(CompletableFuture<ACell> future) {
-		if (resultFuture!=null) throw new IllegalStateException("Result future already set");
-		this.resultFuture=future;
-
-		// complete the future if the job is already finished
+	public void setFuture(CompletableFuture<ACell> future) {
+		if (!resultFuture.compareAndSet(null, future)) {
+			throw new IllegalStateException("Result future already set");
+		}
 		if (isFinished()) {
 			completeResultFuture();
 		}
 	}
 
 	public AString getStatus() {
-		return RT.ensureString(RT.get(data, Fields.STATUS));
+		return RT.ensureString(RT.get(data.get(), Fields.STATUS));
 	}
 
 	/**
@@ -207,19 +232,21 @@ public class Job {
 	 * @return Job data as a JSON-compatible Map
 	 */
 	public AMap<AString, ACell> getData() {
-		return data;
+		return data.get();
 	}
 
 	/**
 	 * Gets the output of this Job, assuming it is COMPLETE
-	 * @return Job output, or throw if not finished
+	 * @return Job output
+	 * @throws IllegalStateException if job has not finished
+	 * @throws JobFailedException if job finished but is not COMPLETE
 	 */
 	public ACell getOutput() {
-		if (!isFinished()) throw new IllegalStateException("Job has no output, status is "+getStatus());
+		if (!isFinished()) throw new IllegalStateException("Job has no output, status is " + getStatus());
 		if (!isComplete()) throw new JobFailedException(this);
-		return RT.get(data, Fields.OUTPUT);
+		return RT.get(data.get(), Fields.OUTPUT);
 	}
-	
+
 	/**
 	 * Gets the error message of this Job, if it has FAILED or REJECTED
 	 * @return Error message as a string, or null if no message or job is not failed/rejected
@@ -227,7 +254,7 @@ public class Job {
 	public String getErrorMessage() {
 		AString status = getStatus();
 		if (status != Status.FAILED && status != Status.REJECTED) return null;
-		ACell errorField = RT.get(data, Fields.ERROR);
+		ACell errorField = RT.get(data.get(), Fields.ERROR);
 		return errorField != null ? errorField.toString() : null;
 	}
 
@@ -235,8 +262,6 @@ public class Job {
 
 	/**
 	 * Enqueues a message record for this job.
-	 * Message records are extensible maps containing at minimum the message content,
-	 * plus metadata such as source, timestamp, and messageId.
 	 * @param record Message record to enqueue
 	 */
 	public void enqueueMessage(AMap<AString, ACell> record) {
@@ -294,19 +319,18 @@ public class Job {
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> getPreviousState() {
-		return (AMap<AString, ACell>) data.get(PREV);
+		return (AMap<AString, ACell>) data.get().get(PREV);
 	}
 
 	/**
-	 * Cancel this Job, if it is not already finished.
-	 * Sets status to CANCELLED and completes the result future exceptionally.
+	 * Cancel this Job. No effect if already finished.
 	 */
-	public synchronized void cancel() {
+	public void cancel() {
 		if (isFinished()) return;
-		cancelled=true;
-		update(job->{
-			job=job.assoc(Fields.STATUS, Status.CANCELLED);
-			job=job.assoc(Fields.ERROR, Strings.create("Job cancelled: "+getID().toHexString()));
+		cancelled = true;
+		update(job -> {
+			job = job.assoc(Fields.STATUS, Status.CANCELLED);
+			job = job.assoc(Fields.ERROR, Strings.create("Job cancelled: " + getID().toHexString()));
 			return job;
 		});
 	}
@@ -315,9 +339,9 @@ public class Job {
 	 * Pause this Job, if it is currently running (STARTED).
 	 * @throws IllegalStateException if the job is already finished
 	 */
-	public synchronized void pause() {
+	public void pause() {
 		if (isFinished()) throw new IllegalStateException("Job already finished");
-		updateData(data.assoc(Fields.STATUS, Status.PAUSED));
+		updateData(data.get().assoc(Fields.STATUS, Status.PAUSED));
 	}
 
 	/**
@@ -325,44 +349,43 @@ public class Job {
 	 * Sets status back to STARTED.
 	 * @throws IllegalStateException if the job is not paused or is finished
 	 */
-	public synchronized void resume() {
+	public void resume() {
 		if (isFinished()) throw new IllegalStateException("Job already finished");
 		if (!isPaused()) throw new IllegalStateException("Job is not paused: " + getStatus());
-		updateData(data.assoc(Fields.STATUS, Status.STARTED));
+		updateData(data.get().assoc(Fields.STATUS, Status.STARTED));
 	}
 
-	public synchronized void setStatus(AString newStatus) {
+	public void setStatus(AString newStatus) {
 		if (isFinished()) throw new IllegalStateException("Job already finished");
-		updateData(data.assoc(Fields.STATUS, newStatus));
+		updateData(data.get().assoc(Fields.STATUS, newStatus));
 	}
 
-	public synchronized void completeWith(ACell result) {
+	public void completeWith(ACell result) {
 		if (isFinished()) throw new IllegalStateException("Job already finished");
 		AMap<AString, ACell> newData = getData();
-		newData=newData.assoc(Fields.STATUS, Status.COMPLETE);
-		newData=newData.assoc(Fields.OUTPUT, result);
+		newData = newData.assoc(Fields.STATUS, Status.COMPLETE);
+		newData = newData.assoc(Fields.OUTPUT, result);
 		updateData(newData);
 	}
 
 	/**
 	 * Waits for the job to complete and returns the result. Blocks indefinitely.
-	 * @param <T> Expected type of ACell result, for convenience. Usually an AMap<String,ACell>
+	 * @param <T> Expected type of ACell result, for convenience
 	 * @return Result of job
 	 * @throws JobFailedException if job failed
 	 */
 	@SuppressWarnings("unchecked")
-	public <T extends ACell> T  awaitResult() {
+	public <T extends ACell> T awaitResult() {
 		try {
 			return (T) future().join();
-		} catch (CompletionException  e) {
-	        Throwable cause = e.getCause();
-	        if (cause instanceof JobFailedException) {
-	            throw (JobFailedException) cause;
-	        }
-	        // Mark the job as failed
-	        fail(cause.getMessage());
-	        throw new JobFailedException(this);
-	    }
+		} catch (CompletionException e) {
+			Throwable cause = e.getCause();
+			if (cause instanceof JobFailedException) {
+				throw (JobFailedException) cause;
+			}
+			fail(cause.getMessage());
+			throw new JobFailedException(this);
+		}
 	}
 
 	/**
@@ -402,41 +425,42 @@ public class Job {
 	 *         or completes exceptionally with JobFailedException on failure
 	 */
 	public CompletableFuture<ACell> future() {
-		if (resultFuture!=null) return resultFuture;
-		synchronized(this) {
-			if (resultFuture!=null) return resultFuture;
-			resultFuture=new CompletableFuture<ACell>();
+		CompletableFuture<ACell> f = resultFuture.get();
+		if (f != null) return f;
+		CompletableFuture<ACell> newFuture = new CompletableFuture<>();
+		if (resultFuture.compareAndSet(null, newFuture)) {
 			if (isFinished()) completeResultFuture();
-			return resultFuture;
+			return newFuture;
 		}
+		return resultFuture.get(); // another thread won the race
 	}
 
 	/**
-	 * Causes the job to fail, if it is not already finished
-	 * @param message
+	 * Causes the job to fail, if it is not already finished.
+	 * @param message Error message
 	 */
-	public synchronized void fail(String message) {
+	public void fail(String message) {
 		if (isFinished()) return;
-		update(job->{
-			job=job.assoc(Fields.STATUS, Status.FAILED);
-			job=job.assoc(Fields.ERROR, Strings.create(message));
+		update(job -> {
+			job = job.assoc(Fields.STATUS, Status.FAILED);
+			job = job.assoc(Fields.ERROR, Strings.create(message));
 			return job;
 		});
 	}
 
 	/**
-	 * Updates the job data atomically using the given update function
-	 * @param updater
+	 * Updates the job data atomically using the given update function.
+	 * @param updater Function to apply to current data
 	 */
-	public synchronized void update(UnaryOperator<AMap<AString,ACell>> updater) {
+	public void update(UnaryOperator<AMap<AString, ACell>> updater) {
 		AMap<AString, ACell> oldData = getData();
-		AMap<AString, ACell> newData=updater.apply(oldData);
+		AMap<AString, ACell> newData = updater.apply(oldData);
 		updateData(newData);
 	}
 
 	/**
 	 * Create a job with a specific failure message
-	 * @param message
+	 * @param message Failure message
 	 * @return Failed Job
 	 */
 	public static Job failure(String message) {
@@ -445,10 +469,10 @@ public class Job {
 			Fields.ERROR, Strings.create(message)
 		));
 	}
-	
+
 	/**
 	 * Create a job with a specific rejection message
-	 * @param message
+	 * @param message Rejection message
 	 * @return Rejected Job
 	 */
 	public static Job rejected(String message) {
@@ -457,7 +481,7 @@ public class Job {
 			Fields.ERROR, Strings.create(message)
 		));
 	}
-	
+
 	/**
 	 * Create a job with PAUSED status
 	 * @param message Optional message explaining why the job was paused
