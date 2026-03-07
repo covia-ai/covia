@@ -37,6 +37,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_TIMELINE = Strings.intern("timeline");
 	private static final AString K_CAPS     = Strings.intern("caps");
 	private static final AString K_ERROR    = Strings.intern("error");
+	private static final AString K_WAKE     = Strings.intern("wake");
 
 	// Status constants
 	public static final AString SLEEPING   = Strings.intern("SLEEPING");
@@ -276,6 +277,53 @@ public class AgentState extends ALatticeComponent<ACell> {
 		putRecord(record.assoc(K_TASKS, tasks.assoc(jobId, snapshot)));
 	}
 
+	// ========== Wake flag ==========
+
+	/**
+	 * Sets the wake time on the agent record. The agent should run when
+	 * {@code now >= wakeTime}. Use {@code Utils.getCurrentTimestamp()} for
+	 * immediate wake, or a future timestamp for deferred/scheduled wake.
+	 *
+	 * <p>Uses min(existing, new) so an earlier wake always wins — a later
+	 * event can never delay an already-requested wake.</p>
+	 *
+	 * <p>Called unconditionally when new work arrives (message, task, async
+	 * completion) regardless of agent status. The run loop checks and clears
+	 * this at merge time.</p>
+	 *
+	 * @param wakeTime Timestamp (millis since epoch) when the agent should wake,
+	 *                 or 0 to clear.
+	 */
+	public void setWakeTime(long wakeTime) {
+		AMap<AString, ACell> record = getRecord();
+		if (record == null) return;
+		if (wakeTime > 0) {
+			long existing = getWakeTime();
+			long effective = (existing > 0) ? Math.min(existing, wakeTime) : wakeTime;
+			putRecord(record.assoc(K_WAKE, CVMLong.create(effective)));
+		} else {
+			putRecord(record.dissoc(K_WAKE));
+		}
+	}
+
+	/**
+	 * Gets the wake time, or 0 if no wake is scheduled.
+	 */
+	public long getWakeTime() {
+		AMap<AString, ACell> record = getRecord();
+		if (record == null) return 0;
+		ACell v = record.get(K_WAKE);
+		return (v instanceof CVMLong l) ? l.longValue() : 0;
+	}
+
+	/**
+	 * Checks whether the agent should wake now ({@code wakeTime > 0 && now >= wakeTime}).
+	 */
+	public boolean shouldWake() {
+		long wt = getWakeTime();
+		return wt > 0 && Utils.getCurrentTimestamp() >= wt;
+	}
+
 	// ========== Key constants for external use ==========
 
 	public static final AString KEY_TS       = Strings.intern("ts");
@@ -288,4 +336,5 @@ public class AgentState extends ALatticeComponent<ACell> {
 	public static final AString KEY_TIMELINE = Strings.intern("timeline");
 	public static final AString KEY_CAPS     = Strings.intern("caps");
 	public static final AString KEY_ERROR    = Strings.intern("error");
+	public static final AString KEY_WAKE     = Strings.intern("wake");
 }

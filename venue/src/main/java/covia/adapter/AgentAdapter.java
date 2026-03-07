@@ -59,6 +59,7 @@ public class AgentAdapter extends AAdapter {
 	// Per-agent completion futures — triggers park on these to wait for the current run
 	private final ConcurrentHashMap<String, CompletableFuture<ACell>> runCompletions = new ConcurrentHashMap<>();
 
+
 	Object agentLock(AString agentId) {
 		return agentLocks.computeIfAbsent(agentId.toString(), k -> new Object());
 	}
@@ -373,8 +374,9 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * agent:resume — resume a suspended agent.
 	 *
-	 * <p>Clears the agent's error and sets status to SLEEPING. If the agent
-	 * has pending work (tasks or inbox messages), wakes it immediately.</p>
+	 * <p>Clears the agent's error and sets status to SLEEPING. If
+	 * {@code autoWake} is true (default), immediately starts the agent
+	 * if it has pending work or a wake was requested while suspended.</p>
 	 */
 	private void handleResume(Job job, ACell input, RequestContext ctx) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
@@ -386,6 +388,10 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
 
+		// Default autoWake to true
+		ACell autoWakeCell = RT.getIn(input, Fields.AUTO_WAKE);
+		boolean autoWake = !(CVMBool.FALSE.equals(autoWakeCell));
+
 		synchronized (agentLock(agentId)) {
 			AString status = agent.getStatus();
 			if (!AgentState.SUSPENDED.equals(status)) {
@@ -396,8 +402,9 @@ public class AgentAdapter extends AAdapter {
 			agent.setStatus(AgentState.SLEEPING);
 		}
 
-		// Wake if there's pending work
-		wakeAgent(agentId, ctx);
+		if (autoWake) {
+			tryRun(agentId, ctx);
+		}
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(
@@ -535,24 +542,45 @@ public class AgentAdapter extends AAdapter {
 	// ========== Wake and run loop ==========
 
 	/**
-	 * Wakes an agent — checks the lattice status and starts the run loop if
-	 * the agent is SLEEPING and has work.
+	 * Wakes an agent — unconditionally sets the lattice wake flag, then starts
+	 * the run loop if the agent is SLEEPING.
 	 *
 	 * <p>This is the single entry point for all agent wakes: request, message,
-	 * async job completion. The per-agent lock serialises the status check with
-	 * record mutations, eliminating lost wakeups.</p>
+	 * async job completion. The per-agent lock serialises the flag set and
+	 * status check with record mutations, eliminating lost wakeups.</p>
 	 *
-	 * <p>If the agent is already RUNNING, the new work is already in the lattice
-	 * (inbox/tasks) and the running loop will pick it up on its next iteration
-	 * check. No separate wake flag needed.</p>
-	 *
-	 * <p>A completion future is created so that any {@code agent:trigger} that
-	 * arrives while the agent is running can park on it.</p>
+	 * <p>The wake flag is set regardless of status (RUNNING, SUSPENDED, etc.)
+	 * so that the run loop or a future resume sees outstanding work. If the
+	 * agent is SLEEPING, the loop is started immediately. If RUNNING, the
+	 * running loop will see the flag at merge time and re-iterate.</p>
 	 *
 	 * <p>Package-private so that {@link LLMAgentAdapter} can call it from async
 	 * completion callbacks.</p>
 	 */
+	/**
+	 * Signals an immediate wake and tries to start the run loop.
+	 *
+	 * <p>Sets the wake time to now on the lattice record (regardless of
+	 * status), then calls {@link #tryRun} to start the loop if SLEEPING.</p>
+	 */
 	void wakeAgent(AString agentId, RequestContext ctx) {
+		synchronized (agentLock(agentId)) {
+			AgentState agent = getAgent(ctx.getCallerDID(), agentId);
+			if (agent == null) return;
+			agent.setWakeTime(Utils.getCurrentTimestamp());
+		}
+		tryRun(agentId, ctx);
+	}
+
+	/**
+	 * Tries to start the run loop if the agent is SLEEPING and should wake
+	 * (wake time has arrived or there is pending work).
+	 *
+	 * <p>Does NOT set the wake time — call {@link #wakeAgent} for that.
+	 * Used by resume to honour a wake flag set while suspended without
+	 * forcing a new wake.</p>
+	 */
+	private void tryRun(AString agentId, RequestContext ctx) {
 		AString callerDID = ctx.getCallerDID();
 		AString transitionOp;
 		CompletableFuture<ACell> completion;
@@ -560,8 +588,10 @@ public class AgentAdapter extends AAdapter {
 		synchronized (agentLock(agentId)) {
 			AgentState agent = getAgent(callerDID, agentId);
 			if (agent == null) return;
-			if (AgentState.RUNNING.equals(agent.getStatus())) return;
-			if (!hasWork(agent)) return;
+
+			AString status = agent.getStatus();
+			if (!AgentState.SLEEPING.equals(status)) return;
+			if (!agent.shouldWake() && !hasWork(agent)) return;
 
 			transitionOp = resolveTransitionOp(callerDID, agentId);
 			if (transitionOp == null) return;
@@ -728,11 +758,12 @@ public class AgentAdapter extends AAdapter {
 					remainingInbox = remainingInbox.conj(currentInbox.get(i));
 				}
 
-				// Only loop if genuinely NEW events arrived during the transition:
-				// new inbox messages OR new tasks not in the presented snapshot.
+				// Loop if wake was requested during the transition, or if
+				// genuinely new events arrived (new messages or new tasks).
+				boolean wakeRequested = agent.shouldWake();
 				boolean hasNewMessages = remainingInbox.count() > 0;
 				boolean hasNewTasks = hasTasksNotIn(updatedTasks, tasks);
-				hasNewWork = hasNewMessages || hasNewTasks;
+				hasNewWork = wakeRequested || hasNewMessages || hasNewTasks;
 
 				AVector<ACell> timeline = ensureVector(agent.getTimeline());
 
@@ -742,7 +773,8 @@ public class AgentAdapter extends AAdapter {
 					.assoc(AgentState.KEY_INBOX, remainingInbox)
 					.assoc(AgentState.KEY_TIMELINE, timeline.conj(timelineEntry))
 					.assoc(AgentState.KEY_STATUS, hasNewWork ? AgentState.RUNNING : AgentState.SLEEPING)
-					.dissoc(AgentState.KEY_ERROR);
+					.dissoc(AgentState.KEY_ERROR)
+					.dissoc(AgentState.KEY_WAKE); // Clear wake — we've acted on it
 				agent.putRecord(newRecord);
 			}
 

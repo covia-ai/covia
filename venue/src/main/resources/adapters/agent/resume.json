@@ -7,7 +7,8 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Agent name to resume" }
+				"agentId": { "type": "string", "description": "Agent name to resume" },
+				"autoWake": { "type": "boolean", "description": "If true (default), immediately start the agent if it has pending work or a wake was requested while suspended. Set to false to resume into SLEEPING without starting." }
 			},
 			"required": ["agentId"]
 		},

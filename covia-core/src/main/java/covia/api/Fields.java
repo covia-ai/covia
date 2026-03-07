@@ -107,6 +107,7 @@ public class Fields {
 	public static final StringShort TASK_RESULTS = Strings.intern("taskResults");
 	public static final StringShort JOB_ID = Strings.intern("jobId");
 	public static final StringShort SNAPSHOT = Strings.intern("snapshot");
+	public static final StringShort AUTO_WAKE = Strings.intern("autoWake");
 
 	// Identity / authorization
 	public static final StringShort CALLER = Strings.intern("caller");
