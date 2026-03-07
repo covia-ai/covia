@@ -1,7 +1,7 @@
 package covia.venue;
 
-import java.util.HashMap;
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 import org.slf4j.Logger;
@@ -56,7 +56,7 @@ public class JobManager {
 	private final AString venueDID;
 
 	/** In-memory cache of active (non-terminal) jobs */
-	private final HashMap<Blob, Job> activeJobs = new HashMap<>();
+	private final ConcurrentHashMap<Blob, Job> activeJobs = new ConcurrentHashMap<>();
 
 	/** Listeners notified on every job state update (SSE, MCP notifications) */
 	private final java.util.concurrent.CopyOnWriteArrayList<java.util.function.Consumer<Job>> jobUpdateListeners =
@@ -245,9 +245,7 @@ public class JobManager {
 				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 				persistJobRecord(getID(), redactOutputSecrets(newData, meta), effectiveCaller);
 				if (Job.isFinished(newData)) {
-					synchronized (activeJobs) {
-						activeJobs.remove(getID());
-					}
+					activeJobs.remove(getID());
 				}
 				return newData;
 			}
@@ -258,9 +256,7 @@ public class JobManager {
 			job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
 		}
 
-		synchronized (activeJobs) {
-			activeJobs.put(jobID, job);
-		}
+		activeJobs.put(jobID, job);
 
 		// Persist initial job record
 		persistJobRecord(jobID, status, callerDID);
@@ -279,9 +275,7 @@ public class JobManager {
 	public AMap<AString, ACell> getJobData(Blob jobID, RequestContext ctx) {
 		// 1. Hot cache (active jobs)
 		Job job;
-		synchronized (activeJobs) {
-			job = activeJobs.get(jobID);
-		}
+		job = activeJobs.get(jobID);
 		if (job != null) {
 			if (!accessControl.canAccessJob(ctx, job.getData())) {
 				throw new AuthException("Access denied to job: " + jobID.toHexString());
@@ -303,9 +297,7 @@ public class JobManager {
 	 */
 	public AMap<AString, ACell> getJobData(Blob jobID) {
 		Job job;
-		synchronized (activeJobs) {
-			job = activeJobs.get(jobID);
-		}
+		job = activeJobs.get(jobID);
 		if (job != null) return job.getData();
 		return null;
 	}
@@ -315,10 +307,8 @@ public class JobManager {
 	 * Checks in-memory cache first, falls back to constructing a read-only Job from lattice.
 	 */
 	public Job getJob(Blob jobID) {
-		synchronized (activeJobs) {
-			Job job = activeJobs.get(jobID);
-			if (job != null) return job;
-		}
+		Job job = activeJobs.get(jobID);
+		if (job != null) return job;
 		return null;
 	}
 
@@ -326,10 +316,8 @@ public class JobManager {
 	 * Gets the live Job object with lattice fallback using request context.
 	 */
 	public Job getJob(Blob jobID, RequestContext ctx) {
-		synchronized (activeJobs) {
-			Job job = activeJobs.get(jobID);
-			if (job != null) return job;
-		}
+		Job job = activeJobs.get(jobID);
+		if (job != null) return job;
 
 		// Fall back to user's lattice
 		AString did = ctx.isInternal() ? venueDID : ctx.getCallerDID();
@@ -357,9 +345,7 @@ public class JobManager {
 
 	public void updateJobStatus(Blob jobID, AMap<AString, ACell> newData) {
 		Job job;
-		synchronized (activeJobs) {
-			job = activeJobs.get(jobID);
-		}
+		job = activeJobs.get(jobID);
 		if (job == null) return;
 		job.updateData(newData);
 	}
@@ -377,9 +363,7 @@ public class JobManager {
 
 	public AMap<AString, ACell> cancelJob(Blob id) {
 		Job job;
-		synchronized (activeJobs) {
-			job = activeJobs.get(id);
-		}
+		job = activeJobs.get(id);
 		if (job == null) return null;
 		job.cancel();
 		return job.getData();
@@ -397,9 +381,7 @@ public class JobManager {
 
 	public AMap<AString, ACell> pauseJob(Blob id) {
 		Job job;
-		synchronized (activeJobs) {
-			job = activeJobs.get(id);
-		}
+		job = activeJobs.get(id);
 		if (job == null) return null;
 		job.pause();
 		return job.getData();
@@ -417,9 +399,7 @@ public class JobManager {
 
 	public AMap<AString, ACell> resumeJob(Blob id) {
 		Job job;
-		synchronized (activeJobs) {
-			job = activeJobs.get(id);
-		}
+		job = activeJobs.get(id);
 		if (job == null) return null;
 		job.resume();
 
@@ -450,9 +430,7 @@ public class JobManager {
 	}
 
 	public boolean deleteJob(Blob id) {
-		synchronized (activeJobs) {
-			activeJobs.remove(id);
-		}
+		activeJobs.remove(id);
 		return true;
 	}
 
@@ -530,9 +508,7 @@ public class JobManager {
 				AMap<AString, ACell> record = (AMap<AString, ACell>) value;
 
 				// Skip jobs already in memory
-				synchronized (activeJobs) {
-					if (activeJobs.containsKey(jobID)) continue;
-				}
+				if (activeJobs.containsKey(jobID)) continue;
 
 				// Skip terminal jobs
 				if (Job.isFinished(record)) continue;
@@ -587,9 +563,7 @@ public class JobManager {
 				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 				persistJobRecord(getID(), redactOutputSecrets(newData, meta), callerDID);
 				if (Job.isFinished(newData)) {
-					synchronized (activeJobs) {
-						activeJobs.remove(getID());
-					}
+					activeJobs.remove(getID());
 				}
 				return newData;
 			}
@@ -599,9 +573,7 @@ public class JobManager {
 			job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
 		}
 
-		synchronized (activeJobs) {
-			activeJobs.put(jobID, job);
-		}
+		activeJobs.put(jobID, job);
 		RequestContext ctx = RequestContext.of(callerDID);
 		if (meta == null) {
 			markJobFailed(jobID, record, "Cannot re-fire: no operation metadata for " + opRef, callerDID);
@@ -635,9 +607,7 @@ public class JobManager {
 				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 				persistJobRecord(getID(), newData, callerDID);
 				if (Job.isFinished(newData)) {
-					synchronized (activeJobs) {
-						activeJobs.remove(getID());
-					}
+					activeJobs.remove(getID());
 				}
 				return newData;
 			}
@@ -647,9 +617,7 @@ public class JobManager {
 			job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
 		}
 
-		synchronized (activeJobs) {
-			activeJobs.put(jobID, job);
-		}
+		activeJobs.put(jobID, job);
 	}
 
 	private void markJobFailed(Blob jobID, AMap<AString, ACell> record, String reason, AString callerDID) {
