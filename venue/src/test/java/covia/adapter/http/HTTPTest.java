@@ -22,7 +22,7 @@ public class HTTPTest {
 	@Test public void testHTTPGet() throws InterruptedException, ExecutionException, TimeoutException {
 		VenueHTTP covia=TestServer.COVIA;
 
-		Job result=covia.invokeSync("http:get", Maps.of("url",TestServer.BASE_URL));
+		Job result=covia.invokeSync("http:get", Maps.of("url",TestServer.BASE_URL), 10_000);
 		assertTrue(result.isComplete());
 
 		assertEquals(200,RT.ensureLong(RT.getIn(result.getOutput(),"status")).longValue());
@@ -139,10 +139,12 @@ public class HTTPTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		// Test HTTP GET to an invalid endpoint - should return 404
+		// Uses explicit timeout because the adapter makes a re-entrant HTTP call
+		// back to the same server, which can stall under thread contention.
 		Job result = covia.invokeSync("http:get", Maps.of(
 			"url", TestServer.BASE_URL + "/invalid-doc",
 			"headers", Maps.of("User-Agent", "Covia-Test/1.0")
-		));
+		), 10_000);
 
 		assertTrue(result.isComplete(), "HTTP GET to invalid endpoint should complete");
 
