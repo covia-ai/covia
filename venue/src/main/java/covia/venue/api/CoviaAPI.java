@@ -23,6 +23,7 @@ import convex.core.exceptions.ParseException;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Job;
@@ -439,7 +440,7 @@ public class CoviaAPI extends ACoviaAPI {
 
 			this.buildResult(ctx, 201, job.getData());
 			ctx.header("Location",ROUTE+"jobs/"+job.getID().toHexString());
-		} catch (SecurityException e) {
+		} catch (AuthException e) {
 			this.buildError(ctx, 403, e.getMessage());
 		} catch (IllegalArgumentException | IllegalStateException e) {
 			this.buildError(ctx, 400, "Error invoking operation: "+e.getClass().getSimpleName()+":"+e.getMessage());
@@ -477,7 +478,7 @@ public class CoviaAPI extends ACoviaAPI {
 				return;
 			}
 			buildResult(ctx,200,status);
-		} catch (SecurityException e) {
+		} catch (AuthException e) {
 			buildError(ctx,403,e.getMessage());
 		} catch (Exception e) {
 			buildError(ctx,404,"Job not found: "+id);
@@ -520,7 +521,7 @@ public class CoviaAPI extends ACoviaAPI {
 			response.put("status", "queued");
 			response.put("queueDepth", depth);
 			buildResult(ctx, 202, response);
-		} catch (SecurityException e) {
+		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
 		} catch (IllegalArgumentException e) {
 			buildError(ctx, 404, e.getMessage());
@@ -557,7 +558,7 @@ public class CoviaAPI extends ACoviaAPI {
 			} else {
 				ctx.status(404);
 			}
-		} catch (SecurityException e) {
+		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
 		}
 	}
@@ -590,7 +591,7 @@ public class CoviaAPI extends ACoviaAPI {
 			} else {
 				ctx.status(404);
 			}
-		} catch (SecurityException e) {
+		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
 		} catch (IllegalStateException e) {
 			buildError(ctx, 409, e.getMessage());
@@ -625,7 +626,7 @@ public class CoviaAPI extends ACoviaAPI {
 			} else {
 				ctx.status(404);
 			}
-		} catch (SecurityException e) {
+		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
 		} catch (IllegalStateException e) {
 			buildError(ctx, 409, e.getMessage());
@@ -659,7 +660,7 @@ public class CoviaAPI extends ACoviaAPI {
 			} else {
 				ctx.status(404);
 			}
-		} catch (SecurityException e) {
+		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
 		}
 	}
@@ -679,7 +680,7 @@ public class CoviaAPI extends ACoviaAPI {
 				result.add(jobs.entryAt(i).getKey().toHexString());
 			}
 			buildResult(ctx, result);
-		} catch (SecurityException e) {
+		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
 		}
 	}

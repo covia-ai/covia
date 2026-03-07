@@ -10,6 +10,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -57,7 +58,7 @@ public class SecretAdapter extends AAdapter {
 				case "extract":
 					// TODO: capability-gated secret extraction
 					return CompletableFuture.failedFuture(
-						new SecurityException("No capability to extract secrets"));
+						new AuthException("No capability to extract secrets"));
 				default:
 					return CompletableFuture.failedFuture(
 						new IllegalArgumentException("Unknown secret operation: " + op));

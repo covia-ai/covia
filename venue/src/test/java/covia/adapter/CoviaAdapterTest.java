@@ -16,6 +16,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.venue.AgentState;
 import covia.venue.Engine;
@@ -209,6 +210,56 @@ public class CoviaAdapterTest {
 		assertEquals(Strings.create("Vector"), RT.getIn(result, "type"));
 		assertNotNull(RT.getIn(result, "count"));
 		assertNull(RT.getIn(result, "keys"), "Vectors should not have keys");
+	}
+
+	// ========== Isolation / adversarial ==========
+
+	@Test
+	public void testCannotReadOtherUsersData() {
+		// Bob should not see Alice's agents
+		RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
+
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, "g/test-agent"), BOB);
+		ACell result = readJob.awaitResult(5000);
+
+		assertEquals(CVMBool.FALSE, RT.getIn(result, "exists"),
+			"Bob should not be able to read Alice's agent");
+	}
+
+	@Test
+	public void testCannotListOtherUsersAgents() {
+		RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
+
+		Job listJob = engine.jobs().invokeOperation("covia:list",
+			Maps.of(Fields.PATH, "g"), BOB);
+		ACell result = listJob.awaitResult(5000);
+
+		assertEquals(CVMBool.FALSE, RT.getIn(result, "exists"),
+			"Bob should not see Alice's agent namespace");
+	}
+
+	@Test
+	public void testNonExistentUserReturnsNotFound() {
+		RequestContext NOBODY = RequestContext.of(Strings.create("did:key:z6MkNobody"));
+
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, "g"), NOBODY);
+		ACell readResult = readJob.awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(readResult, "exists"));
+
+		Job listJob = engine.jobs().invokeOperation("covia:list",
+			Maps.of(Fields.PATH, "g"), NOBODY);
+		ACell listResult = listJob.awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(listResult, "exists"));
+	}
+
+	@Test
+	public void testUnauthenticatedRequestFails() {
+		// Anonymous requests should be rejected as an auth failure
+		assertThrows(AuthException.class, () ->
+			engine.jobs().invokeOperation("covia:read",
+				Maps.of(Fields.PATH, "g"), RequestContext.ANONYMOUS));
 	}
 
 	// ========== Path parsing ==========

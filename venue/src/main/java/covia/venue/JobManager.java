@@ -7,6 +7,7 @@ import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import covia.exception.AuthException;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -138,7 +139,7 @@ public class JobManager {
 	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		if (meta == null) throw new IllegalArgumentException("Metadata must be specified");
 		AString callerDID = ctx.isInternal() ? venueDID : ctx.getCallerDID();
-		if (callerDID == null) throw new IllegalArgumentException("callerDID is required");
+		if (callerDID == null) throw new AuthException("Authentication required");
 
 		String adapterName = AAdapter.getAdapterName(meta);
 		if (adapterName == null) {
@@ -219,7 +220,7 @@ public class JobManager {
 	 * Submit a Job for an operation.
 	 */
 	private Job submitJob(AString opID, AMap<AString, ACell> meta, ACell input, AString callerDID) {
-		if (callerDID == null) throw new IllegalArgumentException("callerDID is required");
+		if (callerDID == null) throw new AuthException("Authentication required");
 
 		long ts = Utils.getCurrentTimestamp();
 		Blob jobID = generateJobID(ts);
@@ -273,7 +274,7 @@ public class JobManager {
 	/**
 	 * Gets a snapshot of the current job status data with request context.
 	 * Checks in-memory cache first, falls back to user's lattice.
-	 * @throws SecurityException if the caller does not own the job
+	 * @throws AuthException if the caller does not own the job
 	 */
 	public AMap<AString, ACell> getJobData(Blob jobID, RequestContext ctx) {
 		// 1. Hot cache (active jobs)
@@ -283,7 +284,7 @@ public class JobManager {
 		}
 		if (job != null) {
 			if (!accessControl.canAccessJob(ctx, job.getData())) {
-				throw new SecurityException("Access denied to job: " + jobID.toHexString());
+				throw new AuthException("Access denied to job: " + jobID.toHexString());
 			}
 			return job.getData();
 		}
@@ -365,7 +366,7 @@ public class JobManager {
 
 	/**
 	 * Cancels a Job with request context.
-	 * @throws SecurityException if the caller does not own the job
+	 * @throws AuthException if the caller does not own the job
 	 */
 	public AMap<AString, ACell> cancelJob(Blob id, RequestContext ctx) {
 		AMap<AString, ACell> data = getJobData(id, ctx);
@@ -386,7 +387,7 @@ public class JobManager {
 
 	/**
 	 * Pauses a running Job with request context.
-	 * @throws SecurityException if the caller does not own the job
+	 * @throws AuthException if the caller does not own the job
 	 */
 	public AMap<AString, ACell> pauseJob(Blob id, RequestContext ctx) {
 		AMap<AString, ACell> data = getJobData(id, ctx);
@@ -406,7 +407,7 @@ public class JobManager {
 
 	/**
 	 * Resumes a paused Job with request context.
-	 * @throws SecurityException if the caller does not own the job
+	 * @throws AuthException if the caller does not own the job
 	 */
 	public AMap<AString, ACell> resumeJob(Blob id, RequestContext ctx) {
 		AMap<AString, ACell> data = getJobData(id, ctx);
@@ -438,7 +439,7 @@ public class JobManager {
 
 	/**
 	 * Deletes a job permanently with request context.
-	 * @throws SecurityException if the caller does not own the job
+	 * @throws AuthException if the caller does not own the job
 	 */
 	public boolean deleteJob(Blob id, RequestContext ctx) {
 		AMap<AString, ACell> data = getJobData(id, ctx);
@@ -459,12 +460,12 @@ public class JobManager {
 
 	/**
 	 * Delivers a message to a job's message queue with request context.
-	 * @throws SecurityException if the caller does not own the job
+	 * @throws AuthException if the caller does not own the job
 	 */
 	public int deliverMessage(Blob jobID, AMap<AString, ACell> message, RequestContext ctx) {
 		AMap<AString, ACell> data = getJobData(jobID);
 		if (data != null && !accessControl.canAccessJob(ctx, data)) {
-			throw new SecurityException("Access denied to job: " + jobID.toHexString());
+			throw new AuthException("Access denied to job: " + jobID.toHexString());
 		}
 		return deliverMessage(jobID, message, ctx.getCallerDID());
 	}

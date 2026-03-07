@@ -14,6 +14,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Status;
 
@@ -160,8 +161,8 @@ public class AccessControlTest {
 
 	@Test
 	public void testInvokeWithNullCallerThrows() {
-		// callerDID is required — null should throw IllegalArgumentException
-		assertThrows(IllegalArgumentException.class,
+		// callerDID is required — null should throw AuthException
+		assertThrows(AuthException.class,
 			() -> engine.jobs().invokeOperation(
 				"test:echo", Maps.of("message", "hello"), RequestContext.ANONYMOUS));
 	}
@@ -214,9 +215,9 @@ public class AccessControlTest {
 		assertNotNull(engine.jobs().getJobData(aliceJob.getID(), aliceCtx));
 
 		// Bob cannot
-		assertThrows(SecurityException.class,
+		assertThrows(AuthException.class,
 			() -> engine.jobs().getJobData(aliceJob.getID(), bobCtx),
-			"Non-owner should get SecurityException");
+			"Non-owner should get AuthException");
 
 		// Clean up
 		engine.jobs().cancelJob(aliceJob.getID(), aliceCtx);
@@ -231,7 +232,7 @@ public class AccessControlTest {
 			"test:delay", Maps.of("delay", 10000), aliceCtx);
 
 		// Bob cannot cancel Alice's job
-		assertThrows(SecurityException.class,
+		assertThrows(AuthException.class,
 			() -> engine.jobs().cancelJob(aliceJob.getID(), bobCtx));
 
 		// Alice can cancel her own job
