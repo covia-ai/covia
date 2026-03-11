@@ -11,6 +11,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.util.JSON;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.grid.Status;
@@ -72,6 +73,7 @@ public class LangChainAdapter extends AAdapter {
 	static final AString K_TOOLS      = Strings.intern("tools");
 	static final AString K_ROLE       = Strings.intern("role");
 	static final AString K_CONTENT    = Strings.intern("content");
+	static final AString K_STRUCTURED_CONTENT = Strings.intern("structured_content");
 	static final AString K_TOOL_CALLS = Strings.intern("toolCalls");
 	static final AString K_ID         = Strings.intern("id");
 	static final AString K_NAME       = Strings.intern("name");
@@ -372,7 +374,14 @@ public class LangChainAdapter extends AAdapter {
 				case "tool": {
 					AString id = RT.ensureString(RT.getIn(entry, K_ID));
 					AString name = RT.ensureString(RT.getIn(entry, K_NAME));
+					// Text content or structured content (serialised to JSON)
 					AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
+					if (content == null) {
+						ACell structured = RT.getIn(entry, K_STRUCTURED_CONTENT);
+						if (structured != null) {
+							content = Strings.create(JSON.toString(structured));
+						}
+					}
 					if (id != null && name != null && content != null) {
 						result.add(new ToolExecutionResultMessage(
 							id.toString(), name.toString(), content.toString()));

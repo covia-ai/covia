@@ -107,6 +107,7 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final AString K_PROPERTIES  = Strings.intern("properties");
 	private static final AString K_REQUIRED    = Strings.intern("required");
 	private static final AString K_REASON      = Strings.intern("reason");
+	private static final AString K_STRUCTURED_CONTENT = Strings.intern("structured_content");
 
 	// Role values
 	private static final AString ROLE_SYSTEM    = Strings.intern("system");
@@ -121,8 +122,8 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final String TOOL_GRID_INVOKE   = "grid_invoke";
 	private static final String TOOL_MESSAGE_AGENT = "message_agent";
 	private static final String TOOL_REQUEST_AGENT = "request_agent";
-	private static final String TOOL_COVIA_LIST    = "covia_list";
-	private static final String TOOL_COVIA_GET     = "covia_get";
+	private static final String TOOL_LIST_FUNCTIONS    = "list_functions";
+	private static final String TOOL_DESCRIBE_FUNCTION = "describe_function";
 
 	/** Maximum tool call loop iterations to prevent runaway loops */
 	static final int MAX_TOOL_ITERATIONS = 20;
@@ -172,16 +173,9 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final AMap<AString, ACell> TOOL_DEF_GRID_RUN = Maps.of(
 		K_NAME, Strings.create(TOOL_GRID_RUN),
 		K_DESCRIPTION, Strings.create(
-			"Invoke a grid operation synchronously and wait for the result. "
-			+ "IMPORTANT: Use covia_get first to look up the operation's input schema before calling this. "
-			+ "Available operations include: "
-			+ "agent:create (create a new agent), "
-			+ "agent:request (submit a task to another agent), "
-			+ "agent:query (read an agent's state), "
-			+ "agent:list (list all agents), "
-			+ "http:get / http:post (HTTP requests), "
-			+ "convex:query / convex:transact (blockchain operations), "
-			+ "mcp:tools:list / mcp:tools:call (MCP tool discovery and invocation). "
+			"Invoke an adapter function synchronously and wait for the result. "
+			+ "IMPORTANT: Use describe_function first to look up the function's input schema. "
+			+ "Use list_functions to discover available functions. "
 			+ "For long-running operations, use grid_invoke instead."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
@@ -191,7 +185,7 @@ public class LLMAgentAdapter extends AAdapter {
 					K_DESCRIPTION, Strings.create("The operation to invoke, e.g. \"agent:create\", \"http:get\", \"convex:query\"")),
 				Fields.INPUT, Maps.of(
 					K_TYPE, Strings.create("object"),
-					K_DESCRIPTION, Strings.create("Input parameters as a JSON object. Use covia_get to check the required schema first."))
+					K_DESCRIPTION, Strings.create("Input parameters as a JSON object. Use describe_function to check the required schema first."))
 			),
 			K_REQUIRED, Vectors.of(Strings.create("operation"))
 		)
@@ -213,7 +207,7 @@ public class LLMAgentAdapter extends AAdapter {
 					K_DESCRIPTION, Strings.create("The operation to invoke, e.g. \"agent:request\", \"http:post\"")),
 				Fields.INPUT, Maps.of(
 					K_TYPE, Strings.create("object"),
-					K_DESCRIPTION, Strings.create("Input parameters as a JSON object. Use covia_get to check the required schema first."))
+					K_DESCRIPTION, Strings.create("Input parameters as a JSON object. Use describe_function to check the required schema first."))
 			),
 			K_REQUIRED, Vectors.of(Strings.create("operation"))
 		)
@@ -262,31 +256,31 @@ public class LLMAgentAdapter extends AAdapter {
 		)
 	);
 
-	private static final AMap<AString, ACell> TOOL_DEF_COVIA_LIST = Maps.of(
-		K_NAME, Strings.create(TOOL_COVIA_LIST),
+	private static final AMap<AString, ACell> TOOL_DEF_LIST_FUNCTIONS = Maps.of(
+		K_NAME, Strings.create(TOOL_LIST_FUNCTIONS),
 		K_DESCRIPTION, Strings.create(
-			"List all operations available on this venue. "
-			+ "Returns operation names and descriptions. "
-			+ "Use this to discover what operations you can call with grid_run."),
+			"List all adapter functions available on this venue. "
+			+ "Returns function names, IDs, and descriptions. "
+			+ "Use this to discover what functions you can call with grid_run."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.empty()
 		)
 	);
 
-	private static final AMap<AString, ACell> TOOL_DEF_COVIA_GET = Maps.of(
-		K_NAME, Strings.create(TOOL_COVIA_GET),
+	private static final AMap<AString, ACell> TOOL_DEF_DESCRIBE_FUNCTION = Maps.of(
+		K_NAME, Strings.create(TOOL_DESCRIBE_FUNCTION),
 		K_DESCRIPTION, Strings.create(
-			"Get the full metadata for an operation, including its input and output schemas. "
-			+ "Use this before calling grid_run to learn what parameters an operation expects."),
+			"Get the full metadata for an adapter function, including its input and output schemas. "
+			+ "Use this before calling grid_run to learn what parameters a function expects."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
-				Fields.OPERATION, Maps.of(
+				K_NAME, Maps.of(
 					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("The operation name, e.g. \"agent:create\", \"http:get\""))
+					K_DESCRIPTION, Strings.create("The function name, e.g. \"agent:create\", \"http:get\""))
 			),
-			K_REQUIRED, Vectors.of(Strings.create("operation"))
+			K_REQUIRED, Vectors.of(Strings.create("name"))
 		)
 	);
 
@@ -296,8 +290,8 @@ public class LLMAgentAdapter extends AAdapter {
 		(ACell) TOOL_DEF_GRID_INVOKE,
 		(ACell) TOOL_DEF_MESSAGE_AGENT,
 		(ACell) TOOL_DEF_REQUEST_AGENT,
-		(ACell) TOOL_DEF_COVIA_LIST,
-		(ACell) TOOL_DEF_COVIA_GET
+		(ACell) TOOL_DEF_LIST_FUNCTIONS,
+		(ACell) TOOL_DEF_DESCRIBE_FUNCTION
 	);
 
 	/** Task tools only available when there are outstanding tasks */
@@ -538,21 +532,25 @@ public class LLMAgentAdapter extends AAdapter {
 				}
 
 				// Execute the tool — built-in or grid dispatch
-				String toolResult;
+				ACell toolResult;
 				try {
 					String toolName = (name != null) ? name.toString() : "";
 					toolResult = executeToolCall(toolName, toolInput, ctx, toolCtx);
 				} catch (Exception e) {
-					toolResult = "Error: " + e.getMessage();
+					toolResult = Strings.create("Error: " + e.getMessage());
 					log.warn("Tool execution failed: {} — {}", name, e.getMessage());
 				}
 
-				// Append tool result message
+				// Append tool result message — text in content, structured in structured_content
 				AMap<AString, ACell> toolMsg = Maps.of(
 					K_ROLE, ROLE_TOOL,
-					K_NAME, (name != null) ? name : Strings.create("unknown"),
-					K_CONTENT, Strings.create(toolResult)
+					K_NAME, (name != null) ? name : Strings.create("unknown")
 				);
+				if (toolResult instanceof AString s) {
+					toolMsg = toolMsg.assoc(K_CONTENT, s);
+				} else {
+					toolMsg = toolMsg.assoc(K_STRUCTURED_CONTENT, toolResult);
+				}
 				if (id != null) toolMsg = toolMsg.assoc(K_ID, id);
 				newMessages = newMessages.conj(toolMsg);
 			}
@@ -572,8 +570,11 @@ public class LLMAgentAdapter extends AAdapter {
 
 	/**
 	 * Executes a tool call, dispatching to built-in handlers or grid operations.
+	 * Returns ACell — either an AString (for errors/simple text) or a structured
+	 * AMap/AVector. The caller converts structured results to JSON strings for
+	 * the tool message content.
 	 */
-	private String executeToolCall(String toolName, ACell input, RequestContext ctx, ToolContext toolCtx) {
+	private ACell executeToolCall(String toolName, ACell input, RequestContext ctx, ToolContext toolCtx) {
 		return switch (toolName) {
 			case TOOL_COMPLETE_TASK  -> handleCompleteTask(input, toolCtx);
 			case TOOL_FAIL_TASK     -> handleFailTask(input, toolCtx);
@@ -581,8 +582,8 @@ public class LLMAgentAdapter extends AAdapter {
 			case TOOL_GRID_INVOKE   -> handleInvokeAsync(input, ctx, toolCtx);
 			case TOOL_MESSAGE_AGENT -> handleMessageAgent(input, ctx);
 			case TOOL_REQUEST_AGENT -> handleRequestAgent(input, ctx);
-			case TOOL_COVIA_LIST    -> handleCoviaList();
-			case TOOL_COVIA_GET     -> handleCoviaGet(input);
+			case TOOL_LIST_FUNCTIONS    -> handleListFunctions();
+			case TOOL_DESCRIBE_FUNCTION -> handleDescribeFunction(input);
 			default -> handleGridDispatch(toolName, input, ctx);
 		};
 	}
@@ -593,12 +594,12 @@ public class LLMAgentAdapter extends AAdapter {
 	 * the presented task list; completion is recorded in taskResults for the
 	 * agent framework to process.
 	 */
-	private String handleCompleteTask(ACell input, ToolContext toolCtx) {
+	private ACell handleCompleteTask(ACell input, ToolContext toolCtx) {
 		AString jobIdStr = RT.ensureString(RT.getIn(input, Fields.JOB_ID));
-		if (jobIdStr == null) return "Error: jobId is required";
+		if (jobIdStr == null) return Strings.create("Error: jobId is required");
 
-		if (!isKnownTask(jobIdStr, toolCtx)) return "Error: task not found: " + jobIdStr;
-		if (isAlreadyCompleted(jobIdStr, toolCtx)) return "Error: task already finished: " + jobIdStr;
+		if (!isKnownTask(jobIdStr, toolCtx)) return Strings.create("Error: task not found: " + jobIdStr);
+		if (isAlreadyCompleted(jobIdStr, toolCtx)) return Strings.create("Error: task already finished: " + jobIdStr);
 
 		ACell output = RT.getIn(input, Fields.OUTPUT);
 
@@ -606,19 +607,19 @@ public class LLMAgentAdapter extends AAdapter {
 		toolCtx.recordTaskResult(jobIdStr,
 			Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, output));
 
-		return "{\"status\":\"COMPLETE\"}";
+		return Maps.of(Fields.STATUS, Status.COMPLETE);
 	}
 
 	/**
 	 * Fails/rejects an inbound task with a reason. Side effect — immediate.
 	 * Tasks are lattice data, not JobManager jobs.
 	 */
-	private String handleFailTask(ACell input, ToolContext toolCtx) {
+	private ACell handleFailTask(ACell input, ToolContext toolCtx) {
 		AString jobIdStr = RT.ensureString(RT.getIn(input, Fields.JOB_ID));
-		if (jobIdStr == null) return "Error: jobId is required";
+		if (jobIdStr == null) return Strings.create("Error: jobId is required");
 
-		if (!isKnownTask(jobIdStr, toolCtx)) return "Error: task not found: " + jobIdStr;
-		if (isAlreadyCompleted(jobIdStr, toolCtx)) return "Error: task already finished: " + jobIdStr;
+		if (!isKnownTask(jobIdStr, toolCtx)) return Strings.create("Error: task not found: " + jobIdStr);
+		if (isAlreadyCompleted(jobIdStr, toolCtx)) return Strings.create("Error: task already finished: " + jobIdStr);
 
 		AString reason = RT.ensureString(RT.getIn(input, K_REASON));
 		String reasonStr = (reason != null) ? reason.toString() : "Rejected by agent";
@@ -627,7 +628,7 @@ public class LLMAgentAdapter extends AAdapter {
 		toolCtx.recordTaskResult(jobIdStr,
 			Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, Strings.create(reasonStr)));
 
-		return "{\"status\":\"FAILED\"}";
+		return Maps.of(Fields.STATUS, Status.FAILED);
 	}
 
 	/**
@@ -650,23 +651,23 @@ public class LLMAgentAdapter extends AAdapter {
 	/**
 	 * Invokes a grid operation synchronously, returning the result directly.
 	 */
-	private String handleInvoke(ACell input, RequestContext ctx) {
+	private ACell handleInvoke(ACell input, RequestContext ctx) {
 		AString operation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
-		if (operation == null) return "Error: operation is required";
+		if (operation == null) return Strings.create("Error: operation is required");
 
 		ACell opInput = ensureParsedInput(RT.getIn(input, Fields.INPUT));
 
 		Job opJob = engine.jobs().invokeOperation(operation, opInput, ctx);
 		ACell result = opJob.awaitResult();
-		return (result != null) ? result.toString() : "null";
+		return (result != null) ? result : Maps.empty();
 	}
 
 	/**
 	 * Invokes a grid operation asynchronously. Adds to pending, registers wake callback.
 	 */
-	private String handleInvokeAsync(ACell input, RequestContext ctx, ToolContext toolCtx) {
+	private ACell handleInvokeAsync(ACell input, RequestContext ctx, ToolContext toolCtx) {
 		AString operation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
-		if (operation == null) return "Error: operation is required";
+		if (operation == null) return Strings.create("Error: operation is required");
 
 		ACell opInput = ensureParsedInput(RT.getIn(input, Fields.INPUT));
 
@@ -685,40 +686,40 @@ public class LLMAgentAdapter extends AAdapter {
 			});
 		}
 
-		return "{\"jobId\":\"" + jobIdHex + "\"}";
+		return Maps.of(Fields.JOB_ID, jobIdHex);
 	}
 
 	/**
 	 * Sends an ephemeral message to another agent's inbox.
 	 */
-	private String handleMessageAgent(ACell input, RequestContext ctx) {
+	private ACell handleMessageAgent(ACell input, RequestContext ctx) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
-		if (agentId == null) return "Error: agentId is required";
+		if (agentId == null) return Strings.create("Error: agentId is required");
 
 		ACell message = RT.getIn(input, Fields.MESSAGE);
-		if (message == null) return "Error: message is required";
+		if (message == null) return Strings.create("Error: message is required");
 
 		Users users = engine.getVenueState().users();
 		User user = users.get(ctx.getCallerDID());
-		if (user == null) return "Error: user not found";
+		if (user == null) return Strings.create("Error: user not found");
 
 		AgentState agent = user.agent(agentId);
-		if (agent == null) return "Error: agent not found: " + agentId;
-		if (!agent.exists()) return "Error: agent not found: " + agentId;
+		if (agent == null) return Strings.create("Error: agent not found: " + agentId);
+		if (!agent.exists()) return Strings.create("Error: agent not found: " + agentId);
 		if (AgentState.TERMINATED.equals(agent.getStatus())) {
-			return "Error: agent is terminated: " + agentId;
+			return Strings.create("Error: agent is terminated: " + agentId);
 		}
 
 		agent.deliverMessage(message);
-		return "{\"delivered\":true}";
+		return Maps.of(Fields.DELIVERED, CVMBool.TRUE);
 	}
 
 	/**
 	 * Submits a task to another agent synchronously and returns the result.
 	 */
-	private String handleRequestAgent(ACell input, RequestContext ctx) {
+	private ACell handleRequestAgent(ACell input, RequestContext ctx) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
-		if (agentId == null) return "Error: agentId is required";
+		if (agentId == null) return Strings.create("Error: agentId is required");
 
 		ACell taskInput = RT.getIn(input, Fields.INPUT);
 
@@ -732,74 +733,64 @@ public class LLMAgentAdapter extends AAdapter {
 		try {
 			Job requestJob = engine.jobs().invokeOperation("agent:request", requestInput, ctx);
 			ACell result = requestJob.awaitResult();
-			return convex.core.util.JSON.toString(result);
+			return (result != null) ? result : Maps.empty();
 		} catch (Exception e) {
-			return "Error: " + e.getMessage();
+			return Strings.create("Error: " + e.getMessage());
 		}
 	}
 
 	/**
 	 * Lists all operations available on the venue with names and descriptions.
 	 */
-	private String handleCoviaList() {
+	@SuppressWarnings("unchecked")
+	private ACell handleListFunctions() {
 		Index<AString, Hash> ops = engine.getOperationRegistry();
-		StringBuilder sb = new StringBuilder();
-		sb.append("{\"operations\":[");
-		boolean first = true;
+		AVector<ACell> functions = Vectors.empty();
 		for (long i = 0; i < ops.count(); i++) {
 			var entry = ops.entryAt(i);
 			AString name = entry.getKey();
 			Hash hash = entry.getValue();
 			Asset asset = engine.getAsset(hash);
 
-			if (!first) sb.append(",");
-			first = false;
-			sb.append("{\"name\":\"").append(name).append("\"");
+			AMap<AString, ACell> func = Maps.of(
+				K_NAME, name,
+				K_ID, Strings.create(hash.toHexString()));
 			if (asset != null) {
-				AMap<AString, ACell> meta = asset.meta();
-				ACell desc = meta.get(Fields.DESCRIPTION);
-				if (desc != null) {
-					sb.append(",\"description\":\"").append(escapeJson(desc.toString())).append("\"");
-				}
+				ACell desc = asset.meta().get(Fields.DESCRIPTION);
+				if (desc != null) func = func.assoc(K_DESCRIPTION, desc);
 			}
-			sb.append("}");
+			functions = (AVector<ACell>) functions.conj(func);
 		}
-		sb.append("]}");
-		return sb.toString();
+		return Maps.of(Strings.create("functions"), functions);
 	}
 
 	/**
-	 * Gets full metadata for a named operation, including input/output schemas.
+	 * Gets full metadata for a named adapter function, including input/output schemas.
 	 */
-	private String handleCoviaGet(ACell input) {
-		AString opName = RT.ensureString(RT.getIn(input, Fields.OPERATION));
-		if (opName == null) return "Error: operation name is required";
+	private ACell handleDescribeFunction(ACell input) {
+		AString funcName = RT.ensureString(RT.getIn(input, K_NAME));
+		if (funcName == null) return Strings.create("Error: function name is required");
 
-		Hash hash = engine.resolveOperation(opName);
-		if (hash == null) return "Error: operation not found: " + opName;
+		Hash hash = engine.resolveOperation(funcName);
+		if (hash == null) return Strings.create("Error: function not found: " + funcName);
 
 		Asset asset = engine.getAsset(hash);
-		if (asset == null) return "Error: asset not found for operation: " + opName;
+		if (asset == null) return Strings.create("Error: asset not found for function: " + funcName);
 
-		AMap<AString, ACell> meta = asset.meta();
-		return convex.core.util.JSON.toString(meta);
-	}
-
-	private static String escapeJson(String s) {
-		return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
+		return asset.meta();
 	}
 
 	/**
 	 * Falls through to grid dispatch for non-built-in tools.
 	 */
-	private String handleGridDispatch(String toolName, ACell input, RequestContext ctx) {
+	private ACell handleGridDispatch(String toolName, ACell input, RequestContext ctx) {
 		try {
 			Job toolJob = engine.jobs().invokeOperation(
 				Strings.create(toolName), input, ctx);
 			ACell toolOutput = toolJob.awaitResult();
-			return (toolOutput != null) ? toolOutput.toString() : "null";
+			return (toolOutput != null) ? toolOutput : Maps.empty();
 		} catch (Exception e) {
-			return "Error: " + e.getMessage();
+			return Strings.create("Error: " + e.getMessage());
 		}
 	}
 
