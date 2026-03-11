@@ -234,14 +234,19 @@ public class LLMAgentAdapter extends AAdapter {
 		)
 	);
 
-	/** All default tool definitions, merged with user-configured tools before passing to level 3 */
+	/** Base tools always available (invoke, invoke_async, message_agent) */
 	@SuppressWarnings("unchecked")
-	private static final AVector<ACell> DEFAULT_TOOLS = (AVector<ACell>) Vectors.of(
-		(ACell) TOOL_DEF_COMPLETE_TASK,
-		(ACell) TOOL_DEF_FAIL_TASK,
+	private static final AVector<ACell> BASE_TOOLS = (AVector<ACell>) Vectors.of(
 		(ACell) TOOL_DEF_INVOKE,
 		(ACell) TOOL_DEF_INVOKE_ASYNC,
 		(ACell) TOOL_DEF_MESSAGE_AGENT
+	);
+
+	/** Task tools only available when there are outstanding tasks */
+	@SuppressWarnings("unchecked")
+	private static final AVector<ACell> TASK_TOOLS = (AVector<ACell>) Vectors.of(
+		(ACell) TOOL_DEF_COMPLETE_TASK,
+		(ACell) TOOL_DEF_FAIL_TASK
 	);
 
 	@Override
@@ -323,18 +328,8 @@ public class LLMAgentAdapter extends AAdapter {
 			).concat(history);
 		}
 
-		// Append task context as a user turn so the LLM can see pending tasks
-		if (tasks != null && tasks.count() > 0) {
-			StringBuilder sb = new StringBuilder("[Tasks assigned to you]\n");
-			for (long i = 0; i < tasks.count(); i++) {
-				ACell task = tasks.get(i);
-				AString jobId = RT.ensureString(RT.getIn(task, Fields.JOB_ID));
-				ACell taskInput = RT.getIn(task, Fields.INPUT);
-				sb.append("- Task ").append(jobId).append(": ").append(taskInput).append("\n");
-			}
-			sb.append("Use complete_task or fail_task to resolve each task.");
-			history = history.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(sb.toString())));
-		}
+		// Task context is built dynamically per tool-loop iteration (not baked into
+		// history) so the LLM only sees outstanding tasks, not already-resolved ones.
 
 		// Append pending job results as a user turn
 		if (pending != null && pending.count() > 0) {
@@ -362,12 +357,12 @@ public class LLMAgentAdapter extends AAdapter {
 			}
 		}
 
-		// Build the merged tool list: default tools + user-configured tools
-		AVector<ACell> allTools = DEFAULT_TOOLS;
+		// Build the base tool list (task tools added dynamically per loop iteration)
+		AVector<ACell> baseTools = BASE_TOOLS;
 		if (config != null) {
 			ACell toolsCell = config.get(K_TOOLS);
 			if (toolsCell instanceof AVector) {
-				allTools = (AVector<ACell>) allTools.concat((AVector<ACell>) toolsCell);
+				baseTools = (AVector<ACell>) baseTools.concat((AVector<ACell>) toolsCell);
 			}
 		}
 
@@ -376,7 +371,7 @@ public class LLMAgentAdapter extends AAdapter {
 
 		// Invoke level 3 with tool call loop — returns all messages to append
 		AVector<ACell> newMessages = invokeWithToolLoop(
-			llmOperation, config, history, allTools, ctx, toolCtx);
+			llmOperation, config, history, baseTools, ctx, toolCtx);
 		history = (AVector<ACell>) history.concat(newMessages);
 
 		// Extract text content from the final assistant message
@@ -418,7 +413,7 @@ public class LLMAgentAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private AVector<ACell> invokeWithToolLoop(
 			AString llmOperation, AMap<AString, ACell> config,
-			AVector<ACell> history, AVector<ACell> tools, RequestContext ctx,
+			AVector<ACell> history, AVector<ACell> baseTools, RequestContext ctx,
 			ToolContext toolCtx) {
 
 		AVector<ACell> newMessages = Vectors.empty();
@@ -426,6 +421,13 @@ public class LLMAgentAdapter extends AAdapter {
 		for (int iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
 			// Build level 3 input (full history including new messages from this loop)
 			AVector<ACell> fullHistory = (AVector<ACell>) history.concat(newMessages);
+
+			// Inject dynamic task context — only outstanding (unresolved) tasks
+			ACell taskMsg = buildOutstandingTaskMessage(toolCtx);
+			if (taskMsg != null) {
+				fullHistory = fullHistory.conj(taskMsg);
+			}
+
 			AMap<AString, ACell> l3Input = Maps.of(K_MESSAGES, fullHistory);
 			if (config != null) {
 				ACell model = config.get(K_MODEL);
@@ -435,7 +437,12 @@ public class LLMAgentAdapter extends AAdapter {
 				ACell responseFormat = config.get(K_RESPONSE_FORMAT);
 				if (responseFormat != null) l3Input = l3Input.assoc(K_RESPONSE_FORMAT, responseFormat);
 			}
-			if (tools != null) {
+
+			// Include task tools (complete_task, fail_task) only when tasks remain
+			AVector<ACell> tools = (taskMsg != null)
+				? (AVector<ACell>) TASK_TOOLS.concat(baseTools)
+				: baseTools;
+			if (tools != null && tools.count() > 0) {
 				l3Input = l3Input.assoc(K_TOOLS, tools);
 			}
 
@@ -492,6 +499,7 @@ public class LLMAgentAdapter extends AAdapter {
 				if (id != null) toolMsg = toolMsg.assoc(K_ID, id);
 				newMessages = newMessages.conj(toolMsg);
 			}
+
 		}
 
 		// Iteration limit reached
@@ -521,22 +529,20 @@ public class LLMAgentAdapter extends AAdapter {
 
 	/**
 	 * Completes an inbound task with a result. Side effect — immediate.
+	 * Tasks are lattice data, not JobManager jobs. Validation checks against
+	 * the presented task list; completion is recorded in taskResults for the
+	 * agent framework to process.
 	 */
 	private String handleCompleteTask(ACell input, ToolContext toolCtx) {
 		AString jobIdStr = RT.ensureString(RT.getIn(input, Fields.JOB_ID));
 		if (jobIdStr == null) return "Error: jobId is required";
 
-		Blob jobId = parseJobId(jobIdStr);
-		if (jobId == null) return "Error: invalid jobId: " + jobIdStr;
-
-		Job taskJob = engine.jobs().getJob(jobId);
-		if (taskJob == null) return "Error: task not found: " + jobIdStr;
-		if (taskJob.isFinished()) return "Error: task already finished: " + jobIdStr;
+		if (!isKnownTask(jobIdStr, toolCtx)) return "Error: task not found: " + jobIdStr;
+		if (isAlreadyCompleted(jobIdStr, toolCtx)) return "Error: task already finished: " + jobIdStr;
 
 		ACell output = RT.getIn(input, Fields.OUTPUT);
-		taskJob.completeWith(output);
 
-		// Record in taskResults for timeline capture
+		// Record in taskResults for the agent framework to remove from lattice
 		toolCtx.recordTaskResult(jobIdStr,
 			Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, output));
 
@@ -545,23 +551,19 @@ public class LLMAgentAdapter extends AAdapter {
 
 	/**
 	 * Fails/rejects an inbound task with a reason. Side effect — immediate.
+	 * Tasks are lattice data, not JobManager jobs.
 	 */
 	private String handleFailTask(ACell input, ToolContext toolCtx) {
 		AString jobIdStr = RT.ensureString(RT.getIn(input, Fields.JOB_ID));
 		if (jobIdStr == null) return "Error: jobId is required";
 
-		Blob jobId = parseJobId(jobIdStr);
-		if (jobId == null) return "Error: invalid jobId: " + jobIdStr;
-
-		Job taskJob = engine.jobs().getJob(jobId);
-		if (taskJob == null) return "Error: task not found: " + jobIdStr;
-		if (taskJob.isFinished()) return "Error: task already finished: " + jobIdStr;
+		if (!isKnownTask(jobIdStr, toolCtx)) return "Error: task not found: " + jobIdStr;
+		if (isAlreadyCompleted(jobIdStr, toolCtx)) return "Error: task already finished: " + jobIdStr;
 
 		AString reason = RT.ensureString(RT.getIn(input, K_REASON));
 		String reasonStr = (reason != null) ? reason.toString() : "Rejected by agent";
-		taskJob.fail(reasonStr);
 
-		// Record in taskResults for timeline capture
+		// Record in taskResults for the agent framework to remove from lattice
 		toolCtx.recordTaskResult(jobIdStr,
 			Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, Strings.create(reasonStr)));
 
@@ -687,6 +689,50 @@ public class LLMAgentAdapter extends AAdapter {
 		} catch (Exception e) {
 			return null;
 		}
+	}
+
+	/**
+	 * Checks whether the given jobId string matches a task in the presented task list.
+	 */
+	private static boolean isKnownTask(AString jobIdStr, ToolContext toolCtx) {
+		if (toolCtx.tasks == null) return false;
+		for (long i = 0; i < toolCtx.tasks.count(); i++) {
+			ACell task = toolCtx.tasks.get(i);
+			AString taskJobId = RT.ensureString(RT.getIn(task, Fields.JOB_ID));
+			if (jobIdStr.equals(taskJobId)) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Checks whether the given jobId has already been recorded as completed/failed.
+	 */
+	private static boolean isAlreadyCompleted(AString jobIdStr, ToolContext toolCtx) {
+		return toolCtx.taskResults != null && toolCtx.taskResults.get(jobIdStr) != null;
+	}
+
+	/**
+	 * Builds a user message listing only outstanding (unresolved) tasks.
+	 * Returns null if no tasks remain, signalling the loop to omit task tools.
+	 */
+	private static AMap<AString, ACell> buildOutstandingTaskMessage(ToolContext toolCtx) {
+		if (toolCtx.tasks == null || toolCtx.tasks.count() == 0) return null;
+		StringBuilder sb = new StringBuilder();
+		int outstanding = 0;
+		for (long i = 0; i < toolCtx.tasks.count(); i++) {
+			ACell task = toolCtx.tasks.get(i);
+			AString jobId = RT.ensureString(RT.getIn(task, Fields.JOB_ID));
+			if (jobId != null && toolCtx.taskResults != null && toolCtx.taskResults.get(jobId) != null) {
+				continue; // already resolved
+			}
+			if (outstanding == 0) sb.append("[Tasks assigned to you]\n");
+			outstanding++;
+			ACell taskInput = RT.getIn(task, Fields.INPUT);
+			sb.append("- Task ").append(jobId).append(": ").append(taskInput).append("\n");
+		}
+		if (outstanding == 0) return null;
+		sb.append("Use complete_task or fail_task to resolve each task.");
+		return Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(sb.toString()));
 	}
 
 	@SuppressWarnings("unchecked")

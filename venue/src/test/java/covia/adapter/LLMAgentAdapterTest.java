@@ -9,6 +9,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -479,10 +480,9 @@ public class LLMAgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("task-agent");
 
-		// Create a request job manually in STARTED state and add it as a task
-		Job requestJob = engine.jobs().invokeOperation(
-			"test:never", Maps.empty(), RequestContext.of(ALICE_DID));
-		agent.addTask(requestJob.getID(), Maps.of("question", "What is 2+2?"));
+		// Tasks are pure lattice data — use a generated Blob ID, not a Job
+		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
+		agent.addTask(taskId, Maps.of("question", "What is 2+2?"));
 
 		// Trigger the agent — level 2 (test:taskllm) will call complete_task
 		Job runJob = engine.jobs().invokeOperation(
@@ -491,11 +491,7 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		runJob.awaitResult(5000);
 
-		// The request Job should be COMPLETE with the agent's output
-		assertTrue(requestJob.isFinished(), "Request job should be finished");
-		assertEquals("COMPLETE", requestJob.getStatus().toString());
-
-		// Verify agent state
+		// Verify agent state — task should be removed after completion
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
 		assertEquals(0, agent.getTasks().count(), "Tasks should be empty after completion");
 		assertEquals(1, agent.getTimeline().count());
@@ -511,25 +507,16 @@ public class LLMAgentAdapterTest {
 		// Test complete_task via processChat directly (no agent:request pipeline)
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
-		// Create a task job manually
-		Job taskJob = engine.jobs().invokeOperation(
-			"test:echo", Maps.of("echo", "task payload"), RequestContext.of(ALICE_DID));
-		// Don't await — leave it in a state we can complete
-		String taskJobId = taskJob.getID().toHexString();
-
-		// Create a new job to be our "task" that the agent will complete
-		Job pendingTask = engine.jobs().invokeOperation(
-			"test:never", Maps.empty(), RequestContext.of(ALICE_DID));
-		String pendingTaskId = pendingTask.getID().toHexString();
+		// Tasks are pure lattice data — use a synthetic hex ID
+		String taskId = Blob.createRandom(new java.util.Random(), 16).toHexString();
 
 		// Build input with tasks
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "direct-task-agent",
 			AgentState.KEY_STATE, Maps.of("config", Maps.of("llmOperation", "test:taskllm")),
 			Fields.TASKS, Vectors.of(Maps.of(
-				Fields.JOB_ID, pendingTaskId,
-				Fields.INPUT, Maps.of("question", "test?"),
-				Fields.STATUS, "STARTED"
+				Fields.JOB_ID, taskId,
+				Fields.INPUT, Maps.of("question", "test?")
 			)),
 			Fields.MESSAGES, Vectors.empty()
 		);
@@ -541,8 +528,10 @@ public class LLMAgentAdapterTest {
 		ACell taskResults = RT.getIn(output, Fields.TASK_RESULTS);
 		assertNotNull(taskResults, "Output should contain taskResults from complete_task tool call");
 
-		// The pending task job should now be complete
-		assertTrue(pendingTask.isFinished(), "Task job should be completed by complete_task tool");
+		// Verify the specific task was recorded as COMPLETE
+		ACell taskResult = RT.getIn(taskResults, taskId);
+		assertNotNull(taskResult, "taskResults should contain entry for our task");
+		assertEquals("COMPLETE", RT.getIn(taskResult, Fields.STATUS).toString());
 	}
 
 	// ========== Built-in tools: invoke ==========
