@@ -1,6 +1,6 @@
 {
 	"name": "Create Agent",
-	"description": "Creates and initialises a new agent for the authenticated user. Agents are identified by human-readable names and persist in the user's lattice state. Idempotent: creating an existing agent is a no-op.",
+	"description": "Creates and initialises a new agent for the authenticated user. Agents are identified by human-readable names and persist in the user's lattice state. Idempotent: creating an existing agent is a no-op. Set overwrite=true to replace an existing (e.g. TERMINATED) agent with fresh state.",
 	"dateCreated": "2026-02-27T00:00:00Z",
 	"operation": {
 		"adapter": "agent:create",
@@ -9,7 +9,8 @@
 			"properties": {
 				"agentId": { "type": "string", "description": "Human-readable agent name" },
 				"config": { "type": "object", "description": "Optional framework configuration" },
-				"state": { "description": "Optional initial state for the transition function. Use this to seed transition-function-specific configuration (e.g. LLM provider, model, system prompt)." }
+				"state": { "description": "Optional initial state for the transition function. Use this to seed transition-function-specific configuration (e.g. LLM provider, model, system prompt)." },
+				"overwrite": { "type": "boolean", "description": "If true, replace an existing agent with fresh state. Default false." }
 			},
 			"required": ["agentId"]
 		},
@@ -17,7 +18,8 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string" },
-				"status": { "type": "string" }
+				"status": { "type": "string" },
+				"created": { "type": "boolean", "description": "True if a new agent was created, false if it already existed" }
 			}
 		}
 	}

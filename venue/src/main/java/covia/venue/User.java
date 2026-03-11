@@ -98,6 +98,15 @@ public class User extends ALatticeComponent<ACell> {
 	}
 
 	/**
+	 * Removes an agent record entirely from the lattice.
+	 *
+	 * @param agentId Agent identifier to remove
+	 */
+	public void removeAgent(AString agentId) {
+		cursor.path(Namespace.G, agentId).set(null);
+	}
+
+	/**
 	 * Gets all agents as a map for iteration.
 	 *
 	 * @return Map of agent ID to agent state, or null if none

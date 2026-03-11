@@ -680,6 +680,183 @@ public class AgentAdapterTest {
 		assertEquals(0, ((AVector<?>) agents).count());
 	}
 
+	// ========== agent:delete ==========
+
+	@Test
+	public void testDeleteAgent() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "del-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job delJob = engine.jobs().invokeOperation(
+			"agent:delete",
+			Maps.of(Fields.AGENT_ID, "del-agent"),
+			RequestContext.of(ALICE_DID));
+		ACell result = delJob.awaitResult(5000);
+
+		assertNotNull(result);
+		assertEquals(AgentState.TERMINATED, RT.getIn(result, Fields.STATUS));
+
+		// Record still exists with TERMINATED status
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("del-agent");
+		assertNotNull(agent, "Agent record should still exist");
+		assertEquals(AgentState.TERMINATED, agent.getStatus());
+	}
+
+	@Test
+	public void testDeleteAgentWithRemove() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "rem-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job delJob = engine.jobs().invokeOperation(
+			"agent:delete",
+			Maps.of(Fields.AGENT_ID, "rem-agent", Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		ACell result = delJob.awaitResult(5000);
+
+		assertNotNull(result);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.REMOVED));
+
+		// Record should be gone
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("rem-agent");
+		assertNull(agent, "Agent record should be removed");
+	}
+
+	@Test
+	public void testDeleteThenRecreate() {
+		// Delete without remove — name is blocked
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "reuse-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		engine.jobs().invokeOperation(
+			"agent:delete",
+			Maps.of(Fields.AGENT_ID, "reuse-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Create again without overwrite — idempotent no-op, created=false
+		Job job2 = engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "reuse-agent"),
+			RequestContext.of(ALICE_DID));
+		ACell result2 = job2.awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(result2, Fields.CREATED));
+		assertEquals(AgentState.TERMINATED, RT.getIn(result2, Fields.STATUS));
+	}
+
+	@Test
+	public void testDeleteWithRemoveThenRecreate() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "clean-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Delete with remove
+		engine.jobs().invokeOperation(
+			"agent:delete",
+			Maps.of(Fields.AGENT_ID, "clean-agent", Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Recreate — should succeed with created=true
+		Job job2 = engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "clean-agent"),
+			RequestContext.of(ALICE_DID));
+		ACell result2 = job2.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(result2, Fields.CREATED));
+		assertEquals(AgentState.SLEEPING, RT.getIn(result2, Fields.STATUS));
+	}
+
+	// ========== agent:create with overwrite ==========
+
+	@Test
+	public void testCreateOverwriteTerminated() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "ow-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Terminate it
+		engine.jobs().invokeOperation(
+			"agent:delete",
+			Maps.of(Fields.AGENT_ID, "ow-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Overwrite with new config
+		Job job = engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "ow-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete"),
+				Fields.OVERWRITE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CREATED));
+		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
+
+		// Config should be the new one
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("ow-agent");
+		AMap<AString, ACell> config = agent.getConfig();
+		assertEquals(Strings.create("test:taskcomplete"), config.get(Fields.OPERATION));
+	}
+
+	@Test
+	public void testCreateOverwriteLiveAgentFails() {
+		// Create a live (SLEEPING) agent
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "live-ow",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Overwrite a non-terminated agent should fail
+		Job job = engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "live-ow",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete"),
+				Fields.OVERWRITE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			job.awaitResult(5000);
+			fail("Should fail when overwriting a non-terminated agent");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+		}
+	}
+
+	@Test
+	public void testCreateOverwriteFalseIsNoOp() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "no-ow",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Without overwrite — idempotent no-op
+		Job job = engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "no-ow",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertEquals(CVMBool.FALSE, RT.getIn(result, Fields.CREATED));
+
+		// Config should still be original
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("no-ow");
+		assertEquals(Strings.create("test:echo"), agent.getConfig().get(Fields.OPERATION));
+	}
+
 	// ========== AgentState lifecycle ==========
 
 	@Test

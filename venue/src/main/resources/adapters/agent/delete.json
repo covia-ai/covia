@@ -1,13 +1,14 @@
 {
 	"name": "Delete Agent",
-	"description": "Terminates and removes an agent. The agent will no longer accept messages, tasks, or triggers. The agent record is preserved for audit purposes.",
+	"description": "Terminates an agent. The agent will no longer accept messages, tasks, or triggers. By default the agent record is preserved (TERMINATED status) for audit purposes. Set remove=true to delete the record entirely, freeing the name for reuse.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "agent:delete",
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Agent name to delete" }
+				"agentId": { "type": "string", "description": "Agent name to delete" },
+				"remove": { "type": "boolean", "description": "If true, remove the agent record entirely instead of marking as TERMINATED. Default false." }
 			},
 			"required": ["agentId"]
 		},
@@ -15,7 +16,8 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string" },
-				"status": { "type": "string", "description": "Final status (TERMINATED)" }
+				"status": { "type": "string", "description": "Final status (TERMINATED)" },
+				"removed": { "type": "boolean", "description": "True if the record was removed" }
 			}
 		}
 	}

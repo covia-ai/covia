@@ -117,11 +117,24 @@ public class AgentAdapter extends AAdapter {
 
 		AMap<AString, ACell> config = (AMap<AString, ACell>) RT.getIn(input, Fields.CONFIG);
 		ACell initialState = RT.getIn(input, AgentState.KEY_STATE);
+		boolean overwrite = CVMBool.TRUE.equals(RT.getIn(input, Fields.OVERWRITE));
 
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ctx.getCallerDID());
 		AgentState agent = user.agent(agentId);
 		boolean alreadyExists = (agent != null && agent.exists());
+
+		// If overwrite requested, only allow on TERMINATED agents
+		if (alreadyExists && overwrite) {
+			if (AgentState.TERMINATED.equals(agent.getStatus())) {
+				user.removeAgent(agentId);
+				alreadyExists = false;
+			} else {
+				job.fail("Cannot overwrite agent that is not TERMINATED (status: " + agent.getStatus() + ")");
+				return;
+			}
+		}
+
 		agent = user.ensureAgent(agentId, config, initialState);
 
 		AMap<AString, ACell> result = Maps.of(
@@ -286,10 +299,18 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
 
-		agent.setStatus(AgentState.TERMINATED);
-
-		job.setStatus(Status.STARTED);
-		job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.TERMINATED));
+		boolean remove = CVMBool.TRUE.equals(RT.getIn(input, Fields.REMOVE));
+		if (remove) {
+			Users users = engine.getVenueState().users();
+			User user = users.get(ctx.getCallerDID());
+			user.removeAgent(agentId);
+			job.setStatus(Status.STARTED);
+			job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.REMOVED, CVMBool.TRUE));
+		} else {
+			agent.setStatus(AgentState.TERMINATED);
+			job.setStatus(Status.STARTED);
+			job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.TERMINATED));
+		}
 	}
 
 	private void handleSuspend(Job job, ACell input, RequestContext ctx) {
