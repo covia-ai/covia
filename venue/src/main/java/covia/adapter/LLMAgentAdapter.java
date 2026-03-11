@@ -544,7 +544,7 @@ public class LLMAgentAdapter extends AAdapter {
 	 * producing a string like "{\"key\": \"val\"}" instead of a map. This parses
 	 * such strings into proper maps.
 	 */
-	private static ACell ensureParsedInput(ACell opInput) {
+	static ACell ensureParsedInput(ACell opInput) {
 		if (opInput == null) return Maps.empty();
 		if (opInput instanceof AString s) {
 			try {
@@ -590,24 +590,12 @@ public class LLMAgentAdapter extends AAdapter {
 		for (long i = 0; i < toolsVec.count(); i++) {
 			ACell entry = toolsVec.get(i);
 
-			AString operation;
-			AString nameOverride = null;
-			AString descOverride = null;
+			AString[] parsed = parseConfigToolEntry(entry);
+			if (parsed == null) continue;
 
-			if (entry instanceof AString s) {
-				// String shorthand: "agent:create"
-				operation = s;
-			} else if (entry instanceof AMap<?, ?> m) {
-				// Map form: {operation: "agent:create", name: "...", description: "..."}
-				AMap<AString, ACell> map = (AMap<AString, ACell>) m;
-				operation = RT.ensureString(map.get(Fields.OPERATION));
-				nameOverride = RT.ensureString(map.get(K_NAME));
-				descOverride = RT.ensureString(map.get(K_DESCRIPTION));
-			} else {
-				continue; // skip invalid entries
-			}
-
-			if (operation == null) continue;
+			AString operation = parsed[0];
+			AString nameOverride = parsed[1];
+			AString descOverride = parsed[2];
 
 			// Resolve operation to asset
 			Hash hash = engine.resolveOperation(operation);
@@ -621,46 +609,82 @@ public class LLMAgentAdapter extends AAdapter {
 				continue;
 			}
 
-			// Derive tool name: override → asset toolName → operation with colons→underscores
-			String toolName;
-			if (nameOverride != null) {
-				toolName = nameOverride.toString();
-			} else {
-				AString assetToolName = RT.ensureString(asset.meta().get(Fields.TOOL_NAME));
-				if (assetToolName != null) {
-					toolName = assetToolName.toString();
-				} else {
-					toolName = operation.toString().replace(':', '_').replace('/', '_');
-				}
-			}
+			// Derive tool name and description from overrides / asset metadata
+			AString assetToolName = RT.ensureString(asset.meta().get(Fields.TOOL_NAME));
+			String toolName = deriveToolName(nameOverride, assetToolName, operation);
 
-			// Derive description: override → asset description
-			AString description = descOverride;
-			if (description == null) {
-				description = RT.ensureString(asset.meta().get(Fields.DESCRIPTION));
-			}
+			AString description = (descOverride != null)
+				? descOverride
+				: RT.ensureString(asset.meta().get(Fields.DESCRIPTION));
 
 			// Extract input schema from asset operation metadata
 			ACell inputSchema = RT.getIn(asset.meta(), Fields.OPERATION, Fields.INPUT);
-			AMap<AString, ACell> parameters;
-			if (inputSchema instanceof AMap) {
-				parameters = (AMap<AString, ACell>) inputSchema;
-			} else {
-				parameters = Maps.of(K_TYPE, Strings.create("object"), K_PROPERTIES, Maps.empty());
-			}
 
-			// Build tool definition
-			AMap<AString, ACell> toolDef = Maps.of(
-				K_NAME, Strings.create(toolName),
-				K_PARAMETERS, parameters);
-			if (description != null) {
-				toolDef = toolDef.assoc(K_DESCRIPTION, description);
-			}
-
+			AMap<AString, ACell> toolDef = buildToolDefinition(toolName, description, inputSchema);
 			tools = tools.conj(toolDef);
 			configToolMap.put(toolName, operation);
 		}
 		return tools;
+	}
+
+	// ========== Pure helper functions (package-private for testing) ==========
+
+	/**
+	 * Parses a config tool entry (string or map) into its components.
+	 *
+	 * @return Array of [operation, nameOverride, descOverride], or null if invalid
+	 */
+	@SuppressWarnings("unchecked")
+	static AString[] parseConfigToolEntry(ACell entry) {
+		AString operation;
+		AString nameOverride = null;
+		AString descOverride = null;
+
+		if (entry instanceof AString s) {
+			operation = s;
+		} else if (entry instanceof AMap<?, ?> m) {
+			AMap<AString, ACell> map = (AMap<AString, ACell>) m;
+			operation = RT.ensureString(map.get(Fields.OPERATION));
+			nameOverride = RT.ensureString(map.get(K_NAME));
+			descOverride = RT.ensureString(map.get(K_DESCRIPTION));
+		} else {
+			return null;
+		}
+
+		if (operation == null) return null;
+		return new AString[] { operation, nameOverride, descOverride };
+	}
+
+	/**
+	 * Derives a tool name from overrides, asset metadata, or the operation name.
+	 *
+	 * <p>Priority: nameOverride → asset toolName → operation with colons/slashes→underscores</p>
+	 */
+	static String deriveToolName(AString nameOverride, AString assetToolName, AString operation) {
+		if (nameOverride != null) return nameOverride.toString();
+		if (assetToolName != null) return assetToolName.toString();
+		return operation.toString().replace(':', '_').replace('/', '_');
+	}
+
+	/**
+	 * Builds a tool definition map from resolved components.
+	 */
+	@SuppressWarnings("unchecked")
+	static AMap<AString, ACell> buildToolDefinition(String toolName, AString description, ACell inputSchema) {
+		AMap<AString, ACell> parameters;
+		if (inputSchema instanceof AMap) {
+			parameters = (AMap<AString, ACell>) inputSchema;
+		} else {
+			parameters = Maps.of(K_TYPE, Strings.create("object"), K_PROPERTIES, Maps.empty());
+		}
+
+		AMap<AString, ACell> toolDef = Maps.of(
+			K_NAME, Strings.create(toolName),
+			K_PARAMETERS, parameters);
+		if (description != null) {
+			toolDef = toolDef.assoc(K_DESCRIPTION, description);
+		}
+		return toolDef;
 	}
 
 	/**
@@ -680,7 +704,7 @@ public class LLMAgentAdapter extends AAdapter {
 	/**
 	 * Checks whether the given jobId string matches a task in the presented task list.
 	 */
-	private static boolean isKnownTask(AString jobIdStr, ToolContext toolCtx) {
+	static boolean isKnownTask(AString jobIdStr, ToolContext toolCtx) {
 		if (toolCtx.tasks == null) return false;
 		for (long i = 0; i < toolCtx.tasks.count(); i++) {
 			ACell task = toolCtx.tasks.get(i);
@@ -693,7 +717,7 @@ public class LLMAgentAdapter extends AAdapter {
 	/**
 	 * Checks whether the given jobId has already been recorded as completed/failed.
 	 */
-	private static boolean isAlreadyCompleted(AString jobIdStr, ToolContext toolCtx) {
+	static boolean isAlreadyCompleted(AString jobIdStr, ToolContext toolCtx) {
 		return toolCtx.taskResults != null && toolCtx.taskResults.get(jobIdStr) != null;
 	}
 
@@ -701,7 +725,7 @@ public class LLMAgentAdapter extends AAdapter {
 	 * Builds a user message listing only outstanding (unresolved) tasks.
 	 * Returns null if no tasks remain, signalling the loop to omit task tools.
 	 */
-	private static AMap<AString, ACell> buildOutstandingTaskMessage(ToolContext toolCtx) {
+	static AMap<AString, ACell> buildOutstandingTaskMessage(ToolContext toolCtx) {
 		if (toolCtx.tasks == null || toolCtx.tasks.count() == 0) return null;
 		StringBuilder sb = new StringBuilder();
 		int outstanding = 0;
@@ -729,7 +753,7 @@ public class LLMAgentAdapter extends AAdapter {
 		return null;
 	}
 
-	private static AString getConfigValue(AMap<AString, ACell> config, AString key, AString defaultValue) {
+	static AString getConfigValue(AMap<AString, ACell> config, AString key, AString defaultValue) {
 		if (config == null) return defaultValue;
 		AString val = RT.ensureString(config.get(key));
 		return (val != null) ? val : defaultValue;

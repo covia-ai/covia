@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -13,9 +16,13 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.LLMAgentAdapter.ToolContext;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -603,6 +610,557 @@ public class LLMAgentAdapterTest {
 		// The LLM should still respond normally with default tools present
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
 		assertEquals("hello", response.toString());
+	}
+
+	// ========== Pure function: extractConfig ==========
+
+	@Test
+	public void testExtractConfigNull() {
+		assertNull(LLMAgentAdapter.extractConfig(null));
+	}
+
+	@Test
+	public void testExtractConfigEmptyState() {
+		assertNull(LLMAgentAdapter.extractConfig(Maps.empty()));
+	}
+
+	@Test
+	public void testExtractConfigPresent() {
+		AMap<AString, ACell> config = Maps.of("llmOperation", "test:llm");
+		ACell state = Maps.of("config", config);
+		AMap<AString, ACell> result = LLMAgentAdapter.extractConfig(state);
+		assertNotNull(result);
+		assertEquals(Strings.create("test:llm"), result.get(Strings.intern("llmOperation")));
+	}
+
+	@Test
+	public void testExtractConfigNonMap() {
+		// config is a string — should return null
+		ACell state = Maps.of("config", Strings.create("not-a-map"));
+		assertNull(LLMAgentAdapter.extractConfig(state));
+	}
+
+	// ========== Pure function: extractHistory ==========
+
+	@Test
+	public void testExtractHistoryEmptyState() {
+		AVector<ACell> h = LLMAgentAdapter.extractHistory(Maps.empty());
+		assertEquals(0, h.count());
+	}
+
+	@Test
+	public void testExtractHistoryNonVector() {
+		ACell state = Maps.of("history", Strings.create("not-a-vector"));
+		AVector<ACell> h = LLMAgentAdapter.extractHistory(state);
+		assertEquals(0, h.count());
+	}
+
+	// ========== Pure function: getConfigValue ==========
+
+	@Test
+	public void testGetConfigValuePresent() {
+		AMap<AString, ACell> config = Maps.of("model", "gpt-4");
+		AString result = LLMAgentAdapter.getConfigValue(config, Strings.intern("model"), null);
+		assertEquals("gpt-4", result.toString());
+	}
+
+	@Test
+	public void testGetConfigValueMissing() {
+		AMap<AString, ACell> config = Maps.of("model", "gpt-4");
+		AString def = Strings.create("default-val");
+		AString result = LLMAgentAdapter.getConfigValue(config, Strings.intern("nonexistent"), def);
+		assertSame(def, result);
+	}
+
+	@Test
+	public void testGetConfigValueNullConfig() {
+		AString def = Strings.create("fallback");
+		AString result = LLMAgentAdapter.getConfigValue(null, Strings.intern("key"), def);
+		assertSame(def, result);
+	}
+
+	@Test
+	public void testGetConfigValueNonString() {
+		// Value is a long, not a string — should return default
+		AMap<AString, ACell> config = Maps.of("count", CVMLong.create(42));
+		AString result = LLMAgentAdapter.getConfigValue(config, Strings.intern("count"), Strings.create("def"));
+		assertEquals("def", result.toString());
+	}
+
+	// ========== Pure function: ensureParsedInput ==========
+
+	@Test
+	public void testEnsureParsedInputNull() {
+		ACell result = LLMAgentAdapter.ensureParsedInput(null);
+		assertEquals(Maps.empty(), result);
+	}
+
+	@Test
+	public void testEnsureParsedInputMap() {
+		AMap<AString, ACell> map = Maps.of("key", "value");
+		ACell result = LLMAgentAdapter.ensureParsedInput(map);
+		assertSame(map, result);
+	}
+
+	@Test
+	public void testEnsureParsedInputJsonString() {
+		AString jsonStr = Strings.create("{\"name\": \"alice\", \"age\": 30}");
+		ACell result = LLMAgentAdapter.ensureParsedInput(jsonStr);
+		assertTrue(result instanceof AMap, "Should parse JSON string into a map");
+		assertEquals(Strings.create("alice"), RT.getIn(result, "name"));
+		assertEquals(CVMLong.create(30), RT.getIn(result, "age"));
+	}
+
+	@Test
+	public void testEnsureParsedInputInvalidJsonString() {
+		AString garbage = Strings.create("not valid json {{{");
+		ACell result = LLMAgentAdapter.ensureParsedInput(garbage);
+		// Should return the original string when parsing fails
+		assertSame(garbage, result);
+	}
+
+	@Test
+	public void testEnsureParsedInputVector() {
+		AVector<ACell> vec = Vectors.of(Strings.create("a"), Strings.create("b"));
+		ACell result = LLMAgentAdapter.ensureParsedInput(vec);
+		assertSame(vec, result);
+	}
+
+	// ========== Pure function: parseConfigToolEntry ==========
+
+	@Test
+	public void testParseConfigToolEntryString() {
+		AString[] parsed = LLMAgentAdapter.parseConfigToolEntry(Strings.create("agent:create"));
+		assertNotNull(parsed);
+		assertEquals("agent:create", parsed[0].toString());
+		assertNull(parsed[1]); // no name override
+		assertNull(parsed[2]); // no description override
+	}
+
+	@Test
+	public void testParseConfigToolEntryMapFull() {
+		ACell entry = Maps.of(
+			"operation", "http:get",
+			"name", "fetch_url",
+			"description", "Fetch a URL"
+		);
+		AString[] parsed = LLMAgentAdapter.parseConfigToolEntry(entry);
+		assertNotNull(parsed);
+		assertEquals("http:get", parsed[0].toString());
+		assertEquals("fetch_url", parsed[1].toString());
+		assertEquals("Fetch a URL", parsed[2].toString());
+	}
+
+	@Test
+	public void testParseConfigToolEntryMapMinimal() {
+		ACell entry = Maps.of("operation", "agent:list");
+		AString[] parsed = LLMAgentAdapter.parseConfigToolEntry(entry);
+		assertNotNull(parsed);
+		assertEquals("agent:list", parsed[0].toString());
+		assertNull(parsed[1]);
+		assertNull(parsed[2]);
+	}
+
+	@Test
+	public void testParseConfigToolEntryMapMissingOperation() {
+		ACell entry = Maps.of("name", "orphan_tool");
+		assertNull(LLMAgentAdapter.parseConfigToolEntry(entry));
+	}
+
+	@Test
+	public void testParseConfigToolEntryInvalidType() {
+		assertNull(LLMAgentAdapter.parseConfigToolEntry(CVMLong.create(42)));
+		assertNull(LLMAgentAdapter.parseConfigToolEntry(CVMBool.TRUE));
+	}
+
+	@Test
+	public void testParseConfigToolEntryNull() {
+		assertNull(LLMAgentAdapter.parseConfigToolEntry(null));
+	}
+
+	// ========== Pure function: deriveToolName ==========
+
+	@Test
+	public void testDeriveToolNameOverrideWins() {
+		String name = LLMAgentAdapter.deriveToolName(
+			Strings.create("my_tool"),
+			Strings.create("asset_tool"),
+			Strings.create("adapter:op"));
+		assertEquals("my_tool", name);
+	}
+
+	@Test
+	public void testDeriveToolNameAssetToolNameWins() {
+		String name = LLMAgentAdapter.deriveToolName(
+			null,
+			Strings.create("asset_tool"),
+			Strings.create("adapter:op"));
+		assertEquals("asset_tool", name);
+	}
+
+	@Test
+	public void testDeriveToolNameFallbackColonToUnderscore() {
+		String name = LLMAgentAdapter.deriveToolName(
+			null, null, Strings.create("agent:create"));
+		assertEquals("agent_create", name);
+	}
+
+	@Test
+	public void testDeriveToolNameFallbackSlashToUnderscore() {
+		String name = LLMAgentAdapter.deriveToolName(
+			null, null, Strings.create("did:venue:user/o/my-tool"));
+		assertEquals("did_venue_user_o_my-tool", name);
+	}
+
+	@Test
+	public void testDeriveToolNameNoSpecialChars() {
+		String name = LLMAgentAdapter.deriveToolName(
+			null, null, Strings.create("simple"));
+		assertEquals("simple", name);
+	}
+
+	// ========== Pure function: buildToolDefinition ==========
+
+	@Test
+	public void testBuildToolDefinitionWithSchema() {
+		AMap<AString, ACell> schema = Maps.of(
+			"type", "object",
+			"properties", Maps.of("url", Maps.of("type", "string")),
+			"required", Vectors.of("url")
+		);
+		AMap<AString, ACell> def = LLMAgentAdapter.buildToolDefinition(
+			"fetch_url", Strings.create("Fetch a URL"), schema);
+
+		assertEquals(Strings.create("fetch_url"), def.get(Strings.intern("name")));
+		assertEquals(Strings.create("Fetch a URL"), def.get(Strings.intern("description")));
+		assertSame(schema, def.get(Strings.intern("parameters")));
+	}
+
+	@Test
+	public void testBuildToolDefinitionNullSchema() {
+		AMap<AString, ACell> def = LLMAgentAdapter.buildToolDefinition(
+			"my_tool", Strings.create("Does stuff"), null);
+
+		assertEquals(Strings.create("my_tool"), def.get(Strings.intern("name")));
+		// Should get default schema with type: "object"
+		ACell params = def.get(Strings.intern("parameters"));
+		assertNotNull(params);
+		assertEquals(Strings.create("object"), RT.getIn(params, "type"));
+	}
+
+	@Test
+	public void testBuildToolDefinitionNullDescription() {
+		AMap<AString, ACell> schema = Maps.of("type", "object");
+		AMap<AString, ACell> def = LLMAgentAdapter.buildToolDefinition("tool", null, schema);
+
+		assertEquals(Strings.create("tool"), def.get(Strings.intern("name")));
+		assertNull(def.get(Strings.intern("description")));
+	}
+
+	@Test
+	public void testBuildToolDefinitionStringSchema() {
+		// Non-map schema (e.g. a string) should get default object schema
+		AMap<AString, ACell> def = LLMAgentAdapter.buildToolDefinition(
+			"tool", null, Strings.create("bad-schema"));
+		ACell params = def.get(Strings.intern("parameters"));
+		assertEquals(Strings.create("object"), RT.getIn(params, "type"));
+	}
+
+	// ========== Pure function: isKnownTask ==========
+
+	@Test
+	public void testIsKnownTaskFound() {
+		AVector<ACell> tasks = Vectors.of(
+			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task1"),
+			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "task2")
+		);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null);
+
+		assertTrue(LLMAgentAdapter.isKnownTask(Strings.create("aaa"), ctx));
+		assertTrue(LLMAgentAdapter.isKnownTask(Strings.create("bbb"), ctx));
+	}
+
+	@Test
+	public void testIsKnownTaskNotFound() {
+		AVector<ACell> tasks = Vectors.of(
+			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task1")
+		);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null);
+
+		assertFalse(LLMAgentAdapter.isKnownTask(Strings.create("zzz"), ctx));
+	}
+
+	@Test
+	public void testIsKnownTaskNullTasks() {
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null);
+		assertFalse(LLMAgentAdapter.isKnownTask(Strings.create("aaa"), ctx));
+	}
+
+	@Test
+	public void testIsKnownTaskEmptyTasks() {
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, Vectors.empty(), null, null);
+		assertFalse(LLMAgentAdapter.isKnownTask(Strings.create("aaa"), ctx));
+	}
+
+	// ========== Pure function: isAlreadyCompleted ==========
+
+	@Test
+	public void testIsAlreadyCompletedTrue() {
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null);
+		ctx.recordTaskResult(Strings.create("aaa"),
+			Maps.of(Fields.STATUS, Status.COMPLETE));
+
+		assertTrue(LLMAgentAdapter.isAlreadyCompleted(Strings.create("aaa"), ctx));
+	}
+
+	@Test
+	public void testIsAlreadyCompletedFalse() {
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null);
+		ctx.recordTaskResult(Strings.create("aaa"),
+			Maps.of(Fields.STATUS, Status.COMPLETE));
+
+		assertFalse(LLMAgentAdapter.isAlreadyCompleted(Strings.create("bbb"), ctx));
+	}
+
+	@Test
+	public void testIsAlreadyCompletedNullResults() {
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null);
+		assertFalse(LLMAgentAdapter.isAlreadyCompleted(Strings.create("aaa"), ctx));
+	}
+
+	// ========== Pure function: buildOutstandingTaskMessage ==========
+
+	@Test
+	public void testBuildOutstandingTaskMessageNoTasks() {
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null);
+		assertNull(LLMAgentAdapter.buildOutstandingTaskMessage(ctx));
+	}
+
+	@Test
+	public void testBuildOutstandingTaskMessageEmptyTasks() {
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, Vectors.empty(), null, null);
+		assertNull(LLMAgentAdapter.buildOutstandingTaskMessage(ctx));
+	}
+
+	@Test
+	public void testBuildOutstandingTaskMessageAllResolved() {
+		AVector<ACell> tasks = Vectors.of(
+			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task1")
+		);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null);
+		ctx.recordTaskResult(Strings.create("aaa"),
+			Maps.of(Fields.STATUS, Status.COMPLETE));
+
+		assertNull(LLMAgentAdapter.buildOutstandingTaskMessage(ctx));
+	}
+
+	@Test
+	public void testBuildOutstandingTaskMessageSomeOutstanding() {
+		AVector<ACell> tasks = Vectors.of(
+			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "done-task"),
+			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "pending-task")
+		);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null);
+		ctx.recordTaskResult(Strings.create("aaa"),
+			Maps.of(Fields.STATUS, Status.COMPLETE));
+
+		AMap<AString, ACell> msg = LLMAgentAdapter.buildOutstandingTaskMessage(ctx);
+		assertNotNull(msg);
+		assertEquals(Strings.create("user"), msg.get(Strings.intern("role")));
+
+		String content = RT.ensureString(msg.get(Strings.intern("content"))).toString();
+		assertTrue(content.contains("bbb"), "Should mention outstanding task bbb");
+		assertFalse(content.contains("aaa"), "Should not mention resolved task aaa");
+		assertTrue(content.contains("complete_task"), "Should instruct to use complete_task");
+	}
+
+	@Test
+	public void testBuildOutstandingTaskMessageAllOutstanding() {
+		AVector<ACell> tasks = Vectors.of(
+			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task-one"),
+			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "task-two")
+		);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null);
+
+		AMap<AString, ACell> msg = LLMAgentAdapter.buildOutstandingTaskMessage(ctx);
+		assertNotNull(msg);
+		String content = RT.ensureString(msg.get(Strings.intern("content"))).toString();
+		assertTrue(content.contains("aaa"));
+		assertTrue(content.contains("bbb"));
+		assertTrue(content.contains("[Tasks assigned to you]"));
+	}
+
+	// ========== ToolContext: recordTaskResult ==========
+
+	@Test
+	public void testToolContextRecordTaskResult() {
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null);
+		assertNull(ctx.taskResults);
+
+		ctx.recordTaskResult(Strings.create("job1"),
+			Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, "result1"));
+		assertNotNull(ctx.taskResults);
+		assertEquals(1, ctx.taskResults.count());
+
+		ctx.recordTaskResult(Strings.create("job2"),
+			Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, "reason"));
+		assertEquals(2, ctx.taskResults.count());
+
+		// Verify contents
+		assertEquals(Status.COMPLETE, RT.getIn(ctx.taskResults, "job1", Fields.STATUS));
+		assertEquals(Status.FAILED, RT.getIn(ctx.taskResults, "job2", Fields.STATUS));
+	}
+
+	// ========== Integration: buildConfigTools with engine ==========
+
+	@Test
+	public void testBuildConfigToolsStringEntries() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		Map<String, AString> configToolMap = new HashMap<>();
+		AVector<ACell> toolsVec = Vectors.of(
+			(ACell) Strings.create("agent:create"),
+			(ACell) Strings.create("agent:list")
+		);
+
+		// Use reflection-free approach: call processChat with tools in config
+		// and verify the tools are present by checking configToolMap
+		// Actually, buildConfigTools is private — but we can test via processChat
+		// and check output state. However, the refactored pure helpers cover
+		// the logic. Let's test the integration path instead.
+
+		// Create agent with custom tools config, call processChat, verify it works
+		ACell state = Maps.of("config", Maps.of(
+			"llmOperation", "test:llm",
+			"tools", Vectors.of("agent:create", "agent:list")
+		));
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "custom-tools-agent",
+			AgentState.KEY_STATE, state,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
+		);
+
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		assertNotNull(output);
+		// Should complete without error — tools resolved successfully
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		assertEquals("test", response.toString());
+	}
+
+	@Test
+	public void testBuildConfigToolsMapEntries() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		ACell state = Maps.of("config", Maps.of(
+			"llmOperation", "test:llm",
+			"tools", Vectors.of(
+				Maps.of("operation", "agent:create",
+					"name", "make_agent",
+					"description", "Create a new agent")
+			)
+		));
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "map-tools-agent",
+			AgentState.KEY_STATE, state,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
+		);
+
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		assertNotNull(output);
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		assertEquals("test", response.toString());
+	}
+
+	@Test
+	public void testBuildConfigToolsMixedEntries() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		ACell state = Maps.of("config", Maps.of(
+			"llmOperation", "test:llm",
+			"tools", Vectors.of(
+				"agent:create",
+				Maps.of("operation", "covia:read", "name", "read_data"),
+				"agent:list"
+			)
+		));
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "mixed-tools-agent",
+			AgentState.KEY_STATE, state,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
+		);
+
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		assertNotNull(output);
+	}
+
+	@Test
+	public void testDefaultToolsFalse() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		ACell state = Maps.of("config", Maps.of(
+			"llmOperation", "test:llm",
+			"defaultTools", CVMBool.FALSE
+		));
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "no-defaults-agent",
+			AgentState.KEY_STATE, state,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
+		);
+
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		assertNotNull(output);
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		assertEquals("test", response.toString());
+	}
+
+	@Test
+	public void testDefaultToolsFalseWithCustomTools() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		ACell state = Maps.of("config", Maps.of(
+			"llmOperation", "test:llm",
+			"defaultTools", CVMBool.FALSE,
+			"tools", Vectors.of("agent:create")
+		));
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "custom-only-agent",
+			AgentState.KEY_STATE, state,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
+		);
+
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		assertNotNull(output);
+	}
+
+	@Test
+	public void testInvalidToolEntrySkipped() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		// Include invalid entries (number, bool) — should be skipped gracefully
+		ACell state = Maps.of("config", Maps.of(
+			"llmOperation", "test:llm",
+			"tools", Vectors.of(
+				CVMLong.create(42),       // invalid
+				"agent:create",           // valid
+				CVMBool.TRUE,             // invalid
+				"nonexistent:operation"   // valid format but won't resolve
+			)
+		));
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "invalid-tools-agent",
+			AgentState.KEY_STATE, state,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
+		);
+
+		// Should not throw — invalid entries silently skipped
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		assertNotNull(output);
 	}
 
 	// ========== Helper ==========

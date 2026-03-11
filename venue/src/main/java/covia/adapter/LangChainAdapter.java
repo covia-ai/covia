@@ -260,10 +260,10 @@ public class LangChainAdapter extends AAdapter {
 		List<ChatMessage> chatMessages = toChatMessages(messages);
 		ResponseFormat responseFormat = toResponseFormat(responseFormatCell);
 
-		log.info("LLM call: {} messages, {} tools", chatMessages.size(),
+		log.debug("LLM call: {} messages, {} tools", chatMessages.size(),
 			(tools != null) ? tools.count() : 0);
 		for (int i = 0; i < chatMessages.size(); i++) {
-			log.info("  msg[{}]: {}", i, chatMessages.get(i));
+			log.debug("  msg[{}]: {}", i, chatMessages.get(i));
 		}
 
 		boolean needsRequest = (tools != null && tools.count() > 0) || responseFormat != null;
@@ -281,7 +281,7 @@ public class LangChainAdapter extends AAdapter {
 			response = model.chat(chatMessages);
 		}
 
-		log.info("LLM response: text='{}', toolCalls={}",
+		log.debug("LLM response: text='{}', toolCalls={}",
 			response.aiMessage().text(),
 			response.aiMessage().hasToolExecutionRequests()
 				? response.aiMessage().toolExecutionRequests() : "none");
