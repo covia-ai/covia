@@ -107,7 +107,7 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final AString K_PROPERTIES  = Strings.intern("properties");
 	private static final AString K_REQUIRED    = Strings.intern("required");
 	private static final AString K_REASON      = Strings.intern("reason");
-	private static final AString K_STRUCTURED_CONTENT = Strings.intern("structured_content");
+	private static final AString K_STRUCTURED_CONTENT = Strings.intern("structuredContent");
 
 	// Role values
 	private static final AString ROLE_SYSTEM    = Strings.intern("system");

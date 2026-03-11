@@ -73,7 +73,7 @@ public class LangChainAdapter extends AAdapter {
 	static final AString K_TOOLS      = Strings.intern("tools");
 	static final AString K_ROLE       = Strings.intern("role");
 	static final AString K_CONTENT    = Strings.intern("content");
-	static final AString K_STRUCTURED_CONTENT = Strings.intern("structured_content");
+	static final AString K_STRUCTURED_CONTENT = Strings.intern("structuredContent");
 	static final AString K_TOOL_CALLS = Strings.intern("toolCalls");
 	static final AString K_ID         = Strings.intern("id");
 	static final AString K_NAME       = Strings.intern("name");
