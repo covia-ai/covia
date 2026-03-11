@@ -423,7 +423,21 @@ public class LLMAgentAdapter extends AAdapter {
 		// Invoke level 3 with tool call loop — returns all messages to append
 		AVector<ACell> newMessages = invokeWithToolLoop(
 			llmOperation, config, history, baseTools, ctx, toolCtx);
-		history = (AVector<ACell>) history.concat(newMessages);
+
+		// Filter out empty assistant messages (e.g. when LLM produces only <think> tags)
+		// to avoid polluting history with useless entries that confuse future calls
+		AVector<ACell> filtered = Vectors.empty();
+		for (long i = 0; i < newMessages.count(); i++) {
+			ACell msg = newMessages.get(i);
+			if (ROLE_ASSISTANT.equals(RT.getIn(msg, K_ROLE))) {
+				AString content = RT.ensureString(RT.getIn(msg, K_CONTENT));
+				boolean hasContent = content != null && content.count() > 0;
+				boolean hasToolCalls = RT.getIn(msg, K_TOOL_CALLS) instanceof AVector<?> v && v.count() > 0;
+				if (!hasContent && !hasToolCalls) continue; // skip empty assistant msgs
+			}
+			filtered = filtered.conj(msg);
+		}
+		history = (AVector<ACell>) history.concat(filtered);
 
 		// Extract text content from the final assistant message
 		ACell lastMsg = newMessages.get(newMessages.count() - 1);

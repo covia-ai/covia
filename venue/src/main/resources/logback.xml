@@ -12,6 +12,8 @@
 	<root level="WARN">
 		<appender-ref ref="STDOUT" />
 	</root>
+
+	<logger name="covia" level="INFO" />
 	
 	<!-- hides spurious errors. Revisit later -->
 	<logger name="io.modelcontextprotocol" level="OFF" />

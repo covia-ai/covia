@@ -5,6 +5,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -61,6 +64,8 @@ import dev.langchain4j.model.openai.OpenAiChatModel;
  * <p>When input contains {@code prompt} (string), returns {@code {response: "...", think?: "..."}}.</p>
  */
 public class LangChainAdapter extends AAdapter {
+
+	private static final Logger log = LoggerFactory.getLogger(LangChainAdapter.class);
 
 	/** IO timeout for LLM API calls */
 	private static final Duration IO_TIMEOUT = Duration.ofSeconds(120);
@@ -255,6 +260,12 @@ public class LangChainAdapter extends AAdapter {
 		List<ChatMessage> chatMessages = toChatMessages(messages);
 		ResponseFormat responseFormat = toResponseFormat(responseFormatCell);
 
+		log.info("LLM call: {} messages, {} tools", chatMessages.size(),
+			(tools != null) ? tools.count() : 0);
+		for (int i = 0; i < chatMessages.size(); i++) {
+			log.info("  msg[{}]: {}", i, chatMessages.get(i));
+		}
+
 		boolean needsRequest = (tools != null && tools.count() > 0) || responseFormat != null;
 		ChatResponse response;
 		if (needsRequest) {
@@ -269,6 +280,11 @@ public class LangChainAdapter extends AAdapter {
 		} else {
 			response = model.chat(chatMessages);
 		}
+
+		log.info("LLM response: text='{}', toolCalls={}",
+			response.aiMessage().text(),
+			response.aiMessage().hasToolExecutionRequests()
+				? response.aiMessage().toolExecutionRequests() : "none");
 
 		return toAssistantMessage(response.aiMessage());
 	}
@@ -357,8 +373,10 @@ public class LangChainAdapter extends AAdapter {
 							AString args = RT.ensureString(RT.getIn(tc, K_ARGUMENTS));
 							AString id = RT.ensureString(RT.getIn(tc, K_ID));
 							if (name != null) {
+								// Synthetic ID if LLM didn't provide one (e.g. Ollama)
+								String idStr = (id != null) ? id.toString() : name.toString();
 								reqs.add(ToolExecutionRequest.builder()
-									.id(id != null ? id.toString() : null)
+									.id(idStr)
 									.name(name.toString())
 									.arguments(args != null ? args.toString() : "{}")
 									.build());
@@ -382,9 +400,10 @@ public class LangChainAdapter extends AAdapter {
 							content = Strings.create(JSON.toString(structured));
 						}
 					}
-					if (id != null && name != null && content != null) {
+					if (name != null && content != null) {
+						String idStr = (id != null) ? id.toString() : name.toString();
 						result.add(new ToolExecutionResultMessage(
-							id.toString(), name.toString(), content.toString()));
+							idStr, name.toString(), content.toString()));
 					}
 					break;
 				}
