@@ -8,6 +8,8 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.ASet;
+import convex.core.data.Hash;
+import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -18,6 +20,7 @@ import convex.core.lang.RT;
 import convex.lattice.ALattice;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.api.Fields;
+import covia.grid.Asset;
 import covia.venue.RequestContext;
 import covia.venue.User;
 import covia.venue.Users;
@@ -80,6 +83,8 @@ public class CoviaAdapter extends AAdapter {
 		String BASE = "/adapters/covia/";
 		installAsset(BASE + "read.json");
 		installAsset(BASE + "list.json");
+		installAsset(BASE + "functions.json");
+		installAsset(BASE + "describe.json");
 	}
 
 	@Override
@@ -90,6 +95,8 @@ public class CoviaAdapter extends AAdapter {
 		return switch (getSubOperation(meta)) {
 			case "read" -> CompletableFuture.completedFuture(handleRead(ctx, input));
 			case "list" -> CompletableFuture.completedFuture(handleList(ctx, input));
+			case "functions" -> CompletableFuture.completedFuture(handleFunctions());
+			case "describe" -> CompletableFuture.completedFuture(handleDescribe(input));
 			default -> CompletableFuture.failedFuture(
 				new RuntimeException("Unknown covia operation: " + getSubOperation(meta)));
 		};
@@ -251,6 +258,49 @@ public class CoviaAdapter extends AAdapter {
 		}
 
 		return desc.assoc(K_EXISTS, CVMBool.TRUE);
+	}
+
+	// ========== Function introspection ==========
+
+	/**
+	 * Lists all registered adapter functions with names, IDs, and descriptions.
+	 */
+	@SuppressWarnings("unchecked")
+	private ACell handleFunctions() {
+		Index<AString, Hash> ops = engine.getOperationRegistry();
+		AVector<ACell> functions = Vectors.empty();
+		for (long i = 0; i < ops.count(); i++) {
+			var entry = ops.entryAt(i);
+			AString name = entry.getKey();
+			Hash hash = entry.getValue();
+			Asset asset = engine.getAsset(hash);
+
+			AMap<AString, ACell> func = Maps.of(
+				Fields.NAME, name,
+				Fields.ID, Strings.create(hash.toHexString()));
+			if (asset != null) {
+				ACell desc = asset.meta().get(Fields.DESCRIPTION);
+				if (desc != null) func = func.assoc(Fields.DESCRIPTION, desc);
+			}
+			functions = (AVector<ACell>) functions.conj(func);
+		}
+		return Maps.of(Strings.intern("functions"), functions);
+	}
+
+	/**
+	 * Gets full metadata for a named adapter function, including input/output schemas.
+	 */
+	private ACell handleDescribe(ACell input) {
+		AString funcName = RT.ensureString(RT.getIn(input, Fields.NAME));
+		if (funcName == null) return Maps.of(Fields.ERROR, Strings.create("name is required"));
+
+		Hash hash = engine.resolveOperation(funcName);
+		if (hash == null) return Maps.of(Fields.ERROR, Strings.create("function not found: " + funcName));
+
+		Asset asset = engine.getAsset(hash);
+		if (asset == null) return Maps.of(Fields.ERROR, Strings.create("asset not found for: " + funcName));
+
+		return asset.meta();
 	}
 
 	// ========== Path parsing ==========
