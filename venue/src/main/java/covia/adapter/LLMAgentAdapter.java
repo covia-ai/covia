@@ -10,12 +10,15 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Hash;
+import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
@@ -35,7 +38,7 @@ import covia.venue.Users;
  *
  * <h3>Default tool palette</h3>
  * <p>Level 2 provides built-in tools to every LLM agent (see AGENT_LOOP.md §3.5):
- * {@code complete_task}, {@code fail_task}, {@code invoke}, {@code invoke_async},
+ * {@code complete_task}, {@code fail_task}, {@code grid_run}, {@code grid_invoke},
  * {@code message_agent}. These are intercepted in the tool call loop and handled
  * locally — they are not dispatched as grid operations.</p>
  *
@@ -73,7 +76,8 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final Logger log = LoggerFactory.getLogger(LLMAgentAdapter.class);
 
 	private static final AString DEFAULT_SYSTEM_PROMPT = Strings.create(
-		"You are a helpful AI assistant on the Covia platform. "
+		"You are a helpful AI agent on the Covia platform. "
+		+ "Use tools and grid oprtaions to complete tasks."
 		+ "Give concise, clear and accurate responses.");
 
 	private static final AString DEFAULT_LLM_OPERATION = Strings.create("langchain:openai");
@@ -113,9 +117,12 @@ public class LLMAgentAdapter extends AAdapter {
 	// Built-in tool names
 	private static final String TOOL_COMPLETE_TASK = "complete_task";
 	private static final String TOOL_FAIL_TASK     = "fail_task";
-	private static final String TOOL_INVOKE        = "invoke";
-	private static final String TOOL_INVOKE_ASYNC  = "invoke_async";
+	private static final String TOOL_GRID_RUN       = "grid_run";
+	private static final String TOOL_GRID_INVOKE   = "grid_invoke";
 	private static final String TOOL_MESSAGE_AGENT = "message_agent";
+	private static final String TOOL_REQUEST_AGENT = "request_agent";
+	private static final String TOOL_COVIA_LIST    = "covia_list";
+	private static final String TOOL_COVIA_GET     = "covia_get";
 
 	/** Maximum tool call loop iterations to prevent runaway loops */
 	static final int MAX_TOOL_ITERATIONS = 20;
@@ -126,11 +133,9 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final AMap<AString, ACell> TOOL_DEF_COMPLETE_TASK = Maps.of(
 		K_NAME, Strings.create(TOOL_COMPLETE_TASK),
 		K_DESCRIPTION, Strings.create(
-			"Complete an inbound task that was assigned to you. "
-			+ "Call this when you have produced the result the requester asked for. "
-			+ "The task's Job will be marked COMPLETE and the output delivered to the caller. "
-			+ "This is a side effect — the completion takes effect immediately and is not "
-			+ "rolled back if your current run fails afterwards."),
+			"Complete an inbound task with a result. "
+			+ "Call this once you have produced the output the requester asked for. "
+			+ "The output will be delivered to the caller."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
@@ -149,10 +154,7 @@ public class LLMAgentAdapter extends AAdapter {
 		K_NAME, Strings.create(TOOL_FAIL_TASK),
 		K_DESCRIPTION, Strings.create(
 			"Reject or fail an inbound task. Call this when you cannot fulfil the request — "
-			+ "e.g. the task is outside your capabilities, the input is invalid, or an "
-			+ "unrecoverable error occurred. The task's Job will be marked FAILED with "
-			+ "the reason you provide. This is a side effect — the failure takes effect "
-			+ "immediately."),
+			+ "e.g. the task is outside your capabilities or the input is invalid."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
@@ -167,45 +169,51 @@ public class LLMAgentAdapter extends AAdapter {
 		)
 	);
 
-	private static final AMap<AString, ACell> TOOL_DEF_INVOKE = Maps.of(
-		K_NAME, Strings.create(TOOL_INVOKE),
+	private static final AMap<AString, ACell> TOOL_DEF_GRID_RUN = Maps.of(
+		K_NAME, Strings.create(TOOL_GRID_RUN),
 		K_DESCRIPTION, Strings.create(
 			"Invoke a grid operation synchronously and wait for the result. "
-			+ "Use this for fast operations where you need the result to continue "
-			+ "reasoning — e.g. querying data, calling an API, running a computation. "
-			+ "The operation runs on the venue and the result is returned directly. "
-			+ "For long-running operations, use invoke_async instead."),
+			+ "IMPORTANT: Use covia_get first to look up the operation's input schema before calling this. "
+			+ "Available operations include: "
+			+ "agent:create (create a new agent), "
+			+ "agent:request (submit a task to another agent), "
+			+ "agent:query (read an agent's state), "
+			+ "agent:list (list all agents), "
+			+ "http:get / http:post (HTTP requests), "
+			+ "convex:query / convex:transact (blockchain operations), "
+			+ "mcp:tools:list / mcp:tools:call (MCP tool discovery and invocation). "
+			+ "For long-running operations, use grid_invoke instead."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
 				Fields.OPERATION, Maps.of(
 					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("The operation reference to invoke (e.g. \"http:get\", \"convex:query\", \"mcp:toolCall\")")),
+					K_DESCRIPTION, Strings.create("The operation to invoke, e.g. \"agent:create\", \"http:get\", \"convex:query\"")),
 				Fields.INPUT, Maps.of(
-					K_TYPE, Maps.of(K_TYPE, Strings.create("object")),
-					K_DESCRIPTION, Strings.create("Input parameters for the operation, matching its input schema"))
+					K_TYPE, Strings.create("object"),
+					K_DESCRIPTION, Strings.create("Input parameters as a JSON object. Use covia_get to check the required schema first."))
 			),
 			K_REQUIRED, Vectors.of(Strings.create("operation"))
 		)
 	);
 
-	private static final AMap<AString, ACell> TOOL_DEF_INVOKE_ASYNC = Maps.of(
-		K_NAME, Strings.create(TOOL_INVOKE_ASYNC),
+	private static final AMap<AString, ACell> TOOL_DEF_GRID_INVOKE = Maps.of(
+		K_NAME, Strings.create(TOOL_GRID_INVOKE),
 		K_DESCRIPTION, Strings.create(
 			"Invoke a grid operation asynchronously. Returns immediately with a Job ID — "
 			+ "the operation runs in the background. The Job ID is added to your pending "
 			+ "list and you will be woken automatically when it completes. "
-			+ "Use this for long-running operations, delegation to other agents, or "
-			+ "human-in-the-loop requests where you don't need the result right now."),
+			+ "Use this for long-running operations or delegation to other agents "
+			+ "(e.g. agent:request to submit a task and get the result later)."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
 				Fields.OPERATION, Maps.of(
 					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("The operation reference to invoke (e.g. \"agent:request\", \"http:post\")")),
+					K_DESCRIPTION, Strings.create("The operation to invoke, e.g. \"agent:request\", \"http:post\"")),
 				Fields.INPUT, Maps.of(
-					K_TYPE, Maps.of(K_TYPE, Strings.create("object")),
-					K_DESCRIPTION, Strings.create("Input parameters for the operation, matching its input schema"))
+					K_TYPE, Strings.create("object"),
+					K_DESCRIPTION, Strings.create("Input parameters as a JSON object. Use covia_get to check the required schema first."))
 			),
 			K_REQUIRED, Vectors.of(Strings.create("operation"))
 		)
@@ -214,12 +222,11 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final AMap<AString, ACell> TOOL_DEF_MESSAGE_AGENT = Maps.of(
 		K_NAME, Strings.create(TOOL_MESSAGE_AGENT),
 		K_DESCRIPTION, Strings.create(
-			"Send an ephemeral message to another agent's inbox. The message is a "
-			+ "notification — it does not create a tracked task and you will not receive "
-			+ "a response. The target agent will see the message on its next run. "
-			+ "Use this for informal coordination, FYI notifications, or triggering "
-			+ "another agent to act. For work items that need a response, use invoke "
-			+ "or invoke_async with agent:request instead."),
+			"Send a fire-and-forget message to another agent's inbox. "
+			+ "The target agent will be woken and see the message on its next run. "
+			+ "No response is returned — use this for notifications or nudges. "
+			+ "For tracked work that produces a result, use grid_run/request_agent "
+			+ "with agent:request instead."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
@@ -234,16 +241,66 @@ public class LLMAgentAdapter extends AAdapter {
 		)
 	);
 
-	/** Base tools always available (invoke, invoke_async, message_agent) */
-	@SuppressWarnings("unchecked")
+	private static final AMap<AString, ACell> TOOL_DEF_REQUEST_AGENT = Maps.of(
+		K_NAME, Strings.create(TOOL_REQUEST_AGENT),
+		K_DESCRIPTION, Strings.create(
+			"Submit a task to another agent and wait for the result. "
+			+ "Use this to delegate work — the target agent will be woken, "
+			+ "process the task, and return an output. "
+			+ "The target agent must already exist (use grid_run with agent:create first if needed)."),
+		K_PARAMETERS, Maps.of(
+			K_TYPE, Strings.create("object"),
+			K_PROPERTIES, Maps.of(
+				Fields.AGENT_ID, Maps.of(
+					K_TYPE, Strings.create("string"),
+					K_DESCRIPTION, Strings.create("The ID of the target agent")),
+				Fields.INPUT, Maps.of(
+					K_TYPE, Maps.empty(),
+					K_DESCRIPTION, Strings.create("The task input — describes what you want the agent to do. Can be any JSON value."))
+			),
+			K_REQUIRED, Vectors.of(Strings.create("agentId"), Strings.create("input"))
+		)
+	);
+
+	private static final AMap<AString, ACell> TOOL_DEF_COVIA_LIST = Maps.of(
+		K_NAME, Strings.create(TOOL_COVIA_LIST),
+		K_DESCRIPTION, Strings.create(
+			"List all operations available on this venue. "
+			+ "Returns operation names and descriptions. "
+			+ "Use this to discover what operations you can call with grid_run."),
+		K_PARAMETERS, Maps.of(
+			K_TYPE, Strings.create("object"),
+			K_PROPERTIES, Maps.empty()
+		)
+	);
+
+	private static final AMap<AString, ACell> TOOL_DEF_COVIA_GET = Maps.of(
+		K_NAME, Strings.create(TOOL_COVIA_GET),
+		K_DESCRIPTION, Strings.create(
+			"Get the full metadata for an operation, including its input and output schemas. "
+			+ "Use this before calling grid_run to learn what parameters an operation expects."),
+		K_PARAMETERS, Maps.of(
+			K_TYPE, Strings.create("object"),
+			K_PROPERTIES, Maps.of(
+				Fields.OPERATION, Maps.of(
+					K_TYPE, Strings.create("string"),
+					K_DESCRIPTION, Strings.create("The operation name, e.g. \"agent:create\", \"http:get\""))
+			),
+			K_REQUIRED, Vectors.of(Strings.create("operation"))
+		)
+	);
+
+	/** Base tools always available */
 	private static final AVector<ACell> BASE_TOOLS = (AVector<ACell>) Vectors.of(
-		(ACell) TOOL_DEF_INVOKE,
-		(ACell) TOOL_DEF_INVOKE_ASYNC,
-		(ACell) TOOL_DEF_MESSAGE_AGENT
+		(ACell) TOOL_DEF_GRID_RUN,
+		(ACell) TOOL_DEF_GRID_INVOKE,
+		(ACell) TOOL_DEF_MESSAGE_AGENT,
+		(ACell) TOOL_DEF_REQUEST_AGENT,
+		(ACell) TOOL_DEF_COVIA_LIST,
+		(ACell) TOOL_DEF_COVIA_GET
 	);
 
 	/** Task tools only available when there are outstanding tasks */
-	@SuppressWarnings("unchecked")
 	private static final AVector<ACell> TASK_TOOLS = (AVector<ACell>) Vectors.of(
 		(ACell) TOOL_DEF_COMPLETE_TASK,
 		(ACell) TOOL_DEF_FAIL_TASK
@@ -262,7 +319,7 @@ public class LLMAgentAdapter extends AAdapter {
 			+ "loops: when the LLM requests tool calls, executes them as grid "
 			+ "operations and feeds results back until a text response is produced. "
 			+ "Provides built-in tools: complete_task, fail_task, invoke, "
-			+ "invoke_async, message_agent.";
+			+ "grid_invoke, message_agent, request_agent.";
 	}
 
 	@Override
@@ -403,7 +460,7 @@ public class LLMAgentAdapter extends AAdapter {
 	 * executes each tool, appends tool result messages, and calls the LLM again.
 	 * Repeats until a text-only response or the iteration limit.</p>
 	 *
-	 * <p>Built-in tools (complete_task, fail_task, invoke, invoke_async,
+	 * <p>Built-in tools (complete_task, fail_task, grid_run, grid_invoke,
 	 * message_agent) are intercepted and handled locally. All other tool names
 	 * are dispatched as grid operations.</p>
 	 *
@@ -518,11 +575,14 @@ public class LLMAgentAdapter extends AAdapter {
 	 */
 	private String executeToolCall(String toolName, ACell input, RequestContext ctx, ToolContext toolCtx) {
 		return switch (toolName) {
-			case TOOL_COMPLETE_TASK -> handleCompleteTask(input, toolCtx);
-			case TOOL_FAIL_TASK    -> handleFailTask(input, toolCtx);
-			case TOOL_INVOKE       -> handleInvoke(input, ctx);
-			case TOOL_INVOKE_ASYNC -> handleInvokeAsync(input, ctx, toolCtx);
+			case TOOL_COMPLETE_TASK  -> handleCompleteTask(input, toolCtx);
+			case TOOL_FAIL_TASK     -> handleFailTask(input, toolCtx);
+			case TOOL_GRID_RUN      -> handleInvoke(input, ctx);
+			case TOOL_GRID_INVOKE   -> handleInvokeAsync(input, ctx, toolCtx);
 			case TOOL_MESSAGE_AGENT -> handleMessageAgent(input, ctx);
+			case TOOL_REQUEST_AGENT -> handleRequestAgent(input, ctx);
+			case TOOL_COVIA_LIST    -> handleCoviaList();
+			case TOOL_COVIA_GET     -> handleCoviaGet(input);
 			default -> handleGridDispatch(toolName, input, ctx);
 		};
 	}
@@ -571,14 +631,30 @@ public class LLMAgentAdapter extends AAdapter {
 	}
 
 	/**
+	 * Ensures the input value is a parsed map. LLMs often double-stringify JSON,
+	 * producing a string like "{\"key\": \"val\"}" instead of a map. This parses
+	 * such strings into proper maps.
+	 */
+	private static ACell ensureParsedInput(ACell opInput) {
+		if (opInput == null) return Maps.empty();
+		if (opInput instanceof AString s) {
+			try {
+				return convex.core.util.JSON.parse(s.toString());
+			} catch (Exception e) {
+				// Not valid JSON — return as-is
+			}
+		}
+		return opInput;
+	}
+
+	/**
 	 * Invokes a grid operation synchronously, returning the result directly.
 	 */
 	private String handleInvoke(ACell input, RequestContext ctx) {
 		AString operation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 		if (operation == null) return "Error: operation is required";
 
-		ACell opInput = RT.getIn(input, Fields.INPUT);
-		if (opInput == null) opInput = Maps.empty();
+		ACell opInput = ensureParsedInput(RT.getIn(input, Fields.INPUT));
 
 		Job opJob = engine.jobs().invokeOperation(operation, opInput, ctx);
 		ACell result = opJob.awaitResult();
@@ -592,8 +668,7 @@ public class LLMAgentAdapter extends AAdapter {
 		AString operation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 		if (operation == null) return "Error: operation is required";
 
-		ACell opInput = RT.getIn(input, Fields.INPUT);
-		if (opInput == null) opInput = Maps.empty();
+		ACell opInput = ensureParsedInput(RT.getIn(input, Fields.INPUT));
 
 		Job opJob = engine.jobs().invokeOperation(operation, opInput, ctx);
 		Blob jobId = opJob.getID();
@@ -636,6 +711,82 @@ public class LLMAgentAdapter extends AAdapter {
 
 		agent.deliverMessage(message);
 		return "{\"delivered\":true}";
+	}
+
+	/**
+	 * Submits a task to another agent synchronously and returns the result.
+	 */
+	private String handleRequestAgent(ACell input, RequestContext ctx) {
+		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		if (agentId == null) return "Error: agentId is required";
+
+		ACell taskInput = RT.getIn(input, Fields.INPUT);
+
+		// Delegate to agent:request with wait=true
+		ACell requestInput = Maps.of(
+			Fields.AGENT_ID, agentId,
+			Fields.INPUT, taskInput,
+			Fields.WAIT, CVMBool.TRUE
+		);
+
+		try {
+			Job requestJob = engine.jobs().invokeOperation("agent:request", requestInput, ctx);
+			ACell result = requestJob.awaitResult();
+			return convex.core.util.JSON.toString(result);
+		} catch (Exception e) {
+			return "Error: " + e.getMessage();
+		}
+	}
+
+	/**
+	 * Lists all operations available on the venue with names and descriptions.
+	 */
+	private String handleCoviaList() {
+		Index<AString, Hash> ops = engine.getOperationRegistry();
+		StringBuilder sb = new StringBuilder();
+		sb.append("{\"operations\":[");
+		boolean first = true;
+		for (long i = 0; i < ops.count(); i++) {
+			var entry = ops.entryAt(i);
+			AString name = entry.getKey();
+			Hash hash = entry.getValue();
+			Asset asset = engine.getAsset(hash);
+
+			if (!first) sb.append(",");
+			first = false;
+			sb.append("{\"name\":\"").append(name).append("\"");
+			if (asset != null) {
+				AMap<AString, ACell> meta = asset.meta();
+				ACell desc = meta.get(Fields.DESCRIPTION);
+				if (desc != null) {
+					sb.append(",\"description\":\"").append(escapeJson(desc.toString())).append("\"");
+				}
+			}
+			sb.append("}");
+		}
+		sb.append("]}");
+		return sb.toString();
+	}
+
+	/**
+	 * Gets full metadata for a named operation, including input/output schemas.
+	 */
+	private String handleCoviaGet(ACell input) {
+		AString opName = RT.ensureString(RT.getIn(input, Fields.OPERATION));
+		if (opName == null) return "Error: operation name is required";
+
+		Hash hash = engine.resolveOperation(opName);
+		if (hash == null) return "Error: operation not found: " + opName;
+
+		Asset asset = engine.getAsset(hash);
+		if (asset == null) return "Error: asset not found for operation: " + opName;
+
+		AMap<AString, ACell> meta = asset.meta();
+		return convex.core.util.JSON.toString(meta);
+	}
+
+	private static String escapeJson(String s) {
+		return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
 	}
 
 	/**
