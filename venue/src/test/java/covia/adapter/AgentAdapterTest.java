@@ -10,6 +10,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
@@ -855,6 +856,252 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("no-ow");
 		assertEquals(Strings.create("test:echo"), agent.getConfig().get(Fields.OPERATION));
+	}
+
+	// ========== agent:list — filter TERMINATED ==========
+
+	@Test
+	public void testListAgentsHidesTerminated() {
+		// Create two agents, delete one
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "alive"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "dead"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		engine.jobs().invokeOperation(
+			"agent:delete",
+			Maps.of(Fields.AGENT_ID, "dead"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Default list should hide terminated
+		Job listJob = engine.jobs().invokeOperation(
+			"agent:list", Maps.empty(), RequestContext.of(ALICE_DID));
+		ACell result = listJob.awaitResult(5000);
+
+		@SuppressWarnings("unchecked")
+		AVector<ACell> agents = (AVector<ACell>) RT.getIn(result, "agents");
+		assertEquals(1, agents.count(), "Terminated agent should be hidden");
+		assertEquals(Strings.create("alive"), RT.getIn(agents.get(0), Fields.AGENT_ID));
+	}
+
+	@Test
+	public void testListAgentsIncludeTerminated() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "alive2"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "dead2"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		engine.jobs().invokeOperation(
+			"agent:delete",
+			Maps.of(Fields.AGENT_ID, "dead2"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// With includeTerminated=true
+		Job listJob = engine.jobs().invokeOperation(
+			"agent:list",
+			Maps.of(Fields.INCLUDE_TERMINATED, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		ACell result = listJob.awaitResult(5000);
+
+		@SuppressWarnings("unchecked")
+		AVector<ACell> agents = (AVector<ACell>) RT.getIn(result, "agents");
+		assertEquals(2, agents.count(), "Should include both agents when includeTerminated=true");
+	}
+
+	@Test
+	public void testListAgentsAllTerminated() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "doomed"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		engine.jobs().invokeOperation(
+			"agent:delete",
+			Maps.of(Fields.AGENT_ID, "doomed"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job listJob = engine.jobs().invokeOperation(
+			"agent:list", Maps.empty(), RequestContext.of(ALICE_DID));
+		ACell result = listJob.awaitResult(5000);
+
+		@SuppressWarnings("unchecked")
+		AVector<ACell> agents = (AVector<ACell>) RT.getIn(result, "agents");
+		assertEquals(0, agents.count(), "All terminated — list should be empty");
+	}
+
+	// ========== agent:cancelTask ==========
+
+	@Test
+	public void testCancelTask() {
+		// Create agent and add a task
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "task-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("task-agent");
+
+		Blob taskId = Blob.createRandom(new java.util.Random(42), 16);
+		agent.addTask(taskId, Maps.of("question", "What is 2+2?"));
+		assertEquals(1, agent.getTasks().count());
+
+		// Cancel the task
+		Job cancelJob = engine.jobs().invokeOperation(
+			"agent:cancelTask",
+			Maps.of(Fields.AGENT_ID, "task-agent",
+				Fields.TASK_ID, taskId.toHexString()),
+			RequestContext.of(ALICE_DID));
+		ACell result = cancelJob.awaitResult(5000);
+
+		assertNotNull(result);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CANCELLED));
+		assertEquals(Strings.create("task-agent"), RT.getIn(result, Fields.AGENT_ID));
+
+		// Task should be gone
+		assertEquals(0, agent.getTasks().count());
+	}
+
+	@Test
+	public void testCancelTaskNotFound() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "cancel-nf",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job cancelJob = engine.jobs().invokeOperation(
+			"agent:cancelTask",
+			Maps.of(Fields.AGENT_ID, "cancel-nf",
+				Fields.TASK_ID, "0000000000000000deadbeefdeadbeef"),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			cancelJob.awaitResult(5000);
+			fail("Should fail — task does not exist");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, cancelJob.getStatus());
+		}
+	}
+
+	@Test
+	public void testCancelTaskMissingParams() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "cancel-mp",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Missing taskId
+		Job job1 = engine.jobs().invokeOperation(
+			"agent:cancelTask",
+			Maps.of(Fields.AGENT_ID, "cancel-mp"),
+			RequestContext.of(ALICE_DID));
+		try {
+			job1.awaitResult(5000);
+			fail("Should fail — taskId missing");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job1.getStatus());
+		}
+
+		// Missing agentId
+		Job job2 = engine.jobs().invokeOperation(
+			"agent:cancelTask",
+			Maps.of(Fields.TASK_ID, "abcd"),
+			RequestContext.of(ALICE_DID));
+		try {
+			job2.awaitResult(5000);
+			fail("Should fail — agentId missing");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job2.getStatus());
+		}
+	}
+
+	@Test
+	public void testCancelTaskMultiple() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "multi-task",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("multi-task");
+
+		java.util.Random rng = new java.util.Random(123);
+		Blob task1 = Blob.createRandom(rng, 16);
+		Blob task2 = Blob.createRandom(rng, 16);
+		Blob task3 = Blob.createRandom(rng, 16);
+		agent.addTask(task1, Maps.of("q", "one"));
+		agent.addTask(task2, Maps.of("q", "two"));
+		agent.addTask(task3, Maps.of("q", "three"));
+		assertEquals(3, agent.getTasks().count());
+
+		// Cancel the middle one
+		engine.jobs().invokeOperation(
+			"agent:cancelTask",
+			Maps.of(Fields.AGENT_ID, "multi-task",
+				Fields.TASK_ID, task2.toHexString()),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		assertEquals(2, agent.getTasks().count());
+		assertNull(agent.getTasks().get(task2), "Cancelled task should be gone");
+		assertNotNull(agent.getTasks().get(task1), "Other tasks should remain");
+		assertNotNull(agent.getTasks().get(task3), "Other tasks should remain");
+	}
+
+	@Test
+	public void testCancelTaskInvalidHex() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "cancel-hex",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation(
+			"agent:cancelTask",
+			Maps.of(Fields.AGENT_ID, "cancel-hex",
+				Fields.TASK_ID, "not-valid-hex!!!"),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			job.awaitResult(5000);
+			fail("Should fail — invalid hex");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+		}
+	}
+
+	// ========== AgentState.removeTask ==========
+
+	@Test
+	public void testAgentStateRemoveTask() {
+		User user = engine.getVenueState().users().ensure(ALICE_DID);
+		AgentState agent = user.ensureAgent("rm-task-agent", null, null);
+
+		Blob taskId = Blob.createRandom(new java.util.Random(0), 16);
+		agent.addTask(taskId, Maps.of("data", "test"));
+		assertEquals(1, agent.getTasks().count());
+
+		agent.removeTask(taskId);
+		assertEquals(0, agent.getTasks().count());
+	}
+
+	@Test
+	public void testAgentStateRemoveNonexistentTask() {
+		User user = engine.getVenueState().users().ensure(ALICE_DID);
+		AgentState agent = user.ensureAgent("rm-noop-agent", null, null);
+
+		Blob taskId = Blob.createRandom(new java.util.Random(1), 16);
+		// Removing a task that doesn't exist should be a no-op
+		agent.removeTask(taskId);
+		assertEquals(0, agent.getTasks().count());
 	}
 
 	// ========== AgentState lifecycle ==========

@@ -115,6 +115,9 @@ public class Fields {
 	public static final StringShort REMOVE = Strings.intern("remove");
 	public static final StringShort REMOVED = Strings.intern("removed");
 	public static final StringShort OVERWRITE = Strings.intern("overwrite");
+	public static final StringShort INCLUDE_TERMINATED = Strings.intern("includeTerminated");
+	public static final StringShort TASK_ID = Strings.intern("taskId");
+	public static final StringShort CANCELLED = Strings.intern("cancelled");
 
 	// Identity / authorization
 	public static final StringShort CALLER = Strings.intern("caller");

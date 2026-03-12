@@ -76,6 +76,7 @@ public class AgentAdapter extends AAdapter {
 		installAsset(BASE + "suspend.json");
 		installAsset(BASE + "resume.json");
 		installAsset(BASE + "update.json");
+		installAsset(BASE + "cancelTask.json");
 	}
 
 	@Override
@@ -96,12 +97,13 @@ public class AgentAdapter extends AAdapter {
 				case "message" -> handleMessage(job, input, ctx);
 				case "trigger" -> handleTrigger(job, input, ctx);
 				case "query"   -> handleQuery(job, input, ctx);
-				case "list"    -> handleList(job, ctx);
+				case "list"    -> handleList(job, input, ctx);
 				case "delete"  -> handleDelete(job, input, ctx);
 				case "suspend" -> handleSuspend(job, input, ctx);
 				case "resume"  -> handleResume(job, input, ctx);
-				case "update"  -> handleUpdate(job, input, ctx);
-				default        -> job.fail("Unknown agent operation: " + getSubOperation(meta));
+				case "update"     -> handleUpdate(job, input, ctx);
+				case "cancelTask" -> handleCancelTask(job, input, ctx);
+				default           -> job.fail("Unknown agent operation: " + getSubOperation(meta));
 			}
 		} catch (Exception e) {
 			job.fail(e.getMessage());
@@ -259,7 +261,9 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	@SuppressWarnings("unchecked")
-	private void handleList(Job job, RequestContext ctx) {
+	private void handleList(Job job, ACell input, RequestContext ctx) {
+		boolean includeTerminated = CVMBool.TRUE.equals(RT.getIn(input, Fields.INCLUDE_TERMINATED));
+
 		Users users = engine.getVenueState().users();
 		User user = users.get(ctx.getCallerDID());
 
@@ -273,13 +277,16 @@ public class AgentAdapter extends AAdapter {
 					if (!(value instanceof AMap)) continue;
 					AMap<AString, ACell> record = (AMap<AString, ACell>) value;
 
+					ACell status = record.get(AgentState.KEY_STATUS);
+					if (!includeTerminated && AgentState.TERMINATED.equals(status)) continue;
+
 					long taskCount = 0;
 					ACell tasksCell = record.get(AgentState.KEY_TASKS);
 					if (tasksCell instanceof Index) taskCount = ((Index<?, ?>) tasksCell).count();
 
 					AMap<AString, ACell> summary = Maps.of(
 						Fields.AGENT_ID, agentId,
-						Fields.STATUS, record.get(AgentState.KEY_STATUS),
+						Fields.STATUS, status,
 						Fields.TASKS, CVMLong.create(taskCount));
 					ACell error = record.get(AgentState.KEY_ERROR);
 					if (error != null) summary = summary.assoc(Fields.ERROR, error);
@@ -368,6 +375,41 @@ public class AgentAdapter extends AAdapter {
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, agent.getStatus()));
+	}
+
+	private void handleCancelTask(Job job, ACell input, RequestContext ctx) {
+		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		if (agentId == null) { job.fail("agentId is required"); return; }
+
+		AString taskIdHex = RT.ensureString(RT.getIn(input, Fields.TASK_ID));
+		if (taskIdHex == null) { job.fail("taskId is required"); return; }
+
+		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
+		if (agent == null) return;
+
+		// Parse hex task ID to Blob
+		Blob taskId;
+		try {
+			taskId = Blob.fromHex(taskIdHex.toString());
+		} catch (Exception e) {
+			job.fail("Invalid taskId format: " + taskIdHex);
+			return;
+		}
+
+		// Check task exists
+		Index<Blob, ACell> tasks = agent.getTasks();
+		if (tasks.get(taskId) == null) {
+			job.fail("Task not found: " + taskIdHex);
+			return;
+		}
+
+		agent.removeTask(taskId);
+
+		job.setStatus(Status.STARTED);
+		job.completeWith(Maps.of(
+			Fields.AGENT_ID, agentId,
+			Fields.TASK_ID, taskIdHex,
+			Fields.CANCELLED, CVMBool.TRUE));
 	}
 
 	// ========== Wake and run management ==========

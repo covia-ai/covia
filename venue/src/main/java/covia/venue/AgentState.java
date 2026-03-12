@@ -222,6 +222,10 @@ public class AgentState extends ALatticeComponent<ACell> {
 		update(r -> r.assoc(K_TASKS, extractTasks(r).assoc(taskId, taskData)));
 	}
 
+	public void removeTask(Blob taskId) {
+		update(r -> r.assoc(K_TASKS, extractTasks(r).dissoc(taskId)));
+	}
+
 	public void addPending(Blob jobId, ACell snapshot) {
 		update(r -> r.assoc(K_PENDING, extractPending(r).assoc(jobId, snapshot)));
 	}

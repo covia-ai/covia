@@ -1,12 +1,14 @@
 {
 	"name": "List Agents",
-	"description": "Lists all agents owned by the authenticated user, with a status summary for each.",
+	"description": "Lists all agents owned by the authenticated user, with a status summary for each. Terminated agents are hidden by default.",
 	"dateCreated": "2026-03-06T00:00:00Z",
 	"operation": {
 		"adapter": "agent:list",
 		"input": {
 			"type": "object",
-			"properties": {}
+			"properties": {
+				"includeTerminated": { "type": "boolean", "description": "If true, include TERMINATED agents in the listing. Default false." }
+			}
 		},
 		"output": {
 			"type": "object",
