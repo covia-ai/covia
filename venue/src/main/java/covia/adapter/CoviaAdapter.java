@@ -110,6 +110,7 @@ public class CoviaAdapter extends AAdapter {
 		installAsset(BASE + "list.json");
 		installAsset(BASE + "functions.json");
 		installAsset(BASE + "describe.json");
+		installAsset(BASE + "adapters.json");
 	}
 
 	@Override
@@ -127,6 +128,7 @@ public class CoviaAdapter extends AAdapter {
 				case "list" -> CompletableFuture.completedFuture(handleList(ctx, input));
 				case "functions" -> CompletableFuture.completedFuture(handleFunctions());
 				case "describe" -> CompletableFuture.completedFuture(handleDescribe(input));
+				case "adapters" -> CompletableFuture.completedFuture(handleAdapters());
 				default -> CompletableFuture.failedFuture(
 					new RuntimeException("Unknown covia operation: " + getSubOperation(meta)));
 			};
@@ -735,6 +737,30 @@ public class CoviaAdapter extends AAdapter {
 		if (asset == null) return Maps.of(Fields.ERROR, Strings.create("asset not found for: " + funcName));
 
 		return asset.meta();
+	}
+
+	/**
+	 * Lists all registered adapters with their name, description, and operation count.
+	 */
+	@SuppressWarnings("unchecked")
+	private ACell handleAdapters() {
+		AVector<ACell> result = Vectors.empty();
+		for (String name : engine.getAdapterNames()) {
+			AAdapter adapter = engine.getAdapter(name);
+			AMap<AString, ACell> entry = Maps.of(
+				Fields.NAME, Strings.create(name),
+				Fields.DESCRIPTION, Strings.create(adapter.getDescription()));
+			// Count operations for this adapter
+			Index<AString, Hash> ops = engine.getOperationRegistry();
+			long count = 0;
+			for (long i = 0; i < ops.count(); i++) {
+				AString opName = ops.entryAt(i).getKey();
+				if (opName != null && opName.toString().startsWith(name + ":")) count++;
+			}
+			entry = entry.assoc(Strings.intern("operations"), CVMLong.create(count));
+			result = (AVector<ACell>) result.conj(entry);
+		}
+		return Maps.of(Strings.intern("adapters"), result);
 	}
 
 	// ========== Path parsing ==========

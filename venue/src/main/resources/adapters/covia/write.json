@@ -13,7 +13,7 @@
 					"description": "Path to write, e.g. 'w/my-notes' or 'o/my-operation'. Must start with 'w/' (workspace) or 'o/' (operations)."
 				},
 				"value": {
-					"description": "The value to store. Can be any JSON-compatible type: string, number, boolean, object, array, or null."
+					"description": "The value to store. You should normally use structured values rather than serialised strings."
 				}
 			},
 			"required": ["path", "value"]

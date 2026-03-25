@@ -402,23 +402,22 @@ public class Engine {
 
 	/** Namespace prefix for immutable content-addressed assets */
 	private static final AString NS_ASSET = Strings.intern("/a/");
+	private static final AString NS_OPS   = Strings.intern("/o/");
 	/** Namespace prefix for DID URLs */
 	private static final AString NS_DID   = Strings.intern("did:");
-	// TODO: private static final AString NS_OPS       = Strings.intern("/o/");
-	// TODO: private static final AString NS_WORKSPACE = Strings.intern("/w/");
-	// TODO: private static final AString NS_JOB       = Strings.intern("/j/");
 
 	/**
-	 * Resolves a reference to an Asset. Supports:
+	 * Resolves a reference to an Asset. Supports (in priority order):
 	 * <ul>
 	 *   <li>Bare hex hash — shorthand for {@code /a/<hash>}</li>
 	 *   <li>{@code /a/<hash>} — explicit asset namespace</li>
+	 *   <li>{@code /o/<name>} — caller's user-scoped operation namespace</li>
 	 *   <li>{@code did:.../<namespace>/<path>} — local or remote DID URL</li>
-	 *   <li>Operation name (e.g. "test:echo") — operation registry lookup</li>
+	 *   <li>Operation name (e.g. "test:echo") — venue operation registry</li>
 	 * </ul>
 	 *
 	 * @param ref Reference string
-	 * @param ctx Request context (caller identity for future per-user namespace scoping)
+	 * @param ctx Request context (caller identity for /o/ namespace scoping)
 	 * @return Resolved Asset, or null if not resolvable
 	 */
 	public Asset resolveAsset(AString ref, RequestContext ctx) {
@@ -432,17 +431,18 @@ public class Engine {
 		if (ref.startsWith(NS_ASSET)) {
 			return resolveAssetRef(ref.slice(3));
 		}
-		// TODO: /o/ — operation registry (Phase 3)
-		// if (ref.startsWith(NS_OPS)) { return resolveOpsRef(ref.slice(3), ctx); }
-		// TODO: /w/ — per-user workspace (Phase 3+)
-		// if (ref.startsWith(NS_WORKSPACE)) { return resolveWorkspaceRef(ref.slice(3), ctx); }
 
-		// 3. DID URL
+		// 3. /o/<name> — caller's user-scoped operation namespace
+		if (ref.startsWith(NS_OPS)) {
+			return resolveUserOp(ref.slice(3), ctx);
+		}
+
+		// 4. DID URL
 		if (ref.startsWith(NS_DID)) {
 			return resolveDIDURL(ref);
 		}
 
-		// 4. Operation name registry (legacy — becomes /o/ in Phase 3)
+		// 5. Operation name registry (venue-level named operations)
 		Hash opHash = operations.get(ref);
 		if (opHash != null) return getAsset(opHash);
 
@@ -465,6 +465,43 @@ public class Engine {
 	private Asset resolveAssetRef(AString hashStr) {
 		Hash h = Hash.parse(hashStr);
 		return (h != null) ? getAsset(h) : null;
+	}
+
+	/**
+	 * Resolves an operation from the caller's {@code /o/} namespace.
+	 *
+	 * <p>The value at the path can be:</p>
+	 * <ul>
+	 *   <li>A map with an {@code operation} field — treated as inline operation metadata</li>
+	 *   <li>A string — treated as a reference and resolved recursively (e.g. an {@code /a/} hash)</li>
+	 * </ul>
+	 */
+	private Asset resolveUserOp(AString name, RequestContext ctx) {
+		if (ctx == null || ctx.getCallerDID() == null) return null;
+
+		Users users = venueState.users();
+		User user = users.get(ctx.getCallerDID());
+		if (user == null) return null;
+
+		// Read from the user's /o/ namespace
+		ACell value = RT.getIn(user.get(), "o", name);
+		if (value == null) return null;
+
+		// If it's a map with an "operation" field, treat as inline metadata
+		if (value instanceof AMap) {
+			ACell opField = RT.getIn(value, "operation");
+			if (opField != null) {
+				return Asset.fromMeta((AMap<AString, ACell>) value);
+			}
+		}
+
+		// If it's a string, treat as a reference and resolve recursively
+		AString strRef = RT.ensureString(value);
+		if (strRef != null) {
+			return resolveAsset(strRef, ctx);
+		}
+
+		return null;
 	}
 
 	/**

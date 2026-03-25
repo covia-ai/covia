@@ -171,6 +171,7 @@ public class LLMAgentAdapter extends AAdapter {
 
 	/** Default tool operations — resolved via buildConfigTools at runtime */
 	private static final AVector<ACell> DEFAULT_TOOL_OPS = (AVector<ACell>) Vectors.of(
+		(ACell) Strings.create("agent:create"),
 		(ACell) Strings.create("agent:message"),
 		(ACell) Strings.create("agent:request"),
 		(ACell) Strings.create("covia:read"),
