@@ -57,6 +57,8 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.completedFuture(handleToolLlm(input));
                 case "taskllm":
                     return CompletableFuture.completedFuture(handleTaskLlm(input));
+                case "workspacellm":
+                    return CompletableFuture.completedFuture(handleWorkspaceLlm(input));
                 case "never":
                     return new CompletableFuture<>();
                 case "delay":
@@ -93,6 +95,7 @@ public class TestAdapter extends AAdapter {
 			installAsset(BASE+"testllm.json");
 			installAsset(BASE+"testtoolllm.json");
 			installAsset(BASE+"testtaskllm.json");
+			installAsset(BASE+"testworkspacellm.json");
 			installAsset(BASE+"neverop.json");
 			installAsset(BASE+"delayop.json");
 			installAsset(BASE+"randomop.json");
@@ -347,6 +350,75 @@ public class TestAdapter extends AAdapter {
         // No tasks found — return text
         return Maps.of("role", Strings.create("assistant"),
             "content", Strings.create("No tasks to complete"));
+    }
+
+    /**
+     * Test LLM that exercises workspace tools across multiple tool call rounds
+     * within a single agent run:
+     * <ol>
+     *   <li>Write knowledge to workspace via covia_write</li>
+     *   <li>Append to a log via covia_append</li>
+     *   <li>Read back the knowledge via covia_read</li>
+     *   <li>Return text summary after all tool results received</li>
+     * </ol>
+     * Tracks progress by counting tool result messages in the conversation.
+     */
+    @SuppressWarnings("unchecked")
+    private ACell handleWorkspaceLlm(ACell input) {
+        ACell messagesCell = RT.getIn(input, "messages");
+        if (!(messagesCell instanceof AVector)) {
+            return Maps.of("role", Strings.create("assistant"),
+                "content", Strings.create("(no messages)"));
+        }
+        AVector<ACell> messages = (AVector<ACell>) messagesCell;
+
+        // Count tool results after the last user message (current run only)
+        int toolResults = 0;
+        int lastUserIdx = -1;
+        for (long i = messages.count() - 1; i >= 0; i--) {
+            AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+            if (role != null && "user".equals(role.toString())) {
+                lastUserIdx = (int) i;
+                break;
+            }
+        }
+        for (long i = Math.max(0, lastUserIdx); i < messages.count(); i++) {
+            AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+            if (role != null && "tool".equals(role.toString())) toolResults++;
+        }
+
+        if (toolResults == 0) {
+            // Round 1: Write knowledge to workspace
+            return Maps.of("role", Strings.create("assistant"),
+                "toolCalls", Vectors.of(Maps.of(
+                    "id", Strings.create("call_w1"),
+                    "name", Strings.create("covia_write"),
+                    "arguments", Strings.create(
+                        "{\"path\":\"w/knowledge/topic\",\"value\":\"lattice technology\"}")
+                )));
+        } else if (toolResults == 1) {
+            // Round 2: Append to event log
+            return Maps.of("role", Strings.create("assistant"),
+                "toolCalls", Vectors.of(Maps.of(
+                    "id", Strings.create("call_w2"),
+                    "name", Strings.create("covia_append"),
+                    "arguments", Strings.create(
+                        "{\"path\":\"w/log\",\"value\":\"Learned about lattice technology\"}")
+                )));
+        } else if (toolResults == 2) {
+            // Round 3: Read back the knowledge
+            return Maps.of("role", Strings.create("assistant"),
+                "toolCalls", Vectors.of(Maps.of(
+                    "id", Strings.create("call_w3"),
+                    "name", Strings.create("covia_read"),
+                    "arguments", Strings.create("{\"path\":\"w/knowledge/topic\"}")
+                )));
+        } else {
+            // Round 4: All tool results received — return text summary
+            return Maps.of("role", Strings.create("assistant"),
+                "content", Strings.create(
+                    "Done. Wrote knowledge, appended to log, and verified by reading back."));
+        }
     }
 
     private RuntimeException handleError(ACell input) {

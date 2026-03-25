@@ -1,0 +1,23 @@
+{
+	"name": "Test Workspace LLM",
+	"description": "Test LLM that exercises workspace tools (covia_write, covia_append, covia_read) in sequence within a single agent run. Used for end-to-end testing of agent workspace interaction.",
+	"dateCreated": "2026-03-25T00:00:00Z",
+	"operation": {
+		"adapter": "test:workspacellm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": { "type": "array" },
+				"tools": { "type": "array" }
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": { "type": "string" },
+				"content": { "type": "string" },
+				"toolCalls": { "type": "array" }
+			}
+		}
+	}
+}
