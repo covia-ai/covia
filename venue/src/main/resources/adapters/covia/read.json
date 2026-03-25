@@ -1,6 +1,6 @@
 {
 	"name": "Read Lattice Data",
-	"description": "Reads a value from the user's lattice namespace at the given path. Paths use '/' separators (e.g. 'g/my-agent/state', 'g/my-agent/timeline/3', 's/my-secret'). Namespaces: 'g' = agents, 's' = secrets, 'j' = jobs. Path can also be a JSON array for pre-typed keys (e.g. ['g', 'my-agent', 'timeline', 3]). Returns {exists: true, value: <data>} when path has data, or {exists: false, value: null} when path has no data or is invalid.",
+	"description": "Reads a value from the user's lattice namespace at the given path. Paths use '/' separators (e.g. 'g/my-agent/state', 'w/my-notes', 'o/my-op'). Namespaces: 'g' = agents, 's' = secrets, 'j' = jobs, 'w' = workspace, 'o' = operations. Path can also be a JSON array for pre-typed keys. Returns {exists: true, value: <data>} when path has data. If the value exceeds maxSize bytes (default 1000000), returns {exists: true, truncated: true, size: <bytes>} — use covia:list to inspect or covia:slice to page through vectors.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "covia:read",
@@ -9,7 +9,11 @@
 			"type": "object",
 			"properties": {
 				"path": {
-					"description": "Path to read, e.g. 'g/my-agent/state' or ['g', 'my-agent', 'timeline', 3]. Namespaces: g = agents, s = secrets, j = jobs."
+					"description": "Path to read, e.g. 'g/my-agent/state' or 'w/my-notes'. Namespaces: g = agents, s = secrets, j = jobs, w = workspace, o = operations."
+				},
+				"maxSize": {
+					"type": "integer",
+					"description": "Maximum memory size in bytes for the returned value (default 1000000). If exceeded, returns truncated: true with the size."
 				}
 			},
 			"required": ["path"]
@@ -18,7 +22,9 @@
 			"type": "object",
 			"properties": {
 				"exists": { "type": "boolean", "description": "True if data exists at this path" },
-				"value": { "description": "The value at the path, or null if not found" }
+				"value": { "description": "The value at the path, or null if not found or truncated" },
+				"truncated": { "type": "boolean", "description": "True if the value was too large and was not returned" },
+				"size": { "type": "integer", "description": "Memory size in bytes (only present when truncated)" }
 			}
 		}
 	}

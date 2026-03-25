@@ -42,6 +42,8 @@ import convex.lattice.generic.StringKeyedLattice;
  *               "j"  ->  IndexLattice + LWW (user's job references)
  *               "g"  ->  MapLattice + LWW (user's agents — single atomic record per agent)
  *               "s"  ->  MapLattice + LWW (user's encrypted credentials)
+ *               "w"  ->  MapLattice + REPLACE (user's workspace — opaque JSON/CAD3 data)
+ *               "o"  ->  MapLattice + REPLACE (user's operations — opaque JSON/CAD3 definitions)
  *     :meta  ->  CASLattice (shared content-addressable metadata)
  * </pre>
  *
@@ -116,6 +118,17 @@ public final class Covia {
 	private static final LWWLattice<ACell> AGENT_LWW = LWWLattice.create(Covia::extractTsTimestamp);
 
 	/**
+	 * Simple replace lattice — always takes the incoming value.
+	 * Used for workspace and operations where values are opaque JSON/CAD3
+	 * structures with no timestamp-based merge semantics. Adequate for
+	 * single-venue; cross-venue sync will require application-level
+	 * conflict resolution.
+	 */
+	@SuppressWarnings("unchecked")
+	private static final FunctionLattice<ACell> REPLACE =
+		(FunctionLattice<ACell>) FunctionLattice.create((a, b) -> b);
+
+	/**
 	 * Per-user lattice structure. Each user (identified by DID string) gets
 	 * an independent {@link StringKeyedLattice} with short AString keys matching
 	 * {@link Namespace} constants. String keys keep the user lattice
@@ -124,7 +137,9 @@ public final class Covia {
 	public static final StringKeyedLattice USER = StringKeyedLattice.create(
 		"j", IndexLattice.create(LWW),         // user's job references
 		"g", MapLattice.create(AGENT_LWW),     // user's agents (LWW per agent, latest ts wins)
-		"s", MapLattice.create(LWW)            // user's encrypted credentials
+		"s", MapLattice.create(LWW),           // user's encrypted credentials
+		"w", MapLattice.create(REPLACE),       // user's workspace (opaque JSON/CAD3 data)
+		"o", MapLattice.create(REPLACE)        // user's operations (opaque JSON/CAD3 definitions)
 	);
 
 	/**

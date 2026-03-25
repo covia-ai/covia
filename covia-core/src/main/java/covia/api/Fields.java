@@ -99,6 +99,7 @@ public class Fields {
 
 	// Lattice navigation
 	public static final StringShort PATH = Strings.intern("path");
+	public static final StringShort VALUE = Strings.intern("value");
 
 	// Agent related
 	public static final StringShort AGENT_ID = Strings.intern("agentId");

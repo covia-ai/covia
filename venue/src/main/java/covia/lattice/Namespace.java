@@ -30,10 +30,10 @@ public final class Namespace {
 	/** Assets namespace — user-created assets (/a/) — future */
 	public static final AString A = Strings.intern("a");
 
-	/** Workspace namespace — user scratch space (/w/) — future */
+	/** Workspace namespace — general-purpose user data (/w/) */
 	public static final AString W = Strings.intern("w");
 
-	/** Operations namespace — user's named operations (/o/) — future */
+	/** Operations namespace — user's named operations (/o/) */
 	public static final AString O = Strings.intern("o");
 
 	private Namespace() {}

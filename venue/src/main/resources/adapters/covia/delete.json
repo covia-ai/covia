@@ -1,0 +1,25 @@
+{
+	"name": "Delete Lattice Data",
+	"description": "Deletes a value from the user's workspace ('w') or operations ('o') namespace at the given path. Path must start with 'w/' or 'o/' followed by a key (e.g. 'w/my-notes', 'o/my-operation'). Deleting from other namespaces (g, s, j) is not permitted — those are framework-managed. Deleting a non-existent key is a no-op (idempotent). Returns {deleted: true} on success.",
+	"dateCreated": "2026-03-25T00:00:00Z",
+	"operation": {
+		"adapter": "covia:delete",
+		"toolName": "covia_delete",
+		"input": {
+			"type": "object",
+			"properties": {
+				"path": {
+					"type": "string",
+					"description": "Path to delete, e.g. 'w/my-notes' or 'o/my-operation'. Must start with 'w/' (workspace) or 'o/' (operations)."
+				}
+			},
+			"required": ["path"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"deleted": { "type": "boolean", "description": "True if the delete operation completed successfully" }
+			}
+		}
+	}
+}

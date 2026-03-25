@@ -1,0 +1,28 @@
+{
+	"name": "Append to Lattice Vector",
+	"description": "Appends an element to a vector in the user's workspace ('w') or operations ('o') namespace. Path must start with 'w/' or 'o/' (e.g. 'w/events', 'w/agent-data/logs'). If the path does not exist, a new single-element vector is created. If the path contains a vector, the element is appended. Deeper paths are supported — intermediate maps are created as needed. Errors if the target path contains a non-vector value. Returns {appended: true} on success.",
+	"dateCreated": "2026-03-25T00:00:00Z",
+	"operation": {
+		"adapter": "covia:append",
+		"toolName": "covia_append",
+		"input": {
+			"type": "object",
+			"properties": {
+				"path": {
+					"type": "string",
+					"description": "Path to the vector to append to, e.g. 'w/events' or 'w/agent-data/logs'. Must start with 'w/' or 'o/'."
+				},
+				"value": {
+					"description": "The element to append. Can be any JSON-compatible type."
+				}
+			},
+			"required": ["path", "value"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"appended": { "type": "boolean", "description": "True if the element was appended successfully" }
+			}
+		}
+	}
+}

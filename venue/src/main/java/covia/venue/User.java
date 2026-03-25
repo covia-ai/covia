@@ -24,6 +24,8 @@ import covia.lattice.Namespace;
  *   <li>{@code "j"} — user's job references (IndexLattice + LWW)</li>
  *   <li>{@code "g"} — user's agents (MapLattice + AGENT)</li>
  *   <li>{@code "s"} — user's encrypted credentials (MapLattice + LWW)</li>
+ *   <li>{@code "w"} — user's workspace data (MapLattice + LWW)</li>
+ *   <li>{@code "o"} — user's operations (MapLattice + LWW)</li>
  * </ul>
  */
 public class User extends ALatticeComponent<ACell> {

@@ -1,0 +1,36 @@
+{
+	"name": "Slice Lattice Data",
+	"description": "Reads a paginated slice of entries from a collection at a path in the user's lattice namespace. Works on vectors (returns elements), maps (returns {key, value} entries), and sets (returns elements). Supports offset (default 0) and limit (default 100) for pagination. Works on any path and namespace (e.g. 'w/events', 'g/my-agent/timeline', 'w/config'). Use covia:list first to check the type and count at a path. Returns {type, values: [...], count: <total>, offset: <n>}.",
+	"dateCreated": "2026-03-25T00:00:00Z",
+	"operation": {
+		"adapter": "covia:slice",
+		"toolName": "covia_slice",
+		"input": {
+			"type": "object",
+			"properties": {
+				"path": {
+					"description": "Path to the collection, e.g. 'w/events', 'g/my-agent/timeline', or 'w/config'."
+				},
+				"offset": {
+					"type": "integer",
+					"description": "Starting index (default 0)."
+				},
+				"limit": {
+					"type": "integer",
+					"description": "Maximum number of entries to return (default 100)."
+				}
+			},
+			"required": ["path"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"exists": { "type": "boolean" },
+				"type": { "type": "string", "description": "Collection type: Vector, Map, or Set" },
+				"values": { "type": "array", "description": "The entries in the requested range. For maps, each entry is {key, value}." },
+				"count": { "type": "integer", "description": "Total number of entries in the collection" },
+				"offset": { "type": "integer", "description": "Starting index of this page" }
+			}
+		}
+	}
+}

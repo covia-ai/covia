@@ -1,0 +1,28 @@
+{
+	"name": "Write Lattice Data",
+	"description": "Writes a value to the user's workspace ('w') or operations ('o') namespace at the given path. Path must start with 'w/' or 'o/' followed by a key (e.g. 'w/my-notes', 'o/my-operation'). Writing to other namespaces (g, s, j) is not permitted — those are framework-managed. The value can be any JSON-compatible type (string, number, boolean, object, array, null). Writing null removes the entry (equivalent to delete). Returns {written: true} on success.",
+	"dateCreated": "2026-03-25T00:00:00Z",
+	"operation": {
+		"adapter": "covia:write",
+		"toolName": "covia_write",
+		"input": {
+			"type": "object",
+			"properties": {
+				"path": {
+					"type": "string",
+					"description": "Path to write, e.g. 'w/my-notes' or 'o/my-operation'. Must start with 'w/' (workspace) or 'o/' (operations)."
+				},
+				"value": {
+					"description": "The value to store. Can be any JSON-compatible type: string, number, boolean, object, array, or null."
+				}
+			},
+			"required": ["path", "value"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"written": { "type": "boolean", "description": "True if the value was written successfully" }
+			}
+		}
+	}
+}
