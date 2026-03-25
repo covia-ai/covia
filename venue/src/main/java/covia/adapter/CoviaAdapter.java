@@ -3,6 +3,7 @@ package covia.adapter;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
+import convex.auth.did.DIDURL;
 import convex.core.data.ACell;
 import convex.core.data.ACountable;
 import convex.core.data.AMap;
@@ -159,21 +160,14 @@ public class CoviaAdapter extends AAdapter {
 	 * {@code covia:slice} to read vector elements in pages.</p>
 	 */
 	private ACell handleRead(RequestContext ctx, ACell input) {
-		ACell pathCell = RT.getIn(input, Fields.PATH);
-		ACell[] jsonKeys = parsePath(pathCell);
+		Object[] target = resolveTargetPath(ctx, RT.getIn(input, Fields.PATH));
+		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
+		ACell[] pathKeys = (ACell[]) target[1];
 
-		ALatticeCursor<ACell> cursor = getUserCursor(ctx);
 		if (cursor == null) return result(null);
-		if (jsonKeys.length == 0) return sizeGuardedResult(cursor.get(), input);
+		if (pathKeys.length == 0) return sizeGuardedResult(cursor.get(), input);
 
-		ACell value = readPath(cursor, jsonKeys);
-		if (value == null) return result(null);
-
-		// Size guard — encoding length is the actual byte size of the value
-		long maxSize = DEFAULT_MAX_SIZE;
-		ACell maxSizeCell = RT.getIn(input, K_MAX_SIZE);
-		if (maxSizeCell instanceof CVMLong l) maxSize = Math.max(0, l.longValue());
-
+		ACell value = readPath(cursor, pathKeys);
 		return sizeGuardedResult(value, input);
 	}
 
@@ -212,13 +206,13 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	private ACell handleSlice(RequestContext ctx, ACell input) {
-		ACell pathCell = RT.getIn(input, Fields.PATH);
-		ACell[] jsonKeys = parsePath(pathCell);
+		Object[] target = resolveTargetPath(ctx, RT.getIn(input, Fields.PATH));
+		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
+		ACell[] pathKeys = (ACell[]) target[1];
 
-		ALatticeCursor<ACell> cursor = getUserCursor(ctx);
 		if (cursor == null) return Maps.of(K_EXISTS, CVMBool.FALSE);
 
-		ACell value = (jsonKeys.length > 0) ? readPath(cursor, jsonKeys) : cursor.get();
+		ACell value = (pathKeys.length > 0) ? readPath(cursor, pathKeys) : cursor.get();
 		if (value == null) return Maps.of(K_EXISTS, CVMBool.FALSE);
 
 		long limit = 100;
@@ -309,9 +303,10 @@ public class CoviaAdapter extends AAdapter {
 		ALatticeCursor<ACell> entryCursor = resolveEntry(ensureUserCursor(ctx), jsonKeys);
 
 		if (jsonKeys.length == 2) {
+			// Top-level entry: cursor set (lattice handles new entries)
 			entryCursor.set(value);
 		} else {
-			// Deep write: read top-level entry, update at nested path, write back
+			// Deep write: type-aware navigation for map/vector paths
 			ACell current = entryCursor.get();
 			entryCursor.set(deepSet(current, jsonKeys, 2, value));
 		}
@@ -617,14 +612,13 @@ public class CoviaAdapter extends AAdapter {
 	 * in the response so the caller knows where to continue.</p>
 	 */
 	private ACell handleList(RequestContext ctx, ACell input) {
-		ACell pathCell = RT.getIn(input, Fields.PATH);
-		ACell[] jsonKeys = parsePath(pathCell);
+		Object[] target = resolveTargetPath(ctx, RT.getIn(input, Fields.PATH));
+		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
+		ACell[] pathKeys = (ACell[]) target[1];
 
-		ALatticeCursor<ACell> cursor = getUserCursor(ctx);
 		ACell value = null;
-
 		if (cursor != null) {
-			value = (jsonKeys.length > 0) ? readPath(cursor, jsonKeys) : cursor.get();
+			value = (pathKeys.length > 0) ? readPath(cursor, pathKeys) : cursor.get();
 		}
 
 		return describeValue(value, input);
@@ -823,6 +817,56 @@ public class CoviaAdapter extends AAdapter {
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ctx.getCallerDID());
 		return user.cursor();
+	}
+
+	/**
+	 * Resolves a path that may target another user's namespace via DID URL syntax.
+	 *
+	 * <p>Paths can be either relative (e.g. {@code "w/notes"}) targeting the
+	 * caller's own namespace, or DID URL paths (e.g. {@code "did:key:z6Mk.../w/notes"})
+	 * targeting another user. DID URL parsing uses {@link DIDURL} from convex-core.</p>
+	 *
+	 * <p>Cross-user access is denied until capability enforcement is implemented.
+	 * The infrastructure resolves the target user and path, then rejects with a
+	 * clear error.</p>
+	 *
+	 * @return A two-element result: [cursor, pathKeys] where pathKeys are the
+	 *         namespace-relative keys (DID prefix stripped)
+	 */
+	private Object[] resolveTargetPath(RequestContext ctx, ACell pathCell) {
+		if (pathCell == null) {
+			return new Object[] { getUserCursor(ctx), new ACell[0] };
+		}
+
+		// Check if the raw path string is a DID URL (starts with "did:")
+		AString pathStr = RT.ensureString(pathCell);
+		if (pathStr != null && pathStr.toString().startsWith("did:")) {
+			return resolveDIDURL(ctx, pathStr.toString());
+		}
+
+		// Not a DID URL — parse as normal relative path
+		return new Object[] { getUserCursor(ctx), parsePath(pathCell) };
+	}
+
+	/**
+	 * Resolves a DID URL path like {@code "did:key:z6MkAlice/w/notes"} into
+	 * a target cursor and namespace-relative path keys.
+	 */
+	private Object[] resolveDIDURL(RequestContext ctx, String rawPath) {
+		DIDURL didURL = DIDURL.create(rawPath);
+		AString targetDID = Strings.create(didURL.getDID().toString());
+
+		// Parse the DID URL path component into namespace keys
+		ACell[] pathKeys = parseStringPath(didURL.getPath());
+
+		if (targetDID.equals(ctx.getCallerDID())) {
+			// Own namespace with explicit DID — allowed
+			return new Object[] { getUserCursor(ctx), pathKeys };
+		}
+
+		// Cross-user access — deny with uniform error (do not leak user existence)
+		throw new RuntimeException(
+			"Cross-user access requires capability delegation (not yet implemented)");
 	}
 
 }

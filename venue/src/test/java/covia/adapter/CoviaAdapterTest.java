@@ -568,6 +568,72 @@ public class CoviaAdapterTest {
 		assertEquals(Strings.create("bob-only"), RT.getIn(bobResult, "value"));
 	}
 
+	// ========== Cross-user access (denied — capabilities not yet implemented) ==========
+
+	@Test
+	public void testCrossUserReadDenied() {
+		// Alice writes workspace data
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/public-info", Fields.VALUE, Strings.create("hello from alice")),
+			ALICE).awaitResult(5000);
+
+		// Bob tries to read Alice's workspace via DID-prefixed path
+		RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/public-info"),
+			BOB);
+		// Should fail with a capability error, not silently return null
+		assertThrows(Exception.class, () -> readJob.awaitResult(5000));
+	}
+
+	@Test
+	public void testCrossUserListDenied() {
+		RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
+		Job listJob = engine.jobs().invokeOperation("covia:list",
+			Maps.of(Fields.PATH, ALICE_DID + "/w"),
+			BOB);
+		assertThrows(Exception.class, () -> listJob.awaitResult(5000));
+	}
+
+	@Test
+	public void testCrossUserSliceDenied() {
+		// Create a vector for Alice
+		engine.jobs().invokeOperation("covia:append",
+			Maps.of(Fields.PATH, "w/events", Fields.VALUE, Strings.create("ev1")),
+			ALICE).awaitResult(5000);
+
+		RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
+		Job sliceJob = engine.jobs().invokeOperation("covia:slice",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/events"),
+			BOB);
+		assertThrows(Exception.class, () -> sliceJob.awaitResult(5000));
+	}
+
+	@Test
+	public void testCrossUserReadNonExistentUser() {
+		// Same error as existing user — must not leak user existence
+		RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, "did:key:z6MkNobody/w/anything"),
+			BOB);
+		assertThrows(Exception.class, () -> readJob.awaitResult(5000));
+	}
+
+	@Test
+	public void testReadOwnNamespaceWithExplicitDid() {
+		// Alice reads her own namespace with DID prefix — should work normally
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/mine", Fields.VALUE, Strings.create("my data")),
+			ALICE).awaitResult(5000);
+
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/mine"),
+			ALICE);
+		ACell result = readJob.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
+		assertEquals(Strings.create("my data"), RT.getIn(result, "value"));
+	}
+
 	// ========== covia:write — deep paths ==========
 
 	@Test

@@ -354,11 +354,11 @@ capability delegation.
 
 | Tool | Caps required | Description |
 |------|---------------|-------------|
-| `read_secret` | `/secret/decrypt` | Decrypt a secret (adapter handles plaintext) |
-| `spawn_agent` | `/crud/write` on `/g/` | Create a new agent |
-| `fork_agent` | `/agent/fork` | Fork an existing agent |
-| `delegate` | `/ucan/delegate` | Sub-delegate UCAN capabilities |
-| cross-user read | `/crud/read` on other DID | Read another user's `/w/` namespace |
+| `read_secret` | `secret/decrypt` | Decrypt a secret (adapter handles plaintext) |
+| `spawn_agent` | `crud/write` on `/g/` | Create a new agent |
+| `fork_agent` | `agent/fork` | Fork an existing agent |
+| `delegate` | `ucan/delegate` | Sub-delegate UCAN capabilities |
+| cross-user read | `crud/read` on other DID | Read another user's `/w/` namespace |
 
 #### Additional tools
 

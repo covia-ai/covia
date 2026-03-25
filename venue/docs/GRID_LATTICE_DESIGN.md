@@ -244,16 +244,16 @@ All fields are framework-managed except `state`, which is owned by the transitio
 
 | Operation | Description | Caps required |
 |-----------|-------------|---------------|
-| Read agent record | Read any field of an agent's state | `{ with: "did:.../g/<id>", can: "/crud/read" }` |
-| Write agent workspace | Write to an agent's or user's workspace | `{ with: "did:.../w/path", can: "/crud/write" }` |
-| List agents | Enumerate agents for a user | `{ with: "did:.../g/", can: "/crud/read" }` |
+| Read agent record | Read any field of an agent's state | `{ with: "did:.../g/<id>", can: "crud/read" }` |
+| Write agent workspace | Write to an agent's or user's workspace | `{ with: "did:.../w/path", can: "crud/write" }` |
+| List agents | Enumerate agents for a user | `{ with: "did:.../g/", can: "crud/read" }` |
 | Complete/fail task | Complete or fail a Job assigned to an agent | Job must be assigned to the agent |
-| Message agent | Append to an agent's inbox | `{ with: "did:.../g/<id>", can: "/agent/message" }` |
-| Invoke operation | Invoke any grid operation (creates a Job) | `{ with: "did:.../o/op-name", can: "/invoke" }` |
-| Decrypt secret | Decrypt a secret from the user's store | `{ with: "did:.../s/key", can: "/secret/decrypt" }` |
-| Spawn agent | Create a new agent | `{ with: "did:.../g/", can: "/crud/write" }` |
-| Fork agent | Fork an existing agent | `{ with: "did:.../g/<id>", can: "/agent/fork" }` |
-| Delegate caps | Sub-delegate UCAN capabilities | `{ with: "did:...", can: "/ucan/delegate" }` |
+| Message agent | Append to an agent's inbox | `{ with: "did:.../g/<id>", can: "agent/message" }` |
+| Invoke operation | Invoke any grid operation (creates a Job) | `{ with: "did:.../o/op-name", can: "invoke" }` |
+| Decrypt secret | Decrypt a secret from the user's store | `{ with: "did:.../s/key", can: "secret/decrypt" }` |
+| Spawn agent | Create a new agent | `{ with: "did:.../g/", can: "crud/write" }` |
+| Fork agent | Fork an existing agent | `{ with: "did:.../g/<id>", can: "agent/fork" }` |
+| Delegate caps | Sub-delegate UCAN capabilities | `{ with: "did:...", can: "ucan/delegate" }` |
 
 **Timeline efficiency:** Each timeline entry is a raw lattice value, not a pinned `/a/` ref. CAD3 structural sharing means unchanged subtrees between transitions share storage automatically. The timeline can grow indefinitely without proportional storage cost.
 
@@ -359,7 +359,7 @@ Operations are invoked with explicit inputs and capabilities:
 ```
 invoke("someop",
   { arg1: lookup(/my/data), arg2: "constant" },
-  [ { with: "did:key:zAlice.../a/cafebabe...", can: "/crud/read" } ]
+  [ { with: "did:key:zAlice.../a/cafebabe...", can: "crud/read" } ]
 )
 ```
 
@@ -382,16 +382,16 @@ Capabilities inherit the namespace path hierarchy. The risk profile follows from
 
 | Capability | Risk Level |
 |-----------|------------|
-| `with: did:.../o/`, `can: /crud/read` | Low — code is inspectable, open-source model |
-| `with: did:.../o/cafebabe`, `can: /invoke` | Medium — consumes compute resources |
-| `with: did:.../a/cafebabe`, `can: /crud/read` | Medium — exposes user data |
-| `with: did:.../a/`, `can: /crud/read` | High — exposes all user data |
-| `with: did:.../w/projects/foo/`, `can: /crud/read` | Medium-High |
-| `with: did:.../w/`, `can: /crud/read` | High — live working state |
-| `with: did:.../s/`, `can: /crud/read` | Low — returns ciphertext only |
-| `with: did:.../s/key`, `can: /secret/decrypt` | Highest — reveals plaintext |
-| `with: did:.../w/results/`, `can: /crud/write` | Medium |
-| `with: did:.../`, `can: /` | Maximum — trusted agents only |
+| `with: did:.../o/`, `can: crud/read` | Low — code is inspectable, open-source model |
+| `with: did:.../o/cafebabe`, `can: invoke` | Medium — consumes compute resources |
+| `with: did:.../a/cafebabe`, `can: crud/read` | Medium — exposes user data |
+| `with: did:.../a/`, `can: crud/read` | High — exposes all user data |
+| `with: did:.../w/projects/foo/`, `can: crud/read` | Medium-High |
+| `with: did:.../w/`, `can: crud/read` | High — live working state |
+| `with: did:.../s/`, `can: crud/read` | Low — returns ciphertext only |
+| `with: did:.../s/key`, `can: secret/decrypt` | Highest — reveals plaintext |
+| `with: did:.../w/results/`, `can: crud/write` | Medium |
+| `with: did:...`, `can: *` | Maximum — trusted agents only |
 
 ### 5.4 Namespace Security Symmetry
 
@@ -413,111 +413,36 @@ Operation output is arbitrary CAD3. The lattice stores and hashes any valid CAD3
 
 ## 6. Capability Model — UCAN
 
-Capabilities are expressed as UCAN tokens, represented as lattice-native JSON-like values (not JWT/base64). The capability model follows the UCAN specification's `with`/`can` structure, where each capability pairs a resource (noun) with a command (verb). Each UCAN is cryptographically signed by the issuer, enabling verifiable delegation chains without any central authority.
+> **Full specification:** See [UCAN.md](./UCAN.md) for the complete design including
+> token structure, ability hierarchy, delegation chains, verification algorithm,
+> lattice storage, enforcement points, and implementation phasing.
 
-### 6.1 UCAN Structure
+Capabilities are expressed as lattice-native UCAN tokens following the UCAN specification's `with`/`can` structure. Each capability pairs a resource (DID URL) with an ability (slash-delimited verb). UCANs are signed by the issuer, enabling verifiable delegation chains without any central authority. Covia uses CAD3 encoding instead of IPLD/DAG-CBOR but the authorisation model is identical to the UCAN spec.
+
+### Example
 
 ```json
 {
   "iss": "did:key:zAlice...",
   "aud": "did:key:zBob.../g/helper",
   "att": [
-    { "with": "did:key:zAlice.../w/projects/foo/", "can": "/crud/read" },
-    { "with": "did:key:zAlice.../o/cafebabe...", "can": "/invoke" }
+    { "with": "did:key:zAlice.../w/projects/foo", "can": "crud/read" },
+    { "with": "did:key:zAlice.../o/cafebabe...", "can": "invoke" }
   ],
   "exp": 1719500000,
-  "nbf": 1719400000,
-  "nnc": "a1b2c3d4e5",
-  "fct": [{ "grid-version": "1.0" }],
-  "prf": ["/a/cafebabe..."],
+  "prf": ["<cad3-hash-of-parent-ucan>"],
   "sig": "0xdeadbeef..."
 }
 ```
 
-- **`iss`** — Issuer DID. Signs this token with their Ed25519 private key.
-- **`aud`** — Audience DID. The agent/operation receiving the capability.
-- **`att`** — Attenuations. Array of capabilities, each a `with` (resource URI) + `can` (command) pair.
-- **`exp`** — Expiry. Unix timestamp, token invalid after this time.
-- **`nbf`** — Not Before. Unix timestamp, token invalid before this time.
-- **`nnc`** — Nonce. Ensures uniqueness, prevents replay attacks.
-- **`fct`** — Facts. Additional signed assertions (metadata, context).
-- **`prf`** — Proof chain. References to parent UCANs (as `/a/` immutable refs), forming the delegation chain.
-- **`sig`** — Ed25519 signature over the CAD3 hash of all fields except `sig`.
+### Key Properties
 
-### 6.2 Covia Resource and Command Scheme
-
-**Resources** use the DID URI directly as the resource identifier. Since DIDs are already valid URIs, no custom scheme is needed — the DID identifies the authority and the path scopes into the lattice:
-
-| Resource URI | Meaning |
-|-------------|---------|
-| `did:key:zAlice.../` | Everything in this identity's lattice |
-| `did:key:zAlice.../w/` | All workspace data |
-| `did:key:zAlice.../w/projects/foo/` | Specific workspace subtree |
-| `did:key:zAlice.../a/cafebabe...` | Specific immutable asset |
-| `did:key:zAlice.../o/` | All operations |
-| `did:key:zAlice.../s/anthropic-key` | Specific secret |
-
-Sub-path URIs are valid attenuations of their parent — `did:.../w/projects/foo/` is a valid delegation from `did:.../w/`.
-
-**Commands** follow UCAN's slash-delimited convention. Command hierarchy works via path prefix — shorter commands prove longer ones (e.g. `/crud` proves `/crud/read`). `/` (top) proves any command.
-
-| Command | Meaning | Typical use |
-|---------|---------|------------|
-| `/` | Top — proves any command | Full delegation to trusted agents |
-| `/crud/read` | Read data | Asset access, workspace reads |
-| `/crud/write` | Write data | Workspace mutations |
-| `/crud/delete` | Delete data | Workspace cleanup |
-| `/invoke` | Execute an operation | Calling grid ops |
-| `/invoke/async` | Execute asynchronously | Fire-and-forget job submission |
-| `/agent/fork` | Fork an agent | Creating agent copies |
-| `/agent/message` | Write to agent inbox | Agent-to-agent communication |
-| `/secret/decrypt` | Decrypt a secret | Accessing plaintext via adapter |
-| `/ucan/delegate` | Sub-delegate capabilities | Agent delegation chains |
-| `/ucan/revoke` | Revoke a UCAN | Cancelling granted capabilities |
-
-### 6.3 Capability Risk Hierarchy
-
-The combination of resource URIs and commands creates a natural risk hierarchy:
-
-| Capability | Risk Level |
-|-----------|------------|
-| `with: did:.../o/`, `can: /crud/read` | Low — code is inspectable |
-| `with: did:.../o/cafebabe`, `can: /invoke` | Medium — consumes compute |
-| `with: did:.../a/cafebabe`, `can: /crud/read` | Medium — specific data |
-| `with: did:.../a/`, `can: /crud/read` | High — all user data |
-| `with: did:.../w/`, `can: /crud/read` | High — live working state |
-| `with: did:.../s/key`, `can: /secret/decrypt` | Highest — reveals plaintext |
-| `with: did:.../`, `can: /` | Maximum — full delegation |
-
-### 6.4 Signing and Verification
-
-The signing chain works because every DID resolves to a public key (anchored on-chain via CVM). Verification is purely local:
-
-1. **Verify signature** — resolve issuer's DID to public key, verify `sig` against CAD3 hash of UCAN content
-2. **Check time bounds** — reject if before `nbf` or after `exp`
-3. **Check nonce** — reject if previously seen (replay prevention)
-4. **Check revocation** — look up UCAN's `/a/` hash in revocation lists
-5. **Walk proof chain** — for each parent UCAN in `prf`:
-   - Verify the parent's signature the same way
-   - Confirm the parent's `aud` matches this UCAN's `iss` (delegation is continuous)
-   - Confirm attenuation is valid — each `with` must be equal or sub-path of parent's, each `can` must be equal or sub-command of parent's
-6. **Verify root** — the chain terminates at a root UCAN where the issuer is the resource owner
-
-No callbacks, no token servers, no online verification. The UCAN, its proof chain, and the on-chain DID→key mapping are sufficient. This is critical for P2P and federated execution where the verifying venue may have no relationship with the issuer.
-
-### 6.5 Key Properties
-
-**Lattice-native.** UCANs are first-class lattice objects, stored as content-addressable values in `/a/`. No separate token format — they're stored, referenced, delegated, and verified using the same addressing and content-addressing as everything else. The CAD3 hash of a UCAN is its canonical identifier.
-
-**Delegation chains.** An agent can sub-delegate a narrower capability:
-
-1. User grants agent `{ with: "did:.../w/", can: "/crud/read" }` — signs UCAN with user's key
-2. Agent invokes an operation granting only `{ with: "did:.../w/projects/foo/", can: "/crud/read" }` — signs new UCAN with agent's key, references parent in `prf`
-3. Any verifier walks the chain: resource attenuated (sub-path), command unchanged, signatures valid
-
-**Self-contained.** UCANs travel with job submissions across P2P boundaries. The full proof chain is embedded or referenced via `/a/` hashes. Any executing venue validates locally.
-
-**Revocation.** Publish a signed revocation record referencing the UCAN's `/a/` hash. Verifiers check revocation lists as part of chain validation. Revocation propagates through the lattice like any other data.
+- **Lattice-native.** UCANs are content-addressable values in `/a/`. CAD3 value hash is the canonical identifier. No JWT, no base64.
+- **DID URL resources.** Resource URIs are DID URLs scoping into the user's lattice namespace (e.g. `did:key:zAlice.../w/projects/foo`). Sub-paths attenuate parents.
+- **Standard abilities.** `*` is the top ability. Abilities are slash-delimited without leading slash: `crud/read`, `invoke`, `secret/decrypt`, `agent/message`, `ucan/delegate`. Prefix hierarchy — `crud` proves `crud/read`.
+- **Delegation chains.** Agents sub-delegate narrower capabilities via proof chain references. Attenuation only — never widen.
+- **Self-contained verification.** No callbacks or token servers. The UCAN, its proof chain, and DID→key resolution are sufficient.
+- **Revocation.** Signed records referencing the UCAN's CAD3 hash, propagated through the lattice.
 
 ---
 

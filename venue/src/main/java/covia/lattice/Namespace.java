@@ -36,5 +36,8 @@ public final class Namespace {
 	/** Operations namespace — user's named operations (/o/) */
 	public static final AString O = Strings.intern("o");
 
+	/** HITL namespace — human-in-the-loop requests (/h/) — Phase D */
+	public static final AString H = Strings.intern("h");
+
 	private Namespace() {}
 }
