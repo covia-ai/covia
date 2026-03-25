@@ -2,7 +2,6 @@ package covia.venue;
 
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Function;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,11 +46,7 @@ public class JobManager {
 
 	private static final Logger log = LoggerFactory.getLogger(JobManager.class);
 
-	private final VenueState venueState;
-	private final AccessControl accessControl;
-	private final Function<String, AAdapter> adapterLookup;
-	private final Function<AString, Asset> assetResolver;
-	private final AString venueDID;
+	private final Engine engine;
 
 	/** In-memory cache of active (non-terminal) jobs */
 	private final ConcurrentHashMap<Blob, Job> activeJobs = new ConcurrentHashMap<>();
@@ -68,21 +63,10 @@ public class JobManager {
 	/**
 	 * Creates a new JobManager.
 	 *
-	 * @param venueState Venue lattice state (for per-user job persistence)
-	 * @param accessControl Access control for ownership checks
-	 * @param adapterLookup Resolves adapter name to AAdapter instance
-	 * @param assetResolver Resolves operation reference string to Asset
-	 * @param venueDID Venue's own DID (used as caller for internal jobs)
+	 * @param engine The venue engine
 	 */
-	public JobManager(VenueState venueState, AccessControl accessControl,
-			Function<String, AAdapter> adapterLookup,
-			Function<AString, Asset> assetResolver,
-			AString venueDID) {
-		this.venueState = venueState;
-		this.accessControl = accessControl;
-		this.adapterLookup = adapterLookup;
-		this.assetResolver = assetResolver;
-		this.venueDID = venueDID;
+	public JobManager(Engine engine) {
+		this.engine = engine;
 	}
 
 	// ========== Job Invocation ==========
@@ -105,7 +89,7 @@ public class JobManager {
 	public Job invokeOperation(AString ref, ACell input, RequestContext ctx) {
 		if (ref == null) throw new IllegalArgumentException("Operation must be specified");
 
-		Asset asset = assetResolver.apply(ref);
+		Asset asset = engine.resolveAsset(ref, ctx);
 		if (asset == null) {
 			throw new IllegalArgumentException("Cannot resolve operation: " + ref);
 		}
@@ -136,14 +120,14 @@ public class JobManager {
 	 */
 	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		if (meta == null) throw new IllegalArgumentException("Metadata must be specified");
-		AString callerDID = ctx.isInternal() ? venueDID : ctx.getCallerDID();
+		AString callerDID = ctx.isInternal() ? engine.getDIDString() : ctx.getCallerDID();
 		if (callerDID == null) throw new AuthException("Authentication required");
 
 		String adapterName = AAdapter.getAdapterName(meta);
 		if (adapterName == null) {
 			throw new IllegalArgumentException("Metadata must contain operation.adapter field");
 		}
-		AAdapter adapter = adapterLookup.apply(adapterName);
+		AAdapter adapter = engine.getAdapter(adapterName);
 		if (adapter == null) {
 			throw new IllegalStateException("Adapter not available: " + adapterName);
 		}
@@ -275,16 +259,16 @@ public class JobManager {
 		Job job;
 		job = activeJobs.get(jobID);
 		if (job != null) {
-			if (!accessControl.canAccessJob(ctx, job.getData())) {
+			if (!engine.getAccessControl().canAccessJob(ctx, job.getData())) {
 				throw new AuthException("Access denied to job: " + jobID.toHexString());
 			}
 			return job.getData();
 		}
 
 		// 2. User's lattice (authoritative)
-		AString did = ctx.isInternal() ? venueDID : ctx.getCallerDID();
+		AString did = ctx.isInternal() ? engine.getDIDString() : ctx.getCallerDID();
 		if (did == null) return null;
-		User user = venueState.users().get(did);
+		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
 		return user.jobs().get(jobID);
 	}
@@ -318,9 +302,9 @@ public class JobManager {
 		if (job != null) return job;
 
 		// Fall back to user's lattice
-		AString did = ctx.isInternal() ? venueDID : ctx.getCallerDID();
+		AString did = ctx.isInternal() ? engine.getDIDString() : ctx.getCallerDID();
 		if (did == null) return null;
-		User user = venueState.users().get(did);
+		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
 		AMap<AString, ACell> record = user.jobs().get(jobID);
 		if (record == null) return null;
@@ -332,9 +316,9 @@ public class JobManager {
 	 * Reads directly from the user's per-user lattice.
 	 */
 	public Index<Blob, ACell> getJobs(RequestContext ctx) {
-		AString did = ctx.isInternal() ? venueDID : ctx.getCallerDID();
+		AString did = ctx.isInternal() ? engine.getDIDString() : ctx.getCallerDID();
 		if (did == null) return Index.none();
-		User user = venueState.users().get(did);
+		User user = engine.getVenueState().users().get(did);
 		if (user == null) return Index.none();
 		return user.jobs().getAll();
 	}
@@ -440,7 +424,7 @@ public class JobManager {
 	 */
 	public int deliverMessage(Blob jobID, AMap<AString, ACell> message, RequestContext ctx) {
 		AMap<AString, ACell> data = getJobData(jobID);
-		if (data != null && !accessControl.canAccessJob(ctx, data)) {
+		if (data != null && !engine.getAccessControl().canAccessJob(ctx, data)) {
 			throw new AuthException("Access denied to job: " + jobID.toHexString());
 		}
 		return deliverMessage(jobID, message, ctx.getCallerDID());
@@ -487,13 +471,13 @@ public class JobManager {
 	 */
 	@SuppressWarnings("unchecked")
 	public void recoverJobs() {
-		AMap<AString, ACell> userData = venueState.users().getAll();
+		AMap<AString, ACell> userData = engine.getVenueState().users().getAll();
 		if (userData == null || userData.isEmpty()) return;
 
 		int refired = 0, kept = 0, failed = 0;
 		for (var entry : userData.entrySet()) {
 			AString did = (AString) entry.getKey();
-			User user = venueState.users().get(did);
+			User user = engine.getVenueState().users().get(did);
 			if (user == null) continue;
 
 			Index<Blob, ACell> userJobs = user.jobs().getAll();
@@ -541,7 +525,7 @@ public class JobManager {
 		}
 
 		// Resolve operation
-		Asset asset = assetResolver.apply(opRef);
+		Asset asset = engine.resolveAsset(opRef);
 		Operation op = (asset != null) ? Operation.from(asset) : null;
 
 		// Resolve adapter
@@ -595,7 +579,7 @@ public class JobManager {
 		AString opRef = RT.ensureString(record.get(Fields.OP));
 		Operation op = null;
 		if (opRef != null) {
-			Asset asset = assetResolver.apply(opRef);
+			Asset asset = engine.resolveAsset(opRef);
 			op = (asset != null) ? Operation.from(asset) : null;
 		}
 
@@ -633,7 +617,7 @@ public class JobManager {
 	 * This is the single source of truth for all jobs.
 	 */
 	private void persistJobRecord(Blob jobID, AMap<AString, ACell> record, AString callerDID) {
-		User user = venueState.users().ensure(callerDID);
+		User user = engine.getVenueState().users().ensure(callerDID);
 		user.jobs().persist(jobID, record);
 	}
 
@@ -649,7 +633,7 @@ public class JobManager {
 
 		AString opStr = RT.ensureString(job.getData().get(Fields.OP));
 		if (opStr == null) return null;
-		Asset asset = assetResolver.apply(opStr);
+		Asset asset = engine.resolveAsset(opStr);
 		return (asset != null) ? asset.meta() : null;
 	}
 
@@ -660,7 +644,7 @@ public class JobManager {
 		AMap<AString, ACell> meta = resolveJobMeta(job);
 		if (meta != null) {
 			String adapterName = AAdapter.getAdapterName(meta);
-			if (adapterName != null) return adapterLookup.apply(adapterName);
+			if (adapterName != null) return engine.getAdapter(adapterName);
 		}
 		return null;
 	}
@@ -672,7 +656,7 @@ public class JobManager {
 		if (op != null) {
 			String adapterName = AAdapter.getAdapterName(op.meta());
 			if (adapterName != null) {
-				AAdapter adapter = adapterLookup.apply(adapterName);
+				AAdapter adapter = engine.getAdapter(adapterName);
 				if (adapter != null) return adapter;
 			}
 		}
@@ -713,6 +697,6 @@ public class JobManager {
 	 * Gets the venue DID used for internal job ownership.
 	 */
 	public AString getVenueDID() {
-		return venueDID;
+		return engine.getDIDString();
 	}
 }

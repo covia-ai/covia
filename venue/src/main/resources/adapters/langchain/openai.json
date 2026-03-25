@@ -1,59 +1,57 @@
 {
-	"name":"GPT-5 nano",
-	"creator":"Mike Anderson",
-	"description":"Chat with OpenAI GPT-5 nano",
-	"dateCreated":"2025-09-16T00:00:00Z",
-	"dateModified": "2025-09-16T00:00:00Z",
-	"keywords":["LLM", "model", "openai"],
+	"name": "OpenAI Chat",
+	"description": "Chat with an OpenAI-compatible LLM. Supports messages-based and prompt-based input. API key resolved from user's secret store (OPENAI_API_KEY by default). Compatible with OpenAI, DeepSeek, Gemini, and other OpenAI-compatible endpoints — set the url parameter to use a different provider.",
+	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "langchain:openai",
 		"secretFields": ["apiKey"],
 		"secretKey": "OPENAI_API_KEY",
-		"info":{
-		    "featured":true
-		},
-
-		"input":{
-			"type":"object",
-			"properties":{
-				"prompt":{
-					"type":"string",
-					"description":"The prompt for the model."
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": {
+					"type": "array",
+					"description": "Conversation messages array [{role, content}]. Used by the agent tool call loop."
 				},
-				"model":{
-					"type":"string",
-					"description":"Optional model name (defaults to gpt-5-nano)",
-					"default":"gpt-5-nano"
+				"prompt": {
+					"type": "string",
+					"description": "Simple prompt string (alternative to messages)."
 				},
-				"systemPrompt":{
-					"type":"string",
-					"description":"System prompt to set the AI's behaviour and context"
+				"model": {
+					"type": "string",
+					"description": "Model name (e.g. gpt-4o-mini, gpt-4o, deepseek-chat).",
+					"default": "gpt-4o-mini"
 				},
-				"apiKey":{
-					"type":"string",
-					"secret":true,
-					"description":"API key for authentication"
+				"systemPrompt": {
+					"type": "string",
+					"description": "System prompt to set the AI's behaviour."
 				},
-				"url":{
-					"type":"string",
-					"description":"OpenAI base URL (defaults to https://api.openai.com/v1)",
-					"default":"https://api.openai.com/v1"
+				"apiKey": {
+					"type": "string",
+					"secret": true,
+					"description": "API key (resolved from secret store by default)."
+				},
+				"url": {
+					"type": "string",
+					"description": "Base URL. Defaults to OpenAI. Set to use other providers (e.g. https://api.deepseek.com/v1).",
+					"default": "https://api.openai.com/v1"
+				},
+				"tools": {
+					"type": "array",
+					"description": "Tool definitions for function calling."
+				},
+				"responseFormat": {
+					"description": "Response format: 'json', 'text', or {name, schema} for structured output."
 				}
 			}
 		},
-		"output":{
-			"type":"object",
-			"properties":{
-				"response":{
-					"type":"string",
-					"description":"The LLM response"
-				},
-				"think":{
-					"type":"string",
-					"description":"Model thought process"
-				}
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": { "type": "string" },
+				"content": { "type": "string", "description": "The LLM response text" },
+				"toolCalls": { "type": "array", "description": "Tool call requests from the LLM" }
 			}
 		}
 	}
 }
-

@@ -130,8 +130,7 @@ public class Engine {
 		LatticeContext ctx = LatticeContext.create(null, this.keyPair);
 		this.lattice.withContext(ctx);
 		initialiseFromCursor();
-		this.jobManager = new JobManager(venueState, accessControl,
-				this::getAdapter, this::resolveAsset, getDIDString());
+		this.jobManager = new JobManager(this);
 		this.contentStorage = createStorage();
 		this.contentStorage.initialise();
 	}
