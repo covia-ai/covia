@@ -890,9 +890,9 @@ public class CoviaAdapter extends AAdapter {
 			return new Object[] { getUserCursor(ctx), pathKeys };
 		}
 
-		// Cross-user access — deny with uniform error (do not leak user existence)
-		throw new RuntimeException(
-			"Cross-user access requires capability delegation (not yet implemented)");
+		// Cross-user access — requires UCAN proof in RequestContext (Phase C1)
+		// TODO: check ctx.getProofs() for a valid UCAN chain covering this request
+		throw new RuntimeException("Access denied");
 	}
 
 }

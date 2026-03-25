@@ -150,52 +150,153 @@ Constraint semantics are application-defined. The UCAN infrastructure verifies a
 
 ---
 
-## 4. Delegation Chains
+## 4. Token Lifecycle
 
-### 4.1 Chain Structure
+### 4.1 Issuing
 
-A delegation chain is a sequence of UCANs where each link's `aud` matches the next link's `iss`:
+The resource owner creates and signs a UCAN token using `ucan:issue`:
 
-```
-Root UCAN (self-issued by resource owner):
-  iss: did:key:zAlice        ; Alice is the owner
-  aud: did:key:zBob          ; grants to Bob
-  att: [{ with: "did:key:zAlice.../w/", can: "crud" }]
-  prf: []                    ; root — no parent proofs
-
-Delegation UCAN (issued by Bob):
-  iss: did:key:zBob           ; Bob delegates
-  aud: did:key:zCarol         ; grants to Carol
-  att: [{ with: "did:key:zAlice.../w/reports/", can: "crud/read" }]
-  prf: [<hash-of-root-ucan>] ; proves authority via Alice's grant
+```json
+ucan:issue {
+  aud: "did:key:zBob...",
+  att: [{ with: "/w/", can: "crud/read" }],
+  exp: 1735689600
+}
 ```
 
-Carol can read `did:key:zAlice.../w/reports/` because:
-1. Alice granted Bob `/crud` on her entire `/w/` namespace
-2. Bob attenuated to `/crud/read` on the `/w/reports/` subtree for Carol
-3. The chain is cryptographically verifiable without contacting Alice or Bob
+The venue signs the token with the caller's key (resolved from their DID)
+and returns the complete signed token. The token is self-contained — it
+includes everything needed for verification.
 
-### 4.2 Verification Algorithm
+### 4.2 Delivery
+
+The issuer delivers the token to the audience through any channel:
+- `agent:message` — agent-to-agent delivery
+- API response — returned to the caller
+- Out-of-band — email, shared document, etc.
+
+The token is a CVM value (a map). It can be serialised, transmitted,
+and deserialised without loss.
+
+### 4.3 Presentation
+
+The audience presents UCAN tokens in the `RequestContext` on a
+**per-request basis**. Each request carries its own proof set — there is
+no server-side token store and no session-level capability state.
 
 ```
-verify(ucan, requiredCapability):
-  1. Verify ucan.sig against CAD3 hash using iss public key
-  2. Check exp >= now and (nbf == null or nbf <= now)
-  3. Check nnc not previously seen (if present)
-  4. Check ucan.att contains a capability that covers requiredCapability:
-     - with is equal or parent of required.with
-     - can is equal or parent of required.can
-  5. If prf is empty:
-     - ucan.iss must be the resource owner (DID in the with URI)
-     - This is the root — chain terminates
-  6. For each parent hash in prf:
-     - Resolve parent UCAN from /a/ store
-     - Verify parent.aud == ucan.iss (continuous delegation)
-     - Verify parent covers ucan.att (attenuation is valid)
-     - Recursively verify(parent, ucan.att)
+RequestContext:
+  callerDID: "did:key:zBob..."
+  proofs: [<ucan-token-1>, <ucan-token-2>, ...]   ; full signed tokens
 ```
 
-### 4.3 Revocation
+A request may carry multiple proofs. For example, a cross-user read
+of Alice's workspace might require:
+- A root UCAN from Alice granting Bob `crud/read` on `/w/`
+- (For delegation) Bob's own sub-delegation UCAN if acting on behalf
+  of Carol
+
+The proofs travel with the request — they are not stored at the venue.
+This is the standard UCAN bearer token model.
+
+#### Proof references
+
+Proofs in the `prf` field can be either:
+- **Inline** — the full signed token embedded directly (simple, self-contained)
+- **By value ID** — a `/a/<hash>` path referencing a token stored in the
+  venue's content-addressed asset store (bandwidth-efficient for repeated use)
+
+Note: CIDs (IPLD content identifiers) are not used. Covia uses CAD3
+value hashes as the native content-addressing scheme.
+
+#### Transport
+
+**REST API**: Optional `ucans` field in the request body:
+```json
+POST /api/v1/invoke
+{
+  "operation": "covia:read",
+  "input": { "path": "did:key:zAlice.../w/notes" },
+  "ucans": [<signed-token>, ...]
+}
+```
+
+**MCP**: Optional `ucans` field in tool call parameters:
+```json
+{ "path": "did:key:zAlice.../w/notes", "ucans": [<signed-token>, ...] }
+```
+
+**Grid operations** (`grid:run`, `grid:invoke`): Optional `ucans` field
+in the operation input. Tokens travel with the job across venue boundaries:
+```json
+grid:invoke { operation: "...", input: {...}, ucans: [...] }
+```
+
+**Agent tool calls**: The agent framework (level 2) attaches the user's
+proofs automatically when invoking tools on behalf of the user. Agents
+inherit the capabilities of the user who triggered them.
+
+#### Caching (future)
+
+Per-request proof presentation means every request carries its full
+proof set. A future optimisation: venues can cache validated tokens
+(keyed by CAD3 hash) and accept hash references in place of full tokens
+for subsequent requests within a time window. Not implemented in Phase C1.
+
+### 4.4 Verification
+
+The venue verifies the proof chain on every request. No server-side
+state is consulted — the proofs in the request are sufficient.
+
+```
+verify(proofs, requiredCapability):
+  For each ucan in proofs:
+    1. Verify ucan.sig against CAD3 hash using iss public key
+    2. Check exp >= now and (nbf == null or nbf <= now)
+    3. Check ucan.aud matches the caller's DID
+    4. Check ucan.att contains a capability that covers requiredCapability:
+       - with is equal or parent of required.with (path attenuation)
+       - can is equal or parent of required.can (ability attenuation)
+       - * covers any ability
+    5. If prf is empty:
+       - ucan.iss must be the resource owner (DID in the with URI)
+       - Root reached — chain valid
+    6. For each parent in prf:
+       - Verify parent.aud == ucan.iss (continuous delegation)
+       - Verify parent covers ucan.att (attenuation only narrows)
+       - Recursively verify parent
+  If any proof provides a valid chain: allow
+  Otherwise: deny (uniform error)
+```
+
+Attenuation matching uses `Capability.covers()` from convex-core.
+
+### 4.5 Delegation Chains
+
+An agent can sub-delegate a narrower capability by signing a new token
+that references the parent token in `prf`:
+
+```
+Root (Alice → Bob):
+  iss: did:key:zAlice, aud: did:key:zBob
+  att: [{ with: "/w/", can: "crud" }]
+  prf: []
+
+Delegation (Bob → Carol):
+  iss: did:key:zBob, aud: did:key:zCarol
+  att: [{ with: "/w/reports/", can: "crud/read" }]
+  prf: [<root-token>]
+```
+
+Carol presents the delegation token. The venue verifies:
+1. Bob signed it, Carol is the audience
+2. Bob's `att` is covered by Alice's grant (sub-path, sub-ability)
+3. Alice signed the root, Alice owns the resource
+4. Both signatures valid, neither expired
+
+The full proof chain travels with Carol's request.
+
+### 4.6 Revocation
 
 A revocation is a signed record referencing a UCAN's CAD3 hash:
 
@@ -207,124 +308,90 @@ A revocation is a signed record referencing a UCAN's CAD3 hash:
 }
 ```
 
-Revocations are stored in the lattice and checked during verification (step between 3 and 4). Revocation of a parent UCAN invalidates all downstream delegations.
+Revocations are published to the lattice. Venues check revocation
+lists during verification. Revoking a parent invalidates all
+downstream delegations.
 
 ---
 
-## 5. Lattice Storage
+## 5. Enforcement
 
-### 5.1 UCAN Storage
+### 5.1 Own-Namespace Implicit Grant
 
-UCANs are stored as content-addressable values in the `/a/` (assets) namespace. The CAD3 value hash of the complete UCAN (including signature) is its identifier.
-
-```
-/a/<cad3-hash>  →  { iss, aud, att, exp, nbf, nnc, fct, prf, sig }
-```
-
-This means UCANs are:
-- **Immutable** — the hash changes if any field changes
-- **Deduplicated** — identical UCANs share the same hash
-- **Replicable** — content-addressed data syncs safely across venues
-- **Referenceable** — proof chains use hashes, not inline copies
-
-### 5.2 Capability Grants (`:caps`)
-
-The venue state includes a `:caps` field (`MapLattice`) mapping DIDs to their active capability sets. This is the runtime-queryable index of effective capabilities:
-
-```
-:caps → MapLattice (DID → capability record)
-  "did:key:zBob" → {
-    grants: [<hash1>, <hash2>]     ; CAD3 hashes of UCANs granting to this DID
-    updated: 1719500000
-  }
-```
-
-Venue operators populate `:caps` to bootstrap initial grants. Agents populate it via `/ucan/delegate`. The enforcement layer resolves and validates the chain at invocation time.
-
-### 5.3 Per-Agent Capabilities
-
-The agent record's `caps` field (currently a placeholder) will hold the agent's effective capability set — the resolved and validated capabilities that the agent is authorised to exercise:
-
-```
-agent record:
-  caps: {
-    grants: [<hash1>, ...]          ; UCAN hashes
-    effective: [                     ; pre-resolved capabilities (cache)
-      { with: "did:.../w/", can: "crud/read" }
-    ]
-  }
-```
-
-The `effective` set is computed from the grant chain and cached. It is recomputed when grants change or expire.
-
----
-
-## 6. Enforcement Points
-
-### 6.1 Current State
-
-| Point | Current Enforcement | UCAN Enforcement |
-|-------|-------------------|-----------------|
-| `covia:write` / `covia:delete` / `covia:append` | `validateWritablePath` — static check: namespace must be `w` or `o` | Check caller has `{with: "<did>/<path>", can: "crud/write"}` |
-| `covia:read` / `covia:list` / `covia:slice` | Own namespace only; cross-user denied in `resolveTargetPath` | Check caller has `{with: "<target-did>/<path>", can: "crud/read"}` |
-| `secret:extract` | TODO | Check `{with: "<did>/s/<name>", can: "secret/decrypt"}` |
-| `agent:message` | Agent must exist and not be TERMINATED | Additionally check `{with: "<did>/g/<id>", can: "agent/message"}` |
-| Grid operation invoke | No capability check | Check `{with: "<did>/o/<op>", can: "invoke"}` |
-| Agent delegation | Not implemented | Check `{with: "<did>", can: "ucan/delegate"}` |
-
-### 6.2 Enforcement Flow
-
-For a cross-user read like `did:key:zAlice.../w/notes` from Bob:
-
-```
-1. resolveTargetPath extracts target DID (Alice) and path (/w/notes)
-2. Caller is Bob — cross-user access detected
-3. Look up Bob's capability grants (from :caps or presented UCAN)
-4. Find a UCAN chain: Alice → Bob with { with: "did:.../w/", can: "crud/read" }
-5. Verify chain (signatures, attenuation, expiry, revocation)
-6. If valid: resolve Alice's cursor, navigate path, return value
-7. If invalid: deny with uniform error (no information leak)
-```
-
-### 6.3 Own-Namespace Implicit Grant
-
-A user always has full capabilities over their own namespace. No UCAN is needed for:
+A user always has full capabilities over their own namespace. No UCAN
+is needed for:
 - Reading/writing/deleting own `/w/` and `/o/`
 - Managing own agents (`/g/`)
 - Accessing own secrets (`/s/`)
 
-This is the "resource owner" root of every delegation chain.
+This is the "resource owner" root of every delegation chain. The venue
+recognises the caller's DID as owning their namespace without requiring
+a token.
+
+### 5.2 Cross-User Access
+
+Cross-user access requires a valid proof chain in the `RequestContext`.
+The enforcement point extracts the target DID and path from the request,
+determines the required capability, and verifies the caller's proofs.
+
+```
+Bob requests: covia:read { path: "did:key:zAlice.../w/notes" }
+  with proofs: [<ucan from Alice granting Bob crud/read on /w/>]
+
+Venue:
+  1. Extract target: did:key:zAlice, path: /w/notes
+  2. Required capability: { with: "/w/notes", can: "crud/read" }
+  3. Check proofs for a chain covering the requirement
+  4. Verify signatures, attenuation, expiry
+  5. Allow or deny
+```
+
+### 5.3 Enforcement Points
+
+| Point | Required Capability |
+|-------|-------------------|
+| `covia:read` / `covia:list` / `covia:slice` (cross-user) | `{ with: "<path>", can: "crud/read" }` |
+| `covia:write` / `covia:delete` / `covia:append` (cross-user) | `{ with: "<path>", can: "crud/write" }` |
+| `secret:extract` | `{ with: "/s/<name>", can: "secret/decrypt" }` |
+| `agent:message` (cross-user) | `{ with: "/g/<id>", can: "agent/message" }` |
+| Grid operation invoke | `{ with: "/o/<op>", can: "invoke" }` |
+| Sub-delegation | `{ with: "<path>", can: "ucan/delegate" }` |
+
+### 5.4 Agent Proofs
+
+When an agent runs, its transition function (level 2) invokes tools on
+behalf of the user. The agent framework attaches the user's proofs to
+tool calls automatically — the agent inherits the capabilities of the
+user who triggered it.
+
+For agent-to-agent delegation, the agent can issue its own UCANs
+(signed with the agent's key, if the agent has one) with the user's
+token in `prf`. This enables scoped delegation without sharing the
+user's full capabilities.
 
 ---
 
-## 7. Implementation Phases
+## 6. Implementation Phases
 
-### Phase C1: Simple Capability Grants (No Delegation)
+### Phase C1: Signed UCAN Tokens
 
-- Add capability checking to `validateWritablePath` and `resolveTargetPath`
-- Venue operator configures grants via `:caps` in venue state
-- Capabilities are `{with, can}` pairs — no signatures, no chains
-- Cross-user reads work when capability is granted
-- Forward-compatible with full UCAN (same `with`/`can` semantics)
-
-### Phase C2: Signed UCANs
-
-- UCAN tokens with Ed25519 signatures over CAD3 content
-- Stored in `/a/` as content-addressable values
+- `Capability.covers()` in convex-core for attenuation matching
+- `ucan:issue` operation creates and signs tokens
+- Tokens presented per-request in `RequestContext.proofs`
 - Signature verification on every capability check
 - Time bounds (`exp`, `nbf`) enforced
-- Nonce tracking for replay prevention
+- Cross-user reads work when valid proof is presented
 
-### Phase C3: Delegation Chains
+### Phase C2: Delegation Chains
 
-- Proof chain walking (`prf` field)
-- Attenuation validation (resource sub-path, command prefix)
+- Proof chain walking (`prf` field with embedded parent tokens)
+- Attenuation validation at each chain link
 - Agents can sub-delegate narrower capabilities
 - Revocation support
 
-### Phase C4: Federation
+### Phase C3: Federation
 
-- UCANs travel with job submissions across venue boundaries
+- Proof chains travel with job submissions across venue boundaries
 - Each venue verifies independently using DID→key resolution
 - Cross-venue capability negotiation
 

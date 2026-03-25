@@ -568,7 +568,7 @@ public class CoviaAdapterTest {
 		assertEquals(Strings.create("bob-only"), RT.getIn(bobResult, "value"));
 	}
 
-	// ========== Cross-user access (denied — capabilities not yet implemented) ==========
+	// ========== Cross-user access — capability grants ==========
 
 	@Test
 	public void testCrossUserReadDenied() {
@@ -633,6 +633,9 @@ public class CoviaAdapterTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
 		assertEquals(Strings.create("my data"), RT.getIn(result, "value"));
 	}
+
+	// Cross-user grant tests will be added when UCAN proof presentation
+	// is implemented in RequestContext (Phase C1).
 
 	// ========== covia:write — deep paths ==========
 
