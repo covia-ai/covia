@@ -8,6 +8,7 @@
 	"operation": {
 		"adapter": "langchain:openai",
 		"secretFields": ["apiKey"],
+		"secretKey": "OPENAI_API_KEY",
 		"info":{
 		    "featured":true
 		},
