@@ -292,7 +292,8 @@ Level 2 provides a set of tools to the LLM during the tool call loop. These are
 the agent's interface to the outside world. Each tool maps directly to an MCP
 tool definition (name, description, JSON schema for args).
 
-The tool palette is split into **default tools** (always available) and
+The tool palette is split into **default tools** (always available),
+**workspace tools** (available by default for own namespace), and
 **capability-gated tools** (require explicit `caps` — Phase C).
 
 #### Default tools
@@ -310,41 +311,54 @@ execution and maps results back to the tool call loop.
 These are side effects — they complete the Job immediately via JobManager.
 Not rolled back if the transition subsequently fails (§3.4.1).
 
-**Operations:**
-
-| Tool | Description | Args | Returns |
-|------|-------------|------|---------|
-| `invoke` | Invoke a grid operation synchronously | `{operation, input}` | The operation result |
-| `invoke_async` | Invoke a grid operation asynchronously — adds Job ID to `pending`, registers wake callback | `{operation, input}` | `{jobId}` |
-
-`invoke` blocks within the tool loop until the operation completes and returns
-the result directly. Use for fast operations where the agent needs the result
-to continue reasoning.
-
-`invoke_async` returns immediately with the Job ID. The agent continues
-execution. When the job completes, the scheduler wakes the agent (§3.4.2).
-Use for long-running operations, delegation to other agents, and HITL requests.
-
 **Communication:**
 
 | Tool | Description | Args | Returns |
 |------|-------------|------|---------|
 | `message_agent` | Send an ephemeral message to another agent's inbox | `{agentId, message}` | `{delivered: true}` |
+| `request_agent` | Submit a persistent task to another agent | `{agentId, input, wait?}` | Task job status |
+
+#### Workspace and introspection tools
+
+These are in the default tool palette. They operate on the authenticated
+user's own lattice namespace. Paths support mixed map/vector navigation
+(e.g. `w/records/1/name`). Writable namespaces: `w/` (workspace) and
+`o/` (operations). All namespaces are readable.
+
+| Tool | Description | Args | Returns |
+|------|-------------|------|---------|
+| `covia:read` | Read a value at any lattice path | `{path, maxSize?}` | `{exists, value}` or `{exists, truncated, size}` |
+| `covia:write` | Write a value to `/w/` or `/o/` at any depth | `{path, value}` | `{written: true}` |
+| `covia:delete` | Delete a key from `/w/` or `/o/` at any depth | `{path}` | `{deleted: true}` |
+| `covia:append` | Append an element to a vector in `/w/` or `/o/` | `{path, value}` | `{appended: true}` |
+| `covia:slice` | Read a paginated slice from a collection | `{path, offset?, limit?}` | `{type, values, count, offset}` |
+| `covia:list` | Describe structure at a path (type, count, keys) | `{path, limit?, offset?}` | `{type, count, keys?}` |
+| `covia:functions` | List all operations available on this venue | `{}` | `{functions: [...]}` |
+| `covia:describe` | Get full metadata for a named operation | `{name}` | Asset metadata |
+
+**Deep path navigation:** Paths like `w/data/nested/field` create intermediate
+maps on write. Paths into vectors use integer indices (e.g. `w/events/0`).
+Type-aware navigation resolves maps by string key and vectors by parsed index.
+
+**`maxSize` guard:** `covia:read` defaults to 1MB max response. If the value's
+encoding exceeds the limit, returns `{exists: true, truncated: true, size: N}`
+instead — use `covia:list` to inspect or `covia:slice` to page.
 
 #### Capability-gated tools (Phase C)
 
-These require explicit capabilities in the agent's `caps` field. Not available
-until capability enforcement is implemented.
+These require explicit capabilities in the agent's `caps` field. Available
+once UCAN capability enforcement is implemented. The current workspace tools
+(`covia:write`, `covia:delete`, `covia:append`) restrict to `/w/` and `/o/`
+namespaces — UCAN enforcement will replace this static check with per-agent
+capability delegation.
 
 | Tool | Caps required | Description |
 |------|---------------|-------------|
-| `read_lattice` | `/crud/read` | Read a lattice path |
-| `write_lattice` | `/crud/write` on `/w/` | Write to workspace |
-| `list_lattice` | `/crud/read` | List keys at a path |
 | `read_secret` | `/secret/decrypt` | Decrypt a secret (adapter handles plaintext) |
 | `spawn_agent` | `/crud/write` on `/g/` | Create a new agent |
 | `fork_agent` | `/agent/fork` | Fork an existing agent |
 | `delegate` | `/ucan/delegate` | Sub-delegate UCAN capabilities |
+| cross-user read | `/crud/read` on other DID | Read another user's `/w/` namespace |
 
 #### Additional tools
 
@@ -696,6 +710,7 @@ See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
 | **B5** | Task-based agent model: `agent:request`, tasks/pending queues, scheduling | ✓ Complete |
 | **B6** | Agent query/list operations: `agent:query`, `agent:list`, RequestContext refactor, Index for tasks/pending | ✓ Complete |
 | **B7** | Lattice-native run loop: per-agent lock, status-based exclusion, merge-at-write-time, `wakeAgent`, `Job.awaitResult(timeout)` | ✓ Complete |
-| **C** | Capability enforcement (UCAN `with`/`can`), tool palette | Planned |
-| **D** | HITL requests (`/h/` namespace), cross-user messaging, advanced wake triggers | Planned |
+| **B10** | Agent workspace CRUD: `/w/` and `/o/` namespaces, write/delete/append/slice, deep path navigation, type-aware vector indexing, `maxSize` guard, default tools | ✓ Complete |
+| **C** | Capability enforcement (UCAN `with`/`can`) — `validateWritablePath` is the insertion point | Planned |
+| **D** | HITL requests (`/h/` namespace), cross-user messaging, cross-agent workspace reads | Planned |
 | **E** | Agent forking and cross-venue migration | Planned |

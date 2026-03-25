@@ -98,7 +98,7 @@ Adapter Layer
     ├── HTTPAdapter       — outbound HTTP requests
     ├── Orchestrator      — multi-step workflow coordination
     ├── JVMAdapter        — string utilities
-    ├── CoviaAdapter      — internal covia operations
+    ├── CoviaAdapter      — lattice CRUD (read, write, delete, append, slice, list, functions, describe)
     ├── AgentAdapter      — agent lifecycle (create, message, run)
     ├── LLMAgentAdapter   — LLM-backed agent transitions (chat)
     ├── SecretAdapter      — secret store operations (set, extract)
@@ -188,6 +188,8 @@ The engine always resolves operation references to metadata before dispatching �
 ### P0 — Critical (blocks production use)
 
 - [x] **Add authorization enforcement** — Job ownership enforced via `AccessControl` + `JobManager`. Per-user job persistence. Capability enforcement (UCAN `with`/`can`) planned for Phase 3/4.
+
+- [x] **Agent workspace CRUD** — `/w/` (workspace) and `/o/` (operations) namespaces with full CRUD: `covia:write`, `covia:delete`, `covia:append`, `covia:slice`, plus `covia:read`/`covia:list` for all namespaces. Deep path navigation through mixed map/vector structures. `maxSize` guard on reads. All workspace tools in default LLM agent palette. REPLACE lattice for opaque JSON/CAD3 data. 533 tests.
 
 ### P1 — High (security and reliability)
 
