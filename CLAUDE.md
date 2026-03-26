@@ -189,7 +189,9 @@ The engine always resolves operation references to metadata before dispatching �
 
 - [x] **Add authorization enforcement** — Job ownership enforced via `AccessControl` + `JobManager`. Per-user job persistence. Capability enforcement (UCAN `with`/`can`) planned for Phase 3/4.
 
-- [x] **Agent workspace CRUD** — `/w/` (workspace) and `/o/` (operations) namespaces with full CRUD: `covia:write`, `covia:delete`, `covia:append`, `covia:slice`, plus `covia:read`/`covia:list` for all namespaces. Deep path navigation through mixed map/vector structures. `maxSize` guard on reads. All workspace tools in default LLM agent palette. REPLACE lattice for opaque JSON/CAD3 data. 533 tests.
+- [x] **Agent workspace CRUD** — `/w/`, `/o/`, `/h/` namespaces with full CRUD, deep path navigation, vector indexing, JSONValueLattice, `/o/` operation resolution, default agent tools. 550 tests.
+
+- [x] **UCAN capability enforcement (Phase C1)** — Venue-signed UCAN tokens via `ucan:issue`. Per-request proof presentation in `RequestContext`. Cross-user reads verified via `UCANValidator` + `Capability.covers()` from convex-core. Full DID URL resources. Transport-level `ucans` field in REST envelope. Adversarial tests (forged signature, wrong audience, expired, wrong ability). 561 tests.
 
 ### P1 — High (security and reliability)
 

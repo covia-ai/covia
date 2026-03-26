@@ -710,7 +710,9 @@ See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
 | **B5** | Task-based agent model: `agent:request`, tasks/pending queues, scheduling | ✓ Complete |
 | **B6** | Agent query/list operations: `agent:query`, `agent:list`, RequestContext refactor, Index for tasks/pending | ✓ Complete |
 | **B7** | Lattice-native run loop: per-agent lock, status-based exclusion, merge-at-write-time, `wakeAgent`, `Job.awaitResult(timeout)` | ✓ Complete |
-| **B10** | Agent workspace CRUD: `/w/` and `/o/` namespaces, write/delete/append/slice, deep path navigation, type-aware vector indexing, `maxSize` guard, default tools | ✓ Complete |
-| **C** | Capability enforcement (UCAN `with`/`can`) — `validateWritablePath` is the insertion point | Planned |
-| **D** | HITL requests (`/h/` namespace), cross-user messaging, cross-agent workspace reads | Planned |
-| **E** | Agent forking and cross-venue migration | Planned |
+| **B10** | Agent workspace CRUD: `/w/`, `/o/`, `/h/` namespaces, deep paths, vector indexing, JSONValueLattice, DID URL cross-user paths, default tools | ✓ Complete |
+| **B11** | `/o/` operation resolution, `agent:create` default tool, `covia:adapters`, langchain cleanup, JobManager simplification | ✓ Complete |
+| **C1** | UCAN proofs: venue-signed tokens (`ucan:issue`), per-request proof verification, full DID URL resources, `Capability.covers()`, cross-user reads with valid proof chain | ✓ Complete |
+| **C2** | Delegation chains — proof chain walking, attenuation validation, agent sub-delegation, revocation | Planned |
+| **D** | HITL requests (`/h/` namespace), cross-user messaging | Planned |
+| **E** | Agent forking, cross-venue migration, federated UCAN validation | Planned |
