@@ -1,0 +1,39 @@
+{
+	"name": "Issue UCAN Token",
+	"description": "Creates a venue-signed UCAN capability token. The venue is the issuer. The token grants the audience (aud) the specified capabilities (att) until expiry (exp). Present the returned token as a proof on subsequent requests that require the granted capabilities.",
+	"dateCreated": "2026-03-25T00:00:00Z",
+	"operation": {
+		"adapter": "ucan:issue",
+		"toolName": "ucan_issue",
+		"input": {
+			"type": "object",
+			"properties": {
+				"aud": {
+					"type": "string",
+					"description": "Audience DID — who receives this capability (e.g. did:key:z6MkBob...)"
+				},
+				"att": {
+					"type": "array",
+					"description": "Attenuations — array of {with, can} capability pairs",
+					"items": {
+						"type": "object",
+						"properties": {
+							"with": { "type": "string", "description": "Resource path (e.g. /w/, /w/projects/)" },
+							"can": { "type": "string", "description": "Ability (e.g. crud/read, crud/write, *)" }
+						},
+						"required": ["with", "can"]
+					}
+				},
+				"exp": {
+					"type": "integer",
+					"description": "Expiry time in unix seconds"
+				}
+			},
+			"required": ["aud", "att", "exp"]
+		},
+		"output": {
+			"type": "object",
+			"description": "Complete signed UCAN token (header, payload, sig)"
+		}
+	}
+}

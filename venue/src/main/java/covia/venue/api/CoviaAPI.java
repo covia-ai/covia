@@ -431,6 +431,10 @@ public class CoviaAPI extends ACoviaAPI {
 		ACell input=RT.getIn(req, "input");
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
+		// Attach UCAN proofs from request envelope (not from operation input)
+		AVector<ACell> ucans = RT.getIn(req, "ucans");
+		if (ucans != null) rctx = rctx.withProofs(ucans);
+
 		try {
 			Job job=engine().jobs().invokeOperation(op,input,rctx);
 			if (job==null) {

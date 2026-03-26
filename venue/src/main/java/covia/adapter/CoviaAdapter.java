@@ -4,6 +4,9 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import convex.auth.did.DIDURL;
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.ACountable;
 import convex.core.data.AMap;
@@ -162,7 +165,7 @@ public class CoviaAdapter extends AAdapter {
 	 * {@code covia:slice} to read vector elements in pages.</p>
 	 */
 	private ACell handleRead(RequestContext ctx, ACell input) {
-		Object[] target = resolveTargetPath(ctx, RT.getIn(input, Fields.PATH));
+		Object[] target = resolveTargetPath(ctx, input);
 		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
 		ACell[] pathKeys = (ACell[]) target[1];
 
@@ -208,7 +211,7 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	private ACell handleSlice(RequestContext ctx, ACell input) {
-		Object[] target = resolveTargetPath(ctx, RT.getIn(input, Fields.PATH));
+		Object[] target = resolveTargetPath(ctx, input);
 		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
 		ACell[] pathKeys = (ACell[]) target[1];
 
@@ -614,7 +617,7 @@ public class CoviaAdapter extends AAdapter {
 	 * in the response so the caller knows where to continue.</p>
 	 */
 	private ACell handleList(RequestContext ctx, ACell input) {
-		Object[] target = resolveTargetPath(ctx, RT.getIn(input, Fields.PATH));
+		Object[] target = resolveTargetPath(ctx, input);
 		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
 		ACell[] pathKeys = (ACell[]) target[1];
 
@@ -859,7 +862,8 @@ public class CoviaAdapter extends AAdapter {
 	 * @return A two-element result: [cursor, pathKeys] where pathKeys are the
 	 *         namespace-relative keys (DID prefix stripped)
 	 */
-	private Object[] resolveTargetPath(RequestContext ctx, ACell pathCell) {
+	private Object[] resolveTargetPath(RequestContext ctx, ACell input) {
+		ACell pathCell = RT.getIn(input, Fields.PATH);
 		if (pathCell == null) {
 			return new Object[] { getUserCursor(ctx), new ACell[0] };
 		}
@@ -890,9 +894,89 @@ public class CoviaAdapter extends AAdapter {
 			return new Object[] { getUserCursor(ctx), pathKeys };
 		}
 
-		// Cross-user access — requires UCAN proof in RequestContext (Phase C1)
-		// TODO: check ctx.getProofs() for a valid UCAN chain covering this request
+		// Cross-user access — verify UCAN proofs
+		// Build full DID URL for the requested resource
+		String requestedResource = targetDID.toString() + buildSubPath(pathKeys);
+		if (verifyProofs(ctx, requestedResource, "crud/read")) {
+			Users users = engine.getVenueState().users();
+			User targetUser = users.get(targetDID);
+			if (targetUser != null) {
+				return new Object[] { targetUser.cursor(), pathKeys };
+			}
+		}
+
 		throw new RuntimeException("Access denied");
+	}
+
+	/**
+	 * Builds a sub-path string from parsed path keys (e.g. ["w", "notes"] → "/w/notes").
+	 */
+	private static String buildSubPath(ACell[] pathKeys) {
+		if (pathKeys.length == 0) return "/";
+		StringBuilder sb = new StringBuilder();
+		for (ACell key : pathKeys) {
+			sb.append('/').append(key);
+		}
+		return sb.toString();
+	}
+
+	/**
+	 * Verifies that the request context contains a valid UCAN proof chain
+	 * granting the caller the requested capability on the target DID's resource.
+	 *
+	 * <p>For each proof token in the context:</p>
+	 * <ol>
+	 *   <li>Parse as UCAN</li>
+	 *   <li>Verify signature and time bounds via {@link UCANValidator}</li>
+	 *   <li>Check audience matches caller</li>
+	 *   <li>Check issuer matches target DID (resource owner)</li>
+	 *   <li>Check attenuations cover the requested capability via {@link Capability#covers}</li>
+	 * </ol>
+	 */
+	/**
+	 * Verifies that the request context contains a valid UCAN proof chain
+	 * granting the caller the requested capability.
+	 *
+	 * @param requestedResource Full DID URL (e.g. "did:key:zAlice.../w/notes")
+	 * @param requestedAbility Ability string (e.g. "crud/read")
+	 */
+	@SuppressWarnings("unchecked")
+	private boolean verifyProofs(RequestContext ctx,
+			String requestedResource, String requestedAbility) {
+		AVector<ACell> proofs = ctx.getProofs();
+		if (proofs == null || proofs.count() == 0) return false;
+
+		long now = System.currentTimeMillis() / 1000;
+		AString venueDID = engine.getDIDString();
+
+		for (long i = 0; i < proofs.count(); i++) {
+			AMap<AString, ACell> tokenMap = RT.ensureMap(proofs.get(i));
+			if (tokenMap == null) continue;
+
+			UCAN token = UCAN.parse(tokenMap);
+			if (token == null) continue;
+
+			// Verify signature and time bounds
+			if (UCANValidator.validate(token, now) == null) continue;
+
+			// Audience must match caller
+			AString aud = token.getAudience();
+			if (aud == null || !aud.equals(ctx.getCallerDID())) continue;
+
+			// Phase C1: issuer must be the venue (authority for all hosted data).
+			AString iss = token.getIssuer();
+			if (iss == null || !iss.equals(venueDID)) continue;
+
+			// Check attenuations cover the requested resource (full DID URL)
+			AVector<ACell> atts = token.getCapabilities();
+			for (long j = 0; j < atts.count(); j++) {
+				AMap<AString, ACell> att = RT.ensureMap(atts.get(j));
+				if (att != null && Capability.covers(att, requestedResource, requestedAbility)) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 }

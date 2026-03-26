@@ -1,30 +1,34 @@
 package covia.venue;
 
+import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.AVector;
+import convex.core.data.Vectors;
 
 /**
- * Represents the context of an API request, carrying caller identity and
- * request-scoped metadata. Threaded through Engine methods to support
- * authorization checks.
+ * Represents the context of an API request, carrying caller identity,
+ * UCAN proofs, and request-scoped metadata.
  */
 public class RequestContext {
 
 	private final AString callerDID;
 	private final boolean internal;
+	private final AVector<ACell> proofs;
 
 	/**
 	 * Context for internal operations (adapters, recovery, etc.) that bypass auth.
 	 */
-	public static final RequestContext INTERNAL = new RequestContext(null, true);
+	public static final RequestContext INTERNAL = new RequestContext(null, true, null);
 
 	/**
 	 * Context for anonymous (unauthenticated) external requests.
 	 */
-	public static final RequestContext ANONYMOUS = new RequestContext(null, false);
+	public static final RequestContext ANONYMOUS = new RequestContext(null, false, null);
 
-	private RequestContext(AString callerDID, boolean internal) {
+	private RequestContext(AString callerDID, boolean internal, AVector<ACell> proofs) {
 		this.callerDID = callerDID;
 		this.internal = internal;
+		this.proofs = proofs;
 	}
 
 	/**
@@ -33,7 +37,22 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, false);
+		return new RequestContext(callerDID, false, null);
+	}
+
+	/**
+	 * Creates a RequestContext with caller DID and UCAN proofs.
+	 */
+	public static RequestContext of(AString callerDID, AVector<ACell> proofs) {
+		if (callerDID == null) return ANONYMOUS;
+		return new RequestContext(callerDID, false, proofs);
+	}
+
+	/**
+	 * Returns a new context with the given proofs added.
+	 */
+	public RequestContext withProofs(AVector<ACell> proofs) {
+		return new RequestContext(this.callerDID, this.internal, proofs);
 	}
 
 	/**
@@ -62,6 +81,13 @@ public class RequestContext {
 	 */
 	public boolean isAuthenticated() {
 		return callerDID != null;
+	}
+
+	/**
+	 * Gets the UCAN proofs attached to this request, or null if none.
+	 */
+	public AVector<ACell> getProofs() {
+		return proofs;
 	}
 
 	@Override
