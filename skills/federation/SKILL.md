@@ -6,7 +6,7 @@ argument-hint: [demo|invoke] [venue-url]
 
 # Federation Demo
 
-**Prerequisite:** The local venue must be running and connected as an MCP server (`http://localhost:8080/mcp/sse`). This skill also requires a **second venue** — either a deployed venue or a second local venue on a different port (see below). If MCP tools are not available, tell the user to run `/venue-setup local` first.
+**Prerequisite:** The local venue must be running and connected as an MCP server (`http://localhost:8080/mcp`). This skill also requires a **second venue** — either a deployed venue or a second local venue on a different port (see below). If MCP tools are not available, tell the user to run `/venue-setup local` first.
 
 Demonstrate Covia's federated grid operations — invoking operations across venue boundaries.
 

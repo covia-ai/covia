@@ -6,7 +6,7 @@ argument-hint: [issue|explain]
 
 # UCAN Capability Management
 
-**Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp/sse`). If MCP tools are not available, tell the user to run `/venue-setup local` first.
+**Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp`). If MCP tools are not available, tell the user to run `/venue-setup local` first.
 
 Manage capability-based authorisation on a Covia venue using UCAN tokens.
 

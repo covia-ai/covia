@@ -5,7 +5,7 @@ description: Check Covia venue health — adapters, registered operations, activ
 
 # Venue Status
 
-**Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp/sse`). If MCP tools are not available, tell the user to run `/venue-setup local` first.
+**Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp`). If MCP tools are not available, tell the user to run `/venue-setup local` first.
 
 Check the current state of the connected Covia venue. Run these in parallel:
 

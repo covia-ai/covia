@@ -6,7 +6,7 @@ argument-hint: [quick|full]
 
 # Venue Smoke Test
 
-**Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp/sse`). If MCP tools are not available, tell the user to run `/venue-setup local` first.
+**Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp`). If MCP tools are not available, tell the user to run `/venue-setup local` first.
 
 Run a quick health check on the connected Covia venue.
 

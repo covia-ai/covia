@@ -6,7 +6,7 @@ argument-hint: [setup|run|run bad|run batch|trace|reset|status|setup-desktop]
 
 # AP Invoice Audit Trail Demo
 
-**Prerequisite:** The venue must be running and connected as an MCP server. If tools like `agent_list` are not available, tell the user to run `/venue-setup local` first, then add the MCP endpoint (`http://localhost:8080/mcp/sse`) to their Claude Code MCP settings.
+**Prerequisite:** The venue must be running and connected as an MCP server. If tools like `agent_list` are not available, tell the user to run `/venue-setup local` first, then add the MCP endpoint (`http://localhost:8080/mcp`) to their Claude Code MCP settings.
 
 You are setting up or running a demo of Covia's accounts payable pipeline. Three LLM-backed agents process invoices with a complete immutable audit trail.
 
@@ -104,5 +104,5 @@ Show the user the Claude Desktop project instructions so they can paste them int
 
 1. The venue must be running and agents set up (via `/ap-demo setup` in Claude Code)
 2. In Claude Desktop, create a new Project and paste the instructions into the project's custom instructions
-3. Add the venue as an MCP server in Claude Desktop's settings: `http://localhost:8080/mcp/sse`
+3. Add the venue as an MCP server in Claude Desktop's settings: `http://localhost:8080/mcp`
 4. Then the user can run the demo conversationally in Claude Desktop

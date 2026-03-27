@@ -54,7 +54,7 @@ curl http://localhost:8080/
 {
   "mcpServers": {
     "local-covia-venue": {
-      "url": "http://localhost:8080/mcp/sse"
+      "url": "http://localhost:8080/mcp"
     }
   }
 }
@@ -187,7 +187,7 @@ Adapt for other platforms (AWS ECS, Azure Container Instances, fly.io, etc.) as 
 | Field | Default | Purpose |
 |-------|---------|---------|
 | `port` | 8080 | HTTP listen port |
-| `mcp.enabled` | true | Enable MCP endpoint at `/mcp/sse` |
+| `mcp.enabled` | true | Enable MCP endpoint at `/mcp` |
 | `auth.publicAccess` | true | Allow unauthenticated access (dev only) |
 | `did` | auto-generated | Venue's decentralised identifier |
 | `hostname` | localhost | Public hostname for DID resolution |
