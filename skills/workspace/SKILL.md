@@ -6,6 +6,8 @@ argument-hint: [browse|read|write] [path]
 
 # Workspace Explorer
 
+**Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp/sse`). If MCP tools are not available, tell the user to run `/venue-setup local` first.
+
 Navigate and manage data in the venue's lattice namespace.
 
 ## Namespace Structure

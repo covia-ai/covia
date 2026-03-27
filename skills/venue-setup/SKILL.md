@@ -72,10 +72,11 @@ sudo apt-get install -y openjdk-25-jdk caddy screen
 
 **Upload the JAR** (from build machine):
 ```bash
-# Via GCloud Storage
+# Via scp
+scp venue/target/covia.jar user@vm-host:~/covia.jar
+
+# Or via cloud storage (e.g. GCloud)
 gsutil cp venue/target/covia.jar gs://your-bucket/covia.jar
-# On the VM
-gsutil cp gs://your-bucket/covia.jar ~/covia.jar
 ```
 
 **Config file** — create `~/.covia/config.json`:
@@ -144,7 +145,7 @@ docker run -p 8080:8080 -v /path/to/config.json:/app/config.json covia:latest co
 - Health check: `curl http://localhost:8080/` every 30s
 - JVM: G1GC, 75% max RAM, container-aware
 
-**Google Cloud Run:**
+**Cloud deployment** — push the image to any container registry and deploy. Example with Google Cloud Run:
 ```bash
 docker tag covia:latest gcr.io/PROJECT_ID/covia:latest
 docker push gcr.io/PROJECT_ID/covia:latest
@@ -156,6 +157,8 @@ gcloud run deploy covia \
   --min-instances 0 \
   --max-instances 10
 ```
+
+Adapt for other platforms (AWS ECS, Azure Container Instances, fly.io, etc.) as needed — the image is a standard OCI container.
 
 ### `config` — Configuration Reference
 

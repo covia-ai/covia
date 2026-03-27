@@ -12,7 +12,9 @@ secret_set  name=OPENAI_API_KEY  value=<ask-user>
 
 ## 2. Seed Reference Data
 
-### Vendor record
+Seed all vendor records and purchase orders below. This gives Bob real data to query and enables multiple demo scenarios (happy path, rejection, VP escalation).
+
+### Vendor records
 
 ```
 covia_write  path=w/vendor-records/Acme Corp
@@ -28,7 +30,36 @@ value: {
 }
 ```
 
-### Purchase order
+```
+covia_write  path=w/vendor-records/Globex Ltd
+value: {
+  "vendor_id": "V-2087",
+  "name": "Globex Ltd",
+  "status": "ACTIVE",
+  "tax_id": "GB-12-8834521",
+  "payment_method": "WIRE",
+  "bank_account": "****3310",
+  "sanctions_check": "CLEAR",
+  "last_reviewed": "2024-11-01"
+}
+```
+
+```
+covia_write  path=w/vendor-records/Initech Systems
+value: {
+  "vendor_id": "V-3201",
+  "name": "Initech Systems",
+  "status": "SUSPENDED",
+  "tax_id": "US-91-5567890",
+  "payment_method": "ACH",
+  "bank_account": "****4455",
+  "sanctions_check": "FLAGGED",
+  "sanctions_detail": "OFAC SDN List — added 2024-08-20",
+  "last_reviewed": "2024-08-22"
+}
+```
+
+### Purchase orders
 
 ```
 covia_write  path=w/purchase-orders/Acme Corp/PO-2024-0456
@@ -41,6 +72,34 @@ value: {
   "budget_code": "ENG-INFRA-2024",
   "status": "OPEN",
   "approver": "J. Martinez"
+}
+```
+
+```
+covia_write  path=w/purchase-orders/Globex Ltd/PO-2024-0790
+value: {
+  "po_number": "PO-2024-0790",
+  "vendor": "Globex Ltd",
+  "amount_authorised": 150000,
+  "currency": "USD",
+  "department": "Operations",
+  "budget_code": "OPS-PLATFORM-2024",
+  "status": "OPEN",
+  "approver": "D. Chen"
+}
+```
+
+```
+covia_write  path=w/purchase-orders/Initech Systems/PO-2024-0312
+value: {
+  "po_number": "PO-2024-0312",
+  "vendor": "Initech Systems",
+  "amount_authorised": 8000,
+  "currency": "USD",
+  "department": "IT",
+  "budget_code": "IT-MAINT-2024",
+  "status": "OPEN",
+  "approver": "R. Kapoor"
 }
 ```
 

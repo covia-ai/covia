@@ -6,6 +6,8 @@ argument-hint: [issue|explain]
 
 # UCAN Capability Management
 
+**Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp/sse`). If MCP tools are not available, tell the user to run `/venue-setup local` first.
+
 Manage capability-based authorisation on a Covia venue using UCAN tokens.
 
 ## Concepts
@@ -85,6 +87,23 @@ ucan_issue
 # Bob presents the token when reading Alice's data
 # (via REST API ucans field or agent proof context)
 ```
+
+## Solo Demo (No Second User)
+
+If demoing alone without a second DID, you can still show the flow:
+
+1. **Issue a self-referencing token** — use the venue's own DID as audience. Query the venue DID first:
+   ```
+   covia_read  path=venue/did  → returns the venue DID
+   ucan_issue
+     aud: "<venue-DID>"
+     att: [{ "with": "<your-DID>/w/demo-data", "can": "crud/read" }]
+     exp: <1 hour from now>
+   ```
+
+2. **Explain the model** — use the `explain` command to walk through the concepts. The token itself demonstrates the structure even without a real second party.
+
+3. **Show the token contents** — UCANs are self-describing. Display the issued token and walk through the fields (issuer, audience, attenuations, expiry, signature).
 
 ## Current Status
 

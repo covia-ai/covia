@@ -6,6 +6,8 @@ argument-hint: [demo|invoke] [venue-url]
 
 # Federation Demo
 
+**Prerequisite:** The local venue must be running and connected as an MCP server (`http://localhost:8080/mcp/sse`). This skill also requires a **second venue** — either a deployed venue or a second local venue on a different port (see below). If MCP tools are not available, tell the user to run `/venue-setup local` first.
+
 Demonstrate Covia's federated grid operations — invoking operations across venue boundaries.
 
 ## Concepts
@@ -16,11 +18,35 @@ Demonstrate Covia's federated grid operations — invoking operations across ven
 - **Venue** — identified by URL or DID (`did:web:venue.example.com`)
 - **UCAN proofs** — capability tokens that travel with requests for authorisation
 
+## Two-Venue Setup
+
+This demo requires a second venue. Options:
+
+**Option A — Two local venues on different ports:**
+```bash
+# Terminal 1: local venue on default port
+java -jar venue/target/covia.jar
+
+# Terminal 2: second venue on port 8081
+java -jar venue/target/covia.jar second-venue-config.json
+```
+
+Where `second-venue-config.json` contains:
+```json
+{
+  "venues": [{ "name": "Remote Venue", "port": 8081, "mcp": { "enabled": true } }]
+}
+```
+
+The remote URL is then `http://localhost:8081`.
+
+**Option B — Use a deployed venue** (e.g. `https://venue.example.com`). Ask the user for the URL.
+
 ## Commands
 
 ### `demo` — Run a federated demo
 
-Requires two venues. Ask the user for the remote venue URL.
+Ask the user for the remote venue URL (or use `http://localhost:8081` if running two local venues).
 
 1. **Echo test** — verify connectivity:
    ```

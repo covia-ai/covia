@@ -6,6 +6,8 @@ argument-hint: [quick|full]
 
 # Venue Smoke Test
 
+**Prerequisite:** The venue must be running and connected as an MCP server (`http://localhost:8080/mcp/sse`). If MCP tools are not available, tell the user to run `/venue-setup local` first.
+
 Run a quick health check on the connected Covia venue.
 
 ## `quick` (default)
@@ -34,9 +36,9 @@ Report a summary table: adapter count, function count, echo test pass/fail.
 
 ## `full`
 
-Run all quick tests plus:
+Run all quick tests plus the tests below. **Requires `OPENAI_API_KEY`** — if not set, tell the user to run `/secret set OPENAI_API_KEY` first.
 
-4. **LLM test** — verify OpenAI connectivity (requires API key):
+4. **LLM test** — verify OpenAI connectivity:
    ```
    grid_run  operation=langchain:openai
      input={ "messages": [{"role": "user", "content": "Say hello in exactly 3 words"}] }
