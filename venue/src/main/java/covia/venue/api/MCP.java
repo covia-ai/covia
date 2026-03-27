@@ -402,6 +402,8 @@ public class MCP extends ACoviaAPI {
 	}
 
 	private Hash findTool(AString toolName) {
+		// Sanitise incoming name so both "test:echo" and "test_echo" resolve
+		AString sanitisedName = sanitiseToolName(toolName);
 		for (String adapterName : engine().getAdapterNames()) {
 			try {
 				var adapter = engine().getAdapter(adapterName);
@@ -412,12 +414,12 @@ public class MCP extends ACoviaAPI {
 				for (long i = 0; i < n; i++) {
 					Hash h = adapterTools.entryAt(i).getKey();
 					AMap<AString, ACell> meta = engine().getMetaValue(h);
-					AString opAdapter = RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER);
-					if (toolName.equals(opAdapter)) {
+					AString opAdapter = sanitiseToolName(RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER));
+					if (sanitisedName.equals(opAdapter)) {
 						return h;
 					}
-					AString opToolName = RT.getIn(meta, Fields.OPERATION, Fields.TOOL_NAME);
-					if (toolName.equals(opToolName)) {
+					AString opToolName = sanitiseToolName(RT.getIn(meta, Fields.OPERATION, Fields.TOOL_NAME));
+					if (sanitisedName.equals(opToolName)) {
 						return h;
 					}
 				}
@@ -491,13 +493,25 @@ public class MCP extends ACoviaAPI {
 		return toolsVector;
 	}
 
+	/**
+	 * Sanitises a tool name to comply with MCP tool naming rules.
+	 * MCP requires tool names to match ^[a-zA-Z0-9_-]{1,64}$.
+	 * Replaces colons and slashes with underscores.
+	 */
+	static AString sanitiseToolName(AString name) {
+		if (name == null) return null;
+		String s = name.toString();
+		String sanitised = s.replace(':', '_').replace('/', '_');
+		return Strings.create(sanitised);
+	}
+
 	private AMap<AString, ACell> checkTool(AMap<AString, ACell> meta) {
 		AMap<AString, ACell> op = RT.getIn(meta, Fields.OPERATION);
 		if (op == null) return null;
 
-		AString toolName = RT.ensureString(op.get(Fields.ADAPTER));
+		AString toolName = RT.ensureString(op.get(Fields.TOOL_NAME));
 		if (toolName == null) {
-			toolName = RT.ensureString(op.get(Fields.TOOL_NAME));
+			toolName = sanitiseToolName(RT.ensureString(op.get(Fields.ADAPTER)));
 		}
 		if (toolName == null) return null;
 

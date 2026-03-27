@@ -26,6 +26,16 @@ covia/                          # ai.covia:covia:0.0.2-SNAPSHOT (parent POM)
 │       └── venue/storage/      #   Storage backends (Lattice, File, Memory)
 ├── workbench/                  # Minimal Swing GUI REPL for demo/testing
 │   └── src/main/java/covia/gui/  Bench, ReplPanel, LAF
+├── skills/                     # Claude Code skills (symlink .claude/skills → skills/)
+│   ├── ap-demo/                #   AP invoice audit trail demo (Alice/Bob/Carol)
+│   ├── agent/                  #   Agent creation and management
+│   ├── venue-setup/            #   Build and run a venue (local/VM/Docker)
+│   ├── venue-status/           #   Venue health check
+│   ├── grid-test/              #   Smoke test venue operations
+│   ├── workspace/              #   Browse/read/write lattice data
+│   ├── secret/                 #   Manage API keys and credentials
+│   ├── federation/             #   Cross-venue grid operations
+│   └── ucan/                   #   Capability token management
 ├── deploy/                     # Deployment configs (Caddyfile, config templates)
 ├── Dockerfile                  # Container build (Alpine, Java 25)
 ├── BUILD.md                    # Build and release workflow
@@ -240,6 +250,29 @@ The engine always resolves operation references to metadata before dispatching �
 - **venue/docs/GRID_LATTICE_DESIGN.md** — Grid lattice design: addressing, namespaces, UCAN capabilities, federation, agents, lattice mechanics, implementation phases
 - **venue/CLAUDE.md** — Detailed venue module architecture, design objectives, adapter reference, API endpoints, and development guidelines
 - **venue/CLAUDE.local.md** — Working notes on lattice persistence implementation progress
+
+## Skills
+
+Reusable Claude Code skills are in `skills/`. To use them as slash commands, create a junction:
+
+```bash
+# Windows (from covia root)
+cmd /c "mklink /J .claude\skills skills"
+```
+
+Then invoke with `/skill-name`, e.g. `/ap-demo setup`, `/venue-setup local`, `/agent create MyAgent`.
+
+| Skill | Purpose |
+|-------|---------|
+| `/ap-demo` | AP invoice audit trail demo with Alice/Bob/Carol agents |
+| `/agent` | Create, configure, and manage agents (handles config gotchas) |
+| `/venue-setup` | Build and run a venue — local, VM, or Docker |
+| `/venue-status` | Quick venue health check — adapters, agents, workspace |
+| `/grid-test` | Smoke test venue operations |
+| `/workspace` | Browse and manage lattice namespace data |
+| `/secret` | Manage API keys and credentials |
+| `/federation` | Cross-venue grid operations demo |
+| `/ucan` | UCAN capability token management |
 
 ## Resources
 

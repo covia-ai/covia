@@ -131,12 +131,12 @@ public class MCPTest {
 			// Verify we got some tools
 			assertTrue(tools.size() > 0, "TestAdapter should provide at least one MCP tool");
 			
-			// Look for the "test:echo" tool specifically (tool name derived from adapter field)
+			// Look for the "test_echo" tool specifically (sanitised from "test:echo" for MCP compliance)
 			boolean foundEchoTool = false;
 			for (int i = 0; i < tools.size(); i++) {
 				AMap<AString, ACell> tool = tools.get(i);
 				AString name = RT.ensureString(tool.get(Fields.NAME));
-				if ("test:echo".equals(name.toString())) {
+				if ("test_echo".equals(name.toString())) {
 					foundEchoTool = true;
 
 					// Verify the tool has the expected structure
@@ -144,14 +144,14 @@ public class MCPTest {
 					assertTrue(tool.containsKey(Fields.DESCRIPTION), "Tool should have a description");
 					assertTrue(tool.containsKey(Fields.INPUT_SCHEMA), "Tool should have an inputSchema");
 
-					// Verify the name is "test:echo"
-					assertEquals("test:echo", name.toString(), "Tool name should be 'test:echo'");
+					// Verify the name is sanitised (colons replaced with underscores)
+					assertEquals("test_echo", name.toString(), "Tool name should be 'test_echo' (MCP-sanitised)");
 
 					break;
 				}
 			}
 
-			assertTrue(foundEchoTool, "Should find the 'test:echo' tool from TestAdapter");
+			assertTrue(foundEchoTool, "Should find the 'test_echo' tool from TestAdapter");
 			
 		} catch (Exception e) {
 			throw new RuntimeException("Failed to test listTools method", e);
