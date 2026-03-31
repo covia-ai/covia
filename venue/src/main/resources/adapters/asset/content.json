@@ -1,0 +1,27 @@
+{
+  "name": "Get Asset Content",
+  "description": "Retrieves the content payload of an asset by its ID. Content is always a Blob (binary data), returned as a hex string in JSON. Returns exists: false if the asset is not found. Returns truncated: true with the size if the content exceeds maxSize (default 1 MB). Use asset:get to retrieve metadata.",
+  "dateCreated": "2026-03-31T00:00:00Z",
+  "operation": {
+    "adapter": "asset:content",
+    "toolName": "asset_content",
+    "input": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Asset ID (hex hash)" },
+        "maxSize": { "type": "integer", "description": "Maximum content size in bytes (default 1000000). If exceeded, returns truncated: true with the size." }
+      },
+      "required": ["id"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Asset ID (confirmed)" },
+        "exists": { "type": "boolean", "description": "True if the asset was found" },
+        "value": { "type": "string", "description": "Content as hex-encoded Blob (0x...). Present when exists is true and not truncated." },
+        "truncated": { "type": "boolean", "description": "True if content exceeds maxSize" },
+        "size": { "type": "integer", "description": "Content size in bytes (present when truncated)" }
+      }
+    }
+  }
+}

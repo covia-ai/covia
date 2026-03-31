@@ -13,7 +13,12 @@
           "description": "Arbitrary JSON metadata for the asset. The asset ID is computed from this object. Include a 'name' field for discoverability and a 'type' field for filtering (e.g. 'agent-definition', 'invoice', 'document')."
         },
         "content": {
-          "description": "Optional content payload stored alongside the metadata. Use for document text, structured data, or any payload that should be retrievable via asset:get but kept separate from the identifying metadata."
+          "type": "string",
+          "description": "Optional content payload as a hex-encoded Blob (must start with 0x). Retrieved separately via asset:content. Mutually exclusive with contentText."
+        },
+        "contentText": {
+          "type": "string",
+          "description": "Optional content payload as plain text (auto-encoded to UTF-8 Blob). Convenience alternative to content for text documents. Mutually exclusive with content."
         }
       },
       "required": ["metadata"]

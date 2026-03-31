@@ -1,6 +1,6 @@
 {
   "name": "Get Asset",
-  "description": "Retrieves an asset by its content-addressed ID. Returns the full metadata object that was stored. Use this to inspect agent definitions, documents, or any stored asset.",
+  "description": "Retrieves an asset's metadata by its content-addressed ID. Returns the metadata as 'value', consistent with covia:read. Use asset:content to retrieve the content payload separately. Returns exists: false if the asset is not found.",
   "dateCreated": "2026-03-31T00:00:00Z",
   "operation": {
     "adapter": "asset:get",
@@ -16,8 +16,8 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "description": "Asset ID (confirmed)" },
-        "metadata": { "type": "object", "description": "The stored metadata object" },
-        "content": { "description": "Content payload, if one was stored with the asset" }
+        "exists": { "type": "boolean", "description": "True if the asset was found" },
+        "value": { "type": "object", "description": "The stored metadata object (present when exists is true)" }
       }
     }
   }

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -103,8 +104,10 @@ public class AssetAdapterTest {
 
 		assertNotNull(result);
 		assertEquals(id, RT.getIn(result, Fields.ID));
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Strings.create("exists")));
 
-		AMap<AString, ACell> returnedMeta = RT.ensureMap(RT.getIn(result, Fields.METADATA));
+		// Consistent with covia:read — value contains the metadata
+		AMap<AString, ACell> returnedMeta = RT.ensureMap(RT.getIn(result, Fields.VALUE));
 		assertNotNull(returnedMeta);
 		assertEquals(Strings.create("Retrievable Doc"), returnedMeta.get(Fields.NAME));
 		assertEquals(Strings.create("document"), returnedMeta.get(Fields.TYPE));
@@ -114,12 +117,11 @@ public class AssetAdapterTest {
 	public void testGetNonExistent() {
 		ACell input = Maps.of(Fields.ID, "0000000000000000000000000000000000000000000000000000000000000000");
 		Job job = engine.jobs().invokeOperation("asset:get", input, RequestContext.of(ALICE_DID));
-		try {
-			job.awaitResult(5000);
-			fail("Should have thrown for non-existent asset");
-		} catch (Exception e) {
-			assertEquals(Status.FAILED, job.getStatus());
-		}
+		ACell result = job.awaitResult(5000);
+
+		// Consistent with covia:read — returns exists: false, not an error
+		assertEquals(CVMBool.FALSE, RT.getIn(result, Strings.create("exists")));
+		assertNull(RT.getIn(result, Fields.VALUE));
 	}
 
 	@Test
@@ -203,44 +205,339 @@ public class AssetAdapterTest {
 
 	// ========== asset:store with content ==========
 
+	private static final AString K_CONTENT_TEXT = Strings.intern("contentText");
+
 	@Test
-	public void testStoreAndGetWithContent() {
+	public void testStoreAndRetrieveContent() {
 		ACell metadata = Maps.of(
 			Fields.NAME, "Invoice with Content",
 			Fields.TYPE, "invoice");
-		ACell content = Maps.of(
-			Strings.create("invoice_text"), "Invoice from Acme Corp, total $15,600");
-
-		ACell input = Maps.of(Fields.METADATA, metadata, Fields.CONTENT, content);
+		// "Hello" = 0x48656C6C6F — hex Blob via content parameter
+		ACell input = Maps.of(Fields.METADATA, metadata,
+			Fields.CONTENT, Strings.create("0x48656C6C6F"));
 		Job storeJob = engine.jobs().invokeOperation("asset:store", input, RequestContext.of(ALICE_DID));
 		AString id = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID));
 
-		// Retrieve — should include content
+		// asset:get returns metadata only — no content
 		Job getJob = engine.jobs().invokeOperation("asset:get",
 			Maps.of(Fields.ID, id), RequestContext.of(ALICE_DID));
-		ACell result = getJob.awaitResult(5000);
+		ACell getResult = getJob.awaitResult(5000);
+		assertEquals(Strings.create("invoice"), RT.getIn(getResult, Fields.VALUE, Fields.TYPE));
 
-		AMap<AString, ACell> returnedMeta = RT.ensureMap(RT.getIn(result, Fields.METADATA));
-		assertEquals(Strings.create("invoice"), returnedMeta.get(Fields.TYPE));
+		// Metadata should have content.sha256 auto-injected
+		assertNotNull(RT.getIn(getResult, Fields.VALUE, Fields.CONTENT, Fields.SHA256),
+			"content.sha256 should be auto-injected");
 
-		AMap<AString, ACell> returnedContent = RT.ensureMap(RT.getIn(result, Fields.CONTENT));
-		assertNotNull(returnedContent, "Content should be returned");
-		assertEquals(Strings.create("Invoice from Acme Corp, total $15,600"),
-			returnedContent.get(Strings.create("invoice_text")));
+		// asset:content returns the Blob
+		Job contentJob = engine.jobs().invokeOperation("asset:content",
+			Maps.of(Fields.ID, id), RequestContext.of(ALICE_DID));
+		ACell contentResult = contentJob.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(contentResult, Strings.create("exists")));
+
+		ACell value = RT.getIn(contentResult, Fields.VALUE);
+		assertNotNull(value, "Content value should be present");
+		assertTrue(value instanceof ABlob, "Content should be a Blob");
+		assertEquals("Hello", new String(((ABlob) value).getBytes(), java.nio.charset.StandardCharsets.UTF_8));
 	}
 
 	@Test
-	public void testStoreWithoutContentReturnsNoContent() {
+	public void testStoreWithContentText() {
+		ACell metadata = Maps.of(Fields.NAME, "Text Content", Fields.TYPE, "invoice");
+		ACell input = Maps.of(Fields.METADATA, metadata,
+			K_CONTENT_TEXT, Strings.create("Invoice from Acme Corp"));
+		Job storeJob = engine.jobs().invokeOperation("asset:store", input, RequestContext.of(ALICE_DID));
+		AString id = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID));
+
+		// Retrieve content — should be UTF-8 encoded Blob
+		Job contentJob = engine.jobs().invokeOperation("asset:content",
+			Maps.of(Fields.ID, id), RequestContext.of(ALICE_DID));
+		ABlob blob = (ABlob) RT.getIn(contentJob.awaitResult(5000), Fields.VALUE);
+		assertNotNull(blob);
+		assertEquals("Invoice from Acme Corp",
+			new String(blob.getBytes(), java.nio.charset.StandardCharsets.UTF_8));
+	}
+
+	@Test
+	public void testStoreRejectsBothContentAndContentText() {
+		ACell metadata = Maps.of(Fields.NAME, "Both", Fields.TYPE, "test");
+		ACell input = Maps.of(Fields.METADATA, metadata,
+			Fields.CONTENT, Strings.create("0xAA"),
+			K_CONTENT_TEXT, Strings.create("hello"));
+		Job job = engine.jobs().invokeOperation("asset:store", input, RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("Should reject both content and contentText");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+		}
+	}
+
+	@Test
+	public void testStoreRejectsNonHexContent() {
+		ACell metadata = Maps.of(Fields.NAME, "Bad Content", Fields.TYPE, "test");
+		ACell input = Maps.of(Fields.METADATA, metadata,
+			Fields.CONTENT, Strings.create("plain text not hex"));
+		Job job = engine.jobs().invokeOperation("asset:store", input, RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("Should reject non-hex content string");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+		}
+	}
+
+	@Test
+	public void testContentWithoutPayload() {
 		ACell metadata = Maps.of(Fields.NAME, "No Content Asset", Fields.TYPE, "test");
 		Job storeJob = engine.jobs().invokeOperation("asset:store",
 			Maps.of(Fields.METADATA, metadata), RequestContext.of(ALICE_DID));
 		AString id = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID));
 
+		Job contentJob = engine.jobs().invokeOperation("asset:content",
+			Maps.of(Fields.ID, id), RequestContext.of(ALICE_DID));
+		ACell result = contentJob.awaitResult(5000);
+
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Strings.create("exists")));
+		assertNull(RT.getIn(result, Fields.VALUE), "No content payload should mean no value");
+	}
+
+	@Test
+	public void testContentNonExistentAsset() {
+		Job job = engine.jobs().invokeOperation("asset:content",
+			Maps.of(Fields.ID, "0000000000000000000000000000000000000000000000000000000000000000"),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(result, Strings.create("exists")));
+	}
+
+	// ========== Content vs metadata identity ==========
+
+	@Test
+	public void testContentHashInjectedIntoMetadata() {
+		ACell metadata = Maps.of(Fields.NAME, "Auto Hash Test", Fields.TYPE, "invoice");
+
+		Job job = engine.jobs().invokeOperation("asset:store",
+			Maps.of(Fields.METADATA, metadata, K_CONTENT_TEXT, Strings.create("Hello")),
+			RequestContext.of(ALICE_DID));
+		AString id = RT.ensureString(RT.getIn(job.awaitResult(5000), Fields.ID));
+
+		Job getJob = engine.jobs().invokeOperation("asset:get",
+			Maps.of(Fields.ID, id), RequestContext.of(ALICE_DID));
+		ACell getResult = getJob.awaitResult(5000);
+
+		AMap<AString, ACell> meta = RT.ensureMap(RT.getIn(getResult, Fields.VALUE));
+		AString sha = RT.ensureString(RT.getIn(meta, Fields.CONTENT, Fields.SHA256));
+		assertNotNull(sha, "content.sha256 should be auto-injected into metadata");
+		assertTrue(sha.count() > 0);
+	}
+
+	@Test
+	public void testDifferentContentProducesDifferentAssetId() {
+		ACell meta1 = Maps.of(Fields.NAME, "Doc", Fields.TYPE, "test");
+		ACell meta2 = Maps.of(Fields.NAME, "Doc", Fields.TYPE, "test");
+
+		Job job1 = engine.jobs().invokeOperation("asset:store",
+			Maps.of(Fields.METADATA, meta1, K_CONTENT_TEXT, Strings.create("version-1")),
+			RequestContext.of(ALICE_DID));
+		AString id1 = RT.ensureString(RT.getIn(job1.awaitResult(5000), Fields.ID));
+
+		Job job2 = engine.jobs().invokeOperation("asset:store",
+			Maps.of(Fields.METADATA, meta2, K_CONTENT_TEXT, Strings.create("version-2")),
+			RequestContext.of(ALICE_DID));
+		AString id2 = RT.ensureString(RT.getIn(job2.awaitResult(5000), Fields.ID));
+
+		assertNotEquals(id1, id2, "Different content → different content.sha256 → different asset ID");
+	}
+
+	// ========== Cross-user visibility ==========
+
+	private static final AString BOB_DID = Strings.create("did:key:z6MkBob");
+
+	@Test
+	public void testCrossUserVisibility() {
+		// Alice stores an asset
+		ACell metadata = Maps.of(Fields.NAME, "Alice's Asset", Fields.TYPE, "shared");
+		Job storeJob = engine.jobs().invokeOperation("asset:store",
+			Maps.of(Fields.METADATA, metadata), RequestContext.of(ALICE_DID));
+		AString id = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID));
+
+		// Bob can get it — asset store is venue-global
+		Job getJob = engine.jobs().invokeOperation("asset:get",
+			Maps.of(Fields.ID, id), RequestContext.of(BOB_DID));
+		ACell result = getJob.awaitResult(5000);
+		assertNotNull(result);
+		assertEquals(Strings.create("Alice's Asset"),
+			RT.getIn(result, Fields.VALUE, Fields.NAME));
+	}
+
+	// ========== List edge cases ==========
+
+	@Test
+	public void testListNoMatches() {
+		ACell input = Maps.of(Fields.TYPE, "nonexistent-type-xyz");
+		Job job = engine.jobs().invokeOperation("asset:list", input, RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		AVector<?> items = (AVector<?>) RT.getIn(result, Fields.ITEMS);
+		assertNotNull(items);
+		assertEquals(0, items.count(), "Should find no matching assets");
+	}
+
+	@Test
+	public void testListItemStructure() {
+		ACell metadata = Maps.of(
+			Fields.NAME, "Structured Item",
+			Fields.TYPE, "structure-test",
+			Fields.DESCRIPTION, "Testing list item fields");
+		engine.jobs().invokeOperation("asset:store",
+			Maps.of(Fields.METADATA, metadata), RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation("asset:list",
+			Maps.of(Fields.TYPE, "structure-test"), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		AVector<?> items = (AVector<?>) RT.getIn(result, Fields.ITEMS);
+		assertEquals(1, items.count());
+
+		AMap<AString, ACell> item = RT.ensureMap(items.get(0));
+		assertNotNull(item.get(Fields.ID), "Item should have id");
+		assertEquals(Strings.create("Structured Item"), item.get(Fields.NAME));
+		assertEquals(Strings.create("structure-test"), item.get(Fields.TYPE));
+		assertEquals(Strings.create("Testing list item fields"), item.get(Fields.DESCRIPTION));
+	}
+
+	// ========== Grid invoke path ==========
+
+	@Test
+	public void testStoreViaGridRun() {
+		ACell metadata = Maps.of(Fields.NAME, "Grid Stored", Fields.TYPE, "grid-test");
+
+		// Invoke asset:store via grid:run — the federated invocation path
+		Job job = engine.jobs().invokeOperation("grid:run", Maps.of(
+			Fields.OPERATION, "asset:store",
+			Fields.INPUT, Maps.of(Fields.METADATA, metadata)),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertNotNull(result);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.STORED));
+		AString id = RT.ensureString(RT.getIn(result, Fields.ID));
+		assertNotNull(id);
+
+		// Verify retrievable via direct path
+		Job getJob = engine.jobs().invokeOperation("asset:get",
+			Maps.of(Fields.ID, id), RequestContext.of(ALICE_DID));
+		ACell getResult = getJob.awaitResult(5000);
+		assertEquals(Strings.create("Grid Stored"),
+			RT.getIn(getResult, Fields.VALUE, Fields.NAME));
+	}
+
+	@Test
+	public void testGetViaGridRun() {
+		// Store directly
+		ACell metadata = Maps.of(Fields.NAME, "Grid Get Test", Fields.TYPE, "grid-test");
+		Job storeJob = engine.jobs().invokeOperation("asset:store",
+			Maps.of(Fields.METADATA, metadata), RequestContext.of(ALICE_DID));
+		AString id = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID));
+
+		// Retrieve via grid:run
+		Job job = engine.jobs().invokeOperation("grid:run", Maps.of(
+			Fields.OPERATION, "asset:get",
+			Fields.INPUT, Maps.of(Fields.ID, id)),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertEquals(Strings.create("Grid Get Test"),
+			RT.getIn(result, Fields.VALUE, Fields.NAME));
+	}
+
+	// ========== Complex nested metadata ==========
+
+	@Test
+	public void testComplexNestedMetadataRoundTrip() {
+		// Simulate an agent definition with deep nesting (responseFormat schema)
+		ACell schema = Maps.of(
+			Strings.create("type"), "object",
+			Strings.create("properties"), Maps.of(
+				Strings.create("vendor_name"), Maps.of(
+					Strings.create("type"), "string",
+					Fields.DESCRIPTION, "Vendor name"),
+				Strings.create("line_items"), Maps.of(
+					Strings.create("type"), "array",
+					Strings.create("items"), Maps.of(
+						Strings.create("type"), "object",
+						Strings.create("properties"), Maps.of(
+							Fields.DESCRIPTION, Maps.of(Strings.create("type"), "string"),
+							Strings.create("amount"), Maps.of(Strings.create("type"), "number"))))),
+			Strings.create("required"), convex.core.data.Vectors.of(
+				Strings.create("vendor_name"), Strings.create("line_items")));
+
+		ACell metadata = Maps.of(
+			Fields.NAME, "Deep Nested Agent",
+			Fields.TYPE, "agent-definition",
+			Strings.create("agent"), Maps.of(
+				Fields.OPERATION, "llmagent:chat",
+				Fields.CONFIG, Maps.of(
+					Strings.create("model"), "gpt-4o",
+					Strings.create("responseFormat"), Maps.of(
+						Fields.NAME, "TestSchema",
+						Strings.create("schema"), schema))));
+
+		Job storeJob = engine.jobs().invokeOperation("asset:store",
+			Maps.of(Fields.METADATA, metadata), RequestContext.of(ALICE_DID));
+		AString id = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID));
+
+		// Retrieve and verify deep nesting survived the JSON round-trip
 		Job getJob = engine.jobs().invokeOperation("asset:get",
 			Maps.of(Fields.ID, id), RequestContext.of(ALICE_DID));
 		ACell result = getJob.awaitResult(5000);
 
-		assertNull(RT.getIn(result, Fields.CONTENT), "Content should be absent when not stored");
+		AMap<AString, ACell> meta = RT.ensureMap(RT.getIn(result, Fields.VALUE));
+		assertEquals(Strings.create("gpt-4o"),
+			RT.getIn(meta, Strings.create("agent"), Fields.CONFIG, Strings.create("model")));
+		assertEquals(Strings.create("TestSchema"),
+			RT.getIn(meta, Strings.create("agent"), Fields.CONFIG,
+				Strings.create("responseFormat"), Fields.NAME));
+		assertEquals(Strings.create("object"),
+			RT.getIn(meta, Strings.create("agent"), Fields.CONFIG,
+				Strings.create("responseFormat"), Strings.create("schema"), Strings.create("type")));
+	}
+
+	// ========== Inline config overrides definition ==========
+
+	@Test
+	public void testInlineConfigOverridesDefinition() {
+		// Store a definition with model=gpt-4o
+		ACell metadata = Maps.of(
+			Fields.NAME, "Override Test Def",
+			Fields.TYPE, "agent-definition",
+			Strings.create("agent"), Maps.of(
+				Fields.OPERATION, "llmagent:chat",
+				Fields.CONFIG, Maps.of(
+					Strings.create("llmOperation"), "langchain:openai",
+					Strings.create("model"), "gpt-4o")));
+
+		Job storeJob = engine.jobs().invokeOperation("asset:store",
+			Maps.of(Fields.METADATA, metadata), RequestContext.of(ALICE_DID));
+		AString defHash = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID));
+
+		// Create agent with definition AND explicit config — explicit should win
+		ACell createInput = Maps.of(
+			Fields.AGENT_ID, "OverrideAgent",
+			Fields.DEFINITION, defHash,
+			Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo"));
+
+		Job createJob = engine.jobs().invokeOperation("agent:create", createInput, RequestContext.of(ALICE_DID));
+		createJob.awaitResult(5000);
+
+		// Query — config.operation should be test:echo (explicit), not llmagent:chat (definition)
+		Job queryJob = engine.jobs().invokeOperation("agent:query",
+			Maps.of(Fields.AGENT_ID, "OverrideAgent"), RequestContext.of(ALICE_DID));
+		ACell queryResult = queryJob.awaitResult(5000);
+
+		AMap<AString, ACell> config = RT.ensureMap(RT.getIn(queryResult, Fields.CONFIG));
+		assertEquals(Strings.create("test:echo"), config.get(Fields.OPERATION),
+			"Explicit config should override definition");
 	}
 
 	// ========== Agent definition as asset ==========
@@ -345,7 +642,7 @@ public class AssetAdapterTest {
 		Job getJob = engine.jobs().invokeOperation("asset:get", Maps.of(Fields.ID, id), RequestContext.of(ALICE_DID));
 		ACell getResult = getJob.awaitResult(5000);
 
-		AMap<AString, ACell> returnedMeta = RT.ensureMap(RT.getIn(getResult, Fields.METADATA));
+		AMap<AString, ACell> returnedMeta = RT.ensureMap(RT.getIn(getResult, Fields.VALUE));
 		assertEquals(Strings.create("agent-definition"), returnedMeta.get(Fields.TYPE));
 		assertEquals(Strings.create("llmagent:chat"),
 			RT.getIn(returnedMeta, Strings.create("agent"), Fields.OPERATION));
