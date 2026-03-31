@@ -1,0 +1,26 @@
+{
+  "name": "List Assets",
+  "description": "Lists assets stored on this venue with pagination. Returns summary information (id, name, type, description) for each asset. Use asset:get to retrieve full metadata for a specific asset.",
+  "dateCreated": "2026-03-31T00:00:00Z",
+  "operation": {
+    "adapter": "asset:list",
+    "toolName": "asset_list",
+    "input": {
+      "type": "object",
+      "properties": {
+        "offset": { "type": "integer", "description": "Starting index (default 0)" },
+        "limit": { "type": "integer", "description": "Maximum assets to return (default 100, max 1000)" },
+        "type": { "type": "string", "description": "Optional filter: only return assets whose metadata has this 'type' field value (e.g. 'agent-definition', 'invoice')" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "items": { "type": "array", "description": "Asset summaries with id, name, type, description" },
+        "total": { "type": "integer", "description": "Total number of matching assets" },
+        "offset": { "type": "integer" },
+        "limit": { "type": "integer" }
+      }
+    }
+  }
+}

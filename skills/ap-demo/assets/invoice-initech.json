@@ -1,0 +1,13 @@
+{
+  "name": "INV-2024-1105 — Initech Systems",
+  "type": "invoice",
+  "vendor": "Initech Systems",
+  "invoice_number": "INV-2024-1105",
+  "date": "2024-11-20",
+  "scenario": "sanctioned",
+  "content": {
+    "contentType": "text/plain",
+    "sha256": "2B8D3323ABEB13EF56B9564A6CE7D33FC950325F5AFF3725B9E8E94EE3603B84",
+    "fileName": "invoice-initech.txt"
+  }
+}

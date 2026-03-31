@@ -1,0 +1,1 @@
+Invoice from Acme Corp, INV-2024-0892, dated 2024-11-15. Line items: Cloud hosting Q4 $12,400, API gateway licence $3,200. Total: $15,600 USD. Payment terms: Net 30. PO# PO-2024-0456.

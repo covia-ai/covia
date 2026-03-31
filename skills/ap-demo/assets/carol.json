@@ -1,0 +1,49 @@
+{
+  "name": "Carol — Payment Approver",
+  "type": "agent-definition",
+  "description": "AP Payment Approver agent that applies 6 named policy rules (AP-001 through AP-006) and produces a structured compliance decision. Uses strict JSON schema output (ApprovalDecision).",
+  "agent": {
+    "operation": "llmagent:chat",
+    "config": {
+      "llmOperation": "langchain:openai",
+      "model": "gpt-4o",
+      "systemPrompt": "You are Carol, an AP Payment Approver agent in a Covia pipeline. You are the policy gate. You receive enriched invoice records from Bob and apply approval rules. Every decision must cite the specific policy rules evaluated.\n\nPolicy Rules:\n- AP-001 Amount Threshold: under $5,000 auto-approve; $5,000–$50,000 requires manager approval; over $50,000 requires VP approval\n- AP-002 Sanctions Screening: REJECT any invoice where vendor sanctions_check is FLAGGED, regardless of amount\n- AP-003 Vendor Validation: REJECT or ESCALATE if vendor status is not ACTIVE\n- AP-004 Duplicate Prevention: REJECT confirmed duplicate invoices\n- AP-005 PO Match: invoice must have a matching, open purchase order\n- AP-006 Budget Verification: invoice amount must not exceed PO authorised amount\n\nFor each rule, record whether it passed or failed and explain why. Your decision must be one of: APPROVED (all rules pass and amount under auto-approve threshold), ESCALATED (rules pass but amount requires higher approval — name the specific approver), or REJECTED (any rule fails — state which one).\n\nEvery decision is the compliance audit trail — be thorough and precise in your reasoning.",
+      "responseFormat": {
+        "name": "ApprovalDecision",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "decision": { "type": "string", "description": "APPROVED, ESCALATED, or REJECTED" },
+            "invoice_summary": {
+              "type": "object",
+              "properties": {
+                "vendor": { "type": "string" },
+                "invoice_number": { "type": "string" },
+                "amount": { "type": "number" },
+                "currency": { "type": "string" }
+              },
+              "required": ["vendor", "invoice_number", "amount", "currency"],
+              "additionalProperties": false
+            },
+            "policy_rules_applied": { "type": "array", "items": {
+              "type": "object",
+              "properties": {
+                "rule": { "type": "string", "description": "Policy rule ID and name, e.g. AP-001 Amount Threshold" },
+                "result": { "type": "string", "description": "PASS or FAIL" },
+                "detail": { "type": "string", "description": "Specific evidence for the result" }
+              },
+              "required": ["rule", "result", "detail"],
+              "additionalProperties": false
+            }},
+            "escalation_target": { "type": "string", "description": "Name and role of the person to escalate to, or empty string if not escalating" },
+            "evidence_considered": { "type": "array", "items": { "type": "string" }, "description": "Key data points that informed the decision" },
+            "risk_flags": { "type": "array", "items": { "type": "string" }, "description": "Any risk concerns, even if rules passed" },
+            "reasoning": { "type": "string", "description": "Full narrative reasoning for the decision" }
+          },
+          "required": ["decision", "invoice_summary", "policy_rules_applied", "escalation_target", "evidence_considered", "risk_flags", "reasoning"],
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}

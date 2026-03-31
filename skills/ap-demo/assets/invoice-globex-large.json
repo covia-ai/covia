@@ -1,0 +1,13 @@
+{
+  "name": "INV-2024-1215 — Globex Ltd",
+  "type": "invoice",
+  "vendor": "Globex Ltd",
+  "invoice_number": "INV-2024-1215",
+  "date": "2024-12-15",
+  "scenario": "large",
+  "content": {
+    "contentType": "text/plain",
+    "sha256": "99DD085AAA41561418B9108C5E077A89D81C13E80BEA5960EAE31F38ECF8C9D6",
+    "fileName": "invoice-globex-large.txt"
+  }
+}

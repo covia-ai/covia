@@ -92,6 +92,11 @@ public class Fields {
 	public static final StringShort CATEGORY = Strings.intern("category");
 	public static final StringShort OUTPUT_SCHEMA = Strings.intern("outputSchema");
 
+	// Asset related
+	public static final StringShort DEFINITION = Strings.intern("definition");
+	public static final StringShort METADATA = Strings.intern("metadata");
+	public static final StringShort STORED = Strings.intern("stored");
+
 	// JSON Schema
 	public static final StringShort REQUIRED = Strings.intern("required");
 	public static final StringShort DEFS = Strings.intern("$defs");

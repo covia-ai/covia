@@ -13,6 +13,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -119,6 +120,34 @@ public class AgentAdapter extends AAdapter {
 
 		AMap<AString, ACell> config = (AMap<AString, ACell>) RT.getIn(input, Fields.CONFIG);
 		ACell initialState = RT.getIn(input, AgentState.KEY_STATE);
+
+		// Resolve agent definition asset if provided
+		AString definitionRef = RT.ensureString(RT.getIn(input, Fields.DEFINITION));
+		if (definitionRef != null) {
+			Hash defHash = Hash.parse(definitionRef);
+			if (defHash == null) { job.fail("Invalid definition hash: " + definitionRef); return; }
+
+			AMap<AString, ACell> defMeta = engine.getMetaValue(defHash);
+			if (defMeta == null) { job.fail("Definition asset not found: " + definitionRef); return; }
+
+			// Extract agent config from definition metadata
+			AString defOp = RT.ensureString(RT.getIn(defMeta, Strings.intern("agent"), Fields.OPERATION));
+			AMap<AString, ACell> defConfig = RT.ensureMap(RT.getIn(defMeta, Strings.intern("agent"), Fields.CONFIG));
+
+			// Definition provides defaults; explicit params override
+			if (config == null && defOp != null) {
+				config = Maps.of(Fields.OPERATION, defOp);
+			}
+			if (initialState == null && defConfig != null) {
+				initialState = Maps.of(Strings.intern("config"), defConfig);
+			}
+
+			// Store definition hash in config for provenance
+			if (config != null) {
+				config = config.assoc(Fields.DEFINITION, definitionRef);
+			}
+		}
+
 		boolean overwrite = CVMBool.TRUE.equals(RT.getIn(input, Fields.OVERWRITE));
 
 		Users users = engine.getVenueState().users();

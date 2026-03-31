@@ -1,0 +1,70 @@
+{
+  "name": "Bob — Data Enricher",
+  "type": "agent-definition",
+  "description": "AP Data Enricher agent that autonomously validates invoices against vendor records, purchase orders, and sanctions data. Uses tools (covia_read, covia_write) and strict JSON schema output (InvoiceEnrichment).",
+  "agent": {
+    "operation": "llmagent:chat",
+    "config": {
+      "llmOperation": "langchain:openai",
+      "model": "gpt-4o",
+      "systemPrompt": "You are Bob, an AP Data Enricher agent in a Covia pipeline. You receive structured invoice data from Alice and enrich it by autonomously looking up real data.\n\nFor every invoice, you MUST:\n1. Look up the vendor record at w/vendor-records/{vendor_name} using covia_read\n2. Check sanctions status from the vendor record\n3. Look up the purchase order at w/purchase-orders/{vendor_name}/{po_number} using covia_read\n4. Check for duplicate invoices at w/invoices/{vendor_name}/{invoice_number} using covia_read\n5. Validate that invoice currency matches PO currency\n6. Check that the invoice amount is within the PO authorised amount\n7. After completing your analysis, write your full enrichment result to w/enrichments/{invoice_number} using covia_write\n\nRecord the exact workspace path you queried in each source_path field. If a lookup returns exists: false, record that — it is important evidence. Your confidence_score should reflect how many validations succeeded (1.0 = all clear, lower for each warning).",
+      "responseFormat": {
+        "name": "InvoiceEnrichment",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "invoice_number": { "type": "string" },
+            "vendor_validation": {
+              "type": "object",
+              "properties": {
+                "status": { "type": "string", "description": "ACTIVE, SUSPENDED, or UNKNOWN" },
+                "sanctions_check": { "type": "string", "description": "CLEAR, FLAGGED, or UNKNOWN" },
+                "sanctions_detail": { "type": "string", "description": "Detail if flagged, empty string otherwise" },
+                "source_path": { "type": "string", "description": "Workspace path queried for vendor record" }
+              },
+              "required": ["status", "sanctions_check", "sanctions_detail", "source_path"],
+              "additionalProperties": false
+            },
+            "po_match": {
+              "type": "object",
+              "properties": {
+                "matched": { "type": "boolean" },
+                "po_number": { "type": "string" },
+                "amount_authorised": { "type": "number", "description": "PO authorised amount, or 0 if no PO found" },
+                "within_budget": { "type": "boolean" },
+                "approver": { "type": "string", "description": "PO approver name, or empty string" },
+                "source_path": { "type": "string" }
+              },
+              "required": ["matched", "po_number", "amount_authorised", "within_budget", "approver", "source_path"],
+              "additionalProperties": false
+            },
+            "duplicate_check": {
+              "type": "object",
+              "properties": {
+                "is_duplicate": { "type": "boolean" },
+                "detail": { "type": "string" }
+              },
+              "required": ["is_duplicate", "detail"],
+              "additionalProperties": false
+            },
+            "currency_match": {
+              "type": "object",
+              "properties": {
+                "invoice_currency": { "type": "string" },
+                "po_currency": { "type": "string", "description": "PO currency, or empty string if no PO" },
+                "match": { "type": "boolean" }
+              },
+              "required": ["invoice_currency", "po_currency", "match"],
+              "additionalProperties": false
+            },
+            "confidence_score": { "type": "number", "description": "0.0 to 1.0 — reflects how many validations passed" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "source_references": { "type": "array", "items": { "type": "string" }, "description": "All workspace paths consulted during enrichment" }
+          },
+          "required": ["invoice_number", "vendor_validation", "po_match", "duplicate_check", "currency_match", "confidence_score", "warnings", "source_references"],
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}

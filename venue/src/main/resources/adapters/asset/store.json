@@ -1,0 +1,29 @@
+{
+  "name": "Store Asset",
+  "description": "Stores an immutable, content-addressed asset on the venue. The asset ID is the CAD3 hash of the metadata — storing the same metadata twice returns the same ID. Use this to persist agent definitions, documents, configurations, or any structured data as a reusable, tamper-proof asset.",
+  "dateCreated": "2026-03-31T00:00:00Z",
+  "operation": {
+    "adapter": "asset:store",
+    "toolName": "asset_store",
+    "input": {
+      "type": "object",
+      "properties": {
+        "metadata": {
+          "type": "object",
+          "description": "Arbitrary JSON metadata for the asset. The asset ID is computed from this object. Include a 'name' field for discoverability and a 'type' field for filtering (e.g. 'agent-definition', 'invoice', 'document')."
+        },
+        "content": {
+          "description": "Optional content payload stored alongside the metadata. Use for document text, structured data, or any payload that should be retrievable via asset:get but kept separate from the identifying metadata."
+        }
+      },
+      "required": ["metadata"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Content-addressed asset ID (hex hash)" },
+        "stored": { "type": "boolean" }
+      }
+    }
+  }
+}

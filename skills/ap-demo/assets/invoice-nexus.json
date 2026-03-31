@@ -1,0 +1,13 @@
+{
+  "name": "INV-2024-1300 — Nexus Dynamics",
+  "type": "invoice",
+  "vendor": "Nexus Dynamics",
+  "invoice_number": "INV-2024-1300",
+  "date": "2024-12-20",
+  "scenario": "unknown",
+  "content": {
+    "contentType": "text/plain",
+    "sha256": "CC2BD678FE85B00851C7215CCF7BCD483AA3F2EE4DBCDC2FC5DCF6FD49199E20",
+    "fileName": "invoice-nexus.txt"
+  }
+}

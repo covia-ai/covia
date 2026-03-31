@@ -8,8 +8,9 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Human-readable agent name" },
-				"config": { "type": "object", "description": "Optional framework configuration" },
-				"state": { "description": "Optional initial state for the transition function. Use this to seed transition-function-specific configuration (e.g. LLM provider, model, system prompt)." },
+				"definition": { "type": "string", "description": "Asset hash of an agent definition. If provided, the agent's config and state are extracted from the definition's metadata. Explicit config/state parameters override the definition." },
+				"config": { "type": "object", "description": "Optional framework configuration. Overrides definition if both provided." },
+				"state": { "description": "Optional initial state for the transition function. Overrides definition if both provided." },
 				"overwrite": { "type": "boolean", "description": "If true, replace an existing agent with fresh state. Default false." }
 			},
 			"required": ["agentId"]

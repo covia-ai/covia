@@ -1,0 +1,24 @@
+{
+  "name": "Get Asset",
+  "description": "Retrieves an asset by its content-addressed ID. Returns the full metadata object that was stored. Use this to inspect agent definitions, documents, or any stored asset.",
+  "dateCreated": "2026-03-31T00:00:00Z",
+  "operation": {
+    "adapter": "asset:get",
+    "toolName": "asset_get",
+    "input": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Asset ID (hex hash from asset:store)" }
+      },
+      "required": ["id"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Asset ID (confirmed)" },
+        "metadata": { "type": "object", "description": "The stored metadata object" },
+        "content": { "description": "Content payload, if one was stored with the asset" }
+      }
+    }
+  }
+}

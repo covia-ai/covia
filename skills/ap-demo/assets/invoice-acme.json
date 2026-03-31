@@ -1,0 +1,13 @@
+{
+  "name": "INV-2024-0892 — Acme Corp",
+  "type": "invoice",
+  "vendor": "Acme Corp",
+  "invoice_number": "INV-2024-0892",
+  "date": "2024-11-15",
+  "scenario": "default",
+  "content": {
+    "contentType": "text/plain",
+    "sha256": "B2B28EA9565184A039B81529BC4F1EC67A0A0377C2E7E8C4853FC1DF3AACB18D",
+    "fileName": "invoice-acme.txt"
+  }
+}
