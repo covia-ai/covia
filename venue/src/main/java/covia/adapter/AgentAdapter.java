@@ -192,9 +192,10 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null) return;
 
 		// Parse wait: false/absent = async, true = indefinite, integer = timeout ms
+		// Accept string "true" for LLM compatibility (agents pass strings, not booleans)
 		ACell waitCell = RT.getIn(input, Fields.WAIT);
 		long waitMs = 0;
-		if (CVMBool.TRUE.equals(waitCell)) waitMs = -1;
+		if (CVMBool.TRUE.equals(waitCell) || Strings.create("true").equals(waitCell)) waitMs = -1;
 		else if (waitCell instanceof CVMLong l && l.longValue() > 0) waitMs = l.longValue();
 
 		// Add task to agent's lattice (atomic)
