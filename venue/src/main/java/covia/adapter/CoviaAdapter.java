@@ -428,7 +428,7 @@ public class CoviaAdapter extends AAdapter {
 	 * into the value with type-aware deep navigation. This handles vector
 	 * indexing (e.g. {@code "w/events/0"}) that pure lattice resolution cannot.
 	 */
-	private static ACell readPath(ALatticeCursor<ACell> cursor, ACell[] jsonKeys) {
+	static ACell readPath(ALatticeCursor<ACell> cursor, ACell[] jsonKeys) {
 		// Try full lattice resolution first (works for pure-map paths like
 		// g/agent/state/counter where every level is a map).
 		ACell[] resolved = cursor.getLattice().resolvePath(jsonKeys);

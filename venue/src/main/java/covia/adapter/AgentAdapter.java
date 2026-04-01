@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import covia.grid.Asset;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
@@ -124,11 +125,10 @@ public class AgentAdapter extends AAdapter {
 		// Resolve agent definition asset if provided
 		AString definitionRef = RT.ensureString(RT.getIn(input, Fields.DEFINITION));
 		if (definitionRef != null) {
-			Hash defHash = Hash.parse(definitionRef);
-			if (defHash == null) { job.fail("Invalid definition hash: " + definitionRef); return; }
+			Asset defAsset = engine.resolveAsset(definitionRef, ctx);
+			if (defAsset == null) { job.fail("Definition asset not found: " + definitionRef); return; }
 
-			AMap<AString, ACell> defMeta = engine.getMetaValue(defHash);
-			if (defMeta == null) { job.fail("Definition asset not found: " + definitionRef); return; }
+			AMap<AString, ACell> defMeta = defAsset.meta();
 
 			// Extract agent config from definition metadata
 			AString defOp = RT.ensureString(RT.getIn(defMeta, Strings.intern("agent"), Fields.OPERATION));
@@ -142,9 +142,10 @@ public class AgentAdapter extends AAdapter {
 				initialState = Maps.of(Strings.intern("config"), defConfig);
 			}
 
-			// Store definition hash in config for provenance
+			// Store resolved asset ID in config for provenance
 			if (config != null) {
-				config = config.assoc(Fields.DEFINITION, definitionRef);
+				AString defID = Strings.create(defAsset.getID().toHexString());
+				config = config.assoc(Fields.DEFINITION, defID);
 			}
 		}
 

@@ -95,6 +95,7 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final AString K_TOOLS           = Strings.intern("tools");
 	private static final AString K_DEFAULT_TOOLS   = Strings.intern("defaultTools");
 	private static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
+	private static final AString K_CONTEXT        = Strings.intern("context");
 
 	// History / message field keys
 	private static final AString K_HISTORY    = Strings.intern("history");
@@ -174,6 +175,10 @@ public class LLMAgentAdapter extends AAdapter {
 		(ACell) Strings.create("agent:create"),
 		(ACell) Strings.create("agent:message"),
 		(ACell) Strings.create("agent:request"),
+		(ACell) Strings.create("asset:store"),
+		(ACell) Strings.create("asset:get"),
+		(ACell) Strings.create("asset:list"),
+		(ACell) Strings.create("grid:run"),
 		(ACell) Strings.create("covia:read"),
 		(ACell) Strings.create("covia:write"),
 		(ACell) Strings.create("covia:delete"),
@@ -267,6 +272,20 @@ public class LLMAgentAdapter extends AAdapter {
 			history = (AVector<ACell>) Vectors.of(
 				(ACell) Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, sysContent)
 			).concat(history);
+		}
+
+		// Context loading — resolve state.config.context and state.context
+		// entries as system messages. See venue/docs/CONTEXT.md for design.
+		ContextLoader contextLoader = new ContextLoader(engine);
+		if (config != null) {
+			AVector<ACell> configContext = RT.ensureVector(config.get(K_CONTEXT));
+			AVector<ACell> contextMsgs = contextLoader.resolve(configContext, ctx);
+			history = (AVector<ACell>) history.concat(contextMsgs);
+		}
+		AVector<ACell> stateContext = RT.ensureVector(RT.getIn(state, K_CONTEXT));
+		if (stateContext != null) {
+			AVector<ACell> contextMsgs = contextLoader.resolve(stateContext, ctx);
+			history = (AVector<ACell>) history.concat(contextMsgs);
 		}
 
 		// Task context is built dynamically per tool-loop iteration (not baked into

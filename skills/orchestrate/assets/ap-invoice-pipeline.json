@@ -1,0 +1,56 @@
+{
+  "name": "AP Invoice Pipeline",
+  "description": "Three-agent AP pipeline: Alice extracts structured invoice data, Bob enriches with vendor/PO validation, Carol applies approval policy rules. Requires agents Alice, Bob, and Carol to be created via /ap-demo setup.",
+  "type": "orchestration",
+  "operation": {
+    "adapter": "orchestrator",
+    "input": {
+      "type": "object",
+      "properties": {
+        "invoice_text": {
+          "type": "string",
+          "description": "Raw invoice text to process through the pipeline"
+        }
+      },
+      "required": ["invoice_text"]
+    },
+    "steps": [
+      {
+        "op": "agent:request",
+        "input": {
+          "agentId": ["const", "Alice"],
+          "input": ["input"],
+          "wait": ["const", true]
+        }
+      },
+      {
+        "op": "agent:request",
+        "input": {
+          "agentId": ["const", "Bob"],
+          "input": {
+            "source_agent": ["const", "Alice"],
+            "extraction": [0, "output"]
+          },
+          "wait": ["const", true]
+        }
+      },
+      {
+        "op": "agent:request",
+        "input": {
+          "agentId": ["const", "Carol"],
+          "input": {
+            "source_pipeline": ["const", "Alice -> Bob -> Carol"],
+            "extraction": [0, "output"],
+            "enrichment": [1, "output"]
+          },
+          "wait": ["const", true]
+        }
+      }
+    ],
+    "result": {
+      "extraction": [0, "output"],
+      "enrichment": [1, "output"],
+      "decision": [2, "output"]
+    }
+  }
+}

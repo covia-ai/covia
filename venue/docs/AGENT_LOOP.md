@@ -286,7 +286,26 @@ not tracked — they are invisible to the agent.
 This is the mechanism for delegated work, long-running computations, and HITL
 requests (Phase D). The LLM decides what to fire-and-forget vs what to await.
 
-### 3.5 Default Tool Palette
+### 3.5 Context Loading
+
+Level 2 resolves **context entries** declared in the agent's configuration and
+state, injecting them as system messages before the conversation history. This
+pre-loads reference material (policy documents, data schemas, procedures) without
+tool calls or history pollution.
+
+Context entries can be:
+- **Literal text** — inline instructions
+- **Workspace references** — paths like `w/docs/ap-rules` resolved via the user's namespace
+- **Asset references** — hashes, `/a/` paths, `/o/` names, DID URLs resolved via `engine.resolveAsset()`
+- **Grid operation results** — the output of any grid operation, resolved at load time
+
+Two layers: `state.config.context` (stable baseline, loaded every run) and
+`state.context` (dynamic, mutable between runs). Config context loads first.
+
+See [CONTEXT.md](./CONTEXT.md) for the full design: entry format, resolution
+rules, load order, size considerations, and phasing.
+
+### 3.6 Default Tool Palette
 
 Level 2 provides a set of tools to the LLM during the tool call loop. These are
 the agent's interface to the outside world. Each tool maps directly to an MCP
@@ -372,7 +391,7 @@ The agent creator controls the tool set:
 - External MCP tools are added via agent configuration
 - Capability-gated tools appear only when the agent has the required `caps`
 
-### 3.6 Invocation
+### 3.7 Invocation
 
 Each level invokes the next as a grid operation — same dispatch path as any other
 operation in the venue. This means any level can be:
@@ -385,7 +404,7 @@ The level 2 operation is specified in the agent's `config.operation` field
 (default set at creation, overridable per-run). The level 3 operation is
 specified by the agent creator in `state.config.llmOperation`.
 
-### 3.7 Credential Access
+### 3.8 Credential Access
 
 Operations that need API keys or other secrets resolve them from two sources,
 in order:
