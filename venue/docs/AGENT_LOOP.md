@@ -64,7 +64,7 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `pending` | index | `Index<Blob, ACell>` of outbound Job IDs the agent is waiting on. Ordered by Job ID. |
 | `inbox` | vector | Ephemeral messages awaiting processing. Drained on successful run. |
 | `timeline` | vector | Append-only log of transition records (§2.3). Grows with each successful agent run. Timestamped for audit. |
-| `caps` | map | Capability sets (placeholder — Phase C enforcement) |
+| `caps` | map | Capability attenuations — UCAN scoping for agent tool calls. See [UCAN.md §5.4](./UCAN.md) for Model A (user-scoped) vs Model B (independent DID). |
 | `error` | string? | Last error message, or null. Set when the transition function fails. |
 
 All fields are framework-managed except `state`, which is owned by the transition
@@ -363,13 +363,20 @@ Type-aware navigation resolves maps by string key and vectors by parsed index.
 encoding exceeds the limit, returns `{exists: true, truncated: true, size: N}`
 instead — use `covia:list` to inspect or `covia:slice` to page.
 
-#### Capability-gated tools (Phase C)
+#### Capability-gated tools (Phase C2)
 
-These require explicit capabilities in the agent's `caps` field. Available
-once UCAN capability enforcement is implemented. The current workspace tools
-(`covia:write`, `covia:delete`, `covia:append`) restrict to `/w/` and `/o/`
-namespaces — UCAN enforcement will replace this static check with per-agent
-capability delegation.
+These require explicit capabilities in the agent's `caps` field. See
+[UCAN.md §5.4](./UCAN.md) for the two agent identity models:
+
+- **Model A (user-scoped):** Agent's `caps` declares attenuations. The venue issues
+  a scoped UCAN at creation. Tool calls go through a restricted RequestContext.
+  Example: Carol can write `w/decisions/` but not `w/vendor-records/`.
+- **Model B (independent DID):** Agent has its own keypair. It receives delegations
+  from users and presents proof chains on tool calls.
+
+The current workspace tools (`covia:write`, `covia:delete`, `covia:append`)
+restrict to `/w/` and `/o/` namespaces — UCAN enforcement will replace
+this static check with per-agent capability delegation.
 
 | Tool | Caps required | Description |
 |------|---------------|-------------|

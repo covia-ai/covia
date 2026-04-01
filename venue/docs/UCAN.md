@@ -357,23 +357,171 @@ Venue:
 | Grid operation invoke | `{ with: "/o/<op>", can: "invoke" }` |
 | Sub-delegation | `{ with: "<path>", can: "ucan/delegate" }` |
 
-### 5.4 Agent Proofs
+### 5.4 Agent Identity Models
 
-When an agent runs, its transition function (level 2) invokes tools on
-behalf of the user. The agent framework attaches the user's proofs to
-tool calls automatically — the agent inherits the capabilities of the
-user who triggered it.
+Agents need capabilities to act in the world. The critical question is
+**identity** — does the agent act as the user, or as itself? Covia supports
+both models, and they compose naturally via UCAN delegation.
 
-For agent-to-agent delegation, the agent can issue its own UCANs
-(signed with the agent's key, if the agent has one) with the user's
-token in `prf`. This enables scoped delegation without sharing the
-user's full capabilities.
+#### Model A: User-Scoped Agent (Attenuated Delegation)
+
+The agent has **no independent identity**. It acts under the user's DID with
+attenuated capabilities. The user creates the agent and declares what it
+can do — the venue issues a scoped UCAN at creation time.
+
+```
+User DID: did:key:zAlice...
+Agent ID: Carol
+
+Delegation at creation:
+  iss: did:key:zAlice
+  aud: did:key:zAlice.../g/Carol       ; agent-scoped audience (DID URL)
+  att: [
+    { with: "did:key:zAlice.../w/decisions/", can: "crud/write" },
+    { with: "did:key:zAlice.../w/enrichments/", can: "crud/read" }
+  ]
+  prf: []                               ; root grant from resource owner
+```
+
+When Carol's tool calls execute, the framework wraps her RequestContext
+with only this token. Carol can write to `w/decisions/` but not
+`w/vendor-records/`. She can read enrichments but not secrets.
+
+**Identity:** `did:key:zAlice.../g/Carol` (a DID URL under Alice's namespace)
+**Keys:** None — the venue signs on Alice's behalf
+**Best for:** Pipeline agents, task workers, scoped automations — anything that
+operates within one user's namespace with restricted permissions.
+
+**How it works at runtime:**
+
+1. `agent:create` with `caps` field declares the agent's attenuations
+2. Venue issues a UCAN: issuer = user DID, audience = agent DID URL
+3. Token stored in agent record (alongside config, state, etc.)
+4. On each run, level 2 creates a restricted RequestContext with only the agent's token
+5. Tool calls go through CoviaAdapter which verifies the token against the requested path/ability
+6. Writes outside the allowed scope are denied
+
+**Example — AP Demo enforcement:**
+
+| Agent | Allowed | Denied |
+|-------|---------|--------|
+| Alice | (no tools needed — extraction only) | — |
+| Bob | `crud/read` on `w/vendor-records/`, `w/purchase-orders/`, `w/invoices/`; `crud/write` on `w/enrichments/` | Write to `w/vendor-records/`, `w/decisions/` |
+| Carol | `crud/read` on `w/enrichments/`; `crud/write` on `w/decisions/` | Write to `w/enrichments/`, read secrets |
+| Dave | `crud/read` on `w/`; `invoke` on orchestration | Write to `w/` (read-only manager) |
+
+#### Model B: Independent Agent (Own DID)
+
+The agent has its own **cryptographic identity** — its own Ed25519 keypair and
+DID. It can sign UCANs, receive delegations from multiple users, and act
+autonomously across the grid.
+
+```
+Agent DID: did:key:zCarolBot...
+
+Delegation from Alice:
+  iss: did:key:zAlice
+  aud: did:key:zCarolBot
+  att: [{ with: "did:key:zAlice.../w/decisions/", can: "crud/write" }]
+  prf: []
+
+Delegation from Bob's org:
+  iss: did:key:zBobOrg
+  aud: did:key:zCarolBot
+  att: [{ with: "did:key:zBobOrg.../w/invoices/", can: "crud/read" }]
+  prf: []
+```
+
+Carol can now operate across multiple users' namespaces, presenting
+different proof chains depending on whose data she's accessing.
+
+**Identity:** `did:key:zCarolBot...` (independent DID)
+**Keys:** Ed25519 keypair generated at agent creation, stored in the venue's key store
+**Best for:** Autonomous agents, cross-organisation workflows, agents that serve
+multiple users, agents that need to issue their own sub-delegations.
+
+**How it works at runtime:**
+
+1. `agent:create` with `identity: true` generates a keypair and DID for the agent
+2. Agent's DID is recorded in the agent record and discoverable via `agent:query`
+3. Users delegate capabilities to the agent's DID via `ucan:issue`
+4. Agent stores received UCANs (in `state` or a dedicated token store)
+5. On each run, level 2 creates a RequestContext with the agent's DID and attached proofs
+6. When accessing cross-user data, the agent presents the relevant proof chain
+7. The agent can sub-delegate to other agents by signing its own UCANs
+
+#### Composing Both Models
+
+The models compose. A user-scoped agent (Model A) can be upgraded to
+independent (Model B) by generating a keypair. An independent agent
+can be constrained by the delegations it receives — it can only do
+what someone has explicitly granted.
+
+```
+                    Alice (user)
+                   /           \
+            [Model A]        [Model A]
+           Carol (scoped)    Bob (scoped)
+           w/decisions/*     w/enrichments/*
+                |
+          [Model B upgrade]
+           Carol gets own DID
+                |
+           Carol can now receive
+           delegations from other users
+```
+
+A practical pattern: start with Model A for simplicity and predictable
+scoping. Upgrade to Model B when the agent needs cross-user access or
+must act as a principal in federated workflows.
+
+#### Agent-to-Agent Delegation
+
+With Model B, agents can delegate to each other:
+
+```
+Alice delegates to Dave (Model B):
+  iss: did:key:zAlice
+  aud: did:key:zDaveBot
+  att: [{ with: "did:key:zAlice.../w/", can: "crud" }]
+
+Dave sub-delegates to Carol (Model B):
+  iss: did:key:zDaveBot
+  aud: did:key:zCarolBot
+  att: [{ with: "did:key:zAlice.../w/decisions/", can: "crud/write" }]
+  prf: [<alice-to-dave-token>]
+```
+
+Carol can write decisions in Alice's namespace, via a delegation chain
+that flows from Alice through Dave. Dave's sub-delegation is attenuated —
+Carol gets write on `w/decisions/` only, not the full `w/` that Dave has.
+
+This is the standard UCAN delegation chain model applied to agents.
+
+### 5.5 Enforcement in the Tool Call Loop
+
+When level 2 dispatches a tool call during the agent's run, it constructs
+a RequestContext for the tool invocation. The context determines enforcement:
+
+| Agent Model | RequestContext | Enforcement |
+|-------------|---------------|-------------|
+| No caps (current default) | Caller's identity, no restrictions | Full access to own namespace |
+| Model A (attenuated) | Caller's identity + agent's scoped UCAN | CoviaAdapter checks UCAN before writes |
+| Model B (independent) | Agent's own DID + presented proof chain | Full UCAN verification on every operation |
+
+The enforcement point is the same in all cases — CoviaAdapter's
+`verifyProofs()` method. The difference is what's in the RequestContext.
+
+For Model A, the key change is that the agent's tool calls go through a
+**restricted RequestContext** instead of inheriting the user's full access.
+The venue becomes the enforcement mechanism — it issued the scoped token
+and it verifies it on every tool call.
 
 ---
 
 ## 6. Implementation Phases
 
-### Phase C1: Signed UCAN Tokens
+### Phase C1: Signed UCAN Tokens ✓
 
 - `Capability.covers()` in convex-core for attenuation matching
 - `ucan:issue` operation creates and signs tokens
@@ -386,14 +534,32 @@ user's full capabilities.
 
 - Proof chain walking (`prf` field with embedded parent tokens)
 - Attenuation validation at each chain link
-- Agents can sub-delegate narrower capabilities
-- Revocation support
+- Revocation support (signed records referencing UCAN hash)
+
+### Phase C2a: Agent Capability Scoping (Model A)
+
+- `caps` field in agent create specifies attenuations
+- Venue issues scoped UCAN at agent creation (issuer = user, audience = agent DID URL)
+- Token stored in agent record
+- Level 2 wraps tool call RequestContext with agent's token
+- CoviaAdapter enforces write/read restrictions via token verification
+- Own-namespace writes become capability-gated (not just namespace-prefixed)
+
+### Phase C2b: Independent Agent Identity (Model B)
+
+- `identity: true` on agent create generates Ed25519 keypair + DID
+- Agent DID stored in record, discoverable via `agent:query`
+- Agent can receive delegations from any user
+- Level 2 uses agent's DID in RequestContext for tool calls
+- Agent can sign its own UCANs for sub-delegation
+- Agent-to-agent delegation chains
 
 ### Phase C3: Federation
 
 - Proof chains travel with job submissions across venue boundaries
 - Each venue verifies independently using DID→key resolution
 - Cross-venue capability negotiation
+- Independent agents can operate across venues with portable identity
 
 ---
 
