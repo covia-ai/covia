@@ -96,6 +96,7 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final AString K_DEFAULT_TOOLS   = Strings.intern("defaultTools");
 	private static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
 	private static final AString K_CONTEXT        = Strings.intern("context");
+	private static final AString K_CAPS           = Strings.intern("caps");
 
 	// History / message field keys
 	private static final AString K_HISTORY    = Strings.intern("history");
@@ -336,8 +337,11 @@ public class LLMAgentAdapter extends AAdapter {
 			}
 		}
 
+		// Read agent capability attenuations (null = unrestricted)
+		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
+
 		// Create tool context for built-in tool execution
-		ToolContext toolCtx = new ToolContext(agentId, ctx, tasks, pending, configToolMap);
+		ToolContext toolCtx = new ToolContext(agentId, ctx, tasks, pending, configToolMap, caps);
 
 		// Invoke level 3 with tool call loop — returns all messages to append
 		AVector<ACell> newMessages = invokeWithToolLoop(
@@ -510,12 +514,19 @@ public class LLMAgentAdapter extends AAdapter {
 	 * the tool message content.
 	 */
 	private ACell executeToolCall(String toolName, ACell input, RequestContext ctx, ToolContext toolCtx) {
-		// Built-in task tools (must mutate ToolContext directly)
+		// Built-in task tools (must mutate ToolContext directly) — always allowed
 		if (TOOL_COMPLETE_TASK.equals(toolName)) return handleCompleteTask(input, toolCtx);
 		if (TOOL_FAIL_TASK.equals(toolName)) return handleFailTask(input, toolCtx);
 
-		// Config tools — tool name maps to a resolved operation
+		// Resolve the actual operation name for capability checking
 		AString operation = toolCtx.configToolMap.get(toolName);
+		String opName = (operation != null) ? operation.toString() : toolName;
+
+		// Check agent capabilities before dispatch
+		String denied = CapabilityChecker.check(toolCtx.caps, opName, input);
+		if (denied != null) return Strings.create("Error: " + denied);
+
+		// Config tools — tool name maps to a resolved operation
 		if (operation != null) {
 			return handleConfigTool(operation, input, ctx);
 		}
@@ -806,15 +817,17 @@ public class LLMAgentAdapter extends AAdapter {
 		final AVector<ACell> tasks;
 		final AVector<ACell> pending;
 		final Map<String, AString> configToolMap;
+		final AVector<ACell> caps;
 		AMap<AString, ACell> taskResults;
 
 		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
-				Map<String, AString> configToolMap) {
+				Map<String, AString> configToolMap, AVector<ACell> caps) {
 			this.agentId = agentId;
 			this.ctx = ctx;
 			this.tasks = tasks;
 			this.pending = pending;
 			this.configToolMap = (configToolMap != null) ? configToolMap : Map.of();
+			this.caps = caps;
 		}
 
 		void recordTaskResult(AString jobId, AMap<AString, ACell> result) {

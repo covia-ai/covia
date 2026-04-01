@@ -874,7 +874,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task1"),
 			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "task2")
 		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null);
 
 		assertTrue(LLMAgentAdapter.isKnownTask(Strings.create("aaa"), ctx));
 		assertTrue(LLMAgentAdapter.isKnownTask(Strings.create("bbb"), ctx));
@@ -885,20 +885,20 @@ public class LLMAgentAdapterTest {
 		AVector<ACell> tasks = Vectors.of(
 			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task1")
 		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null);
 
 		assertFalse(LLMAgentAdapter.isKnownTask(Strings.create("zzz"), ctx));
 	}
 
 	@Test
 	public void testIsKnownTaskNullTasks() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		assertFalse(LLMAgentAdapter.isKnownTask(Strings.create("aaa"), ctx));
 	}
 
 	@Test
 	public void testIsKnownTaskEmptyTasks() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, Vectors.empty(), null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, Vectors.empty(), null, null, null);
 		assertFalse(LLMAgentAdapter.isKnownTask(Strings.create("aaa"), ctx));
 	}
 
@@ -906,7 +906,7 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testIsAlreadyCompletedTrue() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		ctx.recordTaskResult(Strings.create("aaa"),
 			Maps.of(Fields.STATUS, Status.COMPLETE));
 
@@ -915,7 +915,7 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testIsAlreadyCompletedFalse() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		ctx.recordTaskResult(Strings.create("aaa"),
 			Maps.of(Fields.STATUS, Status.COMPLETE));
 
@@ -924,7 +924,7 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testIsAlreadyCompletedNullResults() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		assertFalse(LLMAgentAdapter.isAlreadyCompleted(Strings.create("aaa"), ctx));
 	}
 
@@ -932,13 +932,13 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testBuildOutstandingTaskMessageNoTasks() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		assertNull(LLMAgentAdapter.buildOutstandingTaskMessage(ctx));
 	}
 
 	@Test
 	public void testBuildOutstandingTaskMessageEmptyTasks() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, Vectors.empty(), null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, Vectors.empty(), null, null, null);
 		assertNull(LLMAgentAdapter.buildOutstandingTaskMessage(ctx));
 	}
 
@@ -947,7 +947,7 @@ public class LLMAgentAdapterTest {
 		AVector<ACell> tasks = Vectors.of(
 			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task1")
 		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null);
 		ctx.recordTaskResult(Strings.create("aaa"),
 			Maps.of(Fields.STATUS, Status.COMPLETE));
 
@@ -960,7 +960,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "done-task"),
 			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "pending-task")
 		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null);
 		ctx.recordTaskResult(Strings.create("aaa"),
 			Maps.of(Fields.STATUS, Status.COMPLETE));
 
@@ -980,7 +980,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task-one"),
 			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "task-two")
 		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null);
 
 		AMap<AString, ACell> msg = LLMAgentAdapter.buildOutstandingTaskMessage(ctx);
 		assertNotNull(msg);
@@ -994,7 +994,7 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testToolContextRecordTaskResult() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		assertNull(ctx.taskResults);
 
 		ctx.recordTaskResult(Strings.create("job1"),
