@@ -192,12 +192,7 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
 
-		// Parse wait: false/absent = async, true = indefinite, integer = timeout ms
-		// Accept string "true" for LLM compatibility (agents pass strings, not booleans)
-		ACell waitCell = RT.getIn(input, Fields.WAIT);
-		long waitMs = 0;
-		if (CVMBool.TRUE.equals(waitCell) || Strings.create("true").equals(waitCell)) waitMs = -1;
-		else if (waitCell instanceof CVMLong l && l.longValue() > 0) waitMs = l.longValue();
+		long waitMs = parseWaitMs(input);
 
 		// Add task to agent's lattice (atomic)
 		Blob taskId = generateTaskId();
@@ -207,31 +202,18 @@ public class AgentAdapter extends AAdapter {
 		// Wake agent — returns the run cycle's completion future
 		CompletableFuture<ACell> completion = wakeAgent(agentId, ctx);
 
-		job.setStatus(Status.STARTED);
 		AString taskIdHex = taskIdHex(taskId);
-
-		if (waitMs != 0 && completion != null) {
-			try {
-				ACell cycleResult = (waitMs < 0)
-					? completion.join()
-					: completion.get(waitMs, TimeUnit.MILLISECONDS);
-				ACell taskResult = RT.getIn(cycleResult, Fields.TASK_RESULTS, taskIdHex);
-				if (taskResult != null) {
-					job.completeWith(Maps.of(
-						Fields.ID, taskIdHex,
-						Fields.STATUS, RT.getIn(taskResult, Fields.STATUS),
-						Fields.OUTPUT, RT.getIn(taskResult, Fields.OUTPUT)));
-				} else {
-					job.completeWith(Maps.of(Fields.ID, taskIdHex, Fields.STATUS, PENDING));
-				}
-			} catch (TimeoutException e) {
-				job.completeWith(Maps.of(Fields.ID, taskIdHex, Fields.STATUS, PENDING));
-			} catch (Exception e) {
-				job.completeWith(Maps.of(Fields.ID, taskIdHex, Fields.STATUS, PENDING));
+		ACell pending = Maps.of(Fields.ID, taskIdHex, Fields.STATUS, PENDING);
+		awaitRunCompletion(job, completion, waitMs, pending, cycleResult -> {
+			ACell taskResult = RT.getIn(cycleResult, Fields.TASK_RESULTS, taskIdHex);
+			if (taskResult != null) {
+				return Maps.of(
+					Fields.ID, taskIdHex,
+					Fields.STATUS, RT.getIn(taskResult, Fields.STATUS),
+					Fields.OUTPUT, RT.getIn(taskResult, Fields.OUTPUT));
 			}
-		} else {
-			job.completeWith(Maps.of(Fields.ID, taskIdHex, Fields.STATUS, PENDING));
-		}
+			return pending;
+		});
 	}
 
 	private void handleMessage(Job job, ACell input, RequestContext ctx) {
@@ -271,11 +253,12 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		job.setStatus(Status.STARTED);
-		completion.whenComplete((result, ex) -> {
-			if (ex != null) job.fail(ex.getMessage());
-			else job.completeWith(result);
-		});
+		// Default wait=true for backward compat (trigger traditionally blocks)
+		long waitMs = parseWaitMs(input);
+		if (waitMs == 0 && RT.getIn(input, Fields.WAIT) == null) waitMs = -1;
+
+		ACell running = Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.RUNNING);
+		awaitRunCompletion(job, completion, waitMs, running, result -> result);
 	}
 
 	private void handleQuery(Job job, ACell input, RequestContext ctx) {
@@ -470,6 +453,52 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	// ========== Wake and run management ==========
+
+	/**
+	 * Parses the {@code wait} parameter from tool input.
+	 * <ul>
+	 *   <li>{@code false} or absent → 0 (async, return immediately)</li>
+	 *   <li>{@code true} or {@code "true"} → -1 (block indefinitely)</li>
+	 *   <li>positive integer → timeout in milliseconds</li>
+	 * </ul>
+	 */
+	static long parseWaitMs(ACell input) {
+		ACell waitCell = RT.getIn(input, Fields.WAIT);
+		if (CVMBool.TRUE.equals(waitCell) || Strings.create("true").equals(waitCell)) return -1;
+		if (waitCell instanceof CVMLong l && l.longValue() > 0) return l.longValue();
+		return 0;
+	}
+
+	/**
+	 * Awaits a run cycle completion future according to the wait policy, then
+	 * completes the job. If {@code waitMs == 0} or {@code completion == null},
+	 * completes immediately with the {@code immediateResult}. Otherwise blocks
+	 * for the specified duration and calls {@code resultMapper} on the cycle result.
+	 *
+	 * @param job The job to complete
+	 * @param completion Run cycle future (may be null)
+	 * @param waitMs Wait policy: 0=async, -1=indefinite, >0=timeout ms
+	 * @param immediateResult Result to return when not waiting
+	 * @param resultMapper Maps the cycle result to a job result when waiting completes
+	 */
+	void awaitRunCompletion(Job job, CompletableFuture<ACell> completion, long waitMs,
+			ACell immediateResult, java.util.function.Function<ACell, ACell> resultMapper) {
+		job.setStatus(Status.STARTED);
+		if (waitMs == 0 || completion == null) {
+			job.completeWith(immediateResult);
+			return;
+		}
+		try {
+			ACell cycleResult = (waitMs < 0)
+				? completion.join()
+				: completion.get(waitMs, TimeUnit.MILLISECONDS);
+			job.completeWith(resultMapper.apply(cycleResult));
+		} catch (TimeoutException e) {
+			job.completeWith(immediateResult);
+		} catch (Exception e) {
+			job.completeWith(immediateResult);
+		}
+	}
 
 	/**
 	 * Wakes an agent — sets wake time to now, then tries to start the run loop.

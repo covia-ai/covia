@@ -1,13 +1,14 @@
 {
 	"name": "Trigger Agent",
-	"description": "Triggers the agent's transition loop and waits for completion. If the agent is sleeping, starts the run loop and completes when the loop finishes — even with no pending work, since the transition function may act proactively. If already running, waits for the current run to complete. The transition operation is always taken from the agent's config.operation.",
+	"description": "Triggers the agent's transition loop. By default waits for the run cycle to complete. Set wait=false to return immediately while the agent runs in the background, or wait=<ms> for a timeout. If the agent is sleeping, starts the run loop — even with no pending work, since the transition function may act proactively. If already running, returns the existing run's future. The transition operation is always taken from the agent's config.operation.",
 	"dateCreated": "2026-03-06T00:00:00Z",
 	"operation": {
 		"adapter": "agent:trigger",
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Agent name to trigger" }
+				"agentId": { "type": "string", "description": "Agent name to trigger" },
+				"wait": { "description": "Wait policy: true (default, block until done), false (return immediately), or integer milliseconds (timeout)" }
 			},
 			"required": ["agentId"]
 		},
@@ -15,8 +16,8 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string" },
-				"status": { "type": "string", "description": "Agent status after run (e.g. 'SLEEPING')" },
-				"result": { "description": "Result returned by the transition function" }
+				"status": { "type": "string", "description": "Agent status: SLEEPING (completed) or RUNNING (if wait=false or timed out)" },
+				"result": { "description": "Result returned by the transition function (only when waited)" }
 			}
 		}
 	}
