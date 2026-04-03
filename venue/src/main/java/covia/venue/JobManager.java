@@ -17,6 +17,8 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
+import convex.core.data.prim.CVMBool;
+import convex.core.json.schema.JsonSchema;
 import covia.adapter.AAdapter;
 import covia.adapter.CapabilityChecker;
 import covia.api.Fields;
@@ -139,6 +141,17 @@ public class JobManager {
 			}
 		}
 
+		// Validate input against operation schema when strict mode is enabled
+		if (CVMBool.TRUE.equals(RT.getIn(meta, Fields.OPERATION, K_STRICT))) {
+			AMap<AString, ACell> inputSchema = getMap(RT.getIn(meta, Fields.OPERATION, Fields.INPUT));
+			if (inputSchema != null && !inputSchema.isEmpty()) {
+				String schemaErr = JsonSchema.validate(inputSchema, input);
+				if (schemaErr != null) {
+					throw new IllegalArgumentException("Input schema violation: " + schemaErr);
+				}
+			}
+		}
+
 		AAdapter adapter = engine.getAdapter(adapterName);
 		if (adapter == null) {
 			throw new IllegalStateException("Adapter not available: " + adapterName);
@@ -148,6 +161,13 @@ public class JobManager {
 		Job job = submitJob(opID, meta, input, callerDID);
 		adapter.invoke(job, ctx, meta, input);
 		return job;
+	}
+
+	private static final AString K_STRICT = Strings.intern("strict");
+
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> getMap(ACell cell) {
+		return (cell instanceof AMap) ? (AMap<AString, ACell>) cell : null;
 	}
 
 	// ========== Secret Redaction ==========

@@ -7,6 +7,7 @@ import java.util.concurrent.CompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.core.json.schema.JsonSchema;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -465,7 +466,25 @@ public class LLMAgentAdapter extends AAdapter {
 			boolean hasToolCalls = (toolCallsCell instanceof AVector) && ((AVector<ACell>) toolCallsCell).count() > 0;
 
 			if (!hasToolCalls) {
-				// Text-only response — append and we're done
+				// Text-only response — validate against responseFormat schema if present
+				if (config != null) {
+					AMap<AString, ACell> rfSchema = getResponseFormatSchema(config);
+					if (rfSchema != null) {
+						// Parse the content as JSON and validate against the schema
+						AString content = RT.ensureString(RT.getIn(l3Result, K_CONTENT));
+						if (content != null) {
+							try {
+								ACell parsed = convex.core.util.JSON.parse(content.toString());
+								String schemaErr = JsonSchema.validate(rfSchema, parsed);
+								if (schemaErr != null) {
+									log.warn("LLM response schema violation: {}", schemaErr);
+								}
+							} catch (Exception e) {
+								log.warn("LLM response not valid JSON despite responseFormat: {}", e.getMessage());
+							}
+						}
+					}
+				}
 				newMessages = newMessages.conj(l3Result);
 				return newMessages;
 			}
@@ -578,7 +597,8 @@ public class LLMAgentAdapter extends AAdapter {
 		toolCtx.recordTaskResult(jobIdStr,
 			Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, output));
 
-		return Maps.of(Fields.STATUS, Status.COMPLETE);
+		return Maps.of(Fields.JOB_ID, jobIdStr, Fields.STATUS, Status.COMPLETE,
+			Fields.OUTPUT, output != null ? output : Maps.empty());
 	}
 
 	/**
@@ -599,7 +619,8 @@ public class LLMAgentAdapter extends AAdapter {
 		toolCtx.recordTaskResult(jobIdStr,
 			Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, Strings.create(reasonStr)));
 
-		return Maps.of(Fields.STATUS, Status.FAILED);
+		return Maps.of(Fields.JOB_ID, jobIdStr, Fields.STATUS, Status.FAILED,
+			Fields.ERROR, Strings.create(reasonStr));
 	}
 
 	/**
@@ -831,6 +852,20 @@ public class LLMAgentAdapter extends AAdapter {
 		ACell h = RT.getIn(state, K_HISTORY);
 		if (h instanceof AVector) return (AVector<ACell>) h;
 		return Vectors.empty();
+	}
+
+	/**
+	 * Extracts the JSON Schema from a responseFormat config, if present.
+	 * responseFormat can be: "json" (no schema), "text" (no schema), or {name, schema} (has schema).
+	 */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> getResponseFormatSchema(AMap<AString, ACell> config) {
+		ACell rf = config.get(K_RESPONSE_FORMAT);
+		if (rf instanceof AMap) {
+			ACell schema = ((AMap<AString, ACell>) rf).get(Strings.intern("schema"));
+			if (schema instanceof AMap) return (AMap<AString, ACell>) schema;
+		}
+		return null;
 	}
 
 	// ========== Tool context ==========

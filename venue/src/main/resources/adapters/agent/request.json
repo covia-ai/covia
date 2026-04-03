@@ -8,19 +8,18 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Target agent name" },
-				"input": { "description": "Request input data (any JSON value)" },
-				"wait": { "description": "Wait for agent to complete the task. false/absent = return immediately (async). true = block indefinitely. Integer = timeout in milliseconds, returns current status on timeout." }
+				"input": { "type": "object", "description": "Request input data to send to the agent. Pass the full structured data the agent needs — do not summarise or wrap it." },
+				"wait": { "type": "boolean", "description": "Wait for the agent to complete. true = block until done (recommended for pipelines). false or omit = return immediately with PENDING status. Can also be an integer for timeout in milliseconds." }
 			},
 			"required": ["agentId"]
 		},
 		"output": {
 			"type": "object",
-			"description": "Job status object for the task. Same shape as grid:invoke output.",
+			"description": "Task status. When wait=true and the agent completes, includes the full output.",
 			"properties": {
-				"id": { "type": "string", "description": "Task Job ID" },
-				"status": { "type": "string", "description": "Job status (e.g. STARTED, COMPLETE, FAILED)" },
-				"created": { "type": "integer", "description": "Timestamp when the task was created" },
-				"output": { "description": "Task output, present when status is COMPLETE and wait=true" }
+				"id": { "type": "string", "description": "Task Job ID (hex)" },
+				"status": { "type": "string", "description": "PENDING (async/timeout), COMPLETE, or FAILED" },
+				"output": { "type": "object", "description": "Agent's structured response (present when status=COMPLETE)" }
 			}
 		}
 	}

@@ -8,15 +8,15 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Target agent name" },
-				"message": { "description": "Message content (any JSON value)" }
+				"message": { "type": "string", "description": "Message content to deliver to the agent's inbox" }
 			},
-			"required": ["agentId"]
+			"required": ["agentId", "message"]
 		},
 		"output": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string" },
-				"delivered": { "type": "boolean" }
+				"agentId": { "type": "string", "description": "Agent that received the message" },
+				"delivered": { "type": "boolean", "description": "true if message was delivered" }
 			}
 		}
 	}
