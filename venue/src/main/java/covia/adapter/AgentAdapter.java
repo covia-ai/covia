@@ -617,6 +617,11 @@ public class AgentAdapter extends AAdapter {
 				Fields.TASKS, formattedTasks,
 				Fields.PENDING, resolvedPending,
 				Fields.MESSAGES, inbox);
+			// Pass framework config separately so the transition can read caps, tools, etc.
+			AMap<AString, ACell> agentConfig = agent.getConfig();
+			if (agentConfig != null) {
+				transitionInput = transitionInput.assoc(AgentState.KEY_CONFIG, agentConfig);
+			}
 
 			Job transitionJob = engine.jobs().invokeOperation(transitionOp, transitionInput, ctx);
 			ACell transitionResult = transitionJob.awaitResult();

@@ -258,8 +258,19 @@ public class LLMAgentAdapter extends AAdapter {
 		AVector<ACell> tasks = (AVector<ACell>) RT.getIn(input, Fields.TASKS);
 		AVector<ACell> pending = (AVector<ACell>) RT.getIn(input, Fields.PENDING);
 
-		// Read LLM config from state
+		// Read LLM config — merge record-level config (from agent framework, has caps/tools)
+		// with state-level config (has LLM settings like llmOperation, model). State overrides.
 		AMap<AString, ACell> config = extractConfig(state);
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> recordConfig = (RT.getIn(input, AgentState.KEY_CONFIG) instanceof AMap m) ? m : null;
+		if (recordConfig != null) {
+			if (config == null) {
+				config = recordConfig;
+			} else {
+				// Merge: record-level is the base, state-level overrides
+				config = recordConfig.merge(config);
+			}
+		}
 
 		// Extract settings from config
 		AString llmOperation = getConfigValue(config, K_LLM_OPERATION, DEFAULT_LLM_OPERATION);
