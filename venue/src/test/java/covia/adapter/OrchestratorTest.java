@@ -528,6 +528,108 @@ public class OrchestratorTest {
 		assertEquals("hello world", RT.getIn(result, "greeting").toString());
 	}
 
+	// ========== JSON round-trip (simulates MCP path) — issue #44 ==========
+
+	@Test
+	public void testGridRunViaJsonRoundTrip() {
+		// Simulate the MCP path: build the grid:run input as a JSON string,
+		// parse it back, then invoke. This catches any CVM type differences
+		// between in-process Maps.of() and JSON-parsed values.
+		String orchHash = storeJsonOrchestration("""
+			{
+				"name": "JSON Round Trip Test",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [{
+						"op": "test:echo",
+						"input": { "msg": ["input", "text"] }
+					}],
+					"result": { "answer": [0, "msg"] }
+				}
+			}
+		""");
+
+		// Build the grid:run invocation as JSON (like MCP would)
+		String gridRunInputJson = """
+			{"operation": "%s", "input": {"text": "via-json"}}
+		""".formatted(orchHash);
+
+		// Parse from JSON — this is what MCP does
+		ACell parsedInput = JSON.parse(gridRunInputJson);
+
+		Job job = engine.jobs().invokeOperation("grid:run", parsedInput,
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertNotNull(result, "grid:run via JSON round-trip should produce non-null result");
+		assertEquals(Strings.create("via-json"), RT.getIn(result, Strings.create("answer")),
+			"Step output should resolve correctly after JSON round-trip");
+	}
+
+	@Test
+	public void testGridRunMultiStepViaJsonRoundTrip() {
+		// Multi-step with step dependencies — the pattern that was failing
+		String orchHash = storeJsonOrchestration("""
+			{
+				"name": "Multi-Step JSON Test",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "test:echo", "input": {"data": ["input", "value"]} },
+						{ "op": "test:echo", "input": {"data": [0, "data"]} }
+					],
+					"result": { "step0": [0, "data"], "step1": [1, "data"] }
+				}
+			}
+		""");
+
+		String gridRunInputJson = """
+			{"operation": "%s", "input": {"value": "chain-test"}}
+		""".formatted(orchHash);
+
+		ACell parsedInput = JSON.parse(gridRunInputJson);
+
+		Job job = engine.jobs().invokeOperation("grid:run", parsedInput,
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertNotNull(result, "Multi-step grid:run via JSON should produce result");
+		assertEquals(Strings.create("chain-test"), RT.getIn(result, Strings.create("step0")),
+			"Step 0 should resolve from JSON-parsed input");
+		assertEquals(Strings.create("chain-test"), RT.getIn(result, Strings.create("step1")),
+			"Step 1 should resolve from step 0 output after JSON round-trip");
+	}
+
+	@Test
+	public void testGridRunWithConcatViaJsonRoundTrip() {
+		// Concat with JSON-parsed input — the dynamic path pattern
+		String orchHash = storeJsonOrchestration("""
+			{
+				"name": "Concat JSON Test",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [{
+						"op": "test:echo",
+						"input": { "path": ["concat", ["const", "w/data/"], ["input", "id"]] }
+					}],
+					"result": { "path": [0, "path"] }
+				}
+			}
+		""");
+
+		String gridRunInputJson = """
+			{"operation": "%s", "input": {"id": "INV-001"}}
+		""".formatted(orchHash);
+
+		ACell parsedInput = JSON.parse(gridRunInputJson);
+
+		Job job = engine.jobs().invokeOperation("grid:run", parsedInput,
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertEquals("w/data/INV-001", RT.getIn(result, Strings.create("path")).toString());
+	}
+
 	// ========== Strict mode validation ==========
 
 	@Test
