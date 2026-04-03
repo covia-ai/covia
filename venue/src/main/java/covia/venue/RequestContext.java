@@ -14,21 +14,23 @@ public class RequestContext {
 	private final AString callerDID;
 	private final boolean internal;
 	private final AVector<ACell> proofs;
+	private final AVector<ACell> caps;
 
 	/**
 	 * Context for internal operations (adapters, recovery, etc.) that bypass auth.
 	 */
-	public static final RequestContext INTERNAL = new RequestContext(null, true, null);
+	public static final RequestContext INTERNAL = new RequestContext(null, true, null, null);
 
 	/**
 	 * Context for anonymous (unauthenticated) external requests.
 	 */
-	public static final RequestContext ANONYMOUS = new RequestContext(null, false, null);
+	public static final RequestContext ANONYMOUS = new RequestContext(null, false, null, null);
 
-	private RequestContext(AString callerDID, boolean internal, AVector<ACell> proofs) {
+	private RequestContext(AString callerDID, boolean internal, AVector<ACell> proofs, AVector<ACell> caps) {
 		this.callerDID = callerDID;
 		this.internal = internal;
 		this.proofs = proofs;
+		this.caps = caps;
 	}
 
 	/**
@@ -37,7 +39,7 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, false, null);
+		return new RequestContext(callerDID, false, null, null);
 	}
 
 	/**
@@ -45,14 +47,22 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID, AVector<ACell> proofs) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, false, proofs);
+		return new RequestContext(callerDID, false, proofs, null);
 	}
 
 	/**
 	 * Returns a new context with the given proofs added.
 	 */
 	public RequestContext withProofs(AVector<ACell> proofs) {
-		return new RequestContext(this.callerDID, this.internal, proofs);
+		return new RequestContext(this.callerDID, this.internal, proofs, this.caps);
+	}
+
+	/**
+	 * Returns a new context with capability attenuations. Operations are checked
+	 * against these caps before execution. Null = unrestricted.
+	 */
+	public RequestContext withCaps(AVector<ACell> caps) {
+		return new RequestContext(this.callerDID, this.internal, this.proofs, caps);
 	}
 
 	/**
@@ -88,6 +98,14 @@ public class RequestContext {
 	 */
 	public AVector<ACell> getProofs() {
 		return proofs;
+	}
+
+	/**
+	 * Gets the capability attenuations for this request, or null if unrestricted.
+	 * When non-null, operations must be covered by at least one capability.
+	 */
+	public AVector<ACell> getCaps() {
+		return caps;
 	}
 
 	@Override

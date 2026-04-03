@@ -4,11 +4,16 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import covia.api.Fields;
+import covia.grid.Job;
+import covia.venue.Engine;
+import covia.venue.RequestContext;
 
 /**
  * Tests for CapabilityChecker — agent capability enforcement.
@@ -269,5 +274,52 @@ public class CapabilityCheckerTest {
 		// Bob CANNOT write vendor records
 		assertNotNull(CapabilityChecker.check(bobCaps, "covia:write",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme Corp"))));
+	}
+
+	// ========== RequestContext.caps enforcement at JobManager ==========
+
+	@Test
+	public void testJobManagerEnforcesContextCaps() {
+		Engine engine = Engine.createTemp(null);
+		Engine.addDemoAssets(engine);
+
+		AVector<ACell> caps = Vectors.of(
+			Capability.create(Strings.create("w/allowed/"), Capability.CRUD_WRITE),
+			Capability.create(Strings.create("w/"), Capability.CRUD_READ)
+		);
+
+		RequestContext ctx = RequestContext.of(
+			convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey())
+		).withCaps(caps);
+
+		// Write to allowed path — should succeed
+		Job writeOk = engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/allowed/doc", Fields.VALUE, Strings.create("ok")), ctx);
+		assertNotNull(writeOk.awaitResult(5000), "Write to allowed path should succeed");
+
+		// Read from anywhere — should succeed (crud/read on w/)
+		Job readOk = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, "w/allowed/doc"), ctx);
+		assertNotNull(readOk.awaitResult(5000), "Read should succeed");
+
+		// Write to disallowed path — should fail
+		assertThrows(Exception.class, () -> {
+			engine.jobs().invokeOperation("covia:write",
+				Maps.of(Fields.PATH, "w/forbidden/doc", Fields.VALUE, Strings.create("bad")), ctx);
+		}, "Write to disallowed path should throw");
+	}
+
+	@Test
+	public void testJobManagerNullCapsUnrestricted() {
+		Engine engine = Engine.createTemp(null);
+		Engine.addDemoAssets(engine);
+
+		RequestContext ctx = RequestContext.of(
+			convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey())
+		);
+		// No caps = unrestricted — write anywhere
+		Job writeOk = engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/anything", Fields.VALUE, Strings.create("fine")), ctx);
+		assertNotNull(writeOk.awaitResult(5000), "No caps should mean unrestricted access");
 	}
 }

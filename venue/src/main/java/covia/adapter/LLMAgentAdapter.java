@@ -356,10 +356,14 @@ public class LLMAgentAdapter extends AAdapter {
 		// Read agent capability attenuations (null = unrestricted)
 		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
 
+		// Attach caps to the RequestContext — enforced universally at JobManager dispatch
+		RequestContext capsCtx = (caps != null) ? ctx.withCaps(caps) : ctx;
+
 		// Create tool context for built-in tool execution
-		ToolContext toolCtx = new ToolContext(agentId, ctx, tasks, pending, configToolMap, caps);
+		ToolContext toolCtx = new ToolContext(agentId, capsCtx, tasks, pending, configToolMap, caps);
 
 		// Invoke level 3 with tool call loop — returns all messages to append
+		// ctx (uncapped) for the L3 LLM call; capsCtx flows through toolCtx for tool dispatch
 		AVector<ACell> newMessages = invokeWithToolLoop(
 			llmOperation, config, history, baseTools, ctx, toolCtx);
 
@@ -538,17 +542,21 @@ public class LLMAgentAdapter extends AAdapter {
 		AString operation = toolCtx.configToolMap.get(toolName);
 		String opName = (operation != null) ? operation.toString() : toolName;
 
-		// Check agent capabilities before dispatch
+		// Check agent capabilities before dispatch (fast rejection, avoids job creation)
 		String denied = CapabilityChecker.check(toolCtx.caps, opName, input);
 		if (denied != null) return Strings.create("Error: " + denied);
 
+		// Use the capability-scoped context for tool dispatch
+		// (caps also enforced at JobManager level for defence in depth)
+		RequestContext toolRequestCtx = toolCtx.ctx;
+
 		// Config tools — tool name maps to a resolved operation
 		if (operation != null) {
-			return handleConfigTool(operation, input, ctx);
+			return handleConfigTool(operation, input, toolRequestCtx);
 		}
 
 		// Fall through to grid dispatch (tool name used as operation name)
-		return handleGridDispatch(toolName, input, ctx);
+		return handleGridDispatch(toolName, input, toolRequestCtx);
 	}
 
 	/**

@@ -18,6 +18,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
 import covia.adapter.AAdapter;
+import covia.adapter.CapabilityChecker;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Asset;
@@ -127,6 +128,17 @@ public class JobManager {
 		if (adapterName == null) {
 			throw new IllegalArgumentException("Metadata must contain operation.adapter field");
 		}
+
+		// Enforce capability attenuations from RequestContext
+		AVector<ACell> caps = ctx.getCaps();
+		if (caps != null) {
+			AString opName = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER));
+			String denied = CapabilityChecker.check(caps, opName != null ? opName.toString() : adapterName, input);
+			if (denied != null) {
+				throw new RuntimeException(denied);
+			}
+		}
+
 		AAdapter adapter = engine.getAdapter(adapterName);
 		if (adapter == null) {
 			throw new IllegalStateException("Adapter not available: " + adapterName);
