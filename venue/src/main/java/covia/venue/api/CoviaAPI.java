@@ -444,7 +444,23 @@ public class CoviaAPI extends ACoviaAPI {
 				return;
 			}
 
-			this.buildResult(ctx, 201, job.getData());
+			// Check for wait: query param ?wait=true or body field "wait"
+			String waitParam = ctx.queryParam("wait");
+			ACell waitField = RT.getIn(req, "wait");
+			boolean shouldWait = "true".equals(waitParam)
+				|| convex.core.data.prim.CVMBool.TRUE.equals(waitField)
+				|| Strings.create("true").equals(waitField);
+
+			if (shouldWait) {
+				// Block until job completes (120s timeout)
+				try {
+					job.awaitResult(120_000);
+				} catch (Exception e) {
+					// Timeout or failure — return current state
+				}
+			}
+
+			this.buildResult(ctx, shouldWait && job.isComplete() ? 200 : 201, job.getData());
 			ctx.header("Location",ROUTE+"jobs/"+job.getID().toHexString());
 		} catch (AuthException e) {
 			this.buildError(ctx, 403, e.getMessage());

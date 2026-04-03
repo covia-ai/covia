@@ -82,7 +82,7 @@ public class LLMAgentAdapter extends AAdapter {
 
 	private static final AString DEFAULT_SYSTEM_PROMPT = Strings.create(
 		"You are a helpful AI agent on the Covia platform. "
-		+ "Use tools and grid oprtaions to complete tasks."
+		+ "Use tools and grid operations to complete tasks. "
 		+ "Give concise, clear and accurate responses.");
 
 	private static final AString DEFAULT_LLM_OPERATION = Strings.create("langchain:openai");
@@ -344,6 +344,18 @@ public class LLMAgentAdapter extends AAdapter {
 					history = history.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, content));
 				}
 			}
+		}
+
+		// If no messages, tasks, or pending results were added, signal the empty state.
+		// This prevents LLM hallucination when triggered with no work — the LLM knows
+		// the situation rather than inferring from conversation history.
+		boolean hasInput = (messages != null && messages.count() > 0)
+			|| (tasks != null && tasks.count() > 0)
+			|| (pending != null && pending.count() > 0);
+		if (!hasInput) {
+			history = history.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT,
+				Strings.create("[No pending tasks, messages, or job results. "
+					+ "You may act proactively based on your role, or report idle.]")));
 		}
 
 		// Build the tool list from config

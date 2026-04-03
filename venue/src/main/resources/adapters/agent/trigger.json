@@ -1,6 +1,6 @@
 {
 	"name": "Trigger Agent",
-	"description": "Triggers the agent's transition loop. By default waits for the run cycle to complete. Set wait=false to return immediately while the agent runs in the background, or wait=<ms> for a timeout. If the agent is sleeping, starts the run loop — even with no pending work, since the transition function may act proactively. If already running, returns the existing run's future. The transition operation is always taken from the agent's config.operation.",
+	"description": "Triggers the agent's transition loop. Starts the run cycle whether or not there is pending work — the agent may act proactively based on its prompt. When no tasks or messages are pending, the agent receives a clear signal and can choose to act or report idle. By default waits for the run cycle to complete. Set wait=false to return immediately, or wait=<ms> for a timeout.",
 	"dateCreated": "2026-03-06T00:00:00Z",
 	"operation": {
 		"adapter": "agent:trigger",
