@@ -306,12 +306,28 @@ public class LLMAgentAdapter extends AAdapter {
 			history = history.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(sb.toString())));
 		}
 
-		// Append each inbox message as a user turn
+		// Append each inbox message as a user turn (with provenance)
 		if (messages != null) {
 			for (long i = 0; i < messages.count(); i++) {
 				ACell msg = messages.get(i);
-				AString content = RT.ensureString(RT.getIn(msg, K_CONTENT));
-				if (content == null) content = RT.ensureString(msg);
+				AString content = null;
+				if (msg instanceof AString s) {
+					// Plain string message
+					content = s;
+				} else if (msg instanceof AMap) {
+					ACell caller = RT.getIn(msg, Fields.CALLER);
+					ACell msgBody = RT.getIn(msg, Fields.MESSAGE);
+					if (msgBody != null) {
+						// Envelope format {caller, message}
+						String prefix = (caller != null) ? "[Message from: " + caller + "]\n" : "[Message]\n";
+						content = Strings.create(prefix + msgBody);
+					} else {
+						// Map with content field (e.g. {content: "..."})
+						AString c = RT.ensureString(RT.getIn(msg, K_CONTENT));
+						if (c != null) content = c;
+						else content = Strings.create(msg.toString());
+					}
+				}
 				if (content != null) {
 					history = history.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, content));
 				}
@@ -777,7 +793,10 @@ public class LLMAgentAdapter extends AAdapter {
 			if (outstanding == 0) sb.append("[Tasks assigned to you]\n");
 			outstanding++;
 			ACell taskInput = RT.getIn(task, Fields.INPUT);
-			sb.append("- Task ").append(jobId).append(": ").append(taskInput).append("\n");
+			ACell caller = RT.getIn(task, Fields.CALLER);
+			sb.append("- Task ").append(jobId);
+			if (caller != null) sb.append(" (from: ").append(caller).append(")");
+			sb.append(": ").append(taskInput).append("\n");
 		}
 		if (outstanding == 0) return null;
 		sb.append("Use complete_task or fail_task to resolve each task.");

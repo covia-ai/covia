@@ -5,6 +5,7 @@
 .lsp
 .clj-kondo
 CLAUDE.local.md
-/.claude/
+/.claude/*
+!/.claude/settings.json
 /venue_err.log
 /dev/

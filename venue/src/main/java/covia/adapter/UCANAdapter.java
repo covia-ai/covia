@@ -102,10 +102,10 @@ public class UCANAdapter extends AAdapter {
 			throw new RuntimeException("Cannot resolve audience public key from DID: " + audDID);
 		}
 
-		// Sign with venue key pair — venue is the issuer
+		// Sign with venue key pair — venue is the issuer, return as JWT
 		AKeyPair venueKP = engine.getKeyPair();
 		UCAN token = UCAN.create(venueKP, audKey, exp, att, Vectors.empty());
 
-		return token.toMap();
+		return Maps.of("token", token.toJWT(venueKP));
 	}
 }

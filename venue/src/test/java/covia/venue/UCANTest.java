@@ -72,10 +72,16 @@ public class UCANTest {
 			ALICE);
 		ACell result = job.awaitResult(5000);
 
-		assertNotNull(RT.getIn(result, "header"));
-		assertNotNull(RT.getIn(result, "payload"));
-		assertNotNull(RT.getIn(result, "sig"));
-		assertEquals(venueDID, RT.getIn(result, "payload", "iss"));
+		// ucan:issue returns {"token": "<jwt>"}
+		AString jwt = RT.ensureString(RT.getIn(result, "token"));
+		assertNotNull(jwt, "ucan:issue should return a JWT token");
+		assertTrue(jwt.toString().contains("."), "Token should be a JWT with dot-separated parts");
+
+		// Validate the JWT round-trips correctly
+		UCAN parsed = UCAN.fromJWT(jwt);
+		assertNotNull(parsed, "JWT should parse as a valid UCAN");
+		assertEquals(venueDID, parsed.getIssuer());
+		assertEquals(BOB_DID, parsed.getAudience());
 	}
 
 	@Test

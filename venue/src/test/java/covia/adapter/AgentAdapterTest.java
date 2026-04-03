@@ -569,7 +569,7 @@ public class AgentAdapterTest {
 
 		// Query it
 		Job queryJob = engine.jobs().invokeOperation(
-			"agent:query",
+			"agent:info",
 			Maps.of(Fields.AGENT_ID, "query-agent"),
 			RequestContext.of(ALICE_DID));
 		ACell result = queryJob.awaitResult(5000);
@@ -578,14 +578,14 @@ public class AgentAdapterTest {
 		assertEquals(Strings.create("query-agent"), RT.getIn(result, Fields.AGENT_ID));
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 		assertNotNull(RT.getIn(result, AgentState.KEY_CONFIG));
-		assertNotNull(RT.getIn(result, AgentState.KEY_STATE));
-		assertNotNull(RT.getIn(result, AgentState.KEY_TIMELINE));
+		// Summary returns timelineLength and tasks count, not full state
+		assertNotNull(RT.getIn(result, Strings.intern("timelineLength")));
 	}
 
 	@Test
 	public void testQueryNonExistentAgent() {
 		Job queryJob = engine.jobs().invokeOperation(
-			"agent:query",
+			"agent:info",
 			Maps.of(Fields.AGENT_ID, "ghost"),
 			RequestContext.of(ALICE_DID));
 		try {
@@ -609,7 +609,7 @@ public class AgentAdapterTest {
 
 		// Query should still work — you can read terminated agents
 		Job queryJob = engine.jobs().invokeOperation(
-			"agent:query",
+			"agent:info",
 			Maps.of(Fields.AGENT_ID, "term-query"),
 			RequestContext.of(ALICE_DID));
 		ACell result = queryJob.awaitResult(5000);

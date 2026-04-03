@@ -8,15 +8,23 @@ argument-hint: [setup|run|run bad|run batch|trace|reset|status|setup-desktop]
 
 **Prerequisite:** The venue must be running and connected as an MCP server. If tools like `agent_list` are not available, tell the user to run `/venue-setup local` first, then add the MCP endpoint (`http://localhost:8080/mcp`) to their Claude Code MCP settings.
 
-You are setting up or running a demo of Covia's accounts payable pipeline. Three LLM-backed agents process invoices with a complete immutable audit trail. All agents use **strict structured output** — every response is schema-enforced JSON with guaranteed field names.
+You are setting up or running a demo of Covia's accounts payable pipeline. Four agents process invoices with capability-scoped permissions, shared context documents, and a complete immutable audit trail.
+
+## Key Features
+
+- **Orchestration** — Alice → Bob → Carol runs as a single declarative pipeline job
+- **Context loading** — policy rules and data guide stored as immutable artifacts, loaded into agent context automatically
+- **Capability enforcement** — each agent can only read/write specific workspace paths
+- **Provenance** — every task and message shows who sent it
 
 ## Agents
 
-| Agent | Role | What they do | Output Schema |
-|-------|------|-------------|---------------|
-| **Alice** | Invoice Scanner | Extracts structured data from raw invoice text | `InvoiceExtraction` — vendor, line items, amounts, PO, flags |
-| **Bob** | Data Enricher | Validates vendor records, checks duplicates, matches POs — **autonomously calls tools** | `InvoiceEnrichment` — validations, confidence, source refs |
-| **Carol** | Payment Approver | Policy gate — applies 6 named rules and records reasoning | `ApprovalDecision` — decision, policy matrix, reasoning |
+| Agent | Role | What they do | Caps |
+|-------|------|-------------|------|
+| **Alice** | Invoice Scanner | Extracts structured data from raw invoice text | No caps (extraction only, no tools) |
+| **Bob** | Data Enricher | Validates vendor records, checks duplicates, matches POs — **autonomously calls tools** | Read vendors/POs/invoices, write enrichments only |
+| **Carol** | Payment Approver | Policy gate — applies 6 named rules and records reasoning | Read all workspace, write decisions only |
+| **Dave** | AP Manager | Conversational manager — runs pipeline, investigates, answers questions | Read-only workspace, invoke orchestrations |
 
 ## Commands
 
@@ -24,30 +32,35 @@ Based on `$ARGUMENTS`:
 
 ### `setup` (or no argument)
 
-Run all setup steps — secret, reference data, agents:
+Run all setup steps — secret, reference data, artifacts, orchestration, agents:
 
 1. **Ask for OpenAI API key** if not already stored, then `secret_set`
 2. **Seed reference data** — three vendors (Acme Corp, Globex Ltd, Initech Systems) and their purchase orders (see [setup.md](setup.md)). Initech is suspended/sanctioned to enable rejection demos.
-3. **Create all three agents** in parallel (see [setup.md](setup.md) for full config including `responseFormat` schemas)
-4. **Verify** with `agent_list` — all three should be SLEEPING
-5. **Confirm structured output** — query any agent and verify `state.config.responseFormat` is present
+3. **Store shared artifacts** — read `assets/ap-policy-rules.md` and `assets/ap-data-guide.md`, store each as an artifact via `asset_store` with `contentText`. Note the returned hashes.
+4. **Store the orchestration** — read `assets/ap-pipeline.json`, store via `asset_store`. Store the pipeline hash at `w/config/ap-pipeline`.
+5. **Create all four agents** in parallel (see [setup.md](setup.md) for full config). Agent prompts are short — reference material loads from context. Each agent has `caps` scoping their workspace access.
+6. **Verify** with `agent_list` — Alice, Bob, Carol, Dave all SLEEPING
+7. **Confirm context and caps** — query Bob or Carol and verify `state.config.context` and `state.config.caps` are present
 
 Key config rules:
 - `config.operation` must be a **plain string** `"llmagent:chat"`, not a map
-- `state.config.responseFormat` must be a map with `name` (string) and `schema` (JSON Schema with `additionalProperties: false` at every object level) — this enables OpenAI strict structured output
+- `state.config.context` is an array of asset hashes or workspace paths — loaded as system messages before each run
+- `state.config.caps` is an array of `{with, can}` attenuations — enforced on every tool call. No caps = full access.
+- `state.config.responseFormat` must have `additionalProperties: false` at every object level for OpenAI strict mode
 - Use `agent_request` with `input` parameter (not `task`) for submitting work
-- Include data paths in Bob's system prompt so he knows where to look
 
 ### `run` (or `run <scenario>`)
 
-Run the invoice pipeline (Alice → Bob → Carol):
+Run the invoice pipeline via the stored orchestration:
 
-1. Send the invoice to Alice via `agent_request` with `wait: true`
-2. Forward Alice's `InvoiceExtraction` to Bob (include `source_agent` and `source_job` for provenance). Because Alice uses strict schema output, you can reliably reference `vendor_name`, `po_number`, and other fields by name.
-3. After Bob responds, **verify workspace persistence**: `covia_read path=w/enrichments/{invoice_number}` — mention this to the audience, it shows Bob wrote to the Convex lattice.
-4. Forward Bob's `InvoiceEnrichment` to Carol (include `source_pipeline` with both job IDs)
-5. Present Carol's `ApprovalDecision` with the policy rule matrix — each rule has a name, PASS/FAIL, and evidence
+1. Read the pipeline hash from `w/config/ap-pipeline`
+2. Run via `grid_run operation=<hash> input={"invoice_text": "..."}`
+3. The orchestration chains Alice → Bob → Carol as a single job, returning `{extraction, enrichment, decision}`
+4. Present the result: Alice's extraction, Bob's validation, Carol's policy rule matrix
+5. **Verify workspace persistence**: `covia_read path=w/enrichments/{invoice_number}` and `covia_read path=w/decisions/{invoice_number}`
 6. Show the structured audit trail and provenance chain (see run.md Steps 4–5)
+
+Alternatively, ask Dave to process the invoice — he knows the orchestration hash from his context and will run it via `grid_run`.
 
 **Scenarios** (see [run.md](run.md) for full invoice texts and expected outcomes):
 
@@ -113,6 +126,18 @@ agent_query  agentId=Carol   (if exists)
 ```
 
 Report agent statuses, timeline lengths, whether `responseFormat` is configured, and any errors.
+
+## Optional Enhancements
+
+These are not implemented but would improve the demo:
+
+- **Orchestration-driven persistence.** Currently Bob and Carol write to workspace via LLM tool calls, which is non-deterministic — they sometimes skip the write. A more reliable approach: add `covia:write` steps to the orchestration after Bob and Carol, so persistence is guaranteed by the pipeline rather than the LLM. Requires a `concat` input spec type (or `jvm:stringConcat` steps) to build dynamic paths like `w/enrichments/{invoice_number}`.
+
+- **Duplicate detection across runs.** Bob checks `w/invoices/{vendor}/{invoice_number}` for duplicates but nothing writes there. Add an orchestration step that writes to `w/invoices/` after Alice extracts, so subsequent runs of the same invoice are caught.
+
+- **Carol reads Bob's persisted enrichment.** Instead of receiving enrichment data inline from the orchestration, Carol could read `w/enrichments/{invoice_number}` directly. This validates that Bob actually wrote it and creates a cleaner data dependency.
+
+- **Dave as orchestration manager.** Dave could discover and invoke orchestrations by listing assets with `type=orchestration` rather than needing the hash in his context.
 
 ### `setup-desktop`
 

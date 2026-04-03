@@ -1,6 +1,6 @@
 {
 	"name": "Request Agent Task",
-	"description": "Submits a persistent task to an agent. Creates a Job that the agent will complete or reject during a future run. Returns the Job ID for tracking progress. This is the primary way to interact with agents via MCP. By default returns immediately (async); set wait=true to block until the agent completes the task.",
+	"description": "Send a request to an agent and get a response. This is the PRIMARY tool for all agent interactions — asking questions, submitting tasks, or requesting actions. Creates a tracked Job with a result. Set wait=true to get the response inline. Use this instead of agent_message unless you explicitly want a fire-and-forget notification.",
 	"dateCreated": "2026-03-06T00:00:00Z",
 	"operation": {
 		"adapter": "agent:request",

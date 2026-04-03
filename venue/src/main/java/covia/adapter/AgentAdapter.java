@@ -72,7 +72,7 @@ public class AgentAdapter extends AAdapter {
 		installAsset(BASE + "request.json");
 		installAsset(BASE + "message.json");
 		installAsset(BASE + "trigger.json");
-		installAsset(BASE + "query.json");
+		installAsset(BASE + "info.json");
 		installAsset(BASE + "list.json");
 		installAsset(BASE + "delete.json");
 		installAsset(BASE + "suspend.json");
@@ -98,7 +98,7 @@ public class AgentAdapter extends AAdapter {
 				case "request" -> handleRequest(job, input, ctx);
 				case "message" -> handleMessage(job, input, ctx);
 				case "trigger" -> handleTrigger(job, input, ctx);
-				case "query"   -> handleQuery(job, input, ctx);
+				case "info"    -> handleQuery(job, input, ctx);
 				case "list"    -> handleList(job, input, ctx);
 				case "delete"  -> handleDelete(job, input, ctx);
 				case "suspend" -> handleSuspend(job, input, ctx);
@@ -241,7 +241,12 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
 
-		agent.deliverMessage(RT.getIn(input, Fields.MESSAGE));
+		ACell messageContent = RT.getIn(input, Fields.MESSAGE);
+		// Wrap message with caller provenance
+		ACell envelope = Maps.of(
+			Fields.CALLER, ctx.getCallerDID(),
+			Fields.MESSAGE, messageContent);
+		agent.deliverMessage(envelope);
 		wakeAgent(agentId, ctx);
 
 		job.setStatus(Status.STARTED);
@@ -287,8 +292,29 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> record = agent.getRecord();
 		if (record == null) { job.fail("Agent not found: " + agentId); return; }
 
+		// Return a lightweight summary. Full state, history, and timeline
+		// are accessible via covia:read path=g/<agentId>/state etc.
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> state = RT.ensureMap(record.get(AgentState.KEY_STATE));
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> stateConfig = (state != null) ? RT.ensureMap(RT.getIn(state, Strings.intern("config"))) : null;
+		AVector<?> timeline = agent.getTimeline();
+		Index<Blob, ACell> tasks = agent.getTasks();
+
+		AMap<AString, ACell> summary = Maps.of(
+			Fields.AGENT_ID, agentId,
+			Fields.STATUS, record.get(AgentState.KEY_STATUS),
+			Fields.CONFIG, record.get(AgentState.KEY_CONFIG));
+
+		// Include state.config (caps, context, model, prompt) but not history
+		if (stateConfig != null) summary = summary.assoc(Strings.intern("stateConfig"), stateConfig);
+		if (timeline != null) summary = summary.assoc(Strings.intern("timelineLength"), CVMLong.create(timeline.count()));
+		if (tasks != null) summary = summary.assoc(Strings.intern("tasks"), CVMLong.create(tasks.count()));
+		ACell error = record.get(AgentState.KEY_ERROR);
+		if (error != null) summary = summary.assoc(AgentState.KEY_ERROR, error);
+
 		job.setStatus(Status.STARTED);
-		job.completeWith(record.assoc(Fields.AGENT_ID, agentId));
+		job.completeWith(summary);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -629,9 +655,14 @@ public class AgentAdapter extends AAdapter {
 		if (tasks == null || tasks.count() == 0) return Vectors.empty();
 		AVector<ACell> result = Vectors.empty();
 		for (var entry : tasks.entrySet()) {
-			result = result.conj(Maps.of(
-				Fields.JOB_ID, taskIdHex(entry.getKey()),
-				Fields.INPUT, entry.getValue()));
+			Blob jobId = entry.getKey();
+			AMap<AString, ACell> jobData = engine.jobs().getJobData(jobId);
+			ACell caller = (jobData != null) ? jobData.get(Fields.CALLER) : null;
+			AMap<AString, ACell> task = Maps.of(
+				Fields.JOB_ID, taskIdHex(jobId),
+				Fields.INPUT, entry.getValue());
+			if (caller != null) task = task.assoc(Fields.CALLER, caller);
+			result = result.conj(task);
 		}
 		return result;
 	}

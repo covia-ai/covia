@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__*"
+    ]
+  },
+  "mcpServers": {
+    "covia-venue": {
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}

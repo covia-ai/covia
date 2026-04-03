@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.auth.ucan.UCANValidator;
 import convex.api.ContentTypes;
 import convex.core.data.ACell;
 import convex.core.data.AHashMap;
@@ -386,7 +387,14 @@ public class MCP extends ACoviaAPI {
 			Hash opID = findTool(toolName);
 			ACell arguments = RT.getIn(params, Fields.ARGUMENTS);
 			if (opID != null) {
-				Job job = engine().jobs().invokeOperation(opID.toCVMHexString(), arguments, RequestContext.of(callerDID));
+				RequestContext rctx = RequestContext.of(callerDID);
+
+				// Extract UCAN proofs from tool arguments (JWT strings)
+				AVector<ACell> ucans = RT.getIn(arguments, Fields.UCANS);
+				AVector<ACell> proofs = UCANValidator.parseTransportUCANs(ucans);
+				if (proofs != null) rctx = rctx.withProofs(proofs);
+
+				Job job = engine().jobs().invokeOperation(opID.toCVMHexString(), arguments, rctx);
 				ACell result = job.awaitResult(TOOL_CALL_TIMEOUT_MS);
 				if (result == null && !job.isComplete()) {
 					return toolError("Tool call timed out after " + (TOOL_CALL_TIMEOUT_MS / 1000)

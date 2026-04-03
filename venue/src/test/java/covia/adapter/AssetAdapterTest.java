@@ -531,7 +531,7 @@ public class AssetAdapterTest {
 		createJob.awaitResult(5000);
 
 		// Query — config.operation should be test:echo (explicit), not llmagent:chat (definition)
-		Job queryJob = engine.jobs().invokeOperation("agent:query",
+		Job queryJob = engine.jobs().invokeOperation("agent:info",
 			Maps.of(Fields.AGENT_ID, "OverrideAgent"), RequestContext.of(ALICE_DID));
 		ACell queryResult = queryJob.awaitResult(5000);
 
@@ -572,7 +572,7 @@ public class AssetAdapterTest {
 		assertEquals(Strings.create("SLEEPING"), RT.getIn(createResult, Fields.STATUS));
 
 		// Query agent and verify config was populated from definition
-		Job queryJob = engine.jobs().invokeOperation("agent:query",
+		Job queryJob = engine.jobs().invokeOperation("agent:info",
 			Maps.of(Fields.AGENT_ID, "DefAgent"), RequestContext.of(ALICE_DID));
 		ACell queryResult = queryJob.awaitResult(5000);
 
@@ -582,11 +582,9 @@ public class AssetAdapterTest {
 		assertEquals(Strings.create("llmagent:chat"), config.get(Fields.OPERATION));
 		assertEquals(defHash, config.get(Fields.DEFINITION));
 
-		// State.config should have the LLM config from definition
-		AMap<AString, ACell> state = RT.ensureMap(RT.getIn(queryResult, Strings.create("state")));
-		assertNotNull(state);
-		AMap<AString, ACell> stateConfig = RT.ensureMap(state.get(Strings.create("config")));
-		assertNotNull(stateConfig, "state.config should be populated from definition");
+		// stateConfig should have the LLM config from definition
+		AMap<AString, ACell> stateConfig = RT.ensureMap(RT.getIn(queryResult, Strings.create("stateConfig")));
+		assertNotNull(stateConfig, "stateConfig should be populated from definition");
 		assertEquals(Strings.create("gpt-4o"), stateConfig.get(Strings.create("model")));
 	}
 

@@ -26,7 +26,8 @@ covia/                          # ai.covia:covia:0.0.2-SNAPSHOT (parent POM)
 │       └── venue/storage/      #   Storage backends (Lattice, File, Memory)
 ├── workbench/                  # Minimal Swing GUI REPL for demo/testing
 │   └── src/main/java/covia/gui/  Bench, ReplPanel, LAF
-├── skills/                     # Claude Code skills (symlink .claude/skills → skills/)
+├── .claude/                    # Claude Code config (settings.json tracked; rest gitignored)
+├── skills/                     # Claude Code skills (junction .claude/skills → skills/)
 │   ├── ap-demo/                #   AP invoice audit trail demo (Alice/Bob/Carol)
 │   ├── agent/                  #   Agent creation and management
 │   ├── venue-setup/            #   Build and run a venue (local/VM/Docker)
@@ -253,26 +254,41 @@ The engine always resolves operation references to metadata before dispatching �
 
 ## Skills
 
-Reusable Claude Code skills are in `skills/`. To use them as slash commands, create a junction:
+Reusable Claude Code skills live in `skills/` (tracked in git). Claude Code reads them from `.claude/skills/`, which is a local junction to `skills/`.
+
+### Setup
+
+The junction must be created once per checkout (it's gitignored):
 
 ```bash
 # Windows (from covia root)
 cmd /c "mklink /J .claude\skills skills"
+
+# macOS / Linux
+ln -s ../skills .claude/skills
 ```
 
-Then invoke with `/skill-name`, e.g. `/ap-demo setup`, `/venue-setup local`, `/agent create MyAgent`.
+Skills then work as `/skill-name` in **CLI**, **Desktop Chat**, and **IDE Cowork** modes. Example: `/ap-demo setup`, `/venue-setup local`, `/agent create MyAgent`.
+
+### Shared Configuration
+
+`.claude/settings.json` is committed and provides the default MCP server config. Environment-specific overrides go in `.claude/settings.local.json` (gitignored).
+
+### Available Skills
 
 | Skill | Purpose |
 |-------|---------|
-| `/ap-demo` | AP invoice audit trail demo with Alice/Bob/Carol agents |
 | `/agent` | Create, configure, and manage agents (handles config gotchas) |
+| `/ap-demo` | AP invoice audit trail demo with Alice/Bob/Carol agents |
+| `/asset` | Store and retrieve content-addressed assets |
+| `/federation` | Cross-venue grid operations demo |
+| `/grid-test` | Smoke test venue operations |
+| `/orchestrate` | Multi-step workflow pipelines |
+| `/secret` | Manage API keys and credentials |
+| `/ucan` | UCAN capability token management |
 | `/venue-setup` | Build and run a venue — local, VM, or Docker |
 | `/venue-status` | Quick venue health check — adapters, agents, workspace |
-| `/grid-test` | Smoke test venue operations |
 | `/workspace` | Browse and manage lattice namespace data |
-| `/secret` | Manage API keys and credentials |
-| `/federation` | Cross-venue grid operations demo |
-| `/ucan` | UCAN capability token management |
 
 ## Resources
 

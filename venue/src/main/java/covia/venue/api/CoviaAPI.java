@@ -10,6 +10,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -431,9 +432,10 @@ public class CoviaAPI extends ACoviaAPI {
 		ACell input=RT.getIn(req, "input");
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
-		// Attach UCAN proofs from request envelope (not from operation input)
+		// Attach UCAN proofs from request envelope (JWT strings → validated CVM maps)
 		AVector<ACell> ucans = RT.getIn(req, "ucans");
-		if (ucans != null) rctx = rctx.withProofs(ucans);
+		AVector<ACell> proofs = UCANValidator.parseTransportUCANs(ucans);
+		if (proofs != null) rctx = rctx.withProofs(proofs);
 
 		try {
 			Job job=engine().jobs().invokeOperation(op,input,rctx);

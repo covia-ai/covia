@@ -1,6 +1,6 @@
 {
 	"name": "Message Agent",
-	"description": "Delivers a message to an agent's inbox. The message is queued for processing on the next agent run. If the agent has a configured transition operation and is sleeping, message delivery automatically wakes the agent. The agent must already exist.",
+	"description": "Send a fire-and-forget notification to an agent's inbox. NO response is returned — use agent_request instead if you need a reply. Messages are ephemeral notifications, not tracked tasks. Only use this for one-way alerts or events where you do not need the agent to respond.",
 	"dateCreated": "2026-02-27T00:00:00Z",
 	"operation": {
 		"adapter": "agent:message",

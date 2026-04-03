@@ -1,0 +1,28 @@
+{
+	"name": "Agent Info",
+	"description": "Get a lightweight summary of an agent: status, config, capabilities, task count, timeline length, and any error. For more detail use covia_read: g/{agentId}/state/config (LLM settings, caps, context), g/{agentId}/state/history (conversation), g/{agentId}/timeline (run records), g/{agentId}/inbox (pending messages).",
+	"dateCreated": "2026-04-01T00:00:00Z",
+	"operation": {
+		"adapter": "agent:info",
+		"toolName": "agent_info",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Agent name to query" }
+			},
+			"required": ["agentId"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string" },
+				"status": { "type": "string", "description": "SLEEPING, RUNNING, SUSPENDED, or TERMINATED" },
+				"config": { "type": "object", "description": "Framework config (operation, definition)" },
+				"stateConfig": { "type": "object", "description": "Agent's LLM config: model, systemPrompt, caps, context, responseFormat" },
+				"timelineLength": { "type": "integer", "description": "Number of completed runs" },
+				"tasks": { "type": "integer", "description": "Number of pending tasks" },
+				"error": { "type": "string", "description": "Last error message, if suspended" }
+			}
+		}
+	}
+}

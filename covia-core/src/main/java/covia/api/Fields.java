@@ -72,6 +72,7 @@ public class Fields {
 	public static final StringShort STRUCTURED_CONTENT = Strings.intern("structuredContent");
 	public static final StringShort PARAMS = Strings.intern("params");
 	public static final StringShort TOKEN = Strings.intern("token");
+	public static final StringShort UCANS = Strings.intern("ucans");
 	public static final StringShort OBJECT = Strings.intern("object");
 	public static final StringShort ANY = Strings.intern("any");
 	public static final StringShort PROPERTIES = Strings.intern("properties");
