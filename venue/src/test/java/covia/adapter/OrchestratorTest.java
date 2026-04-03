@@ -451,6 +451,83 @@ public class OrchestratorTest {
 		}
 	}
 
+	// ========== Concat input spec ==========
+
+	@Test
+	public void testConcatInputSpec() {
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Concat Test",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [{
+						"op": "test:echo",
+						"input": { "echoed": ["concat", ["const", "w/enrichments/"], ["input", "invoiceId"]] }
+					}],
+					"result": { "path": [0, "echoed"] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("invoiceId"), "INV-2024-0891"),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+		assertEquals("w/enrichments/INV-2024-0891", RT.getIn(result, "path").toString());
+	}
+
+	@Test
+	public void testConcatWithStepOutput() {
+		// Step 0 produces a value, step 1 uses concat to build a path from it
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Concat Step Output Test",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{
+							"op": "test:echo",
+							"input": { "echoed": ["const", "doc-42"] }
+						},
+						{
+							"op": "test:echo",
+							"input": { "echoed": ["concat", ["const", "docs/"], [0, "echoed"], ["const", ".txt"]] }
+						}
+					],
+					"result": { "path": [1, "echoed"] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.empty(), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+		assertEquals("docs/doc-42.txt", RT.getIn(result, "path").toString());
+	}
+
+	@Test
+	public void testConcatInResult() {
+		// Concat can also be used in the result spec
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Concat Result Test",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [{
+						"op": "test:echo",
+						"input": { "echoed": ["const", "hello"] }
+					}],
+					"result": { "greeting": ["concat", [0, "echoed"], ["const", " world"]] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.empty(), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+		assertEquals("hello world", RT.getIn(result, "greeting").toString());
+	}
+
 	// ========== Helper ==========
 
 	/**

@@ -42,6 +42,7 @@ public class Fields {
 	// Orchestration related
 	public static final StringShort STEPS = Strings.intern("steps");
 	public static final StringShort CONST = Strings.intern("const");
+	public static final StringShort CONCAT = Strings.intern("concat");
 	
 	// HTTP related
 	public static final StringShort HEADERS = Strings.intern("headers");

@@ -47,7 +47,7 @@ Steps run in parallel by default. A step only waits if it references output from
 
 ### Input Specification
 
-Input specs tell the orchestrator where each value comes from. Three source types:
+Input specs tell the orchestrator where each value comes from. Four source types:
 
 #### 1. Orchestration input — `["input", ...]`
 
@@ -78,6 +78,32 @@ Reference output from a completed step by its zero-based index. **This creates a
 [0, "output"]                    // step 0's output.output
 [1, "result", "vendor_name"]     // step 1's output.result.vendor_name
 ```
+
+#### 4. Concatenation — `["concat", spec, ...]`
+
+Build dynamic strings by concatenating resolved specs. Each element is resolved recursively (any source type) and joined:
+
+```json
+["concat", ["const", "w/enrichments/"], ["input", "invoiceId"]]
+// → "w/enrichments/INV-2024-0891" (if input.invoiceId = "INV-2024-0891")
+
+["concat", ["const", "docs/"], [0, "name"], ["const", ".txt"]]
+// → "docs/report.txt" (if step 0 output.name = "report")
+```
+
+Essential for building dynamic workspace paths, e.g. writing per-record results:
+
+```json
+{
+  "op": "covia:write",
+  "input": {
+    "path": ["concat", ["const", "w/enrichments/"], ["input", "invoiceId"]],
+    "value": [0, "output"]
+  }
+}
+```
+
+Step references inside concat create dependencies (the orchestrator scans recursively).
 
 #### Composing inputs
 

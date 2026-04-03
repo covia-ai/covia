@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Strings;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.MapEntry;
@@ -193,6 +194,13 @@ public class Orchestrator extends AAdapter {
 				} else if (Fields.INPUT.equals(code)) {
 					ACell value=RT.getIn(orchInput, v.subVector(1,n-1).toCellArray());
 					return value;
+				} else if (Fields.CONCAT.equals(code)) {
+					StringBuilder sb = new StringBuilder();
+					for (long i = 1; i < n; i++) {
+						ACell part = computeInput(v.get(i), path);
+						if (part != null) sb.append(part.toString());
+					}
+					return Strings.create(sb.toString());
 				} else {
 					throw new IllegalArgumentException("Unrecognised source type in: "+v);
 				}
@@ -228,7 +236,6 @@ public class Orchestrator extends AAdapter {
 			}
 
 			private HashSet<Integer> scanDeps(HashSet<Integer> accDeps, ACell inputSpec) {
-				// System.err.println("Scanning deps: "+inputSpec);
 				if (inputSpec instanceof AVector v) {
 					if (v.count()==0) throw new IllegalStateException("Empty vector in input value");
 					ACell code=v.get(0);
@@ -238,7 +245,12 @@ public class Orchestrator extends AAdapter {
 							throw new IllegalArgumentException("Step can only refer to previous step(s) but was "+ix+" in step "+stepNum+" for spec "+inputSpec);
 						}
 						accDeps.add(ix);
-					} 
+					} else if (Fields.CONCAT.equals(code)) {
+						// Recurse into each concat element to find step references
+						for (long i=1; i<v.count(); i++) {
+							scanDeps(accDeps, v.get(i));
+						}
+					}
 				} else if (inputSpec instanceof AMap m) {
 					int c=Utils.checkedInt(m.count());
 					for (int i=0; i<c; i++) {
