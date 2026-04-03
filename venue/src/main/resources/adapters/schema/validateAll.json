@@ -1,0 +1,23 @@
+{
+  "name": "Validate All Errors",
+  "description": "Validate a value against a JSON Schema and return all violations (not just the first). Returns {valid: true/false, errors: [...]}.",
+  "operation": {
+    "adapter": "schema:validateAll",
+    "toolName": "schema_validateAll",
+    "input": {
+      "type": "object",
+      "properties": {
+        "schema": { "type": "object", "description": "JSON Schema to validate against" },
+        "value": { "description": "Value to validate" }
+      },
+      "required": ["schema"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "valid": { "type": "boolean" },
+        "errors": { "type": "array", "items": { "type": "string" }, "description": "All validation errors" }
+      }
+    }
+  }
+}

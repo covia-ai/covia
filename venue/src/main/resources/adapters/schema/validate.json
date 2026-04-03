@@ -1,0 +1,23 @@
+{
+  "name": "Validate Value",
+  "description": "Validate a value against a JSON Schema. Returns {valid: true} if the value conforms, or {valid: false, error: '...'} with the first violation found.",
+  "operation": {
+    "adapter": "schema:validate",
+    "toolName": "schema_validate",
+    "input": {
+      "type": "object",
+      "properties": {
+        "schema": { "type": "object", "description": "JSON Schema to validate against" },
+        "value": { "description": "Value to validate" }
+      },
+      "required": ["schema"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "valid": { "type": "boolean" },
+        "error": { "type": "string", "description": "First validation error, if any" }
+      }
+    }
+  }
+}

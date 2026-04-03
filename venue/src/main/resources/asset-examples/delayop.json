@@ -9,8 +9,8 @@
 			"type":"object",
 			"properties":{
 				"operation":{
-					"type":"asset",
-					"description":"The operation to run after a delay."
+					"type":"string",
+					"description":"The operation to run after a delay (asset ID or name)."
 				},
 				"delay":{
 					"type":"number",
@@ -23,7 +23,6 @@
 			}	
 		},
 		"output": {
-			"type":"any",
 			"description":"The output of the delayed operation."
 		}
 	}

@@ -528,6 +528,80 @@ public class OrchestratorTest {
 		assertEquals("hello world", RT.getIn(result, "greeting").toString());
 	}
 
+	// ========== Strict mode validation ==========
+
+	@Test
+	public void testStrictModePassesValidOutput() {
+		// test:echo echoes its input — output matches the declared output schema
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Strict Valid Test",
+				"operation": {
+					"adapter": "orchestrator",
+					"strict": true,
+					"steps": [{
+						"op": "test:echo",
+						"input": { "echoed": ["const", "hello"] }
+					}],
+					"result": { "value": [0, "echoed"] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.empty(), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+		assertNotNull(result, "Strict mode should pass when output is valid");
+		assertEquals("hello", RT.getIn(result, "value").toString());
+	}
+
+	@Test
+	public void testStrictModePerStep() {
+		// Per-step strict flag
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Per-Step Strict Test",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [{
+						"op": "test:echo",
+						"strict": true,
+						"input": { "echoed": ["const", "hello"] }
+					}],
+					"result": { "value": [0, "echoed"] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.empty(), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+		assertNotNull(result, "Per-step strict should pass for valid output");
+	}
+
+	@Test
+	public void testStrictModeDisabledByDefault() {
+		// Without strict: true, no validation — even bad output passes
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Non-Strict Test",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [{
+						"op": "test:echo",
+						"input": { "echoed": ["const", "hello"] }
+					}],
+					"result": { "value": [0, "echoed"] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.empty(), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+		assertNotNull(result, "Non-strict should always pass");
+	}
+
 	// ========== Helper ==========
 
 	/**

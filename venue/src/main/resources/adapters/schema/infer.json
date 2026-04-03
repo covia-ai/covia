@@ -1,0 +1,20 @@
+{
+  "name": "Infer Schema",
+  "description": "Infer a JSON Schema from an example value. Produces the tightest schema that accepts the given value. Useful for schema discovery and documentation.",
+  "operation": {
+    "adapter": "schema:infer",
+    "toolName": "schema_infer",
+    "input": {
+      "type": "object",
+      "properties": {
+        "value": { "description": "Value to infer a schema from" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "schema": { "type": "object", "description": "Inferred JSON Schema" }
+      }
+    }
+  }
+}

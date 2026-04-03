@@ -11,6 +11,8 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
+import convex.core.json.schema.JsonSchema;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.MapEntry;
@@ -21,6 +23,7 @@ import convex.core.util.JSON;
 import convex.core.util.ThreadUtils;
 import convex.core.util.Utils;
 import covia.api.Fields;
+import covia.grid.Asset;
 import covia.grid.Grid;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -46,11 +49,15 @@ public class Orchestrator extends AAdapter {
 		throw new UnsupportedOperationException("Invalid call to orchestrator");
 	}
 
+	private static final AString K_STRICT = Strings.intern("strict");
+
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		AVector<?> steps=RT.ensureVector(RT.getIn(meta, Fields.OPERATION, Fields.STEPS));
-		ACell resultSpec=RT.getIn(meta, Fields.OPERATION, Fields.RESULT);
-		Orchestration orch=new Orchestration(job,ctx,input,steps,resultSpec);
+		AMap<AString, ACell> operation = RT.getIn(meta, Fields.OPERATION);
+		AVector<?> steps=RT.ensureVector(operation.get(Fields.STEPS));
+		ACell resultSpec=operation.get(Fields.RESULT);
+		boolean strict = CVMBool.TRUE.equals(operation.get(K_STRICT));
+		Orchestration orch=new Orchestration(job,ctx,input,steps,resultSpec,strict);
 		ThreadUtils.runVirtual("orchestrator thread", orch);
 	}
 
@@ -64,14 +71,16 @@ public class Orchestrator extends AAdapter {
 		final BlockingQueue<SubTask> completionQueue;
 		final ACell orchInput;
 		final RequestContext ctx;
+		final boolean strict;
 		ACell orchOutput=null;
 
-		public Orchestration(Job job, RequestContext ctx, ACell input, AVector<?> steps, ACell resultSpec) {
+		public Orchestration(Job job, RequestContext ctx, ACell input, AVector<?> steps, ACell resultSpec, boolean strict) {
 			this.job=job;
 			this.jobID=job.getID();
 			this.steps=steps;
 			this.orchInput=input;
 			this.ctx=ctx;
+			this.strict=strict;
 			this.n=Utils.checkedInt(steps.count());
 			completionQueue=new ArrayBlockingQueue<>(n);
 			this.resultSpec=resultSpec;
@@ -81,7 +90,7 @@ public class Orchestrator extends AAdapter {
 				if (step==null) throw new IllegalArgumentException("Step must be defined as a map object but was: "+steps.get(i));
 				SubTask task=new SubTask(i,step);
 				subTasks.add(task);
-			}		
+			}
 		}
 
 		private static final boolean DEBUG_ORCH=false;
@@ -220,7 +229,35 @@ public class Orchestrator extends AAdapter {
 				throw new IllegalArgumentException("Unrecognised input spec: "+inputSpec+" at path "+path);
 			}
 		}
-		
+
+		/**
+		 * Validates step output against the operation's declared output schema.
+		 * Throws on validation failure with a clear error naming the step.
+		 */
+		private void validateStepOutput(AString opId, ACell output, int stepNum) {
+			if (output == null) return;
+			try {
+				Asset asset = engine.resolveAsset(opId, ctx);
+				if (asset == null) return;
+				AMap<AString, ACell> outputSchema = getMap(RT.getIn(asset.meta(), Fields.OPERATION, Fields.OUTPUT));
+				if (outputSchema == null || outputSchema.isEmpty()) return;
+				String err = JsonSchema.validate(outputSchema, output);
+				if (err != null) {
+					throw new RuntimeException(
+						"Step " + stepNum + " (" + opId + ") output schema violation: " + err);
+				}
+			} catch (RuntimeException e) {
+				throw e;
+			} catch (Exception e) {
+				// Schema resolution failed — skip validation
+			}
+		}
+
+		@SuppressWarnings("unchecked")
+		private static AMap<AString, ACell> getMap(ACell cell) {
+			return (cell instanceof AMap) ? (AMap<AString, ACell>) cell : null;
+		}
+
 		public class SubTask implements Runnable {
 			AMap<AString, ACell> step;
 			HashSet<Integer> deps;
@@ -276,6 +313,12 @@ public class Orchestrator extends AAdapter {
 					}
 
 					output=subJob.awaitResult();
+
+					// Strict mode: validate step output against the operation's output schema
+					if (strict || CVMBool.TRUE.equals(step.get(K_STRICT))) {
+						validateStepOutput(opId, output, stepNum);
+					}
+
 					completionQueue.add(this);
 				} catch (Exception e) {
 					if (DEBUG_ORCH) System.err.println(e);

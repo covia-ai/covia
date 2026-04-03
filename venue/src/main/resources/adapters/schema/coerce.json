@@ -1,0 +1,22 @@
+{
+  "name": "Coerce Value",
+  "description": "Coerce a value to match a schema where possible. Handles common type mismatches: string-to-number, string-to-boolean, etc. Returns the original value if no coercion is possible.",
+  "operation": {
+    "adapter": "schema:coerce",
+    "toolName": "schema_coerce",
+    "input": {
+      "type": "object",
+      "properties": {
+        "schema": { "type": "object", "description": "Target JSON Schema" },
+        "value": { "description": "Value to coerce" }
+      },
+      "required": ["schema"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "value": { "description": "Coerced value (may be unchanged)" }
+      }
+    }
+  }
+}

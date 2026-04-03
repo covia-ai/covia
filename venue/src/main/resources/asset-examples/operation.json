@@ -9,8 +9,8 @@
 			"type":"object",
 			"properties":{
 				"data":{
-					"type":"asset",
-					"description":"The raw data to hash. Can be any binary content."
+					"type":"string",
+					"description":"The raw data to hash. Can be any binary content (hex-encoded)."
 				}
 			}
 		},

@@ -1,0 +1,22 @@
+{
+  "name": "Check Schema",
+  "description": "Check whether a JSON Schema is structurally valid (well-formed). Validates type values and property/items structure. Does not reject unknown annotation keywords (per JSON Schema spec).",
+  "operation": {
+    "adapter": "schema:check",
+    "toolName": "schema_check",
+    "input": {
+      "type": "object",
+      "properties": {
+        "schema": { "type": "object", "description": "JSON Schema to check" }
+      },
+      "required": ["schema"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "valid": { "type": "boolean" },
+        "error": { "type": "string", "description": "Error description if malformed" }
+      }
+    }
+  }
+}
