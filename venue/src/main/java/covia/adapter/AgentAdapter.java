@@ -651,10 +651,14 @@ public class AgentAdapter extends AAdapter {
 		AString transitionOp = resolveTransitionOp(callerDID, agentId);
 		if (transitionOp == null) return null;
 
-		// Atomic CAS: SLEEPING → RUNNING
+		// Atomic CAS: SLEEPING → RUNNING. If it fails, the agent is already
+		// running elsewhere — return that runner's future if we can find it.
+		// NOTE: a race exists (#64) where status can appear RUNNING with no
+		// entry in runCompletions; we retry the CAS once to work around it.
 		if (!agent.tryStartRunning()) {
-			// Was already RUNNING — return existing future
-			return runCompletions.get(agentId.toString());
+			CompletableFuture<ACell> other = runCompletions.get(agentId.toString());
+			if (other != null) return other;
+			if (!agent.tryStartRunning()) return null;
 		}
 
 		// We won the CAS — create future and start loop

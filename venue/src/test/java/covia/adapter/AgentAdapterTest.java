@@ -539,6 +539,80 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testTriggerDefaultBlocksUntilComplete() {
+		// Backward compat: no `wait` field → block until run loop finishes (status SLEEPING).
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "block-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User u = engine.getVenueState().users().get(ALICE_DID);
+		u.agent("block-agent").deliverMessage(Maps.of("content", "hi"));
+
+		Job job = engine.jobs().invokeOperation(
+			"agent:trigger",
+			Maps.of(Fields.AGENT_ID, "block-agent"),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertNotNull(result);
+		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS),
+			"Default wait should block until run loop completes");
+	}
+
+	@Test
+	public void testTriggerWaitFalseReturnsImmediately() {
+		// wait=false → return immediately with status RUNNING. Run loop still
+		// executes in the background; caller polls via agent:info or
+		// covia:read path=g/<agent>/status.
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "async-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User u = engine.getVenueState().users().get(ALICE_DID);
+		u.agent("async-agent").deliverMessage(Maps.of("content", "hi"));
+
+		Job job = engine.jobs().invokeOperation(
+			"agent:trigger",
+			Maps.of(Fields.AGENT_ID, "async-agent", Fields.WAIT, CVMBool.FALSE),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertNotNull(result);
+		assertEquals(AgentState.RUNNING, RT.getIn(result, Fields.STATUS),
+			"wait=false should return RUNNING without blocking");
+		assertEquals(Strings.create("async-agent"), RT.getIn(result, Fields.AGENT_ID));
+	}
+
+	@Test
+	public void testTriggerWaitIntegerTimeout() {
+		// wait=<ms> → block up to that many ms, return running if timed out.
+		// Using test:echo which is effectively instant — result should be SLEEPING
+		// because the run loop finishes well within the timeout.
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "to-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User u = engine.getVenueState().users().get(ALICE_DID);
+		u.agent("to-agent").deliverMessage(Maps.of("content", "hi"));
+
+		Job job = engine.jobs().invokeOperation(
+			"agent:trigger",
+			Maps.of(Fields.AGENT_ID, "to-agent", Fields.WAIT, CVMLong.create(5000)),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(6000);
+
+		assertNotNull(result);
+		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS),
+			"wait=5000 should wait for fast run loop to finish");
+	}
+
+	@Test
 	public void testTriggerNoWork() {
 		// Trigger with no messages/tasks — transition still runs (may act proactively)
 		engine.jobs().invokeOperation(
