@@ -83,6 +83,33 @@ public class AssetAdapterTest {
 		}
 	}
 
+	@Test
+	public void testStoreRejectsJsonArrayMetadata() {
+		// Regression: metadata string that parses to a JSON array should be rejected,
+		// not silently stored as empty metadata (caused by RT.ensureMap(null) returning Maps.empty()).
+		ACell input = Maps.of(Fields.METADATA, "[1, 2, 3]");
+		Job job = engine.jobs().invokeOperation("asset:store", input, RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("Should have thrown for JSON array metadata");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+		}
+	}
+
+	@Test
+	public void testStoreRejectsJsonNullMetadata() {
+		// Regression: metadata string "null" should be rejected, not silently stored as empty.
+		ACell input = Maps.of(Fields.METADATA, "null");
+		Job job = engine.jobs().invokeOperation("asset:store", input, RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("Should have thrown for JSON null metadata");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+		}
+	}
+
 	// ========== asset:get ==========
 
 	@Test

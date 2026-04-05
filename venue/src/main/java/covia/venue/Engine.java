@@ -455,10 +455,14 @@ public class Engine {
 	 * @param assetID Asset ID of operation
 	 * @return Metadata value, or null if not valid metadata
 	 */
+	@SuppressWarnings("unchecked")
 	public AMap<AString,ACell> getMetaValue(Hash assetID) {
 		AVector<?> arec=venueState.assets().getRecord(assetID);
 		if (arec==null) return null;
-		return RT.ensureMap(arec.get(AssetStore.POS_META));
+		// instanceof — RT.ensureMap(null) returns an empty map, which would
+		// violate the "null if not valid metadata" contract.
+		ACell meta = arec.get(AssetStore.POS_META);
+		return (meta instanceof AMap) ? (AMap<AString, ACell>) meta : null;
 	}
 
 	// ========== Reference resolution ==========

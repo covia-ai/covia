@@ -76,17 +76,20 @@ public class AssetAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private ACell handleStore(ACell input, RequestContext ctx) {
 		ACell metaCell = RT.getIn(input, Fields.METADATA);
-		// Accept metadata as a JSON object or a JSON string (parsed on the fly)
+		// Accept metadata as a JSON object or a JSON string (parsed on the fly).
+		// NB: instanceof check on the parsed value is required because RT.ensureMap(null)
+		// returns an empty map — we need to reject non-object JSON (e.g. "[]", "null").
 		AMap<AString, ACell> metadata;
 		if (metaCell instanceof AMap) {
 			metadata = (AMap<AString, ACell>) metaCell;
 		} else if (metaCell instanceof AString s) {
+			ACell parsed;
 			try {
-				ACell parsed = convex.core.util.JSON.parse(s.toString());
-				metadata = RT.ensureMap(parsed);
+				parsed = convex.core.util.JSON.parse(s.toString());
 			} catch (Exception e) {
 				throw new IllegalArgumentException("metadata string is not valid JSON: " + e.getMessage());
 			}
+			metadata = (parsed instanceof AMap) ? (AMap<AString, ACell>) parsed : null;
 		} else {
 			metadata = null;
 		}

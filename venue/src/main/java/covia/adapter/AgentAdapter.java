@@ -175,9 +175,15 @@ public class AgentAdapter extends AAdapter {
 
 			AMap<AString, ACell> defMeta = defAsset.meta();
 
-			// Extract agent config from definition metadata
+			// Extract agent config from definition metadata.
+			// NB: use instanceof (not RT.ensureMap) because RT.ensureMap(null) returns
+			// an empty map, which would wrap an empty state.config even when the
+			// definition has no nested agent.config.
 			AString defOp = RT.ensureString(RT.getIn(defMeta, Strings.intern("agent"), Fields.OPERATION));
-			AMap<AString, ACell> defConfig = RT.ensureMap(RT.getIn(defMeta, Strings.intern("agent"), Fields.CONFIG));
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> defConfig =
+				(RT.getIn(defMeta, Strings.intern("agent"), Fields.CONFIG) instanceof AMap<?,?> dm)
+					? (AMap<AString, ACell>) dm : null;
 
 			// Definition provides defaults; explicit params override
 			if (config == null && defOp != null) {

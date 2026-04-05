@@ -86,8 +86,13 @@ public class Orchestrator extends AAdapter {
 			this.resultSpec=resultSpec;
 			subTasks=new ArrayList<>();
 			for (int i=0; i<n; i++) {
-				AMap<AString, ACell> step=RT.ensureMap(steps.get(i));
-				if (step==null) throw new IllegalArgumentException("Step must be defined as a map object but was: "+steps.get(i));
+				// instanceof — RT.ensureMap(null) returns an empty map, which
+				// would swallow the error case and fail confusingly downstream.
+				if (!(steps.get(i) instanceof AMap<?,?> sm)) {
+					throw new IllegalArgumentException("Step must be defined as a map object but was: "+steps.get(i));
+				}
+				@SuppressWarnings("unchecked")
+				AMap<AString, ACell> step = (AMap<AString, ACell>) sm;
 				SubTask task=new SubTask(i,step);
 				subTasks.add(task);
 			}

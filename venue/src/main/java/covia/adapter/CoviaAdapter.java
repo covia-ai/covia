@@ -950,8 +950,9 @@ public class CoviaAdapter extends AAdapter {
 		AString venueDID = engine.getDIDString();
 
 		for (long i = 0; i < proofs.count(); i++) {
-			AMap<AString, ACell> tokenMap = RT.ensureMap(proofs.get(i));
-			if (tokenMap == null) continue;
+			if (!(proofs.get(i) instanceof AMap<?,?> tm)) continue;
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> tokenMap = (AMap<AString, ACell>) tm;
 
 			UCAN token = UCAN.parse(tokenMap);
 			if (token == null) continue;
@@ -970,8 +971,10 @@ public class CoviaAdapter extends AAdapter {
 			// Check attenuations cover the requested resource (full DID URL)
 			AVector<ACell> atts = token.getCapabilities();
 			for (long j = 0; j < atts.count(); j++) {
-				AMap<AString, ACell> att = RT.ensureMap(atts.get(j));
-				if (att != null && Capability.covers(att, requestedResource, requestedAbility)) {
+				if (!(atts.get(j) instanceof AMap<?,?> am)) continue;
+				@SuppressWarnings("unchecked")
+				AMap<AString, ACell> att = (AMap<AString, ACell>) am;
+				if (Capability.covers(att, requestedResource, requestedAbility)) {
 					return true;
 				}
 			}

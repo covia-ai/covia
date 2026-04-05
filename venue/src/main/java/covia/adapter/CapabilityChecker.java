@@ -42,9 +42,10 @@ public class CapabilityChecker {
 		if (resource == null) resource = "";
 
 		for (long i = 0; i < caps.count(); i++) {
+			// Skip non-map entries — defensive against malformed caps data
+			if (!(caps.get(i) instanceof AMap<?,?> capMap)) continue;
 			@SuppressWarnings("unchecked")
-			AMap<AString, ACell> cap = RT.ensureMap(caps.get(i));
-			if (cap == null) continue;
+			AMap<AString, ACell> cap = (AMap<AString, ACell>) capMap;
 
 			if (Capability.covers(cap, resource, ability)) {
 				return null; // allowed
