@@ -46,6 +46,11 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_START = Strings.intern("start");
 	private static final AString K_END   = Strings.intern("end");
 	private static final AString PENDING = Strings.intern("PENDING");
+	private static final AString K_SOURCE_ID        = Strings.intern("sourceId");
+	private static final AString K_INCLUDE_TIMELINE = Strings.intern("includeTimeline");
+	private static final AString K_FORKED_FROM      = Strings.intern("forkedFrom");
+	private static final AString K_SYSTEM_PROMPT    = Strings.intern("systemPrompt");
+	private static final AString K_LLM_OPERATION    = Strings.intern("llmOperation");
 
 	/** Maximum run loop iterations before forced exit (safety net) */
 	private static final int MAX_LOOP_ITERATIONS = 20;
@@ -55,6 +60,9 @@ public class AgentAdapter extends AAdapter {
 
 	/** Counter for task ID generation */
 	private long taskIdCounter = 0;
+
+	/** Registry of pre-installed template names → venue asset hashes */
+	private Index<AString, Hash> templates = Index.none();
 
 	@Override public String getName() { return "agent"; }
 
@@ -69,6 +77,7 @@ public class AgentAdapter extends AAdapter {
 	protected void installAssets() {
 		String BASE = "/adapters/agent/";
 		installAsset(BASE + "create.json");
+		installAsset(BASE + "fork.json");
 		installAsset(BASE + "request.json");
 		installAsset(BASE + "message.json");
 		installAsset(BASE + "trigger.json");
@@ -79,6 +88,27 @@ public class AgentAdapter extends AAdapter {
 		installAsset(BASE + "resume.json");
 		installAsset(BASE + "update.json");
 		installAsset(BASE + "cancelTask.json");
+
+		// Install standard agent templates — discoverable via config="template:<name>"
+		installTemplate("template:minimal", "/agent-templates/minimal.json");
+		installTemplate("template:reader",  "/agent-templates/reader.json");
+		installTemplate("template:worker",  "/agent-templates/worker.json");
+		installTemplate("template:manager", "/agent-templates/manager.json");
+		installTemplate("template:analyst", "/agent-templates/analyst.json");
+		installTemplate("template:full",    "/agent-templates/full.json");
+	}
+
+	/**
+	 * Installs an agent template as a venue-level asset and records its
+	 * short name in the template registry. Templates are flat config maps
+	 * (systemPrompt, tools, etc.) that can be referenced via
+	 * {@code config="template:<name>"} in {@code agent:create}.
+	 */
+	private void installTemplate(String name, String resourcePath) {
+		Hash hash = installAsset(resourcePath);
+		if (hash != null) {
+			templates = templates.assoc(Strings.create(name), hash);
+		}
 	}
 
 	@Override
@@ -95,6 +125,7 @@ public class AgentAdapter extends AAdapter {
 		try {
 			switch (getSubOperation(meta)) {
 				case "create"  -> handleCreate(job, input, ctx);
+				case "fork"    -> handleFork(job, input, ctx);
 				case "request" -> handleRequest(job, input, ctx);
 				case "message" -> handleMessage(job, input, ctx);
 				case "trigger" -> handleTrigger(job, input, ctx);
@@ -114,13 +145,27 @@ public class AgentAdapter extends AAdapter {
 
 	// ========== Operation handlers ==========
 
-	@SuppressWarnings("unchecked")
 	private void handleCreate(Job job, ACell input, RequestContext ctx) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) { job.fail("agentId is required"); return; }
 
-		AMap<AString, ACell> config = (AMap<AString, ACell>) RT.getIn(input, Fields.CONFIG);
+		AMap<AString, ACell> config;
+		try {
+			config = parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx);
+		} catch (IllegalArgumentException e) {
+			job.fail(e.getMessage()); return;
+		}
+
 		ACell initialState = RT.getIn(input, AgentState.KEY_STATE);
+
+		// Templates may embed initial state — extract if caller didn't provide one
+		if (config != null && initialState == null) {
+			ACell embeddedState = config.get(AgentState.KEY_STATE);
+			if (embeddedState != null) {
+				initialState = embeddedState;
+				config = config.dissoc(AgentState.KEY_STATE);
+			}
+		}
 
 		// Resolve agent definition asset if provided
 		AString definitionRef = RT.ensureString(RT.getIn(input, Fields.DEFINITION));
@@ -142,37 +187,101 @@ public class AgentAdapter extends AAdapter {
 				initialState = Maps.of(Strings.intern("config"), defConfig);
 			}
 
-			// Store resolved asset ID in config for provenance
+			// Store resolved asset ID in config for provenance (full DID URL)
 			if (config != null) {
-				AString defID = Strings.create(defAsset.getID().toHexString());
+				AString defID = ctx.getCallerDID().append("/a/" + defAsset.getID().toHexString());
 				config = config.assoc(Fields.DEFINITION, defID);
 			}
 		}
 
-		boolean overwrite = CVMBool.TRUE.equals(RT.getIn(input, Fields.OVERWRITE));
-
-		Users users = engine.getVenueState().users();
-		User user = users.ensure(ctx.getCallerDID());
-		AgentState agent = user.agent(agentId);
-		boolean alreadyExists = (agent != null && agent.exists());
-
-		// If overwrite requested, only allow on TERMINATED agents
-		if (alreadyExists && overwrite) {
-			if (AgentState.TERMINATED.equals(agent.getStatus())) {
-				user.removeAgent(agentId);
-				alreadyExists = false;
-			} else {
-				job.fail("Cannot overwrite agent that is not TERMINATED (status: " + agent.getStatus() + ")");
-				return;
-			}
+		// Apply sensible defaults for LLM agents. LLMAgentAdapter.processChat merges
+		// record.config with state.config at chat time (state wins), so we write LLM
+		// defaults directly into record.config instead of duplicating into state.
+		if (config == null) config = Maps.empty();
+		if (!config.containsKey(Fields.OPERATION)) {
+			config = config.assoc(Fields.OPERATION, Strings.create("llmagent:chat"));
+		}
+		// systemPrompt present implies an LLM agent — ensure llmOperation is set
+		if (config.containsKey(K_SYSTEM_PROMPT) && !config.containsKey(K_LLM_OPERATION)) {
+			config = config.assoc(K_LLM_OPERATION, Strings.create("langchain:openai"));
 		}
 
-		agent = user.ensureAgent(agentId, config, initialState);
+		boolean overwrite = CVMBool.TRUE.equals(RT.getIn(input, Fields.OVERWRITE));
+		Users users = engine.getVenueState().users();
+		User user = users.ensure(ctx.getCallerDID());
+
+		// Idempotent: if the slot is occupied and !overwrite, ensureAgent below
+		// returns the existing agent unchanged. If overwrite=true, TERMINATED
+		// agents are cleared; non-TERMINATED fails.
+		Boolean stillOccupied = applyOverwrite(job, user, agentId, overwrite);
+		if (stillOccupied == null) return;
+		boolean alreadyExists = stillOccupied;
+
+		AgentState agent = user.ensureAgent(agentId, config, initialState);
 
 		AMap<AString, ACell> result = Maps.of(
 			Fields.AGENT_ID, agentId,
 			Fields.STATUS, agent.getStatus(),
 			Fields.CREATED, CVMBool.of(!alreadyExists));
+
+		job.setStatus(Status.STARTED);
+		job.completeWith(result);
+	}
+
+	/**
+	 * agent:fork — create a new agent from an existing agent's config + state.
+	 *
+	 * <p>Copies config and state; timeline is copied only if {@code includeTimeline}
+	 * is true. Tasks, pending, and inbox are fresh; status is SLEEPING. Optional
+	 * inline or reference config is merged on top of the source config.</p>
+	 */
+	private void handleFork(Job job, ACell input, RequestContext ctx) {
+		AString sourceId = RT.ensureString(RT.getIn(input, K_SOURCE_ID));
+		if (sourceId == null) { job.fail("sourceId is required"); return; }
+
+		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		if (agentId == null) { job.fail("agentId is required"); return; }
+
+		Users users = engine.getVenueState().users();
+		User user = users.ensure(ctx.getCallerDID());
+
+		// Resolve source agent
+		AgentState source = user.agent(sourceId);
+		if (source == null || !source.exists()) {
+			job.fail("Source agent not found: " + sourceId); return;
+		}
+		if (AgentState.TERMINATED.equals(source.getStatus())) {
+			job.fail("Cannot fork TERMINATED agent: " + sourceId); return;
+		}
+
+		// Resolve optional config override and merge on top of source config
+		AMap<AString, ACell> overrideConfig;
+		try {
+			overrideConfig = parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx);
+		} catch (IllegalArgumentException e) {
+			job.fail(e.getMessage()); return;
+		}
+		AMap<AString, ACell> sourceConfig = source.getConfig();
+		AMap<AString, ACell> forkConfig = (overrideConfig == null) ? sourceConfig
+			: (sourceConfig != null ? sourceConfig.merge(overrideConfig) : overrideConfig);
+
+		ACell sourceState = source.getState();
+		AVector<ACell> sourceTimeline = CVMBool.TRUE.equals(RT.getIn(input, K_INCLUDE_TIMELINE))
+			? source.getTimeline() : null;
+
+		// Fork must write into an empty slot — fail if the target still exists
+		boolean overwrite = CVMBool.TRUE.equals(RT.getIn(input, Fields.OVERWRITE));
+		Boolean stillOccupied = applyOverwrite(job, user, agentId, overwrite);
+		if (stillOccupied == null) return;
+		if (stillOccupied) { job.fail("Target agent already exists: " + agentId); return; }
+
+		AgentState target = user.forkAgent(agentId, forkConfig, sourceState, sourceTimeline);
+
+		AMap<AString, ACell> result = Maps.of(
+			Fields.AGENT_ID, agentId,
+			Fields.STATUS, target.getStatus(),
+			Fields.CREATED, CVMBool.TRUE,
+			K_FORKED_FROM, sourceId);
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(result);
@@ -277,10 +386,13 @@ public class AgentAdapter extends AAdapter {
 
 		// Return a lightweight summary. Full state, history, and timeline
 		// are accessible via covia:read path=g/<agentId>/state etc.
+		// NB: stateConfig is only populated by legacy definition-created agents.
+		// Use instanceof (not RT.ensureMap) because RT.ensureMap(null) returns
+		// an empty map — callers would see a spurious empty stateConfig otherwise.
 		@SuppressWarnings("unchecked")
-		AMap<AString, ACell> state = RT.ensureMap(record.get(AgentState.KEY_STATE));
-		@SuppressWarnings("unchecked")
-		AMap<AString, ACell> stateConfig = (state != null) ? RT.ensureMap(RT.getIn(state, Strings.intern("config"))) : null;
+		AMap<AString, ACell> stateConfig =
+			(RT.getIn(record, AgentState.KEY_STATE, Strings.intern("config")) instanceof AMap<?,?> sc)
+				? (AMap<AString, ACell>) sc : null;
 		AVector<?> timeline = agent.getTimeline();
 		Index<Blob, ACell> tasks = agent.getTasks();
 
@@ -289,7 +401,7 @@ public class AgentAdapter extends AAdapter {
 			Fields.STATUS, record.get(AgentState.KEY_STATUS),
 			Fields.CONFIG, record.get(AgentState.KEY_CONFIG));
 
-		// Include state.config (caps, context, model, prompt) but not history
+		// Include state.config (legacy path — only populated by definition-created agents)
 		if (stateConfig != null) summary = summary.assoc(Strings.intern("stateConfig"), stateConfig);
 		if (timeline != null) summary = summary.assoc(Strings.intern("timelineLength"), CVMLong.create(timeline.count()));
 		if (tasks != null) summary = summary.assoc(Strings.intern("tasks"), CVMLong.create(tasks.count()));
@@ -768,6 +880,100 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> config = agent.getConfig();
 		if (config == null) return null;
 		return RT.ensureString(config.get(Fields.OPERATION));
+	}
+
+	/**
+	 * Parses the {@code config} input argument to an {@link AMap}, accepting
+	 * either an inline map or a string reference (workspace path, asset ref,
+	 * DID URL, or standard template name).
+	 *
+	 * @throws IllegalArgumentException if a string reference cannot be resolved
+	 * @return the resolved config map, or {@code null} if no config was provided
+	 */
+	@SuppressWarnings("unchecked")
+	private AMap<AString, ACell> parseConfigArg(ACell configArg, RequestContext ctx) {
+		if (configArg == null) return null;
+		if (configArg instanceof AMap<?,?> m) return (AMap<AString, ACell>) m;
+		AString ref = RT.ensureString(configArg);
+		if (ref == null) return null;
+		AMap<AString, ACell> resolved = resolveConfigRef(ref, ctx);
+		if (resolved == null) {
+			throw new IllegalArgumentException("Could not resolve config reference: " + ref);
+		}
+		return resolved;
+	}
+
+	/**
+	 * Processes the {@code overwrite} flag for a target agent slot. If the slot
+	 * is occupied by a TERMINATED agent and {@code overwrite} is true, the
+	 * existing agent is removed. If the slot is occupied by a non-TERMINATED
+	 * agent and {@code overwrite} is true, the job is failed.
+	 *
+	 * <p>When {@code overwrite} is false and the slot is occupied, this method
+	 * does nothing — callers decide whether that's an error (fork) or idempotent
+	 * (create).</p>
+	 *
+	 * @return the slot occupancy AFTER this call — {@link Boolean#TRUE} if still
+	 *         occupied, {@link Boolean#FALSE} if free, or {@code null} if the
+	 *         job was failed by this method
+	 */
+	private Boolean applyOverwrite(Job job, User user, AString agentId, boolean overwrite) {
+		AgentState existing = user.agent(agentId);
+		if (existing == null || !existing.exists()) return Boolean.FALSE;
+
+		if (!overwrite) return Boolean.TRUE;
+
+		if (AgentState.TERMINATED.equals(existing.getStatus())) {
+			user.removeAgent(agentId);
+			return Boolean.FALSE;
+		}
+		job.fail("Cannot overwrite agent that is not TERMINATED (status: " + existing.getStatus() + ")");
+		return null;
+	}
+
+	/**
+	 * Resolves a string reference to a config map. Tries, in order:
+	 * <ol>
+	 *   <li>Pre-installed template registry (e.g. {@code template:worker})</li>
+	 *   <li>Asset resolution (bare hash, {@code /a/}, {@code /o/}, DID URL,
+	 *       venue operation name) — the asset metadata is used as the config map</li>
+	 *   <li>Workspace path resolution (e.g. {@code w/templates/reader}) within
+	 *       the caller's own lattice namespace</li>
+	 * </ol>
+	 * Returns {@code null} if none resolves to a map.
+	 */
+	@SuppressWarnings("unchecked")
+	private AMap<AString, ACell> resolveConfigRef(AString ref, RequestContext ctx) {
+		// Check pre-installed template registry first (e.g. "template:worker")
+		Hash templateHash = templates.get(ref);
+		if (templateHash != null) {
+			Asset tAsset = engine.getAsset(templateHash);
+			if (tAsset != null) {
+				AMap<AString, ACell> tMeta = tAsset.meta();
+				if (tMeta != null) return tMeta;
+			}
+		}
+
+		// Try asset resolution
+		Asset asset = engine.resolveAsset(ref, ctx);
+		if (asset != null) {
+			AMap<AString, ACell> meta = asset.meta();
+			if (meta != null) return meta;
+		}
+
+		// Fall back to workspace path resolution in caller's own namespace
+		if (ctx.getCallerDID() != null) {
+			Users users = engine.getVenueState().users();
+			User user = users.get(ctx.getCallerDID());
+			if (user != null) {
+				ACell[] pathKeys = CoviaAdapter.parsePath(ref);
+				if (pathKeys.length > 0) {
+					ACell value = CoviaAdapter.readPath(user.cursor(), pathKeys);
+					if (value instanceof AMap<?,?> vm) return (AMap<AString, ACell>) vm;
+				}
+			}
+		}
+		return null;
 	}
 
 	// ========== ID generation ==========

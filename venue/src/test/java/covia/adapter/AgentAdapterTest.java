@@ -73,6 +73,149 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testCreateAgentWithConfigFromWorkspacePath() {
+		// Store a template map in the caller's workspace
+		AMap<AString, ACell> template = Maps.of(
+			Strings.create("systemPrompt"), Strings.create("You read data."),
+			Strings.create("model"), Strings.create("gpt-4"));
+
+		engine.jobs().invokeOperation(
+			"covia:write",
+			Maps.of(
+				Fields.PATH, Strings.create("w/templates/reader"),
+				Fields.VALUE, template),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Create an agent from a workspace-path reference
+		Job job = engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "reader-from-template",
+				Fields.CONFIG, Strings.create("w/templates/reader")),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertNotNull(result);
+		assertEquals(Strings.create("reader-from-template"), RT.getIn(result, Fields.AGENT_ID));
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("reader-from-template");
+		assertNotNull(agent);
+		AMap<AString, ACell> storedConfig = agent.getConfig();
+		assertNotNull(storedConfig);
+		assertEquals(Strings.create("You read data."),
+			storedConfig.get(Strings.create("systemPrompt")));
+		assertEquals(Strings.create("gpt-4"),
+			storedConfig.get(Strings.create("model")));
+	}
+
+	@Test
+	public void testCreateAgentFromStandardTemplateReader() {
+		Job job = engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "reader-bot",
+				Fields.CONFIG, Strings.create("template:reader")),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertNotNull(result);
+		assertEquals(Strings.create("reader-bot"), RT.getIn(result, Fields.AGENT_ID));
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("reader-bot");
+		assertNotNull(agent);
+		AMap<AString, ACell> config = agent.getConfig();
+		assertNotNull(config);
+		// Template supplies a systemPrompt and a tools vector
+		assertNotNull(config.get(Strings.create("systemPrompt")));
+		assertNotNull(config.get(Strings.create("tools")));
+		// Reader template has defaultTools=false
+		assertEquals(CVMBool.FALSE, config.get(Strings.create("defaultTools")));
+	}
+
+	@Test
+	public void testCreateAgentFromStandardTemplateWorker() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "data-worker",
+				Fields.CONFIG, Strings.create("template:worker")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("data-worker");
+		assertNotNull(agent);
+		AMap<AString, ACell> config = agent.getConfig();
+		// Worker template includes covia:write in tools
+		AVector<ACell> tools = RT.ensureVector(config.get(Strings.create("tools")));
+		assertNotNull(tools);
+		boolean hasWrite = false;
+		for (long i = 0; i < tools.count(); i++) {
+			if (Strings.create("covia:write").equals(tools.get(i))) {
+				hasWrite = true;
+				break;
+			}
+		}
+		assertTrue(hasWrite, "worker template should include covia:write");
+	}
+
+	@Test
+	public void testCreateAgentWithConfigRefFailsIfMissing() {
+		Job job = engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "ghost-template",
+				Fields.CONFIG, Strings.create("w/templates/does-not-exist")),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			job.awaitResult(5000);
+			fail("Should fail when config reference cannot be resolved");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+		}
+	}
+
+	@Test
+	public void testCreateAgentExtractsEmbeddedState() {
+		// Template with embedded state field — should be extracted as initial state
+		AMap<AString, ACell> template = Maps.of(
+			Strings.create("systemPrompt"), Strings.create("You have memory."),
+			AgentState.KEY_STATE, Maps.of(Strings.create("memory"), Strings.create("pre-loaded")));
+
+		engine.jobs().invokeOperation(
+			"covia:write",
+			Maps.of(
+				Fields.PATH, Strings.create("w/templates/stateful"),
+				Fields.VALUE, template),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "stateful-agent",
+				Fields.CONFIG, Strings.create("w/templates/stateful")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("stateful-agent");
+		assertNotNull(agent);
+
+		// systemPrompt lives in config, embedded state is not in config
+		AMap<AString, ACell> storedConfig = agent.getConfig();
+		assertEquals(Strings.create("You have memory."),
+			storedConfig.get(Strings.create("systemPrompt")));
+		assertNull(storedConfig.get(AgentState.KEY_STATE),
+			"state field should be extracted out of config");
+
+		// Embedded state is used as initial state
+		ACell state = agent.getState();
+		assertNotNull(state);
+		assertEquals(Strings.create("pre-loaded"), RT.getIn(state, Strings.create("memory")));
+	}
+
+	@Test
 	public void testCreateMissingAgentId() {
 		ACell input = Maps.of("foo", "bar");
 		Job job = engine.jobs().invokeOperation(
@@ -100,6 +243,185 @@ public class AgentAdapterTest {
 
 		assertNotNull(result2);
 		assertEquals(Strings.create("idempotent-agent"), RT.getIn(result2, Fields.AGENT_ID));
+	}
+
+	// ========== agent:fork ==========
+
+	@Test
+	public void testForkAgentBasic() {
+		// Create source agent with config and some state
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "source-agent",
+				Fields.CONFIG, Maps.of(
+					Strings.create("systemPrompt"), Strings.create("You are source."),
+					Strings.create("model"), Strings.create("gpt-4")),
+				AgentState.KEY_STATE, Maps.of(Strings.create("memory"), Strings.create("original"))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Fork it
+		Job job = engine.jobs().invokeOperation(
+			"agent:fork",
+			Maps.of(
+				Strings.create("sourceId"), Strings.create("source-agent"),
+				Fields.AGENT_ID, "fork-agent"),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertNotNull(result);
+		assertEquals(Strings.create("fork-agent"), RT.getIn(result, Fields.AGENT_ID));
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CREATED));
+		assertEquals(Strings.create("source-agent"), RT.getIn(result, Strings.create("forkedFrom")));
+		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
+
+		// Fork should have the same config and state as source
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState fork = user.agent("fork-agent");
+		assertNotNull(fork);
+		AMap<AString, ACell> forkConfig = fork.getConfig();
+		assertEquals(Strings.create("You are source."),
+			forkConfig.get(Strings.create("systemPrompt")));
+		assertEquals(Strings.create("gpt-4"),
+			forkConfig.get(Strings.create("model")));
+		assertEquals(Strings.create("original"),
+			RT.getIn(fork.getState(), Strings.create("memory")));
+	}
+
+	@Test
+	public void testForkAgentWithConfigOverride() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(
+				Fields.AGENT_ID, "base",
+				Fields.CONFIG, Maps.of(
+					Strings.create("systemPrompt"), Strings.create("Original prompt"),
+					Strings.create("model"), Strings.create("gpt-4"))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Fork with config override — systemPrompt changes, model stays
+		engine.jobs().invokeOperation(
+			"agent:fork",
+			Maps.of(
+				Strings.create("sourceId"), Strings.create("base"),
+				Fields.AGENT_ID, "variant",
+				Fields.CONFIG, Maps.of(
+					Strings.create("systemPrompt"), Strings.create("Override prompt"))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState variant = user.agent("variant");
+		AMap<AString, ACell> vc = variant.getConfig();
+		assertEquals(Strings.create("Override prompt"),
+			vc.get(Strings.create("systemPrompt")));
+		assertEquals(Strings.create("gpt-4"), vc.get(Strings.create("model")),
+			"Non-overridden fields should come from source");
+	}
+
+	@Test
+	public void testForkAgentFreshCollections() {
+		// Create source with messages and tasks
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "busy-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Deliver a message to source
+		engine.jobs().invokeOperation(
+			"agent:message",
+			Maps.of(
+				Fields.AGENT_ID, "busy-agent",
+				Fields.MESSAGE, Maps.of("content", "hello")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Fork
+		engine.jobs().invokeOperation(
+			"agent:fork",
+			Maps.of(
+				Strings.create("sourceId"), Strings.create("busy-agent"),
+				Fields.AGENT_ID, "busy-fork"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState fork = user.agent("busy-fork");
+		AVector<ACell> forkInbox = fork.getInbox();
+		assertNotNull(forkInbox);
+		assertEquals(0, forkInbox.count(), "Fork should have empty inbox");
+		assertEquals(0, fork.getTasks().count(), "Fork should have no tasks");
+
+		// Source still has its messages
+		AgentState source = user.agent("busy-agent");
+		assertEquals(1, source.getInbox().count(), "Source inbox is not touched");
+	}
+
+	@Test
+	public void testForkAgentIncludeTimeline() {
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "timeline-source"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Fork WITHOUT timeline
+		engine.jobs().invokeOperation(
+			"agent:fork",
+			Maps.of(
+				Strings.create("sourceId"), Strings.create("timeline-source"),
+				Fields.AGENT_ID, "no-timeline-fork"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Fork WITH timeline
+		engine.jobs().invokeOperation(
+			"agent:fork",
+			Maps.of(
+				Strings.create("sourceId"), Strings.create("timeline-source"),
+				Fields.AGENT_ID, "with-timeline-fork",
+				Strings.create("includeTimeline"), CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		// Both forks exist
+		assertNotNull(user.agent("no-timeline-fork"));
+		assertNotNull(user.agent("with-timeline-fork"));
+		// Both have empty timelines (source had none), and status SLEEPING
+		assertEquals(AgentState.SLEEPING, user.agent("no-timeline-fork").getStatus());
+		assertEquals(AgentState.SLEEPING, user.agent("with-timeline-fork").getStatus());
+	}
+
+	@Test
+	public void testForkMissingSource() {
+		Job job = engine.jobs().invokeOperation(
+			"agent:fork",
+			Maps.of(
+				Strings.create("sourceId"), Strings.create("ghost"),
+				Fields.AGENT_ID, "fork"),
+			RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("Should fail when source doesn't exist");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+		}
+	}
+
+	@Test
+	public void testForkTargetAlreadyExists() {
+		engine.jobs().invokeOperation("agent:create",
+			Maps.of(Fields.AGENT_ID, "a1"), RequestContext.of(ALICE_DID)).awaitResult(5000);
+		engine.jobs().invokeOperation("agent:create",
+			Maps.of(Fields.AGENT_ID, "a2"), RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation(
+			"agent:fork",
+			Maps.of(
+				Strings.create("sourceId"), Strings.create("a1"),
+				Fields.AGENT_ID, "a2"),
+			RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("Should fail when target already exists");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+		}
 	}
 
 	// ========== agent:message ==========
@@ -304,30 +626,45 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testTriggerNoOperationConfigured() {
+	public void testInfoOmitsEmptyStateConfig() {
+		// New agents (non-definition path) have state=null — info should not
+		// include a spurious empty stateConfig field. Regression for RT.ensureMap
+		// returning Maps.empty() for null input.
 		engine.jobs().invokeOperation(
 			"agent:create",
-			Maps.of(Fields.AGENT_ID, "no-op-agent"),
+			Maps.of(
+				Fields.AGENT_ID, "no-state-agent",
+				Fields.CONFIG, Strings.create("template:reader")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// No config.operation — wakeAgent won't auto-run, message stays in inbox
+		ACell info = engine.jobs().invokeOperation(
+			"agent:info",
+			Maps.of(Fields.AGENT_ID, "no-state-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		assertNotNull(info);
+		// stateConfig should be absent entirely (not present as empty map)
+		assertNull(RT.getIn(info, Strings.create("stateConfig")),
+			"Template-created agent should have no stateConfig field in info output");
+	}
+
+	@Test
+	public void testCreateAutoDefaults() {
+		// Agent created with no config gets sensible defaults
 		engine.jobs().invokeOperation(
-			"agent:message",
-			Maps.of(Fields.AGENT_ID, "no-op-agent", Fields.MESSAGE, Maps.of("content", "hello")),
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "auto-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Trigger should fail — has work but no transition operation
-		Job runJob = engine.jobs().invokeOperation(
-			"agent:trigger",
-			Maps.of(Fields.AGENT_ID, "no-op-agent"),
-			RequestContext.of(ALICE_DID));
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("auto-agent");
+		assertNotNull(agent);
 
-		try {
-			runJob.awaitResult(5000);
-			fail("Should fail without operation");
-		} catch (Exception e) {
-			assertEquals(Status.FAILED, runJob.getStatus());
-		}
+		// Should have auto-set operation: llmagent:chat
+		AMap<AString, ACell> config = agent.getConfig();
+		assertNotNull(config);
+		assertEquals(Strings.create("llmagent:chat"), config.get(Fields.OPERATION),
+			"Auto-default should set operation to llmagent:chat");
 	}
 
 	// ========== Result in run output ==========

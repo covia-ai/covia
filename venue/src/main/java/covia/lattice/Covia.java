@@ -46,6 +46,7 @@ import convex.lattice.generic.StringKeyedLattice;
  *               "w"  ->  MapLattice + JSONValue (user's workspace — recursive per-key merge)
  *               "o"  ->  MapLattice + JSONValue (user's operations — recursive per-key merge)
  *               "h"  ->  MapLattice + JSONValue (HITL requests — Phase D placeholder)
+ *               "a"  ->  CASLattice (user's content-addressed assets)
  *     :meta  ->  CASLattice (shared content-addressable metadata)
  * </pre>
  *
@@ -131,7 +132,8 @@ public final class Covia {
 		"s", MapLattice.create(LWW),           // user's encrypted credentials
 		"w", MapLattice.create(JSONValueLattice.INSTANCE),  // user's workspace (recursive JSON merge)
 		"o", MapLattice.create(JSONValueLattice.INSTANCE),  // user's operations (recursive JSON merge)
-		"h", MapLattice.create(JSONValueLattice.INSTANCE)   // HITL requests (Phase D — placeholder)
+		"h", MapLattice.create(JSONValueLattice.INSTANCE),  // HITL requests (Phase D — placeholder)
+		"a", CASLattice.create()               // user's content-addressed assets
 	);
 
 	/**

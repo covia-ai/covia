@@ -319,12 +319,30 @@ public class Engine {
 		return adapters.keySet();
 	}
 
+	/**
+	 * Stores an asset in the venue-level CAS (used by adapter registration).
+	 */
 	public Hash storeAsset(AString meta, ACell content) {
 		Hash id = venueState.assets().store(meta, content);
 		log.info("Stored asset {} : {}", id, RT.getIn(JSON.parse(meta), Fields.NAME));
 		return id;
 	}
 
+	/**
+	 * Stores an asset in the caller's per-user CAS namespace.
+	 */
+	public Hash storeUserAsset(AString meta, ACell content, RequestContext ctx) {
+		AString callerDID = ctx.getCallerDID();
+		if (callerDID == null) throw new IllegalArgumentException("Authentication required to store assets");
+		User user = getVenueState().users().ensure(callerDID);
+		Hash id = user.assets().store(meta, content);
+		log.info("Stored user asset {} : {} (user: {})", id, RT.getIn(JSON.parse(meta), Fields.NAME), callerDID);
+		return id;
+	}
+
+	/**
+	 * Gets venue-level assets (adapter registrations).
+	 */
 	public AMap<ABlob, AVector<?>> getAssets() {
 		return venueState.assets().getAll();
 	}
@@ -369,9 +387,49 @@ public class Engine {
 	}
 
 	/**
-	 * Get an Asset by its Hash ID.
-	 * @param assetID Asset ID
-	 * @return Asset instance, or null if not found
+	 * Get an asset record by Hash — checks user namespace first, then venue.
+	 * This is the single resolution point for all asset lookups by hash.
+	 */
+	public AVector<?> getAssetRecord(Hash assetID, RequestContext ctx) {
+		// Check user's /a/ first
+		if (ctx != null && ctx.getCallerDID() != null) {
+			User user = getVenueState().users().get(ctx.getCallerDID());
+			if (user != null) {
+				AVector<?> arec = user.assets().getRecord(assetID);
+				if (arec != null) return arec;
+			}
+		}
+		// Fall back to venue-level assets
+		return venueState.assets().getRecord(assetID);
+	}
+
+	/**
+	 * Get an asset record by Hash — checks a specific user, then venue.
+	 */
+	public AVector<?> getAssetRecord(Hash assetID, AString userDID) {
+		if (userDID != null) {
+			User user = getVenueState().users().get(userDID);
+			if (user != null) {
+				AVector<?> arec = user.assets().getRecord(assetID);
+				if (arec != null) return arec;
+			}
+		}
+		return venueState.assets().getRecord(assetID);
+	}
+
+	/**
+	 * Get an Asset by its Hash ID — checks user namespace first, then venue.
+	 */
+	public Asset getAsset(Hash assetID, RequestContext ctx) {
+		AVector<?> arec = getAssetRecord(assetID, ctx);
+		if (arec == null) return null;
+		AString metaString = RT.ensureString(arec.get(AssetStore.POS_JSON));
+		if (metaString == null) return null;
+		return Asset.create(assetID, metaString);
+	}
+
+	/**
+	 * Get an Asset by its Hash ID from venue-level store (no user context).
 	 */
 	public Asset getAsset(Hash assetID) {
 		AVector<?> arec=venueState.assets().getRecord(assetID);
@@ -428,13 +486,15 @@ public class Engine {
 	public Asset resolveAsset(AString ref, RequestContext ctx) {
 		if (ref == null) return null;
 
-		// 1. Bare hex hash → /a/<hash>
+		// 1. Bare hex hash → check user /a/ then venue /a/
 		Hash h = Hash.parse(ref);
-		if (h != null) return getAsset(h);
+		if (h != null) return getAsset(h, ctx);
 
 		// 2. Namespace prefix dispatch
 		if (ref.startsWith(NS_ASSET)) {
-			return resolveAssetRef(ref.slice(3));
+			Hash ah = Hash.parse(ref.slice(3));
+			if (ah != null) return getAsset(ah, ctx);
+			return null;
 		}
 
 		// 3. /o/<name> — caller's user-scoped operation namespace
@@ -523,15 +583,25 @@ public class Engine {
 		}
 		String path = didurl.getPath();
 		if (path == null || !path.startsWith("/a/")) return null;
-		// TODO: dispatch on other namespace prefixes in path (/o/, /w/, etc.)
 
 		Hash hash = Hash.parse(path.substring(3));
 		if (hash == null) return null;
 
-		// Local vs remote
 		String didStr = didurl.getDID().toString();
+		AString didString = Strings.create(didStr);
+
+		// Local resolution: venue DID or known user DID
 		if (getDIDString().toString().equals(didStr)) {
+			// Venue DID — venue-level assets only
 			return getAsset(hash);
+		}
+		User user = getVenueState().users().get(didString);
+		if (user != null) {
+			// Local user DID — user assets, venue fallback
+			AVector<?> rec = getAssetRecord(hash, didString);
+			if (rec == null) return null;
+			AString metaString = RT.ensureString(rec.get(AssetStore.POS_JSON));
+			return (metaString != null) ? Asset.create(hash, metaString) : null;
 		}
 
 		// Remote DID — create Operation with remote venue reference
@@ -743,6 +813,13 @@ public class Engine {
 
 	public DID getDID() {
 		return DID.fromString(getDIDString().toString());
+	}
+
+	/**
+	 * Builds a DID URL for an asset: {@code <venue-did>/a/<hex-hash>}
+	 */
+	public AString assetDIDURL(Hash hash) {
+		return getDIDString().append("/a/" + hash.toHexString());
 	}
 
 	public AString getDIDString() {

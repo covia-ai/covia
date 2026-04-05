@@ -120,6 +120,24 @@ public class AgentState extends ALatticeComponent<ACell> {
 		putRecord(record);
 	}
 
+	/**
+	 * Initialises an agent record as a fork of another agent. Copies config
+	 * and state, optionally copies timeline. Tasks, pending, and inbox are
+	 * fresh; status is SLEEPING. Does nothing if this agent already exists.
+	 */
+	public void initialiseFromFork(AMap<AString, ACell> config, ACell state, AVector<ACell> timeline) {
+		if (exists()) return;
+		AMap<AString, ACell> record = Maps.of(
+			K_STATUS, SLEEPING,
+			K_TASKS, Index.none(),
+			K_PENDING, Index.none(),
+			K_INBOX, Vectors.empty(),
+			K_TIMELINE, (timeline != null) ? timeline : Vectors.empty());
+		if (config != null) record = record.assoc(K_CONFIG, config);
+		if (state != null) record = record.assoc(K_STATE, state);
+		putRecord(record);
+	}
+
 	// ========== Read accessors ==========
 
 	public AString getStatus() {

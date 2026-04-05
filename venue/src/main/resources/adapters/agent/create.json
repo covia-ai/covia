@@ -1,16 +1,29 @@
 {
 	"name": "Create Agent",
-	"description": "Creates and initialises a new agent for the authenticated user. Agents are identified by human-readable names and persist in the user's lattice state. Idempotent: creating an existing agent is a no-op. Set overwrite=true to replace an existing (e.g. TERMINATED) agent with fresh state.",
+	"description": "Creates a new LLM-powered agent. The agent runs on the Covia platform and can use tools to complete tasks. If no config is provided, the agent gets sensible defaults (GPT-4o, standard tools). Set overwrite=true to replace an existing agent.",
 	"dateCreated": "2026-02-27T00:00:00Z",
 	"operation": {
 		"adapter": "agent:create",
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Human-readable agent name" },
-				"definition": { "type": "string", "description": "Asset hash of an agent definition. If provided, the agent's config and state are extracted from the definition's metadata. Explicit config/state parameters override the definition." },
-				"config": { "type": "object", "description": "Optional framework configuration. Overrides definition if both provided." },
-				"state": { "description": "Optional initial state for the transition function. Overrides definition if both provided." },
+				"agentId": { "type": "string", "description": "Human-readable agent name (e.g. 'Alice', 'DataChecker')" },
+				"config": {
+					"description": "Agent configuration. Either an inline map or a string reference that resolves to one — workspace path (e.g. 'w/templates/reader'), asset ref (/a/<hash>), DID URL, or venue operation name. Key fields: systemPrompt (what the agent does), tools (array of operation names it can call), model (LLM model, default gpt-4o), caps (capability restrictions). A resolved template may also include a 'state' field which is used as the agent's initial state.",
+					"oneOf": [
+						{
+							"type": "object",
+							"properties": {
+								"systemPrompt": { "type": "string", "description": "System prompt defining the agent's role and behaviour" },
+								"tools": { "type": "array", "description": "Tool operations the agent can call (e.g. ['covia:read', 'covia:write']). Default tools are included automatically." },
+								"model": { "type": "string", "description": "LLM model name (default: gpt-4o)" },
+								"caps": { "type": "array", "description": "Capability restrictions — array of {with, can} objects limiting what the agent can access" }
+							}
+						},
+						{ "type": "string", "description": "Reference to a config map stored in workspace, assets, or elsewhere" }
+					]
+				},
+				"definition": { "type": "string", "description": "Asset ID of an agent definition using the legacy nested format (meta.agent.config). For the unified approach, pass the reference directly in 'config'." },
 				"overwrite": { "type": "boolean", "description": "If true, replace an existing agent with fresh state. Default false." }
 			},
 			"required": ["agentId"]

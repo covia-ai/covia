@@ -37,12 +37,12 @@ import covia.venue.RequestContext;
  * structured message maps and invokes level 3 via the grid operation dispatch.</p>
  *
  * <h3>Tool palette</h3>
- * <p>Default tools (unless disabled via {@code defaultTools: false}):
- * {@code list_functions}, {@code describe_function}, {@code message_agent},
- * {@code request_agent}. Task tools ({@code complete_task}, {@code fail_task})
- * are added dynamically when tasks are pending.</p>
+ * <p>Unless disabled via {@code defaultTools: false}, agents start with the
+ * tool set in {@link #DEFAULT_TOOL_OPS} (covia CRUD, agent lifecycle, asset
+ * management, schema, grid). Task tools ({@code complete_task},
+ * {@code fail_task}) are added dynamically when tasks are pending.</p>
  *
- * <p>Additional tools can be configured via {@code tools} in the agent's state config.
+ * <p>Additional tools can be configured via {@code tools} in the agent's config.
  * Each entry is a string (operation name) or map with {@code operation} plus optional
  * {@code name} and {@code description} overrides. Config tools are resolved from
  * adapter functions or grid operations and flattened as direct tools for the LLM.</p>
@@ -93,6 +93,7 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final AString K_MODEL         = Strings.intern("model");
 	private static final AString K_SYSTEM_PROMPT = Strings.intern("systemPrompt");
 	private static final AString K_URL             = Strings.intern("url");
+	private static final AString K_API_KEY         = Strings.intern("apiKey");
 	private static final AString K_TOOLS           = Strings.intern("tools");
 	private static final AString K_DEFAULT_TOOLS   = Strings.intern("defaultTools");
 	private static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
@@ -180,6 +181,8 @@ public class LLMAgentAdapter extends AAdapter {
 		(ACell) Strings.create("asset:store"),
 		(ACell) Strings.create("asset:get"),
 		(ACell) Strings.create("asset:list"),
+		(ACell) Strings.create("asset:content"),
+		(ACell) Strings.create("asset:pin"),
 		(ACell) Strings.create("grid:run"),
 		(ACell) Strings.create("covia:read"),
 		(ACell) Strings.create("covia:write"),
@@ -188,7 +191,9 @@ public class LLMAgentAdapter extends AAdapter {
 		(ACell) Strings.create("covia:slice"),
 		(ACell) Strings.create("covia:list"),
 		(ACell) Strings.create("covia:functions"),
-		(ACell) Strings.create("covia:describe")
+		(ACell) Strings.create("covia:describe"),
+		(ACell) Strings.create("schema:validate"),
+		(ACell) Strings.create("schema:infer")
 	);
 
 	/** Task tools only available when there are outstanding tasks */
@@ -209,8 +214,8 @@ public class LLMAgentAdapter extends AAdapter {
 			+ "invokes a level 3 grid operation for LLM calls. Supports tool call "
 			+ "loops: when the LLM requests tool calls, executes them as grid "
 			+ "operations and feeds results back until a text response is produced. "
-			+ "Provides built-in tools: complete_task, fail_task, invoke, "
-			+ "grid_invoke, message_agent, request_agent.";
+			+ "Built-in tools: complete_task, fail_task (added dynamically when "
+			+ "tasks are pending). All other tools dispatch via the grid.";
 	}
 
 	@Override
@@ -258,19 +263,16 @@ public class LLMAgentAdapter extends AAdapter {
 		AVector<ACell> tasks = (AVector<ACell>) RT.getIn(input, Fields.TASKS);
 		AVector<ACell> pending = (AVector<ACell>) RT.getIn(input, Fields.PENDING);
 
-		// Read LLM config — merge record-level config (from agent framework, has caps/tools)
-		// with state-level config (has LLM settings like llmOperation, model). State overrides.
-		AMap<AString, ACell> config = extractConfig(state);
+		// Read LLM config — merge record-level config (agent framework: caps, tools,
+		// systemPrompt, llmOperation) with state-level config (stale for new agents,
+		// still used by legacy definition-created agents). State overrides record.
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> recordConfig = (RT.getIn(input, AgentState.KEY_CONFIG) instanceof AMap m) ? m : null;
-		if (recordConfig != null) {
-			if (config == null) {
-				config = recordConfig;
-			} else {
-				// Merge: record-level is the base, state-level overrides
-				config = recordConfig.merge(config);
-			}
-		}
+		AMap<AString, ACell> stateConfig = extractConfig(state);
+		AMap<AString, ACell> config;
+		if (recordConfig == null)      config = stateConfig;
+		else if (stateConfig == null)  config = recordConfig;
+		else                           config = recordConfig.merge(stateConfig);
 
 		// Extract settings from config
 		AString llmOperation = getConfigValue(config, K_LLM_OPERATION, DEFAULT_LLM_OPERATION);
@@ -461,16 +463,7 @@ public class LLMAgentAdapter extends AAdapter {
 			}
 
 			AMap<AString, ACell> l3Input = Maps.of(K_MESSAGES, fullHistory);
-			if (config != null) {
-				ACell model = config.get(K_MODEL);
-				if (model != null) l3Input = l3Input.assoc(K_MODEL, model);
-				ACell url = config.get(K_URL);
-				if (url != null) l3Input = l3Input.assoc(K_URL, url);
-				ACell apiKey = config.get(Strings.intern("apiKey"));
-				if (apiKey != null) l3Input = l3Input.assoc(Strings.intern("apiKey"), apiKey);
-				ACell responseFormat = config.get(K_RESPONSE_FORMAT);
-				if (responseFormat != null) l3Input = l3Input.assoc(K_RESPONSE_FORMAT, responseFormat);
-			}
+			l3Input = copyIfPresent(config, l3Input, K_MODEL, K_URL, K_API_KEY, K_RESPONSE_FORMAT);
 
 			// Include task tools (complete_task, fail_task) only when tasks remain
 			AVector<ACell> tools = (taskMsg != null)
@@ -867,6 +860,20 @@ public class LLMAgentAdapter extends AAdapter {
 		if (config == null) return defaultValue;
 		AString val = RT.ensureString(config.get(key));
 		return (val != null) ? val : defaultValue;
+	}
+
+	/**
+	 * Copies each of the given keys from {@code src} to {@code dst} if present
+	 * (and non-null) in src. Returns the updated dst map (AMap is immutable).
+	 */
+	static AMap<AString, ACell> copyIfPresent(
+			AMap<AString, ACell> src, AMap<AString, ACell> dst, AString... keys) {
+		if (src == null) return dst;
+		for (AString key : keys) {
+			ACell v = src.get(key);
+			if (v != null) dst = dst.assoc(key, v);
+		}
+		return dst;
 	}
 
 	@SuppressWarnings("unchecked")

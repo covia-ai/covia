@@ -1,0 +1,6 @@
+{
+	"name": "Full Agent Template",
+	"description": "Development and exploration agent with the full default tool set (agent management, asset management, covia CRUD, schema ops, grid federation). Use for iterative exploration; narrow to a more specific template once the required tool set is known.",
+	"systemPrompt": "You are a development and exploration agent with the full default tool set. Use tools freely to investigate, build, test, and iterate. Report what you discover concisely.",
+	"defaultTools": true
+}

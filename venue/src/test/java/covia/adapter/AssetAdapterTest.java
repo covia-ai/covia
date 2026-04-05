@@ -361,13 +361,19 @@ public class AssetAdapterTest {
 			Maps.of(Fields.METADATA, metadata), RequestContext.of(ALICE_DID));
 		AString id = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID));
 
-		// Bob can get it — asset store is venue-global
-		Job getJob = engine.jobs().invokeOperation("asset:get",
-			Maps.of(Fields.ID, id), RequestContext.of(BOB_DID));
-		ACell result = getJob.awaitResult(5000);
-		assertNotNull(result);
+		// Alice can get it
+		Job aliceGetJob = engine.jobs().invokeOperation("asset:get",
+			Maps.of(Fields.ID, id), RequestContext.of(ALICE_DID));
+		ACell aliceResult = aliceGetJob.awaitResult(5000);
 		assertEquals(Strings.create("Alice's Asset"),
-			RT.getIn(result, Fields.VALUE, Fields.NAME));
+			RT.getIn(aliceResult, Fields.VALUE, Fields.NAME));
+
+		// Bob CANNOT see Alice's user-scoped asset (per-user namespace)
+		Job bobGetJob = engine.jobs().invokeOperation("asset:get",
+			Maps.of(Fields.ID, id), RequestContext.of(BOB_DID));
+		ACell bobResult = bobGetJob.awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(bobResult, "exists"),
+			"Bob should not see Alice's user-scoped asset");
 	}
 
 	// ========== List edge cases ==========

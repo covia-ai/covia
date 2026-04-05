@@ -1,0 +1,30 @@
+{
+	"name": "Fork Agent",
+	"description": "Forks an existing agent — creates a new agent with the same config and state as the source. The forked agent starts SLEEPING with fresh tasks, pending, and inbox collections; timeline is copied only if includeTimeline is true. Use for branching exploration (try different prompts from a common starting point), scaling (spawn parallel workers from a trained agent), or snapshots before risky operations. Optional config overrides are merged on top of the source config.",
+	"dateCreated": "2026-04-05T00:00:00Z",
+	"operation": {
+		"adapter": "agent:fork",
+		"input": {
+			"type": "object",
+			"properties": {
+				"sourceId": { "type": "string", "description": "Agent ID to fork from (must exist and not be TERMINATED)" },
+				"agentId": { "type": "string", "description": "New agent ID for the fork (must not already exist, unless overwrite=true and the existing agent is TERMINATED)" },
+				"config": {
+					"description": "Optional config overrides — inline map or string reference (workspace path, asset ref, DID URL). Merged on top of the source agent's config."
+				},
+				"includeTimeline": { "type": "boolean", "description": "If true, copy the source agent's timeline (run history). Default false." },
+				"overwrite": { "type": "boolean", "description": "If true, replace an existing TERMINATED agent at agentId. Default false." }
+			},
+			"required": ["sourceId", "agentId"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string" },
+				"status": { "type": "string" },
+				"created": { "type": "boolean" },
+				"forkedFrom": { "type": "string", "description": "The sourceId this agent was forked from" }
+			}
+		}
+	}
+}

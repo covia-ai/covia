@@ -27,6 +27,7 @@ import covia.lattice.Namespace;
  *   <li>{@code "w"} — user's workspace data (MapLattice + REPLACE)</li>
  *   <li>{@code "o"} — user's operations (MapLattice + REPLACE)</li>
  *   <li>{@code "h"} — HITL requests (MapLattice + REPLACE, Phase D placeholder)</li>
+ *   <li>{@code "a"} — content-addressed assets (CASLattice, union merge)</li>
  * </ul>
  */
 public class User extends ALatticeComponent<ACell> {
@@ -54,6 +55,16 @@ public class User extends ALatticeComponent<ACell> {
 	 */
 	public JobStore jobs() {
 		return new JobStore(cursor.path(Namespace.J));
+	}
+
+	/**
+	 * Gets the user's asset store (per-user content-addressed assets).
+	 *
+	 * @return AssetStore wrapping the user's "a" cursor
+	 */
+	@SuppressWarnings("unchecked")
+	public AssetStore assets() {
+		return new AssetStore(cursor.path(Namespace.A));
 	}
 
 	/**
@@ -98,6 +109,25 @@ public class User extends ALatticeComponent<ACell> {
 		AgentState state = new AgentState(c, agentId);
 		if (!state.exists()) state.initialise(config, initialState);
 		return state;
+	}
+
+	/**
+	 * Creates a new agent as a fork of another. Copies config and state;
+	 * timeline is copied only if {@code timeline} is non-null. Tasks, pending,
+	 * and inbox are fresh; status is SLEEPING.
+	 *
+	 * @param agentId Agent identifier for the fork (must not already exist)
+	 * @param config Config map to use (typically merged source+override)
+	 * @param state Initial state (typically source state)
+	 * @param timeline Optional timeline to copy, or null for empty
+	 * @return The new AgentState wrapper
+	 */
+	public AgentState forkAgent(AString agentId, AMap<AString, ACell> config,
+			ACell state, convex.core.data.AVector<ACell> timeline) {
+		ALatticeCursor<ACell> c = cursor.path(Namespace.G, agentId);
+		AgentState fork = new AgentState(c, agentId);
+		if (!fork.exists()) fork.initialiseFromFork(config, state, timeline);
+		return fork;
 	}
 
 	/**

@@ -1,0 +1,22 @@
+{
+	"name": "Pin Asset",
+	"description": "Pin an asset into your own namespace. Copies the asset (metadata and content) from any source — another user's namespace, a venue-level asset, or a remote venue — into your /a/ namespace. Idempotent: pinning the same asset twice has no effect (same content hash). Use this to save assets you've been shared access to, to keep references to venue operations, or to ensure an asset remains available in your namespace.",
+	"operation": {
+		"adapter": "asset:pin",
+		"toolName": "asset_pin",
+		"input": {
+			"type": "object",
+			"properties": {
+				"id": { "type": "string", "description": "Asset reference to pin — DID URL (did:key:.../a/<hash>), /a/<hash>, bare hex hash, or operation name" }
+			},
+			"required": ["id"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"id": { "type": "string", "description": "Your DID URL for the pinned asset" },
+				"pinned": { "type": "boolean", "description": "true if successfully pinned" }
+			}
+		}
+	}
+}

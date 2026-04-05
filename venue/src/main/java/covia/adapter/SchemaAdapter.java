@@ -68,7 +68,7 @@ public class SchemaAdapter extends AAdapter {
 
 	private ACell handleValidate(ACell input) {
 		AMap<AString, ACell> schema = getMap(RT.getIn(input, K_SCHEMA));
-		ACell value = RT.getIn(input, K_VALUE);
+		ACell value = parseValue(RT.getIn(input, K_VALUE));
 		if (schema == null) throw new IllegalArgumentException("'schema' is required");
 
 		String err = JsonSchema.validate(schema, value);
@@ -80,7 +80,7 @@ public class SchemaAdapter extends AAdapter {
 
 	private ACell handleValidateAll(ACell input) {
 		AMap<AString, ACell> schema = getMap(RT.getIn(input, K_SCHEMA));
-		ACell value = RT.getIn(input, K_VALUE);
+		ACell value = parseValue(RT.getIn(input, K_VALUE));
 		if (schema == null) throw new IllegalArgumentException("'schema' is required");
 
 		AVector<AString> errors = JsonSchema.validateAll(schema, value);
@@ -91,14 +91,14 @@ public class SchemaAdapter extends AAdapter {
 	}
 
 	private ACell handleInfer(ACell input) {
-		ACell value = RT.getIn(input, K_VALUE);
+		ACell value = parseValue(RT.getIn(input, K_VALUE));
 		AMap<AString, ACell> schema = JsonSchema.infer(value);
 		return Maps.of(K_SCHEMA, schema);
 	}
 
 	private ACell handleCoerce(ACell input) {
 		AMap<AString, ACell> schema = getMap(RT.getIn(input, K_SCHEMA));
-		ACell value = RT.getIn(input, K_VALUE);
+		ACell value = parseValue(RT.getIn(input, K_VALUE));
 		if (schema == null) throw new IllegalArgumentException("'schema' is required");
 
 		ACell coerced = JsonSchema.coerce(schema, value);
@@ -118,6 +118,31 @@ public class SchemaAdapter extends AAdapter {
 
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> getMap(ACell cell) {
-		return (cell instanceof AMap) ? (AMap<AString, ACell>) cell : null;
+		if (cell instanceof AMap) return (AMap<AString, ACell>) cell;
+		// LLMs often pass JSON objects as strings — parse them
+		if (cell instanceof AString s) {
+			try {
+				ACell parsed = convex.core.util.JSON.parse(s.toString());
+				if (parsed instanceof AMap) return (AMap<AString, ACell>) parsed;
+			} catch (Exception e) { /* not valid JSON */ }
+		}
+		return null;
+	}
+
+	/**
+	 * Extracts a value from input, parsing JSON strings if the value is a string
+	 * that looks like JSON. LLMs frequently pass structured data as strings.
+	 */
+	private static ACell parseValue(ACell cell) {
+		if (cell instanceof AString s) {
+			String str = s.toString();
+			if ((str.startsWith("{") && str.endsWith("}")) ||
+				(str.startsWith("[") && str.endsWith("]"))) {
+				try {
+					return convex.core.util.JSON.parse(str);
+				} catch (Exception e) { /* not valid JSON, return as string */ }
+			}
+		}
+		return cell;
 	}
 }

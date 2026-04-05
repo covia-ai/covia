@@ -216,9 +216,9 @@ public class ContextLoader {
 			Asset asset = engine.resolveAsset(ref, ctx);
 			if (asset == null) return null;
 
-			// Try text content payload first
+			// Try text content payload — user assets first, venue fallback
 			Hash assetHash = asset.getID();
-			AVector<?> record = engine.getVenueState().assets().getRecord(assetHash);
+			AVector<?> record = engine.getAssetRecord(assetHash, ctx);
 			if (record != null) {
 				ACell content = record.get(AssetStore.POS_CONTENT);
 				if (content instanceof ABlob blob && blob.count() > 0) {

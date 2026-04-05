@@ -18,6 +18,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.grid.Asset;
 import covia.venue.AssetStore;
 import covia.venue.RequestContext;
 
@@ -47,6 +48,7 @@ public class AssetAdapter extends AAdapter {
 		installAsset(BASE + "get.json");
 		installAsset(BASE + "content.json");
 		installAsset(BASE + "list.json");
+		installAsset(BASE + "pin.json");
 	}
 
 	@Override
@@ -58,10 +60,11 @@ public class AssetAdapter extends AAdapter {
 
 		try {
 			return switch (getSubOperation(meta)) {
-				case "store"   -> CompletableFuture.completedFuture(handleStore(input));
-				case "get"     -> CompletableFuture.completedFuture(handleGet(input));
-				case "content" -> CompletableFuture.completedFuture(handleContent(input));
-				case "list"    -> CompletableFuture.completedFuture(handleList(input));
+				case "store"   -> CompletableFuture.completedFuture(handleStore(input, ctx));
+				case "get"     -> CompletableFuture.completedFuture(handleGet(input, ctx));
+				case "content" -> CompletableFuture.completedFuture(handleContent(input, ctx));
+				case "list"    -> CompletableFuture.completedFuture(handleList(input, ctx));
+				case "pin"     -> CompletableFuture.completedFuture(handlePin(input, ctx));
 				default -> CompletableFuture.failedFuture(
 					new IllegalArgumentException("Unknown asset operation: " + getSubOperation(meta)));
 			};
@@ -70,10 +73,25 @@ public class AssetAdapter extends AAdapter {
 		}
 	}
 
-	private ACell handleStore(ACell input) {
-		AMap<AString, ACell> metadata = RT.ensureMap(RT.getIn(input, Fields.METADATA));
+	@SuppressWarnings("unchecked")
+	private ACell handleStore(ACell input, RequestContext ctx) {
+		ACell metaCell = RT.getIn(input, Fields.METADATA);
+		// Accept metadata as a JSON object or a JSON string (parsed on the fly)
+		AMap<AString, ACell> metadata;
+		if (metaCell instanceof AMap) {
+			metadata = (AMap<AString, ACell>) metaCell;
+		} else if (metaCell instanceof AString s) {
+			try {
+				ACell parsed = convex.core.util.JSON.parse(s.toString());
+				metadata = RT.ensureMap(parsed);
+			} catch (Exception e) {
+				throw new IllegalArgumentException("metadata string is not valid JSON: " + e.getMessage());
+			}
+		} else {
+			metadata = null;
+		}
 		if (metadata == null) {
-			throw new IllegalArgumentException("metadata is required and must be a JSON object");
+			throw new IllegalArgumentException("metadata is required and must be a JSON object or JSON string");
 		}
 
 		// Optional content — two explicit paths, no inference:
@@ -115,10 +133,12 @@ public class AssetAdapter extends AAdapter {
 		}
 
 		AString jsonString = JSON.printPretty(metadata);
-		Hash id = engine.storeAsset(jsonString, content);
+		Hash id = engine.storeUserAsset(jsonString, content, ctx);
 
+		// Return full DID URL: did:key:zCaller.../a/<hash>
+		AString didUrl = ctx.getCallerDID().append("/a/" + id.toHexString());
 		return Maps.of(
-			Fields.ID, Strings.create(id.toHexString()),
+			Fields.ID, didUrl,
 			Fields.STORED, CVMBool.TRUE);
 	}
 
@@ -152,33 +172,49 @@ public class AssetAdapter extends AAdapter {
 	/** Default max content size: 1 MB */
 	private static final long DEFAULT_MAX_SIZE = 1_000_000;
 
-	private ACell handleGet(ACell input) {
+	/**
+	 * Parses an asset hash from an ID string. Accepts bare hash, /a/<hash>,
+	 * or did:key:.../a/<hash> formats.
+	 */
+	private static Hash parseAssetId(AString idStr) {
+		if (idStr == null) return null;
+		String s = idStr.toString();
+		// Strip DID prefix if present: did:key:z6Mk.../a/<hash> → <hash>
+		int aPos = s.indexOf("/a/");
+		if (aPos >= 0) s = s.substring(aPos + 3);
+		return Hash.parse(s);
+	}
+
+	private ACell handleGet(ACell input, RequestContext ctx) {
 		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
 		if (idStr == null) throw new IllegalArgumentException("id is required");
 
-		Hash hash = Hash.parse(idStr);
+		Hash hash = parseAssetId(idStr);
 		if (hash == null) throw new IllegalArgumentException("Invalid asset ID format: " + idStr);
 
-		AMap<AString, ACell> meta = engine.getMetaValue(hash);
+		AVector<?> record = engine.getAssetRecord(hash, ctx);
+		if (record == null) {
+			return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.FALSE);
+		}
+		AMap<AString, ACell> meta = RT.ensureMap(record.get(AssetStore.POS_META));
 		if (meta == null) {
 			return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.FALSE);
 		}
 
-		// Consistent with covia:read — return {exists, value}
 		return Maps.of(
 			Fields.ID, idStr,
 			K_EXISTS, CVMBool.TRUE,
 			Fields.VALUE, meta);
 	}
 
-	private ACell handleContent(ACell input) {
+	private ACell handleContent(ACell input, RequestContext ctx) {
 		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
 		if (idStr == null) throw new IllegalArgumentException("id is required");
 
-		Hash hash = Hash.parse(idStr);
+		Hash hash = parseAssetId(idStr);
 		if (hash == null) throw new IllegalArgumentException("Invalid asset ID format: " + idStr);
 
-		AVector<?> record = engine.getVenueState().assets().getRecord(hash);
+		AVector<?> record = engine.getAssetRecord(hash, ctx);
 		if (record == null) {
 			return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.FALSE);
 		}
@@ -212,7 +248,7 @@ public class AssetAdapter extends AAdapter {
 	}
 
 	@SuppressWarnings("unchecked")
-	private ACell handleList(ACell input) {
+	private ACell handleList(ACell input, RequestContext ctx) {
 		long offset = 0, limit = 100;
 		ACell offsetCell = RT.getIn(input, Fields.OFFSET);
 		if (offsetCell instanceof CVMLong l) offset = Math.max(0, l.longValue());
@@ -221,7 +257,18 @@ public class AssetAdapter extends AAdapter {
 
 		AString typeFilter = RT.ensureString(RT.getIn(input, Fields.TYPE));
 
+		// List user's assets + venue-level assets (venue assets are public infrastructure)
 		AMap<ABlob, AVector<?>> allAssets = engine.getAssets();
+		if (ctx != null && ctx.getCallerDID() != null) {
+			covia.venue.User user = engine.getVenueState().users().get(ctx.getCallerDID());
+			if (user != null) {
+				AMap<ABlob, AVector<?>> userAssets = user.assets().getAll();
+				if (userAssets != null) {
+					if (allAssets != null) allAssets = allAssets.merge(userAssets);
+					else allAssets = userAssets;
+				}
+			}
+		}
 		long rawTotal = (allAssets != null) ? allAssets.count() : 0;
 
 		AVector<ACell> items = Vectors.empty();
@@ -269,5 +316,30 @@ public class AssetAdapter extends AAdapter {
 			Fields.TOTAL, CVMLong.create(total),
 			Fields.OFFSET, CVMLong.create(offset),
 			Fields.LIMIT, CVMLong.create(limit));
+	}
+
+	private ACell handlePin(ACell input, RequestContext ctx) {
+		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
+		if (idStr == null) throw new IllegalArgumentException("id is required");
+
+		// Resolve the source asset from any reference format
+		Asset asset = engine.resolveAsset(idStr, ctx);
+		if (asset == null) throw new IllegalArgumentException("Asset not found: " + idStr);
+
+		Hash hash = asset.getID();
+
+		// Get the full record (metadata + content) from wherever it lives
+		AVector<?> record = engine.getAssetRecord(hash, ctx);
+		if (record == null) throw new IllegalArgumentException("Asset record not found: " + idStr);
+
+		AString metaString = RT.ensureString(record.get(AssetStore.POS_JSON));
+		ACell content = record.get(AssetStore.POS_CONTENT);
+
+		// Store into caller's /a/ namespace
+		engine.storeUserAsset(metaString, content, ctx);
+
+		// Return caller's DID URL
+		AString didUrl = ctx.getCallerDID().append("/a/" + hash.toHexString());
+		return Maps.of(Fields.ID, didUrl, Strings.intern("pinned"), CVMBool.TRUE);
 	}
 }
