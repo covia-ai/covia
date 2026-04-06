@@ -15,6 +15,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.util.CellExplorer;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -421,5 +422,80 @@ public class ContextLoaderTest {
 	public void testEmptyString() {
 		ACell msg = loader.resolveEntry(Strings.create(""), ctx);
 		assertNotNull(msg, "Empty string is literal text");
+	}
+
+	// ========== CellExplorer integration ==========
+
+	@Test
+	public void testCellExplorerRendersStructuredValue() {
+		// Write structured data to workspace
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("w/explorer-test"),
+				Strings.create("value"), Maps.of(
+					Strings.create("name"), Strings.create("Alice"),
+					Strings.create("role"), Strings.create("analyst"),
+					Strings.create("score"), 42)),
+			ctx).awaitResult(5000);
+
+		// With explorer — should produce JSON5 format
+		loader.setCellExplorer(new CellExplorer(10_000));
+		ACell msg = loader.resolveEntry(Strings.create("w/explorer-test"), ctx);
+		assertNotNull(msg);
+		String content = RT.ensureString(RT.getIn(msg, Strings.intern("content"))).toString();
+		// CellExplorer produces JSON5 with unquoted keyword-like keys
+		assertTrue(content.contains("Alice"), "Should contain value");
+		assertTrue(content.contains("analyst"), "Should contain value");
+	}
+
+	@Test
+	public void testCellExplorerTruncatesLargeValues() {
+		// Write a large map to workspace
+		AMap<AString, ACell> largeMap = Maps.empty();
+		for (int i = 0; i < 100; i++) {
+			largeMap = largeMap.assoc(Strings.create("key" + i), Strings.create("value" + i + " ".repeat(50)));
+		}
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("w/large-test"),
+				Strings.create("value"), largeMap),
+			ctx).awaitResult(5000);
+
+		// Small budget — should truncate with annotations
+		loader.setCellExplorer(new CellExplorer(200));
+		ACell msg = loader.resolveEntry(Strings.create("w/large-test"), ctx);
+		assertNotNull(msg);
+		String content = RT.ensureString(RT.getIn(msg, Strings.intern("content"))).toString();
+		assertTrue(content.contains("/*"), "Should contain truncation annotation");
+		assertTrue(content.contains("more"), "Should indicate more entries");
+	}
+
+	@Test
+	public void testNullExplorerPreservesLegacyBehaviour() {
+		// Write data
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("w/legacy-test"),
+				Strings.create("value"), Strings.create("plain text")),
+			ctx).awaitResult(5000);
+
+		// No explorer set — should use toString() as before
+		ACell msg = loader.resolveEntry(Strings.create("w/legacy-test"), ctx);
+		assertNotNull(msg);
+		String content = RT.ensureString(RT.getIn(msg, Strings.intern("content"))).toString();
+		assertTrue(content.contains("plain text"));
+	}
+
+	@Test
+	public void testRenderValueDirect() {
+		// Without explorer
+		assertEquals("42", loader.renderValue(convex.core.data.prim.CVMLong.create(42)));
+
+		// With explorer
+		loader.setCellExplorer(new CellExplorer(10_000));
+		assertEquals("42", loader.renderValue(convex.core.data.prim.CVMLong.create(42)));
+
+		// Map renders as JSON5
+		ACell map = Maps.of(Strings.create("a"), Strings.create("b"));
+		String rendered = loader.renderValue(map);
+		assertTrue(rendered.contains("a"));
+		assertTrue(rendered.contains("b"));
 	}
 }

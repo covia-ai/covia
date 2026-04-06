@@ -1,6 +1,5 @@
 package covia.adapter;
 
-import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
@@ -13,14 +12,11 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
-import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
-import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
-import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
@@ -263,127 +259,37 @@ public class LLMAgentAdapter extends AAdapter {
 		AVector<ACell> tasks = (AVector<ACell>) RT.getIn(input, Fields.TASKS);
 		AVector<ACell> pending = (AVector<ACell>) RT.getIn(input, Fields.PENDING);
 
-		// Read LLM config — merge record-level config (agent framework: caps, tools,
-		// systemPrompt, llmOperation) with state-level config (stale for new agents,
-		// still used by legacy definition-created agents). State overrides record.
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> recordConfig = (RT.getIn(input, AgentState.KEY_CONFIG) instanceof AMap m) ? m : null;
-		AMap<AString, ACell> stateConfig = extractConfig(state);
-		AMap<AString, ACell> config;
-		if (recordConfig == null)      config = stateConfig;
-		else if (stateConfig == null)  config = recordConfig;
-		else                           config = recordConfig.merge(stateConfig);
 
-		// Extract settings from config
-		AString llmOperation = getConfigValue(config, K_LLM_OPERATION, DEFAULT_LLM_OPERATION);
-		AString systemPrompt = getConfigValue(config, K_SYSTEM_PROMPT, null);
-
-		// Reconstruct conversation history from state
-		AVector<ACell> history = extractHistory(state);
-
-		// If no system prompt in history yet, prepend one
-		if (history.count() == 0 || !ROLE_SYSTEM.equals(RT.getIn(history.get(0), K_ROLE))) {
-			AString sysContent = (systemPrompt != null) ? systemPrompt : DEFAULT_SYSTEM_PROMPT;
-			history = (AVector<ACell>) Vectors.of(
-				(ACell) Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, sysContent)
-			).concat(history);
-		}
-
-		// Context loading — resolve state.config.context and state.context
-		// entries as system messages. See venue/docs/CONTEXT.md for design.
-		ContextLoader contextLoader = new ContextLoader(engine);
-		if (config != null) {
-			AVector<ACell> configContext = RT.ensureVector(config.get(K_CONTEXT));
-			AVector<ACell> contextMsgs = contextLoader.resolve(configContext, ctx);
-			history = (AVector<ACell>) history.concat(contextMsgs);
-		}
-		AVector<ACell> stateContext = RT.ensureVector(RT.getIn(state, K_CONTEXT));
-		if (stateContext != null) {
-			AVector<ACell> contextMsgs = contextLoader.resolve(stateContext, ctx);
-			history = (AVector<ACell>) history.concat(contextMsgs);
-		}
-
-		// Task context is built dynamically per tool-loop iteration (not baked into
-		// history) so the LLM only sees outstanding tasks, not already-resolved ones.
-
-		// Append pending job results as a user turn
-		if (pending != null && pending.count() > 0) {
-			StringBuilder sb = new StringBuilder("[Pending job results]\n");
-			for (long i = 0; i < pending.count(); i++) {
-				ACell p = pending.get(i);
-				AString jobId = RT.ensureString(RT.getIn(p, Fields.JOB_ID));
-				ACell status = RT.getIn(p, Fields.STATUS);
-				ACell output = RT.getIn(p, Fields.OUTPUT);
-				sb.append("- Job ").append(jobId).append(" status=").append(status)
-				  .append(" output=").append(output).append("\n");
-			}
-			history = history.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(sb.toString())));
-		}
-
-		// Append each inbox message as a user turn (with provenance)
-		if (messages != null) {
-			for (long i = 0; i < messages.count(); i++) {
-				ACell msg = messages.get(i);
-				AString content = null;
-				if (msg instanceof AString s) {
-					// Plain string message
-					content = s;
-				} else if (msg instanceof AMap) {
-					ACell caller = RT.getIn(msg, Fields.CALLER);
-					ACell msgBody = RT.getIn(msg, Fields.MESSAGE);
-					if (msgBody != null) {
-						// Envelope format {caller, message}
-						String prefix = (caller != null) ? "[Message from: " + caller + "]\n" : "[Message]\n";
-						content = Strings.create(prefix + msgBody);
-					} else {
-						// Map with content field (e.g. {content: "..."})
-						AString c = RT.ensureString(RT.getIn(msg, K_CONTENT));
-						if (c != null) content = c;
-						else content = Strings.create(msg.toString());
-					}
-				}
-				if (content != null) {
-					history = history.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT, content));
-				}
-			}
-		}
-
-		// If no messages, tasks, or pending results were added, signal the empty state.
-		// This prevents LLM hallucination when triggered with no work — the LLM knows
-		// the situation rather than inferring from conversation history.
+		// Determine if there is real input for the agent
 		boolean hasInput = (messages != null && messages.count() > 0)
 			|| (tasks != null && tasks.count() > 0)
 			|| (pending != null && pending.count() > 0);
-		if (!hasInput) {
-			history = history.conj(Maps.of(K_ROLE, ROLE_USER, K_CONTENT,
-				Strings.create("[No pending tasks, messages, or job results. "
-					+ "You may act proactively based on your role, or report idle.]")));
-		}
 
-		// Build the tool list from config
-		boolean useDefaults = config == null || !CVMBool.FALSE.equals(config.get(K_DEFAULT_TOOLS));
-		Map<String, AString> configToolMap = new HashMap<>();
+		// Build context via ContextBuilder
+		ContextBuilder.ContextResult context = new ContextBuilder(engine, ctx)
+			.withConfig(recordConfig, state)
+			.withSystemPrompt(extractHistory(state))
+			.withContextEntries(state)
+			.withPendingResults(pending)
+			.withInboxMessages(messages)
+			.withEmptyStateSignal(hasInput)
+			.withTools()
+			.build();
 
-		// Resolve default tools as operation references
-		AVector<ACell> baseTools = Vectors.empty();
-		if (useDefaults) {
-			baseTools = buildConfigTools(DEFAULT_TOOL_OPS, configToolMap);
-		}
+		AVector<ACell> history = context.history();
+		AVector<ACell> baseTools = context.tools();
+		Map<String, AString> configToolMap = context.configToolMap();
+		AMap<AString, ACell> config = context.config();
+		RequestContext capsCtx = context.capsCtx();
+		AVector<ACell> caps = context.caps();
 
-		// Resolve additional config tools
-		if (config != null) {
-			ACell toolsCell = config.get(K_TOOLS);
-			if (toolsCell instanceof AVector<?> toolsVec) {
-				baseTools = (AVector<ACell>) baseTools.concat(
-					buildConfigTools((AVector<ACell>) toolsVec, configToolMap));
-			}
-		}
+		// Extract LLM operation from merged config
+		AString llmOperation = ContextBuilder.getConfigValue(config, K_LLM_OPERATION, DEFAULT_LLM_OPERATION);
 
-		// Read agent capability attenuations (null = unrestricted)
-		AVector<ACell> caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
-
-		// Attach caps to the RequestContext — enforced universally at JobManager dispatch
-		RequestContext capsCtx = (caps != null) ? ctx.withCaps(caps) : ctx;
+		// Task context is built dynamically per tool-loop iteration (not baked into
+		// history) so the LLM only sees outstanding tasks, not already-resolved ones.
 
 		// Create tool context for built-in tool execution
 		ToolContext toolCtx = new ToolContext(agentId, capsCtx, tasks, pending, configToolMap, caps);
@@ -672,119 +578,21 @@ public class LLMAgentAdapter extends AAdapter {
 
 	// ========== Config tool resolution ==========
 
-	/**
-	 * Builds flattened tool definitions from the config {@code tools} vector.
-	 *
-	 * <p>Each entry is either a string (operation name shorthand) or a map with
-	 * {@code operation} plus optional overrides ({@code name}, {@code description}).
-	 * The operation is resolved via the engine to get the asset metadata, from which
-	 * the tool definition (name, description, parameters) is derived.</p>
-	 *
-	 * @param toolsVec Config tools vector (strings and/or maps)
-	 * @param configToolMap Populated with toolName → operation mapping for dispatch
-	 * @return Vector of tool definition maps for the LLM
-	 */
-	@SuppressWarnings("unchecked")
-	private AVector<ACell> buildConfigTools(AVector<ACell> toolsVec, Map<String, AString> configToolMap) {
-		AVector<ACell> tools = Vectors.empty();
-		for (long i = 0; i < toolsVec.count(); i++) {
-			ACell entry = toolsVec.get(i);
+	// ========== Delegates to ContextBuilder (package-private for testing) ==========
 
-			AString[] parsed = parseConfigToolEntry(entry);
-			if (parsed == null) continue;
-
-			AString operation = parsed[0];
-			AString nameOverride = parsed[1];
-			AString descOverride = parsed[2];
-
-			// Resolve operation to asset
-			Hash hash = engine.resolveOperation(operation);
-			if (hash == null) {
-				log.warn("Config tool: cannot resolve operation '{}'", operation);
-				continue;
-			}
-			Asset asset = engine.getAsset(hash);
-			if (asset == null) {
-				log.warn("Config tool: asset not found for operation '{}'", operation);
-				continue;
-			}
-
-			// Derive tool name and description from overrides / asset metadata
-			AString assetToolName = RT.ensureString(asset.meta().get(Fields.TOOL_NAME));
-			String toolName = deriveToolName(nameOverride, assetToolName, operation);
-
-			AString description = (descOverride != null)
-				? descOverride
-				: RT.ensureString(asset.meta().get(Fields.DESCRIPTION));
-
-			// Extract input schema from asset operation metadata
-			ACell inputSchema = RT.getIn(asset.meta(), Fields.OPERATION, Fields.INPUT);
-
-			AMap<AString, ACell> toolDef = buildToolDefinition(toolName, description, inputSchema);
-			tools = tools.conj(toolDef);
-			configToolMap.put(toolName, operation);
-		}
-		return tools;
-	}
-
-	// ========== Pure helper functions (package-private for testing) ==========
-
-	/**
-	 * Parses a config tool entry (string or map) into its components.
-	 *
-	 * @return Array of [operation, nameOverride, descOverride], or null if invalid
-	 */
-	@SuppressWarnings("unchecked")
+	/** @see ContextBuilder#parseConfigToolEntry(ACell) */
 	static AString[] parseConfigToolEntry(ACell entry) {
-		AString operation;
-		AString nameOverride = null;
-		AString descOverride = null;
-
-		if (entry instanceof AString s) {
-			operation = s;
-		} else if (entry instanceof AMap<?, ?> m) {
-			AMap<AString, ACell> map = (AMap<AString, ACell>) m;
-			operation = RT.ensureString(map.get(Fields.OPERATION));
-			nameOverride = RT.ensureString(map.get(K_NAME));
-			descOverride = RT.ensureString(map.get(K_DESCRIPTION));
-		} else {
-			return null;
-		}
-
-		if (operation == null) return null;
-		return new AString[] { operation, nameOverride, descOverride };
+		return ContextBuilder.parseConfigToolEntry(entry);
 	}
 
-	/**
-	 * Derives a tool name from overrides, asset metadata, or the operation name.
-	 *
-	 * <p>Priority: nameOverride → asset toolName → operation with colons/slashes→underscores</p>
-	 */
+	/** @see ContextBuilder#deriveToolName(AString, AString, AString) */
 	static String deriveToolName(AString nameOverride, AString assetToolName, AString operation) {
-		if (nameOverride != null) return nameOverride.toString();
-		if (assetToolName != null) return assetToolName.toString();
-		return operation.toString().replace(':', '_').replace('/', '_');
+		return ContextBuilder.deriveToolName(nameOverride, assetToolName, operation);
 	}
 
-	/**
-	 * Builds a tool definition map from resolved components.
-	 */
-	@SuppressWarnings("unchecked")
+	/** @see ContextBuilder#buildToolDefinition(String, AString, ACell) */
 	static AMap<AString, ACell> buildToolDefinition(String toolName, AString description, ACell inputSchema) {
-		AMap<AString, ACell> parameters;
-		if (inputSchema instanceof AMap) {
-			parameters = (AMap<AString, ACell>) inputSchema;
-		} else {
-			parameters = Maps.of(K_TYPE, Strings.create("object"), K_PROPERTIES, Maps.empty());
-		}
-
-		AMap<AString, ACell> toolDef = Maps.of(
-			K_NAME, Strings.create(toolName),
-			K_PARAMETERS, parameters);
-		if (description != null) {
-			toolDef = toolDef.assoc(K_DESCRIPTION, description);
-		}
-		return toolDef;
+		return ContextBuilder.buildToolDefinition(toolName, description, inputSchema);
 	}
 
 	/**

@@ -8,6 +8,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
+import convex.core.data.util.CellExplorer;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -53,9 +54,28 @@ public class ContextLoader {
 	private static final AString K_PATH     = Strings.intern("path");
 
 	private final Engine engine;
+	private CellExplorer explorer;
 
 	public ContextLoader(Engine engine) {
 		this.engine = engine;
+	}
+
+	/**
+	 * Sets a CellExplorer for budget-controlled JSON5 rendering of lattice values.
+	 * When set, workspace paths, job outputs, and operation results are rendered
+	 * via the explorer instead of raw {@code toString()}.
+	 */
+	public void setCellExplorer(CellExplorer explorer) {
+		this.explorer = explorer;
+	}
+
+	/**
+	 * Renders a CVM value as a string. Uses CellExplorer if set, otherwise
+	 * falls back to {@code toString()}.
+	 */
+	String renderValue(ACell value) {
+		if (explorer != null) return explorer.explore(value).toString();
+		return value.toString();
 	}
 
 	/**
@@ -198,7 +218,7 @@ public class ContextLoader {
 
 			ACell value = CoviaAdapter.readPath(cursor, pathKeys);
 			if (value == null) return null;
-			return value.toString();
+			return renderValue(value);
 		} catch (Exception e) {
 			return null;
 		}
@@ -248,7 +268,7 @@ public class ContextLoader {
 				return null;
 			}
 			String labelStr = (label != null) ? label.toString() : "op:" + op;
-			return systemMessage(labelStr, result.toString());
+			return systemMessage(labelStr, renderValue(result));
 		} catch (RuntimeException e) {
 			if (required) throw e;
 			return null;
@@ -288,7 +308,7 @@ public class ContextLoader {
 			}
 
 			String labelStr = (label != null) ? label.toString() : "Job " + jobId;
-			return systemMessage(labelStr, output.toString());
+			return systemMessage(labelStr, renderValue(output));
 		} catch (RuntimeException e) {
 			if (required) throw e;
 			return null;
