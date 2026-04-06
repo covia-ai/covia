@@ -8,6 +8,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.interfaces.RSAPublicKey;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -114,7 +115,17 @@ public class LoginProviders {
 			ctx.status(400).result("Unsupported or unconfigured provider: " + providerName);
 			return;
 		}
-		ctx.redirect(provider.getAuthUrl());
+
+		String redirectUri = ctx.queryParam("redirect_uri");
+		if (redirectUri != null) {
+			// Encode redirect_uri into OAuth state as base64 JSON
+			String stateJson = "{\"redirect_uri\":\"" + redirectUri.replace("\"", "\\\"") + "\"}";
+			String state = Base64.getUrlEncoder().withoutPadding()
+				.encodeToString(stateJson.getBytes(StandardCharsets.UTF_8));
+			ctx.redirect(provider.getAuthUrl(state));
+		} else {
+			ctx.redirect(provider.getAuthUrl());
+		}
 	}
 
 	@SuppressWarnings("unchecked")
@@ -130,6 +141,23 @@ public class LoginProviders {
 		if (code == null) {
 			ctx.status(400).result("Missing authorisation code");
 			return;
+		}
+
+		// Extract redirect_uri from OAuth state if present
+		String frontendRedirectUri = null;
+		String stateParam = ctx.queryParam("state");
+		if (stateParam != null) {
+			try {
+				String stateJson = new String(
+					Base64.getUrlDecoder().decode(stateParam), StandardCharsets.UTF_8);
+				@SuppressWarnings("unchecked")
+				Map<String, Object> stateMap = (Map<String, Object>) JSON.jvm(stateJson);
+				if (stateMap != null && stateMap.containsKey("redirect_uri")) {
+					frontendRedirectUri = stateMap.get("redirect_uri").toString();
+				}
+			} catch (Exception e) {
+				log.debug("Could not decode OAuth state parameter", e);
+			}
 		}
 
 		try {
@@ -199,12 +227,22 @@ public class LoginProviders {
 			AString venueJwt = JWT.signPublic(claims, engine.getKeyPair());
 
 			// 5. Return JWT to client
-			AMap<AString, ACell> response = Maps.of(
-				"token", venueJwt,
-				"did", userDID
-			);
-			ctx.header("Content-type", "application/json");
-			ctx.result(JSON.toString(response));
+			if (frontendRedirectUri != null) {
+				// Redirect back to frontend with token and DID as query params
+				String sep = frontendRedirectUri.contains("?") ? "&" : "?";
+				String redirectUrl = frontendRedirectUri + sep
+					+ "token=" + URLEncoder.encode(venueJwt.toString(), StandardCharsets.UTF_8)
+					+ "&did=" + URLEncoder.encode(userDID.toString(), StandardCharsets.UTF_8);
+				ctx.redirect(redirectUrl);
+			} else {
+				// Backward compatible: return JSON for API/CLI clients
+				AMap<AString, ACell> response = Maps.of(
+					"token", venueJwt,
+					"did", userDID
+				);
+				ctx.header("Content-type", "application/json");
+				ctx.result(JSON.toString(response));
+			}
 
 		} catch (Exception e) {
 			log.error("OAuth callback error for {}", providerName, e);
