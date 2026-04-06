@@ -54,7 +54,7 @@ public class SecretAdapter extends AAdapter {
 		try {
 			switch (op) {
 				case "set":
-					return CompletableFuture.completedFuture(handleSet(input, callerDID));
+					return CompletableFuture.supplyAsync(() -> handleSet(input, callerDID), VIRTUAL_EXECUTOR);
 				case "extract":
 					// TODO: capability-gated secret extraction
 					return CompletableFuture.failedFuture(

@@ -14,11 +14,13 @@
 						{
 							"type": "object",
 							"properties": {
+								"operation": { "type": "string", "description": "Transition operation for the agent (e.g. 'llmagent:chat'). Determines how the agent processes tasks." },
 								"systemPrompt": { "type": "string", "description": "System prompt defining the agent's role and behaviour" },
 								"tools": { "type": "array", "description": "Tool operations the agent can call (e.g. ['covia:read', 'covia:write']). Default tools are included automatically." },
 								"model": { "type": "string", "description": "LLM model name (default: gpt-4o)" },
 								"caps": { "type": "array", "description": "Capability restrictions — array of {with, can} objects limiting what the agent can access" }
-							}
+							},
+							"additionalProperties": true
 						},
 						{ "type": "string", "description": "Reference to a config map stored in workspace, assets, or elsewhere" }
 					]

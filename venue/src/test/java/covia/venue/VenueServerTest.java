@@ -340,6 +340,44 @@ public class VenueServerTest {
 	}
 
 	@Test
+	public void testHTTPInvokeAgentCreate() throws Exception {
+		// Reproduce: POST /invoke with agent:create — should not hang
+		HttpClient client = HttpClient.newBuilder().build();
+		String body = "{\"operation\": \"agent:create\", \"input\": {\"agentId\": \"HttpTestAgent\"}}";
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI("http://localhost:" + PORT + "/api/v1/invoke"))
+			.POST(HttpRequest.BodyPublishers.ofString(body))
+			.header("Content-Type", "application/json")
+			.timeout(Duration.ofSeconds(10))
+			.build();
+
+		CompletableFuture<HttpResponse<String>> future = client.sendAsync(req, HttpResponse.BodyHandlers.ofString());
+		HttpResponse<String> resp = future.get(10000, TimeUnit.MILLISECONDS);
+		assertTrue(resp.statusCode() == 200 || resp.statusCode() == 201,
+			"Should return 200 or 201, got " + resp.statusCode() + ": " + resp.body());
+		assertTrue(resp.body().contains("COMPLETE") || resp.body().contains("PENDING"),
+			"Should contain job status: " + resp.body());
+	}
+
+	@Test
+	public void testHTTPInvokeSecretSet() throws Exception {
+		// Reproduce: POST /invoke with secret:set ��� should not hang
+		HttpClient client = HttpClient.newBuilder().build();
+		String body = "{\"operation\": \"secret:set\", \"input\": {\"name\": \"TEST_SECRET\", \"value\": \"test123\"}}";
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI("http://localhost:" + PORT + "/api/v1/invoke"))
+			.POST(HttpRequest.BodyPublishers.ofString(body))
+			.header("Content-Type", "application/json")
+			.timeout(Duration.ofSeconds(10))
+			.build();
+
+		CompletableFuture<HttpResponse<String>> future = client.sendAsync(req, HttpResponse.BodyHandlers.ofString());
+		HttpResponse<String> resp = future.get(10000, TimeUnit.MILLISECONDS);
+		assertTrue(resp.statusCode() == 200 || resp.statusCode() == 201,
+			"Should return 200 or 201, got " + resp.statusCode() + ": " + resp.body());
+	}
+
+	@Test
 	public void testAnonymousInvokeGetsPublicDID() throws Exception {
 		// Invoke via HTTP client without auth — should get public DID as caller
 		ACell input = Maps.of("message", "anonymous test");

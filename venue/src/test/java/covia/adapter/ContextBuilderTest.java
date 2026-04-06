@@ -478,4 +478,132 @@ public class ContextBuilderTest {
 		assertEquals("Does things", RT.ensureString(RT.getIn(def, Strings.intern("description"))).toString());
 		assertNotNull(RT.getIn(def, Strings.intern("parameters")));
 	}
+
+	// ========== Dynamic context (load/unload, context map, safety valve) ==========
+
+	@Test public void testLoadedPathsResolution() {
+		// Write data to workspace via operation
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("w/test-data"),
+				Strings.create("value"), Maps.of(Strings.create("key"), Strings.create("value"))),
+			ctx).awaitResult(5000);
+
+		AMap<AString, ACell> loads = Maps.of(
+			Strings.create("w/test-data"), Maps.of(
+				Strings.create("budget"), CVMLong.create(500)));
+
+		ContextBuilder builder = new ContextBuilder(engine, ctx);
+		ContextBuilder.ContextResult result = builder
+			.withConfig(null, null)
+			.withSystemPrompt(Vectors.empty())
+			.withLoadedPaths(loads)
+			.withTools()
+			.build();
+
+		// Should have at least one message from the loaded path
+		boolean found = false;
+		for (long i = 0; i < result.history().count(); i++) {
+			AString content = RT.ensureString(RT.getIn(result.history().get(i), "content"));
+			if (content != null && content.toString().contains("key")) found = true;
+		}
+		assertTrue(found, "Loaded path should appear in context");
+	}
+
+	@Test public void testLoadedPathsMissingSkipped() {
+		AMap<AString, ACell> loads = Maps.of(
+			Strings.create("w/nonexistent/path"), Maps.of(
+				Strings.create("budget"), CVMLong.create(500)));
+
+		ContextBuilder builder = new ContextBuilder(engine, ctx);
+		// Should not throw
+		builder.withConfig(null, null)
+			.withSystemPrompt(Vectors.empty())
+			.withLoadedPaths(loads)
+			.withTools()
+			.build();
+	}
+
+	@Test public void testContextMapContent() {
+		AMap<AString, ACell> loads = Maps.of(
+			Strings.create("w/data"), Maps.of(
+				Strings.create("budget"), CVMLong.create(800),
+				Strings.create("label"), Strings.create("Test Data")));
+
+		ContextBuilder builder = new ContextBuilder(engine, ctx);
+		ContextBuilder.ContextResult result = builder
+			.withConfig(null, null)
+			.withSystemPrompt(Vectors.empty())
+			.withContextMap(loads)
+			.withTools()
+			.build();
+
+		// Find the context map message
+		boolean foundMap = false;
+		for (long i = 0; i < result.history().count(); i++) {
+			AString content = RT.ensureString(RT.getIn(result.history().get(i), "content"));
+			if (content != null && content.toString().contains("[Context Map]")) {
+				foundMap = true;
+				String text = content.toString();
+				assertTrue(text.contains("budget:"), "Should show budget");
+				assertTrue(text.contains("w/data"), "Should list loaded path");
+				assertTrue(text.contains("Test Data"), "Should show label");
+				assertTrue(text.contains("800B"), "Should show path budget");
+			}
+		}
+		assertTrue(foundMap, "Should have context map message");
+	}
+
+	@Test public void testContextMapWarningAt70Pct() {
+		// Use a tiny budget so context map triggers warning
+		ContextBuilder builder = new ContextBuilder(engine, ctx, 100);
+		// Fill most of the budget with a system prompt
+		AVector<ACell> bigHistory = Vectors.of(
+			Maps.of(Strings.create("role"), Strings.create("system"),
+				Strings.create("content"), Strings.create("x".repeat(80))));
+		ContextBuilder.ContextResult result = builder
+			.withConfig(null, null)
+			.withSystemPrompt(bigHistory)
+			.withContextMap(null)
+			.build();
+
+		boolean foundWarning = false;
+		for (long i = 0; i < result.history().count(); i++) {
+			AString content = RT.ensureString(RT.getIn(result.history().get(i), "content"));
+			if (content != null && content.toString().contains("WARNING")) foundWarning = true;
+		}
+		assertTrue(foundWarning, "Should warn when budget > 70%");
+	}
+
+	@Test public void testSafetyValveNoPruneBelow90() {
+		ContextBuilder builder = new ContextBuilder(engine, ctx); // 180k budget
+		builder.withConfig(null, null).withSystemPrompt(Vectors.empty());
+
+		AMap<AString, ACell> loads = Maps.of(
+			Strings.create("w/a"), Maps.of(Strings.create("budget"), CVMLong.create(500)));
+
+		AMap<AString, ACell> result = builder.applySafetyValve(loads);
+		assertEquals(1, result.count(), "Should not prune below 90%");
+	}
+
+	@Test public void testSafetyValvePrunesLIFO() {
+		// Use a tiny budget and fill it way past 90%
+		ContextBuilder builder = new ContextBuilder(engine, ctx, 100);
+		AVector<ACell> bigHistory = Vectors.of(
+			Maps.of(Strings.create("role"), Strings.create("system"),
+				Strings.create("content"), Strings.create("x".repeat(95))));
+		builder.withConfig(null, null).withSystemPrompt(bigHistory);
+		// Consumed is now > 90 bytes out of 100
+
+		AMap<AString, ACell> loads = Maps.of(
+			Strings.create("w/old"), Maps.of(
+				Strings.create("budget"), CVMLong.create(10),
+				Strings.create("ts"), CVMLong.create(1000)),
+			Strings.create("w/new"), Maps.of(
+				Strings.create("budget"), CVMLong.create(10),
+				Strings.create("ts"), CVMLong.create(2000)));
+
+		AMap<AString, ACell> result = builder.applySafetyValve(loads);
+		// Should prune newest first (w/new has ts=2000)
+		assertTrue(result.count() < loads.count(), "Should prune at least one entry");
+	}
 }

@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.util.JSON;
 import covia.grid.Asset;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
@@ -902,6 +903,12 @@ public class AgentAdapter extends AAdapter {
 		if (configArg instanceof AMap<?,?> m) return (AMap<AString, ACell>) m;
 		AString ref = RT.ensureString(configArg);
 		if (ref == null) return null;
+		// MCP oneOf may deliver a JSON object as a string — parse it
+		String s = ref.toString();
+		if (s.startsWith("{")) {
+			ACell parsed = JSON.parse(s);
+			if (parsed instanceof AMap<?,?> pm) return (AMap<AString, ACell>) pm;
+		}
 		AMap<AString, ACell> resolved = resolveConfigRef(ref, ctx);
 		if (resolved == null) {
 			throw new IllegalArgumentException("Could not resolve config reference: " + ref);

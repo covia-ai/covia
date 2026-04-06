@@ -38,7 +38,8 @@
         "input": {
           "agentId": ["const", "Carol"],
           "input": {
-            "enriched_invoice": [1, "output"],
+            "extraction": [0, "output"],
+            "enrichment": [1, "output"],
             "source_pipeline": ["const", [
               {"agent": "Alice"},
               {"agent": "Bob"}

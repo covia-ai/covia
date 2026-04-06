@@ -15,6 +15,8 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -82,6 +84,9 @@ public class LLMAgentAdapter extends AAdapter {
 		+ "Give concise, clear and accurate responses.");
 
 	private static final AString DEFAULT_LLM_OPERATION = Strings.create("langchain:openai");
+
+	// State field keys
+	private static final AString K_LOADS = Strings.intern("loads");
 
 	// Config field keys (read from state.config)
 	private static final AString K_CONFIG        = Strings.intern("config");
@@ -169,6 +174,57 @@ public class LLMAgentAdapter extends AAdapter {
 		)
 	);
 
+	// Built-in context tool names
+	private static final String TOOL_CONTEXT_LOAD   = "context_load";
+	private static final String TOOL_CONTEXT_UNLOAD = "context_unload";
+
+	private static final AMap<AString, ACell> TOOL_DEF_CONTEXT_LOAD = Maps.of(
+		K_NAME, Strings.create(TOOL_CONTEXT_LOAD),
+		K_DESCRIPTION, Strings.create(
+			"Add a lattice path to your persistent loaded context. "
+			+ "The path is resolved fresh each turn and injected as a system message. "
+			+ "Use for reference material you need across multiple turns. "
+			+ "For one-shot reads, use explore instead. Effect takes place next turn."),
+		K_PARAMETERS, Maps.of(
+			K_TYPE, Strings.create("object"),
+			K_PROPERTIES, Maps.of(
+				Strings.create("path"), Maps.of(
+					K_TYPE, Strings.create("string"),
+					K_DESCRIPTION, Strings.create("Lattice path to load (e.g. w/docs/rules, n/notes)")),
+				Strings.create("budget"), Maps.of(
+					K_TYPE, Strings.create("integer"),
+					K_DESCRIPTION, Strings.create("Byte budget for rendering this path (default 500, max 10000)")),
+				Strings.create("label"), Maps.of(
+					K_TYPE, Strings.create("string"),
+					K_DESCRIPTION, Strings.create("Optional human-readable label for this context entry"))
+			),
+			K_REQUIRED, Vectors.of(Strings.create("path"))
+		)
+	);
+
+	private static final AMap<AString, ACell> TOOL_DEF_CONTEXT_UNLOAD = Maps.of(
+		K_NAME, Strings.create(TOOL_CONTEXT_UNLOAD),
+		K_DESCRIPTION, Strings.create(
+			"Remove a path from your persistent loaded context. "
+			+ "Frees the budget allocated to that path. "
+			+ "Cannot unload pinned context entries from config."),
+		K_PARAMETERS, Maps.of(
+			K_TYPE, Strings.create("object"),
+			K_PROPERTIES, Maps.of(
+				Strings.create("path"), Maps.of(
+					K_TYPE, Strings.create("string"),
+					K_DESCRIPTION, Strings.create("Lattice path to unload (must match the path used in context_load)"))
+			),
+			K_REQUIRED, Vectors.of(Strings.create("path"))
+		)
+	);
+
+	/** Context tools — always available to agents */
+	private static final AVector<ACell> CONTEXT_TOOLS = (AVector<ACell>) Vectors.of(
+		(ACell) TOOL_DEF_CONTEXT_LOAD,
+		(ACell) TOOL_DEF_CONTEXT_UNLOAD
+	);
+
 	/** Default tool operations — resolved via buildConfigTools at runtime */
 	private static final AVector<ACell> DEFAULT_TOOL_OPS = (AVector<ACell>) Vectors.of(
 		(ACell) Strings.create("agent:create"),
@@ -186,6 +242,8 @@ public class LLMAgentAdapter extends AAdapter {
 		(ACell) Strings.create("covia:append"),
 		(ACell) Strings.create("covia:slice"),
 		(ACell) Strings.create("covia:list"),
+		(ACell) Strings.create("covia:explore"),
+		(ACell) Strings.create("covia:adapters"),
 		(ACell) Strings.create("covia:functions"),
 		(ACell) Strings.create("covia:describe"),
 		(ACell) Strings.create("schema:validate"),
@@ -267,16 +325,25 @@ public class LLMAgentAdapter extends AAdapter {
 			|| (tasks != null && tasks.count() > 0)
 			|| (pending != null && pending.count() > 0);
 
+		// Extract dynamic loaded paths from state
+		AMap<AString, ACell> existingLoads = extractLoads(state);
+
 		// Build context via ContextBuilder
-		ContextBuilder.ContextResult context = new ContextBuilder(engine, ctx)
+		ContextBuilder builder = new ContextBuilder(engine, ctx);
+		ContextBuilder.ContextResult context = builder
 			.withConfig(recordConfig, state)
 			.withSystemPrompt(extractHistory(state))
 			.withContextEntries(state)
+			.withLoadedPaths(existingLoads)
+			.withContextMap(existingLoads)
 			.withPendingResults(pending)
 			.withInboxMessages(messages)
 			.withEmptyStateSignal(hasInput)
 			.withTools()
 			.build();
+
+		// Safety valve — may prune loads if budget exceeded
+		AMap<AString, ACell> activeLoads = builder.applySafetyValve(existingLoads);
 
 		AVector<ACell> history = context.history();
 		AVector<ACell> baseTools = context.tools();
@@ -295,7 +362,7 @@ public class LLMAgentAdapter extends AAdapter {
 		// history) so the LLM only sees outstanding tasks, not already-resolved ones.
 
 		// Create tool context for built-in tool execution
-		ToolContext toolCtx = new ToolContext(agentId, capsCtx, tasks, pending, configToolMap, caps);
+		ToolContext toolCtx = new ToolContext(agentId, capsCtx, tasks, pending, configToolMap, caps, activeLoads);
 
 		// Invoke level 3 with tool call loop — returns all messages to append
 		// ctx (uncapped) for the L3 LLM call; capsCtx flows through toolCtx for tool dispatch
@@ -322,10 +389,14 @@ public class LLMAgentAdapter extends AAdapter {
 		AString contentText = RT.ensureString(RT.getIn(lastMsg, K_CONTENT));
 		String responseText = (contentText != null) ? contentText.toString() : "";
 
-		// Return transition function output (preserve config in state)
+		// Return transition function output (preserve config and loads in state)
 		AMap<AString, ACell> newState = Maps.of(K_HISTORY, history);
 		if (config != null) {
 			newState = newState.assoc(K_CONFIG, config);
+		}
+		AMap<AString, ACell> finalLoads = toolCtx.getLoads();
+		if (finalLoads != null && finalLoads.count() > 0) {
+			newState = newState.assoc(K_LOADS, finalLoads);
 		}
 		ACell result = Maps.of(K_RESPONSE, Strings.create(responseText));
 		AMap<AString, ACell> output = Maps.of(
@@ -374,10 +445,10 @@ public class LLMAgentAdapter extends AAdapter {
 			AMap<AString, ACell> l3Input = Maps.of(K_MESSAGES, fullHistory);
 			l3Input = copyIfPresent(config, l3Input, K_MODEL, K_URL, K_API_KEY, K_RESPONSE_FORMAT);
 
-			// Include task tools (complete_task, fail_task) only when tasks remain
+			// Include task tools when tasks remain; context tools always available
 			AVector<ACell> tools = (taskMsg != null)
-				? (AVector<ACell>) TASK_TOOLS.concat(baseTools)
-				: baseTools;
+				? (AVector<ACell>) TASK_TOOLS.concat(CONTEXT_TOOLS).concat(baseTools)
+				: (AVector<ACell>) CONTEXT_TOOLS.concat(baseTools);
 			if (tools != null && tools.count() > 0) {
 				l3Input = l3Input.assoc(K_TOOLS, tools);
 			}
@@ -482,6 +553,10 @@ public class LLMAgentAdapter extends AAdapter {
 		if (TOOL_COMPLETE_TASK.equals(toolName)) return handleCompleteTask(input, toolCtx);
 		if (TOOL_FAIL_TASK.equals(toolName)) return handleFailTask(input, toolCtx);
 
+		// Built-in context tools (harness-level, like task tools)
+		if (TOOL_CONTEXT_LOAD.equals(toolName)) return handleContextLoad(input, toolCtx);
+		if (TOOL_CONTEXT_UNLOAD.equals(toolName)) return handleContextUnload(input, toolCtx);
+
 		// Resolve the actual operation name for capability checking
 		AString operation = toolCtx.configToolMap.get(toolName);
 		String opName = (operation != null) ? operation.toString() : toolName;
@@ -546,6 +621,48 @@ public class LLMAgentAdapter extends AAdapter {
 
 		return Maps.of(Fields.JOB_ID, jobIdStr, Fields.STATUS, Status.FAILED,
 			Fields.ERROR, Strings.create(reasonStr));
+	}
+
+	// ========== Built-in context tools ==========
+
+	ACell handleContextLoad(ACell input, ToolContext toolCtx) {
+		AString path = RT.ensureString(RT.getIn(input, Strings.create("path")));
+		if (path == null) return Strings.create("Error: path is required");
+
+		long budget = 500;
+		ACell budgetCell = RT.getIn(input, Strings.create("budget"));
+		if (budgetCell instanceof CVMLong l) {
+			budget = Math.max(256, Math.min(l.longValue(), 10_000));
+		}
+		AString label = RT.ensureString(RT.getIn(input, Strings.create("label")));
+
+		AMap<AString, ACell> entryMeta = Maps.of(
+			Strings.create("budget"), CVMLong.create(budget),
+			Strings.create("ts"), CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
+		if (label != null) entryMeta = entryMeta.assoc(Strings.create("label"), label);
+
+		toolCtx.addLoad(path, entryMeta);
+
+		return Maps.of(
+			Strings.create("path"), path,
+			Strings.create("loaded"), CVMBool.TRUE,
+			Strings.create("budget"), CVMLong.create(budget),
+			Strings.create("note"), Strings.create("Path will appear in context next turn. Use explore for immediate reads."));
+	}
+
+	ACell handleContextUnload(ACell input, ToolContext toolCtx) {
+		AString path = RT.ensureString(RT.getIn(input, Strings.create("path")));
+		if (path == null) return Strings.create("Error: path is required");
+
+		if (!toolCtx.hasLoad(path)) {
+			return Strings.create("Error: path not loaded: " + path);
+		}
+
+		toolCtx.removeLoad(path);
+
+		return Maps.of(
+			Strings.create("path"), path,
+			Strings.create("unloaded"), CVMBool.TRUE);
 	}
 
 	/**
@@ -695,6 +812,13 @@ public class LLMAgentAdapter extends AAdapter {
 		return Vectors.empty();
 	}
 
+	@SuppressWarnings("unchecked")
+	static AMap<AString, ACell> extractLoads(ACell state) {
+		if (state == null) return Maps.empty();
+		ACell l = RT.getIn(state, K_LOADS);
+		return (l instanceof AMap) ? (AMap<AString, ACell>) l : Maps.empty();
+	}
+
 	/**
 	 * Extracts the JSON Schema from a responseFormat config, if present.
 	 * responseFormat can be: "json" (no schema), "text" (no schema), or {name, schema} (has schema).
@@ -722,20 +846,38 @@ public class LLMAgentAdapter extends AAdapter {
 		final Map<String, AString> configToolMap;
 		final AVector<ACell> caps;
 		AMap<AString, ACell> taskResults;
+		AMap<AString, ACell> loads;
 
 		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
-				Map<String, AString> configToolMap, AVector<ACell> caps) {
+				Map<String, AString> configToolMap, AVector<ACell> caps, AMap<AString, ACell> loads) {
 			this.agentId = agentId;
 			this.ctx = ctx;
 			this.tasks = tasks;
 			this.pending = pending;
 			this.configToolMap = (configToolMap != null) ? configToolMap : Map.of();
 			this.caps = caps;
+			this.loads = (loads != null) ? loads : Maps.empty();
 		}
 
 		void recordTaskResult(AString jobId, AMap<AString, ACell> result) {
 			if (taskResults == null) taskResults = Maps.empty();
 			taskResults = taskResults.assoc(jobId, result);
+		}
+
+		void addLoad(AString path, AMap<AString, ACell> meta) {
+			loads = loads.assoc(path, meta);
+		}
+
+		void removeLoad(AString path) {
+			loads = loads.dissoc(path);
+		}
+
+		boolean hasLoad(AString path) {
+			return loads.get(path) != null;
+		}
+
+		AMap<AString, ACell> getLoads() {
+			return loads;
 		}
 	}
 }

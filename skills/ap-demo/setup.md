@@ -103,40 +103,50 @@ value: {
 }
 ```
 
-## 3. Store Shared Artifacts
+## 3. Store Shared Documents and Orchestration
 
-Store the AP policy rules and data guide as immutable artifacts. These are loaded into agent context automatically — agents reference them by hash, not by reading workspace. Read the files from `assets/ap-policy-rules.md` and `assets/ap-data-guide.md`.
+Store shared documents in workspace — agents reference them by path, not by hash. Also store as content-addressed assets for immutability/audit. Read the files from `assets/ap-policy-rules.md` and `assets/ap-data-guide.md`.
+
+### Documents in workspace (for agent context)
+
+```
+covia_write  path=w/docs/policy-rules  value=<contents of assets/ap-policy-rules.md as string>
+covia_write  path=w/docs/data-guide    value=<contents of assets/ap-data-guide.md as string>
+```
+
+### Immutable copies as assets (for audit trail)
 
 ```
 asset_store  metadata={"name": "AP Policy Rules", "type": "document"}  contentText=<contents of assets/ap-policy-rules.md>
-→ returns {id: "<policy-hash>"}
-
 asset_store  metadata={"name": "AP Data Guide", "type": "document"}  contentText=<contents of assets/ap-data-guide.md>
-→ returns {id: "<data-guide-hash>"}
 ```
 
-Note the hashes — they go into agent `context` arrays below.
+### Pipeline orchestration
 
-Also store the orchestration asset (read from `assets/ap-pipeline.json`):
+Store as a content-addressed asset (the orchestrator resolves by hash), then write the hash to a workspace path so agents can discover it:
 
 ```
 asset_store  metadata=<contents of assets/ap-pipeline.json>
 → returns {id: "<pipeline-hash>"}
-```
 
-Store the pipeline hash in workspace so Dave can find it:
-
-```
 covia_write  path=w/config/ap-pipeline  value=<pipeline-hash>
 ```
 
 ## 4. Create Agents
 
-All four use `llmagent:chat` transition with `langchain:openai` (gpt-4o). Create in parallel.
+All four use `llmagent:chat` transition with `langchain:openai` (gpt-4o-mini). Create in parallel.
 
 **IMPORTANT:** `config.operation` must be a plain string `"llmagent:chat"`, not a map.
 
-Agents use **context loading** to receive shared reference material. The `context` array in `state.config` lists asset hashes and workspace paths that are resolved and injected as system messages before each run. This keeps system prompts short (identity + behaviour only) and shared docs in one place.
+Agents use **context loading** to receive shared reference material. The `context` array in `state.config` lists asset hashes, workspace paths, and op-based entries that are resolved and injected as system messages before each run. This keeps system prompts short (identity + behaviour only) and shared docs in one place.
+
+### Context entry types used in this demo
+
+| Type | Example | What it does |
+|------|---------|-------------|
+| **Asset hash** | `"<hash>"` | Fetches content from content-addressed store (UTF-8) |
+| **Workspace ref** | `{"ref": "w/vendor-records", "label": "..."}` | Reads lattice value, rendered via CellExplorer with budget control |
+| **Op-based** | `{"op": "covia:list", "input": {...}, "label": "..."}` | Runs an operation at context-load time, injects result |
 
 All pipeline agents use **strict structured output** via `responseFormat`. Every `responseFormat` schema must have `additionalProperties: false` at every object level for OpenAI strict mode.
 
@@ -148,7 +158,7 @@ agent_create
   config: { "operation": "llmagent:chat" }
   state: { "config": {
     "llmOperation": "langchain:openai",
-    "model": "gpt-4o",
+    "model": "gpt-4o-mini",
     "systemPrompt": "You are Alice, an AP Invoice Scanner. Extract structured invoice fields from raw text. Your output is schema-enforced — populate every field. Use empty string for missing text fields and empty array for missing lists. Add a flag for every field that required interpretation or was ambiguous. Be precise with amounts.",
     "responseFormat": {
       "name": "InvoiceExtraction",
@@ -185,7 +195,7 @@ agent_create
 
 Bob uses **tools and structured output together**. During processing he autonomously calls `covia_read` to look up vendor records and purchase orders. After all tool calls complete, his final response is schema-enforced. He also writes his enrichment to workspace for the permanent record.
 
-Bob's `context` loads the AP Data Guide artifact so he knows where to find data — no need to inline paths in the prompt.
+Bob's `context` loads: (1) the AP Data Guide artifact for workspace layout, and (2) an op-based entry that lists known vendors at context-load time — so Bob knows which vendors exist before making any tool calls.
 
 ```
 agent_create
@@ -193,9 +203,12 @@ agent_create
   config: { "operation": "llmagent:chat" }
   state: { "config": {
     "llmOperation": "langchain:openai",
-    "model": "gpt-4o",
+    "model": "gpt-4o-mini",
     "systemPrompt": "You are Bob, an AP Data Enricher. You receive structured invoice data and enrich it by autonomously looking up vendor records, purchase orders, and checking for duplicates. Use your tools to read and write workspace data. Record the exact path you queried in each source_path field. Your confidence_score should reflect how many validations succeeded (1.0 = all clear, lower for each warning).",
-    "context": ["<data-guide-hash>"],
+    "context": [
+      {"ref": "w/docs/data-guide", "label": "AP Data Guide"},
+      {"op": "covia:list", "input": {"path": "w/vendor-records"}, "label": "Known Vendors"}
+    ],
     "responseFormat": {
       "name": "InvoiceEnrichment",
       "schema": {
@@ -260,7 +273,7 @@ agent_create
 
 Carol applies named policy rules and must cite each one in her response. The schema forces her to enumerate every rule she evaluated.
 
-Carol's `context` loads the AP Policy Rules artifact — the rules are no longer inline in the prompt. She also writes her decision to `w/decisions/{invoice_number}` for the permanent audit trail.
+Carol's `context` loads: (1) the AP Policy Rules artifact, and (2) a workspace ref for all vendor records — rendered via CellExplorer with budget control, giving Carol vendor status at a glance. She receives both Alice's extraction (for the actual invoice total) and Bob's enrichment (for validation results) via the orchestration. She writes her decision to `w/decisions/{invoice_number}` for the permanent audit trail.
 
 ```
 agent_create
@@ -268,9 +281,12 @@ agent_create
   config: { "operation": "llmagent:chat" }
   state: { "config": {
     "llmOperation": "langchain:openai",
-    "model": "gpt-4o",
-    "systemPrompt": "You are Carol, the AP Payment Approver and policy gate. Apply the AP policy rules to enriched invoice records. Every decision must cite each rule evaluated with PASS or FAIL and specific evidence. Write your decision to w/decisions/{invoice_number} for the audit trail. Be thorough and precise — every decision is the compliance record.",
-    "context": ["<policy-hash>"],
+    "model": "gpt-4o-mini",
+    "systemPrompt": "You are Carol, the AP Payment Approver and policy gate. You receive both the original extraction (with the invoice total_amount) and Bob's enrichment (with validation results). Use extraction.total_amount as the invoice amount for threshold rules — not the PO authorised amount. Apply the AP policy rules to every invoice. Every decision must cite each rule evaluated with PASS or FAIL and specific evidence. Write your decision to w/decisions/{invoice_number} for the audit trail.",
+    "context": [
+      {"ref": "w/docs/policy-rules", "label": "AP Policy Rules"},
+      {"ref": "w/vendor-records", "label": "Vendor Records (reference)"}
+    ],
     "responseFormat": {
       "name": "ApprovalDecision",
       "schema": {
@@ -320,11 +336,11 @@ agent_create
   config: { "operation": "llmagent:chat" }
   state: { "config": {
     "llmOperation": "langchain:openai",
-    "model": "gpt-4o",
+    "model": "gpt-4o-mini",
     "systemPrompt": "You are Dave, the AP Manager. You oversee Alice (scanner), Bob (enricher), and Carol (approver). You can process invoices through the pipeline using grid_run with the orchestration hash from your context, investigate workspace data, query agent state, and answer questions. Summarise pipeline results highlighting the decision, policy rules, and risk flags.",
     "context": [
-      "<policy-hash>",
-      "<data-guide-hash>",
+      {"ref": "w/docs/policy-rules", "label": "AP Policy Rules"},
+      {"ref": "w/docs/data-guide", "label": "AP Data Guide"},
       {"ref": "w/config/ap-pipeline", "label": "AP Pipeline Orchestration Hash"}
     ]
   }}

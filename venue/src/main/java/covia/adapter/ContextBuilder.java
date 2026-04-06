@@ -198,6 +198,115 @@ public class ContextBuilder {
 	}
 
 	/**
+	 * Resolves dynamically loaded paths from the agent's state.loads map.
+	 * Each entry is resolved fresh using ContextLoader with per-entry CellExplorer budget.
+	 * Entries that exceed remaining budget or fail to resolve are silently skipped.
+	 */
+	@SuppressWarnings("unchecked")
+	public ContextBuilder withLoadedPaths(AMap<AString, ACell> loads) {
+		if (loads == null || loads.count() == 0) return this;
+
+		ContextLoader loader = new ContextLoader(engine);
+
+		for (var entry : loads.entrySet()) {
+			AString path = entry.getKey();
+			AMap<AString, ACell> meta = (AMap<AString, ACell>) entry.getValue();
+
+			int entryBudget = 500;
+			ACell budgetCell = meta.get(Strings.intern("budget"));
+			if (budgetCell instanceof convex.core.data.prim.CVMLong l) {
+				entryBudget = (int) Math.max(MIN_ENTRY_BUDGET, Math.min(l.longValue(), 10_000));
+			}
+
+			if (entryBudget > getRemaining()) continue;
+
+			loader.setCellExplorer(new CellExplorer(entryBudget));
+			ACell msg = loader.resolveEntry(path, ctx);
+			if (msg != null) {
+				messages = messages.conj(msg);
+				trackMessage(msg);
+			}
+		}
+		return this;
+	}
+
+	/**
+	 * Appends a compact context map showing budget status and loaded paths.
+	 */
+	@SuppressWarnings("unchecked")
+	public ContextBuilder withContextMap(AMap<AString, ACell> loads) {
+		StringBuilder sb = new StringBuilder("[Context Map]\n");
+		sb.append("budget: ").append(consumed).append("/").append(totalBudget)
+		  .append(" bytes (").append(getRemaining()).append(" remaining)\n");
+
+		int pct = (int) (100 * consumed / totalBudget);
+		if (pct >= 70) {
+			sb.append("WARNING: ").append(pct).append("% budget used. Consider unloading unused paths.\n");
+		}
+
+		if (loads != null && loads.count() > 0) {
+			sb.append("loaded:\n");
+			for (var entry : loads.entrySet()) {
+				AString path = entry.getKey();
+				AMap<AString, ACell> meta = (AMap<AString, ACell>) entry.getValue();
+				ACell budgetCell = meta.get(Strings.intern("budget"));
+				int budget = (budgetCell instanceof convex.core.data.prim.CVMLong l) ? (int) l.longValue() : 500;
+				AString label = RT.ensureString(meta.get(Strings.intern("label")));
+				sb.append("  ").append(path);
+				if (label != null) sb.append(" — ").append(label);
+				sb.append(" [").append(budget).append("B]\n");
+			}
+		}
+
+		ACell msg = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(sb.toString()));
+		messages = messages.conj(msg);
+		trackMessage(msg);
+		return this;
+	}
+
+	/**
+	 * Safety valve: if budget usage exceeds 90%, auto-prune loaded paths (LIFO — newest first)
+	 * until usage drops below 70%. Returns the pruned loads map for persistence.
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> applySafetyValve(AMap<AString, ACell> loads) {
+		if (loads == null || loads.count() == 0) return loads;
+		double usageRatio = (double) consumed / totalBudget;
+		if (usageRatio < PRUNE_THRESHOLD) return loads;
+
+		// Sort by ts descending (newest first for LIFO eviction)
+		java.util.List<java.util.Map.Entry<AString, ACell>> sorted = new java.util.ArrayList<>();
+		for (var entry : loads.entrySet()) sorted.add(entry);
+		sorted.sort((a, b) -> {
+			long tsA = extractTs((AMap<AString, ACell>) a.getValue());
+			long tsB = extractTs((AMap<AString, ACell>) b.getValue());
+			return Long.compare(tsB, tsA);
+		});
+
+		AMap<AString, ACell> pruned = loads;
+		for (var e : sorted) {
+			if ((double) consumed / totalBudget < WARN_THRESHOLD) break;
+			AString path = e.getKey();
+			AMap<AString, ACell> meta = (AMap<AString, ACell>) e.getValue();
+			int entryBudget = 500;
+			ACell budgetCell = meta.get(Strings.intern("budget"));
+			if (budgetCell instanceof convex.core.data.prim.CVMLong l) entryBudget = (int) l.longValue();
+			pruned = pruned.dissoc(path);
+			consumed -= entryBudget;
+			log.info("Safety valve: auto-pruned loaded path {} ({} bytes)", path, entryBudget);
+		}
+		return pruned;
+	}
+
+	private static long extractTs(AMap<AString, ACell> meta) {
+		ACell v = meta.get(Strings.intern("ts"));
+		return (v instanceof convex.core.data.prim.CVMLong l) ? l.longValue() : 0;
+	}
+
+	static final double WARN_THRESHOLD = 0.70;
+	static final double PRUNE_THRESHOLD = 0.90;
+
+	/**
 	 * Appends pending job results as a user message.
 	 */
 	public ContextBuilder withPendingResults(AVector<ACell> pending) {
