@@ -1,0 +1,25 @@
+{
+  "venues": [
+    {
+      "name": "Local Dev Venue",
+      "hostname": "localhost",
+      "port": 8080,
+      "baseUrl": "http://localhost:8080",
+      "mcp": {},
+      "auth": {
+        "public": { "enabled": true },
+        "tokenExpiry": 86400,
+        "oauth": {
+          "google": {
+            "clientId": "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
+            "clientSecret": "YOUR_GOOGLE_CLIENT_SECRET"
+          },
+          "github": {
+            "clientId": "YOUR_GITHUB_CLIENT_ID",
+            "clientSecret": "YOUR_GITHUB_CLIENT_SECRET"
+          }
+        }
+      }
+    }
+  ]
+}

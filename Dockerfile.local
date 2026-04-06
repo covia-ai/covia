@@ -1,0 +1,38 @@
+# Multi-stage build: builds convex + covia from source, then runs venue
+# Usage: docker build -f Dockerfile.local -t covia-local ..
+
+################################################
+# Build stage — Java 21 + Maven
+FROM eclipse-temurin:21-jdk AS builder
+
+RUN apt-get update && apt-get install -y maven && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy both projects
+COPY convex/ /build/convex/
+COPY covia/ /build/covia/
+
+# Build convex with version 0.8.4-SNAPSHOT (covia expects this), then build covia
+RUN cd /build/convex \
+    && mvn versions:set -DnewVersion=0.8.4-SNAPSHOT -q \
+    && mvn clean install -DskipTests -q \
+    && cd /build/covia \
+    && mvn clean install -DskipTests -q
+
+################################################
+# Run stage
+FROM eclipse-temurin:21-jre-alpine
+
+WORKDIR /app
+
+RUN apk add --no-cache curl && rm -rf /var/cache/apk/*
+
+COPY --from=builder /build/covia/venue/target/covia.jar /app/covia.jar
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8080/ || exit 1
+
+CMD ["java", "-jar", "covia.jar"]

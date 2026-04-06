@@ -1,0 +1,45 @@
+################################################
+# Build stage — compile Convex + Covia from source
+FROM maven:3.9-eclipse-temurin-21 AS build
+
+WORKDIR /build
+
+# Copy Convex source and install to local repo
+COPY convex/ /build/convex/
+RUN cd /build/convex && mvn clean install -DskipTests -q
+
+# Copy Covia source
+COPY covia/ /build/covia/
+
+# Build Covia
+RUN cd /build/covia && mvn clean install -DskipTests -q
+
+################################################
+# Run stage
+FROM eclipse-temurin:21-jre-alpine
+
+WORKDIR /app
+
+RUN apk add --no-cache curl && rm -rf /var/cache/apk/*
+
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+COPY --from=build /build/covia/venue/target/covia.jar /app/covia.jar
+
+RUN chown -R appuser:appgroup /app
+
+USER appuser
+
+EXPOSE 8080
+
+ENV JAVA_OPTS="-XX:+UseContainerSupport \
+                -XX:MaxRAMPercentage=75.0 \
+                -XX:+UseG1GC \
+                -Djava.security.egd=file:/dev/./urandom \
+                -Dfile.encoding=UTF-8"
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8080/ || exit 1
+
+CMD ["sh", "-c", "java $JAVA_OPTS -jar covia.jar"]

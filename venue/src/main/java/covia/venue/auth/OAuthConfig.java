@@ -72,11 +72,22 @@ public class OAuthConfig {
 	 * Construct the full authorisation redirect URL for this provider.
 	 */
 	public String getAuthUrl() {
-		return authUrl
+		return getAuthUrl(null);
+	}
+
+	/**
+	 * Construct the full authorisation redirect URL with an optional OAuth state parameter.
+	 */
+	public String getAuthUrl(String state) {
+		String url = authUrl
 			+ "?response_type=code"
 			+ "&client_id=" + URLEncoder.encode(clientId, StandardCharsets.UTF_8)
 			+ "&redirect_uri=" + URLEncoder.encode(redirectUri, StandardCharsets.UTF_8)
 			+ "&scope=" + URLEncoder.encode(scope, StandardCharsets.UTF_8)
 			+ "&access_type=offline";
+		if (state != null) {
+			url += "&state=" + URLEncoder.encode(state, StandardCharsets.UTF_8);
+		}
+		return url;
 	}
 }
