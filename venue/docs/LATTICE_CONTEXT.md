@@ -1,38 +1,69 @@
 # Lattice Agent Context Architecture
 
-**Version:** 1.2 Draft
+**Version:** 1.3 Draft
 **Purpose:** Complete context design for an LLM agent on the Convex lattice. Lattice-native replacement for frameworks like Letta.
 
 ## Namespaces
 
-| Namespace | Purpose | Permissions | Lifecycle |
-|-----------|---------|-------------|-----------|
-| `/g/{agent}/` | Agent namespace | Harness-owned | Permanent |
-| `/g/{agent}/state/plan` | Task stack | Agent via `plan()` | Pinned |
-| `/g/{agent}/state/w/` | Agent persistent workspace | Agent read/write | Permanent |
-| `/t/` | Task temp workspace | Agent full access | Fork-on-push, rollback-on-pop |
-| `/w/` | User/shared data | Per-resource | External |
-| `/o/` | Operations registry | Read-only | External |
+Three addressing layers: lattice storage, agent-visible paths, and shorthand prefixes.
 
-### Agent State
+### Agent-Visible Paths
+
+| Prefix | Resolves to | Scope | Lifecycle |
+|--------|------------|-------|-----------|
+| `n/` | `g/{agent}/n/...` | Agent-private workspace | Permanent, dies with agent |
+| `t/` | Current task node's scratch | Task-local scratch | Wiped on pop |
+| `w/` | `<DID>/w/...` | User shared data | Permanent |
+| `o/` | `<DID>/o/...` | Operations registry | Permanent |
+
+`n/` and `t/` are only valid in agent scope. Full paths (e.g. `g/{agent}/timeline/0`) work everywhere.
+
+### Lattice Storage
+
+Per-user state under `:user-data/<DID>`:
+
+| Key | Lattice type | Contents |
+|-----|-------------|----------|
+| `"g"` | MapLattice + AGENT_LWW | Agent records (atomic, ts-based) |
+| `"w"` | MapLattice + JSONValue | User workspace (recursive merge) |
+| `"o"` | MapLattice + JSONValue | User operations (recursive merge) |
+| `"s"` | MapLattice + LWW | Encrypted secrets |
+| `"j"` | IndexLattice + LWW | Job references |
+| `"h"` | MapLattice + JSONValue | HITL requests |
+| `"a"` | CASLattice | Content-addressed assets |
+
+### Agent Record
+
+An agent's complete state lives at `g/{agentId}` as a single atomic record:
 
 ```
-/g/alice/
-  ├── state/
-  │   ├── plan              ← task stack (pinned)
-  │   └── w/                ← persistent workspace
-  │       ├── notes/
-  │       ├── drafts/
-  │       └── refs/
-  └── (harness config — harness-owned)
+g/alice/
+  ├── status          ← SLEEPING | RUNNING | SUSPENDED | TERMINATED
+  ├── config          ← harness-owned (transition op, tools, LLM params)
+  ├── tasks           ← task stack (agent writes via plan())
+  ├── n/              ← agent-private workspace (agent read/write)
+  │   ├── notes/
+  │   ├── drafts/
+  │   └── refs/
+  ├── timeline        ← append-only audit trail (harness-managed)
+  ├── inbox           ← incoming messages (external)
+  ├── pending         ← async job references (harness-managed)
+  ├── state           ← opaque domain state (transition function)
+  ├── ts              ← last-update timestamp (auto)
+  ├── error           ← error message if SUSPENDED
+  └── wake            ← deferred wake timestamp
 ```
 
-### Destination Shorthand
+Framework-managed (read-only to agent): status, config, tasks, timeline, inbox, pending, state, ts, error, wake. The agent writes `n/` directly and `tasks` via `plan()`.
+
+### Destination Shorthand (agent scope only)
 
 | Agent writes | Resolves to |
 |-------------|-------------|
-| `w/notes/x` | `/g/alice/state/w/notes/x` |
-| `t/snapshot` | `/t/snapshot` |
+| `n/notes/x` | `g/alice/n/notes/x` (agent-private) |
+| `t/snapshot` | Current task's scratch area |
+| `w/data/x` | `<DID>/w/data/x` (user shared) |
+| `o/myop` | `<DID>/o/myop` (user operations) |
 
 ## Context Layout
 
@@ -52,16 +83,17 @@ Fixed overhead (sections 1–3, 6): ~4,400 B (~1,100 tokens). Under 0.6%.
 
 ## Lifecycle Model
 
-Four lifecycles. No TTL. Cleanup is by pop or explicit unload.
+Three load lifecycles for data in the agent's context. No TTL. Pop is the only automatic cleanup.
 
 | Lifecycle | Source | Expires |
 |-----------|--------|---------|
-| **Pinned** | Harness | Never |
-| **Global** | `load()` | Explicit `unload()` |
-| **Scoped** | `load(scope:)` | Task pops |
-| **Ephemeral** | One-shot within turn | Next turn |
+| **Pinned** | Harness | Never (task stack, system prompt) |
+| **Global** | `load()` | Explicit `unload()`. Survives push/pop. |
+| **Scoped** | `load(scope:)` | Freed when that task pops |
 
-**Scope incentivises decomposition.** If you want automatic cleanup, break work into tasks. Pop is the only automatic cleanup — no lazy TTL shortcut.
+Tool results (`explore`, `compare`) are not "loaded" — they appear in the task conversation and disappear with it on pop.
+
+**Scope incentivises decomposition.** Want automatic cleanup? Break work into tasks. Pop is the only automatic cleanup — no lazy TTL shortcut.
 
 ## Task-Scoped Conversation
 
@@ -69,18 +101,28 @@ Each task has its own conversation history. This is the fundamental mechanism th
 
 ### Push (start child task)
 
-1. Parent's conversation is **suspended** (held by harness, not in context)
-2. Child gets a **fresh conversation** — no parent or sibling history
-3. Scoped loads for the child are activated
-4. `/t/` is forked (child gets clean overlay)
+When `plan()` sets a child task to `active`, the harness (between turns):
 
-### Pop (complete child task)
+1. Persists the current task's conversation to local storage
+2. Activates the child task on the agent record
+3. Starts a **fresh conversation** — no parent or sibling history
+4. Scoped loads for the child are activated
 
-1. Child's conversation is **discarded**
-2. Child's result is inserted into parent's conversation as a one-line summary
+The agent never pushes directly — it updates the plan, the harness executes the transition.
+
+### Pop (complete or fail child task)
+
+When `plan()` sets a task to `complete` or `failed`, the harness (between turns):
+
+1. Child's conversation is **discarded** (local storage)
+2. Child's `t/` scratch data is cleared from the task node
 3. Scoped loads are freed
-4. `/t/` overlay is rolled back
-5. Parent's conversation is **resumed**
+4. Cascades: any active/pending descendants are marked `cancelled`, their conversations discarded, their `t/` cleared
+5. Summary inserted into parent conversation: `[{path} completed: "{result}"]` or `[{path} failed: "{error}"]`
+6. If more active siblings remain, harness pushes the next one (declaration order)
+7. When all active children are done, parent conversation is **resumed**
+
+A task cannot be re-opened after pop. To retry, create a new child task.
 
 ### What the agent sees
 
@@ -89,11 +131,11 @@ Only the current task's conversation is in section 5. This means:
 ```
 ── Section 5: Task Conversation (/research/vendor-b) ──
 
-load("/w/vendors/b/profile", budget: 500, scope: "/research/vendor-b")
+load("w/vendors/b/profile", budget: 500, scope: "/research/vendor-b")
 → loaded
-explore("/w/vendors/b/products", budget: 800)
+explore("w/vendors/b/products", budget: 800)
 → 8 products, 1 flagship, 15% share
-explore("/w/vendors/b/financials", budget: 600)
+explore("w/vendors/b/financials", budget: 600)
 → revenue 2.1B, growth 22%, margin 24%
 "Smaller but fastest growing. Higher margins."
 ```
@@ -118,38 +160,41 @@ Three one-line results. All the detail was in the child conversations, now disca
 
 ### Tool results are just conversation
 
-No special result tracking. Tool results live in the task conversation. When the task pops, they're gone. If the agent needs data to survive, it promotes to `w/` or `t/` before popping.
+No special result tracking. Tool results live in the task conversation. When the task pops, they're gone. If the agent needs data to survive, it promotes to `n/` (agent-private) or `w/` (shared) before popping.
 
 ## Task Stack
 
-### Uniform Tasks
+### Storage
 
-Every node is a task — map with required `status`. Nested maps with `status` are children.
+Tasks are stored flat in the agent's `tasks` Index, keyed by Blob ID. Each task is a map with required `status` field, plus optional `result`, `t` (scratch data), `parent`, `children`, `name`, and arbitrary metadata. The harness renders the flat index as a tree for the agent using task paths (e.g. `/research/vendor-a`).
 
-### Paths
+`plan()` is the only way the agent modifies tasks. The harness translates path-based plan updates to ID-based index mutations.
 
-Direct: `/research/vendor-a`.
+### Focus and Activation
 
-### Focus
+The agent activates tasks via `plan()`. There is always exactly one active conversation (the focused task).
 
-Multiple active siblings allowed. Focus = most recently updated active leaf.
+- Multiple active siblings are processed in declaration order, one at a time
+- Parent conversation stays suspended until all active children are done
+- After all active children pop, parent resumes and can activate more or proceed
+- The harness never auto-activates pending tasks
+
+This allows batch activation ("do A, B, C in parallel") and sequential activation ("do A, then decide") as the agent sees fit.
 
 | State | Rendering |
 |-------|-----------|
-| Focused leaf | Full — metadata, scoped paths, `/t/` contents |
+| Focused (current) | Full — metadata, scoped paths, `t/` contents |
 | Other active | Two-line summary |
 | Pending | One-line |
-| Complete | One-line + result |
+| Complete/Failed | One-line + result |
 
-### Cascade
+### Task Scratch (`t/`)
 
-Pop = free scoped loads + discard conversation + rollback `/t/` + cascade through descendants.
+Each task node has a `t` field for scratch data. The agent writes via `t/key` shorthand; the harness stores it in the current task's `t` map. On pop, the task node is compacted (status + result only) and `t` is wiped.
 
-### Transactional `/t/`
+No overlay, no fork mechanics — `t/` is simply part of the task node.
 
-Fork-on-push, rollback-on-pop. Copy-on-write via Merkle sharing (free fork). Reads: own overlay → parent overlay → base. Writes: own overlay only.
-
-**Promote before pop** — agent must copy/write to `w/` to persist results beyond task completion.
+**Promote before pop** — agent must write to `n/` (agent-private) or `w/` (shared) to persist results beyond task completion.
 
 ## Context Map
 
@@ -161,11 +206,11 @@ Fork-on-push, rollback-on-pop. Copy-on-write via Merkle sharing (free fork). Rea
     tokens: {total: 45000, used: 2000, avail: 43000}
   },
   paths: {
-    "/g/alice/state/plan":
+    "g/alice/tasks":
       {budget: 500, pinned: true},
-    "/w/vendors/b/profile":
+    "w/vendors/b/profile":
       {budget: 500, scope: "/research/vendor-b"},
-    "/g/alice/state/w/notes/methodology":
+    "n/methodology":
       {budget: 200, scope: "/"}
   }
 }
@@ -221,7 +266,7 @@ No `ttl` — cleanup is by pop or explicit unload.
 ```json5
 {
   name: "copy",
-  description: "Deep-clone lattice cell. Use w/ for persistent workspace, t/ for task temp. Immutable snapshot.",
+  description: "Deep-clone lattice cell. Use n/ for agent workspace, w/ for shared, t/ for task scratch. Immutable snapshot.",
   parameters: { source: "string", dest: "string" }
 }
 ```
@@ -231,7 +276,7 @@ No `ttl` — cleanup is by pop or explicit unload.
 ```json5
 {
   name: "write",
-  description: "Write string content. Use w/ for persistent (notes, drafts), t/ for task temp.",
+  description: "Write string content. Use n/ for agent workspace (notes, drafts), w/ for shared data, t/ for task scratch.",
   parameters: { dest: "string", value: "string" }
 }
 ```
@@ -253,7 +298,7 @@ No `ttl` — cleanup is by pop or explicit unload.
 ```json5
 {
   name: "plan",
-  description: "Create or update task stack. Without path: full replacement. With path: merge at target. Completing a task triggers pop: frees scoped loads, discards task conversation (summary preserved in parent), rolls back /t/ overlay, cascades through descendants.",
+  description: "Create or update task stack. Without path: full replacement. With path: merge at target. Setting status to 'complete' or 'failed' triggers pop: frees scoped loads, discards task conversation (summary preserved in parent), clears t/ scratch, cascades through descendants.",
   parameters: {
     path: "string — optional task path",
     update: "object — merge data. null removes."
@@ -265,24 +310,28 @@ No `ttl` — cleanup is by pop or explicit unload.
 
 ```
 HARNESS (between turns):
-  1. Check task completions → pop:
-       discard task conversation
-       insert summary into parent conversation
+  1. Check task completions/failures → pop:
+       discard task conversation (local storage)
+       clear t/ scratch from task node
        free scoped loads
-       rollback /t/ overlay
-       cascade through descendants
-  2. If pushing new child task:
-       suspend parent conversation
+       cascade: cancel active/pending descendants
+       insert summary into parent conversation
+  2. If more active siblings remain:
+       push next active sibling (declaration order)
+       persist parent conversation to local storage
        start fresh conversation
-       fork /t/
-  3. Update focus
-  4. If root completed → validate, swap next root
-  5. Refresh loaded paths from lattice
-  6. Render task stack (focused leaf expanded)
-  7. Calculate budget (bytes + tokens)
-  8. Safety valve: 70% warn, 90% prune
-  9. Assemble prompt (sections 1–7)
- 10. Append continuation prompt
+  3. If all active children done:
+       resume parent conversation
+  4. If new child task activated by agent:
+       persist current conversation to local storage
+       push child, start fresh conversation
+  5. If root completed → validate, swap next root
+  6. Refresh loaded paths from lattice
+  7. Render task stack (focused task expanded)
+  8. Calculate budget (bytes + tokens)
+  9. Safety valve: 70% warn, 90% auto-prune
+ 10. Assemble prompt (sections 1–7)
+ 11. Append continuation prompt
 
 AGENT TURN:
   1. Read context map      → budget, loaded paths
@@ -293,7 +342,7 @@ AGENT TURN:
   6. Reason                 → next action
   7. Maybe explore/compare  → results join task conversation
   8. Maybe load/unload      → adjust working set
-  9. Maybe write/copy       → persist to w/ or scratch to t/
+  9. Maybe write/copy       → persist to n/ or w/, scratch to t/
  10. Maybe plan()           → update tasks (triggers push/pop)
  11. Act                    → Convex MCP tools
  12. Respond
@@ -305,7 +354,7 @@ AGENT TURN:
 
 **Task conversation: /**
 ```
-explore("/w/vendors", budget: 300)
+explore("w/vendors", budget: 300)
 → 12 vendors, A/B/C found
 
 plan({update: {
@@ -314,39 +363,39 @@ plan({update: {
   research: {
     status: "active",
     vendor-a: {status: "active"},
-    vendor-b: {status: "pending"},
-    vendor-c: {status: "pending"}
+    vendor-b: {status: "active"},
+    vendor-c: {status: "active"}
   },
   compare: {status: "pending"},
   draft: {status: "pending"},
   review: {status: "pending"}
 }})
 
-write("w/notes/methodology",
+write("n/methodology",
   "Compare revenue growth, margins, share. Flag risks.")
-load("/g/alice/state/w/notes/methodology", budget: 200, scope: "/")
-"Plan created. Starting vendor A research."
+load("n/methodology", budget: 200, scope: "/")
+"Plan created. Starting vendor research."
 ```
 
-→ Harness pushes `/research/vendor-a`. Root conversation suspended. Fresh conversation starts.
+→ Three vendor tasks batch-activated. Harness pushes `/research/vendor-a` (first in declaration order). Root conversation suspended.
 
 ### Turn 2 — Research vendor A
 
 **Task conversation: /research/vendor-a** (clean — no root history)
 ```
-load("/w/vendors/a/profile", budget: 500, scope: "/research/vendor-a")
+load("w/vendors/a/profile", budget: 500, scope: "/research/vendor-a")
 → loaded
 
-explore("/w/vendors/a/products", budget: 800)
+explore("w/vendors/a/products", budget: 800)
 → 14 products, 3 flagship, 23% share
 
-explore("/w/vendors/a/financials", budget: 600)
+explore("w/vendors/a/financials", budget: 600)
 → revenue 4.2B, growth 8%, margin 18%
 
-copy("/w/vendors/a/financials", "t/vendor-a-fin")
-→ snapshot to temp workspace
+copy("w/vendors/a/financials", "t/vendor-a-fin")
+→ snapshot to task scratch
 
-write("w/notes/vendor-a",
+write("n/vendor-a",
   "Strong portfolio, 23% share. Growth slowing (8% vs 12% prior).
    Margin pressure from new entrants.")
 
@@ -354,24 +403,24 @@ plan({path: "/research/vendor-a",
   update: {status: "complete", result: "23% share, growth slowing"}})
 ```
 
-→ Pop: conversation discarded. `/w/vendors/a/profile` unloaded. `/t/` rolled back. Parent gets summary.
+→ Pop: conversation discarded. Scoped load freed. `t/` cleared. Parent gets summary.
 
-→ Harness pushes `/research/vendor-b`. Fresh conversation.
+→ Harness pushes `/research/vendor-b` (next active sibling). Fresh conversation.
 
 ### Turn 3 — Research vendor B
 
 **Task conversation: /research/vendor-b** (clean — no vendor A history)
 ```
-load("/w/vendors/b/profile", budget: 500, scope: "/research/vendor-b")
+load("w/vendors/b/profile", budget: 500, scope: "/research/vendor-b")
 → loaded
 
-explore("/w/vendors/b/products", budget: 800)
+explore("w/vendors/b/products", budget: 800)
 → 8 products, 1 flagship, 15% share
 
-explore("/w/vendors/b/financials", budget: 600)
+explore("w/vendors/b/financials", budget: 600)
 → revenue 2.1B, growth 22%, margin 24%
 
-write("w/notes/vendor-b",
+write("n/vendor-b",
   "Smaller but fastest growing. Higher margins.
    Threat to A in 2-3 years.")
 
@@ -379,9 +428,11 @@ plan({path: "/research/vendor-b",
   update: {status: "complete", result: "15% share, rapid growth"}})
 ```
 
-→ Pop, push vendor-c. Same pattern.
+→ Pop, push vendor-c (last active sibling). Same pattern.
 
 ### Turn 4 — After all research, start comparison
+
+All three vendor tasks were batch-activated, so after vendor-c pops, `/research` resumes automatically.
 
 **Task conversation: /research** (resumed, with child summaries)
 ```
@@ -396,7 +447,7 @@ plan({path: "/research", update: {status: "complete"}})
 
 **Task conversation: /** (resumed)
 ```
-"Plan created. Starting vendor A research."
+"Plan created. Starting vendor research."
 [research completed: "3 vendors analysed"]
 
 plan({path: "/compare", update: {status: "active"}})
@@ -408,14 +459,14 @@ plan({path: "/compare", update: {status: "active"}})
 
 **Task conversation: /compare** (clean)
 ```
-load("/g/alice/state/w/notes/vendor-a", budget: 300, scope: "/compare")
-load("/g/alice/state/w/notes/vendor-b", budget: 300, scope: "/compare")
-load("/g/alice/state/w/notes/vendor-c", budget: 300, scope: "/compare")
+load("n/vendor-a", budget: 300, scope: "/compare")
+load("n/vendor-b", budget: 300, scope: "/compare")
+load("n/vendor-c", budget: 300, scope: "/compare")
 → all three notes loaded simultaneously
 
 "B strongest growth trajectory. A largest but slowing. C declining."
 
-write("w/notes/comparison",
+write("n/comparison",
   "B strongest growth. A largest. C acquisition target.
    Key risk: B's margins may not sustain at scale.")
 
@@ -424,21 +475,21 @@ plan({path: "/compare",
     result: "B strongest growth, A largest, C declining"}})
 ```
 
-→ Pop. Notes unloaded. Push `/draft`.
+→ Pop. Scoped loads freed. Push `/draft`.
 
 ### Turn 6 — Draft
 
 **Task conversation: /draft** (clean)
 ```
-load("/g/alice/state/w/notes/comparison", budget: 400, scope: "/draft")
-load("/g/alice/state/w/notes/methodology", budget: 200, scope: "/draft")
+load("n/comparison", budget: 400, scope: "/draft")
+load("n/methodology", budget: 200, scope: "/draft")
 
-write("w/drafts/competitive-analysis",
+write("n/drafts/competitive-analysis",
   "## Competitive Analysis: Q3 2026\n\n### Summary\n...")
 
 plan({path: "/draft",
   update: {status: "complete",
-    result: "draft at w/drafts/competitive-analysis"}})
+    result: "draft at n/drafts/competitive-analysis"}})
 ```
 
 → Pop. Push `/review`.
@@ -447,29 +498,29 @@ plan({path: "/draft",
 
 **Task conversation: /review** (clean)
 ```
-load("/g/alice/state/w/drafts/competitive-analysis",
+load("n/drafts/competitive-analysis",
   budget: 2000, scope: "/review")
 
 // Agent reviews, spots a gap...
-explore("/w/vendors/b/financials/breakdown", budget: 500)
+explore("w/vendors/b/financials/breakdown", budget: 500)
 → R&D spend 34% — explains high margins
 
-write("w/drafts/competitive-analysis-final",
+write("n/drafts/competitive-analysis-final",
   "## Competitive Analysis: Q3 2026 (Final)\n\n...")
 
 plan({path: "/review", update: {status: "complete"}})
 plan({update: {status: "complete"}})
 ```
 
-→ Root complete. All scoped data freed. All `/t/` rolled back. Harness swaps next root.
+→ Root complete. All scoped data freed. Harness swaps next root.
 
 **Final root conversation (what the harness archives):**
 ```
-"Plan created. Starting vendor A research."
+"Plan created. Starting vendor research."
 [research completed: "3 vendors analysed"]
 [compare completed: "B strongest growth, A largest, C declining"]
-[draft completed: "draft at w/drafts/competitive-analysis"]
-[review completed: "final at w/drafts/competitive-analysis-final"]
+[draft completed: "draft at n/drafts/competitive-analysis"]
+[review completed: "final at n/drafts/competitive-analysis-final"]
 "Report complete."
 ```
 
@@ -478,10 +529,11 @@ Six lines. The entire multi-turn analysis compressed to an action log.
 ### What This Demonstrates
 
 - **Clean task conversations** — each vendor research has no sibling noise
+- **Batch activation** — all three vendors activated upfront, processed in order
 - **Pop discards + summarises** — parent sees one-line results
-- **Promote before pop** — `write("w/...")` saves findings before completion
+- **Promote before pop** — `write("n/...")` saves findings to agent workspace
 - **Progressive focus** — never holding all vendors' raw data simultaneously
-- **`/t/` scratch space** — snapshots used during analysis, rolled back
+- **`t/` scratch space** — snapshots used during analysis, cleared on pop
 - **Conversation stays SHORT** — current task only, maybe 5-10 turns
 - **Root archives cleanly** — entire session compresses to ~6 lines
 
@@ -506,23 +558,23 @@ Six lines. The entire multi-turn analysis compressed to an action log.
 
 ### Task conversation: /unblock/api-spec
 ```
-load("/w/projects/launch/specs/api", budget: 800, scope: "/unblock/api-spec")
-load("/w/projects/launch/requirements/auth", budget: 500, scope: "/unblock/api-spec")
+load("w/projects/launch/specs/api", budget: 800, scope: "/unblock/api-spec")
+load("w/projects/launch/requirements/auth", budget: 500, scope: "/unblock/api-spec")
 
-explore("/w/teams/engineering/drafts/auth-design", budget: 1000)
+explore("w/teams/engineering/drafts/auth-design", budget: 1000)
 → partial design, missing token refresh flow
 
 write("t/auth-options",
   "Option 1: OAuth2+PKCE\nOption 2: mTLS")
 
-write("w/notes/auth-recommendation",
+write("n/auth-recommendation",
   "Recommend OAuth2+PKCE. Aligns with existing infra.")
 
 plan({path: "/unblock/api-spec",
   update: {status: "complete", result: "auth design recommended"}})
 ```
 
-→ Pop: specs unloaded, `/t/auth-options` rolled back, recommendation persists at `w/`.
+→ Pop: scoped loads freed, `t/auth-options` cleared, recommendation persists at `n/`.
 
 Parent conversation gets: `[api-spec completed: "auth design recommended"]`
 
@@ -535,13 +587,13 @@ Marketing task auto-unblocked.
 | Data at top, query at bottom | ✅ |
 | Minimal relevant context | ✅ Budget truncation + task-scoped conversation |
 | Observation masking | ✅ Pop discards, parent gets summary only |
-| Tiered memory | ✅ Pinned → global → scoped → ephemeral |
+| Tiered memory | ✅ Pinned → global → scoped |
 | Compaction-resilient | ✅ Sections 1–4, 6 rebuilt by harness |
 | Budget awareness | ✅ Bytes + tokens in context map |
 | Structured plans | ✅ Uniform tasks, focus rendering |
 | Task-scoped context | ✅ Loads, conversation, and /t/ all pop together |
-| Transactional workspace | ✅ /t/ fork-on-push, rollback-on-pop |
-| Promote-before-pop | ✅ Explicit save to w/ for persistent results |
+| Task scratch | ✅ t/ in task node, cleared on pop |
+| Promote-before-pop | ✅ Explicit save to n/ or w/ for persistent results |
 | Slim history | ✅ Current task only + parent summaries |
 | Schema efficiency | ✅ 7 tools, ~1,600 B |
 
@@ -552,25 +604,25 @@ Marketing task auto-unblocked.
 | Dimension | **Letta/MemGPT** | **Claude Code** | **LangChain** | **Covia Lattice** |
 |---|---|---|---|---|
 | Metaphor | OS (RAM + disk) | IDE session | Middleware pipeline | Task call stack |
-| Memory tiers | Core → recall → archival | Context → CLAUDE.md → files | State → store → external | Pinned → global → scoped → ephemeral |
+| Memory tiers | Core → recall → archival | Context → CLAUDE.md → files | State → store → external | Pinned → global → scoped |
 | Cleanup | Agent self-edits | LLM compaction (lossy) | Middleware summarise/mask | **Pop (deterministic cascade)** |
 | What gets lost | Agent decides | LLM decides (unpredictable) | Configurable | **Nothing — promote before pop** |
 | History scope | Full session + recall search | Single growing conversation | Growing, summarised | **Per-task, discarded on pop** |
 | Task structure | None built-in | None (CLAUDE.md conventions) | TodoList (flat) | **Hierarchical stack + cascade** |
-| Workspace isolation | None | Subagents (separate process) | None | **Forked /t/ per task, rollback** |
+| Workspace isolation | None | Subagents (separate process) | None | **Task-scoped t/ scratch, cleared on pop** |
 | Data resolution | None | File truncation heuristics | None | **CellExplorer budget control** |
 | Change detection | recall_memory_search | Re-read files | None | **compare() with hash-skip** |
 | Tool schema overhead | ~2-5K tokens | ~16.8K tokens (8.4% of context) | Varies | **~400 tokens (0.2%)** |
 
 ### Where Covia is ahead
 
-**Deterministic cleanup.** Other systems rely on LLM-generated summaries — inherently lossy and unpredictable. Claude Code users report compaction "forgetting" architectural decisions and access control rules. Our pop discards the task conversation, but the agent already promoted findings to `w/`. Nothing is lost by surprise. This is RAII vs garbage collection.
+**Deterministic cleanup.** Other systems rely on LLM-generated summaries — inherently lossy and unpredictable. Claude Code users report compaction "forgetting" architectural decisions and access control rules. Our pop discards the task conversation, but the agent already promoted findings to `n/` or `w/`. Nothing is lost by surprise. This is RAII vs garbage collection.
 
 **Task-scoped conversation.** No other framework scopes history to tasks. Claude Code operates on a single growing conversation that eventually gets compacted. LangChain summarises the full history. Our agent gets a fresh, focused conversation per task — 5-10 turns, not 200.
 
 **Progressive data resolution.** CellExplorer is unique. A 50MB lattice structure rendered at 500 bytes with structural annotations. No other framework offers budget-controlled views of arbitrary data.
 
-**Transactional workspace.** `/t/` with fork-on-push and rollback-on-pop. Copy-on-write via Merkle sharing makes forking free. Claude Code has manual file checkpoints but they're not task-scoped.
+**Task-scoped scratch.** `t/` scratch stored within each task node, cleared on pop. No fork or overlay mechanics — just part of the task lifecycle. Claude Code has manual file checkpoints but they're not task-scoped.
 
 **Structural change detection.** `compare()` skips unchanged subtrees via hash comparison. Orders of magnitude more efficient than re-reading or searching recall memory.
 
@@ -579,8 +631,8 @@ Marketing task auto-unblocked.
 ### Apparent gaps and how Covia covers them
 
 **Self-editing memory / skill learning (Letta).** Letta agents rewrite their own core memory and learn skills from experience. Covia covers this through:
-- Agent persistent workspace (`/g/{agent}/state/w/`) — agent writes learned patterns, preferences, and reusable strategies
-- Operations registry (`/o/`) — discovered operations cached to `w/refs/` and reloaded for future tasks
+- Agent-private workspace (`n/`) — agent writes learned patterns, preferences, and reusable strategies
+- Operations registry (`o/`) — discovered operations cached to `n/refs/` and reloaded for future tasks
 - Lattice data is inherently versioned via content-addressing — every state is a snapshot that can be referenced
 
 **Subagent delegation (Claude Code).** Claude Code spawns subagents with isolated context. Covia covers this through:
@@ -592,7 +644,7 @@ Marketing task auto-unblocked.
 - Content-addressed Merkle DAG — every value has a unique hash, structural sharing is automatic
 - Immutable cells — no merge conflicts, no branch management needed
 - `compare()` uses hash trees natively — faster and more precise than git diff
-- Copy-on-write forking (our `/t/` workspace) is what git tries to do, but at the data structure level rather than the file level
+- Task-scoped scratch (`t/`) provides isolated working space per task, cleared on completion
 
 **Agent timeline / history (Letta).** Letta maintains recall memory searchable by date and content. Covia covers this through:
 - Agent timeline is a Covia Grid feature — full history of agent actions, decisions, and state transitions
@@ -602,7 +654,7 @@ Marketing task auto-unblocked.
 **External tool integration (Claude Code MCP).** Claude Code connects to external services via MCP. Covia covers this through:
 - **Grid operations** — the federated grid IS the tool integration layer
 - **Venue adapters** — bridge to external APIs, databases, services
-- Operations discovered via `/o/` and invoked through grid — naturally lattice-integrated
+- Operations discovered via `o/` and invoked through grid — naturally lattice-integrated
 - Dynamic tool injection — lattice operations become tool definitions at runtime
 
 **Production maturity.** Claude Code's compaction has been refined through millions of sessions. Letta has extensive benchmarks (Context-Bench, Letta Evals). Our pop-based model is cleaner in theory but unproven at scale. This is the primary gap — it needs implementation and battle-testing.
@@ -618,22 +670,23 @@ Covia: RAII (resources freed deterministically when their scope ends).
 
 ## Design Decisions
 
-1. **Four lifecycles.** Pinned → global → scoped → ephemeral. No TTL. Pop is the cleanup mechanism.
-2. **Task-scoped conversation.** Each task has its own conversation. Pop discards it. Parent gets one-line summary. Siblings never see each other's history.
-3. **Pop = cascade.** Frees scoped loads + discards conversation + rolls back `/t/` + cascades descendants.
-4. **Promote before pop.** Write to `w/` to persist. Everything in task scope and `/t/` is ephemeral by default.
-5. **Tool results are just conversation.** No special result tracking. They live in the task conversation and pop with it.
-6. **Push = fresh context.** Parent conversation suspended. Child gets clean conversation + forked `/t/`.
-7. **Parent sees summaries only.** Child task result inserted as one-line entry in parent conversation.
-8. **Covia namespaces.** `/g/` agents, `/w/` user data, `/o/` operations, `/t/` temp workspace.
-9. **Agent state at `/g/{agent}/state/`.** Plan at `state/plan`, persistent workspace at `state/w/`.
-10. **Uniform task nodes.** `status` field distinguishes children from metadata.
-11. **Focus = most recently modified active leaf.**
+1. **Three load lifecycles.** Pinned (harness-managed, always present), global (agent `load()`, explicit `unload()`), scoped (freed when task pops). No TTL. Pop is the only automatic cleanup. Tool results are not "loaded" — they live in conversation.
+2. **Task-scoped conversation.** Each task has its own conversation history. Pop discards it. Parent receives the `result` field as a one-line summary. Siblings never see each other's history.
+3. **Pop = cascade.** Setting status to `complete` or `failed` triggers pop: discard conversation, clear `t/` scratch, free scoped loads, cascade (cancel active/pending descendants). A task cannot be re-opened — create a new child to retry.
+4. **Promote before pop.** Write to `n/` (agent-private) or `w/` (shared) to persist findings. Everything in `t/` and conversation is ephemeral — lost on pop.
+5. **Tool results are just conversation.** No special result tracking. `explore()` and `compare()` results live in the task conversation and pop with it.
+6. **Push = fresh context.** When `plan()` sets a child to `active`, the harness persists the current conversation to local storage, activates the child, and starts a fresh conversation. The agent never pushes directly.
+7. **Parent sees summaries only.** Format: `[{path} completed: "{result}"]` or `[{path} failed: "{error}"]`.
+8. **Namespaces.** Three layers: lattice storage (per-user `g`, `w`, `o`, `j`, `s`, `h`, `a`), agent-visible paths (`n/`, `t/`, `w/`, `o/`), and shorthand resolution (harness maps prefixes to lattice locations in agent scope).
+9. **Agent record is the unit.** Complete state at `g/{agentId}`: status, config, tasks, `n` (workspace), timeline, inbox, pending, state, ts, error, wake. No nesting layer. The agent record IS the state — fork it, migrate it, archive it.
+10. **Task storage.** Flat Index keyed by Blob ID. Each task is a map with required `status`, optional `result`, `t` (scratch), `parent`, `children`, `name`, plus arbitrary metadata. Harness renders flat index as a tree; `plan()` uses paths, harness maps to IDs.
+11. **Focus and activation.** Agent activates tasks via `plan()`. Multiple active siblings are processed in declaration order, one at a time. Parent stays suspended until all active children are done. Harness never auto-activates pending tasks.
 12. **Task stack at bottom of context.** Adjacent to current turn for recency attention.
-13. **Harness continuation prompt.** Always appended. States next step.
-14. **Context map is simple.** Just paths + budgets + scopes. No results tracking, no TTL countdowns.
-15. **Destination shorthand.** `w/...` → `/g/{agent}/state/w/...`. `t/...` → `/t/...`.
-16. **Single root in LLM context.** Harness manages root queue.
-17. **Safety valve.** 70% warn, 90% prune.
-18. **Scope incentivises decomposition.** Break work into tasks → get automatic cleanup.
+13. **Harness continuation prompt.** Always appended. States current task, scoped loads, and suggested next step.
+14. **Context map is simple.** Paths + budgets + scopes. No result tracking, no TTL countdowns.
+15. **Destination shorthand (agent scope only).** `n/` → `g/{agent}/n/`, `t/` → current task's scratch, `w/` → `<DID>/w/`, `o/` → `<DID>/o/`. Full paths work everywhere.
+16. **Single root in LLM context.** Harness manages root queue. External requests create new roots.
+17. **Safety valve.** 70%: harness warns in continuation prompt. 90%: auto-prune — unload global loads (most recently loaded first), then truncate oldest conversation turns. Never touches pinned or scoped loads.
+18. **Scope incentivises decomposition.** Want automatic cleanup? Break work into tasks.
 19. **7 tools, ~1,600 B.** Under 0.5% of context window.
+20. **Crash recovery.** Harness reconstructs task stack from agent record (lattice-backed). Suspended conversations are persisted locally — if lost, task resumes with fresh conversation. Agent's `n/` workspace and task `t/` scratch are intact (in agent record on lattice).
