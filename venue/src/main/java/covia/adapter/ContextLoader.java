@@ -188,7 +188,8 @@ public class ContextLoader {
 	 */
 	static boolean isNamespacePath(String ref) {
 		return ref.startsWith("w/") || ref.startsWith("g/") || ref.startsWith("o/")
-			|| ref.startsWith("j/") || ref.startsWith("s/") || ref.startsWith("h/");
+			|| ref.startsWith("j/") || ref.startsWith("s/") || ref.startsWith("h/")
+			|| ref.startsWith("n/");
 	}
 
 	/**

@@ -282,8 +282,11 @@ public class LLMAgentAdapter extends AAdapter {
 		AVector<ACell> baseTools = context.tools();
 		Map<String, AString> configToolMap = context.configToolMap();
 		AMap<AString, ACell> config = context.config();
-		RequestContext capsCtx = context.capsCtx();
 		AVector<ACell> caps = context.caps();
+
+		// Add agent scope to the capability context — all tool calls carry the agentId
+		// so adapters (e.g. CoviaAdapter) can resolve n/ paths to agent-private workspace
+		RequestContext capsCtx = context.capsCtx().withAgentId(agentId);
 
 		// Extract LLM operation from merged config
 		AString llmOperation = ContextBuilder.getConfigValue(config, K_LLM_OPERATION, DEFAULT_LLM_OPERATION);

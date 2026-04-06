@@ -15,22 +15,24 @@ public class RequestContext {
 	private final boolean internal;
 	private final AVector<ACell> proofs;
 	private final AVector<ACell> caps;
+	private final AString agentId;
 
 	/**
 	 * Context for internal operations (adapters, recovery, etc.) that bypass auth.
 	 */
-	public static final RequestContext INTERNAL = new RequestContext(null, true, null, null);
+	public static final RequestContext INTERNAL = new RequestContext(null, true, null, null, null);
 
 	/**
 	 * Context for anonymous (unauthenticated) external requests.
 	 */
-	public static final RequestContext ANONYMOUS = new RequestContext(null, false, null, null);
+	public static final RequestContext ANONYMOUS = new RequestContext(null, false, null, null, null);
 
-	private RequestContext(AString callerDID, boolean internal, AVector<ACell> proofs, AVector<ACell> caps) {
+	private RequestContext(AString callerDID, boolean internal, AVector<ACell> proofs, AVector<ACell> caps, AString agentId) {
 		this.callerDID = callerDID;
 		this.internal = internal;
 		this.proofs = proofs;
 		this.caps = caps;
+		this.agentId = agentId;
 	}
 
 	/**
@@ -39,7 +41,7 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, false, null, null);
+		return new RequestContext(callerDID, false, null, null, null);
 	}
 
 	/**
@@ -47,14 +49,14 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID, AVector<ACell> proofs) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, false, proofs, null);
+		return new RequestContext(callerDID, false, proofs, null, null);
 	}
 
 	/**
 	 * Returns a new context with the given proofs added.
 	 */
 	public RequestContext withProofs(AVector<ACell> proofs) {
-		return new RequestContext(this.callerDID, this.internal, proofs, this.caps);
+		return new RequestContext(this.callerDID, this.internal, proofs, this.caps, this.agentId);
 	}
 
 	/**
@@ -62,7 +64,15 @@ public class RequestContext {
 	 * against these caps before execution. Null = unrestricted.
 	 */
 	public RequestContext withCaps(AVector<ACell> caps) {
-		return new RequestContext(this.callerDID, this.internal, this.proofs, caps);
+		return new RequestContext(this.callerDID, this.internal, this.proofs, caps, this.agentId);
+	}
+
+	/**
+	 * Returns a new context with agent scope. When set, the {@code n/} path prefix
+	 * resolves to the agent's private workspace at {@code g/{agentId}/n/}.
+	 */
+	public RequestContext withAgentId(AString agentId) {
+		return new RequestContext(this.callerDID, this.internal, this.proofs, this.caps, agentId);
 	}
 
 	/**
@@ -108,10 +118,20 @@ public class RequestContext {
 		return caps;
 	}
 
+	/**
+	 * Gets the agent ID for agent-scoped operations, or null if not in agent scope.
+	 * When set, the {@code n/} path prefix resolves to the agent's private workspace.
+	 */
+	public AString getAgentId() {
+		return agentId;
+	}
+
 	@Override
 	public String toString() {
 		if (internal) return "RequestContext[INTERNAL]";
 		if (callerDID == null) return "RequestContext[ANONYMOUS]";
-		return "RequestContext[" + callerDID + "]";
+		String s = "RequestContext[" + callerDID;
+		if (agentId != null) s += " agent=" + agentId;
+		return s + "]";
 	}
 }

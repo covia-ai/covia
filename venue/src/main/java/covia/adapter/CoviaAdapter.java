@@ -9,6 +9,7 @@ import convex.auth.ucan.UCAN;
 import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.ACountable;
+import convex.core.data.util.CellExplorer;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -69,6 +70,11 @@ import covia.venue.Users;
  * {@code covia:write} and {@code covia:delete}. All other namespaces
  * ({@code g/}, {@code s/}, {@code j/}) are framework-managed and
  * reject direct writes.</p>
+ *
+ * <p>The {@code n/} prefix is agent-scoped shorthand: when the
+ * {@link RequestContext} carries an agentId (set by the harness during agent
+ * execution), {@code n/foo} is rewritten to {@code g/{agentId}/n/foo},
+ * providing agents with a private read/write workspace within their record.</p>
  */
 public class CoviaAdapter extends AAdapter {
 
@@ -90,6 +96,9 @@ public class CoviaAdapter extends AAdapter {
 
 	/** Namespaces that accept user writes via covia:write and covia:delete. */
 	private static final Set<String> WRITABLE_NAMESPACES = Set.of("w", "o");
+
+	/** Prefix for agent-private workspace (rewritten to g/{agentId}/n/...) */
+	private static final String AGENT_WORKSPACE_PREFIX = "n";
 
 	@Override
 	public String getName() {
@@ -114,6 +123,7 @@ public class CoviaAdapter extends AAdapter {
 		installAsset(BASE + "functions.json");
 		installAsset(BASE + "describe.json");
 		installAsset(BASE + "adapters.json");
+		installAsset(BASE + "explore.json");
 	}
 
 	@Override
@@ -132,6 +142,7 @@ public class CoviaAdapter extends AAdapter {
 				case "functions" -> CompletableFuture.completedFuture(handleFunctions());
 				case "describe" -> CompletableFuture.completedFuture(handleDescribe(input));
 				case "adapters" -> CompletableFuture.completedFuture(handleAdapters());
+				case "explore" -> CompletableFuture.completedFuture(handleExplore(ctx, input));
 				default -> CompletableFuture.failedFuture(
 					new RuntimeException("Unknown covia operation: " + getSubOperation(meta)));
 			};
@@ -196,6 +207,85 @@ public class CoviaAdapter extends AAdapter {
 		}
 
 		return result(value);
+	}
+
+	// ========== covia:explore — Budget-controlled JSON5 reads ==========
+
+	private static final AString K_PATHS   = Strings.intern("paths");
+	private static final AString K_BUDGET  = Strings.intern("budget");
+	private static final AString K_COMPACT = Strings.intern("compact");
+	private static final AString K_RESULT  = Strings.intern("result");
+
+	/** Default explore budget in bytes (storage-size units) */
+	private static final int DEFAULT_EXPLORE_BUDGET = 500;
+
+	/**
+	 * Budget-controlled read of lattice data via {@link CellExplorer}.
+	 *
+	 * <p>Accepts a single path or array of paths. Each value is rendered as JSON5
+	 * with structural annotations, truncated to the byte budget. For multiple
+	 * paths the budget is split equally.</p>
+	 *
+	 * @return For a single path: {@code {result: "rendered JSON5"}}. For multiple
+	 *         paths: {@code {result: {path1: "...", path2: "..."}}}
+	 */
+	@SuppressWarnings("unchecked")
+	private ACell handleExplore(RequestContext ctx, ACell input) {
+		ACell pathsCell = RT.getIn(input, K_PATHS);
+
+		// Budget
+		int budget = DEFAULT_EXPLORE_BUDGET;
+		ACell budgetCell = RT.getIn(input, K_BUDGET);
+		if (budgetCell instanceof CVMLong l) budget = (int) Math.max(10, l.longValue());
+
+		// Compact (default true)
+		boolean compact = true;
+		ACell compactCell = RT.getIn(input, K_COMPACT);
+		if (CVMBool.FALSE.equals(compactCell)) compact = false;
+
+		// Single path (string)
+		if (pathsCell instanceof AString) {
+			String rendered = explorePath(ctx, pathsCell.toString(), budget, compact);
+			return Maps.of(K_RESULT, Strings.create(rendered));
+		}
+
+		// Multiple paths (vector)
+		if (pathsCell instanceof AVector<?> pathsVec) {
+			int perPath = Math.max(10, budget / (int) Math.max(1, pathsVec.count()));
+			AMap<AString, ACell> results = Maps.empty();
+			for (long i = 0; i < pathsVec.count(); i++) {
+				ACell p = pathsVec.get(i);
+				String pathStr = (p instanceof AString s) ? s.toString() : p.toString();
+				String rendered = explorePath(ctx, pathStr, perPath, compact);
+				results = results.assoc(Strings.create(pathStr), Strings.create(rendered));
+			}
+			return Maps.of(K_RESULT, results);
+		}
+
+		throw new RuntimeException("'paths' must be a string or array of strings");
+	}
+
+	/**
+	 * Resolves a single path and renders the value via CellExplorer.
+	 */
+	private String explorePath(RequestContext ctx, String pathStr, int budget, boolean compact) {
+		ALatticeCursor<ACell> cursor = getUserCursor(ctx);
+		if (cursor == null) return "null /* no user data */";
+
+		ACell[] pathKeys = parseStringPath(pathStr);
+		pathKeys = rewriteAgentPath(ctx, pathKeys);
+
+		ACell value;
+		if (pathKeys.length == 0) {
+			value = cursor.get();
+		} else {
+			value = readPath(cursor, pathKeys);
+		}
+
+		if (value == null) return "null /* not found: " + pathStr + " */";
+
+		CellExplorer explorer = new CellExplorer(budget, compact);
+		return explorer.explore(value).toString();
 	}
 
 	/**
@@ -302,7 +392,9 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleWrite(RequestContext ctx, ACell input) {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
-		validateWritablePath(jsonKeys);
+		ACell[] rewritten = rewriteAgentPath(ctx, jsonKeys);
+		if (rewritten == jsonKeys) validateWritablePath(jsonKeys); // only validate non-agent paths
+		jsonKeys = rewritten;
 		ACell value = RT.getIn(input, Fields.VALUE);
 
 		ALatticeCursor<ACell> entryCursor = resolveEntry(ensureUserCursor(ctx), jsonKeys);
@@ -330,7 +422,9 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
-		validateWritablePath(jsonKeys);
+		ACell[] rewritten = rewriteAgentPath(ctx, jsonKeys);
+		if (rewritten == jsonKeys) validateWritablePath(jsonKeys);
+		jsonKeys = rewritten;
 
 		ALatticeCursor<ACell> cursor = getUserCursor(ctx);
 		if (cursor == null) return Maps.of(K_DELETED, CVMBool.TRUE);
@@ -361,7 +455,9 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleAppend(RequestContext ctx, ACell input) {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
-		validateWritablePath(jsonKeys);
+		ACell[] rewritten = rewriteAgentPath(ctx, jsonKeys);
+		if (rewritten == jsonKeys) validateWritablePath(jsonKeys);
+		jsonKeys = rewritten;
 		ACell element = RT.getIn(input, Fields.VALUE);
 
 		ALatticeCursor<ACell> entryCursor = resolveEntry(ensureUserCursor(ctx), jsonKeys);
@@ -874,8 +970,40 @@ public class CoviaAdapter extends AAdapter {
 			return resolveDIDURL(ctx, pathStr.toString());
 		}
 
-		// Not a DID URL — parse as normal relative path
-		return new Object[] { getUserCursor(ctx), parsePath(pathCell) };
+		// Parse and rewrite agent-scoped n/ prefix if applicable
+		ACell[] pathKeys = parsePath(pathCell);
+		pathKeys = rewriteAgentPath(ctx, pathKeys);
+		return new Object[] { getUserCursor(ctx), pathKeys };
+	}
+
+	/**
+	 * Rewrites agent-scoped {@code n/} paths to {@code g/{agentId}/n/}.
+	 *
+	 * <p>When the first path segment is {@code "n"} and the RequestContext
+	 * carries an agentId (set by the harness during agent execution), the
+	 * path is rewritten to target the agent's private workspace within
+	 * the agent record. This allows agents to use {@code n/notes/foo}
+	 * as shorthand for {@code g/{agentId}/n/notes/foo}.</p>
+	 *
+	 * @return Rewritten path keys, or the original keys if no rewrite needed
+	 * @throws RuntimeException if n/ prefix is used without agent scope
+	 */
+	static ACell[] rewriteAgentPath(RequestContext ctx, ACell[] pathKeys) {
+		if (pathKeys.length == 0) return pathKeys;
+		String first = pathKeys[0].toString();
+		if (!AGENT_WORKSPACE_PREFIX.equals(first)) return pathKeys;
+
+		AString agentId = ctx.getAgentId();
+		if (agentId == null) {
+			throw new RuntimeException("Cannot use 'n/' prefix outside agent scope");
+		}
+
+		// Rewrite: n/foo/bar → g/{agentId}/n/foo/bar
+		ACell[] rewritten = new ACell[pathKeys.length + 2];
+		rewritten[0] = Strings.create("g");
+		rewritten[1] = agentId;
+		System.arraycopy(pathKeys, 0, rewritten, 2, pathKeys.length);
+		return rewritten;
 	}
 
 	/**

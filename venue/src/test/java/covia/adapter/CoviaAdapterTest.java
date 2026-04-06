@@ -1181,4 +1181,313 @@ public class CoviaAdapterTest {
 		assertEquals(0, CoviaAdapter.parseStringPath(null).length);
 		assertEquals(0, CoviaAdapter.parseStringPath("/").length);
 	}
+
+	// ========== Agent workspace (n/ prefix) ==========
+
+	@Test
+	public void testAgentWorkspaceWrite() {
+		// Create agent-scoped context
+		RequestContext agentCtx = ALICE.withAgentId(Strings.create("test-agent"));
+
+		// Write to n/ — should succeed
+		Job writeJob = engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("n/notes/vendor-a"),
+				Strings.create("value"), Strings.create("23% share, growth slowing")),
+			agentCtx);
+		ACell result = writeJob.awaitResult(5000);
+		assertNotNull(result);
+		assertTrue(CVMBool.TRUE.equals(RT.getIn(result, Strings.intern("written"))));
+	}
+
+	@Test
+	public void testAgentWorkspaceRead() {
+		RequestContext agentCtx = ALICE.withAgentId(Strings.create("test-agent"));
+
+		// Write then read via n/ shorthand
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("n/methodology"),
+				Strings.create("value"), Strings.create("Compare revenue and margins")),
+			agentCtx).awaitResult(5000);
+
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Strings.create("path"), Strings.create("n/methodology")),
+			agentCtx);
+		ACell result = readJob.awaitResult(5000);
+		assertTrue(CVMBool.TRUE.equals(RT.getIn(result, Strings.intern("exists"))));
+		assertEquals("Compare revenue and margins",
+			RT.ensureString(RT.getIn(result, Strings.intern("value"))).toString());
+	}
+
+	@Test
+	public void testAgentWorkspaceReadViaFullPath() {
+		RequestContext agentCtx = ALICE.withAgentId(Strings.create("test-agent"));
+
+		// Write via n/ shorthand
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("n/data"),
+				Strings.create("value"), Strings.create("agent private")),
+			agentCtx).awaitResult(5000);
+
+		// Read via full g/ path (no agent scope needed)
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Strings.create("path"), Strings.create("g/test-agent/n/data")),
+			ALICE);
+		ACell result = readJob.awaitResult(5000);
+		assertTrue(CVMBool.TRUE.equals(RT.getIn(result, Strings.intern("exists"))));
+		assertEquals("agent private",
+			RT.ensureString(RT.getIn(result, Strings.intern("value"))).toString());
+	}
+
+	@Test
+	public void testAgentWorkspaceDelete() {
+		RequestContext agentCtx = ALICE.withAgentId(Strings.create("test-agent"));
+
+		// Write then delete
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("n/temp"),
+				Strings.create("value"), Strings.create("ephemeral")),
+			agentCtx).awaitResult(5000);
+
+		Job deleteJob = engine.jobs().invokeOperation("covia:delete",
+			Maps.of(Strings.create("path"), Strings.create("n/temp")),
+			agentCtx);
+		ACell result = deleteJob.awaitResult(5000);
+		assertTrue(CVMBool.TRUE.equals(RT.getIn(result, Strings.intern("deleted"))));
+
+		// Verify deleted
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Strings.create("path"), Strings.create("n/temp")),
+			agentCtx);
+		ACell readResult = readJob.awaitResult(5000);
+		assertFalse(CVMBool.TRUE.equals(RT.getIn(readResult, Strings.intern("exists"))));
+	}
+
+	@Test
+	public void testAgentWorkspaceStructuredData() {
+		RequestContext agentCtx = ALICE.withAgentId(Strings.create("test-agent"));
+
+		// Write structured map
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("n/analysis"),
+				Strings.create("value"), Maps.of(
+					Strings.create("vendor"), Strings.create("Acme"),
+					Strings.create("share"), 23)),
+			agentCtx).awaitResult(5000);
+
+		// Read back
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Strings.create("path"), Strings.create("n/analysis")),
+			agentCtx);
+		ACell result = readJob.awaitResult(5000);
+		assertTrue(CVMBool.TRUE.equals(RT.getIn(result, Strings.intern("exists"))));
+		ACell value = RT.getIn(result, Strings.intern("value"));
+		assertEquals("Acme", RT.ensureString(RT.getIn(value, Strings.create("vendor"))).toString());
+	}
+
+	@Test
+	public void testAgentWorkspaceRejectsWithoutScope() {
+		// No agentId on context — n/ should fail
+		Job writeJob = engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("n/notes/x"),
+				Strings.create("value"), Strings.create("should fail")),
+			ALICE);
+		assertThrows(Exception.class, () -> writeJob.awaitResult(5000),
+			"n/ write without agent scope should fail");
+	}
+
+	@Test
+	public void testAgentWorkspaceList() {
+		RequestContext agentCtx = ALICE.withAgentId(Strings.create("test-agent"));
+
+		// Write multiple keys
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("n/a"),
+				Strings.create("value"), Strings.create("alpha")),
+			agentCtx).awaitResult(5000);
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("n/b"),
+				Strings.create("value"), Strings.create("beta")),
+			agentCtx).awaitResult(5000);
+
+		// List n/
+		Job listJob = engine.jobs().invokeOperation("covia:list",
+			Maps.of(Strings.create("path"), Strings.create("n")),
+			agentCtx);
+		ACell result = listJob.awaitResult(5000);
+		assertTrue(CVMBool.TRUE.equals(RT.getIn(result, Strings.intern("exists"))));
+		long count = ((CVMLong) RT.getIn(result, Strings.intern("count"))).longValue();
+		assertTrue(count >= 2, "Should have at least 2 entries");
+	}
+
+	@Test
+	public void testRewriteAgentPath() {
+		RequestContext agentCtx = ALICE.withAgentId(Strings.create("my-agent"));
+		ACell[] path = CoviaAdapter.parseStringPath("n/notes/foo");
+		ACell[] rewritten = CoviaAdapter.rewriteAgentPath(agentCtx, path);
+
+		assertEquals(5, rewritten.length);
+		assertEquals("g", rewritten[0].toString());
+		assertEquals("my-agent", rewritten[1].toString());
+		assertEquals("n", rewritten[2].toString());
+		assertEquals("notes", rewritten[3].toString());
+		assertEquals("foo", rewritten[4].toString());
+	}
+
+	@Test
+	public void testRewriteAgentPathNoRewriteForOtherPrefixes() {
+		RequestContext agentCtx = ALICE.withAgentId(Strings.create("my-agent"));
+		ACell[] path = CoviaAdapter.parseStringPath("w/data/foo");
+		ACell[] result = CoviaAdapter.rewriteAgentPath(agentCtx, path);
+		assertSame(path, result, "Non-n/ paths should not be rewritten");
+	}
+
+	@Test
+	public void testRewriteAgentPathThrowsWithoutScope() {
+		ACell[] path = CoviaAdapter.parseStringPath("n/notes");
+		assertThrows(RuntimeException.class,
+			() -> CoviaAdapter.rewriteAgentPath(ALICE, path),
+			"n/ without agentId should throw");
+	}
+
+	// ========== covia:explore ==========
+
+	@Test
+	public void testExploreSinglePath() {
+		// Write data to explore
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("w/vendors/acme"),
+				Strings.create("value"), Maps.of(
+					Strings.create("name"), Strings.create("Acme Corp"),
+					Strings.create("share"), 23,
+					Strings.create("growth"), Strings.create("8%"))),
+			ALICE).awaitResult(5000);
+
+		Job exploreJob = engine.jobs().invokeOperation("covia:explore",
+			Maps.of(Strings.create("paths"), Strings.create("w/vendors/acme"),
+				Strings.create("budget"), CVMLong.create(2000)),
+			ALICE);
+		ACell result = exploreJob.awaitResult(5000);
+		AString rendered = RT.ensureString(RT.getIn(result, Strings.intern("result")));
+		assertNotNull(rendered, "Should return rendered result");
+		String s = rendered.toString();
+		assertTrue(s.contains("Acme Corp"), "Should contain value");
+		assertTrue(s.contains("23"), "Should contain numeric value");
+	}
+
+	@Test
+	public void testExploreMultiplePaths() {
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("w/a"),
+				Strings.create("value"), Strings.create("alpha")),
+			ALICE).awaitResult(5000);
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("w/b"),
+				Strings.create("value"), Strings.create("beta")),
+			ALICE).awaitResult(5000);
+
+		Job exploreJob = engine.jobs().invokeOperation("covia:explore",
+			Maps.of(Strings.create("paths"), Vectors.of(
+				(ACell) Strings.create("w/a"), (ACell) Strings.create("w/b")),
+				Strings.create("budget"), CVMLong.create(1000)),
+			ALICE);
+		ACell result = exploreJob.awaitResult(5000);
+		ACell resultMap = RT.getIn(result, Strings.intern("result"));
+		assertTrue(resultMap instanceof AMap, "Multiple paths should return a map");
+		AString aVal = RT.ensureString(RT.getIn(resultMap, Strings.create("w/a")));
+		AString bVal = RT.ensureString(RT.getIn(resultMap, Strings.create("w/b")));
+		assertNotNull(aVal);
+		assertNotNull(bVal);
+		assertTrue(aVal.toString().contains("alpha"));
+		assertTrue(bVal.toString().contains("beta"));
+	}
+
+	@Test
+	public void testExploreBudgetTruncation() {
+		// Write a large map
+		AMap<AString, ACell> largeMap = Maps.empty();
+		for (int i = 0; i < 50; i++) {
+			largeMap = largeMap.assoc(Strings.create("key" + i),
+				Strings.create("value" + i + " ".repeat(30)));
+		}
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("w/large"),
+				Strings.create("value"), largeMap),
+			ALICE).awaitResult(5000);
+
+		// Small budget — should truncate
+		Job exploreJob = engine.jobs().invokeOperation("covia:explore",
+			Maps.of(Strings.create("paths"), Strings.create("w/large"),
+				Strings.create("budget"), CVMLong.create(200)),
+			ALICE);
+		ACell result = exploreJob.awaitResult(5000);
+		String rendered = RT.ensureString(RT.getIn(result, Strings.intern("result"))).toString();
+		assertTrue(rendered.contains("/*"), "Should contain truncation annotation");
+		assertTrue(rendered.contains("more"), "Should indicate more entries");
+	}
+
+	@Test
+	public void testExploreDefaultBudget() {
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("w/small"),
+				Strings.create("value"), Strings.create("hello")),
+			ALICE).awaitResult(5000);
+
+		// No budget param — should use default (500)
+		Job exploreJob = engine.jobs().invokeOperation("covia:explore",
+			Maps.of(Strings.create("paths"), Strings.create("w/small")),
+			ALICE);
+		ACell result = exploreJob.awaitResult(5000);
+		String rendered = RT.ensureString(RT.getIn(result, Strings.intern("result"))).toString();
+		assertTrue(rendered.contains("hello"));
+	}
+
+	@Test
+	public void testExploreMissingPath() {
+		Job exploreJob = engine.jobs().invokeOperation("covia:explore",
+			Maps.of(Strings.create("paths"), Strings.create("w/nonexistent")),
+			ALICE);
+		ACell result = exploreJob.awaitResult(5000);
+		String rendered = RT.ensureString(RT.getIn(result, Strings.intern("result"))).toString();
+		assertTrue(rendered.contains("null"), "Missing path should render as null");
+		assertTrue(rendered.contains("not found"), "Should indicate not found");
+	}
+
+	@Test
+	public void testExploreAgentWorkspace() {
+		RequestContext agentCtx = ALICE.withAgentId(Strings.create("test-agent"));
+
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("n/research"),
+				Strings.create("value"), Maps.of(
+					Strings.create("finding"), Strings.create("23% market share"))),
+			agentCtx).awaitResult(5000);
+
+		Job exploreJob = engine.jobs().invokeOperation("covia:explore",
+			Maps.of(Strings.create("paths"), Strings.create("n/research"),
+				Strings.create("budget"), CVMLong.create(1000)),
+			agentCtx);
+		ACell result = exploreJob.awaitResult(5000);
+		String rendered = RT.ensureString(RT.getIn(result, Strings.intern("result"))).toString();
+		assertTrue(rendered.contains("23% market share"));
+	}
+
+	@Test
+	public void testExploreNestedStructure() {
+		// Write nested data
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("w/deep"),
+				Strings.create("value"), Maps.of(
+					Strings.create("level1"), Maps.of(
+						Strings.create("level2"), Maps.of(
+							Strings.create("value"), Strings.create("deep data"))))),
+			ALICE).awaitResult(5000);
+
+		Job exploreJob = engine.jobs().invokeOperation("covia:explore",
+			Maps.of(Strings.create("paths"), Strings.create("w/deep"),
+				Strings.create("budget"), CVMLong.create(5000)),
+			ALICE);
+		ACell result = exploreJob.awaitResult(5000);
+		String rendered = RT.ensureString(RT.getIn(result, Strings.intern("result"))).toString();
+		assertTrue(rendered.contains("deep data"), "Should render nested values");
+	}
 }
