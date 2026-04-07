@@ -45,6 +45,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 	// ========== Harness tool names ==========
 
+	/** Maximum tool call loop iterations per frame */
+	static final int MAX_ITERATIONS = 20;
+
 	static final String TOOL_SUBGOAL  = "subgoal";
 	static final String TOOL_COMPLETE = "complete";
 	static final String TOOL_FAIL     = "fail";
@@ -219,9 +222,29 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			newState = newState.assoc(K_CONFIG, config);
 		}
 
-		return Maps.of(
+		AMap<AString, ACell> output = Maps.of(
 			AgentState.KEY_STATE, newState,
 			Fields.RESULT, Maps.of(K_RESPONSE, Strings.create(responseText)));
+
+		// Auto-complete all pending tasks with the root goal result
+		if (tasks != null && tasks.count() > 0) {
+			AMap<AString, ACell> taskResults = Maps.empty();
+			AString statusKey = "complete".equals(result.status())
+				? covia.grid.Status.COMPLETE : covia.grid.Status.FAILED;
+			for (long i = 0; i < tasks.count(); i++) {
+				AString jobId = RT.ensureString(RT.getIn(tasks.get(i), Fields.JOB_ID));
+				if (jobId != null) {
+					taskResults = taskResults.assoc(jobId, Maps.of(
+						Fields.STATUS, statusKey,
+						Fields.OUTPUT, result.value()));
+				}
+			}
+			if (taskResults.count() > 0) {
+				output = output.assoc(Fields.TASK_RESULTS, taskResults);
+			}
+		}
+
+		return output;
 	}
 
 	// ========== Frame execution ==========
@@ -258,7 +281,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// Assemble tools = harness tools + configured tools
 		AVector<ACell> tools = (AVector<ACell>) HARNESS_TOOLS.concat(baseTools);
 
-		for (int iteration = 0; iteration < 200; iteration++) {
+		for (int iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
 			AMap<AString, ACell> activeFrame = (AMap<AString, ACell>) frames.get(frameIndex);
 
 			// Assemble full context for this inference
