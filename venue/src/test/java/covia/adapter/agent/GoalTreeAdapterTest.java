@@ -63,8 +63,8 @@ public class GoalTreeAdapterTest {
 
 	@Test
 	public void testHarnessToolDefinitions() {
-		// Verify the 4 harness tools are defined correctly
-		assertEquals(4, GoalTreeAdapter.HARNESS_TOOLS.count());
+		// Verify the 6 harness tools are defined correctly
+		assertEquals(6, GoalTreeAdapter.HARNESS_TOOLS.count());
 
 		// Check each tool has name, description, parameters
 		for (long i = 0; i < GoalTreeAdapter.HARNESS_TOOLS.count(); i++) {
@@ -82,6 +82,8 @@ public class GoalTreeAdapterTest {
 		assertEquals("complete", RT.ensureString(RT.getIn(GoalTreeAdapter.HARNESS_TOOLS.get(1), "name")).toString());
 		assertEquals("fail", RT.ensureString(RT.getIn(GoalTreeAdapter.HARNESS_TOOLS.get(2), "name")).toString());
 		assertEquals("compact", RT.ensureString(RT.getIn(GoalTreeAdapter.HARNESS_TOOLS.get(3), "name")).toString());
+		assertEquals("context_load", RT.ensureString(RT.getIn(GoalTreeAdapter.HARNESS_TOOLS.get(4), "name")).toString());
+		assertEquals("context_unload", RT.ensureString(RT.getIn(GoalTreeAdapter.HARNESS_TOOLS.get(5), "name")).toString());
 	}
 
 	// ========== Simple transition (using test:llm mock) ==========

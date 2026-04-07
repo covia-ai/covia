@@ -14,6 +14,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.ContextBuilder;
 import covia.api.Fields;
@@ -48,10 +49,12 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	/** Maximum tool call loop iterations per frame */
 	static final int MAX_ITERATIONS = 20;
 
-	static final String TOOL_SUBGOAL  = "subgoal";
-	static final String TOOL_COMPLETE = "complete";
-	static final String TOOL_FAIL     = "fail";
-	static final String TOOL_COMPACT  = "compact";
+	static final String TOOL_SUBGOAL        = "subgoal";
+	static final String TOOL_COMPLETE       = "complete";
+	static final String TOOL_FAIL           = "fail";
+	static final String TOOL_COMPACT        = "compact";
+	static final String TOOL_CONTEXT_LOAD   = "context_load";
+	static final String TOOL_CONTEXT_UNLOAD = "context_unload";
 
 	// ========== Harness tool definitions ==========
 
@@ -113,20 +116,60 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 						"Your summary of the work done so far (required — only you know what matters)"))),
 			K_REQUIRED, Vectors.of(Strings.create("summary"))));
 
+	static final AMap<AString, ACell> TOOL_DEF_CONTEXT_LOAD = Maps.of(
+		K_NAME, Strings.create(TOOL_CONTEXT_LOAD),
+		K_DESCRIPTION, Strings.create(
+			"Pin a lattice path to your persistent loaded context. "
+			+ "The path is resolved fresh each turn and injected as a system message. "
+			+ "Use for reference material you need across multiple turns. "
+			+ "Loads are scoped to your current frame — children inherit them, "
+			+ "but your loads are restored when a child completes. "
+			+ "For one-shot reads, use inspect instead."),
+		K_PARAMETERS, Maps.of(
+			K_TYPE, Strings.create("object"),
+			K_PROPERTIES, Maps.of(
+				Strings.create("path"), Maps.of(
+					K_TYPE, Strings.create("string"),
+					K_DESCRIPTION, Strings.create("Lattice path to load (e.g. w/docs/rules, n/notes)")),
+				Strings.create("budget"), Maps.of(
+					K_TYPE, Strings.create("integer"),
+					K_DESCRIPTION, Strings.create("Byte budget for rendering this path (default 500, max 10000)")),
+				Strings.create("label"), Maps.of(
+					K_TYPE, Strings.create("string"),
+					K_DESCRIPTION, Strings.create("Optional human-readable label for this context entry"))),
+			K_REQUIRED, Vectors.of(Strings.create("path"))));
+
+	static final AMap<AString, ACell> TOOL_DEF_CONTEXT_UNLOAD = Maps.of(
+		K_NAME, Strings.create(TOOL_CONTEXT_UNLOAD),
+		K_DESCRIPTION, Strings.create(
+			"Remove a path from your persistent loaded context. "
+			+ "Frees the budget allocated to that path."),
+		K_PARAMETERS, Maps.of(
+			K_TYPE, Strings.create("object"),
+			K_PROPERTIES, Maps.of(
+				Strings.create("path"), Maps.of(
+					K_TYPE, Strings.create("string"),
+					K_DESCRIPTION, Strings.create("Lattice path to unload"))),
+			K_REQUIRED, Vectors.of(Strings.create("path"))));
+
 	/** Harness tools for root frame — includes subgoal for decomposition */
 	@SuppressWarnings("unchecked")
-	static final AVector<ACell> HARNESS_TOOLS = (AVector<ACell>) Vectors.of(
+	static final AVector<ACell> HARNESS_TOOLS = Vectors.of(
 		(ACell) TOOL_DEF_SUBGOAL,
 		(ACell) TOOL_DEF_COMPLETE,
 		(ACell) TOOL_DEF_FAIL,
-		(ACell) TOOL_DEF_COMPACT);
+		(ACell) TOOL_DEF_COMPACT,
+		(ACell) TOOL_DEF_CONTEXT_LOAD,
+		(ACell) TOOL_DEF_CONTEXT_UNLOAD);
 
 	/** Harness tools for child frames — no subgoal (complete/fail/compact only) */
 	@SuppressWarnings("unchecked")
-	static final AVector<ACell> CHILD_HARNESS_TOOLS = (AVector<ACell>) Vectors.of(
+	static final AVector<ACell> CHILD_HARNESS_TOOLS = Vectors.of(
 		(ACell) TOOL_DEF_COMPLETE,
 		(ACell) TOOL_DEF_FAIL,
-		(ACell) TOOL_DEF_COMPACT);
+		(ACell) TOOL_DEF_COMPACT,
+		(ACell) TOOL_DEF_CONTEXT_LOAD,
+		(ACell) TOOL_DEF_CONTEXT_UNLOAD);
 
 	/** System note prepended to child frame context */
 	private static final AMap<AString, ACell> CHILD_FRAME_NOTE = Maps.of(
@@ -342,6 +385,14 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			AMap<AString, ACell> ancestorMsg = GoalTreeContext.renderAncestors(frames);
 			if (ancestorMsg != null) fullHistory = fullHistory.conj(ancestorMsg);
 
+			// Loaded data (active frame's loads, resolved fresh each turn)
+			AMap<AString, ACell> frameLoads = GoalTreeContext.getLoads(activeFrame);
+			if (frameLoads.count() > 0) {
+				ContextBuilder loadBuilder = new ContextBuilder(engine, ctx);
+				fullHistory = (AVector<ACell>) fullHistory.concat(
+					loadBuilder.resolveLoads(frameLoads));
+			}
+
 			// Context map
 			long consumed = fullHistory.count() * 100; // rough estimate
 			AMap<AString, ACell> ctxMap = GoalTreeContext.renderContextMap(
@@ -401,11 +452,48 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					pendingCompactSummary = summary;
 					toolResult = Strings.create("Compacted " + turnsBefore + " turns into segment. Context freed.");
 
+				} else if (TOOL_CONTEXT_LOAD.equals(toolName)) {
+					AString path = RT.ensureString(RT.getIn(toolInput, Strings.create("path")));
+					if (path == null) {
+						toolResult = Strings.create("Error: path is required");
+					} else {
+						long budget = 500;
+						ACell budgetCell = RT.getIn(toolInput, Strings.create("budget"));
+						if (budgetCell instanceof CVMLong l) {
+							budget = Math.max(256, Math.min(l.longValue(), 10_000));
+						}
+						AString label = RT.ensureString(RT.getIn(toolInput, Strings.create("label")));
+						AMap<AString, ACell> entryMeta = Maps.of(
+							Strings.create("budget"), CVMLong.create(budget),
+							Strings.create("ts"), CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
+						if (label != null) entryMeta = entryMeta.assoc(Strings.create("label"), label);
+						activeFrame = GoalTreeContext.addLoad(activeFrame, path, entryMeta);
+						toolResult = Maps.of(
+							Strings.create("path"), path,
+							Strings.create("loaded"), CVMBool.TRUE,
+							Strings.create("budget"), CVMLong.create(budget),
+							Strings.create("note"), Strings.create("Path will appear in context next turn."));
+					}
+
+				} else if (TOOL_CONTEXT_UNLOAD.equals(toolName)) {
+					AString path = RT.ensureString(RT.getIn(toolInput, Strings.create("path")));
+					if (path == null) {
+						toolResult = Strings.create("Error: path is required");
+					} else if (GoalTreeContext.getLoads(activeFrame).get(path) == null) {
+						toolResult = Strings.create("Error: path not loaded: " + path);
+					} else {
+						activeFrame = GoalTreeContext.removeLoad(activeFrame, path);
+						toolResult = Maps.of(
+							Strings.create("path"), path,
+							Strings.create("unloaded"), CVMBool.TRUE);
+					}
+
 				} else if (TOOL_SUBGOAL.equals(toolName)) {
 					String desc = RT.ensureString(RT.getIn(toolInput, Strings.create("description"))).toString();
 
-					// Push child frame
-					AMap<AString, ACell> childFrame = GoalTreeContext.createFrame(desc);
+					// Push child frame with inherited loads (copy-on-push)
+					AMap<AString, ACell> parentLoads = GoalTreeContext.getLoads(activeFrame);
+					AMap<AString, ACell> childFrame = GoalTreeContext.createFrame(desc, parentLoads);
 					frames = updateFrame(frames, frameIndex, activeFrame);
 					AVector<ACell> childFrames = frames.conj(childFrame);
 

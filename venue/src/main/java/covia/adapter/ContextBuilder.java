@@ -198,6 +198,37 @@ public class ContextBuilder {
 	}
 
 	/**
+	 * Resolves loaded paths and returns them as a vector of messages.
+	 * Does not modify builder state — suitable for GoalTreeAdapter which
+	 * assembles its own message vector.
+	 */
+	@SuppressWarnings("unchecked")
+	public AVector<ACell> resolveLoads(AMap<AString, ACell> loads) {
+		if (loads == null || loads.count() == 0) return Vectors.empty();
+
+		ContextLoader loader = new ContextLoader(engine);
+		AVector<ACell> result = Vectors.empty();
+
+		for (var entry : loads.entrySet()) {
+			AString path = entry.getKey();
+			AMap<AString, ACell> meta = (AMap<AString, ACell>) entry.getValue();
+
+			int entryBudget = 500;
+			ACell budgetCell = meta.get(Strings.intern("budget"));
+			if (budgetCell instanceof convex.core.data.prim.CVMLong l) {
+				entryBudget = (int) Math.max(MIN_ENTRY_BUDGET, Math.min(l.longValue(), 10_000));
+			}
+
+			loader.setCellExplorer(new CellExplorer(entryBudget));
+			ACell msg = loader.resolveEntry(path, ctx);
+			if (msg != null) {
+				result = result.conj(msg);
+			}
+		}
+		return result;
+	}
+
+	/**
 	 * Resolves dynamically loaded paths from the agent's state.loads map.
 	 * Each entry is resolved fresh using ContextLoader with per-entry CellExplorer budget.
 	 * Entries that exceed remaining budget or fail to resolve are silently skipped.

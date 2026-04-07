@@ -422,6 +422,94 @@ public class GoalTreeContextTest {
 		assertTrue(GoalTreeContext.estimateLiveTurnBytes(frame) > 0);
 	}
 
+	// ========== Scoped loads ==========
+
+	@Test
+	public void testGetLoadsEmpty() {
+		AMap<AString, ACell> frame = GoalTreeContext.createFrame("test");
+		AMap<AString, ACell> loads = GoalTreeContext.getLoads(frame);
+		assertNotNull(loads);
+		assertEquals(0, loads.count());
+	}
+
+	@Test
+	public void testAddLoad() {
+		AMap<AString, ACell> frame = GoalTreeContext.createFrame("test");
+		AMap<AString, ACell> meta = Maps.of(
+			Strings.create("budget"), CVMLong.create(500));
+		frame = GoalTreeContext.addLoad(frame, Strings.create("w/docs/rules"), meta);
+
+		AMap<AString, ACell> loads = GoalTreeContext.getLoads(frame);
+		assertEquals(1, loads.count());
+		assertNotNull(loads.get(Strings.create("w/docs/rules")));
+	}
+
+	@Test
+	public void testRemoveLoad() {
+		AMap<AString, ACell> frame = GoalTreeContext.createFrame("test");
+		AMap<AString, ACell> meta = Maps.of(
+			Strings.create("budget"), CVMLong.create(500));
+		frame = GoalTreeContext.addLoad(frame, Strings.create("w/docs/rules"), meta);
+		frame = GoalTreeContext.removeLoad(frame, Strings.create("w/docs/rules"));
+
+		AMap<AString, ACell> loads = GoalTreeContext.getLoads(frame);
+		assertEquals(0, loads.count());
+		// K_LOADS key should be removed entirely when empty
+		assertNull(frame.get(GoalTreeContext.K_LOADS));
+	}
+
+	@Test
+	public void testCreateFrameWithInheritedLoads() {
+		AMap<AString, ACell> meta = Maps.of(
+			Strings.create("budget"), CVMLong.create(300));
+		AMap<AString, ACell> parentLoads = Maps.of(
+			Strings.create("w/docs/rules"), (ACell) meta);
+
+		AMap<AString, ACell> child = GoalTreeContext.createFrame("child task", parentLoads);
+
+		// Child should have inherited loads
+		AMap<AString, ACell> childLoads = GoalTreeContext.getLoads(child);
+		assertEquals(1, childLoads.count());
+		assertNotNull(childLoads.get(Strings.create("w/docs/rules")));
+	}
+
+	@Test
+	public void testChildLoadShadowsParent() {
+		// Parent has w/data at budget 200
+		AMap<AString, ACell> parentLoads = Maps.of(
+			Strings.create("w/data"), (ACell) Maps.of(
+				Strings.create("budget"), CVMLong.create(200)));
+
+		// Child inherits, then overrides with budget 2000
+		AMap<AString, ACell> child = GoalTreeContext.createFrame("detail work", parentLoads);
+		child = GoalTreeContext.addLoad(child, Strings.create("w/data"),
+			Maps.of(Strings.create("budget"), CVMLong.create(2000)));
+
+		CVMLong childBudget = (CVMLong) RT.getIn(
+			GoalTreeContext.getLoads(child).get(Strings.create("w/data")), "budget");
+		assertEquals(2000, childBudget.longValue());
+
+		// Parent loads unaffected (immutable data)
+		CVMLong parentBudget = (CVMLong) RT.getIn(
+			parentLoads.get(Strings.create("w/data")), "budget");
+		assertEquals(200, parentBudget.longValue());
+	}
+
+	@Test
+	public void testChildUnloadDoesNotAffectParent() {
+		AMap<AString, ACell> parentLoads = Maps.of(
+			Strings.create("w/rules"), (ACell) Maps.of(
+				Strings.create("budget"), CVMLong.create(500)));
+
+		// Child inherits, then unloads
+		AMap<AString, ACell> child = GoalTreeContext.createFrame("focused", parentLoads);
+		child = GoalTreeContext.removeLoad(child, Strings.create("w/rules"));
+
+		assertEquals(0, GoalTreeContext.getLoads(child).count());
+		// Parent loads unchanged (immutable)
+		assertEquals(1, parentLoads.count());
+	}
+
 	// ========== Full assembly (integration) ==========
 
 	@Test

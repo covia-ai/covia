@@ -396,6 +396,47 @@ public class GoalTreeContext {
 		return bytes;
 	}
 
+	// ========== Scoped loads ==========
+
+	/**
+	 * Returns the loads map for a frame, or empty if none.
+	 */
+	@SuppressWarnings("unchecked")
+	public static AMap<AString, ACell> getLoads(AMap<AString, ACell> frame) {
+		ACell loads = frame.get(K_LOADS);
+		return (loads instanceof AMap) ? (AMap<AString, ACell>) loads : Maps.empty();
+	}
+
+	/**
+	 * Adds or replaces a load entry in a frame's loads map.
+	 *
+	 * @param frame the frame to modify
+	 * @param path the lattice path being loaded
+	 * @param meta load metadata (budget, ts, label)
+	 * @return updated frame
+	 */
+	public static AMap<AString, ACell> addLoad(AMap<AString, ACell> frame,
+			AString path, AMap<AString, ACell> meta) {
+		AMap<AString, ACell> loads = getLoads(frame);
+		return frame.assoc(K_LOADS, loads.assoc(path, meta));
+	}
+
+	/**
+	 * Removes a load entry from a frame's loads map.
+	 *
+	 * @param frame the frame to modify
+	 * @param path the lattice path to unload
+	 * @return updated frame
+	 */
+	public static AMap<AString, ACell> removeLoad(AMap<AString, ACell> frame, AString path) {
+		AMap<AString, ACell> loads = getLoads(frame);
+		AMap<AString, ACell> updated = loads.dissoc(path);
+		if (updated.count() == 0) {
+			return frame.dissoc(K_LOADS);
+		}
+		return frame.assoc(K_LOADS, updated);
+	}
+
 	// ========== Internal helpers ==========
 
 	/**
