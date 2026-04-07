@@ -134,9 +134,9 @@ covia_write  path=w/config/ap-pipeline  value=<pipeline-hash>
 
 ## 4. Create Agents
 
-All four use `llmagent:chat` transition with `langchain:openai` (gpt-4o-mini). Create in parallel.
+All four use `goaltree:chat` transition with `langchain:openai` (gpt-4o-mini). Create in parallel.
 
-**IMPORTANT:** `config.operation` must be a plain string `"llmagent:chat"`, not a map.
+**IMPORTANT:** `config.operation` must be a plain string `"goaltree:chat"`, not a map.
 
 Agents use **context loading** to receive shared reference material. The `context` array in `state.config` lists asset hashes, workspace paths, and op-based entries that are resolved and injected as system messages before each run. This keeps system prompts short (identity + behaviour only) and shared docs in one place.
 
@@ -155,7 +155,7 @@ All pipeline agents use **strict structured output** via `responseFormat`. Every
 ```
 agent_create
   agentId: "Alice"
-  config: { "operation": "llmagent:chat" }
+  config: { "operation": "goaltree:chat" }
   state: { "config": {
     "llmOperation": "langchain:openai",
     "model": "gpt-4o-mini",
@@ -200,7 +200,7 @@ Bob's `context` loads: (1) the AP Data Guide artifact for workspace layout, and 
 ```
 agent_create
   agentId: "Bob"
-  config: { "operation": "llmagent:chat" }
+  config: { "operation": "goaltree:chat" }
   state: { "config": {
     "llmOperation": "langchain:openai",
     "model": "gpt-4o-mini",
@@ -278,7 +278,7 @@ Carol's `context` loads: (1) the AP Policy Rules artifact, and (2) a workspace r
 ```
 agent_create
   agentId: "Carol"
-  config: { "operation": "llmagent:chat" }
+  config: { "operation": "goaltree:chat" }
   state: { "config": {
     "llmOperation": "langchain:openai",
     "model": "gpt-4o-mini",
@@ -333,7 +333,7 @@ Dave is the general-purpose manager. No structured output — he's conversationa
 ```
 agent_create
   agentId: "Dave"
-  config: { "operation": "llmagent:chat" }
+  config: { "operation": "goaltree:chat" }
   state: { "config": {
     "llmOperation": "langchain:openai",
     "model": "gpt-4o-mini",

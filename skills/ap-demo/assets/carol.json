@@ -3,7 +3,7 @@
   "type": "agent-definition",
   "description": "AP Payment Approver agent that applies 6 named policy rules (AP-001 through AP-006) and produces a structured compliance decision. Uses strict JSON schema output (ApprovalDecision).",
   "agent": {
-    "operation": "llmagent:chat",
+    "operation": "goaltree:chat",
     "config": {
       "llmOperation": "langchain:openai",
       "model": "gpt-4o",

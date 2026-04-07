@@ -152,11 +152,11 @@ public class GoalTreeContext {
 		if (taskCount == 1 && msgCount == 0 && pendingCount == 0) {
 			ACell inputCell = RT.getIn(tasks.get(0), Strings.intern("input"));
 			if (inputCell == null) return "Task: (no input)";
-			if (inputCell instanceof AString s) return truncate(s.toString(), 200);
-			// Structured input — check for common patterns
+			if (inputCell instanceof AString s) return s.toString();
+			// Structured input — check for message field, else render as JSON
 			AString msgField = RT.ensureString(RT.getIn(inputCell, Strings.intern("message")));
-			if (msgField != null) return truncate(msgField.toString(), 200);
-			return truncate(inputCell.toString(), 200);
+			if (msgField != null) return msgField.toString();
+			return convex.core.util.JSON.toString(inputCell);
 		}
 
 		// Mixed or multiple — summarise counts

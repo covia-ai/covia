@@ -3,7 +3,7 @@
   "type": "agent-definition",
   "description": "AP Data Enricher agent that autonomously validates invoices against vendor records, purchase orders, and sanctions data. Uses tools (covia_read, covia_write) and strict JSON schema output (InvoiceEnrichment).",
   "agent": {
-    "operation": "llmagent:chat",
+    "operation": "goaltree:chat",
     "config": {
       "llmOperation": "langchain:openai",
       "model": "gpt-4o",

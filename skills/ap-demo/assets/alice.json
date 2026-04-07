@@ -3,7 +3,7 @@
   "type": "agent-definition",
   "description": "AP Invoice Scanner agent that extracts structured fields from raw invoice text. Uses strict JSON schema output (InvoiceExtraction).",
   "agent": {
-    "operation": "llmagent:chat",
+    "operation": "goaltree:chat",
     "config": {
       "llmOperation": "langchain:openai",
       "model": "gpt-4o",

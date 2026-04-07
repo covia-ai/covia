@@ -3,7 +3,7 @@
   "type": "agent-definition",
   "description": "General manager agent that orchestrates the AP pipeline. Sends invoices through Alice, Bob, Carol and summarises results.",
   "agent": {
-    "operation": "llmagent:chat",
+    "operation": "goaltree:chat",
     "config": {
       "llmOperation": "langchain:openai",
       "model": "gpt-4o",
