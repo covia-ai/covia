@@ -9,6 +9,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -30,6 +31,7 @@ public class CoviaAdapterTest {
 	private Engine engine;
 	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
 	private static final RequestContext ALICE = RequestContext.of(ALICE_DID);
+	private static final RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
 
 	@BeforeEach
 	public void setup() {
@@ -1320,33 +1322,140 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
-	public void testRewriteAgentPath() {
-		RequestContext agentCtx = ALICE.withAgentId(Strings.create("my-agent"));
-		ACell[] path = CoviaAdapter.parseStringPath("n/notes/foo");
-		ACell[] rewritten = CoviaAdapter.rewriteAgentPath(agentCtx, path);
+	public void testAgentNamespaceResolverThrowsWithoutScope() {
+		// n/ outside agent scope should throw
+		assertThrows(RuntimeException.class, () ->
+			engine.jobs().invokeOperation("covia:write",
+				Maps.of(Strings.create("path"), Strings.create("n/notes"),
+					Strings.create("value"), Strings.create("test")),
+				ALICE).awaitResult(5000));
+	}
 
-		assertEquals(5, rewritten.length);
-		assertEquals("g", rewritten[0].toString());
-		assertEquals("my-agent", rewritten[1].toString());
-		assertEquals("n", rewritten[2].toString());
-		assertEquals("notes", rewritten[3].toString());
-		assertEquals("foo", rewritten[4].toString());
+	// ========== t/ temp namespace ==========
+
+	@Test
+	public void testTempWriteAndRead() {
+		// Create a job to scope t/ against
+		Job job = engine.jobs().invokeOperation("test:echo",
+			Maps.of(Strings.create("message"), Strings.create("hello")),
+			ALICE);
+		job.awaitResult(5000);
+		Blob jobId = job.getID();
+		RequestContext jobCtx = ALICE.withJobId(jobId);
+
+		// Write to t/
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("t/draft"),
+				Strings.create("value"), Maps.of(
+					Strings.create("interim"), Strings.create("working value"))),
+			jobCtx).awaitResult(5000);
+
+		// Read it back
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Strings.create("path"), Strings.create("t/draft")),
+			jobCtx);
+		ACell result = readJob.awaitResult(5000);
+		assertTrue(RT.bool(RT.getIn(result, "exists")), "Should exist");
+		assertEquals("working value",
+			RT.ensureString(RT.getIn(result, "value", "interim")).toString());
 	}
 
 	@Test
-	public void testRewriteAgentPathNoRewriteForOtherPrefixes() {
-		RequestContext agentCtx = ALICE.withAgentId(Strings.create("my-agent"));
-		ACell[] path = CoviaAdapter.parseStringPath("w/data/foo");
-		ACell[] result = CoviaAdapter.rewriteAgentPath(agentCtx, path);
-		assertSame(path, result, "Non-n/ paths should not be rewritten");
+	public void testTempDelete() {
+		Job job = engine.jobs().invokeOperation("test:echo",
+			Maps.of(Strings.create("message"), Strings.create("hello")),
+			ALICE);
+		job.awaitResult(5000);
+		RequestContext jobCtx = ALICE.withJobId(job.getID());
+
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("t/ephemeral"),
+				Strings.create("value"), Strings.create("temp data")),
+			jobCtx).awaitResult(5000);
+
+		engine.jobs().invokeOperation("covia:delete",
+			Maps.of(Strings.create("path"), Strings.create("t/ephemeral")),
+			jobCtx).awaitResult(5000);
+
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Strings.create("path"), Strings.create("t/ephemeral")),
+			jobCtx);
+		ACell result = readJob.awaitResult(5000);
+		assertFalse(RT.bool(RT.getIn(result, "exists")), "Should not exist after delete");
 	}
 
 	@Test
-	public void testRewriteAgentPathThrowsWithoutScope() {
-		ACell[] path = CoviaAdapter.parseStringPath("n/notes");
-		assertThrows(RuntimeException.class,
-			() -> CoviaAdapter.rewriteAgentPath(ALICE, path),
-			"n/ without agentId should throw");
+	public void testTempInspect() {
+		Job job = engine.jobs().invokeOperation("test:echo",
+			Maps.of(Strings.create("message"), Strings.create("hello")),
+			ALICE);
+		job.awaitResult(5000);
+		RequestContext jobCtx = ALICE.withJobId(job.getID());
+
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("t/analysis"),
+				Strings.create("value"), Maps.of(
+					Strings.create("step1"), Strings.create("gathered"),
+					Strings.create("step2"), Strings.create("processed"))),
+			jobCtx).awaitResult(5000);
+
+		Job inspectJob = engine.jobs().invokeOperation("covia:inspect",
+			Maps.of(Strings.create("paths"), Strings.create("t/analysis"),
+				Strings.create("budget"), CVMLong.create(1000)),
+			jobCtx);
+		ACell result = inspectJob.awaitResult(5000);
+		String rendered = RT.ensureString(RT.getIn(result, Strings.intern("result"))).toString();
+		assertTrue(rendered.contains("gathered"), "Should contain temp data");
+	}
+
+	@Test
+	public void testTempIsolatedPerJob() {
+		// Two different jobs get different t/ spaces
+		Job job1 = engine.jobs().invokeOperation("test:echo",
+			Maps.of(Strings.create("message"), Strings.create("one")),
+			ALICE);
+		job1.awaitResult(5000);
+		Job job2 = engine.jobs().invokeOperation("test:echo",
+			Maps.of(Strings.create("message"), Strings.create("two")),
+			ALICE);
+		job2.awaitResult(5000);
+
+		RequestContext ctx1 = ALICE.withJobId(job1.getID());
+		RequestContext ctx2 = ALICE.withJobId(job2.getID());
+
+		// Write to job1's t/
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("t/data"),
+				Strings.create("value"), Strings.create("job1-only")),
+			ctx1).awaitResult(5000);
+
+		// job2 should not see it
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Strings.create("path"), Strings.create("t/data")),
+			ctx2);
+		ACell result = readJob.awaitResult(5000);
+		assertFalse(RT.bool(RT.getIn(result, "exists")),
+			"t/ should be isolated per job");
+	}
+
+	@Test
+	public void testTempAutoScopedByJob() {
+		// Every operation now auto-gets jobId from JobManager.
+		// A bare write to t/ should work — scoped to that operation's own job.
+		Job writeJob = engine.jobs().invokeOperation("covia:write",
+			Maps.of(Strings.create("path"), Strings.create("t/auto"),
+				Strings.create("value"), Strings.create("auto-scoped")),
+			ALICE);
+		writeJob.awaitResult(5000);
+
+		// Reading from the same jobId should see the data
+		RequestContext sameJobCtx = ALICE.withJobId(writeJob.getID());
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Strings.create("path"), Strings.create("t/auto")),
+			sameJobCtx);
+		ACell result = readJob.awaitResult(5000);
+		assertTrue(RT.bool(RT.getIn(result, "exists")),
+			"Should find data written to t/ in same job scope");
 	}
 
 	// ========== covia:inspect ==========
@@ -1490,4 +1599,5 @@ public class CoviaAdapterTest {
 		String rendered = RT.ensureString(RT.getIn(result, Strings.intern("result"))).toString();
 		assertTrue(rendered.contains("deep data"), "Should render nested values");
 	}
+
 }

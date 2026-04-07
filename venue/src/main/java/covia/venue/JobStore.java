@@ -33,11 +33,22 @@ public class JobStore extends ALatticeComponent<Index<Blob, ACell>> {
 	 * @param record Job status record map
 	 */
 	public void persist(Blob jobID, AMap<AString, ACell> record) {
+		final AMap<AString, ACell> rec = record;
 		cursor.updateAndGet(jobs -> {
 			if (jobs == null) jobs = Index.none();
-			return ((Index<Blob, ACell>) jobs).assoc(jobID, record);
+			Index<Blob, ACell> idx = (Index<Blob, ACell>) jobs;
+			// Preserve temp field from existing record (goal-scoped scratch)
+			AMap<AString, ACell> merged = rec;
+			ACell existing = idx.get(jobID);
+			if (existing instanceof AMap<?,?> existingMap) {
+				ACell temp = ((AMap<AString, ACell>) existingMap).get(K_TEMP);
+				if (temp != null) merged = merged.assoc(K_TEMP, temp);
+			}
+			return idx.assoc(jobID, merged);
 		});
 	}
+
+	private static final AString K_TEMP = convex.core.data.Strings.intern("temp");
 
 	/**
 	 * Gets a single job record from the lattice.

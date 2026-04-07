@@ -1,5 +1,7 @@
 package covia.adapter;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
@@ -71,6 +73,11 @@ import covia.venue.Users;
  * ({@code g/}, {@code s/}, {@code j/}) are framework-managed and
  * reject direct writes.</p>
  *
+ * <p>Virtual namespaces ({@code n/} for agent workspace, {@code t/} for
+ * goal-scoped temp) are resolved by registered {@link NamespaceResolver}
+ * implementations that map to the appropriate lattice location based on
+ * the {@link RequestContext}.</p>
+ *
  * <p>The {@code n/} prefix is agent-scoped shorthand: when the
  * {@link RequestContext} carries an agentId (set by the harness during agent
  * execution), {@code n/foo} is rewritten to {@code g/{agentId}/n/foo},
@@ -97,8 +104,8 @@ public class CoviaAdapter extends AAdapter {
 	/** Namespaces that accept user writes via covia:write and covia:delete. */
 	private static final Set<String> WRITABLE_NAMESPACES = Set.of("w", "o");
 
-	/** Prefix for agent-private workspace (rewritten to g/{agentId}/n/...) */
-	private static final String AGENT_WORKSPACE_PREFIX = "n";
+	/** Registered virtual namespace resolvers, keyed by prefix. */
+	private final Map<String, NamespaceResolver> resolvers = new HashMap<>();
 
 	@Override
 	public String getName() {
@@ -109,6 +116,13 @@ public class CoviaAdapter extends AAdapter {
 	public String getDescription() {
 		return "Provides native access to internal services in this Covia venue, "
 			+ "including lattice read/write/list/delete for user data.";
+	}
+
+	/**
+	 * Registers a virtual namespace resolver for the given prefix.
+	 */
+	public void registerResolver(String prefix, NamespaceResolver resolver) {
+		resolvers.put(prefix, resolver);
 	}
 
 	@Override
@@ -124,6 +138,10 @@ public class CoviaAdapter extends AAdapter {
 		installAsset(BASE + "describe.json");
 		installAsset(BASE + "adapters.json");
 		installAsset(BASE + "inspect.json");
+
+		// Register built-in virtual namespace resolvers
+		registerResolver("n", new AgentNamespaceResolver());
+		registerResolver("t", new TempNamespaceResolver());
 	}
 
 	@Override
@@ -176,6 +194,19 @@ public class CoviaAdapter extends AAdapter {
 	 * {@code covia:slice} to read vector elements in pages.</p>
 	 */
 	private ACell handleRead(RequestContext ctx, ACell input) {
+		// Check job-scoped virtual namespace (t/) first
+		ACell pathCell = RT.getIn(input, Fields.PATH);
+		if (pathCell != null) {
+			ACell[] pathKeys = parsePath(pathCell);
+			NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
+			if (vns != null && vns.jobId() != null) {
+				ACell temp = TempNamespaceResolver.getTemp(vns.cursor(), vns.jobId());
+				ACell value = (vns.remainingKeys().length == 0) ? temp
+					: deepGet(temp, vns.remainingKeys(), 0);
+				return sizeGuardedResult(value, input);
+			}
+		}
+
 		Object[] target = resolveTargetPath(ctx, input);
 		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
 		ACell[] pathKeys = (ACell[]) target[1];
@@ -269,17 +300,35 @@ public class CoviaAdapter extends AAdapter {
 	 * Resolves a single path and renders the value via CellExplorer.
 	 */
 	private String explorePath(RequestContext ctx, String pathStr, int budget, boolean compact) {
-		ALatticeCursor<ACell> cursor = getUserCursor(ctx);
+		ACell[] pathKeys = parseStringPath(pathStr);
+
+		// Check job-scoped virtual namespace (t/)
+		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
+		if (vns != null && vns.jobId() != null) {
+			ACell temp = TempNamespaceResolver.getTemp(vns.cursor(), vns.jobId());
+			ACell value = (vns.remainingKeys().length == 0) ? temp
+				: deepGet(temp, vns.remainingKeys(), 0);
+			if (value == null) return "null /* not found: " + pathStr + " */";
+			return new CellExplorer(budget, compact).explore(value).toString();
+		}
+
+		// Cursor-based virtual (n/) or physical namespace
+		ALatticeCursor<ACell> cursor;
+		ACell[] keys;
+		if (vns != null) {
+			cursor = vns.cursor();
+			keys = vns.remainingKeys();
+		} else {
+			cursor = getUserCursor(ctx);
+			keys = pathKeys;
+		}
 		if (cursor == null) return "null /* no user data */";
 
-		ACell[] pathKeys = parseStringPath(pathStr);
-		pathKeys = rewriteAgentPath(ctx, pathKeys);
-
 		ACell value;
-		if (pathKeys.length == 0) {
+		if (keys.length == 0) {
 			value = cursor.get();
 		} else {
-			value = readPath(cursor, pathKeys);
+			value = readPath(cursor, keys);
 		}
 
 		if (value == null) return "null /* not found: " + pathStr + " */";
@@ -392,18 +441,30 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleWrite(RequestContext ctx, ACell input) {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
-		ACell[] rewritten = rewriteAgentPath(ctx, jsonKeys);
-		if (rewritten == jsonKeys) validateWritablePath(jsonKeys); // only validate non-agent paths
-		jsonKeys = rewritten;
+		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
 		ACell value = RT.getIn(input, Fields.VALUE);
 
-		ALatticeCursor<ACell> entryCursor = resolveEntry(ensureUserCursor(ctx), jsonKeys);
+		// Check job-scoped virtual namespace (t/)
+		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
+		if (vns != null && vns.jobId() != null) {
+			ACell[] keys = vns.remainingKeys();
+			TempNamespaceResolver.updateTemp(vns.cursor(), vns.jobId(), oldTemp -> {
+				AMap<AString, ACell> map = (oldTemp instanceof AMap) ? (AMap<AString, ACell>) oldTemp : Maps.empty();
+				if (keys.length == 0) return value;
+				if (keys.length == 1) return map.assoc(Strings.create(keys[0].toString()), value);
+				AString topKey = Strings.create(keys[0].toString());
+				return map.assoc(topKey, deepSet(map.get(topKey), keys, 1, value));
+			});
+			return Maps.of(K_WRITTEN, CVMBool.TRUE);
+		}
 
+		// Cursor-based virtual (n/) or physical namespace
+		if (vns != null) jsonKeys = vns.remainingKeys();
+		ALatticeCursor<ACell> baseCursor = (vns != null) ? vns.cursor() : ensureUserCursor(ctx);
+		ALatticeCursor<ACell> entryCursor = resolveEntry(baseCursor, jsonKeys);
 		if (jsonKeys.length == 2) {
-			// Top-level entry: cursor set (lattice handles new entries)
 			entryCursor.set(value);
 		} else {
-			// Deep write: type-aware navigation for map/vector paths
 			ACell current = entryCursor.get();
 			entryCursor.set(deepSet(current, jsonKeys, 2, value));
 		}
@@ -422,16 +483,30 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
-		ACell[] rewritten = rewriteAgentPath(ctx, jsonKeys);
-		if (rewritten == jsonKeys) validateWritablePath(jsonKeys);
-		jsonKeys = rewritten;
+		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
 
-		ALatticeCursor<ACell> cursor = getUserCursor(ctx);
+		// Check job-scoped virtual namespace (t/)
+		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
+		if (vns != null && vns.jobId() != null) {
+			ACell[] keys = vns.remainingKeys();
+			TempNamespaceResolver.updateTemp(vns.cursor(), vns.jobId(), oldTemp -> {
+				AMap<AString, ACell> map = (oldTemp instanceof AMap) ? (AMap<AString, ACell>) oldTemp : Maps.empty();
+				if (keys.length == 0) return null;
+				AString topKey = Strings.create(keys[0].toString());
+				if (keys.length == 1) return map.dissoc(topKey);
+				ACell existing = map.get(topKey);
+				if (existing == null) return map;
+				return map.assoc(topKey, deepDelete(existing, keys, 1));
+			});
+			return Maps.of(K_DELETED, CVMBool.TRUE);
+		}
+
+		// Cursor-based virtual (n/) or physical namespace
+		if (vns != null) jsonKeys = vns.remainingKeys();
+		ALatticeCursor<ACell> cursor = (vns != null) ? vns.cursor() : getUserCursor(ctx);
 		if (cursor == null) return Maps.of(K_DELETED, CVMBool.TRUE);
-
 		ALatticeCursor<ACell> entryCursor = resolveEntryOrNull(cursor, jsonKeys);
 		if (entryCursor == null) return Maps.of(K_DELETED, CVMBool.TRUE);
-
 		if (jsonKeys.length == 2) {
 			entryCursor.set(null);
 		} else {
@@ -455,12 +530,15 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleAppend(RequestContext ctx, ACell input) {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
-		ACell[] rewritten = rewriteAgentPath(ctx, jsonKeys);
-		if (rewritten == jsonKeys) validateWritablePath(jsonKeys);
-		jsonKeys = rewritten;
+		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
+
+		// Cursor-based virtual (n/) or physical namespace
+		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
+		if (vns != null) jsonKeys = vns.remainingKeys();
+		ALatticeCursor<ACell> baseCursor = (vns != null) ? vns.cursor() : ensureUserCursor(ctx);
 		ACell element = RT.getIn(input, Fields.VALUE);
 
-		ALatticeCursor<ACell> entryCursor = resolveEntry(ensureUserCursor(ctx), jsonKeys);
+		ALatticeCursor<ACell> entryCursor = resolveEntry(baseCursor, jsonKeys);
 
 		if (jsonKeys.length == 2) {
 			entryCursor.set(appendToVector(entryCursor.get(), element));
@@ -938,7 +1016,7 @@ public class CoviaAdapter extends AAdapter {
 	 * user namespace if it does not yet exist. Used by write operations
 	 * that need to store data for a first-time user.
 	 */
-	private ALatticeCursor<ACell> ensureUserCursor(RequestContext ctx) {
+	ALatticeCursor<ACell> ensureUserCursor(RequestContext ctx) {
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ctx.getCallerDID());
 		return user.cursor();
@@ -970,40 +1048,46 @@ public class CoviaAdapter extends AAdapter {
 			return resolveDIDURL(ctx, pathStr.toString());
 		}
 
-		// Parse and rewrite agent-scoped n/ prefix if applicable
 		ACell[] pathKeys = parsePath(pathCell);
-		pathKeys = rewriteAgentPath(ctx, pathKeys);
+
+		// Check for virtual namespace (n/ → agent workspace)
+		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
+		if (vns != null && vns.jobId() == null) {
+			// Cursor-based virtual namespace (n/): return cursor + remaining keys
+			return new Object[] { vns.cursor(), vns.remainingKeys() };
+		}
 		return new Object[] { getUserCursor(ctx), pathKeys };
 	}
 
+
 	/**
-	 * Rewrites agent-scoped {@code n/} paths to {@code g/{agentId}/n/}.
+	 * Resolves a parsed path, checking virtual namespace resolvers first,
+	 * then falling through to the standard user lattice cursor.
 	 *
-	 * <p>When the first path segment is {@code "n"} and the RequestContext
-	 * carries an agentId (set by the harness during agent execution), the
-	 * path is rewritten to target the agent's private workspace within
-	 * the agent record. This allows agents to use {@code n/notes/foo}
-	 * as shorthand for {@code g/{agentId}/n/notes/foo}.</p>
-	 *
-	 * @return Rewritten path keys, or the original keys if no rewrite needed
-	 * @throws RuntimeException if n/ prefix is used without agent scope
+	 * @return For virtual namespaces: ResolvedNamespace with cursor at namespace root.
+	 *         For physical namespaces: null (caller uses standard user cursor flow).
 	 */
-	static ACell[] rewriteAgentPath(RequestContext ctx, ACell[] pathKeys) {
-		if (pathKeys.length == 0) return pathKeys;
-		String first = pathKeys[0].toString();
-		if (!AGENT_WORKSPACE_PREFIX.equals(first)) return pathKeys;
-
-		AString agentId = ctx.getAgentId();
-		if (agentId == null) {
-			throw new RuntimeException("Cannot use 'n/' prefix outside agent scope");
+	NamespaceResolver.ResolvedNamespace resolveVirtual(RequestContext ctx, ACell[] pathKeys) {
+		if (pathKeys.length > 0) {
+			String prefix = pathKeys[0].toString();
+			NamespaceResolver resolver = resolvers.get(prefix);
+			if (resolver != null) {
+				return resolver.resolve(ctx, this, pathKeys);
+			}
 		}
+		return null;
+	}
 
-		// Rewrite: n/foo/bar → g/{agentId}/n/foo/bar
-		ACell[] rewritten = new ACell[pathKeys.length + 2];
-		rewritten[0] = Strings.create("g");
-		rewritten[1] = agentId;
-		System.arraycopy(pathKeys, 0, rewritten, 2, pathKeys.length);
-		return rewritten;
+	/**
+	 * Checks whether a parsed path targets a writable namespace — either a
+	 * physical writable namespace or a writable virtual namespace resolver.
+	 */
+	boolean isWritableNamespace(ACell[] pathKeys) {
+		if (pathKeys.length < 2) return false;
+		String ns = pathKeys[0].toString();
+		if (WRITABLE_NAMESPACES.contains(ns)) return true;
+		NamespaceResolver resolver = resolvers.get(ns);
+		return resolver != null && resolver.isWritable();
 	}
 
 	/**

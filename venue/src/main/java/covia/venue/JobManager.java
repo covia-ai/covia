@@ -159,7 +159,12 @@ public class JobManager {
 
 		AString opID = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER));
 		Job job = submitJob(opID, meta, input, callerDID);
-		adapter.invoke(job, ctx, meta, input);
+
+		// Set jobId on context so adapters can use t/ (job-scoped temp).
+		// Preserve existing jobId if already set — parent scope takes precedence
+		// (e.g. GoalTreeAdapter sets root job ID for all tool calls).
+		RequestContext jobCtx = (ctx.getJobId() != null) ? ctx : ctx.withJobId(job.getID());
+		adapter.invoke(job, jobCtx, meta, input);
 		return job;
 	}
 

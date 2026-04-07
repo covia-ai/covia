@@ -290,15 +290,37 @@ Each frame has its own `loads` map. Effective loads at any depth = merge of ance
 
 ## Storage Tiers
 
-| Storage | Lifetime | Purpose |
-|---------|----------|---------|
-| `t/` | Root goal | Scratch space. Full agent permissions. Cleaned up on root completion. |
-| `w/` | Permanent | Curated outputs: notes, drafts, refs. Survives everything. |
-| Conversation data | Permanent | Full turns stored in segments. Always on lattice. Zoom via CellExplorer. |
+| Storage | Lifetime | Backed by | Purpose |
+|---------|----------|-----------|---------|
+| `t/` | Job-scoped | `j/{jobId}/temp/` | Temp space shared across sub-operations within a job. |
+| `w/` | Permanent | User lattice `w/` | Curated outputs: notes, drafts, refs. Survives everything. |
+| Conversation data | Permanent | Goal tree state | Full turns stored in segments. Always on lattice. Zoom via CellExplorer. |
 
-`t/` is a new namespace in the per-user lattice, alongside `w/`, `g/`, `s/`, `j/`, `o/`, `h/`. It provides root-goal-scoped scratch space. The harness clears `t/` when the root frame completes or fails. Children can see and overwrite each other's files — it's simple shared space for the duration of the root goal.
+### `t/` — Job-Scoped Temp
 
-Operations that work with `t/`: `covia:read`, `covia:write`, `covia:delete`, `covia:append`, `covia:list`, `covia:inspect` — all existing operations, just with the `t/` prefix.
+`t/` is a **virtual namespace** — it doesn't exist as a top-level lattice namespace. Instead, it resolves to the `temp` field within the current job record via a `NamespaceResolver` (see GRID_LATTICE_DESIGN.md §4.5). The job ID comes from the `RequestContext`, so each job gets isolated temp.
+
+All existing `covia:*` operations work with `t/` — the resolver is transparent. The agent writes `t/draft` and the resolver navigates directly to the job's temp cursor. No path rewriting, no string building.
+
+### Scoping Rules
+
+Every operation invocation creates a Job. The `jobId` is set on the `RequestContext` automatically by `JobManager`. Sub-operations that execute within a parent job's context **inherit the parent's `jobId`** and therefore share its `t/` space. Operations that create new top-level jobs get fresh `t/`.
+
+| Scenario | `t/` scope | Why |
+|---|---|---|
+| **Goal tree subgoals** | Shared with root goal | Subgoals run within the same tool call loop, same job |
+| **Goal tree tool calls** (`covia:write`, etc.) | Shared with root goal | Tool dispatches inherit the goal's `jobId` |
+| **Orchestration steps** | Shared with orchestration job | Steps execute within the orchestrator's context |
+| **Direct invoke** (`POST /invoke`, MCP) | Own job | New top-level job, fresh `jobId` |
+| **`agent:request`** → separate agent | Own job | New agent trigger, new job |
+| **`grid:run`** to remote venue | Own job | New job on target venue |
+
+**Key principle:** `t/` is shared across all sub-work within a single job. Orchestration steps can exchange data through `t/` without writing to permanent workspace. If isolation between steps is needed, use `grid:run` which creates a new job with its own `t/`.
+
+### When to use `t/` vs `w/`
+
+- **`t/`** — intermediate calculations, draft data between subgoals or orchestration steps, shared working state within a single execution. Automatically scoped to the job.
+- **`w/`** — final outputs, notes worth keeping, data that other agents or future executions should see. Permanent.
 
 ## Root Frame
 
@@ -682,7 +704,7 @@ As goals get more complex, the agent can opt into more tools:
 |-----------|------------|-----|
 | Need reference data across turns | `context_load` | Keep data in context without re-exploring |
 | Need to scope data to subgoals | `context_load` (frame-scoped) | Auto-cleanup on completion |
-| Need scratch space | `t/` namespace with `covia_write` | Working files for root goal duration |
+| Need temp space | `t/` namespace with `covia_write` | Working files for root goal duration |
 | Context getting long | `compact` | Agent-controlled checkpointing |
 | Load rejected, context full | `context_unload` | Free space by removing paths |
 
@@ -697,7 +719,7 @@ As goals get more complex, the agent can opt into more tools:
 7. **Ancestor context is an array of frames.** Each rendered at decreasing budgets. Parent ~300B, grandparent ~150B.
 8. **Description is the child's goal.** The `subgoal` description becomes the goal message in the child frame.
 9. **Loads are lexically scoped.** Children inherit parent loads. Shadowing supported. Pop restores parent's version.
-10. **`t/` is root-goal scoped.** Per-user lattice namespace. Cleaned up on root completion. Shared scratch for child frames.
+10. **`t/` is root-goal scoped.** Per-user lattice namespace. Cleaned up on root completion. Shared temp for child frames.
 11. **Sequential execution.** `subgoal` blocks the parent. Later children see earlier results in ancestor context.
 12. **Nesting is natural.** A child can call `subgoal`. The stack grows. Each `complete` pops one frame.
 13. **Harness creates root frame.** Request creates frame. Agent never runs frameless.
@@ -735,12 +757,13 @@ covia.adapter.agent.GoalTreeAdapter extends AAdapter
 | Tool dispatch | Reuse `executeToolCall` pattern | Same config tool resolution, grid dispatch |
 | `AgentState` | Extend state model | Add `goalTree` field alongside existing `history` |
 | Level 3 contract | Identical | Same `{messages, tools, responseFormat}` input/output |
-| `CoviaAdapter` | Add `t/` namespace support | New writable namespace in `readPath`/`writePath` |
+| `CoviaAdapter` | Add `NamespaceResolver` | Virtual namespace dispatch for `t/` and `n/` |
+| `RequestContext` | Add `jobId` field | Needed by `t/` resolver to locate temp in job record |
+| Job record | Add `temp` field | MapLattice within job record for goal-scoped temp |
 
-### New `/t/` Namespace
+### Virtual Namespace Resolvers
 
-Add `t/` to the per-user lattice alongside `w/`, `o/`, `h/`. Implementation in `CoviaAdapter`:
-- Writable (like `w/`)
-- Readable by all existing `covia:*` operations
-- Cleared by GoalTreeAdapter on root frame completion
-- Stored at `:user-data -> <DID> -> :t` in the lattice
+`t/` and `n/` are virtual prefixes resolved by `NamespaceResolver` implementations registered on `CoviaAdapter`. See GRID_LATTICE_DESIGN.md §4.5 for the full design.
+
+- **`t/` resolver** — navigates to `j/{ctx.jobId}/temp/` within the user's job index. GoalTreeAdapter sets `jobId` on the RequestContext when starting the root goal. Temp is cleared on root frame completion.
+- **`n/` resolver** — navigates to the agent's workspace within its state record. Uses `ctx.agentId`. Replaces the current `rewriteAgentPath` hack.

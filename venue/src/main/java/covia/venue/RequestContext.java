@@ -3,6 +3,7 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Vectors;
 
 /**
@@ -16,23 +17,25 @@ public class RequestContext {
 	private final AVector<ACell> proofs;
 	private final AVector<ACell> caps;
 	private final AString agentId;
+	private final Blob jobId;
 
 	/**
 	 * Context for internal operations (adapters, recovery, etc.) that bypass auth.
 	 */
-	public static final RequestContext INTERNAL = new RequestContext(null, true, null, null, null);
+	public static final RequestContext INTERNAL = new RequestContext(null, true, null, null, null, null);
 
 	/**
 	 * Context for anonymous (unauthenticated) external requests.
 	 */
-	public static final RequestContext ANONYMOUS = new RequestContext(null, false, null, null, null);
+	public static final RequestContext ANONYMOUS = new RequestContext(null, false, null, null, null, null);
 
-	private RequestContext(AString callerDID, boolean internal, AVector<ACell> proofs, AVector<ACell> caps, AString agentId) {
+	private RequestContext(AString callerDID, boolean internal, AVector<ACell> proofs, AVector<ACell> caps, AString agentId, Blob jobId) {
 		this.callerDID = callerDID;
 		this.internal = internal;
 		this.proofs = proofs;
 		this.caps = caps;
 		this.agentId = agentId;
+		this.jobId = jobId;
 	}
 
 	/**
@@ -41,7 +44,7 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, false, null, null, null);
+		return new RequestContext(callerDID, false, null, null, null, null);
 	}
 
 	/**
@@ -49,14 +52,14 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID, AVector<ACell> proofs) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, false, proofs, null, null);
+		return new RequestContext(callerDID, false, proofs, null, null, null);
 	}
 
 	/**
 	 * Returns a new context with the given proofs added.
 	 */
 	public RequestContext withProofs(AVector<ACell> proofs) {
-		return new RequestContext(this.callerDID, this.internal, proofs, this.caps, this.agentId);
+		return new RequestContext(this.callerDID, this.internal, proofs, this.caps, this.agentId, this.jobId);
 	}
 
 	/**
@@ -64,7 +67,7 @@ public class RequestContext {
 	 * against these caps before execution. Null = unrestricted.
 	 */
 	public RequestContext withCaps(AVector<ACell> caps) {
-		return new RequestContext(this.callerDID, this.internal, this.proofs, caps, this.agentId);
+		return new RequestContext(this.callerDID, this.internal, this.proofs, caps, this.agentId, this.jobId);
 	}
 
 	/**
@@ -72,7 +75,15 @@ public class RequestContext {
 	 * resolves to the agent's private workspace at {@code g/{agentId}/n/}.
 	 */
 	public RequestContext withAgentId(AString agentId) {
-		return new RequestContext(this.callerDID, this.internal, this.proofs, this.caps, agentId);
+		return new RequestContext(this.callerDID, this.internal, this.proofs, this.caps, agentId, this.jobId);
+	}
+
+	/**
+	 * Returns a new context with job scope. When set, the {@code t/} path prefix
+	 * resolves to the job's temp field at {@code j/{jobId}/temp/}.
+	 */
+	public RequestContext withJobId(Blob jobId) {
+		return new RequestContext(this.callerDID, this.internal, this.proofs, this.caps, this.agentId, jobId);
 	}
 
 	/**
@@ -126,12 +137,21 @@ public class RequestContext {
 		return agentId;
 	}
 
+	/**
+	 * Gets the job ID for job-scoped operations, or null if not in job scope.
+	 * When set, the {@code t/} path prefix resolves to the job's temp field.
+	 */
+	public Blob getJobId() {
+		return jobId;
+	}
+
 	@Override
 	public String toString() {
 		if (internal) return "RequestContext[INTERNAL]";
 		if (callerDID == null) return "RequestContext[ANONYMOUS]";
 		String s = "RequestContext[" + callerDID;
 		if (agentId != null) s += " agent=" + agentId;
+		if (jobId != null) s += " job=" + jobId;
 		return s + "]";
 	}
 }

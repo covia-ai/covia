@@ -124,7 +124,7 @@ This gives human-readable provenance ("which op") and exact reproducibility ("wh
 
 `invoke()` also accepts operations from other sources — `/w/my-draft-op` (workspace draft, validated and pinned at invoke time), `/a/cafebabe...` (already pinned), or `did:key:zBob.../o/transform` (federated). In all cases the job record contains a pinned `/a/` reference.
 
-**Separation from `/w/`:** Both `/o/` and `/w/` are mutable, but `/o/` is a typed registry with schema enforcement, open-read defaults (code is inspectable), and operation-specific indexing (schema matching, dependency graphs, cost/performance tracking). `/w/` is untyped scratch space with private-read defaults.
+**Separation from `/w/`:** Both `/o/` and `/w/` are mutable, but `/o/` is a typed registry with schema enforcement, open-read defaults (code is inspectable), and operation-specific indexing (schema matching, dependency graphs, cost/performance tracking). `/w/` is untyped user data space with private-read defaults.
 
 **Separation from `/a/`:** Operations are kept in a distinct mutable namespace from immutable data assets because code and data have different security profiles. `read(/o/)` is low-risk (open-source mindset), while `read(/a/)` exposes potentially sensitive user data. `/a/` serves as the universal immutable layer that both data and operations pin to.
 
@@ -332,7 +332,7 @@ This enables provenance tracking, licensing verification, and update propagation
 
 #### `/w/` — Workspace
 
-Mutable working space for agents and users. Scratch data, drafts, intermediate results. The "hot" layer.
+Mutable data space for agents and users. Persistent storage for user and agent data — documents, records, configuration, outputs. The primary read/write namespace.
 
 - Freely mutable — no transition constraints
 - Hashmap-based — user defines arbitrary structure
@@ -347,6 +347,67 @@ Encrypted, capability-gated data. Different encryption and access semantics from
 - Decryption requires explicit `decrypt` capability via UCAN with key delegation
 - Convergent encryption ties back to CAD3
 - Reading the namespace is low-risk; the real security boundary is the decrypt capability
+
+### 4.5 Virtual Namespaces
+
+Some path prefixes are not backed by a dedicated lattice namespace. Instead they are **virtual** — resolved at runtime by a `NamespaceResolver` that maps the prefix to the correct lattice location based on the `RequestContext`. This avoids path string rewriting, creates no temporary allocations, and keeps scoping explicit.
+
+| Prefix | Resolves to | Scope | Resolver needs |
+|--------|-------------|-------|----------------|
+| `n/` | Agent's own workspace within its state record | Agent | `RequestContext.agentId` |
+| `t/` | `temp` field within the current job record | Job | `RequestContext.jobId` |
+
+**`n/` — Agent Workspace.** Shorthand for the running agent's private workspace. An agent writing `n/notes` accesses its own state without knowing its agent ID or constructing a `g/{agentId}/state/w/notes` path. The resolver navigates directly to the agent's workspace cursor via the `agentId` on the RequestContext.
+
+**`t/` — Job-Scoped Temp.** Temporary data scoped to a single job execution. Stored as a `temp` field within the job record (`j/{jobId}/temp/...`). The resolver navigates directly to the job's temp sub-map via the `jobId` on the RequestContext.
+
+Properties:
+- **Naturally scoped** — the job IS the execution; no separate lifecycle to manage
+- **Concurrent-safe** — different jobs get different temp, even for the same agent or user
+- **Persisted** — temp survives restarts (it's part of the job record on the lattice)
+- **Auditable** — temp is visible in the job record alongside input/output, giving full provenance
+- **Cleaned up** — GoalTreeAdapter clears the temp field on root frame completion; or it can be left for debugging
+
+#### Scoping Rules
+
+`JobManager` automatically sets `jobId` on the `RequestContext` when dispatching to an adapter. If the context already carries a `jobId` (set by a parent job), the parent's ID is preserved. This means sub-operations within a job share its `t/`:
+
+| Scenario | `t/` scope | Reason |
+|---|---|---|
+| Goal tree subgoals and tool calls | Shared with root goal's job | GoalTreeAdapter sets `jobId`; sub-operations inherit it |
+| Orchestration steps | Shared with orchestration job | Steps execute within the orchestrator's context |
+| Direct invoke (REST, MCP) | Own job | New top-level job, `JobManager` auto-sets fresh `jobId` |
+| `agent:request` / `agent:trigger` | Own job | New agent execution, new job |
+| `grid:run` to remote venue | Own job | New job on target venue |
+
+**Key principle:** `t/` is shared across all sub-work within a single job. Orchestration steps can exchange data through `t/` without writing to permanent workspace. If isolation between steps is needed, use `grid:run` which creates a new job with its own `t/`.
+
+**When to use `t/` vs `w/`:**
+- `t/` — intermediate calculations, draft data between subgoals or orchestration steps, shared working state within a single execution. Automatically scoped to the job.
+- `w/` — final outputs, notes worth keeping, data that other agents or future executions should see. Permanent.
+
+#### Resolver Interface
+
+```java
+/**
+ * Resolves a virtual namespace prefix to a lattice cursor and remaining path keys.
+ * Called by CoviaAdapter when the first path segment matches a registered prefix.
+ */
+public interface NamespaceResolver {
+    /**
+     * @param ctx     the request context (provides agentId, jobId, callerDID)
+     * @param adapter the CoviaAdapter (provides access to lattice cursors)
+     * @param keys    the full parsed path keys (first element is the prefix)
+     * @return resolved target, or null if unresolvable
+     */
+    ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys);
+
+    /** Whether this namespace accepts writes. */
+    boolean isWritable();
+}
+```
+
+Resolvers are registered on CoviaAdapter at startup. Path resolution checks virtual resolvers first (O(1) lookup by prefix), then falls through to the standard user lattice cursor for physical namespaces. No string concatenation, no path rebuilding — the resolver returns the cursor positioned at the right location.
 
 ---
 
@@ -777,7 +838,7 @@ Lattice structure change:
       :caps      → MapLattice (DID → capability set)              ← NEW
       :user-data → MapLattice (DID → per-user KeyedLattice)       ← NEW
         <user-DID-string> → KeyedLattice
-          :workspace → MapLattice (user scratch space)
+          :workspace → MapLattice (user data space)
           :assets    → CASLattice (user-created assets)
           :jobs      → MapLattice (user's job history)
           :ops       → MapLattice (user's named operations)
@@ -860,7 +921,7 @@ Builds on: per-user cursors (agents are owned by users), operations registry (ag
 
 ### Phase 6: Workspace (`/w/`) and Secrets (`/s/`)
 
-Workspace: freely mutable scratch space per user/agent. Already partially enabled by per-user cursors.
+Workspace: freely mutable data space per user/agent. Already partially enabled by per-user cursors.
 
 Secrets: encrypted at rest, capability-gated decryption. Convergent encryption. Required for secure API key management.
 
