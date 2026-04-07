@@ -14,7 +14,9 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
+import convex.core.data.Blob;
 import covia.grid.Job;
+import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -103,7 +105,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Hello"))));
 
-		ACell output = adapter.processGoal(ALICE, input);
+		ACell output = adapter.processGoal(null, ALICE, input);
 		assertNotNull(output);
 
 		// Should have state and result
@@ -127,7 +129,7 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Do something"))));
 
-		ACell output = adapter.processGoal(ALICE, input);
+		ACell output = adapter.processGoal(null, ALICE, input);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
 		assertNotNull(response, "Should have a response after tool loop");
 		assertTrue(response.toString().contains("Tool returned"),
@@ -150,7 +152,7 @@ public class GoalTreeAdapterTest {
 					Fields.JOB_ID, Strings.create("job-123"),
 					Fields.INPUT, Strings.create("Process this invoice"))));
 
-		ACell output = adapter.processGoal(ALICE, input);
+		ACell output = adapter.processGoal(null, ALICE, input);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
 		assertNotNull(response);
 		// test:llm echoes the last user message — which should be the task description
@@ -203,11 +205,96 @@ public class GoalTreeAdapterTest {
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Test compact"))));
 
-		ACell output = adapter.processGoal(ALICE, input);
+		ACell output = adapter.processGoal(null, ALICE, input);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
 		assertNotNull(response, "Should have a response after compact loop");
 		assertTrue(response.toString().contains("Compact verified"),
 			"Response should confirm segment was found: " + response);
+	}
+
+	// ========== Cancellation ==========
+
+	private static final Blob TEST_JOB_ID = Blob.fromHex("0000000000000000");
+
+	@Test
+	public void testCancelledJobExitsImmediately() {
+		// A job that is already cancelled should cause the frame loop to exit
+		// on the very first iteration without making any L3 calls
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		Job job = new Job(Maps.of(Fields.STATUS, Status.PENDING, Fields.ID, TEST_JOB_ID));
+		job.cancel(); // cancel before running
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "cancel-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("test:llm"),
+				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Strings.create("content"), Strings.create("Hello"))));
+
+		ACell output = adapter.processGoal(job, ALICE, input);
+		// Should still return output (failed result), not throw
+		assertNotNull(output);
+		ACell response = RT.getIn(output, Fields.RESULT, "response");
+		assertNotNull(response, "Should have a response even when cancelled");
+		assertTrue(response.toString().contains("cancelled"),
+			"Response should indicate cancellation: " + response);
+	}
+
+	@Test
+	public void testCancelledJobDuringToolLoop() {
+		// Use test:toolllm which makes a tool call then returns text.
+		// Cancel the job after it starts — the second iteration should detect cancellation.
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		Job job = new Job(Maps.of(Fields.STATUS, Status.STARTED, Fields.ID, TEST_JOB_ID));
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "cancel-loop-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("test:toolllm"),
+				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Strings.create("content"), Strings.create("Do something"))));
+
+		// Run in a thread so we can cancel mid-flight
+		var future = java.util.concurrent.CompletableFuture.supplyAsync(
+			() -> adapter.processGoal(job, ALICE, input));
+
+		// Brief pause to let first iteration start, then cancel
+		try { Thread.sleep(100); } catch (InterruptedException e) {}
+		job.cancel();
+
+		ACell output = future.join();
+		assertNotNull(output);
+		// Either completed (if first iteration finished before cancel) or cancelled
+		ACell response = RT.getIn(output, Fields.RESULT, "response");
+		assertNotNull(response, "Should have a response");
+	}
+
+	@Test
+	public void testInvokeWithCancelledJob() {
+		// Test the full invoke path — cancel the job, verify it doesn't complete normally
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		Job job = engine.jobs().invokeOperation("goaltree:chat",
+			Maps.of(Fields.AGENT_ID, "invoke-cancel",
+				AgentState.KEY_CONFIG, Maps.of(
+					Strings.create("llmOperation"), Strings.create("test:never"),
+					Strings.create("systemPrompt"), Strings.create("Test"))),
+			ALICE);
+
+		// Cancel immediately
+		job.cancel();
+
+		// Wait briefly for the async invoke to notice
+		try { Thread.sleep(500); } catch (InterruptedException e) {}
+
+		assertTrue(job.isFinished(), "Job should be finished after cancel");
+		assertEquals("CANCELLED", job.getStatus().toString());
 	}
 
 	@Test
@@ -226,7 +313,7 @@ public class GoalTreeAdapterTest {
 					Fields.JOB_ID, Strings.create("job-goal"),
 					Fields.INPUT, Strings.create("Tell me about penguins"))));
 
-		ACell output = adapter.processGoal(ALICE, input);
+		ACell output = adapter.processGoal(null, ALICE, input);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
 		// test:llm echoes the last user message
 		assertTrue(response.toString().contains("penguin"),

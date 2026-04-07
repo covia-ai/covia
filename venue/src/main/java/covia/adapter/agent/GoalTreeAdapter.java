@@ -212,11 +212,13 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		job.setStatus(Strings.create("STARTED"));
 		CompletableFuture.runAsync(() -> {
 			try {
-				ACell output = processGoal(ctx, input);
-				job.completeWith(output);
+				ACell output = processGoal(job, ctx, input);
+				if (!job.isFinished()) {
+					job.completeWith(output);
+				}
 			} catch (Exception e) {
 				log.error("GoalTreeAdapter error", e);
-				job.fail(e.getMessage());
+				if (!job.isFinished()) job.fail(e.getMessage());
 			}
 		}, VIRTUAL_EXECUTOR);
 	}
@@ -232,7 +234,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	 * @return transition output: {@code {state, result}}
 	 */
 	@SuppressWarnings("unchecked")
-	ACell processGoal(RequestContext ctx, ACell input) {
+	ACell processGoal(Job job, RequestContext ctx, ACell input) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		ACell state = RT.getIn(input, AgentState.KEY_STATE);
 		AVector<ACell> messages = (AVector<ACell>) RT.getIn(input, Fields.MESSAGES);
@@ -268,7 +270,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		RequestContext capsCtx = context.capsCtx();
 
 		// Run the root frame
-		FrameResult result = runFrame(frames, 0, config, llmOperation, baseTools,
+		FrameResult result = runFrame(job, frames, 0, config, llmOperation, baseTools,
 			configToolMap, caps, capsCtx, context.history());
 
 		// Goal tree config is immutable — don't re-write it to state every transition.
@@ -326,7 +328,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	 * @return the frame's result
 	 */
 	@SuppressWarnings("unchecked")
-	FrameResult runFrame(AVector<ACell> frames, int frameIndex,
+	FrameResult runFrame(Job job, AVector<ACell> frames, int frameIndex,
 			AMap<AString, ACell> config, AString llmOperation,
 			AVector<ACell> baseTools, Map<String, AString> configToolMap,
 			AVector<ACell> caps, RequestContext ctx, AVector<ACell> systemMessages) {
@@ -355,6 +357,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		String pendingCompactSummary = null;
 
 		for (int iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+			// Check for cancellation before each L3 call
+			if (job != null && job.isFinished()) {
+				return FrameResult.failed(Strings.create("Job cancelled"));
+			}
+
 			activeFrame = (AMap<AString, ACell>) frames.get(frameIndex);
 
 			// Apply deferred compaction before assembling context
@@ -513,7 +520,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					AVector<ACell> childFrames = frames.conj(childFrame);
 
 					// Recurse into child
-					FrameResult childResult = runFrame(childFrames, frameIndex + 1,
+					FrameResult childResult = runFrame(job, childFrames, frameIndex + 1,
 						config, llmOperation, baseTools, configToolMap, caps, ctx, systemMessages);
 
 					// Pop child — result becomes tool result in parent

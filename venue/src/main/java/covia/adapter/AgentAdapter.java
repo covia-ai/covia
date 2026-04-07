@@ -59,6 +59,9 @@ public class AgentAdapter extends AAdapter {
 	/** Per-agent completion future — fires when the current run cycle finishes */
 	private final ConcurrentHashMap<String, CompletableFuture<ACell>> runCompletions = new ConcurrentHashMap<>();
 
+	/** Active transition job per agent — allows suspend to cancel running transitions */
+	private final ConcurrentHashMap<String, Job> activeTransitions = new ConcurrentHashMap<>();
+
 	/** Counter for task ID generation */
 	private long taskIdCounter = 0;
 
@@ -489,6 +492,10 @@ public class AgentAdapter extends AAdapter {
 
 		agent.setStatus(AgentState.SUSPENDED);
 
+		// Cancel any active transition so the agent stops promptly
+		Job activeJob = activeTransitions.get(agentId.toString());
+		if (activeJob != null) activeJob.cancel();
+
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.SUSPENDED));
 	}
@@ -744,7 +751,13 @@ public class AgentAdapter extends AAdapter {
 			}
 
 			Job transitionJob = engine.jobs().invokeOperation(transitionOp, transitionInput, ctx);
-			ACell transitionResult = transitionJob.awaitResult();
+			activeTransitions.put(agentId.toString(), transitionJob);
+			ACell transitionResult;
+			try {
+				transitionResult = transitionJob.awaitResult();
+			} finally {
+				activeTransitions.remove(agentId.toString());
+			}
 
 			// Process results
 			long endTs = Utils.getCurrentTimestamp();
