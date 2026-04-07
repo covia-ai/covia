@@ -47,7 +47,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	// ========== Harness tool names ==========
 
 	/** Maximum tool call loop iterations per frame */
-	static final int MAX_ITERATIONS = 20;
+	static final int MAX_ITERATIONS = 50;
 
 	static final String TOOL_SUBGOAL        = "subgoal";
 	static final String TOOL_COMPLETE       = "complete";
