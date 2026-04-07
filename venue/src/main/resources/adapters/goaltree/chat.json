@@ -1,0 +1,26 @@
+{
+	"name": "Goal Tree Agent Chat",
+	"description": "Goal tree transition function for agents. Supports hierarchical goal decomposition via subgoal/complete/fail/compact harness tools. Each transition creates a fresh root frame from incoming work. Subgoals branch into child frames with summarised ancestry. Conversations can be compacted into segments to free context space. Uses the same Level 3 LLM operations as LLM Agent Chat.",
+	"dateCreated": "2026-04-07T00:00:00Z",
+	"operation": {
+		"adapter": "goaltree:chat",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Agent identifier" },
+				"state": { "description": "Previous agent state (null on first run). Contains 'config' map (llmOperation, model, systemPrompt, tools, caps, context)." },
+				"messages": { "type": "array", "description": "Inbox messages to process" },
+				"tasks": { "type": "array", "description": "Pending task requests" },
+				"pending": { "type": "array", "description": "Pending job results" }
+			},
+			"required": ["agentId"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"state": { "type": "object", "description": "Updated agent state" },
+				"result": { "type": "object", "description": "Contains 'response' with the root goal's result" }
+			}
+		}
+	}
+}

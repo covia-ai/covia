@@ -53,7 +53,7 @@ public class ContextBuilder {
 	private static final Logger log = LoggerFactory.getLogger(ContextBuilder.class);
 
 	/** Default context budget in bytes (storage-size units). ~45k tokens. */
-	static final long DEFAULT_BUDGET = 180_000;
+	public static final long DEFAULT_BUDGET = 180_000;
 
 	/** Minimum per-entry budget for CellExplorer rendering */
 	private static final int MIN_ENTRY_BUDGET = 256;

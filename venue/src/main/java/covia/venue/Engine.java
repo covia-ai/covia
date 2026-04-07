@@ -256,6 +256,7 @@ public class Engine {
 		venue.registerAdapter(new SecretAdapter());
 		venue.registerAdapter(new UCANAdapter());
 		venue.registerAdapter(new LLMAgentAdapter());
+		venue.registerAdapter(new covia.adapter.agent.GoalTreeAdapter());
 	}
 
 	/**
