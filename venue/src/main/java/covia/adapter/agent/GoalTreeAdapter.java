@@ -69,10 +69,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	static final AMap<AString, ACell> TOOL_DEF_SUBGOAL = Maps.of(
 		K_NAME, Strings.create(TOOL_SUBGOAL),
 		K_DESCRIPTION, Strings.create(
-			"Open a subgoal frame. Brackets a section of work — the child sees its "
-			+ "description, ancestor context (summarised), and inherited loads. Runs "
-			+ "until complete() or fail() is called, or a text-only response is given "
-			+ "(implicit complete). Returns the child's structured result."),
+			"Delegate a self-contained piece of work. Describe what you need done "
+			+ "— a sub-agent will execute it independently and return the result. "
+			+ "Use when a task has distinct parts you want done separately (e.g. "
+			+ "'analyse vendor Acme' then 'analyse vendor Globex'). The sub-agent "
+			+ "has access to all your tools and loaded data."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
@@ -84,7 +85,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	static final AMap<AString, ACell> TOOL_DEF_COMPLETE = Maps.of(
 		K_NAME, Strings.create(TOOL_COMPLETE),
 		K_DESCRIPTION, Strings.create(
-			"Finish current goal with structured result. Returns to parent."),
+			"Finish your current goal and return structured data (a map or object) as "
+			+ "the result. Only needed when your caller needs machine-readable output. "
+			+ "For text answers, just respond normally — that also completes the goal."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
@@ -94,7 +97,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	static final AMap<AString, ACell> TOOL_DEF_FAIL = Maps.of(
 		K_NAME, Strings.create(TOOL_FAIL),
 		K_DESCRIPTION, Strings.create(
-			"Fail current goal with error info. Parent can retry, skip, or escalate."),
+			"Report that your goal cannot be completed. Explain what went wrong so "
+			+ "the caller can decide whether to retry, try a different approach, or give up."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
@@ -104,9 +108,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	static final AMap<AString, ACell> TOOL_DEF_COMPACT = Maps.of(
 		K_NAME, Strings.create(TOOL_COMPACT),
 		K_DESCRIPTION, Strings.create(
-			"Checkpoint your conversation so far. Live turns become a compacted segment "
-			+ "with your summary. Frees context space for continued work. Data is not lost "
-			+ "— the segment retains all turns, just rendered at reduced detail."),
+			"Archive your conversation so far into a summary you write. Frees context "
+			+ "space so you can continue working on long tasks. Call this after completing "
+			+ "a significant chunk of work when you still have more to do. Your summary "
+			+ "should capture key findings and what remains."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
@@ -119,12 +124,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	static final AMap<AString, ACell> TOOL_DEF_CONTEXT_LOAD = Maps.of(
 		K_NAME, Strings.create(TOOL_CONTEXT_LOAD),
 		K_DESCRIPTION, Strings.create(
-			"Pin a lattice path to your persistent loaded context. "
-			+ "The path is resolved fresh each turn and injected as a system message. "
-			+ "Use for reference material you need across multiple turns. "
-			+ "Loads are scoped to your current frame — children inherit them, "
-			+ "but your loads are restored when a child completes. "
-			+ "For one-shot reads, use inspect instead."),
+			"Keep data from a workspace path visible in your context across turns. "
+			+ "Use for rules, schemas, or reference material you need to consult "
+			+ "repeatedly. The data is refreshed automatically each turn. Subgoals "
+			+ "inherit your loaded data. For data you only need once, use covia_read "
+			+ "or inspect instead."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
@@ -142,8 +146,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	static final AMap<AString, ACell> TOOL_DEF_CONTEXT_UNLOAD = Maps.of(
 		K_NAME, Strings.create(TOOL_CONTEXT_UNLOAD),
 		K_DESCRIPTION, Strings.create(
-			"Remove a path from your persistent loaded context. "
-			+ "Frees the budget allocated to that path."),
+			"Remove previously loaded data from your context. "
+			+ "Frees space for other work or data."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
@@ -420,6 +424,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 			// Process each tool call
 			AVector<ACell> toolCalls = getToolCalls(l3Result);
+			log.info("Frame[{}] iter={} tools={}", frameIndex, iteration,
+				toolCalls.count() > 0 ? toolCalls.toString().substring(0, Math.min(200, toolCalls.toString().length())) : "0");
 			for (long t = 0; t < toolCalls.count(); t++) {
 				ACell tc = toolCalls.get(t);
 				AString toolCallId = RT.ensureString(RT.getIn(tc, K_ID));
@@ -490,6 +496,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 				} else if (TOOL_SUBGOAL.equals(toolName)) {
 					String desc = RT.ensureString(RT.getIn(toolInput, Strings.create("description"))).toString();
+					log.info("Subgoal pushed: {}", desc);
 
 					// Push child frame with inherited loads (copy-on-push)
 					AMap<AString, ACell> parentLoads = GoalTreeContext.getLoads(activeFrame);

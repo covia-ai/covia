@@ -97,6 +97,7 @@ public class AgentAdapter extends AAdapter {
 		installTemplate("template:manager", "/agent-templates/manager.json");
 		installTemplate("template:analyst", "/agent-templates/analyst.json");
 		installTemplate("template:full",    "/agent-templates/full.json");
+		installTemplate("template:goaltree","/agent-templates/goaltree.json");
 	}
 
 	/**
