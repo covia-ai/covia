@@ -88,10 +88,18 @@ public class GoalTreeContextTest {
 	}
 
 	@Test
-	public void testDescribeTransitionSingleTask() {
+	public void testDescribeTransitionSingleTaskString() {
 		AVector<ACell> tasks = Vectors.of((ACell) Maps.of("input", "Process invoice"));
 		String desc = GoalTreeContext.describeTransitionInput(null, tasks, null);
-		assertEquals("Task: Process invoice", desc);
+		assertEquals("Process invoice", desc);
+	}
+
+	@Test
+	public void testDescribeTransitionSingleTaskWithMessageField() {
+		AVector<ACell> tasks = Vectors.of((ACell) Maps.of("input",
+			Maps.of("message", "What is 2+2?")));
+		String desc = GoalTreeContext.describeTransitionInput(null, tasks, null);
+		assertEquals("What is 2+2?", desc);
 	}
 
 	@Test
@@ -288,7 +296,6 @@ public class GoalTreeContextTest {
 		assertNotNull(goal);
 		assertEquals("user", RT.ensureString(goal.get(GoalTreeContext.K_ROLE)).toString());
 		String content = RT.ensureString(goal.get(GoalTreeContext.K_CONTENT)).toString();
-		assertTrue(content.contains("Goal"));
 		assertTrue(content.contains("Analyse Beta Inc"));
 	}
 

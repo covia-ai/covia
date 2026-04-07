@@ -115,9 +115,17 @@ public class GoalTreeContext {
 	 * Tasks have {input, caller?} structure from agent:request.
 	 */
 	public static String describeTask(ACell task) {
-		AString input = RT.ensureString(RT.getIn(task, Strings.intern("input")));
+		ACell inputCell = RT.getIn(task, Strings.intern("input"));
 		AString caller = RT.ensureString(RT.getIn(task, Strings.intern("caller")));
-		String text = (input != null) ? truncate(input.toString(), 200) : "(no input)";
+		String text;
+		if (inputCell == null) {
+			text = "(no input)";
+		} else if (inputCell instanceof AString s) {
+			text = truncate(s.toString(), 200);
+		} else {
+			// Structured input — render as string (may be a map like {message: "..."})
+			text = truncate(inputCell.toString(), 200);
+		}
 		StringBuilder sb = new StringBuilder("Task");
 		if (caller != null) sb.append(" from ").append(caller);
 		sb.append(": ").append(text);
@@ -140,9 +148,15 @@ public class GoalTreeContext {
 			return describeMessage(messages.get(0));
 		}
 
-		// Single task — use its input directly
+		// Single task — use its input directly (the task IS the user's request)
 		if (taskCount == 1 && msgCount == 0 && pendingCount == 0) {
-			return describeTask(tasks.get(0));
+			ACell inputCell = RT.getIn(tasks.get(0), Strings.intern("input"));
+			if (inputCell == null) return "Task: (no input)";
+			if (inputCell instanceof AString s) return truncate(s.toString(), 200);
+			// Structured input — check for common patterns
+			AString msgField = RT.ensureString(RT.getIn(inputCell, Strings.intern("message")));
+			if (msgField != null) return truncate(msgField.toString(), 200);
+			return truncate(inputCell.toString(), 200);
 		}
 
 		// Mixed or multiple — summarise counts
@@ -279,7 +293,7 @@ public class GoalTreeContext {
 		AString desc = RT.ensureString(frame.get(K_DESCRIPTION));
 		if (desc == null) return null;
 		return Maps.of(K_ROLE, ROLE_USER, K_CONTENT,
-			Strings.create("[Goal] " + desc));
+			Strings.create(desc));
 	}
 
 	/**
