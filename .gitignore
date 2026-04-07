@@ -9,3 +9,4 @@ CLAUDE.local.md
 !/.claude/settings.json
 /venue_err.log
 /dev/
+/agent-export/

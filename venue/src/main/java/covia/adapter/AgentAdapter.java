@@ -759,10 +759,14 @@ public class AgentAdapter extends AAdapter {
 				K_START, CVMLong.create(startTs),
 				K_END, CVMLong.create(endTs),
 				Fields.OP, transitionOp,
-				AgentState.KEY_STATE, record.get(AgentState.KEY_STATE),
-				Fields.TASKS, formattedTasks,
-				Fields.MESSAGES, inbox,
 				Fields.RESULT, result);
+			// Only include non-empty collections to avoid bloat
+			if (formattedTasks != null && formattedTasks.count() > 0) {
+				timelineEntry = timelineEntry.assoc(Fields.TASKS, formattedTasks);
+			}
+			if (inbox != null && inbox.count() > 0) {
+				timelineEntry = timelineEntry.assoc(Fields.MESSAGES, inbox);
+			}
 			if (taskResults != null) timelineEntry = timelineEntry.assoc(Fields.TASK_RESULTS, taskResults);
 
 			// Accumulate task results across iterations

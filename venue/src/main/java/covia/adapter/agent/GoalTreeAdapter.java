@@ -271,12 +271,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		FrameResult result = runFrame(frames, 0, config, llmOperation, baseTools,
 			configToolMap, caps, capsCtx, context.history());
 
-		// Persist: save root frame conversation in state for next transition's context
-		AMap<AString, ACell> newState = Maps.of(
-			K_HISTORY, Vectors.empty()); // goal tree doesn't use flat history
-		if (config != null) {
-			newState = newState.assoc(K_CONFIG, config);
-		}
+		// Goal tree config is immutable — don't re-write it to state every transition.
+		// Only state-level data (like history) goes here; config lives on the record.
+		AMap<AString, ACell> newState = Maps.empty();
 
 		AMap<AString, ACell> output = Maps.of(
 			AgentState.KEY_STATE, newState,
@@ -429,11 +426,29 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 				if (TOOL_COMPLETE.equals(toolName)) {
 					ACell result = RT.getIn(toolInput, Strings.create("result"));
-					// Record tool result before returning
-					activeFrame = GoalTreeContext.appendTurn(activeFrame,
-						toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("complete"))));
-					frames = updateFrame(frames, frameIndex, activeFrame);
-					return FrameResult.complete(result);
+					// Validate: if responseFormat is set, string result must be valid JSON
+					if (config != null && config.get(K_RESPONSE_FORMAT) != null && result instanceof AString s) {
+						boolean valid = true;
+						try {
+							convex.core.util.JSON.parse(s.toString());
+						} catch (Exception e) { valid = false; }
+						if (!valid) {
+							// Malformed — record error, let LLM retry on next iteration
+							toolResult = Strings.create("Error: result is not valid JSON. "
+								+ "Respond with text instead — that also completes the goal with schema enforcement.");
+						} else {
+							activeFrame = GoalTreeContext.appendTurn(activeFrame,
+								toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("complete"))));
+							frames = updateFrame(frames, frameIndex, activeFrame);
+							return FrameResult.complete(result);
+						}
+					} else {
+						// No responseFormat or structured result — accept as-is
+						activeFrame = GoalTreeContext.appendTurn(activeFrame,
+							toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("complete"))));
+						frames = updateFrame(frames, frameIndex, activeFrame);
+						return FrameResult.complete(result);
+					}
 
 				} else if (TOOL_FAIL.equals(toolName)) {
 					ACell error = RT.getIn(toolInput, Strings.create("error"));
