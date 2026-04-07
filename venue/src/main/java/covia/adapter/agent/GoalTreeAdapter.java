@@ -271,13 +271,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		FrameResult result = runFrame(frames, 0, config, llmOperation, baseTools,
 			configToolMap, caps, capsCtx, context.history());
 
-		// Build response text from root result
-		String responseText = "";
-		if (result.value() != null) {
-			AString s = RT.ensureString(result.value());
-			responseText = (s != null) ? s.toString() : result.value().toString();
-		}
-
 		// Persist: save root frame conversation in state for next transition's context
 		AMap<AString, ACell> newState = Maps.of(
 			K_HISTORY, Vectors.empty()); // goal tree doesn't use flat history
@@ -287,7 +280,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 		AMap<AString, ACell> output = Maps.of(
 			AgentState.KEY_STATE, newState,
-			Fields.RESULT, Maps.of(K_RESPONSE, Strings.create(responseText)));
+			Fields.RESULT, Maps.of(K_RESPONSE, result.value()));
 
 		// Auto-complete all pending tasks with the root goal result
 		if (tasks != null && tasks.count() > 0) {
