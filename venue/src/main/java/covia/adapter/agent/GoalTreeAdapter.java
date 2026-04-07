@@ -113,13 +113,29 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 						"Your summary of the work done so far (required — only you know what matters)"))),
 			K_REQUIRED, Vectors.of(Strings.create("summary"))));
 
-	/** Harness tools — always available alongside configured operation tools */
+	/** Harness tools for root frame — includes subgoal for decomposition */
 	@SuppressWarnings("unchecked")
 	static final AVector<ACell> HARNESS_TOOLS = (AVector<ACell>) Vectors.of(
 		(ACell) TOOL_DEF_SUBGOAL,
 		(ACell) TOOL_DEF_COMPLETE,
 		(ACell) TOOL_DEF_FAIL,
 		(ACell) TOOL_DEF_COMPACT);
+
+	/** Harness tools for child frames — no subgoal (complete/fail/compact only) */
+	@SuppressWarnings("unchecked")
+	static final AVector<ACell> CHILD_HARNESS_TOOLS = (AVector<ACell>) Vectors.of(
+		(ACell) TOOL_DEF_COMPLETE,
+		(ACell) TOOL_DEF_FAIL,
+		(ACell) TOOL_DEF_COMPACT);
+
+	/** System note prepended to child frame context */
+	private static final AMap<AString, ACell> CHILD_FRAME_NOTE = Maps.of(
+		K_ROLE, ROLE_SYSTEM,
+		K_CONTENT, Strings.create(
+			"You are inside a subgoal. Complete the specific task described below. "
+			+ "When done, just respond with your answer — a plain text response "
+			+ "returns your result to the parent. Only call complete() if you need "
+			+ "to return structured data."));
 
 	// ========== Adapter registration ==========
 
@@ -279,13 +295,48 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			AVector<ACell> caps, RequestContext ctx, AVector<ACell> systemMessages) {
 
 		// Assemble tools = harness tools + configured tools
-		AVector<ACell> tools = (AVector<ACell>) HARNESS_TOOLS.concat(baseTools);
+		// Root frames get all harness tools; child frames get only complete/fail/compact
+		// (no subgoal — prevents unnecessary nesting from smaller models)
+		AVector<ACell> harnessForFrame = (frameIndex == 0)
+			? HARNESS_TOOLS
+			: CHILD_HARNESS_TOOLS;
+		AVector<ACell> tools = (AVector<ACell>) harnessForFrame.concat(baseTools);
+
+		// Inject goal as first user message in the conversation (once, not every iteration)
+		AMap<AString, ACell> activeFrame = (AMap<AString, ACell>) frames.get(frameIndex);
+		if (GoalTreeContext.countLiveTurns(activeFrame) == 0) {
+			AMap<AString, ACell> goalMsg = GoalTreeContext.renderGoal(activeFrame);
+			if (goalMsg != null) {
+				activeFrame = GoalTreeContext.appendTurn(activeFrame, goalMsg);
+				frames = updateFrame(frames, frameIndex, activeFrame);
+			}
+		}
+
+		// Deferred compact: applied at the start of the next iteration so we never
+		// split an assistant message from its tool results (OpenAI requires every
+		// tool result to follow its assistant tool_calls message)
+		String pendingCompactSummary = null;
 
 		for (int iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-			AMap<AString, ACell> activeFrame = (AMap<AString, ACell>) frames.get(frameIndex);
+			activeFrame = (AMap<AString, ACell>) frames.get(frameIndex);
+
+			// Apply deferred compaction before assembling context
+			if (pendingCompactSummary != null) {
+				activeFrame = GoalTreeContext.compactFrame(activeFrame, pendingCompactSummary);
+				// Re-inject goal as user message so the LLM retains frame context
+				AMap<AString, ACell> goalMsg = GoalTreeContext.renderGoal(activeFrame);
+				if (goalMsg != null) {
+					activeFrame = GoalTreeContext.appendTurn(activeFrame, goalMsg);
+				}
+				frames = updateFrame(frames, frameIndex, activeFrame);
+				pendingCompactSummary = null;
+			}
 
 			// Assemble full context for this inference
 			AVector<ACell> fullHistory = systemMessages;
+
+			// Child frame note (if not root)
+			if (frameIndex > 0) fullHistory = fullHistory.conj(CHILD_FRAME_NOTE);
 
 			// Ancestor context (if not root)
 			AMap<AString, ACell> ancestorMsg = GoalTreeContext.renderAncestors(frames);
@@ -297,13 +348,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 				frames, consumed, ContextBuilder.DEFAULT_BUDGET);
 			fullHistory = fullHistory.conj(ctxMap);
 
-			// Conversation (segments + live turns)
+			// Conversation (segments + live turns — includes goal as first user message)
 			AVector<ACell> convMessages = GoalTreeContext.renderConversation(activeFrame);
 			fullHistory = (AVector<ACell>) fullHistory.concat(convMessages);
-
-			// Goal message
-			AMap<AString, ACell> goalMsg = GoalTreeContext.renderGoal(activeFrame);
-			if (goalMsg != null) fullHistory = fullHistory.conj(goalMsg);
 
 			// Invoke L3
 			ACell l3Result = invokeLevel3(llmOperation, config, fullHistory, tools, ctx);
@@ -348,7 +395,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 				} else if (TOOL_COMPACT.equals(toolName)) {
 					String summary = RT.ensureString(RT.getIn(toolInput, Strings.create("summary"))).toString();
 					long turnsBefore = GoalTreeContext.countLiveTurns(activeFrame);
-					activeFrame = GoalTreeContext.compactFrame(activeFrame, summary);
+					// Defer compaction to the start of the next iteration — compacting
+					// now would archive the current assistant message, orphaning any
+					// remaining tool results in this batch
+					pendingCompactSummary = summary;
 					toolResult = Strings.create("Compacted " + turnsBefore + " turns into segment. Context freed.");
 
 				} else if (TOOL_SUBGOAL.equals(toolName)) {

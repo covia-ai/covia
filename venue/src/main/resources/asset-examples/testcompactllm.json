@@ -1,0 +1,23 @@
+{
+	"name": "Test Compact LLM",
+	"description": "Test LLM that exercises the compact harness tool. First call returns tool calls for test:echo and compact; second call verifies the compacted segment and returns text.",
+	"dateCreated": "2026-04-07T00:00:00Z",
+	"operation": {
+		"adapter": "test:compactllm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": { "type": "array" },
+				"tools": { "type": "array" }
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": { "type": "string" },
+				"content": { "type": "string" },
+				"toolCalls": { "type": "array" }
+			}
+		}
+	}
+}

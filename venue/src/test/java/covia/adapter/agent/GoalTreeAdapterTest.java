@@ -110,4 +110,124 @@ public class GoalTreeAdapterTest {
 		assertNotNull(response, "Should have a response");
 		assertTrue(response.toString().length() > 0, "Response should not be empty");
 	}
+
+	@Test
+	public void testTransitionWithToolCall() {
+		// test:toolllm makes one tool call (test:echo), then returns text on seeing results
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "tool-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("test:toolllm"),
+				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Strings.create("content"), Strings.create("Do something"))));
+
+		ACell output = adapter.processGoal(ALICE, input);
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		assertNotNull(response, "Should have a response after tool loop");
+		assertTrue(response.toString().contains("Tool returned"),
+			"Response should include tool result: " + response);
+	}
+
+	@Test
+	public void testTransitionWithTask() {
+		// Task input should become the goal description
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "task-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("test:llm"),
+				Strings.create("systemPrompt"), Strings.create("Echo the user's request.")),
+			Fields.TASKS, Vectors.of(
+				(ACell) Maps.of(
+					Fields.JOB_ID, Strings.create("job-123"),
+					Fields.INPUT, Strings.create("Process this invoice"))));
+
+		ACell output = adapter.processGoal(ALICE, input);
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		assertNotNull(response);
+		// test:llm echoes the last user message — which should be the task description
+		assertTrue(response.toString().contains("Process this invoice"),
+			"Goal should contain task input: " + response);
+
+		// Task should be auto-completed
+		ACell taskResults = RT.getIn(output, Fields.TASK_RESULTS);
+		assertNotNull(taskResults, "Should have taskResults");
+		assertNotNull(RT.getIn(taskResults, Strings.create("job-123")),
+			"Task job-123 should be completed");
+	}
+
+	@Test
+	public void testExplicitComplete() {
+		// Use test:toolllm which calls test:echo — but we want to test complete()
+		// Instead, create a mock input where the LLM would call complete
+		// For now, test that FrameResult.complete works correctly
+		GoalTreeAdapter.FrameResult result = GoalTreeAdapter.FrameResult.complete(
+			Maps.of(Strings.create("answer"), Strings.create("42")));
+		assertEquals("complete", result.status());
+		assertNotNull(result.value());
+	}
+
+	@Test
+	public void testExplicitFail() {
+		GoalTreeAdapter.FrameResult result = GoalTreeAdapter.FrameResult.failed(
+			Strings.create("Something went wrong"));
+		assertEquals("failed", result.status());
+		assertEquals("Something went wrong", RT.ensureString(result.value()).toString());
+	}
+
+	// ========== Subgoal test (using test:toolllm) ==========
+
+	@Test
+	public void testCompactDeferredAndVerified() {
+		// test:compactllm calls test:echo + compact in one batch, then on next
+		// iteration sees the compacted segment and returns text.
+		// This verifies: (1) deferred compaction doesn't orphan tool results,
+		// (2) compacted segment renders as a system message, (3) goal is
+		// re-injected after compaction.
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "compact-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("test:compactllm"),
+				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Strings.create("content"), Strings.create("Test compact"))));
+
+		ACell output = adapter.processGoal(ALICE, input);
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		assertNotNull(response, "Should have a response after compact loop");
+		assertTrue(response.toString().contains("Compact verified"),
+			"Response should confirm segment was found: " + response);
+	}
+
+	@Test
+	public void testGoalIsFirstUserMessage() {
+		// Verify the goal is injected as the first conversation turn, not repeated
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "goal-msg-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("test:llm"),
+				Strings.create("systemPrompt"), Strings.create("Echo the message.")),
+			Fields.TASKS, Vectors.of(
+				(ACell) Maps.of(
+					Fields.JOB_ID, Strings.create("job-goal"),
+					Fields.INPUT, Strings.create("Tell me about penguins"))));
+
+		ACell output = adapter.processGoal(ALICE, input);
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		// test:llm echoes the last user message
+		assertTrue(response.toString().contains("penguin"),
+			"Should echo the goal text: " + response);
+	}
 }

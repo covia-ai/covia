@@ -59,6 +59,8 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.completedFuture(handleTaskLlm(input));
                 case "workspacellm":
                     return CompletableFuture.completedFuture(handleWorkspaceLlm(input));
+                case "compactllm":
+                    return CompletableFuture.completedFuture(handleCompactLlm(input));
                 case "never":
                     return new CompletableFuture<>();
                 case "delay":
@@ -96,6 +98,7 @@ public class TestAdapter extends AAdapter {
 			installAsset(BASE+"testtoolllm.json");
 			installAsset(BASE+"testtaskllm.json");
 			installAsset(BASE+"testworkspacellm.json");
+			installAsset(BASE+"testcompactllm.json");
 			installAsset(BASE+"neverop.json");
 			installAsset(BASE+"delayop.json");
 			installAsset(BASE+"randomop.json");
@@ -419,6 +422,44 @@ public class TestAdapter extends AAdapter {
                 "content", Strings.create(
                     "Done. Wrote knowledge, appended to log, and verified by reading back."));
         }
+    }
+
+    /**
+     * Test LLM that exercises the compact harness tool. First call returns
+     * tool calls [test:echo, compact]. After deferred compaction the second
+     * call sees a compacted segment and returns text confirming it.
+     */
+    @SuppressWarnings("unchecked")
+    private ACell handleCompactLlm(ACell input) {
+        ACell messagesCell = RT.getIn(input, "messages");
+        if (messagesCell instanceof AVector) {
+            AVector<ACell> messages = (AVector<ACell>) messagesCell;
+            // Check for compacted segment marker
+            for (long i = 0; i < messages.count(); i++) {
+                AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+                AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
+                if (role != null && "system".equals(role.toString())
+                        && content != null && content.toString().contains("[Compacted:")) {
+                    return Maps.of(
+                        "role", Strings.create("assistant"),
+                        "content", Strings.create("Compact verified. Segment found.")
+                    );
+                }
+            }
+        }
+        // No segments — first round: call test:echo + compact
+        return Maps.of(
+            "role", Strings.create("assistant"),
+            "toolCalls", Vectors.of(
+                Maps.of(
+                    "id", Strings.create("call_e1"),
+                    "name", Strings.create("test_echo"),
+                    "arguments", Strings.create("{\"input\":\"hello\"}")),
+                Maps.of(
+                    "id", Strings.create("call_c1"),
+                    "name", Strings.create("compact"),
+                    "arguments", Strings.create("{\"summary\":\"Made an echo call.\"}")))
+        );
     }
 
     private RuntimeException handleError(ACell input) {
