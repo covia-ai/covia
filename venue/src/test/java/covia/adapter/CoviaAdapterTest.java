@@ -1349,10 +1349,10 @@ public class CoviaAdapterTest {
 			"n/ without agentId should throw");
 	}
 
-	// ========== covia:explore ==========
+	// ========== covia:inspect ==========
 
 	@Test
-	public void testExploreSinglePath() {
+	public void testInspectSinglePath() {
 		// Write data to explore
 		engine.jobs().invokeOperation("covia:write",
 			Maps.of(Strings.create("path"), Strings.create("w/vendors/acme"),
@@ -1362,7 +1362,7 @@ public class CoviaAdapterTest {
 					Strings.create("growth"), Strings.create("8%"))),
 			ALICE).awaitResult(5000);
 
-		Job exploreJob = engine.jobs().invokeOperation("covia:explore",
+		Job exploreJob = engine.jobs().invokeOperation("covia:inspect",
 			Maps.of(Strings.create("paths"), Strings.create("w/vendors/acme"),
 				Strings.create("budget"), CVMLong.create(2000)),
 			ALICE);
@@ -1375,7 +1375,7 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
-	public void testExploreMultiplePaths() {
+	public void testInspectMultiplePaths() {
 		engine.jobs().invokeOperation("covia:write",
 			Maps.of(Strings.create("path"), Strings.create("w/a"),
 				Strings.create("value"), Strings.create("alpha")),
@@ -1385,7 +1385,7 @@ public class CoviaAdapterTest {
 				Strings.create("value"), Strings.create("beta")),
 			ALICE).awaitResult(5000);
 
-		Job exploreJob = engine.jobs().invokeOperation("covia:explore",
+		Job exploreJob = engine.jobs().invokeOperation("covia:inspect",
 			Maps.of(Strings.create("paths"), Vectors.of(
 				(ACell) Strings.create("w/a"), (ACell) Strings.create("w/b")),
 				Strings.create("budget"), CVMLong.create(1000)),
@@ -1402,7 +1402,7 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
-	public void testExploreBudgetTruncation() {
+	public void testInspectBudgetTruncation() {
 		// Write a large map
 		AMap<AString, ACell> largeMap = Maps.empty();
 		for (int i = 0; i < 50; i++) {
@@ -1415,7 +1415,7 @@ public class CoviaAdapterTest {
 			ALICE).awaitResult(5000);
 
 		// Small budget — should truncate
-		Job exploreJob = engine.jobs().invokeOperation("covia:explore",
+		Job exploreJob = engine.jobs().invokeOperation("covia:inspect",
 			Maps.of(Strings.create("paths"), Strings.create("w/large"),
 				Strings.create("budget"), CVMLong.create(200)),
 			ALICE);
@@ -1426,14 +1426,14 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
-	public void testExploreDefaultBudget() {
+	public void testInspectDefaultBudget() {
 		engine.jobs().invokeOperation("covia:write",
 			Maps.of(Strings.create("path"), Strings.create("w/small"),
 				Strings.create("value"), Strings.create("hello")),
 			ALICE).awaitResult(5000);
 
 		// No budget param — should use default (500)
-		Job exploreJob = engine.jobs().invokeOperation("covia:explore",
+		Job exploreJob = engine.jobs().invokeOperation("covia:inspect",
 			Maps.of(Strings.create("paths"), Strings.create("w/small")),
 			ALICE);
 		ACell result = exploreJob.awaitResult(5000);
@@ -1442,8 +1442,8 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
-	public void testExploreMissingPath() {
-		Job exploreJob = engine.jobs().invokeOperation("covia:explore",
+	public void testInspectMissingPath() {
+		Job exploreJob = engine.jobs().invokeOperation("covia:inspect",
 			Maps.of(Strings.create("paths"), Strings.create("w/nonexistent")),
 			ALICE);
 		ACell result = exploreJob.awaitResult(5000);
@@ -1453,7 +1453,7 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
-	public void testExploreAgentWorkspace() {
+	public void testInspectAgentWorkspace() {
 		RequestContext agentCtx = ALICE.withAgentId(Strings.create("test-agent"));
 
 		engine.jobs().invokeOperation("covia:write",
@@ -1462,7 +1462,7 @@ public class CoviaAdapterTest {
 					Strings.create("finding"), Strings.create("23% market share"))),
 			agentCtx).awaitResult(5000);
 
-		Job exploreJob = engine.jobs().invokeOperation("covia:explore",
+		Job exploreJob = engine.jobs().invokeOperation("covia:inspect",
 			Maps.of(Strings.create("paths"), Strings.create("n/research"),
 				Strings.create("budget"), CVMLong.create(1000)),
 			agentCtx);
@@ -1472,7 +1472,7 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
-	public void testExploreNestedStructure() {
+	public void testInspectNestedStructure() {
 		// Write nested data
 		engine.jobs().invokeOperation("covia:write",
 			Maps.of(Strings.create("path"), Strings.create("w/deep"),
@@ -1482,7 +1482,7 @@ public class CoviaAdapterTest {
 							Strings.create("value"), Strings.create("deep data"))))),
 			ALICE).awaitResult(5000);
 
-		Job exploreJob = engine.jobs().invokeOperation("covia:explore",
+		Job exploreJob = engine.jobs().invokeOperation("covia:inspect",
 			Maps.of(Strings.create("paths"), Strings.create("w/deep"),
 				Strings.create("budget"), CVMLong.create(5000)),
 			ALICE);

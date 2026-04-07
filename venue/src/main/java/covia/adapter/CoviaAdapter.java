@@ -123,7 +123,7 @@ public class CoviaAdapter extends AAdapter {
 		installAsset(BASE + "functions.json");
 		installAsset(BASE + "describe.json");
 		installAsset(BASE + "adapters.json");
-		installAsset(BASE + "explore.json");
+		installAsset(BASE + "inspect.json");
 	}
 
 	@Override
@@ -142,7 +142,7 @@ public class CoviaAdapter extends AAdapter {
 				case "functions" -> CompletableFuture.completedFuture(handleFunctions());
 				case "describe" -> CompletableFuture.completedFuture(handleDescribe(input));
 				case "adapters" -> CompletableFuture.completedFuture(handleAdapters());
-				case "explore" -> CompletableFuture.completedFuture(handleExplore(ctx, input));
+				case "inspect" -> CompletableFuture.completedFuture(handleInspect(ctx, input));
 				default -> CompletableFuture.failedFuture(
 					new RuntimeException("Unknown covia operation: " + getSubOperation(meta)));
 			};
@@ -209,18 +209,18 @@ public class CoviaAdapter extends AAdapter {
 		return result(value);
 	}
 
-	// ========== covia:explore — Budget-controlled JSON5 reads ==========
+	// ========== covia:inspect — Budget-controlled JSON5 reads ==========
 
 	private static final AString K_PATHS   = Strings.intern("paths");
 	private static final AString K_BUDGET  = Strings.intern("budget");
 	private static final AString K_COMPACT = Strings.intern("compact");
 	private static final AString K_RESULT  = Strings.intern("result");
 
-	/** Default explore budget in bytes (storage-size units) */
-	private static final int DEFAULT_EXPLORE_BUDGET = 500;
+	/** Default inspect budget in bytes (storage-size units) */
+	private static final int DEFAULT_INSPECT_BUDGET = 500;
 
 	/**
-	 * Budget-controlled read of lattice data via {@link CellExplorer}.
+	 * Budget-controlled inspection of lattice data via {@link CellExplorer}.
 	 *
 	 * <p>Accepts a single path or array of paths. Each value is rendered as JSON5
 	 * with structural annotations, truncated to the byte budget. For multiple
@@ -230,11 +230,11 @@ public class CoviaAdapter extends AAdapter {
 	 *         paths: {@code {result: {path1: "...", path2: "..."}}}
 	 */
 	@SuppressWarnings("unchecked")
-	private ACell handleExplore(RequestContext ctx, ACell input) {
+	private ACell handleInspect(RequestContext ctx, ACell input) {
 		ACell pathsCell = RT.getIn(input, K_PATHS);
 
 		// Budget
-		int budget = DEFAULT_EXPLORE_BUDGET;
+		int budget = DEFAULT_INSPECT_BUDGET;
 		ACell budgetCell = RT.getIn(input, K_BUDGET);
 		if (budgetCell instanceof CVMLong l) budget = (int) Math.max(10, l.longValue());
 

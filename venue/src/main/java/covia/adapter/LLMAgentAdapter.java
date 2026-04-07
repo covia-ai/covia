@@ -184,7 +184,7 @@ public class LLMAgentAdapter extends AAdapter {
 			"Add a lattice path to your persistent loaded context. "
 			+ "The path is resolved fresh each turn and injected as a system message. "
 			+ "Use for reference material you need across multiple turns. "
-			+ "For one-shot reads, use explore instead. Effect takes place next turn."),
+			+ "For one-shot reads, use inspect instead. Effect takes place next turn."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
@@ -242,7 +242,7 @@ public class LLMAgentAdapter extends AAdapter {
 		(ACell) Strings.create("covia:append"),
 		(ACell) Strings.create("covia:slice"),
 		(ACell) Strings.create("covia:list"),
-		(ACell) Strings.create("covia:explore"),
+		(ACell) Strings.create("covia:inspect"),
 		(ACell) Strings.create("covia:adapters"),
 		(ACell) Strings.create("covia:functions"),
 		(ACell) Strings.create("covia:describe"),
@@ -647,7 +647,7 @@ public class LLMAgentAdapter extends AAdapter {
 			Strings.create("path"), path,
 			Strings.create("loaded"), CVMBool.TRUE,
 			Strings.create("budget"), CVMLong.create(budget),
-			Strings.create("note"), Strings.create("Path will appear in context next turn. Use explore for immediate reads."));
+			Strings.create("note"), Strings.create("Path will appear in context next turn. Use inspect for immediate reads."));
 	}
 
 	ACell handleContextUnload(ACell input, ToolContext toolCtx) {
