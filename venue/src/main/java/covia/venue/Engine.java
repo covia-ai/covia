@@ -926,8 +926,10 @@ public class Engine {
 		AString callerDID = ctx.getCallerDID();
 		if (callerDID == null) return null;
 
-		// Strip /s/ prefix if present
-		String name = secretRef.startsWith("/s/") ? secretRef.substring(3) : secretRef;
+		// Strip s/ or /s/ prefix if present
+		String name = secretRef.startsWith("/s/") ? secretRef.substring(3)
+				: secretRef.startsWith("s/") ? secretRef.substring(2)
+				: secretRef;
 		if (name.isEmpty()) return null;
 
 		User user = venueState.users().get(callerDID);

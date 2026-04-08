@@ -262,7 +262,8 @@ public class ContextLoader {
 	 */
 	ACell resolveOpEntry(AString op, ACell input, AString label, boolean required, RequestContext ctx) {
 		try {
-			Job job = engine.jobs().invokeOperation(op, input, ctx);
+			// Context loading is framework infrastructure — bypass agent caps
+			Job job = engine.jobs().invokeOperation(op, input, ctx.withCaps(null));
 			ACell result = job.awaitResult(10_000);
 			if (result == null) {
 				if (required) throw new RuntimeException("Required context operation returned null: " + op);

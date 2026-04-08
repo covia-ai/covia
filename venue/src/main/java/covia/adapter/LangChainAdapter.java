@@ -582,8 +582,14 @@ public class LangChainAdapter extends AAdapter {
 				}
 				return builder.build();
 			}
-			case "object":
-				return toJsonObjectSchema(prop);
+			case "object": {
+				JsonObjectSchema obj = toJsonObjectSchema(prop);
+				if (obj != null) return obj;
+				// Object with no sub-properties — return empty schema (required for Gemini compat)
+				JsonObjectSchema.Builder b = JsonObjectSchema.builder();
+				if (descStr != null) b.description(descStr);
+				return b.build();
+			}
 			default:
 				return JsonStringSchema.builder().description(descStr).build();
 		}

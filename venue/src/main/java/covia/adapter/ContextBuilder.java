@@ -421,8 +421,36 @@ public class ContextBuilder {
 		if (config != null) {
 			ACell toolsCell = config.get(K_TOOLS);
 			if (toolsCell instanceof AVector<?> toolsVec) {
-				baseTools = (AVector<ACell>) baseTools.concat(
-					buildConfigTools((AVector<ACell>) toolsVec, configToolMap));
+				// Build config tools, skipping any already provided by defaults
+				AVector<ACell> configTools = buildConfigTools((AVector<ACell>) toolsVec, configToolMap);
+				// Deduplicate: configToolMap was populated by defaults first, so
+				// buildConfigTools only adds genuinely new entries. But the vector
+				// may still contain dups if the same operation resolved to an
+				// already-present tool name. Filter by checking baseTools count.
+				if (baseTools.count() == 0) {
+					baseTools = configTools;
+				} else {
+					// Only append tools whose name isn't already in baseTools
+					java.util.Set<String> existing = new java.util.HashSet<>();
+					for (long j = 0; j < baseTools.count(); j++) {
+						ACell t = baseTools.get(j);
+						if (t instanceof AMap) {
+							ACell n = ((AMap<?,?>) t).get(Fields.NAME);
+							if (n != null) existing.add(n.toString());
+						}
+					}
+					for (long j = 0; j < configTools.count(); j++) {
+						ACell t = configTools.get(j);
+						String n = null;
+						if (t instanceof AMap) {
+							ACell nc = ((AMap<?,?>) t).get(Fields.NAME);
+							if (nc != null) n = nc.toString();
+						}
+						if (n == null || !existing.contains(n)) {
+							baseTools = (AVector<ACell>) baseTools.conj(t);
+						}
+					}
+				}
 			}
 		}
 

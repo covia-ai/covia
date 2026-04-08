@@ -222,11 +222,14 @@ public class LangChainAdapterTest {
 		assertEquals(5, result.properties().size());
 		assertNotNull(result.required());
 		assertEquals(2, result.required().size());
+		assertRequiredPropertiesExist(result, "allTypes");
 	}
 
 	@SuppressWarnings({"unchecked", "rawtypes"})
 	@Test
 	public void testToJsonObjectSchemaNoProperties() {
+		// toJsonObjectSchema still returns null for top-level schemas without properties
+		// (the fix is in toSchemaElement which wraps the null into an empty object)
 		AMap<AString, ACell> schema = (AMap<AString, ACell>)(AMap) Maps.of("type", "object");
 		assertNull(LangChainAdapter.toJsonObjectSchema(schema), "Should return null when no properties");
 	}
@@ -591,6 +594,113 @@ public class LangChainAdapterTest {
 		assertNotNull(rf);
 		assertEquals("SearchResults", rf.jsonSchema().name());
 		assertNotNull(rf.jsonSchema().rootElement());
+	}
+
+	// ========== JSON Schema correctness invariants ==========
+
+	/**
+	 * Invariant: every entry in "required" must have a corresponding entry in "properties".
+	 * Violating this produces invalid JSON Schema that strict validators (e.g. Gemini) reject.
+	 */
+	private static void assertRequiredPropertiesExist(JsonObjectSchema schema, String context) {
+		if (schema.required() == null) return;
+		for (String req : schema.required()) {
+			assertNotNull(schema.properties().get(req),
+				context + ": required property '" + req + "' missing from properties");
+		}
+	}
+
+	/**
+	 * Invariant: all declared properties in the input must appear in the output.
+	 * No silent dropping of valid JSON Schema constructs during conversion.
+	 */
+	private static void assertAllPropertiesPreserved(
+			AMap<AString, ACell> inputProperties, JsonObjectSchema output, String context) {
+		inputProperties.forEach((key, value) -> {
+			assertNotNull(output.properties().get(key.toString()),
+				context + ": input property '" + key + "' was silently dropped during conversion");
+		});
+	}
+
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	@Test
+	public void testObjectPropertyWithoutSubProperties() {
+		// type: "object" without "properties" is valid JSON Schema (means "any object").
+		// Conversion must not drop it — that would break the required/properties invariant.
+		AMap<AString, ACell> schema = (AMap<AString, ACell>)(AMap) Maps.of(
+			"type", "object",
+			"properties", Maps.of(
+				"metadata", Maps.of("type", "object", "description", "Arbitrary JSON metadata"),
+				"name", Maps.of("type", "string", "description", "A name")
+			),
+			"required", Vectors.of("metadata")
+		);
+
+		var result = LangChainAdapter.toJsonObjectSchema(schema);
+		assertNotNull(result);
+
+		AMap<AString, ACell> inputProps = (AMap<AString, ACell>)(AMap) Maps.of(
+			"metadata", Maps.of("type", "object", "description", "Arbitrary JSON metadata"),
+			"name", Maps.of("type", "string", "description", "A name")
+		);
+		assertAllPropertiesPreserved(inputProps, result, "object-without-subproperties");
+		assertRequiredPropertiesExist(result, "object-without-subproperties");
+
+		// The propertyless object must be a JsonObjectSchema, not downcast to string
+		assertInstanceOf(JsonObjectSchema.class, result.properties().get("metadata"));
+	}
+
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	@Test
+	public void testRequiredPropertiesInvariantWithAllTypes() {
+		// Every type of property — when listed as required — must appear in the output.
+		AMap<AString, ACell> schema = (AMap<AString, ACell>)(AMap) Maps.of(
+			"type", "object",
+			"properties", Maps.of(
+				"s", Maps.of("type", "string"),
+				"i", Maps.of("type", "integer"),
+				"n", Maps.of("type", "number"),
+				"b", Maps.of("type", "boolean"),
+				"a", Maps.of("type", "array"),
+				"o", Maps.of("type", "object", "properties", Maps.of("x", Maps.of("type", "string"))),
+				"bare_o", Maps.of("type", "object")
+			),
+			"required", Vectors.of("s", "i", "n", "b", "a", "o", "bare_o")
+		);
+
+		var result = LangChainAdapter.toJsonObjectSchema(schema);
+		assertNotNull(result);
+		assertRequiredPropertiesExist(result, "all-types-required");
+		assertEquals(7, result.properties().size());
+	}
+
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	@Test
+	public void testToolSpecWithPropertylessObjectParam() {
+		// End-to-end: tool spec matching asset:store's shape
+		var tools = Vectors.of(
+			Maps.of(
+				"name", "store_asset",
+				"description", "Store an asset",
+				"parameters", Maps.of(
+					"type", "object",
+					"properties", Maps.of(
+						"metadata", Maps.of("type", "object", "description", "Asset metadata"),
+						"content", Maps.of("type", "string")
+					),
+					"required", Vectors.of("metadata")
+				)
+			)
+		);
+
+		List<ToolSpecification> specs = LangChainAdapter.toToolSpecifications(tools);
+		assertEquals(1, specs.size());
+
+		JsonObjectSchema params = specs.get(0).parameters();
+		assertNotNull(params);
+		assertRequiredPropertiesExist(params, "store_asset tool");
+		assertEquals(2, params.properties().size());
+		assertInstanceOf(JsonObjectSchema.class, params.properties().get("metadata"));
 	}
 
 	// ========== stripThinkTags ==========

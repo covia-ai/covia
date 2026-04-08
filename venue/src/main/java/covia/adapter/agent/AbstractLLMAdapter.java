@@ -94,7 +94,8 @@ public abstract class AbstractLLMAdapter extends AAdapter {
 			l3Input = l3Input.assoc(K_TOOLS, tools);
 		}
 
-		Job l3Job = engine.jobs().invokeOperation(llmOperation, l3Input, ctx);
+		// LLM invocation is framework infrastructure — bypass agent caps
+		Job l3Job = engine.jobs().invokeOperation(llmOperation, l3Input, ctx.withCaps(null));
 		return l3Job.awaitResult();
 	}
 
@@ -153,11 +154,12 @@ public abstract class AbstractLLMAdapter extends AAdapter {
 
 	/**
 	 * Invokes an operation and returns the result, handling errors gracefully.
+	 * Caps are stripped because dispatchTool already enforced them explicitly.
 	 */
 	private ACell invokeOperation(AString operation, ACell input, RequestContext ctx) {
 		ACell opInput = ensureParsedInput(input);
 		try {
-			Job opJob = engine.jobs().invokeOperation(operation, opInput, ctx);
+			Job opJob = engine.jobs().invokeOperation(operation, opInput, ctx.withCaps(null));
 			ACell result = opJob.awaitResult();
 			return (result != null) ? result : Maps.empty();
 		} catch (Exception e) {
