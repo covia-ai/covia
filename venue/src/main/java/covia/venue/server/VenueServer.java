@@ -61,6 +61,7 @@ public class VenueServer {
 	protected final Config config;
 
 	protected Convex convex;
+	protected AStore store;
 	protected Javalin javalin;
 
 	/** NodeServer manages lattice persistence and (future) replication */
@@ -80,14 +81,15 @@ public class VenueServer {
 		this.convex=null; // TODO:
 
 		// Create NodeServer with Covia lattice (local-only, no network port)
+		// Launch immediately so restore happens before Engine reads the cursor.
 		try {
-			AStore store = createStore(this.config);
+			this.store = createStore(this.config);
 			AKeyPair keyPair = resolveKeyPair(this.config);
 			this.nodeServer = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
-			engine = new Engine(config, nodeServer.getCursor(), keyPair);
-			// Set merge context so propagator can re-sign after OwnerLattice merge
 			nodeServer.setMergeContext(LatticeContext.create(null, keyPair));
-		} catch (IOException e) {
+			nodeServer.launch(); // restore from store BEFORE Engine init
+			engine = new Engine(config, nodeServer.getCursor(), keyPair);
+		} catch (Exception e) {
 			throw new RuntimeException("Failed to create venue engine", e);
 		}
 
@@ -219,13 +221,9 @@ public class VenueServer {
 	 * Start app with specific port
 	 */
 	private synchronized void start(Integer port) {
-		close();
-
-		// Launch NodeServer (restore from store, start propagator)
-		try {
-			nodeServer.launch();
-		} catch (Exception e) {
-			throw new RuntimeException("NodeServer launch failed", e);
+		if (javalin!=null) {
+			javalin.stop();
+			javalin=null;
 		}
 
 		javalin=buildApp();
@@ -251,6 +249,10 @@ public class VenueServer {
 	 */
 	public Engine getEngine() {
 		return engine;
+	}
+
+	public AStore getStore() {
+		return store;
 	}
 
 	
@@ -428,6 +430,9 @@ public class VenueServer {
 	    //}
 	}
 
+	/**
+	 * Full shutdown: stops HTTP server, persists and closes NodeServer and store.
+	 */
 	public void close() {
 		if (javalin!=null) {
 			javalin.stop();
@@ -439,6 +444,10 @@ public class VenueServer {
 			} catch (IOException e) {
 				log.warn("NodeServer close failed", e);
 			}
+		}
+		if (store!=null) {
+			store.close();
+			store=null;
 		}
 	}
 }
