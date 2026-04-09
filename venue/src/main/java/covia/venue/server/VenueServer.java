@@ -24,6 +24,9 @@ import covia.lattice.Covia;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.LocalVenue;
+import convex.dlfs.DLFSDriveManager;
+import convex.dlfs.DLFSWebDAV;
+import covia.adapter.DLFSAdapter;
 import covia.venue.api.A2A;
 import covia.venue.api.CoviaAPI;
 import covia.venue.api.MCP;
@@ -123,6 +126,10 @@ public class VenueServer {
 		
 		Engine.addDemoAssets(server.getEngine());
 		server.getEngine().jobs().recoverJobs();
+
+		// Mount DLFS WebDAV if adapter is registered
+		server.mountDLFSWebDAV();
+
 		return server;
 	}
 
@@ -174,7 +181,41 @@ public class VenueServer {
 	}
 
 	
-	private void addAPIRoutes(Javalin javalin) {	
+	/**
+	 * Mounts DLFS WebDAV routes if the DLFS adapter is registered.
+	 * Creates a DLFSDriveManager that delegates to the adapter's
+	 * lattice-backed drives.
+	 */
+	private void mountDLFSWebDAV() {
+		if (!engine.hasAdapter("dlfs")) return;
+		DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
+
+		// Wrap the adapter's lattice drives as a DLFSDriveManager for WebDAV
+		DLFSDriveManager webdavManager = new DLFSDriveManager() {
+			@Override
+			public java.nio.file.FileSystem getDrive(String identity, String driveName) {
+				if (identity == null) return null;
+				try {
+					return dlfs.getDriveForIdentity(identity, driveName);
+				} catch (Exception e) {
+					log.debug("WebDAV drive access failed for {}: {}", driveName, e.getMessage());
+					return null;
+				}
+			}
+
+			@Override
+			public boolean createDrive(String identity, String driveName) {
+				getDrive(identity, driveName); // auto-creates via DLFS.connect
+				return true;
+			}
+		};
+
+		DLFSWebDAV webdav = new DLFSWebDAV(webdavManager);
+		webdav.addRoutes(javalin);
+		log.info("DLFS WebDAV mounted at /dlfs/");
+	}
+
+	private void addAPIRoutes(Javalin javalin) {
 		api.addRoutes(javalin);
 		userApi.addRoutes(javalin);
 		webApp.addRoutes(javalin);

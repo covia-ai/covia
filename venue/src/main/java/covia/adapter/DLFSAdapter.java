@@ -166,6 +166,14 @@ public class DLFSAdapter extends AAdapter {
 	}
 
 	/**
+	 * Gets or creates a connected DLFS drive for the given DID.
+	 * Public so WebDAV can access drives by identity string.
+	 */
+	public DLFSLocal getDriveForIdentity(String didString, String driveName) {
+		return getDrive(RequestContext.of(Strings.create(didString)), driveName);
+	}
+
+	/**
 	 * Gets or creates a connected DLFS drive for the caller.
 	 */
 	private DLFSLocal getDrive(RequestContext ctx, String driveName) {
