@@ -190,13 +190,18 @@ public class VenueServer {
 		if (!engine.hasAdapter("dlfs")) return;
 		DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
 
-		// Wrap the adapter's lattice drives as a DLFSDriveManager for WebDAV
+		// Wrap the adapter's lattice drives as a DLFSDriveManager for WebDAV.
+		// Unauthenticated requests use the venue's public DID.
+		String publicDID = engine.getDIDString().toString();
 		DLFSDriveManager webdavManager = new DLFSDriveManager() {
+			private String resolveIdentity(String identity) {
+				return (identity != null) ? identity : publicDID;
+			}
+
 			@Override
 			public java.nio.file.FileSystem getDrive(String identity, String driveName) {
-				if (identity == null) return null;
 				try {
-					return dlfs.getDriveForIdentity(identity, driveName);
+					return dlfs.getDriveForIdentity(resolveIdentity(identity), driveName);
 				} catch (Exception e) {
 					log.debug("WebDAV drive access failed for {}: {}", driveName, e.getMessage());
 					return null;
