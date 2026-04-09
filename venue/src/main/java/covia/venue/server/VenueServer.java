@@ -292,35 +292,6 @@ public class VenueServer {
 		DLFSWebDAV webdav = new DLFSWebDAV(webdavManager);
 		webdav.addRoutes(javalin);
 
-		// Root-level DAV discovery for Windows WebClient
-		// Windows sends OPTIONS / then PROPFIND / before navigating to /dlfs/
-		javalin.options("/", ctx -> {
-			ctx.header("DAV", "1, 2");
-			ctx.header("MS-Author-Via", "DAV");
-			ctx.header("Allow", "OPTIONS, GET, HEAD, PROPFIND");
-			ctx.status(200);
-		});
-		javalin.before(ctx -> {
-			if ("PROPFIND".equals(ctx.req().getMethod()) && "/".equals(ctx.path())) {
-				StringBuilder xml = new StringBuilder();
-				xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
-				xml.append("<D:multistatus xmlns:D=\"DAV:\">");
-				xml.append("<D:response><D:href>/</D:href><D:propstat><D:prop>");
-				xml.append("<D:displayname>/</D:displayname>");
-				xml.append("<D:resourcetype><D:collection/></D:resourcetype>");
-				xml.append("</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>");
-				xml.append("<D:response><D:href>/dlfs/</D:href><D:propstat><D:prop>");
-				xml.append("<D:displayname>dlfs</D:displayname>");
-				xml.append("<D:resourcetype><D:collection/></D:resourcetype>");
-				xml.append("</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>");
-				xml.append("</D:multistatus>");
-				ctx.contentType("application/xml; charset=utf-8");
-				ctx.status(207);
-				ctx.result(xml.toString());
-				ctx.skipRemainingHandlers();
-			}
-		});
-
 		log.info("DLFS WebDAV mounted at /dlfs/");
 	}
 

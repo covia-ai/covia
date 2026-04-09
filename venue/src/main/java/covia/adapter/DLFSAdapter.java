@@ -115,13 +115,14 @@ public class DLFSAdapter extends AAdapter {
 	// ==================== Key Management ====================
 
 	/**
-	 * Gets or creates the user's DLFS keypair from the secret store.
-	 * The Ed25519 seed is stored as hex in the DLFS_KEY secret.
+	 * Gets the user's DLFS keypair from the secret store.
+	 * If no key exists, generates one and syncs the venue state (the only grid
+	 * mutation in the DLFS path — secrets are stored in the forked VenueState
+	 * which needs syncState() to merge into the root lattice for persistence).
 	 *
-	 * @return User's DLFS keypair
-	 * @throws IllegalStateException if secret store is unavailable
+	 * @return User's DLFS keypair (never null)
 	 */
-	private AKeyPair getUserKeyPair(RequestContext ctx) {
+	private AKeyPair ensureUserKeyPair(RequestContext ctx) {
 		AString callerDID = ctx.getCallerDID();
 		if (callerDID == null) throw new IllegalArgumentException("Authentication required for DLFS access");
 
@@ -129,19 +130,15 @@ public class DLFSAdapter extends AAdapter {
 		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
 		SecretStore secrets = user.secrets();
 
-		// Check for existing key
+		// Return existing key if present
 		AString existing = secrets.decrypt(DLFS_KEY_SECRET, encKey);
 		if (existing != null) {
-			Blob seed = Blob.fromHex(existing.toString());
-			return AKeyPair.create(seed);
+			return AKeyPair.create(Blob.fromHex(existing.toString()));
 		}
 
-		// Auto-generate a new DLFS key.
-		// secrets.store() writes to the forked VenueState cursor, so we must
-		// sync the venue state to merge it into the root lattice for persistence.
+		// Generate new key and sync venue state (grid mutation)
 		AKeyPair newKey = AKeyPair.generate();
-		String seedHex = newKey.getSeed().toHexString();
-		secrets.store(DLFS_KEY_SECRET, seedHex, encKey);
+		secrets.store(DLFS_KEY_SECRET, newKey.getSeed().toHexString(), encKey);
 		engine.syncState();
 		log.info("Generated DLFS key for user {}", callerDID);
 		return newKey;
@@ -180,7 +177,7 @@ public class DLFSAdapter extends AAdapter {
 	 * Gets or creates a connected DLFS drive for the caller.
 	 */
 	private DLFSLocal getDrive(RequestContext ctx, String driveName) {
-		AKeyPair dlfsKey = getUserKeyPair(ctx);
+		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
 		String cacheKey = dlfsKey.getAccountKey().toHexString() + ":" + driveName;
 
 		return driveCache.computeIfAbsent(cacheKey, k -> {
@@ -194,7 +191,7 @@ public class DLFSAdapter extends AAdapter {
 	 * Lists drive names by inspecting the user's DLFS cursor.
 	 */
 	private AVector<ACell> listDriveNames(RequestContext ctx) {
-		AKeyPair dlfsKey = getUserKeyPair(ctx);
+		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
 		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
 		ACell value = userCursor.get();
 
@@ -279,7 +276,7 @@ public class DLFSAdapter extends AAdapter {
 		if (name == null) throw new IllegalArgumentException("'name' or 'drive' is required");
 
 		// Remove from cache and set null on the lattice cursor to tombstone it
-		AKeyPair dlfsKey = getUserKeyPair(ctx);
+		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
 		String cacheKey = dlfsKey.getAccountKey().toHexString() + ":" + name;
 		driveCache.remove(cacheKey);
 
