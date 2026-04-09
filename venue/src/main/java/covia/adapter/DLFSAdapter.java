@@ -10,34 +10,50 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Base64;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.AccountKey;
+import convex.core.data.Blob;
+import convex.core.data.Index;
+import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import convex.dlfs.DLFSDriveManager;
+import convex.core.util.Utils;
+import convex.lattice.LatticeContext;
+import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.fs.DLFS;
+import convex.lattice.fs.DLFileSystem;
+import convex.lattice.fs.impl.DLFSLocal;
 import covia.api.Fields;
+import covia.lattice.Covia;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.SecretStore;
+import covia.venue.User;
 
 /**
  * DLFS (Decentralised Lattice File System) adapter for the Covia venue.
  *
- * <p>Provides file-system operations on per-user DLFS drives that exist
- * as an independent lattice region — completely outside the venue lattice.
- * Drives have their own CRDT merge semantics (rsync-like, timestamp-wins)
- * and can be synced independently.</p>
+ * <p>Provides file-system operations on per-user DLFS drives backed by the
+ * lattice {@code :dlfs} region (sibling to {@code :grid} in {@link Covia#ROOT}).
+ * Each user's drives are signed with their own Ed25519 key (stored as
+ * {@code DLFS_KEY} in the venue's secret store).</p>
+ *
+ * <p>DLFS is an independent lattice region with its own CRDT merge semantics
+ * (rsync-like, timestamp-wins) and can sync independently from venue state.</p>
  *
  * <h3>Operations</h3>
  * <ul>
@@ -56,13 +72,15 @@ public class DLFSAdapter extends AAdapter {
 	private static final Logger log = LoggerFactory.getLogger(DLFSAdapter.class);
 
 	private static final String ASSETS_PATH = "/adapters/dlfs/";
+	private static final String DLFS_KEY_SECRET = "DLFS_KEY";
 
 	private static final AString FIELD_DRIVE = Strings.intern("drive");
 	private static final AString FIELD_PATH = Strings.intern("path");
 	private static final AString FIELD_NAME = Strings.intern("name");
 	private static final AString FIELD_CONTENT = Strings.intern("content");
 
-	private final DLFSDriveManager driveManager = new DLFSDriveManager();
+	/** Cache of connected DLFS filesystems: "accountKey:driveName" → DLFSLocal */
+	private final ConcurrentHashMap<String, DLFSLocal> driveCache = new ConcurrentHashMap<>();
 
 	@Override
 	public String getName() {
@@ -73,7 +91,7 @@ public class DLFSAdapter extends AAdapter {
 	public String getDescription() {
 		return "Decentralised Lattice File System — self-sovereign file storage with CRDT merge semantics. " +
 			   "Manage per-user drives, read and write files, list directories. " +
-			   "DLFS drives exist as an independent lattice region outside the venue, " +
+			   "DLFS drives exist as an independent lattice region signed by the user's own key, " +
 			   "enabling private, portable health vaults and document storage.";
 	}
 
@@ -90,19 +108,88 @@ public class DLFSAdapter extends AAdapter {
 		log.info("DLFS adapter installed with {} operations", operationNames.count());
 	}
 
+	// ==================== Key Management ====================
+
 	/**
-	 * Gets the caller identity for drive ownership.
+	 * Gets or creates the user's DLFS keypair from the secret store.
+	 * The Ed25519 seed is stored as hex in the DLFS_KEY secret.
+	 *
+	 * @return User's DLFS keypair
+	 * @throws IllegalStateException if secret store is unavailable
 	 */
-	private String getIdentity(RequestContext ctx) {
-		AString did = ctx.getCallerDID();
-		return did != null ? did.toString() : null;
+	private AKeyPair getUserKeyPair(RequestContext ctx) {
+		AString callerDID = ctx.getCallerDID();
+		if (callerDID == null) throw new IllegalArgumentException("Authentication required for DLFS access");
+
+		User user = engine.getVenueState().users().ensure(callerDID);
+		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
+		SecretStore secrets = user.secrets();
+
+		// Check for existing key
+		AString existing = secrets.decrypt(DLFS_KEY_SECRET, encKey);
+		if (existing != null) {
+			Blob seed = Blob.fromHex(existing.toString());
+			return AKeyPair.create(seed);
+		}
+
+		// Auto-generate a new DLFS key
+		AKeyPair newKey = AKeyPair.generate();
+		String seedHex = newKey.getSeed().toHexString();
+		secrets.store(DLFS_KEY_SECRET, seedHex, encKey);
+		log.info("Generated DLFS key for user {}", callerDID);
+		return newKey;
+	}
+
+	// ==================== Drive Access ====================
+
+	/**
+	 * Gets the DLFS cursor for a user's signed region in the :dlfs lattice.
+	 * Navigates root → :dlfs → OwnerLattice(AccountKey) → :value (signed drives map).
+	 * The user's DLFS key is set as signing context before entering the OwnerLattice.
+	 */
+	private ALatticeCursor<?> getUserDLFSCursor(AKeyPair dlfsKey) {
+		// Navigate: root → :dlfs
+		ALatticeCursor<Index<Keyword, ACell>> rootCursor = engine.getRootCursor();
+		ALatticeCursor<?> dlfsCursor = rootCursor.path(Covia.DLFS);
+
+		// Set the USER's signing context (not the venue's) for writes through OwnerLattice
+		LatticeContext lctx = LatticeContext.create(null, dlfsKey);
+		dlfsCursor.withContext(lctx);
+
+		// Navigate into user's signed slot: OwnerLattice → AccountKey → :value
+		AccountKey ak = dlfsKey.getAccountKey();
+		return dlfsCursor.path(ak, convex.core.cvm.Keywords.VALUE);
 	}
 
 	/**
-	 * Resolves a drive for the given caller. Returns null if not found.
+	 * Gets or creates a connected DLFS drive for the caller.
 	 */
-	private FileSystem getDrive(RequestContext ctx, String driveName) {
-		return driveManager.getDrive(getIdentity(ctx), driveName);
+	private DLFSLocal getDrive(RequestContext ctx, String driveName) {
+		AKeyPair dlfsKey = getUserKeyPair(ctx);
+		String cacheKey = dlfsKey.getAccountKey().toHexString() + ":" + driveName;
+
+		return driveCache.computeIfAbsent(cacheKey, k -> {
+			ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
+			AString driveNameStr = Strings.create(driveName);
+			return DLFS.connect(userCursor, driveNameStr);
+		});
+	}
+
+	/**
+	 * Lists drive names by inspecting the user's DLFS cursor.
+	 */
+	private AVector<ACell> listDriveNames(RequestContext ctx) {
+		AKeyPair dlfsKey = getUserKeyPair(ctx);
+		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
+		ACell value = userCursor.get();
+
+		AVector<ACell> names = Vectors.empty();
+		if (value instanceof AMap<?,?> map) {
+			for (var entry : ((AMap<AString,ACell>) map).entrySet()) {
+				names = names.conj(entry.getKey());
+			}
+		}
+		return names;
 	}
 
 	/**
@@ -112,10 +199,11 @@ public class DLFSAdapter extends AAdapter {
 		if (filePath == null || filePath.isEmpty()) {
 			return fs.getRootDirectories().iterator().next();
 		}
-		// Ensure leading slash for DLFS path resolution
 		String p = filePath.startsWith("/") ? filePath : "/" + filePath;
 		return fs.getPath(p);
 	}
+
+	// ==================== Invocation ====================
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
@@ -153,11 +241,7 @@ public class DLFSAdapter extends AAdapter {
 	// ==================== Drive Management ====================
 
 	private ACell handleListDrives(RequestContext ctx) {
-		List<String> drives = driveManager.listDrives(getIdentity(ctx));
-		AVector<ACell> names = Vectors.empty();
-		for (String name : drives) {
-			names = names.conj(Strings.create(name));
-		}
+		AVector<ACell> names = listDriveNames(ctx);
 		return Maps.of("drives", names);
 	}
 
@@ -166,9 +250,10 @@ public class DLFSAdapter extends AAdapter {
 		if (name == null) name = RT.ensureString(input.get(FIELD_DRIVE));
 		if (name == null) throw new IllegalArgumentException("'name' or 'drive' is required");
 
-		boolean created = driveManager.createDrive(getIdentity(ctx), name.toString());
+		// getDrive auto-creates via DLFS.connect() (initialises empty tree if absent)
+		getDrive(ctx, name.toString());
 		return Maps.of(
-			"created", created ? CVMBool.TRUE : CVMBool.FALSE,
+			"created", CVMBool.TRUE,
 			"name", name
 		);
 	}
@@ -178,19 +263,24 @@ public class DLFSAdapter extends AAdapter {
 		if (name == null) name = RT.ensureString(input.get(FIELD_DRIVE));
 		if (name == null) throw new IllegalArgumentException("'name' or 'drive' is required");
 
-		boolean deleted = driveManager.deleteDrive(getIdentity(ctx), name.toString());
-		if (!deleted) throw new IllegalArgumentException("Drive not found: " + name);
+		// Remove from cache and set null on the lattice cursor to tombstone it
+		AKeyPair dlfsKey = getUserKeyPair(ctx);
+		String cacheKey = dlfsKey.getAccountKey().toHexString() + ":" + name;
+		driveCache.remove(cacheKey);
+
+		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
+		ALatticeCursor<?> driveCursor = userCursor.path(name);
+		driveCursor.set(null);
+
 		return Maps.of("deleted", CVMBool.TRUE);
 	}
 
 	// ==================== File Operations ====================
 
-	private FileSystem requireDrive(RequestContext ctx, AMap<AString, ACell> input) {
+	private DLFSLocal requireDrive(RequestContext ctx, AMap<AString, ACell> input) {
 		AString driveCell = RT.ensureString(input.get(FIELD_DRIVE));
 		if (driveCell == null) throw new IllegalArgumentException("'drive' is required");
-		FileSystem fs = getDrive(ctx, driveCell.toString());
-		if (fs == null) throw new IllegalArgumentException("Drive not found: " + driveCell);
-		return fs;
+		return getDrive(ctx, driveCell.toString());
 	}
 
 	private ACell handleList(RequestContext ctx, AMap<AString, ACell> input) throws IOException {

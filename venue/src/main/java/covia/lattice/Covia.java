@@ -15,6 +15,7 @@ import convex.lattice.generic.LWWLattice;
 import convex.lattice.generic.MapLattice;
 import convex.lattice.generic.OwnerLattice;
 import convex.lattice.generic.StringKeyedLattice;
+import convex.lattice.fs.DLFSLattice;
 
 
 /**
@@ -60,6 +61,10 @@ public final class Covia {
 
 	/** Keyword for the grid state at the root level */
 	public static final Keyword GRID = Keyword.intern("grid");
+
+	/** Keyword for the DLFS (Decentralised Lattice File System) region at root level.
+	 *  Independent from venue state — per-user drives signed with user's own key. */
+	public static final Keyword DLFS = Keyword.intern("dlfs");
 
 	// ========== Grid-level keywords ==========
 
@@ -155,16 +160,32 @@ public final class Covia {
 	);
 
 	/**
-	 * Root lattice for Covia venue state.
+	 * Per-user DLFS drives lattice. Each user (AccountKey) signs their own
+	 * drive map. Drives are keyed by name (e.g. "health-vault"), each
+	 * containing a DLFSLattice tree with rsync-like CRDT merge semantics.
+	 */
+	public static final OwnerLattice<?> DLFS_USERS = OwnerLattice.create(
+		MapLattice.create(DLFSLattice.INSTANCE)    // drive-name → DLFS tree
+	);
+
+	/**
+	 * Root lattice for Covia state.
 	 *
-	 * <p>Entry point for all venue state management. Uses nested KeyedLattice
-	 * composition following the same pattern as Convex's {@code Lattice.ROOT}.
+	 * <p>Entry point for all state management. Two sibling regions:</p>
+	 * <ul>
+	 *   <li>{@code :grid} — venue state, signed by the venue's key</li>
+	 *   <li>{@code :dlfs} — per-user DLFS drives, each signed by the user's own key</li>
+	 * </ul>
+	 *
+	 * <p>DLFS is an independent lattice region with its own merge semantics
+	 * and sync logic. It can grow large without affecting venue state sync.</p>
 	 */
 	public static final KeyedLattice ROOT = KeyedLattice.create(
 		GRID, KeyedLattice.create(
 			VENUES, OwnerLattice.create(VENUE),
 			META, CASLattice.create()
-		)
+		),
+		DLFS, DLFS_USERS
 	);
 
 	/**

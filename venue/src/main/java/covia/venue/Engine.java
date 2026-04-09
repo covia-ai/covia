@@ -889,6 +889,15 @@ public class Engine {
 		return venueState;
 	}
 
+	/**
+	 * Gets the root lattice cursor. Used by adapters that need access to
+	 * top-level lattice regions (e.g. DLFSAdapter for the :dlfs region).
+	 */
+	@SuppressWarnings("unchecked")
+	public ALatticeCursor<Index<Keyword, ACell>> getRootCursor() {
+		return lattice;
+	}
+
 	public AString getName() {
 		return config.getName();
 	}

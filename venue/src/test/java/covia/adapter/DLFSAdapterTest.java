@@ -50,9 +50,9 @@ public class DLFSAdapterTest {
 		assertEquals(initialCount + 1, drives.count());
 		assertTrue(drives.toString().contains("health-vault"));
 
-		// Creating same drive again should return created: false
+		// Creating same drive again is idempotent (lattice-backed)
 		result = run("dlfs:createDrive", Maps.of("name", "health-vault"));
-		assertEquals(false, RT.bool(RT.getIn(result, "created")));
+		assertTrue(RT.bool(RT.getIn(result, "created")));
 	}
 
 	@Test
@@ -125,14 +125,15 @@ public class DLFSAdapterTest {
 	@Test
 	public void testDeleteDrive() {
 		run("dlfs:createDrive", Maps.of("name", "test-remove"));
+		run("dlfs:write", Maps.of("drive", "test-remove", "path", "data.txt", "content", "hello"));
 
 		ACell result = run("dlfs:deleteDrive", Maps.of("name", "test-remove"));
 		assertTrue(RT.bool(RT.getIn(result, "deleted")));
 
-		// Drive should be gone — file ops should fail
-		assertThrows(Exception.class, () ->
-			run("dlfs:list", Maps.of("drive", "test-remove"))
-		);
+		// Drive tombstoned on lattice — re-accessing creates a fresh empty drive
+		result = run("dlfs:list", Maps.of("drive", "test-remove"));
+		AVector<?> entries = RT.ensureVector(RT.getIn(result, "entries"));
+		assertEquals(0, entries.count(), "Deleted drive should be empty when re-accessed");
 	}
 
 	@Test
