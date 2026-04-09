@@ -188,6 +188,7 @@ public class VenueServer {
 	 */
 	private void mountDLFSWebDAV() {
 		if (!engine.hasAdapter("dlfs")) return;
+		if (!config.isWebDAVEnabled()) return;
 		DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
 
 		// Wrap the adapter's lattice drives as a DLFSDriveManager for WebDAV.

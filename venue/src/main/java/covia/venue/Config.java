@@ -109,6 +109,11 @@ public class Config {
 	/** Key for base URL override (if not set, derived from hostname + port) */
 	public static final AString BASE_URL = Strings.intern("baseUrl");
 
+	// ========== DLFS config keys ==========
+
+	/** Key for DLFS WebDAV configuration section */
+	public static final AString WEBDAV = Strings.intern("webdav");
+
 	// ========== Server config keys ==========
 
 	/** Key for CORS allowed origins (default: "*" = all) */
@@ -236,6 +241,19 @@ public class Config {
 		CVMLong cv = RT.ensureLong(config.get(MAX_CONTENT_SIZE));
 		if (cv != null) return cv.longValue();
 		return DEFAULT_MAX_CONTENT_SIZE;
+	}
+
+	// ========== DLFS accessors ==========
+
+	/**
+	 * Check if DLFS WebDAV is enabled.
+	 * Requires {"webdav": {"enabled": true}} in config.
+	 * @return true if WebDAV should be mounted
+	 */
+	public boolean isWebDAVEnabled() {
+		AMap<AString, ACell> webdavConfig = RT.ensureMap(config.get(WEBDAV));
+		if (webdavConfig == null) return false;
+		return RT.bool(webdavConfig.get(ENABLED));
 	}
 
 	// ========== Auth accessors ==========

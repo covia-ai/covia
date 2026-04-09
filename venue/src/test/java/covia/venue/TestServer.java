@@ -23,6 +23,7 @@ public class TestServer {
 				Strings.create("port"),0, // ephemeral port
 				Fields.MCP,Maps.of(),
 				Fields.A2A,Maps.of(),
+				Config.WEBDAV,Maps.of(Config.ENABLED,true),
 				Config.AUTH,Maps.of(
 					Config.PUBLIC,Maps.of(Config.ENABLED,true)
 				)));
