@@ -175,13 +175,21 @@ Bridges operations to execution environments:
 | `grid` | Federated grid operations | `run`, `invoke`, `jobStatus`, `jobResult` |
 | `convex` | Convex blockchain | `query`, `transact` |
 | `mcp` | Model Context Protocol | `toolList`, `toolCall` |
-| `langchain` | AI/LLM models | `openai`, `ollama`, `gemini`, `deepseek` |
-| `http` | HTTP requests | `get`, `post` |
+| `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `deepseek` |
+| `http` | HTTP requests (SSRF-protected) | `get`, `post` |
 | `jvm` | JVM utilities | `stringConcat`, `urlEncode`, `urlDecode` |
+| `schema` | JSON Schema operations | `validate`, `validateAll`, `infer`, `coerce`, `check` |
 | `orchestrator` | Multi-step workflows | Custom orchestration |
-| `agent` | Agent lifecycle | `create`, `message`, `run` |
+| `covia` | Lattice CRUD | `read`, `write`, `delete`, `append`, `slice`, `list`, `functions`, `describe`, `adapters`, `inspect` |
+| `asset` | Content-addressed assets | `store`, `get`, `getContent`, `list`, `pin` |
+| `agent` | Agent lifecycle | `create`, `fork`, `request`, `message`, `trigger`, `query`, `list`, `delete`, `suspend`, `resume`, `update`, `cancelTask` |
 | `llmagent` | LLM agent transitions | `chat` |
+| `goaltree` | Goal-tree agent planning | `chat` |
+| `dlfs` | Decentralised file system | `listDrives`, `createDrive`, `deleteDrive`, `list`, `read`, `write`, `mkdir`, `delete` |
+| `vault` | Health vault (DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
 | `secret` | Secret store | `set`, `extract` |
+| `ucan` | Capability tokens | `issue` |
+| `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
 
 ## API Endpoints
 
@@ -275,6 +283,32 @@ ALatticeCursor<Index<Blob, ACell>> jobsCursor = vs.jobs().getCursor();
 - Unit tests in `src/test/java/`
 - Use `Engine.createTemp()` for test instances
 - Asset examples in `src/main/resources/asset-examples/` for validation
+
+## Configuration
+
+### Persistence
+
+Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
+
+```json
+{
+  "store": "/data/venue.etch",
+  "seed": "hex-ed25519-seed"
+}
+```
+
+- `store`: `"temp"` (default, deleted on exit), `"memory"`, or file path
+- `seed`: Ed25519 hex seed for stable venue identity. If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file.
+
+### DLFS WebDAV
+
+```json
+{
+  "webdav": { "enabled": true }
+}
+```
+
+Mounts WebDAV at `/dlfs/` for file access to DLFS drives. Off by default.
 
 ## Build & Run
 

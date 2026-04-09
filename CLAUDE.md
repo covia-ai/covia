@@ -18,7 +18,7 @@ covia/                          # ai.covia:covia:0.0.2-SNAPSHOT (parent POM)
 │       └── grid/impl/          #   Content implementations (BlobContent, LatticeContent)
 ├── venue/                      # Main venue server runtime (produces covia.jar)
 │   └── src/main/java/covia/
-│       ├── adapter/            #   Adapter framework + 12 implementations
+│       ├── adapter/            #   Adapter framework + 18 implementations
 │       ├── lattice/            #   Lattice definitions (Covia.ROOT, Covia.VENUE)
 │       ├── venue/              #   Engine, MainVenue, Config, Auth, LocalVenue
 │       ├── venue/api/          #   REST API (CoviaAPI), MCP, A2A, UserAPI
@@ -103,16 +103,22 @@ Engine (core state, adapters, assets, content, identity)
     |
 Adapter Layer
     ├── GridAdapter       — cross-venue federation (grid:run, grid:invoke)
-    ├── LangChainAdapter  — LLM inference (openai, ollama, gemini, deepseek)
+    ├── LangChainAdapter  — LLM inference (openai, ollama, anthropic, gemini, deepseek)
     ├── MCPAdapter        — MCP tool discovery and invocation
     ├── ConvexAdapter     — blockchain queries and transactions
-    ├── HTTPAdapter       — outbound HTTP requests
+    ├── HTTPAdapter       — outbound HTTP requests (with SSRF protection)
     ├── Orchestrator      — multi-step workflow coordination
     ├── JVMAdapter        — string utilities
+    ├── SchemaAdapter     — JSON Schema validation, inference, coercion
     ├── CoviaAdapter      — lattice CRUD (read, write, delete, append, slice, list, functions, describe)
-    ├── AgentAdapter      — agent lifecycle (create, message, run)
+    ├── AssetAdapter      — content-addressed asset store/retrieve
+    ├── AgentAdapter      — agent lifecycle (create, message, run, fork, templates)
     ├── LLMAgentAdapter   — LLM-backed agent transitions (chat)
-    ├── SecretAdapter      — secret store operations (set, extract)
+    ├── GoalTreeAdapter   — goal-tree agent with structured planning
+    ├── DLFSAdapter       — decentralised file system (per-user signed drives)
+    ├── VaultAdapter      — health vault (thin wrapper over DLFS)
+    ├── SecretAdapter     — secret store operations (set, extract)
+    ├── UCANAdapter       — capability token issuance
     └── TestAdapter       — echo, delay, error simulation, chat
 ```
 
@@ -175,11 +181,11 @@ The engine always resolves operation references to metadata before dispatching �
 }
 ```
 
-## Current State (as of 2026-02)
+## Current State (as of 2026-04)
 
 ### What Works Well
 
-- Clean adapter abstraction with 9 pluggable backends
+- Clean adapter abstraction with 18 pluggable backends
 - Lattice foundation with CRDT merge semantics
 - Content-addressed assets (CAD3 value hash)
 - Async job model with CompletableFuture and SSE
