@@ -3,14 +3,10 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
-import java.nio.file.Files;
-import java.nio.file.Path;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.data.ACell;
-import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
@@ -74,11 +70,6 @@ public class DLFSPersistenceTest {
 			).awaitResult(5000);
 			assertEquals("persistent!", RT.ensureString(RT.getIn(readResult, "content")).toString(),
 				"File should be readable in same session");
-
-			// Now check: does the root cursor's value actually contain the file data?
-			// Print the DLFS region structure for debugging
-			System.out.println("DLFS region type: " + dlfs.getClass().getSimpleName());
-			System.out.println("DLFS region: " + dlfs.toString().substring(0, Math.min(200, dlfs.toString().length())));
 
 			// Sync DLFS drive (triggers root propagator for entire lattice)
 			DLFSAdapter dlfsAdapter1 = (DLFSAdapter) engine.getAdapter("dlfs");

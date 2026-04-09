@@ -27,8 +27,7 @@ public class TestOps {
 			ORCH=Assets.calcID(Utils.readResourceAsString("/asset-examples/orch.json"));
 			GOOGLESEARCH=Assets.calcID(Utils.readResourceAsString("/asset-examples/googlesearch.json"));
 		 } catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+			throw new RuntimeException("Failed to load test asset definitions", e);
 		 }
 	}
 }
