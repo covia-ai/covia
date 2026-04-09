@@ -1,0 +1,37 @@
+2026-04-09T13:27:25.538Z INFO  [main] covia.venue.MainVenue -- Logging configured from default resource: /covia/logback-default.xml
+2026-04-09T13:27:25.825Z INFO  [main] covia.venue.Auth -- Auth: public access enabled, token expiry 86400s, 0 OAuth provider(s)
+2026-04-09T13:27:25.827Z INFO  [main] covia.venue.Engine -- Configuring storage type: lattice
+2026-04-09T13:27:25.953Z ERROR [main] io.javalin.Javalin -- Failed to start Javalin
+Exception in thread "main" io.javalin.util.JavalinBindException: Port already in use. Make sure no other process is using port 8080 and try again.
+	at io.javalin.jetty.JettyServer.start(JettyServer.kt:105)
+	at io.javalin.Javalin.start(Javalin.java:136)
+	at covia.venue.server.VenueServer.start(VenueServer.java:189)
+	at covia.venue.server.VenueServer.start(VenueServer.java:155)
+	at covia.venue.server.VenueServer.start(VenueServer.java:134)
+	at covia.venue.server.VenueServer.launch(VenueServer.java:122)
+	at covia.venue.MainVenue.main(MainVenue.java:68)
+Caused by: java.io.IOException: Failed to bind to 0.0.0.0/0.0.0.0:8080
+	at org.eclipse.jetty.server.ServerConnector.openAcceptChannel(ServerConnector.java:344)
+	at org.eclipse.jetty.server.ServerConnector.open(ServerConnector.java:304)
+	at org.eclipse.jetty.server.Server.lambda$doStart$0(Server.java:402)
+	at java.base/java.util.stream.ForEachOps$ForEachOp$OfRef.accept(ForEachOps.java:186)
+	at java.base/java.util.stream.ReferencePipeline$3$1.accept(ReferencePipeline.java:214)
+	at java.base/java.util.stream.ReferencePipeline$2$1.accept(ReferencePipeline.java:197)
+	at java.base/java.util.Spliterators$ArraySpliterator.forEachRemaining(Spliterators.java:1024)
+	at java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:570)
+	at java.base/java.util.stream.AbstractPipeline.wrapAndCopyInto(AbstractPipeline.java:560)
+	at java.base/java.util.stream.ForEachOps$ForEachOp.evaluateSequential(ForEachOps.java:153)
+	at java.base/java.util.stream.ForEachOps$ForEachOp$OfRef.evaluateSequential(ForEachOps.java:176)
+	at java.base/java.util.stream.AbstractPipeline.evaluate(AbstractPipeline.java:265)
+	at java.base/java.util.stream.ReferencePipeline.forEach(ReferencePipeline.java:632)
+	at org.eclipse.jetty.server.Server.doStart(Server.java:398)
+	at org.eclipse.jetty.util.component.AbstractLifeCycle.start(AbstractLifeCycle.java:93)
+	at io.javalin.jetty.JettyServer.start(JettyServer.kt:97)
+	... 6 more
+Caused by: java.net.BindException: Address already in use: bind
+	at java.base/sun.nio.ch.Net.bind0(Native Method)
+	at java.base/sun.nio.ch.Net.bind(Net.java:522)
+	at java.base/sun.nio.ch.ServerSocketChannelImpl.netBind(ServerSocketChannelImpl.java:335)
+	at java.base/sun.nio.ch.ServerSocketChannelImpl.bind(ServerSocketChannelImpl.java:297)
+	at org.eclipse.jetty.server.ServerConnector.openAcceptChannel(ServerConnector.java:339)
+	... 21 more

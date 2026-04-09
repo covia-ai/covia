@@ -8,9 +8,10 @@
       "type": "object",
       "properties": {
         "path": { "type": "string", "description": "File path within the vault (e.g. 'documents/referral.json')" },
-        "content": { "type": "string", "description": "Text content to write" }
+        "content": { "type": "string", "description": "Text content to write (use this OR asset, not both)" },
+        "asset": { "type": "string", "description": "Asset reference to write as file content (e.g. '/a/0x1234...', DID URL). Streams binary directly." }
       },
-      "required": ["path", "content"]
+      "required": ["path"]
     },
     "output": {
       "type": "object",

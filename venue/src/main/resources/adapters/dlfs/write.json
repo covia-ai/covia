@@ -9,9 +9,10 @@
       "properties": {
         "drive": { "type": "string", "description": "Drive name" },
         "path": { "type": "string", "description": "File path within the drive" },
-        "content": { "type": "string", "description": "Text content to write" }
+        "content": { "type": "string", "description": "Text content to write (use this OR asset, not both)" },
+        "asset": { "type": "string", "description": "Asset reference to write as file content (e.g. '/a/0x1234...', DID URL). Streams binary directly — no size limit." }
       },
-      "required": ["drive", "path", "content"]
+      "required": ["drive", "path"]
     },
     "output": {
       "type": "object",

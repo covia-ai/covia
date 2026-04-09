@@ -1,6 +1,8 @@
 package covia.adapter;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystem;
@@ -32,6 +34,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
+import covia.grid.Asset;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
 import convex.lattice.fs.DLFS;
@@ -78,6 +81,7 @@ public class DLFSAdapter extends AAdapter {
 	private static final AString FIELD_PATH = Strings.intern("path");
 	private static final AString FIELD_NAME = Strings.intern("name");
 	private static final AString FIELD_CONTENT = Strings.intern("content");
+	private static final AString FIELD_ASSET = Strings.intern("asset");
 
 	/** Cache of connected DLFS filesystems: "accountKey:driveName" → DLFSLocal */
 	private final ConcurrentHashMap<String, DLFSLocal> driveCache = new ConcurrentHashMap<>();
@@ -341,18 +345,34 @@ public class DLFSAdapter extends AAdapter {
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 
 		AString contentCell = RT.ensureString(input.get(FIELD_CONTENT));
-		if (contentCell == null) throw new IllegalArgumentException("'content' is required");
+		AString assetRef = RT.ensureString(input.get(FIELD_ASSET));
 
 		Path path = resolvePath(fs, pathCell.toString());
-		byte[] bytes = contentCell.toString().getBytes(StandardCharsets.UTF_8);
 		boolean isNew = !Files.exists(path);
-		Files.write(path, bytes,
-			StandardOpenOption.CREATE,
-			StandardOpenOption.TRUNCATE_EXISTING,
-			StandardOpenOption.WRITE);
+		long written;
+
+		if (assetRef != null) {
+			// Resolve asset reference and stream content to DLFS
+			Asset asset = engine.resolveAsset(assetRef, ctx);
+			if (asset == null) throw new IllegalArgumentException("Asset not found: " + assetRef);
+			try (InputStream is = engine.getContentStream(asset);
+			     OutputStream os = Files.newOutputStream(path,
+			         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+				if (is == null) throw new IllegalArgumentException("Asset has no content: " + assetRef);
+				written = is.transferTo(os);
+			}
+		} else if (contentCell != null) {
+			// Inline text content
+			byte[] bytes = contentCell.toString().getBytes(StandardCharsets.UTF_8);
+			Files.write(path, bytes,
+				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+			written = bytes.length;
+		} else {
+			throw new IllegalArgumentException("Either 'content' (text) or 'asset' (reference) is required");
+		}
 
 		return Maps.of(
-			"written", CVMLong.create(bytes.length),
+			"written", CVMLong.create(written),
 			"created", isNew ? CVMBool.TRUE : CVMBool.FALSE
 		);
 	}
