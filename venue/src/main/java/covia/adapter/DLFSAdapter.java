@@ -136,10 +136,13 @@ public class DLFSAdapter extends AAdapter {
 			return AKeyPair.create(seed);
 		}
 
-		// Auto-generate a new DLFS key
+		// Auto-generate a new DLFS key.
+		// secrets.store() writes to the forked VenueState cursor, so we must
+		// sync the venue state to merge it into the root lattice for persistence.
 		AKeyPair newKey = AKeyPair.generate();
 		String seedHex = newKey.getSeed().toHexString();
 		secrets.store(DLFS_KEY_SECRET, seedHex, encKey);
+		engine.syncState();
 		log.info("Generated DLFS key for user {}", callerDID);
 		return newKey;
 	}

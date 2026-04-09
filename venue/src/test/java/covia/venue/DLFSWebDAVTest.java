@@ -127,4 +127,55 @@ public class DLFSWebDAVTest {
 		HttpResponse<String> res = request("GET", "health-vault/does-not-exist.txt", null);
 		assertEquals(404, res.statusCode());
 	}
+
+	@Test
+	public void testOptionsReturnsDAVHeaders() throws Exception {
+		HttpResponse<String> res = request("OPTIONS", "health-vault/", null);
+		assertEquals(200, res.statusCode());
+
+		String dav = res.headers().firstValue("DAV").orElse("");
+		assertTrue(dav.contains("1"), "DAV header should include class 1");
+		assertTrue(dav.contains("2"), "DAV header should include class 2");
+
+		String msAuthor = res.headers().firstValue("MS-Author-Via").orElse("");
+		assertEquals("DAV", msAuthor, "MS-Author-Via should be DAV");
+
+		String allow = res.headers().firstValue("Allow").orElse("");
+		assertTrue(allow.contains("PROPFIND"), "Allow should include PROPFIND");
+		assertTrue(allow.contains("MKCOL"), "Allow should include MKCOL");
+		assertTrue(allow.contains("PUT"), "Allow should include PUT");
+	}
+
+	@Test
+	public void testOptionsBarePathReturnsDAVHeaders() throws Exception {
+		HttpResponse<String> res = request("OPTIONS", "", null);
+		assertEquals(200, res.statusCode());
+
+		String dav = res.headers().firstValue("DAV").orElse("");
+		assertTrue(dav.contains("1"), "DAV header should include class 1 on bare /dlfs path");
+	}
+
+	@Test
+	public void testWriteReachesRootCursor() throws Exception {
+		// Write via WebDAV
+		HttpResponse<String> putRes = request("PUT", "health-vault/sync-verify.txt", "verify sync");
+		assertEquals(201, putRes.statusCode());
+
+		// The root cursor should have DLFS data with the file content
+		var rootValue = TestServer.SERVER.getEngine().getRootCursor().get();
+		assertNotNull(rootValue, "Root cursor should have value");
+		var dlfsRegion = rootValue.get(convex.core.data.Keyword.intern("dlfs"));
+		assertNotNull(dlfsRegion, ":dlfs region should exist in root after WebDAV PUT");
+	}
+
+	@Test
+	public void testPropfindReturnsMultistatus() throws Exception {
+		// Ensure at least one file exists
+		request("PUT", "health-vault/propfind-test.txt", "content");
+
+		HttpResponse<String> res = request("PROPFIND", "health-vault/", null);
+		assertEquals(207, res.statusCode(), "PROPFIND should return 207 Multi-Status");
+		assertTrue(res.body().contains("multistatus"), "Response should be WebDAV multistatus XML");
+		assertTrue(res.body().contains("propfind-test.txt"), "Response should list the test file");
+	}
 }

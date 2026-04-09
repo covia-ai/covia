@@ -30,6 +30,21 @@ public class Config {
 	/** Key for Convex peer configuration */
 	public static final AString CONVEX = Strings.intern("convex");
 
+	// ========== Lattice store config keys ==========
+
+	/**
+	 * Key for lattice store path.
+	 * <ul>
+	 *   <li>{@code "temp"} (default) — temporary store, deleted on exit</li>
+	 *   <li>{@code "memory"} — in-memory only, no persistence</li>
+	 *   <li>File path — persistent Etch store at that location</li>
+	 * </ul>
+	 */
+	public static final AString STORE = Strings.intern("store");
+
+	/** Key for venue identity seed (Ed25519, 32-byte hex string). */
+	public static final AString SEED = Strings.intern("seed");
+
 	// ========== Venue config keys ==========
 
 	/** Key for venue name */
@@ -203,6 +218,26 @@ public class Config {
 			return scheme + "://" + host;
 		}
 		return scheme + "://" + host + ":" + port;
+	}
+
+	// ========== Lattice store accessor ==========
+
+	/**
+	 * Get the lattice store path.
+	 * @return Store path string: "temp" (default), "memory", or a file path
+	 */
+	public String getStore() {
+		AString storeVal = RT.ensureString(config.get(STORE));
+		return (storeVal != null) ? storeVal.toString() : "temp";
+	}
+
+	/**
+	 * Get the venue identity seed (Ed25519, 32-byte hex).
+	 * @return Hex seed string, or null if not configured
+	 */
+	public String getSeed() {
+		AString seedVal = RT.ensureString(config.get(SEED));
+		return (seedVal != null) ? seedVal.toString() : null;
 	}
 
 	// ========== Storage accessors ==========

@@ -5,13 +5,19 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Index;
+import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
+import convex.lattice.cursor.ALatticeCursor;
+import covia.lattice.Covia;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 
@@ -134,6 +140,45 @@ public class DLFSAdapterTest {
 		result = run("dlfs:list", Maps.of("drive", "test-remove"));
 		AVector<?> entries = RT.ensureVector(RT.getIn(result, "entries"));
 		assertEquals(0, entries.count(), "Deleted drive should be empty when re-accessed");
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testWriteReachesRootCursor() {
+		// Write a file via DLFS adapter
+		run("dlfs:write", Maps.of("drive", "sync-test", "path", "hello.txt", "content", "sync check"));
+
+		// Verify the root cursor has DLFS data
+		ALatticeCursor<Index<Keyword, ACell>> root = engine.getRootCursor();
+		ACell dlfsRegion = root.get().get(Covia.DLFS);
+		assertNotNull(dlfsRegion, "Root cursor should have :dlfs region after DLFS write");
+	}
+
+	@Test
+	public void testDLFSSyncReachesRootOnSyncCallback() {
+		// Hook an onSync callback on the root cursor (simulates NodeServer propagator)
+		ALatticeCursor<Index<Keyword, ACell>> root = engine.getRootCursor();
+		AtomicInteger syncCount = new AtomicInteger();
+		if (root instanceof convex.lattice.cursor.RootLatticeCursor<?> rlc) {
+			rlc.onSync(value -> { syncCount.incrementAndGet(); return value; });
+		} else {
+			fail("Engine root cursor should be a RootLatticeCursor, was: " + root.getClass().getName());
+		}
+
+		// Write via adapter
+		run("dlfs:write", Maps.of("drive", "sync-cb-test", "path", "test.txt", "content", "callback check"));
+
+		// Adapter write alone shouldn't trigger onSync
+		int beforeSync = syncCount.get();
+
+		// Now get the drive and sync it (simulates what syncDrive() in WebDAV does)
+		DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
+		var drive = dlfs.getDriveForIdentity(ALICE_DID.toString(), "sync-cb-test");
+		drive.sync();
+
+		assertTrue(syncCount.get() > beforeSync,
+			"DLFSLocal.sync() should trigger root cursor onSync callback, " +
+			"but syncCount went from " + beforeSync + " to " + syncCount.get());
 	}
 
 	@Test

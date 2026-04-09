@@ -1,6 +1,9 @@
 package covia.venue.server;
 
+import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import org.eclipse.jetty.server.ServerConnector;
 import org.slf4j.Logger;
@@ -14,6 +17,8 @@ import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.crypto.AKeyPair;
+import convex.core.data.Blob;
 import convex.core.store.AStore;
 import convex.etch.EtchStore;
 import convex.lattice.LatticeContext;
@@ -76,11 +81,12 @@ public class VenueServer {
 
 		// Create NodeServer with Covia lattice (local-only, no network port)
 		try {
-			AStore store = EtchStore.createTemp();
+			AStore store = createStore(this.config);
+			AKeyPair keyPair = resolveKeyPair(this.config);
 			this.nodeServer = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
-			engine = new Engine(config, nodeServer.getCursor());
+			engine = new Engine(config, nodeServer.getCursor(), keyPair);
 			// Set merge context so propagator can re-sign after OwnerLattice merge
-			nodeServer.setMergeContext(LatticeContext.create(null, engine.getKeyPair()));
+			nodeServer.setMergeContext(LatticeContext.create(null, keyPair));
 		} catch (IOException e) {
 			throw new RuntimeException("Failed to create venue engine", e);
 		}
@@ -103,7 +109,74 @@ public class VenueServer {
 	}
 
 	/**
-	 * Launch a Venue server with the specified config. 
+	 * Creates an AStore based on the "store" config value.
+	 * <ul>
+	 *   <li>{@code "temp"} (default) — temporary Etch store, deleted on exit</li>
+	 *   <li>{@code "memory"} — in-memory store, no persistence</li>
+	 *   <li>File path — persistent Etch store at that location</li>
+	 * </ul>
+	 */
+	private static AStore createStore(Config config) throws IOException {
+		String storePath = config.getStore();
+		if ("memory".equals(storePath)) {
+			log.info("Using in-memory store (no persistence)");
+			return new convex.core.store.MemoryStore();
+		}
+		if ("temp".equals(storePath)) {
+			log.info("Using temporary Etch store (deleted on exit)");
+			return EtchStore.createTemp();
+		}
+		// Persistent file store
+		File f = new File(storePath).getAbsoluteFile();
+		f.getParentFile().mkdirs();
+		log.info("Using persistent Etch store: {}", f);
+		return EtchStore.create(f);
+	}
+
+	/**
+	 * Resolves the venue identity keypair from config or key file.
+	 * <ol>
+	 *   <li>Config {@code "seed"} — explicit hex seed (32 bytes)</li>
+	 *   <li>Key file next to store — auto-persisted on first run</li>
+	 *   <li>Generate new — ephemeral (temp store) or saved to key file (persistent store)</li>
+	 * </ol>
+	 */
+	private static AKeyPair resolveKeyPair(Config config) throws IOException {
+		// 1. Explicit seed in config
+		String seedHex = config.getSeed();
+		if (seedHex != null) {
+			AKeyPair kp = AKeyPair.create(Blob.fromHex(seedHex));
+			log.info("Using venue identity from config seed: {}", kp.getAccountKey());
+			return kp;
+		}
+
+		// 2. Key file next to store (only for persistent stores)
+		String storePath = config.getStore();
+		if (!"temp".equals(storePath) && !"memory".equals(storePath)) {
+			Path keyFile = Path.of(storePath).resolveSibling("venue.key");
+			if (Files.exists(keyFile)) {
+				String hex = Files.readString(keyFile).trim();
+				AKeyPair kp = AKeyPair.create(Blob.fromHex(hex));
+				log.info("Using venue identity from key file: {}", kp.getAccountKey());
+				return kp;
+			}
+
+			// 3. Generate and save to key file
+			AKeyPair kp = AKeyPair.generate();
+			keyFile.getParent().toFile().mkdirs();
+			Files.writeString(keyFile, kp.getSeed().toHexString());
+			log.info("Generated venue identity (saved to {}): {}", keyFile, kp.getAccountKey());
+			return kp;
+		}
+
+		// Ephemeral store — generate without saving
+		AKeyPair kp = AKeyPair.generate();
+		log.info("Generated ephemeral venue identity: {}", kp.getAccountKey());
+		return kp;
+	}
+
+	/**
+	 * Launch a Venue server with the specified config.
 	 * @param config Config, or null for default test config.
 	 * @return Launched Venue Server instance
 	 */
@@ -218,6 +291,36 @@ public class VenueServer {
 
 		DLFSWebDAV webdav = new DLFSWebDAV(webdavManager);
 		webdav.addRoutes(javalin);
+
+		// Root-level DAV discovery for Windows WebClient
+		// Windows sends OPTIONS / then PROPFIND / before navigating to /dlfs/
+		javalin.options("/", ctx -> {
+			ctx.header("DAV", "1, 2");
+			ctx.header("MS-Author-Via", "DAV");
+			ctx.header("Allow", "OPTIONS, GET, HEAD, PROPFIND");
+			ctx.status(200);
+		});
+		javalin.before(ctx -> {
+			if ("PROPFIND".equals(ctx.req().getMethod()) && "/".equals(ctx.path())) {
+				StringBuilder xml = new StringBuilder();
+				xml.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+				xml.append("<D:multistatus xmlns:D=\"DAV:\">");
+				xml.append("<D:response><D:href>/</D:href><D:propstat><D:prop>");
+				xml.append("<D:displayname>/</D:displayname>");
+				xml.append("<D:resourcetype><D:collection/></D:resourcetype>");
+				xml.append("</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>");
+				xml.append("<D:response><D:href>/dlfs/</D:href><D:propstat><D:prop>");
+				xml.append("<D:displayname>dlfs</D:displayname>");
+				xml.append("<D:resourcetype><D:collection/></D:resourcetype>");
+				xml.append("</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>");
+				xml.append("</D:multistatus>");
+				ctx.contentType("application/xml; charset=utf-8");
+				ctx.status(207);
+				ctx.result(xml.toString());
+				ctx.skipRemainingHandlers();
+			}
+		});
+
 		log.info("DLFS WebDAV mounted at /dlfs/");
 	}
 
@@ -287,7 +390,7 @@ public class VenueServer {
 			ctx.status(500);
 		});
 		
-		app.options("/*", ctx-> {
+		app.options("/api/*", ctx-> {
 			ctx.status(204);
 			ctx.removeHeader("Content-type");
 			ctx.header("access-control-allow-headers", "content-type, authorization, x-covia-user");
@@ -305,6 +408,7 @@ public class VenueServer {
 			ctx.header("access-control-allow-private-network", "true");
 		});
 
+		// Sync lattice state after API mutations to trigger persistence
 		// Sync lattice state after API mutations to trigger persistence
 		app.after("/api/*", ctx -> engine.syncState());
 
