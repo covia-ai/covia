@@ -843,21 +843,26 @@ public class AgentAdapterTest {
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Submit without wait — should return immediately with task job status
+		// Submit request — the Job stays STARTED until the agent processes the task.
+		// The standard Job lifecycle handles sync vs async from the caller's side:
+		// - Sync: caller calls awaitResult() which blocks until the run loop completes it
+		// - Async: caller checks job status and polls later
 		Job requestJob = engine.jobs().invokeOperation(
 			"agent:request",
 			Maps.of(Fields.AGENT_ID, "async-agent", Fields.INPUT, Maps.of("data", "async")),
 			RequestContext.of(ALICE_DID));
 
-		ACell result = requestJob.awaitResult(5000);
-		assertNotNull(result, "Async request should complete immediately");
-		assertTrue(requestJob.isComplete(), "Request job should be COMPLETE");
+		// Job should be in STARTED state immediately (not COMPLETE with PENDING)
+		assertFalse(requestJob.isFinished(), "Job should not be finished immediately after submission");
 
-		// Result is the task job data — status may be STARTED (agent hasn't run yet)
-		ACell taskStatus = RT.getIn(result, Fields.STATUS);
-		assertNotNull(taskStatus, "Result should contain task job status");
-		ACell taskId = RT.getIn(result, Fields.ID);
-		assertNotNull(taskId, "Result should contain task job ID");
+		// Now wait for the result — the run loop will complete it
+		ACell result = requestJob.awaitResult(5000);
+		assertNotNull(result, "Request should eventually complete");
+		assertTrue(requestJob.isComplete(), "Request job should be COMPLETE after agent processes it");
+
+		// Result should contain the task output
+		ACell output = RT.getIn(result, Fields.OUTPUT);
+		assertNotNull(output, "Result should contain task output");
 	}
 
 	@Test
@@ -962,6 +967,96 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("multi-agent");
 		assertEquals(0, agent.getTasks().count(), "All tasks should be cleared");
+	}
+
+	// ========== agent:request — sync/async consistency ==========
+
+	@Test
+	public void testRequestSyncViaAwaitResult() {
+		// The standard sync pattern: invokeOperation + awaitResult.
+		// No 'wait' param needed — the Job lifecycle handles blocking.
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "sync-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation(
+			"agent:request",
+			Maps.of(Fields.AGENT_ID, "sync-agent", Fields.INPUT, Maps.of("q", "test")),
+			RequestContext.of(ALICE_DID));
+
+		// Job is not yet finished
+		assertFalse(job.isFinished());
+
+		// awaitResult blocks until the run loop completes the Job
+		ACell result = job.awaitResult(5000);
+		assertNotNull(result);
+		assertTrue(job.isComplete());
+
+		// Output is the task result
+		ACell output = RT.getIn(result, Fields.OUTPUT);
+		assertNotNull(output, "Sync result should contain task output");
+	}
+
+	@Test
+	public void testRequestAsyncViaPoll() {
+		// The standard async pattern: invokeOperation, return immediately, poll later.
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "poll-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation(
+			"agent:request",
+			Maps.of(Fields.AGENT_ID, "poll-agent", Fields.INPUT, Maps.of("q", "poll")),
+			RequestContext.of(ALICE_DID));
+
+		// Job is STARTED, not COMPLETE — async client can return this to the caller
+		assertEquals(Status.STARTED, job.getStatus());
+		assertFalse(job.isFinished());
+
+		// Simulate polling: wait then check
+		job.awaitResult(5000);
+		assertTrue(job.isComplete(), "Job should be complete after agent processes the task");
+
+		// Can retrieve the result via getOutput after polling
+		ACell output = job.getOutput();
+		assertNotNull(output, "Polling should retrieve the output");
+	}
+
+	@Test
+	public void testRequestWaitParamIgnored() {
+		// The 'wait' parameter in the input is now irrelevant — both paths produce
+		// the same Job lifecycle. Verify that wait:true and no-wait behave identically.
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "wait-ignored-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// With wait:true
+		Job withWait = engine.jobs().invokeOperation(
+			"agent:request",
+			Maps.of(Fields.AGENT_ID, "wait-ignored-agent",
+				Fields.INPUT, Maps.of("q", "a"), Fields.WAIT, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		ACell r1 = withWait.awaitResult(5000);
+
+		// Without wait
+		Job withoutWait = engine.jobs().invokeOperation(
+			"agent:request",
+			Maps.of(Fields.AGENT_ID, "wait-ignored-agent",
+				Fields.INPUT, Maps.of("q", "b")),
+			RequestContext.of(ALICE_DID));
+		ACell r2 = withoutWait.awaitResult(5000);
+
+		// Both should complete with task output
+		assertTrue(withWait.isComplete());
+		assertTrue(withoutWait.isComplete());
+		assertNotNull(RT.getIn(r1, Fields.OUTPUT), "wait:true should have output");
+		assertNotNull(RT.getIn(r2, Fields.OUTPUT), "no wait should have output");
 	}
 
 	// ========== agent:query ==========

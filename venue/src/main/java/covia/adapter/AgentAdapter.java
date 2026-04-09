@@ -62,6 +62,9 @@ public class AgentAdapter extends AAdapter {
 	/** Active transition job per agent — allows suspend to cancel running transitions */
 	private final ConcurrentHashMap<String, Job> activeTransitions = new ConcurrentHashMap<>();
 
+	/** Pending task Jobs — taskIdHex → Job. Completed by the run loop when taskResults arrive. */
+	private final ConcurrentHashMap<String, Job> pendingTaskJobs = new ConcurrentHashMap<>();
+
 	/** Counter for task ID generation */
 	private long taskIdCounter = 0;
 
@@ -312,28 +315,21 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
 
-		long waitMs = parseWaitMs(input);
-
-		// Add task to agent's lattice (atomic)
+		// Add task to agent's lattice
 		Blob taskId = generateTaskId();
 		ACell taskInput = RT.getIn(input, Fields.INPUT);
 		agent.addTask(taskId, taskInput);
 
-		// Wake agent — returns the run cycle's completion future
-		CompletableFuture<ACell> completion = wakeAgent(agentId, ctx);
-
+		// Register this Job to be completed by the run loop when the task result arrives.
+		// The Job stays in STARTED state — the standard Job lifecycle (REST ?wait, SDK
+		// job.result()) handles sync vs async from the caller's perspective.
 		AString taskIdHex = taskIdHex(taskId);
-		ACell pending = Maps.of(Fields.ID, taskIdHex, Fields.STATUS, PENDING);
-		awaitRunCompletion(job, completion, waitMs, pending, cycleResult -> {
-			ACell taskResult = RT.getIn(cycleResult, Fields.TASK_RESULTS, taskIdHex);
-			if (taskResult != null) {
-				return Maps.of(
-					Fields.ID, taskIdHex,
-					Fields.STATUS, RT.getIn(taskResult, Fields.STATUS),
-					Fields.OUTPUT, RT.getIn(taskResult, Fields.OUTPUT));
-			}
-			return pending;
-		});
+		job.setStatus(Status.STARTED);
+		pendingTaskJobs.put(taskIdHex.toString(), job);
+
+		// Wake agent to process the task — force=true because we just added a task
+		// that may not yet be visible via cursor.get() (lattice write race)
+		wakeAgent(agentId, ctx, true);
 	}
 
 	private void handleMessage(Job job, ACell input, RequestContext ctx) {
@@ -633,10 +629,14 @@ public class AgentAdapter extends AAdapter {
 	 * can't run). Package-private so LLMAgentAdapter can call it.
 	 */
 	CompletableFuture<ACell> wakeAgent(AString agentId, RequestContext ctx) {
+		return wakeAgent(agentId, ctx, false);
+	}
+
+	CompletableFuture<ACell> wakeAgent(AString agentId, RequestContext ctx, boolean force) {
 		AgentState agent = getAgent(ctx.getCallerDID(), agentId);
 		if (agent == null) return null;
 		agent.setWakeTime(Utils.getCurrentTimestamp());
-		return tryStartRun(agentId, ctx, false);
+		return tryStartRun(agentId, ctx, force);
 	}
 
 	/**
@@ -789,9 +789,25 @@ public class AgentAdapter extends AAdapter {
 				}
 			}
 
-			// Merge results atomically
+			// Merge results atomically (timeline, state, task cleanup)
 			AMap<AString, ACell> merged = agent.mergeRunResult(
 				newState, inbox.count(), tasks, taskResults, timelineEntry);
+
+			// Complete pending request Jobs AFTER the merge so timeline and state
+			// are visible when the caller's awaitResult returns
+			if (taskResults != null) {
+				for (var entry : taskResults.entrySet()) {
+					String taskKey = entry.getKey().toString();
+					Job pendingJob = pendingTaskJobs.remove(taskKey);
+					if (pendingJob != null) {
+						ACell taskResult = entry.getValue();
+						pendingJob.completeWith(Maps.of(
+							Fields.ID, entry.getKey(),
+							Fields.STATUS, RT.getIn(taskResult, Fields.STATUS),
+							Fields.OUTPUT, RT.getIn(taskResult, Fields.OUTPUT)));
+					}
+				}
+			}
 
 			lastResult = Maps.of(
 				Fields.AGENT_ID, agentId,
@@ -808,6 +824,7 @@ public class AgentAdapter extends AAdapter {
 		}
 		} catch (Exception e) {
 			suspendOnError(callerDID, agentId, e);
+			failPendingTaskJobs(callerDID, agentId, e.getMessage());
 			completeRunExceptionally(completion, agentId, e.getMessage());
 		}
 	}
@@ -870,6 +887,25 @@ public class AgentAdapter extends AAdapter {
 			AString agentId, String message) {
 		runCompletions.remove(agentId.toString(), completion);
 		completion.completeExceptionally(new RuntimeException(message));
+	}
+
+	/**
+	 * Fails pending task Jobs for the given agent. Called when the agent
+	 * suspends — the agent can't process tasks in this state, so callers
+	 * waiting on results should be unblocked with a failure.
+	 */
+	private void failPendingTaskJobs(AString callerDID, AString agentId, String error) {
+		AgentState agent = getAgent(callerDID, agentId);
+		if (agent == null) return;
+		Index<Blob, ACell> tasks = agent.getTasks();
+		if (tasks == null) return;
+		for (var entry : tasks.entrySet()) {
+			String taskKey = taskIdHex(entry.getKey()).toString();
+			Job pending = pendingTaskJobs.remove(taskKey);
+			if (pending != null) {
+				pending.fail(error);
+			}
+		}
 	}
 
 	private void suspendOnError(AString callerDID, AString agentId, Exception e) {

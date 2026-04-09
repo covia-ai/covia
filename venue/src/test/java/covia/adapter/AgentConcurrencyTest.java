@@ -341,22 +341,20 @@ public class AgentConcurrencyTest {
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "conc-req",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Submit two requests concurrently
+		// Submit two requests concurrently — both block via awaitResult
 		CompletableFuture<ACell> f1 = CompletableFuture.supplyAsync(() ->
 			engine.jobs().invokeOperation("agent:request",
 				Maps.of(Fields.AGENT_ID, "conc-req",
-					Fields.INPUT, Maps.of("task", "one"),
-					Fields.WAIT, CVMBool.TRUE),
+					Fields.INPUT, Maps.of("task", "one")),
 				RequestContext.of(ALICE_DID)).awaitResult(10000));
 
 		CompletableFuture<ACell> f2 = CompletableFuture.supplyAsync(() ->
 			engine.jobs().invokeOperation("agent:request",
 				Maps.of(Fields.AGENT_ID, "conc-req",
-					Fields.INPUT, Maps.of("task", "two"),
-					Fields.WAIT, CVMBool.TRUE),
+					Fields.INPUT, Maps.of("task", "two")),
 				RequestContext.of(ALICE_DID)).awaitResult(10000));
 
 		ACell r1 = f1.join();
@@ -365,14 +363,11 @@ public class AgentConcurrencyTest {
 		assertNotNull(r1, "First request should complete");
 		assertNotNull(r2, "Second request should complete");
 
-		// Both tasks were submitted. test:echo doesn't produce taskResults,
-		// so they remain pending — the key assertion is that both concurrent
-		// submissions didn't crash or corrupt agent state.
+		// Both tasks should have been processed and cleared
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("conc-req");
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
-		assertEquals(2, agent.getTasks().count(),
-			"Both tasks should be in the agent (test:echo doesn't process tasks)");
+		assertEquals(0, agent.getTasks().count(), "All tasks should be processed");
 		assertTrue(agent.getTimeline().count() >= 1, "At least one run loop should have executed");
 	}
 
