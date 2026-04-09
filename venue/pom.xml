@@ -93,6 +93,11 @@
 		</dependency>
 		<dependency>
 			<groupId>world.convex</groupId>
+			<artifactId>convex-dlfs</artifactId>
+			<version>${convex.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>world.convex</groupId>
 			<artifactId>convex-java</artifactId>
 			<version>${convex.version}</version>
 		</dependency>

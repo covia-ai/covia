@@ -1,0 +1,22 @@
+{
+  "name": "Delete DLFS File",
+  "description": "Delete a file or empty directory from a DLFS drive.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "dlfs:delete",
+    "input": {
+      "type": "object",
+      "properties": {
+        "drive": { "type": "string", "description": "Drive name" },
+        "path": { "type": "string", "description": "File or directory path to delete" }
+      },
+      "required": ["drive", "path"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "deleted": { "type": "boolean" }
+      }
+    }
+  }
+}

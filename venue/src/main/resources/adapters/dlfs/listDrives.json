@@ -1,0 +1,15 @@
+{
+  "name": "List DLFS Drives",
+  "description": "List all DLFS drives owned by the caller. Returns an array of drive names.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "dlfs:listDrives",
+    "input": { "type": "object", "properties": {} },
+    "output": {
+      "type": "object",
+      "properties": {
+        "drives": { "type": "array", "items": { "type": "string" }, "description": "Drive names" }
+      }
+    }
+  }
+}

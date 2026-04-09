@@ -53,6 +53,7 @@ import covia.adapter.LLMAgentAdapter;
 import covia.adapter.MCPAdapter;
 import covia.adapter.Orchestrator;
 import covia.adapter.SecretAdapter;
+import covia.adapter.DLFSAdapter;
 import covia.adapter.UCANAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
@@ -255,6 +256,7 @@ public class Engine {
 		venue.registerAdapter(new AgentAdapter());
 		venue.registerAdapter(new SecretAdapter());
 		venue.registerAdapter(new UCANAdapter());
+		venue.registerAdapter(new DLFSAdapter());
 		venue.registerAdapter(new LLMAgentAdapter());
 		venue.registerAdapter(new covia.adapter.agent.GoalTreeAdapter());
 	}

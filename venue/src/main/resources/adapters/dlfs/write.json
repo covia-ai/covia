@@ -1,0 +1,24 @@
+{
+  "name": "Write DLFS File",
+  "description": "Write text content to a file in a DLFS drive. Creates the file if it does not exist; overwrites if it does. Parent directories must already exist — use dlfs:mkdir first if needed.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "dlfs:write",
+    "input": {
+      "type": "object",
+      "properties": {
+        "drive": { "type": "string", "description": "Drive name" },
+        "path": { "type": "string", "description": "File path within the drive" },
+        "content": { "type": "string", "description": "Text content to write" }
+      },
+      "required": ["drive", "path", "content"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "written": { "type": "integer", "description": "Bytes written" },
+        "created": { "type": "boolean", "description": "True if file was newly created" }
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "List DLFS Directory",
+  "description": "List directory contents in a DLFS drive. Returns entries with name, type (file/directory), and size. Omit path to list the drive root.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "dlfs:list",
+    "input": {
+      "type": "object",
+      "properties": {
+        "drive": { "type": "string", "description": "Drive name" },
+        "path": { "type": "string", "description": "Directory path (omit for root)" }
+      },
+      "required": ["drive"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "type": { "type": "string" },
+              "size": { "type": "integer" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

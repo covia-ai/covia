@@ -1,0 +1,22 @@
+{
+  "name": "Create DLFS Directory",
+  "description": "Create a directory in a DLFS drive. Parent directories must already exist.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "dlfs:mkdir",
+    "input": {
+      "type": "object",
+      "properties": {
+        "drive": { "type": "string", "description": "Drive name" },
+        "path": { "type": "string", "description": "Directory path to create" }
+      },
+      "required": ["drive", "path"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "created": { "type": "boolean" }
+      }
+    }
+  }
+}
