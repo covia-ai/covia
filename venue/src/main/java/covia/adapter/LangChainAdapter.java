@@ -40,6 +40,7 @@ import dev.langchain4j.model.chat.request.json.JsonNumberSchema;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import dev.langchain4j.model.chat.request.json.JsonSchemaElement;
 import dev.langchain4j.model.chat.request.json.JsonStringSchema;
+import dev.langchain4j.model.anthropic.AnthropicChatModel;
 import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 
@@ -112,8 +113,9 @@ public class LangChainAdapter extends AAdapter {
 	@Override
 	public void installAssets() {
 		// Canonical operations — one per adapter route
-		installAsset("/adapters/langchain/openai.json");   // langchain:openai (OpenAI-compatible)
-		installAsset("/adapters/langchain/ollama.json");    // langchain:ollama (local Ollama)
+		installAsset("/adapters/langchain/openai.json");      // langchain:openai (OpenAI-compatible)
+		installAsset("/adapters/langchain/ollama.json");     // langchain:ollama (local Ollama)
+		installAsset("/adapters/langchain/anthropic.json");  // langchain:anthropic (native Anthropic API)
 
 		// Example configurations — distinct adapter references for the operation registry
 		installAsset("/asset-examples/qwen.json");          // langchain:ollama:qwen3
@@ -204,6 +206,10 @@ public class LangChainAdapter extends AAdapter {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.openai.com/v1";
 			String model = (modelName != null) ? modelName : "gpt-3.5-turbo";
 			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
+		} else if ("anthropic".equals(provider)) {
+			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.anthropic.com/v1/";
+			String model = (modelName != null) ? modelName : "claude-sonnet-4-5-20250514";
+			return buildAnthropicModel(apiKey, baseUrl, model, IO_TIMEOUT);
 		}
 		return null;
 	}
@@ -220,6 +226,17 @@ public class LangChainAdapter extends AAdapter {
 
 	static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout) {
 		return OpenAiChatModel.builder()
+			.apiKey(apiKey)
+			.baseUrl(baseUrl)
+			.logRequests(true)
+			.logResponses(true)
+			.modelName(model)
+			.timeout(timeout)
+			.build();
+	}
+
+	static ChatModel buildAnthropicModel(String apiKey, String baseUrl, String model, Duration timeout) {
+		return AnthropicChatModel.builder()
 			.apiKey(apiKey)
 			.baseUrl(baseUrl)
 			.logRequests(true)

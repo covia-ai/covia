@@ -1,0 +1,29 @@
+{
+  "name": "Anthropic Chat",
+  "description": "Chat with Anthropic Claude models using the native Anthropic API. Supports system prompts, tools, and structured output.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "langchain:anthropic",
+    "input": {
+      "type": "object",
+      "properties": {
+        "prompt": { "type": "string", "description": "User prompt (simple mode)" },
+        "messages": { "type": "array", "description": "Chat messages (advanced mode)" },
+        "model": { "type": "string", "description": "Model name (default: claude-sonnet-4-5-20250514)" },
+        "apiKey": { "type": "string", "description": "Anthropic API key" },
+        "url": { "type": "string", "description": "API base URL (default: https://api.anthropic.com/v1/)" },
+        "systemPrompt": { "type": "string", "description": "System prompt" },
+        "tools": { "type": "array", "description": "Tool definitions" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "role": { "type": "string" },
+        "content": { "type": "string" },
+        "toolCalls": { "type": "array" }
+      }
+    },
+    "secretFields": ["apiKey"]
+  }
+}
