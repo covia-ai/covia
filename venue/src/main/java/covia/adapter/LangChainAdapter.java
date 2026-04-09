@@ -208,7 +208,7 @@ public class LangChainAdapter extends AAdapter {
 			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
 		} else if ("anthropic".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.anthropic.com/v1/";
-			String model = (modelName != null) ? modelName : "claude-sonnet-4-5-20250514";
+			String model = (modelName != null) ? modelName : "claude-sonnet-4-20250514";
 			return buildAnthropicModel(apiKey, baseUrl, model, IO_TIMEOUT);
 		}
 		return null;
