@@ -1,0 +1,21 @@
+{
+  "name": "Create Vault Directory",
+  "description": "Create a directory in the user's health vault.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "vault:mkdir",
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "Directory path to create (e.g. 'documents', 'lab-results/2026')" }
+      },
+      "required": ["path"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "created": { "type": "boolean" }
+      }
+    }
+  }
+}

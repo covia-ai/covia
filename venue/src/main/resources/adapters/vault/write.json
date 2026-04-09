@@ -1,0 +1,23 @@
+{
+  "name": "Write Vault File",
+  "description": "Write a file to the user's health vault. Creates the file if it does not exist; overwrites if it does. Use vault:mkdir first to create parent directories.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "vault:write",
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "File path within the vault (e.g. 'documents/referral.json')" },
+        "content": { "type": "string", "description": "Text content to write" }
+      },
+      "required": ["path", "content"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "written": { "type": "integer", "description": "Bytes written" },
+        "created": { "type": "boolean", "description": "True if file was newly created" }
+      }
+    }
+  }
+}

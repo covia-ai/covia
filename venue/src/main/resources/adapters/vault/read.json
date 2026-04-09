@@ -1,0 +1,23 @@
+{
+  "name": "Read Vault File",
+  "description": "Read a file from the user's health vault. Returns text (UTF-8) or base64-encoded content for binary files.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "vault:read",
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "File path within the vault (e.g. 'documents/blood-panel-q4.json')" }
+      },
+      "required": ["path"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "content": { "type": "string", "description": "File content (text or base64)" },
+        "encoding": { "type": "string", "description": "utf-8 or base64" },
+        "size": { "type": "integer", "description": "Size in bytes" }
+      }
+    }
+  }
+}

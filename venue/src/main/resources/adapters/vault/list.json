@@ -1,0 +1,30 @@
+{
+  "name": "List Vault Directory",
+  "description": "List files and directories in the user's health vault. Omit path to list the vault root.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "vault:list",
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "Directory path within the vault (omit for root)" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "type": { "type": "string" },
+              "size": { "type": "integer" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

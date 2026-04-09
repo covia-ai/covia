@@ -1,0 +1,21 @@
+{
+  "name": "Delete Vault File",
+  "description": "Delete a file or empty directory from the user's health vault.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "vault:delete",
+    "input": {
+      "type": "object",
+      "properties": {
+        "path": { "type": "string", "description": "File or directory path to delete" }
+      },
+      "required": ["path"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "deleted": { "type": "boolean" }
+      }
+    }
+  }
+}
