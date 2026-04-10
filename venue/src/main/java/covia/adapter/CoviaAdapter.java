@@ -628,7 +628,7 @@ public class CoviaAdapter extends AAdapter {
 	 * into the value with type-aware deep navigation. This handles vector
 	 * indexing (e.g. {@code "w/events/0"}) that pure lattice resolution cannot.
 	 */
-	static ACell readPath(ALatticeCursor<ACell> cursor, ACell[] jsonKeys) {
+	public static ACell readPath(ALatticeCursor<ACell> cursor, ACell[] jsonKeys) {
 		// Try full lattice resolution first (works for pure-map paths like
 		// g/agent/state/counter where every level is a map).
 		ACell[] resolved = cursor.getLattice().resolvePath(jsonKeys);
@@ -1010,7 +1010,7 @@ public class CoviaAdapter extends AAdapter {
 	 * guess types. The lattice's {@link ALattice#resolveKey} at each level
 	 * is responsible for translating to the correct CVM type.</p>
 	 */
-	static ACell[] parseStringPath(String path) {
+	public static ACell[] parseStringPath(String path) {
 		if (path == null || path.isEmpty()) return new ACell[0];
 		if (path.startsWith("/")) path = path.substring(1);
 		if (path.endsWith("/")) path = path.substring(0, path.length() - 1);

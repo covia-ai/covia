@@ -193,4 +193,120 @@ public class OperationResolutionTest {
 		assertNotEquals(openaiHash, ollamaHash,
 			"Different adapter operations should have different hashes");
 	}
+
+	// ========== Workspace path resolution (no leading slash) ==========
+	//
+	// Users should be able to write a hash/reference to a workspace path
+	// (e.g. w/config/my-pipeline) and then invoke that path directly via
+	// resolveAsset, instead of pasting opaque hashes around.
+
+	@Test
+	public void testResolveWorkspacePathToHash() {
+		// Store an operation hash at a workspace path
+		Hash echoHash = engine.resolveOperation("test:echo");
+		assertNotNull(echoHash);
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/config/echo-pointer",
+			        Fields.VALUE, Strings.create(echoHash.toHexString())),
+			ALICE).awaitResult(5000);
+
+		// Resolve via the workspace path — recursive deref
+		Asset asset = engine.resolveAsset(Strings.create("w/config/echo-pointer"), ALICE);
+		assertNotNull(asset, "workspace path should dereference and resolve to test:echo");
+		assertEquals(echoHash, asset.getID());
+	}
+
+	@Test
+	public void testResolveWorkspacePathToOperationName() {
+		// Workspace path → operation name string → registry resolution
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/config/op-pointer",
+			        Fields.VALUE, Strings.create("test:echo")),
+			ALICE).awaitResult(5000);
+
+		Asset asset = engine.resolveAsset(Strings.create("w/config/op-pointer"), ALICE);
+		assertNotNull(asset, "workspace path → op name → registry should resolve");
+		assertEquals(engine.resolveOperation("test:echo"), asset.getID());
+	}
+
+	@Test
+	public void testResolveWorkspacePathToInlineMetadata() {
+		// Workspace path → inline operation metadata map
+		ACell opMeta = Maps.of(
+			"name", "Inline Pipeline",
+			"description", "Inline operation stored in workspace",
+			"operation", Maps.of(
+				"adapter", "test:echo",
+				"input", Maps.of("type", "object")
+			)
+		);
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/config/inline-op", Fields.VALUE, opMeta),
+			ALICE).awaitResult(5000);
+
+		Asset asset = engine.resolveAsset(Strings.create("w/config/inline-op"), ALICE);
+		assertNotNull(asset, "workspace path with inline metadata should resolve");
+		assertEquals(Strings.create("Inline Pipeline"), asset.meta().get(Fields.NAME));
+	}
+
+	@Test
+	public void testResolveWorkspacePathMissing() {
+		assertNull(engine.resolveAsset(Strings.create("w/config/nonexistent"), ALICE));
+	}
+
+	@Test
+	public void testResolveWorkspacePathRequiresAuth() {
+		// Internal context has no caller DID — workspace lookup must fail cleanly
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/config/internal-test",
+			        Fields.VALUE, Strings.create("test:echo")),
+			ALICE).awaitResult(5000);
+
+		// Internal context can't resolve workspace paths because they're per-user
+		assertNull(engine.resolveAsset(Strings.create("w/config/internal-test")));
+	}
+
+	// ========== DID URL self-reference round-trip ==========
+	//
+	// asset_store returns the venue's own DID URL form (e.g.
+	// did:key:VENUE:public/a/<hash>). Feeding that back into resolveAsset
+	// must work without crashing — it used to fall through to Grid.connect
+	// which only handles did:web.
+
+	@Test
+	public void testResolveLocalDidKeyUrlForVenueAsset() {
+		// Pick any venue-installed asset hash
+		Hash echoHash = engine.resolveOperation("test:echo");
+		assertNotNull(echoHash);
+
+		// Construct the DID URL form: <venue-did>:public/a/<hash>
+		// (matches what asset_store returns when called by an anonymous user)
+		String didUrl = engine.getDIDString().toString() + ":public/a/" + echoHash.toHexString();
+
+		Asset asset = engine.resolveAsset(Strings.create(didUrl), ALICE);
+		assertNotNull(asset, "did:key:VENUE:public/a/<hash> should resolve as local");
+		assertEquals(echoHash, asset.getID());
+	}
+
+	@Test
+	public void testResolveBareVenueDidUrl() {
+		// Without the :public sub-id — bare venue DID
+		Hash echoHash = engine.resolveOperation("test:echo");
+		assertNotNull(echoHash);
+
+		String didUrl = engine.getDIDString().toString() + "/a/" + echoHash.toHexString();
+		Asset asset = engine.resolveAsset(Strings.create(didUrl), ALICE);
+		assertNotNull(asset, "did:key:VENUE/a/<hash> should resolve as local");
+		assertEquals(echoHash, asset.getID());
+	}
+
+	@Test
+	public void testResolveUnknownDidKeyReturnsNullNotCrash() {
+		// A different did:key venue we have no record of — must NOT throw
+		// "Unrecognised DID method: key" via Grid.connect
+		String foreignDid = "did:key:z6MkUnknownVenueKeyThatDoesNotExist123456789ABCDEF/a/"
+			+ "0000000000000000000000000000000000000000000000000000000000000000";
+		assertNull(engine.resolveAsset(Strings.create(foreignDid), ALICE),
+			"unknown did:key should return null, not throw");
+	}
 }

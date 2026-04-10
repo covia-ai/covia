@@ -88,7 +88,16 @@ public class VenueServer {
 			this.nodeServer = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			nodeServer.setMergeContext(LatticeContext.create(null, keyPair));
 			nodeServer.launch(); // restore from store BEFORE Engine init
-			engine = new Engine(config, nodeServer.getCursor(), keyPair);
+			// Wire the synchronous persistence handler — used by Engine.flush()
+			// and the close-time final flush. See venue/docs/PERSISTENCE.md §5.0.
+			covia.venue.PersistenceHandler persistHandler = value -> {
+				try {
+					nodeServer.persistSnapshot(value);
+				} catch (java.io.IOException e) {
+					throw new RuntimeException("persistSnapshot failed", e);
+				}
+			};
+			engine = new Engine(config, nodeServer.getCursor(), keyPair, persistHandler);
 		} catch (Exception e) {
 			throw new RuntimeException("Failed to create venue engine", e);
 		}
@@ -381,9 +390,16 @@ public class VenueServer {
 			ctx.header("access-control-allow-private-network", "true");
 		});
 
-		// Sync lattice state after API mutations to trigger persistence
-		// Sync lattice state after API mutations to trigger persistence
+		// Sync lattice state after every mutation-capable request so writes
+		// are durable across restart. Covers REST (/api/*), MCP JSON-RPC
+		// (/mcp), and A2A endpoints. Without this, MCP-driven writes
+		// (agent_create, covia_write, asset_store, etc.) live only in
+		// memory and are lost on shutdown — silently.
 		app.after("/api/*", ctx -> engine.syncState());
+		app.after("/mcp",   ctx -> engine.syncState());
+		app.after("/mcp/*", ctx -> engine.syncState());
+		app.after("/a2a",   ctx -> engine.syncState());
+		app.after("/a2a/*", ctx -> engine.syncState());
 
 
 		return app;
@@ -431,16 +447,29 @@ public class VenueServer {
 	}
 
 	/**
-	 * Full shutdown: stops HTTP server, persists and closes NodeServer and store.
+	 * Full shutdown: stops HTTP server, drains the engine's persistence sweep
+	 * and runs a final flush, then closes NodeServer and store.
+	 *
+	 * <p>The engine.close() must run BEFORE nodeServer.close() so the
+	 * venueState fork's writes are merged into the root before the
+	 * propagator's shutdown drain reads from it. See
+	 * {@code venue/docs/PERSISTENCE.md} §5.3.</p>
 	 */
 	public void close() {
 		if (javalin!=null) {
 			javalin.stop();
 			javalin=null;
 		}
+		if (engine!=null) {
+			try {
+				engine.close(); // stops sweep daemon, runs final synchronous flush
+			} catch (Exception e) {
+				log.warn("Engine close failed", e);
+			}
+		}
 		if (nodeServer!=null) {
 			try {
-				nodeServer.close(); // final sync + persist
+				nodeServer.close(); // graceful drain — now sees the engine's final flush
 			} catch (IOException e) {
 				log.warn("NodeServer close failed", e);
 			}

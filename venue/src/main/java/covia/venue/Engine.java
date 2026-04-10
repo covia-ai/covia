@@ -7,6 +7,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -115,22 +119,60 @@ public class Engine {
 	protected Index<AString, Hash> operations = (Index<AString, Hash>) Index.EMPTY;
 
 	/**
+	 * Persistence callback supplied at construction. Wired by VenueServer to
+	 * NodeServer.persistSnapshot for the production stack; no-op for tests
+	 * and in-memory engines. See {@link PersistenceHandler}.
+	 */
+	private final PersistenceHandler persistHandler;
+
+	/**
+	 * Background sweep daemon — periodically pulls venueState fork into the
+	 * root and triggers the lattice's sync callback so the propagator
+	 * persists durable. See {@code venue/docs/PERSISTENCE.md}.
+	 */
+	private final ScheduledExecutorService persistenceSweep;
+
+	/** Atomic close flag — prevents double-close and serves as the sweep daemon's stop signal. */
+	private final AtomicBoolean closed = new AtomicBoolean(false);
+
+	/** How often the persistence sweep daemon runs (ms). */
+	private static final long SWEEP_INTERVAL_MS = 100;
+
+	/**
 	 * Primary constructor: Engine receives an ALatticeCursor from its caller.
 	 * Engine is agnostic to persistence and replication — it just uses the cursor.
 	 * Generates a new random key pair for this venue.
 	 */
 	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor) throws IOException {
-		this(config, cursor, AKeyPair.generate());
+		this(config, cursor, AKeyPair.generate(), PersistenceHandler.NOOP);
 	}
 
 	/**
 	 * Constructor with explicit key pair. Use when the venue identity must be
 	 * stable across restarts (same AccountKey = same OwnerLattice slot).
+	 *
+	 * <p>Uses a no-op persistence handler — appropriate for in-memory venues
+	 * and tests that don't need synchronous flush. For a production venue,
+	 * use the four-arg constructor and pass a real {@link PersistenceHandler}
+	 * (typically wired to {@code NodeServer.persistSnapshot}).</p>
 	 */
 	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor, AKeyPair keyPair) throws IOException {
+		this(config, cursor, keyPair, PersistenceHandler.NOOP);
+	}
+
+	/**
+	 * Canonical constructor with persistence handler.
+	 *
+	 * <p>The handler is invoked synchronously by {@link #flush()} (and during
+	 * the close-time final flush) to make the venue's lattice value durable.
+	 * Pass {@link PersistenceHandler#NOOP} for in-memory venues.</p>
+	 */
+	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor,
+			AKeyPair keyPair, PersistenceHandler persistHandler) throws IOException {
 		this.config=new Config(config);
 		this.keyPair=keyPair;
 		this.lattice=cursor;
+		this.persistHandler = (persistHandler != null) ? persistHandler : PersistenceHandler.NOOP;
 		// Set signing context so SignedCursor can sign writes through OwnerLattice
 		LatticeContext ctx = LatticeContext.create(null, this.keyPair);
 		this.lattice.withContext(ctx);
@@ -138,6 +180,22 @@ public class Engine {
 		this.jobManager = new JobManager(this);
 		this.contentStorage = createStorage();
 		this.contentStorage.initialise();
+
+		// Start the persistence sweep daemon ONLY if a real persistence
+		// handler is wired. In-memory engines (createTemp, NOOP handler)
+		// have nothing to flush to, so the sweep is meaningless and would
+		// just leak a thread per test.
+		if (this.persistHandler != PersistenceHandler.NOOP) {
+			this.persistenceSweep = Executors.newSingleThreadScheduledExecutor(r -> {
+				Thread t = new Thread(r, "covia-persistence-sweep");
+				t.setDaemon(true);
+				return t;
+			});
+			this.persistenceSweep.scheduleWithFixedDelay(
+				this::sweep, SWEEP_INTERVAL_MS, SWEEP_INTERVAL_MS, TimeUnit.MILLISECONDS);
+		} else {
+			this.persistenceSweep = null;
+		}
 	}
 
 
@@ -240,6 +298,92 @@ public class Engine {
 	public void syncState() {
 		venueState.sync();
 		lattice.sync();
+	}
+
+	// ========================================================================
+	// Persistence — see venue/docs/PERSISTENCE.md
+	// ========================================================================
+
+	/**
+	 * Background sweep step. Merges the venueState fork into the root, then
+	 * fires the root cursor's onSync callback (which the NodeServer wires to
+	 * the propagator). Both calls are required because
+	 * {@code ForkedLatticeCursor.sync()} deliberately does NOT propagate sync
+	 * up the chain — see {@code venue/docs/PERSISTENCE.md} §5.0.
+	 *
+	 * <p>Called from the persistence sweep daemon and from {@link #flush()}.
+	 * Sync is a no-op when there are no pending writes, so this is cheap on
+	 * idle venues.</p>
+	 */
+	private void sweep() {
+		if (closed.get()) return;
+		try {
+			venueState.sync();   // pull fork writes into the root
+			lattice.sync();      // fire NodeServer.onSync → propagator
+		} catch (Exception e) {
+			log.warn("Persistence sweep failed", e);
+		}
+	}
+
+	/**
+	 * Synchronously syncs venueState into the root and persists the current
+	 * value through the propagator on the caller's thread. Returns when the
+	 * write set is on disk.
+	 *
+	 * <p>Bypasses the propagator's background queue by calling the
+	 * {@link PersistenceHandler} (typically wired to
+	 * {@code NodeServer.persistSnapshot}). This is the correct primitive for
+	 * "make this write durable before I return" — there is no
+	 * "wait for the background drain queue to flush" API on a running
+	 * propagator (this is a known upstream gap).</p>
+	 *
+	 * <p>Use sparingly — most writes don't need this. Default eventual
+	 * durability via the background sweep is fine for in-flight job state,
+	 * conversation history, etc. Use {@code flush()} for: job completion,
+	 * audit records, secret rotation, agent TERMINATED, OAuth login.</p>
+	 */
+	public void flush() {
+		venueState.sync();                   // pull fork into root
+		persistHandler.persist(lattice.get()); // synchronous persist
+	}
+
+	/**
+	 * Stops the persistence sweep, runs a final flush, and releases engine
+	 * resources. After close, the engine cannot be used.
+	 *
+	 * <p>Must be called BEFORE {@code nodeServer.close()} so the venueState
+	 * fork is merged into the root before the propagator's shutdown drain
+	 * reads from the root cursor. {@code VenueServer.close()} handles this
+	 * ordering.</p>
+	 *
+	 * <p>Idempotent — calling close more than once is safe.</p>
+	 */
+	public void close() {
+		if (!closed.compareAndSet(false, true)) return; // already closed
+
+		// Stop accepting new sweep tasks; wait briefly for in-flight sweep to finish.
+		// May be null for in-memory engines that have no persistence handler.
+		if (persistenceSweep != null) {
+			persistenceSweep.shutdown();
+			try {
+				if (!persistenceSweep.awaitTermination(2, TimeUnit.SECONDS)) {
+					persistenceSweep.shutdownNow();
+				}
+			} catch (InterruptedException e) {
+				persistenceSweep.shutdownNow();
+				Thread.currentThread().interrupt();
+			}
+		}
+
+		// Final synchronous flush — guarantees the venueState fork's writes
+		// are on disk before VenueServer's nodeServer.close() reads from
+		// the root cursor for its graceful drain.
+		try {
+			venueState.sync();
+			persistHandler.persist(lattice.get());
+		} catch (Exception e) {
+			log.warn("Final persistence flush failed during close", e);
+		}
 	}
 
 	public static void addDemoAssets(Engine venue) {
@@ -493,7 +637,17 @@ public class Engine {
 	 * @return Resolved Asset, or null if not resolvable
 	 */
 	public Asset resolveAsset(AString ref, RequestContext ctx) {
+		return resolveAsset(ref, ctx, 0);
+	}
+
+	/** Maximum recursion depth for {@link #resolveAsset} when dereferencing
+	 *  workspace path values that themselves contain references. Prevents
+	 *  infinite loops if a path stores a reference back to itself. */
+	private static final int MAX_RESOLVE_DEPTH = 8;
+
+	private Asset resolveAsset(AString ref, RequestContext ctx, int depth) {
 		if (ref == null) return null;
+		if (depth >= MAX_RESOLVE_DEPTH) return null;
 
 		// 1. Bare hex hash → check user /a/ then venue /a/
 		Hash h = Hash.parse(ref);
@@ -516,11 +670,79 @@ public class Engine {
 			return resolveDIDURL(ref);
 		}
 
-		// 5. Operation name registry (venue-level named operations)
+		// 5. Workspace path — dereference through caller's lattice and recurse.
+		// Recognises any of the venue namespace prefixes (w/, g/, o/, j/, s/,
+		// n/, h/) WITHOUT a leading slash. The value at the path can be:
+		//   - a string → treated as a reference and resolved recursively
+		//   - a map with an "operation" field → treated as inline metadata
+		// This is the primary mechanism for using human-friendly paths like
+		// "w/config/ap-pipeline" as operation references instead of opaque
+		// asset hashes. Mirrors ContextLoader.isNamespacePath.
+		if (isUserNamespacePath(ref)) {
+			Asset deref = resolveWorkspaceRef(ref, ctx, depth);
+			if (deref != null) return deref;
+			// Fall through to step 6 (operation registry) — a path-shaped
+			// alias is unlikely but technically possible.
+		}
+
+		// 6. Operation name registry (venue-level named operations)
 		Hash opHash = operations.get(ref);
 		if (opHash != null) return getAsset(opHash);
 
 		return null;
+	}
+
+	/**
+	 * Returns true if {@code ref} starts with a known user-namespace prefix
+	 * (w/, g/, o/, j/, s/, n/, h/) without a leading slash. Mirrors
+	 * {@link covia.adapter.ContextLoader} so the two resolvers stay aligned.
+	 */
+	static boolean isUserNamespacePath(AString ref) {
+		if (ref == null || ref.count() < 2) return false;
+		String s = ref.toString();
+		return s.startsWith("w/") || s.startsWith("g/") || s.startsWith("o/")
+			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
+			|| s.startsWith("n/");
+	}
+
+	/**
+	 * Dereferences a user-namespace path and resolves the resulting value as
+	 * an Asset. Returns null if the path is missing, the user has no lattice
+	 * state, or the value is not a recognisable reference.
+	 */
+	@SuppressWarnings("unchecked")
+	private Asset resolveWorkspaceRef(AString ref, RequestContext ctx, int depth) {
+		if (ctx == null || ctx.getCallerDID() == null) return null;
+		try {
+			Users users = venueState.users();
+			User user = users.get(ctx.getCallerDID());
+			if (user == null) return null;
+
+			ACell[] pathKeys = covia.adapter.CoviaAdapter.parseStringPath(ref.toString());
+			if (pathKeys.length == 0) return null;
+
+			ACell value = covia.adapter.CoviaAdapter.readPath(user.cursor(), pathKeys);
+			if (value == null) return null;
+
+			// Inline operation metadata: a map with an "operation" field
+			if (value instanceof AMap) {
+				AMap<AString, ACell> map = (AMap<AString, ACell>) value;
+				if (map.get(Strings.create("operation")) != null) {
+					return Asset.fromMeta(map);
+				}
+				return null;
+			}
+
+			// String reference: recurse with the value as the new ref
+			AString strRef = RT.ensureString(value);
+			if (strRef != null) {
+				return resolveAsset(strRef, ctx, depth + 1);
+			}
+
+			return null;
+		} catch (Exception e) {
+			return null;
+		}
 	}
 
 	/**
@@ -582,6 +804,19 @@ public class Engine {
 	 * Resolves a DID URL reference using {@link DIDURL} parsing.
 	 * Dispatches on the path namespace prefix. Local DID → local lookup,
 	 * remote DID → remote venue reference.
+	 *
+	 * <p><b>Local DID handling.</b> The venue's own DID may have sub-id
+	 * variants — e.g. {@code did:key:VENUE:public} for the public/anonymous
+	 * user namespace. We treat any DID URL whose method matches the venue's
+	 * own DID method AND whose id starts with the venue's id as local. The
+	 * id-prefix match also catches user DIDs that have stored data, which we
+	 * resolve via the per-user asset record.</p>
+	 *
+	 * <p><b>Federation scope.</b> {@link Grid#connect} currently only handles
+	 * {@code did:web:}. For DID methods this venue cannot federate with —
+	 * including its own {@code did:key} method — we return {@code null}
+	 * rather than throwing, so callers can fall through to other resolution
+	 * forms or surface a clean "not found" error.</p>
 	 */
 	private Asset resolveDIDURL(AString ref) {
 		DIDURL didurl;
@@ -596,25 +831,66 @@ public class Engine {
 		Hash hash = Hash.parse(path.substring(3));
 		if (hash == null) return null;
 
-		String didStr = didurl.getDID().toString();
-		AString didString = Strings.create(didStr);
+		// Compare structurally on parsed (method, id) — NOT on DID.toString(),
+		// which URL-encodes colons in the id and would break sub-id matching
+		// like "VENUE:public".
+		DID venueDID;
+		try {
+			venueDID = getDID();
+		} catch (Exception e) {
+			venueDID = null;
+		}
+		DID parsedDID = didurl.getDID();
+		String parsedMethod = parsedDID.getMethod();
+		String parsedID = parsedDID.getID();
 
-		// Local resolution: venue DID or known user DID
-		if (getDIDString().toString().equals(didStr)) {
-			// Venue DID — venue-level assets only
+		// Local resolution path 1: exact venue DID match
+		if (venueDID != null && venueDID.equals(parsedDID)) {
 			return getAsset(hash);
 		}
+
+		// Local resolution path 2: venue DID with sub-id (e.g. ":public")
+		// The DID URI parser keeps "id:subid" as a single id field. We detect
+		// the sub-id form by checking prefix on the unescaped id. Resolve as
+		// per-user asset (the public user is keyed by "<venueDID>:public");
+		// fall back to venue-level lookup if no user record is present.
+		if (venueDID != null
+				&& parsedMethod.equals(venueDID.getMethod())
+				&& parsedID.startsWith(venueDID.getID() + ":")) {
+			// Reconstruct the unescaped DID string for the user lookup. We
+			// can't use parsedDID.toString() (URL-encodes the colon).
+			AString unescapedDIDString = Strings.create("did:" + parsedMethod + ":" + parsedID);
+			User user = getVenueState().users().get(unescapedDIDString);
+			if (user != null) {
+				AVector<?> rec = getAssetRecord(hash, unescapedDIDString);
+				if (rec != null) {
+					AString metaString = RT.ensureString(rec.get(AssetStore.POS_JSON));
+					if (metaString != null) return Asset.create(hash, metaString);
+				}
+			}
+			// Fall back to venue-level lookup — the asset hash may have been
+			// stored in the venue store independently of any user record.
+			return getAsset(hash);
+		}
+
+		// Local resolution path 3: known user DID (different method/id, stored locally)
+		AString didString = Strings.create("did:" + parsedMethod + ":" + parsedID);
 		User user = getVenueState().users().get(didString);
 		if (user != null) {
-			// Local user DID — user assets, venue fallback
 			AVector<?> rec = getAssetRecord(hash, didString);
 			if (rec == null) return null;
 			AString metaString = RT.ensureString(rec.get(AssetStore.POS_JSON));
 			return (metaString != null) ? Asset.create(hash, metaString) : null;
 		}
 
-		// Remote DID — create Operation with remote venue reference
-		Venue remoteVenue = Grid.connect(didStr);
+		// Remote dispatch — only for DID methods Grid.connect can handle.
+		// did:key cannot federate today, so a non-local did:key URL means
+		// "not found" rather than "federate to it".
+		if (!"web".equals(parsedMethod)) {
+			return null;
+		}
+
+		Venue remoteVenue = Grid.connect(didString.toString());
 		Operation remoteOp = Operation.create(hash, null);
 		remoteOp.setVenue(remoteVenue);
 		return remoteOp;
