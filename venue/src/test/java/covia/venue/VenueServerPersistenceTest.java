@@ -91,12 +91,11 @@ public class VenueServerPersistenceTest {
 			ACell dlfs = server.getEngine().getRootCursor().get().get(Keyword.intern("dlfs"));
 			assertNotNull(dlfs, "Root cursor should have :dlfs region after write");
 
-			// Sync and verify store has the data
-			server.getEngine().syncState();
-			Thread.sleep(300);
+			// Synchronous flush — guarantees data is on disk before we read it
+			server.getEngine().flush();
 
 			ACell storeRoot = server.getStore().getRootData();
-			assertNotNull(storeRoot, "Store should have root data after sync");
+			assertNotNull(storeRoot, "Store should have root data after flush");
 
 			server.close();
 		}
@@ -163,9 +162,8 @@ public class VenueServerPersistenceTest {
 		HttpResponse<String> putRes = webdav(server.port(), "PUT", "sync-drive/test.txt", "sync test");
 		assertEquals(201, putRes.statusCode());
 
-		// Give propagator time to persist
-		Thread.sleep(500);
-
+		// server.close() does a synchronous final flush via engine.close()
+		// (see PERSISTENCE.md §5.3) — no manual sleep needed.
 		server.close();
 
 		// Restart and verify data survived

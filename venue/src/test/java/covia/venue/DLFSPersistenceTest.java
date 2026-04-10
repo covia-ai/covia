@@ -71,11 +71,15 @@ public class DLFSPersistenceTest {
 			assertEquals("persistent!", RT.ensureString(RT.getIn(readResult, "content")).toString(),
 				"File should be readable in same session");
 
-			// Sync DLFS drive (triggers root propagator for entire lattice)
+			// Sync DLFS drive, then synchronously persist the root via the
+			// node's persistSnapshot — guarantees data is on disk before we
+			// read it. Tests construct Engine with the 3-arg constructor
+			// (NOOP persist handler) so engine.flush() is a no-op here; we
+			// drive persistence directly through the local node.
 			DLFSAdapter dlfsAdapter1 = (DLFSAdapter) engine.getAdapter("dlfs");
 			var drive1 = dlfsAdapter1.getDriveForIdentity(ALICE_DID.toString(), "health-vault");
 			drive1.sync();
-			Thread.sleep(300);
+			node.persistSnapshot(node.getCursor().get());
 
 			// Verify store actually received the data
 			ACell storeRootAfterSync = store.getRootData();

@@ -45,7 +45,14 @@ public class VenueHTTP extends Venue {
 	public static Logger log=LoggerFactory.getLogger(VenueHTTP.class);
 
 	private static final double BACKOFF_FACTOR = 1.5;
-	private static final long INITIAL_POLL_DELAY = 300;
+	/**
+	 * Initial poll delay in ms. Kept low so short operations finish in
+	 * sub-tens-of-ms instead of waiting a full poll cycle. Long-running jobs
+	 * are unaffected — exponential backoff (1.5x) reaches the previous
+	 * 300ms gap by the 10th poll, and the MAX_POLL_DELAY ceiling is the
+	 * steady-state rate, not this value.
+	 */
+	private static final long INITIAL_POLL_DELAY = 10;
 	private static final long MAX_POLL_DELAY = 10000;
 	private static final long DEFAULT_TIMEOUT = 30000; // 30 seconds, allows for slowish LLM responses
 

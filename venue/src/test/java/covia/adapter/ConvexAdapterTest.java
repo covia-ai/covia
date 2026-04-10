@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.Maps;
@@ -16,6 +17,14 @@ import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
 import covia.venue.TestServer;
 
+/**
+ * Integration tests for the convex adapter — every test makes a real network
+ * call to {@code peer.convex.live:18888}. Tagged "integration" so they're
+ * excluded from the default {@code mvn test} run (which uses
+ * {@code excludedGroups=integration} per the surefire config in venue/pom.xml).
+ * Run explicitly with {@code mvn test -Dgroups=integration}.
+ */
+@Tag("integration")
 class ConvexAdapterTest {
 
 	static final String PEER = "peer.convex.live:18888";

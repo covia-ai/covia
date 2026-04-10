@@ -55,9 +55,7 @@ public class GoalTreeAdapterTest {
 			ALICE);
 		// Should start without error (may fail on LLM call, but shouldn't NPE)
 		assertNotNull(job);
-		// Wait briefly — the job runs async
-		try { Thread.sleep(500); } catch (InterruptedException e) {}
-		// Job should exist (started or completed)
+		// Job should have a status field — even PENDING is fine, no need to wait
 		assertNotNull(job.getStatus());
 	}
 
@@ -290,8 +288,11 @@ public class GoalTreeAdapterTest {
 		// Cancel immediately
 		job.cancel();
 
-		// Wait briefly for the async invoke to notice
-		try { Thread.sleep(500); } catch (InterruptedException e) {}
+		// Poll for finish — bounded, deterministic, no fixed sleep waste
+		long deadline = System.currentTimeMillis() + 2000;
+		while (!job.isFinished() && System.currentTimeMillis() < deadline) {
+			Thread.yield();
+		}
 
 		assertTrue(job.isFinished(), "Job should be finished after cancel");
 		assertEquals("CANCELLED", job.getStatus().toString());

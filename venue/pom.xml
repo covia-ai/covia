@@ -13,6 +13,22 @@
 		<plugins>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<!-- Skip integration tests by default. Run them explicitly with
+					     mvn test -Dgroups=integration -DexcludedGroups= -->
+					<excludedGroups>integration</excludedGroups>
+					<!-- Fork 4 JVMs in parallel. Each fork has its own TestServer
+					     singleton, so no shared-state contention between forks
+					     (only between classes within the same fork, which run
+					     sequentially). 4 forks gives the best wall-clock time
+					     for the venue suite; more forks hit JIT/warmup overhead. -->
+					<forkCount>4</forkCount>
+					<reuseForks>true</reuseForks>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-compiler-plugin</artifactId>
 				<version>3.14.0</version>
 				<configuration>
