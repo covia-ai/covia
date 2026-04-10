@@ -1,0 +1,32 @@
+{
+	"name": "JSON Select",
+	"description": "Picks a value from a map of cases by key. If 'key' is present in 'cases', returns its value; otherwise returns 'default' (or null). Use for declarative branching when you have a discriminator string — like a switch statement.",
+	"operation": {
+		"adapter": "json:select",
+		"input": {
+			"type": "object",
+			"properties": {
+				"key": {
+					"type": "string",
+					"description": "Discriminator key to look up in cases."
+				},
+				"cases": {
+					"type": "object",
+					"description": "Map of possible keys to values."
+				},
+				"default": {
+					"description": "Optional value to return if key is not found in cases."
+				}
+			},
+			"required": ["key", "cases"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"result": {
+					"description": "The matched case value, or the default, or null."
+				}
+			}
+		}
+	}
+}

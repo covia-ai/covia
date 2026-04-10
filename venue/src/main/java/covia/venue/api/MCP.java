@@ -375,7 +375,11 @@ public class MCP extends McpServer {
 	}
 
 	private AMap<AString, ACell> checkTool(AMap<AString, ACell> meta) {
-		AMap<AString, ACell> op = RT.getIn(meta, Fields.OPERATION);
+		// operation may be a map (full op definition) OR a string reference
+		// (template/asset path, e.g. goaltree.json's "operation": "goaltree:chat").
+		// Only map-form operations are exposable as MCP tools — string refs are
+		// resolved later by the agent runtime, not callable directly.
+		AMap<AString, ACell> op = RT.ensureMap(RT.getIn(meta, Fields.OPERATION));
 		if (op == null) return null;
 
 		AString toolName = RT.ensureString(op.get(Fields.TOOL_NAME));

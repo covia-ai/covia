@@ -1,0 +1,36 @@
+{
+	"name": "JSON Assoc",
+	"description": "Returns a new map with 'value' set at 'path' inside 'target'. Path may be a single string key or a vector of keys for nested paths. Intermediate maps are created if missing. Equivalent to Clojure assoc-in or Lodash _.set.",
+	"operation": {
+		"adapter": "json:assoc",
+		"input": {
+			"type": "object",
+			"properties": {
+				"target": {
+					"type": "object",
+					"description": "Map to update. Defaults to empty map if not provided."
+				},
+				"path": {
+					"description": "String (single key) or vector of keys (nested path).",
+					"oneOf": [
+						{ "type": "string" },
+						{ "type": "array", "items": { "type": "string" } }
+					]
+				},
+				"value": {
+					"description": "Value to set at the path."
+				}
+			},
+			"required": ["path"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"result": {
+					"type": "object",
+					"description": "The updated map."
+				}
+			}
+		}
+	}
+}

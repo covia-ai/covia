@@ -1,0 +1,36 @@
+{
+	"name": "JSON Conditional",
+	"description": "Picks the 'then' value of the first case whose 'when' is truthy. Truthiness is strict: only JSON false and null are falsy; everything else (including 0, empty strings/arrays/objects) is truthy. Use to express declarative branching based on prior step results.",
+	"operation": {
+		"adapter": "json:cond",
+		"input": {
+			"type": "object",
+			"properties": {
+				"cases": {
+					"type": "array",
+					"description": "Vector of {when, then} maps. The first case with a truthy 'when' has its 'then' returned.",
+					"items": {
+						"type": "object",
+						"properties": {
+							"when": { "description": "Condition. Truthy unless null or false." },
+							"then": { "description": "Value to return if condition is truthy." }
+						},
+						"required": ["when", "then"]
+					}
+				},
+				"default": {
+					"description": "Optional value to return if no case matches."
+				}
+			},
+			"required": ["cases"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"result": {
+					"description": "The 'then' of the first matching case, or the default, or null."
+				}
+			}
+		}
+	}
+}

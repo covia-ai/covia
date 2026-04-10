@@ -50,6 +50,7 @@ import covia.adapter.ConvexAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.adapter.GridAdapter;
 import covia.adapter.HTTPAdapter;
+import covia.adapter.JSONAdapter;
 import covia.adapter.JVMAdapter;
 import covia.adapter.SchemaAdapter;
 import covia.adapter.LangChainAdapter;
@@ -391,6 +392,7 @@ public class Engine {
 		venue.registerAdapter(new HTTPAdapter());
 		venue.registerAdapter(new JVMAdapter());
 		venue.registerAdapter(new SchemaAdapter());
+		venue.registerAdapter(new JSONAdapter());
 		venue.registerAdapter(new Orchestrator());
 		venue.registerAdapter(new MCPAdapter());
 		venue.registerAdapter(new LangChainAdapter());

@@ -1,0 +1,27 @@
+{
+	"name": "JSON Merge",
+	"description": "Deep-merges a vector of maps using RFC 7396 JSON Merge Patch semantics. Later values win on key conflict; recursive maps merge recursively; null values delete the key from the target. Use to compose a structured output from multiple prior step results.",
+	"operation": {
+		"adapter": "json:merge",
+		"input": {
+			"type": "object",
+			"properties": {
+				"values": {
+					"type": "array",
+					"description": "Vector of maps to merge in order. Later values win on conflict.",
+					"items": { "type": "object" }
+				}
+			},
+			"required": ["values"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"result": {
+					"type": "object",
+					"description": "The merged map."
+				}
+			}
+		}
+	}
+}
