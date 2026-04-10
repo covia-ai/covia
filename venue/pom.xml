@@ -18,11 +18,13 @@
 					<!-- Skip integration tests by default. Run them explicitly with
 					     mvn test -Dgroups=integration -DexcludedGroups= -->
 					<excludedGroups>integration</excludedGroups>
-					<!-- Fork 4 JVMs in parallel. Each fork has its own TestServer
-					     and TestEngine singletons so there's no shared-state
-					     contention between forks (only between classes within
-					     the same fork, which run sequentially). -->
-					<forkCount>4</forkCount>
+					<!-- Fork 2 JVMs in parallel. Each fork has its own TestServer
+					     and TestEngine singletons, no shared-state contention
+					     between forks. After the shared TestEngine refactor,
+					     2 forks is more stable than 4 (HTTPTest in particular
+					     gets variance under fork contention). Within each fork,
+					     classes run sequentially. -->
+					<forkCount>2</forkCount>
 					<reuseForks>true</reuseForks>
 				</configuration>
 			</plugin>
