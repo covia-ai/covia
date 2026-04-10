@@ -45,34 +45,51 @@ public class AuthMiddleware {
 	private static final AString KID = Fields.KID;
 	private static final AString EMAIL = Fields.EMAIL;
 
-	private static AccountKey venueKey;
-	private static AString venueDID;
-	private static AString publicDID;
-	private static Auth venueAuth;
-	private static Map<String, OAuthConfig> externalProviders;
-	private static boolean publicAccessEnabled;
+	// Per-instance state. Was static, which made running multiple VenueServers
+	// in the same JVM (production multi-tenant, parallel test classes) racy:
+	// every register() call would trample the previous instance's fields,
+	// causing requests to be attributed to the wrong venue's public DID
+	// and 403'd by AccessControl on cross-venue job lookups.
+	private final AccountKey venueKey;
+	@SuppressWarnings("unused")
+	private final AString venueDID;
+	private final AString publicDID;
+	private final Auth venueAuth;
+	private final Map<String, OAuthConfig> externalProviders;
+	private final boolean publicAccessEnabled;
+
+	private AuthMiddleware(AccountKey venueAccountKey, Auth auth, AString venueDIDString) {
+		this.venueKey = venueAccountKey;
+		this.venueDID = venueDIDString;
+		this.publicDID = Strings.create(venueDIDString + ":public");
+		this.venueAuth = auth;
+		this.publicAccessEnabled = auth.isPublicAccessEnabled();
+		this.externalProviders = auth.getLoginProviders().hasProviders()
+			? auth.getLoginProviders().getProviders() : null;
+	}
 
 	/**
-	 * Register auth middleware on API paths.
+	 * Register auth middleware on API paths. Each call creates a fresh
+	 * {@link AuthMiddleware} instance bound to the supplied venue identity,
+	 * so multiple VenueServers in the same JVM (production multi-tenant or
+	 * parallel test classes) do not share state.
+	 *
 	 * @param app Javalin application
 	 * @param venueAccountKey The venue's public key for verifying venue-signed JWTs
 	 * @param auth Auth instance for access control configuration
 	 * @param venueDIDString The venue's DID string for deriving user DIDs
+	 * @return The constructed middleware instance (rarely needed by callers,
+	 *         but useful for tests).
 	 */
-	public static void register(Javalin app, AccountKey venueAccountKey, Auth auth, AString venueDIDString) {
-		venueKey = venueAccountKey;
-		venueDID = venueDIDString;
-		publicDID = Strings.create(venueDIDString + ":public");
-		venueAuth = auth;
-		publicAccessEnabled = auth.isPublicAccessEnabled();
-		externalProviders = auth.getLoginProviders().hasProviders()
-			? auth.getLoginProviders().getProviders() : null;
-		app.before("/api/*", AuthMiddleware::extractIdentity);
-		app.before("/a2a", AuthMiddleware::extractIdentity);
-		app.before("/mcp", AuthMiddleware::extractIdentity);
+	public static AuthMiddleware register(Javalin app, AccountKey venueAccountKey, Auth auth, AString venueDIDString) {
+		AuthMiddleware mw = new AuthMiddleware(venueAccountKey, auth, venueDIDString);
+		app.before("/api/*", mw::extractIdentity);
+		app.before("/a2a", mw::extractIdentity);
+		app.before("/mcp", mw::extractIdentity);
+		return mw;
 	}
 
-	static void extractIdentity(Context ctx) {
+	void extractIdentity(Context ctx) {
 		String auth = ctx.header("Authorization");
 		if (auth == null || !auth.startsWith("Bearer ")) {
 			if (!publicAccessEnabled) {
@@ -129,7 +146,7 @@ public class AuthMiddleware {
 	/**
 	 * Verify a self-issued JWT where the kid header matches the did:key in the sub claim.
 	 */
-	private static AString tryVerifySelfIssued(AString jwt) {
+	private AString tryVerifySelfIssued(AString jwt) {
 		AMap<AString, ACell> claims = JWT.verifyPublic(jwt);
 		if (claims == null) return null;
 
@@ -160,7 +177,7 @@ public class AuthMiddleware {
 	 * Verify a venue-signed JWT. The venue's key is the trusted signer.
 	 * The sub claim contains the user's DID.
 	 */
-	private static AString tryVerifyVenueSigned(AString jwt) {
+	private AString tryVerifyVenueSigned(AString jwt) {
 		AMap<AString, ACell> claims = JWT.verifyPublic(jwt, venueKey);
 		if (claims == null) return null;
 
@@ -192,7 +209,7 @@ public class AuthMiddleware {
 	 * Verify an RS256 JWT from a configured external OAuth provider.
 	 * Tries each provider's JWKS endpoint to find a matching key.
 	 */
-	private static AString tryVerifyExternalProvider(AString jwt) {
+	private AString tryVerifyExternalProvider(AString jwt) {
 		try {
 			JWT parsed = JWT.parse(jwt);
 			if (parsed == null) return null;
@@ -225,7 +242,7 @@ public class AuthMiddleware {
 	 * Look up an existing user by email in the venue's user database.
 	 * Returns the user's DID if found, null otherwise.
 	 */
-	private static AString findUserDIDByEmail(AString email) {
+	private AString findUserDIDByEmail(AString email) {
 		if (venueAuth == null) return null;
 		AMap<AString, AMap<AString, ACell>> users = venueAuth.getUsers();
 		if (users == null) return null;

@@ -4,6 +4,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
@@ -39,6 +40,17 @@ public class Job {
 
 	/** Lazy result future — atomic for safe publication */
 	private final AtomicReference<CompletableFuture<ACell>> resultFuture = new AtomicReference<>();
+
+	/**
+	 * Optional handle to the underlying interruptible work future. Set by
+	 * adapters that submit work to an executor (e.g. {@code executor.submit(...)}).
+	 * When non-null, {@link #cancel()} will call {@code workFuture.cancel(true)}
+	 * to interrupt the running thread, so a cancel actually stops the work
+	 * rather than just marking the lattice status. CompletableFuture from
+	 * {@code runAsync} cannot be used here — its {@code cancel(true)} ignores
+	 * the interrupt flag and never interrupts the thread.
+	 */
+	private volatile Future<?> workFuture = null;
 
 	/** Per-job message queue for incoming message records */
 	private final ConcurrentLinkedQueue<AMap<AString, ACell>> messageQueue = new ConcurrentLinkedQueue<>();
@@ -324,6 +336,12 @@ public class Job {
 
 	/**
 	 * Cancel this Job. No effect if already finished.
+	 *
+	 * <p>If a {@linkplain #setWorkFuture work future} has been registered, it
+	 * is cancelled with {@code mayInterruptIfRunning=true} so the underlying
+	 * worker thread is interrupted (e.g. unblocks {@code Thread.sleep}). This
+	 * is what makes cancel actually stop the work rather than just marking
+	 * the lattice status.</p>
 	 */
 	public void cancel() {
 		if (isFinished()) return;
@@ -333,6 +351,24 @@ public class Job {
 			job = job.assoc(Fields.ERROR, Strings.create("Job cancelled: " + getID().toHexString()));
 			return job;
 		});
+		Future<?> wf = workFuture;
+		if (wf != null) wf.cancel(true);
+	}
+
+	/**
+	 * Register the interruptible {@link Future} representing this job's
+	 * underlying work. Adapters that submit work via
+	 * {@code ExecutorService.submit(...)} should call this so that
+	 * {@link #cancel()} can actually interrupt the worker thread.
+	 *
+	 * <p>Pass the {@link Future} returned by {@code submit}, NOT a
+	 * {@link CompletableFuture} from {@code runAsync} — the latter ignores
+	 * {@code mayInterruptIfRunning}.</p>
+	 *
+	 * @param future the interruptible future, or null to clear
+	 */
+	public void setWorkFuture(Future<?> future) {
+		this.workFuture = future;
 	}
 
 	/**

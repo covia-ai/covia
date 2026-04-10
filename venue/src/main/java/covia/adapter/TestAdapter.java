@@ -169,7 +169,11 @@ public class TestAdapter extends AAdapter {
     }
 
     private void handleDelay(Job job, RequestContext ctx, ACell input) {
-    	CompletableFuture.runAsync(() -> {
+    	// Use submit() (not CompletableFuture.runAsync) so the returned Future
+    	// is interruptible — Job.cancel() calls workFuture.cancel(true) which
+    	// interrupts Thread.sleep below. CompletableFuture from runAsync
+    	// ignores mayInterruptIfRunning and would leave the sleep running.
+    	java.util.concurrent.Future<?> f = VIRTUAL_EXECUTOR.submit(() -> {
     		try {
 				ACell op = RT.getIn(input, Fields.OPERATION);
 				ACell opInput = RT.getIn(input, Fields.INPUT);
@@ -179,11 +183,13 @@ public class TestAdapter extends AAdapter {
 				ACell result = subJob.awaitResult();
 				job.completeWith(result);
     		} catch (InterruptedException e) {
-    			job.fail("Delay operation interrupted");
+    			// cancelled — Job.cancel already updated lattice status
+    			Thread.currentThread().interrupt();
     		} catch (Exception e) {
     			job.fail(e.getMessage());
     		}
-    	}, VIRTUAL_EXECUTOR);
+    	});
+    	job.setWorkFuture(f);
 	}
 
 	private ACell handleEcho(ACell input) {

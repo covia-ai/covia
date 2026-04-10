@@ -14,18 +14,11 @@
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
+				<version>3.5.2</version>
 				<configuration>
 					<!-- Skip integration tests by default. Run them explicitly with
 					     mvn test -Dgroups=integration -DexcludedGroups= -->
 					<excludedGroups>integration</excludedGroups>
-					<!-- Fork 2 JVMs in parallel. Each fork has its own TestServer
-					     and TestEngine singletons, no shared-state contention
-					     between forks. After the shared TestEngine refactor,
-					     2 forks is more stable than 4 (HTTPTest in particular
-					     gets variance under fork contention). Within each fork,
-					     classes run sequentially. -->
-					<forkCount>2</forkCount>
-					<reuseForks>true</reuseForks>
 				</configuration>
 			</plugin>
 			<plugin>

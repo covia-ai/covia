@@ -235,7 +235,10 @@ public class AccessControlTest {
 		assertThrows(AuthException.class,
 			() -> engine.jobs().cancelJob(aliceJob.getID(), bobCtx));
 
-		// Alice can cancel her own job
+		// Alice can cancel her own job — this MUST also interrupt the
+		// underlying delay thread, otherwise the JVM stalls at the end of
+		// the test waiting for the orphaned sleep to drain (see
+		// TestAdapter.handleDelay + Job.cancel + Job.workFuture).
 		assertNotNull(engine.jobs().cancelJob(aliceJob.getID(), aliceCtx));
 	}
 

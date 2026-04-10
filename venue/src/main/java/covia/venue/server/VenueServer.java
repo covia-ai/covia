@@ -358,6 +358,30 @@ public class VenueServer {
 			});
 			
 			config.useVirtualThreads=true;
+
+			// Disable Jetty's session housekeeper thread. Covia is fully
+			// stateless — auth is JWT bearer token per request, no code
+			// anywhere calls getSession() or stores session attributes. By
+			// default Jetty installs a Session-HouseKeeper thread (non-daemon)
+			// to scavenge an empty session store, which kept the test JVM
+			// alive for ~5s after the last test completed.
+			//
+			// We can't simply setSessionHandler(null) — Jetty NPEs. Instead
+			// we install a custom SessionIdManager whose HouseKeeper has
+			// interval=0, which disables scheduling so no thread is created.
+			config.jetty.modifyServer(server -> {
+				try {
+					org.eclipse.jetty.server.session.DefaultSessionIdManager idMgr =
+						new org.eclipse.jetty.server.session.DefaultSessionIdManager(server);
+					org.eclipse.jetty.server.session.HouseKeeper hk =
+						new org.eclipse.jetty.server.session.HouseKeeper();
+					hk.setIntervalSec(0); // disabled — no scavenge thread
+					idMgr.setSessionHouseKeeper(hk);
+					server.setSessionIdManager(idMgr);
+				} catch (Exception e) {
+					log.warn("Failed to disable Jetty session housekeeper", e);
+				}
+			});
 		});
 		
 		
