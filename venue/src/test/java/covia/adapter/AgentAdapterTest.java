@@ -1316,28 +1316,109 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateOverwriteLiveAgentFails() {
-		// Create a live (SLEEPING) agent
+	public void testCreateOverwriteSleepingUpdatesInPlace() {
+		// Create a SLEEPING agent with initial config and let it accrue some
+		// state we want to preserve across the update
 		engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "live-ow",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Overwrite a non-terminated agent should fail
+		// Manually seed timeline + inbox so we can verify they survive
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState pre = user.agent("live-ow");
+		pre.deliverMessage(Strings.create("hello"));
+		long preTs = pre.getTs();
+
+		// Overwrite a SLEEPING agent — in-place update, status preserved
 		Job job = engine.jobs().invokeOperation(
 			"agent:create",
 			Maps.of(Fields.AGENT_ID, "live-ow",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete"),
 				Fields.OVERWRITE, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
 
+		assertEquals(CVMBool.FALSE, RT.getIn(result, Fields.CREATED), "should be updated, not created");
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.UPDATED));
+		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
+
+		// Config replaced
+		AgentState post = user.agent("live-ow");
+		assertEquals(Strings.create("test:taskcomplete"), post.getConfig().get(Fields.OPERATION));
+		// Inbox preserved (the unprocessed "hello" message is still there)
+		AVector<ACell> inbox = post.getInbox();
+		assertNotNull(inbox);
+		assertEquals(1, inbox.count(), "inbox message should survive in-place update");
+		assertEquals(Strings.create("hello"), inbox.get(0));
+		// ts advanced
+		assertTrue(post.getTs() >= preTs, "ts should advance on update");
+	}
+
+	@Test
+	public void testCreateOverwriteSuspendedUpdatesInPlace() {
+		// Create then suspend the agent — error state, dormant
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "susp-ow",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		user.agent("susp-ow").suspend(Strings.create("simulated failure"));
+		assertEquals(AgentState.SUSPENDED, user.agent("susp-ow").getStatus());
+
+		// Overwrite SUSPENDED — in-place update, error and status preserved
+		ACell result = engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "susp-ow",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete"),
+				Fields.OVERWRITE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		assertEquals(CVMBool.FALSE, RT.getIn(result, Fields.CREATED));
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.UPDATED));
+
+		AgentState post = user.agent("susp-ow");
+		assertEquals(Strings.create("test:taskcomplete"), post.getConfig().get(Fields.OPERATION));
+		// Status stays SUSPENDED — caller can resume separately
+		assertEquals(AgentState.SUSPENDED, post.getStatus());
+		assertEquals(Strings.create("simulated failure"), post.getError(),
+			"error should be preserved across in-place update");
+	}
+
+	@Test
+	public void testCreateOverwriteRunningFails() {
+		// Create then force the agent into RUNNING (simulating an active transition)
+		engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "run-ow",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		user.agent("run-ow").setStatus(AgentState.RUNNING);
+
+		// Overwrite RUNNING must fail loudly — race risk
+		Job job = engine.jobs().invokeOperation(
+			"agent:create",
+			Maps.of(Fields.AGENT_ID, "run-ow",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete"),
+				Fields.OVERWRITE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
 		try {
 			job.awaitResult(5000);
-			fail("Should fail when overwriting a non-terminated agent");
+			fail("Should fail when overwriting a RUNNING agent");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, job.getStatus());
+			// Error message should mention RUNNING and how to recover
+			String err = job.getErrorMessage();
+			assertTrue(err != null && err.contains("RUNNING"),
+				"error should mention RUNNING: " + err);
 		}
+
+		// Original config must be untouched
+		assertEquals(Strings.create("test:echo"),
+			user.agent("run-ow").getConfig().get(Fields.OPERATION));
 	}
 
 	@Test

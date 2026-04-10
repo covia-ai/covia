@@ -1,6 +1,6 @@
 {
 	"name": "Create Agent",
-	"description": "Creates a new LLM-powered agent. The agent runs on the Covia platform and can use tools to complete tasks. If no config is provided, the agent gets sensible defaults (GPT-4o, standard tools). Set overwrite=true to replace an existing agent.",
+	"description": "Creates an agent in the caller's namespace. Without overwrite, an existing slot is a no-op (idempotent). With overwrite=true, an existing SLEEPING or SUSPENDED agent has its config updated in place (timeline preserved); a TERMINATED agent is wiped and re-created fresh; a RUNNING agent is rejected. See venue/docs/AGENT_LOOP.md §4.1 for the full slot resolution table.",
 	"dateCreated": "2026-02-27T00:00:00Z",
 	"operation": {
 		"adapter": "agent:create",
@@ -26,7 +26,7 @@
 					]
 				},
 				"definition": { "type": "string", "description": "Asset ID of an agent definition using the legacy nested format (meta.agent.config). For the unified approach, pass the reference directly in 'config'." },
-				"overwrite": { "type": "boolean", "description": "If true, replace an existing agent with fresh state. Default false." }
+				"overwrite": { "type": "boolean", "description": "If true and the slot is occupied: SLEEPING/SUSPENDED → update config in place (timeline preserved); TERMINATED → wipe and re-create; RUNNING → fail. If false (default), an occupied slot is a no-op." }
 			},
 			"required": ["agentId"]
 		},
@@ -34,8 +34,9 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string" },
-				"status": { "type": "string" },
-				"created": { "type": "boolean", "description": "True if a new agent was created, false if it already existed" }
+				"status": { "type": "string", "description": "Current status of the agent: SLEEPING, RUNNING, SUSPENDED, or TERMINATED" },
+				"created": { "type": "boolean", "description": "True if a new record was written (empty slot or TERMINATED revival)" },
+				"updated": { "type": "boolean", "description": "True if an existing SLEEPING/SUSPENDED record was updated in place; mutually exclusive with created" }
 			}
 		}
 	}

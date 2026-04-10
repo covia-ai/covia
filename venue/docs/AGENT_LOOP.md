@@ -116,6 +116,52 @@ Timeline entries are only appended on success. On error, no timeline entry is
 written — the error is recorded in the agent record's `error` field and all
 queues are preserved for retry.
 
+### 2.5 Status Lifecycle
+
+The `status` field is the source of truth for what the agent is doing right now
+and which operations may safely act on it. There are four states:
+
+```
+                    agent:create
+                         │
+                         ▼
+                   ┌──────────┐
+        ┌─────────▶│ SLEEPING │◀────────┐
+        │          └────┬─────┘         │
+        │               │ wakeAgent     │ tryResume
+        │               │ (work to do)  │ (caller fixed cause)
+        │               ▼               │
+        │          ┌──────────┐         │
+        │          │  RUNNING │         │
+        │          └────┬─────┘         │
+        │               │               │
+        │      ┌────────┴────────┐      │
+        │      │ run loop done   │      │
+        │ ok   │                 │ error│
+        └──────┘                 └─────▶┌───────────┐
+                                        │ SUSPENDED │
+                                        └───────────┘
+                                  agent:delete (any state)
+                                        │
+                                        ▼
+                                  ┌────────────┐
+                                  │ TERMINATED │
+                                  └────────────┘
+```
+
+| Status | Meaning | Run loop | Mutations allowed |
+|--------|---------|----------|-------------------|
+| `SLEEPING` | Idle, no transition active. Default after create or after a successful run with no remaining work. | Not running. `wakeAgent` triggers it. | All. Safe to update config in place. |
+| `RUNNING` | A transition is currently in flight on a virtual thread. Holds the per-agent lock during record mutations. | Running. New work is appended to `tasks`/`inbox` and picked up on next iteration. | Inbox/task appends only. **Config mutation is racy and rejected** — the in-flight transition has already captured the old config. |
+| `SUSPENDED` | Last run failed with an error. Dormant — does not auto-retry. State, tasks, pending, and inbox preserved. | Not running. Resume via `tryResume` (clears error, returns to SLEEPING). | All. In-place config update is allowed and preserves the error so the caller can decide whether to resume after fixing the underlying cause. |
+| `TERMINATED` | Logically deleted. Slot still occupies the namespace key (so the ID is reserved) but the agent is dead. | Cannot run. `agent:request` / `agent:message` / `agent:trigger` all fail. | None — only `agent:create overwrite:true` revives the slot, which **wipes timeline, inbox, tasks, pending, error** and starts fresh. |
+
+**State transitions** are documented in §4: `create` (→SLEEPING), `wakeAgent`
+(SLEEPING→RUNNING via CAS, §4.6), run loop completion (RUNNING→SLEEPING or
+RUNNING→SUSPENDED, §4.4), `agent:resume` (SUSPENDED→SLEEPING, §4.5),
+`agent:delete` (any→TERMINATED, §4.5), and `agent:create overwrite:true`
+(SLEEPING/SUSPENDED→same status with new config, TERMINATED→fresh SLEEPING).
+
 ---
 
 ## 3. Three Levels
@@ -461,11 +507,56 @@ The `config` map supports:
 - Other framework configuration as needed
 
 Initial state allows the creator to seed transition-function-specific configuration
-(e.g. LLM provider, model, system prompt) that the transition function will read
-and preserve across runs. This keeps the framework `config` clean of
-transition-function internals, and allows an agent to switch transition functions.
+(e.g. LLM provider, model, system prompt, capabilities) that the transition
+function will read and preserve across runs. This keeps the framework `config`
+clean of transition-function internals, and allows an agent to switch transition
+functions.
 
-**Idempotent:** If the agent record already exists, create is a no-op.
+**Inputs:**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `agentId` | yes | Identifier for the agent slot in the caller's `g/` namespace |
+| `config` | no | Framework-level config (typically just `{operation: "..."}`) |
+| `state` | no | Initial state (typically `{config: {systemPrompt, caps, tools, ...}}`) |
+| `overwrite` | no | If true, an occupied slot is updated or wiped according to the slot resolution table below |
+
+**Outputs:** `{agentId, status, created: bool, updated: bool}`. Exactly one of
+`created` and `updated` is true on success.
+
+**Slot resolution.** What happens when the target slot already contains an
+agent depends on `overwrite` and the existing status:
+
+| `overwrite` | Existing status | Result | Side effect | `created` | `updated` |
+|---|---|---|---|---|---|
+| any           | (empty)      | **CREATED** | fresh record initialised at SLEEPING | `true`  | `false` |
+| absent / `false` | any state | **NOOP**    | record unchanged — idempotent re-run | `false` | `false` |
+| `true`        | `SLEEPING`   | **UPDATED** | `config` and `state.config` replaced; `timeline`, `inbox`, `tasks`, `pending`, `status`, `ts` preserved | `false` | `true` |
+| `true`        | `SUSPENDED`  | **UPDATED** | as SLEEPING; `error` and SUSPENDED status preserved (caller may resume separately) | `false` | `true` |
+| `true`        | `RUNNING`    | **FAIL**    | job fails: "Cannot update agent X: currently RUNNING. Wait for the active transition to finish, or call agent:cancelTask first." | — | — |
+| `true`        | `TERMINATED` | **CREATED** | `removeAgent` then fresh record — wipes timeline, inbox, tasks, pending, error | `true`  | `false` |
+
+**Why RUNNING is rejected.** A transition currently in flight has already
+captured the old `state.config` at the start of `processGoal` (level 2). Mutating
+`config` mid-run produces a Frankenstein agent — old prompt for the current
+turn, new prompt for the next — that surfaces as a hard-to-debug "why is the
+agent using the old policy" mystery. Forcing the caller to wait for SLEEPING (or
+explicitly cancel) eliminates the race.
+
+**Why SLEEPING / SUSPENDED are safe.** Both are dormant: no transition holds
+the per-agent lock, no thread is reading the config. The `updateConfigAndState`
+mutation is atomic (under `cursor.updateAndGet`), so there is no partial-write
+window. The next `wakeAgent` reads the new config.
+
+**Why TERMINATED wipes.** TERMINATED is the explicit "throw it all out" signal.
+If the caller wanted to preserve history, they would have updated in-place from
+SLEEPING/SUSPENDED instead of deleting first. Reviving a TERMINATED slot
+restarts at SLEEPING with a fresh timeline.
+
+**Idempotent re-runs.** Without `overwrite`, calling `agent:create` on an
+existing slot is a no-op. This makes setup scripts safe to re-run after partial
+failures: the script does not need to track which agents already exist. To
+update an existing agent on re-run, the script must opt in with `overwrite: true`.
 
 ### 4.2 Request
 
@@ -571,13 +662,35 @@ the response visible to callers without querying agent state separately.
 
 ### 4.5 Other Lifecycle Events
 
-| Event | Mutation |
-|-------|----------|
-| **Config update** | Read agent record, update `config`, write agent record. |
-| **Terminate** | Set status → `"TERMINATED"`, write agent record. |
-| **Clear error** | Set error → null, status → `"SLEEPING"`, write agent record. |
+| Operation | Trigger | Effect | Allowed status | New status |
+|-----------|---------|--------|----------------|------------|
+| **Update** | `agent:create overwrite:true` | Replace `config` and `state.config` in place; preserve timeline, inbox, tasks, pending, status, error. See §4.1 slot resolution table. | SLEEPING, SUSPENDED, TERMINATED (wipes) | unchanged (or SLEEPING if was TERMINATED) |
+| **Suspend** | run loop error (§4.4) | Set `error`, set status → SUSPENDED. State, tasks, pending, inbox unchanged. | RUNNING (internal) | SUSPENDED |
+| **Resume** | `agent:resume` | CAS SUSPENDED→SLEEPING via `tryResume`, clear `error`. Then wake via §4.6 if there is work. | SUSPENDED only | SLEEPING |
+| **Suspend (manual)** | `agent:suspend` | Set status → SUSPENDED with caller-supplied reason. Stops the agent from being woken. | SLEEPING | SUSPENDED |
+| **Trigger** | `agent:trigger` | Wake the agent and (optionally) wait for the run loop to drain. Fails on TERMINATED. See §4.6. | SLEEPING, RUNNING | RUNNING then SLEEPING |
+| **Cancel task** | `agent:cancelTask` | Remove a pending task from the agent's `tasks` index. Does not affect the run loop directly. | any except TERMINATED | unchanged |
+| **Delete** | `agent:delete` | Default: set status → TERMINATED (record retained for audit). With `remove:true`: physically remove the lattice slot. | any | TERMINATED (or absent) |
+| **Fork** | `agent:fork` | Create a NEW agent at a different `agentId` from this one's config + optional state + optional timeline. The source is untouched; the target slot must be empty unless `overwrite:true` and TERMINATED. | source must not be TERMINATED | new agent SLEEPING |
 
-All read-modify-write on the single value.
+**All mutations are atomic.** Each operation is a single `cursor.updateAndGet`
+on the agent's lattice cell, so concurrent operations against the same agent
+serialise cleanly without explicit locking. The per-agent lock around the run
+loop (§4.4) coordinates the heavier compound operations (read snapshot →
+invoke transition → merge result) but the underlying cell mutations remain
+atomic CAS-style updates.
+
+**Status invariants:**
+
+- Once an agent is TERMINATED, it cannot transition to any other status without
+  going through `agent:create overwrite:true`, which wipes the record. There is
+  no "un-terminate".
+- RUNNING is a transient state held only while the run loop's transition function
+  is executing or its merge step is pending. It is the only status under which
+  config mutations are rejected.
+- SUSPENDED preserves all queues so a resumed agent picks up where it stopped.
+  In-place updates while SUSPENDED do **not** auto-resume — that is the caller's
+  decision (typically: fix the cause, update the config, then `agent:resume`).
 
 ### 4.6 Scheduling — `wakeAgent`
 

@@ -224,22 +224,72 @@ public class AgentAdapter extends AAdapter {
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ctx.getCallerDID());
 
-		// Idempotent: if the slot is occupied and !overwrite, ensureAgent below
-		// returns the existing agent unchanged. If overwrite=true, TERMINATED
-		// agents are cleared; non-TERMINATED fails.
-		Boolean stillOccupied = applyOverwrite(job, user, agentId, overwrite);
-		if (stillOccupied == null) return;
-		boolean alreadyExists = stillOccupied;
+		// Resolve what to do with the target slot. See resolveCreateSlot for the
+		// full state machine — empty slots create, occupied slots update or no-op
+		// based on overwrite flag and current status.
+		SlotResult slot = resolveCreateSlot(job, user, agentId, overwrite, config, initialState);
+		if (slot == SlotResult.FAILED) return;
 
+		// ensureAgent is a no-op when the agent already exists; for UPDATED slots
+		// the in-place update has already happened inside resolveCreateSlot.
 		AgentState agent = user.ensureAgent(agentId, config, initialState);
 
 		AMap<AString, ACell> result = Maps.of(
 			Fields.AGENT_ID, agentId,
 			Fields.STATUS, agent.getStatus(),
-			Fields.CREATED, CVMBool.of(!alreadyExists));
+			Fields.CREATED, CVMBool.of(slot == SlotResult.CREATED),
+			Fields.UPDATED, CVMBool.of(slot == SlotResult.UPDATED));
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(result);
+	}
+
+	/** Outcome of resolving the target slot for {@code agent:create}. */
+	private enum SlotResult { CREATED, UPDATED, NOOP, FAILED }
+
+	/**
+	 * State machine for {@code agent:create}'s target slot. Determines whether
+	 * to create a fresh record, update an existing one in place, no-op, or fail.
+	 *
+	 * <table>
+	 *   <caption>Slot resolution matrix</caption>
+	 *   <tr><th>{@code overwrite}</th><th>Existing status</th><th>Result</th><th>Side effect</th></tr>
+	 *   <tr><td>any</td>            <td>(empty)</td>      <td>CREATED</td><td>none — caller initialises</td></tr>
+	 *   <tr><td>false</td>          <td>any</td>          <td>NOOP</td>   <td>none — idempotent</td></tr>
+	 *   <tr><td>true</td>           <td>TERMINATED</td>   <td>CREATED</td><td>removeAgent — fresh start, timeline wiped</td></tr>
+	 *   <tr><td>true</td>           <td>SLEEPING</td>     <td>UPDATED</td><td>updateConfigAndState — timeline preserved</td></tr>
+	 *   <tr><td>true</td>           <td>SUSPENDED</td>    <td>UPDATED</td><td>updateConfigAndState — timeline + error preserved</td></tr>
+	 *   <tr><td>true</td>           <td>RUNNING</td>      <td>FAILED</td> <td>job.fail — racy, unsafe to mutate mid-run</td></tr>
+	 * </table>
+	 *
+	 * <p>The RUNNING rejection is the only loud failure: a transition currently
+	 * in flight has already captured the OLD config at its start, so a mid-run
+	 * config swap would surface as a "why is the agent using the old prompt"
+	 * mystery on the next run. Callers should wait for the agent to return to
+	 * SLEEPING (e.g. via {@code agent:trigger}'s wait semantics) or cancel the
+	 * active task with {@code agent:cancelTask}.</p>
+	 */
+	private SlotResult resolveCreateSlot(Job job, User user, AString agentId, boolean overwrite,
+			AMap<AString, ACell> newConfig, ACell newState) {
+		AgentState existing = user.agent(agentId);
+		if (existing == null || !existing.exists()) return SlotResult.CREATED;
+
+		if (!overwrite) return SlotResult.NOOP;
+
+		AString status = existing.getStatus();
+		if (AgentState.TERMINATED.equals(status)) {
+			// Fresh start — wipe timeline, tasks, inbox, the lot
+			user.removeAgent(agentId);
+			return SlotResult.CREATED;
+		}
+		if (AgentState.RUNNING.equals(status)) {
+			job.fail("Cannot update agent " + agentId + ": currently RUNNING. "
+				+ "Wait for the active transition to finish, or call agent:cancelTask first.");
+			return SlotResult.FAILED;
+		}
+		// SLEEPING / SUSPENDED — in-place update preserves timeline, inbox, tasks, pending, status
+		existing.updateConfigAndState(newConfig, newState);
+		return SlotResult.UPDATED;
 	}
 
 	/**

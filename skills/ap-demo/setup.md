@@ -150,6 +150,8 @@ Agents use **context loading** to receive shared reference material. The `contex
 
 All pipeline agents use **strict structured output** via `responseFormat`. Every `responseFormat` schema must have `additionalProperties: false` at every object level for OpenAI strict mode.
 
+**Re-running setup:** every `agent_create` block below passes `overwrite: true`. On a fresh venue this is a no-op (slot empty); on a venue that already has the agent, it updates the config in place — preserving the timeline, inbox, and tasks. Re-run setup any time you tweak a system prompt, capability set, or context entry; the change applies on the next agent run. RUNNING agents are rejected (race-unsafe) — wait for them to return to SLEEPING first.
+
 ### Alice — Invoice Scanner
 
 Alice does pure text extraction — no tools needed. Empty `caps: []` denies all tool calls, making her capability surface explicit.
@@ -157,6 +159,7 @@ Alice does pure text extraction — no tools needed. Empty `caps: []` denies all
 ```
 agent_create
   agentId: "Alice"
+  overwrite: true
   config: { "operation": "goaltree:chat" }
   state: { "config": {
     "llmOperation": "langchain:openai",
@@ -205,6 +208,7 @@ Bob's caps grant exactly what his role needs — read vendor/PO data and the dat
 ```
 agent_create
   agentId: "Bob"
+  overwrite: true
   config: { "operation": "goaltree:chat" }
   state: { "config": {
     "llmOperation": "langchain:openai",
@@ -291,6 +295,7 @@ Carol can read everything in the workspace (she needs to inspect any reference d
 ```
 agent_create
   agentId: "Carol"
+  overwrite: true
   config: { "operation": "goaltree:chat" }
   state: { "config": {
     "llmOperation": "langchain:openai",
@@ -352,6 +357,7 @@ Dave is read-only on the workspace, can run orchestrations, and can query/messag
 ```
 agent_create
   agentId: "Dave"
+  overwrite: true
   config: { "operation": "goaltree:chat" }
   state: { "config": {
     "llmOperation": "langchain:openai",
