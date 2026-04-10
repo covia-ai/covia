@@ -38,7 +38,7 @@ import covia.grid.Status;
 import covia.grid.impl.BlobContent;
 
 public class EngineTest {
-	Engine venue;
+	final Engine venue = TestEngine.ENGINE;
 	Hash randomOpID;
 	AString EMPTY_META = Strings.create("{}");
 
@@ -48,8 +48,9 @@ public class EngineTest {
 
 	@BeforeEach
 	public void setup() throws IOException {
-		venue=Engine.createTemp(null);
-		Engine.addDemoAssets(venue);
+		// Asset stores are content-addressed and idempotent — repeated calls
+		// with the same metadata return the same hash, so it's safe to share
+		// TestEngine.ENGINE across tests.
 		randomOpID=venue.storeAsset(Utils.readResourceAsAString("/asset-examples/randomop.json"), null);
 		echoOpId=venue.storeAsset(Utils.readResourceAsAString("/asset-examples/echoop.json"), null);
 		qwenOpId=venue.storeAsset(Utils.readResourceAsAString("/asset-examples/qwen.json"), null);
@@ -308,9 +309,11 @@ public class EngineTest {
 	}
 
 	// ========== Secret resolution ==========
-
-	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
-	private static final AString BOB_DID = Strings.create("did:key:z6MkBob");
+	//
+	// Per-test unique DIDs so secret writes from different tests don't
+	// collide on the shared TestEngine.ENGINE.
+	private final AString ALICE_DID = Strings.create("did:key:z6MkAlice-EngineTest-" + System.nanoTime());
+	private final AString BOB_DID = Strings.create("did:key:z6MkBob-EngineTest-" + System.nanoTime());
 
 	@Test
 	public void testResolveSecret() {

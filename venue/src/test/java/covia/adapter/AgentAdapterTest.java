@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
@@ -22,22 +23,29 @@ import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 import covia.venue.User;
 import covia.venue.VenueState;
 
 /**
  * Tests for the AgentAdapter: create, message, trigger, request, query, and list operations.
+ *
+ * <p>Uses the shared {@link TestEngine#ENGINE}; each test gets unique
+ * ALICE_DID / BOB_DID via {@link TestEngine#uniqueDID(TestInfo)} so agent
+ * names and user state don't collide across tests.</p>
  */
 public class AgentAdapterTest {
 
-	private Engine engine;
-	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
-	private static final AString BOB_DID = Strings.create("did:key:z6MkBob");
+	private final Engine engine = TestEngine.ENGINE;
+	// ALICE_DID / BOB_DID are per-test (not static) so each test sees a fresh
+	// user namespace within the shared engine.
+	private AString ALICE_DID;
+	private AString BOB_DID;
 
 	@BeforeEach
-	public void setup() {
-		engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
+	public void setup(TestInfo info) {
+		ALICE_DID = TestEngine.uniqueDID(info);
+		BOB_DID = Strings.create(ALICE_DID.toString() + "-bob");
 	}
 
 	// ========== agent:create ==========

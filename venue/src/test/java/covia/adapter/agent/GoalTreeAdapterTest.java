@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -20,20 +21,23 @@ import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 
 /**
  * Tests for GoalTreeAdapter — the goal tree agent transition function.
+ *
+ * <p>Uses the shared {@link TestEngine#ENGINE} with per-test ALICE_DID.</p>
  */
 public class GoalTreeAdapterTest {
 
-	private Engine engine;
-	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
-	private static final RequestContext ALICE = RequestContext.of(ALICE_DID);
+	private final Engine engine = TestEngine.ENGINE;
+	private AString ALICE_DID;
+	private RequestContext ALICE;
 
 	@BeforeEach
-	public void setup() {
-		engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
+	public void setup(TestInfo info) {
+		ALICE_DID = TestEngine.uniqueDID(info);
+		ALICE = RequestContext.of(ALICE_DID);
 	}
 
 	// ========== Registration ==========

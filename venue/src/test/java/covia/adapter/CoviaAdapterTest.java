@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -22,21 +23,29 @@ import covia.grid.Job;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 
 /**
  * Tests for the CoviaAdapter: lattice read, write, delete, and list operations.
+ *
+ * <p>Uses the shared {@link TestEngine#ENGINE}; each test gets its own user
+ * DID via {@link TestEngine#uniqueDID(TestInfo)} so writes don't collide
+ * across tests.</p>
  */
 public class CoviaAdapterTest {
 
-	private Engine engine;
-	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
-	private static final RequestContext ALICE = RequestContext.of(ALICE_DID);
-	private static final RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
+	private final Engine engine = TestEngine.ENGINE;
+	// ALICE / BOB are per-test (not static) so each test sees a fresh user
+	// namespace within the shared engine.
+	private AString ALICE_DID;
+	private RequestContext ALICE;
+	private RequestContext BOB;
 
 	@BeforeEach
-	public void setup() {
-		engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
+	public void setup(TestInfo info) {
+		ALICE_DID = TestEngine.uniqueDID(info);
+		ALICE = RequestContext.of(ALICE_DID);
+		BOB = RequestContext.of(Strings.create(ALICE_DID.toString() + "-bob"));
 
 		// Create an agent so there's data to read
 		Job createJob = engine.jobs().invokeOperation("agent:create",

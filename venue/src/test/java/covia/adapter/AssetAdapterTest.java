@@ -20,19 +20,20 @@ import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
+import org.junit.jupiter.api.TestInfo;
 
 /**
  * Tests for the AssetAdapter: store, get, and list operations.
  */
 public class AssetAdapterTest {
 
-	private Engine engine;
-	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
+	private final Engine engine = TestEngine.ENGINE;
+	private AString ALICE_DID;
 
 	@BeforeEach
-	public void setup() {
-		engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
+	public void setup(TestInfo info) {
+		ALICE_DID = TestEngine.uniqueDID(info);
 	}
 
 	// ========== asset:store ==========

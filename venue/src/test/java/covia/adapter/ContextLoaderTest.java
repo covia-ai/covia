@@ -21,6 +21,8 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
+import org.junit.jupiter.api.TestInfo;
 
 /**
  * Tests for ContextLoader — context entry resolution for agent LLM context.
@@ -31,17 +33,15 @@ import covia.venue.RequestContext;
  */
 public class ContextLoaderTest {
 
-	private Engine engine;
-	private ContextLoader loader;
+	private final Engine engine = TestEngine.ENGINE;
+	private final ContextLoader loader = new ContextLoader(engine);
 	private RequestContext ctx;
-	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
+	private AString ALICE_DID;
 
 	@BeforeEach
-	public void setup() {
-		engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
+	public void setup(TestInfo info) {
+		ALICE_DID = TestEngine.uniqueDID(info);
 		ctx = RequestContext.of(ALICE_DID);
-		loader = new ContextLoader(engine);
 	}
 
 	// ========== Static helpers ==========

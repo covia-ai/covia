@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -26,6 +27,7 @@ import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 import covia.venue.User;
 
 /**
@@ -33,11 +35,16 @@ import covia.venue.User;
  *
  * <p>Uses {@code test:llm} as the level 3 operation, which echoes the last
  * user message as the response — no real LLM needed.</p>
+ *
+ * <p>Uses the shared {@link TestEngine#ENGINE} with per-test ALICE_DID for
+ * isolation.</p>
  */
 public class LLMAgentAdapterTest {
 
-	private Engine engine;
-	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
+	private final Engine engine = TestEngine.ENGINE;
+	// ALICE_DID is per-test (not static) so each test sees a fresh user
+	// namespace within the shared engine.
+	private AString ALICE_DID;
 
 	/** State with test LLM config — points at test:llm for level 3 */
 	private static final ACell TEST_STATE = Maps.of(
@@ -45,9 +52,8 @@ public class LLMAgentAdapterTest {
 	);
 
 	@BeforeEach
-	public void setup() {
-		engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
+	public void setup(TestInfo info) {
+		ALICE_DID = TestEngine.uniqueDID(info);
 	}
 
 	// ========== History reconstruction ==========

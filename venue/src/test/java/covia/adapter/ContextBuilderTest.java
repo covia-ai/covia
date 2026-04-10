@@ -21,6 +21,8 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
+import org.junit.jupiter.api.TestInfo;
 
 /**
  * Tests for ContextBuilder — context assembly for agent LLM turns.
@@ -31,9 +33,9 @@ import covia.venue.RequestContext;
  */
 public class ContextBuilderTest {
 
-	private Engine engine;
+	private final Engine engine = TestEngine.ENGINE;
 	private RequestContext ctx;
-	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
+	private AString ALICE_DID;
 
 	private static final AString K_ROLE    = Strings.intern("role");
 	private static final AString K_CONTENT = Strings.intern("content");
@@ -42,9 +44,8 @@ public class ContextBuilderTest {
 	private static final AString K_CONTEXT = Strings.intern("context");
 
 	@BeforeEach
-	public void setup() {
-		engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
+	public void setup(TestInfo info) {
+		ALICE_DID = TestEngine.uniqueDID(info);
 		ctx = RequestContext.of(ALICE_DID);
 	}
 

@@ -19,10 +19,9 @@
 					     mvn test -Dgroups=integration -DexcludedGroups= -->
 					<excludedGroups>integration</excludedGroups>
 					<!-- Fork 4 JVMs in parallel. Each fork has its own TestServer
-					     singleton, so no shared-state contention between forks
-					     (only between classes within the same fork, which run
-					     sequentially). 4 forks gives the best wall-clock time
-					     for the venue suite; more forks hit JIT/warmup overhead. -->
+					     and TestEngine singletons so there's no shared-state
+					     contention between forks (only between classes within
+					     the same fork, which run sequentially). -->
 					<forkCount>4</forkCount>
 					<reuseForks>true</reuseForks>
 				</configuration>
