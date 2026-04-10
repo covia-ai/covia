@@ -25,6 +25,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.data.type.Types;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 import convex.lattice.ALattice;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.api.Fields;
@@ -442,7 +443,7 @@ public class CoviaAdapter extends AAdapter {
 	private ACell handleWrite(RequestContext ctx, ACell input) {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
 		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
-		ACell value = RT.getIn(input, Fields.VALUE);
+		ACell value = parseJsonValue(RT.getIn(input, Fields.VALUE));
 
 		// Check job-scoped virtual namespace (t/)
 		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
@@ -536,7 +537,7 @@ public class CoviaAdapter extends AAdapter {
 		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
 		if (vns != null) jsonKeys = vns.remainingKeys();
 		ALatticeCursor<ACell> baseCursor = (vns != null) ? vns.cursor() : ensureUserCursor(ctx);
-		ACell element = RT.getIn(input, Fields.VALUE);
+		ACell element = parseJsonValue(RT.getIn(input, Fields.VALUE));
 
 		ALatticeCursor<ACell> entryCursor = resolveEntry(baseCursor, jsonKeys);
 
@@ -550,6 +551,31 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	// ========== Write path helpers ==========
+
+	/**
+	 * Coerces a value supplied as a JSON-encoded string into the parsed
+	 * structure. LLMs frequently pass nested objects/arrays as a string
+	 * literal — without this, an enrichment map would be persisted as a
+	 * single string instead of a queryable structure.
+	 *
+	 * <p>Only strings whose first/last non-whitespace characters look like
+	 * JSON object/array delimiters are parsed; everything else is returned
+	 * unchanged. Parse failures fall back to the original value.</p>
+	 */
+	static ACell parseJsonValue(ACell cell) {
+		if (!(cell instanceof AString s)) return cell;
+		String str = s.toString().trim();
+		if (str.isEmpty()) return cell;
+		char first = str.charAt(0);
+		char last = str.charAt(str.length() - 1);
+		if ((first == '{' && last == '}') || (first == '[' && last == ']')) {
+			try {
+				ACell parsed = JSON.parse(str);
+				if (parsed != null) return parsed;
+			} catch (Exception e) { /* not valid JSON, return original */ }
+		}
+		return cell;
+	}
 
 	/**
 	 * Validates that a parsed path targets a writable namespace.

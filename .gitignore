@@ -8,5 +8,6 @@ CLAUDE.local.md
 /.claude/*
 !/.claude/settings.json
 /venue_err.log
+/venue.log
 /dev/
 /agent-export/

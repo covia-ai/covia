@@ -367,6 +367,89 @@ public class CoviaAdapterTest {
 		assertEquals(Strings.create("second"), RT.getIn(readResult, "value"));
 	}
 
+	// ========== covia:write — JSON-string coercion ==========
+	//
+	// LLMs frequently call covia:write with `value` as a JSON-encoded string
+	// rather than a structured map/array. The adapter must parse such strings
+	// so the audit trail contains queryable structures, not opaque blobs.
+
+	@Test
+	public void testWriteCoercesJsonObjectString() {
+		String json = "{\"vendor_id\":\"V-1042\",\"status\":\"ACTIVE\",\"score\":0.95}";
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/enrichments/INV-001",
+			        Fields.VALUE, Strings.create(json)),
+			ALICE).awaitResult(5000);
+
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, "w/enrichments/INV-001"), ALICE);
+		ACell readResult = readJob.awaitResult(5000);
+		ACell value = RT.getIn(readResult, "value");
+		assertNotNull(value, "value should be present");
+		// If parsing worked, this is a structured map and we can navigate into it
+		assertEquals(Strings.create("V-1042"), RT.getIn(value, "vendor_id"));
+		assertEquals(Strings.create("ACTIVE"), RT.getIn(value, "status"));
+	}
+
+	@Test
+	public void testWriteCoercesJsonArrayString() {
+		String json = "[\"a\",\"b\",\"c\"]";
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/tags", Fields.VALUE, Strings.create(json)),
+			ALICE).awaitResult(5000);
+
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, "w/tags"), ALICE);
+		ACell readResult = readJob.awaitResult(5000);
+		AVector<ACell> value = RT.getIn(readResult, "value");
+		assertNotNull(value);
+		assertEquals(3, value.count());
+		assertEquals(Strings.create("b"), value.get(1));
+	}
+
+	@Test
+	public void testWritePlainStringNotCoerced() {
+		// Strings that are not JSON delimiters must be stored as-is.
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/note", Fields.VALUE, Strings.create("just a note")),
+			ALICE).awaitResult(5000);
+
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, "w/note"), ALICE);
+		assertEquals(Strings.create("just a note"),
+			RT.getIn(readJob.awaitResult(5000), "value"));
+	}
+
+	@Test
+	public void testWriteMalformedJsonStringPreserved() {
+		// Looks like JSON but isn't — must not throw, must store original string.
+		String malformed = "{not really json}";
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/note2", Fields.VALUE, Strings.create(malformed)),
+			ALICE).awaitResult(5000);
+
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, "w/note2"), ALICE);
+		assertEquals(Strings.create(malformed),
+			RT.getIn(readJob.awaitResult(5000), "value"));
+	}
+
+	@Test
+	public void testAppendCoercesJsonObjectString() {
+		String json = "{\"event\":\"validated\",\"by\":\"Bob\"}";
+		engine.jobs().invokeOperation("covia:append",
+			Maps.of(Fields.PATH, "w/audit", Fields.VALUE, Strings.create(json)),
+			ALICE).awaitResult(5000);
+
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, "w/audit"), ALICE);
+		AVector<ACell> value = RT.getIn(readJob.awaitResult(5000), "value");
+		assertNotNull(value);
+		assertEquals(1, value.count());
+		// Element must be a parsed map, not the raw string
+		assertEquals(Strings.create("validated"), RT.getIn(value.get(0), "event"));
+	}
+
 	@Test
 	public void testWriteMultipleKeys() {
 		// Write several keys to workspace

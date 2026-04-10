@@ -214,11 +214,15 @@ public class LangChainAdapter extends AAdapter {
 		return null;
 	}
 
+	// Request/response logging is disabled by default — these flags would
+	// leak full prompts and completions (potentially sensitive user data)
+	// to stdout if the langchain4j logger were ever bumped to DEBUG.
+
 	static ChatModel buildOllamaModel(String baseUrl, String model, Duration timeout) {
 		return OllamaChatModel.builder()
 			.baseUrl(baseUrl)
-			.logRequests(true)
-			.logResponses(true)
+			.logRequests(false)
+			.logResponses(false)
 			.modelName(model)
 			.timeout(timeout)
 			.build();
@@ -228,8 +232,8 @@ public class LangChainAdapter extends AAdapter {
 		return OpenAiChatModel.builder()
 			.apiKey(apiKey)
 			.baseUrl(baseUrl)
-			.logRequests(true)
-			.logResponses(true)
+			.logRequests(false)
+			.logResponses(false)
 			.modelName(model)
 			.timeout(timeout)
 			.build();
@@ -239,8 +243,8 @@ public class LangChainAdapter extends AAdapter {
 		return AnthropicChatModel.builder()
 			.apiKey(apiKey)
 			.baseUrl(baseUrl)
-			.logRequests(true)
-			.logResponses(true)
+			.logRequests(false)
+			.logResponses(false)
 			.modelName(model)
 			.timeout(timeout)
 			.build();

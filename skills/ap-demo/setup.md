@@ -152,6 +152,8 @@ All pipeline agents use **strict structured output** via `responseFormat`. Every
 
 ### Alice — Invoice Scanner
 
+Alice does pure text extraction — no tools needed. Empty `caps: []` denies all tool calls, making her capability surface explicit.
+
 ```
 agent_create
   agentId: "Alice"
@@ -159,6 +161,7 @@ agent_create
   state: { "config": {
     "llmOperation": "langchain:openai",
     "model": "gpt-4o-mini",
+    "caps": [],
     "systemPrompt": "You are Alice, an AP Invoice Scanner. Extract structured invoice fields from raw text. Your output is schema-enforced — populate every field. Use empty string for missing text fields and empty array for missing lists. Add a flag for every field that required interpretation or was ambiguous. Be precise with amounts.",
     "responseFormat": {
       "name": "InvoiceExtraction",
@@ -197,6 +200,8 @@ Bob uses **tools and structured output together**. During processing he autonomo
 
 Bob's `context` loads: (1) the AP Data Guide artifact for workspace layout, and (2) an op-based entry that lists known vendors at context-load time — so Bob knows which vendors exist before making any tool calls.
 
+Bob's caps grant exactly what his role needs — read vendor/PO data and the data guide, write enrichments. Any attempt to write decisions or modify vendor records is denied.
+
 ```
 agent_create
   agentId: "Bob"
@@ -204,6 +209,12 @@ agent_create
   state: { "config": {
     "llmOperation": "langchain:openai",
     "model": "gpt-4o-mini",
+    "caps": [
+      {"with": "w/vendor-records/", "can": "crud/read"},
+      {"with": "w/purchase-orders/", "can": "crud/read"},
+      {"with": "w/docs/",            "can": "crud/read"},
+      {"with": "w/enrichments/",     "can": "crud"}
+    ],
     "systemPrompt": "You are Bob, an AP Data Enricher. You receive structured invoice data and enrich it by autonomously looking up vendor records, purchase orders, and checking for duplicates. Use your tools to read and write workspace data. Record the exact path you queried in each source_path field. Your confidence_score should reflect how many validations succeeded (1.0 = all clear, lower for each warning).",
     "context": [
       {"ref": "w/docs/data-guide", "label": "AP Data Guide"},
@@ -275,6 +286,8 @@ Carol applies named policy rules and must cite each one in her response. The sch
 
 Carol's `context` loads: (1) the AP Policy Rules artifact, and (2) a workspace ref for all vendor records — rendered via CellExplorer with budget control, giving Carol vendor status at a glance. She receives both Alice's extraction (for the actual invoice total) and Bob's enrichment (for validation results) via the orchestration. She writes her decision to `w/decisions/{invoice_number}` for the permanent audit trail.
 
+Carol can read everything in the workspace (she needs to inspect any reference data) but can only write to `w/decisions/`. Critically, she cannot modify enrichments or vendor records — preserving the audit trail.
+
 ```
 agent_create
   agentId: "Carol"
@@ -282,6 +295,10 @@ agent_create
   state: { "config": {
     "llmOperation": "langchain:openai",
     "model": "gpt-4o-mini",
+    "caps": [
+      {"with": "w/",           "can": "crud/read"},
+      {"with": "w/decisions/", "can": "crud"}
+    ],
     "systemPrompt": "You are Carol, the AP Payment Approver and policy gate. You receive both the original extraction (with the invoice total_amount) and Bob's enrichment (with validation results). Use extraction.total_amount as the invoice amount for threshold rules — not the PO authorised amount. Apply the AP policy rules to every invoice. Every decision must cite each rule evaluated with PASS or FAIL and specific evidence. Write your decision to w/decisions/{invoice_number} for the audit trail.",
     "context": [
       {"ref": "w/docs/policy-rules", "label": "AP Policy Rules"},
@@ -330,6 +347,8 @@ agent_create
 
 Dave is the general-purpose manager. No structured output — he's conversational. His context loads the policy rules, data guide, and pipeline orchestration hash so he can answer questions and run the pipeline without hardcoded knowledge.
 
+Dave is read-only on the workspace, can run orchestrations, and can query/message the pipeline agents. He cannot write anywhere — proving managerial oversight without write privilege. Act 4 of the demo script depends on Dave being denied a write to `w/vendor-records/`.
+
 ```
 agent_create
   agentId: "Dave"
@@ -337,6 +356,13 @@ agent_create
   state: { "config": {
     "llmOperation": "langchain:openai",
     "model": "gpt-4o-mini",
+    "caps": [
+      {"with": "w/",  "can": "crud/read"},
+      {"with": "g/",  "can": "agent/query"},
+      {"with": "g/",  "can": "agent/message"},
+      {"with": "g/",  "can": "agent/request"},
+      {"with": "",    "can": "invoke"}
+    ],
     "systemPrompt": "You are Dave, the AP Manager. You oversee Alice (scanner), Bob (enricher), and Carol (approver). You can process invoices through the pipeline using grid_run with the orchestration hash from your context, investigate workspace data, query agent state, and answer questions. Summarise pipeline results highlighting the decision, policy rules, and risk flags.",
     "context": [
       {"ref": "w/docs/policy-rules", "label": "AP Policy Rules"},
@@ -352,9 +378,11 @@ agent_create
 agent_list  → should show Alice, Bob, Carol, Dave all SLEEPING
 ```
 
-Confirm context is configured by querying Bob and Carol:
+Confirm context and caps are configured:
 
 ```
-agent_query  agentId=Bob   → state.config.context should list the data guide hash
-agent_query  agentId=Carol → state.config.context should list the policy rules hash
+agent_query  agentId=Bob   → state.config.context lists the data guide hash; state.config.caps has 4 entries
+agent_query  agentId=Carol → state.config.context lists the policy rules hash; state.config.caps has 2 entries
+agent_query  agentId=Dave  → state.config.caps has 5 entries (workspace read + agent/g + invoke)
+agent_query  agentId=Alice → state.config.caps is [] (no tools needed)
 ```

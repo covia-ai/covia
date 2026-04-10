@@ -14,7 +14,6 @@ import org.junit.jupiter.api.Test;
 import convex.core.data.ACell;
 import convex.core.data.Maps;
 import convex.core.lang.RT;
-import covia.exception.ResponseException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
