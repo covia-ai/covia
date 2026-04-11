@@ -134,7 +134,7 @@ to agents and humans alike.
 
 ## 4. Create Agents
 
-All four use `goaltree:chat` transition with `langchain:openai` (gpt-4o-mini). Create in parallel.
+All four use `goaltree:chat` transition with `langchain:openai`. Alice uses `gpt-4o-mini` (pure extraction, strict schema does the work); Bob, Carol, and Dave use `gpt-4.1-mini` for better tool-loop and instruction-following behaviour. Create in parallel.
 
 **IMPORTANT:** `config.operation` must be a plain string `"v/ops/goaltree/chat"`, not a map.
 
@@ -211,7 +211,7 @@ agent_create
   config: { "operation": "v/ops/goaltree/chat" }
   state: { "config": {
     "llmOperation": "v/ops/langchain/openai",
-    "model": "gpt-4o-mini",
+    "model": "gpt-4.1-mini",
     "caps": [
       {"with": "w/vendor-records/", "can": "crud/read"},
       {"with": "w/purchase-orders/", "can": "crud/read"},
@@ -219,7 +219,7 @@ agent_create
       {"with": "w/invoices/",        "can": "crud"},
       {"with": "w/enrichments/",     "can": "crud"}
     ],
-    "systemPrompt": "You are Bob, an AP Data Enricher. You receive structured invoice data and enrich it by autonomously looking up vendor records, purchase orders, and checking for duplicates. Use your tools to read and write workspace data. Record the exact path you queried in each source_path field. Your confidence_score should reflect how many validations succeeded (1.0 = all clear, lower for each warning).",
+    "systemPrompt": "You are Bob, an AP Data Enricher. You receive structured invoice data and enrich it. Workflow: (1) read w/vendor-records/{vendor_name} to validate the vendor; (2) read w/purchase-orders/{vendor_name}/{po_number} to match the PO; (3) read w/invoices/{vendor_name}/{invoice_number} for duplicate detection (not found = no duplicate); (4) write the enrichment to w/enrichments/{invoice_number}; (5) respond with the InvoiceEnrichment JSON. Make NO tool calls outside this workflow. Record the exact path you queried in each source_path field. confidence_score: 1.0 if all validations clean, lower for each warning. After step 5 you are done — do not write anywhere else, do not call any further tools.",
     "context": [
       {"ref": "w/docs/data-guide", "label": "AP Data Guide"},
       {"op": "v/ops/covia/list", "input": {"path": "w/vendor-records"}, "label": "Known Vendors"}
@@ -299,12 +299,12 @@ agent_create
   config: { "operation": "v/ops/goaltree/chat" }
   state: { "config": {
     "llmOperation": "v/ops/langchain/openai",
-    "model": "gpt-4o-mini",
+    "model": "gpt-4.1-mini",
     "caps": [
       {"with": "w/",           "can": "crud/read"},
       {"with": "w/decisions/", "can": "crud"}
     ],
-    "systemPrompt": "You are Carol, the AP Payment Approver and policy gate. You receive both the original extraction (with the invoice total_amount) and Bob's enrichment (with validation results). Use extraction.total_amount as the invoice amount for threshold rules — not the PO authorised amount. Apply the AP policy rules to every invoice. Every decision must cite each rule evaluated with PASS or FAIL and specific evidence. Write your decision to w/decisions/{invoice_number} for the audit trail.",
+    "systemPrompt": "You are Carol, the AP Payment Approver and policy gate. You receive both the original extraction (with the invoice total_amount) and Bob's enrichment (with validation results). Use extraction.total_amount as the invoice amount for threshold rules — not the PO authorised amount. Apply the AP policy rules to every invoice. Every decision must cite each rule evaluated with PASS or FAIL and specific evidence. Workflow: (1) evaluate every policy rule against the extraction and enrichment data; (2) write your decision to w/decisions/{invoice_number} — this is your ONLY persistence path; (3) respond with the ApprovalDecision JSON. Make NO tool calls outside this workflow. Do not write to w/audits/, w/logs/, or any other path — those do not exist and will fail. After step 3 you are done.",
     "context": [
       {"ref": "w/docs/policy-rules", "label": "AP Policy Rules"},
       {"ref": "w/vendor-records", "label": "Vendor Records (reference)"}
@@ -361,7 +361,7 @@ agent_create
   config: { "operation": "v/ops/goaltree/chat" }
   state: { "config": {
     "llmOperation": "v/ops/langchain/openai",
-    "model": "gpt-4o-mini",
+    "model": "gpt-4.1-mini",
     "caps": [
       {"with": "w/",  "can": "crud/read"},
       {"with": "g/",  "can": "agent/message"},
