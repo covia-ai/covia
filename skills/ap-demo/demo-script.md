@@ -61,7 +61,7 @@ covia_read  path=w/decisions/INV-2024-1042    → Carol's compliance decision
 Query Carol to show her config:
 
 ```
-agent_query  agentId=Carol
+agent_info  agentId=Carol
 ```
 
 Point out:
@@ -86,7 +86,7 @@ agent_request  agentId=Dave  input={"task": "Try to write a test value to w/vend
 Show Bob's caps:
 
 ```
-agent_query  agentId=Bob → state.config.caps shows exactly 4 entries
+agent_info  agentId=Bob → state.config.caps shows exactly 4 entries
 ```
 
 > "Bob can read vendors and POs, write enrichments. Nothing else. Carol can read anything but only write decisions."
@@ -134,7 +134,7 @@ Show the message provenance:
 ```
 covia_list  path=w/decisions       → all decisions by invoice number
 covia_list  path=w/enrichments     → all enrichments
-agent_query  agentId=Carol         → timeline shows every run with full context
+agent_info  agentId=Carol         → timeline shows every run with full context
 ```
 
 > "This is the compliance record. Immutable, structured, traceable from Carol's decision back through Bob's validation to Alice's extraction to the raw invoice text."

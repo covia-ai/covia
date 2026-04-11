@@ -49,7 +49,7 @@ Run all quick tests plus the tests below. **Requires `OPENAI_API_KEY`** — if n
    ```
    agent_create  agentId=_smoke_test  config={"operation": "v/test/ops/taskcomplete"}
    agent_request  agentId=_smoke_test  input={"test": true}  wait=true
-   agent_query  agentId=_smoke_test
+   agent_info  agentId=_smoke_test
    agent_delete  agentId=_smoke_test  remove=true
    ```
    Expected: agent runs, task completes, timeline has one entry.

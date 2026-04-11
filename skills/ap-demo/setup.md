@@ -364,7 +364,6 @@ agent_create
     "model": "gpt-4o-mini",
     "caps": [
       {"with": "w/",  "can": "crud/read"},
-      {"with": "g/",  "can": "agent/query"},
       {"with": "g/",  "can": "agent/message"},
       {"with": "g/",  "can": "agent/request"},
       {"with": "",    "can": "invoke"}
@@ -387,8 +386,8 @@ agent_list  → should show Alice, Bob, Carol, Dave all SLEEPING
 Confirm context and caps are configured:
 
 ```
-agent_query  agentId=Bob   → state.config.context lists the data guide hash; state.config.caps has 4 entries
-agent_query  agentId=Carol → state.config.context lists the policy rules hash; state.config.caps has 2 entries
-agent_query  agentId=Dave  → state.config.caps has 5 entries (workspace read + agent/g + invoke)
-agent_query  agentId=Alice → state.config.caps is [] (no tools needed)
+agent_info  agentId=Bob   → state.config.context lists the data guide hash; state.config.caps has 4 entries
+agent_info  agentId=Carol → state.config.context lists the policy rules hash; state.config.caps has 2 entries
+agent_info  agentId=Dave  → state.config.caps has 4 entries (workspace read + agent/g message + agent/g request + invoke)
+agent_info  agentId=Alice → state.config.caps is [] (no tools needed)
 ```

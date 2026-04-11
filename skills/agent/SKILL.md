@@ -50,7 +50,7 @@ Shows agent IDs, statuses, and task counts.
 ### `query <name>` — Inspect an agent
 
 ```
-agent_query  agentId=<name>
+agent_info  agentId=<name>
 ```
 
 Show status, config, pending tasks, timeline length, and last run result.

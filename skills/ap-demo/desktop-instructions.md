@@ -110,7 +110,7 @@ After the pipeline runs, demonstrate:
 ### Context Loading
 Query Carol to show her config — short prompt, policy rules loaded from a shared artifact:
 ```
-agent_query  agentId=Carol
+agent_info  agentId=Carol
 ```
 
 ### Capability Enforcement

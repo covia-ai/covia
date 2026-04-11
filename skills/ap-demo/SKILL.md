@@ -81,9 +81,9 @@ Submit all four scenario invoices to Alice concurrently (without `wait`), then p
 Walk the provenance chain backward from Carol's most recent decision to Alice's raw input. Query all three agent timelines:
 
 ```
-agent_query  agentId=Carol
-agent_query  agentId=Bob
-agent_query  agentId=Alice
+agent_info  agentId=Carol
+agent_info  agentId=Bob
+agent_info  agentId=Alice
 ```
 
 Because all agents use strict schemas, the `result` field in each timeline entry contains guaranteed structured output. Extract the latest entry from each and build the provenance chain:
@@ -120,9 +120,9 @@ Check current state:
 
 ```
 agent_list
-agent_query  agentId=Alice   (if exists)
-agent_query  agentId=Bob     (if exists)
-agent_query  agentId=Carol   (if exists)
+agent_info  agentId=Alice   (if exists)
+agent_info  agentId=Bob     (if exists)
+agent_info  agentId=Carol   (if exists)
 ```
 
 Report agent statuses, timeline lengths, whether `responseFormat` is configured, and any errors.

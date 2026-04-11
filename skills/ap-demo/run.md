@@ -109,7 +109,7 @@ Risk flags: {risk_flags.length > 0 ? risk_flags : "None"}
 Query Bob to show the richest audit data:
 
 ```
-agent_query  agentId=Bob
+agent_info  agentId=Bob
 ```
 
 From Bob's latest timeline entry, present a structured audit card:
@@ -138,9 +138,9 @@ Output: enrichment, confidence {confidence_score}
 Query all three agent timelines and build the full chain:
 
 ```
-agent_query  agentId=Carol
-agent_query  agentId=Bob
-agent_query  agentId=Alice
+agent_info  agentId=Carol
+agent_info  agentId=Bob
+agent_info  agentId=Alice
 ```
 
 Present a structured provenance chain using the structured output fields:
@@ -256,7 +256,7 @@ INV-2024-1300  Nexus Dynamics    $12,000   UNKNOWN        UNKNOWN    NO        R
 
 | Problem | Likely Cause | Fix |
 |---------|-------------|-----|
-| Alice returns error instead of structured JSON | LLM call failed (API key, network) | Check `agent_query agentId=Alice` timeline for errors. Verify `OPENAI_API_KEY` is set. Structured output means format issues are impossible — errors are always platform-level. |
+| Alice returns error instead of structured JSON | LLM call failed (API key, network) | Check `agent_info agentId=Alice` timeline for errors. Verify `OPENAI_API_KEY` is set. Structured output means format issues are impossible — errors are always platform-level. |
 | Bob says he can't find vendor records | Reference data not seeded, or vendor name mismatch | Re-run `/ap-demo setup` (step 2). Check `covia_read path=w/vendor-records/Acme Corp` returns data. Alice's `vendor_name` must exactly match the seeded key. |
 | Bob's confidence score is unexpectedly low | Invoice fields don't match seeded data | Check Alice's output — `vendor_name` must be exactly "Acme Corp", `po_number` must be "PO-2024-0456". |
 | Carol rejects instead of escalating | Policy interpretation varies between runs | Reset Carol (`/agent reset Carol`) and re-submit. Carol's structured output should cite the specific rule — check which one she flags. |
