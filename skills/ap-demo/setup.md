@@ -224,61 +224,62 @@ agent_create
       {"ref": "w/docs/data-guide", "label": "AP Data Guide"},
       {"op": "v/ops/covia/list", "input": {"path": "w/vendor-records"}, "label": "Known Vendors"}
     ],
-    "responseFormat": {
-      "name": "InvoiceEnrichment",
-      "schema": {
-        "type": "object",
-        "properties": {
-          "invoice_number": { "type": "string" },
-          "vendor_validation": {
-            "type": "object",
-            "properties": {
-              "status": { "type": "string", "description": "ACTIVE, SUSPENDED, or UNKNOWN" },
-              "sanctions_check": { "type": "string", "description": "CLEAR, FLAGGED, or UNKNOWN" },
-              "sanctions_detail": { "type": "string", "description": "Detail if flagged, empty string otherwise" },
-              "source_path": { "type": "string", "description": "Workspace path queried for vendor record" }
+    "outputs": {
+      "complete": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "invoice_number": { "type": "string" },
+            "vendor_validation": {
+              "type": "object",
+              "properties": {
+                "status": { "type": "string", "description": "ACTIVE, SUSPENDED, or UNKNOWN" },
+                "sanctions_check": { "type": "string", "description": "CLEAR, FLAGGED, or UNKNOWN" },
+                "sanctions_detail": { "type": "string", "description": "Detail if flagged, empty string otherwise" },
+                "source_path": { "type": "string", "description": "Workspace path queried for vendor record" }
+              },
+              "required": ["status", "sanctions_check", "sanctions_detail", "source_path"],
+              "additionalProperties": false
             },
-            "required": ["status", "sanctions_check", "sanctions_detail", "source_path"],
-            "additionalProperties": false
-          },
-          "po_match": {
-            "type": "object",
-            "properties": {
-              "matched": { "type": "boolean" },
-              "po_number": { "type": "string" },
-              "amount_authorised": { "type": "number", "description": "PO authorised amount, or 0 if no PO found" },
-              "within_budget": { "type": "boolean" },
-              "approver": { "type": "string", "description": "PO approver name, or empty string" },
-              "source_path": { "type": "string" }
+            "po_match": {
+              "type": "object",
+              "properties": {
+                "matched": { "type": "boolean" },
+                "po_number": { "type": "string" },
+                "amount_authorised": { "type": "number", "description": "PO authorised amount, or 0 if no PO found" },
+                "within_budget": { "type": "boolean" },
+                "approver": { "type": "string", "description": "PO approver name, or empty string" },
+                "source_path": { "type": "string" }
+              },
+              "required": ["matched", "po_number", "amount_authorised", "within_budget", "approver", "source_path"],
+              "additionalProperties": false
             },
-            "required": ["matched", "po_number", "amount_authorised", "within_budget", "approver", "source_path"],
-            "additionalProperties": false
-          },
-          "duplicate_check": {
-            "type": "object",
-            "properties": {
-              "is_duplicate": { "type": "boolean" },
-              "detail": { "type": "string" }
+            "duplicate_check": {
+              "type": "object",
+              "properties": {
+                "is_duplicate": { "type": "boolean" },
+                "detail": { "type": "string" }
+              },
+              "required": ["is_duplicate", "detail"],
+              "additionalProperties": false
             },
-            "required": ["is_duplicate", "detail"],
-            "additionalProperties": false
-          },
-          "currency_match": {
-            "type": "object",
-            "properties": {
-              "invoice_currency": { "type": "string" },
-              "po_currency": { "type": "string", "description": "PO currency, or empty string if no PO" },
-              "match": { "type": "boolean" }
+            "currency_match": {
+              "type": "object",
+              "properties": {
+                "invoice_currency": { "type": "string" },
+                "po_currency": { "type": "string", "description": "PO currency, or empty string if no PO" },
+                "match": { "type": "boolean" }
+              },
+              "required": ["invoice_currency", "po_currency", "match"],
+              "additionalProperties": false
             },
-            "required": ["invoice_currency", "po_currency", "match"],
-            "additionalProperties": false
+            "confidence_score": { "type": "number", "description": "0.0 to 1.0 — reflects how many validations passed" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "source_references": { "type": "array", "items": { "type": "string" }, "description": "All workspace paths consulted during enrichment" }
           },
-          "confidence_score": { "type": "number", "description": "0.0 to 1.0 — reflects how many validations passed" },
-          "warnings": { "type": "array", "items": { "type": "string" } },
-          "source_references": { "type": "array", "items": { "type": "string" }, "description": "All workspace paths consulted during enrichment" }
-        },
-        "required": ["invoice_number", "vendor_validation", "po_match", "duplicate_check", "currency_match", "confidence_score", "warnings", "source_references"],
-        "additionalProperties": false
+          "required": ["invoice_number", "vendor_validation", "po_match", "duplicate_check", "currency_match", "confidence_score", "warnings", "source_references"],
+          "additionalProperties": false
+        }
       }
     }
   }}
@@ -309,40 +310,41 @@ agent_create
       {"ref": "w/docs/policy-rules", "label": "AP Policy Rules"},
       {"ref": "w/vendor-records", "label": "Vendor Records (reference)"}
     ],
-    "responseFormat": {
-      "name": "ApprovalDecision",
-      "schema": {
-        "type": "object",
-        "properties": {
-          "decision": { "type": "string", "description": "APPROVED, ESCALATED, or REJECTED" },
-          "invoice_summary": {
-            "type": "object",
-            "properties": {
-              "vendor": { "type": "string" },
-              "invoice_number": { "type": "string" },
-              "amount": { "type": "number" },
-              "currency": { "type": "string" }
+    "outputs": {
+      "complete": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "decision": { "type": "string", "description": "APPROVED, ESCALATED, or REJECTED" },
+            "invoice_summary": {
+              "type": "object",
+              "properties": {
+                "vendor": { "type": "string" },
+                "invoice_number": { "type": "string" },
+                "amount": { "type": "number" },
+                "currency": { "type": "string" }
+              },
+              "required": ["vendor", "invoice_number", "amount", "currency"],
+              "additionalProperties": false
             },
-            "required": ["vendor", "invoice_number", "amount", "currency"],
-            "additionalProperties": false
+            "policy_rules_applied": { "type": "array", "items": {
+              "type": "object",
+              "properties": {
+                "rule": { "type": "string", "description": "Policy rule ID and name, e.g. AP-001 Amount Threshold" },
+                "result": { "type": "string", "description": "PASS or FAIL" },
+                "detail": { "type": "string", "description": "Specific evidence for the result" }
+              },
+              "required": ["rule", "result", "detail"],
+              "additionalProperties": false
+            }},
+            "escalation_target": { "type": "string", "description": "Name and role of the person to escalate to, or empty string if not escalating" },
+            "evidence_considered": { "type": "array", "items": { "type": "string" }, "description": "Key data points that informed the decision" },
+            "risk_flags": { "type": "array", "items": { "type": "string" }, "description": "Any risk concerns, even if rules passed" },
+            "reasoning": { "type": "string", "description": "Full narrative reasoning for the decision" }
           },
-          "policy_rules_applied": { "type": "array", "items": {
-            "type": "object",
-            "properties": {
-              "rule": { "type": "string", "description": "Policy rule ID and name, e.g. AP-001 Amount Threshold" },
-              "result": { "type": "string", "description": "PASS or FAIL" },
-              "detail": { "type": "string", "description": "Specific evidence for the result" }
-            },
-            "required": ["rule", "result", "detail"],
-            "additionalProperties": false
-          }},
-          "escalation_target": { "type": "string", "description": "Name and role of the person to escalate to, or empty string if not escalating" },
-          "evidence_considered": { "type": "array", "items": { "type": "string" }, "description": "Key data points that informed the decision" },
-          "risk_flags": { "type": "array", "items": { "type": "string" }, "description": "Any risk concerns, even if rules passed" },
-          "reasoning": { "type": "string", "description": "Full narrative reasoning for the decision" }
-        },
-        "required": ["decision", "invoice_summary", "policy_rules_applied", "escalation_target", "evidence_considered", "risk_flags", "reasoning"],
-        "additionalProperties": false
+          "required": ["decision", "invoice_summary", "policy_rules_applied", "escalation_target", "evidence_considered", "risk_flags", "reasoning"],
+          "additionalProperties": false
+        }
       }
     }
   }}

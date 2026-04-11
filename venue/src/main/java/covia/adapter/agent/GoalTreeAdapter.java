@@ -65,6 +65,27 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	private static final AString K_REQUIRED    = Strings.intern("required");
 	private static final AString K_RESPONSE    = Strings.intern("response");
 	private static final AString K_HISTORY     = Strings.intern("history");
+	private static final AString K_OUTPUTS     = Strings.intern("outputs");
+	private static final AString K_SCHEMA      = Strings.intern("schema");
+	private static final AString K_ADDITIONAL_PROPERTIES = Strings.intern("additionalProperties");
+
+	/**
+	 * Default schema for the {@code fail} tool's parameters when an agent has
+	 * declared {@code outputs} but not specified a custom fail schema. Strict-
+	 * compatible: every property is required, additionalProperties is false.
+	 */
+	@SuppressWarnings("unchecked")
+	static final AMap<AString, ACell> DEFAULT_FAIL_SCHEMA = Maps.of(
+		K_TYPE, Strings.create("object"),
+		K_PROPERTIES, Maps.of(
+			Strings.create("reason"), Maps.of(
+				K_TYPE, Strings.create("string"),
+				K_DESCRIPTION, Strings.create("Brief explanation of why the goal failed")),
+			Strings.create("details"), Maps.of(
+				K_TYPE, Strings.create("string"),
+				K_DESCRIPTION, Strings.create("Additional context: tool errors, missing data, partial work done"))),
+		K_REQUIRED, Vectors.of((ACell) Strings.create("reason"), (ACell) Strings.create("details")),
+		K_ADDITIONAL_PROPERTIES, convex.core.data.prim.CVMBool.FALSE);
 
 	static final AMap<AString, ACell> TOOL_DEF_SUBGOAL = Maps.of(
 		K_NAME, Strings.create(TOOL_SUBGOAL),
@@ -244,6 +265,24 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		AMap<AString, ACell> recordConfig = (RT.getIn(input, AgentState.KEY_CONFIG) instanceof AMap m) ? m : null;
 		AMap<AString, ACell> config = extractConfig(recordConfig, state);
 
+		// Resolve typed outputs declaration. When set, the agent's complete/
+		// fail tools become typed (parameters carry the user's schema), the
+		// text-only path is rejected (LLM must call complete or fail), and
+		// responseFormat is suppressed at the L3 level — schema enforcement
+		// happens via OpenAI strictTools on the tool call arguments instead.
+		AMap<AString, ACell> outputs = resolveOutputs(config);
+		AVector<ACell> typedRootHarnessTools = (outputs != null)
+			? buildTypedRootHarnessTools(outputs)
+			: null;
+
+		// When outputs are typed, drop responseFormat from the config we pass
+		// to L3 — strict mode would otherwise also try to constrain the (now
+		// non-existent) text content path, which conflicts with our tool-only
+		// completion model.
+		AMap<AString, ACell> l3Config = (outputs != null && config != null)
+			? config.dissoc(K_RESPONSE_FORMAT)
+			: config;
+
 		// Generate root goal description from incoming work
 		String rootDescription = GoalTreeContext.describeTransitionInput(messages, tasks, pending);
 
@@ -264,14 +303,14 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		AVector<ACell> baseTools = context.tools();
 		Map<String, AString> configToolMap = context.configToolMap();
 		AVector<ACell> caps = context.caps();
-		AString llmOperation = getLLMOperation(config);
+		AString llmOperation = getLLMOperation(l3Config);
 
 		// Set up capability-scoped context for tool dispatch
 		RequestContext capsCtx = context.capsCtx();
 
 		// Run the root frame
-		FrameResult result = runFrame(job, frames, 0, config, llmOperation, baseTools,
-			configToolMap, caps, capsCtx, context.history());
+		FrameResult result = runFrame(job, frames, 0, l3Config, llmOperation, baseTools,
+			configToolMap, caps, capsCtx, context.history(), typedRootHarnessTools);
 
 		// Goal tree is stateless across transitions for everything except config:
 		// the frame stack is in-memory only. Config (caps, responseFormat, prompt,
@@ -361,20 +400,31 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	 * @param caps capability attenuations
 	 * @param ctx request context for tool dispatch
 	 * @param systemMessages system messages (prompt, context entries)
+	 * @param typedRootHarnessTools per-agent typed root harness tools, or null
+	 *        to use the static {@link #HARNESS_TOOLS}. Only applied at the
+	 *        root frame; child frames always use {@link #CHILD_HARNESS_TOOLS}.
 	 * @return the frame's result
 	 */
 	@SuppressWarnings("unchecked")
 	FrameResult runFrame(Job job, AVector<ACell> frames, int frameIndex,
 			AMap<AString, ACell> config, AString llmOperation,
 			AVector<ACell> baseTools, Map<String, AString> configToolMap,
-			AVector<ACell> caps, RequestContext ctx, AVector<ACell> systemMessages) {
+			AVector<ACell> caps, RequestContext ctx, AVector<ACell> systemMessages,
+			AVector<ACell> typedRootHarnessTools) {
 
 		// Assemble tools = harness tools + configured tools
 		// Root frames get all harness tools; child frames get only complete/fail/compact
-		// (no subgoal — prevents unnecessary nesting from smaller models)
-		AVector<ACell> harnessForFrame = (frameIndex == 0)
-			? HARNESS_TOOLS
-			: CHILD_HARNESS_TOOLS;
+		// (no subgoal — prevents unnecessary nesting from smaller models).
+		// When the agent has declared typed outputs, the root frame's complete
+		// and fail tools carry the user's schema as their parameters and the
+		// LLM is forced through OpenAI strictTools enforcement.
+		AVector<ACell> harnessForFrame;
+		if (frameIndex == 0) {
+			harnessForFrame = (typedRootHarnessTools != null) ? typedRootHarnessTools : HARNESS_TOOLS;
+		} else {
+			harnessForFrame = CHILD_HARNESS_TOOLS;
+		}
+		boolean typedOutputs = (frameIndex == 0 && typedRootHarnessTools != null);
 		AVector<ACell> tools = (AVector<ACell>) harnessForFrame.concat(baseTools);
 
 		// Inject goal as first user message in the conversation (once, not every iteration)
@@ -444,14 +494,32 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			ACell l3Result = invokeLevel3(llmOperation, config, fullHistory, tools, ctx);
 
 			if (!hasToolCalls(l3Result)) {
-				// Text-only = implicit complete
+				// Text-only response — handling depends on whether the agent
+				// has declared typed outputs.
 				AString content = RT.ensureString(RT.getIn(l3Result, K_CONTENT));
 
-				// If responseFormat declares a schema, validate that content parses
-				// as JSON. The LLM is supposed to honour strict mode server-side, but
-				// in practice models sometimes bail to plain text on tool errors —
-				// catch that here and push them back into another iteration so the
-				// frame doesn't propagate a schema-breaking string upstream.
+				// Typed outputs: text-only is forbidden — the LLM MUST call
+				// complete() or fail() to deliver a result. Nudge it back.
+				if (typedOutputs) {
+					log.info("Frame[{}] iter={} text response rejected — typed outputs require complete()/fail()",
+						frameIndex, iteration);
+					activeFrame = GoalTreeContext.appendTurn(activeFrame, l3Result);
+					AMap<AString, ACell> nudge = Maps.of(
+						K_ROLE, ROLE_USER,
+						K_CONTENT, Strings.create(
+							"Your response was plain text, but this agent has typed outputs. "
+							+ "You must call either complete(result=...) with the structured "
+							+ "result, or fail(error=...) with a structured error. Text-only "
+							+ "responses are not accepted."));
+					activeFrame = GoalTreeContext.appendTurn(activeFrame, nudge);
+					frames = updateFrame(frames, frameIndex, activeFrame);
+					continue;
+				}
+
+				// Legacy responseFormat path: validate content parses as JSON
+				// when a schema is declared. Strict mode usually catches this
+				// server-side but some providers (and pre-strict-mode setups)
+				// bail to plain text on tool errors — catch that here.
 				if (content != null && hasSchemaResponseFormat(config)) {
 					boolean valid;
 					try {
@@ -500,8 +568,14 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 				if (TOOL_COMPLETE.equals(toolName)) {
 					ACell result = RT.getIn(toolInput, Strings.create("result"));
-					// Validate: if responseFormat is set, string result must be valid JSON
-					if (config != null && config.get(K_RESPONSE_FORMAT) != null && result instanceof AString s) {
+					// With typed outputs, OpenAI strictTools enforces schema
+					// conformance on the result arg at the API level — strict
+					// mode means by the time we see the call, the result is
+					// already a structured map matching the declared schema.
+					// For the legacy responseFormat path (no typed outputs but
+					// a schema is set), keep the parseability check that helped
+					// pre-strict-mode setups catch malformed string results.
+					if (!typedOutputs && config != null && config.get(K_RESPONSE_FORMAT) != null && result instanceof AString s) {
 						boolean valid = true;
 						try {
 							convex.core.util.JSON.parse(s.toString());
@@ -517,7 +591,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 							return FrameResult.complete(result);
 						}
 					} else {
-						// No responseFormat or structured result — accept as-is
+						// Typed outputs path or no schema — accept as-is.
 						activeFrame = GoalTreeContext.appendTurn(activeFrame,
 							toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("complete"))));
 						frames = updateFrame(frames, frameIndex, activeFrame);
@@ -586,9 +660,13 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					frames = updateFrame(frames, frameIndex, activeFrame);
 					AVector<ACell> childFrames = frames.conj(childFrame);
 
-					// Recurse into child
+					// Recurse into child. Child frames don't inherit typed root
+					// harness tools — they always use the generic complete/fail
+					// (a subgoal's contract is "return any value to the parent",
+					// not the parent's typed output schema). Pass null so the
+					// child uses CHILD_HARNESS_TOOLS regardless of typing.
 					FrameResult childResult = runFrame(job, childFrames, frameIndex + 1,
-						config, llmOperation, baseTools, configToolMap, caps, ctx, systemMessages);
+						config, llmOperation, baseTools, configToolMap, caps, ctx, systemMessages, null);
 
 					// Pop child — result becomes tool result in parent
 					AMap<AString, ACell> resultMap = Maps.of(
@@ -631,6 +709,125 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> rfMap = (AMap<AString, ACell>) rf;
 		return rfMap.get(Strings.create("schema")) instanceof AMap;
+	}
+
+	// ========== Typed outputs ==========
+
+	/**
+	 * Resolves the agent's typed outputs declaration. Returns the
+	 * {@code outputs} map from config when present. Otherwise, when
+	 * {@code responseFormat} declares a JSON schema, synthesises a
+	 * shimmed outputs declaration so existing agents that only specify
+	 * responseFormat get the typed-tool treatment too.
+	 *
+	 * <p>Returns null if neither outputs nor a schema-bearing responseFormat
+	 * is declared — the agent uses the legacy untyped harness tools.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	static AMap<AString, ACell> resolveOutputs(AMap<AString, ACell> config) {
+		if (config == null) return null;
+		ACell explicit = config.get(K_OUTPUTS);
+		if (explicit instanceof AMap) return (AMap<AString, ACell>) explicit;
+		// Migration shim: lift responseFormat.schema into outputs.complete.schema
+		if (hasSchemaResponseFormat(config)) {
+			AMap<AString, ACell> rf = (AMap<AString, ACell>) config.get(K_RESPONSE_FORMAT);
+			ACell schema = rf.get(K_SCHEMA);
+			return Maps.of(
+				Strings.create(TOOL_COMPLETE),
+				Maps.of(K_SCHEMA, schema));
+		}
+		return null;
+	}
+
+	/** Pulls the {@code complete} schema from a resolved outputs map, or null. */
+	@SuppressWarnings("unchecked")
+	static AMap<AString, ACell> outputsCompleteSchema(AMap<AString, ACell> outputs) {
+		if (outputs == null) return null;
+		ACell entry = outputs.get(Strings.create(TOOL_COMPLETE));
+		if (!(entry instanceof AMap)) return null;
+		ACell schema = ((AMap<AString, ACell>) entry).get(K_SCHEMA);
+		return (schema instanceof AMap) ? (AMap<AString, ACell>) schema : null;
+	}
+
+	/**
+	 * Pulls the {@code fail} schema from a resolved outputs map. Falls back to
+	 * {@link #DEFAULT_FAIL_SCHEMA} when outputs is set but no fail schema is
+	 * declared, so typed agents always get a structured fail path.
+	 */
+	@SuppressWarnings("unchecked")
+	static AMap<AString, ACell> outputsFailSchema(AMap<AString, ACell> outputs) {
+		if (outputs == null) return null;
+		ACell entry = outputs.get(Strings.create(TOOL_FAIL));
+		if (entry instanceof AMap) {
+			ACell schema = ((AMap<AString, ACell>) entry).get(K_SCHEMA);
+			if (schema instanceof AMap) return (AMap<AString, ACell>) schema;
+		}
+		return DEFAULT_FAIL_SCHEMA;
+	}
+
+	/**
+	 * Synthesises a typed {@code complete} tool whose {@code result} parameter
+	 * is the agent's declared output schema. Wrapped in a strict-compatible
+	 * parameters object so OpenAI's strictTools mode enforces the schema at
+	 * the API level — closing the asymmetry where the legacy untyped complete
+	 * tool bypassed schema enforcement entirely.
+	 */
+	static AMap<AString, ACell> typedCompleteTool(AMap<AString, ACell> resultSchema) {
+		return Maps.of(
+			K_NAME, Strings.create(TOOL_COMPLETE),
+			K_DESCRIPTION, Strings.create(
+				"Finish your goal with the structured result. This is the ONLY way to "
+				+ "successfully complete — text-only responses are not accepted. The "
+				+ "result parameter is schema-enforced; make sure you have gathered "
+				+ "enough data via tool calls to populate every required field before "
+				+ "calling this."),
+			K_PARAMETERS, Maps.of(
+				K_TYPE, Strings.create("object"),
+				K_PROPERTIES, Maps.of(Strings.create("result"), resultSchema),
+				K_REQUIRED, Vectors.of(Strings.create("result")),
+				K_ADDITIONAL_PROPERTIES, convex.core.data.prim.CVMBool.FALSE));
+	}
+
+	/**
+	 * Synthesises a typed {@code fail} tool whose error parameter is the
+	 * agent's declared fail schema (or {@link #DEFAULT_FAIL_SCHEMA}). Used
+	 * when an agent declares typed outputs — gives the LLM a structured way
+	 * to bail with diagnostic information instead of an unconstrained string.
+	 */
+	static AMap<AString, ACell> typedFailTool(AMap<AString, ACell> errorSchema) {
+		return Maps.of(
+			K_NAME, Strings.create(TOOL_FAIL),
+			K_DESCRIPTION, Strings.create(
+				"Report that your goal cannot be completed. Use this when a required "
+				+ "tool call has failed, data is missing, or capability denials prevent "
+				+ "progress. The error parameter is schema-enforced — provide a clear "
+				+ "explanation in the required fields. Do not bail to text — call this "
+				+ "tool instead."),
+			K_PARAMETERS, Maps.of(
+				K_TYPE, Strings.create("object"),
+				K_PROPERTIES, Maps.of(Strings.create("error"), errorSchema),
+				K_REQUIRED, Vectors.of(Strings.create("error")),
+				K_ADDITIONAL_PROPERTIES, convex.core.data.prim.CVMBool.FALSE));
+	}
+
+	/**
+	 * Builds the root-frame harness tool list for an agent, replacing the
+	 * static {@link #TOOL_DEF_COMPLETE} and {@link #TOOL_DEF_FAIL} with typed
+	 * versions when {@code outputs} is set. Returns null if no typing is
+	 * needed (caller falls back to {@link #HARNESS_TOOLS}).
+	 */
+	@SuppressWarnings("unchecked")
+	static AVector<ACell> buildTypedRootHarnessTools(AMap<AString, ACell> outputs) {
+		AMap<AString, ACell> completeSchema = outputsCompleteSchema(outputs);
+		if (completeSchema == null) return null; // no typing
+		AMap<AString, ACell> failSchema = outputsFailSchema(outputs);
+		return (AVector<ACell>) Vectors.of(
+			(ACell) TOOL_DEF_SUBGOAL,
+			(ACell) typedCompleteTool(completeSchema),
+			(ACell) typedFailTool(failSchema),
+			(ACell) TOOL_DEF_COMPACT,
+			(ACell) TOOL_DEF_CONTEXT_LOAD,
+			(ACell) TOOL_DEF_CONTEXT_UNLOAD);
 	}
 
 	/** Extracts merged config from record-level and state-level config. */

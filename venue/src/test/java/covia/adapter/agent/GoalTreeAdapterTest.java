@@ -326,39 +326,177 @@ public class GoalTreeAdapterTest {
 			"Should echo the goal text: " + response);
 	}
 
-	@Test
-	public void testResponseFormatSchemaAcceptsValidJson() {
-		// When responseFormat declares a schema and the LLM emits valid JSON text,
-		// the frame completes normally (validation passes through).
-		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+	// (testResponseFormatSchemaAcceptsValidJson removed: with the typed-outputs
+	// migration shim, responseFormat agents now go through the typed-tool path
+	// and reject text-only responses. The legacy text-content path it tested no
+	// longer applies. See testTypedOutputsRejectsTextOnlyResponse below.)
 
-		AMap<AString, ACell> schema = Maps.of(
+	// ========== Typed outputs ==========
+
+	private static AMap<AString, ACell> simpleSchema() {
+		return Maps.of(
 			Strings.create("type"), Strings.create("object"),
 			Strings.create("properties"), Maps.of(
-				Strings.create("answer"), Maps.of(Strings.create("type"), Strings.create("string"))),
+				Strings.create("answer"), Maps.of(
+					Strings.create("type"), Strings.create("string"))),
 			Strings.create("required"), Vectors.of((ACell) Strings.create("answer")),
 			Strings.create("additionalProperties"), convex.core.data.prim.CVMBool.FALSE);
+	}
 
-		AMap<AString, ACell> responseFormat = Maps.of(
+	@Test
+	public void testResolveOutputsExplicit() {
+		// Explicit outputs declaration takes precedence over any responseFormat.
+		AMap<AString, ACell> schema = simpleSchema();
+		AMap<AString, ACell> outputs = Maps.of(
+			Strings.create("complete"), Maps.of(Strings.create("schema"), schema));
+		AMap<AString, ACell> config = Maps.of(Strings.create("outputs"), outputs);
+		AMap<AString, ACell> resolved = GoalTreeAdapter.resolveOutputs(config);
+		assertNotNull(resolved);
+		assertSame(outputs, resolved);
+	}
+
+	@Test
+	public void testResolveOutputsMigratedFromResponseFormat() {
+		// Migration shim: responseFormat with a schema becomes outputs.complete.schema.
+		AMap<AString, ACell> schema = simpleSchema();
+		AMap<AString, ACell> rf = Maps.of(
 			Strings.create("name"), Strings.create("Answer"),
 			Strings.create("schema"), schema);
+		AMap<AString, ACell> config = Maps.of(Strings.create("responseFormat"), rf);
+		AMap<AString, ACell> resolved = GoalTreeAdapter.resolveOutputs(config);
+		assertNotNull(resolved, "responseFormat with schema should migrate to outputs");
+		AMap<AString, ACell> completeSchema = GoalTreeAdapter.outputsCompleteSchema(resolved);
+		assertEquals(schema, completeSchema, "migrated schema should match");
+	}
+
+	@Test
+	public void testResolveOutputsAbsent() {
+		// No outputs and no responseFormat → null (legacy untyped path).
+		assertNull(GoalTreeAdapter.resolveOutputs(null));
+		assertNull(GoalTreeAdapter.resolveOutputs(Maps.empty()));
+		// responseFormat as a plain string (not a schema map) → null
+		AMap<AString, ACell> jsonOnlyConfig = Maps.of(
+			Strings.create("responseFormat"), Strings.create("json"));
+		assertNull(GoalTreeAdapter.resolveOutputs(jsonOnlyConfig));
+	}
+
+	@Test
+	public void testTypedCompleteToolWrapsSchema() {
+		AMap<AString, ACell> schema = simpleSchema();
+		AMap<AString, ACell> tool = GoalTreeAdapter.typedCompleteTool(schema);
+		assertEquals("complete", RT.ensureString(RT.getIn(tool, "name")).toString());
+		// parameters: object with single 'result' property, additionalProperties: false
+		ACell params = tool.get(Strings.create("parameters"));
+		assertEquals(Strings.create("object"), RT.getIn(params, "type"));
+		assertEquals(convex.core.data.prim.CVMBool.FALSE,
+			RT.getIn(params, "additionalProperties"));
+		ACell required = RT.getIn(params, "required");
+		assertEquals(Vectors.of(Strings.create("result")), required);
+		// The user's schema is preserved verbatim under properties.result
+		ACell resultSchema = RT.getIn(params, "properties", "result");
+		assertEquals(schema, resultSchema);
+	}
+
+	@Test
+	public void testTypedFailToolUsesDefaultSchema() {
+		// Without an explicit fail schema, outputsFailSchema returns the default
+		// (reason + details, both required, additionalProperties false).
+		AMap<AString, ACell> outputs = Maps.of(
+			Strings.create("complete"), Maps.of(Strings.create("schema"), simpleSchema()));
+		AMap<AString, ACell> failSchema = GoalTreeAdapter.outputsFailSchema(outputs);
+		assertNotNull(failSchema);
+		assertEquals(GoalTreeAdapter.DEFAULT_FAIL_SCHEMA, failSchema);
+		AMap<AString, ACell> tool = GoalTreeAdapter.typedFailTool(failSchema);
+		assertEquals("fail", RT.ensureString(RT.getIn(tool, "name")).toString());
+		ACell errorSchema = RT.getIn(tool, "parameters", "properties", "error");
+		assertEquals(failSchema, errorSchema);
+	}
+
+	@Test
+	public void testTypedFailToolHonoursOverride() {
+		// Custom fail schema overrides the default
+		AMap<AString, ACell> customFailSchema = Maps.of(
+			Strings.create("type"), Strings.create("object"),
+			Strings.create("properties"), Maps.of(
+				Strings.create("code"), Maps.of(Strings.create("type"), Strings.create("string"))),
+			Strings.create("required"), Vectors.of((ACell) Strings.create("code")),
+			Strings.create("additionalProperties"), convex.core.data.prim.CVMBool.FALSE);
+		AMap<AString, ACell> outputs = Maps.of(
+			Strings.create("complete"), Maps.of(Strings.create("schema"), simpleSchema()),
+			Strings.create("fail"), Maps.of(Strings.create("schema"), customFailSchema));
+		AMap<AString, ACell> failSchema = GoalTreeAdapter.outputsFailSchema(outputs);
+		assertEquals(customFailSchema, failSchema);
+	}
+
+	@Test
+	public void testBuildTypedRootHarnessTools() {
+		// When outputs is set, the typed root harness tool list contains
+		// subgoal + typed complete + typed fail + compact + context_load + context_unload
+		AMap<AString, ACell> outputs = Maps.of(
+			Strings.create("complete"), Maps.of(Strings.create("schema"), simpleSchema()));
+		AVector<ACell> tools = GoalTreeAdapter.buildTypedRootHarnessTools(outputs);
+		assertNotNull(tools);
+		assertEquals(6, tools.count());
+		// Names: subgoal, complete, fail, compact, context_load, context_unload
+		java.util.Set<String> names = new java.util.HashSet<>();
+		for (long i = 0; i < tools.count(); i++) {
+			names.add(RT.ensureString(RT.getIn(tools.get(i), "name")).toString());
+		}
+		assertTrue(names.contains("subgoal"));
+		assertTrue(names.contains("complete"));
+		assertTrue(names.contains("fail"));
+		assertTrue(names.contains("compact"));
+		assertTrue(names.contains("context_load"));
+		assertTrue(names.contains("context_unload"));
+		// The complete tool's parameters carry the user's schema
+		ACell completeTool = null;
+		for (long i = 0; i < tools.count(); i++) {
+			ACell tool = tools.get(i);
+			if ("complete".equals(RT.ensureString(RT.getIn(tool, "name")).toString())) {
+				completeTool = tool;
+				break;
+			}
+		}
+		assertNotNull(completeTool);
+		ACell resultSchema = RT.getIn(completeTool, "parameters", "properties", "result");
+		assertEquals(simpleSchema(), resultSchema);
+	}
+
+	@Test
+	public void testBuildTypedRootHarnessToolsReturnsNullWithoutOutputs() {
+		// No outputs → null → caller falls back to static HARNESS_TOOLS
+		assertNull(GoalTreeAdapter.buildTypedRootHarnessTools(null));
+		assertNull(GoalTreeAdapter.buildTypedRootHarnessTools(Maps.empty()));
+	}
+
+	@Test
+	public void testTypedOutputsRejectsTextOnlyResponse() {
+		// With outputs declared and a mock LLM that only emits text (test:llm
+		// echoes the user message), the harness should reject the text and
+		// nudge the LLM repeatedly until MAX_ITERATIONS — never accepting the
+		// text-only response as a valid completion.
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		AMap<AString, ACell> outputs = Maps.of(
+			Strings.create("complete"), Maps.of(Strings.create("schema"), simpleSchema()));
 
 		ACell input = Maps.of(
-			Fields.AGENT_ID, "json-agent",
+			Fields.AGENT_ID, "typed-text-agent",
 			AgentState.KEY_STATE, null,
 			AgentState.KEY_CONFIG, Maps.of(
 				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
-				Strings.create("responseFormat"), responseFormat),
+				Strings.create("outputs"), outputs),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"),
-					Strings.create("{\"answer\":\"42\"}"))));
+					Strings.create("anything"))));
 
 		ACell output = adapter.processGoal(null, ALICE, input);
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
 		assertNotNull(response);
-		// test:llm echoes the JSON; it parses; frame completes with that JSON
-		assertTrue(response.toString().contains("\"answer\""),
-			"Valid JSON should pass validation: " + response);
+		// test:llm only echoes — it can't make tool calls — so the loop will
+		// always reject the text and eventually hit MAX_ITERATIONS.
+		assertFalse(response.toString().equals("anything"),
+			"Text-only response must not be accepted under typed outputs: " + response);
 	}
 
 	@Test
