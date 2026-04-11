@@ -109,30 +109,60 @@ public abstract class AAdapter {
 	 * @return The asset hash, or {@code null} if installation failed
 	 */
 	protected Hash installAsset(String catalogPath, String resourcePath) {
+		return installAssetAt("v/ops/", catalogPath, resourcePath);
+	}
+
+	/**
+	 * Installs a non-primitive example asset (e.g. a demo orchestration or a
+	 * pre-canned sample). The asset is stored in the venue CAS and remains
+	 * callable by hash, but is NOT registered in {@code /v/ops/}. Per
+	 * OPERATIONS.md §7, only adapter primitives belong in the catalog.
+	 *
+	 * @param resourcePath Resource path of the asset JSON
+	 * @return The asset hash, or {@code null} if installation failed
+	 */
+	protected Hash installExampleAsset(String resourcePath) {
+		return installAsset(resourcePath);
+	}
+
+	/**
+	 * Installs a test-only operation under {@code /v/test/ops/<catalogPath>}.
+	 * This keeps the test ops in their own sub-namespace under {@code /v/test/}
+	 * — hidden by default from {@code /v/ops/} listings while still callable
+	 * via the explicit path. Per OPERATIONS.md §7.
+	 *
+	 * @param catalogPath The path under {@code /v/test/ops/} (e.g. {@code "echo"})
+	 * @param resourcePath Resource path of the asset JSON
+	 * @return The asset hash, or {@code null} if installation failed
+	 */
+	protected Hash installTestAsset(String catalogPath, String resourcePath) {
+		return installAssetAt("v/test/ops/", catalogPath, resourcePath);
+	}
+
+	/**
+	 * Shared implementation: store the asset, validate the catalog path, and
+	 * defer the materialisation write until {@link covia.venue.Engine#materialiseVOps}.
+	 */
+	private Hash installAssetAt(String prefix, String catalogPath, String resourcePath) {
 		Hash hash = installAsset(resourcePath);
 		if (hash == null) return null;
 
-		// Validate catalog path before registering it. On failure, log and
-		// leave the asset in the CAS but skip the /v/ops/ entry.
 		if (!isValidCatalogPath(catalogPath)) {
 			log.warn("Invalid catalog path '{}' for resource {} — asset stored in CAS only",
 				catalogPath, resourcePath);
 			return hash;
 		}
 
-		// Defer the actual /v/ops/<catalogPath> write until after all adapters
-		// are registered. installAsset is called during adapter registration,
-		// but the CoviaAdapter that provides covia:write may not yet be
-		// registered. Engine.materialiseVOps() flushes the deferred entries
-		// after all adapters have run installAssets().
-		pendingCatalogEntries.put(catalogPath, hash);
+		pendingCatalogEntries.put(prefix + catalogPath, hash);
 		return hash;
 	}
 
 	/**
 	 * Catalog entries collected during {@link #installAsset(String, String)}
-	 * calls, awaiting materialisation by {@link covia.venue.Engine#materialiseVOps}.
-	 * Map of {@code /v/ops/} path → asset hash.
+	 * and {@link #installTestAsset(String, String)} calls, awaiting
+	 * materialisation by {@link covia.venue.Engine#materialiseVOps}. Maps the
+	 * full target path (e.g. {@code "v/ops/json/merge"} or
+	 * {@code "v/test/ops/echo"}) to the asset hash.
 	 */
 	public final java.util.Map<String, Hash> pendingCatalogEntries = new java.util.LinkedHashMap<>();
 

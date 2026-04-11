@@ -39,7 +39,7 @@ public class UCANAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
-		installAsset("/adapters/ucan/issue.json");
+		installAsset("ucan/issue", "/adapters/ucan/issue.json");
 	}
 
 	@Override

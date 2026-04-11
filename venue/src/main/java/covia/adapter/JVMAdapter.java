@@ -35,9 +35,9 @@ public class JVMAdapter extends AAdapter {
 	
 	@Override
 	protected void installAssets() {
-		installAsset("/adapters/jvm/stringConcat.json");
-		installAsset("/adapters/jvm/urlEncode.json");
-		installAsset("/adapters/jvm/urlDecode.json");
+		installAsset("jvm/string-concat", "/adapters/jvm/stringConcat.json");
+		installAsset("jvm/url-encode",    "/adapters/jvm/urlEncode.json");
+		installAsset("jvm/url-decode",    "/adapters/jvm/urlDecode.json");
 	}
 
 	@Override

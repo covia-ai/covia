@@ -65,7 +65,6 @@ public class CapabilityChecker {
 			case "covia:read", "covia:list", "covia:slice" -> "crud/read";
 			case "covia:write", "covia:append" -> "crud/write";
 			case "covia:delete" -> "crud/delete";
-			case "covia:functions", "covia:describe", "covia:adapters" -> "crud/read";
 			case "agent:create" -> "agent/create";
 			case "agent:request" -> "agent/request";
 			case "agent:message" -> "agent/message";

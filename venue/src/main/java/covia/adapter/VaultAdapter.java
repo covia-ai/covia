@@ -47,11 +47,11 @@ public class VaultAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
-		installAsset(ASSETS_PATH + "read.json");
-		installAsset(ASSETS_PATH + "write.json");
-		installAsset(ASSETS_PATH + "list.json");
-		installAsset(ASSETS_PATH + "mkdir.json");
-		installAsset(ASSETS_PATH + "delete.json");
+		installAsset("vault/read",   ASSETS_PATH + "read.json");
+		installAsset("vault/write",  ASSETS_PATH + "write.json");
+		installAsset("vault/list",   ASSETS_PATH + "list.json");
+		installAsset("vault/mkdir",  ASSETS_PATH + "mkdir.json");
+		installAsset("vault/delete", ASSETS_PATH + "delete.json");
 		log.info("Vault adapter installed with {} operations", operationNames.count());
 	}
 

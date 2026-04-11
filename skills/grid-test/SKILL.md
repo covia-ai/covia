@@ -22,15 +22,15 @@ Run these in parallel and report results:
 
 2. **List adapters** — verify all adapters are registered:
    ```
-   covia_adapters
+   covia_list  path=v/info/adapters
    ```
    Expected: should show adapters (test, agent, llmagent, grid, langchain, convex, http, jvm, covia, secret, ucan, mcp, orchestrator).
 
-3. **List functions** — verify operations are installed:
+3. **List operations catalog** — verify operations are installed:
    ```
-   list_functions
+   covia_list  path=v/ops
    ```
-   Expected: 40+ functions across all adapters.
+   Expected: 40+ operations across all adapters under their per-adapter sub-namespaces.
 
 Report a summary table: adapter count, function count, echo test pass/fail.
 

@@ -38,8 +38,8 @@ public class SecretAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
-		installAsset("/adapters/secret/set.json");
-		installAsset("/adapters/secret/extract.json");
+		installAsset("secret/set",     "/adapters/secret/set.json");
+		installAsset("secret/extract", "/adapters/secret/extract.json");
 	}
 
 	@Override

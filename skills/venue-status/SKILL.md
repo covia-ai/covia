@@ -9,10 +9,10 @@ description: Check Covia venue health — adapters, registered operations, activ
 
 Check the current state of the connected Covia venue. Run these in parallel:
 
-1. **Adapters** — `covia_adapters` — list all registered adapters and operation counts
+1. **Adapters** — `covia_list path=v/info/adapters` — list all registered adapters and operation counts
 2. **Agents** — `agent_list` — list all agents with status
 3. **Workspace** — `covia_list` — describe the top-level namespace structure
-4. **Functions** — `list_functions` — count total available operations
+4. **Operations catalog** — `covia_list path=v/ops` — count operations available in the venue catalog
 
 Present a clean summary:
 

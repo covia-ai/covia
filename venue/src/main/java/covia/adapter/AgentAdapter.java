@@ -83,18 +83,18 @@ public class AgentAdapter extends AAdapter {
 	@Override
 	protected void installAssets() {
 		String BASE = "/adapters/agent/";
-		installAsset(BASE + "create.json");
-		installAsset(BASE + "fork.json");
-		installAsset(BASE + "request.json");
-		installAsset(BASE + "message.json");
-		installAsset(BASE + "trigger.json");
-		installAsset(BASE + "info.json");
-		installAsset(BASE + "list.json");
-		installAsset(BASE + "delete.json");
-		installAsset(BASE + "suspend.json");
-		installAsset(BASE + "resume.json");
-		installAsset(BASE + "update.json");
-		installAsset(BASE + "cancelTask.json");
+		installAsset("agent/create",      BASE + "create.json");
+		installAsset("agent/fork",        BASE + "fork.json");
+		installAsset("agent/request",     BASE + "request.json");
+		installAsset("agent/message",     BASE + "message.json");
+		installAsset("agent/trigger",     BASE + "trigger.json");
+		installAsset("agent/info",        BASE + "info.json");
+		installAsset("agent/list",        BASE + "list.json");
+		installAsset("agent/delete",      BASE + "delete.json");
+		installAsset("agent/suspend",     BASE + "suspend.json");
+		installAsset("agent/resume",      BASE + "resume.json");
+		installAsset("agent/update",      BASE + "update.json");
+		installAsset("agent/cancel-task", BASE + "cancelTask.json");
 
 		// Install standard agent templates — discoverable via config="template:<name>"
 		installTemplate("template:minimal", "/agent-templates/minimal.json");

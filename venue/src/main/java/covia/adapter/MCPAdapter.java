@@ -53,9 +53,8 @@ public class MCPAdapter extends AAdapter {
 	
 	@Override
 	protected void installAssets() {
-		TOOL_CALL=installAsset("/adapters/mcp/toolCall.json");
-		TOOLS_LIST=installAsset("/adapters/mcp/toolList.json");
-		
+		TOOL_CALL  = installAsset("mcp/tools-call", "/adapters/mcp/toolCall.json");
+		TOOLS_LIST = installAsset("mcp/tools-list", "/adapters/mcp/toolList.json");
 	}
 
 	@Override

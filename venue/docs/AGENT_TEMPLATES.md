@@ -247,10 +247,10 @@ Installed at venue startup by `AgentAdapter.installAssets` via `installTemplate(
 | Name | Tools | Purpose |
 |------|-------|---------|
 | `template:minimal` | (none, `defaultTools: false`) | Pure reasoning, no side effects |
-| `template:reader` | covia:read, covia:list, covia:slice, covia:functions, covia:describe | Read-only data analysis |
-| `template:worker` | covia:read/write/delete/append/slice/list, covia:functions, covia:describe | General data processing |
-| `template:manager` | agent:create/fork/message/request/list/info/cancelTask, covia:read/list, covia:functions, covia:describe | Agent coordination |
-| `template:analyst` | covia:read/list/slice, schema:validate/infer/coerce, covia:functions, covia:describe | Data analysis with schema awareness |
+| `template:reader` | covia:read, covia:list, covia:slice | Read-only data analysis |
+| `template:worker` | covia:read/write/delete/append/slice/list | General data processing |
+| `template:manager` | agent:create/fork/message/request/list/info/cancelTask, covia:read/list | Agent coordination |
+| `template:analyst` | covia:read/list/slice, schema:validate/infer/coerce | Data analysis with schema awareness |
 | `template:full` | All default tools (`defaultTools: true`) | Development and exploration |
 
 Template JSON files live in `venue/src/main/resources/agent-templates/`.

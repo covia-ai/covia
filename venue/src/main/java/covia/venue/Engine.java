@@ -429,9 +429,11 @@ public class Engine {
 
 	/**
 	 * Flushes catalog entries that adapters collected via
-	 * {@link covia.adapter.AAdapter#installAsset(String, String)}. Each
-	 * entry is written to {@code /v/ops/&lt;catalogPath&gt;} as inline asset
-	 * metadata via {@code covia:write} with internal context.
+	 * {@link covia.adapter.AAdapter#installAsset(String, String)} and
+	 * {@link covia.adapter.AAdapter#installTestAsset(String, String)}. Each
+	 * entry is written to its full target path (e.g. {@code v/ops/json/merge}
+	 * or {@code v/test/ops/echo}) as inline asset metadata via
+	 * {@code covia:write} with internal context.
 	 *
 	 * <p>Called once at startup after all adapters are registered (so that
 	 * {@code CoviaAdapter} — which provides {@code covia:write} — is
@@ -442,7 +444,7 @@ public class Engine {
 		for (var adapter : adapters.values()) {
 			if (adapter == null) continue;
 			for (var entry : adapter.pendingCatalogEntries.entrySet()) {
-				String catalogPath = entry.getKey();
+				String fullPath = entry.getKey();
 				Hash hash = entry.getValue();
 				try {
 					AString metaString = adapter.getInstalledAssets().get(hash);
@@ -450,12 +452,12 @@ public class Engine {
 					ACell meta = convex.core.util.JSON.parse(metaString);
 					jobManager.invokeOperation("covia:write",
 						Maps.of(
-							Fields.PATH, Strings.create("v/ops/" + catalogPath),
+							Fields.PATH, Strings.create(fullPath),
 							Fields.VALUE, meta),
 						ctx).awaitResult(5000);
 				} catch (Exception e) {
-					log.warn("Failed to register {} at /v/ops/{}: {}",
-						adapter.getName(), catalogPath, e.getMessage());
+					log.warn("Failed to register {} at /{}: {}",
+						adapter.getName(), fullPath, e.getMessage());
 				}
 			}
 		}
@@ -508,15 +510,21 @@ public class Engine {
 				(ACell) Strings.create("a2a"));
 			writeVenueInfo("v/info/protocols", protocols, ctx);
 
-			// /v/info/adapters/<name> — per-adapter summary
+			// /v/info/adapters/<name> — per-adapter summary. The "operations"
+			// field is a vector of full catalog paths drawn from the adapter's
+			// pendingCatalogEntries — each entry is directly invocable via
+			// grid:run. Agents can count with length(operations).
 			for (String adapterName : adapters.keySet()) {
 				AAdapter adapter = adapters.get(adapterName);
 				if (adapter == null) continue;
-				int opCount = adapter.getInstalledAssets().size();
+				AVector<ACell> ops = Vectors.empty();
+				for (String catalogPath : adapter.pendingCatalogEntries.keySet()) {
+					ops = ops.conj(Strings.create(catalogPath));
+				}
 				AMap<AString, ACell> summary = Maps.of(
 					Strings.create("name"), Strings.create(adapter.getName()),
 					Strings.create("description"), Strings.create(adapter.getDescription()),
-					Strings.create("operations"), CVMLong.create(opCount));
+					Strings.create("operations"), ops);
 				writeVenueInfo("v/info/adapters/" + adapterName, summary, ctx);
 			}
 		} catch (Exception e) {

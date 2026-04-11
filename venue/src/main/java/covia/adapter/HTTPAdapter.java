@@ -129,21 +129,21 @@ public class HTTPAdapter extends AAdapter {
 			   "Perfect for integrating with REST APIs, web services, and external data sources like Google Search and AI model APIs.";
 	}
 	
-	@Override 
+	@Override
 	protected void installAssets() {
 		String BASE = "/asset-examples/";
 
-		// Install HTTP-related operation assets
-		installAsset(BASE + "httpget.json");
-		installAsset(BASE + "httppost.json");
-		installAsset(BASE + "http-query-example.json");
-		installAsset(BASE + "googlesearch.json");
-		
-		// Install Google search orchestration examples
-		installAsset(BASE + "google-search-orch.json");
-		installAsset(BASE + "google-search-advanced-orch.json");
-		installAsset(BASE + "google-search-practical-orch.json");
-		
+		// HTTP primitives — registered in /v/ops/.
+		installAsset("http/get",  BASE + "httpget.json");
+		installAsset("http/post", BASE + "httppost.json");
+
+		// Demos and orchestrations — stored in CAS only, not in the catalog.
+		installExampleAsset(BASE + "http-query-example.json");
+		installExampleAsset(BASE + "googlesearch.json");
+		installExampleAsset(BASE + "google-search-orch.json");
+		installExampleAsset(BASE + "google-search-advanced-orch.json");
+		installExampleAsset(BASE + "google-search-practical-orch.json");
+
 		log.info("HTTP adapter assets installed successfully");
 	}
 	

@@ -99,8 +99,6 @@ public class ContextBuilder {
 		(ACell) Strings.create("covia:slice"),
 		(ACell) Strings.create("covia:list"),
 		(ACell) Strings.create("covia:inspect"),
-		(ACell) Strings.create("covia:functions"),
-		(ACell) Strings.create("covia:describe"),
 		(ACell) Strings.create("schema:validate"),
 		(ACell) Strings.create("schema:infer")
 	);

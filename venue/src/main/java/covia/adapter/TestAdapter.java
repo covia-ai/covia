@@ -91,22 +91,24 @@ public class TestAdapter extends AAdapter {
 		String BASE="/asset-examples/";
 
 		try {
-			installAsset(BASE+"empty.json");
-			installAsset(BASE+"randomop.json");
-			installAsset(BASE+"echoop.json");
-			installAsset(BASE+"testllm.json");
-			installAsset(BASE+"testtoolllm.json");
-			installAsset(BASE+"testtaskllm.json");
-			installAsset(BASE+"testworkspacellm.json");
-			installAsset(BASE+"testcompactllm.json");
-			installAsset(BASE+"neverop.json");
-			installAsset(BASE+"delayop.json");
-			installAsset(BASE+"randomop.json");
-			installAsset(BASE+"failop.json");
-			installAsset(BASE+"chatop.json");
-			installAsset(BASE+"pauseop.json");
-			installAsset(BASE+"orch.json");
-			installAsset(BASE+"taskcomplete.json");
+			// Test primitives — registered under /v/test/ops/<name>, not /v/ops/.
+			installTestAsset("random",       BASE+"randomop.json");
+			installTestAsset("echo",         BASE+"echoop.json");
+			installTestAsset("llm",          BASE+"testllm.json");
+			installTestAsset("toolllm",      BASE+"testtoolllm.json");
+			installTestAsset("taskllm",      BASE+"testtaskllm.json");
+			installTestAsset("workspacellm", BASE+"testworkspacellm.json");
+			installTestAsset("compactllm",   BASE+"testcompactllm.json");
+			installTestAsset("never",        BASE+"neverop.json");
+			installTestAsset("delay",        BASE+"delayop.json");
+			installTestAsset("error",        BASE+"failop.json");
+			installTestAsset("chat",         BASE+"chatop.json");
+			installTestAsset("pause",        BASE+"pauseop.json");
+			installTestAsset("taskcomplete", BASE+"taskcomplete.json");
+
+			// Demos and content fixtures — stored in CAS only, not in any catalog.
+			installExampleAsset(BASE+"empty.json");
+			installExampleAsset(BASE+"orch.json");
 			Hash iris=engine.storeAsset(Utils.readResourceAsAString(BASE+"iris.json"),null);
 			engine.putContent(iris,this.getClass().getResourceAsStream(BASE+"iris.csv"));
 			Hash shake=engine.storeAsset(Utils.readResourceAsAString(BASE+"shakespeare.json"),null);

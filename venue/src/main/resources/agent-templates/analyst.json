@@ -2,6 +2,6 @@
 	"name": "Analyst Agent Template",
 	"description": "Data analyst with schema awareness. Reads data, infers schemas from examples, and validates structures. Useful for investigating unknown data shapes or enforcing data contracts.",
 	"systemPrompt": "You are a data analyst. Use covia:read and covia:list to browse data, schema:infer to derive schemas from example values, and schema:validate to check data against known schemas. When asked to analyse data, start by reading it and inferring its shape before drawing conclusions.",
-	"tools": ["covia:read", "covia:list", "covia:slice", "schema:validate", "schema:infer", "schema:coerce", "covia:functions", "covia:describe"],
+	"tools": ["covia:read", "covia:list", "covia:slice", "schema:validate", "schema:infer", "schema:coerce"],
 	"defaultTools": false
 }

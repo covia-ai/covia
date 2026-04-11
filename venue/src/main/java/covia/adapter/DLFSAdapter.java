@@ -101,14 +101,14 @@ public class DLFSAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
-		installAsset(ASSETS_PATH + "listDrives.json");
-		installAsset(ASSETS_PATH + "createDrive.json");
-		installAsset(ASSETS_PATH + "deleteDrive.json");
-		installAsset(ASSETS_PATH + "list.json");
-		installAsset(ASSETS_PATH + "read.json");
-		installAsset(ASSETS_PATH + "write.json");
-		installAsset(ASSETS_PATH + "mkdir.json");
-		installAsset(ASSETS_PATH + "delete.json");
+		installAsset("dlfs/list-drives",  ASSETS_PATH + "listDrives.json");
+		installAsset("dlfs/create-drive", ASSETS_PATH + "createDrive.json");
+		installAsset("dlfs/delete-drive", ASSETS_PATH + "deleteDrive.json");
+		installAsset("dlfs/list",         ASSETS_PATH + "list.json");
+		installAsset("dlfs/read",         ASSETS_PATH + "read.json");
+		installAsset("dlfs/write",        ASSETS_PATH + "write.json");
+		installAsset("dlfs/mkdir",        ASSETS_PATH + "mkdir.json");
+		installAsset("dlfs/delete",       ASSETS_PATH + "delete.json");
 		log.info("DLFS adapter installed with {} operations", operationNames.count());
 	}
 

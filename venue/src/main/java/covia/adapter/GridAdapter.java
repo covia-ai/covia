@@ -43,10 +43,10 @@ public class GridAdapter extends AAdapter {
 
     @Override
     protected void installAssets() {
-        RUN_OPERATION = installAsset("/adapters/grid/run.json");
-        INVOKE_OPERATION = installAsset("/adapters/grid/invoke.json");
-        JOB_STATUS_OPERATION = installAsset("/adapters/grid/jobStatus.json");
-        JOB_RESULT_OPERATION = installAsset("/adapters/grid/jobResult.json");
+        RUN_OPERATION        = installAsset("grid/run",        "/adapters/grid/run.json");
+        INVOKE_OPERATION     = installAsset("grid/invoke",     "/adapters/grid/invoke.json");
+        JOB_STATUS_OPERATION = installAsset("grid/job-status", "/adapters/grid/jobStatus.json");
+        JOB_RESULT_OPERATION = installAsset("grid/job-result", "/adapters/grid/jobResult.json");
     }
 
 	@Override

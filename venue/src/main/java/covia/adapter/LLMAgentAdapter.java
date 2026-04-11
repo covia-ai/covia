@@ -243,9 +243,6 @@ public class LLMAgentAdapter extends AAdapter {
 		(ACell) Strings.create("covia:slice"),
 		(ACell) Strings.create("covia:list"),
 		(ACell) Strings.create("covia:inspect"),
-		(ACell) Strings.create("covia:adapters"),
-		(ACell) Strings.create("covia:functions"),
-		(ACell) Strings.create("covia:describe"),
 		(ACell) Strings.create("schema:validate"),
 		(ACell) Strings.create("schema:infer")
 	);
@@ -274,7 +271,7 @@ public class LLMAgentAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
-		installAsset("/adapters/llmagent/chat.json");
+		installAsset("llmagent/chat", "/adapters/llmagent/chat.json");
 	}
 
 	@Override

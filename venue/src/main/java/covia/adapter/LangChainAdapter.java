@@ -113,12 +113,12 @@ public class LangChainAdapter extends AAdapter {
 	@Override
 	public void installAssets() {
 		// Canonical operations — one per adapter route
-		installAsset("/adapters/langchain/openai.json");      // langchain:openai (OpenAI-compatible)
-		installAsset("/adapters/langchain/ollama.json");     // langchain:ollama (local Ollama)
-		installAsset("/adapters/langchain/anthropic.json");  // langchain:anthropic (native Anthropic API)
+		installAsset("langchain/openai",    "/adapters/langchain/openai.json");
+		installAsset("langchain/ollama",    "/adapters/langchain/ollama.json");
+		installAsset("langchain/anthropic", "/adapters/langchain/anthropic.json");
 
-		// Example configurations — distinct adapter references for the operation registry
-		installAsset("/asset-examples/qwen.json");          // langchain:ollama:qwen3
+		// Example configurations — stored in CAS, not in /v/ops/.
+		installExampleAsset("/asset-examples/qwen.json");   // langchain:ollama:qwen3
 	}
 
 	@Override

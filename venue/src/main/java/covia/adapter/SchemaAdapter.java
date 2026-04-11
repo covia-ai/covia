@@ -41,11 +41,11 @@ public class SchemaAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
-		installAsset("/adapters/schema/validate.json");
-		installAsset("/adapters/schema/validateAll.json");
-		installAsset("/adapters/schema/infer.json");
-		installAsset("/adapters/schema/coerce.json");
-		installAsset("/adapters/schema/check.json");
+		installAsset("schema/validate",     "/adapters/schema/validate.json");
+		installAsset("schema/validate-all", "/adapters/schema/validateAll.json");
+		installAsset("schema/infer",        "/adapters/schema/infer.json");
+		installAsset("schema/coerce",       "/adapters/schema/coerce.json");
+		installAsset("schema/check",        "/adapters/schema/check.json");
 	}
 
 	@Override

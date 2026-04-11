@@ -43,11 +43,11 @@ public class AssetAdapter extends AAdapter {
 	@Override
 	protected void installAssets() {
 		String BASE = "/adapters/asset/";
-		installAsset(BASE + "store.json");
-		installAsset(BASE + "get.json");
-		installAsset(BASE + "content.json");
-		installAsset(BASE + "list.json");
-		installAsset(BASE + "pin.json");
+		installAsset("asset/store",   BASE + "store.json");
+		installAsset("asset/get",     BASE + "get.json");
+		installAsset("asset/content", BASE + "content.json");
+		installAsset("asset/list",    BASE + "list.json");
+		installAsset("asset/pin",     BASE + "pin.json");
 	}
 
 	@Override

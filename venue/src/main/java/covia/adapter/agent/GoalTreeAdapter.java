@@ -197,7 +197,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 	@Override
 	protected void installAssets() {
-		installAsset("/adapters/goaltree/chat.json");
+		installAsset("goaltree/chat", "/adapters/goaltree/chat.json");
 	}
 
 	// ========== Invocation ==========

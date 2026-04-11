@@ -398,8 +398,12 @@ user's own lattice namespace. Paths support mixed map/vector navigation
 | `covia:append` | Append an element to a vector in `/w/` or `/o/` | `{path, value}` | `{appended: true}` |
 | `covia:slice` | Read a paginated slice from a collection | `{path, offset?, limit?}` | `{type, values, count, offset}` |
 | `covia:list` | Describe structure at a path (type, count, keys) | `{path, limit?, offset?}` | `{type, count, keys?}` |
-| `covia:functions` | List all operations available on this venue | `{}` | `{functions: [...]}` |
-| `covia:describe` | Get full metadata for a named operation | `{name}` | Asset metadata |
+
+Operation discovery is now done through the lattice: `covia:list path=v/ops` for
+the venue's operations catalog, `covia:read path=v/ops/<name>` for full metadata,
+and `covia:list path=v/info/adapters` for adapter summaries. The dedicated
+`covia:functions`, `covia:describe`, and `covia:adapters` ops are gone — see
+`OPERATIONS.md` for the full design.
 
 **Deep path navigation:** Paths like `w/data/nested/field` create intermediate
 maps on write. Paths into vectors use integer indices (e.g. `w/events/0`).

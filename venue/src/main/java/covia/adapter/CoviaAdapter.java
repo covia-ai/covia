@@ -129,17 +129,14 @@ public class CoviaAdapter extends AAdapter {
 	@Override
 	protected void installAssets() {
 		String BASE = "/adapters/covia/";
-		installAsset(BASE + "read.json");
-		installAsset(BASE + "write.json");
-		installAsset(BASE + "copy.json");
-		installAsset(BASE + "delete.json");
-		installAsset(BASE + "append.json");
-		installAsset(BASE + "slice.json");
-		installAsset(BASE + "list.json");
-		installAsset(BASE + "functions.json");
-		installAsset(BASE + "describe.json");
-		installAsset(BASE + "adapters.json");
-		installAsset(BASE + "inspect.json");
+		installAsset("covia/read",    BASE + "read.json");
+		installAsset("covia/write",   BASE + "write.json");
+		installAsset("covia/copy",    BASE + "copy.json");
+		installAsset("covia/delete",  BASE + "delete.json");
+		installAsset("covia/append",  BASE + "append.json");
+		installAsset("covia/slice",   BASE + "slice.json");
+		installAsset("covia/list",    BASE + "list.json");
+		installAsset("covia/inspect", BASE + "inspect.json");
 
 		// Register built-in virtual namespace resolvers
 		registerResolver("n", new AgentNamespaceResolver());
@@ -164,9 +161,6 @@ public class CoviaAdapter extends AAdapter {
 				case "append" -> CompletableFuture.completedFuture(handleAppend(ctx, input));
 				case "slice" -> CompletableFuture.completedFuture(handleSlice(ctx, input));
 				case "list" -> CompletableFuture.completedFuture(handleList(ctx, input));
-				case "functions" -> CompletableFuture.completedFuture(handleFunctions());
-				case "describe" -> CompletableFuture.completedFuture(handleDescribe(input));
-				case "adapters" -> CompletableFuture.completedFuture(handleAdapters());
 				case "inspect" -> CompletableFuture.completedFuture(handleInspect(ctx, input));
 				default -> CompletableFuture.failedFuture(
 					new RuntimeException("Unknown covia operation: " + getSubOperation(meta)));
@@ -972,73 +966,6 @@ public class CoviaAdapter extends AAdapter {
 		}
 
 		return desc.assoc(K_EXISTS, CVMBool.TRUE);
-	}
-
-	// ========== Function introspection ==========
-
-	/**
-	 * Lists all registered adapter functions with names, IDs, and descriptions.
-	 */
-	@SuppressWarnings("unchecked")
-	private ACell handleFunctions() {
-		Index<AString, Hash> ops = engine.getOperationRegistry();
-		AVector<ACell> functions = Vectors.empty();
-		for (long i = 0; i < ops.count(); i++) {
-			var entry = ops.entryAt(i);
-			AString name = entry.getKey();
-			Hash hash = entry.getValue();
-			Asset asset = engine.getAsset(hash);
-
-			AMap<AString, ACell> func = Maps.of(
-				Fields.NAME, name,
-				Fields.ID, Strings.create(hash.toHexString()));
-			if (asset != null) {
-				ACell desc = asset.meta().get(Fields.DESCRIPTION);
-				if (desc != null) func = func.assoc(Fields.DESCRIPTION, desc);
-			}
-			functions = (AVector<ACell>) functions.conj(func);
-		}
-		return Maps.of(Strings.intern("functions"), functions);
-	}
-
-	/**
-	 * Gets full metadata for a named adapter function, including input/output schemas.
-	 */
-	private ACell handleDescribe(ACell input) {
-		AString funcName = RT.ensureString(RT.getIn(input, Fields.NAME));
-		if (funcName == null) return Maps.of(Fields.ERROR, Strings.create("name is required"));
-
-		Hash hash = engine.resolveOperation(funcName);
-		if (hash == null) return Maps.of(Fields.ERROR, Strings.create("function not found: " + funcName));
-
-		Asset asset = engine.getAsset(hash);
-		if (asset == null) return Maps.of(Fields.ERROR, Strings.create("asset not found for: " + funcName));
-
-		return asset.meta();
-	}
-
-	/**
-	 * Lists all registered adapters with their name, description, and operation count.
-	 */
-	@SuppressWarnings("unchecked")
-	private ACell handleAdapters() {
-		AVector<ACell> result = Vectors.empty();
-		for (String name : engine.getAdapterNames()) {
-			AAdapter adapter = engine.getAdapter(name);
-			AMap<AString, ACell> entry = Maps.of(
-				Fields.NAME, Strings.create(name),
-				Fields.DESCRIPTION, Strings.create(adapter.getDescription()));
-			// Count operations for this adapter
-			Index<AString, Hash> ops = engine.getOperationRegistry();
-			long count = 0;
-			for (long i = 0; i < ops.count(); i++) {
-				AString opName = ops.entryAt(i).getKey();
-				if (opName != null && opName.toString().startsWith(name + ":")) count++;
-			}
-			entry = entry.assoc(Strings.intern("operations"), CVMLong.create(count));
-			result = (AVector<ACell>) result.conj(entry);
-		}
-		return Maps.of(Strings.intern("adapters"), result);
 	}
 
 	// ========== Path parsing ==========

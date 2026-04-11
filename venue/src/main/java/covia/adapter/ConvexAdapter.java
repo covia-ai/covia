@@ -48,8 +48,8 @@ public class ConvexAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
-		QUERY_OPERATION = installAsset("/adapters/convex/query.json");
-		TRANSACT_OPERATION = installAsset("/adapters/convex/transact.json");
+		QUERY_OPERATION    = installAsset("convex/query",    "/adapters/convex/query.json");
+		TRANSACT_OPERATION = installAsset("convex/transact", "/adapters/convex/transact.json");
 	}
 
 	@Override
