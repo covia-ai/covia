@@ -1,6 +1,6 @@
 {
 	"name": "List Lattice Structure",
-	"description": "Describes the structure at a path in the user's lattice namespace. Returns the type of value at the path (map, vector, index, set, string, etc.) along with type-specific metadata. For maps: includes keys (with pagination). For vectors/countables: includes count. For sets: includes values directly. Always includes 'exists' (boolean) to distinguish missing paths from null values. Paths use '/' separators. Omit path to describe the top-level user namespace.",
+	"description": "Describes the structure at any resolvable lattice path: type (map, vector, set, string, etc.), count, and (for maps) keys with pagination. Use this before covia_read on unfamiliar paths to check size and shape, or to enumerate sub-keys without fetching their values. Examples: covia_list path=v/ops to discover venue operations, covia_list path=o to see your own pinned ops, covia_list path=v/info/adapters to list installed adapters. Omit path to describe the top-level of your namespace.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "covia:list",
@@ -9,7 +9,7 @@
 			"type": "object",
 			"properties": {
 				"path": {
-					"description": "Path to describe, e.g. 'g' (agents namespace), 'g/my-agent' (agent record). Omit to describe top-level."
+					"description": "Any resolvable lattice path. Examples: 'v/ops' (venue catalog), 'o' (your pins), 'v/info/adapters' (installed adapters), 'g/my-agent' (agent record), 'w/notes'. Omit to describe the top-level of your namespace."
 				},
 				"limit": {
 					"type": "integer",

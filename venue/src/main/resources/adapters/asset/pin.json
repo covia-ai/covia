@@ -1,6 +1,6 @@
 {
 	"name": "Pin Asset",
-	"description": "Snapshot a value into your own /a/ content-addressed namespace. The 'path' argument accepts any resolvable address (hex hash, /a/<hash>, /o/<name>, /v/<path>, DID URL, or workspace path). If the source is itself a CAS asset, both metadata and content are preserved; otherwise the resolved value is stored as inline metadata. Idempotent — pinning the same value twice produces the same hash. Returns the caller's DID URL for the pinned asset and its CAD3 hash.",
+	"description": "Snapshot any resolvable value into your own /a/ content-addressed store. Idempotent — pinning the same value twice produces the same hash. If the source is already a CAS asset, both metadata and content are preserved; otherwise the resolved value is stored as inline metadata. Returns {path, hash} where path is your DID URL for the pinned asset and hash is the bare hex CAD3 ID. Use this to freeze a venue op or workspace value at a specific version.",
 	"operation": {
 		"adapter": "asset:pin",
 		"toolName": "asset_pin",

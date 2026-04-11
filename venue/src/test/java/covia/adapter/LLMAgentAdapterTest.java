@@ -184,7 +184,9 @@ public class LLMAgentAdapterTest {
 			RT.getIn(output, AgentState.KEY_STATE));
 
 		AString sysContent = RT.ensureString(RT.getIn(history.get(0), "content"));
-		assertEquals("You are a pirate", sysContent.toString());
+		// Custom prompt comes first, then the always-appended lattice reference
+		assertTrue(sysContent.toString().startsWith("You are a pirate"),
+			"Custom prompt should appear at the start of the system message");
 	}
 
 	// ========== Integration: full agent pipeline ==========
@@ -303,7 +305,9 @@ public class LLMAgentAdapterTest {
 		AVector<ACell> history = LLMAgentAdapter.extractHistory(
 			RT.getIn(output, AgentState.KEY_STATE));
 		AString sysContent = RT.ensureString(RT.getIn(history.get(0), "content"));
-		assertEquals("Custom prompt", sysContent.toString());
+		// Custom prompt comes first, then the always-appended lattice reference
+		assertTrue(sysContent.toString().startsWith("Custom prompt"),
+			"Custom prompt should appear at the start of the system message");
 
 		AMap<AString, ACell> returnedConfig = LLMAgentAdapter.extractConfig(
 			RT.getIn(output, AgentState.KEY_STATE));

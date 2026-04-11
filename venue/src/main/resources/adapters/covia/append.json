@@ -1,6 +1,6 @@
 {
 	"name": "Append to Lattice Vector",
-	"description": "Appends an element to a vector in the user's workspace ('w') or operations ('o') namespace. Path must start with 'w/' or 'o/' (e.g. 'w/events', 'w/agent-data/logs'). If the path does not exist, a new single-element vector is created. If the path contains a vector, the element is appended. Deeper paths are supported — intermediate maps are created as needed. Errors if the target path contains a non-vector value. Returns {appended: true} on success.",
+	"description": "Appends an element to a vector at a writable lattice path: w/, o/, n/ (agent scope), or t/ (job temp). Creates a new single-element vector if the path does not exist. Intermediate maps are created on demand for deeper paths. Errors if the target contains a non-vector value — use covia_write for non-vector targets. Returns {appended: true}.",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "covia:append",
@@ -10,7 +10,7 @@
 			"properties": {
 				"path": {
 					"type": "string",
-					"description": "Path to the vector to append to, e.g. 'w/events' or 'w/agent-data/logs'. Must start with 'w/' or 'o/'."
+					"description": "Writable path to a vector (creates one if missing). Must start with w/, o/, n/, or t/. Deep paths create intermediate maps."
 				},
 				"value": {
 					"description": "The element to append. You should normally use structured values rather than serialised strings."

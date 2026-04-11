@@ -1,6 +1,6 @@
 {
 	"name": "Copy Lattice Value",
-	"description": "Server-side value duplication: reads a value from 'from' and writes it to 'to'. The 'from' argument accepts any resolvable address (hex hash, /a/, /o/, /v/, DID URL, or workspace path); 'to' must be a writable mutable path. Use to snapshot a venue op into your own /o/, cache remote data locally, or branch any workspace value. Reads and writes are subject to standard capability checks. Returns {copied: true} on success.",
+	"description": "Server-side value duplication: reads from any resolvable path (from) and writes the value to a writable path (to). Common idiom: pin a venue op into your own namespace as a callable name — covia_copy from=v/ops/json/merge to=o/merge, then grid_run operation=o/merge. Also useful for snapshotting remote data locally or branching workspace values. Both read and write capability checks apply. Returns {copied: true}.",
 	"operation": {
 		"adapter": "covia:copy",
 		"input": {
@@ -12,7 +12,7 @@
 				},
 				"to": {
 					"type": "string",
-					"description": "Destination path. Must be a writable mutable path (o/, w/, g/<own-agent>/, s/, n/, t/)."
+					"description": "Destination path. Must be writable: w/, o/, n/, or t/."
 				}
 			},
 			"required": ["from", "to"]

@@ -1,6 +1,6 @@
 {
 	"name": "Write Lattice Data",
-	"description": "Writes a value to a writable lattice path. Accepted namespaces: 'w/' (your workspace), 'o/' (your operation pins), 'n/' (an agent's own workspace, agent-scoped only), and 't/' (job-scoped temp, job-scoped only). Writes to framework-managed namespaces ('g/' agents, 's/' secrets, 'j/' jobs) are not permitted — use the corresponding agent:*, secret:*, or job APIs instead. Writes to 'v/' (venue globals) are rejected unless the caller is the venue identity. Path is '/'-separated; intermediate maps are created on demand. The value can be any JSON-compatible type; writing null removes the entry. Returns {written: true} on success.",
+	"description": "Writes a value to a writable lattice path: w/ (workspace), o/ (operation pins), n/ (agent scope, when running inside an agent), or t/ (job temp, when running inside a job). Other namespaces are managed via dedicated APIs (g/ via agent_*, s/ via secret_*, j/ via job APIs). Path is '/'-separated; intermediate maps are created on demand. Writing null deletes the entry. To pin an operation by name for grid_run, write its full metadata to o/<name>: see system prompt. Returns {written: true}.",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "covia:write",

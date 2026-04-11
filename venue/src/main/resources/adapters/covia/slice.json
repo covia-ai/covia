@@ -1,6 +1,6 @@
 {
 	"name": "Slice Lattice Data",
-	"description": "Reads a paginated slice of entries from a collection at a path in the user's lattice namespace. Works on vectors (returns elements), maps (returns {key, value} entries), and sets (returns elements). Supports offset (default 0) and limit (default 100) for pagination. Works on any path and namespace (e.g. 'w/events', 'g/my-agent/timeline', 'w/config'). Use covia:list first to check the type and count at a path. Returns {type, values: [...], count: <total>, offset: <n>}.",
+	"description": "Reads a paginated slice of entries from a vector, map, or set at any resolvable lattice path. Returns {type, values, count, offset}. For vectors/sets, values is an array of elements; for maps, each entry is {key, value}. Use after covia_list reveals a large collection. Default limit is 100; pass offset to page through. Examples: covia_slice path=v/ops/agent (all agent ops), covia_slice path=g/my-agent/timeline limit=10 (latest run records).",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "covia:slice",
@@ -9,7 +9,7 @@
 			"type": "object",
 			"properties": {
 				"path": {
-					"description": "Path to the collection, e.g. 'w/events', 'g/my-agent/timeline', or 'w/config'."
+					"description": "Any resolvable path pointing at a collection. Examples: 'v/ops/agent' (catalog sub-tree), 'w/events', 'g/my-agent/timeline'."
 				},
 				"offset": {
 					"type": "integer",

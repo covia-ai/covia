@@ -1,6 +1,6 @@
 {
 	"name": "Grid Run",
-	"description": "Run a Covia grid operation on this venue or an optional remote venue",
+	"description": "Synchronously executes any operation reachable on the lattice and returns its result. The 'operation' argument accepts any resolvable form: catalog paths (v/ops/json/merge, v/test/ops/echo), your own pins (o/my-op), bare hex hashes, /a/<hash>, or DID URLs (for remote venues). Pass the operation's input arguments as a JSON map matching its declared input schema (use covia_read path=v/ops/<adapter>/<op> to see the schema first if uncertain). Blocks until the job finishes — for long-running pipelines use grid_invoke instead and poll grid_jobStatus / grid_jobResult. To run on a remote venue, pass venue=<url-or-did>.",
 	"operation": {
 		"adapter": "grid:run",
 		"input": {
@@ -8,20 +8,20 @@
 			"properties": {
 				"operation": {
 					"type": "string",
-					"description": "Operation alias or asset ID to invoke"
+					"description": "Operation reference. Any resolvable form: v/ops/<adapter>/<op>, o/<name>, hex hash, /a/<hash>, or DID URL. Use covia_list path=v/ops to discover what's available."
 				},
 				"input": {
-					"description": "Arguments to pass to the operation"
+					"description": "Arguments matching the operation's input schema. Use covia_read path=v/ops/<adapter>/<op> to inspect the schema if unsure."
 				},
 				"venue": {
 					"type": "string",
-					"description": "Optional remote venue URL or DID to connect to"
+					"description": "Optional remote venue URL or DID. Omit to run on this venue."
 				}
 			},
 			"required": ["operation"]
 		},
 		"output": {
-			"description": "Result of the executed grid operation"
+			"description": "The operation's output (shape determined by the operation's output schema)"
 		}
 	}
 }

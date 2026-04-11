@@ -1,6 +1,6 @@
 {
 	"name": "Delete Lattice Data",
-	"description": "Deletes a value from the user's workspace ('w') or operations ('o') namespace at the given path. Path must start with 'w/' or 'o/' followed by a key (e.g. 'w/my-notes', 'o/my-operation'). Deleting from other namespaces (g, s, j) is not permitted — those are framework-managed. Deleting a non-existent key is a no-op (idempotent). Returns {deleted: true} on success.",
+	"description": "Deletes the value at a writable lattice path: w/, o/, n/ (agent scope), or t/ (job temp). Other namespaces are managed via dedicated APIs (g/ via agent_*, s/ via secret_*, j/ via job APIs). Idempotent — deleting a non-existent path is a no-op. Returns {deleted: true}.",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "covia:delete",
@@ -10,7 +10,7 @@
 			"properties": {
 				"path": {
 					"type": "string",
-					"description": "Path to delete, e.g. 'w/my-notes' or 'o/my-operation'. Must start with 'w/' (workspace) or 'o/' (operations)."
+					"description": "Writable path to delete. Must start with w/, o/, n/, or t/."
 				}
 			},
 			"required": ["path"]

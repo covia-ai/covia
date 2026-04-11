@@ -1,6 +1,6 @@
 {
   "name": "Get Asset",
-  "description": "Reads asset metadata from any resolvable address. The 'id' argument accepts a hex hash, /a/<hash>, /o/<name>, /v/<path>, DID URL, or any workspace path. Hash-form refs read from the content-addressed store; other forms walk the universal lattice resolver and return the value if it is a map. Returns the metadata as 'value', consistent with covia:read. Use asset:content to retrieve the binary content payload separately. Returns exists: false if the source is not found or the resolved value is not asset-shaped.",
+  "description": "Reads asset metadata from any resolvable address (hex hash, /a/<hash>, /o/<name>, /v/<path>, DID URL, or workspace path). Returns {id, exists, value} where value is the metadata map. Use asset_content for the binary payload. Mostly equivalent to covia_read with asset semantics: returns exists: false if the resolved value isn't a map.",
   "dateCreated": "2026-03-31T00:00:00Z",
   "operation": {
     "adapter": "asset:get",

@@ -1,6 +1,6 @@
 {
   "name": "Get Asset Content",
-  "description": "Retrieves the binary content payload of an asset. The 'id' argument accepts any resolvable address: hex hash, /a/<hash>, /o/<name>, /v/<path>, DID URL, or workspace path. Hash-form refs read directly from the content-addressed store; for other forms the value is resolved, its CAD3 hash derived, and the corresponding CAS record fetched (so a workspace map that has never been stored as an asset returns exists: false, but a /v/ops/ entry that does have a CAS record will resolve correctly). Content is always a Blob, returned as a hex string in JSON. Returns truncated: true with the size if the content exceeds maxSize (default 1 MB). Use asset:get to retrieve metadata.",
+  "description": "Retrieves the binary content payload of an asset by any resolvable address (hex hash, /a/, /o/, /v/, DID URL, workspace path). Content is returned as a hex-encoded Blob. Returns {truncated: true, size} if the payload exceeds maxSize (default 1MB). Use asset_get for metadata. Note: only assets that were stored with a content payload have content — non-CAS workspace values return exists: false here.",
   "dateCreated": "2026-03-31T00:00:00Z",
   "operation": {
     "adapter": "asset:content",

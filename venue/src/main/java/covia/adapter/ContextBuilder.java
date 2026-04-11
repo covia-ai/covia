@@ -75,10 +75,45 @@ public class ContextBuilder {
 	private static final AString ROLE_SYSTEM = Strings.intern("system");
 	private static final AString ROLE_USER   = Strings.intern("user");
 
-	private static final AString DEFAULT_SYSTEM_PROMPT = Strings.create(
-		"You are a helpful AI agent on the Covia platform. "
-		+ "Use tools and grid operations to complete tasks. "
-		+ "Give concise, clear and accurate responses.");
+	/**
+	 * Fallback identity prompt used when an agent has no {@code systemPrompt}
+	 * in its config. Always followed by {@link #LATTICE_REFERENCE}.
+	 */
+	private static final AString DEFAULT_IDENTITY_PROMPT = Strings.create(
+		"You are a helpful AI agent on the Covia platform. Use tools and grid "
+		+ "operations to complete tasks efficiently. Give concise, clear, "
+		+ "accurate responses.");
+
+	/**
+	 * Lattice operational reference appended to every agent's system prompt
+	 * (whether default or custom). Gives the LLM the namespace cheat sheet,
+	 * discovery hints, and resolution rules so it can use the venue's
+	 * lattice features effectively.
+	 */
+	private static final AString LATTICE_REFERENCE = Strings.create(
+		"LATTICE NAMESPACES:\n"
+		+ "  w/<path>     Your workspace — durable read/write storage for your work\n"
+		+ "  o/<name>     Your operation pins — named operations callable via grid_run\n"
+		+ "  g/<id>/...   Agent records (framework-managed; read with covia_read, modify with agent_*)\n"
+		+ "  s/<name>     Your secrets (read/write only via secret_* tools)\n"
+		+ "  j/<id>/...   Your jobs (read with covia_read, modify via job APIs)\n"
+		+ "  /a/<hash>    Content-addressed asset store (immutable; create with asset_store or asset_pin)\n"
+		+ "  v/ops/...    Venue-provided operations catalog (read-only)\n"
+		+ "  v/info/...   Venue introspection: name, did, version, adapters\n"
+		+ "  n/...        Agent-private scope (when running inside an agent)\n"
+		+ "  t/...        Job-scoped temporary data (when running inside a job)\n"
+		+ "\n"
+		+ "DISCOVERY:\n"
+		+ "  covia_list path=v/ops                 — see what operations the venue offers\n"
+		+ "  covia_list path=v/info/adapters       — see installed adapters with their op lists\n"
+		+ "  covia_read path=v/ops/<adapter>/<op>  — read full metadata for a venue op\n"
+		+ "  covia_list path=o                     — see your own pinned operations\n"
+		+ "\n"
+		+ "RESOLUTION:\n"
+		+ "  Any read-side path argument accepts: bare hex hashes, /a/<hash>, /o/<name>, "
+		+ "v/<path>, did:web:venue/u:user/<path>, or workspace paths. Use "
+		+ "covia_copy from=<source> to=o/<name> to pin a venue op into your own "
+		+ "/o/ for repeated use by name.");
 
 	/** Default tool operations — resolved at runtime via engine */
 	static final AVector<ACell> DEFAULT_TOOL_OPS = (AVector<ACell>) Vectors.of(
@@ -148,8 +183,14 @@ public class ContextBuilder {
 		if (messages == null) messages = Vectors.empty();
 
 		if (messages.count() == 0 || !ROLE_SYSTEM.equals(RT.getIn(messages.get(0), K_ROLE))) {
-			AString sysContent = getConfigValue(config, K_SYSTEM_PROMPT, null);
-			if (sysContent == null) sysContent = DEFAULT_SYSTEM_PROMPT;
+			// Compose: identity (custom or default) + always-appended lattice reference.
+			// The lattice reference ensures every agent — regardless of how its prompt
+			// was configured — has the namespace cheat sheet, discovery hints, and
+			// path-resolution rules to use the venue's lattice features properly.
+			AString identity = getConfigValue(config, K_SYSTEM_PROMPT, null);
+			if (identity == null) identity = DEFAULT_IDENTITY_PROMPT;
+			AString sysContent = Strings.create(
+				identity.toString() + "\n\n" + LATTICE_REFERENCE.toString());
 			ACell sysMsg = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, sysContent);
 			messages = (AVector<ACell>) Vectors.of(sysMsg).concat(messages);
 			trackMessage(sysMsg);
@@ -511,9 +552,15 @@ public class ContextBuilder {
 			String toolName = deriveToolName(nameOverride, assetToolName, fallbackSource);
 			toolMap.put(toolName, operation);
 
-			AString description = (descOverride != null)
+			// Prepend the catalog path to the description so the LLM sees the
+			// lattice address co-located with the tool name. This lets the
+			// model reason about provenance, discover sibling ops, and pin or
+			// copy tools to its own /o/ namespace using the path it can see.
+			AString rawDescription = (descOverride != null)
 				? descOverride
 				: RT.ensureString(asset.meta().get(Fields.DESCRIPTION));
+			String descBody = (rawDescription != null) ? rawDescription.toString() : "";
+			AString description = Strings.create("Operation: " + operation + "\n\n" + descBody);
 
 			ACell inputSchema = RT.getIn(asset.meta(), Fields.OPERATION, Fields.INPUT);
 

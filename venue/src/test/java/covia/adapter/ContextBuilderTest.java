@@ -332,6 +332,79 @@ public class ContextBuilderTest {
 	}
 
 	@Test
+	public void testSystemPromptIncludesLatticeReference() {
+		// Default identity prompt → lattice reference appended
+		ContextBuilder.ContextResult defaultResult = new ContextBuilder(engine, ctx)
+			.withConfig(null, null)
+			.withSystemPrompt(Vectors.empty())
+			.build();
+		AString defaultSys = extractSystemContent(defaultResult.history());
+		assertNotNull(defaultSys);
+		assertTrue(defaultSys.toString().contains("LATTICE NAMESPACES"),
+			"Default system prompt should include lattice reference");
+		assertTrue(defaultSys.toString().contains("DISCOVERY"),
+			"Default system prompt should include discovery hints");
+		assertTrue(defaultSys.toString().contains("v/ops"),
+			"Default system prompt should mention v/ops catalog");
+
+		// Custom identity prompt → lattice reference STILL appended
+		AMap<AString, ACell> customConfig = Maps.of(
+			Strings.intern("systemPrompt"),
+			Strings.create("You are Carol the AP Approver. Be concise."));
+		ContextBuilder.ContextResult customResult = new ContextBuilder(engine, ctx)
+			.withConfig(customConfig, null)
+			.withSystemPrompt(Vectors.empty())
+			.build();
+		AString customSys = extractSystemContent(customResult.history());
+		assertNotNull(customSys);
+		assertTrue(customSys.toString().contains("Carol the AP Approver"),
+			"Custom identity prompt should still appear");
+		assertTrue(customSys.toString().contains("LATTICE NAMESPACES"),
+			"Lattice reference should also be appended for custom prompts");
+	}
+
+	private static AString extractSystemContent(AVector<ACell> history) {
+		if (history == null || history.count() == 0) return null;
+		ACell first = history.get(0);
+		if (!(first instanceof AMap)) return null;
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> firstMap = (AMap<AString, ACell>) first;
+		AString role = RT.ensureString(firstMap.get(Strings.intern("role")));
+		if (role == null || !"system".equals(role.toString())) return null;
+		return RT.ensureString(firstMap.get(Strings.intern("content")));
+	}
+
+	@Test
+	public void testToolDescriptionContainsCatalogPath() {
+		// The LLM-visible description should be prefixed with "Operation: <path>"
+		// so the model sees the lattice address co-located with the tool name.
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withConfig(null, null)
+			.withSystemPrompt(Vectors.empty())
+			.withTools()
+			.build();
+
+		boolean foundCoviaRead = false;
+		for (long i = 0; i < result.tools().count(); i++) {
+			AMap<AString, ACell> tool = RT.ensureMap(result.tools().get(i));
+			AString name = RT.ensureString(tool.get(Strings.intern("name")));
+			if (!"covia_read".equals(name.toString())) continue;
+			foundCoviaRead = true;
+
+			AString description = RT.ensureString(tool.get(Strings.intern("description")));
+			assertNotNull(description, "covia_read tool should have a description");
+			String descStr = description.toString();
+			assertTrue(descStr.startsWith("Operation: v/ops/covia/read"),
+				"Description should be prefixed with 'Operation: v/ops/covia/read', got: "
+					+ descStr.substring(0, Math.min(80, descStr.length())));
+			// And the original description body should still be there
+			assertTrue(descStr.contains("Reads a single value"),
+				"Description body should still be present");
+		}
+		assertTrue(foundCoviaRead, "covia_read tool should be in the default tool list");
+	}
+
+	@Test
 	public void testDefaultToolsDisabled() {
 		AMap<AString, ACell> config = Maps.of(
 			Strings.intern("defaultTools"), CVMBool.FALSE);
