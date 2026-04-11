@@ -229,6 +229,11 @@ public class LangChainAdapter extends AAdapter {
 	}
 
 	static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout) {
+		// Enable OpenAI Structured Outputs strict mode for both response_format and
+		// tool calls. Without this, langchain4j defaults to false and we get only
+		// "best effort" schema following — which is why responses regularly violated
+		// declared response schemas. Strict mode is server-enforced for supported
+		// models (gpt-4o-mini and later).
 		return OpenAiChatModel.builder()
 			.apiKey(apiKey)
 			.baseUrl(baseUrl)
@@ -236,6 +241,8 @@ public class LangChainAdapter extends AAdapter {
 			.logResponses(false)
 			.modelName(model)
 			.timeout(timeout)
+			.strictJsonSchema(true)
+			.strictTools(true)
 			.build();
 	}
 
