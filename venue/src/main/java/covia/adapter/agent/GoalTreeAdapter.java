@@ -273,9 +273,16 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		FrameResult result = runFrame(job, frames, 0, config, llmOperation, baseTools,
 			configToolMap, caps, capsCtx, context.history());
 
-		// Goal tree config is immutable — don't re-write it to state every transition.
-		// Only state-level data (like history) goes here; config lives on the record.
+		// Goal tree is stateless across transitions for everything except config:
+		// the frame stack is in-memory only. Config (caps, responseFormat, prompt,
+		// loaded paths…) must survive every transition because agents are typically
+		// configured by writing config into state at create time. Wiping it would
+		// silently strip caps/schema enforcement on the second invocation.
 		AMap<AString, ACell> newState = Maps.empty();
+		if (state instanceof AMap) {
+			ACell sc = RT.getIn(state, K_CONFIG);
+			if (sc != null) newState = newState.assoc(K_CONFIG, sc);
+		}
 
 		AMap<AString, ACell> output = Maps.of(
 			AgentState.KEY_STATE, newState,
@@ -410,6 +417,37 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			if (!hasToolCalls(l3Result)) {
 				// Text-only = implicit complete
 				AString content = RT.ensureString(RT.getIn(l3Result, K_CONTENT));
+
+				// If responseFormat declares a schema, validate that content parses
+				// as JSON. The LLM is supposed to honour strict mode server-side, but
+				// in practice models sometimes bail to plain text on tool errors —
+				// catch that here and push them back into another iteration so the
+				// frame doesn't propagate a schema-breaking string upstream.
+				if (content != null && hasSchemaResponseFormat(config)) {
+					boolean valid;
+					try {
+						convex.core.util.JSON.parse(content.toString());
+						valid = true;
+					} catch (Exception e) { valid = false; }
+					if (!valid) {
+						log.info("Frame[{}] iter={} text response does not parse as JSON; nudging LLM",
+							frameIndex, iteration);
+						activeFrame = GoalTreeContext.appendTurn(activeFrame, l3Result);
+						AMap<AString, ACell> nudge = Maps.of(
+							K_ROLE, ROLE_USER,
+							K_CONTENT, Strings.create(
+								"Your response was plain text, but a JSON schema is required. "
+								+ "Respond with valid JSON matching the schema. If a tool call "
+								+ "failed or data was unavailable, populate the relevant fields "
+								+ "with safe defaults (empty string, false, 0, empty array) and "
+								+ "describe the issue in a warnings or detail field — never "
+								+ "abandon the schema."));
+						activeFrame = GoalTreeContext.appendTurn(activeFrame, nudge);
+						frames = updateFrame(frames, frameIndex, activeFrame);
+						continue;
+					}
+				}
+
 				// Record the assistant message in frame conversation
 				frames = updateFrame(frames, frameIndex,
 					GoalTreeContext.appendTurn(activeFrame, l3Result));
@@ -554,6 +592,16 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	/** Updates a frame at the given index in the frame stack. */
 	private static AVector<ACell> updateFrame(AVector<ACell> frames, int index, ACell frame) {
 		return frames.assoc(index, frame);
+	}
+
+	/** True if config declares a responseFormat with a JSON schema (not just "json"/"text"). */
+	private static boolean hasSchemaResponseFormat(AMap<AString, ACell> config) {
+		if (config == null) return false;
+		ACell rf = config.get(K_RESPONSE_FORMAT);
+		if (!(rf instanceof AMap)) return false;
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> rfMap = (AMap<AString, ACell>) rf;
+		return rfMap.get(Strings.create("schema")) instanceof AMap;
 	}
 
 	/** Extracts merged config from record-level and state-level config. */

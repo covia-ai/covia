@@ -324,4 +324,105 @@ public class GoalTreeAdapterTest {
 		assertTrue(response.toString().contains("penguin"),
 			"Should echo the goal text: " + response);
 	}
+
+	@Test
+	public void testResponseFormatSchemaAcceptsValidJson() {
+		// When responseFormat declares a schema and the LLM emits valid JSON text,
+		// the frame completes normally (validation passes through).
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		AMap<AString, ACell> schema = Maps.of(
+			Strings.create("type"), Strings.create("object"),
+			Strings.create("properties"), Maps.of(
+				Strings.create("answer"), Maps.of(Strings.create("type"), Strings.create("string"))),
+			Strings.create("required"), Vectors.of((ACell) Strings.create("answer")),
+			Strings.create("additionalProperties"), convex.core.data.prim.CVMBool.FALSE);
+
+		AMap<AString, ACell> responseFormat = Maps.of(
+			Strings.create("name"), Strings.create("Answer"),
+			Strings.create("schema"), schema);
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "json-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
+				Strings.create("responseFormat"), responseFormat),
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Strings.create("content"),
+					Strings.create("{\"answer\":\"42\"}"))));
+
+		ACell output = adapter.processGoal(null, ALICE, input);
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		assertNotNull(response);
+		// test:llm echoes the JSON; it parses; frame completes with that JSON
+		assertTrue(response.toString().contains("\"answer\""),
+			"Valid JSON should pass validation: " + response);
+	}
+
+	@Test
+	public void testStateConfigPreservedAcrossTransitions() {
+		// state.config (where caps, responseFormat, prompt etc. are stored at agent
+		// create time) must survive a transition. Wiping it would silently strip
+		// schema enforcement on every invocation after the first.
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		AMap<AString, ACell> stateConfig = Maps.of(
+			Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
+			Strings.create("systemPrompt"), Strings.create("Be brief."));
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "stateful-agent",
+			AgentState.KEY_STATE, Maps.of(AbstractLLMAdapter.K_CONFIG, stateConfig),
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("v/test/ops/llm")),
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Strings.create("content"), Strings.create("hi"))));
+
+		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell newState = RT.getIn(output, AgentState.KEY_STATE);
+		assertNotNull(newState);
+		ACell preservedConfig = RT.getIn(newState, AbstractLLMAdapter.K_CONFIG);
+		assertNotNull(preservedConfig, "state.config must survive the transition");
+		assertEquals(stateConfig, preservedConfig,
+			"state.config must be preserved verbatim");
+	}
+
+	@Test
+	public void testResponseFormatSchemaRejectsPlainText() {
+		// When responseFormat declares a schema and the LLM emits plain text,
+		// the harness nudges the LLM. test:llm just echoes, so the loop iterates
+		// until MAX_ITERATIONS and returns failure (no valid JSON ever produced).
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		AMap<AString, ACell> schema = Maps.of(
+			Strings.create("type"), Strings.create("object"),
+			Strings.create("properties"), Maps.of(
+				Strings.create("answer"), Maps.of(Strings.create("type"), Strings.create("string"))),
+			Strings.create("required"), Vectors.of((ACell) Strings.create("answer")),
+			Strings.create("additionalProperties"), convex.core.data.prim.CVMBool.FALSE);
+
+		AMap<AString, ACell> responseFormat = Maps.of(
+			Strings.create("name"), Strings.create("Answer"),
+			Strings.create("schema"), schema);
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "text-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
+				Strings.create("responseFormat"), responseFormat),
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Strings.create("content"),
+					Strings.create("This is plain text, not JSON."))));
+
+		ACell output = adapter.processGoal(null, ALICE, input);
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		// Should NOT be the original plain text — harness should have rejected it.
+		// With test:llm echoing, the loop hits max iterations and returns
+		// "Max iterations reached" as the failure value.
+		assertNotNull(response);
+		assertFalse(response.toString().equals("This is plain text, not JSON."),
+			"Plain text response should not be accepted as complete: " + response);
+	}
 }

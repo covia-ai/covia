@@ -216,6 +216,7 @@ agent_create
       {"with": "w/vendor-records/", "can": "crud/read"},
       {"with": "w/purchase-orders/", "can": "crud/read"},
       {"with": "w/docs/",            "can": "crud/read"},
+      {"with": "w/invoices/",        "can": "crud"},
       {"with": "w/enrichments/",     "can": "crud"}
     ],
     "systemPrompt": "You are Bob, an AP Data Enricher. You receive structured invoice data and enrich it by autonomously looking up vendor records, purchase orders, and checking for duplicates. Use your tools to read and write workspace data. Record the exact path you queried in each source_path field. Your confidence_score should reflect how many validations succeeded (1.0 = all clear, lower for each warning).",
@@ -385,7 +386,7 @@ agent_list  → should show Alice, Bob, Carol, Dave all SLEEPING
 Confirm context and caps are configured:
 
 ```
-agent_info  agentId=Bob   → state.config.context lists the data guide hash; state.config.caps has 4 entries
+agent_info  agentId=Bob   → state.config.context lists the data guide hash; state.config.caps has 5 entries
 agent_info  agentId=Carol → state.config.context lists the policy rules hash; state.config.caps has 2 entries
 agent_info  agentId=Dave  → state.config.caps has 4 entries (workspace read + agent/g message + agent/g request + invoke)
 agent_info  agentId=Alice → state.config.caps is [] (no tools needed)
