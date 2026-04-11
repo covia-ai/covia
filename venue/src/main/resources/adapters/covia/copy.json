@@ -1,0 +1,30 @@
+{
+	"name": "Copy Lattice Value",
+	"description": "Server-side value duplication: reads a value from 'from' and writes it to 'to'. The 'from' argument accepts any resolvable address (hex hash, /a/, /o/, /v/, DID URL, or workspace path); 'to' must be a writable mutable path. Use to snapshot a venue op into your own /o/, cache remote data locally, or branch any workspace value. Reads and writes are subject to standard capability checks. Returns {copied: true} on success.",
+	"operation": {
+		"adapter": "covia:copy",
+		"input": {
+			"type": "object",
+			"properties": {
+				"from": {
+					"type": "string",
+					"description": "Source path. Any resolvable address: hex hash, /a/<hash>, /o/<name>, /v/<path>, DID URL, or workspace path (w/, g/, j/, etc.)."
+				},
+				"to": {
+					"type": "string",
+					"description": "Destination path. Must be a writable mutable path (o/, w/, g/<own-agent>/, s/, n/, t/)."
+				}
+			},
+			"required": ["from", "to"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"copied": {
+					"type": "boolean",
+					"description": "True if the value was successfully copied."
+				}
+			}
+		}
+	}
+}

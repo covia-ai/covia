@@ -131,6 +131,7 @@ public class CoviaAdapter extends AAdapter {
 		String BASE = "/adapters/covia/";
 		installAsset(BASE + "read.json");
 		installAsset(BASE + "write.json");
+		installAsset(BASE + "copy.json");
 		installAsset(BASE + "delete.json");
 		installAsset(BASE + "append.json");
 		installAsset(BASE + "slice.json");
@@ -143,17 +144,22 @@ public class CoviaAdapter extends AAdapter {
 		// Register built-in virtual namespace resolvers
 		registerResolver("n", new AgentNamespaceResolver());
 		registerResolver("t", new TempNamespaceResolver());
+		registerResolver("v", new VenueGlobalsResolver(this));
 	}
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		if (ctx.getCallerDID() == null) {
+		// Internal context bypasses the authentication check — engine code
+		// running at startup (e.g. /v/ materialiser) needs to be able to
+		// invoke covia:* ops without a caller DID.
+		if (ctx.getCallerDID() == null && !ctx.isInternal()) {
 			return CompletableFuture.failedFuture(new RuntimeException("Authentication required"));
 		}
 		try {
 			return switch (getSubOperation(meta)) {
 				case "read" -> CompletableFuture.completedFuture(handleRead(ctx, input));
 				case "write" -> CompletableFuture.completedFuture(handleWrite(ctx, input));
+				case "copy" -> CompletableFuture.completedFuture(handleCopy(ctx, input));
 				case "delete" -> CompletableFuture.completedFuture(handleDelete(ctx, input));
 				case "append" -> CompletableFuture.completedFuture(handleAppend(ctx, input));
 				case "slice" -> CompletableFuture.completedFuture(handleSlice(ctx, input));
@@ -195,7 +201,8 @@ public class CoviaAdapter extends AAdapter {
 	 * {@code covia:slice} to read vector elements in pages.</p>
 	 */
 	private ACell handleRead(RequestContext ctx, ACell input) {
-		// Check job-scoped virtual namespace (t/) first
+		// Check job-scoped virtual namespace (t/) first — these require
+		// specialised cursor navigation that Engine.resolvePath doesn't handle.
 		ACell pathCell = RT.getIn(input, Fields.PATH);
 		if (pathCell != null) {
 			ACell[] pathKeys = parsePath(pathCell);
@@ -208,6 +215,21 @@ public class CoviaAdapter extends AAdapter {
 			}
 		}
 
+		// Try universal resolution via Engine.resolvePath. This covers every
+		// input form per OPERATIONS.md §4: bare hex hash, /a/<hash>, /o/<name>,
+		// local DID URL, and workspace paths (w/, g/, o/, j/, etc.). Returns
+		// the literal value at the resolved location with no ref-following or
+		// asset interpretation.
+		AString pathStr = RT.ensureString(pathCell);
+		if (pathStr != null) {
+			ACell value = engine.resolvePath(pathStr, ctx);
+			if (value != null) {
+				return sizeGuardedResult(value, input);
+			}
+		}
+
+		// Fall back to local resolution for cases not handled by resolvePath
+		// (e.g. n/ virtual namespace requires the agent context).
 		Object[] target = resolveTargetPath(ctx, input);
 		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
 		ACell[] pathKeys = (ACell[]) target[1];
@@ -440,9 +462,62 @@ public class CoviaAdapter extends AAdapter {
 	 * @return {@code {written: true}} on success
 	 * @throws RuntimeException if the path is invalid or targets a non-writable namespace
 	 */
+	// ========== covia:copy — server-side path-to-path duplication ==========
+
+	private static final AString K_FROM = Strings.intern("from");
+	private static final AString K_TO = Strings.intern("to");
+	private static final AString K_COPIED = Strings.intern("copied");
+
+	/**
+	 * Server-side value duplication: reads a value from {@code from} and
+	 * writes it to {@code to}, all within the venue boundary.
+	 *
+	 * <p>Per OPERATIONS.md §6, {@code from} accepts any resolvable address
+	 * (hex hash, {@code /a/}, {@code /o/}, {@code /v/}, DID URL, workspace
+	 * path) and {@code to} must be a writable mutable path. The op is a
+	 * thin composition of {@code resolvePath + write}; reads and writes
+	 * use the standard caps enforcement of each side.</p>
+	 *
+	 * <p>Use this to snapshot a venue op into your own {@code /o/} (e.g.
+	 * {@code from=v/ops/json/merge to=o/merge}), to cache remote data
+	 * locally ({@code from=did:web:...:w/data to=w/cache/...}), or to
+	 * branch any workspace value.</p>
+	 *
+	 * @return {@code {copied: true}} on success
+	 */
+	private ACell handleCopy(RequestContext ctx, ACell input) {
+		AString from = RT.ensureString(RT.getIn(input, K_FROM));
+		AString to = RT.ensureString(RT.getIn(input, K_TO));
+		if (from == null) throw new IllegalArgumentException("'from' is required");
+		if (to == null) throw new IllegalArgumentException("'to' is required");
+
+		// Read from source via the canonical universal resolver. Caps
+		// enforcement happens inside resolvePath via the cursor it returns.
+		ACell value = engine.resolvePath(from, ctx);
+		if (value == null) {
+			throw new RuntimeException("source not found: " + from);
+		}
+
+		// Delegate to handleWrite for the destination, which enforces
+		// writability and per-namespace canWrite checks.
+		ACell writeInput = Maps.of(Fields.PATH, to, Fields.VALUE, value);
+		handleWrite(ctx, writeInput);
+
+		return Maps.of(K_COPIED, CVMBool.TRUE);
+	}
+
 	private ACell handleWrite(RequestContext ctx, ACell input) {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
 		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
+		// Per-call write authorisation for virtual namespaces (e.g. /v/
+		// requires the venue identity). Static isWritableNamespace doesn't
+		// know about the caller; canWrite(ctx) does.
+		if (jsonKeys.length > 0) {
+			NamespaceResolver resolver = resolvers.get(jsonKeys[0].toString());
+			if (resolver != null && !resolver.canWrite(ctx)) {
+				throw new RuntimeException("Write permission denied for namespace: " + jsonKeys[0]);
+			}
+		}
 		ACell value = parseJsonValue(RT.getIn(input, Fields.VALUE));
 
 		// Check job-scoped virtual namespace (t/)
@@ -1038,13 +1113,30 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * Gets the lattice cursor for the authenticated user, creating the
-	 * user namespace if it does not yet exist. Used by write operations
+	 * Gets the lattice cursor for the authenticated user (caller), creating
+	 * the user namespace if it does not yet exist. Used by write operations
 	 * that need to store data for a first-time user.
 	 */
 	ALatticeCursor<ACell> ensureUserCursor(RequestContext ctx) {
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ctx.getCallerDID());
+		return user.cursor();
+	}
+
+	/**
+	 * Gets the lattice cursor for a specific user identified by DID, creating
+	 * the user namespace if it does not yet exist. Parallel to
+	 * {@link #ensureUserCursor(RequestContext)} but targets a named user
+	 * rather than the calling user. Used by venue-scoped virtual namespace
+	 * resolvers (e.g. {@code VenueGlobalsResolver} for {@code /v/}) that
+	 * need to navigate to a fixed user's data regardless of the caller.
+	 *
+	 * @param did the DID of the user whose cursor to return
+	 * @return the lattice cursor positioned at that user's namespace root
+	 */
+	public ALatticeCursor<ACell> ensureUserCursor(AString did) {
+		Users users = engine.getVenueState().users();
+		User user = users.ensure(did);
 		return user.cursor();
 	}
 
@@ -1093,7 +1185,7 @@ public class CoviaAdapter extends AAdapter {
 	 * @return For virtual namespaces: ResolvedNamespace with cursor at namespace root.
 	 *         For physical namespaces: null (caller uses standard user cursor flow).
 	 */
-	NamespaceResolver.ResolvedNamespace resolveVirtual(RequestContext ctx, ACell[] pathKeys) {
+	public NamespaceResolver.ResolvedNamespace resolveVirtual(RequestContext ctx, ACell[] pathKeys) {
 		if (pathKeys.length > 0) {
 			String prefix = pathKeys[0].toString();
 			NamespaceResolver resolver = resolvers.get(prefix);
@@ -1102,6 +1194,36 @@ public class CoviaAdapter extends AAdapter {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * Reads the value at a virtual-namespace path (e.g. {@code n/notes},
+	 * {@code v/ops/json/merge}). Returns the literal value at the resolved
+	 * cursor, or {@code null} if the path doesn't match a registered
+	 * virtual prefix or is unresolvable.
+	 *
+	 * <p>This is the entry point used by {@link covia.venue.Engine#resolvePath}
+	 * to handle virtual namespaces uniformly. The {@code t/} (job-scoped temp)
+	 * resolver is excluded — its data structure access pattern (per-job temp
+	 * field) requires specialised handling that lives in {@link #handleRead}.</p>
+	 */
+	public ACell readVirtualNamespace(RequestContext ctx, AString path) {
+		if (path == null) return null;
+		ACell[] pathKeys = parseStringPath(path.toString());
+		if (pathKeys.length == 0) return null;
+
+		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
+		if (vns == null) return null;
+
+		// Job-scoped (t/) is not handled here — it requires specialised
+		// access via TempNamespaceResolver.getTemp.
+		if (vns.jobId() != null) return null;
+
+		// Cursor-based virtual namespace (n/, v/, etc.): navigate the
+		// resolved cursor with the remaining keys.
+		ACell[] remaining = vns.remainingKeys();
+		if (remaining.length == 0) return vns.cursor().get();
+		return readPath(vns.cursor(), remaining);
 	}
 
 	/**

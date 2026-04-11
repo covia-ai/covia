@@ -182,6 +182,13 @@ public class Engine {
 		this.contentStorage = createStorage();
 		this.contentStorage.initialise();
 
+		// Ensure the venue's own user record exists in :user-data. The venue
+		// is treated as a user (it has its own DID and keypair) so that the
+		// /v/ virtual namespace can resolve to its /w/global/ sub-tree
+		// (per OPERATIONS.md §3). Idempotent — Users.ensure creates if
+		// missing, returns existing otherwise.
+		this.venueState.users().ensure(getDIDString());
+
 		// Start the persistence sweep daemon ONLY if a real persistence
 		// handler is wired. In-memory engines (createTemp, NOOP handler)
 		// have nothing to flush to, so the sweep is meaningless and would
@@ -407,6 +414,135 @@ public class Engine {
 		venue.registerAdapter(new VaultAdapter());
 		venue.registerAdapter(new LLMAgentAdapter());
 		venue.registerAdapter(new covia.adapter.agent.GoalTreeAdapter());
+
+		// Flush pending /v/ops/ entries from all adapters. Per OPERATIONS.md
+		// §7, installAsset(catalogPath, resourcePath) defers the catalog
+		// write until after all adapters are registered, because covia:write
+		// (which the materialiser uses) requires CoviaAdapter to be present.
+		venue.materialiseVOps();
+
+		// Materialise /v/info/ from venue config + registered adapters.
+		// Per OPERATIONS.md §7, this is re-run on every startup. Idempotent
+		// modulo /v/info/started which legitimately reflects the current boot.
+		venue.materialiseVenueInfo();
+	}
+
+	/**
+	 * Flushes catalog entries that adapters collected via
+	 * {@link covia.adapter.AAdapter#installAsset(String, String)}. Each
+	 * entry is written to {@code /v/ops/&lt;catalogPath&gt;} as inline asset
+	 * metadata via {@code covia:write} with internal context.
+	 *
+	 * <p>Called once at startup after all adapters are registered (so that
+	 * {@code CoviaAdapter} — which provides {@code covia:write} — is
+	 * available). Idempotent on re-run.</p>
+	 */
+	public void materialiseVOps() {
+		RequestContext ctx = RequestContext.INTERNAL;
+		for (var adapter : adapters.values()) {
+			if (adapter == null) continue;
+			for (var entry : adapter.pendingCatalogEntries.entrySet()) {
+				String catalogPath = entry.getKey();
+				Hash hash = entry.getValue();
+				try {
+					AString metaString = adapter.getInstalledAssets().get(hash);
+					if (metaString == null) continue;
+					ACell meta = convex.core.util.JSON.parse(metaString);
+					jobManager.invokeOperation("covia:write",
+						Maps.of(
+							Fields.PATH, Strings.create("v/ops/" + catalogPath),
+							Fields.VALUE, meta),
+						ctx).awaitResult(5000);
+				} catch (Exception e) {
+					log.warn("Failed to register {} at /v/ops/{}: {}",
+						adapter.getName(), catalogPath, e.getMessage());
+				}
+			}
+		}
+	}
+
+	/**
+	 * Writes the venue introspection data to {@code /v/info/} sub-paths.
+	 * Called once at startup after all adapters are registered, and any
+	 * time the venue wants to refresh the information.
+	 *
+	 * <p>Per OPERATIONS.md §3, the populated paths are:</p>
+	 * <ul>
+	 *   <li>{@code /v/info/name} — venue display name (from config)</li>
+	 *   <li>{@code /v/info/did} — venue's own DID</li>
+	 *   <li>{@code /v/info/version} — covia jar version</li>
+	 *   <li>{@code /v/info/started} — startup time as epoch milliseconds</li>
+	 *   <li>{@code /v/info/protocols} — array of enabled protocol handlers</li>
+	 *   <li>{@code /v/info/adapters/&lt;name&gt;} — per-adapter summary</li>
+	 * </ul>
+	 *
+	 * <p>Writes go through the {@code covia:write} op with
+	 * {@link RequestContext#INTERNAL}, which the {@code v/} resolver
+	 * recognises as the venue identity.</p>
+	 */
+	public void materialiseVenueInfo() {
+		try {
+			RequestContext ctx = RequestContext.INTERNAL;
+
+			// /v/info/name
+			AString name = config.getName();
+			if (name != null) writeVenueInfo("v/info/name", name, ctx);
+
+			// /v/info/did
+			AString did = getDIDString();
+			if (did != null) writeVenueInfo("v/info/did", did, ctx);
+
+			// /v/info/version
+			String version = jarVersion();
+			if (version != null) writeVenueInfo("v/info/version", Strings.create(version), ctx);
+
+			// /v/info/started — current boot time
+			writeVenueInfo("v/info/started", CVMLong.create(System.currentTimeMillis()), ctx);
+
+			// /v/info/protocols — list of enabled protocol handlers (left
+			// as a TODO until VenueServer wires it; for now write what the
+			// engine knows about its own surface)
+			AVector<ACell> protocols = Vectors.of(
+				(ACell) Strings.create("rest"),
+				(ACell) Strings.create("mcp"),
+				(ACell) Strings.create("a2a"));
+			writeVenueInfo("v/info/protocols", protocols, ctx);
+
+			// /v/info/adapters/<name> — per-adapter summary
+			for (String adapterName : adapters.keySet()) {
+				AAdapter adapter = adapters.get(adapterName);
+				if (adapter == null) continue;
+				int opCount = adapter.getInstalledAssets().size();
+				AMap<AString, ACell> summary = Maps.of(
+					Strings.create("name"), Strings.create(adapter.getName()),
+					Strings.create("description"), Strings.create(adapter.getDescription()),
+					Strings.create("operations"), CVMLong.create(opCount));
+				writeVenueInfo("v/info/adapters/" + adapterName, summary, ctx);
+			}
+		} catch (Exception e) {
+			log.warn("Failed to materialise /v/info/", e);
+		}
+	}
+
+	private void writeVenueInfo(String path, ACell value, RequestContext ctx) {
+		try {
+			jobManager.invokeOperation("covia:write",
+				Maps.of(Fields.PATH, Strings.create(path), Fields.VALUE, value),
+				ctx).awaitResult(5000);
+		} catch (Exception e) {
+			log.warn("Failed to write {}: {}", path, e.getMessage());
+		}
+	}
+
+	/**
+	 * Best-effort jar version lookup. Returns null if the version can't be
+	 * determined (e.g. running from IDE classes rather than a packaged jar).
+	 */
+	private static String jarVersion() {
+		Package pkg = Engine.class.getPackage();
+		if (pkg == null) return null;
+		String v = pkg.getImplementationVersion();
+		return (v != null) ? v : "dev";
 	}
 
 	/**
@@ -616,7 +752,30 @@ public class Engine {
 		return (meta instanceof AMap) ? (AMap<AString, ACell>) meta : null;
 	}
 
-	// ========== Reference resolution ==========
+	// ========== Path resolution ==========
+	//
+	// This module provides two layered resolution functions:
+	//
+	// 1. resolvePath(ref, ctx) — pure single-step path navigation. Returns
+	//    the LITERAL value at the resolved local lattice cell as an ACell.
+	//    Handles: bare hex hash, /a/<hash>, /o/<name>, /v/<path> (future),
+	//    local DID URLs, plain workspace paths. Returns null for remote
+	//    DIDs and unresolvable refs. NEVER chases references; NEVER
+	//    interprets values; NEVER recurses.
+	//
+	// 2. resolveAsset(ref, ctx) — composes resolvePath + Asset.fromMeta,
+	//    with a separate branch for remote DID URLs that creates federated
+	//    Operation handles. The legacy bare-name registry fallback is also
+	//    here as a deprecated final step.
+	//
+	// The split is per OPERATIONS.md §4: read-side ops use resolvePath
+	// (which gives them universal resolution); op-invocation paths use
+	// resolveAsset (which adds asset interpretation and federation).
+	//
+	// There is NO automatic reference-following anywhere. A user pin at
+	// /o/<name> that contains a non-asset value (e.g. a string or a map
+	// without an "operation" field) is opaque data, not a reference. This
+	// keeps the resolver primitive simple and explicit.
 
 	/** Namespace prefix for immutable content-addressed assets */
 	private static final AString NS_ASSET = Strings.intern("/a/");
@@ -625,69 +784,131 @@ public class Engine {
 	private static final AString NS_DID   = Strings.intern("did:");
 
 	/**
-	 * Resolves a reference to an Asset. Supports (in priority order):
+	 * Pure single-step path navigation. Returns the literal value at the
+	 * resolved local lattice cell. Does NOT chase references, follow
+	 * indirections, or interpret the value in any way.
+	 *
+	 * <p>Accepted input forms:</p>
 	 * <ul>
-	 *   <li>Bare hex hash — shorthand for {@code /a/<hash>}</li>
-	 *   <li>{@code /a/<hash>} — explicit asset namespace</li>
-	 *   <li>{@code /o/<name>} — caller's user-scoped operation namespace</li>
-	 *   <li>{@code did:.../<namespace>/<path>} — local or remote DID URL</li>
-	 *   <li>Operation name (e.g. "test:echo") — venue operation registry</li>
+	 *   <li>Bare hex hash → asset metadata from CAS</li>
+	 *   <li>{@code /a/<hash>} → asset metadata from CAS</li>
+	 *   <li>{@code /o/<name>} → caller's own /o/ entry value</li>
+	 *   <li>Local DID URL with {@code /a/<hash>} path → asset metadata</li>
+	 *   <li>Workspace path ({@code w/...}, {@code g/...}, etc.) → cursor value</li>
 	 * </ul>
+	 *
+	 * <p>Returns null for unresolvable refs, remote DID URLs, and refs that
+	 * resolve to a missing lattice cell. Remote DID URLs are handled by
+	 * {@link #resolveAsset(AString, RequestContext)} via federated dispatch.</p>
+	 *
+	 * @param ref Reference string
+	 * @param ctx Request context (caller identity for /o/ and workspace navigation)
+	 * @return Literal value at the resolved location, or null
+	 */
+	public ACell resolvePath(AString ref, RequestContext ctx) {
+		if (ref == null) return null;
+
+		// 1. Bare hex hash → look up in CAS
+		Hash h = Hash.parse(ref);
+		if (h != null) {
+			Asset asset = getAsset(h, ctx);
+			return (asset != null) ? asset.meta() : null;
+		}
+
+		// 2. /a/<hash> → look up in CAS
+		if (ref.startsWith(NS_ASSET)) {
+			Hash ah = Hash.parse(ref.slice(3));
+			if (ah == null) return null;
+			Asset asset = getAsset(ah, ctx);
+			return (asset != null) ? asset.meta() : null;
+		}
+
+		// 3. /o/<name> → caller's own /o/, return literal value
+		if (ref.startsWith(NS_OPS)) {
+			return readUserOpValue(ref.slice(3), ctx);
+		}
+
+		// 4. DID URL — local cases only; remote is handled by resolveAsset
+		if (ref.startsWith(NS_DID)) {
+			Asset local = resolveLocalDIDURL(ref);
+			return (local != null) ? local.meta() : null;
+		}
+
+		// 5. Virtual namespace prefix (n/, v/, ...) — delegate to the
+		// registered resolver via CoviaAdapter. Handles cursor-based
+		// virtual namespaces uniformly. (t/ — job-scoped temp — is not
+		// handled here; covia:read has its own t/ branch.)
+		ACell virtualValue = resolveVirtualNamespace(ref, ctx);
+		if (virtualValue != null) return virtualValue;
+
+		// 6. Workspace path (w/, g/, o/, j/, s/, h/) → caller's lattice
+		if (isUserNamespacePath(ref)) {
+			return readWorkspacePathValue(ref, ctx);
+		}
+
+		return null;
+	}
+
+	/**
+	 * Delegates resolution of a virtual-namespace path to the
+	 * {@link covia.adapter.CoviaAdapter}'s registered resolvers. Returns
+	 * the literal value at the resolved location, or null if the path
+	 * doesn't match a registered virtual prefix.
+	 */
+	private ACell resolveVirtualNamespace(AString ref, RequestContext ctx) {
+		covia.adapter.CoviaAdapter coviaAdapter =
+			(covia.adapter.CoviaAdapter) getAdapter("covia");
+		if (coviaAdapter == null) return null;
+		try {
+			return coviaAdapter.readVirtualNamespace(ctx, ref);
+		} catch (Exception e) {
+			return null;
+		}
+	}
+
+	/**
+	 * Resolves a reference to an Asset. Composes {@link #resolvePath} with
+	 * {@link Asset#fromMeta}, plus a federation branch for remote DID URLs
+	 * and a deprecated fallback to the legacy global operation registry.
+	 *
+	 * <p>Op-invocation paths ({@code grid:run}, agent loop, orchestration
+	 * step dispatch) use this function. Read-side ops should use
+	 * {@link #resolvePath} instead.</p>
 	 *
 	 * @param ref Reference string
 	 * @param ctx Request context (caller identity for /o/ namespace scoping)
-	 * @return Resolved Asset, or null if not resolvable
+	 * @return Resolved Asset, or null if not resolvable as an asset
 	 */
 	public Asset resolveAsset(AString ref, RequestContext ctx) {
-		return resolveAsset(ref, ctx, 0);
-	}
-
-	/** Maximum recursion depth for {@link #resolveAsset} when dereferencing
-	 *  workspace path values that themselves contain references. Prevents
-	 *  infinite loops if a path stores a reference back to itself. */
-	private static final int MAX_RESOLVE_DEPTH = 8;
-
-	private Asset resolveAsset(AString ref, RequestContext ctx, int depth) {
 		if (ref == null) return null;
-		if (depth >= MAX_RESOLVE_DEPTH) return null;
 
-		// 1. Bare hex hash → check user /a/ then venue /a/
-		Hash h = Hash.parse(ref);
-		if (h != null) return getAsset(h, ctx);
-
-		// 2. Namespace prefix dispatch
-		if (ref.startsWith(NS_ASSET)) {
-			Hash ah = Hash.parse(ref.slice(3));
-			if (ah != null) return getAsset(ah, ctx);
-			return null;
-		}
-
-		// 3. /o/<name> — caller's user-scoped operation namespace
-		if (ref.startsWith(NS_OPS)) {
-			return resolveUserOp(ref.slice(3), ctx);
-		}
-
-		// 4. DID URL
+		// Remote DID URLs: create a federated Operation. The remote venue
+		// holds the actual metadata; the returned Operation carries enough
+		// to dispatch the call across the wire.
 		if (ref.startsWith(NS_DID)) {
-			return resolveDIDURL(ref);
+			Asset asset = resolveDIDURL(ref);
+			if (asset != null) return asset;
+			// Fall through — DID URL might be unresolvable but other forms
+			// could match (rare; defensive).
 		}
 
-		// 5. Workspace path — dereference through caller's lattice and recurse.
-		// Recognises any of the venue namespace prefixes (w/, g/, o/, j/, s/,
-		// n/, h/) WITHOUT a leading slash. The value at the path can be:
-		//   - a string → treated as a reference and resolved recursively
-		//   - a map with an "operation" field → treated as inline metadata
-		// This is the primary mechanism for using human-friendly paths like
-		// "w/config/ap-pipeline" as operation references instead of opaque
-		// asset hashes. Mirrors ContextLoader.isNamespacePath.
-		if (isUserNamespacePath(ref)) {
-			Asset deref = resolveWorkspaceRef(ref, ctx, depth);
-			if (deref != null) return deref;
-			// Fall through to step 6 (operation registry) — a path-shaped
-			// alias is unlikely but technically possible.
+		// Pure navigation, then asset interpretation. Only maps that have
+		// an "operation" field can be interpreted as callable Assets;
+		// other map shapes (and strings, vectors, scalars) resolve as raw
+		// data but are not callable as operations.
+		ACell value = resolvePath(ref, ctx);
+		if (value instanceof AMap) {
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> map = (AMap<AString, ACell>) value;
+			if (map.get(Strings.create("operation")) != null) {
+				return Asset.fromMeta(map);
+			}
 		}
 
-		// 6. Operation name registry (venue-level named operations)
+		// Deprecated fallback: legacy global operation registry. Bare names
+		// like "json:merge" or "agent:create" are looked up in the
+		// engine.operations map. This will be removed in Phase 3 of the
+		// OPERATIONS.md migration; new code should use /v/ops/ paths.
 		Hash opHash = operations.get(ref);
 		if (opHash != null) return getAsset(opHash);
 
@@ -708,12 +929,23 @@ public class Engine {
 	}
 
 	/**
-	 * Dereferences a user-namespace path and resolves the resulting value as
-	 * an Asset. Returns null if the path is missing, the user has no lattice
-	 * state, or the value is not a recognisable reference.
+	 * Reads the literal value at the caller's {@code /o/<name>} namespace.
+	 * Returns whatever's stored — a map, string, vector, or null if absent.
+	 * No interpretation, no asset wrapping, no reference chasing.
 	 */
-	@SuppressWarnings("unchecked")
-	private Asset resolveWorkspaceRef(AString ref, RequestContext ctx, int depth) {
+	private ACell readUserOpValue(AString name, RequestContext ctx) {
+		if (ctx == null || ctx.getCallerDID() == null) return null;
+		Users users = venueState.users();
+		User user = users.get(ctx.getCallerDID());
+		if (user == null) return null;
+		return RT.getIn(user.get(), "o", name);
+	}
+
+	/**
+	 * Reads the literal value at a workspace path through the caller's
+	 * lattice cursor. Returns whatever's there, with no interpretation.
+	 */
+	private ACell readWorkspacePathValue(AString ref, RequestContext ctx) {
 		if (ctx == null || ctx.getCallerDID() == null) return null;
 		try {
 			Users users = venueState.users();
@@ -723,28 +955,26 @@ public class Engine {
 			ACell[] pathKeys = covia.adapter.CoviaAdapter.parseStringPath(ref.toString());
 			if (pathKeys.length == 0) return null;
 
-			ACell value = covia.adapter.CoviaAdapter.readPath(user.cursor(), pathKeys);
-			if (value == null) return null;
-
-			// Inline operation metadata: a map with an "operation" field
-			if (value instanceof AMap) {
-				AMap<AString, ACell> map = (AMap<AString, ACell>) value;
-				if (map.get(Strings.create("operation")) != null) {
-					return Asset.fromMeta(map);
-				}
-				return null;
-			}
-
-			// String reference: recurse with the value as the new ref
-			AString strRef = RT.ensureString(value);
-			if (strRef != null) {
-				return resolveAsset(strRef, ctx, depth + 1);
-			}
-
-			return null;
+			return covia.adapter.CoviaAdapter.readPath(user.cursor(), pathKeys);
 		} catch (Exception e) {
 			return null;
 		}
+	}
+
+	/**
+	 * Resolves a DID URL to a local Asset only — returns null if the DID is
+	 * remote or unresolvable locally. Used by {@link #resolvePath} which
+	 * does not handle federation. Federation is handled separately by
+	 * {@link #resolveAsset} via {@link #resolveDIDURL}.
+	 */
+	private Asset resolveLocalDIDURL(AString ref) {
+		Asset full = resolveDIDURL(ref);
+		// resolveDIDURL returns either a local Asset (with metadata) or a
+		// remote federated Operation (whose metadata may not be present).
+		// We treat any Asset whose meta() is non-null as local; remote
+		// Operations have null metadata until they're dispatched.
+		if (full == null) return null;
+		return (full.meta() != null) ? full : null;
 	}
 
 	/**
@@ -763,43 +993,6 @@ public class Engine {
 	private Asset resolveAssetRef(AString hashStr) {
 		Hash h = Hash.parse(hashStr);
 		return (h != null) ? getAsset(h) : null;
-	}
-
-	/**
-	 * Resolves an operation from the caller's {@code /o/} namespace.
-	 *
-	 * <p>The value at the path can be:</p>
-	 * <ul>
-	 *   <li>A map with an {@code operation} field — treated as inline operation metadata</li>
-	 *   <li>A string — treated as a reference and resolved recursively (e.g. an {@code /a/} hash)</li>
-	 * </ul>
-	 */
-	private Asset resolveUserOp(AString name, RequestContext ctx) {
-		if (ctx == null || ctx.getCallerDID() == null) return null;
-
-		Users users = venueState.users();
-		User user = users.get(ctx.getCallerDID());
-		if (user == null) return null;
-
-		// Read from the user's /o/ namespace
-		ACell value = RT.getIn(user.get(), "o", name);
-		if (value == null) return null;
-
-		// If it's a map with an "operation" field, treat as inline metadata
-		if (value instanceof AMap) {
-			ACell opField = RT.getIn(value, "operation");
-			if (opField != null) {
-				return Asset.fromMeta((AMap<AString, ACell>) value);
-			}
-		}
-
-		// If it's a string, treat as a reference and resolve recursively
-		AString strRef = RT.ensureString(value);
-		if (strRef != null) {
-			return resolveAsset(strRef, ctx);
-		}
-
-		return null;
 	}
 
 	/**

@@ -30,8 +30,20 @@ public interface NamespaceResolver {
 	 */
 	ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys);
 
-	/** Whether this namespace accepts writes. */
+	/** Whether this namespace accepts writes (static, applies to all callers). */
 	boolean isWritable();
+
+	/**
+	 * Whether the given caller is permitted to write to this namespace. The
+	 * default implementation defers to {@link #isWritable()} (the existing
+	 * static yes/no semantics). Resolvers that need per-caller authorisation
+	 * — e.g. {@code VenueGlobalsResolver}, where reads are universally
+	 * allowed but writes require the venue identity — override this to
+	 * inspect the {@link RequestContext}.
+	 */
+	default boolean canWrite(RequestContext ctx) {
+		return isWritable();
+	}
 
 	/**
 	 * Result of namespace resolution: a cursor positioned at the namespace root

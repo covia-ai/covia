@@ -18,7 +18,6 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
-import covia.grid.Asset;
 import covia.venue.AssetStore;
 import covia.venue.RequestContext;
 
@@ -188,18 +187,25 @@ public class AssetAdapter extends AAdapter {
 		return Hash.parse(s);
 	}
 
+	@SuppressWarnings("unchecked")
 	private ACell handleGet(ACell input, RequestContext ctx) {
 		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
 		if (idStr == null) throw new IllegalArgumentException("id is required");
 
+		// Hash-form refs go through the CAS record (preserves the canonical
+		// metadata bytes). Other forms walk the universal resolver.
+		AMap<AString, ACell> meta = null;
 		Hash hash = parseAssetId(idStr);
-		if (hash == null) throw new IllegalArgumentException("Invalid asset ID format: " + idStr);
-
-		AVector<?> record = engine.getAssetRecord(hash, ctx);
-		if (record == null) {
-			return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.FALSE);
+		if (hash != null) {
+			AVector<?> record = engine.getAssetRecord(hash, ctx);
+			if (record != null) {
+				meta = RT.ensureMap(record.get(AssetStore.POS_META));
+			}
+		} else {
+			ACell value = engine.resolvePath(idStr, ctx);
+			if (value instanceof AMap) meta = (AMap<AString, ACell>) value;
 		}
-		AMap<AString, ACell> meta = RT.ensureMap(record.get(AssetStore.POS_META));
+
 		if (meta == null) {
 			return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.FALSE);
 		}
@@ -210,14 +216,28 @@ public class AssetAdapter extends AAdapter {
 			Fields.VALUE, meta);
 	}
 
+	@SuppressWarnings("unchecked")
 	private ACell handleContent(ACell input, RequestContext ctx) {
 		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
 		if (idStr == null) throw new IllegalArgumentException("id is required");
 
+		// Locate the CAS record for the source. Hash-form refs name the record
+		// directly. For non-hash refs we resolve the path, derive the CAD3 hash
+		// of the resulting metadata, and look up the same record by hash —
+		// non-CAS workspace values that have never been stored as assets won't
+		// have a record, and the call returns exists: false.
+		AVector<?> record = null;
 		Hash hash = parseAssetId(idStr);
-		if (hash == null) throw new IllegalArgumentException("Invalid asset ID format: " + idStr);
+		if (hash != null) {
+			record = engine.getAssetRecord(hash, ctx);
+		} else {
+			ACell value = engine.resolvePath(idStr, ctx);
+			if (value instanceof AMap) {
+				Hash derived = ((AMap<AString, ACell>) value).getHash();
+				record = engine.getAssetRecord(derived, ctx);
+			}
+		}
 
-		AVector<?> record = engine.getAssetRecord(hash, ctx);
 		if (record == null) {
 			return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.FALSE);
 		}
@@ -321,28 +341,49 @@ public class AssetAdapter extends AAdapter {
 			Fields.LIMIT, CVMLong.create(limit));
 	}
 
+	@SuppressWarnings("unchecked")
 	private ACell handlePin(ACell input, RequestContext ctx) {
-		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
-		if (idStr == null) throw new IllegalArgumentException("id is required");
+		// Accept `path` (preferred) or `id` (deprecated alias) for one cycle.
+		AString pathStr = RT.ensureString(RT.getIn(input, Fields.PATH));
+		if (pathStr == null) pathStr = RT.ensureString(RT.getIn(input, Fields.ID));
+		if (pathStr == null) throw new IllegalArgumentException("path is required");
 
-		// Resolve the source asset from any reference format
-		Asset asset = engine.resolveAsset(idStr, ctx);
-		if (asset == null) throw new IllegalArgumentException("Asset not found: " + idStr);
+		AString metaString;
+		ACell content = null;
 
-		Hash hash = asset.getID();
+		// If the source is a hash-form reference (bare hex, /a/<hash>, or
+		// did:.../a/<hash>), look up the existing asset record so we preserve
+		// its content payload as well as the metadata. Resolving these via the
+		// generic path resolver would only return the metadata.
+		Hash existingHash = parseAssetId(pathStr);
+		if (existingHash != null) {
+			AVector<?> record = engine.getAssetRecord(existingHash, ctx);
+			if (record == null) throw new IllegalArgumentException("Asset not found: " + pathStr);
+			metaString = RT.ensureString(record.get(AssetStore.POS_JSON));
+			content = record.get(AssetStore.POS_CONTENT);
+		} else {
+			// Non-hash reference: walk the universal resolver. The resolved
+			// value is treated as inline metadata; non-asset paths produce
+			// content-less pins.
+			ACell value = engine.resolvePath(pathStr, ctx);
+			if (value == null) throw new IllegalArgumentException("Path not found: " + pathStr);
+			if (!(value instanceof AMap)) {
+				throw new IllegalArgumentException(
+					"Cannot pin non-map value at " + pathStr
+					+ " (got " + value.getClass().getSimpleName() + ")");
+			}
+			metaString = JSON.printPretty((AMap<AString, ACell>) value);
+		}
 
-		// Get the full record (metadata + content) from wherever it lives
-		AVector<?> record = engine.getAssetRecord(hash, ctx);
-		if (record == null) throw new IllegalArgumentException("Asset record not found: " + idStr);
+		// Store into the caller's /a/ namespace.
+		Hash hash = engine.storeUserAsset(metaString, content, ctx);
 
-		AString metaString = RT.ensureString(record.get(AssetStore.POS_JSON));
-		ACell content = record.get(AssetStore.POS_CONTENT);
-
-		// Store into caller's /a/ namespace
-		engine.storeUserAsset(metaString, content, ctx);
-
-		// Return caller's DID URL
+		// Return the caller's DID URL plus the bare hex hash. The path is
+		// directly usable as input to other read-side ops; the hash is
+		// convenient for version comparison.
 		AString didUrl = ctx.getCallerDID().append("/a/" + hash.toHexString());
-		return Maps.of(Fields.ID, didUrl, Strings.intern("pinned"), CVMBool.TRUE);
+		return Maps.of(
+			Fields.PATH, didUrl,
+			Strings.intern("hash"), Strings.create(hash.toHexString()));
 	}
 }

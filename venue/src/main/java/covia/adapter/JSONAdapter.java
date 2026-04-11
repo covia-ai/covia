@@ -61,10 +61,10 @@ public class JSONAdapter extends AAdapter {
 
 	@Override
 	protected void installAssets() {
-		installAsset("/adapters/json/merge.json");
-		installAsset("/adapters/json/cond.json");
-		installAsset("/adapters/json/assoc.json");
-		installAsset("/adapters/json/select.json");
+		installAsset("json/merge",  "/adapters/json/merge.json");
+		installAsset("json/cond",   "/adapters/json/cond.json");
+		installAsset("json/assoc",  "/adapters/json/assoc.json");
+		installAsset("json/select", "/adapters/json/select.json");
 	}
 
 	@Override

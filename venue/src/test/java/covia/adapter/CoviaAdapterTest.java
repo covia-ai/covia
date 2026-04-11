@@ -128,6 +128,177 @@ public class CoviaAdapterTest {
 		assertNotNull(RT.getIn(result, "value"), "Should return user root");
 	}
 
+	// ========== covia:read — universal resolution forms ==========
+	//
+	// Per OPERATIONS.md §4, covia:read accepts every resolvable address form
+	// via Engine.resolvePath: bare hex hash, /a/<hash>, /o/<name>, local DID
+	// URL, and workspace paths. These tests verify each form works through
+	// the covia:read entry point.
+
+	@Test
+	public void testReadByBareHexHash() {
+		// First find a known asset hash from the venue catalog
+		convex.core.data.Hash echoHash = engine.resolveOperation("test:echo");
+		assertNotNull(echoHash);
+
+		// Read it via bare hex hash through covia:read
+		Job job = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, Strings.create(echoHash.toHexString())), ALICE);
+		ACell result = job.awaitResult(5000);
+
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
+		ACell value = RT.getIn(result, "value");
+		assertNotNull(value, "should resolve hex hash to asset metadata");
+		assertTrue(value instanceof AMap,
+			"asset metadata should be a map");
+	}
+
+	@Test
+	public void testReadBySlashAHash() {
+		convex.core.data.Hash echoHash = engine.resolveOperation("test:echo");
+
+		Job job = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, Strings.create("/a/" + echoHash.toHexString())), ALICE);
+		ACell result = job.awaitResult(5000);
+
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
+		assertNotNull(RT.getIn(result, "value"));
+	}
+
+	@Test
+	public void testReadByLeadingSlashOPath() {
+		// Write inline metadata to /o/test-op
+		ACell opMeta = Maps.of(
+			"name", "Test Custom Op",
+			"operation", Maps.of("adapter", "test:echo")
+		);
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "o/test-op", Fields.VALUE, opMeta), ALICE)
+			.awaitResult(5000);
+
+		// Read via /o/test-op (with leading slash) — universal form
+		Job job = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, "/o/test-op"), ALICE);
+		ACell result = job.awaitResult(5000);
+
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
+		assertEquals(opMeta, RT.getIn(result, "value"));
+	}
+
+	@Test
+	public void testReadByLocalDIDURL() {
+		// Construct a local DID URL pointing at an existing asset
+		convex.core.data.Hash echoHash = engine.resolveOperation("test:echo");
+		String didUrl = engine.getDIDString().toString() + "/a/" + echoHash.toHexString();
+
+		Job job = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, Strings.create(didUrl)), ALICE);
+		ACell result = job.awaitResult(5000);
+
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
+		assertNotNull(RT.getIn(result, "value"),
+			"local DID URL should resolve through universal resolution");
+	}
+
+	@Test
+	public void testReadNonExistentHashReturnsExistsFalse() {
+		// A well-formed but non-existent hash returns exists=false, not error
+		Job job = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH,
+				"/a/0000000000000000000000000000000000000000000000000000000000000000"),
+			ALICE);
+		ACell result = job.awaitResult(5000);
+
+		assertEquals(CVMBool.FALSE, RT.getIn(result, "exists"));
+	}
+
+	// ========== covia:copy — server-side value duplication ==========
+
+	@Test
+	public void testCopyWorkspaceValue() {
+		// Write a value at one workspace path, copy to another
+		ACell original = Maps.of("a", CVMLong.create(1), "b", Strings.create("hello"));
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/source", Fields.VALUE, original), ALICE)
+			.awaitResult(5000);
+
+		Job copyJob = engine.jobs().invokeOperation("covia:copy",
+			Maps.of(Strings.create("from"), "w/source",
+				Strings.create("to"), "w/dest"), ALICE);
+		ACell copyResult = copyJob.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(copyResult, "copied"));
+
+		// Read both — they should be equal
+		Job readSource = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, "w/source"), ALICE);
+		Job readDest = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, "w/dest"), ALICE);
+		assertEquals(original, RT.getIn(readSource.awaitResult(5000), "value"));
+		assertEquals(original, RT.getIn(readDest.awaitResult(5000), "value"));
+	}
+
+	@Test
+	public void testCopyVenueOpToOwnSlashO() {
+		// Snapshot a venue op into the user's /o/
+		// (json:merge is installed at v/ops/json/merge by JSONAdapter migration)
+		Job copyJob = engine.jobs().invokeOperation("covia:copy",
+			Maps.of(Strings.create("from"), "v/ops/json/merge",
+				Strings.create("to"), "o/my-merge"), ALICE);
+		ACell result = copyJob.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "copied"));
+
+		// Read the destination — it should be the full operation metadata
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, "o/my-merge"), ALICE);
+		ACell metadata = RT.getIn(readJob.awaitResult(5000), "value");
+		assertNotNull(metadata);
+		assertTrue(metadata instanceof AMap);
+		assertEquals(Strings.create("JSON Merge"),
+			RT.getIn(metadata, "name"));
+	}
+
+	@Test
+	public void testCopyMissingSourceFails() {
+		// Source path doesn't exist — copy should fail
+		Job job = engine.jobs().invokeOperation("covia:copy",
+			Maps.of(Strings.create("from"), "w/no-such-thing",
+				Strings.create("to"), "w/dest"), ALICE);
+		// awaitResult throws when the job fails
+		assertThrows(Exception.class, () -> job.awaitResult(5000),
+			"copy from missing source should fail");
+	}
+
+	@Test
+	public void testCopyMissingArgsFails() {
+		// Missing 'to'
+		Job job1 = engine.jobs().invokeOperation("covia:copy",
+			Maps.of(Strings.create("from"), "w/anything"), ALICE);
+		assertThrows(Exception.class, () -> job1.awaitResult(5000));
+
+		// Missing 'from'
+		Job job2 = engine.jobs().invokeOperation("covia:copy",
+			Maps.of(Strings.create("to"), "w/anything"), ALICE);
+		assertThrows(Exception.class, () -> job2.awaitResult(5000));
+	}
+
+	@Test
+	public void testCopyByHashSource() {
+		// Copy by hex hash source (universal resolution)
+		convex.core.data.Hash echoHash = engine.resolveOperation("test:echo");
+		Job copyJob = engine.jobs().invokeOperation("covia:copy",
+			Maps.of(Strings.create("from"), echoHash.toHexString(),
+				Strings.create("to"), "o/from-hash"), ALICE);
+		ACell result = copyJob.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "copied"));
+
+		// Verify the copy is real metadata
+		Job readJob = engine.jobs().invokeOperation("covia:read",
+			Maps.of(Fields.PATH, "o/from-hash"), ALICE);
+		ACell metadata = RT.getIn(readJob.awaitResult(5000), "value");
+		assertNotNull(metadata);
+		assertTrue(metadata instanceof AMap);
+	}
+
 	// ========== covia:list ==========
 
 	@Test

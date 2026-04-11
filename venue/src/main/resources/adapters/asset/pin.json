@@ -1,21 +1,21 @@
 {
 	"name": "Pin Asset",
-	"description": "Pin an asset into your own namespace. Copies the asset (metadata and content) from any source — another user's namespace, a venue-level asset, or a remote venue — into your /a/ namespace. Idempotent: pinning the same asset twice has no effect (same content hash). Use this to save assets you've been shared access to, to keep references to venue operations, or to ensure an asset remains available in your namespace.",
+	"description": "Snapshot a value into your own /a/ content-addressed namespace. The 'path' argument accepts any resolvable address (hex hash, /a/<hash>, /o/<name>, /v/<path>, DID URL, or workspace path). If the source is itself a CAS asset, both metadata and content are preserved; otherwise the resolved value is stored as inline metadata. Idempotent — pinning the same value twice produces the same hash. Returns the caller's DID URL for the pinned asset and its CAD3 hash.",
 	"operation": {
 		"adapter": "asset:pin",
 		"toolName": "asset_pin",
 		"input": {
 			"type": "object",
 			"properties": {
-				"id": { "type": "string", "description": "Asset reference to pin — DID URL (did:key:.../a/<hash>), /a/<hash>, bare hex hash, or operation name" }
+				"path": { "type": "string", "description": "Source address. Any resolvable form: hex hash, /a/<hash>, /o/<name>, /v/<path>, DID URL, or workspace path (w/, g/, j/, etc.)." }
 			},
-			"required": ["id"]
+			"required": ["path"]
 		},
 		"output": {
 			"type": "object",
 			"properties": {
-				"id": { "type": "string", "description": "Your DID URL for the pinned asset" },
-				"pinned": { "type": "boolean", "description": "true if successfully pinned" }
+				"path": { "type": "string", "description": "Caller's DID URL for the pinned asset (did:.../a/<hash>)" },
+				"hash": { "type": "string", "description": "Hex CAD3 hash of the pinned metadata — version identifier" }
 			}
 		}
 	}

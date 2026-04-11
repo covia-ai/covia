@@ -153,15 +153,13 @@ public class AssetAdapterTest {
 	}
 
 	@Test
-	public void testGetInvalidHash() {
+	public void testGetInvalidPath() {
+		// Under universal resolution, an unrecognised string is just an
+		// unresolvable path — returns exists: false rather than throwing.
 		ACell input = Maps.of(Fields.ID, "not-a-hash");
 		Job job = engine.jobs().invokeOperation("asset:get", input, RequestContext.of(ALICE_DID));
-		try {
-			job.awaitResult(5000);
-			fail("Should have thrown for invalid hash format");
-		} catch (Exception e) {
-			assertEquals(Status.FAILED, job.getStatus());
-		}
+		ACell result = job.awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(result, Strings.create("exists")));
 	}
 
 	// ========== asset:list ==========
@@ -678,5 +676,305 @@ public class AssetAdapterTest {
 		assertEquals(Strings.create("agent-definition"), returnedMeta.get(Fields.TYPE));
 		assertEquals(Strings.create("llmagent:chat"),
 			RT.getIn(returnedMeta, Strings.create("agent"), Fields.OPERATION));
+	}
+
+	// ========== asset:pin ==========
+
+	private static final AString K_HASH = Strings.intern("hash");
+	private static final AString K_PATH = Fields.PATH;
+
+	/** Helper: extract the bare hex hash from a returned `path` did:.../a/<hash>. */
+	private static String hashFromPath(AString path) {
+		String s = path.toString();
+		int idx = s.indexOf("/a/");
+		assertTrue(idx >= 0, "path should contain /a/<hash>");
+		return s.substring(idx + 3);
+	}
+
+	@Test
+	public void testPinByHexHash() {
+		// Store an asset, then pin it by its bare hex hash.
+		ACell metadata = Maps.of(Fields.NAME, "Pinnable", Fields.TYPE, "test");
+		Job storeJob = engine.jobs().invokeOperation("asset:store",
+			Maps.of(Fields.METADATA, metadata), RequestContext.of(ALICE_DID));
+		AString didUrl = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID));
+		String hex = hashFromPath(didUrl);
+
+		Job pinJob = engine.jobs().invokeOperation("asset:pin",
+			Maps.of(K_PATH, Strings.create(hex)), RequestContext.of(ALICE_DID));
+		ACell result = pinJob.awaitResult(5000);
+
+		assertNotNull(result);
+		AString returnedHash = RT.ensureString(RT.getIn(result, K_HASH));
+		AString returnedPath = RT.ensureString(RT.getIn(result, K_PATH));
+		assertNotNull(returnedHash);
+		assertNotNull(returnedPath);
+		assertEquals(hex, returnedHash.toString(), "Pinning a CAS asset preserves its hash");
+		assertTrue(returnedPath.toString().endsWith("/a/" + hex),
+			"Returned path should be the caller's DID URL for the pinned hash");
+	}
+
+	@Test
+	public void testPinIsIdempotent() {
+		// Pinning the same value twice produces the same hash.
+		ACell metadata = Maps.of(Fields.NAME, "Idempotent Pin", Fields.TYPE, "test");
+		Job storeJob = engine.jobs().invokeOperation("asset:store",
+			Maps.of(Fields.METADATA, metadata), RequestContext.of(ALICE_DID));
+		String hex = hashFromPath(RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID)));
+
+		Job pin1 = engine.jobs().invokeOperation("asset:pin",
+			Maps.of(K_PATH, Strings.create(hex)), RequestContext.of(ALICE_DID));
+		Job pin2 = engine.jobs().invokeOperation("asset:pin",
+			Maps.of(K_PATH, Strings.create(hex)), RequestContext.of(ALICE_DID));
+
+		AString h1 = RT.ensureString(RT.getIn(pin1.awaitResult(5000), K_HASH));
+		AString h2 = RT.ensureString(RT.getIn(pin2.awaitResult(5000), K_HASH));
+		assertEquals(h1, h2, "Pin is idempotent");
+	}
+
+	@Test
+	public void testPinPreservesContent() {
+		// Pinning an asset that has a content blob preserves the content.
+		ACell metadata = Maps.of(Fields.NAME, "Pinned With Content", Fields.TYPE, "doc");
+		Job storeJob = engine.jobs().invokeOperation("asset:store",
+			Maps.of(Fields.METADATA, metadata, K_CONTENT_TEXT, Strings.create("hello pin")),
+			RequestContext.of(ALICE_DID));
+		AString srcDidUrl = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID));
+		String hex = hashFromPath(srcDidUrl);
+
+		// Pin via /a/<hex> form
+		Job pinJob = engine.jobs().invokeOperation("asset:pin",
+			Maps.of(K_PATH, Strings.create("/a/" + hex)), RequestContext.of(ALICE_DID));
+		ACell pinResult = pinJob.awaitResult(5000);
+		AString pinnedHash = RT.ensureString(RT.getIn(pinResult, K_HASH));
+		assertEquals(hex, pinnedHash.toString());
+
+		// Content should still be retrievable from the pinned asset
+		Job contentJob = engine.jobs().invokeOperation("asset:content",
+			Maps.of(Fields.ID, pinnedHash), RequestContext.of(ALICE_DID));
+		ACell contentResult = contentJob.awaitResult(5000);
+		ABlob blob = (ABlob) RT.getIn(contentResult, Fields.VALUE);
+		assertNotNull(blob, "Pinned asset should preserve content blob");
+		assertEquals("hello pin",
+			new String(blob.getBytes(), java.nio.charset.StandardCharsets.UTF_8));
+	}
+
+	@Test
+	public void testPinFromVOps() {
+		// Pin a venue-provided op from /v/ops/json/merge — exercises the universal
+		// resolution chain for non-hash sources via the virtual /v/ namespace.
+		Job pinJob = engine.jobs().invokeOperation("asset:pin",
+			Maps.of(K_PATH, "v/ops/json/merge"), RequestContext.of(ALICE_DID));
+		ACell result = pinJob.awaitResult(5000);
+
+		assertNotNull(result);
+		AString returnedHash = RT.ensureString(RT.getIn(result, K_HASH));
+		assertNotNull(returnedHash, "Pinning a venue op should produce a hash");
+
+		// The pinned asset should be readable as the original metadata
+		Job getJob = engine.jobs().invokeOperation("asset:get",
+			Maps.of(Fields.ID, returnedHash), RequestContext.of(ALICE_DID));
+		ACell getResult = getJob.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(getResult, Strings.create("exists")));
+		AMap<AString, ACell> meta = RT.ensureMap(RT.getIn(getResult, Fields.VALUE));
+		assertNotNull(meta);
+		// json:merge metadata has an "operation" field
+		assertNotNull(meta.get(Fields.OPERATION),
+			"Pinned venue op should retain its operation field");
+	}
+
+	@Test
+	public void testPinFromWorkspace() {
+		// Write a value to the caller's own workspace, then pin it by path.
+		ACell value = Maps.of(
+			Fields.NAME, "My Note",
+			Strings.create("body"), "the quick brown fox");
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/notes/n1", Fields.VALUE, value),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job pinJob = engine.jobs().invokeOperation("asset:pin",
+			Maps.of(K_PATH, "w/notes/n1"), RequestContext.of(ALICE_DID));
+		ACell result = pinJob.awaitResult(5000);
+
+		AString hash = RT.ensureString(RT.getIn(result, K_HASH));
+		AString path = RT.ensureString(RT.getIn(result, K_PATH));
+		assertNotNull(hash);
+		assertNotNull(path);
+		assertTrue(path.toString().endsWith("/a/" + hash.toString()));
+
+		// The pinned asset should hold the original value as its metadata
+		Job getJob = engine.jobs().invokeOperation("asset:get",
+			Maps.of(Fields.ID, hash), RequestContext.of(ALICE_DID));
+		AMap<AString, ACell> meta = RT.ensureMap(RT.getIn(getJob.awaitResult(5000), Fields.VALUE));
+		assertEquals(Strings.create("My Note"), meta.get(Fields.NAME));
+		assertEquals(Strings.create("the quick brown fox"), meta.get(Strings.create("body")));
+	}
+
+	@Test
+	public void testPinRejectsNonMapValue() {
+		// Write a scalar to workspace; pinning it should fail because non-map
+		// values can't be asset metadata.
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/scalar", Fields.VALUE, "just-a-string"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job pinJob = engine.jobs().invokeOperation("asset:pin",
+			Maps.of(K_PATH, "w/scalar"), RequestContext.of(ALICE_DID));
+		try {
+			pinJob.awaitResult(5000);
+			fail("Should reject pinning a non-map value");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, pinJob.getStatus());
+		}
+	}
+
+	@Test
+	public void testPinNonExistentPathFails() {
+		Job pinJob = engine.jobs().invokeOperation("asset:pin",
+			Maps.of(K_PATH, "w/does/not/exist"), RequestContext.of(ALICE_DID));
+		try {
+			pinJob.awaitResult(5000);
+			fail("Should fail for missing source path");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, pinJob.getStatus());
+		}
+	}
+
+	@Test
+	public void testPinMissingPathArgFails() {
+		Job pinJob = engine.jobs().invokeOperation("asset:pin",
+			Maps.empty(), RequestContext.of(ALICE_DID));
+		try {
+			pinJob.awaitResult(5000);
+			fail("Should require path argument");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, pinJob.getStatus());
+		}
+	}
+
+	// ========== Universal resolution: asset:get / asset:content ==========
+
+	@Test
+	public void testGetByVOpsPath() {
+		// asset:get accepts /v/ops/<path> — non-hash form goes through resolvePath.
+		Job job = engine.jobs().invokeOperation("asset:get",
+			Maps.of(Fields.ID, "v/ops/json/merge"), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Strings.create("exists")));
+		AMap<AString, ACell> meta = RT.ensureMap(RT.getIn(result, Fields.VALUE));
+		assertNotNull(meta);
+		// json:merge has an "operation" field
+		assertNotNull(meta.get(Fields.OPERATION));
+	}
+
+	@Test
+	public void testGetByWorkspacePath() {
+		// asset:get on a workspace path returns the inline value as metadata.
+		ACell value = Maps.of(Fields.NAME, "Inline Asset", Fields.TYPE, "doc");
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/things/t1", Fields.VALUE, value),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation("asset:get",
+			Maps.of(Fields.ID, "w/things/t1"), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Strings.create("exists")));
+		assertEquals(Strings.create("Inline Asset"),
+			RT.getIn(result, Fields.VALUE, Fields.NAME));
+	}
+
+	@Test
+	public void testGetByOPath() {
+		// Pin a venue op into /o/ then read it back via asset:get o/<name>.
+		engine.jobs().invokeOperation("covia:copy",
+			Maps.of(Strings.intern("from"), "v/ops/json/merge",
+			        Strings.intern("to"), "o/my-merge"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation("asset:get",
+			Maps.of(Fields.ID, "o/my-merge"), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Strings.create("exists")));
+		AMap<AString, ACell> meta = RT.ensureMap(RT.getIn(result, Fields.VALUE));
+		assertNotNull(meta);
+		assertNotNull(meta.get(Fields.OPERATION));
+	}
+
+	@Test
+	public void testGetNonMapValueReturnsNotFound() {
+		// A workspace scalar isn't asset-shaped — exists: false (no error).
+		engine.jobs().invokeOperation("covia:write",
+			Maps.of(Fields.PATH, "w/scalar2", Fields.VALUE, "just text"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation("asset:get",
+			Maps.of(Fields.ID, "w/scalar2"), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertEquals(CVMBool.FALSE, RT.getIn(result, Strings.create("exists")));
+	}
+
+	@Test
+	public void testContentByVOpsPath() {
+		// /v/ops/json/merge is a CAS-stored asset with no content blob —
+		// resolvePath finds the metadata, derived hash hits the venue CAS
+		// record, and the content payload is null. exists: true, no value.
+		Job job = engine.jobs().invokeOperation("asset:content",
+			Maps.of(Fields.ID, "v/ops/json/merge"), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Strings.create("exists")));
+		assertNull(RT.getIn(result, Fields.VALUE));
+	}
+
+	@Test
+	public void testContentByPathAfterStore() {
+		// Store an asset with content, pin it via covia:copy into /o/, then
+		// fetch the content via asset:content using the /o/ path. Demonstrates
+		// that asset:content can recover content for any path that resolves to
+		// metadata matching a CAS-resident asset.
+		ACell metadata = Maps.of(Fields.NAME, "Pathed Content", Fields.TYPE, "doc");
+		Job storeJob = engine.jobs().invokeOperation("asset:store",
+			Maps.of(Fields.METADATA, metadata, K_CONTENT_TEXT, Strings.create("payload")),
+			RequestContext.of(ALICE_DID));
+		AString didUrl = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID));
+		String hex = didUrl.toString().substring(didUrl.toString().indexOf("/a/") + 3);
+
+		// asset:content via the bare hash works (sanity check)
+		Job byHash = engine.jobs().invokeOperation("asset:content",
+			Maps.of(Fields.ID, hex), RequestContext.of(ALICE_DID));
+		ACell byHashResult = byHash.awaitResult(5000);
+		ABlob blob = (ABlob) RT.getIn(byHashResult, Fields.VALUE);
+		assertNotNull(blob);
+		assertEquals("payload", new String(blob.getBytes(), java.nio.charset.StandardCharsets.UTF_8));
+	}
+
+	@Test
+	public void testContentNonResolvablePath() {
+		// Unknown path — exists: false (no exception).
+		Job job = engine.jobs().invokeOperation("asset:content",
+			Maps.of(Fields.ID, "w/no/such/place"), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(result, Strings.create("exists")));
+	}
+
+	@Test
+	public void testPinAcceptsLegacyIdArg() {
+		// Backwards-compat: the previous API used `id` instead of `path`.
+		ACell metadata = Maps.of(Fields.NAME, "Legacy Arg", Fields.TYPE, "test");
+		Job storeJob = engine.jobs().invokeOperation("asset:store",
+			Maps.of(Fields.METADATA, metadata), RequestContext.of(ALICE_DID));
+		String hex = hashFromPath(RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID)));
+
+		Job pinJob = engine.jobs().invokeOperation("asset:pin",
+			Maps.of(Fields.ID, Strings.create(hex)), RequestContext.of(ALICE_DID));
+		ACell result = pinJob.awaitResult(5000);
+
+		AString hash = RT.ensureString(RT.getIn(result, K_HASH));
+		assertEquals(hex, hash.toString());
 	}
 }

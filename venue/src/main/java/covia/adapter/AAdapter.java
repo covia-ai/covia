@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
+import convex.core.data.Strings;
 import convex.core.util.ThreadUtils;
 import convex.core.data.AString;
 import convex.core.data.Hash;
@@ -61,6 +62,14 @@ public abstract class AAdapter {
 
 	/**
 	 * Helper method to install a single asset from a resource path.
+	 *
+	 * <p><b>Legacy form.</b> Stores the asset in the venue CAS and adds an
+	 * entry to the per-adapter operation registry indexed by
+	 * {@code operation.adapter}. Per OPERATIONS.md, the new
+	 * {@link #installAsset(String, String)} overload should be preferred —
+	 * it adds an explicit catalog path that places the asset in
+	 * {@code /v/ops/&lt;catalogPath&gt;}.</p>
+	 *
 	 * @param resourcePath The resource path to read the asset from
 	 */
 	protected Hash installAsset(String resourcePath) {
@@ -72,6 +81,73 @@ public abstract class AAdapter {
 			return null;
 		}
 
+	}
+
+	/**
+	 * Installs an asset and registers it in the venue's operation catalog
+	 * at {@code /v/ops/&lt;catalogPath&gt;}.
+	 *
+	 * <p>The catalog path is the user-facing name of the operation,
+	 * decoupled from {@code operation.adapter} (which is internal dispatch
+	 * info). Per OPERATIONS.md §7, adapters declare the catalog path
+	 * explicitly rather than having the venue derive it from the dispatch
+	 * string.</p>
+	 *
+	 * <p>Validation:</p>
+	 * <ul>
+	 *   <li>Each segment matches {@code ^[a-z][a-z0-9-]*$}</li>
+	 *   <li>No segment is {@code .} or {@code ..}</li>
+	 *   <li>No two adapters install at the same {@code /v/ops/} path</li>
+	 * </ul>
+	 *
+	 * <p>Invalid paths log a warning and skip the catalog entry; the asset
+	 * still lives in the venue CAS and remains callable by hash.</p>
+	 *
+	 * @param catalogPath The path under {@code /v/ops/} to install at
+	 *                    (e.g. {@code "json/merge"})
+	 * @param resourcePath The resource path to read the asset from
+	 * @return The asset hash, or {@code null} if installation failed
+	 */
+	protected Hash installAsset(String catalogPath, String resourcePath) {
+		Hash hash = installAsset(resourcePath);
+		if (hash == null) return null;
+
+		// Validate catalog path before registering it. On failure, log and
+		// leave the asset in the CAS but skip the /v/ops/ entry.
+		if (!isValidCatalogPath(catalogPath)) {
+			log.warn("Invalid catalog path '{}' for resource {} — asset stored in CAS only",
+				catalogPath, resourcePath);
+			return hash;
+		}
+
+		// Defer the actual /v/ops/<catalogPath> write until after all adapters
+		// are registered. installAsset is called during adapter registration,
+		// but the CoviaAdapter that provides covia:write may not yet be
+		// registered. Engine.materialiseVOps() flushes the deferred entries
+		// after all adapters have run installAssets().
+		pendingCatalogEntries.put(catalogPath, hash);
+		return hash;
+	}
+
+	/**
+	 * Catalog entries collected during {@link #installAsset(String, String)}
+	 * calls, awaiting materialisation by {@link covia.venue.Engine#materialiseVOps}.
+	 * Map of {@code /v/ops/} path → asset hash.
+	 */
+	public final java.util.Map<String, Hash> pendingCatalogEntries = new java.util.LinkedHashMap<>();
+
+	/**
+	 * Validates a catalog path: non-empty {@code /}-separated segments,
+	 * each matching {@code [a-z][a-z0-9-]*}, no {@code .} or {@code ..}.
+	 */
+	private static boolean isValidCatalogPath(String catalogPath) {
+		if (catalogPath == null || catalogPath.isEmpty()) return false;
+		String[] segments = catalogPath.split("/");
+		for (String seg : segments) {
+			if (seg.isEmpty() || ".".equals(seg) || "..".equals(seg)) return false;
+			if (!seg.matches("^[a-z][a-z0-9-]*$")) return false;
+		}
+		return true;
 	}
 
 	/**

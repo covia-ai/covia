@@ -1,6 +1,6 @@
 {
   "name": "Get Asset",
-  "description": "Retrieves an asset's metadata by its content-addressed ID. Returns the metadata as 'value', consistent with covia:read. Use asset:content to retrieve the content payload separately. Returns exists: false if the asset is not found.",
+  "description": "Reads asset metadata from any resolvable address. The 'id' argument accepts a hex hash, /a/<hash>, /o/<name>, /v/<path>, DID URL, or any workspace path. Hash-form refs read from the content-addressed store; other forms walk the universal lattice resolver and return the value if it is a map. Returns the metadata as 'value', consistent with covia:read. Use asset:content to retrieve the binary content payload separately. Returns exists: false if the source is not found or the resolved value is not asset-shaped.",
   "dateCreated": "2026-03-31T00:00:00Z",
   "operation": {
     "adapter": "asset:get",
@@ -8,16 +8,16 @@
     "input": {
       "type": "object",
       "properties": {
-        "id": { "type": "string", "description": "Asset ID (hex hash from asset:store)" }
+        "id": { "type": "string", "description": "Asset reference. Any resolvable address: hex hash, /a/<hash>, /o/<name>, /v/<path>, DID URL, or workspace path (w/, g/, j/, etc.)." }
       },
       "required": ["id"]
     },
     "output": {
       "type": "object",
       "properties": {
-        "id": { "type": "string", "description": "Asset ID (confirmed)" },
-        "exists": { "type": "boolean", "description": "True if the asset was found" },
-        "value": { "type": "object", "description": "The stored metadata object (present when exists is true)" }
+        "id": { "type": "string", "description": "Asset reference (echoed)" },
+        "exists": { "type": "boolean", "description": "True if a metadata map was found at the address" },
+        "value": { "type": "object", "description": "The resolved metadata object (present when exists is true)" }
       }
     }
   }
