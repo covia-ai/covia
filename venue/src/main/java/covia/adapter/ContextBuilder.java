@@ -236,13 +236,22 @@ public class ContextBuilder {
 			messages = messages.slice(1, messages.count());
 		}
 
-		// Compose identity + lattice reference. The lattice reference is
-		// always appended so every agent — regardless of custom prompt —
-		// has namespace prefixes, discovery hints, and resolution rules.
+		// Compose identity + lattice reference + caps section. The lattice
+		// reference is always appended so every agent has namespace prefixes,
+		// discovery hints, and resolution rules. The caps section is only
+		// added if the agent has declared caps — without it the LLM has to
+		// discover its capability boundaries by hitting them, which wastes
+		// iterations and produces failure loops.
 		AString identity = getConfigValue(config, K_SYSTEM_PROMPT, null);
 		if (identity == null) identity = DEFAULT_IDENTITY_PROMPT;
-		AString sysContent = Strings.create(
-			identity.toString() + "\n\n" + LATTICE_REFERENCE.toString());
+		StringBuilder sb = new StringBuilder(identity.toString())
+			.append("\n\n").append(LATTICE_REFERENCE.toString());
+		String capsSection = renderCapsForPrompt(
+			RT.ensureVector(config != null ? config.get(K_CAPS) : null));
+		if (capsSection != null) {
+			sb.append("\n\n").append(capsSection);
+		}
+		AString sysContent = Strings.create(sb.toString());
 		ACell sysMsg = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, sysContent);
 		messages = (AVector<ACell>) Vectors.of(sysMsg).concat(messages);
 		trackMessage(sysMsg);
@@ -609,6 +618,51 @@ public class ContextBuilder {
 
 	private void trackMessage(ACell msg) {
 		consumed += Cells.storageSize(msg);
+	}
+
+	// ========== Caps rendering ==========
+
+	/**
+	 * Renders an agent's capability set as a system prompt section.
+	 *
+	 * <p>Returns {@code null} when caps are absent (full access — no
+	 * restriction to communicate). For an empty array (deny-all) and any
+	 * non-empty caps array, returns a labelled section listing each
+	 * {@code (ability, resource)} pair plus a directive instructing the
+	 * LLM not to retry calls outside its bounds.</p>
+	 *
+	 * <p>The format is intentionally compact and terminal: "denied" plus
+	 * "retrying does not help" plus "complete with explanation if the goal
+	 * cannot be met". Models that wasted iterations on cap-denied loops
+	 * before this section was introduced typically did so because they had
+	 * no upfront knowledge of where the boundaries actually were.</p>
+	 */
+	static String renderCapsForPrompt(AVector<ACell> caps) {
+		if (caps == null) return null; // unrestricted — no section
+		StringBuilder sb = new StringBuilder("## Your capabilities (caps)\n");
+		if (caps.count() == 0) {
+			sb.append("- (none) — you have no tool capabilities. Any tool call will be denied.\n");
+		} else {
+			for (long i = 0; i < caps.count(); i++) {
+				if (!(caps.get(i) instanceof AMap<?,?> capMap)) continue;
+				@SuppressWarnings("unchecked")
+				AMap<AString, ACell> cap = (AMap<AString, ACell>) capMap;
+				AString with = RT.ensureString(cap.get(Strings.intern("with")));
+				AString can  = RT.ensureString(cap.get(Strings.intern("can")));
+				if (can == null && with == null) continue;
+				sb.append("- ").append(can != null ? can.toString() : "(any)")
+				  .append(" on ").append(with != null ? with.toString() : "(any)")
+				  .append('\n');
+			}
+		}
+		sb.append('\n')
+		  .append("Tool calls outside these capabilities will fail with a "
+		  		+ "\"Capability denied\" error. Retrying the same call does not help "
+		  		+ "— the denial is structural. Plan your tool calls within these "
+		  		+ "bounds. If your goal cannot be achieved within your capabilities, "
+		  		+ "complete the goal with a clear explanation rather than looping "
+		  		+ "on impossible operations.");
+		return sb.toString();
 	}
 
 	// ========== Tool building (moved from LLMAgentAdapter) ==========

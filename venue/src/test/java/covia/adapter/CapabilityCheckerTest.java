@@ -229,6 +229,44 @@ public class CapabilityCheckerTest {
 			Maps.of(Strings.create("operation"), Strings.create("some-hash"))));
 	}
 
+	// ========== Denial message format ==========
+
+	@Test
+	public void testDenialMessageIncludesAvailableCaps() {
+		// LLMs that hit a denial historically retried the same call because
+		// the error didn't tell them what they CAN do. The denial message
+		// must include the agent's capability set so the LLM has actionable
+		// guidance, not just "denied".
+		AVector<ACell> caps = caps(
+			"w/decisions/", "crud",
+			"w/", "crud/read");
+		String msg = CapabilityChecker.check(caps, "v/ops/covia/write",
+			Maps.of(Strings.create("path"), Strings.create("w/audits/INV-123")));
+		assertNotNull(msg);
+		assertTrue(msg.contains("Capability denied"), "Should be flagged as denial: " + msg);
+		assertTrue(msg.contains("w/audits/INV-123"), "Should name the resource attempted: " + msg);
+		assertTrue(msg.contains("crud/write"), "Should name the ability required: " + msg);
+		assertTrue(msg.contains("Your capabilities are"),
+			"Denial must include the agent's actual capabilities: " + msg);
+		assertTrue(msg.contains("crud on w/decisions/"),
+			"Should list each cap with ability and resource: " + msg);
+		assertTrue(msg.contains("crud/read on w/"),
+			"Should list each cap with ability and resource: " + msg);
+		assertTrue(msg.contains("Retrying"),
+			"Should tell the LLM not to loop on the same call: " + msg);
+	}
+
+	@Test
+	public void testDenialMessageWithEmptyCaps() {
+		// Empty caps array = deny-all. Message should still be sensible
+		// rather than rendering as nonsense.
+		String msg = CapabilityChecker.check(Vectors.empty(), "v/ops/covia/write",
+			Maps.of(Strings.create("path"), Strings.create("w/anything")));
+		assertNotNull(msg);
+		assertTrue(msg.contains("Your capabilities are: (none)"),
+			"Empty caps should be rendered as (none): " + msg);
+	}
+
 	// ========== AP Demo scenario ==========
 
 	@Test

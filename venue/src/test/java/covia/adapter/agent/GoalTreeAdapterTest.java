@@ -9,6 +9,7 @@ import org.junit.jupiter.api.TestInfo;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -182,7 +183,7 @@ public class GoalTreeAdapterTest {
 	@Test
 	public void testExplicitFail() {
 		GoalTreeAdapter.FrameResult result = GoalTreeAdapter.FrameResult.failed(
-			Strings.create("Something went wrong"));
+			Strings.create("Something went wrong"), Vectors.empty());
 		assertEquals("failed", result.status());
 		assertEquals("Something went wrong", RT.ensureString(result.value()).toString());
 	}
@@ -358,6 +359,72 @@ public class GoalTreeAdapterTest {
 		// test:llm echoes the JSON; it parses; frame completes with that JSON
 		assertTrue(response.toString().contains("\"answer\""),
 			"Valid JSON should pass validation: " + response);
+	}
+
+	@Test
+	public void testFailedFrameConversationPersistedToState() {
+		// When a frame fails (here: by hitting MAX_ITERATIONS via the JSON
+		// validation nudge loop), the deepest frame's conversation must be
+		// persisted under state.lastFailure for post-mortem debugging.
+		// Without this, the only post-failure visibility into agent loops
+		// is the live process log — which evaporates on restart.
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		AMap<AString, ACell> schema = Maps.of(
+			Strings.create("type"), Strings.create("object"),
+			Strings.create("properties"), Maps.of(
+				Strings.create("answer"), Maps.of(Strings.create("type"), Strings.create("string"))),
+			Strings.create("required"), Vectors.of((ACell) Strings.create("answer")),
+			Strings.create("additionalProperties"), convex.core.data.prim.CVMBool.FALSE);
+
+		AMap<AString, ACell> responseFormat = Maps.of(
+			Strings.create("name"), Strings.create("Answer"),
+			Strings.create("schema"), schema);
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "fail-debug-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
+				Strings.create("responseFormat"), responseFormat),
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Strings.create("content"),
+					Strings.create("This is plain text, not JSON."))));
+
+		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell newState = RT.getIn(output, AgentState.KEY_STATE);
+		assertNotNull(newState);
+		ACell lastFailure = RT.getIn(newState, Strings.create("lastFailure"));
+		assertNotNull(lastFailure, "Failed transition must persist lastFailure debug info");
+		assertNotNull(RT.getIn(lastFailure, Strings.create("error")),
+			"lastFailure must include the error value");
+		ACell conversation = RT.getIn(lastFailure, Strings.create("conversation"));
+		assertNotNull(conversation, "lastFailure must include the conversation");
+		assertTrue(conversation instanceof AVector,
+			"conversation should be a vector of messages");
+		assertTrue(((AVector<?>) conversation).count() > 0,
+			"conversation should not be empty after a failed run");
+	}
+
+	@Test
+	public void testSuccessfulFrameLeavesNoLastFailure() {
+		// Successful runs should not leave a lastFailure trace — that
+		// would mislead debugging by surfacing stale data.
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "happy-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("v/test/ops/llm")),
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Strings.create("content"), Strings.create("hello"))));
+
+		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell newState = RT.getIn(output, AgentState.KEY_STATE);
+		assertNotNull(newState);
+		ACell lastFailure = RT.getIn(newState, Strings.create("lastFailure"));
+		assertNull(lastFailure, "Successful runs should not leave a lastFailure trace");
 	}
 
 	@Test

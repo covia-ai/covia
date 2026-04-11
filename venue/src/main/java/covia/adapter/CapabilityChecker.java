@@ -52,9 +52,44 @@ public class CapabilityChecker {
 			}
 		}
 
-		return "Capability denied: " + operation + " requires " + ability
-			+ " on " + (resource.isEmpty() ? "(any)" : resource)
-			+ " — not covered by agent caps";
+		// Build an actionable denial message that includes WHAT the agent
+		// can do, not just what it can't. Without this LLMs that hit a
+		// denial often retry the same impossible call because they have no
+		// idea what the actual boundaries are.
+		StringBuilder sb = new StringBuilder("Capability denied: ")
+			.append(operation).append(" requires ").append(ability)
+			.append(" on ").append(resource.isEmpty() ? "(any)" : resource)
+			.append(". Your capabilities are: ");
+		appendCapsList(sb, caps);
+		sb.append(". Retrying the same call will not succeed — the denial is "
+			+ "structural. If your goal cannot be met within these "
+			+ "capabilities, complete with a clear explanation rather than "
+			+ "looping on impossible operations.");
+		return sb.toString();
+	}
+
+	/**
+	 * Appends a compact "ability on resource, ability on resource, …" list
+	 * for inclusion in error messages. Empty caps render as {@code (none)}.
+	 */
+	private static void appendCapsList(StringBuilder sb, AVector<ACell> caps) {
+		if (caps == null || caps.count() == 0) {
+			sb.append("(none)");
+			return;
+		}
+		boolean first = true;
+		for (long i = 0; i < caps.count(); i++) {
+			if (!(caps.get(i) instanceof AMap<?,?> capMap)) continue;
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> cap = (AMap<AString, ACell>) capMap;
+			AString with = RT.ensureString(cap.get(Strings.intern("with")));
+			AString can  = RT.ensureString(cap.get(Strings.intern("can")));
+			if (!first) sb.append(", ");
+			first = false;
+			sb.append(can != null ? can.toString() : "(any)")
+			  .append(" on ")
+			  .append(with != null ? with.toString() : "(any)");
+		}
 	}
 
 	/**

@@ -284,6 +284,27 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			if (sc != null) newState = newState.assoc(K_CONFIG, sc);
 		}
 
+		// On failure, persist the deepest frame's conversation as a debug
+		// aid under state.lastFailure. Without this, when an agent loops or
+		// hits max iterations the only thing visible post-mortem is the
+		// final outcome string — making it nearly impossible to investigate
+		// what tools were called, what they returned, and why. The frame
+		// stack is otherwise dropped after the transition. On success this
+		// field is cleared, so it always reflects the most recent failure.
+		if ("failed".equals(result.status()) && result.framesAtFailure() != null) {
+			AVector<ACell> finalFrames = result.framesAtFailure();
+			if (finalFrames.count() > 0) {
+				AMap<AString, ACell> deepest = (AMap<AString, ACell>) finalFrames.get(finalFrames.count() - 1);
+				AVector<ACell> conversation = GoalTreeContext.renderConversation(deepest);
+				AMap<AString, ACell> lastFailure = Maps.of(
+					Strings.create("error"), result.value() != null ? result.value() : Strings.create(""),
+					Strings.create("conversation"), conversation,
+					Strings.create("frameDepth"), CVMLong.create(finalFrames.count()),
+					Strings.create("ts"), CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
+				newState = newState.assoc(Strings.create("lastFailure"), lastFailure);
+			}
+		}
+
 		AMap<AString, ACell> output = Maps.of(
 			AgentState.KEY_STATE, newState,
 			Fields.RESULT, Maps.of(K_RESPONSE, result.value()));
@@ -313,10 +334,18 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 	/**
 	 * Result of running a frame — either complete or failed.
+	 *
+	 * <p>On failure, {@code framesAtFailure} carries the final frame stack
+	 * for post-mortem debugging — the caller can render the deepest frame's
+	 * conversation and persist it as a debug aid. Null on success because
+	 * GoalTreeAdapter is intentionally stateless across transitions for
+	 * everything except config.</p>
 	 */
-	record FrameResult(String status, ACell value) {
-		static FrameResult complete(ACell value) { return new FrameResult("complete", value); }
-		static FrameResult failed(ACell error) { return new FrameResult("failed", error); }
+	record FrameResult(String status, ACell value, AVector<ACell> framesAtFailure) {
+		static FrameResult complete(ACell value) { return new FrameResult("complete", value, null); }
+		static FrameResult failed(ACell error, AVector<ACell> frames) {
+			return new FrameResult("failed", error, frames);
+		}
 	}
 
 	/**
@@ -366,7 +395,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		for (int iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
 			// Check for cancellation before each L3 call
 			if (job != null && job.isFinished()) {
-				return FrameResult.failed(Strings.create("Job cancelled"));
+				return FrameResult.failed(Strings.create("Job cancelled"), frames);
 			}
 
 			activeFrame = (AMap<AString, ACell>) frames.get(frameIndex);
@@ -500,7 +529,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					activeFrame = GoalTreeContext.appendTurn(activeFrame,
 						toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("failed"))));
 					frames = updateFrame(frames, frameIndex, activeFrame);
-					return FrameResult.failed(error);
+					return FrameResult.failed(error, frames);
 
 				} else if (TOOL_COMPACT.equals(toolName)) {
 					String summary = RT.ensureString(RT.getIn(toolInput, Strings.create("summary"))).toString();
@@ -584,7 +613,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		}
 
 		log.warn("GoalTreeAdapter: max iterations reached for frame");
-		return FrameResult.failed(Strings.create("Max iterations reached"));
+		return FrameResult.failed(Strings.create("Max iterations reached"), frames);
 	}
 
 	// ========== Helpers ==========

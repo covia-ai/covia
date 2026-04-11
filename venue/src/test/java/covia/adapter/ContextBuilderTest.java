@@ -372,6 +372,64 @@ public class ContextBuilderTest {
 	}
 
 	@Test
+	public void testSystemPromptOmitsCapsSectionWhenUnrestricted() {
+		// No caps in config = unrestricted = no caps section
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withConfig(null, null)
+			.withSystemPrompt(Vectors.empty())
+			.build();
+		AString sys = extractSystemContent(result.history());
+		assertNotNull(sys);
+		assertFalse(sys.toString().contains("Your capabilities (caps)"),
+			"Unrestricted agents should NOT see a caps section");
+	}
+
+	@Test
+	public void testSystemPromptIncludesCapsWhenSet() {
+		// Caps in config = caps section in system prompt with each entry
+		AMap<AString, ACell> config = Maps.of(
+			Strings.intern("caps"), Vectors.of(
+				(ACell) Maps.of(
+					Strings.intern("with"), Strings.create("w/decisions/"),
+					Strings.intern("can"), Strings.create("crud")),
+				(ACell) Maps.of(
+					Strings.intern("with"), Strings.create("w/"),
+					Strings.intern("can"), Strings.create("crud/read"))));
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withConfig(config, null)
+			.withSystemPrompt(Vectors.empty())
+			.build();
+		AString sys = extractSystemContent(result.history());
+		assertNotNull(sys);
+		String content = sys.toString();
+		assertTrue(content.contains("Your capabilities (caps)"),
+			"Caps section header should be present");
+		assertTrue(content.contains("crud on w/decisions/"),
+			"Each cap should be listed with ability and resource: " + content);
+		assertTrue(content.contains("crud/read on w/"),
+			"Each cap should be listed with ability and resource: " + content);
+		assertTrue(content.contains("Capability denied"),
+			"Caps section should explain what happens on denial");
+		assertTrue(content.contains("Retrying the same call does not help"),
+			"Caps section should tell the LLM not to loop on denials");
+	}
+
+	@Test
+	public void testSystemPromptIncludesEmptyCapsExplicitly() {
+		// Empty caps array = deny all = should be explicitly stated
+		AMap<AString, ACell> config = Maps.of(
+			Strings.intern("caps"), Vectors.empty());
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withConfig(config, null)
+			.withSystemPrompt(Vectors.empty())
+			.build();
+		AString sys = extractSystemContent(result.history());
+		assertNotNull(sys);
+		assertTrue(sys.toString().contains("(none)"),
+			"Empty caps should be explicitly stated as no capabilities");
+	}
+
+	@Test
 	public void testSystemPromptIncludesLatticeReference() {
 		// Default identity prompt → lattice reference appended
 		ContextBuilder.ContextResult defaultResult = new ContextBuilder(engine, ctx)
