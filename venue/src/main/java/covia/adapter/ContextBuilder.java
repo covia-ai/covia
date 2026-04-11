@@ -59,6 +59,7 @@ public class ContextBuilder {
 
 	// Interned keys (matching LLMAgentAdapter constants)
 	private static final AString K_CONFIG        = Strings.intern("config");
+	private static final AString K_TRANSCRIPT    = Strings.intern("transcript");
 	private static final AString K_SYSTEM_PROMPT = Strings.intern("systemPrompt");
 	private static final AString K_TOOLS         = Strings.intern("tools");
 	private static final AString K_DEFAULT_TOOLS = Strings.intern("defaultTools");
@@ -175,31 +176,70 @@ public class ContextBuilder {
 	}
 
 	/**
-	 * Prepends system prompt if not already present in existing history.
+	 * Always builds a fresh system message at the start of the LLM context.
+	 *
+	 * <p>The system message is composed of the agent's identity prompt
+	 * (custom from config, or {@link #DEFAULT_IDENTITY_PROMPT}) followed by
+	 * the {@link #LATTICE_REFERENCE} cheat sheet. This is rebuilt every
+	 * turn so updates to either source apply immediately to existing
+	 * agents — there is no "freeze on first turn" caching.</p>
+	 *
+	 * <p>The {@code starting} parameter is the message vector to start
+	 * from — typically empty (callers add transcript content via
+	 * {@link #withTranscript(ACell)}). If a non-empty starting vector is
+	 * passed and already begins with a system message, that system
+	 * message is REPLACED by the freshly composed one — the rest of the
+	 * starting vector is preserved.</p>
 	 */
 	@SuppressWarnings("unchecked")
-	public ContextBuilder withSystemPrompt(AVector<ACell> existingHistory) {
-		messages = existingHistory;
-		if (messages == null) messages = Vectors.empty();
+	public ContextBuilder withSystemPrompt(AVector<ACell> starting) {
+		messages = (starting != null) ? starting : (AVector<ACell>) Vectors.empty();
 
-		if (messages.count() == 0 || !ROLE_SYSTEM.equals(RT.getIn(messages.get(0), K_ROLE))) {
-			// Compose: identity (custom or default) + always-appended lattice reference.
-			// The lattice reference ensures every agent — regardless of how its prompt
-			// was configured — has the namespace cheat sheet, discovery hints, and
-			// path-resolution rules to use the venue's lattice features properly.
-			AString identity = getConfigValue(config, K_SYSTEM_PROMPT, null);
-			if (identity == null) identity = DEFAULT_IDENTITY_PROMPT;
-			AString sysContent = Strings.create(
-				identity.toString() + "\n\n" + LATTICE_REFERENCE.toString());
-			ACell sysMsg = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, sysContent);
-			messages = (AVector<ACell>) Vectors.of(sysMsg).concat(messages);
-			trackMessage(sysMsg);
-		} else {
-			trackMessage(messages.get(0));
+		// If starting already has a system message at index 0, drop it —
+		// we always rebuild fresh.
+		if (messages.count() > 0 && ROLE_SYSTEM.equals(RT.getIn(messages.get(0), K_ROLE))) {
+			messages = messages.slice(1, messages.count());
 		}
-		// Track remaining history messages
+
+		// Compose identity + lattice reference. The lattice reference is
+		// always appended so every agent — regardless of custom prompt —
+		// has namespace prefixes, discovery hints, and resolution rules.
+		AString identity = getConfigValue(config, K_SYSTEM_PROMPT, null);
+		if (identity == null) identity = DEFAULT_IDENTITY_PROMPT;
+		AString sysContent = Strings.create(
+			identity.toString() + "\n\n" + LATTICE_REFERENCE.toString());
+		ACell sysMsg = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, sysContent);
+		messages = (AVector<ACell>) Vectors.of(sysMsg).concat(messages);
+		trackMessage(sysMsg);
+
+		// Track remaining starting messages
 		for (long i = 1; i < messages.count(); i++) {
 			trackMessage(messages.get(i));
+		}
+		return this;
+	}
+
+	/**
+	 * Appends the persistent conversation transcript from agent state.
+	 *
+	 * <p>Reads {@code state.transcript} (a vector of user / assistant / tool
+	 * messages from previous turns) and appends each message to the
+	 * builder's message vector. Returns silently if there is no transcript.</p>
+	 *
+	 * <p>The transcript is the only durable record of conversation across
+	 * turns. Per {@code AGENT_CONTEXT_PLAN.md}, ephemeral context (system
+	 * prompt, context entries, loaded paths, [Context Map], pending
+	 * results, inbox messages) is rebuilt fresh per turn and never
+	 * persisted into the transcript.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	public ContextBuilder withTranscript(ACell state) {
+		AVector<ACell> transcript = RT.ensureVector(RT.getIn(state, K_TRANSCRIPT));
+		if (transcript == null || transcript.count() == 0) return this;
+		for (long i = 0; i < transcript.count(); i++) {
+			ACell msg = transcript.get(i);
+			messages = messages.conj(msg);
+			trackMessage(msg);
 		}
 		return this;
 	}

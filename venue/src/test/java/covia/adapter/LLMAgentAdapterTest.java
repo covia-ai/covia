@@ -103,12 +103,12 @@ public class LLMAgentAdapterTest {
 		assertNotNull(response);
 		assertEquals("Hello world", response.toString());
 
-		AVector<ACell> history = LLMAgentAdapter.extractHistory(newState);
-		assertEquals(4, history.count(), "Should have system + context map + user + assistant");
-		assertEquals(Strings.create("system"), RT.getIn(history.get(0), "role"));
-		assertEquals(Strings.create("system"), RT.getIn(history.get(1), "role")); // context map
-		assertEquals(Strings.create("user"), RT.getIn(history.get(2), "role"));
-		assertEquals(Strings.create("assistant"), RT.getIn(history.get(3), "role"));
+		// Transcript holds only real conversation turns — system messages,
+		// [Context Map], and other ephemeral context are NOT persisted.
+		AVector<ACell> transcript = LLMAgentAdapter.extractTranscript(newState);
+		assertEquals(2, transcript.count(), "Transcript: user + assistant");
+		assertEquals(Strings.create("user"), RT.getIn(transcript.get(0), "role"));
+		assertEquals(Strings.create("assistant"), RT.getIn(transcript.get(1), "role"));
 	}
 
 	@Test
@@ -133,12 +133,84 @@ public class LLMAgentAdapterTest {
 		ACell output2 = adapter.processChat(RequestContext.of(ALICE_DID), input2);
 		ACell state2 = RT.getIn(output2, AgentState.KEY_STATE);
 
-		// system + ctxmap + user1 + assistant1 + ctxmap + user2 + assistant2 = 7
-		AVector<ACell> history = LLMAgentAdapter.extractHistory(state2);
-		assertEquals(7, history.count());
+		// Transcript: user1 + assistant1 + user2 + assistant2 = 4
+		AVector<ACell> transcript = LLMAgentAdapter.extractTranscript(state2);
+		assertEquals(4, transcript.count());
 
 		AString response = RT.ensureString(RT.getIn(output2, Fields.RESULT, "response"));
 		assertEquals("second message", response.toString());
+	}
+
+	@Test
+	public void testTranscriptDoesNotAccumulateEphemeralContext() {
+		// AGENT_CONTEXT_PLAN.md §2.1 — the duplication bug. Two turns of
+		// processChat must produce a transcript containing only the real
+		// conversation turns. No system messages, no [Context Map], no
+		// context entries — those are ephemeral and rebuilt fresh per turn.
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		ACell state = TEST_STATE;
+		// Three turns
+		for (int i = 1; i <= 3; i++) {
+			ACell input = Maps.of(
+				Fields.AGENT_ID, "no-bloat-agent",
+				AgentState.KEY_STATE, state,
+				Fields.MESSAGES, Vectors.of(Maps.of("content", "turn " + i))
+			);
+			ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+			state = RT.getIn(output, AgentState.KEY_STATE);
+		}
+
+		AVector<ACell> transcript = LLMAgentAdapter.extractTranscript(state);
+		// Three (user + assistant) pairs
+		assertEquals(6, transcript.count());
+
+		// Verify NO system messages and NO [Context Map] in the transcript
+		for (long i = 0; i < transcript.count(); i++) {
+			AString role = RT.ensureString(RT.getIn(transcript.get(i), "role"));
+			assertNotEquals("system", role.toString(),
+				"Transcript should never contain system messages, found one at index " + i);
+			AString content = RT.ensureString(RT.getIn(transcript.get(i), "content"));
+			if (content != null) {
+				assertFalse(content.toString().contains("[Context Map]"),
+					"Transcript should never contain [Context Map] entries, found one at index " + i);
+			}
+		}
+
+		// Roles alternate user, assistant, user, assistant, user, assistant
+		assertEquals(Strings.create("user"),      RT.getIn(transcript.get(0), "role"));
+		assertEquals(Strings.create("assistant"), RT.getIn(transcript.get(1), "role"));
+		assertEquals(Strings.create("user"),      RT.getIn(transcript.get(2), "role"));
+		assertEquals(Strings.create("assistant"), RT.getIn(transcript.get(3), "role"));
+		assertEquals(Strings.create("user"),      RT.getIn(transcript.get(4), "role"));
+		assertEquals(Strings.create("assistant"), RT.getIn(transcript.get(5), "role"));
+	}
+
+	@Test
+	public void testSystemPromptUpdatesAcrossTurnsAreNotFrozen() {
+		// AGENT_CONTEXT_PLAN.md §2.2 — system prompt freeze bug. After
+		// turn 1 the agent's stored state must NOT contain a system
+		// message. The next turn rebuilds the system message fresh from
+		// current config, so updates apply immediately.
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		ACell state = TEST_STATE;
+		// First turn
+		ACell input1 = Maps.of(
+			Fields.AGENT_ID, "fresh-prompt-agent",
+			AgentState.KEY_STATE, state,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "hi"))
+		);
+		ACell output1 = adapter.processChat(RequestContext.of(ALICE_DID), input1);
+		ACell state1 = RT.getIn(output1, AgentState.KEY_STATE);
+
+		// Verify state1 has NO system message anywhere
+		AVector<ACell> transcript = LLMAgentAdapter.extractTranscript(state1);
+		for (long i = 0; i < transcript.count(); i++) {
+			AString role = RT.ensureString(RT.getIn(transcript.get(i), "role"));
+			assertNotEquals("system", role.toString(),
+				"Persisted state must not contain a frozen system message");
+		}
 	}
 
 	@Test
@@ -156,11 +228,11 @@ public class LLMAgentAdapterTest {
 		);
 
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
-		AVector<ACell> history = LLMAgentAdapter.extractHistory(
+		AVector<ACell> transcript = LLMAgentAdapter.extractTranscript(
 			RT.getIn(output, AgentState.KEY_STATE));
 
-		// system + ctxmap + 3 user + 1 assistant = 6
-		assertEquals(6, history.count());
+		// Transcript: 3 inbox messages (user) + 1 assistant = 4
+		assertEquals(4, transcript.count());
 
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
 		assertEquals("message three", response.toString());
@@ -168,6 +240,11 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testCustomSystemPrompt() {
+		// processChat should accept and apply a custom systemPrompt without
+		// error. The system message itself is rebuilt fresh per turn and
+		// not persisted to the transcript — see ContextBuilderTest
+		// .testSystemPromptIncludesLatticeReference for the assertion that
+		// the prompt actually reaches the LLM context.
 		ACell initialState = Maps.of(
 			"config", Maps.of("llmOperation", "v/test/ops/llm", "systemPrompt", "You are a pirate")
 		);
@@ -180,13 +257,13 @@ public class LLMAgentAdapterTest {
 		);
 
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
-		AVector<ACell> history = LLMAgentAdapter.extractHistory(
+		assertNotNull(output);
+		AVector<ACell> transcript = LLMAgentAdapter.extractTranscript(
 			RT.getIn(output, AgentState.KEY_STATE));
-
-		AString sysContent = RT.ensureString(RT.getIn(history.get(0), "content"));
-		// Custom prompt comes first, then the always-appended lattice reference
-		assertTrue(sysContent.toString().startsWith("You are a pirate"),
-			"Custom prompt should appear at the start of the system message");
+		// Just the real conversation: user + assistant
+		assertEquals(2, transcript.count());
+		assertEquals(Strings.create("user"), RT.getIn(transcript.get(0), "role"));
+		assertEquals(Strings.create("assistant"), RT.getIn(transcript.get(1), "role"));
 	}
 
 	// ========== Integration: full agent pipeline ==========
@@ -214,8 +291,8 @@ public class LLMAgentAdapterTest {
 		assertEquals(0, agent.getInbox().count());
 		assertEquals(1, agent.getTimeline().count());
 
-		AVector<ACell> history = LLMAgentAdapter.extractHistory(agent.getState());
-		assertTrue(history.count() >= 3, "Should have system + user + assistant");
+		AVector<ACell> transcript = LLMAgentAdapter.extractTranscript(agent.getState());
+		assertTrue(transcript.count() >= 2, "Transcript should have user + assistant");
 
 		ACell timelineEntry = agent.getTimeline().get(0);
 		AString response = RT.ensureString(RT.getIn(timelineEntry, Fields.RESULT, "response"));
@@ -249,9 +326,9 @@ public class LLMAgentAdapterTest {
 
 		assertEquals(2, agent.getTimeline().count());
 
-		// system + ctxmap + (user1 + assistant1) + ctxmap + (user2 + assistant2) = 7
-		AVector<ACell> history = LLMAgentAdapter.extractHistory(agent.getState());
-		assertEquals(7, history.count());
+		// Transcript: user1 + assistant1 + user2 + assistant2 = 4
+		AVector<ACell> transcript = LLMAgentAdapter.extractTranscript(agent.getState());
+		assertEquals(4, transcript.count());
 	}
 
 	@Test
@@ -302,12 +379,13 @@ public class LLMAgentAdapterTest {
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
-		AVector<ACell> history = LLMAgentAdapter.extractHistory(
+		// Custom systemPrompt application is verified in
+		// ContextBuilderTest.testSystemPromptIncludesLatticeReference.
+		// Here we just check that processChat ran cleanly and that the
+		// returned state preserves the merged config.
+		AVector<ACell> transcript = LLMAgentAdapter.extractTranscript(
 			RT.getIn(output, AgentState.KEY_STATE));
-		AString sysContent = RT.ensureString(RT.getIn(history.get(0), "content"));
-		// Custom prompt comes first, then the always-appended lattice reference
-		assertTrue(sysContent.toString().startsWith("Custom prompt"),
-			"Custom prompt should appear at the start of the system message");
+		assertEquals(2, transcript.count(), "Transcript: user + assistant");
 
 		AMap<AString, ACell> returnedConfig = LLMAgentAdapter.extractConfig(
 			RT.getIn(output, AgentState.KEY_STATE));
@@ -328,11 +406,12 @@ public class LLMAgentAdapterTest {
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
-		AVector<ACell> history = LLMAgentAdapter.extractHistory(
+		// Default system prompt is built fresh per turn (not persisted).
+		// Default content is verified in ContextBuilderTest. Here we just
+		// confirm processChat completes and persists the conversation.
+		AVector<ACell> transcript = LLMAgentAdapter.extractTranscript(
 			RT.getIn(output, AgentState.KEY_STATE));
-		AString sysContent = RT.ensureString(RT.getIn(history.get(0), "content"));
-		assertTrue(sysContent.toString().contains("Covia platform"),
-			"Default system prompt should mention Covia");
+		assertEquals(2, transcript.count(), "Transcript: user + assistant");
 	}
 
 	@Test
@@ -369,12 +448,12 @@ public class LLMAgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("tool-agent");
 
-		// system + user + assistant(toolCall) + tool(result) + assistant(text)
-		AVector<ACell> history = LLMAgentAdapter.extractHistory(agent.getState());
-		assertTrue(history.count() >= 5,
-			"Should have system + user + assistant(toolCall) + tool + assistant(text), got " + history.count());
+		// Transcript: user + assistant(toolCall) + tool(result) + assistant(text) = 4
+		AVector<ACell> transcript = LLMAgentAdapter.extractTranscript(agent.getState());
+		assertTrue(transcript.count() >= 4,
+			"Transcript should have user + assistant(toolCall) + tool + assistant(text), got " + transcript.count());
 
-		ACell lastMsg = history.get(history.count() - 1);
+		ACell lastMsg = transcript.get(transcript.count() - 1);
 		AString lastContent = RT.ensureString(RT.getIn(lastMsg, "content"));
 		assertNotNull(lastContent, "Final assistant message should have content");
 		assertTrue(lastContent.toString().contains("Tool returned:"),
@@ -404,19 +483,19 @@ public class LLMAgentAdapterTest {
 		assertNotNull(response);
 		assertTrue(response.toString().contains("Tool returned:"));
 
-		AVector<ACell> history = LLMAgentAdapter.extractHistory(
+		AVector<ACell> transcript = LLMAgentAdapter.extractTranscript(
 			RT.getIn(output, AgentState.KEY_STATE));
-		assertTrue(history.count() >= 5);
+		assertTrue(transcript.count() >= 4);
 
 		boolean hasToolMsg = false;
-		for (long i = 0; i < history.count(); i++) {
-			AString role = RT.ensureString(RT.getIn(history.get(i), "role"));
+		for (long i = 0; i < transcript.count(); i++) {
+			AString role = RT.ensureString(RT.getIn(transcript.get(i), "role"));
 			if (role != null && "tool".equals(role.toString())) {
 				hasToolMsg = true;
 				break;
 			}
 		}
-		assertTrue(hasToolMsg, "History should contain a tool result message");
+		assertTrue(hasToolMsg, "Transcript should contain a tool result message");
 	}
 
 	// ========== Response format ==========

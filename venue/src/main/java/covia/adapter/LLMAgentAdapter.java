@@ -103,6 +103,7 @@ public class LLMAgentAdapter extends AAdapter {
 
 	// History / message field keys
 	private static final AString K_HISTORY    = Strings.intern("history");
+	private static final AString K_TRANSCRIPT = Strings.intern("transcript");
 	private static final AString K_ROLE       = Strings.intern("role");
 	private static final AString K_CONTENT    = Strings.intern("content");
 	private static final AString K_RESPONSE   = Strings.intern("response");
@@ -325,16 +326,25 @@ public class LLMAgentAdapter extends AAdapter {
 		// Extract dynamic loaded paths from state
 		AMap<AString, ACell> existingLoads = extractLoads(state);
 
-		// Build context via ContextBuilder
+		// Build per-turn LLM context. Per AGENT_CONTEXT_PLAN.md §4 Option C
+		// (transcript model): system prompt + context entries + loads +
+		// [Context Map] are rebuilt FRESH every turn and never persisted.
+		// Only the persistent transcript (real user/assistant/tool turns)
+		// carries forward via withTranscript(state).
+		//
+		// Order matters: ephemeral background → transcript (history) →
+		// this turn's pending/inbox → empty signal. The system prompt
+		// goes first for primacy, the new input goes last for recency.
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
 			.withConfig(recordConfig, state)
-			.withSystemPrompt(extractHistory(state))
-			.withContextEntries(state)
-			.withLoadedPaths(existingLoads)
-			.withContextMap(existingLoads)
-			.withPendingResults(pending)
-			.withInboxMessages(messages)
+			.withSystemPrompt(Vectors.empty())   // always fresh
+			.withContextEntries(state)            // ephemeral
+			.withLoadedPaths(existingLoads)       // ephemeral
+			.withContextMap(existingLoads)        // ephemeral
+			.withTranscript(state)                // persisted conversation
+			.withPendingResults(pending)          // ephemeral (this turn)
+			.withInboxMessages(messages)          // this turn's user input
 			.withEmptyStateSignal(hasInput)
 			.withTools()
 			.build();
@@ -342,7 +352,7 @@ public class LLMAgentAdapter extends AAdapter {
 		// Safety valve — may prune loads if budget exceeded
 		AMap<AString, ACell> activeLoads = builder.applySafetyValve(existingLoads);
 
-		AVector<ACell> history = context.history();
+		AVector<ACell> llmMessages = context.history();
 		AVector<ACell> baseTools = context.tools();
 		Map<String, AString> configToolMap = context.configToolMap();
 		AMap<AString, ACell> config = context.config();
@@ -364,30 +374,61 @@ public class LLMAgentAdapter extends AAdapter {
 		// Invoke level 3 with tool call loop — returns all messages to append
 		// ctx (uncapped) for the L3 LLM call; capsCtx flows through toolCtx for tool dispatch
 		AVector<ACell> newMessages = invokeWithToolLoop(
-			llmOperation, config, history, baseTools, ctx, toolCtx);
+			llmOperation, config, llmMessages, baseTools, ctx, toolCtx);
 
 		// Filter out empty assistant messages (e.g. when LLM produces only <think> tags)
-		// to avoid polluting history with useless entries that confuse future calls
-		AVector<ACell> filtered = Vectors.empty();
+		// to avoid polluting the transcript with useless entries
+		AVector<ACell> newMessagesFiltered = Vectors.empty();
 		for (long i = 0; i < newMessages.count(); i++) {
 			ACell msg = newMessages.get(i);
 			if (ROLE_ASSISTANT.equals(RT.getIn(msg, K_ROLE))) {
 				AString content = RT.ensureString(RT.getIn(msg, K_CONTENT));
 				boolean hasContent = content != null && content.count() > 0;
 				boolean hasToolCalls = RT.getIn(msg, K_TOOL_CALLS) instanceof AVector<?> v && v.count() > 0;
-				if (!hasContent && !hasToolCalls) continue; // skip empty assistant msgs
+				if (!hasContent && !hasToolCalls) continue;
 			}
-			filtered = filtered.conj(msg);
+			newMessagesFiltered = newMessagesFiltered.conj(msg);
 		}
-		history = (AVector<ACell>) history.concat(filtered);
 
 		// Extract text content from the final assistant message
 		ACell lastMsg = newMessages.get(newMessages.count() - 1);
 		AString contentText = RT.ensureString(RT.getIn(lastMsg, K_CONTENT));
 		String responseText = (contentText != null) ? contentText.toString() : "";
 
-		// Return transition function output (preserve config and loads in state)
-		AMap<AString, ACell> newState = Maps.of(K_HISTORY, history);
+		// Compute the transcript delta to persist. The delta is just the
+		// real conversation turns from this run: incoming task inputs and
+		// inbox messages (as user role), plus the LLM-side new messages
+		// (assistant + tool). Pending results, [Context Map], context
+		// entries, etc. are ephemeral status / background and are NOT
+		// persisted.
+		AVector<ACell> oldTranscript = extractTranscript(state);
+		AVector<ACell> transcriptDelta = (AVector<ACell>) Vectors.empty();
+		// Synthesize a user message for each task input — captures what
+		// the agent was asked to do, so the transcript is intelligible
+		// across turns even though the LLM saw the task via the dynamic
+		// [Tasks assigned to you] injection inside the tool loop.
+		if (tasks != null) {
+			for (long i = 0; i < tasks.count(); i++) {
+				ACell taskMsg = wrapTaskAsUserMessage(tasks.get(i));
+				if (taskMsg != null) transcriptDelta = transcriptDelta.conj(taskMsg);
+			}
+		}
+		if (messages != null) {
+			// Inbox messages get the same wrapping as withInboxMessages —
+			// re-derive here so the transcript stores plain user messages
+			// rather than the [Message from: ...] decorated form.
+			for (long i = 0; i < messages.count(); i++) {
+				ACell wrapped = wrapInboxAsUserMessage(messages.get(i));
+				if (wrapped != null) transcriptDelta = transcriptDelta.conj(wrapped);
+			}
+		}
+		transcriptDelta = (AVector<ACell>) transcriptDelta.concat(newMessagesFiltered);
+		AVector<ACell> newTranscript = (AVector<ACell>) oldTranscript.concat(transcriptDelta);
+
+		// Return transition function output. State holds: transcript (the
+		// only durable conversation record), config, and loads. The legacy
+		// K_HISTORY field is no longer written.
+		AMap<AString, ACell> newState = Maps.of(K_TRANSCRIPT, newTranscript);
 		if (config != null) {
 			newState = newState.assoc(K_CONFIG, config);
 		}
@@ -807,6 +848,65 @@ public class LLMAgentAdapter extends AAdapter {
 		ACell h = RT.getIn(state, K_HISTORY);
 		if (h instanceof AVector) return (AVector<ACell>) h;
 		return Vectors.empty();
+	}
+
+	/**
+	 * Extracts the persistent transcript from agent state. This is the
+	 * canonical conversation record per AGENT_CONTEXT_PLAN.md Option C —
+	 * only real user / assistant / tool turns, no ephemeral context.
+	 */
+	@SuppressWarnings("unchecked")
+	static AVector<ACell> extractTranscript(ACell state) {
+		if (state == null) return Vectors.empty();
+		ACell t = RT.getIn(state, K_TRANSCRIPT);
+		if (t instanceof AVector) return (AVector<ACell>) t;
+		return Vectors.empty();
+	}
+
+	/**
+	 * Converts a task record into a plain user-role transcript entry. The
+	 * task input is serialised as JSON so the LLM, on a later turn, can
+	 * see what it was originally asked to do. Mirrors the dynamic
+	 * {@code [Tasks assigned to you]} injection from
+	 * {@link #buildOutstandingTaskMessage} but in a one-time persistent
+	 * form for the transcript.
+	 */
+	@SuppressWarnings("unchecked")
+	private static ACell wrapTaskAsUserMessage(ACell task) {
+		if (task == null) return null;
+		ACell taskInput = RT.getIn(task, Fields.INPUT);
+		if (taskInput == null) return null;
+		String inputStr;
+		try {
+			inputStr = convex.core.util.JSON.toString(taskInput);
+		} catch (Exception e) {
+			inputStr = taskInput.toString();
+		}
+		return Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(inputStr));
+	}
+
+	/**
+	 * Converts an inbox message into a plain user-role transcript entry.
+	 * Mirrors {@link ContextBuilder#withInboxMessages} but without the
+	 * "[Message from: ...]" decoration — the transcript stores the raw
+	 * user content.
+	 */
+	@SuppressWarnings("unchecked")
+	private static ACell wrapInboxAsUserMessage(ACell msg) {
+		AString content = null;
+		if (msg instanceof AString s) {
+			content = s;
+		} else if (msg instanceof AMap) {
+			ACell msgBody = RT.getIn(msg, Fields.MESSAGE);
+			if (msgBody != null) {
+				content = RT.ensureString(msgBody);
+			} else {
+				AString c = RT.ensureString(RT.getIn(msg, K_CONTENT));
+				content = (c != null) ? c : Strings.create(msg.toString());
+			}
+		}
+		if (content == null) return null;
+		return Maps.of(K_ROLE, ROLE_USER, K_CONTENT, content);
 	}
 
 	@SuppressWarnings("unchecked")

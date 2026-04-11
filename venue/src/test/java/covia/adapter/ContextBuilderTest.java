@@ -134,9 +134,13 @@ public class ContextBuilderTest {
 	}
 
 	@Test
-	public void testExistingSystemPromptPreserved() {
+	public void testExistingSystemPromptIsAlwaysReplaced() {
+		// Per AGENT_CONTEXT_PLAN.md Option C, the system message is
+		// always rebuilt fresh per turn — any system message at the
+		// start of the starting vector is dropped and replaced with
+		// the freshly composed identity + LATTICE_REFERENCE.
 		AVector<ACell> existing = Vectors.of(
-			(ACell) Maps.of(K_ROLE, Strings.intern("system"), K_CONTENT, Strings.create("Existing prompt")),
+			(ACell) Maps.of(K_ROLE, Strings.intern("system"), K_CONTENT, Strings.create("Stale frozen prompt")),
 			(ACell) Maps.of(K_ROLE, Strings.intern("user"), K_CONTENT, Strings.create("Hello")));
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
@@ -145,9 +149,19 @@ public class ContextBuilderTest {
 			.withTools()
 			.build();
 
+		// Still 2 messages: the fresh system + the preserved user
 		assertEquals(2, result.history().count());
-		String content = RT.ensureString(RT.getIn(result.history().get(0), K_CONTENT)).toString();
-		assertEquals("Existing prompt", content);
+		String sysContent = RT.ensureString(RT.getIn(result.history().get(0), K_CONTENT)).toString();
+		// Old "Stale frozen prompt" is gone — replaced with fresh default
+		assertFalse(sysContent.contains("Stale frozen prompt"),
+			"Stale system message should have been dropped");
+		assertTrue(sysContent.contains("Covia platform"),
+			"Fresh default identity prompt should be present");
+		assertTrue(sysContent.contains("LATTICE NAMESPACES"),
+			"Lattice reference should be appended");
+		// User message preserved at index 1
+		String userContent = RT.ensureString(RT.getIn(result.history().get(1), K_CONTENT)).toString();
+		assertEquals("Hello", userContent);
 	}
 
 	// ========== Context entries ==========
