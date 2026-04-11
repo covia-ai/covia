@@ -136,7 +136,7 @@ covia_write  path=w/config/ap-pipeline  value=<pipeline-hash>
 
 All four use `goaltree:chat` transition with `langchain:openai` (gpt-4o-mini). Create in parallel.
 
-**IMPORTANT:** `config.operation` must be a plain string `"goaltree:chat"`, not a map.
+**IMPORTANT:** `config.operation` must be a plain string `"v/ops/goaltree/chat"`, not a map.
 
 Agents use **context loading** to receive shared reference material. The `context` array in `state.config` lists asset hashes, workspace paths, and op-based entries that are resolved and injected as system messages before each run. This keeps system prompts short (identity + behaviour only) and shared docs in one place.
 
@@ -146,7 +146,7 @@ Agents use **context loading** to receive shared reference material. The `contex
 |------|---------|-------------|
 | **Asset hash** | `"<hash>"` | Fetches content from content-addressed store (UTF-8) |
 | **Workspace ref** | `{"ref": "w/vendor-records", "label": "..."}` | Reads lattice value, rendered via CellExplorer with budget control |
-| **Op-based** | `{"op": "covia:list", "input": {...}, "label": "..."}` | Runs an operation at context-load time, injects result |
+| **Op-based** | `{"op": "v/ops/covia/list", "input": {...}, "label": "..."}` | Runs an operation at context-load time, injects result |
 
 All pipeline agents use **strict structured output** via `responseFormat`. Every `responseFormat` schema must have `additionalProperties: false` at every object level for OpenAI strict mode.
 
@@ -160,9 +160,9 @@ Alice does pure text extraction — no tools needed. Empty `caps: []` denies all
 agent_create
   agentId: "Alice"
   overwrite: true
-  config: { "operation": "goaltree:chat" }
+  config: { "operation": "v/ops/goaltree/chat" }
   state: { "config": {
-    "llmOperation": "langchain:openai",
+    "llmOperation": "v/ops/langchain/openai",
     "model": "gpt-4o-mini",
     "caps": [],
     "systemPrompt": "You are Alice, an AP Invoice Scanner. Extract structured invoice fields from raw text. Your output is schema-enforced — populate every field. Use empty string for missing text fields and empty array for missing lists. Add a flag for every field that required interpretation or was ambiguous. Be precise with amounts.",
@@ -209,9 +209,9 @@ Bob's caps grant exactly what his role needs — read vendor/PO data and the dat
 agent_create
   agentId: "Bob"
   overwrite: true
-  config: { "operation": "goaltree:chat" }
+  config: { "operation": "v/ops/goaltree/chat" }
   state: { "config": {
-    "llmOperation": "langchain:openai",
+    "llmOperation": "v/ops/langchain/openai",
     "model": "gpt-4o-mini",
     "caps": [
       {"with": "w/vendor-records/", "can": "crud/read"},
@@ -222,7 +222,7 @@ agent_create
     "systemPrompt": "You are Bob, an AP Data Enricher. You receive structured invoice data and enrich it by autonomously looking up vendor records, purchase orders, and checking for duplicates. Use your tools to read and write workspace data. Record the exact path you queried in each source_path field. Your confidence_score should reflect how many validations succeeded (1.0 = all clear, lower for each warning).",
     "context": [
       {"ref": "w/docs/data-guide", "label": "AP Data Guide"},
-      {"op": "covia:list", "input": {"path": "w/vendor-records"}, "label": "Known Vendors"}
+      {"op": "v/ops/covia/list", "input": {"path": "w/vendor-records"}, "label": "Known Vendors"}
     ],
     "responseFormat": {
       "name": "InvoiceEnrichment",
@@ -296,9 +296,9 @@ Carol can read everything in the workspace (she needs to inspect any reference d
 agent_create
   agentId: "Carol"
   overwrite: true
-  config: { "operation": "goaltree:chat" }
+  config: { "operation": "v/ops/goaltree/chat" }
   state: { "config": {
-    "llmOperation": "langchain:openai",
+    "llmOperation": "v/ops/langchain/openai",
     "model": "gpt-4o-mini",
     "caps": [
       {"with": "w/",           "can": "crud/read"},
@@ -358,9 +358,9 @@ Dave is read-only on the workspace, can run orchestrations, and can query/messag
 agent_create
   agentId: "Dave"
   overwrite: true
-  config: { "operation": "goaltree:chat" }
+  config: { "operation": "v/ops/goaltree/chat" }
   state: { "config": {
-    "llmOperation": "langchain:openai",
+    "llmOperation": "v/ops/langchain/openai",
     "model": "gpt-4o-mini",
     "caps": [
       {"with": "w/",  "can": "crud/read"},

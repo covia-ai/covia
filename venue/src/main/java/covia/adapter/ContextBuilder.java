@@ -11,7 +11,6 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Cells;
-import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -83,24 +82,24 @@ public class ContextBuilder {
 
 	/** Default tool operations — resolved at runtime via engine */
 	static final AVector<ACell> DEFAULT_TOOL_OPS = (AVector<ACell>) Vectors.of(
-		(ACell) Strings.create("agent:create"),
-		(ACell) Strings.create("agent:message"),
-		(ACell) Strings.create("agent:request"),
-		(ACell) Strings.create("asset:store"),
-		(ACell) Strings.create("asset:get"),
-		(ACell) Strings.create("asset:list"),
-		(ACell) Strings.create("asset:content"),
-		(ACell) Strings.create("asset:pin"),
-		(ACell) Strings.create("grid:run"),
-		(ACell) Strings.create("covia:read"),
-		(ACell) Strings.create("covia:write"),
-		(ACell) Strings.create("covia:delete"),
-		(ACell) Strings.create("covia:append"),
-		(ACell) Strings.create("covia:slice"),
-		(ACell) Strings.create("covia:list"),
-		(ACell) Strings.create("covia:inspect"),
-		(ACell) Strings.create("schema:validate"),
-		(ACell) Strings.create("schema:infer")
+		(ACell) Strings.create("v/ops/agent/create"),
+		(ACell) Strings.create("v/ops/agent/message"),
+		(ACell) Strings.create("v/ops/agent/request"),
+		(ACell) Strings.create("v/ops/asset/store"),
+		(ACell) Strings.create("v/ops/asset/get"),
+		(ACell) Strings.create("v/ops/asset/list"),
+		(ACell) Strings.create("v/ops/asset/content"),
+		(ACell) Strings.create("v/ops/asset/pin"),
+		(ACell) Strings.create("v/ops/grid/run"),
+		(ACell) Strings.create("v/ops/covia/read"),
+		(ACell) Strings.create("v/ops/covia/write"),
+		(ACell) Strings.create("v/ops/covia/delete"),
+		(ACell) Strings.create("v/ops/covia/append"),
+		(ACell) Strings.create("v/ops/covia/slice"),
+		(ACell) Strings.create("v/ops/covia/list"),
+		(ACell) Strings.create("v/ops/covia/inspect"),
+		(ACell) Strings.create("v/ops/schema/validate"),
+		(ACell) Strings.create("v/ops/schema/infer")
 	);
 
 	// Instance state
@@ -496,19 +495,21 @@ public class ContextBuilder {
 			AString nameOverride = parsed[1];
 			AString descOverride = parsed[2];
 
-			Hash hash = engine.resolveOperation(operation);
-			if (hash == null) {
+			Asset asset = engine.resolveAsset(operation, ctx);
+			if (asset == null) {
 				log.warn("Config tool: cannot resolve operation '{}'", operation);
 				continue;
 			}
-			Asset asset = engine.getAsset(hash);
-			if (asset == null) {
-				log.warn("Config tool: asset not found for operation '{}'", operation);
-				continue;
-			}
 
-			AString assetToolName = RT.ensureString(asset.meta().get(Fields.TOOL_NAME));
-			String toolName = deriveToolName(nameOverride, assetToolName, operation);
+			// toolName lives inside the operation block, not at the top level.
+			// If absent, sanitise operation.adapter (dispatch string like
+			// "agent:create") rather than the catalog path used for lookup —
+			// the dispatch string sanitises cleanly via colon→underscore.
+			AString assetToolName = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.TOOL_NAME));
+			AString dispatchAdapter = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.ADAPTER));
+			AString fallbackSource = (dispatchAdapter != null) ? dispatchAdapter : operation;
+			String toolName = deriveToolName(nameOverride, assetToolName, fallbackSource);
+			toolMap.put(toolName, operation);
 
 			AString description = (descOverride != null)
 				? descOverride

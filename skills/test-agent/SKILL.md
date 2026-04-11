@@ -29,11 +29,11 @@ Example:
 
 ```
 agent_create  agentId=TestBot  config={
-  "operation": "llmagent:chat",
-  "llmOperation": "langchain:openai",
+  "operation": "v/ops/llmagent/chat",
+  "llmOperation": "v/ops/langchain/openai",
   "model": "gpt-4o",
   "systemPrompt": "You are TestBot. ...",
-  "tools": ["covia:read", "covia:write"],
+  "tools": ["v/ops/covia/read", "v/ops/covia/write"],
   "caps": [{"with": "w/output/", "can": "crud/write"}, {"with": "w/", "can": "crud/read"}]
 }
 ```
@@ -183,17 +183,17 @@ Parse output with `| python -m json.tool` for readability.
 Common operations:
 ```bash
 # List agents
-curl ... -d '{"operation": "agent:list"}'
+curl ... -d '{"operation": "v/ops/agent/list"}'
 
 # Create agent
-curl ... -d '{"operation": "agent:create", "input": {"agentId": "...", "config": {...}}}'
+curl ... -d '{"operation": "v/ops/agent/create", "input": {"agentId": "...", "config": {...}}}'
 
 # Send request
-curl ... -d '{"operation": "agent:request", "input": {"agentId": "...", "input": {...}, "wait": true}}'
+curl ... -d '{"operation": "v/ops/agent/request", "input": {"agentId": "...", "input": {...}, "wait": true}}'
 
 # Read workspace
-curl ... -d '{"operation": "covia:read", "input": {"path": "..."}}'
+curl ... -d '{"operation": "v/ops/covia/read", "input": {"path": "..."}}'
 
 # Read agent timeline
-curl ... -d '{"operation": "covia:read", "input": {"path": "g/<name>/timeline"}}'
+curl ... -d '{"operation": "v/ops/covia/read", "input": {"path": "g/<name>/timeline"}}'
 ```

@@ -28,7 +28,7 @@ public class CapabilityCheckerTest {
 
 	@Test
 	public void testNullCapsAllowsEverything() {
-		assertNull(CapabilityChecker.check(null, "covia:write",
+		assertNull(CapabilityChecker.check(null, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/anything"))));
 	}
 
@@ -36,17 +36,17 @@ public class CapabilityCheckerTest {
 
 	@Test
 	public void testOperationAbilityMapping() {
-		assertEquals("crud/read", CapabilityChecker.operationAbility("covia:read"));
-		assertEquals("crud/read", CapabilityChecker.operationAbility("covia:list"));
-		assertEquals("crud/read", CapabilityChecker.operationAbility("covia:slice"));
-		assertEquals("crud/write", CapabilityChecker.operationAbility("covia:write"));
-		assertEquals("crud/write", CapabilityChecker.operationAbility("covia:append"));
-		assertEquals("crud/delete", CapabilityChecker.operationAbility("covia:delete"));
-		assertEquals("agent/request", CapabilityChecker.operationAbility("agent:request"));
-		assertEquals("agent/message", CapabilityChecker.operationAbility("agent:message"));
-		assertEquals("asset/store", CapabilityChecker.operationAbility("asset:store"));
-		assertEquals("asset/read", CapabilityChecker.operationAbility("asset:get"));
-		assertEquals("invoke", CapabilityChecker.operationAbility("grid:run"));
+		assertEquals("crud/read", CapabilityChecker.operationAbility("v/ops/covia/read"));
+		assertEquals("crud/read", CapabilityChecker.operationAbility("v/ops/covia/list"));
+		assertEquals("crud/read", CapabilityChecker.operationAbility("v/ops/covia/slice"));
+		assertEquals("crud/write", CapabilityChecker.operationAbility("v/ops/covia/write"));
+		assertEquals("crud/write", CapabilityChecker.operationAbility("v/ops/covia/append"));
+		assertEquals("crud/delete", CapabilityChecker.operationAbility("v/ops/covia/delete"));
+		assertEquals("agent/request", CapabilityChecker.operationAbility("v/ops/agent/request"));
+		assertEquals("agent/message", CapabilityChecker.operationAbility("v/ops/agent/message"));
+		assertEquals("asset/store", CapabilityChecker.operationAbility("v/ops/asset/store"));
+		assertEquals("asset/read", CapabilityChecker.operationAbility("v/ops/asset/get"));
+		assertEquals("invoke", CapabilityChecker.operationAbility("v/ops/grid/run"));
 		assertEquals("invoke", CapabilityChecker.operationAbility("some:unknown:op"));
 	}
 
@@ -55,20 +55,20 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testExtractResourceFromCoviaOp() {
 		assertEquals("w/decisions/INV-123",
-			CapabilityChecker.extractResource("covia:write",
+			CapabilityChecker.extractResource("v/ops/covia/write",
 				Maps.of(Strings.create("path"), Strings.create("w/decisions/INV-123"))));
 	}
 
 	@Test
 	public void testExtractResourceFromAgentOp() {
 		assertEquals("g/Carol",
-			CapabilityChecker.extractResource("agent:request",
+			CapabilityChecker.extractResource("v/ops/agent/request",
 				Maps.of(Strings.create("agentId"), Strings.create("Carol"))));
 	}
 
 	@Test
 	public void testExtractResourceNullForGridRun() {
-		assertNull(CapabilityChecker.extractResource("grid:run",
+		assertNull(CapabilityChecker.extractResource("v/ops/grid/run",
 			Maps.of(Strings.create("operation"), Strings.create("some-hash"))));
 	}
 
@@ -90,14 +90,14 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testAllowWriteToGrantedPath() {
 		AVector<ACell> caps = caps("w/decisions", "crud/write");
-		assertNull(CapabilityChecker.check(caps, "covia:write",
+		assertNull(CapabilityChecker.check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/decisions/INV-123"))));
 	}
 
 	@Test
 	public void testDenyWriteToUngrantedPath() {
 		AVector<ACell> caps = caps("w/decisions", "crud/write");
-		assertNotNull(CapabilityChecker.check(caps, "covia:write",
+		assertNotNull(CapabilityChecker.check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme"))));
 	}
 
@@ -106,14 +106,14 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testAllowReadFromGrantedPath() {
 		AVector<ACell> caps = caps("w/enrichments", "crud/read");
-		assertNull(CapabilityChecker.check(caps, "covia:read",
+		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/enrichments/INV-123"))));
 	}
 
 	@Test
 	public void testDenyReadFromUngrantedPath() {
 		AVector<ACell> caps = caps("w/enrichments", "crud/read");
-		assertNotNull(CapabilityChecker.check(caps, "covia:read",
+		assertNotNull(CapabilityChecker.check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme"))));
 	}
 
@@ -122,14 +122,14 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testExactPathMatch() {
 		AVector<ACell> caps = caps("w/vendor-records", "crud/read");
-		assertNull(CapabilityChecker.check(caps, "covia:read",
+		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records"))));
 	}
 
 	@Test
 	public void testPathPrefixCoversChildren() {
 		AVector<ACell> caps = caps("w/vendor-records", "crud/read");
-		assertNull(CapabilityChecker.check(caps, "covia:read",
+		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme Corp"))));
 	}
 
@@ -137,14 +137,14 @@ public class CapabilityCheckerTest {
 	public void testTrailingSlashCoversBase() {
 		// "w/vendor-records/" should still cover "w/vendor-records"
 		AVector<ACell> caps = caps("w/vendor-records/", "crud/read");
-		assertNull(CapabilityChecker.check(caps, "covia:read",
+		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records"))));
 	}
 
 	@Test
 	public void testTrailingSlashCoversChildren() {
 		AVector<ACell> caps = caps("w/vendor-records/", "crud/read");
-		assertNull(CapabilityChecker.check(caps, "covia:read",
+		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme Corp"))));
 	}
 
@@ -158,15 +158,15 @@ public class CapabilityCheckerTest {
 			"w/vendor-records", "crud/read"
 		);
 		// Allowed
-		assertNull(CapabilityChecker.check(caps, "covia:write",
+		assertNull(CapabilityChecker.check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/decisions/INV-123"))));
-		assertNull(CapabilityChecker.check(caps, "covia:read",
+		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/enrichments/INV-123"))));
-		assertNull(CapabilityChecker.check(caps, "covia:read",
+		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme"))));
 
 		// Denied — write to enrichments (only has read)
-		assertNotNull(CapabilityChecker.check(caps, "covia:write",
+		assertNotNull(CapabilityChecker.check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/enrichments/INV-123"))));
 	}
 
@@ -175,27 +175,27 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testWildcardCapsAllowsEverything() {
 		AVector<ACell> caps = caps("", "*");
-		assertNull(CapabilityChecker.check(caps, "covia:write",
+		assertNull(CapabilityChecker.check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/anything"))));
-		assertNull(CapabilityChecker.check(caps, "grid:run",
+		assertNull(CapabilityChecker.check(caps, "v/ops/grid/run",
 			Maps.of(Strings.create("operation"), Strings.create("some-hash"))));
 	}
 
 	@Test
 	public void testCrudPrefixCoversReadWriteDelete() {
 		AVector<ACell> caps = caps("w/", "crud");
-		assertNull(CapabilityChecker.check(caps, "covia:read",
+		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/anything"))));
-		assertNull(CapabilityChecker.check(caps, "covia:write",
+		assertNull(CapabilityChecker.check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/anything"))));
-		assertNull(CapabilityChecker.check(caps, "covia:delete",
+		assertNull(CapabilityChecker.check(caps, "v/ops/covia/delete",
 			Maps.of(Strings.create("path"), Strings.create("w/anything"))));
 	}
 
 	@Test
 	public void testReadDoesNotCoverWrite() {
 		AVector<ACell> caps = caps("w/", "crud/read");
-		assertNotNull(CapabilityChecker.check(caps, "covia:write",
+		assertNotNull(CapabilityChecker.check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/anything"))));
 	}
 
@@ -204,19 +204,19 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testAgentRequestCap() {
 		AVector<ACell> caps = caps("g/Alice", "agent/request");
-		assertNull(CapabilityChecker.check(caps, "agent:request",
+		assertNull(CapabilityChecker.check(caps, "v/ops/agent/request",
 			Maps.of(Strings.create("agentId"), Strings.create("Alice"))));
 		// Different agent — denied
-		assertNotNull(CapabilityChecker.check(caps, "agent:request",
+		assertNotNull(CapabilityChecker.check(caps, "v/ops/agent/request",
 			Maps.of(Strings.create("agentId"), Strings.create("Bob"))));
 	}
 
 	@Test
 	public void testAgentPrefixCoversAll() {
 		AVector<ACell> caps = caps("g/", "agent");
-		assertNull(CapabilityChecker.check(caps, "agent:request",
+		assertNull(CapabilityChecker.check(caps, "v/ops/agent/request",
 			Maps.of(Strings.create("agentId"), Strings.create("Alice"))));
-		assertNull(CapabilityChecker.check(caps, "agent:message",
+		assertNull(CapabilityChecker.check(caps, "v/ops/agent/message",
 			Maps.of(Strings.create("agentId"), Strings.create("Bob"))));
 	}
 
@@ -225,7 +225,7 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testInvokeCap() {
 		AVector<ACell> caps = caps("", "invoke");
-		assertNull(CapabilityChecker.check(caps, "grid:run",
+		assertNull(CapabilityChecker.check(caps, "v/ops/grid/run",
 			Maps.of(Strings.create("operation"), Strings.create("some-hash"))));
 	}
 
@@ -238,16 +238,16 @@ public class CapabilityCheckerTest {
 			"w/", "crud/read"
 		);
 		// Carol can write decisions
-		assertNull(CapabilityChecker.check(carolCaps, "covia:write",
+		assertNull(CapabilityChecker.check(carolCaps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/decisions/INV-2024-0891"))));
 		// Carol can read anything in workspace
-		assertNull(CapabilityChecker.check(carolCaps, "covia:read",
+		assertNull(CapabilityChecker.check(carolCaps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/enrichments/INV-2024-0891"))));
 		// Carol CANNOT write to vendor records (only has read on w/)
-		assertNotNull(CapabilityChecker.check(carolCaps, "covia:write",
+		assertNotNull(CapabilityChecker.check(carolCaps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme Corp"))));
 		// Carol CANNOT write enrichments
-		assertNotNull(CapabilityChecker.check(carolCaps, "covia:write",
+		assertNotNull(CapabilityChecker.check(carolCaps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/enrichments/INV-2024-0891"))));
 	}
 
@@ -260,19 +260,19 @@ public class CapabilityCheckerTest {
 			"w/invoices", "crud/read"
 		);
 		// Bob can write enrichments
-		assertNull(CapabilityChecker.check(bobCaps, "covia:write",
+		assertNull(CapabilityChecker.check(bobCaps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/enrichments/INV-2024-0891"))));
 		// Bob can read vendor records
-		assertNull(CapabilityChecker.check(bobCaps, "covia:read",
+		assertNull(CapabilityChecker.check(bobCaps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme Corp"))));
 		// Bob can list vendor records
-		assertNull(CapabilityChecker.check(bobCaps, "covia:list",
+		assertNull(CapabilityChecker.check(bobCaps, "v/ops/covia/list",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records"))));
 		// Bob CANNOT write to decisions
-		assertNotNull(CapabilityChecker.check(bobCaps, "covia:write",
+		assertNotNull(CapabilityChecker.check(bobCaps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/decisions/INV-2024-0891"))));
 		// Bob CANNOT write vendor records
-		assertNotNull(CapabilityChecker.check(bobCaps, "covia:write",
+		assertNotNull(CapabilityChecker.check(bobCaps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme Corp"))));
 	}
 
@@ -293,18 +293,18 @@ public class CapabilityCheckerTest {
 		).withCaps(caps);
 
 		// Write to allowed path — should succeed
-		Job writeOk = engine.jobs().invokeOperation("covia:write",
+		Job writeOk = engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/allowed/doc", Fields.VALUE, Strings.create("ok")), ctx);
 		assertNotNull(writeOk.awaitResult(5000), "Write to allowed path should succeed");
 
 		// Read from anywhere — should succeed (crud/read on w/)
-		Job readOk = engine.jobs().invokeOperation("covia:read",
+		Job readOk = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, "w/allowed/doc"), ctx);
 		assertNotNull(readOk.awaitResult(5000), "Read should succeed");
 
 		// Write to disallowed path — should fail
 		assertThrows(Exception.class, () -> {
-			engine.jobs().invokeOperation("covia:write",
+			engine.jobs().invokeOperation("v/ops/covia/write",
 				Maps.of(Fields.PATH, "w/forbidden/doc", Fields.VALUE, Strings.create("bad")), ctx);
 		}, "Write to disallowed path should throw");
 	}
@@ -318,7 +318,7 @@ public class CapabilityCheckerTest {
 			convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey())
 		);
 		// No caps = unrestricted — write anywhere
-		Job writeOk = engine.jobs().invokeOperation("covia:write",
+		Job writeOk = engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/anything", Fields.VALUE, Strings.create("fine")), ctx);
 		assertNotNull(writeOk.awaitResult(5000), "No caps should mean unrestricted access");
 	}

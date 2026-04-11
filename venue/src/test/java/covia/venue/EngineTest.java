@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -32,6 +33,7 @@ import convex.core.util.JSON;
 import convex.core.util.Utils;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.grid.Asset;
 import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -96,7 +98,7 @@ public class EngineTest {
 	@Test
 	public void testAdapterOperation() {
 		ACell input=Maps.of("message", "Hello World");
-		Job job=venue.jobs().invokeOperation("test:echo", input, RequestContext.INTERNAL);
+		Job job=venue.jobs().invokeOperation("v/test/ops/echo", input, RequestContext.INTERNAL);
 		AMap<AString, ACell> status = job.getData();
 
 		ACell jobID = RT.getIn(status, "id");
@@ -114,7 +116,7 @@ public class EngineTest {
 	@Test
 	public void testAdapterError() {
 		ACell input=Maps.of("message", "Test Error");
-		Job job=venue.jobs().invokeOperation("test:random", input, RequestContext.INTERNAL);
+		Job job=venue.jobs().invokeOperation("v/test/ops/random", input, RequestContext.INTERNAL);
 		AMap<AString, ACell> status = job.getData();
 
 		ACell jobID = RT.getIn(status, "id");
@@ -214,7 +216,7 @@ public class EngineTest {
 	@Test
 	public void testAwaitResultSuccess() {
 		ACell input = Maps.of("message", "Hello");
-		Job job = venue.jobs().invokeOperation("test:echo", input, RequestContext.INTERNAL);
+		Job job = venue.jobs().invokeOperation("v/test/ops/echo", input, RequestContext.INTERNAL);
 
 		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
@@ -224,7 +226,7 @@ public class EngineTest {
 	@Test
 	public void testAwaitResultFailure() {
 		ACell input = Maps.of("message", "This should fail");
-		Job job = venue.jobs().invokeOperation("test:error", input, RequestContext.INTERNAL);
+		Job job = venue.jobs().invokeOperation("v/test/ops/error", input, RequestContext.INTERNAL);
 
 		assertThrows(JobFailedException.class, () -> job.awaitResult(5000));
 	}
@@ -232,7 +234,7 @@ public class EngineTest {
 	@Test
 	public void testAwaitResultAfterCompletion() throws Exception {
 		ACell input = Maps.of("message", "Fail fast");
-		Job job = venue.jobs().invokeOperation("test:error", input, RequestContext.INTERNAL);
+		Job job = venue.jobs().invokeOperation("v/test/ops/error", input, RequestContext.INTERNAL);
 
 		Thread.sleep(100);
 
@@ -263,7 +265,7 @@ public class EngineTest {
 
 	@Test
 	public void testResolveAssetHashOperationName() {
-		Hash resolved = venue.resolveHash("test:echo");
+		Hash resolved = venue.resolveHash("v/test/ops/echo");
 		assertNotNull(resolved, "test:echo should resolve to an asset hash");
 		assertNotNull(venue.getMetaValue(resolved));
 	}
@@ -289,7 +291,7 @@ public class EngineTest {
 	@Test
 	public void testInvokeViaOperationName() {
 		ACell input = Maps.of("message", "Hello via name");
-		Job job = venue.jobs().invokeOperation("test:echo", input, RequestContext.INTERNAL);
+		Job job = venue.jobs().invokeOperation("v/test/ops/echo", input, RequestContext.INTERNAL);
 
 		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
@@ -297,15 +299,16 @@ public class EngineTest {
 	}
 
 	@Test
-	public void testOperationRegistry() {
-		var registry = venue.getOperationRegistry();
-		assertTrue(registry.count() > 0, "Operation registry should not be empty");
+	public void testCatalogResolution() {
+		// Venue catalog ops resolve via universal lattice navigation.
+		Asset echo = venue.resolveAsset(Strings.create("v/test/ops/echo"));
+		assertNotNull(echo, "v/test/ops/echo should resolve");
 
-		Hash echoHash = venue.resolveOperation("test:echo");
-		assertNotNull(echoHash, "test:echo should be registered");
+		Asset error = venue.resolveAsset(Strings.create("v/test/ops/error"));
+		assertNotNull(error, "v/test/ops/error should resolve");
 
-		Hash errorHash = venue.resolveOperation("test:error");
-		assertNotNull(errorHash, "test:error should be registered");
+		// Distinct assets get distinct hashes
+		assertNotEquals(echo.getID(), error.getID());
 	}
 
 	// ========== Secret resolution ==========
@@ -449,7 +452,7 @@ public class EngineTest {
 	public void testSecretSetOperation() {
 		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
 		ACell input = Maps.of("name", "MY_KEY", "value", "my-secret-value");
-		Job job = venue.jobs().invokeOperation("secret:set", input, aliceCtx);
+		Job job = venue.jobs().invokeOperation("v/ops/secret/set", input, aliceCtx);
 		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
 		assertEquals(Strings.create("MY_KEY"), RT.getIn(result, "name"));
@@ -470,7 +473,7 @@ public class EngineTest {
 
 		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
 		Job job = venue.jobs().invokeOperation(
-			"secret:extract", Maps.of("name", "STOLEN_KEY"), aliceCtx);
+			"v/ops/secret/extract", Maps.of("name", "STOLEN_KEY"), aliceCtx);
 
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
 

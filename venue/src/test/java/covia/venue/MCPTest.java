@@ -162,7 +162,7 @@ public class MCPTest {
 		MCPAdapter mcpAdapter=(MCPAdapter) venue.getAdapter("mcp");
 		AMap<AString,ACell> input=Maps.of("foo",2);
 
-		ACell result=mcpAdapter.callMCPTool(Strings.create(BASE_URL), "test:echo",input,null);
+		ACell result=mcpAdapter.callMCPTool(Strings.create(BASE_URL), "test_echo",input,null);
 		assertEquals(input,result);
 	}
 	
@@ -209,7 +209,7 @@ public class MCPTest {
 		Job job=client.invoke(mcpAdapter.TOOL_CALL,
 				Maps.of(
 					Fields.SERVER,BASE_URL,
-					Fields.TOOL_NAME,"test:echo",
+					Fields.TOOL_NAME,"test_echo",
 					Fields.ARGUMENTS,arguments)).join();
 
 		AMap<AString,AInteger> result=job.awaitResult(5000);

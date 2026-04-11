@@ -145,13 +145,13 @@ Agent definitions have an `agent` object:
   "type": "agent-definition",
   "description": "Extracts structured fields from invoice text",
   "agent": {
-    "operation": "llmagent:chat",
+    "operation": "v/ops/llmagent/chat",
     "config": {
-      "llmOperation": "langchain:openai",
+      "llmOperation": "v/ops/langchain/openai",
       "model": "gpt-4o",
       "systemPrompt": "You are Alice...",
       "responseFormat": { "name": "InvoiceExtraction", "schema": { ... } },
-      "tools": ["covia:read", "covia:write"]
+      "tools": ["v/ops/covia/read", "v/ops/covia/write"]
     }
   }
 }
@@ -177,8 +177,8 @@ Orchestrations are operations with `adapter: "orchestrator"` and a `steps` array
   "operation": {
     "adapter": "orchestrator",
     "steps": [
-      { "op": "agent:request", "input": { "agentId": ["const", "Alice"], ... } },
-      { "op": "agent:request", "input": { "agentId": ["const", "Bob"], "data": [0, "output"] } }
+      { "op": "v/ops/agent/request", "input": { "agentId": ["const", "Alice"], ... } },
+      { "op": "v/ops/agent/request", "input": { "agentId": ["const", "Bob"], "data": [0, "output"] } }
     ],
     "result": {
       "step1": [0, "output"],

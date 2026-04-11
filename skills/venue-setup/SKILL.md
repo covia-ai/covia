@@ -206,7 +206,7 @@ Adapt for other platforms (AWS ECS, Azure Container Instances, fly.io, etc.) as 
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
-| `Cannot start agent` | `config.operation` is a map, not a string | Use plain string: `"llmagent:chat"` |
+| `Cannot start agent` | `config.operation` is a map, not a string | Use plain string: `"v/ops/llmagent/chat"` |
 | MCP tool name rejected | Colons in tool names | Rebuild venue (fix in MCP.java sanitises names) |
 | `Job not found` | Wrong job ID format | Use the ID from `agent_request` response |
 | Agent SLEEPING but not running | No pending tasks or messages | Use `agent_request` (not `agent_message`) to submit work |

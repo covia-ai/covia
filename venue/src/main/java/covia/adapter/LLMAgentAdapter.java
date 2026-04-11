@@ -62,7 +62,7 @@ import covia.venue.RequestContext;
  * <h3>State structure</h3>
  * <pre>{@code
  * { "config": {
- *     "llmOperation": "langchain:openai",
+ *     "llmOperation": "v/ops/langchain/openai",
  *     "model": "gpt-4o-mini",
  *     "systemPrompt": "You are...",
  *     "tools": [{name, description, parameters}]
@@ -83,7 +83,7 @@ public class LLMAgentAdapter extends AAdapter {
 		+ "Use tools and grid operations to complete tasks. "
 		+ "Give concise, clear and accurate responses.");
 
-	private static final AString DEFAULT_LLM_OPERATION = Strings.create("langchain:openai");
+	private static final AString DEFAULT_LLM_OPERATION = Strings.create("v/ops/langchain/openai");
 
 	// State field keys
 	private static final AString K_LOADS = Strings.intern("loads");
@@ -227,24 +227,24 @@ public class LLMAgentAdapter extends AAdapter {
 
 	/** Default tool operations — resolved via buildConfigTools at runtime */
 	private static final AVector<ACell> DEFAULT_TOOL_OPS = (AVector<ACell>) Vectors.of(
-		(ACell) Strings.create("agent:create"),
-		(ACell) Strings.create("agent:message"),
-		(ACell) Strings.create("agent:request"),
-		(ACell) Strings.create("asset:store"),
-		(ACell) Strings.create("asset:get"),
-		(ACell) Strings.create("asset:list"),
-		(ACell) Strings.create("asset:content"),
-		(ACell) Strings.create("asset:pin"),
-		(ACell) Strings.create("grid:run"),
-		(ACell) Strings.create("covia:read"),
-		(ACell) Strings.create("covia:write"),
-		(ACell) Strings.create("covia:delete"),
-		(ACell) Strings.create("covia:append"),
-		(ACell) Strings.create("covia:slice"),
-		(ACell) Strings.create("covia:list"),
-		(ACell) Strings.create("covia:inspect"),
-		(ACell) Strings.create("schema:validate"),
-		(ACell) Strings.create("schema:infer")
+		(ACell) Strings.create("v/ops/agent/create"),
+		(ACell) Strings.create("v/ops/agent/message"),
+		(ACell) Strings.create("v/ops/agent/request"),
+		(ACell) Strings.create("v/ops/asset/store"),
+		(ACell) Strings.create("v/ops/asset/get"),
+		(ACell) Strings.create("v/ops/asset/list"),
+		(ACell) Strings.create("v/ops/asset/content"),
+		(ACell) Strings.create("v/ops/asset/pin"),
+		(ACell) Strings.create("v/ops/grid/run"),
+		(ACell) Strings.create("v/ops/covia/read"),
+		(ACell) Strings.create("v/ops/covia/write"),
+		(ACell) Strings.create("v/ops/covia/delete"),
+		(ACell) Strings.create("v/ops/covia/append"),
+		(ACell) Strings.create("v/ops/covia/slice"),
+		(ACell) Strings.create("v/ops/covia/list"),
+		(ACell) Strings.create("v/ops/covia/inspect"),
+		(ACell) Strings.create("v/ops/schema/validate"),
+		(ACell) Strings.create("v/ops/schema/infer")
 	);
 
 	/** Task tools only available when there are outstanding tasks */

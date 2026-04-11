@@ -52,7 +52,7 @@
 		},
 		"steps": [
 			{
-				"op": "http:GET",
+				"op": "v/ops/http/get",
 				"name": "Google Search Request",
 				"input": {
 					"url": ["const", "https://www.google.com/search"],

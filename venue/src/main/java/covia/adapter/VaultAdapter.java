@@ -52,7 +52,7 @@ public class VaultAdapter extends AAdapter {
 		installAsset("vault/list",   ASSETS_PATH + "list.json");
 		installAsset("vault/mkdir",  ASSETS_PATH + "mkdir.json");
 		installAsset("vault/delete", ASSETS_PATH + "delete.json");
-		log.info("Vault adapter installed with {} operations", operationNames.count());
+		log.info("Vault adapter installed with {} operations", pendingCatalogEntries.size());
 	}
 
 	private static final AString OP_KEY = Strings.intern("operation");

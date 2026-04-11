@@ -41,32 +41,32 @@ public class DLFSAdapterTest {
 	@Test
 	public void testCreateAndListDrives() {
 		// No drives initially
-		ACell result = run("dlfs:listDrives", Maps.empty());
+		ACell result = run("v/ops/dlfs/list-drives", Maps.empty());
 		AVector<?> drives = RT.ensureVector(RT.getIn(result, "drives"));
 		assertNotNull(drives);
 		long initialCount = drives.count();
 
 		// Create health-vault drive
-		result = run("dlfs:createDrive", Maps.of("name", "health-vault"));
+		result = run("v/ops/dlfs/create-drive", Maps.of("name", "health-vault"));
 		assertEquals(true, RT.bool(RT.getIn(result, "created")));
 
 		// List should show it
-		result = run("dlfs:listDrives", Maps.empty());
+		result = run("v/ops/dlfs/list-drives", Maps.empty());
 		drives = RT.ensureVector(RT.getIn(result, "drives"));
 		assertEquals(initialCount + 1, drives.count());
 		assertTrue(drives.toString().contains("health-vault"));
 
 		// Creating same drive again is idempotent (lattice-backed)
-		result = run("dlfs:createDrive", Maps.of("name", "health-vault"));
+		result = run("v/ops/dlfs/create-drive", Maps.of("name", "health-vault"));
 		assertTrue(RT.bool(RT.getIn(result, "created")));
 	}
 
 	@Test
 	public void testWriteAndReadFile() {
-		run("dlfs:createDrive", Maps.of("name", "test-rw"));
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-rw"));
 
 		// Write a file
-		ACell result = run("dlfs:write", Maps.of(
+		ACell result = run("v/ops/dlfs/write", Maps.of(
 			"drive", "test-rw",
 			"path", "profile.json",
 			"content", "{\"name\": \"Sarah Smith\"}"
@@ -76,7 +76,7 @@ public class DLFSAdapterTest {
 		assertTrue(written > 0);
 
 		// Read it back
-		result = run("dlfs:read", Maps.of("drive", "test-rw", "path", "profile.json"));
+		result = run("v/ops/dlfs/read", Maps.of("drive", "test-rw", "path", "profile.json"));
 		String content = RT.ensureString(RT.getIn(result, "content")).toString();
 		assertEquals("{\"name\": \"Sarah Smith\"}", content);
 		assertEquals("utf-8", RT.ensureString(RT.getIn(result, "encoding")).toString());
@@ -84,21 +84,21 @@ public class DLFSAdapterTest {
 
 	@Test
 	public void testMkdirAndList() {
-		run("dlfs:createDrive", Maps.of("name", "test-dir"));
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-dir"));
 
 		// Create directory
-		ACell result = run("dlfs:mkdir", Maps.of("drive", "test-dir", "path", "medications"));
+		ACell result = run("v/ops/dlfs/mkdir", Maps.of("drive", "test-dir", "path", "medications"));
 		assertTrue(RT.bool(RT.getIn(result, "created")));
 
 		// Write file inside
-		run("dlfs:write", Maps.of(
+		run("v/ops/dlfs/write", Maps.of(
 			"drive", "test-dir",
 			"path", "medications/levothyroxine.json",
 			"content", "{\"dose\": \"75mcg\"}"
 		));
 
 		// List root
-		result = run("dlfs:list", Maps.of("drive", "test-dir"));
+		result = run("v/ops/dlfs/list", Maps.of("drive", "test-dir"));
 		AVector<?> entries = RT.ensureVector(RT.getIn(result, "entries"));
 		assertNotNull(entries);
 		assertEquals(1, entries.count());
@@ -106,7 +106,7 @@ public class DLFSAdapterTest {
 		assertEquals("directory", RT.getIn(entries.get(0), "type").toString());
 
 		// List medications dir
-		result = run("dlfs:list", Maps.of("drive", "test-dir", "path", "medications"));
+		result = run("v/ops/dlfs/list", Maps.of("drive", "test-dir", "path", "medications"));
 		entries = RT.ensureVector(RT.getIn(result, "entries"));
 		assertEquals(1, entries.count());
 		assertEquals("levothyroxine.json", RT.getIn(entries.get(0), "name").toString());
@@ -115,29 +115,29 @@ public class DLFSAdapterTest {
 
 	@Test
 	public void testDeleteFile() {
-		run("dlfs:createDrive", Maps.of("name", "test-del"));
-		run("dlfs:write", Maps.of("drive", "test-del", "path", "temp.txt", "content", "delete me"));
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-del"));
+		run("v/ops/dlfs/write", Maps.of("drive", "test-del", "path", "temp.txt", "content", "delete me"));
 
 		// Delete
-		ACell result = run("dlfs:delete", Maps.of("drive", "test-del", "path", "temp.txt"));
+		ACell result = run("v/ops/dlfs/delete", Maps.of("drive", "test-del", "path", "temp.txt"));
 		assertTrue(RT.bool(RT.getIn(result, "deleted")));
 
 		// Read should fail
 		assertThrows(Exception.class, () ->
-			run("dlfs:read", Maps.of("drive", "test-del", "path", "temp.txt"))
+			run("v/ops/dlfs/read", Maps.of("drive", "test-del", "path", "temp.txt"))
 		);
 	}
 
 	@Test
 	public void testDeleteDrive() {
-		run("dlfs:createDrive", Maps.of("name", "test-remove"));
-		run("dlfs:write", Maps.of("drive", "test-remove", "path", "data.txt", "content", "hello"));
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-remove"));
+		run("v/ops/dlfs/write", Maps.of("drive", "test-remove", "path", "data.txt", "content", "hello"));
 
-		ACell result = run("dlfs:deleteDrive", Maps.of("name", "test-remove"));
+		ACell result = run("v/ops/dlfs/delete-drive", Maps.of("name", "test-remove"));
 		assertTrue(RT.bool(RT.getIn(result, "deleted")));
 
 		// Drive tombstoned on lattice — re-accessing creates a fresh empty drive
-		result = run("dlfs:list", Maps.of("drive", "test-remove"));
+		result = run("v/ops/dlfs/list", Maps.of("drive", "test-remove"));
 		AVector<?> entries = RT.ensureVector(RT.getIn(result, "entries"));
 		assertEquals(0, entries.count(), "Deleted drive should be empty when re-accessed");
 	}
@@ -146,7 +146,7 @@ public class DLFSAdapterTest {
 	@SuppressWarnings("unchecked")
 	public void testWriteReachesRootCursor() {
 		// Write a file via DLFS adapter
-		run("dlfs:write", Maps.of("drive", "sync-test", "path", "hello.txt", "content", "sync check"));
+		run("v/ops/dlfs/write", Maps.of("drive", "sync-test", "path", "hello.txt", "content", "sync check"));
 
 		// Verify the root cursor has DLFS data
 		ALatticeCursor<Index<Keyword, ACell>> root = engine.getRootCursor();
@@ -166,7 +166,7 @@ public class DLFSAdapterTest {
 		}
 
 		// Write via adapter
-		run("dlfs:write", Maps.of("drive", "sync-cb-test", "path", "test.txt", "content", "callback check"));
+		run("v/ops/dlfs/write", Maps.of("drive", "sync-cb-test", "path", "test.txt", "content", "callback check"));
 
 		// Adapter write alone shouldn't trigger onSync
 		int beforeSync = syncCount.get();
@@ -184,23 +184,23 @@ public class DLFSAdapterTest {
 	@Test
 	public void testDriveNotFound() {
 		assertThrows(Exception.class, () ->
-			run("dlfs:read", Maps.of("drive", "nonexistent", "path", "foo.txt"))
+			run("v/ops/dlfs/read", Maps.of("drive", "nonexistent", "path", "foo.txt"))
 		);
 	}
 
 	@Test
 	public void testOverwriteFile() {
-		run("dlfs:createDrive", Maps.of("name", "test-overwrite"));
-		run("dlfs:write", Maps.of("drive", "test-overwrite", "path", "data.txt", "content", "v1"));
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-overwrite"));
+		run("v/ops/dlfs/write", Maps.of("drive", "test-overwrite", "path", "data.txt", "content", "v1"));
 
 		// Overwrite
-		ACell result = run("dlfs:write", Maps.of(
+		ACell result = run("v/ops/dlfs/write", Maps.of(
 			"drive", "test-overwrite", "path", "data.txt", "content", "v2"
 		));
 		assertEquals(false, RT.bool(RT.getIn(result, "created")));
 
 		// Read should return v2
-		result = run("dlfs:read", Maps.of("drive", "test-overwrite", "path", "data.txt"));
+		result = run("v/ops/dlfs/read", Maps.of("drive", "test-overwrite", "path", "data.txt"));
 		assertEquals("v2", RT.ensureString(RT.getIn(result, "content")).toString());
 	}
 }

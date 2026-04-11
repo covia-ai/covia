@@ -50,7 +50,7 @@ public class DLFSPersistenceTest {
 
 			// Write via DLFS adapter
 			ACell result = engine.jobs().invokeOperation(
-				"dlfs:write",
+				"v/ops/dlfs/write",
 				Maps.of("drive", "health-vault", "path", "test.txt", "content", "persistent!"),
 				RequestContext.of(ALICE_DID)
 			).awaitResult(5000);
@@ -64,7 +64,7 @@ public class DLFSPersistenceTest {
 
 			// Verify we can read the file back immediately (same session)
 			ACell readResult = engine.jobs().invokeOperation(
-				"dlfs:read",
+				"v/ops/dlfs/read",
 				Maps.of("drive", "health-vault", "path", "test.txt"),
 				RequestContext.of(ALICE_DID)
 			).awaitResult(5000);
@@ -133,7 +133,7 @@ public class DLFSPersistenceTest {
 
 			// Read via adapter
 			ACell result = engine.jobs().invokeOperation(
-				"dlfs:read",
+				"v/ops/dlfs/read",
 				Maps.of("drive", "health-vault", "path", "test.txt"),
 				RequestContext.of(ALICE_DID)
 			).awaitResult(5000);

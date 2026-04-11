@@ -47,14 +47,14 @@
 		"steps": [
 			{
 				"name": "Encode Query",
-				"op": "jvm:urlEncode",
+				"op": "v/ops/jvm/url-encode",
 				"input": {
 					"input": ["input", "query"]
 				}
 			},
 			{
 				"name": "Construct URL",
-				"op": "jvm:stringConcat",
+				"op": "v/ops/jvm/string-concat",
 				"input": {
 					"first": ["const", "https://www.google.com/search?q="],
 					"second": [0, "result"],
@@ -63,7 +63,7 @@
 			},
 			{
 				"name": "Perform Search",
-				"op": "http:get",
+				"op": "v/ops/http/get",
 				"input": {
 					"url": [1, "result"],
 					"headers": ["const", {

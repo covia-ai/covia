@@ -157,7 +157,10 @@ public class JobManager {
 			throw new IllegalStateException("Adapter not available: " + adapterName);
 		}
 
-		AString opID = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER));
+		// Persist the bare hex hash of the metadata as the op reference.
+		// Hex hashes are universally resolvable via the resolvePath bare-hex
+		// branch and survive any change in catalog naming or adapter registry.
+		AString opID = Strings.create(meta.getHash().toHexString());
 		Job job = submitJob(opID, meta, input, callerDID);
 
 		// Set jobId on context so adapters can use t/ (job-scoped temp).

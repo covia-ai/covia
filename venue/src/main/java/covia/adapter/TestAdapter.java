@@ -259,7 +259,7 @@ public class TestAdapter extends AAdapter {
 
     /**
      * Test LLM with tool calls: if no tool result messages are present, returns
-     * a tool call request for "test:echo". Once tool results appear, returns a
+     * a tool call request for "v/test/ops/echo". Once tool results appear, returns a
      * text response summarising them. Used for testing the tool call loop.
      */
     @SuppressWarnings("unchecked")
@@ -293,7 +293,7 @@ public class TestAdapter extends AAdapter {
                 "role", Strings.create("assistant"),
                 "toolCalls", Vectors.of(Maps.of(
                     "id", Strings.create("call_1"),
-                    "name", Strings.create("test:echo"),
+                    "name", Strings.create("v/test/ops/echo"),
                     "arguments", Strings.create("{\"echo\":\"" + lastUserMsg + "\"}")
                 ))
             );

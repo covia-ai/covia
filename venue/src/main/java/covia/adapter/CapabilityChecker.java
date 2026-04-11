@@ -30,7 +30,7 @@ public class CapabilityChecker {
 	 * Checks whether an operation invocation is allowed by the agent's caps.
 	 *
 	 * @param caps Capability attenuations (null = unrestricted)
-	 * @param operation The operation being invoked (e.g. "covia:write")
+	 * @param operation The operation being invoked (e.g. "v/ops/covia/write")
 	 * @param input The tool call input
 	 * @return null if allowed, or an error message string if denied
 	 */
@@ -60,15 +60,31 @@ public class CapabilityChecker {
 	/**
 	 * Maps an operation name to a required ability.
 	 */
+	/**
+	 * Maps an operation reference to a required ability. Accepts both the
+	 * legacy dispatch-string form ({@code "covia:write"}) — which is what
+	 * {@link covia.venue.JobManager} sees in {@code operation.adapter}
+	 * during invocation — and the catalog path form ({@code "v/ops/covia/write"}).
+	 */
 	static String operationAbility(String operation) {
 		return switch (operation) {
+			// Catalog path form
+			case "v/ops/covia/read", "v/ops/covia/list", "v/ops/covia/slice" -> "crud/read";
+			case "v/ops/covia/write", "v/ops/covia/append" -> "crud/write";
+			case "v/ops/covia/delete" -> "crud/delete";
+			case "v/ops/agent/create" -> "agent/create";
+			case "v/ops/agent/request" -> "agent/request";
+			case "v/ops/agent/message" -> "agent/message";
+			case "v/ops/asset/store" -> "asset/store";
+			case "v/ops/asset/get", "v/ops/asset/list" -> "asset/read";
+			case "v/ops/grid/run" -> "invoke";
+			// Legacy dispatch-string form (operation.adapter)
 			case "covia:read", "covia:list", "covia:slice" -> "crud/read";
 			case "covia:write", "covia:append" -> "crud/write";
 			case "covia:delete" -> "crud/delete";
 			case "agent:create" -> "agent/create";
 			case "agent:request" -> "agent/request";
 			case "agent:message" -> "agent/message";
-			case "agent:query" -> "agent/query";
 			case "asset:store" -> "asset/store";
 			case "asset:get", "asset:list" -> "asset/read";
 			case "grid:run" -> "invoke";
@@ -81,12 +97,16 @@ public class CapabilityChecker {
 	 * Returns null for operations that don't target a specific path.
 	 */
 	static String extractResource(String operation, ACell input) {
-		if (operation.startsWith("covia:")) {
+		// Path-targeted ops: pull the path arg out of the input.
+		if (operation.startsWith("v/ops/covia/") || operation.startsWith("covia:")) {
 			AString path = RT.ensureString(RT.getIn(input, K_PATH));
 			return (path != null) ? path.toString() : null;
 		}
-		if ("agent:request".equals(operation) || "agent:message".equals(operation)
-				|| "agent:query".equals(operation) || "agent:create".equals(operation)) {
+		// Agent-targeted ops: derive a g/<id> resource string from the agentId.
+		if ("v/ops/agent/request".equals(operation) || "v/ops/agent/message".equals(operation)
+				|| "v/ops/agent/create".equals(operation)
+				|| "agent:request".equals(operation) || "agent:message".equals(operation)
+				|| "agent:create".equals(operation)) {
 			AString agentId = RT.ensureString(RT.getIn(input, Strings.intern("agentId")));
 			return (agentId != null) ? "g/" + agentId : "g/";
 		}

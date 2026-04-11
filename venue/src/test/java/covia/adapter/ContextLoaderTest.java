@@ -58,7 +58,7 @@ public class ContextLoaderTest {
 		assertFalse(ContextLoader.isNamespacePath("Always use British English"));
 		assertFalse(ContextLoader.isNamespacePath("abc123def456"));
 		assertFalse(ContextLoader.isNamespacePath("/a/abc123"));
-		assertFalse(ContextLoader.isNamespacePath("test:echo"));
+		assertFalse(ContextLoader.isNamespacePath("v/test/ops/echo"));
 	}
 
 	@Test
@@ -75,8 +75,8 @@ public class ContextLoaderTest {
 		assertTrue(ContextLoader.isAssetReference("did:key:z6MkAlice/a/abc123"));
 
 		// Adapter:op pattern
-		assertTrue(ContextLoader.isAssetReference("test:echo"));
-		assertTrue(ContextLoader.isAssetReference("langchain:openai"));
+		assertTrue(ContextLoader.isAssetReference("v/test/ops/echo"));
+		assertTrue(ContextLoader.isAssetReference("v/ops/langchain/openai"));
 
 		// Literal text — should NOT be asset references
 		assertFalse(ContextLoader.isAssetReference("Always use British English"));
@@ -87,7 +87,7 @@ public class ContextLoaderTest {
 	@Test
 	public void testDeriveLabel() {
 		assertEquals("w/docs/rules", ContextLoader.deriveLabel("w/docs/rules"));
-		assertEquals("test:echo", ContextLoader.deriveLabel("test:echo"));
+		assertEquals("v/test/ops/echo", ContextLoader.deriveLabel("v/test/ops/echo"));
 		// Hex hash gets truncated
 		String hash = "a".repeat(64);
 		assertEquals("aaaaaaaaaaaa...", ContextLoader.deriveLabel(hash));
@@ -133,7 +133,7 @@ public class ContextLoaderTest {
 	@Test
 	public void testWorkspacePathExists() {
 		// Write some data to workspace
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/docs/test-rules"),
 				Strings.create("value"), Strings.create("Rule 1: Always validate")),
 			ctx).awaitResult(5000);
@@ -154,7 +154,7 @@ public class ContextLoaderTest {
 	@Test
 	public void testWorkspacePathStructuredValue() {
 		// Write structured data (map)
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/config/policy"),
 				Strings.create("value"), Maps.of(
 					Strings.create("max_amount"), 50000,
@@ -172,7 +172,7 @@ public class ContextLoaderTest {
 	@Test
 	public void testAssetWithTextContent() {
 		// Store an asset with text content
-		Job storeJob = engine.jobs().invokeOperation("asset:store",
+		Job storeJob = engine.jobs().invokeOperation("v/ops/asset/store",
 			Maps.of(
 				Strings.create("metadata"), Maps.of(
 					Strings.create("name"), Strings.create("Test Policy"),
@@ -192,7 +192,7 @@ public class ContextLoaderTest {
 	@Test
 	public void testAssetDescriptionFallback() {
 		// Store an asset without content — should fall back to description
-		Job storeJob = engine.jobs().invokeOperation("asset:store",
+		Job storeJob = engine.jobs().invokeOperation("v/ops/asset/store",
 			Maps.of(
 				Strings.create("metadata"), Maps.of(
 					Strings.create("name"), Strings.create("My Operation"),
@@ -210,7 +210,7 @@ public class ContextLoaderTest {
 	@Test
 	public void testAssetByRegisteredName() {
 		// test:echo is a registered operation name
-		ACell msg = loader.resolveEntry(Strings.create("test:echo"), ctx);
+		ACell msg = loader.resolveEntry(Strings.create("v/test/ops/echo"), ctx);
 		assertNotNull(msg, "Should resolve registered operation name");
 		String content = RT.ensureString(RT.getIn(msg, Strings.intern("content"))).toString();
 		// Should contain the operation's description
@@ -229,7 +229,7 @@ public class ContextLoaderTest {
 	@Test
 	public void testJobResultComplete() {
 		// Create a completed job via test:echo
-		Job job = engine.jobs().invokeOperation("test:echo",
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo",
 			Maps.of(Strings.create("message"), Strings.create("hello world")),
 			ctx);
 		ACell result = job.awaitResult(5000);
@@ -251,7 +251,7 @@ public class ContextLoaderTest {
 	@Test
 	public void testJobResultWithPath() {
 		// Create a completed job with structured output
-		Job job = engine.jobs().invokeOperation("test:echo",
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo",
 			Maps.of(Strings.create("nested"), Maps.of(
 				Strings.create("value"), Strings.create("deep data"))),
 			ctx);
@@ -291,7 +291,7 @@ public class ContextLoaderTest {
 	@Test
 	public void testGridOpEntry() {
 		ACell entry = Maps.of(
-			Strings.intern("op"), Strings.create("test:echo"),
+			Strings.intern("op"), Strings.create("v/test/ops/echo"),
 			Strings.intern("input"), Maps.of(Strings.create("greeting"), Strings.create("hello from op")),
 			Strings.intern("label"), Strings.create("Echo Op")
 		);
@@ -305,13 +305,13 @@ public class ContextLoaderTest {
 	@Test
 	public void testGridOpWorkspaceRead() {
 		// Write data, then load via op entry
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/context-test"),
 				Strings.create("value"), Strings.create("loaded via op")),
 			ctx).awaitResult(5000);
 
 		ACell entry = Maps.of(
-			Strings.intern("op"), Strings.create("covia:read"),
+			Strings.intern("op"), Strings.create("v/ops/covia/read"),
 			Strings.intern("input"), Maps.of(Strings.create("path"), Strings.create("w/context-test"))
 		);
 		ACell msg = loader.resolveEntry(entry, ctx);
@@ -323,7 +323,7 @@ public class ContextLoaderTest {
 	@Test
 	public void testGridOpFailureNotRequired() {
 		ACell entry = Maps.of(
-			Strings.intern("op"), Strings.create("test:error"),
+			Strings.intern("op"), Strings.create("v/test/ops/error"),
 			Strings.intern("input"), Maps.of(Strings.create("message"), Strings.create("boom"))
 		);
 		ACell msg = loader.resolveEntry(entry, ctx);
@@ -333,7 +333,7 @@ public class ContextLoaderTest {
 	@Test
 	public void testGridOpFailureRequired() {
 		ACell entry = Maps.of(
-			Strings.intern("op"), Strings.create("test:error"),
+			Strings.intern("op"), Strings.create("v/test/ops/error"),
 			Strings.intern("input"), Maps.of(Strings.create("message"), Strings.create("boom")),
 			Strings.intern("required"), CVMBool.TRUE
 		);
@@ -344,7 +344,7 @@ public class ContextLoaderTest {
 
 	@Test
 	public void testMapRefWorkspace() {
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/ref-test"),
 				Strings.create("value"), Strings.create("ref content")),
 			ctx).awaitResult(5000);
@@ -383,7 +383,7 @@ public class ContextLoaderTest {
 	@Test
 	public void testResolveMultipleEntries() {
 		// Write workspace data
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/batch-test"),
 				Strings.create("value"), Strings.create("batch value")),
 			ctx).awaitResult(5000);
@@ -429,7 +429,7 @@ public class ContextLoaderTest {
 	@Test
 	public void testCellExplorerRendersStructuredValue() {
 		// Write structured data to workspace
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/explorer-test"),
 				Strings.create("value"), Maps.of(
 					Strings.create("name"), Strings.create("Alice"),
@@ -454,7 +454,7 @@ public class ContextLoaderTest {
 		for (int i = 0; i < 100; i++) {
 			largeMap = largeMap.assoc(Strings.create("key" + i), Strings.create("value" + i + " ".repeat(50)));
 		}
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/large-test"),
 				Strings.create("value"), largeMap),
 			ctx).awaitResult(5000);
@@ -471,7 +471,7 @@ public class ContextLoaderTest {
 	@Test
 	public void testNullExplorerPreservesLegacyBehaviour() {
 		// Write data
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/legacy-test"),
 				Strings.create("value"), Strings.create("plain text")),
 			ctx).awaitResult(5000);

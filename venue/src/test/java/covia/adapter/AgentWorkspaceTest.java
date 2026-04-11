@@ -47,11 +47,11 @@ public class AgentWorkspaceTest {
 	@Test
 	public void testAgentWorkspaceAcrossRuns() {
 		// Create an LLM agent that uses workspace tools
-		engine.jobs().invokeOperation("agent:create",
+		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "workspace-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "llmagent:chat"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
 				AgentState.KEY_STATE, Maps.of("config", Maps.of(
-					"llmOperation", "test:workspacellm"))),
+					"llmOperation", "v/test/ops/workspacellm"))),
 			ALICE).awaitResult(5000);
 
 		// Run 1: agent writes knowledge, appends to log, reads back
@@ -59,7 +59,7 @@ public class AgentWorkspaceTest {
 			.agent("workspace-agent")
 			.deliverMessage(Maps.of("content", "Learn about lattice technology"));
 
-		Job run1 = engine.jobs().invokeOperation("agent:trigger",
+		Job run1 = engine.jobs().invokeOperation("v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "workspace-agent"), ALICE);
 		run1.awaitResult(30000);
 
@@ -70,13 +70,13 @@ public class AgentWorkspaceTest {
 		assertEquals(1, agent.getTimeline().count());
 
 		// Knowledge persisted
-		Job readK = engine.jobs().invokeOperation("covia:read",
+		Job readK = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, "w/knowledge/topic"), ALICE);
 		assertEquals(Strings.create("lattice technology"),
 			RT.getIn(readK.awaitResult(5000), "value"));
 
 		// Log has one entry
-		Job readLog = engine.jobs().invokeOperation("covia:read",
+		Job readLog = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, "w/log"), ALICE);
 		AVector<ACell> log1 = RT.getIn(readLog.awaitResult(5000), "value");
 		assertEquals(1, log1.count());
@@ -86,12 +86,12 @@ public class AgentWorkspaceTest {
 			.agent("workspace-agent")
 			.deliverMessage(Maps.of("content", "Continue learning"));
 
-		Job run2 = engine.jobs().invokeOperation("agent:trigger",
+		Job run2 = engine.jobs().invokeOperation("v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "workspace-agent"), ALICE);
 		run2.awaitResult(30000);
 
 		// Log now has two entries
-		Job readLog2 = engine.jobs().invokeOperation("covia:read",
+		Job readLog2 = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, "w/log"), ALICE);
 		AVector<ACell> log2 = RT.getIn(readLog2.awaitResult(5000), "value");
 		assertEquals(2, log2.count(), "Log should accumulate across agent runs");

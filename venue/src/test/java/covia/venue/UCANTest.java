@@ -49,10 +49,10 @@ public class UCANTest {
 		venueDID = engine.getDIDString();
 
 		// Alice writes some workspace data
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/shared/doc", Fields.VALUE, Strings.create("shared content")),
 			ALICE).awaitResult(5000);
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/private/secret", Fields.VALUE, Strings.create("private content")),
 			ALICE).awaitResult(5000);
 	}
@@ -63,7 +63,7 @@ public class UCANTest {
 	public void testIssueToken() {
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 
-		Job job = engine.jobs().invokeOperation("ucan:issue",
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(
 				UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
@@ -88,7 +88,7 @@ public class UCANTest {
 	public void testIssueRejectsOtherUserNamespace() {
 		// Alice cannot issue a token for Bob's namespace
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
-		Job job = engine.jobs().invokeOperation("ucan:issue",
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(
 				UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
@@ -104,7 +104,7 @@ public class UCANTest {
 	public void testCrossUserReadWithValidProof() {
 		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/w/", "crud/read", 3600);
 
-		Job readJob = engine.jobs().invokeOperation("covia:read",
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
 			withProofs(BOB, token));
 		ACell result = readJob.awaitResult(5000);
@@ -118,14 +118,14 @@ public class UCANTest {
 		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/w/shared/", "crud/read", 3600);
 
 		// Bob can read /w/shared/doc
-		Job readShared = engine.jobs().invokeOperation("covia:read",
+		Job readShared = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
 			withProofs(BOB, token));
 		assertEquals(Strings.create("shared content"),
 			RT.getIn(readShared.awaitResult(5000), "value"));
 
 		// Bob cannot read /w/private/secret (path not covered)
-		Job readPrivate = engine.jobs().invokeOperation("covia:read",
+		Job readPrivate = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, ALICE_DID + "/w/private/secret"),
 			withProofs(BOB, token));
 		assertThrows(Exception.class, () -> readPrivate.awaitResult(5000));
@@ -133,7 +133,7 @@ public class UCANTest {
 
 	@Test
 	public void testCrossUserReadDeniedWithoutProof() {
-		Job readJob = engine.jobs().invokeOperation("covia:read",
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
 			BOB);
 		assertThrows(Exception.class, () -> readJob.awaitResult(5000));
@@ -143,7 +143,7 @@ public class UCANTest {
 	public void testCrossUserReadDeniedExpiredToken() {
 		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/w/", "crud/read", -3600);
 
-		Job readJob = engine.jobs().invokeOperation("covia:read",
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
 			withProofs(BOB, token));
 		assertThrows(Exception.class, () -> readJob.awaitResult(5000));
@@ -154,7 +154,7 @@ public class UCANTest {
 		// Token issued to Carol, but Bob presents it
 		AMap<AString, ACell> token = issueToken(CAROL_DID, ALICE_DID, "/w/", "crud/read", 3600);
 
-		Job readJob = engine.jobs().invokeOperation("covia:read",
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
 			withProofs(BOB, token));
 		assertThrows(Exception.class, () -> readJob.awaitResult(5000));
@@ -164,7 +164,7 @@ public class UCANTest {
 	public void testCrossUserReadWildcardAbility() {
 		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/w/", "*", 3600);
 
-		Job readJob = engine.jobs().invokeOperation("covia:read",
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
 			withProofs(BOB, token));
 		assertEquals(Strings.create("shared content"),
@@ -175,7 +175,7 @@ public class UCANTest {
 	public void testCrossUserListWithProof() {
 		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/w/", "crud/read", 3600);
 
-		Job listJob = engine.jobs().invokeOperation("covia:list",
+		Job listJob = engine.jobs().invokeOperation("v/ops/covia/list",
 			Maps.of(Fields.PATH, ALICE_DID + "/w"),
 			withProofs(BOB, token));
 		ACell result = listJob.awaitResult(5000);
@@ -194,7 +194,7 @@ public class UCANTest {
 			Vectors.of(Capability.create(Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
 			Vectors.empty());
 
-		Job readJob = engine.jobs().invokeOperation("covia:read",
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
 			withProofs(BOB, forged.toMap()));
 		assertThrows(Exception.class, () -> readJob.awaitResult(5000));
@@ -205,7 +205,7 @@ public class UCANTest {
 		// Token grants crud/write but request needs crud/read
 		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/w/", "crud/write", 3600);
 
-		Job readJob = engine.jobs().invokeOperation("covia:read",
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
 			withProofs(BOB, token));
 		assertThrows(Exception.class, () -> readJob.awaitResult(5000));

@@ -20,7 +20,7 @@ public class JVMTest {
 		VenueHTTP covia = TestServer.COVIA;
 		
 		// Test basic string concatenation
-		Job result = covia.invokeSync("jvm:stringConcat", Maps.of(
+		Job result = covia.invokeSync("v/ops/jvm/string-concat", Maps.of(
 			"first", "Hello",
 			"second", "World"
 		));
@@ -49,7 +49,7 @@ public class JVMTest {
 		VenueHTTP covia = TestServer.COVIA;
 		
 		// Test string concatenation with separator
-		Job result = covia.invokeSync("jvm:stringConcat", Maps.of(
+		Job result = covia.invokeSync("v/ops/jvm/string-concat", Maps.of(
 			"first", "apple",
 			"second", "banana",
 			"separator", "|"
@@ -73,7 +73,7 @@ public class JVMTest {
 		VenueHTTP covia = TestServer.COVIA;
 		
 		// Test string concatenation with empty strings
-		Job result = covia.invokeSync("jvm:stringConcat", Maps.of(
+		Job result = covia.invokeSync("v/ops/jvm/string-concat", Maps.of(
 			"first", "",
 			"second", ""
 		));
@@ -96,7 +96,7 @@ public class JVMTest {
 		VenueHTTP covia = TestServer.COVIA;
 		
 		// Test string concatenation with null inputs (should default to empty strings)
-		Job result = covia.invokeSync("jvm:stringConcat", Maps.of());
+		Job result = covia.invokeSync("v/ops/jvm/string-concat", Maps.of());
 		
 		assertEquals(Status.COMPLETE, result.getStatus(), "Job should complete successfully");
 		
@@ -116,7 +116,7 @@ public class JVMTest {
 		VenueHTTP covia = TestServer.COVIA;
 		
 		// Test URL encoding with special characters
-		Job result = covia.invokeSync("jvm:urlEncode", Maps.of(
+		Job result = covia.invokeSync("v/ops/jvm/url-encode", Maps.of(
 			"input", "Hello World! & Co."
 		));
 		
@@ -138,7 +138,7 @@ public class JVMTest {
 		VenueHTTP covia = TestServer.COVIA;
 		
 		// Test URL encoding with empty string
-		Job result = covia.invokeSync("jvm:urlEncode", Maps.of(
+		Job result = covia.invokeSync("v/ops/jvm/url-encode", Maps.of(
 			"input", ""
 		));
 		
@@ -160,7 +160,7 @@ public class JVMTest {
 		VenueHTTP covia = TestServer.COVIA;
 		
 		// Test URL encoding with null input (should default to empty string)
-		Job result = covia.invokeSync("jvm:urlEncode", Maps.of());
+		Job result = covia.invokeSync("v/ops/jvm/url-encode", Maps.of());
 		
 		assertEquals(Status.COMPLETE, result.getStatus(), "Job should complete successfully");
 		
@@ -180,7 +180,7 @@ public class JVMTest {
 		VenueHTTP covia = TestServer.COVIA;
 		
 		// Test URL decoding with encoded string
-		Job result = covia.invokeSync("jvm:urlDecode", Maps.of(
+		Job result = covia.invokeSync("v/ops/jvm/url-decode", Maps.of(
 			"input", "Hello+World%21+%26+Co."
 		));
 		
@@ -202,7 +202,7 @@ public class JVMTest {
 		VenueHTTP covia = TestServer.COVIA;
 		
 		// Test URL decoding with empty string
-		Job result = covia.invokeSync("jvm:urlDecode", Maps.of(
+		Job result = covia.invokeSync("v/ops/jvm/url-decode", Maps.of(
 			"input", ""
 		));
 		
@@ -224,7 +224,7 @@ public class JVMTest {
 		VenueHTTP covia = TestServer.COVIA;
 		
 		// Test URL decoding with null input (should default to empty string)
-		Job result = covia.invokeSync("jvm:urlDecode", Maps.of());
+		Job result = covia.invokeSync("v/ops/jvm/url-decode", Maps.of());
 		
 		assertEquals(Status.COMPLETE, result.getStatus(), "Job should complete successfully");
 		
@@ -246,7 +246,7 @@ public class JVMTest {
 		String original = "Hello World! & Co. + Special/Chars?";
 		
 		// First encode
-		Job encodeResult = covia.invokeSync("jvm:urlEncode", Maps.of(
+		Job encodeResult = covia.invokeSync("v/ops/jvm/url-encode", Maps.of(
 			"input", original
 		));
 		
@@ -254,7 +254,7 @@ public class JVMTest {
 		String encoded = RT.ensureString(RT.getIn(encodeResult.getOutput(), "result")).toString();
 		
 		// Then decode
-		Job decodeResult = covia.invokeSync("jvm:urlDecode", Maps.of(
+		Job decodeResult = covia.invokeSync("v/ops/jvm/url-decode", Maps.of(
 			"input", encoded
 		));
 		

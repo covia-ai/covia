@@ -54,7 +54,7 @@ public class AgentAdapterTest {
 	public void testCreateAgent() {
 		ACell input = Maps.of(Fields.AGENT_ID, "my-assistant");
 		Job job = engine.jobs().invokeOperation(
-			"agent:create", input, RequestContext.of(ALICE_DID));
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
 		assertNotNull(result, "Create should return a result");
@@ -69,7 +69,7 @@ public class AgentAdapterTest {
 			Fields.CONFIG, Maps.of("model", "gpt-4", "temperature", "0.7")
 		);
 		Job job = engine.jobs().invokeOperation(
-			"agent:create", input, RequestContext.of(ALICE_DID));
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
 		job.awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
@@ -88,7 +88,7 @@ public class AgentAdapterTest {
 			Strings.create("model"), Strings.create("gpt-4"));
 
 		engine.jobs().invokeOperation(
-			"covia:write",
+			"v/ops/covia/write",
 			Maps.of(
 				Fields.PATH, Strings.create("w/templates/reader"),
 				Fields.VALUE, template),
@@ -96,7 +96,7 @@ public class AgentAdapterTest {
 
 		// Create an agent from a workspace-path reference
 		Job job = engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "reader-from-template",
 				Fields.CONFIG, Strings.create("w/templates/reader")),
@@ -120,7 +120,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testCreateAgentFromStandardTemplateReader() {
 		Job job = engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "reader-bot",
 				Fields.CONFIG, Strings.create("template:reader")),
@@ -145,7 +145,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testCreateAgentFromStandardTemplateWorker() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "data-worker",
 				Fields.CONFIG, Strings.create("template:worker")),
@@ -160,7 +160,7 @@ public class AgentAdapterTest {
 		assertNotNull(tools);
 		boolean hasWrite = false;
 		for (long i = 0; i < tools.count(); i++) {
-			if (Strings.create("covia:write").equals(tools.get(i))) {
+			if (Strings.create("v/ops/covia/write").equals(tools.get(i))) {
 				hasWrite = true;
 				break;
 			}
@@ -171,7 +171,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testCreateAgentWithConfigRefFailsIfMissing() {
 		Job job = engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "ghost-template",
 				Fields.CONFIG, Strings.create("w/templates/does-not-exist")),
@@ -193,14 +193,14 @@ public class AgentAdapterTest {
 			AgentState.KEY_STATE, Maps.of(Strings.create("memory"), Strings.create("pre-loaded")));
 
 		engine.jobs().invokeOperation(
-			"covia:write",
+			"v/ops/covia/write",
 			Maps.of(
 				Fields.PATH, Strings.create("w/templates/stateful"),
 				Fields.VALUE, template),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "stateful-agent",
 				Fields.CONFIG, Strings.create("w/templates/stateful")),
@@ -227,7 +227,7 @@ public class AgentAdapterTest {
 	public void testCreateMissingAgentId() {
 		ACell input = Maps.of("foo", "bar");
 		Job job = engine.jobs().invokeOperation(
-			"agent:create", input, RequestContext.of(ALICE_DID));
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
 
 		try {
 			job.awaitResult(5000);
@@ -242,11 +242,11 @@ public class AgentAdapterTest {
 		ACell input = Maps.of(Fields.AGENT_ID, "idempotent-agent");
 
 		Job job1 = engine.jobs().invokeOperation(
-			"agent:create", input, RequestContext.of(ALICE_DID));
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
 		job1.awaitResult(5000);
 
 		Job job2 = engine.jobs().invokeOperation(
-			"agent:create", input, RequestContext.of(ALICE_DID));
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
 		ACell result2 = job2.awaitResult(5000);
 
 		assertNotNull(result2);
@@ -259,7 +259,7 @@ public class AgentAdapterTest {
 	public void testForkAgentBasic() {
 		// Create source agent with config and some state
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "source-agent",
 				Fields.CONFIG, Maps.of(
@@ -270,7 +270,7 @@ public class AgentAdapterTest {
 
 		// Fork it
 		Job job = engine.jobs().invokeOperation(
-			"agent:fork",
+			"v/ops/agent/fork",
 			Maps.of(
 				Strings.create("sourceId"), Strings.create("source-agent"),
 				Fields.AGENT_ID, "fork-agent"),
@@ -299,7 +299,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testForkAgentWithConfigOverride() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "base",
 				Fields.CONFIG, Maps.of(
@@ -309,7 +309,7 @@ public class AgentAdapterTest {
 
 		// Fork with config override — systemPrompt changes, model stays
 		engine.jobs().invokeOperation(
-			"agent:fork",
+			"v/ops/agent/fork",
 			Maps.of(
 				Strings.create("sourceId"), Strings.create("base"),
 				Fields.AGENT_ID, "variant",
@@ -330,13 +330,13 @@ public class AgentAdapterTest {
 	public void testForkAgentFreshCollections() {
 		// Create source with messages and tasks
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "busy-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Deliver a message to source
 		engine.jobs().invokeOperation(
-			"agent:message",
+			"v/ops/agent/message",
 			Maps.of(
 				Fields.AGENT_ID, "busy-agent",
 				Fields.MESSAGE, Maps.of("content", "hello")),
@@ -344,7 +344,7 @@ public class AgentAdapterTest {
 
 		// Fork
 		engine.jobs().invokeOperation(
-			"agent:fork",
+			"v/ops/agent/fork",
 			Maps.of(
 				Strings.create("sourceId"), Strings.create("busy-agent"),
 				Fields.AGENT_ID, "busy-fork"),
@@ -365,13 +365,13 @@ public class AgentAdapterTest {
 	@Test
 	public void testForkAgentIncludeTimeline() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "timeline-source"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Fork WITHOUT timeline
 		engine.jobs().invokeOperation(
-			"agent:fork",
+			"v/ops/agent/fork",
 			Maps.of(
 				Strings.create("sourceId"), Strings.create("timeline-source"),
 				Fields.AGENT_ID, "no-timeline-fork"),
@@ -379,7 +379,7 @@ public class AgentAdapterTest {
 
 		// Fork WITH timeline
 		engine.jobs().invokeOperation(
-			"agent:fork",
+			"v/ops/agent/fork",
 			Maps.of(
 				Strings.create("sourceId"), Strings.create("timeline-source"),
 				Fields.AGENT_ID, "with-timeline-fork",
@@ -398,7 +398,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testForkMissingSource() {
 		Job job = engine.jobs().invokeOperation(
-			"agent:fork",
+			"v/ops/agent/fork",
 			Maps.of(
 				Strings.create("sourceId"), Strings.create("ghost"),
 				Fields.AGENT_ID, "fork"),
@@ -413,13 +413,13 @@ public class AgentAdapterTest {
 
 	@Test
 	public void testForkTargetAlreadyExists() {
-		engine.jobs().invokeOperation("agent:create",
+		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "a1"), RequestContext.of(ALICE_DID)).awaitResult(5000);
-		engine.jobs().invokeOperation("agent:create",
+		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "a2"), RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job job = engine.jobs().invokeOperation(
-			"agent:fork",
+			"v/ops/agent/fork",
 			Maps.of(
 				Strings.create("sourceId"), Strings.create("a1"),
 				Fields.AGENT_ID, "a2"),
@@ -437,7 +437,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testMessageAgent() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "msg-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -446,7 +446,7 @@ public class AgentAdapterTest {
 			Fields.MESSAGE, Maps.of("content", "hello")
 		);
 		Job msgJob = engine.jobs().invokeOperation(
-			"agent:message", msgInput, RequestContext.of(ALICE_DID));
+			"v/ops/agent/message", msgInput, RequestContext.of(ALICE_DID));
 		ACell result = msgJob.awaitResult(5000);
 
 		assertNotNull(result);
@@ -462,7 +462,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testMessageNonExistentAgent() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "other-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -471,7 +471,7 @@ public class AgentAdapterTest {
 			Fields.MESSAGE, Maps.of("content", "hello")
 		);
 		Job msgJob = engine.jobs().invokeOperation(
-			"agent:message", msgInput, RequestContext.of(ALICE_DID));
+			"v/ops/agent/message", msgInput, RequestContext.of(ALICE_DID));
 
 		try {
 			msgJob.awaitResult(5000);
@@ -484,7 +484,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testMessageTerminatedAgent() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "term-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -497,7 +497,7 @@ public class AgentAdapterTest {
 			Fields.MESSAGE, Maps.of("content", "hello")
 		);
 		Job msgJob = engine.jobs().invokeOperation(
-			"agent:message", msgInput, RequestContext.of(ALICE_DID));
+			"v/ops/agent/message", msgInput, RequestContext.of(ALICE_DID));
 
 		try {
 			msgJob.awaitResult(5000);
@@ -512,9 +512,9 @@ public class AgentAdapterTest {
 	@Test
 	public void testTriggerWithEcho() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "echo-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Deliver messages directly to avoid auto-wake race
@@ -524,7 +524,7 @@ public class AgentAdapterTest {
 		}
 
 		Job runJob = engine.jobs().invokeOperation(
-			"agent:trigger",
+			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "echo-agent"),
 			RequestContext.of(ALICE_DID));
 		ACell result = runJob.awaitResult(5000);
@@ -550,16 +550,16 @@ public class AgentAdapterTest {
 	public void testTriggerDefaultBlocksUntilComplete() {
 		// Backward compat: no `wait` field → block until run loop finishes (status SLEEPING).
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "block-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User u = engine.getVenueState().users().get(ALICE_DID);
 		u.agent("block-agent").deliverMessage(Maps.of("content", "hi"));
 
 		Job job = engine.jobs().invokeOperation(
-			"agent:trigger",
+			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "block-agent"),
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
@@ -575,16 +575,16 @@ public class AgentAdapterTest {
 		// executes in the background; caller polls via agent:info or
 		// covia:read path=g/<agent>/status.
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "async-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User u = engine.getVenueState().users().get(ALICE_DID);
 		u.agent("async-agent").deliverMessage(Maps.of("content", "hi"));
 
 		Job job = engine.jobs().invokeOperation(
-			"agent:trigger",
+			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "async-agent", Fields.WAIT, CVMBool.FALSE),
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
@@ -601,16 +601,16 @@ public class AgentAdapterTest {
 		// Using test:echo which is effectively instant — result should be SLEEPING
 		// because the run loop finishes well within the timeout.
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "to-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User u = engine.getVenueState().users().get(ALICE_DID);
 		u.agent("to-agent").deliverMessage(Maps.of("content", "hi"));
 
 		Job job = engine.jobs().invokeOperation(
-			"agent:trigger",
+			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "to-agent", Fields.WAIT, CVMLong.create(5000)),
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(6000);
@@ -624,13 +624,13 @@ public class AgentAdapterTest {
 	public void testTriggerNoWork() {
 		// Trigger with no messages/tasks — transition still runs (may act proactively)
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "empty-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job runJob = engine.jobs().invokeOperation(
-			"agent:trigger",
+			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "empty-agent"),
 			RequestContext.of(ALICE_DID));
 		ACell result = runJob.awaitResult(5000);
@@ -649,20 +649,20 @@ public class AgentAdapterTest {
 	@Test
 	public void testUserIsolation() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "shared-name"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
-			"agent:message",
+			"v/ops/agent/message",
 			Maps.of(Fields.AGENT_ID, "shared-name", Fields.MESSAGE, Maps.of("from", "alice")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "shared-name"),
 			RequestContext.of(BOB_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
-			"agent:message",
+			"v/ops/agent/message",
 			Maps.of(Fields.AGENT_ID, "shared-name", Fields.MESSAGE, Maps.of("from", "bob")),
 			RequestContext.of(BOB_DID)).awaitResult(5000);
 
@@ -681,10 +681,10 @@ public class AgentAdapterTest {
 	@Test
 	public void testTriggerWithDefaultOperation() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "default-op-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -693,7 +693,7 @@ public class AgentAdapterTest {
 		user0.agent("default-op-agent").deliverMessage(Maps.of("content", "hello"));
 
 		Job runJob = engine.jobs().invokeOperation(
-			"agent:trigger",
+			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "default-op-agent"),
 			RequestContext.of(ALICE_DID));
 		ACell result = runJob.awaitResult(5000);
@@ -713,14 +713,14 @@ public class AgentAdapterTest {
 		// include a spurious empty stateConfig field. Regression for RT.ensureMap
 		// returning Maps.empty() for null input.
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "no-state-agent",
 				Fields.CONFIG, Strings.create("template:reader")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		ACell info = engine.jobs().invokeOperation(
-			"agent:info",
+			"v/ops/agent/info",
 			Maps.of(Fields.AGENT_ID, "no-state-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -734,7 +734,7 @@ public class AgentAdapterTest {
 	public void testCreateAutoDefaults() {
 		// Agent created with no config gets sensible defaults
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "auto-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -745,7 +745,7 @@ public class AgentAdapterTest {
 		// Should have auto-set operation: llmagent:chat
 		AMap<AString, ACell> config = agent.getConfig();
 		assertNotNull(config);
-		assertEquals(Strings.create("llmagent:chat"), config.get(Fields.OPERATION),
+		assertEquals(Strings.create("v/ops/llmagent/chat"), config.get(Fields.OPERATION),
 			"Auto-default should set operation to llmagent:chat");
 	}
 
@@ -754,13 +754,13 @@ public class AgentAdapterTest {
 	@Test
 	public void testTriggerOutputIncludesResult() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "result-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "llmagent:chat"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
 				AgentState.KEY_STATE, Maps.of(
 					"config", Maps.of(
-						"llmOperation", "test:llm",
+						"llmOperation", "v/test/ops/llm",
 						"systemPrompt", "You are helpful."
 					)
 				)
@@ -772,7 +772,7 @@ public class AgentAdapterTest {
 		resultUser.agent("result-agent").deliverMessage(Maps.of("content", "hello"));
 
 		Job runJob = engine.jobs().invokeOperation(
-			"agent:trigger",
+			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "result-agent"),
 			RequestContext.of(ALICE_DID));
 		ACell result = runJob.awaitResult(5000);
@@ -791,16 +791,16 @@ public class AgentAdapterTest {
 	public void testRequestCreatesTask() {
 		// Create agent with default operation
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "task-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Submit a request with wait — blocks until agent completes the task
 		Job requestJob = engine.jobs().invokeOperation(
-			"agent:request",
+			"v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "task-agent", Fields.INPUT, Maps.of("question", "What is 2+2?"),
 				Fields.WAIT, CVMLong.create(5000)),
 			RequestContext.of(ALICE_DID));
@@ -818,16 +818,16 @@ public class AgentAdapterTest {
 	@Test
 	public void testRequestTaskCompletion() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "completing-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Submit a request with wait=true (indefinite)
 		Job requestJob = engine.jobs().invokeOperation(
-			"agent:request",
+			"v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "completing-agent", Fields.INPUT, Maps.of("data", "hello"),
 				Fields.WAIT, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
@@ -844,10 +844,10 @@ public class AgentAdapterTest {
 	@Test
 	public void testRequestAsync() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "async-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -856,7 +856,7 @@ public class AgentAdapterTest {
 		// - Sync: caller calls awaitResult() which blocks until the run loop completes it
 		// - Async: caller checks job status and polls later
 		Job requestJob = engine.jobs().invokeOperation(
-			"agent:request",
+			"v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "async-agent", Fields.INPUT, Maps.of("data", "async")),
 			RequestContext.of(ALICE_DID));
 
@@ -876,7 +876,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testRequestToNonExistentAgent() {
 		Job requestJob = engine.jobs().invokeOperation(
-			"agent:request",
+			"v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "ghost-agent", Fields.INPUT, Maps.of("q", "hello")),
 			RequestContext.of(ALICE_DID));
 
@@ -891,7 +891,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testRequestToTerminatedAgent() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "dead-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -899,7 +899,7 @@ public class AgentAdapterTest {
 		user.agent("dead-agent").setStatus(AgentState.TERMINATED);
 
 		Job requestJob = engine.jobs().invokeOperation(
-			"agent:request",
+			"v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "dead-agent", Fields.INPUT, Maps.of("q", "hello")),
 			RequestContext.of(ALICE_DID));
 
@@ -914,15 +914,15 @@ public class AgentAdapterTest {
 	@Test
 	public void testRequestTimelineIncludesTaskResults() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "timeline-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job requestJob = engine.jobs().invokeOperation(
-			"agent:request",
+			"v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "timeline-agent", Fields.INPUT, Maps.of("task", "audit"),
 				Fields.WAIT, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
@@ -944,22 +944,22 @@ public class AgentAdapterTest {
 	@Test
 	public void testMultipleRequestsProcessed() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "multi-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Submit two requests with wait
 		Job req1 = engine.jobs().invokeOperation(
-			"agent:request",
+			"v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "multi-agent", Fields.INPUT, Maps.of("n", "1"),
 				Fields.WAIT, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
 
 		Job req2 = engine.jobs().invokeOperation(
-			"agent:request",
+			"v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "multi-agent", Fields.INPUT, Maps.of("n", "2"),
 				Fields.WAIT, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
@@ -984,13 +984,13 @@ public class AgentAdapterTest {
 		// The standard sync pattern: invokeOperation + awaitResult.
 		// No 'wait' param needed — the Job lifecycle handles blocking.
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "sync-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job job = engine.jobs().invokeOperation(
-			"agent:request",
+			"v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "sync-agent", Fields.INPUT, Maps.of("q", "test")),
 			RequestContext.of(ALICE_DID));
 
@@ -1011,13 +1011,13 @@ public class AgentAdapterTest {
 	public void testRequestAsyncViaPoll() {
 		// The standard async pattern: invokeOperation, return immediately, poll later.
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "poll-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job job = engine.jobs().invokeOperation(
-			"agent:request",
+			"v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "poll-agent", Fields.INPUT, Maps.of("q", "poll")),
 			RequestContext.of(ALICE_DID));
 
@@ -1039,14 +1039,14 @@ public class AgentAdapterTest {
 		// The 'wait' parameter in the input is now irrelevant — both paths produce
 		// the same Job lifecycle. Verify that wait:true and no-wait behave identically.
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "wait-ignored-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// With wait:true
 		Job withWait = engine.jobs().invokeOperation(
-			"agent:request",
+			"v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "wait-ignored-agent",
 				Fields.INPUT, Maps.of("q", "a"), Fields.WAIT, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
@@ -1054,7 +1054,7 @@ public class AgentAdapterTest {
 
 		// Without wait
 		Job withoutWait = engine.jobs().invokeOperation(
-			"agent:request",
+			"v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "wait-ignored-agent",
 				Fields.INPUT, Maps.of("q", "b")),
 			RequestContext.of(ALICE_DID));
@@ -1073,17 +1073,17 @@ public class AgentAdapterTest {
 	public void testQueryAgent() {
 		// Create an agent with config and state
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "query-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo"),
 				AgentState.KEY_STATE, Maps.of("counter", 0)
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Query it
 		Job queryJob = engine.jobs().invokeOperation(
-			"agent:info",
+			"v/ops/agent/info",
 			Maps.of(Fields.AGENT_ID, "query-agent"),
 			RequestContext.of(ALICE_DID));
 		ACell result = queryJob.awaitResult(5000);
@@ -1099,7 +1099,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testQueryNonExistentAgent() {
 		Job queryJob = engine.jobs().invokeOperation(
-			"agent:info",
+			"v/ops/agent/info",
 			Maps.of(Fields.AGENT_ID, "ghost"),
 			RequestContext.of(ALICE_DID));
 		try {
@@ -1114,7 +1114,7 @@ public class AgentAdapterTest {
 	public void testQueryTerminatedAgent() {
 		// Create and terminate an agent
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "term-query"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -1123,7 +1123,7 @@ public class AgentAdapterTest {
 
 		// Query should still work — you can read terminated agents
 		Job queryJob = engine.jobs().invokeOperation(
-			"agent:info",
+			"v/ops/agent/info",
 			Maps.of(Fields.AGENT_ID, "term-query"),
 			RequestContext.of(ALICE_DID));
 		ACell result = queryJob.awaitResult(5000);
@@ -1138,7 +1138,7 @@ public class AgentAdapterTest {
 	public void testListAgentsEmpty() {
 		// New user with no agents
 		Job listJob = engine.jobs().invokeOperation(
-			"agent:list", Maps.empty(), RequestContext.of(BOB_DID));
+			"v/ops/agent/list", Maps.empty(), RequestContext.of(BOB_DID));
 		ACell result = listJob.awaitResult(5000);
 
 		assertNotNull(result);
@@ -1152,16 +1152,16 @@ public class AgentAdapterTest {
 	public void testListAgents() {
 		// Create two agents
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "agent-a"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "agent-b"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job listJob = engine.jobs().invokeOperation(
-			"agent:list", Maps.empty(), RequestContext.of(ALICE_DID));
+			"v/ops/agent/list", Maps.empty(), RequestContext.of(ALICE_DID));
 		ACell result = listJob.awaitResult(5000);
 
 		ACell agents = RT.getIn(result, "agents");
@@ -1183,12 +1183,12 @@ public class AgentAdapterTest {
 	public void testListAgentsIsolation() {
 		// Alice's agents should not appear in Bob's list
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "alice-only"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job bobList = engine.jobs().invokeOperation(
-			"agent:list", Maps.empty(), RequestContext.of(BOB_DID));
+			"v/ops/agent/list", Maps.empty(), RequestContext.of(BOB_DID));
 		ACell result = bobList.awaitResult(5000);
 
 		ACell agents = RT.getIn(result, "agents");
@@ -1200,12 +1200,12 @@ public class AgentAdapterTest {
 	@Test
 	public void testDeleteAgent() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "del-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job delJob = engine.jobs().invokeOperation(
-			"agent:delete",
+			"v/ops/agent/delete",
 			Maps.of(Fields.AGENT_ID, "del-agent"),
 			RequestContext.of(ALICE_DID));
 		ACell result = delJob.awaitResult(5000);
@@ -1223,12 +1223,12 @@ public class AgentAdapterTest {
 	@Test
 	public void testDeleteAgentWithRemove() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "rem-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job delJob = engine.jobs().invokeOperation(
-			"agent:delete",
+			"v/ops/agent/delete",
 			Maps.of(Fields.AGENT_ID, "rem-agent", Fields.REMOVE, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
 		ACell result = delJob.awaitResult(5000);
@@ -1246,18 +1246,18 @@ public class AgentAdapterTest {
 	public void testDeleteThenRecreate() {
 		// Delete without remove — name is blocked
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "reuse-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		engine.jobs().invokeOperation(
-			"agent:delete",
+			"v/ops/agent/delete",
 			Maps.of(Fields.AGENT_ID, "reuse-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Create again without overwrite — idempotent no-op, created=false
 		Job job2 = engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "reuse-agent"),
 			RequestContext.of(ALICE_DID));
 		ACell result2 = job2.awaitResult(5000);
@@ -1268,19 +1268,19 @@ public class AgentAdapterTest {
 	@Test
 	public void testDeleteWithRemoveThenRecreate() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "clean-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Delete with remove
 		engine.jobs().invokeOperation(
-			"agent:delete",
+			"v/ops/agent/delete",
 			Maps.of(Fields.AGENT_ID, "clean-agent", Fields.REMOVE, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Recreate — should succeed with created=true
 		Job job2 = engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "clean-agent"),
 			RequestContext.of(ALICE_DID));
 		ACell result2 = job2.awaitResult(5000);
@@ -1293,22 +1293,22 @@ public class AgentAdapterTest {
 	@Test
 	public void testCreateOverwriteTerminated() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "ow-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Terminate it
 		engine.jobs().invokeOperation(
-			"agent:delete",
+			"v/ops/agent/delete",
 			Maps.of(Fields.AGENT_ID, "ow-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Overwrite with new config
 		Job job = engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "ow-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
 				Fields.OVERWRITE, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
@@ -1320,7 +1320,7 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("ow-agent");
 		AMap<AString, ACell> config = agent.getConfig();
-		assertEquals(Strings.create("test:taskcomplete"), config.get(Fields.OPERATION));
+		assertEquals(Strings.create("v/test/ops/taskcomplete"), config.get(Fields.OPERATION));
 	}
 
 	@Test
@@ -1328,9 +1328,9 @@ public class AgentAdapterTest {
 		// Create a SLEEPING agent with initial config and let it accrue some
 		// state we want to preserve across the update
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "live-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Manually seed timeline + inbox so we can verify they survive
@@ -1341,9 +1341,9 @@ public class AgentAdapterTest {
 
 		// Overwrite a SLEEPING agent — in-place update, status preserved
 		Job job = engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "live-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
 				Fields.OVERWRITE, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
@@ -1354,7 +1354,7 @@ public class AgentAdapterTest {
 
 		// Config replaced
 		AgentState post = user.agent("live-ow");
-		assertEquals(Strings.create("test:taskcomplete"), post.getConfig().get(Fields.OPERATION));
+		assertEquals(Strings.create("v/test/ops/taskcomplete"), post.getConfig().get(Fields.OPERATION));
 		// Inbox preserved (the unprocessed "hello" message is still there)
 		AVector<ACell> inbox = post.getInbox();
 		assertNotNull(inbox);
@@ -1368,9 +1368,9 @@ public class AgentAdapterTest {
 	public void testCreateOverwriteSuspendedUpdatesInPlace() {
 		// Create then suspend the agent — error state, dormant
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "susp-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		user.agent("susp-ow").suspend(Strings.create("simulated failure"));
@@ -1378,9 +1378,9 @@ public class AgentAdapterTest {
 
 		// Overwrite SUSPENDED — in-place update, error and status preserved
 		ACell result = engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "susp-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
 				Fields.OVERWRITE, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -1388,7 +1388,7 @@ public class AgentAdapterTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.UPDATED));
 
 		AgentState post = user.agent("susp-ow");
-		assertEquals(Strings.create("test:taskcomplete"), post.getConfig().get(Fields.OPERATION));
+		assertEquals(Strings.create("v/test/ops/taskcomplete"), post.getConfig().get(Fields.OPERATION));
 		// Status stays SUSPENDED — caller can resume separately
 		assertEquals(AgentState.SUSPENDED, post.getStatus());
 		assertEquals(Strings.create("simulated failure"), post.getError(),
@@ -1399,18 +1399,18 @@ public class AgentAdapterTest {
 	public void testCreateOverwriteRunningFails() {
 		// Create then force the agent into RUNNING (simulating an active transition)
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "run-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		user.agent("run-ow").setStatus(AgentState.RUNNING);
 
 		// Overwrite RUNNING must fail loudly — race risk
 		Job job = engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "run-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
 				Fields.OVERWRITE, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
 		try {
@@ -1425,23 +1425,23 @@ public class AgentAdapterTest {
 		}
 
 		// Original config must be untouched
-		assertEquals(Strings.create("test:echo"),
+		assertEquals(Strings.create("v/test/ops/echo"),
 			user.agent("run-ow").getConfig().get(Fields.OPERATION));
 	}
 
 	@Test
 	public void testCreateOverwriteFalseIsNoOp() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "no-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Without overwrite — idempotent no-op
 		Job job = engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "no-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
@@ -1450,7 +1450,7 @@ public class AgentAdapterTest {
 		// Config should still be original
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("no-ow");
-		assertEquals(Strings.create("test:echo"), agent.getConfig().get(Fields.OPERATION));
+		assertEquals(Strings.create("v/test/ops/echo"), agent.getConfig().get(Fields.OPERATION));
 	}
 
 	// ========== agent:list — filter TERMINATED ==========
@@ -1459,21 +1459,21 @@ public class AgentAdapterTest {
 	public void testListAgentsHidesTerminated() {
 		// Create two agents, delete one
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "alive"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "dead"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
-			"agent:delete",
+			"v/ops/agent/delete",
 			Maps.of(Fields.AGENT_ID, "dead"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Default list should hide terminated
 		Job listJob = engine.jobs().invokeOperation(
-			"agent:list", Maps.empty(), RequestContext.of(ALICE_DID));
+			"v/ops/agent/list", Maps.empty(), RequestContext.of(ALICE_DID));
 		ACell result = listJob.awaitResult(5000);
 
 		@SuppressWarnings("unchecked")
@@ -1485,21 +1485,21 @@ public class AgentAdapterTest {
 	@Test
 	public void testListAgentsIncludeTerminated() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "alive2"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "dead2"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
-			"agent:delete",
+			"v/ops/agent/delete",
 			Maps.of(Fields.AGENT_ID, "dead2"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// With includeTerminated=true
 		Job listJob = engine.jobs().invokeOperation(
-			"agent:list",
+			"v/ops/agent/list",
 			Maps.of(Fields.INCLUDE_TERMINATED, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
 		ACell result = listJob.awaitResult(5000);
@@ -1512,16 +1512,16 @@ public class AgentAdapterTest {
 	@Test
 	public void testListAgentsAllTerminated() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "doomed"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
-			"agent:delete",
+			"v/ops/agent/delete",
 			Maps.of(Fields.AGENT_ID, "doomed"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job listJob = engine.jobs().invokeOperation(
-			"agent:list", Maps.empty(), RequestContext.of(ALICE_DID));
+			"v/ops/agent/list", Maps.empty(), RequestContext.of(ALICE_DID));
 		ACell result = listJob.awaitResult(5000);
 
 		@SuppressWarnings("unchecked")
@@ -1535,9 +1535,9 @@ public class AgentAdapterTest {
 	public void testCancelTask() {
 		// Create agent and add a task
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "task-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
@@ -1549,7 +1549,7 @@ public class AgentAdapterTest {
 
 		// Cancel the task
 		Job cancelJob = engine.jobs().invokeOperation(
-			"agent:cancelTask",
+			"v/ops/agent/cancel-task",
 			Maps.of(Fields.AGENT_ID, "task-agent",
 				Fields.TASK_ID, taskId.toHexString()),
 			RequestContext.of(ALICE_DID));
@@ -1566,13 +1566,13 @@ public class AgentAdapterTest {
 	@Test
 	public void testCancelTaskNotFound() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "cancel-nf",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job cancelJob = engine.jobs().invokeOperation(
-			"agent:cancelTask",
+			"v/ops/agent/cancel-task",
 			Maps.of(Fields.AGENT_ID, "cancel-nf",
 				Fields.TASK_ID, "0000000000000000deadbeefdeadbeef"),
 			RequestContext.of(ALICE_DID));
@@ -1588,14 +1588,14 @@ public class AgentAdapterTest {
 	@Test
 	public void testCancelTaskMissingParams() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "cancel-mp",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Missing taskId
 		Job job1 = engine.jobs().invokeOperation(
-			"agent:cancelTask",
+			"v/ops/agent/cancel-task",
 			Maps.of(Fields.AGENT_ID, "cancel-mp"),
 			RequestContext.of(ALICE_DID));
 		try {
@@ -1607,7 +1607,7 @@ public class AgentAdapterTest {
 
 		// Missing agentId
 		Job job2 = engine.jobs().invokeOperation(
-			"agent:cancelTask",
+			"v/ops/agent/cancel-task",
 			Maps.of(Fields.TASK_ID, "abcd"),
 			RequestContext.of(ALICE_DID));
 		try {
@@ -1621,9 +1621,9 @@ public class AgentAdapterTest {
 	@Test
 	public void testCancelTaskMultiple() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "multi-task",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
@@ -1640,7 +1640,7 @@ public class AgentAdapterTest {
 
 		// Cancel the middle one
 		engine.jobs().invokeOperation(
-			"agent:cancelTask",
+			"v/ops/agent/cancel-task",
 			Maps.of(Fields.AGENT_ID, "multi-task",
 				Fields.TASK_ID, task2.toHexString()),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
@@ -1654,13 +1654,13 @@ public class AgentAdapterTest {
 	@Test
 	public void testCancelTaskInvalidHex() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "cancel-hex",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		Job job = engine.jobs().invokeOperation(
-			"agent:cancelTask",
+			"v/ops/agent/cancel-task",
 			Maps.of(Fields.AGENT_ID, "cancel-hex",
 				Fields.TASK_ID, "not-valid-hex!!!"),
 			RequestContext.of(ALICE_DID));

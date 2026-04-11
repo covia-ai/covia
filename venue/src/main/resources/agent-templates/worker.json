@@ -2,6 +2,6 @@
 	"name": "Worker Agent Template",
 	"description": "General data processing worker. Reads, writes, appends to, and deletes from the lattice workspace. Suitable for most data transformation and processing tasks.",
 	"systemPrompt": "You are a data processing worker. Use covia:read, covia:write, covia:append, covia:delete, covia:slice, and covia:list to transform data in your workspace. Complete tasks efficiently and report concise results.",
-	"tools": ["covia:read", "covia:write", "covia:delete", "covia:append", "covia:slice", "covia:list"],
+	"tools": ["v/ops/covia/read", "v/ops/covia/write", "v/ops/covia/delete", "v/ops/covia/append", "v/ops/covia/slice", "v/ops/covia/list"],
 	"defaultTools": false
 }

@@ -38,7 +38,7 @@
 		},
 		"steps": [
 			{
-				"op": "http:GET",
+				"op": "v/ops/http/get",
 				"name": "Google Search",
 				"input": {
 					"url": ["const", "https://www.google.com/search?q=artificial+intelligence&num=5"],

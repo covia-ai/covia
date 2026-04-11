@@ -48,7 +48,7 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [{
-						"op": "test:echo",
+						"op": "v/test/ops/echo",
 						"input": { "echoed": ["input", "message"] }
 					}],
 					"result": { "result": [0, "echoed"] }
@@ -72,7 +72,7 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [{
-						"op": "test:echo",
+						"op": "v/test/ops/echo",
 						"input": ["const", {"fixed": "value"}]
 					}],
 					"result": { "result": [0, "fixed"] }
@@ -95,7 +95,7 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [{
-						"op": "test:echo",
+						"op": "v/test/ops/echo",
 						"input": ["input"]
 					}],
 					"result": { "msg": [0, "message"] }
@@ -121,8 +121,8 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [
-						{ "op": "test:echo", "input": ["const", {"value": "first"}] },
-						{ "op": "test:echo", "input": {"prev": [0, "value"]} }
+						{ "op": "v/test/ops/echo", "input": ["const", {"value": "first"}] },
+						{ "op": "v/test/ops/echo", "input": {"prev": [0, "value"]} }
 					],
 					"result": {
 						"step0": [0, "value"],
@@ -148,9 +148,9 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [
-						{ "op": "test:echo", "input": {"msg": ["input", "text"]} },
-						{ "op": "test:echo", "input": [0] },
-						{ "op": "test:echo", "input": [1] }
+						{ "op": "v/test/ops/echo", "input": {"msg": ["input", "text"]} },
+						{ "op": "v/test/ops/echo", "input": [0] },
+						{ "op": "v/test/ops/echo", "input": [1] }
 					],
 					"result": { "final": [2, "msg"] }
 				}
@@ -175,7 +175,7 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [{
-						"op": "test:echo",
+						"op": "v/test/ops/echo",
 						"input": { "val": ["input", "x"] }
 					}],
 					"result": { "answer": [0, "val"] }
@@ -184,7 +184,7 @@ public class OrchestratorTest {
 		""");
 
 		// Invoke via grid:run — the MCP client path
-		Job job = engine.jobs().invokeOperation("grid:run",
+		Job job = engine.jobs().invokeOperation("v/ops/grid/run",
 			Maps.of(Fields.OPERATION, hash, Fields.INPUT, Maps.of(Strings.create("x"), "via-grid")),
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
@@ -200,16 +200,16 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [
-						{ "op": "test:echo", "input": {"msg": ["input", "text"]} },
-						{ "op": "test:echo", "input": {"from_prev": [0, "msg"]} },
-						{ "op": "test:echo", "input": {"from_prev": [1, "from_prev"]} }
+						{ "op": "v/test/ops/echo", "input": {"msg": ["input", "text"]} },
+						{ "op": "v/test/ops/echo", "input": {"from_prev": [0, "msg"]} },
+						{ "op": "v/test/ops/echo", "input": {"from_prev": [1, "from_prev"]} }
 					],
 					"result": { "final": [2, "from_prev"] }
 				}
 			}
 		""");
 
-		Job job = engine.jobs().invokeOperation("grid:run",
+		Job job = engine.jobs().invokeOperation("v/ops/grid/run",
 			Maps.of(Fields.OPERATION, hash, Fields.INPUT, Maps.of(Strings.create("text"), "grid-chain")),
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
@@ -223,9 +223,9 @@ public class OrchestratorTest {
 	public void testAgentRequestPipeline() {
 		// Create echo agents (test:taskcomplete auto-completes tasks with the input as output)
 		for (String name : new String[]{"PipeA", "PipeB", "PipeC"}) {
-			engine.jobs().invokeOperation("agent:create",
+			engine.jobs().invokeOperation("v/ops/agent/create",
 				Maps.of(Fields.AGENT_ID, name,
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")),
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 		}
 
@@ -236,7 +236,7 @@ public class OrchestratorTest {
 					"adapter": "orchestrator",
 					"steps": [
 						{
-							"op": "agent:request",
+							"op": "v/ops/agent/request",
 							"input": {
 								"agentId": ["const", "PipeA"],
 								"input": { "invoice": ["input", "invoice_text"] },
@@ -244,7 +244,7 @@ public class OrchestratorTest {
 							}
 						},
 						{
-							"op": "agent:request",
+							"op": "v/ops/agent/request",
 							"input": {
 								"agentId": ["const", "PipeB"],
 								"input": { "data": [0, "output"] },
@@ -252,7 +252,7 @@ public class OrchestratorTest {
 							}
 						},
 						{
-							"op": "agent:request",
+							"op": "v/ops/agent/request",
 							"input": {
 								"agentId": ["const", "PipeC"],
 								"input": { "data": [1, "output"] },
@@ -283,9 +283,9 @@ public class OrchestratorTest {
 	public void testAgentRequestPipelineViaGridRun() {
 		// Same as above but invoked via grid:run — the full MCP path
 		for (String name : new String[]{"GridA", "GridB"}) {
-			engine.jobs().invokeOperation("agent:create",
+			engine.jobs().invokeOperation("v/ops/agent/create",
 				Maps.of(Fields.AGENT_ID, name,
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")),
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 		}
 
@@ -296,7 +296,7 @@ public class OrchestratorTest {
 					"adapter": "orchestrator",
 					"steps": [
 						{
-							"op": "agent:request",
+							"op": "v/ops/agent/request",
 							"input": {
 								"agentId": ["const", "GridA"],
 								"input": { "msg": ["input", "text"] },
@@ -304,7 +304,7 @@ public class OrchestratorTest {
 							}
 						},
 						{
-							"op": "agent:request",
+							"op": "v/ops/agent/request",
 							"input": {
 								"agentId": ["const", "GridB"],
 								"input": { "prev": [0, "output"] },
@@ -320,7 +320,7 @@ public class OrchestratorTest {
 			}
 		""");
 
-		Job job = engine.jobs().invokeOperation("grid:run",
+		Job job = engine.jobs().invokeOperation("v/ops/grid/run",
 			Maps.of(Fields.OPERATION, hash,
 				Fields.INPUT, Maps.of(Strings.create("text"), "grid-agent-test")),
 			RequestContext.of(ALICE_DID));
@@ -342,7 +342,7 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [{
-						"op": "test:echo",
+						"op": "v/test/ops/echo",
 						"input": { "val": ["input", "x"] }
 					}],
 					"result": { "answer": [0, "val"] }
@@ -358,7 +358,7 @@ public class OrchestratorTest {
 		// Same hash — JSON round-trip is stable
 		assertEquals(hash, rehash.toHexString(), "JSON round-trip should produce same asset hash");
 
-		Job job = engine.jobs().invokeOperation("grid:run",
+		Job job = engine.jobs().invokeOperation("v/ops/grid/run",
 			Maps.of(Fields.OPERATION, hash,
 				Fields.INPUT, Maps.of(Strings.create("x"), "mcp-roundtrip")),
 			RequestContext.of(ALICE_DID));
@@ -370,9 +370,9 @@ public class OrchestratorTest {
 	@Test
 	public void testAssetStoreAgentPipelineRoundTrip() {
 		for (String name : new String[]{"RtA", "RtB"}) {
-			engine.jobs().invokeOperation("agent:create",
+			engine.jobs().invokeOperation("v/ops/agent/create",
 				Maps.of(Fields.AGENT_ID, name,
-					Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")),
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 				RequestContext.of(ALICE_DID)).awaitResult(5000);
 		}
 
@@ -383,7 +383,7 @@ public class OrchestratorTest {
 					"adapter": "orchestrator",
 					"steps": [
 						{
-							"op": "agent:request",
+							"op": "v/ops/agent/request",
 							"input": {
 								"agentId": ["const", "RtA"],
 								"input": { "msg": ["input", "text"] },
@@ -391,7 +391,7 @@ public class OrchestratorTest {
 							}
 						},
 						{
-							"op": "agent:request",
+							"op": "v/ops/agent/request",
 							"input": {
 								"agentId": ["const", "RtB"],
 								"input": { "prev": [0, "output"] },
@@ -413,7 +413,7 @@ public class OrchestratorTest {
 		Hash rehash = engine.storeAsset(reprinted, null);
 		assertEquals(hash, rehash.toHexString(), "JSON round-trip should be stable");
 
-		Job job = engine.jobs().invokeOperation("grid:run",
+		Job job = engine.jobs().invokeOperation("v/ops/grid/run",
 			Maps.of(Fields.OPERATION, hash,
 				Fields.INPUT, Maps.of(Strings.create("text"), "roundtrip-test")),
 			RequestContext.of(ALICE_DID));
@@ -434,7 +434,7 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [{
-						"op": "test:error",
+						"op": "v/test/ops/error",
 						"input": { "message": ["const", "boom"] }
 					}],
 					"result": { "result": [0] }
@@ -462,7 +462,7 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [{
-						"op": "test:echo",
+						"op": "v/test/ops/echo",
 						"input": { "echoed": ["concat", ["const", "w/enrichments/"], ["input", "invoiceId"]] }
 					}],
 					"result": { "path": [0, "echoed"] }
@@ -487,11 +487,11 @@ public class OrchestratorTest {
 					"adapter": "orchestrator",
 					"steps": [
 						{
-							"op": "test:echo",
+							"op": "v/test/ops/echo",
 							"input": { "echoed": ["const", "doc-42"] }
 						},
 						{
-							"op": "test:echo",
+							"op": "v/test/ops/echo",
 							"input": { "echoed": ["concat", ["const", "docs/"], [0, "echoed"], ["const", ".txt"]] }
 						}
 					],
@@ -515,7 +515,7 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [{
-						"op": "test:echo",
+						"op": "v/test/ops/echo",
 						"input": { "echoed": ["const", "hello"] }
 					}],
 					"result": { "greeting": ["concat", [0, "echoed"], ["const", " world"]] }
@@ -542,7 +542,7 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [{
-						"op": "test:echo",
+						"op": "v/test/ops/echo",
 						"input": { "msg": ["input", "text"] }
 					}],
 					"result": { "answer": [0, "msg"] }
@@ -558,7 +558,7 @@ public class OrchestratorTest {
 		// Parse from JSON — this is what MCP does
 		ACell parsedInput = JSON.parse(gridRunInputJson);
 
-		Job job = engine.jobs().invokeOperation("grid:run", parsedInput,
+		Job job = engine.jobs().invokeOperation("v/ops/grid/run", parsedInput,
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
@@ -576,8 +576,8 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [
-						{ "op": "test:echo", "input": {"data": ["input", "value"]} },
-						{ "op": "test:echo", "input": {"data": [0, "data"]} }
+						{ "op": "v/test/ops/echo", "input": {"data": ["input", "value"]} },
+						{ "op": "v/test/ops/echo", "input": {"data": [0, "data"]} }
 					],
 					"result": { "step0": [0, "data"], "step1": [1, "data"] }
 				}
@@ -590,7 +590,7 @@ public class OrchestratorTest {
 
 		ACell parsedInput = JSON.parse(gridRunInputJson);
 
-		Job job = engine.jobs().invokeOperation("grid:run", parsedInput,
+		Job job = engine.jobs().invokeOperation("v/ops/grid/run", parsedInput,
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
@@ -610,7 +610,7 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [{
-						"op": "test:echo",
+						"op": "v/test/ops/echo",
 						"input": { "path": ["concat", ["const", "w/data/"], ["input", "id"]] }
 					}],
 					"result": { "path": [0, "path"] }
@@ -624,7 +624,7 @@ public class OrchestratorTest {
 
 		ACell parsedInput = JSON.parse(gridRunInputJson);
 
-		Job job = engine.jobs().invokeOperation("grid:run", parsedInput,
+		Job job = engine.jobs().invokeOperation("v/ops/grid/run", parsedInput,
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
@@ -643,7 +643,7 @@ public class OrchestratorTest {
 					"adapter": "orchestrator",
 					"strict": true,
 					"steps": [{
-						"op": "test:echo",
+						"op": "v/test/ops/echo",
 						"input": { "echoed": ["const", "hello"] }
 					}],
 					"result": { "value": [0, "echoed"] }
@@ -667,7 +667,7 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [{
-						"op": "test:echo",
+						"op": "v/test/ops/echo",
 						"strict": true,
 						"input": { "echoed": ["const", "hello"] }
 					}],
@@ -691,7 +691,7 @@ public class OrchestratorTest {
 				"operation": {
 					"adapter": "orchestrator",
 					"steps": [{
-						"op": "test:echo",
+						"op": "v/test/ops/echo",
 						"input": { "echoed": ["const", "hello"] }
 					}],
 					"result": { "value": [0, "echoed"] }

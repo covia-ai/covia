@@ -343,7 +343,7 @@ public class VenueServerTest {
 	public void testHTTPInvokeAgentCreate() throws Exception {
 		// Reproduce: POST /invoke with agent:create — should not hang
 		HttpClient client = HttpClient.newBuilder().build();
-		String body = "{\"operation\": \"agent:create\", \"input\": {\"agentId\": \"HttpTestAgent\"}}";
+		String body = "{\"operation\": \"v/ops/agent/create\", \"input\": {\"agentId\": \"HttpTestAgent\"}}";
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + PORT + "/api/v1/invoke"))
 			.POST(HttpRequest.BodyPublishers.ofString(body))
@@ -363,7 +363,7 @@ public class VenueServerTest {
 	public void testHTTPInvokeSecretSet() throws Exception {
 		// Reproduce: POST /invoke with secret:set ��� should not hang
 		HttpClient client = HttpClient.newBuilder().build();
-		String body = "{\"operation\": \"secret:set\", \"input\": {\"name\": \"TEST_SECRET\", \"value\": \"test123\"}}";
+		String body = "{\"operation\": \"v/ops/secret/set\", \"input\": {\"name\": \"TEST_SECRET\", \"value\": \"test123\"}}";
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + PORT + "/api/v1/invoke"))
 			.POST(HttpRequest.BodyPublishers.ofString(body))

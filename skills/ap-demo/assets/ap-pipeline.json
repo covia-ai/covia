@@ -13,7 +13,7 @@
     },
     "steps": [
       {
-        "op": "agent:request",
+        "op": "v/ops/agent/request",
         "input": {
           "agentId": ["const", "Alice"],
           "input": {
@@ -23,7 +23,7 @@
         }
       },
       {
-        "op": "agent:request",
+        "op": "v/ops/agent/request",
         "input": {
           "agentId": ["const", "Bob"],
           "input": {
@@ -34,7 +34,7 @@
         }
       },
       {
-        "op": "agent:request",
+        "op": "v/ops/agent/request",
         "input": {
           "agentId": ["const", "Carol"],
           "input": {

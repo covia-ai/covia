@@ -168,9 +168,9 @@ public class AgentConcurrencyTest {
 		// Two triggers on the same agent concurrently — only one run loop
 		// should execute. Both should complete without error.
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "conc-trig",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Deliver message directly to avoid auto-wake
@@ -179,12 +179,12 @@ public class AgentConcurrencyTest {
 
 		// Two concurrent triggers
 		CompletableFuture<ACell> f1 = CompletableFuture.supplyAsync(() ->
-			engine.jobs().invokeOperation("agent:trigger",
+			engine.jobs().invokeOperation("v/ops/agent/trigger",
 				Maps.of(Fields.AGENT_ID, "conc-trig"),
 				RequestContext.of(ALICE_DID)).awaitResult(5000));
 
 		CompletableFuture<ACell> f2 = CompletableFuture.supplyAsync(() ->
-			engine.jobs().invokeOperation("agent:trigger",
+			engine.jobs().invokeOperation("v/ops/agent/trigger",
 				Maps.of(Fields.AGENT_ID, "conc-trig"),
 				RequestContext.of(ALICE_DID)).awaitResult(5000));
 
@@ -209,16 +209,16 @@ public class AgentConcurrencyTest {
 		// should join the existing future (agent still RUNNING) and complete
 		// normally — NOT fail with "Cannot start agent".
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "overlap",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		user.agent("overlap").deliverMessage(Maps.of("content", "hello"));
 
 		// First trigger: wait=false, returns immediately with RUNNING
-		Job t1 = engine.jobs().invokeOperation("agent:trigger",
+		Job t1 = engine.jobs().invokeOperation("v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "overlap", Fields.WAIT, CVMBool.FALSE),
 			RequestContext.of(ALICE_DID));
 		ACell r1 = t1.awaitResult(5000);
@@ -228,7 +228,7 @@ public class AgentConcurrencyTest {
 		// - join existing future (agent still RUNNING from first trigger's loop), or
 		// - start new loop (agent already back to SLEEPING because test:echo is fast)
 		// Either way, it must NOT fail.
-		Job t2 = engine.jobs().invokeOperation("agent:trigger",
+		Job t2 = engine.jobs().invokeOperation("v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "overlap"),
 			RequestContext.of(ALICE_DID));
 		ACell r2 = t2.awaitResult(5000);
@@ -245,20 +245,20 @@ public class AgentConcurrencyTest {
 		// Concurrent agent:trigger also calls tryStartRun.
 		// Only one should win the CAS; the other gets the existing future.
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "msg-trig",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Submit message and trigger concurrently
 		CompletableFuture<ACell> fMsg = CompletableFuture.supplyAsync(() ->
-			engine.jobs().invokeOperation("agent:message",
+			engine.jobs().invokeOperation("v/ops/agent/message",
 				Maps.of(Fields.AGENT_ID, "msg-trig",
 					Fields.MESSAGE, Maps.of("content", "hello")),
 				RequestContext.of(ALICE_DID)).awaitResult(5000));
 
 		CompletableFuture<ACell> fTrig = CompletableFuture.supplyAsync(() ->
-			engine.jobs().invokeOperation("agent:trigger",
+			engine.jobs().invokeOperation("v/ops/agent/trigger",
 				Maps.of(Fields.AGENT_ID, "msg-trig"),
 				RequestContext.of(ALICE_DID)).awaitResult(5000));
 
@@ -278,9 +278,9 @@ public class AgentConcurrencyTest {
 	public void testSyncStatePreservesAgentCreation() {
 		// Create an agent, syncState, verify agent is still intact.
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "sync-create",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo",
 					Strings.create("systemPrompt"), Strings.create("You are sync test."))),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -302,16 +302,16 @@ public class AgentConcurrencyTest {
 		// Trigger with wait:false, immediately syncState, verify agent
 		// still completes its run loop and ends up SLEEPING.
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "sync-run",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		user.agent("sync-run").deliverMessage(Maps.of("content", "hello"));
 
 		// Trigger with wait:false
-		engine.jobs().invokeOperation("agent:trigger",
+		engine.jobs().invokeOperation("v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "sync-run", Fields.WAIT, CVMBool.FALSE),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -339,20 +339,20 @@ public class AgentConcurrencyTest {
 	public void testConcurrentRequestsBothCompleted() {
 		// Two agent:request calls submitted concurrently — both should complete.
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "conc-req",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:taskcomplete")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Submit two requests concurrently — both block via awaitResult
 		CompletableFuture<ACell> f1 = CompletableFuture.supplyAsync(() ->
-			engine.jobs().invokeOperation("agent:request",
+			engine.jobs().invokeOperation("v/ops/agent/request",
 				Maps.of(Fields.AGENT_ID, "conc-req",
 					Fields.INPUT, Maps.of("task", "one")),
 				RequestContext.of(ALICE_DID)).awaitResult(10000));
 
 		CompletableFuture<ACell> f2 = CompletableFuture.supplyAsync(() ->
-			engine.jobs().invokeOperation("agent:request",
+			engine.jobs().invokeOperation("v/ops/agent/request",
 				Maps.of(Fields.AGENT_ID, "conc-req",
 					Fields.INPUT, Maps.of("task", "two")),
 				RequestContext.of(ALICE_DID)).awaitResult(10000));
@@ -376,9 +376,9 @@ public class AgentConcurrencyTest {
 	@Test
 	public void testResumeAutoWakeProcessesPendingMessages() {
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "resume-wake",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "test:echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Deliver messages directly (no auto-wake since agent isn't SLEEPING for wakeAgent)
@@ -393,7 +393,7 @@ public class AgentConcurrencyTest {
 		assertEquals(2, agent.getInbox().count(), "Messages should be pending");
 
 		// Resume with autoWake=true
-		engine.jobs().invokeOperation("agent:resume",
+		engine.jobs().invokeOperation("v/ops/agent/resume",
 			Maps.of(Fields.AGENT_ID, "resume-wake"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 

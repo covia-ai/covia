@@ -14,7 +14,7 @@ Manage agents on a connected Covia venue via MCP.
 
 These are critical — getting them wrong produces silent failures:
 
-1. **`config.operation` must be a plain string** — e.g. `"llmagent:chat"`, never `{"name": "llmagent:chat"}`. The agent runner calls `RT.ensureString()` on this field.
+1. **`config.operation` must be a plain string** — e.g. `"v/ops/llmagent/chat"`, never `{"name": "v/ops/llmagent/chat"}`. The agent runner calls `RT.ensureString()` on this field.
 
 2. **Use `agent_request` with `input` parameter** to submit work — not `task`, not `message`. Requests create trackable Jobs with immutable records.
 
@@ -29,9 +29,9 @@ These are critical — getting them wrong produces silent failures:
 ```
 agent_create
   agentId: "<name>"
-  config: { "operation": "llmagent:chat" }
+  config: { "operation": "v/ops/llmagent/chat" }
   state: { "config": {
-    "llmOperation": "langchain:openai",
+    "llmOperation": "v/ops/langchain/openai",
     "model": "gpt-4o",
     "systemPrompt": "<prompt>"
   }}

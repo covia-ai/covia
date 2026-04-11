@@ -52,10 +52,10 @@ public class GoalTreeAdapterTest {
 	@Test
 	public void testOperationResolvable() {
 		// goaltree:chat should resolve to an operation
-		Job job = engine.jobs().invokeOperation("goaltree:chat",
+		Job job = engine.jobs().invokeOperation("v/ops/goaltree/chat",
 			Maps.of(Fields.AGENT_ID, "test-agent",
 				AgentState.KEY_CONFIG, Maps.of(
-					Strings.create("llmOperation"), Strings.create("test:llm"))),
+					Strings.create("llmOperation"), Strings.create("v/test/ops/llm"))),
 			ALICE);
 		// Should start without error (may fail on LLM call, but shouldn't NPE)
 		assertNotNull(job);
@@ -102,7 +102,7 @@ public class GoalTreeAdapterTest {
 			Fields.AGENT_ID, "test-agent",
 			AgentState.KEY_STATE, null,
 			AgentState.KEY_CONFIG, Maps.of(
-				Strings.create("llmOperation"), Strings.create("test:llm"),
+				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Hello"))));
@@ -126,7 +126,7 @@ public class GoalTreeAdapterTest {
 			Fields.AGENT_ID, "tool-agent",
 			AgentState.KEY_STATE, null,
 			AgentState.KEY_CONFIG, Maps.of(
-				Strings.create("llmOperation"), Strings.create("test:toolllm"),
+				Strings.create("llmOperation"), Strings.create("v/test/ops/toolllm"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Do something"))));
@@ -147,7 +147,7 @@ public class GoalTreeAdapterTest {
 			Fields.AGENT_ID, "task-agent",
 			AgentState.KEY_STATE, null,
 			AgentState.KEY_CONFIG, Maps.of(
-				Strings.create("llmOperation"), Strings.create("test:llm"),
+				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("systemPrompt"), Strings.create("Echo the user's request.")),
 			Fields.TASKS, Vectors.of(
 				(ACell) Maps.of(
@@ -202,7 +202,7 @@ public class GoalTreeAdapterTest {
 			Fields.AGENT_ID, "compact-agent",
 			AgentState.KEY_STATE, null,
 			AgentState.KEY_CONFIG, Maps.of(
-				Strings.create("llmOperation"), Strings.create("test:compactllm"),
+				Strings.create("llmOperation"), Strings.create("v/test/ops/compactllm"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Test compact"))));
@@ -231,7 +231,7 @@ public class GoalTreeAdapterTest {
 			Fields.AGENT_ID, "cancel-agent",
 			AgentState.KEY_STATE, null,
 			AgentState.KEY_CONFIG, Maps.of(
-				Strings.create("llmOperation"), Strings.create("test:llm"),
+				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Hello"))));
@@ -257,7 +257,7 @@ public class GoalTreeAdapterTest {
 			Fields.AGENT_ID, "cancel-loop-agent",
 			AgentState.KEY_STATE, null,
 			AgentState.KEY_CONFIG, Maps.of(
-				Strings.create("llmOperation"), Strings.create("test:toolllm"),
+				Strings.create("llmOperation"), Strings.create("v/test/ops/toolllm"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Do something"))));
@@ -282,10 +282,10 @@ public class GoalTreeAdapterTest {
 		// Test the full invoke path — cancel the job, verify it doesn't complete normally
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 
-		Job job = engine.jobs().invokeOperation("goaltree:chat",
+		Job job = engine.jobs().invokeOperation("v/ops/goaltree/chat",
 			Maps.of(Fields.AGENT_ID, "invoke-cancel",
 				AgentState.KEY_CONFIG, Maps.of(
-					Strings.create("llmOperation"), Strings.create("test:never"),
+					Strings.create("llmOperation"), Strings.create("v/test/ops/never"),
 					Strings.create("systemPrompt"), Strings.create("Test"))),
 			ALICE);
 
@@ -311,7 +311,7 @@ public class GoalTreeAdapterTest {
 			Fields.AGENT_ID, "goal-msg-agent",
 			AgentState.KEY_STATE, null,
 			AgentState.KEY_CONFIG, Maps.of(
-				Strings.create("llmOperation"), Strings.create("test:llm"),
+				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
 				Strings.create("systemPrompt"), Strings.create("Echo the message.")),
 			Fields.TASKS, Vectors.of(
 				(ACell) Maps.of(

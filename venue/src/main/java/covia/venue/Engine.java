@@ -113,13 +113,6 @@ public class Engine {
 	protected final HashMap<String, AAdapter> adapters = new HashMap<>();
 
 	/**
-	 * Registry of named operations mapping operation name (e.g. "test:echo") to canonical asset Hash.
-	 * Populated during adapter registration from each adapter's operation names.
-	 */
-	@SuppressWarnings("unchecked")
-	protected Index<AString, Hash> operations = (Index<AString, Hash>) Index.EMPTY;
-
-	/**
 	 * Persistence callback supplied at construction. Wired by VenueServer to
 	 * NodeServer.persistSnapshot for the production stack; no-op for tests
 	 * and in-memory engines. See {@link PersistenceHandler}.
@@ -441,6 +434,15 @@ public class Engine {
 	 */
 	public void materialiseVOps() {
 		RequestContext ctx = RequestContext.INTERNAL;
+		// Bootstrap: covia:write is itself a v/ops/ entry that doesn't yet
+		// exist when materialisation begins, so we can't reference it by
+		// catalog path. Look up its hash from the CoviaAdapter's pending
+		// entries once and dispatch by bare hex hash for every write.
+		String writeRef = lookupCoviaWriteRef();
+		if (writeRef == null) {
+			log.warn("Cannot materialise /v/ops — covia:write hash not available");
+			return;
+		}
 		for (var adapter : adapters.values()) {
 			if (adapter == null) continue;
 			for (var entry : adapter.pendingCatalogEntries.entrySet()) {
@@ -450,7 +452,7 @@ public class Engine {
 					AString metaString = adapter.getInstalledAssets().get(hash);
 					if (metaString == null) continue;
 					ACell meta = convex.core.util.JSON.parse(metaString);
-					jobManager.invokeOperation("covia:write",
+					jobManager.invokeOperation(writeRef,
 						Maps.of(
 							Fields.PATH, Strings.create(fullPath),
 							Fields.VALUE, meta),
@@ -461,6 +463,20 @@ public class Engine {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Look up the covia:write asset hash from the CoviaAdapter's pending
+	 * catalog entries. Used by the venue startup materialiser to invoke
+	 * writes before {@code v/ops/covia/write} is itself materialised.
+	 *
+	 * @return the bare hex hash of covia:write, or null if unavailable
+	 */
+	private String lookupCoviaWriteRef() {
+		AAdapter coviaAdapter = adapters.get("covia");
+		if (coviaAdapter == null) return null;
+		Hash hash = coviaAdapter.pendingCatalogEntries.get("v/ops/covia/write");
+		return (hash != null) ? hash.toHexString() : null;
 	}
 
 	/**
@@ -533,8 +549,13 @@ public class Engine {
 	}
 
 	private void writeVenueInfo(String path, ACell value, RequestContext ctx) {
+		// Same bootstrap rule as materialiseVOps: invoke covia:write by hash
+		// because v/ops/covia/write may not be materialised yet (and even
+		// after it is, going through it adds no value here).
+		String writeRef = lookupCoviaWriteRef();
+		if (writeRef == null) return;
 		try {
-			jobManager.invokeOperation("covia:write",
+			jobManager.invokeOperation(writeRef,
 				Maps.of(Fields.PATH, Strings.create(path), Fields.VALUE, value),
 				ctx).awaitResult(5000);
 		} catch (Exception e) {
@@ -564,15 +585,8 @@ public class Engine {
 		}
 		adapter.install(this);
 		adapters.put(name, adapter);
-
-		// Collect operation names from adapter into engine-level registry
-		Index<AString, Hash> adapterOps = adapter.getOperationNames();
-		long n = adapterOps.count();
-		for (long i = 0; i < n; i++) {
-			var entry = adapterOps.entryAt(i);
-			operations = operations.assoc(entry.getKey(), entry.getValue());
-		}
-		log.info("Registered adapter: {} ({} operations)", name, n);
+		log.info("Registered adapter: {} ({} primitives)", name,
+			adapter.pendingCatalogEntries.size());
 	}
 
 	/**
@@ -649,28 +663,6 @@ public class Engine {
 	public Auth getAuth() {
 		return auth;
 	}
-
-	/**
-	 * Get the operation registry mapping operation names to asset Hashes.
-	 * @return Index of operation name → asset Hash
-	 */
-	public Index<AString, Hash> getOperationRegistry() {
-		return operations;
-	}
-
-	/**
-	 * Resolve an operation name to its canonical asset Hash.
-	 * @param name Operation name (e.g. "test:echo")
-	 * @return Asset Hash, or null if not found
-	 */
-	public Hash resolveOperation(String name) {
-		return resolveOperation(Strings.create(name));
-	}
-
-	public Hash resolveOperation(AString name) {
-		return operations.get(name);
-	}
-
 
 	public static Engine createTemp(AMap<AString,ACell> config) {
 		try {
@@ -913,13 +905,6 @@ public class Engine {
 			}
 		}
 
-		// Deprecated fallback: legacy global operation registry. Bare names
-		// like "json:merge" or "agent:create" are looked up in the
-		// engine.operations map. This will be removed in Phase 3 of the
-		// OPERATIONS.md migration; new code should use /v/ops/ paths.
-		Hash opHash = operations.get(ref);
-		if (opHash != null) return getAsset(opHash);
-
 		return null;
 	}
 
@@ -1122,7 +1107,6 @@ public class Engine {
 		if (ref.startsWith(NS_ASSET)) {
 			return Hash.parse(ref.slice(3));
 		}
-		// TODO: /o/ — resolve operation name to pinned /a/ hash (Phase 3)
 
 		// 3. DID URL (local only — no remote dispatch)
 		if (ref.startsWith(NS_DID)) {
@@ -1138,8 +1122,10 @@ public class Engine {
 			return null;
 		}
 
-		// 4. Operation name registry
-		return operations.get(ref);
+		// 4. Catalog path or other resolvable form — go through resolveAsset
+		// to get the canonical hash from the resolved asset metadata.
+		Asset asset = resolveAsset(ref);
+		return (asset != null) ? asset.getID() : null;
 	}
 
 	/**
@@ -1385,10 +1371,16 @@ public class Engine {
 
 	public AMap<AString, ACell> getStats() {
 		AMap<AString, AMap<AString, ACell>> usersMap = auth.getUsers();
+		// Count primitives across all adapters' catalog entries — this is
+		// the canonical "what's in /v/ops/ and /v/test/ops/" total.
+		long opCount = 0;
+		for (var adapter : adapters.values()) {
+			opCount += adapter.pendingCatalogEntries.size();
+		}
 		return Maps.of(
 				 "assets",getAssets().size(),
 				 "users",usersMap != null ? usersMap.count() : 0,
-				 "ops",operations.count()
+				 "ops",opCount
 				);
 	}
 

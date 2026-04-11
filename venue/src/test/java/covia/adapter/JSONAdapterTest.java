@@ -101,7 +101,7 @@ public class JSONAdapterTest {
 	}
 
 	@Test public void testMergeViaInvocation() throws Exception {
-		Job result = COVIA.invokeSync("json:merge", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/merge", Maps.of(
 			"values", Vectors.of(
 				Maps.of(s("a"), l(1)),
 				Maps.of(s("b"), l(2)),
@@ -113,14 +113,14 @@ public class JSONAdapterTest {
 	}
 
 	@Test public void testMergeEmptyValuesYieldsEmptyMap() throws Exception {
-		Job result = COVIA.invokeSync("json:merge", Maps.of("values", Vectors.empty()));
+		Job result = COVIA.invokeSync("v/ops/json/merge", Maps.of("values", Vectors.empty()));
 		assertEquals(Status.COMPLETE, result.getStatus(), msg(result));
 		assertEquals(Maps.empty(), RT.getIn(result.getOutput(), "result"));
 	}
 
 	@Test public void testMergeDeepViaInvocation() throws Exception {
 		// Three-way deep merge
-		Job result = COVIA.invokeSync("json:merge", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/merge", Maps.of(
 			"values", Vectors.of(
 				Maps.of(s("decision"), s("APPROVED")),
 				Maps.of(s("invoice_summary"), Maps.of(s("amount"), l(800))),
@@ -148,7 +148,7 @@ public class JSONAdapterTest {
 	}
 
 	@Test public void testCondPicksFirstTruthy() throws Exception {
-		Job result = COVIA.invokeSync("json:cond", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/cond", Maps.of(
 			"cases", Vectors.of(
 				Maps.of(s("when"), CVMBool.FALSE, s("then"), s("nope")),
 				Maps.of(s("when"), CVMBool.TRUE,  s("then"), s("first-true")),
@@ -158,7 +158,7 @@ public class JSONAdapterTest {
 	}
 
 	@Test public void testCondNoMatchReturnsDefault() throws Exception {
-		Job result = COVIA.invokeSync("json:cond", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/cond", Maps.of(
 			"cases", Vectors.of(
 				Maps.of(s("when"), CVMBool.FALSE, s("then"), s("nope1")),
 				Maps.of(s("when"), CVMBool.FALSE, s("then"), s("nope2"))),
@@ -168,7 +168,7 @@ public class JSONAdapterTest {
 	}
 
 	@Test public void testCondNoMatchNoDefaultReturnsNull() throws Exception {
-		Job result = COVIA.invokeSync("json:cond", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/cond", Maps.of(
 			"cases", Vectors.of(
 				Maps.of(s("when"), CVMBool.FALSE, s("then"), s("nope")))));
 		assertEquals(Status.COMPLETE, result.getStatus(), msg(result));
@@ -177,7 +177,7 @@ public class JSONAdapterTest {
 
 	@Test public void testCondNullWhenIsFalsy() throws Exception {
 		// when=null should be treated as falsy (not matched)
-		Job result = COVIA.invokeSync("json:cond", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/cond", Maps.of(
 			"cases", Vectors.of(
 				Maps.of(s("when"), null, s("then"), s("skipped")),
 				Maps.of(s("when"), CVMBool.TRUE, s("then"), s("matched")))));
@@ -187,7 +187,7 @@ public class JSONAdapterTest {
 
 	@Test public void testCondZeroIsTruthy() throws Exception {
 		// 0 is truthy under our strict rule — only false/null are falsy
-		Job result = COVIA.invokeSync("json:cond", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/cond", Maps.of(
 			"cases", Vectors.of(
 				Maps.of(s("when"), l(0), s("then"), s("zero-matched")))));
 		assertEquals(Status.COMPLETE, result.getStatus(), msg(result));
@@ -196,7 +196,7 @@ public class JSONAdapterTest {
 
 	@Test public void testCondCanReturnComplexValue() throws Exception {
 		// 'then' values can be arbitrary structures (maps, vectors, etc.)
-		Job result = COVIA.invokeSync("json:cond", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/cond", Maps.of(
 			"cases", Vectors.of(
 				Maps.of(s("when"), CVMBool.TRUE,
 					s("then"), Maps.of(s("decision"), s("APPROVED"), s("amount"), l(800))))));
@@ -210,7 +210,7 @@ public class JSONAdapterTest {
 	// ========================================================================
 
 	@Test public void testAssocStringPath() throws Exception {
-		Job result = COVIA.invokeSync("json:assoc", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/assoc", Maps.of(
 			"target", Maps.of(s("a"), l(1)),
 			"path", s("b"),
 			"value", l(2)));
@@ -221,7 +221,7 @@ public class JSONAdapterTest {
 	}
 
 	@Test public void testAssocVectorPathNested() throws Exception {
-		Job result = COVIA.invokeSync("json:assoc", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/assoc", Maps.of(
 			"target", Maps.of(s("user"), Maps.of(s("name"), s("alice"))),
 			"path", Vectors.of(s("user"), s("email")),
 			"value", s("a@b.c")));
@@ -232,7 +232,7 @@ public class JSONAdapterTest {
 	}
 
 	@Test public void testAssocOverwritesExisting() throws Exception {
-		Job result = COVIA.invokeSync("json:assoc", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/assoc", Maps.of(
 			"target", Maps.of(s("a"), l(1)),
 			"path", s("a"),
 			"value", l(99)));
@@ -241,7 +241,7 @@ public class JSONAdapterTest {
 	}
 
 	@Test public void testAssocMissingTargetUsesEmptyMap() throws Exception {
-		Job result = COVIA.invokeSync("json:assoc", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/assoc", Maps.of(
 			"path", s("k"),
 			"value", l(42)));
 		assertEquals(Status.COMPLETE, result.getStatus(), msg(result));
@@ -250,7 +250,7 @@ public class JSONAdapterTest {
 
 	@Test public void testAssocCreatesIntermediateMaps() throws Exception {
 		// assoc-in semantics: missing intermediate keys get filled with empty maps
-		Job result = COVIA.invokeSync("json:assoc", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/assoc", Maps.of(
 			"target", Maps.empty(),
 			"path", Vectors.of(s("a"), s("b"), s("c")),
 			"value", l(7)));
@@ -263,7 +263,7 @@ public class JSONAdapterTest {
 	// ========================================================================
 
 	@Test public void testSelectByKey() throws Exception {
-		Job result = COVIA.invokeSync("json:select", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/select", Maps.of(
 			"key", s("manager"),
 			"cases", Maps.of(
 				s("auto"),    Maps.of(s("decision"), s("APPROVED")),
@@ -275,7 +275,7 @@ public class JSONAdapterTest {
 	}
 
 	@Test public void testSelectMissingKeyReturnsDefault() throws Exception {
-		Job result = COVIA.invokeSync("json:select", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/select", Maps.of(
 			"key", s("unknown"),
 			"cases", Maps.of(s("a"), l(1), s("b"), l(2)),
 			"default", s("fallback")));
@@ -284,7 +284,7 @@ public class JSONAdapterTest {
 	}
 
 	@Test public void testSelectMissingKeyNoDefaultReturnsNull() throws Exception {
-		Job result = COVIA.invokeSync("json:select", Maps.of(
+		Job result = COVIA.invokeSync("v/ops/json/select", Maps.of(
 			"key", s("unknown"),
 			"cases", Maps.of(s("a"), l(1))));
 		assertEquals(Status.COMPLETE, result.getStatus(), msg(result));
@@ -301,7 +301,7 @@ public class JSONAdapterTest {
 		//   - merge combines it with invoice summary and policy rules
 
 		// Step 1: cond picks tier decision
-		Job tierJob = COVIA.invokeSync("json:cond", Maps.of(
+		Job tierJob = COVIA.invokeSync("v/ops/json/cond", Maps.of(
 			"cases", Vectors.of(
 				Maps.of(s("when"), CVMBool.FALSE,
 					s("then"), Maps.of(s("decision"), s("APPROVED"), s("tier"), s("auto"))),
@@ -314,7 +314,7 @@ public class JSONAdapterTest {
 		ACell tierDecision = RT.getIn(tierJob.getOutput(), "result");
 
 		// Step 2: merge tier decision with invoice summary and policy rules
-		Job mergeJob = COVIA.invokeSync("json:merge", Maps.of(
+		Job mergeJob = COVIA.invokeSync("v/ops/json/merge", Maps.of(
 			"values", Vectors.of(
 				tierDecision,
 				Maps.of(s("invoice_summary"),

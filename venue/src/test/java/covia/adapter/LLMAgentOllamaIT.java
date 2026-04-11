@@ -57,15 +57,15 @@ public class LLMAgentOllamaIT {
 	public void testOllamaChat() {
 		ACell initialState = Maps.of(
 			"config", Maps.of(
-				"llmOperation", "langchain:ollama",
+				"llmOperation", "v/ops/langchain/ollama",
 				"model", "qwen3",
 				"systemPrompt", "You are a concise assistant. Reply in one sentence."
 			)
 		);
 		engine.jobs().invokeOperation(
-			"agent:create",
+			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "ollama-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "llmagent:chat"),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
 				AgentState.KEY_STATE, initialState),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -74,7 +74,7 @@ public class LLMAgentOllamaIT {
 		ollamaUser.agent("ollama-agent").deliverMessage(Maps.of("content", "What is the capital of France?"));
 
 		Job runJob = engine.jobs().invokeOperation(
-			"agent:trigger",
+			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "ollama-agent"),
 			RequestContext.of(ALICE_DID));
 		ACell result = runJob.awaitResult(5000);
@@ -104,7 +104,7 @@ public class LLMAgentOllamaIT {
 		ollamaUser.agent("ollama-agent").deliverMessage(Maps.of("content", "And what is its population?"));
 
 		Job run2 = engine.jobs().invokeOperation(
-			"agent:trigger",
+			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "ollama-agent"),
 			RequestContext.of(ALICE_DID));
 		run2.awaitResult(5000);

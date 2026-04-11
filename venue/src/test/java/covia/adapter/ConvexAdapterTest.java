@@ -33,7 +33,7 @@ class ConvexAdapterTest {
 	void queryPublicPeerEndpoint() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.PEER, PEER,
                 Fields.ADDRESS, "#13",
                 Fields.SOURCE, "(* 2 3)"));
@@ -48,7 +48,7 @@ class ConvexAdapterTest {
 	void transact() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("convex:transact", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/transact", Maps.of(
 				Fields.PEER, PEER,
 				Fields.SOURCE, "(def foo 1)",
 				Fields.ADDRESS, "#13",
@@ -68,7 +68,7 @@ class ConvexAdapterTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		// No "source" field at all — adapter should fail with a clear message
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.PEER, PEER,
 				Fields.ADDRESS, "#13"));
 
@@ -83,7 +83,7 @@ class ConvexAdapterTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		// Empty string source — Reader.read("") will throw
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.PEER, PEER,
 				Fields.ADDRESS, "#13",
 				Fields.SOURCE, ""));
@@ -97,7 +97,7 @@ class ConvexAdapterTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		// Unmatched parentheses — Reader.read should fail
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.PEER, PEER,
 				Fields.ADDRESS, "#13",
 				Fields.SOURCE, "(+ 1 2"));
@@ -112,7 +112,7 @@ class ConvexAdapterTest {
 	void queryReturnsNumber() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.PEER, PEER,
 				Fields.ADDRESS, "#13",
 				Fields.SOURCE, "(+ 100 200)"));
@@ -126,7 +126,7 @@ class ConvexAdapterTest {
 	void queryReturnsString() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.PEER, PEER,
 				Fields.ADDRESS, "#13",
 				Fields.SOURCE, "(str \"hello\" \" \" \"world\")"));
@@ -141,7 +141,7 @@ class ConvexAdapterTest {
 	void queryReturnsVector() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.PEER, PEER,
 				Fields.ADDRESS, "#13",
 				Fields.SOURCE, "[1 2 3]"));
@@ -156,7 +156,7 @@ class ConvexAdapterTest {
 	void queryReturnsMap() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.PEER, PEER,
 				Fields.ADDRESS, "#13",
 				Fields.SOURCE, "{:a 1 :b 2}"));
@@ -171,7 +171,7 @@ class ConvexAdapterTest {
 	void queryReturnsNil() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.PEER, PEER,
 				Fields.ADDRESS, "#13",
 				Fields.SOURCE, "nil"));
@@ -185,7 +185,7 @@ class ConvexAdapterTest {
 	void queryReturnsBoolean() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.PEER, PEER,
 				Fields.ADDRESS, "#13",
 				Fields.SOURCE, "(= 1 1)"));
@@ -202,7 +202,7 @@ class ConvexAdapterTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		// Reference to an undefined symbol — CVM returns an error result
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.PEER, PEER,
 				Fields.ADDRESS, "#13",
 				Fields.SOURCE, "this-symbol-does-not-exist-xyz"));
@@ -218,7 +218,7 @@ class ConvexAdapterTest {
 	void queryDivisionByZero() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.PEER, PEER,
 				Fields.ADDRESS, "#13",
 				Fields.SOURCE, "(/ 1 0)"));
@@ -235,7 +235,7 @@ class ConvexAdapterTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		// Omit the address — adapter should still work (uses null address for query)
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.PEER, PEER,
 				Fields.SOURCE, "(+ 1 1)"));
 
@@ -250,7 +250,7 @@ class ConvexAdapterTest {
 	void transactMissingSource() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("convex:transact", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/transact", Maps.of(
 				Fields.PEER, PEER,
 				Fields.ADDRESS, "#13",
 				Strings.create("seed"), "0xB5232CF710Aaa222F2C898105d06d58283f91173D668C313b72dD90f0175E622"));
@@ -265,7 +265,7 @@ class ConvexAdapterTest {
 	void transactMissingAddress() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("convex:transact", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/transact", Maps.of(
 				Fields.PEER, PEER,
 				Fields.SOURCE, "(def foo 1)",
 				Strings.create("seed"), "0xB5232CF710Aaa222F2C898105d06d58283f91173D668C313b72dD90f0175E622"));
@@ -280,7 +280,7 @@ class ConvexAdapterTest {
 	void transactMissingSeed() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("convex:transact", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/transact", Maps.of(
 				Fields.PEER, PEER,
 				Fields.SOURCE, "(def foo 1)",
 				Fields.ADDRESS, "#13"));
@@ -296,7 +296,7 @@ class ConvexAdapterTest {
 	void transactEmptySource() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("convex:transact", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/transact", Maps.of(
 				Fields.PEER, PEER,
 				Fields.ADDRESS, "#13",
 				Fields.SOURCE, "",
@@ -310,7 +310,7 @@ class ConvexAdapterTest {
 	void transactMalformedExpression() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("convex:transact", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/transact", Maps.of(
 				Fields.PEER, PEER,
 				Fields.ADDRESS, "#13",
 				Fields.SOURCE, "(def foo",
@@ -327,7 +327,7 @@ class ConvexAdapterTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		// Use a non-existent peer endpoint — should fail to connect
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.PEER, "localhost:19999",
 				Fields.ADDRESS, "#13",
 				Fields.SOURCE, "(+ 1 1)"));
@@ -347,7 +347,7 @@ class ConvexAdapterTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		// Omit the peer field — the query.json asset has a default peer in metadata
-		Job job = covia.invokeSync("convex:query", Maps.of(
+		Job job = covia.invokeSync("v/ops/convex/query", Maps.of(
 				Fields.ADDRESS, "#13",
 				Fields.SOURCE, "(* 7 6)"));
 

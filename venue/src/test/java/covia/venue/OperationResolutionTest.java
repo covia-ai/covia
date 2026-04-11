@@ -39,7 +39,7 @@ public class OperationResolutionTest {
 	@Test
 	public void testResolveByHash() {
 		// Resolve an existing operation by its hash
-		Hash echoHash = engine.resolveOperation("test:echo");
+		Hash echoHash = engine.resolveAsset(Strings.create("v/test/ops/echo")).getID();
 		assertNotNull(echoHash);
 
 		Asset asset = engine.resolveAsset(Strings.create(echoHash.toHexString()));
@@ -68,7 +68,7 @@ public class OperationResolutionTest {
 				"input", Maps.of("type", "object")
 			)
 		);
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/my-echo", Fields.VALUE, opMeta),
 			ALICE).awaitResult(5000);
 
@@ -80,12 +80,15 @@ public class OperationResolutionTest {
 
 	@Test
 	public void testInvokeUserOp() {
-		// Write an operation definition that routes to test:echo
+		// Write an operation definition that routes to test:echo. The
+		// operation.adapter field is the internal dispatch string used by
+		// the test adapter to identify the sub-op — kept as-is even though
+		// the catalog path for echo is v/test/ops/echo.
 		ACell opMeta = Maps.of(
 			"name", "My Echo",
 			"operation", Maps.of("adapter", "test:echo")
 		);
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/my-echo", Fields.VALUE, opMeta),
 			ALICE).awaitResult(5000);
 
@@ -111,10 +114,10 @@ public class OperationResolutionTest {
 		// Storing a string at /o/<name> is allowed (it's just data) but it
 		// is NOT treated as a reference. resolveAsset returns null because
 		// the value isn't a map with an operation field.
-		Hash echoHash = engine.resolveOperation("test:echo");
+		Hash echoHash = engine.resolveAsset(Strings.create("v/test/ops/echo")).getID();
 		assertNotNull(echoHash);
 
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/echo-ref",
 				Fields.VALUE, Strings.create("/a/" + echoHash.toHexString())),
 			ALICE).awaitResult(5000);
@@ -132,8 +135,8 @@ public class OperationResolutionTest {
 
 	@Test
 	public void testInvokingUserOpWithStringValueFails() {
-		Hash echoHash = engine.resolveOperation("test:echo");
-		engine.jobs().invokeOperation("covia:write",
+		Hash echoHash = engine.resolveAsset(Strings.create("v/test/ops/echo")).getID();
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/my-ref",
 				Fields.VALUE, Strings.create("/a/" + echoHash.toHexString())),
 			ALICE).awaitResult(5000);
@@ -171,7 +174,7 @@ public class OperationResolutionTest {
 			"name", "Alice's Op",
 			"operation", Maps.of("adapter", "test:echo")
 		);
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/private-op", Fields.VALUE, opMeta),
 			ALICE).awaitResult(5000);
 
@@ -188,7 +191,7 @@ public class OperationResolutionTest {
 	@Test
 	public void testVenueRegistryStillWorks() {
 		// The legacy operation name registry should still resolve
-		Asset asset = engine.resolveAsset(Strings.create("test:echo"));
+		Asset asset = engine.resolveAsset(Strings.create("v/test/ops/echo"));
 		assertNotNull(asset, "Venue registry should still resolve operation names");
 	}
 
@@ -197,8 +200,8 @@ public class OperationResolutionTest {
 	@Test
 	public void testDistinctAssetsHaveDistinctHashes() {
 		// langchain:openai and langchain:ollama should be different assets
-		Hash openaiHash = engine.resolveOperation("langchain:openai");
-		Hash ollamaHash = engine.resolveOperation("langchain:ollama");
+		Hash openaiHash = engine.resolveAsset(Strings.create("v/ops/langchain/openai")).getID();
+		Hash ollamaHash = engine.resolveAsset(Strings.create("v/ops/langchain/ollama")).getID();
 		assertNotNull(openaiHash);
 		assertNotNull(ollamaHash);
 		assertNotEquals(openaiHash, ollamaHash,
@@ -216,9 +219,9 @@ public class OperationResolutionTest {
 	@Test
 	public void testStringAtWorkspacePathIsNotResolvableAsOperation() {
 		// A hash string stored at a workspace path is data, not a reference.
-		Hash echoHash = engine.resolveOperation("test:echo");
+		Hash echoHash = engine.resolveAsset(Strings.create("v/test/ops/echo")).getID();
 		assertNotNull(echoHash);
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/config/echo-pointer",
 			        Fields.VALUE, Strings.create(echoHash.toHexString())),
 			ALICE).awaitResult(5000);
@@ -238,9 +241,9 @@ public class OperationResolutionTest {
 		// a reference. The legacy registry fallback is only triggered for
 		// the bare-string ref form, not for stored values that happen to
 		// be strings.
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/config/op-pointer",
-			        Fields.VALUE, Strings.create("test:echo")),
+			        Fields.VALUE, Strings.create("v/test/ops/echo")),
 			ALICE).awaitResult(5000);
 
 		Asset asset = engine.resolveAsset(Strings.create("w/config/op-pointer"), ALICE);
@@ -258,7 +261,7 @@ public class OperationResolutionTest {
 				"input", Maps.of("type", "object")
 			)
 		);
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/config/inline-op", Fields.VALUE, opMeta),
 			ALICE).awaitResult(5000);
 
@@ -275,9 +278,9 @@ public class OperationResolutionTest {
 	@Test
 	public void testResolveWorkspacePathRequiresAuth() {
 		// Internal context has no caller DID — workspace lookup must fail cleanly
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/config/internal-test",
-			        Fields.VALUE, Strings.create("test:echo")),
+			        Fields.VALUE, Strings.create("v/test/ops/echo")),
 			ALICE).awaitResult(5000);
 
 		// Internal context can't resolve workspace paths because they're per-user
@@ -294,7 +297,7 @@ public class OperationResolutionTest {
 	@Test
 	public void testResolveLocalDidKeyUrlForVenueAsset() {
 		// Pick any venue-installed asset hash
-		Hash echoHash = engine.resolveOperation("test:echo");
+		Hash echoHash = engine.resolveAsset(Strings.create("v/test/ops/echo")).getID();
 		assertNotNull(echoHash);
 
 		// Construct the DID URL form: <venue-did>:public/a/<hash>
@@ -309,7 +312,7 @@ public class OperationResolutionTest {
 	@Test
 	public void testResolveBareVenueDidUrl() {
 		// Without the :public sub-id — bare venue DID
-		Hash echoHash = engine.resolveOperation("test:echo");
+		Hash echoHash = engine.resolveAsset(Strings.create("v/test/ops/echo")).getID();
 		assertNotNull(echoHash);
 
 		String didUrl = engine.getDIDString().toString() + "/a/" + echoHash.toHexString();
@@ -337,7 +340,7 @@ public class OperationResolutionTest {
 
 	@Test
 	public void testResolvePathReturnsAssetMetadataForBareHash() {
-		Hash echoHash = engine.resolveOperation("test:echo");
+		Hash echoHash = engine.resolveAsset(Strings.create("v/test/ops/echo")).getID();
 		assertNotNull(echoHash);
 
 		ACell value = engine.resolvePath(Strings.create(echoHash.toHexString()), ALICE);
@@ -348,7 +351,7 @@ public class OperationResolutionTest {
 
 	@Test
 	public void testResolvePathReturnsAssetMetadataForSlashAHash() {
-		Hash echoHash = engine.resolveOperation("test:echo");
+		Hash echoHash = engine.resolveAsset(Strings.create("v/test/ops/echo")).getID();
 		ACell value = engine.resolvePath(
 			Strings.create("/a/" + echoHash.toHexString()), ALICE);
 		assertNotNull(value);
@@ -362,7 +365,7 @@ public class OperationResolutionTest {
 			"name", "Custom",
 			"operation", Maps.of("adapter", "test:echo")
 		);
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/custom", Fields.VALUE, opMeta),
 			ALICE).awaitResult(5000);
 
@@ -373,7 +376,7 @@ public class OperationResolutionTest {
 	@Test
 	public void testResolvePathReturnsLiteralStringAtUserOp() {
 		// A string at /o/<name> is opaque data; resolvePath returns it literally
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/note",
 				Fields.VALUE, Strings.create("just a string")),
 			ALICE).awaitResult(5000);
@@ -385,7 +388,7 @@ public class OperationResolutionTest {
 	@Test
 	public void testResolvePathReturnsLiteralValueAtWorkspacePath() {
 		ACell raw = Maps.of("kind", "config", "version", CVMLong.create(42));
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/cfg/x", Fields.VALUE, raw),
 			ALICE).awaitResult(5000);
 
@@ -405,10 +408,10 @@ public class OperationResolutionTest {
 	public void testResolvePathDoesNotChaseStringRefs() {
 		// Even if the string at /o/x looks like a path, resolvePath returns
 		// the string literally — no automatic chasing.
-		Hash echoHash = engine.resolveOperation("test:echo");
+		Hash echoHash = engine.resolveAsset(Strings.create("v/test/ops/echo")).getID();
 		AString hashStr = Strings.create("/a/" + echoHash.toHexString());
 
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/looks-like-ref", Fields.VALUE, hashStr),
 			ALICE).awaitResult(5000);
 
@@ -424,7 +427,7 @@ public class OperationResolutionTest {
 		ACell refMap = Maps.of(
 			"ref", Strings.create("v/ops/json/merge")
 		);
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/has-ref-field", Fields.VALUE, refMap),
 			ALICE).awaitResult(5000);
 
@@ -451,7 +454,7 @@ public class OperationResolutionTest {
 			"name", "Inline",
 			"operation", Maps.of("adapter", "test:echo")
 		);
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/inline", Fields.VALUE, opMeta),
 			ALICE).awaitResult(5000);
 
@@ -476,7 +479,7 @@ public class OperationResolutionTest {
 	public void testWriteAndReadVenueGlobalAsInternal() {
 		// Internal context can write to /v/
 		ACell value = Maps.of("name", "test entry", "version", CVMLong.create(1));
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "v/test/entry", Fields.VALUE, value),
 			RequestContext.INTERNAL).awaitResult(5000);
 
@@ -493,7 +496,7 @@ public class OperationResolutionTest {
 	public void testNonVenueCallerCannotWriteToV() {
 		// Alice (a regular user) cannot write to /v/
 		assertThrows(Exception.class, () -> {
-			engine.jobs().invokeOperation("covia:write",
+			engine.jobs().invokeOperation("v/ops/covia/write",
 				Maps.of(Fields.PATH, "v/test/forbidden", Fields.VALUE, Strings.create("nope")),
 				ALICE).awaitResult(5000);
 		}, "non-venue caller should be rejected when writing to /v/");
@@ -503,7 +506,7 @@ public class OperationResolutionTest {
 	public void testVenueGlobalsRouteThroughVenueUserWGlobal() {
 		// Verify the underlying storage location: writing to v/foo should be
 		// readable from <venue-DID>/w/global/foo by the venue itself.
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "v/foo", Fields.VALUE, Strings.create("hello")),
 			RequestContext.INTERNAL).awaitResult(5000);
 
@@ -519,11 +522,11 @@ public class OperationResolutionTest {
 	@Test
 	public void testVenueGlobalsReadableViaCoviaRead() {
 		// Universal resolution: covia:read should accept v/ paths
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "v/welcome", Fields.VALUE, Strings.create("hi from venue")),
 			RequestContext.INTERNAL).awaitResult(5000);
 
-		Job job = engine.jobs().invokeOperation("covia:read",
+		Job job = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, "v/welcome"), ALICE);
 		ACell result = job.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
@@ -538,7 +541,7 @@ public class OperationResolutionTest {
 			"operation", Maps.of("adapter", "json:merge"),
 			"tags", convex.core.data.Vectors.of(Strings.create("data"), Strings.create("util"))
 		);
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "v/ops/json/merge", Fields.VALUE, complex),
 			RequestContext.INTERNAL).awaitResult(5000);
 
@@ -613,7 +616,7 @@ public class OperationResolutionTest {
 	@Test
 	public void testVenueInfoAccessibleViaCoviaRead() {
 		// Universal resolution: covia:read should work for /v/info/ paths
-		Job job = engine.jobs().invokeOperation("covia:read",
+		Job job = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, "v/info/did"), ALICE);
 		ACell result = job.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
@@ -663,7 +666,7 @@ public class OperationResolutionTest {
 	@Test
 	public void testVOpsAccessibleViaCoviaList() {
 		// covia:list on v/ops/json should show the four primitives
-		Job job = engine.jobs().invokeOperation("covia:list",
+		Job job = engine.jobs().invokeOperation("v/ops/covia/list",
 			Maps.of(Fields.PATH, "v/ops/json"), ALICE);
 		ACell result = job.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));

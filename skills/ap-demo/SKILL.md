@@ -43,7 +43,7 @@ Run all setup steps — secret, reference data, artifacts, orchestration, agents
 7. **Confirm context and caps** — query Bob or Carol and verify `state.config.context` and `state.config.caps` are present
 
 Key config rules:
-- `config.operation` must be a **plain string** `"goaltree:chat"`, not a map
+- `config.operation` must be a **plain string** `"v/ops/goaltree/chat"`, not a map
 - `state.config.context` is an array of asset hashes or workspace paths — loaded as system messages before each run
 - `state.config.caps` is an array of `{with, can}` attenuations — enforced on every tool call. No caps = full access.
 - `state.config.responseFormat` must have `additionalProperties: false` at every object level for OpenAI strict mode

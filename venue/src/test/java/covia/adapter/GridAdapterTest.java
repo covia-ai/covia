@@ -20,8 +20,8 @@ class GridAdapterTest {
 	void runLocalOperation() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("grid:run", Maps.of(
-				Fields.OPERATION, "jvm:stringConcat",
+		Job job = covia.invokeSync("v/ops/grid/run", Maps.of(
+				Fields.OPERATION, "v/ops/jvm/string-concat",
 				Fields.INPUT, Maps.of(
 					"first", "Hello",
 					"second", "Grid"
@@ -36,9 +36,9 @@ class GridAdapterTest {
 	void runRemoteOperation() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("grid:run", Maps.of(
+		Job job = covia.invokeSync("v/ops/grid/run", Maps.of(
 				Fields.VENUE, TestServer.BASE_URL,
-				Fields.OPERATION, "jvm:stringConcat",
+				Fields.OPERATION, "v/ops/jvm/string-concat",
 				Fields.INPUT, Maps.of(
 					"first", "Remote",
 					"second", "Run"
@@ -53,8 +53,8 @@ class GridAdapterTest {
 	void invokeLocalOperation() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("grid:invoke", Maps.of(
-				Fields.OPERATION, "jvm:stringConcat",
+		Job job = covia.invokeSync("v/ops/grid/invoke", Maps.of(
+				Fields.OPERATION, "v/ops/jvm/string-concat",
 				Fields.INPUT, Maps.of(
 					"first", "Hello",
 					"second", "Async"
@@ -69,9 +69,9 @@ class GridAdapterTest {
 	void invokeRemoteOperation() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("grid:invoke", Maps.of(
+		Job job = covia.invokeSync("v/ops/grid/invoke", Maps.of(
 				Fields.VENUE, TestServer.BASE_URL,
-				Fields.OPERATION, "jvm:stringConcat",
+				Fields.OPERATION, "v/ops/jvm/string-concat",
 				Fields.INPUT, Maps.of(
 					"first", "Async",
 					"second", "Remote"
@@ -86,13 +86,13 @@ class GridAdapterTest {
 	void jobStatusLocal() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("grid:invoke", Maps.of(
-				Fields.OPERATION, "jvm:stringConcat",
+		Job job = covia.invokeSync("v/ops/grid/invoke", Maps.of(
+				Fields.OPERATION, "v/ops/jvm/string-concat",
 				Fields.INPUT, Maps.of("first", "status", "second", "check")));
 		AString jobId = RT.ensureString(RT.getIn(job.getOutput(), Fields.ID));
 		assertNotNull(jobId);
 
-		Job statusJob = covia.invokeSync("grid:jobStatus", Maps.of(Fields.ID, jobId));
+		Job statusJob = covia.invokeSync("v/ops/grid/job-status", Maps.of(Fields.ID, jobId));
 		assertEquals(Status.COMPLETE, statusJob.getStatus());
 		assertEquals(Status.COMPLETE, RT.getIn(statusJob.getOutput(), Fields.STATUS));
 	}
@@ -101,12 +101,12 @@ class GridAdapterTest {
 	void jobResultLocal() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("grid:invoke", Maps.of(
-				Fields.OPERATION, "jvm:stringConcat",
+		Job job = covia.invokeSync("v/ops/grid/invoke", Maps.of(
+				Fields.OPERATION, "v/ops/jvm/string-concat",
 				Fields.INPUT, Maps.of("first", "result", "second", "wait")));
 		AString jobId = RT.ensureString(RT.getIn(job.getOutput(), Fields.ID));
 
-		Job resultJob = covia.invokeSync("grid:jobResult", Maps.of(Fields.ID, jobId));
+		Job resultJob = covia.invokeSync("v/ops/grid/job-result", Maps.of(Fields.ID, jobId));
 		assertEquals(Status.COMPLETE, resultJob.getStatus());
 		assertEquals("resultwait", RT.getIn(resultJob.getOutput(), Fields.RESULT).toString());
 	}
@@ -115,11 +115,11 @@ class GridAdapterTest {
 	void jobResultLocalFailure() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job failJob = covia.invokeSync("grid:invoke", Maps.of(
-				Fields.OPERATION, "test:error"));
+		Job failJob = covia.invokeSync("v/ops/grid/invoke", Maps.of(
+				Fields.OPERATION, "v/test/ops/error"));
 		AString jobId = RT.ensureString(RT.getIn(failJob.getOutput(), Fields.ID));
 
-		Job resultJob = covia.invokeSync("grid:jobResult", Maps.of(Fields.ID, jobId));
+		Job resultJob = covia.invokeSync("v/ops/grid/job-result", Maps.of(Fields.ID, jobId));
 		assertEquals(Status.FAILED, resultJob.getStatus());
 		assertNotNull(resultJob.getErrorMessage());
 	}
@@ -132,8 +132,8 @@ class GridAdapterTest {
 	void runLocalOperationFailure() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job job = covia.invokeSync("grid:run", Maps.of(
-				Fields.OPERATION, "test:error",
+		Job job = covia.invokeSync("v/ops/grid/run", Maps.of(
+				Fields.OPERATION, "v/test/ops/error",
 				Fields.INPUT, Maps.of("message", "Test failure via grid:run")));
 
 		assertNotNull(job, "Job should not be null");

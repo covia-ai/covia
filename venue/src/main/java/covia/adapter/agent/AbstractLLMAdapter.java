@@ -71,14 +71,14 @@ public abstract class AbstractLLMAdapter extends AAdapter {
 
 	// ========== Defaults ==========
 
-	public static final AString DEFAULT_LLM_OPERATION = Strings.create("langchain:openai");
+	public static final AString DEFAULT_LLM_OPERATION = Strings.create("v/ops/langchain/openai");
 
 	// ========== Level 3 invocation ==========
 
 	/**
 	 * Invokes a Level 3 LLM operation with messages and optional tools.
 	 *
-	 * @param llmOperation the grid operation (e.g. "langchain:openai")
+	 * @param llmOperation the grid operation (e.g. "v/ops/langchain/openai")
 	 * @param config agent config (model, url, apiKey, responseFormat extracted)
 	 * @param messages full message history for this inference
 	 * @param tools tool definitions (null or empty = no tools)

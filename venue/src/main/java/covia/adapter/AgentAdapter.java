@@ -213,11 +213,11 @@ public class AgentAdapter extends AAdapter {
 		// defaults directly into record.config instead of duplicating into state.
 		if (config == null) config = Maps.empty();
 		if (!config.containsKey(Fields.OPERATION)) {
-			config = config.assoc(Fields.OPERATION, Strings.create("llmagent:chat"));
+			config = config.assoc(Fields.OPERATION, Strings.create("v/ops/llmagent/chat"));
 		}
 		// systemPrompt present implies an LLM agent — ensure llmOperation is set
 		if (config.containsKey(K_SYSTEM_PROMPT) && !config.containsKey(K_LLM_OPERATION)) {
-			config = config.assoc(K_LLM_OPERATION, Strings.create("langchain:openai"));
+			config = config.assoc(K_LLM_OPERATION, Strings.create("v/ops/langchain/openai"));
 		}
 
 		boolean overwrite = CVMBool.TRUE.equals(RT.getIn(input, Fields.OVERWRITE));

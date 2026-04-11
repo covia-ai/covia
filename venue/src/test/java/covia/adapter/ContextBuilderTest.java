@@ -155,7 +155,7 @@ public class ContextBuilderTest {
 	@Test
 	public void testContextEntriesFromConfig() {
 		// Write workspace data
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/rules"),
 				Strings.create("value"), Strings.create("Rule 1: validate all inputs")),
 			ctx).awaitResult(5000);
@@ -184,7 +184,7 @@ public class ContextBuilderTest {
 	@Test
 	public void testContextEntriesUseCellExplorer() {
 		// Write structured map to workspace
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/structured"),
 				Strings.create("value"), Maps.of(
 					Strings.create("name"), Strings.create("Alice"),
@@ -347,7 +347,7 @@ public class ContextBuilderTest {
 
 	@Test
 	public void testCapsExtracted() {
-		AVector<ACell> capsVec = Vectors.of((ACell) Strings.create("grid:run"));
+		AVector<ACell> capsVec = Vectors.of((ACell) Strings.create("v/ops/grid/run"));
 		AMap<AString, ACell> config = Maps.of(
 			Strings.intern("caps"), capsVec);
 
@@ -435,9 +435,9 @@ public class ContextBuilderTest {
 
 	@Test
 	public void testParseConfigToolEntryString() {
-		AString[] parsed = ContextBuilder.parseConfigToolEntry(Strings.create("agent:create"));
+		AString[] parsed = ContextBuilder.parseConfigToolEntry(Strings.create("v/ops/agent/create"));
 		assertNotNull(parsed);
-		assertEquals("agent:create", parsed[0].toString());
+		assertEquals("v/ops/agent/create", parsed[0].toString());
 		assertNull(parsed[1]);
 		assertNull(parsed[2]);
 	}
@@ -445,12 +445,12 @@ public class ContextBuilderTest {
 	@Test
 	public void testParseConfigToolEntryMap() {
 		ACell entry = Maps.of(
-			Fields.OPERATION, Strings.create("grid:run"),
+			Fields.OPERATION, Strings.create("v/ops/grid/run"),
 			Strings.intern("name"), Strings.create("myTool"),
 			Strings.intern("description"), Strings.create("My tool"));
 		AString[] parsed = ContextBuilder.parseConfigToolEntry(entry);
 		assertNotNull(parsed);
-		assertEquals("grid:run", parsed[0].toString());
+		assertEquals("v/ops/grid/run", parsed[0].toString());
 		assertEquals("myTool", parsed[1].toString());
 		assertEquals("My tool", parsed[2].toString());
 	}
@@ -484,7 +484,7 @@ public class ContextBuilderTest {
 
 	@Test public void testLoadedPathsResolution() {
 		// Write data to workspace via operation
-		engine.jobs().invokeOperation("covia:write",
+		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/test-data"),
 				Strings.create("value"), Maps.of(Strings.create("key"), Strings.create("value"))),
 			ctx).awaitResult(5000);

@@ -32,7 +32,7 @@ import covia.venue.Users;
  *   <li>Workspace path references ({@code w/docs/rules})</li>
  *   <li>Asset references (hex hash, {@code /a/}, {@code /o/}, DID URL, registered name)</li>
  *   <li>Job result references ({@code {"job": "0x..."}}</li>
- *   <li>Grid operation calls ({@code {"op": "covia:read", "input": {...}}})</li>
+ *   <li>Grid operation calls ({@code {"op": "v/ops/covia/read", "input": {...}}})</li>
  *   <li>Map entries with {@code ref}, {@code text}, {@code label}, {@code required} fields</li>
  * </ul>
  *
@@ -194,12 +194,20 @@ public class ContextLoader {
 
 	/**
 	 * Returns true if the string looks like an asset reference rather than literal text.
+	 *
+	 * <p>References include hex hashes, /a/ and /o/ paths, DID URLs, lattice
+	 * namespace paths (w/, g/, j/, s/, h/, n/, t/, o/), and venue catalog
+	 * paths under /v/. Strings with spaces are treated as literal text.</p>
 	 */
 	static boolean isAssetReference(String ref) {
+		if (ref == null || ref.isEmpty() || ref.contains(" ")) return false;
 		if (ref.startsWith("/a/") || ref.startsWith("/o/")) return true;
 		if (ref.startsWith("did:")) return true;
-		if (ref.contains(":") && !ref.contains(" ")) return true; // adapter:op pattern
 		if (ref.length() == 64 && ref.matches("[0-9a-fA-F]+")) return true; // hex hash
+		// Lattice namespace paths
+		if (ref.startsWith("w/") || ref.startsWith("o/") || ref.startsWith("g/")
+			|| ref.startsWith("j/") || ref.startsWith("s/") || ref.startsWith("h/")
+			|| ref.startsWith("n/") || ref.startsWith("t/") || ref.startsWith("v/")) return true;
 		return false;
 	}
 

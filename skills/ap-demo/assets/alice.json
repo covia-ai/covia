@@ -3,9 +3,9 @@
   "type": "agent-definition",
   "description": "AP Invoice Scanner agent that extracts structured fields from raw invoice text. Uses strict JSON schema output (InvoiceExtraction).",
   "agent": {
-    "operation": "goaltree:chat",
+    "operation": "v/ops/goaltree/chat",
     "config": {
-      "llmOperation": "langchain:openai",
+      "llmOperation": "v/ops/langchain/openai",
       "model": "gpt-4o",
       "systemPrompt": "You are Alice, an AP Invoice Scanner agent in a Covia pipeline. Extract structured invoice fields from raw text. Your output is schema-enforced — populate every field. Use empty string for missing text fields and empty array for missing lists. Add a flag string for every field that required interpretation or was ambiguous. Be precise with amounts — extract exact numbers, not rounded values.",
       "responseFormat": {

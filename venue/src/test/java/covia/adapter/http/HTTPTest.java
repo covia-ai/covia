@@ -30,7 +30,7 @@ public class HTTPTest {
 	@Test public void testHTTPGet() throws InterruptedException, ExecutionException, TimeoutException {
 		VenueHTTP covia=TestServer.COVIA;
 
-		Job result=covia.invokeSync("http:get", Maps.of("url",TestServer.BASE_URL), 10_000);
+		Job result=covia.invokeSync("v/ops/http/get", Maps.of("url",TestServer.BASE_URL), 10_000);
 		assertTrue(result.isComplete());
 
 		assertEquals(200,RT.ensureLong(RT.getIn(result.getOutput(),"status")).longValue());
@@ -42,7 +42,7 @@ public class HTTPTest {
 		// Test HTTP GET to an invalid endpoint - should return 404
 		// Uses explicit timeout because the adapter makes a re-entrant HTTP call
 		// back to the same server, which can stall under thread contention.
-		Job result = covia.invokeSync("http:get", Maps.of(
+		Job result = covia.invokeSync("v/ops/http/get", Maps.of(
 			"url", TestServer.BASE_URL + "/invalid-doc",
 			"headers", Maps.of("User-Agent", "Covia-Test/1.0")
 		), 10_000);
@@ -63,7 +63,7 @@ public class HTTPTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		// GET the venue's /status endpoint — always available
-		Job result = covia.invokeSync("http:get", Maps.of(
+		Job result = covia.invokeSync("v/ops/http/get", Maps.of(
 			"url", TestServer.BASE_URL + "/api/v1/status"
 		), 10_000);
 
@@ -82,7 +82,7 @@ public class HTTPTest {
 		// Use the venue's own /api/v1/status endpoint with query params
 		// The query params won't affect the response, but we verify they
 		// are properly appended to the URL (no exception, request succeeds)
-		Job result = covia.invokeSync("http:get", Maps.of(
+		Job result = covia.invokeSync("v/ops/http/get", Maps.of(
 			"url", TestServer.BASE_URL + "/api/v1/status",
 			"queryParams", Maps.of(
 				"param1", "value1",
@@ -99,7 +99,7 @@ public class HTTPTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		// URL already has a query string; queryParams should be appended with &
-		Job result = covia.invokeSync("http:get", Maps.of(
+		Job result = covia.invokeSync("v/ops/http/get", Maps.of(
 			"url", TestServer.BASE_URL + "/api/v1/status?existing=true",
 			"queryParams", Maps.of("extra", "param")
 		), 10_000);
@@ -117,7 +117,7 @@ public class HTTPTest {
 
 		// POST to the venue's invoke endpoint with an invalid body — we expect
 		// the server to respond (likely 400 or 422) rather than the adapter failing.
-		Job result = covia.invokeSync("http:post", Maps.of(
+		Job result = covia.invokeSync("v/ops/http/post", Maps.of(
 			"url", TestServer.BASE_URL + "/api/v1/invoke",
 			"headers", Maps.of("Content-Type", "application/json"),
 			"body", Maps.of("dummy", "payload")
@@ -135,7 +135,7 @@ public class HTTPTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		// POST with custom headers
-		Job result = covia.invokeSync("http:post", Maps.of(
+		Job result = covia.invokeSync("v/ops/http/post", Maps.of(
 			"url", TestServer.BASE_URL + "/api/v1/status",
 			"headers", Maps.of(
 				"Content-Type", "application/json",
@@ -154,7 +154,7 @@ public class HTTPTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		// Use http:get but override method to POST via the method field
-		Job result = covia.invokeSync("http:get", Maps.of(
+		Job result = covia.invokeSync("v/ops/http/get", Maps.of(
 			"url", TestServer.BASE_URL + "/api/v1/status",
 			"method", "POST",
 			"body", Maps.of("test", "data")
@@ -222,7 +222,7 @@ public class HTTPTest {
 
 		// TestServer already calls addAllowedHost("localhost"), so requests to
 		// localhost should succeed through the venue
-		Job result = covia.invokeSync("http:get", Maps.of(
+		Job result = covia.invokeSync("v/ops/http/get", Maps.of(
 			"url", TestServer.BASE_URL + "/api/v1/status"
 		), 10_000);
 
@@ -273,7 +273,7 @@ public class HTTPTest {
 
 		// No URL provided — adapter NPEs on url.toString(), server returns 500
 		assertThrows(ExecutionException.class, () -> {
-			covia.invokeSync("http:get", Maps.of(), 10_000);
+			covia.invokeSync("v/ops/http/get", Maps.of(), 10_000);
 		}, "Missing URL should cause an error");
 	}
 
@@ -282,7 +282,7 @@ public class HTTPTest {
 
 		// Malformed URL — URISyntaxException, server returns 500
 		assertThrows(ExecutionException.class, () -> {
-			covia.invokeSync("http:get", Maps.of(
+			covia.invokeSync("v/ops/http/get", Maps.of(
 				"url", "not a valid url at all %%% {}"
 			), 10_000);
 		}, "Invalid URL format should cause an error");
@@ -293,7 +293,7 @@ public class HTTPTest {
 
 		// URL with scheme but no host — validateURL rejects it, server returns 400
 		assertThrows(ExecutionException.class, () -> {
-			covia.invokeSync("http:get", Maps.of(
+			covia.invokeSync("v/ops/http/get", Maps.of(
 				"url", "http:///path/only"
 			), 10_000);
 		}, "URL with no host should cause an error");
@@ -304,7 +304,7 @@ public class HTTPTest {
 
 		// Empty URL string — validateURL rejects it, server returns 400
 		assertThrows(ExecutionException.class, () -> {
-			covia.invokeSync("http:get", Maps.of("url", ""), 10_000);
+			covia.invokeSync("v/ops/http/get", Maps.of("url", ""), 10_000);
 		}, "Empty URL string should cause an error");
 	}
 
@@ -316,7 +316,7 @@ public class HTTPTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		// Request a path that does not exist on the venue
-		Job result = covia.invokeSync("http:get", Maps.of(
+		Job result = covia.invokeSync("v/ops/http/get", Maps.of(
 			"url", TestServer.BASE_URL + "/this/path/does/not/exist"
 		), 10_000);
 
@@ -331,7 +331,7 @@ public class HTTPTest {
 		VenueHTTP covia = TestServer.COVIA;
 
 		// DELETE on a GET-only endpoint — expect 405 Method Not Allowed (or 404)
-		Job result = covia.invokeSync("http:get", Maps.of(
+		Job result = covia.invokeSync("v/ops/http/get", Maps.of(
 			"url", TestServer.BASE_URL + "/api/v1/status",
 			"method", "DELETE"
 		), 10_000);
@@ -348,7 +348,7 @@ public class HTTPTest {
 	@Test public void testResponseContainsAllFields() throws InterruptedException, ExecutionException, TimeoutException {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job result = covia.invokeSync("http:get", Maps.of(
+		Job result = covia.invokeSync("v/ops/http/get", Maps.of(
 			"url", TestServer.BASE_URL + "/api/v1/status"
 		), 10_000);
 
@@ -506,7 +506,7 @@ public class HTTPTest {
 			System.out.println("Google search orchestration failed (this is expected in some environments): " + error);
 
 			// Run a fallback test to ensure HTTP adapter is working
-			Job fallbackResult = covia.invokeSync("http:get", Maps.of(
+			Job fallbackResult = covia.invokeSync("v/ops/http/get", Maps.of(
 				"url", "https://httpbin.org/status/200",
 				"headers", Maps.of("User-Agent", "Covia-Test/1.0")
 			));
@@ -526,7 +526,7 @@ public class HTTPTest {
 
 		// Test HTTP GET with query parameters using httpbin.org
 		try {
-			Job result = covia.invokeSync("http:get", Maps.of(
+			Job result = covia.invokeSync("v/ops/http/get", Maps.of(
 				"url", "https://httpbin.org/get",
 				"queryParams", Maps.of(
 					"param1", "value1",

@@ -22,6 +22,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.exceptions.ParseException;
 import convex.core.lang.RT;
+import covia.adapter.AAdapter;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.AuthException;
@@ -713,31 +714,34 @@ public class CoviaAPI extends ACoviaAPI {
 			summary = "List all named operations available on this venue.",
 			operationId = "getOperations")
 	protected void getOperations(Context ctx) {
-		Index<AString, Hash> ops = engine().getOperationRegistry();
-		long n = ops.count();
+		// Enumerate all primitives from each adapter's catalog entries.
+		// This is the canonical "what's in /v/ops/ and /v/test/ops/" list.
 		ArrayList<Object> result = new ArrayList<>();
-		for (long i = 0; i < n; i++) {
-			var entry = ops.entryAt(i);
-			AString name = entry.getKey();
-			Hash assetHash = entry.getValue();
-			Map<String, Object> opInfo = new HashMap<>();
-			opInfo.put("name", name.toString());
-			opInfo.put("asset", assetHash.toHexString());
+		for (var adapter : engine().getAdapterNames()) {
+			AAdapter aa = engine().getAdapter(adapter);
+			if (aa == null) continue;
+			for (var entry : aa.pendingCatalogEntries.entrySet()) {
+				String catalogPath = entry.getKey();
+				Hash assetHash = entry.getValue();
+				Map<String, Object> opInfo = new HashMap<>();
+				opInfo.put("name", catalogPath);
+				opInfo.put("asset", assetHash.toHexString());
 
-			Asset asset = engine().getAsset(assetHash);
-			if (asset != null) {
-				AMap<AString, ACell> meta = asset.meta();
-				ACell desc = meta.get(Fields.DESCRIPTION);
-				if (desc != null) opInfo.put("description", desc.toString());
-				ACell opMeta = meta.get(Fields.OPERATION);
-				if (opMeta instanceof AMap<?,?> opMap) {
-					ACell input = ((AMap<AString,ACell>) opMap).get(Fields.INPUT);
-					if (input != null) opInfo.put("input", input);
-					ACell output = ((AMap<AString,ACell>) opMap).get(Fields.OUTPUT);
-					if (output != null) opInfo.put("output", output);
+				Asset asset = engine().getAsset(assetHash);
+				if (asset != null) {
+					AMap<AString, ACell> meta = asset.meta();
+					ACell desc = meta.get(Fields.DESCRIPTION);
+					if (desc != null) opInfo.put("description", desc.toString());
+					ACell opMeta = meta.get(Fields.OPERATION);
+					if (opMeta instanceof AMap<?,?> opMap) {
+						ACell input = ((AMap<AString,ACell>) opMap).get(Fields.INPUT);
+						if (input != null) opInfo.put("input", input);
+						ACell output = ((AMap<AString,ACell>) opMap).get(Fields.OUTPUT);
+						if (output != null) opInfo.put("output", output);
+					}
 				}
+				result.add(opInfo);
 			}
-			result.add(opInfo);
 		}
 		buildResult(ctx, 200, result);
 	}
@@ -753,7 +757,7 @@ public class CoviaAPI extends ACoviaAPI {
 							description = "Operation name (e.g. test:echo).",
 							required = true,
 							type = String.class,
-							example = "test:echo") })
+							example = "v/test/ops/echo") })
 	protected void getOperation(Context ctx) {
 		String name = ctx.pathParam("name");
 		try {
@@ -845,7 +849,7 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 
 		ACell input = Maps.of("name", name, "value", value);
-		Job job = engine().jobs().invokeOperation(Strings.create("secret:set"), input, rctx);
+		Job job = engine().jobs().invokeOperation(Strings.create("v/ops/secret/set"), input, rctx);
 		ACell result = job.awaitResult();
 		if (result == null) {
 			buildError(ctx, 500, "Failed to store secret");

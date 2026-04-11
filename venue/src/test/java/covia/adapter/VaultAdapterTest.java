@@ -34,14 +34,14 @@ public class VaultAdapterTest {
 	@Test
 	public void testWriteAndRead() {
 		// Write to vault — no drive parameter needed
-		ACell result = run("vault:write", Maps.of(
+		ACell result = run("v/ops/vault/write", Maps.of(
 			"path", "profile.json",
 			"content", "{\"name\": \"Sarah Smith\", \"nhsNumber\": \"485 777 3456\"}"
 		));
 		assertTrue(RT.bool(RT.getIn(result, "created")));
 
 		// Read back
-		result = run("vault:read", Maps.of("path", "profile.json"));
+		result = run("v/ops/vault/read", Maps.of("path", "profile.json"));
 		String content = RT.ensureString(RT.getIn(result, "content")).toString();
 		assertTrue(content.contains("Sarah Smith"));
 		assertEquals("utf-8", RT.ensureString(RT.getIn(result, "encoding")).toString());
@@ -49,11 +49,11 @@ public class VaultAdapterTest {
 
 	@Test
 	public void testMkdirAndList() {
-		run("vault:mkdir", Maps.of("path", "lab-results"));
-		run("vault:write", Maps.of("path", "lab-results/panel-q4.json", "content", "{\"tsh\": 2.8}"));
+		run("v/ops/vault/mkdir", Maps.of("path", "lab-results"));
+		run("v/ops/vault/write", Maps.of("path", "lab-results/panel-q4.json", "content", "{\"tsh\": 2.8}"));
 
 		// List lab-results dir
-		ACell result = run("vault:list", Maps.of("path", "lab-results"));
+		ACell result = run("v/ops/vault/list", Maps.of("path", "lab-results"));
 		AVector<?> entries = RT.ensureVector(RT.getIn(result, "entries"));
 		assertNotNull(entries);
 		assertEquals(1, entries.count());
@@ -62,9 +62,9 @@ public class VaultAdapterTest {
 
 	@Test
 	public void testDelete() {
-		run("vault:mkdir", Maps.of("path", "tmp"));
-		run("vault:write", Maps.of("path", "tmp/deleteme.txt", "content", "delete me"));
-		ACell result = run("vault:delete", Maps.of("path", "tmp/deleteme.txt"));
+		run("v/ops/vault/mkdir", Maps.of("path", "tmp"));
+		run("v/ops/vault/write", Maps.of("path", "tmp/deleteme.txt", "content", "delete me"));
+		ACell result = run("v/ops/vault/delete", Maps.of("path", "tmp/deleteme.txt"));
 		assertTrue(RT.bool(RT.getIn(result, "deleted")));
 	}
 
@@ -73,7 +73,7 @@ public class VaultAdapterTest {
 		// Anonymous context should fail
 		assertThrows(Exception.class, () ->
 			engine.jobs().invokeOperation(
-				"vault:list", Maps.empty(), RequestContext.ANONYMOUS
+				"v/ops/vault/list", Maps.empty(), RequestContext.ANONYMOUS
 			).awaitResult(5000)
 		);
 	}

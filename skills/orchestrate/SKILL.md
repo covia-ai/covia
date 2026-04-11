@@ -41,7 +41,7 @@ Steps run in parallel by default. A step only waits if it references output from
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `op` | Yes | Operation to invoke (e.g. `"agent:request"`, `"test:echo"`, `"covia:read"`) |
+| `op` | Yes | Operation to invoke (e.g. `"v/ops/agent/request"`, `"v/test/ops/echo"`, `"v/ops/covia/read"`) |
 | `input` | Yes | Input specification — can wire in constants, orchestration input, or previous step outputs |
 | `venue` | No | Remote venue DID or URL for federated execution |
 
@@ -95,7 +95,7 @@ Essential for building dynamic workspace paths, e.g. writing per-record results:
 
 ```json
 {
-  "op": "covia:write",
+  "op": "v/ops/covia/write",
   "input": {
     "path": ["concat", ["const", "w/enrichments/"], ["input", "invoiceId"]],
     "value": [0, "output"]
@@ -146,9 +146,9 @@ The `result` field assembles the orchestration's final output using the same ref
 
 ```json
 "steps": [
-  { "op": "covia:read", "input": {"path": ["const", "w/vendors"]} },
-  { "op": "covia:read", "input": {"path": ["const", "w/orders"]} },
-  { "op": "agent:request", "input": {
+  { "op": "v/ops/covia/read", "input": {"path": ["const", "w/vendors"]} },
+  { "op": "v/ops/covia/read", "input": {"path": ["const", "w/orders"]} },
+  { "op": "v/ops/agent/request", "input": {
       "agentId": ["const", "Analyser"],
       "input": {"vendors": [0, "value"], "orders": [1, "value"]},
       "wait": ["const", true]
@@ -266,7 +266,7 @@ Steps can execute on remote venues by adding a `venue` field:
 
 ```json
 {
-  "op": "agent:request",
+  "op": "v/ops/agent/request",
   "input": { ... },
   "venue": "did:key:z6Mk..."
 }

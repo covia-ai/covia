@@ -109,7 +109,7 @@ public class DLFSAdapter extends AAdapter {
 		installAsset("dlfs/write",        ASSETS_PATH + "write.json");
 		installAsset("dlfs/mkdir",        ASSETS_PATH + "mkdir.json");
 		installAsset("dlfs/delete",       ASSETS_PATH + "delete.json");
-		log.info("DLFS adapter installed with {} operations", operationNames.count());
+		log.info("DLFS adapter installed with {} operations", pendingCatalogEntries.size());
 	}
 
 	// ==================== Key Management ====================

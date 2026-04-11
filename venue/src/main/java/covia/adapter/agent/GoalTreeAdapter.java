@@ -31,7 +31,7 @@ import covia.venue.RequestContext;
  * {@code compact} to checkpoint long conversations.</p>
  *
  * <p>Registered as operation {@code goaltree:chat}. Selected via agent config:</p>
- * <pre>{@code {"operation": "goaltree:chat"}}</pre>
+ * <pre>{@code {"operation": "v/ops/goaltree/chat"}}</pre>
  *
  * <p>Each transition creates a fresh root frame from the incoming work. The frame
  * stack is in-memory during execution; between transitions only the root frame's
