@@ -116,6 +116,41 @@ public class ContextBuilder {
 		+ "covia_copy from=<source> to=o/<name> to pin a venue op into your own "
 		+ "/o/ for repeated use by name.");
 
+	/**
+	 * Per-engine cache of resolved default tool definitions.
+	 *
+	 * <p>The default tool list ({@link #DEFAULT_TOOL_OPS}) resolves to the
+	 * same {@code (tools, toolMap)} pair on every call, since all default
+	 * ops live under {@code v/ops/} which is venue-scoped and independent
+	 * of the calling user. Building it costs ~18 lattice lookups + JSON
+	 * parses per turn. This static cache eliminates that work after the
+	 * first call per Engine instance.</p>
+	 *
+	 * <p>Keyed on {@link Engine} identity (the default
+	 * {@code ConcurrentHashMap} equality semantics, which fall through to
+	 * {@code Object.equals} for {@code Engine} since it doesn't override
+	 * it). Different test engines and the production engine each get
+	 * their own cache entry.</p>
+	 *
+	 * <p>The cache is populated lazily on first {@link #withTools()} call
+	 * and never invalidated — adapters install their assets at engine
+	 * startup and don't change them, so cached results stay valid for
+	 * the life of the JVM. Restart to refresh.</p>
+	 */
+	private static final java.util.concurrent.ConcurrentHashMap<Engine, DefaultToolsCacheEntry>
+		DEFAULT_TOOL_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/** Cached resolved default tools for one Engine instance. */
+	private static final class DefaultToolsCacheEntry {
+		final AVector<ACell> tools;
+		final Map<String, AString> toolMap;
+		DefaultToolsCacheEntry(AVector<ACell> tools, Map<String, AString> toolMap) {
+			this.tools = tools;
+			// Defensive copy so callers can mutate their own configToolMap
+			this.toolMap = Map.copyOf(toolMap);
+		}
+	}
+
 	/** Default tool operations — resolved at runtime via engine */
 	static final AVector<ACell> DEFAULT_TOOL_OPS = (AVector<ACell>) Vectors.of(
 		(ACell) Strings.create("v/ops/agent/create"),
@@ -485,6 +520,12 @@ public class ContextBuilder {
 
 	/**
 	 * Builds tool list from config (defaults + config tools) and extracts caps.
+	 *
+	 * <p>The default-tool resolution is cached per Engine via
+	 * {@link #DEFAULT_TOOL_CACHE}: the first call per engine builds the 18
+	 * default tool definitions; subsequent calls reuse them. Per-config
+	 * tools are still rebuilt fresh each call since they may include
+	 * user-scoped {@code /o/<name>} references.</p>
 	 */
 	@SuppressWarnings("unchecked")
 	public ContextBuilder withTools() {
@@ -493,7 +534,19 @@ public class ContextBuilder {
 
 		AVector<ACell> baseTools = Vectors.empty();
 		if (useDefaults) {
-			baseTools = buildConfigTools(DEFAULT_TOOL_OPS, configToolMap);
+			DefaultToolsCacheEntry cached = DEFAULT_TOOL_CACHE.get(engine);
+			if (cached == null) {
+				// Cache miss: build the default tools and store the result
+				Map<String, AString> freshMap = new HashMap<>();
+				AVector<ACell> freshTools = buildConfigTools(DEFAULT_TOOL_OPS, freshMap);
+				cached = new DefaultToolsCacheEntry(freshTools, freshMap);
+				DEFAULT_TOOL_CACHE.put(engine, cached);
+			}
+			baseTools = cached.tools;
+			// Copy the cached tool map into our per-build map so callers
+			// can mutate it (e.g. add config tools below) without poisoning
+			// the cache. The cache's own map is immutable (Map.copyOf).
+			configToolMap.putAll(cached.toolMap);
 		}
 
 		if (config != null) {

@@ -1,12 +1,16 @@
 # Agent Context — Implementation Plan
 
-**Status:** Plan, April 2026
+**Status:** Partially complete, April 2026
 **Target designs:** [LATTICE_CONTEXT.md](./LATTICE_CONTEXT.md), [GOAL_TREE.md](./GOAL_TREE.md)
 **Older draft:** [CONTEXT.md](./CONTEXT.md) — partially superseded
 
 Migration tracker for closing the gap between the canonical designs
 and the current code. Delete this doc once the gaps in §3 are closed
 or consciously deferred.
+
+**Done:** §4 Decision 1 → Option C (transcript model), implemented in
+commit `43d1dd8`. Bugs §2.1 (ephemeral context bloat) and §2.2 (frozen
+system prompt) are fixed. See §8 for the migration outcome.
 
 ---
 
@@ -54,23 +58,30 @@ all the bugs in §2.
 
 ## 2. LLMAgentAdapter bugs
 
-1. **Ephemeral context baked into durable history.** Context entries,
-   loaded paths, [Context Map], pending results, and inbox messages
-   all `messages.conj(...)` into the same vector that becomes
-   `state.history`. After N turns, N copies of each.
+1. ✅ **FIXED** (commit `43d1dd8`). **Ephemeral context baked into
+   durable history.** Context entries, loaded paths, [Context Map],
+   pending results, and inbox messages all `messages.conj(...)` into
+   the same vector that becomes `state.history`. After N turns, N
+   copies of each.
 
-2. **System prompt frozen at first turn.** `withSystemPrompt` only
-   creates a new system message if existing history doesn't already
-   start with one. Updates to `LATTICE_REFERENCE` or to the agent's
-   custom `systemPrompt` never reach existing agents.
+2. ✅ **FIXED** (commit `43d1dd8`). **System prompt frozen at first
+   turn.** `withSystemPrompt` only creates a new system message if
+   existing history doesn't already start with one. Updates to
+   `LATTICE_REFERENCE` or to the agent's custom `systemPrompt` never
+   reach existing agents.
 
 3. **No transcript compaction.** History grows monotonically. The
    safety valve at 70%/90% prunes loaded paths but never history.
+   Still open — see §5.4.
 
-4. **User input persistence is ad-hoc.** The task input flow puts
-   the new task into the LLM's context but persists it inconsistently.
+4. ✅ **FIXED** (commit `43d1dd8`). **User input persistence is
+   ad-hoc.** The task input flow puts the new task into the LLM's
+   context but persists it inconsistently. The new transcript model
+   synthesises a user message for each task input via
+   `wrapTaskAsUserMessage`.
 
 5. **Tools rebuilt every turn, uncached.** ~10ms wasted per turn.
+   Still open — see §5.1.
 
 ---
 
@@ -97,7 +108,10 @@ Note: GOAL_TREE §Implementation Notes already walked back from the
 
 ## 4. Decisions
 
-### Decision 1 — what to do about LLMAgentAdapter
+### Decision 1 — what to do about LLMAgentAdapter ✅ DECIDED & IMPLEMENTED
+
+Resolved as **Option C — Transcript model**, implemented in commit
+`43d1dd8`. The bugs in §2 are fixed and verified live; see §8.
 
 | Option | Change | Pros | Cons |
 |--------|--------|------|------|
@@ -132,28 +146,22 @@ prior invoices).
 | 5.2 | Context entry cache with versioning | LATTICE_CONTEXT's pinned/global/scoped distinction lets the harness cache pinned entries by content hash and only re-resolve on change. |
 | 5.3 | LATTICE_CONTEXT 7-tool vs current 18-tool default | GOAL_TREE already deferred this. Possible compromise: curated subset (~8 tools) by default, opt-in to full catalog. |
 | 5.4 | Compaction strategy | After Decision 1 → Option C lands, transcript needs a compaction story. GOAL_TREE's `compact` tool with LLM-written summary is the recommended approach. |
-| 5.5 | Verify GoalTreeAdapter ancestor rendering | GOAL_TREE §Context Assembly Layout describes parent/grandparent at decreasing budgets. Confirm `GoalTreeContext` matches and budgets are sane. |
+| 5.5 | ✅ Verified — `GoalTreeContext` matches GOAL_TREE.md spec exactly: `PARENT_BUDGET = 300`, `ANCESTOR_DECAY = 0.5` (300 → 150 → 75 → … → `MIN_ANCESTOR_BUDGET = 50`), outermost-to-innermost render order. Existing `GoalTreeContextTest` covers all four budget levels and the render order. No code changes needed. |
 
 ---
 
-## 6. Next steps
+## 6. Remaining work
 
-1. **Get user buy-in on Decision 1 and Decision 2.** This is a
-   roadmap call.
-
-2. **Implement the chosen option.** For Option C, the work is:
-   - Split `ContextBuilder.build()` into LLM-message and
-     transcript-delta outputs
-   - Update `LLMAgentAdapter.processChat` to persist only the
-     transcript delta
-   - Add tests for: system-prompt updates apply immediately, no
-     duplication after N turns, multi-turn continuity
-   - One-shot cleanup of polluted `history` field on existing agents
-
-3. **Update `AGENT_LOOP.md` §3.2** to clarify which adapter is
-   recommended for what.
-
-4. **File §5 items as separate tickets.**
+| # | What | Status |
+|---|------|--------|
+| Option C | Transcript model in LLMAgentAdapter | ✅ commit `43d1dd8` |
+| §5.1 | Tool list cache | ✅ Done — per-Engine cache of resolved default tools, ~10ms saved per turn |
+| §5.2 | Context entry cache with versioning | Open — compounding leverage |
+| §5.3 | Curated default tool subset | Open — separate design |
+| §5.4 | Compaction strategy for transcript | Open — needed for long-running agents |
+| §5.5 | Verify GoalTreeAdapter ancestor rendering | ✅ Verified — implementation matches spec, existing tests cover it |
+| `AGENT_LOOP.md` §3.2 | Document the transcript model | ✅ Done |
+| Decision 2 | Whether to persist GoalTreeAdapter frame stack | Deferred until concrete use case |
 
 ---
 
@@ -161,11 +169,75 @@ prior invoices).
 
 Delete this doc once:
 
-- Decisions 1 and 2 are made and implemented
-- The bugs in §2 are fixed (or no longer apply because the state
-  model changed)
-- `AGENT_LOOP.md` reflects the canonical adapter recommendation
-- §5 items are filed as separate tickets
+- §5.1 tool list cache is implemented (small win) — done in same
+  session as Option C
+- §5.5 ancestor rendering audit is complete (small audit) — done
+  in same session
+- §5.4 compaction strategy is at least filed as a separate ticket
+- `AGENT_LOOP.md` §3.2 is updated to describe the transcript model
+
+§5.2 (context entry cache) and §5.3 (curated toolset) can be filed
+as separate tickets and are not closure-blocking.
 
 LATTICE_CONTEXT.md and GOAL_TREE.md remain canonical. This plan is
 just the migration tracker.
+
+---
+
+## 8. Outcome of Option C (commit 43d1dd8)
+
+### Mechanism
+- `ContextBuilder.withSystemPrompt` always rebuilds the system message
+  fresh from current config + LATTICE_REFERENCE; if a starting vector
+  has a stale system message at index 0, it is dropped.
+- New `ContextBuilder.withTranscript(state)` reads `state.transcript`
+  and appends those messages.
+- `LLMAgentAdapter.processChat` builds the per-turn LLM context as:
+  ```
+  fresh system → context entries → loaded paths → [Context Map]
+    → transcript → pending → inbox → empty signal → tools
+  ```
+- After the tool loop, the transcript delta is `synthesised user
+  message per task input` + `wrapped inbox messages` + `new
+  assistant/tool messages`. This is the only thing persisted.
+- `state.history` field is no longer written. New persistence shape:
+  `{transcript, config, loads}`.
+
+### Smoking-gun verification
+Before fix (`_proof_test`, two turns, original `state.history`):
+```
+[system, [Context Map], assistant, [Context Map], assistant]
+```
+Two `[Context Map]` system messages — one per turn. With Bob and
+~2KB rendered policy rules, 20 turns would have stuffed ~40KB of
+duplicated reference data into history.
+
+After fix (same kind of agent, freshly created, two turns,
+`state.transcript`):
+```
+[user("{task:Hello}"), assistant(toolCall), tool, assistant("OK"),
+ user("{task:World}"), assistant(toolCall), tool, assistant("OK")]
+```
+8 messages. No `[Context Map]`, no frozen system message, no
+duplicated reference data. Multi-turn continuity preserved.
+
+### Migration
+Existing agents with `state.history` are not migrated. The new code
+ignores `K_HISTORY` and starts with an empty transcript on first
+turn after upgrade. Effectively their conversation history resets.
+AP demo agents are unaffected because they use `goaltree:chat`,
+which already discarded state every transition.
+
+### Test coverage
+- `testTranscriptDoesNotAccumulateEphemeralContext` — three turns,
+  asserts exactly 6 messages (3 user + 3 assistant), no system, no
+  `[Context Map]`
+- `testSystemPromptUpdatesAcrossTurnsAreNotFrozen` — verifies
+  persisted state contains no frozen system message
+- `testExistingSystemPromptIsAlwaysReplaced` (was
+  `testExistingSystemPromptPreserved`) — flips the assertion to
+  match the new behaviour
+- All existing tests updated from `extractHistory` →
+  `extractTranscript` with new expected counts
+
+939 venue tests stable green over 3 runs.

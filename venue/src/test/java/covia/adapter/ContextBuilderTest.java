@@ -332,6 +332,32 @@ public class ContextBuilderTest {
 	// ========== Tools ==========
 
 	@Test
+	public void testDefaultToolsCached() {
+		// Default tools resolve to the SAME vector across calls — the
+		// per-engine cache returns the cached AVector instance.
+		ContextBuilder.ContextResult r1 = new ContextBuilder(engine, ctx)
+			.withConfig(null, null)
+			.withSystemPrompt(Vectors.empty())
+			.withTools()
+			.build();
+		ContextBuilder.ContextResult r2 = new ContextBuilder(engine, ctx)
+			.withConfig(null, null)
+			.withSystemPrompt(Vectors.empty())
+			.withTools()
+			.build();
+
+		// Same Engine → same cached tool vector instance (identity, not just equal)
+		assertSame(r1.tools(), r2.tools(),
+			"Default tools should be cached per Engine and return the same instance");
+
+		// Each builder still gets its own configToolMap (not the cached one)
+		assertNotSame(r1.configToolMap(), r2.configToolMap(),
+			"configToolMap should be a per-build copy, not the cached map");
+		// But the contents should match
+		assertEquals(r1.configToolMap().keySet(), r2.configToolMap().keySet());
+	}
+
+	@Test
 	public void testDefaultToolsBuilt() {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)

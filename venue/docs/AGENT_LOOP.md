@@ -202,15 +202,28 @@ Receives current state and new messages, returns updated state. This is the
 pluggable part — different agents use different transition functions (LLM chat,
 rule engine, workflow, custom code).
 
-For LLM agents (`llmagent:chat`), level 2:
+For LLM agents (`llmagent:chat`), level 2 follows the **transcript model** from
+[AGENT_CONTEXT_PLAN.md](./AGENT_CONTEXT_PLAN.md) §4 Option C:
+
 - Reads LLM configuration from `state.config`
-- Reconstructs conversation history from `state.history`
-- Appends inbox messages as user turns
+- Reads the **persistent transcript** from `state.transcript` — only real
+  user / assistant / tool conversation turns from previous runs
+- Builds a **per-turn LLM context** with FRESH ephemeral additions every turn:
+  - System message (identity prompt + lattice cheat sheet, rebuilt fresh)
+  - Resolved context entries
+  - Resolved loaded paths
+  - `[Context Map]` budget summary
+  - Then appends the persistent transcript
+  - Then appends pending job results, inbox messages, empty-state signal
 - Invokes level 3 (LLM call) as a grid operation
 - Handles tool call responses: execute tools, feed results back, call level 3
   again (loop until the LLM returns a text response or a limit is reached)
-- Appends the assistant response to history
-- Returns updated state (with config preserved) and a result summary
+- Computes the **transcript delta**: synthesised user message per task input,
+  wrapped inbox messages, and the new assistant + tool messages from the loop
+- Persists `state.transcript = oldTranscript + delta`. The legacy
+  `state.history` field is no longer written. The system prompt, context
+  entries, and `[Context Map]` are NEVER persisted — they rebuild fresh each
+  turn so updates apply immediately to existing agents.
 
 Level 2 does not import or depend on any LLM library. It invokes level 3 as a
 grid operation and works with structured message maps. This makes it pluggable:
@@ -220,6 +233,12 @@ or a test mock.
 The level 3 operation to invoke is specified in `state.config.llmOperation`
 (default: `langchain:openai`). The agent creator picks both the agent loop
 strategy (level 2) and the LLM backend (level 3).
+
+The other level 2 adapter, `goaltree:chat` (GoalTreeAdapter), is documented
+separately in [GOAL_TREE.md](./GOAL_TREE.md). It is currently stateless across
+transitions — each transition is a fresh root frame with no cross-request
+memory. Use it for goal decomposition with subgoal/complete/fail/compact tools;
+use `llmagent:chat` for cross-turn conversational memory.
 
 ### 3.3 Level 3 — LLM Call (Single Step)
 
