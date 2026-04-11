@@ -105,7 +105,9 @@ value: {
 
 ## 3. Store Shared Documents and Orchestration
 
-Store shared documents in workspace — agents reference them by path, not by hash. Also store as content-addressed assets for immutability/audit. Read the files from `assets/ap-policy-rules.md` and `assets/ap-data-guide.md`.
+Everything in this demo lives at named lattice paths — no opaque content
+hashes anywhere. Agents reference docs and the pipeline by name; the LLM
+can see exactly what's there via `covia:list` / `covia:read`.
 
 ### Documents in workspace (for agent context)
 
@@ -114,23 +116,21 @@ covia_write  path=w/docs/policy-rules  value=<contents of assets/ap-policy-rules
 covia_write  path=w/docs/data-guide    value=<contents of assets/ap-data-guide.md as string>
 ```
 
-### Immutable copies as assets (for audit trail)
-
-```
-asset_store  metadata={"name": "AP Policy Rules", "type": "document"}  contentText=<contents of assets/ap-policy-rules.md>
-asset_store  metadata={"name": "AP Data Guide", "type": "document"}  contentText=<contents of assets/ap-data-guide.md>
-```
-
 ### Pipeline orchestration
 
-Store as a content-addressed asset (the orchestrator resolves by hash), then write the hash to a workspace path so agents can discover it:
+Write the orchestration metadata directly to your operation pins at
+`o/ap-pipeline`. Per OPERATIONS.md §5, any map with an `operation` field
+under `/o/<name>` is callable by name via `grid_run operation=o/<name>` —
+no separate `asset_store` step, no hash dereferencing.
 
 ```
-asset_store  metadata=<contents of assets/ap-pipeline.json>
-→ returns {id: "<pipeline-hash>"}
-
-covia_write  path=w/config/ap-pipeline  value=<pipeline-hash>
+covia_write  path=o/ap-pipeline  value=<contents of assets/ap-pipeline.json>
 ```
+
+After this, `grid_run operation=o/ap-pipeline input={...}` runs the
+pipeline. `covia_read path=o/ap-pipeline` shows the full orchestration
+structure (steps, schemas, result mapping) in plain JSON — transparent
+to agents and humans alike.
 
 ## 4. Create Agents
 
@@ -144,8 +144,7 @@ Agents use **context loading** to receive shared reference material. The `contex
 
 | Type | Example | What it does |
 |------|---------|-------------|
-| **Asset hash** | `"<hash>"` | Fetches content from content-addressed store (UTF-8) |
-| **Workspace ref** | `{"ref": "w/vendor-records", "label": "..."}` | Reads lattice value, rendered via CellExplorer with budget control |
+| **Lattice ref** | `{"ref": "w/vendor-records", "label": "..."}` | Reads any resolvable path (workspace, `/o/`, `/v/`, asset, DID URL), rendered via CellExplorer with budget control |
 | **Op-based** | `{"op": "v/ops/covia/list", "input": {...}, "label": "..."}` | Runs an operation at context-load time, injects result |
 
 All pipeline agents use **strict structured output** via `responseFormat`. Every `responseFormat` schema must have `additionalProperties: false` at every object level for OpenAI strict mode.
@@ -368,11 +367,11 @@ agent_create
       {"with": "g/",  "can": "agent/request"},
       {"with": "",    "can": "invoke"}
     ],
-    "systemPrompt": "You are Dave, the AP Manager. You oversee Alice (scanner), Bob (enricher), and Carol (approver). You can process invoices through the pipeline using grid_run with the orchestration hash from your context, investigate workspace data, query agent state, and answer questions. Summarise pipeline results highlighting the decision, policy rules, and risk flags.",
+    "systemPrompt": "You are Dave, the AP Manager. You oversee Alice (scanner), Bob (enricher), and Carol (approver). To process an invoice through the pipeline, use grid_run with operation=o/ap-pipeline (your context shows the full orchestration structure). You can also investigate workspace data, query agent state, and answer questions. Summarise pipeline results highlighting the decision, policy rules, and risk flags.",
     "context": [
       {"ref": "w/docs/policy-rules", "label": "AP Policy Rules"},
       {"ref": "w/docs/data-guide", "label": "AP Data Guide"},
-      {"ref": "w/config/ap-pipeline", "label": "AP Pipeline Orchestration Hash"}
+      {"ref": "o/ap-pipeline", "label": "AP Invoice Pipeline (callable as grid_run operation=o/ap-pipeline)"}
     ]
   }}
 ```

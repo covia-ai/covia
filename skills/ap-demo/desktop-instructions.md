@@ -80,18 +80,18 @@ covia_read  path=w/decisions/{invoice_number}
 Run the entire pipeline as a single command:
 
 ```
-grid_run  operation=<read from w/config/ap-pipeline>  input={"invoice_text": "<text>"}
+grid_run  operation=o/ap-pipeline  input={"invoice_text": "<text>"}
 ```
 
 The orchestration chains Alice → Bob → Carol automatically, returning `{extraction, enrichment, decision}` in one response. Show that the same audit trail is created.
 
 ### Option C: Ask Dave
 
-Ask Dave conversationally — he knows the orchestration hash from his context:
+Ask Dave conversationally — `o/ap-pipeline` is in his context, so he can call it directly:
 
 > "Dave, process this invoice: [invoice text]"
 
-Dave runs the pipeline via `grid_run` and summarises the result.
+Dave runs `grid_run operation=o/ap-pipeline` and summarises the result.
 
 ## Demo Scenarios
 

@@ -37,7 +37,7 @@ asset_list type=orchestration → AP Invoice Pipeline
 Run the orchestration with the Acme Corp invoice ($15,600):
 
 ```
-grid_run  operation=<pipeline-hash>  input={"invoice_text": "INVOICE #INV-2024-1042\nFrom: Acme Corp\nDate: 2024-11-15\n\nCloud Infrastructure (Nov)      $12,000.00\nPremium Support Package          $3,600.00\nTotal:                          $15,600.00\n\nPayment Terms: Net 30\nPO Number: PO-2024-0456"}
+grid_run  operation=o/ap-pipeline  input={"invoice_text": "INVOICE #INV-2024-1042\nFrom: Acme Corp\nDate: 2024-11-15\n\nCloud Infrastructure (Nov)      $12,000.00\nPremium Support Package          $3,600.00\nTotal:                          $15,600.00\n\nPayment Terms: Net 30\nPO Number: PO-2024-0456"}
 ```
 
 **Expected result:** ESCALATED to J. Martinez (manager approval, $5k–$50k range)

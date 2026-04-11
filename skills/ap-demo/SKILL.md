@@ -36,8 +36,8 @@ Run all setup steps — secret, reference data, artifacts, orchestration, agents
 
 1. **Ask for OpenAI API key** if not already stored, then `secret_set`
 2. **Seed reference data** — three vendors (Acme Corp, Globex Ltd, Initech Systems) and their purchase orders (see [setup.md](setup.md)). Initech is suspended/sanctioned to enable rejection demos.
-3. **Store shared artifacts** — read `assets/ap-policy-rules.md` and `assets/ap-data-guide.md`, store each as an artifact via `asset_store` with `contentText`. Note the returned hashes.
-4. **Store the orchestration** — read `assets/ap-pipeline.json`, store via `asset_store`. Store the pipeline hash at `w/config/ap-pipeline`.
+3. **Write shared documents** — read `assets/ap-policy-rules.md` and `assets/ap-data-guide.md`, write each to its workspace path with `covia_write`: `w/docs/policy-rules` and `w/docs/data-guide`.
+4. **Pin the pipeline orchestration** — read `assets/ap-pipeline.json` and `covia_write path=o/ap-pipeline value=<contents>`. The pipeline is now invokable by name as `grid_run operation=o/ap-pipeline` — no hash dereferencing.
 5. **Create all four agents** in parallel (see [setup.md](setup.md) for full config). Agent prompts are short — reference material loads from context. Each agent has `caps` scoping their workspace access.
 6. **Verify** with `agent_list` — Alice, Bob, Carol, Dave all SLEEPING
 7. **Confirm context and caps** — query Bob or Carol and verify `state.config.context` and `state.config.caps` are present
@@ -53,14 +53,13 @@ Key config rules:
 
 Run the invoice pipeline via the stored orchestration:
 
-1. Read the pipeline hash from `w/config/ap-pipeline`
-2. Run via `grid_run operation=<hash> input={"invoice_text": "..."}`
-3. The orchestration chains Alice → Bob → Carol as a single job, returning `{extraction, enrichment, decision}`
-4. Present the result: Alice's extraction, Bob's validation, Carol's policy rule matrix
-5. **Verify workspace persistence**: `covia_read path=w/enrichments/{invoice_number}` and `covia_read path=w/decisions/{invoice_number}`
-6. Show the structured audit trail and provenance chain (see run.md Steps 4–5)
+1. Run via `grid_run operation=o/ap-pipeline input={"invoice_text": "..."}`
+2. The orchestration chains Alice → Bob → Carol as a single job, returning `{extraction, enrichment, decision}`
+3. Present the result: Alice's extraction, Bob's validation, Carol's policy rule matrix
+4. **Verify workspace persistence**: `covia_read path=w/enrichments/{invoice_number}` and `covia_read path=w/decisions/{invoice_number}`
+5. Show the structured audit trail and provenance chain (see run.md Steps 4–5)
 
-Alternatively, ask Dave to process the invoice — he knows the orchestration hash from his context and will run it via `grid_run`.
+Alternatively, ask Dave to process the invoice — `o/ap-pipeline` is in his context and he'll call `grid_run operation=o/ap-pipeline` directly.
 
 **Scenarios** (see [run.md](run.md) for full invoice texts and expected outcomes):
 
