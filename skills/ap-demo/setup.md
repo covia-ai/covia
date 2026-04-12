@@ -147,13 +147,13 @@ Agents use **context loading** to receive shared reference material. The `contex
 | **Lattice ref** | `{"ref": "w/vendor-records", "label": "..."}` | Reads any resolvable path (workspace, `/o/`, `/v/`, asset, DID URL), rendered via CellExplorer with budget control |
 | **Op-based** | `{"op": "v/ops/covia/list", "input": {...}, "label": "..."}` | Runs an operation at context-load time, injects result |
 
-All pipeline agents use **strict structured output** via `responseFormat`. Every `responseFormat` schema must have `additionalProperties: false` at every object level for OpenAI strict mode.
+Pipeline agents that need structured output declare it via `outputs` (typed complete/fail). Every schema must have `additionalProperties: false` at every object level for OpenAI strict mode. Alice uses `responseFormat` (migration shim — auto-converted to typed outputs) since she has no tools.
 
 **Re-running setup:** every `agent_create` block below passes `overwrite: true`. On a fresh venue this is a no-op (slot empty); on a venue that already has the agent, it updates the config in place — preserving the timeline, inbox, and tasks. Re-run setup any time you tweak a system prompt, capability set, or context entry; the change applies on the next agent run. RUNNING agents are rejected (race-unsafe) — wait for them to return to SLEEPING first.
 
 ### Alice — Invoice Scanner
 
-Alice does pure text extraction — no tools needed. Empty `caps: []` denies all tool calls, making her capability surface explicit.
+Alice does pure text extraction — no tools needed. `defaultTools: false` with no `tools` list means zero tools. Empty `caps: []` denies all tool calls as a safety net.
 
 ```
 agent_create
@@ -163,6 +163,7 @@ agent_create
   state: { "config": {
     "llmOperation": "v/ops/langchain/openai",
     "model": "gpt-4o-mini",
+    "defaultTools": false,
     "caps": [],
     "systemPrompt": "You are Alice, an AP Invoice Scanner. Extract structured invoice fields from raw text. Your output is schema-enforced — populate every field. Use empty string for missing text fields and empty array for missing lists. Add a flag for every field that required interpretation or was ambiguous. Be precise with amounts.",
     "responseFormat": {
@@ -202,7 +203,7 @@ Bob uses **tools and structured output together**. During processing he autonomo
 
 Bob's `context` loads: (1) the AP Data Guide artifact for workspace layout, and (2) an op-based entry that lists known vendors at context-load time — so Bob knows which vendors exist before making any tool calls.
 
-Bob's caps grant exactly what his role needs — read vendor/PO data and the data guide, write enrichments. Any attempt to write decisions or modify vendor records is denied.
+Bob's tools are curated to exactly what his workflow needs: read, write, and list. No harness tools — his typed `outputs` auto-inject `complete`/`fail`. Caps scope what data he can actually touch.
 
 ```
 agent_create
@@ -212,6 +213,8 @@ agent_create
   state: { "config": {
     "llmOperation": "v/ops/langchain/openai",
     "model": "gpt-4.1-mini",
+    "defaultTools": false,
+    "tools": ["v/ops/covia/read", "v/ops/covia/write", "v/ops/covia/list"],
     "caps": [
       {"with": "w/vendor-records/", "can": "crud/read"},
       {"with": "w/purchase-orders/", "can": "crud/read"},
@@ -291,7 +294,7 @@ Carol applies named policy rules and must cite each one in her response. The sch
 
 Carol's `context` loads: (1) the AP Policy Rules artifact, and (2) a workspace ref for all vendor records — rendered via CellExplorer with budget control, giving Carol vendor status at a glance. She receives both Alice's extraction (for the actual invoice total) and Bob's enrichment (for validation results) via the orchestration. She writes her decision to `w/decisions/{invoice_number}` for the permanent audit trail.
 
-Carol can read everything in the workspace (she needs to inspect any reference data) but can only write to `w/decisions/`. Critically, she cannot modify enrichments or vendor records — preserving the audit trail.
+Carol can read everything in the workspace (she needs to inspect any reference data) but can only write to `w/decisions/`. Critically, she cannot modify enrichments or vendor records — preserving the audit trail. Like Bob, her tools are curated and `complete`/`fail` come from typed outputs.
 
 ```
 agent_create
@@ -301,6 +304,8 @@ agent_create
   state: { "config": {
     "llmOperation": "v/ops/langchain/openai",
     "model": "gpt-4.1-mini",
+    "defaultTools": false,
+    "tools": ["v/ops/covia/read", "v/ops/covia/write"],
     "caps": [
       {"with": "w/",           "can": "crud/read"},
       {"with": "w/decisions/", "can": "crud"}
@@ -356,6 +361,8 @@ Dave is the general-purpose manager. No structured output — he's conversationa
 
 Dave is read-only on the workspace, can run orchestrations, and can query/message the pipeline agents. He cannot write anywhere — proving managerial oversight without write privilege. Act 4 of the demo script depends on Dave being denied a write to `w/vendor-records/`.
 
+Dave gets a broader tool set: data exploration, agent management, pipeline execution, plus harness tools for decomposing complex investigations and self-service tool discovery.
+
 ```
 agent_create
   agentId: "Dave"
@@ -364,6 +371,13 @@ agent_create
   state: { "config": {
     "llmOperation": "v/ops/langchain/openai",
     "model": "gpt-4.1-mini",
+    "defaultTools": false,
+    "tools": [
+      "v/ops/covia/read", "v/ops/covia/list", "v/ops/covia/inspect",
+      "v/ops/grid/run",
+      "v/ops/agent/request", "v/ops/agent/message", "v/ops/agent/list", "v/ops/agent/info",
+      "subgoal", "compact", "more_tools"
+    ],
     "caps": [
       {"with": "w/",  "can": "crud/read"},
       {"with": "g/",  "can": "agent/message"},
