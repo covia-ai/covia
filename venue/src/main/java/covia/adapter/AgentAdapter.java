@@ -504,53 +504,11 @@ public class AgentAdapter extends AAdapter {
 			.withTools()
 			.build();
 
-		// Extract system prompt text (first system message)
-		AString systemPromptText = null;
-		AVector<ACell> history = context.history();
-		if (history != null && history.count() > 0) {
-			ACell first = history.get(0);
-			if (Strings.intern("system").equals(RT.getIn(first, Strings.intern("role")))) {
-				systemPromptText = RT.ensureString(RT.getIn(first, Strings.intern("content")));
-			}
-		}
-
-		// Collect context entry labels (non-system messages from the history
-		// minus the system prompt at index 0)
-		AVector<ACell> contextEntries = Vectors.empty();
-		for (long i = 1; i < history.count(); i++) {
-			ACell msg = history.get(i);
-			AString content = RT.ensureString(RT.getIn(msg, Strings.intern("content")));
-			if (content != null) {
-				String text = content.toString();
-				// Extract label from "[Context: <label>]\n..." format
-				String label = text;
-				if (text.startsWith("[Context: ")) {
-					int end = text.indexOf(']');
-					if (end > 0) label = text.substring(10, end);
-				}
-				int byteLen = text.length();
-				contextEntries = contextEntries.conj(Maps.of(
-					Strings.create("label"), Strings.create(label),
-					Strings.create("bytes"), CVMLong.create(byteLen)));
-			}
-		}
-
-		// Collect tool names
-		AVector<ACell> toolNames = Vectors.empty();
-		AVector<ACell> tools = context.tools();
-		if (tools != null) {
-			for (long i = 0; i < tools.count(); i++) {
-				AString name = RT.ensureString(RT.getIn(tools.get(i), Strings.intern("name")));
-				if (name != null) toolNames = toolNames.conj(name);
-			}
-		}
-
+		// Return the raw assembled context — exactly what the LLM receives.
 		AMap<AString, ACell> result = Maps.of(
 			Fields.AGENT_ID, agentId,
-			Strings.create("systemPrompt"), systemPromptText != null ? systemPromptText : Strings.create(""),
-			Strings.create("contextEntries"), contextEntries,
-			Strings.create("tools"), toolNames,
-			Strings.create("toolCount"), CVMLong.create(tools != null ? tools.count() : 0));
+			Strings.create("messages"), context.history(),
+			Strings.create("tools"), context.tools() != null ? context.tools() : Vectors.empty());
 		if (context.caps() != null) {
 			result = result.assoc(Strings.create("caps"), context.caps());
 		}
