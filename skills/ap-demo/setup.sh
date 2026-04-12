@@ -1,91 +1,51 @@
-#!/usr/bin/env python3
-"""AP Demo Setup — seeds reference data, documents, pipeline, and agents.
+#!/bin/bash
+# AP Demo Setup — seeds reference data, documents, pipeline, and agents.
+# Usage: bash skills/ap-demo/setup.sh [VENUE_URL]
+# Default venue: http://localhost:8080
+#
+# All data lives in assets/ as JSON files. This script just pipes them
+# to the venue API via curl. No other dependencies.
 
-Usage: python setup.sh [VENUE_URL]
-       Default venue: http://localhost:8080
+set -e
+VENUE="${1:-http://localhost:8080}"
+API="$VENUE/api/v1/invoke"
+DIR="$(cd "$(dirname "$0")/assets" && pwd -W 2>/dev/null || pwd)"
 
-All data lives in assets/ as JSON or Markdown files. This script just
-pipes them to the venue API — no transformation, no templating.
-"""
+# Write a {path, value} JSON file to the lattice
+write() { curl -sf -X POST "$API" -H "Content-Type: application/json" -d "{\"operation\":\"v/ops/covia/write\",\"input\":$(cat "$DIR/$1")}" > /dev/null; }
 
-import json, os, sys, urllib.request, urllib.error
+# Create an agent from a JSON file
+agent() { curl -sf -X POST "$API" -H "Content-Type: application/json" -d "{\"operation\":\"v/ops/agent/create\",\"input\":$(cat "$DIR/$1")}" > /dev/null; }
 
-VENUE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8080"
-API = f"{VENUE}/api/v1/invoke"
-DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+echo "=== AP Demo Setup ==="
+echo "Venue: $VENUE"
+curl -sf "$VENUE/api/v1/status" > /dev/null || { echo "ERROR: Venue not reachable"; exit 1; }
 
+echo "Seeding reference data..."
+write vendor-acme.json
+write vendor-globex.json
+write vendor-initech.json
+write po-acme.json
+write po-globex.json
+write po-initech.json
 
-def invoke(operation, input_data):
-    """POST an operation to the venue and return the output."""
-    body = json.dumps({"operation": operation, "input": input_data}).encode()
-    req = urllib.request.Request(API, data=body, headers={"Content-Type": "application/json"})
-    resp = json.loads(urllib.request.urlopen(req).read())
-    return resp.get("output", {})
+echo "Storing documents..."
+write doc-policy-rules.json
+write doc-data-guide.json
 
+echo "Storing pipeline..."
+write pipeline.json
 
-def write(path, value):
-    """covia_write a value to a lattice path."""
-    invoke("v/ops/covia/write", {"path": path, "value": value})
+echo "Creating agents..."
+agent alice.json
+agent bob.json
+agent carol.json
+agent dave.json
 
-
-def write_file(path, filepath):
-    """covia_write the contents of a JSON file (parsed) to a lattice path."""
-    with open(filepath) as f:
-        write(path, json.load(f))
-
-
-def write_text(path, filepath):
-    """covia_write the contents of a text file (as string) to a lattice path."""
-    with open(filepath) as f:
-        write(path, f.read())
-
-
-def write_data(filepath):
-    """covia_write using a JSON file that contains {path, value}."""
-    with open(filepath) as f:
-        data = json.load(f)
-    write(data["path"], data["value"])
-
-
-def create_agent(filepath):
-    """agent_create using a JSON file that is the complete input."""
-    with open(filepath) as f:
-        invoke("v/ops/agent/create", json.load(f))
-
-
-# ── Check venue ──────────────────────────────────────────────
-print(f"=== AP Demo Setup ===")
-print(f"Venue: {VENUE}")
-try:
-    urllib.request.urlopen(f"{VENUE}/api/v1/status")
-except Exception:
-    print(f"ERROR: Venue not reachable at {VENUE}")
-    sys.exit(1)
-
-# ── Reference data ───────────────────────────────────────────
-print("Seeding reference data...")
-for f in ["vendor-acme.json", "vendor-globex.json", "vendor-initech.json",
-          "po-acme.json", "po-globex.json", "po-initech.json"]:
-    write_data(os.path.join(DIR, f))
-
-# ── Documents ────────────────────────────────────────────────
-print("Storing documents...")
-write_text("w/docs/policy-rules", os.path.join(DIR, "ap-policy-rules.md"))
-write_text("w/docs/data-guide", os.path.join(DIR, "ap-data-guide.md"))
-
-# ── Pipeline orchestration ───────────────────────────────────
-print("Storing pipeline...")
-write_file("o/ap-pipeline", os.path.join(DIR, "ap-pipeline.json"))
-
-# ── Agents ───────────────────────────────────────────────────
-print("Creating agents...")
-for agent in ["alice", "bob", "carol", "dave"]:
-    create_agent(os.path.join(DIR, f"{agent}.json"))
-
-# ── Verify ───────────────────────────────────────────────────
-print()
-print("=== Verification ===")
-agents = invoke("v/ops/agent/list", {}).get("agents", [])
-for a in agents:
-    print(f"  {a.get('agentId', '?')}: {a.get('status', '?')}")
-print(f"\n{len(agents)} agents ready.")
+echo ""
+echo "=== Done ==="
+curl -sf -X POST "$API" -H "Content-Type: application/json" -d '{"operation":"v/ops/agent/list","input":{}}' | python -c "
+import json,sys
+for a in json.load(sys.stdin).get('output',{}).get('agents',[]):
+    print(f'  {a[\"agentId\"]}: {a[\"status\"]}')
+" 2>/dev/null || echo "  (install python to see agent status)"

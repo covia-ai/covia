@@ -1,0 +1,115 @@
+{
+  "path": "o/ap-pipeline",
+  "value": {
+    "name": "AP Invoice Pipeline",
+    "type": "orchestration",
+    "description": "Three-step accounts payable pipeline: Alice (extract) \u00e2\u2020\u2019 Bob (enrich) \u00e2\u2020\u2019 Carol (approve). Pass invoice_text as input. Returns extraction, enrichment, and approval decision.",
+    "operation": {
+      "adapter": "orchestrator",
+      "input": {
+        "type": "object",
+        "properties": {
+          "invoice_text": {
+            "type": "string",
+            "description": "Raw invoice text to process"
+          }
+        },
+        "required": [
+          "invoice_text"
+        ]
+      },
+      "steps": [
+        {
+          "op": "v/ops/agent/request",
+          "input": {
+            "agentId": [
+              "const",
+              "Alice"
+            ],
+            "input": {
+              "invoice_text": [
+                "input",
+                "invoice_text"
+              ]
+            },
+            "wait": [
+              "const",
+              true
+            ]
+          }
+        },
+        {
+          "op": "v/ops/agent/request",
+          "input": {
+            "agentId": [
+              "const",
+              "Bob"
+            ],
+            "input": {
+              "invoice": [
+                0,
+                "output"
+              ],
+              "source_agent": [
+                "const",
+                "Alice"
+              ]
+            },
+            "wait": [
+              "const",
+              true
+            ]
+          }
+        },
+        {
+          "op": "v/ops/agent/request",
+          "input": {
+            "agentId": [
+              "const",
+              "Carol"
+            ],
+            "input": {
+              "extraction": [
+                0,
+                "output"
+              ],
+              "enrichment": [
+                1,
+                "output"
+              ],
+              "source_pipeline": [
+                "const",
+                [
+                  {
+                    "agent": "Alice"
+                  },
+                  {
+                    "agent": "Bob"
+                  }
+                ]
+              ]
+            },
+            "wait": [
+              "const",
+              true
+            ]
+          }
+        }
+      ],
+      "result": {
+        "extraction": [
+          0,
+          "output"
+        ],
+        "enrichment": [
+          1,
+          "output"
+        ],
+        "decision": [
+          2,
+          "output"
+        ]
+      }
+    }
+  }
+}

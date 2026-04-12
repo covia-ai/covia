@@ -1,0 +1,4 @@
+{
+  "path": "w/docs/data-guide",
+  "value": "# AP Data Layout\n\n## Workspace Paths\n\n### Vendor Records\nPath: `w/vendor-records/{vendor_name}`\n\nFields: vendor_id, name, status (ACTIVE/SUSPENDED), tax_id, payment_method, bank_account, sanctions_check (CLEAR/FLAGGED), sanctions_detail, last_reviewed\n\n### Purchase Orders\nPath: `w/purchase-orders/{vendor_name}/{po_number}`\n\nFields: po_number, vendor, amount_authorised, currency, department, budget_code, status (OPEN/CLOSED), approver\n\n### Duplicate Check\nPath: `w/invoices/{vendor_name}/{invoice_number}`\n\nIf exists, the invoice is a duplicate.\n\n### Enrichment Results\nPath: `w/enrichments/{invoice_number}`\n\nWrite enrichment analysis here after completing validation.\n\n### Decision Records\nPath: `w/decisions/{invoice_number}`\n\nWrite approval decisions here for the audit trail.\n"
+}
