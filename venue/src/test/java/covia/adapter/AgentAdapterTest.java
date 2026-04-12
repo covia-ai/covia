@@ -14,6 +14,7 @@ import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -1736,5 +1737,38 @@ public class AgentAdapterTest {
 		agent.deliverMessage(Maps.of("content", "world"));
 		inbox = agent.getInbox();
 		assertEquals(2, inbox.count());
+	}
+
+	// ========== agent:update merge semantics ==========
+
+	@Test
+	public void testUpdateMergesStateConfig() {
+		// Create agent with full config
+		ACell createInput = Maps.of(
+			Fields.AGENT_ID, "merge-test",
+			Strings.create("overwrite"), convex.core.data.prim.CVMBool.TRUE,
+			AgentState.KEY_STATE, Maps.of(AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("model"), Strings.create("gpt-4.1-mini"),
+				Strings.create("systemPrompt"), Strings.create("You are a test agent"),
+				Strings.create("tools"), Vectors.of(
+					(ACell) Strings.create("v/ops/covia/read"),
+					(ACell) Strings.create("v/ops/covia/write")),
+				Strings.create("caps"), Vectors.of(
+					(ACell) Maps.of(Strings.create("with"), Strings.create("w/"), Strings.create("can"), Strings.create("crud"))))));
+		engine.jobs().invokeOperation("v/ops/agent/create", createInput, RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Update just the model — other fields should survive
+		ACell updateInput = Maps.of(
+			Fields.AGENT_ID, "merge-test",
+			AgentState.KEY_STATE, Maps.of(AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("model"), Strings.create("gpt-5.4-mini"))));
+		engine.jobs().invokeOperation("v/ops/agent/update", updateInput, RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Verify: model changed, everything else preserved
+		ACell config = engine.resolvePath(Strings.create("g/merge-test/state/config"), RequestContext.of(ALICE_DID));
+		assertEquals(Strings.create("gpt-5.4-mini"), RT.getIn(config, Strings.create("model")));
+		assertEquals(Strings.create("You are a test agent"), RT.getIn(config, Strings.create("systemPrompt")));
+		assertNotNull(RT.getIn(config, Strings.create("tools")), "tools should survive model update");
+		assertNotNull(RT.getIn(config, Strings.create("caps")), "caps should survive model update");
 	}
 }

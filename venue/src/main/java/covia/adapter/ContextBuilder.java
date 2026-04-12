@@ -270,7 +270,14 @@ public class ContextBuilder {
 		if (model != null) sb.append(". Model: ").append(model);
 		sb.append('.');
 
-		sb.append("\n\n").append(LATTICE_REFERENCE.toString());
+		// Include lattice reference when the agent has tools (default or explicit).
+		// Agents with no tools (e.g. pure extraction) don't need namespace docs.
+		boolean hasTools = config == null
+			|| !CVMBool.FALSE.equals(config.get(K_DEFAULT_TOOLS))
+			|| config.get(K_TOOLS) != null;
+		if (hasTools) {
+			sb.append("\n\n").append(LATTICE_REFERENCE.toString());
+		}
 		String capsSection = renderCapsForPrompt(
 			RT.ensureVector(config != null ? config.get(K_CAPS) : null));
 		if (capsSection != null) {

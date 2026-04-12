@@ -49,6 +49,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	/** Maximum tool call loop iterations per frame */
 	static final int MAX_ITERATIONS = 50;
 
+	/** Live turn count above which the auto-compact nudge fires */
+	static final int AUTO_COMPACT_THRESHOLD = 20;
+
 	static final String TOOL_SUBGOAL        = "subgoal";
 	static final String TOOL_COMPLETE       = "complete";
 	static final String TOOL_FAIL           = "fail";
@@ -617,6 +620,18 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			AVector<ACell> convMessages = GoalTreeContext.renderConversation(activeFrame);
 			fullHistory = (AVector<ACell>) fullHistory.concat(convMessages);
 
+			// Auto-compact nudge: when conversation grows large, inject a
+			// system hint so the LLM calls compact() before running out of
+			// context. Only fires if the agent has compact in its tool set.
+			long liveTurns = GoalTreeContext.countLiveTurns(activeFrame);
+			if (liveTurns > AUTO_COMPACT_THRESHOLD && hasCompactTool(harnessForFrame)) {
+				fullHistory = fullHistory.conj(Maps.of(
+					K_ROLE, ROLE_SYSTEM,
+					K_CONTENT, Strings.create(
+						"Your conversation has " + liveTurns + " turns. "
+						+ "Call compact(summary) now to free context space before continuing.")));
+			}
+
 			// Invoke L3
 			ACell l3Result = invokeLevel3(llmOperation, config, fullHistory, tools, ctx);
 
@@ -844,6 +859,18 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	}
 
 	// ========== Helpers ==========
+
+	/** Returns true if the tool set includes the compact tool. */
+	private static boolean hasCompactTool(AVector<ACell> tools) {
+		for (long i = 0; i < tools.count(); i++) {
+			ACell tool = tools.get(i);
+			if (tool instanceof AMap) {
+				ACell name = ((AMap<?,?>) tool).get(Strings.intern("name"));
+				if (name != null && TOOL_COMPACT.equals(name.toString())) return true;
+			}
+		}
+		return false;
+	}
 
 	/** Updates a frame at the given index in the frame stack. */
 	private static AVector<ACell> updateFrame(AVector<ACell> frames, int index, ACell frame) {

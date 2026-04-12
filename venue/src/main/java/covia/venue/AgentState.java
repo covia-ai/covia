@@ -290,14 +290,53 @@ public class AgentState extends ALatticeComponent<ACell> {
 		update(r -> r.assoc(K_STATUS, SLEEPING).dissoc(K_WAKE));
 	}
 
-	/** Updates config and/or state fields. */
+	/**
+	 * Merges config and/or state fields into the existing agent record.
+	 *
+	 * <p>Incoming maps are shallow-merged into the existing values so that
+	 * updating a single field (e.g. model) does not wipe sibling fields
+	 * (e.g. caps, tools, outputs). Top-level keys in the incoming map
+	 * override the corresponding keys in the existing map; keys not
+	 * present in the incoming map are preserved.</p>
+	 */
+	@SuppressWarnings("unchecked")
 	public void updateConfigAndState(AMap<AString, ACell> config, ACell state) {
 		update(r -> {
 			AMap<AString, ACell> u = r;
-			if (config != null) u = u.assoc(K_CONFIG, config);
-			if (state != null) u = u.assoc(K_STATE, state);
+			if (config != null) {
+				AMap<AString, ACell> existing = (AMap<AString, ACell>) r.get(K_CONFIG);
+				u = u.assoc(K_CONFIG, merge(existing, config));
+			}
+			if (state instanceof AMap) {
+				AMap<AString, ACell> existing = (AMap<AString, ACell>) r.get(K_STATE);
+				AMap<AString, ACell> incoming = (AMap<AString, ACell>) state;
+				AMap<AString, ACell> merged = merge(existing, incoming);
+				// Deep-merge state.config so updating one field (e.g. model)
+				// doesn't wipe siblings (e.g. caps, tools, outputs)
+				if (existing != null && incoming.containsKey(K_CONFIG)
+						&& existing.get(K_CONFIG) instanceof AMap
+						&& incoming.get(K_CONFIG) instanceof AMap) {
+					merged = merged.assoc(K_CONFIG, merge(
+						(AMap<AString, ACell>) existing.get(K_CONFIG),
+						(AMap<AString, ACell>) incoming.get(K_CONFIG)));
+				}
+				u = u.assoc(K_STATE, merged);
+			} else if (state != null) {
+				u = u.assoc(K_STATE, state);
+			}
 			return u;
 		});
+	}
+
+	/** Shallow-merge: incoming keys override existing, existing keys preserved. */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> merge(AMap<AString, ACell> existing, AMap<AString, ACell> incoming) {
+		if (existing == null) return incoming;
+		AMap<AString, ACell> result = existing;
+		for (var entry : incoming.entrySet()) {
+			result = result.assoc((AString) entry.getKey(), entry.getValue());
+		}
+		return result;
 	}
 
 	// ========== Run loop merge ==========

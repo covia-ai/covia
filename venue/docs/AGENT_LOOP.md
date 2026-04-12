@@ -235,10 +235,11 @@ The level 3 operation to invoke is specified in `state.config.llmOperation`
 strategy (level 2) and the LLM backend (level 3).
 
 The other level 2 adapter, `goaltree:chat` (GoalTreeAdapter), is documented
-separately in [GOAL_TREE.md](./GOAL_TREE.md). It is currently stateless across
+separately in [GOAL_TREE.md](./GOAL_TREE.md). It is stateless across
 transitions — each transition is a fresh root frame with no cross-request
-memory. Use it for goal decomposition with subgoal/complete/fail/compact tools;
-use `llmagent:chat` for cross-turn conversational memory.
+memory. It supports typed outputs (schema-enforced `complete`/`fail`), opt-in
+harness tools, runtime tool discovery via `more_tools`, and auto-compact
+nudges. Use `llmagent:chat` for cross-turn conversational memory.
 
 ### 3.3 Level 3 — LLM Call (Single Step)
 
@@ -370,90 +371,68 @@ Two layers: `state.config.context` (stable baseline, loaded every run) and
 See [CONTEXT.md](./CONTEXT.md) for the full design: entry format, resolution
 rules, load order, size considerations, and phasing.
 
-### 3.6 Default Tool Palette
+### 3.6 Tool Palette
 
-Level 2 provides a set of tools to the LLM during the tool call loop. These are
-the agent's interface to the outside world. Each tool maps directly to an MCP
-tool definition (name, description, JSON schema for args).
+Agents declare their tools in `state.config.tools` — a curated list of
+operation paths and harness tool names. Set `defaultTools: false` to disable
+the legacy 18-tool default set. Zero tools by default — a bare chatbot just
+responds with text.
 
-The tool palette is split into **default tools** (always available),
-**workspace tools** (available by default for own namespace), and
-**capability-gated tools** (require explicit `caps` — Phase C).
+```json
+"tools": ["v/ops/covia/read", "v/ops/covia/write", "subgoal", "compact"]
+```
 
-#### Default tools
+Entries are either **operation paths** (resolved via `ContextBuilder.buildConfigTools`
+to LLM tool definitions with name, description, parameters from the asset
+metadata) or **harness tool names** (resolved by `GoalTreeAdapter.resolveHarnessTools`
+to built-in tool definitions).
 
-These are provided by the Level 2 loop to the LLM agent. Level 2 handles
-execution and maps results back to the tool call loop.
+#### Harness tools (GoalTreeAdapter)
 
-**Task management:**
+All opt-in — include by name in `config.tools` if needed.
 
-| Tool | Description | Args | Returns |
-|------|-------------|------|---------|
-| `complete_task` | Complete an inbound task with a result | `{jobId, output}` | `{status: "COMPLETE"}` |
-| `fail_task` | Reject/fail an inbound task with a reason | `{jobId, reason}` | `{status: "FAILED"}` |
+| Tool | Purpose |
+|------|---------|
+| `subgoal` | Delegate a sub-task to an isolated child frame |
+| `complete` | Return structured result (auto-injected with typed outputs) |
+| `fail` | Report failure with structured error (auto-injected with typed outputs) |
+| `compact` | Archive conversation to a summary, freeing context space |
+| `context_load` | Pin workspace data in context across turns |
+| `context_unload` | Remove pinned data |
+| `more_tools` | Discover and add operations at runtime |
 
-These are side effects — they complete the Job immediately via JobManager.
-Not rolled back if the transition subsequently fails (§3.4.1).
+**Typed outputs:** When `state.config.outputs` is set, `complete` and `fail`
+are auto-injected with schema-enforced parameters — no need to list them in
+`tools`. The LLM's tool call arguments must match the declared schema (enforced
+by OpenAI `strictTools`). Text-only responses are rejected. Flattened: the
+entire tool input IS the result — `complete({field: val})`, not
+`complete({result: {field: val}})`.
 
-**Communication:**
+**Auto-compact:** When conversation exceeds 20 turns and the agent has `compact`
+in its tool set, a system hint nudges the LLM to compact before context overflow.
 
-| Tool | Description | Args | Returns |
-|------|-------------|------|---------|
-| `message_agent` | Send an ephemeral message to another agent's inbox | `{agentId, message}` | `{delivered: true}` |
-| `request_agent` | Submit a persistent task to another agent | `{agentId, input, wait?}` | Task job status |
+#### Operation tools
 
-#### Workspace and introspection tools
+Any venue operation can be a tool. Common categories:
 
-These are in the default tool palette. They operate on the authenticated
-user's own lattice namespace. Paths support mixed map/vector navigation
-(e.g. `w/records/1/name`). Writable namespaces: `w/` (workspace) and
-`o/` (operations). All namespaces are readable.
+| Category | Examples |
+|----------|---------|
+| **Data** | `v/ops/covia/read`, `write`, `list`, `delete`, `append`, `slice`, `inspect`, `copy` |
+| **Grid** | `v/ops/grid/run` (execute operations), `grid/invoke` (async) |
+| **Agents** | `v/ops/agent/create`, `request`, `message`, `list`, `info`, `fork` |
+| **Assets** | `v/ops/asset/store`, `get`, `list`, `pin`, `content` |
+| **Schema** | `v/ops/schema/validate`, `infer` |
 
-| Tool | Description | Args | Returns |
-|------|-------------|------|---------|
-| `covia:read` | Read a value at any lattice path | `{path, maxSize?}` | `{exists, value}` or `{exists, truncated, size}` |
-| `covia:write` | Write a value to `/w/` or `/o/` at any depth | `{path, value}` | `{written: true}` |
-| `covia:delete` | Delete a key from `/w/` or `/o/` at any depth | `{path}` | `{deleted: true}` |
-| `covia:append` | Append an element to a vector in `/w/` or `/o/` | `{path, value}` | `{appended: true}` |
-| `covia:slice` | Read a paginated slice from a collection | `{path, offset?, limit?}` | `{type, values, count, offset}` |
-| `covia:list` | Describe structure at a path (type, count, keys) | `{path, limit?, offset?}` | `{type, count, keys?}` |
+Each tool's description includes its operation path (e.g. `Operation: v/ops/covia/read`)
+so the LLM can reason about provenance and discover related operations.
 
-Operation discovery is now done through the lattice: `covia:list path=v/ops` for
-the venue's operations catalog, `covia:read path=v/ops/<name>` for full metadata,
-and `covia:list path=v/info/adapters` for adapter summaries. The dedicated
-`covia:functions`, `covia:describe`, and `covia:adapters` ops are gone — see
-`OPERATIONS.md` for the full design.
+#### Capability enforcement
 
-**Deep path navigation:** Paths like `w/data/nested/field` create intermediate
-maps on write. Paths into vectors use integer indices (e.g. `w/events/0`).
-Type-aware navigation resolves maps by string key and vectors by parsed index.
+Tool calls are checked against the agent's `caps` before dispatch. Denied calls
+return an error listing the agent's actual capabilities. The system prompt
+includes a caps section so the LLM knows its boundaries upfront.
 
-**`maxSize` guard:** `covia:read` defaults to 1MB max response. If the value's
-encoding exceeds the limit, returns `{exists: true, truncated: true, size: N}`
-instead — use `covia:list` to inspect or `covia:slice` to page.
-
-#### Capability-gated tools (Phase C2)
-
-These require explicit capabilities in the agent's `caps` field. See
-[UCAN.md §5.4](./UCAN.md) for the two agent identity models:
-
-- **Model A (user-scoped):** Agent's `caps` declares attenuations. The venue issues
-  a scoped UCAN at creation. Tool calls go through a restricted RequestContext.
-  Example: Carol can write `w/decisions/` but not `w/vendor-records/`.
-- **Model B (independent DID):** Agent has its own keypair. It receives delegations
-  from users and presents proof chains on tool calls.
-
-The current workspace tools (`covia:write`, `covia:delete`, `covia:append`)
-restrict to `/w/` and `/o/` namespaces — UCAN enforcement will replace
-this static check with per-agent capability delegation.
-
-| Tool | Caps required | Description |
-|------|---------------|-------------|
-| `read_secret` | `secret/decrypt` | Decrypt a secret (adapter handles plaintext) |
-| `spawn_agent` | `crud/write` on `/g/` | Create a new agent |
-| `fork_agent` | `agent/fork` | Fork an existing agent |
-| `delegate` | `ucan/delegate` | Sub-delegate UCAN capabilities |
-| cross-user read | `crud/read` on other DID | Read another user's `/w/` namespace |
+See [UCAN.md](./UCAN.md) for the capability model.
 
 #### Additional tools
 
