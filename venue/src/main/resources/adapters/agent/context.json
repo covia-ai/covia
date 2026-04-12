@@ -1,6 +1,6 @@
 {
 	"name": "Agent Context",
-	"description": "Render the full LLM context an agent would see on a fresh transition, without invoking the LLM. Returns the assembled system prompt, context entries with labels and sizes, tool list, caps, and outputs config. Use this to inspect and debug what an agent actually receives.",
+	"description": "Render the exact L3 input (messages + tools + model) an agent would receive on a fresh transition, as pretty-printed JSON. Includes system prompt, context entries, harness tools (with typed schemas when outputs is set), and base tools. Pass an optional task to see the complete first-iteration message vector including the synthesised goal.",
 	"dateCreated": "2026-04-12T00:00:00Z",
 	"operation": {
 		"adapter": "agent:context",
@@ -8,20 +8,14 @@
 		"input": {
 			"type": "object",
 			"properties": {
-				"agentId": { "type": "string", "description": "Agent name to inspect" }
+				"agentId": { "type": "string", "description": "Agent name to inspect" },
+				"task": { "description": "Optional task input — if provided, a goal user message is synthesised and appended to the messages, showing the complete first-iteration context" }
 			},
 			"required": ["agentId"]
 		},
 		"output": {
-			"type": "object",
-			"properties": {
-				"agentId": { "type": "string" },
-				"systemPrompt": { "type": "string", "description": "Full system prompt text (identity + lattice reference + caps + session context)" },
-				"contextEntries": { "type": "array", "description": "Resolved context entries with labels and byte sizes" },
-				"tools": { "type": "array", "description": "Tool names available to the agent" },
-				"toolCount": { "type": "integer" },
-				"caps": { "type": "array", "description": "Capability attenuations (null if unrestricted)" }
-			}
+			"type": "string",
+			"description": "Pretty-printed JSON of the L3 input: {messages, tools, model}"
 		}
 	}
 }

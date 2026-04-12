@@ -528,10 +528,26 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
+		// If a task input was provided, synthesise the goal user message
+		// exactly as GoalTreeAdapter.processGoal would and append it to the
+		// messages — so the caller sees the complete first-iteration vector.
+		AVector<ACell> messages = context.history();
+		ACell taskInput = RT.getIn(input, Strings.intern("task"));
+		if (taskInput != null) {
+			AVector<ACell> tasks = Vectors.of(
+				(ACell) Maps.of(Strings.intern("input"), taskInput));
+			String goalDesc = covia.adapter.agent.GoalTreeContext.describeTransitionInput(
+				null, tasks, null);
+			ACell goalMsg = Maps.of(
+				Strings.intern("role"), Strings.intern("user"),
+				Strings.intern("content"), Strings.create(goalDesc));
+			messages = messages.conj(goalMsg);
+		}
+
 		// Assemble the L3 input — the exact map that invokeLevel3 would
 		// build and send to the LLM provider. This IS what the LLM sees.
 		AMap<AString, ACell> l3Input = Maps.of(
-			Strings.create("messages"), context.history(),
+			Strings.create("messages"), messages,
 			Strings.create("tools"), allTools);
 		if (mergedConfig != null) {
 			ACell model = mergedConfig.get(Strings.create("model"));
