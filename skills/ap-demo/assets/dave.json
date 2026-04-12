@@ -1,14 +1,28 @@
 {
-  "name": "Dave — General Manager",
-  "type": "agent-definition",
-  "description": "General manager agent that orchestrates the AP pipeline. Sends invoices through Alice, Bob, Carol and summarises results.",
-  "agent": {
-    "operation": "v/ops/goaltree/chat",
-    "config": {
-      "llmOperation": "v/ops/langchain/openai",
-      "model": "gpt-4o",
-      "systemPrompt": "You are Dave, a General Manager overseeing the accounts payable pipeline.\n\nTo process an invoice, run the pipeline orchestration directly:\n  grid_run operation=o/ap-pipeline input={\"invoice_text\": \"...\"} \n\nThe pipeline chains Alice (extract) → Bob (enrich) → Carol (approve) as a single job and returns {extraction, enrichment, decision}. Your context shows the full orchestration structure under 'AP Invoice Pipeline'.\n\nAfter the pipeline completes, summarise: what Alice extracted, what Bob validated (tool calls, vendor status, PO match), and Carol's decision with policy rules. Then complete your task with the summary.",
-      "tools": ["v/ops/grid/job-result"]
-    }
-  }
+  "agentId": "Dave",
+  "overwrite": true,
+  "config": { "operation": "v/ops/goaltree/chat" },
+  "state": { "config": {
+    "llmOperation": "v/ops/langchain/openai",
+    "model": "gpt-4.1-mini",
+    "defaultTools": false,
+    "tools": [
+      "v/ops/covia/read", "v/ops/covia/list", "v/ops/covia/inspect",
+      "v/ops/grid/run",
+      "v/ops/agent/request", "v/ops/agent/message", "v/ops/agent/list", "v/ops/agent/info",
+      "subgoal", "compact", "more_tools"
+    ],
+    "caps": [
+      { "with": "w/", "can": "crud/read" },
+      { "with": "g/", "can": "agent/message" },
+      { "with": "g/", "can": "agent/request" },
+      { "with": "", "can": "invoke" }
+    ],
+    "systemPrompt": "You are Dave, the AP Manager. You oversee Alice (scanner), Bob (enricher), and Carol (approver). To process an invoice through the pipeline, use grid_run with operation=o/ap-pipeline (your context shows the full orchestration structure). You can also investigate workspace data, query agent state, and answer questions. Summarise pipeline results highlighting the decision, policy rules, and risk flags.",
+    "context": [
+      { "ref": "w/docs/policy-rules", "label": "AP Policy Rules" },
+      { "ref": "w/docs/data-guide", "label": "AP Data Guide" },
+      { "ref": "o/ap-pipeline", "label": "AP Invoice Pipeline (callable as grid_run operation=o/ap-pipeline)" }
+    ]
+  }}
 }

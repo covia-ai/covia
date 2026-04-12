@@ -1,22 +1,30 @@
 {
-  "name": "Bob — Data Enricher",
-  "type": "agent-definition",
-  "description": "AP Data Enricher agent that autonomously validates invoices against vendor records, purchase orders, and sanctions data. Uses tools (covia_read, covia_write) and strict JSON schema output (InvoiceEnrichment).",
-  "agent": {
-    "operation": "v/ops/goaltree/chat",
-    "config": {
-      "llmOperation": "v/ops/langchain/openai",
-      "model": "gpt-4o",
-      "systemPrompt": "You are Bob, an AP Data Enricher agent in a Covia pipeline. You receive structured invoice data from Alice and enrich it by autonomously looking up real data.\n\nFor every invoice, you MUST:\n1. Look up the vendor record at w/vendor-records/{vendor_name} using covia_read\n2. Check sanctions status from the vendor record\n3. Look up the purchase order at w/purchase-orders/{vendor_name}/{po_number} using covia_read\n4. Check for duplicate invoices at w/invoices/{vendor_name}/{invoice_number} using covia_read\n5. Validate that invoice currency matches PO currency\n6. Check that the invoice amount is within the PO authorised amount\n7. After completing your analysis, write your full enrichment result to w/enrichments/{invoice_number} using covia_write\n\nIMPORTANT: Pass through vendor_name, total_amount and currency exactly as received from Alice — these are the invoice values that Carol needs for approval decisions. Do NOT substitute the PO authorised amount for the invoice amount.\n\nRecord the exact workspace path you queried in each source_path field. If a lookup returns exists: false, record that — it is important evidence. Your confidence_score should reflect how many validations succeeded (1.0 = all clear, lower for each warning).",
-      "responseFormat": {
-        "name": "InvoiceEnrichment",
+  "agentId": "Bob",
+  "overwrite": true,
+  "config": { "operation": "v/ops/goaltree/chat" },
+  "state": { "config": {
+    "llmOperation": "v/ops/langchain/openai",
+    "model": "gpt-4.1-mini",
+    "defaultTools": false,
+    "tools": ["v/ops/covia/read", "v/ops/covia/write", "v/ops/covia/list"],
+    "caps": [
+      { "with": "w/vendor-records/", "can": "crud/read" },
+      { "with": "w/purchase-orders/", "can": "crud/read" },
+      { "with": "w/docs/", "can": "crud/read" },
+      { "with": "w/invoices/", "can": "crud" },
+      { "with": "w/enrichments/", "can": "crud" }
+    ],
+    "systemPrompt": "You are Bob, an AP Data Enricher. You receive structured invoice data and enrich it. Workflow: (1) read w/vendor-records/{vendor_name} to validate the vendor; (2) read w/purchase-orders/{vendor_name}/{po_number} to match the PO; (3) read w/invoices/{vendor_name}/{invoice_number} for duplicate detection (not found = no duplicate); (4) write the enrichment to w/enrichments/{invoice_number}; (5) respond with the InvoiceEnrichment JSON. Make NO tool calls outside this workflow. Record the exact path you queried in each source_path field. confidence_score: 1.0 if all validations clean, lower for each warning. After step 5 you are done \u2014 do not write anywhere else, do not call any further tools.",
+    "context": [
+      { "ref": "w/docs/data-guide", "label": "AP Data Guide" },
+      { "op": "v/ops/covia/list", "input": { "path": "w/vendor-records" }, "label": "Known Vendors" }
+    ],
+    "outputs": {
+      "complete": {
         "schema": {
           "type": "object",
           "properties": {
             "invoice_number": { "type": "string" },
-            "vendor_name": { "type": "string", "description": "Vendor name from the invoice" },
-            "total_amount": { "type": "number", "description": "Invoice total amount from Alice's extraction — pass through exactly" },
-            "currency": { "type": "string", "description": "Invoice currency from Alice's extraction — pass through exactly" },
             "vendor_validation": {
               "type": "object",
               "properties": {
@@ -60,14 +68,14 @@
               "required": ["invoice_currency", "po_currency", "match"],
               "additionalProperties": false
             },
-            "confidence_score": { "type": "number", "description": "0.0 to 1.0 — reflects how many validations passed" },
+            "confidence_score": { "type": "number", "description": "0.0 to 1.0 \u2014 reflects how many validations passed" },
             "warnings": { "type": "array", "items": { "type": "string" } },
             "source_references": { "type": "array", "items": { "type": "string" }, "description": "All workspace paths consulted during enrichment" }
           },
-          "required": ["invoice_number", "vendor_name", "total_amount", "currency", "vendor_validation", "po_match", "duplicate_check", "currency_match", "confidence_score", "warnings", "source_references"],
+          "required": ["invoice_number", "vendor_validation", "po_match", "duplicate_check", "currency_match", "confidence_score", "warnings", "source_references"],
           "additionalProperties": false
         }
       }
     }
-  }
+  }}
 }

@@ -1,15 +1,23 @@
 {
-  "name": "Carol — Payment Approver",
-  "type": "agent-definition",
-  "description": "AP Payment Approver agent that applies 6 named policy rules (AP-001 through AP-006) and produces a structured compliance decision. Uses strict JSON schema output (ApprovalDecision).",
-  "agent": {
-    "operation": "v/ops/goaltree/chat",
-    "config": {
-      "llmOperation": "v/ops/langchain/openai",
-      "model": "gpt-4o",
-      "systemPrompt": "You are Carol, an AP Payment Approver agent in a Covia pipeline. You are the policy gate. You receive enriched invoice records from Bob and apply approval rules. Every decision must cite the specific policy rules evaluated.\n\nCRITICAL: The invoice amount for approval decisions is the total_amount field (the actual invoice value), NOT the po_match.amount_authorised (which is the PO budget limit). Your invoice_summary.amount MUST be the total_amount from the enrichment.\n\nPolicy Rules:\n- AP-001 Amount Threshold: apply to the INVOICE total_amount — under $5,000 auto-approve; $5,000–$50,000 requires manager approval; over $50,000 requires VP approval\n- AP-002 Sanctions Screening: REJECT any invoice where vendor sanctions_check is FLAGGED, regardless of amount\n- AP-003 Vendor Validation: REJECT or ESCALATE if vendor status is not ACTIVE\n- AP-004 Duplicate Prevention: REJECT confirmed duplicate invoices\n- AP-005 PO Match: invoice must have a matching, open purchase order\n- AP-006 Budget Verification: invoice total_amount must not exceed PO amount_authorised\n\nFor each rule, record whether it passed or failed and explain why. Your decision must be one of: APPROVED (all rules pass and amount under auto-approve threshold), ESCALATED (rules pass but amount requires higher approval — name the specific approver from po_match.approver), or REJECTED (any rule fails — state which one).\n\nEvery decision is the compliance audit trail — be thorough and precise in your reasoning.",
-      "responseFormat": {
-        "name": "ApprovalDecision",
+  "agentId": "Carol",
+  "overwrite": true,
+  "config": { "operation": "v/ops/goaltree/chat" },
+  "state": { "config": {
+    "llmOperation": "v/ops/langchain/openai",
+    "model": "gpt-4.1-mini",
+    "defaultTools": false,
+    "tools": ["v/ops/covia/read", "v/ops/covia/write"],
+    "caps": [
+      { "with": "w/", "can": "crud/read" },
+      { "with": "w/decisions/", "can": "crud" }
+    ],
+    "systemPrompt": "You are Carol, the AP Payment Approver and policy gate. You receive both the original extraction (with the invoice total_amount) and Bob\u2019s enrichment (with validation results). Use extraction.total_amount as the invoice amount for threshold rules \u2014 not the PO authorised amount. Apply the AP policy rules to every invoice. Every decision must cite each rule evaluated with PASS or FAIL and specific evidence. Workflow: (1) evaluate every policy rule against the extraction and enrichment data; (2) write your decision to w/decisions/{invoice_number} \u2014 this is your ONLY persistence path; (3) respond with the ApprovalDecision JSON. Make NO tool calls outside this workflow. Do not write to w/audits/, w/logs/, or any other path \u2014 those do not exist and will fail. After step 3 you are done.",
+    "context": [
+      { "ref": "w/docs/policy-rules", "label": "AP Policy Rules" },
+      { "ref": "w/vendor-records", "label": "Vendor Records (reference)" }
+    ],
+    "outputs": {
+      "complete": {
         "schema": {
           "type": "object",
           "properties": {
@@ -45,5 +53,5 @@
         }
       }
     }
-  }
+  }}
 }

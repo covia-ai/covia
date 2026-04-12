@@ -1,41 +1,40 @@
 {
-  "name": "Alice — Invoice Scanner",
-  "type": "agent-definition",
-  "description": "AP Invoice Scanner agent that extracts structured fields from raw invoice text. Uses strict JSON schema output (InvoiceExtraction).",
-  "agent": {
-    "operation": "v/ops/goaltree/chat",
-    "config": {
-      "llmOperation": "v/ops/langchain/openai",
-      "model": "gpt-4o",
-      "systemPrompt": "You are Alice, an AP Invoice Scanner agent in a Covia pipeline. Extract structured invoice fields from raw text. Your output is schema-enforced — populate every field. Use empty string for missing text fields and empty array for missing lists. Add a flag string for every field that required interpretation or was ambiguous. Be precise with amounts — extract exact numbers, not rounded values.",
-      "responseFormat": {
-        "name": "InvoiceExtraction",
-        "schema": {
-          "type": "object",
-          "properties": {
-            "vendor_name": { "type": "string", "description": "Exact vendor name as it appears on the invoice" },
-            "invoice_number": { "type": "string" },
-            "date": { "type": "string", "description": "Invoice date in ISO 8601 format (YYYY-MM-DD)" },
-            "line_items": { "type": "array", "items": {
-              "type": "object",
-              "properties": {
-                "description": { "type": "string" },
-                "amount": { "type": "number" },
-                "currency": { "type": "string" }
-              },
-              "required": ["description", "amount", "currency"],
-              "additionalProperties": false
-            }},
-            "total_amount": { "type": "number" },
-            "currency": { "type": "string", "description": "Three-letter currency code" },
-            "payment_terms": { "type": "string", "description": "e.g. Net 30, Net 45" },
-            "po_number": { "type": "string", "description": "Purchase order number, or empty string if not present" },
-            "flags": { "type": "array", "items": { "type": "string" }, "description": "Missing or ambiguous fields that may need human review" }
-          },
-          "required": ["vendor_name", "invoice_number", "date", "line_items", "total_amount", "currency", "payment_terms", "po_number", "flags"],
-          "additionalProperties": false
-        }
+  "agentId": "Alice",
+  "overwrite": true,
+  "config": { "operation": "v/ops/goaltree/chat" },
+  "state": { "config": {
+    "llmOperation": "v/ops/langchain/openai",
+    "model": "gpt-4o-mini",
+    "defaultTools": false,
+    "caps": [],
+    "systemPrompt": "You are Alice, an AP Invoice Scanner. Extract structured invoice fields from raw text. Your output is schema-enforced \u2014 populate every field. Use empty string for missing text fields and empty array for missing lists. Add a flag for every field that required interpretation or was ambiguous. Be precise with amounts.",
+    "responseFormat": {
+      "name": "InvoiceExtraction",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "vendor_name": { "type": "string", "description": "Exact vendor name as it appears on the invoice" },
+          "invoice_number": { "type": "string" },
+          "date": { "type": "string", "description": "Invoice date in ISO 8601 format (YYYY-MM-DD)" },
+          "line_items": { "type": "array", "items": {
+            "type": "object",
+            "properties": {
+              "description": { "type": "string" },
+              "amount": { "type": "number" },
+              "currency": { "type": "string" }
+            },
+            "required": ["description", "amount", "currency"],
+            "additionalProperties": false
+          }},
+          "total_amount": { "type": "number" },
+          "currency": { "type": "string", "description": "Three-letter currency code" },
+          "payment_terms": { "type": "string", "description": "e.g. Net 30, Net 45" },
+          "po_number": { "type": "string", "description": "Purchase order number, or empty string if not present" },
+          "flags": { "type": "array", "items": { "type": "string" }, "description": "Missing or ambiguous fields that may need human review" }
+        },
+        "required": ["vendor_name", "invoice_number", "date", "line_items", "total_amount", "currency", "payment_terms", "po_number", "flags"],
+        "additionalProperties": false
       }
     }
-  }
+  }}
 }
