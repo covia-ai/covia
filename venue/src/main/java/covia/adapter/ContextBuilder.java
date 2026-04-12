@@ -244,8 +244,20 @@ public class ContextBuilder {
 		// iterations and produces failure loops.
 		AString identity = getConfigValue(config, K_SYSTEM_PROMPT, null);
 		if (identity == null) identity = DEFAULT_IDENTITY_PROMPT;
-		StringBuilder sb = new StringBuilder(identity.toString())
-			.append("\n\n").append(LATTICE_REFERENCE.toString());
+		StringBuilder sb = new StringBuilder(identity.toString());
+
+		// Session context: date/time and venue identity. Always included —
+		// agents that write timestamps, evaluate dates, or need to refer
+		// to their venue have no other way to get this information.
+		sb.append("\n\nCurrent date: ")
+		  .append(java.time.LocalDate.now().toString())
+		  .append(". Venue: ").append(engine.getName());
+		// Model name, if configured — helps the LLM self-calibrate
+		AString model = getConfigValue(config, Strings.intern("model"), null);
+		if (model != null) sb.append(". Model: ").append(model);
+		sb.append('.');
+
+		sb.append("\n\n").append(LATTICE_REFERENCE.toString());
 		String capsSection = renderCapsForPrompt(
 			RT.ensureVector(config != null ? config.get(K_CAPS) : null));
 		if (capsSection != null) {

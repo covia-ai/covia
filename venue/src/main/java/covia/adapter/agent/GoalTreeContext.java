@@ -297,30 +297,6 @@ public class GoalTreeContext {
 	}
 
 	/**
-	 * Renders a context map showing budget status and frame depth.
-	 *
-	 * @param frames the full frame stack
-	 * @param bytesConsumed bytes consumed by other context sections
-	 * @param totalBudget total context budget
-	 * @return system message with context map
-	 */
-	public static AMap<AString, ACell> renderContextMap(
-			AVector<ACell> frames, long bytesConsumed, long totalBudget) {
-		StringBuilder sb = new StringBuilder("[Context Map]\n");
-		sb.append("budget: ").append(bytesConsumed).append("/").append(totalBudget)
-		  .append(" bytes (").append(totalBudget - bytesConsumed).append(" remaining)\n");
-		sb.append("depth: ").append(frames.count()).append(" frame")
-		  .append(frames.count() > 1 ? "s" : "").append("\n");
-
-		int pct = (int) (100 * bytesConsumed / Math.max(1, totalBudget));
-		if (pct >= 70) {
-			sb.append("WARNING: ").append(pct).append("% budget used. Consider calling compact(summary).\n");
-		}
-
-		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(sb.toString()));
-	}
-
-	/**
 	 * Compacts live turns in a frame's conversation into a new segment.
 	 * Returns an updated frame with the segment appended and live turns cleared.
 	 *

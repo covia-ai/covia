@@ -480,12 +480,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					loadBuilder.resolveLoads(frameLoads));
 			}
 
-			// Context map
-			long consumed = fullHistory.count() * 100; // rough estimate
-			AMap<AString, ACell> ctxMap = GoalTreeContext.renderContextMap(
-				frames, consumed, ContextBuilder.DEFAULT_BUDGET);
-			fullHistory = fullHistory.conj(ctxMap);
-
 			// Conversation (segments + live turns — includes goal as first user message)
 			AVector<ACell> convMessages = GoalTreeContext.renderConversation(activeFrame);
 			fullHistory = (AVector<ACell>) fullHistory.concat(convMessages);

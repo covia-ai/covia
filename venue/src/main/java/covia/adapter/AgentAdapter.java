@@ -89,6 +89,7 @@ public class AgentAdapter extends AAdapter {
 		installAsset("agent/message",     BASE + "message.json");
 		installAsset("agent/trigger",     BASE + "trigger.json");
 		installAsset("agent/info",        BASE + "info.json");
+		installAsset("agent/context",     BASE + "context.json");
 		installAsset("agent/list",        BASE + "list.json");
 		installAsset("agent/delete",      BASE + "delete.json");
 		installAsset("agent/suspend",     BASE + "suspend.json");
@@ -138,6 +139,7 @@ public class AgentAdapter extends AAdapter {
 				case "message" -> handleMessage(job, input, ctx);
 				case "trigger" -> handleTrigger(job, input, ctx);
 				case "info"    -> handleQuery(job, input, ctx);
+				case "context" -> handleContext(job, input, ctx);
 				case "list"    -> handleList(job, input, ctx);
 				case "delete"  -> handleDelete(job, input, ctx);
 				case "suspend" -> handleSuspend(job, input, ctx);
@@ -467,6 +469,94 @@ public class AgentAdapter extends AAdapter {
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(summary);
+	}
+
+	/**
+	 * Renders the assembled LLM context an agent would see on a fresh
+	 * transition — same ContextBuilder pipeline as the real adapter, but
+	 * without invoking the LLM. Returns the system prompt text, context
+	 * entry labels, tool names, caps, and outputs config as a single map.
+	 * Designed for live debugging: call via {@code agent:context} to see
+	 * exactly what the LLM receives.
+	 */
+	@SuppressWarnings("unchecked")
+	private void handleContext(Job job, ACell input, RequestContext ctx) {
+		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		if (agentId == null) { job.fail("agentId is required"); return; }
+
+		Users users = engine.getVenueState().users();
+		User user = users.get(ctx.getCallerDID());
+		if (user == null) { job.fail("User not found"); return; }
+		AgentState agent = user.agent(agentId);
+		if (agent == null) { job.fail("Agent not found: " + agentId); return; }
+
+		AMap<AString, ACell> record = agent.getRecord();
+		AMap<AString, ACell> recordConfig = (record.get(AgentState.KEY_CONFIG) instanceof AMap m)
+			? (AMap<AString, ACell>) m : null;
+		ACell state = record.get(AgentState.KEY_STATE);
+
+		// Build context exactly as the transition adapter would
+		ContextBuilder builder = new ContextBuilder(engine, ctx);
+		ContextBuilder.ContextResult context = builder
+			.withConfig(recordConfig, state)
+			.withSystemPrompt(Vectors.empty())
+			.withContextEntries(state)
+			.withTools()
+			.build();
+
+		// Extract system prompt text (first system message)
+		AString systemPromptText = null;
+		AVector<ACell> history = context.history();
+		if (history != null && history.count() > 0) {
+			ACell first = history.get(0);
+			if (Strings.intern("system").equals(RT.getIn(first, Strings.intern("role")))) {
+				systemPromptText = RT.ensureString(RT.getIn(first, Strings.intern("content")));
+			}
+		}
+
+		// Collect context entry labels (non-system messages from the history
+		// minus the system prompt at index 0)
+		AVector<ACell> contextEntries = Vectors.empty();
+		for (long i = 1; i < history.count(); i++) {
+			ACell msg = history.get(i);
+			AString content = RT.ensureString(RT.getIn(msg, Strings.intern("content")));
+			if (content != null) {
+				String text = content.toString();
+				// Extract label from "[Context: <label>]\n..." format
+				String label = text;
+				if (text.startsWith("[Context: ")) {
+					int end = text.indexOf(']');
+					if (end > 0) label = text.substring(10, end);
+				}
+				int byteLen = text.length();
+				contextEntries = contextEntries.conj(Maps.of(
+					Strings.create("label"), Strings.create(label),
+					Strings.create("bytes"), CVMLong.create(byteLen)));
+			}
+		}
+
+		// Collect tool names
+		AVector<ACell> toolNames = Vectors.empty();
+		AVector<ACell> tools = context.tools();
+		if (tools != null) {
+			for (long i = 0; i < tools.count(); i++) {
+				AString name = RT.ensureString(RT.getIn(tools.get(i), Strings.intern("name")));
+				if (name != null) toolNames = toolNames.conj(name);
+			}
+		}
+
+		AMap<AString, ACell> result = Maps.of(
+			Fields.AGENT_ID, agentId,
+			Strings.create("systemPrompt"), systemPromptText != null ? systemPromptText : Strings.create(""),
+			Strings.create("contextEntries"), contextEntries,
+			Strings.create("tools"), toolNames,
+			Strings.create("toolCount"), CVMLong.create(tools != null ? tools.count() : 0));
+		if (context.caps() != null) {
+			result = result.assoc(Strings.create("caps"), context.caps());
+		}
+
+		job.setStatus(Status.STARTED);
+		job.completeWith(result);
 	}
 
 	@SuppressWarnings("unchecked")

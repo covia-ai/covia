@@ -299,29 +299,6 @@ public class GoalTreeContextTest {
 		assertTrue(content.contains("Analyse Beta Inc"));
 	}
 
-	// ========== Context map ==========
-
-	@Test
-	public void testRenderContextMap() {
-		AVector<ACell> frames = Vectors.of(
-			(ACell) GoalTreeContext.createFrame("root"),
-			(ACell) GoalTreeContext.createFrame("child"));
-		AMap<AString, ACell> map = GoalTreeContext.renderContextMap(frames, 5000, 180000);
-		String content = RT.ensureString(map.get(GoalTreeContext.K_CONTENT)).toString();
-		assertTrue(content.contains("5000/180000"));
-		assertTrue(content.contains("2 frames"));
-		assertFalse(content.contains("WARNING")); // only ~3%
-	}
-
-	@Test
-	public void testRenderContextMapWarningAt70Pct() {
-		AVector<ACell> frames = Vectors.of((ACell) GoalTreeContext.createFrame("root"));
-		AMap<AString, ACell> map = GoalTreeContext.renderContextMap(frames, 140000, 180000);
-		String content = RT.ensureString(map.get(GoalTreeContext.K_CONTENT)).toString();
-		assertTrue(content.contains("WARNING"));
-		assertTrue(content.contains("compact"));
-	}
-
 	// ========== Compaction ==========
 
 	@Test

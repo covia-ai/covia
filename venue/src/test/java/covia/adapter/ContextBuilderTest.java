@@ -372,6 +372,36 @@ public class ContextBuilderTest {
 	}
 
 	@Test
+	public void testSystemPromptIncludesSessionContext() {
+		// Every agent should see current date and venue name.
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withConfig(null, null)
+			.withSystemPrompt(Vectors.empty())
+			.build();
+		AString sys = extractSystemContent(result.history());
+		assertNotNull(sys);
+		String content = sys.toString();
+		assertTrue(content.contains("Current date:"),
+			"System prompt should include current date: " + content);
+		assertTrue(content.contains("Venue:"),
+			"System prompt should include venue name: " + content);
+	}
+
+	@Test
+	public void testSystemPromptIncludesModelWhenConfigured() {
+		AMap<AString, ACell> config = Maps.of(
+			Strings.intern("model"), Strings.create("gpt-4.1-mini"));
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withConfig(config, null)
+			.withSystemPrompt(Vectors.empty())
+			.build();
+		AString sys = extractSystemContent(result.history());
+		assertNotNull(sys);
+		assertTrue(sys.toString().contains("Model: gpt-4.1-mini"),
+			"System prompt should include model name when configured");
+	}
+
+	@Test
 	public void testSystemPromptOmitsCapsSectionWhenUnrestricted() {
 		// No caps in config = unrestricted = no caps section
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)

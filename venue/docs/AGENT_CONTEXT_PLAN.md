@@ -159,7 +159,14 @@ prior invoices).
 | §5.2 | Context entry cache with versioning | Open — compounding leverage |
 | §5.3 | Curated default tool subset | Open — separate design |
 | §5.4 | Compaction strategy for transcript | Open — needed for long-running agents |
-| §5.5 | Verify GoalTreeAdapter ancestor rendering | ✅ Verified — implementation matches spec, existing tests cover it |
+| §5.5 | Verify GoalTreeAdapter ancestor rendering | ✅ Verified |
+| §5.6 | Typed agent outputs | ✅ commit `a02a5bb` — see §9 |
+| §5.7 | Strict mode enabled | ✅ commit `9016c0f` |
+| §5.8 | Caps in system prompt + denial messages | ✅ commit `f1f8bbf` |
+| §5.9 | Failed-frame conversation persistence | ✅ commit `f1f8bbf` |
+| §5.10 | [Context Map] removed from goaltree | ✅ (inaccurate budget, actively misleading) |
+| §5.11 | Session context (date, venue, model) | ✅ added to system prompt |
+| §5.12 | `agent:context` operation | ✅ renders full LLM context for live inspection |
 | `AGENT_LOOP.md` §3.2 | Document the transcript model | ✅ Done |
 | Decision 2 | Whether to persist GoalTreeAdapter frame stack | Deferred until concrete use case |
 
@@ -241,3 +248,62 @@ which already discarded state every transition.
   `extractTranscript` with new expected counts
 
 939 venue tests stable green over 3 runs.
+
+---
+
+## 9. Outcome of typed agent outputs (commit a02a5bb)
+
+### Problem
+Two parallel mechanisms described the agent's response shape:
+- `responseFormat` — applied via OpenAI's `response_format` API to the
+  assistant text content, enforced by strict mode server-side.
+- `complete(result: any)` harness tool — unconstrained tool argument,
+  NOT enforced by strict mode.
+
+The `complete` tool's description actively pushed the LLM toward
+the unenforced path for structured outputs. So schema enforcement
+was nominal — bypassed whenever the LLM used `complete()`.
+
+### Mechanism
+Agents now declare typed `outputs`:
+```json
+"outputs": {
+  "complete": { "schema": { "type": "object", "properties": {...} } },
+  "fail":     { "schema": { "type": "object", "properties": {...} } }
+}
+```
+
+When set:
+- `GoalTreeAdapter` synthesises `complete` and `fail` tools with the
+  user's schema as their parameters (wrapped in strict-compatible
+  parameter objects).
+- OpenAI `strictTools=true` enforces the schema at the API level on
+  the tool call argument — closing the bypass.
+- Text-only assistant responses are rejected at the root frame — the
+  LLM must call `complete()` or `fail()` to deliver a result.
+- `responseFormat` is dropped from the L3 invocation when outputs is
+  set (no double mechanism).
+- Migration shim: agents with only `responseFormat` (schema map) get
+  auto-converted to `outputs.complete.schema`.
+- Default fail schema: `{reason: string, details: string}`.
+- Subgoal/child frames keep the legacy untyped harness.
+
+### Verification
+4/4 AP demo scenarios produce fully schema-conforming structured
+outputs via the typed `complete()` tool. Process logs confirm the
+`result` arg arrives as a structured map (not stringified JSON),
+proving `strictTools` is enforcing the schema at the API level.
+
+### Related fixes in the same session
+- `b4e9839` — `state.config` preserved across transitions (was being
+  wiped to `Maps.empty()` every transition, silently losing caps and
+  schema enforcement after the first invocation)
+- `9016c0f` — OpenAI `strictJsonSchema` and `strictTools` enabled
+  (langchain4j defaults both to `false`)
+- `f1f8bbf` — caps in system prompt, actionable denial messages,
+  failed-frame conversation persisted to `state.lastFailure`
+- `d57a96c` — Bob/Carol prompts tightened with step-numbered workflows;
+  upgraded to `gpt-4.1-mini` for better tool-loop behaviour
+- `[Context Map]` removed from goaltree (inaccurate budget estimate)
+- Session context (date, venue name, model) added to system prompt
+- `agent:context` operation for live context inspection

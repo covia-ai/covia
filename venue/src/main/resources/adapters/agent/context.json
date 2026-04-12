@@ -1,0 +1,27 @@
+{
+	"name": "Agent Context",
+	"description": "Render the full LLM context an agent would see on a fresh transition, without invoking the LLM. Returns the assembled system prompt, context entries with labels and sizes, tool list, caps, and outputs config. Use this to inspect and debug what an agent actually receives.",
+	"dateCreated": "2026-04-12T00:00:00Z",
+	"operation": {
+		"adapter": "agent:context",
+		"toolName": "agent_context",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Agent name to inspect" }
+			},
+			"required": ["agentId"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string" },
+				"systemPrompt": { "type": "string", "description": "Full system prompt text (identity + lattice reference + caps + session context)" },
+				"contextEntries": { "type": "array", "description": "Resolved context entries with labels and byte sizes" },
+				"tools": { "type": "array", "description": "Tool names available to the agent" },
+				"toolCount": { "type": "integer" },
+				"caps": { "type": "array", "description": "Capability attenuations (null if unrestricted)" }
+			}
+		}
+	}
+}
