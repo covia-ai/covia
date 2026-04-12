@@ -70,10 +70,16 @@ public class ContextLoader {
 	}
 
 	/**
-	 * Renders a CVM value as a string. Uses CellExplorer if set, otherwise
-	 * falls back to {@code toString()}.
+	 * Renders a CVM value as a string for inclusion in LLM context.
+	 *
+	 * <p>Plain strings are returned directly — CellExplorer wraps strings
+	 * in JSON5 quotes and escapes newlines, which destroys readable text
+	 * content like markdown documents. CellExplorer is only used for
+	 * structured values (maps, vectors, etc.) where budget-controlled
+	 * rendering is valuable.</p>
 	 */
 	String renderValue(ACell value) {
+		if (value instanceof AString s) return s.toString();
 		if (explorer != null) return explorer.explore(value).toString();
 		return value.toString();
 	}

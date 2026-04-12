@@ -498,4 +498,26 @@ public class ContextLoaderTest {
 		assertTrue(rendered.contains("a"));
 		assertTrue(rendered.contains("b"));
 	}
+
+	@Test
+	public void testRenderValuePreservesStringContent() {
+		// Plain strings must be returned verbatim — no JSON5 quoting, no
+		// newline escaping. CellExplorer wraps strings in quotes and escapes
+		// \n to \\n, which destroys readable text content. Strings should
+		// bypass the explorer entirely.
+		String markdown = "# Title\n\nParagraph with **bold**.\n\n- item 1\n- item 2\n";
+		AString value = Strings.create(markdown);
+
+		// Without explorer — trivial
+		assertEquals(markdown, loader.renderValue(value));
+
+		// WITH explorer — this is the case that was broken. CellExplorer
+		// would have returned \"# Title\\n\\nParagraph...\" (escaped newlines).
+		loader.setCellExplorer(new CellExplorer(10_000));
+		String rendered = loader.renderValue(value);
+		assertEquals(markdown, rendered, "Strings must be returned verbatim even with CellExplorer set");
+		assertTrue(rendered.contains("\n"), "Newlines must be real newlines, not escaped \\n");
+		assertFalse(rendered.contains("\\n"), "Must NOT contain escaped \\n sequences");
+		assertFalse(rendered.startsWith("\""), "Must NOT be JSON-quoted");
+	}
 }
