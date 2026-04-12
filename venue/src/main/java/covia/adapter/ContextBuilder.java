@@ -86,35 +86,36 @@ public class ContextBuilder {
 		+ "accurate responses.");
 
 	/**
-	 * Lattice operational reference appended to every agent's system prompt
-	 * (whether default or custom). Gives the LLM the namespace cheat sheet,
-	 * discovery hints, and resolution rules so it can use the venue's
-	 * lattice features effectively.
+	 * Lattice reference appended to every agent's system prompt. Teaches any
+	 * agent how to work on the Covia grid: what the lattice is, what each
+	 * namespace is for, how addressing works across users and venues.
 	 */
 	private static final AString LATTICE_REFERENCE = Strings.create(
-		"LATTICE NAMESPACES:\n"
-		+ "  w/<path>     Your workspace — durable read/write storage for your work\n"
-		+ "  o/<name>     Your operation pins — named operations callable via grid_run\n"
-		+ "  g/<id>/...   Agent records (framework-managed; read with covia_read, modify with agent_*)\n"
-		+ "  s/<name>     Your secrets (read/write only via secret_* tools)\n"
-		+ "  j/<id>/...   Your jobs (read with covia_read, modify via job APIs)\n"
-		+ "  /a/<hash>    Content-addressed asset store (immutable; create with asset_store or asset_pin)\n"
-		+ "  v/ops/...    Venue-provided operations catalog (read-only)\n"
-		+ "  v/info/...   Venue introspection: name, did, version, adapters\n"
-		+ "  n/...        Agent-private scope (when running inside an agent)\n"
-		+ "  t/...        Job-scoped temporary data (when running inside a job)\n"
+		"## Covia Lattice\n"
+		+ "You operate on the Covia grid — a federated network of venues hosting "
+		+ "operations, agents, and persistent data.\n"
 		+ "\n"
-		+ "DISCOVERY:\n"
-		+ "  covia_list path=v/ops                 — see what operations the venue offers\n"
-		+ "  covia_list path=v/info/adapters       — see installed adapters with their op lists\n"
-		+ "  covia_read path=v/ops/<adapter>/<op>  — read full metadata for a venue op\n"
-		+ "  covia_list path=o                     — see your own pinned operations\n"
+		+ "User namespaces (scoped to current user):\n"
+		+ "  w/  Workspace — persistent data you manage on the user's behalf\n"
+		+ "  o/  Operation pins — named operations saved for reuse\n"
+		+ "  n/  Agent-private — your notes, plans, state (persists across transitions)\n"
+		+ "  t/  Temporary — job-scoped scratch space (cleaned up when job ends)\n"
+		+ "  g/  Agent records — state, timelines, config for all agents\n"
+		+ "  s/  Secrets — API keys and credentials (secret tools only)\n"
+		+ "  j/  Job records — status and results of past work\n"
+		+ "  a/  Assets — immutable content-addressed artifacts, referenced by hash\n"
 		+ "\n"
-		+ "RESOLUTION:\n"
-		+ "  Any read-side path argument accepts: bare hex hashes, /a/<hash>, /o/<name>, "
-		+ "v/<path>, did:web:venue/u:user/<path>, or workspace paths. Use "
-		+ "covia_copy from=<source> to=o/<name> to pin a venue op into your own "
-		+ "/o/ for repeated use by name.");
+		+ "Venue-level (shared, read-only):\n"
+		+ "  v/ops/  Operations catalog\n"
+		+ "  v/info/  Venue metadata\n"
+		+ "\n"
+		+ "Addressing — any path argument accepts:\n"
+		+ "  w/docs/rules                  Local user data\n"
+		+ "  o/my-pipeline                 Pinned operation\n"
+		+ "  v/ops/covia/read              Venue operation\n"
+		+ "  a/<hash>                      Asset by content hash\n"
+		+ "  did:key:<id>/w/...            Cross-user (requires capability)\n"
+		+ "  did:web:<venue>/v/ops/...     Cross-venue (federated)");
 
 	/**
 	 * Per-engine cache of resolved default tool definitions.
@@ -186,6 +187,9 @@ public class ContextBuilder {
 	private AVector<ACell> caps;
 	private AMap<AString, ACell> config;
 
+	/** Tool names to skip during resolution (handled externally, e.g. harness tools) */
+	private java.util.Set<String> skipToolNames = java.util.Set.of();
+
 	public ContextBuilder(Engine engine, RequestContext ctx) {
 		this(engine, ctx, DEFAULT_BUDGET);
 	}
@@ -194,6 +198,15 @@ public class ContextBuilder {
 		this.engine = engine;
 		this.ctx = ctx;
 		this.totalBudget = budget;
+	}
+
+	/**
+	 * Sets tool names that should be silently skipped during resolution.
+	 * Used for harness tools that are resolved externally by the adapter.
+	 */
+	public ContextBuilder withSkipToolNames(java.util.Set<String> names) {
+		this.skipToolNames = names;
+		return this;
 	}
 
 	// ========== Section builders ==========
@@ -681,9 +694,14 @@ public class ContextBuilder {
 
 	/**
 	 * Resolves config tools to LLM tool definitions.
+	 *
+	 * <p>Each entry in {@code toolsVec} is either a string (operation path) or
+	 * a map with {@code operation}, optional {@code name}, optional {@code description}.
+	 * The resolved tool definitions are returned; the {@code toolMap} is populated
+	 * as a side-effect (tool name → operation path) for dispatch routing.</p>
 	 */
 	@SuppressWarnings("unchecked")
-	AVector<ACell> buildConfigTools(AVector<ACell> toolsVec, Map<String, AString> toolMap) {
+	public AVector<ACell> buildConfigTools(AVector<ACell> toolsVec, Map<String, AString> toolMap) {
 		AVector<ACell> result = Vectors.empty();
 		for (long i = 0; i < toolsVec.count(); i++) {
 			ACell entry = toolsVec.get(i);
@@ -694,6 +712,9 @@ public class ContextBuilder {
 			AString operation = parsed[0];
 			AString nameOverride = parsed[1];
 			AString descOverride = parsed[2];
+
+			// Skip harness tools — they're resolved by the adapter, not here
+			if (skipToolNames.contains(operation.toString())) continue;
 
 			Asset asset = engine.resolveAsset(operation, ctx);
 			if (asset == null) {

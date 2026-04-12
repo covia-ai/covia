@@ -55,6 +55,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	static final String TOOL_COMPACT        = "compact";
 	static final String TOOL_CONTEXT_LOAD   = "context_load";
 	static final String TOOL_CONTEXT_UNLOAD = "context_unload";
+	static final String TOOL_MORE_TOOLS     = "more_tools";
 
 	// ========== Harness tool definitions ==========
 
@@ -103,28 +104,34 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					K_DESCRIPTION, Strings.create("What the subgoal should accomplish"))),
 			K_REQUIRED, Vectors.of(Strings.create("description"))));
 
+	/*
+	 * Untyped complete/fail: parameters are open objects — the LLM can pass
+	 * any fields. The entire tool input becomes the result/error value.
+	 *
+	 * Because LLM provider APIs require tool arguments to be JSON objects,
+	 * agents cannot return arrays or primitives directly. To return an array,
+	 * wrap it: complete({items: [...]}).
+	 */
+
 	static final AMap<AString, ACell> TOOL_DEF_COMPLETE = Maps.of(
 		K_NAME, Strings.create(TOOL_COMPLETE),
 		K_DESCRIPTION, Strings.create(
-			"Finish your current goal and return structured data (a map or object) as "
-			+ "the result. Only needed when your caller needs machine-readable output. "
-			+ "For text answers, just respond normally — that also completes the goal."),
+			"Finish your current goal and return the result. Only needed when "
+			+ "your caller needs structured output. For text answers, just "
+			+ "respond normally — that also completes the goal."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
-			K_PROPERTIES, Maps.of(
-				Strings.create("result"), Maps.of(
-					K_DESCRIPTION, Strings.create("Structured result value")))));
+			K_PROPERTIES, Maps.empty()));
 
 	static final AMap<AString, ACell> TOOL_DEF_FAIL = Maps.of(
 		K_NAME, Strings.create(TOOL_FAIL),
 		K_DESCRIPTION, Strings.create(
-			"Report that your goal cannot be completed. Explain what went wrong so "
-			+ "the caller can decide whether to retry, try a different approach, or give up."),
+			"Report that your goal cannot be completed. Explain what went wrong "
+			+ "so the caller can decide whether to retry, try a different approach, "
+			+ "or give up."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
-			K_PROPERTIES, Maps.of(
-				Strings.create("error"), Maps.of(
-					K_DESCRIPTION, Strings.create("Structured error information")))));
+			K_PROPERTIES, Maps.empty()));
 
 	static final AMap<AString, ACell> TOOL_DEF_COMPACT = Maps.of(
 		K_NAME, Strings.create(TOOL_COMPACT),
@@ -149,13 +156,13 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			+ "Use for rules, schemas, or reference material you need to consult "
 			+ "repeatedly. The data is refreshed automatically each turn. Subgoals "
 			+ "inherit your loaded data. For data you only need once, use covia_read "
-			+ "or inspect instead."),
+			+ "instead. Call context_unload with the same path to remove it."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
 				Strings.create("path"), Maps.of(
 					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("Lattice path to load (e.g. w/docs/rules, n/notes)")),
+					K_DESCRIPTION, Strings.create("Workspace path to load (e.g. w/docs/rules, w/vendor-records/acme)")),
 				Strings.create("budget"), Maps.of(
 					K_TYPE, Strings.create("integer"),
 					K_DESCRIPTION, Strings.create("Byte budget for rendering this path (default 500, max 10000)")),
@@ -167,34 +174,80 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	static final AMap<AString, ACell> TOOL_DEF_CONTEXT_UNLOAD = Maps.of(
 		K_NAME, Strings.create(TOOL_CONTEXT_UNLOAD),
 		K_DESCRIPTION, Strings.create(
-			"Remove previously loaded data from your context. "
-			+ "Frees space for other work or data."),
+			"Remove a path previously added with context_load. Pass the same "
+			+ "path string you used when loading. Frees context space for other "
+			+ "work or data."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
 				Strings.create("path"), Maps.of(
 					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("Lattice path to unload"))),
+					K_DESCRIPTION, Strings.create("The path you passed to context_load"))),
 			K_REQUIRED, Vectors.of(Strings.create("path"))));
 
-	/** Harness tools for root frame — includes subgoal for decomposition */
-	@SuppressWarnings("unchecked")
-	public static final AVector<ACell> HARNESS_TOOLS = Vectors.of(
-		(ACell) TOOL_DEF_SUBGOAL,
-		(ACell) TOOL_DEF_COMPLETE,
-		(ACell) TOOL_DEF_FAIL,
-		(ACell) TOOL_DEF_COMPACT,
-		(ACell) TOOL_DEF_CONTEXT_LOAD,
-		(ACell) TOOL_DEF_CONTEXT_UNLOAD);
+	static final AMap<AString, ACell> TOOL_DEF_MORE_TOOLS = Maps.of(
+		K_NAME, Strings.create(TOOL_MORE_TOOLS),
+		K_DESCRIPTION, Strings.create(
+			"Add operations to your tool set for the rest of this run. "
+			+ "Use covia_list to discover available operations first "
+			+ "(e.g. covia_list path=v/ops), then call this with the paths "
+			+ "you need. Added tools appear on your next turn."),
+		K_PARAMETERS, Maps.of(
+			K_TYPE, Strings.create("object"),
+			K_PROPERTIES, Maps.of(
+				Strings.create("operations"), Maps.of(
+					K_TYPE, Strings.create("array"),
+					K_DESCRIPTION, Strings.create("Operation paths to add as tools (e.g. [\"v/ops/agent/create\", \"v/ops/grid/run\"])"),
+					Strings.create("items"), Maps.of(K_TYPE, Strings.create("string")))),
+			K_REQUIRED, Vectors.of(Strings.create("operations"))));
 
-	/** Harness tools for child frames — no subgoal (complete/fail/compact only) */
+	/**
+	 * Registry of all optional harness tool definitions by name.
+	 * Agents opt into harness tools by listing their names in config.tools
+	 * alongside regular operation paths.
+	 */
+	static final Map<String, AMap<AString, ACell>> HARNESS_TOOL_REGISTRY = Map.of(
+		TOOL_SUBGOAL, TOOL_DEF_SUBGOAL,
+		TOOL_COMPLETE, TOOL_DEF_COMPLETE,
+		TOOL_FAIL, TOOL_DEF_FAIL,
+		TOOL_COMPACT, TOOL_DEF_COMPACT,
+		TOOL_CONTEXT_LOAD, TOOL_DEF_CONTEXT_LOAD,
+		TOOL_CONTEXT_UNLOAD, TOOL_DEF_CONTEXT_UNLOAD,
+		TOOL_MORE_TOOLS, TOOL_DEF_MORE_TOOLS);
+
+	/**
+	 * Resolves harness tools from the agent's config.tools list.
+	 *
+	 * <p>Scans config.tools for entries matching known harness tool names
+	 * (subgoal, complete, fail, compact, context_load, context_unload,
+	 * more_tools). Returns their definitions as a vector. Entries that don't
+	 * match are ignored (they'll be resolved as operations by ContextBuilder).</p>
+	 *
+	 * @param config agent config (may be null)
+	 * @return vector of harness tool definitions found in config
+	 */
 	@SuppressWarnings("unchecked")
-	static final AVector<ACell> CHILD_HARNESS_TOOLS = Vectors.of(
-		(ACell) TOOL_DEF_COMPLETE,
-		(ACell) TOOL_DEF_FAIL,
-		(ACell) TOOL_DEF_COMPACT,
-		(ACell) TOOL_DEF_CONTEXT_LOAD,
-		(ACell) TOOL_DEF_CONTEXT_UNLOAD);
+	static AVector<ACell> resolveHarnessTools(AMap<AString, ACell> config) {
+		AVector<ACell> result = Vectors.empty();
+		if (config == null) return result;
+		ACell toolsCell = config.get(K_TOOLS);
+		if (!(toolsCell instanceof AVector)) return result;
+
+		AVector<ACell> toolsList = (AVector<ACell>) toolsCell;
+		for (long i = 0; i < toolsList.count(); i++) {
+			ACell entry = toolsList.get(i);
+			if (entry instanceof AString s) {
+				AMap<AString, ACell> def = HARNESS_TOOL_REGISTRY.get(s.toString());
+				if (def != null) result = result.conj(def);
+			}
+		}
+		return result;
+	}
+
+	/** Returns true if the given tool name is a harness tool. */
+	public static boolean isHarnessTool(String name) {
+		return HARNESS_TOOL_REGISTRY.containsKey(name);
+	}
 
 	/** System note prepended to child frame context */
 	private static final AMap<AString, ACell> CHILD_FRAME_NOTE = Maps.of(
@@ -243,12 +296,13 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		AMap<AString, ACell> config = extractConfig(recordConfig, state);
 		AMap<AString, ACell> outputs = resolveOutputs(config);
 		AVector<ACell> typedRootHarnessTools = (outputs != null)
-			? buildTypedRootHarnessTools(outputs) : null;
+			? buildTypedRootHarnessTools(outputs, config) : null;
 		AMap<AString, ACell> l3Config = (outputs != null && config != null)
 			? config.dissoc(K_RESPONSE_FORMAT) : config;
 
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
+			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
 			.withConfig(recordConfig, state)
 			.withSystemPrompt(Vectors.empty())
 			.withContextEntries(state)
@@ -259,7 +313,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 		// --- same as first iteration of runFrame ---
 		AVector<ACell> harnessTools = (typedRootHarnessTools != null)
-			? typedRootHarnessTools : HARNESS_TOOLS;
+			? typedRootHarnessTools : resolveHarnessTools(config);
 		AVector<ACell> allTools = (AVector<ACell>) harnessTools.concat(baseTools);
 
 		AVector<ACell> fullHistory = context.history();
@@ -329,7 +383,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// happens via OpenAI strictTools on the tool call arguments instead.
 		AMap<AString, ACell> outputs = resolveOutputs(config);
 		AVector<ACell> typedRootHarnessTools = (outputs != null)
-			? buildTypedRootHarnessTools(outputs)
+			? buildTypedRootHarnessTools(outputs, config)
 			: null;
 
 		// When outputs are typed, drop responseFormat from the config we pass
@@ -343,9 +397,12 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// Generate root goal description from incoming work
 		String rootDescription = GoalTreeContext.describeTransitionInput(messages, tasks, pending);
 
-		// Build context (system prompt, tools, caps) via ContextBuilder
+		// Build context (system prompt, tools, caps) via ContextBuilder.
+		// Harness tool names in config.tools are skipped here — they're
+		// resolved separately by resolveHarnessTools / buildTypedRootHarnessTools.
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
+			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
 			.withConfig(recordConfig, state)
 			.withSystemPrompt(Vectors.empty()) // fresh transition, no prior history
 			.withContextEntries(state)
@@ -457,32 +514,47 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	 * @param caps capability attenuations
 	 * @param ctx request context for tool dispatch
 	 * @param systemMessages system messages (prompt, context entries)
-	 * @param typedRootHarnessTools per-agent typed root harness tools, or null
-	 *        to use the static {@link #HARNESS_TOOLS}. Only applied at the
-	 *        root frame; child frames always use {@link #CHILD_HARNESS_TOOLS}.
+	 * @param typedRootHarnessTools per-agent typed root harness tools (with
+	 *        schema-enforced complete/fail), or null for untyped agents.
+	 *        Only applied at root frame; child frames resolve their own
+	 *        harness tools from config (excluding subgoal to prevent nesting).
 	 * @return the frame's result
 	 */
 	@SuppressWarnings("unchecked")
 	FrameResult runFrame(Job job, AVector<ACell> frames, int frameIndex,
 			AMap<AString, ACell> config, AString llmOperation,
-			AVector<ACell> baseTools, Map<String, AString> configToolMap,
+			AVector<ACell> baseToolsParam, Map<String, AString> configToolMap,
 			AVector<ACell> caps, RequestContext ctx, AVector<ACell> systemMessages,
 			AVector<ACell> typedRootHarnessTools) {
 
-		// Assemble tools = harness tools + configured tools
-		// Root frames get all harness tools; child frames get only complete/fail/compact
-		// (no subgoal — prevents unnecessary nesting from smaller models).
-		// When the agent has declared typed outputs, the root frame's complete
-		// and fail tools carry the user's schema as their parameters and the
-		// LLM is forced through OpenAI strictTools enforcement.
+		// Mutable copy — more_tools can append to this mid-run
+		AVector<ACell> baseTools = baseToolsParam;
+
+		// Harness tool selection: root frames use the typed harness tools
+		// (if outputs declared) or the config-resolved harness tools.
+		// Child frames get the same config-resolved set minus subgoal
+		// (prevents unnecessary nesting from smaller models).
 		AVector<ACell> harnessForFrame;
 		if (frameIndex == 0) {
-			harnessForFrame = (typedRootHarnessTools != null) ? typedRootHarnessTools : HARNESS_TOOLS;
+			harnessForFrame = (typedRootHarnessTools != null)
+				? typedRootHarnessTools
+				: resolveHarnessTools(config);
 		} else {
-			harnessForFrame = CHILD_HARNESS_TOOLS;
+			// Child frames: resolve from config but exclude subgoal
+			AVector<ACell> childHarness = resolveHarnessTools(config);
+			AVector<ACell> filtered = Vectors.empty();
+			for (long i = 0; i < childHarness.count(); i++) {
+				ACell tool = childHarness.get(i);
+				if (tool instanceof AMap) {
+					ACell name = ((AMap<?,?>) tool).get(K_NAME);
+					if (name != null && !TOOL_SUBGOAL.equals(name.toString())) {
+						filtered = filtered.conj(tool);
+					}
+				}
+			}
+			harnessForFrame = filtered;
 		}
 		boolean typedOutputs = (frameIndex == 0 && typedRootHarnessTools != null);
-		AVector<ACell> tools = (AVector<ACell>) harnessForFrame.concat(baseTools);
 
 		// Inject goal as first user message in the conversation (once, not every iteration)
 		AMap<AString, ACell> activeFrame = (AMap<AString, ACell>) frames.get(frameIndex);
@@ -518,6 +590,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 				frames = updateFrame(frames, frameIndex, activeFrame);
 				pendingCompactSummary = null;
 			}
+
+			// Assemble tools = harness + base (recomputed each iteration
+			// so more_tools additions are picked up)
+			AVector<ACell> tools = (AVector<ACell>) harnessForFrame.concat(baseTools);
 
 			// Assemble full context for this inference
 			AVector<ACell> fullHistory = systemMessages;
@@ -618,43 +694,21 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 				ACell toolResult;
 
 				if (TOOL_COMPLETE.equals(toolName)) {
-					ACell result = RT.getIn(toolInput, Strings.create("result"));
+					// Flattened: the entire tool input IS the result.
 					// With typed outputs, OpenAI strictTools enforces schema
-					// conformance on the result arg at the API level — strict
-					// mode means by the time we see the call, the result is
-					// already a structured map matching the declared schema.
-					// For the legacy responseFormat path (no typed outputs but
-					// a schema is set), keep the parseability check that helped
-					// pre-strict-mode setups catch malformed string results.
-					if (!typedOutputs && config != null && config.get(K_RESPONSE_FORMAT) != null && result instanceof AString s) {
-						boolean valid = true;
-						try {
-							convex.core.util.JSON.parse(s.toString());
-						} catch (Exception e) { valid = false; }
-						if (!valid) {
-							// Malformed — record error, let LLM retry on next iteration
-							toolResult = Strings.create("Error: result is not valid JSON. "
-								+ "Respond with text instead — that also completes the goal with schema enforcement.");
-						} else {
-							activeFrame = GoalTreeContext.appendTurn(activeFrame,
-								toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("complete"))));
-							frames = updateFrame(frames, frameIndex, activeFrame);
-							return FrameResult.complete(result);
-						}
-					} else {
-						// Typed outputs path or no schema — accept as-is.
-						activeFrame = GoalTreeContext.appendTurn(activeFrame,
-							toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("complete"))));
-						frames = updateFrame(frames, frameIndex, activeFrame);
-						return FrameResult.complete(result);
-					}
+					// conformance at the API level — by the time we see the
+					// call, toolInput already matches the declared schema.
+					activeFrame = GoalTreeContext.appendTurn(activeFrame,
+						toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("complete"))));
+					frames = updateFrame(frames, frameIndex, activeFrame);
+					return FrameResult.complete(toolInput);
 
 				} else if (TOOL_FAIL.equals(toolName)) {
-					ACell error = RT.getIn(toolInput, Strings.create("error"));
+					// Flattened: the entire tool input IS the error.
 					activeFrame = GoalTreeContext.appendTurn(activeFrame,
 						toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("failed"))));
 					frames = updateFrame(frames, frameIndex, activeFrame);
-					return FrameResult.failed(error, frames);
+					return FrameResult.failed(toolInput, frames);
 
 				} else if (TOOL_COMPACT.equals(toolName)) {
 					String summary = RT.ensureString(RT.getIn(toolInput, Strings.create("summary"))).toString();
@@ -699,6 +753,50 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 						toolResult = Maps.of(
 							Strings.create("path"), path,
 							Strings.create("unloaded"), CVMBool.TRUE);
+					}
+
+				} else if (TOOL_MORE_TOOLS.equals(toolName)) {
+					ACell opsCell = RT.getIn(toolInput, Strings.create("operations"));
+					if (!(opsCell instanceof AVector)) {
+						toolResult = Strings.create("Error: operations must be an array of operation paths");
+					} else {
+						AVector<ACell> ops = (AVector<ACell>) opsCell;
+						// Resolve operations into tool definitions using the
+						// same pipeline as ContextBuilder.withTools
+						ContextBuilder resolver = new ContextBuilder(engine, ctx);
+						java.util.Map<String, AString> newToolMap = new java.util.HashMap<>();
+						AVector<ACell> newTools = resolver.buildConfigTools(ops, newToolMap);
+
+						// Deduplicate against existing tools
+						java.util.Set<String> existing = new java.util.HashSet<>();
+						for (long j = 0; j < baseTools.count(); j++) {
+							ACell et = baseTools.get(j);
+							if (et instanceof AMap) {
+								ACell n = ((AMap<?,?>) et).get(K_NAME);
+								if (n != null) existing.add(n.toString());
+							}
+						}
+
+						AVector<ACell> added = Vectors.empty();
+						for (long j = 0; j < newTools.count(); j++) {
+							ACell et = newTools.get(j);
+							String n = null;
+							if (et instanceof AMap) {
+								ACell nc = ((AMap<?,?>) et).get(K_NAME);
+								if (nc != null) n = nc.toString();
+							}
+							if (n != null && !existing.contains(n)) {
+								baseTools = baseTools.conj(et);
+								configToolMap.put(n, newToolMap.get(n));
+								added = added.conj(Strings.create(n));
+							}
+						}
+
+						toolResult = Maps.of(
+							Strings.create("added"), added,
+							Strings.create("total_tools"), CVMLong.create(baseTools.count()),
+							Strings.create("note"), Strings.create("Tools available on your next turn."));
+						log.info("more_tools: added {} tools", added.count());
 					}
 
 				} else if (TOOL_SUBGOAL.equals(toolName)) {
@@ -817,33 +915,35 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	}
 
 	/**
-	 * Synthesises a typed {@code complete} tool whose {@code result} parameter
-	 * is the agent's declared output schema. Wrapped in a strict-compatible
-	 * parameters object so OpenAI's strictTools mode enforces the schema at
-	 * the API level — closing the asymmetry where the legacy untyped complete
-	 * tool bypassed schema enforcement entirely.
+	 * Synthesises a typed {@code complete} tool whose parameters ARE the
+	 * agent's declared output schema. OpenAI's strictTools mode enforces the
+	 * schema at the API level — the LLM's tool call arguments must match.
+	 * Flattened: {@code complete({field1: v1, field2: v2})} — no wrapper.
+	 *
+	 * <p><b>Protocol limitation:</b> LLM tool call arguments must be JSON
+	 * objects (OpenAI, Anthropic, all major providers). This means agents
+	 * cannot return arrays or primitives directly from {@code complete()} —
+	 * they must wrap them in an object (e.g. {@code {items: [...]}}). This
+	 * is an unfortunate constraint imposed by LLM provider APIs, not a
+	 * design choice. If providers ever support non-object tool arguments,
+	 * this restriction should be removed.</p>
 	 */
 	static AMap<AString, ACell> typedCompleteTool(AMap<AString, ACell> resultSchema) {
 		return Maps.of(
 			K_NAME, Strings.create(TOOL_COMPLETE),
 			K_DESCRIPTION, Strings.create(
 				"Finish your goal with the structured result. This is the ONLY way to "
-				+ "successfully complete — text-only responses are not accepted. The "
-				+ "result parameter is schema-enforced; make sure you have gathered "
+				+ "successfully complete — text-only responses are not accepted. "
+				+ "Parameters are schema-enforced; make sure you have gathered "
 				+ "enough data via tool calls to populate every required field before "
 				+ "calling this."),
-			K_PARAMETERS, Maps.of(
-				K_TYPE, Strings.create("object"),
-				K_PROPERTIES, Maps.of(Strings.create("result"), resultSchema),
-				K_REQUIRED, Vectors.of(Strings.create("result")),
-				K_ADDITIONAL_PROPERTIES, convex.core.data.prim.CVMBool.FALSE));
+			K_PARAMETERS, resultSchema);
 	}
 
 	/**
-	 * Synthesises a typed {@code fail} tool whose error parameter is the
-	 * agent's declared fail schema (or {@link #DEFAULT_FAIL_SCHEMA}). Used
-	 * when an agent declares typed outputs — gives the LLM a structured way
-	 * to bail with diagnostic information instead of an unconstrained string.
+	 * Synthesises a typed {@code fail} tool whose parameters ARE the agent's
+	 * declared fail schema (or {@link #DEFAULT_FAIL_SCHEMA}). Flattened:
+	 * {@code fail({reason: "...", details: "..."})} — no wrapper.
 	 */
 	static AMap<AString, ACell> typedFailTool(AMap<AString, ACell> errorSchema) {
 		return Maps.of(
@@ -851,34 +951,50 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			K_DESCRIPTION, Strings.create(
 				"Report that your goal cannot be completed. Use this when a required "
 				+ "tool call has failed, data is missing, or capability denials prevent "
-				+ "progress. The error parameter is schema-enforced — provide a clear "
+				+ "progress. Parameters are schema-enforced — provide a clear "
 				+ "explanation in the required fields. Do not bail to text — call this "
 				+ "tool instead."),
-			K_PARAMETERS, Maps.of(
-				K_TYPE, Strings.create("object"),
-				K_PROPERTIES, Maps.of(Strings.create("error"), errorSchema),
-				K_REQUIRED, Vectors.of(Strings.create("error")),
-				K_ADDITIONAL_PROPERTIES, convex.core.data.prim.CVMBool.FALSE));
+			K_PARAMETERS, errorSchema);
 	}
 
 	/**
-	 * Builds the root-frame harness tool list for an agent, replacing the
-	 * static {@link #TOOL_DEF_COMPLETE} and {@link #TOOL_DEF_FAIL} with typed
-	 * versions when {@code outputs} is set. Returns null if no typing is
-	 * needed (caller falls back to {@link #HARNESS_TOOLS}).
+	 * Builds the root-frame harness tool list for an agent with typed outputs.
+	 *
+	 * <p>Auto-injects typed {@code complete} and {@code fail} tools (with schema
+	 * enforcement) regardless of config — these are required for the typed output
+	 * model. Other harness tools (subgoal, compact, etc.) are included only if
+	 * they appear in {@code config.tools}.</p>
+	 *
+	 * @param outputs resolved outputs declaration
+	 * @param config agent config (scanned for optional harness tools)
+	 * @return typed harness tools vector, or null if outputs has no complete schema
 	 */
 	@SuppressWarnings("unchecked")
-	public static AVector<ACell> buildTypedRootHarnessTools(AMap<AString, ACell> outputs) {
+	public static AVector<ACell> buildTypedRootHarnessTools(
+			AMap<AString, ACell> outputs, AMap<AString, ACell> config) {
 		AMap<AString, ACell> completeSchema = outputsCompleteSchema(outputs);
 		if (completeSchema == null) return null; // no typing
 		AMap<AString, ACell> failSchema = outputsFailSchema(outputs);
-		return (AVector<ACell>) Vectors.of(
-			(ACell) TOOL_DEF_SUBGOAL,
+
+		// Start with typed complete/fail — always injected for typed outputs
+		AVector<ACell> result = Vectors.of(
 			(ACell) typedCompleteTool(completeSchema),
-			(ACell) typedFailTool(failSchema),
-			(ACell) TOOL_DEF_COMPACT,
-			(ACell) TOOL_DEF_CONTEXT_LOAD,
-			(ACell) TOOL_DEF_CONTEXT_UNLOAD);
+			(ACell) typedFailTool(failSchema));
+
+		// Add optional harness tools from config (excluding complete/fail
+		// which we already handled with typed versions)
+		AVector<ACell> optional = resolveHarnessTools(config);
+		for (long i = 0; i < optional.count(); i++) {
+			ACell tool = optional.get(i);
+			if (tool instanceof AMap) {
+				ACell name = ((AMap<?,?>) tool).get(K_NAME);
+				String n = (name != null) ? name.toString() : "";
+				if (!TOOL_COMPLETE.equals(n) && !TOOL_FAIL.equals(n)) {
+					result = result.conj(tool);
+				}
+			}
+		}
+		return result;
 	}
 
 	/** Extracts merged config from record-level and state-level config. */

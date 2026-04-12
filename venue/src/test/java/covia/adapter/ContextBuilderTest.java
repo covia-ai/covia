@@ -157,7 +157,7 @@ public class ContextBuilderTest {
 			"Stale system message should have been dropped");
 		assertTrue(sysContent.contains("Covia platform"),
 			"Fresh default identity prompt should be present");
-		assertTrue(sysContent.contains("LATTICE NAMESPACES"),
+		assertTrue(sysContent.contains("Covia Lattice"),
 			"Lattice reference should be appended");
 		// User message preserved at index 1
 		String userContent = RT.ensureString(RT.getIn(result.history().get(1), K_CONTENT)).toString();
@@ -468,10 +468,10 @@ public class ContextBuilderTest {
 			.build();
 		AString defaultSys = extractSystemContent(defaultResult.history());
 		assertNotNull(defaultSys);
-		assertTrue(defaultSys.toString().contains("LATTICE NAMESPACES"),
+		assertTrue(defaultSys.toString().contains("Covia Lattice"),
 			"Default system prompt should include lattice reference");
-		assertTrue(defaultSys.toString().contains("DISCOVERY"),
-			"Default system prompt should include discovery hints");
+		assertTrue(defaultSys.toString().contains("Workspace"),
+			"Default system prompt should describe workspace namespace");
 		assertTrue(defaultSys.toString().contains("v/ops"),
 			"Default system prompt should mention v/ops catalog");
 
@@ -487,7 +487,7 @@ public class ContextBuilderTest {
 		assertNotNull(customSys);
 		assertTrue(customSys.toString().contains("Carol the AP Approver"),
 			"Custom identity prompt should still appear");
-		assertTrue(customSys.toString().contains("LATTICE NAMESPACES"),
+		assertTrue(customSys.toString().contains("Covia Lattice"),
 			"Lattice reference should also be appended for custom prompts");
 	}
 

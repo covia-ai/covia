@@ -67,28 +67,56 @@ public class GoalTreeAdapterTest {
 	// ========== Tool definitions ==========
 
 	@Test
-	public void testHarnessToolDefinitions() {
-		// Verify the 6 harness tools are defined correctly
-		assertEquals(6, GoalTreeAdapter.HARNESS_TOOLS.count());
+	public void testHarnessToolRegistry() {
+		// All 7 harness tools are in the registry
+		assertEquals(7, GoalTreeAdapter.HARNESS_TOOL_REGISTRY.size());
+		assertTrue(GoalTreeAdapter.isHarnessTool("subgoal"));
+		assertTrue(GoalTreeAdapter.isHarnessTool("complete"));
+		assertTrue(GoalTreeAdapter.isHarnessTool("fail"));
+		assertTrue(GoalTreeAdapter.isHarnessTool("compact"));
+		assertTrue(GoalTreeAdapter.isHarnessTool("context_load"));
+		assertTrue(GoalTreeAdapter.isHarnessTool("context_unload"));
+		assertTrue(GoalTreeAdapter.isHarnessTool("more_tools"));
+		assertFalse(GoalTreeAdapter.isHarnessTool("covia_read"));
 
-		// Check each tool has name, description, parameters
-		for (long i = 0; i < GoalTreeAdapter.HARNESS_TOOLS.count(); i++) {
-			@SuppressWarnings("unchecked")
-			AMap<AString, ACell> tool = (AMap<AString, ACell>) GoalTreeAdapter.HARNESS_TOOLS.get(i);
-			assertNotNull(tool.get(Strings.intern("name")), "Tool " + i + " should have name");
-			assertNotNull(tool.get(Strings.intern("description")), "Tool " + i + " should have description");
-			assertNotNull(tool.get(Strings.intern("parameters")), "Tool " + i + " should have parameters");
+		// Each definition has name, description, parameters
+		for (var entry : GoalTreeAdapter.HARNESS_TOOL_REGISTRY.entrySet()) {
+			AMap<AString, ACell> tool = entry.getValue();
+			assertNotNull(tool.get(Strings.intern("name")), entry.getKey() + " should have name");
+			assertNotNull(tool.get(Strings.intern("description")), entry.getKey() + " should have description");
+			assertNotNull(tool.get(Strings.intern("parameters")), entry.getKey() + " should have parameters");
 		}
 	}
 
 	@Test
-	public void testHarnessToolNames() {
-		assertEquals("subgoal", RT.ensureString(RT.getIn(GoalTreeAdapter.HARNESS_TOOLS.get(0), "name")).toString());
-		assertEquals("complete", RT.ensureString(RT.getIn(GoalTreeAdapter.HARNESS_TOOLS.get(1), "name")).toString());
-		assertEquals("fail", RT.ensureString(RT.getIn(GoalTreeAdapter.HARNESS_TOOLS.get(2), "name")).toString());
-		assertEquals("compact", RT.ensureString(RT.getIn(GoalTreeAdapter.HARNESS_TOOLS.get(3), "name")).toString());
-		assertEquals("context_load", RT.ensureString(RT.getIn(GoalTreeAdapter.HARNESS_TOOLS.get(4), "name")).toString());
-		assertEquals("context_unload", RT.ensureString(RT.getIn(GoalTreeAdapter.HARNESS_TOOLS.get(5), "name")).toString());
+	public void testResolveHarnessToolsFromConfig() {
+		// Config with some harness tools + an operation path
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> config = Maps.of(
+			Strings.intern("tools"), Vectors.of(
+				(ACell) Strings.create("subgoal"),
+				(ACell) Strings.create("complete"),
+				(ACell) Strings.create("v/ops/covia/read"), // not a harness tool — skipped
+				(ACell) Strings.create("more_tools")));
+		AVector<ACell> resolved = GoalTreeAdapter.resolveHarnessTools(config);
+		assertEquals(3, resolved.count());
+		assertEquals("subgoal", RT.ensureString(RT.getIn(resolved.get(0), "name")).toString());
+		assertEquals("complete", RT.ensureString(RT.getIn(resolved.get(1), "name")).toString());
+		assertEquals("more_tools", RT.ensureString(RT.getIn(resolved.get(2), "name")).toString());
+	}
+
+	@Test
+	public void testResolveHarnessToolsEmptyConfig() {
+		// No tools in config → no harness tools
+		AVector<ACell> resolved = GoalTreeAdapter.resolveHarnessTools(null);
+		assertEquals(0, resolved.count());
+
+		// Empty tools list
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> config = Maps.of(
+			Strings.intern("tools"), Vectors.empty());
+		resolved = GoalTreeAdapter.resolveHarnessTools(config);
+		assertEquals(0, resolved.count());
 	}
 
 	// ========== Simple transition (using test:llm mock) ==========
@@ -381,20 +409,17 @@ public class GoalTreeAdapterTest {
 	}
 
 	@Test
-	public void testTypedCompleteToolWrapsSchema() {
+	public void testTypedCompleteToolFlattensSchema() {
+		// The user's schema IS the parameters — no result wrapper
 		AMap<AString, ACell> schema = simpleSchema();
 		AMap<AString, ACell> tool = GoalTreeAdapter.typedCompleteTool(schema);
 		assertEquals("complete", RT.ensureString(RT.getIn(tool, "name")).toString());
-		// parameters: object with single 'result' property, additionalProperties: false
 		ACell params = tool.get(Strings.create("parameters"));
+		// Parameters are the user's schema directly
+		assertEquals(schema, params);
 		assertEquals(Strings.create("object"), RT.getIn(params, "type"));
 		assertEquals(convex.core.data.prim.CVMBool.FALSE,
 			RT.getIn(params, "additionalProperties"));
-		ACell required = RT.getIn(params, "required");
-		assertEquals(Vectors.of(Strings.create("result")), required);
-		// The user's schema is preserved verbatim under properties.result
-		ACell resultSchema = RT.getIn(params, "properties", "result");
-		assertEquals(schema, resultSchema);
 	}
 
 	@Test
@@ -408,8 +433,9 @@ public class GoalTreeAdapterTest {
 		assertEquals(GoalTreeAdapter.DEFAULT_FAIL_SCHEMA, failSchema);
 		AMap<AString, ACell> tool = GoalTreeAdapter.typedFailTool(failSchema);
 		assertEquals("fail", RT.ensureString(RT.getIn(tool, "name")).toString());
-		ACell errorSchema = RT.getIn(tool, "parameters", "properties", "error");
-		assertEquals(failSchema, errorSchema);
+		// Parameters are the fail schema directly — no error wrapper
+		ACell params = tool.get(Strings.create("parameters"));
+		assertEquals(failSchema, params);
 	}
 
 	@Test
@@ -429,15 +455,21 @@ public class GoalTreeAdapterTest {
 	}
 
 	@Test
+	@SuppressWarnings("unchecked")
 	public void testBuildTypedRootHarnessTools() {
-		// When outputs is set, the typed root harness tool list contains
-		// subgoal + typed complete + typed fail + compact + context_load + context_unload
+		// Config with harness tools so they get included alongside typed complete/fail
+		AMap<AString, ACell> config = Maps.of(
+			Strings.intern("tools"), Vectors.of(
+				(ACell) Strings.create("subgoal"),
+				(ACell) Strings.create("compact"),
+				(ACell) Strings.create("context_load"),
+				(ACell) Strings.create("context_unload")));
 		AMap<AString, ACell> outputs = Maps.of(
 			Strings.create("complete"), Maps.of(Strings.create("schema"), simpleSchema()));
-		AVector<ACell> tools = GoalTreeAdapter.buildTypedRootHarnessTools(outputs);
+		AVector<ACell> tools = GoalTreeAdapter.buildTypedRootHarnessTools(outputs, config);
 		assertNotNull(tools);
+		// 2 (typed complete + fail) + 4 optional = 6
 		assertEquals(6, tools.count());
-		// Names: subgoal, complete, fail, compact, context_load, context_unload
 		java.util.Set<String> names = new java.util.HashSet<>();
 		for (long i = 0; i < tools.count(); i++) {
 			names.add(RT.ensureString(RT.getIn(tools.get(i), "name")).toString());
@@ -448,7 +480,7 @@ public class GoalTreeAdapterTest {
 		assertTrue(names.contains("compact"));
 		assertTrue(names.contains("context_load"));
 		assertTrue(names.contains("context_unload"));
-		// The complete tool's parameters carry the user's schema
+		// The complete tool's parameters ARE the user's schema (flattened)
 		ACell completeTool = null;
 		for (long i = 0; i < tools.count(); i++) {
 			ACell tool = tools.get(i);
@@ -458,15 +490,27 @@ public class GoalTreeAdapterTest {
 			}
 		}
 		assertNotNull(completeTool);
-		ACell resultSchema = RT.getIn(completeTool, "parameters", "properties", "result");
-		assertEquals(simpleSchema(), resultSchema);
+		ACell params = RT.getIn(completeTool, "parameters");
+		assertEquals(simpleSchema(), params);
+	}
+
+	@Test
+	public void testBuildTypedRootHarnessToolsMinimal() {
+		// No harness tools in config — only typed complete/fail auto-injected
+		AMap<AString, ACell> outputs = Maps.of(
+			Strings.create("complete"), Maps.of(Strings.create("schema"), simpleSchema()));
+		AVector<ACell> tools = GoalTreeAdapter.buildTypedRootHarnessTools(outputs, Maps.empty());
+		assertNotNull(tools);
+		assertEquals(2, tools.count()); // just complete + fail
+		assertEquals("complete", RT.ensureString(RT.getIn(tools.get(0), "name")).toString());
+		assertEquals("fail", RT.ensureString(RT.getIn(tools.get(1), "name")).toString());
 	}
 
 	@Test
 	public void testBuildTypedRootHarnessToolsReturnsNullWithoutOutputs() {
-		// No outputs → null → caller falls back to static HARNESS_TOOLS
-		assertNull(GoalTreeAdapter.buildTypedRootHarnessTools(null));
-		assertNull(GoalTreeAdapter.buildTypedRootHarnessTools(Maps.empty()));
+		// No outputs → null → caller falls back to resolveHarnessTools
+		assertNull(GoalTreeAdapter.buildTypedRootHarnessTools(null, null));
+		assertNull(GoalTreeAdapter.buildTypedRootHarnessTools(Maps.empty(), null));
 	}
 
 	@Test
