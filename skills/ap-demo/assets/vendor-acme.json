@@ -1,0 +1,10 @@
+{"path": "w/vendor-records/Acme Corp", "value": {
+  "vendor_id": "V-1042",
+  "name": "Acme Corp",
+  "status": "ACTIVE",
+  "tax_id": "US-84-2917345",
+  "payment_method": "ACH",
+  "bank_account": "****7892",
+  "sanctions_check": "CLEAR",
+  "last_reviewed": "2024-09-15"
+}}

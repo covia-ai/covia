@@ -1,80 +1,91 @@
-#!/bin/bash
-# AP Demo Setup — seeds reference data, documents, pipeline, and agents.
-# Usage: bash skills/ap-demo/setup.sh [VENUE_URL]
-# Default venue: http://localhost:8080
+#!/usr/bin/env python3
+"""AP Demo Setup — seeds reference data, documents, pipeline, and agents.
 
-set -e
-VENUE="${1:-http://localhost:8080}"
-API="$VENUE/api/v1/invoke"
-# Use Windows-compatible path on MSYS/Git Bash
-DIR="$(cd "$(dirname "$0")" && pwd -W 2>/dev/null || pwd)"
+Usage: python setup.sh [VENUE_URL]
+       Default venue: http://localhost:8080
 
-invoke() {
-  curl -sf -X POST "$API" -H "Content-Type: application/json" -d "$1" > /dev/null
-}
+All data lives in assets/ as JSON or Markdown files. This script just
+pipes them to the venue API — no transformation, no templating.
+"""
 
-invoke_file() {
-  local op="$1" file="$2"
-  curl -sf -X POST "$API" -H "Content-Type: application/json" \
-    -d "$(printf '{"operation":"%s","input":%s}' "$op" "$(cat "$file")")" > /dev/null
-}
+import json, os, sys, urllib.request, urllib.error
 
-echo "=== AP Demo Setup ==="
-echo "Venue: $VENUE"
+VENUE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8080"
+API = f"{VENUE}/api/v1/invoke"
+DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
-# 1. Check venue is up
-curl -sf "$VENUE/api/v1/status" > /dev/null || { echo "ERROR: Venue not reachable at $VENUE"; exit 1; }
 
-# 2. Seed vendor records
-echo "Seeding vendor records..."
-invoke '{"operation":"v/ops/covia/write","input":{"path":"w/vendor-records/Acme Corp","value":{"vendor_id":"V-1042","name":"Acme Corp","status":"ACTIVE","tax_id":"US-84-2917345","payment_method":"ACH","bank_account":"****7892","sanctions_check":"CLEAR","last_reviewed":"2024-09-15"}}}'
-invoke '{"operation":"v/ops/covia/write","input":{"path":"w/vendor-records/Globex Ltd","value":{"vendor_id":"V-2087","name":"Globex Ltd","status":"ACTIVE","tax_id":"GB-12-8834521","payment_method":"WIRE","bank_account":"****3310","sanctions_check":"CLEAR","last_reviewed":"2024-11-01"}}}'
-invoke '{"operation":"v/ops/covia/write","input":{"path":"w/vendor-records/Initech Systems","value":{"vendor_id":"V-3201","name":"Initech Systems","status":"SUSPENDED","tax_id":"US-91-5567890","payment_method":"ACH","bank_account":"****4455","sanctions_check":"FLAGGED","sanctions_detail":"OFAC SDN List \u2014 added 2024-08-20","last_reviewed":"2024-08-22"}}}'
+def invoke(operation, input_data):
+    """POST an operation to the venue and return the output."""
+    body = json.dumps({"operation": operation, "input": input_data}).encode()
+    req = urllib.request.Request(API, data=body, headers={"Content-Type": "application/json"})
+    resp = json.loads(urllib.request.urlopen(req).read())
+    return resp.get("output", {})
 
-# 3. Seed purchase orders
-echo "Seeding purchase orders..."
-invoke '{"operation":"v/ops/covia/write","input":{"path":"w/purchase-orders/Acme Corp/PO-2024-0456","value":{"po_number":"PO-2024-0456","vendor":"Acme Corp","amount_authorised":20000,"currency":"USD","department":"Engineering","budget_code":"ENG-INFRA-2024","status":"OPEN","approver":"J. Martinez"}}}'
-invoke '{"operation":"v/ops/covia/write","input":{"path":"w/purchase-orders/Globex Ltd/PO-2024-0790","value":{"po_number":"PO-2024-0790","vendor":"Globex Ltd","amount_authorised":150000,"currency":"USD","department":"Operations","budget_code":"OPS-PLATFORM-2024","status":"OPEN","approver":"D. Chen"}}}'
-invoke '{"operation":"v/ops/covia/write","input":{"path":"w/purchase-orders/Initech Systems/PO-2024-0312","value":{"po_number":"PO-2024-0312","vendor":"Initech Systems","amount_authorised":8000,"currency":"USD","department":"IT","budget_code":"IT-MAINT-2024","status":"OPEN","approver":"R. Kapoor"}}}'
 
-# 4. Store documents (read from assets/ and write as string values)
-echo "Storing documents..."
-python -c "
-import json, urllib.request
-api = '$API'
-for path, file in [('w/docs/policy-rules', '$DIR/assets/ap-policy-rules.md'), ('w/docs/data-guide', '$DIR/assets/ap-data-guide.md')]:
-    with open(file) as f: text = f.read()
-    data = json.dumps({'operation': 'v/ops/covia/write', 'input': {'path': path, 'value': text}}).encode()
-    urllib.request.urlopen(urllib.request.Request(api, data=data, headers={'Content-Type': 'application/json'}))
-"
+def write(path, value):
+    """covia_write a value to a lattice path."""
+    invoke("v/ops/covia/write", {"path": path, "value": value})
 
-# 5. Store pipeline orchestration
-echo "Storing pipeline..."
-invoke_file "v/ops/covia/write" <(python -c "
-import json
-with open('$DIR/assets/ap-pipeline.json') as f: pipeline = json.load(f)
-print(json.dumps({'path': 'o/ap-pipeline', 'value': pipeline}))
-")
 
-# 6. Create agents (pipe JSON files directly)
-echo "Creating agents..."
-for agent in alice bob carol dave; do
-  invoke_file "v/ops/agent/create" "$DIR/assets/$agent.json" &
-done
-wait
+def write_file(path, filepath):
+    """covia_write the contents of a JSON file (parsed) to a lattice path."""
+    with open(filepath) as f:
+        write(path, json.load(f))
 
-# 7. Verify
-echo ""
-echo "=== Verification ==="
-curl -sf -X POST "$API" -H "Content-Type: application/json" \
-  -d '{"operation":"v/ops/agent/list","input":{}}' | \
-  python -c "
-import json, sys
-data = json.load(sys.stdin)
-agents = data.get('output', {}).get('agents', [])
+
+def write_text(path, filepath):
+    """covia_write the contents of a text file (as string) to a lattice path."""
+    with open(filepath) as f:
+        write(path, f.read())
+
+
+def write_data(filepath):
+    """covia_write using a JSON file that contains {path, value}."""
+    with open(filepath) as f:
+        data = json.load(f)
+    write(data["path"], data["value"])
+
+
+def create_agent(filepath):
+    """agent_create using a JSON file that is the complete input."""
+    with open(filepath) as f:
+        invoke("v/ops/agent/create", json.load(f))
+
+
+# ── Check venue ──────────────────────────────────────────────
+print(f"=== AP Demo Setup ===")
+print(f"Venue: {VENUE}")
+try:
+    urllib.request.urlopen(f"{VENUE}/api/v1/status")
+except Exception:
+    print(f"ERROR: Venue not reachable at {VENUE}")
+    sys.exit(1)
+
+# ── Reference data ───────────────────────────────────────────
+print("Seeding reference data...")
+for f in ["vendor-acme.json", "vendor-globex.json", "vendor-initech.json",
+          "po-acme.json", "po-globex.json", "po-initech.json"]:
+    write_data(os.path.join(DIR, f))
+
+# ── Documents ────────────────────────────────────────────────
+print("Storing documents...")
+write_text("w/docs/policy-rules", os.path.join(DIR, "ap-policy-rules.md"))
+write_text("w/docs/data-guide", os.path.join(DIR, "ap-data-guide.md"))
+
+# ── Pipeline orchestration ───────────────────────────────────
+print("Storing pipeline...")
+write_file("o/ap-pipeline", os.path.join(DIR, "ap-pipeline.json"))
+
+# ── Agents ───────────────────────────────────────────────────
+print("Creating agents...")
+for agent in ["alice", "bob", "carol", "dave"]:
+    create_agent(os.path.join(DIR, f"{agent}.json"))
+
+# ── Verify ───────────────────────────────────────────────────
+print()
+print("=== Verification ===")
+agents = invoke("v/ops/agent/list", {}).get("agents", [])
 for a in agents:
-    name = a.get('agentId', '?')
-    status = a.get('status', '?')
-    print(f'  {name}: {status}')
-print(f'\n{len(agents)} agents ready.')
-"
+    print(f"  {a.get('agentId', '?')}: {a.get('status', '?')}")
+print(f"\n{len(agents)} agents ready.")

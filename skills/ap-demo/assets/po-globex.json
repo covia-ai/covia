@@ -1,0 +1,10 @@
+{"path": "w/purchase-orders/Globex Ltd/PO-2024-0790", "value": {
+  "po_number": "PO-2024-0790",
+  "vendor": "Globex Ltd",
+  "amount_authorised": 150000,
+  "currency": "USD",
+  "department": "Operations",
+  "budget_code": "OPS-PLATFORM-2024",
+  "status": "OPEN",
+  "approver": "D. Chen"
+}}

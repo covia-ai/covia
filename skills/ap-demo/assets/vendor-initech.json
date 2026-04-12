@@ -1,0 +1,11 @@
+{"path": "w/vendor-records/Initech Systems", "value": {
+  "vendor_id": "V-3201",
+  "name": "Initech Systems",
+  "status": "SUSPENDED",
+  "tax_id": "US-91-5567890",
+  "payment_method": "ACH",
+  "bank_account": "****4455",
+  "sanctions_check": "FLAGGED",
+  "sanctions_detail": "OFAC SDN List \u2014 added 2024-08-20",
+  "last_reviewed": "2024-08-22"
+}}

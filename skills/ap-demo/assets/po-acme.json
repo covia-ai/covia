@@ -1,0 +1,10 @@
+{"path": "w/purchase-orders/Acme Corp/PO-2024-0456", "value": {
+  "po_number": "PO-2024-0456",
+  "vendor": "Acme Corp",
+  "amount_authorised": 20000,
+  "currency": "USD",
+  "department": "Engineering",
+  "budget_code": "ENG-INFRA-2024",
+  "status": "OPEN",
+  "approver": "J. Martinez"
+}}

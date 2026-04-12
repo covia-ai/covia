@@ -1,0 +1,10 @@
+{"path": "w/purchase-orders/Initech Systems/PO-2024-0312", "value": {
+  "po_number": "PO-2024-0312",
+  "vendor": "Initech Systems",
+  "amount_authorised": 8000,
+  "currency": "USD",
+  "department": "IT",
+  "budget_code": "IT-MAINT-2024",
+  "status": "OPEN",
+  "approver": "R. Kapoor"
+}}

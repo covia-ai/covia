@@ -1,0 +1,10 @@
+{"path": "w/vendor-records/Globex Ltd", "value": {
+  "vendor_id": "V-2087",
+  "name": "Globex Ltd",
+  "status": "ACTIVE",
+  "tax_id": "GB-12-8834521",
+  "payment_method": "WIRE",
+  "bank_account": "****3310",
+  "sanctions_check": "CLEAR",
+  "last_reviewed": "2024-11-01"
+}}
