@@ -87,16 +87,26 @@ public abstract class AbstractLLMAdapter extends AAdapter {
 	 */
 	protected ACell invokeLevel3(AString llmOperation, AMap<AString, ACell> config,
 			AVector<ACell> messages, AVector<ACell> tools, RequestContext ctx) {
-		AMap<AString, ACell> l3Input = Maps.of(K_MESSAGES, messages);
-		l3Input = copyIfPresent(config, l3Input, K_MODEL, K_URL, K_API_KEY, K_RESPONSE_FORMAT);
-
-		if (tools != null && tools.count() > 0) {
-			l3Input = l3Input.assoc(K_TOOLS, tools);
-		}
-
+		AMap<AString, ACell> l3Input = buildL3Input(config, messages, tools);
 		// LLM invocation is framework infrastructure — bypass agent caps
 		Job l3Job = engine.jobs().invokeOperation(llmOperation, l3Input, ctx.withCaps(null));
 		return l3Job.awaitResult();
+	}
+
+	/**
+	 * Builds the L3 input map: {@code {messages, tools, model, ...}} — the
+	 * exact payload that goes to the LLM provider operation. Factored out of
+	 * {@link #invokeLevel3} so the same construction can be used for
+	 * inspection (e.g. {@code agent:context}) without actually calling the LLM.
+	 */
+	public static AMap<AString, ACell> buildL3Input(AMap<AString, ACell> config,
+			AVector<ACell> messages, AVector<ACell> tools) {
+		AMap<AString, ACell> l3Input = Maps.of(K_MESSAGES, messages);
+		l3Input = copyIfPresent(config, l3Input, K_MODEL, K_URL, K_API_KEY, K_RESPONSE_FORMAT);
+		if (tools != null && tools.count() > 0) {
+			l3Input = l3Input.assoc(K_TOOLS, tools);
+		}
+		return l3Input;
 	}
 
 	/**

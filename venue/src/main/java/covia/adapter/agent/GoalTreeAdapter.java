@@ -221,6 +221,63 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		installAsset("goaltree/chat", "/adapters/goaltree/chat.json");
 	}
 
+	/**
+	 * Builds the exact L3 input that would be sent to the LLM on the first
+	 * iteration of a fresh transition — same code path as {@code processGoal}
+	 * + the first iteration of {@code runFrame}, minus the actual LLM call.
+	 *
+	 * <p>Returns the map that {@code invokeLevel3} would dispatch:
+	 * {@code {messages, tools, model, ...}}. Used by {@code agent:context}
+	 * for inspection.</p>
+	 *
+	 * @param recordConfig agent's record-level config
+	 * @param state agent's state
+	 * @param task optional task input (if non-null, synthesises the goal user message)
+	 * @param ctx request context
+	 * @return the L3 input map
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> buildFirstIterationL3Input(
+			AMap<AString, ACell> recordConfig, ACell state, ACell task, RequestContext ctx) {
+		// --- same as processGoal ---
+		AMap<AString, ACell> config = extractConfig(recordConfig, state);
+		AMap<AString, ACell> outputs = resolveOutputs(config);
+		AVector<ACell> typedRootHarnessTools = (outputs != null)
+			? buildTypedRootHarnessTools(outputs) : null;
+		AMap<AString, ACell> l3Config = (outputs != null && config != null)
+			? config.dissoc(K_RESPONSE_FORMAT) : config;
+
+		ContextBuilder builder = new ContextBuilder(engine, ctx);
+		ContextBuilder.ContextResult context = builder
+			.withConfig(recordConfig, state)
+			.withSystemPrompt(Vectors.empty())
+			.withContextEntries(state)
+			.withTools()
+			.build();
+
+		AVector<ACell> baseTools = context.tools();
+
+		// --- same as first iteration of runFrame ---
+		AVector<ACell> harnessTools = (typedRootHarnessTools != null)
+			? typedRootHarnessTools : HARNESS_TOOLS;
+		AVector<ACell> allTools = (AVector<ACell>) harnessTools.concat(baseTools);
+
+		AVector<ACell> fullHistory = context.history();
+
+		// Synthesise goal from task (same as GoalTreeContext.describeTransitionInput
+		// + renderGoal + appendTurn in the real path)
+		if (task != null) {
+			AVector<ACell> tasks = Vectors.of(
+				(ACell) Maps.of(Strings.intern("input"), task));
+			String goalDesc = GoalTreeContext.describeTransitionInput(null, tasks, null);
+			ACell goalMsg = Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(goalDesc));
+			fullHistory = fullHistory.conj(goalMsg);
+		}
+
+		// --- same as invokeLevel3 ---
+		return buildL3Input(l3Config, fullHistory, allTools);
+	}
+
 	// ========== Invocation ==========
 
 	@Override

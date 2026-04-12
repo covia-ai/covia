@@ -495,77 +495,54 @@ public class AgentAdapter extends AAdapter {
 			? (AMap<AString, ACell>) m : null;
 		ACell state = record.get(AgentState.KEY_STATE);
 
-		// Build context exactly as the transition adapter would
-		ContextBuilder builder = new ContextBuilder(engine, ctx);
-		ContextBuilder.ContextResult context = builder
-			.withConfig(recordConfig, state)
-			.withSystemPrompt(Vectors.empty())
-			.withContextEntries(state)
-			.withTools()
-			.build();
-
-		// Merge config from record + state (same as transition adapters)
-		AMap<AString, ACell> stateConfig = ContextBuilder.extractConfig(state);
-		AMap<AString, ACell> mergedConfig = recordConfig;
-		if (stateConfig != null) {
-			mergedConfig = (mergedConfig != null) ? mergedConfig.merge(stateConfig) : stateConfig;
-		}
-
-		// Build the full tool list including harness tools. GoalTree agents
-		// get subgoal/complete/fail/compact/context_load/context_unload;
-		// with typed outputs, complete/fail carry the agent's schema.
-		AVector<ACell> allTools = context.tools() != null ? context.tools() : Vectors.empty();
+		// Delegate to the actual adapter's code path. For goaltree agents
+		// this calls GoalTreeAdapter.buildFirstIterationL3Input which uses
+		// the same ContextBuilder pipeline, harness tool assembly, output
+		// typing, and L3 input construction as the real transition — the
+		// only difference is we return the L3 input instead of dispatching.
+		ACell taskInput = RT.getIn(input, Strings.intern("task"));
 		AString operation = (recordConfig != null)
 			? RT.ensureString(recordConfig.get(Strings.intern("operation")))
 			: null;
+
+		AMap<AString, ACell> l3Input;
 		if (operation != null && operation.toString().contains("goaltree")) {
-			covia.adapter.agent.GoalTreeAdapter gta = (covia.adapter.agent.GoalTreeAdapter) engine.getAdapter("goaltree");
-			if (gta != null) {
-				AMap<AString, ACell> outputs = covia.adapter.agent.GoalTreeAdapter.resolveOutputs(mergedConfig);
-				AVector<ACell> harnessTools = covia.adapter.agent.GoalTreeAdapter.buildTypedRootHarnessTools(outputs);
-				if (harnessTools == null) harnessTools = covia.adapter.agent.GoalTreeAdapter.HARNESS_TOOLS;
-				allTools = (AVector<ACell>) harnessTools.concat(allTools);
-			}
+			covia.adapter.agent.GoalTreeAdapter gta =
+				(covia.adapter.agent.GoalTreeAdapter) engine.getAdapter("goaltree");
+			l3Input = gta.buildFirstIterationL3Input(recordConfig, state, taskInput, ctx);
+		} else {
+			// Fallback for non-goaltree agents — basic ContextBuilder only
+			ContextBuilder builder = new ContextBuilder(engine, ctx);
+			ContextBuilder.ContextResult context = builder
+				.withConfig(recordConfig, state)
+				.withSystemPrompt(Vectors.empty())
+				.withContextEntries(state)
+				.withTools()
+				.build();
+			l3Input = covia.adapter.agent.AbstractLLMAdapter.buildL3Input(
+				ContextBuilder.extractConfig(state),
+				context.history(),
+				context.tools());
 		}
 
-		// If a task input was provided, synthesise the goal user message
-		// exactly as GoalTreeAdapter.processGoal would and append it to the
-		// messages — so the caller sees the complete first-iteration vector.
-		AVector<ACell> messages = context.history();
-		ACell taskInput = RT.getIn(input, Strings.intern("task"));
-		if (taskInput != null) {
-			AVector<ACell> tasks = Vectors.of(
-				(ACell) Maps.of(Strings.intern("input"), taskInput));
-			String goalDesc = covia.adapter.agent.GoalTreeContext.describeTransitionInput(
-				null, tasks, null);
-			ACell goalMsg = Maps.of(
-				Strings.intern("role"), Strings.intern("user"),
-				Strings.intern("content"), Strings.create(goalDesc));
-			messages = messages.conj(goalMsg);
-		}
-
-		// Build the output as ordered JSON directly — NOT via Convex maps
-		// which hash-order their keys. The order here matches the wire
-		// format to the LLM provider: model, messages, tools.
-		StringBuilder sb = new StringBuilder();
-		sb.append("{\n");
-		// Model
-		ACell model = (mergedConfig != null) ? mergedConfig.get(Strings.create("model")) : null;
-		if (model != null) {
-			sb.append("  \"model\": ").append(JSON.toString(model)).append(",\n");
-		}
-		// Messages — in order, one per line
+		// Serialize as ordered JSON matching the wire format to the LLM.
+		// Convex maps hash-order keys, so we build the JSON directly.
+		AVector<ACell> messages = RT.ensureVector(l3Input.get(Strings.create("messages")));
+		AVector<ACell> tools = RT.ensureVector(l3Input.get(Strings.create("tools")));
+		StringBuilder sb = new StringBuilder("{\n");
+		ACell model = l3Input.get(Strings.create("model"));
+		if (model != null) sb.append("  \"model\": ").append(JSON.toString(model)).append(",\n");
+		ACell rf = l3Input.get(Strings.create("responseFormat"));
+		if (rf != null) sb.append("  \"responseFormat\": ").append(JSON.toString(rf)).append(",\n");
 		sb.append("  \"messages\": [\n");
 		for (long i = 0; i < messages.count(); i++) {
 			if (i > 0) sb.append(",\n");
 			sb.append("    ").append(JSON.toString(messages.get(i)));
 		}
-		sb.append("\n  ],\n");
-		// Tools — in order, one per line
-		sb.append("  \"tools\": [\n");
-		for (long i = 0; i < allTools.count(); i++) {
+		sb.append("\n  ],\n  \"tools\": [\n");
+		for (long i = 0; i < tools.count(); i++) {
 			if (i > 0) sb.append(",\n");
-			sb.append("    ").append(JSON.toString(allTools.get(i)));
+			sb.append("    ").append(JSON.toString(tools.get(i)));
 		}
 		sb.append("\n  ]\n}");
 
