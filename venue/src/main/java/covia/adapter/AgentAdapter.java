@@ -544,24 +544,33 @@ public class AgentAdapter extends AAdapter {
 			messages = messages.conj(goalMsg);
 		}
 
-		// Assemble the L3 input — the exact map that invokeLevel3 would
-		// build and send to the LLM provider. This IS what the LLM sees.
-		AMap<AString, ACell> l3Input = Maps.of(
-			Strings.create("messages"), messages,
-			Strings.create("tools"), allTools);
-		if (mergedConfig != null) {
-			ACell model = mergedConfig.get(Strings.create("model"));
-			if (model != null) l3Input = l3Input.assoc(Strings.create("model"), model);
-			ACell rf = mergedConfig.get(Strings.create("responseFormat"));
-			if (rf != null) l3Input = l3Input.assoc(Strings.create("responseFormat"), rf);
+		// Build the output as ordered JSON directly — NOT via Convex maps
+		// which hash-order their keys. The order here matches the wire
+		// format to the LLM provider: model, messages, tools.
+		StringBuilder sb = new StringBuilder();
+		sb.append("{\n");
+		// Model
+		ACell model = (mergedConfig != null) ? mergedConfig.get(Strings.create("model")) : null;
+		if (model != null) {
+			sb.append("  \"model\": ").append(JSON.toString(model)).append(",\n");
 		}
-
-		// Serialize as standard JSON so the output is human-readable and
-		// matches the wire format to the LLM provider.
-		String json = JSON.toStringPretty(l3Input);
+		// Messages — in order, one per line
+		sb.append("  \"messages\": [\n");
+		for (long i = 0; i < messages.count(); i++) {
+			if (i > 0) sb.append(",\n");
+			sb.append("    ").append(JSON.toString(messages.get(i)));
+		}
+		sb.append("\n  ],\n");
+		// Tools — in order, one per line
+		sb.append("  \"tools\": [\n");
+		for (long i = 0; i < allTools.count(); i++) {
+			if (i > 0) sb.append(",\n");
+			sb.append("    ").append(JSON.toString(allTools.get(i)));
+		}
+		sb.append("\n  ]\n}");
 
 		job.setStatus(Status.STARTED);
-		job.completeWith(Strings.create(json));
+		job.completeWith(Strings.create(sb.toString()));
 	}
 
 	@SuppressWarnings("unchecked")
