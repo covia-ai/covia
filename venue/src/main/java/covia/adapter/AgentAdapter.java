@@ -504,17 +504,48 @@ public class AgentAdapter extends AAdapter {
 			.withTools()
 			.build();
 
-		// Return the raw assembled context — exactly what the LLM receives.
-		AMap<AString, ACell> result = Maps.of(
-			Fields.AGENT_ID, agentId,
-			Strings.create("messages"), context.history(),
-			Strings.create("tools"), context.tools() != null ? context.tools() : Vectors.empty());
-		if (context.caps() != null) {
-			result = result.assoc(Strings.create("caps"), context.caps());
+		// Merge config from record + state (same as transition adapters)
+		AMap<AString, ACell> stateConfig = ContextBuilder.extractConfig(state);
+		AMap<AString, ACell> mergedConfig = recordConfig;
+		if (stateConfig != null) {
+			mergedConfig = (mergedConfig != null) ? mergedConfig.merge(stateConfig) : stateConfig;
 		}
 
+		// Build the full tool list including harness tools. GoalTree agents
+		// get subgoal/complete/fail/compact/context_load/context_unload;
+		// with typed outputs, complete/fail carry the agent's schema.
+		AVector<ACell> allTools = context.tools() != null ? context.tools() : Vectors.empty();
+		AString operation = (recordConfig != null)
+			? RT.ensureString(recordConfig.get(Strings.intern("operation")))
+			: null;
+		if (operation != null && operation.toString().contains("goaltree")) {
+			covia.adapter.agent.GoalTreeAdapter gta = (covia.adapter.agent.GoalTreeAdapter) engine.getAdapter("goaltree");
+			if (gta != null) {
+				AMap<AString, ACell> outputs = covia.adapter.agent.GoalTreeAdapter.resolveOutputs(mergedConfig);
+				AVector<ACell> harnessTools = covia.adapter.agent.GoalTreeAdapter.buildTypedRootHarnessTools(outputs);
+				if (harnessTools == null) harnessTools = covia.adapter.agent.GoalTreeAdapter.HARNESS_TOOLS;
+				allTools = (AVector<ACell>) harnessTools.concat(allTools);
+			}
+		}
+
+		// Assemble the L3 input — the exact map that invokeLevel3 would
+		// build and send to the LLM provider. This IS what the LLM sees.
+		AMap<AString, ACell> l3Input = Maps.of(
+			Strings.create("messages"), context.history(),
+			Strings.create("tools"), allTools);
+		if (mergedConfig != null) {
+			ACell model = mergedConfig.get(Strings.create("model"));
+			if (model != null) l3Input = l3Input.assoc(Strings.create("model"), model);
+			ACell rf = mergedConfig.get(Strings.create("responseFormat"));
+			if (rf != null) l3Input = l3Input.assoc(Strings.create("responseFormat"), rf);
+		}
+
+		// Serialize as standard JSON so the output is human-readable and
+		// matches the wire format to the LLM provider.
+		String json = JSON.toStringPretty(l3Input);
+
 		job.setStatus(Status.STARTED);
-		job.completeWith(result);
+		job.completeWith(Strings.create(json));
 	}
 
 	@SuppressWarnings("unchecked")

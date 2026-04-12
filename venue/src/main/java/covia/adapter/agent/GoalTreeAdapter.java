@@ -179,7 +179,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 	/** Harness tools for root frame — includes subgoal for decomposition */
 	@SuppressWarnings("unchecked")
-	static final AVector<ACell> HARNESS_TOOLS = Vectors.of(
+	public static final AVector<ACell> HARNESS_TOOLS = Vectors.of(
 		(ACell) TOOL_DEF_SUBGOAL,
 		(ACell) TOOL_DEF_COMPLETE,
 		(ACell) TOOL_DEF_FAIL,
@@ -718,7 +718,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	 * is declared — the agent uses the legacy untyped harness tools.</p>
 	 */
 	@SuppressWarnings("unchecked")
-	static AMap<AString, ACell> resolveOutputs(AMap<AString, ACell> config) {
+	public static AMap<AString, ACell> resolveOutputs(AMap<AString, ACell> config) {
 		if (config == null) return null;
 		ACell explicit = config.get(K_OUTPUTS);
 		if (explicit instanceof AMap) return (AMap<AString, ACell>) explicit;
@@ -811,7 +811,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	 * needed (caller falls back to {@link #HARNESS_TOOLS}).
 	 */
 	@SuppressWarnings("unchecked")
-	static AVector<ACell> buildTypedRootHarnessTools(AMap<AString, ACell> outputs) {
+	public static AVector<ACell> buildTypedRootHarnessTools(AMap<AString, ACell> outputs) {
 		AMap<AString, ACell> completeSchema = outputsCompleteSchema(outputs);
 		if (completeSchema == null) return null; // no typing
 		AMap<AString, ACell> failSchema = outputsFailSchema(outputs);
