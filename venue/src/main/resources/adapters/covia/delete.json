@@ -1,6 +1,6 @@
 {
 	"name": "Delete Lattice Data",
-	"description": "Deletes the value at a writable lattice path: w/, o/, n/ (agent scope), or t/ (job temp). Other namespaces are managed via dedicated APIs (g/ via agent_*, s/ via secret_*, j/ via job APIs). Idempotent — deleting a non-existent path is a no-op. Returns {deleted: true}.",
+	"description": "Delete a value at a writable lattice path (w/, o/, n/, t/). Example: w/scratch/temp-data (clean up workspace). Idempotent — deleting a non-existent path is a no-op.",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "covia:delete",

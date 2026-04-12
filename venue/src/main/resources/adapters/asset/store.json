@@ -1,6 +1,6 @@
 {
   "name": "Store Asset",
-  "description": "Stores an immutable, content-addressed asset in your /a/ namespace. The asset ID is the CAD3 hash of the metadata — storing the same metadata twice returns the same ID (idempotent). Use for tamper-proof storage of documents, agent definitions, or any data needing a stable identity. For named operations callable via grid_run, write to o/<name> directly with covia_write instead — much simpler than the store-then-pin pattern.",
+  "description": "Store an immutable content-addressed asset in your a/ namespace. The ID is the CAD3 hash — storing identical metadata twice returns the same ID (idempotent). Use for documents, definitions, or data needing a stable tamper-proof identity. For named operations callable via grid_run, prefer covia_write to o/<name> — simpler than store-then-pin.",
   "dateCreated": "2026-03-31T00:00:00Z",
   "operation": {
     "adapter": "asset:store",

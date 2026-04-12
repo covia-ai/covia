@@ -526,7 +526,7 @@ public class ContextBuilderTest {
 				"Description should be prefixed with 'Operation: v/ops/covia/read', got: "
 					+ descStr.substring(0, Math.min(80, descStr.length())));
 			// And the original description body should still be there
-			assertTrue(descStr.contains("Reads a single value"),
+			assertTrue(descStr.contains("Read a value"),
 				"Description body should still be present");
 		}
 		assertTrue(foundCoviaRead, "covia_read tool should be in the default tool list");

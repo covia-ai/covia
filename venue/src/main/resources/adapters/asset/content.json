@@ -1,6 +1,6 @@
 {
   "name": "Get Asset Content",
-  "description": "Retrieves the binary content payload of an asset by any resolvable address (hex hash, /a/, /o/, /v/, DID URL, workspace path). Content is returned as a hex-encoded Blob. Returns {truncated: true, size} if the payload exceeds maxSize (default 1MB). Use asset_get for metadata. Note: only assets that were stored with a content payload have content — non-CAS workspace values return exists: false here.",
+  "description": "Retrieve the binary content payload of an asset by any resolvable address. Returned as hex-encoded Blob. Returns {truncated: true, size} if it exceeds maxSize (default 1MB). Use asset_get for metadata. Only assets stored with a content payload have content.",
   "dateCreated": "2026-03-31T00:00:00Z",
   "operation": {
     "adapter": "asset:content",

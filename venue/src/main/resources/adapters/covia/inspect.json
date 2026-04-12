@@ -1,6 +1,6 @@
 {
 	"name": "Inspect Lattice Data",
-	"description": "Renders any resolvable lattice path as JSON5 with structural annotations (entry counts, byte sizes), truncated to fit a byte budget (default 500). Smaller budgets summarise with /* +N more, size */ markers; larger budgets reveal more detail. Use when you need to understand the shape of large or unknown data without overwhelming your context — covia_read returns the raw value, covia_inspect produces a budget-controlled overview. Pass an array of paths to compare multiple values within one budget (each path gets an equal share). Single path returns a JSON5 string; multiple paths return a map of path → string.",
+	"description": "Budget-controlled preview of data at any lattice path. Renders as JSON5 truncated to a byte budget (default 500), with structural annotations showing what was elided. Use to understand the shape of large or unknown data without overwhelming your context — covia_read returns the full raw value, inspect gives a summary. Pass an array of paths to compare multiple values in one call.",
 	"dateCreated": "2026-04-07T00:00:00Z",
 	"operation": {
 		"adapter": "covia:inspect",

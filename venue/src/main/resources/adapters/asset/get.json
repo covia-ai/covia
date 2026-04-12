@@ -1,6 +1,6 @@
 {
   "name": "Get Asset",
-  "description": "Reads asset metadata from any resolvable address (hex hash, /a/<hash>, /o/<name>, /v/<path>, DID URL, or workspace path). Returns {id, exists, value} where value is the metadata map. Use asset_content for the binary payload. Mostly equivalent to covia_read with asset semantics: returns exists: false if the resolved value isn't a map.",
+  "description": "Read asset metadata from any resolvable address (a/<hash>, o/<name>, v/ops/..., DID URL). Returns {id, exists, value}. Use asset_content for the binary payload, or covia_read if you just want the raw value without asset semantics.",
   "dateCreated": "2026-03-31T00:00:00Z",
   "operation": {
     "adapter": "asset:get",

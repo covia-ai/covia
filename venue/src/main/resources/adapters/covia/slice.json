@@ -1,6 +1,6 @@
 {
 	"name": "Slice Lattice Data",
-	"description": "Reads a paginated slice of entries from a vector, map, or set at any resolvable lattice path. Returns {type, values, count, offset}. For vectors/sets, values is an array of elements; for maps, each entry is {key, value}. Use after covia_list reveals a large collection. Default limit is 100; pass offset to page through. Examples: covia_slice path=v/ops/agent (all agent ops), covia_slice path=g/my-agent/timeline limit=10 (latest run records).",
+	"description": "Read a paginated slice from a collection at any lattice path. For vectors: array of elements; for maps: array of {key, value}. Use after covia_list reveals a large collection. Example: g/Alice/timeline limit=5 (recent agent runs).",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "covia:slice",

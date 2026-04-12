@@ -1,6 +1,6 @@
 {
 	"name": "Read Lattice Data",
-	"description": "Reads a single value from the lattice at any resolvable path (workspace, /o/, /v/, /a/<hash>, DID URL). Path is '/'-separated and may also be a JSON array for pre-typed keys. Returns {exists, value}. If the value exceeds maxSize bytes (default 1MB), returns {exists: true, truncated: true, size} — fall back to covia_slice for paginated access or covia_inspect for budget-controlled rendering. See system prompt for namespace prefixes.",
+	"description": "Read a value from any lattice path. Examples: w/vendor-records/acme (workspace data), v/ops/covia/write (operation metadata), did:key:<id>/w/shared (cross-user read). Returns {exists, value}. For large values use covia_list to check size first, covia_slice for pagination, or covia_inspect for a budget-controlled summary.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "covia:read",

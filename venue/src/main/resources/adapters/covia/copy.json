@@ -1,6 +1,6 @@
 {
 	"name": "Copy Lattice Value",
-	"description": "Server-side value duplication: reads from any resolvable path (from) and writes the value to a writable path (to). Common idiom: pin a venue op into your own namespace as a callable name — covia_copy from=v/ops/json/merge to=o/merge, then grid_run operation=o/merge. Also useful for snapshotting remote data locally or branching workspace values. Both read and write capability checks apply. Returns {copied: true}.",
+	"description": "Copy a value from any readable path to any writable path. Key use: pin a venue op as a named shortcut — covia_copy from=v/ops/json/merge to=o/merge, then grid_run operation=o/merge. Also useful for snapshotting data or branching workspace values. Both read and write capability checks apply.",
 	"operation": {
 		"adapter": "covia:copy",
 		"input": {

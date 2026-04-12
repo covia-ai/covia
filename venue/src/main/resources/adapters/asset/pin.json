@@ -1,6 +1,6 @@
 {
 	"name": "Pin Asset",
-	"description": "Snapshot any resolvable value into your own /a/ content-addressed store. Idempotent — pinning the same value twice produces the same hash. If the source is already a CAS asset, both metadata and content are preserved; otherwise the resolved value is stored as inline metadata. Returns {path, hash} where path is your DID URL for the pinned asset and hash is the bare hex CAD3 ID. Use this to freeze a venue op or workspace value at a specific version.",
+	"description": "Snapshot any resolvable value into your a/ content-addressed store. Idempotent — same value produces the same hash. Use to freeze a venue op or workspace value at a specific version. Returns {path, hash} where path is your DID URL for the pinned asset.",
 	"operation": {
 		"adapter": "asset:pin",
 		"toolName": "asset_pin",

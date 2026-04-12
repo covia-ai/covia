@@ -1,6 +1,6 @@
 {
   "name": "List Assets",
-  "description": "Lists content-addressed assets in your /a/ namespace with pagination. Returns summary info (id, name, type, description) per asset. Use asset_get for full metadata or asset_content for the binary payload of a specific entry. Filter by type field for narrow searches (e.g. type='agent-definition').",
+  "description": "List assets in your a/ namespace with pagination. Returns summary info (id, name, type, description) per asset. Use asset_get for full metadata. Filter by type for narrow searches (e.g. type='agent-definition').",
   "dateCreated": "2026-03-31T00:00:00Z",
   "operation": {
     "adapter": "asset:list",

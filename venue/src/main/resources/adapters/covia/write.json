@@ -1,6 +1,6 @@
 {
 	"name": "Write Lattice Data",
-	"description": "Writes a value to a writable lattice path: w/ (workspace), o/ (operation pins), n/ (agent scope, when running inside an agent), or t/ (job temp, when running inside a job). Other namespaces are managed via dedicated APIs (g/ via agent_*, s/ via secret_*, j/ via job APIs). Path is '/'-separated; intermediate maps are created on demand. Writing null deletes the entry. To pin an operation by name for grid_run, write its full metadata to o/<name>: see system prompt. Returns {written: true}.",
+	"description": "Write a value to a writable lattice path (w/, o/, n/, t/). Examples: w/enrichments/INV-001 (persist a work product), o/my-pipeline (pin an operation for grid_run). Intermediate maps are created on demand. Writing null deletes the entry. Use structured values (objects/arrays) rather than serialised strings.",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "covia:write",

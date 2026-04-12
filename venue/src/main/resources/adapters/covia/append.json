@@ -1,6 +1,6 @@
 {
 	"name": "Append to Lattice Vector",
-	"description": "Appends an element to a vector at a writable lattice path: w/, o/, n/ (agent scope), or t/ (job temp). Creates a new single-element vector if the path does not exist. Intermediate maps are created on demand for deeper paths. Errors if the target contains a non-vector value — use covia_write for non-vector targets. Returns {appended: true}.",
+	"description": "Append an element to a vector at a writable path (w/, o/, n/, t/). Creates the vector if it doesn't exist. Example: w/audit/trail (build an immutable event log). Errors if the target is not a vector — use covia_write to replace non-vector values.",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "covia:append",

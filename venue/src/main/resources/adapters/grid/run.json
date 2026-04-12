@@ -1,6 +1,6 @@
 {
 	"name": "Grid Run",
-	"description": "Synchronously executes any operation reachable on the lattice and returns its result. The 'operation' argument accepts any resolvable form: catalog paths (v/ops/json/merge, v/test/ops/echo), your own pins (o/my-op), bare hex hashes, /a/<hash>, or DID URLs (for remote venues). Pass the operation's input arguments as a JSON map matching its declared input schema (use covia_read path=v/ops/<adapter>/<op> to see the schema first if uncertain). Blocks until the job finishes — for long-running pipelines use grid_invoke instead and poll grid_jobStatus / grid_jobResult. To run on a remote venue, pass venue=<url-or-did>.",
+	"description": "Execute an operation and return its result. The operation argument accepts any resolvable form: v/ops/json/merge (venue catalog), o/my-pipeline (your pin), a/<hash> (asset), or did:web:<venue>/v/ops/... (remote venue). Pass input as a JSON map matching the operation's schema. Blocks until complete — use grid_invoke for long-running work.",
 	"operation": {
 		"adapter": "grid:run",
 		"input": {
