@@ -1863,4 +1863,47 @@ public class CoviaAdapterTest {
 		assertTrue(rendered.contains("deep data"), "Should render nested values");
 	}
 
+	// Regression: concurrent appends to the same vector path used to lose
+	// elements because handleAppend did read-then-set on the entry cursor.
+	// The fix routes both branches through updateAndGet so each append
+	// retries against the latest committed value.
+	@Test
+	public void testConcurrentAppendsSameVector() throws Exception {
+		int writers = 8;
+		int perWriter = 25;
+		java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+		java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(writers);
+		java.util.List<Throwable> errors = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+
+		for (int w = 0; w < writers; w++) {
+			final int writerId = w;
+			new Thread(() -> {
+				try {
+					start.await();
+					for (int i = 0; i < perWriter; i++) {
+						engine.jobs().invokeOperation("v/ops/covia/append",
+							Maps.of(Fields.PATH, "w/log",
+								Fields.VALUE, Strings.create("w" + writerId + "-" + i)),
+							ALICE).awaitResult(5000);
+					}
+				} catch (Throwable t) {
+					errors.add(t);
+				} finally {
+					done.countDown();
+				}
+			}, "covia-appender-" + w).start();
+		}
+		start.countDown();
+		assertTrue(done.await(30, java.util.concurrent.TimeUnit.SECONDS),
+			"appenders did not finish in time");
+		assertTrue(errors.isEmpty(), "appender errors: " + errors);
+
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/log"), ALICE);
+		AVector<ACell> log = RT.getIn(readJob.awaitResult(5000), "value");
+		assertNotNull(log, "log should exist after concurrent appends");
+		assertEquals(writers * perWriter, log.count(),
+			"all concurrently appended elements must survive");
+	}
+
 }

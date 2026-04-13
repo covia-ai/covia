@@ -58,9 +58,10 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 
 	public User ensure(AString did) {
 		ALatticeCursor<ACell> userCursor = cursor.path(did);
-		if (userCursor.get() == null) {
-			userCursor.set(Covia.USER.zero());
-		}
+		// Atomic init: read-then-set is racy under concurrent first-touches —
+		// a late reader could observe null and set(zero), clobbering an earlier
+		// writer's committed user data (jobs, secrets, agents).
+		userCursor.updateAndGet(current -> current != null ? current : Covia.USER.zero());
 		return new User(userCursor, did);
 	}
 

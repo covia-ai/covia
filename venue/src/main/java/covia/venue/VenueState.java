@@ -165,9 +165,17 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 * @param did The venue's DID string
 	 */
 	public void initialise(ACell did) {
-		if (cursor.get() == null) {
-			cursor.set(Covia.VENUE.zero().assoc(Covia.DID, did));
-		}
+		// Atomic init via CAS — read-then-set would let a late initialise()
+		// clobber state another thread already wrote. PathCursor's
+		// updateAndGet substitutes valueLattice.zero() (an empty Index for
+		// VENUE) for null, so test by DID presence rather than null-equality.
+		cursor.updateAndGet(current -> {
+			@SuppressWarnings("unchecked")
+			Index<Keyword, ACell> v = (current instanceof Index<?,?>)
+				? (Index<Keyword, ACell>) current
+				: (Index<Keyword, ACell>) Covia.VENUE.zero();
+			return v.containsKey(Covia.DID) ? v : v.assoc(Covia.DID, did);
+		});
 	}
 
 	/**

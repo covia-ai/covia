@@ -535,8 +535,8 @@ public class CoviaAdapter extends AAdapter {
 		if (jsonKeys.length == 2) {
 			entryCursor.set(value);
 		} else {
-			ACell current = entryCursor.get();
-			entryCursor.set(deepSet(current, jsonKeys, 2, value));
+			ACell[] keys = jsonKeys;
+			entryCursor.updateAndGet(current -> deepSet(current, keys, 2, value));
 		}
 		return Maps.of(K_WRITTEN, CVMBool.TRUE);
 	}
@@ -580,10 +580,8 @@ public class CoviaAdapter extends AAdapter {
 		if (jsonKeys.length == 2) {
 			entryCursor.set(null);
 		} else {
-			ACell current = entryCursor.get();
-			if (current != null) {
-				entryCursor.set(deepDelete(current, jsonKeys, 2));
-			}
+			ACell[] keys = jsonKeys;
+			entryCursor.updateAndGet(current -> current != null ? deepDelete(current, keys, 2) : null);
 		}
 		return Maps.of(K_DELETED, CVMBool.TRUE);
 	}
@@ -611,10 +609,10 @@ public class CoviaAdapter extends AAdapter {
 		ALatticeCursor<ACell> entryCursor = resolveEntry(baseCursor, jsonKeys);
 
 		if (jsonKeys.length == 2) {
-			entryCursor.set(appendToVector(entryCursor.get(), element));
+			entryCursor.updateAndGet(current -> appendToVector(current, element));
 		} else {
-			ACell current = entryCursor.get();
-			entryCursor.set(deepAppend(current, jsonKeys, 2, element));
+			ACell[] keys = jsonKeys;
+			entryCursor.updateAndGet(current -> deepAppend(current, keys, 2, element));
 		}
 		return Maps.of(K_APPENDED, CVMBool.TRUE);
 	}
@@ -828,15 +826,20 @@ public class CoviaAdapter extends AAdapter {
 
 	/**
 	 * Appends an element to a vector, creating a new vector if the current
-	 * value is null.
+	 * value is null or an empty container (the latter occurs when an
+	 * atomic update lambda receives the value lattice's zero in place of
+	 * a missing path — see {@link convex.lattice.cursor.PathCursor}).
 	 *
-	 * @throws RuntimeException if current value is non-null and non-vector
+	 * @throws RuntimeException if current value is non-empty and non-vector
 	 */
 	@SuppressWarnings("unchecked")
 	private static ACell appendToVector(ACell current, ACell element) {
 		if (current == null) return Vectors.of(element);
 		if (current instanceof AVector) {
 			return ((AVector<ACell>) current).conj(element);
+		}
+		if (current instanceof AMap && ((AMap<?, ?>) current).isEmpty()) {
+			return Vectors.of(element);
 		}
 		throw new RuntimeException(
 			"Cannot append to non-vector value of type: " + current.getType());

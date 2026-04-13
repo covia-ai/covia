@@ -452,6 +452,50 @@ public class VenueStateTest {
 
 	// ========== Fork / Sync ==========
 
+	// Regression: concurrent first-touches for the same DID used to clobber
+	// each other because Users.ensure did read-then-set. Each thread writes
+	// a distinct job under the same user; with the fix all writes survive.
+	@Test
+	public void testConcurrentEnsureSameUser() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		var root = Cursors.createLattice(Covia.ROOT);
+		root.withContext(convex.lattice.LatticeContext.create(null, kp));
+		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey());
+
+		String did = "did:key:zRace";
+		int writers = 8;
+		java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+		java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(writers);
+		java.util.List<Throwable> errors = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+
+		for (int i = 0; i < writers; i++) {
+			final int idx = i;
+			new Thread(() -> {
+				try {
+					start.await();
+					User u = vs.users().ensure(did);
+					Blob jobID = Blob.parse(String.format("0x%04x", idx + 1));
+					u.jobs().persist(jobID, Maps.of(
+						Fields.STATUS, Status.PENDING,
+						Fields.UPDATED, CVMLong.create(1000L + idx)));
+				} catch (Throwable t) {
+					errors.add(t);
+				} finally {
+					done.countDown();
+				}
+			}, "user-init-" + i).start();
+		}
+		start.countDown();
+		assertTrue(done.await(10, java.util.concurrent.TimeUnit.SECONDS),
+			"ensure writers did not finish in time");
+		assertTrue(errors.isEmpty(), "writer errors: " + errors);
+
+		User finalUser = vs.users().get(did);
+		assertNotNull(finalUser, "user should exist after concurrent ensure");
+		assertEquals(writers, finalUser.jobs().count(),
+			"all jobs from concurrent ensure() callers must survive");
+	}
+
 	@Test
 	public void testForkSyncIdempotent() {
 		AKeyPair kp = AKeyPair.generate();

@@ -3,7 +3,9 @@ package covia.adapter;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -14,22 +16,30 @@ import convex.core.data.AVector;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
-import convex.core.data.Strings;
 import convex.core.lang.RT;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.lattice.Covia;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 
 public class DLFSAdapterTest {
 
+	// Class-local engine (not TestEngine.ENGINE) so onSync callbacks added by
+	// testDLFSSyncReachesRootOnSyncCallback don't accumulate across all venue
+	// tests. Per-method DID still required since methods run in parallel.
 	static Engine engine;
-	static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
+	private AString ALICE_DID;
 
 	@BeforeAll
 	static void setup() {
 		engine = Engine.createTemp(null);
 		Engine.addDemoAssets(engine);
+	}
+
+	@BeforeEach
+	public void setupDID(TestInfo info) {
+		ALICE_DID = TestEngine.uniqueDID(info);
 	}
 
 	private ACell run(String op, ACell input) {

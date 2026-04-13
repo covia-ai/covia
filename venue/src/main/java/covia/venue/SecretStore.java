@@ -1,6 +1,7 @@
 package covia.venue;
 
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import convex.core.crypto.AESGCM;
 import convex.core.crypto.AKeyPair;
@@ -78,6 +79,38 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 			if (m == null) m = Maps.empty();
 			return m.assoc(name, record);
 		});
+	}
+
+	/**
+	 * Atomically stores a secret only if no entry with this name exists.
+	 *
+	 * <p>Uses cursor CAS — concurrent callers see a consistent winner. Does NOT
+	 * call {@code sync()} on the cursor; propagation is the caller's concern.</p>
+	 *
+	 * @param name Secret name
+	 * @param plaintext Secret value in plaintext
+	 * @param encryptionKey 32-byte AES-256 key (from {@link #deriveKey})
+	 * @return true if this call wrote the entry; false if an entry already existed
+	 */
+	@SuppressWarnings({ "unchecked", "rawtypes" })
+	public boolean storeIfAbsent(AString name, AString plaintext, byte[] encryptionKey) {
+		byte[] encrypted = AESGCM.encrypt(encryptionKey, plaintext.toString().getBytes(StandardCharsets.UTF_8));
+		AMap<AString, ACell> record = Maps.of(
+			ENCRYPTED_KEY, Blob.wrap(encrypted),
+			UPDATED_KEY, CVMLong.create(System.currentTimeMillis())
+		);
+		AtomicBoolean wrote = new AtomicBoolean(false);
+		cursor.updateAndGet(current -> {
+			AMap m = RT.ensureMap(current);
+			if (m == null) m = Maps.empty();
+			if (m.containsKey(name)) {
+				wrote.set(false);
+				return m;
+			}
+			wrote.set(true);
+			return m.assoc(name, record);
+		});
+		return wrote.get();
 	}
 
 	/**

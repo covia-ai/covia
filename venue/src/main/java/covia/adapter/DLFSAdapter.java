@@ -13,7 +13,6 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Base64;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -83,9 +82,6 @@ public class DLFSAdapter extends AAdapter {
 	private static final AString FIELD_CONTENT = Strings.intern("content");
 	private static final AString FIELD_ASSET = Strings.intern("asset");
 
-	/** Cache of connected DLFS filesystems: "accountKey:driveName" → DLFSLocal */
-	private final ConcurrentHashMap<String, DLFSLocal> driveCache = new ConcurrentHashMap<>();
-
 	@Override
 	public String getName() {
 		return "dlfs";
@@ -116,9 +112,12 @@ public class DLFSAdapter extends AAdapter {
 
 	/**
 	 * Gets the user's DLFS keypair from the secret store.
-	 * If no key exists, generates one and syncs the venue state (the only grid
-	 * mutation in the DLFS path — secrets are stored in the forked VenueState
-	 * which needs syncState() to merge into the root lattice for persistence).
+	 *
+	 * <p>Concurrent callers race-safely: a candidate key is generated locally,
+	 * then atomically published via {@link SecretStore#storeIfAbsent}. The
+	 * winner is whichever value is in the store after the CAS — which may be
+	 * another caller's candidate. Only the caller whose candidate won the race
+	 * triggers a venue state sync.</p>
 	 *
 	 * @return User's DLFS keypair (never null)
 	 */
@@ -130,18 +129,26 @@ public class DLFSAdapter extends AAdapter {
 		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
 		SecretStore secrets = user.secrets();
 
-		// Return existing key if present
 		AString existing = secrets.decrypt(DLFS_KEY_SECRET, encKey);
 		if (existing != null) {
 			return AKeyPair.create(Blob.fromHex(existing.toString()));
 		}
 
-		// Generate new key and sync venue state (grid mutation)
-		AKeyPair newKey = AKeyPair.generate();
-		secrets.store(DLFS_KEY_SECRET, newKey.getSeed().toHexString(), encKey);
-		engine.syncState();
-		log.info("Generated DLFS key for user {}", callerDID);
-		return newKey;
+		AKeyPair candidate = AKeyPair.generate();
+		AString candidateHex = Strings.create(candidate.getSeed().toHexString());
+		boolean wonRace = secrets.storeIfAbsent(Strings.create(DLFS_KEY_SECRET), candidateHex, encKey);
+
+		AString winner = secrets.decrypt(DLFS_KEY_SECRET, encKey);
+		if (winner == null) {
+			throw new IllegalStateException("DLFS key vanished after storeIfAbsent for " + callerDID);
+		}
+
+		if (wonRace) {
+			engine.syncState();
+			log.info("Generated DLFS key for user {}", callerDID);
+		}
+
+		return AKeyPair.create(Blob.fromHex(winner.toString()));
 	}
 
 	// ==================== Drive Access ====================
@@ -149,42 +156,41 @@ public class DLFSAdapter extends AAdapter {
 	/**
 	 * Gets the DLFS cursor for a user's signed region in the :dlfs lattice.
 	 * Navigates root → :dlfs → OwnerLattice(AccountKey) → :value (signed drives map).
-	 * The user's DLFS key is set as signing context before entering the OwnerLattice.
+	 *
+	 * <p>The returned cursor carries a {@link LatticeContext} with the caller's
+	 * DLFS signing key and a wall-clock timestamp. The timestamp is propagated
+	 * to all DLFS node writes via {@code DLFSLocal.getTimestamp()} and used as
+	 * the merge timestamp where applicable.</p>
 	 */
 	private ALatticeCursor<?> getUserDLFSCursor(AKeyPair dlfsKey) {
-		// Navigate: root → :dlfs
 		ALatticeCursor<Index<Keyword, ACell>> rootCursor = engine.getRootCursor();
 		ALatticeCursor<?> dlfsCursor = rootCursor.path(Covia.DLFS);
 
-		// Set the USER's signing context (not the venue's) for writes through OwnerLattice
-		LatticeContext lctx = LatticeContext.create(null, dlfsKey);
+		LatticeContext lctx = LatticeContext.create(
+			CVMLong.create(System.currentTimeMillis()), dlfsKey);
 		dlfsCursor.withContext(lctx);
 
-		// Navigate into user's signed slot: OwnerLattice → AccountKey → :value
 		AccountKey ak = dlfsKey.getAccountKey();
 		return dlfsCursor.path(ak, convex.core.cvm.Keywords.VALUE);
 	}
 
 	/**
-	 * Gets or creates a connected DLFS drive for the given DID.
-	 * Public so WebDAV can access drives by identity string.
+	 * Gets a connected DLFS drive for the given DID. Public so WebDAV can
+	 * access drives by identity string.
 	 */
 	public DLFSLocal getDriveForIdentity(String didString, String driveName) {
 		return getDrive(RequestContext.of(Strings.create(didString)), driveName);
 	}
 
 	/**
-	 * Gets or creates a connected DLFS drive for the caller.
+	 * Connects a DLFS drive view for the caller. Cheap — just a cursor view, no
+	 * caching. A fresh {@link DLFSLocal} per request keeps the per-request
+	 * {@link LatticeContext} (timestamp, signing key) isolated.
 	 */
 	private DLFSLocal getDrive(RequestContext ctx, String driveName) {
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
-		String cacheKey = dlfsKey.getAccountKey().toHexString() + ":" + driveName;
-
-		return driveCache.computeIfAbsent(cacheKey, k -> {
-			ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
-			AString driveNameStr = Strings.create(driveName);
-			return DLFS.connect(userCursor, driveNameStr);
-		});
+		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
+		return DLFS.connect(userCursor, Strings.create(driveName));
 	}
 
 	/**
@@ -275,11 +281,7 @@ public class DLFSAdapter extends AAdapter {
 		if (name == null) name = RT.ensureString(input.get(FIELD_DRIVE));
 		if (name == null) throw new IllegalArgumentException("'name' or 'drive' is required");
 
-		// Remove from cache and set null on the lattice cursor to tombstone it
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
-		String cacheKey = dlfsKey.getAccountKey().toHexString() + ":" + name;
-		driveCache.remove(cacheKey);
-
 		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
 		ALatticeCursor<?> driveCursor = userCursor.path(name);
 		driveCursor.set(null);
