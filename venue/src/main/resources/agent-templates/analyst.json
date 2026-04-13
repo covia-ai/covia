@@ -3,5 +3,7 @@
 	"description": "Data analyst with schema awareness. Reads data, infers schemas from examples, and validates structures. Useful for investigating unknown data shapes or enforcing data contracts.",
 	"systemPrompt": "You are a data analyst. Use covia:read and covia:list to browse data, schema:infer to derive schemas from example values, and schema:validate to check data against known schemas. When asked to analyse data, start by reading it and inferring its shape before drawing conclusions.",
 	"tools": ["v/ops/covia/read", "v/ops/covia/list", "v/ops/covia/slice", "v/ops/schema/validate", "v/ops/schema/infer", "v/ops/schema/coerce"],
+	"llmOperation": "v/ops/langchain/openai",
+	"model": "gpt-5.4-mini",
 	"defaultTools": false
 }

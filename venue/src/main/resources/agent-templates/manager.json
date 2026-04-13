@@ -9,5 +9,7 @@
 		"v/ops/covia/read", "v/ops/covia/list", "v/ops/grid/run",
 		"subgoal", "compact", "more_tools"
 	],
+	"llmOperation": "v/ops/langchain/openai",
+	"model": "gpt-5.4-mini",
 	"defaultTools": false
 }

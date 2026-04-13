@@ -204,7 +204,7 @@ public class LangChainAdapter extends AAdapter {
 			return buildOllamaModel(baseUrl, model, IO_TIMEOUT);
 		} else if ("openai".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.openai.com/v1";
-			String model = (modelName != null) ? modelName : "gpt-3.5-turbo";
+			String model = (modelName != null) ? modelName : "gpt-5.4-mini";
 			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
 		} else if ("anthropic".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.anthropic.com/v1/";

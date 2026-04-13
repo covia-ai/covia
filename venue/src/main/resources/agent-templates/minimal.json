@@ -2,5 +2,7 @@
 	"name": "Minimal Agent Template",
 	"description": "Pure reasoning agent with no side-effect tools. Useful for analysis, summarisation, and advisory roles where the agent should not touch any data. Suitable when you want an agent that only produces text output based on the conversation.",
 	"systemPrompt": "You are a reasoning agent. You have no tools — respond with analysis, advice, or summaries based purely on the conversation and your own reasoning. If asked to perform an action that requires tools, explain what you would do but do not claim to have done it.",
+	"llmOperation": "v/ops/langchain/openai",
+	"model": "gpt-5.4-mini",
 	"defaultTools": false
 }
