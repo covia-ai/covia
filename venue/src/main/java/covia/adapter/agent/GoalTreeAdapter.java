@@ -382,21 +382,22 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		AMap<AString, ACell> recordConfig = (RT.getIn(input, AgentState.KEY_CONFIG) instanceof AMap m) ? m : null;
 		AMap<AString, ACell> config = extractConfig(recordConfig, state);
 
-		// Resolve typed outputs declaration. When set, the agent's response
-		// is constrained by an OpenAI response_format with the user's schema
-		// (server-side enforcement). The LLM completes by emitting structured
-		// text matching the schema — no special complete tool needed.
+		// Resolve the response schema. Order: per-request responseSchema
+		// (passed in agent_request) overrides the agent's config.outputs
+		// default. When a schema is in effect, it's injected into the L3
+		// config as response_format and OpenAI enforces it on the assistant's
+		// text response (server-side).
 		AMap<AString, ACell> outputs = resolveOutputs(config);
-		AMap<AString, ACell> completeSchema = outputsCompleteSchema(outputs);
-		boolean typedOutputs = (completeSchema != null);
+		AMap<AString, ACell> defaultSchema = outputsCompleteSchema(outputs);
+		AMap<AString, ACell> perRequestSchema = extractPerRequestResponseSchema(tasks);
+		AMap<AString, ACell> activeSchema = (perRequestSchema != null) ? perRequestSchema : defaultSchema;
+		boolean typedOutputs = (activeSchema != null);
 
-		// When typed: inject responseFormat into the L3 config so OpenAI
-		// enforces schema on the assistant's text response.
 		AMap<AString, ACell> l3Config = config;
 		if (typedOutputs && config != null) {
 			AMap<AString, ACell> responseFormat = Maps.of(
 				Strings.create("name"), Strings.create("agent_output"),
-				Strings.create("schema"), completeSchema);
+				Strings.create("schema"), activeSchema);
 			l3Config = config.assoc(K_RESPONSE_FORMAT, responseFormat);
 		}
 
@@ -844,6 +845,29 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	}
 
 	// ========== Helpers ==========
+
+	/**
+	 * Extracts a per-request response schema from the tasks vector. When
+	 * a caller invokes agent_request with a responseSchema field, the
+	 * framework attaches it to the task entry. Returns the first schema
+	 * found, or null if none of the tasks have one.
+	 *
+	 * <p>If multiple tasks specify different schemas, the first wins.
+	 * Mixing schemas in one batch is rare and not well-defined.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> extractPerRequestResponseSchema(AVector<ACell> tasks) {
+		if (tasks == null) return null;
+		AString K_RESPONSE_SCHEMA = Strings.intern("responseSchema");
+		for (long i = 0; i < tasks.count(); i++) {
+			ACell t = tasks.get(i);
+			if (t instanceof AMap) {
+				ACell schema = ((AMap<AString, ACell>) t).get(K_RESPONSE_SCHEMA);
+				if (schema instanceof AMap) return (AMap<AString, ACell>) schema;
+			}
+		}
+		return null;
+	}
 
 	/** Returns true if the tool set includes the compact tool. */
 	private static boolean hasCompactTool(AVector<ACell> tools) {

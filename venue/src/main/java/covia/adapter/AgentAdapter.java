@@ -353,10 +353,17 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
 
-		// Add task to agent's lattice
+		// Add task to agent's lattice. Store raw input directly — most
+		// common case. If a per-request responseSchema was supplied, wrap
+		// it as {input, responseSchema}; the transition function handles
+		// both shapes (see formatTasks).
 		Blob taskId = generateTaskId();
 		ACell taskInput = RT.getIn(input, Fields.INPUT);
-		agent.addTask(taskId, taskInput);
+		ACell responseSchema = RT.getIn(input, Strings.intern("responseSchema"));
+		ACell taskData = (responseSchema instanceof AMap)
+			? Maps.of(Fields.INPUT, taskInput, Strings.intern("responseSchema"), responseSchema)
+			: taskInput;
+		agent.addTask(taskId, taskData);
 
 		// Register this Job to be completed by the run loop when the task result arrives.
 		// The Job stays in STARTED state — the standard Job lifecycle (REST ?wait, SDK
@@ -954,19 +961,43 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Formats task Index entries as a vector for the transition function.
-	 * Tasks are raw lattice data: {@code Blob taskId → ACell input}.
+	 * Task data is either raw input or a {input, responseSchema} wrapper
+	 * map (when the caller specified a per-request response schema). This
+	 * method unwraps the wrapper so the transition sees a uniform shape:
+	 * {jobId, input, caller?, responseSchema?}.
 	 */
+	@SuppressWarnings("unchecked")
 	private AVector<ACell> formatTasks(Index<Blob, ACell> tasks) {
 		if (tasks == null || tasks.count() == 0) return Vectors.empty();
+		AString K_RESPONSE_SCHEMA = Strings.intern("responseSchema");
 		AVector<ACell> result = Vectors.empty();
 		for (var entry : tasks.entrySet()) {
 			Blob jobId = entry.getKey();
 			AMap<AString, ACell> jobData = engine.jobs().getJobData(jobId);
 			ACell caller = (jobData != null) ? jobData.get(Fields.CALLER) : null;
+			ACell raw = entry.getValue();
+			ACell taskInput;
+			ACell responseSchema = null;
+			// Detect wrapper shape: a map containing BOTH "input" and
+			// "responseSchema" keys. Both must be present together — this
+			// avoids false positives where a worker's actual input happens
+			// to be a map with an "input" field.
+			if (raw instanceof AMap<?,?> rm) {
+				AMap<AString, ACell> rawMap = (AMap<AString, ACell>) rm;
+				if (rawMap.containsKey(Fields.INPUT) && rawMap.containsKey(K_RESPONSE_SCHEMA)) {
+					taskInput = rawMap.get(Fields.INPUT);
+					responseSchema = rawMap.get(K_RESPONSE_SCHEMA);
+				} else {
+					taskInput = raw;
+				}
+			} else {
+				taskInput = raw;
+			}
 			AMap<AString, ACell> task = Maps.of(
 				Fields.JOB_ID, taskIdHex(jobId),
-				Fields.INPUT, entry.getValue());
+				Fields.INPUT, taskInput);
 			if (caller != null) task = task.assoc(Fields.CALLER, caller);
+			if (responseSchema != null) task = task.assoc(K_RESPONSE_SCHEMA, responseSchema);
 			result = result.conj(task);
 		}
 		return result;
