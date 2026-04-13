@@ -1,6 +1,6 @@
 # Agent Context — Implementation Plan
 
-**Status:** Closure criteria met (April 2026). Only §5.2 (context entry cache) remains open. Safe to delete this tracker once §5.2 is decided one way or the other.
+**Status:** Closure criteria met (April 2026). All open items resolved or rejected. Safe to delete this tracker.
 **Target designs:** [LATTICE_CONTEXT.md](./LATTICE_CONTEXT.md), [GOAL_TREE.md](./GOAL_TREE.md)
 **Older draft:** [CONTEXT.md](./CONTEXT.md) — partially superseded
 
@@ -143,7 +143,7 @@ prior invoices).
 | # | Gap | Notes |
 |---|-----|-------|
 | 5.1 | Tool list cache | Cache `(default tools enabled, config.tools)` → tool defs. ~10ms saved per turn. |
-| 5.2 | Context entry cache with versioning | LATTICE_CONTEXT's pinned/global/scoped distinction lets the harness cache pinned entries by content hash and only re-resolve on change. |
+| 5.2 | ❌ Rejected — context entry cache | Caching context data is unsafe: lattice values can change at any time and the agent must see the current state on each turn. Re-resolving every turn is the correct semantics, not an optimisation target. |
 | 5.3 | LATTICE_CONTEXT 7-tool vs current 18-tool default | GOAL_TREE already deferred this. Possible compromise: curated subset (~8 tools) by default, opt-in to full catalog. |
 | 5.4 | Compaction strategy | After Decision 1 → Option C lands, transcript needs a compaction story. GOAL_TREE's `compact` tool with LLM-written summary is the recommended approach. |
 | 5.5 | ✅ Verified — `GoalTreeContext` matches GOAL_TREE.md spec exactly: `PARENT_BUDGET = 300`, `ANCESTOR_DECAY = 0.5` (300 → 150 → 75 → … → `MIN_ANCESTOR_BUDGET = 50`), outermost-to-innermost render order. Existing `GoalTreeContextTest` covers all four budget levels and the render order. No code changes needed. |
@@ -156,7 +156,7 @@ prior invoices).
 |---|------|--------|
 | Option C | Transcript model in LLMAgentAdapter | ✅ commit `43d1dd8` |
 | §5.1 | Tool list cache | ✅ Done — per-Engine cache of resolved default tools, ~10ms saved per turn |
-| §5.2 | Context entry cache with versioning | Open — compounding leverage |
+| §5.2 | Context entry cache with versioning | ❌ Rejected — lattice values can change any time; always re-resolve |
 | §5.3 | Curated default tool subset | ✅ Done — opt-in tools model: `defaultTools: false` + explicit `tools` list. All 7 harness tools also opt-in via name. See AGENT_LOOP.md §3.6 |
 | §5.4 | Compaction strategy for transcript | ✅ Done — `compact` harness tool + auto-compact nudge when conversation exceeds 20 turns and agent has compact in its tool set |
 | §5.5 | Verify GoalTreeAdapter ancestor rendering | ✅ Verified |

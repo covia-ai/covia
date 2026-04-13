@@ -1,6 +1,6 @@
 {
 	"name": "Update Agent",
-	"description": "Updates an agent's configuration and/or state. Only 'config' and 'state' fields can be updated — framework-managed fields (status, tasks, inbox, timeline) are not affected. Use this to change the transition operation, system prompt, or any other agent configuration without recreating the agent.",
+	"description": "Update an agent's configuration and/or state. Both `config` and `state.config` are shallow-merged into the existing values — partial updates preserve siblings. Updating just `state.config.model` keeps tools, caps, outputs, and systemPrompt intact. Framework-managed fields (status, tasks, inbox, timeline) are never affected. Use this to tweak agent settings without recreating.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "agent:update",
@@ -8,8 +8,8 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent name to update" },
-				"config": { "type": "object", "description": "New framework configuration (replaces existing config entirely)" },
-				"state": { "description": "New state for the transition function (replaces existing state entirely)" }
+				"config": { "type": "object", "description": "Framework config fields to merge. Top-level keys override existing; unspecified keys are preserved." },
+				"state": { "description": "State fields to merge. For state.config, deep-merged so partial updates (e.g. just model) don't wipe sibling fields." }
 			},
 			"required": ["agentId"]
 		},

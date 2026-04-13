@@ -1771,4 +1771,36 @@ public class AgentAdapterTest {
 		assertNotNull(RT.getIn(config, Strings.create("tools")), "tools should survive model update");
 		assertNotNull(RT.getIn(config, Strings.create("caps")), "caps should survive model update");
 	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testUpdateNullValueDocumentsCurrentBehaviour() {
+		// Document current behaviour: setting a config field to null via update
+		// stores null at that key — it does NOT remove the key. To remove a field,
+		// recreate the agent with overwrite:true. This test pins down the
+		// behaviour so any change to it shows up in the diff.
+		ACell createInput = Maps.of(
+			Fields.AGENT_ID, "null-test",
+			Strings.create("overwrite"), CVMBool.TRUE,
+			AgentState.KEY_STATE, Maps.of(AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("model"), Strings.create("gpt-4o"),
+				Strings.create("systemPrompt"), Strings.create("Original prompt"))));
+		engine.jobs().invokeOperation("v/ops/agent/create", createInput, RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Update systemPrompt to null
+		ACell updateInput = Maps.of(
+			Fields.AGENT_ID, "null-test",
+			AgentState.KEY_STATE, Maps.of(AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("systemPrompt"), null)));
+		engine.jobs().invokeOperation("v/ops/agent/update", updateInput, RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Verify: model preserved, systemPrompt key still exists with null value
+		ACell config = engine.resolvePath(Strings.create("g/null-test/state/config"), RequestContext.of(ALICE_DID));
+		assertEquals(Strings.create("gpt-4o"), RT.getIn(config, Strings.create("model")));
+		AMap<AString, ACell> configMap = (AMap<AString, ACell>) config;
+		assertTrue(configMap.containsKey(Strings.create("systemPrompt")),
+			"key should still exist after setting to null (current behaviour)");
+		assertNull(configMap.get(Strings.create("systemPrompt")),
+			"value should be null (current behaviour — to fully remove, recreate with overwrite:true)");
+	}
 }
