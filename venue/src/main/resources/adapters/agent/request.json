@@ -8,7 +8,10 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Target agent name" },
-				"input": { "type": "object", "description": "The request payload. Must contain the actual instructions, data, or parameters the agent needs to do the work. An empty object {} means the agent has nothing to act on — always populate this field with the full task content." },
+				"input": {
+					"type": "object",
+					"description": "The request payload. MUST contain the actual instructions, data, or parameters the agent needs. NEVER pass an empty object {} — the worker has nothing to act on. Use field 'task' for free-form instructions; add other fields the worker needs (data, paths, options). Example: {task: 'summarise w/notes/daily', format: 'bullet list'}."
+				},
 				"wait": { "type": "boolean", "description": "Wait for the agent to complete. true = block until done (recommended — you usually want the result). false = return PENDING immediately. Integer = timeout in ms." }
 			},
 			"required": ["agentId", "input"]
