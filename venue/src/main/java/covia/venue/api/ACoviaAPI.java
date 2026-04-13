@@ -89,8 +89,13 @@ public abstract class ACoviaAPI  {
 	}
 
 	public void buildRawResult(Context ctx,String jsonContent) {
-		ctx.header("Content-type", ContentTypes.JSON);
-		ctx.result(jsonContent);
+		// Explicit UTF-8 encoding for both header and body. Without this,
+		// Javalin/Jetty encodes the String using the platform default
+		// charset (Windows-1252 on Windows JVMs), which mangles non-ASCII
+		// characters in JSON-embedded strings — em-dashes, curly quotes,
+		// etc. produced by LLMs end up double-encoded.
+		ctx.header("Content-type", ContentTypes.JSON + "; charset=utf-8");
+		ctx.result(jsonContent.getBytes(java.nio.charset.StandardCharsets.UTF_8));
 	}
 	
 	public void buildResult(Context ctx,Object json) {
