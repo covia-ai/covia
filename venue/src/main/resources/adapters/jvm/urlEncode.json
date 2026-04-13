@@ -4,6 +4,7 @@
 	"dateCreated": "2025-01-27T10:00:00Z",
 	"operation": {
 		"adapter": "jvm:urlEncode",
+		"toolName": "url_encode",
 		"input": {
 			"type": "object",
 			"properties": {

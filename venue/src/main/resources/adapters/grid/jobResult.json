@@ -3,6 +3,7 @@
 	"description": "Wait for a Covia grid job to finish and return its output",
 	"operation": {
 		"adapter": "grid:jobResult",
+		"toolName": "grid_job_result",
 		"input": {
 			"type": "object",
 			"properties": {

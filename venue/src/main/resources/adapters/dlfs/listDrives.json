@@ -4,6 +4,7 @@
   "creator": "Covia",
   "operation": {
     "adapter": "dlfs:listDrives",
+    "toolName": "dlfs_list_drives",
     "input": { "type": "object", "properties": {} },
     "output": {
       "type": "object",

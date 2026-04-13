@@ -3,6 +3,7 @@
 	"description": "Fetch the current status of a Covia grid job by ID",
 	"operation": {
 		"adapter": "grid:jobStatus",
+		"toolName": "grid_job_status",
 		"input": {
 			"type": "object",
 			"properties": {
