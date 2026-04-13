@@ -133,6 +133,20 @@ public abstract class AAdapter {
 	}
 
 	/**
+	 * Installs an agent template under {@code /v/agents/templates/<catalogPath>}.
+	 * Templates are flat config maps (systemPrompt, tools, caps, etc.) used by
+	 * {@code agent:create} via {@code config="v/agents/templates/<name>"} —
+	 * just standard lattice path resolution, no special-case lookup.
+	 *
+	 * @param catalogPath The template name (e.g. {@code "manager"})
+	 * @param resourcePath Resource path of the template JSON
+	 * @return The asset hash, or {@code null} if installation failed
+	 */
+	protected Hash installAgentTemplate(String catalogPath, String resourcePath) {
+		return installAssetAt("v/agents/templates/", catalogPath, resourcePath);
+	}
+
+	/**
 	 * Shared implementation: store the asset, validate the catalog path, and
 	 * defer the materialisation write until {@link covia.venue.Engine#materialiseVOps}.
 	 */

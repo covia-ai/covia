@@ -2,7 +2,7 @@
 
 Templates for creating, sharing, and forking agents on the Covia grid.
 
-**Status:** Draft — April 2026. Phases 1, 2, and 3a implemented — `config` accepts string references, `agent:fork` operation exists, standard templates shipped as venue-level assets discoverable via `template:<name>`.
+**Status:** Draft — April 2026. Phases 1, 2, and 3a implemented — `config` accepts string references, `agent:fork` operation exists, standard templates shipped at `v/agents/templates/<name>`.
 
 ---
 
@@ -242,17 +242,17 @@ The venue ships with standard templates registered as venue-level assets at star
 
 ### Standard templates (shipped)
 
-Installed at venue startup by `AgentAdapter.installAssets` via `installTemplate(name, path)`. Stored as venue-level assets and registered in the adapter's template name registry. Resolvable via `config="template:<name>"`.
+Installed at venue startup by `AgentAdapter.installAssets` via `installAgentTemplate(name, path)`. Materialised to the venue lattice at `v/agents/templates/<name>`. Discoverable via `covia_list path=v/agents/templates`. Resolvable via `config="v/agents/templates/<name>"` — standard lattice path resolution, no special-case lookup.
 
-| Name | Tools | Purpose |
+| Path | Tools | Purpose |
 |------|-------|---------|
-| `template:minimal` | (none, `defaultTools: false`) | Pure reasoning, no side effects |
-| `template:reader` | covia:read, covia:list, covia:slice | Read-only data analysis |
-| `template:worker` | covia:read/write/delete/append/slice/list | General data processing |
-| `template:manager` | agent CRUD ops, covia:read/list, grid:run, **subgoal/compact/more_tools** | Agent coordination with goal decomposition |
-| `template:analyst` | covia:read/list/slice, schema:validate/infer/coerce | Data analysis with schema awareness |
-| `template:goaltree` | Curated covia + grid + asset ops + all 7 harness tools | Goal-tree agent with full decomposition support |
-| `template:full` | All default tools + all 7 harness tools (`defaultTools: true`) | Development and exploration |
+| `v/agents/templates/minimal` | (none, `defaultTools: false`) | Pure reasoning, no side effects |
+| `v/agents/templates/reader` | covia:read, covia:list, covia:slice | Read-only data analysis |
+| `v/agents/templates/worker` | covia:read/write/delete/append/slice/list | General data processing |
+| `v/agents/templates/manager` | agent CRUD ops, covia:read/list, grid:run, **subgoal/compact/more_tools** | Agent coordination with goal decomposition |
+| `v/agents/templates/analyst` | covia:read/list/slice, schema:validate/infer/coerce | Data analysis with schema awareness |
+| `v/agents/templates/goaltree` | Curated covia + grid + asset ops + all 7 harness tools | Goal-tree agent with full decomposition support |
+| `v/agents/templates/full` | All default tools + all 7 harness tools (`defaultTools: true`) | Development and exploration |
 
 **Tools are opt-in.** Each template explicitly lists the tools it needs in `config.tools`. Set `defaultTools: false` to disable the legacy 18-tool default set. Harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`) are also opt-in — include their names in `config.tools`. Typed outputs (`config.outputs`) auto-inject `complete`/`fail` regardless of the tools list.
 
@@ -268,8 +268,8 @@ Currently when `agent:create` is called with no config, the hardcoded `DEFAULT_T
 
 An agent creating another agent can:
 
-1. **Use a standard template by name:** `agent_create agentId=Worker config=template:reader` (resolves via pre-installed registry)
-2. **Browse workspace templates:** `covia_list path=w/templates`
+1. **Use a standard template:** `agent_create agentId=Worker config=v/agents/templates/reader`
+2. **Browse standard templates:** `covia_list path=v/agents/templates`
 3. **Read a workspace template:** `covia_read path=w/templates/my-worker`
 4. **Create from workspace reference:** `agent_create agentId=Worker config=w/templates/my-worker`
 5. **Customise:** Read a template, modify the returned map, pass the modified map inline as config
@@ -284,9 +284,7 @@ This is a fully data-driven workflow — no special APIs, just reading templates
 ### Phase 1: `config` accepts string references ✓ DONE
 
 - `agent:create`'s `config` field accepts an inline map *or* a string reference
-- Resolution order in `AgentAdapter.resolveConfigRef`:
-  1. `engine.resolveAsset(ref, ctx)` — handles bare hash, `/a/`, `/o/`, DID URL, venue op name
-  2. Workspace path lookup in caller's own lattice namespace (via `CoviaAdapter.parsePath` + `readPath`)
+- Resolution: `AgentAdapter.resolveConfigRef` calls `engine.resolvePath(ref, ctx)` which handles every form (venue paths, workspace paths, asset hashes, DID URLs, pinned ops)
 - Embedded `state` field in the resolved map is extracted and used as initial state
 - Schema in `create.json` uses `oneOf` to document both forms
 - The legacy `definition` field continues to work for nested `meta.agent.config` format
@@ -302,14 +300,14 @@ This is a fully data-driven workflow — no special APIs, just reading templates
 
 ### Phase 3a: Ship standard templates ✓ DONE
 
-- Template JSONs in `venue/src/main/resources/agent-templates/` (minimal, reader, worker, manager, analyst, full)
-- `AgentAdapter.installTemplate(name, path)` reads, stores as venue asset, records in `templates` Index
-- `resolveConfigRef` checks the template registry first before falling through to asset/workspace resolution
-- Templates are discoverable via `config="template:<name>"`
+- Template JSONs in `venue/src/main/resources/agent-templates/` (minimal, reader, worker, manager, analyst, full, goaltree)
+- `AgentAdapter.installAgentTemplate(name, path)` materialises each to `v/agents/templates/<name>` at venue startup
+- No special-case lookup — `resolveConfigRef` uses standard `engine.resolvePath` which handles `v/agents/templates/<name>` like any other venue path
+- Templates are discoverable via `covia_list path=v/agents/templates`
 
 ### Phase 3b: Swap default
 
-- Change `LLMAgentAdapter` to use a smaller default tool set (e.g. match `template:worker`) instead of the current 19-tool `DEFAULT_TOOL_OPS`
+- Change `LLMAgentAdapter` to use a smaller default tool set (e.g. match `v/agents/templates/worker`) instead of the current 19-tool `DEFAULT_TOOL_OPS`
 - Resolves #60 (too many default tools)
 - Breaking change — needs explicit review before rollout (impacts all agents that rely on current defaults)
 

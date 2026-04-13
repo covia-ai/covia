@@ -68,9 +68,6 @@ public class AgentAdapter extends AAdapter {
 	/** Counter for task ID generation */
 	private long taskIdCounter = 0;
 
-	/** Registry of pre-installed template names → venue asset hashes */
-	private Index<AString, Hash> templates = Index.none();
-
 	@Override public String getName() { return "agent"; }
 
 	@Override
@@ -97,27 +94,16 @@ public class AgentAdapter extends AAdapter {
 		installAsset("agent/update",      BASE + "update.json");
 		installAsset("agent/cancel-task", BASE + "cancelTask.json");
 
-		// Install standard agent templates — discoverable via config="template:<name>"
-		installTemplate("template:minimal", "/agent-templates/minimal.json");
-		installTemplate("template:reader",  "/agent-templates/reader.json");
-		installTemplate("template:worker",  "/agent-templates/worker.json");
-		installTemplate("template:manager", "/agent-templates/manager.json");
-		installTemplate("template:analyst", "/agent-templates/analyst.json");
-		installTemplate("template:full",    "/agent-templates/full.json");
-		installTemplate("template:goaltree","/agent-templates/goaltree.json");
-	}
-
-	/**
-	 * Installs an agent template as a venue-level asset and records its
-	 * short name in the template registry. Templates are flat config maps
-	 * (systemPrompt, tools, etc.) that can be referenced via
-	 * {@code config="template:<name>"} in {@code agent:create}.
-	 */
-	private void installTemplate(String name, String resourcePath) {
-		Hash hash = installAsset(resourcePath);
-		if (hash != null) {
-			templates = templates.assoc(Strings.create(name), hash);
-		}
+		// Install standard agent templates at v/agents/templates/<name>.
+		// Discoverable via covia_list path=v/agents/templates and usable in
+		// agent:create via config="v/agents/templates/<name>".
+		installAgentTemplate("minimal",  "/agent-templates/minimal.json");
+		installAgentTemplate("reader",   "/agent-templates/reader.json");
+		installAgentTemplate("worker",   "/agent-templates/worker.json");
+		installAgentTemplate("manager",  "/agent-templates/manager.json");
+		installAgentTemplate("analyst",  "/agent-templates/analyst.json");
+		installAgentTemplate("full",     "/agent-templates/full.json");
+		installAgentTemplate("goaltree", "/agent-templates/goaltree.json");
 	}
 
 	@Override
@@ -1130,47 +1116,16 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Resolves a string reference to a config map. Tries, in order:
-	 * <ol>
-	 *   <li>Pre-installed template registry (e.g. {@code template:worker})</li>
-	 *   <li>Asset resolution (bare hash, {@code /a/}, {@code /o/}, DID URL,
-	 *       venue operation name) — the asset metadata is used as the config map</li>
-	 *   <li>Workspace path resolution (e.g. {@code w/templates/reader}) within
-	 *       the caller's own lattice namespace</li>
-	 * </ol>
-	 * Returns {@code null} if none resolves to a map.
+	 * Resolves a string reference to a config map via standard lattice path
+	 * resolution. Accepts any resolvable form: venue paths
+	 * ({@code v/agents/templates/manager}), workspace paths ({@code w/configs/my}),
+	 * pinned operations ({@code o/my-config}), asset hashes, DID URLs, etc.
+	 * Returns the resolved value if it's a map, or {@code null} otherwise.
 	 */
 	@SuppressWarnings("unchecked")
 	private AMap<AString, ACell> resolveConfigRef(AString ref, RequestContext ctx) {
-		// Check pre-installed template registry first (e.g. "template:worker")
-		Hash templateHash = templates.get(ref);
-		if (templateHash != null) {
-			Asset tAsset = engine.getAsset(templateHash);
-			if (tAsset != null) {
-				AMap<AString, ACell> tMeta = tAsset.meta();
-				if (tMeta != null) return tMeta;
-			}
-		}
-
-		// Try asset resolution
-		Asset asset = engine.resolveAsset(ref, ctx);
-		if (asset != null) {
-			AMap<AString, ACell> meta = asset.meta();
-			if (meta != null) return meta;
-		}
-
-		// Fall back to workspace path resolution in caller's own namespace
-		if (ctx.getCallerDID() != null) {
-			Users users = engine.getVenueState().users();
-			User user = users.get(ctx.getCallerDID());
-			if (user != null) {
-				ACell[] pathKeys = CoviaAdapter.parsePath(ref);
-				if (pathKeys.length > 0) {
-					ACell value = CoviaAdapter.readPath(user.cursor(), pathKeys);
-					if (value instanceof AMap<?,?> vm) return (AMap<AString, ACell>) vm;
-				}
-			}
-		}
+		ACell value = engine.resolvePath(ref, ctx);
+		if (value instanceof AMap<?,?> m) return (AMap<AString, ACell>) m;
 		return null;
 	}
 

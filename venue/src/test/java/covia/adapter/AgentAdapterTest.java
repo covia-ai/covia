@@ -124,7 +124,7 @@ public class AgentAdapterTest {
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "reader-bot",
-				Fields.CONFIG, Strings.create("template:reader")),
+				Fields.CONFIG, Strings.create("v/agents/templates/reader")),
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
@@ -149,7 +149,7 @@ public class AgentAdapterTest {
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "data-worker",
-				Fields.CONFIG, Strings.create("template:worker")),
+				Fields.CONFIG, Strings.create("v/agents/templates/worker")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
@@ -717,7 +717,7 @@ public class AgentAdapterTest {
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "no-state-agent",
-				Fields.CONFIG, Strings.create("template:reader")),
+				Fields.CONFIG, Strings.create("v/agents/templates/reader")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		ACell info = engine.jobs().invokeOperation(
