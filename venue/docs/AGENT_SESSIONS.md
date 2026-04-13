@@ -239,25 +239,42 @@ Sessions are **never deleted** by the framework (audit). Archived sessions can b
 
 ---
 
-## 8. Timeline Rework
+## 8. Timeline as State Snapshots
 
-### 8.1 Today
+### 8.1 Mental model
 
-`g/<agent>/timeline` is a flat vector. Every transition appends one entry containing snapshot data.
+Timeline entries are **agent state snapshots at transition boundaries**, not events or conversation logs. Each entry captures "what the agent looked like at moment T" — not "what happened." This is already true today; the framing matters when sessions enter the picture.
 
-### 8.2 Proposed
+### 8.2 With sessions
 
-`g/<agent>/timeline` becomes the **session-level audit log** at the agent — events like:
+A snapshot includes pointers to all active sessions, not their content:
 
-- `session.created` — id, type, counterparty
-- `session.transition` — sid, summary, ts (lightweight reference, not full snapshot)
-- `session.archived` — sid, reason
+```json
+{
+  "ts": 1776079053991,
+  "transitionId": "...",
+  "summary": "Replied in conv-mike (12 turns)",
+  "sessionsActive": ["conv-mike", "project-ap"],
+  "sessionsTouched": ["conv-mike"]
+}
+```
 
-Per-session detailed history lives at `g/<agent>/sessions/<sid>/history`. The agent-level timeline becomes thin and navigable; the heavy data is per-session.
+That's it. No config copy, no result copy, no inbox/pending/messages duplicated. The snapshot is a marker; the actual content lives in the lattice (state, sessions, config) and is reconstructable from the snapshot's references.
 
-### 8.3 Cross-session view
+### 8.3 What this gives
 
-To see all transitions across all sessions, walk `g/<agent>/sessions/*/history`. The agent-level timeline is for high-level events; detail requires drilling into a session.
+- **Multi-session captured naturally** — every active session is in the snapshot, so "what was the agent doing at time T across all conversations and projects?" is one timeline lookup
+- **Cognitive clarity** — agent reading its own timeline sees "I worked on X, then Y, then Z," not "here's my config 47 times"
+- **Audit semantics improved** — "what was state at transition T?" is answered by walking the lattice from the snapshot's reference, not by inspecting per-entry duplicates
+- **Lattice dedup is automatic** — content addressing means redundant references cost nothing; the structural complexity in the data shape is the real concern, not storage
+
+### 8.4 Cross-session view
+
+To see all transitions across all sessions, the timeline is the right place — each snapshot already lists all active sessions. To see detail within one session, walk that session's history at `g/<agent>/sessions/<sid>/history`.
+
+### 8.5 Could go further (out of scope for v1)
+
+The lattice already tracks state changes via cursor history. Timeline could become a *view* over that history with transition-boundary annotations rather than a separately-appended structure. That's a deeper architectural change deferred for now.
 
 ---
 
