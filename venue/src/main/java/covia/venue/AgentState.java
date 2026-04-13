@@ -291,6 +291,31 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
+	 * Returns a future that completes when this agent reaches SLEEPING.
+	 *
+	 * <p>Implemented by polling the agent record (10ms intervals). Used by
+	 * tests to wait for the run loop to quiesce — no need for explicit
+	 * polling loops in test code. Production code should react to inbox or
+	 * task deliveries rather than poll agent status.</p>
+	 *
+	 * <p>The future never completes exceptionally; callers should apply a
+	 * timeout via {@code .get(timeout, unit)}.</p>
+	 */
+	public java.util.concurrent.CompletableFuture<Void> awaitSleeping() {
+		java.util.concurrent.CompletableFuture<Void> cf = new java.util.concurrent.CompletableFuture<>();
+		java.util.concurrent.CompletableFuture.runAsync(() -> {
+			while (!cf.isDone() && !SLEEPING.equals(getStatus())) {
+				try { Thread.sleep(10); } catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					return;
+				}
+			}
+			cf.complete(null);
+		});
+		return cf;
+	}
+
+	/**
 	 * Merges config and/or state fields into the existing agent record.
 	 *
 	 * <p>Incoming maps are shallow-merged into the existing values so that

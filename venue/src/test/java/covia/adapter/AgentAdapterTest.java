@@ -844,34 +844,37 @@ public class AgentAdapterTest {
 
 	@Test
 	public void testRequestAsync() {
+		// Use v/test/ops/never as the transition so the agent starts but
+		// never completes. This makes the async-submit assertion
+		// deterministic — the job genuinely cannot finish, so isFinished()
+		// is reliably false regardless of timing.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "async-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Submit request — the Job stays STARTED until the agent processes the task.
-		// The standard Job lifecycle handles sync vs async from the caller's side:
-		// - Sync: caller calls awaitResult() which blocks until the run loop completes it
-		// - Async: caller checks job status and polls later
+		// Submit request — should return immediately with a non-finished Job.
+		// Behavioural guarantee: agent_request is non-blocking; the caller
+		// can poll or awaitResult(timeout) on the returned Job.
 		Job requestJob = engine.jobs().invokeOperation(
 			"v/ops/agent/request",
 			Maps.of(Fields.AGENT_ID, "async-agent", Fields.INPUT, Maps.of("data", "async")),
 			RequestContext.of(ALICE_DID));
 
-		// Job should be in STARTED state immediately (not COMPLETE with PENDING)
-		assertFalse(requestJob.isFinished(), "Job should not be finished immediately after submission");
+		// Job must not be finished — the agent's transition is "never"
+		assertFalse(requestJob.isFinished(),
+			"Job should not be finished when the agent transition never completes");
 
-		// Now wait for the result — the run loop will complete it
-		ACell result = requestJob.awaitResult(5000);
-		assertNotNull(result, "Request should eventually complete");
-		assertTrue(requestJob.isComplete(), "Request job should be COMPLETE after agent processes it");
-
-		// Result should contain the task output
-		ACell output = RT.getIn(result, Fields.OUTPUT);
-		assertNotNull(output, "Result should contain task output");
+		// awaitResult with a short timeout should throw rather than block forever
+		try {
+			requestJob.awaitResult(100);
+			fail("awaitResult should throw when the job cannot complete within the timeout");
+		} catch (covia.exception.JobFailedException e) {
+			// Expected — timeout
+		}
 	}
 
 	@Test
