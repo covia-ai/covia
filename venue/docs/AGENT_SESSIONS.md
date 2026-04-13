@@ -247,26 +247,31 @@ Timeline entries are **agent state snapshots at transition boundaries**, not eve
 
 ### 8.2 With sessions
 
-A snapshot includes pointers to all active sessions, not their content:
+A snapshot is the **full agent state at the transition boundary**, including every active session in full:
 
 ```json
 {
   "ts": 1776079053991,
   "transitionId": "...",
-  "summary": "Replied in conv-mike (12 turns)",
-  "sessionsActive": ["conv-mike", "project-ap"],
-  "sessionsTouched": ["conv-mike"]
+  "config": { ... full agent config ... },
+  "state": { ... agent-level state ... },
+  "sessions": {
+    "conv-mike":  { "meta": {...}, "state": {...}, "history": [...] },
+    "project-ap": { "meta": {...}, "state": {...}, "history": [...] }
+  },
+  "inbox": [...],
+  "status": "RUNNING"
 }
 ```
 
-That's it. No config copy, no result copy, no inbox/pending/messages duplicated. The snapshot is a marker; the actual content lives in the lattice (state, sessions, config) and is reconstructable from the snapshot's references.
+Lattice content addressing means unchanged sub-structures are deduplicated automatically — the inactive session's history isn't recopied, the unchanged config map points to the same cell as before. Each snapshot is "logically the whole agent at that moment" but physically only writes what changed.
 
 ### 8.3 What this gives
 
-- **Multi-session captured naturally** — every active session is in the snapshot, so "what was the agent doing at time T across all conversations and projects?" is one timeline lookup
-- **Cognitive clarity** — agent reading its own timeline sees "I worked on X, then Y, then Z," not "here's my config 47 times"
-- **Audit semantics improved** — "what was state at transition T?" is answered by walking the lattice from the snapshot's reference, not by inspecting per-entry duplicates
-- **Lattice dedup is automatic** — content addressing means redundant references cost nothing; the structural complexity in the data shape is the real concern, not storage
+- **Complete reconstruction** — any past state of the agent is fully retrievable from one snapshot, no walking required
+- **Multi-session captured naturally** — every active session is in the snapshot in full
+- **Audit semantics straightforward** — "what was the agent at transition T?" is just reading the snapshot
+- **Lattice dedup makes it free** — only changed cells take new storage; the snapshot's *logical* completeness is the correct mental model, the *physical* delta is the lattice's job
 
 ### 8.4 Cross-session view
 
