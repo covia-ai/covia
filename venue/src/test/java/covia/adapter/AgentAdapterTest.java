@@ -1803,4 +1803,101 @@ public class AgentAdapterTest {
 		assertNull(configMap.get(Strings.create("systemPrompt")),
 			"value should be null (current behaviour — to fully remove, recreate with overwrite:true)");
 	}
+
+	// ========== Templates as lattice data (v/agents/templates/) ==========
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testTemplatesDiscoverableInLattice() {
+		// covia_list path=v/agents/templates returns the 7 standard templates
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/covia/list",
+			Maps.of(Strings.create("path"), Strings.create("v/agents/templates")),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+		assertNotNull(result);
+		assertEquals(CVMLong.create(7), RT.getIn(result, Strings.create("count")));
+		AVector<ACell> keys = RT.ensureVector(RT.getIn(result, Strings.create("keys")));
+		java.util.Set<String> names = new java.util.HashSet<>();
+		for (long i = 0; i < keys.count(); i++) names.add(keys.get(i).toString());
+		assertTrue(names.containsAll(java.util.List.of(
+			"minimal", "reader", "worker", "manager", "analyst", "full", "goaltree")));
+	}
+
+	@Test
+	public void testManagerTemplateRuntimeToolPalette() {
+		// Create from v/agents/templates/manager and verify the runtime tool palette
+		// includes both operation tools and harness tools (subgoal/compact/more_tools).
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "mgr-runtime",
+					Fields.CONFIG, Strings.create("v/agents/templates/manager")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		java.util.Set<String> names = runtimeToolNames("mgr-runtime");
+
+		// Operation tools resolved from paths
+		assertTrue(names.contains("agent_create"), "manager should have agent_create");
+		assertTrue(names.contains("agent_request"), "manager should have agent_request");
+		assertTrue(names.contains("grid_run"), "manager should have grid_run");
+		assertTrue(names.contains("covia_read"), "manager should have covia_read");
+		// Harness tools resolved by name
+		assertTrue(names.contains("subgoal"), "manager should have subgoal");
+		assertTrue(names.contains("compact"), "manager should have compact");
+		assertTrue(names.contains("more_tools"), "manager should have more_tools");
+		// No leakage of operation paths as tool names
+		assertFalse(names.contains("v/ops/agent/create"), "operation path should not appear as tool name");
+	}
+
+	@Test
+	public void testGoaltreeTemplateGetsAllSevenHarnessTools() {
+		// template:goaltree explicitly lists all 7 harness tools — verify all resolve
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "gt-runtime",
+					Fields.CONFIG, Strings.create("v/agents/templates/goaltree")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		java.util.Set<String> names = runtimeToolNames("gt-runtime");
+		for (String harness : new String[]{"subgoal", "complete", "fail", "compact",
+		                                    "context_load", "context_unload", "more_tools"}) {
+			assertTrue(names.contains(harness), "goaltree should have " + harness);
+		}
+	}
+
+	@Test
+	public void testReaderTemplateHasNoHarnessTools() {
+		// template:reader is read-only data analysis — operations only, no harness tools
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "rdr-runtime",
+					Fields.CONFIG, Strings.create("v/agents/templates/reader")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		java.util.Set<String> names = runtimeToolNames("rdr-runtime");
+		// Operations: yes
+		assertTrue(names.contains("covia_read"), "reader should have covia_read");
+		assertTrue(names.contains("covia_list"), "reader should have covia_list");
+		// Harness: no
+		assertFalse(names.contains("subgoal"), "reader should NOT have subgoal");
+		assertFalse(names.contains("compact"), "reader should NOT have compact");
+		assertFalse(names.contains("more_tools"), "reader should NOT have more_tools");
+	}
+
+	/** Builds the L3 input via the same code path as agent:context and returns tool names. */
+	@SuppressWarnings("unchecked")
+	private java.util.Set<String> runtimeToolNames(String agentId) {
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent(agentId);
+		assertNotNull(agent, "agent " + agentId + " should exist");
+		covia.adapter.agent.GoalTreeAdapter adapter =
+			(covia.adapter.agent.GoalTreeAdapter) engine.getAdapter("goaltree");
+		AMap<AString, ACell> l3 = adapter.buildFirstIterationL3Input(
+			agent.getConfig(), agent.getState(), null, RequestContext.of(ALICE_DID));
+		AVector<ACell> tools = RT.ensureVector(l3.get(Strings.create("tools")));
+		assertNotNull(tools, "L3 input should have a tools array");
+		java.util.Set<String> names = new java.util.HashSet<>();
+		for (long i = 0; i < tools.count(); i++) {
+			ACell name = ((AMap<AString, ACell>) tools.get(i)).get(Strings.create("name"));
+			if (name != null) names.add(name.toString());
+		}
+		return names;
+	}
 }
