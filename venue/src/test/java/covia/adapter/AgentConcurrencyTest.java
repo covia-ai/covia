@@ -363,10 +363,17 @@ public class AgentConcurrencyTest {
 		assertNotNull(r1, "First request should complete");
 		assertNotNull(r2, "Second request should complete");
 
-		// Both tasks should have been processed and cleared
+		// Both tasks should have been processed and cleared. The run loop
+		// transitions the agent back to SLEEPING asynchronously after the
+		// awaited task jobs complete — poll briefly for that final state.
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("conc-req");
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		for (int i = 0; i < 100; i++) {
+			if (AgentState.SLEEPING.equals(agent.getStatus())) break;
+			try { Thread.sleep(10); } catch (InterruptedException e) { break; }
+		}
+		assertEquals(AgentState.SLEEPING, agent.getStatus(),
+			"Agent should reach SLEEPING after both run loops complete");
 		assertEquals(0, agent.getTasks().count(), "All tasks should be processed");
 		assertTrue(agent.getTimeline().count() >= 1, "At least one run loop should have executed");
 	}

@@ -1,6 +1,6 @@
 {
 	"name": "Request Agent Task",
-	"description": "Send a request to an agent and get a response. This is the PRIMARY tool for all agent interactions — asking questions, submitting tasks, or requesting actions. Creates a tracked Job with a result. Set wait=true to get the response inline. Use this instead of agent_message unless you explicitly want a fire-and-forget notification.",
+	"description": "Send a request to an agent and get a response. PRIMARY tool for agent delegation. Creates a tracked Job with a result. Example: agent_request(agentId='Helper', input={task: 'summarise w/notes/daily', format: 'bullet list'}, wait=true). The input must carry the full request content — never send {} or the agent has nothing to act on.",
 	"dateCreated": "2026-03-06T00:00:00Z",
 	"operation": {
 		"adapter": "agent:request",
@@ -8,10 +8,10 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Target agent name" },
-				"input": { "type": "object", "description": "Request input data to send to the agent. Pass the full structured data the agent needs — do not summarise or wrap it." },
-				"wait": { "type": "boolean", "description": "Wait for the agent to complete. true = block until done (recommended for pipelines). false or omit = return immediately with PENDING status. Can also be an integer for timeout in milliseconds." }
+				"input": { "type": "object", "description": "The request payload. Must contain the actual instructions, data, or parameters the agent needs to do the work. An empty object {} means the agent has nothing to act on — always populate this field with the full task content." },
+				"wait": { "type": "boolean", "description": "Wait for the agent to complete. true = block until done (recommended — you usually want the result). false = return PENDING immediately. Integer = timeout in ms." }
 			},
-			"required": ["agentId"]
+			"required": ["agentId", "input"]
 		},
 		"output": {
 			"type": "object",
