@@ -156,19 +156,43 @@ Analyse Beta Inc: products, financials, market position.
 
 Ancestor budget is configurable. Rule of thumb: parent ~300B, grandparent ~150B, great-grandparent ~80B. CellExplorer renders each ancestor's conversation at its budget — segments show as summaries, live turns may be truncated.
 
-## Harness Tools (4)
+## Harness Tools (7, opt-in)
 
-These are built-in tools handled directly by GoalTreeAdapter, following the same pattern as `complete_task` / `fail_task` / `context_load` / `context_unload` in LLMAgentAdapter. They are always included in the tool palette alongside the agent's configured operation tools.
+GoalTreeAdapter provides 7 built-in tools. **All are opt-in** — agents declare which ones they need in `state.config.tools` alongside operation paths. Zero harness tools by default — a bare chatbot just responds with text.
 
-### `subgoal` -- Open a subgoal
+```json5
+"tools": ["subgoal", "compact", "more_tools", "v/ops/covia/read"]
+```
+
+The registry:
+
+| Name | Purpose |
+|------|---------|
+| `subgoal` | Delegate work to an isolated child frame |
+| `complete` | Return structured result (auto-injected with typed outputs) |
+| `fail` | Report failure with structured error (auto-injected with typed outputs) |
+| `compact` | Archive conversation to a summary, freeing context space |
+| `context_load` | Pin workspace data in context across turns |
+| `context_unload` | Remove pinned data |
+| `more_tools` | Add operations to the tool set at runtime |
+
+### Typed outputs auto-inject complete/fail
+
+When `state.config.outputs.complete.schema` is declared, the harness auto-injects typed `complete` and `fail` tools with schema-enforced parameters — no need to list them in `config.tools`. The LLM's tool call arguments must match the declared schema (enforced by OpenAI `strictTools`). Text-only responses are rejected.
+
+```json5
+"outputs": {
+  "complete": { "schema": { "type": "object", "properties": {...}, "required": [...], "additionalProperties": false } }
+}
+```
+
+### `subgoal` — Open a subgoal
 
 ```json5
 {
   name: "subgoal",
-  description: "Open a subgoal frame. Brackets a section of work -- the child sees its description, ancestor context (summarised), and inherited loads. Runs until the child calls complete() or fail(), or produces a text-only response (implicit complete). Returns the child's structured result.",
-  parameters: {
-    description: { type: "string", description: "What the subgoal should accomplish" }
-  },
+  description: "Delegate a self-contained piece of work to a child frame. The child runs independently with its own conversation and tool access. Returns the child's result as a tool result.",
+  parameters: { description: { type: "string" } },
   returns: "{status: 'complete', result: any} or {status: 'failed', error: any}"
 }
 ```
@@ -184,39 +208,28 @@ When the parent calls `subgoal`:
 
 No concurrency. The stack exists for the same reason a CPU has a call stack — to know where to return to and what context to restore.
 
-### `complete` -- Return result to parent
+### `complete` and `fail` — Return result to parent
+
+**Flattened parameters:** the entire tool input IS the result/error. No `result`/`error` wrapper.
 
 ```json5
-{
-  name: "complete",
-  description: "Finish current goal with structured result. Returns to parent.",
-  parameters: {
-    result: { type: "object", description: "Structured result value" }
-  }
-}
+// Untyped: parameters are open object — pass any fields
+complete({any: "data", you: "want"})
+fail({reason: "API key invalid", details: "401 from openai.com"})
+
+// Typed: parameters ARE the user's schema (strictTools enforced)
+complete({invoice_number: "INV-001", decision: "APPROVED", ...})
 ```
 
-### `fail` -- Return error to parent
+Protocol limitation: LLM tool call arguments must be JSON objects (OpenAI, Anthropic, all major providers). Agents cannot return arrays or primitives directly — wrap them: `complete({items: [...]})`.
 
-```json5
-{
-  name: "fail",
-  description: "Fail current goal with error info. Parent can retry, skip, or escalate.",
-  parameters: {
-    error: { type: "object", description: "Structured error information" }
-  }
-}
-```
-
-### `compact` -- Checkpoint conversation
+### `compact` — Checkpoint conversation
 
 ```json5
 {
   name: "compact",
-  description: "Checkpoint your conversation so far. Live turns become a compacted segment with your summary. Frees context space for continued work. Data is not lost -- the segment retains all turns, just rendered at reduced detail by CellExplorer.",
-  parameters: {
-    summary: { type: "string", description: "Your summary of the work done so far (required -- only you know what matters)" }
-  }
+  description: "Archive your conversation so far into a summary you write. Frees context space.",
+  parameters: { summary: { type: "string" } }
 }
 ```
 
@@ -228,10 +241,9 @@ When the agent calls `compact`:
 
 The `summary` parameter is required — only the LLM knows what matters in the work done so far. The harness prompts when compaction is needed but the agent writes the summary:
 
-- **70%**: harness appends system note: "Context at 72% capacity. Consider calling compact(summary) to free space."
-- **90%**: harness appends stronger note: "Context at 92% capacity. You must compact now or context will be truncated."
+**Auto-compact nudge (current):** When live turn count exceeds `AUTO_COMPACT_THRESHOLD` (20) and the agent has `compact` in its tool set, the harness injects a system message: "Your conversation has N turns. Call compact(summary) now to free context space before continuing." The LLM decides whether to compact.
 
-If the LLM still doesn't compact after the 90% warning, the harness truncates the oldest live turns (they're still on the lattice, just no longer in the active context).
+**Future (planned):** byte-budget-based thresholds (70% / 90%) with hard truncation of oldest turns at 90% if the LLM ignores the nudge.
 
 ## Compacted Segment Structure
 

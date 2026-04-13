@@ -1,6 +1,6 @@
 # Agent Context — Implementation Plan
 
-**Status:** Partially complete, April 2026
+**Status:** Closure criteria met (April 2026). Only §5.2 (context entry cache) remains open. Safe to delete this tracker once §5.2 is decided one way or the other.
 **Target designs:** [LATTICE_CONTEXT.md](./LATTICE_CONTEXT.md), [GOAL_TREE.md](./GOAL_TREE.md)
 **Older draft:** [CONTEXT.md](./CONTEXT.md) — partially superseded
 
@@ -157,8 +157,8 @@ prior invoices).
 | Option C | Transcript model in LLMAgentAdapter | ✅ commit `43d1dd8` |
 | §5.1 | Tool list cache | ✅ Done — per-Engine cache of resolved default tools, ~10ms saved per turn |
 | §5.2 | Context entry cache with versioning | Open — compounding leverage |
-| §5.3 | Curated default tool subset | Open — separate design |
-| §5.4 | Compaction strategy for transcript | Open — needed for long-running agents |
+| §5.3 | Curated default tool subset | ✅ Done — opt-in tools model: `defaultTools: false` + explicit `tools` list. All 7 harness tools also opt-in via name. See AGENT_LOOP.md §3.6 |
+| §5.4 | Compaction strategy for transcript | ✅ Done — `compact` harness tool + auto-compact nudge when conversation exceeds 20 turns and agent has compact in its tool set |
 | §5.5 | Verify GoalTreeAdapter ancestor rendering | ✅ Verified |
 | §5.6 | Typed agent outputs | ✅ commit `a02a5bb` — see §9 |
 | §5.7 | Strict mode enabled | ✅ commit `9016c0f` |

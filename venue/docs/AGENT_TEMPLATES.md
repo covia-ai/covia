@@ -249,9 +249,12 @@ Installed at venue startup by `AgentAdapter.installAssets` via `installTemplate(
 | `template:minimal` | (none, `defaultTools: false`) | Pure reasoning, no side effects |
 | `template:reader` | covia:read, covia:list, covia:slice | Read-only data analysis |
 | `template:worker` | covia:read/write/delete/append/slice/list | General data processing |
-| `template:manager` | agent:create/fork/message/request/list/info/cancelTask, covia:read/list | Agent coordination |
+| `template:manager` | agent CRUD ops, covia:read/list, grid:run, **subgoal/compact/more_tools** | Agent coordination with goal decomposition |
 | `template:analyst` | covia:read/list/slice, schema:validate/infer/coerce | Data analysis with schema awareness |
-| `template:full` | All default tools (`defaultTools: true`) | Development and exploration |
+| `template:goaltree` | Curated covia + grid + asset ops + all 7 harness tools | Goal-tree agent with full decomposition support |
+| `template:full` | All default tools + all 7 harness tools (`defaultTools: true`) | Development and exploration |
+
+**Tools are opt-in.** Each template explicitly lists the tools it needs in `config.tools`. Set `defaultTools: false` to disable the legacy 18-tool default set. Harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`) are also opt-in — include their names in `config.tools`. Typed outputs (`config.outputs`) auto-inject `complete`/`fail` regardless of the tools list.
 
 Template JSON files live in `venue/src/main/resources/agent-templates/`.
 
