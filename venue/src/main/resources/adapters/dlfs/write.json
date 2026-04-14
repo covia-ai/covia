@@ -1,6 +1,6 @@
 {
   "name": "Write DLFS File",
-  "description": "Write text content to a file in a DLFS drive. Creates the file if it does not exist; overwrites if it does. Parent directories must already exist — use dlfs:mkdir first if needed.",
+  "description": "Write content to a file in a DLFS drive. Creates the file if it does not exist; overwrites if it does. Parent directories must already exist — use dlfs:mkdir first if needed. Accepts UTF-8 text via 'content', a JSON-serialisable value via 'value', or a content-addressed asset via 'asset'. Binary uploads from clients should use the WebDAV PUT transport at /dlfs/{drive}/{path} directly.",
   "creator": "Covia",
   "operation": {
     "adapter": "dlfs:write",
@@ -9,7 +9,8 @@
       "properties": {
         "drive": { "type": "string", "description": "Drive name" },
         "path": { "type": "string", "description": "File path within the drive" },
-        "content": { "type": "string", "description": "Text content to write (use this OR asset, not both)" },
+        "content": { "type": "string", "description": "UTF-8 text to write. Use exactly one of 'content', 'value', or 'asset'." },
+        "value": { "description": "JSON-serialisable value to write as UTF-8 JSON. Use exactly one of 'content', 'value', or 'asset'." },
         "asset": { "type": "string", "description": "Asset reference to write as file content (e.g. '/a/0x1234...', DID URL). Streams binary directly — no size limit." }
       },
       "required": ["drive", "path"]

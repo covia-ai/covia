@@ -1,6 +1,6 @@
 {
   "name": "Read DLFS File",
-  "description": "Read file contents from a DLFS drive. Returns text (UTF-8) or base64-encoded content for binary files, plus file size.",
+  "description": "Read a file from a DLFS drive. The 'mode' parameter controls how the file is returned: 'auto' (default) returns UTF-8 text for text files, or a reference with a WebDAV URL for binaries; 'text' forces UTF-8 decoding; 'bytes' returns base64-encoded bytes; 'json' parses the file as JSON and returns the value. For binary files, prefer fetching via the WebDAV GET transport at /dlfs/{drive}/{path} rather than using 'bytes' mode.",
   "creator": "Covia",
   "operation": {
     "adapter": "dlfs:read",
@@ -8,16 +8,20 @@
       "type": "object",
       "properties": {
         "drive": { "type": "string", "description": "Drive name" },
-        "path": { "type": "string", "description": "File path within the drive" }
+        "path": { "type": "string", "description": "File path within the drive" },
+        "mode": { "type": "string", "enum": ["auto", "text", "bytes", "json"], "description": "How to decode the file. Default 'auto'." }
       },
       "required": ["drive", "path"]
     },
     "output": {
       "type": "object",
       "properties": {
-        "content": { "type": "string", "description": "File content (text or base64)" },
-        "encoding": { "type": "string", "description": "utf-8 or base64" },
-        "size": { "type": "integer", "description": "Size in bytes" }
+        "content": { "type": "string", "description": "File content (present for modes auto/text/bytes). Text for utf-8 encoding, base64 for bytes." },
+        "value": { "description": "Parsed JSON value (present for mode=json only)." },
+        "encoding": { "type": "string", "description": "'utf-8', 'base64', or 'binary'. 'binary' means bytes were not inlined — fetch via the 'url' field." },
+        "size": { "type": "integer", "description": "Size in bytes" },
+        "mime": { "type": "string", "description": "Best-guess MIME type" },
+        "url": { "type": "string", "description": "WebDAV URL to fetch raw bytes (present when encoding=binary)" }
       }
     }
   }

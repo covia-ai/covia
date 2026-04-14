@@ -276,8 +276,9 @@ public class VenueServer {
 		DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
 
 		// Wrap the adapter's lattice drives as a DLFSDriveManager for WebDAV.
-		// Unauthenticated requests use the venue's public DID.
-		String publicDID = engine.getDIDString().toString();
+		// Unauthenticated requests use the venue's public DID (must match
+		// AuthMiddleware's ":public" suffix so WebDAV and REST share a drive).
+		String publicDID = engine.getDIDString().toString() + ":public";
 		DLFSDriveManager webdavManager = new DLFSDriveManager() {
 			private String resolveIdentity(String identity) {
 				return (identity != null) ? identity : publicDID;

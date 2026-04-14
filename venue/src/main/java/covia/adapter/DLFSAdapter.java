@@ -80,7 +80,10 @@ public class DLFSAdapter extends AAdapter {
 	private static final AString FIELD_PATH = Strings.intern("path");
 	private static final AString FIELD_NAME = Strings.intern("name");
 	private static final AString FIELD_CONTENT = Strings.intern("content");
+	private static final AString FIELD_VALUE = Strings.intern("value");
 	private static final AString FIELD_ASSET = Strings.intern("asset");
+	private static final AString FIELD_MODE = Strings.intern("mode");
+	private static final AString FIELD_MIME = Strings.intern("mime");
 
 	@Override
 	public String getName() {
@@ -327,25 +330,74 @@ public class DLFSAdapter extends AAdapter {
 	}
 
 	private ACell handleRead(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
-		FileSystem fs = requireDrive(ctx, input);
+		AString driveCell = RT.ensureString(input.get(FIELD_DRIVE));
+		if (driveCell == null) throw new IllegalArgumentException("'drive' is required");
+		String driveName = driveCell.toString();
+		FileSystem fs = getDrive(ctx, driveName);
+
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 
+		AString modeCell = RT.ensureString(input.get(FIELD_MODE));
+		String mode = modeCell != null ? modeCell.toString() : "auto";
+
 		Path path = resolvePath(fs, pathCell.toString());
 		byte[] bytes = Files.readAllBytes(path);
+		String mime = MimeUtils.guess(pathCell.toString(), bytes);
+		CVMLong size = CVMLong.create(bytes.length);
 
-		if (isLikelyText(bytes)) {
-			return Maps.of(
-				"content", new String(bytes, StandardCharsets.UTF_8),
-				"encoding", "utf-8",
-				"size", CVMLong.create(bytes.length)
-			);
-		} else {
-			return Maps.of(
-				"content", Base64.getEncoder().encodeToString(bytes),
-				"encoding", "base64",
-				"size", CVMLong.create(bytes.length)
-			);
+		switch (mode) {
+			case "auto": {
+				if (isLikelyText(bytes)) {
+					return Maps.of(
+						"content", new String(bytes, StandardCharsets.UTF_8),
+						"encoding", "utf-8",
+						"size", size,
+						"mime", mime
+					);
+				}
+				// Binary: return a reference to the WebDAV URL — caller fetches bytes there
+				return Maps.of(
+					"encoding", "binary",
+					"size", size,
+					"mime", mime,
+					"url", buildWebDAVUrl(driveName, pathCell.toString())
+				);
+			}
+			case "text": {
+				if (!isLikelyText(bytes)) {
+					throw new IllegalArgumentException("File is not valid UTF-8 text");
+				}
+				return Maps.of(
+					"content", new String(bytes, StandardCharsets.UTF_8),
+					"encoding", "utf-8",
+					"size", size,
+					"mime", mime
+				);
+			}
+			case "bytes": {
+				return Maps.of(
+					"content", Base64.getEncoder().encodeToString(bytes),
+					"encoding", "base64",
+					"size", size,
+					"mime", mime
+				);
+			}
+			case "json": {
+				ACell value;
+				try {
+					value = convex.core.util.JSON.parse(new String(bytes, StandardCharsets.UTF_8));
+				} catch (Exception e) {
+					throw new IllegalArgumentException("File is not valid JSON: " + e.getMessage());
+				}
+				return Maps.of(
+					"value", value,
+					"size", size,
+					"mime", mime
+				);
+			}
+			default:
+				throw new IllegalArgumentException("Unknown mode '" + mode + "'. Expected: auto, text, bytes, json");
 		}
 	}
 
@@ -355,7 +407,17 @@ public class DLFSAdapter extends AAdapter {
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 
 		AString contentCell = RT.ensureString(input.get(FIELD_CONTENT));
+		ACell valueCell = input.get(FIELD_VALUE);
+		boolean hasValue = input.containsKey(FIELD_VALUE);
 		AString assetRef = RT.ensureString(input.get(FIELD_ASSET));
+
+		int supplied = (contentCell != null ? 1 : 0) + (hasValue ? 1 : 0) + (assetRef != null ? 1 : 0);
+		if (supplied == 0) {
+			throw new IllegalArgumentException("Exactly one of 'content' (UTF-8 text), 'value' (JSON), or 'asset' (reference) is required");
+		}
+		if (supplied > 1) {
+			throw new IllegalArgumentException("Only one of 'content', 'value', or 'asset' may be supplied");
+		}
 
 		Path path = resolvePath(fs, pathCell.toString());
 		boolean isNew = !Files.exists(path);
@@ -371,14 +433,18 @@ public class DLFSAdapter extends AAdapter {
 				if (is == null) throw new IllegalArgumentException("Asset has no content: " + assetRef);
 				written = is.transferTo(os);
 			}
-		} else if (contentCell != null) {
-			// Inline text content
-			byte[] bytes = contentCell.toString().getBytes(StandardCharsets.UTF_8);
+		} else if (hasValue) {
+			// JSON-serialised value
+			byte[] bytes = convex.core.util.JSON.print(valueCell).toString().getBytes(StandardCharsets.UTF_8);
 			Files.write(path, bytes,
 				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
 			written = bytes.length;
 		} else {
-			throw new IllegalArgumentException("Either 'content' (text) or 'asset' (reference) is required");
+			// Inline UTF-8 text content
+			byte[] bytes = contentCell.toString().getBytes(StandardCharsets.UTF_8);
+			Files.write(path, bytes,
+				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+			written = bytes.length;
 		}
 
 		return Maps.of(
@@ -412,5 +478,23 @@ public class DLFSAdapter extends AAdapter {
 			if (b == 0) return false;
 		}
 		return true;
+	}
+
+	/**
+	 * Builds a URL-encoded WebDAV path: {@code /dlfs/{drive}/{path}}, with each
+	 * path component encoded so spaces and other special characters survive.
+	 */
+	private static String buildWebDAVUrl(String drive, String path) {
+		StringBuilder sb = new StringBuilder("/dlfs/");
+		sb.append(java.net.URLEncoder.encode(drive, StandardCharsets.UTF_8).replace("+", "%20"));
+		if (path != null && !path.isEmpty()) {
+			// Strip leading slashes and encode each segment
+			String p = path.startsWith("/") ? path.substring(1) : path;
+			for (String seg : p.split("/", -1)) {
+				sb.append('/');
+				sb.append(java.net.URLEncoder.encode(seg, StandardCharsets.UTF_8).replace("+", "%20"));
+			}
+		}
+		return sb.toString();
 	}
 }

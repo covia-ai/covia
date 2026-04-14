@@ -1,6 +1,6 @@
 {
   "name": "Write Vault File",
-  "description": "Write a file to the user's health vault. Creates the file if it does not exist; overwrites if it does. Use vault:mkdir first to create parent directories.",
+  "description": "Write a file to the user's health vault. Creates the file if it does not exist; overwrites if it does. Use vault:mkdir first to create parent directories. Accepts UTF-8 text via 'content', a JSON-serialisable value via 'value', or a content-addressed asset via 'asset'. Binary uploads from clients should use the WebDAV PUT transport at /dlfs/health-vault/{path} directly.",
   "creator": "Covia",
   "operation": {
     "adapter": "vault:write",
@@ -8,7 +8,8 @@
       "type": "object",
       "properties": {
         "path": { "type": "string", "description": "File path within the vault (e.g. 'documents/referral.json')" },
-        "content": { "type": "string", "description": "Text content to write (use this OR asset, not both)" },
+        "content": { "type": "string", "description": "UTF-8 text to write. Use exactly one of 'content', 'value', or 'asset'." },
+        "value": { "description": "JSON-serialisable value to write as UTF-8 JSON. Use exactly one of 'content', 'value', or 'asset'." },
         "asset": { "type": "string", "description": "Asset reference to write as file content (e.g. '/a/0x1234...', DID URL). Streams binary directly." }
       },
       "required": ["path"]

@@ -1,0 +1,10 @@
+{
+  "venues": [
+    {
+      "name": "Local Test Venue",
+      "hostname": "localhost",
+      "mcp": {},
+      "webdav": { "enabled": true }
+    }
+  ]
+}

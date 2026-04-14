@@ -1,22 +1,26 @@
 {
   "name": "Read Vault File",
-  "description": "Read a file from the user's health vault. Returns text (UTF-8) or base64-encoded content for binary files.",
+  "description": "Read a file from the user's health vault. The 'mode' parameter controls how the file is returned: 'auto' (default) returns UTF-8 text for text files, or a reference with a WebDAV URL for binaries; 'text' forces UTF-8 decoding; 'bytes' returns base64-encoded bytes; 'json' parses the file as JSON and returns the value. For binary files, prefer fetching via the WebDAV GET transport at /dlfs/health-vault/{path} rather than using 'bytes' mode.",
   "creator": "Covia",
   "operation": {
     "adapter": "vault:read",
     "input": {
       "type": "object",
       "properties": {
-        "path": { "type": "string", "description": "File path within the vault (e.g. 'documents/blood-panel-q4.json')" }
+        "path": { "type": "string", "description": "File path within the vault (e.g. 'documents/blood-panel-q4.json')" },
+        "mode": { "type": "string", "enum": ["auto", "text", "bytes", "json"], "description": "How to decode the file. Default 'auto'." }
       },
       "required": ["path"]
     },
     "output": {
       "type": "object",
       "properties": {
-        "content": { "type": "string", "description": "File content (text or base64)" },
-        "encoding": { "type": "string", "description": "utf-8 or base64" },
-        "size": { "type": "integer", "description": "Size in bytes" }
+        "content": { "type": "string", "description": "File content (present for modes auto/text/bytes)." },
+        "value": { "description": "Parsed JSON value (present for mode=json only)." },
+        "encoding": { "type": "string", "description": "'utf-8', 'base64', or 'binary'." },
+        "size": { "type": "integer", "description": "Size in bytes" },
+        "mime": { "type": "string", "description": "Best-guess MIME type" },
+        "url": { "type": "string", "description": "WebDAV URL to fetch raw bytes (present when encoding=binary)" }
       }
     }
   }
