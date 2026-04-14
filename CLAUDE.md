@@ -18,7 +18,7 @@ covia/                          # ai.covia:covia:0.0.2-SNAPSHOT (parent POM)
 │       └── grid/impl/          #   Content implementations (BlobContent, LatticeContent)
 ├── venue/                      # Main venue server runtime (produces covia.jar)
 │   └── src/main/java/covia/
-│       ├── adapter/            #   Adapter framework + 18 implementations
+│       ├── adapter/            #   Adapter framework and implementations
 │       ├── lattice/            #   Lattice definitions (Covia.ROOT, Covia.VENUE)
 │       ├── venue/              #   Engine, MainVenue, Config, Auth, LocalVenue
 │       ├── venue/api/          #   REST API (CoviaAPI), MCP, A2A, UserAPI
@@ -181,11 +181,11 @@ The engine always resolves operation references to metadata before dispatching �
 }
 ```
 
-## Current State (as of 2026-04)
+## Current State
 
 ### What Works Well
 
-- Clean adapter abstraction with 18 pluggable backends
+- Clean adapter abstraction with many pluggable backends
 - Lattice foundation with CRDT merge semantics
 - Content-addressed assets (CAD3 value hash)
 - Async job model with CompletableFuture and SSE
@@ -206,9 +206,9 @@ The engine always resolves operation references to metadata before dispatching �
 
 - [x] **Add authorization enforcement** — Job ownership enforced via `AccessControl` + `JobManager`. Per-user job persistence. Capability enforcement (UCAN `with`/`can`) planned for Phase 3/4.
 
-- [x] **Agent workspace CRUD** — `/w/`, `/o/`, `/h/` namespaces with full CRUD, deep path navigation, vector indexing, JSONValueLattice, `/o/` operation resolution, default agent tools. 550 tests.
+- [x] **Agent workspace CRUD** — `/w/`, `/o/`, `/h/` namespaces with full CRUD, deep path navigation, vector indexing, JSONValueLattice, `/o/` operation resolution, default agent tools.
 
-- [x] **UCAN capability enforcement (Phase C1)** — Venue-signed UCAN tokens via `ucan:issue`. Per-request proof presentation in `RequestContext`. Cross-user reads verified via `UCANValidator` + `Capability.covers()` from convex-core. Full DID URL resources. Transport-level `ucans` field in REST envelope. Adversarial tests (forged signature, wrong audience, expired, wrong ability). 561 tests.
+- [x] **UCAN capability enforcement (Phase C1)** — Venue-signed UCAN tokens via `ucan:issue`. Per-request proof presentation in `RequestContext`. Cross-user reads verified via `UCANValidator` + `Capability.covers()` from convex-core. Full DID URL resources. Transport-level `ucans` field in REST envelope. Adversarial tests (forged signature, wrong audience, expired, wrong ability).
 
 ### P1 — High (security and reliability)
 

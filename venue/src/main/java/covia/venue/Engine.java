@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -110,7 +111,7 @@ public class Engine {
 	/**
 	 * Map of named adapters that can handle different types of operations or resources
 	 */
-	protected final HashMap<String, AAdapter> adapters = new HashMap<>();
+	protected final ConcurrentHashMap<String, AAdapter> adapters = new ConcurrentHashMap<>();
 
 	/**
 	 * Persistence callback supplied at construction. Wired by VenueServer to
@@ -578,7 +579,7 @@ public class Engine {
 	 * Register an adapter
 	 * @param adapter The adapter instance to register
 	 */
-	public void registerAdapter(AAdapter adapter) {
+	public synchronized void registerAdapter(AAdapter adapter) {
 		String name = adapter.getName();
 		if (adapters.containsKey(name) ) {
 			throw new IllegalStateException("Trying to install same adapter twice: "+name);
