@@ -1038,39 +1038,6 @@ public class AgentAdapterTest {
 		assertNotNull(output, "Polling should retrieve the output");
 	}
 
-	@Test
-	public void testRequestWaitParamIgnored() {
-		// The 'wait' parameter in the input is now irrelevant — both paths produce
-		// the same Job lifecycle. Verify that wait:true and no-wait behave identically.
-		engine.jobs().invokeOperation(
-			"v/ops/agent/create",
-			Maps.of(Fields.AGENT_ID, "wait-ignored-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
-			RequestContext.of(ALICE_DID)).awaitResult(5000);
-
-		// With wait:true
-		Job withWait = engine.jobs().invokeOperation(
-			"v/ops/agent/request",
-			Maps.of(Fields.AGENT_ID, "wait-ignored-agent",
-				Fields.INPUT, Maps.of("q", "a"), Fields.WAIT, CVMBool.TRUE),
-			RequestContext.of(ALICE_DID));
-		ACell r1 = withWait.awaitResult(5000);
-
-		// Without wait
-		Job withoutWait = engine.jobs().invokeOperation(
-			"v/ops/agent/request",
-			Maps.of(Fields.AGENT_ID, "wait-ignored-agent",
-				Fields.INPUT, Maps.of("q", "b")),
-			RequestContext.of(ALICE_DID));
-		ACell r2 = withoutWait.awaitResult(5000);
-
-		// Both should complete with task output
-		assertTrue(withWait.isComplete());
-		assertTrue(withoutWait.isComplete());
-		assertNotNull(RT.getIn(r1, Fields.OUTPUT), "wait:true should have output");
-		assertNotNull(RT.getIn(r2, Fields.OUTPUT), "no wait should have output");
-	}
-
 	// ========== agent:query ==========
 
 	@Test

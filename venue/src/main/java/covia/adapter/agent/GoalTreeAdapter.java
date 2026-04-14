@@ -300,11 +300,16 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		AMap<AString, ACell> outputs = resolveOutputs(config);
 		AMap<AString, ACell> completeSchema = outputsCompleteSchema(outputs);
 		AMap<AString, ACell> l3Config = config;
+		AVector<ACell> typedTools = null;
 		if (completeSchema != null && config != null) {
 			AMap<AString, ACell> responseFormat = Maps.of(
 				Strings.create("name"), Strings.create("agent_output"),
 				Strings.create("schema"), completeSchema);
 			l3Config = config.assoc(K_RESPONSE_FORMAT, responseFormat);
+			AMap<AString, ACell> failSchema = outputsFailSchema(outputs);
+			typedTools = (AVector<ACell>) Vectors.of(
+				(ACell) typedCompleteTool(completeSchema),
+				(ACell) typedFailTool(failSchema));
 		}
 
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
@@ -320,7 +325,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 		// --- same as first iteration of runFrame ---
 		AVector<ACell> harnessTools = resolveHarnessTools(config);
-		AVector<ACell> allTools = (AVector<ACell>) harnessTools.concat(baseTools);
+		AVector<ACell> allTools = (typedTools != null)
+			? (AVector<ACell>) typedTools.concat(harnessTools).concat(baseTools)
+			: (AVector<ACell>) harnessTools.concat(baseTools);
 
 		AVector<ACell> fullHistory = context.history();
 
@@ -384,9 +391,17 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 		// Resolve the response schema. Order: per-request responseSchema
 		// (passed in agent_request) overrides the agent's config.outputs
-		// default. When a schema is in effect, it's injected into the L3
-		// config as response_format and OpenAI enforces it on the assistant's
-		// text response (server-side).
+		// default. When a schema is in effect, the framework supports BOTH
+		// completion paths to maximise provider compatibility:
+		//   1. response_format with the schema — OpenAI/Gemini/Mistral/etc.
+		//      enforce conformance server-side on the assistant's text
+		//      response. This is the preferred path where supported.
+		//   2. Typed complete/fail tools with the schema as parameters —
+		//      works on Anthropic and other providers without response_format
+		//      JSON schema support. The LLM calls complete(...) and the
+		//      harness extracts the args as the result.
+		// The agent author chooses how to coach the LLM via the system
+		// prompt; the framework wires up both mechanisms.
 		AMap<AString, ACell> outputs = resolveOutputs(config);
 		AMap<AString, ACell> defaultSchema = outputsCompleteSchema(outputs);
 		AMap<AString, ACell> perRequestSchema = extractPerRequestResponseSchema(tasks);
@@ -399,6 +414,18 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 				Strings.create("name"), Strings.create("agent_output"),
 				Strings.create("schema"), activeSchema);
 			l3Config = config.assoc(K_RESPONSE_FORMAT, responseFormat);
+		}
+
+		// Build typed harness tools (complete/fail) when typed outputs are active.
+		// Use the active schema (per-request override or agent default).
+		AVector<ACell> typedHarnessTools = null;
+		if (typedOutputs) {
+			AMap<AString, ACell> failSchema = (perRequestSchema != null)
+				? DEFAULT_FAIL_SCHEMA  // per-request schema only specifies complete
+				: outputsFailSchema(outputs);
+			typedHarnessTools = (AVector<ACell>) Vectors.of(
+				(ACell) typedCompleteTool(activeSchema),
+				(ACell) typedFailTool(failSchema));
 		}
 
 		// Generate root goal description from incoming work
@@ -429,11 +456,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// Set up capability-scoped context for tool dispatch
 		RequestContext capsCtx = context.capsCtx();
 
-		// Run the root frame. typedOutputs flag tells runFrame whether the
-		// LLM is expected to emit a structured response (parsed as JSON) or
-		// free text.
+		// Run the root frame. typedHarnessTools (if non-null) injects the
+		// typed complete/fail tools alongside the regular harness/operation
+		// tools, supporting providers that prefer tool calls over response_format.
 		FrameResult result = runFrame(job, frames, 0, l3Config, llmOperation, baseTools,
-			configToolMap, caps, capsCtx, context.history(), typedOutputs);
+			configToolMap, caps, capsCtx, context.history(), typedHarnessTools);
 
 		// Goal tree is stateless across transitions for everything except config:
 		// the frame stack is in-memory only. Config (caps, responseFormat, prompt,
@@ -523,9 +550,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	 * @param caps capability attenuations
 	 * @param ctx request context for tool dispatch
 	 * @param systemMessages system messages (prompt, context entries)
-	 * @param typedOutputsRoot true if the root frame has typed outputs (the
-	 *        L3 responseFormat enforces a schema on the LLM's text response).
-	 *        Only the root frame inherits this — child subgoals are free-form.
+	 * @param typedRootHarnessTools typed complete/fail tools injected at the
+	 *        root frame (alongside config-resolved harness tools), or null
+	 *        for untyped agents. When non-null, the root frame ALSO has
+	 *        response_format set in its L3 config — both completion paths
+	 *        are wired up. Children are always free-form.
 	 * @return the frame's result
 	 */
 	@SuppressWarnings("unchecked")
@@ -533,16 +562,45 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			AMap<AString, ACell> config, AString llmOperation,
 			AVector<ACell> baseToolsParam, Map<String, AString> configToolMap,
 			AVector<ACell> caps, RequestContext ctx, AVector<ACell> systemMessages,
-			boolean typedOutputsRoot) {
+			AVector<ACell> typedRootHarnessTools) {
 
 		// Mutable copy — more_tools can append to this mid-run
 		AVector<ACell> baseTools = baseToolsParam;
 
 		// Harness tool selection: from config.tools. Child frames exclude
 		// subgoal (prevents unnecessary nesting from smaller models).
+		// Plus typed complete/fail tools at the root frame when typed
+		// outputs are active (deduplicated against any complete/fail in
+		// config.tools — typed wins).
 		AVector<ACell> harnessForFrame;
 		if (frameIndex == 0) {
-			harnessForFrame = resolveHarnessTools(config);
+			AVector<ACell> configHarness = resolveHarnessTools(config);
+			if (typedRootHarnessTools != null) {
+				// Typed complete/fail wins; filter out any duplicates from config
+				java.util.Set<String> typedNames = new java.util.HashSet<>();
+				for (long i = 0; i < typedRootHarnessTools.count(); i++) {
+					ACell t = typedRootHarnessTools.get(i);
+					if (t instanceof AMap) {
+						ACell n = ((AMap<?,?>) t).get(K_NAME);
+						if (n != null) typedNames.add(n.toString());
+					}
+				}
+				AVector<ACell> merged = typedRootHarnessTools;
+				for (long i = 0; i < configHarness.count(); i++) {
+					ACell t = configHarness.get(i);
+					String n = null;
+					if (t instanceof AMap) {
+						ACell nc = ((AMap<?,?>) t).get(K_NAME);
+						if (nc != null) n = nc.toString();
+					}
+					if (n == null || !typedNames.contains(n)) {
+						merged = merged.conj(t);
+					}
+				}
+				harnessForFrame = merged;
+			} else {
+				harnessForFrame = configHarness;
+			}
 		} else {
 			// Child frames: resolve from config but exclude subgoal
 			AVector<ACell> childHarness = resolveHarnessTools(config);
@@ -560,7 +618,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		}
 		// Typed outputs only at the root frame — children produce free-form
 		// results back to their parent
-		boolean typedOutputs = (frameIndex == 0 && typedOutputsRoot);
+		boolean typedOutputs = (frameIndex == 0 && typedRootHarnessTools != null);
 		// Strip responseFormat from the L3 config for child frames so they
 		// can produce arbitrary results back to the parent
 		AMap<AString, ACell> frameL3Config = (frameIndex == 0)
@@ -816,7 +874,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					// child also gets responseFormat stripped from its L3
 					// config (handled inside the recursive runFrame).
 					FrameResult childResult = runFrame(job, childFrames, frameIndex + 1,
-						config, llmOperation, baseTools, configToolMap, caps, ctx, systemMessages, false);
+						config, llmOperation, baseTools, configToolMap, caps, ctx, systemMessages, null);
 
 					// Pop child — result becomes tool result in parent
 					AMap<AString, ACell> resultMap = Maps.of(
@@ -968,11 +1026,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		return Maps.of(
 			K_NAME, Strings.create(TOOL_COMPLETE),
 			K_DESCRIPTION, Strings.create(
-				"Finish your goal with the structured result. This is the ONLY way to "
-				+ "successfully complete — text-only responses are not accepted. "
-				+ "Parameters are schema-enforced; make sure you have gathered "
-				+ "enough data via tool calls to populate every required field before "
-				+ "calling this."),
+				"Finish your goal with the structured result. Parameters carry the "
+				+ "declared output schema."),
 			K_PARAMETERS, resultSchema);
 	}
 
@@ -985,11 +1040,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		return Maps.of(
 			K_NAME, Strings.create(TOOL_FAIL),
 			K_DESCRIPTION, Strings.create(
-				"Report that your goal cannot be completed. Use this when a required "
-				+ "tool call has failed, data is missing, or capability denials prevent "
-				+ "progress. Parameters are schema-enforced — provide a clear "
-				+ "explanation in the required fields. Do not bail to text — call this "
-				+ "tool instead."),
+				"Report that your goal cannot be completed. Parameters carry the "
+				+ "structured error schema."),
 			K_PARAMETERS, errorSchema);
 	}
 

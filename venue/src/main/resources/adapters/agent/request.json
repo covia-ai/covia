@@ -1,6 +1,6 @@
 {
 	"name": "Request Agent Task",
-	"description": "Send a request to an agent and get a response. PRIMARY tool for agent delegation. Creates a tracked Job with a result. Example: agent_request(agentId='Helper', input={task: 'summarise w/notes/daily', format: 'bullet list'}, wait=true). For structured output, pass responseSchema (a JSON Schema) — the agent's response will conform to it. Otherwise the agent uses its own default response shape.",
+	"description": "Send a request to an agent and get a response. PRIMARY tool for agent delegation. Creates a tracked Job that completes when the agent finishes the task — use the standard Job lifecycle (e.g. REST ?wait= or SDK job.awaitResult()) to block or poll. Example: agent_request(agentId='Helper', input={task: 'summarise w/notes/daily', format: 'bullet list'}). For structured output, pass responseSchema (a JSON Schema) — the agent's response will conform to it. Otherwise the agent uses its own default response shape.",
 	"dateCreated": "2026-03-06T00:00:00Z",
 	"operation": {
 		"adapter": "agent:request",
@@ -12,7 +12,6 @@
 					"type": "object",
 					"description": "The request payload. MUST contain the actual instructions, data, or parameters the agent needs. NEVER pass an empty object {} — the worker has nothing to act on. Use field 'task' for free-form instructions; add other fields the worker needs (data, paths, options). Example: {task: 'summarise w/notes/daily', format: 'bullet list'}."
 				},
-				"wait": { "type": "boolean", "description": "Wait for the agent to complete. true = block until done (recommended — you usually want the result). false = return PENDING immediately. Integer = timeout in ms." },
 				"responseSchema": {
 					"type": "object",
 					"description": "Optional JSON Schema. When provided, the agent's response is constrained to match this schema (server-side enforcement via OpenAI structured outputs). Use to get typed structured output from any agent. Overrides the agent's default output schema if it has one."
@@ -22,12 +21,8 @@
 		},
 		"output": {
 			"type": "object",
-			"description": "Task status. When wait=true and the agent completes, includes the full output.",
-			"properties": {
-				"id": { "type": "string", "description": "Task Job ID (hex)" },
-				"status": { "type": "string", "description": "PENDING (async/timeout), COMPLETE, or FAILED" },
-				"output": { "type": "object", "description": "Agent's structured response (present when status=COMPLETE)" }
-			}
+			"description": "Agent's structured response to the request.",
+			"additionalProperties": true
 		}
 	}
 }

@@ -100,6 +100,12 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
 	private static final AString K_CONTEXT        = Strings.intern("context");
 	private static final AString K_CAPS           = Strings.intern("caps");
+	private static final AString K_TOOL_CALL_TIMEOUT_MS = Strings.intern("toolCallTimeoutMs");
+
+	// Default per-tool-call timeout inside the agent loop. Bounds the wait on
+	// any single grid op invoked as a tool so a stuck sub-job cannot hang the
+	// parent agent's run loop indefinitely. See covia-ai/covia#82.
+	static final long DEFAULT_TOOL_CALL_TIMEOUT_MS = 300_000L;
 
 	// History / message field keys
 	private static final AString K_HISTORY    = Strings.intern("history");
@@ -369,7 +375,8 @@ public class LLMAgentAdapter extends AAdapter {
 		// history) so the LLM only sees outstanding tasks, not already-resolved ones.
 
 		// Create tool context for built-in tool execution
-		ToolContext toolCtx = new ToolContext(agentId, capsCtx, tasks, pending, configToolMap, caps, activeLoads);
+		long toolCallTimeoutMs = resolveToolCallTimeoutMs(config);
+		ToolContext toolCtx = new ToolContext(agentId, capsCtx, tasks, pending, configToolMap, caps, activeLoads, toolCallTimeoutMs);
 
 		// Invoke level 3 with tool call loop — returns all messages to append
 		// ctx (uncapped) for the L3 LLM call; capsCtx flows through toolCtx for tool dispatch
@@ -609,11 +616,25 @@ public class LLMAgentAdapter extends AAdapter {
 
 		// Config tools — tool name maps to a resolved operation
 		if (operation != null) {
-			return handleConfigTool(operation, input, toolRequestCtx);
+			return handleConfigTool(operation, input, toolRequestCtx, toolCtx.toolCallTimeoutMs);
 		}
 
 		// Fall through to grid dispatch (tool name used as operation name)
-		return handleGridDispatch(toolName, input, toolRequestCtx);
+		return handleGridDispatch(toolName, input, toolRequestCtx, toolCtx.toolCallTimeoutMs);
+	}
+
+	/**
+	 * Resolves the per-tool-call timeout from the agent's merged config.
+	 * Accepts CVMLong (ms) or any numeric ACell; falls back to the default
+	 * if absent, non-numeric, or non-positive. Clamped at 1s minimum.
+	 */
+	static long resolveToolCallTimeoutMs(AMap<AString, ACell> config) {
+		ACell v = (config != null) ? config.get(K_TOOL_CALL_TIMEOUT_MS) : null;
+		if (v instanceof CVMLong l) {
+			long ms = l.longValue();
+			if (ms >= 1000) return ms;
+		}
+		return DEFAULT_TOOL_CALL_TIMEOUT_MS;
 	}
 
 	/**
@@ -723,14 +744,18 @@ public class LLMAgentAdapter extends AAdapter {
 	/**
 	 * Falls through to grid dispatch for unrecognised tool names.
 	 */
-	private ACell handleGridDispatch(String toolName, ACell input, RequestContext ctx) {
+	private ACell handleGridDispatch(String toolName, ACell input, RequestContext ctx, long timeoutMs) {
+		Job toolJob;
 		try {
-			Job toolJob = engine.jobs().invokeOperation(
-				Strings.create(toolName), input, ctx);
-			ACell toolOutput = toolJob.awaitResult();
-			return (toolOutput != null) ? toolOutput : Maps.empty();
+			toolJob = engine.jobs().invokeOperation(Strings.create(toolName), input, ctx);
 		} catch (Exception e) {
 			return Strings.create("Error: " + e.getMessage());
+		}
+		try {
+			ACell toolOutput = toolJob.awaitResult(timeoutMs);
+			return (toolOutput != null) ? toolOutput : Maps.empty();
+		} catch (Exception e) {
+			return Strings.create("Error: " + e.getMessage() + " (jobId: " + toolJob.getID() + ")");
 		}
 	}
 
@@ -756,14 +781,19 @@ public class LLMAgentAdapter extends AAdapter {
 	/**
 	 * Invokes a config tool's operation directly with the LLM's input.
 	 */
-	private ACell handleConfigTool(AString operation, ACell input, RequestContext ctx) {
+	private ACell handleConfigTool(AString operation, ACell input, RequestContext ctx, long timeoutMs) {
 		ACell opInput = ensureParsedInput(input);
+		Job opJob;
 		try {
-			Job opJob = engine.jobs().invokeOperation(operation, opInput, ctx);
-			ACell result = opJob.awaitResult();
-			return (result != null) ? result : Maps.empty();
+			opJob = engine.jobs().invokeOperation(operation, opInput, ctx);
 		} catch (Exception e) {
 			return Strings.create("Error: " + e.getMessage());
+		}
+		try {
+			ACell result = opJob.awaitResult(timeoutMs);
+			return (result != null) ? result : Maps.empty();
+		} catch (Exception e) {
+			return Strings.create("Error: " + e.getMessage() + " (jobId: " + opJob.getID() + ")");
 		}
 	}
 
@@ -942,11 +972,18 @@ public class LLMAgentAdapter extends AAdapter {
 		final AVector<ACell> pending;
 		final Map<String, AString> configToolMap;
 		final AVector<ACell> caps;
+		final long toolCallTimeoutMs;
 		AMap<AString, ACell> taskResults;
 		AMap<AString, ACell> loads;
 
 		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
 				Map<String, AString> configToolMap, AVector<ACell> caps, AMap<AString, ACell> loads) {
+			this(agentId, ctx, tasks, pending, configToolMap, caps, loads, DEFAULT_TOOL_CALL_TIMEOUT_MS);
+		}
+
+		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
+				Map<String, AString> configToolMap, AVector<ACell> caps, AMap<AString, ACell> loads,
+				long toolCallTimeoutMs) {
 			this.agentId = agentId;
 			this.ctx = ctx;
 			this.tasks = tasks;
@@ -954,6 +991,7 @@ public class LLMAgentAdapter extends AAdapter {
 			this.configToolMap = (configToolMap != null) ? configToolMap : Map.of();
 			this.caps = caps;
 			this.loads = (loads != null) ? loads : Maps.empty();
+			this.toolCallTimeoutMs = toolCallTimeoutMs;
 		}
 
 		void recordTaskResult(AString jobId, AMap<AString, ACell> result) {
