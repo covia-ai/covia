@@ -30,8 +30,7 @@ import convex.lattice.cursor.ALatticeCursor;
  * {@code "updated"} (CVMLong timestamp) fields. The {@code "updated"} field
  * enables LWW merge semantics.</p>
  *
- * <p>Follows the same lattice app wrapper pattern as {@link AssetStore}
- * and {@link JobStore}.</p>
+ * <p>Follows the same lattice app wrapper pattern as {@link AssetStore}.</p>
  */
 public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 

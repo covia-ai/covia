@@ -105,15 +105,6 @@ public class VenueState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Gets the venue's job store.
-	 *
-	 * @return JobStore cursor wrapper
-	 */
-	public JobStore jobs() {
-		return new JobStore(cursor.path(Covia.JOBS));
-	}
-
-	/**
 	 * Gets the venue's per-user data store.
 	 *
 	 * @return Users cursor wrapper

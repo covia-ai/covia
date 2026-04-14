@@ -3,6 +3,8 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Blob;
+import convex.core.data.Index;
 import convex.core.data.Strings;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
@@ -17,9 +19,9 @@ import covia.lattice.Namespace;
  * {@link VenueState#user(AString)} (returns null if the user doesn't
  * exist) or {@link VenueState#ensureUser(AString)} (creates if needed).</p>
  *
- * <p>Follows the same lattice app wrapper pattern as {@link AssetStore}
- * and {@link JobStore}. The per-user lattice uses short AString-compatible
- * keys from {@link Namespace} for JSON compliance:</p>
+ * <p>Follows the same lattice app wrapper pattern as {@link AssetStore}.
+ * The per-user lattice uses short AString-compatible keys from
+ * {@link Namespace} for JSON compliance:</p>
  * <ul>
  *   <li>{@code "j"} — user's job references (IndexLattice + LWW)</li>
  *   <li>{@code "g"} — user's agents (MapLattice + AGENT)</li>
@@ -49,13 +51,53 @@ public class User extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Gets the user's job store (per-user job references, LWW merge).
+	 * Gets all of this user's jobs as an Index keyed by Job ID. Never null.
 	 *
-	 * @return JobStore wrapping the user's "j" cursor
+	 * @return Index of job records, empty if the user has no jobs
 	 */
-	public JobStore jobs() {
-		return new JobStore(cursor.path(Namespace.J));
+	@SuppressWarnings("unchecked")
+	public Index<Blob, ACell> getJobs() {
+		ACell value = cursor.path(Namespace.J).get();
+		return (value instanceof Index) ? (Index<Blob, ACell>) value : Index.none();
 	}
+
+	/**
+	 * Gets a single job record from this user's job index.
+	 *
+	 * @param jobID Job ID
+	 * @return Job record map, or null if not found
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> getJob(Blob jobID) {
+		ACell record = getJobs().get(jobID);
+		return (record instanceof AMap) ? (AMap<AString, ACell>) record : null;
+	}
+
+	/**
+	 * Persists a job record to this user's job index. Preserves the {@code temp}
+	 * field from any existing record at the same ID (goal-scoped scratch).
+	 *
+	 * @param jobID Job ID (16-byte Blob: timestamp + counter + random)
+	 * @param record Job status record map
+	 */
+	@SuppressWarnings("unchecked")
+	public void persistJob(Blob jobID, AMap<AString, ACell> record) {
+		final AMap<AString, ACell> rec = record;
+		cursor.path(Namespace.J).updateAndGet(jobs -> {
+			Index<Blob, ACell> idx = (jobs instanceof Index)
+				? (Index<Blob, ACell>) jobs
+				: Index.none();
+			AMap<AString, ACell> merged = rec;
+			ACell existing = idx.get(jobID);
+			if (existing instanceof AMap<?,?> existingMap) {
+				ACell temp = ((AMap<AString, ACell>) existingMap).get(K_TEMP);
+				if (temp != null) merged = merged.assoc(K_TEMP, temp);
+			}
+			return idx.assoc(jobID, merged);
+		});
+	}
+
+	private static final AString K_TEMP = Strings.intern("temp");
 
 	/**
 	 * Gets the user's asset store (per-user content-addressed assets).

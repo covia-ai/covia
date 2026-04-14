@@ -83,7 +83,7 @@ This has structural problems on at least four axes:
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Lattice components (AgentState, UserWorkspace, AssetStore, │  encapsulate
-│  JobStore, SecretStore, Users, User, VenueState, …)         │  cursor.updateAndGet
+│  SecretStore, Users, User, VenueState, …)                   │  cursor.updateAndGet
 │  Each owns a cursor + a vocabulary of named mutations.      │  via update() helper
 │  May fork internally for transactional multi-write atomicity│  (component's own concern)
 └──────────────────────────┬──────────────────────────────────┘
@@ -134,7 +134,6 @@ This has structural problems on at least four axes:
 | `Users` / `User` | `venue/.../Users.java`, `User.java` | per-DID lattice subtrees, child component factories |
 | `AgentState` | `venue/.../AgentState.java` | one agent's record (gold standard for the pattern) |
 | `AssetStore` | `venue/.../AssetStore.java` | content-addressed asset index |
-| `JobStore` | `venue/.../JobStore.java` | per-user job index |
 | `SecretStore` | `venue/.../SecretStore.java` | encrypted secrets |
 | `Auth` | `venue/.../Auth.java` | OAuth user records |
 | `LatticeStorage` | `venue/.../storage/LatticeStorage.java` | lattice-backed blob CAS |

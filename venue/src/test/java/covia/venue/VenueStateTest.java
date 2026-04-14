@@ -144,88 +144,54 @@ public class VenueStateTest {
 		assertNotNull(all.get(id2));
 	}
 
-	// ========== Job Store ==========
+	// ========== Per-User Job Index ==========
 
 	@Test
-	public void testJobStoreRoundTrip() {
+	public void testUserJobRoundTrip() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
-		JobStore jobs = vs.jobs();
+		User user = vs.users().ensure("did:key:zAlice");
 
-		assertEquals(0, jobs.count());
+		assertEquals(0, user.getJobs().count());
 
 		Blob jobID = Blob.parse("0x0001");
 		AMap<AString, ACell> record = Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L));
-		jobs.persist(jobID, record);
+		user.persistJob(jobID, record);
 
-		assertEquals(1, jobs.count());
-
-		AMap<AString, ACell> retrieved = jobs.get(jobID);
+		assertEquals(1, user.getJobs().count());
+		AMap<AString, ACell> retrieved = user.getJob(jobID);
 		assertNotNull(retrieved);
 		assertEquals(Status.PENDING, retrieved.get(Fields.STATUS));
 	}
 
 	@Test
-	public void testJobStoreUpdate() {
+	public void testUserJobUpdate() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
-		JobStore jobs = vs.jobs();
+		User user = vs.users().ensure("did:key:zAlice");
 
 		Blob jobID = Blob.parse("0x0001");
-		jobs.persist(jobID, Maps.of(
+		user.persistJob(jobID, Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
 
-		// Update same job
-		jobs.persist(jobID, Maps.of(
+		user.persistJob(jobID, Maps.of(
 			Fields.STATUS, Status.COMPLETE,
 			Fields.UPDATED, CVMLong.create(2000L)));
 
-		assertEquals(1, jobs.count(), "Should still be one job");
-
-		AMap<AString, ACell> retrieved = jobs.get(jobID);
-		assertEquals(Status.COMPLETE, retrieved.get(Fields.STATUS));
+		assertEquals(1, user.getJobs().count(), "Should still be one job");
+		assertEquals(Status.COMPLETE, user.getJob(jobID).get(Fields.STATUS));
 	}
 
 	@Test
-	public void testJobStoreMultiple() {
+	public void testUserJobGetNonExistent() {
 		AKeyPair kp = AKeyPair.generate();
 		VenueState vs = VenueState.create(kp);
-		JobStore jobs = vs.jobs();
+		User user = vs.users().ensure("did:key:zAlice");
 
-		jobs.persist(Blob.parse("0x0001"), Maps.of(
-			Fields.STATUS, Status.PENDING,
-			Fields.UPDATED, CVMLong.create(1000L)));
-		jobs.persist(Blob.parse("0x0002"), Maps.of(
-			Fields.STATUS, Status.COMPLETE,
-			Fields.UPDATED, CVMLong.create(2000L)));
-
-		assertEquals(2, jobs.count());
-	}
-
-	@Test
-	public void testJobStoreGetAll() {
-		AKeyPair kp = AKeyPair.generate();
-		VenueState vs = VenueState.create(kp);
-		JobStore jobs = vs.jobs();
-
-		jobs.persist(Blob.parse("0x0001"), Maps.of(
-			Fields.STATUS, Status.PENDING,
-			Fields.UPDATED, CVMLong.create(1000L)));
-
-		Index<Blob, ACell> all = jobs.getAll();
-		assertNotNull(all);
-		assertEquals(1, all.count());
-	}
-
-	@Test
-	public void testJobStoreGetNonExistent() {
-		AKeyPair kp = AKeyPair.generate();
-		VenueState vs = VenueState.create(kp);
-
-		assertNull(vs.jobs().get(Blob.parse("0xFFFF")));
+		assertNull(user.getJob(Blob.parse("0xFFFF")));
 	}
 
 	// ========== Child Cursor Accessors ==========
@@ -236,7 +202,6 @@ public class VenueStateTest {
 		VenueState vs = VenueState.create(kp);
 
 		assertNotNull(vs.assets(), "Assets component should be available");
-		assertNotNull(vs.jobs(), "Jobs component should be available");
 		assertNotNull(vs.users(), "Users component should be available");
 		assertNotNull(vs.storage(), "Storage component should be available");
 	}
@@ -310,7 +275,8 @@ public class VenueStateTest {
 		// Write asset and job through the fork
 		Hash assetId = forked.assets().store(
 			Strings.create("{\"name\":\"Synced Asset\"}"), null);
-		forked.jobs().persist(Blob.parse("0x0001"), Maps.of(
+		User forkedAlice = forked.users().ensure("did:key:zAlice");
+		forkedAlice.persistJob(Blob.parse("0x0001"), Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
 
@@ -320,7 +286,10 @@ public class VenueStateTest {
 		// Verify changes visible through the connected VenueState
 		assertNotNull(connected.assets().getRecord(assetId),
 			"Asset should be visible through connected cursor after sync");
-		assertNotNull(connected.jobs().get(Blob.parse("0x0001")),
+		User connectedAlice = connected.users().get("did:key:zAlice");
+		assertNotNull(connectedAlice,
+			"User should be visible through connected cursor after sync");
+		assertNotNull(connectedAlice.getJob(Blob.parse("0x0001")),
 			"Job should be visible through connected cursor after sync");
 	}
 
@@ -338,11 +307,12 @@ public class VenueStateTest {
 		forked.assets().store(Strings.create("{\"name\":\"Batch B\"}"), null);
 		forked.assets().store(Strings.create("{\"name\":\"Batch C\"}"), null);
 
-		// Multiple job writes
-		forked.jobs().persist(Blob.parse("0x0001"), Maps.of(
+		// Multiple job writes to a user
+		User forkedAlice = forked.users().ensure("did:key:zAlice");
+		forkedAlice.persistJob(Blob.parse("0x0001"), Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
-		forked.jobs().persist(Blob.parse("0x0002"), Maps.of(
+		forkedAlice.persistJob(Blob.parse("0x0002"), Maps.of(
 			Fields.STATUS, Status.COMPLETE,
 			Fields.UPDATED, CVMLong.create(2000L)));
 
@@ -351,7 +321,8 @@ public class VenueStateTest {
 
 		assertEquals(3, connected.assets().count(),
 			"All 3 assets should be visible after single sync");
-		assertEquals(2, connected.jobs().count(),
+		User connectedAlice = connected.users().get("did:key:zAlice");
+		assertEquals(2, connectedAlice.getJobs().count(),
 			"All 2 jobs should be visible after single sync");
 	}
 
@@ -394,20 +365,20 @@ public class VenueStateTest {
 		User bob = vs.users().ensure(bobDID);
 
 		// Alice writes a job reference
-		alice.jobs().persist(Blob.parse("0x0001"), Maps.of(
+		alice.persistJob(Blob.parse("0x0001"), Maps.of(
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L)));
 
 		// Bob writes a job reference
-		bob.jobs().persist(Blob.parse("0x0002"), Maps.of(
+		bob.persistJob(Blob.parse("0x0002"), Maps.of(
 			Fields.STATUS, Status.COMPLETE,
 			Fields.UPDATED, CVMLong.create(2000L)));
 
 		// Each sees only their own data
-		assertEquals(1, alice.jobs().count(), "Alice should see only her job");
-		assertEquals(1, bob.jobs().count(), "Bob should see only his job");
-		assertNotNull(alice.jobs().get(Blob.parse("0x0001")));
-		assertNull(alice.jobs().get(Blob.parse("0x0002")));
+		assertEquals(1, alice.getJobs().count(), "Alice should see only her job");
+		assertEquals(1, bob.getJobs().count(), "Bob should see only his job");
+		assertNotNull(alice.getJob(Blob.parse("0x0001")));
+		assertNull(alice.getJob(Blob.parse("0x0002")));
 	}
 
 	@Test
@@ -475,7 +446,7 @@ public class VenueStateTest {
 					start.await();
 					User u = vs.users().ensure(did);
 					Blob jobID = Blob.parse(String.format("0x%04x", idx + 1));
-					u.jobs().persist(jobID, Maps.of(
+					u.persistJob(jobID, Maps.of(
 						Fields.STATUS, Status.PENDING,
 						Fields.UPDATED, CVMLong.create(1000L + idx)));
 				} catch (Throwable t) {
@@ -492,7 +463,7 @@ public class VenueStateTest {
 
 		User finalUser = vs.users().get(did);
 		assertNotNull(finalUser, "user should exist after concurrent ensure");
-		assertEquals(writers, finalUser.jobs().count(),
+		assertEquals(writers, finalUser.getJobs().count(),
 			"all jobs from concurrent ensure() callers must survive");
 	}
 

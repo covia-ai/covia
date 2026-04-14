@@ -797,7 +797,7 @@ The target state described above will be achieved incrementally. Each phase buil
 
 Foundation for all lattice-backed state management.
 
-- `VenueState`, `AssetStore`, `JobStore` wrappers over lattice cursors
+- `VenueState`, `AssetStore`, `User` wrappers over lattice cursors
 - Forked cursors for batched unsigned writes with single-sign sync
 - `Covia.ROOT` lattice definition with KeyedLattice composition
 - Per-venue OwnerLattice (one signing slot per venue)

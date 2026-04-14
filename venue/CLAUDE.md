@@ -273,9 +273,10 @@ engine.jobs().resumeJob(jobID, requestCtx);
 // Via VenueState application wrappers (preferred)
 Hash id = engine.storeAsset(metadataString, contentBlob);
 
-// Direct cursor access (lower level)
+// Per-user access (jobs, agents, secrets, workspace)
 VenueState vs = engine.getVenueState();
-ALatticeCursor<Index<Blob, ACell>> jobsCursor = vs.jobs().getCursor();
+User user = vs.users().ensure(callerDID);
+Index<Blob, ACell> userJobs = user.getJobs();
 ```
 
 ### Testing

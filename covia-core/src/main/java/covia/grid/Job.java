@@ -2,13 +2,10 @@ package covia.grid;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
 import convex.core.data.ABlob;
@@ -42,35 +39,19 @@ public class Job {
 	private final AtomicReference<CompletableFuture<ACell>> resultFuture = new AtomicReference<>();
 
 	/**
-	 * Optional handle to the underlying interruptible work future. Set by
-	 * adapters that submit work to an executor (e.g. {@code executor.submit(...)}).
-	 * When non-null, {@link #cancel()} will call {@code workFuture.cancel(true)}
-	 * to interrupt the running thread, so a cancel actually stops the work
-	 * rather than just marking the lattice status. CompletableFuture from
-	 * {@code runAsync} cannot be used here — its {@code cancel(true)} ignores
-	 * the interrupt flag and never interrupts the thread.
+	 * Optional cancellation hook. Invoked by {@link #cancel()} so the work can
+	 * actually stop (interrupt a sleeping thread, close a connection, etc.)
+	 * rather than just marking the lattice status. Adapters that submit
+	 * interruptible work register a hook such as
+	 * {@code () -> future.cancel(true)}.
 	 */
-	private volatile Future<?> workFuture = null;
-
-	/** Per-job message queue for incoming message records */
-	private final ConcurrentLinkedQueue<AMap<AString, ACell>> messageQueue = new ConcurrentLinkedQueue<>();
-
-	/** Optional listener notified after each state update */
-	private volatile Consumer<Job> updateListener = null;
-
-	/** Transient reference to the operation being executed, if resolved */
-	private final Operation operation;
+	private volatile Runnable onCancel = null;
 
 	/** Key for previous state pointer in job data */
 	public static final AString PREV = Strings.intern("prev");
 
 	public Job(AMap<AString, ACell> status) {
-		this(status, null);
-	}
-
-	public Job(AMap<AString, ACell> status, Operation operation) {
 		this.data = new AtomicReference<>(status);
-		this.operation = operation;
 	}
 
 	public static boolean isFinished(AMap<AString, ACell> jobData) {
@@ -164,11 +145,6 @@ public class Job {
 		// Post-update side effects
 		AMap<AString, ACell> current = data.get();
 		onUpdate(current);
-
-		Consumer<Job> listener = this.updateListener;
-		if (listener != null) {
-			listener.accept(this);
-		}
 
 		if (isFinished(current)) {
 			completeResultFuture();
@@ -270,51 +246,6 @@ public class Job {
 		return errorField != null ? errorField.toString() : null;
 	}
 
-	// ===== Message Queue =====
-
-	/**
-	 * Enqueues a message record for this job.
-	 * @param record Message record to enqueue
-	 */
-	public void enqueueMessage(AMap<AString, ACell> record) {
-		messageQueue.add(record);
-	}
-
-	/**
-	 * Dequeues the next message record from this job's queue.
-	 * @return Next message record, or null if queue is empty
-	 */
-	public AMap<AString, ACell> dequeueMessage() {
-		return messageQueue.poll();
-	}
-
-	/**
-	 * Gets the current number of messages in this job's queue.
-	 * @return Queue depth
-	 */
-	public int getQueueSize() {
-		return messageQueue.size();
-	}
-
-	// ===== Update Listener =====
-
-	/**
-	 * Sets a listener to be notified after each state update.
-	 * Used by SSE server for per-job event broadcasting.
-	 * @param listener Listener to set, or null to remove
-	 */
-	public void setUpdateListener(Consumer<Job> listener) {
-		this.updateListener = listener;
-	}
-
-	/**
-	 * Gets the operation associated with this job, if resolved.
-	 * @return Operation, or null if not resolved at creation time
-	 */
-	public Operation getOperation() {
-		return operation;
-	}
-
 	/**
 	 * Gets the caller DID associated with this job, if identified.
 	 * @return Caller DID string, or null if anonymous
@@ -337,11 +268,11 @@ public class Job {
 	/**
 	 * Cancel this Job. No effect if already finished.
 	 *
-	 * <p>If a {@linkplain #setWorkFuture work future} has been registered, it
-	 * is cancelled with {@code mayInterruptIfRunning=true} so the underlying
-	 * worker thread is interrupted (e.g. unblocks {@code Thread.sleep}). This
-	 * is what makes cancel actually stop the work rather than just marking
-	 * the lattice status.</p>
+	 * <p>If a {@linkplain #setCancelHook cancel hook} has been registered, it
+	 * runs after the status transition so the underlying worker can actually
+	 * stop (e.g. interrupt a sleeping thread via {@code future.cancel(true)}).
+	 * Without a hook, cancellation only flips the lattice status and the
+	 * worker must poll {@link #isFinished()} to notice.</p>
 	 */
 	public void cancel() {
 		if (isFinished()) return;
@@ -351,24 +282,22 @@ public class Job {
 			job = job.assoc(Fields.ERROR, Strings.create("Job cancelled: " + getID().toHexString()));
 			return job;
 		});
-		Future<?> wf = workFuture;
-		if (wf != null) wf.cancel(true);
+		Runnable hook = onCancel;
+		if (hook != null) hook.run();
 	}
 
 	/**
-	 * Register the interruptible {@link Future} representing this job's
-	 * underlying work. Adapters that submit work via
-	 * {@code ExecutorService.submit(...)} should call this so that
-	 * {@link #cancel()} can actually interrupt the worker thread.
+	 * Register a cancellation hook invoked by {@link #cancel()}. Adapters that
+	 * submit interruptible work should register
+	 * {@code () -> future.cancel(true)} so a cancel actually stops the worker
+	 * thread. Pass a {@link java.util.concurrent.Future} from
+	 * {@code ExecutorService.submit(...)}, not a {@link CompletableFuture}
+	 * from {@code runAsync} (the latter ignores {@code mayInterruptIfRunning}).
 	 *
-	 * <p>Pass the {@link Future} returned by {@code submit}, NOT a
-	 * {@link CompletableFuture} from {@code runAsync} — the latter ignores
-	 * {@code mayInterruptIfRunning}.</p>
-	 *
-	 * @param future the interruptible future, or null to clear
+	 * @param hook the cancel callback, or null to clear
 	 */
-	public void setWorkFuture(Future<?> future) {
-		this.workFuture = future;
+	public void setCancelHook(Runnable hook) {
+		this.onCancel = hook;
 	}
 
 	/**

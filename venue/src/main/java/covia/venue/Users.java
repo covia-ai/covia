@@ -14,7 +14,7 @@ import covia.lattice.Covia;
  * <p>Wraps a lattice cursor at the {@code :user-data} level
  * ({@code MapLattice<AString, StringKeyedLattice>}). Provides typed
  * accessors for per-user state, following the same pattern as
- * {@link AssetStore} and {@link JobStore}.</p>
+ * {@link AssetStore}.</p>
  *
  * <p>Each user is identified by a DID string and gets an independent
  * {@link User} lattice component backed by a

@@ -228,7 +228,7 @@ public class JobManager {
 	 * Returns a copy of job data with secret fields in the output redacted.
 	 * Uses the same {@code secretFields} list as input redaction.
 	 */
-	private static AMap<AString, ACell> redactOutputSecrets(AMap<AString, ACell> jobData, AMap<AString, ACell> meta) {
+	static AMap<AString, ACell> redactOutputSecrets(AMap<AString, ACell> jobData, AMap<AString, ACell> meta) {
 		ACell output = jobData.get(Fields.OUTPUT);
 		if (output == null) return jobData;
 		ACell redacted = redactSecrets(output, meta);
@@ -261,17 +261,7 @@ public class JobManager {
 			status = status.assoc(Fields.NAME, name);
 		}
 
-		final AString effectiveCaller = callerDID;
-		Job job = new Job(status) {
-			@Override public AMap<AString, ACell> processUpdate(AMap<AString, ACell> newData) {
-				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
-				persistJobRecord(getID(), redactOutputSecrets(newData, meta), effectiveCaller);
-				if (Job.isFinished(newData)) {
-					activeJobs.remove(getID());
-				}
-				return newData;
-			}
-		};
+		VenueJob job = new VenueJob(status, meta, callerDID, this);
 
 		// Set update listener if configured (e.g. for SSE broadcasting)
 		if (!jobUpdateListeners.isEmpty()) {
@@ -310,7 +300,7 @@ public class JobManager {
 		if (did == null) return null;
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
-		return user.jobs().get(jobID);
+		return user.getJob(jobID);
 	}
 
 	/**
@@ -346,9 +336,9 @@ public class JobManager {
 		if (did == null) return null;
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
-		AMap<AString, ACell> record = user.jobs().get(jobID);
+		AMap<AString, ACell> record = user.getJob(jobID);
 		if (record == null) return null;
-		return new Job(record, null);
+		return new Job(record);
 	}
 
 	/**
@@ -360,7 +350,7 @@ public class JobManager {
 		if (did == null) return Index.none();
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return Index.none();
-		return user.jobs().getAll();
+		return user.getJobs();
 	}
 
 	// ========== Job Lifecycle Control ==========
@@ -489,16 +479,15 @@ public class JobManager {
 			record = record.assoc(Fields.SOURCE, source);
 		}
 
-		job.enqueueMessage(record);
-		int depth = job.getQueueSize();
-
-		// Dispatch to adapter if it supports multi-turn
+		// Dispatch to adapter if it supports multi-turn. The message record is
+		// passed directly — Job no longer buffers a per-job message queue (the
+		// previous queue was write-only and never drained).
 		AAdapter adapter = resolveJobAdapter(job);
 		if (adapter != null && adapter.supportsMultiTurn()) {
 			adapter.handleMessage(job, record);
 		}
 
-		return depth;
+		return 0;
 	}
 
 	// ========== Job Recovery ==========
@@ -520,7 +509,7 @@ public class JobManager {
 			User user = engine.getVenueState().users().get(did);
 			if (user == null) continue;
 
-			Index<Blob, ACell> userJobs = user.jobs().getAll();
+			Index<Blob, ACell> userJobs = user.getJobs();
 			long n = userJobs.count();
 			for (long i = 0; i < n; i++) {
 				var jobEntry = userJobs.entryAt(i);
@@ -579,16 +568,7 @@ public class JobManager {
 		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
 
 		// Create a live Job wrapping the persisted record
-		Job job = new Job(record, op) {
-			@Override public AMap<AString, ACell> processUpdate(AMap<AString, ACell> newData) {
-				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
-				persistJobRecord(getID(), redactOutputSecrets(newData, meta), callerDID);
-				if (Job.isFinished(newData)) {
-					activeJobs.remove(getID());
-				}
-				return newData;
-			}
-		};
+		VenueJob job = new VenueJob(record, meta, callerDID, this);
 
 		if (!jobUpdateListeners.isEmpty()) {
 			job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
@@ -623,16 +603,8 @@ public class JobManager {
 			op = (asset != null) ? Operation.from(asset) : null;
 		}
 
-		Job job = new Job(record, op) {
-			@Override public AMap<AString, ACell> processUpdate(AMap<AString, ACell> newData) {
-				newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
-				persistJobRecord(getID(), newData, callerDID);
-				if (Job.isFinished(newData)) {
-					activeJobs.remove(getID());
-				}
-				return newData;
-			}
-		};
+		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
+		VenueJob job = new VenueJob(record, meta, callerDID, this);
 
 		if (!jobUpdateListeners.isEmpty()) {
 			job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
@@ -656,21 +628,26 @@ public class JobManager {
 	 * Persists a job record to the user's per-user lattice.
 	 * This is the single source of truth for all jobs.
 	 */
-	private void persistJobRecord(Blob jobID, AMap<AString, ACell> record, AString callerDID) {
+	void persistJobRecord(Blob jobID, AMap<AString, ACell> record, AString callerDID) {
 		User user = engine.getVenueState().users().ensure(callerDID);
-		user.jobs().persist(jobID, record);
+		user.persistJob(jobID, record);
+	}
+
+	/**
+	 * Removes a job from the active cache. Called by {@link VenueJob} when a
+	 * state transition lands the job in a terminal status.
+	 */
+	void evictActive(Blob jobID) {
+		activeJobs.remove(jobID);
 	}
 
 	// ========== Adapter Resolution ==========
 
 	/**
-	 * Resolves the metadata for a job, trying the Operation object first,
-	 * then falling back to resolving the operation reference from the job record.
+	 * Resolves the metadata for a job by looking up the operation reference
+	 * in the job record.
 	 */
 	private AMap<AString, ACell> resolveJobMeta(Job job) {
-		Operation operation = job.getOperation();
-		if (operation != null) return operation.meta();
-
 		AString opStr = RT.ensureString(job.getData().get(Fields.OP));
 		if (opStr == null) return null;
 		Asset asset = engine.resolveAsset(opStr);
