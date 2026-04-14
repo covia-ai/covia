@@ -359,6 +359,9 @@ public class VenueServer {
 			
 			config.useVirtualThreads=true;
 
+			// Raise HTTP body size limit (default 1 MB is too low for vault uploads).
+			config.http.maxRequestSize = 10_000_000L;
+
 			// Disable Jetty's session housekeeper thread. Covia is fully
 			// stateless — auth is JWT bearer token per request, no code
 			// anywhere calls getSession() or stores session attributes. By
