@@ -32,6 +32,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_CONFIG   = Strings.intern("config");
 	private static final AString K_STATE    = Strings.intern("state");
 	private static final AString K_TASKS    = Strings.intern("tasks");
+	private static final AString K_SESSIONS = Strings.intern("sessions");
 	private static final AString K_PENDING  = Strings.intern("pending");
 	private static final AString K_INBOX    = Strings.intern("inbox");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
@@ -49,6 +50,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	public static final AString KEY_STATUS   = K_STATUS;
 	public static final AString KEY_CONFIG   = K_CONFIG;
 	public static final AString KEY_TASKS    = K_TASKS;
+	public static final AString KEY_SESSIONS = K_SESSIONS;
 	public static final AString KEY_PENDING  = K_PENDING;
 	public static final AString KEY_INBOX    = K_INBOX;
 	public static final AString KEY_TIMELINE = K_TIMELINE;
@@ -112,6 +114,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 		AMap<AString, ACell> record = Maps.of(
 			K_STATUS, SLEEPING,
 			K_TASKS, Index.none(),
+			K_SESSIONS, Index.none(),
 			K_PENDING, Index.none(),
 			K_INBOX, Vectors.empty(),
 			K_TIMELINE, Vectors.empty());
@@ -122,14 +125,16 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	/**
 	 * Initialises an agent record as a fork of another agent. Copies config
-	 * and state, optionally copies timeline. Tasks, pending, and inbox are
-	 * fresh; status is SLEEPING. Does nothing if this agent already exists.
+	 * and state, optionally copies timeline. Tasks, sessions, pending, and
+	 * inbox are fresh; status is SLEEPING. Does nothing if this agent
+	 * already exists.
 	 */
 	public void initialiseFromFork(AMap<AString, ACell> config, ACell state, AVector<ACell> timeline) {
 		if (exists()) return;
 		AMap<AString, ACell> record = Maps.of(
 			K_STATUS, SLEEPING,
 			K_TASKS, Index.none(),
+			K_SESSIONS, Index.none(),
 			K_PENDING, Index.none(),
 			K_INBOX, Vectors.empty(),
 			K_TIMELINE, (timeline != null) ? timeline : Vectors.empty());
@@ -179,6 +184,19 @@ public class AgentState extends ALatticeComponent<ACell> {
 		AMap<AString, ACell> r = getRecord();
 		if (r == null) return Index.none();
 		ACell v = r.get(K_TASKS);
+		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
+	}
+
+	/**
+	 * Returns the agent's sessions Index (sid → session record).
+	 * Currently reserved for Phase 1 sessions work — returns an empty
+	 * Index on legacy records that predate the field.
+	 */
+	@SuppressWarnings("unchecked")
+	public Index<Blob, ACell> getSessions() {
+		AMap<AString, ACell> r = getRecord();
+		if (r == null) return Index.none();
+		ACell v = r.get(K_SESSIONS);
 		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
 	}
 
