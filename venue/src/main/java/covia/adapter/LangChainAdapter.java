@@ -116,6 +116,7 @@ public class LangChainAdapter extends AAdapter {
 		installAsset("langchain/openai",    "/adapters/langchain/openai.json");
 		installAsset("langchain/ollama",    "/adapters/langchain/ollama.json");
 		installAsset("langchain/anthropic", "/adapters/langchain/anthropic.json");
+		installAsset("langchain/xai",       "/adapters/langchain/xai.json");
 
 		// Example configurations — stored in CAS, not in /v/ops/.
 		installExampleAsset("/asset-examples/qwen.json");   // langchain:ollama:qwen3

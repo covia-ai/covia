@@ -1,0 +1,59 @@
+{
+	"name": "xAI Chat",
+	"description": "Chat with xAI Grok models via the OpenAI-compatible xAI API. Supports messages-based and prompt-based input, system prompts, tools, and structured output.",
+	"creator": "Covia",
+	"dateCreated": "2026-04-15T00:00:00Z",
+	"keywords": ["LLM", "model", "xai", "grok"],
+	"operation": {
+		"adapter": "langchain:openai",
+		"secretFields": ["apiKey"],
+		"secretKey": "XAI_API_KEY",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": {
+					"type": "array",
+					"description": "Conversation messages array [{role, content}]. Used by the agent tool call loop."
+				},
+				"prompt": {
+					"type": "string",
+					"description": "Simple prompt string (alternative to messages)."
+				},
+				"model": {
+					"type": "string",
+					"description": "Model name (e.g. grok-4, grok-3, grok-3-mini).",
+					"default": "grok-4"
+				},
+				"systemPrompt": {
+					"type": "string",
+					"description": "System prompt to set the AI's behaviour."
+				},
+				"apiKey": {
+					"type": "string",
+					"secret": true,
+					"description": "xAI API key (resolved from secret store by default)."
+				},
+				"url": {
+					"type": "string",
+					"description": "Base URL. Defaults to the xAI API endpoint.",
+					"default": "https://api.x.ai/v1"
+				},
+				"tools": {
+					"type": "array",
+					"description": "Tool definitions for function calling."
+				},
+				"responseFormat": {
+					"description": "Response format: 'json', 'text', or {name, schema} for structured output."
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": { "type": "string" },
+				"content": { "type": "string", "description": "The LLM response text" },
+				"toolCalls": { "type": "array", "description": "Tool call requests from the LLM" }
+			}
+		}
+	}
+}
