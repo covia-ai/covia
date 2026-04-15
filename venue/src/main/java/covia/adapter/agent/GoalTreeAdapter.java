@@ -27,7 +27,7 @@ import covia.venue.RequestContext;
  *
  * <p>A more powerful variant of {@code LLMAgentAdapter} that adds hierarchical
  * goal decomposition via a frame stack. Agents call {@code subgoal} to bracket
- * sub-tasks, {@code complete}/{@code fail} to return results, and
+ * sub-goals, {@code complete}/{@code fail} to return results, and
  * {@code compact} to checkpoint long conversations.</p>
  *
  * <p>Registered as operation {@code goaltree:chat}. Selected via agent config:</p>
@@ -96,7 +96,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		K_DESCRIPTION, Strings.create(
 			"Delegate a self-contained piece of work. Describe what you need done "
 			+ "— a sub-agent will execute it independently and return the result. "
-			+ "Use when a task has distinct parts you want done separately (e.g. "
+			+ "Use when your current goal has distinct parts you want done separately (e.g. "
 			+ "'analyse vendor Acme' then 'analyse vendor Globex'). The sub-agent "
 			+ "has access to all your tools and loaded data."),
 		K_PARAMETERS, Maps.of(
@@ -140,7 +140,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		K_NAME, Strings.create(TOOL_COMPACT),
 		K_DESCRIPTION, Strings.create(
 			"Archive your conversation so far into a summary you write. Frees context "
-			+ "space so you can continue working on long tasks. Call this after completing "
+			+ "space so you can continue working on long goals. Call this after completing "
 			+ "a significant chunk of work when you still have more to do. Your summary "
 			+ "should capture key findings and what remains."),
 		K_PARAMETERS, Maps.of(
@@ -256,7 +256,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	private static final AMap<AString, ACell> CHILD_FRAME_NOTE = Maps.of(
 		K_ROLE, ROLE_SYSTEM,
 		K_CONTENT, Strings.create(
-			"You are inside a subgoal. Complete the specific task described below. "
+			"You are inside a subgoal. Complete the specific goal described below. "
 			+ "When done, just respond with your answer — a plain text response "
 			+ "returns your result to the parent. Only call complete() if you need "
 			+ "to return structured data."));
