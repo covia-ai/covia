@@ -264,14 +264,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	// ========== CAS operations ==========
 
-	/** Atomic CAS: SLEEPING → RUNNING. Returns true if this call won. */
-	public boolean tryStartRunning() {
-		AMap<AString, ACell> before = getAndUpdate(r ->
-			SLEEPING.equals(RT.ensureString(r.get(K_STATUS)))
-				? r.assoc(K_STATUS, RUNNING) : r);
-		return SLEEPING.equals(RT.ensureString(before.get(K_STATUS)));
-	}
-
 	/** Atomic CAS: SUSPENDED → SLEEPING, clear error. Returns true if resumed. */
 	public boolean tryResume() {
 		AMap<AString, ACell> before = getAndUpdate(r ->

@@ -54,30 +54,6 @@ public class AgentConcurrencyTest {
 	// ========== Unit: AgentState CAS operations ==========
 
 	@Test
-	public void testTryStartRunningIdempotence() {
-		// tryStartRunning CAS: SLEEPING → RUNNING. Second call should fail.
-		Users users = engine.getVenueState().users();
-		User user = users.ensure(ALICE_DID);
-		AgentState agent = user.ensureAgent("cas-test", Maps.empty(), null);
-
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
-
-		// First CAS: succeeds
-		assertTrue(agent.tryStartRunning(), "First CAS should succeed");
-		assertEquals(AgentState.RUNNING, agent.getStatus());
-
-		// Second CAS: fails (already RUNNING)
-		assertFalse(agent.tryStartRunning(), "Second CAS should fail — already RUNNING");
-		assertEquals(AgentState.RUNNING, agent.getStatus());
-
-		// Sleep, then CAS again: succeeds
-		agent.sleep();
-		assertEquals(AgentState.SLEEPING, agent.getStatus());
-		assertTrue(agent.tryStartRunning(), "CAS after sleep should succeed");
-		assertEquals(AgentState.RUNNING, agent.getStatus());
-	}
-
-	@Test
 	public void testTryResumeIdempotence() {
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ALICE_DID);
@@ -209,6 +185,101 @@ public class AgentConcurrencyTest {
 	}
 
 	@Test
+	public void testRapidTriggerStressNoCannotStartAgent() {
+		// Regression for #64: rapid fire of trigger wait:false followed by
+		// a blocking trigger, repeated. The pre-refactor code had two
+		// sources of truth (in-memory runCompletions map + lattice K_STATUS
+		// CAS) that could disagree and produce "Cannot start agent" errors.
+		//
+		// With the RunCoordinator refactor, all start/attach/exit decisions
+		// are under a single per-agent lock — this race class is eliminated.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "rapid",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("rapid");
+
+		for (int i = 0; i < 50; i++) {
+			agent.deliverMessage(Maps.of("content", "msg-" + i));
+
+			// Non-blocking trigger
+			Job t1 = engine.jobs().invokeOperation("v/ops/agent/trigger",
+				Maps.of(Fields.AGENT_ID, "rapid", Fields.WAIT, CVMBool.FALSE),
+				RequestContext.of(ALICE_DID));
+			ACell r1 = t1.awaitResult(5000);
+			assertNotNull(r1, "iteration " + i + ": wait:false trigger must not fail");
+			assertEquals(Status.COMPLETE, t1.getStatus(),
+				"iteration " + i + ": wait:false trigger job must complete, not fail");
+
+			// Immediate blocking trigger — the bug pattern
+			Job t2 = engine.jobs().invokeOperation("v/ops/agent/trigger",
+				Maps.of(Fields.AGENT_ID, "rapid"),
+				RequestContext.of(ALICE_DID));
+			ACell r2 = t2.awaitResult(5000);
+			assertNotNull(r2, "iteration " + i + ": blocking trigger must not fail with 'Cannot start agent'");
+			assertEquals(Status.COMPLETE, t2.getStatus(),
+				"iteration " + i + ": blocking trigger must complete");
+		}
+
+		// Eventually quiesce — all messages processed, agent SLEEPING
+		try {
+			agent.awaitSleeping().get(5, TimeUnit.SECONDS);
+		} catch (Exception e) {
+			fail("Timed out waiting for rapid agent to reach SLEEPING: " + e);
+		}
+		assertEquals(0, agent.getInbox().count(), "All messages should be processed");
+	}
+
+	@Test
+	public void testConcurrentTriggerBarrageNoCannotStartAgent() {
+		// Concurrent variant of #64: many parallel triggers with and without
+		// wait. Regression for the two-structure race: pre-refactor the
+		// non-atomic window between runCompletions.put and the K_STATUS CAS
+		// could cause a trigger to see "no live future" AND "not SLEEPING",
+		// failing with "Cannot start agent".
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "barrage",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("barrage");
+
+		final int N = 20;
+		@SuppressWarnings("unchecked")
+		CompletableFuture<Job>[] futures = new CompletableFuture[N];
+
+		for (int i = 0; i < N; i++) {
+			final int idx = i;
+			agent.deliverMessage(Maps.of("content", "barrage-" + idx));
+			final ACell wait = (idx % 2 == 0) ? CVMBool.FALSE : CVMBool.TRUE;
+			futures[i] = CompletableFuture.supplyAsync(() ->
+				engine.jobs().invokeOperation("v/ops/agent/trigger",
+					Maps.of(Fields.AGENT_ID, "barrage", Fields.WAIT, wait),
+					RequestContext.of(ALICE_DID)));
+		}
+
+		for (int i = 0; i < N; i++) {
+			Job j = futures[i].join();
+			ACell result = j.awaitResult(5000);
+			assertNotNull(result, "trigger " + i + " must not fail");
+			assertEquals(Status.COMPLETE, j.getStatus(),
+				"trigger " + i + " job must complete, not fail");
+		}
+
+		try {
+			agent.awaitSleeping().get(10, TimeUnit.SECONDS);
+		} catch (Exception e) {
+			fail("Timed out waiting for barrage agent to reach SLEEPING: " + e);
+		}
+		assertEquals(0, agent.getInbox().count(), "All messages should be processed");
+	}
+
+	@Test
 	public void testTriggerWaitFalseThenTriggerOverlapping() {
 		// Pattern that surfaced the ForkedLatticeCursor.sync() bug.
 		// First trigger with wait:false returns immediately. Second trigger
@@ -247,9 +318,9 @@ public class AgentConcurrencyTest {
 
 	@Test
 	public void testMessageAndTriggerConcurrent() {
-		// agent:message calls wakeAgent (which calls tryStartRun).
-		// Concurrent agent:trigger also calls tryStartRun.
-		// Only one should win the CAS; the other gets the existing future.
+		// Both agent:message and agent:trigger funnel through wakeAgent.
+		// The RunCoordinator lock serialises them — one starts the loop,
+		// the other attaches to the live completion future.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "msg-trig",

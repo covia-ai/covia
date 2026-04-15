@@ -154,7 +154,7 @@ Every lattice component:
 2. **Has a private `update(UnaryOperator<V>)` helper** that wraps `cursor.updateAndGet`. All mutations go through it. Reference: `AgentState.update` at `AgentState.java:85`.
 3. **Exposes named, intent-revealing mutation methods.** No `set(path, value)` escape hatch.
 4. **Never calls `engine.syncState()` or any persistence API.** Engine handles persistence at a higher level.
-5. **May expose CAS / atomic helpers** for concurrent access. Reference: `AgentState.tryStartRunning` at `AgentState.java:268`.
+5. **May expose CAS / atomic helpers** for concurrent access. Reference: `AgentState.tryResume` in `AgentState.java`.
 6. **May fork its own cursor for transactional multi-write atomicity** when a single mutation needs several lattice writes that must succeed-or-roll-back together. The component then syncs the fork on success. **Discard on failure is implicit** — there is no explicit `fork.discard()` or `Closeable` API; dropping the fork reference and letting GC reclaim it is the rollback mechanism. This is a component-internal correctness tool, not a persistence mechanism.
 
 ### 4.3 Adapter contract

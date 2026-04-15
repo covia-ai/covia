@@ -4,6 +4,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,10 +36,12 @@ import covia.venue.Users;
 /**
  * Adapter for agent lifecycle management.
  *
- * <p>All agent state mutations use atomic lattice updates via
- * {@link AgentState} named methods — no per-agent locks. The only
- * coordination primitive is a per-agent {@link CompletableFuture} that
- * fires when a run cycle completes, enabling callers to wait for results.</p>
+ * <p>Run-loop concurrency is mediated by a single per-agent
+ * {@link RunCoordinator}: its lock serialises the "start new run vs. attach
+ * to live run vs. exit cleanly" decisions, and its {@link CompletableFuture}
+ * is the completion signal. The lattice {@code K_STATUS} field is a
+ * persisted mirror of coord state for restart recovery and user visibility,
+ * not the concurrency primitive.</p>
  */
 public class AgentAdapter extends AAdapter {
 
@@ -56,8 +59,22 @@ public class AgentAdapter extends AAdapter {
 	/** Maximum run loop iterations before forced exit (safety net) */
 	private static final int MAX_LOOP_ITERATIONS = 20;
 
-	/** Per-agent completion future — fires when the current run cycle finishes */
-	private final ConcurrentHashMap<String, CompletableFuture<ACell>> runCompletions = new ConcurrentHashMap<>();
+	/**
+	 * Per-agent run coordinator — the single source of truth for "is this
+	 * agent running". The lock serialises start/exit decisions; the future
+	 * slot holds the live run's completion (or null if idle).
+	 *
+	 * <p>Coordinators are created lazily and retained for the lifetime of
+	 * the process — the per-agent memory is a ReentrantLock plus a nullable
+	 * reference, negligible even for large agent populations.</p>
+	 */
+	private static final class RunCoordinator {
+		final ReentrantLock lock = new ReentrantLock();
+		CompletableFuture<ACell> completion;
+	}
+
+	/** One coordinator per agent, keyed by agentId. */
+	private final ConcurrentHashMap<String, RunCoordinator> runs = new ConcurrentHashMap<>();
 
 	/** Active transition job per agent — allows suspend to cancel running transitions */
 	private final ConcurrentHashMap<String, Job> activeTransitions = new ConcurrentHashMap<>();
@@ -408,7 +425,7 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		CompletableFuture<ACell> completion = tryStartRun(agentId, ctx, true);
+		CompletableFuture<ACell> completion = wakeAgent(agentId, ctx, true);
 		if (completion == null) {
 			job.fail("Cannot start agent: " + agentId);
 			return;
@@ -637,7 +654,7 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		if (autoWake) tryStartRun(agentId, ctx, false);
+		if (autoWake) wakeAgent(agentId, ctx, false);
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.SLEEPING));
@@ -748,58 +765,70 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Wakes an agent — sets wake time to now, then tries to start the run loop.
-	 * Returns the completion future for the run cycle (may be null if the agent
-	 * can't run). Package-private so LLMAgentAdapter can call it.
-	 */
-	CompletableFuture<ACell> wakeAgent(AString agentId, RequestContext ctx) {
-		return wakeAgent(agentId, ctx, false);
-	}
-
-	CompletableFuture<ACell> wakeAgent(AString agentId, RequestContext ctx, boolean force) {
-		AgentState agent = getAgent(ctx.getCallerDID(), agentId);
-		if (agent == null) return null;
-		agent.setWakeTime(Utils.getCurrentTimestamp());
-		return tryStartRun(agentId, ctx, force);
-	}
-
-	/**
-	 * Tries to start the run loop. Returns the completion future.
+	 * Wakes the agent: persists the wake flag, then either attaches to the
+	 * live run loop or starts a fresh one. Returns the completion future,
+	 * or null if the agent doesn't exist / has no work and wake isn't forced.
 	 *
-	 * <p>If the agent is already RUNNING, returns the existing future.
-	 * If SLEEPING, performs an atomic CAS to RUNNING and starts the loop.
-	 * The {@code force} flag skips the shouldWake/hasWork check (for triggers).</p>
+	 * <p>All run-loop concurrency flows through this single entry point.
+	 * The per-agent {@link RunCoordinator} lock serialises the
+	 * start/attach/exit decision; callers never observe an inconsistency
+	 * between "loop is live" (future present) and "agent can accept a new
+	 * loop" (future absent). The lattice {@code K_STATUS} is written for
+	 * observability and restart recovery, not as a CAS primitive.</p>
+	 *
+	 * @param force if true, skips the {@code shouldWake || hasWork} gate —
+	 *              used by explicit triggers that always want to try running
 	 */
-	private CompletableFuture<ACell> tryStartRun(AString agentId, RequestContext ctx, boolean force) {
+	CompletableFuture<ACell> wakeAgent(AString agentId, RequestContext ctx, boolean force) {
+		String key = agentId.toString();
 		AString callerDID = ctx.getCallerDID();
-
-		// If already running, return existing future
-		CompletableFuture<ACell> existing = runCompletions.get(agentId.toString());
-		if (existing != null && !existing.isDone()) return existing;
 
 		AgentState agent = getAgent(callerDID, agentId);
 		if (agent == null) return null;
-		if (!force && !agent.shouldWake() && !hasWork(agent)) return null;
 
-		AString transitionOp = resolveTransitionOp(callerDID, agentId);
-		if (transitionOp == null) return null;
+		RunCoordinator coord = runs.computeIfAbsent(key, k -> new RunCoordinator());
+		coord.lock.lock();
+		try {
+			// Persist wake flag — any in-flight loop will observe it either
+			// via mergeRunResult's CAS-retried lambda or via tryCleanExit's
+			// re-check under this same lock. Set unconditionally so that
+			// resume of a suspended agent sees pending work.
+			agent.setWakeTime(Utils.getCurrentTimestamp());
 
-		// Atomic CAS: SLEEPING → RUNNING. If it fails, the agent is already
-		// running elsewhere — return that runner's future.
-		if (!agent.tryStartRunning()) {
-			return runCompletions.get(agentId.toString());
+			// Live run? Attach to it. Our wake flag is already visible to
+			// the loop's merge or will be caught at its clean-exit check.
+			if (coord.completion != null && !coord.completion.isDone()) {
+				return coord.completion;
+			}
+
+			// Only start a loop from SLEEPING. Suspended or terminated
+			// agents keep their wake flag for later resume; running is
+			// handled by the live-run branch above.
+			if (!AgentState.SLEEPING.equals(agent.getStatus())) return null;
+
+			// No live run. Decide whether to start one.
+			if (!force && !agent.shouldWake() && !hasWork(agent)) return null;
+
+			AString transitionOp = resolveTransitionOp(callerDID, agentId);
+			if (transitionOp == null) return null;
+
+			CompletableFuture<ACell> completion = new CompletableFuture<>();
+			coord.completion = completion;
+			agent.setStatus(AgentState.RUNNING);
+
+			final AString finalOp = transitionOp;
+			CompletableFuture.runAsync(
+				() -> executeRunLoop(agentId, callerDID, finalOp, ctx, coord),
+				VIRTUAL_EXECUTOR);
+			return completion;
+		} finally {
+			coord.lock.unlock();
 		}
+	}
 
-		// We won the CAS — create future and start loop
-		CompletableFuture<ACell> completion = new CompletableFuture<>();
-		runCompletions.put(agentId.toString(), completion);
-
-		final AString finalOp = transitionOp;
-		CompletableFuture.runAsync(() -> {
-			executeRunLoop(agentId, callerDID, finalOp, ctx, completion);
-		}, VIRTUAL_EXECUTOR);
-
-		return completion;
+	/** Overload: non-forced wake (used by message delivery / resume auto-wake). */
+	CompletableFuture<ACell> wakeAgent(AString agentId, RequestContext ctx) {
+		return wakeAgent(agentId, ctx, false);
 	}
 
 	private static boolean hasWork(AgentState agent) {
@@ -814,7 +843,7 @@ public class AgentAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private void executeRunLoop(AString agentId, AString callerDID,
 			AString transitionOp, RequestContext ctx,
-			CompletableFuture<ACell> completion) {
+			RunCoordinator coord) {
 		ACell lastResult = null;
 		boolean firstIteration = true;
 		int iteration = 0;
@@ -826,7 +855,9 @@ public class AgentAdapter extends AAdapter {
 				log.warn("Agent {} hit max loop iterations ({}), forcing sleep", agentId, MAX_LOOP_ITERATIONS);
 				AgentState agent = getAgent(callerDID, agentId);
 				if (agent != null) agent.setStatus(AgentState.SLEEPING);
-				completeRun(completion, agentId, lastResult != null ? lastResult : Maps.of(
+				// Safety-net exit — bypass the clean-exit handshake so we
+				// cannot loop forever even if wake flags keep arriving.
+				forceExit(coord, lastResult != null ? lastResult : Maps.of(
 					Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.SLEEPING,
 					Fields.TASK_RESULTS, allTaskResults));
 				return;
@@ -835,7 +866,7 @@ public class AgentAdapter extends AAdapter {
 			// Snapshot current state (reads are non-blocking)
 			AgentState agent = getAgent(callerDID, agentId);
 			if (agent == null) {
-				completeRunExceptionally(completion, agentId, "Agent not found: " + agentId);
+				completeExceptionally(coord, "Agent not found: " + agentId);
 				return;
 			}
 
@@ -845,13 +876,12 @@ public class AgentAdapter extends AAdapter {
 			Index<Blob, ACell> pending = agent.getPending();
 			ACell currentState = agent.getState();
 
-			// On subsequent iterations, exit if no new work
+			// On subsequent iterations, attempt clean exit if no new work.
+			// tryCleanExit re-checks wake/hasWork under the coord lock, so a
+			// trigger arriving between the last merge and here is still seen.
 			if (!firstIteration && inbox.count() == 0 && tasks.count() == 0) {
-				agent.sleep();
-				completeRun(completion, agentId, lastResult != null ? lastResult : Maps.of(
-					Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.SLEEPING,
-					Fields.TASK_RESULTS, allTaskResults));
-				return;
+				if (tryCleanExit(coord, agent, lastResult, allTaskResults, agentId)) return;
+				continue;  // late wake — loop again
 			}
 			firstIteration = false;
 
@@ -942,14 +972,14 @@ public class AgentAdapter extends AAdapter {
 			boolean continueLoop = AgentState.RUNNING.equals(
 				RT.ensureString(merged.get(AgentState.KEY_STATUS)));
 			if (!continueLoop) {
-				completeRun(completion, agentId, lastResult);
-				return;
+				if (tryCleanExit(coord, agent, lastResult, allTaskResults, agentId)) return;
+				// Late wake arrived between merge and lock — loop again.
 			}
 		}
 		} catch (Exception e) {
 			suspendOnError(callerDID, agentId, e);
 			failPendingTaskJobs(callerDID, agentId, e.getMessage());
-			completeRunExceptionally(completion, agentId, e.getMessage());
+			completeExceptionally(coord, e.getMessage());
 		}
 	}
 
@@ -1026,15 +1056,81 @@ public class AgentAdapter extends AAdapter {
 
 	// ========== Run completion ==========
 
-	private void completeRun(CompletableFuture<ACell> completion, AString agentId, ACell result) {
-		runCompletions.remove(agentId.toString(), completion);
-		completion.complete(result);
+	/**
+	 * Attempts a clean exit from the run loop. Called when the loop has
+	 * observed empty queues or a non-RUNNING status.
+	 *
+	 * <p>Acquires the coord lock and re-checks under it whether new work has
+	 * arrived (wake flag set, or inbox/tasks non-empty) since the last merge.
+	 * If so, marks the agent RUNNING again and returns false so the caller
+	 * loops. Otherwise completes the run future, clears the coord slot, and
+	 * returns true.</p>
+	 *
+	 * <p>This is the only place that transitions a live run to "done" under
+	 * normal flow — exactly symmetric with {@link #wakeAgent} which is the
+	 * only place that transitions idle to "running". The shared coord lock
+	 * guarantees no wake is lost between the loop's final merge and exit.</p>
+	 *
+	 * @return true if exit happened (caller must return), false if a late
+	 *         wake was observed and the loop should continue
+	 */
+	private boolean tryCleanExit(RunCoordinator coord, AgentState agent,
+			ACell lastResult, AMap<AString, ACell> allTaskResults, AString agentId) {
+		coord.lock.lock();
+		try {
+			// Re-read agent under the lock — wake flag or queues may have
+			// changed since the loop started this iteration.
+			if (agent.shouldWake() || hasWork(agent)) {
+				agent.setStatus(AgentState.RUNNING);
+				return false;
+			}
+			agent.setStatus(AgentState.SLEEPING);
+			CompletableFuture<ACell> f = coord.completion;
+			coord.completion = null;
+			if (f != null) {
+				// Use the last iteration's transition result (if any) but
+				// force status to SLEEPING — the last merge may have written
+				// RUNNING because the initial wake flag was still set when
+				// mergeRunResult read the record, but we're exiting now.
+				ACell result = Maps.of(
+					Fields.AGENT_ID, agentId,
+					Fields.STATUS, AgentState.SLEEPING,
+					Fields.RESULT, lastResult != null ? RT.getIn(lastResult, Fields.RESULT) : null,
+					Fields.TASK_RESULTS, allTaskResults);
+				f.complete(result);
+			}
+			return true;
+		} finally {
+			coord.lock.unlock();
+		}
 	}
 
-	private void completeRunExceptionally(CompletableFuture<ACell> completion,
-			AString agentId, String message) {
-		runCompletions.remove(agentId.toString(), completion);
-		completion.completeExceptionally(new RuntimeException(message));
+	/**
+	 * Safety-net exit used when the loop hits {@link #MAX_LOOP_ITERATIONS}.
+	 * Bypasses the wake/hasWork re-check — if we've looped this many times,
+	 * something is wrong and we must release the slot regardless.
+	 */
+	private void forceExit(RunCoordinator coord, ACell result) {
+		coord.lock.lock();
+		try {
+			CompletableFuture<ACell> f = coord.completion;
+			coord.completion = null;
+			if (f != null) f.complete(result);
+		} finally {
+			coord.lock.unlock();
+		}
+	}
+
+	/** Exceptional exit — used when the loop catches an exception or the agent vanishes. */
+	private void completeExceptionally(RunCoordinator coord, String message) {
+		coord.lock.lock();
+		try {
+			CompletableFuture<ACell> f = coord.completion;
+			coord.completion = null;
+			if (f != null) f.completeExceptionally(new RuntimeException(message));
+		} finally {
+			coord.lock.unlock();
+		}
 	}
 
 	/**
