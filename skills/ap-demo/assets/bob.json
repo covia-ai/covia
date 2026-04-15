@@ -4,7 +4,7 @@
   "config": { "operation": "v/ops/goaltree/chat" },
   "state": { "config": {
     "llmOperation": "v/ops/langchain/openai",
-    "model": "gpt-4.1-mini",
+    "model": "gpt-5.4-mini",
     "defaultTools": false,
     "tools": ["v/ops/covia/read", "v/ops/covia/write", "v/ops/covia/list"],
     "caps": [

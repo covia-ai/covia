@@ -32,7 +32,7 @@ A template is a CVM map with the same structure as `agent:create` config. It may
   "name": "Convex Query Worker",
   "systemPrompt": "You query the Convex blockchain and report results...",
   "tools": ["convex:query", "covia:read", "covia:write"],
-  "model": "gpt-4o",
+  "model": "gpt-5.4-mini",
   "caps": [
     {"with": "w/results/", "can": "crud/write"},
     {"with": "w/", "can": "crud/read"}
@@ -73,7 +73,7 @@ A template is any CVM map. The following fields are recognised:
 | `description` | string | What this agent does (useful for LLM discovery) |
 | `systemPrompt` | string | System prompt defining the agent's role |
 | `tools` | array | Tool operation names the agent can call |
-| `model` | string | LLM model name (default: gpt-4o) |
+| `model` | string | LLM model name (default: gpt-5.4-mini) |
 | `llmOperation` | string | LLM backend operation (default: langchain:openai) |
 | `caps` | array | Capability restrictions (array of {with, can} objects) |
 | `context` | array | Context loading entries (asset hashes, workspace paths) |

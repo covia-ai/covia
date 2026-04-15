@@ -161,7 +161,7 @@ Declared at agent creation in `state.config.context`. Loaded on every run. The a
 {
   "config": {
     "llmOperation": "langchain:openai",
-    "model": "gpt-4o",
+    "model": "gpt-5.4-mini",
     "systemPrompt": "You are Carol, the AP Payment Approver...",
     "context": [
       "w/docs/ap-policy-rules",

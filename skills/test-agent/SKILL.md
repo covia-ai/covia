@@ -31,7 +31,7 @@ Example:
 agent_create  agentId=TestBot  config={
   "operation": "v/ops/llmagent/chat",
   "llmOperation": "v/ops/langchain/openai",
-  "model": "gpt-4o",
+  "model": "gpt-5.4-mini",
   "systemPrompt": "You are TestBot. ...",
   "tools": ["v/ops/covia/read", "v/ops/covia/write"],
   "caps": [{"with": "w/output/", "can": "crud/write"}, {"with": "w/", "can": "crud/read"}]

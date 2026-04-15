@@ -40,10 +40,10 @@ Agent configs are standalone JSON files in `assets/`. Each is a complete `agent_
 
 | Agent | Config | Model | Tools | Caps | Outputs |
 |-------|--------|-------|-------|------|---------|
-| Alice | [alice.json](assets/alice.json) | gpt-4o-mini | none | `[]` (deny all) | responseFormat (extraction schema) |
-| Bob | [bob.json](assets/bob.json) | gpt-4.1-mini | covia_read, covia_write, covia_list | read vendors/POs/docs, write invoices/enrichments | typed complete (enrichment schema) |
-| Carol | [carol.json](assets/carol.json) | gpt-4.1-mini | covia_read, covia_write | read all w/, write decisions only | typed complete (decision schema) |
-| Dave | [dave.json](assets/dave.json) | gpt-4.1-mini | 8 ops + subgoal, compact, more_tools | read w/, agent message/request, invoke | none (conversational) |
+| Alice | [alice.json](assets/alice.json) | gpt-5.4-mini | none | `[]` (deny all) | responseFormat (extraction schema) |
+| Bob | [bob.json](assets/bob.json) | gpt-5.4-mini | covia_read, covia_write, covia_list | read vendors/POs/docs, write invoices/enrichments | typed complete (enrichment schema) |
+| Carol | [carol.json](assets/carol.json) | gpt-5.4-mini | covia_read, covia_write | read all w/, write decisions only | typed complete (decision schema) |
+| Dave | [dave.json](assets/dave.json) | gpt-5.4-mini | 8 ops + subgoal, compact, more_tools | read w/, agent message/request, invoke | none (conversational) |
 
 All use `goaltree:chat` transition with `defaultTools: false`. Typed `outputs` auto-inject `complete`/`fail` tools with schema enforcement. `overwrite: true` allows re-running setup to update configs without losing timelines.
 

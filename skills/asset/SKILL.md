@@ -148,7 +148,7 @@ Agent definitions have an `agent` object:
     "operation": "v/ops/llmagent/chat",
     "config": {
       "llmOperation": "v/ops/langchain/openai",
-      "model": "gpt-4o",
+      "model": "gpt-5.4-mini",
       "systemPrompt": "You are Alice...",
       "responseFormat": { "name": "InvoiceExtraction", "schema": { ... } },
       "tools": ["v/ops/covia/read", "v/ops/covia/write"]

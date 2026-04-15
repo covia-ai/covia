@@ -32,7 +32,7 @@ agent_create
   config: { "operation": "v/ops/llmagent/chat" }
   state: { "config": {
     "llmOperation": "v/ops/langchain/openai",
-    "model": "gpt-4o",
+    "model": "gpt-5.4-mini",
     "systemPrompt": "<prompt>"
   }}
 ```

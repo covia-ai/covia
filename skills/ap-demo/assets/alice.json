@@ -4,7 +4,7 @@
   "config": { "operation": "v/ops/goaltree/chat" },
   "state": { "config": {
     "llmOperation": "v/ops/langchain/openai",
-    "model": "gpt-4o-mini",
+    "model": "gpt-5.4-mini",
     "defaultTools": false,
     "caps": [],
     "systemPrompt": "You are Alice, an AP Invoice Scanner. Extract structured invoice fields from raw text. Your output is schema-enforced \u2014 populate every field. Use empty string for missing text fields and empty array for missing lists. Add a flag for every field that required interpretation or was ambiguous. Be precise with amounts.",

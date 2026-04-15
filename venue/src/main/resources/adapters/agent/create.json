@@ -9,7 +9,7 @@
 			"properties": {
 				"agentId": { "type": "string", "description": "Human-readable agent name (e.g. 'Alice', 'DataChecker')" },
 				"config": {
-					"description": "Agent configuration. Either an inline map or a string reference that resolves to one — workspace path (e.g. 'w/templates/reader'), asset ref (/a/<hash>), DID URL, or venue operation name. Key fields: systemPrompt (what the agent does), tools (array of operation names it can call), model (LLM model, default gpt-4o), caps (capability restrictions). A resolved template may also include a 'state' field which is used as the agent's initial state.",
+					"description": "Agent configuration. Either an inline map or a string reference that resolves to one — workspace path (e.g. 'w/templates/reader'), asset ref (/a/<hash>), DID URL, or venue operation name. Key fields: systemPrompt (what the agent does), tools (array of operation names it can call), model (LLM model, default gpt-5.4-mini), caps (capability restrictions). A resolved template may also include a 'state' field which is used as the agent's initial state.",
 					"oneOf": [
 						{
 							"type": "object",
@@ -17,7 +17,7 @@
 								"operation": { "type": "string", "description": "Transition operation for the agent (e.g. 'llmagent:chat'). Determines how the agent processes tasks." },
 								"systemPrompt": { "type": "string", "description": "System prompt defining the agent's role and behaviour" },
 								"tools": { "type": "array", "description": "Tool operations the agent can call (e.g. ['covia:read', 'covia:write']). Default tools are included automatically." },
-								"model": { "type": "string", "description": "LLM model name (default: gpt-4o)" },
+								"model": { "type": "string", "description": "LLM model name (default: gpt-5.4-mini)" },
 								"caps": { "type": "array", "description": "Capability restrictions — array of {with, can} objects limiting what the agent can access" }
 							},
 							"additionalProperties": true
