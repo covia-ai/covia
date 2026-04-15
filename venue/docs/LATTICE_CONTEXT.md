@@ -9,14 +9,21 @@ Three addressing layers: lattice storage, agent-visible paths, and shorthand pre
 
 ### Agent-Visible Paths
 
-| Prefix | Resolves to | Scope | Lifecycle |
-|--------|------------|-------|-----------|
-| `n/` | `g/{agent}/n/...` | Agent-private workspace | Permanent, dies with agent |
-| `t/` | Current task node's scratch | Task-local scratch | Wiped on pop |
-| `w/` | `<DID>/w/...` | User shared data | Permanent |
-| `o/` | `<DID>/o/...` | Operations registry | Permanent |
+Five shorthands, one per scope. Each resolves to a single state bucket. Data is never wiped — all state persists at its full lattice path for audit. "Scope" only governs where writes are directed based on the currently focused context.
 
-`n/` and `t/` are only valid in agent scope. Full paths (e.g. `g/{agent}/timeline/0`) work everywhere.
+| Prefix | Resolves to | Scope | Writes accepted while… |
+|--------|------------|-------|------------------------|
+| `t/` | `g/{agent}/tasks/{taskId}/t/...` | Task state (currently focused job) | A task is focused |
+| `c/` | `g/{agent}/sessions/{sid}/c/...` | Session / conversation state | A session is active |
+| `n/` | `g/{agent}/n/...` | Agent state (cross-session) | Agent is not TERMINATED |
+| `w/` | `<DID>/w/...` | User shared data | Always |
+| `o/` | `<DID>/o/...` | User operations registry | Always |
+
+`t/`, `c/`, `n/` are only valid in agent scope. Full paths (e.g. `g/{agent}/timeline/0`) work everywhere.
+
+**Note:** `t/` means **task scratch** where "task" is the Covia external unit of work — a job assigned to the agent via `agent_request`. `t/key` resolves to the `t` field inside the taskdata map at `g/{agent}/tasks/{taskId}` (the same Index that's existed since Phase B5). Do not confuse with **goal-tree nodes** (internal recursive context scoping — see "Goal tree" below), which have no top-level shorthand.
+
+**Data persists.** Tasks, sessions, and goals are not wiped at any lifecycle boundary — completion, pop, archive, and termination all leave the data at its full lattice path for audit. "Scope" in the table above governs only where *writes via shorthand* are currently directed, not when data is removed.
 
 ### Lattice Storage
 
@@ -40,28 +47,39 @@ An agent's complete state lives at `g/{agentId}` as a single atomic record:
 g/alice/
   ├── status          ← SLEEPING | RUNNING | SUSPENDED | TERMINATED
   ├── config          ← harness-owned (transition op, tools, LLM params)
-  ├── tasks           ← task stack (agent writes via plan())
+  ├── tasks           ← Index of tasks (Covia jobs assigned to this agent).
+  │                     Each entry is a taskdata map with input, status,
+  │                     result, sessionId?, goals?, and a t/ field used by
+  │                     the `t/` shorthand.
+  ├── sessions        ← Index of sessions (conversational scopes). See
+  │                     AGENT_SESSIONS.md for shape.
   ├── n/              ← agent-private workspace (agent read/write)
   │   ├── notes/
   │   ├── drafts/
   │   └── refs/
   ├── timeline        ← append-only audit trail (harness-managed)
-  ├── inbox           ← incoming messages (external)
-  ├── pending         ← async job references (harness-managed)
-  ├── state           ← opaque domain state (transition function)
+  ├── inbox           ← out-of-band signals (wake events, routing failures)
   ├── ts              ← last-update timestamp (auto)
   ├── error           ← error message if SUSPENDED
   └── wake            ← deferred wake timestamp
 ```
 
-Framework-managed (read-only to agent): status, config, tasks, timeline, inbox, pending, state, ts, error, wake. The agent writes `n/` directly and `tasks` via `plan()`.
+Framework-managed (read-only to agent): status, config, tasks, sessions, timeline, inbox, ts, error, wake. The agent writes `n/` directly and manipulates the current task's `goals` tree via `plan()`.
+
+### Task vs Goal — terminology
+
+- **Task** (Covia external) — a job assigned to the agent via `agent_request`. One per entry in the `tasks` Index. The `t/` shorthand is per-task. Tasks are not "popped" — they complete with a result and remain in the Index as audit.
+- **Goal** (internal, optional) — a node in a recursive decomposition the agent builds *within* a task to structure its own work. Goal trees are manipulated by `plan()`, rendered as paths like `/research/vendor-a`, and use push/pop semantics for conversation focus. Goals have no top-level shorthand — they're below the task.
+
+A task may contain a goal tree (`goals` field inside taskdata); a goal tree always lives inside exactly one task.
 
 ### Destination Shorthand (agent scope only)
 
 | Agent writes | Resolves to |
 |-------------|-------------|
 | `n/notes/x` | `g/alice/n/notes/x` (agent-private) |
-| `t/snapshot` | Current task's scratch area |
+| `t/snapshot` | `g/alice/tasks/{taskId}/t/snapshot` — focused task's scratch |
+| `c/topic` | `g/alice/sessions/{sid}/c/topic` — active session's scratch |
 | `w/data/x` | `<DID>/w/data/x` (user shared) |
 | `o/myop` | `<DID>/o/myop` (user operations) |
 
@@ -73,63 +91,67 @@ Framework-managed (read-only to agent): status, config, tasks, timeline, inbox, 
 | 2. Tool schemas | ~1,600 B | Strong (top) | 6 lattice + 1 harness. MCP deferred. |
 | 3. Context map | ~300 B | Strong (top) | Budget + loaded paths. Simple. |
 | 4. Loaded data | agent-controlled | Upper | Loaded paths, refreshed each turn. |
-| 5. Task conversation | varies | Middle | Current task's history only. Short. |
-| 6. Task stack | ~500 B | Strong (bottom) | Focused leaf expanded. |
+| 5. Goal conversation | varies | Middle | Current goal's history only. Short. |
+| 6. Goal tree | ~500 B | Strong (bottom) | Focused leaf expanded. |
 | 7. Current turn | varies | Strong (bottom) | Tool result + continuation. |
 
 Fixed overhead (sections 1–3, 6): ~4,400 B (~1,100 tokens). Under 0.6%.
 
-**Key insight:** Section 5 is the current task's conversation only — not the entire session. This keeps the middle zone short and focused. Parent and sibling task conversations are not present.
+**Key insight:** Section 5 is the current goal's conversation only — not the entire task or session. This keeps the middle zone short and focused. Parent and sibling goal conversations are not present.
 
 ## Lifecycle Model
 
-Three load lifecycles for data in the agent's context. No TTL. Pop is the only automatic cleanup.
+Two separate lifecycle concepts apply, and they should not be conflated:
 
-| Lifecycle | Source | Expires |
-|-----------|--------|---------|
-| **Pinned** | Harness | Never (task stack, system prompt) |
+1. **Active context scope** — where data appears *in the LLM's live prompt*. This shrinks and grows as goals are pushed and popped. "Freeing on pop" means removing from the live prompt, not deleting data.
+2. **Lattice data persistence** — data at lattice paths (including `t/`, `c/`, `n/`, and goal nodes) persists indefinitely. Nothing is wiped at task completion, goal pop, session archive, or agent termination. Past state is preserved as audit and remains queryable via full lattice paths.
+
+Three load lifecycles govern the active context:
+
+| Lifecycle | Source | Leaves active context when… |
+|-----------|--------|-----------------------------|
+| **Pinned** | Harness | Never (goal tree, system prompt) |
 | **Global** | `load()` | Explicit `unload()`. Survives push/pop. |
-| **Scoped** | `load(scope:)` | Freed when that task pops |
+| **Scoped** | `load(scope:)` | That goal pops |
 
-Tool results (`explore`, `compare`) are not "loaded" — they appear in the task conversation and disappear with it on pop.
+Tool results (`explore`, `compare`) are not "loaded" — they appear in the goal conversation and leave the active context when the conversation is discarded on pop. The tool invocation itself remains recorded in the persisted conversation on the lattice.
 
-**Scope incentivises decomposition.** Want automatic cleanup? Break work into tasks. Pop is the only automatic cleanup — no lazy TTL shortcut.
+**Scope incentivises decomposition.** Want automatic context shrinkage? Break work into goals — each pop narrows the active window without losing anything from the record.
 
-## Task-Scoped Conversation
+## Goal-Scoped Conversation
 
-Each task has its own conversation history. This is the fundamental mechanism that keeps context clean.
+Each goal has its own conversation history. This is the fundamental mechanism that keeps context clean. Goals live inside a task; a single task can host a whole goal tree. Task-level state (the `t/` shorthand and the rest of taskdata) is orthogonal to goal scope.
 
-### Push (start child task)
+### Push (start child goal)
 
-When `plan()` sets a child task to `active`, the harness (between turns):
+When `plan()` sets a child goal to `active`, the harness (between turns):
 
-1. Persists the current task's conversation to local storage
-2. Activates the child task on the agent record
-3. Starts a **fresh conversation** — no parent or sibling history
-4. Scoped loads for the child are activated
+1. Persists the current goal's conversation (to the goal node on the lattice — it is kept, not thrown away)
+2. Activates the child goal
+3. Starts a **fresh conversation** for the child — no parent or sibling history visible
+4. Scoped loads for the child enter the active context
 
 The agent never pushes directly — it updates the plan, the harness executes the transition.
 
-### Pop (complete or fail child task)
+### Pop (complete or fail child goal)
 
-When `plan()` sets a task to `complete` or `failed`, the harness (between turns):
+When `plan()` sets a goal to `complete` or `failed`, the harness (between turns):
 
-1. Child's conversation is **discarded** (local storage)
-2. Child's `t/` scratch data is cleared from the task node
-3. Scoped loads are freed
-4. Cascades: any active/pending descendants are marked `cancelled`, their conversations discarded, their `t/` cleared
-5. Summary inserted into parent conversation: `[{path} completed: "{result}"]` or `[{path} failed: "{error}"]`
-6. If more active siblings remain, harness pushes the next one (declaration order)
-7. When all active children are done, parent conversation is **resumed**
+1. Child's conversation leaves the active context (remains persisted on the goal node as audit)
+2. Scoped loads for that goal leave the active context
+3. Cascades: any active/pending descendants are marked `cancelled`; their conversations and scoped loads leave the active context (records preserved)
+4. Summary inserted into the parent's conversation: `[{path} completed: "{result}"]` or `[{path} failed: "{error}"]`
+5. If more active siblings remain, harness pushes the next one (declaration order)
+6. When all active children are done, parent conversation is **resumed**
 
-A task cannot be re-opened after pop. To retry, create a new child task.
+A popped goal's conversation, tool results, and scoped-load snapshots remain on the lattice for audit. A goal cannot be re-opened as the active target — if the agent wants to resume that line of work, it creates a new child goal, optionally referencing the earlier one.
 
 ### What the agent sees
 
-Only the current task's conversation is in section 5. This means:
+Only the current goal's conversation is in section 5. This means:
 
 ```
-── Section 5: Task Conversation (/research/vendor-b) ──
+── Section 5: Goal Conversation (/research/vendor-b) ──
 
 load("w/vendors/b/profile", budget: 500, scope: "/research/vendor-b")
 → loaded
@@ -140,12 +162,12 @@ explore("w/vendors/b/financials", budget: 600)
 "Smaller but fastest growing. Higher margins."
 ```
 
-Clean. No vendor-a history. No parent setup noise. Just this task's work.
+Clean. No vendor-a history. No parent setup noise. Just this goal's work.
 
 ### What the parent sees after children pop
 
 ```
-── Section 5: Task Conversation (/research) ──
+── Section 5: Goal Conversation (/research) ──
 
 "Beginning vendor research."
 
@@ -156,45 +178,48 @@ Clean. No vendor-a history. No parent setup noise. Just this task's work.
 "All three vendors researched. Moving to comparison."
 ```
 
-Three one-line results. All the detail was in the child conversations, now discarded.
+Three one-line results in the live prompt. The detail is still on the lattice at each child goal node — anyone (or the agent on a later turn) can walk back through it.
 
-### Tool results are just conversation
+### Tool results and conversation
 
-No special result tracking. Tool results live in the task conversation. When the task pops, they're gone. If the agent needs data to survive, it promotes to `n/` (agent-private) or `w/` (shared) before popping.
+Tool results live in the goal conversation. When the goal pops, they leave the *active context* (no longer visible to the LLM) but remain on the lattice with the persisted conversation. Agents that want data to carry *into* subsequent goals or tasks should promote it to `t/` (task scratch, persists for the Covia task), `n/` (agent-private, cross-session), or `w/` (shared) before popping — that's what makes it visible in future active contexts without having to re-explore.
 
-## Task Stack
+## Goal Tree
 
 ### Storage
 
-Tasks are stored flat in the agent's `tasks` Index, keyed by Blob ID. Each task is a map with required `status` field, plus optional `result`, `t` (scratch data), `parent`, `children`, `name`, and arbitrary metadata. The harness renders the flat index as a tree for the agent using task paths (e.g. `/research/vendor-a`).
+Goals for the currently focused task are stored flat in a `goals` Index inside that task's taskdata (at `g/{agent}/tasks/{taskId}/goals`), keyed by Blob ID. Each goal is a map with required `status`, plus optional `result`, `conversation` (persisted turns for audit), `parent`, `children`, `name`, and arbitrary metadata. The harness renders the flat index as a tree for the agent using goal paths (e.g. `/research/vendor-a`).
 
-`plan()` is the only way the agent modifies tasks. The harness translates path-based plan updates to ID-based index mutations.
+`plan()` is the only way the agent modifies the goal tree. The harness translates path-based plan updates to ID-based index mutations on the focused task's `goals` Index.
 
 ### Focus and Activation
 
-The agent activates tasks via `plan()`. There is always exactly one active conversation (the focused task).
+The agent activates goals via `plan()`. There is always exactly one active conversation (the focused goal).
 
 - Multiple active siblings are processed in declaration order, one at a time
 - Parent conversation stays suspended until all active children are done
 - After all active children pop, parent resumes and can activate more or proceed
-- The harness never auto-activates pending tasks
+- The harness never auto-activates pending goals
 
 This allows batch activation ("do A, B, C in parallel") and sequential activation ("do A, then decide") as the agent sees fit.
 
 | State | Rendering |
 |-------|-----------|
-| Focused (current) | Full — metadata, scoped paths, `t/` contents |
+| Focused (current) | Full — metadata, scoped paths, recent conversation |
 | Other active | Two-line summary |
 | Pending | One-line |
 | Complete/Failed | One-line + result |
 
-### Task Scratch (`t/`)
+### Task scratch (`t/`) is task-level, not goal-level
 
-Each task node has a `t` field for scratch data. The agent writes via `t/key` shorthand; the harness stores it in the current task's `t` map. On pop, the task node is compacted (status + result only) and `t` is wiped.
+The `t/` shorthand resolves to the **focused Covia task's** scratch — not the focused goal. All goals within a single task share the same `t/`. This is intentional: `t/` is a place to accumulate findings and in-progress work across the goal tree that should survive individual goal pops but not leak between separate tasks.
 
-No overlay, no fork mechanics — `t/` is simply part of the task node.
+- Goal-local working data → keep it in the goal conversation. It persists on the lattice after pop but leaves the active context.
+- Cross-goal-but-task-local data → write to `t/`. Survives pops within the task.
+- Cross-task-within-agent → write to `n/`.
+- Shared across users/agents → write to `w/`.
 
-**Promote before pop** — agent must write to `n/` (agent-private) or `w/` (shared) to persist results beyond task completion.
+**Data is never wiped.** Goal conversations, `t/` contents, `c/` contents, and the goal tree itself all remain on the lattice at completion, pop, archive, and termination boundaries. "Promote before pop" is no longer a correctness requirement — it's a *visibility* optimisation: if you want data in the active context of later turns, move it somewhere that's still in scope.
 
 ## Context Map
 
@@ -206,7 +231,7 @@ No overlay, no fork mechanics — `t/` is simply part of the task node.
     tokens: {total: 45000, used: 2000, avail: 43000}
   },
   paths: {
-    "g/alice/tasks":
+    "g/alice/tasks/{taskId}/goals":
       {budget: 500, pinned: true},
     "w/vendors/b/profile":
       {budget: 500, scope: "/research/vendor-b"},
@@ -225,7 +250,7 @@ Simple. No results tracking. No TTL countdowns.
 ```json5
 {
   name: "explore",
-  description: "Read lattice data at one or more paths, truncated to byte budget. JSON5 with structural annotations. Result appears in task conversation.",
+  description: "Read lattice data at one or more paths, truncated to byte budget. JSON5 with structural annotations. Result appears in goal conversation.",
   parameters: {
     paths: "string | string[]", budget: "integer (default: 500)",
     compact: "boolean (default: false)", filter: "string — optional",
@@ -234,22 +259,22 @@ Simple. No results tracking. No TTL countdowns.
 }
 ```
 
-No `retain` — results live in the task conversation and pop with it.
+No `retain` — results live in the goal conversation. When the goal pops they leave the active context but remain on the lattice as audit.
 
 ### 2. `load` — Add refreshing path to context
 
 ```json5
 {
   name: "load",
-  description: "Add lattice path to context. Refreshed each turn. Global (default) or scoped (freed when task pops).",
+  description: "Add lattice path to context. Refreshed each turn. Global (default) or scoped (leaves active context when that goal pops).",
   parameters: {
     path: "string", budget: "integer (default: 500)",
-    scope: "string — optional task path"
+    scope: "string — optional goal path"
   }
 }
 ```
 
-No `ttl` — cleanup is by pop or explicit unload.
+No `ttl` — entries leave the active context only on pop or explicit unload.
 
 ### 3. `unload` — Remove from context
 
@@ -266,7 +291,7 @@ No `ttl` — cleanup is by pop or explicit unload.
 ```json5
 {
   name: "copy",
-  description: "Deep-clone lattice cell. Use n/ for agent workspace, w/ for shared, t/ for task scratch. Immutable snapshot.",
+  description: "Deep-clone lattice cell. Use n/ for agent workspace, w/ for shared, t/ for current-task scratch, c/ for current-session scratch. Immutable snapshot.",
   parameters: { source: "string", dest: "string" }
 }
 ```
@@ -276,7 +301,7 @@ No `ttl` — cleanup is by pop or explicit unload.
 ```json5
 {
   name: "write",
-  description: "Write string content. Use n/ for agent workspace (notes, drafts), w/ for shared data, t/ for task scratch.",
+  description: "Write string content. Use n/ for agent workspace (notes, drafts), w/ for shared data, t/ for current-task scratch, c/ for current-session scratch.",
   parameters: { dest: "string", value: "string" }
 }
 ```
@@ -286,21 +311,21 @@ No `ttl` — cleanup is by pop or explicit unload.
 ```json5
 {
   name: "compare",
-  description: "Compare two lattice paths, return only differences. Hash comparison skips unchanged subtrees. Inline /* was: */ annotations. Result appears in task conversation.",
+  description: "Compare two lattice paths, return only differences. Hash comparison skips unchanged subtrees. Inline /* was: */ annotations. Result appears in goal conversation.",
   parameters: {
     a: "string", b: "string", budget: "integer (default: 500)"
   }
 }
 ```
 
-### 7. `plan` — Update task stack (harness, schema-enforced)
+### 7. `plan` — Update goal tree (harness, schema-enforced)
 
 ```json5
 {
   name: "plan",
-  description: "Create or update task stack. Without path: full replacement. With path: merge at target. Setting status to 'complete' or 'failed' triggers pop: frees scoped loads, discards task conversation (summary preserved in parent), clears t/ scratch, cascades through descendants.",
+  description: "Create or update the goal tree for the current task. Without path: full replacement. With path: merge at target. Setting status to 'complete' or 'failed' triggers pop: the goal's conversation and scoped loads leave the active context (record preserved on the lattice), a summary is inserted into the parent conversation, and the pop cascades through active/pending descendants.",
   parameters: {
-    path: "string — optional task path",
+    path: "string — optional goal path",
     update: "object — merge data. null removes."
   }
 }
@@ -310,40 +335,39 @@ No `ttl` — cleanup is by pop or explicit unload.
 
 ```
 HARNESS (between turns):
-  1. Check task completions/failures → pop:
-       discard task conversation (local storage)
-       clear t/ scratch from task node
-       free scoped loads
-       cascade: cancel active/pending descendants
+  1. Check goal completions/failures → pop:
+       goal conversation leaves active context (persisted on goal node)
+       scoped loads leave active context
+       cascade: cancel active/pending descendants (records preserved)
        insert summary into parent conversation
   2. If more active siblings remain:
        push next active sibling (declaration order)
-       persist parent conversation to local storage
-       start fresh conversation
+       persist parent conversation to its goal node
+       start fresh conversation for sibling
   3. If all active children done:
        resume parent conversation
-  4. If new child task activated by agent:
-       persist current conversation to local storage
+  4. If new child goal activated by agent:
+       persist current conversation to its goal node
        push child, start fresh conversation
-  5. If root completed → validate, swap next root
+  5. If root goal completed → validate, task completes (taskdata.result set)
   6. Refresh loaded paths from lattice
-  7. Render task stack (focused task expanded)
+  7. Render goal tree (focused goal expanded)
   8. Calculate budget (bytes + tokens)
   9. Safety valve: 70% warn, 90% auto-prune
  10. Assemble prompt (sections 1–7)
  11. Append continuation prompt
 
 AGENT TURN:
-  1. Read context map      → budget, loaded paths
-  2. Read loaded data      → reference data
-  3. Read task conversation → what have I done in this task
-  4. Read task stack        → plan, focus
+  1. Read context map       → budget, loaded paths
+  2. Read loaded data       → reference data
+  3. Read goal conversation → what have I done in this goal
+  4. Read goal tree         → plan, focus
   5. Read current turn      → tool result + continuation
   6. Reason                 → next action
-  7. Maybe explore/compare  → results join task conversation
+  7. Maybe explore/compare  → results join goal conversation
   8. Maybe load/unload      → adjust working set
-  9. Maybe write/copy       → persist to n/ or w/, scratch to t/
- 10. Maybe plan()           → update tasks (triggers push/pop)
+  9. Maybe write/copy       → persist to n/, w/, t/, or c/
+ 10. Maybe plan()           → update goal tree (triggers push/pop)
  11. Act                    → Convex MCP tools
  12. Respond
 ```
@@ -352,7 +376,7 @@ AGENT TURN:
 
 ### Turn 1 — Root task setup
 
-**Task conversation: /**
+**Goal conversation: /**
 ```
 explore("w/vendors", budget: 300)
 → 12 vendors, A/B/C found
@@ -377,11 +401,11 @@ load("n/methodology", budget: 200, scope: "/")
 "Plan created. Starting vendor research."
 ```
 
-→ Three vendor tasks batch-activated. Harness pushes `/research/vendor-a` (first in declaration order). Root conversation suspended.
+→ Three vendor goals batch-activated. Harness pushes `/research/vendor-a` (first in declaration order). Root conversation suspended.
 
 ### Turn 2 — Research vendor A
 
-**Task conversation: /research/vendor-a** (clean — no root history)
+**Goal conversation: /research/vendor-a** (clean — no root history)
 ```
 load("w/vendors/a/profile", budget: 500, scope: "/research/vendor-a")
 → loaded
@@ -403,13 +427,13 @@ plan({path: "/research/vendor-a",
   update: {status: "complete", result: "23% share, growth slowing"}})
 ```
 
-→ Pop: conversation discarded. Scoped load freed. `t/` cleared. Parent gets summary.
+→ Pop: conversation leaves the active context (still on the goal node). Scoped load leaves the active context. `t/vendor-a-fin` stays — `t/` is task-level and persists through goal pops. Parent gets summary.
 
 → Harness pushes `/research/vendor-b` (next active sibling). Fresh conversation.
 
 ### Turn 3 — Research vendor B
 
-**Task conversation: /research/vendor-b** (clean — no vendor A history)
+**Goal conversation: /research/vendor-b** (clean — no vendor A history)
 ```
 load("w/vendors/b/profile", budget: 500, scope: "/research/vendor-b")
 → loaded
@@ -428,13 +452,13 @@ plan({path: "/research/vendor-b",
   update: {status: "complete", result: "15% share, rapid growth"}})
 ```
 
-→ Pop, push vendor-c (last active sibling). Same pattern.
+→ Pop, push vendor-c (last active sibling). Same pattern — child conversations leave active context but remain persisted on their goal nodes.
 
 ### Turn 4 — After all research, start comparison
 
-All three vendor tasks were batch-activated, so after vendor-c pops, `/research` resumes automatically.
+All three vendor goals were batch-activated, so after vendor-c pops, `/research` resumes automatically.
 
-**Task conversation: /research** (resumed, with child summaries)
+**Goal conversation: /research** (resumed, with child summaries)
 ```
 [vendor-a completed: "23% share, growth slowing"]
 [vendor-b completed: "15% share, rapid growth"]
@@ -445,7 +469,7 @@ plan({path: "/research", update: {status: "complete"}})
 
 → Pop `/research`. Root conversation resumed.
 
-**Task conversation: /** (resumed)
+**Goal conversation: /** (resumed)
 ```
 "Plan created. Starting vendor research."
 [research completed: "3 vendors analysed"]
@@ -457,7 +481,7 @@ plan({path: "/compare", update: {status: "active"}})
 
 ### Turn 5 — Compare
 
-**Task conversation: /compare** (clean)
+**Goal conversation: /compare** (clean)
 ```
 load("n/vendor-a", budget: 300, scope: "/compare")
 load("n/vendor-b", budget: 300, scope: "/compare")
@@ -475,11 +499,11 @@ plan({path: "/compare",
     result: "B strongest growth, A largest, C declining"}})
 ```
 
-→ Pop. Scoped loads freed. Push `/draft`.
+→ Pop. Scoped loads leave active context. Push `/draft`.
 
 ### Turn 6 — Draft
 
-**Task conversation: /draft** (clean)
+**Goal conversation: /draft** (clean)
 ```
 load("n/comparison", budget: 400, scope: "/draft")
 load("n/methodology", budget: 200, scope: "/draft")
@@ -496,7 +520,7 @@ plan({path: "/draft",
 
 ### Turn 7 — Review and complete
 
-**Task conversation: /review** (clean)
+**Goal conversation: /review** (clean)
 ```
 load("n/drafts/competitive-analysis",
   budget: 2000, scope: "/review")
@@ -512,7 +536,7 @@ plan({path: "/review", update: {status: "complete"}})
 plan({update: {status: "complete"}})
 ```
 
-→ Root complete. All scoped data freed. Harness swaps next root.
+→ Root goal complete → task completes, taskdata.result set. All scoped data leaves active context (records preserved). Harness may begin the next task if one is queued.
 
 **Final root conversation (what the harness archives):**
 ```
@@ -524,18 +548,18 @@ plan({update: {status: "complete"}})
 "Report complete."
 ```
 
-Six lines. The entire multi-turn analysis compressed to an action log.
+Six lines in the active context. The entire multi-turn analysis compressed to an action log; every child conversation and tool result is still retrievable on the lattice via its goal node.
 
 ### What This Demonstrates
 
-- **Clean task conversations** — each vendor research has no sibling noise
+- **Clean goal conversations** — each vendor research has no sibling noise in the active context
 - **Batch activation** — all three vendors activated upfront, processed in order
-- **Pop discards + summarises** — parent sees one-line results
-- **Promote before pop** — `write("n/...")` saves findings to agent workspace
-- **Progressive focus** — never holding all vendors' raw data simultaneously
-- **`t/` scratch space** — snapshots used during analysis, cleared on pop
-- **Conversation stays SHORT** — current task only, maybe 5-10 turns
-- **Root archives cleanly** — entire session compresses to ~6 lines
+- **Pop summarises into parent; full detail preserved on the lattice** — parent sees one-line results; audit can walk back any child conversation
+- **Promote for visibility** — `write("n/...")` moves findings into a scope visible from later goals and tasks
+- **Progressive focus** — never holding all vendors' raw data simultaneously in the active context
+- **`t/` scratch** — task-level, survives goal pops within the same task; wiped only by the user, never by the framework
+- **Conversation stays SHORT** — current goal only, maybe 5-10 turns
+- **Root archives cleanly** — the active view compresses to ~6 lines; the record is lossless
 
 ## Full Example: Project Coordination
 
@@ -574,27 +598,28 @@ plan({path: "/unblock/api-spec",
   update: {status: "complete", result: "auth design recommended"}})
 ```
 
-→ Pop: scoped loads freed, `t/auth-options` cleared, recommendation persists at `n/`.
+→ Pop: scoped loads leave active context. `t/auth-options` remains in taskdata (`t/` is task-level, not goal-level — it persists across goal pops within the same task). The `n/auth-recommendation` note is visible from every subsequent goal in every subsequent task on this agent.
 
 Parent conversation gets: `[api-spec completed: "auth design recommended"]`
 
-Marketing task auto-unblocked.
+Marketing goal auto-unblocked.
 
 ## Best Practices Review
 
 | Practice | Status |
 |----------|--------|
 | Data at top, query at bottom | ✅ |
-| Minimal relevant context | ✅ Budget truncation + task-scoped conversation |
-| Observation masking | ✅ Pop discards, parent gets summary only |
+| Minimal relevant context | ✅ Budget truncation + goal-scoped conversation |
+| Observation masking | ✅ Pop removes from active context, parent gets summary only |
 | Tiered memory | ✅ Pinned → global → scoped |
 | Compaction-resilient | ✅ Sections 1–4, 6 rebuilt by harness |
 | Budget awareness | ✅ Bytes + tokens in context map |
-| Structured plans | ✅ Uniform tasks, focus rendering |
-| Task-scoped context | ✅ Loads, conversation, and /t/ all pop together |
-| Task scratch | ✅ t/ in task node, cleared on pop |
-| Promote-before-pop | ✅ Explicit save to n/ or w/ for persistent results |
-| Slim history | ✅ Current task only + parent summaries |
+| Structured plans | ✅ Uniform goals, focus rendering |
+| Goal-scoped active context | ✅ Loads and conversation leave active context on pop (records preserved) |
+| Task scratch (`t/`) | ✅ Task-level, survives goal pops within the task, persists for audit |
+| Visibility promotion | ✅ Explicit save to `t/`, `n/`, or `w/` keeps data in scope for later goals/tasks |
+| Lossless audit | ✅ Goal conversations and tool results preserved on the lattice even after leaving active context |
+| Slim active history | ✅ Current goal only + parent summaries |
 | Schema efficiency | ✅ 7 tools, ~1,600 B |
 
 ## Comparison with Leading Approaches
@@ -603,26 +628,26 @@ Marketing task auto-unblocked.
 
 | Dimension | **Letta/MemGPT** | **Claude Code** | **LangChain** | **Covia Lattice** |
 |---|---|---|---|---|
-| Metaphor | OS (RAM + disk) | IDE session | Middleware pipeline | Task call stack |
+| Metaphor | OS (RAM + disk) | IDE session | Middleware pipeline | Goal tree inside task |
 | Memory tiers | Core → recall → archival | Context → CLAUDE.md → files | State → store → external | Pinned → global → scoped |
-| Cleanup | Agent self-edits | LLM compaction (lossy) | Middleware summarise/mask | **Pop (deterministic cascade)** |
-| What gets lost | Agent decides | LLM decides (unpredictable) | Configurable | **Nothing — promote before pop** |
-| History scope | Full session + recall search | Single growing conversation | Growing, summarised | **Per-task, discarded on pop** |
-| Task structure | None built-in | None (CLAUDE.md conventions) | TodoList (flat) | **Hierarchical stack + cascade** |
-| Workspace isolation | None | Subagents (separate process) | None | **Task-scoped t/ scratch, cleared on pop** |
+| Active-context cleanup | Agent self-edits | LLM compaction (lossy) | Middleware summarise/mask | **Pop (deterministic cascade)** |
+| What gets lost from the record | Agent decides | LLM decides (unpredictable) | Configurable | **Nothing — records preserved on lattice** |
+| History scope (active view) | Full session + recall search | Single growing conversation | Growing, summarised | **Per-goal, leaves active context on pop** |
+| Goal/plan structure | None built-in | None (CLAUDE.md conventions) | TodoList (flat) | **Hierarchical tree + cascade** |
+| Workspace isolation | None | Subagents (separate process) | None | **Task-level `t/` scratch persists; goal-level conversation scoped** |
 | Data resolution | None | File truncation heuristics | None | **CellExplorer budget control** |
 | Change detection | recall_memory_search | Re-read files | None | **compare() with hash-skip** |
 | Tool schema overhead | ~2-5K tokens | ~16.8K tokens (8.4% of context) | Varies | **~400 tokens (0.2%)** |
 
 ### Where Covia is ahead
 
-**Deterministic cleanup.** Other systems rely on LLM-generated summaries — inherently lossy and unpredictable. Claude Code users report compaction "forgetting" architectural decisions and access control rules. Our pop discards the task conversation, but the agent already promoted findings to `n/` or `w/`. Nothing is lost by surprise. This is RAII vs garbage collection.
+**Deterministic active-context cleanup.** Other systems rely on LLM-generated summaries — inherently lossy and unpredictable. Claude Code users report compaction "forgetting" architectural decisions and access control rules. Our pop removes the goal conversation from the active context, and the full record stays on the lattice. Nothing is lost from the record by surprise — this is RAII for attention, not for storage.
 
-**Task-scoped conversation.** No other framework scopes history to tasks. Claude Code operates on a single growing conversation that eventually gets compacted. LangChain summarises the full history. Our agent gets a fresh, focused conversation per task — 5-10 turns, not 200.
+**Goal-scoped conversation.** No other framework scopes history to internal planning steps. Claude Code operates on a single growing conversation that eventually gets compacted. LangChain summarises the full history. Our agent gets a fresh, focused conversation per goal — 5-10 turns, not 200 — with the full ancestral record still on the lattice.
 
 **Progressive data resolution.** CellExplorer is unique. A 50MB lattice structure rendered at 500 bytes with structural annotations. No other framework offers budget-controlled views of arbitrary data.
 
-**Task-scoped scratch.** `t/` scratch stored within each task node, cleared on pop. No fork or overlay mechanics — just part of the task lifecycle. Claude Code has manual file checkpoints but they're not task-scoped.
+**Task-level scratch.** `t/` scratch stored inside each task's taskdata, shared across all goals within that task. Persists as audit after the task completes. No fork or overlay mechanics. Claude Code has manual file checkpoints but they're not Covia-task-scoped.
 
 **Structural change detection.** `compare()` skips unchanged subtrees via hash comparison. Orders of magnitude more efficient than re-reading or searching recall memory.
 
@@ -637,14 +662,14 @@ Marketing task auto-unblocked.
 
 **Subagent delegation (Claude Code).** Claude Code spawns subagents with isolated context. Covia covers this through:
 - **Grid operations** — delegate tasks to remote agents/services on the federated grid
-- **Task stack** provides within-agent isolation (each child task gets clean context)
+- **Goal tree** provides within-agent active-context isolation (each child goal gets clean active context)
 - Multi-agent coordination is a Grid-level concern, not a context management concern
 
 **Git-backed versioning (Letta Context Repositories).** Letta's MemFS projects memory into git-backed files. Covia's lattice is **superior to git** for this purpose:
 - Content-addressed Merkle DAG — every value has a unique hash, structural sharing is automatic
 - Immutable cells — no merge conflicts, no branch management needed
 - `compare()` uses hash trees natively — faster and more precise than git diff
-- Task-scoped scratch (`t/`) provides isolated working space per task, cleared on completion
+- Task-level scratch (`t/`) provides isolated working space per Covia task, preserved as audit after completion
 
 **Agent timeline / history (Letta).** Letta maintains recall memory searchable by date and content. Covia covers this through:
 - Agent timeline is a Covia Grid feature — full history of agent actions, decisions, and state transitions
@@ -663,30 +688,31 @@ Marketing task auto-unblocked.
 
 Every other system treats context management as **damage control** — the conversation grows, eventually you compress or discard, and you hope important information survives.
 
-Covia treats context as **explicitly scoped resources tied to a task lifecycle**. Nothing is lost by surprise. The agent decides what to promote. Conversation history is task-local by design, not compressed after the fact. The lattice provides perfect recall for anything the agent chose to persist.
+Covia treats the **active context** (what the LLM sees this turn) as a scoped resource tied to the goal tree, and treats the **lattice record** as immutable and complete. Nothing is lost from the record by surprise. The agent decides what to promote *for visibility* — not for preservation. Goal conversation history is scoped-by-design in the active view, while the full transcript remains addressable on the lattice.
 
-Other systems: garbage collection (hope the GC picks the right things).
-Covia: RAII (resources freed deterministically when their scope ends).
+Other systems: garbage collection of the record itself (hope the GC picks the right things to keep).
+Covia: RAII for attention (records stay; only the active window contracts and expands deterministically).
 
 ## Design Decisions
 
-1. **Three load lifecycles.** Pinned (harness-managed, always present), global (agent `load()`, explicit `unload()`), scoped (freed when task pops). No TTL. Pop is the only automatic cleanup. Tool results are not "loaded" — they live in conversation.
-2. **Task-scoped conversation.** Each task has its own conversation history. Pop discards it. Parent receives the `result` field as a one-line summary. Siblings never see each other's history.
-3. **Pop = cascade.** Setting status to `complete` or `failed` triggers pop: discard conversation, clear `t/` scratch, free scoped loads, cascade (cancel active/pending descendants). A task cannot be re-opened — create a new child to retry.
-4. **Promote before pop.** Write to `n/` (agent-private) or `w/` (shared) to persist findings. Everything in `t/` and conversation is ephemeral — lost on pop.
-5. **Tool results are just conversation.** No special result tracking. `explore()` and `compare()` results live in the task conversation and pop with it.
-6. **Push = fresh context.** When `plan()` sets a child to `active`, the harness persists the current conversation to local storage, activates the child, and starts a fresh conversation. The agent never pushes directly.
+1. **Three load lifecycles.** Pinned (harness-managed, always present), global (agent `load()`, explicit `unload()`), scoped (leaves the active context when that goal pops). No TTL. Pop is the only automatic active-context shrinkage. Tool results are not "loaded" — they live in the goal conversation.
+2. **Goal-scoped active conversation.** Each goal has its own conversation. On pop the goal conversation leaves the active context but is preserved on the goal node. Parent receives the `result` field as a one-line summary. Siblings never see each other's conversation in the active context.
+3. **Pop = cascade over the active context.** Setting a goal's status to `complete` or `failed` triggers pop: goal conversation and scoped loads leave the active context, cascade cancels active/pending descendants. Records are preserved on the lattice. A goal cannot be re-opened as the active target — create a new child to resume that line of work.
+4. **Data persists.** `t/`, `c/`, `n/`, goal conversations, and goal nodes are never wiped by the framework. "Promote" (write to `t/`, `n/`, or `w/`) is a *visibility* choice — it moves data into a scope still visible in the active context of later goals/tasks. All historical state remains queryable via full lattice paths.
+5. **Tool results are just conversation.** No special result tracking. `explore()` and `compare()` results live in the goal conversation; on pop they leave the active context with the conversation and remain on the lattice.
+6. **Push = fresh active context.** When `plan()` sets a child to `active`, the harness persists the current conversation to its goal node, activates the child, and starts a fresh conversation. The agent never pushes directly.
 7. **Parent sees summaries only.** Format: `[{path} completed: "{result}"]` or `[{path} failed: "{error}"]`.
-8. **Namespaces.** Three layers: lattice storage (per-user `g`, `w`, `o`, `j`, `s`, `h`, `a`), agent-visible paths (`n/`, `t/`, `w/`, `o/`), and shorthand resolution (harness maps prefixes to lattice locations in agent scope).
-9. **Agent record is the unit.** Complete state at `g/{agentId}`: status, config, tasks, `n` (workspace), timeline, inbox, pending, state, ts, error, wake. No nesting layer. The agent record IS the state — fork it, migrate it, archive it.
-10. **Task storage.** Flat Index keyed by Blob ID. Each task is a map with required `status`, optional `result`, `t` (scratch), `parent`, `children`, `name`, plus arbitrary metadata. Harness renders flat index as a tree; `plan()` uses paths, harness maps to IDs.
-11. **Focus and activation.** Agent activates tasks via `plan()`. Multiple active siblings are processed in declaration order, one at a time. Parent stays suspended until all active children are done. Harness never auto-activates pending tasks.
-12. **Task stack at bottom of context.** Adjacent to current turn for recency attention.
-13. **Harness continuation prompt.** Always appended. States current task, scoped loads, and suggested next step.
-14. **Context map is simple.** Paths + budgets + scopes. No result tracking, no TTL countdowns.
-15. **Destination shorthand (agent scope only).** `n/` → `g/{agent}/n/`, `t/` → current task's scratch, `w/` → `<DID>/w/`, `o/` → `<DID>/o/`. Full paths work everywhere.
-16. **Single root in LLM context.** Harness manages root queue. External requests create new roots.
-17. **Safety valve.** 70%: harness warns in continuation prompt. 90%: auto-prune — unload global loads (most recently loaded first), then truncate oldest conversation turns. Never touches pinned or scoped loads.
-18. **Scope incentivises decomposition.** Want automatic cleanup? Break work into tasks.
-19. **7 tools, ~1,600 B.** Under 0.5% of context window.
-20. **Crash recovery.** Harness reconstructs task stack from agent record (lattice-backed). Suspended conversations are persisted locally — if lost, task resumes with fresh conversation. Agent's `n/` workspace and task `t/` scratch are intact (in agent record on lattice).
+8. **Namespaces.** Three layers: lattice storage (per-user `g`, `w`, `o`, `j`, `s`, `h`, `a`), agent-visible shorthands (`n/`, `t/`, `c/`, `w/`, `o/`), and resolution rules (harness maps prefixes to lattice locations in agent scope, requiring a focused task for `t/` and an active session for `c/`).
+9. **Agent record is the unit.** Complete state at `g/{agentId}`: status, config, tasks (Covia jobs Index), sessions, `n` (agent workspace), timeline, inbox, ts, error, wake. Tasks and sessions are orthogonal.
+10. **Task vs goal.** A **task** is a Covia external job (entry in `g/{agent}/tasks`). A **goal** is an internal planning node inside a task's `goals` Index. `t/` is task-level; goals have no shorthand.
+11. **Goal tree storage.** Flat Index inside taskdata (`g/{agent}/tasks/{taskId}/goals`), keyed by Blob ID. Each goal is a map with required `status`, optional `result`, `conversation`, `parent`, `children`, `name`, plus arbitrary metadata. Harness renders flat index as a tree; `plan()` uses paths, harness maps to IDs.
+12. **Focus and activation.** Agent activates goals via `plan()`. Multiple active siblings are processed in declaration order, one at a time. Parent stays suspended until all active children are done. Harness never auto-activates pending goals.
+13. **Goal tree at bottom of context.** Adjacent to current turn for recency attention.
+14. **Harness continuation prompt.** Always appended. States current goal, scoped loads, and suggested next step.
+15. **Context map is simple.** Paths + budgets + scopes. No result tracking, no TTL countdowns.
+16. **Destination shorthand (agent scope only).** `n/` → `g/{agent}/n/`, `t/` → current task's scratch (`g/{agent}/tasks/{taskId}/t/`), `c/` → current session's scratch (`g/{agent}/sessions/{sid}/c/`), `w/` → `<DID>/w/`, `o/` → `<DID>/o/`. Full paths work everywhere.
+17. **Single root goal in active context.** Harness manages a queue of pending tasks. Each new Covia task starts with a fresh root goal.
+18. **Safety valve.** 70%: harness warns in continuation prompt. 90%: auto-prune — unload global loads (most recently loaded first), then truncate oldest conversation turns from the active view. Never touches pinned or scoped loads, and never alters the lattice record.
+19. **Scope incentivises decomposition.** Want automatic active-context shrinkage? Break work into goals.
+20. **7 tools, ~1,600 B.** Under 0.5% of context window.
+21. **Crash recovery.** Harness reconstructs goal tree from taskdata on the lattice. All conversations, scratch, and scoped-load paths are recoverable. `n/` (agent), `t/` (task), and `c/` (session) are intact.
