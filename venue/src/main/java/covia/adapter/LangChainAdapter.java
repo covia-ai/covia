@@ -40,6 +40,7 @@ import dev.langchain4j.model.chat.request.json.JsonNumberSchema;
 import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import dev.langchain4j.model.chat.request.json.JsonSchemaElement;
 import dev.langchain4j.model.chat.request.json.JsonStringSchema;
+import dev.langchain4j.model.anthropic.AnthropicChatModel;
 import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 
@@ -112,8 +113,9 @@ public class LangChainAdapter extends AAdapter {
 	@Override
 	public void installAssets() {
 		// Canonical operations — one per adapter route
-		installAsset("/adapters/langchain/openai.json");   // langchain:openai (OpenAI-compatible)
-		installAsset("/adapters/langchain/ollama.json");    // langchain:ollama (local Ollama)
+		installAsset("/adapters/langchain/openai.json");     // langchain:openai (OpenAI-compatible)
+		installAsset("/adapters/langchain/ollama.json");     // langchain:ollama (local Ollama)
+		installAsset("/adapters/langchain/anthropic.json");  // langchain:anthropic (Anthropic Claude)
 
 		// Example configurations — distinct adapter references for the operation registry
 		installAsset("/asset-examples/qwen.json");          // langchain:ollama:qwen3
@@ -124,7 +126,7 @@ public class LangChainAdapter extends AAdapter {
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
 			return CompletableFuture.completedFuture(
-				Status.failure("Method not specified. Use 'langchain:ollama:modelName' or 'langchain:openai'")
+				Status.failure("Method not specified. Use 'langchain:ollama:modelName', 'langchain:openai', or 'langchain:anthropic'")
 			);
 		}
 
@@ -150,7 +152,7 @@ public class LangChainAdapter extends AAdapter {
 		final ChatModel chatModel = buildProviderModel(provider, finalModelName, apiKey, urlParam);
 		if (chatModel == null) {
 			return CompletableFuture.completedFuture(
-				Status.failure("Unknown provider: '" + provider + "'. Supported: 'ollama', 'openai'")
+				Status.failure("Unknown provider: '" + provider + "'. Supported: 'ollama', 'openai', 'anthropic'")
 			);
 		}
 
@@ -204,6 +206,9 @@ public class LangChainAdapter extends AAdapter {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.openai.com/v1";
 			String model = (modelName != null) ? modelName : "gpt-3.5-turbo";
 			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
+		} else if ("anthropic".equals(provider)) {
+			String model = (modelName != null) ? modelName : "claude-sonnet-4-6";
+			return buildAnthropicModel(apiKey, model, IO_TIMEOUT);
 		}
 		return null;
 	}
@@ -215,6 +220,16 @@ public class LangChainAdapter extends AAdapter {
 			.logResponses(true)
 			.modelName(model)
 			.timeout(timeout)
+			.build();
+	}
+
+	static ChatModel buildAnthropicModel(String apiKey, String model, Duration timeout) {
+		return AnthropicChatModel.builder()
+			.apiKey(apiKey)
+			.modelName(model)
+			.timeout(timeout)
+			.logRequests(true)
+			.logResponses(true)
 			.build();
 	}
 

@@ -469,10 +469,12 @@ public class Engine {
 	// ========== Reference resolution ==========
 
 	/** Namespace prefix for immutable content-addressed assets */
-	private static final AString NS_ASSET = Strings.intern("/a/");
-	private static final AString NS_OPS   = Strings.intern("/o/");
+	private static final AString NS_ASSET  = Strings.intern("/a/");
+	private static final AString NS_OPS    = Strings.intern("/o/");
 	/** Namespace prefix for DID URLs */
-	private static final AString NS_DID   = Strings.intern("did:");
+	private static final AString NS_DID    = Strings.intern("did:");
+	/** Namespace prefix for venue-level operation shortcuts (v/ops/adapter/op → adapter:op) */
+	private static final AString NS_V_OPS  = Strings.intern("v/ops/");
 
 	/**
 	 * Resolves a reference to an Asset. Supports (in priority order):
@@ -512,7 +514,21 @@ public class Engine {
 			return resolveDIDURL(ref);
 		}
 
-		// 5. Operation name registry (venue-level named operations)
+		// 5. v/ops/<adapter>/<op> shorthand → adapter:op in the operation registry
+		if (ref.startsWith(NS_V_OPS)) {
+			// Strip "v/ops/" (6 chars) and replace the first '/' with ':'
+			AString tail = ref.slice(6);
+			String tailStr = tail.toString();
+			int slash = tailStr.indexOf('/');
+			String adapterOp = (slash >= 0)
+				? tailStr.substring(0, slash) + ":" + tailStr.substring(slash + 1)
+				: tailStr;
+			Hash opHash2 = operations.get(Strings.create(adapterOp));
+			if (opHash2 != null) return getAsset(opHash2);
+			return null;
+		}
+
+		// 6. Operation name registry (venue-level named operations)
 		Hash opHash = operations.get(ref);
 		if (opHash != null) return getAsset(opHash);
 

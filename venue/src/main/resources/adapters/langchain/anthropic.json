@@ -1,0 +1,49 @@
+{
+	"name": "Anthropic Claude Chat",
+	"description": "Chat with an Anthropic Claude model. Supports messages-based and prompt-based input. API key resolved from user's secret store (ANTHROPIC_API_KEY by default).",
+	"dateCreated": "2026-04-15T00:00:00Z",
+	"operation": {
+		"adapter": "langchain:anthropic",
+		"secretFields": ["apiKey"],
+		"secretKey": "ANTHROPIC_API_KEY",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": {
+					"type": "array",
+					"description": "Conversation messages array [{role, content}]. Used by the agent tool call loop."
+				},
+				"prompt": {
+					"type": "string",
+					"description": "Simple prompt string (alternative to messages)."
+				},
+				"model": {
+					"type": "string",
+					"description": "Model name (e.g. claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5-20251001).",
+					"default": "claude-sonnet-4-6"
+				},
+				"systemPrompt": {
+					"type": "string",
+					"description": "System prompt to set the AI's behaviour."
+				},
+				"apiKey": {
+					"type": "string",
+					"secret": true,
+					"description": "Anthropic API key (resolved from secret store by default)."
+				},
+				"tools": {
+					"type": "array",
+					"description": "Tool definitions for function calling."
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": { "type": "string" },
+				"content": { "type": "string", "description": "The Claude response text" },
+				"toolCalls": { "type": "array", "description": "Tool call requests from Claude" }
+			}
+		}
+	}
+}
