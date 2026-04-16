@@ -112,7 +112,6 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final AString K_TRANSCRIPT = Strings.intern("transcript");
 	private static final AString K_ROLE       = Strings.intern("role");
 	private static final AString K_CONTENT    = Strings.intern("content");
-	private static final AString K_RESPONSE   = Strings.intern("response");
 	private static final AString K_MESSAGES   = Strings.intern("messages");
 	private static final AString K_TOOL_CALLS = Strings.intern("toolCalls");
 	private static final AString K_ID         = Strings.intern("id");
@@ -443,14 +442,36 @@ public class LLMAgentAdapter extends AAdapter {
 		if (finalLoads != null && finalLoads.count() > 0) {
 			newState = newState.assoc(K_LOADS, finalLoads);
 		}
-		ACell result = Maps.of(K_RESPONSE, Strings.create(responseText));
+		// Lean transition output: emit {response | error, taskComplete?} and
+		// let the framework synthesise the per-task taskResults entry from
+		// our lean fields. With one-task-per-cycle (Sub-stage 2.2), the
+		// LLM only ever sees one task and so only one complete_task or
+		// fail_task call resolves it.
+		//
+		// Default response is the assistant's chat text. If the LLM called
+		// complete_task with structured output, that output overrides the
+		// chat text (it's the authoritative task result). If the LLM called
+		// fail_task, the error replaces the response entirely.
 		AMap<AString, ACell> output = Maps.of(
 			AgentState.KEY_STATE, newState,
-			Fields.RESULT, result
-		);
-		// Include task results from built-in tool calls
-		if (toolCtx.taskResults != null) {
-			output = output.assoc(Fields.TASK_RESULTS, toolCtx.taskResults);
+			Fields.RESPONSE, Strings.create(responseText));
+
+		if (toolCtx.taskResults != null && toolCtx.taskResults.count() > 0) {
+			// One-task-per-cycle: take the single entry
+			var entry = toolCtx.taskResults.entrySet().iterator().next();
+			ACell taskResult = entry.getValue();
+			AString status = RT.ensureString(RT.getIn(taskResult, Fields.STATUS));
+			if (Status.FAILED.equals(status)) {
+				ACell err = RT.getIn(taskResult, Fields.ERROR);
+				if (err != null) output = output.assoc(Fields.ERROR, err)
+					.dissoc(Fields.RESPONSE);
+			} else {
+				ACell taskOutput = RT.getIn(taskResult, Fields.OUTPUT);
+				if (taskOutput != null) {
+					output = output.assoc(Fields.RESPONSE, taskOutput);
+				}
+			}
+			output = output.assoc(Fields.TASK_COMPLETE, CVMBool.TRUE);
 		}
 		return output;
 	}

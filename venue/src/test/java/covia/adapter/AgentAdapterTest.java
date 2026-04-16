@@ -778,11 +778,10 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		ACell result = runJob.awaitResult(5000);
 
-		// The trigger output should include the transition result
-		ACell transitionResult = RT.getIn(result, Fields.RESULT);
-		assertNotNull(transitionResult, "Trigger output should include the transition result");
-		AString response = RT.ensureString(RT.getIn(transitionResult, "response"));
-		assertNotNull(response, "Result should contain a response");
+		// Trigger output's `result` is now the bare lean response value (Sub-stage 2.4),
+		// not a {response: ...} wrapper.
+		AString response = RT.ensureString(RT.getIn(result, Fields.RESULT));
+		assertNotNull(response, "Trigger output should include the transition response");
 		assertTrue(response.toString().length() > 0, "Response should not be empty");
 	}
 

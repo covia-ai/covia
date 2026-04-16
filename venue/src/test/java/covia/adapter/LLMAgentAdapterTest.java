@@ -95,12 +95,10 @@ public class LLMAgentAdapterTest {
 
 		ACell newState = RT.getIn(output, AgentState.KEY_STATE);
 		assertNotNull(newState, "Output should contain state");
-		ACell result = RT.getIn(output, Fields.RESULT);
-		assertNotNull(result, "Output should contain result");
 
 		// test:llm echoes last user message
-		AString response = RT.ensureString(RT.getIn(result, "response"));
-		assertNotNull(response);
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
+		assertNotNull(response, "Output should contain response");
 		assertEquals("Hello world", response.toString());
 
 		// Transcript holds only real conversation turns — system messages,
@@ -137,7 +135,7 @@ public class LLMAgentAdapterTest {
 		AVector<ACell> transcript = LLMAgentAdapter.extractTranscript(state2);
 		assertEquals(4, transcript.count());
 
-		AString response = RT.ensureString(RT.getIn(output2, Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(output2, Fields.RESPONSE));
 		assertEquals("second message", response.toString());
 	}
 
@@ -234,7 +232,7 @@ public class LLMAgentAdapterTest {
 		// Transcript: 3 inbox messages (user) + 1 assistant = 4
 		assertEquals(4, transcript.count());
 
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertEquals("message three", response.toString());
 	}
 
@@ -295,7 +293,9 @@ public class LLMAgentAdapterTest {
 		assertTrue(transcript.count() >= 2, "Transcript should have user + assistant");
 
 		ACell timelineEntry = agent.getTimeline().get(0);
-		AString response = RT.ensureString(RT.getIn(timelineEntry, Fields.RESULT, "response"));
+		// Timeline `result` is the bare lean response (Sub-stage 2.4) — the
+		// framework no longer wraps it in {response: ...}.
+		AString response = RT.ensureString(RT.getIn(timelineEntry, Fields.RESULT));
 		assertNotNull(response, "Timeline result should contain response");
 		assertEquals("Hello from e2e", response.toString());
 	}
@@ -461,7 +461,7 @@ public class LLMAgentAdapterTest {
 
 		AVector<ACell> timeline = agent.getTimeline();
 		assertEquals(1, timeline.count());
-		AString response = RT.ensureString(RT.getIn(timeline.get(0), Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(timeline.get(0), Fields.RESULT));
 		assertNotNull(response);
 		assertTrue(response.toString().contains("Tool returned:"));
 	}
@@ -479,7 +479,7 @@ public class LLMAgentAdapterTest {
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response);
 		assertTrue(response.toString().contains("Tool returned:"));
 
@@ -553,7 +553,7 @@ public class LLMAgentAdapterTest {
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response);
 		assertEquals("give me json", response.toString());
 	}
@@ -621,14 +621,13 @@ public class LLMAgentAdapterTest {
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
-		// The task should have been completed via the built-in tool
-		ACell taskResults = RT.getIn(output, Fields.TASK_RESULTS);
-		assertNotNull(taskResults, "Output should contain taskResults from complete_task tool call");
-
-		// Verify the specific task was recorded as COMPLETE
-		ACell taskResult = RT.getIn(taskResults, taskId);
-		assertNotNull(taskResult, "taskResults should contain entry for our task");
-		assertEquals("COMPLETE", RT.getIn(taskResult, Fields.STATUS).toString());
+		// Lean contract: complete_task surfaces as taskComplete=true plus a
+		// non-null response (the structured task output overrides the chat
+		// text). The framework synthesises the per-task taskResults entry.
+		assertEquals(CVMBool.TRUE, RT.getIn(output, Fields.TASK_COMPLETE),
+			"Output should signal taskComplete=true after complete_task tool call");
+		assertNotNull(RT.getIn(output, Fields.RESPONSE),
+			"Output should carry the task's structured response");
 	}
 
 	// ========== Built-in tools: invoke ==========
@@ -648,7 +647,7 @@ public class LLMAgentAdapterTest {
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response);
 		assertTrue(response.toString().contains("Tool returned:"));
 	}
@@ -698,7 +697,7 @@ public class LLMAgentAdapterTest {
 		assertNotNull(output);
 
 		// The LLM should still respond normally with default tools present
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertEquals("hello", response.toString());
 	}
 
@@ -1134,7 +1133,7 @@ public class LLMAgentAdapterTest {
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 		// Should complete without error — tools resolved successfully
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertEquals("test", response.toString());
 	}
 
@@ -1159,7 +1158,7 @@ public class LLMAgentAdapterTest {
 
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertEquals("test", response.toString());
 	}
 
@@ -1203,7 +1202,7 @@ public class LLMAgentAdapterTest {
 
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertEquals("test", response.toString());
 	}
 

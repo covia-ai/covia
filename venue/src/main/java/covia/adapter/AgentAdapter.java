@@ -988,24 +988,27 @@ public class AgentAdapter extends AAdapter {
 			ACell taskResultsCell = RT.getIn(transitionResult, Fields.TASK_RESULTS);
 			if (taskResultsCell instanceof AMap) taskResults = (AMap<AString, ACell>) taskResultsCell;
 
-			// Lean-contract translation: if the transition returned a lean
-			// result {response?, error?, taskComplete?} instead of the
-			// legacy {state, result, taskResults} shape, synthesize a
-			// taskResults entry for the picked task and surface `response`
-			// (or `error`) as the run result. `error` takes precedence over
-			// `response` and produces a FAILED entry; otherwise COMPLETE.
+			// Lean-contract translation: when the transition returns the lean
+			// shape {response?, error?, taskComplete?} instead of the legacy
+			// {state, result, taskResults} shape, synthesise a taskResults
+			// entry for the picked task (when one was picked) and surface
+			// `response` (or `error`) as the bare run result. `error` takes
+			// precedence over `response` and produces a FAILED entry;
+			// otherwise COMPLETE. The result surfacing applies whether or
+			// not a task was picked, so inbox-only and message-only
+			// transitions also get a non-null result in their timeline entry.
+			ACell leanResponse = RT.getIn(transitionResult, Fields.RESPONSE);
+			ACell leanError = RT.getIn(transitionResult, Fields.ERROR);
 			if (taskResults == null && pickedTask != null) {
 				ACell taskCompleteCell = RT.getIn(transitionResult, Fields.TASK_COMPLETE);
-				ACell response = RT.getIn(transitionResult, Fields.RESPONSE);
-				ACell error = RT.getIn(transitionResult, Fields.ERROR);
 				if (CVMBool.TRUE.equals(taskCompleteCell)) {
-					AMap<AString, ACell> taskEntry = (error != null)
-						? Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, error)
-						: Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, response);
+					AMap<AString, ACell> taskEntry = (leanError != null)
+						? Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, leanError)
+						: Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, leanResponse);
 					taskResults = Maps.of(taskIdHex(pickedTask.getKey()), taskEntry);
 				}
-				if (result == null) result = (error != null) ? error : response;
 			}
+			if (result == null) result = (leanError != null) ? leanError : leanResponse;
 
 			AMap<AString, ACell> timelineEntry = Maps.of(
 				K_START, CVMLong.create(startTs),
