@@ -1038,6 +1038,162 @@ public class AgentAdapterTest {
 		assertNotNull(output, "Polling should retrieve the output");
 	}
 
+	// ========== session minting (Stage 1) ==========
+
+	@Test
+	public void testMessageMintsSession() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "session-msg"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, "session-msg", Fields.MESSAGE, "hi"),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		AString sid = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
+		assertNotNull(sid, "Message response should carry a minted sessionId");
+		assertEquals(32, sid.count(), "sessionId should be 16-byte hex (32 chars)");
+
+		// Session record created lazily
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("session-msg");
+		Blob sidBlob = Blob.fromHex(sid.toString());
+		AMap<AString, ACell> session = agent.getSession(sidBlob);
+		assertNotNull(session, "Session record should be created");
+		assertNotNull(session.get(Strings.intern("c")));
+		assertNotNull(session.get(Strings.intern("history")));
+		assertNotNull(session.get(Strings.intern("pending")));
+		assertNotNull(session.get(Strings.intern("meta")));
+	}
+
+	@Test
+	public void testMessageReusesProvidedSession() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "session-reuse"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// First call mints a sid
+		Job first = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, "session-reuse", Fields.MESSAGE, "one"),
+			RequestContext.of(ALICE_DID));
+		AString sid = RT.ensureString(RT.getIn(first.awaitResult(5000), Fields.SESSION_ID));
+		assertNotNull(sid);
+
+		// Second call with same sid — echoed back, no new session created
+		Job second = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, "session-reuse", Fields.MESSAGE, "two",
+				Fields.SESSION_ID, sid),
+			RequestContext.of(ALICE_DID));
+		ACell result2 = second.awaitResult(5000);
+		assertEquals(sid, RT.ensureString(RT.getIn(result2, Fields.SESSION_ID)));
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("session-reuse");
+		assertEquals(1, agent.getSessions().count(),
+			"Reusing an existing sid must not create a second session");
+	}
+
+	@Test
+	public void testRequestMintsSessionAndAttachesToTaskRow() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "session-req",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Submit async so we can inspect the task row while it's still pending
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "session-req", Fields.INPUT, Maps.of("q", "hello")),
+			RequestContext.of(ALICE_DID));
+
+		// Job is still pending (never completes) — inspect the task row
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("session-req");
+		assertEquals(1, agent.getTasks().count(), "Task should be queued");
+		// Take the only task row and assert it carries a sessionId
+		var entry = agent.getTasks().entrySet().iterator().next();
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> row = (AMap<AString, ACell>) entry.getValue();
+		AString taskSid = RT.ensureString(row.get(Fields.SESSION_ID));
+		assertNotNull(taskSid, "Task row should record the session it belongs to");
+
+		// And the session itself exists
+		Blob sidBlob = Blob.fromHex(taskSid.toString());
+		assertNotNull(agent.getSession(sidBlob), "Session record should be created");
+
+		// Clean up: cancel the task so the test doesn't leave a running loop
+		job.cancel();
+	}
+
+	@Test
+	public void testRequestResponseEnvelopeCarriesSessionId() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "session-env",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "session-env", Fields.INPUT, Maps.of("q", "ping")),
+			RequestContext.of(ALICE_DID));
+
+		ACell result = job.awaitResult(5000);
+		AString sid = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
+		assertNotNull(sid, "Completed request envelope must include sessionId");
+	}
+
+	@Test
+	public void testTriggerMintsSession() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "session-trig",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "session-trig", Fields.WAIT, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		AString sid = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
+		assertNotNull(sid, "Trigger response should carry a sessionId");
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("session-trig");
+		assertEquals(1, agent.getSessions().count());
+	}
+
+	@Test
+	public void testInvalidSessionIdFails() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "session-bad"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, "session-bad", Fields.MESSAGE, "hi",
+				Fields.SESSION_ID, "not-hex-zz"),
+			RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("Should fail for malformed sessionId");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+		}
+	}
+
 	// ========== agent:query ==========
 
 	@Test

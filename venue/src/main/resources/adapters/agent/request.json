@@ -15,13 +15,17 @@
 				"responseSchema": {
 					"type": "object",
 					"description": "Optional JSON Schema. When provided, the agent's response is constrained to match this schema (server-side enforcement via OpenAI structured outputs). Use to get typed structured output from any agent. Overrides the agent's default output schema if it has one."
+				},
+				"sessionId": {
+					"type": "string",
+					"description": "Optional session identifier (hex string). Requests sharing a sessionId are treated as part of the same conversation. If omitted, a new session is created and its id returned in the response."
 				}
 			},
 			"required": ["agentId", "input"]
 		},
 		"output": {
 			"type": "object",
-			"description": "Agent's structured response to the request.",
+			"description": "Agent's structured response to the request. Includes the sessionId the task belonged to.",
 			"additionalProperties": true
 		}
 	}

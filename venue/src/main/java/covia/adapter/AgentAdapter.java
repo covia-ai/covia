@@ -85,6 +85,9 @@ public class AgentAdapter extends AAdapter {
 	/** Counter for task ID generation */
 	private long taskIdCounter = 0;
 
+	/** Counter for session ID generation */
+	private long sessionIdCounter = 0;
+
 	@Override public String getName() { return "agent"; }
 
 	@Override
@@ -370,8 +373,14 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
 
+		// Mint or reuse a session for this request. Stage 1 scaffold — the
+		// sid is recorded on the task row and returned in the response
+		// envelope, but the transition function does not yet consume it.
+		Blob sid = resolveOrMintSession(job, agent, input, ctx.getCallerDID());
+		if (sid == null) return;
+
 		// Build canonical taskdata map (Option A — pending-queue record):
-		//   {input, caller, created, responseSchema?, t: {}}
+		//   {input, caller, created, sessionId, responseSchema?, t: {}}
 		// Task rows are transient — status/result/error live on the Job record
 		// and in the agent timeline's taskResults snapshot. The 't' slot is
 		// reserved for per-task scratch; Phase 1c will wire TempNamespaceResolver
@@ -380,10 +389,11 @@ public class AgentAdapter extends AAdapter {
 		ACell taskInput = RT.getIn(input, Fields.INPUT);
 		ACell responseSchema = RT.getIn(input, Fields.RESPONSE_SCHEMA);
 		AMap<AString, ACell> taskData = Maps.of(
-			Fields.INPUT,   taskInput,
-			Fields.CALLER,  ctx.getCallerDID(),
-			Fields.CREATED, CVMLong.create(Utils.getCurrentTimestamp()),
-			Fields.T,       Maps.empty());
+			Fields.INPUT,      taskInput,
+			Fields.CALLER,     ctx.getCallerDID(),
+			Fields.CREATED,    CVMLong.create(Utils.getCurrentTimestamp()),
+			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			Fields.T,          Maps.empty());
 		if (responseSchema instanceof AMap) {
 			taskData = taskData.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
 		}
@@ -408,16 +418,23 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
 
+		Blob sid = resolveOrMintSession(job, agent, input, ctx.getCallerDID());
+		if (sid == null) return;
+
 		ACell messageContent = RT.getIn(input, Fields.MESSAGE);
-		// Wrap message with caller provenance
+		// Wrap message with caller provenance and the session it belongs to
 		ACell envelope = Maps.of(
-			Fields.CALLER, ctx.getCallerDID(),
-			Fields.MESSAGE, messageContent);
+			Fields.CALLER,     ctx.getCallerDID(),
+			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			Fields.MESSAGE,    messageContent);
 		agent.deliverMessage(envelope);
 		wakeAgent(agentId, ctx);
 
 		job.setStatus(Status.STARTED);
-		job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.DELIVERED, CVMBool.TRUE));
+		job.completeWith(Maps.of(
+			Fields.AGENT_ID,   agentId,
+			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			Fields.DELIVERED,  CVMBool.TRUE));
 	}
 
 	private void handleTrigger(Job job, ACell input, RequestContext ctx) {
@@ -432,6 +449,10 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
+		Blob sid = resolveOrMintSession(job, agent, input, ctx.getCallerDID());
+		if (sid == null) return;
+		AString sidHex = Strings.create(sid.toHexString());
+
 		CompletableFuture<ACell> completion = wakeAgent(agentId, ctx, true);
 		if (completion == null) {
 			job.fail("Cannot start agent: " + agentId);
@@ -442,8 +463,24 @@ public class AgentAdapter extends AAdapter {
 		long waitMs = parseWaitMs(input);
 		if (waitMs == 0 && RT.getIn(input, Fields.WAIT) == null) waitMs = -1;
 
-		ACell running = Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.RUNNING);
-		awaitRunCompletion(job, completion, waitMs, running, result -> result);
+		ACell running = Maps.of(
+			Fields.AGENT_ID,   agentId,
+			Fields.SESSION_ID, sidHex,
+			Fields.STATUS,     AgentState.RUNNING);
+		awaitRunCompletion(job, completion, waitMs, running,
+			result -> annotateWithSession(result, sidHex));
+	}
+
+	/**
+	 * Adds a {@code sessionId} entry to a map-typed run result; returns the
+	 * cell unchanged if it is not a map (e.g. null or unexpected shape).
+	 */
+	@SuppressWarnings("unchecked")
+	private static ACell annotateWithSession(ACell result, AString sidHex) {
+		if (!(result instanceof AMap)) return result;
+		AMap<AString, ACell> m = (AMap<AString, ACell>) result;
+		if (m.containsKey(Fields.SESSION_ID)) return m;
+		return m.assoc(Fields.SESSION_ID, sidHex);
 	}
 
 	private void handleQuery(Job job, ACell input, RequestContext ctx) {
@@ -955,17 +992,23 @@ public class AgentAdapter extends AAdapter {
 				newState, inbox.count(), tasks, taskResults, timelineEntry);
 
 			// Complete pending request Jobs AFTER the merge so timeline and state
-			// are visible when the caller's awaitResult returns
+			// are visible when the caller's awaitResult returns. The sid was
+			// recorded on the task row in handleRequest — look it up from the
+			// pre-merge tasks snapshot so the caller sees which session the
+			// result belongs to.
 			if (taskResults != null) {
 				for (var entry : taskResults.entrySet()) {
 					String taskKey = entry.getKey().toString();
 					Job pendingJob = pendingTaskJobs.remove(taskKey);
 					if (pendingJob != null) {
 						ACell taskResult = entry.getValue();
-						pendingJob.completeWith(Maps.of(
+						AMap<AString, ACell> envelope = Maps.of(
 							Fields.ID, entry.getKey(),
 							Fields.STATUS, RT.getIn(taskResult, Fields.STATUS),
-							Fields.OUTPUT, RT.getIn(taskResult, Fields.OUTPUT)));
+							Fields.OUTPUT, RT.getIn(taskResult, Fields.OUTPUT));
+						ACell sid = extractTaskSessionId(tasks, entry.getKey());
+						if (sid != null) envelope = envelope.assoc(Fields.SESSION_ID, sid);
+						pendingJob.completeWith(envelope);
 					}
 				}
 			}
@@ -994,6 +1037,21 @@ public class AgentAdapter extends AAdapter {
 
 	private static AVector<ACell> ensureVector(AVector<ACell> v) {
 		return (v != null) ? v : Vectors.empty();
+	}
+
+	/**
+	 * Looks up the sessionId recorded on the task row keyed by the given
+	 * hex task id, or returns null if absent or malformed.
+	 */
+	@SuppressWarnings("unchecked")
+	private static ACell extractTaskSessionId(Index<Blob, ACell> tasks, AString taskIdHex) {
+		if (tasks == null || taskIdHex == null) return null;
+		Blob key;
+		try { key = Blob.fromHex(taskIdHex.toString()); }
+		catch (Exception e) { return null; }
+		ACell row = tasks.get(key);
+		if (!(row instanceof AMap)) return null;
+		return ((AMap<AString, ACell>) row).get(Fields.SESSION_ID);
 	}
 
 	/**
@@ -1256,7 +1314,38 @@ public class AgentAdapter extends AAdapter {
 		return Blob.wrap(bs);
 	}
 
+	private synchronized Blob generateSessionId() {
+		long ts = Utils.getCurrentTimestamp();
+		byte[] bs = new byte[16];
+		Utils.writeLong(bs, 0, ts);
+		Utils.writeLong(bs, 8, sessionIdCounter++);
+		return Blob.wrap(bs);
+	}
+
 	private static AString taskIdHex(Blob id) {
 		return Strings.create(id.toHexString());
+	}
+
+	/**
+	 * Resolves the sessionId from input, minting a new one if absent, and
+	 * ensures a session record exists on the agent. Returns the sid, or
+	 * {@code null} if the input's sessionId is malformed (job is failed).
+	 */
+	private Blob resolveOrMintSession(Job job, AgentState agent, ACell input, AString caller) {
+		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);
+		Blob sid;
+		if (sidCell != null) {
+			AString s = RT.ensureString(sidCell);
+			if (s == null) { job.fail("sessionId must be a hex string"); return null; }
+			sid = Blob.fromHex(s.toString());
+			if (sid == null) {
+				job.fail("Invalid sessionId format: " + s);
+				return null;
+			}
+		} else {
+			sid = generateSessionId();
+		}
+		agent.ensureSession(sid, caller);
+		return sid;
 	}
 }

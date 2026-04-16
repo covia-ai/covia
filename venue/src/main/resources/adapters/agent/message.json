@@ -8,7 +8,11 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Target agent name" },
-				"message": { "type": "string", "description": "Message content to deliver to the agent's inbox" }
+				"message": { "type": "string", "description": "Message content to deliver to the agent's inbox" },
+				"sessionId": {
+					"type": "string",
+					"description": "Optional session identifier (hex string). Messages sharing a sessionId are treated as part of the same conversation. If omitted, a new session is created and its id returned in the response."
+				}
 			},
 			"required": ["agentId", "message"]
 		},
@@ -16,6 +20,7 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent that received the message" },
+				"sessionId": { "type": "string", "description": "Session the message was delivered into" },
 				"delivered": { "type": "boolean", "description": "true if message was delivered" }
 			}
 		}

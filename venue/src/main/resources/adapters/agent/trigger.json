@@ -8,7 +8,11 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent name to trigger" },
-				"wait": { "description": "Wait policy: true (default, block until done), false (return immediately), or integer milliseconds (timeout)" }
+				"wait": { "description": "Wait policy: true (default, block until done), false (return immediately), or integer milliseconds (timeout)" },
+				"sessionId": {
+					"type": "string",
+					"description": "Optional session identifier (hex string). If omitted, a new session is created and its id returned in the response."
+				}
 			},
 			"required": ["agentId"]
 		},
@@ -16,6 +20,7 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string" },
+				"sessionId": { "type": "string", "description": "Session the trigger ran under" },
 				"status": { "type": "string", "description": "Agent status: SLEEPING (completed) or RUNNING (if wait=false or timed out)" },
 				"result": { "description": "Result returned by the transition function (only when waited)" }
 			}

@@ -129,6 +129,13 @@ public class Fields {
 	public static final StringShort RESPONSE_SCHEMA = Strings.intern("responseSchema");
 	public static final StringShort T = Strings.intern("t");
 
+	// Session related
+	public static final StringShort SESSION_ID = Strings.intern("sessionId");
+	public static final StringShort HISTORY = Strings.intern("history");
+	public static final StringShort PARTIES = Strings.intern("parties");
+	public static final StringShort TURNS = Strings.intern("turns");
+	public static final StringShort C = Strings.intern("c");
+
 	// Identity / authorization
 	public static final StringShort CALLER = Strings.intern("caller");
 	public static final StringShort ROLES = Strings.intern("roles");

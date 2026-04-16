@@ -39,6 +39,14 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_ERROR    = Strings.intern("error");
 	private static final AString K_WAKE     = Strings.intern("wake");
 
+	// Session record field keys (scoped within a single session map)
+	private static final AString K_C        = Strings.intern("c");
+	private static final AString K_HISTORY  = Strings.intern("history");
+	private static final AString K_META     = Strings.intern("meta");
+	private static final AString K_PARTIES  = Strings.intern("parties");
+	private static final AString K_CREATED  = Strings.intern("created");
+	private static final AString K_TURNS    = Strings.intern("turns");
+
 	// Status constants
 	public static final AString SLEEPING   = Strings.intern("SLEEPING");
 	public static final AString RUNNING    = Strings.intern("RUNNING");
@@ -189,8 +197,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	/**
 	 * Returns the agent's sessions Index (sid → session record).
-	 * Currently reserved for Phase 1 sessions work — returns an empty
-	 * Index on legacy records that predate the field.
 	 */
 	@SuppressWarnings("unchecked")
 	public Index<Blob, ACell> getSessions() {
@@ -198,6 +204,42 @@ public class AgentState extends ALatticeComponent<ACell> {
 		if (r == null) return Index.none();
 		ACell v = r.get(K_SESSIONS);
 		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
+	}
+
+	/**
+	 * Returns the session record for the given sid, or null if absent.
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> getSession(Blob sid) {
+		Index<Blob, ACell> sessions = getSessions();
+		ACell v = sessions.get(sid);
+		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
+	}
+
+	/**
+	 * Ensures a session record exists at the given sid. If absent, creates
+	 * a fresh session: {c: {}, history: [], pending: [], meta: {created, turns, parties}}.
+	 * If {@code caller} is non-null and the session is new, it is recorded as
+	 * the first party. Returns the session record (existing or freshly created).
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> ensureSession(Blob sid, AString caller) {
+		update(r -> {
+			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
+				? (Index<Blob, ACell>) idx : Index.none();
+			if (sessions.get(sid) != null) return r;
+			AMap<AString, ACell> meta = Maps.of(
+				K_CREATED, CVMLong.create(Utils.getCurrentTimestamp()),
+				K_TURNS,   CVMLong.create(0),
+				K_PARTIES, (caller != null) ? Vectors.of(caller) : Vectors.empty());
+			AMap<AString, ACell> session = Maps.of(
+				K_C,       Maps.empty(),
+				K_HISTORY, Vectors.empty(),
+				K_PENDING, Vectors.empty(),
+				K_META,    meta);
+			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
+		});
+		return getSession(sid);
 	}
 
 	@SuppressWarnings("unchecked")
