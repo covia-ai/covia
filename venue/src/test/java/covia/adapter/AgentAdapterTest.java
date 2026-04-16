@@ -981,6 +981,84 @@ public class AgentAdapterTest {
 		assertEquals(0, agent.getTasks().count(), "All tasks should be cleared");
 	}
 
+	// ========== run loop — one task per cycle (Sub-stage 2.2) ==========
+
+	/**
+	 * Single-task case: the transition should receive a one-element tasks vector,
+	 * recorded on the timeline entry.
+	 */
+	@SuppressWarnings("unchecked")
+	@Test
+	public void testSingleTaskTimelineHasOneTask() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "single-task-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job req = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "single-task-agent", Fields.INPUT, Maps.of("q", "one"),
+				Fields.WAIT, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		req.awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("single-task-agent");
+		AVector<ACell> timeline = agent.getTimeline();
+		assertEquals(1, timeline.count(), "Should produce exactly one cycle");
+
+		AVector<ACell> tasksOnEntry = (AVector<ACell>) RT.getIn(timeline.get(0), Fields.TASKS);
+		assertNotNull(tasksOnEntry, "Timeline entry should record the picked task");
+		assertEquals(1, tasksOnEntry.count(), "Cycle should pick exactly one task");
+	}
+
+	/**
+	 * Multi-task case: the run loop should fan tasks out across cycles.
+	 * Two queued tasks → two timeline entries, each with a one-element tasks vector.
+	 */
+	@SuppressWarnings("unchecked")
+	@Test
+	public void testMultiTaskFansOutAcrossCycles() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "fanout-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job req1 = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "fanout-agent", Fields.INPUT, Maps.of("n", "1"),
+				Fields.WAIT, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		Job req2 = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "fanout-agent", Fields.INPUT, Maps.of("n", "2"),
+				Fields.WAIT, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+
+		req1.awaitResult(5000);
+		req2.awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("fanout-agent");
+		AVector<ACell> timeline = agent.getTimeline();
+
+		// Each cycle that picks a task records a tasks vector. Cycles with no
+		// task picked (e.g., a final inbox-only or wake-only cycle) omit it.
+		long cyclesThatPickedATask = 0;
+		for (long i = 0; i < timeline.count(); i++) {
+			AVector<ACell> picked = (AVector<ACell>) RT.getIn(timeline.get(i), Fields.TASKS);
+			if (picked == null || picked.count() == 0) continue;
+			assertEquals(1, picked.count(),
+				"Each cycle must pick at most one task — cycle " + i + " picked " + picked.count());
+			cyclesThatPickedATask++;
+		}
+		assertEquals(2, cyclesThatPickedATask,
+			"Two queued tasks must fan out across exactly two cycles");
+		assertEquals(0, agent.getTasks().count(), "All tasks should be cleared");
+	}
+
 	// ========== agent:request — sync/async consistency ==========
 
 	@Test

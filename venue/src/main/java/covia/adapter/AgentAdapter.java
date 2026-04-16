@@ -1,5 +1,6 @@
 package covia.adapter;
 
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -931,9 +932,21 @@ public class AgentAdapter extends AAdapter {
 
 			long startTs = Utils.getCurrentTimestamp();
 
-			// Format tasks for the transition (tasks are raw lattice data)
-			AVector<ACell> formattedTasks = formatTasks(tasks);
+			// Pick at most one task per cycle (oldest by created timestamp).
+			// Multi-task agents fan out across cycles. The transition still
+			// receives a vector — current shape is length 0 or 1.
+			Map.Entry<Blob, ACell> pickedTask = pickOldestTask(tasks);
+			AVector<ACell> formattedTasks = formatPickedTask(pickedTask);
 			AVector<ACell> resolvedPending = resolveJobIds(pending, Fields.OUTPUT);
+
+			// Per-cycle ctx: scope to the picked task so t/ and c/ resolvers
+			// can address its private slot and session.
+			RequestContext cycleCtx = ctx;
+			if (pickedTask != null) {
+				cycleCtx = cycleCtx.withTaskId(pickedTask.getKey());
+				Blob sid = extractSessionIdFromTask(pickedTask.getValue());
+				if (sid != null) cycleCtx = cycleCtx.withSessionId(sid);
+			}
 
 			// Invoke transition — no lock, no coordination during this call
 			AMap<AString, ACell> transitionInput = Maps.of(
@@ -948,7 +961,7 @@ public class AgentAdapter extends AAdapter {
 				transitionInput = transitionInput.assoc(AgentState.KEY_CONFIG, agentConfig);
 			}
 
-			Job transitionJob = engine.jobs().invokeOperation(transitionOp, transitionInput, ctx);
+			Job transitionJob = engine.jobs().invokeOperation(transitionOp, transitionInput, cycleCtx);
 			activeTransitions.put(agentId.toString(), transitionJob);
 			ACell transitionResult;
 			try {
@@ -1055,30 +1068,71 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Formats task Index entries as a vector for the transition function.
-	 * Reads the canonical taskdata shape — {input, caller, created,
-	 * responseSchema?, t, sessionId?, goals?} — and emits the transition
-	 * wire shape {jobId, input, caller?, responseSchema?}.
+	 * Picks the oldest task from the Index by {@code created} timestamp.
+	 * Index iteration order is hash-based, so we must scan to find FIFO.
+	 * Returns null if the Index is empty.
 	 */
 	@SuppressWarnings("unchecked")
-	private AVector<ACell> formatTasks(Index<Blob, ACell> tasks) {
-		if (tasks == null || tasks.count() == 0) return Vectors.empty();
-		AVector<ACell> result = Vectors.empty();
+	private static Map.Entry<Blob, ACell> pickOldestTask(Index<Blob, ACell> tasks) {
+		if (tasks == null || tasks.count() == 0) return null;
+		Map.Entry<Blob, ACell> oldest = null;
+		long oldestTs = Long.MAX_VALUE;
 		for (var entry : tasks.entrySet()) {
-			Blob jobId = entry.getKey();
-			ACell raw = entry.getValue();
-			AMap<AString, ACell> taskMap = (raw instanceof AMap) ? (AMap<AString, ACell>) raw : null;
-			ACell taskInput = (taskMap != null) ? taskMap.get(Fields.INPUT) : raw;
-			ACell caller = (taskMap != null) ? taskMap.get(Fields.CALLER) : null;
-			ACell responseSchema = (taskMap != null) ? taskMap.get(Fields.RESPONSE_SCHEMA) : null;
-			AMap<AString, ACell> task = Maps.of(
-				Fields.JOB_ID, taskIdHex(jobId),
-				Fields.INPUT, taskInput);
-			if (caller != null) task = task.assoc(Fields.CALLER, caller);
-			if (responseSchema != null) task = task.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
-			result = result.conj(task);
+			ACell value = entry.getValue();
+			long ts = Long.MAX_VALUE;
+			if (value instanceof AMap) {
+				ACell created = ((AMap<AString, ACell>) value).get(Fields.CREATED);
+				if (created instanceof CVMLong) ts = ((CVMLong) created).longValue();
+			}
+			if (oldest == null || ts < oldestTs) {
+				oldest = entry;
+				oldestTs = ts;
+			}
 		}
-		return result;
+		return oldest;
+	}
+
+	/**
+	 * Formats a single picked task entry as a single-element vector. Empty
+	 * vector if no task was picked. Wire shape matches {@link #formatTask}.
+	 */
+	private static AVector<ACell> formatPickedTask(Map.Entry<Blob, ACell> picked) {
+		if (picked == null) return Vectors.empty();
+		return Vectors.of(formatTask(picked.getKey(), picked.getValue()));
+	}
+
+	/**
+	 * Formats one canonical taskdata entry — {input, caller, created,
+	 * responseSchema?, t, sessionId?, goals?} — into the transition wire
+	 * shape {jobId, input, caller?, responseSchema?}.
+	 */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> formatTask(Blob jobId, ACell raw) {
+		AMap<AString, ACell> taskMap = (raw instanceof AMap) ? (AMap<AString, ACell>) raw : null;
+		ACell taskInput = (taskMap != null) ? taskMap.get(Fields.INPUT) : raw;
+		ACell caller = (taskMap != null) ? taskMap.get(Fields.CALLER) : null;
+		ACell responseSchema = (taskMap != null) ? taskMap.get(Fields.RESPONSE_SCHEMA) : null;
+		AMap<AString, ACell> task = Maps.of(
+			Fields.JOB_ID, taskIdHex(jobId),
+			Fields.INPUT, taskInput);
+		if (caller != null) task = task.assoc(Fields.CALLER, caller);
+		if (responseSchema != null) task = task.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
+		return task;
+	}
+
+	/**
+	 * Extracts the sessionId blob from a canonical taskdata map. Returns
+	 * null if the value isn't a map or carries no parseable sessionId.
+	 */
+	@SuppressWarnings("unchecked")
+	private static Blob extractSessionIdFromTask(ACell taskValue) {
+		if (!(taskValue instanceof AMap)) return null;
+		ACell sid = ((AMap<AString, ACell>) taskValue).get(Fields.SESSION_ID);
+		if (sid == null) return null;
+		AString sidStr = RT.ensureString(sid);
+		if (sidStr == null) return null;
+		try { return Blob.fromHex(sidStr.toString()); }
+		catch (Exception e) { return null; }
 	}
 
 	/**
