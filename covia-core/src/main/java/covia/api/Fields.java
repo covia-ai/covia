@@ -136,6 +136,11 @@ public class Fields {
 	public static final StringShort TURNS = Strings.intern("turns");
 	public static final StringShort C = Strings.intern("c");
 
+	// Lean transition contract (Sub-stage 3)
+	public static final StringShort NEW_INPUT = Strings.intern("newInput");
+	public static final StringShort RESPONSE = Strings.intern("response");
+	public static final StringShort TASK_COMPLETE = Strings.intern("taskComplete");
+
 	// Identity / authorization
 	public static final StringShort CALLER = Strings.intern("caller");
 	public static final StringShort ROLES = Strings.intern("roles");

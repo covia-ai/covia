@@ -1059,6 +1059,39 @@ public class AgentAdapterTest {
 		assertEquals(0, agent.getTasks().count(), "All tasks should be cleared");
 	}
 
+	// ========== lean transition contract (Sub-stage 3) ==========
+
+	/**
+	 * Lean transition returns {response, taskComplete}. Framework must
+	 * synthesize a taskResults entry for the picked task so the calling Job
+	 * receives the response as its output. Uses the in-suite taskcomplete op
+	 * which is now itself written against the lean contract — this test
+	 * verifies the full round trip including framework translation.
+	 */
+	@Test
+	public void testLeanTransitionCompletesTask() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "lean-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		ACell userPayload = Maps.of("q", "lean-please");
+		Job req = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "lean-agent", Fields.INPUT, userPayload,
+				Fields.WAIT, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		ACell envelope = req.awaitResult(5000);
+
+		ACell output = RT.getIn(envelope, Fields.OUTPUT);
+		assertNotNull(output, "Lean transition must produce output via framework synthesis");
+		ACell completed = RT.getIn(output, Strings.create("completed"));
+		assertEquals(userPayload, completed,
+			"Lean transition's response.completed should echo newInput");
+		assertEquals(Status.COMPLETE, RT.ensureString(RT.getIn(envelope, Fields.STATUS)));
+	}
+
 	// ========== agent:request — sync/async consistency ==========
 
 	@Test

@@ -948,13 +948,22 @@ public class AgentAdapter extends AAdapter {
 				if (sid != null) cycleCtx = cycleCtx.withSessionId(sid);
 			}
 
-			// Invoke transition — no lock, no coordination during this call
+			// Invoke transition — no lock, no coordination during this call.
+			// Lean contract surface: also pass `newInput` (the picked task's
+			// input). Old transitions ignore it; new transitions read it
+			// directly without iterating the tasks vector.
 			AMap<AString, ACell> transitionInput = Maps.of(
 				Fields.AGENT_ID, agentId,
 				AgentState.KEY_STATE, currentState,
 				Fields.TASKS, formattedTasks,
 				Fields.PENDING, resolvedPending,
 				Fields.MESSAGES, inbox);
+			if (pickedTask != null) {
+				ACell pickedTaskInput = (pickedTask.getValue() instanceof AMap)
+					? ((AMap<AString, ACell>) pickedTask.getValue()).get(Fields.INPUT)
+					: pickedTask.getValue();
+				transitionInput = transitionInput.assoc(Fields.NEW_INPUT, pickedTaskInput);
+			}
 			// Pass framework config separately so the transition can read caps, tools, etc.
 			AMap<AString, ACell> agentConfig = agent.getConfig();
 			if (agentConfig != null) {
@@ -978,6 +987,21 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> taskResults = null;
 			ACell taskResultsCell = RT.getIn(transitionResult, Fields.TASK_RESULTS);
 			if (taskResultsCell instanceof AMap) taskResults = (AMap<AString, ACell>) taskResultsCell;
+
+			// Lean-contract translation: if the transition returned a lean
+			// result {response?, taskComplete?} instead of the legacy
+			// {state, result, taskResults} shape, synthesize taskResults
+			// for the picked task and surface `response` as the run result.
+			if (taskResults == null && pickedTask != null) {
+				ACell taskCompleteCell = RT.getIn(transitionResult, Fields.TASK_COMPLETE);
+				ACell response = RT.getIn(transitionResult, Fields.RESPONSE);
+				if (CVMBool.TRUE.equals(taskCompleteCell)) {
+					taskResults = Maps.of(taskIdHex(pickedTask.getKey()),
+						Maps.of(Fields.STATUS, Strings.create("COMPLETE"),
+							Fields.OUTPUT, response));
+				}
+				if (result == null && response != null) result = response;
+			}
 
 			AMap<AString, ACell> timelineEntry = Maps.of(
 				K_START, CVMLong.create(startTs),

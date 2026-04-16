@@ -200,34 +200,21 @@ public class TestAdapter extends AAdapter {
     }
 
     /**
-     * Test transition function that auto-completes all tasks.
-     * Returns the transition function contract: {state, result, taskResults}.
-     * Each task is completed with its own input as output.
+     * Test transition using the lean contract (Sub-stage 3).
+     *
+     * <p>Reads {@code newInput} (the picked task's input) and returns
+     * {@code {response, taskComplete}}. The framework synthesises
+     * {@code taskResults} from {@code response} for the picked task,
+     * so callers see the same task output as before — but the transition
+     * itself no longer touches state, the tasks vector, or assembles
+     * a per-task result map.</p>
      */
-    @SuppressWarnings("unchecked")
     private ACell handleTaskComplete(ACell input) {
-        ACell state = RT.getIn(input, "state");
-        ACell tasksCell = RT.getIn(input, "tasks");
-
-        AMap<AString, ACell> taskResults = Maps.empty();
-        if (tasksCell instanceof AVector) {
-            AVector<ACell> tasks = (AVector<ACell>) tasksCell;
-            for (long i = 0; i < tasks.count(); i++) {
-                AString jobId = RT.ensureString(RT.getIn(tasks.get(i), "jobId"));
-                ACell taskInput = RT.getIn(tasks.get(i), "input");
-                if (jobId != null) {
-                    taskResults = taskResults.assoc(jobId, Maps.of(
-                        "status", Strings.create("COMPLETE"),
-                        "output", Maps.of("completed", taskInput)
-                    ));
-                }
-            }
-        }
-
+        ACell newInput = RT.getIn(input, Fields.NEW_INPUT);
+        ACell response = Maps.of(Strings.create("completed"), newInput);
         return Maps.of(
-            "state", state,
-            "result", Maps.of("tasksCompleted", CVMLong.create(taskResults.count())),
-            "taskResults", taskResults
+            Fields.RESPONSE, response,
+            Fields.TASK_COMPLETE, convex.core.data.prim.CVMBool.TRUE
         );
     }
 
