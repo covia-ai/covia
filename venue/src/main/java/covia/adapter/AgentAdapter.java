@@ -989,18 +989,22 @@ public class AgentAdapter extends AAdapter {
 			if (taskResultsCell instanceof AMap) taskResults = (AMap<AString, ACell>) taskResultsCell;
 
 			// Lean-contract translation: if the transition returned a lean
-			// result {response?, taskComplete?} instead of the legacy
-			// {state, result, taskResults} shape, synthesize taskResults
-			// for the picked task and surface `response` as the run result.
+			// result {response?, error?, taskComplete?} instead of the
+			// legacy {state, result, taskResults} shape, synthesize a
+			// taskResults entry for the picked task and surface `response`
+			// (or `error`) as the run result. `error` takes precedence over
+			// `response` and produces a FAILED entry; otherwise COMPLETE.
 			if (taskResults == null && pickedTask != null) {
 				ACell taskCompleteCell = RT.getIn(transitionResult, Fields.TASK_COMPLETE);
 				ACell response = RT.getIn(transitionResult, Fields.RESPONSE);
+				ACell error = RT.getIn(transitionResult, Fields.ERROR);
 				if (CVMBool.TRUE.equals(taskCompleteCell)) {
-					taskResults = Maps.of(taskIdHex(pickedTask.getKey()),
-						Maps.of(Fields.STATUS, Strings.create("COMPLETE"),
-							Fields.OUTPUT, response));
+					AMap<AString, ACell> taskEntry = (error != null)
+						? Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, error)
+						: Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, response);
+					taskResults = Maps.of(taskIdHex(pickedTask.getKey()), taskEntry);
 				}
-				if (result == null && response != null) result = response;
+				if (result == null) result = (error != null) ? error : response;
 			}
 
 			AMap<AString, ACell> timelineEntry = Maps.of(
@@ -1043,6 +1047,8 @@ public class AgentAdapter extends AAdapter {
 							Fields.ID, entry.getKey(),
 							Fields.STATUS, RT.getIn(taskResult, Fields.STATUS),
 							Fields.OUTPUT, RT.getIn(taskResult, Fields.OUTPUT));
+						ACell err = RT.getIn(taskResult, Fields.ERROR);
+						if (err != null) envelope = envelope.assoc(Fields.ERROR, err);
 						ACell sid = extractTaskSessionId(tasks, entry.getKey());
 						if (sid != null) envelope = envelope.assoc(Fields.SESSION_ID, sid);
 						pendingJob.completeWith(envelope);

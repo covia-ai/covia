@@ -141,7 +141,7 @@ public class GoalTreeAdapterTest {
 
 		// Should have state and result
 		assertNotNull(RT.getIn(output, AgentState.KEY_STATE));
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response, "Should have a response");
 		assertTrue(response.toString().length() > 0, "Response should not be empty");
 	}
@@ -161,7 +161,7 @@ public class GoalTreeAdapterTest {
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Do something"))));
 
 		ACell output = adapter.processGoal(null, ALICE, input);
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response, "Should have a response after tool loop");
 		assertTrue(response.toString().contains("Tool returned"),
 			"Response should include tool result: " + response);
@@ -184,17 +184,17 @@ public class GoalTreeAdapterTest {
 					Fields.INPUT, Strings.create("Process this invoice"))));
 
 		ACell output = adapter.processGoal(null, ALICE, input);
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response);
 		// test:llm echoes the last user message — which should be the task description
 		assertTrue(response.toString().contains("Process this invoice"),
 			"Goal should contain task input: " + response);
 
-		// Task should be auto-completed
-		ACell taskResults = RT.getIn(output, Fields.TASK_RESULTS);
-		assertNotNull(taskResults, "Should have taskResults");
-		assertNotNull(RT.getIn(taskResults, Strings.create("job-123")),
-			"Task job-123 should be completed");
+		// Lean contract: transition signals task completion via taskComplete;
+		// the framework synthesises the per-task taskResults entry.
+		assertEquals(convex.core.data.prim.CVMBool.TRUE,
+			RT.getIn(output, Fields.TASK_COMPLETE),
+			"Should signal taskComplete=true when a task was processed");
 	}
 
 	@Test
@@ -237,7 +237,7 @@ public class GoalTreeAdapterTest {
 				(ACell) Maps.of(Strings.create("content"), Strings.create("Test compact"))));
 
 		ACell output = adapter.processGoal(null, ALICE, input);
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response, "Should have a response after compact loop");
 		assertTrue(response.toString().contains("Compact verified"),
 			"Response should confirm segment was found: " + response);
@@ -268,10 +268,10 @@ public class GoalTreeAdapterTest {
 		ACell output = adapter.processGoal(job, ALICE, input);
 		// Should still return output (failed result), not throw
 		assertNotNull(output);
-		ACell response = RT.getIn(output, Fields.RESULT, "response");
-		assertNotNull(response, "Should have a response even when cancelled");
-		assertTrue(response.toString().contains("cancelled"),
-			"Response should indicate cancellation: " + response);
+		ACell err = RT.getIn(output, Fields.ERROR);
+		assertNotNull(err, "Should report error even when cancelled");
+		assertTrue(err.toString().contains("cancelled"),
+			"Error should indicate cancellation: " + err);
 	}
 
 	@Test
@@ -301,9 +301,11 @@ public class GoalTreeAdapterTest {
 
 		ACell output = future.join();
 		assertNotNull(output);
-		// Either completed (if first iteration finished before cancel) or cancelled
-		ACell response = RT.getIn(output, Fields.RESULT, "response");
-		assertNotNull(response, "Should have a response");
+		// Either completed (response) or cancelled (error) — exactly one is set
+		ACell response = RT.getIn(output, Fields.RESPONSE);
+		ACell err = RT.getIn(output, Fields.ERROR);
+		assertTrue(response != null || err != null,
+			"Should have either a response or an error");
 	}
 
 	@Test
@@ -348,7 +350,7 @@ public class GoalTreeAdapterTest {
 					Fields.INPUT, Strings.create("Tell me about penguins"))));
 
 		ACell output = adapter.processGoal(null, ALICE, input);
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		// test:llm echoes the last user message
 		assertTrue(response.toString().contains("penguin"),
 			"Should echo the goal text: " + response);
@@ -535,12 +537,11 @@ public class GoalTreeAdapterTest {
 					Strings.create("anything"))));
 
 		ACell output = adapter.processGoal(null, ALICE, input);
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
-		assertNotNull(response);
-		// test:llm only echoes — it can't make tool calls — so the loop will
-		// always reject the text and eventually hit MAX_ITERATIONS.
-		assertFalse(response.toString().equals("anything"),
-			"Text-only response must not be accepted under typed outputs: " + response);
+		// Loop hits MAX_ITERATIONS — failure path emits `error`, not `response`.
+		AString err = RT.ensureString(RT.getIn(output, Fields.ERROR));
+		assertNotNull(err, "Failed transition should report error");
+		assertFalse(err.toString().equals("anything"),
+			"Text-only response must not be accepted under typed outputs: " + err);
 	}
 
 	@Test
@@ -666,12 +667,10 @@ public class GoalTreeAdapterTest {
 					Strings.create("This is plain text, not JSON."))));
 
 		ACell output = adapter.processGoal(null, ALICE, input);
-		AString response = RT.ensureString(RT.getIn(output, Fields.RESULT, "response"));
-		// Should NOT be the original plain text — harness should have rejected it.
-		// With test:llm echoing, the loop hits max iterations and returns
-		// "Max iterations reached" as the failure value.
-		assertNotNull(response);
-		assertFalse(response.toString().equals("This is plain text, not JSON."),
-			"Plain text response should not be accepted as complete: " + response);
+		// Loop hits MAX_ITERATIONS — failure path emits `error`, not `response`.
+		AString err = RT.ensureString(RT.getIn(output, Fields.ERROR));
+		assertNotNull(err, "Plain text should be rejected, producing failure");
+		assertFalse(err.toString().equals("This is plain text, not JSON."),
+			"Plain text response should not be accepted as complete: " + err);
 	}
 }

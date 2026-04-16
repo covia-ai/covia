@@ -67,7 +67,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	private static final AString K_TYPE        = Strings.intern("type");
 	private static final AString K_PROPERTIES  = Strings.intern("properties");
 	private static final AString K_REQUIRED    = Strings.intern("required");
-	private static final AString K_RESPONSE    = Strings.intern("response");
 	private static final AString K_HISTORY     = Strings.intern("history");
 	private static final AString K_OUTPUTS     = Strings.intern("outputs");
 	private static final AString K_SCHEMA      = Strings.intern("schema");
@@ -494,28 +493,21 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			}
 		}
 
-		AMap<AString, ACell> output = Maps.of(
-			AgentState.KEY_STATE, newState,
-			Fields.RESULT, Maps.of(K_RESPONSE, result.value()));
-
-		// Auto-complete all pending tasks with the root goal result
-		if (tasks != null && tasks.count() > 0) {
-			AMap<AString, ACell> taskResults = Maps.empty();
-			AString statusKey = "complete".equals(result.status())
-				? covia.grid.Status.COMPLETE : covia.grid.Status.FAILED;
-			for (long i = 0; i < tasks.count(); i++) {
-				AString jobId = RT.ensureString(RT.getIn(tasks.get(i), Fields.JOB_ID));
-				if (jobId != null) {
-					taskResults = taskResults.assoc(jobId, Maps.of(
-						Fields.STATUS, statusKey,
-						Fields.OUTPUT, result.value()));
-				}
-			}
-			if (taskResults.count() > 0) {
-				output = output.assoc(Fields.TASK_RESULTS, taskResults);
-			}
+		// Lean transition output: emit {response | error, taskComplete} and let
+		// the framework synthesise taskResults for the picked task. State is
+		// still emitted because GoalTree's config currently rides in state.config
+		// across transitions — that carry-over moves to the session record in
+		// the later sub-stage when state is fully retired.
+		AMap<AString, ACell> output = Maps.of(AgentState.KEY_STATE, newState);
+		boolean failed = "failed".equals(result.status());
+		if (failed) {
+			output = output.assoc(Fields.ERROR, result.value());
+		} else {
+			output = output.assoc(Fields.RESPONSE, result.value());
 		}
-
+		if (tasks != null && tasks.count() > 0) {
+			output = output.assoc(Fields.TASK_COMPLETE, convex.core.data.prim.CVMBool.TRUE);
+		}
 		return output;
 	}
 
