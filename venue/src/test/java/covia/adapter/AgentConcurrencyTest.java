@@ -86,7 +86,7 @@ public class AgentConcurrencyTest {
 		// extractInbox(r) returns [hello], remainingInbox skips 0 = [hello]
 		// remainingInbox.count() > 0 → hasNew = true → status RUNNING
 		AMap<AString, ACell> merged = agent.mergeRunResult(
-			null, 0, Index.none(), null,
+			null, 0, null, Index.none(), null,
 			Maps.of("ts", CVMLong.create(1)));
 
 		assertEquals(AgentState.RUNNING, RT.ensureString(merged.get(AgentState.KEY_STATUS)),
@@ -94,7 +94,7 @@ public class AgentConcurrencyTest {
 
 		// Now process that message: mergeRunResult with processedMsgCount=1
 		AMap<AString, ACell> merged2 = agent.mergeRunResult(
-			null, 1, Index.none(), null,
+			null, 1, null, Index.none(), null,
 			Maps.of("ts", CVMLong.create(2)));
 
 		assertEquals(AgentState.SLEEPING, RT.ensureString(merged2.get(AgentState.KEY_STATUS)),
@@ -116,7 +116,7 @@ public class AgentConcurrencyTest {
 
 		// mergeRunResult presenting T1 as already processed
 		AMap<AString, ACell> merged = agent.mergeRunResult(
-			null, 0, agent.getTasks(), null,
+			null, 0, null, agent.getTasks(), null,
 			Maps.of("ts", CVMLong.create(1)));
 
 		assertEquals(AgentState.SLEEPING, RT.ensureString(merged.get(AgentState.KEY_STATUS)),
@@ -131,7 +131,7 @@ public class AgentConcurrencyTest {
 		@SuppressWarnings("unchecked")
 		Index<Blob, ACell> presentedTasks = (Index<Blob, ACell>) (Index<?,?>) Index.none().assoc(t1, Strings.create("task-1"));
 		AMap<AString, ACell> merged2 = agent.mergeRunResult(
-			null, 0, presentedTasks, null,
+			null, 0, null, presentedTasks, null,
 			Maps.of("ts", CVMLong.create(2)));
 
 		assertEquals(AgentState.RUNNING, RT.ensureString(merged2.get(AgentState.KEY_STATUS)),

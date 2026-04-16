@@ -425,18 +425,40 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * added during the transition. Determines whether new work arrived
 	 * and sets status to RUNNING or SLEEPING accordingly.</p>
 	 *
+	 * <p>Inbox messages presented to the transition occupy the prefix
+	 * {@code [0, presentedMsgCount)}. Of those, only entries whose
+	 * {@code sessionId} matches {@code consumedSession} were actually
+	 * processed this cycle (Sub-stage 2.6 — one-session-per-cycle demux);
+	 * the rest stay in the inbox for a future cycle. Messages arriving
+	 * during the transition (indices {@code >= presentedMsgCount}) are
+	 * always preserved. {@code consumedSession == null} consumes the
+	 * unsessioned messages in the presented prefix.</p>
+	 *
+	 * <p>TODO: revisit bucketed inbox ({@code Index<Blob, AVector>}) once
+	 * we hit perf or per-session-query needs. The flat scan here is O(n).</p>
+	 *
 	 * @return The new record (check status to determine if loop should continue)
 	 */
 	public AMap<AString, ACell> mergeRunResult(
-			ACell newState, long processedMsgCount,
+			ACell newState, long presentedMsgCount,
+			AString consumedSession,
 			Index<Blob, ACell> presentedTasks,
 			AMap<AString, ACell> taskResults,
 			AMap<AString, ACell> timelineEntry) {
 		return update(r -> {
-			// Preserve messages added during transition
 			AVector<ACell> currentInbox = extractInbox(r);
 			AVector<ACell> remainingInbox = Vectors.empty();
-			for (long i = processedMsgCount; i < currentInbox.count(); i++) {
+			// Presented prefix: keep messages whose session was NOT consumed
+			long prefixEnd = Math.min(presentedMsgCount, currentInbox.count());
+			for (long i = 0; i < prefixEnd; i++) {
+				ACell msg = currentInbox.get(i);
+				AString msgSid = messageSessionId(msg);
+				if (!sessionMatches(consumedSession, msgSid)) {
+					remainingInbox = remainingInbox.conj(msg);
+				}
+			}
+			// Tail: messages arrived during transition — always preserve
+			for (long i = prefixEnd; i < currentInbox.count(); i++) {
 				remainingInbox = remainingInbox.conj(currentInbox.get(i));
 			}
 
@@ -459,6 +481,17 @@ public class AgentState extends ALatticeComponent<ACell> {
 				.dissoc(K_ERROR)
 				.dissoc(K_WAKE);
 		});
+	}
+
+	private static AString messageSessionId(ACell msg) {
+		if (!(msg instanceof AMap)) return null;
+		ACell sid = ((AMap<?, ?>) msg).get(covia.api.Fields.SESSION_ID);
+		return (sid instanceof AString) ? (AString) sid : null;
+	}
+
+	private static boolean sessionMatches(AString a, AString b) {
+		if (a == null) return b == null;
+		return a.equals(b);
 	}
 
 	// ========== Private helpers ==========

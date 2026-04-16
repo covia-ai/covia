@@ -939,13 +939,26 @@ public class AgentAdapter extends AAdapter {
 			AVector<ACell> formattedTasks = formatPickedTask(pickedTask);
 			AVector<ACell> resolvedPending = resolveJobIds(pending, Fields.OUTPUT);
 
-			// Per-cycle ctx: scope to the picked task so t/ and c/ resolvers
-			// can address its private slot and session.
+			// Pick at most one session per cycle (Sub-stage 2.6). Priority:
+			//   1. picked task's sessionId (so the task's session controls)
+			//   2. else the oldest inbox message's sessionId
+			//   3. else null (unsessioned messages, if any)
+			// Inbox is then filtered to messages matching that session — the
+			// transition only ever sees one session's traffic per cycle.
+			// TODO: revisit a bucketed inbox (Index<sessionId, AVector>) if
+			// the O(n) per-cycle scan or per-session queries become hot.
+			AString pickedSession = pickSessionForCycle(pickedTask, inbox);
+			AVector<ACell> filteredInbox = filterInboxBySession(inbox, pickedSession);
+
+			// Per-cycle ctx: scope to the picked task and session so t/ and
+			// c/ resolvers can address its private slot and session record.
 			RequestContext cycleCtx = ctx;
 			if (pickedTask != null) {
 				cycleCtx = cycleCtx.withTaskId(pickedTask.getKey());
-				Blob sid = extractSessionIdFromTask(pickedTask.getValue());
-				if (sid != null) cycleCtx = cycleCtx.withSessionId(sid);
+			}
+			if (pickedSession != null) {
+				Blob sidBlob = Blob.parse(pickedSession.toString());
+				if (sidBlob != null) cycleCtx = cycleCtx.withSessionId(sidBlob);
 			}
 
 			// Invoke transition — no lock, no coordination during this call.
@@ -957,7 +970,7 @@ public class AgentAdapter extends AAdapter {
 				AgentState.KEY_STATE, currentState,
 				Fields.TASKS, formattedTasks,
 				Fields.PENDING, resolvedPending,
-				Fields.MESSAGES, inbox);
+				Fields.MESSAGES, filteredInbox);
 			if (pickedTask != null) {
 				ACell pickedTaskInput = (pickedTask.getValue() instanceof AMap)
 					? ((AMap<AString, ACell>) pickedTask.getValue()).get(Fields.INPUT)
@@ -1024,9 +1037,12 @@ public class AgentAdapter extends AAdapter {
 				}
 			}
 
-			// Merge results atomically (timeline, state, task cleanup)
+			// Merge results atomically (timeline, state, task cleanup).
+			// Pass pickedSession so the merge only consumes presented-prefix
+			// inbox entries that match the session this cycle handled —
+			// other-session messages stay queued for a future cycle.
 			AMap<AString, ACell> merged = agent.mergeRunResult(
-				newState, inbox.count(), tasks, taskResults, timelineEntry);
+				newState, inbox.count(), pickedSession, tasks, taskResults, timelineEntry);
 
 			// Complete pending request Jobs AFTER the merge so timeline and state
 			// are visible when the caller's awaitResult returns. The sid was
@@ -1116,6 +1132,59 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 		return oldest;
+	}
+
+	/**
+	 * Picks the session this cycle will handle. Priority:
+	 *   1. Picked task's sessionId (so the active task's session controls)
+	 *   2. Oldest inbox message's sessionId
+	 *   3. null (the unsessioned bucket)
+	 *
+	 * <p>Returned value is the AString hex sessionId, or null for the
+	 * unsessioned bucket. The transition will only see traffic for this
+	 * single session per cycle.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	private static AString pickSessionForCycle(
+			Map.Entry<Blob, ACell> pickedTask, AVector<ACell> inbox) {
+		if (pickedTask != null) {
+			ACell tv = pickedTask.getValue();
+			if (tv instanceof AMap) {
+				ACell sid = ((AMap<AString, ACell>) tv).get(Fields.SESSION_ID);
+				if (sid instanceof AString) return (AString) sid;
+			}
+			return null;
+		}
+		if (inbox != null && inbox.count() > 0) {
+			ACell first = inbox.get(0);
+			if (first instanceof AMap) {
+				ACell sid = ((AMap<AString, ACell>) first).get(Fields.SESSION_ID);
+				if (sid instanceof AString) return (AString) sid;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Returns the inbox messages whose envelope {@code sessionId} matches
+	 * {@code session} (null matches messages with no sessionId — the
+	 * unsessioned bucket). Preserves order.
+	 */
+	@SuppressWarnings("unchecked")
+	private static AVector<ACell> filterInboxBySession(AVector<ACell> inbox, AString session) {
+		if (inbox == null || inbox.count() == 0) return Vectors.empty();
+		AVector<ACell> out = Vectors.empty();
+		for (long i = 0; i < inbox.count(); i++) {
+			ACell msg = inbox.get(i);
+			AString sid = null;
+			if (msg instanceof AMap) {
+				ACell v = ((AMap<AString, ACell>) msg).get(Fields.SESSION_ID);
+				if (v instanceof AString) sid = (AString) v;
+			}
+			boolean match = (session == null) ? (sid == null) : session.equals(sid);
+			if (match) out = out.conj(msg);
+		}
+		return out;
 	}
 
 	/**
