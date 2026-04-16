@@ -370,16 +370,23 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
 
-		// Add task to agent's lattice. Store raw input directly — most
-		// common case. If a per-request responseSchema was supplied, wrap
-		// it as {input, responseSchema}; the transition function handles
-		// both shapes (see formatTasks).
+		// Build canonical taskdata map (Option A — pending-queue record):
+		//   {input, caller, created, responseSchema?, t: {}}
+		// Task rows are transient — status/result/error live on the Job record
+		// and in the agent timeline's taskResults snapshot. The 't' slot is
+		// reserved for per-task scratch; Phase 1c will wire TempNamespaceResolver
+		// to populate it.
 		Blob taskId = generateTaskId();
 		ACell taskInput = RT.getIn(input, Fields.INPUT);
-		ACell responseSchema = RT.getIn(input, Strings.intern("responseSchema"));
-		ACell taskData = (responseSchema instanceof AMap)
-			? Maps.of(Fields.INPUT, taskInput, Strings.intern("responseSchema"), responseSchema)
-			: taskInput;
+		ACell responseSchema = RT.getIn(input, Fields.RESPONSE_SCHEMA);
+		AMap<AString, ACell> taskData = Maps.of(
+			Fields.INPUT,   taskInput,
+			Fields.CALLER,  ctx.getCallerDID(),
+			Fields.CREATED, CVMLong.create(Utils.getCurrentTimestamp()),
+			Fields.T,       Maps.empty());
+		if (responseSchema instanceof AMap) {
+			taskData = taskData.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
+		}
 		agent.addTask(taskId, taskData);
 
 		// Register this Job to be completed by the run loop when the task result arrives.
@@ -991,43 +998,26 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * Formats task Index entries as a vector for the transition function.
-	 * Task data is either raw input or a {input, responseSchema} wrapper
-	 * map (when the caller specified a per-request response schema). This
-	 * method unwraps the wrapper so the transition sees a uniform shape:
-	 * {jobId, input, caller?, responseSchema?}.
+	 * Reads the canonical taskdata shape — {input, caller, created,
+	 * responseSchema?, t, sessionId?, goals?} — and emits the transition
+	 * wire shape {jobId, input, caller?, responseSchema?}.
 	 */
 	@SuppressWarnings("unchecked")
 	private AVector<ACell> formatTasks(Index<Blob, ACell> tasks) {
 		if (tasks == null || tasks.count() == 0) return Vectors.empty();
-		AString K_RESPONSE_SCHEMA = Strings.intern("responseSchema");
 		AVector<ACell> result = Vectors.empty();
 		for (var entry : tasks.entrySet()) {
 			Blob jobId = entry.getKey();
-			AMap<AString, ACell> jobData = engine.jobs().getJobData(jobId);
-			ACell caller = (jobData != null) ? jobData.get(Fields.CALLER) : null;
 			ACell raw = entry.getValue();
-			ACell taskInput;
-			ACell responseSchema = null;
-			// Detect wrapper shape: a map containing BOTH "input" and
-			// "responseSchema" keys. Both must be present together — this
-			// avoids false positives where a worker's actual input happens
-			// to be a map with an "input" field.
-			if (raw instanceof AMap<?,?> rm) {
-				AMap<AString, ACell> rawMap = (AMap<AString, ACell>) rm;
-				if (rawMap.containsKey(Fields.INPUT) && rawMap.containsKey(K_RESPONSE_SCHEMA)) {
-					taskInput = rawMap.get(Fields.INPUT);
-					responseSchema = rawMap.get(K_RESPONSE_SCHEMA);
-				} else {
-					taskInput = raw;
-				}
-			} else {
-				taskInput = raw;
-			}
+			AMap<AString, ACell> taskMap = (raw instanceof AMap) ? (AMap<AString, ACell>) raw : null;
+			ACell taskInput = (taskMap != null) ? taskMap.get(Fields.INPUT) : raw;
+			ACell caller = (taskMap != null) ? taskMap.get(Fields.CALLER) : null;
+			ACell responseSchema = (taskMap != null) ? taskMap.get(Fields.RESPONSE_SCHEMA) : null;
 			AMap<AString, ACell> task = Maps.of(
 				Fields.JOB_ID, taskIdHex(jobId),
 				Fields.INPUT, taskInput);
 			if (caller != null) task = task.assoc(Fields.CALLER, caller);
-			if (responseSchema != null) task = task.assoc(K_RESPONSE_SCHEMA, responseSchema);
+			if (responseSchema != null) task = task.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
 			result = result.conj(task);
 		}
 		return result;
