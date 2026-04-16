@@ -195,7 +195,7 @@ public class ContextLoader {
 	static boolean isNamespacePath(String ref) {
 		return ref.startsWith("w/") || ref.startsWith("g/") || ref.startsWith("o/")
 			|| ref.startsWith("j/") || ref.startsWith("s/") || ref.startsWith("h/")
-			|| ref.startsWith("n/");
+			|| ref.startsWith("n/") || ref.startsWith("c/");
 	}
 
 	/**
@@ -213,7 +213,8 @@ public class ContextLoader {
 		// Lattice namespace paths
 		if (ref.startsWith("w/") || ref.startsWith("o/") || ref.startsWith("g/")
 			|| ref.startsWith("j/") || ref.startsWith("s/") || ref.startsWith("h/")
-			|| ref.startsWith("n/") || ref.startsWith("t/") || ref.startsWith("v/")) return true;
+			|| ref.startsWith("n/") || ref.startsWith("t/") || ref.startsWith("c/")
+			|| ref.startsWith("v/")) return true;
 		return false;
 	}
 

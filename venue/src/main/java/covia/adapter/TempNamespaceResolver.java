@@ -14,16 +14,27 @@ import convex.lattice.cursor.ALatticeCursor;
 import covia.venue.RequestContext;
 
 /**
- * Resolves the {@code t/} virtual namespace to the {@code temp} field within
- * the current job record on the user's lattice.
+ * Resolves the {@code t/} virtual namespace to an ephemeral, scope-private
+ * slot. The resolver has two modes depending on what scope is present on
+ * the {@link RequestContext}:
  *
- * <p>{@code t/draft} resolves to remaining keys {@code ["draft"]}. The
- * returned cursor is the user's jobs index cursor. Read and write operations
- * use {@link #getTemp} and {@link #updateTemp} to navigate into the
- * specific job record's temp field atomically.</p>
+ * <ol>
+ *   <li><b>Agent + task scope.</b> When both {@code agentId} and {@code taskId}
+ *       are set, {@code t/draft} resolves to the caller's cursor with rewritten
+ *       keys {@code ["g", agentId, "tasks", taskId, "t", "draft"]}. This is
+ *       the preferred path for agent task work — each task keeps its own
+ *       temp slot within its record, and the cursor flow in
+ *       {@link CoviaAdapter} treats it as an ordinary writable path.</li>
+ *   <li><b>Job scope (legacy).</b> When only {@code jobId} is set (no agent
+ *       context), {@code t/draft} resolves to remaining keys {@code ["draft"]}
+ *       over the user's jobs index cursor. Reads and writes go through
+ *       {@link #getTemp}/{@link #updateTemp} for atomic access to the
+ *       specific job record's {@code temp} field. This preserves the
+ *       goal-tree execution path that predates per-task scopes.</li>
+ * </ol>
  *
- * <p>Requires {@code ctx.getJobId()} to be set (i.e. the request is running
- * within a goal tree execution).</p>
+ * <p>If neither scope is present the resolver throws helpfully rather than
+ * silently returning the wrong location.</p>
  */
 class TempNamespaceResolver implements NamespaceResolver {
 
@@ -32,23 +43,39 @@ class TempNamespaceResolver implements NamespaceResolver {
 
 	@Override
 	public ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
+		AString agentId = ctx.getAgentId();
+		Blob taskId = ctx.getTaskId();
 		Blob jobId = ctx.getJobId();
-		if (jobId == null) {
-			throw new RuntimeException("Cannot use 't/' prefix outside job scope (no jobId on RequestContext)");
+
+		// Preferred: agent + task scope — rewrite to a concrete lattice path.
+		if (agentId != null && taskId != null) {
+			ALatticeCursor<ACell> userCursor = adapter.ensureUserCursor(ctx);
+			ACell[] rewritten = new ACell[keys.length + 4];
+			rewritten[0] = Strings.create("g");
+			rewritten[1] = agentId;
+			rewritten[2] = Strings.create("tasks");
+			rewritten[3] = taskId;
+			rewritten[4] = Strings.create("t");
+			System.arraycopy(keys, 1, rewritten, 5, keys.length - 1);
+			return new ResolvedNamespace(userCursor, rewritten);
 		}
 
-		// Navigate: user cursor → j (jobs index)
-		ALatticeCursor<ACell> userCursor = adapter.ensureUserCursor(ctx);
-		ACell[] jPath = userCursor.getLattice().resolvePath(new ACell[] { Strings.create("j") });
-		if (jPath == null) {
-			throw new RuntimeException("Cannot resolve jobs namespace");
-		}
-		ALatticeCursor<ACell> jobsCursor = userCursor.path(jPath);
+		// Legacy: job scope — specialised cursor access via getTemp/updateTemp.
+		if (jobId != null) {
+			ALatticeCursor<ACell> userCursor = adapter.ensureUserCursor(ctx);
+			ACell[] jPath = userCursor.getLattice().resolvePath(new ACell[] { Strings.create("j") });
+			if (jPath == null) {
+				throw new RuntimeException("Cannot resolve jobs namespace");
+			}
+			ALatticeCursor<ACell> jobsCursor = userCursor.path(jPath);
 
-		// Remaining keys: everything after the "t" prefix
-		ACell[] remaining = new ACell[keys.length - 1];
-		System.arraycopy(keys, 1, remaining, 0, remaining.length);
-		return new ResolvedNamespace(jobsCursor, remaining, jobId);
+			ACell[] remaining = new ACell[keys.length - 1];
+			System.arraycopy(keys, 1, remaining, 0, remaining.length);
+			return new ResolvedNamespace(jobsCursor, remaining, jobId);
+		}
+
+		throw new RuntimeException(
+			"Cannot use 't/' prefix outside job or task scope (requires agentId+taskId or jobId on RequestContext)");
 	}
 
 	@Override

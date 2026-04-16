@@ -140,6 +140,7 @@ public class CoviaAdapter extends AAdapter {
 
 		// Register built-in virtual namespace resolvers
 		registerResolver("n", new AgentNamespaceResolver());
+		registerResolver("c", new SessionNamespaceResolver());
 		registerResolver("t", new TempNamespaceResolver());
 		registerResolver("v", new VenueGlobalsResolver(this));
 	}

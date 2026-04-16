@@ -911,7 +911,7 @@ public class Engine {
 
 	/**
 	 * Returns true if {@code ref} starts with a known user-namespace prefix
-	 * (w/, g/, o/, j/, s/, n/, h/) without a leading slash. Mirrors
+	 * (w/, g/, o/, j/, s/, n/, h/, c/) without a leading slash. Mirrors
 	 * {@link covia.adapter.ContextLoader} so the two resolvers stay aligned.
 	 */
 	static boolean isUserNamespacePath(AString ref) {
@@ -919,7 +919,7 @@ public class Engine {
 		String s = ref.toString();
 		return s.startsWith("w/") || s.startsWith("g/") || s.startsWith("o/")
 			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
-			|| s.startsWith("n/");
+			|| s.startsWith("n/") || s.startsWith("c/");
 	}
 
 	/**

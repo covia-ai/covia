@@ -1863,6 +1863,103 @@ public class CoviaAdapterTest {
 		assertTrue(rendered.contains("deep data"), "Should render nested values");
 	}
 
+	// ========== Sub-stage 1: c/ and t/ resolver wiring (inert) ==========
+	//
+	// Sub-stage 1 wires the new c/ (session) and agent+task scope of t/
+	// resolvers but does NOT yet wire up the cursor-based write path through
+	// Index<Blob, ACell> entries. These tests verify scope detection and
+	// helpful errors. Read/write functionality through these prefixes lands
+	// in later sub-stages once session/task records have specialised access
+	// helpers (analogous to TempNamespaceResolver.updateTemp for jobId scope).
+
+	@Test
+	public void testSessionRejectsWithoutSessionId() {
+		// agentId set but no sessionId — c/ should fail
+		RequestContext halfCtx = ALICE.withAgentId(Strings.create("test-agent"));
+		Job writeJob = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "c/x", Fields.VALUE, Strings.create("nope")),
+			halfCtx);
+		assertThrows(Exception.class, () -> writeJob.awaitResult(5000),
+			"c/ write without sessionId should fail");
+	}
+
+	@Test
+	public void testSessionRejectsWithoutAgentId() {
+		// sessionId set but no agentId — c/ should fail
+		RequestContext halfCtx = ALICE.withSessionId(Blob.fromHex("aa11bb22"));
+		Job writeJob = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "c/x", Fields.VALUE, Strings.create("nope")),
+			halfCtx);
+		assertThrows(Exception.class, () -> writeJob.awaitResult(5000),
+			"c/ write without agentId should fail");
+	}
+
+	@Test
+	public void testSessionResolverRewritesPath() {
+		// Direct resolver-level test: c/draft + agent + session scope rewrites
+		// to ["g", agentId, "sessions", sessionId, "c", "draft"] on the
+		// caller's user cursor.
+		AString agentId = Strings.create("test-agent");
+		Blob sessionId = Blob.fromHex("aa11bb22cc33dd44");
+		RequestContext ctx = ALICE.withAgentId(agentId).withSessionId(sessionId);
+
+		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
+		ACell[] keys = CoviaAdapter.parseStringPath("c/draft");
+		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx, keys);
+		assertNotNull(vns);
+		ACell[] rk = vns.remainingKeys();
+		assertEquals(6, rk.length);
+		assertEquals("g", rk[0].toString());
+		assertEquals(agentId, rk[1]);
+		assertEquals("sessions", rk[2].toString());
+		assertEquals(sessionId, rk[3]);
+		assertEquals("c", rk[4].toString());
+		assertEquals("draft", rk[5].toString());
+	}
+
+	@Test
+	public void testTempResolverPrefersAgentTaskScope() {
+		// When agentId+taskId both set, t/ rewrites to a concrete cursor path
+		// rather than the legacy job-scoped flow. jobId is still set by
+		// JobManager but agent+task takes precedence.
+		AString agentId = Strings.create("test-agent");
+		Blob taskId = Blob.fromHex("01020304");
+		RequestContext ctx = ALICE.withAgentId(agentId).withTaskId(taskId)
+			.withJobId(Blob.fromHex("ffeeddcc"));
+
+		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
+		ACell[] keys = CoviaAdapter.parseStringPath("t/draft");
+		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx, keys);
+		assertNotNull(vns);
+		assertNull(vns.jobId(), "agent+task scope must not use legacy jobId path");
+		ACell[] rk = vns.remainingKeys();
+		assertEquals(6, rk.length);
+		assertEquals("g", rk[0].toString());
+		assertEquals(agentId, rk[1]);
+		assertEquals("tasks", rk[2].toString());
+		assertEquals(taskId, rk[3]);
+		assertEquals("t", rk[4].toString());
+		assertEquals("draft", rk[5].toString());
+	}
+
+	@Test
+	public void testTempResolverFallsBackToJobScope() {
+		// jobId set but no agentId/taskId — legacy job-scoped flow with
+		// jobId returned in ResolvedNamespace and remainingKeys stripped of
+		// the t/ prefix.
+		Blob jobId = Blob.fromHex("ffeeddcc");
+		RequestContext ctx = ALICE.withJobId(jobId);
+
+		CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
+		ACell[] keys = CoviaAdapter.parseStringPath("t/draft");
+		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx, keys);
+		assertNotNull(vns);
+		assertEquals(jobId, vns.jobId());
+		ACell[] rk = vns.remainingKeys();
+		assertEquals(1, rk.length);
+		assertEquals("draft", rk[0].toString());
+	}
+
 	// Regression: concurrent appends to the same vector path used to lose
 	// elements because handleAppend did read-then-set on the entry cursor.
 	// The fix routes both branches through updateAndGet so each append
