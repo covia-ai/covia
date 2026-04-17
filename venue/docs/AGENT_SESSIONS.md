@@ -96,8 +96,6 @@ g/<agent>/
   n/                  — AGENT state (cross-session). Agent-private persistent
                         workspace. Long-term memory, persona, learned patterns.
                         Usually small; written rarely.
-  inbox               — out-of-band signals only (wake events, routing failures,
-                        future broadcasts). NOT a conversation queue — see §5.5.1.
   timeline            — thin audit log of session events (session-created,
                         turn-recorded, archived). Replaces the old per-transition
                         snapshot vector.
@@ -198,7 +196,7 @@ agent_trigger   agentId=X  sessionId=Y?                 — wake the agent. No p
 |----|-------|---------------|----------------------|
 | `agent_request` | `tasks` Index | yes (Job) | Agent must produce `response` (auto-completes task) or `error`, or yield (task stays pending until external wake) |
 | `agent_chat` | session-scoped chat slot | yes (Job) | Agent's next `response` on this session completes the chat job. Typically continues an existing session (`sessionId` supplied); mints a new one on first contact |
-| `agent_message` | session `pending` (or agent `inbox` for out-of-band) | no | Agent processes whenever; any `response` lands in session history |
+| `agent_message` | session `pending` | no | Agent processes whenever; any `response` lands in session history |
 | `agent_trigger` | none | yes (run completion) | Just nudges the run loop; no payload to deliver |
 
 Session ids are always venue-minted — callers never supply their own. Per-op rules are detailed in §5.5; summary:
@@ -293,13 +291,7 @@ client → agent_message {agentId, sessionId: "s-01HX...",
 
 Routed messages are appended directly to `g/<agent>/sessions/<sid>/history`. There is no agent-level `messages` queue for conversational traffic — that's what #69 was complaining about, and it goes away.
 
-The agent-level `inbox` (§4) is **not** a conversation queue. It's a routing/staging layer for out-of-band signals that don't belong to any session:
-
-- Internal wake events (scheduled triggers, timer fires)
-- Cross-session or cross-agent broadcasts (future)
-- Messages whose routing failed (unknown `sessionId`, rejected caller)
-
-Conversational traffic skips the inbox entirely and goes straight into session history.
+There is no agent-level inbox. All messages are routed to `session.pending` and drained by the run loop on the next transition cycle for that session.
 
 #### 5.5.2 Multiple messages before the agent transitions
 
@@ -509,7 +501,6 @@ A snapshot is the **full agent state at the transition boundary**, including eve
     "conv-mike":  { "meta": {...}, "state": {...}, "history": [...] },
     "support-01HXYZ": { "meta": {...}, "state": {...}, "history": [...] }
   },
-  "inbox": [...],
   "status": "RUNNING"
 }
 ```
@@ -588,7 +579,7 @@ The API surface is additive at the envelope level (new `sessionId` field in requ
 |-------|-------|---------|
 | **0 (now)** | Design doc + open questions | This file |
 | **1** | Session storage + session envelope + single transition contract | Every invocation runs in a session; `sessionId` in request/response envelope; per-session history at `g/<agent>/sessions/<sid>/`; chatbot demo |
-| **2.1–2.6** | Session lattice slot + sessionId on intake/inbox + ensureSession + one-session-per-cycle inbox demux | ✓ Done (Stage 2.6 complete; sessions auto-minted, inbox demuxes by session, one session active per transition cycle) |
+| **2.1–2.6** | Session lattice slot + sessionId on intake + ensureSession + one-session-per-cycle demux | ✓ Done (Stage 2.6 complete; sessions auto-minted, session.pending is sole intake, one session active per transition cycle) |
 | **2.7** | Single response value contract; explicit task completion via venue ops | Transition adapter returns `ACell response` (or null) — appended to `c/history` if non-null. For chat picked: return value completes chat Job. For task picked: completion is explicit via `agent:complete_task` / `agent:fail_task` ops invoked during transition (framework reads RequestContext for `agentId`/`taskId`/`jobId`). State writes via `covia_write` (RequestContext-scoped to `n`/`c`/`t`). No `agent:yield` op — yield is the natural state when no completion op was invoked. No `agent:complete_chat` — chat completes via return. LLM tool loop wraps `complete_task` / `fail_task` as tools; plain-text response = return value (auto-completes chat, yields for task). Yields → exponential falloff on per-task `nextWake`; optional caller-settable `timeout`, default very long. |
 | **2.8** | Add `agent_chat` op + session-scoped chat slot | Caller awaits next `response` on the session; mints session on first contact, continues existing session normally. A2A `message/send` analogue. |
 | **3** | Per-session history population | Append turn records to `g/<agent>/sessions/<sid>/history` on every transition. Move heavy result data off the flat timeline and into per-session history; agent timeline becomes a thin audit log keyed by session id |
@@ -619,7 +610,7 @@ At the Phase 1 cutover, existing agents begin running each new invocation inside
 
 ### 12.2 Why it might be wrong
 
-- **New primitive to learn** — agent authors now need to think about sessions in addition to state, config, tasks, inbox
+- **New primitive to learn** — agent authors now need to think about sessions in addition to state, config, tasks
 - **Per-invocation session overhead** — pure one-shot callers (Alice-style extraction) pay the cost of a session record they never reuse; acceptable price for uniform audit but not free
 - **Storage layout change** — moving heavy data to per-session history is a non-trivial migration if applied retroactively
 - **Open questions still load-bearing** — creation authority (§10 OQ #1), caps scope (#3), and migration of flat timelines (#11) remain unresolved

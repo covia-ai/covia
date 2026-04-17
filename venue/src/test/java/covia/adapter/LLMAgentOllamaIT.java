@@ -10,6 +10,7 @@ import org.junit.jupiter.api.condition.EnabledIf;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
@@ -71,7 +72,12 @@ public class LLMAgentOllamaIT {
 
 		// Deliver directly to avoid auto-wake race
 		User ollamaUser = engine.getVenueState().users().get(ALICE_DID);
-		ollamaUser.agent("ollama-agent").deliverMessage(Maps.of("content", "What is the capital of France?"));
+		AgentState ollamaAgent = ollamaUser.agent("ollama-agent");
+		Blob ollamaSid = Blob.fromHex("44440001444400014444000144440001");
+		ollamaAgent.ensureSession(ollamaSid, ALICE_DID);
+		AString ollamaSidHex = Strings.create(ollamaSid.toHexString());
+		ollamaAgent.appendSessionPending(ollamaSid, Maps.of(
+			Strings.intern("content"), Strings.create("What is the capital of France?")));
 
 		Job runJob = engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -93,7 +99,8 @@ public class LLMAgentOllamaIT {
 		System.out.println(timelineResponse);
 
 		// Second turn
-		ollamaUser.agent("ollama-agent").deliverMessage(Maps.of("content", "And what is its population?"));
+		ollamaAgent.appendSessionPending(ollamaSid, Maps.of(
+			Strings.intern("content"), Strings.create("And what is its population?")));
 
 		Job run2 = engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",

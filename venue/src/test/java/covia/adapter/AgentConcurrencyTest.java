@@ -71,34 +71,37 @@ public class AgentConcurrencyTest {
 	// ========== Unit: mergeRunResult ==========
 
 	@Test
-	public void testMergeRunResultDetectsNewMessage() {
-		// mergeRunResult should detect messages delivered DURING the transition
-		// (between the inbox snapshot and the merge) via remainingInbox.count().
+	public void testMergeRunResultDetectsNewSessionPending() {
+		// mergeRunResult should detect session pending messages delivered
+		// DURING the transition and stay RUNNING.
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ALICE_DID);
 		AgentState agent = user.ensureAgent("merge-msg", Maps.empty(), null);
 		agent.setStatus(AgentState.RUNNING);
 
-		// Deliver a message that's "new" — wasn't in the original inbox snapshot
-		agent.deliverMessage(Maps.of("content", "hello"));
+		// Set up a session with a pending message
+		Blob sid = Blob.fromHex("66660001666600016666000166660001");
+		agent.ensureSession(sid, ALICE_DID);
+		agent.appendSessionPending(sid, Maps.of("content", "hello"));
 
-		// mergeRunResult with processedMsgCount=0 (we processed 0 messages):
-		// extractInbox(r) returns [hello], remainingInbox skips 0 = [hello]
-		// remainingInbox.count() > 0 → hasNew = true → status RUNNING
+		// mergeRunResult with 0 drain: session.pending still has the message
+		// → hasSessionPendingInRecord = true → status RUNNING
 		AMap<AString, ACell> merged = agent.mergeRunResult(
-			null, 0, null, Index.none(), null,
-			Maps.of("ts", CVMLong.create(1)));
+			null, null, Index.none(), null,
+			Maps.of("ts", CVMLong.create(1)),
+			sid, null, 0);
 
 		assertEquals(AgentState.RUNNING, RT.ensureString(merged.get(AgentState.KEY_STATUS)),
-			"Should detect the new message and stay RUNNING");
+			"Should detect session pending and stay RUNNING");
 
-		// Now process that message: mergeRunResult with processedMsgCount=1
+		// Now drain that message: presentedSessionPendingCount=1
 		AMap<AString, ACell> merged2 = agent.mergeRunResult(
-			null, 1, null, Index.none(), null,
-			Maps.of("ts", CVMLong.create(2)));
+			null, null, Index.none(), null,
+			Maps.of("ts", CVMLong.create(2)),
+			sid, null, 1);
 
 		assertEquals(AgentState.SLEEPING, RT.ensureString(merged2.get(AgentState.KEY_STATUS)),
-			"No new messages — should go to SLEEPING");
+			"No pending messages — should go to SLEEPING");
 	}
 
 	@Test
@@ -116,7 +119,7 @@ public class AgentConcurrencyTest {
 
 		// mergeRunResult presenting T1 as already processed
 		AMap<AString, ACell> merged = agent.mergeRunResult(
-			null, 0, null, agent.getTasks(), null,
+			null, null, agent.getTasks(), null,
 			Maps.of("ts", CVMLong.create(1)));
 
 		assertEquals(AgentState.SLEEPING, RT.ensureString(merged.get(AgentState.KEY_STATUS)),
@@ -131,7 +134,7 @@ public class AgentConcurrencyTest {
 		@SuppressWarnings("unchecked")
 		Index<Blob, ACell> presentedTasks = (Index<Blob, ACell>) (Index<?,?>) Index.none().assoc(t1, Strings.create("task-1"));
 		AMap<AString, ACell> merged2 = agent.mergeRunResult(
-			null, 0, null, presentedTasks, null,
+			null, null, presentedTasks, null,
 			Maps.of("ts", CVMLong.create(2)));
 
 		assertEquals(AgentState.RUNNING, RT.ensureString(merged2.get(AgentState.KEY_STATUS)),
@@ -152,7 +155,12 @@ public class AgentConcurrencyTest {
 
 		// Deliver message directly to avoid auto-wake
 		User user = engine.getVenueState().users().get(ALICE_DID);
-		user.agent("conc-trig").deliverMessage(Maps.of("content", "hello"));
+		AgentState concAgent = user.agent("conc-trig");
+		Blob concSid = Blob.fromHex("77770001777700017777000177770001");
+		concAgent.ensureSession(concSid, ALICE_DID);
+		concAgent.appendSessionPending(concSid, Maps.of(
+			Fields.SESSION_ID, Strings.create(concSid.toHexString()),
+			Fields.MESSAGE, Maps.of("content", "hello")));
 
 		// Two concurrent triggers
 		CompletableFuture<ACell> f1 = CompletableFuture.supplyAsync(() ->
@@ -171,7 +179,7 @@ public class AgentConcurrencyTest {
 		assertNotNull(r1);
 		assertNotNull(r2);
 
-		// Agent should be SLEEPING with processed inbox
+		// Agent should be SLEEPING with processed session pending
 		AgentState agent = user.agent("conc-trig");
 		try {
 			agent.awaitSleeping().get(5, TimeUnit.SECONDS);
@@ -179,7 +187,7 @@ public class AgentConcurrencyTest {
 			fail("Timed out waiting for agent to reach SLEEPING: " + e);
 		}
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
-		assertEquals(0, agent.getInbox().count(), "Inbox should be drained");
+		assertFalse(agent.hasSessionPending(), "Session pending should be drained");
 		// At least 1 timeline entry (possibly 2 if both triggered separate loops)
 		assertTrue(agent.getTimeline().count() >= 1, "At least one run should have executed");
 	}
@@ -201,9 +209,14 @@ public class AgentConcurrencyTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("rapid");
+		Blob rapidSid = Blob.fromHex("88880001888800018888000188880001");
+		agent.ensureSession(rapidSid, ALICE_DID);
+		AString rapidSidHex = Strings.create(rapidSid.toHexString());
 
 		for (int i = 0; i < 50; i++) {
-			agent.deliverMessage(Maps.of("content", "msg-" + i));
+			agent.appendSessionPending(rapidSid, Maps.of(
+				Fields.SESSION_ID, rapidSidHex,
+				Fields.MESSAGE, Maps.of("content", "msg-" + i)));
 
 			// Non-blocking trigger
 			Job t1 = engine.jobs().invokeOperation("v/ops/agent/trigger",
@@ -230,7 +243,7 @@ public class AgentConcurrencyTest {
 		} catch (Exception e) {
 			fail("Timed out waiting for rapid agent to reach SLEEPING: " + e);
 		}
-		assertEquals(0, agent.getInbox().count(), "All messages should be processed");
+		assertFalse(agent.hasSessionPending(), "All messages should be processed");
 	}
 
 	@Test
@@ -248,6 +261,9 @@ public class AgentConcurrencyTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("barrage");
+		Blob barrageSid = Blob.fromHex("99990001999900019999000199990001");
+		agent.ensureSession(barrageSid, ALICE_DID);
+		AString barrageSidHex = Strings.create(barrageSid.toHexString());
 
 		final int N = 20;
 		@SuppressWarnings("unchecked")
@@ -255,7 +271,9 @@ public class AgentConcurrencyTest {
 
 		for (int i = 0; i < N; i++) {
 			final int idx = i;
-			agent.deliverMessage(Maps.of("content", "barrage-" + idx));
+			agent.appendSessionPending(barrageSid, Maps.of(
+				Fields.SESSION_ID, barrageSidHex,
+				Fields.MESSAGE, Maps.of("content", "barrage-" + idx)));
 			final ACell wait = (idx % 2 == 0) ? CVMBool.FALSE : CVMBool.TRUE;
 			futures[i] = CompletableFuture.supplyAsync(() ->
 				engine.jobs().invokeOperation("v/ops/agent/trigger",
@@ -276,7 +294,7 @@ public class AgentConcurrencyTest {
 		} catch (Exception e) {
 			fail("Timed out waiting for barrage agent to reach SLEEPING: " + e);
 		}
-		assertEquals(0, agent.getInbox().count(), "All messages should be processed");
+		assertFalse(agent.hasSessionPending(), "All messages should be processed");
 	}
 
 	@Test
@@ -292,7 +310,12 @@ public class AgentConcurrencyTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
-		user.agent("overlap").deliverMessage(Maps.of("content", "hello"));
+		AgentState overlapAgent = user.agent("overlap");
+		Blob overlapSid = Blob.fromHex("aabb0001aabb0001aabb0001aabb0001");
+		overlapAgent.ensureSession(overlapSid, ALICE_DID);
+		overlapAgent.appendSessionPending(overlapSid, Maps.of(
+			Fields.SESSION_ID, Strings.create(overlapSid.toHexString()),
+			Fields.MESSAGE, Maps.of("content", "hello")));
 
 		// First trigger: wait=false, returns immediately with RUNNING
 		Job t1 = engine.jobs().invokeOperation("v/ops/agent/trigger",
@@ -351,7 +374,7 @@ public class AgentConcurrencyTest {
 			fail("Timed out waiting for agent to reach SLEEPING: " + e);
 		}
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
-		assertEquals(0, agent.getInbox().count(), "Inbox should be drained");
+		assertFalse(agent.hasSessionPending(), "Session pending should be drained");
 	}
 
 	// ========== Integration: syncState during agent operations ==========
@@ -390,7 +413,12 @@ public class AgentConcurrencyTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
-		user.agent("sync-run").deliverMessage(Maps.of("content", "hello"));
+		AgentState syncRunAgent = user.agent("sync-run");
+		Blob syncSid = Blob.fromHex("bbcc0001bbcc0001bbcc0001bbcc0001");
+		syncRunAgent.ensureSession(syncSid, ALICE_DID);
+		syncRunAgent.appendSessionPending(syncSid, Maps.of(
+			Fields.SESSION_ID, Strings.create(syncSid.toHexString()),
+			Fields.MESSAGE, Maps.of("content", "hello")));
 
 		// Trigger with wait:false
 		engine.jobs().invokeOperation("v/ops/agent/trigger",
@@ -412,7 +440,7 @@ public class AgentConcurrencyTest {
 
 		assertEquals(AgentState.SLEEPING, agent.getStatus(),
 			"Agent should reach SLEEPING after run loop completes — syncState must not clobber");
-		assertEquals(0, agent.getInbox().count(), "Inbox should be drained");
+		assertFalse(agent.hasSessionPending(), "Session pending should be drained");
 		assertTrue(agent.getTimeline().count() >= 1, "Run loop should have executed");
 	}
 
@@ -475,13 +503,20 @@ public class AgentConcurrencyTest {
 		// Deliver messages directly (no auto-wake since agent isn't SLEEPING for wakeAgent)
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("resume-wake");
-		agent.deliverMessage(Maps.of("content", "pending-1"));
-		agent.deliverMessage(Maps.of("content", "pending-2"));
+		Blob resumeSid = Blob.fromHex("ccdd0001ccdd0001ccdd0001ccdd0001");
+		agent.ensureSession(resumeSid, ALICE_DID);
+		AString resumeSidHex = Strings.create(resumeSid.toHexString());
+		agent.appendSessionPending(resumeSid, Maps.of(
+			Fields.SESSION_ID, resumeSidHex,
+			Fields.MESSAGE, Maps.of("content", "pending-1")));
+		agent.appendSessionPending(resumeSid, Maps.of(
+			Fields.SESSION_ID, resumeSidHex,
+			Fields.MESSAGE, Maps.of("content", "pending-2")));
 
 		// Suspend the agent
 		agent.suspend(Strings.create("maintenance"));
 		assertEquals(AgentState.SUSPENDED, agent.getStatus());
-		assertEquals(2, agent.getInbox().count(), "Messages should be pending");
+		assertTrue(agent.hasSessionPending(), "Messages should be pending");
 
 		// Resume with autoWake=true
 		engine.jobs().invokeOperation("v/ops/agent/resume",
@@ -496,7 +531,7 @@ public class AgentConcurrencyTest {
 
 		assertEquals(AgentState.SLEEPING, agent.getStatus(),
 			"Agent should complete run loop after resume auto-wake");
-		assertEquals(0, agent.getInbox().count(),
+		assertFalse(agent.hasSessionPending(),
 			"Messages should be processed by auto-wake");
 	}
 }

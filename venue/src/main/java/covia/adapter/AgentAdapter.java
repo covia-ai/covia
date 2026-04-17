@@ -441,11 +441,6 @@ public class AgentAdapter extends AAdapter {
 			Fields.CALLER,     ctx.getCallerDID(),
 			Fields.SESSION_ID, Strings.create(sid.toHexString()),
 			Fields.MESSAGE,    messageContent);
-		agent.deliverMessage(envelope);
-		// S3b dual-write: also append to the session's pending vector so
-		// transitions can read messages directly from session.pending without
-		// scanning the agent-level inbox. The inbox write above remains for
-		// backwards compatibility until S3d.
 		agent.appendSessionPending(sid, envelope);
 		wakeAgent(agentId, ctx);
 
@@ -458,10 +453,11 @@ public class AgentAdapter extends AAdapter {
 
 	/**
 	 * agent:chat — synchronous request for the agent's next response on a
-	 * session. Reserves a per-session chat slot, delivers the message to the
-	 * agent's inbox, wakes the agent, and leaves the Job in STARTED state.
-	 * The framework's run loop completes the Job from the transition's
-	 * {@code response} value once the agent runs (see {@link #executeRunLoop}).
+	 * session. Reserves a per-session chat slot, appends the message to the
+	 * session's pending vector, wakes the agent, and leaves the Job in
+	 * STARTED state. The framework's run loop completes the Job from the
+	 * transition's {@code response} value once the agent runs (see
+	 * {@link #executeRunLoop}).
 	 *
 	 * <p>A2A {@code message/send} analogue. Unlike {@code agent:request},
 	 * which puts work in the {@code tasks} Index and requires explicit
@@ -501,16 +497,10 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		// Deliver the message to the agent's inbox with session envelope.
-		// Existing run-loop session demux ensures only this session's traffic
-		// is presented to the picked cycle (Sub-stage 2.6).
 		ACell envelope = Maps.of(
 			Fields.CALLER,     ctx.getCallerDID(),
 			Fields.SESSION_ID, sidHex,
 			Fields.MESSAGE,    messageContent);
-		agent.deliverMessage(envelope);
-		// S3b dual-write: also append to the session's pending vector. The
-		// inbox write above remains for backwards compatibility until S3d.
 		agent.appendSessionPending(sid, envelope);
 
 		// Stay in STARTED — the run loop will completeWith the agent's
@@ -1098,8 +1088,7 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	private static boolean hasWork(AgentState agent) {
-		AVector<ACell> inbox = agent.getInbox();
-		if (inbox != null && inbox.count() > 0) return true;
+		if (agent.hasSessionPending()) return true;
 		Index<Blob, ACell> tasks = agent.getTasks();
 		return tasks != null && tasks.count() > 0;
 	}
@@ -1137,7 +1126,6 @@ public class AgentAdapter extends AAdapter {
 			}
 
 			AMap<AString, ACell> record = agent.getRecord();
-			AVector<ACell> inbox = ensureVector(agent.getInbox());
 			Index<Blob, ACell> tasks = agent.getTasks();
 			Index<Blob, ACell> pending = agent.getPending();
 			ACell currentState = agent.getState();
@@ -1145,7 +1133,7 @@ public class AgentAdapter extends AAdapter {
 			// On subsequent iterations, attempt clean exit if no new work.
 			// tryCleanExit re-checks wake/hasWork under the coord lock, so a
 			// trigger arriving between the last merge and here is still seen.
-			if (!firstIteration && inbox.count() == 0 && tasks.count() == 0) {
+			if (!firstIteration && !agent.hasSessionPending() && tasks.count() == 0) {
 				if (tryCleanExit(coord, agent, lastResult, allTaskResults, agentId)) return;
 				continue;  // late wake — loop again
 			}
@@ -1160,41 +1148,25 @@ public class AgentAdapter extends AAdapter {
 			AVector<ACell> formattedTasks = formatPickedTask(pickedTask);
 			AVector<ACell> resolvedPending = resolveJobIds(pending, Fields.OUTPUT);
 
-			// Pick at most one session per cycle (Sub-stage 2.6). Priority:
+			// Pick at most one session per cycle. Priority:
 			//   1. picked task's sessionId (so the task's session controls)
-			//   2. else the oldest inbox message's sessionId
-			//   3. else null (unsessioned messages, if any)
-			// Inbox is then filtered to messages matching that session — the
-			// transition only ever sees one session's traffic per cycle.
-			// TODO: revisit a bucketed inbox (Index<sessionId, AVector>) if
-			// the O(n) per-cycle scan or per-session queries become hot.
-			AString pickedSession = pickSessionForCycle(pickedTask, inbox);
-			AVector<ACell> filteredInbox = filterInboxBySession(inbox, pickedSession);
+			//   2. else the first session with non-empty pending
+			//   3. else null (no session traffic)
+			AString pickedSession = pickSessionForCycle(pickedTask, agent);
+			Blob pickedSessionBlob = (pickedSession != null) ? Blob.parse(pickedSession.toString()) : null;
+			AVector<ACell> filteredInbox = (pickedSessionBlob != null)
+				? agent.getSessionPending(pickedSessionBlob) : Vectors.empty();
 
-			// Snapshot the picked session's chat slot (if any). Captured here
-			// so that a chat that arrives during the transition isn't picked
-			// up by this cycle's completion logic — it'll be handled next pass.
+			// Snapshot the picked session's chat slot and pending count.
+			// Captured here so that a chat that arrives during the transition
+			// isn't picked up by this cycle's completion logic — it'll be
+			// handled next pass.
 			Blob pickedChatJobId = null;
-			Blob pickedSessionBlob = null;
 			AMap<AString, ACell> pickedSessionRecord = null;
-			long presentedSessionPendingCount = 0;
-			if (pickedSession != null) {
-				pickedSessionBlob = Blob.parse(pickedSession.toString());
-				if (pickedSessionBlob != null) {
-					pickedChatJobId = agent.getChatJob(pickedSessionBlob);
-					// S3b: snapshot the session record so the transition gets
-					// its full {parties, meta, c, history, pending} view, and
-					// remember the pending count so the post-transition merge
-					// drains exactly the entries this cycle saw (any messages
-					// arriving during the transition stay queued).
-					pickedSessionRecord = agent.getSession(pickedSessionBlob);
-					if (pickedSessionRecord != null) {
-						ACell pv = pickedSessionRecord.get(AgentState.KEY_PENDING);
-						if (pv instanceof AVector) {
-							presentedSessionPendingCount = ((AVector<?>) pv).count();
-						}
-					}
-				}
+			long presentedSessionPendingCount = filteredInbox.count();
+			if (pickedSessionBlob != null) {
+				pickedChatJobId = agent.getChatJob(pickedSessionBlob);
+				pickedSessionRecord = agent.getSession(pickedSessionBlob);
 			}
 
 			// Per-cycle ctx: scope to the agent, picked task, and session so
@@ -1206,9 +1178,8 @@ public class AgentAdapter extends AAdapter {
 			if (pickedTask != null) {
 				cycleCtx = cycleCtx.withTaskId(pickedTask.getKey());
 			}
-			if (pickedSession != null) {
-				Blob sidBlob = Blob.parse(pickedSession.toString());
-				if (sidBlob != null) cycleCtx = cycleCtx.withSessionId(sidBlob);
+			if (pickedSessionBlob != null) {
+				cycleCtx = cycleCtx.withSessionId(pickedSessionBlob);
 			}
 
 			// Invoke transition — no lock, no coordination during this call.
@@ -1228,17 +1199,15 @@ public class AgentAdapter extends AAdapter {
 				Fields.AGENT_ID, agentId,
 				AgentState.KEY_STATE, currentState,
 				Fields.TASKS, formattedTasks,
-				Fields.PENDING, resolvedPending,
-				Fields.MESSAGES, filteredInbox);
+				Fields.PENDING, resolvedPending);
 			if (pickedTaskInput != null) {
 				transitionInput = transitionInput.assoc(Fields.NEW_INPUT, pickedTaskInput);
 			}
-			// S3b: surface the picked session's full record under
-			// `Fields.SESSION` for transitions that prefer reading
-			// {history, pending, c, meta, parties} directly. Includes `id`
-			// (sid hex) for convenience. Legacy `Fields.MESSAGES` /
-			// `Fields.PENDING` (agent-level) remain populated for compat
-			// until S3e migrates the contract.
+			// Surface the picked session's full record under
+			// `Fields.SESSION` — transitions read {history, pending, c,
+			// meta, parties} from here. Includes `id` (sid hex) for
+			// convenience. Adapters call effectiveMessages(input) to read
+			// the session.pending vector.
 			if (pickedSessionRecord != null) {
 				AMap<AString, ACell> sessionMap = pickedSessionRecord
 					.assoc(Fields.SESSION_ID, pickedSession);
@@ -1295,8 +1264,8 @@ public class AgentAdapter extends AAdapter {
 			if (formattedTasks != null && formattedTasks.count() > 0) {
 				timelineEntry = timelineEntry.assoc(Fields.TASKS, formattedTasks);
 			}
-			if (inbox != null && inbox.count() > 0) {
-				timelineEntry = timelineEntry.assoc(Fields.MESSAGES, inbox);
+			if (filteredInbox != null && filteredInbox.count() > 0) {
+				timelineEntry = timelineEntry.assoc(Fields.MESSAGES, filteredInbox);
 			}
 			if (taskResults != null) timelineEntry = timelineEntry.assoc(Fields.TASK_RESULTS, taskResults);
 
@@ -1345,18 +1314,14 @@ public class AgentAdapter extends AAdapter {
 				}
 			}
 
-			// Merge results atomically (timeline, state, task cleanup, history).
-			// Pass pickedSession so the merge only consumes presented-prefix
-			// inbox entries that match the session this cycle handled —
-			// other-session messages stay queued for a future cycle.
-			// Task cleanup is idempotent — the venue op may have already
-			// removed completed entries from agent.tasks during the
-			// transition, in which case removeCompletedTasks is a no-op.
-			// History append (S3a) lands in the same CAS as the timeline,
-			// so external readers never see a cycle that wrote one but not
-			// the other.
+			// Merge results atomically (timeline, state, task cleanup, history,
+			// session pending drain). Task cleanup is idempotent — the venue op
+			// may have already removed completed entries from agent.tasks during
+			// the transition, in which case removeCompletedTasks is a no-op.
+			// History append lands in the same CAS as the timeline, so external
+			// readers never see a cycle that wrote one but not the other.
 			AMap<AString, ACell> merged = agent.mergeRunResult(
-				newState, inbox.count(), pickedSession, tasks, taskResults,
+				newState, pickedSession, tasks, taskResults,
 				timelineEntry, pickedSessionBlob, turnsToAppend,
 				presentedSessionPendingCount);
 
@@ -1417,19 +1382,16 @@ public class AgentAdapter extends AAdapter {
 
 	// ========== Helpers ==========
 
-	private static AVector<ACell> ensureVector(AVector<ACell> v) {
-		return (v != null) ? v : Vectors.empty();
-	}
-
 	/**
-	 * Returns the effective inbox for a transition input (S3c read priority).
+	 * Returns the effective inbox for a transition input.
 	 *
-	 * <p>If the input carries a {@code session.pending} vector (S3b dual-write),
-	 * it is preferred — the session-scoped envelopes are the canonical record.
-	 * Otherwise falls back to the legacy agent-level {@code Fields.MESSAGES}.
-	 * Both shapes are envelope vectors (chat/message envelopes), so callers
-	 * that previously read {@code Fields.MESSAGES} can switch to this helper
-	 * without changing downstream processing.</p>
+	 * <p>Reads {@code input.session.pending} — the session-scoped envelope
+	 * vector populated by the framework before each transition. This is the
+	 * sole production path; the framework no longer puts messages under
+	 * {@code Fields.MESSAGES}.</p>
+	 *
+	 * <p>A {@code Fields.MESSAGES} fallback is retained for unit tests that
+	 * build transition inputs directly without a session map.</p>
 	 *
 	 * <p>Returns an empty vector (never null) for ergonomic iteration.</p>
 	 *
@@ -1445,6 +1407,7 @@ public class AgentAdapter extends AAdapter {
 				return (AVector<ACell>) pending;
 			}
 		}
+		// Fallback for unit tests that construct transition inputs directly.
 		ACell messages = RT.getIn(input, Fields.MESSAGES);
 		return (messages instanceof AVector) ? (AVector<ACell>) messages : Vectors.empty();
 	}
@@ -1509,16 +1472,16 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * Picks the session this cycle will handle. Priority:
 	 *   1. Picked task's sessionId (so the active task's session controls)
-	 *   2. Oldest inbox message's sessionId
-	 *   3. null (the unsessioned bucket)
+	 *   2. First session with non-empty pending
+	 *   3. null (no session traffic)
 	 *
-	 * <p>Returned value is the AString hex sessionId, or null for the
-	 * unsessioned bucket. The transition will only see traffic for this
-	 * single session per cycle.</p>
+	 * <p>Returned value is the AString hex sessionId, or null if no
+	 * session has pending work. The transition will only see traffic for
+	 * this single session per cycle.</p>
 	 */
 	@SuppressWarnings("unchecked")
 	private static AString pickSessionForCycle(
-			Map.Entry<Blob, ACell> pickedTask, AVector<ACell> inbox) {
+			Map.Entry<Blob, ACell> pickedTask, AgentState agent) {
 		if (pickedTask != null) {
 			ACell tv = pickedTask.getValue();
 			if (tv instanceof AMap) {
@@ -1527,36 +1490,8 @@ public class AgentAdapter extends AAdapter {
 			}
 			return null;
 		}
-		if (inbox != null && inbox.count() > 0) {
-			ACell first = inbox.get(0);
-			if (first instanceof AMap) {
-				ACell sid = ((AMap<AString, ACell>) first).get(Fields.SESSION_ID);
-				if (sid instanceof AString) return (AString) sid;
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * Returns the inbox messages whose envelope {@code sessionId} matches
-	 * {@code session} (null matches messages with no sessionId — the
-	 * unsessioned bucket). Preserves order.
-	 */
-	@SuppressWarnings("unchecked")
-	private static AVector<ACell> filterInboxBySession(AVector<ACell> inbox, AString session) {
-		if (inbox == null || inbox.count() == 0) return Vectors.empty();
-		AVector<ACell> out = Vectors.empty();
-		for (long i = 0; i < inbox.count(); i++) {
-			ACell msg = inbox.get(i);
-			AString sid = null;
-			if (msg instanceof AMap) {
-				ACell v = ((AMap<AString, ACell>) msg).get(Fields.SESSION_ID);
-				if (v instanceof AString) sid = (AString) v;
-			}
-			boolean match = (session == null) ? (sid == null) : session.equals(sid);
-			if (match) out = out.conj(msg);
-		}
-		return out;
+		Blob sid = agent.pickSessionWithPending();
+		return (sid != null) ? Strings.create(sid.toHexString()) : null;
 	}
 
 	/**

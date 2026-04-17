@@ -229,7 +229,8 @@ public class MCP extends McpServer {
 		);
 	}
 
-	private static String negotiateProtocolVersion(ACell params) {
+	@Override
+	protected String negotiateProtocolVersion(ACell params) {
 		ACell clientVersion = RT.getIn(params, "protocolVersion");
 		if (clientVersion instanceof AString cv) {
 			String requested = cv.toString();

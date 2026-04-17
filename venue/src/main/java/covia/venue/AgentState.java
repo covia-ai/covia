@@ -34,7 +34,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_TASKS    = Strings.intern("tasks");
 	private static final AString K_SESSIONS = Strings.intern("sessions");
 	private static final AString K_PENDING  = Strings.intern("pending");
-	private static final AString K_INBOX    = Strings.intern("inbox");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
 	private static final AString K_ERROR    = Strings.intern("error");
 	private static final AString K_WAKE     = Strings.intern("wake");
@@ -82,7 +81,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 	public static final AString KEY_TASKS    = K_TASKS;
 	public static final AString KEY_SESSIONS = K_SESSIONS;
 	public static final AString KEY_PENDING  = K_PENDING;
-	public static final AString KEY_INBOX    = K_INBOX;
 	public static final AString KEY_TIMELINE = K_TIMELINE;
 	public static final AString KEY_ERROR    = K_ERROR;
 	public static final AString KEY_WAKE     = K_WAKE;
@@ -149,7 +147,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 			K_TASKS, Index.none(),
 			K_SESSIONS, Index.none(),
 			K_PENDING, Index.none(),
-			K_INBOX, Vectors.empty(),
 			K_TIMELINE, Vectors.empty());
 		if (config != null) record = record.assoc(K_CONFIG, config);
 		if (initialState != null) record = record.assoc(K_STATE, initialState);
@@ -158,9 +155,9 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	/**
 	 * Initialises an agent record as a fork of another agent. Copies config
-	 * and state, optionally copies timeline. Tasks, sessions, pending, and
-	 * inbox are fresh; status is SLEEPING. Does nothing if this agent
-	 * already exists.
+	 * and state, optionally copies timeline. Tasks, sessions, and pending
+	 * are fresh; status is SLEEPING. Does nothing if this agent already
+	 * exists.
 	 */
 	public void initialiseFromFork(AMap<AString, ACell> config, ACell state, AVector<ACell> timeline) {
 		if (exists()) return;
@@ -169,7 +166,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 			K_TASKS, Index.none(),
 			K_SESSIONS, Index.none(),
 			K_PENDING, Index.none(),
-			K_INBOX, Vectors.empty(),
 			K_TIMELINE, (timeline != null) ? timeline : Vectors.empty());
 		if (config != null) record = record.assoc(K_CONFIG, config);
 		if (state != null) record = record.assoc(K_STATE, state);
@@ -194,14 +190,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 	public ACell getState() {
 		AMap<AString, ACell> r = getRecord();
 		return (r != null) ? r.get(K_STATE) : null;
-	}
-
-	@SuppressWarnings("unchecked")
-	public AVector<ACell> getInbox() {
-		AMap<AString, ACell> r = getRecord();
-		if (r == null) return null;
-		ACell v = r.get(K_INBOX);
-		return (v instanceof AVector) ? (AVector<ACell>) v : null;
 	}
 
 	@SuppressWarnings("unchecked")
@@ -361,6 +349,41 @@ public class AgentState extends ALatticeComponent<ACell> {
 		});
 	}
 
+	/**
+	 * Returns true if any session has a non-empty pending vector.
+	 */
+	@SuppressWarnings("unchecked")
+	public boolean hasSessionPending() {
+		Index<Blob, ACell> sessions = getSessions();
+		if (sessions == null || sessions.count() == 0) return false;
+		for (var entry : sessions.entrySet()) {
+			ACell sv = entry.getValue();
+			if (sv instanceof AMap m) {
+				ACell pv = m.get(K_PENDING);
+				if (pv instanceof AVector v && v.count() > 0) return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Returns the sid (Blob) of the first session with non-empty pending,
+	 * or null if no session has pending messages.
+	 */
+	@SuppressWarnings("unchecked")
+	public Blob pickSessionWithPending() {
+		Index<Blob, ACell> sessions = getSessions();
+		if (sessions == null || sessions.count() == 0) return null;
+		for (var entry : sessions.entrySet()) {
+			ACell sv = entry.getValue();
+			if (sv instanceof AMap m) {
+				ACell pv = m.get(K_PENDING);
+				if (pv instanceof AVector v && v.count() > 0) return entry.getKey();
+			}
+		}
+		return null;
+	}
+
 	public AString getError() {
 		AMap<AString, ACell> r = getRecord();
 		return (r != null) ? RT.ensureString(r.get(K_ERROR)) : null;
@@ -397,14 +420,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	public void clearError() {
 		update(r -> r.dissoc(K_ERROR));
-	}
-
-	public void deliverMessage(ACell message) {
-		update(r -> {
-			@SuppressWarnings("unchecked")
-			AVector<ACell> inbox = extractInbox(r);
-			return r.assoc(K_INBOX, inbox.conj(message));
-		});
 	}
 
 	public void addTask(Blob taskId, ACell taskData) {
@@ -458,8 +473,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 *
 	 * <p>Implemented by polling the agent record (10ms intervals). Used by
 	 * tests to wait for the run loop to quiesce — no need for explicit
-	 * polling loops in test code. Production code should react to inbox or
-	 * task deliveries rather than poll agent status.</p>
+	 * polling loops in test code. Production code should react to session
+	 * pending or task deliveries rather than poll agent status.</p>
 	 *
 	 * <p>The future never completes exceptionally; callers should apply a
 	 * timeout via {@code .get(timeout, unit)}.</p>
@@ -532,75 +547,48 @@ public class AgentState extends ALatticeComponent<ACell> {
 	/**
 	 * Atomically merges run loop results into the agent record.
 	 *
-	 * <p>Reconciles concurrent modifications: preserves messages and tasks
-	 * added during the transition. Determines whether new work arrived
-	 * and sets status to RUNNING or SLEEPING accordingly.</p>
-	 *
-	 * <p>Inbox messages presented to the transition occupy the prefix
-	 * {@code [0, presentedMsgCount)}. Of those, only entries whose
-	 * {@code sessionId} matches {@code consumedSession} were actually
-	 * processed this cycle (Sub-stage 2.6 — one-session-per-cycle demux);
-	 * the rest stay in the inbox for a future cycle. Messages arriving
-	 * during the transition (indices {@code >= presentedMsgCount}) are
-	 * always preserved. {@code consumedSession == null} consumes the
-	 * unsessioned messages in the presented prefix.</p>
-	 *
-	 * <p>TODO: revisit bucketed inbox ({@code Index<Blob, AVector>}) once
-	 * we hit perf or per-session-query needs. The flat scan here is O(n).</p>
+	 * <p>Reconciles concurrent modifications: preserves tasks added during
+	 * the transition. Determines whether new work arrived (session pending
+	 * messages, new tasks, or wake flag) and sets status to RUNNING or
+	 * SLEEPING accordingly.</p>
 	 *
 	 * @return The new record (check status to determine if loop should continue)
 	 */
 	public AMap<AString, ACell> mergeRunResult(
-			ACell newState, long presentedMsgCount,
+			ACell newState,
 			AString consumedSession,
 			Index<Blob, ACell> presentedTasks,
 			AMap<AString, ACell> taskResults,
 			AMap<AString, ACell> timelineEntry) {
-		return mergeRunResult(newState, presentedMsgCount, consumedSession,
+		return mergeRunResult(newState, consumedSession,
 			presentedTasks, taskResults, timelineEntry, null, null, 0);
 	}
 
-	// TODO: the 9-arg signature is a smell. The pure transition function
-	// (input→output) forces the framework to snapshot everything pre-call and
-	// wire it back through mergeRunResult. Consider letting the transition
-	// operate directly on the AgentState — eliminates the snapshot/drain
-	// plumbing entirely and collapses this method to ~3 lines.
-
 	/**
-	 * Atomic merge with session history append + session pending drain
-	 * (Sub-stages 3a + 3b).
+	 * Atomic merge with session history append + session pending drain.
 	 *
-	 * <p>Same semantics as the 6-arg overload, plus, when
-	 * {@code historySid != null}:
+	 * <p>When {@code historySid != null}:
 	 * <ul>
 	 *   <li>If {@code turnsToAppend} is non-empty, turns are appended to
 	 *       {@code sessions[historySid].history} and {@code meta.turns} is
-	 *       bumped (S3a).</li>
+	 *       bumped.</li>
 	 *   <li>The first {@code presentedSessionPendingCount} entries of
 	 *       {@code sessions[historySid].pending} are dropped — the run loop
 	 *       snapshots the count pre-transition and passes it here so that
 	 *       messages arriving during the transition (the tail) are preserved
-	 *       for the next cycle (S3b).</li>
+	 *       for the next cycle.</li>
 	 * </ul>
 	 * All performed inside the same CAS as the timeline / state writes.</p>
 	 *
 	 * <p>This atomic-update guarantee matches the deferred-completion
-	 * ordering invariant from S2.7c-2: an external observer never sees a
-	 * cycle that wrote the timeline but not the history / pending drain.</p>
-	 *
-	 * <p>Turn shape (each entry of {@code turnsToAppend}):
-	 * {@code {role, content, ts, source}} — see venue/CLAUDE.local.md
-	 * "Sessions S3 — Per-session history (turn shape contract)".</p>
-	 *
-	 * <p>If the session record is missing, the append/drain silently
-	 * no-ops (defensive — should not happen in the run loop since the
-	 * cycle picked the session from existing state).</p>
+	 * ordering invariant: an external observer never sees a cycle that
+	 * wrote the timeline but not the history / pending drain.</p>
 	 *
 	 * @return The new record (check status to determine if loop should continue)
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> mergeRunResult(
-			ACell newState, long presentedMsgCount,
+			ACell newState,
 			AString consumedSession,
 			Index<Blob, ACell> presentedTasks,
 			AMap<AString, ACell> taskResults,
@@ -609,44 +597,22 @@ public class AgentState extends ALatticeComponent<ACell> {
 			AVector<ACell> turnsToAppend,
 			long presentedSessionPendingCount) {
 		return update(r -> {
-			AVector<ACell> currentInbox = extractInbox(r);
-			AVector<ACell> remainingInbox = Vectors.empty();
-			// Presented prefix: keep messages whose session was NOT consumed
-			long prefixEnd = Math.min(presentedMsgCount, currentInbox.count());
-			for (long i = 0; i < prefixEnd; i++) {
-				ACell msg = currentInbox.get(i);
-				AString msgSid = messageSessionId(msg);
-				if (!sessionMatches(consumedSession, msgSid)) {
-					remainingInbox = remainingInbox.conj(msg);
-				}
-			}
-			// Tail: messages arrived during transition — always preserve
-			for (long i = prefixEnd; i < currentInbox.count(); i++) {
-				remainingInbox = remainingInbox.conj(currentInbox.get(i));
-			}
-
 			// Remove completed tasks, detect new ones
 			Index<Blob, ACell> currentTasks = extractTasks(r);
 			Index<Blob, ACell> remainingTasks = removeCompletedTasks(currentTasks, taskResults);
-
-			boolean hasNew = shouldWakeFromRecord(r)
-				|| remainingInbox.count() > 0
-				|| hasNewTasksNotIn(remainingTasks, presentedTasks);
 
 			AVector<ACell> timeline = extractTimeline(r);
 
 			AMap<AString, ACell> updated = r
 				.assoc(K_STATE, newState)
 				.assoc(K_TASKS, remainingTasks)
-				.assoc(K_INBOX, remainingInbox)
 				.assoc(K_TIMELINE, timeline.conj(timelineEntry))
-				.assoc(K_STATUS, hasNew ? RUNNING : SLEEPING)
 				.dissoc(K_ERROR)
 				.dissoc(K_WAKE);
 
 			// Atomic history append + session.pending drain for the picked
-			// session (S3a + S3b). Both touch the same session record so we
-			// fold them into one assoc.
+			// session. Both touch the same session record so we fold them
+			// into one assoc.
 			boolean hasTurns = turnsToAppend != null && turnsToAppend.count() > 0;
 			boolean hasDrain = presentedSessionPendingCount > 0;
 			if (historySid != null && (hasTurns || hasDrain)) {
@@ -691,28 +657,33 @@ public class AgentState extends ALatticeComponent<ACell> {
 				}
 			}
 
+			// Check whether any session still has pending messages after
+			// the drain, or new tasks arrived, or the wake flag is set.
+			boolean hasSessionPendingInRecord = false;
+			ACell sessionsCell = updated.get(K_SESSIONS);
+			if (sessionsCell instanceof Index idx) {
+				for (var entry : ((Index<Blob, ACell>) idx).entrySet()) {
+					if (entry.getValue() instanceof AMap m) {
+						ACell pv = m.get(K_PENDING);
+						if (pv instanceof AVector v && v.count() > 0) {
+							hasSessionPendingInRecord = true;
+							break;
+						}
+					}
+				}
+			}
+
+			boolean hasNew = shouldWakeFromRecord(r)
+				|| hasSessionPendingInRecord
+				|| hasNewTasksNotIn(remainingTasks, presentedTasks);
+
+			updated = updated.assoc(K_STATUS, hasNew ? RUNNING : SLEEPING);
+
 			return updated;
 		});
 	}
 
-	private static AString messageSessionId(ACell msg) {
-		if (!(msg instanceof AMap)) return null;
-		ACell sid = ((AMap<?, ?>) msg).get(covia.api.Fields.SESSION_ID);
-		return (sid instanceof AString) ? (AString) sid : null;
-	}
-
-	private static boolean sessionMatches(AString a, AString b) {
-		if (a == null) return b == null;
-		return a.equals(b);
-	}
-
 	// ========== Private helpers ==========
-
-	@SuppressWarnings("unchecked")
-	private static AVector<ACell> extractInbox(AMap<AString, ACell> r) {
-		ACell v = r.get(K_INBOX);
-		return (v instanceof AVector) ? (AVector<ACell>) v : Vectors.empty();
-	}
 
 	@SuppressWarnings("unchecked")
 	private static Index<Blob, ACell> extractTasks(AMap<AString, ACell> r) {

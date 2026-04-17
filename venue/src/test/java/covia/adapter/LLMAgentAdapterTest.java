@@ -218,7 +218,11 @@ public class LLMAgentAdapterTest {
 
 		// Deliver directly to avoid auto-wake race
 		User e2eUser = engine.getVenueState().users().get(ALICE_DID);
-		e2eUser.agent("e2e-agent").deliverMessage(Maps.of("content", "Hello from e2e"));
+		AgentState e2eAgent = e2eUser.agent("e2e-agent");
+		Blob e2eSid = Blob.fromHex("e2e10001e2e10001e2e10001e2e10001");
+		e2eAgent.ensureSession(e2eSid, ALICE_DID);
+		e2eAgent.appendSessionPending(e2eSid, Maps.of(
+			Strings.intern("content"), Strings.create("Hello from e2e")));
 
 		Job runJob = engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -232,7 +236,7 @@ public class LLMAgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("e2e-agent");
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
-		assertEquals(0, agent.getInbox().count());
+		assertFalse(agent.hasSessionPending());
 		assertEquals(1, agent.getTimeline().count());
 
 		ACell timelineEntry = agent.getTimeline().get(0);
@@ -247,9 +251,14 @@ public class LLMAgentAdapterTest {
 	public void testEndToEndMultiTrigger() {
 		createTestAgent("multi-run-agent");
 		User multiUser = engine.getVenueState().users().get(ALICE_DID);
+		AgentState multiAgent = multiUser.agent("multi-run-agent");
+		Blob multiSid = Blob.fromHex("11110001111100011111000111110001");
+		multiAgent.ensureSession(multiSid, ALICE_DID);
+		AString multiSidHex = Strings.create(multiSid.toHexString());
 
 		// First run — deliver directly to avoid auto-wake race
-		multiUser.agent("multi-run-agent").deliverMessage(Maps.of("content", "Turn 1"));
+		multiAgent.appendSessionPending(multiSid, Maps.of(
+			Strings.intern("content"), Strings.create("Turn 1")));
 
 		engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -257,7 +266,8 @@ public class LLMAgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Second run
-		multiUser.agent("multi-run-agent").deliverMessage(Maps.of("content", "Turn 2"));
+		multiAgent.appendSessionPending(multiSid, Maps.of(
+			Strings.intern("content"), Strings.create("Turn 2")));
 
 		engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -280,7 +290,11 @@ public class LLMAgentAdapterTest {
 
 		// Deliver directly to avoid auto-wake
 		User echoUser = engine.getVenueState().users().get(ALICE_DID);
-		echoUser.agent("echo-regression").deliverMessage(Maps.of("content", "hello"));
+		AgentState echoRegAgent = echoUser.agent("echo-regression");
+		Blob echoRegSid = Blob.fromHex("22220001222200012222000122220001");
+		echoRegAgent.ensureSession(echoRegSid, ALICE_DID);
+		echoRegAgent.appendSessionPending(echoRegSid, Maps.of(
+			Strings.intern("content"), Strings.create("hello")));
 
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -365,7 +379,11 @@ public class LLMAgentAdapterTest {
 
 		// Deliver directly to avoid auto-wake
 		User toolUser = engine.getVenueState().users().get(ALICE_DID);
-		toolUser.agent("tool-agent").deliverMessage(Maps.of("content", "use a tool"));
+		AgentState toolAgent = toolUser.agent("tool-agent");
+		Blob toolSid = Blob.fromHex("33330001333300013333000133330001");
+		toolAgent.ensureSession(toolSid, ALICE_DID);
+		toolAgent.appendSessionPending(toolSid, Maps.of(
+			Strings.intern("content"), Strings.create("use a tool")));
 
 		Job runJob = engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -599,7 +617,7 @@ public class LLMAgentAdapterTest {
 		// For now, verify the agent exists and can receive messages
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState receiver = user.agent("receiver-agent");
-		assertEquals(0, receiver.getInbox().count());
+		assertFalse(receiver.hasSessionPending());
 
 		// Deliver via agent:message (existing path) to verify receiver works
 		engine.jobs().invokeOperation(
@@ -607,7 +625,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "receiver-agent", Fields.MESSAGE, Strings.create("hello")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		assertEquals(1, receiver.getInbox().count());
+		assertTrue(receiver.hasSessionPending());
 	}
 
 	// ========== Default tools are merged ==========

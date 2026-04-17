@@ -353,14 +353,12 @@ public class AgentAdapterTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState fork = user.agent("busy-fork");
-		AVector<ACell> forkInbox = fork.getInbox();
-		assertNotNull(forkInbox);
-		assertEquals(0, forkInbox.count(), "Fork should have empty inbox");
+		assertFalse(fork.hasSessionPending(), "Fork should have no pending messages");
 		assertEquals(0, fork.getTasks().count(), "Fork should have no tasks");
 
 		// Source still has its messages
 		AgentState source = user.agent("busy-agent");
-		assertEquals(1, source.getInbox().count(), "Source inbox is not touched");
+		assertTrue(source.hasSessionPending(), "Source session pending is not touched");
 	}
 
 	@Test
@@ -455,9 +453,7 @@ public class AgentAdapterTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("msg-agent");
-		AVector<ACell> inbox = agent.getInbox();
-		assertNotNull(inbox, "Inbox should not be null after message");
-		assertEquals(1, inbox.count(), "Inbox should have 1 message");
+		assertTrue(agent.hasSessionPending(), "Agent should have pending message after delivery");
 	}
 
 	@Test
@@ -905,12 +901,10 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		msgJob.awaitResult(5000);
 
-		// Both channels should hold the message
-		assertEquals(1, agent.getInbox().count(),
-			"Inbox must hold the message (legacy channel)");
+		// Session pending should hold the message
 		AVector<ACell> sessionPending = agent.getSessionPending(sid);
 		assertEquals(1, sessionPending.count(),
-			"session.pending must also hold the message (S3b new channel)");
+			"session.pending must hold the message");
 		// Envelope shape preserved on both sides
 		AMap<AString, ACell> envelope = (AMap<AString, ACell>) sessionPending.get(0);
 		assertEquals(Strings.create("hi there"), envelope.get(Fields.MESSAGE));
@@ -1024,7 +1018,6 @@ public class AgentAdapterTest {
 				Fields.MESSAGE,    Strings.create("b")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		assertEquals(2, agent.getInbox().count());
 		AVector<ACell> pending = agent.getSessionPending(sid);
 		assertEquals(2, pending.count(), "Both messages must appear in session.pending");
 		assertEquals(Strings.create("a"),
@@ -1160,8 +1153,14 @@ public class AgentAdapterTest {
 
 		// Deliver messages directly to avoid auto-wake race
 		User echoUser = engine.getVenueState().users().get(ALICE_DID);
+		AgentState echoAgent = echoUser.agent("echo-agent");
+		Blob echoSid = Blob.fromHex("aaaa0001aaaa0001aaaa0001aaaa0001");
+		echoAgent.ensureSession(echoSid, ALICE_DID);
+		AString echoSidHex = Strings.create(echoSid.toHexString());
 		for (int i = 0; i < 2; i++) {
-			echoUser.agent("echo-agent").deliverMessage(Maps.of("content", "msg-" + i));
+			echoAgent.appendSessionPending(echoSid, Maps.of(
+				Fields.SESSION_ID, echoSidHex,
+				Fields.MESSAGE, Maps.of("content", "msg-" + i)));
 		}
 
 		Job runJob = engine.jobs().invokeOperation(
@@ -1177,8 +1176,7 @@ public class AgentAdapterTest {
 		AgentState agent = user.agent("echo-agent");
 		assertEquals(AgentState.SLEEPING, agent.getStatus(), "Status should be sleeping after run");
 
-		AVector<ACell> inbox = agent.getInbox();
-		assertEquals(0, inbox.count(), "Inbox should be empty after run");
+		assertFalse(agent.hasSessionPending(), "Session pending should be empty after run");
 
 		AVector<ACell> timeline = agent.getTimeline();
 		assertNotNull(timeline, "Timeline should not be null");
@@ -1197,7 +1195,12 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User u = engine.getVenueState().users().get(ALICE_DID);
-		u.agent("block-agent").deliverMessage(Maps.of("content", "hi"));
+		AgentState blockAgent = u.agent("block-agent");
+		Blob blockSid = Blob.fromHex("bbbb0001bbbb0001bbbb0001bbbb0001");
+		blockAgent.ensureSession(blockSid, ALICE_DID);
+		blockAgent.appendSessionPending(blockSid, Maps.of(
+			Fields.SESSION_ID, Strings.create(blockSid.toHexString()),
+			Fields.MESSAGE, Maps.of("content", "hi")));
 
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -1221,8 +1224,13 @@ public class AgentAdapterTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User u = engine.getVenueState().users().get(ALICE_DID);
-		u.agent("async-agent").deliverMessage(Maps.of("content", "hi"));
+		User u2 = engine.getVenueState().users().get(ALICE_DID);
+		AgentState asyncAgent = u2.agent("async-agent");
+		Blob asyncSid = Blob.fromHex("cccc0001cccc0001cccc0001cccc0001");
+		asyncAgent.ensureSession(asyncSid, ALICE_DID);
+		asyncAgent.appendSessionPending(asyncSid, Maps.of(
+			Fields.SESSION_ID, Strings.create(asyncSid.toHexString()),
+			Fields.MESSAGE, Maps.of("content", "hi")));
 
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -1247,8 +1255,13 @@ public class AgentAdapterTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		User u = engine.getVenueState().users().get(ALICE_DID);
-		u.agent("to-agent").deliverMessage(Maps.of("content", "hi"));
+		User u3 = engine.getVenueState().users().get(ALICE_DID);
+		AgentState toAgent = u3.agent("to-agent");
+		Blob toSid = Blob.fromHex("dddd0001dddd0001dddd0001dddd0001");
+		toAgent.ensureSession(toSid, ALICE_DID);
+		toAgent.appendSessionPending(toSid, Maps.of(
+			Fields.SESSION_ID, Strings.create(toSid.toHexString()),
+			Fields.MESSAGE, Maps.of("content", "hi")));
 
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -1313,8 +1326,8 @@ public class AgentAdapterTest {
 		AgentState aliceAgent = alice.agent("shared-name");
 		AgentState bobAgent = bob.agent("shared-name");
 
-		assertEquals(1, aliceAgent.getInbox().count(), "Alice's agent should have 1 message");
-		assertEquals(1, bobAgent.getInbox().count(), "Bob's agent should have 1 message");
+		assertTrue(aliceAgent.hasSessionPending(), "Alice's agent should have pending message");
+		assertTrue(bobAgent.hasSessionPending(), "Bob's agent should have pending message");
 	}
 
 	// ========== Default transition op from config ==========
@@ -1331,7 +1344,12 @@ public class AgentAdapterTest {
 
 		// Deliver directly to avoid auto-wake race
 		User user0 = engine.getVenueState().users().get(ALICE_DID);
-		user0.agent("default-op-agent").deliverMessage(Maps.of("content", "hello"));
+		AgentState defAgent = user0.agent("default-op-agent");
+		Blob defSid = Blob.fromHex("eeee0001eeee0001eeee0001eeee0001");
+		defAgent.ensureSession(defSid, ALICE_DID);
+		defAgent.appendSessionPending(defSid, Maps.of(
+			Fields.SESSION_ID, Strings.create(defSid.toHexString()),
+			Fields.MESSAGE, Maps.of("content", "hello")));
 
 		Job runJob = engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -1344,7 +1362,7 @@ public class AgentAdapterTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("default-op-agent");
-		assertEquals(0, agent.getInbox().count(), "Inbox should be cleared");
+		assertFalse(agent.hasSessionPending(), "Session pending should be cleared");
 		assertEquals(1, agent.getTimeline().count(), "Timeline should have 1 entry");
 	}
 
@@ -1410,7 +1428,11 @@ public class AgentAdapterTest {
 
 		// Deliver directly to avoid auto-wake race
 		User resultUser = engine.getVenueState().users().get(ALICE_DID);
-		resultUser.agent("result-agent").deliverMessage(Maps.of("content", "hello"));
+		AgentState resultAgent = resultUser.agent("result-agent");
+		Blob resultSid = Blob.fromHex("ffff0001ffff0001ffff0001ffff0001");
+		resultAgent.ensureSession(resultSid, ALICE_DID);
+		resultAgent.appendSessionPending(resultSid, Maps.of(
+			Strings.intern("content"), Strings.create("hello")));
 
 		Job runJob = engine.jobs().invokeOperation(
 			"v/ops/agent/trigger",
@@ -2310,10 +2332,12 @@ public class AgentAdapterTest {
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Manually seed timeline + inbox so we can verify they survive
+		// Manually seed session pending so we can verify it survives
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState pre = user.agent("live-ow");
-		pre.deliverMessage(Strings.create("hello"));
+		Blob owSid = Blob.fromHex("abab0001abab0001abab0001abab0001");
+		pre.ensureSession(owSid, ALICE_DID);
+		pre.appendSessionPending(owSid, Strings.create("hello"));
 		long preTs = pre.getTs();
 
 		// Overwrite a SLEEPING agent — in-place update, status preserved
@@ -2332,11 +2356,11 @@ public class AgentAdapterTest {
 		// Config replaced
 		AgentState post = user.agent("live-ow");
 		assertEquals(Strings.create("v/test/ops/taskcomplete"), post.getConfig().get(Fields.OPERATION));
-		// Inbox preserved (the unprocessed "hello" message is still there)
-		AVector<ACell> inbox = post.getInbox();
-		assertNotNull(inbox);
-		assertEquals(1, inbox.count(), "inbox message should survive in-place update");
-		assertEquals(Strings.create("hello"), inbox.get(0));
+		// Session pending preserved (the unprocessed "hello" message is still there)
+		assertTrue(post.hasSessionPending(), "session pending should survive in-place update");
+		AVector<ACell> owPending = post.getSessionPending(owSid);
+		assertEquals(1, owPending.count());
+		assertEquals(Strings.create("hello"), owPending.get(0));
 		// ts advanced
 		assertTrue(post.getTs() >= preTs, "ts should advance on update");
 	}
@@ -2706,13 +2730,15 @@ public class AgentAdapterTest {
 		agent.clearError();
 		assertNull(agent.getError());
 
-		agent.deliverMessage(Maps.of("content", "hello"));
-		AVector<ACell> inbox = agent.getInbox();
-		assertNotNull(inbox);
-		assertEquals(1, inbox.count());
-		agent.deliverMessage(Maps.of("content", "world"));
-		inbox = agent.getInbox();
-		assertEquals(2, inbox.count());
+		Blob mutSid = Blob.fromHex("cdcd0001cdcd0001cdcd0001cdcd0001");
+		agent.ensureSession(mutSid, ALICE_DID);
+		agent.appendSessionPending(mutSid, Maps.of("content", "hello"));
+		AVector<ACell> pending = agent.getSessionPending(mutSid);
+		assertNotNull(pending);
+		assertEquals(1, pending.count());
+		agent.appendSessionPending(mutSid, Maps.of("content", "world"));
+		pending = agent.getSessionPending(mutSid);
+		assertEquals(2, pending.count());
 	}
 
 	// ========== agent:update merge semantics ==========

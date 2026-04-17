@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
@@ -55,9 +56,13 @@ public class AgentWorkspaceTest {
 			ALICE).awaitResult(5000);
 
 		// Run 1: agent writes knowledge, appends to log, reads back
-		engine.getVenueState().users().get(ALICE_DID)
-			.agent("workspace-agent")
-			.deliverMessage(Maps.of("content", "Learn about lattice technology"));
+		AgentState wsAgent = engine.getVenueState().users().get(ALICE_DID)
+			.agent("workspace-agent");
+		Blob wsSid = Blob.fromHex("55550001555500015555000155550001");
+		wsAgent.ensureSession(wsSid, ALICE_DID);
+		AString wsSidHex = Strings.create(wsSid.toHexString());
+		wsAgent.appendSessionPending(wsSid, Maps.of(
+			Strings.intern("content"), Strings.create("Learn about lattice technology")));
 
 		Job run1 = engine.jobs().invokeOperation("v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "workspace-agent"), ALICE);
@@ -82,9 +87,8 @@ public class AgentWorkspaceTest {
 		assertEquals(1, log1.count());
 
 		// Run 2: same agent, workspace accumulates
-		engine.getVenueState().users().get(ALICE_DID)
-			.agent("workspace-agent")
-			.deliverMessage(Maps.of("content", "Continue learning"));
+		wsAgent.appendSessionPending(wsSid, Maps.of(
+			Strings.intern("content"), Strings.create("Continue learning")));
 
 		Job run2 = engine.jobs().invokeOperation("v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "workspace-agent"), ALICE);
