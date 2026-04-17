@@ -549,6 +549,35 @@ public class AgentAdapterTest {
 		// and testCancelChatReleasesSlot, so no direct slot assertion here.
 	}
 
+	/**
+	 * Regression guard for issue #85 — internal adapter-to-adapter calls
+	 * (transition dispatch, LLM sub-invocation, tool calls) must use
+	 * {@code JobManager.invokeInternal} which returns a plain
+	 * {@link java.util.concurrent.CompletableFuture} and creates zero Jobs.
+	 * Pre-refactor a single {@code agent:chat} spawned 3 Jobs:
+	 * the chat Job, a transition Job ({@code llmagent:chat}), and an LLM
+	 * sub-invocation Job ({@code test:llm}). Post-refactor only the
+	 * caller's chat Job should exist.
+	 */
+	@Test
+	public void testChatProducesExactlyOneJob() {
+		createChatAgent("chat-count-agent");
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+
+		long before = engine.jobs().getJobs(ctx).count();
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "chat-count-agent", Fields.MESSAGE, Strings.create("hi")),
+			ctx);
+		chatJob.awaitResult(5000);
+
+		long after = engine.jobs().getJobs(ctx).count();
+		assertEquals(1, after - before,
+			"agent:chat must produce exactly 1 Job — pre-refactor created 3 "
+			+ "(chat + transition + llm sub-invocation)");
+	}
+
 	@Test
 	public void testChatContinuesKnownSession() {
 		createChatAgent("chat-cont-agent");
