@@ -45,7 +45,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_PARTIES  = Strings.intern("parties");
 	private static final AString K_CREATED  = Strings.intern("created");
 	private static final AString K_TURNS    = Strings.intern("turns");
-	private static final AString K_CHAT_JOB = Strings.intern("chatJob");
 
 	// Turn record field keys (entries in session.history). See venue/CLAUDE.local.md
 	// "Sessions S3 — Per-session history (turn shape contract)" for full spec.
@@ -261,55 +260,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 		if (r == null) return Index.none();
 		ACell v = r.get(K_PENDING);
 		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
-	}
-
-	/**
-	 * Returns the in-flight chat Job ID for the given session, or {@code null}
-	 * if no chat is awaiting a response.
-	 */
-	public Blob getChatJob(Blob sid) {
-		AMap<AString, ACell> session = getSession(sid);
-		if (session == null) return null;
-		ACell v = session.get(K_CHAT_JOB);
-		return (v instanceof Blob) ? (Blob) v : null;
-	}
-
-	/**
-	 * Atomically reserves the per-session chat slot for {@code chatJobId}.
-	 * Returns true if the reservation succeeded; false if the session is
-	 * missing or another chat is already in flight for it.
-	 */
-	@SuppressWarnings("unchecked")
-	public boolean tryReserveChatSlot(Blob sid, Blob chatJobId) {
-		AMap<AString, ACell> after = update(r -> {
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-			if (session.get(K_CHAT_JOB) != null) return r;
-			session = session.assoc(K_CHAT_JOB, chatJobId);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
-		return after != null && chatJobId.equals(getChatJob(sid));
-	}
-
-	/**
-	 * Clears the per-session chat slot. Idempotent — no-op if the session
-	 * is missing or the slot is already empty.
-	 */
-	@SuppressWarnings("unchecked")
-	public void clearChatSlot(Blob sid) {
-		update(r -> {
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
-			if (session.get(K_CHAT_JOB) == null) return r;
-			session = session.dissoc(K_CHAT_JOB);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
 	}
 
 	/**

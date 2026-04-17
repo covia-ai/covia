@@ -173,36 +173,21 @@ public class JobCancellationTest {
 		Blob sid = Blob.fromHex(sidHex.toString());
 
 		// Verify chat slot is reserved
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("chat-cancel-agent");
-		assertNotNull(agent.getChatJob(sid), "Chat slot should be reserved before cancel");
+		covia.adapter.AgentAdapter agentAdapter =
+			(covia.adapter.AgentAdapter) engine.getAdapter("agent");
+		AString agentIdStr = Strings.create("chat-cancel-agent");
+		assertNotNull(agentAdapter.getActiveChatForTest(agentIdStr, sid),
+			"Chat slot should be reserved before cancel");
 
 		chatJob.cancel();
-
-		// The slot should eventually be cleared — the run loop's
-		// failAllPendingForAgent or the next cycle should clean it up.
-		// For now, verify the Job is cancelled.
 		assertEquals("CANCELLED", chatJob.getStatus().toString());
 
-		// A second chat on the same session should eventually succeed
-		// (not fail with "already has an in-flight chat") once the agent
-		// processes the cancellation. We test this by checking the slot
-		// directly — if it's still reserved, that's the bug from issue #84.
-		// Give the agent run loop a moment to clean up.
-		pollUntilFinished(getAgentRunJob("chat-cancel-agent"), 5000);
-
-		agent = engine.getVenueState().users().get(ALICE_DID).agent("chat-cancel-agent");
-		Blob slotAfter = agent.getChatJob(sid);
-		// Document current behavior: slot may or may not be cleared depending
-		// on whether the agent's transition completed or failed. If the agent
-		// uses test:never, the transition never completes, so the slot stays.
-		// This is a known gap — the slot should be cleared when the chat Job
-		// is externally cancelled.
-		if (slotAfter != null) {
-			// Known limitation — external cancel doesn't release the slot.
-			// The agent framework only clears it on response/error/failAll.
-			System.out.println("KNOWN GAP: chat slot not released on external cancel");
-		}
+		// Issue #85: cancelling the caller's Job releases the in-memory chat
+		// slot immediately via the cancel hook registered in handleChat.
+		// No need to wait for the run loop — the slot is freed synchronously
+		// when chatJob.cancel() fires the hook.
+		assertNull(agentAdapter.getActiveChatForTest(agentIdStr, sid),
+			"Chat slot should be released immediately on caller-Job cancel");
 	}
 
 	@Test

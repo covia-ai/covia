@@ -50,12 +50,7 @@ public class TestAdapter extends AAdapter {
                 case "echo":
                     return CompletableFuture.completedFuture(handleEcho(input));
                 case "taskcomplete":
-                    // taskcomplete invokes the agent venue op for completion —
-                    // needs ctx + a live Job for sub-invocation, so route via
-                    // the invoke() override below.
-                    return CompletableFuture.failedFuture(
-                        new UnsupportedOperationException("taskcomplete uses invoke path for venue op invocation")
-                    );
+                    return CompletableFuture.completedFuture(handleTaskComplete(ctx, input));
                 case "llm":
                     return CompletableFuture.completedFuture(handleLlm(input));
                 case "toolllm":
@@ -136,9 +131,6 @@ public class TestAdapter extends AAdapter {
         } else if ("delay".equals(subOp)) {
             // Delay: needs Job for caller DID propagation to sub-invocation
             handleDelay(job, ctx, input);
-        } else if ("taskcomplete".equals(subOp)) {
-            // taskcomplete: invoke agent:complete-task venue op via cycleCtx
-            handleTaskComplete(job, ctx, input);
         } else {
             // Default one-shot path
             super.invoke(job, ctx, meta, input);
@@ -189,8 +181,7 @@ public class TestAdapter extends AAdapter {
 				ACell opInput = RT.getIn(input, Fields.INPUT);
 				CVMLong delay = CVMLong.parse(RT.getIn(input, Fields.DELAY));
 				Thread.sleep(delay.longValue());
-				Job subJob = engine.jobs().invokeOperation(RT.ensureString(op), opInput, ctx);
-				ACell result = subJob.awaitResult();
+				ACell result = engine.jobs().invokeInternal(RT.ensureString(op), opInput, ctx).join();
 				job.completeWith(result);
     		} catch (InterruptedException e) {
     			// cancelled — Job.cancel already updated lattice status
@@ -216,24 +207,18 @@ public class TestAdapter extends AAdapter {
      * <p>Returns {@code {response}} so the framework still records a
      * non-null timeline result for the cycle.</p>
      */
-    private void handleTaskComplete(Job job, RequestContext ctx, ACell input) {
+    private ACell handleTaskComplete(RequestContext ctx, ACell input) {
         ACell newInput = RT.getIn(input, Fields.NEW_INPUT);
         ACell response = Maps.of(Strings.create("completed"), newInput);
 
         if (ctx.getTaskId() != null) {
-            try {
-                Job opJob = engine.jobs().invokeOperation(
-                    "v/ops/agent/complete-task",
-                    Maps.of(Fields.RESULT, response),
-                    ctx);
-                opJob.awaitResult();
-            } catch (Exception e) {
-                job.fail("agent:complete-task invocation failed: " + e.getMessage());
-                return;
-            }
+            engine.jobs().invokeInternal(
+                "v/ops/agent/complete-task",
+                Maps.of(Fields.RESULT, response),
+                ctx).join();
         }
 
-        job.completeWith(Maps.of(Fields.RESPONSE, response));
+        return Maps.of(Fields.RESPONSE, response);
     }
 
     /**

@@ -2,6 +2,8 @@ package covia.adapter;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +20,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.agent.AbstractLLMAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -273,24 +276,7 @@ public class LLMAgentAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		throw new UnsupportedOperationException(
-			"LLMAgentAdapter requires caller DID — use invoke(Job, ...) path");
-	}
-
-	@Override
-	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		job.setStatus(covia.grid.Status.STARTED);
-
-		CompletableFuture.supplyAsync(() -> {
-			return processChat(ctx, input);
-		}, VIRTUAL_EXECUTOR)
-		.thenAccept(job::completeWith)
-		.exceptionally(e -> {
-			Throwable cause = (e instanceof java.util.concurrent.CompletionException && e.getCause() != null)
-				? e.getCause() : e;
-			job.fail(cause.getMessage());
-			return null;
-		});
+		return CompletableFuture.supplyAsync(() -> processChat(ctx, input), VIRTUAL_EXECUTOR);
 	}
 
 	/**
@@ -483,9 +469,8 @@ public class LLMAgentAdapter extends AAdapter {
 				l3Input = l3Input.assoc(K_TOOLS, tools);
 			}
 
-			// Dispatch to level 3
-			Job l3Job = engine.jobs().invokeOperation(llmOperation, l3Input, ctx);
-			ACell l3Result = l3Job.awaitResult();
+			// Dispatch to level 3 — internal, no sub-Job created
+			ACell l3Result = engine.jobs().invokeInternal(llmOperation, l3Input, ctx).join();
 
 			// Level 3 returns an assistant message: {role, content?, toolCalls?}
 			ACell toolCallsCell = RT.getIn(l3Result, K_TOOL_CALLS);
@@ -643,11 +628,11 @@ public class LLMAgentAdapter extends AAdapter {
 			: Maps.empty();
 		ACell opResult;
 		try {
-			Job opJob = engine.jobs().invokeOperation(
-				"v/ops/agent/complete-task", opInput, toolCtx.ctx);
-			opResult = opJob.awaitResult(toolCtx.toolCallTimeoutMs);
+			opResult = engine.jobs().invokeInternal(
+				"v/ops/agent/complete-task", opInput, toolCtx.ctx)
+				.get(toolCtx.toolCallTimeoutMs, TimeUnit.MILLISECONDS);
 		} catch (Exception e) {
-			return Strings.create("Error: " + e.getMessage());
+			return Strings.create("Error: " + AbstractLLMAdapter.unwrap(e).getMessage());
 		}
 
 		// Record locally so processChat can promote the structured output
@@ -681,11 +666,11 @@ public class LLMAgentAdapter extends AAdapter {
 		AMap<AString, ACell> opInput = Maps.of(Fields.ERROR, error);
 		ACell opResult;
 		try {
-			Job opJob = engine.jobs().invokeOperation(
-				"v/ops/agent/fail-task", opInput, toolCtx.ctx);
-			opResult = opJob.awaitResult(toolCtx.toolCallTimeoutMs);
+			opResult = engine.jobs().invokeInternal(
+				"v/ops/agent/fail-task", opInput, toolCtx.ctx)
+				.get(toolCtx.toolCallTimeoutMs, TimeUnit.MILLISECONDS);
 		} catch (Exception e) {
-			return Strings.create("Error: " + e.getMessage());
+			return Strings.create("Error: " + AbstractLLMAdapter.unwrap(e).getMessage());
 		}
 
 		Blob taskId = toolCtx.ctx.getTaskId();
@@ -761,17 +746,14 @@ public class LLMAgentAdapter extends AAdapter {
 	 * Falls through to grid dispatch for unrecognised tool names.
 	 */
 	private ACell handleGridDispatch(String toolName, ACell input, RequestContext ctx, long timeoutMs) {
-		Job toolJob;
 		try {
-			toolJob = engine.jobs().invokeOperation(Strings.create(toolName), input, ctx);
-		} catch (Exception e) {
-			return Strings.create("Error: " + e.getMessage());
-		}
-		try {
-			ACell toolOutput = toolJob.awaitResult(timeoutMs);
+			ACell toolOutput = engine.jobs().invokeInternal(Strings.create(toolName), input, ctx)
+				.get(timeoutMs, TimeUnit.MILLISECONDS);
 			return (toolOutput != null) ? toolOutput : Maps.empty();
+		} catch (TimeoutException e) {
+			return Strings.create("Error: tool call timed out after " + timeoutMs + "ms");
 		} catch (Exception e) {
-			return Strings.create("Error: " + e.getMessage() + " (jobId: " + toolJob.getID() + ")");
+			return Strings.create("Error: " + AbstractLLMAdapter.unwrap(e).getMessage());
 		}
 	}
 
@@ -799,17 +781,14 @@ public class LLMAgentAdapter extends AAdapter {
 	 */
 	private ACell handleConfigTool(AString operation, ACell input, RequestContext ctx, long timeoutMs) {
 		ACell opInput = ensureParsedInput(input);
-		Job opJob;
 		try {
-			opJob = engine.jobs().invokeOperation(operation, opInput, ctx);
-		} catch (Exception e) {
-			return Strings.create("Error: " + e.getMessage());
-		}
-		try {
-			ACell result = opJob.awaitResult(timeoutMs);
+			ACell result = engine.jobs().invokeInternal(operation, opInput, ctx)
+				.get(timeoutMs, TimeUnit.MILLISECONDS);
 			return (result != null) ? result : Maps.empty();
+		} catch (TimeoutException e) {
+			return Strings.create("Error: tool call timed out after " + timeoutMs + "ms");
 		} catch (Exception e) {
-			return Strings.create("Error: " + e.getMessage() + " (jobId: " + opJob.getID() + ")");
+			return Strings.create("Error: " + AbstractLLMAdapter.unwrap(e).getMessage());
 		}
 	}
 

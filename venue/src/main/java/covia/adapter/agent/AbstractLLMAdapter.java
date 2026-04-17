@@ -15,7 +15,6 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.CapabilityChecker;
-import covia.grid.Job;
 import covia.venue.RequestContext;
 
 /**
@@ -88,9 +87,9 @@ public abstract class AbstractLLMAdapter extends AAdapter {
 	protected ACell invokeLevel3(AString llmOperation, AMap<AString, ACell> config,
 			AVector<ACell> messages, AVector<ACell> tools, RequestContext ctx) {
 		AMap<AString, ACell> l3Input = buildL3Input(config, messages, tools);
-		// LLM invocation is framework infrastructure — bypass agent caps
-		Job l3Job = engine.jobs().invokeOperation(llmOperation, l3Input, ctx.withCaps(null));
-		return l3Job.awaitResult();
+		// LLM invocation is framework infrastructure — bypass agent caps.
+		// Internal dispatch — no sub-Job created.
+		return engine.jobs().invokeInternal(llmOperation, l3Input, ctx.withCaps(null)).join();
 	}
 
 	/**
@@ -165,16 +164,28 @@ public abstract class AbstractLLMAdapter extends AAdapter {
 	/**
 	 * Invokes an operation and returns the result, handling errors gracefully.
 	 * Caps are stripped because dispatchTool already enforced them explicitly.
+	 * Internal dispatch — no sub-Job created.
 	 */
 	private ACell invokeOperation(AString operation, ACell input, RequestContext ctx) {
 		ACell opInput = ensureParsedInput(input);
 		try {
-			Job opJob = engine.jobs().invokeOperation(operation, opInput, ctx.withCaps(null));
-			ACell result = opJob.awaitResult();
+			ACell result = engine.jobs().invokeInternal(operation, opInput, ctx.withCaps(null)).join();
 			return (result != null) ? result : Maps.empty();
 		} catch (Exception e) {
-			return Strings.create("Error: " + e.getMessage());
+			return Strings.create("Error: " + unwrap(e).getMessage());
 		}
+	}
+
+	/**
+	 * Unwraps a {@link java.util.concurrent.CompletionException} to expose the
+	 * adapter's original exception — otherwise error messages read
+	 * "java.util.concurrent.CompletionException: ...".
+	 */
+	public static Throwable unwrap(Throwable t) {
+		if (t instanceof java.util.concurrent.CompletionException && t.getCause() != null) {
+			return t.getCause();
+		}
+		return t;
 	}
 
 	// ========== Tool result message construction ==========

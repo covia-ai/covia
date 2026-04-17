@@ -16,7 +16,6 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.grid.Asset;
-import covia.grid.Job;
 import covia.venue.AssetStore;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -278,8 +277,8 @@ public class ContextLoader {
 	ACell resolveOpEntry(AString op, ACell input, AString label, boolean required, RequestContext ctx) {
 		try {
 			// Context loading is framework infrastructure — bypass agent caps
-			Job job = engine.jobs().invokeOperation(op, input, ctx.withCaps(null));
-			ACell result = job.awaitResult(10_000);
+			ACell result = engine.jobs().invokeInternal(op, input, ctx.withCaps(null))
+				.get(10_000, java.util.concurrent.TimeUnit.MILLISECONDS);
 			if (result == null) {
 				if (required) throw new RuntimeException("Required context operation returned null: " + op);
 				return null;
@@ -288,6 +287,9 @@ public class ContextLoader {
 			return systemMessage(labelStr, renderValue(result));
 		} catch (RuntimeException e) {
 			if (required) throw e;
+			return null;
+		} catch (Exception e) {
+			if (required) throw new RuntimeException("Context operation failed: " + op + " — " + e.getMessage(), e);
 			return null;
 		}
 	}

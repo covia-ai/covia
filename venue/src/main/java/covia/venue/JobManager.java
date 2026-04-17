@@ -1,6 +1,7 @@
 package covia.venue;
 
 import java.util.Random;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
@@ -122,6 +123,117 @@ public class JobManager {
 	 * @return Job tracking the execution
 	 */
 	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
+		AAdapter adapter = prepareInvocation(meta, input, ctx);
+		AString callerDID = ctx.isInternal() ? engine.getDIDString() : ctx.getCallerDID();
+
+		// Persist the bare hex hash of the metadata as the op reference.
+		// Hex hashes are universally resolvable via the resolvePath bare-hex
+		// branch and survive any change in catalog naming or adapter registry.
+		AString opID = Strings.create(meta.getHash().toHexString());
+		Job job = submitJob(opID, meta, input, callerDID);
+
+		// Set jobId on context so adapters can use t/ (job-scoped temp).
+		// Preserve existing jobId if already set — parent scope takes precedence
+		// (e.g. GoalTreeAdapter sets root job ID for all tool calls).
+		RequestContext jobCtx = (ctx.getJobId() != null) ? ctx : ctx.withJobId(job.getID());
+		adapter.invoke(job, jobCtx, meta, input);
+		return job;
+	}
+
+	// ========== Internal Invocation (no Job) ==========
+
+	/**
+	 * Invokes an operation without creating a Job. Used for adapter-to-adapter
+	 * dispatch inside a single external interaction: the caller's Job is the
+	 * only audit-relevant record, and creating sub-Jobs for transition /
+	 * LLM / tool calls just adds persistence and lifecycle overhead.
+	 *
+	 * <p>Performs the same resolve / caps / schema / adapter-lookup plumbing
+	 * as {@link #invokeOperation(AString, ACell, RequestContext)}, but skips
+	 * Job creation, activeJobs tracking, persistence, and update listeners.
+	 * Calls {@link AAdapter#invokeFuture} directly and returns its future.</p>
+	 *
+	 * <p>Remote operations fall through to the Job-creating path — remote
+	 * dispatch needs a Job on the far side for status tracking.</p>
+	 *
+	 * <p>Cancellation is cooperative: the returned future's
+	 * {@link CompletableFuture#cancel(boolean)} signals the adapter if it
+	 * cooperates, but does not guarantee interruption of in-flight work.</p>
+	 *
+	 * @param ref Operation reference (hex hash, DID URL, workspace path, etc.)
+	 * @param input Input parameters
+	 * @param ctx Request context (caller identity, caps, scope)
+	 * @return future that completes with the adapter result, or exceptionally on failure
+	 */
+	public CompletableFuture<ACell> invokeInternal(String ref, ACell input, RequestContext ctx) {
+		return invokeInternal(Strings.create(ref), input, ctx);
+	}
+
+	public CompletableFuture<ACell> invokeInternal(AString ref, ACell input, RequestContext ctx) {
+		if (ref == null) {
+			return CompletableFuture.failedFuture(
+				new IllegalArgumentException("Operation must be specified"));
+		}
+
+		Asset asset;
+		try {
+			asset = engine.resolveAsset(ref, ctx);
+		} catch (Exception e) {
+			return CompletableFuture.failedFuture(e);
+		}
+		if (asset == null) {
+			return CompletableFuture.failedFuture(
+				new IllegalArgumentException("Cannot resolve operation: " + ref));
+		}
+
+		Operation op = Operation.from(asset);
+		if (op == null) {
+			return CompletableFuture.failedFuture(
+				new IllegalArgumentException("Asset is not an operation: " + asset.getID()));
+		}
+
+		// Remote operations still need a Job on the far side for status
+		// tracking — fall back to the job-creating path.
+		Venue opVenue = op.getVenue();
+		if (opVenue != null && !(opVenue instanceof LocalVenue)) {
+			try {
+				Job remote = op.invoke(input).join();
+				return remote.future();
+			} catch (Exception e) {
+				return CompletableFuture.failedFuture(e);
+			}
+		}
+
+		return invokeInternal(op.meta(), input, ctx);
+	}
+
+	public CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
+		AAdapter adapter;
+		try {
+			adapter = prepareInvocation(meta, input, ctx);
+		} catch (Exception e) {
+			return CompletableFuture.failedFuture(e);
+		}
+		try {
+			CompletableFuture<ACell> f = adapter.invokeFuture(ctx, meta, input);
+			return (f != null) ? f : CompletableFuture.completedFuture(null);
+		} catch (Exception e) {
+			return CompletableFuture.failedFuture(e);
+		}
+	}
+
+	/**
+	 * Shared invocation prelude: validates metadata, auth, caps, schema;
+	 * returns the adapter ready to invoke. Used by both
+	 * {@link #invokeOperation(AMap, ACell, RequestContext)} (Job path) and
+	 * {@link #invokeInternal(AMap, ACell, RequestContext)} (no-Job path).
+	 *
+	 * @throws IllegalArgumentException invalid meta or schema violation
+	 * @throws AuthException caller not authenticated
+	 * @throws RuntimeException capability denied
+	 * @throws IllegalStateException adapter not registered
+	 */
+	private AAdapter prepareInvocation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		if (meta == null) throw new IllegalArgumentException("Metadata must be specified");
 		AString callerDID = ctx.isInternal() ? engine.getDIDString() : ctx.getCallerDID();
 		if (callerDID == null) throw new AuthException("Authentication required");
@@ -156,19 +268,7 @@ public class JobManager {
 		if (adapter == null) {
 			throw new IllegalStateException("Adapter not available: " + adapterName);
 		}
-
-		// Persist the bare hex hash of the metadata as the op reference.
-		// Hex hashes are universally resolvable via the resolvePath bare-hex
-		// branch and survive any change in catalog naming or adapter registry.
-		AString opID = Strings.create(meta.getHash().toHexString());
-		Job job = submitJob(opID, meta, input, callerDID);
-
-		// Set jobId on context so adapters can use t/ (job-scoped temp).
-		// Preserve existing jobId if already set — parent scope takes precedence
-		// (e.g. GoalTreeAdapter sets root job ID for all tool calls).
-		RequestContext jobCtx = (ctx.getJobId() != null) ? ctx : ctx.withJobId(job.getID());
-		adapter.invoke(job, jobCtx, meta, input);
-		return job;
+		return adapter;
 	}
 
 	private static final AString K_STRICT = Strings.intern("strict");

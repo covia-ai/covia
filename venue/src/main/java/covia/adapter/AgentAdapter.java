@@ -78,7 +78,7 @@ public class AgentAdapter extends AAdapter {
 	private final ConcurrentHashMap<String, RunCoordinator> runs = new ConcurrentHashMap<>();
 
 	/** Active transition job per agent — allows suspend to cancel running transitions */
-	private final ConcurrentHashMap<String, Job> activeTransitions = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<String, CompletableFuture<ACell>> activeTransitions = new ConcurrentHashMap<>();
 
 	/**
 	 * Per-agent deferred task completions written by {@code agent:complete-task}
@@ -89,6 +89,42 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private final ConcurrentHashMap<String, ConcurrentHashMap<Blob, AMap<AString, ACell>>> deferredCompletions
 		= new ConcurrentHashMap<>();
+
+	/**
+	 * Per-agent in-flight chat Jobs keyed by session ID. An entry reserves
+	 * the chat slot for its session — a subsequent {@code agent:chat} on the
+	 * same session fails fast while the entry is live. The slot is released
+	 * when the run loop completes the Job, when the caller's Job is cancelled
+	 * (via a cancel hook registered in {@link #handleChat}), or when
+	 * {@link #failAllPendingForAgent} sweeps on technical failure. Keeping
+	 * the reservation in memory (not on the lattice) lets {@code Job.isFinished()}
+	 * act as the truth — no separate CAS required, and a cancelled caller
+	 * Job naturally frees the slot.
+	 */
+	private final ConcurrentHashMap<String, ConcurrentHashMap<Blob, Job>> activeChats = new ConcurrentHashMap<>();
+
+	/**
+	 * Test-only: injects a chat reservation so a follow-up {@code agent:chat}
+	 * on the same session hits the busy-slot path deterministically without
+	 * needing a real long-running transition to hold the slot.
+	 */
+	public void reserveChatSlotForTest(AString agentId, Blob sid, Job job) {
+		activeChats.computeIfAbsent(agentId.toString(), k -> new ConcurrentHashMap<>())
+			.put(sid, job);
+	}
+
+	/**
+	 * Test-only: returns the live chat Job for the given session (the one
+	 * reserving the in-memory slot), or {@code null} if no reservation
+	 * is held. Returns null if the previous holder's Job has since finished
+	 * — matches the semantics used by the run loop.
+	 */
+	public Job getActiveChatForTest(AString agentId, Blob sid) {
+		ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(agentId.toString());
+		if (agentChats == null) return null;
+		Job j = agentChats.get(sid);
+		return (j != null && !j.isFinished()) ? j : null;
+	}
 
 	/** Counter for session ID generation */
 	private long sessionIdCounter = 0;
@@ -136,7 +172,28 @@ public class AgentAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		throw new UnsupportedOperationException("AgentAdapter requires caller DID — use invoke(Job, ...) path");
+		// Only the two task-completion venue ops are reachable via
+		// invokeInternal (the framework invokes them from adapter transitions
+		// without creating a sub-Job). All other agent ops require the
+		// Job-aware invoke(Job, ...) path — they are external, user-facing,
+		// and produce observable Jobs.
+		String subOp = getSubOperation(meta);
+		try {
+			switch (subOp) {
+				case "completeTask" -> {
+					return CompletableFuture.completedFuture(doCompleteTask(input, ctx));
+				}
+				case "failTask" -> {
+					return CompletableFuture.completedFuture(doFailTask(input, ctx));
+				}
+				default -> {
+					return CompletableFuture.failedFuture(new UnsupportedOperationException(
+						"agent:" + subOp + " requires Job-aware invocation"));
+				}
+			}
+		} catch (Exception e) {
+			return CompletableFuture.failedFuture(e);
+		}
 	}
 
 	@Override
@@ -490,12 +547,23 @@ public class AgentAdapter extends AAdapter {
 		if (sid == null) return;
 		AString sidHex = Strings.create(sid.toHexString());
 
-		// Reserve the per-session chat slot. Atomic — fails fast if another
-		// chat is already in flight for this session.
-		if (!agent.tryReserveChatSlot(sid, job.getID())) {
+		// Reserve the per-session chat slot (in-memory). Fails fast if a
+		// live chat is already in flight — but a previous caller whose Job
+		// has since finished (completed or cancelled) no longer holds the
+		// slot. Register a cancel hook so the caller cancelling their own
+		// Job immediately frees the slot for a retry.
+		ConcurrentHashMap<Blob, Job> agentChats = activeChats
+			.computeIfAbsent(agentId.toString(), k -> new ConcurrentHashMap<>());
+		Job existing = agentChats.get(sid);
+		if (existing != null && !existing.isFinished()) {
 			job.fail("Session " + sidHex + " already has an in-flight chat");
 			return;
 		}
+		agentChats.put(sid, job);
+		final ConcurrentHashMap<Blob, Job> chatsRef = agentChats;
+		final Blob sidRef = sid;
+		final Job jobRef = job;
+		job.setCancelHook(() -> chatsRef.remove(sidRef, jobRef));
 
 		ACell envelope = Maps.of(
 			Fields.CALLER,     ctx.getCallerDID(),
@@ -749,8 +817,8 @@ public class AgentAdapter extends AAdapter {
 		agent.setStatus(AgentState.SUSPENDED);
 
 		// Cancel any active transition so the agent stops promptly
-		Job activeJob = activeTransitions.get(agentId.toString());
-		if (activeJob != null) activeJob.cancel();
+		CompletableFuture<ACell> activeTransition = activeTransitions.get(agentId.toString());
+		if (activeTransition != null) activeTransition.cancel(true);
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.SUSPENDED));
@@ -848,31 +916,36 @@ public class AgentAdapter extends AAdapter {
 	 * Index. Returns {@code {agentId, taskId, status: "COMPLETE"}}.</p>
 	 */
 	private void handleCompleteTask(Job job, ACell input, RequestContext ctx) {
+		try {
+			job.setStatus(Status.STARTED);
+			job.completeWith(doCompleteTask(input, ctx));
+		} catch (Exception e) {
+			job.fail(e.getMessage());
+		}
+	}
+
+	private ACell doCompleteTask(ACell input, RequestContext ctx) {
 		AString agentId = ctx.getAgentId();
 		Blob taskId = ctx.getTaskId();
 		if (agentId == null || taskId == null) {
-			job.fail("agent:completeTask requires task scope (agentId + taskId in RequestContext)");
-			return;
+			throw new IllegalArgumentException(
+				"agent:completeTask requires task scope (agentId + taskId in RequestContext)");
 		}
 
-		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
-		if (agent == null) return;
-
+		AgentState agent = requireAgent(ctx.getCallerDID(), agentId);
 		Index<Blob, ACell> tasks = agent.getTasks();
 		if (tasks == null || tasks.get(taskId) == null) {
-			job.fail("Task not found: " + taskId.toHexString());
-			return;
+			throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
 		}
 
 		ACell result = RT.getIn(input, Fields.RESULT);
 		parkCompletion(agentId, tasks, taskId, Status.COMPLETE, Fields.OUTPUT, result);
 		agent.removeTask(taskId);
 
-		job.setStatus(Status.STARTED);
-		job.completeWith(Maps.of(
+		return Maps.of(
 			Fields.AGENT_ID, agentId,
 			Fields.TASK_ID,  taskIdHex(taskId),
-			Fields.STATUS,   Status.COMPLETE));
+			Fields.STATUS,   Status.COMPLETE);
 	}
 
 	/**
@@ -882,20 +955,26 @@ public class AgentAdapter extends AAdapter {
 	 * {@code {agentId, taskId, status: "FAILED"}}.
 	 */
 	private void handleFailTask(Job job, ACell input, RequestContext ctx) {
+		try {
+			job.setStatus(Status.STARTED);
+			job.completeWith(doFailTask(input, ctx));
+		} catch (Exception e) {
+			job.fail(e.getMessage());
+		}
+	}
+
+	private ACell doFailTask(ACell input, RequestContext ctx) {
 		AString agentId = ctx.getAgentId();
 		Blob taskId = ctx.getTaskId();
 		if (agentId == null || taskId == null) {
-			job.fail("agent:failTask requires task scope (agentId + taskId in RequestContext)");
-			return;
+			throw new IllegalArgumentException(
+				"agent:failTask requires task scope (agentId + taskId in RequestContext)");
 		}
 
-		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
-		if (agent == null) return;
-
+		AgentState agent = requireAgent(ctx.getCallerDID(), agentId);
 		Index<Blob, ACell> tasks = agent.getTasks();
 		if (tasks == null || tasks.get(taskId) == null) {
-			job.fail("Task not found: " + taskId.toHexString());
-			return;
+			throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
 		}
 
 		ACell errorCell = RT.getIn(input, Fields.ERROR);
@@ -903,11 +982,10 @@ public class AgentAdapter extends AAdapter {
 		parkCompletion(agentId, tasks, taskId, Status.FAILED, Fields.ERROR, errorStr);
 		agent.removeTask(taskId);
 
-		job.setStatus(Status.STARTED);
-		job.completeWith(Maps.of(
+		return Maps.of(
 			Fields.AGENT_ID, agentId,
 			Fields.TASK_ID,  taskIdHex(taskId),
-			Fields.STATUS,   Status.FAILED));
+			Fields.STATUS,   Status.FAILED);
 	}
 
 	/**
@@ -1161,11 +1239,17 @@ public class AgentAdapter extends AAdapter {
 			// Captured here so that a chat that arrives during the transition
 			// isn't picked up by this cycle's completion logic — it'll be
 			// handled next pass.
-			Blob pickedChatJobId = null;
+			Job pickedChatJob = null;
 			AMap<AString, ACell> pickedSessionRecord = null;
 			long presentedSessionPendingCount = filteredInbox.count();
 			if (pickedSessionBlob != null) {
-				pickedChatJobId = agent.getChatJob(pickedSessionBlob);
+				ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(agentId.toString());
+				if (agentChats != null) {
+					Job candidate = agentChats.get(pickedSessionBlob);
+					if (candidate != null && !candidate.isFinished()) {
+						pickedChatJob = candidate;
+					}
+				}
 				pickedSessionRecord = agent.getSession(pickedSessionBlob);
 			}
 
@@ -1219,11 +1303,14 @@ public class AgentAdapter extends AAdapter {
 				transitionInput = transitionInput.assoc(AgentState.KEY_CONFIG, agentConfig);
 			}
 
-			Job transitionJob = engine.jobs().invokeOperation(transitionOp, transitionInput, cycleCtx);
-			activeTransitions.put(agentId.toString(), transitionJob);
+			// Internal dispatch — no sub-Job created. The future is registered
+			// so handleSuspend can cancel an in-flight transition.
+			CompletableFuture<ACell> transitionFuture =
+				engine.jobs().invokeInternal(transitionOp, transitionInput, cycleCtx);
+			activeTransitions.put(agentId.toString(), transitionFuture);
 			ACell transitionResult;
 			try {
-				transitionResult = transitionJob.awaitResult();
+				transitionResult = transitionFuture.join();
 			} finally {
 				activeTransitions.remove(agentId.toString());
 			}
@@ -1337,28 +1424,24 @@ public class AgentAdapter extends AAdapter {
 			//   - leanError non-null → fail the chat Job (technical fail)
 			//   - leanResponse non-null → complete with the response
 			//   - both null → yield, slot stays for next cycle
-			if (pickedChatJobId != null) {
+			if (pickedChatJob != null && (leanError != null || leanResponse != null)) {
+				// Release the slot BEFORE completing the Job so a caller that
+				// awakens on awaitResult and immediately submits a follow-up
+				// chat on the same session never races a stale reservation.
+				ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(agentId.toString());
+				if (agentChats != null) agentChats.remove(pickedSessionBlob, pickedChatJob);
 				if (leanError != null) {
-					// Clear the slot BEFORE completing the Job so a caller that
-					// awakens on awaitResult and immediately submits a follow-up
-					// chat on the same session never races a stale reservation.
-					if (pickedSessionBlob != null) agent.clearChatSlot(pickedSessionBlob);
-					Job chatJob = engine.jobs().getJob(pickedChatJobId);
-					if (chatJob != null && !chatJob.isFinished()) {
-						chatJob.fail(leanError.toString());
-					}
-				} else if (leanResponse != null) {
-					if (pickedSessionBlob != null) agent.clearChatSlot(pickedSessionBlob);
-					Job chatJob = engine.jobs().getJob(pickedChatJobId);
-					if (chatJob != null && !chatJob.isFinished()) {
-						chatJob.completeWith(Maps.of(
+					if (!pickedChatJob.isFinished()) pickedChatJob.fail(leanError.toString());
+				} else {
+					if (!pickedChatJob.isFinished()) {
+						pickedChatJob.completeWith(Maps.of(
 							Fields.AGENT_ID,   agentId,
 							Fields.SESSION_ID, pickedSession,
 							Fields.RESPONSE,   leanResponse));
 					}
 				}
-				// else: yield — keep slot reserved for the next wake
 			}
+			// else: yield — keep slot reserved for the next wake
 
 			lastResult = Maps.of(
 				Fields.AGENT_ID, agentId,
@@ -1666,17 +1749,12 @@ public class AgentAdapter extends AAdapter {
 					}
 				}
 			}
-			Index<Blob, ACell> sessions = agent.getSessions();
-			if (sessions != null) {
-				for (var entry : sessions.entrySet()) {
-					Blob sid = entry.getKey();
-					Blob chatJobId = agent.getChatJob(sid);
-					if (chatJobId == null) continue;
-					Job chatJob = engine.jobs().getJob(chatJobId);
-					if (chatJob != null && !chatJob.isFinished()) {
-						chatJob.fail(error);
-					}
-					agent.clearChatSlot(sid);
+		}
+		ConcurrentHashMap<Blob, Job> agentChats = activeChats.remove(agentId.toString());
+		if (agentChats != null) {
+			for (Job chatJob : agentChats.values()) {
+				if (chatJob != null && !chatJob.isFinished()) {
+					chatJob.fail(error);
 				}
 			}
 		}
@@ -1716,6 +1794,12 @@ public class AgentAdapter extends AAdapter {
 	private AgentState lookupAgent(Job job, AString callerDID, AString agentId) {
 		AgentState agent = getAgent(callerDID, agentId);
 		if (agent == null) job.fail("Agent not found or terminated: " + agentId);
+		return agent;
+	}
+
+	private AgentState requireAgent(AString callerDID, AString agentId) {
+		AgentState agent = getAgent(callerDID, agentId);
+		if (agent == null) throw new IllegalArgumentException("Agent not found or terminated: " + agentId);
 		return agent;
 	}
 

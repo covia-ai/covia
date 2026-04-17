@@ -544,11 +544,9 @@ public class AgentAdapterTest {
 		assertNotNull(sidHex, "Chat response must include the minted sessionId");
 		assertNotNull(RT.getIn(result, Fields.RESPONSE), "Chat response must include the agent's response");
 
-		// Verify the chat slot was cleared after completion
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("chat-agent");
-		Blob sid = Blob.fromHex(sidHex.toString());
-		assertNull(agent.getChatJob(sid), "Chat slot should be cleared after completion");
+		// Chat slot is now in-memory (not on the lattice). The follow-up
+		// regression is covered by testChatRejectsConcurrentOnSameSession
+		// and testCancelChatReleasesSlot, so no direct slot assertion here.
 	}
 
 	@Test
@@ -625,14 +623,16 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("chat-busy-agent");
 
-		// Pre-create a session and reserve its chat slot manually to force
-		// the second-chat-on-busy-session error path deterministically.
+		// Pre-create a session and reserve its in-memory chat slot with a
+		// never-finished Job to force the second-chat-on-busy-session error
+		// path deterministically.
 		Blob sid = Blob.fromHex("11111111111111111111111111111111");
 		agent.ensureSession(sid, ALICE_DID);
-		Blob fakeJobId = Blob.fromHex(
-			"00000000000000000000000000000001000000000000000000000000000000bb");
-		assertTrue(agent.tryReserveChatSlot(sid, fakeJobId),
-			"First reservation should succeed");
+		AgentAdapter agentAdapter = (AgentAdapter) engine.getAdapter("agent");
+		// A never-completing placeholder Job holds the slot.
+		Job placeholder = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
+		agentAdapter.reserveChatSlotForTest(
+			Strings.create("chat-busy-agent"), sid, placeholder);
 
 		// Now an agent_chat on the same session must fail fast
 		Job chatJob = engine.jobs().invokeOperation(

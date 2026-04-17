@@ -348,23 +348,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		throw new UnsupportedOperationException("GoalTreeAdapter uses invoke() with direct job control");
-	}
-
-	@Override
-	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		job.setStatus(Strings.create("STARTED"));
-		CompletableFuture.runAsync(() -> {
-			try {
-				ACell output = processGoal(job, ctx, input);
-				if (!job.isFinished()) {
-					job.completeWith(output);
-				}
-			} catch (Exception e) {
-				log.error("GoalTreeAdapter error", e);
-				if (!job.isFinished()) job.fail(e.getMessage());
-			}
-		}, VIRTUAL_EXECUTOR);
+		return CompletableFuture.supplyAsync(() -> processGoal(null, ctx, input), VIRTUAL_EXECUTOR);
 	}
 
 	/**
@@ -542,8 +526,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			opInput = (value != null) ? Maps.of(Fields.RESULT, value) : Maps.empty();
 			opPath = Strings.create("v/ops/agent/complete-task");
 		}
-		Job opJob = engine.jobs().invokeOperation(opPath, opInput, ctx);
-		opJob.awaitResult();
+		engine.jobs().invokeInternal(opPath, opInput, ctx).join();
 	}
 
 	// ========== Frame execution ==========
