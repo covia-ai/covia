@@ -58,13 +58,12 @@ g/alice/
   │   ├── drafts/
   │   └── refs/
   ├── timeline        ← append-only audit trail (harness-managed)
-  ├── inbox           ← out-of-band signals (wake events, routing failures)
   ├── ts              ← last-update timestamp (auto)
   ├── error           ← error message if SUSPENDED
   └── wake            ← deferred wake timestamp
 ```
 
-Framework-managed (read-only to agent): status, config, tasks, sessions, timeline, inbox, ts, error, wake. The agent writes `n/` directly and manipulates the current task's `goals` tree via `plan()`.
+Framework-managed (read-only to agent): status, config, tasks, sessions, timeline, ts, error, wake. The agent writes `n/` directly and manipulates the current task's `goals` tree via `plan()`. Messages are delivered via `session.pending` (see AGENT_SESSIONS.md).
 
 ### Task vs Goal — terminology
 
@@ -703,7 +702,7 @@ Covia: RAII for attention (records stay; only the active window contracts and ex
 6. **Push = fresh active context.** When `plan()` sets a child to `active`, the harness persists the current conversation to its goal node, activates the child, and starts a fresh conversation. The agent never pushes directly.
 7. **Parent sees summaries only.** Format: `[{path} completed: "{result}"]` or `[{path} failed: "{error}"]`.
 8. **Namespaces.** Three layers: lattice storage (per-user `g`, `w`, `o`, `j`, `s`, `h`, `a`), agent-visible shorthands (`n/`, `t/`, `c/`, `w/`, `o/`), and resolution rules (harness maps prefixes to lattice locations in agent scope, requiring a focused task for `t/` and an active session for `c/`).
-9. **Agent record is the unit.** Complete state at `g/{agentId}`: status, config, tasks (Covia jobs Index), sessions, `n` (agent workspace), timeline, inbox, ts, error, wake. Tasks and sessions are orthogonal.
+9. **Agent record is the unit.** Complete state at `g/{agentId}`: status, config, tasks (Covia jobs Index), sessions, `n` (agent workspace), timeline, ts, error, wake. Messages arrive via `session.pending`. Tasks and sessions are orthogonal.
 10. **Task vs goal.** A **task** is a Covia external job (entry in `g/{agent}/tasks`). A **goal** is an internal planning node inside a task's `goals` Index. `t/` is task-level; goals have no shorthand.
 11. **Goal tree storage.** Flat Index inside taskdata (`g/{agent}/tasks/{taskId}/goals`), keyed by Blob ID. Each goal is a map with required `status`, optional `result`, `conversation`, `parent`, `children`, `name`, plus arbitrary metadata. Harness renders flat index as a tree; `plan()` uses paths, harness maps to IDs.
 12. **Focus and activation.** Agent activates goals via `plan()`. Multiple active siblings are processed in declaration order, one at a time. Parent stays suspended until all active children are done. Harness never auto-activates pending goals.

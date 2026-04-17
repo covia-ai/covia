@@ -2,7 +2,7 @@
 
 Design for Covia agent state and the transitions that mutate it.
 
-**Status:** Draft — March 2026
+**Status:** April 2026
 
 See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent addressing
 (`/g/<agent-id>`, §4.3.4), secret store (`/s/`, §4.3.6), and implementation phasing (§12).
@@ -24,13 +24,13 @@ See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent address
    Cross-venue sync is replication: the more-recent state replaces the stale one.
 
 4. **Three levels.** The agent update (level 1) manages framework bookkeeping:
-   status, timeline, inbox. The agent transition (level 2) manages domain logic:
+   status, timeline, sessions. The agent transition (level 2) manages domain logic:
    conversation history, tool call loops, state. The LLM call (level 3) is a single
    stateless invocation. Each level is a grid operation, pluggable independently.
    The framework never inspects user state; lower levels never manage framework fields.
 
 5. **Transition function must succeed.** A failing transition function is a severe
-   bug — it suspends the entire agent. The agent update restores the inbox and
+   bug — it suspends the entire agent. The agent update restores the queues and
    records the error. The transition function is responsible for its own error
    handling; if it wants the agent to continue running, it must return successfully.
 
@@ -59,10 +59,10 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `ts` | long | Timestamp of the last write. **The merge discriminator.** Set on every write. |
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"` |
 | `config` | map | Framework-level configuration. Includes `operation` (default transition op). |
-| `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function-specific configuration (e.g. LLM provider, model) lives here, not in `config`. Set at creation via optional initial state. |
+| `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function-specific configuration (e.g. LLM provider, model) lives here, not in `config`. Set at creation via optional initial state. Note: `state.transcript` is no longer used — `session.history` is the canonical conversation record. |
 | `tasks` | index | `Index<Blob, ACell>` of inbound request Job IDs. Persistent until resolved. Ordered by Job ID. |
 | `pending` | index | `Index<Blob, ACell>` of outbound Job IDs the agent is waiting on. Ordered by Job ID. |
-| `inbox` | vector | Ephemeral messages awaiting processing. Drained on successful run. |
+| `sessions` | index | `Index<Blob, ACell>` of sessions. Each session contains history, pending messages, metadata, and per-session state (`c/`). See AGENT_SESSIONS.md. |
 | `timeline` | vector | Append-only log of transition records (§2.3). Grows with each successful agent run. Timestamped for audit. |
 | `caps` | map | Capability attenuations — UCAN scoping for agent tool calls. See [UCAN.md §5.4](./UCAN.md) for Model A (user-scoped) vs Model B (independent DID). |
 | `error` | string? | Last error message, or null. Set when the transition function fails. |
@@ -81,9 +81,10 @@ holds Job IDs. The agent decides when and how to fulfil each task. Tasks persist
 until the agent completes or rejects them — they survive restarts and can span
 days or weeks. Tasks can come from humans (via MCP), other agents, or the system.
 
-**Messages** (`inbox`) are ephemeral notifications. They inform the agent of
-events but do not represent commitments. Messages are consumed on each run and
-recorded in the timeline. They may or may not trigger agent action.
+**Messages** are delivered to `session.pending` — a per-session queue. Each
+message is an envelope with content and caller metadata. Messages are drained
+by the run loop on the next transition cycle for that session and appended to
+`session.history` as turns. See AGENT_SESSIONS.md for the session model.
 
 An agent also tracks **pending** outbound jobs — jobs it has explicitly created
 via the async invoke tool during the tool call loop (level 2). The agent
@@ -104,7 +105,7 @@ received, decided, and accomplished in each run.
 | `op` | string | The operation reference used for the transition function. |
 | `state` | any | The starting state passed to the transition function. |
 | `tasks` | vector | Resolved task data (jobId, input, status) at run start (from the `tasks` index). |
-| `messages` | vector | The inbox messages passed to the transition function. |
+| `messages` | vector | The session pending messages passed to the transition function. |
 | `result` | any | The `result` returned by the transition function. |
 | `taskResults` | map? | Task completions from output declarations (§3.4.1). `{<jobId>: {status, output}}`. |
 
@@ -152,9 +153,9 @@ and which operations may safely act on it. There are four states:
 | Status | Meaning | Run loop | Mutations allowed |
 |--------|---------|----------|-------------------|
 | `SLEEPING` | Idle, no transition active. Default after create or after a successful run with no remaining work. | Not running. `wakeAgent` triggers it. | All. Safe to update config in place. |
-| `RUNNING` | A transition is currently in flight on a virtual thread. Holds the per-agent lock during record mutations. | Running. New work is appended to `tasks`/`inbox` and picked up on next iteration. | Inbox/task appends only. **Config mutation is racy and rejected** — the in-flight transition has already captured the old config. |
-| `SUSPENDED` | Last run failed with an error. Dormant — does not auto-retry. State, tasks, pending, and inbox preserved. | Not running. Resume via `tryResume` (clears error, returns to SLEEPING). | All. In-place config update is allowed and preserves the error so the caller can decide whether to resume after fixing the underlying cause. |
-| `TERMINATED` | Logically deleted. Slot still occupies the namespace key (so the ID is reserved) but the agent is dead. | Cannot run. `agent:request` / `agent:message` / `agent:trigger` all fail. | None — only `agent:create overwrite:true` revives the slot, which **wipes timeline, inbox, tasks, pending, error** and starts fresh. |
+| `RUNNING` | A transition is currently in flight on a virtual thread. Holds the per-agent lock during record mutations. | Running. New work is appended to `tasks`/`session.pending` and picked up on next iteration. | Task/session appends only. **Config mutation is racy and rejected** — the in-flight transition has already captured the old config. |
+| `SUSPENDED` | Last run failed with an error. Dormant — does not auto-retry. State, tasks, pending, and sessions preserved. | Not running. Resume via `tryResume` (clears error, returns to SLEEPING). | All. In-place config update is allowed and preserves the error so the caller can decide whether to resume after fixing the underlying cause. |
+| `TERMINATED` | Logically deleted. Slot still occupies the namespace key (so the ID is reserved) but the agent is dead. | Cannot run. `agent:request` / `agent:message` / `agent:trigger` all fail. | None — only `agent:create overwrite:true` revives the slot, which **wipes timeline, sessions, tasks, pending, error** and starts fresh. |
 
 **State transitions** are documented in §4: `create` (→SLEEPING), `wakeAgent`
 (SLEEPING→RUNNING via CAS, §4.6), run loop completion (RUNNING→SLEEPING or
@@ -171,7 +172,7 @@ operation, pluggable and replaceable independently.
 
 ```
 Level 1: Agent Update          agent:trigger (AgentAdapter)
-  │  manages inbox, timeline, status
+  │  manages sessions, timeline, status
   │  invokes level 2 as a grid operation
   ▼
 Level 2: Agent Transition      llmagent:chat (LLMAgentAdapter)
@@ -184,7 +185,7 @@ Level 3: LLM Call              langchain:openai (LangChainAdapter)
 
 ### 3.1 Level 1 — Agent Update (Framework)
 
-Reads inbound tasks, pending job completions, and inbox messages. Invokes the
+Reads inbound tasks, pending job completions, and session pending messages. Invokes the
 transition function, records the result in the timeline, manages status, writes
 the complete agent record. The same for every agent. Defined in §4.3.
 
@@ -202,28 +203,28 @@ Receives current state and new messages, returns updated state. This is the
 pluggable part — different agents use different transition functions (LLM chat,
 rule engine, workflow, custom code).
 
-For LLM agents (`llmagent:chat`), level 2 follows the **transcript model** from
-[AGENT_CONTEXT_PLAN.md](./AGENT_CONTEXT_PLAN.md) §4 Option C:
+For LLM agents (`llmagent:chat`), level 2:
 
 - Reads LLM configuration from `state.config`
-- Reads the **persistent transcript** from `state.transcript` — only real
-  user / assistant / tool conversation turns from previous runs
+- Reads the **session history** from `input.session.history` — turn envelopes
+  `{role, content, ts, source}` from prior transitions, converted to LLM
+  `{role, content}` messages (`ts`/`source` stripped)
 - Builds a **per-turn LLM context** with FRESH ephemeral additions every turn:
   - System message (identity prompt + lattice cheat sheet, rebuilt fresh)
   - Resolved context entries
   - Resolved loaded paths
   - `[Context Map]` budget summary
-  - Then appends the persistent transcript
-  - Then appends pending job results, inbox messages, empty-state signal
+  - Then appends the session history
+  - Then appends pending job results and new messages
 - Invokes level 3 (LLM call) as a grid operation
 - Handles tool call responses: execute tools, feed results back, call level 3
   again (loop until the LLM returns a text response or a limit is reached)
-- Computes the **transcript delta**: synthesised user message per task input,
-  wrapped inbox messages, and the new assistant + tool messages from the loop
-- Persists `state.transcript = oldTranscript + delta`. The legacy
-  `state.history` field is no longer written. The system prompt, context
-  entries, and `[Context Map]` are NEVER persisted — they rebuild fresh each
-  turn so updates apply immediately to existing agents.
+- The assistant's final response is returned to the framework, which appends
+  it as a turn to `session.history`
+- No per-adapter transcript persistence — `session.history` is the canonical
+  record, managed by the framework. The system prompt, context entries, and
+  `[Context Map]` are NEVER persisted — they rebuild fresh each turn so
+  updates apply immediately to existing agents.
 
 Level 2 does not import or depend on any LLM library. It invokes level 3 as a
 grid operation and works with structured message maps. This makes it pluggable:
@@ -235,11 +236,11 @@ The level 3 operation to invoke is specified in `state.config.llmOperation`
 strategy (level 2) and the LLM backend (level 3).
 
 The other level 2 adapter, `goaltree:chat` (GoalTreeAdapter), is documented
-separately in [GOAL_TREE.md](./GOAL_TREE.md). It is stateless across
-transitions — each transition is a fresh root frame with no cross-request
-memory. It supports typed outputs (schema-enforced `complete`/`fail`), opt-in
-harness tools, runtime tool discovery via `more_tools`, and auto-compact
-nudges. Use `llmagent:chat` for cross-turn conversational memory.
+separately in [GOAL_TREE.md](./GOAL_TREE.md). It reads `session.history` for
+cross-transition context (same as LLMAgentAdapter). Each transition builds a
+fresh root frame; the frame stack is not persisted across transitions. It
+supports typed outputs (schema-enforced `complete`/`fail`), opt-in harness
+tools, runtime tool discovery via `more_tools`, and auto-compact nudges.
 
 ### 3.3 Level 3 — LLM Call (Single Step)
 
@@ -275,7 +276,7 @@ The contract between level 1 and level 2:
 | `state` | any | Current `state` from the agent record. Null on first run. |
 | `tasks` | vector | Inbound task data resolved from the `tasks` index (jobId, input, status). |
 | `pending` | vector | Outbound job data resolved from the `pending` index (jobId, status, result). |
-| `messages` | vector | The inbox. Ephemeral message records. |
+| `session` | map | The picked session record: `{id, parties, meta, c, history, pending}`. See AGENT_SESSIONS.md §6.1. |
 
 **Output:**
 
@@ -285,7 +286,7 @@ The contract between level 1 and level 2:
 | `result` | any | Summary of what happened. Recorded in the timeline entry and returned to callers. |
 | `taskResults` | map? | Optional task completions: `{<jobId>: {status, output}}`. See §3.4.1. |
 
-The transition function does not manage ts, status, timeline, inbox, or
+The transition function does not manage ts, status, timeline, sessions, or
 scheduling. It declares what it has accomplished and the framework applies the
 changes atomically.
 
@@ -502,7 +503,7 @@ Every operation atomically replaces the agent record with a new `ts`.
 **Trigger:** `agent:create`
 
 Writes the initial agent record: status=SLEEPING, config from input, state from
-input (or null), empty tasks/pending indices, empty inbox, empty timeline, no error.
+input (or null), empty tasks/pending indices, empty sessions, empty timeline, no error.
 
 The `config` map supports:
 - `operation` — default transition operation (e.g. `"llmagent:chat"`)
@@ -533,10 +534,10 @@ agent depends on `overwrite` and the existing status:
 |---|---|---|---|---|---|
 | any           | (empty)      | **CREATED** | fresh record initialised at SLEEPING | `true`  | `false` |
 | absent / `false` | any state | **NOOP**    | record unchanged — idempotent re-run | `false` | `false` |
-| `true`        | `SLEEPING`   | **UPDATED** | `config` and `state.config` replaced; `timeline`, `inbox`, `tasks`, `pending`, `status`, `ts` preserved | `false` | `true` |
+| `true`        | `SLEEPING`   | **UPDATED** | `config` and `state.config` replaced; `timeline`, `sessions`, `tasks`, `pending`, `status`, `ts` preserved | `false` | `true` |
 | `true`        | `SUSPENDED`  | **UPDATED** | as SLEEPING; `error` and SUSPENDED status preserved (caller may resume separately) | `false` | `true` |
 | `true`        | `RUNNING`    | **FAIL**    | job fails: "Cannot update agent X: currently RUNNING. Wait for the active transition to finish, or call agent:cancelTask first." | — | — |
-| `true`        | `TERMINATED` | **CREATED** | `removeAgent` then fresh record — wipes timeline, inbox, tasks, pending, error | `true`  | `false` |
+| `true`        | `TERMINATED` | **CREATED** | `removeAgent` then fresh record — wipes timeline, sessions, tasks, pending, error | `true`  | `false` |
 
 **Why RUNNING is rejected.** A transition currently in flight has already
 captured the old `state.config` at the start of `processGoal` (level 2). Mutating
@@ -591,7 +592,8 @@ This is the primary MCP-facing operation for interacting with agents.
 
 **Trigger:** `agent:message`
 
-Reads current agent record, appends the message to `inbox`, writes agent record.
+Reads current agent record, appends the message to the session's `pending` queue
+via `appendSessionPending`, writes agent record.
 Then wakes the agent (§4.6) — if the agent has a `config.operation`, this
 triggers a run automatically.
 
@@ -613,7 +615,7 @@ the transition decides what to do (it may act proactively).
 
 **Run exclusion.** The agent's `status` field in the lattice is the source of
 truth for whether a run is active. A per-agent lock serialises the status check
-with all record mutations (`addTask`, `deliverMessage`, run loop writes). There
+with all record mutations (`addTask`, `appendSessionPending`, run loop writes). There
 are no separate Java-side running/wake flags — all decisions are based on lattice
 data.
 
@@ -626,32 +628,33 @@ accidentally completed by an old run.
 **Sequence (per iteration):**
 
 1. Acquire the per-agent lock. Read a consistent snapshot of the agent record:
-   `inbox`, `tasks`, `pending`, `state`.
-2. If nothing to process (no tasks and empty inbox): set status → `"SLEEPING"`,
+   `sessions`, `tasks`, `pending`, `state`.
+2. If nothing to process (no tasks and no session with pending messages): set status → `"SLEEPING"`,
    release lock, return. Pending jobs are passed through but do not alone
    trigger a run.
 3. Release the lock.
 4. Resolve job data from JobManager (read-only, no lock needed).
 5. Invoke the transition function (§3.2) with `agent-id`, current `state`,
-   `tasks`, `pending` (with resolved statuses), and `inbox`. **No lock held**
-   during the transition — it may take seconds or minutes.
+   `tasks`, `pending` (with resolved statuses), and the picked `session`.
+   **No lock held** during the transition — it may take seconds or minutes.
 6. On success — **merge with current state** (acquire lock):
    - Re-read the current agent record (not the stale snapshot from step 1).
    - Remove completed tasks from the **current** `tasks` index (not the stale
      snapshot). This prevents overwriting tasks added by concurrent `addTask`
      calls during the transition.
-   - Remove only the **processed** messages from the **current** `inbox`. Messages
-     appended by concurrent `deliverMessage` calls during the transition are
-     preserved (they appear at indices beyond the processed count).
+   - Drain the presented count of pending messages from the picked session's
+     `pending` queue. Messages appended by concurrent `appendSessionPending`
+     calls during the transition are preserved (they appear at indices beyond
+     the presented count).
    - Update `state` from the returned value.
    - Append timeline entry with full audit data (§2.4).
-   - If remaining work exists (tasks or inbox non-empty after merge): set
+   - If remaining work exists (tasks remain or a session has pending messages): set
      status → `"RUNNING"`, release lock, loop to step 1.
    - Otherwise: set status → `"SLEEPING"`, release lock.
    - Apply `taskResults` to JobManager — complete or fail each task Job
      (outside the lock).
 7. On error:
-   - Leave `state`, `tasks`, `pending`, and `inbox` unchanged.
+   - Leave `state`, `tasks`, `pending`, and `sessions` unchanged.
    - Set status → `"SUSPENDED"`, set `error` (inside the lock).
    - Note: task completions made via tool calls during execution are **not**
      rolled back (§3.4.1).
@@ -666,8 +669,8 @@ the response visible to callers without querying agent state separately.
 
 | Operation | Trigger | Effect | Allowed status | New status |
 |-----------|---------|--------|----------------|------------|
-| **Update** | `agent:create overwrite:true` | Replace `config` and `state.config` in place; preserve timeline, inbox, tasks, pending, status, error. See §4.1 slot resolution table. | SLEEPING, SUSPENDED, TERMINATED (wipes) | unchanged (or SLEEPING if was TERMINATED) |
-| **Suspend** | run loop error (§4.4) | Set `error`, set status → SUSPENDED. State, tasks, pending, inbox unchanged. | RUNNING (internal) | SUSPENDED |
+| **Update** | `agent:create overwrite:true` | Replace `config` and `state.config` in place; preserve timeline, sessions, tasks, pending, status, error. See §4.1 slot resolution table. | SLEEPING, SUSPENDED, TERMINATED (wipes) | unchanged (or SLEEPING if was TERMINATED) |
+| **Suspend** | run loop error (§4.4) | Set `error`, set status → SUSPENDED. State, tasks, pending, sessions unchanged. | RUNNING (internal) | SUSPENDED |
 | **Resume** | `agent:resume` | CAS SUSPENDED→SLEEPING via `tryResume`, clear `error`. Then wake via §4.6 if there is work. | SUSPENDED only | SLEEPING |
 | **Suspend (manual)** | `agent:suspend` | Set status → SUSPENDED with caller-supplied reason. Stops the agent from being woken. | SLEEPING | SUSPENDED |
 | **Trigger** | `agent:trigger` | Wake the agent and (optionally) wait for the run loop to drain. Fails on TERMINATED. See §4.6. | SLEEPING, RUNNING | RUNNING then SLEEPING |
@@ -697,7 +700,7 @@ atomic CAS-style updates.
 ### 4.6 Scheduling — `wakeAgent`
 
 Scheduling is **lattice-native**: the agent's `status` field and the contents
-of `inbox`/`tasks` are the only inputs to the wake decision. There are no
+of `sessions`/`tasks` are the only inputs to the wake decision. There are no
 separate Java-side running/wake flags that could drift from the lattice.
 
 **`wakeAgent(agentId, ctx)`** is the single entry point for all agent wakes.
@@ -706,7 +709,7 @@ callbacks. The logic (all inside the per-agent lock):
 
 1. Read the agent's `status` from the lattice.
 2. If RUNNING → return (new work is in the lattice; the loop will see it).
-3. If no work (empty inbox and tasks) → return.
+3. If no work (no session with pending messages and no tasks) → return.
 4. Resolve `config.operation` → if null, return (no transition op configured).
 5. Set status → RUNNING.
 6. Start `executeRunLoop` on a virtual thread.
@@ -715,9 +718,9 @@ An agent is eligible to run when any of:
 
 - A new task has been added to `tasks` (via `agent:request`)
 - A pending outbound job has completed or failed
-- A new message has been delivered to `inbox` (via `agent:message`)
+- A new message has been delivered to a session's `pending` queue (via `agent:message`)
 
-**No lost wakeups.** The per-agent lock serialises `addTask` / `deliverMessage`
+**No lost wakeups.** The per-agent lock serialises `addTask` / `appendSessionPending`
 with the run loop's status check. If work is added before the lock is acquired,
 the loop sees it. If work is added after the loop writes SLEEPING, the
 subsequent `wakeAgent` call sees SLEEPING and starts a new loop.
@@ -753,7 +756,7 @@ there are no concurrent writers to the agent record.
 
 The run loop holds the lock only briefly — for reading the snapshot and for
 writing the merged result. The transition invocation (which may take seconds or
-minutes) runs without the lock held. Concurrent `addTask` and `deliverMessage`
+minutes) runs without the lock held. Concurrent `addTask` and `appendSessionPending`
 calls proceed while the transition runs; their writes are preserved by the
 merge-at-write-time strategy (§4.4 step 6).
 
@@ -761,7 +764,7 @@ Cross-venue sync is replication: the venue hosting the agent always has the late
 ts. Replicas receive the complete state.
 
 Per-field merge (a previous design) was wrong because it could produce Frankenstein
-states — status from venue A, timeline from venue B, inbox fragments from both. An
+states — status from venue A, timeline from venue B, session fragments from both. An
 inconsistent state that never actually existed. With a single atomic value, the winner
 is always a state that genuinely existed on the hosting venue.
 

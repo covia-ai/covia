@@ -135,7 +135,7 @@ public class ContextBuilderTest {
 
 	@Test
 	public void testExistingSystemPromptIsAlwaysReplaced() {
-		// Per AGENT_CONTEXT_PLAN.md Option C, the system message is
+		// The system message is
 		// always rebuilt fresh per turn — any system message at the
 		// start of the starting vector is dropped and replaced with
 		// the freshly composed identity + LATTICE_REFERENCE.

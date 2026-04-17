@@ -1,6 +1,6 @@
 # Agent Sessions — Design Proposal
 
-**Status:** Draft — April 2026. Future epic, on hold pending other work.
+**Status:** Implemented — April 2026. Stages 1–3 complete.
 
 This doc proposes **sessions** as a first-class agent primitive: **scoped interactions between parties, with their own history and context, jointly owned by the participants**. A session is a communication primitive — a channel. Whatever the parties build together (documents, deliverables, long-lived work state) lives elsewhere (see [PROJECTS.md](./PROJECTS.md) for that layer).
 
@@ -328,7 +328,7 @@ input: {
   agentId,
   n,                   — agent state snapshot (from g/<agent>/n/). Rare updates.
   session: {
-    id, parties, meta,
+    sessionId, parties, meta,
     c,                 — session state snapshot (from sessions/<sid>/c/). Common updates.
     history,           — conversation transcript
     pending            — messages queued since last transition (§5.5.2)
@@ -580,9 +580,9 @@ The API surface is additive at the envelope level (new `sessionId` field in requ
 | **0 (now)** | Design doc + open questions | This file |
 | **1** | Session storage + session envelope + single transition contract | Every invocation runs in a session; `sessionId` in request/response envelope; per-session history at `g/<agent>/sessions/<sid>/`; chatbot demo |
 | **2.1–2.6** | Session lattice slot + sessionId on intake + ensureSession + one-session-per-cycle demux | ✓ Done (Stage 2.6 complete; sessions auto-minted, session.pending is sole intake, one session active per transition cycle) |
-| **2.7** | Single response value contract; explicit task completion via venue ops | Transition adapter returns `ACell response` (or null) — appended to `c/history` if non-null. For chat picked: return value completes chat Job. For task picked: completion is explicit via `agent:complete_task` / `agent:fail_task` ops invoked during transition (framework reads RequestContext for `agentId`/`taskId`/`jobId`). State writes via `covia_write` (RequestContext-scoped to `n`/`c`/`t`). No `agent:yield` op — yield is the natural state when no completion op was invoked. No `agent:complete_chat` — chat completes via return. LLM tool loop wraps `complete_task` / `fail_task` as tools; plain-text response = return value (auto-completes chat, yields for task). Yields → exponential falloff on per-task `nextWake`; optional caller-settable `timeout`, default very long. |
-| **2.8** | Add `agent_chat` op + session-scoped chat slot | Caller awaits next `response` on the session; mints session on first contact, continues existing session normally. A2A `message/send` analogue. |
-| **3** | Per-session history population | Append turn records to `g/<agent>/sessions/<sid>/history` on every transition. Move heavy result data off the flat timeline and into per-session history; agent timeline becomes a thin audit log keyed by session id |
+| **2.7** | Single response value contract; explicit task completion via venue ops | ✓ Done. Transition adapter returns `ACell response` (or null) — appended to `c/history` if non-null. For chat picked: return value completes chat Job. For task picked: completion is explicit via `agent:complete_task` / `agent:fail_task` ops invoked during transition (framework reads RequestContext for `agentId`/`taskId`/`jobId`). State writes via `covia_write` (RequestContext-scoped to `n`/`c`/`t`). No `agent:yield` op — yield is the natural state when no completion op was invoked. No `agent:complete_chat` — chat completes via return. LLM tool loop wraps `complete_task` / `fail_task` as tools; plain-text response = return value (auto-completes chat, yields for task). Yields → exponential falloff on per-task `nextWake`; optional caller-settable `timeout`, default very long. |
+| **2.8** | Add `agent_chat` op + session-scoped chat slot | ✓ Done. Caller awaits next `response` on the session; mints session on first contact, continues existing session normally. A2A `message/send` analogue. |
+| **3** | Per-session history population | ✓ Done (S3a–d, S3f). Session.history populated per transition. Agent inbox removed (S3d) — session.pending is sole intake. No history cap (S3e) — summarisation deferred to ContextBuilder. |
 | **4** | Lifecycle automation | Auto-idle, auto-archive, suspended sessions |
 | **5** | Adapter unification (§6.4) | Merge `llmagent:chat` and `goaltree:chat` into one flag-driven adapter; uniform harness tools (`more_tools` etc.) across both modes; persistable frame stack per session |
 | **6** | Memory layer | Separate epic; episodic/semantic/procedural memory across sessions |

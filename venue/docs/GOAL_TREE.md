@@ -531,8 +531,7 @@ GoalTreeAdapter stores its state in the agent's `state` field on the lattice, ex
 ```json5
 {
   config: { /* agent config -- operation, model, systemPrompt, tools, caps, context */ },
-  history: [ /* existing field -- not used by goal tree, kept for compatibility */ ],
-  loads: { /* existing field -- not used by goal tree, kept for compatibility */ },
+  // No per-adapter transcript -- session.history is the canonical record (framework-managed)
   goalTree: {
     frames: [
       {
@@ -767,7 +766,7 @@ covia.adapter.agent.GoalTreeAdapter extends AAdapter
 | `CellExplorer` | Reuse as-is | Renders ancestors, segments at budget |
 | `CapabilityChecker` | Reuse as-is | Same capability enforcement |
 | Tool dispatch | Reuse `executeToolCall` pattern | Same config tool resolution, grid dispatch |
-| `AgentState` | Extend state model | Add `goalTree` field alongside existing `history` |
+| `AgentState` | Extend state model | Session.history is canonical record (framework-managed) |
 | Level 3 contract | Identical | Same `{messages, tools, responseFormat}` input/output |
 | `CoviaAdapter` | Add `NamespaceResolver` | Virtual namespace dispatch for `t/` and `n/` |
 | `RequestContext` | Add `jobId` field | Needed by `t/` resolver to locate temp in job record |

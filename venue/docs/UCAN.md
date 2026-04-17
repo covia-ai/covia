@@ -118,7 +118,7 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `crud/delete` | — | Delete data |
 | `invoke` | `invoke/async` | Execute operations |
 | `invoke/async` | — | Fire-and-forget execution |
-| `agent/message` | — | Write to agent inbox |
+| `agent/message` | — | Send message to agent session |
 | `agent/fork` | — | Fork an agent |
 | `secret/decrypt` | — | Decrypt a secret |
 | `ucan/delegate` | — | Sub-delegate capabilities |

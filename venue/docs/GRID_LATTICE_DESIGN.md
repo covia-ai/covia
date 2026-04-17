@@ -174,7 +174,7 @@ This is a critical design distinction. The three execution-related namespaces se
 
 **Jobs are executions of operations.** Every `invoke()` creates a job. The job records exactly what ran (pinned op ref), what went in (pinned inputs), what came out (outputs), and who did it (executor). Jobs are the **economic and accountability unit** — billing, SLA tracking, and dispute resolution happen at the job level. Jobs answer the caller's question: "what happened with my request?"
 
-**Agents are actors that create and execute jobs.** An agent's transition function may invoke operations (creating jobs), send messages to other agents (inbox writes), or spawn new agents. The agent's timeline records all of this from the agent's perspective — what it saw, what it decided, what it did. The timeline answers the agent's question: "what did I do and why?"
+**Agents are actors that create and execute jobs.** An agent's transition function may invoke operations (creating jobs), send messages to other agents (via session.pending), or spawn new agents. The agent's timeline records all of this from the agent's perspective — what it saw, what it decided, what it did. The timeline answers the agent's question: "what did I do and why?"
 
 **The critical cross-reference:** A job record references the executing agent. An agent's timeline entry references the jobs it created. This dual record provides two audit perspectives on the same work:
 
@@ -186,7 +186,7 @@ This is a critical design distinction. The three execution-related namespaces se
   executor: "/g/helper"                     op: "test:echo",
   inputs: { ... }                          state: { ... },
   outputs: { ... }                         tasks: [resolved task data...],
-  cost: 450                                messages: [inbox items...],
+  cost: 450                                messages: [session pending...],
                                            result: { ... },
                                            taskResults: { ... }
                                          }
@@ -196,12 +196,12 @@ This is a critical design distinction. The three execution-related namespaces se
 
 | Pattern | Mechanism | Creates job? | Use case |
 |---------|-----------|-------------|----------|
-| **Async message** | `agent:message` — appends to agent's `inbox` vector | No | Notifications, FYI, loose coordination |
+| **Async message** | `agent:message` — appends to session's `pending` queue | No | Notifications, FYI, loose coordination |
+| **Chat** | `agent:chat` — synchronous request for a response on a session | Yes | Conversational interaction, A2A `message/send` |
 | **Task request** | `agent:request` — adds Job ID to agent's `tasks` index. The request Job IS the task. | Yes | Primary mechanism. MCP users, A2A, delegated work. Agent must complete or reject. |
 | **Delegation** | `invoke()` with sub-delegated UCAN caps | Yes | Agent delegates subtask to another agent |
-| **Broadcast** | Write to multiple inboxes | No | Announcements, pub-sub patterns |
 
-The key principle: **if you need accountability (cost, result, SLA), use `agent:request`. If you need informal coordination, use inbox messages.** Tasks persist until the agent explicitly completes or rejects them. Inbox messages are ephemeral and best-effort. Both appear in the agent's timeline for full auditability.
+The key principle: **if you need accountability (cost, result, SLA), use `agent:request`. If you need informal coordination, use messages.** Tasks persist until the agent explicitly completes or rejects them. Messages are session-scoped and recorded in session history. Both appear in the agent's timeline for full auditability.
 
 **Agent runs are internal.** When the runtime wakes an agent and runs its transition function, this is an internal lifecycle event (currently implemented as an `agent:trigger` Job for infrastructure reasons, but conceptually an operational concern of the runtime). The `agent:trigger` Job is not visible to external callers — they interact with the agent via `agent:request` and track the request Job. An agent's transition may create zero, one, or many additional jobs as part of its processing.
 
@@ -223,9 +223,9 @@ Each agent is a single atomic LWW value — the entire agent record is replaced 
 | `state` | any | User-defined state. Opaque to the framework — owned entirely by the transition function. |
 | `tasks` | index | `Index<Blob, ACell>` — inbound request Job IDs. Ordered by Job ID; O(log n) insert/delete. |
 | `pending` | index | `Index<Blob, ACell>` — outbound Job IDs the agent is waiting on. Ordered by Job ID. |
-| `inbox` | vector | Ephemeral messages awaiting processing. Drained on each successful run. |
+| `sessions` | index | `Index<Blob, ACell>` — per-session state. Each session has history, pending, metadata, and per-session state (`c/`). See AGENT_SESSIONS.md. |
 | `timeline` | vector | Append-only log of transition records. Grows with each successful run. |
-| `caps` | map | Capability sets (placeholder — Phase C enforcement). |
+| `caps` | map | Capability attenuations — UCAN scoping for agent tool calls. |
 | `error` | string? | Last error message, or absent. Set when the transition function fails. |
 
 All fields are framework-managed except `state`, which is owned by the transition function.
@@ -248,7 +248,7 @@ All fields are framework-managed except `state`, which is owned by the transitio
 | Write agent workspace | Write to an agent's or user's workspace | `{ with: "did:.../w/path", can: "crud/write" }` |
 | List agents | Enumerate agents for a user | `{ with: "did:.../g/", can: "crud/read" }` |
 | Complete/fail task | Complete or fail a Job assigned to an agent | Job must be assigned to the agent |
-| Message agent | Append to an agent's inbox | `{ with: "did:.../g/<id>", can: "agent/message" }` |
+| Message agent | Append to an agent session's pending queue | `{ with: "did:.../g/<id>", can: "agent/message" }` |
 | Invoke operation | Invoke any grid operation (creates a Job) | `{ with: "did:.../o/op-name", can: "invoke" }` |
 | Decrypt secret | Decrypt a secret from the user's store | `{ with: "did:.../s/key", can: "secret/decrypt" }` |
 | Spawn agent | Create a new agent | `{ with: "did:.../g/", can: "crud/write" }` |
@@ -257,7 +257,7 @@ All fields are framework-managed except `state`, which is owned by the transitio
 
 **Timeline efficiency:** Each timeline entry is a raw lattice value, not a pinned `/a/` ref. CAD3 structural sharing means unchanged subtrees between transitions share storage automatically. The timeline can grow indefinitely without proportional storage cost.
 
-**Communication:** Sending a message to another agent uses `agent:message`, which appends to the target agent's `inbox` vector — local: `/g/my-assistant`, remote: `did:key:zBob.../g/helper` — with appropriate capability via UCAN.
+**Communication:** Sending a message to another agent uses `agent:message`, which appends to the target agent's session `pending` queue — local: `/g/my-assistant`, remote: `did:key:zBob.../g/helper` — with appropriate capability via UCAN.
 
 **Discoverability:** Agent IDs are human-readable strings chosen by the user. The canonical reference is via DID: `did:key:zAlice.../g/my-assistant`. Additional metadata (`name`, `description`, `tags`) in the agent's `config` supports discovery queries (e.g. "find all agents tagged 'code-review'").
 
@@ -267,7 +267,7 @@ Because agent state is an immutable lattice value with no hidden mutable referen
 
 **Migration** moves an agent between venues:
 
-1. Suspend agent at venue A (status → suspended, drain inbox)
+1. Suspend agent at venue A (status → suspended, drain session pending)
 2. Read full agent state: timeline, config, caps
 3. Create agent at venue B with same DID, same state
 4. Update DID resolution to point to venue B
@@ -567,7 +567,7 @@ The adapter exposes selected grid ops as MCP tools and grid assets as MCP resour
 
 ### 8.2 A2A (Agent-to-Agent Protocol)
 
-A2A maps to the runtime layer (Layer 1) — agent discovery and task delegation align with the inbox/job model.
+A2A maps to the runtime layer (Layer 1) — agent discovery and task delegation align with the session/job model.
 
 | A2A Concept | Grid Equivalent |
 |-------------|-----------------|
@@ -672,26 +672,15 @@ Skills are defined at the top level of config (not nested under `a2a/`) because 
 
 All protocol interactions are recorded as structured lattice data within the agent's timeline and the jobs namespace. This ensures full auditability regardless of whether the interaction was native or bridged.
 
-**Inbound interactions** (external → grid) are recorded as inbox messages with protocol metadata:
+**Inbound interactions** (external → grid) are recorded as session pending messages and subsequently appended to session history with protocol metadata:
 
 ```
-/g/<agent-id>/inbox (vector)
+/g/<agent-id>/sessions/<sid>/pending (vector)
   [
     {
-      protocol: "a2a",
-      type: "task",
-      from: "did:external:agent-xyz",
-      task_id: "a2a-task-9876",
-      payload: { ... },
+      message: "...",
+      caller: "did:external:agent-xyz",
       ts: 1719500000
-    },
-    {
-      protocol: "mcp",
-      type: "tool_call",
-      from: "did:external:client-abc",
-      method: "transform",
-      params: { ... },
-      ts: 1719500001
     }
   ]
 ```
@@ -736,7 +725,7 @@ This means every interaction — native grid, MCP, A2A, webhook — ends up as s
 
 | Communication | Mechanism | Overhead |
 |--------------|-----------|----------|
-| **Native** (grid agent → grid agent) | Direct inbox write with UCAN caps | Minimal — lattice-native |
+| **Native** (grid agent → grid agent) | Direct session.pending write with UCAN caps | Minimal — lattice-native |
 | **Bridged** (MCP / A2A / webhook) | Venue-provided protocol adapter | Adapter translates, records, enforces caps |
 
 The grid's security model (caps, runtime enforcement) applies uniformly regardless of protocol origin. The adapters are the bridge between external protocols and the grid's native model — they translate, record, and enforce, but never bypass the runtime.
@@ -915,7 +904,7 @@ Extend the capability model from Phase 2 with full UCAN features: signed tokens,
 
 ### Phase 5: Agent Model (`/g/`)
 
-Stateful actors with lifecycle, tasks, pending, inbox, timeline, and pluggable transition functions. The three-level architecture (agent update → transition fn → LLM call). Agent data structure and transitions are defined in AGENT_LOOP.md.
+Stateful actors with lifecycle, tasks, pending, sessions, timeline, and pluggable transition functions. The three-level architecture (agent update → transition fn → LLM call). Agent data structure and transitions are defined in AGENT_LOOP.md.
 
 Builds on: per-user cursors (agents are owned by users), operations registry (agents invoke ops), UCAN (agents have capability boundaries).
 

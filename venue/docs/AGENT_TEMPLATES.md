@@ -191,7 +191,7 @@ Fork creates a new agent from an existing agent's complete state.
 | state | Yes | Full conversation history, LLM config |
 | timeline | Configurable | `includeTimeline: true` copies run history |
 | tasks | No | Pending tasks stay with the original |
-| inbox | No | Messages stay with the original |
+| sessions | No | Session state stays with the original |
 | status | Reset to SLEEPING | Forked agent starts fresh |
 
 ### API
@@ -293,7 +293,7 @@ This is a fully data-driven workflow — no special APIs, just reading templates
 
 - `agent:fork` operation in AgentAdapter
 - Copies config and state from source; optional `includeTimeline: true` copies run history
-- Resets status to SLEEPING; tasks, pending, and inbox are fresh
+- Resets status to SLEEPING; tasks, pending, and sessions are fresh
 - Optional `config` override (inline map or string reference) is merged on top of source config per-field
 - Source must exist and not be TERMINATED; target must not already exist (unless `overwrite: true` and target is TERMINATED)
 - Implementation: `User.forkAgent` + `AgentState.initialiseFromFork`

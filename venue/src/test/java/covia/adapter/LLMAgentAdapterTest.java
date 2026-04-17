@@ -136,7 +136,7 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testSystemPromptUpdatesAcrossTurnsAreNotFrozen() {
-		// AGENT_CONTEXT_PLAN.md §2.2 — system prompt freeze bug. After
+		// System prompt freeze bug (fixed). After
 		// turn 1 the agent's stored state must NOT contain a system
 		// message. The next turn rebuilds the system message fresh from
 		// current config, so updates apply immediately.

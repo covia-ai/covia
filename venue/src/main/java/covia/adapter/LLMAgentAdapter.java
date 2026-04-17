@@ -325,7 +325,7 @@ public class LLMAgentAdapter extends AAdapter {
 		// Extract dynamic loaded paths from state
 		AMap<AString, ACell> existingLoads = extractLoads(state);
 
-		// Build per-turn LLM context. Per AGENT_CONTEXT_PLAN.md §4 Option C
+		// Build per-turn LLM context. Ephemeral context model:
 		// (transcript model): system prompt + context entries + loads +
 		// [Context Map] are rebuilt FRESH every turn and never persisted.
 		// Only the persistent history (session.history turns) carries
