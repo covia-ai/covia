@@ -374,14 +374,16 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	 * and returns the transition output ({@code {state, result}}).</p>
 	 *
 	 * @param ctx request context (caller identity, capabilities)
-	 * @param input transition input: {@code {agentId, state, messages, tasks, pending}}
-	 * @return transition output: {@code {state, result}}
+	 * @param input transition input: {@code {agentId, state, tasks, pending, messages, config, newInput, session?}}
+	 * @return transition output: {@code {state, response | error}}
 	 */
 	@SuppressWarnings("unchecked")
 	ACell processGoal(Job job, RequestContext ctx, ACell input) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		ACell state = RT.getIn(input, AgentState.KEY_STATE);
-		AVector<ACell> messages = (AVector<ACell>) RT.getIn(input, Fields.MESSAGES);
+		// S3c: prefer session.pending over agent-level messages when a session
+		// is in scope. effectiveMessages picks the right one (no duplication).
+		AVector<ACell> messages = covia.adapter.AgentAdapter.effectiveMessages(input);
 		AVector<ACell> tasks = (AVector<ACell>) RT.getIn(input, Fields.TASKS);
 		AVector<ACell> pending = (AVector<ACell>) RT.getIn(input, Fields.PENDING);
 
@@ -433,11 +435,12 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// Build context (system prompt, tools, caps) via ContextBuilder.
 		// Harness tool names in config.tools are skipped here — they're
 		// resolved separately by resolveHarnessTools / buildTypedRootHarnessTools.
+		AVector<ACell> sessionTurns = covia.adapter.AgentAdapter.sessionHistory(input);
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
 			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
 			.withConfig(recordConfig, state)
-			.withSystemPrompt(Vectors.empty()) // fresh transition, no prior history
+			.withSessionHistory(sessionTurns)
 			.withContextEntries(state)
 			.withTools()
 			.build();
@@ -493,22 +496,54 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			}
 		}
 
-		// Lean transition output: emit {response | error, taskComplete} and let
-		// the framework synthesise taskResults for the picked task. State is
-		// still emitted because GoalTree's config currently rides in state.config
-		// across transitions — that carry-over moves to the session record in
-		// the later sub-stage when state is fully retired.
-		AMap<AString, ACell> output = Maps.of(AgentState.KEY_STATE, newState);
+		// Lean transition output: emit {response | error}. When a task was
+		// picked this cycle, complete it explicitly via the venue op
+		// (agent:complete-task / agent:fail-task), which parks a completion
+		// envelope into the framework's deferredCompletions map. The run
+		// loop drains that map after mergeRunResult to build taskResults.
+		// State is still emitted because GoalTree's config currently rides
+		// in state.config across transitions — that carry-over moves to
+		// the session record in the later sub-stage when state is fully
+		// retired.
 		boolean failed = "failed".equals(result.status());
+		if (tasks != null && tasks.count() > 0 && ctx.getTaskId() != null) {
+			completeTaskViaVenueOp(ctx, failed, result.value());
+		}
+		AMap<AString, ACell> output = Maps.of(AgentState.KEY_STATE, newState);
 		if (failed) {
 			output = output.assoc(Fields.ERROR, result.value());
 		} else {
 			output = output.assoc(Fields.RESPONSE, result.value());
 		}
-		if (tasks != null && tasks.count() > 0) {
-			output = output.assoc(Fields.TASK_COMPLETE, convex.core.data.prim.CVMBool.TRUE);
-		}
 		return output;
+	}
+
+	/**
+	 * Completes (or fails) the in-scope task via the venue op. The framework
+	 * passes a cycle ctx scoped with both agentId and taskId; the op reads
+	 * those from the RequestContext, parks a completion envelope into the
+	 * framework's deferred-completion map, and removes the task entry.
+	 *
+	 * <p>Failures (agent missing, task gone, op rejected) propagate up to
+	 * {@link #processGoal}, which in turn propagates to {@link #invoke},
+	 * which fails the transition Job. The framework's outer catch then
+	 * fails the caller's pending task Job — without that, the caller would
+	 * block on {@code awaitResult} forever.</p>
+	 */
+	private void completeTaskViaVenueOp(RequestContext ctx, boolean failed, ACell value) {
+		AMap<AString, ACell> opInput;
+		AString opPath;
+		if (failed) {
+			AString errorStr = (value instanceof AString s) ? s
+				: Strings.create(value == null ? "Task failed" : value.toString());
+			opInput = Maps.of(Fields.ERROR, errorStr);
+			opPath = Strings.create("v/ops/agent/fail-task");
+		} else {
+			opInput = (value != null) ? Maps.of(Fields.RESULT, value) : Maps.empty();
+			opPath = Strings.create("v/ops/agent/complete-task");
+		}
+		Job opJob = engine.jobs().invokeOperation(opPath, opInput, ctx);
+		opJob.awaitResult();
 	}
 
 	// ========== Frame execution ==========

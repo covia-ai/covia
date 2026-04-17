@@ -1,0 +1,25 @@
+{
+    "name": "Complete Agent Task",
+    "description": "Explicitly marks the in-scope task as successfully complete. Invoked by an agent transition (typically as an LLM tool call) to deliver the final result to the caller. The agentId and taskId are read from the request context — the framework populates them when dispatching a task transition. Without a task in scope the call fails. Side effects: completes the pending task Job with the supplied result and removes the task from the agent's task queue.",
+    "dateCreated": "2026-04-16T00:00:00Z",
+    "operation": {
+        "adapter": "agent:completeTask",
+        "toolName": "agent_complete_task",
+        "input": {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "description": "The successful result to deliver to the caller. Any value is accepted; the schema is intentionally open so transitions can return arbitrary structured output."
+                }
+            }
+        },
+        "output": {
+            "type": "object",
+            "properties": {
+                "agentId": { "type": "string" },
+                "taskId":  { "type": "string" },
+                "status":  { "type": "string", "description": "Always 'COMPLETE' on success." }
+            }
+        }
+    }
+}

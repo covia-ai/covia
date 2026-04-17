@@ -59,7 +59,6 @@ public class ContextBuilder {
 
 	// Interned keys (matching LLMAgentAdapter constants)
 	private static final AString K_CONFIG        = Strings.intern("config");
-	private static final AString K_TRANSCRIPT    = Strings.intern("transcript");
 	private static final AString K_SYSTEM_PROMPT = Strings.intern("systemPrompt");
 	private static final AString K_TOOLS         = Strings.intern("tools");
 	private static final AString K_DEFAULT_TOOLS = Strings.intern("defaultTools");
@@ -233,8 +232,8 @@ public class ContextBuilder {
 	 * agents — there is no "freeze on first turn" caching.</p>
 	 *
 	 * <p>The {@code starting} parameter is the message vector to start
-	 * from — typically empty (callers add transcript content via
-	 * {@link #withTranscript(ACell)}). If a non-empty starting vector is
+	 * from — typically empty (callers add history via
+	 * {@link #withSessionHistory(AVector)}). If a non-empty starting vector is
 	 * passed and already begins with a system message, that system
 	 * message is REPLACED by the freshly composed one — the rest of the
 	 * starting vector is preserved.</p>
@@ -296,24 +295,34 @@ public class ContextBuilder {
 	}
 
 	/**
-	 * Appends the persistent conversation transcript from agent state.
+	 * Appends session.history turn envelopes as LLM messages.
 	 *
-	 * <p>Reads {@code state.transcript} (a vector of user / assistant / tool
-	 * messages from previous turns) and appends each message to the
-	 * builder's message vector. Returns silently if there is no transcript.</p>
+	 * <p>Each entry is a turn envelope {@code {role, content, ts, source}}.
+	 * Role maps directly to the LLM role. Content is stringified if not
+	 * already an {@code AString}. {@code ts} and {@code source} are
+	 * dropped (vendor APIs require only {@code {role, content}}).</p>
 	 *
-	 * <p>The transcript is the only durable record of conversation across
-	 * turns. Per {@code AGENT_CONTEXT_PLAN.md}, ephemeral context (system
-	 * prompt, context entries, loaded paths, [Context Map], pending
-	 * results, inbox messages) is rebuilt fresh per turn and never
-	 * persisted into the transcript.</p>
+	 * <p>If {@code turns} is null or empty, returns silently.</p>
 	 */
 	@SuppressWarnings("unchecked")
-	public ContextBuilder withTranscript(ACell state) {
-		AVector<ACell> transcript = RT.ensureVector(RT.getIn(state, K_TRANSCRIPT));
-		if (transcript == null || transcript.count() == 0) return this;
-		for (long i = 0; i < transcript.count(); i++) {
-			ACell msg = transcript.get(i);
+	public ContextBuilder withSessionHistory(AVector<ACell> turns) {
+		if (turns == null || turns.count() == 0) return this;
+		for (long i = 0; i < turns.count(); i++) {
+			ACell turn = turns.get(i);
+			if (!(turn instanceof AMap)) continue;
+			AMap<AString, ACell> envelope = (AMap<AString, ACell>) turn;
+			ACell role = envelope.get(K_ROLE);
+			if (!(role instanceof AString)) continue;
+			ACell content = envelope.get(K_CONTENT);
+			AString contentStr;
+			if (content instanceof AString s) {
+				contentStr = s;
+			} else if (content == null) {
+				contentStr = Strings.EMPTY;
+			} else {
+				contentStr = Strings.create(content.toString());
+			}
+			ACell msg = Maps.of(K_ROLE, role, K_CONTENT, contentStr);
 			messages = messages.conj(msg);
 			trackMessage(msg);
 		}

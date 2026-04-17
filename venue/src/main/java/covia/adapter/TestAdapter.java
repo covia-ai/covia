@@ -50,7 +50,12 @@ public class TestAdapter extends AAdapter {
                 case "echo":
                     return CompletableFuture.completedFuture(handleEcho(input));
                 case "taskcomplete":
-                    return CompletableFuture.completedFuture(handleTaskComplete(input));
+                    // taskcomplete invokes the agent venue op for completion —
+                    // needs ctx + a live Job for sub-invocation, so route via
+                    // the invoke() override below.
+                    return CompletableFuture.failedFuture(
+                        new UnsupportedOperationException("taskcomplete uses invoke path for venue op invocation")
+                    );
                 case "llm":
                     return CompletableFuture.completedFuture(handleLlm(input));
                 case "toolllm":
@@ -131,6 +136,9 @@ public class TestAdapter extends AAdapter {
         } else if ("delay".equals(subOp)) {
             // Delay: needs Job for caller DID propagation to sub-invocation
             handleDelay(job, ctx, input);
+        } else if ("taskcomplete".equals(subOp)) {
+            // taskcomplete: invoke agent:complete-task venue op via cycleCtx
+            handleTaskComplete(job, ctx, input);
         } else {
             // Default one-shot path
             super.invoke(job, ctx, meta, input);
@@ -200,22 +208,32 @@ public class TestAdapter extends AAdapter {
     }
 
     /**
-     * Test transition using the lean contract (Sub-stage 3).
+     * Test transition that completes the picked task via the
+     * {@code agent:complete-task} venue op. The framework dispatches with a
+     * cycle ctx scoped to the agent + task, so the venue op can identify
+     * which task to complete from the RequestContext alone.
      *
-     * <p>Reads {@code newInput} (the picked task's input) and returns
-     * {@code {response, taskComplete}}. The framework synthesises
-     * {@code taskResults} from {@code response} for the picked task,
-     * so callers see the same task output as before — but the transition
-     * itself no longer touches state, the tasks vector, or assembles
-     * a per-task result map.</p>
+     * <p>Returns {@code {response}} so the framework still records a
+     * non-null timeline result for the cycle.</p>
      */
-    private ACell handleTaskComplete(ACell input) {
+    private void handleTaskComplete(Job job, RequestContext ctx, ACell input) {
         ACell newInput = RT.getIn(input, Fields.NEW_INPUT);
         ACell response = Maps.of(Strings.create("completed"), newInput);
-        return Maps.of(
-            Fields.RESPONSE, response,
-            Fields.TASK_COMPLETE, convex.core.data.prim.CVMBool.TRUE
-        );
+
+        if (ctx.getTaskId() != null) {
+            try {
+                Job opJob = engine.jobs().invokeOperation(
+                    "v/ops/agent/complete-task",
+                    Maps.of(Fields.RESULT, response),
+                    ctx);
+                opJob.awaitResult();
+            } catch (Exception e) {
+                job.fail("agent:complete-task invocation failed: " + e.getMessage());
+                return;
+            }
+        }
+
+        job.completeWith(Maps.of(Fields.RESPONSE, response));
     }
 
     /**
@@ -315,32 +333,22 @@ public class TestAdapter extends AAdapter {
             }
         }
 
-        // Look for task context in user messages — extract first job ID
+        // If a task context is present, call complete_task. The in-scope task
+        // is read from the framework-populated RequestContext — no jobId arg.
         for (long i = 0; i < messages.count(); i++) {
             AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
             AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
             if (role != null && "user".equals(role.toString()) && content != null) {
                 String text = content.toString();
                 if (text.contains("[Tasks assigned to you]")) {
-                    // Extract job ID: "- Task <hexid>: ..."
-                    int idx = text.indexOf("- Task ");
-                    if (idx >= 0) {
-                        String rest = text.substring(idx + 7);
-                        int colon = rest.indexOf(":");
-                        if (colon > 0) {
-                            String jobId = rest.substring(0, colon).trim();
-                            // Call complete_task with this job ID
-                            return Maps.of(
-                                "role", Strings.create("assistant"),
-                                "toolCalls", Vectors.of(Maps.of(
-                                    "id", Strings.create("call_ct"),
-                                    "name", Strings.create("complete_task"),
-                                    "arguments", Strings.create(
-                                        "{\"jobId\":\"" + jobId + "\",\"output\":{\"answer\":\"done\"}}")
-                                ))
-                            );
-                        }
-                    }
+                    return Maps.of(
+                        "role", Strings.create("assistant"),
+                        "toolCalls", Vectors.of(Maps.of(
+                            "id", Strings.create("call_ct"),
+                            "name", Strings.create("complete_task"),
+                            "arguments", Strings.create("{\"result\":{\"answer\":\"done\"}}")
+                        ))
+                    );
                 }
             }
         }

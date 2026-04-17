@@ -101,9 +101,12 @@ g/<agent>/
   timeline            — thin audit log of session events (session-created,
                         turn-recorded, archived). Replaces the old per-transition
                         snapshot vector.
-  tasks/              — Index of tasks (jobs assigned to this agent), keyed by taskId.
-                        Pre-existing from Phase B5 — tasks are agent-level and
-                        orthogonal to sessions. Each entry is a taskdata map:
+  tasks/              — Index of tasks (jobs assigned to this agent), keyed by
+                        taskId. **Task ID == caller's request Job ID** — there
+                        is no parallel task identifier; the request Job is the
+                        system of record and the task entry is the in-flight
+                        instruction keyed by that same ID. Each entry is a
+                        taskdata map:
     <taskId>          {
                         sessionId?,  — optional back-reference; a task may
                                        belong to a session or stand alone
@@ -180,21 +183,33 @@ The id is opaque and venue-minted (UUID-ish, MCP/A2A-compatible). `parties` is t
 
 ## 5. API Surface
 
-### 5.1 Existing operations gain `sessionId`
+### 5.1 Three intake operations
+
+The boundary surface has three distinct ops that encode the caller's intent. The agent's transition contract is uniform — the framework dispatches the agent's response based on which op queued the work (§6.3).
 
 ```
-agent_request   agentId=X  sessionId=Y?  input=...      ← sessionId optional (mint if absent)
-agent_message   agentId=X  sessionId=Y   content=...    ← sessionId required
-agent_trigger   agentId=X  sessionId=Y?                 ← sessionId optional (agent-level if absent)
+agent_request   agentId=X  sessionId=Y?  input=...      — submit a tracked task. Caller awaits result.
+agent_chat      agentId=X  sessionId=Y?  message=...    — synchronous request for a response. Caller awaits next response.
+agent_message   agentId=X  sessionId=Y   content=...    — fire-and-forget notification. No response expected.
+agent_trigger   agentId=X  sessionId=Y?                 — wake the agent. No payload, no response.
 ```
+
+| Op | Queue | Caller waits? | Completion semantics |
+|----|-------|---------------|----------------------|
+| `agent_request` | `tasks` Index | yes (Job) | Agent must produce `response` (auto-completes task) or `error`, or yield (task stays pending until external wake) |
+| `agent_chat` | session-scoped chat slot | yes (Job) | Agent's next `response` on this session completes the chat job. Typically continues an existing session (`sessionId` supplied); mints a new one on first contact |
+| `agent_message` | session `pending` (or agent `inbox` for out-of-band) | no | Agent processes whenever; any `response` lands in session history |
+| `agent_trigger` | none | yes (run completion) | Just nudges the run loop; no payload to deliver |
 
 Session ids are always venue-minted — callers never supply their own. Per-op rules are detailed in §5.5; summary:
 
 - `sessionId` supplied + session known → continue that session (caller echoes the id, A2A/MCP-style)
 - `sessionId` supplied + session unknown → error
-- `sessionId` omitted on `agent_request` → venue mints a new session, returns the id
+- `sessionId` omitted on `agent_request` / `agent_chat` → venue mints a new session, returns the id
 - `sessionId` omitted on `agent_message` → **error** (messages require a session)
 - `session={title: ..., parties: [...]}` on `agent_request` → create new session with explicit metadata; the response includes the minted id
+
+**Why three ops, not flags on one op.** Each op encodes a distinct caller intent (long-running task vs. wait-for-reply vs. notify). The agent doesn't have to declare its mode — the framework already knows what to do with the agent's response based on which queue picked the work. This eliminates the "is this response a task completion or a chat reply or both?" ambiguity that comes from a single intake op + per-call flags.
 
 ### 5.2 New operations
 
@@ -247,17 +262,18 @@ This matches both A2A `contextId` and MCP `Mcp-Session-Id`:
 
 ### 5.5 Messages and session routing
 
-`agent_request` and `agent_message` play different roles, so they have different rules for missing `sessionId`:
+The four intake ops play different roles, so they have different rules for missing `sessionId`:
 
 | Op | `sessionId` absent | `sessionId` present and known | `sessionId` present and unknown |
 |----|--------------------|-------------------------------|---------------------------------|
 | `agent_request` | Mint new session, return id with task result | Continue that session | Error |
+| `agent_chat` | Mint new session, return id with response | Continue that session | Error |
 | `agent_message` | **Error** — messages require a session | Append to session history, wake agent if sleeping | Error |
 | `agent_trigger` | Wake agent (no session scope) | Wake agent scoped to that session | Error |
 
-**Why the asymmetry.** `agent_request` is the canonical entry point — one-off task invocations AND "start a conversation" both flow through it. Minting on missing is the universal starter. `agent_message` is inherently conversational: a message without a conversation doesn't make sense. If a caller has no session yet, the right move is `agent_request` (even with `wait: false` for fire-and-forget starters — it returns the minted id immediately and the caller can follow up with `agent_message`).
+**Why the asymmetry.** `agent_request` and `agent_chat` can both mint on missing — but for `agent_chat` that's the *first turn* case, not the typical one. The normal case for `agent_chat` is **continuing an existing session** (sessionId supplied) — that's what conversational interaction looks like once it's underway. Mint-on-missing exists so first contact doesn't require a separate "start session" call. By contrast, `agent_message` is inherently conversational and a message without a conversation doesn't make sense, so it errors on missing.
 
-This matches A2A: their `message/send` is effectively our `agent_request` — it may create or continue a context and always returns the id. Pure conversational continuation (our `agent_message`) requires an existing context.
+This matches A2A: their `message/send` is effectively our `agent_chat` — synchronous, returns a response, normally continues a context (and may create one on first contact). Our `agent_request` is the heavier "submit a task" cousin (Job tracked, may take long, completion is explicit). Pure conversational continuation (our `agent_message`) requires an existing context.
 
 **Conversational flow:**
 
@@ -313,50 +329,105 @@ Under §5.4, every transition runs inside a session — there is **one contract*
 
 ### 6.1 Unified contract
 
-Transitions see each scope's state directly by its shorthand name. Output updates go to whichever scope the adapter cares about.
+Transitions see each scope's state by its shorthand name. The output is a single **response value** — what the agent wants to emit this turn (chat reply, task progress note, or task result). State writes happen during the transition via lattice ops; task completion/failure happens via dedicated venue ops invoked by the adapter (or by the LLM via the tool loop).
 
 ```
 input: {
   agentId,
-  n,                   — agent state (from g/<agent>/n/). Rare updates.
+  n,                   — agent state snapshot (from g/<agent>/n/). Rare updates.
   session: {
     id, parties, meta,
-    c,                 — session state (from sessions/<sid>/c/). Common updates.
+    c,                 — session state snapshot (from sessions/<sid>/c/). Common updates.
     history,           — conversation transcript
     pending            — messages queued since last transition (§5.5.2)
   },
   task?: {             — present only when this transition is servicing a task
-    taskId,            — key in the agent's tasks Index
-    sessionId?,        — back-reference to the session that spawned it, if any
-    t,                 — task state (the `t` field of the taskdata map
+    taskId,
+    sessionId?,
+    t,                 — task state snapshot (the `t` field of the taskdata map
                          at g/<agent>/tasks/<taskId>)
     input              — the task's input payload
   },
   newInput             — the new request/message that triggered this transition
 }
 
-output: {
-  response,            — reply content / task result
-  n?,                  — optional: updates to agent state (rare)
-  c?,                  — optional: updates to session state (common)
-  t?,                  — optional: updates to task state (when servicing a task)
-  sessionMeta?         — optional: title, status, turn count
-}
+output: ACell           — the response value (or null), appended to c/history
 ```
 
-The framework:
+If the return value is non-null, the framework appends it as a turn to `c/history`. For chat work, the return value also completes the chat Job. For task work, completion is **explicit**: the agent (or LLM tool loop) invokes `agent:complete_task` to finish; if no completion op was invoked during the transition, the task yields and stays in the queue.
 
-1. Resolves or mints the session before the transition (§5.4)
-2. Reads `n/` (agent), `c/` (session), `history`, `pending` from the lattice. If a task is focused, also reads the `t` field from its taskdata entry.
-3. Provides them as transition input under their shorthand names
-4. Writes back any returned `n`, `c`, `t` into their respective paths (merge semantics per scope — §4). `t` updates merge into the taskdata map at `g/<agent>/tasks/<taskId>`.
-5. Appends `newInput + response` to session history
-6. Clears `pending` for the session (its messages are now in history)
-7. Returns the sessionId in the response envelope (always, not just on mint)
+**State updates during a transition.** All routed by RequestContext scoped to `(agent, session, task?)`:
 
-Most transitions touch only `c`. `n` updates are the exception (agent learning a preference that should apply to all future conversations). `t` updates are common only for task-servicing transitions (Bob enriching an invoice, Carol deciding on it).
+| Intent | Action |
+|---|---|
+| Update agent state | `covia_write n/...` → `g/<agent>/n/...` |
+| Update session state | `covia_write c/...` → `sessions/<sid>/c/...` |
+| Update task WIP | `covia_write t/...` → current task's `t` |
 
-Stateless adapters (pure extraction, one-shot classifiers) ignore the state fields and `history`. Their session becomes a one-turn audit record, invisible to the adapter logic.
+**Completion ops invoked during the transition.** These are venue operations, not return-value flags. They read `(agentId, taskId)` from RequestContext — and since **task ID == caller's request Job ID**, no separate jobId is needed (the live Job is recovered via `engine.jobs().getJob(taskId)`):
+
+| Op | Effect |
+|---|---|
+| `agent:complete_task` (input: `result`) | Job → COMPLETE with `result`, task entry removed |
+| `agent:fail_task` (input: `error`) | Job → FAILED with `error`, task entry removed |
+
+There is no `agent:yield` op — yield is the natural state when no completion op was invoked. There is no `agent:complete_chat` op — chat completes via the return value.
+
+**Framework-populated scope.** The run loop builds a per-cycle `RequestContext` with `withAgentId(agentId)` always, plus `withTaskId(pickedTask.getKey())` and `withSessionId(...)` when applicable. This ctx is what the transition Job runs under, so any venue op invoked from inside the transition (directly or via the LLM tool loop) sees the correct scope without explicit input args.
+
+**Completion ordering (deferred drain).** `agent:complete_task` / `agent:fail_task` do not finish the caller's pending Job inline. They park a completion envelope (`{id, status, output|error}`) into a per-agent `deferredCompletions` map and return synchronously. The run loop, after the transition returns, drains this map to build the cycle's `taskResults` field, then commits via `mergeRunResult`, and only **then** completes (or fails) the pending Jobs identified in the drained envelopes. This ordering is load-bearing: it guarantees that any caller blocked on `Job.awaitResult` observes the timeline and lattice writes for its task before its `awaitResult` call returns. Without the deferral, the venue op would race the framework's timeline write and callers could see an empty `taskResults` immediately after their awaitResult unblocked.
+
+The framework around the transition:
+
+1. Resolves or mints the session before invoking (§5.4)
+2. Reads `n/`, `c/`, `history`, `pending` (and `t` if a task is focused) from the lattice
+3. Builds a RequestContext scoped to `(agent, session, task?, jobId)` so writes and completion ops route correctly
+4. Provides the snapshots as transition input under their shorthand names
+5. Invokes the transition adapter
+6. On adapter return:
+   - If return value non-null → append turn to `c/history`
+   - If chat picked: complete chat Job with return value (yield only if return is null — rare)
+   - If task picked: completed iff `agent:complete_task` / `agent:fail_task` was invoked during transition; otherwise yield, apply falloff (§6.3)
+   - If message picked: no completion concept (return value already emitted to history)
+7. On adapter throw → if task/chat picked, Job → FAILED with *technical* error (distinct from `fail_task` semantic failure)
+8. Returns the sessionId in the response envelope (always)
+
+Stateless adapters (pure extraction, one-shot classifiers) just invoke `agent:complete_task(result)` and return. Their session becomes a one-turn audit record.
+
+### 6.3 Yield, falloff, and timeouts
+
+For task work, the framework distinguishes **completed** from **yield** by observing whether `agent:complete_task` / `agent:fail_task` was invoked during the transition. Queue state is authoritative — the Job is the system of record (set by the completion op), the task entry is the in-flight instruction (removed by the completion op). For chat work, completion is determined by the return value (non-null = complete; null = yield, rare).
+
+**Yield semantics.** A task cycle that exits without invoking a completion op yields — the run loop exits the active wake, the agent returns to SLEEPING, and the task stays in the `tasks` Index for next time. Yield is the natural way to express:
+
+- **Long-running task in progress** — agent kicked off a delegated op via async invoke (§3.4.2), recorded it in `t`, and is waiting for the callback
+- **Multi-step planning** — agent did internal work (lattice writes to `n` / `c` / `t`) but isn't ready to complete
+- **Agent had nothing useful to say** — transient false wake; loop exits cleanly
+
+The picked task resumes on the next wake. Wake sources:
+
+- **Delegated op completes** — the `pending` Index entry resolves, framework wakes the agent
+- **`agent_message` arrives** — sets the wake flag
+- **`agent_trigger` called** — explicit nudge
+- **Scheduled timer** — once B8.8 lands
+
+**Per-task exponential falloff.** A task that yields without progress is not capped or auto-failed — it just gets rescheduled further out each time. On every yield: increment a `yields` counter on the task record and set `nextWake = now + base * 2^yields` (capped at e.g. 1 day). The scheduler (B8.8) wakes the agent at `nextWake`. Any progress — completion, fail, message arrival, delegated op callback, explicit trigger — clears the counter. Yielded tasks aren't burning resources, they're dormant.
+
+**Optional task timeout.** Tasks may carry an optional `timeout` field (caller-settable on `agent_request`); default very long (e.g. weeks) or absent. The framework checks `timeout` at pick time — if exceeded, the task is auto-failed with `timeout` error before invoking the agent. Callers that want a tight deadline set their own; the framework imposes none by default.
+
+**Technical errors.** If the transition adapter throws (e.g., LLM API failure, lattice error), the framework catches it. If a task or chat was picked, the Job is failed with a *technical* error (distinct from `agent:fail_task`'s semantic failure). The task entry is removed / chat slot cleared in both cases; the difference is recorded in the Job's failure reason.
+
+**Layering: framework vs tool loop.** The framework only sees venue ops being invoked (`agent:complete_task`, `agent:fail_task`) and the adapter's return value. There is no LLM-specific concept at the framework layer. Inside LLMAgentAdapter, the tool loop wraps these as named tools the LLM can call:
+
+- `complete_task` tool → invokes `agent:complete_task`, exits loop with the result as the return value
+- `fail_task` tool → invokes `agent:fail_task`, exits loop
+- Plain text response from the LLM (no tool calls) → exits loop with the text as the return value
+
+For chat, plain text response naturally completes the chat Job (return value flows through). For tasks, plain text response does *not* complete the task — the LLM must call `complete_task` explicitly. This matches the explicit-completion model for tool-using LLMs.
+
+There is no separate `yield` tool. Yield is what happens when the loop exits for a task without `complete_task` having been called — purely emergent from tool-loop behaviour, not a framework primitive.
+
+Non-LLM adapters call the venue ops directly with no tool-loop layer.
 
 ### 6.2 Adapter selection
 
@@ -517,8 +588,10 @@ The API surface is additive at the envelope level (new `sessionId` field in requ
 |-------|-------|---------|
 | **0 (now)** | Design doc + open questions | This file |
 | **1** | Session storage + session envelope + single transition contract | Every invocation runs in a session; `sessionId` in request/response envelope; per-session history at `g/<agent>/sessions/<sid>/`; chatbot demo |
-| **2** | Session ops | `agent:sessionList`, `agent:sessionInfo`, `agent:sessionArchive`; lattice discovery at `g/<agent>/sessions/` |
-| **3** | Timeline rework | Move heavy data to per-session history; agent timeline becomes a thin audit log keyed by session id |
+| **2.1–2.6** | Session lattice slot + sessionId on intake/inbox + ensureSession + one-session-per-cycle inbox demux | ✓ Done (Stage 2.6 complete; sessions auto-minted, inbox demuxes by session, one session active per transition cycle) |
+| **2.7** | Single response value contract; explicit task completion via venue ops | Transition adapter returns `ACell response` (or null) — appended to `c/history` if non-null. For chat picked: return value completes chat Job. For task picked: completion is explicit via `agent:complete_task` / `agent:fail_task` ops invoked during transition (framework reads RequestContext for `agentId`/`taskId`/`jobId`). State writes via `covia_write` (RequestContext-scoped to `n`/`c`/`t`). No `agent:yield` op — yield is the natural state when no completion op was invoked. No `agent:complete_chat` — chat completes via return. LLM tool loop wraps `complete_task` / `fail_task` as tools; plain-text response = return value (auto-completes chat, yields for task). Yields → exponential falloff on per-task `nextWake`; optional caller-settable `timeout`, default very long. |
+| **2.8** | Add `agent_chat` op + session-scoped chat slot | Caller awaits next `response` on the session; mints session on first contact, continues existing session normally. A2A `message/send` analogue. |
+| **3** | Per-session history population | Append turn records to `g/<agent>/sessions/<sid>/history` on every transition. Move heavy result data off the flat timeline and into per-session history; agent timeline becomes a thin audit log keyed by session id |
 | **4** | Lifecycle automation | Auto-idle, auto-archive, suspended sessions |
 | **5** | Adapter unification (§6.4) | Merge `llmagent:chat` and `goaltree:chat` into one flag-driven adapter; uniform harness tools (`more_tools` etc.) across both modes; persistable frame stack per session |
 | **6** | Memory layer | Separate epic; episodic/semantic/procedural memory across sessions |

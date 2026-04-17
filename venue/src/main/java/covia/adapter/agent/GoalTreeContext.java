@@ -102,6 +102,10 @@ public class GoalTreeContext {
 	 */
 	public static String describeMessage(ACell message) {
 		AString content = RT.ensureString(RT.getIn(message, K_CONTENT));
+		if (content == null) {
+			// Chat/message envelopes use "message" not "content"
+			content = RT.ensureString(RT.getIn(message, Strings.intern("message")));
+		}
 		AString caller = RT.ensureString(RT.getIn(message, Strings.intern("caller")));
 		String text = (content != null) ? truncate(content.toString(), 200) : "(empty message)";
 		if (caller != null) {

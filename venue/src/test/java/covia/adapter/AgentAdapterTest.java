@@ -508,6 +508,646 @@ public class AgentAdapterTest {
 		}
 	}
 
+	// ========== agent:chat ==========
+
+	/**
+	 * Standard LLM-backed chat agent for chat tests. Uses {@code v/test/ops/llm}
+	 * which echoes the last user message as the assistant content; the
+	 * {@code llmagent:chat} transition surfaces that as the {@code response}
+	 * value the framework completes the chat Job with.
+	 */
+	private void createChatAgent(String agentId) {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, agentId,
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
+				AgentState.KEY_STATE, Maps.of(
+					"config", Maps.of(
+						"llmOperation", "v/test/ops/llm",
+						"systemPrompt", "Echo the user."
+					)
+				)
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+	}
+
+	@Test
+	public void testChatMintsSessionAndReturnsResponse() {
+		createChatAgent("chat-agent");
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "chat-agent", Fields.MESSAGE, Strings.create("hello")),
+			RequestContext.of(ALICE_DID));
+
+		ACell result = chatJob.awaitResult(5000);
+		assertNotNull(result, "Chat must complete with a response");
+		assertEquals(Strings.create("chat-agent"), RT.getIn(result, Fields.AGENT_ID));
+		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
+		assertNotNull(sidHex, "Chat response must include the minted sessionId");
+		assertNotNull(RT.getIn(result, Fields.RESPONSE), "Chat response must include the agent's response");
+
+		// Verify the chat slot was cleared after completion
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("chat-agent");
+		Blob sid = Blob.fromHex(sidHex.toString());
+		assertNull(agent.getChatJob(sid), "Chat slot should be cleared after completion");
+	}
+
+	@Test
+	public void testChatContinuesKnownSession() {
+		createChatAgent("chat-cont-agent");
+
+		// First chat — mint session
+		Job first = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "chat-cont-agent", Fields.MESSAGE, Strings.create("first")),
+			RequestContext.of(ALICE_DID));
+		ACell firstResult = first.awaitResult(5000);
+		AString sidHex = RT.ensureString(RT.getIn(firstResult, Fields.SESSION_ID));
+		assertNotNull(sidHex);
+
+		// Second chat — echo session id
+		Job second = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(
+				Fields.AGENT_ID,   "chat-cont-agent",
+				Fields.SESSION_ID, sidHex,
+				Fields.MESSAGE,    Strings.create("second")),
+			RequestContext.of(ALICE_DID));
+		ACell secondResult = second.awaitResult(5000);
+		assertNotNull(secondResult);
+		assertEquals(sidHex, RT.getIn(secondResult, Fields.SESSION_ID),
+			"Second chat must echo the same session id");
+	}
+
+	@Test
+	public void testChatRejectsUnknownSession() {
+		createChatAgent("chat-reject-agent");
+
+		// Random non-existent sid (well-formed hex, never minted)
+		String fakeSid = "00000000000000000000000000000000";
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(
+				Fields.AGENT_ID,   "chat-reject-agent",
+				Fields.SESSION_ID, Strings.create(fakeSid),
+				Fields.MESSAGE,    Strings.create("hi")),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			chatJob.awaitResult(5000);
+			fail("Chat with unknown sessionId must fail");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, chatJob.getStatus());
+		}
+	}
+
+	@Test
+	public void testChatRejectsConcurrentOnSameSession() throws InterruptedException {
+		// Use a long-running LLM op so the first chat stays in flight while
+		// the second arrives. v/test/ops/delay holds the transition open.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "chat-busy-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
+				AgentState.KEY_STATE, Maps.of(
+					"config", Maps.of(
+						// Wrap delay around the L3 call by using the standard llm op
+						// but with a slow llm. Easiest: use test:delay-llm if it exists,
+						// otherwise just attempt a second call quickly.
+						"llmOperation", "v/test/ops/llm",
+						"systemPrompt", "Echo the user."
+					)
+				)
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("chat-busy-agent");
+
+		// Pre-create a session and reserve its chat slot manually to force
+		// the second-chat-on-busy-session error path deterministically.
+		Blob sid = Blob.fromHex("11111111111111111111111111111111");
+		agent.ensureSession(sid, ALICE_DID);
+		Blob fakeJobId = Blob.fromHex(
+			"00000000000000000000000000000001000000000000000000000000000000bb");
+		assertTrue(agent.tryReserveChatSlot(sid, fakeJobId),
+			"First reservation should succeed");
+
+		// Now an agent_chat on the same session must fail fast
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(
+				Fields.AGENT_ID,   "chat-busy-agent",
+				Fields.SESSION_ID, Strings.create(sid.toHexString()),
+				Fields.MESSAGE,    Strings.create("hi")),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			chatJob.awaitResult(5000);
+			fail("Concurrent chat on same session must be rejected");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, chatJob.getStatus());
+		}
+	}
+
+	@Test
+	public void testChatRequiresMessage() {
+		createChatAgent("chat-msg-agent");
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "chat-msg-agent"),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			chatJob.awaitResult(5000);
+			fail("Chat without message must fail");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, chatJob.getStatus());
+		}
+	}
+
+	// ========== S3a — session.history append ==========
+
+	/**
+	 * After a successful chat, the framework must have appended a user turn
+	 * (the chat message) and an assistant turn (the response) to the
+	 * picked session's history vector. Each turn carries
+	 * {role, content, ts, source}; meta.turns increments accordingly.
+	 *
+	 * <p>Note: S3a only appends turns derived from picked-task input or
+	 * leanResponse. Chat messages go via inbox in S3a and are NOT yet
+	 * surfaced as user turns from history (that's S3b). So we expect
+	 * exactly one assistant turn, sourced from the transition.</p>
+	 */
+	@Test
+	public void testTransitionAppendsResponseToSessionHistory() {
+		createChatAgent("hist-resp-agent");
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "hist-resp-agent", Fields.MESSAGE, Strings.create("hello")),
+			RequestContext.of(ALICE_DID));
+		ACell result = chatJob.awaitResult(5000);
+		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
+		assertNotNull(sidHex);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("hist-resp-agent");
+		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sidHex.toString()));
+		assertNotNull(session, "Session record must exist");
+
+		AVector<ACell> history = (AVector<ACell>) session.get(Strings.intern("history"));
+		assertNotNull(history, "Session must have a history vector");
+		assertEquals(2, history.count(),
+			"Chat cycle appends user turn (chat message) + assistant turn");
+
+		AMap<AString, ACell> userTurn = (AMap<AString, ACell>) history.get(0);
+		assertEquals(AgentState.ROLE_USER, userTurn.get(AgentState.K_ROLE));
+		assertEquals(AgentState.SOURCE_CHAT, userTurn.get(AgentState.K_SOURCE));
+		assertEquals(Strings.create("hello"), userTurn.get(AgentState.K_CONTENT));
+
+		AMap<AString, ACell> assistantTurn = (AMap<AString, ACell>) history.get(1);
+		assertEquals(AgentState.ROLE_ASSISTANT, assistantTurn.get(AgentState.K_ROLE));
+		assertEquals(AgentState.SOURCE_TRANSITION, assistantTurn.get(AgentState.K_SOURCE));
+		assertNotNull(assistantTurn.get(AgentState.K_CONTENT), "Turn must carry content");
+		assertNotNull(assistantTurn.get(AgentState.K_TURN_TS), "Turn must carry timestamp");
+		assertTrue(assistantTurn.get(AgentState.K_TURN_TS) instanceof CVMLong, "ts must be CVMLong");
+
+		// meta.turns should be 2 (user + assistant)
+		AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(Strings.intern("meta"));
+		assertEquals(CVMLong.create(2), meta.get(Strings.intern("turns")),
+			"meta.turns must reflect appended turn count");
+	}
+
+	/**
+	 * When a task is picked, its input becomes a user/request turn appended
+	 * to the picked session's history alongside the assistant response.
+	 */
+	@Test
+	public void testTransitionAppendsTaskInputAsUserTurn() {
+		// Use v/test/ops/taskcomplete — it completes the task in a single
+		// cycle and returns a `response`, giving us both user and assistant
+		// turns deterministically.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "hist-task-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Blob sid = Blob.fromHex("22222222222222222222222222222222");
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("hist-task-agent");
+		agent.ensureSession(sid, ALICE_DID);
+
+		Job reqJob = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(
+				Fields.AGENT_ID, "hist-task-agent",
+				Fields.SESSION_ID, Strings.create(sid.toHexString()),
+				Fields.INPUT, Strings.create("do thing"),
+				Fields.WAIT, CVMLong.create(5000)),
+			RequestContext.of(ALICE_DID));
+		reqJob.awaitResult(5000);
+
+		try { agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS); }
+		catch (Exception e) { fail("Agent did not return to SLEEPING: " + e); }
+
+		AMap<AString, ACell> session = agent.getSession(sid);
+		AVector<ACell> history = (AVector<ACell>) session.get(Strings.intern("history"));
+		assertEquals(2, history.count(),
+			"Picked task + response cycle appends two turns (user, assistant)");
+
+		AMap<AString, ACell> userTurn = (AMap<AString, ACell>) history.get(0);
+		assertEquals(AgentState.ROLE_USER, userTurn.get(AgentState.K_ROLE));
+		assertEquals(AgentState.SOURCE_REQUEST, userTurn.get(AgentState.K_SOURCE));
+		assertEquals(Strings.create("do thing"), userTurn.get(AgentState.K_CONTENT));
+
+		AMap<AString, ACell> assistantTurn = (AMap<AString, ACell>) history.get(1);
+		assertEquals(AgentState.ROLE_ASSISTANT, assistantTurn.get(AgentState.K_ROLE));
+		assertEquals(AgentState.SOURCE_TRANSITION, assistantTurn.get(AgentState.K_SOURCE));
+	}
+
+	/**
+	 * Errored cycles append no turns. {@code leanError != null} must skip
+	 * history population entirely so the audit trail doesn't claim a
+	 * conversation turn that the agent failed to produce.
+	 */
+	@Test
+	public void testErrorResponseDoesNotAppendTurn() {
+		// Use the test echo-llm agent but break the L3 op to force an error path.
+		// Simplest: create an agent whose transition op returns an error.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "hist-err-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
+				AgentState.KEY_STATE, Maps.of(
+					"config", Maps.of(
+						"llmOperation", "v/test/ops/error",
+						"systemPrompt", "x"
+					)
+				)
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "hist-err-agent", Fields.MESSAGE, Strings.create("x")),
+			RequestContext.of(ALICE_DID));
+		try { chatJob.awaitResult(5000); } catch (Exception ignored) {}
+
+		// Find the minted session via agent state — chat slot should be cleared
+		// either way, but we want any session that exists to have empty history.
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("hist-err-agent");
+		var sessions = agent.getSessions();
+		if (sessions.count() == 0) return; // No session minted — nothing to assert
+		for (var entry : sessions.entrySet()) {
+			AMap<AString, ACell> session = (AMap<AString, ACell>) entry.getValue();
+			AVector<ACell> history = (AVector<ACell>) session.get(Strings.intern("history"));
+			assertEquals(0, history.count(),
+				"Errored cycle must not append any turns to history");
+		}
+	}
+
+	/**
+	 * History must accumulate across multiple chat turns on the same session,
+	 * with order preserved (oldest first) and meta.turns reflecting the
+	 * cumulative count.
+	 */
+	@Test
+	public void testHistoryCarriesAcrossMultipleCycles() {
+		createChatAgent("hist-multi-agent");
+
+		Job first = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "hist-multi-agent", Fields.MESSAGE, Strings.create("one")),
+			RequestContext.of(ALICE_DID));
+		ACell firstResult = first.awaitResult(5000);
+		AString sidHex = RT.ensureString(RT.getIn(firstResult, Fields.SESSION_ID));
+
+		Job second = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(
+				Fields.AGENT_ID,   "hist-multi-agent",
+				Fields.SESSION_ID, sidHex,
+				Fields.MESSAGE,    Strings.create("two")),
+			RequestContext.of(ALICE_DID));
+		second.awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("hist-multi-agent");
+		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sidHex.toString()));
+		AVector<ACell> history = (AVector<ACell>) session.get(Strings.intern("history"));
+		assertEquals(4, history.count(),
+			"Two chat cycles: each appends user+assistant = 4 turns total");
+
+		// Turn order: [user1, assistant1, user2, assistant2]
+		assertEquals(AgentState.ROLE_USER, RT.getIn(history.get(0), AgentState.K_ROLE));
+		assertEquals(Strings.create("one"), RT.getIn(history.get(0), AgentState.K_CONTENT));
+		assertEquals(AgentState.ROLE_ASSISTANT, RT.getIn(history.get(1), AgentState.K_ROLE));
+		assertEquals(AgentState.ROLE_USER, RT.getIn(history.get(2), AgentState.K_ROLE));
+		assertEquals(Strings.create("two"), RT.getIn(history.get(2), AgentState.K_CONTENT));
+		assertEquals(AgentState.ROLE_ASSISTANT, RT.getIn(history.get(3), AgentState.K_ROLE));
+
+		AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(Strings.intern("meta"));
+		assertEquals(CVMLong.create(4), meta.get(Strings.intern("turns")));
+
+		// Order preserved: ts of all turns must be non-decreasing
+		long prev = 0;
+		for (long i = 0; i < history.count(); i++) {
+			long ts = ((CVMLong) RT.getIn(history.get(i), AgentState.K_TURN_TS)).longValue();
+			assertTrue(ts >= prev, "History order must be chronological at index " + i);
+			prev = ts;
+		}
+	}
+
+	// ========== S3b — session map in transition input + dual-write ==========
+
+	/**
+	 * S3b dual-write: a chat must land in both {@code agent.inbox} (legacy)
+	 * and {@code session.pending} (new). After the cycle runs, both should
+	 * be drained for the consumed session.
+	 */
+	@Test
+	public void testChatDualWritesToSessionPending() throws Exception {
+		// Create the agent, mint a session manually, then deliver a chat —
+		// but block the run loop so we can observe the dual-write before the
+		// cycle drains it. Simplest: pre-reserve the chat slot so the actual
+		// agent_chat fails fast, leaving the manually-injected message visible.
+		// Even simpler: use agent_message (no slot reservation) and observe.
+		createChatAgent("s3b-dualwrite-agent");
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("s3b-dualwrite-agent");
+
+		// Suspend agent so messages queue without being consumed
+		engine.jobs().invokeOperation(
+			"v/ops/agent/suspend",
+			Maps.of(Fields.AGENT_ID, "s3b-dualwrite-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Blob sid = Blob.fromHex("33333333333333333333333333333333");
+		agent.ensureSession(sid, ALICE_DID);
+
+		Job msgJob = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(
+				Fields.AGENT_ID,   "s3b-dualwrite-agent",
+				Fields.SESSION_ID, Strings.create(sid.toHexString()),
+				Fields.MESSAGE,    Strings.create("hi there")),
+			RequestContext.of(ALICE_DID));
+		msgJob.awaitResult(5000);
+
+		// Both channels should hold the message
+		assertEquals(1, agent.getInbox().count(),
+			"Inbox must hold the message (legacy channel)");
+		AVector<ACell> sessionPending = agent.getSessionPending(sid);
+		assertEquals(1, sessionPending.count(),
+			"session.pending must also hold the message (S3b new channel)");
+		// Envelope shape preserved on both sides
+		AMap<AString, ACell> envelope = (AMap<AString, ACell>) sessionPending.get(0);
+		assertEquals(Strings.create("hi there"), envelope.get(Fields.MESSAGE));
+	}
+
+	/**
+	 * The session record carried into the transition under
+	 * {@code Fields.SESSION} must have the full {parties, meta, c, history,
+	 * pending} shape (id is associated by the run loop). We verify by
+	 * driving a chat cycle and asserting:
+	 *  (a) the session record on the lattice carries every expected key, and
+	 *  (b) the cycle observed and drained {@code session.pending} (proves
+	 *      the run loop snapshotted the record and passed the count to the
+	 *      atomic merge).
+	 */
+	@Test
+	public void testTransitionReceivesSessionMap() throws Exception {
+		createChatAgent("s3b-shape-agent");
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("s3b-shape-agent");
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "s3b-shape-agent",
+				Fields.MESSAGE, Strings.create("hi")),
+			RequestContext.of(ALICE_DID));
+		ACell result = chatJob.awaitResult(5000);
+		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
+		Blob sid = Blob.fromHex(sidHex.toString());
+
+		agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS);
+
+		AMap<AString, ACell> session = agent.getSession(sid);
+		assertNotNull(session, "Session record must exist on lattice");
+		// Keys the run loop assembles into the transition input map
+		assertNotNull(session.get(Strings.intern("meta")),    "session must have meta");
+		assertNotNull(session.get(Strings.intern("c")),       "session must have c");
+		assertNotNull(session.get(Strings.intern("history")), "session must have history");
+		assertNotNull(session.get(Strings.intern("pending")), "session must have pending");
+		// parties lives under meta
+		AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(Strings.intern("meta"));
+		assertNotNull(meta.get(Strings.intern("parties")), "meta.parties must exist");
+
+		// Drain proof — the run loop did snapshot session.pending and pass
+		// its count to mergeRunResult. (The chat-handler dual-write puts the
+		// message in session.pending; if the merge didn't drain it, count > 0.)
+		assertEquals(0, ((AVector<?>) session.get(Strings.intern("pending"))).count(),
+			"session.pending must have been drained by the cycle");
+	}
+
+	/**
+	 * After a cycle consumes the session's pending messages, the session
+	 * pending vector must be drained. Tail messages arriving during the
+	 * transition are preserved (tested implicitly via count semantics in
+	 * the merge — here we just verify the basic drain).
+	 */
+	@Test
+	public void testSessionPendingDrainsAfterCycle() throws Exception {
+		createChatAgent("s3b-drain-agent");
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("s3b-drain-agent");
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "s3b-drain-agent",
+				Fields.MESSAGE, Strings.create("hello")),
+			RequestContext.of(ALICE_DID));
+		ACell result = chatJob.awaitResult(5000);
+		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
+		Blob sid = Blob.fromHex(sidHex.toString());
+
+		agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS);
+
+		AVector<ACell> sessionPending = agent.getSessionPending(sid);
+		assertEquals(0, sessionPending.count(),
+			"session.pending must be drained after the cycle consumes its messages");
+	}
+
+	/**
+	 * Symmetric to the chat dual-write test but for {@code agent_message}
+	 * — confirms the dual-write happens regardless of which intake op
+	 * delivered the message.
+	 */
+	@Test
+	public void testMessageDualWritesToSessionPending() throws Exception {
+		createChatAgent("s3b-msg-dualwrite-agent");
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("s3b-msg-dualwrite-agent");
+
+		// Suspend so messages queue
+		engine.jobs().invokeOperation(
+			"v/ops/agent/suspend",
+			Maps.of(Fields.AGENT_ID, "s3b-msg-dualwrite-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Blob sid = Blob.fromHex("55555555555555555555555555555555");
+		agent.ensureSession(sid, ALICE_DID);
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(
+				Fields.AGENT_ID,   "s3b-msg-dualwrite-agent",
+				Fields.SESSION_ID, Strings.create(sid.toHexString()),
+				Fields.MESSAGE,    Strings.create("a")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(
+				Fields.AGENT_ID,   "s3b-msg-dualwrite-agent",
+				Fields.SESSION_ID, Strings.create(sid.toHexString()),
+				Fields.MESSAGE,    Strings.create("b")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		assertEquals(2, agent.getInbox().count());
+		AVector<ACell> pending = agent.getSessionPending(sid);
+		assertEquals(2, pending.count(), "Both messages must appear in session.pending");
+		assertEquals(Strings.create("a"),
+			((AMap<AString, ACell>) pending.get(0)).get(Fields.MESSAGE));
+		assertEquals(Strings.create("b"),
+			((AMap<AString, ACell>) pending.get(1)).get(Fields.MESSAGE));
+	}
+
+	// ========== S3c — adapters prefer session.history / session.pending ==========
+
+	/**
+	 * S3c read priority: when a transition input carries both
+	 * {@code session.pending} (S3b dual-write) and the legacy
+	 * {@code Fields.MESSAGES}, {@link AgentAdapter#effectiveMessages} must
+	 * return {@code session.pending} — reading both would duplicate.
+	 */
+	@Test
+	public void testEffectiveMessagesPrefersSessionPending() {
+		AVector<ACell> sessionPending = Vectors.of(
+			Maps.of(Fields.MESSAGE, Strings.create("from-session")));
+		AVector<ACell> legacyMessages = Vectors.of(
+			Maps.of(Fields.MESSAGE, Strings.create("from-legacy")));
+		AMap<AString, ACell> session = Maps.of(
+			AgentState.KEY_PENDING, sessionPending,
+			AgentState.KEY_HISTORY, Vectors.empty());
+		AMap<AString, ACell> input = Maps.of(
+			Fields.SESSION,  session,
+			Fields.MESSAGES, legacyMessages);
+
+		AVector<ACell> effective = AgentAdapter.effectiveMessages(input);
+		assertEquals(1, effective.count(),
+			"Must take session.pending only — not concatenate with messages");
+		assertEquals(Strings.create("from-session"),
+			RT.getIn(effective.get(0), Fields.MESSAGE),
+			"Must be the session.pending entry, not the legacy messages entry");
+	}
+
+	/**
+	 * S3c read priority fallback: with no session in the input,
+	 * {@link AgentAdapter#effectiveMessages} returns {@code Fields.MESSAGES}.
+	 * Returns empty (never null) when neither source has anything.
+	 */
+	@Test
+	public void testEffectiveMessagesFallsBackToInputMessages() {
+		AVector<ACell> legacyMessages = Vectors.of(
+			Maps.of(Fields.MESSAGE, Strings.create("legacy-only")));
+		AMap<AString, ACell> input = Maps.of(Fields.MESSAGES, legacyMessages);
+
+		AVector<ACell> effective = AgentAdapter.effectiveMessages(input);
+		assertEquals(1, effective.count());
+		assertEquals(Strings.create("legacy-only"),
+			RT.getIn(effective.get(0), Fields.MESSAGE));
+
+		// Empty input → empty (not null)
+		AVector<ACell> empty = AgentAdapter.effectiveMessages(Maps.empty());
+		assertNotNull(empty, "Must return empty vector, not null");
+		assertEquals(0, empty.count());
+	}
+
+	/**
+	 * S3c read priority for transcript: {@link AgentAdapter#sessionHistory}
+	 * returns the {@code session.history} vector when a session is present,
+	 * else {@code null} so callers can fall back to their own state.
+	 */
+	@Test
+	public void testSessionHistoryHelper() {
+		AVector<ACell> turns = Vectors.of(
+			Maps.of(AgentState.K_ROLE, AgentState.ROLE_USER,
+				AgentState.K_CONTENT, Strings.create("hi")));
+		AMap<AString, ACell> session = Maps.of(
+			AgentState.KEY_HISTORY, turns,
+			AgentState.KEY_PENDING, Vectors.empty());
+		AMap<AString, ACell> withSession = Maps.of(Fields.SESSION, session);
+		AVector<ACell> got = AgentAdapter.sessionHistory(withSession);
+		assertNotNull(got);
+		assertEquals(1, got.count());
+
+		// No session → null sentinel (caller falls back to state.transcript)
+		assertNull(AgentAdapter.sessionHistory(Maps.empty()),
+			"Null when no session in scope");
+	}
+
+	/**
+	 * S3c transcript conversion: ContextBuilder.withSessionHistory must
+	 * convert each turn envelope {role, content, ts, source} into a plain
+	 * LLM message {role, content}. Tool-call interleaving from across-turn
+	 * tool sequences is not preserved (this is the documented contract).
+	 */
+	@Test
+	public void testWithSessionHistoryConvertsTurnsToLLMMessages() {
+		AVector<ACell> turns = Vectors.of(
+			(ACell) Maps.of(
+				AgentState.K_ROLE,    AgentState.ROLE_USER,
+				AgentState.K_CONTENT, Strings.create("what's 2+2?"),
+				AgentState.K_TURN_TS, CVMLong.create(100L),
+				AgentState.K_SOURCE,  AgentState.SOURCE_REQUEST),
+			(ACell) Maps.of(
+				AgentState.K_ROLE,    AgentState.ROLE_ASSISTANT,
+				AgentState.K_CONTENT, Strings.create("4"),
+				AgentState.K_TURN_TS, CVMLong.create(200L),
+				AgentState.K_SOURCE,  AgentState.SOURCE_TRANSITION));
+
+		ContextBuilder builder = new ContextBuilder(engine, RequestContext.of(ALICE_DID));
+		ContextBuilder.ContextResult result = builder
+			.withSessionHistory(turns)
+			.withTools()
+			.build();
+
+		AVector<ACell> llmMessages = result.history();
+		assertEquals(2, llmMessages.count(), "Two turns → two LLM messages");
+
+		AMap<AString, ACell> first = (AMap<AString, ACell>) llmMessages.get(0);
+		assertEquals(AgentState.ROLE_USER, first.get(Strings.intern("role")));
+		assertEquals(Strings.create("what's 2+2?"), first.get(Strings.intern("content")));
+		// ts and source are dropped — vendor APIs require {role, content} only
+		assertNull(first.get(AgentState.K_TURN_TS), "ts must be dropped");
+		assertNull(first.get(AgentState.K_SOURCE),  "source must be dropped");
+
+		AMap<AString, ACell> second = (AMap<AString, ACell>) llmMessages.get(1);
+		assertEquals(AgentState.ROLE_ASSISTANT, second.get(Strings.intern("role")));
+		assertEquals(Strings.create("4"), second.get(Strings.intern("content")));
+	}
+
 	// ========== agent:trigger ==========
 
 	@Test
@@ -1089,6 +1729,106 @@ public class AgentAdapterTest {
 		assertEquals(userPayload, completed,
 			"Lean transition's response.completed should echo newInput");
 		assertEquals(Status.COMPLETE, RT.ensureString(RT.getIn(envelope, Fields.STATUS)));
+	}
+
+	// ========== Sub-stage 2.7c — agent:complete-task / agent:fail-task contract ==========
+
+	/**
+	 * Direct invocation of {@code agent:complete-task} without an enclosing
+	 * cycle context (no agentId/taskId in RequestContext) must fail —
+	 * callers cannot complete arbitrary tasks; the op only accepts the task
+	 * the framework currently has in scope.
+	 */
+	@Test
+	public void testCompleteTaskRejectsUnscopedCall() {
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/complete-task",
+			Maps.of(Fields.RESULT, Strings.create("nope")),
+			RequestContext.of(ALICE_DID));
+		assertThrows(covia.exception.JobFailedException.class, () -> job.awaitResult(2000),
+			"complete-task must reject calls without (agentId, taskId) scope");
+		assertEquals(Status.FAILED, job.getStatus());
+	}
+
+	@Test
+	public void testFailTaskRejectsUnscopedCall() {
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/fail-task",
+			Maps.of(Fields.ERROR, Strings.create("oops")),
+			RequestContext.of(ALICE_DID));
+		assertThrows(covia.exception.JobFailedException.class, () -> job.awaitResult(2000),
+			"fail-task must reject calls without (agentId, taskId) scope");
+		assertEquals(Status.FAILED, job.getStatus());
+	}
+
+	/**
+	 * Ordering invariant: a caller's {@code awaitResult} must observe the
+	 * cycle's timeline write before returning. The venue op parks a deferred
+	 * completion; the framework drains it after {@code mergeRunResult}, so
+	 * the timeline is durable by the time the pending Job completes.
+	 *
+	 * <p>If this regresses, completion would race with the merge and the
+	 * caller could see an empty timeline immediately after a successful
+	 * task return — exactly the bug fixed in S2.7c‑2.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	@Test
+	public void testCallerSeesTimelineAfterAwait() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "ordering-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job req = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "ordering-agent",
+				Fields.INPUT, Maps.of("q", "ordering"),
+				Fields.WAIT, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		req.awaitResult(5000);
+
+		// awaitResult returned — timeline MUST be visible at this point.
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("ordering-agent");
+		AVector<ACell> timeline = agent.getTimeline();
+		assertNotNull(timeline);
+		assertEquals(1, timeline.count(),
+			"Timeline entry must be persisted before awaitResult returns");
+		ACell taskResults = RT.getIn(timeline.get(0), Fields.TASK_RESULTS);
+		assertNotNull(taskResults, "Cycle must record taskResults from the deferred completion");
+	}
+
+	/**
+	 * Envelope shape: a successful task completion produces a Job envelope
+	 * with id/status/output, and the agent's task Index is empty afterward.
+	 * Verifies the venue op cleans up state and the framework forwards the
+	 * envelope unchanged to the caller.
+	 */
+	@Test
+	public void testCompleteTaskEnvelopeShape() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "envelope-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job req = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "envelope-agent",
+				Fields.INPUT, Maps.of("q", "envelope"),
+				Fields.WAIT, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		ACell envelope = req.awaitResult(5000);
+
+		assertEquals(Status.COMPLETE, RT.ensureString(RT.getIn(envelope, Fields.STATUS)));
+		assertNotNull(RT.getIn(envelope, Fields.ID), "Envelope must carry the task/job id");
+		assertNotNull(RT.getIn(envelope, Fields.OUTPUT), "Envelope must carry the task output");
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("envelope-agent");
+		assertEquals(0, agent.getTasks().count(),
+			"Venue op must remove the task entry from the agent's Index");
 	}
 
 	// ========== agent:request — sync/async consistency ==========

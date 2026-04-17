@@ -1,0 +1,27 @@
+{
+    "name": "Fail Agent Task",
+    "description": "Explicitly marks the in-scope task as failed. Invoked by an agent transition (typically as an LLM tool call) to surface a non-recoverable error to the caller. The agentId and taskId are read from the request context — the framework populates them when dispatching a task transition. Without a task in scope the call fails. Side effects: fails the pending task Job with the supplied error message and removes the task from the agent's task queue.",
+    "dateCreated": "2026-04-16T00:00:00Z",
+    "operation": {
+        "adapter": "agent:failTask",
+        "toolName": "agent_fail_task",
+        "input": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string",
+                    "description": "Human-readable error message describing why the task failed."
+                }
+            },
+            "required": ["error"]
+        },
+        "output": {
+            "type": "object",
+            "properties": {
+                "agentId": { "type": "string" },
+                "taskId":  { "type": "string" },
+                "status":  { "type": "string", "description": "Always 'FAILED'." }
+            }
+        }
+    }
+}

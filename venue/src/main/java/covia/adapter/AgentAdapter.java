@@ -80,11 +80,15 @@ public class AgentAdapter extends AAdapter {
 	/** Active transition job per agent — allows suspend to cancel running transitions */
 	private final ConcurrentHashMap<String, Job> activeTransitions = new ConcurrentHashMap<>();
 
-	/** Pending task Jobs — taskIdHex → Job. Completed by the run loop when taskResults arrive. */
-	private final ConcurrentHashMap<String, Job> pendingTaskJobs = new ConcurrentHashMap<>();
-
-	/** Counter for task ID generation */
-	private long taskIdCounter = 0;
+	/**
+	 * Per-agent deferred task completions written by {@code agent:complete-task}
+	 * and {@code agent:fail-task} during a transition cycle. The framework
+	 * drains these AFTER {@code mergeRunResult} has written the timeline, so
+	 * the caller's {@code awaitResult} only returns once the cycle is fully
+	 * persisted. Inner key is the task (== caller Job) ID.
+	 */
+	private final ConcurrentHashMap<String, ConcurrentHashMap<Blob, AMap<AString, ACell>>> deferredCompletions
+		= new ConcurrentHashMap<>();
 
 	/** Counter for session ID generation */
 	private long sessionIdCounter = 0;
@@ -104,6 +108,7 @@ public class AgentAdapter extends AAdapter {
 		installAsset("agent/create",      BASE + "create.json");
 		installAsset("agent/fork",        BASE + "fork.json");
 		installAsset("agent/request",     BASE + "request.json");
+		installAsset("agent/chat",        BASE + "chat.json");
 		installAsset("agent/message",     BASE + "message.json");
 		installAsset("agent/trigger",     BASE + "trigger.json");
 		installAsset("agent/info",        BASE + "info.json");
@@ -113,7 +118,9 @@ public class AgentAdapter extends AAdapter {
 		installAsset("agent/suspend",     BASE + "suspend.json");
 		installAsset("agent/resume",      BASE + "resume.json");
 		installAsset("agent/update",      BASE + "update.json");
-		installAsset("agent/cancel-task", BASE + "cancelTask.json");
+		installAsset("agent/cancel-task",   BASE + "cancelTask.json");
+		installAsset("agent/complete-task", BASE + "completeTask.json");
+		installAsset("agent/fail-task",     BASE + "failTask.json");
 
 		// Install standard agent templates at v/agents/templates/<name>.
 		// Discoverable via covia_list path=v/agents/templates and usable in
@@ -143,6 +150,7 @@ public class AgentAdapter extends AAdapter {
 				case "create"  -> handleCreate(job, input, ctx);
 				case "fork"    -> handleFork(job, input, ctx);
 				case "request" -> handleRequest(job, input, ctx);
+				case "chat"    -> handleChat(job, input, ctx);
 				case "message" -> handleMessage(job, input, ctx);
 				case "trigger" -> handleTrigger(job, input, ctx);
 				case "info"    -> handleQuery(job, input, ctx);
@@ -151,9 +159,11 @@ public class AgentAdapter extends AAdapter {
 				case "delete"  -> handleDelete(job, input, ctx);
 				case "suspend" -> handleSuspend(job, input, ctx);
 				case "resume"  -> handleResume(job, input, ctx);
-				case "update"     -> handleUpdate(job, input, ctx);
-				case "cancelTask" -> handleCancelTask(job, input, ctx);
-				default           -> job.fail("Unknown agent operation: " + getSubOperation(meta));
+				case "update"       -> handleUpdate(job, input, ctx);
+				case "cancelTask"   -> handleCancelTask(job, input, ctx);
+				case "completeTask" -> handleCompleteTask(job, input, ctx);
+				case "failTask"     -> handleFailTask(job, input, ctx);
+				default             -> job.fail("Unknown agent operation: " + getSubOperation(meta));
 			}
 		} catch (Exception e) {
 			job.fail(e.getMessage());
@@ -380,13 +390,18 @@ public class AgentAdapter extends AAdapter {
 		Blob sid = resolveOrMintSession(job, agent, input, ctx.getCallerDID());
 		if (sid == null) return;
 
-		// Build canonical taskdata map (Option A — pending-queue record):
-		//   {input, caller, created, sessionId, responseSchema?, t: {}}
+		// Build canonical taskdata map: {input, caller, created, sessionId, responseSchema?, t: {}}
 		// Task rows are transient — status/result/error live on the Job record
 		// and in the agent timeline's taskResults snapshot. The 't' slot is
-		// reserved for per-task scratch; Phase 1c will wire TempNamespaceResolver
-		// to populate it.
-		Blob taskId = generateTaskId();
+		// reserved for per-task scratch.
+		//
+		// Task ID == caller's Job ID. There is no separate task identifier:
+		// the request Job is the system of record, and the task entry in the
+		// agent's tasks Index is the in-flight instruction keyed by that same
+		// ID. The run loop completes the task by completing the Job retrieved
+		// via {@code engine.jobs().getJob(taskId)} — no parallel pending-Jobs
+		// map is maintained.
+		Blob taskId = job.getID();
 		ACell taskInput = RT.getIn(input, Fields.INPUT);
 		ACell responseSchema = RT.getIn(input, Fields.RESPONSE_SCHEMA);
 		AMap<AString, ACell> taskData = Maps.of(
@@ -400,12 +415,10 @@ public class AgentAdapter extends AAdapter {
 		}
 		agent.addTask(taskId, taskData);
 
-		// Register this Job to be completed by the run loop when the task result arrives.
 		// The Job stays in STARTED state — the standard Job lifecycle (REST ?wait, SDK
-		// job.result()) handles sync vs async from the caller's perspective.
-		AString taskIdHex = taskIdHex(taskId);
+		// job.result()) handles sync vs async from the caller's perspective. The run
+		// loop will retrieve the Job by its ID (== taskId) and complete it.
 		job.setStatus(Status.STARTED);
-		pendingTaskJobs.put(taskIdHex.toString(), job);
 
 		// Wake agent to process the task — force=true because we just added a task
 		// that may not yet be visible via cursor.get() (lattice write race)
@@ -429,6 +442,11 @@ public class AgentAdapter extends AAdapter {
 			Fields.SESSION_ID, Strings.create(sid.toHexString()),
 			Fields.MESSAGE,    messageContent);
 		agent.deliverMessage(envelope);
+		// S3b dual-write: also append to the session's pending vector so
+		// transitions can read messages directly from session.pending without
+		// scanning the agent-level inbox. The inbox write above remains for
+		// backwards compatibility until S3d.
+		agent.appendSessionPending(sid, envelope);
 		wakeAgent(agentId, ctx);
 
 		job.setStatus(Status.STARTED);
@@ -436,6 +454,72 @@ public class AgentAdapter extends AAdapter {
 			Fields.AGENT_ID,   agentId,
 			Fields.SESSION_ID, Strings.create(sid.toHexString()),
 			Fields.DELIVERED,  CVMBool.TRUE));
+	}
+
+	/**
+	 * agent:chat — synchronous request for the agent's next response on a
+	 * session. Reserves a per-session chat slot, delivers the message to the
+	 * agent's inbox, wakes the agent, and leaves the Job in STARTED state.
+	 * The framework's run loop completes the Job from the transition's
+	 * {@code response} value once the agent runs (see {@link #executeRunLoop}).
+	 *
+	 * <p>A2A {@code message/send} analogue. Unlike {@code agent:request},
+	 * which puts work in the {@code tasks} Index and requires explicit
+	 * {@code agent:complete-task}, the chat path is naturally completed by
+	 * whatever the agent next emits as its response on the session.</p>
+	 *
+	 * <p>Session resolution rules (chat-strict, §5.5):</p>
+	 * <ul>
+	 *   <li>{@code sessionId} omitted → mint a new session</li>
+	 *   <li>{@code sessionId} present + known → continue that session</li>
+	 *   <li>{@code sessionId} present + unknown → fail</li>
+	 * </ul>
+	 *
+	 * <p>Only one chat may be in flight per session at a time. A second
+	 * {@code agent:chat} on a session whose slot is already reserved fails
+	 * fast — callers should wait for the first to complete or use
+	 * {@code agent:message} for queued conversational sends.</p>
+	 */
+	private void handleChat(Job job, ACell input, RequestContext ctx) {
+		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		if (agentId == null) { job.fail("agentId is required"); return; }
+
+		ACell messageContent = RT.getIn(input, Fields.MESSAGE);
+		if (messageContent == null) { job.fail("message is required"); return; }
+
+		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
+		if (agent == null) return;
+
+		Blob sid = resolveSessionForChat(job, agent, input, ctx.getCallerDID());
+		if (sid == null) return;
+		AString sidHex = Strings.create(sid.toHexString());
+
+		// Reserve the per-session chat slot. Atomic — fails fast if another
+		// chat is already in flight for this session.
+		if (!agent.tryReserveChatSlot(sid, job.getID())) {
+			job.fail("Session " + sidHex + " already has an in-flight chat");
+			return;
+		}
+
+		// Deliver the message to the agent's inbox with session envelope.
+		// Existing run-loop session demux ensures only this session's traffic
+		// is presented to the picked cycle (Sub-stage 2.6).
+		ACell envelope = Maps.of(
+			Fields.CALLER,     ctx.getCallerDID(),
+			Fields.SESSION_ID, sidHex,
+			Fields.MESSAGE,    messageContent);
+		agent.deliverMessage(envelope);
+		// S3b dual-write: also append to the session's pending vector. The
+		// inbox write above remains for backwards compatibility until S3d.
+		agent.appendSessionPending(sid, envelope);
+
+		// Stay in STARTED — the run loop will completeWith the agent's
+		// response (or fail) once the next cycle for this session runs.
+		job.setStatus(Status.STARTED);
+
+		// Force the wake — we just reserved a slot and added a message,
+		// either of which may not yet be visible via cursor.get().
+		wakeAgent(agentId, ctx, true);
 	}
 
 	private void handleTrigger(Job job, ACell input, RequestContext ctx) {
@@ -761,6 +845,143 @@ public class AgentAdapter extends AAdapter {
 			Fields.CANCELLED, CVMBool.TRUE));
 	}
 
+	/**
+	 * Completes the in-scope task with a successful result. Invoked by an
+	 * agent transition (typically as an LLM tool call) to explicitly mark
+	 * the current task done. Reads {@code agentId} and {@code taskId} from
+	 * the {@link RequestContext} — these are populated by the framework
+	 * when dispatching a task transition. Without a task in scope the call
+	 * fails.
+	 *
+	 * <p>Side effects: completes the pending task Job with the provided
+	 * {@code result} and removes the task entry from the agent's task
+	 * Index. Returns {@code {agentId, taskId, status: "COMPLETE"}}.</p>
+	 */
+	private void handleCompleteTask(Job job, ACell input, RequestContext ctx) {
+		AString agentId = ctx.getAgentId();
+		Blob taskId = ctx.getTaskId();
+		if (agentId == null || taskId == null) {
+			job.fail("agent:completeTask requires task scope (agentId + taskId in RequestContext)");
+			return;
+		}
+
+		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
+		if (agent == null) return;
+
+		Index<Blob, ACell> tasks = agent.getTasks();
+		if (tasks == null || tasks.get(taskId) == null) {
+			job.fail("Task not found: " + taskId.toHexString());
+			return;
+		}
+
+		ACell result = RT.getIn(input, Fields.RESULT);
+		parkCompletion(agentId, tasks, taskId, Status.COMPLETE, Fields.OUTPUT, result);
+		agent.removeTask(taskId);
+
+		job.setStatus(Status.STARTED);
+		job.completeWith(Maps.of(
+			Fields.AGENT_ID, agentId,
+			Fields.TASK_ID,  taskIdHex(taskId),
+			Fields.STATUS,   Status.COMPLETE));
+	}
+
+	/**
+	 * Fails the in-scope task with an error. Mirror of {@link #handleCompleteTask}
+	 * for the failure path: the pending task Job is failed with the supplied
+	 * error, the task entry is removed, and the call returns
+	 * {@code {agentId, taskId, status: "FAILED"}}.
+	 */
+	private void handleFailTask(Job job, ACell input, RequestContext ctx) {
+		AString agentId = ctx.getAgentId();
+		Blob taskId = ctx.getTaskId();
+		if (agentId == null || taskId == null) {
+			job.fail("agent:failTask requires task scope (agentId + taskId in RequestContext)");
+			return;
+		}
+
+		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
+		if (agent == null) return;
+
+		Index<Blob, ACell> tasks = agent.getTasks();
+		if (tasks == null || tasks.get(taskId) == null) {
+			job.fail("Task not found: " + taskId.toHexString());
+			return;
+		}
+
+		ACell errorCell = RT.getIn(input, Fields.ERROR);
+		AString errorStr = (errorCell == null) ? Strings.create("Task failed") : Strings.create(errorCell.toString());
+		parkCompletion(agentId, tasks, taskId, Status.FAILED, Fields.ERROR, errorStr);
+		agent.removeTask(taskId);
+
+		job.setStatus(Status.STARTED);
+		job.completeWith(Maps.of(
+			Fields.AGENT_ID, agentId,
+			Fields.TASK_ID,  taskIdHex(taskId),
+			Fields.STATUS,   Status.FAILED));
+	}
+
+	/**
+	 * Parks a completion envelope into {@link #deferredCompletions} for the
+	 * given agent. The framework drains these AFTER {@code mergeRunResult}
+	 * so the caller's {@code awaitResult} only returns once the cycle's
+	 * timeline / state writes are visible. Shared by
+	 * {@link #handleCompleteTask} and {@link #handleFailTask}.
+	 */
+	private void parkCompletion(AString agentId, Index<Blob, ACell> tasks, Blob taskId,
+			AString status, AString valueField, ACell value) {
+		AMap<AString, ACell> envelope = Maps.of(
+			Fields.ID,     taskId,
+			Fields.STATUS, status,
+			valueField,    value);
+		ACell sid = extractTaskSessionId(tasks, taskId);
+		if (sid != null) envelope = envelope.assoc(Fields.SESSION_ID, sid);
+		deferredCompletions
+			.computeIfAbsent(agentId.toString(), k -> new ConcurrentHashMap<>())
+			.put(taskId, envelope);
+	}
+
+	/**
+	 * Builds the per-cycle {@code taskResults} map from drained completion
+	 * envelopes, or returns {@code null} if there are none. The returned
+	 * map is consumed by {@code mergeRunResult} for timeline + task cleanup.
+	 */
+	private static AMap<AString, ACell> buildTaskResultsFromDeferred(
+			ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred) {
+		if (deferred == null || deferred.isEmpty()) return null;
+		AMap<AString, ACell> taskResults = Maps.empty();
+		for (var e : deferred.entrySet()) {
+			AMap<AString, ACell> envelope = e.getValue();
+			AString status = RT.ensureString(envelope.get(Fields.STATUS));
+			ACell taskEntry = Status.FAILED.equals(status)
+				? Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR,  envelope.get(Fields.ERROR))
+				: Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, envelope.get(Fields.OUTPUT));
+			taskResults = taskResults.assoc(taskIdHex(e.getKey()), taskEntry);
+		}
+		return taskResults;
+	}
+
+	/**
+	 * Completes the caller's pending task Jobs from drained completion
+	 * envelopes. MUST be called AFTER {@code mergeRunResult} so a caller
+	 * blocked on {@link Job#awaitResult} only unblocks once the cycle's
+	 * timeline + state writes are visible. Idempotent and null-safe.
+	 */
+	private void completeDeferredJobs(ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred) {
+		if (deferred == null) return;
+		for (var e : deferred.entrySet()) {
+			Job pendingJob = engine.jobs().getJob(e.getKey());
+			if (pendingJob == null || pendingJob.isFinished()) continue;
+			AMap<AString, ACell> envelope = e.getValue();
+			AString status = RT.ensureString(envelope.get(Fields.STATUS));
+			if (Status.FAILED.equals(status)) {
+				ACell err = envelope.get(Fields.ERROR);
+				pendingJob.fail(err == null ? "Task failed" : err.toString());
+			} else {
+				pendingJob.completeWith(envelope);
+			}
+		}
+	}
+
 	// ========== Wake and run management ==========
 
 	/**
@@ -950,9 +1171,38 @@ public class AgentAdapter extends AAdapter {
 			AString pickedSession = pickSessionForCycle(pickedTask, inbox);
 			AVector<ACell> filteredInbox = filterInboxBySession(inbox, pickedSession);
 
-			// Per-cycle ctx: scope to the picked task and session so t/ and
-			// c/ resolvers can address its private slot and session record.
-			RequestContext cycleCtx = ctx;
+			// Snapshot the picked session's chat slot (if any). Captured here
+			// so that a chat that arrives during the transition isn't picked
+			// up by this cycle's completion logic — it'll be handled next pass.
+			Blob pickedChatJobId = null;
+			Blob pickedSessionBlob = null;
+			AMap<AString, ACell> pickedSessionRecord = null;
+			long presentedSessionPendingCount = 0;
+			if (pickedSession != null) {
+				pickedSessionBlob = Blob.parse(pickedSession.toString());
+				if (pickedSessionBlob != null) {
+					pickedChatJobId = agent.getChatJob(pickedSessionBlob);
+					// S3b: snapshot the session record so the transition gets
+					// its full {parties, meta, c, history, pending} view, and
+					// remember the pending count so the post-transition merge
+					// drains exactly the entries this cycle saw (any messages
+					// arriving during the transition stay queued).
+					pickedSessionRecord = agent.getSession(pickedSessionBlob);
+					if (pickedSessionRecord != null) {
+						ACell pv = pickedSessionRecord.get(AgentState.KEY_PENDING);
+						if (pv instanceof AVector) {
+							presentedSessionPendingCount = ((AVector<?>) pv).count();
+						}
+					}
+				}
+			}
+
+			// Per-cycle ctx: scope to the agent, picked task, and session so
+			// path resolvers (n/, t/, c/) can address the right slot, and
+			// agent:completeTask / agent:failTask invoked during the
+			// transition can identify which agent + task they're acting on.
+			// Since taskId == caller's Job ID, no separate jobId scope is needed.
+			RequestContext cycleCtx = ctx.withAgentId(agentId);
 			if (pickedTask != null) {
 				cycleCtx = cycleCtx.withTaskId(pickedTask.getKey());
 			}
@@ -965,17 +1215,34 @@ public class AgentAdapter extends AAdapter {
 			// Lean contract surface: also pass `newInput` (the picked task's
 			// input). Old transitions ignore it; new transitions read it
 			// directly without iterating the tasks vector.
+			// Extract picked task input once — used both as transition input
+			// and (S3a) as the user-turn content if appended to history.
+			ACell pickedTaskInput = null;
+			if (pickedTask != null) {
+				pickedTaskInput = (pickedTask.getValue() instanceof AMap)
+					? ((AMap<AString, ACell>) pickedTask.getValue()).get(Fields.INPUT)
+					: pickedTask.getValue();
+			}
+
 			AMap<AString, ACell> transitionInput = Maps.of(
 				Fields.AGENT_ID, agentId,
 				AgentState.KEY_STATE, currentState,
 				Fields.TASKS, formattedTasks,
 				Fields.PENDING, resolvedPending,
 				Fields.MESSAGES, filteredInbox);
-			if (pickedTask != null) {
-				ACell pickedTaskInput = (pickedTask.getValue() instanceof AMap)
-					? ((AMap<AString, ACell>) pickedTask.getValue()).get(Fields.INPUT)
-					: pickedTask.getValue();
+			if (pickedTaskInput != null) {
 				transitionInput = transitionInput.assoc(Fields.NEW_INPUT, pickedTaskInput);
+			}
+			// S3b: surface the picked session's full record under
+			// `Fields.SESSION` for transitions that prefer reading
+			// {history, pending, c, meta, parties} directly. Includes `id`
+			// (sid hex) for convenience. Legacy `Fields.MESSAGES` /
+			// `Fields.PENDING` (agent-level) remain populated for compat
+			// until S3e migrates the contract.
+			if (pickedSessionRecord != null) {
+				AMap<AString, ACell> sessionMap = pickedSessionRecord
+					.assoc(Fields.SESSION_ID, pickedSession);
+				transitionInput = transitionInput.assoc(Fields.SESSION, sessionMap);
 			}
 			// Pass framework config separately so the transition can read caps, tools, etc.
 			AMap<AString, ACell> agentConfig = agent.getConfig();
@@ -993,27 +1260,30 @@ public class AgentAdapter extends AAdapter {
 			}
 
 			// Process results — the transition contract is now lean only:
-			//   {state?, response?, error?, taskComplete?}
+			//   {state?, response?, error?}
 			// `error` takes precedence over `response` and signals failure.
-			// When `taskComplete` is true and a task was picked this cycle,
-			// synthesise the per-task taskResults entry (FAILED with error,
-			// or COMPLETE with response). The bare run result surfaced in
-			// the timeline is the error (if any) or response, regardless
-			// of whether a task was picked, so inbox-only and message-only
-			// transitions still get a non-null timeline result.
+			// Task completion is signalled by the transition invoking
+			// agent:complete-task / agent:fail-task via the venue op, which
+			// removes the task entry and parks a completion envelope in
+			// `deferredCompletions[agentId][taskId]`. We drain that here to
+			// build the per-cycle taskResults entry. Pending Jobs are
+			// completed AFTER mergeRunResult so the caller's awaitResult only
+			// returns once the timeline / state writes are visible.
+			// The bare run result surfaced in the timeline is the error
+			// (if any) or response, regardless of whether a task was picked,
+			// so inbox-only and message-only transitions still get a non-null
+			// timeline result.
 			long endTs = Utils.getCurrentTimestamp();
 			ACell newState = RT.getIn(transitionResult, AgentState.KEY_STATE);
 			ACell leanResponse = RT.getIn(transitionResult, Fields.RESPONSE);
 			ACell leanError = RT.getIn(transitionResult, Fields.ERROR);
 
-			AMap<AString, ACell> taskResults = null;
-			if (pickedTask != null
-					&& CVMBool.TRUE.equals(RT.getIn(transitionResult, Fields.TASK_COMPLETE))) {
-				AMap<AString, ACell> taskEntry = (leanError != null)
-					? Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, leanError)
-					: Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, leanResponse);
-				taskResults = Maps.of(taskIdHex(pickedTask.getKey()), taskEntry);
-			}
+			// Peek the parked envelopes (don't remove yet) so an exception
+			// before completeDeferredJobs leaves them visible to the outer
+			// catch sweeper — the slot is only cleared after merge succeeds.
+			ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred =
+				deferredCompletions.get(agentId.toString());
+			AMap<AString, ACell> taskResults = buildTaskResultsFromDeferred(deferred);
 			ACell result = (leanError != null) ? leanError : leanResponse;
 
 			AMap<AString, ACell> timelineEntry = Maps.of(
@@ -1037,35 +1307,92 @@ public class AgentAdapter extends AAdapter {
 				}
 			}
 
-			// Merge results atomically (timeline, state, task cleanup).
+			// Build turns to append to session.history (only when a session
+			// was picked this cycle, and the transition didn't error).
+			// Order: inbox messages → picked task input → assistant response.
+			// Errors and yields contribute no turns. See venue/CLAUDE.local.md
+			// "Sessions S3 — Per-session history (turn shape contract)".
+			AVector<ACell> turnsToAppend = Vectors.empty();
+			if (pickedSessionBlob != null && leanError == null) {
+				// S3f: record each inbox/chat message as a user turn so
+				// session.history captures the full conversation (previously
+				// only the adapter's transcript recorded these).
+				if (filteredInbox != null) {
+					for (long i = 0; i < filteredInbox.count(); i++) {
+						ACell msgContent = RT.getIn(filteredInbox.get(i), Fields.MESSAGE);
+						if (msgContent != null) {
+							turnsToAppend = turnsToAppend.conj(Maps.of(
+								AgentState.K_ROLE,    AgentState.ROLE_USER,
+								AgentState.K_CONTENT, msgContent,
+								AgentState.K_TURN_TS, CVMLong.create(startTs),
+								AgentState.K_SOURCE,  AgentState.SOURCE_CHAT));
+						}
+					}
+				}
+				if (pickedTaskInput != null) {
+					turnsToAppend = turnsToAppend.conj(Maps.of(
+						AgentState.K_ROLE,    AgentState.ROLE_USER,
+						AgentState.K_CONTENT, pickedTaskInput,
+						AgentState.K_TURN_TS, CVMLong.create(startTs),
+						AgentState.K_SOURCE,  AgentState.SOURCE_REQUEST));
+				}
+				if (leanResponse != null) {
+					turnsToAppend = turnsToAppend.conj(Maps.of(
+						AgentState.K_ROLE,    AgentState.ROLE_ASSISTANT,
+						AgentState.K_CONTENT, leanResponse,
+						AgentState.K_TURN_TS, CVMLong.create(endTs),
+						AgentState.K_SOURCE,  AgentState.SOURCE_TRANSITION));
+				}
+			}
+
+			// Merge results atomically (timeline, state, task cleanup, history).
 			// Pass pickedSession so the merge only consumes presented-prefix
 			// inbox entries that match the session this cycle handled —
 			// other-session messages stay queued for a future cycle.
+			// Task cleanup is idempotent — the venue op may have already
+			// removed completed entries from agent.tasks during the
+			// transition, in which case removeCompletedTasks is a no-op.
+			// History append (S3a) lands in the same CAS as the timeline,
+			// so external readers never see a cycle that wrote one but not
+			// the other.
 			AMap<AString, ACell> merged = agent.mergeRunResult(
-				newState, inbox.count(), pickedSession, tasks, taskResults, timelineEntry);
+				newState, inbox.count(), pickedSession, tasks, taskResults,
+				timelineEntry, pickedSessionBlob, turnsToAppend,
+				presentedSessionPendingCount);
 
-			// Complete pending request Jobs AFTER the merge so timeline and state
-			// are visible when the caller's awaitResult returns. The sid was
-			// recorded on the task row in handleRequest — look it up from the
-			// pre-merge tasks snapshot so the caller sees which session the
-			// result belongs to.
-			if (taskResults != null) {
-				for (var entry : taskResults.entrySet()) {
-					String taskKey = entry.getKey().toString();
-					Job pendingJob = pendingTaskJobs.remove(taskKey);
-					if (pendingJob != null) {
-						ACell taskResult = entry.getValue();
-						AMap<AString, ACell> envelope = Maps.of(
-							Fields.ID, entry.getKey(),
-							Fields.STATUS, RT.getIn(taskResult, Fields.STATUS),
-							Fields.OUTPUT, RT.getIn(taskResult, Fields.OUTPUT));
-						ACell err = RT.getIn(taskResult, Fields.ERROR);
-						if (err != null) envelope = envelope.assoc(Fields.ERROR, err);
-						ACell sid = extractTaskSessionId(tasks, entry.getKey());
-						if (sid != null) envelope = envelope.assoc(Fields.SESSION_ID, sid);
-						pendingJob.completeWith(envelope);
+			// Now that the timeline + state are persisted, claim the parked
+			// envelopes (atomic remove) and complete the caller's pending
+			// task Jobs. Doing this AFTER the merge guarantees that an
+			// awaitResult caller sees the completed cycle's writes.
+			completeDeferredJobs(deferredCompletions.remove(agentId.toString()));
+
+			// Complete any in-flight chat for the picked session. Same
+			// post-merge ordering invariant as task completion: the caller's
+			// awaitResult only unblocks once the cycle's writes are visible.
+			//   - leanError non-null → fail the chat Job (technical fail)
+			//   - leanResponse non-null → complete with the response
+			//   - both null → yield, slot stays for next cycle
+			if (pickedChatJobId != null) {
+				if (leanError != null) {
+					// Clear the slot BEFORE completing the Job so a caller that
+					// awakens on awaitResult and immediately submits a follow-up
+					// chat on the same session never races a stale reservation.
+					if (pickedSessionBlob != null) agent.clearChatSlot(pickedSessionBlob);
+					Job chatJob = engine.jobs().getJob(pickedChatJobId);
+					if (chatJob != null && !chatJob.isFinished()) {
+						chatJob.fail(leanError.toString());
+					}
+				} else if (leanResponse != null) {
+					if (pickedSessionBlob != null) agent.clearChatSlot(pickedSessionBlob);
+					Job chatJob = engine.jobs().getJob(pickedChatJobId);
+					if (chatJob != null && !chatJob.isFinished()) {
+						chatJob.completeWith(Maps.of(
+							Fields.AGENT_ID,   agentId,
+							Fields.SESSION_ID, pickedSession,
+							Fields.RESPONSE,   leanResponse));
 					}
 				}
+				// else: yield — keep slot reserved for the next wake
 			}
 
 			lastResult = Maps.of(
@@ -1083,7 +1410,7 @@ public class AgentAdapter extends AAdapter {
 		}
 		} catch (Exception e) {
 			suspendOnError(callerDID, agentId, e);
-			failPendingTaskJobs(callerDID, agentId, e.getMessage());
+			failAllPendingForAgent(callerDID, agentId, e.getMessage());
 			completeExceptionally(coord, e.getMessage());
 		}
 	}
@@ -1095,16 +1422,61 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Looks up the sessionId recorded on the task row keyed by the given
-	 * hex task id, or returns null if absent or malformed.
+	 * Returns the effective inbox for a transition input (S3c read priority).
+	 *
+	 * <p>If the input carries a {@code session.pending} vector (S3b dual-write),
+	 * it is preferred — the session-scoped envelopes are the canonical record.
+	 * Otherwise falls back to the legacy agent-level {@code Fields.MESSAGES}.
+	 * Both shapes are envelope vectors (chat/message envelopes), so callers
+	 * that previously read {@code Fields.MESSAGES} can switch to this helper
+	 * without changing downstream processing.</p>
+	 *
+	 * <p>Returns an empty vector (never null) for ergonomic iteration.</p>
+	 *
+	 * @param input the transition input map
+	 * @return effective inbox vector — never null
 	 */
 	@SuppressWarnings("unchecked")
-	private static ACell extractTaskSessionId(Index<Blob, ACell> tasks, AString taskIdHex) {
-		if (tasks == null || taskIdHex == null) return null;
-		Blob key;
-		try { key = Blob.fromHex(taskIdHex.toString()); }
-		catch (Exception e) { return null; }
-		ACell row = tasks.get(key);
+	public static AVector<ACell> effectiveMessages(ACell input) {
+		ACell session = RT.getIn(input, Fields.SESSION);
+		if (session != null) {
+			ACell pending = RT.getIn(session, AgentState.KEY_PENDING);
+			if (pending instanceof AVector) {
+				return (AVector<ACell>) pending;
+			}
+		}
+		ACell messages = RT.getIn(input, Fields.MESSAGES);
+		return (messages instanceof AVector) ? (AVector<ACell>) messages : Vectors.empty();
+	}
+
+	/**
+	 * Returns the effective session.history for a transition input (S3c).
+	 *
+	 * <p>Returns the {@code input.session.history} vector if present, else
+	 * {@code null}. Adapters use the null sentinel to fall back to their
+	 * own state-held transcript (e.g. {@code state.transcript} in
+	 * LLMAgentAdapter). Returning null (not empty) preserves "no session"
+	 * vs "session with empty history" distinction.</p>
+	 *
+	 * @param input the transition input map
+	 * @return turn-envelope vector, or null if no session present
+	 */
+	@SuppressWarnings("unchecked")
+	public static AVector<ACell> sessionHistory(ACell input) {
+		ACell session = RT.getIn(input, Fields.SESSION);
+		if (session == null) return null;
+		ACell history = RT.getIn(session, AgentState.KEY_HISTORY);
+		return (history instanceof AVector) ? (AVector<ACell>) history : null;
+	}
+
+	/**
+	 * Looks up the sessionId recorded on the task row keyed by the given
+	 * task id, or returns null if absent or malformed.
+	 */
+	@SuppressWarnings("unchecked")
+	private static ACell extractTaskSessionId(Index<Blob, ACell> tasks, Blob taskId) {
+		if (tasks == null || taskId == null) return null;
+		ACell row = tasks.get(taskId);
 		if (!(row instanceof AMap)) return null;
 		return ((AMap<AString, ACell>) row).get(Fields.SESSION_ID);
 	}
@@ -1331,20 +1703,56 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Fails pending task Jobs for the given agent. Called when the agent
-	 * suspends — the agent can't process tasks in this state, so callers
-	 * waiting on results should be unblocked with a failure.
+	 * Fails all pending work for an agent that is being abandoned (e.g.
+	 * suspended on a run-loop exception). Sweeps three sources:
+	 * <ul>
+	 *   <li>Tasks still listed in {@code agent.getTasks()} — venue op was
+	 *       never called; the caller's Job is still waiting in PENDING/STARTED.</li>
+	 *   <li>Envelopes parked in {@link #deferredCompletions} — venue op was
+	 *       called but the framework didn't reach {@code completeDeferredJobs}
+	 *       (e.g. exception fired between the inner peek and the post-merge
+	 *       remove). These would otherwise leak indefinitely.</li>
+	 *   <li>Per-session chat slots — {@code agent:chat} reserved a slot
+	 *       awaiting the next response. Any agent error must surface as a
+	 *       chat Job failure rather than leaving the caller blocked forever.</li>
+	 * </ul>
+	 * Each surviving Job is failed with {@code error}.
 	 */
-	private void failPendingTaskJobs(AString callerDID, AString agentId, String error) {
+	@SuppressWarnings("unchecked")
+	private void failAllPendingForAgent(AString callerDID, AString agentId, String error) {
 		AgentState agent = getAgent(callerDID, agentId);
-		if (agent == null) return;
-		Index<Blob, ACell> tasks = agent.getTasks();
-		if (tasks == null) return;
-		for (var entry : tasks.entrySet()) {
-			String taskKey = taskIdHex(entry.getKey()).toString();
-			Job pending = pendingTaskJobs.remove(taskKey);
-			if (pending != null) {
-				pending.fail(error);
+		if (agent != null) {
+			Index<Blob, ACell> tasks = agent.getTasks();
+			if (tasks != null) {
+				for (var entry : tasks.entrySet()) {
+					Job pending = engine.jobs().getJob(entry.getKey());
+					if (pending != null && !pending.isFinished()) {
+						pending.fail(error);
+					}
+				}
+			}
+			Index<Blob, ACell> sessions = agent.getSessions();
+			if (sessions != null) {
+				for (var entry : sessions.entrySet()) {
+					Blob sid = entry.getKey();
+					Blob chatJobId = agent.getChatJob(sid);
+					if (chatJobId == null) continue;
+					Job chatJob = engine.jobs().getJob(chatJobId);
+					if (chatJob != null && !chatJob.isFinished()) {
+						chatJob.fail(error);
+					}
+					agent.clearChatSlot(sid);
+				}
+			}
+		}
+		ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred =
+			deferredCompletions.remove(agentId.toString());
+		if (deferred != null) {
+			for (var e : deferred.entrySet()) {
+				Job pending = engine.jobs().getJob(e.getKey());
+				if (pending != null && !pending.isFinished()) {
+					pending.fail(error);
+				}
 			}
 		}
 	}
@@ -1455,14 +1863,6 @@ public class AgentAdapter extends AAdapter {
 
 	// ========== ID generation ==========
 
-	private synchronized Blob generateTaskId() {
-		long ts = Utils.getCurrentTimestamp();
-		byte[] bs = new byte[16];
-		Utils.writeLong(bs, 0, ts);
-		Utils.writeLong(bs, 8, taskIdCounter++);
-		return Blob.wrap(bs);
-	}
-
 	private synchronized Blob generateSessionId() {
 		long ts = Utils.getCurrentTimestamp();
 		byte[] bs = new byte[16];
@@ -1494,6 +1894,32 @@ public class AgentAdapter extends AAdapter {
 		} else {
 			sid = generateSessionId();
 		}
+		agent.ensureSession(sid, caller);
+		return sid;
+	}
+
+	/**
+	 * Chat-specific session resolution. Differs from {@link #resolveOrMintSession}
+	 * in one critical way: a {@code sessionId} that is provided but does not
+	 * exist on the agent is rejected — we do not silently create a session
+	 * for the caller. This matches §5.5 (agent_chat row): {@code sessionId
+	 * present and unknown → Error}. Mint-on-missing only happens when the
+	 * caller supplied no {@code sessionId} at all.
+	 */
+	private Blob resolveSessionForChat(Job job, AgentState agent, ACell input, AString caller) {
+		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);
+		if (sidCell != null) {
+			AString s = RT.ensureString(sidCell);
+			if (s == null) { job.fail("sessionId must be a hex string"); return null; }
+			Blob sid = Blob.fromHex(s.toString());
+			if (sid == null) { job.fail("Invalid sessionId format: " + s); return null; }
+			if (agent.getSession(sid) == null) {
+				job.fail("Unknown sessionId: " + s + " — omit sessionId to start a new session");
+				return null;
+			}
+			return sid;
+		}
+		Blob sid = generateSessionId();
 		agent.ensureSession(sid, caller);
 		return sid;
 	}

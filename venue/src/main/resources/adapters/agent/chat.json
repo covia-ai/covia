@@ -1,0 +1,29 @@
+{
+	"name": "Chat with Agent",
+	"description": "Send a message to an agent and synchronously await its next response on the session. Mints a new session when sessionId is omitted (returned in the response); continues an existing session when sessionId is supplied. A2A message/send analogue. Use this for conversational interactions where you need a reply. Use agent_request for tracked task delegation, or agent_message for fire-and-forget notifications. Only one chat may be in flight per session — concurrent calls on the same session are rejected.",
+	"dateCreated": "2026-04-16T00:00:00Z",
+	"operation": {
+		"adapter": "agent:chat",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "Target agent name" },
+				"message": { "description": "Message content to send to the agent. May be a string, structured object, or any JSON-serialisable value." },
+				"sessionId": {
+					"type": "string",
+					"description": "Optional session identifier (hex string). Echo the sessionId returned by a previous chat to continue the conversation. If omitted, a new session is created and its id returned in the response. An unknown sessionId is rejected — omit to start a new session."
+				}
+			},
+			"required": ["agentId", "message"]
+		},
+		"output": {
+			"type": "object",
+			"description": "Agent's response to the chat message.",
+			"properties": {
+				"agentId": { "type": "string", "description": "Agent that produced the response" },
+				"sessionId": { "type": "string", "description": "Session the response belongs to (echo on subsequent chats to continue)" },
+				"response": { "description": "The agent's response value (whatever the transition emitted as its turn output)" }
+			}
+		}
+	}
+}

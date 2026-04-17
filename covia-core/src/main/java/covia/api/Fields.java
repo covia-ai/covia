@@ -135,6 +135,9 @@ public class Fields {
 	public static final StringShort PARTIES = Strings.intern("parties");
 	public static final StringShort TURNS = Strings.intern("turns");
 	public static final StringShort C = Strings.intern("c");
+	/** Transition input field (S3b): the picked session record map
+	 *  {id, parties, meta, c, history, pending} for the cycle's session. */
+	public static final StringShort SESSION = Strings.intern("session");
 
 	// Lean transition contract (Sub-stage 3)
 	public static final StringShort NEW_INPUT = Strings.intern("newInput");

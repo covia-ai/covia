@@ -46,6 +46,28 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_PARTIES  = Strings.intern("parties");
 	private static final AString K_CREATED  = Strings.intern("created");
 	private static final AString K_TURNS    = Strings.intern("turns");
+	private static final AString K_CHAT_JOB = Strings.intern("chatJob");
+
+	// Turn record field keys (entries in session.history). See venue/CLAUDE.local.md
+	// "Sessions S3 — Per-session history (turn shape contract)" for full spec.
+	public static final AString K_ROLE      = Strings.intern("role");
+	public static final AString K_CONTENT   = Strings.intern("content");
+	public static final AString K_SOURCE    = Strings.intern("source");
+	/** Turn timestamp field name. Same interned value as the private K_TS
+	 *  (lattice version stamp) but conceptually distinct: this is wall-clock
+	 *  millis at turn mint time. Exposed for run-loop turn construction. */
+	public static final AString K_TURN_TS   = Strings.intern("ts");
+
+	// Role values
+	public static final AString ROLE_USER      = Strings.intern("user");
+	public static final AString ROLE_ASSISTANT = Strings.intern("assistant");
+	public static final AString ROLE_SYSTEM    = Strings.intern("system");
+
+	// Source values
+	public static final AString SOURCE_TRANSITION = Strings.intern("transition");
+	public static final AString SOURCE_REQUEST    = Strings.intern("request");
+	public static final AString SOURCE_CHAT       = Strings.intern("chat");
+	public static final AString SOURCE_MESSAGE    = Strings.intern("message");
 
 	// Status constants
 	public static final AString SLEEPING   = Strings.intern("SLEEPING");
@@ -64,6 +86,9 @@ public class AgentState extends ALatticeComponent<ACell> {
 	public static final AString KEY_TIMELINE = K_TIMELINE;
 	public static final AString KEY_ERROR    = K_ERROR;
 	public static final AString KEY_WAKE     = K_WAKE;
+	/** Session-record `history` key — vector of turn envelopes. Public for
+	 *  adapters that read transcript from {@code input.session.history} (S3c). */
+	public static final AString KEY_HISTORY  = K_HISTORY;
 
 	private final AString agentId;
 
@@ -248,6 +273,92 @@ public class AgentState extends ALatticeComponent<ACell> {
 		if (r == null) return Index.none();
 		ACell v = r.get(K_PENDING);
 		return (v instanceof Index) ? (Index<Blob, ACell>) v : Index.none();
+	}
+
+	/**
+	 * Returns the in-flight chat Job ID for the given session, or {@code null}
+	 * if no chat is awaiting a response.
+	 */
+	public Blob getChatJob(Blob sid) {
+		AMap<AString, ACell> session = getSession(sid);
+		if (session == null) return null;
+		ACell v = session.get(K_CHAT_JOB);
+		return (v instanceof Blob) ? (Blob) v : null;
+	}
+
+	/**
+	 * Atomically reserves the per-session chat slot for {@code chatJobId}.
+	 * Returns true if the reservation succeeded; false if the session is
+	 * missing or another chat is already in flight for it.
+	 */
+	@SuppressWarnings("unchecked")
+	public boolean tryReserveChatSlot(Blob sid, Blob chatJobId) {
+		AMap<AString, ACell> after = update(r -> {
+			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
+				? (Index<Blob, ACell>) idx : Index.none();
+			ACell sv = sessions.get(sid);
+			if (!(sv instanceof AMap)) return r;
+			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
+			if (session.get(K_CHAT_JOB) != null) return r;
+			session = session.assoc(K_CHAT_JOB, chatJobId);
+			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
+		});
+		return after != null && chatJobId.equals(getChatJob(sid));
+	}
+
+	/**
+	 * Clears the per-session chat slot. Idempotent — no-op if the session
+	 * is missing or the slot is already empty.
+	 */
+	@SuppressWarnings("unchecked")
+	public void clearChatSlot(Blob sid) {
+		update(r -> {
+			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
+				? (Index<Blob, ACell>) idx : Index.none();
+			ACell sv = sessions.get(sid);
+			if (!(sv instanceof AMap)) return r;
+			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
+			if (session.get(K_CHAT_JOB) == null) return r;
+			session = session.dissoc(K_CHAT_JOB);
+			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
+		});
+	}
+
+	/**
+	 * Returns the per-session pending message vector (S3b). Distinct from
+	 * the agent-level {@code pending} Index of in-flight Job snapshots —
+	 * same {@code AString} field name at a different path. This vector
+	 * holds messages awaiting consumption by the next transition for the
+	 * given session.
+	 *
+	 * <p>Returns an empty vector if the session is missing or has no
+	 * pending entries.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	public AVector<ACell> getSessionPending(Blob sid) {
+		AMap<AString, ACell> session = getSession(sid);
+		if (session == null) return Vectors.empty();
+		ACell v = session.get(K_PENDING);
+		return (v instanceof AVector) ? (AVector<ACell>) v : Vectors.empty();
+	}
+
+	/**
+	 * Atomically appends an envelope to {@code sessions[sid].pending} (S3b).
+	 * No-op if the session is missing — callers should ensureSession first.
+	 */
+	@SuppressWarnings("unchecked")
+	public void appendSessionPending(Blob sid, ACell envelope) {
+		update(r -> {
+			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
+				? (Index<Blob, ACell>) idx : Index.none();
+			ACell sv = sessions.get(sid);
+			if (!(sv instanceof AMap)) return r;
+			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
+			AVector<ACell> pending = (session.get(K_PENDING) instanceof AVector pv)
+				? (AVector<ACell>) pv : Vectors.empty();
+			session = session.assoc(K_PENDING, pending.conj(envelope));
+			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
+		});
 	}
 
 	public AString getError() {
@@ -445,6 +556,58 @@ public class AgentState extends ALatticeComponent<ACell> {
 			Index<Blob, ACell> presentedTasks,
 			AMap<AString, ACell> taskResults,
 			AMap<AString, ACell> timelineEntry) {
+		return mergeRunResult(newState, presentedMsgCount, consumedSession,
+			presentedTasks, taskResults, timelineEntry, null, null, 0);
+	}
+
+	// TODO: the 9-arg signature is a smell. The pure transition function
+	// (input→output) forces the framework to snapshot everything pre-call and
+	// wire it back through mergeRunResult. Consider letting the transition
+	// operate directly on the AgentState — eliminates the snapshot/drain
+	// plumbing entirely and collapses this method to ~3 lines.
+
+	/**
+	 * Atomic merge with session history append + session pending drain
+	 * (Sub-stages 3a + 3b).
+	 *
+	 * <p>Same semantics as the 6-arg overload, plus, when
+	 * {@code historySid != null}:
+	 * <ul>
+	 *   <li>If {@code turnsToAppend} is non-empty, turns are appended to
+	 *       {@code sessions[historySid].history} and {@code meta.turns} is
+	 *       bumped (S3a).</li>
+	 *   <li>The first {@code presentedSessionPendingCount} entries of
+	 *       {@code sessions[historySid].pending} are dropped — the run loop
+	 *       snapshots the count pre-transition and passes it here so that
+	 *       messages arriving during the transition (the tail) are preserved
+	 *       for the next cycle (S3b).</li>
+	 * </ul>
+	 * All performed inside the same CAS as the timeline / state writes.</p>
+	 *
+	 * <p>This atomic-update guarantee matches the deferred-completion
+	 * ordering invariant from S2.7c-2: an external observer never sees a
+	 * cycle that wrote the timeline but not the history / pending drain.</p>
+	 *
+	 * <p>Turn shape (each entry of {@code turnsToAppend}):
+	 * {@code {role, content, ts, source}} — see venue/CLAUDE.local.md
+	 * "Sessions S3 — Per-session history (turn shape contract)".</p>
+	 *
+	 * <p>If the session record is missing, the append/drain silently
+	 * no-ops (defensive — should not happen in the run loop since the
+	 * cycle picked the session from existing state).</p>
+	 *
+	 * @return The new record (check status to determine if loop should continue)
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> mergeRunResult(
+			ACell newState, long presentedMsgCount,
+			AString consumedSession,
+			Index<Blob, ACell> presentedTasks,
+			AMap<AString, ACell> taskResults,
+			AMap<AString, ACell> timelineEntry,
+			Blob historySid,
+			AVector<ACell> turnsToAppend,
+			long presentedSessionPendingCount) {
 		return update(r -> {
 			AVector<ACell> currentInbox = extractInbox(r);
 			AVector<ACell> remainingInbox = Vectors.empty();
@@ -472,7 +635,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 			AVector<ACell> timeline = extractTimeline(r);
 
-			return r
+			AMap<AString, ACell> updated = r
 				.assoc(K_STATE, newState)
 				.assoc(K_TASKS, remainingTasks)
 				.assoc(K_INBOX, remainingInbox)
@@ -480,6 +643,55 @@ public class AgentState extends ALatticeComponent<ACell> {
 				.assoc(K_STATUS, hasNew ? RUNNING : SLEEPING)
 				.dissoc(K_ERROR)
 				.dissoc(K_WAKE);
+
+			// Atomic history append + session.pending drain for the picked
+			// session (S3a + S3b). Both touch the same session record so we
+			// fold them into one assoc.
+			boolean hasTurns = turnsToAppend != null && turnsToAppend.count() > 0;
+			boolean hasDrain = presentedSessionPendingCount > 0;
+			if (historySid != null && (hasTurns || hasDrain)) {
+				Index<Blob, ACell> sessions = (updated.get(K_SESSIONS) instanceof Index idx)
+					? (Index<Blob, ACell>) idx : Index.none();
+				ACell sv = sessions.get(historySid);
+				if (sv instanceof AMap) {
+					AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
+
+					if (hasTurns) {
+						AVector<ACell> history = (session.get(K_HISTORY) instanceof AVector hv)
+							? (AVector<ACell>) hv : Vectors.empty();
+						for (long i = 0; i < turnsToAppend.count(); i++) {
+							history = history.conj(turnsToAppend.get(i));
+						}
+						session = session.assoc(K_HISTORY, history);
+						// Bump session.meta.turns by the number appended
+						if (session.get(K_META) instanceof AMap) {
+							AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(K_META);
+							long current = (meta.get(K_TURNS) instanceof CVMLong cl)
+								? cl.longValue() : 0;
+							meta = meta.assoc(K_TURNS,
+								CVMLong.create(current + turnsToAppend.count()));
+							session = session.assoc(K_META, meta);
+						}
+					}
+
+					if (hasDrain) {
+						// Drop the first N entries (presented prefix). Tail
+						// (entries that arrived during transition) is preserved.
+						AVector<ACell> pending = (session.get(K_PENDING) instanceof AVector pv)
+							? (AVector<ACell>) pv : Vectors.empty();
+						long drop = Math.min(presentedSessionPendingCount, pending.count());
+						AVector<ACell> remaining = Vectors.empty();
+						for (long i = drop; i < pending.count(); i++) {
+							remaining = remaining.conj(pending.get(i));
+						}
+						session = session.assoc(K_PENDING, remaining);
+					}
+
+					updated = updated.assoc(K_SESSIONS, sessions.assoc(historySid, session));
+				}
+			}
+
+			return updated;
 		});
 	}
 

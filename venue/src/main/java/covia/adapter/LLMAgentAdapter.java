@@ -107,9 +107,7 @@ public class LLMAgentAdapter extends AAdapter {
 	// parent agent's run loop indefinitely. See covia-ai/covia#82.
 	static final long DEFAULT_TOOL_CALL_TIMEOUT_MS = 300_000L;
 
-	// History / message field keys
-	private static final AString K_HISTORY    = Strings.intern("history");
-	private static final AString K_TRANSCRIPT = Strings.intern("transcript");
+	// Message field keys
 	private static final AString K_ROLE       = Strings.intern("role");
 	private static final AString K_CONTENT    = Strings.intern("content");
 	private static final AString K_MESSAGES   = Strings.intern("messages");
@@ -122,7 +120,6 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final AString K_TYPE        = Strings.intern("type");
 	private static final AString K_PROPERTIES  = Strings.intern("properties");
 	private static final AString K_REQUIRED    = Strings.intern("required");
-	private static final AString K_REASON      = Strings.intern("reason");
 	private static final AString K_STRUCTURED_CONTENT = Strings.intern("structuredContent");
 
 	// Role values
@@ -144,39 +141,33 @@ public class LLMAgentAdapter extends AAdapter {
 	private static final AMap<AString, ACell> TOOL_DEF_COMPLETE_TASK = Maps.of(
 		K_NAME, Strings.create(TOOL_COMPLETE_TASK),
 		K_DESCRIPTION, Strings.create(
-			"Complete an inbound task with a result. "
+			"Complete the in-scope task with a result. "
 			+ "Call this once you have produced the output the requester asked for. "
-			+ "The output will be delivered to the caller."),
+			+ "The output will be delivered to the caller. "
+			+ "The agent and task are determined from the current request context — you do not pass an id."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
-				Fields.JOB_ID, Maps.of(
-					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("The Job ID of the task to complete (hex string from the tasks list)")),
-				Fields.OUTPUT, Maps.of(
-					K_TYPE, Maps.empty(),
-					K_DESCRIPTION, Strings.create("The result to return to the requester. Can be any JSON value — string, object, array, etc."))
-			),
-			K_REQUIRED, Vectors.of(Strings.create("jobId"))
+				Fields.RESULT, Maps.of(
+					K_DESCRIPTION, Strings.create("The result to return to the requester. Any JSON value — string, object, array, etc."))
+			)
 		)
 	);
 
 	private static final AMap<AString, ACell> TOOL_DEF_FAIL_TASK = Maps.of(
 		K_NAME, Strings.create(TOOL_FAIL_TASK),
 		K_DESCRIPTION, Strings.create(
-			"Reject or fail an inbound task. Call this when you cannot fulfil the request — "
-			+ "e.g. the task is outside your capabilities or the input is invalid."),
+			"Reject or fail the in-scope task. Call this when you cannot fulfil the request — "
+			+ "e.g. the task is outside your capabilities or the input is invalid. "
+			+ "The agent and task are determined from the current request context — you do not pass an id."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
-				Fields.JOB_ID, Maps.of(
-					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("The Job ID of the task to fail (hex string from the tasks list)")),
-				K_REASON, Maps.of(
+				Fields.ERROR, Maps.of(
 					K_TYPE, Strings.create("string"),
 					K_DESCRIPTION, Strings.create("Human-readable explanation of why the task cannot be completed"))
 			),
-			K_REQUIRED, Vectors.of(Strings.create("jobId"), Strings.create("reason"))
+			K_REQUIRED, Vectors.of(Strings.create("error"))
 		)
 	);
 
@@ -309,14 +300,17 @@ public class LLMAgentAdapter extends AAdapter {
 	 * and returns the updated state.</p>
 	 *
 	 * @param ctx Request context (caller identity for level 3 invocation)
-	 * @param input Transition function contract: { agentId, state, tasks, pending, messages }
-	 * @return Transition function output: { state, result, taskResults? }
+	 * @param input Transition input: { agentId, state, tasks, pending, messages, config, newInput, session? }
+	 * @return Transition output: { state, response | error }
 	 */
 	@SuppressWarnings("unchecked")
 	ACell processChat(RequestContext ctx, ACell input) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		ACell state = RT.getIn(input, AgentState.KEY_STATE);
-		AVector<ACell> messages = (AVector<ACell>) RT.getIn(input, Fields.MESSAGES);
+		// S3c: prefer session.pending over agent-level messages when a session
+		// is in scope. Both carry the same envelopes (S3b dual-write); reading
+		// both would duplicate. effectiveMessages picks the right one.
+		AVector<ACell> messages = AgentAdapter.effectiveMessages(input);
 		AVector<ACell> tasks = (AVector<ACell>) RT.getIn(input, Fields.TASKS);
 		AVector<ACell> pending = (AVector<ACell>) RT.getIn(input, Fields.PENDING);
 
@@ -334,12 +328,13 @@ public class LLMAgentAdapter extends AAdapter {
 		// Build per-turn LLM context. Per AGENT_CONTEXT_PLAN.md §4 Option C
 		// (transcript model): system prompt + context entries + loads +
 		// [Context Map] are rebuilt FRESH every turn and never persisted.
-		// Only the persistent transcript (real user/assistant/tool turns)
-		// carries forward via withTranscript(state).
+		// Only the persistent history (session.history turns) carries
+		// forward via withSessionHistory.
 		//
-		// Order matters: ephemeral background → transcript (history) →
-		// this turn's pending/inbox → empty signal. The system prompt
-		// goes first for primacy, the new input goes last for recency.
+		// Order matters: ephemeral background → history → this turn's
+		// pending/inbox → empty signal. System prompt goes first for
+		// primacy, new input goes last for recency.
+		AVector<ACell> sessionTurns = AgentAdapter.sessionHistory(input);
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
 			.withConfig(recordConfig, state)
@@ -347,7 +342,7 @@ public class LLMAgentAdapter extends AAdapter {
 			.withContextEntries(state)            // ephemeral
 			.withLoadedPaths(existingLoads)       // ephemeral
 			.withContextMap(existingLoads)        // ephemeral
-			.withTranscript(state)                // persisted conversation
+			.withSessionHistory(sessionTurns)     // session.history → LLM messages
 			.withPendingResults(pending)          // ephemeral (this turn)
 			.withInboxMessages(messages)          // this turn's user input
 			.withEmptyStateSignal(hasInput)
@@ -401,40 +396,9 @@ public class LLMAgentAdapter extends AAdapter {
 		AString contentText = RT.ensureString(RT.getIn(lastMsg, K_CONTENT));
 		String responseText = (contentText != null) ? contentText.toString() : "";
 
-		// Compute the transcript delta to persist. The delta is just the
-		// real conversation turns from this run: incoming task inputs and
-		// inbox messages (as user role), plus the LLM-side new messages
-		// (assistant + tool). Pending results, [Context Map], context
-		// entries, etc. are ephemeral status / background and are NOT
-		// persisted.
-		AVector<ACell> oldTranscript = extractTranscript(state);
-		AVector<ACell> transcriptDelta = (AVector<ACell>) Vectors.empty();
-		// Synthesize a user message for each task input — captures what
-		// the agent was asked to do, so the transcript is intelligible
-		// across turns even though the LLM saw the task via the dynamic
-		// [Tasks assigned to you] injection inside the tool loop.
-		if (tasks != null) {
-			for (long i = 0; i < tasks.count(); i++) {
-				ACell taskMsg = wrapTaskAsUserMessage(tasks.get(i));
-				if (taskMsg != null) transcriptDelta = transcriptDelta.conj(taskMsg);
-			}
-		}
-		if (messages != null) {
-			// Inbox messages get the same wrapping as withInboxMessages —
-			// re-derive here so the transcript stores plain user messages
-			// rather than the [Message from: ...] decorated form.
-			for (long i = 0; i < messages.count(); i++) {
-				ACell wrapped = wrapInboxAsUserMessage(messages.get(i));
-				if (wrapped != null) transcriptDelta = transcriptDelta.conj(wrapped);
-			}
-		}
-		transcriptDelta = (AVector<ACell>) transcriptDelta.concat(newMessagesFiltered);
-		AVector<ACell> newTranscript = (AVector<ACell>) oldTranscript.concat(transcriptDelta);
-
-		// Return transition function output. State holds: transcript (the
-		// only durable conversation record), config, and loads. The legacy
-		// K_HISTORY field is no longer written.
-		AMap<AString, ACell> newState = Maps.of(K_TRANSCRIPT, newTranscript);
+		// Session.history is the sole conversation record — the adapter
+		// does not maintain its own transcript. State holds only config + loads.
+		AMap<AString, ACell> newState = Maps.empty();
 		if (config != null) {
 			newState = newState.assoc(K_CONFIG, config);
 		}
@@ -442,16 +406,17 @@ public class LLMAgentAdapter extends AAdapter {
 		if (finalLoads != null && finalLoads.count() > 0) {
 			newState = newState.assoc(K_LOADS, finalLoads);
 		}
-		// Lean transition output: emit {response | error, taskComplete?} and
-		// let the framework synthesise the per-task taskResults entry from
-		// our lean fields. With one-task-per-cycle (Sub-stage 2.2), the
-		// LLM only ever sees one task and so only one complete_task or
-		// fail_task call resolves it.
+		// Lean transition output: emit {state, response | error}. Task
+		// completion (if any) is signalled to the framework by the venue op
+		// invoked from the complete_task / fail_task tool wrappers, which
+		// parks an envelope in deferredCompletions; the run loop drains
+		// that map AFTER mergeRunResult to build the cycle's TASK_RESULTS.
 		//
 		// Default response is the assistant's chat text. If the LLM called
 		// complete_task with structured output, that output overrides the
-		// chat text (it's the authoritative task result). If the LLM called
-		// fail_task, the error replaces the response entirely.
+		// chat text in the timeline result (it's the authoritative task
+		// answer). If the LLM called fail_task, the error replaces the
+		// response entirely.
 		AMap<AString, ACell> output = Maps.of(
 			AgentState.KEY_STATE, newState,
 			Fields.RESPONSE, Strings.create(responseText));
@@ -471,7 +436,6 @@ public class LLMAgentAdapter extends AAdapter {
 					output = output.assoc(Fields.RESPONSE, taskOutput);
 				}
 			}
-			output = output.assoc(Fields.TASK_COMPLETE, CVMBool.TRUE);
 		}
 		return output;
 	}
@@ -659,48 +623,79 @@ public class LLMAgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Completes an inbound task with a result. Side effect — immediate.
-	 * Tasks are lattice data, not JobManager jobs. Validation checks against
-	 * the presented task list; completion is recorded in taskResults for the
-	 * agent framework to process.
+	 * Completes the in-scope task with a result by invoking the
+	 * {@code agent:completeTask} venue op. The op reads {@code agentId} and
+	 * {@code taskId} from the {@link RequestContext} (populated by the framework
+	 * for every transition cycle), so the LLM only supplies {@code result}.
+	 *
+	 * <p>The venue op completes the caller's pending task Job and removes the
+	 * task entry from the agent's task Index. We also record into
+	 * {@link ToolContext#taskResults} so the surrounding {@code processChat}
+	 * can promote the structured task output into the transition's
+	 * {@code response} field for the timeline (otherwise the timeline
+	 * {@code result} would just be the empty content of the assistant's
+	 * tool-call message).</p>
 	 */
 	private ACell handleCompleteTask(ACell input, ToolContext toolCtx) {
-		AString jobIdStr = RT.ensureString(RT.getIn(input, Fields.JOB_ID));
-		if (jobIdStr == null) return Strings.create("Error: jobId is required");
+		ACell result = RT.getIn(input, Fields.RESULT);
+		AMap<AString, ACell> opInput = (result != null)
+			? Maps.of(Fields.RESULT, result)
+			: Maps.empty();
+		ACell opResult;
+		try {
+			Job opJob = engine.jobs().invokeOperation(
+				"v/ops/agent/complete-task", opInput, toolCtx.ctx);
+			opResult = opJob.awaitResult(toolCtx.toolCallTimeoutMs);
+		} catch (Exception e) {
+			return Strings.create("Error: " + e.getMessage());
+		}
 
-		if (!isKnownTask(jobIdStr, toolCtx)) return Strings.create("Error: task not found: " + jobIdStr);
-		if (isAlreadyCompleted(jobIdStr, toolCtx)) return Strings.create("Error: task already finished: " + jobIdStr);
+		// Record locally so processChat can promote the structured output
+		// into the transition's response field for the timeline.
+		Blob taskId = toolCtx.ctx.getTaskId();
+		if (taskId != null) {
+			AString taskIdStr = Strings.create(taskId.toHexString());
+			toolCtx.recordTaskResult(taskIdStr,
+				Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, result));
+		}
 
-		ACell output = RT.getIn(input, Fields.OUTPUT);
-
-		// Record in taskResults for the agent framework to remove from lattice
-		toolCtx.recordTaskResult(jobIdStr,
-			Maps.of(Fields.STATUS, Status.COMPLETE, Fields.OUTPUT, output));
-
-		return Maps.of(Fields.JOB_ID, jobIdStr, Fields.STATUS, Status.COMPLETE,
-			Fields.OUTPUT, output != null ? output : Maps.empty());
+		return (opResult != null) ? opResult : Maps.empty();
 	}
 
 	/**
-	 * Fails/rejects an inbound task with a reason. Side effect — immediate.
-	 * Tasks are lattice data, not JobManager jobs.
+	 * Fails the in-scope task by invoking the {@code agent:failTask} venue op.
+	 * The op reads {@code agentId} and {@code taskId} from the
+	 * {@link RequestContext}; the LLM supplies an {@code error} message.
+	 *
+	 * <p>As with {@link #handleCompleteTask}, we record locally into
+	 * {@link ToolContext#taskResults} so {@code processChat} can promote
+	 * the error into the transition's {@code error} field for the timeline.
+	 * The venue op completes the pending Job and removes the task entry —
+	 * the framework reads completion state directly from the now-finished
+	 * Job, so no separate signal is required.</p>
 	 */
 	private ACell handleFailTask(ACell input, ToolContext toolCtx) {
-		AString jobIdStr = RT.ensureString(RT.getIn(input, Fields.JOB_ID));
-		if (jobIdStr == null) return Strings.create("Error: jobId is required");
+		AString error = RT.ensureString(RT.getIn(input, Fields.ERROR));
+		if (error == null) return Strings.create("Error: error is required");
 
-		if (!isKnownTask(jobIdStr, toolCtx)) return Strings.create("Error: task not found: " + jobIdStr);
-		if (isAlreadyCompleted(jobIdStr, toolCtx)) return Strings.create("Error: task already finished: " + jobIdStr);
+		AMap<AString, ACell> opInput = Maps.of(Fields.ERROR, error);
+		ACell opResult;
+		try {
+			Job opJob = engine.jobs().invokeOperation(
+				"v/ops/agent/fail-task", opInput, toolCtx.ctx);
+			opResult = opJob.awaitResult(toolCtx.toolCallTimeoutMs);
+		} catch (Exception e) {
+			return Strings.create("Error: " + e.getMessage());
+		}
 
-		AString reason = RT.ensureString(RT.getIn(input, K_REASON));
-		String reasonStr = (reason != null) ? reason.toString() : "Rejected by agent";
+		Blob taskId = toolCtx.ctx.getTaskId();
+		if (taskId != null) {
+			AString taskIdStr = Strings.create(taskId.toHexString());
+			toolCtx.recordTaskResult(taskIdStr,
+				Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, error));
+		}
 
-		// Record in taskResults for the agent framework to remove from lattice
-		toolCtx.recordTaskResult(jobIdStr,
-			Maps.of(Fields.STATUS, Status.FAILED, Fields.ERROR, Strings.create(reasonStr)));
-
-		return Maps.of(Fields.JOB_ID, jobIdStr, Fields.STATUS, Status.FAILED,
-			Fields.ERROR, Strings.create(reasonStr));
+		return (opResult != null) ? opResult : Maps.empty();
 	}
 
 	// ========== Built-in context tools ==========
@@ -891,73 +886,6 @@ public class LLMAgentAdapter extends AAdapter {
 			if (v != null) dst = dst.assoc(key, v);
 		}
 		return dst;
-	}
-
-	@SuppressWarnings("unchecked")
-	static AVector<ACell> extractHistory(ACell state) {
-		if (state == null) return Vectors.empty();
-		ACell h = RT.getIn(state, K_HISTORY);
-		if (h instanceof AVector) return (AVector<ACell>) h;
-		return Vectors.empty();
-	}
-
-	/**
-	 * Extracts the persistent transcript from agent state. This is the
-	 * canonical conversation record per AGENT_CONTEXT_PLAN.md Option C —
-	 * only real user / assistant / tool turns, no ephemeral context.
-	 */
-	@SuppressWarnings("unchecked")
-	static AVector<ACell> extractTranscript(ACell state) {
-		if (state == null) return Vectors.empty();
-		ACell t = RT.getIn(state, K_TRANSCRIPT);
-		if (t instanceof AVector) return (AVector<ACell>) t;
-		return Vectors.empty();
-	}
-
-	/**
-	 * Converts a task record into a plain user-role transcript entry. The
-	 * task input is serialised as JSON so the LLM, on a later turn, can
-	 * see what it was originally asked to do. Mirrors the dynamic
-	 * {@code [Tasks assigned to you]} injection from
-	 * {@link #buildOutstandingTaskMessage} but in a one-time persistent
-	 * form for the transcript.
-	 */
-	@SuppressWarnings("unchecked")
-	private static ACell wrapTaskAsUserMessage(ACell task) {
-		if (task == null) return null;
-		ACell taskInput = RT.getIn(task, Fields.INPUT);
-		if (taskInput == null) return null;
-		String inputStr;
-		try {
-			inputStr = convex.core.util.JSON.toString(taskInput);
-		} catch (Exception e) {
-			inputStr = taskInput.toString();
-		}
-		return Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(inputStr));
-	}
-
-	/**
-	 * Converts an inbox message into a plain user-role transcript entry.
-	 * Mirrors {@link ContextBuilder#withInboxMessages} but without the
-	 * "[Message from: ...]" decoration — the transcript stores the raw
-	 * user content.
-	 */
-	@SuppressWarnings("unchecked")
-	private static ACell wrapInboxAsUserMessage(ACell msg) {
-		AString content = null;
-		if (msg instanceof AString s) {
-			content = s;
-		} else if (msg instanceof AMap) {
-			ACell msgBody = RT.getIn(msg, Fields.MESSAGE);
-			if (msgBody != null) {
-				content = RT.ensureString(msgBody);
-			} else {
-				AString c = RT.ensureString(RT.getIn(msg, K_CONTENT));
-				content = (c != null) ? c : Strings.create(msg.toString());
-			}
-		}
-		if (content == null) return null;
-		return Maps.of(K_ROLE, ROLE_USER, K_CONTENT, content);
 	}
 
 	@SuppressWarnings("unchecked")

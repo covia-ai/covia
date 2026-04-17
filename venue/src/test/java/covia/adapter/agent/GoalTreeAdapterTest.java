@@ -190,11 +190,52 @@ public class GoalTreeAdapterTest {
 		assertTrue(response.toString().contains("Process this invoice"),
 			"Goal should contain task input: " + response);
 
-		// Lean contract: transition signals task completion via taskComplete;
-		// the framework synthesises the per-task taskResults entry.
-		assertEquals(convex.core.data.prim.CVMBool.TRUE,
-			RT.getIn(output, Fields.TASK_COMPLETE),
-			"Should signal taskComplete=true when a task was processed");
+		// New contract: transition emits {state, response} only. Task
+		// completion is signalled by invoking agent:complete-task via the
+		// venue op — which is a no-op in this direct call because the test
+		// ctx isn't scoped with agentId/taskId.
+		assertNull(RT.getIn(output, Fields.TASK_COMPLETE),
+			"taskComplete flag must no longer appear on transition output");
+	}
+
+	@Test
+	public void testTransitionPropagatesVenueOpFailure() {
+		// Regression: completeTaskViaVenueOp used to swallow venue op
+		// failures, which would orphan the caller's pending task Job
+		// (caller blocks on awaitResult forever). Now failures must
+		// propagate so the framework's outer catch can fail the Job.
+		//
+		// Trigger: scope ctx with agentId + taskId pointing at a
+		// non-existent agent. The transition produces a result, then
+		// invokes agent:complete-task — which fails with "agent not found"
+		// because the agent was never created. The failure should bubble
+		// out of processGoal as an exception.
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		Blob fakeTaskId = Blob.fromHex(
+			"00000000000000000000000000000001000000000000000000000000000000aa");
+		RequestContext scopedCtx = ALICE
+			.withAgentId(Strings.create("ghost-agent"))
+			.withTaskId(fakeTaskId);
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "ghost-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
+				Strings.create("systemPrompt"), Strings.create("Echo the request.")),
+			Fields.TASKS, Vectors.of(
+				(ACell) Maps.of(
+					Fields.JOB_ID, Strings.create("job-ghost"),
+					Fields.INPUT, Strings.create("Process this"))));
+
+		Exception thrown = assertThrows(Exception.class,
+			() -> adapter.processGoal(null, scopedCtx, input),
+			"Venue op failure must propagate, not be silently swallowed");
+		String msg = thrown.getMessage();
+		assertNotNull(msg, "Exception must have a message");
+		assertTrue(msg.contains("not found") || msg.contains("Agent"),
+			"Expected agent-not-found error, got: " + msg);
 	}
 
 	@Test

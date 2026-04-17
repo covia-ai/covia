@@ -85,14 +85,6 @@ public class LLMAgentOllamaIT {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("ollama-agent");
 
-		AVector<ACell> history = LLMAgentAdapter.extractHistory(agent.getState());
-		assertEquals(3, history.count());
-
-		AString response = RT.ensureString(RT.getIn(history.get(2), "content"));
-		assertNotNull(response);
-		System.out.println("=== Ollama response ===");
-		System.out.println(response);
-
 		AVector<ACell> timeline = agent.getTimeline();
 		assertEquals(1, timeline.count());
 		AString timelineResponse = RT.ensureString(RT.getIn(timeline.get(0), Fields.RESULT, "response"));
@@ -108,14 +100,6 @@ public class LLMAgentOllamaIT {
 			Maps.of(Fields.AGENT_ID, "ollama-agent"),
 			RequestContext.of(ALICE_DID));
 		run2.awaitResult(5000);
-
-		AVector<ACell> history2 = LLMAgentAdapter.extractHistory(agent.getState());
-		assertEquals(5, history2.count());
-
-		AString response2 = RT.ensureString(RT.getIn(history2.get(4), "content"));
-		assertNotNull(response2);
-		System.out.println("=== Turn 2 response ===");
-		System.out.println(response2);
 
 		assertEquals(2, agent.getTimeline().count());
 	}
