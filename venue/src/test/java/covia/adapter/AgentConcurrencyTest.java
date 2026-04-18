@@ -199,8 +199,10 @@ public class AgentConcurrencyTest {
 		// sources of truth (in-memory runCompletions map + lattice K_STATUS
 		// CAS) that could disagree and produce "Cannot start agent" errors.
 		//
-		// With the RunCoordinator refactor, all start/attach/exit decisions
-		// are under a single per-agent lock — this race class is eliminated.
+		// In the virtual-thread-per-agent model, launch is an atomic CAS on
+		// runningLoops via ConcurrentHashMap.compute() — the in-memory slot
+		// is the sole source of truth for liveness, so this race class is
+		// eliminated.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "rapid",
@@ -342,8 +344,9 @@ public class AgentConcurrencyTest {
 	@Test
 	public void testMessageAndTriggerConcurrent() {
 		// Both agent:message and agent:trigger funnel through wakeAgent.
-		// The RunCoordinator lock serialises them — one starts the loop,
-		// the other attaches to the live completion future.
+		// The atomic CAS on runningLoops (ConcurrentHashMap.compute)
+		// serialises them — one wake wins and starts the loop, the other
+		// attaches to the live completion future.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "msg-trig",

@@ -1331,8 +1331,9 @@ public class AgentAdapterTest {
 	 * Regression for #64 — phantom RUNNING state. If the agent's lattice status
 	 * shows RUNNING but no live run exists (crash-recovery remnant, stale
 	 * write, or race that slips past clean-exit), a subsequent trigger must
-	 * still be able to start a fresh loop. The coord is the source of truth
-	 * for liveness — wakeAgent corrects the lattice under the lock.
+	 * still be able to start a fresh loop. The runningLoops slot is the source
+	 * of truth for liveness — wakeAgent corrects the lattice inside the atomic
+	 * ConcurrentHashMap.compute() update.
 	 *
 	 * <p>Deterministic: we force the phantom by writing status=RUNNING
 	 * directly while no run is live (fresh agent, no triggers yet), then
@@ -1350,7 +1351,7 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("phantom-agent");
 
-		// Force the phantom: status=RUNNING with no coord.completion
+		// Force the phantom: status=RUNNING with no runningLoops entry
 		agent.setStatus(AgentState.RUNNING);
 		assertEquals(AgentState.RUNNING, agent.getStatus());
 

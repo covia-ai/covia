@@ -20,8 +20,9 @@ See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent address
    monotonic within an agent's lifetime.
 
 3. **Single venue writes.** An agent lives on one venue. All writes — message delivery,
-   agent runs, config updates — are serialised on that venue via a per-agent lock.
-   Cross-venue sync is replication: the more-recent state replaces the stale one.
+   agent runs, config updates — are serialised on that venue via atomic per-agent
+   cursor updates (`cursor.updateAndGet`). Cross-venue sync is replication: the
+   more-recent state replaces the stale one.
 
 4. **Three levels.** The agent update (level 1) manages framework bookkeeping:
    status, timeline, sessions. The agent transition (level 2) manages domain logic:
@@ -153,7 +154,7 @@ and which operations may safely act on it. There are four states:
 | Status | Meaning | Run loop | Mutations allowed |
 |--------|---------|----------|-------------------|
 | `SLEEPING` | Idle, no transition active. Default after create or after a successful run with no remaining work. | Not running. `wakeAgent` triggers it. | All. Safe to update config in place. |
-| `RUNNING` | A transition is currently in flight on a virtual thread. Holds the per-agent lock during record mutations. | Running. New work is appended to `tasks`/`session.pending` and picked up on next iteration. | Task/session appends only. **Config mutation is racy and rejected** — the in-flight transition has already captured the old config. |
+| `RUNNING` | A transition is currently in flight on a virtual thread. Record mutations go through atomic cursor updates. | Running. New work is appended to `tasks`/`session.pending` and picked up on next iteration. | Task/session appends only. **Config mutation is racy and rejected** — the in-flight transition has already captured the old config. |
 | `SUSPENDED` | Last run failed with an error. Dormant — does not auto-retry. State, tasks, pending, and sessions preserved. | Not running. Resume via `tryResume` (clears error, returns to SLEEPING). | All. In-place config update is allowed and preserves the error so the caller can decide whether to resume after fixing the underlying cause. |
 | `TERMINATED` | Logically deleted. Slot still occupies the namespace key (so the ID is reserved) but the agent is dead. | Cannot run. `agent:request` / `agent:message` / `agent:trigger` all fail. | None — only `agent:create overwrite:true` revives the slot, which **wipes timeline, sessions, tasks, pending, error** and starts fresh. |
 
@@ -337,7 +338,7 @@ run failed), but the Job result is durable. This matches how other side effects
 Level 2 exposes an **async invoke** tool to the LLM. When called, it:
 
 1. Invokes the specified operation asynchronously (creates a Job via JobManager).
-2. Adds the Job ID to the agent's `pending` index (inside the per-agent lock).
+2. Adds the Job ID to the agent's `pending` index via an atomic cursor update.
 3. Registers a completion callback that calls `wakeAgent` (§4.6) when the
    job finishes.
 4. Returns the Job ID to the LLM as the tool result.
@@ -546,10 +547,10 @@ turn, new prompt for the next — that surfaces as a hard-to-debug "why is the
 agent using the old policy" mystery. Forcing the caller to wait for SLEEPING (or
 explicitly cancel) eliminates the race.
 
-**Why SLEEPING / SUSPENDED are safe.** Both are dormant: no transition holds
-the per-agent lock, no thread is reading the config. The `updateConfigAndState`
-mutation is atomic (under `cursor.updateAndGet`), so there is no partial-write
-window. The next `wakeAgent` reads the new config.
+**Why SLEEPING / SUSPENDED are safe.** Both are dormant: no run loop is
+executing a transition, no thread is reading the config. The
+`updateConfigAndState` mutation is atomic (under `cursor.updateAndGet`), so
+there is no partial-write window. The next `wakeAgent` reads the new config.
 
 **Why TERMINATED wipes.** TERMINATED is the explicit "throw it all out" signal.
 If the caller wanted to preserve history, they would have updated in-place from
@@ -733,14 +734,24 @@ separate Java-side running/wake flags that could drift from the lattice.
 
 **`wakeAgent(agentId, ctx)`** is the single entry point for all agent wakes.
 It is called by `agent:request`, `agent:message`, and async job completion
-callbacks. The logic (all inside the per-agent lock):
+callbacks. The logic (atomic CAS on `runningLoops: ConcurrentHashMap` via
+`compute()`):
 
-1. Read the agent's `status` from the lattice.
-2. If RUNNING → return (new work is in the lattice; the loop will see it).
-3. If no work (no session with pending messages and no tasks) → return.
-4. Resolve `config.operation` → if null, return (no transition op configured).
-5. Set status → RUNNING.
-6. Start `executeRunLoop` on a virtual thread.
+1. Inside `runningLoops.compute(agentId, ...)`:
+   - If slot already populated → live loop exists; return existing completion
+     (caller observes RUNNING; new work is in the lattice and the live loop
+     will see it on its next iteration).
+   - Otherwise → read the agent's `status` from the lattice.
+   - If `status == RUNNING` with no live launcher → phantom (#64); correct to
+     SLEEPING under the same atomic update before launching.
+   - If no work (no session with pending messages and no tasks) → return null
+     (leave slot empty).
+   - Resolve `config.operation` → if null, return null.
+   - Set status → RUNNING on the lattice.
+   - Create a fresh `CompletableFuture<ACell>`, put it in the slot, and launch
+     `executeRunLoop` on a `Thread.ofVirtual()`.
+2. The launcher wins the slot atomically; concurrent callers observing the
+   populated slot simply return the same completion future.
 
 An agent is eligible to run when any of:
 
@@ -748,13 +759,16 @@ An agent is eligible to run when any of:
 - A pending outbound job has completed or failed
 - A new message has been delivered to a session's `pending` queue (via `agent:message`)
 
-**No lost wakeups.** The per-agent lock serialises `addTask` / `appendSessionPending`
-with the run loop's status check. If work is added before the lock is acquired,
-the loop sees it. If work is added after the loop writes SLEEPING, the
-subsequent `wakeAgent` call sees SLEEPING and starts a new loop.
+**No lost wakeups.** `addTask` / `appendSessionPending` write to the lattice
+atomically, then call `wakeAgent`. The loop's top-of-iteration `hasWork` check
+reads the current lattice. If work landed while a loop was running, the next
+iteration sees it. If work landed after the loop wrote SLEEPING and removed
+its slot, the `finally`-block double-check (§4.4) re-launches; failing that,
+the next `wakeAgent` from the writer finds the slot empty and launches.
 
-**No double runs.** The lock serialises the SLEEPING → RUNNING CAS. Only one
-thread can win the transition; all others see RUNNING and return.
+**No double runs.** `ConcurrentHashMap.compute()` serialises the
+empty-slot → launch transition. Only one thread can populate the slot; all
+others observe it populated and return the existing completion.
 
 **Configurable sleep:** `config.sleepInterval` (milliseconds). If set, the agent
 wakes periodically even without events. Useful for polling-style agents.
@@ -778,15 +792,17 @@ unconditionally.
 
 ### 5.2 Why One Value?
 
-All writes to an agent are serialised on one venue via a per-agent lock. Message
-delivery, task addition, and run loop writes are all guarded by this lock, so
-there are no concurrent writers to the agent record.
+All writes to an agent are serialised on one venue through atomic cursor
+updates (`cursor.updateAndGet`). Message delivery, task addition, and run loop
+merges are all compare-and-swap operations against the same lattice slot, so
+there are no lost updates even though multiple threads may write concurrently.
 
-The run loop holds the lock only briefly — for reading the snapshot and for
-writing the merged result. The transition invocation (which may take seconds or
-minutes) runs without the lock held. Concurrent `addTask` and `appendSessionPending`
-calls proceed while the transition runs; their writes are preserved by the
-merge-at-write-time strategy (§4.4 step 6).
+The run loop never holds a lock. It reads a snapshot at the top of each
+iteration, runs the transition (which may take seconds or minutes), then
+merges the result via a single atomic `cursor.updateAndGet`. Concurrent
+`addTask` and `appendSessionPending` calls proceed while the transition runs;
+their writes are preserved because `mergeRunResult` reads the *current*
+sessions/tasks inside the CAS (not the stale pre-transition snapshot).
 
 Cross-venue sync is replication: the venue hosting the agent always has the latest
 ts. Replicas receive the complete state.

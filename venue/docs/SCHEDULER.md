@@ -7,7 +7,7 @@ at the session and task level while execution remains serial per agent.
 subject) and Path 4 are planned.
 
 See:
-- [AGENT_LOOP.md](./AGENT_LOOP.md) — run loop, status model, per-agent lock
+- [AGENT_LOOP.md](./AGENT_LOOP.md) — run loop, status model, virtual-thread launcher
 - [AGENT_SESSIONS.md](./AGENT_SESSIONS.md) — sessions, session.pending, history, task binding
 - [GRID_LATTICE_DESIGN.md §4.5](./GRID_LATTICE_DESIGN.md) — virtual namespaces (`n/`, `c/`, `t/`) and the split between user scratch and framework-managed state.
 
@@ -226,9 +226,10 @@ but carrying the agent-owner's DID for access control. Bypasses rate
 limits (the scheduler is the venue itself, not an external caller).
 
 The scheduler does not wait for cycles to finish — it calls `wakeAgent`
-and moves on. `wakeAgent`'s lock/coord handles deduplication; if a
-cycle is already live, the scheduler call attaches to the same future
-(and discards it, since the scheduler doesn't need the result).
+and moves on. `wakeAgent`'s atomic CAS on `runningLoops` handles
+deduplication; if a cycle is already live, the scheduler call observes
+the existing completion future (and discards it, since the scheduler
+doesn't need the result).
 
 ### 7.6 Crash Recovery
 
@@ -456,25 +457,27 @@ federation work.
 
 ## 9. `wakeAgent` Invariants
 
-1. **Lock serialisation.** Per-agent `ReentrantLock`. Held across
-   status read, phantom recovery, `coord.completion` check, status
-   write, and loop dispatch.
+1. **Atomic launcher CAS.** `runningLoops.compute(agentId, ...)` either
+   installs a fresh `CompletableFuture` (and the caller starts the
+   virtual thread) or returns the existing live future (and the caller
+   attaches). No shared lock on the hot path.
 
-2. **Phantom RUNNING recovery.** No live coord + lattice shows
-   RUNNING → correct to SLEEPING before starting a fresh loop.
+2. **Phantom RUNNING recovery.** No entry in `runningLoops` + lattice
+   shows RUNNING → correct to SLEEPING before installing a fresh slot.
 
 3. **Gate on non-force.**
    `force || hasWork() || hasDueScheduledWake()` must be true, or no
    loop starts. `hasWork` covers events; `hasDueScheduledWake` covers
    session/task timers.
 
-4. **Dedup via coord.** Concurrent `wakeAgent` calls (scheduler +
-   intake + trigger) all attach to the same
-   `CompletableFuture<ACell>` returned by the first winner.
+4. **Dedup via launcher slot.** Concurrent `wakeAgent` calls (scheduler
+   + intake + trigger) all observe the same `CompletableFuture<ACell>`
+   — the first to install wins, the rest attach.
 
 5. **No wake flag on lattice.** No agent-level wake field to set.
-   Events carry themselves via pending writes (read under the lock by
-   the clean-exit handshake); scheduled wakes carry themselves via
+   Events carry themselves via pending writes (picked up by the next
+   iteration's top-of-loop `hasWork` check, or by the run loop's
+   post-exit `finally` re-check); scheduled wakes carry themselves via
    session/task wake times (read on the next tick).
 
 ---

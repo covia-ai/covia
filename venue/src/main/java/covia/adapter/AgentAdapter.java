@@ -625,10 +625,11 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		// Default wait=true: block until the cycle quiesces or yields. This is
-		// a blocking wait on the coord completion, NOT a result-await — the
-		// caller gets a status snapshot, not agent output. For output, wait
-		// on the task/chat Job returned by agent:request / agent:chat.
+		// Default wait=true: block until the loop drains all work and the
+		// completion future resolves. This is a blocking wait on the run
+		// loop, NOT a result-await — the caller gets a status snapshot,
+		// not agent output. For output, wait on the task/chat Job returned
+		// by agent:request / agent:chat.
 		long waitMs = parseWaitMs(input);
 		if (waitMs == 0 && RT.getIn(input, Fields.WAIT) == null) waitMs = -1;
 
