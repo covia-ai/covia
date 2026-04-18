@@ -75,10 +75,10 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** One coordinator per agent, keyed by agentId. */
-	private final ConcurrentHashMap<String, RunCoordinator> runs = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<AString, RunCoordinator> runs = new ConcurrentHashMap<>();
 
 	/** Active transition job per agent — allows suspend to cancel running transitions */
-	private final ConcurrentHashMap<String, CompletableFuture<ACell>> activeTransitions = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<AString, CompletableFuture<ACell>> activeTransitions = new ConcurrentHashMap<>();
 
 	/**
 	 * Per-agent deferred task completions written by {@code agent:complete-task}
@@ -87,7 +87,7 @@ public class AgentAdapter extends AAdapter {
 	 * the caller's {@code awaitResult} only returns once the cycle is fully
 	 * persisted. Inner key is the task (== caller Job) ID.
 	 */
-	private final ConcurrentHashMap<String, ConcurrentHashMap<Blob, AMap<AString, ACell>>> deferredCompletions
+	private final ConcurrentHashMap<AString, ConcurrentHashMap<Blob, AMap<AString, ACell>>> deferredCompletions
 		= new ConcurrentHashMap<>();
 
 	/**
@@ -101,7 +101,7 @@ public class AgentAdapter extends AAdapter {
 	 * act as the truth — no separate CAS required, and a cancelled caller
 	 * Job naturally frees the slot.
 	 */
-	private final ConcurrentHashMap<String, ConcurrentHashMap<Blob, Job>> activeChats = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<AString, ConcurrentHashMap<Blob, Job>> activeChats = new ConcurrentHashMap<>();
 
 	/**
 	 * Test-only: injects a chat reservation so a follow-up {@code agent:chat}
@@ -109,7 +109,7 @@ public class AgentAdapter extends AAdapter {
 	 * needing a real long-running transition to hold the slot.
 	 */
 	public void reserveChatSlotForTest(AString agentId, Blob sid, Job job) {
-		activeChats.computeIfAbsent(agentId.toString(), k -> new ConcurrentHashMap<>())
+		activeChats.computeIfAbsent(agentId, k -> new ConcurrentHashMap<>())
 			.put(sid, job);
 	}
 
@@ -120,7 +120,7 @@ public class AgentAdapter extends AAdapter {
 	 * — matches the semantics used by the run loop.
 	 */
 	public Job getActiveChatForTest(AString agentId, Blob sid) {
-		ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(agentId.toString());
+		ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(agentId);
 		if (agentChats == null) return null;
 		Job j = agentChats.get(sid);
 		return (j != null && !j.isFinished()) ? j : null;
@@ -553,7 +553,7 @@ public class AgentAdapter extends AAdapter {
 		// slot. Register a cancel hook so the caller cancelling their own
 		// Job immediately frees the slot for a retry.
 		ConcurrentHashMap<Blob, Job> agentChats = activeChats
-			.computeIfAbsent(agentId.toString(), k -> new ConcurrentHashMap<>());
+			.computeIfAbsent(agentId, k -> new ConcurrentHashMap<>());
 		Job existing = agentChats.get(sid);
 		if (existing != null && !existing.isFinished()) {
 			job.fail("Session " + sidHex + " already has an in-flight chat");
@@ -817,7 +817,7 @@ public class AgentAdapter extends AAdapter {
 		agent.setStatus(AgentState.SUSPENDED);
 
 		// Cancel any active transition so the agent stops promptly
-		CompletableFuture<ACell> activeTransition = activeTransitions.get(agentId.toString());
+		CompletableFuture<ACell> activeTransition = activeTransitions.get(agentId);
 		if (activeTransition != null) activeTransition.cancel(true);
 
 		job.setStatus(Status.STARTED);
@@ -1004,7 +1004,7 @@ public class AgentAdapter extends AAdapter {
 		ACell sid = extractTaskSessionId(tasks, taskId);
 		if (sid != null) envelope = envelope.assoc(Fields.SESSION_ID, sid);
 		deferredCompletions
-			.computeIfAbsent(agentId.toString(), k -> new ConcurrentHashMap<>())
+			.computeIfAbsent(agentId, k -> new ConcurrentHashMap<>())
 			.put(taskId, envelope);
 	}
 
@@ -1114,13 +1114,12 @@ public class AgentAdapter extends AAdapter {
 	 *              used by explicit triggers that always want to try running
 	 */
 	CompletableFuture<ACell> wakeAgent(AString agentId, RequestContext ctx, boolean force) {
-		String key = agentId.toString();
 		AString callerDID = ctx.getCallerDID();
 
 		AgentState agent = getAgent(callerDID, agentId);
 		if (agent == null) return null;
 
-		RunCoordinator coord = runs.computeIfAbsent(key, k -> new RunCoordinator());
+		RunCoordinator coord = runs.computeIfAbsent(agentId, k -> new RunCoordinator());
 		coord.lock.lock();
 		try {
 			// Persist wake flag — any in-flight loop will observe it either
@@ -1135,10 +1134,24 @@ public class AgentAdapter extends AAdapter {
 				return coord.completion;
 			}
 
+			// No live run here (coord is the source of truth for liveness).
+			// If the lattice still shows RUNNING, it's a phantom — either a
+			// crash-recovery remnant (agent was RUNNING when the venue
+			// stopped) or a stale write that slipped past the clean-exit
+			// handshake. Correct it under the lock so a fresh loop can
+			// start; failing to would lock the agent out indefinitely
+			// (see #64).
+			AString status = agent.getStatus();
+			if (AgentState.RUNNING.equals(status)) {
+				log.warn("Agent {} in phantom RUNNING state with no live run; "
+					+ "correcting to SLEEPING", agentId);
+				agent.setStatus(AgentState.SLEEPING);
+				status = AgentState.SLEEPING;
+			}
+
 			// Only start a loop from SLEEPING. Suspended or terminated
-			// agents keep their wake flag for later resume; running is
-			// handled by the live-run branch above.
-			if (!AgentState.SLEEPING.equals(agent.getStatus())) return null;
+			// agents keep their wake flag for later resume.
+			if (!AgentState.SLEEPING.equals(status)) return null;
 
 			// No live run. Decide whether to start one.
 			if (!force && !agent.shouldWake() && !hasWork(agent)) return null;
@@ -1243,7 +1256,7 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> pickedSessionRecord = null;
 			long presentedSessionPendingCount = filteredInbox.count();
 			if (pickedSessionBlob != null) {
-				ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(agentId.toString());
+				ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(agentId);
 				if (agentChats != null) {
 					Job candidate = agentChats.get(pickedSessionBlob);
 					if (candidate != null && !candidate.isFinished()) {
@@ -1307,12 +1320,12 @@ public class AgentAdapter extends AAdapter {
 			// so handleSuspend can cancel an in-flight transition.
 			CompletableFuture<ACell> transitionFuture =
 				engine.jobs().invokeInternal(transitionOp, transitionInput, cycleCtx);
-			activeTransitions.put(agentId.toString(), transitionFuture);
+			activeTransitions.put(agentId, transitionFuture);
 			ACell transitionResult;
 			try {
 				transitionResult = transitionFuture.join();
 			} finally {
-				activeTransitions.remove(agentId.toString());
+				activeTransitions.remove(agentId);
 			}
 
 			// Process results — the transition contract is now lean only:
@@ -1338,7 +1351,7 @@ public class AgentAdapter extends AAdapter {
 			// before completeDeferredJobs leaves them visible to the outer
 			// catch sweeper — the slot is only cleared after merge succeeds.
 			ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred =
-				deferredCompletions.get(agentId.toString());
+				deferredCompletions.get(agentId);
 			AMap<AString, ACell> taskResults = buildTaskResultsFromDeferred(deferred);
 			ACell result = (leanError != null) ? leanError : leanResponse;
 
@@ -1416,7 +1429,7 @@ public class AgentAdapter extends AAdapter {
 			// envelopes (atomic remove) and complete the caller's pending
 			// task Jobs. Doing this AFTER the merge guarantees that an
 			// awaitResult caller sees the completed cycle's writes.
-			completeDeferredJobs(deferredCompletions.remove(agentId.toString()));
+			completeDeferredJobs(deferredCompletions.remove(agentId));
 
 			// Complete any in-flight chat for the picked session. Same
 			// post-merge ordering invariant as task completion: the caller's
@@ -1428,7 +1441,7 @@ public class AgentAdapter extends AAdapter {
 				// Release the slot BEFORE completing the Job so a caller that
 				// awakens on awaitResult and immediately submits a follow-up
 				// chat on the same session never races a stale reservation.
-				ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(agentId.toString());
+				ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(agentId);
 				if (agentChats != null) agentChats.remove(pickedSessionBlob, pickedChatJob);
 				if (leanError != null) {
 					if (!pickedChatJob.isFinished()) pickedChatJob.fail(leanError.toString());
@@ -1750,7 +1763,7 @@ public class AgentAdapter extends AAdapter {
 				}
 			}
 		}
-		ConcurrentHashMap<Blob, Job> agentChats = activeChats.remove(agentId.toString());
+		ConcurrentHashMap<Blob, Job> agentChats = activeChats.remove(agentId);
 		if (agentChats != null) {
 			for (Job chatJob : agentChats.values()) {
 				if (chatJob != null && !chatJob.isFinished()) {
@@ -1759,7 +1772,7 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 		ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred =
-			deferredCompletions.remove(agentId.toString());
+			deferredCompletions.remove(agentId);
 		if (deferred != null) {
 			for (var e : deferred.entrySet()) {
 				Job pending = engine.jobs().getJob(e.getKey());

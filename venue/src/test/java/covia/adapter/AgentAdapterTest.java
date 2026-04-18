@@ -1327,6 +1327,48 @@ public class AgentAdapterTest {
 		assertEquals(1, agent.getTimeline().count(), "Transition should have run once");
 	}
 
+	/**
+	 * Regression for #64 — phantom RUNNING state. If the agent's lattice status
+	 * shows RUNNING but no live run exists (crash-recovery remnant, stale
+	 * write, or race that slips past clean-exit), a subsequent trigger must
+	 * still be able to start a fresh loop. The coord is the source of truth
+	 * for liveness — wakeAgent corrects the lattice under the lock.
+	 *
+	 * <p>Deterministic: we force the phantom by writing status=RUNNING
+	 * directly while no run is live (fresh agent, no triggers yet), then
+	 * issue a normal trigger. Without the fix this fails with "Cannot start
+	 * agent"; with the fix the trigger recovers and completes.</p>
+	 */
+	@Test
+	public void testPhantomRunningRecovery() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "phantom-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("phantom-agent");
+
+		// Force the phantom: status=RUNNING with no coord.completion
+		agent.setStatus(AgentState.RUNNING);
+		assertEquals(AgentState.RUNNING, agent.getStatus());
+
+		// Trigger must recover — not fail with "Cannot start agent"
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "phantom-agent"),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertNotNull(result, "Trigger should recover from phantom RUNNING");
+		assertEquals(Status.COMPLETE, job.getStatus(),
+			"Job should complete, not fail with 'Cannot start agent'");
+		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
+		assertEquals(AgentState.SLEEPING, agent.getStatus(),
+			"Agent should be SLEEPING after the recovered run");
+	}
+
 	// ========== User isolation ==========
 
 	@Test
