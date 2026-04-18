@@ -47,7 +47,7 @@ covia/                          # ai.covia:covia:0.0.2-SNAPSHOT (parent POM)
 
 - **Java 21+** (JDK)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.4-SNAPSHOT** must be installed in local Maven repo (`cd ../convex && mvn clean install`)
+- **Convex 0.8.4** (released artifact; `mvn install` from `../convex` if building from source)
 
 ## Build & Run
 
@@ -79,7 +79,7 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.4-SNAPSHOT | Lattice platform, immutable data, cryptography |
+| Convex | 0.8.4 | Lattice platform, immutable data, cryptography |
 | Javalin | 6.7.0 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.5.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 0.12.1 | Model Context Protocol |
