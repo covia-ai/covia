@@ -32,8 +32,9 @@ delay session B. Backoff on task X must not delay task Y. The execution
 lock does not make them share a scheduling fate.
 
 **Consequence:** wake state lives on sessions and tasks, not on the agent.
-The agent record carries no agent-level wake field. The scheduler scans
-sessions and tasks to decide when to call `wakeAgent`.
+The agent record carries no agent-level wake field. The scheduler indexes
+per-thread wake times in a priority queue and calls `wakeAgent` when a
+thread comes due.
 
 This is the single most important design decision in this document and
 drives the rest.
@@ -84,9 +85,13 @@ Explicit wakes bypass both. Different mechanisms, one funnel (§9).
    unfinished). Phantom RUNNING (crash remnant, stale write past a clean
    exit) is corrected before installing a fresh slot (#64).
 
-6. **Scheduler is stateless.** The set of "due" sessions/tasks is a
-   pure function of lattice state. No external queue, no index to
-   invalidate. The scheduler is an observer that fires on observation.
+6. **Lattice is source of truth; scheduler index is derived.** `wakeTime`
+   on sessions and tasks is authoritative and persistent. The scheduler
+   holds an in-memory priority queue keyed by `wakeTime` for O(log n)
+   next-due lookup, rebuilt on boot from the lattice. A single helper
+   (`AgentState.setThreadWakeTime`) writes the field AND updates the
+   index atomically — no other call site mutates `wakeTime`, so
+   invalidation cannot drift.
 
 ---
 
@@ -96,7 +101,7 @@ Explicit wakes bypass both. Different mechanisms, one funnel (§9).
 |---|---|---|---|---|---|
 | 1 | Explicit trigger | `agent:trigger`, `agent:resume` | `true` | nothing | **Yes** |
 | 2 | Work arrival | `agent:request`, `agent:chat`, `agent:message` | `true`* | session.pending / tasks | No |
-| 3 | Scheduled | venue scheduler tick | `false` | (reads session.wakeTime / task.wakeTime) | No |
+| 3 | Scheduled | venue scheduler priority queue | `false` | (reads session.wakeTime / task.wakeTime) | No |
 | 4 | Async completion | Job completion hook | `false` | session.pending (completion envelope) | No |
 
 \* Path 2 uses `force=true` purely to cover the write-visibility window
@@ -177,78 +182,185 @@ Agent-level wake state is eliminated. Sessions and tasks are the scheduling thre
 
 Absent `wakeTime` means "no outstanding schedule" — the thread is event-driven only (e.g. a chat session waiting for the next message).
 
-### 7.3 Scan, Not Index
+### 7.3 Why Not Scan
 
-Two options:
+At venue scale (thousands of users × many agents × many sessions) a
+per-second full scan over SLEEPING agents × threads is wasted work:
+steady state is "almost everything is sleeping with no wake due", so
+~100% of the scan cost produces no action. An indexed scheduler, fired
+only when a thread is actually due, is O(log n) per schedule/cancel
+and zero cost at idle.
 
-**Scan** — every tick, iterate users × agents[SLEEPING] × sessions ×
-tasks; for each with a due wake, call `wakeAgent`. Stateless.
+### 7.4 Scheduler Component — `ScheduledThreadPoolExecutor`
 
-**Index** — priority queue keyed by target time. O(log n) insert,
-O(1) pop. Fast. But requires invalidation on every `sleep`, every
-backoff, every new session/task creation, and crash-recovery rebuild.
-Duplicates lattice state (CRDT hygiene violation; the index becomes a
-second source of truth).
+`AgentScheduler` is a thin wrapper around the JDK's
+`ScheduledThreadPoolExecutor` (STPE). STPE is already a heap-backed
+priority-queue scheduler with park-until-next-due, automatic promotion
+on earlier writes, O(log n) cancel, and battle-tested shutdown. No
+reason to re-implement any of it.
 
-**Choice: scan.** At venue scale (thousands of users × single-digit
-agents × single-digit sessions × small task counts) a 1s scan over
-immutable lattice cells with structural sharing is microseconds.
-Profile before optimising.
+**Internals:**
 
-### 7.4 Tick Interval
+```java
+class AgentScheduler {
+    private final ScheduledThreadPoolExecutor timer;
+    private final ConcurrentHashMap<ThreadRef, ScheduledFuture<?>> handles;
+    private final Engine engine;
 
-1 second default. Rationale unchanged from prior draft: cron-style
-agents want minute granularity, retry agents want second granularity,
-sub-second is not a scheduling target (use events). Configurable via
-`config.scheduler.tickMs`; set to 0 to disable (for tests).
+    AgentScheduler(Engine engine) {
+        this.engine = engine;
+        this.timer = new ScheduledThreadPoolExecutor(1, r -> {
+            Thread t = new Thread(r, "agent-scheduler");
+            t.setDaemon(true);
+            return t;
+        });
+        // Cancelled futures removed from queue immediately, not at fire time.
+        this.timer.setRemoveOnCancelPolicy(true);
+        this.handles = new ConcurrentHashMap<>();
+    }
+}
+```
 
-### 7.5 Scheduler Component
+One platform daemon thread for timing. Fire action dispatches onto a
+fresh virtual thread (below) so `wakeAgent`'s lattice writes / Etch
+I/O never stall the timer.
 
-`AgentScheduler` — Engine-owned, one tick task on a dedicated
-`ScheduledExecutorService`. Per tick, roughly:
+**Public surface:**
+
+| Method | Semantics |
+|---|---|
+| `schedule(ref, wakeTime)` | Cancel any prior future for `ref`, install a new fire at `wakeTime`. |
+| `cancel(ref)` | Cancel the future for `ref`, if any. |
+| `nextDue()` | Earliest absolute wake (diagnostics / tests); `-1` if empty. |
+| `tickOnce()` | Test-only: synchronously fire all due refs against an injected `TimeSource`. |
+
+**Implementation:**
+
+```java
+void schedule(ThreadRef ref, long wakeTime) {
+    ScheduledFuture<?> prev = handles.remove(ref);
+    if (prev != null) prev.cancel(false);
+    long delay = Math.max(0, wakeTime - now());
+    handles.put(ref, timer.schedule(() -> fire(ref), delay, MILLISECONDS));
+}
+
+void cancel(ThreadRef ref) {
+    ScheduledFuture<?> f = handles.remove(ref);
+    if (f != null) f.cancel(false);
+}
+
+private void fire(ThreadRef ref) {
+    handles.remove(ref);   // slot cleared; next schedule installs fresh
+    Thread.ofVirtual().start(() -> {
+        try {
+            engine.wakeAgent(
+                ref.agentId(),
+                RequestContext.scheduler(ref.userDid()),
+                false);
+        } catch (Throwable t) {
+            log.warn("scheduler fire failed for {}", ref, t);
+        }
+    });
+}
+```
+
+**`ThreadRef`** is a record `(userDid, agentId, threadKind, threadId)`
+with value-based equals/hashCode — the map key for cancel-by-ref.
+
+**`RequestContext.scheduler(did)`** is a new factory mirroring
+`INTERNAL` but carrying the agent-owner's DID for access control.
+Bypasses rate limits (the scheduler is the venue itself).
+
+### 7.5 Invariant: Single-Writer per `wakeTime` Field
+
+Every `wakeTime` write goes through one helper:
+
+```
+AgentState.setThreadWakeTime(kind, threadId, wakeTime | null)
+    ↓ cursor.updateAndGet — writes sessions[sid].wakeTime / tasks[tid].wakeTime
+    ↓ wakeTime != null ? scheduler.schedule(ref, wakeTime) : scheduler.cancel(ref)
+```
+
+**Order matters: lattice first, scheduler second.** If the process
+crashes between the two, the boot rebuild (§7.6) restores the scheduler
+from the lattice. The reverse order would risk losing writes.
+
+**All call sites identified:**
+
+| Caller | Context | Runs on |
+|---|---|---|
+| `sleep` tool | Inside a transition's LLM tool loop | Agent's run-loop vthread |
+| `mergeRunResult` post-cycle clear | End of a cycle that processed the thread | Same vthread |
+| `mergeRunResult` backoff-on-yield | Same cycle if no progress | Same vthread |
+| Boot rebuild | Startup | Before any run loop starts |
+
+Intake ops (`agent:request`, `agent:chat`, `agent:message`) write
+`pending`/`tasks` entries, *not* `wakeTime`. New tasks with no
+`wakeTime` are "run ASAP" — handled by `hasWork`, not the scheduler.
+
+**Per-ref concurrency is zero.** Virtual-thread-per-agent means at
+most one cycle runs per agent. All in-cycle writers (`sleep`,
+`mergeRunResult`) are sequential on that one vthread. The only
+cross-thread writer is boot rebuild, which runs before any cycle
+starts. No lock needed on `setThreadWakeTime`.
+
+**Clock skew.** STPE uses `System.nanoTime` internally. Wall-clock
+NTP jumps do not move the fire target (STPE computes delay in nanos
+at schedule time). Acceptable — wake is advisory; the run loop's
+`hasWork` + `hasDueScheduledWake` gate reads lattice truth. Wakes
+persist across restart; the scheduler uses relative delays from
+absolute `wakeTime - now()` at (re)schedule time.
+
+### 7.6 Crash Recovery — One-Pass Rebuild on Boot
+
+The scheduler is in-memory only. The lattice carries authoritative
+`wakeTime` on each session/task. On venue startup, after lattice
+load and before accepting traffic:
 
 ```
 for each user in venueState.users():
-    for each agent in user.sleepingAgents():
-        if (shouldWakeForSchedule(agent)):
-            wakeAgent(agent.id, RequestContext.scheduler(user.did), false)
+    for each agent in user.agents():
+        for each session with session.wakeTime != null:
+            scheduler.schedule(sessionRef, session.wakeTime)
+        for each task with task.wakeTime != null:
+            scheduler.schedule(taskRef, task.wakeTime)
 ```
 
-Where `shouldWakeForSchedule(agent)` returns true if:
+One-time cost, proportional to the count of *scheduled* threads (not
+total threads). Past-due wakes land with `delay ≤ 0` and fire
+immediately.
 
-```
-(any session with wakeTime > 0 && now ≥ wakeTime) ||
-(any task with wakeTime > 0 && now ≥ wakeTime)
-```
+Startup ordering in `Engine.start()`:
 
-`RequestContext.scheduler(did)` is a new factory mirroring `INTERNAL`
-but carrying the agent-owner's DID for access control. Bypasses rate
-limits (the scheduler is the venue itself, not an external caller).
+1. Load lattice.
+2. Construct `AgentScheduler` (STPE ready, no futures scheduled yet).
+3. Boot rebuild — populate futures from lattice.
+4. Start `VenueServer` (accept external traffic).
 
-The scheduler does not wait for cycles to finish — it calls `wakeAgent`
-and moves on. `wakeAgent`'s atomic CAS on `runningLoops` handles
-deduplication; if a cycle is already live, the scheduler call observes
-the existing completion future (and discards it, since the scheduler
-doesn't need the result).
+Between (3) and (4), futures may fire and start run loops. That's
+fine — run loops don't require external traffic.
 
-### 7.6 Crash Recovery
+Phantom RUNNING agents (was running when venue stopped) are corrected
+by `wakeAgent`'s phantom-recovery path (#64) when the scheduler fires
+them. No scheduler-specific recovery logic needed.
 
-No state to recover. On restart:
+**Belt-and-braces reconcile (optional).** A low-frequency pass (e.g.
+every 10 minutes) could re-scan the lattice and log any drift between
+scheduler handles and lattice `wakeTime`. Not required under §7.5's
+single-helper invariant — default off via
+`config.scheduler.reconcileIntervalMs`. Added only if a future code
+path introduces a bypass write.
 
-- Sessions/tasks with past-due wakes are caught by the first tick.
-- Phantom RUNNING agents (was running when venue stopped) are
-  corrected by `wakeAgent`'s phantom-recovery path (#64) when the
-  scheduler tries to wake them.
-- No reconciler needed (contrast with Path 4 async completion, §8).
+### 7.7 Failure Modes — Checked
 
-### 7.7 Clock
-
-`Utils.getCurrentTimestamp()` — wall-clock millis. NTP adjustments
-backward may briefly delay wakes; forward may fire them early. Not a
-correctness issue because wake is advisory (lower bound), every fire
-still passes through `wakeAgent`'s gate, and the loop's own logic
-decides what to do. Monotonic clocks are not used because wake times
-persist across restart and monotonic time does not.
+| Scenario | Outcome |
+|---|---|
+| Fire races with `cancel(ref)` — future already running | `fire` → `wakeAgent` → gate reads lattice, sees no work / nothing due → returns. Harmless. |
+| `schedule` replaces a ref mid-fire | Old fire runs with stale wakeTime; `wakeAgent` gate catches it. New future installed, fires at new time. |
+| Crash after lattice write, before `scheduler.schedule` | Boot rebuild restores from lattice. |
+| 10K refs due at same `now` | STPE pops all, spawns 10K vthreads rapidly. `runningLoops.compute` dedups per agent. O(1) per fire. |
+| Executor task throws | `fire` catches `Throwable`, logs. STPE continues (no silent cancel of other tasks). |
+| Venue shutdown | `timer.shutdown()` in `Engine.stop()`. In-flight fires complete on their vthreads. |
 
 ### 7.8 Agent-Driven Sleep — `sleep` Harness Tool
 
@@ -305,9 +417,11 @@ backoff write.
 
 **Cycle exit preserves the wake time.** Wake times live on session and task records, not on the agent. The status transition at the end of a cycle only touches the agent's status field, so scheduled wakes on other threads persist naturally. A wake is only cleared by the cycle that actually processes that thread.
 
-**Bounds.** 1 ms ≤ ms ≤ 30 days (2_592_000_000). Lower bound matches
-tick granularity. Upper bound guards LLM arithmetic bugs; agents
-wanting indefinite dormancy suspend explicitly.
+**Bounds.** 1 ms ≤ ms ≤ 30 days (2_592_000_000). Lower bound is a
+sanity floor (sub-millisecond sleep is not a scheduling target — use
+events); the scheduler itself has no tick quantum since it's
+event-driven. Upper bound guards LLM arithmetic bugs; agents wanting
+indefinite dormancy suspend explicitly.
 
 **Return value.** `{thread: "session"|"task", id: <sid|tid>,
 wakeTime: <absolute target>}` — the LLM sees which thread it slept
@@ -363,18 +477,32 @@ The run loop's clean-exit handshake re-reads state under the lock before exiting
 - **Event override.** Chat on session A while session A is sleeping
   → immediate wake (hasWork path). Sleep state untouched (it was
   attached to the session, which the cycle now processes and clears).
-- **Scheduler fires at target.** `sleep(5000)` → scheduler ticks
-  every 1 s; session wakes within ~1–2 s of target. (Test with
-  injected `TimeSource` to avoid real-time flake.)
+- **Scheduler fires at target.** `sleep(5000)` → scheduler unparks at
+  the target and fires `wakeAgent`; session wakes within a few ms of
+  target. Test via injected `TimeSource` + `tickOnce()` to avoid
+  real-time flake.
+- **Earlier write bumps the wait.** Scheduler parked for `sleep(60_000)`;
+  a new `sleep(1000)` call must fire at 1s, not 60s. `schedule()`
+  signals the scheduler thread; verified via `tickOnce()` after a
+  simulated new-earliest write.
+- **Cancel clears the wake.** Processing a thread clears its wakeTime
+  via `setThreadWakeTime(..., null)` → scheduler removes it from the
+  queue. Ref is not fired again unless re-scheduled.
 - **Backoff on yield.** Task yields without progress → yieldCount
   bumps, wakeTime deferred by backoff(yieldCount). Repeat yields
   escalate.
 - **Sleep defers backoff.** Task yields but sleep was called → sleep
   value stands; no backoff applied over it.
 - **Restart preservation.** Session.wakeTime / task.wakeTime survive
-  venue restart; overdue wakes fire on first post-restart tick.
-- **Phantom recovery.** Crashed-while-RUNNING agent + scheduler tick
-  → wakeAgent recovers to SLEEPING and starts fresh loop.
+  venue restart; the boot-time rebuild populates the priority queue
+  from the lattice; overdue wakes fire on the scheduler's first
+  iteration after boot.
+- **Phantom recovery.** Crashed-while-RUNNING agent + scheduled wake
+  reaches the queue head → wakeAgent recovers to SLEEPING and starts
+  fresh loop.
+- **Index ↔ lattice reconcile.** Startup rebuild matches lattice
+  `wakeTime`s exactly; optional periodic reconcile (§7.6) finds zero
+  drift under the single-helper invariant.
 
 ### 7.13 Open Questions
 
@@ -477,8 +605,9 @@ federation work.
 5. **No wake flag on lattice.** No agent-level wake field to set.
    Events carry themselves via pending writes (picked up by the next
    iteration's top-of-loop `hasWork` check, or by the run loop's
-   post-exit `finally` re-check); scheduled wakes carry themselves via
-   session/task wake times (read on the next tick).
+   post-exit `finally` re-check); scheduled wakes are held in the
+   scheduler's priority queue, which fires `wakeAgent` at the target
+   time.
 
 ---
 
@@ -491,8 +620,10 @@ federation work.
   "threads" from the scheduler's point of view. Replace-semantics
   for both.
 - Events bypass wake times via `hasWork`.
-- Scheduler scans sessions and tasks (not agents) at 1 s tick,
-  calls `wakeAgent` when any thread is due.
+- Scheduler is an in-memory priority queue keyed by `wakeTime`,
+  event-driven (no polling). Updated atomically by the single
+  `setThreadWakeTime` helper that also writes the lattice field.
+  Rebuilt on boot from the lattice.
 - `sleep` is a harness tool (not a venue op), scoped to the active
   thread from `toolCtx`.
 - Framework backoff defers to explicit sleep on the same cycle.
@@ -568,12 +699,14 @@ iteration order (currently the Index's natural order). Could
 prefer oldest-due-first. Not observed as a problem; revisit if
 agents stall on specific sessions while others fire.
 
-### 11.7 Scheduler tick testability
+### 11.7 Scheduler testability
 
-`AgentScheduler` exposes a `tickOnce()` method for tests — runs
-one tick synchronously. Tests then control time via a
-`TimeSource` abstraction (wall-clock default, controllable for
-tests). Replaces real-time polling in tests, removes flakiness.
+`AgentScheduler` exposes a `tickOnce()` method for tests — synchronously
+drains all entries at or before `now` without involving the scheduler's
+own thread. Tests control time via a `TimeSource` abstraction (wall-clock
+default, controllable for tests); `tickOnce()` uses the injected time
+source so tests can fast-forward without real sleep. Removes real-time
+flakiness.
 
 ### 11.8 Yield-count reset criteria refinement
 
