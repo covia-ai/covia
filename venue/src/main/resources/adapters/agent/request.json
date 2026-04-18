@@ -1,6 +1,6 @@
 {
 	"name": "Request Agent Task",
-	"description": "Send a request to an agent and get a response. PRIMARY tool for agent delegation. Creates a tracked Job that completes when the agent finishes the task — use the standard Job lifecycle (e.g. REST ?wait= or SDK job.awaitResult()) to block or poll. Example: agent_request(agentId='Helper', input={task: 'summarise w/notes/daily', format: 'bullet list'}). For structured output, pass responseSchema (a JSON Schema) — the agent's response will conform to it. Otherwise the agent uses its own default response shape.",
+	"description": "Send a request to an agent. PRIMARY tool for agent delegation. Best-effort synchronous: by default waits up to 5 seconds for the agent to finish. If the agent completes in time you get its structured response directly. If not, you get a snapshot {id, status: STARTED, agentId, sessionId} — poll with grid_job_result(id=<that id>, timeout=<ms>) to retrieve the result. Example: agent_request(agentId='Helper', input={task: 'summarise w/notes/daily'}, timeout=30000). For quick jobs set a short timeout; for slow jobs set timeout=0 (pure async) and poll via grid_job_result. For structured output, pass responseSchema.",
 	"dateCreated": "2026-03-06T00:00:00Z",
 	"operation": {
 		"adapter": "agent:request",
@@ -11,6 +11,10 @@
 				"input": {
 					"type": "object",
 					"description": "The request payload. MUST contain the actual instructions, data, or parameters the agent needs. NEVER pass an empty object {} — the worker has nothing to act on. Use field 'task' for free-form instructions; add other fields the worker needs (data, paths, options). Example: {task: 'summarise w/notes/daily', format: 'bullet list'}."
+				},
+				"timeout": {
+					"type": "integer",
+					"description": "Milliseconds to wait synchronously for the agent to complete. Default 5000ms. On timeout the response is a STARTED snapshot with the task Job id — poll via grid_job_result to retrieve the final result later. Set to 0 for pure async (snapshot returned immediately)."
 				},
 				"responseSchema": {
 					"type": "object",
@@ -25,7 +29,7 @@
 		},
 		"output": {
 			"type": "object",
-			"description": "Agent's structured response to the request. Includes the sessionId the task belonged to.",
+			"description": "Either the agent's structured response (if it completed within the timeout) or a snapshot {id, status: STARTED, agentId, sessionId} to poll via grid_job_result. Always carries the sessionId the task belonged to.",
 			"additionalProperties": true
 		}
 	}

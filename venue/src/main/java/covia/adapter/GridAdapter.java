@@ -1,12 +1,15 @@
 package covia.adapter;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
+import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Grid;
@@ -51,41 +54,26 @@ public class GridAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		throw new UnsupportedOperationException("GridAdapter requires Job context for caller DID propagation");
+		String gridOp = getSubOperation(meta);
+		if (gridOp == null) {
+			return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid grid operation: no sub-operation in metadata"));
+		}
+		AString callerDID = ctx.getCallerDID();
+		return switch (gridOp) {
+			case "run"       -> invokeRun(meta, input, callerDID);
+			case "invoke"    -> invokeAsync(meta, input, callerDID);
+			case "jobStatus" -> invokeJobStatus(meta, input, callerDID);
+			case "jobResult" -> invokeJobResult(meta, input, callerDID);
+			default          -> CompletableFuture.failedFuture(new IllegalArgumentException("Unrecognised grid operation: " + gridOp));
+		};
 	}
 
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		String gridOp = getSubOperation(meta);
-		if (gridOp == null) {
-			job.fail("Invalid grid operation: no sub-operation in metadata");
-			return;
-		}
-
-		// Extract caller DID from request context
-		AString callerDID = ctx.getCallerDID();
-
-		CompletableFuture<ACell> future;
-        switch (gridOp) {
-        case "run":
-            future = invokeRun(meta, input, callerDID);
-            break;
-        case "invoke":
-            future = invokeAsync(meta, input, callerDID);
-            break;
-        case "jobStatus":
-            future = invokeJobStatus(meta, input, callerDID);
-            break;
-        case "jobResult":
-            future = invokeJobResult(meta, input, callerDID);
-            break;
-        default:
-            job.fail("Unrecognised grid operation: " + gridOp);
-            return;
-        }
-		future.whenComplete((result, error) -> {
+		invokeFuture(ctx, meta, input).whenComplete((result, error) -> {
 			if (error != null) {
-				job.fail(error.getMessage());
+				Throwable cause = (error instanceof java.util.concurrent.CompletionException) ? error.getCause() : error;
+				job.fail(cause != null ? cause.getMessage() : error.getMessage());
 			} else {
 				job.completeWith(result);
 			}
@@ -145,7 +133,29 @@ public class GridAdapter extends AAdapter {
 		}
 
 		Venue venue = selectVenue(resolveVenue(meta, input), callerDID);
-		return venue.awaitJobResult(jobId);
+		CompletableFuture<ACell> jobFuture = venue.awaitJobResult(jobId);
+
+		long timeoutMs = parseTimeoutMs(input);
+		if (timeoutMs <= 0) return jobFuture;
+
+		// Derive a new future so the timeout doesn't corrupt the underlying Job's future.
+		// thenApply(x -> x) creates an independent CompletableFuture that completes
+		// when jobFuture does; applying orTimeout to it fails only this derivative.
+		return jobFuture.thenApply(x -> x)
+				.orTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+				.exceptionallyCompose(ex -> {
+					if (ex instanceof TimeoutException || ex.getCause() instanceof TimeoutException) {
+						return CompletableFuture.failedFuture(
+							new TimeoutException("grid:jobResult timed out after " + timeoutMs + "ms waiting for job " + jobId.toHexString()));
+					}
+					return CompletableFuture.failedFuture(ex);
+				});
+	}
+
+	private static long parseTimeoutMs(ACell input) {
+		ACell v = RT.getIn(input, Fields.TIMEOUT);
+		if (v instanceof CVMLong l) return l.longValue();
+		return 0;
 	}
 
     private Venue selectVenue(AString venueSpec, AString callerDID) {

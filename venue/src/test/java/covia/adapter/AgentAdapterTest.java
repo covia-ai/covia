@@ -1984,6 +1984,157 @@ public class AgentAdapterTest {
 		assertNotNull(output, "Polling should retrieve the output");
 	}
 
+	// ========== issue #57: async + poll delegation (tool-loop path) ==========
+
+	/**
+	 * agent:request via invokeInternal (LLM tool-loop path) — helper completes
+	 * fast, result returned inline before the 5s default timeout elapses.
+	 */
+	@Test
+	public void testRequestViaToolLoopReturnsResultWhenFast() throws Exception {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "fast-helper",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		ACell result = engine.jobs().invokeInternal(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "fast-helper", Fields.INPUT, Maps.of("q", "fast")),
+			RequestContext.of(ALICE_DID)).get(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
+
+		assertNotNull(result, "Fast helper should return a full result inline");
+		// Full result is the taskcomplete adapter's echoed task output — not a STARTED snapshot
+		assertNotEquals(Status.STARTED, RT.getIn(result, Fields.STATUS),
+			"Fast completion should not surface as a STARTED snapshot");
+	}
+
+	/**
+	 * agent:request via invokeInternal with short timeout against a helper that
+	 * never completes — returns a STARTED snapshot (not error) so the LLM can
+	 * poll via grid:jobResult.
+	 */
+	@Test
+	public void testRequestViaToolLoopReturnsSnapshotOnTimeout() throws Exception {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "slow-helper",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		ACell result = engine.jobs().invokeInternal(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "slow-helper",
+				Fields.INPUT, Maps.of("q", "slow"),
+				Fields.TIMEOUT, CVMLong.create(100)),
+			RequestContext.of(ALICE_DID)).get(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
+
+		assertNotNull(result, "Should return a snapshot on timeout, not error");
+		AString id = RT.ensureString(RT.getIn(result, Fields.ID));
+		assertNotNull(id, "Snapshot should carry the task Job id for polling");
+		assertEquals(Strings.create("slow-helper"), RT.getIn(result, Fields.AGENT_ID));
+		assertEquals(Status.STARTED, RT.getIn(result, Fields.STATUS),
+			"Timed-out delegation should expose STARTED status for polling");
+	}
+
+	/**
+	 * agent:request with timeout=0 — pure async: snapshot returned immediately
+	 * without waiting on the task.
+	 */
+	@Test
+	public void testRequestViaToolLoopAsyncZeroTimeout() throws Exception {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "async-helper",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		long start = System.nanoTime();
+		ACell result = engine.jobs().invokeInternal(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "async-helper",
+				Fields.INPUT, Maps.of("q", "async"),
+				Fields.TIMEOUT, CVMLong.create(0)),
+			RequestContext.of(ALICE_DID)).get(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
+		long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+
+		assertTrue(elapsedMs < 500, "timeout=0 should return immediately, took " + elapsedMs + "ms");
+		assertEquals(Status.STARTED, RT.getIn(result, Fields.STATUS));
+		assertNotNull(RT.getIn(result, Fields.ID), "Async response must carry Job id");
+	}
+
+	/**
+	 * grid:jobResult with timeout on a never-completing task — the tool errors
+	 * rather than returning a STARTED snapshot. Distinct semantics from
+	 * agent:request: callers of grid:jobResult want a result.
+	 */
+	@Test
+	public void testGridJobResultTimesOutWithError() throws Exception {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "grid-helper",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Submit async via agent:request (timeout=0 → snapshot immediately)
+		ACell snap = engine.jobs().invokeInternal(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "grid-helper",
+				Fields.INPUT, Maps.of("q", "x"),
+				Fields.TIMEOUT, CVMLong.create(0)),
+			RequestContext.of(ALICE_DID)).get(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
+		AString taskId = RT.ensureString(RT.getIn(snap, Fields.ID));
+		assertNotNull(taskId);
+
+		// Poll via grid:jobResult with a short timeout — must error, not return snapshot
+		java.util.concurrent.CompletableFuture<ACell> f = engine.jobs().invokeInternal(
+			"v/ops/grid/job-result",
+			Maps.of(Fields.ID, taskId, Fields.TIMEOUT, CVMLong.create(100)),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			f.get(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
+			fail("grid:jobResult should error on timeout when caller wanted a result");
+		} catch (java.util.concurrent.ExecutionException e) {
+			Throwable cause = e.getCause();
+			assertTrue(cause instanceof java.util.concurrent.TimeoutException
+					|| (cause != null && cause.getMessage() != null && cause.getMessage().contains("timed out")),
+				"Expected TimeoutException, got: " + cause);
+		}
+	}
+
+	/**
+	 * Full async+poll delegation pattern (issue #57 fix). Caller submits a
+	 * request with a short timeout, gets a STARTED snapshot, then waits on
+	 * the task via grid:jobResult and receives the agent's final result.
+	 */
+	@Test
+	public void testAsyncDelegationPattern() throws Exception {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "delegate-helper",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Step 1: submit with timeout=0 to force async return
+		ACell snap = engine.jobs().invokeInternal(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "delegate-helper",
+				Fields.INPUT, Maps.of("task", "delegate"),
+				Fields.TIMEOUT, CVMLong.create(0)),
+			RequestContext.of(ALICE_DID)).get(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
+		AString taskId = RT.ensureString(RT.getIn(snap, Fields.ID));
+		assertNotNull(taskId, "Async submit returns a task id");
+
+		// Step 2: poll via grid:jobResult with generous timeout
+		ACell result = engine.jobs().invokeInternal(
+			"v/ops/grid/job-result",
+			Maps.of(Fields.ID, taskId, Fields.TIMEOUT, CVMLong.create(5000)),
+			RequestContext.of(ALICE_DID)).get(10_000, java.util.concurrent.TimeUnit.MILLISECONDS);
+
+		assertNotNull(result, "Poll should retrieve the delegated task's result");
+	}
+
 	// ========== session minting (Stage 1) ==========
 
 	@Test

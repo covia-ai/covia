@@ -180,11 +180,10 @@ public class AgentAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		// Only the two task-completion venue ops are reachable via
-		// invokeInternal (the framework invokes them from adapter transitions
-		// without creating a sub-Job). All other agent ops require the
-		// Job-aware invoke(Job, ...) path — they are external, user-facing,
-		// and produce observable Jobs.
+		// completeTask/failTask are zero-Job (framework invokes from transitions).
+		// request is reachable here from the LLM tool loop — delegates to the
+		// Job-aware path to create a task Job, then races completion against
+		// an optional timeout.
 		String subOp = getSubOperation(meta);
 		try {
 			switch (subOp) {
@@ -193,6 +192,9 @@ public class AgentAdapter extends AAdapter {
 				}
 				case "failTask" -> {
 					return CompletableFuture.completedFuture(doFailTask(input, ctx));
+				}
+				case "request" -> {
+					return invokeRequestInternal(ctx, meta, input);
 				}
 				default -> {
 					return CompletableFuture.failedFuture(new UnsupportedOperationException(
@@ -203,6 +205,62 @@ public class AgentAdapter extends AAdapter {
 			return CompletableFuture.failedFuture(e);
 		}
 	}
+
+	/**
+	 * Invokes {@code agent:request} from a zero-Job context (LLM tool loop).
+	 *
+	 * <p>Creates a task Job via {@link #invoke(Job, RequestContext, AMap, ACell)}
+	 * and races its completion against {@code input.timeout} (ms). If the task
+	 * completes within the timeout, its result is returned. If not, a snapshot
+	 * {@code {id, status, agentId, sessionId}} is returned — this is a success
+	 * path, enabling the caller to poll via {@code grid:jobResult}. The task
+	 * continues to run in the background.</p>
+	 *
+	 * <p>Default timeout is 5000ms — short best-effort wait so fast helpers
+	 * return inline while long work falls through to the async-poll pattern.
+	 * Timeout {@code <= 0} returns the snapshot immediately (pure async).</p>
+	 */
+	private CompletableFuture<ACell> invokeRequestInternal(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		Job taskJob = engine.jobs().invokeOperation(meta, input, ctx);
+
+		long timeoutMs = parseRequestTimeoutMs(input);
+		AString sessionId = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+
+		if (timeoutMs <= 0) {
+			return CompletableFuture.completedFuture(buildRequestSnapshot(taskJob, agentId, sessionId));
+		}
+
+		// Derive a view future so orTimeout only affects this returned future,
+		// not the task Job's internal completion.
+		return taskJob.future().thenApply(x -> x)
+				.orTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+				.exceptionally(ex -> {
+					Throwable cause = (ex instanceof java.util.concurrent.CompletionException) ? ex.getCause() : ex;
+					if (cause instanceof TimeoutException) {
+						return buildRequestSnapshot(taskJob, agentId, sessionId);
+					}
+					throw (ex instanceof RuntimeException re) ? re : new RuntimeException(cause);
+				});
+	}
+
+	private static final long DEFAULT_REQUEST_TIMEOUT_MS = 5000L;
+
+	private static long parseRequestTimeoutMs(ACell input) {
+		ACell v = RT.getIn(input, Fields.TIMEOUT);
+		if (v instanceof CVMLong l) return l.longValue();
+		return DEFAULT_REQUEST_TIMEOUT_MS;
+	}
+
+	private static AMap<AString, ACell> buildRequestSnapshot(Job taskJob, AString agentId, AString sessionId) {
+		AMap<AString, ACell> snap = Maps.of(
+			Fields.ID,       Strings.create(taskJob.getID().toHexString()),
+			Fields.STATUS,   taskJob.getStatus(),
+			Fields.AGENT_ID, agentId);
+		if (sessionId != null) snap = snap.assoc(Fields.SESSION_ID, sessionId);
+		return snap;
+	}
+
 
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {

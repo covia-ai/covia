@@ -236,6 +236,7 @@ public class LLMAgentAdapter extends AAdapter {
 		(ACell) Strings.create("v/ops/asset/content"),
 		(ACell) Strings.create("v/ops/asset/pin"),
 		(ACell) Strings.create("v/ops/grid/run"),
+		(ACell) Strings.create("v/ops/grid/job-result"),
 		(ACell) Strings.create("v/ops/covia/read"),
 		(ACell) Strings.create("v/ops/covia/write"),
 		(ACell) Strings.create("v/ops/covia/delete"),
