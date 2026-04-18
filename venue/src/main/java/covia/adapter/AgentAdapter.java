@@ -5,7 +5,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.locks.ReentrantLock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,12 +36,26 @@ import covia.venue.Users;
 /**
  * Adapter for agent lifecycle management.
  *
- * <p>Run-loop concurrency is mediated by a single per-agent
- * {@link RunCoordinator}: its lock serialises the "start new run vs. attach
- * to live run vs. exit cleanly" decisions, and its {@link CompletableFuture}
- * is the completion signal. The lattice {@code K_STATUS} field is a
- * persisted mirror of coord state for restart recovery and user visibility,
- * not the concurrency primitive.</p>
+ * <p><b>Run-loop concurrency model.</b> One virtual thread per agent at any
+ * time. Launch is serialised by an atomic CAS on {@link #runningLoops}: the
+ * first {@code wakeAgent} caller that finds an empty slot installs a
+ * completion future and starts the loop; subsequent concurrent wakes see the
+ * live slot and return that future unchanged. The running loop drains work
+ * from the lattice ({@code session.pending}, {@code tasks}) on each
+ * iteration — wakes that arrive during a cycle write to the lattice and are
+ * picked up by {@code hasWork()} at the top of the next iteration, not via
+ * thread signalling.</p>
+ *
+ * <p>Transitions are invoked with a blocking {@code .join()} on the virtual
+ * thread — cheap (vthreads park without consuming an OS thread), no yield
+ * plumbing needed. Long-running external ops (HTTP, slow LLM, HITL) simply
+ * park the vthread until the future completes. Self-chat and async resume
+ * work without races because work arrives on the lattice and is naturally
+ * drained by the same loop.</p>
+ *
+ * <p>The lattice {@code K_STATUS} field mirrors the runtime state for
+ * restart recovery and observability — it is not the concurrency
+ * primitive.</p>
  */
 public class AgentAdapter extends AAdapter {
 
@@ -61,21 +74,15 @@ public class AgentAdapter extends AAdapter {
 	private static final int MAX_LOOP_ITERATIONS = 20;
 
 	/**
-	 * Per-agent run coordinator — the single source of truth for "is this
-	 * agent running". The lock serialises start/exit decisions; the future
-	 * slot holds the live run's completion (or null if idle).
-	 *
-	 * <p>Coordinators are created lazily and retained for the lifetime of
-	 * the process — the per-agent memory is a ReentrantLock plus a nullable
-	 * reference, negligible even for large agent populations.</p>
+	 * Per-agent launcher slot. Presence of a non-done entry means a virtual
+	 * thread is currently running the agent's loop; the value is that
+	 * thread's completion future (callers of {@code wakeAgent} that are
+	 * waiting can join on it). {@link ConcurrentHashMap#compute} provides the
+	 * atomic "install if absent or done" primitive that serialises launch
+	 * without any lock.
 	 */
-	private static final class RunCoordinator {
-		final ReentrantLock lock = new ReentrantLock();
-		CompletableFuture<ACell> completion;
-	}
-
-	/** One coordinator per agent, keyed by agentId. */
-	private final ConcurrentHashMap<AString, RunCoordinator> runs = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<AString, CompletableFuture<ACell>> runningLoops
+		= new ConcurrentHashMap<>();
 
 	/** Active transition job per agent — allows suspend to cancel running transitions */
 	private final ConcurrentHashMap<AString, CompletableFuture<ACell>> activeTransitions = new ConcurrentHashMap<>();
@@ -580,6 +587,22 @@ public class AgentAdapter extends AAdapter {
 		wakeAgent(agentId, ctx, true);
 	}
 
+	/**
+	 * Fallback kick to nudge the agent's run loop. <b>Not a result-getter.</b>
+	 *
+	 * <p>Trigger carries no payload and makes no guarantee about what the
+	 * agent produces — it only guarantees the run loop gets a cycle (subject
+	 * to the usual gates). Callers who want a response should submit work
+	 * via {@code agent:request} / {@code agent:chat} and wait on the
+	 * returned Job. Use trigger only when normal intake isn't enough — e.g.
+	 * after a manual state edit, for diagnostics, or to resume a stuck agent.
+	 *
+	 * <p>The {@code wait} param controls how long this call blocks, not what
+	 * is awaited. With the non-blocking run loop, a "completed" wait means
+	 * the current cycle has either quiesced (SLEEPING) or yielded on an
+	 * async transition op (still RUNNING). It does not mean the agent's
+	 * task/chat work is done.
+	 */
 	private void handleTrigger(Job job, ACell input, RequestContext ctx) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) { job.fail("agentId is required"); return; }
@@ -602,7 +625,10 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		// Default wait=true for backward compat (trigger traditionally blocks)
+		// Default wait=true: block until the cycle quiesces or yields. This is
+		// a blocking wait on the coord completion, NOT a result-await — the
+		// caller gets a status snapshot, not agent output. For output, wait
+		// on the task/chat Job returned by agent:request / agent:chat.
 		long waitMs = parseWaitMs(input);
 		if (waitMs == 0 && RT.getIn(input, Fields.WAIT) == null) waitMs = -1;
 
@@ -1099,16 +1125,19 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Wakes the agent: persists the wake flag, then either attaches to the
-	 * live run loop or starts a fresh one. Returns the completion future,
-	 * or null if the agent doesn't exist / has no work and wake isn't forced.
+	 * Wakes the agent: persists the wake flag and launches a fresh run loop
+	 * if none is currently running. Returns the live loop's completion
+	 * future, or null if the agent doesn't exist / has no work and wake
+	 * isn't forced.
 	 *
 	 * <p>All run-loop concurrency flows through this single entry point.
-	 * The per-agent {@link RunCoordinator} lock serialises the
-	 * start/attach/exit decision; callers never observe an inconsistency
-	 * between "loop is live" (future present) and "agent can accept a new
-	 * loop" (future absent). The lattice {@code K_STATUS} is written for
-	 * observability and restart recovery, not as a CAS primitive.</p>
+	 * Launch is serialised by {@link ConcurrentHashMap#compute} on
+	 * {@link #runningLoops} — at most one virtual thread per agent. Wakes
+	 * that arrive during a live cycle write to the lattice (session.pending,
+	 * tasks) and are picked up by the running loop's {@code hasWork()} check
+	 * at the top of the next iteration; they do not need to be signalled
+	 * across threads. The lattice {@code K_STATUS} mirrors runtime state
+	 * for observability, not concurrency control.</p>
 	 *
 	 * @param force if true, skips the {@code shouldWake || hasWork} gate —
 	 *              used by explicit triggers that always want to try running
@@ -1119,58 +1148,59 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = getAgent(callerDID, agentId);
 		if (agent == null) return null;
 
-		RunCoordinator coord = runs.computeIfAbsent(agentId, k -> new RunCoordinator());
-		coord.lock.lock();
-		try {
-			// Persist wake flag — any in-flight loop will observe it either
-			// via mergeRunResult's CAS-retried lambda or via tryCleanExit's
-			// re-check under this same lock. Set unconditionally so that
-			// resume of a suspended agent sees pending work.
-			agent.setWakeTime(Utils.getCurrentTimestamp());
+		// Persist wake flag — visible to any in-flight loop's hasWork()
+		// check at the top of the next iteration. Set unconditionally so
+		// that resume of a suspended agent sees pending work.
+		agent.setWakeTime(Utils.getCurrentTimestamp());
 
-			// Live run? Attach to it. Our wake flag is already visible to
-			// the loop's merge or will be caught at its clean-exit check.
-			if (coord.completion != null && !coord.completion.isDone()) {
-				return coord.completion;
-			}
+		// Fast path: live loop exists, attach to it. A done future in the
+		// slot is treated as "no live loop" — the exiting loop removes it
+		// in its finally block, but we may observe it briefly.
+		CompletableFuture<ACell> existing = runningLoops.get(agentId);
+		if (existing != null && !existing.isDone()) return existing;
 
-			// No live run here (coord is the source of truth for liveness).
-			// If the lattice still shows RUNNING, it's a phantom — either a
-			// crash-recovery remnant (agent was RUNNING when the venue
-			// stopped) or a stale write that slipped past the clean-exit
-			// handshake. Correct it under the lock so a fresh loop can
-			// start; failing to would lock the agent out indefinitely
-			// (see #64).
-			AString status = agent.getStatus();
-			if (AgentState.RUNNING.equals(status)) {
-				log.warn("Agent {} in phantom RUNNING state with no live run; "
-					+ "correcting to SLEEPING", agentId);
-				agent.setStatus(AgentState.SLEEPING);
-				status = AgentState.SLEEPING;
-			}
-
-			// Only start a loop from SLEEPING. Suspended or terminated
-			// agents keep their wake flag for later resume.
-			if (!AgentState.SLEEPING.equals(status)) return null;
-
-			// No live run. Decide whether to start one.
-			if (!force && !agent.shouldWake() && !hasWork(agent)) return null;
-
-			AString transitionOp = resolveTransitionOp(callerDID, agentId);
-			if (transitionOp == null) return null;
-
-			CompletableFuture<ACell> completion = new CompletableFuture<>();
-			coord.completion = completion;
-			agent.setStatus(AgentState.RUNNING);
-
-			final AString finalOp = transitionOp;
-			CompletableFuture.runAsync(
-				() -> executeRunLoop(agentId, callerDID, finalOp, ctx, coord),
-				VIRTUAL_EXECUTOR);
-			return completion;
-		} finally {
-			coord.lock.unlock();
+		// Phantom RUNNING recovery (#64): if lattice shows RUNNING but no
+		// live loop in our map, it's a crash remnant or stale write. Correct
+		// to SLEEPING so a fresh loop can start; otherwise the agent would
+		// be locked out indefinitely.
+		AString status = agent.getStatus();
+		if (AgentState.RUNNING.equals(status)) {
+			log.warn("Agent {} in phantom RUNNING state with no live run; "
+				+ "correcting to SLEEPING", agentId);
+			agent.setStatus(AgentState.SLEEPING);
+			status = AgentState.SLEEPING;
 		}
+
+		// Only start a loop from SLEEPING. Suspended or terminated agents
+		// keep their wake flag for later resume.
+		if (!AgentState.SLEEPING.equals(status)) return null;
+
+		// Gate: only start if there's work (or forced).
+		if (!force && !agent.shouldWake() && !hasWork(agent)) return null;
+
+		AString transitionOp = resolveTransitionOp(callerDID, agentId);
+		if (transitionOp == null) return null;
+
+		// Atomic CAS: install our completion only if no other loop is live.
+		// compute's function runs atomically under CHM's bucket lock, so the
+		// check+install is a single operation — no lost-launch race with
+		// concurrent wakeAgent calls.
+		CompletableFuture<ACell> mine = new CompletableFuture<>();
+		CompletableFuture<ACell> installed = runningLoops.compute(agentId, (k, cur) -> {
+			if (cur != null && !cur.isDone()) return cur;
+			return mine;
+		});
+		if (installed != mine) {
+			// Someone else won the launch race — use their future.
+			return installed;
+		}
+
+		agent.setStatus(AgentState.RUNNING);
+		final AString finalOp = transitionOp;
+		final CompletableFuture<ACell> finalCompletion = mine;
+		Thread.ofVirtual().start(
+			() -> executeRunLoop(agentId, callerDID, finalOp, ctx, finalCompletion));
+		return mine;
 	}
 
 	/** Overload: non-forced wake (used by message delivery / resume auto-wake). */
@@ -1186,294 +1216,321 @@ public class AgentAdapter extends AAdapter {
 
 	// ========== Run loop ==========
 
+	/**
+	 * Carries per-iteration outputs back to {@link #executeRunLoop}. The
+	 * decision "continue looping" lives in the loop itself — it just checks
+	 * {@code hasWork()} and {@code shouldWake()} at the top of the next
+	 * iteration, same criteria used at launch time.
+	 */
+	private record IterResult(ACell lastResult, AMap<AString, ACell> allTaskResults) {}
+
+	/**
+	 * Runs an agent's cycle loop on a single virtual thread. Each iteration:
+	 * <ol>
+	 *   <li>Checks for work on the lattice (session.pending, tasks). No work
+	 *       (and no explicit wake) → exit the loop.</li>
+	 *   <li>Picks one task / one session and builds transition input.</li>
+	 *   <li>Invokes the transition and blocks on its future via
+	 *       {@code .join()}. Virtual thread parking is cheap; a slow or
+	 *       long-running op (HTTP, HITL, slow LLM) does not consume an OS
+	 *       thread. Self-chat and other in-transition ops that enqueue more
+	 *       work on the lattice are picked up by the same loop on the next
+	 *       iteration — no cross-thread wake needed.</li>
+	 *   <li>Merges the transition result (timeline, history, state, task
+	 *       cleanup) and drains deferred task-completion envelopes.</li>
+	 * </ol>
+	 *
+	 * <p>Clean exit is a three-step dance that closes the exit/wake race:
+	 * loop exits → {@code finally} removes the loop from
+	 * {@link #runningLoops} → re-checks {@code hasWork}. Any wake whose
+	 * lattice write landed before that re-check is picked up and a fresh
+	 * loop is launched via {@link #wakeAgent}. Any wake whose write lands
+	 * after the re-check sees the empty launcher slot and launches its own
+	 * loop — the CAS in {@code wakeAgent} guarantees at most one survives.</p>
+	 */
 	@SuppressWarnings("unchecked")
 	private void executeRunLoop(AString agentId, AString callerDID,
 			AString transitionOp, RequestContext ctx,
-			RunCoordinator coord) {
+			CompletableFuture<ACell> completion) {
 		ACell lastResult = null;
-		boolean firstIteration = true;
 		int iteration = 0;
 		AMap<AString, ACell> allTaskResults = Maps.empty();
+		boolean firstIteration = true;
 
 		try {
-		while (true) {
-			if (++iteration > MAX_LOOP_ITERATIONS) {
-				log.warn("Agent {} hit max loop iterations ({}), forcing sleep", agentId, MAX_LOOP_ITERATIONS);
+			while (true) {
+				if (++iteration > MAX_LOOP_ITERATIONS) {
+					log.warn("Agent {} hit max loop iterations ({}), forcing sleep",
+						agentId, MAX_LOOP_ITERATIONS);
+					break;
+				}
+
 				AgentState agent = getAgent(callerDID, agentId);
-				if (agent != null) agent.setStatus(AgentState.SLEEPING);
-				// Safety-net exit — bypass the clean-exit handshake so we
-				// cannot loop forever even if wake flags keep arriving.
-				forceExit(coord, lastResult != null ? lastResult : Maps.of(
-					Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.SLEEPING,
-					Fields.TASK_RESULTS, allTaskResults));
-				return;
-			}
-
-			// Snapshot current state (reads are non-blocking)
-			AgentState agent = getAgent(callerDID, agentId);
-			if (agent == null) {
-				completeExceptionally(coord, "Agent not found: " + agentId);
-				return;
-			}
-
-			AMap<AString, ACell> record = agent.getRecord();
-			Index<Blob, ACell> tasks = agent.getTasks();
-			Index<Blob, ACell> pending = agent.getPending();
-			ACell currentState = agent.getState();
-
-			// On subsequent iterations, attempt clean exit if no new work.
-			// tryCleanExit re-checks wake/hasWork under the coord lock, so a
-			// trigger arriving between the last merge and here is still seen.
-			if (!firstIteration && !agent.hasSessionPending() && tasks.count() == 0) {
-				if (tryCleanExit(coord, agent, lastResult, allTaskResults, agentId)) return;
-				continue;  // late wake — loop again
-			}
-			firstIteration = false;
-
-			long startTs = Utils.getCurrentTimestamp();
-
-			// Pick at most one task per cycle (oldest by created timestamp).
-			// Multi-task agents fan out across cycles. The transition still
-			// receives a vector — current shape is length 0 or 1.
-			Map.Entry<Blob, ACell> pickedTask = pickOldestTask(tasks);
-			AVector<ACell> formattedTasks = formatPickedTask(pickedTask);
-			AVector<ACell> resolvedPending = resolveJobIds(pending, Fields.OUTPUT);
-
-			// Pick at most one session per cycle. Priority:
-			//   1. picked task's sessionId (so the task's session controls)
-			//   2. else the first session with non-empty pending
-			//   3. else null (no session traffic)
-			AString pickedSession = pickSessionForCycle(pickedTask, agent);
-			Blob pickedSessionBlob = (pickedSession != null) ? Blob.parse(pickedSession.toString()) : null;
-			AVector<ACell> filteredInbox = (pickedSessionBlob != null)
-				? agent.getSessionPending(pickedSessionBlob) : Vectors.empty();
-
-			// Snapshot the picked session's chat slot and pending count.
-			// Captured here so that a chat that arrives during the transition
-			// isn't picked up by this cycle's completion logic — it'll be
-			// handled next pass.
-			Job pickedChatJob = null;
-			AMap<AString, ACell> pickedSessionRecord = null;
-			long presentedSessionPendingCount = filteredInbox.count();
-			if (pickedSessionBlob != null) {
-				ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(agentId);
-				if (agentChats != null) {
-					Job candidate = agentChats.get(pickedSessionBlob);
-					if (candidate != null && !candidate.isFinished()) {
-						pickedChatJob = candidate;
-					}
+				if (agent == null) {
+					completion.completeExceptionally(
+						new RuntimeException("Agent not found: " + agentId));
+					return;
 				}
-				pickedSessionRecord = agent.getSession(pickedSessionBlob);
-			}
 
-			// Per-cycle ctx: scope to the agent, picked task, and session so
-			// path resolvers (n/, t/, c/) can address the right slot, and
-			// agent:completeTask / agent:failTask invoked during the
-			// transition can identify which agent + task they're acting on.
-			// Since taskId == caller's Job ID, no separate jobId scope is needed.
-			RequestContext cycleCtx = ctx.withAgentId(agentId);
-			if (pickedTask != null) {
-				cycleCtx = cycleCtx.withTaskId(pickedTask.getKey());
-			}
-			if (pickedSessionBlob != null) {
-				cycleCtx = cycleCtx.withSessionId(pickedSessionBlob);
-			}
+				Index<Blob, ACell> tasks = agent.getTasks();
+				Index<Blob, ACell> pending = agent.getPending();
+				ACell currentState = agent.getState();
 
-			// Invoke transition — no lock, no coordination during this call.
-			// Lean contract surface: also pass `newInput` (the picked task's
-			// input). Old transitions ignore it; new transitions read it
-			// directly without iterating the tasks vector.
-			// Extract picked task input once — used both as transition input
-			// and (S3a) as the user-turn content if appended to history.
-			ACell pickedTaskInput = null;
-			if (pickedTask != null) {
-				pickedTaskInput = (pickedTask.getValue() instanceof AMap)
-					? ((AMap<AString, ACell>) pickedTask.getValue()).get(Fields.INPUT)
-					: pickedTask.getValue();
-			}
-
-			AMap<AString, ACell> transitionInput = Maps.of(
-				Fields.AGENT_ID, agentId,
-				AgentState.KEY_STATE, currentState,
-				Fields.TASKS, formattedTasks,
-				Fields.PENDING, resolvedPending);
-			if (pickedTaskInput != null) {
-				transitionInput = transitionInput.assoc(Fields.NEW_INPUT, pickedTaskInput);
-			}
-			// Surface the picked session's full record under
-			// `Fields.SESSION` — transitions read {history, pending, c,
-			// meta, parties} from here. Includes `id` (sid hex) for
-			// convenience. Adapters call effectiveMessages(input) to read
-			// the session.pending vector.
-			if (pickedSessionRecord != null) {
-				AMap<AString, ACell> sessionMap = pickedSessionRecord
-					.assoc(Fields.SESSION_ID, pickedSession);
-				transitionInput = transitionInput.assoc(Fields.SESSION, sessionMap);
-			}
-			// Pass framework config separately so the transition can read caps, tools, etc.
-			AMap<AString, ACell> agentConfig = agent.getConfig();
-			if (agentConfig != null) {
-				transitionInput = transitionInput.assoc(AgentState.KEY_CONFIG, agentConfig);
-			}
-
-			// Internal dispatch — no sub-Job created. The future is registered
-			// so handleSuspend can cancel an in-flight transition.
-			CompletableFuture<ACell> transitionFuture =
-				engine.jobs().invokeInternal(transitionOp, transitionInput, cycleCtx);
-			activeTransitions.put(agentId, transitionFuture);
-			ACell transitionResult;
-			try {
-				transitionResult = transitionFuture.join();
-			} finally {
-				activeTransitions.remove(agentId);
-			}
-
-			// Process results — the transition contract is now lean only:
-			//   {state?, response?, error?}
-			// `error` takes precedence over `response` and signals failure.
-			// Task completion is signalled by the transition invoking
-			// agent:complete-task / agent:fail-task via the venue op, which
-			// removes the task entry and parks a completion envelope in
-			// `deferredCompletions[agentId][taskId]`. We drain that here to
-			// build the per-cycle taskResults entry. Pending Jobs are
-			// completed AFTER mergeRunResult so the caller's awaitResult only
-			// returns once the timeline / state writes are visible.
-			// The bare run result surfaced in the timeline is the error
-			// (if any) or response, regardless of whether a task was picked,
-			// so inbox-only and message-only transitions still get a non-null
-			// timeline result.
-			long endTs = Utils.getCurrentTimestamp();
-			ACell newState = RT.getIn(transitionResult, AgentState.KEY_STATE);
-			ACell leanResponse = RT.getIn(transitionResult, Fields.RESPONSE);
-			ACell leanError = RT.getIn(transitionResult, Fields.ERROR);
-
-			// Peek the parked envelopes (don't remove yet) so an exception
-			// before completeDeferredJobs leaves them visible to the outer
-			// catch sweeper — the slot is only cleared after merge succeeds.
-			ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred =
-				deferredCompletions.get(agentId);
-			AMap<AString, ACell> taskResults = buildTaskResultsFromDeferred(deferred);
-			ACell result = (leanError != null) ? leanError : leanResponse;
-
-			AMap<AString, ACell> timelineEntry = Maps.of(
-				K_START, CVMLong.create(startTs),
-				K_END, CVMLong.create(endTs),
-				Fields.OP, transitionOp,
-				Fields.RESULT, result);
-			// Only include non-empty collections to avoid bloat
-			if (formattedTasks != null && formattedTasks.count() > 0) {
-				timelineEntry = timelineEntry.assoc(Fields.TASKS, formattedTasks);
-			}
-			if (filteredInbox != null && filteredInbox.count() > 0) {
-				timelineEntry = timelineEntry.assoc(Fields.MESSAGES, filteredInbox);
-			}
-			if (taskResults != null) timelineEntry = timelineEntry.assoc(Fields.TASK_RESULTS, taskResults);
-
-			// Accumulate task results across iterations
-			if (taskResults != null) {
-				for (var entry : taskResults.entrySet()) {
-					allTaskResults = allTaskResults.assoc(entry.getKey(), entry.getValue());
+				// On subsequent iterations, exit cleanly if no work remains.
+				// The finally block performs a post-exit re-check that closes
+				// the exit/wake race without a lock.
+				if (!firstIteration && !agent.hasSessionPending() && tasks.count() == 0
+						&& !agent.shouldWake()) {
+					break;
 				}
-			}
+				firstIteration = false;
 
-			// Build turns to append to session.history (only when a session
-			// was picked this cycle, and the transition didn't error).
-			// Order: inbox messages → picked task input → assistant response.
-			// Errors and yields contribute no turns. See venue/CLAUDE.local.md
-			// "Sessions S3 — Per-session history (turn shape contract)".
-			AVector<ACell> turnsToAppend = Vectors.empty();
-			if (pickedSessionBlob != null && leanError == null) {
-				// S3f: record each inbox/chat message as a user turn so
-				// session.history captures the full conversation (previously
-				// only the adapter's transcript recorded these).
-				if (filteredInbox != null) {
-					for (long i = 0; i < filteredInbox.count(); i++) {
-						ACell msgContent = RT.getIn(filteredInbox.get(i), Fields.MESSAGE);
-						if (msgContent != null) {
-							turnsToAppend = turnsToAppend.conj(Maps.of(
-								AgentState.K_ROLE,    AgentState.ROLE_USER,
-								AgentState.K_CONTENT, msgContent,
-								AgentState.K_TURN_TS, CVMLong.create(startTs),
-								AgentState.K_SOURCE,  AgentState.SOURCE_CHAT));
+				long startTs = Utils.getCurrentTimestamp();
+
+				// Pick at most one task per cycle (oldest by created timestamp).
+				// Multi-task agents fan out across cycles.
+				Map.Entry<Blob, ACell> pickedTask = pickOldestTask(tasks);
+				AVector<ACell> formattedTasks = formatPickedTask(pickedTask);
+				AVector<ACell> resolvedPending = resolveJobIds(pending, Fields.OUTPUT);
+
+				// Pick at most one session per cycle. Priority:
+				//   1. picked task's sessionId (so the task's session controls)
+				//   2. else the first session with non-empty pending
+				//   3. else null (no session traffic)
+				AString pickedSession = pickSessionForCycle(pickedTask, agent);
+				Blob pickedSessionBlob = (pickedSession != null)
+					? Blob.parse(pickedSession.toString()) : null;
+				AVector<ACell> filteredInbox = (pickedSessionBlob != null)
+					? agent.getSessionPending(pickedSessionBlob) : Vectors.empty();
+
+				Job pickedChatJob = null;
+				AMap<AString, ACell> pickedSessionRecord = null;
+				long presentedSessionPendingCount = filteredInbox.count();
+				if (pickedSessionBlob != null) {
+					ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(agentId);
+					if (agentChats != null) {
+						Job candidate = agentChats.get(pickedSessionBlob);
+						if (candidate != null && !candidate.isFinished()) {
+							pickedChatJob = candidate;
 						}
 					}
+					pickedSessionRecord = agent.getSession(pickedSessionBlob);
 				}
+
+				// Per-cycle ctx: scope to the agent, picked task, and session so
+				// path resolvers (n/, t/, c/) can address the right slot, and
+				// agent:completeTask / agent:failTask can identify which
+				// agent + task they're acting on.
+				RequestContext cycleCtx = ctx.withAgentId(agentId);
+				if (pickedTask != null) cycleCtx = cycleCtx.withTaskId(pickedTask.getKey());
+				if (pickedSessionBlob != null) cycleCtx = cycleCtx.withSessionId(pickedSessionBlob);
+
+				ACell pickedTaskInput = null;
+				if (pickedTask != null) {
+					pickedTaskInput = (pickedTask.getValue() instanceof AMap)
+						? ((AMap<AString, ACell>) pickedTask.getValue()).get(Fields.INPUT)
+						: pickedTask.getValue();
+				}
+
+				AMap<AString, ACell> transitionInput = Maps.of(
+					Fields.AGENT_ID, agentId,
+					AgentState.KEY_STATE, currentState,
+					Fields.TASKS, formattedTasks,
+					Fields.PENDING, resolvedPending);
 				if (pickedTaskInput != null) {
-					turnsToAppend = turnsToAppend.conj(Maps.of(
-						AgentState.K_ROLE,    AgentState.ROLE_USER,
-						AgentState.K_CONTENT, pickedTaskInput,
-						AgentState.K_TURN_TS, CVMLong.create(startTs),
-						AgentState.K_SOURCE,  AgentState.SOURCE_REQUEST));
+					transitionInput = transitionInput.assoc(Fields.NEW_INPUT, pickedTaskInput);
 				}
-				if (leanResponse != null) {
-					turnsToAppend = turnsToAppend.conj(Maps.of(
-						AgentState.K_ROLE,    AgentState.ROLE_ASSISTANT,
-						AgentState.K_CONTENT, leanResponse,
-						AgentState.K_TURN_TS, CVMLong.create(endTs),
-						AgentState.K_SOURCE,  AgentState.SOURCE_TRANSITION));
+				if (pickedSessionRecord != null) {
+					AMap<AString, ACell> sessionMap = pickedSessionRecord
+						.assoc(Fields.SESSION_ID, pickedSession);
+					transitionInput = transitionInput.assoc(Fields.SESSION, sessionMap);
 				}
+				AMap<AString, ACell> agentConfig = agent.getConfig();
+				if (agentConfig != null) {
+					transitionInput = transitionInput.assoc(AgentState.KEY_CONFIG, agentConfig);
+				}
+
+				// Invoke transition. Blocks on the vthread — cheap, and any
+				// work the transition enqueues on the lattice (e.g. a nested
+				// agent:chat that wakes this same agent) is naturally visible
+				// to the next iteration via hasWork(). A cancelled or errored
+				// future surfaces as an error-shaped transitionResult so the
+				// merge path handles it normally.
+				CompletableFuture<ACell> transitionFuture =
+					engine.jobs().invokeInternal(transitionOp, transitionInput, cycleCtx);
+				activeTransitions.put(agentId, transitionFuture);
+
+				ACell transitionResult;
+				try {
+					transitionResult = transitionFuture.join();
+				} catch (java.util.concurrent.CancellationException ce) {
+					transitionResult = Maps.of(Fields.ERROR,
+						Strings.create("Transition cancelled"));
+				} catch (java.util.concurrent.CompletionException e) {
+					Throwable cause = (e.getCause() != null) ? e.getCause() : e;
+					transitionResult = Maps.of(Fields.ERROR,
+						Strings.create("Transition failed: " + cause.getMessage()));
+				} finally {
+					activeTransitions.remove(agentId, transitionFuture);
+				}
+
+				IterResult merged = mergeAndPostProcess(
+					agent, agentId, transitionOp, transitionResult, pickedTask,
+					pickedTaskInput, formattedTasks, pickedSession,
+					pickedSessionBlob, pickedChatJob, filteredInbox,
+					presentedSessionPendingCount, tasks, startTs, allTaskResults);
+				lastResult = merged.lastResult();
+				allTaskResults = merged.allTaskResults();
 			}
 
-			// Merge results atomically (timeline, state, task cleanup, history,
-			// session pending drain). Task cleanup is idempotent — the venue op
-			// may have already removed completed entries from agent.tasks during
-			// the transition, in which case removeCompletedTasks is a no-op.
-			// History append lands in the same CAS as the timeline, so external
-			// readers never see a cycle that wrote one but not the other.
-			AMap<AString, ACell> merged = agent.mergeRunResult(
-				newState, pickedSession, tasks, taskResults,
-				timelineEntry, pickedSessionBlob, turnsToAppend,
-				presentedSessionPendingCount);
-
-			// Now that the timeline + state are persisted, claim the parked
-			// envelopes (atomic remove) and complete the caller's pending
-			// task Jobs. Doing this AFTER the merge guarantees that an
-			// awaitResult caller sees the completed cycle's writes.
-			completeDeferredJobs(deferredCompletions.remove(agentId));
-
-			// Complete any in-flight chat for the picked session. Same
-			// post-merge ordering invariant as task completion: the caller's
-			// awaitResult only unblocks once the cycle's writes are visible.
-			//   - leanError non-null → fail the chat Job (technical fail)
-			//   - leanResponse non-null → complete with the response
-			//   - both null → yield, slot stays for next cycle
-			if (pickedChatJob != null && (leanError != null || leanResponse != null)) {
-				// Release the slot BEFORE completing the Job so a caller that
-				// awakens on awaitResult and immediately submits a follow-up
-				// chat on the same session never races a stale reservation.
-				ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(agentId);
-				if (agentChats != null) agentChats.remove(pickedSessionBlob, pickedChatJob);
-				if (leanError != null) {
-					if (!pickedChatJob.isFinished()) pickedChatJob.fail(leanError.toString());
-				} else {
-					if (!pickedChatJob.isFinished()) {
-						pickedChatJob.completeWith(Maps.of(
-							Fields.AGENT_ID,   agentId,
-							Fields.SESSION_ID, pickedSession,
-							Fields.RESPONSE,   leanResponse));
-					}
-				}
-			}
-			// else: yield — keep slot reserved for the next wake
-
-			lastResult = Maps.of(
+			// Clean exit: mark SLEEPING, complete the completion with the
+			// last cycle's result.
+			AgentState agent = getAgent(callerDID, agentId);
+			if (agent != null) agent.setStatus(AgentState.SLEEPING);
+			completion.complete(Maps.of(
 				Fields.AGENT_ID, agentId,
-				Fields.STATUS, merged.get(AgentState.KEY_STATUS),
-				Fields.RESULT, result,
-				Fields.TASK_RESULTS, allTaskResults);
-
-			boolean continueLoop = AgentState.RUNNING.equals(
-				RT.ensureString(merged.get(AgentState.KEY_STATUS)));
-			if (!continueLoop) {
-				if (tryCleanExit(coord, agent, lastResult, allTaskResults, agentId)) return;
-				// Late wake arrived between merge and lock — loop again.
-			}
-		}
+				Fields.STATUS, AgentState.SLEEPING,
+				Fields.RESULT, lastResult != null ? RT.getIn(lastResult, Fields.RESULT) : null,
+				Fields.TASK_RESULTS, allTaskResults));
 		} catch (Exception e) {
 			suspendOnError(callerDID, agentId, e);
 			failAllPendingForAgent(callerDID, agentId, e.getMessage());
-			completeExceptionally(coord, e.getMessage());
+			completion.completeExceptionally(new RuntimeException(e.getMessage()));
+		} finally {
+			// Release the launcher slot, then re-check for wakes that may
+			// have arrived while this loop was exiting. remove(key, value)
+			// only clears the slot if it still holds OUR completion — a
+			// concurrent wakeAgent that already took over won't be disturbed.
+			runningLoops.remove(agentId, completion);
+			AgentState agent = getAgent(callerDID, agentId);
+			if (agent != null && AgentState.SLEEPING.equals(agent.getStatus())
+					&& (hasWork(agent) || agent.shouldWake())) {
+				wakeAgent(agentId, ctx, false);
+			}
 		}
+	}
+
+	/**
+	 * Merges a transition result into the agent record and handles all the
+	 * post-transition bookkeeping: timeline entry, history turns, deferred
+	 * task-completion envelopes, in-flight chat completion.
+	 */
+	@SuppressWarnings("unchecked")
+	private IterResult mergeAndPostProcess(
+			AgentState agent, AString agentId, AString transitionOp,
+			ACell transitionResult, Map.Entry<Blob, ACell> pickedTask,
+			ACell pickedTaskInput, AVector<ACell> formattedTasks,
+			AString pickedSession, Blob pickedSessionBlob, Job pickedChatJob,
+			AVector<ACell> filteredInbox, long presentedSessionPendingCount,
+			Index<Blob, ACell> tasks, long startTs,
+			AMap<AString, ACell> allTaskResults) {
+		long endTs = Utils.getCurrentTimestamp();
+		ACell newState = RT.getIn(transitionResult, AgentState.KEY_STATE);
+		ACell leanResponse = RT.getIn(transitionResult, Fields.RESPONSE);
+		ACell leanError = RT.getIn(transitionResult, Fields.ERROR);
+
+		// Peek the parked envelopes (don't remove yet) so an exception
+		// before completeDeferredJobs leaves them visible to the outer
+		// catch sweeper — the slot is only cleared after merge succeeds.
+		ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred =
+			deferredCompletions.get(agentId);
+		AMap<AString, ACell> taskResults = buildTaskResultsFromDeferred(deferred);
+		ACell result = (leanError != null) ? leanError : leanResponse;
+
+		AMap<AString, ACell> timelineEntry = Maps.of(
+			K_START, CVMLong.create(startTs),
+			K_END, CVMLong.create(endTs),
+			Fields.OP, transitionOp,
+			Fields.RESULT, result);
+		// Only include non-empty collections to avoid bloat
+		if (formattedTasks != null && formattedTasks.count() > 0) {
+			timelineEntry = timelineEntry.assoc(Fields.TASKS, formattedTasks);
+		}
+		if (filteredInbox != null && filteredInbox.count() > 0) {
+			timelineEntry = timelineEntry.assoc(Fields.MESSAGES, filteredInbox);
+		}
+		if (taskResults != null) timelineEntry = timelineEntry.assoc(Fields.TASK_RESULTS, taskResults);
+
+		// Accumulate task results across iterations
+		if (taskResults != null) {
+			for (var entry : taskResults.entrySet()) {
+				allTaskResults = allTaskResults.assoc(entry.getKey(), entry.getValue());
+			}
+		}
+
+		// Build turns to append to session.history (only when a session
+		// was picked this cycle, and the transition didn't error).
+		// Order: inbox messages → picked task input → assistant response.
+		AVector<ACell> turnsToAppend = Vectors.empty();
+		if (pickedSessionBlob != null && leanError == null) {
+			if (filteredInbox != null) {
+				for (long i = 0; i < filteredInbox.count(); i++) {
+					ACell msgContent = RT.getIn(filteredInbox.get(i), Fields.MESSAGE);
+					if (msgContent != null) {
+						turnsToAppend = turnsToAppend.conj(Maps.of(
+							AgentState.K_ROLE,    AgentState.ROLE_USER,
+							AgentState.K_CONTENT, msgContent,
+							AgentState.K_TURN_TS, CVMLong.create(startTs),
+							AgentState.K_SOURCE,  AgentState.SOURCE_CHAT));
+					}
+				}
+			}
+			if (pickedTaskInput != null) {
+				turnsToAppend = turnsToAppend.conj(Maps.of(
+					AgentState.K_ROLE,    AgentState.ROLE_USER,
+					AgentState.K_CONTENT, pickedTaskInput,
+					AgentState.K_TURN_TS, CVMLong.create(startTs),
+					AgentState.K_SOURCE,  AgentState.SOURCE_REQUEST));
+			}
+			if (leanResponse != null) {
+				turnsToAppend = turnsToAppend.conj(Maps.of(
+					AgentState.K_ROLE,    AgentState.ROLE_ASSISTANT,
+					AgentState.K_CONTENT, leanResponse,
+					AgentState.K_TURN_TS, CVMLong.create(endTs),
+					AgentState.K_SOURCE,  AgentState.SOURCE_TRANSITION));
+			}
+		}
+
+		// Merge results atomically (timeline, state, task cleanup, history,
+		// session pending drain). History append lands in the same CAS as
+		// the timeline, so external readers never see a cycle that wrote
+		// one but not the other.
+		AMap<AString, ACell> merged = agent.mergeRunResult(
+			newState, pickedSession, tasks, taskResults,
+			timelineEntry, pickedSessionBlob, turnsToAppend,
+			presentedSessionPendingCount);
+
+		// Now that the timeline + state are persisted, claim the parked
+		// envelopes (atomic remove) and complete the caller's pending
+		// task Jobs. Doing this AFTER the merge guarantees that an
+		// awaitResult caller sees the completed cycle's writes.
+		completeDeferredJobs(deferredCompletions.remove(agentId));
+
+		// Complete any in-flight chat for the picked session. Same
+		// post-merge ordering invariant as task completion.
+		if (pickedChatJob != null && (leanError != null || leanResponse != null)) {
+			ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(agentId);
+			if (agentChats != null) agentChats.remove(pickedSessionBlob, pickedChatJob);
+			if (leanError != null) {
+				if (!pickedChatJob.isFinished()) pickedChatJob.fail(leanError.toString());
+			} else {
+				if (!pickedChatJob.isFinished()) {
+					pickedChatJob.completeWith(Maps.of(
+						Fields.AGENT_ID,   agentId,
+						Fields.SESSION_ID, pickedSession,
+						Fields.RESPONSE,   leanResponse));
+				}
+			}
+		}
+		// else: yield — keep slot reserved for the next wake
+
+		ACell lastResult = Maps.of(
+			Fields.AGENT_ID, agentId,
+			Fields.STATUS, merged.get(AgentState.KEY_STATUS),
+			Fields.RESULT, result,
+			Fields.TASK_RESULTS, allTaskResults);
+
+		return new IterResult(lastResult, allTaskResults);
 	}
 
 	// ========== Helpers ==========
@@ -1652,85 +1709,6 @@ public class AgentAdapter extends AAdapter {
 			resolved = resolved.conj(info);
 		}
 		return resolved;
-	}
-
-	// ========== Run completion ==========
-
-	/**
-	 * Attempts a clean exit from the run loop. Called when the loop has
-	 * observed empty queues or a non-RUNNING status.
-	 *
-	 * <p>Acquires the coord lock and re-checks under it whether new work has
-	 * arrived (wake flag set, or inbox/tasks non-empty) since the last merge.
-	 * If so, marks the agent RUNNING again and returns false so the caller
-	 * loops. Otherwise completes the run future, clears the coord slot, and
-	 * returns true.</p>
-	 *
-	 * <p>This is the only place that transitions a live run to "done" under
-	 * normal flow — exactly symmetric with {@link #wakeAgent} which is the
-	 * only place that transitions idle to "running". The shared coord lock
-	 * guarantees no wake is lost between the loop's final merge and exit.</p>
-	 *
-	 * @return true if exit happened (caller must return), false if a late
-	 *         wake was observed and the loop should continue
-	 */
-	private boolean tryCleanExit(RunCoordinator coord, AgentState agent,
-			ACell lastResult, AMap<AString, ACell> allTaskResults, AString agentId) {
-		coord.lock.lock();
-		try {
-			// Re-read agent under the lock — wake flag or queues may have
-			// changed since the loop started this iteration.
-			if (agent.shouldWake() || hasWork(agent)) {
-				agent.setStatus(AgentState.RUNNING);
-				return false;
-			}
-			agent.setStatus(AgentState.SLEEPING);
-			CompletableFuture<ACell> f = coord.completion;
-			coord.completion = null;
-			if (f != null) {
-				// Use the last iteration's transition result (if any) but
-				// force status to SLEEPING — the last merge may have written
-				// RUNNING because the initial wake flag was still set when
-				// mergeRunResult read the record, but we're exiting now.
-				ACell result = Maps.of(
-					Fields.AGENT_ID, agentId,
-					Fields.STATUS, AgentState.SLEEPING,
-					Fields.RESULT, lastResult != null ? RT.getIn(lastResult, Fields.RESULT) : null,
-					Fields.TASK_RESULTS, allTaskResults);
-				f.complete(result);
-			}
-			return true;
-		} finally {
-			coord.lock.unlock();
-		}
-	}
-
-	/**
-	 * Safety-net exit used when the loop hits {@link #MAX_LOOP_ITERATIONS}.
-	 * Bypasses the wake/hasWork re-check — if we've looped this many times,
-	 * something is wrong and we must release the slot regardless.
-	 */
-	private void forceExit(RunCoordinator coord, ACell result) {
-		coord.lock.lock();
-		try {
-			CompletableFuture<ACell> f = coord.completion;
-			coord.completion = null;
-			if (f != null) f.complete(result);
-		} finally {
-			coord.lock.unlock();
-		}
-	}
-
-	/** Exceptional exit — used when the loop catches an exception or the agent vanishes. */
-	private void completeExceptionally(RunCoordinator coord, String message) {
-		coord.lock.lock();
-		try {
-			CompletableFuture<ACell> f = coord.completion;
-			coord.completion = null;
-			if (f != null) f.completeExceptionally(new RuntimeException(message));
-		} finally {
-			coord.lock.unlock();
-		}
 	}
 
 	/**

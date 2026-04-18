@@ -67,6 +67,7 @@ public class AgentWorkspaceTest {
 		Job run1 = engine.jobs().invokeOperation("v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "workspace-agent"), ALICE);
 		run1.awaitResult(30000);
+		TestEngine.awaitTimelineCount(wsAgent, 1, 10000);
 
 		// Verify: agent is sleeping, workspace has data
 		AgentState agent = engine.getVenueState().users().get(ALICE_DID)
@@ -93,6 +94,7 @@ public class AgentWorkspaceTest {
 		Job run2 = engine.jobs().invokeOperation("v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "workspace-agent"), ALICE);
 		run2.awaitResult(30000);
+		TestEngine.awaitTimelineCount(wsAgent, 2, 10000);
 
 		// Log now has two entries
 		Job readLog2 = engine.jobs().invokeOperation("v/ops/covia/read",

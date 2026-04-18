@@ -61,6 +61,8 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.completedFuture(handleWorkspaceLlm(input));
                 case "compactllm":
                     return CompletableFuture.completedFuture(handleCompactLlm(input));
+                case "selfchat":
+                    return CompletableFuture.completedFuture(handleSelfChatLlm(ctx, input));
                 case "never":
                     return new CompletableFuture<>();
                 case "delay":
@@ -99,6 +101,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("taskllm",      BASE+"testtaskllm.json");
 			installTestAsset("workspacellm", BASE+"testworkspacellm.json");
 			installTestAsset("compactllm",   BASE+"testcompactllm.json");
+			installTestAsset("selfchat",     BASE+"testselfchat.json");
 			installTestAsset("never",        BASE+"neverop.json");
 			installTestAsset("delay",        BASE+"delayop.json");
 			installTestAsset("error",        BASE+"failop.json");
@@ -448,6 +451,74 @@ public class TestAdapter extends AAdapter {
                     "name", Strings.create("compact"),
                     "arguments", Strings.create("{\"summary\":\"Made an echo call.\"}")))
         );
+    }
+
+    /**
+     * Test LLM that issues a self-message during its transition. First cycle:
+     * sends {@code agent:message} to itself with a fresh session carrying
+     * "FOLLOWUP", then returns a plain-text response. Second cycle (triggered
+     * by the self-message landing on {@code session.pending}): sees FOLLOWUP
+     * in its inbound messages and returns "handled followup".
+     *
+     * <p>Regression for the virtual-thread run loop — proves that a nested
+     * invocation writing to the agent's own lattice during a transition is
+     * picked up by the same loop's next iteration without a race.</p>
+     */
+    @SuppressWarnings("unchecked")
+    private ACell handleSelfChatLlm(RequestContext ctx, ACell input) {
+        ACell messagesCell = RT.getIn(input, "messages");
+        String lastUser = "";
+        if (messagesCell instanceof AVector) {
+            AVector<ACell> messages = (AVector<ACell>) messagesCell;
+            for (long i = messages.count() - 1; i >= 0; i--) {
+                AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+                if (role != null && "user".equals(role.toString())) {
+                    AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
+                    if (content != null) lastUser = content.toString();
+                    break;
+                }
+            }
+        }
+
+        if (lastUser.contains("FOLLOWUP")) {
+            return Maps.of(
+                "role", Strings.create("assistant"),
+                "content", Strings.create("handled followup"));
+        }
+
+        AString agentId = ctx.getAgentId();
+        if (agentId == null) {
+            return Maps.of(
+                "role", Strings.create("assistant"),
+                "content", Strings.create("no agent in context — cannot self-message"));
+        }
+
+        // Mint a fresh session id for the self-message so it doesn't collide
+        // with the current session we're transitioning on.
+        byte[] sidBytes = new byte[16];
+        random.nextBytes(sidBytes);
+        StringBuilder hex = new StringBuilder();
+        for (byte b : sidBytes) hex.append(String.format("%02x", b));
+
+        AMap<AString, ACell> msgInput = Maps.of(
+            Fields.AGENT_ID,   agentId,
+            Fields.SESSION_ID, Strings.create(hex.toString()),
+            Fields.MESSAGE,    Maps.of(Strings.create("content"), Strings.create("FOLLOWUP")));
+
+        try {
+            // agent:message is Job-aware; use invokeOperation, not invokeInternal.
+            Job msgJob = engine.jobs().invokeOperation(
+                "v/ops/agent/message", msgInput, ctx);
+            msgJob.awaitResult(5000);
+        } catch (Exception e) {
+            return Maps.of(
+                "role", Strings.create("assistant"),
+                "content", Strings.create("self-message failed: " + e.getMessage()));
+        }
+
+        return Maps.of(
+            "role", Strings.create("assistant"),
+            "content", Strings.create("kicked self-message"));
     }
 
     private RuntimeException handleError(ACell input) {

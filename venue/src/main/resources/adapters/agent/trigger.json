@@ -1,6 +1,6 @@
 {
 	"name": "Trigger Agent",
-	"description": "Triggers the agent's transition loop. Starts the run cycle whether or not there is pending work — the agent may act proactively based on its prompt. When no tasks or messages are pending, the agent receives a clear signal and can choose to act or report idle. By default waits for the run cycle to complete. Set wait=false to return immediately, or wait=<ms> for a timeout.",
+	"description": "Fallback kick that nudges the agent's run loop to execute a cycle. Not a result-getter — trigger carries no payload and makes no guarantee about what the agent produces. For results, await the relevant Job: submit work via agent:request (task Job) or agent:chat (chat Job) and wait on that. Use agent:trigger only when something outside the normal intake path needs a nudge — e.g. after a manual state edit, for diagnostics, or to resume a stuck agent. Defaults to blocking until the current cycle yields or finishes; set wait=false to return immediately, or wait=<ms> for a bounded wait.",
 	"dateCreated": "2026-03-06T00:00:00Z",
 	"operation": {
 		"adapter": "agent:trigger",
@@ -8,7 +8,7 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent name to trigger" },
-				"wait": { "description": "Wait policy: true (default, block until done), false (return immediately), or integer milliseconds (timeout)" },
+				"wait": { "description": "Wait policy: true (default, block until cycle yields or completes), false (return immediately), or integer milliseconds (timeout). Not a result-await — wait on the task/chat Job for results." },
 				"sessionId": {
 					"type": "string",
 					"description": "Optional session identifier (hex string). If omitted, a new session is created and its id returned in the response."
@@ -21,8 +21,8 @@
 			"properties": {
 				"agentId": { "type": "string" },
 				"sessionId": { "type": "string", "description": "Session the trigger ran under" },
-				"status": { "type": "string", "description": "Agent status: SLEEPING (completed) or RUNNING (if wait=false or timed out)" },
-				"result": { "description": "Result returned by the transition function (only when waited)" }
+				"status": { "type": "string", "description": "Agent status at return: SLEEPING (cycle quiesced) or RUNNING (cycle still in progress, yielded on async op, or wait=false / timed out)" },
+				"result": { "description": "Transition result snapshot if the cycle completed during the wait. Do NOT use this to read agent output — await the task/chat Job instead." }
 			}
 		}
 	}

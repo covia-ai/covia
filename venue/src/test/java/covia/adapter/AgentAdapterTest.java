@@ -1509,12 +1509,14 @@ public class AgentAdapterTest {
 			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "result-agent"),
 			RequestContext.of(ALICE_DID));
-		ACell result = runJob.awaitResult(5000);
+		runJob.awaitResult(5000);
+		covia.venue.TestEngine.awaitTimelineCount(resultAgent, 1, 5000);
 
-		// Trigger output's `result` is now the bare lean response value (Sub-stage 2.4),
-		// not a {response: ...} wrapper.
-		AString response = RT.ensureString(RT.getIn(result, Fields.RESULT));
-		assertNotNull(response, "Trigger output should include the transition response");
+		// Trigger only kicks the cycle — read the response off the
+		// timeline entry written by the run loop.
+		ACell timelineEntry = resultAgent.getTimeline().get(0);
+		AString response = RT.ensureString(RT.getIn(timelineEntry, Fields.RESULT));
+		assertNotNull(response, "Timeline result should include the transition response");
 		assertTrue(response.toString().length() > 0, "Response should not be empty");
 	}
 

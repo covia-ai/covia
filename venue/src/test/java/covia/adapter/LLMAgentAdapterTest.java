@@ -228,10 +228,8 @@ public class LLMAgentAdapterTest {
 			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "e2e-agent"),
 			RequestContext.of(ALICE_DID));
-		ACell result = runJob.awaitResult(5000);
-
-		assertNotNull(result);
-		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
+		runJob.awaitResult(5000);
+		TestEngine.awaitTimelineCount(e2eAgent, 1, 10000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("e2e-agent");
@@ -264,6 +262,7 @@ public class LLMAgentAdapterTest {
 			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "multi-run-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		TestEngine.awaitTimelineCount(multiAgent, 1, 10000);
 
 		// Second run
 		multiAgent.appendSessionPending(multiSid, Maps.of(
@@ -273,6 +272,7 @@ public class LLMAgentAdapterTest {
 			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "multi-run-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		TestEngine.awaitTimelineCount(multiAgent, 2, 10000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("multi-run-agent");
@@ -389,10 +389,8 @@ public class LLMAgentAdapterTest {
 			"v/ops/agent/trigger",
 			Maps.of(Fields.AGENT_ID, "tool-agent"),
 			RequestContext.of(ALICE_DID));
-		ACell result = runJob.awaitResult(5000);
-
-		assertNotNull(result);
-		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
+		runJob.awaitResult(5000);
+		TestEngine.awaitTimelineCount(toolAgent, 1, 10000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("tool-agent");
@@ -511,6 +509,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "task-agent"),
 			RequestContext.of(ALICE_DID));
 		runJob.awaitResult(5000);
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
 
 		// Verify agent state — task should be removed after completion
 		assertEquals(AgentState.SLEEPING, agent.getStatus());

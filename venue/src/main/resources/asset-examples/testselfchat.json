@@ -1,0 +1,29 @@
+{
+	"name": "Test Self-Chat LLM",
+	"description": "Test LLM that invokes agent:message on itself during its first transition, then handles the FOLLOWUP message on the next cycle. Used to regression-test nested self-chat during the agent run loop.",
+	"dateCreated": "2026-04-18T00:00:00Z",
+	"operation": {
+		"adapter": "test:selfchat",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": {
+					"type": "array",
+					"description": "Conversation history as message maps"
+				},
+				"tools": {
+					"type": "array",
+					"description": "Tool definitions (ignored by test provider)"
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"description": "Assistant message: {role: 'assistant', content: string}",
+			"properties": {
+				"role": { "type": "string" },
+				"content": { "type": "string" }
+			}
+		}
+	}
+}

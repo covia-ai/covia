@@ -89,77 +89,41 @@ Each scope has **one** state bucket accessed via a single shorthand. No parallel
 
 ```
 g/<agent>/
-  ts                  — record timestamp
-  status              — SLEEPING | RUNNING | SUSPENDED | TERMINATED
-  wake, error         — lifecycle fields
   config              — agent-level config (identity, default tools, caps, model, transitionOp)
-  n/                  — AGENT state (cross-session). Agent-private persistent
-                        workspace. Long-term memory, persona, learned patterns.
-                        Usually small; written rarely.
-  timeline            — thin audit log of session events (session-created,
-                        turn-recorded, archived). Replaces the old per-transition
-                        snapshot vector.
+  timeline            — audit log of session/task events
   tasks/              — Index of tasks (jobs assigned to this agent), keyed by
-                        taskId. **Task ID == caller's request Job ID** — there
-                        is no parallel task identifier; the request Job is the
-                        system of record and the task entry is the in-flight
-                        instruction keyed by that same ID. Each entry is a
-                        taskdata map:
-    <taskId>          {
-                        sessionId?,  — optional back-reference; a task may
-                                       belong to a session or stand alone
-                        input,       — the task's input payload
-                        status,      — pending / running / complete / failed
-                        result?,     — output once complete
-                        t/           — TASK state. Scratch for the work the
-                                       agent is doing for this particular job.
-                                       Lives as a field inside the taskdata map.
-                        plan?,       — optional goal-tree / plan data
-                        ...          — other per-task metadata
-                      }
+                        taskId. **Task ID == caller's request Job ID** — the
+                        request Job is the system of record; the task entry is
+                        the in-flight instruction keyed by that same ID.
   sessions/           — Index of sessions, keyed by sid
     <sid>/
       meta            — {id, parties, title, status, started, lastActivity, turnCount}
-      c/              — SESSION state. Per-conversation working memory,
-                        dialogue context, ongoing-topic notes. This is where most
-                        agent memory actually lives.
       history         — vector of turns/events (full transcript)
       pending         — messages queued for next transition (§5.5.2)
       config?         — session-level config overrides (rare)
-  cross-session/      — optional, future: memory shared across sessions (§9.2)
 ```
 
-Tasks and sessions are **orthogonal**. A task is a Covia job assigned to the agent; a session is a conversational scope. A task MAY reference a session it was spawned from (via `sessionId` inside its taskdata) but does not live under it. A session MAY reference the tasks it spawned (future: `meta.taskIds` vector), but its history doesn't require one.
+Other framework-managed fields on the agent record (status, scheduling, error, caps, timeline entries) are documented where they are authoritative — see [GRID_LATTICE_DESIGN.md §4.3](./GRID_LATTICE_DESIGN.md) for the top-level shape, [SCHEDULER.md](./SCHEDULER.md) for wake state, and [AGENT_LOOP.md](./AGENT_LOOP.md) for timeline entry structure.
+
+**User scratch space** for the agent, session, and task lives in the virtual namespaces `n/`, `c/`, and `t/` respectively — see [GRID_LATTICE_DESIGN.md §4.5](./GRID_LATTICE_DESIGN.md). These are for arbitrary user data; framework-managed state (status, `wakeTime`, task input/result, etc.) is accessed through dedicated APIs, not via these shortcuts.
+
+Tasks and sessions are **orthogonal**. A task is a Covia job assigned to the agent; a session is a conversational scope. A task MAY reference a session it was spawned from (via `sessionId` inside its taskdata) but does not live under it. A session MAY reference the tasks it spawned, but its history doesn't require one.
 
 **Data persists forever** (subject to user deletion). The scope lifecycle only governs *where writes are directed based on the current context*, not when data is removed. Task completion, session archive, and agent termination do not wipe the corresponding scratch — it remains at the full lattice path as audit data.
 
-### 4.1 The scope ladder
+### 4.1 User-scratch shorthands
 
-Five scopes form a monotonic ladder by how long the *writing window* stays open. Each has one shorthand.
+Three virtual namespaces expose user-writable scratch scoped to the agent, session, and job/task:
 
-| Shorthand | Scope | Writes accepted while… | Typical use |
-|-----------|-------|------------------------|-------------|
-| `t/` | Task | a task is focused | "My working notes while executing this job" |
-| `c/` | Session | a session is active | "Context I've built up in this conversation" |
-| `n/` | Agent | agent is not TERMINATED | "Things I've learned that should carry across every conversation" |
-| `w/` | User | always (user-owned) | "Shared documents, data, deliverables" |
-| `o/` | User | always (user-owned) | "Operation registry" |
+| Shorthand | Scope | Typical use |
+|-----------|-------|-------------|
+| `t/` | Job (= task when task is focused) | Working notes for this unit of work |
+| `c/` | Session | Conversational context, topic notes |
+| `n/` | Agent | Long-term memory, persona, cross-session state |
 
-Reading is unrestricted — once written, data at any shorthand path remains readable via its full lattice path indefinitely, so Carol can audit what Bob scratched to `t/` weeks later.
+`w/` and `o/` are the user-level workspace and operation-registry namespaces (see [GRID_LATTICE_DESIGN.md §4](./GRID_LATTICE_DESIGN.md)).
 
-### 4.2 Shorthand resolution
-
-```
-t/key  →  g/<agent>/tasks/<taskId>/t/key      (requires focused task)
-c/key  →  g/<agent>/sessions/<sid>/c/key      (requires active session)
-n/key  →  g/<agent>/n/key                     (always valid while agent exists)
-w/key  →  <userDID>/w/key
-o/key  →  <userDID>/o/key
-```
-
-`t/` resolves into the `t` field of the focused task's taskdata map — i.e. writes to `t/foo` update the `t.foo` key inside the ACell stored at `g/<agent>/tasks/<taskId>`. No separate subtree; the existing taskdata Index is the storage.
-
-Full lattice paths work everywhere. Shorthands only resolve in agent scope. `t/` access with no focused task errors; `c/` with no active session errors (rare — sessions are minted on message/request arrival).
+Resolution rules, lifetimes, scoping inheritance, and the split between user scratch and framework-managed state are defined in [GRID_LATTICE_DESIGN.md §4.5](./GRID_LATTICE_DESIGN.md).
 
 ### 4.3 Session metadata shape (suggested)
 
@@ -197,7 +161,7 @@ agent_trigger   agentId=X  sessionId=Y?                 — wake the agent. No p
 | `agent_request` | `tasks` Index | yes (Job) | Agent must produce `response` (auto-completes task) or `error`, or yield (task stays pending until external wake) |
 | `agent_chat` | session-scoped chat slot | yes (Job) | Agent's next `response` on this session completes the chat job. Typically continues an existing session (`sessionId` supplied); mints a new one on first contact |
 | `agent_message` | session `pending` | no | Agent processes whenever; any `response` lands in session history |
-| `agent_trigger` | none | yes (run completion) | Just nudges the run loop; no payload to deliver |
+| `agent_trigger` | none | block on cycle quiesce/yield | **Fallback kick** — nudges the run loop, no payload, no result-await. Callers wanting output should wait on a task/chat Job from `agent_request` / `agent_chat`. |
 
 Session ids are always venue-minted — callers never supply their own. Per-op rules are detailed in §5.5; summary:
 
@@ -396,14 +360,9 @@ For task work, the framework distinguishes **completed** from **yield** by obser
 - **Multi-step planning** — agent did internal work (lattice writes to `n` / `c` / `t`) but isn't ready to complete
 - **Agent had nothing useful to say** — transient false wake; loop exits cleanly
 
-The picked task resumes on the next wake. Wake sources:
+The picked task resumes on the next wake. The four wake paths (explicit trigger, work arrival, scheduled, async completion) are defined in [SCHEDULER.md §4](./SCHEDULER.md).
 
-- **Delegated op completes** — the `pending` Index entry resolves, framework wakes the agent
-- **`agent_message` arrives** — sets the wake flag
-- **`agent_trigger` called** — explicit nudge
-- **Scheduled timer** — once B8.8 lands
-
-**Per-task exponential falloff.** A task that yields without progress is not capped or auto-failed — it just gets rescheduled further out each time. On every yield: increment a `yields` counter on the task record and set `nextWake = now + base * 2^yields` (capped at e.g. 1 day). The scheduler (B8.8) wakes the agent at `nextWake`. Any progress — completion, fail, message arrival, delegated op callback, explicit trigger — clears the counter. Yielded tasks aren't burning resources, they're dormant.
+**Per-task exponential backoff.** A task that yields without progress is not capped or auto-failed — it is rescheduled by the framework with growing delay between cycles. Any progress (completion, fail, message arrival, delegated op callback, explicit trigger) resets the backoff. Yielded tasks are dormant, not burning resources. See [SCHEDULER.md](./SCHEDULER.md) for wake semantics, field names, and backoff policy.
 
 **Optional task timeout.** Tasks may carry an optional `timeout` field (caller-settable on `agent_request`); default very long (e.g. weeks) or absent. The framework checks `timeout` at pick time — if exceeded, the task is auto-failed with `timeout` error before invoking the agent. Callers that want a tight deadline set their own; the framework imposes none by default.
 

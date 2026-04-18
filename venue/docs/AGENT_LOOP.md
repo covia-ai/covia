@@ -606,58 +606,86 @@ tracked for completion. Use `agent:request` for work items that need a response.
 
 **Trigger:** `wakeAgent` (§4.6), not directly by MCP users.
 
-Also callable via `agent:trigger` for synchronisation and manual control. The
-trigger has **wait-for-completion** semantics: it returns when the agent has
-finished processing (reached SLEEPING). If the agent is already RUNNING, the
-trigger parks on a completion future and completes when the current run finishes.
-The trigger always invokes the transition function, even with no pending work —
-the transition decides what to do (it may act proactively).
+Also callable via `agent:trigger` — a **fallback kick**, not a result-getter.
+Trigger nudges the run loop so a cycle executes; it carries no payload and
+makes no guarantees about agent output. Callers who want results should
+submit work via `agent:request` (task Job) or `agent:chat` (chat Job) and
+await that Job. Use trigger only when the normal intake path isn't enough
+(manual state edit, diagnostics, resuming a stuck agent).
 
-**Run exclusion.** The agent's `status` field in the lattice is the source of
-truth for whether a run is active. A per-agent lock serialises the status check
-with all record mutations (`addTask`, `appendSessionPending`, run loop writes). There
-are no separate Java-side running/wake flags — all decisions are based on lattice
-data.
+The `wait` parameter on trigger is a block on the loop's completion
+future, not a result-await: it returns when the loop drains all
+outstanding work and exits to SLEEPING. A transition that awaits an
+async op (LLM, HTTP, HITL) simply keeps its virtual thread blocked on
+`.join()` — there is no yield/resume handoff. A `SLEEPING` return means
+the loop fully drained; a `RUNNING` snapshot from a bounded `wait` means
+the loop is still processing. The transition always runs once per
+trigger, even with no pending work, so an agent may act proactively on
+a trigger.
 
-A per-agent `CompletableFuture` is created when the agent transitions to RUNNING
-(whether via `wakeAgent` or `agent:trigger`). Multiple triggers can park on the
-same future. When the loop finishes, all waiting triggers are notified.
-`ConcurrentHashMap.remove(key, value)` ensures that a new run's future is never
-accidentally completed by an old run.
+**Run exclusion.** The in-memory `runningLoops`
+(`ConcurrentHashMap<agentId, CompletableFuture>`) is the source of truth
+for whether a loop is live. Launch is serialised by an atomic CAS via
+`ConcurrentHashMap.compute` — the first wake installs a fresh future,
+subsequent wakes observe the existing one and return it. A virtual
+thread is started only by the winning wake. Mutations to the agent
+record (`addTask`, `appendSessionPending`, run loop writes) use atomic
+cursor updates directly — no shared lock.
+
+The lattice `status` field is a durable hint; `runningLoops` is the
+authoritative liveness signal. Phantom RUNNING (crash remnant or stale
+write past a clean exit) is corrected inside `wakeAgent` before
+installing a fresh slot (#64). `ConcurrentHashMap.remove(key, value)`
+ensures a new run's future is never accidentally completed by an old
+run's `finally` block.
 
 **Sequence (per iteration):**
 
-1. Acquire the per-agent lock. Read a consistent snapshot of the agent record:
-   `sessions`, `tasks`, `pending`, `state`.
-2. If nothing to process (no tasks and no session with pending messages): set status → `"SLEEPING"`,
-   release lock, return. Pending jobs are passed through but do not alone
+1. Read the current agent record: `sessions`, `tasks`, `pending`, `state`.
+2. If not the first iteration and nothing to process (no tasks and no
+   session with pending messages and no scheduled wake due): break out
+   of the loop. Pending jobs are passed through but do not alone
    trigger a run.
-3. Release the lock.
-4. Resolve job data from JobManager (read-only, no lock needed).
-5. Invoke the transition function (§3.2) with `agent-id`, current `state`,
+3. Resolve job data from JobManager.
+4. Invoke the transition function (§3.2) with `agent-id`, current `state`,
    `tasks`, `pending` (with resolved statuses), and the picked `session`.
-   **No lock held** during the transition — it may take seconds or minutes.
-6. On success — **merge with current state** (acquire lock):
-   - Re-read the current agent record (not the stale snapshot from step 1).
-   - Remove completed tasks from the **current** `tasks` index (not the stale
-     snapshot). This prevents overwriting tasks added by concurrent `addTask`
-     calls during the transition.
-   - Drain the presented count of pending messages from the picked session's
-     `pending` queue. Messages appended by concurrent `appendSessionPending`
-     calls during the transition are preserved (they appear at indices beyond
-     the presented count).
+   The virtual thread blocks on `.join()` of the returned future — no
+   lock is held; other agents' loops run independently.
+5. On success — **merge with current state** via `mergeRunResult`, a
+   single atomic `cursor.updateAndGet` on the agent record:
+   - Re-read the record inside the CAS (not the stale snapshot from step 1).
+   - Remove completed tasks from the **current** `tasks` index (not the
+     stale snapshot). This prevents overwriting tasks added by concurrent
+     `addTask` calls during the transition.
+   - Drain the presented count of pending messages from the picked
+     session's `pending` queue. Messages appended by concurrent
+     `appendSessionPending` calls during the transition (including the
+     agent's own self-chat / self-message) are preserved at indices
+     beyond the presented count and picked up by the next iteration's
+     `hasWork` check.
    - Update `state` from the returned value.
    - Append timeline entry with full audit data (§2.4).
-   - If remaining work exists (tasks remain or a session has pending messages): set
-     status → `"RUNNING"`, release lock, loop to step 1.
-   - Otherwise: set status → `"SLEEPING"`, release lock.
-   - Apply `taskResults` to JobManager — complete or fail each task Job
-     (outside the lock).
-7. On error:
+   - Status is set to `RUNNING` if work remains, else `SLEEPING`.
+6. Complete any picked chat Job's `CompletableFuture` and drain
+   `deferredCompletions` to finish task Jobs parked by
+   `agent:complete-task` / `agent:fail-task` — both strictly AFTER the
+   merge, so external awaiters see timeline and state writes first.
+7. Loop back to step 1. The top-of-loop check at step 2 is the sole
+   exit gate.
+8. On exception:
    - Leave `state`, `tasks`, `pending`, and `sessions` unchanged.
-   - Set status → `"SUSPENDED"`, set `error` (inside the lock).
-   - Note: task completions made via tool calls during execution are **not**
-     rolled back (§3.4.1).
+   - Set status → `"SUSPENDED"`, set `error`.
+   - Fail all pending task Jobs and clear parked completions for this
+     agent.
+   - Note: task completions made via tool calls during execution are
+     **not** rolled back (§3.4.1).
+
+After the loop exits (break or exception), a `finally` block removes
+the agent from `runningLoops` (via `remove(key, value)` so a concurrent
+new run is not clobbered) and re-checks `hasWork` on the agent. If
+work landed during exit, a fresh `wakeAgent` call is issued — any wake
+whose lattice write preceded this re-check triggers a new loop; any
+wake landing after sees an empty slot and wins its own CAS.
 
 The transition operation always comes from `config.operation` (set at creation).
 Callers cannot override it — to change the transition function, update the config.
@@ -680,10 +708,10 @@ the response visible to callers without querying agent state separately.
 
 **All mutations are atomic.** Each operation is a single `cursor.updateAndGet`
 on the agent's lattice cell, so concurrent operations against the same agent
-serialise cleanly without explicit locking. The per-agent lock around the run
-loop (§4.4) coordinates the heavier compound operations (read snapshot →
-invoke transition → merge result) but the underlying cell mutations remain
-atomic CAS-style updates.
+serialise cleanly without explicit locking. The run loop's cycle is a
+read → transition → merge sequence; concurrency with external mutations
+is handled by reading the current record inside `mergeRunResult`'s CAS
+(not the pre-transition snapshot) so late writes are never lost.
 
 **Status invariants:**
 

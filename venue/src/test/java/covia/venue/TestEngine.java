@@ -2,6 +2,9 @@ package covia.venue;
 
 import convex.core.data.Strings;
 import convex.core.data.AString;
+import convex.core.data.Blob;
+import convex.core.data.Index;
+import convex.core.data.ACell;
 
 /**
  * Shared {@link Engine} singleton for venue unit tests that don't need their
@@ -75,5 +78,61 @@ public class TestEngine {
 	 */
 	public static AString uniqueDID(String discriminator) {
 		return Strings.create("did:key:z6Mk-test-" + discriminator);
+	}
+
+	/**
+	 * Polls until the agent is idle (status {@code SLEEPING} with no
+	 * session pending and no tasks) or the timeout elapses. Tests should
+	 * wait on task/chat/request Jobs for results; this helper is for cases
+	 * that drive the agent via a fallback trigger + direct lattice writes
+	 * and need a quiescence signal before making assertions.
+	 *
+	 * @throws AssertionError if the agent is not idle within the timeout.
+	 */
+	public static void awaitAgentIdle(AgentState agent, long timeoutMs) {
+		long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() < deadline) {
+			AString status = agent.getStatus();
+			Index<Blob, ACell> tasks = agent.getTasks();
+			boolean idle = AgentState.SLEEPING.equals(status)
+				&& !agent.hasSessionPending()
+				&& (tasks == null || tasks.count() == 0);
+			if (idle) return;
+			try { Thread.sleep(5); } catch (InterruptedException ie) {
+				Thread.currentThread().interrupt();
+				return;
+			}
+		}
+		throw new AssertionError("Agent did not become idle within "
+			+ timeoutMs + "ms (status=" + agent.getStatus()
+			+ ", hasSessionPending=" + agent.hasSessionPending()
+			+ ", tasks=" + (agent.getTasks() == null ? 0 : agent.getTasks().count()) + ")");
+	}
+
+	/**
+	 * Polls until the agent's timeline has at least {@code minCount} entries
+	 * or the timeout elapses. Use this when asserting on the output of a
+	 * cycle whose transition may yield on an async op — the merge (and
+	 * therefore the timeline write) happens on resume, not at trigger
+	 * return. Timeline count only grows, so "at least N" is a safe
+	 * quiescence signal.
+	 *
+	 * @throws AssertionError if the timeline does not reach {@code minCount}
+	 *                        within the timeout.
+	 */
+	public static void awaitTimelineCount(AgentState agent, int minCount, long timeoutMs) {
+		long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() < deadline) {
+			convex.core.data.AVector<?> tl = agent.getTimeline();
+			if (tl != null && tl.count() >= minCount) return;
+			try { Thread.sleep(5); } catch (InterruptedException ie) {
+				Thread.currentThread().interrupt();
+				return;
+			}
+		}
+		convex.core.data.AVector<?> tl = agent.getTimeline();
+		throw new AssertionError("Agent timeline did not reach " + minCount
+			+ " entries within " + timeoutMs + "ms (current="
+			+ (tl == null ? 0 : tl.count()) + ", status=" + agent.getStatus() + ")");
 	}
 }

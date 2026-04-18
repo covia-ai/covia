@@ -211,24 +211,19 @@ Stateful actors with pluggable transition functions. Each agent is a state machi
 
 Agent IDs are human-readable strings chosen by the user (e.g. `"my-assistant"`, `"code-reviewer"`). The canonical lattice address is `did:key:zAlice.../g/my-assistant`.
 
-Each agent is a single atomic LWW value — the entire agent record is replaced on every write, and the record with the latest `ts` wins on merge. All writes are serialised on the hosting venue, so there are no concurrent writers.
+Each agent is a single atomic LWW value — the entire agent record is replaced on every write, with the latest timestamp winning on merge. All writes are serialised on the hosting venue; there are no concurrent writers.
 
-**Agent record fields:**
+**What users see.** The user-visible agent surface is:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `ts` | long | Timestamp of the last write. The LWW merge discriminator. Set automatically on every write. |
-| `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"` |
-| `config` | map | Framework-level configuration. Includes `operation` (default transition op), `name`, `description`, `tags`, `skills` (A2A), protocol settings. |
-| `state` | any | User-defined state. Opaque to the framework — owned entirely by the transition function. |
-| `tasks` | index | `Index<Blob, ACell>` — inbound request Job IDs. Ordered by Job ID; O(log n) insert/delete. |
-| `pending` | index | `Index<Blob, ACell>` — outbound Job IDs the agent is waiting on. Ordered by Job ID. |
-| `sessions` | index | `Index<Blob, ACell>` — per-session state. Each session has history, pending, metadata, and per-session state (`c/`). See AGENT_SESSIONS.md. |
-| `timeline` | vector | Append-only log of transition records. Grows with each successful run. |
-| `caps` | map | Capability attenuations — UCAN scoping for agent tool calls. |
-| `error` | string? | Last error message, or absent. Set when the transition function fails. |
+- **`config`** — the agent's declared behaviour: transition operation, name, description, tags, A2A skills, tool palette, protocol settings. This is what an author writes when creating an agent.
+- **`status`** — high-level lifecycle (`SLEEPING` / `RUNNING` / `SUSPENDED` / `TERMINATED`), observable via `agent:info` or `covia:read`.
+- **Virtual namespaces `n/`, `c/`, `t/`** — user-writable scratch scoped to agent, session, and job. See §4.5.
 
-All fields are framework-managed except `state`, which is owned by the transition function.
+Internal framework fields (sessions, tasks, pending, timeline, caps, scheduling state) are managed by the runtime and are not a stable user-writable surface. Their structure is documented where it's authoritative:
+
+- **Sessions and tasks:** [AGENT_SESSIONS.md](./AGENT_SESSIONS.md)
+- **Scheduling (wake times, backoff):** [SCHEDULER.md](./SCHEDULER.md)
+- **Transition function contract and timeline:** [AGENT_LOOP.md](./AGENT_LOOP.md)
 
 **Execution architecture, transition function contract, operations, scheduling, and timeline entry structure** are defined in AGENT_LOOP.md. In summary: the venue runtime manages agent lifecycle through a three-level architecture (agent update → transition function → LLM call), where only the transition function is pluggable. See AGENT_LOOP.md §2–§4 for full details.
 
@@ -352,21 +347,28 @@ Encrypted, capability-gated data. Different encryption and access semantics from
 
 Some path prefixes are not backed by a dedicated lattice namespace. Instead they are **virtual** — resolved at runtime by a `NamespaceResolver` that maps the prefix to the correct lattice location based on the `RequestContext`. This avoids path string rewriting, creates no temporary allocations, and keeps scoping explicit.
 
+**Virtual namespaces are user-level scratch space.** They expose a location for operation code and agent tool calls to read and write arbitrary data. They do **not** expose framework-managed system fields (status, `wakeTime`, `yieldCount`, task input/result, timeline). Those fields are accessed through dedicated APIs — `RequestContext`, engine accessors, venue ops — never by writing under a virtual namespace prefix. This split keeps the user-writable surface clean of state the framework owns and keeps the framework free to restructure its own storage without breaking user code.
+
 | Prefix | Resolves to | Scope | Resolver needs |
 |--------|-------------|-------|----------------|
-| `n/` | Agent's own workspace within its state record | Agent | `RequestContext.agentId` |
-| `t/` | `temp` field within the current job record | Job | `RequestContext.jobId` |
+| `n/` | Agent-scoped scratch (persistent across sessions) | Agent | `RequestContext.agentId` |
+| `c/` | Session-scoped scratch (per-conversation) | Session | `RequestContext.sessionId` |
+| `t/` | Job-scoped scratch (per-invocation) | Job | `RequestContext.jobId` |
 
-**`n/` — Agent Workspace.** Shorthand for the running agent's private workspace. An agent writing `n/notes` accesses its own state without knowing its agent ID or constructing a `g/{agentId}/state/w/notes` path. The resolver navigates directly to the agent's workspace cursor via the `agentId` on the RequestContext.
+**`n/` — Agent Workspace.** The running agent's persistent private workspace. Carries across sessions and tasks. Long-term memory, learned patterns, persona. Written rarely, read often. Agent-scoped via `RequestContext.agentId`.
 
-**`t/` — Job-Scoped Temp.** Temporary data scoped to a single job execution. Stored as a `temp` field within the job record (`j/{jobId}/temp/...`). The resolver navigates directly to the job's temp sub-map via the `jobId` on the RequestContext.
+**`c/` — Session Scratch.** Per-conversation working memory for a session. Dialogue context, topic notes, scratch that is only meaningful while the session is active. Session-scoped via `RequestContext.sessionId`. See AGENT_SESSIONS.md for session lifecycle.
+
+**`t/` — Job-Scoped Temp.** Temporary scratch for a single job execution. Job-scoped via `RequestContext.jobId`. Not agent-specific — any operation running under a job can use `t/` for intermediate results. Agent tasks use `t/` too, because a task IS a job (Task ID == Job ID).
 
 Properties:
-- **Naturally scoped** — the job IS the execution; no separate lifecycle to manage
-- **Concurrent-safe** — different jobs get different temp, even for the same agent or user
-- **Persisted** — temp survives restarts (it's part of the job record on the lattice)
-- **Auditable** — temp is visible in the job record alongside input/output, giving full provenance
-- **Cleaned up** — GoalTreeAdapter clears the temp field on root frame completion; or it can be left for debugging
+- **Naturally scoped** — the job is the execution unit; no separate lifecycle to manage.
+- **Concurrent-safe** — different jobs get different scratch, even for the same agent or user.
+- **Persisted** — part of the job record on the lattice; survives restarts.
+- **Auditable** — visible alongside job input/output, giving full provenance.
+- **Inheritable** — sub-operations within a job share its `t/` (see scoping rules below).
+
+Sub-operations within a job inherit the parent job's `jobId` on the `RequestContext`, so they share the parent's `t/`. This is the intended behaviour: orchestration steps, goal-tree subgoals, and tool calls can exchange data through `t/` without writing to permanent workspace.
 
 #### Scoping Rules
 
@@ -380,11 +382,16 @@ Properties:
 | `agent:request` / `agent:trigger` | Own job | New agent execution, new job |
 | `grid:run` to remote venue | Own job | New job on target venue |
 
-**Key principle:** `t/` is shared across all sub-work within a single job. Orchestration steps can exchange data through `t/` without writing to permanent workspace. If isolation between steps is needed, use `grid:run` which creates a new job with its own `t/`.
+**Key principle:** `t/` is shared across all sub-work within a single job. If isolation between steps is needed, use `grid:run` which creates a new job with its own `t/`.
 
-**When to use `t/` vs `w/`:**
-- `t/` — intermediate calculations, draft data between subgoals or orchestration steps, shared working state within a single execution. Automatically scoped to the job.
-- `w/` — final outputs, notes worth keeping, data that other agents or future executions should see. Permanent.
+**Choosing the right scratch scope:**
+
+| Scope | Use for | Lifetime |
+|---|---|---|
+| `t/` | Intermediate calculations, data passed between orchestration steps or subgoals | Single job |
+| `c/` | Conversational context, dialogue notes, topic state | Session |
+| `n/` | Agent persona, learned patterns, long-term memory | Agent lifetime |
+| `w/` | Final outputs, documents, anything other agents or users should see | Permanent (user workspace) |
 
 #### Resolver Interface
 
