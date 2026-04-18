@@ -109,6 +109,12 @@ public class Engine {
 	private final JobManager jobManager;
 
 	/**
+	 * Per-thread wake scheduler (B8.8). Fires {@code wakeAgent} when a
+	 * session or task {@code wakeTime} falls due. See {@code venue/docs/SCHEDULER.md §7}.
+	 */
+	private final AgentScheduler scheduler;
+
+	/**
 	 * Map of named adapters that can handle different types of operations or resources
 	 */
 	protected final ConcurrentHashMap<String, AAdapter> adapters = new ConcurrentHashMap<>();
@@ -173,8 +179,13 @@ public class Engine {
 		this.lattice.withContext(ctx);
 		initialiseFromCursor();
 		this.jobManager = new JobManager(this);
+		this.scheduler = new AgentScheduler(this::fireScheduledWake);
 		this.contentStorage = createStorage();
 		this.contentStorage.initialise();
+
+		// Lattice is authoritative for per-thread wakes; the scheduler index
+		// is in-memory only and rebuilt on every boot. See SCHEDULER.md §7.
+		rebuildSchedulerFromLattice();
 
 		// Ensure the venue's own user record exists in :user-data. The venue
 		// is treated as a user (it has its own DID and keypair) so that the
@@ -362,6 +373,12 @@ public class Engine {
 	 */
 	public void close() {
 		if (!closed.compareAndSet(false, true)) return; // already closed
+
+		// Stop the scheduler first so no new fires land during shutdown. In-
+		// flight fires on virtual threads keep running; their wakeAgent calls
+		// tolerate a closing venue because the run loops themselves gate on
+		// agent state in the lattice.
+		scheduler.shutdown();
 
 		// Stop accepting new sweep tasks; wait briefly for in-flight sweep to finish.
 		// May be null for in-memory engines that have no persistence handler.
@@ -1391,6 +1408,90 @@ public class Engine {
 	 */
 	public JobManager jobs() {
 		return jobManager;
+	}
+
+	/**
+	 * Gets the per-thread wake scheduler (B8.8).
+	 * @return AgentScheduler instance
+	 */
+	public AgentScheduler scheduler() {
+		return scheduler;
+	}
+
+	/**
+	 * Fire action for the scheduler — invoked on a fresh virtual thread
+	 * when a session/task {@code wakeTime} falls due. Delegates to the
+	 * agent adapter's {@code wakeAgent} with a scheduler-scoped
+	 * {@link RequestContext}. If the adapter isn't registered (e.g.
+	 * stripped-down test engine), the fire is a no-op.
+	 */
+	private void fireScheduledWake(AgentScheduler.ThreadRef ref) {
+		AAdapter a = getAdapter("agent");
+		if (!(a instanceof AgentAdapter agentAdapter)) return;
+		agentAdapter.wakeAgent(
+			ref.agentId(),
+			RequestContext.scheduler(ref.userDid()),
+			false);
+	}
+
+	/**
+	 * Scans the lattice for all session/task {@code wakeTime} fields and
+	 * registers each as a scheduler entry. Called once during Engine
+	 * construction so a restart that drops the in-memory scheduler state
+	 * does not lose any scheduled wakes. See {@code venue/docs/SCHEDULER.md §7}.
+	 */
+	@SuppressWarnings("unchecked")
+	void rebuildSchedulerFromLattice() {
+		AMap<AString, ACell> userData = venueState.users().getAll();
+		if (userData == null || userData.isEmpty()) return;
+
+		int count = 0;
+		for (var userEntry : userData.entrySet()) {
+			AString userDid = (AString) userEntry.getKey();
+			User user = venueState.users().get(userDid);
+			if (user == null) continue;
+			AMap<AString, ACell> agents = user.getAgents();
+			if (agents == null || agents.isEmpty()) continue;
+			for (var agentEntry : agents.entrySet()) {
+				AString agentId = (AString) agentEntry.getKey();
+				ACell agentVal = agentEntry.getValue();
+				if (!(agentVal instanceof AMap)) continue;
+				AMap<AString, ACell> agentRec = (AMap<AString, ACell>) agentVal;
+				count += scheduleWakesFromIndex(userDid, agentId, agentRec,
+					AgentState.KEY_SESSIONS, AgentScheduler.ThreadKind.SESSION);
+				count += scheduleWakesFromIndex(userDid, agentId, agentRec,
+					AgentState.KEY_TASKS, AgentScheduler.ThreadKind.TASK);
+			}
+		}
+		if (count > 0) {
+			log.info("Scheduler: rebuilt {} pending wake(s) from lattice", count);
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private int scheduleWakesFromIndex(AString userDid, AString agentId,
+			AMap<AString, ACell> agentRec, AString key,
+			AgentScheduler.ThreadKind kind) {
+		ACell v = agentRec.get(key);
+		if (!(v instanceof Index)) return 0;
+		Index<Blob, ACell> idx = (Index<Blob, ACell>) v;
+		int n = 0;
+		long cnt = idx.count();
+		for (long i = 0; i < cnt; i++) {
+			var e = idx.entryAt(i);
+			Blob threadId = (Blob) e.getKey();
+			ACell rec = e.getValue();
+			if (!(rec instanceof AMap)) continue;
+			ACell wt = ((AMap<AString, ACell>) rec).get(Fields.WAKE_TIME);
+			if (!(wt instanceof CVMLong)) continue;
+			long wakeTime = ((CVMLong) wt).longValue();
+			if (wakeTime <= 0) continue;
+			scheduler.schedule(
+				new AgentScheduler.ThreadRef(userDid, agentId, kind, threadId),
+				wakeTime);
+			n++;
+		}
+		return n;
 	}
 
 	// ========== Secret resolution ==========

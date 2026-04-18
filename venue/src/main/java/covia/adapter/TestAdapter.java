@@ -51,6 +51,8 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.completedFuture(handleEcho(input));
                 case "taskcomplete":
                     return CompletableFuture.completedFuture(handleTaskComplete(ctx, input));
+                case "wakeresponse":
+                    return CompletableFuture.completedFuture(handleWakeResponse(input));
                 case "llm":
                     return CompletableFuture.completedFuture(handleLlm(input));
                 case "toolllm":
@@ -108,6 +110,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("chat",         BASE+"chatop.json");
 			installTestAsset("pause",        BASE+"pauseop.json");
 			installTestAsset("taskcomplete", BASE+"taskcomplete.json");
+			installTestAsset("wakeresponse", BASE+"wakeresponse.json");
 
 			// Demos and content fixtures — stored in CAS only, not in any catalog.
 			installExampleAsset(BASE+"empty.json");
@@ -222,6 +225,25 @@ public class TestAdapter extends AAdapter {
         }
 
         return Maps.of(Fields.RESPONSE, response);
+    }
+
+    /**
+     * Test transition that returns a {@code wakeTime} in the transition
+     * result (B8.8 per-thread scheduled wake). Reads the requested wake
+     * value from {@code state.wakeTime} in the transition input, echoes
+     * it back in the result alongside a fixed {@code response}. Does not
+     * complete any task — the session survives post-merge so the
+     * framework's per-thread wake wire-up can install a SESSION ref in
+     * the scheduler.
+     */
+    private ACell handleWakeResponse(ACell input) {
+        ACell wt = RT.getIn(input, "state", Fields.WAKE_TIME);
+        AMap<AString, ACell> out = Maps.of(
+            Fields.RESPONSE, Strings.create("ack"));
+        if (wt instanceof CVMLong) {
+            out = out.assoc(Fields.WAKE_TIME, wt);
+        }
+        return out;
     }
 
     /**

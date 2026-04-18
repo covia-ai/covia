@@ -1,0 +1,10 @@
+{
+	"name": "Wake Response Test Operation",
+	"description": "Test transition that returns a wakeTime from state.wakeTime in the transition result. Used to exercise per-thread scheduler wire-up (B8.8).",
+	"dateCreated": "2026-04-18T00:00:00Z",
+	"operation": {
+		"adapter": "test:wakeresponse",
+		"input": {},
+		"output": {}
+	}
+}

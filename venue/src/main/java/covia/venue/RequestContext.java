@@ -61,6 +61,18 @@ public class RequestContext {
 	}
 
 	/**
+	 * Creates a RequestContext for scheduler-initiated wakes. Carries the
+	 * agent owner's DID for access control (so the wake runs against the
+	 * agent's own namespace) but is marked internal — auth and rate-limit
+	 * checks are bypassed because the scheduler is the venue itself.
+	 * Falls back to {@link #INTERNAL} if userDid is null.
+	 */
+	public static RequestContext scheduler(AString userDid) {
+		if (userDid == null) return INTERNAL;
+		return new RequestContext(userDid, true, null, null, null, null, null, null);
+	}
+
+	/**
 	 * Returns a new context with the given proofs added.
 	 */
 	public RequestContext withProofs(AVector<ACell> proofs) {

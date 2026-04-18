@@ -1,5 +1,6 @@
 package covia.venue;
 
+import java.util.Objects;
 import java.util.function.UnaryOperator;
 
 import convex.core.data.ACell;
@@ -16,6 +17,7 @@ import convex.core.lang.RT;
 import convex.core.util.Utils;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
+import covia.api.Fields;
 
 /**
  * Cursor wrapper for a single agent's state within a user's lattice.
@@ -36,7 +38,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_PENDING  = Strings.intern("pending");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
 	private static final AString K_ERROR    = Strings.intern("error");
-	private static final AString K_WAKE     = Strings.intern("wake");
 
 	// Session record field keys (scoped within a single session map)
 	private static final AString K_C        = Strings.intern("c");
@@ -82,7 +83,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 	public static final AString KEY_PENDING  = K_PENDING;
 	public static final AString KEY_TIMELINE = K_TIMELINE;
 	public static final AString KEY_ERROR    = K_ERROR;
-	public static final AString KEY_WAKE     = K_WAKE;
 	/** Session-record `history` key — vector of turn envelopes. Public for
 	 *  adapters that read transcript from {@code input.session.history} (S3c). */
 	public static final AString KEY_HISTORY  = K_HISTORY;
@@ -346,18 +346,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 		return (v instanceof CVMLong l) ? l.longValue() : 0;
 	}
 
-	public long getWakeTime() {
-		AMap<AString, ACell> r = getRecord();
-		if (r == null) return 0;
-		ACell v = r.get(K_WAKE);
-		return (v instanceof CVMLong l) ? l.longValue() : 0;
-	}
-
-	public boolean shouldWake() {
-		long wt = getWakeTime();
-		return wt > 0 && Utils.getCurrentTimestamp() >= wt;
-	}
-
 	// ========== Simple mutations ==========
 
 	public void setStatus(AString status) {
@@ -384,17 +372,76 @@ public class AgentState extends ALatticeComponent<ACell> {
 		update(r -> r.assoc(K_PENDING, extractPending(r).assoc(jobId, snapshot)));
 	}
 
-	/** Sets wake time using min semantics — an earlier wake always wins. */
-	public void setWakeTime(long wakeTime) {
-		if (wakeTime <= 0) {
-			update(r -> r.dissoc(K_WAKE));
+	/**
+	 * Single-writer helper for per-thread wake scheduling (B8.8). Writes
+	 * {@code wakeTime} on the named session or task record, then registers
+	 * (or cancels) a fire in the {@link AgentScheduler}. See
+	 * {@code venue/docs/SCHEDULER.md §7.5}.
+	 *
+	 * <p>Replace-semantics: the new {@code wakeTime} overwrites any prior
+	 * value. Pass {@code wakeTime <= 0} to clear the wake and cancel the
+	 * scheduler fire. A missing session / task is a no-op (no lattice
+	 * write, no scheduler change) — callers should ensure the record
+	 * exists first.</p>
+	 *
+	 * <p>Order: lattice write first, then scheduler. A crash between
+	 * the two is recovered by the boot rebuild, which restores the
+	 * scheduler index from the authoritative lattice state.</p>
+	 *
+	 * <p>Per-ref concurrency is zero under the virtual-thread-per-agent
+	 * model (one cycle per agent serialises all in-cycle writers). Boot
+	 * rebuild runs before any cycle starts. No per-ref lock needed.</p>
+	 *
+	 * @param scheduler Scheduler to install / cancel the fire on
+	 * @param userDid   Agent owner's DID (for {@link AgentScheduler.ThreadRef})
+	 * @param kind      SESSION or TASK
+	 * @param threadId  Session or task id (Blob)
+	 * @param wakeTime  Absolute wall-clock millis, or {@code <= 0} to clear
+	 */
+	@SuppressWarnings("unchecked")
+	public void setThreadWakeTime(AgentScheduler scheduler, AString userDid,
+			AgentScheduler.ThreadKind kind, Blob threadId, long wakeTime) {
+		Objects.requireNonNull(scheduler, "scheduler");
+		Objects.requireNonNull(userDid, "userDid");
+		Objects.requireNonNull(kind, "kind");
+		Objects.requireNonNull(threadId, "threadId");
+
+		// Single pre-read so we can skip the write if the target record
+		// is missing. We don't retry on a race — callers ensure existence.
+		AMap<AString, ACell> record = getRecord();
+		if (record == null) return;
+
+		boolean present;
+		if (kind == AgentScheduler.ThreadKind.SESSION) {
+			Index<Blob, ACell> sessions = (record.get(K_SESSIONS) instanceof Index idx)
+				? (Index<Blob, ACell>) idx : Index.none();
+			present = sessions.get(threadId) instanceof AMap;
 		} else {
-			update(r -> {
-				ACell v = r.get(K_WAKE);
-				long existing = (v instanceof CVMLong l) ? l.longValue() : 0;
-				long effective = (existing > 0) ? Math.min(existing, wakeTime) : wakeTime;
-				return r.assoc(K_WAKE, CVMLong.create(effective));
-			});
+			Index<Blob, ACell> tasks = (record.get(K_TASKS) instanceof Index idx)
+				? (Index<Blob, ACell>) idx : Index.none();
+			present = tasks.get(threadId) instanceof AMap;
+		}
+		if (!present) return;
+
+		AString key = (kind == AgentScheduler.ThreadKind.SESSION) ? K_SESSIONS : K_TASKS;
+		update(r -> {
+			Index<Blob, ACell> idx = (r.get(key) instanceof Index i)
+				? (Index<Blob, ACell>) i : Index.none();
+			ACell existing = idx.get(threadId);
+			if (!(existing instanceof AMap)) return r;
+			AMap<AString, ACell> rec = (AMap<AString, ACell>) existing;
+			AMap<AString, ACell> updated = (wakeTime > 0)
+				? rec.assoc(Fields.WAKE_TIME, CVMLong.create(wakeTime))
+				: rec.dissoc(Fields.WAKE_TIME);
+			return r.assoc(key, idx.assoc(threadId, updated));
+		});
+
+		AgentScheduler.ThreadRef ref =
+			new AgentScheduler.ThreadRef(userDid, agentId, kind, threadId);
+		if (wakeTime > 0) {
+			scheduler.schedule(ref, wakeTime);
+		} else {
+			scheduler.cancel(ref);
 		}
 	}
 
@@ -413,9 +460,18 @@ public class AgentState extends ALatticeComponent<ACell> {
 		update(r -> r.assoc(K_ERROR, error).assoc(K_STATUS, SUSPENDED));
 	}
 
-	/** Sets SLEEPING status and clears wake. */
+	/**
+	 * Sets SLEEPING status, unless the agent has been externally SUSPENDED
+	 * or TERMINATED — in which case the status is preserved.
+	 */
 	public void sleep() {
-		update(r -> r.assoc(K_STATUS, SLEEPING).dissoc(K_WAKE));
+		update(r -> {
+			AString cur = RT.ensureString(r.get(K_STATUS));
+			if (SUSPENDED.equals(cur) || TERMINATED.equals(cur)) {
+				return r;
+			}
+			return r.assoc(K_STATUS, SLEEPING);
+		});
 	}
 
 	/**
@@ -557,8 +613,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 				.assoc(K_STATE, newState)
 				.assoc(K_TASKS, remainingTasks)
 				.assoc(K_TIMELINE, timeline.conj(timelineEntry))
-				.dissoc(K_ERROR)
-				.dissoc(K_WAKE);
+				.dissoc(K_ERROR);
 
 			// Atomic history append + session.pending drain for the picked
 			// session. Both touch the same session record so we fold them
@@ -623,11 +678,17 @@ public class AgentState extends ALatticeComponent<ACell> {
 				}
 			}
 
-			boolean hasNew = shouldWakeFromRecord(r)
-				|| hasSessionPendingInRecord
+			boolean hasNew = hasSessionPendingInRecord
 				|| hasNewTasksNotIn(remainingTasks, presentedTasks);
 
-			updated = updated.assoc(K_STATUS, hasNew ? RUNNING : SLEEPING);
+			// Preserve externally-set SUSPENDED/TERMINATED — these are signals
+			// from outside the run loop (e.g. handleSuspend, handleTerminate)
+			// and must not be overwritten here. The CAS-retry inside
+			// updateAndGet guarantees we see the latest status.
+			AString currentStatus = RT.ensureString(r.get(K_STATUS));
+			if (!SUSPENDED.equals(currentStatus) && !TERMINATED.equals(currentStatus)) {
+				updated = updated.assoc(K_STATUS, hasNew ? RUNNING : SLEEPING);
+			}
 
 			return updated;
 		});
@@ -651,12 +712,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static AVector<ACell> extractTimeline(AMap<AString, ACell> r) {
 		ACell v = r.get(K_TIMELINE);
 		return (v instanceof AVector) ? (AVector<ACell>) v : Vectors.empty();
-	}
-
-	private static boolean shouldWakeFromRecord(AMap<AString, ACell> r) {
-		ACell v = r.get(K_WAKE);
-		if (!(v instanceof CVMLong l)) return false;
-		return l.longValue() > 0 && Utils.getCurrentTimestamp() >= l.longValue();
 	}
 
 	private static Index<Blob, ACell> removeCompletedTasks(

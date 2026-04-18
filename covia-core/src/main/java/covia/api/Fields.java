@@ -135,6 +135,10 @@ public class Fields {
 	public static final StringShort PARTIES = Strings.intern("parties");
 	public static final StringShort TURNS = Strings.intern("turns");
 	public static final StringShort C = Strings.intern("c");
+
+	// Scheduler fields (B8.8) — per-thread on session/task records
+	public static final StringShort WAKE_TIME = Strings.intern("wakeTime");
+	public static final StringShort YIELD_COUNT = Strings.intern("yieldCount");
 	/** Transition input field (S3b): the picked session record map
 	 *  {id, parties, meta, c, history, pending} for the cycle's session. */
 	public static final StringShort SESSION = Strings.intern("session");

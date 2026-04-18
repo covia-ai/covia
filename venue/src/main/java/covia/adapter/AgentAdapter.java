@@ -28,6 +28,7 @@ import convex.core.util.Utils;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.AgentScheduler;
 import covia.venue.AgentState;
 import covia.venue.RequestContext;
 import covia.venue.User;
@@ -1140,19 +1141,15 @@ public class AgentAdapter extends AAdapter {
 	 * across threads. The lattice {@code K_STATUS} mirrors runtime state
 	 * for observability, not concurrency control.</p>
 	 *
-	 * @param force if true, skips the {@code shouldWake || hasWork} gate —
-	 *              used by explicit triggers that always want to try running
+	 * @param force if true, skips the {@code hasWork} gate — used by
+	 *              explicit triggers and scheduler fires that always want
+	 *              to try running
 	 */
-	CompletableFuture<ACell> wakeAgent(AString agentId, RequestContext ctx, boolean force) {
+	public CompletableFuture<ACell> wakeAgent(AString agentId, RequestContext ctx, boolean force) {
 		AString callerDID = ctx.getCallerDID();
 
 		AgentState agent = getAgent(callerDID, agentId);
 		if (agent == null) return null;
-
-		// Persist wake flag — visible to any in-flight loop's hasWork()
-		// check at the top of the next iteration. Set unconditionally so
-		// that resume of a suspended agent sees pending work.
-		agent.setWakeTime(Utils.getCurrentTimestamp());
 
 		// Fast path: live loop exists, attach to it. A done future in the
 		// slot is treated as "no live loop" — the exiting loop removes it
@@ -1177,7 +1174,7 @@ public class AgentAdapter extends AAdapter {
 		if (!AgentState.SLEEPING.equals(status)) return null;
 
 		// Gate: only start if there's work (or forced).
-		if (!force && !agent.shouldWake() && !hasWork(agent)) return null;
+		if (!force && !hasWork(agent)) return null;
 
 		AString transitionOp = resolveTransitionOp(callerDID, agentId);
 		if (transitionOp == null) return null;
@@ -1220,8 +1217,8 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * Carries per-iteration outputs back to {@link #executeRunLoop}. The
 	 * decision "continue looping" lives in the loop itself — it just checks
-	 * {@code hasWork()} and {@code shouldWake()} at the top of the next
-	 * iteration, same criteria used at launch time.
+	 * {@code hasWork()} at the top of the next iteration, same criterion
+	 * used at launch time.
 	 */
 	private record IterResult(ACell lastResult, AMap<AString, ACell> allTaskResults) {}
 
@@ -1277,11 +1274,20 @@ public class AgentAdapter extends AAdapter {
 				Index<Blob, ACell> pending = agent.getPending();
 				ACell currentState = agent.getState();
 
+				// Honour external SUSPENDED/TERMINATED — if someone (e.g.
+				// handleSuspend) flipped our status while we were between
+				// iterations, exit promptly. The merge step preserves the
+				// status via the same rule, so we won't clobber it here.
+				AString curStatus = agent.getStatus();
+				if (AgentState.SUSPENDED.equals(curStatus)
+						|| AgentState.TERMINATED.equals(curStatus)) {
+					break;
+				}
+
 				// On subsequent iterations, exit cleanly if no work remains.
 				// The finally block performs a post-exit re-check that closes
 				// the exit/wake race without a lock.
-				if (!firstIteration && !agent.hasSessionPending() && tasks.count() == 0
-						&& !agent.shouldWake()) {
+				if (!firstIteration && !agent.hasSessionPending() && tasks.count() == 0) {
 					break;
 				}
 				firstIteration = false;
@@ -1376,7 +1382,7 @@ public class AgentAdapter extends AAdapter {
 				}
 
 				IterResult merged = mergeAndPostProcess(
-					agent, agentId, transitionOp, transitionResult, pickedTask,
+					agent, agentId, callerDID, transitionOp, transitionResult, pickedTask,
 					pickedTaskInput, formattedTasks, pickedSession,
 					pickedSessionBlob, pickedChatJob, filteredInbox,
 					presentedSessionPendingCount, tasks, startTs, allTaskResults);
@@ -1384,13 +1390,20 @@ public class AgentAdapter extends AAdapter {
 				allTaskResults = merged.allTaskResults();
 			}
 
-			// Clean exit: mark SLEEPING, complete the completion with the
-			// last cycle's result.
+			// Clean exit: mark SLEEPING (atomic — preserves SUSPENDED /
+			// TERMINATED if set externally), complete the completion with
+			// the last cycle's result. Report whatever status we ended up
+			// on so callers of the completion see the true final state.
 			AgentState agent = getAgent(callerDID, agentId);
-			if (agent != null) agent.setStatus(AgentState.SLEEPING);
+			AString finalStatus = AgentState.SLEEPING;
+			if (agent != null) {
+				agent.sleep();
+				AString observed = agent.getStatus();
+				if (observed != null) finalStatus = observed;
+			}
 			completion.complete(Maps.of(
 				Fields.AGENT_ID, agentId,
-				Fields.STATUS, AgentState.SLEEPING,
+				Fields.STATUS, finalStatus,
 				Fields.RESULT, lastResult != null ? RT.getIn(lastResult, Fields.RESULT) : null,
 				Fields.TASK_RESULTS, allTaskResults));
 		} catch (Exception e) {
@@ -1405,7 +1418,7 @@ public class AgentAdapter extends AAdapter {
 			runningLoops.remove(agentId, completion);
 			AgentState agent = getAgent(callerDID, agentId);
 			if (agent != null && AgentState.SLEEPING.equals(agent.getStatus())
-					&& (hasWork(agent) || agent.shouldWake())) {
+					&& hasWork(agent)) {
 				wakeAgent(agentId, ctx, false);
 			}
 		}
@@ -1418,7 +1431,8 @@ public class AgentAdapter extends AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	private IterResult mergeAndPostProcess(
-			AgentState agent, AString agentId, AString transitionOp,
+			AgentState agent, AString agentId, AString callerDID,
+			AString transitionOp,
 			ACell transitionResult, Map.Entry<Blob, ACell> pickedTask,
 			ACell pickedTaskInput, AVector<ACell> formattedTasks,
 			AString pickedSession, Blob pickedSessionBlob, Job pickedChatJob,
@@ -1500,6 +1514,42 @@ public class AgentAdapter extends AAdapter {
 			newState, pickedSession, tasks, taskResults,
 			timelineEntry, pickedSessionBlob, turnsToAppend,
 			presentedSessionPendingCount);
+
+		// Per-thread scheduled wake (B8.8). Transition result may carry a
+		// `wakeTime` (absolute wall-clock millis) requesting a future fire on
+		// the picked thread. If present, install it via setThreadWakeTime
+		// (lattice-first, then scheduler). If absent but the picked record
+		// still carries a stale `wakeTime` from a just-consumed scheduler
+		// fire, clear it so the scheduler rebuild on restart doesn't re-fire
+		// a wake that's already been serviced. Lattice is authoritative; the
+		// scheduler index is rebuilt from it on boot.
+		AgentScheduler scheduler = engine.scheduler();
+		if (scheduler != null && leanError == null) {
+			Blob pickedThreadId = null;
+			AgentScheduler.ThreadKind pickedKind = null;
+			AMap<AString, ACell> pickedRecord = null;
+			if (pickedTask != null) {
+				pickedThreadId = pickedTask.getKey();
+				pickedKind = AgentScheduler.ThreadKind.TASK;
+				Index<Blob, ACell> currentTasks = agent.getTasks();
+				ACell tRec = (currentTasks != null) ? currentTasks.get(pickedThreadId) : null;
+				if (tRec instanceof AMap) pickedRecord = (AMap<AString, ACell>) tRec;
+			} else if (pickedSessionBlob != null) {
+				pickedThreadId = pickedSessionBlob;
+				pickedKind = AgentScheduler.ThreadKind.SESSION;
+				pickedRecord = agent.getSession(pickedSessionBlob);
+			}
+			if (pickedThreadId != null) {
+				ACell wtCell = RT.getIn(transitionResult, Fields.WAKE_TIME);
+				long requestedWake = (wtCell instanceof CVMLong cl) ? cl.longValue() : 0L;
+				boolean hasExisting = pickedRecord != null
+					&& pickedRecord.get(Fields.WAKE_TIME) instanceof CVMLong;
+				if (requestedWake > 0 || hasExisting) {
+					agent.setThreadWakeTime(scheduler, callerDID,
+						pickedKind, pickedThreadId, requestedWake);
+				}
+			}
+		}
 
 		// Now that the timeline + state are persisted, claim the parked
 		// envelopes (atomic remove) and complete the caller's pending

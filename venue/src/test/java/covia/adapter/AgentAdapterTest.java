@@ -2957,6 +2957,64 @@ public class AgentAdapterTest {
 		assertFalse(names.contains("more_tools"), "reader should NOT have more_tools");
 	}
 
+	// ========== B8.8 — transition-returned wakeTime wires into scheduler ==========
+
+	/**
+	 * When a transition returns a {@code wakeTime} in its result, the
+	 * framework installs it on the picked thread via
+	 * {@code setThreadWakeTime}: lattice record carries {@code wakeTime},
+	 * and the in-memory scheduler contains a {@link
+	 * covia.venue.AgentScheduler.ThreadRef} for that thread.
+	 */
+	@Test
+	public void testTransitionWakeTimeSchedulesSessionWake() {
+		long farFuture = System.currentTimeMillis() + 60_000;
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "wake-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse"),
+				AgentState.KEY_STATE, Maps.of(
+					Fields.WAKE_TIME, CVMLong.create(farFuture))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(
+				Fields.AGENT_ID, "wake-agent",
+				Fields.MESSAGE, Strings.create("hello")),
+			RequestContext.of(ALICE_DID));
+		chatJob.awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("wake-agent");
+		try { agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS); }
+		catch (Exception e) { fail("Agent did not return to SLEEPING: " + e); }
+
+		// Session id: the chat response carries it back.
+		AString sessionIdStr = (AString) RT.getIn(chatJob.getOutput(), Fields.SESSION_ID);
+		assertNotNull(sessionIdStr, "chat should return a sessionId");
+		Blob sid = Blob.parse(sessionIdStr.toString());
+
+		// Lattice: session record carries the wakeTime.
+		AMap<AString, ACell> session = agent.getSession(sid);
+		ACell lattWake = session.get(Fields.WAKE_TIME);
+		assertTrue(lattWake instanceof CVMLong,
+			"session record should carry wakeTime after transition");
+		assertEquals(farFuture, ((CVMLong) lattWake).longValue());
+
+		// Scheduler: ThreadRef installed for SESSION kind.
+		covia.venue.AgentScheduler.ThreadRef ref = new covia.venue.AgentScheduler.ThreadRef(
+			ALICE_DID, Strings.create("wake-agent"),
+			covia.venue.AgentScheduler.ThreadKind.SESSION, sid);
+		assertTrue(engine.scheduler().contains(ref),
+			"scheduler should contain SESSION ref after transition returns wakeTime");
+
+		// Cleanup — don't leak a pending fire into later tests.
+		engine.scheduler().cancel(ref);
+	}
+
 	/** Builds the L3 input via the same code path as agent:context and returns tool names. */
 	@SuppressWarnings("unchecked")
 	private java.util.Set<String> runtimeToolNames(String agentId) {
