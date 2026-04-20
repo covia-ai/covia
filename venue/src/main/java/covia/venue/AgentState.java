@@ -41,11 +41,15 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	// Session record field keys (scoped within a single session map)
 	private static final AString K_C        = Strings.intern("c");
-	private static final AString K_HISTORY  = Strings.intern("history");
+	private static final AString K_FRAMES   = Strings.intern("frames");
 	private static final AString K_META     = Strings.intern("meta");
 	private static final AString K_PARTIES  = Strings.intern("parties");
 	private static final AString K_CREATED  = Strings.intern("created");
 	private static final AString K_TURNS    = Strings.intern("turns");
+
+	// Frame record field keys (entries in session.frames). See GOAL_TREE.md.
+	private static final AString K_DESCRIPTION  = Strings.intern("description");
+	private static final AString K_CONVERSATION = Strings.intern("conversation");
 
 	// Turn record field keys (entries in session.history). See venue/CLAUDE.local.md
 	// "Sessions S3 — Per-session history (turn shape contract)" for full spec.
@@ -83,9 +87,15 @@ public class AgentState extends ALatticeComponent<ACell> {
 	public static final AString KEY_PENDING  = K_PENDING;
 	public static final AString KEY_TIMELINE = K_TIMELINE;
 	public static final AString KEY_ERROR    = K_ERROR;
-	/** Session-record `history` key — vector of turn envelopes. Public for
-	 *  adapters that read transcript from {@code input.session.history} (S3c). */
-	public static final AString KEY_HISTORY  = K_HISTORY;
+	/** Session-record `frames` key — vector of frame maps. First entry is the
+	 *  root frame; subsequent entries are pushed by {@code subgoal}. See
+	 *  {@code venue/docs/GOAL_TREE.md}. */
+	public static final AString KEY_FRAMES   = K_FRAMES;
+	/** Frame record `description` key. */
+	public static final AString KEY_DESCRIPTION  = K_DESCRIPTION;
+	/** Frame record `conversation` key — vector of turn envelopes and/or
+	 *  compacted segments. */
+	public static final AString KEY_CONVERSATION = K_CONVERSATION;
 
 	private final AString agentId;
 
@@ -230,9 +240,12 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 	/**
 	 * Ensures a session record exists at the given sid. If absent, creates
-	 * a fresh session: {c: {}, history: [], pending: [], meta: {created, turns, parties}}.
-	 * If {@code caller} is non-null and the session is new, it is recorded as
-	 * the first party. Returns the session record (existing or freshly created).
+	 * a fresh session: {c: {}, pending: [], frames: [rootFrame],
+	 * meta: {created, turns, parties}}. The root frame is empty
+	 * ({@code {description: "", conversation: []}}) — adapters fill its
+	 * description on first use. If {@code caller} is non-null and the session
+	 * is new, it is recorded as the first party. Returns the session record
+	 * (existing or freshly created).
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> ensureSession(Blob sid, AString caller) {
@@ -244,10 +257,13 @@ public class AgentState extends ALatticeComponent<ACell> {
 				K_CREATED, CVMLong.create(Utils.getCurrentTimestamp()),
 				K_TURNS,   CVMLong.create(0),
 				K_PARTIES, (caller != null) ? Vectors.of(caller) : Vectors.empty());
+			AMap<AString, ACell> rootFrame = Maps.of(
+				K_DESCRIPTION,  Strings.EMPTY,
+				K_CONVERSATION, Vectors.empty());
 			AMap<AString, ACell> session = Maps.of(
 				K_C,       Maps.empty(),
-				K_HISTORY, Vectors.empty(),
 				K_PENDING, Vectors.empty(),
+				K_FRAMES,  Vectors.of(rootFrame),
 				K_META,    meta);
 			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
 		});
@@ -615,9 +631,9 @@ public class AgentState extends ALatticeComponent<ACell> {
 				.assoc(K_TIMELINE, timeline.conj(timelineEntry))
 				.dissoc(K_ERROR);
 
-			// Atomic history append + session.pending drain for the picked
-			// session. Both touch the same session record so we fold them
-			// into one assoc.
+			// Atomic frames[0].conversation append + session.pending drain for
+			// the picked session. Both touch the same session record so we
+			// fold them into one assoc.
 			boolean hasTurns = turnsToAppend != null && turnsToAppend.count() > 0;
 			boolean hasDrain = presentedSessionPendingCount > 0;
 			if (historySid != null && (hasTurns || hasDrain)) {
@@ -628,12 +644,29 @@ public class AgentState extends ALatticeComponent<ACell> {
 					AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
 
 					if (hasTurns) {
-						AVector<ACell> history = (session.get(K_HISTORY) instanceof AVector hv)
-							? (AVector<ACell>) hv : Vectors.empty();
-						for (long i = 0; i < turnsToAppend.count(); i++) {
-							history = history.conj(turnsToAppend.get(i));
+						// Append into frames[0].conversation. Defensive: if
+						// the session was created before frames were added,
+						// initialise a root frame here.
+						AVector<ACell> frames = (session.get(K_FRAMES) instanceof AVector fv)
+							? (AVector<ACell>) fv : Vectors.empty();
+						AMap<AString, ACell> rootFrame;
+						if (frames.count() == 0) {
+							rootFrame = Maps.of(
+								K_DESCRIPTION,  Strings.EMPTY,
+								K_CONVERSATION, Vectors.empty());
+							frames = Vectors.of(rootFrame);
+						} else {
+							rootFrame = (AMap<AString, ACell>) frames.get(0);
 						}
-						session = session.assoc(K_HISTORY, history);
+						AVector<ACell> rootConv = (rootFrame.get(K_CONVERSATION) instanceof AVector cv)
+							? (AVector<ACell>) cv : Vectors.empty();
+						for (long i = 0; i < turnsToAppend.count(); i++) {
+							rootConv = rootConv.conj(turnsToAppend.get(i));
+						}
+						rootFrame = rootFrame.assoc(K_CONVERSATION, rootConv);
+						frames = frames.assoc(0, rootFrame);
+						session = session.assoc(K_FRAMES, frames);
+
 						// Bump session.meta.turns by the number appended
 						if (session.get(K_META) instanceof AMap) {
 							AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(K_META);

@@ -67,7 +67,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	private static final AString K_TYPE        = Strings.intern("type");
 	private static final AString K_PROPERTIES  = Strings.intern("properties");
 	private static final AString K_REQUIRED    = Strings.intern("required");
-	private static final AString K_HISTORY     = Strings.intern("history");
 	private static final AString K_OUTPUTS     = Strings.intern("outputs");
 	private static final AString K_SCHEMA      = Strings.intern("schema");
 	private static final AString K_ADDITIONAL_PROPERTIES = Strings.intern("additionalProperties");
@@ -419,12 +418,12 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// Build context (system prompt, tools, caps) via ContextBuilder.
 		// Harness tool names in config.tools are skipped here — they're
 		// resolved separately by resolveHarnessTools / buildTypedRootHarnessTools.
-		AVector<ACell> sessionTurns = covia.adapter.AgentAdapter.sessionHistory(input);
+		AVector<ACell> sessionFrames = covia.adapter.AgentAdapter.sessionFrames(input);
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
 			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
 			.withConfig(recordConfig, state)
-			.withSessionHistory(sessionTurns)
+			.withFrameStack(sessionFrames)
 			.withContextEntries(state)
 			.withTools()
 			.build();

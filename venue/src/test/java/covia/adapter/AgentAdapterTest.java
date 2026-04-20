@@ -727,8 +727,11 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sidHex.toString()));
 		assertNotNull(session, "Session record must exist");
 
-		AVector<ACell> history = (AVector<ACell>) session.get(Strings.intern("history"));
-		assertNotNull(history, "Session must have a history vector");
+		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
+		assertNotNull(frames, "Session must have frames");
+		AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
+		AVector<ACell> history = (AVector<ACell>) rootFrame.get(AgentState.KEY_CONVERSATION);
+		assertNotNull(history, "Root frame must have a conversation vector");
 		assertEquals(2, history.count(),
 			"Chat cycle appends user turn (chat message) + assistant turn");
 
@@ -785,7 +788,9 @@ public class AgentAdapterTest {
 		catch (Exception e) { fail("Agent did not return to SLEEPING: " + e); }
 
 		AMap<AString, ACell> session = agent.getSession(sid);
-		AVector<ACell> history = (AVector<ACell>) session.get(Strings.intern("history"));
+		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
+		AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
+		AVector<ACell> history = (AVector<ACell>) rootFrame.get(AgentState.KEY_CONVERSATION);
 		assertEquals(2, history.count(),
 			"Picked task + response cycle appends two turns (user, assistant)");
 
@@ -836,7 +841,9 @@ public class AgentAdapterTest {
 		if (sessions.count() == 0) return; // No session minted — nothing to assert
 		for (var entry : sessions.entrySet()) {
 			AMap<AString, ACell> session = (AMap<AString, ACell>) entry.getValue();
-			AVector<ACell> history = (AVector<ACell>) session.get(Strings.intern("history"));
+			AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
+			AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
+			AVector<ACell> history = (AVector<ACell>) rootFrame.get(AgentState.KEY_CONVERSATION);
 			assertEquals(0, history.count(),
 				"Errored cycle must not append any turns to history");
 		}
@@ -870,7 +877,9 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("hist-multi-agent");
 		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sidHex.toString()));
-		AVector<ACell> history = (AVector<ACell>) session.get(Strings.intern("history"));
+		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
+		AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
+		AVector<ACell> history = (AVector<ACell>) rootFrame.get(AgentState.KEY_CONVERSATION);
 		assertEquals(4, history.count(),
 			"Two chat cycles: each appends user+assistant = 4 turns total");
 
@@ -892,6 +901,114 @@ public class AgentAdapterTest {
 			assertTrue(ts >= prev, "History order must be chronological at index " + i);
 			prev = ts;
 		}
+	}
+
+	// ========== Cutover step 2a — frames[0].conversation dual-write ==========
+
+	/**
+	 * {@code ensureSession} creates a session with a {@code frames} vector
+	 * holding exactly one root frame ({@code {description: "", conversation: []}}).
+	 * This is the shape GoalTreeAdapter relies on post-cutover: a root frame
+	 * always exists from session creation onward.
+	 */
+	@Test
+	public void testEnsureSessionCreatesRootFrame() {
+		createChatAgent("frames-init-agent");
+
+		Blob sid = Blob.fromHex("33333333333333333333333333333333");
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("frames-init-agent");
+		agent.ensureSession(sid, ALICE_DID);
+
+		AMap<AString, ACell> session = agent.getSession(sid);
+		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
+		assertNotNull(frames, "Session must carry a frames vector");
+		assertEquals(1, frames.count(), "Fresh session has exactly one root frame");
+
+		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
+		assertEquals(Strings.EMPTY, root.get(AgentState.KEY_DESCRIPTION),
+			"Root frame description starts empty");
+		AVector<ACell> conv = (AVector<ACell>) root.get(AgentState.KEY_CONVERSATION);
+		assertNotNull(conv, "Root frame must carry a conversation vector");
+		assertEquals(0, conv.count(), "Fresh root frame conversation is empty");
+	}
+
+	/**
+	 * Writer-path dual-write (cutover step 2a): turns appended by a transition
+	 * must land in {@code session.frames[0].conversation} in the same order
+	 * and with the same content as {@code session.history}. Once readers swap
+	 * to frames (step 2b/3) and history is dropped (step 2c), the history
+	 * half of this assertion goes away — the frames-side check stays.
+	 */
+	@Test
+	public void testTransitionAppendsToRootFrameConversation() {
+		createChatAgent("frames-write-agent");
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "frames-write-agent", Fields.MESSAGE, Strings.create("hi")),
+			RequestContext.of(ALICE_DID));
+		ACell result = chatJob.awaitResult(5000);
+		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("frames-write-agent");
+		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sidHex.toString()));
+
+		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
+		assertEquals(1, frames.count(), "No subgoal — stack depth is 1");
+		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
+		AVector<ACell> conv = (AVector<ACell>) root.get(AgentState.KEY_CONVERSATION);
+
+		assertEquals(2, conv.count(),
+			"Chat cycle appends user turn + assistant turn to root frame conversation");
+
+		AMap<AString, ACell> userTurn = (AMap<AString, ACell>) conv.get(0);
+		assertEquals(AgentState.ROLE_USER, userTurn.get(AgentState.K_ROLE));
+		assertEquals(AgentState.SOURCE_CHAT, userTurn.get(AgentState.K_SOURCE));
+		assertEquals(Strings.create("hi"), userTurn.get(AgentState.K_CONTENT));
+
+		AMap<AString, ACell> assistantTurn = (AMap<AString, ACell>) conv.get(1);
+		assertEquals(AgentState.ROLE_ASSISTANT, assistantTurn.get(AgentState.K_ROLE));
+		assertEquals(AgentState.SOURCE_TRANSITION, assistantTurn.get(AgentState.K_SOURCE));
+	}
+
+	/**
+	 * Turns must accumulate in {@code frames[0].conversation} across multiple
+	 * cycles in the same session, preserving order (oldest first).
+	 */
+	@Test
+	public void testRootFrameConversationAccumulatesAcrossCycles() {
+		createChatAgent("frames-multi-agent");
+
+		Job first = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "frames-multi-agent", Fields.MESSAGE, Strings.create("one")),
+			RequestContext.of(ALICE_DID));
+		AString sidHex = RT.ensureString(RT.getIn(first.awaitResult(5000), Fields.SESSION_ID));
+
+		Job second = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(
+				Fields.AGENT_ID,   "frames-multi-agent",
+				Fields.SESSION_ID, sidHex,
+				Fields.MESSAGE,    Strings.create("two")),
+			RequestContext.of(ALICE_DID));
+		second.awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("frames-multi-agent");
+		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sidHex.toString()));
+
+		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
+		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
+		AVector<ACell> conv = (AVector<ACell>) root.get(AgentState.KEY_CONVERSATION);
+
+		assertEquals(4, conv.count(), "Two chat cycles append 4 turns total");
+		assertEquals(Strings.create("one"), RT.getIn(conv.get(0), AgentState.K_CONTENT));
+		assertEquals(AgentState.ROLE_ASSISTANT, RT.getIn(conv.get(1), AgentState.K_ROLE));
+		assertEquals(Strings.create("two"), RT.getIn(conv.get(2), AgentState.K_CONTENT));
+		assertEquals(AgentState.ROLE_ASSISTANT, RT.getIn(conv.get(3), AgentState.K_ROLE));
 	}
 
 	// ========== S3b — session map in transition input + dual-write ==========
@@ -971,7 +1088,7 @@ public class AgentAdapterTest {
 		// Keys the run loop assembles into the transition input map
 		assertNotNull(session.get(Strings.intern("meta")),    "session must have meta");
 		assertNotNull(session.get(Strings.intern("c")),       "session must have c");
-		assertNotNull(session.get(Strings.intern("history")), "session must have history");
+		assertNotNull(session.get(AgentState.KEY_FRAMES),     "session must have frames");
 		assertNotNull(session.get(Strings.intern("pending")), "session must have pending");
 		// parties lives under meta
 		AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(Strings.intern("meta"));
@@ -1069,9 +1186,12 @@ public class AgentAdapterTest {
 			Maps.of(Fields.MESSAGE, Strings.create("from-session")));
 		AVector<ACell> legacyMessages = Vectors.of(
 			Maps.of(Fields.MESSAGE, Strings.create("from-legacy")));
+		AMap<AString, ACell> rootFrame = Maps.of(
+			AgentState.KEY_DESCRIPTION,  Strings.EMPTY,
+			AgentState.KEY_CONVERSATION, Vectors.empty());
 		AMap<AString, ACell> session = Maps.of(
 			AgentState.KEY_PENDING, sessionPending,
-			AgentState.KEY_HISTORY, Vectors.empty());
+			AgentState.KEY_FRAMES,  Vectors.of(rootFrame));
 		AMap<AString, ACell> input = Maps.of(
 			Fields.SESSION,  session,
 			Fields.MESSAGES, legacyMessages);
@@ -1107,36 +1227,53 @@ public class AgentAdapterTest {
 	}
 
 	/**
-	 * S3c read priority for transcript: {@link AgentAdapter#sessionHistory}
-	 * returns the {@code session.history} vector when a session is present,
-	 * else {@code null} so callers can fall back to their own state.
+	 * Frame-stack read helper: {@link AgentAdapter#sessionFrames} reads
+	 * {@code input.session.frames} — the full frame stack. Returns null
+	 * when no session is in scope or frames is absent/empty, so callers
+	 * can fall back to their own state.
 	 */
 	@Test
-	public void testSessionHistoryHelper() {
+	public void testSessionFramesHelper() {
 		AVector<ACell> turns = Vectors.of(
 			Maps.of(AgentState.K_ROLE, AgentState.ROLE_USER,
 				AgentState.K_CONTENT, Strings.create("hi")));
+		AMap<AString, ACell> rootFrame = Maps.of(
+			AgentState.KEY_DESCRIPTION,  Strings.EMPTY,
+			AgentState.KEY_CONVERSATION, turns);
 		AMap<AString, ACell> session = Maps.of(
-			AgentState.KEY_HISTORY, turns,
+			AgentState.KEY_FRAMES,  Vectors.of(rootFrame),
 			AgentState.KEY_PENDING, Vectors.empty());
 		AMap<AString, ACell> withSession = Maps.of(Fields.SESSION, session);
-		AVector<ACell> got = AgentAdapter.sessionHistory(withSession);
+		AVector<ACell> got = AgentAdapter.sessionFrames(withSession);
 		assertNotNull(got);
-		assertEquals(1, got.count());
+		assertEquals(1, got.count(), "Single root frame");
 
-		// No session → null sentinel (caller falls back to state.transcript)
-		assertNull(AgentAdapter.sessionHistory(Maps.empty()),
+		// No session → null sentinel (caller falls back to state)
+		assertNull(AgentAdapter.sessionFrames(Maps.empty()),
 			"Null when no session in scope");
+
+		// Session present but frames missing → null
+		AMap<AString, ACell> sessionNoFrames = Maps.of(
+			AgentState.KEY_PENDING, Vectors.empty());
+		assertNull(AgentAdapter.sessionFrames(Maps.of(Fields.SESSION, sessionNoFrames)),
+			"Null when session has no frames");
+
+		// Session with empty frames vector → null
+		AMap<AString, ACell> sessionEmptyFrames = Maps.of(
+			AgentState.KEY_FRAMES, Vectors.empty());
+		assertNull(AgentAdapter.sessionFrames(Maps.of(Fields.SESSION, sessionEmptyFrames)),
+			"Null when frames is empty vector");
 	}
 
 	/**
-	 * S3c transcript conversion: ContextBuilder.withSessionHistory must
-	 * convert each turn envelope {role, content, ts, source} into a plain
-	 * LLM message {role, content}. Tool-call interleaving from across-turn
-	 * tool sequences is not preserved (this is the documented contract).
+	 * {@link ContextBuilder#withFrameStack} must convert the active frame's
+	 * conversation turn envelopes {role, content, ts, source} into plain
+	 * LLM messages {role, content}. Degenerate single-frame case: no ancestor
+	 * summary, just the root's conversation. Tool-call interleaving from
+	 * across-turn tool sequences is not preserved (documented contract).
 	 */
 	@Test
-	public void testWithSessionHistoryConvertsTurnsToLLMMessages() {
+	public void testWithFrameStackConvertsTurnsToLLMMessages() {
 		AVector<ACell> turns = Vectors.of(
 			(ACell) Maps.of(
 				AgentState.K_ROLE,    AgentState.ROLE_USER,
@@ -1148,10 +1285,14 @@ public class AgentAdapterTest {
 				AgentState.K_CONTENT, Strings.create("4"),
 				AgentState.K_TURN_TS, CVMLong.create(200L),
 				AgentState.K_SOURCE,  AgentState.SOURCE_TRANSITION));
+		AMap<AString, ACell> rootFrame = Maps.of(
+			AgentState.KEY_DESCRIPTION,  Strings.EMPTY,
+			AgentState.KEY_CONVERSATION, turns);
+		AVector<ACell> frames = Vectors.of(rootFrame);
 
 		ContextBuilder builder = new ContextBuilder(engine, RequestContext.of(ALICE_DID));
 		ContextBuilder.ContextResult result = builder
-			.withSessionHistory(turns)
+			.withFrameStack(frames)
 			.withTools()
 			.build();
 
@@ -2161,7 +2302,7 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> session = agent.getSession(sidBlob);
 		assertNotNull(session, "Session record should be created");
 		assertNotNull(session.get(Strings.intern("c")));
-		assertNotNull(session.get(Strings.intern("history")));
+		assertNotNull(session.get(AgentState.KEY_FRAMES));
 		assertNotNull(session.get(Strings.intern("pending")));
 		assertNotNull(session.get(Strings.intern("meta")));
 	}

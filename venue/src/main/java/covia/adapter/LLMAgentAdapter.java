@@ -315,13 +315,13 @@ public class LLMAgentAdapter extends AAdapter {
 		// Build per-turn LLM context. Ephemeral context model:
 		// (transcript model): system prompt + context entries + loads +
 		// [Context Map] are rebuilt FRESH every turn and never persisted.
-		// Only the persistent history (session.history turns) carries
-		// forward via withSessionHistory.
+		// Only the persistent history (session frames) carries forward
+		// via withFrameStack.
 		//
 		// Order matters: ephemeral background → history → this turn's
 		// pending/inbox → empty signal. System prompt goes first for
 		// primacy, new input goes last for recency.
-		AVector<ACell> sessionTurns = AgentAdapter.sessionHistory(input);
+		AVector<ACell> sessionFrames = AgentAdapter.sessionFrames(input);
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
 			.withConfig(recordConfig, state)
@@ -329,7 +329,7 @@ public class LLMAgentAdapter extends AAdapter {
 			.withContextEntries(state)            // ephemeral
 			.withLoadedPaths(existingLoads)       // ephemeral
 			.withContextMap(existingLoads)        // ephemeral
-			.withSessionHistory(sessionTurns)     // session.history → LLM messages
+			.withFrameStack(sessionFrames)        // session.frames → LLM messages
 			.withPendingResults(pending)          // ephemeral (this turn)
 			.withInboxMessages(messages)          // this turn's user input
 			.withEmptyStateSignal(hasInput)

@@ -40,7 +40,6 @@ public class ContextBuilderTest {
 	private static final AString K_ROLE    = Strings.intern("role");
 	private static final AString K_CONTENT = Strings.intern("content");
 	private static final AString K_CONFIG  = Strings.intern("config");
-	private static final AString K_HISTORY = Strings.intern("history");
 	private static final AString K_CONTEXT = Strings.intern("context");
 
 	@BeforeEach

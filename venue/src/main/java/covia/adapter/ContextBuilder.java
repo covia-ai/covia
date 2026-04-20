@@ -233,7 +233,7 @@ public class ContextBuilder {
 	 *
 	 * <p>The {@code starting} parameter is the message vector to start
 	 * from — typically empty (callers add history via
-	 * {@link #withSessionHistory(AVector)}). If a non-empty starting vector is
+	 * {@link #withFrameStack(AVector)}). If a non-empty starting vector is
 	 * passed and already begins with a system message, that system
 	 * message is REPLACED by the freshly composed one — the rest of the
 	 * starting vector is preserved.</p>
@@ -295,25 +295,56 @@ public class ContextBuilder {
 	}
 
 	/**
-	 * Appends session.history turn envelopes as LLM messages.
+	 * Appends a session frame stack as LLM messages.
 	 *
-	 * <p>Each entry is a turn envelope {@code {role, content, ts, source}}.
-	 * Role maps directly to the LLM role. Content is stringified if not
-	 * already an {@code AString}. {@code ts} and {@code source} are
-	 * dropped (vendor APIs require only {@code {role, content}}).</p>
+	 * <p>For stacks of depth &gt; 1, ancestors are summarised via
+	 * {@link covia.adapter.agent.GoalTreeContext#renderAncestors} (one system
+	 * message summarising all parent frames). The active (deepest) frame's
+	 * {@code conversation} entries are then appended:
+	 * <ul>
+	 *   <li>Compacted segments → system messages of the form
+	 *       {@code [Compacted: N turns] summary}.</li>
+	 *   <li>Live turns {@code {role, content, ts, source}} → LLM messages
+	 *       {@code {role, content}} with content stringified. {@code ts} and
+	 *       {@code source} are dropped — vendor APIs require only role/content.</li>
+	 * </ul></p>
 	 *
-	 * <p>If {@code turns} is null or empty, returns silently.</p>
+	 * <p>In the degenerate single-frame case (LLMAgentAdapter, GoalTreeAdapter
+	 * pre-subgoal) this emits the root frame's conversation turns as flat
+	 * LLM messages — equivalent to the pre-cutover {@code withSessionHistory}.</p>
+	 *
+	 * <p>If {@code frames} is null or empty, returns silently.</p>
 	 */
 	@SuppressWarnings("unchecked")
-	public ContextBuilder withSessionHistory(AVector<ACell> turns) {
-		if (turns == null || turns.count() == 0) return this;
-		for (long i = 0; i < turns.count(); i++) {
-			ACell turn = turns.get(i);
-			if (!(turn instanceof AMap)) continue;
-			AMap<AString, ACell> envelope = (AMap<AString, ACell>) turn;
-			ACell role = envelope.get(K_ROLE);
+	public ContextBuilder withFrameStack(AVector<ACell> frames) {
+		if (frames == null || frames.count() == 0) return this;
+
+		// Ancestor summary for deep stacks (single-frame case: no-op)
+		if (frames.count() > 1) {
+			AMap<AString, ACell> ancestorMsg =
+				covia.adapter.agent.GoalTreeContext.renderAncestors(frames);
+			if (ancestorMsg != null) {
+				messages = messages.conj(ancestorMsg);
+				trackMessage(ancestorMsg);
+			}
+		}
+
+		// Active frame's conversation via GoalTreeContext — already handles
+		// segment → system message conversion. We then normalise each entry
+		// to {role, content} with stringified content (vendor APIs require
+		// string content and ignore extra fields like ts/source).
+		ACell activeCell = frames.get(frames.count() - 1);
+		if (!(activeCell instanceof AMap)) return this;
+		AVector<ACell> rendered = covia.adapter.agent.GoalTreeContext
+			.renderConversation((AMap<AString, ACell>) activeCell);
+
+		for (long i = 0; i < rendered.count(); i++) {
+			ACell entry = rendered.get(i);
+			if (!(entry instanceof AMap)) continue;
+			AMap<AString, ACell> m = (AMap<AString, ACell>) entry;
+			ACell role = m.get(K_ROLE);
 			if (!(role instanceof AString)) continue;
-			ACell content = envelope.get(K_CONTENT);
+			ACell content = m.get(K_CONTENT);
 			AString contentStr;
 			if (content instanceof AString s) {
 				contentStr = s;

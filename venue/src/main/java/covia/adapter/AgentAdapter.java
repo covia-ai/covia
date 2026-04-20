@@ -1675,23 +1675,28 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Returns the effective session.history for a transition input (S3c).
+	 * Returns the full frame stack from the session map.
 	 *
-	 * <p>Returns the {@code input.session.history} vector if present, else
-	 * {@code null}. Adapters use the null sentinel to fall back to their
-	 * own state-held transcript (e.g. {@code state.transcript} in
-	 * LLMAgentAdapter). Returning null (not empty) preserves "no session"
-	 * vs "session with empty history" distinction.</p>
+	 * <p>Reads {@code input.session.frames} — a vector of frame records. The
+	 * first entry is the root frame; subsequent entries are pushed by
+	 * {@code subgoal}. Each frame is {@code {description, conversation, …}}.
+	 * See {@code venue/docs/GOAL_TREE.md}.</p>
+	 *
+	 * <p>Returns {@code null} if no session is in scope, or if the session
+	 * has no frames. Adapters use the null sentinel to fall back to their
+	 * own state-held transcript for unsessioned callers.</p>
 	 *
 	 * @param input the transition input map
-	 * @return turn-envelope vector, or null if no session present
+	 * @return frame-stack vector, or null if no session/frames present
 	 */
 	@SuppressWarnings("unchecked")
-	public static AVector<ACell> sessionHistory(ACell input) {
+	public static AVector<ACell> sessionFrames(ACell input) {
 		ACell session = RT.getIn(input, Fields.SESSION);
 		if (session == null) return null;
-		ACell history = RT.getIn(session, AgentState.KEY_HISTORY);
-		return (history instanceof AVector) ? (AVector<ACell>) history : null;
+		ACell frames = RT.getIn(session, AgentState.KEY_FRAMES);
+		if (!(frames instanceof AVector)) return null;
+		AVector<ACell> fv = (AVector<ACell>) frames;
+		return (fv.count() > 0) ? fv : null;
 	}
 
 	/**
