@@ -1,11 +1,11 @@
 # Covia Goal Tree
 
-**Version:** 2.0 Draft
-**Purpose:** Hierarchical goal decomposition, execution, and history for lattice-aware agents. Agents pursue goals; sub-goals open scoped frames with their own conversation; results return up the tree.
+**Version:** 2.1 Draft (session-unified)
+**Purpose:** Hierarchical goal decomposition, execution, and history for lattice-aware agents. Agents pursue goals; sub-goals open scoped frames with their own conversation; results return up the tree. The goal tree IS the session's conversation record — no separate history structure.
 
 ## Core Idea
 
-`subgoal` is a tool call that brackets a section of work. Inside, the agent has a clean conversation with summarised ancestry above. `complete` returns a structured result to the parent. `compact` checkpoints long conversations into segments without losing data. Everything is lattice data, rendered by CellExplorer at any budget.
+A session's root frame is its conversation. `subgoal` is a tool call that brackets a section of work inside a child frame. `compact` brackets a run of live turns as a segment — this is how per-question thinking is scoped in chat sessions. `complete` returns a structured result to the parent (one-shot invocations) or is never called (chat sessions run indefinitely). Everything is lattice data on the session record, rendered by CellExplorer at any budget.
 
 ## Relationship to Existing Architecture
 
@@ -29,6 +29,36 @@ The goal tree adapter registers as operation `goaltree:chat`, used in agent conf
 ```json
 {"operation": "goaltree:chat"}
 ```
+
+## Sessions and Frames
+
+**A session IS a root frame.** The session record at `sessions/<sid>` carries a `frames` vector whose first element is the root frame. `frames[0].conversation` is the agent's complete execution and conversation record for that session.
+
+Everything goes here — nothing lives alongside. Live turns from chat/message intake, assistant responses, tool calls, tool results, compacted segments, and subgoal branches are all entries in the same conversation vector. Child frames pushed by `subgoal` live at `frames[1..N]`. The frame stack is lattice data; transitions read it, append to it, and write it back atomically.
+
+### Lifecycle
+
+| Event | Effect |
+|-------|--------|
+| Session created | Root frame created, description = session origin (first message, task request, operation invocation) |
+| Chat / message intake | Envelope appended to `sessions/<sid>/pending` |
+| Transition picked | Envelopes drained from pending, appended to root frame conversation as `user` turns |
+| Transition runs | Assistant turns, tool calls, tool results, subgoal branches appended atomically in `mergeRunResult` |
+| Agent calls `compact` | Run of live turns collapses into a segment with the agent's summary |
+| Agent calls `subgoal` | Child frame pushed onto `sessions/<sid>/frames`; child conversation builds up; pop on `complete` |
+| Session closed | Frames persist on the lattice — no destructive cleanup |
+
+Chat sessions typically never `complete` the root frame — they run indefinitely, appending turns. One-shot invocations (a single grid operation call on a fresh session) do complete the root frame, and the session's role is the same as a single-turn task.
+
+### Per-question bracketing
+
+"Thinking for a specific question" is bracketed by `compact`. The agent calls `compact(summary)` at the end of its work on a question, rolling that run of live turns into a segment whose summary surfaces in future-turn context. No extra frame needed — the compact segment IS the bracket.
+
+Subgoals remain available for intra-question decomposition (e.g. "analyse each vendor") and nest inside the session's root frame. A complex question might do: user turn → tool calls → subgoal(vendor-a) → subgoal(vendor-b) → subgoal(vendor-c) → assistant synthesis → compact.
+
+### LLMAgentAdapter is the degenerate case
+
+`llmagent:chat` agents use the same structure: root frame only, no harness tools enabled (no `subgoal`, no `compact`, no `complete`). Their conversation is a flat list of live turns. A single reader ingests both `llmagent` and `goaltree` sessions — no divergent schema.
 
 ## How LLMs Work With Tools
 
@@ -72,12 +102,16 @@ A frame's conversation is a list. Each entry is either a **live turn** or a **co
 [
   {summary: "...", turns: 200, items: [...]},   // segment 0
   {summary: "...", turns: 200, items: [...]},   // segment 1
+  {role: "user", content: "...",                 // live turn from intake
+   ts: 1713600000000, source: "chat"},
   {role: "assistant", content: "..."},           // live turn
   {role: "assistant", content: "...",            // live turn with tool calls
    toolCalls: [{id: "tc_1", name: "covia_inspect", arguments: {...}}]},
   {role: "tool", id: "tc_1", name: "covia_inspect", content: "..."},
 ]
 ```
+
+**Turn envelope fields:** `role` and `content` are the LLM-conversation primitives. Optional `ts` (wall-clock millis) and `source` (`"chat" | "message" | "request" | "transition"`) carry provenance — they let audit and replay distinguish a chat-intake user turn from a task-request user turn without inspecting role alone. Vendor LLM APIs ignore `ts`/`source`; the adapter strips them when constructing the level 3 payload. Assistant turns with `toolCalls` and subsequent `tool` turns preserve intra-transition interleaving on the lattice.
 
 Compacted segments contain the full conversation data in `items`. The `summary` is an LLM-provided description of that phase of work. CellExplorer renders the whole list at whatever budget the context allows — segments are truncated to summaries at low budget, expanded to full turns at high budget.
 
@@ -104,14 +138,14 @@ Budget 2000+:
 
 ## The Frame Stack
 
-The harness maintains a stack of frames internally. The LLM doesn't see the stack — it just calls tools. The stack is how the harness assembles context for each inference.
+Frames live on the session record (`sessions/<sid>/frames`). The LLM doesn't see the stack — it just calls tools. The stack is how the harness assembles context for each inference and is persisted across transitions as part of session state.
 
 ### Frame Contents
 
 | Field | Description |
 |-------|-------------|
-| description | The `subgoal` description that created this frame |
-| conversation | List of segments + live turns |
+| description | Root: session origin. Child: the `subgoal` description that created this frame. |
+| conversation | List of segments + live turns (each turn: `{role, content, ts?, source?, toolCalls?}`) |
 | loads | Lattice paths loaded at this scope |
 
 ### Context Assembly
@@ -302,47 +336,72 @@ Each frame has its own `loads` map. Effective loads at any depth = merge of ance
 
 ## Storage Tiers
 
-| Storage | Lifetime | Backed by | Purpose |
-|---------|----------|-----------|---------|
-| `t/` | Job-scoped | `j/{jobId}/temp/` | Temp space shared across sub-operations within a job. |
-| `w/` | Permanent | User lattice `w/` | Curated outputs: notes, drafts, refs. Survives everything. |
-| Conversation data | Permanent | Goal tree state | Full turns stored in segments. Always on lattice. Zoom via CellExplorer. |
+Four virtual namespaces, resolved by `NamespaceResolver` implementations registered on `CoviaAdapter`. Each has a distinct lifetime and scope, forming a hierarchy from permanent to ephemeral.
+
+| Storage | Lifetime | Scope | Backed by | Purpose |
+|---------|----------|-------|-----------|---------|
+| `w/` | Permanent | User | User lattice `w/` | Curated outputs: notes, drafts, refs. Survives everything. |
+| `n/` | Permanent | Agent | `g/<agentId>/n/` | Agent workspace — persistent per-agent scratch and notes. |
+| `c/` | Session | Session | `g/<agentId>/sessions/<sid>/c/` | Session-scoped scratch — survives across turns within the same session. |
+| `t/` | Job | Transition | `j/<jobId>/temp/` | Per-transition temp — shared across subgoals and tool calls within a single Job. Gone at transition end. |
+
+All existing `covia:*` operations work with each prefix transparently — agents write `c/draft` or `t/scratch` without knowing the full lattice path. The resolver rewrites the keys based on the `RequestContext` (`agentId`, `sessionId`, `jobId`).
+
+### `c/` — Session-Scoped Scratch
+
+`c/` is the natural home for cross-turn memory within a single session. It persists across transitions (unlike `t/`) but is scoped to one session (unlike `n/` or `w/`). Requires both `agentId` and `sessionId` on the `RequestContext`; errors otherwise. Typical uses: running summaries the agent builds up, draft artefacts refined turn-by-turn, state tracking specific to this conversation.
 
 ### `t/` — Job-Scoped Temp
 
-`t/` is a **virtual namespace** — it doesn't exist as a top-level lattice namespace. Instead, it resolves to the `temp` field within the current job record via a `NamespaceResolver` (see GRID_LATTICE_DESIGN.md §4.5). The job ID comes from the `RequestContext`, so each job gets isolated temp.
-
-All existing `covia:*` operations work with `t/` — the resolver is transparent. The agent writes `t/draft` and the resolver navigates directly to the job's temp cursor. No path rewriting, no string building.
-
-### Scoping Rules
-
-Every operation invocation creates a Job. The `jobId` is set on the `RequestContext` automatically by `JobManager`. Sub-operations that execute within a parent job's context **inherit the parent's `jobId`** and therefore share its `t/` space. Operations that create new top-level jobs get fresh `t/`.
+`t/` resolves to the `temp` field within the current job record. The `jobId` comes from the `RequestContext`, so each Job gets isolated temp. Sub-operations that execute within a parent Job's context inherit the `jobId` and therefore share `t/`:
 
 | Scenario | `t/` scope | Why |
 |---|---|---|
-| **Goal tree subgoals** | Shared with root goal | Subgoals run within the same tool call loop, same job |
+| **Goal tree subgoals** | Shared with root goal | Subgoals run within the same tool call loop, same Job |
 | **Goal tree tool calls** (`covia:write`, etc.) | Shared with root goal | Tool dispatches inherit the goal's `jobId` |
 | **Orchestration steps** | Shared with orchestration job | Steps execute within the orchestrator's context |
-| **Direct invoke** (`POST /invoke`, MCP) | Own job | New top-level job, fresh `jobId` |
-| **`agent:request`** → separate agent | Own job | New agent trigger, new job |
-| **`grid:run`** to remote venue | Own job | New job on target venue |
+| **Direct invoke** (`POST /invoke`, MCP) | Own Job | New top-level Job, fresh `jobId` |
+| **`agent:request`** → separate agent | Own Job | New agent trigger, new Job |
+| **`grid:run`** to remote venue | Own Job | New Job on target venue |
 
-**Key principle:** `t/` is shared across all sub-work within a single job. Orchestration steps can exchange data through `t/` without writing to permanent workspace. If isolation between steps is needed, use `grid:run` which creates a new job with its own `t/`.
+**Chat-session implication:** each chat message triggers a fresh transition = fresh Job, so `t/` **resets between chat turns**. Subgoals within a single transition share `t/`; across transitions, use `c/` instead.
 
-### When to use `t/` vs `w/`
+### Choosing the right tier
 
-- **`t/`** — intermediate calculations, draft data between subgoals or orchestration steps, shared working state within a single execution. Automatically scoped to the job.
-- **`w/`** — final outputs, notes worth keeping, data that other agents or future executions should see. Permanent.
+- **`t/`** — intra-transition scratch: intermediate values passed between subgoals or between tool calls. Dies at transition end.
+- **`c/`** — cross-turn session memory: draft artefacts, running summaries, per-conversation state. Survives turns, scoped to one session.
+- **`n/`** — per-agent persistent workspace: reusable notes, templates, accumulated knowledge the agent carries across all sessions.
+- **`w/`** — user-level permanent storage: final outputs, shared data, anything other agents or future sessions should see.
+
+Prefer the tightest scope that fits — it's cheaper to reason about and less likely to cause cross-contamination.
 
 ## Root Frame
 
-The harness creates the root frame when a request arrives:
+The root frame is session-scoped, not transition-scoped. It is created when the session is created and persists for the life of the session. Transitions read from and append to the existing root frame — they do not rebuild it.
 
-1. Request arrives (user message, queued task, grid operation)
-2. Harness creates root frame with request as description
-3. Agent's first turn is inside a frame — never frameless
-4. Agent works, potentially calling `subgoal` for sub-tasks
-5. Agent calls `complete(result)` or produces a text-only response — root result returned to caller
+### Chat-style sessions (long-lived)
+
+1. First chat/message arrives → session created, root frame created with origin as description
+2. Envelope appended to `sessions/<sid>/pending`; run loop wakes
+3. Transition drains pending into the root frame's live turns as `user` entries
+4. LLM produces assistant turns, optionally with tool calls; tools execute, results appended as `tool` turns
+5. Agent may call `subgoal` (pushes child frame) or `compact` (segments a run of live turns)
+6. Transition ends; frame persists. Session is now ready for the next message.
+7. Second chat arrives → appended as new user turn after all prior turns/segments. No new frame.
+
+The root frame never calls `complete` in normal chat flow — chat sessions run indefinitely. Bracketing per question happens via `compact`.
+
+**If `complete` is called at chat-root (mis-use):** the harness treats it as an implicit compact with the result as summary, appends the compact segment to the root conversation, and continues the session. The session is not terminated by a stray `complete`. This keeps the agent resilient to LLM confusion between "end this subgoal" and "end the session" — the agent can't accidentally close a chat. (For agents that *should* terminate on `complete`, the caller is invoking one-shot style — the one-shot path below.)
+
+### One-shot invocations (short-lived)
+
+1. Grid operation invoked on a fresh session
+2. Session + root frame created; invocation input is the goal description
+3. Agent works, possibly nesting subgoals
+4. Agent calls `complete(result)` or produces a text-only response
+5. Result returned to caller; session/frame remain on the lattice (audit trail)
+
+Agent's first turn is always inside a frame — never frameless.
 
 ## Text-Only Response Handling
 
@@ -393,6 +452,35 @@ subgoal("Draft report")
 
 The draft step sees gather + analyse results in its ancestor context.
 
+## Concurrent Intake During Subgoals
+
+A session may be working inside a child frame (subgoal in progress) when a new chat or message arrives. The rule:
+
+**Intake is uniform — envelopes always land in `sessions/<sid>/pending` regardless of frame depth.** The subgoal-aware logic is at drain time.
+
+**Draining targets the root frame, not the active child.** When `mergeRunResult` drains `pending` into conversation, turns are appended to `frames[0].conversation`. Subgoals are the agent's internal decomposition; the user is in dialogue with the session, not with a subgoal.
+
+**The active child sees the new user turn via ancestor context.** `renderAncestors` renders the root frame at decreasing budget; a newly-appended user turn at the tail of root's conversation shows up on the child's next inference. No extra plumbing.
+
+**The agent has three choices once it notices:**
+1. **Keep working** — appropriate when the new message is unrelated or lower priority (e.g. "actually make it concise too" during a long research task).
+2. **`complete(partial_result)`** — wrap up the subgoal with what's done so far, return to root, then respond.
+3. **`fail({reason: "superseded"})`** — abandon the subgoal and return to root.
+
+The harness does not pre-empt. The agent decides.
+
+### Soft nudge
+
+When `pending` drains while a child frame is active, the harness injects a short `system` turn into the active frame's conversation: *"New user message at session root — see ancestor context."* This makes the event salient without changing the ancestor-rendering contract. Agents deep in tool loops don't have to audit ancestors every turn.
+
+### Parallel tool calls including subgoal
+
+An LLM can emit multiple tool calls in one assistant turn. If two or more are `subgoal`, the harness processes them **sequentially**: push frame 1, run to completion, pop, then push frame 2. This keeps the stack invariant intact (only one active frame) and preserves the "later subgoals see earlier results in ancestor context" guarantee. Non-subgoal tool calls in the same assistant turn execute in parallel as usual; subgoals are the exception.
+
+### Cancellation
+
+A user "stop" or "cancel" is not a chat message and doesn't go through this path — it's a control event (`agent:suspend` or explicit cancel). Chat intake is always additive conversation; the agent's judgement controls what happens to in-flight subgoals.
+
 ## Failure Handling
 
 ```
@@ -400,31 +488,39 @@ subgoal("Analyse Delta Corp")
 -> {"status": "failed", "error": {"reason": "API returned 503", "retryable": true}}
 ```
 
-Parent decides: retry, skip, escalate, or fail itself. The failed frame's conversation is preserved in the segment — useful for debugging.
+Parent decides: retry, skip, escalate, or fail itself. The failed child frame is popped from the stack; its conversation is kept as a compacted segment in the parent's conversation with `summary` derived from the failure reason — useful for debugging and for the parent's next-inference context.
+
+**Transition atomicity.** All frame-stack changes produced by a transition (pushes, pops, appends, compactions, pending drains) land in one CAS inside `mergeRunResult`. A transition that crashes mid-inference leaves the lattice at its pre-transition state; the run loop retries from there. No partial stack is ever visible to readers. Because the full stack is on the lattice, the failure point is already explorable — no separate `state.lastFailure` snapshot is needed.
 
 ## Zooming Into History
 
-Everything is lattice data. Explore at any budget using existing operations:
+Frames live on the session record. Everything is lattice data — explore at any budget using existing operations:
 
 ```
-// Plan overview
-covia_inspect({path: "g/alice/state/plan", budget: 200})
--> {name: "Competitive analysis", status: "complete",
-   result: {report: "w/drafts/analysis-final"}}
+// Session overview (root frame at index 0)
+covia_inspect({path: "sessions/<sid>/frames/0", budget: 200})
+-> {description: "Competitive analysis for vendors A, B, C",
+    conversation: [/* Vec, 47 entries */],
+    loads: {/* Map, 2 entries */}}
 
-// Child results
-covia_inspect({path: "g/alice/state/plan/research", budget: 500})
--> {children: {
-     vendor-a: {result: {share: 0.23}},
-     vendor-b: {result: {share: 0.15}},
-     vendor-c: {result: {share: 0.31}}}}
+// Root conversation at summary level -- segments collapse to their summaries
+covia_inspect({path: "sessions/<sid>/frames/0/conversation", budget: 500})
+-> [{summary: "Setup and vendor A research...", turns: 45, /* items hidden */},
+    {summary: "Vendor B research...", turns: 38, /* items hidden */},
+    {role: "assistant", content: "Now analysing vendor C."},
+    ...]
 
-// Full conversation of a specific child
-covia_inspect({path: "g/alice/state/plan/research/vendor-b/conversation", budget: 5000})
--> [{summary: "...", turns: 12, items: [
-     {role: "assistant", content: "...", toolCalls: [...]},
-     {role: "tool", ...},
-     ...]}]
+// Drill into a specific segment's full turns
+covia_inspect({path: "sessions/<sid>/frames/0/conversation/0/items", budget: 5000})
+-> [{role: "assistant", content: "...", toolCalls: [...]},
+    {role: "tool", ...},
+    ...]
+
+// Child frame (if subgoal was active when the session was inspected)
+covia_inspect({path: "sessions/<sid>/frames/1", budget: 500})
+-> {description: "Analyse Beta Inc",
+    conversation: [...],
+    loads: {...}}
 ```
 
 ## Context Assembly Layout
@@ -526,31 +622,55 @@ One principle: **full data always stored, CellExplorer controls resolution.** Co
 
 ## State Model
 
-GoalTreeAdapter stores its state in the agent's `state` field on the lattice, extending the existing `AgentState` structure:
+Frame state lives on the **session record**, not per-adapter agent state. Config remains on the agent; per-conversation data is owned by the session.
+
+### Session record
 
 ```json5
+// sessions/<sid>
 {
-  config: { /* agent config -- operation, model, systemPrompt, tools, caps, context */ },
-  // No per-adapter transcript -- session.history is the canonical record (framework-managed)
-  goalTree: {
-    frames: [
-      {
-        description: "Root goal description",
-        conversation: [ /* segments + live turns */ ],
-        loads: { /* frame-scoped loads */ }
-      },
-      {
-        description: "Subgoal description",
-        conversation: [ /* segments + live turns */ ],
-        loads: { /* frame-scoped loads */ }
-      }
-    ],
-    result: null  // set when root completes
-  }
+  parties: [ /* DIDs participating */ ],
+  meta:    { created: <ts>, turns: <N>, ... },
+  pending: [ /* intake envelopes not yet drained into the frame */ ],
+  frames: [
+    {
+      description: "Session origin (first message, task goal, invocation input)",
+      conversation: [ /* segments + live turns -- the session's sole conversation record */ ],
+      loads:        { /* frame-scoped loads */ }
+    },
+    {
+      description: "Subgoal description (pushed by subgoal tool)",
+      conversation: [ /* ... */ ],
+      loads:        { /* ... */ }
+    }
+  ],
+  result: null  // set when root frame completes (one-shot invocations only)
 }
 ```
 
-The frame stack is stored as a vector. The last element is the active frame. Push appends, pop removes the last element.
+The frame stack is stored as a vector. The last element is the active frame. Push appends, pop removes the last element. `frames[0]` is the persistent root frame — its `conversation` is the canonical session history.
+
+### Agent record
+
+```json5
+// g/<agent>
+{
+  config: { /* operation, model, systemPrompt, tools, caps, context */ },
+  state:  { /* agent-level state -- NO per-session conversation data here */ },
+  tasks:  { /* pending task Jobs */ },
+  sessions: { /* session IDs this agent participates in */ }
+}
+```
+
+Config is read on every transition and propagated into the transition input. Per-session data (frames, pending) is fetched from the session record, not the agent.
+
+### Legacy fields being removed
+
+- **`sessions/<sid>/history`** — a flat turn vector that was built as a parallel structure. The conversation lives inside the root frame; no separate history field exists in the target schema. The turn envelope shape (`{role, content, ts, source}`) carries over unchanged as entries in `frames[0].conversation`.
+- **In-memory frame stack in `GoalTreeAdapter.processGoal`** — the adapter built a fresh root frame per transition and discarded it at the end. Frames are session state and read from the lattice; there is nothing to build.
+- **`state.lastFailure`** — a failure-only snapshot kept as a debug aid because the real stack wasn't persisted. With frames on the lattice, the full stack at failure is already there; this field is redundant.
+
+`llmagent:chat` and `goaltree:chat` write and read the same `sessions/<sid>/frames[0].conversation`. LLMAgent is a root-frame-only, no-harness-tools configuration.
 
 ## Full Example: What the LLM Sees
 
@@ -715,7 +835,8 @@ As goals get more complex, the agent can opt into more tools:
 |-----------|------------|-----|
 | Need reference data across turns | `context_load` | Keep data in context without re-exploring |
 | Need to scope data to subgoals | `context_load` (frame-scoped) | Auto-cleanup on completion |
-| Need temp space | `t/` namespace with `covia_write` | Working files for root goal duration |
+| Need intra-transition scratch | `t/` namespace with `covia_write` | Working files for one transition; shared across subgoals |
+| Need cross-turn session memory | `c/` namespace with `covia_write` | Survives turns within the session; scoped to this conversation |
 | Context getting long | `compact` | Agent-controlled checkpointing |
 | Load rejected, context full | `context_unload` | Free space by removing paths |
 
@@ -730,17 +851,19 @@ As goals get more complex, the agent can opt into more tools:
 7. **Ancestor context is an array of frames.** Each rendered at decreasing budgets. Parent ~300B, grandparent ~150B.
 8. **Description is the child's goal.** The `subgoal` description becomes the goal message in the child frame.
 9. **Loads are lexically scoped.** Children inherit parent loads. Shadowing supported. Pop restores parent's version.
-10. **`t/` is root-goal scoped.** Per-user lattice namespace. Cleaned up on root completion. Shared temp for child frames.
+10. **Four scoped namespaces, distinct lifetimes.** `w/` (user, permanent), `n/` (agent, permanent), `c/` (session, cross-turn), `t/` (Job, per-transition). Agents pick the tightest scope that fits. `t/` is shared across subgoals within a transition but resets between transitions; cross-turn memory goes in `c/`.
 11. **Sequential execution.** `subgoal` blocks the parent. Later children see earlier results in ancestor context.
 12. **Nesting is natural.** A child can call `subgoal`. The stack grows. Each `complete` pops one frame.
-13. **Harness creates root frame.** Request creates frame. Agent never runs frameless.
-14. **Text-only = implicit complete.** Natural LLM API contract. No bouncing.
-15. **GoalTreeAdapter is a peer of LLMAgentAdapter.** Same Level 2 slot, same Level 3 contract. Agents choose via config.
-16. **Existing tools reused.** `context_load`, `context_unload`, all `covia:*` operations, `agent:*` operations — everything from the existing tool palette. Goal tree adds 4 new harness tools, not a new tool universe.
-17. **Budget is harness-managed by default.** Agent gets yes/no on loads, not arithmetic. Context map shows numbers for advanced agents.
-18. **Context layout follows attention research.** Reference at top (primacy), conversation in middle, current turn at bottom (recency).
-19. **Frame stack is lattice data.** Stored in `state.goalTree.frames`. Explorable, mergeable, recoverable.
-20. **Compacted segments accumulate.** Each `compact` appends a segment. Phase boundaries preserved.
+13. **Session IS a root frame.** Root frame is created at session creation and persists for the session's life. Transitions append to it; they do not rebuild it. Chat sessions never `complete` the root; one-shot invocations do.
+14. **The frame stack is the session's conversation record.** `sessions/<sid>/frames[0].conversation` holds everything — user turns, assistant turns, tool calls, tool results, segments, and child-frame references. There is no `session.history` field, no per-adapter transcript, no debug snapshot on failure; the full stack on the lattice is the only record.
+15. **Text-only = implicit complete.** Natural LLM API contract. No bouncing.
+16. **GoalTreeAdapter and LLMAgentAdapter share the session schema.** LLMAgentAdapter is the degenerate case: root frame only, no harness tools enabled. Agents choose adapter via config; readers consume both the same way.
+17. **Existing tools reused.** `context_load`, `context_unload`, all `covia:*` operations, `agent:*` operations — everything from the existing tool palette. Goal tree adds 7 harness tools, not a new tool universe.
+18. **Budget is harness-managed by default.** Agent gets yes/no on loads, not arithmetic. Context map shows numbers for advanced agents.
+19. **Context layout follows attention research.** Reference at top (primacy), conversation in middle, current turn at bottom (recency).
+20. **Frame stack is lattice data on the session record.** Stored in `sessions/<sid>/frames`. Explorable, mergeable, recoverable. Survives across transitions and agent restarts.
+21. **Compacted segments accumulate.** Each `compact` appends a segment. Phase boundaries preserved. Per-question bracketing is the primary use in chat sessions.
+22. **Intake queue stays at session level.** `sessions/<sid>/pending` is the pre-transition staging area; envelopes are drained into the root frame as `user` turns atomically inside `mergeRunResult`. Keeps concurrent intake separate from the append path.
 
 ## Implementation Notes
 
@@ -748,33 +871,60 @@ As goals get more complex, the agent can opt into more tools:
 
 ```
 covia.adapter.agent.GoalTreeAdapter extends AAdapter
-  - processGoal(RequestContext, ACell input) -- entry point
-  - runFrame(FrameStack, RequestContext) -- recursive frame execution
-  - buildFrameContext(FrameStack) -- context assembly with ancestors
-  - handleSubgoal(input, FrameStack) -- push frame, recurse
-  - handleComplete(input, FrameStack) -- pop frame, return result
-  - handleFail(input, FrameStack) -- pop frame, return error
-  - handleCompact(input, FrameStack) -- segment live turns
+  - processGoal(RequestContext, ACell input) -- entry point; reads session record from input
+  - loadRootFrame(sessionRecord) -- reads existing frames vector from session
+  - runFrame(frames, activeIdx, RequestContext) -- iterative frame execution
+  - buildFrameContext(frames) -- context assembly with ancestors
+  - handleSubgoal(input, frames) -- push frame; transition exits so next cycle runs child
+  - handleComplete(input, frames) -- pop frame, return result to parent frame
+  - handleFail(input, frames) -- pop frame, return error
+  - handleCompact(input, frames) -- segment live turns in active frame
+  - appendTurnsAtomic(frames, newTurns) -- append inside mergeRunResult CAS
 ```
+
+### Session-frame integration
+
+The run-loop merge step (`mergeRunResult`) atomically:
+1. Drains the prefix of `sessions/<sid>/pending` that the transition saw
+2. Appends user turns (converted from drained envelopes) to `frames[0].conversation`
+3. Appends the transition's assistant / tool / subgoal turns to the active frame's conversation
+4. Writes the agent timeline entry
+
+All inside one CAS on the session record. Readers never see partial state.
 
 ### Reuse from Existing Code
 
 | Component | Reuse | Notes |
 |-----------|-------|-------|
-| `ContextBuilder` | Extend with `withAncestorFrames()` | Budget-aware ancestor rendering |
+| `ContextBuilder` | Extend with `withAncestorFrames()` | Budget-aware ancestor rendering across the frame stack |
 | `ContextLoader` | Reuse as-is | Resolves loaded paths and context entries |
 | `CellExplorer` | Reuse as-is | Renders ancestors, segments at budget |
 | `CapabilityChecker` | Reuse as-is | Same capability enforcement |
 | Tool dispatch | Reuse `executeToolCall` pattern | Same config tool resolution, grid dispatch |
-| `AgentState` | Extend state model | Session.history is canonical record (framework-managed) |
+| `AgentState` | Frame data moves to session record | `state.goalTree.frames` removed. Agent state holds only `config` and adapter-agnostic fields. |
+| Session record | Add `frames` vector | `sessions/<sid>/frames[0].conversation` is canonical history. Replaces `sessions/<sid>/history`. |
+| `LLMAgentAdapter` | Reads/writes same session shape | Degenerate case: single root frame, no harness tools. Single reader for both adapters. |
 | Level 3 contract | Identical | Same `{messages, tools, responseFormat}` input/output |
-| `CoviaAdapter` | Add `NamespaceResolver` | Virtual namespace dispatch for `t/` and `n/` |
-| `RequestContext` | Add `jobId` field | Needed by `t/` resolver to locate temp in job record |
-| Job record | Add `temp` field | MapLattice within job record for goal-scoped temp |
+| `CoviaAdapter` | `NamespaceResolver` registry | Virtual namespace dispatch for `t/`, `n/`, `c/` |
+| `RequestContext` | `jobId`, `sessionId`, `agentId` fields | Needed by `t/` / `c/` / `n/` resolvers to rewrite paths |
+| Job record | `temp` field | MapLattice within job record for `t/` backing storage |
+
+### Cutover plan
+
+The flat-history structure and in-memory frame stack are two halves of the same gap — removed together. Sessions are a recent primitive and not widely persisted across upgrades, so the cutover is a direct replacement rather than a data migration.
+
+1. **Session record.** Add `frames` to `ensureSession`'s initial shape; initialise with a single empty root frame. Drop `history` from the initial shape.
+2. **Writer path.** `mergeRunResult` drops its `history` append branch. In the same CAS it (a) drains `pending` envelopes as user turns into `frames[0].conversation` (root, regardless of active depth — see Concurrent Intake) and (b) appends the transition's assistant / tool / compact / subgoal entries to the active frame's conversation (`frames[last]`). A push from `subgoal` grows `frames` by one; a pop from `complete`/`fail` shrinks it by one, with the child's conversation folded into the parent's as a segment on failure.
+3. **Reader path.** `AgentAdapter.sessionHistory(input)` removed. Adapters read `input.session.frames` (a full stack) and render via `GoalTreeContext.renderAncestors` + `renderConversation`. `effectiveMessages(input)` unchanged.
+4. **`ContextBuilder`.** `withSessionHistory` removed; new `withFrameStack(frames)` delegates to the existing GoalTreeContext renderers — these already handle segments and preserve tool-call interleaving.
+5. **`GoalTreeAdapter.processGoal`.** Stop constructing a fresh root frame. Read frames from the session map, append during execution via the existing `updateFrame` path, emit the final stack back as part of the transition output so `mergeRunResult` persists it. `state.lastFailure` code path removed — the stack on the lattice is the post-mortem.
+6. **`LLMAgentAdapter.processChat`.** Writes assistant response as a live turn into the root frame via the same framework path — no adapter-owned conversation state.
+7. **Tests.** Assertions referencing `session.history` redirect to `session.frames[0].conversation`. Turn envelope shape unchanged; most assertions need only a path update.
 
 ### Virtual Namespace Resolvers
 
-`t/` and `n/` are virtual prefixes resolved by `NamespaceResolver` implementations registered on `CoviaAdapter`. See GRID_LATTICE_DESIGN.md §4.5 for the full design.
+`t/`, `n/`, and `c/` are virtual prefixes resolved by `NamespaceResolver` implementations registered on `CoviaAdapter`. See GRID_LATTICE_DESIGN.md §4.5 for the full design.
 
-- **`t/` resolver** — navigates to `j/{ctx.jobId}/temp/` within the user's job index. GoalTreeAdapter sets `jobId` on the RequestContext when starting the root goal. Temp is cleared on root frame completion.
-- **`n/` resolver** — navigates to the agent's workspace within its state record. Uses `ctx.agentId`. Replaces the current `rewriteAgentPath` hack.
+- **`t/` resolver** (`TempNamespaceResolver`) — navigates to `j/{ctx.jobId}/temp/` within the user's job index. Set by `JobManager` on every Job. Dies with the Job.
+- **`n/` resolver** (`AgentNamespaceResolver`) — navigates to `g/{ctx.agentId}/n/` within the agent's record. Uses `ctx.agentId`. Persistent per-agent.
+- **`c/` resolver** (`SessionNamespaceResolver`) — rewrites to `g/{ctx.agentId}/sessions/{ctx.sessionId}/c/`. Requires both `agentId` and `sessionId`; errors otherwise. Persistent per-session, survives transitions.
