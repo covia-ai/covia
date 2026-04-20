@@ -412,25 +412,46 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 				(ACell) typedFailTool(failSchema));
 		}
 
-		// Generate root goal description from incoming work
+		// Generate root goal description from incoming work. Only used when
+		// the session has no frames yet (first transition).
 		String rootDescription = GoalTreeContext.describeTransitionInput(messages, tasks, pending);
+
+		// Frame stack comes from the session record (step 5 cutover): on the
+		// first transition it's empty and we mint a root frame here; on later
+		// transitions we pick up the persisted stack and continue appending.
+		// Everything we mutate (appendTurn, updateFrame, push/pop) ends up in
+		// this vector, which we emit as Fields.FRAMES at the end so
+		// mergeRunResult can CAS-replace session.frames. Because the adapter
+		// now owns every conversation write, the framework skips its own
+		// assistant/user turn appends when adapterFrames is non-null.
+		AVector<ACell> sessionFrames = covia.adapter.AgentAdapter.sessionFrames(input);
+		AVector<ACell> frames;
+		if (sessionFrames != null && sessionFrames.count() > 0) {
+			frames = sessionFrames;
+		} else {
+			frames = Vectors.of((ACell) GoalTreeContext.createFrame(rootDescription));
+		}
+
+		// Adapter-owned turns: record this cycle's inputs (pending envelopes
+		// and picked task input) as user turns on frames[0].conversation before
+		// the tool loop runs. The framework used to do this in mergeRunResult
+		// but with adapter-emitted frames the framework stays out — otherwise
+		// the user turns would land at the wrong chronological position (after
+		// this cycle's assistant/tool turns).
+		long cycleTs = convex.core.util.Utils.getCurrentTimestamp();
+		frames = appendCycleInputTurns(frames, messages, input, cycleTs);
 
 		// Build context (system prompt, tools, caps) via ContextBuilder.
 		// Harness tool names in config.tools are skipped here — they're
 		// resolved separately by resolveHarnessTools / buildTypedRootHarnessTools.
-		AVector<ACell> sessionFrames = covia.adapter.AgentAdapter.sessionFrames(input);
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
 			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
 			.withConfig(recordConfig, state)
-			.withFrameStack(sessionFrames)
+			.withFrameStack(frames)
 			.withContextEntries(state)
 			.withTools()
 			.build();
-
-		// Create root frame
-		AMap<AString, ACell> rootFrame = GoalTreeContext.createFrame(rootDescription);
-		AVector<ACell> frames = Vectors.of((ACell) rootFrame);
 
 		// Prepare tool dispatch context
 		AVector<ACell> baseTools = context.tools();
@@ -447,10 +468,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		FrameResult result = runFrame(job, frames, 0, l3Config, llmOperation, baseTools,
 			configToolMap, caps, capsCtx, context.history(), typedHarnessTools);
 
-		// Goal tree is stateless across transitions for everything except config:
-		// the frame stack is in-memory only. Config (caps, responseFormat, prompt,
-		// loaded paths…) must survive every transition because agents are typically
-		// configured by writing config into state at create time. Wiping it would
+		// Config carry-over only — the frame stack lives on the session
+		// record now, so no per-adapter frame state is persisted here.
+		// Config (caps, responseFormat, prompt, loaded paths…) must survive
+		// every transition because agents are typically configured by
+		// writing config into state at create time. Wiping it would
 		// silently strip caps/schema enforcement on the second invocation.
 		AMap<AString, ACell> newState = Maps.empty();
 		if (state instanceof AMap) {
@@ -458,41 +480,22 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			if (sc != null) newState = newState.assoc(K_CONFIG, sc);
 		}
 
-		// On failure, persist the deepest frame's conversation as a debug
-		// aid under state.lastFailure. Without this, when an agent loops or
-		// hits max iterations the only thing visible post-mortem is the
-		// final outcome string — making it nearly impossible to investigate
-		// what tools were called, what they returned, and why. The frame
-		// stack is otherwise dropped after the transition. On success this
-		// field is cleared, so it always reflects the most recent failure.
-		if ("failed".equals(result.status()) && result.framesAtFailure() != null) {
-			AVector<ACell> finalFrames = result.framesAtFailure();
-			if (finalFrames.count() > 0) {
-				AMap<AString, ACell> deepest = (AMap<AString, ACell>) finalFrames.get(finalFrames.count() - 1);
-				AVector<ACell> conversation = GoalTreeContext.renderConversation(deepest);
-				AMap<AString, ACell> lastFailure = Maps.of(
-					Strings.create("error"), result.value() != null ? result.value() : Strings.create(""),
-					Strings.create("conversation"), conversation,
-					Strings.create("frameDepth"), CVMLong.create(finalFrames.count()),
-					Strings.create("ts"), CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
-				newState = newState.assoc(Strings.create("lastFailure"), lastFailure);
-			}
-		}
-
 		// Lean transition output: emit {response | error}. When a task was
 		// picked this cycle, complete it explicitly via the venue op
 		// (agent:complete-task / agent:fail-task), which parks a completion
 		// envelope into the framework's deferredCompletions map. The run
 		// loop drains that map after mergeRunResult to build taskResults.
-		// State is still emitted because GoalTree's config currently rides
-		// in state.config across transitions — that carry-over moves to
-		// the session record in the later sub-stage when state is fully
-		// retired.
+		// Fields.FRAMES carries the final stack so mergeRunResult CAS-
+		// replaces session.frames — when no session is in scope this is a
+		// no-op on the framework side.
 		boolean failed = "failed".equals(result.status());
 		if (tasks != null && tasks.count() > 0 && ctx.getTaskId() != null) {
 			completeTaskViaVenueOp(ctx, failed, result.value());
 		}
 		AMap<AString, ACell> output = Maps.of(AgentState.KEY_STATE, newState);
+		if (result.frames() != null) {
+			output = output.assoc(Fields.FRAMES, result.frames());
+		}
 		if (failed) {
 			output = output.assoc(Fields.ERROR, result.value());
 		} else {
@@ -533,14 +536,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	/**
 	 * Result of running a frame — either complete or failed.
 	 *
-	 * <p>On failure, {@code framesAtFailure} carries the final frame stack
-	 * for post-mortem debugging — the caller can render the deepest frame's
-	 * conversation and persist it as a debug aid. Null on success because
-	 * GoalTreeAdapter is intentionally stateless across transitions for
-	 * everything except config.</p>
+	 * <p>{@code frames} always carries the final frame stack so the caller can
+	 * emit it back to {@code mergeRunResult} as {@code Fields.FRAMES}. The
+	 * session record on the lattice is the sole post-mortem — there is no
+	 * separate failure snapshot.</p>
 	 */
-	record FrameResult(String status, ACell value, AVector<ACell> framesAtFailure) {
-		static FrameResult complete(ACell value) { return new FrameResult("complete", value, null); }
+	record FrameResult(String status, ACell value, AVector<ACell> frames) {
+		static FrameResult complete(ACell value, AVector<ACell> frames) {
+			return new FrameResult("complete", value, frames);
+		}
 		static FrameResult failed(ACell error, AVector<ACell> frames) {
 			return new FrameResult("failed", error, frames);
 		}
@@ -722,7 +726,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 						ACell parsed = convex.core.util.JSON.parse(content.toString());
 						frames = updateFrame(frames, frameIndex,
 							GoalTreeContext.appendTurn(activeFrame, l3Result));
-						return FrameResult.complete(parsed);
+						return FrameResult.complete(parsed, frames);
 					} catch (Exception e) {
 						// Schema enforcement should prevent this, but if the LLM
 						// somehow bails to non-JSON text, nudge it to retry.
@@ -743,7 +747,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 				// Untyped: text is the result
 				frames = updateFrame(frames, frameIndex,
 					GoalTreeContext.appendTurn(activeFrame, l3Result));
-				return FrameResult.complete(content);
+				return FrameResult.complete(content, frames);
 			}
 
 			// Record assistant message (with tool calls) in conversation
@@ -769,7 +773,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					activeFrame = GoalTreeContext.appendTurn(activeFrame,
 						toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("complete"))));
 					frames = updateFrame(frames, frameIndex, activeFrame);
-					return FrameResult.complete(toolInput);
+					return FrameResult.complete(toolInput, frames);
 
 				} else if (TOOL_FAIL.equals(toolName)) {
 					// Flattened: the entire tool input IS the error.
@@ -951,6 +955,59 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	/** Updates a frame at the given index in the frame stack. */
 	private static AVector<ACell> updateFrame(AVector<ACell> frames, int index, ACell frame) {
 		return frames.assoc(index, frame);
+	}
+
+	/**
+	 * Appends this cycle's user-side inputs as turns on {@code frames[0].conversation}
+	 * before the tool loop runs.
+	 *
+	 * <p>The framework used to build these turns in {@code mergeRunResult} from
+	 * the picked task input and drained pending envelopes. With adapter-emitted
+	 * frames that path is skipped — the adapter must record user turns itself
+	 * so they land in chronological order (before this cycle's assistant / tool
+	 * turns) and so the frame stack faithfully mirrors the conversation.</p>
+	 *
+	 * <p>Turn shape matches the S3 envelope contract
+	 * ({@code {role, content, ts, source}}) — extra fields are ignored by the
+	 * LLM adapter's message extraction, so LLM calls are unaffected.</p>
+	 *
+	 * @param frames current frame stack (must have at least one root frame)
+	 * @param messages effective messages (session.pending or Fields.MESSAGES);
+	 *        each entry is a chat/message envelope with a {@code message} field
+	 * @param input the transition input (read for {@code Fields.NEW_INPUT})
+	 * @param ts wall-clock millis to stamp on the new turns
+	 * @return frame stack with user turns appended to frames[0].conversation
+	 */
+	@SuppressWarnings("unchecked")
+	private static AVector<ACell> appendCycleInputTurns(AVector<ACell> frames,
+			AVector<ACell> messages, ACell input, long ts) {
+		if (frames == null || frames.count() == 0) return frames;
+		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
+		CVMLong tsCell = CVMLong.create(ts);
+
+		if (messages != null) {
+			for (long i = 0; i < messages.count(); i++) {
+				ACell envelope = messages.get(i);
+				ACell content = RT.getIn(envelope, Fields.MESSAGE);
+				if (content == null) continue;
+				root = GoalTreeContext.appendTurn(root, Maps.of(
+					covia.venue.AgentState.K_ROLE,    covia.venue.AgentState.ROLE_USER,
+					covia.venue.AgentState.K_CONTENT, content,
+					covia.venue.AgentState.K_TURN_TS, tsCell,
+					covia.venue.AgentState.K_SOURCE,  covia.venue.AgentState.SOURCE_CHAT));
+			}
+		}
+
+		ACell newInput = RT.getIn(input, Fields.NEW_INPUT);
+		if (newInput != null) {
+			root = GoalTreeContext.appendTurn(root, Maps.of(
+				covia.venue.AgentState.K_ROLE,    covia.venue.AgentState.ROLE_USER,
+				covia.venue.AgentState.K_CONTENT, newInput,
+				covia.venue.AgentState.K_TURN_TS, tsCell,
+				covia.venue.AgentState.K_SOURCE,  covia.venue.AgentState.SOURCE_REQUEST));
+		}
+
+		return frames.assoc(0, root);
 	}
 
 	/** True if config declares a responseFormat with a JSON schema (not just "json"/"text"). */

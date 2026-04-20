@@ -148,6 +148,11 @@ public class Fields {
 	public static final StringShort NEW_INPUT = Strings.intern("newInput");
 	public static final StringShort RESPONSE = Strings.intern("response");
 	public static final StringShort TASK_COMPLETE = Strings.intern("taskComplete");
+	/** Transition output field: updated session frame stack. When present,
+	 *  mergeRunResult CAS-replaces session.frames with this value (the adapter
+	 *  owns its own assistant/tool turns). When absent, the framework appends
+	 *  the response as an assistant turn to frames[0].conversation. */
+	public static final StringShort FRAMES = Strings.intern("frames");
 
 	// Identity / authorization
 	public static final StringShort CALLER = Strings.intern("caller");

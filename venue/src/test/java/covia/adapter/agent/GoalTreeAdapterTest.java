@@ -244,7 +244,8 @@ public class GoalTreeAdapterTest {
 		// Instead, create a mock input where the LLM would call complete
 		// For now, test that FrameResult.complete works correctly
 		GoalTreeAdapter.FrameResult result = GoalTreeAdapter.FrameResult.complete(
-			Maps.of(Strings.create("answer"), Strings.create("42")));
+			Maps.of(Strings.create("answer"), Strings.create("42")),
+			Vectors.empty());
 		assertEquals("complete", result.status());
 		assertNotNull(result.value());
 	}
@@ -586,12 +587,12 @@ public class GoalTreeAdapterTest {
 	}
 
 	@Test
-	public void testFailedFrameConversationPersistedToState() {
+	public void testFailedTransitionEmitsFramesForPostMortem() {
 		// When a frame fails (here: by hitting MAX_ITERATIONS via the JSON
-		// validation nudge loop), the deepest frame's conversation must be
-		// persisted under state.lastFailure for post-mortem debugging.
-		// Without this, the only post-failure visibility into agent loops
-		// is the live process log — which evaporates on restart.
+		// validation nudge loop), the full frame stack rides back to the
+		// framework as Fields.FRAMES so mergeRunResult persists it on the
+		// session record. The lattice copy IS the post-mortem — there is
+		// no separate state.lastFailure snapshot.
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 
 		AMap<AString, ACell> schema = Maps.of(
@@ -616,24 +617,28 @@ public class GoalTreeAdapterTest {
 					Strings.create("This is plain text, not JSON."))));
 
 		ACell output = adapter.processGoal(null, ALICE, input);
+		// Error path: transition must report error, not response.
+		assertNotNull(RT.getIn(output, Fields.ERROR),
+			"Failed transition must report error");
+		// Fields.FRAMES must carry the final stack for session.frames
+		// replacement in mergeRunResult.
+		ACell framesOut = RT.getIn(output, Fields.FRAMES);
+		assertNotNull(framesOut, "Failed transition must emit frames for post-mortem");
+		assertTrue(framesOut instanceof AVector,
+			"frames output must be a vector");
+		assertTrue(((AVector<?>) framesOut).count() > 0,
+			"frames output must contain at least the root frame");
+		// state.lastFailure is retired — lattice frames are the sole record.
 		ACell newState = RT.getIn(output, AgentState.KEY_STATE);
-		assertNotNull(newState);
-		ACell lastFailure = RT.getIn(newState, Strings.create("lastFailure"));
-		assertNotNull(lastFailure, "Failed transition must persist lastFailure debug info");
-		assertNotNull(RT.getIn(lastFailure, Strings.create("error")),
-			"lastFailure must include the error value");
-		ACell conversation = RT.getIn(lastFailure, Strings.create("conversation"));
-		assertNotNull(conversation, "lastFailure must include the conversation");
-		assertTrue(conversation instanceof AVector,
-			"conversation should be a vector of messages");
-		assertTrue(((AVector<?>) conversation).count() > 0,
-			"conversation should not be empty after a failed run");
+		assertNull(RT.getIn(newState, Strings.create("lastFailure")),
+			"state.lastFailure is retired — frames on the session record are the post-mortem");
 	}
 
 	@Test
-	public void testSuccessfulFrameLeavesNoLastFailure() {
-		// Successful runs should not leave a lastFailure trace — that
-		// would mislead debugging by surfacing stale data.
+	public void testSuccessfulTransitionEmitsFrames() {
+		// Successful runs also emit frames so session.frames[0].conversation
+		// grows atomically with the timeline write. state.lastFailure is
+		// never written.
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
 
 		ACell input = Maps.of(
@@ -645,10 +650,15 @@ public class GoalTreeAdapterTest {
 				(ACell) Maps.of(Strings.create("content"), Strings.create("hello"))));
 
 		ACell output = adapter.processGoal(null, ALICE, input);
+		assertNotNull(RT.getIn(output, Fields.RESPONSE),
+			"Successful transition must report response");
+		ACell framesOut = RT.getIn(output, Fields.FRAMES);
+		assertNotNull(framesOut, "Successful transition must emit frames");
+		assertTrue(framesOut instanceof AVector);
+		assertTrue(((AVector<?>) framesOut).count() > 0);
 		ACell newState = RT.getIn(output, AgentState.KEY_STATE);
-		assertNotNull(newState);
-		ACell lastFailure = RT.getIn(newState, Strings.create("lastFailure"));
-		assertNull(lastFailure, "Successful runs should not leave a lastFailure trace");
+		assertNull(RT.getIn(newState, Strings.create("lastFailure")),
+			"state.lastFailure is retired");
 	}
 
 	@Test

@@ -583,7 +583,25 @@ public class AgentState extends ALatticeComponent<ACell> {
 			AMap<AString, ACell> taskResults,
 			AMap<AString, ACell> timelineEntry) {
 		return mergeRunResult(newState, consumedSession,
-			presentedTasks, taskResults, timelineEntry, null, null, 0);
+			presentedTasks, taskResults, timelineEntry, null, null, 0, null);
+	}
+
+	/**
+	 * Back-compat 8-arg overload — no adapter-owned frames. Delegates to the
+	 * 9-arg form with {@code newFrames = null}.
+	 */
+	public AMap<AString, ACell> mergeRunResult(
+			ACell newState,
+			AString consumedSession,
+			Index<Blob, ACell> presentedTasks,
+			AMap<AString, ACell> taskResults,
+			AMap<AString, ACell> timelineEntry,
+			Blob historySid,
+			AVector<ACell> turnsToAppend,
+			long presentedSessionPendingCount) {
+		return mergeRunResult(newState, consumedSession, presentedTasks,
+			taskResults, timelineEntry, historySid, turnsToAppend,
+			presentedSessionPendingCount, null);
 	}
 
 	/**
@@ -606,6 +624,14 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * ordering invariant: an external observer never sees a cycle that
 	 * wrote the timeline but not the history / pending drain.</p>
 	 *
+	 * <p>When {@code newFrames} is non-null, the picked session's
+	 * {@code frames} vector is replaced wholesale before any turn append —
+	 * the adapter owns its own frame-stack changes (subgoal pushes/pops,
+	 * tool turns, compactions). Any {@code turnsToAppend} are still applied
+	 * to {@code frames[0].conversation} on top, which is how concurrent
+	 * intake (drained pending envelopes → user turns at root) co-exists
+	 * with adapter-owned stack emission.</p>
+	 *
 	 * @return The new record (check status to determine if loop should continue)
 	 */
 	@SuppressWarnings("unchecked")
@@ -617,7 +643,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 			AMap<AString, ACell> timelineEntry,
 			Blob historySid,
 			AVector<ACell> turnsToAppend,
-			long presentedSessionPendingCount) {
+			long presentedSessionPendingCount,
+			AVector<ACell> newFrames) {
 		return update(r -> {
 			// Remove completed tasks, detect new ones
 			Index<Blob, ACell> currentTasks = extractTasks(r);
@@ -636,12 +663,20 @@ public class AgentState extends ALatticeComponent<ACell> {
 			// fold them into one assoc.
 			boolean hasTurns = turnsToAppend != null && turnsToAppend.count() > 0;
 			boolean hasDrain = presentedSessionPendingCount > 0;
-			if (historySid != null && (hasTurns || hasDrain)) {
+			boolean hasNewFrames = newFrames != null;
+			if (historySid != null && (hasTurns || hasDrain || hasNewFrames)) {
 				Index<Blob, ACell> sessions = (updated.get(K_SESSIONS) instanceof Index idx)
 					? (Index<Blob, ACell>) idx : Index.none();
 				ACell sv = sessions.get(historySid);
 				if (sv instanceof AMap) {
 					AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
+
+					// Adapter-owned frame stack: replace wholesale before any
+					// turn append. Turn append below still lands on frames[0]
+					// so concurrent-intake user turns end up at root.
+					if (hasNewFrames) {
+						session = session.assoc(K_FRAMES, newFrames);
+					}
 
 					if (hasTurns) {
 						// Append into frames[0].conversation. Defensive: if

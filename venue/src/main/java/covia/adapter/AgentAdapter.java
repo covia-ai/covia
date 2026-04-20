@@ -1501,6 +1501,15 @@ public class AgentAdapter extends AAdapter {
 		ACell newState = RT.getIn(transitionResult, AgentState.KEY_STATE);
 		ACell leanResponse = RT.getIn(transitionResult, Fields.RESPONSE);
 		ACell leanError = RT.getIn(transitionResult, Fields.ERROR);
+		// Adapter-owned frame stack: when the transition emits `frames`, the
+		// adapter has recorded its own assistant/tool turns in the appropriate
+		// frame conversations. Framework skips appending the assistant response
+		// to frames[0] in that case (would duplicate). User turns from drained
+		// pending still append at root (concurrent-intake path).
+		ACell framesCell = RT.getIn(transitionResult, Fields.FRAMES);
+		@SuppressWarnings("unchecked")
+		AVector<ACell> adapterFrames = (framesCell instanceof AVector)
+			? (AVector<ACell>) framesCell : null;
 
 		// Peek the parked envelopes (don't remove yet) so an exception
 		// before completeDeferredJobs leaves them visible to the outer
@@ -1531,11 +1540,13 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
-		// Build turns to append to session.history (only when a session
-		// was picked this cycle, and the transition didn't error).
+		// Build turns to append to frames[0].conversation (only when a session
+		// was picked this cycle, the transition didn't error, and the adapter
+		// did NOT emit its own frames stack). When adapterFrames is non-null
+		// the adapter owns every conversation write — framework stays out.
 		// Order: inbox messages → picked task input → assistant response.
 		AVector<ACell> turnsToAppend = Vectors.empty();
-		if (pickedSessionBlob != null && leanError == null) {
+		if (pickedSessionBlob != null && leanError == null && adapterFrames == null) {
 			if (filteredInbox != null) {
 				for (long i = 0; i < filteredInbox.count(); i++) {
 					ACell msgContent = RT.getIn(filteredInbox.get(i), Fields.MESSAGE);
@@ -1571,7 +1582,7 @@ public class AgentAdapter extends AAdapter {
 		AMap<AString, ACell> merged = agent.mergeRunResult(
 			newState, pickedSession, tasks, taskResults,
 			timelineEntry, pickedSessionBlob, turnsToAppend,
-			presentedSessionPendingCount);
+			presentedSessionPendingCount, adapterFrames);
 
 		// Per-thread scheduled wake (B8.8). Transition result may carry a
 		// `wakeTime` (absolute wall-clock millis) requesting a future fire on
