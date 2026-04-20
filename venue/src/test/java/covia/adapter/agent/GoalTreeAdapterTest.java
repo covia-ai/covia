@@ -662,6 +662,138 @@ public class GoalTreeAdapterTest {
 	}
 
 	@Test
+	public void testFramesPersistAcrossTransitions() {
+		// Regression for the step-5 cutover: each transition must read the
+		// persisted frame stack from session.frames, append this cycle's
+		// turns, and emit the extended stack as Fields.FRAMES. Across three
+		// turns on the same "session" (simulated by feeding the previous
+		// output's frames back in), frames[0].conversation must grow
+		// monotonically with no duplicates and no reset.
+		//
+		// Also guards the efficiency angle called out in
+		// GetMine-ai/demo#16: each turn must contribute a bounded number
+		// of envelopes (one per user message), not re-append the entire
+		// prior history — otherwise conversation length grows quadratically
+		// and LLM context overflows within a handful of turns.
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		AMap<AString, ACell> config = Maps.of(
+			Strings.create("llmOperation"), Strings.create("v/test/ops/llm"));
+
+		// --- Turn 1: no session, adapter mints a fresh root frame.
+		ACell input1 = Maps.of(
+			Fields.AGENT_ID, "persist-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, config,
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Fields.MESSAGE, Strings.create("turn one"))));
+
+		ACell out1 = adapter.processGoal(null, ALICE, input1);
+		assertNotNull(RT.getIn(out1, Fields.RESPONSE), "turn 1 should succeed");
+		@SuppressWarnings("unchecked")
+		AVector<ACell> frames1 = (AVector<ACell>) RT.getIn(out1, Fields.FRAMES);
+		assertNotNull(frames1, "turn 1 must emit frames");
+		assertEquals(1, frames1.count(), "root frame only — no subgoal recursion expected");
+
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> root1 = (AMap<AString, ACell>) frames1.get(0);
+		AString rootDesc = RT.ensureString(root1.get(Strings.intern("description")));
+		@SuppressWarnings("unchecked")
+		AVector<ACell> conv1 = (AVector<ACell>) root1.get(Strings.intern("conversation"));
+		assertNotNull(conv1);
+		long conv1Count = conv1.count();
+		assertTrue(conv1Count >= 1,
+			"turn 1 must record at least the user message envelope; got " + conv1Count);
+
+		// --- Turn 2: feed turn 1's frames back as session.frames. Adapter
+		// must read those and extend — not reset or duplicate.
+		AMap<AString, ACell> session2 = Maps.of(AgentState.KEY_FRAMES, frames1);
+		ACell input2 = Maps.of(
+			Fields.AGENT_ID, "persist-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, config,
+			Fields.SESSION, session2,
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Fields.MESSAGE, Strings.create("turn two"))));
+
+		ACell out2 = adapter.processGoal(null, ALICE, input2);
+		assertNotNull(RT.getIn(out2, Fields.RESPONSE), "turn 2 should succeed");
+		@SuppressWarnings("unchecked")
+		AVector<ACell> frames2 = (AVector<ACell>) RT.getIn(out2, Fields.FRAMES);
+		assertNotNull(frames2, "turn 2 must emit frames");
+		assertEquals(1, frames2.count(), "root frame count must be stable across transitions");
+
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> root2 = (AMap<AString, ACell>) frames2.get(0);
+		assertEquals(rootDesc, RT.ensureString(root2.get(Strings.intern("description"))),
+			"root frame description must be preserved across transitions");
+		@SuppressWarnings("unchecked")
+		AVector<ACell> conv2 = (AVector<ACell>) root2.get(Strings.intern("conversation"));
+		long conv2Count = conv2.count();
+		assertTrue(conv2Count > conv1Count,
+			"conversation must grow after turn 2: " + conv1Count + " -> " + conv2Count);
+
+		// Efficiency bound (issue #16): per-turn delta must be small and
+		// independent of prior history length. If the adapter were
+		// re-appending the whole transcript each cycle we'd see delta
+		// equal to (or exceeding) conv1Count here.
+		long delta2 = conv2Count - conv1Count;
+		assertTrue(delta2 <= conv1Count + 2,
+			"per-turn conversation growth must be bounded (not quadratic); "
+				+ "turn 1 added " + conv1Count + ", turn 2 delta " + delta2);
+
+		// Both user messages must appear exactly once — no duplicates,
+		// no loss of turn 1 content.
+		assertEquals(1, countTurnsMatching(conv2, "turn one"),
+			"'turn one' user message must appear exactly once after turn 2");
+		assertEquals(1, countTurnsMatching(conv2, "turn two"),
+			"'turn two' user message must appear exactly once after turn 2");
+
+		// --- Turn 3: one more round-trip to confirm monotonic growth.
+		AMap<AString, ACell> session3 = Maps.of(AgentState.KEY_FRAMES, frames2);
+		ACell input3 = Maps.of(
+			Fields.AGENT_ID, "persist-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, config,
+			Fields.SESSION, session3,
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Fields.MESSAGE, Strings.create("turn three"))));
+
+		ACell out3 = adapter.processGoal(null, ALICE, input3);
+		@SuppressWarnings("unchecked")
+		AVector<ACell> frames3 = (AVector<ACell>) RT.getIn(out3, Fields.FRAMES);
+		assertNotNull(frames3);
+		assertEquals(1, frames3.count());
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> root3 = (AMap<AString, ACell>) frames3.get(0);
+		@SuppressWarnings("unchecked")
+		AVector<ACell> conv3 = (AVector<ACell>) root3.get(Strings.intern("conversation"));
+		assertTrue(conv3.count() > conv2Count,
+			"conversation must grow after turn 3: " + conv2Count + " -> " + conv3.count());
+		assertEquals(1, countTurnsMatching(conv3, "turn one"));
+		assertEquals(1, countTurnsMatching(conv3, "turn two"));
+		assertEquals(1, countTurnsMatching(conv3, "turn three"));
+	}
+
+	/**
+	 * Counts user-role turns in a conversation vector whose content
+	 * stringifies to contain {@code needle}. Filters by role to avoid
+	 * matching assistant turns that echo prior content (as test:llm does).
+	 */
+	private static int countTurnsMatching(AVector<ACell> conversation, String needle) {
+		int n = 0;
+		for (long i = 0; i < conversation.count(); i++) {
+			ACell turn = conversation.get(i);
+			AString role = RT.ensureString(RT.getIn(turn, Strings.intern("role")));
+			if (role == null || !"user".equals(role.toString())) continue;
+			ACell content = RT.getIn(turn, Strings.intern("content"));
+			if (content == null) continue;
+			if (content.toString().contains(needle)) n++;
+		}
+		return n;
+	}
+
+	@Test
 	public void testStateConfigPreservedAcrossTransitions() {
 		// state.config (where caps, responseFormat, prompt etc. are stored at agent
 		// create time) must survive a transition. Wiping it would silently strip
