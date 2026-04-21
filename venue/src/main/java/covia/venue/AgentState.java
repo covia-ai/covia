@@ -51,8 +51,9 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_DESCRIPTION  = Strings.intern("description");
 	private static final AString K_CONVERSATION = Strings.intern("conversation");
 
-	// Turn record field keys (entries in session.history). See venue/CLAUDE.local.md
-	// "Sessions S3 — Per-session history (turn shape contract)" for full spec.
+	// Turn record field keys (entries in session.frames[0].conversation, and
+	// in child frame conversations when the goal-tree adapter pushes them).
+	// See GOAL_TREE.md §Conversation Structure for the full spec.
 	public static final AString K_ROLE      = Strings.intern("role");
 	public static final AString K_CONTENT   = Strings.intern("content");
 	public static final AString K_SOURCE    = Strings.intern("source");
@@ -605,13 +606,14 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Atomic merge with session history append + session pending drain.
+	 * Atomic merge with frame-conversation append + session pending drain.
 	 *
 	 * <p>When {@code historySid != null}:
 	 * <ul>
 	 *   <li>If {@code turnsToAppend} is non-empty, turns are appended to
-	 *       {@code sessions[historySid].history} and {@code meta.turns} is
-	 *       bumped.</li>
+	 *       {@code sessions[historySid].frames[0].conversation} and
+	 *       {@code meta.turns} is bumped. (The root frame is minted lazily
+	 *       here if the session has no frames yet.)</li>
 	 *   <li>The first {@code presentedSessionPendingCount} entries of
 	 *       {@code sessions[historySid].pending} are dropped — the run loop
 	 *       snapshots the count pre-transition and passes it here so that
@@ -622,7 +624,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 *
 	 * <p>This atomic-update guarantee matches the deferred-completion
 	 * ordering invariant: an external observer never sees a cycle that
-	 * wrote the timeline but not the history / pending drain.</p>
+	 * wrote the timeline but not the frame conversation / pending drain.</p>
 	 *
 	 * <p>When {@code newFrames} is non-null, the picked session's
 	 * {@code frames} vector is replaced wholesale before any turn append —

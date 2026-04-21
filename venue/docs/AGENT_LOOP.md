@@ -20,8 +20,8 @@ See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent address
    monotonic within an agent's lifetime.
 
 3. **Single venue writes.** An agent lives on one venue. All writes — message delivery,
-   agent runs, config updates — are serialised on that venue via atomic per-agent
-   cursor updates (`cursor.updateAndGet`). Cross-venue sync is replication: the
+   agent runs, config updates — are serialised on that venue via atomic
+   compare-and-swap on the agent record. Cross-venue sync is replication: the
    more-recent state replaces the stale one.
 
 4. **Three levels.** The agent update (level 1) manages framework bookkeeping:
@@ -60,10 +60,10 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `ts` | long | Timestamp of the last write. **The merge discriminator.** Set on every write. |
 | `status` | string | `"SLEEPING"` \| `"RUNNING"` \| `"SUSPENDED"` \| `"TERMINATED"` |
 | `config` | map | Framework-level configuration. Includes `operation` (default transition op). |
-| `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function-specific configuration (e.g. LLM provider, model) lives here, not in `config`. Set at creation via optional initial state. Note: `state.transcript` is no longer used — `session.history` is the canonical conversation record. |
+| `state` | any | User-defined state. Opaque to the framework. Passed to and returned from the transition function. Transition-function-specific configuration (e.g. LLM provider, model) lives here, not in `config`. Set at creation via optional initial state. Conversation content lives on the session record (`session.frames[0].conversation`), not here. |
 | `tasks` | index | `Index<Blob, ACell>` of inbound request Job IDs. Persistent until resolved. Ordered by Job ID. |
 | `pending` | index | `Index<Blob, ACell>` of outbound Job IDs the agent is waiting on. Ordered by Job ID. |
-| `sessions` | index | `Index<Blob, ACell>` of sessions. Each session contains history, pending messages, metadata, and per-session state (`c/`). See AGENT_SESSIONS.md. |
+| `sessions` | index | `Index<Blob, ACell>` of sessions. Each session contains `frames` (the goal-tree frame stack — `frames[0].conversation` is the canonical transcript), pending messages, metadata, and per-session state (`c/`). See AGENT_SESSIONS.md and GOAL_TREE.md. |
 | `timeline` | vector | Append-only log of transition records (§2.3). Grows with each successful agent run. Timestamped for audit. |
 | `caps` | map | Capability attenuations — UCAN scoping for agent tool calls. See [UCAN.md §5.4](./UCAN.md) for Model A (user-scoped) vs Model B (independent DID). |
 | `error` | string? | Last error message, or null. Set when the transition function fails. |
@@ -85,7 +85,8 @@ days or weeks. Tasks can come from humans (via MCP), other agents, or the system
 **Messages** are delivered to `session.pending` — a per-session queue. Each
 message is an envelope with content and caller metadata. Messages are drained
 by the run loop on the next transition cycle for that session and appended to
-`session.history` as turns. See AGENT_SESSIONS.md for the session model.
+`session.frames[0].conversation` as user turns. See AGENT_SESSIONS.md for the
+session model.
 
 An agent also tracks **pending** outbound jobs — jobs it has explicitly created
 via the async invoke tool during the tool call loop (level 2). The agent
@@ -172,15 +173,15 @@ The agent system separates concerns into three levels. Each level is a grid
 operation, pluggable and replaceable independently.
 
 ```
-Level 1: Agent Update          agent:trigger (AgentAdapter)
+Level 1: Agent Update          agent:trigger
   │  manages sessions, timeline, status
   │  invokes level 2 as a grid operation
   ▼
-Level 2: Agent Transition      llmagent:chat (LLMAgentAdapter)
-  │  manages conversation history, tool call loop, state
+Level 2: Agent Transition      llmagent:chat | goaltree:chat
+  │  manages conversation, tool call loop, state
   │  invokes level 3 as a grid operation
   ▼
-Level 3: LLM Call              langchain:openai (LangChainAdapter)
+Level 3: LLM Call              langchain:openai | langchain:anthropic | ...
      single request → response, structured I/O
 ```
 
@@ -207,25 +208,25 @@ rule engine, workflow, custom code).
 For LLM agents (`llmagent:chat`), level 2:
 
 - Reads LLM configuration from `state.config`
-- Reads the **session history** from `input.session.history` — turn envelopes
-  `{role, content, ts, source}` from prior transitions, converted to LLM
-  `{role, content}` messages (`ts`/`source` stripped)
+- Reads the **session frame stack** from `input.session.frames` — turn
+  envelopes `{role, content, ts, source}` live inside `frames[0].conversation`
+  (plus any pushed child frames), converted to LLM `{role, content}` messages
+  (`ts`/`source` stripped)
 - Builds a **per-turn LLM context** with FRESH ephemeral additions every turn:
   - System message (identity prompt + lattice cheat sheet, rebuilt fresh)
   - Resolved context entries
   - Resolved loaded paths
   - `[Context Map]` budget summary
-  - Then appends the session history
+  - Then appends the rendered frame conversation
   - Then appends pending job results and new messages
 - Invokes level 3 (LLM call) as a grid operation
 - Handles tool call responses: execute tools, feed results back, call level 3
   again (loop until the LLM returns a text response or a limit is reached)
 - The assistant's final response is returned to the framework, which appends
-  it as a turn to `session.history`
-- No per-adapter transcript persistence — `session.history` is the canonical
-  record, managed by the framework. The system prompt, context entries, and
-  `[Context Map]` are NEVER persisted — they rebuild fresh each turn so
-  updates apply immediately to existing agents.
+  it as a turn to `session.frames[0].conversation`
+- The session frame stack is the canonical conversation record. The system
+  prompt, context entries, and `[Context Map]` are ephemeral — they rebuild
+  fresh each turn so config updates apply immediately to existing agents.
 
 Level 2 does not import or depend on any LLM library. It invokes level 3 as a
 grid operation and works with structured message maps. This makes it pluggable:
@@ -236,12 +237,12 @@ The level 3 operation to invoke is specified in `state.config.llmOperation`
 (default: `langchain:openai`). The agent creator picks both the agent loop
 strategy (level 2) and the LLM backend (level 3).
 
-The other level 2 adapter, `goaltree:chat` (GoalTreeAdapter), is documented
-separately in [GOAL_TREE.md](./GOAL_TREE.md). It reads `session.history` for
-cross-transition context (same as LLMAgentAdapter). Each transition builds a
-fresh root frame; the frame stack is not persisted across transitions. It
-supports typed outputs (schema-enforced `complete`/`fail`), opt-in harness
-tools, runtime tool discovery via `more_tools`, and auto-compact nudges.
+The other level 2 adapter, `goaltree:chat`, is documented separately in
+[GOAL_TREE.md](./GOAL_TREE.md). It reads and writes the same `session.frames`
+stack, with `frames[0]` persisting for the life of the session. Each transition
+updates the stack atomically on the session record. It supports typed outputs
+(schema-enforced `complete`/`fail`), opt-in harness tools, runtime tool
+discovery via `more_tools`, and auto-compact nudges.
 
 ### 3.3 Level 3 — LLM Call (Single Step)
 
@@ -376,20 +377,19 @@ rules, load order, size considerations, and phasing.
 ### 3.6 Tool Palette
 
 Agents declare their tools in `state.config.tools` — a curated list of
-operation paths and harness tool names. Set `defaultTools: false` to disable
-the legacy 18-tool default set. Zero tools by default — a bare chatbot just
-responds with text.
+operation paths and harness tool names. Zero tools by default — a bare
+chatbot just responds with text. Agents that want the built-in tool set
+opt in via `defaultTools: true`.
 
 ```json
 "tools": ["v/ops/covia/read", "v/ops/covia/write", "subgoal", "compact"]
 ```
 
-Entries are either **operation paths** (resolved via `ContextBuilder.buildConfigTools`
-to LLM tool definitions with name, description, parameters from the asset
-metadata) or **harness tool names** (resolved by `GoalTreeAdapter.resolveHarnessTools`
-to built-in tool definitions).
+Entries are either **operation paths** (resolved to LLM tool definitions
+from the asset metadata: name, description, parameters) or **harness tool
+names** (resolved to built-in tool definitions provided by the adapter).
 
-#### Harness tools (GoalTreeAdapter)
+#### Harness tools
 
 All opt-in — include by name in `config.tools` if needed.
 
@@ -541,16 +541,16 @@ agent depends on `overwrite` and the existing status:
 | `true`        | `TERMINATED` | **CREATED** | `removeAgent` then fresh record — wipes timeline, sessions, tasks, pending, error | `true`  | `false` |
 
 **Why RUNNING is rejected.** A transition currently in flight has already
-captured the old `state.config` at the start of `processGoal` (level 2). Mutating
-`config` mid-run produces a Frankenstein agent — old prompt for the current
-turn, new prompt for the next — that surfaces as a hard-to-debug "why is the
-agent using the old policy" mystery. Forcing the caller to wait for SLEEPING (or
-explicitly cancel) eliminates the race.
+captured the old `config` when it started. Mutating `config` mid-run produces
+a Frankenstein agent — old policy for the current turn, new policy for the
+next — that surfaces as a hard-to-debug "why is the agent using the old
+policy" mystery. Forcing the caller to wait for SLEEPING (or explicitly
+cancel) eliminates the race.
 
 **Why SLEEPING / SUSPENDED are safe.** Both are dormant: no run loop is
-executing a transition, no thread is reading the config. The
-`updateConfigAndState` mutation is atomic (under `cursor.updateAndGet`), so
-there is no partial-write window. The next `wakeAgent` reads the new config.
+executing a transition, no thread is reading the config. The update is
+atomic on the agent record, so there is no partial-write window. The next
+wake reads the new config.
 
 **Why TERMINATED wipes.** TERMINATED is the explicit "throw it all out" signal.
 If the caller wanted to preserve history, they would have updated in-place from
@@ -652,25 +652,23 @@ run's `finally` block.
    `tasks`, `pending` (with resolved statuses), and the picked `session`.
    The virtual thread blocks on `.join()` of the returned future — no
    lock is held; other agents' loops run independently.
-5. On success — **merge with current state** via `mergeRunResult`, a
-   single atomic `cursor.updateAndGet` on the agent record:
-   - Re-read the record inside the CAS (not the stale snapshot from step 1).
-   - Remove completed tasks from the **current** `tasks` index (not the
-     stale snapshot). This prevents overwriting tasks added by concurrent
-     `addTask` calls during the transition.
+5. On success — **merge with current state** atomically on the agent record:
+   - Re-read the record inside the merge (not the stale snapshot from step 1).
+   - Remove completed tasks from the **current** `tasks` index. This prevents
+     overwriting tasks added by concurrent task submissions during the
+     transition.
    - Drain the presented count of pending messages from the picked
-     session's `pending` queue. Messages appended by concurrent
-     `appendSessionPending` calls during the transition (including the
-     agent's own self-chat / self-message) are preserved at indices
-     beyond the presented count and picked up by the next iteration's
-     `hasWork` check.
+     session's `pending` queue. Messages appended concurrently during the
+     transition (including the agent's own self-chat / self-message) are
+     preserved beyond the presented count and picked up by the next
+     iteration's work check.
    - Update `state` from the returned value.
    - Append timeline entry with full audit data (§2.4).
    - Status is set to `RUNNING` if work remains, else `SLEEPING`.
-6. Complete any picked chat Job's `CompletableFuture` and drain
-   `deferredCompletions` to finish task Jobs parked by
-   `agent:complete-task` / `agent:fail-task` — both strictly AFTER the
-   merge, so external awaiters see timeline and state writes first.
+6. Complete any picked chat Job and drain parked task completions from
+   `agent:complete-task` / `agent:fail-task` calls made during the
+   transition — both strictly AFTER the merge, so external awaiters see
+   timeline and state writes first.
 7. Loop back to step 1. The top-of-loop check at step 2 is the sole
    exit gate.
 8. On exception:
@@ -681,12 +679,10 @@ run's `finally` block.
    - Note: task completions made via tool calls during execution are
      **not** rolled back (§3.4.1).
 
-After the loop exits (break or exception), a `finally` block removes
-the agent from `runningLoops` (via `remove(key, value)` so a concurrent
-new run is not clobbered) and re-checks `hasWork` on the agent. If
-work landed during exit, a fresh `wakeAgent` call is issued — any wake
-whose lattice write preceded this re-check triggers a new loop; any
-wake landing after sees an empty slot and wins its own CAS.
+After the loop exits (break or exception), the agent is released from
+its running slot and work is re-checked; if work landed during exit, a
+fresh wake is issued. The exit-vs-wake race is closed so no wake is
+ever dropped.
 
 The transition operation always comes from `config.operation` (set at creation).
 Callers cannot override it — to change the transition function, update the config.
@@ -707,11 +703,11 @@ the response visible to callers without querying agent state separately.
 | **Delete** | `agent:delete` | Default: set status → TERMINATED (record retained for audit). With `remove:true`: physically remove the lattice slot. | any | TERMINATED (or absent) |
 | **Fork** | `agent:fork` | Create a NEW agent at a different `agentId` from this one's config + optional state + optional timeline. The source is untouched; the target slot must be empty unless `overwrite:true` and TERMINATED. | source must not be TERMINATED | new agent SLEEPING |
 
-**All mutations are atomic.** Each operation is a single `cursor.updateAndGet`
-on the agent's lattice cell, so concurrent operations against the same agent
-serialise cleanly without explicit locking. The run loop's cycle is a
-read → transition → merge sequence; concurrency with external mutations
-is handled by reading the current record inside `mergeRunResult`'s CAS
+**All mutations are atomic.** Each operation is a single compare-and-swap
+on the agent's lattice cell, so concurrent operations against the same
+agent serialise cleanly without explicit locking. The run loop's cycle
+is a read → transition → merge sequence; concurrency with external
+mutations is handled by reading the current record inside the merge
 (not the pre-transition snapshot) so late writes are never lost.
 
 **Status invariants:**
@@ -792,17 +788,17 @@ unconditionally.
 
 ### 5.2 Why One Value?
 
-All writes to an agent are serialised on one venue through atomic cursor
-updates (`cursor.updateAndGet`). Message delivery, task addition, and run loop
-merges are all compare-and-swap operations against the same lattice slot, so
-there are no lost updates even though multiple threads may write concurrently.
+All writes to an agent are serialised on one venue through atomic
+compare-and-swap on the agent's lattice slot. Message delivery, task
+addition, and run loop merges all contend against the same slot, so there
+are no lost updates even though multiple threads may write concurrently.
 
 The run loop never holds a lock. It reads a snapshot at the top of each
 iteration, runs the transition (which may take seconds or minutes), then
-merges the result via a single atomic `cursor.updateAndGet`. Concurrent
-`addTask` and `appendSessionPending` calls proceed while the transition runs;
-their writes are preserved because `mergeRunResult` reads the *current*
-sessions/tasks inside the CAS (not the stale pre-transition snapshot).
+merges the result atomically. Concurrent task additions and session
+message appends proceed while the transition runs; their writes are
+preserved because the merge reads the *current* sessions/tasks (not the
+stale pre-transition snapshot).
 
 Cross-venue sync is replication: the venue hosting the agent always has the latest
 ts. Replicas receive the complete state.

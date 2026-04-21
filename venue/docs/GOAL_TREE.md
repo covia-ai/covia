@@ -1,6 +1,6 @@
 # Covia Goal Tree
 
-**Version:** 2.1 Draft (session-unified)
+**Version:** 2.1 (session-unified)
 **Purpose:** Hierarchical goal decomposition, execution, and history for lattice-aware agents. Agents pursue goals; sub-goals open scoped frames with their own conversation; results return up the tree. The goal tree IS the session's conversation record — no separate history structure.
 
 ## Core Idea
@@ -17,15 +17,11 @@ Level 2: GoalTreeAdapter             (domain — goal frames, tool loop, context
 Level 3: langchain:openai etc.       (LLM call — via grid operation)
 ```
 
-**GoalTreeAdapter** (`covia.adapter.agent.GoalTreeAdapter`) is a more powerful variant of `LLMAgentAdapter`. It replaces the flat conversation model with a frame stack, adds 4 harness tools (subgoal, complete, fail, compact), and manages scoped context. The existing `LLMAgentAdapter` remains available for simpler agents that don't need goal decomposition.
+The goal-tree adapter is the richer of the two Level 2 domains: it organises the conversation as a frame stack rather than a flat list, exposes harness tools (`subgoal`, `complete`, `fail`, `compact`), and manages scoped context. The simpler LLM chat adapter is the degenerate case of the same shape.
 
-Both adapters:
-- Use the same Level 3 message format (`{messages, tools?, responseFormat?}`)
-- Dispatch tool calls through the same capability-checking pipeline
-- Persist state via `AgentState` on the lattice
-- Are invoked by Level 1 (`agent:run` / `agent:trigger`)
+Both share the same Level 3 contract (`{messages, tools?, responseFormat?}`), the same capability-checking dispatch for tool calls, the same session record layout, and the same Level 1 entry points.
 
-The goal tree adapter registers as operation `goaltree:chat`, used in agent config:
+The goal-tree adapter registers as operation `goaltree:chat`, used in agent config:
 ```json
 {"operation": "goaltree:chat"}
 ```
@@ -43,7 +39,7 @@ Everything goes here — nothing lives alongside. Live turns from chat/message i
 | Session created | Root frame created, description = session origin (first message, task request, operation invocation) |
 | Chat / message intake | Envelope appended to `sessions/<sid>/pending` |
 | Transition picked | Envelopes drained from pending, appended to root frame conversation as `user` turns |
-| Transition runs | Assistant turns, tool calls, tool results, subgoal branches appended atomically in `mergeRunResult` |
+| Transition runs | Assistant turns, tool calls, tool results, subgoal branches appended atomically to the active frame |
 | Agent calls `compact` | Run of live turns collapses into a segment with the agent's summary |
 | Agent calls `subgoal` | Child frame pushed onto `sessions/<sid>/frames`; child conversation builds up; pop on `complete` |
 | Session closed | Frames persist on the lattice — no destructive cleanup |
@@ -92,7 +88,7 @@ Found all three. I'll research vendor A first.
 
 From the parent's perspective, `subgoal` is just a tool call that branches to the child and returns structured data. The child's 15 turns of work are invisible.
 
-**Tool name convention:** Operations use colons internally (`covia:inspect`) but LLMs see underscores (`covia_inspect`) because MCP and most tool-calling APIs don't permit colons in tool names. The harness handles this mapping automatically via `ContextBuilder.deriveToolName()`.
+**Tool name convention:** Operations use colons internally (`covia:inspect`) but LLMs see underscores (`covia_inspect`) because MCP and most tool-calling APIs don't permit colons in tool names. The harness handles the mapping.
 
 ## Conversation Structure
 
@@ -299,9 +295,7 @@ The `summary` parameter is required — only the LLM knows what matters in the w
 
 ## Scoped Loads
 
-Loads are lexically scoped to frames. Children inherit parent loads.
-
-The existing `context_load` / `context_unload` tools from LLMAgentAdapter are reused. The difference is that GoalTreeAdapter tracks loads per frame and manages inheritance on push/pop.
+Loads are lexically scoped to frames. Children inherit parent loads. On pop, the child's own loads are freed and any shadowed parent loads restored.
 
 ### Inheritance
 
@@ -336,7 +330,7 @@ Each frame has its own `loads` map. Effective loads at any depth = merge of ance
 
 ## Storage Tiers
 
-Four virtual namespaces, resolved by `NamespaceResolver` implementations registered on `CoviaAdapter`. Each has a distinct lifetime and scope, forming a hierarchy from permanent to ephemeral.
+Four virtual namespaces, each with a distinct lifetime and scope, forming a hierarchy from permanent to ephemeral. See `GRID_LATTICE_DESIGN.md` for the resolution model.
 
 | Storage | Lifetime | Scope | Backed by | Purpose |
 |---------|----------|-------|-----------|---------|
@@ -353,7 +347,7 @@ All existing `covia:*` operations work with each prefix transparently — agents
 
 ### `t/` — Job-Scoped Temp
 
-`t/` resolves to the `temp` field within the current job record. The `jobId` comes from the `RequestContext`, so each Job gets isolated temp. Sub-operations that execute within a parent Job's context inherit the `jobId` and therefore share `t/`:
+`t/` is scoped to the current Job — each Job gets its own isolated temp. Sub-operations executing within a parent Job inherit its scope and therefore share `t/`:
 
 | Scenario | `t/` scope | Why |
 |---|---|---|
@@ -458,7 +452,7 @@ A session may be working inside a child frame (subgoal in progress) when a new c
 
 **Intake is uniform — envelopes always land in `sessions/<sid>/pending` regardless of frame depth.** The subgoal-aware logic is at drain time.
 
-**Draining targets the root frame, not the active child.** When `mergeRunResult` drains `pending` into conversation, turns are appended to `frames[0].conversation`. Subgoals are the agent's internal decomposition; the user is in dialogue with the session, not with a subgoal.
+**Draining targets the root frame, not the active child.** User turns from drained envelopes are always appended to `frames[0].conversation`. Subgoals are the agent's internal decomposition; the user is in dialogue with the session, not with a subgoal.
 
 **The active child sees the new user turn via ancestor context.** `renderAncestors` renders the root frame at decreasing budget; a newly-appended user turn at the tail of root's conversation shows up on the child's next inference. No extra plumbing.
 
@@ -490,7 +484,7 @@ subgoal("Analyse Delta Corp")
 
 Parent decides: retry, skip, escalate, or fail itself. The failed child frame is popped from the stack; its conversation is kept as a compacted segment in the parent's conversation with `summary` derived from the failure reason — useful for debugging and for the parent's next-inference context.
 
-**Transition atomicity.** All frame-stack changes produced by a transition (pushes, pops, appends, compactions, pending drains) land in one CAS inside `mergeRunResult`. A transition that crashes mid-inference leaves the lattice at its pre-transition state; the run loop retries from there. No partial stack is ever visible to readers. Because the full stack is on the lattice, the failure point is already explorable — no separate `state.lastFailure` snapshot is needed.
+**Transition atomicity.** All frame-stack changes produced by a transition (pushes, pops, appends, compactions, pending drains) land atomically on the session record. A transition that crashes mid-inference leaves the lattice at its pre-transition state; the run loop retries from there. No partial stack is ever visible to readers. Because the full stack is on the lattice, the failure point is already explorable.
 
 ## Zooming Into History
 
@@ -525,9 +519,7 @@ covia_inspect({path: "sessions/<sid>/frames/1", budget: 500})
 
 ## Context Assembly Layout
 
-The harness assembles the full LLM context for each inference. The ordering follows attention research: reference material at top (primacy), conversation in middle, goal and current turn at bottom (recency).
-
-This extends `ContextBuilder` with new sections for ancestor context and goal framing:
+The harness assembles the full LLM context for each inference. Ordering follows attention research: reference material at top (primacy), conversation in middle, goal and current turn at bottom (recency).
 
 ```
 +----------------------------------------------------------+
@@ -536,9 +528,8 @@ This extends `ContextBuilder` with new sections for ancestor context and goal fr
 |    Static per session.                                    |
 +----------------------------------------------------------+
 | B. TOOL SCHEMAS                               variable   |
-|    4 harness tools (subgoal, complete, fail, compact)     |
+|    Harness tools (subgoal, complete, fail, compact, ...)  |
 |    + configured operation tools (covia_*, agent_*, etc.)  |
-|    Resolved via ContextBuilder.buildConfigTools()         |
 +----------------------------------------------------------+
 | C. CONTEXT MAP                                  ~300 B   |
 |    Budget tracking (bytes consumed/remaining).            |
@@ -546,12 +537,12 @@ This extends `ContextBuilder` with new sections for ancestor context and goal fr
 +----------------------------------------------------------+
 | D. ANCESTOR CONTEXT                          ~200-500 B  |
 |    Parent, grandparent, etc. conversations rendered       |
-|    at decreasing budgets via CellExplorer.                |
+|    at decreasing budgets.                                 |
 |    Provides: chain of purpose, prior sibling results.     |
 +----------------------------------------------------------+
 | E. LOADED DATA                           agent-controlled |
 |    Inherited loads + own scoped loads.                    |
-|    Refreshed from lattice each turn via ContextLoader.    |
+|    Refreshed from lattice each turn.                      |
 +----------------------------------------------------------+
 | F. CONVERSATION                               remainder  |
 |    [compacted segments] + live turns.                     |
@@ -664,13 +655,7 @@ The frame stack is stored as a vector. The last element is the active frame. Pus
 
 Config is read on every transition and propagated into the transition input. Per-session data (frames, pending) is fetched from the session record, not the agent.
 
-### Legacy fields being removed
-
-- **`sessions/<sid>/history`** — a flat turn vector that was built as a parallel structure. The conversation lives inside the root frame; no separate history field exists in the target schema. The turn envelope shape (`{role, content, ts, source}`) carries over unchanged as entries in `frames[0].conversation`.
-- **In-memory frame stack in `GoalTreeAdapter.processGoal`** — the adapter built a fresh root frame per transition and discarded it at the end. Frames are session state and read from the lattice; there is nothing to build.
-- **`state.lastFailure`** — a failure-only snapshot kept as a debug aid because the real stack wasn't persisted. With frames on the lattice, the full stack at failure is already there; this field is redundant.
-
-`llmagent:chat` and `goaltree:chat` write and read the same `sessions/<sid>/frames[0].conversation`. LLMAgent is a root-frame-only, no-harness-tools configuration.
+Both the full goal-tree adapter and the simpler LLM chat adapter share this session shape. The simpler case is a single root frame with no harness tools enabled; the goal-tree case adds nested frames and harness tools. A single reader walks both.
 
 ## Full Example: What the LLM Sees
 
@@ -857,74 +842,16 @@ As goals get more complex, the agent can opt into more tools:
 13. **Session IS a root frame.** Root frame is created at session creation and persists for the session's life. Transitions append to it; they do not rebuild it. Chat sessions never `complete` the root; one-shot invocations do.
 14. **The frame stack is the session's conversation record.** `sessions/<sid>/frames[0].conversation` holds everything — user turns, assistant turns, tool calls, tool results, segments, and child-frame references. There is no `session.history` field, no per-adapter transcript, no debug snapshot on failure; the full stack on the lattice is the only record.
 15. **Text-only = implicit complete.** Natural LLM API contract. No bouncing.
-16. **GoalTreeAdapter and LLMAgentAdapter share the session schema.** LLMAgentAdapter is the degenerate case: root frame only, no harness tools enabled. Agents choose adapter via config; readers consume both the same way.
+16. **Goal-tree and simple-chat adapters share the session schema.** Simple chat is the degenerate case: root frame only, no harness tools enabled. Agents choose adapter via config; readers consume both the same way.
 17. **Existing tools reused.** `context_load`, `context_unload`, all `covia:*` operations, `agent:*` operations — everything from the existing tool palette. Goal tree adds 7 harness tools, not a new tool universe.
 18. **Budget is harness-managed by default.** Agent gets yes/no on loads, not arithmetic. Context map shows numbers for advanced agents.
 19. **Context layout follows attention research.** Reference at top (primacy), conversation in middle, current turn at bottom (recency).
 20. **Frame stack is lattice data on the session record.** Stored in `sessions/<sid>/frames`. Explorable, mergeable, recoverable. Survives across transitions and agent restarts.
 21. **Compacted segments accumulate.** Each `compact` appends a segment. Phase boundaries preserved. Per-question bracketing is the primary use in chat sessions.
-22. **Intake queue stays at session level.** `sessions/<sid>/pending` is the pre-transition staging area; envelopes are drained into the root frame as `user` turns atomically inside `mergeRunResult`. Keeps concurrent intake separate from the append path.
+22. **Intake queue stays at session level.** `sessions/<sid>/pending` is the pre-transition staging area; envelopes are drained into the root frame as `user` turns atomically with the transition's other writes. Keeps concurrent intake separate from the append path.
 
-## Implementation Notes
+## Related Design
 
-### GoalTreeAdapter Structure
-
-```
-covia.adapter.agent.GoalTreeAdapter extends AAdapter
-  - processGoal(RequestContext, ACell input) -- entry point; reads session record from input
-  - loadRootFrame(sessionRecord) -- reads existing frames vector from session
-  - runFrame(frames, activeIdx, RequestContext) -- iterative frame execution
-  - buildFrameContext(frames) -- context assembly with ancestors
-  - handleSubgoal(input, frames) -- push frame; transition exits so next cycle runs child
-  - handleComplete(input, frames) -- pop frame, return result to parent frame
-  - handleFail(input, frames) -- pop frame, return error
-  - handleCompact(input, frames) -- segment live turns in active frame
-  - appendTurnsAtomic(frames, newTurns) -- append inside mergeRunResult CAS
-```
-
-### Session-frame integration
-
-The run-loop merge step (`mergeRunResult`) atomically:
-1. Drains the prefix of `sessions/<sid>/pending` that the transition saw
-2. Appends user turns (converted from drained envelopes) to `frames[0].conversation`
-3. Appends the transition's assistant / tool / subgoal turns to the active frame's conversation
-4. Writes the agent timeline entry
-
-All inside one CAS on the session record. Readers never see partial state.
-
-### Reuse from Existing Code
-
-| Component | Reuse | Notes |
-|-----------|-------|-------|
-| `ContextBuilder` | Extend with `withAncestorFrames()` | Budget-aware ancestor rendering across the frame stack |
-| `ContextLoader` | Reuse as-is | Resolves loaded paths and context entries |
-| `CellExplorer` | Reuse as-is | Renders ancestors, segments at budget |
-| `CapabilityChecker` | Reuse as-is | Same capability enforcement |
-| Tool dispatch | Reuse `executeToolCall` pattern | Same config tool resolution, grid dispatch |
-| `AgentState` | Frame data moves to session record | `state.goalTree.frames` removed. Agent state holds only `config` and adapter-agnostic fields. |
-| Session record | Add `frames` vector | `sessions/<sid>/frames[0].conversation` is canonical history. Replaces `sessions/<sid>/history`. |
-| `LLMAgentAdapter` | Reads/writes same session shape | Degenerate case: single root frame, no harness tools. Single reader for both adapters. |
-| Level 3 contract | Identical | Same `{messages, tools, responseFormat}` input/output |
-| `CoviaAdapter` | `NamespaceResolver` registry | Virtual namespace dispatch for `t/`, `n/`, `c/` |
-| `RequestContext` | `jobId`, `sessionId`, `agentId` fields | Needed by `t/` / `c/` / `n/` resolvers to rewrite paths |
-| Job record | `temp` field | MapLattice within job record for `t/` backing storage |
-
-### Cutover plan
-
-The flat-history structure and in-memory frame stack are two halves of the same gap — removed together. Sessions are a recent primitive and not widely persisted across upgrades, so the cutover is a direct replacement rather than a data migration.
-
-1. **Session record.** Add `frames` to `ensureSession`'s initial shape; initialise with a single empty root frame. Drop `history` from the initial shape.
-2. **Writer path.** `mergeRunResult` drops its `history` append branch. In the same CAS it (a) drains `pending` envelopes as user turns into `frames[0].conversation` (root, regardless of active depth — see Concurrent Intake) and (b) appends the transition's assistant / tool / compact / subgoal entries to the active frame's conversation (`frames[last]`). A push from `subgoal` grows `frames` by one; a pop from `complete`/`fail` shrinks it by one, with the child's conversation folded into the parent's as a segment on failure.
-3. **Reader path.** `AgentAdapter.sessionHistory(input)` removed. Adapters read `input.session.frames` (a full stack) and render via `GoalTreeContext.renderAncestors` + `renderConversation`. `effectiveMessages(input)` unchanged.
-4. **`ContextBuilder`.** `withSessionHistory` removed; new `withFrameStack(frames)` delegates to the existing GoalTreeContext renderers — these already handle segments and preserve tool-call interleaving.
-5. **`GoalTreeAdapter.processGoal`.** Stop constructing a fresh root frame. Read frames from the session map, append during execution via the existing `updateFrame` path, emit the final stack back as part of the transition output so `mergeRunResult` persists it. `state.lastFailure` code path removed — the stack on the lattice is the post-mortem.
-6. **`LLMAgentAdapter.processChat`.** Writes assistant response as a live turn into the root frame via the same framework path — no adapter-owned conversation state.
-7. **Tests.** Assertions referencing `session.history` redirect to `session.frames[0].conversation`. Turn envelope shape unchanged; most assertions need only a path update.
-
-### Virtual Namespace Resolvers
-
-`t/`, `n/`, and `c/` are virtual prefixes resolved by `NamespaceResolver` implementations registered on `CoviaAdapter`. See GRID_LATTICE_DESIGN.md §4.5 for the full design.
-
-- **`t/` resolver** (`TempNamespaceResolver`) — navigates to `j/{ctx.jobId}/temp/` within the user's job index. Set by `JobManager` on every Job. Dies with the Job.
-- **`n/` resolver** (`AgentNamespaceResolver`) — navigates to `g/{ctx.agentId}/n/` within the agent's record. Uses `ctx.agentId`. Persistent per-agent.
-- **`c/` resolver** (`SessionNamespaceResolver`) — rewrites to `g/{ctx.agentId}/sessions/{ctx.sessionId}/c/`. Requires both `agentId` and `sessionId`; errors otherwise. Persistent per-session, survives transitions.
+- `GRID_LATTICE_DESIGN.md` — virtual namespace resolution for `t/` / `n/` / `c/`, session record shape, lattice addressing
+- `AGENT_LOOP.md` — run loop, intake, transition contract
+- `AGENT_SESSIONS.md` — session lifecycle, pending envelope shape
