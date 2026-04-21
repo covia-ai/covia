@@ -1,43 +1,13 @@
-# Agent Sessions — Design Proposal
+# Agent Sessions
 
-**Status:** Implemented — April 2026. Stages 1–3 complete.
+Sessions are the primitive that sits between *agent* (long-lived identity) and *transition* (single compute step). A session is a **scoped interaction between parties with its own history and context, jointly owned by the participants** — a communication channel. Whatever the parties build together (documents, deliverables, long-lived work state) lives elsewhere — see [PROJECTS.md](./PROJECTS.md) for that layer.
 
-This doc proposes **sessions** as a first-class agent primitive: **scoped interactions between parties, with their own history and context, jointly owned by the participants**. A session is a communication primitive — a channel. Whatever the parties build together (documents, deliverables, long-lived work state) lives elsewhere (see [PROJECTS.md](./PROJECTS.md) for that layer).
+Sessions carry:
 
-The current agent model assumes 1 transition = 1 timeline entry = 1 result snapshot. This is fundamentally a request handler model. It cannot express:
-
-- Long-running conversations between an agent and a counterparty
-- Multiple concurrent scoped channels (agent has conversation A with user X about topic P while holding conversation B with agent Y about topic Q)
-- Persistent working memory beyond the next transition's input
-- Coherent "what channel is this message on" routing
-
-Sessions fix this by introducing a layer between *agent* (long-lived identity) and *transition* (single compute step). Symptom issues #67, #68, #69 fall out naturally — they're all consequences of the missing session layer.
-
----
-
-## 1. Problem
-
-### 1.1 Current model
-
-An agent record contains a flat `timeline` vector. Every transition appends one entry that snapshots the full state, config, result, and task results. There is no notion of:
-
-- **Conversation continuity** — turn N+1 has no link to turn N other than re-reading the timeline
-- **Logical work units** — a multi-step task is N independent timeline entries
-- **Multiple parallel contexts** — all work is interleaved in one timeline
-- **Memory beyond the next transition** — state is opaque to the framework, history is reconstructed from timeline
-
-### 1.2 Symptoms (existing issues)
-
-- **#67** — Config duplicated in every timeline entry (no notion of "config snapshot per session")
-- **#68** — Result duplicated in `result.response` and `taskResults` (no notion of "session result")
-- **#69** — Empty `messages`/`pending`/`inbox` per timeline entry (channels are agent-level, not session-level)
-- **#71** — Manager agents lose context between pipeline steps
-- **#57** — Multi-hop delegation timeout (no session = no resumable state)
-- **General** — Cannot build a chatbot without faking conversation history
-
-### 1.3 What's missing
-
-A persistent context that an agent maintains state and history within. Independent of any single request. Discoverable, addressable, and pruneable.
+- **Conversation continuity** — turn N+1 is linked to turn N by shared session id
+- **Logical work units** — a multi-step exchange is one session, not N unrelated snapshots
+- **Multiple parallel contexts** — an agent can hold independent conversations concurrently
+- **Memory for the conversation** — the session is the store; the framework manages it
 
 ---
 
@@ -210,17 +180,17 @@ This matches both A2A `contextId` and MCP `Mcp-Session-Id`:
 > **MCP** — server mints `Mcp-Session-Id` at initialisation, client echoes on every subsequent request; stale id returns 404 and forces re-initialisation.
 > — [modelcontextprotocol.io/specification/2025-06-18/basic/transports](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
 
-**Why this is right:**
+**Properties:**
 
 - **Protocol-compliant** — matches A2A and MCP without translation layers
-- **No implicit continuity** — a fresh request always gets a fresh session; caller opts into continuity by echoing the id (this is different from "per-caller default" which silently re-binds across calls)
+- **No implicit continuity** — a fresh request always gets a fresh session; caller opts into continuity by echoing the id, not by any per-caller default
 - **Uniform audit** — every interaction has a `{sessionId, parties, started}` record, whether one-shot or long-lived
-- **Symptoms #67/#68/#69 fix uniformly** — session history lives in the session; agent-level timeline reduces to a thin audit log of session events
+- **Session-local history** — conversation lives in the session; the agent-level timeline is a thin audit log of session events
 - **One transition path** — adapters always see a session; no two contracts to maintain (§6.1/6.2)
 
-**What about pipeline agents (Alice, Bob, Carol)?** Each invocation gets a short-lived session that completes in one or two turns. The orchestration supplies `sessionId` if it wants Bob's enrichment and Carol's decision grouped under the invoice's pipeline session; otherwise each agent gets its own per-invocation session. Mild overhead (one session record per invocation) buys uniform provenance.
+**Pipeline agents (Alice, Bob, Carol).** Each invocation gets a short-lived session that completes in one or two turns. The orchestration supplies `sessionId` if it wants Bob's enrichment and Carol's decision grouped under the invoice's pipeline session; otherwise each agent gets its own per-invocation session. Mild overhead (one session record per invocation) buys uniform provenance.
 
-**What about per-caller continuity (old Option A)?** Not a framework default — it's a caller pattern. A chatbot client that wants "one ongoing conversation per user" stores the minted `sessionId` alongside the user profile and echoes it. The framework doesn't need to know.
+**Per-caller continuity.** Not a framework default — it's a caller pattern. A chatbot client that wants "one ongoing conversation per user" stores the minted `sessionId` alongside the user profile and echoes it. The framework doesn't need to know.
 
 ### 5.5 Messages and session routing
 
@@ -253,9 +223,7 @@ client → agent_message {agentId, sessionId: "s-01HX...",
 
 #### 5.5.1 Where messages live
 
-Routed messages are appended directly to `g/<agent>/sessions/<sid>/history`. There is no agent-level `messages` queue for conversational traffic — that's what #69 was complaining about, and it goes away.
-
-There is no agent-level inbox. All messages are routed to `session.pending` and drained by the run loop on the next transition cycle for that session.
+All conversational traffic is session-scoped. Messages land in `sessions/<sid>/pending` and are drained into `sessions/<sid>/history` by the run loop on the next transition cycle for that session. There is no agent-level inbox — conversation lives with the conversation.
 
 #### 5.5.2 Multiple messages before the agent transitions
 
@@ -275,13 +243,13 @@ When one agent messages another as part of a shared pipeline run, the orchestrat
 
 When agents correspond outside an orchestration (Bob asks Carol a question on his own initiative), each participant's `agent_message` / `agent_request` still follows the mint-on-missing rule: the first outbound call mints a session, subsequent calls echo the id. The two agents share one session because they share the id, not because of any special "agent-to-agent" machinery.
 
-This keeps §9.3 (multi-party sessions) open — a shared pipeline session already has >2 parties in practice; formalising it is a future question, not a Phase 1 blocker.
+Shared pipeline sessions already have >2 parties in practice; formalising multi-party semantics is a future question (§9.3).
 
 ---
 
 ## 6. Transition Contract
 
-Under §5.4, every transition runs inside a session — there is **one contract**, not two. The "sessionless" legacy shape is retired; existing agents migrate by being wrapped in a per-invocation session (see §11.3).
+Every transition runs inside a session — there is one contract.
 
 ### 6.1 Unified contract
 
@@ -320,7 +288,7 @@ If the return value is non-null, the framework appends it as a turn to `c/histor
 | Update session state | `covia_write c/...` → `sessions/<sid>/c/...` |
 | Update task WIP | `covia_write t/...` → current task's `t` |
 
-**Completion ops invoked during the transition.** These are venue operations, not return-value flags. They read `(agentId, taskId)` from RequestContext — and since **task ID == caller's request Job ID**, no separate jobId is needed (the live Job is recovered via `engine.jobs().getJob(taskId)`):
+**Completion ops invoked during the transition.** These are venue operations, not return-value flags. They read `(agentId, taskId)` from the transition's request context — since **task ID == caller's request Job ID**, no separate jobId is needed:
 
 | Op | Effect |
 |---|---|
@@ -329,15 +297,15 @@ If the return value is non-null, the framework appends it as a turn to `c/histor
 
 There is no `agent:yield` op — yield is the natural state when no completion op was invoked. There is no `agent:complete_chat` op — chat completes via the return value.
 
-**Framework-populated scope.** The run loop builds a per-cycle `RequestContext` with `withAgentId(agentId)` always, plus `withTaskId(pickedTask.getKey())` and `withSessionId(...)` when applicable. This ctx is what the transition Job runs under, so any venue op invoked from inside the transition (directly or via the LLM tool loop) sees the correct scope without explicit input args.
+**Framework-populated scope.** The transition runs under a request context scoped to `(agent, session?, task?)`. Any venue op invoked from inside the transition — directly or via the LLM tool loop — sees the correct scope without having to pass IDs explicitly.
 
-**Completion ordering (deferred drain).** `agent:complete_task` / `agent:fail_task` do not finish the caller's pending Job inline. They park a completion envelope (`{id, status, output|error}`) into a per-agent `deferredCompletions` map and return synchronously. The run loop, after the transition returns, drains this map to build the cycle's `taskResults` field, then commits via `mergeRunResult`, and only **then** completes (or fails) the pending Jobs identified in the drained envelopes. This ordering is load-bearing: it guarantees that any caller blocked on `Job.awaitResult` observes the timeline and lattice writes for its task before its `awaitResult` call returns. Without the deferral, the venue op would race the framework's timeline write and callers could see an empty `taskResults` immediately after their awaitResult unblocked.
+**Completion ordering.** `agent:complete_task` / `agent:fail_task` do not finish the caller's pending Job inline. The completion envelope is parked and drained after the transition's timeline + state writes commit. Only then is the pending Job completed. This ordering is load-bearing: any caller awaiting its task observes the timeline and lattice writes for its task before its await returns. Without the deferral, the venue op would race the framework's timeline write and callers could see an empty `taskResults` immediately after unblocking.
 
 The framework around the transition:
 
 1. Resolves or mints the session before invoking (§5.4)
 2. Reads `n/`, `c/`, `history`, `pending` (and `t` if a task is focused) from the lattice
-3. Builds a RequestContext scoped to `(agent, session, task?, jobId)` so writes and completion ops route correctly
+3. Scopes the request context to `(agent, session, task?)` so writes and completion ops route correctly
 4. Provides the snapshots as transition input under their shorthand names
 5. Invokes the transition adapter
 6. On adapter return:
@@ -368,7 +336,7 @@ The picked task resumes on the next wake. The four wake paths (explicit trigger,
 
 **Technical errors.** If the transition adapter throws (e.g., LLM API failure, lattice error), the framework catches it. If a task or chat was picked, the Job is failed with a *technical* error (distinct from `agent:fail_task`'s semantic failure). The task entry is removed / chat slot cleared in both cases; the difference is recorded in the Job's failure reason.
 
-**Layering: framework vs tool loop.** The framework only sees venue ops being invoked (`agent:complete_task`, `agent:fail_task`) and the adapter's return value. There is no LLM-specific concept at the framework layer. Inside LLMAgentAdapter, the tool loop wraps these as named tools the LLM can call:
+**Layering: framework vs tool loop.** The framework only sees venue ops being invoked (`agent:complete_task`, `agent:fail_task`) and the adapter's return value. There is no LLM-specific concept at the framework layer. Inside an LLM adapter, the tool loop wraps these as named tools the LLM can call:
 
 - `complete_task` tool → invokes `agent:complete_task`, exits loop with the result as the return value
 - `fail_task` tool → invokes `agent:fail_task`, exits loop
@@ -382,36 +350,20 @@ Non-LLM adapters call the venue ops directly with no tool-loop layer.
 
 ### 6.2 Adapter selection
 
-No separate "session-aware" ops needed. All transition adapters receive the unified input shape. The session-awareness dimension collapses into the adapter-unification matrix in §6.4 (`framed`, `persistent`); there is no `chatagent:reply` vs `llmagent:chat` split.
+All transition adapters receive the same unified input shape. There are no "session-aware" ops distinct from "sessionless" ops.
 
-### 6.4 Adapter unification (design amendment)
+### 6.4 Chat adapter shape
 
-`llmagent:chat` is structurally a **depth-1 goaltree with persistent transcript**: a single frame, no subgoals, whose history carries across transitions. `goaltree:chat` is the general case (N frames, stateless per transition). The overlap is large enough that the two adapters should collapse into one.
-
-**Proposed shape:** a single transition adapter (working name `agent:chat`) parameterised by:
+The chat adapter is parameterised by two flags:
 
 | Flag | Effect |
 |------|--------|
-| `framed: false` (default) | Flat single-frame mode. `subgoal` disallowed. Equivalent to today's `llmagent:chat`. |
-| `framed: true` | Multi-frame mode. `subgoal` allowed, child frames summarise on return. Equivalent to today's `goaltree:chat`. |
-| `persistent: true` (default for flat) | Persist transcript / frame stack across transitions. |
-| `persistent: false` (default for framed) | Fresh root on every transition. |
+| `framed` | Multi-frame mode. `subgoal` allowed; child frames summarise on return. When false, the session has a single flat frame and `subgoal` is disallowed. |
+| `persistent` | Persist the frame stack across transitions. When false, a fresh root is built each transition. |
 
-Note: `sessionAware` is no longer a flag — under §5.4 every transition is session-scoped by default. The flag matrix collapses to `{framed, persistent}`.
+Flat + persistent is a chatbot. Framed + persistent is a resumable goal tree. Framed + non-persistent is a one-shot decomposition.
 
-**What this buys:**
-
-- **Harness tools become uniform.** `more_tools`, `context_load`, `context_unload`, typed `complete`/`fail` are available in both modes. This directly fixes the gap where a flat-mode agent (today's `llmagent`) has no way to self-expand its tools mid-run.
-- **Sessions drop in cleanly.** A flat agent inside a session is a chatbot. A framed agent inside a session is a resumable goal tree. No new transition ops needed — the session is supplied by the framework per §5.4/§6.1, not opted into per adapter.
-- **One migration story.** Existing `llmagent:chat` agents map to `{framed: false, persistent: true}`; existing `goaltree:chat` agents map to `{framed: true, persistent: false}`. Transition-op names remain as aliases.
-- **Smaller conceptual surface.** Agent authors pick flags rather than learning which of N adapters matches their pattern.
-
-**What this costs:**
-
-- A one-time refactor to merge `LLMAgentAdapter` and `GoalTreeAdapter`. Most of the code in each already does the same work (tool-call loop, context assembly, harness resolution) with subtle divergence.
-- Harness-tool semantics that today depend on the frame model (`subgoal`, `compact`) need explicit guards when `framed: false`.
-
-If pursued, this collapses the decision in §10 OQ #12.
+Harness tools (`more_tools`, `context_load`, `context_unload`, typed `complete`/`fail`) are available in both modes. Harness tools that depend on the frame model (`subgoal`, `compact`) are only meaningful under `framed: true`.
 
 ---
 
@@ -477,10 +429,6 @@ Lattice content addressing means unchanged sub-structures are deduplicated autom
 
 To see all transitions across all sessions, the timeline is the right place — each snapshot already lists all active sessions. To see detail within one session, walk that session's history at `g/<agent>/sessions/<sid>/history`.
 
-### 8.5 Could go further (out of scope for v1)
-
-The lattice already tracks state changes via cursor history. Timeline could become a *view* over that history with transition-boundary annotations rather than a separately-appended structure. That's a deeper architectural change deferred for now.
-
 ---
 
 ## 9. Cross-Session Concerns
@@ -501,86 +449,31 @@ Sessions hold conversation history. **Memory** — facts, decisions, learnings �
 - Semantic (what's true)
 - Procedural (how to do things)
 
-Memory can be summarised from old sessions, accumulated across sessions, and queried independently. Out of scope for v1; design separately.
+Memory can be summarised from old sessions, accumulated across sessions, and queried independently. Separate layer, designed separately.
 
 ### 9.3 Multi-party sessions (open question)
 
-A single session with multiple counterparties (e.g. a group chat). Not supported in v1. If needed, `meta.counterparty` becomes a vector and routing rules need defining.
+A single session with multiple counterparties (e.g. a group chat). If supported, `meta.counterparty` becomes a vector and routing rules need defining.
 
 ---
 
 ## 10. Open Questions
 
 1. **Session creation authority** — can callers, the framework, and the agent all create sessions? Who owns the id namespace?
-2. ~~**Default session rule**~~ — **Resolved (§5.4):** every interaction is in a session; missing `sessionId` → venue mints + returns, caller echoes to continue. Matches A2A `contextId` and MCP `Mcp-Session-Id`.
-3. **Caps scope** — does each session have its own caps scope, or inherit from agent? Probably inherit by default, with optional per-session attenuation.
-4. **Sub-sessions** — can a session spawn sub-sessions (e.g. a support session branching to a specialist)? Or is the relationship flat with `meta.parent` references?
-5. **Multi-party** — one session, multiple counterparties? See §9.3.
-6. **GoalTree integration** — does each session get its own frame stack persisted? This unlocks resumable goal trees but adds storage. Ties directly to §6.4: under adapter unification, a session simply owns whatever `{framed, persistent}` state its agent's config declares — the question becomes "is `persistent: true` the default for framed sessions?" rather than a separate integration project.
-7. **Storage limits** — per-session size cap? Per-agent total cap? Auto-archive on overflow?
-8. **Session merge/fork** — should sessions support merge (combine two contexts) or fork (branch from a point)? Probably not v1.
-9. **Visibility** — can other users/agents read sessions (with caps)? Default: only the agent and its owner.
-10. **Scheduling** — can a session declare "wake me at time T" without an external request? See #65 (scheduled wake).
-11. **Migration** — existing agents have flat timelines; do they get a synthetic "legacy" session covering all past turns, or does the timeline stay as audit-only with new sessions starting fresh from the Phase 1 cutover?
-12. ~~**Session contract for transitions**~~ — **Resolved (§6.1):** one unified contract, no sessionless path. Session-awareness is not opt-in per adapter. Under §6.4 adapter unification, the remaining knobs are `{framed, persistent}`.
+2. **Caps scope** — does each session have its own caps scope, or inherit from agent? Probably inherit by default, with optional per-session attenuation.
+3. **Sub-sessions** — can a session spawn sub-sessions (e.g. a support session branching to a specialist)? Or is the relationship flat with `meta.parent` references?
+4. **Multi-party** — one session, multiple counterparties? See §9.3.
+5. **Storage limits** — per-session size cap? Per-agent total cap? Auto-archive on overflow?
+6. **Session merge/fork** — should sessions support merge (combine two contexts) or fork (branch from a point)?
+7. **Visibility** — can other users/agents read sessions (with caps)? Default: only the agent and its owner.
+8. **Scheduling** — can a session declare "wake me at time T" without an external request? See [SCHEDULER.md](./SCHEDULER.md).
 
 ---
 
-## 11. Migration Path
+## 11. Related
 
-### 11.1 Compatibility
-
-The API surface is additive at the envelope level (new `sessionId` field in requests and responses) but semantically the transition contract changes — there is no longer a sessionless path (§6.1). Existing callers that never supply `sessionId` continue to work unchanged: the venue mints one per invocation and returns it. Callers that ignore the returned id get one-shot behaviour (identical to today's pipeline agents). Callers that echo the id get continuity for free.
-
-### 11.2 Phasing
-
-| Phase | Scope | Outcome |
-|-------|-------|---------|
-| **0 (now)** | Design doc + open questions | This file |
-| **1** | Session storage + session envelope + single transition contract | Every invocation runs in a session; `sessionId` in request/response envelope; per-session history at `g/<agent>/sessions/<sid>/`; chatbot demo |
-| **2.1–2.6** | Session lattice slot + sessionId on intake + ensureSession + one-session-per-cycle demux | ✓ Done (Stage 2.6 complete; sessions auto-minted, session.pending is sole intake, one session active per transition cycle) |
-| **2.7** | Single response value contract; explicit task completion via venue ops | ✓ Done. Transition adapter returns `ACell response` (or null) — appended to `c/history` if non-null. For chat picked: return value completes chat Job. For task picked: completion is explicit via `agent:complete_task` / `agent:fail_task` ops invoked during transition (framework reads RequestContext for `agentId`/`taskId`/`jobId`). State writes via `covia_write` (RequestContext-scoped to `n`/`c`/`t`). No `agent:yield` op — yield is the natural state when no completion op was invoked. No `agent:complete_chat` — chat completes via return. LLM tool loop wraps `complete_task` / `fail_task` as tools; plain-text response = return value (auto-completes chat, yields for task). Yields → exponential falloff on per-task `nextWake`; optional caller-settable `timeout`, default very long. |
-| **2.8** | Add `agent_chat` op + session-scoped chat slot | ✓ Done. Caller awaits next `response` on the session; mints session on first contact, continues existing session normally. A2A `message/send` analogue. |
-| **3** | Per-session history population | ✓ Done (S3a–d, S3f). Session.history populated per transition. Agent inbox removed (S3d) — session.pending is sole intake. No history cap (S3e) — summarisation deferred to ContextBuilder. |
-| **4** | Lifecycle automation | Auto-idle, auto-archive, suspended sessions |
-| **5** | Adapter unification (§6.4) | Merge `llmagent:chat` and `goaltree:chat` into one flag-driven adapter; uniform harness tools (`more_tools` etc.) across both modes; persistable frame stack per session |
-| **6** | Memory layer | Separate epic; episodic/semantic/procedural memory across sessions |
-| **7** | Multi-party / scheduling | Advanced features |
-
-Phase 1 is a breaking change at the framework level (one contract, not two) but backward compatible at the wire level (envelope gains a field that old callers ignore).
-
-### 11.3 Existing agents
-
-At the Phase 1 cutover, existing agents begin running each new invocation inside a freshly minted session. Their historical flat timeline is preserved read-only as audit data — no retroactive session is synthesised for pre-cutover turns (see §10 OQ #11). Agent authors don't change configs; the framework handles the envelope transparently.
-
----
-
-## 12. Why This is Right (and Why Not)
-
-### 12.1 Why it's right
-
-- **General primitive** — covers chatbots, support, investigations, pipelines without baking any one pattern into the framework
-- **Lattice-native** — sessions are just data at `g/<agent>/sessions/<sid>/`; standard tools work for discovery and inspection
-- **Protocol-aligned** — session semantics match A2A `contextId` and MCP `Mcp-Session-Id` (§5.4); federated interop is trivial
-- **One contract** — every transition runs in a session; no "sessionless vs session-aware" split to reason about (§6.1)
-- **Wire-compatible** — old callers that ignore the new `sessionId` field keep working; they just get one-shot sessions
-- **Solves real symptoms** — #67/#68/#69 fall out naturally; chatbots become possible
-- **Phased** — chatbot in v1, advanced features later
-
-### 12.2 Why it might be wrong
-
-- **New primitive to learn** — agent authors now need to think about sessions in addition to state, config, tasks
-- **Per-invocation session overhead** — pure one-shot callers (Alice-style extraction) pay the cost of a session record they never reuse; acceptable price for uniform audit but not free
-- **Storage layout change** — moving heavy data to per-session history is a non-trivial migration if applied retroactively
-- **Open questions still load-bearing** — creation authority (§10 OQ #1), caps scope (#3), and migration of flat timelines (#11) remain unresolved
-
----
-
-## 13. Related
-
-- [AGENT_LOOP.md](./AGENT_LOOP.md) — current agent transition model that this generalises
-- [GOAL_TREE.md](./GOAL_TREE.md) — frame stack abstraction that could plug in as session-scoped
-- [LATTICE_CONTEXT.md](./LATTICE_CONTEXT.md) — context loading that sessions can leverage per-context
+- [AGENT_LOOP.md](./AGENT_LOOP.md) — agent transition model
+- [GOAL_TREE.md](./GOAL_TREE.md) — frame stack abstraction; session-scoped when `persistent: true`
+- [LATTICE_CONTEXT.md](./LATTICE_CONTEXT.md) — context loading
 - [PROJECTS.md](./PROJECTS.md) — long-lived work state that sessions reference but don't own
-- Issues: #67, #68, #69, #57, #71 — symptoms this addresses
-- Future: AGENT_MEMORY.md (not yet written) — separate cross-session memory layer
+- [SCHEDULER.md](./SCHEDULER.md) — wake semantics and backoff policy
