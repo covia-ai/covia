@@ -138,6 +138,25 @@
 			<artifactId>mcp</artifactId>
 			<version>${mcp.version}</version>
 		</dependency>
+
+		<!-- A2A: Agent-to-Agent protocol. Official SDK used at the wire
+		     boundary (server parse/encode) and in the outbound A2AAdapter.
+		     Pre-1.0; pin exact version to avoid drift. -->
+		<dependency>
+			<groupId>org.a2aproject.sdk</groupId>
+			<artifactId>a2a-java-sdk-spec</artifactId>
+			<version>${a2a.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.a2aproject.sdk</groupId>
+			<artifactId>a2a-java-sdk-client-transport-jsonrpc</artifactId>
+			<version>${a2a.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.a2aproject.sdk</groupId>
+			<artifactId>a2a-java-sdk-http-client</artifactId>
+			<version>${a2a.version}</version>
+		</dependency>
 		
 		<!-- Langchain -->
 		<dependency>

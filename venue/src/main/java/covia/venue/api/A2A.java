@@ -1,346 +1,392 @@
 package covia.venue.api;
 
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
+import org.a2aproject.sdk.spec.A2AError;
+import org.a2aproject.sdk.spec.A2AErrorCodes;
+import org.a2aproject.sdk.spec.A2AMethods;
+import org.a2aproject.sdk.spec.AgentCapabilities;
+import org.a2aproject.sdk.spec.AgentCard;
+import org.a2aproject.sdk.spec.AgentInterface;
+import org.a2aproject.sdk.spec.AgentProvider;
+import org.a2aproject.sdk.spec.AgentSkill;
+import org.a2aproject.sdk.spec.CancelTaskParams;
+import org.a2aproject.sdk.spec.Message;
+import org.a2aproject.sdk.spec.MessageSendParams;
+import org.a2aproject.sdk.spec.Task;
+import org.a2aproject.sdk.spec.TaskQueryParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.api.ContentTypes;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.AVector;
 import convex.core.data.Blob;
-import convex.core.data.Hash;
-import convex.core.data.Index;
-import convex.core.data.MapEntry;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
-import convex.core.data.Vectors;
 import convex.core.lang.RT;
-import convex.core.util.JSON;
 import convex.core.util.Utils;
-import covia.adapter.AAdapter;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Venue;
+import covia.venue.RequestContext;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
-import io.javalin.openapi.HttpMethod;
-import io.javalin.openapi.OpenApi;
-import io.javalin.openapi.OpenApiContent;
-import io.javalin.openapi.OpenApiExampleProperty;
-import io.javalin.openapi.OpenApiResponse;
 
 /**
- * This class implements an A2A (Agent2Agent) server on top of a Covia Venue, as an additional API
- * 
- * Provides agent discovery through the /.well-known/agent-card.json endpoint
- * as specified in the A2A Protocol specification.
+ * A2A (Agent-to-Agent) server API layered on top of a Covia Venue.
+ *
+ * <p>Implements the A2A Protocol v1.0 JSON-RPC binding: Agent Card discovery
+ * at {@code /.well-known/agent-card.json} and JSON-RPC 2.0 at {@code /a2a}.
+ * Supports {@code SendMessage}, {@code GetTask}, {@code CancelTask} in P0.
+ * Streaming ({@code SendStreamingMessage}, {@code SubscribeToTask}) and
+ * push-notification-config methods are intentionally unimplemented for now —
+ * the handler returns {@code UnsupportedOperationError} when called.</p>
+ *
+ * <p>The venue is modelled as a single agent. Fresh {@code SendMessage}
+ * (no {@code taskId}) invokes the configured {@code defaultChatOp} which
+ * produces a Covia Job; the Job ID becomes the A2A Task ID. Continuations
+ * ({@code taskId} set) flow through {@link covia.venue.JobManager#deliverMessage}
+ * which dispatches to the adapter's multi-turn handler.</p>
+ *
+ * <p>Wire format uses spec POJOs (gson via {@link JsonUtil#OBJECT_MAPPER})
+ * at the HTTP boundary; {@link A2ACodec} translates to/from Covia's ACell
+ * representation. Covia internals never see POJOs.</p>
  */
 public class A2A extends ACoviaAPI {
-	
-	public static final Logger log=LoggerFactory.getLogger(A2A.class);
-	
-	final AMap<AString,ACell> AGENT_INFO;
 
+	public static final Logger log = LoggerFactory.getLogger(A2A.class);
+
+	/** A2A-specific response content type per spec §9 / §11. */
+	static final String A2A_JSON = "application/a2a+json; charset=utf-8";
+
+	/** Required: operation reference invoked on a fresh SendMessage. */
+	private final AString defaultChatOp;
+
+	private final String agentName;
+	private final String agentDescription;
+	private final String agentVersion;
+	private final AgentProvider agentProvider;
+
+	@SuppressWarnings("unused")
 	protected final SseServer sseServer;
 
-	
 	public A2A(Venue venue, AMap<AString, ACell> a2aConfig) {
 		super(venue);
-		this.sseServer=new SseServer(engine());
+		this.sseServer = new SseServer(engine());
 
-		// Get agent info from config or use defaults
-		AMap<AString,ACell> agentInfo = RT.getIn(a2aConfig, "agentInfo");
+		// defaultChatOp may be omitted; absence is only fatal when a client
+		// actually calls SendMessage on a fresh task (checked in doSendMessage).
+		// This keeps A2A discovery + GetTask/CancelTask usable for venues that
+		// don't yet have a chat-capable default op configured.
+		this.defaultChatOp = RT.ensureString(RT.getIn(a2aConfig, "defaultChatOp"));
 
-		if (agentInfo==null) agentInfo=Maps.of(
-			"name", "covia-venue-agent",
-			"title", engine().getName(),
-			"version", Utils.getVersion(),
-			"description", "Covia Venue Agent - provides computational capabilities through A2A protocol"
-		);
-		AGENT_INFO=agentInfo;
+		AMap<AString, ACell> agentInfo = RT.getIn(a2aConfig, "agentInfo");
+		this.agentName = stringOr(agentInfo, "name", "covia-venue-agent");
+		this.agentDescription = stringOr(agentInfo, "description",
+				"Covia Venue Agent — federated AI orchestration over the A2A protocol");
+		this.agentVersion = stringOr(agentInfo, "version", Utils.getVersion());
+
+		String orgName = stringOr(agentInfo, "organization",
+				engine().getName() != null ? engine().getName().toString() : "Covia");
+		String orgUrl = stringOr(agentInfo, "providerUrl", "https://covia.ai");
+		this.agentProvider = new AgentProvider(orgName, orgUrl);
 	}
 
-	
 	public void addRoutes(Javalin javalin) {
-		// A2A agent card discovery endpoint
 		javalin.get("/.well-known/agent-card.json", this::getAgentCard);
-		// A2A JSON-RPC endpoint
 		javalin.post("/a2a", this::handleJsonRpc);
 	}
-	
-	@OpenApi(path = "/.well-known/agent-card.json", 
-			methods = HttpMethod.GET, 
-			tags = { "A2A"},
-			summary = "Get A2A Agent Card for discovery", 
-			operationId = "getAgentCard",
-			responses = {
-					@OpenApiResponse(
-							status = "200", 
-							description = "Agent Card JSON document", 
-							content = {
-								@OpenApiContent(
-										type = "application/json", 
-										from = Object.class,
-										exampleObjects = {
-											@OpenApiExampleProperty(name = "agentProvider", value = "{}"),
-											@OpenApiExampleProperty(name = "agentCapabilities", value = "{}"),
-											@OpenApiExampleProperty(name = "agentInterfaces", value = "[]")
-										}
-										) })
-					})	
-	protected void getAgentCard(Context ctx) { 
-		ctx.header("Content-type", ContentTypes.JSON);
-		
+
+	// ==================== Agent Card ====================
+
+	protected void getAgentCard(Context ctx) {
 		try {
-			// Use the existing getExternalBaseUrl function to compute the base URL
 			String baseUrl = getExternalBaseUrl(ctx, "");
-			
-			// Create the agent card
-			AMap<AString, ACell> agentCard = createAgentCard(baseUrl);
-			
-			buildResult(ctx, agentCard);
+			AgentCard card = buildAgentCard(baseUrl);
+			writeJson(ctx, 200, card);
 		} catch (Exception e) {
 			log.error("Error generating agent card", e);
 			buildError(ctx, 500, "Error generating agent card: " + e.getMessage());
 		}
 	}
 
-	/**
-	 * Handle A2A JSON-RPC requests.
-	 * Supports method "message/send" for delivering messages to jobs/tasks.
-	 */
-	@SuppressWarnings("unchecked")
+	private AgentCard buildAgentCard(String baseUrl) {
+		// P0: streaming/push/extended-card all false. Will flip in P1/P2/P3.
+		AgentCapabilities capabilities = new AgentCapabilities(false, false, false, null);
+		// AgentInterface requires non-null fields; we don't use tenanted routing,
+		// so pass an empty tenant string per spec "optional" semantics.
+		AgentInterface iface = new AgentInterface("JSONRPC", baseUrl + "/a2a", "", "1.0");
+
+		return AgentCard.builder()
+				.name(agentName)
+				.description(agentDescription)
+				.version(agentVersion)
+				.provider(agentProvider)
+				.capabilities(capabilities)
+				.supportedInterfaces(List.of(iface))
+				.defaultInputModes(List.of("text/plain", "application/json"))
+				.defaultOutputModes(List.of("text/plain", "application/json"))
+				.skills(List.<AgentSkill>of())  // populated from adapter-installed assets in a later pass
+				.build();
+	}
+
+	// ==================== JSON-RPC dispatch ====================
+
 	protected void handleJsonRpc(Context ctx) {
-		AMap<AString, ACell> request = RT.ensureMap(JSON.parseJSON5(ctx.body()));
-		if (request == null) {
-			buildJsonRpcError(ctx, null, -32700, "Parse error");
-			return;
-		}
-
-		AString method = RT.ensureString(request.get(Fields.METHOD));
-		ACell id = request.get(Fields.ID);
-		ACell params = request.get(Fields.PARAMS);
-
-		if (method == null) {
-			buildJsonRpcError(ctx, id, -32600, "Invalid request: missing method");
-			return;
-		}
-
-		switch (method.toString()) {
-			case "message/send":
-				handleMessageSend(ctx, id, (AMap<AString, ACell>) params);
-				break;
-			default:
-				buildJsonRpcError(ctx, id, -32601, "Method not found: " + method);
-		}
-	}
-
-	/**
-	 * Handle A2A message/send method.
-	 * Maps A2A task/message to Covia job message delivery.
-	 */
-	private void handleMessageSend(Context ctx, ACell rpcId, AMap<AString, ACell> params) {
-		if (params == null) {
-			buildJsonRpcError(ctx, rpcId, -32602, "Invalid params: params required");
-			return;
-		}
-
-		// Extract taskId (= Covia job ID) from params
-		ACell taskIdCell = RT.getIn(params, "taskId");
-		if (taskIdCell == null) {
-			buildJsonRpcError(ctx, rpcId, -32602, "Invalid params: taskId required");
-			return;
-		}
-		Blob taskId = Job.parseID(taskIdCell);
-
-		// Extract message from params
-		AMap<AString, ACell> message = RT.getIn(params, "message");
-		if (message == null) {
-			buildJsonRpcError(ctx, rpcId, -32602, "Invalid params: message required");
-			return;
-		}
-
-		// Deliver the message with caller identity as source
+		String body = ctx.body();
+		Map<?, ?> envelope;
 		try {
-			AString callerDID = AuthMiddleware.getCallerDID(ctx);
-			int depth = engine().jobs().deliverMessage(taskId, message, callerDID);
-			AMap<AString, ACell> response = Maps.of(
-				"jsonrpc", "2.0",
-				Fields.ID, rpcId,
-				"result", Maps.of(
-					Fields.STATUS, Strings.intern("queued"),
-					"queueDepth", RT.cvm(depth)
-				)
-			);
-			buildResult(ctx, 200, response);
-		} catch (IllegalArgumentException e) {
-			buildJsonRpcError(ctx, rpcId, -32602, e.getMessage());
-		} catch (IllegalStateException e) {
-			buildJsonRpcError(ctx, rpcId, -32602, e.getMessage());
-		}
-	}
-
-	private void buildJsonRpcError(Context ctx, ACell id, int code, String message) {
-		AMap<AString, ACell> response = Maps.of(
-			"jsonrpc", "2.0",
-			Fields.ID, id,
-			"error", Maps.of(
-				"code", RT.cvm(code),
-				"message", Strings.create(message)
-			)
-		);
-		buildResult(ctx, 200, response);
-	}
-
-	/**
-	 * Create the A2A Agent Card structure according to the specification
-	 * @param baseUrl The base URL of this agent
-	 * @return Agent Card as Convex Map
-	 */
-	private AMap<AString, ACell> createAgentCard(String baseUrl) {
-		// Agent Provider information
-		AMap<AString, ACell> agentProvider = Maps.of(
-			Fields.NAME, RT.getIn(AGENT_INFO, Fields.NAME),
-			Fields.TITLE, RT.getIn(AGENT_INFO, Fields.TITLE),
-			"version", RT.getIn(AGENT_INFO, "version"),
-			Fields.DESCRIPTION, RT.getIn(AGENT_INFO, Fields.DESCRIPTION)
-		);
-		
-		// Agent Capabilities
-		AMap<AString, ACell> agentCapabilities = Maps.of(
-			"streaming", true,
-			"pushNotifications", false,
-			"supportsAuthenticatedExtendedCard", false
-		);
-		
-		// Agent Skills - based on available operations from adapters
-		AVector<AMap<AString, ACell>> skills = getAgentSkills();
-		
-		// Agent Interfaces - transport endpoints
-		AVector<AMap<AString, ACell>> interfaces = Vectors.of(
-			Maps.of(
-				"transport", "http+json",
-				"url", baseUrl + "/api/v1",
-				"preferred", true
-			),
-			Maps.of(
-				"transport", "json-rpc",
-				"url", baseUrl + "/a2a",
-				"preferred", false
-			)
-		);
-		
-		// Security Scheme - basic authentication
-		AMap<AString, ACell> securityScheme = Maps.of(
-			"type", "http",
-			"scheme", "bearer",
-			"description", "Bearer token authentication"
-		);
-		
-		// Build the complete agent card
-		AMap<AString, ACell> agentCard = Maps.of(
-			"agentProvider", agentProvider,
-			"agentCapabilities", agentCapabilities,
-			"agentSkills", skills,
-			"agentInterfaces", interfaces,
-			"securityScheme", securityScheme,
-			"preferredTransport", "http+json",
-			"additionalInterfaces", Vectors.of(
-				Maps.of(
-					"transport", "json-rpc",
-					"url", baseUrl + "/a2a"
-				)
-			)
-		);
-		
-		return agentCard;
-	}
-	
-	/**
-	 * Get agent skills based on available operations from adapters
-	 * @return Vector of skill objects
-	 */
-	private AVector<AMap<AString, ACell>> getAgentSkills() {
-		AVector<AMap<AString, ACell>> skills = Vectors.empty();
-		
-		// Iterate through all registered adapters to collect skills
-		for (String adapterName : engine().getAdapterNames()) {
-			try {
-				var adapter = engine().getAdapter(adapterName);
-				if (adapter == null) continue;
-				
-				// Get skills from this specific adapter
-				AVector<AMap<AString, ACell>> adapterSkills = getAdapterSkills(adapter);
-				skills = skills.concat(adapterSkills);
-			} catch (Exception e) {
-				log.warn("Error processing adapter " + adapterName, e);
-				// ignore this adapter
-			}
-		}
-		
-		return skills;
-	}
-	
-	/**
-	 * Get A2A skills from a specific adapter's installed assets
-	 * @param adapter The adapter to get skills from
-	 * @return Vector of A2A skills provided by this adapter
-	 */
-	private AVector<AMap<AString, ACell>> getAdapterSkills(AAdapter adapter) {
-		AVector<AMap<AString, ACell>> skillsVector = Vectors.empty();
-		
-		try {
-			// Get installed assets for this adapter
-			Index<Hash, AString> installedAssets = adapter.getInstalledAssets();
-			int n = installedAssets.size();
-			
-			for (int i = 0; i < n; i++) {
-				try {
-					MapEntry<Hash, AString> me = installedAssets.entryAt(i);
-					AString metaString = me.getValue();
-					
-					// Parse the metadata string to get the structured metadata
-					AMap<AString, ACell> meta = RT.ensureMap(JSON.parse(metaString));
-					AMap<AString, ACell> skill = checkSkill(meta);
-					if (skill != null) {
-						skillsVector = skillsVector.conj(skill);
-					}
-				} catch (Exception e) {
-					log.warn("Error processing asset from adapter " + adapter.getName(), e);
-					// ignore this asset
-				}
-			}
+			envelope = JsonUtil.OBJECT_MAPPER.fromJson(body, Map.class);
 		} catch (Exception e) {
-			log.warn("Error getting installed assets from adapter " + adapter.getName(), e);
+			writeError(ctx, null, A2AErrorCodes.JSON_PARSE, "Parse error");
+			return;
 		}
-		
-		return skillsVector;
+		if (envelope == null) {
+			writeError(ctx, null, A2AErrorCodes.INVALID_REQUEST, "Empty request");
+			return;
+		}
+
+		Object id = envelope.get("id");
+		Object methodObj = envelope.get("method");
+		Object paramsRaw = envelope.get("params");
+
+		if (!(methodObj instanceof String method)) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_REQUEST, "Missing or invalid method");
+			return;
+		}
+
+		try {
+			switch (method) {
+				case A2AMethods.SEND_MESSAGE_METHOD -> {
+					MessageSendParams params = parseParams(paramsRaw, MessageSendParams.class);
+					doSendMessage(ctx, id, params);
+				}
+				case A2AMethods.GET_TASK_METHOD -> {
+					TaskQueryParams params = parseParams(paramsRaw, TaskQueryParams.class);
+					doGetTask(ctx, id, params);
+				}
+				case A2AMethods.CANCEL_TASK_METHOD -> {
+					CancelTaskParams params = parseParams(paramsRaw, CancelTaskParams.class);
+					doCancelTask(ctx, id, params);
+				}
+				case A2AMethods.SEND_STREAMING_MESSAGE_METHOD,
+				     A2AMethods.SUBSCRIBE_TO_TASK_METHOD,
+				     A2AMethods.SET_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
+				     A2AMethods.GET_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
+				     A2AMethods.LIST_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
+				     A2AMethods.DELETE_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
+				     A2AMethods.LIST_TASK_METHOD,
+				     A2AMethods.GET_EXTENDED_AGENT_CARD_METHOD ->
+					writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, "Not yet implemented: " + method);
+				default ->
+					writeError(ctx, id, A2AErrorCodes.METHOD_NOT_FOUND, "Method not found: " + method);
+			}
+		} catch (IllegalArgumentException e) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid params: " + e.getMessage());
+		} catch (Exception e) {
+			log.error("Error handling A2A method {}", method, e);
+			writeError(ctx, id, A2AErrorCodes.INTERNAL, "Internal error: " + e.getMessage());
+		}
 	}
-	
-	/**
-	 * Check if an asset metadata represents a valid A2A skill
-	 * @param meta Asset metadata
-	 * @return Skill object if valid, null otherwise
-	 */
-	private AMap<AString, ACell> checkSkill(AMap<AString, ACell> meta) {
-		AMap<AString, ACell> op = RT.getIn(meta, Fields.OPERATION);
-		if (op == null) return null;
-		
-		AString skillName = RT.ensureString(op.get(Fields.TOOL_NAME));
-		if (skillName == null) return null;
-		
-		// Create skill object according to A2A specification
-		AMap<AString, ACell> skill = Maps.of(
-			"name", skillName,
-			"description", RT.getIn(meta, Fields.DESCRIPTION),
-			"category", "computation",
-			"inputSchema", RT.getIn(op, Fields.INPUT),
-			"outputSchema", RT.getIn(op, Fields.OUTPUT)
-		);
-		
-		return skill;
+
+	// ==================== Method handlers ====================
+
+	private void doSendMessage(Context ctx, Object id, MessageSendParams params) {
+		if (params == null || params.message() == null) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "message required");
+			return;
+		}
+		Message incoming = params.message();
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+
+		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
+
+		if (incoming.taskId() == null) {
+			// Fresh task — invoke the default chat op
+			if (defaultChatOp == null) {
+				writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION,
+						"A2A defaultChatOp not configured on this venue");
+				return;
+			}
+			Job job;
+			try {
+				ACell input = Maps.of(Fields.MESSAGE, record);
+				job = engine().jobs().invokeOperation(defaultChatOp, input, rctx);
+			} catch (IllegalArgumentException e) {
+				writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE,
+						"Default chat op not resolvable: " + e.getMessage());
+				return;
+			}
+			// Persist the initiating message to Task history so subsequent
+			// GetTask sees it. The adapter already received it via the
+			// operation's input, so we do not additionally deliverMessage.
+			try {
+				engine().jobs().appendToHistory(job.getID(), record, rctx);
+			} catch (Exception e) {
+				log.warn("Failed to append initial message to Task history", e);
+			}
+			Task task = A2ACodec.toTask(engine().jobs().getJobData(job.getID(), rctx));
+			writeResult(ctx, id, task);
+			return;
+		}
+
+		// Continuation — deliver message to existing task
+		Blob taskId;
+		try {
+			taskId = Blob.parse(incoming.taskId());
+			if (taskId == null) throw new IllegalArgumentException("not a hex blob");
+		} catch (Exception e) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid taskId");
+			return;
+		}
+
+		try {
+			// Persist to Task history first, then dispatch to the adapter.
+			engine().jobs().appendToHistory(taskId, record, rctx);
+			engine().jobs().deliverMessage(taskId, record, rctx);
+		} catch (IllegalArgumentException e) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, e.getMessage());
+			return;
+		} catch (IllegalStateException e) {
+			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, e.getMessage());
+			return;
+		} catch (AuthException e) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found");
+			return;
+		}
+
+		AMap<AString, ACell> jobData = engine().jobs().getJobData(taskId, rctx);
+		if (jobData == null) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + incoming.taskId());
+			return;
+		}
+		writeResult(ctx, id, A2ACodec.toTask(jobData));
+	}
+
+	private void doGetTask(Context ctx, Object id, TaskQueryParams params) {
+		if (params == null || params.id() == null) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "id required");
+			return;
+		}
+		Blob taskId;
+		try {
+			taskId = Blob.parse(params.id());
+			if (taskId == null) throw new IllegalArgumentException();
+		} catch (Exception e) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid task id");
+			return;
+		}
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+
+		AMap<AString, ACell> jobData;
+		try {
+			jobData = engine().jobs().getJobData(taskId, rctx);
+		} catch (AuthException e) {
+			// Don't leak existence of foreign tasks.
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + params.id());
+			return;
+		}
+		if (jobData == null) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + params.id());
+			return;
+		}
+		writeResult(ctx, id, A2ACodec.toTask(jobData));
+	}
+
+	private void doCancelTask(Context ctx, Object id, CancelTaskParams params) {
+		if (params == null || params.id() == null) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "id required");
+			return;
+		}
+		Blob taskId;
+		try {
+			taskId = Blob.parse(params.id());
+			if (taskId == null) throw new IllegalArgumentException();
+		} catch (Exception e) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid task id");
+			return;
+		}
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+
+		AMap<AString, ACell> before;
+		try {
+			before = engine().jobs().getJobData(taskId, rctx);
+		} catch (AuthException e) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + params.id());
+			return;
+		}
+		if (before == null) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + params.id());
+			return;
+		}
+		if (Job.isFinished(before)) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_CANCELABLE,
+					"Task is already in a terminal state");
+			return;
+		}
+
+		try {
+			engine().jobs().cancelJob(taskId, rctx);
+		} catch (Exception e) {
+			writeError(ctx, id, A2AErrorCodes.INTERNAL, "Cancel failed: " + e.getMessage());
+			return;
+		}
+
+		AMap<AString, ACell> after = engine().jobs().getJobData(taskId, rctx);
+		writeResult(ctx, id, A2ACodec.toTask(after != null ? after : before));
+	}
+
+	// ==================== Wire helpers ====================
+
+	private <T> T parseParams(Object raw, Class<T> cls) {
+		// Re-serialise the loose params map, then parse into the typed record.
+		// Single round-trip through gson so polymorphic adapters (Part, etc.)
+		// are applied consistently.
+		String json = JsonUtil.OBJECT_MAPPER.toJson(raw);
+		return JsonUtil.OBJECT_MAPPER.fromJson(json, cls);
+	}
+
+	private void writeResult(Context ctx, Object id, Object result) {
+		Map<String, Object> response = new LinkedHashMap<>();
+		response.put("jsonrpc", "2.0");
+		response.put("id", id);
+		response.put("result", result);
+		writeJson(ctx, 200, response);
+	}
+
+	private void writeError(Context ctx, Object id, A2AErrorCodes code, String message) {
+		Map<String, Object> response = new LinkedHashMap<>();
+		response.put("jsonrpc", "2.0");
+		response.put("id", id);
+		Map<String, Object> err = new LinkedHashMap<>();
+		err.put("code", code.code());
+		err.put("message", message);
+		response.put("error", err);
+		// Per spec §9, JSON-RPC errors are still delivered with HTTP 200.
+		writeJson(ctx, 200, response);
+	}
+
+	private void writeJson(Context ctx, int status, Object payload) {
+		ctx.status(status);
+		ctx.header("Content-Type", A2A_JSON);
+		ctx.result(JsonUtil.OBJECT_MAPPER.toJson(payload).getBytes(StandardCharsets.UTF_8));
+	}
+
+	// Suppress SDK unused import warnings — referenced indirectly through gson adapters.
+	@SuppressWarnings("unused")
+	private static final Class<?>[] _keepTypes = {A2AError.class};
+
+	private static String stringOr(AMap<AString, ACell> m, String key, String fallback) {
+		if (m == null) return fallback;
+		AString s = RT.ensureString(m.get(Strings.intern(key)));
+		return s != null ? s.toString() : fallback;
 	}
 }

@@ -22,7 +22,9 @@ public class TestServer {
 		SERVER=VenueServer.launch(Maps.of(
 				Strings.create("port"),0, // ephemeral port
 				Fields.MCP,Maps.of(),
-				Fields.A2A,Maps.of(),
+				Fields.A2A,Maps.of(
+					Strings.create("defaultChatOp"), Strings.create("v/test/ops/chat")
+				),
 				Config.WEBDAV,Maps.of(Config.ENABLED,true),
 				Config.AUTH,Maps.of(
 					Config.PUBLIC,Maps.of(Config.ENABLED,true)

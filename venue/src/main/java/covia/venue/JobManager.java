@@ -590,6 +590,52 @@ public class JobManager {
 		return 0;
 	}
 
+	// ========== History ==========
+
+	/**
+	 * Append a message record to a Job's history. Used by the A2A server to
+	 * populate {@code Task.history} for Agent-to-Agent conversations.
+	 *
+	 * <p>Deliberately separate from {@link #deliverMessage} — this method only
+	 * persists to history and does not dispatch to the adapter. A2A's
+	 * {@code SendMessage} path calls both: append inbound message to history,
+	 * then deliverMessage (which triggers adapter handling). For a freshly
+	 * invoked task, only the append is needed (the adapter already received
+	 * the first message via the operation's input).</p>
+	 *
+	 * <p>The record is stored as-is under {@link Fields#HISTORY}, a vector of
+	 * per-message maps. Caller-provided {@code messageId} / role / parts
+	 * fields are preserved.</p>
+	 *
+	 * @throws AuthException if the caller does not own the job
+	 */
+	@SuppressWarnings("unchecked")
+	public void appendToHistory(Blob jobID, AMap<AString, ACell> record, RequestContext ctx) {
+		AMap<AString, ACell> data = getJobData(jobID);
+		if (data == null) {
+			throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
+		}
+		if (!engine.getAccessControl().canAccessJob(ctx, data)) {
+			throw new AuthException("Access denied to job: " + jobID.toHexString());
+		}
+		Job job = getJob(jobID);
+		if (job == null) {
+			// Terminal-state job evicted from memory — no-op; history is frozen.
+			return;
+		}
+		if (job.isFinished()) return;
+
+		AMap<AString, ACell> current = job.getData();
+		ACell histCell = current.get(Fields.HISTORY);
+		AVector<ACell> history = (histCell instanceof AVector)
+				? (AVector<ACell>) histCell
+				: convex.core.data.Vectors.empty();
+		AVector<ACell> updated = history.conj(record);
+
+		AMap<AString, ACell> newData = current.assoc(Fields.HISTORY, updated);
+		job.updateData(newData);
+	}
+
 	// ========== Job Recovery ==========
 
 	/**

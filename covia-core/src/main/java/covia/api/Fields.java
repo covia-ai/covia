@@ -79,19 +79,11 @@ public class Fields {
 	public static final StringShort PROPERTIES = Strings.intern("properties");
 	public static final StringShort ADDITIONAL_PROPERTIES = Strings.intern("additionalProperties");
 	
-	// A2A stuff
+	// A2A stuff — wire format goes through spec POJOs + gson; only keep
+	// constants for fields that appear on both sides of the wire boundary
+	// (in Covia-side storage/config as well as in A2A JSON).
 	public static final StringShort A2A = Strings.intern("a2a");
-	public static final StringShort AGENT_PROVIDER = Strings.intern("agentProvider");
-	public static final StringShort AGENT_CAPABILITIES = Strings.intern("agentCapabilities");
-	public static final StringShort AGENT_SKILLS = Strings.intern("agentSkills");
-	public static final StringShort AGENT_INTERFACES = Strings.intern("agentInterfaces");
-	public static final StringShort SECURITY_SCHEME = Strings.intern("securityScheme");
-	public static final StringShort PREFERRED_TRANSPORT = Strings.intern("preferredTransport");
-	public static final StringShort ADDITIONAL_INTERFACES = Strings.intern("additionalInterfaces");
-	public static final StringShort TRANSPORT = Strings.intern("transport");
 	public static final StringShort URL = Strings.intern("url");
-	public static final StringShort PREFERRED = Strings.intern("preferred");
-	public static final StringShort CATEGORY = Strings.intern("category");
 	public static final StringShort OUTPUT_SCHEMA = Strings.intern("outputSchema");
 
 	// Asset related
