@@ -363,10 +363,10 @@ public class JobManager {
 
 		VenueJob job = new VenueJob(status, meta, callerDID, this);
 
-		// Set update listener if configured (e.g. for SSE broadcasting)
-		if (!jobUpdateListeners.isEmpty()) {
-			job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
-		}
+		// Always wire the dispatch listener — listeners may be added after
+		// job creation (e.g. per-subscription A2A SSE sessions). Empty-list
+		// dispatch is a cheap no-op.
+		job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
 
 		activeJobs.put(jobID, job);
 
@@ -852,6 +852,16 @@ public class JobManager {
 	 */
 	public void addJobUpdateListener(java.util.function.Consumer<Job> listener) {
 		this.jobUpdateListeners.add(listener);
+	}
+
+	/**
+	 * Remove a previously-added update listener. Used by per-subscription
+	 * SSE sessions to stop receiving events on disconnect.
+	 *
+	 * @return true if the listener was registered
+	 */
+	public boolean removeJobUpdateListener(java.util.function.Consumer<Job> listener) {
+		return this.jobUpdateListeners.remove(listener);
 	}
 
 	// ========== Accessors ==========

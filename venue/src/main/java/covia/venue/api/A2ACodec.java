@@ -17,6 +17,7 @@ import org.a2aproject.sdk.spec.Part;
 import org.a2aproject.sdk.spec.Task;
 import org.a2aproject.sdk.spec.TaskState;
 import org.a2aproject.sdk.spec.TaskStatus;
+import org.a2aproject.sdk.spec.TaskStatusUpdateEvent;
 import org.a2aproject.sdk.spec.TextPart;
 
 import convex.core.data.ACell;
@@ -127,6 +128,21 @@ public class A2ACodec {
 		TaskState state = toTaskState(RT.ensureString(jobData.get(Fields.STATUS)));
 		OffsetDateTime ts = extractTimestamp(jobData);
 		return new TaskStatus(state, null, ts);
+	}
+
+	/**
+	 * Build a {@link TaskStatusUpdateEvent} for a streaming SSE frame from a
+	 * Job data record. The {@code final} flag is set when the state is terminal
+	 * (COMPLETED / FAILED / CANCELED / REJECTED) — this tells the client the
+	 * stream is ending.
+	 */
+	public static TaskStatusUpdateEvent toStatusUpdate(AMap<AString, ACell> jobData) {
+		Blob jobId = extractJobId(jobData);
+		String taskId = jobId.toHexString();
+		String contextId = extractContextId(jobData, taskId);
+		TaskStatus status = toTaskStatus(jobData);
+		boolean isFinal = status.state().isFinal();
+		return new TaskStatusUpdateEvent(taskId, status, contextId, isFinal, null);
 	}
 
 	/**

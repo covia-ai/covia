@@ -34,11 +34,13 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Venue;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
+import io.javalin.http.sse.SseHandler;
 
 /**
  * A2A (Agent-to-Agent) server API layered on top of a Covia Venue.
@@ -119,8 +121,9 @@ public class A2A extends ACoviaAPI {
 	}
 
 	private AgentCard buildAgentCard(String baseUrl) {
-		// P0: streaming/push/extended-card all false. Will flip in P1/P2/P3.
-		AgentCapabilities capabilities = new AgentCapabilities(false, false, false, null);
+		// Streaming supported via SendStreamingMessage + SubscribeToTask (P2).
+		// Push notifications + extended card still P3.
+		AgentCapabilities capabilities = new AgentCapabilities(true, false, false, null);
 		// AgentInterface requires non-null fields; we don't use tenanted routing,
 		// so pass an empty tenant string per spec "optional" semantics.
 		AgentInterface iface = new AgentInterface("JSONRPC", baseUrl + "/a2a", "", "1.0");
@@ -177,9 +180,16 @@ public class A2A extends ACoviaAPI {
 					CancelTaskParams params = parseParams(paramsRaw, CancelTaskParams.class);
 					doCancelTask(ctx, id, params);
 				}
-				case A2AMethods.SEND_STREAMING_MESSAGE_METHOD,
-				     A2AMethods.SUBSCRIBE_TO_TASK_METHOD,
-				     A2AMethods.SET_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
+				case A2AMethods.SEND_STREAMING_MESSAGE_METHOD -> {
+					MessageSendParams params = parseParams(paramsRaw, MessageSendParams.class);
+					doSendStreamingMessage(ctx, id, params);
+				}
+				case A2AMethods.SUBSCRIBE_TO_TASK_METHOD -> {
+					org.a2aproject.sdk.spec.TaskIdParams params =
+							parseParams(paramsRaw, org.a2aproject.sdk.spec.TaskIdParams.class);
+					doSubscribeToTask(ctx, id, params);
+				}
+				case A2AMethods.SET_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
 				     A2AMethods.GET_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
 				     A2AMethods.LIST_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
 				     A2AMethods.DELETE_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
@@ -342,6 +352,120 @@ public class A2A extends ACoviaAPI {
 
 		AMap<AString, ACell> after = engine().jobs().getJobData(taskId, rctx);
 		writeResult(ctx, id, A2ACodec.toTask(after != null ? after : before));
+	}
+
+	// ==================== Streaming methods ====================
+
+	private void doSendStreamingMessage(Context ctx, Object id, MessageSendParams params) {
+		if (params == null || params.message() == null) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "message required");
+			return;
+		}
+		Message incoming = params.message();
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+
+		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
+
+		// Resolve the target Job ID before opening the SSE stream — the Job
+		// must exist (and be owned by caller) when A2ASseSession polls it.
+		final Blob taskId;
+		if (incoming.taskId() == null) {
+			if (defaultChatOp == null) {
+				writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION,
+						"A2A defaultChatOp not configured on this venue");
+				return;
+			}
+			Job job;
+			try {
+				ACell input = Maps.of(Fields.MESSAGE, record);
+				job = engine().jobs().invokeOperation(defaultChatOp, input, rctx);
+			} catch (IllegalArgumentException e) {
+				writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE,
+						"Default chat op not resolvable: " + e.getMessage());
+				return;
+			}
+			try {
+				engine().jobs().appendToHistory(job.getID(), record, rctx);
+			} catch (Exception e) {
+				log.warn("Failed to append initial message to Task history", e);
+			}
+			taskId = job.getID();
+		} else {
+			try {
+				taskId = Blob.parse(incoming.taskId());
+				if (taskId == null) throw new IllegalArgumentException("not a hex blob");
+			} catch (Exception e) {
+				writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid taskId");
+				return;
+			}
+			try {
+				engine().jobs().appendToHistory(taskId, record, rctx);
+				engine().jobs().deliverMessage(taskId, record, rctx);
+			} catch (IllegalArgumentException e) {
+				writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, e.getMessage());
+				return;
+			} catch (IllegalStateException e) {
+				writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, e.getMessage());
+				return;
+			} catch (AuthException e) {
+				writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found");
+				return;
+			}
+		}
+
+		openSseStream(ctx, id, taskId, rctx);
+	}
+
+	private void doSubscribeToTask(Context ctx, Object id, org.a2aproject.sdk.spec.TaskIdParams params) {
+		if (params == null || params.id() == null) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "id required");
+			return;
+		}
+		Blob taskId;
+		try {
+			taskId = Blob.parse(params.id());
+			if (taskId == null) throw new IllegalArgumentException();
+		} catch (Exception e) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid task id");
+			return;
+		}
+		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+
+		AMap<AString, ACell> jobData;
+		try {
+			jobData = engine().jobs().getJobData(taskId, rctx);
+		} catch (AuthException e) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + params.id());
+			return;
+		}
+		if (jobData == null) {
+			writeError(ctx, id, A2AErrorCodes.TASK_NOT_FOUND, "Task not found: " + params.id());
+			return;
+		}
+		// Per spec §9.4.6: SubscribeToTask on a terminal task returns
+		// UnsupportedOperationError — there will never be more frames.
+		if (Job.isFinished(jobData)) {
+			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION,
+					"Task is in a terminal state; no further updates will be sent");
+			return;
+		}
+
+		openSseStream(ctx, id, taskId, rctx);
+	}
+
+	/**
+	 * Hand off the current {@link Context} to a Javalin SSE handler and attach
+	 * an {@link A2ASseSession}. The session registers a listener, emits the
+	 * initial Task frame, and streams subsequent TaskStatusUpdateEvents. The
+	 * POST response becomes {@code text/event-stream}; no JSON-RPC envelope
+	 * is written at the top level — each SSE frame is its own envelope.
+	 */
+	private void openSseStream(Context ctx, Object rpcId, Blob taskId, RequestContext rctx) {
+		Engine engine = engine();
+		new SseHandler(sseClient -> {
+			A2ASseSession session = new A2ASseSession(sseClient, engine, taskId, rpcId, rctx);
+			session.start();
+		}).handle(ctx);
 	}
 
 	// ==================== Wire helpers ====================

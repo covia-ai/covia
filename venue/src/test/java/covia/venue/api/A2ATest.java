@@ -211,13 +211,12 @@ public class A2ATest {
 	}
 
 	@Test
-	public void streamingMethodNotYetImplemented() throws Exception {
-		MessageSendParams params = new MessageSendParams(userMessage("stream"), null, null);
-		Map<String, Object> resp = rpcCall("req-10", "SendStreamingMessage", params);
+	public void pushNotificationMethodsNotYetImplemented() throws Exception {
+		Map<String, Object> resp = rpcCall("req-10", "ListTasks", new LinkedHashMap<>());
 		Map<String, Object> err = cast(resp.get("error"));
 		assertNotNull(err);
 		assertEquals(-32004.0, toDouble(err.get("code")), 0.001,
-				"Expected UnsupportedOperationError for not-yet-implemented stream");
+				"Expected UnsupportedOperationError for not-yet-implemented ListTasks");
 	}
 
 	@Test
