@@ -1,0 +1,25 @@
+{
+	"name": "A2A Cancel Task",
+	"description": "Request cancellation of a Task on a remote A2A agent via the CancelTask JSON-RPC method",
+	"operation": {
+		"adapter": "a2a:cancel",
+		"input": {
+			"type": "object",
+			"properties": {
+				"url": {
+					"type": "string",
+					"description": "Base URL of the remote A2A agent"
+				},
+				"id": {
+					"type": "string",
+					"description": "Remote Task ID to cancel"
+				}
+			},
+			"required": ["url", "id"]
+		},
+		"output": {
+			"type": "object",
+			"description": "The canceled A2A Task object"
+		}
+	}
+}

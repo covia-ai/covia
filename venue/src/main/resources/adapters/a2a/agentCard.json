@@ -1,0 +1,21 @@
+{
+	"name": "A2A Agent Card",
+	"description": "Fetch a remote agent's public Agent Card via the .well-known/agent-card.json endpoint",
+	"operation": {
+		"adapter": "a2a:getAgentCard",
+		"input": {
+			"type": "object",
+			"properties": {
+				"url": {
+					"type": "string",
+					"description": "Base URL of the remote A2A agent (e.g. https://agent.example.com)"
+				}
+			},
+			"required": ["url"]
+		},
+		"output": {
+			"type": "object",
+			"description": "A2A Agent Card — see https://a2a-protocol.org/latest/specification/"
+		}
+	}
+}

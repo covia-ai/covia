@@ -350,6 +350,15 @@ public class A2A extends ACoviaAPI {
 		// Re-serialise the loose params map, then parse into the typed record.
 		// Single round-trip through gson so polymorphic adapters (Part, etc.)
 		// are applied consistently.
+		// Inject tenant="" before parsing — the SDK's *Params records mark
+		// tenant @NonNull but gson doesn't know to pass "" through default
+		// convenience constructors. Clients typically omit tenant on the wire.
+		if (raw instanceof Map<?, ?> m) {
+			@SuppressWarnings("unchecked")
+			Map<String, Object> mutable = new LinkedHashMap<>((Map<String, Object>) m);
+			mutable.putIfAbsent("tenant", "");
+			raw = mutable;
+		}
 		String json = JsonUtil.OBJECT_MAPPER.toJson(raw);
 		return JsonUtil.OBJECT_MAPPER.fromJson(json, cls);
 	}

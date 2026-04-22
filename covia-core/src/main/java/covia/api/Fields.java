@@ -85,6 +85,10 @@ public class Fields {
 	public static final StringShort A2A = Strings.intern("a2a");
 	public static final StringShort URL = Strings.intern("url");
 	public static final StringShort OUTPUT_SCHEMA = Strings.intern("outputSchema");
+	/** When the A2A adapter mirrors a remote Task into a local Job, this field
+	 *  stores the remote Task ID on the local Job's data so clients can
+	 *  correlate the two. */
+	public static final StringShort REMOTE_TASK_ID = Strings.intern("remoteTaskId");
 
 	// Asset related
 	public static final StringShort DEFINITION = Strings.intern("definition");

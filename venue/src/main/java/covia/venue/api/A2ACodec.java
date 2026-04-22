@@ -61,6 +61,25 @@ public class A2ACodec {
 	// ==================== TaskState mapping ====================
 
 	/**
+	 * Reverse mapping: A2A TaskState → Covia Status. Used by the outbound A2A
+	 * adapter when mirroring a remote Task's lifecycle onto a local Job.
+	 */
+	public static AString fromTaskState(TaskState state) {
+		if (state == null) return Status.PENDING;
+		return switch (state) {
+			case TASK_STATE_SUBMITTED      -> Status.PENDING;
+			case TASK_STATE_WORKING        -> Status.STARTED;
+			case TASK_STATE_COMPLETED      -> Status.COMPLETE;
+			case TASK_STATE_FAILED         -> Status.FAILED;
+			case TASK_STATE_CANCELED       -> Status.CANCELLED;
+			case TASK_STATE_REJECTED       -> Status.REJECTED;
+			case TASK_STATE_INPUT_REQUIRED -> Status.INPUT_REQUIRED;
+			case TASK_STATE_AUTH_REQUIRED  -> Status.AUTH_REQUIRED;
+			case UNRECOGNIZED              -> Status.FAILED;
+		};
+	}
+
+	/**
 	 * Map a Covia Status string to an A2A TaskState.
 	 *
 	 * <p>Covia PAUSED has no A2A equivalent; we collapse it to WORKING so the

@@ -417,6 +417,7 @@ public class Engine {
 		venue.registerAdapter(new CoviaAdapter());
 		venue.registerAdapter(new AssetAdapter());
 		venue.registerAdapter(new GridAdapter());
+		venue.registerAdapter(new covia.adapter.A2AAdapter());
 		venue.registerAdapter(new ConvexAdapter());
 		venue.registerAdapter(new AgentAdapter());
 		venue.registerAdapter(new SecretAdapter());
