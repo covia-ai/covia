@@ -73,7 +73,19 @@ public class RequestContext {
 	}
 
 	/**
-	 * Returns a new context with the given proofs added.
+	 * Returns a new context with the given UCAN proofs attached.
+	 *
+	 * <p><b>Trust contract:</b> the caller is responsible for ensuring that
+	 * every token in {@code proofs} has already been cryptographically
+	 * verified (signature, expiry at the time of verification, proof chain
+	 * integrity). Downstream authorisation code trusts this invariant and
+	 * will <em>not</em> re-verify signatures — it only re-checks temporal
+	 * bounds and policy (audience, issuer, attenuation) at use time.</p>
+	 *
+	 * <p>The canonical way to obtain a verified proof vector is via
+	 * {@code UCANValidator.parseTransportUCANs(...)}, which is the single
+	 * trust boundary for inbound transport tokens. Tests that fabricate
+	 * CAD3-signed tokens directly are implicitly trusted by construction.</p>
 	 */
 	public RequestContext withProofs(AVector<ACell> proofs) {
 		return new RequestContext(this.callerDID, this.internal, proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId);

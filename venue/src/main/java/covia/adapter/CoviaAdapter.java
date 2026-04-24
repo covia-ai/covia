@@ -1212,21 +1212,27 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * Verifies that the request context contains a valid UCAN proof chain
+	 * Verifies that the request context contains a valid UCAN proof
 	 * granting the caller the requested capability on the target DID's resource.
 	 *
 	 * <p>For each proof token in the context:</p>
 	 * <ol>
 	 *   <li>Parse as UCAN</li>
-	 *   <li>Verify signature and time bounds via {@link UCANValidator}</li>
+	 *   <li>Re-check temporal bounds (signature and chain are already verified
+	 *       at transport ingress — see {@link UCANValidator#parseTransportUCANs})</li>
 	 *   <li>Check audience matches caller</li>
-	 *   <li>Check issuer matches target DID (resource owner)</li>
+	 *   <li>Check issuer matches the venue (Phase C1: venue is authority for
+	 *       all hosted data)</li>
 	 *   <li>Check attenuations cover the requested capability via {@link Capability#covers}</li>
 	 * </ol>
-	 */
-	/**
-	 * Verifies that the request context contains a valid UCAN proof chain
-	 * granting the caller the requested capability.
+	 *
+	 * <p>Signature verification is <b>not</b> repeated here. The trust
+	 * boundary is {@code RequestContext.withProofs(...)}; tokens reach it
+	 * only through {@link UCANValidator#parseTransportUCANs} (for transport)
+	 * or direct test fixtures. Re-verifying a JWT-origin token via
+	 * {@link UCAN#verifySignature()} would fail anyway, because that method
+	 * verifies the stored signature against CVM-encoded payload bytes while
+	 * JWT signatures cover base64url JWT bytes.</p>
 	 *
 	 * @param requestedResource Full DID URL (e.g. "did:key:zAlice.../w/notes")
 	 * @param requestedAbility Ability string (e.g. "crud/read")
@@ -1248,8 +1254,9 @@ public class CoviaAdapter extends AAdapter {
 			UCAN token = UCAN.parse(tokenMap);
 			if (token == null) continue;
 
-			// Verify signature and time bounds
-			if (UCANValidator.validate(token, now) == null) continue;
+			// Re-check temporal bounds only. Signature and chain were
+			// verified at the trust boundary (parseTransportUCANs).
+			if (!UCANValidator.checkTemporalBounds(token, now)) continue;
 
 			// Audience must match caller
 			AString aud = token.getAudience();

@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
+import convex.auth.ucan.UCANValidator;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -181,6 +182,73 @@ public class UCANTest {
 		ACell result = listJob.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
 		assertEquals(Strings.create("Map"), RT.getIn(result, "type"));
+	}
+
+	// ========== JWT transport round-trip (regression for #87) ==========
+
+	/**
+	 * Regression for covia#87: a token issued by {@code ucan:issue} (which
+	 * returns a JWT string), presented through the transport path via
+	 * {@link UCANValidator#parseTransportUCANs}, must authorise the
+	 * corresponding cross-user read.
+	 *
+	 * <p>Prior to the fix this always returned "Access denied" because
+	 * {@code CoviaAdapter.verifyProofs} re-ran {@code UCAN.verifySignature()}
+	 * — which verifies the stored signature against CVM-encoded payload
+	 * bytes — on a token whose signature actually covers base64url JWT
+	 * bytes. The redundant re-check has been removed; signatures are
+	 * verified once at {@code parseTransportUCANs} and trusted from there.</p>
+	 */
+	@Test
+	public void testCrossUserReadViaJWTTransport() {
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		Job issueJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(
+				UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(exp)),
+			ALICE);
+		AString jwt = RT.ensureString(RT.getIn(issueJob.awaitResult(5000), "token"));
+		assertNotNull(jwt);
+
+		AVector<ACell> proofs = UCANValidator.parseTransportUCANs(Vectors.of(jwt));
+		assertNotNull(proofs, "Valid JWT should verify at transport ingress");
+		assertEquals(1L, proofs.count());
+
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
+			BOB.withProofs(proofs));
+		ACell result = readJob.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
+		assertEquals(Strings.create("shared content"), RT.getIn(result, "value"));
+	}
+
+	/**
+	 * Tampered JWT signatures must be rejected at the transport trust
+	 * boundary — they must never reach {@code RequestContext.proofs}.
+	 */
+	@Test
+	public void testTamperedJWTRejectedAtIngress() {
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		Job issueJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(
+				UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(exp)),
+			ALICE);
+		String jwt = RT.ensureString(RT.getIn(issueJob.awaitResult(5000), "token")).toString();
+
+		// Flip a character in the signature segment (last dot-separated part)
+		int lastDot = jwt.lastIndexOf('.');
+		char c = jwt.charAt(lastDot + 1);
+		char flipped = (c == 'A') ? 'B' : 'A';
+		String tampered = jwt.substring(0, lastDot + 1) + flipped + jwt.substring(lastDot + 2);
+
+		AVector<ACell> proofs = UCANValidator.parseTransportUCANs(
+			Vectors.of(Strings.create(tampered)));
+		assertNull(proofs, "Tampered JWT must not produce a verified proof");
 	}
 
 	// ========== Adversarial ==========
