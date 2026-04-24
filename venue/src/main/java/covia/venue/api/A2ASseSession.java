@@ -56,6 +56,7 @@ public class A2ASseSession {
 
 	private final Consumer<Job> listener = this::onJobUpdate;
 	private final AtomicBoolean closed = new AtomicBoolean(false);
+	private volatile Job subscribedJob;
 
 	public A2ASseSession(SseClient sseClient, Engine engine, Blob taskId,
 			Object rpcRequestId, RequestContext rctx) {
@@ -78,34 +79,41 @@ public class A2ASseSession {
 		// connections after a timeout and the peer may abort at any time.
 		sseClient.onClose(this::close);
 
+		// Access-control check against the caller via the RequestContext path;
+		// gives us an authoritative snapshot for the initial frame.
 		AMap<AString, ACell> data = engine.jobs().getJobData(taskId, rctx);
 		if (data == null) {
-			// Race: task existed at route-dispatch but was evicted before we
-			// got here. Close cleanly; the POST handler already returned 200.
+			close();
+			return;
+		}
+
+		Job job = engine.jobs().getJob(taskId);
+		if (job == null) {
+			// Job already evicted (terminal). Emit snapshot + final frame and close.
+			sendFrame(A2ACodec.toTask(data));
+			if (Job.isFinished(data)) {
+				sendFrame(A2ACodec.toStatusUpdate(data));
+			}
 			close();
 			return;
 		}
 
 		// Frame 1: Task snapshot
-		Task initial = A2ACodec.toTask(data);
-		sendFrame(initial);
+		sendFrame(A2ACodec.toTask(data));
 
 		if (Job.isFinished(data)) {
-			// Already terminal — emit one statusUpdate with final:true then close.
-			TaskStatusUpdateEvent update = A2ACodec.toStatusUpdate(data);
-			sendFrame(update);
+			sendFrame(A2ACodec.toStatusUpdate(data));
 			close();
 			return;
 		}
 
-		// Register listener for future transitions
-		engine.jobs().addJobUpdateListener(listener);
+		// Attach directly to the Job — no taskId filtering, no global dispatch.
+		this.subscribedJob = job;
+		job.subscribe(listener);
 	}
 
 	private void onJobUpdate(Job job) {
 		if (closed.get()) return;
-		if (!taskId.equals(job.getID())) return;
-
 		AMap<AString, ACell> data = job.getData();
 		try {
 			TaskStatusUpdateEvent update = A2ACodec.toStatusUpdate(data);
@@ -135,7 +143,8 @@ public class A2ASseSession {
 
 	public void close() {
 		if (!closed.compareAndSet(false, true)) return;
-		engine.jobs().removeJobUpdateListener(listener);
+		Job job = this.subscribedJob;
+		if (job != null) job.unsubscribe(listener);
 		try {
 			sseClient.close();
 		} catch (Exception ignored) {

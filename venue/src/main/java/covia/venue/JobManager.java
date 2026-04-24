@@ -55,7 +55,9 @@ public class JobManager {
 	/** In-memory cache of active (non-terminal) jobs */
 	private final ConcurrentHashMap<Blob, Job> activeJobs = new ConcurrentHashMap<>();
 
-	/** Listeners notified on every job state update (SSE, MCP notifications) */
+	/** Cross-cutting listeners notified on every Job in the venue (REST SSE,
+	 *  MCP notifications). Per-Job subscribers attach directly to the Job
+	 *  via {@link Job#subscribe(java.util.function.Consumer)}. */
 	private final java.util.concurrent.CopyOnWriteArrayList<java.util.function.Consumer<Job>> jobUpdateListeners =
 		new java.util.concurrent.CopyOnWriteArrayList<>();
 
@@ -362,12 +364,6 @@ public class JobManager {
 		}
 
 		VenueJob job = new VenueJob(status, meta, callerDID, this);
-
-		// Always wire the dispatch listener — listeners may be added after
-		// job creation (e.g. per-subscription A2A SSE sessions). Empty-list
-		// dispatch is a cheap no-op.
-		job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
-
 		activeJobs.put(jobID, job);
 
 		// Persist initial job record
@@ -716,10 +712,6 @@ public class JobManager {
 		// Create a live Job wrapping the persisted record
 		VenueJob job = new VenueJob(record, meta, callerDID, this);
 
-		if (!jobUpdateListeners.isEmpty()) {
-			job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
-		}
-
 		activeJobs.put(jobID, job);
 		RequestContext ctx = RequestContext.of(callerDID);
 		if (meta == null) {
@@ -751,10 +743,6 @@ public class JobManager {
 
 		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
 		VenueJob job = new VenueJob(record, meta, callerDID, this);
-
-		if (!jobUpdateListeners.isEmpty()) {
-			job.setUpdateListener(j -> jobUpdateListeners.forEach(l -> l.accept(j)));
-		}
 
 		activeJobs.put(jobID, job);
 	}
@@ -848,20 +836,30 @@ public class JobManager {
 	// ========== Listeners ==========
 
 	/**
-	 * Adds a listener to be notified on all job state updates.
+	 * Add a cross-cutting listener notified on every Job state update in the
+	 * venue. Used by venue-wide fan-outs (REST SSE broadcasting, MCP
+	 * notifications). For per-Job subscriptions use
+	 * {@link Job#subscribe(java.util.function.Consumer)} instead.
 	 */
 	public void addJobUpdateListener(java.util.function.Consumer<Job> listener) {
 		this.jobUpdateListeners.add(listener);
 	}
 
-	/**
-	 * Remove a previously-added update listener. Used by per-subscription
-	 * SSE sessions to stop receiving events on disconnect.
-	 *
-	 * @return true if the listener was registered
-	 */
+	/** Remove a previously-added cross-cutting listener. */
 	public boolean removeJobUpdateListener(java.util.function.Consumer<Job> listener) {
 		return this.jobUpdateListeners.remove(listener);
+	}
+
+	/** Called by {@link VenueJob#onUpdate} to fan each Job update out to the
+	 *  cross-cutting listeners. */
+	void notifyGlobalListeners(Job job) {
+		for (java.util.function.Consumer<Job> l : jobUpdateListeners) {
+			try {
+				l.accept(job);
+			} catch (Throwable t) {
+				log.warn("Job update listener threw: {}", t.getMessage());
+			}
+		}
 	}
 
 	// ========== Accessors ==========

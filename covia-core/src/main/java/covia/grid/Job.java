@@ -2,10 +2,12 @@ package covia.grid;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.UnaryOperator;
 
 import convex.core.data.ABlob;
@@ -49,6 +51,16 @@ public class Job {
 
 	/** Key for previous state pointer in job data */
 	public static final AString PREV = Strings.intern("prev");
+
+	/**
+	 * Per-Job listeners invoked on every successful state update. Consumers
+	 * subscribe via {@link #subscribe(Consumer)} and are guaranteed to see
+	 * the Job (not a snapshot) with {@link #getData()} reflecting the state
+	 * just committed by the CAS. Cross-cutting listeners (every Job in a
+	 * venue) belong on {@code JobManager} instead — this list is for
+	 * per-Job consumers like SSE subscriptions.
+	 */
+	private final CopyOnWriteArrayList<Consumer<Job>> listeners = new CopyOnWriteArrayList<>();
 
 	public Job(AMap<AString, ACell> status) {
 		this.data = new AtomicReference<>(status);
@@ -145,10 +157,44 @@ public class Job {
 		// Post-update side effects
 		AMap<AString, ACell> current = data.get();
 		onUpdate(current);
+		notifyListeners();
 
 		if (isFinished(current)) {
 			completeResultFuture();
 			onFinish(current);
+		}
+	}
+
+	/**
+	 * Subscribe a listener that will be notified on every successful state
+	 * update to this Job. The listener runs on the thread that called
+	 * {@link #updateData}; it must not block or throw.
+	 *
+	 * @return the supplied listener, for chaining
+	 */
+	public Consumer<Job> subscribe(Consumer<Job> listener) {
+		listeners.add(listener);
+		return listener;
+	}
+
+	/**
+	 * Remove a previously-registered listener. Identity-based; you must pass
+	 * the same object that was passed to {@link #subscribe}.
+	 *
+	 * @return true if the listener was removed
+	 */
+	public boolean unsubscribe(Consumer<Job> listener) {
+		return listeners.remove(listener);
+	}
+
+	private void notifyListeners() {
+		for (Consumer<Job> l : listeners) {
+			try {
+				l.accept(this);
+			} catch (Throwable t) {
+				// Don't let a misbehaving listener poison updateData; there's
+				// no sensible recovery beyond isolating the failure.
+			}
 		}
 	}
 
