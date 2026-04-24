@@ -211,17 +211,33 @@ value hashes as the native content-addressing scheme.
 
 #### Transport
 
-**REST API**: Optional `ucans` field in the request body:
-```json
-POST /api/v1/invoke
-{
-  "operation": "covia:read",
-  "input": { "path": "did:key:zAlice.../w/notes" },
-  "ucans": [<signed-token>, ...]
-}
-```
+**REST API**: UCAN tokens may arrive through either (or both) of two
+transport channels — they are merged through the same trust boundary:
 
-**MCP**: Optional `ucans` field in tool call parameters:
+1. **Request body `ucans` array** — the portable envelope form that survives
+   cross-venue hops (e.g. `grid:invoke`) where HTTP headers are not
+   preserved:
+   ```json
+   POST /api/v1/invoke
+   {
+     "operation": "covia:read",
+     "input": { "path": "did:key:zAlice.../w/notes" },
+     "ucans": [<signed-token>, ...]
+   }
+   ```
+
+2. **`Authorization: Bearer <ucan-jwt>`** — matching the IETF UCAN-HTTP
+   bearer convention. A single UCAN JWT in the standard HTTP bearer slot
+   serves both as caller authentication (the UCAN's `iss` becomes the
+   caller DID, since the signature proves the issuer holds the private
+   key) and as a capability proof (the same token is added to the proof
+   vector). Additional delegation proofs may accompany it in the body
+   `ucans` array. Expired, tampered, or non-UCAN bearer tokens fall
+   through to the existing JWT auth paths.
+
+**MCP**: Same two channels. Tool call parameters may include `ucans`, and
+the MCP endpoint honours `Authorization: Bearer <ucan-jwt>` on the
+enclosing HTTP request:
 ```json
 { "path": "did:key:zAlice.../w/notes", "ucans": [<signed-token>, ...] }
 ```

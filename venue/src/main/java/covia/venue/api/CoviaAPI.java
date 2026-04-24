@@ -433,9 +433,14 @@ public class CoviaAPI extends ACoviaAPI {
 		ACell input=RT.getIn(req, "input");
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
-		// Attach UCAN proofs from request envelope (JWT strings → validated CVM maps)
+		// Attach UCAN proofs. Two transport channels are accepted and merged
+		// through the same trust boundary (parseTransportUCANs):
+		//   1. `ucans` array in the request envelope
+		//   2. `Authorization: Bearer <ucan-jwt>` (IETF UCAN-HTTP) stashed
+		//      by AuthMiddleware as UCAN_BEARER_ATTR when present
 		AVector<ACell> ucans = RT.getIn(req, "ucans");
-		AVector<ACell> proofs = UCANValidator.parseTransportUCANs(ucans);
+		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
+		AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans);
 		if (proofs != null) rctx = rctx.withProofs(proofs);
 
 		try {

@@ -180,9 +180,12 @@ public class MCP extends McpServer {
 				AString callerDID = (ctx != null) ? AuthMiddleware.getCallerDID(ctx) : null;
 				RequestContext rctx = RequestContext.of(callerDID);
 
-				// Extract UCAN proofs from tool arguments (JWT strings)
+				// Extract UCAN proofs from both transport channels:
+				//   1. `ucans` in tool arguments
+				//   2. `Authorization: Bearer <ucan-jwt>` stashed by AuthMiddleware
 				AVector<ACell> ucans = RT.getIn(arguments, Fields.UCANS);
-				AVector<ACell> proofs = UCANValidator.parseTransportUCANs(ucans);
+				AString bearer = (ctx != null) ? ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR) : null;
+				AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans);
 				if (proofs != null) rctx = rctx.withProofs(proofs);
 
 				Job job = engine().jobs().invokeOperation(opID.toCVMHexString(), arguments, rctx);

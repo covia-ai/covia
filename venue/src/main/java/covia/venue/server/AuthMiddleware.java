@@ -13,6 +13,8 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Strings;
 import convex.auth.jwt.JWT;
+import convex.auth.ucan.UCAN;
+import convex.auth.ucan.UCANValidator;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.venue.Auth;
@@ -41,6 +43,15 @@ public class AuthMiddleware {
 	private static final Logger log = LoggerFactory.getLogger(AuthMiddleware.class);
 
 	static final String CALLER_DID_ATTR = "callerDID";
+	/**
+	 * Context attribute holding the raw UCAN JWT extracted from an
+	 * {@code Authorization: Bearer ...} header, when the bearer is a valid
+	 * UCAN (and so also serves as caller authentication). Downstream handlers
+	 * merge this into their transport {@code ucans} vector via
+	 * {@link UCANValidator#parseTransportUCANsWithBearer}. Null when the
+	 * request has no bearer token or the bearer is not a UCAN.
+	 */
+	public static final String UCAN_BEARER_ATTR = "ucanBearer";
 	private static final AString SUB = Fields.SUB;
 	private static final AString KID = Fields.KID;
 	private static final AString EMAIL = Fields.EMAIL;
@@ -114,7 +125,16 @@ public class AuthMiddleware {
 
 		try {
 			AString jwt = Strings.create(token);
-			AString callerDID = tryVerifySelfIssued(jwt);
+			// Try UCAN first — if the bearer is a UCAN, iss is the caller DID
+			// and the token is also stashed as a capability proof for downstream
+			// handlers (IETF UCAN-HTTP bearer semantics).
+			AString callerDID = tryVerifyUCAN(jwt);
+			if (callerDID != null) {
+				ctx.attribute(UCAN_BEARER_ATTR, jwt);
+			}
+			if (callerDID == null) {
+				callerDID = tryVerifySelfIssued(jwt);
+			}
 			if (callerDID == null && venueKey != null) {
 				callerDID = tryVerifyVenueSigned(jwt);
 			}
@@ -141,6 +161,29 @@ public class AuthMiddleware {
 				ctx.attribute(CALLER_DID_ATTR, publicDID);
 			}
 		}
+	}
+
+	/**
+	 * Verify a UCAN bearer token. EdDSA signature is verified via the JWT
+	 * {@code kid} header; temporal bounds are checked; the token must have a
+	 * non-null {@code aud} (distinguishing it from generic self-issued auth
+	 * JWTs). On success, the issuer DID is returned as the caller identity —
+	 * matching the IETF UCAN-HTTP bearer convention that the invocation
+	 * token's {@code iss} is the caller.
+	 *
+	 * @param jwt Bearer token
+	 * @return Issuer DID (did:key form) on success, null if the token is not
+	 *         a valid UCAN
+	 */
+	private static AString tryVerifyUCAN(AString jwt) {
+		UCAN token = UCAN.fromJWT(jwt);
+		if (token == null) return null;
+		// A UCAN must declare an audience — this is what distinguishes it from
+		// other self-signed EdDSA JWTs that happen to verify.
+		if (token.getAudience() == null) return null;
+		long now = System.currentTimeMillis() / 1000;
+		if (!UCANValidator.checkTemporalBounds(token, now)) return null;
+		return token.getIssuer();
 	}
 
 	/**
