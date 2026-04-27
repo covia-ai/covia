@@ -1,6 +1,6 @@
 {
 	"name": "Grid Invoke",
-	"description": "Submit a Covia grid operation and return the job status",
+	"description": "Submit any operation on the local or a remote venue and return immediately with a job snapshot — does not block. Use grid_run if you want the result inline.\n\nThe escape hatch for invoking operations not exposed as MCP tools: discover with covia_inspect path=v/ops, drill into a group, then invoke any path. The operation argument accepts every resolvable form: v/ops/json/merge (venue catalog), o/my-pipeline (your pin), a/<hash> (asset by content hash), or did:web:<host>/v/ops/... (remote venue).\n\nReturns a job snapshot — poll with grid_job_status or wait for the result with grid_job_result(id=<returned id>).",
 	"operation": {
 		"adapter": "grid:invoke",
 		"input": {
@@ -8,14 +8,14 @@
 			"properties": {
 				"operation": {
 					"type": "string",
-					"description": "Operation alias or asset ID to invoke"
+					"description": "Any resolvable op reference: v/ops/<group>/<op>, o/<pin>, a/<hash>, or did:web:<host>/v/ops/<group>/<op> for federated calls."
 				},
 				"input": {
-					"description": "Arguments to pass to the operation"
+					"description": "Arguments matching the operation's input schema. Read the schema first via covia_read v/ops/<group>/<op>."
 				},
 				"venue": {
 					"type": "string",
-					"description": "Optional remote venue URL or DID to connect to"
+					"description": "Optional remote venue URL or DID — for one-off federation without changing the operation reference."
 				}
 			},
 			"required": ["operation"]

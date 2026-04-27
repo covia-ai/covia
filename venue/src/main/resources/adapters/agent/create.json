@@ -1,6 +1,6 @@
 {
 	"name": "Create Agent",
-	"description": "Creates an agent in the caller's namespace. Without overwrite, an existing slot is a no-op (idempotent). With overwrite=true, an existing SLEEPING or SUSPENDED agent has its config updated in place (timeline preserved); a TERMINATED agent is wiped and re-created fresh; a RUNNING agent is rejected. See venue/docs/AGENT_LOOP.md §4.1 for the full slot resolution table.",
+	"description": "Creates an agent at g/<agentId> in the caller's namespace. Idempotent on empty slots — call again with the same agentId without overwrite=true and you get a no-op success.\n\nSlot resolution when overwrite=true:\n  empty       → create\n  SLEEPING    → update config in place (timeline preserved)\n  SUSPENDED   → update config in place (timeline preserved)\n  TERMINATED  → wipe and re-create fresh\n  RUNNING     → rejected (suspend or wait for it to finish first)\n\nMinimal example: agent_create(agentId='Helper', config={systemPrompt: 'You summarise documents.'}). The default transition is llmagent:chat with the venue's default model. After creation, send work via agent_request and inspect via agent_info.",
 	"dateCreated": "2026-02-27T00:00:00Z",
 	"operation": {
 		"adapter": "agent:create",

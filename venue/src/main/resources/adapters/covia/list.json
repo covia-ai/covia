@@ -1,6 +1,6 @@
 {
 	"name": "List Lattice Structure",
-	"description": "List keys and structure at a lattice path without fetching values. Returns type, count, and keys. Use before covia_read to check size and shape. Examples: v/ops (discover venue operations), w (workspace top-level). Omit path for your namespace root.",
+	"description": "List keys at a lattice path with pagination. Returns type, count, and a (paginated) key array — values are not fetched. Use when you need just the keys of a known map (e.g. iterating agents under g/) or when paginating a large collection. For discovery and exploration use covia_inspect, which is budget-bounded and shows shape and sample values in one call. covia_slice paginates values; this paginates keys.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "covia:list",
