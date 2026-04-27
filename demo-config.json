@@ -1,0 +1,9 @@
+{
+  "venues": [
+    {
+      "name": "Local Test Venue",
+      "hostname": "localhost",
+      "mcp": {}
+    }
+  ]
+}
