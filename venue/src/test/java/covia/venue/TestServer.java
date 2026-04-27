@@ -21,7 +21,12 @@ public class TestServer {
 	static {
 		SERVER=VenueServer.launch(Maps.of(
 				Strings.create("port"),0, // ephemeral port
-				Fields.MCP,Maps.of(),
+				Fields.MCP,Maps.of(
+					Strings.create("includePathPrefixes"),
+					convex.core.data.Vectors.of(Strings.create("v/ops/"), Strings.create("v/test/ops/")),
+					Strings.create("includeAdapters"),
+					convex.core.data.Vectors.of(Strings.create("*"))
+				),
 				Fields.A2A,Maps.of(
 					Strings.create("defaultChatOp"), Strings.create("v/test/ops/chat")
 				),

@@ -64,13 +64,162 @@ public class MCP extends McpServer {
 	/** Active MCP sessions, keyed by session ID */
 	private final ConcurrentHashMap<String, McpSession> sessions = new ConcurrentHashMap<>();
 
+	/**
+	 * Default allowlist of adapter-name groups exposed via MCP. Operations
+	 * outside these groups are presumed to be venue-internal utilities (HTTP,
+	 * JSON, schema, LLM providers, etc.) — useful inside orchestrations
+	 * running on the venue, but external agents can supply equivalents.
+	 *
+	 * <p>Pass {@code mcp.includeAdapters: ["*"]} to expose everything, or
+	 * an explicit list to override the default.</p>
+	 */
+	private static final java.util.Set<String> DEFAULT_INCLUDE_ADAPTERS =
+		java.util.Set.of("covia", "grid", "asset", "secret", "agent");
+
+	/** Wildcard token in {@code includeAdapters} meaning "expose all groups". */
+	private static final String INCLUDE_ALL = "*";
+
+	/**
+	 * Adapter-name groups (the path segment under {@code v/ops/}) eligible
+	 * for MCP exposure. Read from {@code mcp.includeAdapters} at construction;
+	 * defaults to {@link #DEFAULT_INCLUDE_ADAPTERS}.
+	 */
+	private final java.util.Set<String> includedAdapters;
+
+	/**
+	 * Path prefixes whose operations are eligible for MCP exposure. Defaults
+	 * to {@code ["v/ops/"]}; configurable via {@code mcp.includePathPrefixes}.
+	 * Test harnesses may add {@code "v/test/ops/"} to surface test operations.
+	 */
+	private final java.util.List<String> includePathPrefixes;
+
+	/**
+	 * Registry of MCP-exposed tools: sanitised MCP tool name → op reference path
+	 * (e.g. {@code "v/ops/json/merge"}). Listing walks this map; tool calls
+	 * route through it via {@code engine.jobs().invokeOperation(opRef, ...)}.
+	 *
+	 * <p>Built lazily on first access — MCP is constructed before
+	 * {@code addDemoAssets} populates adapter catalogs, so eager construction
+	 * would always see an empty engine.</p>
+	 */
+	private volatile java.util.Map<AString, AString> toolRegistry;
+
 	public MCP(Venue venue, AMap<AString, ACell> mcpConfig) {
 		super(buildServerInfo(venue, mcpConfig));
 		this.venue = venue;
 		this.sseServer = new SseServer(engine());
+		this.includedAdapters = readIncludedAdapters(mcpConfig);
+		this.includePathPrefixes = readIncludePathPrefixes(mcpConfig);
 
 		// Register MCP SSE job notification broadcaster
 		engine().jobs().addJobUpdateListener(this::broadcastJobNotification);
+	}
+
+	private static java.util.List<String> readIncludePathPrefixes(AMap<AString, ACell> mcpConfig) {
+		if (mcpConfig != null) {
+			ACell raw = mcpConfig.get(Strings.create("includePathPrefixes"));
+			if (raw instanceof AVector<?> vec && vec.count() > 0) {
+				java.util.List<String> list = new java.util.ArrayList<>();
+				for (long i = 0; i < vec.count(); i++) {
+					ACell entry = vec.get(i);
+					if (entry instanceof AString s) list.add(s.toString());
+				}
+				return java.util.Collections.unmodifiableList(list);
+			}
+		}
+		return java.util.List.of("v/ops/");
+	}
+
+	/** Returns the tool registry, building it on first access. */
+	private java.util.Map<AString, AString> registry() {
+		java.util.Map<AString, AString> r = toolRegistry;
+		if (r != null) return r;
+		synchronized (this) {
+			if (toolRegistry == null) {
+				toolRegistry = buildToolRegistry(engine(), includePathPrefixes, includedAdapters);
+			}
+			return toolRegistry;
+		}
+	}
+
+	private static java.util.Set<String> readIncludedAdapters(AMap<AString, ACell> mcpConfig) {
+		if (mcpConfig != null) {
+			ACell raw = mcpConfig.get(Strings.create("includeAdapters"));
+			if (raw instanceof AVector<?> vec && vec.count() > 0) {
+				java.util.Set<String> set = new java.util.HashSet<>();
+				for (long i = 0; i < vec.count(); i++) {
+					ACell entry = vec.get(i);
+					if (entry instanceof AString s) set.add(s.toString());
+				}
+				return java.util.Collections.unmodifiableSet(set);
+			}
+		}
+		return DEFAULT_INCLUDE_ADAPTERS;
+	}
+
+	/**
+	 * Build the MCP tool registry by walking all adapters' catalog entries.
+	 * Includes only paths matching one of {@code includePathPrefixes} (default
+	 * {@code v/ops/}). The first segment after the matched prefix is the
+	 * adapter-name group, filtered against {@code includedAdapters}.
+	 */
+	private static java.util.Map<AString, AString> buildToolRegistry(
+			Engine engine,
+			java.util.List<String> includePathPrefixes,
+			java.util.Set<String> includedAdapters) {
+		boolean includeAll = includedAdapters.contains(INCLUDE_ALL);
+		java.util.LinkedHashMap<AString, AString> reg = new java.util.LinkedHashMap<>();
+		for (String adapterName : engine.getAdapterNames()) {
+			var adapter = engine.getAdapter(adapterName);
+			if (adapter == null) continue;
+			for (var entry : adapter.pendingCatalogEntries.entrySet()) {
+				String path = entry.getKey();
+				String matched = matchingPrefix(path, includePathPrefixes);
+				if (matched == null) continue;
+				// Path shape: <prefix><group>/<op...>; group is the allowlist key
+				String tail = path.substring(matched.length());
+				int slash = tail.indexOf('/');
+				String group = (slash >= 0) ? tail.substring(0, slash) : tail;
+				if (!includeAll && !includedAdapters.contains(group)) continue;
+
+				Hash hash = entry.getValue();
+				AString metaString = adapter.getInstalledAssets().get(hash);
+				if (metaString == null) continue;
+				try {
+					AMap<AString, ACell> meta = RT.ensureMap(JSON.parse(metaString));
+					AString toolName = mcpToolNameFor(meta);
+					if (toolName == null) continue;
+					if (reg.putIfAbsent(toolName, Strings.create(path)) != null) {
+						log.warn("Duplicate MCP tool name '{}' — keeping first registration; ignoring {}",
+							toolName, path);
+					}
+				} catch (Exception e) {
+					log.warn("Failed to register MCP tool from {}: {}", path, e.getMessage());
+				}
+			}
+		}
+		log.info("MCP tool registry built: {} tools (prefixes: {}, included groups: {})",
+			reg.size(), includePathPrefixes, includeAll ? "ALL" : includedAdapters);
+		return java.util.Collections.unmodifiableMap(reg);
+	}
+
+	private static String matchingPrefix(String path, java.util.List<String> prefixes) {
+		for (String p : prefixes) if (path.startsWith(p)) return p;
+		return null;
+	}
+
+	/**
+	 * Derive the MCP tool name from operation metadata. Prefers the explicit
+	 * {@code operation.toolName}, falling back to a sanitised
+	 * {@code operation.adapter}. Returns null if neither is present and the
+	 * operation is therefore not exposable.
+	 */
+	private static AString mcpToolNameFor(AMap<AString, ACell> meta) {
+		AMap<AString, ACell> op = RT.ensureMap(RT.getIn(meta, Fields.OPERATION));
+		if (op == null) return null;
+		AString toolName = RT.ensureString(op.get(Fields.TOOL_NAME));
+		if (toolName != null) return sanitiseToolName(toolName);
+		return sanitiseToolName(RT.ensureString(op.get(Fields.ADAPTER)));
 	}
 
 	private static AMap<AString, ACell> buildServerInfo(Venue venue, AMap<AString, ACell> mcpConfig) {
@@ -107,33 +256,18 @@ public class MCP extends McpServer {
 	@Override
 	protected AMap<AString, ACell> listTools() {
 		AVector<AMap<AString, ACell>> toolsVector = Vectors.empty();
-
-		for (String adapterName : engine().getAdapterNames()) {
+		for (var entry : registry().entrySet()) {
+			AString toolName = entry.getKey();
+			AString opRef = entry.getValue();
 			try {
-				var adapter = engine().getAdapter(adapterName);
-				if (adapter == null) continue;
-
-				Index<Hash, AString> installedAssets = adapter.getInstalledAssets();
-				int n = installedAssets.size();
-
-				for (int i = 0; i < n; i++) {
-					try {
-						MapEntry<Hash, AString> me = installedAssets.entryAt(i);
-						AString metaString = me.getValue();
-						AMap<AString, ACell> meta = RT.ensureMap(JSON.parse(metaString));
-						AMap<AString, ACell> mcpTool = checkTool(meta);
-						if (mcpTool != null) {
-							toolsVector = toolsVector.conj(mcpTool);
-						}
-					} catch (Exception e) {
-						log.warn("Error processing asset from adapter " + adapter.getName(), e);
-					}
-				}
+				AMap<AString, ACell> meta = engine().resolveAsset(opRef).meta();
+				AMap<AString, ACell> tool = buildToolEntry(toolName, meta);
+				if (tool != null) toolsVector = toolsVector.conj(tool);
 			} catch (Exception e) {
-				log.warn("Error processing adapter " + adapterName, e);
+				log.warn("Error resolving registered MCP tool {} ({}): {}",
+					toolName, opRef, e.getMessage());
 			}
 		}
-
 		return Maps.of("tools", toolsVector);
 	}
 
@@ -173,9 +307,9 @@ public class MCP extends McpServer {
 
 		try {
 			AString toolName = RT.getIn(params, Fields.NAME);
-			Hash opID = findTool(toolName);
+			AString opRef = (toolName != null) ? registry().get(sanitiseToolName(toolName)) : null;
 			ACell arguments = RT.getIn(params, Fields.ARGUMENTS);
-			if (opID != null) {
+			if (opRef != null) {
 				Context ctx = McpServer.getCurrentContext();
 				AString callerDID = (ctx != null) ? AuthMiddleware.getCallerDID(ctx) : null;
 				RequestContext rctx = RequestContext.of(callerDID);
@@ -188,7 +322,7 @@ public class MCP extends McpServer {
 				AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans);
 				if (proofs != null) rctx = rctx.withProofs(proofs);
 
-				Job job = engine().jobs().invokeOperation(opID.toCVMHexString(), arguments, rctx);
+				Job job = engine().jobs().invokeOperation(opRef, arguments, rctx);
 				ACell result = job.awaitResult(TOOL_CALL_TIMEOUT_MS);
 				if (result == null && !job.isComplete()) {
 					return toolError("Tool call timed out after " + (TOOL_CALL_TIMEOUT_MS / 1000)
@@ -343,34 +477,6 @@ public class MCP extends McpServer {
 
 	// ==================== Tool metadata helpers ====================
 
-	private Hash findTool(AString toolName) {
-		AString sanitisedName = sanitiseToolName(toolName);
-		for (String adapterName : engine().getAdapterNames()) {
-			try {
-				var adapter = engine().getAdapter(adapterName);
-				if (adapter == null) continue;
-
-				Index<Hash, AString> adapterTools = adapter.getInstalledAssets();
-				long n = adapterTools.count();
-				for (long i = 0; i < n; i++) {
-					Hash h = adapterTools.entryAt(i).getKey();
-					AMap<AString, ACell> meta = engine().getMetaValue(h);
-					AString opAdapter = sanitiseToolName(RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER));
-					if (sanitisedName.equals(opAdapter)) {
-						return h;
-					}
-					AString opToolName = sanitiseToolName(RT.getIn(meta, Fields.OPERATION, Fields.TOOL_NAME));
-					if (sanitisedName.equals(opToolName)) {
-						return h;
-					}
-				}
-			} catch (Exception e) {
-				log.warn("Error processing adapter " + adapterName, e);
-			}
-		}
-		return null;
-	}
-
 	static AString sanitiseToolName(AString name) {
 		if (name == null) return null;
 		String s = name.toString();
@@ -378,23 +484,16 @@ public class MCP extends McpServer {
 		return Strings.create(sanitised);
 	}
 
-	private AMap<AString, ACell> checkTool(AMap<AString, ACell> meta) {
-		// operation may be a map (full op definition) OR a string reference
-		// (template/asset path, e.g. goaltree.json's "operation": "v/ops/goaltree/chat").
-		// Only map-form operations are exposable as MCP tools — string refs are
-		// resolved later by the agent runtime, not callable directly.
+	/**
+	 * Build an MCP tool entry from already-resolved tool name and op metadata.
+	 * Returns null if the metadata has no map-form operation (e.g. is a
+	 * string-ref template).
+	 */
+	private AMap<AString, ACell> buildToolEntry(AString toolName, AMap<AString, ACell> meta) {
 		AMap<AString, ACell> op = RT.ensureMap(RT.getIn(meta, Fields.OPERATION));
 		if (op == null) return null;
-
-		AString toolName = RT.ensureString(op.get(Fields.TOOL_NAME));
-		if (toolName == null) {
-			toolName = sanitiseToolName(RT.ensureString(op.get(Fields.ADAPTER)));
-		}
-		if (toolName == null) return null;
-
 		AMap<AString, ACell> inputSchema = ensureSchema(RT.getIn(op, Fields.INPUT));
 		AMap<AString, ACell> outputSchema = ensureSchema(RT.getIn(op, Fields.OUTPUT));
-
 		return Maps.of(
 			Fields.NAME, toolName,
 			Fields.TITLE, RT.getIn(meta, Fields.NAME),
@@ -402,6 +501,17 @@ public class MCP extends McpServer {
 			Fields.INPUT_SCHEMA, inputSchema,
 			Fields.OUTPUT_SCHEMA, outputSchema
 		);
+	}
+
+	/**
+	 * Legacy per-adapter listing used by tests. Walks an adapter's installed
+	 * assets directly (bypassing the registry) and returns MCP-shaped tool
+	 * entries for any with a map-form operation.
+	 */
+	private AMap<AString, ACell> checkTool(AMap<AString, ACell> meta) {
+		AString toolName = mcpToolNameFor(meta);
+		if (toolName == null) return null;
+		return buildToolEntry(toolName, meta);
 	}
 
 	/** Keys to strip from schemas before exposing via MCP */
