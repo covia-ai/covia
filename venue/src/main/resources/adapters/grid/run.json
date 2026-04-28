@@ -11,6 +11,7 @@
 					"description": "Operation reference. Any resolvable form: v/ops/<adapter>/<op>, o/<name>, hex hash, /a/<hash>, or DID URL. Use covia_list path=v/ops to discover what's available."
 				},
 				"input": {
+					"type": ["null", "boolean", "object", "array", "number", "string"],
 					"description": "Arguments matching the operation's input schema. Use covia_read path=v/ops/<adapter>/<op> to inspect the schema if unsure."
 				},
 				"venue": {

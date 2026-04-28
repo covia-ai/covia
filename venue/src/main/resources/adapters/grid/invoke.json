@@ -11,6 +11,7 @@
 					"description": "Any resolvable op reference: v/ops/<group>/<op>, o/<pin>, a/<hash>, or did:web:<host>/v/ops/<group>/<op> for federated calls."
 				},
 				"input": {
+					"type": ["null", "boolean", "object", "array", "number", "string"],
 					"description": "Arguments matching the operation's input schema. Read the schema first via covia_read v/ops/<group>/<op>."
 				},
 				"venue": {
