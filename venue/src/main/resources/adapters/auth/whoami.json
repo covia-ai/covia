@@ -1,0 +1,28 @@
+{
+  "name": "Whoami",
+  "description": "Returns the caller's authenticated DID as resolved by the venue. Useful for verifying authentication and diagnosing identity issues.",
+  "operation": {
+    "adapter": "auth:whoami",
+    "input": {
+      "type": "object",
+      "properties": {}
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "caller": {
+          "type": "string",
+          "description": "Caller DID (or null if anonymous and no public DID was assigned)"
+        },
+        "authenticated": {
+          "type": "boolean",
+          "description": "True if a caller DID is present"
+        },
+        "internal": {
+          "type": "boolean",
+          "description": "True if the request is from an internal venue caller (bypasses auth)"
+        }
+      }
+    }
+  }
+}

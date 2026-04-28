@@ -191,6 +191,7 @@ public class HTTPAdapter extends AAdapter {
 		AMap<AString,AString> headers=RT.ensureMap(RT.getIn(input, Fields.HEADERS));
 		AMap<AString,AString> queryParams=RT.ensureMap(RT.getIn(input, Fields.QUERY_PARAMS));
 		ACell bodyField=RT.getIn(input, Fields.BODY);
+		AString bearerSecret=RT.ensureString(RT.getIn(input, Fields.BEARER_SECRET));
 		
 		try {
 			String method = "GET"; // default
@@ -256,7 +257,21 @@ public class HTTPAdapter extends AAdapter {
 					requestBuilder.header(me.getKey().toString(), me.getValue().toString());
 				}
 			}
-			
+
+			// Resolve bearer secret reference and set Authorization header.
+			// Only secret references are accepted — for plaintext tokens, set the
+			// Authorization header directly via the headers field.
+			if (bearerSecret != null) {
+				if (engine == null || ctx == null) {
+					throw new IllegalStateException("bearerSecret requires engine and request context");
+				}
+				String resolved = engine.resolveSecret(bearerSecret.toString(), ctx);
+				if (resolved == null) {
+					throw new IllegalArgumentException("Could not resolve bearerSecret reference: " + bearerSecret);
+				}
+				requestBuilder.setHeader("Authorization", "Bearer " + resolved);
+			}
+
 			HttpRequest request = requestBuilder.build();
 			
 			// Execute request using instance-level HttpClient

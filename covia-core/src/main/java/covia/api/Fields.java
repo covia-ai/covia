@@ -49,6 +49,7 @@ public class Fields {
 	public static final StringShort QUERY_PARAMS = Strings.intern("queryParams");
 	public static final StringShort BODY = Strings.intern("body");
 	public static final StringShort METHOD = Strings.intern("method");
+	public static final StringShort BEARER_SECRET = Strings.intern("bearerSecret");
 	public static final StringShort INLINE = Strings.intern("inline");
 	
 	public static final StringShort PORT = Strings.intern("port");

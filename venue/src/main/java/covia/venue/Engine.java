@@ -47,6 +47,7 @@ import convex.lattice.fs.DLFileSystem;
 import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.adapter.AssetAdapter;
+import covia.adapter.AuthAdapter;
 import covia.adapter.ConvexAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.adapter.GridAdapter;
@@ -421,6 +422,7 @@ public class Engine {
 		venue.registerAdapter(new ConvexAdapter());
 		venue.registerAdapter(new AgentAdapter());
 		venue.registerAdapter(new SecretAdapter());
+		venue.registerAdapter(new AuthAdapter());
 		venue.registerAdapter(new UCANAdapter());
 		venue.registerAdapter(new DLFSAdapter());
 		venue.registerAdapter(new VaultAdapter());
