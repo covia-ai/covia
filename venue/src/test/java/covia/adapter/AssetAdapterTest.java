@@ -153,6 +153,30 @@ public class AssetAdapterTest {
 	}
 
 	@Test
+	public void testGetAcceptsAllHashForms() {
+		// Regression: asset_get should accept bare hex, a/<hash>, /a/<hash>,
+		// and did:.../a/<hash>. Previously a/<hash> (no leading slash, matching
+		// the user-namespace convention used elsewhere) returned exists:false.
+		ACell metadata = Maps.of(Fields.NAME, "Multi Form", Fields.TYPE, "test");
+		Job storeJob = engine.jobs().invokeOperation("v/ops/asset/store",
+			Maps.of(Fields.METADATA, metadata), RequestContext.of(ALICE_DID));
+		AString didUrl = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID));
+		String hex = didUrl.toString().substring(didUrl.toString().indexOf("/a/") + 3);
+
+		String[] forms = { hex, "a/" + hex, "/a/" + hex, didUrl.toString() };
+		for (String form : forms) {
+			Job getJob = engine.jobs().invokeOperation("v/ops/asset/get",
+				Maps.of(Fields.ID, form), RequestContext.of(ALICE_DID));
+			ACell result = getJob.awaitResult(5000);
+			assertEquals(CVMBool.TRUE, RT.getIn(result, Strings.create("exists")),
+				"asset_get should resolve form: " + form);
+			assertEquals(Strings.create("Multi Form"),
+				RT.getIn(result, Fields.VALUE, Fields.NAME),
+				"asset_get should return correct metadata for form: " + form);
+		}
+	}
+
+	@Test
 	public void testGetInvalidPath() {
 		// Under universal resolution, an unrecognised string is just an
 		// unresolvable path — returns exists: false rather than throwing.

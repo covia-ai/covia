@@ -175,15 +175,22 @@ public class AssetAdapter extends AAdapter {
 	private static final long DEFAULT_MAX_SIZE = 1_000_000;
 
 	/**
-	 * Parses an asset hash from an ID string. Accepts bare hash, /a/<hash>,
-	 * or did:key:.../a/<hash> formats.
+	 * Parses an asset hash from an ID string. Accepts bare hash, a/<hash>,
+	 * /a/<hash>, or did:key:.../a/<hash> formats.
 	 */
 	private static Hash parseAssetId(AString idStr) {
 		if (idStr == null) return null;
 		String s = idStr.toString();
 		// Strip DID prefix if present: did:key:z6Mk.../a/<hash> → <hash>
 		int aPos = s.indexOf("/a/");
-		if (aPos >= 0) s = s.substring(aPos + 3);
+		if (aPos >= 0) {
+			s = s.substring(aPos + 3);
+		} else if (s.startsWith("a/")) {
+			// Bare a/<hash> form — matches the user-namespace convention
+			// used by other prefixes (w/, o/, etc.) and the asset_list tool
+			// description.
+			s = s.substring(2);
+		}
 		return Hash.parse(s);
 	}
 
