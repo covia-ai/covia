@@ -478,6 +478,21 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
+	 * Suspends the agent with an error and drops the task queue, in one CAS.
+	 * Used when a transition fails: callers of the queued tasks have already
+	 * been notified via {@code failAllPendingForAgent}, so leaving stale tasks
+	 * around would only cause the same failure to replay on the next resume.
+	 * Operator can fix the underlying issue and {@code agent_resume} to a
+	 * clean state; callers re-submit if they want to retry.
+	 */
+	public void suspendAndDrain(AString error) {
+		update(r -> r
+			.assoc(K_ERROR, error)
+			.assoc(K_STATUS, SUSPENDED)
+			.assoc(K_TASKS, Index.none()));
+	}
+
+	/**
 	 * Sets SLEEPING status, unless the agent has been externally SUSPENDED
 	 * or TERMINATED — in which case the status is preserved.
 	 */

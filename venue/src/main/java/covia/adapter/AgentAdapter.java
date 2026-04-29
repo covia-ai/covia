@@ -1644,9 +1644,27 @@ public class AgentAdapter extends AAdapter {
 		}
 		// else: yield — keep slot reserved for the next wake
 
+		// Fail-fast on transition error. Framework does not classify or retry —
+		// the caller (operator, or whichever submitter is awaiting a queued
+		// task) decides how to respond to a failure. Suspend the agent and
+		// drop the task queue first so the lattice state is settled before
+		// any caller's awaitResult unblocks; then fail every queued task's
+		// caller Job. The run loop exits at the top of the next iteration
+		// via the SUSPENDED check; the finally re-wake only fires on
+		// SLEEPING, so the agent stays down until an operator resumes it.
+		// See issue #88.
+		if (leanError != null) {
+			AString errStr = Strings.create(leanError.toString());
+			Index<Blob, ACell> tasksAtError = agent.getTasks();
+			agent.suspendAndDrain(errStr);
+			failQueuedTasks(tasksAtError, errStr.toString());
+			failAllPendingForAgent(callerDID, agentId, errStr.toString());
+		}
+
 		ACell lastResult = Maps.of(
 			Fields.AGENT_ID, agentId,
-			Fields.STATUS, merged.get(AgentState.KEY_STATUS),
+			Fields.STATUS, (leanError != null) ? AgentState.SUSPENDED
+				: merged.get(AgentState.KEY_STATUS),
 			Fields.RESULT, result,
 			Fields.TASK_RESULTS, allTaskResults);
 
@@ -1852,19 +1870,27 @@ public class AgentAdapter extends AAdapter {
 	 * </ul>
 	 * Each surviving Job is failed with {@code error}.
 	 */
+	/**
+	 * Fails the caller Jobs for a set of queued tasks. Used by the fail-fast
+	 * path on transition errors, where the task queue is drained before
+	 * notification so callers see a settled (SUSPENDED) lattice state. Pass
+	 * the tasks snapshot captured before the drain.
+	 */
+	private void failQueuedTasks(Index<Blob, ACell> tasks, String error) {
+		if (tasks == null) return;
+		for (var entry : tasks.entrySet()) {
+			Job pending = engine.jobs().getJob(entry.getKey());
+			if (pending != null && !pending.isFinished()) {
+				pending.fail(error);
+			}
+		}
+	}
+
 	@SuppressWarnings("unchecked")
 	private void failAllPendingForAgent(AString callerDID, AString agentId, String error) {
 		AgentState agent = getAgent(callerDID, agentId);
 		if (agent != null) {
-			Index<Blob, ACell> tasks = agent.getTasks();
-			if (tasks != null) {
-				for (var entry : tasks.entrySet()) {
-					Job pending = engine.jobs().getJob(entry.getKey());
-					if (pending != null && !pending.isFinished()) {
-						pending.fail(error);
-					}
-				}
-			}
+			failQueuedTasks(agent.getTasks(), error);
 		}
 		ConcurrentHashMap<Blob, Job> agentChats = activeChats.remove(agentId);
 		if (agentChats != null) {

@@ -3307,6 +3307,101 @@ public class AgentAdapterTest {
 		engine.scheduler().cancel(ref);
 	}
 
+	// ========== Issue #88: fail-fast on transition error ==========
+
+	/**
+	 * Transition that always fails must surface as a FAILED request Job, suspend
+	 * the agent, drain its task queue, and not retry. Regression for the tight
+	 * retry loop reported in issue #88 (e.g. missing OPENAI_API_KEY → ~280
+	 * timeline entries in seconds).
+	 */
+	@Test
+	public void testTransitionErrorSuspendsAgentAndFailsCaller() {
+		// v/test/ops/error reads input.message; the framework's transition input
+		// has no message field, so every invoke throws IllegalArgumentException.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "fail-fast-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/error")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job requestJob = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(
+				Fields.AGENT_ID, "fail-fast-agent",
+				Fields.INPUT,    Maps.of("q", "hello"),
+				Fields.WAIT,     CVMLong.create(5000)),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			requestJob.awaitResult(5000);
+			fail("Request must FAIL when the transition errors");
+		} catch (covia.exception.JobFailedException expected) {
+			// expected — caller sees the failure
+		}
+		assertEquals(Status.FAILED, requestJob.getStatus(),
+			"caller's Job must be FAILED, not stuck PENDING");
+		String err = requestJob.getErrorMessage();
+		assertNotNull(err, "FAILED Job must carry an error message");
+		assertTrue(err.contains("Transition failed"),
+			"error should describe the transition failure: " + err);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("fail-fast-agent");
+
+		try { agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS); }
+		catch (Exception e) { /* may exit via SUSPENDED rather than SLEEPING */ }
+
+		assertEquals(AgentState.SUSPENDED, agent.getStatus(),
+			"agent must be SUSPENDED after a transition error");
+		assertNotNull(agent.getError(), "SUSPENDED agent must record the error");
+		assertEquals(0, agent.getTasks().count(),
+			"task queue must be drained on fail-fast (no retry on resume)");
+
+		// Tight-loop guard: a single failed cycle must produce a single timeline
+		// entry, not the ~20 that the pre-fix code emitted per run.
+		AVector<ACell> timeline = (AVector<ACell>) agent.getRecord()
+			.get(AgentState.KEY_TIMELINE);
+		assertEquals(1, timeline.count(),
+			"fail-fast must record exactly one error cycle in the timeline");
+	}
+
+	/**
+	 * Resume after a fail-fast suspend must restore SLEEPING with the error
+	 * cleared. Subsequent requests should proceed against the (now clean)
+	 * agent — the framework does not retain stale state from the failed run.
+	 */
+	@Test
+	public void testResumeAfterFailFast() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "resume-after-fail",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/error")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job firstReq = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(
+				Fields.AGENT_ID, "resume-after-fail",
+				Fields.INPUT,    Maps.of("q", "first"),
+				Fields.WAIT,     CVMLong.create(5000)),
+			RequestContext.of(ALICE_DID));
+		try { firstReq.awaitResult(5000); } catch (Exception ignored) {}
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("resume-after-fail");
+		assertEquals(AgentState.SUSPENDED, agent.getStatus());
+
+		// Resume — operator action after fixing the underlying issue.
+		assertTrue(agent.tryResume(), "resume must flip SUSPENDED → SLEEPING");
+		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		assertNull(agent.getError(), "resume must clear the error");
+		assertEquals(0, agent.getTasks().count(),
+			"resumed agent must have a clean task queue");
+	}
+
 	/** Builds the L3 input via the same code path as agent:context and returns tool names. */
 	@SuppressWarnings("unchecked")
 	private java.util.Set<String> runtimeToolNames(String agentId) {
