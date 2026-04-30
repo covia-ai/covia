@@ -178,6 +178,22 @@ public class LangChainAdapterTest {
 		assertEquals(convex.core.data.prim.CVMLong.create(50), RT.getIn(msg, "tokens", "total"));
 	}
 
+	@Test
+	public void testToAssistantMessageZeroTokensPreserved() {
+		// Reported zero is real data (e.g. tool-call-only response with no
+		// output text). Distinct from "provider didn't report this count" —
+		// must be written, not dropped.
+		ChatResponse response = ChatResponse.builder()
+			.aiMessage(AiMessage.from(""))
+			.tokenUsage(new TokenUsage(10, 0, 10))
+			.build();
+		ACell msg = LangChainAdapter.toAssistantMessage(response);
+
+		assertEquals(convex.core.data.prim.CVMLong.create(10), RT.getIn(msg, "tokens", "input"));
+		assertEquals(convex.core.data.prim.CVMLong.create(0),  RT.getIn(msg, "tokens", "output"));
+		assertEquals(convex.core.data.prim.CVMLong.create(10), RT.getIn(msg, "tokens", "total"));
+	}
+
 	// ========== toChatMessages ==========
 
 	@Test
