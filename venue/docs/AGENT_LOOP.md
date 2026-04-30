@@ -2,7 +2,7 @@
 
 Design for Covia agent state and the transitions that mutate it.
 
-**Status:** April 2026
+**Status:** April 2026 (current behaviour). See **§8 Architectural Direction** for the in-flight redesign of the framework↔harness contract; §1–§7 describe how the code works today.
 
 See GRID_LATTICE_DESIGN.md for: per-user namespace layout (§4.3), agent addressing
 (`/g/<agent-id>`, §4.3.4), secret store (`/s/`, §4.3.6), and implementation phasing (§12).
@@ -900,3 +900,250 @@ See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
 | **C2** | Delegation chains — proof chain walking, attenuation validation, agent sub-delegation, revocation | Planned |
 | **D** | HITL requests (`/h/` namespace), cross-user messaging | Planned |
 | **E** | Agent forking, cross-venue migration, federated UCAN validation | Planned |
+
+---
+
+## 8. Architectural Direction
+
+**Status:** Proposed — April 2026. §1–§7 describe the current code; §8 describes the target. Each phase below promotes its content into the body and removes the corresponding stub. When §8 is empty, the body alone is the spec.
+
+### 8.1 Why this section exists
+
+The run loop and step contract were fitted to an early agent model where:
+
+- The step was a pure-FSM transition `(state, input) → (state', response)`
+- Every cycle was scoped to a picked task and picked session
+- The framework handed adapters wire-shaped inputs (tasks, pending, messages, session, config) and trusted them to thread state through
+
+Two things have undermined that model:
+
+1. **Session work landed.** Conversation now lives on `session.frames` (recent commit "Drop session.history; read transcript from session.frames"), not in `state`. The pure-FSM accumulator is no longer pulling its weight; in current code `state` mostly just round-trips a duplicate of `config`.
+2. **Wake events generalised.** Runs fire from new tasks, new messages, pending-job completions, scheduled fires, triggers, and self-wakes. The "pick a task and process it" assumption fits `agent:request` cleanly; it distorts the rest into a task-shaped mould or skips them.
+
+The target is a leaner contract where the step is a hook the framework calls each cycle, the harness reads what it needs from the lattice via context, and the framework's role shrinks to scheduling, persistence, and lifecycle.
+
+### 8.2 Vocabulary
+
+These terms are pinned in §8 and will replace inconsistent usage elsewhere during the cleanup pass.
+
+| Term | Meaning |
+|------|---------|
+| **Harness** | The agent infrastructure that wraps a reasoning core (typically an LLM) into an agent. In Covia: framework run loop + step adapter. Spans L1 and L2. |
+| **Run loop** | The framework's outer loop — wake routing, cycle iteration, merge, lifecycle. The L1 part of the harness. Implemented in `executeRunLoop`. |
+| **Wake event** | Any event that schedules a run: task arrival, message arrival, chat arrival, pending-job completion, scheduled fire, trigger, self-wake. |
+| **Trigger** | A specific kind of wake event — externally fired, manual, payload-less. Concretely the `agent:trigger` MCP op. Triggers carry no payload and have no result-await semantics; callers who want a result use `agent:request` or `agent:chat`. |
+| **Run** | Full harness execution from a wake event to the next SLEEPING or SUSPENDED. Contains 1..N cycles. |
+| **Cycle** | One iteration of the run loop = one **step** + one merge. |
+| **Step** | One invocation of an L2 adapter — the agent's reasoning step. Synonym: **transition** (legacy; kept for compatibility). |
+| **Step adapter** | The L2 implementation (`llmagent:chat`, `goaltree:chat`, …). Owns the agent's reasoning style. |
+| **Tool-call loop** | The harness's internal LLM↔tool iteration *inside* a step. Not every step adapter has one — rule engines, workflows, and test stubs may not. |
+| **LLM call** | One HTTP invocation of a level-3 provider (`langchain:openai`, …). Not part of the harness. |
+
+Layered view:
+
+```
+Harness ┌──────────────────────────────────────────────────────────┐
+        │ L1: Run loop  — wake routing, cycles, merge, lifecycle   │
+        │ L2: Step      — reasoning step; may include a tool loop  │
+        └──────────────────────────────────────────────────────────┘
+L3: LLM call (provider) — single model invocation, no agent semantics
+```
+
+#### Wake-event taxonomy
+
+| Wake event | Source | Carries payload? | Caller awaits? |
+|------------|--------|:----------------:|:--------------:|
+| Task arrival | `agent:request` adds a Job to `tasks` | yes | yes (the Job) |
+| Message arrival | `agent:message` appends to `session.pending` | yes | no |
+| Chat arrival | `agent:chat` reserves a chat slot | yes | yes (the chat Job) |
+| Pending completion | An outbound Job in `pending` finishes; completion callback wakes the agent | result of the outbound Job | no |
+| Scheduled fire | Scheduler timer reaches `wakeTime` (B8.8); includes `config.sleepInterval` periodic wake | no | no |
+| **Trigger** | `agent:trigger` MCP op | no | optional loop-drain `wait`, not a result-await |
+| Self-wake | A previous step wrote new work to the agent's own queues | (whatever the previous step wrote) | n/a |
+
+### 8.3 Gaps in the current design
+
+#### 8.3.1 `state` is a vestigial pure-FSM accumulator
+
+The step input today carries `state`; the output writes `state` back. In current code:
+
+- `LLMAgentAdapter` reads `state` to extract `loads` (one slot), then writes back `{config, loads}`. The `config` field is a duplicate of the agent record's `K_CONFIG`.
+- `GoalTreeAdapter` round-trips `state.config` solely to preserve config across cycles — explicit comment in `GoalTreeAdapter.java:473-476`: *"Wiping it would silently strip caps/schema enforcement on the second invocation."*
+
+Pure duplication. The record's `K_CONFIG` is canonical and is already passed into the step input as `KEY_CONFIG` separately. The only legitimate per-step persistent state is `loads` (LLM only), which can move to a dedicated lattice slot.
+
+#### 8.3.2 Cycle scope is over-fitted to "a picked task"
+
+The framework picks at most one task and at most one session per cycle, then bakes them into the step input via `formatPickedTask` / `pickSessionForCycle`. This fits `agent:request` cleanly, but distorts every other wake event:
+
+- **Trigger** fires with no task and no session — the framework synthesises empty inputs.
+- **Scheduled fire** fires with no payload — the agent is woken to "think now."
+- **Pending completion** has no task to pick.
+- **Multi-task agents** (orchestrators, batch processors) cannot consume multiple queued tasks per cycle.
+
+The step adapter ends up branching on "do I have a task? a session? neither?" — branching that should not be in the step adapter, and that the framework should not pre-perform.
+
+#### 8.3.3 Wire shapes leak framework concerns into adapters
+
+`formattedTasks`, `resolvedPending`, `effectiveMessages`, `presentedSessionPendingCount` are framework-internal scheduling artefacts. Step adapters depend on them. Changing the framework's wire format changes every step adapter. The right boundary is: framework gives the adapter a context, adapter reads typed lattice data via accessors.
+
+### 8.4 Target principles
+
+(Replaces §1.)
+
+1. **Single atomic value.** Unchanged. The agent record is one map.
+2. **Last writer wins.** Unchanged.
+3. **Single venue writes.** Unchanged.
+4. **Two layers, not three.** L1 (run loop) drives cycles and persists results. L2 (step adapter) does one cycle's worth of reasoning. L3 is outside the harness — a step adapter may invoke an L3 provider, but that's the adapter's business, not a layer of the contract. The framework never inspects the step adapter's reasoning; the step adapter never manages framework fields.
+5. **Lattice is the state.** No FSM accumulator threaded through the step. Persistent agent state (config, sessions, tasks, pending, timeline) lives on the lattice. The step adapter reads what it needs via context and writes via venue ops.
+6. **Step must succeed.** A failing step suspends the agent (#88). Same fail-fast semantics; the step adapter can return `error` to fail explicitly.
+
+### 8.5 Target step contract
+
+#### 8.5.1 Context
+
+Every step receives a `RequestContext` carrying:
+
+- `callerDID` — who owns this agent
+- `agentId` — which agent
+- `cause` — what wake event fired this run (enum; see §8.2 taxonomy)
+
+Notably absent: `taskId`, `sessionId`. The step adapter chooses which task or session (if any) to act on, by reading the lattice. The framework no longer pre-picks.
+
+#### 8.5.2 Input
+
+The step input is minimal:
+
+```
+{ cause: "task" | "message" | "chat" | "pending" | "scheduled" | "trigger" | "self" }
+```
+
+No `state`, no `tasks`, no `pending`, no `messages`, no `session`, no `config`. The step adapter resolves what it needs:
+
+| Want | Read |
+|------|------|
+| Agent's config | `agent.getConfig()` |
+| Queued tasks | `agent.getTasks()` |
+| Outbound pending | `agent.getPending()` |
+| Sessions | `agent.getSessions()`, `agent.getSession(sid)` |
+| Session frames | `agent.getSession(sid).get("frames")` |
+| Session inbox | `agent.getSession(sid).get("pending")` |
+
+`cause` is a hint, not a contract — the step adapter is free to read the full lattice state and decide what to do regardless of cause.
+
+#### 8.5.3 Output
+
+```
+{
+  response?: ACell,          // recorded as the cycle's timeline result
+  error?:    ACell,          // fail-fast — suspend, drain queue, fail callers (#88)
+  frames?:   AVector<ACell>, // optional session-frames replacement (goal-tree pattern)
+  done?:     boolean         // explicit "no more work to do this run" signal
+}
+```
+
+No `state` field. No `taskResults` field — task completions go through the existing `agent:complete-task` venue op (one mechanism, not two — see §8.5.5).
+
+#### 8.5.4 Stop condition
+
+Currently the run loop iterates while `hasWork(agent)`. Target: the step adapter signals `done: true` when it has nothing left to do. The framework re-invokes the step until `done: true` arrives, with `MAX_LOOP_ITERATIONS` retained as a misbehaving-agent safety cap.
+
+Why adapter-driven: the framework cannot reliably tell "is there more work?" from lattice state alone. A scheduled-fire step might decide nothing changed and return immediately. A multi-task step might process several queued tasks per cycle and signal done when the queue empties. A goal-tree harness might need to plan even with no queued work.
+
+#### 8.5.5 Task completion — one mechanism
+
+§3.4.1 currently describes two mechanisms (tool-call during execution; output declaration). Target: only the tool-call mechanism. Step adapters that don't run a tool-call loop call the same venue op (`agent:complete-task`) directly. The output `taskResults` field is retired, removing `buildTaskResultsFromDeferred` and the two-source merge.
+
+### 8.6 Target run loop
+
+(Replaces §4.4.)
+
+Per cycle:
+
+1. Inside `runningLoops.compute(agentId, ...)`: serialise launch via CAS (unchanged).
+2. Loop:
+   1. Re-check status; exit on SUSPENDED / TERMINATED.
+   2. Determine `cause` from the wake event (or "self" for in-loop iterations).
+   3. Build minimal `RequestContext` (`callerDID`, `agentId`, `cause`) — no `taskId`, no `sessionId`.
+   4. Invoke the step: `engine.jobs().invokeInternal(stepOp, {cause}, ctx)`.
+   5. On success: write timeline entry from `response` / `error`; replace `frames` if emitted.
+   6. On `done: true` or after `MAX_LOOP_ITERATIONS`: exit.
+   7. On `error`: fail-fast (existing #88 path — suspend, drain, fail callers).
+3. After loop exits, mark SLEEPING (or honour SUSPENDED/TERMINATED), release `runningLoops` slot, re-check for wakes.
+
+The framework no longer:
+
+- Picks a task or session
+- Builds wire-shaped `formattedTasks` / `resolvedPending` / `effectiveMessages`
+- Drains `session.pending` based on a presented count (the step adapter calls a venue op when it consumes messages)
+- Resolves Job IDs to job data
+
+### 8.7 Migration map
+
+| Current | Target | Notes |
+|---------|--------|-------|
+| `K_STATE` slot on agent record | retired | Adapter-specific persistent state moves to dedicated slots |
+| Step input field `state` | removed | Adapter reads from lattice |
+| Step input fields `tasks`, `pending`, `messages`, `session`, `config` | removed | Adapter reads via `agent.*` accessors |
+| Step output field `state` | removed | No round-trip |
+| Step output field `taskResults` | removed | Use `agent:complete-task` venue op |
+| `state.config` (LLM/goaltree) | merged into record `K_CONFIG` | Already canonical; just stop duplicating |
+| `state.loads` (LLM) | dedicated slot (`K_LOADS` or adapter namespace) | Only legitimate per-agent persistent state |
+| Framework picks task/session each cycle | adapter reads queue and decides | Cycle scope is the agent, not a task |
+| Loop exits on `hasWork == false` | loop exits on `done: true` from step | Adapter-driven stop condition |
+| Two task-completion mechanisms (§3.4.1) | one mechanism (venue op) | Simpler bookkeeping |
+| `RequestContext` carries `taskId`, `sessionId` | dropped | Adapter resolves these from the lattice |
+
+### 8.8 Phased plan
+
+Each phase is a self-contained PR with a doc commit that promotes its content from §8 into the main body and removes the corresponding stub.
+
+#### Phase D-1 — Step input simplification
+
+- Drop `tasks`, `pending`, `messages`, `session`, `config` from the step input wire shape.
+- Step adapters read via `agent.*` accessors and `RequestContext`.
+- Keep `state` in the step input/output for now to bound the change.
+- Doc: rewrite §3.4 input table; update §4.4 step 4.
+- Tests: `LLMAgentAdapterTest`, `AgentAdapterTest` exercise the new wire shape.
+
+#### Phase D-2 — Output narrowing + done signal
+
+- Step output becomes `{response?, error?, frames?, done?}`.
+- Drop `state` from the output.
+- Retire `taskResults` declaration; step adapters use `agent:complete-task` directly.
+- Loop stops on `done: true` (or `MAX_LOOP_ITERATIONS`).
+- Doc: rewrite §3.4 output table; simplify §3.4.1.
+- Tests: cover the done signal, no-task scheduled wake, multi-task cycle.
+
+#### Phase D-3 — Retire `K_STATE`
+
+- Remove `K_STATE` from the agent record.
+- LLMAgentAdapter's `loads` moves to a dedicated slot.
+- Migration: ignore `state` on read for existing agents; never write it.
+- Doc: rewrite §2.2 record shape; update §1 principles.
+
+#### Phase D-4 — Generalise the cycle
+
+- Framework no longer picks task or session.
+- Step input becomes `{cause}`; context drops `taskId` and `sessionId`.
+- Wake events explicitly enumerated and passed as `cause`.
+- Doc: rewrite §4.4 sequence; update §4.6 wake events; reframe §6.4 MCP-facing ops.
+
+After D-4, §8 is empty. The body of the doc reflects the new model and the banner at the top of the file is restored to a plain status line.
+
+### 8.9 Open questions
+
+1. **Should the step input carry `cause` at all?** Pro: gives the adapter a hint without forcing a lattice diff. Con: adapters might over-trust it. Lean: include it as a non-authoritative hint.
+
+2. **Where does `loads` live post-D-3?** Options:
+   - `K_LOADS` on the agent record (peer of `K_CONFIG`)
+   - Under an `adapters/` namespace map on the agent record
+   - In the session record (per-session loads — different semantics, bigger redesign)
+
+   Lean: `K_LOADS` on the record for parity with `K_CONFIG`.
+
+3. **Backwards compatibility for persistent agents.** Covia is alpha; assume any persistent agents can be re-created. If we ship a venue with persisted agents that have `state.config`, decide whether D-3 reads ignore-and-rewrite or fail-loudly.
+
+4. **Does Phase D-4 break MCP clients?** The MCP-facing operations (`agent:request`, `agent:message`, `agent:chat`, `agent:trigger`) are unchanged — only the framework↔harness contract moves. External callers should see no difference.
+
+5. **Class renames.** `LLMAgentAdapter` → `LLMHarness`? `GoalTreeAdapter` → `GoalTreeHarness`? Defer; doc terminology can lead the code.
