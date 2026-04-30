@@ -20,6 +20,9 @@ import dev.langchain4j.data.message.ToolExecutionResultMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.request.ResponseFormatType;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.output.FinishReason;
+import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.model.chat.request.json.JsonArraySchema;
 import dev.langchain4j.model.chat.request.json.JsonBooleanSchema;
 import dev.langchain4j.model.chat.request.json.JsonEnumSchema;
@@ -127,6 +130,52 @@ public class LangChainAdapterTest {
 		ACell msg = LangChainAdapter.toAssistantMessage(ai);
 
 		assertEquals(Strings.create("The answer is 42"), RT.getIn(msg, "content"));
+	}
+
+	@Test
+	public void testToAssistantMessageWithTokens() {
+		ChatResponse response = ChatResponse.builder()
+			.aiMessage(AiMessage.from("Hi"))
+			.tokenUsage(new TokenUsage(12, 3, 15))
+			.finishReason(FinishReason.STOP)
+			.build();
+		ACell msg = LangChainAdapter.toAssistantMessage(response);
+
+		assertEquals(Strings.create("Hi"), RT.getIn(msg, "content"));
+		assertEquals(convex.core.data.prim.CVMLong.create(12), RT.getIn(msg, "tokens", "input"));
+		assertEquals(convex.core.data.prim.CVMLong.create(3),  RT.getIn(msg, "tokens", "output"));
+		assertEquals(convex.core.data.prim.CVMLong.create(15), RT.getIn(msg, "tokens", "total"));
+		assertEquals(Strings.create("stop"), RT.getIn(msg, "finishReason"));
+	}
+
+	@Test
+	public void testToAssistantMessageNoTokens() {
+		// Provider didn't report usage — fields should be omitted, not zero
+		ChatResponse response = ChatResponse.builder()
+			.aiMessage(AiMessage.from("Hi"))
+			.build();
+		ACell msg = LangChainAdapter.toAssistantMessage(response);
+
+		assertEquals(Strings.create("Hi"), RT.getIn(msg, "content"));
+		assertNull(RT.getIn(msg, "tokens"),
+			"Absent token usage must not produce a tokens map");
+		assertNull(RT.getIn(msg, "finishReason"),
+			"Absent finish reason must not produce a finishReason field");
+	}
+
+	@Test
+	public void testToAssistantMessagePartialTokens() {
+		// Some providers report total only, or input+output without total.
+		// Missing sub-counts must be omitted, not written as zero.
+		ChatResponse response = ChatResponse.builder()
+			.aiMessage(AiMessage.from("Hi"))
+			.tokenUsage(new TokenUsage(null, null, 50))
+			.build();
+		ACell msg = LangChainAdapter.toAssistantMessage(response);
+
+		assertNull(RT.getIn(msg, "tokens", "input"));
+		assertNull(RT.getIn(msg, "tokens", "output"));
+		assertEquals(convex.core.data.prim.CVMLong.create(50), RT.getIn(msg, "tokens", "total"));
 	}
 
 	// ========== toChatMessages ==========

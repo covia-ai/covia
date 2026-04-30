@@ -14,6 +14,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMLong;
 import convex.core.util.JSON;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
@@ -32,6 +33,8 @@ import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.request.ResponseFormatType;
 import dev.langchain4j.model.chat.request.json.JsonSchema;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.output.FinishReason;
+import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.model.chat.request.json.JsonArraySchema;
 import dev.langchain4j.model.chat.request.json.JsonBooleanSchema;
 import dev.langchain4j.model.chat.request.json.JsonEnumSchema;
@@ -91,6 +94,11 @@ public class LangChainAdapter extends AAdapter {
 	static final AString K_DESCRIPTION = Strings.intern("description");
 	static final AString K_ENUM        = Strings.intern("enum");
 	static final AString K_ITEMS       = Strings.intern("items");
+	static final AString K_TOKENS         = Strings.intern("tokens");
+	static final AString K_INPUT          = Strings.intern("input");
+	static final AString K_OUTPUT         = Strings.intern("output");
+	static final AString K_TOTAL          = Strings.intern("total");
+	static final AString K_FINISH_REASON  = Strings.intern("finishReason");
 
 	// Role constants
 	static final AString ROLE_SYSTEM    = Strings.intern("system");
@@ -319,10 +327,41 @@ public class LangChainAdapter extends AAdapter {
 			response.aiMessage().hasToolExecutionRequests()
 				? response.aiMessage().toolExecutionRequests() : "none");
 
-		return toAssistantMessage(response.aiMessage());
+		return toAssistantMessage(response);
 	}
 
 	// ========== Response conversion ==========
+
+	/**
+	 * Builds an assistant message map from a full ChatResponse. Includes
+	 * {@code tokens: {input, output, total}} and {@code finishReason} when
+	 * the provider reports them. Sub-counts (cached, reasoning) are not
+	 * surfaced — keep this minimal for now.
+	 */
+	@SuppressWarnings("unchecked")
+	static ACell toAssistantMessage(ChatResponse response) {
+		AMap<AString, ACell> msg = (AMap<AString, ACell>) toAssistantMessage(response.aiMessage());
+
+		TokenUsage usage = response.tokenUsage();
+		if (usage != null) {
+			AMap<AString, ACell> tokens = Maps.empty();
+			Integer in = usage.inputTokenCount();
+			Integer out = usage.outputTokenCount();
+			Integer tot = usage.totalTokenCount();
+			if (in != null)  tokens = tokens.assoc(K_INPUT,  CVMLong.create(in));
+			if (out != null) tokens = tokens.assoc(K_OUTPUT, CVMLong.create(out));
+			if (tot != null) tokens = tokens.assoc(K_TOTAL,  CVMLong.create(tot));
+			if (tokens.count() > 0) msg = msg.assoc(K_TOKENS, tokens);
+		}
+
+		FinishReason fr = response.finishReason();
+		if (fr != null) {
+			msg = msg.assoc(K_FINISH_REASON,
+				Strings.create(fr.name().toLowerCase()));
+		}
+
+		return msg;
+	}
 
 	/**
 	 * Converts a LangChain4j AiMessage to a Convex assistant message map.
