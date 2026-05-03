@@ -25,6 +25,7 @@ import convex.core.lang.RT;
 public class CapabilityChecker {
 
 	private static final AString K_PATH = Strings.intern("path");
+	private static final AString K_ROOT = Strings.intern("root");
 
 	/**
 	 * Checks whether an operation invocation is allowed by the agent's caps.
@@ -113,6 +114,15 @@ public class CapabilityChecker {
 			case "v/ops/asset/store" -> "asset/store";
 			case "v/ops/asset/get", "v/ops/asset/list" -> "asset/read";
 			case "v/ops/grid/run" -> "invoke";
+			// File / DLFS share crud/* abilities — same resource shape, same
+			// granted caps cover both surfaces. roots/listDrives are
+			// discovery-only and use crud/read.
+			case "v/ops/file/read", "v/ops/file/list", "v/ops/file/stat", "v/ops/file/roots" -> "crud/read";
+			case "v/ops/file/write", "v/ops/file/append", "v/ops/file/mkdir" -> "crud/write";
+			case "v/ops/file/delete" -> "crud/delete";
+			case "v/ops/dlfs/read", "v/ops/dlfs/list", "v/ops/dlfs/stat", "v/ops/dlfs/list-drives" -> "crud/read";
+			case "v/ops/dlfs/write", "v/ops/dlfs/append", "v/ops/dlfs/mkdir", "v/ops/dlfs/create-drive" -> "crud/write";
+			case "v/ops/dlfs/delete", "v/ops/dlfs/delete-drive" -> "crud/delete";
 			// Legacy dispatch-string form (operation.adapter)
 			case "covia:read", "covia:list", "covia:slice" -> "crud/read";
 			case "covia:write", "covia:append" -> "crud/write";
@@ -123,6 +133,12 @@ public class CapabilityChecker {
 			case "asset:store" -> "asset/store";
 			case "asset:get", "asset:list" -> "asset/read";
 			case "grid:run" -> "invoke";
+			case "file:read", "file:list", "file:stat", "file:roots" -> "crud/read";
+			case "file:write", "file:append", "file:mkdir" -> "crud/write";
+			case "file:delete" -> "crud/delete";
+			case "dlfs:read", "dlfs:list", "dlfs:stat", "dlfs:listDrives" -> "crud/read";
+			case "dlfs:write", "dlfs:append", "dlfs:mkdir", "dlfs:createDrive" -> "crud/write";
+			case "dlfs:delete", "dlfs:deleteDrive" -> "crud/delete";
 			default -> "invoke";
 		};
 	}
@@ -137,6 +153,28 @@ public class CapabilityChecker {
 			AString path = RT.ensureString(RT.getIn(input, K_PATH));
 			return (path != null) ? path.toString() : null;
 		}
+		// File-adapter ops: resource = "file/<root>/<path>" so caps can be
+		// granted at namespace ("file/"), per-root ("file/scratch/"), or
+		// per-path ("file/scratch/notes.txt") granularity. roots-listing and
+		// other no-args ops collapse to "file/" (the namespace itself).
+		if (operation.startsWith("v/ops/file/") || operation.startsWith("file:")) {
+			AString root = RT.ensureString(RT.getIn(input, K_ROOT));
+			AString path = RT.ensureString(RT.getIn(input, K_PATH));
+			if (root == null) return "file/";
+			String pathPart = (path == null) ? "" : stripLeading(path.toString(), '/');
+			return "file/" + root + (pathPart.isEmpty() ? "/" : "/" + pathPart);
+		}
+		// DLFS ops: same shape as file with a "dlfs/<drive>/<path>" prefix.
+		// listDrives / createDrive / deleteDrive reach into the drive
+		// namespace itself ("dlfs/<drive>") or the namespace root ("dlfs/").
+		if (operation.startsWith("v/ops/dlfs/") || operation.startsWith("dlfs:")) {
+			AString drive = RT.ensureString(RT.getIn(input, Strings.intern("drive")));
+			if (drive == null) drive = RT.ensureString(RT.getIn(input, Strings.intern("name")));
+			AString path = RT.ensureString(RT.getIn(input, K_PATH));
+			if (drive == null) return "dlfs/";
+			String pathPart = (path == null) ? "" : stripLeading(path.toString(), '/');
+			return "dlfs/" + drive + (pathPart.isEmpty() ? "/" : "/" + pathPart);
+		}
 		// Agent-targeted ops: derive a g/<id> resource string from the agentId.
 		if ("v/ops/agent/request".equals(operation) || "v/ops/agent/message".equals(operation)
 				|| "v/ops/agent/create".equals(operation)
@@ -146,5 +184,11 @@ public class CapabilityChecker {
 			return (agentId != null) ? "g/" + agentId : "g/";
 		}
 		return null;
+	}
+
+	private static String stripLeading(String s, char c) {
+		int i = 0;
+		while (i < s.length() && s.charAt(i) == c) i++;
+		return s.substring(i);
 	}
 }

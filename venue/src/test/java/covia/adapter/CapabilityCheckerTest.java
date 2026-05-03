@@ -360,4 +360,117 @@ public class CapabilityCheckerTest {
 			Maps.of(Fields.PATH, "w/anything", Fields.VALUE, Strings.create("fine")), ctx);
 		assertNotNull(writeOk.awaitResult(5000), "No caps should mean unrestricted access");
 	}
+
+	// ========== File adapter caps ==========
+
+	@Test
+	public void testFileOperationAbilityMapping() {
+		assertEquals("crud/read", CapabilityChecker.operationAbility("v/ops/file/read"));
+		assertEquals("crud/read", CapabilityChecker.operationAbility("v/ops/file/list"));
+		assertEquals("crud/read", CapabilityChecker.operationAbility("v/ops/file/stat"));
+		assertEquals("crud/read", CapabilityChecker.operationAbility("v/ops/file/roots"));
+		assertEquals("crud/write", CapabilityChecker.operationAbility("v/ops/file/write"));
+		assertEquals("crud/write", CapabilityChecker.operationAbility("v/ops/file/append"));
+		assertEquals("crud/write", CapabilityChecker.operationAbility("v/ops/file/mkdir"));
+		assertEquals("crud/delete", CapabilityChecker.operationAbility("v/ops/file/delete"));
+	}
+
+	@Test
+	public void testFileResourceFormat() {
+		// Resource = file/<root>/<path>, leading slashes on path are stripped
+		assertEquals("file/scratch/notes.txt",
+			CapabilityChecker.extractResource("v/ops/file/read",
+				Maps.of(Strings.create("root"), Strings.create("scratch"),
+					Strings.create("path"), Strings.create("notes.txt"))));
+		// Leading slash variant resolves to the same resource
+		assertEquals("file/scratch/notes.txt",
+			CapabilityChecker.extractResource("v/ops/file/read",
+				Maps.of(Strings.create("root"), Strings.create("scratch"),
+					Strings.create("path"), Strings.create("/notes.txt"))));
+		// No path = the root namespace itself
+		assertEquals("file/scratch/",
+			CapabilityChecker.extractResource("v/ops/file/list",
+				Maps.of(Strings.create("root"), Strings.create("scratch"))));
+		// No root (e.g. file:roots) = the file namespace
+		assertEquals("file/",
+			CapabilityChecker.extractResource("v/ops/file/roots", Maps.empty()));
+	}
+
+	@Test
+	public void testFilePerRootCaps() {
+		// Caps scoped to file/scratch/ — agent can write within scratch but
+		// not other roots.
+		AVector<ACell> caps = caps("file/scratch/", "crud/write");
+		assertNull(CapabilityChecker.check(caps, "v/ops/file/write",
+			Maps.of(Strings.create("root"), Strings.create("scratch"),
+				Strings.create("path"), Strings.create("foo.txt"))));
+		assertNotNull(CapabilityChecker.check(caps, "v/ops/file/write",
+			Maps.of(Strings.create("root"), Strings.create("data"),
+				Strings.create("path"), Strings.create("foo.txt"))));
+	}
+
+	@Test
+	public void testFilePerPathCaps() {
+		// Caps narrowed further: only specific subtree writable.
+		AVector<ACell> caps = caps("file/scratch/agent-output/", "crud/write");
+		assertNull(CapabilityChecker.check(caps, "v/ops/file/write",
+			Maps.of(Strings.create("root"), Strings.create("scratch"),
+				Strings.create("path"), Strings.create("agent-output/run-123.json"))));
+		// Sibling path denied
+		assertNotNull(CapabilityChecker.check(caps, "v/ops/file/write",
+			Maps.of(Strings.create("root"), Strings.create("scratch"),
+				Strings.create("path"), Strings.create("other/secret.txt"))));
+	}
+
+	@Test
+	public void testFileReadOnlyCapsRejectWrite() {
+		AVector<ACell> caps = caps("file/", "crud/read");
+		// Read anywhere is fine
+		assertNull(CapabilityChecker.check(caps, "v/ops/file/read",
+			Maps.of(Strings.create("root"), Strings.create("data"),
+				Strings.create("path"), Strings.create("anything"))));
+		// Write rejected even with broad resource scope
+		assertNotNull(CapabilityChecker.check(caps, "v/ops/file/write",
+			Maps.of(Strings.create("root"), Strings.create("data"),
+				Strings.create("path"), Strings.create("anything"))));
+	}
+
+	// ========== DLFS adapter caps ==========
+
+	@Test
+	public void testDLFSOperationAbilityMapping() {
+		assertEquals("crud/read", CapabilityChecker.operationAbility("v/ops/dlfs/read"));
+		assertEquals("crud/read", CapabilityChecker.operationAbility("v/ops/dlfs/list"));
+		assertEquals("crud/write", CapabilityChecker.operationAbility("v/ops/dlfs/write"));
+		assertEquals("crud/write", CapabilityChecker.operationAbility("v/ops/dlfs/create-drive"));
+		assertEquals("crud/delete", CapabilityChecker.operationAbility("v/ops/dlfs/delete-drive"));
+	}
+
+	@Test
+	public void testDLFSResourceFormat() {
+		assertEquals("dlfs/health-vault/medications",
+			CapabilityChecker.extractResource("v/ops/dlfs/list",
+				Maps.of(Strings.create("drive"), Strings.create("health-vault"),
+					Strings.create("path"), Strings.create("/medications"))));
+		assertEquals("dlfs/health-vault/",
+			CapabilityChecker.extractResource("v/ops/dlfs/create-drive",
+				Maps.of(Strings.create("name"), Strings.create("health-vault"))));
+		assertEquals("dlfs/",
+			CapabilityChecker.extractResource("v/ops/dlfs/list-drives", Maps.empty()));
+	}
+
+	@Test
+	public void testDLFSPerDriveCaps() {
+		AVector<ACell> caps = caps("dlfs/scratch/", "crud");
+		// Operations on scratch drive allowed
+		assertNull(CapabilityChecker.check(caps, "v/ops/dlfs/write",
+			Maps.of(Strings.create("drive"), Strings.create("scratch"),
+				Strings.create("path"), Strings.create("/foo.txt"),
+				Strings.create("content"), Strings.create("hi"))));
+		// Other drive denied
+		assertNotNull(CapabilityChecker.check(caps, "v/ops/dlfs/write",
+			Maps.of(Strings.create("drive"), Strings.create("private"),
+				Strings.create("path"), Strings.create("/foo.txt"),
+				Strings.create("content"), Strings.create("hi"))));
+	}
 }

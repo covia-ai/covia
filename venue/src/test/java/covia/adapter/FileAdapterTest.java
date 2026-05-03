@@ -326,6 +326,108 @@ public class FileAdapterTest {
 	}
 
 	// =========================================================
+	// Capability gating
+
+	private static String capDenialOf(Runnable r) {
+		try {
+			r.run();
+			return null;
+		} catch (RuntimeException e) {
+			return e.getMessage();
+		}
+	}
+
+	@Test
+	public void testCapsGateFileWrites() {
+		// Caller has a UCAN-style cap restricting writes to file/work/cap-write/.
+		// Writing inside that subtree succeeds; outside fails before the
+		// adapter is even dispatched. JobManager throws synchronously on
+		// cap denial (no Job is created).
+		convex.core.data.AVector<convex.core.data.ACell> caps = convex.core.data.Vectors.of(
+			convex.auth.ucan.Capability.create(
+				convex.core.data.Strings.create("file/work/cap-write/"),
+				convex.auth.ucan.Capability.CRUD_WRITE),
+			convex.auth.ucan.Capability.create(
+				convex.core.data.Strings.create("file/work/"),
+				convex.auth.ucan.Capability.CRUD_READ)
+		);
+		RequestContext gated = RequestContext.of(
+			convex.core.data.Strings.create(DID)).withCaps(caps);
+
+		// mkdir within scope — allowed
+		Job mkdirJob = engine.jobs().invokeOperation("v/ops/file/mkdir",
+			Maps.of("root", "work", "path", "cap-write", "parents", true), gated);
+		mkdirJob.awaitResult(5000);
+		assertEquals(Status.COMPLETE, mkdirJob.getStatus());
+
+		// Write within scope — allowed
+		Job okWrite = engine.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "work", "path", "cap-write/ok.txt", "content", "ok"),
+			gated);
+		okWrite.awaitResult(5000);
+		assertEquals(Status.COMPLETE, okWrite.getStatus());
+
+		// Read anywhere in work — allowed (read cap covers all of file/work/)
+		Job okRead = engine.jobs().invokeOperation("v/ops/file/read",
+			Maps.of("root", "work", "path", "cap-write/ok.txt"),
+			gated);
+		okRead.awaitResult(5000);
+		assertEquals(Status.COMPLETE, okRead.getStatus());
+
+		// Write outside scope — denied (only have read on broader file/work/)
+		String denied = capDenialOf(() -> engine.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "work", "path", "cap-outside.txt", "content", "nope"),
+			gated));
+		assertNotNull(denied, "should have been denied");
+		assertTrue(denied.contains("Capability denied"),
+			"expected capability denial, got: " + denied);
+
+		// Different root entirely — denied
+		String otherDenied = capDenialOf(() -> engine.jobs().invokeOperation("v/ops/file/read",
+			Maps.of("root", "ro", "path", "ok.txt"), gated));
+		assertNotNull(otherDenied, "cross-root should have been denied");
+		assertTrue(otherDenied.contains("Capability denied"),
+			"expected capability denial for cross-root, got: " + otherDenied);
+	}
+
+	@Test
+	public void testCapsGateFileDelete() {
+		// crud (no /verb) covers read+write+delete. Verify delete works
+		// inside scope and is denied outside.
+		convex.core.data.AVector<convex.core.data.ACell> caps = convex.core.data.Vectors.of(
+			convex.auth.ucan.Capability.create(
+				convex.core.data.Strings.create("file/work/cap-del/"),
+				convex.core.data.Strings.create("crud"))
+		);
+		RequestContext gated = RequestContext.of(
+			convex.core.data.Strings.create(DID)).withCaps(caps);
+		RequestContext free = RequestContext.of(convex.core.data.Strings.create(DID));
+
+		// Set up files using an unconstrained ctx.
+		engine.jobs().invokeOperation("v/ops/file/mkdir",
+			Maps.of("root", "work", "path", "cap-del", "parents", true), free).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "work", "path", "cap-del/doomed.txt", "content", "x"),
+			free).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "work", "path", "cap-del-outside.txt", "content", "x"),
+			free).awaitResult(5000);
+
+		// Delete inside scope — allowed via crud
+		Job okDelete = engine.jobs().invokeOperation("v/ops/file/delete",
+			Maps.of("root", "work", "path", "cap-del/doomed.txt"), gated);
+		okDelete.awaitResult(5000);
+		assertEquals(Status.COMPLETE, okDelete.getStatus());
+
+		// Delete outside scope — denied
+		String denied = capDenialOf(() -> engine.jobs().invokeOperation("v/ops/file/delete",
+			Maps.of("root", "work", "path", "cap-del-outside.txt"), gated));
+		assertNotNull(denied, "delete outside scope should be denied");
+		assertTrue(denied.contains("Capability denied"),
+			"expected capability denial, got: " + denied);
+	}
+
+	// =========================================================
 	// Default (no config) inertness
 
 	@Test

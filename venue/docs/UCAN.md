@@ -368,10 +368,22 @@ Venue:
 |-------|-------------------|
 | `covia:read` / `covia:list` / `covia:slice` (cross-user) | `{ with: "<path>", can: "crud/read" }` |
 | `covia:write` / `covia:delete` / `covia:append` (cross-user) | `{ with: "<path>", can: "crud/write" }` |
+| `file:read` / `file:list` / `file:stat` / `file:roots` | `{ with: "file/<root>/<path>", can: "crud/read" }` |
+| `file:write` / `file:append` / `file:mkdir` | `{ with: "file/<root>/<path>", can: "crud/write" }` |
+| `file:delete` | `{ with: "file/<root>/<path>", can: "crud/delete" }` |
+| `dlfs:read` / `dlfs:list` / `dlfs:stat` / `dlfs:listDrives` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |
+| `dlfs:write` / `dlfs:append` / `dlfs:mkdir` / `dlfs:createDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }` |
+| `dlfs:delete` / `dlfs:deleteDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "/s/<name>", can: "secret/decrypt" }` |
 | `agent:message` (cross-user) | `{ with: "/g/<id>", can: "agent/message" }` |
 | Grid operation invoke | `{ with: "/o/<op>", can: "invoke" }` |
 | Sub-delegation | `{ with: "<path>", can: "ucan/delegate" }` |
+
+File and DLFS resources nest naturally: `with: "file/scratch/"` covers any
+path inside the `scratch` root; `with: "file/"` covers every configured
+file root; `with: "dlfs/health-vault/medications/"` covers a single
+sub-tree of one drive. Granting `crud` (without a verb suffix) covers
+read+write+delete uniformly.
 
 ### 5.4 Agent Identity Models
 
