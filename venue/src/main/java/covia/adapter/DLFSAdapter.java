@@ -86,6 +86,7 @@ public class DLFSAdapter extends AAdapter {
 	private static final AString FIELD_MODE = Strings.intern("mode");
 	private static final AString FIELD_MIME = Strings.intern("mime");
 	private static final AString FIELD_PARENTS = Strings.intern("parents");
+	private static final AString FIELD_RECURSIVE = Strings.intern("recursive");
 
 	@Override
 	public String getName() {
@@ -485,17 +486,35 @@ public class DLFSAdapter extends AAdapter {
 		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
+		boolean recursive = RT.bool(input.get(FIELD_RECURSIVE));
 
 		Path path = resolvePath(fs, pathCell.toString());
 		if (!Files.exists(path)) {
 			return Maps.of("deleted", CVMBool.FALSE, "existed", CVMBool.FALSE);
 		}
-		// Note: no recursive flag — DLFS keeps tombstones in directory entries
-		// so a directory whose children have been deleted is still non-empty
-		// from the FS's point of view. Recursive delete would require
-		// tombstone-aware emptiness in convex-core's DLFSLocal.delete().
-		Files.delete(path);
+		if (Files.isDirectory(path) && recursive) {
+			deleteRecursive(path);
+		} else {
+			Files.delete(path);
+		}
 		return Maps.of("deleted", CVMBool.TRUE, "existed", CVMBool.TRUE);
+	}
+
+	private static void deleteRecursive(Path dir) throws IOException {
+		// Snapshot children before mutating — DLFS's DirectoryStream skips
+		// tombstones, but iterating while mutating is still risky.
+		java.util.List<Path> children = new java.util.ArrayList<>();
+		try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+			for (Path child : stream) children.add(child);
+		}
+		for (Path child : children) {
+			if (Files.isDirectory(child)) {
+				deleteRecursive(child);
+			} else {
+				Files.delete(child);
+			}
+		}
+		Files.delete(dir);
 	}
 
 	private ACell handleStat(RequestContext ctx, AMap<AString, ACell> input) throws IOException {

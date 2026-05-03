@@ -289,6 +289,28 @@ public class DLFSAdapterTest {
 	}
 
 	@Test
+	public void testDeleteRecursive() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-rmrf"));
+		run("v/ops/dlfs/mkdir",
+			Maps.of("drive", "test-rmrf", "path", "tree", "parents", true));
+		run("v/ops/dlfs/write",
+			Maps.of("drive", "test-rmrf", "path", "tree/a.txt", "content", "A"));
+		run("v/ops/dlfs/write",
+			Maps.of("drive", "test-rmrf", "path", "tree/b.txt", "content", "B"));
+
+		// Recursive delete removes the populated directory.
+		ACell result = run("v/ops/dlfs/delete",
+			Maps.of("drive", "test-rmrf", "path", "tree", "recursive", true));
+		assertTrue(RT.bool(RT.getIn(result, "deleted")));
+		assertTrue(RT.bool(RT.getIn(result, "existed")));
+
+		// And the tree is gone.
+		ACell stat = run("v/ops/dlfs/stat",
+			Maps.of("drive", "test-rmrf", "path", "tree"));
+		assertFalse(RT.bool(RT.getIn(stat, "exists")));
+	}
+
+	@Test
 	public void testDeleteMissingIsIdempotent() {
 		run("v/ops/dlfs/create-drive", Maps.of("name", "test-del-missing"));
 		ACell result = run("v/ops/dlfs/delete",
