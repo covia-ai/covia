@@ -1,6 +1,8 @@
 package covia.adapter;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
@@ -29,6 +31,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.grid.Asset;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -83,6 +86,7 @@ public class FileAdapter extends AAdapter {
 	private static final AString FIELD_CONTENT = Strings.intern("content");
 	private static final AString FIELD_VALUE = Strings.intern("value");
 	private static final AString FIELD_BYTES = Strings.intern("bytes");
+	private static final AString FIELD_ASSET = Strings.intern("asset");
 	private static final AString FIELD_MODE = Strings.intern("mode");
 	private static final AString FIELD_PARENTS = Strings.intern("parents");
 	private static final AString FIELD_RECURSIVE = Strings.intern("recursive");
@@ -246,18 +250,26 @@ public class FileAdapter extends AAdapter {
 			return root.path();
 		}
 
+		// Accept a leading "/" (or "\") as "relative to the root" — matches
+		// DLFS convention where "/foo.txt" is the canonical drive-rooted form.
+		// Strip it before delegating to Path.of so the result isn't classed as
+		// absolute on POSIX. Multiple leading separators collapse to one.
+		String stripped = userPath;
+		while (!stripped.isEmpty() && (stripped.charAt(0) == '/' || stripped.charAt(0) == '\\')) {
+			stripped = stripped.substring(1);
+		}
+		if (stripped.isEmpty()) return root.path();
+
 		Path candidate;
 		try {
-			candidate = Path.of(userPath);
+			candidate = Path.of(stripped);
 		} catch (InvalidPathException e) {
 			throw new IllegalArgumentException("Invalid path '" + userPath + "': " + e.getReason());
 		}
 
-		// Reject any path with a root component. This covers POSIX absolute
-		// paths ("/etc/passwd"), Windows drive-rooted paths ("C:\foo",
-		// "C:/foo"), drive-relative paths whose root is a drive ("C:foo"),
-		// UNC paths ("\\server\share\..."), and Windows root-relative paths
-		// ("\foo"). Forces callers to express paths relative to the root.
+		// Reject any path with a root component. After leading-slash strip,
+		// this catches Windows drive-rooted paths ("C:\foo", "C:/foo"),
+		// drive-relative paths ("C:foo"), and UNC paths ("\\server\share").
 		if (candidate.isAbsolute() || candidate.getRoot() != null) {
 			throw new IllegalArgumentException(
 				"Path must be relative to root '" + rootName + "': " + userPath);
@@ -325,14 +337,14 @@ public class FileAdapter extends AAdapter {
 
 		return CompletableFuture.supplyAsync(() -> {
 			try {
-				return dispatch(subOp, RT.ensureMap(input));
+				return dispatch(ctx, subOp, RT.ensureMap(input));
 			} catch (Exception e) {
 				throw new RuntimeException(e.getMessage(), e);
 			}
 		}, VIRTUAL_EXECUTOR);
 	}
 
-	private ACell dispatch(String subOp, AMap<AString, ACell> input) throws IOException {
+	private ACell dispatch(RequestContext ctx, String subOp, AMap<AString, ACell> input) throws IOException {
 		if (input == null) input = Maps.empty();
 
 		// roots is the only op that does not require a root parameter.
@@ -347,8 +359,8 @@ public class FileAdapter extends AAdapter {
 		return switch (subOp) {
 			case "list"   -> handleList(input);
 			case "read"   -> handleRead(input);
-			case "write"  -> handleWrite(input);
-			case "append" -> handleAppend(input);
+			case "write"  -> handleWrite(ctx, input);
+			case "append" -> handleAppend(ctx, input);
 			case "delete" -> handleDelete(input);
 			case "mkdir"  -> handleMkdir(input);
 			case "stat"   -> handleStat(input);
@@ -409,29 +421,41 @@ public class FileAdapter extends AAdapter {
 		}
 
 		byte[] bytes = Files.readAllBytes(file);
-		long size = bytes.length;
+		CVMLong size = CVMLong.create(bytes.length);
+		String mime = MimeUtils.guess(file.getFileName() != null
+			? file.getFileName().toString() : "", bytes);
 
 		switch (mode) {
 			case "text": {
+				if (!looksLikeText(bytes)) {
+					throw new IllegalArgumentException("File is not valid UTF-8 text");
+				}
 				return Maps.of(
 					"content", new String(bytes, StandardCharsets.UTF_8),
 					"encoding", "utf-8",
-					"size", CVMLong.create(size)
+					"size", size,
+					"mime", mime
 				);
 			}
 			case "bytes": {
 				return Maps.of(
 					"content", Base64.getEncoder().encodeToString(bytes),
 					"encoding", "base64",
-					"size", CVMLong.create(size)
+					"size", size,
+					"mime", mime
 				);
 			}
 			case "json": {
-				ACell parsed = JSON.parse(new String(bytes, StandardCharsets.UTF_8));
+				ACell parsed;
+				try {
+					parsed = JSON.parse(new String(bytes, StandardCharsets.UTF_8));
+				} catch (Exception e) {
+					throw new IllegalArgumentException("File is not valid JSON: " + e.getMessage());
+				}
 				return Maps.of(
 					"value", parsed,
-					"encoding", "utf-8",
-					"size", CVMLong.create(size)
+					"size", size,
+					"mime", mime
 				);
 			}
 			case "auto": {
@@ -439,63 +463,54 @@ public class FileAdapter extends AAdapter {
 					return Maps.of(
 						"content", new String(bytes, StandardCharsets.UTF_8),
 						"encoding", "utf-8",
-						"size", CVMLong.create(size)
+						"size", size,
+						"mime", mime
 					);
 				}
 				return Maps.of(
 					"content", Base64.getEncoder().encodeToString(bytes),
 					"encoding", "base64",
-					"size", CVMLong.create(size)
+					"size", size,
+					"mime", mime
 				);
 			}
 			default:
-				throw new IllegalArgumentException("Unknown read mode: " + mode);
+				throw new IllegalArgumentException(
+					"Unknown mode '" + mode + "'. Expected: auto, text, bytes, json");
 		}
 	}
 
-	private ACell handleWrite(AMap<AString, ACell> input) throws IOException {
+	private ACell handleWrite(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		String rootName = stringArg(input, FIELD_ROOT);
 		String pathArg = stringArg(input, FIELD_PATH);
 		requireWritable(rootName);
 
-		byte[] data = encodeWriteInput(input);
 		Path file = resolvePath(rootName, pathArg, false);
-
 		Path parent = file.getParent();
 		if (parent != null && !Files.exists(parent)) {
 			throw new NoSuchFileException("Parent directory does not exist: " + parent);
 		}
 
 		boolean existed = Files.exists(file, LinkOption.NOFOLLOW_LINKS);
-		Files.write(file, data,
-			StandardOpenOption.CREATE,
-			StandardOpenOption.TRUNCATE_EXISTING,
-			StandardOpenOption.WRITE,
-			LinkOption.NOFOLLOW_LINKS);
+		long written = writeInputTo(ctx, input, file, false);
 
 		return Maps.of(
-			"written", CVMLong.create(data.length),
+			"written", CVMLong.create(written),
 			"created", CVMBool.create(!existed)
 		);
 	}
 
-	private ACell handleAppend(AMap<AString, ACell> input) throws IOException {
+	private ACell handleAppend(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		String rootName = stringArg(input, FIELD_ROOT);
 		String pathArg = stringArg(input, FIELD_PATH);
 		requireWritable(rootName);
 
-		byte[] data = encodeWriteInput(input);
 		Path file = resolvePath(rootName, pathArg, false);
-
 		boolean existed = Files.exists(file, LinkOption.NOFOLLOW_LINKS);
-		Files.write(file, data,
-			StandardOpenOption.CREATE,
-			StandardOpenOption.APPEND,
-			StandardOpenOption.WRITE,
-			LinkOption.NOFOLLOW_LINKS);
+		long appended = writeInputTo(ctx, input, file, true);
 
 		return Maps.of(
-			"appended", CVMLong.create(data.length),
+			"appended", CVMLong.create(appended),
 			"created", CVMBool.create(!existed)
 		);
 	}
@@ -564,13 +579,19 @@ public class FileAdapter extends AAdapter {
 			: attrs.isRegularFile() ? "file"
 			: attrs.isSymbolicLink() ? "symlink"
 			: "other";
-		return Maps.of(
+		AMap<AString, ACell> out = Maps.of(
 			"exists", CVMBool.TRUE,
 			"type", type,
 			"size", CVMLong.create(attrs.size()),
 			"modified", CVMLong.create(attrs.lastModifiedTime().toMillis()),
 			"readOnly", CVMBool.create(requireRoot(rootName).readOnly())
 		);
+		if (attrs.isRegularFile()) {
+			String mime = MimeUtils.guess(target.getFileName() != null
+				? target.getFileName().toString() : "", null);
+			out = out.assoc(Strings.create("mime"), Strings.create(mime));
+		}
+		return out;
 	}
 
 	// ==================== Helpers ====================
@@ -581,25 +602,57 @@ public class FileAdapter extends AAdapter {
 	}
 
 	/**
-	 * Encodes a write/append input into bytes. Exactly one of content (utf-8
-	 * text), value (json-serialised), or bytes (base64) must be supplied.
+	 * Writes a write/append input to the target file. Exactly one of
+	 * {@code content} (UTF-8 text), {@code value} (JSON-serialised cell),
+	 * {@code bytes} (base64 inline), or {@code asset} (CAS reference, streamed)
+	 * must be supplied.
+	 *
+	 * @param append true to append, false to truncate
+	 * @return number of bytes written
 	 */
-	private static byte[] encodeWriteInput(AMap<AString, ACell> input) {
+	private long writeInputTo(RequestContext ctx, AMap<AString, ACell> input,
+			Path target, boolean append) throws IOException {
 		AString content = RT.ensureString(input.get(FIELD_CONTENT));
-		ACell value = input.get(FIELD_VALUE);
-		AString bytes = RT.ensureString(input.get(FIELD_BYTES));
+		boolean hasValue = input.containsKey(FIELD_VALUE);
+		AString bytesB64 = RT.ensureString(input.get(FIELD_BYTES));
+		AString assetRef = RT.ensureString(input.get(FIELD_ASSET));
 
-		int provided = (content != null ? 1 : 0) + (value != null ? 1 : 0) + (bytes != null ? 1 : 0);
+		int provided = (content != null ? 1 : 0) + (hasValue ? 1 : 0)
+			+ (bytesB64 != null ? 1 : 0) + (assetRef != null ? 1 : 0);
 		if (provided == 0) {
-			throw new IllegalArgumentException("One of 'content', 'value', or 'bytes' is required");
+			throw new IllegalArgumentException(
+				"Exactly one of 'content' (UTF-8 text), 'value' (JSON), 'bytes' (base64), or 'asset' (reference) is required");
 		}
 		if (provided > 1) {
-			throw new IllegalArgumentException("Only one of 'content', 'value', or 'bytes' may be supplied");
+			throw new IllegalArgumentException(
+				"Only one of 'content', 'value', 'bytes', or 'asset' may be supplied");
 		}
 
-		if (content != null) return content.toString().getBytes(StandardCharsets.UTF_8);
-		if (bytes != null) return Base64.getDecoder().decode(bytes.toString());
-		return JSON.print(value).toString().getBytes(StandardCharsets.UTF_8);
+		StandardOpenOption mode = append
+			? StandardOpenOption.APPEND
+			: StandardOpenOption.TRUNCATE_EXISTING;
+
+		if (assetRef != null) {
+			Asset asset = engine.resolveAsset(assetRef, ctx);
+			if (asset == null) throw new IllegalArgumentException("Asset not found: " + assetRef);
+			try (InputStream is = engine.getContentStream(asset);
+			     OutputStream os = Files.newOutputStream(target,
+			         StandardOpenOption.CREATE, mode, StandardOpenOption.WRITE,
+			         LinkOption.NOFOLLOW_LINKS)) {
+				if (is == null) throw new IllegalArgumentException("Asset has no content: " + assetRef);
+				return is.transferTo(os);
+			}
+		}
+
+		byte[] data;
+		if (content != null) data = content.toString().getBytes(StandardCharsets.UTF_8);
+		else if (bytesB64 != null) data = Base64.getDecoder().decode(bytesB64.toString());
+		else data = JSON.print(input.get(FIELD_VALUE)).toString().getBytes(StandardCharsets.UTF_8);
+
+		Files.write(target, data,
+			StandardOpenOption.CREATE, mode, StandardOpenOption.WRITE,
+			LinkOption.NOFOLLOW_LINKS);
+		return data.length;
 	}
 
 	/** Heuristic: bytes parse as valid UTF-8 with no NULs and few control chars. */

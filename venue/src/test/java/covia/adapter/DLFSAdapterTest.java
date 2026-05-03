@@ -213,4 +213,98 @@ public class DLFSAdapterTest {
 		result = run("v/ops/dlfs/read", Maps.of("drive", "test-overwrite", "path", "data.txt"));
 		assertEquals("v2", RT.ensureString(RT.getIn(result, "content")).toString());
 	}
+
+	// ===== Operations harmonised with FileAdapter =====
+
+	@Test
+	public void testAppend() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-append"));
+		run("v/ops/dlfs/write",
+			Maps.of("drive", "test-append", "path", "log.txt", "content", "line1\n"));
+
+		ACell result = run("v/ops/dlfs/append",
+			Maps.of("drive", "test-append", "path", "log.txt", "content", "line2\n"));
+		assertEquals(6L, RT.ensureLong(RT.getIn(result, "appended")).longValue());
+		assertFalse(RT.bool(RT.getIn(result, "created")));
+
+		ACell read = run("v/ops/dlfs/read",
+			Maps.of("drive", "test-append", "path", "log.txt"));
+		assertEquals("line1\nline2\n", RT.ensureString(RT.getIn(read, "content")).toString());
+	}
+
+	@Test
+	public void testAppendCreatesIfMissing() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-append-new"));
+		ACell result = run("v/ops/dlfs/append",
+			Maps.of("drive", "test-append-new", "path", "fresh.txt", "content", "first"));
+		assertTrue(RT.bool(RT.getIn(result, "created")));
+	}
+
+	@Test
+	public void testWriteBytes() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-bytes"));
+		String b64 = java.util.Base64.getEncoder().encodeToString(new byte[]{0x00, 0x01, 0x02});
+		run("v/ops/dlfs/write",
+			Maps.of("drive", "test-bytes", "path", "bin.dat", "bytes", b64));
+		ACell read = run("v/ops/dlfs/read",
+			Maps.of("drive", "test-bytes", "path", "bin.dat", "mode", "bytes"));
+		assertEquals(b64, RT.ensureString(RT.getIn(read, "content")).toString());
+	}
+
+	@Test
+	public void testStat() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-stat"));
+		run("v/ops/dlfs/write",
+			Maps.of("drive", "test-stat", "path", "thing.txt", "content", "hi"));
+
+		ACell stat = run("v/ops/dlfs/stat",
+			Maps.of("drive", "test-stat", "path", "thing.txt"));
+		assertTrue(RT.bool(RT.getIn(stat, "exists")));
+		assertEquals("file", RT.ensureString(RT.getIn(stat, "type")).toString());
+		assertEquals(2L, RT.ensureLong(RT.getIn(stat, "size")).longValue());
+		assertNotNull(RT.getIn(stat, "modified"));
+
+		ACell missing = run("v/ops/dlfs/stat",
+			Maps.of("drive", "test-stat", "path", "nope.txt"));
+		assertFalse(RT.bool(RT.getIn(missing, "exists")));
+	}
+
+	@Test
+	public void testMkdirParents() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-mkdir-p"));
+
+		// Without parents, intermediate must exist — direct creation fails.
+		assertThrows(Exception.class, () -> run("v/ops/dlfs/mkdir",
+			Maps.of("drive", "test-mkdir-p", "path", "a/b/c")));
+
+		// With parents=true, builds the chain.
+		ACell result = run("v/ops/dlfs/mkdir",
+			Maps.of("drive", "test-mkdir-p", "path", "a/b/c", "parents", true));
+		assertTrue(RT.bool(RT.getIn(result, "created")));
+
+		// Idempotent: calling again on existing directory is harmless.
+		ACell again = run("v/ops/dlfs/mkdir",
+			Maps.of("drive", "test-mkdir-p", "path", "a/b/c", "parents", true));
+		assertFalse(RT.bool(RT.getIn(again, "created")));
+	}
+
+	@Test
+	public void testDeleteMissingIsIdempotent() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-del-missing"));
+		ACell result = run("v/ops/dlfs/delete",
+			Maps.of("drive", "test-del-missing", "path", "nope.txt"));
+		assertFalse(RT.bool(RT.getIn(result, "deleted")));
+		assertFalse(RT.bool(RT.getIn(result, "existed")));
+	}
+
+	@Test
+	public void testListIncludesModified() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-mtime"));
+		run("v/ops/dlfs/write",
+			Maps.of("drive", "test-mtime", "path", "a.txt", "content", "x"));
+		ACell list = run("v/ops/dlfs/list", Maps.of("drive", "test-mtime"));
+		AVector<?> entries = RT.ensureVector(RT.getIn(list, "entries"));
+		assertEquals(1, entries.count());
+		assertNotNull(RT.getIn(entries.get(0), "modified"));
+	}
 }

@@ -20,7 +20,8 @@
         "type": { "type": "string" },
         "size": { "type": "integer" },
         "modified": { "type": "integer" },
-        "readOnly": { "type": "boolean" }
+        "readOnly": { "type": "boolean" },
+        "mime": { "type": "string", "description": "Best-guess MIME type (regular files only)" }
       }
     }
   }

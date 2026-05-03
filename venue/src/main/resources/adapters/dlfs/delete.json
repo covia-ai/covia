@@ -1,6 +1,6 @@
 {
   "name": "Delete DLFS File",
-  "description": "Delete a file or empty directory from a DLFS drive.",
+  "description": "Delete a file or empty directory from a DLFS drive. DLFS does not support recursive directory delete — the lattice's CRDT semantics keep tombstones for deleted children, so a logically-empty directory is still non-empty from the filesystem's perspective.",
   "creator": "Covia",
   "operation": {
     "adapter": "dlfs:delete",
@@ -16,7 +16,8 @@
     "output": {
       "type": "object",
       "properties": {
-        "deleted": { "type": "boolean" }
+        "deleted": { "type": "boolean", "description": "True if the target was deleted" },
+        "existed": { "type": "boolean", "description": "True if the target existed prior to the call" }
       }
     }
   }

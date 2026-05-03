@@ -175,6 +175,15 @@ public class FileAdapterTest {
 	}
 
 	@Test
+	public void testReadIncludesMime() throws IOException {
+		run("v/ops/file/write", Maps.of(
+			"root", "work", "path", "page.html", "content", "<h1>hi</h1>"));
+		ACell read = run("v/ops/file/read",
+			Maps.of("root", "work", "path", "page.html"));
+		assertEquals("text/html", RT.ensureString(RT.getIn(read, "mime")).toString());
+	}
+
+	@Test
 	public void testJsonMode() {
 		run("v/ops/file/write", Maps.of(
 			"root", "work", "path", "obj.json",
@@ -262,13 +271,25 @@ public class FileAdapterTest {
 	}
 
 	@Test
-	public void testRejectsRootRelativePath() {
-		// On Windows, "\\foo" is root-relative (current drive). On POSIX, "/foo"
-		// is absolute. Both should be rejected by the getRoot()/isAbsolute() check.
-		Job job = runRaw("v/ops/file/read", Maps.of("root", "work", "path", "/etc/passwd"));
+	public void testAcceptsLeadingSlash() throws IOException {
+		// DLFS-compatible: "/foo.txt" is equivalent to "foo.txt" — leading
+		// slashes are stripped and the path is treated as relative-to-root.
+		run("v/ops/file/write", Maps.of(
+			"root", "work", "path", "/leading.txt", "content", "ok"));
+		assertEquals("ok", Files.readString(workspace.resolve("leading.txt")));
+
+		ACell read = run("v/ops/file/read",
+			Maps.of("root", "work", "path", "/leading.txt"));
+		assertEquals("ok", RT.ensureString(RT.getIn(read, "content")).toString());
+	}
+
+	@Test
+	public void testLeadingSlashStillRejectsTraversal() {
+		// "/" prefix doesn't grant escape — "/../etc/passwd" still escapes after
+		// the leading slash is stripped.
+		Job job = runRaw("v/ops/file/read",
+			Maps.of("root", "work", "path", "/../etc/passwd"));
 		assertEquals(Status.FAILED, job.getStatus());
-		assertTrue(job.getErrorMessage().contains("relative to root"),
-			"unexpected error: " + job.getErrorMessage());
 	}
 
 	@Test

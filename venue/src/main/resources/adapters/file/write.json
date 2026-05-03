@@ -1,6 +1,6 @@
 {
   "name": "Write File",
-  "description": "Write a file under a configured filesystem root. Creates the file if it does not exist; truncates and overwrites otherwise. Parent directories must already exist — call file:mkdir first if needed. Supply exactly one of 'content' (UTF-8 text), 'value' (JSON-serialised), or 'bytes' (base64). Read-only roots reject writes.",
+  "description": "Write a file under a configured filesystem root. Creates the file if it does not exist; truncates and overwrites otherwise. Parent directories must already exist — call file:mkdir first if needed. Supply exactly one of 'content' (UTF-8 text), 'value' (JSON-serialised), 'bytes' (base64 inline), or 'asset' (CAS reference, streamed). Read-only roots reject writes.",
   "creator": "Covia",
   "operation": {
     "adapter": "file:write",
@@ -12,7 +12,8 @@
         "path": { "type": "string", "description": "File path relative to the root" },
         "content": { "type": "string", "description": "UTF-8 text to write" },
         "value": { "description": "JSON-serialisable value to write as UTF-8 JSON" },
-        "bytes": { "type": "string", "description": "Base64-encoded bytes to write" }
+        "bytes": { "type": "string", "description": "Base64-encoded bytes to write" },
+        "asset": { "type": "string", "description": "Asset reference to stream as file content (e.g. '/a/0x1234...', DID URL)" }
       },
       "required": ["root", "path"]
     },

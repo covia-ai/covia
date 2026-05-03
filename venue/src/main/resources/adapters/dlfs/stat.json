@@ -1,0 +1,27 @@
+{
+  "name": "Stat DLFS File",
+  "description": "Return metadata for a path in a DLFS drive. Reports whether the path exists, its type (file/directory/other), size in bytes, last-modified time (epoch millis), and the best-guess MIME type for files.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "dlfs:stat",
+    "toolName": "dlfs_stat",
+    "input": {
+      "type": "object",
+      "properties": {
+        "drive": { "type": "string", "description": "Drive name" },
+        "path": { "type": "string", "description": "Path within the drive" }
+      },
+      "required": ["drive", "path"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "exists": { "type": "boolean" },
+        "type": { "type": "string" },
+        "size": { "type": "integer" },
+        "modified": { "type": "integer" },
+        "mime": { "type": "string", "description": "Best-guess MIME type (regular files only)" }
+      }
+    }
+  }
+}

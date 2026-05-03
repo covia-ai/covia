@@ -81,9 +81,11 @@ public class DLFSAdapter extends AAdapter {
 	private static final AString FIELD_NAME = Strings.intern("name");
 	private static final AString FIELD_CONTENT = Strings.intern("content");
 	private static final AString FIELD_VALUE = Strings.intern("value");
+	private static final AString FIELD_BYTES = Strings.intern("bytes");
 	private static final AString FIELD_ASSET = Strings.intern("asset");
 	private static final AString FIELD_MODE = Strings.intern("mode");
 	private static final AString FIELD_MIME = Strings.intern("mime");
+	private static final AString FIELD_PARENTS = Strings.intern("parents");
 
 	@Override
 	public String getName() {
@@ -106,8 +108,10 @@ public class DLFSAdapter extends AAdapter {
 		installAsset("dlfs/list",         ASSETS_PATH + "list.json");
 		installAsset("dlfs/read",         ASSETS_PATH + "read.json");
 		installAsset("dlfs/write",        ASSETS_PATH + "write.json");
+		installAsset("dlfs/append",       ASSETS_PATH + "append.json");
 		installAsset("dlfs/mkdir",        ASSETS_PATH + "mkdir.json");
 		installAsset("dlfs/delete",       ASSETS_PATH + "delete.json");
+		installAsset("dlfs/stat",         ASSETS_PATH + "stat.json");
 		log.info("DLFS adapter installed with {} operations", pendingCatalogEntries.size());
 	}
 
@@ -252,9 +256,11 @@ public class DLFSAdapter extends AAdapter {
 			case "deleteDrive" -> handleDeleteDrive(ctx, input);
 			case "list" -> handleList(ctx, input);
 			case "read" -> handleRead(ctx, input);
-			case "write" -> handleWrite(ctx, input);
+			case "write" -> handleWrite(ctx, input, false);
+			case "append" -> handleWrite(ctx, input, true);
 			case "mkdir" -> handleMkdir(ctx, input);
 			case "delete" -> handleDelete(ctx, input);
+			case "stat" -> handleStat(ctx, input);
 			default -> throw new IllegalArgumentException("Unknown DLFS operation: " + subOp);
 		};
 	}
@@ -318,11 +324,10 @@ public class DLFSAdapter extends AAdapter {
 				String name = (fileName != null) ? fileName.toString() : child.toString();
 				AMap<AString, ACell> entry = Maps.of(
 					"name", name,
-					"type", childAttrs.isDirectory() ? "directory" : "file"
+					"type", childAttrs.isDirectory() ? "directory" : "file",
+					"size", CVMLong.create(childAttrs.size()),
+					"modified", CVMLong.create(childAttrs.lastModifiedTime().toMillis())
 				);
-				if (childAttrs.isRegularFile()) {
-					entry = entry.assoc(Strings.create("size"), CVMLong.create(childAttrs.size()));
-				}
 				entries = entries.conj(entry);
 			}
 		}
@@ -401,54 +406,54 @@ public class DLFSAdapter extends AAdapter {
 		}
 	}
 
-	private ACell handleWrite(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
+	private ACell handleWrite(RequestContext ctx, AMap<AString, ACell> input, boolean append) throws IOException {
 		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 
 		AString contentCell = RT.ensureString(input.get(FIELD_CONTENT));
-		ACell valueCell = input.get(FIELD_VALUE);
 		boolean hasValue = input.containsKey(FIELD_VALUE);
+		AString bytesB64 = RT.ensureString(input.get(FIELD_BYTES));
 		AString assetRef = RT.ensureString(input.get(FIELD_ASSET));
 
-		int supplied = (contentCell != null ? 1 : 0) + (hasValue ? 1 : 0) + (assetRef != null ? 1 : 0);
+		int supplied = (contentCell != null ? 1 : 0) + (hasValue ? 1 : 0)
+			+ (bytesB64 != null ? 1 : 0) + (assetRef != null ? 1 : 0);
 		if (supplied == 0) {
-			throw new IllegalArgumentException("Exactly one of 'content' (UTF-8 text), 'value' (JSON), or 'asset' (reference) is required");
+			throw new IllegalArgumentException(
+				"Exactly one of 'content' (UTF-8 text), 'value' (JSON), 'bytes' (base64), or 'asset' (reference) is required");
 		}
 		if (supplied > 1) {
-			throw new IllegalArgumentException("Only one of 'content', 'value', or 'asset' may be supplied");
+			throw new IllegalArgumentException(
+				"Only one of 'content', 'value', 'bytes', or 'asset' may be supplied");
 		}
 
 		Path path = resolvePath(fs, pathCell.toString());
 		boolean isNew = !Files.exists(path);
+		StandardOpenOption mode = append
+			? StandardOpenOption.APPEND
+			: StandardOpenOption.TRUNCATE_EXISTING;
 		long written;
 
 		if (assetRef != null) {
-			// Resolve asset reference and stream content to DLFS
 			Asset asset = engine.resolveAsset(assetRef, ctx);
 			if (asset == null) throw new IllegalArgumentException("Asset not found: " + assetRef);
 			try (InputStream is = engine.getContentStream(asset);
 			     OutputStream os = Files.newOutputStream(path,
-			         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+			         StandardOpenOption.CREATE, mode, StandardOpenOption.WRITE)) {
 				if (is == null) throw new IllegalArgumentException("Asset has no content: " + assetRef);
 				written = is.transferTo(os);
 			}
-		} else if (hasValue) {
-			// JSON-serialised value
-			byte[] bytes = convex.core.util.JSON.print(valueCell).toString().getBytes(StandardCharsets.UTF_8);
-			Files.write(path, bytes,
-				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-			written = bytes.length;
 		} else {
-			// Inline UTF-8 text content
-			byte[] bytes = contentCell.toString().getBytes(StandardCharsets.UTF_8);
-			Files.write(path, bytes,
-				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+			byte[] bytes;
+			if (contentCell != null) bytes = contentCell.toString().getBytes(StandardCharsets.UTF_8);
+			else if (bytesB64 != null) bytes = Base64.getDecoder().decode(bytesB64.toString());
+			else bytes = convex.core.util.JSON.print(input.get(FIELD_VALUE)).toString().getBytes(StandardCharsets.UTF_8);
+			Files.write(path, bytes, StandardOpenOption.CREATE, mode, StandardOpenOption.WRITE);
 			written = bytes.length;
 		}
 
 		return Maps.of(
-			"written", CVMLong.create(written),
+			append ? "appended" : "written", CVMLong.create(written),
 			"created", isNew ? CVMBool.TRUE : CVMBool.FALSE
 		);
 	}
@@ -457,10 +462,23 @@ public class DLFSAdapter extends AAdapter {
 		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
+		boolean parents = RT.bool(input.get(FIELD_PARENTS));
 
 		Path path = resolvePath(fs, pathCell.toString());
-		Files.createDirectory(path);
-		return Maps.of("created", CVMBool.TRUE);
+		boolean existed = Files.exists(path);
+		if (existed) {
+			if (!Files.isDirectory(path)) {
+				throw new IllegalArgumentException("Path exists and is not a directory: " + pathCell);
+			}
+		} else if (parents) {
+			Files.createDirectories(path);
+		} else {
+			Files.createDirectory(path);
+		}
+		return Maps.of(
+			"created", CVMBool.create(!existed),
+			"path", path.toString()
+		);
 	}
 
 	private ACell handleDelete(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
@@ -469,9 +487,44 @@ public class DLFSAdapter extends AAdapter {
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
 
 		Path path = resolvePath(fs, pathCell.toString());
+		if (!Files.exists(path)) {
+			return Maps.of("deleted", CVMBool.FALSE, "existed", CVMBool.FALSE);
+		}
+		// Note: no recursive flag — DLFS keeps tombstones in directory entries
+		// so a directory whose children have been deleted is still non-empty
+		// from the FS's point of view. Recursive delete would require
+		// tombstone-aware emptiness in convex-core's DLFSLocal.delete().
 		Files.delete(path);
-		return Maps.of("deleted", CVMBool.TRUE);
+		return Maps.of("deleted", CVMBool.TRUE, "existed", CVMBool.TRUE);
 	}
+
+	private ACell handleStat(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
+		FileSystem fs = requireDrive(ctx, input);
+		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
+		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
+
+		Path path = resolvePath(fs, pathCell.toString());
+		if (!Files.exists(path)) {
+			return Maps.of("exists", CVMBool.FALSE);
+		}
+		BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
+		String type = attrs.isDirectory() ? "directory"
+			: attrs.isRegularFile() ? "file"
+			: "other";
+		AMap<AString, ACell> out = Maps.of(
+			"exists", CVMBool.TRUE,
+			"type", type,
+			"size", CVMLong.create(attrs.size()),
+			"modified", CVMLong.create(attrs.lastModifiedTime().toMillis())
+		);
+		if (attrs.isRegularFile()) {
+			String mime = MimeUtils.guessByName(path.getFileName() != null
+				? path.getFileName().toString() : "");
+			out = out.assoc(FIELD_MIME, Strings.create(mime));
+		}
+		return out;
+	}
+
 
 	private static boolean isLikelyText(byte[] bytes) {
 		for (byte b : bytes) {

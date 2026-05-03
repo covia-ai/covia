@@ -1,0 +1,28 @@
+{
+  "name": "Append to DLFS File",
+  "description": "Append content to a file in a DLFS drive, creating the file if it does not exist. Parent directories must already exist — use dlfs:mkdir first if needed. Supply exactly one of 'content' (UTF-8 text), 'value' (JSON-serialised), 'bytes' (base64 inline), or 'asset' (CAS reference, streamed).",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "dlfs:append",
+    "toolName": "dlfs_append",
+    "input": {
+      "type": "object",
+      "properties": {
+        "drive": { "type": "string", "description": "Drive name" },
+        "path": { "type": "string", "description": "File path within the drive" },
+        "content": { "type": "string", "description": "UTF-8 text to append" },
+        "value": { "description": "JSON-serialisable value to append as UTF-8 JSON" },
+        "bytes": { "type": "string", "description": "Base64-encoded bytes to append" },
+        "asset": { "type": "string", "description": "Asset reference to stream as appended content" }
+      },
+      "required": ["drive", "path"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "appended": { "type": "integer", "description": "Bytes appended" },
+        "created": { "type": "boolean", "description": "True if file was newly created" }
+      }
+    }
+  }
+}

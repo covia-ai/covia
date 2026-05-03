@@ -1,6 +1,6 @@
 {
   "name": "List DLFS Directory",
-  "description": "List directory contents in a DLFS drive. Returns entries with name, type (file/directory), and size. Omit path to list the drive root.",
+  "description": "List directory contents in a DLFS drive. Returns entries with name, type (file/directory), size in bytes, and last-modified time (epoch millis). Omit path to list the drive root.",
   "creator": "Covia",
   "operation": {
     "adapter": "dlfs:list",
@@ -23,7 +23,8 @@
             "properties": {
               "name": { "type": "string" },
               "type": { "type": "string" },
-              "size": { "type": "integer" }
+              "size": { "type": "integer" },
+              "modified": { "type": "integer" }
             }
           }
         }
