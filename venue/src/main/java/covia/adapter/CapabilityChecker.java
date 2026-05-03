@@ -153,27 +153,27 @@ public class CapabilityChecker {
 			AString path = RT.ensureString(RT.getIn(input, K_PATH));
 			return (path != null) ? path.toString() : null;
 		}
-		// File-adapter ops: resource = "file/<root>/<path>" so caps can be
-		// granted at namespace ("file/"), per-root ("file/scratch/"), or
-		// per-path ("file/scratch/notes.txt") granularity. roots-listing and
-		// other no-args ops collapse to "file/" (the namespace itself).
+		// File-adapter ops: resource is the URI "file://<root>/<path>", with
+		// the configured root name as the URI authority. Granters scope at
+		// namespace level ("file://"), per-root ("file://scratch/"), or
+		// per-path ("file://scratch/notes.txt"). Trailing slash on the grant
+		// is the conventional way to cover a subtree.
 		if (operation.startsWith("v/ops/file/") || operation.startsWith("file:")) {
 			AString root = RT.ensureString(RT.getIn(input, K_ROOT));
 			AString path = RT.ensureString(RT.getIn(input, K_PATH));
-			if (root == null) return "file/";
+			if (root == null) return "file://";
 			String pathPart = (path == null) ? "" : stripLeading(path.toString(), '/');
-			return "file/" + root + (pathPart.isEmpty() ? "/" : "/" + pathPart);
+			return "file://" + root + "/" + pathPart;
 		}
-		// DLFS ops: same shape as file with a "dlfs/<drive>/<path>" prefix.
-		// listDrives / createDrive / deleteDrive reach into the drive
-		// namespace itself ("dlfs/<drive>") or the namespace root ("dlfs/").
+		// DLFS ops: same URI shape, "dlfs://<drive>/<path>". listDrives etc.
+		// land on "dlfs://" (the namespace root) when no drive arg is supplied.
 		if (operation.startsWith("v/ops/dlfs/") || operation.startsWith("dlfs:")) {
 			AString drive = RT.ensureString(RT.getIn(input, Strings.intern("drive")));
 			if (drive == null) drive = RT.ensureString(RT.getIn(input, Strings.intern("name")));
 			AString path = RT.ensureString(RT.getIn(input, K_PATH));
-			if (drive == null) return "dlfs/";
+			if (drive == null) return "dlfs://";
 			String pathPart = (path == null) ? "" : stripLeading(path.toString(), '/');
-			return "dlfs/" + drive + (pathPart.isEmpty() ? "/" : "/" + pathPart);
+			return "dlfs://" + drive + "/" + pathPart;
 		}
 		// Agent-targeted ops: derive a g/<id> resource string from the agentId.
 		if ("v/ops/agent/request".equals(operation) || "v/ops/agent/message".equals(operation)

@@ -377,30 +377,30 @@ public class CapabilityCheckerTest {
 
 	@Test
 	public void testFileResourceFormat() {
-		// Resource = file/<root>/<path>, leading slashes on path are stripped
-		assertEquals("file/scratch/notes.txt",
+		// Resource is the URI "file://<root>/<path>". Leading slashes on path
+		// are stripped before composing.
+		assertEquals("file://scratch/notes.txt",
 			CapabilityChecker.extractResource("v/ops/file/read",
 				Maps.of(Strings.create("root"), Strings.create("scratch"),
 					Strings.create("path"), Strings.create("notes.txt"))));
-		// Leading slash variant resolves to the same resource
-		assertEquals("file/scratch/notes.txt",
+		assertEquals("file://scratch/notes.txt",
 			CapabilityChecker.extractResource("v/ops/file/read",
 				Maps.of(Strings.create("root"), Strings.create("scratch"),
 					Strings.create("path"), Strings.create("/notes.txt"))));
-		// No path = the root namespace itself
-		assertEquals("file/scratch/",
+		// No path → root authority + empty path
+		assertEquals("file://scratch/",
 			CapabilityChecker.extractResource("v/ops/file/list",
 				Maps.of(Strings.create("root"), Strings.create("scratch"))));
-		// No root (e.g. file:roots) = the file namespace
-		assertEquals("file/",
+		// No root (file:roots etc.) → namespace root
+		assertEquals("file://",
 			CapabilityChecker.extractResource("v/ops/file/roots", Maps.empty()));
 	}
 
 	@Test
 	public void testFilePerRootCaps() {
-		// Caps scoped to file/scratch/ — agent can write within scratch but
+		// Cap scoped to file://scratch/ — agent can write within scratch but
 		// not other roots.
-		AVector<ACell> caps = caps("file/scratch/", "crud/write");
+		AVector<ACell> caps = caps("file://scratch/", "crud/write");
 		assertNull(CapabilityChecker.check(caps, "v/ops/file/write",
 			Maps.of(Strings.create("root"), Strings.create("scratch"),
 				Strings.create("path"), Strings.create("foo.txt"))));
@@ -411,12 +411,10 @@ public class CapabilityCheckerTest {
 
 	@Test
 	public void testFilePerPathCaps() {
-		// Caps narrowed further: only specific subtree writable.
-		AVector<ACell> caps = caps("file/scratch/agent-output/", "crud/write");
+		AVector<ACell> caps = caps("file://scratch/agent-output/", "crud/write");
 		assertNull(CapabilityChecker.check(caps, "v/ops/file/write",
 			Maps.of(Strings.create("root"), Strings.create("scratch"),
 				Strings.create("path"), Strings.create("agent-output/run-123.json"))));
-		// Sibling path denied
 		assertNotNull(CapabilityChecker.check(caps, "v/ops/file/write",
 			Maps.of(Strings.create("root"), Strings.create("scratch"),
 				Strings.create("path"), Strings.create("other/secret.txt"))));
@@ -424,12 +422,10 @@ public class CapabilityCheckerTest {
 
 	@Test
 	public void testFileReadOnlyCapsRejectWrite() {
-		AVector<ACell> caps = caps("file/", "crud/read");
-		// Read anywhere is fine
+		AVector<ACell> caps = caps("file://", "crud/read");
 		assertNull(CapabilityChecker.check(caps, "v/ops/file/read",
 			Maps.of(Strings.create("root"), Strings.create("data"),
 				Strings.create("path"), Strings.create("anything"))));
-		// Write rejected even with broad resource scope
 		assertNotNull(CapabilityChecker.check(caps, "v/ops/file/write",
 			Maps.of(Strings.create("root"), Strings.create("data"),
 				Strings.create("path"), Strings.create("anything"))));
@@ -448,20 +444,20 @@ public class CapabilityCheckerTest {
 
 	@Test
 	public void testDLFSResourceFormat() {
-		assertEquals("dlfs/health-vault/medications",
+		assertEquals("dlfs://health-vault/medications",
 			CapabilityChecker.extractResource("v/ops/dlfs/list",
 				Maps.of(Strings.create("drive"), Strings.create("health-vault"),
 					Strings.create("path"), Strings.create("/medications"))));
-		assertEquals("dlfs/health-vault/",
+		assertEquals("dlfs://health-vault/",
 			CapabilityChecker.extractResource("v/ops/dlfs/create-drive",
 				Maps.of(Strings.create("name"), Strings.create("health-vault"))));
-		assertEquals("dlfs/",
+		assertEquals("dlfs://",
 			CapabilityChecker.extractResource("v/ops/dlfs/list-drives", Maps.empty()));
 	}
 
 	@Test
 	public void testDLFSPerDriveCaps() {
-		AVector<ACell> caps = caps("dlfs/scratch/", "crud");
+		AVector<ACell> caps = caps("dlfs://scratch/", "crud");
 		// Operations on scratch drive allowed
 		assertNull(CapabilityChecker.check(caps, "v/ops/dlfs/write",
 			Maps.of(Strings.create("drive"), Strings.create("scratch"),

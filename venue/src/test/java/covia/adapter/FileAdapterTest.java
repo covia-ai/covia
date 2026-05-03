@@ -345,10 +345,10 @@ public class FileAdapterTest {
 		// cap denial (no Job is created).
 		convex.core.data.AVector<convex.core.data.ACell> caps = convex.core.data.Vectors.of(
 			convex.auth.ucan.Capability.create(
-				convex.core.data.Strings.create("file/work/cap-write/"),
+				convex.core.data.Strings.create("file://work/cap-write/"),
 				convex.auth.ucan.Capability.CRUD_WRITE),
 			convex.auth.ucan.Capability.create(
-				convex.core.data.Strings.create("file/work/"),
+				convex.core.data.Strings.create("file://work/"),
 				convex.auth.ucan.Capability.CRUD_READ)
 		);
 		RequestContext gated = RequestContext.of(
@@ -396,7 +396,7 @@ public class FileAdapterTest {
 		// inside scope and is denied outside.
 		convex.core.data.AVector<convex.core.data.ACell> caps = convex.core.data.Vectors.of(
 			convex.auth.ucan.Capability.create(
-				convex.core.data.Strings.create("file/work/cap-del/"),
+				convex.core.data.Strings.create("file://work/cap-del/"),
 				convex.core.data.Strings.create("crud"))
 		);
 		RequestContext gated = RequestContext.of(
