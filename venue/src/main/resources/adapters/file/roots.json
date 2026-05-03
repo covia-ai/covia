@@ -1,6 +1,6 @@
 {
   "name": "List File Roots",
-  "description": "List the named filesystem roots configured for this venue. Returns each root's name, absolute host path, and read-only flag. Agents must use one of these names as the 'root' parameter for other file operations. If the operator has not configured any roots, the venue defaults to a single ephemeral 'tmp' root that is created at startup and deleted on JVM exit.",
+  "description": "List the named filesystem roots configured for this venue. Returns each root's name, display path, kind (host/temp/dlfs), and read-only flag. Agents must use one of these names as the 'root' parameter for other file operations. Roots can be backed by host directories, ephemeral temp dirs, or DLFS drives — the file: surface is uniform regardless. If the operator has not configured any roots, the venue defaults to a single ephemeral 'tmp' root that is created at startup and deleted on JVM exit.",
   "creator": "Covia",
   "operation": {
     "adapter": "file:roots",
@@ -18,7 +18,8 @@
             "type": "object",
             "properties": {
               "name": { "type": "string" },
-              "path": { "type": "string" },
+              "path": { "type": "string", "description": "Host path for host/temp roots; 'dlfs:<drive>' for DLFS-backed roots" },
+              "kind": { "type": "string", "enum": ["host", "temp", "dlfs"] },
               "readOnly": { "type": "boolean" }
             }
           }

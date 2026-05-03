@@ -178,7 +178,7 @@ Bridges operations to execution environments:
 | `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `deepseek` |
 | `http` | HTTP requests (SSRF-protected) | `get`, `post` |
 | `jvm` | JVM utilities | `stringConcat`, `urlEncode`, `urlDecode` |
-| `file` | Local filesystem (root-jailed, opt-in) | `roots`, `list`, `read`, `write`, `append`, `delete`, `mkdir`, `stat` |
+| `file` | Filesystem (root-jailed; host/temp/DLFS-backed roots) | `roots`, `list`, `read`, `write`, `append`, `delete`, `mkdir`, `stat` |
 | `schema` | JSON Schema operations | `validate`, `validateAll`, `infer`, `coerce`, `check` |
 | `orchestrator` | Multi-step workflows | Custom orchestration |
 | `covia` | Lattice CRUD | `read`, `write`, `delete`, `append`, `slice`, `list`, `functions`, `describe`, `adapters`, `inspect` |

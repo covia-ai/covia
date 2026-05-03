@@ -194,8 +194,12 @@ public class DLFSAdapter extends AAdapter {
 	 * Connects a DLFS drive view for the caller. Cheap — just a cursor view, no
 	 * caching. A fresh {@link DLFSLocal} per request keeps the per-request
 	 * {@link LatticeContext} (timestamp, signing key) isolated.
+	 *
+	 * <p>Public so other adapters (e.g. {@code FileAdapter} routing a
+	 * {@code dlfs}-backed root) can obtain the same drive view the DLFS
+	 * adapter operations themselves use.</p>
 	 */
-	private DLFSLocal getDrive(RequestContext ctx, String driveName) {
+	public DLFSLocal getDrive(RequestContext ctx, String driveName) {
 		AKeyPair dlfsKey = ensureUserKeyPair(ctx);
 		ALatticeCursor<?> userCursor = getUserDLFSCursor(dlfsKey);
 		return DLFS.connect(userCursor, Strings.create(driveName));

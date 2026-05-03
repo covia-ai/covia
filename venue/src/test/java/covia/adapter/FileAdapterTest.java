@@ -329,6 +329,84 @@ public class FileAdapterTest {
 	// Default (no config) inertness
 
 	@Test
+	public void testDLFSBackedRoot() {
+		// Configure a file: root that points at a DLFS drive. Operations should
+		// route through DLFS but use the same file: surface as host roots.
+		Engine eng = Engine.createTemp(Maps.of(
+			"file", Maps.of("roots", Maps.of(
+				"shared", Maps.of("dlfs", "shared-drive")
+			))
+		));
+		Engine.addDemoAssets(eng);
+
+		convex.core.data.AString did = convex.core.data.Strings.create(
+			"did:key:z6Mk-test-FileAdapterTest-dlfs");
+
+		// roots reports the dlfs-backed root with kind=dlfs.
+		Job rootsJob = eng.jobs().invokeOperation(
+			"v/ops/file/roots", Maps.empty(), RequestContext.of(did));
+		rootsJob.awaitResult(2000);
+		AVector<?> rootsList = RT.ensureVector(RT.getIn(rootsJob.getOutput(), "roots"));
+		assertEquals(1, rootsList.count());
+		assertEquals("dlfs", RT.ensureString(RT.getIn(rootsList.get(0), "kind")).toString());
+		assertEquals("shared", RT.ensureString(RT.getIn(rootsList.get(0), "name")).toString());
+
+		// Write through file: surface
+		Job writeJob = eng.jobs().invokeOperation(
+			"v/ops/file/write",
+			Maps.of("root", "shared", "path", "hello.txt", "content", "via file"),
+			RequestContext.of(did));
+		writeJob.awaitResult(2000);
+		assertEquals(Status.COMPLETE, writeJob.getStatus());
+		assertTrue(RT.bool(RT.getIn(writeJob.getOutput(), "created")));
+
+		// Read it back through file:
+		Job readJob = eng.jobs().invokeOperation(
+			"v/ops/file/read",
+			Maps.of("root", "shared", "path", "hello.txt"),
+			RequestContext.of(did));
+		readJob.awaitResult(2000);
+		assertEquals("via file", RT.ensureString(RT.getIn(readJob.getOutput(), "content")).toString());
+
+		// And confirm the same data is visible via dlfs: surface
+		Job dlfsRead = eng.jobs().invokeOperation(
+			"v/ops/dlfs/read",
+			Maps.of("drive", "shared-drive", "path", "/hello.txt"),
+			RequestContext.of(did));
+		dlfsRead.awaitResult(2000);
+		assertEquals("via file", RT.ensureString(RT.getIn(dlfsRead.getOutput(), "content")).toString());
+	}
+
+	@Test
+	public void testDLFSRootIsolatesPerCaller() {
+		// Each caller's drive view is signed with their own key — writes by
+		// one DID must not be visible to another.
+		Engine eng = Engine.createTemp(Maps.of(
+			"file", Maps.of("roots", Maps.of(
+				"private", Maps.of("dlfs", "private-drive")
+			))
+		));
+		Engine.addDemoAssets(eng);
+
+		convex.core.data.AString alice = convex.core.data.Strings.create(
+			"did:key:z6Mk-test-FileAdapterTest-alice");
+		convex.core.data.AString bob = convex.core.data.Strings.create(
+			"did:key:z6Mk-test-FileAdapterTest-bob");
+
+		eng.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "private", "path", "secret.txt", "content", "alice's note"),
+			RequestContext.of(alice)).awaitResult(2000);
+
+		// Bob's view of the same drive name must be empty.
+		Job bobList = eng.jobs().invokeOperation(
+			"v/ops/file/list", Maps.of("root", "private"),
+			RequestContext.of(bob));
+		bobList.awaitResult(2000);
+		AVector<?> entries = RT.ensureVector(RT.getIn(bobList.getOutput(), "entries"));
+		assertEquals(0, entries.count(), "Bob should not see Alice's drive contents");
+	}
+
+	@Test
 	public void testDefaultEngineHasTempRoot() {
 		// With no file.roots configured, the adapter defaults to creating an
 		// ephemeral 'tmp' root. Agents get a usable scratch space immediately.

@@ -109,7 +109,7 @@ Adapter Layer
     ├── HTTPAdapter       — outbound HTTP requests (with SSRF protection)
     ├── Orchestrator      — multi-step workflow coordination
     ├── JVMAdapter        — string utilities
-    ├── FileAdapter       — local filesystem access (root-jailed; opt-in via config)
+    ├── FileAdapter       — filesystem access (root-jailed; host / temp / DLFS-backed roots)
     ├── SchemaAdapter     — JSON Schema validation, inference, coercion
     ├── CoviaAdapter      — lattice CRUD (read, write, delete, append, slice, list, functions, describe)
     ├── AssetAdapter      — content-addressed asset store/retrieve
