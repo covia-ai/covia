@@ -1,0 +1,27 @@
+{
+  "name": "Stat File",
+  "description": "Return metadata for a path under a configured filesystem root. Reports whether the path exists, its type (file/directory/symlink/other), size in bytes, last-modified time (epoch millis), and the root's read-only flag.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "file:stat",
+    "toolName": "file_stat",
+    "input": {
+      "type": "object",
+      "properties": {
+        "root": { "type": "string", "description": "Configured root name" },
+        "path": { "type": "string", "description": "Path relative to the root" }
+      },
+      "required": ["root", "path"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "exists": { "type": "boolean" },
+        "type": { "type": "string" },
+        "size": { "type": "integer" },
+        "modified": { "type": "integer" },
+        "readOnly": { "type": "boolean" }
+      }
+    }
+  }
+}

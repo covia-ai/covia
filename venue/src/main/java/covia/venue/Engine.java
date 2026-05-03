@@ -61,6 +61,7 @@ import covia.adapter.MCPAdapter;
 import covia.adapter.Orchestrator;
 import covia.adapter.SecretAdapter;
 import covia.adapter.DLFSAdapter;
+import covia.adapter.FileAdapter;
 import covia.adapter.VaultAdapter;
 import covia.adapter.UCANAdapter;
 import covia.adapter.TestAdapter;
@@ -410,6 +411,7 @@ public class Engine {
 		venue.registerAdapter(new TestAdapter());
 		venue.registerAdapter(new HTTPAdapter());
 		venue.registerAdapter(new JVMAdapter());
+		venue.registerAdapter(new FileAdapter());
 		venue.registerAdapter(new SchemaAdapter());
 		venue.registerAdapter(new JSONAdapter());
 		venue.registerAdapter(new Orchestrator());
@@ -1375,6 +1377,29 @@ public class Engine {
 	 */
 	public VenueState getVenueState() {
 		return venueState;
+	}
+
+	/**
+	 * Looks up an agent's lattice state by owner DID and agent ID.
+	 *
+	 * <p>Returns null if the user doesn't exist, the agent isn't initialised,
+	 * or the agent is {@link AgentState#TERMINATED}. Used by the harness to
+	 * read agent record fields (config, tasks, pending, sessions) directly
+	 * from the lattice instead of plumbing them through the step input.</p>
+	 *
+	 * @param callerDID Agent owner's DID (never null)
+	 * @param agentId   Agent identifier (never null)
+	 * @return AgentState wrapper, or null if not found / terminated
+	 */
+	public AgentState getAgent(AString callerDID, AString agentId) {
+		if (callerDID == null || agentId == null) return null;
+		Users users = venueState.users();
+		User user = users.get(callerDID);
+		if (user == null) return null;
+		AgentState agent = user.agent(agentId);
+		if (agent == null) return null;
+		if (AgentState.TERMINATED.equals(agent.getStatus())) return null;
+		return agent;
 	}
 
 	/**

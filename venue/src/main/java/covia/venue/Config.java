@@ -129,6 +129,17 @@ public class Config {
 	/** Key for DLFS WebDAV configuration section */
 	public static final AString WEBDAV = Strings.intern("webdav");
 
+	// ========== File adapter config keys ==========
+
+	/** Key for FileAdapter configuration section */
+	public static final AString FILE = Strings.intern("file");
+
+	/** Key for FileAdapter named-roots map (root name -&gt; absolute path string). */
+	public static final AString ROOTS = Strings.intern("roots");
+
+	/** Key for per-root read-only flag (boolean). */
+	public static final AString READ_ONLY = Strings.intern("readOnly");
+
 	// ========== Server config keys ==========
 
 	/** Key for CORS allowed origins (default: "*" = all) */
@@ -289,6 +300,37 @@ public class Config {
 		AMap<AString, ACell> webdavConfig = RT.ensureMap(config.get(WEBDAV));
 		if (webdavConfig == null) return false;
 		return RT.bool(webdavConfig.get(ENABLED));
+	}
+
+	// ========== File adapter accessors ==========
+
+	/**
+	 * Get the FileAdapter configuration section.
+	 *
+	 * <p>Expected shape:
+	 * <pre>
+	 * {
+	 *   "file": {
+	 *     "roots": {
+	 *       "workspace": "/srv/agent-workspace",
+	 *       "data":      { "path": "/srv/data", "readOnly": true }
+	 *     }
+	 *   }
+	 * }
+	 * </pre>
+	 *
+	 * <p>If the {@code roots} map is absent or empty, the FileAdapter
+	 * defaults to creating a single ephemeral {@code tmp} root that is
+	 * deleted recursively on JVM exit.
+	 *
+	 * <p>A per-root entry may also be {@code {"temp": true, "prefix": "...",
+	 * "path": "..."}} to materialise a fresh temp directory at startup
+	 * (with optional prefix and parent dir) that is cleaned up at exit.
+	 *
+	 * @return File config map, or null if not configured
+	 */
+	public AMap<AString, ACell> getFileConfig() {
+		return RT.ensureMap(config.get(FILE));
 	}
 
 	// ========== Auth accessors ==========

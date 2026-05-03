@@ -1,0 +1,25 @@
+{
+  "name": "Create Directory",
+  "description": "Create a directory under a configured filesystem root. Set 'parents' to true to create missing intermediate directories (mkdir -p). Existing directories are accepted and reported with created=false. Read-only roots reject mkdir.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "file:mkdir",
+    "toolName": "file_mkdir",
+    "input": {
+      "type": "object",
+      "properties": {
+        "root": { "type": "string", "description": "Configured root name" },
+        "path": { "type": "string", "description": "Directory path relative to the root" },
+        "parents": { "type": "boolean", "description": "Create intermediate parents if missing (default false)" }
+      },
+      "required": ["root", "path"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "created": { "type": "boolean", "description": "True if a new directory was created" },
+        "path": { "type": "string", "description": "Absolute host path of the directory" }
+      }
+    }
+  }
+}

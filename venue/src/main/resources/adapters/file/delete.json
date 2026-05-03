@@ -1,0 +1,25 @@
+{
+  "name": "Delete File",
+  "description": "Delete a file or empty directory under a configured filesystem root. Set 'recursive' to true to remove a non-empty directory and all its contents. The root itself cannot be deleted. Read-only roots reject deletes.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "file:delete",
+    "toolName": "file_delete",
+    "input": {
+      "type": "object",
+      "properties": {
+        "root": { "type": "string", "description": "Configured root name" },
+        "path": { "type": "string", "description": "File or directory path relative to the root" },
+        "recursive": { "type": "boolean", "description": "Recursively delete directory contents (default false)" }
+      },
+      "required": ["root", "path"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "deleted": { "type": "boolean", "description": "True if the target was deleted" },
+        "existed": { "type": "boolean", "description": "True if the target existed prior to the call" }
+      }
+    }
+  }
+}

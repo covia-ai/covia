@@ -1,0 +1,27 @@
+{
+  "name": "Write File",
+  "description": "Write a file under a configured filesystem root. Creates the file if it does not exist; truncates and overwrites otherwise. Parent directories must already exist — call file:mkdir first if needed. Supply exactly one of 'content' (UTF-8 text), 'value' (JSON-serialised), or 'bytes' (base64). Read-only roots reject writes.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "file:write",
+    "toolName": "file_write",
+    "input": {
+      "type": "object",
+      "properties": {
+        "root": { "type": "string", "description": "Configured root name" },
+        "path": { "type": "string", "description": "File path relative to the root" },
+        "content": { "type": "string", "description": "UTF-8 text to write" },
+        "value": { "description": "JSON-serialisable value to write as UTF-8 JSON" },
+        "bytes": { "type": "string", "description": "Base64-encoded bytes to write" }
+      },
+      "required": ["root", "path"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "written": { "type": "integer", "description": "Bytes written" },
+        "created": { "type": "boolean", "description": "True if the file was newly created" }
+      }
+    }
+  }
+}

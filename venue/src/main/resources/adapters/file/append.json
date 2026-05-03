@@ -1,0 +1,27 @@
+{
+  "name": "Append to File",
+  "description": "Append bytes to a file under a configured filesystem root, creating the file if it does not exist. Supply exactly one of 'content' (UTF-8 text), 'value' (JSON-serialised), or 'bytes' (base64). Read-only roots reject writes.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "file:append",
+    "toolName": "file_append",
+    "input": {
+      "type": "object",
+      "properties": {
+        "root": { "type": "string", "description": "Configured root name" },
+        "path": { "type": "string", "description": "File path relative to the root" },
+        "content": { "type": "string", "description": "UTF-8 text to append" },
+        "value": { "description": "JSON-serialisable value to append as UTF-8 JSON" },
+        "bytes": { "type": "string", "description": "Base64-encoded bytes to append" }
+      },
+      "required": ["root", "path"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "appended": { "type": "integer", "description": "Bytes appended" },
+        "created": { "type": "boolean", "description": "True if the file was newly created" }
+      }
+    }
+  }
+}

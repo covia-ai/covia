@@ -1,0 +1,27 @@
+{
+  "name": "Read File",
+  "description": "Read a file from a configured filesystem root. The 'mode' parameter controls decoding: 'auto' (default) returns UTF-8 text for text files and base64 for binary; 'text' forces UTF-8; 'bytes' returns base64; 'json' parses as JSON and returns the value. The encoding field on the response indicates which path was taken.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "file:read",
+    "toolName": "file_read",
+    "input": {
+      "type": "object",
+      "properties": {
+        "root": { "type": "string", "description": "Configured root name" },
+        "path": { "type": "string", "description": "File path relative to the root" },
+        "mode": { "type": "string", "enum": ["auto", "text", "bytes", "json"], "description": "Decoding mode (default 'auto')" }
+      },
+      "required": ["root", "path"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "content": { "type": "string", "description": "File content for modes auto/text/bytes (text or base64)" },
+        "value": { "description": "Parsed JSON value (mode=json only)" },
+        "encoding": { "type": "string", "description": "'utf-8' or 'base64'" },
+        "size": { "type": "integer", "description": "File size in bytes" }
+      }
+    }
+  }
+}

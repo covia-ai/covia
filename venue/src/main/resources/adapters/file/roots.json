@@ -1,0 +1,29 @@
+{
+  "name": "List File Roots",
+  "description": "List the named filesystem roots configured for this venue. Returns each root's name, absolute host path, and read-only flag. Agents must use one of these names as the 'root' parameter for other file operations. If the operator has not configured any roots, the venue defaults to a single ephemeral 'tmp' root that is created at startup and deleted on JVM exit.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "file:roots",
+    "toolName": "file_roots",
+    "input": {
+      "type": "object",
+      "properties": {}
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "roots": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "path": { "type": "string" },
+              "readOnly": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
