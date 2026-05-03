@@ -4,6 +4,7 @@
   "creator": "Covia",
   "operation": {
     "adapter": "dlfs:delete",
+    "toolName": "dlfs_delete",
     "input": {
       "type": "object",
       "properties": {

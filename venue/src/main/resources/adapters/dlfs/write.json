@@ -4,6 +4,7 @@
   "creator": "Covia",
   "operation": {
     "adapter": "dlfs:write",
+    "toolName": "dlfs_write",
     "input": {
       "type": "object",
       "properties": {
