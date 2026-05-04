@@ -94,6 +94,7 @@ public class FileAdapter extends AAdapter {
 	private static final AString FIELD_TEMP = Strings.intern("temp");
 	private static final AString FIELD_PREFIX = Strings.intern("prefix");
 	private static final AString FIELD_DLFS = Strings.intern("dlfs");
+	private static final AString FIELD_DESCRIPTION = Strings.intern("description");
 
 	/**
 	 * A configured root. Subclasses dispatch path resolution to the appropriate
@@ -104,7 +105,14 @@ public class FileAdapter extends AAdapter {
 	 */
 	private static abstract class Root {
 		final boolean readOnly;
-		Root(boolean readOnly) { this.readOnly = readOnly; }
+		/** Operator-supplied human-readable description as an AString, or null if absent.
+		 *  Kept as AString since it originates from the config map and flows
+		 *  back out via {@code Maps.of} unchanged. */
+		final AString description;
+		Root(boolean readOnly, AString description) {
+			this.readOnly = readOnly;
+			this.description = description;
+		}
 		abstract Path baseFor(RequestContext ctx) throws IOException;
 		abstract String displayPath();
 		abstract String kind();
@@ -113,8 +121,8 @@ public class FileAdapter extends AAdapter {
 	private static final class HostRoot extends Root {
 		final Path canonical;
 		final boolean temp;
-		HostRoot(Path canonical, boolean readOnly, boolean temp) {
-			super(readOnly);
+		HostRoot(Path canonical, boolean readOnly, boolean temp, AString description) {
+			super(readOnly, description);
 			this.canonical = canonical;
 			this.temp = temp;
 		}
@@ -126,8 +134,8 @@ public class FileAdapter extends AAdapter {
 	private static final class DLFSRoot extends Root {
 		final String driveName;
 		final Engine engine;
-		DLFSRoot(String driveName, boolean readOnly, Engine engine) {
-			super(readOnly);
+		DLFSRoot(String driveName, boolean readOnly, Engine engine, AString description) {
+			super(readOnly, description);
 			this.driveName = driveName;
 			this.engine = engine;
 		}
@@ -202,7 +210,7 @@ public class FileAdapter extends AAdapter {
 		// suppress this by configuring at least one explicit root.
 		if (roots.isEmpty()) {
 			try {
-				addTempRoot("tmp", null, null, false);
+				addTempRoot("tmp", null, null, false, null);
 				log.info("FileAdapter: no roots configured — defaulted to ephemeral 'tmp' root");
 			} catch (IOException e) {
 				log.warn("FileAdapter: could not create default temp root: {}", e.getMessage());
@@ -214,12 +222,13 @@ public class FileAdapter extends AAdapter {
 	private void loadRoot(String name, ACell raw) {
 		try {
 			if (raw instanceof AString s) {
-				addPathRoot(name, s.toString(), false);
+				addPathRoot(name, s.toString(), false, null);
 			} else if (raw instanceof AMap<?,?> m) {
 				AMap<AString, ACell> rm = (AMap<AString, ACell>) m;
 				boolean isTemp = RT.bool(rm.get(FIELD_TEMP));
 				AString dlfsCell = RT.ensureString(rm.get(FIELD_DLFS));
 				boolean readOnly = RT.bool(rm.get(Config.READ_ONLY));
+				AString description = RT.ensureString(rm.get(FIELD_DESCRIPTION));
 				int variants = (isTemp ? 1 : 0) + (dlfsCell != null ? 1 : 0)
 					+ (rm.containsKey(FIELD_PATH) && !isTemp ? 1 : 0);
 				if (variants > 1) {
@@ -231,16 +240,16 @@ public class FileAdapter extends AAdapter {
 					AString parentCell = RT.ensureString(rm.get(FIELD_PATH));
 					Path parent = (parentCell != null) ? Path.of(parentCell.toString()) : null;
 					String prefix = (prefixCell != null) ? prefixCell.toString() : null;
-					addTempRoot(name, prefix, parent, readOnly);
+					addTempRoot(name, prefix, parent, readOnly, description);
 				} else if (dlfsCell != null) {
-					addDLFSRoot(name, dlfsCell.toString(), readOnly);
+					addDLFSRoot(name, dlfsCell.toString(), readOnly, description);
 				} else {
 					AString p = RT.ensureString(rm.get(FIELD_PATH));
 					if (p == null) {
 						log.warn("FileAdapter: root '{}' missing 'path', 'temp', or 'dlfs' — skipped", name);
 						return;
 					}
-					addPathRoot(name, p.toString(), readOnly);
+					addPathRoot(name, p.toString(), readOnly, description);
 				}
 			} else {
 				log.warn("FileAdapter: root '{}' must be string or map — skipped", name);
@@ -250,7 +259,7 @@ public class FileAdapter extends AAdapter {
 		}
 	}
 
-	private void addPathRoot(String name, String pathStr, boolean readOnly) throws IOException {
+	private void addPathRoot(String name, String pathStr, boolean readOnly, AString description) throws IOException {
 		Path canonical = Path.of(pathStr).toAbsolutePath().normalize();
 		if (!Files.isDirectory(canonical)) {
 			log.warn("FileAdapter: root '{}' path '{}' is not an existing directory — skipped",
@@ -259,11 +268,11 @@ public class FileAdapter extends AAdapter {
 		}
 		// Real path so symlink-rooted configs are normalised once.
 		Path real = canonical.toRealPath();
-		roots.put(name, new HostRoot(real, readOnly, false));
+		roots.put(name, new HostRoot(real, readOnly, false, description));
 		log.info("FileAdapter: root '{}' -> {}{}", name, real, readOnly ? " (read-only)" : "");
 	}
 
-	private void addTempRoot(String name, String prefix, Path parent, boolean readOnly) throws IOException {
+	private void addTempRoot(String name, String prefix, Path parent, boolean readOnly, AString description) throws IOException {
 		String effPrefix = (prefix != null) ? prefix : ("covia-" + name + "-");
 		Path tempDir = (parent != null)
 			? Files.createTempDirectory(parent, effPrefix)
@@ -282,14 +291,14 @@ public class FileAdapter extends AAdapter {
 			}
 		}, "FileAdapter-tempCleanup-" + name));
 
-		roots.put(name, new HostRoot(real, readOnly, true));
+		roots.put(name, new HostRoot(real, readOnly, true, description));
 		log.info("FileAdapter: temp root '{}' -> {} (auto-cleanup on JVM exit){}",
 			name, real, readOnly ? " (read-only)" : "");
 	}
 
-	private void addDLFSRoot(String name, String driveName, boolean readOnly) {
+	private void addDLFSRoot(String name, String driveName, boolean readOnly, AString description) {
 		// Lookup is deferred — DLFSAdapter may register after FileAdapter.
-		roots.put(name, new DLFSRoot(driveName, readOnly, engine));
+		roots.put(name, new DLFSRoot(driveName, readOnly, engine, description));
 		log.info("FileAdapter: root '{}' -> dlfs:{}{}", name, driveName, readOnly ? " (read-only)" : "");
 	}
 
@@ -445,12 +454,17 @@ public class FileAdapter extends AAdapter {
 	private ACell handleRoots() {
 		AVector<ACell> out = Vectors.empty();
 		for (var e : roots.entrySet()) {
-			out = out.conj(Maps.of(
+			Root r = e.getValue();
+			AMap<AString, ACell> entry = Maps.of(
 				"name", e.getKey(),
-				"path", e.getValue().displayPath(),
-				"kind", e.getValue().kind(),
-				"readOnly", CVMBool.create(e.getValue().readOnly)
-			));
+				"path", r.displayPath(),
+				"kind", r.kind(),
+				"readOnly", CVMBool.create(r.readOnly)
+			);
+			if (r.description != null) {
+				entry = entry.assoc(FIELD_DESCRIPTION, r.description);
+			}
+			out = out.conj(entry);
 		}
 		return Maps.of("roots", out);
 	}

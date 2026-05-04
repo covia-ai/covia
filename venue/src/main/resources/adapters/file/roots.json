@@ -20,7 +20,8 @@
               "name": { "type": "string" },
               "path": { "type": "string", "description": "Host path for host/temp roots; 'dlfs:<drive>' for DLFS-backed roots" },
               "kind": { "type": "string", "enum": ["host", "temp", "dlfs"] },
-              "readOnly": { "type": "boolean" }
+              "readOnly": { "type": "boolean" },
+              "description": { "type": "string", "description": "Operator-supplied description (only present if configured)" }
             }
           }
         }

@@ -3,6 +3,7 @@ package covia.adapter;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -81,6 +82,41 @@ public class FileAdapterTest {
 	}
 
 	// =========================================================
+
+	@Test
+	public void testRootDescriptionInRoots() {
+		// Build an isolated engine with description on one root.
+		Engine eng = Engine.createTemp(Maps.of(
+			"file", Maps.of("roots", Maps.of(
+				"docs", Maps.of(
+					"path", workspace.toAbsolutePath().toString(),
+					"description", "Project documentation root")
+			))
+		));
+		Engine.addDemoAssets(eng);
+
+		Job rootsJob = eng.jobs().invokeOperation(
+			"v/ops/file/roots", Maps.empty(),
+			RequestContext.of(convex.core.data.Strings.create(DID)));
+		rootsJob.awaitResult(2000);
+		assertEquals(Status.COMPLETE, rootsJob.getStatus());
+
+		AVector<?> rootsList = RT.ensureVector(RT.getIn(rootsJob.getOutput(), "roots"));
+		assertEquals(1, rootsList.count());
+		assertEquals("Project documentation root",
+			RT.ensureString(RT.getIn(rootsList.get(0), "description")).toString());
+	}
+
+	@Test
+	public void testRootDescriptionAbsentWhenNotConfigured() {
+		// The 'work' root in the shared engine has no description.
+		ACell result = run("v/ops/file/roots", Maps.empty());
+		AVector<?> rs = RT.ensureVector(RT.getIn(result, "roots"));
+		for (long i = 0; i < rs.count(); i++) {
+			assertNull((Object) RT.getIn(rs.get(i), "description"),
+				"description should be absent when not configured");
+		}
+	}
 
 	@Test
 	public void testRoots() {
