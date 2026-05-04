@@ -107,6 +107,7 @@ public class DLFSAdapter extends AAdapter {
 		installAsset("dlfs/create-drive", ASSETS_PATH + "createDrive.json");
 		installAsset("dlfs/delete-drive", ASSETS_PATH + "deleteDrive.json");
 		installAsset("dlfs/list",         ASSETS_PATH + "list.json");
+		installAsset("dlfs/tree",         ASSETS_PATH + "tree.json");
 		installAsset("dlfs/read",         ASSETS_PATH + "read.json");
 		installAsset("dlfs/write",        ASSETS_PATH + "write.json");
 		installAsset("dlfs/append",       ASSETS_PATH + "append.json");
@@ -260,6 +261,7 @@ public class DLFSAdapter extends AAdapter {
 			case "createDrive" -> handleCreateDrive(ctx, input);
 			case "deleteDrive" -> handleDeleteDrive(ctx, input);
 			case "list" -> handleList(ctx, input);
+			case "tree" -> handleTree(ctx, input);
 			case "read" -> handleRead(ctx, input);
 			case "write" -> handleWrite(ctx, input, false);
 			case "append" -> handleWrite(ctx, input, true);
@@ -337,6 +339,105 @@ public class DLFSAdapter extends AAdapter {
 			}
 		}
 		return Maps.of("entries", entries);
+	}
+
+	/** Tree-walk state shared across the recursion (mirrors FileAdapter). */
+	private static final class TreeState {
+		final StringBuilder out = new StringBuilder();
+		int entries = 0;
+		boolean truncated = false;
+	}
+
+	private static final int MAX_DEPTH_CAP = 10;
+	private static final int MAX_ENTRIES_CAP = 5000;
+
+	private ACell handleTree(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
+		FileSystem fs = requireDrive(ctx, input);
+		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
+		Path dir = resolvePath(fs, pathCell != null ? pathCell.toString() : null);
+
+		BasicFileAttributes attrs = Files.readAttributes(dir, BasicFileAttributes.class);
+		if (!attrs.isDirectory()) {
+			throw new IllegalArgumentException("Not a directory: " + pathCell);
+		}
+
+		int maxDepth = boundedInt(input, "maxDepth", 3, 1, MAX_DEPTH_CAP);
+		int maxEntries = boundedInt(input, "maxEntries", 500, 1, MAX_ENTRIES_CAP);
+		String info = stringField(input, "info");
+
+		TreeState state = new TreeState();
+		walkTree(dir, 0, maxDepth, maxEntries, info, state);
+
+		return Maps.of(
+			"tree", state.out.toString(),
+			"truncated", CVMBool.create(state.truncated)
+		);
+	}
+
+	private static void walkTree(Path dir, int depth, int maxDepth, int maxEntries,
+			String info, TreeState state) throws IOException {
+		// Snapshot children first — DLFS DirectoryStream isn't iteration-safe
+		// against concurrent mutation and tombstone semantics make order
+		// dependent on insertion. Sort for stable output.
+		java.util.List<Path> children = new java.util.ArrayList<>();
+		try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+			for (Path c : stream) children.add(c);
+		}
+		children.sort((a, b) -> {
+			Path af = a.getFileName();
+			Path bf = b.getFileName();
+			String an = (af != null) ? af.toString() : a.toString();
+			String bn = (bf != null) ? bf.toString() : b.toString();
+			return an.compareToIgnoreCase(bn);
+		});
+
+		for (Path child : children) {
+			if (state.entries >= maxEntries) {
+				state.truncated = true;
+				return;
+			}
+			state.entries++;
+
+			BasicFileAttributes attrs = Files.readAttributes(child, BasicFileAttributes.class);
+			Path fname = child.getFileName();
+			String name = (fname != null) ? fname.toString() : child.toString();
+			for (int i = 0; i < depth; i++) state.out.append('\t');
+			state.out.append(name);
+
+			if (attrs.isDirectory()) {
+				state.out.append("/\n");
+				if (depth + 1 < maxDepth) {
+					walkTree(child, depth + 1, maxDepth, maxEntries, info, state);
+					if (state.truncated) return;
+				}
+			} else {
+				if ("size".equals(info) && attrs.isRegularFile()) {
+					state.out.append(" (").append(humanSize(attrs.size())).append(')');
+				}
+				state.out.append('\n');
+			}
+		}
+	}
+
+	private static int boundedInt(AMap<AString, ACell> input, String key, int defaultVal, int min, int max) {
+		ACell v = input.get(Strings.create(key));
+		if (v instanceof CVMLong cl) {
+			long l = cl.longValue();
+			return (int) Math.max(min, Math.min(max, l));
+		}
+		return defaultVal;
+	}
+
+	private static String stringField(AMap<AString, ACell> input, String key) {
+		AString v = RT.ensureString(input.get(Strings.create(key)));
+		return (v == null) ? null : v.toString();
+	}
+
+	private static String humanSize(long bytes) {
+		if (bytes < 1024) return bytes + " B";
+		if (bytes < 1024L * 1024) return String.format("%.1f KB", bytes / 1024.0);
+		if (bytes < 1024L * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
+		return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024));
 	}
 
 	private ACell handleRead(RequestContext ctx, AMap<AString, ACell> input) throws IOException {

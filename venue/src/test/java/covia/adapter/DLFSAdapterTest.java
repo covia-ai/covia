@@ -320,6 +320,36 @@ public class DLFSAdapterTest {
 	}
 
 	@Test
+	public void testTreeBasic() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-tree"));
+		run("v/ops/dlfs/mkdir",
+			Maps.of("drive", "test-tree", "path", "/area/sub", "parents", true));
+		run("v/ops/dlfs/write",
+			Maps.of("drive", "test-tree", "path", "/area/a.txt", "content", "A"));
+		run("v/ops/dlfs/write",
+			Maps.of("drive", "test-tree", "path", "/area/sub/inner.txt", "content", "BB"));
+
+		ACell out = run("v/ops/dlfs/tree",
+			Maps.of("drive", "test-tree", "path", "/area"));
+		String tree = RT.ensureString(RT.getIn(out, "tree")).toString();
+		// Names only, sorted, dirs end with /
+		assertEquals("a.txt\nsub/\n\tinner.txt\n", tree);
+		assertFalse(RT.bool(RT.getIn(out, "truncated")));
+	}
+
+	@Test
+	public void testTreeWithSizeInfo() {
+		run("v/ops/dlfs/create-drive", Maps.of("name", "test-tree-info"));
+		run("v/ops/dlfs/write",
+			Maps.of("drive", "test-tree-info", "path", "/short.txt", "content", "hi"));
+
+		ACell out = run("v/ops/dlfs/tree",
+			Maps.of("drive", "test-tree-info", "info", "size"));
+		String tree = RT.ensureString(RT.getIn(out, "tree")).toString();
+		assertTrue(tree.contains("short.txt (2 B)"), "expected size: " + tree);
+	}
+
+	@Test
 	public void testListIncludesModified() {
 		run("v/ops/dlfs/create-drive", Maps.of("name", "test-mtime"));
 		run("v/ops/dlfs/write",

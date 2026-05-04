@@ -184,6 +184,7 @@ public class FileAdapter extends AAdapter {
 	protected void installAssets() {
 		installAsset("file/roots",  ASSETS_PATH + "roots.json");
 		installAsset("file/list",   ASSETS_PATH + "list.json");
+		installAsset("file/tree",   ASSETS_PATH + "tree.json");
 		installAsset("file/read",   ASSETS_PATH + "read.json");
 		installAsset("file/write",  ASSETS_PATH + "write.json");
 		installAsset("file/append", ASSETS_PATH + "append.json");
@@ -439,6 +440,7 @@ public class FileAdapter extends AAdapter {
 
 		return switch (subOp) {
 			case "list"   -> handleList(ctx, input);
+			case "tree"   -> handleTree(ctx, input);
 			case "read"   -> handleRead(ctx, input);
 			case "write"  -> handleWrite(ctx, input);
 			case "append" -> handleAppend(ctx, input);
@@ -494,6 +496,91 @@ public class FileAdapter extends AAdapter {
 			}
 		}
 		return Maps.of("entries", entries);
+	}
+
+	/** Tree-walk state shared across the recursion. */
+	private static final class TreeState {
+		final StringBuilder out = new StringBuilder();
+		int entries = 0;
+		boolean truncated = false;
+	}
+
+	private static final int MAX_DEPTH_CAP = 10;
+	private static final int MAX_ENTRIES_CAP = 5000;
+
+	private ACell handleTree(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
+		String rootName = stringArg(input, FIELD_ROOT);
+		String pathArg = stringArg(input, FIELD_PATH);
+		int maxDepth = boundedInt(input, "maxDepth", 3, 1, MAX_DEPTH_CAP);
+		int maxEntries = boundedInt(input, "maxEntries", 500, 1, MAX_ENTRIES_CAP);
+		AString infoCell = RT.ensureString(input.get(Strings.create("info")));
+		String info = (infoCell != null) ? infoCell.toString() : null;
+
+		Path dir = resolvePath(ctx, rootName, pathArg, true);
+		if (!Files.isDirectory(dir)) {
+			throw new IllegalArgumentException("Not a directory: " + pathArg);
+		}
+
+		TreeState state = new TreeState();
+		walkTree(dir, 0, maxDepth, maxEntries, info, state);
+
+		AMap<AString, ACell> out = Maps.of(
+			"tree", state.out.toString(),
+			"truncated", CVMBool.create(state.truncated)
+		);
+		return out;
+	}
+
+	private static void walkTree(Path dir, int depth, int maxDepth, int maxEntries,
+			String info, TreeState state) throws IOException {
+		// Snapshot + sort so output is stable and not invalidated by concurrent
+		// directory mutation during the walk.
+		java.util.List<Path> children = new java.util.ArrayList<>();
+		try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+			for (Path c : stream) children.add(c);
+		}
+		children.sort((a, b) -> a.getFileName().toString().compareToIgnoreCase(
+			b.getFileName().toString()));
+
+		for (Path child : children) {
+			if (state.entries >= maxEntries) {
+				state.truncated = true;
+				return;
+			}
+			state.entries++;
+
+			BasicFileAttributes attrs = Files.readAttributes(child, BasicFileAttributes.class);
+			for (int i = 0; i < depth; i++) state.out.append('\t');
+			state.out.append(child.getFileName().toString());
+
+			if (attrs.isDirectory()) {
+				state.out.append("/\n");
+				if (depth + 1 < maxDepth) {
+					walkTree(child, depth + 1, maxDepth, maxEntries, info, state);
+					if (state.truncated) return;
+				}
+			} else {
+				if ("size".equals(info) && attrs.isRegularFile()) {
+					state.out.append(" (").append(humanSize(attrs.size())).append(')');
+				}
+				state.out.append('\n');
+			}
+		}
+	}
+
+	private static int boundedInt(AMap<AString, ACell> input, String key, int defaultVal, int min, int max) {
+		ACell v = input.get(Strings.create(key));
+		if (v == null) return defaultVal;
+		Long l = (v instanceof CVMLong cl) ? cl.longValue() : null;
+		if (l == null) return defaultVal;
+		return (int) Math.max(min, Math.min(max, l));
+	}
+
+	private static String humanSize(long bytes) {
+		if (bytes < 1024) return bytes + " B";
+		if (bytes < 1024L * 1024) return String.format("%.1f KB", bytes / 1024.0);
+		if (bytes < 1024L * 1024 * 1024) return String.format("%.1f MB", bytes / (1024.0 * 1024));
+		return String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024));
 	}
 
 	private ACell handleRead(RequestContext ctx, AMap<AString, ACell> input) throws IOException {

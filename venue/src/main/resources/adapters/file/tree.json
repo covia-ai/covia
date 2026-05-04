@@ -1,0 +1,27 @@
+{
+  "name": "Tree of File Root",
+  "description": "Render a tab-indented text tree of a directory under a configured filesystem root. Designed for LLM consumption — directories end with '/' and files are listed by name only. Set 'info': 'size' to append file sizes (e.g. '(1.2 KB)'). Walk is capped by 'maxDepth' (default 3, max 10) and 'maxEntries' (default 500, max 5000); when the entries cap is hit the response sets truncated=true. Path may be omitted to walk from the root.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "file:tree",
+    "toolName": "file_tree",
+    "input": {
+      "type": "object",
+      "properties": {
+        "root": { "type": "string", "description": "Configured root name" },
+        "path": { "type": "string", "description": "Directory path relative to the root (omit for the root itself)" },
+        "maxDepth": { "type": "integer", "description": "Max depth to descend (default 3, max 10)" },
+        "maxEntries": { "type": "integer", "description": "Max total entries before truncation (default 500, max 5000)" },
+        "info": { "type": "string", "enum": ["size"], "description": "Optional per-line annotation. 'size' appends a human-readable size to file lines." }
+      },
+      "required": ["root"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "tree": { "type": "string", "description": "Tab-indented text tree. Each line is one entry: '<tabs><name>' for files, '<tabs><name>/' for directories." },
+        "truncated": { "type": "boolean", "description": "True if the entries cap was reached and the walk stopped early. The agent should narrow the path or lower maxDepth and try again." }
+      }
+    }
+  }
+}

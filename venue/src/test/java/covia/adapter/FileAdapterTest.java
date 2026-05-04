@@ -195,6 +195,83 @@ public class FileAdapterTest {
 	}
 
 	@Test
+	public void testTreeBasic() throws IOException {
+		// Build a small tree under work/, then walk it.
+		run("v/ops/file/mkdir", Maps.of("root", "work", "path", "tree-basic/sub", "parents", true));
+		run("v/ops/file/write", Maps.of("root", "work", "path", "tree-basic/a.txt", "content", "A"));
+		run("v/ops/file/write", Maps.of("root", "work", "path", "tree-basic/sub/inner.txt", "content", "BB"));
+
+		ACell out = run("v/ops/file/tree",
+			Maps.of("root", "work", "path", "tree-basic"));
+		String tree = RT.ensureString(RT.getIn(out, "tree")).toString();
+
+		// Names only (no info), sorted alphabetically, dirs end with /,
+		// files plain, sub-dir contents tab-indented.
+		assertEquals("a.txt\nsub/\n\tinner.txt\n", tree);
+		assertFalse(RT.bool(RT.getIn(out, "truncated")));
+	}
+
+	@Test
+	public void testTreeWithSizeInfo() throws IOException {
+		run("v/ops/file/mkdir", Maps.of("root", "work", "path", "tree-info", "parents", true));
+		run("v/ops/file/write", Maps.of("root", "work", "path", "tree-info/short.txt", "content", "hi"));
+
+		ACell out = run("v/ops/file/tree",
+			Maps.of("root", "work", "path", "tree-info", "info", "size"));
+		String tree = RT.ensureString(RT.getIn(out, "tree")).toString();
+		assertTrue(tree.contains("short.txt (2 B)"),
+			"expected size annotation, got: " + tree);
+	}
+
+	@Test
+	public void testTreeMaxDepthStopsDescent() throws IOException {
+		run("v/ops/file/mkdir",
+			Maps.of("root", "work", "path", "tree-deep/a/b/c", "parents", true));
+		run("v/ops/file/write",
+			Maps.of("root", "work", "path", "tree-deep/a/b/c/buried.txt", "content", "x"));
+
+		// maxDepth=2 → see a/, a/b/ — but not a/b/c/buried.txt
+		ACell out = run("v/ops/file/tree",
+			Maps.of("root", "work", "path", "tree-deep", "maxDepth", 2L));
+		String tree = RT.ensureString(RT.getIn(out, "tree")).toString();
+		assertTrue(tree.contains("a/"));
+		assertTrue(tree.contains("\tb/"));
+		assertFalse(tree.contains("buried.txt"),
+			"depth=2 should stop before buried.txt: " + tree);
+	}
+
+	@Test
+	public void testTreeMaxEntriesTruncates() throws IOException {
+		run("v/ops/file/mkdir",
+			Maps.of("root", "work", "path", "tree-trunc", "parents", true));
+		// Create more files than the cap allows
+		for (int i = 0; i < 6; i++) {
+			run("v/ops/file/write",
+				Maps.of("root", "work", "path", "tree-trunc/f" + i + ".txt", "content", "x"));
+		}
+
+		ACell out = run("v/ops/file/tree",
+			Maps.of("root", "work", "path", "tree-trunc", "maxEntries", 3L));
+		assertTrue(RT.bool(RT.getIn(out, "truncated")));
+		String tree = RT.ensureString(RT.getIn(out, "tree")).toString();
+		// Exactly 3 entries should appear (the first 3 alphabetically)
+		long lines = tree.lines().count();
+		assertEquals(3, lines, "expected 3 entries, got: " + tree);
+	}
+
+	@Test
+	public void testTreeRejectsNonDirectory() {
+		// Write a file then try to tree it
+		run("v/ops/file/write",
+			Maps.of("root", "work", "path", "not-a-dir.txt", "content", "x"));
+		Job job = runRaw("v/ops/file/tree",
+			Maps.of("root", "work", "path", "not-a-dir.txt"));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.getErrorMessage().contains("Not a directory"),
+			"expected 'Not a directory' error, got: " + job.getErrorMessage());
+	}
+
+	@Test
 	public void testStatAndDelete() throws IOException {
 		run("v/ops/file/write", Maps.of("root", "work", "path", "doomed.txt", "content", "x"));
 

@@ -117,10 +117,10 @@ public class CapabilityChecker {
 			// File / DLFS share crud/* abilities — same resource shape, same
 			// granted caps cover both surfaces. roots/listDrives are
 			// discovery-only and use crud/read.
-			case "v/ops/file/read", "v/ops/file/list", "v/ops/file/stat", "v/ops/file/roots" -> "crud/read";
+			case "v/ops/file/read", "v/ops/file/list", "v/ops/file/tree", "v/ops/file/stat", "v/ops/file/roots" -> "crud/read";
 			case "v/ops/file/write", "v/ops/file/append", "v/ops/file/mkdir" -> "crud/write";
 			case "v/ops/file/delete" -> "crud/delete";
-			case "v/ops/dlfs/read", "v/ops/dlfs/list", "v/ops/dlfs/stat", "v/ops/dlfs/list-drives" -> "crud/read";
+			case "v/ops/dlfs/read", "v/ops/dlfs/list", "v/ops/dlfs/tree", "v/ops/dlfs/stat", "v/ops/dlfs/list-drives" -> "crud/read";
 			case "v/ops/dlfs/write", "v/ops/dlfs/append", "v/ops/dlfs/mkdir", "v/ops/dlfs/create-drive" -> "crud/write";
 			case "v/ops/dlfs/delete", "v/ops/dlfs/delete-drive" -> "crud/delete";
 			// Legacy dispatch-string form (operation.adapter)
@@ -133,10 +133,10 @@ public class CapabilityChecker {
 			case "asset:store" -> "asset/store";
 			case "asset:get", "asset:list" -> "asset/read";
 			case "grid:run" -> "invoke";
-			case "file:read", "file:list", "file:stat", "file:roots" -> "crud/read";
+			case "file:read", "file:list", "file:tree", "file:stat", "file:roots" -> "crud/read";
 			case "file:write", "file:append", "file:mkdir" -> "crud/write";
 			case "file:delete" -> "crud/delete";
-			case "dlfs:read", "dlfs:list", "dlfs:stat", "dlfs:listDrives" -> "crud/read";
+			case "dlfs:read", "dlfs:list", "dlfs:tree", "dlfs:stat", "dlfs:listDrives" -> "crud/read";
 			case "dlfs:write", "dlfs:append", "dlfs:mkdir", "dlfs:createDrive" -> "crud/write";
 			case "dlfs:delete", "dlfs:deleteDrive" -> "crud/delete";
 			default -> "invoke";
