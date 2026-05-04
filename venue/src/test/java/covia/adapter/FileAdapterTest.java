@@ -391,6 +391,78 @@ public class FileAdapterTest {
 	}
 
 	@Test
+	public void testCapsGateFileReads() {
+		// Set up a file the test will try to read.
+		RequestContext free = RequestContext.of(convex.core.data.Strings.create(DID));
+		engine.jobs().invokeOperation("v/ops/file/mkdir",
+			Maps.of("root", "work", "path", "cap-read-area", "parents", true),
+			free).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "work", "path", "cap-read-area/secret.txt", "content", "shhh"),
+			free).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/file/write",
+			Maps.of("root", "work", "path", "cap-read-other.txt", "content", "off-limits"),
+			free).awaitResult(5000);
+
+		// (1) Caller with NO caps at all — every op denied, including reads.
+		RequestContext noCaps = RequestContext.of(
+			convex.core.data.Strings.create(DID))
+			.withCaps(convex.core.data.Vectors.empty());
+		String denied = capDenialOf(() -> engine.jobs().invokeOperation("v/ops/file/read",
+			Maps.of("root", "work", "path", "cap-read-area/secret.txt"), noCaps));
+		assertNotNull(denied, "read with empty caps must be denied");
+		assertTrue(denied.contains("Capability denied"),
+			"expected capability denial, got: " + denied);
+		assertTrue(denied.contains("crud/read"),
+			"denial should name the required ability: " + denied);
+
+		// (2) Caller with caps for a different sub-path can't read the secret.
+		convex.core.data.AVector<convex.core.data.ACell> wrongPathCaps = convex.core.data.Vectors.of(
+			convex.auth.ucan.Capability.create(
+				convex.core.data.Strings.create("file://work/elsewhere/"),
+				convex.auth.ucan.Capability.CRUD_READ)
+		);
+		RequestContext wrongPath = RequestContext.of(
+			convex.core.data.Strings.create(DID)).withCaps(wrongPathCaps);
+		String wrongDenied = capDenialOf(() -> engine.jobs().invokeOperation("v/ops/file/read",
+			Maps.of("root", "work", "path", "cap-read-area/secret.txt"), wrongPath));
+		assertNotNull(wrongDenied, "read outside cap subtree must be denied");
+		assertTrue(wrongDenied.contains("Capability denied"));
+
+		// (3) Caller with write-but-not-read caps can't read.
+		convex.core.data.AVector<convex.core.data.ACell> writeOnly = convex.core.data.Vectors.of(
+			convex.auth.ucan.Capability.create(
+				convex.core.data.Strings.create("file://work/"),
+				convex.auth.ucan.Capability.CRUD_WRITE)
+		);
+		RequestContext writeOnlyCtx = RequestContext.of(
+			convex.core.data.Strings.create(DID)).withCaps(writeOnly);
+		String writeOnlyDenied = capDenialOf(() -> engine.jobs().invokeOperation("v/ops/file/read",
+			Maps.of("root", "work", "path", "cap-read-area/secret.txt"), writeOnlyCtx));
+		assertNotNull(writeOnlyDenied, "write-only caps must NOT permit read");
+		assertTrue(writeOnlyDenied.contains("Capability denied"));
+
+		// (4) Caller with the right read cap CAN read.
+		convex.core.data.AVector<convex.core.data.ACell> readScoped = convex.core.data.Vectors.of(
+			convex.auth.ucan.Capability.create(
+				convex.core.data.Strings.create("file://work/cap-read-area/"),
+				convex.auth.ucan.Capability.CRUD_READ)
+		);
+		RequestContext reader = RequestContext.of(
+			convex.core.data.Strings.create(DID)).withCaps(readScoped);
+		Job okRead = engine.jobs().invokeOperation("v/ops/file/read",
+			Maps.of("root", "work", "path", "cap-read-area/secret.txt"), reader);
+		okRead.awaitResult(5000);
+		assertEquals(Status.COMPLETE, okRead.getStatus());
+		assertEquals("shhh", RT.ensureString(RT.getIn(okRead.getOutput(), "content")).toString());
+
+		// And the same reader can't escape its scope into the sibling file.
+		String escapeDenied = capDenialOf(() -> engine.jobs().invokeOperation("v/ops/file/read",
+			Maps.of("root", "work", "path", "cap-read-other.txt"), reader));
+		assertNotNull(escapeDenied, "scoped read cap must not cover siblings outside the granted subtree");
+	}
+
+	@Test
 	public void testCapsGateFileDelete() {
 		// crud (no /verb) covers read+write+delete. Verify delete works
 		// inside scope and is denied outside.
