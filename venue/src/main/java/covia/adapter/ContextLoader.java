@@ -276,8 +276,12 @@ public class ContextLoader {
 	 */
 	ACell resolveOpEntry(AString op, ACell input, AString label, boolean required, RequestContext ctx) {
 		try {
-			// Context loading is framework infrastructure — bypass agent caps
-			ACell result = engine.jobs().invokeInternal(op, input, ctx.withCaps(null))
+			// Context loading is framework infrastructure: entries are
+			// declared in the agent's config (visible to the caller before
+			// invocation) and run pre-transition under the caller's identity.
+			// Mark the call internal so the cap check is skipped; the caller's
+			// caps stay on the ctx for audit.
+			ACell result = engine.jobs().invokeInternal(op, input, ctx.asInternal())
 				.get(10_000, java.util.concurrent.TimeUnit.MILLISECONDS);
 			if (result == null) {
 				if (required) throw new RuntimeException("Required context operation returned null: " + op);

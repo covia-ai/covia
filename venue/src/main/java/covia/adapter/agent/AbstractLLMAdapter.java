@@ -87,9 +87,11 @@ public abstract class AbstractLLMAdapter extends AAdapter {
 	protected ACell invokeLevel3(AString llmOperation, AMap<AString, ACell> config,
 			AVector<ACell> messages, AVector<ACell> tools, RequestContext ctx) {
 		AMap<AString, ACell> l3Input = buildL3Input(config, messages, tools);
-		// LLM invocation is framework infrastructure — bypass agent caps.
-		// Internal dispatch — no sub-Job created.
-		return engine.jobs().invokeInternal(llmOperation, l3Input, ctx.withCaps(null)).join();
+		// LLM invocation is framework infrastructure: the agent's caps gate
+		// what it can DO via tools, not the inference call itself. Mark the
+		// sub-call internal so the cap check is skipped. Caps stay on the
+		// ctx for audit and any downstream observability.
+		return engine.jobs().invokeInternal(llmOperation, l3Input, ctx.asInternal()).join();
 	}
 
 	/**
@@ -163,13 +165,15 @@ public abstract class AbstractLLMAdapter extends AAdapter {
 
 	/**
 	 * Invokes an operation and returns the result, handling errors gracefully.
-	 * Caps are stripped because dispatchTool already enforced them explicitly.
+	 * The caller ({@link #dispatchTool}) has already cap-checked the call
+	 * explicitly; marking this sub-call internal avoids a redundant re-check
+	 * at {@code JobManager.prepareInvocation}. Caps stay on the ctx.
 	 * Internal dispatch — no sub-Job created.
 	 */
 	private ACell invokeOperation(AString operation, ACell input, RequestContext ctx) {
 		ACell opInput = ensureParsedInput(input);
 		try {
-			ACell result = engine.jobs().invokeInternal(operation, opInput, ctx.withCaps(null)).join();
+			ACell result = engine.jobs().invokeInternal(operation, opInput, ctx.asInternal()).join();
 			return (result != null) ? result : Maps.empty();
 		} catch (Exception e) {
 			return Strings.create("Error: " + unwrap(e).getMessage());

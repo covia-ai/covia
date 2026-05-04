@@ -245,9 +245,17 @@ public class JobManager {
 			throw new IllegalArgumentException("Metadata must contain operation.adapter field");
 		}
 
-		// Enforce capability attenuations from RequestContext
+		// Enforce capability attenuations from RequestContext.
+		//
+		// Internal contexts (ctx.isInternal()) bypass the check — same as
+		// AccessControl.canAccessJob. The caps still ride on the context for
+		// audit and downstream observability; we just don't gate trusted
+		// framework calls on them. Adapter code that invokes ops as part of
+		// its own implementation (LLM dispatch, context loading, post-
+		// dispatch-tool tool invoke) marks its sub-calls internal via
+		// {@link RequestContext#asInternal()}.
 		AVector<ACell> caps = ctx.getCaps();
-		if (caps != null) {
+		if (caps != null && !ctx.isInternal()) {
 			AString opName = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER));
 			String denied = CapabilityChecker.check(caps, opName != null ? opName.toString() : adapterName, input);
 			if (denied != null) {

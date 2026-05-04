@@ -348,6 +348,60 @@ public class CapabilityCheckerTest {
 	}
 
 	@Test
+	public void testInternalContextBypassesCapCheck() {
+		// asInternal() preserves caps but flips the trust flag — the cap
+		// check at JobManager.prepareInvocation is skipped. Same primitive
+		// AccessControl.canAccessJob already honours.
+		Engine engine = Engine.createTemp(null);
+		Engine.addDemoAssets(engine);
+
+		AVector<ACell> caps = Vectors.of(
+			Capability.create(Strings.create("w/allowed/"), Capability.CRUD_WRITE)
+		);
+		RequestContext gated = RequestContext.of(
+			convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey())
+		).withCaps(caps);
+
+		// Non-internal capped ctx writing OUTSIDE its scope — denied.
+		assertThrows(Exception.class, () ->
+			engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, "w/forbidden/doc", Fields.VALUE, Strings.create("nope")), gated));
+
+		// Same caps, same op, same input — but marked internal — succeeds.
+		RequestContext trusted = gated.asInternal();
+		Job ok = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/forbidden/doc", Fields.VALUE, Strings.create("ok")), trusted);
+		assertNotNull(ok.awaitResult(5000));
+
+		// Caps are preserved on the internal ctx — they didn't get stripped.
+		// (The bypass is from the trust flag, not from removing caps.)
+		assertEquals(caps, trusted.getCaps());
+	}
+
+	@Test
+	public void testAsInternalIdempotent() {
+		RequestContext ctx = RequestContext.of(
+			convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey()));
+		assertFalse(ctx.isInternal());
+		RequestContext trusted = ctx.asInternal();
+		assertTrue(trusted.isInternal());
+		// Calling again returns the same instance (no churn for already-internal ctx)
+		assertSame(trusted, trusted.asInternal());
+	}
+
+	@Test
+	public void testAsInternalPreservesAllScope() {
+		AVector<ACell> caps = Vectors.of(
+			Capability.create(Strings.create("w/x"), Capability.CRUD_READ));
+		convex.core.data.AString did = convex.core.data.Strings.create("did:key:zScopeTest");
+		RequestContext ctx = RequestContext.of(did).withCaps(caps);
+		RequestContext trusted = ctx.asInternal();
+		assertEquals(did, trusted.getCallerDID());
+		assertEquals(caps, trusted.getCaps());
+		assertTrue(trusted.isInternal());
+	}
+
+	@Test
 	public void testJobManagerNullCapsUnrestricted() {
 		Engine engine = Engine.createTemp(null);
 		Engine.addDemoAssets(engine);
