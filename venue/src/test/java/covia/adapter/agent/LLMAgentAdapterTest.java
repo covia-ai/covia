@@ -1,4 +1,4 @@
-package covia.adapter;
+package covia.adapter.agent;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -20,7 +20,8 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import covia.adapter.LLMAgentAdapter.ToolContext;
+import covia.adapter.agent.LLMAgentAdapter;
+import covia.adapter.agent.LLMAgentAdapter.ToolContext;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;

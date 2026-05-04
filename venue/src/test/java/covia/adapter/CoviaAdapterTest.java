@@ -20,6 +20,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.lattice.NamespaceResolver;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;

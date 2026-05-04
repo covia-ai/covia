@@ -1,4 +1,4 @@
-package covia.adapter;
+package covia.adapter.agent;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -18,6 +18,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.agent.ContextBuilder;
 import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.RequestContext;

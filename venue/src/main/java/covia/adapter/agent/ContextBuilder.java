@@ -1,4 +1,4 @@
-package covia.adapter;
+package covia.adapter.agent;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -794,6 +794,7 @@ public class ContextBuilder {
 	 * @return Array of [operation, nameOverride, descOverride], or null if invalid
 	 */
 	@SuppressWarnings("unchecked")
+	public
 	static AString[] parseConfigToolEntry(ACell entry) {
 		AString operation;
 		AString nameOverride = null;
@@ -818,7 +819,7 @@ public class ContextBuilder {
 	 * Derives a tool name from overrides, asset metadata, or the operation name.
 	 * Priority: nameOverride → asset toolName → operation with colons/slashes→underscores
 	 */
-	static String deriveToolName(AString nameOverride, AString assetToolName, AString operation) {
+	public static String deriveToolName(AString nameOverride, AString assetToolName, AString operation) {
 		if (nameOverride != null) return nameOverride.toString();
 		if (assetToolName != null) return assetToolName.toString();
 		return operation.toString().replace(':', '_').replace('/', '_');
@@ -828,6 +829,7 @@ public class ContextBuilder {
 	 * Builds a tool definition map from resolved components.
 	 */
 	@SuppressWarnings("unchecked")
+	public
 	static AMap<AString, ACell> buildToolDefinition(String toolName, AString description, ACell inputSchema) {
 		AMap<AString, ACell> parameters;
 		if (inputSchema instanceof AMap) {

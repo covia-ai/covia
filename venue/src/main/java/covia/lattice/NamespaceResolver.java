@@ -1,8 +1,9 @@
-package covia.adapter;
+package covia.lattice;
 
 import convex.core.data.ACell;
 import convex.core.data.Blob;
 import convex.lattice.cursor.ALatticeCursor;
+import covia.adapter.CoviaAdapter;
 import covia.venue.RequestContext;
 
 /**

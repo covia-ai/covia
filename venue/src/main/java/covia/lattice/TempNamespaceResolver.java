@@ -1,4 +1,4 @@
-package covia.adapter;
+package covia.lattice;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -11,6 +11,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
 import convex.lattice.cursor.ALatticeCursor;
+import covia.adapter.CoviaAdapter;
 import covia.venue.RequestContext;
 
 /**
@@ -36,7 +37,7 @@ import covia.venue.RequestContext;
  * <p>If neither scope is present the resolver throws helpfully rather than
  * silently returning the wrong location.</p>
  */
-class TempNamespaceResolver implements NamespaceResolver {
+public class TempNamespaceResolver implements NamespaceResolver {
 
 	static final AString K_TEMP = Strings.intern("temp");
 	static final AString K_UPDATED = Strings.intern("updated");
@@ -87,6 +88,7 @@ class TempNamespaceResolver implements NamespaceResolver {
 	 * Reads the temp map from a job record via the jobs index cursor.
 	 */
 	@SuppressWarnings("unchecked")
+	public
 	static ACell getTemp(ALatticeCursor<ACell> jobsCursor, Blob jobId) {
 		ACell index = jobsCursor.get();
 		if (index == null) return null;
@@ -100,6 +102,7 @@ class TempNamespaceResolver implements NamespaceResolver {
 	 * {@code updated} timestamp for LWW merge correctness.
 	 */
 	@SuppressWarnings("unchecked")
+	public
 	static void updateTemp(ALatticeCursor<ACell> jobsCursor, Blob jobId,
 			java.util.function.UnaryOperator<ACell> fn) {
 		jobsCursor.updateAndGet(index -> {

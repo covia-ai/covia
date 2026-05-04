@@ -1,10 +1,11 @@
-package covia.adapter;
+package covia.lattice;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Strings;
 import convex.lattice.cursor.ALatticeCursor;
+import covia.adapter.CoviaAdapter;
 import covia.venue.RequestContext;
 
 /**
@@ -21,7 +22,7 @@ import covia.venue.RequestContext;
  * to be set. Outside that scope the prefix errors helpfully rather than
  * silently resolving to something misleading.</p>
  */
-class SessionNamespaceResolver implements NamespaceResolver {
+public class SessionNamespaceResolver implements NamespaceResolver {
 
 	@Override
 	public ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {

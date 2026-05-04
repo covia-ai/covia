@@ -1,4 +1,4 @@
-package covia.adapter;
+package covia.adapter.agent;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -20,7 +20,10 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import covia.adapter.agent.AbstractLLMAdapter;
+import covia.adapter.AAdapter;
+import covia.adapter.AgentAdapter;
+import covia.adapter.CapabilityChecker;
+import covia.adapter.ContextInspectable;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -764,7 +767,7 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 	 * producing a string like "{\"key\": \"val\"}" instead of a map. This parses
 	 * such strings into proper maps.
 	 */
-	static ACell ensureParsedInput(ACell opInput) {
+	public static ACell ensureParsedInput(ACell opInput) {
 		if (opInput == null) return Maps.empty();
 		if (opInput instanceof AString s) {
 			try {
@@ -801,7 +804,7 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 	}
 
 	/** @see ContextBuilder#deriveToolName(AString, AString, AString) */
-	static String deriveToolName(AString nameOverride, AString assetToolName, AString operation) {
+	public static String deriveToolName(AString nameOverride, AString assetToolName, AString operation) {
 		return ContextBuilder.deriveToolName(nameOverride, assetToolName, operation);
 	}
 
@@ -874,6 +877,7 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 	}
 
 	@SuppressWarnings("unchecked")
+	public
 	static AMap<AString, ACell> extractConfig(ACell state) {
 		if (state == null) return null;
 		ACell c = RT.getIn(state, K_CONFIG);

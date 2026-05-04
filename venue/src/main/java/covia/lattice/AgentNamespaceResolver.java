@@ -1,9 +1,10 @@
-package covia.adapter;
+package covia.lattice;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Strings;
 import convex.lattice.cursor.ALatticeCursor;
+import covia.adapter.CoviaAdapter;
 import covia.venue.RequestContext;
 
 /**
@@ -14,7 +15,7 @@ import covia.venue.RequestContext;
  * {@code ["g", agentId, "n", "notes", "foo"]}. This preserves compatibility
  * with the existing cursor-based write/read logic in CoviaAdapter.</p>
  */
-class AgentNamespaceResolver implements NamespaceResolver {
+public class AgentNamespaceResolver implements NamespaceResolver {
 
 	@Override
 	public ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {

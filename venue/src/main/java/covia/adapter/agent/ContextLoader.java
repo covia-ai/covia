@@ -1,4 +1,4 @@
-package covia.adapter;
+package covia.adapter.agent;
 
 import java.nio.charset.StandardCharsets;
 
@@ -13,6 +13,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.adapter.CoviaAdapter;
 import covia.api.Fields;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.grid.Asset;
@@ -77,7 +78,7 @@ public class ContextLoader {
 	 * structured values (maps, vectors, etc.) where budget-controlled
 	 * rendering is valuable.</p>
 	 */
-	String renderValue(ACell value) {
+	public String renderValue(ACell value) {
 		if (value instanceof AString s) return s.toString();
 		if (explorer != null) return explorer.explore(value).toString();
 		return value.toString();
@@ -108,7 +109,7 @@ public class ContextLoader {
 	 * Resolves a single context entry into a system message, or null if
 	 * the entry cannot be resolved and is not required.
 	 */
-	ACell resolveEntry(ACell entry, RequestContext ctx) {
+	public ACell resolveEntry(ACell entry, RequestContext ctx) {
 		if (entry instanceof AString s) {
 			return resolveStringEntry(s, ctx);
 		} else if (entry instanceof AMap) {
@@ -191,7 +192,7 @@ public class ContextLoader {
 	/**
 	 * Returns true if the string starts with a known namespace prefix.
 	 */
-	static boolean isNamespacePath(String ref) {
+	public static boolean isNamespacePath(String ref) {
 		return ref.startsWith("w/") || ref.startsWith("g/") || ref.startsWith("o/")
 			|| ref.startsWith("j/") || ref.startsWith("s/") || ref.startsWith("h/")
 			|| ref.startsWith("n/") || ref.startsWith("c/");
@@ -204,7 +205,7 @@ public class ContextLoader {
 	 * namespace paths (w/, g/, j/, s/, h/, n/, t/, o/), and venue catalog
 	 * paths under /v/. Strings with spaces are treated as literal text.</p>
 	 */
-	static boolean isAssetReference(String ref) {
+	public static boolean isAssetReference(String ref) {
 		if (ref == null || ref.isEmpty() || ref.contains(" ")) return false;
 		if (ref.startsWith("/a/") || ref.startsWith("/o/")) return true;
 		if (ref.startsWith("did:")) return true;
@@ -349,7 +350,7 @@ public class ContextLoader {
 	/**
 	 * Derives a label from a reference string.
 	 */
-	static String deriveLabel(String ref) {
+	public static String deriveLabel(String ref) {
 		if (isNamespacePath(ref)) return ref;
 		if (ref.length() == 64 && ref.matches("[0-9a-fA-F]+")) return ref.substring(0, 12) + "...";
 		return ref;

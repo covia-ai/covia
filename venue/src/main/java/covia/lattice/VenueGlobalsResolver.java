@@ -1,9 +1,10 @@
-package covia.adapter;
+package covia.lattice;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Strings;
 import convex.lattice.cursor.ALatticeCursor;
+import covia.adapter.CoviaAdapter;
 import covia.venue.RequestContext;
 
 /**
@@ -28,7 +29,7 @@ import covia.venue.RequestContext;
  * override enforces this; reads bypass it because they don't go through
  * a write check.</p>
  */
-class VenueGlobalsResolver implements NamespaceResolver {
+public class VenueGlobalsResolver implements NamespaceResolver {
 
 	private static final AString K_W = Strings.intern("w");
 	private static final AString K_GLOBAL = Strings.intern("global");
@@ -40,7 +41,7 @@ class VenueGlobalsResolver implements NamespaceResolver {
 	 */
 	private final CoviaAdapter coviaAdapter;
 
-	VenueGlobalsResolver(CoviaAdapter coviaAdapter) {
+	public VenueGlobalsResolver(CoviaAdapter coviaAdapter) {
 		this.coviaAdapter = coviaAdapter;
 	}
 

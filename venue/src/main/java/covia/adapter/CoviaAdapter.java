@@ -30,6 +30,11 @@ import convex.lattice.ALattice;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.api.Fields;
 import covia.grid.Asset;
+import covia.lattice.AgentNamespaceResolver;
+import covia.lattice.NamespaceResolver;
+import covia.lattice.SessionNamespaceResolver;
+import covia.lattice.TempNamespaceResolver;
+import covia.lattice.VenueGlobalsResolver;
 import covia.venue.RequestContext;
 import covia.venue.User;
 import covia.venue.Users;
@@ -1048,7 +1053,7 @@ public class CoviaAdapter extends AAdapter {
 	 * the user namespace if it does not yet exist. Used by write operations
 	 * that need to store data for a first-time user.
 	 */
-	ALatticeCursor<ACell> ensureUserCursor(RequestContext ctx) {
+	public ALatticeCursor<ACell> ensureUserCursor(RequestContext ctx) {
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ctx.getCallerDID());
 		return user.cursor();

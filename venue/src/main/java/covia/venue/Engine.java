@@ -56,13 +56,13 @@ import covia.adapter.JSONAdapter;
 import covia.adapter.JVMAdapter;
 import covia.adapter.SchemaAdapter;
 import covia.adapter.LangChainAdapter;
-import covia.adapter.LLMAgentAdapter;
 import covia.adapter.MCPAdapter;
 import covia.adapter.Orchestrator;
 import covia.adapter.SecretAdapter;
 import covia.adapter.DLFSAdapter;
 import covia.adapter.FileAdapter;
 import covia.adapter.VaultAdapter;
+import covia.adapter.agent.LLMAgentAdapter;
 import covia.adapter.UCANAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
@@ -934,7 +934,7 @@ public class Engine {
 	/**
 	 * Returns true if {@code ref} starts with a known user-namespace prefix
 	 * (w/, g/, o/, j/, s/, n/, h/, c/) without a leading slash. Mirrors
-	 * {@link covia.adapter.ContextLoader} so the two resolvers stay aligned.
+	 * {@link covia.adapter.agent.ContextLoader} so the two resolvers stay aligned.
 	 */
 	static boolean isUserNamespacePath(AString ref) {
 		if (ref == null || ref.count() < 2) return false;
