@@ -40,18 +40,21 @@ public class AccessControlTest {
 	}
 
 	@Test
-	public void testInternalBypassesAll() {
+	public void testVenueOwnedJobsAccessibleByVenue() {
 		AccessControl ac = engine.getAccessControl();
-
-		// Internal can access any job, even those without :caller
-		AMap<AString, ACell> job = Maps.of(
+		// venueContext() identifies the caller as the venue itself.
+		RequestContext venueCtx = engine.venueContext();
+		// Venue can access jobs whose :caller is the venue's DID
+		AMap<AString, ACell> venueJob = Maps.of(
 			Fields.STATUS, Status.PENDING,
+			Fields.CALLER, engine.getDIDString(),
 			Fields.UPDATED, CVMLong.create(1000L));
-		assertTrue(ac.canAccessJob(RequestContext.INTERNAL, job));
-
-		// Internal can access job owned by Alice
-		AMap<AString, ACell> aliceJob = job.assoc(Fields.CALLER, ALICE_DID);
-		assertTrue(ac.canAccessJob(RequestContext.INTERNAL, aliceJob));
+		assertTrue(ac.canAccessJob(venueCtx, venueJob));
+		// Venue does NOT magically own jobs created by other users —
+		// it's just another DID under the new model.
+		AMap<AString, ACell> aliceJob = venueJob.assoc(Fields.CALLER, ALICE_DID);
+		assertFalse(ac.canAccessJob(venueCtx, aliceJob),
+			"venue ctx is not a wildcard owner — ownership is per-DID");
 	}
 
 	@Test
@@ -103,7 +106,7 @@ public class AccessControlTest {
 			Fields.UPDATED, CVMLong.create(1000L));
 
 		assertFalse(ac.canAccessJob(RequestContext.of(ALICE_DID), internalJob),
-			"Venue-internal jobs should only be visible to internal requests");
+			"Jobs without :caller (venue-internal) are not owned by anyone");
 	}
 
 	@Test
@@ -119,25 +122,26 @@ public class AccessControlTest {
 		// Phase 2: all operations are accessible
 		assertTrue(ac.canAccessOperation(RequestContext.ANONYMOUS, null));
 		assertTrue(ac.canAccessOperation(RequestContext.of(ALICE_DID), null));
-		assertTrue(ac.canAccessOperation(RequestContext.INTERNAL, null));
+		assertTrue(ac.canAccessOperation(engine.venueContext(), null));
 	}
 
 	// ========== RequestContext Properties ==========
 
 	@Test
 	public void testRequestContextProperties() {
-		assertTrue(RequestContext.INTERNAL.isInternal());
-		assertFalse(RequestContext.INTERNAL.isAuthenticated());
-		assertFalse(RequestContext.INTERNAL.isAnonymous());
-
-		assertFalse(RequestContext.ANONYMOUS.isInternal());
 		assertFalse(RequestContext.ANONYMOUS.isAuthenticated());
 		assertTrue(RequestContext.ANONYMOUS.isAnonymous());
 
 		RequestContext authed = RequestContext.of(ALICE_DID);
-		assertFalse(authed.isInternal());
 		assertTrue(authed.isAuthenticated());
 		assertFalse(authed.isAnonymous());
+
+		// Venue context is just a DID-bound ctx like any other — the
+		// venue's own DID is the caller.
+		RequestContext venueCtx = engine.venueContext();
+		assertTrue(venueCtx.isAuthenticated());
+		assertFalse(venueCtx.isAnonymous());
+		assertEquals(engine.getDIDString(), venueCtx.getCallerDID());
 
 		assertSame(RequestContext.ANONYMOUS, RequestContext.of(null));
 	}
@@ -196,9 +200,9 @@ public class AccessControlTest {
 	public void testInternalSeesVenueJobs() {
 		// Internal requests see the venue's own DID jobs
 		engine.jobs().invokeOperation(
-			"v/test/ops/echo", Maps.of("message", "venue-internal"), RequestContext.INTERNAL);
+			"v/test/ops/echo", Maps.of("message", "venue-internal"), engine.venueContext());
 
-		var venueJobs = engine.jobs().getJobs(RequestContext.INTERNAL);
+		var venueJobs = engine.jobs().getJobs(engine.venueContext());
 		assertTrue(venueJobs.count() >= 1, "Internal should see venue's own jobs");
 	}
 
@@ -246,7 +250,7 @@ public class AccessControlTest {
 	public void testVenueJobInvisibleToExternalUser() {
 		// Create a job with the venue's own DID (internal/programmatic)
 		Job venueJob = engine.jobs().invokeOperation(
-			"v/test/ops/echo", Maps.of("message", "internal"), RequestContext.INTERNAL);
+			"v/test/ops/echo", Maps.of("message", "internal"), engine.venueContext());
 
 		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
 
@@ -256,7 +260,7 @@ public class AccessControlTest {
 			"Venue jobs should not be visible to external callers");
 
 		// Internal sees venue's own jobs
-		var internalJobs = engine.jobs().getJobs(RequestContext.INTERNAL);
+		var internalJobs = engine.jobs().getJobs(engine.venueContext());
 		assertNotNull(internalJobs.get(venueJob.getID()),
 			"Internal should see venue's own jobs");
 	}

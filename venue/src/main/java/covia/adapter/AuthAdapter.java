@@ -44,7 +44,10 @@ public class AuthAdapter extends AAdapter {
 		String op = getSubOperation(meta);
 		if ("whoami".equals(op)) {
 			AString caller = (ctx != null) ? ctx.getCallerDID() : null;
-			boolean internal = (ctx != null) && ctx.isInternal();
+			// "internal" in the response is now a derived flag: caller IS
+			// the venue itself. Engine-side trust paths (venueContext) show
+			// up here; UCAN-authenticated callers don't.
+			boolean internal = (caller != null) && caller.equals(engine.getDIDString());
 			AMap<AString, ACell> out = Maps.of(
 				Fields.CALLER, caller,
 				K_AUTHENTICATED, caller != null,

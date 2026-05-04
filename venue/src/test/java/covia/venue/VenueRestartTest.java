@@ -87,7 +87,7 @@ public class VenueRestartTest {
 
 			// Run test:echo → should COMPLETE
 			Job echoJob = engine.jobs().invokeOperation(echoOpId.toCVMHexString(),
-					Maps.of(Fields.MESSAGE, "hello restart"), RequestContext.INTERNAL);
+					Maps.of(Fields.MESSAGE, "hello restart"), engine.venueContext());
 			echoJob.future().get(5, TimeUnit.SECONDS);
 			assertEquals(Status.COMPLETE, echoJob.getStatus(), "Echo job should complete");
 			assertNotNull(echoJob.getOutput(), "Echo job should have output");
@@ -95,7 +95,7 @@ public class VenueRestartTest {
 
 			// Run test:error → should FAIL
 			Job errorJob = engine.jobs().invokeOperation(errorOpId.toCVMHexString(),
-					Maps.of(Fields.MESSAGE, "test error"), RequestContext.INTERNAL);
+					Maps.of(Fields.MESSAGE, "test error"), engine.venueContext());
 			try {
 				errorJob.future().get(5, TimeUnit.SECONDS);
 			} catch (Exception e) {
@@ -106,14 +106,14 @@ public class VenueRestartTest {
 
 			// Run test:never → should stay STARTED (never completes)
 			Job neverJob = engine.jobs().invokeOperation(neverOpId.toCVMHexString(),
-					Maps.of(Fields.MESSAGE, "never finishes"), RequestContext.INTERNAL);
+					Maps.of(Fields.MESSAGE, "never finishes"), engine.venueContext());
 			Thread.sleep(50); // Give it a moment to start
 			assertEquals(Status.STARTED, neverJob.getStatus(), "Never job should be STARTED");
 			neverJobId = neverJob.getID().toHexString();
 
 			// Run test:pause → should auto-pause itself
 			Job pauseJob = engine.jobs().invokeOperation(pauseOpId.toCVMHexString(),
-					Maps.of(Fields.MESSAGE, "pause me"), RequestContext.INTERNAL);
+					Maps.of(Fields.MESSAGE, "pause me"), engine.venueContext());
 			Thread.sleep(50); // Give it a moment to pause
 			assertEquals(Status.PAUSED, pauseJob.getStatus(), "Pause job should be PAUSED");
 			pauseJobId = pauseJob.getID().toHexString();
@@ -157,7 +157,7 @@ public class VenueRestartTest {
 					"Custom asset metadata should contain original name");
 
 			// 4d: All job IDs present in per-user lattice (venue DID's jobs)
-			Index<Blob, ACell> jobIds = engine2.jobs().getJobs(RequestContext.INTERNAL);
+			Index<Blob, ACell> jobIds = engine2.jobs().getJobs(engine2.venueContext());
 			assertNotNull(jobIds.get(Blob.parse(echoJobId)),
 					"Echo job ID should be in job list after restart");
 			assertNotNull(jobIds.get(Blob.parse(errorJobId)),
@@ -166,14 +166,14 @@ public class VenueRestartTest {
 					"Never job ID should be in job list after restart");
 
 			// 4e: COMPLETE job has correct status and output
-			AMap<AString, ACell> echoData = engine2.jobs().getJobData(Blob.parse(echoJobId), RequestContext.INTERNAL);
+			AMap<AString, ACell> echoData = engine2.jobs().getJobData(Blob.parse(echoJobId), engine2.venueContext());
 			assertNotNull(echoData, "Echo job data should survive restart");
 			assertEquals(Status.COMPLETE, RT.ensureString(echoData.get(Fields.STATUS)),
 					"Echo job should still be COMPLETE");
 			assertNotNull(echoData.get(Fields.OUTPUT), "Echo job output should survive restart");
 
 			// 4f: FAILED job has correct status
-			AMap<AString, ACell> errorData = engine2.jobs().getJobData(Blob.parse(errorJobId), RequestContext.INTERNAL);
+			AMap<AString, ACell> errorData = engine2.jobs().getJobData(Blob.parse(errorJobId), engine2.venueContext());
 			assertNotNull(errorData, "Error job data should survive restart");
 			assertEquals(Status.FAILED, RT.ensureString(errorData.get(Fields.STATUS)),
 					"Error job should still be FAILED");
@@ -186,7 +186,7 @@ public class VenueRestartTest {
 					"Recovered never job should be STARTED or PENDING, got: " + neverStatus);
 
 			// 4h: PAUSED job remains PAUSED after restart (not re-fired)
-			AMap<AString, ACell> pauseData = engine2.jobs().getJobData(Blob.parse(pauseJobId), RequestContext.INTERNAL);
+			AMap<AString, ACell> pauseData = engine2.jobs().getJobData(Blob.parse(pauseJobId), engine2.venueContext());
 			assertNotNull(pauseData, "Pause job data should survive restart");
 			assertEquals(Status.PAUSED, RT.ensureString(pauseData.get(Fields.STATUS)),
 					"Pause job should still be PAUSED after restart");
@@ -195,7 +195,7 @@ public class VenueRestartTest {
 			engine2.jobs().deliverMessage(Blob.parse(pauseJobId), Maps.of("content", "resume"), engine2.getDIDString());
 			Thread.sleep(50); // Give it a moment to process
 			// Job completes and is evicted from activeJobs — use lattice fallback
-			AMap<AString, ACell> unpausedData = engine2.jobs().getJobData(Blob.parse(pauseJobId), RequestContext.INTERNAL);
+			AMap<AString, ACell> unpausedData = engine2.jobs().getJobData(Blob.parse(pauseJobId), engine2.venueContext());
 			assertNotNull(unpausedData, "Unpaused job data should exist in lattice");
 			assertEquals(Status.COMPLETE, RT.ensureString(unpausedData.get(Fields.STATUS)),
 					"Unpaused job should be COMPLETE after receiving message");

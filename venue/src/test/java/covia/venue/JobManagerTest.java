@@ -245,12 +245,14 @@ public class JobManagerTest {
 	}
 
 	@Test
-	public void testInvokeInternalInternalContextAllowed() throws Exception {
-		// INTERNAL context has no caller DID but internal=true → allowed
+	public void testInvokeInternalVenueContextAllowed() throws Exception {
+		// venueContext() carries the venue's own DID — engine-startup /
+		// recovery / framework calls use this where they need the venue
+		// itself as the caller.
 		CompletableFuture<ACell> f = engine.jobs().invokeInternal(
 			"v/test/ops/echo",
 			Maps.of(Strings.create("ping"), Strings.create("pong")),
-			RequestContext.INTERNAL);
+			engine.venueContext());
 		ACell result = f.get(5, TimeUnit.SECONDS);
 		assertEquals(Strings.create("pong"), RT.getIn(result, Strings.create("ping")));
 	}

@@ -13,7 +13,6 @@ import convex.core.data.Vectors;
 public class RequestContext {
 
 	private final AString callerDID;
-	private final boolean internal;
 	private final AVector<ACell> proofs;
 	private final AVector<ACell> caps;
 	private final AString agentId;
@@ -22,19 +21,13 @@ public class RequestContext {
 	private final Blob taskId;
 
 	/**
-	 * Context for internal operations (adapters, recovery, etc.) that bypass auth.
-	 */
-	public static final RequestContext INTERNAL = new RequestContext(null, true, null, null, null, null, null, null);
-
-	/**
 	 * Context for anonymous (unauthenticated) external requests.
 	 */
-	public static final RequestContext ANONYMOUS = new RequestContext(null, false, null, null, null, null, null, null);
+	public static final RequestContext ANONYMOUS = new RequestContext(null, null, null, null, null, null, null);
 
-	private RequestContext(AString callerDID, boolean internal, AVector<ACell> proofs, AVector<ACell> caps,
+	private RequestContext(AString callerDID, AVector<ACell> proofs, AVector<ACell> caps,
 			AString agentId, Blob jobId, Blob sessionId, Blob taskId) {
 		this.callerDID = callerDID;
-		this.internal = internal;
 		this.proofs = proofs;
 		this.caps = caps;
 		this.agentId = agentId;
@@ -46,10 +39,17 @@ public class RequestContext {
 	/**
 	 * Creates a RequestContext for an external request with the given caller DID.
 	 * Returns ANONYMOUS if callerDID is null.
+	 *
+	 * <p>Framework code that needs the venue itself as the caller (engine
+	 * startup, materialisation, recovery) uses
+	 * {@link covia.venue.Engine#venueContext()}, which returns a context
+	 * bound to the venue's own DID. Trust is established by call path —
+	 * {@code JobManager.invokeInternal} skips the cap check, while
+	 * {@code invokeOperation} enforces it.</p>
 	 */
 	public static RequestContext of(AString callerDID) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, false, null, null, null, null, null, null);
+		return new RequestContext(callerDID, null, null, null, null, null, null);
 	}
 
 	/**
@@ -57,19 +57,7 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID, AVector<ACell> proofs) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, false, proofs, null, null, null, null, null);
-	}
-
-	/**
-	 * Creates a RequestContext for scheduler-initiated wakes. Carries the
-	 * agent owner's DID for access control (so the wake runs against the
-	 * agent's own namespace) but is marked internal — auth and rate-limit
-	 * checks are bypassed because the scheduler is the venue itself.
-	 * Falls back to {@link #INTERNAL} if userDid is null.
-	 */
-	public static RequestContext scheduler(AString userDid) {
-		if (userDid == null) return INTERNAL;
-		return new RequestContext(userDid, true, null, null, null, null, null, null);
+		return new RequestContext(callerDID, proofs, null, null, null, null, null);
 	}
 
 	/**
@@ -88,33 +76,17 @@ public class RequestContext {
 	 * CAD3-signed tokens directly are implicitly trusted by construction.</p>
 	 */
 	public RequestContext withProofs(AVector<ACell> proofs) {
-		return new RequestContext(this.callerDID, this.internal, proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId);
+		return new RequestContext(this.callerDID, proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId);
 	}
 
 	/**
-	 * Returns a new context with capability attenuations. Operations are checked
-	 * against these caps before execution. Null = unrestricted.
+	 * Returns a new context with capability attenuations. Operations are
+	 * cap-checked against these by {@link covia.venue.JobManager#invokeOperation}
+	 * (the user-facing entry); {@code invokeInternal} (the framework path)
+	 * does not. Null = unrestricted.
 	 */
 	public RequestContext withCaps(AVector<ACell> caps) {
-		return new RequestContext(this.callerDID, this.internal, this.proofs, caps, this.agentId, this.jobId, this.sessionId, this.taskId);
-	}
-
-	/**
-	 * Returns a new context marked as internal (trusted framework call) while
-	 * preserving caller identity, caps, proofs, and all scope fields.
-	 *
-	 * <p>Used by call paths that need to mark themselves as trusted but don't
-	 * have the option of going through {@link covia.venue.JobManager#invokeInternal}.
-	 * The flag is honoured by {@link AccessControl#canAccessJob} for job
-	 * ownership bypass during recovery / scheduler wakes.</p>
-	 *
-	 * <p>The capability check at {@code JobManager.invokeOperation} is gated
-	 * by call path, not by this flag — adapter-to-adapter sub-calls should
-	 * use {@code invokeInternal} directly with the caller's ctx unchanged.</p>
-	 */
-	public RequestContext asInternal() {
-		if (this.internal) return this;
-		return new RequestContext(this.callerDID, true, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId);
+		return new RequestContext(this.callerDID, this.proofs, caps, this.agentId, this.jobId, this.sessionId, this.taskId);
 	}
 
 	/**
@@ -122,7 +94,7 @@ public class RequestContext {
 	 * resolves to the agent's private workspace at {@code g/{agentId}/n/}.
 	 */
 	public RequestContext withAgentId(AString agentId) {
-		return new RequestContext(this.callerDID, this.internal, this.proofs, this.caps, agentId, this.jobId, this.sessionId, this.taskId);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, agentId, this.jobId, this.sessionId, this.taskId);
 	}
 
 	/**
@@ -132,7 +104,7 @@ public class RequestContext {
 	 * case the agent/task path takes precedence.
 	 */
 	public RequestContext withJobId(Blob jobId) {
-		return new RequestContext(this.callerDID, this.internal, this.proofs, this.caps, this.agentId, jobId, this.sessionId, this.taskId);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, jobId, this.sessionId, this.taskId);
 	}
 
 	/**
@@ -141,7 +113,7 @@ public class RequestContext {
 	 * conversation-scoped slot at {@code g/{agentId}/sessions/{sessionId}/c/}.
 	 */
 	public RequestContext withSessionId(Blob sessionId) {
-		return new RequestContext(this.callerDID, this.internal, this.proofs, this.caps, this.agentId, this.jobId, sessionId, this.taskId);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, sessionId, this.taskId);
 	}
 
 	/**
@@ -150,28 +122,21 @@ public class RequestContext {
 	 * private slot at {@code g/{agentId}/tasks/{taskId}/t/}.
 	 */
 	public RequestContext withTaskId(Blob taskId) {
-		return new RequestContext(this.callerDID, this.internal, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, taskId);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, taskId);
 	}
 
 	/**
-	 * Gets the caller's DID, or null if anonymous/internal.
+	 * Gets the caller's DID, or null if anonymous.
 	 */
 	public AString getCallerDID() {
 		return callerDID;
 	}
 
 	/**
-	 * Returns true if this is an internal request (bypasses auth checks).
-	 */
-	public boolean isInternal() {
-		return internal;
-	}
-
-	/**
-	 * Returns true if this is an anonymous (unauthenticated, non-internal) request.
+	 * Returns true if this is an anonymous (unauthenticated) request.
 	 */
 	public boolean isAnonymous() {
-		return callerDID == null && !internal;
+		return callerDID == null;
 	}
 
 	/**
@@ -233,7 +198,6 @@ public class RequestContext {
 
 	@Override
 	public String toString() {
-		if (internal) return "RequestContext[INTERNAL]";
 		if (callerDID == null) return "RequestContext[ANONYMOUS]";
 		String s = "RequestContext[" + callerDID;
 		if (agentId != null) s += " agent=" + agentId;

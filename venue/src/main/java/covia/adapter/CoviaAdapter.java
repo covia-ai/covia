@@ -147,10 +147,10 @@ public class CoviaAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		// Internal context bypasses the authentication check — engine code
-		// running at startup (e.g. /v/ materialiser) needs to be able to
-		// invoke covia:* ops without a caller DID.
-		if (ctx.getCallerDID() == null && !ctx.isInternal()) {
+		// Authentication required: every covia:* op runs in a user namespace.
+		// Engine-startup code that needs venue-authority writes uses
+		// engine.venueContext() which has the venue's own DID as caller.
+		if (ctx.getCallerDID() == null) {
 			return CompletableFuture.failedFuture(new RuntimeException("Authentication required"));
 		}
 		try {

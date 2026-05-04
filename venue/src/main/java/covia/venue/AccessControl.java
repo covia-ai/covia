@@ -22,22 +22,18 @@ public class AccessControl {
 	/**
 	 * Checks if the request can see/manage a specific job.
 	 *
-	 * <p>Rules:</p>
-	 * <ul>
-	 *   <li>Internal requests always pass.</li>
-	 *   <li>Authenticated users can access jobs where {@code :caller}
-	 *       matches their DID.</li>
-	 *   <li>Jobs without a {@code :caller} field (venue-internal) are
-	 *       only visible to internal requests.</li>
-	 *   <li>Anonymous callers (null DID) cannot access any job.</li>
-	 * </ul>
+	 * <p>Pure ownership check: the caller's DID must match the job's
+	 * {@code :caller} field. Anonymous callers and jobs with no recorded
+	 * caller are denied. Framework code that needs to bypass ownership
+	 * (recovery, scheduler) goes through the no-ctx variants of
+	 * {@link JobManager#getJobData(Blob)} and {@code deliverMessage} —
+	 * trust is established by call path, not by a flag.</p>
 	 *
 	 * @param ctx Request context with caller identity
 	 * @param jobData Job record map
 	 * @return true if access is allowed
 	 */
 	public boolean canAccessJob(RequestContext ctx, AMap<AString, ACell> jobData) {
-		if (ctx.isInternal()) return true;
 		if (jobData == null) return false;
 		AString jobCaller = RT.ensureString(jobData.get(Fields.CALLER));
 		if (jobCaller == null) return false;          // venue-internal job

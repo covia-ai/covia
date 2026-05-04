@@ -73,14 +73,15 @@ class VenueGlobalsResolver implements NamespaceResolver {
 
 	/**
 	 * Per-caller write authorisation. Only the venue identity may write to
-	 * {@code /v/}: either an internal context (engine code at startup) or a
-	 * caller whose DID matches the venue's own DID (operator using a JWT
-	 * signed by the venue keypair).
+	 * {@code /v/} — the caller's DID must match the venue's own DID.
+	 * Engine startup code that needs to write here uses
+	 * {@link covia.venue.Engine#venueContext()}, which has the venue's DID
+	 * as its caller; operator writes work the same way (JWT signed by the
+	 * venue keypair).
 	 */
 	@Override
 	public boolean canWrite(RequestContext ctx) {
 		if (ctx == null) return false;
-		if (ctx.isInternal()) return true;
 		AString callerDID = ctx.getCallerDID();
 		if (callerDID == null) return false;
 		AString venueDID = coviaAdapter.engine.getDIDString();

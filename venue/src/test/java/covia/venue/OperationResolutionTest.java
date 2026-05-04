@@ -471,7 +471,7 @@ public class OperationResolutionTest {
 	//
 	// Per OPERATIONS.md §3, /v/ is a virtual prefix that resolves to the
 	// venue user's /w/global/ sub-tree. Reads are universally allowed; writes
-	// require the venue identity (RequestContext.INTERNAL or the venue's own
+	// require the venue identity (engine.venueContext() or the venue's own
 	// DID). The venue user record exists at engine startup so /v/ paths
 	// always have a backing namespace to navigate.
 
@@ -481,7 +481,7 @@ public class OperationResolutionTest {
 		ACell value = Maps.of("name", "test entry", "version", CVMLong.create(1));
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "v/test/entry", Fields.VALUE, value),
-			RequestContext.INTERNAL).awaitResult(5000);
+			engine.venueContext()).awaitResult(5000);
 
 		// Any caller can read it
 		ACell readBack = engine.resolvePath(Strings.create("v/test/entry"), ALICE);
@@ -508,7 +508,7 @@ public class OperationResolutionTest {
 		// readable from <venue-DID>/w/global/foo by the venue itself.
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "v/foo", Fields.VALUE, Strings.create("hello")),
-			RequestContext.INTERNAL).awaitResult(5000);
+			engine.venueContext()).awaitResult(5000);
 
 		// Read directly from the venue user's workspace via the venue's own
 		// internal context (which can read its own /w/).
@@ -524,7 +524,7 @@ public class OperationResolutionTest {
 		// Universal resolution: covia:read should accept v/ paths
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "v/welcome", Fields.VALUE, Strings.create("hi from venue")),
-			RequestContext.INTERNAL).awaitResult(5000);
+			engine.venueContext()).awaitResult(5000);
 
 		Job job = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, "v/welcome"), ALICE);
@@ -543,7 +543,7 @@ public class OperationResolutionTest {
 		);
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "v/ops/json/merge", Fields.VALUE, complex),
-			RequestContext.INTERNAL).awaitResult(5000);
+			engine.venueContext()).awaitResult(5000);
 
 		// Read via /v/ and verify it round-trips
 		ACell readBack = engine.resolvePath(Strings.create("v/ops/json/merge"), ALICE);

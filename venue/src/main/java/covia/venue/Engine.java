@@ -456,7 +456,7 @@ public class Engine {
 	 * available). Idempotent on re-run.</p>
 	 */
 	public void materialiseVOps() {
-		RequestContext ctx = RequestContext.INTERNAL;
+		RequestContext ctx = venueContext();
 		// Bootstrap: covia:write is itself a v/ops/ entry that doesn't yet
 		// exist when materialisation begins, so we can't reference it by
 		// catalog path. Look up its hash from the CoviaAdapter's pending
@@ -523,7 +523,7 @@ public class Engine {
 	 */
 	public void materialiseVenueInfo() {
 		try {
-			RequestContext ctx = RequestContext.INTERNAL;
+			RequestContext ctx = venueContext();
 
 			// /v/info/name
 			AString name = config.getName();
@@ -1000,7 +1000,7 @@ public class Engine {
 	 * @return Resolved Asset, or null if not resolvable
 	 */
 	public Asset resolveAsset(AString ref) {
-		return resolveAsset(ref, RequestContext.INTERNAL);
+		return resolveAsset(ref, venueContext());
 	}
 
 	/**
@@ -1313,6 +1313,23 @@ public class Engine {
 	}
 
 	/**
+	 * Returns a {@link RequestContext} bound to the venue's own DID — the
+	 * caller is the venue itself. Used by engine-startup code (asset
+	 * materialisation, /v/ writes, recovery) and any other code path where
+	 * trust is established by being inside the venue runtime.
+	 *
+	 * <p>This replaces the older {@code RequestContext.INTERNAL} pattern,
+	 * which used a no-DID context with an {@code internal} flag. The flag
+	 * conflated "trusted code path" with "venue is the caller" and depended
+	 * on every reader checking the flag explicitly. Naming the venue as the
+	 * caller removes the special case — the cap check, ownership check,
+	 * and all auth paths just work against the venue's DID directly.</p>
+	 */
+	public RequestContext venueContext() {
+		return RequestContext.of(getDIDString());
+	}
+
+	/**
 	 * Builds a DID URL for an asset: {@code <venue-did>/a/<hex-hash>}
 	 */
 	public AString assetDIDURL(Hash hash) {
@@ -1458,7 +1475,7 @@ public class Engine {
 		if (!(a instanceof AgentAdapter agentAdapter)) return;
 		agentAdapter.wakeAgent(
 			ref.agentId(),
-			RequestContext.scheduler(ref.userDid()),
+			RequestContext.of(ref.userDid()),
 			false);
 	}
 

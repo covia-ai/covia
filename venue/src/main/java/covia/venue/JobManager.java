@@ -131,7 +131,7 @@ public class JobManager {
 		// sub-calls go through invokeInternal and are framework-trusted.
 		enforceCaps(meta, input, ctx);
 		AAdapter adapter = prepareInvocation(meta, input, ctx);
-		AString callerDID = ctx.isInternal() ? engine.getDIDString() : ctx.getCallerDID();
+		AString callerDID = ctx.getCallerDID();
 
 		// Persist the bare hex hash of the metadata as the op reference.
 		// Hex hashes are universally resolvable via the resolvePath bare-hex
@@ -265,7 +265,7 @@ public class JobManager {
 
 	private AAdapter prepareInvocation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		if (meta == null) throw new IllegalArgumentException("Metadata must be specified");
-		AString callerDID = ctx.isInternal() ? engine.getDIDString() : ctx.getCallerDID();
+		AString callerDID = ctx.getCallerDID();
 		if (callerDID == null) throw new AuthException("Authentication required");
 
 		String adapterName = AAdapter.getAdapterName(meta);
@@ -410,7 +410,7 @@ public class JobManager {
 		}
 
 		// 2. User's lattice (authoritative)
-		AString did = ctx.isInternal() ? engine.getDIDString() : ctx.getCallerDID();
+		AString did = ctx.getCallerDID();
 		if (did == null) return null;
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
@@ -446,7 +446,7 @@ public class JobManager {
 		if (job != null) return job;
 
 		// Fall back to user's lattice
-		AString did = ctx.isInternal() ? engine.getDIDString() : ctx.getCallerDID();
+		AString did = ctx.getCallerDID();
 		if (did == null) return null;
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
@@ -460,7 +460,7 @@ public class JobManager {
 	 * Reads directly from the user's per-user lattice.
 	 */
 	public Index<Blob, ACell> getJobs(RequestContext ctx) {
-		AString did = ctx.isInternal() ? engine.getDIDString() : ctx.getCallerDID();
+		AString did = ctx.getCallerDID();
 		if (did == null) return Index.none();
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return Index.none();
@@ -534,7 +534,7 @@ public class JobManager {
 		if (adapter != null) {
 			AMap<AString, ACell> meta = resolveJobMeta(job);
 			AString callerDID = RT.ensureString(job.getData().get(Fields.CALLER));
-			RequestContext ctx = (callerDID != null) ? RequestContext.of(callerDID) : RequestContext.INTERNAL;
+			RequestContext ctx = (callerDID != null) ? RequestContext.of(callerDID) : engine.venueContext();
 			if (meta != null) {
 				adapter.invoke(job, ctx, meta, job.getData().get(Fields.INPUT));
 			}

@@ -379,29 +379,6 @@ public class CapabilityCheckerTest {
 	}
 
 	@Test
-	public void testAsInternalIdempotent() {
-		RequestContext ctx = RequestContext.of(
-			convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey()));
-		assertFalse(ctx.isInternal());
-		RequestContext trusted = ctx.asInternal();
-		assertTrue(trusted.isInternal());
-		// Calling again returns the same instance (no churn for already-internal ctx)
-		assertSame(trusted, trusted.asInternal());
-	}
-
-	@Test
-	public void testAsInternalPreservesAllScope() {
-		AVector<ACell> caps = Vectors.of(
-			Capability.create(Strings.create("w/x"), Capability.CRUD_READ));
-		convex.core.data.AString did = convex.core.data.Strings.create("did:key:zScopeTest");
-		RequestContext ctx = RequestContext.of(did).withCaps(caps);
-		RequestContext trusted = ctx.asInternal();
-		assertEquals(did, trusted.getCallerDID());
-		assertEquals(caps, trusted.getCaps());
-		assertTrue(trusted.isInternal());
-	}
-
-	@Test
 	public void testJobManagerNullCapsUnrestricted() {
 		Engine engine = Engine.createTemp(null);
 		Engine.addDemoAssets(engine);

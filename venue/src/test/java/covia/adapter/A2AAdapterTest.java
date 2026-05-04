@@ -180,7 +180,9 @@ class A2AAdapterTest {
 		long deadline = System.currentTimeMillis() + 5000;
 		AMap<AString, ACell> data = null;
 		while (System.currentTimeMillis() < deadline) {
-			data = TestServer.ENGINE.jobs().getJobData(jobId, RequestContext.INTERNAL);
+			// Direct active-cache lookup bypasses ownership — fine for test
+			// observation; we're just waiting for status to settle.
+			data = TestServer.ENGINE.jobs().getJobData(jobId);
 			if (data != null) {
 				AString status = RT.ensureString(data.get(Fields.STATUS));
 				if (status != null && !Status.PENDING.equals(status) && !Status.STARTED.equals(status)) {
