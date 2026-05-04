@@ -58,8 +58,11 @@ public class GoalTreeContext {
 
 	static final AString K_ROLE = Strings.intern("role");
 	static final AString K_CONTENT = Strings.intern("content");
+	static final AString K_TOOL_CALLS = Strings.intern("toolCalls");
 	static final AString ROLE_SYSTEM = Strings.intern("system");
 	static final AString ROLE_USER = Strings.intern("user");
+	static final AString ROLE_ASSISTANT = Strings.intern("assistant");
+	static final AString ROLE_TOOL = Strings.intern("tool");
 
 	// ========== Budget defaults ==========
 
@@ -274,17 +277,131 @@ public class GoalTreeContext {
 		for (long i = 0; i < conversation.count(); i++) {
 			ACell entry = conversation.get(i);
 			if (isSegment(entry)) {
-				// Render segment as a system message with summary
-				AString summary = RT.ensureString(((AMap<AString, ACell>) entry).get(K_SUMMARY));
-				ACell turns = ((AMap<AString, ACell>) entry).get(K_TURNS);
-				String text = "[Compacted: " + (turns != null ? turns : "?") + " turns] " +
-					(summary != null ? summary.toString() : "");
-				messages = messages.conj(Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(text)));
+				messages = messages.conj(renderSegment(entry));
 			} else if (isLiveTurn(entry)) {
 				messages = messages.conj(entry);
 			}
 		}
 		return messages;
+	}
+
+	/**
+	 * Renders the conversation for an LLM call with prior-cycle tool scratch
+	 * elided. Within a cycle the LLM needs assistant {@code toolCalls} and
+	 * {@code tool} results to reason; once a cycle ends with a text-only
+	 * assistant turn, those exchanges are scratch — successive cycles only
+	 * need the user→final-assistant pairs of past cycles.
+	 *
+	 * <p>The active (in-flight) cycle — everything after the most recent
+	 * text-only assistant turn — is rendered in full so the current
+	 * iteration of {@code runFrame} keeps its working context intact.</p>
+	 *
+	 * <p>The frame's {@code conversation} field is <b>not mutated</b>; this
+	 * is purely a render-time view. Full history remains available for
+	 * audit, replay, and the legacy {@link #renderConversation} renderer.</p>
+	 *
+	 * @param frame the active frame
+	 * @return vector of message maps with prior-cycle tool scratch elided
+	 */
+	@SuppressWarnings("unchecked")
+	public static AVector<ACell> renderConversationElidingPriorScratch(AMap<AString, ACell> frame) {
+		AVector<ACell> conversation = (AVector<ACell>) frame.get(K_CONVERSATION);
+		if (conversation == null || conversation.count() == 0) return Vectors.empty();
+
+		// Find the index of the LAST text-only assistant turn (end of last
+		// completed cycle). Everything after it is the in-flight cycle.
+		long count = conversation.count();
+		long lastClosedIdx = -1;
+		for (long i = count - 1; i >= 0; i--) {
+			ACell entry = conversation.get(i);
+			if (isSegment(entry)) continue;
+			if (isLiveTurn(entry) && isClosingAssistant((AMap<AString, ACell>) entry)) {
+				lastClosedIdx = i;
+				break;
+			}
+		}
+
+		AVector<ACell> messages = Vectors.empty();
+		for (long i = 0; i < count; i++) {
+			ACell entry = conversation.get(i);
+			if (isSegment(entry)) {
+				messages = messages.conj(renderSegment(entry));
+				continue;
+			}
+			if (!isLiveTurn(entry)) continue;
+			AMap<AString, ACell> turn = (AMap<AString, ACell>) entry;
+
+			// In-flight cycle (after the last closing assistant): full passthrough.
+			if (i > lastClosedIdx) {
+				messages = messages.conj(turn);
+				continue;
+			}
+
+			// Prior, completed cycle: keep only user turns and the closing
+			// assistant text. Drop intermediate assistant(toolCalls) and tool
+			// results — they're scratch the LLM no longer needs.
+			AString role = RT.ensureString(turn.get(K_ROLE));
+			if (ROLE_USER.equals(role)) {
+				messages = messages.conj(turn);
+			} else if (ROLE_ASSISTANT.equals(role) && !hasToolCalls(turn)) {
+				messages = messages.conj(turn);
+			}
+			// else: assistant(toolCalls) or tool — elided.
+		}
+		return messages;
+	}
+
+	/** True if a turn is an assistant text response (no toolCalls vector). */
+	@SuppressWarnings("unchecked")
+	private static boolean isClosingAssistant(AMap<AString, ACell> turn) {
+		AString role = RT.ensureString(turn.get(K_ROLE));
+		if (!ROLE_ASSISTANT.equals(role)) return false;
+		return !hasToolCalls(turn);
+	}
+
+	/** True iff the turn carries a non-empty toolCalls vector. */
+	@SuppressWarnings("unchecked")
+	private static boolean hasToolCalls(AMap<AString, ACell> turn) {
+		ACell tc = turn.get(K_TOOL_CALLS);
+		return (tc instanceof AVector) && ((AVector<ACell>) tc).count() > 0;
+	}
+
+	/** Config key: render mode for the conversation. Values: "full" (legacy)
+	 *  or "elide" (default, skips prior cycles' tool scratch). */
+	static final AString K_RENDER_HISTORY = Strings.intern("renderHistory");
+
+	/** Config value: render the full conversation including all prior tool
+	 *  exchanges. Use when an agent needs the complete reasoning trail
+	 *  (debugging, replay-style continuation). */
+	static final AString RENDER_HISTORY_FULL = Strings.intern("full");
+
+	/**
+	 * Renders the conversation according to the {@code renderHistory} config
+	 * setting. Defaults to elision (only the current cycle's tool scratch is
+	 * sent; prior cycles collapse to user→final-assistant). Pass
+	 * {@code "full"} in the agent config to keep the legacy behaviour.
+	 *
+	 * @param frame  the active frame
+	 * @param config agent config map (may be null)
+	 * @return rendered conversation messages
+	 */
+	public static AVector<ACell> renderConversationFor(AMap<AString, ACell> frame,
+			AMap<AString, ACell> config) {
+		AString mode = (config != null) ? RT.ensureString(config.get(K_RENDER_HISTORY)) : null;
+		if (RENDER_HISTORY_FULL.equals(mode)) {
+			return renderConversation(frame);
+		}
+		return renderConversationElidingPriorScratch(frame);
+	}
+
+	/** Renders a compacted segment as a system message. */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> renderSegment(ACell entry) {
+		AString summary = RT.ensureString(((AMap<AString, ACell>) entry).get(K_SUMMARY));
+		ACell turns = ((AMap<AString, ACell>) entry).get(K_TURNS);
+		String text = "[Compacted: " + (turns != null ? turns : "?") + " turns] " +
+			(summary != null ? summary.toString() : "");
+		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(text));
 	}
 
 	/**

@@ -227,6 +227,168 @@ public class GoalTreeContextTest {
 		assertEquals("assistant", RT.ensureString(RT.getIn(messages.get(1), "role")).toString());
 	}
 
+	// ========== Elide-prior-scratch rendering ==========
+
+	/** Helper: build a conversation vector and put it on a frame. */
+	private static AMap<AString, ACell> withConversation(ACell... turns) {
+		AMap<AString, ACell> frame = GoalTreeContext.createFrame("test");
+		AVector<ACell> conv = Vectors.empty();
+		for (ACell t : turns) conv = conv.conj(t);
+		return frame.assoc(GoalTreeContext.K_CONVERSATION, conv);
+	}
+
+	private static ACell userTurn(String content) {
+		return Maps.of("role", "user", "content", content);
+	}
+
+	private static ACell assistantText(String content) {
+		return Maps.of("role", "assistant", "content", content);
+	}
+
+	private static ACell assistantToolCall(String toolName) {
+		return Maps.of("role", "assistant", "toolCalls",
+			Vectors.of((ACell) Maps.of("id", "tc-1", "name", toolName)));
+	}
+
+	private static ACell toolResult(String content) {
+		return Maps.of("role", "tool", "id", "tc-1", "content", content);
+	}
+
+	@Test
+	public void testElideEmptyConversation() {
+		AMap<AString, ACell> frame = GoalTreeContext.createFrame("test");
+		assertEquals(0, GoalTreeContext.renderConversationElidingPriorScratch(frame).count());
+	}
+
+	@Test
+	public void testElideAllInFlightRendersFully() {
+		// No completed cycles yet — all turns are in-flight, render full.
+		AMap<AString, ACell> frame = withConversation(
+			userTurn("do X"),
+			assistantToolCall("file_read"),
+			toolResult("contents..."));
+		AVector<ACell> rendered = GoalTreeContext.renderConversationElidingPriorScratch(frame);
+		assertEquals(3, rendered.count());
+		assertEquals("user", RT.ensureString(RT.getIn(rendered.get(0), "role")).toString());
+		assertEquals("assistant", RT.ensureString(RT.getIn(rendered.get(1), "role")).toString());
+		assertEquals("tool", RT.ensureString(RT.getIn(rendered.get(2), "role")).toString());
+	}
+
+	@Test
+	public void testElidePriorCycleScratchKept() {
+		// One completed cycle (req1: tool_calls + result + final), then a
+		// second cycle in flight. Prior cycle should keep only user→final.
+		AMap<AString, ACell> frame = withConversation(
+			// Cycle 1 — completed
+			userTurn("read foo and write a note"),
+			assistantToolCall("file_read"),
+			toolResult("foo contents"),
+			assistantToolCall("covia_write"),
+			toolResult("{written: 12}"),
+			assistantText("Done — wrote the note."),
+			// Cycle 2 — in flight
+			userTurn("now summarise the note"),
+			assistantToolCall("covia_read"));
+		AVector<ACell> rendered = GoalTreeContext.renderConversationElidingPriorScratch(frame);
+
+		// Expect: user(req1), assistant("Done..."), user(req2), assistant(toolCalls)
+		assertEquals(4, rendered.count());
+		assertEquals("user", RT.ensureString(RT.getIn(rendered.get(0), "role")).toString());
+		assertEquals("read foo and write a note",
+			RT.ensureString(RT.getIn(rendered.get(0), "content")).toString());
+		assertEquals("assistant", RT.ensureString(RT.getIn(rendered.get(1), "role")).toString());
+		assertEquals("Done — wrote the note.",
+			RT.ensureString(RT.getIn(rendered.get(1), "content")).toString());
+		assertEquals("user", RT.ensureString(RT.getIn(rendered.get(2), "role")).toString());
+		// In-flight assistant turn (with toolCalls) survives
+		assertEquals("assistant", RT.ensureString(RT.getIn(rendered.get(3), "role")).toString());
+		assertNotNull(RT.getIn(rendered.get(3), "toolCalls"));
+	}
+
+	@Test
+	public void testElidePreservesRawConversation() {
+		// Render must not mutate the frame.
+		AMap<AString, ACell> frame = withConversation(
+			userTurn("do X"),
+			assistantToolCall("file_read"),
+			toolResult("contents"),
+			assistantText("Done."),
+			userTurn("now Y"));
+		long before = ((AVector<?>) frame.get(GoalTreeContext.K_CONVERSATION)).count();
+		GoalTreeContext.renderConversationElidingPriorScratch(frame);
+		long after = ((AVector<?>) frame.get(GoalTreeContext.K_CONVERSATION)).count();
+		assertEquals(before, after, "render must not mutate the conversation field");
+		assertEquals(5, after);
+	}
+
+	@Test
+	public void testElideMultiplePriorCycles() {
+		AMap<AString, ACell> frame = withConversation(
+			// Cycle 1
+			userTurn("first"),
+			assistantToolCall("a"), toolResult("a-result"),
+			assistantText("first done"),
+			// Cycle 2
+			userTurn("second"),
+			assistantToolCall("b"), toolResult("b-result"),
+			assistantText("second done"),
+			// Cycle 3 in flight
+			userTurn("third"));
+		AVector<ACell> rendered = GoalTreeContext.renderConversationElidingPriorScratch(frame);
+		// user(1), asst("first done"), user(2), asst("second done"), user(3)
+		assertEquals(5, rendered.count());
+		assertEquals("first", RT.ensureString(RT.getIn(rendered.get(0), "content")).toString());
+		assertEquals("first done", RT.ensureString(RT.getIn(rendered.get(1), "content")).toString());
+		assertEquals("second", RT.ensureString(RT.getIn(rendered.get(2), "content")).toString());
+		assertEquals("second done", RT.ensureString(RT.getIn(rendered.get(3), "content")).toString());
+		assertEquals("third", RT.ensureString(RT.getIn(rendered.get(4), "content")).toString());
+	}
+
+	@Test
+	public void testElideKeepsSegments() {
+		// Compacted segments pass through (already summarised).
+		AVector<ACell> items = Vectors.of(
+			(ACell) Maps.of("role", "assistant", "content", "step 1"));
+		AMap<AString, ACell> segment = GoalTreeContext.createSegment("did stuff", items);
+		AMap<AString, ACell> frame = withConversation(
+			segment,
+			userTurn("next"),
+			assistantToolCall("a"), toolResult("r"),
+			assistantText("done"),
+			userTurn("after"));
+		AVector<ACell> rendered = GoalTreeContext.renderConversationElidingPriorScratch(frame);
+		// segment(system), user, asst("done"), user
+		assertEquals(4, rendered.count());
+		assertEquals("system", RT.ensureString(RT.getIn(rendered.get(0), "role")).toString());
+		assertTrue(RT.ensureString(RT.getIn(rendered.get(0), "content")).toString().contains("Compacted"));
+	}
+
+	@Test
+	public void testRenderConversationForDefaultsToElide() {
+		AMap<AString, ACell> frame = withConversation(
+			userTurn("do X"),
+			assistantToolCall("a"), toolResult("r"),
+			assistantText("Done."),
+			userTurn("now Y"));
+		AVector<ACell> defaultRender = GoalTreeContext.renderConversationFor(frame, null);
+		AVector<ACell> elideRender = GoalTreeContext.renderConversationElidingPriorScratch(frame);
+		assertEquals(elideRender.count(), defaultRender.count());
+	}
+
+	@Test
+	public void testRenderConversationForFullModeMatchesLegacy() {
+		AMap<AString, ACell> frame = withConversation(
+			userTurn("do X"),
+			assistantToolCall("a"), toolResult("r"),
+			assistantText("Done."),
+			userTurn("now Y"));
+		AMap<AString, ACell> config = Maps.of("renderHistory", "full");
+		AVector<ACell> fullRender = GoalTreeContext.renderConversationFor(frame, config);
+		AVector<ACell> legacyRender = GoalTreeContext.renderConversation(frame);
+		assertEquals(legacyRender.count(), fullRender.count());
+		assertEquals(5, fullRender.count());
+	}
+
 	// ========== Ancestor rendering ==========
 
 	@Test

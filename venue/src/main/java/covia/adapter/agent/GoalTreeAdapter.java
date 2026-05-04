@@ -695,8 +695,13 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					loadBuilder.resolveLoads(frameLoads));
 			}
 
-			// Conversation (segments + live turns — includes goal as first user message)
-			AVector<ACell> convMessages = GoalTreeContext.renderConversation(activeFrame);
+			// Conversation (segments + live turns — includes goal as first user message).
+			// Default render elides prior cycles' tool scratch (assistant.toolCalls
+			// + tool results) so successive chat requests don't re-send working data
+			// the LLM no longer needs. Opt out with config.renderHistory = "full".
+			// The frame's raw conversation field is unchanged — full history remains
+			// for audit / replay.
+			AVector<ACell> convMessages = GoalTreeContext.renderConversationFor(activeFrame, frameL3Config);
 			fullHistory = (AVector<ACell>) fullHistory.concat(convMessages);
 
 			// Auto-compact nudge: when conversation grows large, inject a
