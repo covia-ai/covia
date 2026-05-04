@@ -653,6 +653,14 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// tool result to follow its assistant tool_calls message)
 		String pendingCompactSummary = null;
 
+		// Cache for resolved loads — re-rendered only when the loads map
+		// reference changes (which only happens when the agent calls
+		// context-load or context-unload). Saves resolving the same paths
+		// fresh every iteration of the tool loop, which can be ~50 reads
+		// per loaded path per frame for long-running goals.
+		AMap<AString, ACell> cachedLoadsKey = null;
+		AVector<ACell> cachedLoadsRendered = Vectors.empty();
+
 		for (int iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
 			// Check for cancellation before each L3 call
 			if (job != null && job.isFinished()) {
@@ -687,12 +695,18 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			AMap<AString, ACell> ancestorMsg = GoalTreeContext.renderAncestors(frames);
 			if (ancestorMsg != null) fullHistory = fullHistory.conj(ancestorMsg);
 
-			// Loaded data (active frame's loads, resolved fresh each turn)
+			// Loaded data (active frame's loads). The loads map is immutable
+			// and only changes via context-load / context-unload, so reference
+			// compare against the cached key tells us whether to re-render.
 			AMap<AString, ACell> frameLoads = GoalTreeContext.getLoads(activeFrame);
-			if (frameLoads.count() > 0) {
-				ContextBuilder loadBuilder = new ContextBuilder(engine, ctx);
-				fullHistory = (AVector<ACell>) fullHistory.concat(
-					loadBuilder.resolveLoads(frameLoads));
+			if (frameLoads != cachedLoadsKey) {
+				cachedLoadsRendered = (frameLoads.count() > 0)
+					? new ContextBuilder(engine, ctx).resolveLoads(frameLoads)
+					: Vectors.empty();
+				cachedLoadsKey = frameLoads;
+			}
+			if (cachedLoadsRendered.count() > 0) {
+				fullHistory = (AVector<ACell>) fullHistory.concat(cachedLoadsRendered);
 			}
 
 			// Conversation (segments + live turns — includes goal as first user message).
