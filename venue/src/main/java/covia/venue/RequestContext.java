@@ -103,15 +103,14 @@ public class RequestContext {
 	 * Returns a new context marked as internal (trusted framework call) while
 	 * preserving caller identity, caps, proofs, and all scope fields.
 	 *
-	 * <p>The right primitive for adapter code that needs to invoke another op
-	 * as part of its own implementation (LLM dispatch, context loading, tool
-	 * dispatch after explicit cap check). Caps stay on the context for audit
-	 * and observability; the {@code internal} flag bypasses the cap check at
-	 * {@link covia.venue.JobManager#prepareInvocation} the same way it
-	 * bypasses {@link AccessControl#canAccessJob}.</p>
+	 * <p>Used by call paths that need to mark themselves as trusted but don't
+	 * have the option of going through {@link covia.venue.JobManager#invokeInternal}.
+	 * The flag is honoured by {@link AccessControl#canAccessJob} for job
+	 * ownership bypass during recovery / scheduler wakes.</p>
 	 *
-	 * <p>This replaces the older pattern of {@code ctx.withCaps(null)}, which
-	 * silently dropped information rather than marking the call's trust level.</p>
+	 * <p>The capability check at {@code JobManager.invokeOperation} is gated
+	 * by call path, not by this flag — adapter-to-adapter sub-calls should
+	 * use {@code invokeInternal} directly with the caller's ctx unchanged.</p>
 	 */
 	public RequestContext asInternal() {
 		if (this.internal) return this;

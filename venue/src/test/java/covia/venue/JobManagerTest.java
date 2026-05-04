@@ -118,27 +118,58 @@ public class JobManagerTest {
 	// ========== Capability enforcement ==========
 
 	/**
-	 * A capability vector that doesn't cover the requested resource must
-	 * deny before the adapter runs — same enforcement path as
-	 * invokeOperation.
+	 * invokeInternal is the framework dispatch path and deliberately does
+	 * NOT cap-check. Trust is established by going through this entry point
+	 * rather than by a flag on the context (caps stay attached). The
+	 * user-facing cap check fires on invokeOperation only.
+	 *
+	 * <p>This test guards the invariant: a capped ctx going via the
+	 * framework path is allowed (the caller — internal adapter code — is
+	 * responsible for any explicit checks it wants, e.g. dispatchTool).</p>
 	 */
 	@Test
-	public void testInvokeInternalCapsDeny() {
+	public void testInvokeInternalDoesNotEnforceCaps() throws Exception {
 		AVector<ACell> caps = Vectors.of(Maps.of(
 			Strings.create("with"), Strings.create("w/allowed"),
 			Strings.create("can"),  Strings.create("crud/read")));
 		RequestContext capCtx = ctx.withCaps(caps);
 
-		CompletableFuture<ACell> f = engine.jobs().invokeInternal(
+		// Even though the cap doesn't cover w/forbidden/x, invokeInternal
+		// proceeds — that's the point of the framework path. The op runs
+		// to completion and returns the read result (path doesn't exist
+		// so {value: nil, exists: false}, not a cap denial).
+		ACell result = engine.jobs().invokeInternal(
 			"v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/forbidden/x")),
-			capCtx);
+			capCtx).get(5, TimeUnit.SECONDS);
+		assertNotNull(result);
+		// Confirm we hit the read path, not the cap-denial path
+		assertEquals(Boolean.FALSE,
+			convex.core.lang.RT.bool(convex.core.lang.RT.getIn(result, "exists")));
 
-		ExecutionException ex = assertThrows(ExecutionException.class,
-			() -> f.get(5, TimeUnit.SECONDS));
-		assertInstanceOf(RuntimeException.class, ex.getCause());
-		assertTrue(ex.getCause().getMessage().startsWith("Capability denied:"),
-			"Expected capability-denied message, got: " + ex.getCause().getMessage());
+		// Caps remain on the ctx — they didn't get stripped.
+		assertEquals(caps, capCtx.getCaps());
+	}
+
+	/**
+	 * The user-facing path (invokeOperation) still enforces caps. Same
+	 * caps + same op as the test above, but going through the user-facing
+	 * entry — must be denied.
+	 */
+	@Test
+	public void testInvokeOperationEnforcesCaps() {
+		AVector<ACell> caps = Vectors.of(Maps.of(
+			Strings.create("with"), Strings.create("w/allowed"),
+			Strings.create("can"),  Strings.create("crud/read")));
+		RequestContext capCtx = ctx.withCaps(caps);
+
+		RuntimeException ex = assertThrows(RuntimeException.class, () ->
+			engine.jobs().invokeOperation(
+				"v/ops/covia/read",
+				Maps.of(Strings.create("path"), Strings.create("w/forbidden/x")),
+				capCtx));
+		assertTrue(ex.getMessage().startsWith("Capability denied:"),
+			"Expected capability-denied message, got: " + ex.getMessage());
 	}
 
 	@Test

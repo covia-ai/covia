@@ -125,6 +125,11 @@ public class JobManager {
 	 * @return Job tracking the execution
 	 */
 	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
+		// User-facing entry: cap-check before dispatch. invokeInternal (the
+		// no-Job framework path) deliberately doesn't — trust is established
+		// by the call path, not by a flag on the context. Adapter-to-adapter
+		// sub-calls go through invokeInternal and are framework-trusted.
+		enforceCaps(meta, input, ctx);
 		AAdapter adapter = prepareInvocation(meta, input, ctx);
 		AString callerDID = ctx.isInternal() ? engine.getDIDString() : ctx.getCallerDID();
 
@@ -235,6 +240,29 @@ public class JobManager {
 	 * @throws RuntimeException capability denied
 	 * @throws IllegalStateException adapter not registered
 	 */
+	/**
+	 * Enforces capability attenuations on the user-facing dispatch path.
+	 *
+	 * <p>Caps gate what an external caller can do via {@link #invokeOperation}.
+	 * Framework code that calls {@link #invokeInternal} (e.g. agent transition
+	 * dispatch, LLM inference, context loading, post-dispatchTool tool invoke)
+	 * has already established trust by the call path — there's no second
+	 * cap check to apply.</p>
+	 *
+	 * @throws RuntimeException with a {@code Capability denied: ...} message
+	 *         if the request's caps don't cover the operation
+	 */
+	private void enforceCaps(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
+		AVector<ACell> caps = ctx.getCaps();
+		if (caps == null) return;
+		String adapterName = AAdapter.getAdapterName(meta);
+		AString opName = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER));
+		String denied = CapabilityChecker.check(caps, opName != null ? opName.toString() : adapterName, input);
+		if (denied != null) {
+			throw new RuntimeException(denied);
+		}
+	}
+
 	private AAdapter prepareInvocation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		if (meta == null) throw new IllegalArgumentException("Metadata must be specified");
 		AString callerDID = ctx.isInternal() ? engine.getDIDString() : ctx.getCallerDID();
@@ -243,24 +271,6 @@ public class JobManager {
 		String adapterName = AAdapter.getAdapterName(meta);
 		if (adapterName == null) {
 			throw new IllegalArgumentException("Metadata must contain operation.adapter field");
-		}
-
-		// Enforce capability attenuations from RequestContext.
-		//
-		// Internal contexts (ctx.isInternal()) bypass the check — same as
-		// AccessControl.canAccessJob. The caps still ride on the context for
-		// audit and downstream observability; we just don't gate trusted
-		// framework calls on them. Adapter code that invokes ops as part of
-		// its own implementation (LLM dispatch, context loading, post-
-		// dispatch-tool tool invoke) marks its sub-calls internal via
-		// {@link RequestContext#asInternal()}.
-		AVector<ACell> caps = ctx.getCaps();
-		if (caps != null && !ctx.isInternal()) {
-			AString opName = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER));
-			String denied = CapabilityChecker.check(caps, opName != null ? opName.toString() : adapterName, input);
-			if (denied != null) {
-				throw new RuntimeException(denied);
-			}
 		}
 
 		// Validate input against operation schema when strict mode is enabled

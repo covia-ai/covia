@@ -348,10 +348,10 @@ public class CapabilityCheckerTest {
 	}
 
 	@Test
-	public void testInternalContextBypassesCapCheck() {
-		// asInternal() preserves caps but flips the trust flag — the cap
-		// check at JobManager.prepareInvocation is skipped. Same primitive
-		// AccessControl.canAccessJob already honours.
+	public void testInvokeInternalBypassesCapCheck() {
+		// invokeInternal is the framework dispatch path — no cap check
+		// applied. Trust is established by going through this entry point
+		// rather than invokeOperation. Caps stay on the ctx (no stripping).
 		Engine engine = Engine.createTemp(null);
 		Engine.addDemoAssets(engine);
 
@@ -362,20 +362,20 @@ public class CapabilityCheckerTest {
 			convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey())
 		).withCaps(caps);
 
-		// Non-internal capped ctx writing OUTSIDE its scope — denied.
+		// User-facing path: capped ctx writing outside its scope — denied.
 		assertThrows(Exception.class, () ->
 			engine.jobs().invokeOperation("v/ops/covia/write",
 				Maps.of(Fields.PATH, "w/forbidden/doc", Fields.VALUE, Strings.create("nope")), gated));
 
-		// Same caps, same op, same input — but marked internal — succeeds.
-		RequestContext trusted = gated.asInternal();
-		Job ok = engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "w/forbidden/doc", Fields.VALUE, Strings.create("ok")), trusted);
-		assertNotNull(ok.awaitResult(5000));
+		// Framework path: same caps, same op, same input, no flag changes —
+		// invokeInternal is trusted by call path, succeeds.
+		ACell ok = engine.jobs().invokeInternal("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/forbidden/doc", Fields.VALUE, Strings.create("ok")), gated)
+			.join();
+		assertNotNull(ok);
 
-		// Caps are preserved on the internal ctx — they didn't get stripped.
-		// (The bypass is from the trust flag, not from removing caps.)
-		assertEquals(caps, trusted.getCaps());
+		// Caps remain on the ctx — they didn't get stripped.
+		assertEquals(caps, gated.getCaps());
 	}
 
 	@Test

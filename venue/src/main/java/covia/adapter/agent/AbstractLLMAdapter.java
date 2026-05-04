@@ -88,10 +88,10 @@ public abstract class AbstractLLMAdapter extends AAdapter {
 			AVector<ACell> messages, AVector<ACell> tools, RequestContext ctx) {
 		AMap<AString, ACell> l3Input = buildL3Input(config, messages, tools);
 		// LLM invocation is framework infrastructure: the agent's caps gate
-		// what it can DO via tools, not the inference call itself. Mark the
-		// sub-call internal so the cap check is skipped. Caps stay on the
-		// ctx for audit and any downstream observability.
-		return engine.jobs().invokeInternal(llmOperation, l3Input, ctx.asInternal()).join();
+		// what it can DO via tools, not the inference call itself. Trust is
+		// established by going through invokeInternal — the framework path —
+		// rather than the user-facing invokeOperation. Caps stay on ctx.
+		return engine.jobs().invokeInternal(llmOperation, l3Input, ctx).join();
 	}
 
 	/**
@@ -166,14 +166,14 @@ public abstract class AbstractLLMAdapter extends AAdapter {
 	/**
 	 * Invokes an operation and returns the result, handling errors gracefully.
 	 * The caller ({@link #dispatchTool}) has already cap-checked the call
-	 * explicitly; marking this sub-call internal avoids a redundant re-check
-	 * at {@code JobManager.prepareInvocation}. Caps stay on the ctx.
+	 * explicitly. invokeInternal is the framework dispatch path and doesn't
+	 * apply a second cap check, so trust is established by the call path.
 	 * Internal dispatch — no sub-Job created.
 	 */
 	private ACell invokeOperation(AString operation, ACell input, RequestContext ctx) {
 		ACell opInput = ensureParsedInput(input);
 		try {
-			ACell result = engine.jobs().invokeInternal(operation, opInput, ctx.asInternal()).join();
+			ACell result = engine.jobs().invokeInternal(operation, opInput, ctx).join();
 			return (result != null) ? result : Maps.empty();
 		} catch (Exception e) {
 			return Strings.create("Error: " + unwrap(e).getMessage());
