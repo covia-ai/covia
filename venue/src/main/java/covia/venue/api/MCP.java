@@ -300,6 +300,77 @@ public class MCP extends McpServer {
 
 	// ==================== Tool execution (job-based) ====================
 
+	/**
+	 * Coerces JSON-string arguments to their declared object/array shape.
+	 *
+	 * <p>Some MCP clients (notably Claude) serialise nested object or array
+	 * arguments as JSON strings rather than the structured types declared
+	 * in the tool's input schema. For each top-level argument whose schema
+	 * declares a single {@code type} of {@code "object"} or {@code "array"},
+	 * if the supplied value is an {@link AString} that parses as JSON of the
+	 * matching shape, replace it with the parsed value.
+	 *
+	 * <p>Multi-type schemas (e.g. {@code grid_run.input}'s {@code ["null",
+	 * "boolean", "object", ...]}) are left untouched — string is a valid
+	 * member of that type set, so coercing would change semantics. The
+	 * defensive parse for those values lives in {@code GridAdapter.invokeRun}.
+	 *
+	 * <p>Returns the original arguments cell unchanged if no coercion is
+	 * needed, the schema is unavailable, or anything fails.
+	 */
+	@SuppressWarnings("unchecked")
+	private ACell coerceJsonStringArgs(ACell arguments, AString opRef) {
+		if (!(arguments instanceof AMap<?, ?>)) return arguments;
+		AMap<AString, ACell> argMap = (AMap<AString, ACell>) arguments;
+		AMap<AString, ACell> meta;
+		try {
+			meta = engine().resolveAsset(opRef).meta();
+		} catch (Exception e) {
+			return arguments;
+		}
+		if (meta == null) return arguments;
+
+		AMap<AString, ACell> properties = RT.ensureMap(RT.getIn(meta, Fields.OPERATION, Fields.INPUT, Fields.PROPERTIES));
+		if (properties == null) return arguments;
+
+		AMap<AString, ACell> result = argMap;
+		long n = argMap.count();
+		for (long i = 0; i < n; i++) {
+			MapEntry<AString, ACell> entry = (MapEntry<AString, ACell>) argMap.entryAt(i);
+			ACell value = entry.getValue();
+			if (!(value instanceof AString s)) continue;
+
+			AMap<AString, ACell> propSchema = RT.ensureMap(properties.get(entry.getKey()));
+			if (propSchema == null) continue;
+
+			ACell typeCell = propSchema.get(Fields.TYPE);
+			if (!(typeCell instanceof AString typeStr)) continue;
+
+			String type = typeStr.toString();
+			if (!"object".equals(type) && !"array".equals(type)) continue;
+
+			ACell parsed = tryParseJson(s);
+			if (parsed == null) continue;
+			if ("object".equals(type) && !(parsed instanceof AMap)) continue;
+			if ("array".equals(type) && !(parsed instanceof AVector)) continue;
+
+			result = result.assoc(entry.getKey(), parsed);
+		}
+		return result;
+	}
+
+	private static ACell tryParseJson(AString s) {
+		String str = s.toString();
+		if (str.isEmpty()) return null;
+		char c = str.charAt(0);
+		if (c != '{' && c != '[') return null;
+		try {
+			return JSON.parse(str);
+		} catch (Exception e) {
+			return null;
+		}
+	}
+
 	@Override
 	protected AMap<AString, ACell> toolCall(ACell paramsCell) {
 		AMap<AString, ACell> params = RT.ensureMap(paramsCell);
@@ -321,6 +392,10 @@ public class MCP extends McpServer {
 				AString bearer = (ctx != null) ? ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR) : null;
 				AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans);
 				if (proofs != null) rctx = rctx.withProofs(proofs);
+
+				if (engine().config().isFixMcpStrings()) {
+					arguments = coerceJsonStringArgs(arguments, opRef);
+				}
 
 				Job job = engine().jobs().invokeOperation(opRef, arguments, rctx);
 				ACell result = job.awaitResult(TOOL_CALL_TIMEOUT_MS);

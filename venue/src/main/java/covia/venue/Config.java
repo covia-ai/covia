@@ -150,6 +150,16 @@ public class Config {
 	/** Key for MCP enabled flag */
 	public static final AString ENABLED = Strings.intern("enabled");
 
+	/**
+	 * Key for the "Fix MCP Strings" workaround flag (top-level, default true).
+	 * Some MCP clients serialise nested object/array arguments as JSON strings
+	 * instead of the structured types declared in the tool schema. When true,
+	 * the venue defensively re-parses such string values into their declared
+	 * shape at the MCP boundary and at {@code grid:run}/{@code grid:invoke}
+	 * dispatch. Set to false to disable the workaround.
+	 */
+	public static final AString FIX_MCP_STRINGS = Strings.intern("fixMcpStrings");
+
 	// ========== Instance fields ==========
 
 	private final AMap<AString, ACell> config;
@@ -405,6 +415,16 @@ public class Config {
 	 */
 	public boolean hasA2A() {
 		return getA2AConfig() != null;
+	}
+
+	/**
+	 * Whether the "Fix MCP Strings" workaround is enabled.
+	 * @return true if the venue should re-parse JSON-string arguments into
+	 *         their declared object/array shape (defaults to true)
+	 */
+	public boolean isFixMcpStrings() {
+		ACell v = config.get(FIX_MCP_STRINGS);
+		return (v == null) || RT.bool(v);
 	}
 
 	// ========== Server config accessors ==========

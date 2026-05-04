@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import convex.core.data.AString;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -122,6 +123,26 @@ class GridAdapterTest {
 		Job resultJob = covia.invokeSync("v/ops/grid/job-result", Maps.of(Fields.ID, jobId));
 		assertEquals(Status.FAILED, resultJob.getStatus());
 		assertNotNull(resultJob.getErrorMessage());
+	}
+
+	/**
+	 * Some MCP clients serialise nested object arguments as JSON strings.
+	 * The {@code grid:run} input field is polymorphic (accepts any type),
+	 * so the schema-driven coercion at the MCP boundary deliberately lets
+	 * those strings through. {@code GridAdapter.invokeRun} re-parses them
+	 * when {@code Config.fixMcpStrings} is enabled (default).
+	 */
+	@Test
+	void runLocalOperationWithJsonStringInput() throws Exception {
+		VenueHTTP covia = TestServer.COVIA;
+
+		Job job = covia.invokeSync("v/ops/grid/run", Maps.of(
+				Fields.OPERATION, "v/ops/jvm/string-concat",
+				Fields.INPUT, Strings.create("{\"first\":\"Json\",\"second\":\"String\"}")));
+
+		assertNotNull(job, "Job should not be null");
+		assertEquals(Status.COMPLETE, job.getStatus(), "Local grid run should parse JSON-string input");
+		assertEquals("JsonString", RT.getIn(job.getOutput(), "result").toString());
 	}
 
 	/**
