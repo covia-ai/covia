@@ -798,7 +798,7 @@ public class AgentAdapter extends AAdapter {
 			ContextBuilder builder = new ContextBuilder(engine, ctx);
 			ContextBuilder.ContextResult context = builder
 				.withConfig(recordConfig, state)
-				.withSystemPrompt(Vectors.empty())
+				.withSystemPrompt()
 				.withContextEntries(state)
 				.withTools()
 				.build();

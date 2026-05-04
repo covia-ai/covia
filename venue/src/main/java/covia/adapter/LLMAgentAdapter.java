@@ -325,7 +325,7 @@ public class LLMAgentAdapter extends AAdapter {
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
 			.withConfig(recordConfig, state)
-			.withSystemPrompt(Vectors.empty())   // always fresh
+			.withSystemPrompt()                   // always fresh
 			.withContextEntries(state)            // ephemeral
 			.withLoadedPaths(existingLoads)       // ephemeral
 			.withContextMap(existingLoads)        // ephemeral

@@ -38,7 +38,7 @@ import covia.venue.RequestContext;
  * ContextBuilder builder = new ContextBuilder(engine, ctx);
  * ContextResult result = builder
  *     .withConfig(recordConfig, state)
- *     .withSystemPrompt(existingHistory)
+ *     .withSystemPrompt()
  *     .withContextEntries(state)
  *     .withPendingResults(pending)
  *     .withInboxMessages(messages)
@@ -223,26 +223,21 @@ public class ContextBuilder {
 	}
 
 	/**
-	 * Always builds a fresh system message at the start of the LLM context.
+	 * Builds a fresh system message and prepends it to {@code messages}.
 	 *
-	 * <p>The system message is composed of the agent's identity prompt
-	 * (custom from config, or {@link #DEFAULT_IDENTITY_PROMPT}) followed by
-	 * the {@link #LATTICE_REFERENCE} cheat sheet. This is rebuilt every
-	 * turn so updates to either source apply immediately to existing
-	 * agents — there is no "freeze on first turn" caching.</p>
+	 * <p>Composed of the agent's identity prompt (from {@code config.systemPrompt}
+	 * or {@link #DEFAULT_IDENTITY_PROMPT}) plus session context (date, venue,
+	 * model), the {@link #LATTICE_REFERENCE} cheat sheet when the agent has
+	 * tools, and the caps section when caps are declared. Rebuilt every turn —
+	 * updates to either source apply immediately, no freeze-on-first-turn caching.</p>
 	 *
-	 * <p>The {@code starting} parameter is the message vector to start
-	 * from — typically empty (callers add history via
-	 * {@link #withFrameStack(AVector)}). If a non-empty starting vector is
-	 * passed and already begins with a system message, that system
-	 * message is REPLACED by the freshly composed one — the rest of the
-	 * starting vector is preserved.</p>
+	 * <p>Idempotent: if {@code messages} already starts with a system message
+	 * (e.g. from a previous {@code withSystemPrompt} call on this builder),
+	 * it is dropped and replaced by the freshly composed one.</p>
 	 */
 	@SuppressWarnings("unchecked")
-	public ContextBuilder withSystemPrompt(AVector<ACell> starting) {
-		messages = (starting != null) ? starting : (AVector<ACell>) Vectors.empty();
-
-		// If starting already has a system message at index 0, drop it —
+	public ContextBuilder withSystemPrompt() {
+		// If messages already has a system message at index 0, drop it —
 		// we always rebuild fresh.
 		if (messages.count() > 0 && ROLE_SYSTEM.equals(RT.getIn(messages.get(0), K_ROLE))) {
 			messages = messages.slice(1, messages.count());
@@ -286,11 +281,6 @@ public class ContextBuilder {
 		ACell sysMsg = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, sysContent);
 		messages = (AVector<ACell>) Vectors.of(sysMsg).concat(messages);
 		trackMessage(sysMsg);
-
-		// Track remaining starting messages
-		for (long i = 1; i < messages.count(); i++) {
-			trackMessage(messages.get(i));
-		}
 		return this;
 	}
 

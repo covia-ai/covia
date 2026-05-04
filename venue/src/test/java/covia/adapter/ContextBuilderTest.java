@@ -57,7 +57,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(recordConfig, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withTools()
 			.build();
 
@@ -75,7 +75,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(recordConfig, state)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withTools()
 			.build();
 
@@ -91,7 +91,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, state)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withTools()
 			.build();
 
@@ -106,7 +106,7 @@ public class ContextBuilderTest {
 	public void testSystemPromptPrependedWhenMissing() {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withTools()
 			.build();
 
@@ -124,7 +124,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(config, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withTools()
 			.build();
 
@@ -133,34 +133,23 @@ public class ContextBuilderTest {
 	}
 
 	@Test
-	public void testExistingSystemPromptIsAlwaysReplaced() {
-		// The system message is
-		// always rebuilt fresh per turn — any system message at the
-		// start of the starting vector is dropped and replaced with
-		// the freshly composed identity + LATTICE_REFERENCE.
-		AVector<ACell> existing = Vectors.of(
-			(ACell) Maps.of(K_ROLE, Strings.intern("system"), K_CONTENT, Strings.create("Stale frozen prompt")),
-			(ACell) Maps.of(K_ROLE, Strings.intern("user"), K_CONTENT, Strings.create("Hello")));
-
+	public void testWithSystemPromptIsIdempotent() {
+		// Calling withSystemPrompt twice must leave a single system message —
+		// the second call drops the leading system message and rebuilds fresh.
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(existing)
+			.withSystemPrompt()
+			.withSystemPrompt()
 			.withTools()
 			.build();
 
-		// Still 2 messages: the fresh system + the preserved user
-		assertEquals(2, result.history().count());
+		assertEquals(1, result.history().count(),
+			"Repeated withSystemPrompt must not stack system messages");
 		String sysContent = RT.ensureString(RT.getIn(result.history().get(0), K_CONTENT)).toString();
-		// Old "Stale frozen prompt" is gone — replaced with fresh default
-		assertFalse(sysContent.contains("Stale frozen prompt"),
-			"Stale system message should have been dropped");
 		assertTrue(sysContent.contains("Covia platform"),
-			"Fresh default identity prompt should be present");
+			"Default identity prompt should be present");
 		assertTrue(sysContent.contains("Covia Lattice"),
 			"Lattice reference should be appended");
-		// User message preserved at index 1
-		String userContent = RT.ensureString(RT.getIn(result.history().get(1), K_CONTENT)).toString();
-		assertEquals("Hello", userContent);
 	}
 
 	// ========== Context entries ==========
@@ -178,7 +167,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(config, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withContextEntries(Maps.empty())
 			.withTools()
 			.build();
@@ -209,7 +198,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(config, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withContextEntries(Maps.empty())
 			.withTools()
 			.build();
@@ -235,7 +224,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withPendingResults(pending)
 			.withTools()
 			.build();
@@ -252,7 +241,7 @@ public class ContextBuilderTest {
 	public void testNoPendingResults() {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withPendingResults(null)
 			.withTools()
 			.build();
@@ -269,7 +258,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withInboxMessages(inbox)
 			.withTools()
 			.build();
@@ -288,7 +277,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withInboxMessages(inbox)
 			.withTools()
 			.build();
@@ -305,7 +294,7 @@ public class ContextBuilderTest {
 	public void testEmptyStateSignalWhenNoInput() {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withEmptyStateSignal(false)
 			.withTools()
 			.build();
@@ -319,7 +308,7 @@ public class ContextBuilderTest {
 	public void testNoSignalWhenInputPresent() {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withEmptyStateSignal(true)
 			.withTools()
 			.build();
@@ -336,12 +325,12 @@ public class ContextBuilderTest {
 		// per-engine cache returns the cached AVector instance.
 		ContextBuilder.ContextResult r1 = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withTools()
 			.build();
 		ContextBuilder.ContextResult r2 = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withTools()
 			.build();
 
@@ -360,7 +349,7 @@ public class ContextBuilderTest {
 	public void testDefaultToolsBuilt() {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withTools()
 			.build();
 
@@ -375,7 +364,7 @@ public class ContextBuilderTest {
 		// Every agent should see current date and venue name.
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.build();
 		AString sys = extractSystemContent(result.history());
 		assertNotNull(sys);
@@ -392,7 +381,7 @@ public class ContextBuilderTest {
 			Strings.intern("model"), Strings.create("gpt-4.1-mini"));
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(config, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.build();
 		AString sys = extractSystemContent(result.history());
 		assertNotNull(sys);
@@ -405,7 +394,7 @@ public class ContextBuilderTest {
 		// No caps in config = unrestricted = no caps section
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.build();
 		AString sys = extractSystemContent(result.history());
 		assertNotNull(sys);
@@ -426,7 +415,7 @@ public class ContextBuilderTest {
 					Strings.intern("can"), Strings.create("crud/read"))));
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(config, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.build();
 		AString sys = extractSystemContent(result.history());
 		assertNotNull(sys);
@@ -450,7 +439,7 @@ public class ContextBuilderTest {
 			Strings.intern("caps"), Vectors.empty());
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(config, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.build();
 		AString sys = extractSystemContent(result.history());
 		assertNotNull(sys);
@@ -463,7 +452,7 @@ public class ContextBuilderTest {
 		// Default identity prompt → lattice reference appended
 		ContextBuilder.ContextResult defaultResult = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.build();
 		AString defaultSys = extractSystemContent(defaultResult.history());
 		assertNotNull(defaultSys);
@@ -480,7 +469,7 @@ public class ContextBuilderTest {
 			Strings.create("You are Carol the AP Approver. Be concise."));
 		ContextBuilder.ContextResult customResult = new ContextBuilder(engine, ctx)
 			.withConfig(customConfig, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.build();
 		AString customSys = extractSystemContent(customResult.history());
 		assertNotNull(customSys);
@@ -507,7 +496,7 @@ public class ContextBuilderTest {
 		// so the model sees the lattice address co-located with the tool name.
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withTools()
 			.build();
 
@@ -538,7 +527,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(config, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withTools()
 			.build();
 
@@ -553,7 +542,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(config, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withTools()
 			.build();
 
@@ -566,7 +555,7 @@ public class ContextBuilderTest {
 	public void testNoCapsUnrestricted() {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withTools()
 			.build();
 
@@ -584,7 +573,7 @@ public class ContextBuilderTest {
 		assertEquals(100_000, builder.getRemaining());
 
 		builder.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty());
+			.withSystemPrompt();
 
 		assertTrue(builder.getConsumed() > 0, "System prompt should consume budget");
 		assertTrue(builder.getRemaining() < 100_000);
@@ -595,7 +584,7 @@ public class ContextBuilderTest {
 	public void testBudgetInResult() {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx, 200_000)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withTools()
 			.build();
 
@@ -612,7 +601,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withContextEntries(Maps.empty())
 			.withPendingResults(null)
 			.withInboxMessages(inbox)
@@ -696,7 +685,7 @@ public class ContextBuilderTest {
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult result = builder
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withLoadedPaths(loads)
 			.withTools()
 			.build();
@@ -718,7 +707,7 @@ public class ContextBuilderTest {
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		// Should not throw
 		builder.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withLoadedPaths(loads)
 			.withTools()
 			.build();
@@ -733,7 +722,7 @@ public class ContextBuilderTest {
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult result = builder
 			.withConfig(null, null)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withContextMap(loads)
 			.withTools()
 			.build();
@@ -755,15 +744,17 @@ public class ContextBuilderTest {
 	}
 
 	@Test public void testContextMapWarningAt70Pct() {
-		// Use a tiny budget so context map triggers warning
-		ContextBuilder builder = new ContextBuilder(engine, ctx, 100);
-		// Fill most of the budget with a system prompt
-		AVector<ACell> bigHistory = Vectors.of(
-			Maps.of(Strings.create("role"), Strings.create("system"),
-				Strings.create("content"), Strings.create("x".repeat(80))));
+		// Inflate the system prompt to push budget usage past 70%.
+		// defaultTools=false suppresses the lattice reference so the message
+		// size is dominated by the configured systemPrompt.
+		AMap<AString, ACell> bigConfig = Maps.of(
+			Strings.intern("systemPrompt"), Strings.create("x".repeat(800)),
+			Strings.intern("defaultTools"), CVMBool.FALSE);
+		ACell state = Maps.of(Strings.intern("config"), bigConfig);
+		ContextBuilder builder = new ContextBuilder(engine, ctx, 1000);
 		ContextBuilder.ContextResult result = builder
-			.withConfig(null, null)
-			.withSystemPrompt(bigHistory)
+			.withConfig(null, state)
+			.withSystemPrompt()
 			.withContextMap(null)
 			.build();
 
@@ -777,7 +768,7 @@ public class ContextBuilderTest {
 
 	@Test public void testSafetyValveNoPruneBelow90() {
 		ContextBuilder builder = new ContextBuilder(engine, ctx); // 180k budget
-		builder.withConfig(null, null).withSystemPrompt(Vectors.empty());
+		builder.withConfig(null, null).withSystemPrompt();
 
 		AMap<AString, ACell> loads = Maps.of(
 			Strings.create("w/a"), Maps.of(Strings.create("budget"), CVMLong.create(500)));
@@ -787,13 +778,15 @@ public class ContextBuilderTest {
 	}
 
 	@Test public void testSafetyValvePrunesLIFO() {
-		// Use a tiny budget and fill it way past 90%
-		ContextBuilder builder = new ContextBuilder(engine, ctx, 100);
-		AVector<ACell> bigHistory = Vectors.of(
-			Maps.of(Strings.create("role"), Strings.create("system"),
-				Strings.create("content"), Strings.create("x".repeat(95))));
-		builder.withConfig(null, null).withSystemPrompt(bigHistory);
-		// Consumed is now > 90 bytes out of 100
+		// Inflate the system prompt past 90% of budget; defaultTools=false
+		// suppresses the lattice reference so size is dominated by systemPrompt.
+		AMap<AString, ACell> bigConfig = Maps.of(
+			Strings.intern("systemPrompt"), Strings.create("x".repeat(950)),
+			Strings.intern("defaultTools"), CVMBool.FALSE);
+		ACell state = Maps.of(Strings.intern("config"), bigConfig);
+		ContextBuilder builder = new ContextBuilder(engine, ctx, 1000);
+		builder.withConfig(null, state).withSystemPrompt();
+		// Consumed is now > 90% of 1000
 
 		AMap<AString, ACell> loads = Maps.of(
 			Strings.create("w/old"), Maps.of(

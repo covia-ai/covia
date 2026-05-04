@@ -314,7 +314,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		ContextBuilder.ContextResult context = builder
 			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
 			.withConfig(recordConfig, state)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withContextEntries(state)
 			.withTools()
 			.build();
@@ -448,6 +448,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		ContextBuilder.ContextResult context = builder
 			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
 			.withConfig(recordConfig, state)
+			.withSystemPrompt()
 			.withFrameStack(frames)
 			.withContextEntries(state)
 			.withTools()
