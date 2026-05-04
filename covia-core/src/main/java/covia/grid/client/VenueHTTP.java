@@ -476,6 +476,13 @@ public class VenueHTTP extends Venue {
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 				job.cancel();
+			} catch (covia.exception.ResponseException e) {
+				// Polling stopped before the Job reached a terminal state
+				// (timeout or transport error). Do NOT mark the Job as
+				// failed — the remote work is still going as far as we
+				// know. Just signal to awaiters that we lost visibility.
+				log.debug("Polling for job {} ended: {}", job.getID(), e.getMessage());
+				job.pollingFailed(e);
 			}
 		});
 	}

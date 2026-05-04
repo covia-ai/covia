@@ -42,6 +42,10 @@ public class TestServer {
 		((HTTPAdapter) ENGINE.getAdapter("http")).addAllowedHost("localhost");
 
 		COVIA = VenueHTTP.create(URI.create(BASE_URL));
+		// Tests should not be waiting 30s on background polls. Anything
+		// taking longer than this either has a bug or needs an explicit
+		// invokeAndWait(opID, input, timeoutMs) override.
+		COVIA.setTimeout(5000);
 
 		// Close the shared server cleanly on JVM exit so Jetty/Javalin
 		// non-daemon worker threads don't outlive the test session.

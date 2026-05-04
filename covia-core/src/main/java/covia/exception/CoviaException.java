@@ -9,5 +9,9 @@ public class CoviaException extends RuntimeException {
 	public CoviaException(String message) {
 		super(message);
 	}
-	
+
+	public CoviaException(String message, Throwable cause) {
+		super(message, cause);
+	}
+
 }

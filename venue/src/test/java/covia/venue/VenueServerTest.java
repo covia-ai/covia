@@ -106,7 +106,7 @@ public class VenueServerTest {
 		assertEquals(64,opID.length());
 		// System.out.println(opID);
 		// assertNotNull(covia.getMeta(opID).get());
-		Job job = covia.invoke(opID, input).join();
+		Job job = covia.startJob(Strings.create(opID), input);
 		boolean success=covia.waitForFinish(job);
 		assertTrue(success);
 		
