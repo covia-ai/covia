@@ -755,12 +755,13 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Renders the assembled LLM context an agent would see on a fresh
-	 * transition — same ContextBuilder pipeline as the real adapter, but
-	 * without invoking the LLM. Returns the system prompt text, context
-	 * entry labels, tool names, caps, and outputs config as a single map.
-	 * Designed for live debugging: call via {@code agent:context} to see
-	 * exactly what the LLM receives.
+	 * Dispatches {@code agent:context} to the configured transition adapter.
+	 *
+	 * <p>Looks up the agent's transition operation, resolves its adapter, and
+	 * if the adapter implements {@link ContextInspectable}, asks it to render
+	 * its context as JSON. Adapters that do not declare context inspection
+	 * support cause the call to fail with a clear message — AgentAdapter
+	 * holds no opinion on what a context "looks like".</p>
 	 */
 	@SuppressWarnings("unchecked")
 	private void handleContext(Job job, ACell input, RequestContext ctx) {
@@ -778,59 +779,39 @@ public class AgentAdapter extends AAdapter {
 			? (AMap<AString, ACell>) m : null;
 		ACell state = record.get(AgentState.KEY_STATE);
 
-		// Delegate to the actual adapter's code path. For goaltree agents
-		// this calls GoalTreeAdapter.buildFirstIterationL3Input which uses
-		// the same ContextBuilder pipeline, harness tool assembly, output
-		// typing, and L3 input construction as the real transition — the
-		// only difference is we return the L3 input instead of dispatching.
-		ACell taskInput = RT.getIn(input, Strings.intern("task"));
 		AString operation = (recordConfig != null)
-			? RT.ensureString(recordConfig.get(Strings.intern("operation")))
+			? RT.ensureString(recordConfig.get(Fields.OPERATION))
 			: null;
-
-		AMap<AString, ACell> l3Input;
-		if (operation != null && operation.toString().contains("goaltree")) {
-			covia.adapter.agent.GoalTreeAdapter gta =
-				(covia.adapter.agent.GoalTreeAdapter) engine.getAdapter("goaltree");
-			l3Input = gta.buildFirstIterationL3Input(recordConfig, state, taskInput, ctx);
-		} else {
-			// Fallback for non-goaltree agents — basic ContextBuilder only
-			ContextBuilder builder = new ContextBuilder(engine, ctx);
-			ContextBuilder.ContextResult context = builder
-				.withConfig(recordConfig, state)
-				.withSystemPrompt()
-				.withContextEntries(state)
-				.withTools()
-				.build();
-			l3Input = covia.adapter.agent.AbstractLLMAdapter.buildL3Input(
-				ContextBuilder.extractConfig(state),
-				context.history(),
-				context.tools());
+		if (operation == null) {
+			job.fail("Agent has no transition operation configured");
+			return;
 		}
 
-		// Serialize as ordered JSON matching the wire format to the LLM.
-		// Convex maps hash-order keys, so we build the JSON directly.
-		AVector<ACell> messages = RT.ensureVector(l3Input.get(Strings.create("messages")));
-		AVector<ACell> tools = RT.ensureVector(l3Input.get(Strings.create("tools")));
-		StringBuilder sb = new StringBuilder("{\n");
-		ACell model = l3Input.get(Strings.create("model"));
-		if (model != null) sb.append("  \"model\": ").append(JSON.toString(model)).append(",\n");
-		ACell rf = l3Input.get(Strings.create("responseFormat"));
-		if (rf != null) sb.append("  \"responseFormat\": ").append(JSON.toString(rf)).append(",\n");
-		sb.append("  \"messages\": [\n");
-		for (long i = 0; i < messages.count(); i++) {
-			if (i > 0) sb.append(",\n");
-			sb.append("    ").append(JSON.toString(messages.get(i)));
+		// Resolve the adapter that handles the agent's transition operation.
+		covia.grid.Asset asset = engine.resolveAsset(operation, ctx);
+		if (asset == null) {
+			job.fail("Could not resolve agent's operation: " + operation);
+			return;
 		}
-		sb.append("\n  ],\n  \"tools\": [\n");
-		for (long i = 0; i < tools.count(); i++) {
-			if (i > 0) sb.append(",\n");
-			sb.append("    ").append(JSON.toString(tools.get(i)));
+		AString adapterRef = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.ADAPTER));
+		if (adapterRef == null) {
+			job.fail("Agent's operation has no adapter: " + operation);
+			return;
 		}
-		sb.append("\n  ]\n}");
+		String adapterName = adapterRef.toString();
+		int colon = adapterName.indexOf(':');
+		if (colon >= 0) adapterName = adapterName.substring(0, colon);
+		AAdapter target = engine.getAdapter(adapterName);
+		if (!(target instanceof ContextInspectable inspectable)) {
+			job.fail("Adapter '" + adapterName + "' does not support context inspection");
+			return;
+		}
+
+		ACell taskInput = RT.getIn(input, Strings.intern("task"));
+		AString rendered = inspectable.inspectContext(recordConfig, state, taskInput, ctx);
 
 		job.setStatus(Status.STARTED);
-		job.completeWith(Strings.create(sb.toString()));
+		job.completeWith(rendered);
 	}
 
 	@SuppressWarnings("unchecked")

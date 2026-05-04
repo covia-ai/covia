@@ -236,10 +236,47 @@ public abstract class AbstractLLMAdapter extends AAdapter {
 	/**
 	 * Extracts the LLM operation from config, falling back to the default.
 	 */
-	protected static AString getLLMOperation(AMap<AString, ACell> config) {
+	public static AString getLLMOperation(AMap<AString, ACell> config) {
 		if (config == null) return DEFAULT_LLM_OPERATION;
 		AString op = RT.ensureString(config.get(K_LLM_OPERATION));
 		return (op != null) ? op : DEFAULT_LLM_OPERATION;
+	}
+
+	/**
+	 * Pretty-prints a Level 3 input map as JSON for inspection. Output is
+	 * stable-ordered ({@code model}, {@code responseFormat}, {@code messages},
+	 * {@code tools}) so diffs across turns stay readable. Used by
+	 * {@code inspectContext} implementations.
+	 */
+	@SuppressWarnings("unchecked")
+	public static AString renderL3InputAsJson(AMap<AString, ACell> l3Input) {
+		AVector<ACell> messages = RT.ensureVector(l3Input.get(K_MESSAGES));
+		AVector<ACell> tools = RT.ensureVector(l3Input.get(K_TOOLS));
+		StringBuilder sb = new StringBuilder("{\n");
+		ACell model = l3Input.get(K_MODEL);
+		if (model != null) {
+			sb.append("  \"model\": ").append(convex.core.util.JSON.toString(model)).append(",\n");
+		}
+		ACell rf = l3Input.get(K_RESPONSE_FORMAT);
+		if (rf != null) {
+			sb.append("  \"responseFormat\": ").append(convex.core.util.JSON.toString(rf)).append(",\n");
+		}
+		sb.append("  \"messages\": [\n");
+		if (messages != null) {
+			for (long i = 0; i < messages.count(); i++) {
+				if (i > 0) sb.append(",\n");
+				sb.append("    ").append(convex.core.util.JSON.toString(messages.get(i)));
+			}
+		}
+		sb.append("\n  ],\n  \"tools\": [\n");
+		if (tools != null) {
+			for (long i = 0; i < tools.count(); i++) {
+				if (i > 0) sb.append(",\n");
+				sb.append("    ").append(convex.core.util.JSON.toString(tools.get(i)));
+			}
+		}
+		sb.append("\n  ]\n}");
+		return Strings.create(sb.toString());
 	}
 
 	/**

@@ -40,7 +40,7 @@ import covia.venue.RequestContext;
  * @see GoalTreeContext for frame data model and context rendering (pure functions)
  * @see AbstractLLMAdapter for shared L3 invocation and tool dispatch
  */
-public class GoalTreeAdapter extends AbstractLLMAdapter {
+public class GoalTreeAdapter extends AbstractLLMAdapter implements covia.adapter.ContextInspectable {
 
 	private static final Logger log = LoggerFactory.getLogger(GoalTreeAdapter.class);
 
@@ -348,6 +348,21 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		return CompletableFuture.supplyAsync(() -> processGoal(null, ctx, input), VIRTUAL_EXECUTOR);
+	}
+
+	/**
+	 * Renders the first-iteration L3 input as JSON for {@code agent:context}.
+	 * Delegates to {@link #buildFirstIterationL3Input} which uses the same
+	 * ContextBuilder pipeline, harness tool assembly, and output typing as
+	 * a real transition.
+	 */
+	@Override
+	public AString inspectContext(AMap<AString, ACell> recordConfig,
+	                              ACell state,
+	                              ACell taskInput,
+	                              RequestContext ctx) {
+		AMap<AString, ACell> l3Input = buildFirstIterationL3Input(recordConfig, state, taskInput, ctx);
+		return renderL3InputAsJson(l3Input);
 	}
 
 	/**

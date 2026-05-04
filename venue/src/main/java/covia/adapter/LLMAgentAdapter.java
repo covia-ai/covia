@@ -77,7 +77,7 @@ import covia.venue.RequestContext;
  *   ]
  * }}</pre>
  */
-public class LLMAgentAdapter extends AAdapter {
+public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 
 	private static final Logger log = LoggerFactory.getLogger(LLMAgentAdapter.class);
 
@@ -278,6 +278,39 @@ public class LLMAgentAdapter extends AAdapter {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		return CompletableFuture.supplyAsync(() -> processChat(ctx, input), VIRTUAL_EXECUTOR);
+	}
+
+	/**
+	 * Renders the L3 input that would be sent to the LLM on a fresh transition.
+	 * Used by {@code agent:context} via {@link ContextInspectable}. Builds the
+	 * same system prompt, context entries, and tool palette as a real transition,
+	 * but does not invoke the LLM. The {@code taskInput} is appended as a user
+	 * goal message when non-null.
+	 */
+	@Override
+	@SuppressWarnings("unchecked")
+	public AString inspectContext(AMap<AString, ACell> recordConfig,
+	                              ACell state,
+	                              ACell taskInput,
+	                              RequestContext ctx) {
+		ContextBuilder builder = new ContextBuilder(engine, ctx);
+		ContextBuilder.ContextResult context = builder
+			.withConfig(recordConfig, state)
+			.withSystemPrompt()
+			.withContextEntries(state)
+			.withTools()
+			.build();
+
+		AVector<ACell> history = context.history();
+		if (taskInput != null) {
+			ACell goalMsg = Maps.of(K_ROLE, ROLE_USER, K_CONTENT,
+				Strings.create(taskInput.toString()));
+			history = history.conj(goalMsg);
+		}
+
+		AMap<AString, ACell> l3Input = AbstractLLMAdapter.buildL3Input(
+			context.config(), history, context.tools());
+		return AbstractLLMAdapter.renderL3InputAsJson(l3Input);
 	}
 
 	/**
