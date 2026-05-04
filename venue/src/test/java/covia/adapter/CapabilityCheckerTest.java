@@ -455,6 +455,46 @@ public class CapabilityCheckerTest {
 			CapabilityChecker.extractResource("v/ops/dlfs/list-drives", Maps.empty()));
 	}
 
+	// ========== Agent / asset abilities (documented in UCAN.md §3.2) ==========
+
+	@Test
+	public void testAgentCreateAbility() {
+		AVector<ACell> caps = caps("g/Carol", "agent/create");
+		assertNull(CapabilityChecker.check(caps, "v/ops/agent/create",
+			Maps.of(Strings.create("agentId"), Strings.create("Carol"))));
+	}
+
+	@Test
+	public void testAgentParentCoversCreate() {
+		// "agent" ability covers every agent/* per the UCAN.md §3.2 hierarchy.
+		AVector<ACell> caps = caps("g/", "agent");
+		assertNull(CapabilityChecker.check(caps, "v/ops/agent/create",
+			Maps.of(Strings.create("agentId"), Strings.create("Carol"))));
+		assertNull(CapabilityChecker.check(caps, "v/ops/agent/request",
+			Maps.of(Strings.create("agentId"), Strings.create("Bob"))));
+		assertNull(CapabilityChecker.check(caps, "v/ops/agent/message",
+			Maps.of(Strings.create("agentId"), Strings.create("Bob"))));
+	}
+
+	@Test
+	public void testAssetParentCoversStoreAndRead() {
+		// "asset" covers asset/store and asset/read.
+		AVector<ACell> caps = caps("", "asset");
+		assertNull(CapabilityChecker.check(caps, "v/ops/asset/store", Maps.empty()));
+		assertNull(CapabilityChecker.check(caps, "v/ops/asset/get",
+			Maps.of(Strings.create("hash"), Strings.create("0xabc"))));
+	}
+
+	@Test
+	public void testAssetReadDoesNotCoverStore() {
+		AVector<ACell> caps = caps("", "asset/read");
+		// Read allowed
+		assertNull(CapabilityChecker.check(caps, "v/ops/asset/get",
+			Maps.of(Strings.create("hash"), Strings.create("0xabc"))));
+		// Store denied
+		assertNotNull(CapabilityChecker.check(caps, "v/ops/asset/store", Maps.empty()));
+	}
+
 	@Test
 	public void testDLFSPerDriveCaps() {
 		AVector<ACell> caps = caps("dlfs://scratch/", "crud");

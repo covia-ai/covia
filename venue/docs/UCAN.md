@@ -118,8 +118,14 @@ Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is
 | `crud/delete` | — | Delete data |
 | `invoke` | `invoke/async` | Execute operations |
 | `invoke/async` | — | Fire-and-forget execution |
+| `agent` | every `agent/*` | All agent operations |
+| `agent/create` | — | Create a new agent |
+| `agent/request` | — | Submit a request task to an agent |
 | `agent/message` | — | Send message to agent session |
 | `agent/fork` | — | Fork an agent |
+| `asset` | every `asset/*` | All asset operations |
+| `asset/store` | — | Store a new content-addressed asset |
+| `asset/read` | — | Get / list content-addressed assets |
 | `secret/decrypt` | — | Decrypt a secret |
 | `ucan/delegate` | — | Sub-delegate capabilities |
 | `ucan/revoke` | — | Revoke a UCAN |
@@ -375,7 +381,11 @@ Venue:
 | `dlfs:write` / `dlfs:append` / `dlfs:mkdir` / `dlfs:createDrive` | `{ with: "dlfs://<drive>/<path>", can: "crud/write" }` |
 | `dlfs:delete` / `dlfs:deleteDrive` | `{ with: "dlfs://<drive>/<path>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "/s/<name>", can: "secret/decrypt" }` |
+| `agent:create` | `{ with: "/g/<id>", can: "agent/create" }` |
+| `agent:request` (cross-user) | `{ with: "/g/<id>", can: "agent/request" }` |
 | `agent:message` (cross-user) | `{ with: "/g/<id>", can: "agent/message" }` |
+| `asset:store` | `{ with: "<any>", can: "asset/store" }` |
+| `asset:get` / `asset:list` | `{ with: "<any>", can: "asset/read" }` |
 | Grid operation invoke | `{ with: "/o/<op>", can: "invoke" }` |
 | Sub-delegation | `{ with: "<path>", can: "ucan/delegate" }` |
 
