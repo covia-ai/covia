@@ -1,4 +1,4 @@
-package covia.adapter;
+package covia.utils;
 
 import java.util.Map;
 
