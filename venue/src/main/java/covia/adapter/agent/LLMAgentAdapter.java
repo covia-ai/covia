@@ -3,7 +3,6 @@ package covia.adapter.agent;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,12 +19,10 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.lattice.CapabilityChecker;
 import covia.venue.AgentState;
 import covia.venue.RequestContext;
 
@@ -79,59 +76,17 @@ import covia.venue.RequestContext;
  *   ]
  * }}</pre>
  */
-public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
+public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 	private static final Logger log = LoggerFactory.getLogger(LLMAgentAdapter.class);
-
-	private static final AString DEFAULT_SYSTEM_PROMPT = Strings.create(
-		"You are a helpful AI agent on the Covia platform. "
-		+ "Use tools and grid operations to complete tasks. "
-		+ "Give concise, clear and accurate responses.");
-
-	private static final AString DEFAULT_LLM_OPERATION = Strings.create("v/ops/langchain/openai");
 
 	// State field keys
 	private static final AString K_LOADS = Strings.intern("loads");
 
-	// Config field keys (read from state.config)
-	private static final AString K_CONFIG        = Strings.intern("config");
-	private static final AString K_LLM_OPERATION = Strings.intern("llmOperation");
-	private static final AString K_MODEL         = Strings.intern("model");
-	private static final AString K_SYSTEM_PROMPT = Strings.intern("systemPrompt");
-	private static final AString K_URL             = Strings.intern("url");
-	private static final AString K_API_KEY         = Strings.intern("apiKey");
-	private static final AString K_TOOLS           = Strings.intern("tools");
+	// Config keys specific to this adapter (parent provides K_CONFIG, K_LLM_OPERATION,
+	// K_MODEL, K_SYSTEM_PROMPT, K_URL, K_API_KEY, K_TOOLS, K_RESPONSE_FORMAT,
+	// K_CONTEXT, K_CAPS, K_TOOL_CALL_TIMEOUT_MS).
 	private static final AString K_DEFAULT_TOOLS   = Strings.intern("defaultTools");
-	private static final AString K_RESPONSE_FORMAT = Strings.intern("responseFormat");
-	private static final AString K_CONTEXT        = Strings.intern("context");
-	private static final AString K_CAPS           = Strings.intern("caps");
-	private static final AString K_TOOL_CALL_TIMEOUT_MS = Strings.intern("toolCallTimeoutMs");
-
-	// Default per-tool-call timeout inside the agent loop. Bounds the wait on
-	// any single grid op invoked as a tool so a stuck sub-job cannot hang the
-	// parent agent's run loop indefinitely. See covia-ai/covia#82.
-	static final long DEFAULT_TOOL_CALL_TIMEOUT_MS = 300_000L;
-
-	// Message field keys
-	private static final AString K_ROLE       = Strings.intern("role");
-	private static final AString K_CONTENT    = Strings.intern("content");
-	private static final AString K_MESSAGES   = Strings.intern("messages");
-	private static final AString K_TOOL_CALLS = Strings.intern("toolCalls");
-	private static final AString K_ID         = Strings.intern("id");
-	private static final AString K_NAME       = Strings.intern("name");
-	private static final AString K_ARGUMENTS  = Strings.intern("arguments");
-	private static final AString K_DESCRIPTION = Strings.intern("description");
-	private static final AString K_PARAMETERS  = Strings.intern("parameters");
-	private static final AString K_TYPE        = Strings.intern("type");
-	private static final AString K_PROPERTIES  = Strings.intern("properties");
-	private static final AString K_REQUIRED    = Strings.intern("required");
-	private static final AString K_STRUCTURED_CONTENT = Strings.intern("structuredContent");
-
-	// Role values
-	private static final AString ROLE_SYSTEM    = Strings.intern("system");
-	private static final AString ROLE_USER      = Strings.intern("user");
-	private static final AString ROLE_ASSISTANT = Strings.intern("assistant");
-	private static final AString ROLE_TOOL      = Strings.intern("tool");
 
 	// Built-in tool names (only task tools remain as built-ins)
 	private static final String TOOL_COMPLETE_TASK = "complete_task";
@@ -187,22 +142,7 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 			+ "The path is resolved fresh each turn and injected as a system message. "
 			+ "Use for reference material you need across multiple turns. "
 			+ "For one-shot reads, use inspect instead. Effect takes place next turn."),
-		K_PARAMETERS, Maps.of(
-			K_TYPE, Strings.create("object"),
-			K_PROPERTIES, Maps.of(
-				Strings.create("path"), Maps.of(
-					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("Lattice path to load (e.g. w/docs/rules, n/notes)")),
-				Strings.create("budget"), Maps.of(
-					K_TYPE, Strings.create("integer"),
-					K_DESCRIPTION, Strings.create("Byte budget for rendering this path (default 500, max 10000)")),
-				Strings.create("label"), Maps.of(
-					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("Optional human-readable label for this context entry"))
-			),
-			K_REQUIRED, Vectors.of(Strings.create("path"))
-		)
-	);
+		K_PARAMETERS, CONTEXT_LOAD_PARAMS);
 
 	private static final AMap<AString, ACell> TOOL_DEF_CONTEXT_UNLOAD = Maps.of(
 		K_NAME, Strings.create(TOOL_CONTEXT_UNLOAD),
@@ -210,16 +150,7 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 			"Remove a path from your persistent loaded context. "
 			+ "Frees the budget allocated to that path. "
 			+ "Cannot unload pinned context entries from config."),
-		K_PARAMETERS, Maps.of(
-			K_TYPE, Strings.create("object"),
-			K_PROPERTIES, Maps.of(
-				Strings.create("path"), Maps.of(
-					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("Lattice path to unload (must match the path used in context_load)"))
-			),
-			K_REQUIRED, Vectors.of(Strings.create("path"))
-		)
-	);
+		K_PARAMETERS, CONTEXT_UNLOAD_PARAMS);
 
 	/** Context tools — always available to agents */
 	private static final AVector<ACell> CONTEXT_TOOLS = (AVector<ACell>) Vectors.of(
@@ -283,18 +214,14 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 	}
 
 	/**
-	 * Renders the L3 input that would be sent to the LLM on a fresh transition.
-	 * Used by {@code agent:context} via {@link ContextInspectable}. Builds the
-	 * same system prompt, context entries, and tool palette as a real transition,
-	 * but does not invoke the LLM. The {@code taskInput} is appended as a user
-	 * goal message when non-null.
+	 * Builds the L3 input for {@code agent:context} inspection. Same context
+	 * pipeline as {@link #processChat}'s first iteration — system prompt,
+	 * context entries, tool palette — minus the actual LLM invocation. Appends
+	 * the optional {@code taskInput} as a user goal message.
 	 */
 	@Override
-	@SuppressWarnings("unchecked")
-	public AString inspectContext(AMap<AString, ACell> recordConfig,
-	                              ACell state,
-	                              ACell taskInput,
-	                              RequestContext ctx) {
+	protected AMap<AString, ACell> buildInspectionInput(
+			AMap<AString, ACell> recordConfig, ACell state, ACell taskInput, RequestContext ctx) {
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
 			.withConfig(recordConfig, state)
@@ -310,9 +237,7 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 			history = history.conj(goalMsg);
 		}
 
-		AMap<AString, ACell> l3Input = AbstractLLMAdapter.buildL3Input(
-			context.config(), history, context.tools());
-		return AbstractLLMAdapter.renderL3InputAsJson(l3Input);
+		return buildL3Input(context.config(), history, context.tools());
 	}
 
 	/**
@@ -385,7 +310,7 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 		RequestContext capsCtx = context.capsCtx().withAgentId(agentId);
 
 		// Extract LLM operation from merged config
-		AString llmOperation = ContextBuilder.getConfigValue(config, K_LLM_OPERATION, DEFAULT_LLM_OPERATION);
+		AString llmOperation = getLLMOperation(config);
 
 		// Task context is built dynamically per tool-loop iteration (not baked into
 		// history) so the LLM only sees outstanding tasks, not already-resolved ones.
@@ -494,19 +419,13 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 				fullHistory = fullHistory.conj(taskMsg);
 			}
 
-			AMap<AString, ACell> l3Input = Maps.of(K_MESSAGES, fullHistory);
-			l3Input = copyIfPresent(config, l3Input, K_MODEL, K_URL, K_API_KEY, K_RESPONSE_FORMAT);
-
 			// Include task tools when tasks remain; context tools always available
 			AVector<ACell> tools = (taskMsg != null)
 				? (AVector<ACell>) TASK_TOOLS.concat(CONTEXT_TOOLS).concat(baseTools)
 				: (AVector<ACell>) CONTEXT_TOOLS.concat(baseTools);
-			if (tools != null && tools.count() > 0) {
-				l3Input = l3Input.assoc(K_TOOLS, tools);
-			}
 
 			// Dispatch to level 3 — internal, no sub-Job created
-			ACell l3Result = engine.jobs().invokeInternal(llmOperation, l3Input, ctx).join();
+			ACell l3Result = invokeLevel3(llmOperation, config, fullHistory, tools, ctx);
 
 			// Level 3 returns an assistant message: {role, content?, toolCalls?}
 			ACell toolCallsCell = RT.getIn(l3Result, K_TOOL_CALLS);
@@ -566,18 +485,12 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 					log.warn("Tool execution failed: {} — {}", name, e.getMessage());
 				}
 
-				// Append tool result message — text in content, structured in structured_content
-				AMap<AString, ACell> toolMsg = Maps.of(
-					K_ROLE, ROLE_TOOL,
-					K_NAME, (name != null) ? name : Strings.create("unknown")
-				);
-				if (toolResult instanceof AString s) {
-					toolMsg = toolMsg.assoc(K_CONTENT, s);
-				} else {
-					toolMsg = toolMsg.assoc(K_STRUCTURED_CONTENT, toolResult);
-				}
-				if (id != null) toolMsg = toolMsg.assoc(K_ID, id);
-				newMessages = newMessages.conj(toolMsg);
+				// Append tool result message via the shared base helper
+				// (parent rule: AMap/AVector → structuredContent, else stringify
+				// into content). Synthesises a stand-in name when the LLM omits
+				// it — the message format requires a non-null name.
+				String toolNameForMsg = (name != null) ? name.toString() : "unknown";
+				newMessages = newMessages.conj(toolResultMessage(id, toolNameForMsg, toolResult));
 			}
 
 		}
@@ -608,39 +521,10 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 		if (TOOL_CONTEXT_LOAD.equals(toolName)) return handleContextLoad(input, toolCtx);
 		if (TOOL_CONTEXT_UNLOAD.equals(toolName)) return handleContextUnload(input, toolCtx);
 
-		// Resolve the actual operation name for capability checking
-		AString operation = toolCtx.configToolMap.get(toolName);
-		String opName = (operation != null) ? operation.toString() : toolName;
-
-		// Check agent capabilities before dispatch (fast rejection, avoids job creation)
-		String denied = CapabilityChecker.check(toolCtx.caps, opName, input);
-		if (denied != null) return Strings.create("Error: " + denied);
-
-		// Use the capability-scoped context for tool dispatch
-		// (caps also enforced at JobManager level for defence in depth)
-		RequestContext toolRequestCtx = toolCtx.ctx;
-
-		// Config tools — tool name maps to a resolved operation
-		if (operation != null) {
-			return handleConfigTool(operation, input, toolRequestCtx, toolCtx.toolCallTimeoutMs);
-		}
-
-		// Fall through to grid dispatch (tool name used as operation name)
-		return handleGridDispatch(toolName, input, toolRequestCtx, toolCtx.toolCallTimeoutMs);
-	}
-
-	/**
-	 * Resolves the per-tool-call timeout from the agent's merged config.
-	 * Accepts CVMLong (ms) or any numeric ACell; falls back to the default
-	 * if absent, non-numeric, or non-positive. Clamped at 1s minimum.
-	 */
-	static long resolveToolCallTimeoutMs(AMap<AString, ACell> config) {
-		ACell v = (config != null) ? config.get(K_TOOL_CALL_TIMEOUT_MS) : null;
-		if (v instanceof CVMLong l) {
-			long ms = l.longValue();
-			if (ms >= 1000) return ms;
-		}
-		return DEFAULT_TOOL_CALL_TIMEOUT_MS;
+		// Cap-checked, timeout-bounded dispatch via the shared base path.
+		// Resolves config tools, falls through to grid dispatch for unknown names.
+		return dispatchTool(toolName, input, toolCtx.configToolMap,
+			toolCtx.caps, toolCtx.ctx, toolCtx.toolCallTimeoutMs);
 	}
 
 	/**
@@ -668,7 +552,7 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 				"v/ops/agent/complete-task", opInput, toolCtx.ctx)
 				.get(toolCtx.toolCallTimeoutMs, TimeUnit.MILLISECONDS);
 		} catch (Exception e) {
-			return Strings.create("Error: " + AbstractLLMAdapter.unwrap(e).getMessage());
+			return Strings.create("Error: " + unwrap(e).getMessage());
 		}
 
 		// Record locally so processChat can promote the structured output
@@ -706,7 +590,7 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 				"v/ops/agent/fail-task", opInput, toolCtx.ctx)
 				.get(toolCtx.toolCallTimeoutMs, TimeUnit.MILLISECONDS);
 		} catch (Exception e) {
-			return Strings.create("Error: " + AbstractLLMAdapter.unwrap(e).getMessage());
+			return Strings.create("Error: " + unwrap(e).getMessage());
 		}
 
 		Blob taskId = toolCtx.ctx.getTaskId();
@@ -722,32 +606,22 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 	// ========== Built-in context tools ==========
 
 	ACell handleContextLoad(ACell input, ToolContext toolCtx) {
-		AString path = RT.ensureString(RT.getIn(input, Strings.create("path")));
+		AString path = RT.ensureString(RT.getIn(input, K_PATH));
 		if (path == null) return Strings.create("Error: path is required");
 
-		long budget = 500;
-		ACell budgetCell = RT.getIn(input, Strings.create("budget"));
-		if (budgetCell instanceof CVMLong l) {
-			budget = Math.max(256, Math.min(l.longValue(), 10_000));
-		}
-		AString label = RT.ensureString(RT.getIn(input, Strings.create("label")));
-
-		AMap<AString, ACell> entryMeta = Maps.of(
-			Strings.create("budget"), CVMLong.create(budget),
-			Strings.create("ts"), CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
-		if (label != null) entryMeta = entryMeta.assoc(Strings.create("label"), label);
-
-		toolCtx.addLoad(path, entryMeta);
+		long budget = clampLoadBudget(RT.getIn(input, K_BUDGET));
+		AString label = RT.ensureString(RT.getIn(input, K_LABEL));
+		toolCtx.addLoad(path, buildLoadEntryMeta(budget, label));
 
 		return Maps.of(
-			Strings.create("path"), path,
+			K_PATH, path,
 			Strings.create("loaded"), CVMBool.TRUE,
-			Strings.create("budget"), CVMLong.create(budget),
+			K_BUDGET, CVMLong.create(budget),
 			Strings.create("note"), Strings.create("Path will appear in context next turn. Use inspect for immediate reads."));
 	}
 
 	ACell handleContextUnload(ACell input, ToolContext toolCtx) {
-		AString path = RT.ensureString(RT.getIn(input, Strings.create("path")));
+		AString path = RT.ensureString(RT.getIn(input, K_PATH));
 		if (path == null) return Strings.create("Error: path is required");
 
 		if (!toolCtx.hasLoad(path)) {
@@ -757,75 +631,8 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 		toolCtx.removeLoad(path);
 
 		return Maps.of(
-			Strings.create("path"), path,
+			K_PATH, path,
 			Strings.create("unloaded"), CVMBool.TRUE);
-	}
-
-	/**
-	 * Ensures the input value is a parsed map. LLMs often double-stringify JSON,
-	 * producing a string like "{\"key\": \"val\"}" instead of a map. This parses
-	 * such strings into proper maps.
-	 */
-	public static ACell ensureParsedInput(ACell opInput) {
-		if (opInput == null) return Maps.empty();
-		if (opInput instanceof AString s) {
-			try {
-				return convex.core.util.JSON.parse(s.toString());
-			} catch (Exception e) {
-				// Not valid JSON — return as-is
-			}
-		}
-		return opInput;
-	}
-
-	/**
-	 * Falls through to grid dispatch for unrecognised tool names.
-	 */
-	private ACell handleGridDispatch(String toolName, ACell input, RequestContext ctx, long timeoutMs) {
-		try {
-			ACell toolOutput = engine.jobs().invokeInternal(Strings.create(toolName), input, ctx)
-				.get(timeoutMs, TimeUnit.MILLISECONDS);
-			return (toolOutput != null) ? toolOutput : Maps.empty();
-		} catch (TimeoutException e) {
-			return Strings.create("Error: tool call timed out after " + timeoutMs + "ms");
-		} catch (Exception e) {
-			return Strings.create("Error: " + AbstractLLMAdapter.unwrap(e).getMessage());
-		}
-	}
-
-	// ========== Config tool resolution ==========
-
-	// ========== Delegates to ContextBuilder (package-private for testing) ==========
-
-	/** @see ContextBuilder#parseConfigToolEntry(ACell) */
-	static AString[] parseConfigToolEntry(ACell entry) {
-		return ContextBuilder.parseConfigToolEntry(entry);
-	}
-
-	/** @see ContextBuilder#deriveToolName(AString, AString, AString) */
-	public static String deriveToolName(AString nameOverride, AString assetToolName, AString operation) {
-		return ContextBuilder.deriveToolName(nameOverride, assetToolName, operation);
-	}
-
-	/** @see ContextBuilder#buildToolDefinition(String, AString, ACell) */
-	static AMap<AString, ACell> buildToolDefinition(String toolName, AString description, ACell inputSchema) {
-		return ContextBuilder.buildToolDefinition(toolName, description, inputSchema);
-	}
-
-	/**
-	 * Invokes a config tool's operation directly with the LLM's input.
-	 */
-	private ACell handleConfigTool(AString operation, ACell input, RequestContext ctx, long timeoutMs) {
-		ACell opInput = ensureParsedInput(input);
-		try {
-			ACell result = engine.jobs().invokeInternal(operation, opInput, ctx)
-				.get(timeoutMs, TimeUnit.MILLISECONDS);
-			return (result != null) ? result : Maps.empty();
-		} catch (TimeoutException e) {
-			return Strings.create("Error: tool call timed out after " + timeoutMs + "ms");
-		} catch (Exception e) {
-			return Strings.create("Error: " + AbstractLLMAdapter.unwrap(e).getMessage());
-		}
 	}
 
 	/**
@@ -888,20 +695,6 @@ public class LLMAgentAdapter extends AAdapter implements ContextInspectable {
 		if (config == null) return defaultValue;
 		AString val = RT.ensureString(config.get(key));
 		return (val != null) ? val : defaultValue;
-	}
-
-	/**
-	 * Copies each of the given keys from {@code src} to {@code dst} if present
-	 * (and non-null) in src. Returns the updated dst map (AMap is immutable).
-	 */
-	static AMap<AString, ACell> copyIfPresent(
-			AMap<AString, ACell> src, AMap<AString, ACell> dst, AString... keys) {
-		if (src == null) return dst;
-		for (AString key : keys) {
-			ACell v = src.get(key);
-			if (v != null) dst = dst.assoc(key, v);
-		}
-		return dst;
 	}
 
 	@SuppressWarnings("unchecked")
