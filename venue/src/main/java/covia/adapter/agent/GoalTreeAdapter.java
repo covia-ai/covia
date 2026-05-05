@@ -39,7 +39,7 @@ import covia.venue.RequestContext;
  * @see GoalTreeContext for frame data model and context rendering (pure functions)
  * @see AbstractLLMAdapter for shared L3 invocation and tool dispatch
  */
-public class GoalTreeAdapter extends AbstractLLMAdapter implements covia.adapter.ContextInspectable {
+public class GoalTreeAdapter extends AbstractLLMAdapter implements covia.adapter.agent.ContextInspectable {
 
 	private static final Logger log = LoggerFactory.getLogger(GoalTreeAdapter.class);
 
