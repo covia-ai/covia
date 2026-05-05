@@ -14,7 +14,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
-import covia.adapter.CapabilityChecker;
+import covia.lattice.CapabilityChecker;
 import covia.venue.RequestContext;
 
 /**

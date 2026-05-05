@@ -1,4 +1,4 @@
-package covia.adapter;
+package covia.lattice;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -12,6 +12,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.lattice.CapabilityChecker;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 

@@ -21,7 +21,6 @@ import convex.core.util.Utils;
 import convex.core.data.prim.CVMBool;
 import convex.core.json.schema.JsonSchema;
 import covia.adapter.AAdapter;
-import covia.adapter.CapabilityChecker;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Asset;
@@ -29,6 +28,7 @@ import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Status;
 import covia.grid.Venue;
+import covia.lattice.CapabilityChecker;
 
 /**
  * Manages job lifecycle, persistence, and in-memory state for active jobs.

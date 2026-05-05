@@ -1,4 +1,4 @@
-package covia.adapter;
+package covia.lattice;
 
 import convex.auth.ucan.Capability;
 import convex.core.data.ACell;

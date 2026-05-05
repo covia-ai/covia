@@ -22,11 +22,10 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
-import covia.adapter.CapabilityChecker;
-import covia.adapter.ContextInspectable;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.lattice.CapabilityChecker;
 import covia.venue.AgentState;
 import covia.venue.RequestContext;
 
