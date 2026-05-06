@@ -160,6 +160,29 @@ public class Config {
 	 */
 	public static final AString FIX_MCP_STRINGS = Strings.intern("fixMcpStrings");
 
+	/**
+	 * Key for the per-venue secrets bootstrap map.
+	 *
+	 * <p>Structure is {@code {<userKey>: {<name>: <value>, ...}, ...}} where
+	 * {@code userKey} is one of:</p>
+	 * <ul>
+	 *   <li>{@code "venue"} — resolves to the venue's own DID (intended for
+	 *       venue-internal operations and self-issued requests).</li>
+	 *   <li>{@code "public"} — resolves to {@code <venueDID>:public} (the
+	 *       default identity for unauthenticated callers).</li>
+	 *   <li>A literal DID string (e.g. {@code "did:key:z…"}) — assigned
+	 *       verbatim to that user's secret store.</li>
+	 * </ul>
+	 *
+	 * <p>Bootstrap runs at server start and overwrites any existing values
+	 * for the listed names — config is the source of truth at launch. Names
+	 * not listed in config are left untouched.</p>
+	 *
+	 * <p><b>Never commit production secrets here.</b> Intended for personal
+	 * dev configs in gitignored locations (e.g. {@code dev/local.json}).</p>
+	 */
+	public static final AString SECRETS = Strings.intern("secrets");
+
 	// ========== Instance fields ==========
 
 	private final AMap<AString, ACell> config;
@@ -259,6 +282,24 @@ public class Config {
 	public String getSeed() {
 		AString seedVal = RT.ensureString(config.get(SEED));
 		return (seedVal != null) ? seedVal.toString() : null;
+	}
+
+	/**
+	 * Get the configured secrets bootstrap map.
+	 *
+	 * <p>Returns the raw {@code secrets} map from config — the engine's
+	 * bootstrap path is responsible for resolving each top-level key
+	 * (e.g. {@code "venue"}, {@code "public"}, or a literal DID) into a
+	 * concrete user DID and writing the inner {@code name → value} entries
+	 * into that user's encrypted secret store.</p>
+	 *
+	 * @return Secrets map, or null if not configured
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> getSecrets() {
+		ACell raw = config.get(SECRETS);
+		if (raw instanceof AMap) return (AMap<AString, ACell>) raw;
+		return null;
 	}
 
 	// ========== Storage accessors ==========

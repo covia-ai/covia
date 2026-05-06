@@ -312,6 +312,29 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 
 Mounts WebDAV at `/dlfs/` for file access to DLFS drives. Off by default.
 
+### Secrets bootstrap
+
+Per-venue config can pre-populate the encrypted per-user secret stores at startup:
+
+```json
+{
+  "secrets": {
+    "venue":  { "OPENAI_API_KEY": "sk-..." },
+    "public": { "OPENAI_API_KEY": "sk-...", "ANTHROPIC_API_KEY": "sk-ant-..." },
+    "did:key:z6MkAlice...": { "FOO": "bar" }
+  }
+}
+```
+
+Top-level keys resolve as follows:
+- `"venue"` → the venue's own DID (used by venue-internal operations and self-issued requests)
+- `"public"` → `<venueDID>:public`, the default identity for unauthenticated callers
+- Anything else → used verbatim; expected to be a literal DID string
+
+Each named secret overwrites any existing value under that name for that user — config is the source of truth at launch. Names not listed are left untouched. Per-secret failures log a warning but do not fail startup. Values are never logged.
+
+**Never commit production secrets here.** Intended for personal dev configs in gitignored locations (e.g. `dev/local.json`).
+
 ## Build & Run
 
 ```bash

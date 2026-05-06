@@ -376,6 +376,69 @@ public class EngineTest {
 		assertNull(venue.resolveSecret("/s/", RequestContext.of(ALICE_DID)));
 	}
 
+	// ========== Configured-secret bootstrap ==========
+
+	@Test
+	public void testProvisionConfiguredSecrets() {
+		AString externalDID = Strings.create("did:key:z6MkExternal-" + System.nanoTime());
+		AMap<AString, ACell> cfg = Maps.of(
+			Config.SECRETS, Maps.of(
+				Strings.create("venue"), Maps.of(
+					Strings.create("OPENAI_API_KEY"), Strings.create("sk-venue"),
+					Strings.create("ANTHROPIC_API_KEY"), Strings.create("sk-anth")),
+				Strings.create("public"), Maps.of(
+					Strings.create("OPENAI_API_KEY"), Strings.create("sk-public")),
+				externalDID, Maps.of(
+					Strings.create("FOO"), Strings.create("bar"))));
+
+		Engine e = Engine.createTemp(cfg);
+		int provisioned = e.provisionConfiguredSecrets();
+		assertEquals(4, provisioned, "All four secrets should be provisioned");
+
+		AString venueDID = e.getDIDString();
+		AString publicDID = Strings.create(venueDID.toString() + ":public");
+
+		// Each user keeps its own value — no cross-user leakage
+		assertEquals("sk-venue",
+			e.resolveSecret("OPENAI_API_KEY", RequestContext.of(venueDID)));
+		assertEquals("sk-anth",
+			e.resolveSecret("ANTHROPIC_API_KEY", RequestContext.of(venueDID)));
+		assertEquals("sk-public",
+			e.resolveSecret("OPENAI_API_KEY", RequestContext.of(publicDID)));
+		assertEquals("bar",
+			e.resolveSecret("FOO", RequestContext.of(externalDID)));
+
+		// Names not configured for a user remain unset
+		assertNull(e.resolveSecret("ANTHROPIC_API_KEY", RequestContext.of(publicDID)));
+		assertNull(e.resolveSecret("FOO", RequestContext.of(venueDID)));
+	}
+
+	@Test
+	public void testProvisionConfiguredSecretsOverwrites() {
+		AMap<AString, ACell> cfg = Maps.of(
+			Config.SECRETS, Maps.of(
+				Strings.create("public"), Maps.of(
+					Strings.create("KEY1"), Strings.create("from-config"))));
+		Engine e = Engine.createTemp(cfg);
+		AString publicDID = Strings.create(e.getDIDString().toString() + ":public");
+
+		// Pre-existing user-set value is overwritten by config
+		User pub = e.getVenueState().users().ensure(publicDID);
+		byte[] encKey = SecretStore.deriveKey(e.getKeyPair());
+		pub.secrets().store("KEY1", "from-runtime", encKey);
+		assertEquals("from-runtime", e.resolveSecret("KEY1", RequestContext.of(publicDID)));
+
+		assertEquals(1, e.provisionConfiguredSecrets());
+		assertEquals("from-config", e.resolveSecret("KEY1", RequestContext.of(publicDID)));
+	}
+
+	@Test
+	public void testProvisionConfiguredSecretsAbsent() {
+		Engine e = Engine.createTemp(null);
+		assertEquals(0, e.provisionConfiguredSecrets(),
+			"No secrets configured → returns 0, no error");
+	}
+
 	// ========== Secret field redaction ==========
 
 	private AMap<AString, ACell> echoMetaWithSecretFields(String... secrets) {

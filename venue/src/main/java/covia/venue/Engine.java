@@ -1576,4 +1576,90 @@ public class Engine {
 		}
 	}
 
+	/**
+	 * Provisions secrets declared in the venue config into the appropriate
+	 * per-user encrypted secret stores.
+	 *
+	 * <p>Reads {@link Config#SECRETS} ({@code {<userKey>: {<name>: <value>}}}).
+	 * Top-level keys resolve as follows:</p>
+	 * <ul>
+	 *   <li>{@code "venue"} — the venue's own DID (see {@link #getDIDString})</li>
+	 *   <li>{@code "public"} — {@code <venueDID>:public}, the anonymous user</li>
+	 *   <li>Anything else — used verbatim; expected to be a literal DID string</li>
+	 * </ul>
+	 *
+	 * <p>Each named secret overwrites any existing value under that name for
+	 * that user. Names not listed in config are left untouched. Per-secret
+	 * failures are logged at warn but do not fail venue startup.</p>
+	 *
+	 * <p>Values themselves are never logged.</p>
+	 *
+	 * @return number of secrets successfully provisioned (0 if none configured)
+	 */
+	@SuppressWarnings("unchecked")
+	public int provisionConfiguredSecrets() {
+		AMap<AString, ACell> secrets = config.getSecrets();
+		if (secrets == null || secrets.isEmpty()) return 0;
+
+		AString venueDID = getDIDString();
+		AString publicDID = Strings.create(venueDID.toString() + ":public");
+		byte[] encKey = SecretStore.deriveKey(keyPair);
+
+		int total = 0;
+		for (long i = 0; i < secrets.count(); i++) {
+			java.util.Map.Entry<AString, ACell> entry = secrets.entryAt(i);
+			AString userKey = entry.getKey();
+			ACell rawNames = entry.getValue();
+			if (!(rawNames instanceof AMap)) {
+				log.warn("Configured secrets for '{}' must be a map; ignoring", userKey);
+				continue;
+			}
+
+			AString targetDID;
+			String userKeyStr = userKey.toString();
+			if ("venue".equals(userKeyStr)) {
+				targetDID = venueDID;
+			} else if ("public".equals(userKeyStr)) {
+				targetDID = publicDID;
+			} else {
+				targetDID = userKey;
+			}
+
+			User user;
+			try {
+				user = venueState.users().ensure(targetDID);
+			} catch (Exception e) {
+				log.warn("Could not resolve user '{}' for configured secrets: {}",
+					userKeyStr, e.getMessage());
+				continue;
+			}
+
+			AMap<AString, ACell> nameMap = (AMap<AString, ACell>) rawNames;
+			int provisioned = 0;
+			for (long j = 0; j < nameMap.count(); j++) {
+				java.util.Map.Entry<AString, ACell> nv = nameMap.entryAt(j);
+				AString name = nv.getKey();
+				AString value = RT.ensureString(nv.getValue());
+				if (value == null) {
+					log.warn("Configured secret '{}' for user '{}' has non-string value; skipping",
+						name, userKeyStr);
+					continue;
+				}
+				try {
+					user.secrets().store(name, value, encKey);
+					provisioned++;
+				} catch (Exception e) {
+					log.warn("Failed to provision secret '{}' for user '{}': {}",
+						name, userKeyStr, e.getMessage());
+				}
+			}
+			if (provisioned > 0) {
+				log.info("Provisioned {} secret(s) for {} ({})",
+					provisioned, userKeyStr, targetDID);
+			}
+			total += provisioned;
+		}
+		return total;
+	}
+
 }

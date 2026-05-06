@@ -217,6 +217,7 @@ Adapt for other platforms (AWS ECS, Azure Container Instances, fly.io, etc.) as 
 | `hostname` | localhost | Public hostname for DID resolution |
 | `store` | `temp` | Lattice store: `temp` (ephemeral, deleted on exit), `memory` (in-memory), or a file path for a persistent Etch store |
 | `seed` | auto-generated | Ed25519 hex seed for stable venue identity. With a persistent `store` and no explicit seed, one is generated and saved to `venue.key` next to the store file |
+| `secrets` | none | Bootstrap map `{<userKey>: {<name>: <value>}}` written into the encrypted per-user secret stores at startup. `userKey` is `"venue"` (venue's own DID), `"public"` (`<venueDID>:public`), or a literal DID. Overwrites existing values for the listed names; never commit real secrets — use a gitignored config |
 
 **Multiple venues** — run several on one host with different ports:
 ```json

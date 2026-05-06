@@ -209,6 +209,7 @@ public class VenueServer {
 		server.start();
 		
 		Engine.addDemoAssets(server.getEngine());
+		server.getEngine().provisionConfiguredSecrets();
 		server.getEngine().jobs().recoverJobs();
 
 		// Mount DLFS WebDAV if adapter is registered
