@@ -61,8 +61,12 @@ mvn clean install -DskipTests
 # Run venue server (default config, port 8080)
 java -jar venue/target/covia.jar
 
-# Run with custom config
-java -jar venue/target/covia.jar config.json
+# Run with the checked-in ephemeral dev config (temp store, wiped on exit)
+java -jar venue/target/covia.jar local-dev.json
+
+# Run with a personal persistent config (gitignored under /dev/;
+# stable DID, etch+secrets survive restarts — see venue-setup skill)
+java -jar venue/target/covia.jar dev/local.json
 
 # Run tests
 mvn test

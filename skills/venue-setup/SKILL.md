@@ -44,6 +44,30 @@ java -jar venue/target/covia.jar
 java -jar venue/target/covia.jar config.json
 ```
 
+Two checked-in patterns ship with the repo:
+
+| Config | Purpose | Store | Persists across restarts? |
+|--------|---------|-------|---------------------------|
+| `local-dev.json` (committed) | Quick throwaway venue for smoke tests / CI | `temp` Etch (default) | No — DID, agents, secrets all wiped on exit |
+| `dev/local.json` (gitignored under `/dev/`) | Personal long-running dev venue | Persistent Etch at `dev/venue.etch` | Yes — stable DID via `dev/venue.key`; agents and secrets survive restarts |
+
+For the persistent pattern, drop a config like this in `dev/local.json`:
+```json
+{
+  "venues": [
+    {
+      "name": "Local Covia Venue",
+      "hostname": "localhost",
+      "store": "dev/venue.etch",
+      "mcp": {},
+      "webdav": { "enabled": true }
+    }
+  ]
+}
+```
+
+The venue auto-creates `dev/venue.etch` and `dev/venue.key` on first launch. Delete both together for a clean reset; deleting only `venue.key` leaves the etch encrypted under a now-lost identity.
+
 The venue starts on port **8080** by default. Verify with:
 ```bash
 curl http://localhost:8080/
@@ -191,6 +215,8 @@ Adapt for other platforms (AWS ECS, Azure Container Instances, fly.io, etc.) as 
 | `auth.publicAccess` | true | Allow unauthenticated access (dev only) |
 | `did` | auto-generated | Venue's decentralised identifier |
 | `hostname` | localhost | Public hostname for DID resolution |
+| `store` | `temp` | Lattice store: `temp` (ephemeral, deleted on exit), `memory` (in-memory), or a file path for a persistent Etch store |
+| `seed` | auto-generated | Ed25519 hex seed for stable venue identity. With a persistent `store` and no explicit seed, one is generated and saved to `venue.key` next to the store file |
 
 **Multiple venues** — run several on one host with different ports:
 ```json
