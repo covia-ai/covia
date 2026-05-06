@@ -1,7 +1,7 @@
 {
   "venues": [
     {
-      "name": "GetMine Personal Health Vault",
+      "name": "Local Dev Venue",
       "hostname": "localhost",
       "mcp": {},
       "webdav": { "enabled": true }
