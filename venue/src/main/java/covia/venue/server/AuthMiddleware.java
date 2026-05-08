@@ -97,6 +97,8 @@ public class AuthMiddleware {
 		app.before("/api/*", mw::extractIdentity);
 		app.before("/a2a", mw::extractIdentity);
 		app.before("/mcp", mw::extractIdentity);
+		app.before("/dlfs/*", mw::extractIdentity);
+		app.before("/dlfs", mw::extractIdentity);
 		return mw;
 	}
 

@@ -13,6 +13,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
+import convex.core.data.Maps;
+import convex.core.data.Strings;
+import covia.api.Fields;
+import covia.venue.Config;
 import covia.venue.server.VenueServer;
 
 /**
@@ -177,5 +181,39 @@ public class DLFSWebDAVTest {
 		assertEquals(207, res.statusCode(), "PROPFIND should return 207 Multi-Status");
 		assertTrue(res.body().contains("multistatus"), "Response should be WebDAV multistatus XML");
 		assertTrue(res.body().contains("propfind-test.txt"), "Response should list the test file");
+	}
+
+	/**
+	 * Verify that when public access is disabled, unauthenticated WebDAV
+	 * requests are rejected with 401 — not silently served as a public user.
+	 * This guards against the auth-middleware bypass where /dlfs/* was
+	 * previously outside the AuthMiddleware before-filter scope.
+	 */
+	@Test
+	public void testUnauthenticatedAccessRejectedWhenPublicAccessDisabled() throws Exception {
+		// Spin up a private (non-public) server with WebDAV enabled
+		VenueServer privateServer = VenueServer.launch(Maps.of(
+			Strings.create("port"), 0,
+			Config.WEBDAV, Maps.of(Config.ENABLED, true),
+			Config.AUTH, Maps.of(
+				Config.PUBLIC, Maps.of(Config.ENABLED, false)
+			)
+		));
+		try {
+			String privateBase = "http://localhost:" + privateServer.port();
+			HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+
+			// Unauthenticated GET to /dlfs/ should be 401, not 200/404
+			HttpRequest req = HttpRequest.newBuilder()
+				.uri(URI.create(privateBase + "/dlfs/my-drive/file.txt"))
+				.timeout(Duration.ofSeconds(5))
+				.GET()
+				.build();
+			HttpResponse<String> res = client.send(req, HttpResponse.BodyHandlers.ofString());
+			assertEquals(401, res.statusCode(),
+				"Unauthenticated WebDAV access must be rejected with 401 when public access is disabled");
+		} finally {
+			privateServer.close();
+		}
 	}
 }
