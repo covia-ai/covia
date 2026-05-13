@@ -395,7 +395,7 @@ public class VenueServer {
 		});
 
 		app.exception(Exception.class, (e, ctx) -> {
-			e.printStackTrace();
+			log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
 			String message = "Unexpected error: " + e;
 			ctx.result(message);
 			ctx.status(500);
