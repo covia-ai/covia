@@ -79,6 +79,10 @@ mvn test -pl covia-core
 **Main class:** `covia.venue.MainVenue`
 **Executable JAR:** `venue/target/covia.jar` (fat JAR with all dependencies)
 
+## Branch Strategy
+
+`develop` for active development, `master` for releases. See `BUILD.md` for the full release flow.
+
 ## Key Dependencies
 
 | Dependency | Version | Purpose |

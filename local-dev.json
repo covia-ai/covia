@@ -1,8 +1,16 @@
 {
   "venues": [
     {
-      "name": "Local Dev Venue",
+      "name": "Local Dev Venue A",
       "hostname": "localhost",
+      "port": 8080,
+      "mcp": {},
+      "webdav": { "enabled": true }
+    },
+    {
+      "name": "Local Dev Venue B",
+      "hostname": "localhost",
+      "port": 8081,
       "mcp": {},
       "webdav": { "enabled": true }
     }
