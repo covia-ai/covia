@@ -74,12 +74,31 @@ public class GridAdapter extends AAdapter {
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		invokeFuture(ctx, meta, input).whenComplete((result, error) -> {
 			if (error != null) {
-				Throwable cause = (error instanceof java.util.concurrent.CompletionException) ? error.getCause() : error;
-				job.fail(cause != null ? cause.getMessage() : error.getMessage());
+				job.fail(describeFailure(error));
 			} else {
 				job.completeWith(result);
 			}
 		});
+	}
+
+	/**
+	 * Render a Throwable into a non-empty diagnostic string for {@code Job.fail}.
+	 * Strips {@code CompletionException}/{@code ExecutionException} wrappers and falls back
+	 * to the exception class name when {@code getMessage()} is null (e.g. some
+	 * {@code ConnectException}s) so connection failures never surface as a blank
+	 * error field.
+	 */
+	private static String describeFailure(Throwable t) {
+		Throwable cause = t;
+		while ((cause instanceof java.util.concurrent.CompletionException
+				|| cause instanceof java.util.concurrent.ExecutionException)
+				&& cause.getCause() != null && cause.getCause() != cause) {
+			cause = cause.getCause();
+		}
+		String msg = cause.getMessage();
+		String type = cause.getClass().getSimpleName();
+		if (msg == null || msg.isBlank()) return type;
+		return type + ": " + msg;
 	}
 
 	/**
@@ -195,9 +214,13 @@ public class GridAdapter extends AAdapter {
     private Blob parseJobId(ACell jobIdCell) {
         if (jobIdCell == null) return null;
         try {
-            return Job.parseID(jobIdCell);
+            Blob id = Job.parseID(jobIdCell);
+            if (id == null) {
+                throw new IllegalArgumentException("Invalid job ID format: " + jobIdCell);
+            }
+            return id;
         } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid job ID", e);
+            throw new IllegalArgumentException("Invalid job ID format: " + jobIdCell, e);
         }
     }
 
