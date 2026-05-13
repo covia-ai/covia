@@ -101,16 +101,18 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	private static final AMap<AString, ACell> TOOL_DEF_COMPLETE_TASK = Maps.of(
 		K_NAME, Strings.create(TOOL_COMPLETE_TASK),
 		K_DESCRIPTION, Strings.create(
-			"Complete the in-scope task with a result. "
-			+ "Call this once you have produced the output the requester asked for. "
-			+ "The output will be delivered to the caller. "
+			"Deliver the final result for the in-scope task and end it. "
+			+ "This is TERMINAL: `result` is the only channel back to the caller — "
+			+ "any chat text you write on this turn is NOT seen by them. "
+			+ "Only call this once you have the actual answer to deliver. "
 			+ "The agent and task are determined from the current request context — you do not pass an id."),
 		K_PARAMETERS, Maps.of(
 			K_TYPE, Strings.create("object"),
 			K_PROPERTIES, Maps.of(
 				Fields.RESULT, Maps.of(
-					K_DESCRIPTION, Strings.create("The result to return to the requester. Any JSON value — string, object, array, etc."))
-			)
+					K_DESCRIPTION, Strings.create("The result to return to the requester. Any JSON value — string, object, array, etc. Required: omitting this delivers null to the caller."))
+			),
+			K_REQUIRED, Vectors.of(Strings.create("result"))
 		)
 	);
 
@@ -543,9 +545,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 */
 	private ACell handleCompleteTask(ACell input, ToolContext toolCtx) {
 		ACell result = RT.getIn(input, Fields.RESULT);
-		AMap<AString, ACell> opInput = (result != null)
-			? Maps.of(Fields.RESULT, result)
-			: Maps.empty();
+		if (result == null) return Strings.create(
+			"Error: result is required — complete_task delivers `result` to the caller as the task output. "
+			+ "Call again with the actual answer in `result`, or use fail_task if you cannot complete the task.");
+		AMap<AString, ACell> opInput = Maps.of(Fields.RESULT, result);
 		ACell opResult;
 		try {
 			opResult = engine.jobs().invokeInternal(
