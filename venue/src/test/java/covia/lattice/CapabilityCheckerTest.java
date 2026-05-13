@@ -15,6 +15,7 @@ import covia.grid.Job;
 import covia.lattice.CapabilityChecker;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 
 /**
  * Tests for CapabilityChecker — agent capability enforcement.
@@ -319,8 +320,7 @@ public class CapabilityCheckerTest {
 
 	@Test
 	public void testJobManagerEnforcesContextCaps() {
-		Engine engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
+		Engine engine = TestEngine.ENGINE;
 
 		AVector<ACell> caps = Vectors.of(
 			Capability.create(Strings.create("w/allowed/"), Capability.CRUD_WRITE),
@@ -353,8 +353,7 @@ public class CapabilityCheckerTest {
 		// invokeInternal is the framework dispatch path — no cap check
 		// applied. Trust is established by going through this entry point
 		// rather than invokeOperation. Caps stay on the ctx (no stripping).
-		Engine engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
+		Engine engine = TestEngine.ENGINE;
 
 		AVector<ACell> caps = Vectors.of(
 			Capability.create(Strings.create("w/allowed/"), Capability.CRUD_WRITE)
@@ -381,8 +380,7 @@ public class CapabilityCheckerTest {
 
 	@Test
 	public void testJobManagerNullCapsUnrestricted() {
-		Engine engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
+		Engine engine = TestEngine.ENGINE;
 
 		RequestContext ctx = RequestContext.of(
 			convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey())

@@ -24,11 +24,14 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.LocalVenue;
+import covia.venue.TestEngine;
 
 /**
  * Unit tests for MCP tool registry construction, config-driven filtering,
- * and tool-call routing. Constructs ephemeral engines via
- * {@link Engine#createTemp} so each test can vary its config independently.
+ * and tool-call routing. The engine is shared via {@link TestEngine#ENGINE}
+ * — only the {@link MCP} wrapper varies per test, since the engine itself
+ * is read-only across these scenarios (no mutating writes through the MCP
+ * surface).
  */
 @TestInstance(Lifecycle.PER_CLASS)
 public class MCPRegistryTest {
@@ -37,13 +40,12 @@ public class MCPRegistryTest {
 	private static final AString K_INCLUDE_PATH_PREFIXES = Strings.create("includePathPrefixes");
 
 	/**
-	 * Build a fresh engine with all default adapters registered and v/ops/
-	 * materialised. Equivalent to a production venue's startup.
+	 * Returns the shared engine. Kept as a method so each call site reads
+	 * naturally as "the engine I'm wrapping in this MCP" — the construction
+	 * cost is borne once at class load.
 	 */
 	private Engine freshEngine() {
-		Engine engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
-		return engine;
+		return TestEngine.ENGINE;
 	}
 
 	private MCP mcp(Engine engine, AMap<AString, ACell> mcpConfig) {

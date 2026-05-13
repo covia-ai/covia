@@ -7,6 +7,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -26,6 +27,7 @@ import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 import covia.venue.User;
 import covia.venue.Users;
 
@@ -42,13 +44,15 @@ import covia.venue.Users;
  */
 public class AgentConcurrencyTest {
 
-	private Engine engine;
-	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
+	final Engine engine = TestEngine.ENGINE;
+	// Per-test user DID — each test gets its own user namespace, so agent
+	// names like "rapid", "conc-trig" don't collide across tests on the
+	// shared engine.
+	private AString ALICE_DID;
 
 	@BeforeEach
-	public void setup() {
-		engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
+	public void setup(TestInfo info) {
+		ALICE_DID = TestEngine.uniqueDID(info);
 	}
 
 	// ========== Unit: AgentState CAS operations ==========

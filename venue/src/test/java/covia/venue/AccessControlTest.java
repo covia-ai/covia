@@ -6,6 +6,7 @@ import java.io.IOException;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -20,15 +21,22 @@ import covia.grid.Status;
 
 public class AccessControlTest {
 
-	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
-	private static final AString BOB_DID = Strings.create("did:key:z6MkBob");
+	// Pure-logic tests of AccessControl.canAccessJob() use these literal
+	// DIDs — they don't touch engine state so the shared engine is fine.
+	private static final AString ALICE_LITERAL = Strings.create("did:key:z6MkAlice");
+	private static final AString BOB_LITERAL = Strings.create("did:key:z6MkBob");
 
-	Engine engine;
+	final Engine engine = TestEngine.ENGINE;
+
+	// Per-test DIDs for tests that submit real jobs to the shared engine.
+	// Counting/scoping assertions would break with a shared DID.
+	private AString alice;
+	private AString bob;
 
 	@BeforeEach
-	public void setup() throws IOException {
-		engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
+	public void setup(TestInfo info) throws IOException {
+		alice = TestEngine.uniqueDID(info.getDisplayName() + "-alice");
+		bob = TestEngine.uniqueDID(info.getDisplayName() + "-bob");
 	}
 
 	// ========== AccessControl Unit Tests ==========
@@ -52,7 +60,7 @@ public class AccessControlTest {
 		assertTrue(ac.canAccessJob(venueCtx, venueJob));
 		// Venue does NOT magically own jobs created by other users —
 		// it's just another DID under the new model.
-		AMap<AString, ACell> aliceJob = venueJob.assoc(Fields.CALLER, ALICE_DID);
+		AMap<AString, ACell> aliceJob = venueJob.assoc(Fields.CALLER, ALICE_LITERAL);
 		assertFalse(ac.canAccessJob(venueCtx, aliceJob),
 			"venue ctx is not a wildcard owner — ownership is per-DID");
 	}
@@ -63,10 +71,10 @@ public class AccessControlTest {
 
 		AMap<AString, ACell> aliceJob = Maps.of(
 			Fields.STATUS, Status.PENDING,
-			Fields.CALLER, ALICE_DID,
+			Fields.CALLER, ALICE_LITERAL,
 			Fields.UPDATED, CVMLong.create(1000L));
 
-		assertTrue(ac.canAccessJob(RequestContext.of(ALICE_DID), aliceJob),
+		assertTrue(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), aliceJob),
 			"Owner should be able to access their own job");
 	}
 
@@ -76,10 +84,10 @@ public class AccessControlTest {
 
 		AMap<AString, ACell> aliceJob = Maps.of(
 			Fields.STATUS, Status.PENDING,
-			Fields.CALLER, ALICE_DID,
+			Fields.CALLER, ALICE_LITERAL,
 			Fields.UPDATED, CVMLong.create(1000L));
 
-		assertFalse(ac.canAccessJob(RequestContext.of(BOB_DID), aliceJob),
+		assertFalse(ac.canAccessJob(RequestContext.of(BOB_LITERAL), aliceJob),
 			"Non-owner should be denied access");
 	}
 
@@ -89,7 +97,7 @@ public class AccessControlTest {
 
 		AMap<AString, ACell> aliceJob = Maps.of(
 			Fields.STATUS, Status.PENDING,
-			Fields.CALLER, ALICE_DID,
+			Fields.CALLER, ALICE_LITERAL,
 			Fields.UPDATED, CVMLong.create(1000L));
 
 		assertFalse(ac.canAccessJob(RequestContext.ANONYMOUS, aliceJob),
@@ -105,14 +113,14 @@ public class AccessControlTest {
 			Fields.STATUS, Status.PENDING,
 			Fields.UPDATED, CVMLong.create(1000L));
 
-		assertFalse(ac.canAccessJob(RequestContext.of(ALICE_DID), internalJob),
+		assertFalse(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), internalJob),
 			"Jobs without :caller (venue-internal) are not owned by anyone");
 	}
 
 	@Test
 	public void testNullJobDataDenied() {
 		AccessControl ac = engine.getAccessControl();
-		assertFalse(ac.canAccessJob(RequestContext.of(ALICE_DID), null));
+		assertFalse(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), null));
 	}
 
 	@Test
@@ -121,7 +129,7 @@ public class AccessControlTest {
 
 		// Phase 2: all operations are accessible
 		assertTrue(ac.canAccessOperation(RequestContext.ANONYMOUS, null));
-		assertTrue(ac.canAccessOperation(RequestContext.of(ALICE_DID), null));
+		assertTrue(ac.canAccessOperation(RequestContext.of(ALICE_LITERAL), null));
 		assertTrue(ac.canAccessOperation(engine.venueContext(), null));
 	}
 
@@ -132,7 +140,7 @@ public class AccessControlTest {
 		assertFalse(RequestContext.ANONYMOUS.isAuthenticated());
 		assertTrue(RequestContext.ANONYMOUS.isAnonymous());
 
-		RequestContext authed = RequestContext.of(ALICE_DID);
+		RequestContext authed = RequestContext.of(ALICE_LITERAL);
 		assertTrue(authed.isAuthenticated());
 		assertFalse(authed.isAnonymous());
 
@@ -150,7 +158,7 @@ public class AccessControlTest {
 
 	@Test
 	public void testInvokeWithRequestContext() {
-		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
+		RequestContext aliceCtx = RequestContext.of(alice);
 		Job job = engine.jobs().invokeOperation(
 			"v/test/ops/echo", Maps.of("message", "hello"), aliceCtx);
 		assertNotNull(job, "Should be able to invoke with authenticated context");
@@ -160,7 +168,7 @@ public class AccessControlTest {
 		AMap<AString, ACell> jobData = (AMap<AString, ACell>) job.getData();
 		ACell caller = jobData.get(Fields.CALLER);
 		assertNotNull(caller, "Job record should contain caller field");
-		assertEquals(ALICE_DID, caller);
+		assertEquals(alice, caller);
 	}
 
 	@Test
@@ -175,8 +183,8 @@ public class AccessControlTest {
 
 	@Test
 	public void testGetJobsScopedByCaller() {
-		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
-		RequestContext bobCtx = RequestContext.of(BOB_DID);
+		RequestContext aliceCtx = RequestContext.of(alice);
+		RequestContext bobCtx = RequestContext.of(bob);
 
 		// Alice creates a job
 		Job aliceJob = engine.jobs().invokeOperation(
@@ -185,12 +193,12 @@ public class AccessControlTest {
 		Job bobJob = engine.jobs().invokeOperation(
 			"v/test/ops/echo", Maps.of("message", "bob"), bobCtx);
 
-		// Alice sees only her job
+		// Per-test DIDs — the only jobs under these DIDs are the ones we
+		// just submitted, so an exact count is safe on the shared engine.
 		var aliceJobs = engine.jobs().getJobs(aliceCtx);
 		assertEquals(1, aliceJobs.count(), "Alice should see only her own job");
 		assertNotNull(aliceJobs.get(aliceJob.getID()));
 
-		// Bob sees only his job
 		var bobJobs = engine.jobs().getJobs(bobCtx);
 		assertEquals(1, bobJobs.count(), "Bob should see only his own job");
 		assertNotNull(bobJobs.get(bobJob.getID()));
@@ -199,17 +207,18 @@ public class AccessControlTest {
 	@Test
 	public void testInternalSeesVenueJobs() {
 		// Internal requests see the venue's own DID jobs
-		engine.jobs().invokeOperation(
+		Job venueJob = engine.jobs().invokeOperation(
 			"v/test/ops/echo", Maps.of("message", "venue-internal"), engine.venueContext());
 
 		var venueJobs = engine.jobs().getJobs(engine.venueContext());
-		assertTrue(venueJobs.count() >= 1, "Internal should see venue's own jobs");
+		assertNotNull(venueJobs.get(venueJob.getID()),
+			"Internal should see venue's own jobs");
 	}
 
 	@Test
 	public void testGetJobDataDeniedForNonOwner() {
-		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
-		RequestContext bobCtx = RequestContext.of(BOB_DID);
+		RequestContext aliceCtx = RequestContext.of(alice);
+		RequestContext bobCtx = RequestContext.of(bob);
 
 		// Use a non-completing job so it stays in activeJobs for access control check
 		Job aliceJob = engine.jobs().invokeOperation(
@@ -229,8 +238,8 @@ public class AccessControlTest {
 
 	@Test
 	public void testCancelJobDeniedForNonOwner() {
-		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
-		RequestContext bobCtx = RequestContext.of(BOB_DID);
+		RequestContext aliceCtx = RequestContext.of(alice);
+		RequestContext bobCtx = RequestContext.of(bob);
 
 		Job aliceJob = engine.jobs().invokeOperation(
 			"v/test/ops/delay", Maps.of("delay", 10000), aliceCtx);
@@ -252,7 +261,7 @@ public class AccessControlTest {
 		Job venueJob = engine.jobs().invokeOperation(
 			"v/test/ops/echo", Maps.of("message", "internal"), engine.venueContext());
 
-		RequestContext aliceCtx = RequestContext.of(ALICE_DID);
+		RequestContext aliceCtx = RequestContext.of(alice);
 
 		// Alice cannot see the venue's job in her job list
 		var aliceJobs = engine.jobs().getJobs(aliceCtx);
