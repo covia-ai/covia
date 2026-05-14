@@ -29,6 +29,16 @@ import convex.core.lang.RT;
  *
  * <p>System prompt and tool schemas are handled separately by ContextBuilder.
  * This class focuses on the goal-tree-specific sections.</p>
+ *
+ * <h3>Why the layout matters</h3>
+ *
+ * <p>The progressive-budget ancestor rendering in {@link #renderAncestors}
+ * is the central value of the goal-tree design — it's what lets a deep
+ * decomposition stay within a fixed context budget while the active frame
+ * still gets full fidelity. Removing or flattening it collapses goal-tree
+ * to a flat agent. See class-level docs on
+ * {@link covia.adapter.agent.GoalTreeAdapter} and
+ * {@code venue/docs/GOAL_TREE.md} §"Context Assembly".</p>
  */
 public class GoalTreeContext {
 
@@ -226,9 +236,25 @@ public class GoalTreeContext {
 	// ========== Context rendering ==========
 
 	/**
-	 * Renders ancestor frames as a system message. Each ancestor's conversation
-	 * is rendered by CellExplorer at a decreasing budget (parent ~300B,
-	 * grandparent ~150B, etc.).
+	 * Renders ancestor frames as a single system message. Each ancestor's
+	 * conversation is rendered by CellExplorer at a decreasing byte budget
+	 * (parent ~300B, grandparent ~150B, great-grandparent ~80B, floor at
+	 * {@link #MIN_ANCESTOR_BUDGET}).
+	 *
+	 * <p><b>This is the core of the goal-tree value proposition.</b> Without
+	 * progressive ancestor compaction, every level of decomposition would
+	 * push the conversation transcript verbatim into descendants — a 50-turn
+	 * child of a 50-turn parent of a 50-turn grandparent would inherit ~150
+	 * turns of context, defeating the purpose of decomposition. With it, the
+	 * cost of being deep in the stack is bounded regardless of ancestor
+	 * conversation length.</p>
+	 *
+	 * <p><b>Don't be tempted to drop this</b> as a "redundant" pass — the
+	 * subgoal description is an explicit handoff but does <i>not</i> capture
+	 * the parent's tool calls, intermediate findings, or reasoning. The
+	 * ancestor summary surfaces the live state of the parent's work to the
+	 * child, lossily but bounded. See class-level javadoc and
+	 * {@code venue/docs/GOAL_TREE.md} §"Context Assembly" (lines 147–187).</p>
 	 *
 	 * @param frames the full frame stack (last element is active frame)
 	 * @return system message with rendered ancestor context, or null if root frame

@@ -309,7 +309,13 @@ public class ContextBuilder {
 	public ContextBuilder withFrameStack(AVector<ACell> frames) {
 		if (frames == null || frames.count() == 0) return this;
 
-		// Ancestor summary for deep stacks (single-frame case: no-op)
+		// Progressive ancestor compaction — the central mechanism that lets
+		// goal-tree agents stay within budget no matter how deep the stack
+		// goes. Each ancestor is rendered at a decreasing CellExplorer
+		// budget (parent ~300B, grandparent ~150B, ...) into a single
+		// system message. Don't simplify away — see GoalTreeContext
+		// .renderAncestors and venue/docs/GOAL_TREE.md §"Context Assembly".
+		// (single-frame case: no-op)
 		if (frames.count() > 1) {
 			AMap<AString, ACell> ancestorMsg =
 				covia.adapter.agent.GoalTreeContext.renderAncestors(frames);

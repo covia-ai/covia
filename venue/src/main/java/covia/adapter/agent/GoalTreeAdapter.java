@@ -36,6 +36,27 @@ import covia.venue.RequestContext;
  * stack is in-memory during execution; between transitions only the root frame's
  * conversation is persisted in agent state.</p>
  *
+ * <h3>Why this design exists — read before "simplifying"</h3>
+ *
+ * <p>The frame stack is <b>not</b> just a decomposition convenience. It is the
+ * mechanism that makes long-running agents tractable: at every inference, the
+ * <i>active</i> frame's conversation is rendered in full while ancestor frames
+ * are progressively summarised at decreasing byte budgets (parent ~300B,
+ * grandparent ~150B, great-grandparent ~80B; see
+ * {@link GoalTreeContext#renderAncestors}). A 50-turn child call costs the same
+ * as a 5-turn child call from the parent's perspective on the next turn —
+ * the grandparent stays small even as descendants explode.</p>
+ *
+ * <p>Without this progressive ancestor rendering, the design collapses to a
+ * flat agent and `subgoal` becomes purely cosmetic. Don't remove the ancestor
+ * pass in {@link GoalTreeContext#renderAncestors} or
+ * {@link ContextBuilder#withFrameStack} thinking it's redundant — it is the
+ * value proposition. {@code compact} is the in-frame analogue (live turns →
+ * single summary segment) for keeping the active frame itself bounded.</p>
+ *
+ * <p>Full design: {@code venue/docs/GOAL_TREE.md} — especially §"Context
+ * Assembly".</p>
+ *
  * @see GoalTreeContext for frame data model and context rendering (pure functions)
  * @see AbstractLLMAdapter for shared L3 invocation and tool dispatch
  */
