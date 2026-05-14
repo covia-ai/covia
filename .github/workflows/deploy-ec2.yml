@@ -83,7 +83,8 @@ jobs:
             -p 8080:8080 \
             -v /home/ec2-user/covia-data:/data \
             --restart unless-stopped \
-            ghcr.io/covia-ai/covia:latest
+            ghcr.io/covia-ai/covia:latest \
+            java $JAVA_OPTS -jar covia.jar /data/config.json
 
           # Wait for health check
           sleep 10

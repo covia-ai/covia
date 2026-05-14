@@ -6,6 +6,7 @@ services:
       - "8080:8080"
     volumes:
       - /home/ec2-user/covia-data:/data
+    command: ["java", "-jar", "covia.jar", "/data/config.json"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/"]
