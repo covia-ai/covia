@@ -6,8 +6,19 @@ services:
       - "8080:8080"
     volumes:
       - /home/ec2-user/covia-data:/data
-    command: ["java", "-jar", "covia.jar", "/data/config.json"]
+    command: >
+      java -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0
+      -XX:+UseG1GC -XX:+UseStringDeduplication
+      -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8
+      -jar covia.jar /data/config.json
     restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ap-southeast-1
+        awslogs-group: /covia/venue
+        awslogs-stream: docker-covia-venue
+        awslogs-create-group: "true"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/"]
       interval: 30s

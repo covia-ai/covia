@@ -1,0 +1,212 @@
+{
+  "widgets": [
+    {
+      "type": "text",
+      "x": 0, "y": 0, "width": 24, "height": 1,
+      "properties": {
+        "markdown": "# Covia Venue Dashboard — venue-3.covia.ai"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 1, "width": 8, "height": 4,
+      "properties": {
+        "title": "Health Check Status",
+        "metrics": [
+          ["AWS/Route53", "HealthCheckStatus", "HealthCheckId", "c42b6410-3a12-480b-a12f-a06479b3b4e1", {"label": "venue-3.covia.ai", "region": "us-east-1"}]
+        ],
+        "region": "us-east-1",
+        "period": 60,
+        "stat": "Minimum",
+        "view": "timeSeries",
+        "yAxis": {"left": {"min": 0, "max": 1, "label": "1=Healthy"}},
+        "annotations": {"horizontal": [{"label": "Unhealthy", "value": 1, "color": "#d13212"}]}
+      }
+    },
+    {
+      "type": "alarm",
+      "x": 8, "y": 1, "width": 8, "height": 4,
+      "properties": {
+        "title": "Alarm Status",
+        "alarms": [
+          "arn:aws:cloudwatch:us-east-1:731322152283:alarm:Covia-Venue-Down",
+          "arn:aws:cloudwatch:ap-southeast-1:731322152283:alarm:Covia-High-CPU",
+          "arn:aws:cloudwatch:ap-southeast-1:731322152283:alarm:Covia-High-Memory",
+          "arn:aws:cloudwatch:ap-southeast-1:731322152283:alarm:Covia-Disk-Full"
+        ]
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16, "y": 1, "width": 8, "height": 4,
+      "properties": {
+        "title": "Health Check Latency",
+        "metrics": [
+          ["AWS/Route53", "TimeToFirstByte", "HealthCheckId", "c42b6410-3a12-480b-a12f-a06479b3b4e1", {"label": "Response Time (ms)", "region": "us-east-1"}]
+        ],
+        "region": "us-east-1",
+        "period": 60,
+        "stat": "Average",
+        "view": "timeSeries"
+      }
+    },
+    {
+      "type": "text",
+      "x": 0, "y": 5, "width": 24, "height": 1,
+      "properties": {
+        "markdown": "## System Metrics"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 6, "width": 8, "height": 6,
+      "properties": {
+        "title": "CPU Usage (%)",
+        "metrics": [
+          ["Covia", "cpu_usage_user", "InstanceId", "i-0dbcfa2b48675e7f0", "cpu", "cpu-total", {"label": "User", "color": "#1f77b4"}],
+          ["Covia", "cpu_usage_system", "InstanceId", "i-0dbcfa2b48675e7f0", "cpu", "cpu-total", {"label": "System", "color": "#ff7f0e"}]
+        ],
+        "region": "ap-southeast-1",
+        "period": 60,
+        "stat": "Average",
+        "view": "timeSeries",
+        "stacked": true,
+        "yAxis": {"left": {"min": 0, "max": 100, "label": "%"}},
+        "annotations": {"horizontal": [{"label": "Alarm threshold (90%)", "value": 90, "color": "#d13212"}]}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8, "y": 6, "width": 8, "height": 6,
+      "properties": {
+        "title": "Memory Usage (%)",
+        "metrics": [
+          ["Covia", "mem_used_percent", "InstanceId", "i-0dbcfa2b48675e7f0", {"label": "Used %", "color": "#2ca02c"}]
+        ],
+        "region": "ap-southeast-1",
+        "period": 60,
+        "stat": "Average",
+        "view": "timeSeries",
+        "yAxis": {"left": {"min": 0, "max": 100, "label": "%"}},
+        "annotations": {"horizontal": [{"label": "Alarm threshold (85%)", "value": 85, "color": "#d13212"}]}
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16, "y": 6, "width": 8, "height": 6,
+      "properties": {
+        "title": "Disk Usage (%)",
+        "metrics": [
+          ["Covia", "disk_used_percent", "InstanceId", "i-0dbcfa2b48675e7f0", "path", "/", "device", "nvme0n1p1", "fstype", "xfs", {"label": "/ partition", "color": "#9467bd"}]
+        ],
+        "region": "ap-southeast-1",
+        "period": 300,
+        "stat": "Average",
+        "view": "timeSeries",
+        "yAxis": {"left": {"min": 0, "max": 100, "label": "%"}},
+        "annotations": {"horizontal": [{"label": "Alarm threshold (85%)", "value": 85, "color": "#d13212"}]}
+      }
+    },
+    {
+      "type": "text",
+      "x": 0, "y": 12, "width": 24, "height": 1,
+      "properties": {
+        "markdown": "## Network & Disk I/O"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 13, "width": 8, "height": 5,
+      "properties": {
+        "title": "Network Traffic (bytes)",
+        "metrics": [
+          ["AWS/EC2", "NetworkIn", "InstanceId", "i-0dbcfa2b48675e7f0", {"label": "In", "color": "#1f77b4"}],
+          ["AWS/EC2", "NetworkOut", "InstanceId", "i-0dbcfa2b48675e7f0", {"label": "Out", "color": "#ff7f0e"}]
+        ],
+        "region": "ap-southeast-1",
+        "period": 300,
+        "stat": "Sum",
+        "view": "timeSeries"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8, "y": 13, "width": 8, "height": 5,
+      "properties": {
+        "title": "Disk I/O (bytes)",
+        "metrics": [
+          ["AWS/EC2", "EBSReadBytes", "InstanceId", "i-0dbcfa2b48675e7f0", {"label": "Read", "color": "#2ca02c"}],
+          ["AWS/EC2", "EBSWriteBytes", "InstanceId", "i-0dbcfa2b48675e7f0", {"label": "Write", "color": "#d62728"}]
+        ],
+        "region": "ap-southeast-1",
+        "period": 300,
+        "stat": "Sum",
+        "view": "timeSeries"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16, "y": 13, "width": 8, "height": 5,
+      "properties": {
+        "title": "EC2 Status Checks",
+        "metrics": [
+          ["AWS/EC2", "StatusCheckFailed_Instance", "InstanceId", "i-0dbcfa2b48675e7f0", {"label": "Instance", "color": "#d62728"}],
+          ["AWS/EC2", "StatusCheckFailed_System", "InstanceId", "i-0dbcfa2b48675e7f0", {"label": "System", "color": "#ff7f0e"}],
+          ["AWS/EC2", "StatusCheckFailed", "InstanceId", "i-0dbcfa2b48675e7f0", {"label": "Combined", "color": "#1f77b4"}]
+        ],
+        "region": "ap-southeast-1",
+        "period": 300,
+        "stat": "Maximum",
+        "view": "timeSeries",
+        "yAxis": {"left": {"min": 0, "max": 1, "label": "0=OK"}}
+      }
+    },
+    {
+      "type": "text",
+      "x": 0, "y": 18, "width": 24, "height": 1,
+      "properties": {
+        "markdown": "## Venue Logs (Docker → CloudWatch)"
+      }
+    },
+    {
+      "type": "log",
+      "x": 0, "y": 19, "width": 24, "height": 6,
+      "properties": {
+        "title": "Recent Venue Logs",
+        "query": "SOURCE '/covia/venue' | fields @timestamp, @message | sort @timestamp desc | limit 100",
+        "region": "ap-southeast-1",
+        "view": "table"
+      }
+    },
+    {
+      "type": "log",
+      "x": 0, "y": 25, "width": 12, "height": 6,
+      "properties": {
+        "title": "Error Logs",
+        "query": "SOURCE '/covia/venue' | fields @timestamp, @message | filter @message like /ERROR|Exception|FAIL/ | sort @timestamp desc | limit 50",
+        "region": "ap-southeast-1",
+        "view": "table"
+      }
+    },
+    {
+      "type": "log",
+      "x": 12, "y": 25, "width": 12, "height": 6,
+      "properties": {
+        "title": "Warning Logs",
+        "query": "SOURCE '/covia/venue' | fields @timestamp, @message | filter @message like /WARN/ | sort @timestamp desc | limit 50",
+        "region": "ap-southeast-1",
+        "view": "table"
+      }
+    },
+    {
+      "type": "log",
+      "x": 0, "y": 31, "width": 24, "height": 4,
+      "properties": {
+        "title": "Log Volume (events/min)",
+        "query": "SOURCE '/covia/venue' | stats count(*) as logCount by bin(1m)",
+        "region": "ap-southeast-1",
+        "view": "bar"
+      }
+    }
+  ]
+}

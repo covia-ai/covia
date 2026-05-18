@@ -90,9 +90,14 @@ jobs:
             --name covia-venue \
             -p 8080:8080 \
             -v /home/ec2-user/covia-data:/data \
+            --log-driver=awslogs \
+            --log-opt awslogs-region=ap-southeast-1 \
+            --log-opt awslogs-group=/covia/venue \
+            --log-opt awslogs-stream=docker-covia-venue \
+            --log-opt awslogs-create-group=true \
             --restart unless-stopped \
             ghcr.io/covia-ai/covia:latest \
-            java $JAVA_OPTS -jar covia.jar /data/config.json
+            java -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:+UseG1GC -XX:+UseStringDeduplication -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8 -jar covia.jar /data/config.json
 
           # Wait for health check
           sleep 10
