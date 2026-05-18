@@ -13,9 +13,9 @@ WORKDIR /build
 COPY convex/ /build/convex/
 COPY covia/ /build/covia/
 
-# Build convex with version 0.8.4-SNAPSHOT (covia expects this), then build covia
+# Build convex with version 0.8.5-SNAPSHOT (covia expects this), then build covia
 RUN cd /build/convex \
-    && mvn versions:set -DnewVersion=0.8.4-SNAPSHOT -q \
+    && mvn versions:set -DnewVersion=0.8.5-SNAPSHOT -q \
     && mvn clean install -DskipTests -q \
     && cd /build/covia \
     && mvn clean install -DskipTests -q
