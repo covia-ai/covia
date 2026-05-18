@@ -61,15 +61,23 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build-and-push
+    permissions:
+      packages: read
 
     steps:
     - name: Deploy to EC2
       uses: appleboy/ssh-action@v1
+      env:
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         host: ${{ secrets.EC2_HOST }}
         username: ${{ secrets.EC2_USER }}
         key: ${{ secrets.EC2_SSH_KEY }}
+        envs: GHCR_TOKEN
         script: |
+          # Authenticate to GHCR
+          echo $GHCR_TOKEN | docker login ghcr.io -u github --password-stdin
+
           # Pull latest image
           docker pull ghcr.io/covia-ai/covia:latest
 
