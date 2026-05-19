@@ -128,6 +128,10 @@ public class VenueServer {
 	 * </ul>
 	 */
 	private static AStore createStore(Config config) throws IOException {
+		if (!config.isStoreConfigured()) {
+			log.warn("No 'store' configured — falling back to ephemeral temp Etch store; data will be deleted on JVM exit. Set 'store' to a file path for persistence, or to \"temp\"/\"memory\" to silence this warning.");
+			return EtchStore.createTemp();
+		}
 		String storePath = config.getStore();
 		if ("memory".equals(storePath)) {
 			log.info("Using in-memory store (no persistence)");
@@ -197,6 +201,7 @@ public class VenueServer {
 					Fields.NAME,"Test Venue",
 					Fields.DESCRIPTION,"Unconfigured test venue",
 					Strings.create("port"),null, // This uses default (find a port)
+					Config.STORE,Strings.create("temp"), // explicit temp — silences unconfigured-store warning
 					Fields.MCP,Maps.of(),
 					Fields.A2A,Maps.of(),
 					Config.AUTH,Maps.of(

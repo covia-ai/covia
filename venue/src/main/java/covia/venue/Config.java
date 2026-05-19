@@ -276,6 +276,20 @@ public class Config {
 	}
 
 	/**
+	 * Whether the {@code store} key was explicitly set in config.
+	 *
+	 * <p>Distinguishes a deliberate {@code "store": "temp"} from a missing key
+	 * (which {@link #getStore()} also resolves to {@code "temp"} as a default).
+	 * Use this to warn operators that data will not survive a restart when the
+	 * fallback fires unintentionally.
+	 *
+	 * @return true if {@code store} is present in the config map
+	 */
+	public boolean isStoreConfigured() {
+		return config.get(STORE) != null;
+	}
+
+	/**
 	 * Get the venue identity seed (Ed25519, 32-byte hex).
 	 * @return Hex seed string, or null if not configured
 	 */
