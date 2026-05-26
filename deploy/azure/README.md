@@ -17,7 +17,7 @@ chmod +x deploy/azure/setup.sh
 ./deploy/azure/setup.sh
 ```
 
-This creates: Resource Group, VNet, NSG (ports 22/80/443), Static IP, VM (Standard_B2ps_v2 Arm64, Ubuntu 24.04), Docker, nginx, and Let's Encrypt TLS.
+This creates: Resource Group, VNet, NSG (ports 22/80/443), Static IP, VM (Standard_B2s_v2 x86, Ubuntu 24.04), Docker, nginx, and Let's Encrypt TLS.
 
 The script will pause before the nginx/TLS step and ask you to configure DNS first.
 
@@ -30,11 +30,19 @@ ssh azureuser@<public-ip>
 
 cat > ~/covia-data/config.json << 'EOF'
 {
-  "name": "Covia Venue (Azure)",
-  "hostname": "venue-4.covia.ai",
-  "store": "/data/venue.etch"
+  "venues": [
+    {
+      "name": "Covia Venue (Azure)",
+      "hostname": "venue-4.covia.ai",
+      "store": "/data/venue.etch",
+      "mcp": {}
+    }
+  ]
 }
 EOF
+
+# Fix permissions for container user (UID 1001)
+sudo chown -R 1001:1001 ~/covia-data
 ```
 
 ## GitHub Secrets Required

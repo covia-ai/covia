@@ -81,6 +81,24 @@ jobs:
           # Pull latest image
           docker pull ghcr.io/covia-ai/covia:latest
 
+          # Ensure config exists (venues array format)
+          mkdir -p /home/azureuser/covia-data
+          if [ ! -f /home/azureuser/covia-data/config.json ]; then
+            cat > /home/azureuser/covia-data/config.json <<'CONF'
+          {
+            "venues": [
+              {
+                "name": "Covia Venue (Azure)",
+                "hostname": "venue-4.covia.ai",
+                "store": "/data/venue.etch",
+                "mcp": {}
+              }
+            ]
+          }
+          CONF
+          fi
+          sudo chown -R 1001:1001 /home/azureuser/covia-data
+
           # Stop and remove existing container
           docker stop covia-venue 2>/dev/null || true
           docker rm covia-venue 2>/dev/null || true
