@@ -52,6 +52,72 @@ public class AgentAdapterTest {
 
 	// ========== agent:create ==========
 
+	/**
+	 * Regression for #67 and #69: timeline entries must not snapshot the
+	 * full agent config, and empty collection fields (messages/inbox/etc)
+	 * must be elided. Confirms that the Sessions migration's "only include
+	 * non-empty collections" rule (AgentAdapter.java:1509) holds.
+	 */
+	@Test
+	public void testTimelineEntryOmitsConfigAndEmptyCollections() {
+		// Sizable config that would bloat the timeline if snapshotted per transition
+		AMap<AString, ACell> bigConfig = Maps.of(
+			Fields.OPERATION, Strings.create("v/test/ops/echo"),
+			Strings.create("systemPrompt"), Strings.create(
+				"A relatively long system prompt that we want to confirm is NOT "
+				+ "duplicated across every timeline entry. Repeat repeat repeat."),
+			Strings.create("responseFormat"), Maps.of(
+				Strings.create("name"), Strings.create("Report"),
+				Strings.create("schema"), Maps.of("type", "object"))
+		);
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "timeline-shape-agent", Fields.CONFIG, bigConfig),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User u = engine.getVenueState().users().get(ALICE_DID);
+		AgentState a = u.agent("timeline-shape-agent");
+		Blob sid = Blob.fromHex("eeee0001eeee0001eeee0001eeee0001");
+		a.ensureSession(sid, ALICE_DID);
+		a.appendSessionPending(sid, Maps.of(
+			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			Fields.MESSAGE, Maps.of("content", "hi")));
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "timeline-shape-agent",
+				Fields.WAIT, CVMLong.create(5000)),
+			RequestContext.of(ALICE_DID)).awaitResult(6000);
+
+		AVector<ACell> timeline = u.agent("timeline-shape-agent").getTimeline();
+		assertNotNull(timeline, "Timeline should exist after trigger");
+		assertTrue(timeline.count() >= 1, "At least one timeline entry expected");
+
+		for (ACell entryCell : timeline) {
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> entry = (AMap<AString, ACell>) entryCell;
+
+			// #67: per-entry config snapshot must not appear
+			assertNull(entry.get(AgentState.KEY_CONFIG),
+				"#67: timeline entry must not snapshot full config; got: " + entry);
+			assertNull(entry.get(AgentState.KEY_STATE),
+				"#67: timeline entry must not snapshot full state; got: " + entry);
+
+			// #69: empty collections must be elided, not stored as empty
+			ACell messages = entry.get(Fields.MESSAGES);
+			if (messages != null) {
+				assertTrue(RT.ensureVector(messages).count() > 0,
+					"#69: empty 'messages' must be omitted, not stored as empty vector");
+			}
+			ACell tasks = entry.get(Fields.TASKS);
+			if (tasks != null) {
+				assertTrue(RT.ensureVector(tasks).count() > 0,
+					"#69: empty 'tasks' must be omitted, not stored as empty vector");
+			}
+		}
+	}
+
 	@Test
 	public void testCreateAgent() {
 		ACell input = Maps.of(Fields.AGENT_ID, "my-assistant");
