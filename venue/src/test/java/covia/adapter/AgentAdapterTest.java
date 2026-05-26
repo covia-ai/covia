@@ -104,15 +104,24 @@ public class AgentAdapterTest {
 			assertNull(entry.get(AgentState.KEY_STATE),
 				"#67: timeline entry must not snapshot full state; got: " + entry);
 
-			// #69: empty collections must be elided, not stored as empty
+			// #69: empty collections must be elided, not stored as empty.
+			// RT.ensureVector returns null on a non-vector — guard before
+			// reading count so a regression that stored e.g. an empty map
+			// fails with a clean assertion, not NPE.
 			ACell messages = entry.get(Fields.MESSAGES);
 			if (messages != null) {
-				assertTrue(RT.ensureVector(messages).count() > 0,
+				AVector<?> messagesVec = RT.ensureVector(messages);
+				assertNotNull(messagesVec,
+					"Fields.MESSAGES must be a vector when present; got: " + messages);
+				assertTrue(messagesVec.count() > 0,
 					"#69: empty 'messages' must be omitted, not stored as empty vector");
 			}
 			ACell tasks = entry.get(Fields.TASKS);
 			if (tasks != null) {
-				assertTrue(RT.ensureVector(tasks).count() > 0,
+				AVector<?> tasksVec = RT.ensureVector(tasks);
+				assertNotNull(tasksVec,
+					"Fields.TASKS must be a vector when present; got: " + tasks);
+				assertTrue(tasksVec.count() > 0,
 					"#69: empty 'tasks' must be omitted, not stored as empty vector");
 			}
 		}
