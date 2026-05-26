@@ -34,10 +34,97 @@ import dev.langchain4j.model.chat.request.json.JsonStringSchema;
 
 import java.util.List;
 
+import covia.grid.Status;
+import covia.venue.Engine;
+import covia.venue.RequestContext;
+
 /**
  * Unit tests for LangChainAdapter conversion methods.
  */
 public class LangChainAdapterTest {
+
+	// ========== #91 regression: silent fallback when secret resolution fails ==========
+
+	/**
+	 * #91: When the configured secret cannot be resolved (no secret stored,
+	 * or the concurrent-resolution race), the adapter must return a clear
+	 * Status.failure inside its CompletableFuture — not throw synchronously,
+	 * not silently call the provider with junk auth.
+	 */
+	@Test
+	public void testAnthropicMissingSecretReturnsClearError() throws Exception {
+		assertMissingSecretReportsClearly("langchain:anthropic", "ANTHROPIC_API_KEY");
+	}
+
+	@Test
+	public void testOpenAiMissingSecretReturnsClearError() throws Exception {
+		assertMissingSecretReportsClearly("langchain:openai", "OPENAI_API_KEY");
+	}
+
+	/**
+	 * #91: When the caller passes an apiKey of the form "/s/<name>" but the
+	 * named secret can't be resolved, the literal "/s/<name>" must NOT be
+	 * passed through to the provider as the API key. (Doing so would cause
+	 * a 401 with a confusing message — exactly what the bug report saw.)
+	 */
+	@Test
+	public void testAnthropicUnresolvedSecretRefReturnsClearError() throws Exception {
+		Engine engine = Engine.createTemp(null);
+		Engine.addDemoAssets(engine);
+		RequestContext ctx = RequestContext.of(Strings.create("did:key:zTestNoSecret"));
+
+		AMap<AString, ACell> meta = Maps.of(
+			Strings.create("operation"), Maps.of(
+				Strings.create("adapter"), Strings.create("langchain:anthropic")
+			)
+		);
+		ACell input = Maps.of(
+			Strings.create("prompt"), Strings.create("hi"),
+			Strings.create("apiKey"), Strings.create("/s/anthropic"),
+			Strings.create("url"), Strings.create("http://127.0.0.1:1/")
+		);
+
+		LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
+		ACell result = adapter.invokeFuture(ctx, meta, input).get(5, java.util.concurrent.TimeUnit.SECONDS);
+
+		assertFailureMentioning(result, "/s/anthropic");
+	}
+
+	private static void assertMissingSecretReportsClearly(String adapterOp, String secretName) throws Exception {
+		Engine engine = Engine.createTemp(null);
+		Engine.addDemoAssets(engine);
+		RequestContext ctx = RequestContext.of(Strings.create("did:key:zTestNoSecret"));
+
+		AMap<AString, ACell> meta = Maps.of(
+			Strings.create("operation"), Maps.of(
+				Strings.create("adapter"), Strings.create(adapterOp),
+				Strings.create("secretKey"), Strings.create(secretName)
+			)
+		);
+		ACell input = Maps.of(
+			Strings.create("prompt"), Strings.create("hi"),
+			// Closed port so an accidental HTTP call would fail fast — but the
+			// fix should make the adapter fail BEFORE attempting any dial.
+			Strings.create("url"), Strings.create("http://127.0.0.1:1/")
+		);
+
+		LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
+		ACell result = adapter.invokeFuture(ctx, meta, input).get(5, java.util.concurrent.TimeUnit.SECONDS);
+		assertFailureMentioning(result, secretName);
+	}
+
+	private static void assertFailureMentioning(ACell result, String hint) {
+		AString status = RT.ensureString(RT.getIn(result, Strings.create("status")));
+		assertEquals(Status.FAILED, status,
+			"Expected FAILED status, got: " + result);
+		AString message = RT.ensureString(RT.getIn(result, Strings.create("message")));
+		assertNotNull(message, "Failure must carry a message");
+		String lower = message.toString().toLowerCase();
+		assertTrue(lower.contains("api key") || lower.contains("secret"),
+			"Failure message should mention API key / secret, got: " + message);
+		assertTrue(message.toString().contains(hint),
+			"Failure message should reference the secret name/ref '" + hint + "', got: " + message);
+	}
 
 	// ========== toResponseFormat ==========
 

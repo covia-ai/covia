@@ -157,11 +157,27 @@ public class LangChainAdapter extends AAdapter {
 		// Resolve API key
 		final String apiKey = resolveApiKey(meta, input, ctx);
 
+		// Providers that need a key must fail fast with a clear message —
+		// without this, langchain4j's Anthropic builder throws synchronously
+		// (breaking the CompletableFuture contract) and OpenAI silently sends
+		// a request with junk auth, producing the misleading "you didn't provide
+		// an API key" error from OpenAI's server. See #91.
+		if (providerNeedsApiKey(provider) && (apiKey == null || apiKey.isBlank())) {
+			AString apiKeyParam = RT.ensureString(RT.getIn(input, "apiKey"));
+			AString secretName = RT.ensureString(RT.getIn(meta, "operation", "secretKey"));
+			String hint = apiKeyParam != null ? apiKeyParam.toString()
+					: secretName != null ? "/s/" + secretName
+					: "<no apiKey or operation.secretKey configured>";
+			return CompletableFuture.completedFuture(
+				Status.failure("API key not found for provider '" + provider + "' at " + hint)
+			);
+		}
+
 		// Build the ChatModel
 		final ChatModel chatModel = buildProviderModel(provider, finalModelName, apiKey, urlParam);
 		if (chatModel == null) {
 			return CompletableFuture.completedFuture(
-				Status.failure("Unknown provider: '" + provider + "'. Supported: 'ollama', 'openai'")
+				Status.failure("Unknown provider: '" + provider + "'. Supported: 'ollama', 'openai', 'anthropic'")
 			);
 		}
 
@@ -205,6 +221,10 @@ public class LangChainAdapter extends AAdapter {
 	}
 
 	// ========== Model construction ==========
+
+	static boolean providerNeedsApiKey(String provider) {
+		return "openai".equals(provider) || "anthropic".equals(provider);
+	}
 
 	private ChatModel buildProviderModel(String provider, String modelName, String apiKey, AString urlParam) {
 		if ("ollama".equals(provider)) {
@@ -276,9 +296,15 @@ public class LangChainAdapter extends AAdapter {
 	private String resolveApiKey(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		AString apiKeyParam = RT.ensureString(RT.getIn(input, "apiKey"));
 		if (apiKeyParam != null) {
-			String resolved = engine.resolveSecret(apiKeyParam.toString(), ctx);
-			if (resolved != null) return resolved;
-			return apiKeyParam.toString();
+			String s = apiKeyParam.toString();
+			// A "/s/..." or "s/..." prefix means this is a reference into the
+			// caller's secret store. If resolution fails we MUST return null
+			// rather than the literal reference — passing "/s/foo" through as
+			// an API key produces a misleading 401 from the provider (see #91).
+			if (s.startsWith("/s/") || s.startsWith("s/")) {
+				return engine.resolveSecret(s, ctx);
+			}
+			return s;
 		}
 		AString secretName = RT.ensureString(RT.getIn(meta, "operation", "secretKey"));
 		if (secretName != null) {
