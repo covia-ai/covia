@@ -142,6 +142,26 @@ public class Engine {
 	private static final long SWEEP_INTERVAL_MS = 100;
 
 	/**
+	 * How often the sweep forces a store-level fsync. The sweep runs every
+	 * {@link #SWEEP_INTERVAL_MS} but only calls {@link PersistenceHandler#flush()}
+	 * if at least this many ms have elapsed since the last flush. Bounds the
+	 * data-loss window on unclean shutdown (kernel panic, power loss, hard
+	 * VM stop) to roughly this interval. App-requested {@link #flush()} resets
+	 * the counter, so explicit flushes naturally suppress the periodic one.
+	 *
+	 * <p>Package-private (non-final, volatile) so tests can shrink the
+	 * interval to exercise the cadence quickly. Tests must restore the
+	 * original value. Volatile ensures the sweep daemon thread sees the
+	 * change without a synchronisation primitive — without this, the JIT
+	 * may cache the field per thread and tests changing it from the test
+	 * thread won't affect the sweep.</p>
+	 */
+	static volatile long FLUSH_INTERVAL_MS = 10_000;
+
+	/** Timestamp of the last completed flush. Initialised at construction. */
+	private volatile long lastFlushMillis;
+
+	/**
 	 * Primary constructor: Engine receives an ALatticeCursor from its caller.
 	 * Engine is agnostic to persistence and replication — it just uses the cursor.
 	 * Generates a new random key pair for this venue.
@@ -176,6 +196,7 @@ public class Engine {
 		this.keyPair=keyPair;
 		this.lattice=cursor;
 		this.persistHandler = (persistHandler != null) ? persistHandler : PersistenceHandler.NOOP;
+		this.lastFlushMillis = System.currentTimeMillis();
 		// Set signing context so SignedCursor can sign writes through OwnerLattice
 		LatticeContext ctx = LatticeContext.create(null, this.keyPair);
 		this.lattice.withContext(ctx);
@@ -335,6 +356,16 @@ public class Engine {
 		try {
 			venueState.sync();   // pull fork writes into the root
 			lattice.sync();      // fire NodeServer.onSync → propagator
+			// Periodic durability barrier. The propagator's setRootData
+			// writes new root data to the mmap'd Etch but does not fsync;
+			// the OS may take minutes to write dirty pages out on its own.
+			// Forcing fsync every FLUSH_INTERVAL_MS bounds the unclean-
+			// shutdown data-loss window. Cheap on idle venues — fsync of
+			// an unchanged file is a no-op below the kernel.
+			if (System.currentTimeMillis() - lastFlushMillis >= FLUSH_INTERVAL_MS) {
+				persistHandler.flush();
+				lastFlushMillis = System.currentTimeMillis();
+			}
 		} catch (Exception e) {
 			log.warn("Persistence sweep failed", e);
 		}
@@ -359,7 +390,13 @@ public class Engine {
 	 */
 	public void flush() {
 		venueState.sync();                   // pull fork into root
-		persistHandler.persist(lattice.get()); // synchronous persist
+		persistHandler.persist(lattice.get()); // synchronous persist (mmap)
+		try {
+			persistHandler.flush();            // fsync — durable on disk
+		} catch (java.io.IOException e) {
+			throw new RuntimeException("flush failed", e);
+		}
+		lastFlushMillis = System.currentTimeMillis();
 	}
 
 	/**
@@ -402,6 +439,7 @@ public class Engine {
 		try {
 			venueState.sync();
 			persistHandler.persist(lattice.get());
+			persistHandler.flush();
 		} catch (Exception e) {
 			log.warn("Final persistence flush failed during close", e);
 		}

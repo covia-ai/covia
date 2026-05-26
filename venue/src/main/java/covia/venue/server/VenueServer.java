@@ -88,13 +88,30 @@ public class VenueServer {
 			this.nodeServer = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			nodeServer.setMergeContext(LatticeContext.create(null, keyPair));
 			nodeServer.launch(); // restore from store BEFORE Engine init
-			// Wire the synchronous persistence handler — used by Engine.flush()
-			// and the close-time final flush. See venue/docs/PERSISTENCE.md §5.0.
-			covia.venue.PersistenceHandler persistHandler = value -> {
-				try {
-					nodeServer.persistSnapshot(value);
-				} catch (java.io.IOException e) {
-					throw new RuntimeException("persistSnapshot failed", e);
+			// Wire the synchronous persistence handler — used by Engine.flush(),
+			// the periodic flush sweep, and the close-time final flush. See
+			// venue/docs/PERSISTENCE.md §5.0.
+			//
+			// persist() pushes the snapshot through the propagator's
+			// setRootData (mmap write); flush() forces fsync so the bytes are
+			// actually on disk before the call returns. Only EtchStore has a
+			// real fsync to call — for other store types (memory, etc.) the
+			// flush is implicitly a no-op.
+			final AStore wiredStore = this.store;
+			covia.venue.PersistenceHandler persistHandler = new covia.venue.PersistenceHandler() {
+				@Override
+				public void persist(ACell value) {
+					try {
+						nodeServer.persistSnapshot(value);
+					} catch (java.io.IOException e) {
+						throw new RuntimeException("persistSnapshot failed", e);
+					}
+				}
+				@Override
+				public void flush() throws java.io.IOException {
+					if (wiredStore instanceof EtchStore es) {
+						es.flush();
+					}
 				}
 			};
 			engine = new Engine(config, nodeServer.getCursor(), keyPair, persistHandler);
