@@ -88,6 +88,39 @@ import covia.venue.Users;
  * {@link RequestContext} carries an agentId (set by the harness during agent
  * execution), {@code n/foo} is rewritten to {@code g/{agentId}/n/foo},
  * providing agents with a private read/write workspace within their record.</p>
+ *
+ * <h3>Consistency model</h3>
+ *
+ * <p>All native covia CRUD sub-operations ({@code read}, {@code write},
+ * {@code delete}, {@code append}, {@code list}, {@code slice}, {@code copy},
+ * {@code inspect}) are <b>strongly consistent and synchronous</b> on the
+ * in-memory lattice cursor. {@link #invokeFuture} dispatches every handler via
+ * {@link CompletableFuture#completedFuture(Object)} — the cursor mutation has
+ * already completed before the returned future resolves. There is no async
+ * commit phase, no lazy path-index projection, and no
+ * {@code STARTED → COMPLETE} lifecycle for these calls (that pattern belongs
+ * to job-managed operations dispatched through
+ * {@link covia.venue.JobManager}, not to native CRUD).</p>
+ *
+ * <p>Guarantees, for any single caller DID:</p>
+ * <ul>
+ *   <li>A {@code covia:write} is immediately visible to the next
+ *       {@code covia:read}, {@code covia:list}, or {@code covia:slice} on
+ *       the same path or any ancestor.</li>
+ *   <li>A {@code covia:delete} is immediately reflected in subsequent reads
+ *       and lists — no tombstone settling, no eventual visibility.</li>
+ *   <li>{@code covia:list} counts are stable across repeated calls when no
+ *       writers are active.</li>
+ *   <li>Concurrent writes to distinct keys from the same caller all survive
+ *       (no lost updates).</li>
+ * </ul>
+ *
+ * <p>Each caller DID has its own {@link covia.venue.User} lattice — cross-DID
+ * calls target different namespaces and will not see each other's data. If a
+ * caller's effective identity changes between requests (e.g. across a venue
+ * restart that rotated the venue's signing key), apparent "wobble" in counts
+ * or "disappearing" writes are a consequence of that identity change, not of
+ * any consistency gap in this adapter.</p>
  */
 public class CoviaAdapter extends AAdapter {
 
