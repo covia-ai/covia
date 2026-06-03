@@ -1154,15 +1154,31 @@ public class AgentAdapter extends AAdapter {
 			job.completeWith(immediateResult);
 			return;
 		}
+		// Make the blocking wait cancellable. A per-caller signal races against
+		// the shared run-loop future: job.cancel() completes the signal, which
+		// unblocks THIS wait without cancelling the loop — other waiters attached
+		// to `completion` are unaffected, and we never touch `completion` itself.
+		CompletableFuture<ACell> cancelSignal = new CompletableFuture<>();
+		job.setCancelHook(() -> cancelSignal.complete(null));
+		// A cancel may have landed between STARTED and hook registration.
+		if (job.isFinished()) { job.setCancelHook(null); return; }
+		CompletableFuture<ACell> raced = completion.applyToEither(cancelSignal, x -> x);
 		try {
 			ACell cycleResult = (waitMs < 0)
-				? completion.join()
-				: completion.get(waitMs, TimeUnit.MILLISECONDS);
-			job.completeWith(resultMapper.apply(cycleResult));
-		} catch (TimeoutException e) {
-			job.completeWith(immediateResult);
+				? raced.join()
+				: raced.get(waitMs, TimeUnit.MILLISECONDS);
+			// A cancel during the wait already set CANCELLED — don't overwrite it
+			// with a stale completion result.
+			if (!job.isFinished()) job.completeWith(resultMapper.apply(cycleResult));
 		} catch (Exception e) {
-			job.completeWith(immediateResult);
+			// Bounded wait elapsed, or the loop future failed: RUNNING snapshot,
+			// unless a cancel already finished the job.
+			if (!job.isFinished()) job.completeWith(immediateResult);
+		} finally {
+			job.setCancelHook(null);
+			// Detach `raced` from `completion` on the timeout path so a
+			// never-draining loop doesn't accumulate dependents.
+			cancelSignal.complete(null);
 		}
 	}
 

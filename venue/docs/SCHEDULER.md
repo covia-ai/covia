@@ -137,6 +137,11 @@ loop drained all outstanding work. A `RUNNING` snapshot means the loop
 is still processing (either mid-transition or iterating through more
 work); the caller can poll status to observe quiescence.
 
+Cancelling the trigger Job ends its `wait` early — `job.cancel()` completes
+a per-caller signal raced against the loop's `CompletableFuture`, so the
+blocked caller returns at once. Only that caller's wait stops; the run loop
+is untouched and keeps running for any other waiters.
+
 **Use cases:** manual kicks, diagnostic runs, resume from SUSPENDED, nudging
 a stuck agent, tests. Not the common path — events (Path 2) and timers
 (Path 3) cover normal operation. Path 4 (async completion) becomes

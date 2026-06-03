@@ -328,9 +328,7 @@ public class JobCancellationTest {
 	// ========== Cancel agent:trigger with wait ==========
 
 	@Test
-	public void testCancelTriggerDuringWait() {
-		// Use a chat agent (fast LLM) so the trigger actually runs.
-		// Cancel mid-wait — the trigger should terminate promptly.
+	public void testCancelTriggerDuringWait() throws Exception {
 		createNeverAgent("trigger-cancel-agent");
 
 		// Deliver a message so the agent has work
@@ -340,25 +338,42 @@ public class JobCancellationTest {
 				Fields.MESSAGE, Strings.create("wake up")),
 			ctx).awaitResult(5000);
 
-		// Trigger with long wait — blocks up to 30s
-		Job triggerJob = engine.jobs().invokeOperation(
-			"v/ops/agent/trigger",
-			Maps.of(Fields.AGENT_ID, "trigger-cancel-agent",
-				Fields.WAIT, CVMLong.create(30000)),
-			ctx);
+		// agent:trigger blocks the *calling* thread on the run-loop future, so a
+		// caller can never cancel its own trigger. Run it on a background thread
+		// and cancel by id from the test thread — exactly how a separate cancel
+		// request cancels it in production. With a cancellable wait this returns
+		// in milliseconds; the 30s WAIT only elapses if the fix regresses (caught
+		// by the bounded get below, not by a 30s hang).
+		java.util.HashSet<Blob> before = new java.util.HashSet<>();
+		for (var e : engine.jobs().getJobs(ctx).entrySet()) before.add(e.getKey());
 
-		pollUntilStatus(triggerJob, "STARTED", 5000);
+		CompletableFuture<Job> triggerDone = new CompletableFuture<>();
+		Thread.ofVirtual().start(() -> {
+			try {
+				triggerDone.complete(engine.jobs().invokeOperation(
+					"v/ops/agent/trigger",
+					Maps.of(Fields.AGENT_ID, "trigger-cancel-agent",
+						Fields.WAIT, CVMLong.create(30000)),
+					ctx));
+			} catch (Throwable t) {
+				triggerDone.completeExceptionally(t);
+			}
+		});
+
+		// The trigger is the only new job for this caller after the snapshot.
+		Blob triggerId = pollForNewJob(ctx, before, 5000);
+		assertNotNull(triggerId, "Trigger job should be submitted and visible");
+
 		long cancelTime = System.currentTimeMillis();
-		triggerJob.cancel();
-		pollUntilFinished(triggerJob, 5000);
+		engine.jobs().cancelJob(triggerId);
 
+		Job triggerJob = triggerDone.get(5, java.util.concurrent.TimeUnit.SECONDS);
 		long elapsed = System.currentTimeMillis() - cancelTime;
-		assertTrue(triggerJob.isFinished(),
-			"Trigger should be finished after cancel");
-		// The trigger either got cancelled or completed before we could
-		// cancel it (race). Either way, it shouldn't block for 30s.
-		assertTrue(elapsed < 10000,
-			"Cancel should take effect promptly, took " + elapsed + "ms");
+
+		assertTrue(triggerJob.isFinished(), "Trigger should be finished after cancel");
+		assertEquals("CANCELLED", triggerJob.getStatus().toString());
+		assertTrue(elapsed < 5000,
+			"Cancel must unblock the wait promptly, took " + elapsed + "ms");
 	}
 
 	// ========== Double cancel is safe ==========
@@ -436,6 +451,18 @@ public class JobCancellationTest {
 		// The agent's run creates a transition job — look for it
 		// by checking active jobs. This is a best-effort helper.
 		return null; // Not critical for the test assertions
+	}
+
+	/** Polls the caller's job index for the first job id not in {@code known}. */
+	private Blob pollForNewJob(RequestContext ctx, java.util.Set<Blob> known, long timeoutMs) {
+		long deadline = System.currentTimeMillis() + timeoutMs;
+		while (System.currentTimeMillis() < deadline) {
+			for (var e : engine.jobs().getJobs(ctx).entrySet()) {
+				if (!known.contains(e.getKey())) return e.getKey();
+			}
+			Thread.yield();
+		}
+		return null;
 	}
 
 	private void pollUntilStatus(Job job, String status, long timeoutMs) {

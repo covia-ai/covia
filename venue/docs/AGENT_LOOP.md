@@ -624,6 +624,12 @@ the loop is still processing. The transition always runs once per
 trigger, even with no pending work, so an agent may act proactively on
 a trigger.
 
+Cancelling the trigger Job ends its `wait` immediately: `job.cancel()`
+completes a per-caller signal raced against the loop's completion future,
+so the waiting thread unblocks at once. This stops only that caller's
+wait — the run loop itself is untouched and continues for any other
+waiters attached to the same future.
+
 **Run exclusion.** The in-memory `runningLoops`
 (`ConcurrentHashMap<agentId, CompletableFuture>`) is the source of truth
 for whether a loop is live. Launch is serialised by an atomic CAS via
