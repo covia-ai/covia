@@ -10,6 +10,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Execution;
+import org.junit.jupiter.api.parallel.ExecutionMode;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
@@ -43,6 +46,14 @@ import covia.lattice.Covia;
  * touch a real Etch file — the contract under test is purely about WHEN
  * the handler's {@code flush()} is invoked.</p>
  */
+// Mutates the global static Engine.FLUSH_INTERVAL_MS, so it must not run
+// concurrently with anything (@Isolated) and its own methods must not
+// interleave their set/restore of that static (@Execution SAME_THREAD).
+// Without this it flakes under the parallel suite: a concurrent method's
+// @AfterEach restore to the 10s default is observed by another method's
+// engine sweep, which then waits the full 10s and times out.
+@Isolated("mutates global static Engine.FLUSH_INTERVAL_MS")
+@Execution(ExecutionMode.SAME_THREAD)
 public class EngineFlushSweepTest {
 
 	/**

@@ -611,14 +611,16 @@ public class ContextBuilder {
 
 		AVector<ACell> baseTools = Vectors.empty();
 		if (useDefaults) {
-			DefaultToolsCacheEntry cached = DEFAULT_TOOL_CACHE.get(engine);
-			if (cached == null) {
-				// Cache miss: build the default tools and store the result
+			// Atomic population: a plain get-then-put let concurrent first-callers
+			// on the same Engine each build and store a different entry, so the
+			// "stable cached instance" contract broke under parallel tests
+			// (ContextBuilderTest.testDefaultToolsCached). computeIfAbsent builds
+			// once per Engine and every caller sees the same instance.
+			DefaultToolsCacheEntry cached = DEFAULT_TOOL_CACHE.computeIfAbsent(engine, e -> {
 				Map<String, AString> freshMap = new HashMap<>();
 				AVector<ACell> freshTools = buildConfigTools(DEFAULT_TOOL_OPS, freshMap);
-				cached = new DefaultToolsCacheEntry(freshTools, freshMap);
-				DEFAULT_TOOL_CACHE.put(engine, cached);
-			}
+				return new DefaultToolsCacheEntry(freshTools, freshMap);
+			});
 			baseTools = cached.tools;
 			// Copy the cached tool map into our per-build map so callers
 			// can mutate it (e.g. add config tools below) without poisoning
