@@ -507,66 +507,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Returns a future that completes when this agent reaches SLEEPING, or
-	 * completes exceptionally with {@link java.util.concurrent.TimeoutException}
-	 * if it does not within {@code timeoutMs}.
-	 *
-	 * <p>Implemented by polling the agent record (10ms intervals) on a daemon
-	 * virtual thread. Used by tests to wait for the run loop to quiesce.
-	 * Production code should react to session pending or task deliveries
-	 * rather than poll agent status.</p>
-	 *
-	 * <p>The internal poll is <b>bounded</b> by {@code timeoutMs} and always
-	 * terminates, so a caller that gives up never leaves a poll running. The
-	 * previous version polled an unbounded loop on the common pool and leaked a
-	 * worker whenever the agent exited via SUSPENDED/error rather than SLEEPING
-	 * — under the parallel suite those accumulated and wedged the run.</p>
-	 *
-	 * <p>TODO: this status-polling construct is fragile and spends a thread per
-	 * waiter; replace it with a signal-based wait — have the run loop complete
-	 * registered waiters when the agent transitions to SLEEPING, instead of
-	 * polling a shared status field.</p>
-	 */
-	public java.util.concurrent.CompletableFuture<Void> awaitSleeping(long timeoutMs) {
-		java.util.concurrent.CompletableFuture<Void> cf = new java.util.concurrent.CompletableFuture<>();
-		long deadline = System.currentTimeMillis() + timeoutMs;
-		// Daemon virtual thread, NOT the common pool: a lingering poll must not
-		// occupy a shared worker. Bounded by the deadline so it always terminates.
-		Thread.ofVirtual().start(() -> {
-			// Exponential backoff (5ms → ×1.5 → 200ms cap). A tight fixed poll
-			// under the parallel suite contends with the run-loop threads it is
-			// waiting on, which can keep the agent from reaching SLEEPING and
-			// fire the timeout spuriously. Each sleep is clamped to the time
-			// left, so the deadline still fires precisely.
-			long delay = 5;
-			while (!SLEEPING.equals(getStatus())) {
-				long remaining = deadline - System.currentTimeMillis();
-				if (remaining <= 0) {
-					cf.completeExceptionally(new java.util.concurrent.TimeoutException(
-						"Agent did not reach SLEEPING within " + timeoutMs + "ms"));
-					return;
-				}
-				try {
-					Thread.sleep(Math.min(delay, remaining));
-				} catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
-					return;
-				}
-				delay = Math.min(delay * 3 / 2, 200);
-			}
-			cf.complete(null);
-		});
-		return cf;
-	}
-
-	/**
-	 * Awaits SLEEPING with a default 10s bound. See {@link #awaitSleeping(long)}.
-	 */
-	public java.util.concurrent.CompletableFuture<Void> awaitSleeping() {
-		return awaitSleeping(10_000);
-	}
-
-	/**
 	 * Merges config and/or state fields into the existing agent record.
 	 *
 	 * <p>Incoming maps are shallow-merged into the existing values so that

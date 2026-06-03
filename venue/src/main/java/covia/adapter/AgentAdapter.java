@@ -1183,6 +1183,45 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
+	 * Waits for the agent's in-flight run (if any) to reach a rest state
+	 * (SLEEPING, SUSPENDED or TERMINATED) and returns that state.
+	 *
+	 * <p><b>Pure observer — it never wakes or starts the agent.</b> It reads the
+	 * run loop's existing completion future from {@link #runningLoops} (the same
+	 * future {@code agent:trigger} awaits): if a run is in flight it attaches and
+	 * waits; otherwise the agent is already at rest and the current status is
+	 * returned at once. No status polling, no thread to leak, and — unlike a
+	 * {@code wakeAgent} call — no side effect on the shared engine. A run that
+	 * ends via error (the loop suspends the agent and completes the future
+	 * exceptionally) still counts as finished; only a run still RUNNING past
+	 * {@code timeoutMs} times out.</p>
+	 *
+	 * <p>Intended for callers observing a run they already triggered; it does not
+	 * wait for a run that has not started yet.</p>
+	 *
+	 * @return the rest state reached (SLEEPING / SUSPENDED / TERMINATED)
+	 * @throws TimeoutException if the run is still RUNNING after {@code timeoutMs}
+	 */
+	AString awaitRunFinished(AString agentId, RequestContext ctx, long timeoutMs)
+			throws TimeoutException {
+		CompletableFuture<ACell> f = runningLoops.get(agentId); // observe only — do NOT wake
+		if (f != null && !f.isDone()) {
+			try {
+				f.get(timeoutMs, TimeUnit.MILLISECONDS);
+			} catch (TimeoutException e) {
+				throw e; // genuinely still running — caller's bound exceeded
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			} catch (java.util.concurrent.ExecutionException e) {
+				// Run finished via error: the loop suspended the agent and
+				// completed the future exceptionally. That is still a finish.
+			}
+		}
+		AgentState agent = getAgent(ctx.getCallerDID(), agentId);
+		return agent == null ? AgentState.TERMINATED : agent.getStatus();
+	}
+
+	/**
 	 * Wakes the agent: persists the wake flag and launches a fresh run loop
 	 * if none is currently running. Returns the live loop's completion
 	 * future, or null if the agent doesn't exist / has no work and wake

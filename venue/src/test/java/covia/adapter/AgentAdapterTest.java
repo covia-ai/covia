@@ -50,6 +50,21 @@ public class AgentAdapterTest {
 		BOB_DID = Strings.create(ALICE_DID.toString() + "-bob");
 	}
 
+	/**
+	 * Waits — signal-based, via the run loop's completion future — for the agent
+	 * to reach a rest state (SLEEPING/SUSPENDED/TERMINATED) and returns it; fails
+	 * the test if it is still RUNNING after 10s.
+	 */
+	private AString awaitFinished(AgentState agent) {
+		try {
+			return ((AgentAdapter) engine.getAdapter("agent"))
+				.awaitRunFinished(agent.getAgentId(), RequestContext.of(ALICE_DID), 10_000);
+		} catch (java.util.concurrent.TimeoutException e) {
+			throw new AssertionError("Agent '" + agent.getAgentId()
+				+ "' did not reach a rest state in 10s", e);
+		}
+	}
+
 	// ========== agent:create ==========
 
 	/**
@@ -860,8 +875,7 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		reqJob.awaitResult(5000);
 
-		try { agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS); }
-		catch (Exception e) { fail("Agent did not return to SLEEPING: " + e); }
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 
 		AMap<AString, ACell> session = agent.getSession(sid);
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
@@ -1157,7 +1171,7 @@ public class AgentAdapterTest {
 		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
 		Blob sid = Blob.fromHex(sidHex.toString());
 
-		agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS);
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 
 		AMap<AString, ACell> session = agent.getSession(sid);
 		assertNotNull(session, "Session record must exist on lattice");
@@ -1198,7 +1212,7 @@ public class AgentAdapterTest {
 		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
 		Blob sid = Blob.fromHex(sidHex.toString());
 
-		agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS);
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 
 		AVector<ACell> sessionPending = agent.getSessionPending(sid);
 		assertEquals(0, sessionPending.count(),
@@ -3357,8 +3371,7 @@ public class AgentAdapterTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("wake-agent");
-		try { agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS); }
-		catch (Exception e) { fail("Agent did not return to SLEEPING: " + e); }
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 
 		// Session id: the chat response carries it back.
 		AString sessionIdStr = (AString) RT.getIn(chatJob.getOutput(), Fields.SESSION_ID);
@@ -3426,8 +3439,7 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("fail-fast-agent");
 
-		try { agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS); }
-		catch (Exception e) { /* may exit via SUSPENDED rather than SLEEPING */ }
+		awaitFinished(agent);
 
 		assertEquals(AgentState.SUSPENDED, agent.getStatus(),
 			"agent must be SUSPENDED after a transition error");
