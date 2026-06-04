@@ -59,6 +59,17 @@ public class Config {
 	/** Key for venue port */
 	public static final AString PORT = Strings.intern("port");
 
+	/** Key for the HTTP connector's accept-queue (backlog) size */
+	public static final AString ACCEPT_QUEUE_SIZE = Strings.intern("acceptQueueSize");
+
+	/**
+	 * Default accept-queue (backlog) depth. The JDK/Jetty default of 50 is too
+	 * shallow for bursty connection load: when the queue overflows the OS
+	 * refuses new connections (a RST → {@code ConnectException} on Windows)
+	 * instead of queuing them. 1024 absorbs the bursts.
+	 */
+	public static final int DEFAULT_ACCEPT_QUEUE_SIZE = 1024;
+
 	/** Key for MCP configuration */
 	public static final AString MCP = Strings.intern("mcp");
 
@@ -237,6 +248,15 @@ public class Config {
 	public int getPort() {
 		CVMLong portVal = RT.ensureLong(config.get(PORT));
 		return (portVal != null) ? (int) portVal.longValue() : 8080;
+	}
+
+	/**
+	 * Get the HTTP connector accept-queue (backlog) size.
+	 * @return configured value, or {@link #DEFAULT_ACCEPT_QUEUE_SIZE}
+	 */
+	public int getAcceptQueueSize() {
+		CVMLong v = RT.ensureLong(config.get(ACCEPT_QUEUE_SIZE));
+		return (v != null) ? (int) v.longValue() : DEFAULT_ACCEPT_QUEUE_SIZE;
 	}
 
 	/**

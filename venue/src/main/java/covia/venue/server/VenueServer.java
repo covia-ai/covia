@@ -350,6 +350,9 @@ public class VenueServer {
 		if (port==null) port=8080;
 		ServerConnector connector = new ServerConnector(jettyServer);
 		connector.setPort(port);
+		// Deeper accept queue than the JDK/Jetty default (50) so bursts of
+		// concurrent connections queue rather than being refused under load.
+		connector.setAcceptQueueSize(config.getAcceptQueueSize());
 		jettyServer.addConnector(connector);
 	}
 
