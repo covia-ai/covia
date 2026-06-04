@@ -1610,17 +1610,8 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "shared-name"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
-			"v/ops/agent/message",
-			Maps.of(Fields.AGENT_ID, "shared-name", Fields.MESSAGE, Maps.of("from", "alice")),
-			RequestContext.of(ALICE_DID)).awaitResult(5000);
-
-		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "shared-name"),
-			RequestContext.of(BOB_DID)).awaitResult(5000);
-		engine.jobs().invokeOperation(
-			"v/ops/agent/message",
-			Maps.of(Fields.AGENT_ID, "shared-name", Fields.MESSAGE, Maps.of("from", "bob")),
 			RequestContext.of(BOB_DID)).awaitResult(5000);
 
 		User alice = engine.getVenueState().users().get(ALICE_DID);
@@ -1628,6 +1619,22 @@ public class AgentAdapterTest {
 
 		AgentState aliceAgent = alice.agent("shared-name");
 		AgentState bobAgent = bob.agent("shared-name");
+
+		// Deliver directly rather than via agent:message: the op auto-wakes the
+		// agent, whose run loop can drain session.pending before the assertion
+		// reads it (a no-config agent defaults to llmagent:chat, which fails fast
+		// with no LLM and may clear pending first). Direct delivery is the
+		// deterministic path used elsewhere in this file.
+		Blob aliceSid = Blob.fromHex("a1a1000000000000a1a1000000000000");
+		Blob bobSid   = Blob.fromHex("b0b0000000000000b0b0000000000000");
+		aliceAgent.ensureSession(aliceSid, ALICE_DID);
+		aliceAgent.appendSessionPending(aliceSid, Maps.of(
+			Fields.SESSION_ID, Strings.create(aliceSid.toHexString()),
+			Fields.MESSAGE, Maps.of("from", "alice")));
+		bobAgent.ensureSession(bobSid, BOB_DID);
+		bobAgent.appendSessionPending(bobSid, Maps.of(
+			Fields.SESSION_ID, Strings.create(bobSid.toHexString()),
+			Fields.MESSAGE, Maps.of("from", "bob")));
 
 		assertTrue(aliceAgent.hasSessionPending(), "Alice's agent should have pending message");
 		assertTrue(bobAgent.hasSessionPending(), "Bob's agent should have pending message");

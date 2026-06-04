@@ -12,10 +12,12 @@ import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.ACountable;
 import convex.core.data.util.CellExplorer;
+import convex.core.data.ABlobLike;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.ASet;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Maps;
@@ -778,11 +780,28 @@ public class CoviaAdapter extends AAdapter {
 	 * Navigates one level into a CVM value. For maps, uses string key lookup.
 	 * For vectors/sequences, parses the key as an integer index.
 	 */
-	@SuppressWarnings("unchecked")
+	@SuppressWarnings({ "unchecked", "rawtypes" })
 	private static ACell navigateInto(ACell value, ACell key) {
 		if (value instanceof AVector<?> vec) {
 			long idx = parseIndex(key);
 			return (idx >= 0 && idx < vec.count()) ? vec.get(idx) : null;
+		}
+		// Index keys are blob-like (sessions, jobs, scheduler handles use Blob
+		// keys, rendered outward as hex by ALattice.toJSONKey). Check Index
+		// before AMap — Index is an AMap subtype. AString is itself ABlobLike, so
+		// try the key directly first (a string-keyed index), then fall back to
+		// parsing an AString as hex into a Blob (a Blob-keyed index).
+		if (value instanceof Index) {
+			Index idx = (Index) value;
+			if (key instanceof ABlobLike) {
+				ACell direct = (ACell) idx.get(key);
+				if (direct != null) return direct;
+			}
+			if (key instanceof AString s) {
+				Blob b = Blob.parse(s.toString());
+				if (b != null) return (ACell) idx.get(b);
+			}
+			return null;
 		}
 		if (value instanceof AMap<?,?> map) {
 			AString strKey = RT.ensureString(key);

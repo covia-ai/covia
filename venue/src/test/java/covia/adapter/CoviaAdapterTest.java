@@ -129,6 +129,43 @@ public class CoviaAdapterTest {
 		assertNotNull(RT.getIn(result, "value"), "Should return user root");
 	}
 
+	/**
+	 * Regression: covia:read navigating a Blob-keyed {@code Index} by its hex
+	 * key. The sessions Index lives inside the agent's opaque LWW value, so the
+	 * lattice resolver can't descend it — the read falls back to deepGet, whose
+	 * Index branch must parse the hex path segment into the Blob key. This path
+	 * silently returned {@code exists:false} until fixed (found live over MCP,
+	 * not by the map/vector tests above — see CoviaReadIndexNavTest for the
+	 * helper-level unit).
+	 */
+	@Test
+	public void testReadSessionByHexIndexKey() {
+		// wakeresponse returns {response:"ack"}, so the chat slot completes.
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "sess-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse")),
+			ALICE).awaitResult(5000);
+
+		// A chat creates and persists a session keyed by a Blob sid.
+		Job chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "sess-agent", Fields.MESSAGE, Strings.create("hi")),
+			ALICE);
+		AString sid = RT.ensureString(RT.getIn(chat.awaitResult(5000), Fields.SESSION_ID));
+		assertNotNull(sid, "chat should return a sessionId");
+
+		// Whole session record by its hex key (the failing case).
+		Job whole = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "g/sess-agent/sessions/" + sid), ALICE);
+		assertEquals(CVMBool.TRUE, RT.getIn(whole.awaitResult(5000), "exists"),
+			"covia:read must resolve a Blob-keyed Index entry by its hex key");
+
+		// Deep field navigation after the Index step.
+		Job field = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "g/sess-agent/sessions/" + sid + "/meta/turns"), ALICE);
+		assertEquals(CVMBool.TRUE, RT.getIn(field.awaitResult(5000), "exists"),
+			"a deep field after the hex Index key must resolve too");
+	}
+
 	// ========== covia:read — universal resolution forms ==========
 	//
 	// Per OPERATIONS.md §4, covia:read accepts every resolvable address form
