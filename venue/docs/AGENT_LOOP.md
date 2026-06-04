@@ -772,9 +772,11 @@ the next `wakeAgent` from the writer finds the slot empty and launches.
 empty-slot → launch transition. Only one thread can populate the slot; all
 others observe it populated and return the existing completion.
 
-**Configurable sleep:** `config.sleepInterval` (milliseconds). If set, the agent
-wakes periodically even without events. Useful for polling-style agents.
-Exponential backoff when idle is a future refinement.
+**Scheduled wakes:** a transition may return a `wakeTime` on its session/task; the
+framework arms one `agent:trigger` event for the agent in the per-venue grid
+scheduler at the earliest such time (see [SCHEDULER.md](./SCHEDULER.md) and
+[GRID_SCHEDULER.md](./GRID_SCHEDULER.md)). There is no fixed periodic sleep
+interval. A `sleep` harness tool and idle backoff are deferred (SCHEDULER.md §7).
 
 The scheduler is an internal venue concern — its implementation may change
 without affecting the agent contract or MCP interface.
@@ -963,7 +965,7 @@ L3: LLM call (provider) — single model invocation, no agent semantics
 | Message arrival | `agent:message` appends to `session.pending` | yes | no |
 | Chat arrival | `agent:chat` reserves a chat slot | yes | yes (the chat Job) |
 | Pending completion | An outbound Job in `pending` finishes; completion callback wakes the agent | result of the outbound Job | no |
-| Scheduled fire | Scheduler timer reaches `wakeTime` (B8.8); includes `config.sleepInterval` periodic wake | no | no |
+| Scheduled fire | Grid scheduler fires the agent's `agent:trigger` event at the earliest thread `wakeTime` (SCHEDULER.md §4) | no | no |
 | **Trigger** | `agent:trigger` MCP op | no | optional loop-drain `wait`, not a result-await |
 | Self-wake | A previous step wrote new work to the agent's own queues | (whatever the previous step wrote) | n/a |
 

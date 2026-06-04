@@ -1,0 +1,20 @@
+{
+  "name": "List Scheduled Events",
+  "description": "List the caller's pending scheduled events, soonest first. Each entry carries its handle, operation reference, and fire time.",
+  "operation": {
+    "adapter": "scheduler:list",
+    "input": {
+      "type": "object",
+      "properties": {}
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "events": {
+          "type": "array",
+          "description": "Pending events, each as {handle, op, time}, ordered by fire time"
+        }
+      }
+    }
+  }
+}

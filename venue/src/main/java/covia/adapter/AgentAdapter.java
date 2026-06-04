@@ -29,9 +29,9 @@ import covia.adapter.agent.ContextInspectable;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.venue.AgentScheduler;
 import covia.venue.AgentState;
 import covia.venue.RequestContext;
+import covia.venue.Scheduler;
 import covia.venue.User;
 import covia.venue.Users;
 
@@ -197,6 +197,13 @@ public class AgentAdapter extends AAdapter {
 				case "request" -> {
 					return invokeRequestInternal(ctx, meta, input);
 				}
+				case "trigger" -> {
+					// Zero-Job kick (the scheduler's deferred-wake path and the
+					// LLM tool loop). Fire-and-forget: start the loop per `force`
+					// and return a status snapshot immediately — `wait` does not
+					// apply here. Mints no session.
+					return CompletableFuture.completedFuture(doKick(ctx, input));
+				}
 				default -> {
 					return CompletableFuture.failedFuture(new UnsupportedOperationException(
 						"agent:" + subOp + " requires Job-aware invocation"));
@@ -262,6 +269,34 @@ public class AgentAdapter extends AAdapter {
 		return snap;
 	}
 
+	/**
+	 * {@code force} policy for {@code agent:trigger}: {@code true} (default)
+	 * runs a cycle even when the agent is idle — the historical trigger
+	 * behaviour; {@code false} runs only if there is work (the scheduler's
+	 * deferred-wake path). The flag is additive — absent means {@code true},
+	 * so existing callers are unchanged.
+	 */
+	private static boolean parseForce(ACell input) {
+		ACell v = RT.getIn(input, Fields.FORCE);
+		return (v instanceof CVMBool b) ? b.booleanValue() : true;
+	}
+
+	/**
+	 * Zero-Job trigger kick: start the agent's run loop per {@code force} and
+	 * return a status snapshot immediately. Mints no session; ignores
+	 * {@code wait}. Shared by the scheduler's deferred wake and the LLM tool
+	 * loop. The loop, if started, runs on its own virtual thread.
+	 */
+	private ACell doKick(RequestContext ctx, ACell input) {
+		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		if (agentId == null) throw new IllegalArgumentException("agentId is required");
+		wakeAgent(agentId, ctx, parseForce(input));
+		AgentState agent = getAgent(ctx.getCallerDID(), agentId);
+		AString status = (agent != null) ? agent.getStatus() : null;
+		return Maps.of(
+			Fields.AGENT_ID, agentId,
+			Fields.STATUS,   (status != null) ? status : AgentState.SLEEPING);
+	}
 
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
@@ -675,13 +710,27 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		Blob sid = resolveOrMintSession(job, agent, input, ctx.getCallerDID());
-		if (sid == null) return;
-		AString sidHex = Strings.create(sid.toHexString());
+		// Trigger never creates a session. A supplied sessionId is resolved
+		// and echoed back; if none is supplied the trigger runs unsessioned.
+		Blob sid = null;
+		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);
+		if (sidCell != null) {
+			AString s = RT.ensureString(sidCell);
+			if (s == null) { job.fail("sessionId must be a hex string"); return; }
+			sid = Blob.fromHex(s.toString());
+			if (sid == null) { job.fail("Invalid sessionId format: " + s); return; }
+		}
+		AString sidHex = (sid != null) ? Strings.create(sid.toHexString()) : null;
 
-		CompletableFuture<ACell> completion = wakeAgent(agentId, ctx, true);
+		boolean force = parseForce(input);
+		CompletableFuture<ACell> completion = wakeAgent(agentId, ctx, force);
 		if (completion == null) {
-			job.fail("Cannot start agent: " + agentId);
+			// force=true (the default) keeps the historical "must start" contract.
+			if (force) { job.fail("Cannot start agent: " + agentId); return; }
+			// force=false: an idle agent with no work is not an error — return a snapshot.
+			AMap<AString, ACell> snap = Maps.of(
+				Fields.AGENT_ID, agentId, Fields.STATUS, agent.getStatus());
+			job.completeWith((sidHex != null) ? snap.assoc(Fields.SESSION_ID, sidHex) : snap);
 			return;
 		}
 
@@ -693,12 +742,12 @@ public class AgentAdapter extends AAdapter {
 		long waitMs = parseWaitMs(input);
 		if (waitMs == 0 && RT.getIn(input, Fields.WAIT) == null) waitMs = -1;
 
-		ACell running = Maps.of(
-			Fields.AGENT_ID,   agentId,
-			Fields.SESSION_ID, sidHex,
-			Fields.STATUS,     AgentState.RUNNING);
+		AMap<AString, ACell> running = Maps.of(
+			Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.RUNNING);
+		if (sidHex != null) running = running.assoc(Fields.SESSION_ID, sidHex);
+		final AString fSidHex = sidHex;
 		awaitRunCompletion(job, completion, waitMs, running,
-			result -> annotateWithSession(result, sidHex));
+			result -> (fSidHex != null) ? annotateWithSession(result, fSidHex) : result);
 	}
 
 	/**
@@ -1629,20 +1678,20 @@ public class AgentAdapter extends AAdapter {
 		// fire, clear it so the scheduler rebuild on restart doesn't re-fire
 		// a wake that's already been serviced. Lattice is authoritative; the
 		// scheduler index is rebuilt from it on boot.
-		AgentScheduler scheduler = engine.scheduler();
+		Scheduler scheduler = engine.gridScheduler();
 		if (scheduler != null && leanError == null) {
 			Blob pickedThreadId = null;
-			AgentScheduler.ThreadKind pickedKind = null;
+			AgentState.ThreadKind pickedKind = null;
 			AMap<AString, ACell> pickedRecord = null;
 			if (pickedTask != null) {
 				pickedThreadId = pickedTask.getKey();
-				pickedKind = AgentScheduler.ThreadKind.TASK;
+				pickedKind = AgentState.ThreadKind.TASK;
 				Index<Blob, ACell> currentTasks = agent.getTasks();
 				ACell tRec = (currentTasks != null) ? currentTasks.get(pickedThreadId) : null;
 				if (tRec instanceof AMap) pickedRecord = (AMap<AString, ACell>) tRec;
 			} else if (pickedSessionBlob != null) {
 				pickedThreadId = pickedSessionBlob;
-				pickedKind = AgentScheduler.ThreadKind.SESSION;
+				pickedKind = AgentState.ThreadKind.SESSION;
 				pickedRecord = agent.getSession(pickedSessionBlob);
 			}
 			if (pickedThreadId != null) {

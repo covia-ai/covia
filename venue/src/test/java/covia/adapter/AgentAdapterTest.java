@@ -2480,8 +2480,10 @@ public class AgentAdapterTest {
 		assertNotNull(sid, "Completed request envelope must include sessionId");
 	}
 
+	/** Trigger never creates a session: with no sessionId supplied, none is
+	 *  minted and the response carries no sessionId. */
 	@Test
-	public void testTriggerMintsSession() {
+	public void testTriggerDoesNotMintSession() {
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "session-trig",
@@ -2495,11 +2497,11 @@ public class AgentAdapterTest {
 		ACell result = job.awaitResult(5000);
 
 		AString sid = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
-		assertNotNull(sid, "Trigger response should carry a sessionId");
+		assertNull(sid, "Trigger must not mint or return a session when none was supplied");
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("session-trig");
-		assertEquals(1, agent.getSessions().count());
+		assertEquals(0, agent.getSessions().count(), "Trigger must create no session");
 	}
 
 	@Test
@@ -3343,10 +3345,9 @@ public class AgentAdapterTest {
 
 	/**
 	 * When a transition returns a {@code wakeTime} in its result, the
-	 * framework installs it on the picked thread via
-	 * {@code setThreadWakeTime}: lattice record carries {@code wakeTime},
-	 * and the in-memory scheduler contains a {@link
-	 * covia.venue.AgentScheduler.ThreadRef} for that thread.
+	 * framework installs it on the picked thread via {@code setThreadWakeTime}:
+	 * the lattice session record carries {@code wakeTime}, and the venue grid
+	 * scheduler holds a single {@code agent:wake} event armed at that time.
 	 */
 	@Test
 	public void testTransitionWakeTimeSchedulesSessionWake() {
@@ -3385,15 +3386,24 @@ public class AgentAdapterTest {
 			"session record should carry wakeTime after transition");
 		assertEquals(farFuture, ((CVMLong) lattWake).longValue());
 
-		// Scheduler: ThreadRef installed for SESSION kind.
-		covia.venue.AgentScheduler.ThreadRef ref = new covia.venue.AgentScheduler.ThreadRef(
-			ALICE_DID, Strings.create("wake-agent"),
-			covia.venue.AgentScheduler.ThreadKind.SESSION, sid);
-		assertTrue(engine.scheduler().contains(ref),
-			"scheduler should contain SESSION ref after transition returns wakeTime");
+		// Scheduler: a single agent:wake event armed at the transition's wakeTime.
+		convex.core.data.AVector<ACell> events =
+			engine.gridScheduler().list(RequestContext.of(ALICE_DID));
+		ACell wakeHandle = null;
+		for (long i = 0; i < events.count(); i++) {
+			AMap<AString, ACell> ev = (AMap<AString, ACell>) events.get(i);
+			if (Strings.intern("v/ops/agent/trigger").equals(ev.get(Strings.intern("op")))
+					&& ev.get(Strings.intern("time")) instanceof CVMLong t
+					&& t.longValue() == farFuture) {
+				wakeHandle = ev.get(Strings.intern("handle"));
+				break;
+			}
+		}
+		assertNotNull(wakeHandle,
+			"scheduler should hold an agent:wake event at the transition's wakeTime");
 
-		// Cleanup — don't leak a pending fire into later tests.
-		engine.scheduler().cancel(ref);
+		// Cleanup — cancel so we don't leak a pending fire into later tests.
+		engine.gridScheduler().cancel((Blob) wakeHandle, RequestContext.of(ALICE_DID));
 	}
 
 	// ========== Issue #88: fail-fast on transition error ==========

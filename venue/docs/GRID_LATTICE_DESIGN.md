@@ -222,7 +222,7 @@ Each agent is a single atomic LWW value — the entire agent record is replaced 
 Internal framework fields (sessions, tasks, pending, timeline, caps, scheduling state) are managed by the runtime and are not a stable user-writable surface. Their structure is documented where it's authoritative:
 
 - **Sessions and tasks:** [AGENT_SESSIONS.md](./AGENT_SESSIONS.md)
-- **Scheduling (wake times, backoff):** [SCHEDULER.md](./SCHEDULER.md)
+- **Scheduling (wake times):** [SCHEDULER.md](./SCHEDULER.md); the grid scheduler engine: [GRID_SCHEDULER.md](./GRID_SCHEDULER.md)
 - **Transition function contract and timeline:** [AGENT_LOOP.md](./AGENT_LOOP.md)
 
 **Execution architecture, transition function contract, operations, scheduling, and timeline entry structure** are defined in AGENT_LOOP.md. In summary: the venue runtime manages agent lifecycle through a three-level architecture (agent update → transition function → LLM call), where only the transition function is pluggable. See AGENT_LOOP.md §2–§4 for full details.
@@ -347,7 +347,7 @@ Encrypted, capability-gated data. Different encryption and access semantics from
 
 Some path prefixes are not backed by a dedicated lattice namespace. Instead they are **virtual** — resolved at runtime by a `NamespaceResolver` that maps the prefix to the correct lattice location based on the `RequestContext`. This avoids path string rewriting, creates no temporary allocations, and keeps scoping explicit.
 
-**Virtual namespaces are user-level scratch space.** They expose a location for operation code and agent tool calls to read and write arbitrary data. They do **not** expose framework-managed system fields (status, `wakeTime`, `yieldCount`, task input/result, timeline). Those fields are accessed through dedicated APIs — `RequestContext`, engine accessors, venue ops — never by writing under a virtual namespace prefix. This split keeps the user-writable surface clean of state the framework owns and keeps the framework free to restructure its own storage without breaking user code.
+**Virtual namespaces are user-level scratch space.** They expose a location for operation code and agent tool calls to read and write arbitrary data. They do **not** expose framework-managed system fields (status, `wakeTime`, task input/result, timeline). Those fields are accessed through dedicated APIs — `RequestContext`, engine accessors, venue ops — never by writing under a virtual namespace prefix. This split keeps the user-writable surface clean of state the framework owns and keeps the framework free to restructure its own storage without breaking user code.
 
 | Prefix | Resolves to | Scope | Resolver needs |
 |--------|-------------|-------|----------------|

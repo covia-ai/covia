@@ -1,0 +1,20 @@
+{
+  "name": "Cancel Scheduled Event",
+  "description": "Cancel a scheduled event by its handle, removing it before it fires. Only the event's owner may cancel it.",
+  "operation": {
+    "adapter": "scheduler:cancel",
+    "input": {
+      "type": "object",
+      "properties": {
+        "handle": { "type": "string", "description": "Handle of the event to cancel" }
+      },
+      "required": ["handle"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "cancelled": { "type": "boolean", "description": "True if an event was removed, false if no such event" }
+      }
+    }
+  }
+}

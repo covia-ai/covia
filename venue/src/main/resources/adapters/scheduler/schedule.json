@@ -1,0 +1,24 @@
+{
+  "name": "Schedule Operation",
+  "description": "Schedule a grid operation to run at a future time. Returns a handle used to trigger the event early or cancel it. The operation fires with the authority captured from the caller.",
+  "operation": {
+    "adapter": "scheduler:schedule",
+    "input": {
+      "type": "object",
+      "properties": {
+        "operation": { "type": "string", "description": "Reference of the operation to invoke when due" },
+        "input": { "type": "object", "description": "Input passed to the operation when it fires" },
+        "time": { "type": "integer", "description": "Absolute fire time, in milliseconds since the epoch" },
+        "after": { "type": "integer", "description": "Fire after this many milliseconds from now (alternative to time)" }
+      },
+      "required": ["operation"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "handle": { "type": "string", "description": "Handle identifying the scheduled event" },
+        "time": { "type": "integer", "description": "Absolute fire time, in milliseconds since the epoch" }
+      }
+    }
+  }
+}

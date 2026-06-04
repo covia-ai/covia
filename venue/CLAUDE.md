@@ -190,6 +190,7 @@ Bridges operations to execution environments:
 | `vault` | Health vault (DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
 | `secret` | Secret store | `set`, `extract` |
 | `ucan` | Capability tokens | `issue` |
+| `scheduler` | Deferred grid-op invocation (per-venue `:schedule`) | `schedule`, `cancel`, `trigger`, `list` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
 
 ## API Endpoints

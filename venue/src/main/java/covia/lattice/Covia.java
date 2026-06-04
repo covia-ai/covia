@@ -100,6 +100,11 @@ public final class Covia {
 	/** Keyword for per-DID user state within venue state */
 	public static final Keyword USER_DATA = Keyword.intern("user-data");
 
+	/** Keyword for the per-venue scheduled-event index within venue state.
+	 *  A time-ordered {@code Index} keyed by {@code wakeTime||id}; see
+	 *  {@code venue/docs/GRID_SCHEDULER.md}. */
+	public static final Keyword SCHEDULE = Keyword.intern("schedule");
+
 	// ========== Lattice definitions ==========
 
 	/**
@@ -151,6 +156,7 @@ public final class Covia {
 	public static final KeyedLattice VENUE = KeyedLattice.create(
 		ASSETS, CASLattice.create(),                      // union merge (content-addressed)
 		JOBS, IndexLattice.create(LWW),                   // per-job LWW by "updated" timestamp
+		SCHEDULE, LWW,                                     // whole {updated, events} value, replaced as a unit (deletions survive merge — see GRID_SCHEDULER.md §8)
 		USERS, MapLattice.create(LWW),                    // per-user LWW by "updated" timestamp
 		STORAGE, CASLattice.create(),                     // union merge (content-addressed blobs)
 		AUTH, MapLattice.create(LWW),                     // per-entry LWW by "updated" timestamp

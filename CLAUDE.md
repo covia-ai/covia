@@ -128,6 +128,7 @@ Adapter Layer
     ├── VaultAdapter      — health vault (thin wrapper over DLFS)
     ├── SecretAdapter     — secret store operations (set, extract)
     ├── UCANAdapter       — capability token issuance
+    ├── SchedulerAdapter  — deferred grid-op invocation (schedule, cancel, trigger, list)
     └── TestAdapter       — echo, delay, error simulation, chat
 ```
 
