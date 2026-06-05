@@ -9,7 +9,6 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.data.util.CellExplorer;
-import convex.core.data.Cells;
 import convex.core.lang.RT;
 
 /**
@@ -125,28 +124,6 @@ public class GoalTreeContext {
 			return "Message from " + caller + ": " + text;
 		}
 		return text;
-	}
-
-	/**
-	 * Generates a root goal description from a task.
-	 * Tasks have {input, caller?} structure from agent:request.
-	 */
-	public static String describeTask(ACell task) {
-		ACell inputCell = RT.getIn(task, Strings.intern("input"));
-		AString caller = RT.ensureString(RT.getIn(task, Strings.intern("caller")));
-		String text;
-		if (inputCell == null) {
-			text = "(no input)";
-		} else if (inputCell instanceof AString s) {
-			text = truncate(s.toString(), 200);
-		} else {
-			// Structured input — render as string (may be a map like {message: "..."})
-			text = truncate(inputCell.toString(), 200);
-		}
-		StringBuilder sb = new StringBuilder("Task");
-		if (caller != null) sb.append(" from ").append(caller);
-		sb.append(": ").append(text);
-		return sb.toString();
 	}
 
 	/**
@@ -500,23 +477,6 @@ public class GoalTreeContext {
 			if (!isSegment(conversation.get(i))) count++;
 		}
 		return count;
-	}
-
-	/**
-	 * Estimates the byte size of live turns in a frame's conversation.
-	 */
-	public static long estimateLiveTurnBytes(AMap<AString, ACell> frame) {
-		@SuppressWarnings("unchecked")
-		AVector<ACell> conversation = (AVector<ACell>) frame.get(K_CONVERSATION);
-		if (conversation == null) return 0;
-		long bytes = 0;
-		for (long i = 0; i < conversation.count(); i++) {
-			ACell entry = conversation.get(i);
-			if (!isSegment(entry)) {
-				bytes += Cells.storageSize(entry);
-			}
-		}
-		return bytes;
 	}
 
 	// ========== Scoped loads ==========

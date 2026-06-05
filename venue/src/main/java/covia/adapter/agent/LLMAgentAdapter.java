@@ -639,26 +639,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	}
 
 	/**
-	 * Checks whether the given jobId string matches a task in the presented task list.
-	 */
-	static boolean isKnownTask(AString jobIdStr, ToolContext toolCtx) {
-		if (toolCtx.tasks == null) return false;
-		for (long i = 0; i < toolCtx.tasks.count(); i++) {
-			ACell task = toolCtx.tasks.get(i);
-			AString taskJobId = RT.ensureString(RT.getIn(task, Fields.JOB_ID));
-			if (jobIdStr.equals(taskJobId)) return true;
-		}
-		return false;
-	}
-
-	/**
-	 * Checks whether the given jobId has already been recorded as completed/failed.
-	 */
-	static boolean isAlreadyCompleted(AString jobIdStr, ToolContext toolCtx) {
-		return toolCtx.taskResults != null && toolCtx.taskResults.get(jobIdStr) != null;
-	}
-
-	/**
 	 * Builds a user message listing only outstanding (unresolved) tasks.
 	 * Returns null if no tasks remain, signalling the loop to omit task tools.
 	 */

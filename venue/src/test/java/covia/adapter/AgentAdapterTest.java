@@ -426,6 +426,17 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "busy-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
+		// Suspend the source before delivering the message. agent:message
+		// auto-wakes the agent (handleMessage -> wakeAgent); a running loop
+		// would drain session.pending before the assertion below, which made
+		// this test race under parallel load. A suspended agent still queues
+		// the message (appendSessionPending runs before wakeAgent) but its loop
+		// won't consume it — so the source's pending is deterministically present.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/suspend",
+			Maps.of(Fields.AGENT_ID, "busy-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
 		// Deliver a message to source
 		engine.jobs().invokeOperation(
 			"v/ops/agent/message",

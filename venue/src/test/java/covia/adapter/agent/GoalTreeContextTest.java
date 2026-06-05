@@ -66,21 +66,6 @@ public class GoalTreeContextTest {
 	}
 
 	@Test
-	public void testDescribeTask() {
-		ACell task = Maps.of("input", "Generate report for March", "caller", "did:key:zBob");
-		String desc = GoalTreeContext.describeTask(task);
-		assertTrue(desc.startsWith("Task from did:key:zBob"));
-		assertTrue(desc.contains("Generate report"));
-	}
-
-	@Test
-	public void testDescribeTaskNoCaller() {
-		ACell task = Maps.of("input", "Run diagnostics");
-		String desc = GoalTreeContext.describeTask(task);
-		assertEquals("Task: Run diagnostics", desc);
-	}
-
-	@Test
 	public void testDescribeTransitionSingleMessage() {
 		AVector<ACell> msgs = Vectors.of((ACell) Maps.of("content", "Hello agent"));
 		String desc = GoalTreeContext.describeTransitionInput(msgs, null, null);
@@ -549,16 +534,6 @@ public class GoalTreeContextTest {
 		frame = frame.assoc(GoalTreeContext.K_CONVERSATION, conv);
 
 		assertEquals(1, GoalTreeContext.countLiveTurns(frame));
-	}
-
-	@Test
-	public void testEstimateLiveTurnBytes() {
-		AMap<AString, ACell> frame = GoalTreeContext.createFrame("test");
-		assertEquals(0, GoalTreeContext.estimateLiveTurnBytes(frame));
-
-		frame = GoalTreeContext.appendTurn(frame,
-			Maps.of("role", "assistant", "content", "some content"));
-		assertTrue(GoalTreeContext.estimateLiveTurnBytes(frame) > 0);
 	}
 
 	// ========== Scoped loads ==========

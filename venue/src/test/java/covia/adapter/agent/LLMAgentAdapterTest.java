@@ -889,68 +889,6 @@ public class LLMAgentAdapterTest {
 		assertEquals(Strings.create("object"), RT.getIn(params, "type"));
 	}
 
-	// ========== Pure function: isKnownTask ==========
-
-	@Test
-	public void testIsKnownTaskFound() {
-		AVector<ACell> tasks = Vectors.of(
-			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task1"),
-			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "task2")
-		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null, null);
-
-		assertTrue(LLMAgentAdapter.isKnownTask(Strings.create("aaa"), ctx));
-		assertTrue(LLMAgentAdapter.isKnownTask(Strings.create("bbb"), ctx));
-	}
-
-	@Test
-	public void testIsKnownTaskNotFound() {
-		AVector<ACell> tasks = Vectors.of(
-			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task1")
-		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null, null);
-
-		assertFalse(LLMAgentAdapter.isKnownTask(Strings.create("zzz"), ctx));
-	}
-
-	@Test
-	public void testIsKnownTaskNullTasks() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
-		assertFalse(LLMAgentAdapter.isKnownTask(Strings.create("aaa"), ctx));
-	}
-
-	@Test
-	public void testIsKnownTaskEmptyTasks() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, Vectors.empty(), null, null, null, null);
-		assertFalse(LLMAgentAdapter.isKnownTask(Strings.create("aaa"), ctx));
-	}
-
-	// ========== Pure function: isAlreadyCompleted ==========
-
-	@Test
-	public void testIsAlreadyCompletedTrue() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
-		ctx.recordTaskResult(Strings.create("aaa"),
-			Maps.of(Fields.STATUS, Status.COMPLETE));
-
-		assertTrue(LLMAgentAdapter.isAlreadyCompleted(Strings.create("aaa"), ctx));
-	}
-
-	@Test
-	public void testIsAlreadyCompletedFalse() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
-		ctx.recordTaskResult(Strings.create("aaa"),
-			Maps.of(Fields.STATUS, Status.COMPLETE));
-
-		assertFalse(LLMAgentAdapter.isAlreadyCompleted(Strings.create("bbb"), ctx));
-	}
-
-	@Test
-	public void testIsAlreadyCompletedNullResults() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
-		assertFalse(LLMAgentAdapter.isAlreadyCompleted(Strings.create("aaa"), ctx));
-	}
-
 	// ========== Pure function: buildOutstandingTaskMessage ==========
 
 	@Test
