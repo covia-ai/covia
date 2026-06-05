@@ -72,9 +72,15 @@ docker run -d \
   -p 8080:8080 \
   -v /home/azureuser/covia-data:/data \
   --restart unless-stopped \
+  --health-cmd='curl -f --max-time 3 http://localhost:8080/' \
+  --health-interval=30s \
+  --health-timeout=5s \
+  --health-start-period=15s \
+  --health-retries=3 \
   ghcr.io/covia-ai/covia:latest \
-  java -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:+UseG1GC \
-  -XX:+UseStringDeduplication -Djava.security.egd=file:/dev/./urandom \
+  java -Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC \
+  -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError \
+  -Djava.security.egd=file:/dev/./urandom \
   -Dfile.encoding=UTF-8 -jar covia.jar /data/config.json
 ```
 
