@@ -151,16 +151,41 @@ public class HardKillPersistenceTest {
 		return f;
 	}
 
-	/** Reads "drive:path" via the DLFS adapter and returns the content string, or null. */
+	/**
+	 * Reads "drive:path" via the DLFS adapter and returns the content string, or null.
+	 *
+	 * <p>A freshly-launched reader venue may still be mounting its DLFS drives
+	 * when the first read lands; under parallel-suite load that surfaced as a
+	 * transient read failure ({@code JobFailedException} on the path). A flushed
+	 * write is durable, so the value becomes readable shortly after launch —
+	 * poll briefly rather than failing on the race. This does not mask a real
+	 * durability regression: a genuinely-lost write never appears, so the loop
+	 * gives up at the deadline and surfaces the last error (or null).</p>
+	 */
 	private static String readDLFS(VenueServer server, String drive, String path) throws Exception {
-		ACell result = server.getEngine().jobs().invokeOperation(
-			"v/ops/dlfs/read",
-			Maps.of("drive", drive, "path", path),
-			RequestContext.of(ALICE_DID)
-		).awaitResult(5000);
-		if (result == null) return null;
-		ACell c = RT.getIn(result, "content");
-		return c == null ? null : RT.ensureString(c).toString();
+		long deadline = System.currentTimeMillis() + 15_000;
+		Exception last = null;
+		while (true) {
+			try {
+				ACell result = server.getEngine().jobs().invokeOperation(
+					"v/ops/dlfs/read",
+					Maps.of("drive", drive, "path", path),
+					RequestContext.of(ALICE_DID)
+				).awaitResult(5000);
+				if (result != null) {
+					ACell c = RT.getIn(result, "content");
+					if (c != null) return RT.ensureString(c).toString();
+				}
+				// null result/content — drive may not be mounted yet; retry.
+			} catch (Exception e) {
+				last = e; // transient (e.g. drive not mounted yet) — retry until deadline
+			}
+			if (System.currentTimeMillis() >= deadline) {
+				if (last != null) throw last;
+				return null;
+			}
+			Thread.sleep(100);
+		}
 	}
 
 	// ========================================================================
