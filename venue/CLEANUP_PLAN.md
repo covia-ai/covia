@@ -43,9 +43,9 @@ Low risk. Shrinks surface, removes drift hazards, builds confidence. Batchable.
 - [x] `Engine.resolveAssetRef` — deleted (no callers; logic inlined in `resolvePath`/`resolveHash`).
 - [x] `AgentAdapter` unused `PENDING` constant — deleted (zero refs confirmed).
 - [x] `Engine.getRootCursor` — vestigial `@SuppressWarnings("unchecked")` removed (field type matches return type).
-- [~] `GoalTreeContext.describeTask` — analysed: orphan public helper, duplicates `describeTransitionInput`'s inline single-task logic (different output). Recommend delete + tests. **Awaiting confirmation.**
-- [~] `LLMAgentAdapter.isKnownTask` / `isAlreadyCompleted` — analysed: internal (package-private), superseded by the S2.7c completion model (taskId=JobId, deferredCompletions). Not API. Recommend delete + tests. **Awaiting confirmation.**
-- [~] `GoalTreeContext.estimateLiveTurnBytes` — analysed: byte-sibling of the used `countLiveTurns`, but compaction triggers on count not bytes → no consumer (speculative). Recommend delete unless byte-budget compaction is planned. **Awaiting confirmation.**
+- [x] `GoalTreeContext.describeTask` — deleted + tests (orphan duplicating `describeTransitionInput`'s inline single-task logic).
+- [x] `LLMAgentAdapter.isKnownTask` / `isAlreadyCompleted` — deleted + tests (internal, superseded by the explicit-completion model).
+- [x] `GoalTreeContext.estimateLiveTurnBytes` — deleted + tests + the now-unused `Cells` import (no byte-budget consumer; compaction is count-based).
 - [ ] **Deferred (not Phase 0):** `GoalTreeAdapter.buildTypedRootHarnessTools` is the *canonical* typed-tool builder that 3 inline copies should adopt — keep as the seed for Phase 1 consolidation (do NOT delete).
 - [ ] **Investigate separately:** agent-level `pending` Index in `AgentState` (`addPending`/`getPending`/`extractPending` + `resolveJobIds` plumbing) appears write-only — removing it is a data-path change, not a quick win. Defer to its own task.
 
@@ -56,9 +56,10 @@ Low risk. Shrinks surface, removes drift hazards, builds confidence. Batchable.
 
 ### 0c. `Strings.create` → intern / `Fields.*` (safest, verified subset)
 - [x] `Engine` — `Strings.create("name"|"description"|"operation")` → `Fields.NAME`/`Fields.DESCRIPTION`/`Fields.OPERATION`.
-- [ ] `AgentAdapter` fixed op refs → interned constants (`OP_LLMAGENT_CHAT`, `OP_LANGCHAIN_OPENAI`, fixed status/message literals), following the existing `TRIGGER_OP` pattern.
-- [ ] `CoviaAPI` (~:458 `"true"`, ~:812 `"[]"`), `MCP` (`"includePathPrefixes"`/`"includeAdapters"`) → interned constants.
-- [ ] Broader sweep in `TestAdapter`, `GoalTreeAdapter` (schema vocab), `JVMAdapter` is large — split into its own focused task if it grows the diff too much.
+- [x] `AgentAdapter` — default transition/LLM op refs → interned `DEFAULT_TRANSITION_OP` / `DEFAULT_LLM_OP`.
+- [x] `JVMAdapter` — field-name literals → interned constants + shared `EMPTY`; URLEncoder/URLDecoder Charset overload (dead checked-catch + import removed); inlined the constant input count.
+- [ ] **Deferred:** `CoviaAPI` `"true"` (entangled with the Tier-4 dual-accept of `wait`) and `"[]"` (a borderline bug — empty list returned as a string; fix separately); `MCP` `"includePathPrefixes"`/`"includeAdapters"` (minor).
+- [ ] **Folded into Phase 1 (T2):** `TestAdapter` / `GoalTreeAdapter` schema + message vocab — these are the shared LLM message-protocol keys; the correct fix is referencing the T2 holder, not minting local constants now.
 
 ### 0d. Tiny consistency fixes
 - [ ] `Engine.STATUS_MAP` → `static final` (it's genuinely constant; currently a per-instance "constant" field).
@@ -144,6 +145,7 @@ Not smells — real defects found while reading. Track as issues.
 ### Test-suite robustness (hardened)
 - [x] `HTTPTest.testHTTPWithQueryParams` — replaced external httpbin.org with an in-process echo server; deterministic, no longer skipped.
 - [x] `HardKillPersistenceTest.readDLFS` — bounded read-retry absorbs the post-restart DLFS-mount race under parallel load.
+- [x] `AgentAdapterTest.testForkAgentFreshCollections` — suspend the source so its auto-woken run loop can't drain `session.pending` before the assertion (raced under some parallel profiles; surfaced by the dead-helper deletion).
 - [ ] `HTTPTest.testGoogleSearch` / `testGoogleSearchWithFallback` — still hit google.com; `testGoogleSearch` hard-asserts `COMPLETE`. Remaining external-network flakes (not yet hardened).
 
 ---
@@ -162,3 +164,15 @@ Not smells — real defects found while reading. Track as issues.
   `isKnownTask` / `isAlreadyCompleted` / `describeTask` / `estimateLiveTurnBytes`
   is useful live API (internal-superseded, orphan-duplicate, and speculative
   respectively). Recommended delete + tests; awaiting confirmation.
+- _2026-06-05_ — **Dead helpers deleted** (b2f2848): the four above + their tests
+  removed. The deletion shifted parallel scheduling and exposed a pre-existing
+  race in `testForkAgentFreshCollections`, hardened in the same commit (suspend
+  source before message). Full suite green (1298).
+- _2026-06-05_ — **Strings.create sweep** (3a6a9e9): JVMAdapter (constants +
+  Charset overload + dead-catch removal) and AgentAdapter op-refs. Remaining
+  Strings.create work deferred — CoviaAPI/MCP minor literals + the
+  TestAdapter/GoalTreeAdapter message vocab (folds into Phase 1 T2).
+- _2026-06-05_ — **Phase 0 substantially complete.** Remaining 0c items are
+  deferred by design (T2 / Tier-4 / borderline-bug), not skipped. Net so far:
+  −6 dead methods/constants, 3 Javadocs fixed, 3 racy/flaky tests made
+  deterministic, ~10 dead tests removed; suite 1298 green.
