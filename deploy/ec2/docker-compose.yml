@@ -7,8 +7,8 @@ services:
     volumes:
       - /home/ec2-user/covia-data:/data
     command: >
-      java -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0
-      -XX:+UseG1GC -XX:+UseStringDeduplication
+      java -Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC
+      -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError
       -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8
       -jar covia.jar /data/config.json
     restart: unless-stopped
@@ -20,8 +20,8 @@ services:
         awslogs-stream: docker-covia-venue
         awslogs-create-group: "true"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      test: ["CMD", "curl", "-f", "--max-time", "3", "http://localhost:8080/"]
       interval: 30s
-      timeout: 3s
-      start_period: 5s
+      timeout: 5s
+      start_period: 15s
       retries: 3
