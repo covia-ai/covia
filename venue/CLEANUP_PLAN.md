@@ -39,23 +39,23 @@ god-class), `RequestContext` (clean immutable value).
 Low risk. Shrinks surface, removes drift hazards, builds confidence. Batchable.
 
 ### 0a. Dead code
-- [ ] `AgentAdapter.extractSessionIdFromTask` (~:1912) — no callers anywhere. Delete.
-- [ ] `Engine.resolveAssetRef` (~:1052) — no callers; logic inlined in `resolvePath`/`resolveHash`. Delete.
-- [ ] `AgentAdapter` unused `PENDING` constant (~:68) — confirm zero refs, delete.
-- [ ] `Engine.getRootCursor` (~:1469) — remove the vestigial `@SuppressWarnings("unchecked")` (method performs no cast).
-- [ ] `GoalTreeContext.describeTask` (~:134) — orphan; logic re-inlined in `describeTransitionInput`. Delete method + its dedicated tests.
-- [ ] `LLMAgentAdapter.isKnownTask` / `isAlreadyCompleted` (~:644/:657) — production-dead leftovers of an earlier task-completion path; referenced only by their own unit tests. Confirm superseded, then delete method + tests.
-- [ ] `GoalTreeContext.estimateLiveTurnBytes` (~:508) — production-dead; test-only. Confirm, then delete method + tests.
+- [x] `AgentAdapter.extractSessionIdFromTask` — deleted (no callers).
+- [x] `Engine.resolveAssetRef` — deleted (no callers; logic inlined in `resolvePath`/`resolveHash`).
+- [x] `AgentAdapter` unused `PENDING` constant — deleted (zero refs confirmed).
+- [x] `Engine.getRootCursor` — vestigial `@SuppressWarnings("unchecked")` removed (field type matches return type).
+- [~] `GoalTreeContext.describeTask` — analysed: orphan public helper, duplicates `describeTransitionInput`'s inline single-task logic (different output). Recommend delete + tests. **Awaiting confirmation.**
+- [~] `LLMAgentAdapter.isKnownTask` / `isAlreadyCompleted` — analysed: internal (package-private), superseded by the S2.7c completion model (taskId=JobId, deferredCompletions). Not API. Recommend delete + tests. **Awaiting confirmation.**
+- [~] `GoalTreeContext.estimateLiveTurnBytes` — analysed: byte-sibling of the used `countLiveTurns`, but compaction triggers on count not bytes → no consumer (speculative). Recommend delete unless byte-budget compaction is planned. **Awaiting confirmation.**
 - [ ] **Deferred (not Phase 0):** `GoalTreeAdapter.buildTypedRootHarnessTools` is the *canonical* typed-tool builder that 3 inline copies should adopt — keep as the seed for Phase 1 consolidation (do NOT delete).
 - [ ] **Investigate separately:** agent-level `pending` Index in `AgentState` (`addPending`/`getPending`/`extractPending` + `resolveJobIds` plumbing) appears write-only — removing it is a data-path change, not a quick win. Defer to its own task.
 
-### 0b. Orphaned / misattached Javadoc (zero behaviour risk)
-- [ ] `AgentAdapter` — three-source sweep Javadoc is attached to `failQueuedTasks` but documents `failAllPendingForAgent`. Move it down.
-- [ ] `JobManager` (~:270-304) — `prepareInvocation`'s doc sits above `enforceCaps`. Move it to precede `prepareInvocation`.
-- [ ] `CoviaAdapter` (~:488-544) — `handleWrite`'s Javadoc sits above the `copy` section. Move it down to `handleWrite`.
+### 0b. Orphaned / misattached Javadoc (zero behaviour risk) — DONE
+- [x] `AgentAdapter` — three-source sweep Javadoc moved onto `failAllPendingForAgent`.
+- [x] `JobManager` — `prepareInvocation`'s doc moved to precede `prepareInvocation`.
+- [x] `CoviaAdapter` — `handleWrite`'s Javadoc moved down onto `handleWrite`.
 
 ### 0c. `Strings.create` → intern / `Fields.*` (safest, verified subset)
-- [ ] `Engine` (~:607-608, :969) — `Strings.create("name"|"description"|"operation")` → `Fields.NAME`/`Fields.DESCRIPTION`/`Fields.OPERATION` (already interned; removes a per-call alloc in dispatch).
+- [x] `Engine` — `Strings.create("name"|"description"|"operation")` → `Fields.NAME`/`Fields.DESCRIPTION`/`Fields.OPERATION`.
 - [ ] `AgentAdapter` fixed op refs → interned constants (`OP_LLMAGENT_CHAT`, `OP_LANGCHAIN_OPENAI`, fixed status/message literals), following the existing `TRIGGER_OP` pattern.
 - [ ] `CoviaAPI` (~:458 `"true"`, ~:812 `"[]"`), `MCP` (`"includePathPrefixes"`/`"includeAdapters"`) → interned constants.
 - [ ] Broader sweep in `TestAdapter`, `GoalTreeAdapter` (schema vocab), `JVMAdapter` is large — split into its own focused task if it grows the diff too much.
@@ -141,8 +141,24 @@ Not smells — real defects found while reading. Track as issues.
 - [ ] **Med** — `looksLikeText` (UTF-8 + control-char ratio) vs `isLikelyText` (NUL-only) classify the same file differently via File-root vs DLFS path.
 - [ ] **Low** — `CoviaAPI.listSecrets` empty case returns the string `"[]"` instead of an empty list.
 
+### Test-suite robustness (hardened)
+- [x] `HTTPTest.testHTTPWithQueryParams` — replaced external httpbin.org with an in-process echo server; deterministic, no longer skipped.
+- [x] `HardKillPersistenceTest.readDLFS` — bounded read-retry absorbs the post-restart DLFS-mount race under parallel load.
+- [ ] `HTTPTest.testGoogleSearch` / `testGoogleSearchWithFallback` — still hit google.com; `testGoogleSearch` hard-asserts `COMPLETE`. Remaining external-network flakes (not yet hardened).
+
 ---
 
 ## Progress log
 
 - _2026-06-05_ — Plan created from six-cluster review. Phase 0 started.
+- _2026-06-05_ — **Phase 0 safe batch committed** (6384520): removed dead
+  `PENDING` / `extractSessionIdFromTask` / `resolveAssetRef` + vestigial
+  `@SuppressWarnings`; corrected 3 misattached Javadocs; `Strings.create` →
+  `Fields.*` in Engine. Verified green (191 targeted tests; full suite 1308).
+- _2026-06-05_ — **Flaky tests hardened** (468a0a9): HTTPTest uses an in-process
+  echo server (no httpbin.org); `HardKillPersistenceTest.readDLFS` retries to
+  absorb the post-restart DLFS-mount race. Full suite green, skip count 2→1.
+- _2026-06-05_ — **Helper API analysis done** (0a, test-coupled): none of
+  `isKnownTask` / `isAlreadyCompleted` / `describeTask` / `estimateLiveTurnBytes`
+  is useful live API (internal-superseded, orphan-duplicate, and speculative
+  respectively). Recommended delete + tests; awaiting confirmation.
