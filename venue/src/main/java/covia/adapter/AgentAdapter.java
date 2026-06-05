@@ -65,7 +65,6 @@ public class AgentAdapter extends AAdapter {
 
 	private static final AString K_START = Strings.intern("start");
 	private static final AString K_END   = Strings.intern("end");
-	private static final AString PENDING = Strings.intern("PENDING");
 	private static final AString K_SOURCE_ID        = Strings.intern("sourceId");
 	private static final AString K_INCLUDE_TIMELINE = Strings.intern("includeTimeline");
 	private static final AString K_FORKED_FROM      = Strings.intern("forkedFrom");
@@ -1905,21 +1904,6 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Extracts the sessionId blob from a canonical taskdata map. Returns
-	 * null if the value isn't a map or carries no parseable sessionId.
-	 */
-	@SuppressWarnings("unchecked")
-	private static Blob extractSessionIdFromTask(ACell taskValue) {
-		if (!(taskValue instanceof AMap)) return null;
-		ACell sid = ((AMap<AString, ACell>) taskValue).get(Fields.SESSION_ID);
-		if (sid == null) return null;
-		AString sidStr = RT.ensureString(sid);
-		if (sidStr == null) return null;
-		try { return Blob.fromHex(sidStr.toString()); }
-		catch (Exception e) { return null; }
-	}
-
-	/**
 	 * Resolves pending Job IDs to a vector of maps with status and output.
 	 */
 	private AVector<ACell> resolveJobIds(Index<Blob, ACell> ids, AString payloadField) {
@@ -1941,22 +1925,6 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Fails all pending work for an agent that is being abandoned (e.g.
-	 * suspended on a run-loop exception). Sweeps three sources:
-	 * <ul>
-	 *   <li>Tasks still listed in {@code agent.getTasks()} — venue op was
-	 *       never called; the caller's Job is still waiting in PENDING/STARTED.</li>
-	 *   <li>Envelopes parked in {@link #deferredCompletions} — venue op was
-	 *       called but the framework didn't reach {@code completeDeferredJobs}
-	 *       (e.g. exception fired between the inner peek and the post-merge
-	 *       remove). These would otherwise leak indefinitely.</li>
-	 *   <li>Per-session chat slots — {@code agent:chat} reserved a slot
-	 *       awaiting the next response. Any agent error must surface as a
-	 *       chat Job failure rather than leaving the caller blocked forever.</li>
-	 * </ul>
-	 * Each surviving Job is failed with {@code error}.
-	 */
-	/**
 	 * Fails the caller Jobs for a set of queued tasks. Used by the fail-fast
 	 * path on transition errors, where the task queue is drained before
 	 * notification so callers see a settled (SUSPENDED) lattice state. Pass
@@ -1972,6 +1940,22 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
+	/**
+	 * Fails all pending work for an agent that is being abandoned (e.g.
+	 * suspended on a run-loop exception). Sweeps three sources:
+	 * <ul>
+	 *   <li>Tasks still listed in {@code agent.getTasks()} — venue op was
+	 *       never called; the caller's Job is still waiting in PENDING/STARTED.</li>
+	 *   <li>Envelopes parked in {@link #deferredCompletions} — venue op was
+	 *       called but the framework didn't reach {@code completeDeferredJobs}
+	 *       (e.g. exception fired between the inner peek and the post-merge
+	 *       remove). These would otherwise leak indefinitely.</li>
+	 *   <li>Per-session chat slots — {@code agent:chat} reserved a slot
+	 *       awaiting the next response. Any agent error must surface as a
+	 *       chat Job failure rather than leaving the caller blocked forever.</li>
+	 * </ul>
+	 * Each surviving Job is failed with {@code error}.
+	 */
 	@SuppressWarnings("unchecked")
 	private void failAllPendingForAgent(AString callerDID, AString agentId, String error) {
 		AgentState agent = getAgent(callerDID, agentId);

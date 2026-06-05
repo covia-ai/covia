@@ -268,17 +268,6 @@ public class JobManager {
 	}
 
 	/**
-	 * Shared invocation prelude: validates metadata, auth, caps, schema;
-	 * returns the adapter ready to invoke. Used by both
-	 * {@link #invokeOperation(AMap, ACell, RequestContext)} (Job path) and
-	 * {@link #invokeInternal(AMap, ACell, RequestContext)} (no-Job path).
-	 *
-	 * @throws IllegalArgumentException invalid meta or schema violation
-	 * @throws AuthException caller not authenticated
-	 * @throws RuntimeException capability denied
-	 * @throws IllegalStateException adapter not registered
-	 */
-	/**
 	 * Enforces capability attenuations on the user-facing dispatch path.
 	 *
 	 * <p>Caps gate what an external caller can do via {@link #invokeOperation}.
@@ -301,6 +290,17 @@ public class JobManager {
 		}
 	}
 
+	/**
+	 * Shared invocation prelude: validates metadata, auth, caps, schema;
+	 * returns the adapter ready to invoke. Used by both
+	 * {@link #invokeOperation(AMap, ACell, RequestContext)} (Job path) and
+	 * {@link #invokeInternal(AMap, ACell, RequestContext)} (no-Job path).
+	 *
+	 * @throws IllegalArgumentException invalid meta or schema violation
+	 * @throws AuthException caller not authenticated
+	 * @throws RuntimeException capability denied
+	 * @throws IllegalStateException adapter not registered
+	 */
 	private AAdapter prepareInvocation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		if (meta == null) throw new IllegalArgumentException("Metadata must be specified");
 		AString callerDID = ctx.getCallerDID();

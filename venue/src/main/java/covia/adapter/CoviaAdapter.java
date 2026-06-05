@@ -485,18 +485,6 @@ public class CoviaAdapter extends AAdapter {
 			K_VALUE, value);
 	}
 
-	/**
-	 * Writes a value at a path in the user's lattice.
-	 *
-	 * <p>Only the {@code w/} (workspace) and {@code o/} (operations) namespaces
-	 * accept writes. The path must have at least two segments: namespace and
-	 * top-level key (e.g. {@code "w/my-key"}). Deeper paths are supported
-	 * (e.g. {@code "w/data/nested/field"}) — intermediate maps are created
-	 * as needed via read-modify-write on the top-level entry.</p>
-	 *
-	 * @return {@code {written: true}} on success
-	 * @throws RuntimeException if the path is invalid or targets a non-writable namespace
-	 */
 	// ========== covia:copy — server-side path-to-path duplication ==========
 
 	private static final AString K_FROM = Strings.intern("from");
@@ -541,6 +529,18 @@ public class CoviaAdapter extends AAdapter {
 		return Maps.of(K_COPIED, CVMBool.TRUE);
 	}
 
+	/**
+	 * Writes a value at a path in the user's lattice.
+	 *
+	 * <p>Only the {@code w/} (workspace) and {@code o/} (operations) namespaces
+	 * accept writes. The path must have at least two segments: namespace and
+	 * top-level key (e.g. {@code "w/my-key"}). Deeper paths are supported
+	 * (e.g. {@code "w/data/nested/field"}) — intermediate maps are created
+	 * as needed via read-modify-write on the top-level entry.</p>
+	 *
+	 * @return {@code {written: true}} on success
+	 * @throws RuntimeException if the path is invalid or targets a non-writable namespace
+	 */
 	private ACell handleWrite(RequestContext ctx, ACell input) {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
 		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);

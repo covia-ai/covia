@@ -604,8 +604,8 @@ public class Engine {
 					ops = ops.conj(Strings.create(catalogPath));
 				}
 				AMap<AString, ACell> summary = Maps.of(
-					Strings.create("name"), Strings.create(adapter.getName()),
-					Strings.create("description"), Strings.create(adapter.getDescription()),
+					Fields.NAME, Strings.create(adapter.getName()),
+					Fields.DESCRIPTION, Strings.create(adapter.getDescription()),
 					Strings.create("operations"), ops);
 				writeVenueInfo("v/info/adapters/" + adapterName, summary, ctx);
 			}
@@ -966,7 +966,7 @@ public class Engine {
 		if (value instanceof AMap) {
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> map = (AMap<AString, ACell>) value;
-			if (map.get(Strings.create("operation")) != null) {
+			if (map.get(Fields.OPERATION) != null) {
 				return Asset.fromMeta(map);
 			}
 		}
@@ -1044,14 +1044,6 @@ public class Engine {
 	 */
 	public Asset resolveAsset(AString ref) {
 		return resolveAsset(ref, venueContext());
-	}
-
-	/**
-	 * Resolves a hash string within the /a/ namespace.
-	 */
-	private Asset resolveAssetRef(AString hashStr) {
-		Hash h = Hash.parse(hashStr);
-		return (h != null) ? getAsset(h) : null;
 	}
 
 	/**
@@ -1466,7 +1458,6 @@ public class Engine {
 	 * Gets the root lattice cursor. Used by adapters that need access to
 	 * top-level lattice regions (e.g. DLFSAdapter for the :dlfs region).
 	 */
-	@SuppressWarnings("unchecked")
 	public ALatticeCursor<Index<Keyword, ACell>> getRootCursor() {
 		return lattice;
 	}
