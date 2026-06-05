@@ -70,6 +70,10 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_FORKED_FROM      = Strings.intern("forkedFrom");
 	private static final AString K_SYSTEM_PROMPT    = Strings.intern("systemPrompt");
 	private static final AString K_LLM_OPERATION    = Strings.intern("llmOperation");
+	/** Default agent transition operation when none is configured. */
+	private static final AString DEFAULT_TRANSITION_OP = Strings.intern("v/ops/llmagent/chat");
+	/** Default level-3 LLM operation injected for LLM agents (systemPrompt present). */
+	private static final AString DEFAULT_LLM_OP        = Strings.intern("v/ops/langchain/openai");
 
 	/** Maximum run loop iterations before forced exit (safety net) */
 	private static final int MAX_LOOP_ITERATIONS = 20;
@@ -390,11 +394,11 @@ public class AgentAdapter extends AAdapter {
 		// defaults directly into record.config instead of duplicating into state.
 		if (config == null) config = Maps.empty();
 		if (!config.containsKey(Fields.OPERATION)) {
-			config = config.assoc(Fields.OPERATION, Strings.create("v/ops/llmagent/chat"));
+			config = config.assoc(Fields.OPERATION, DEFAULT_TRANSITION_OP);
 		}
 		// systemPrompt present implies an LLM agent — ensure llmOperation is set
 		if (config.containsKey(K_SYSTEM_PROMPT) && !config.containsKey(K_LLM_OPERATION)) {
-			config = config.assoc(K_LLM_OPERATION, Strings.create("v/ops/langchain/openai"));
+			config = config.assoc(K_LLM_OPERATION, DEFAULT_LLM_OP);
 		}
 
 		boolean overwrite = CVMBool.TRUE.equals(RT.getIn(input, Fields.OVERWRITE));
