@@ -98,7 +98,7 @@ Returns `{exists: true, value: <full metadata>}` or `{exists: false}`.
 ### `list [type]` — List stored assets
 
 ```
-asset_list                          # all assets
+asset_list                          # all your pinned assets
 asset_list  type=orchestration      # only orchestrations
 asset_list  type=agent-definition   # only agent definitions
 asset_list  offset=100  limit=50    # pagination

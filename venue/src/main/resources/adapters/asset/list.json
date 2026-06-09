@@ -1,6 +1,6 @@
 {
   "name": "List Assets",
-  "description": "List assets in your a/ namespace with pagination. Returns summary info (id, name, type, description) per asset. Use asset_get for full metadata. Filter by type for narrow searches (e.g. type='agent-definition').",
+  "description": "List your own pinned assets (the per-user a/ namespace), with pagination. Returns summary info (id is the asset hash, plus name, type, description) per asset; use asset_get for full metadata. Filter by type for narrow searches (e.g. type='agent-definition'). Venue operations are not listed here — discover those with covia_functions / covia_adapters.",
   "dateCreated": "2026-03-31T00:00:00Z",
   "operation": {
     "adapter": "asset:list",
