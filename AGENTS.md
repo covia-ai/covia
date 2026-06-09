@@ -45,9 +45,9 @@ covia/                          # ai.covia:covia:0.0.2-SNAPSHOT (parent POM)
 
 ## Requirements
 
-- **Java 21+** (JDK)
+- **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.4** (released artifact; `mvn install` from `../convex` if building from source)
+- **Convex 0.8.5-SNAPSHOT** — currently an unreleased build; `mvn install` from `../convex` (`develop`) until a release is pinned. See the build-reproducibility item in `DX_PLAN.md`.
 
 ## Build & Run
 
@@ -87,10 +87,11 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.4 | Lattice platform, immutable data, cryptography |
+| Convex | 0.8.5-SNAPSHOT | Lattice platform, immutable data, cryptography |
 | Javalin | 6.7.0 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.5.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
-| MCP SDK | 0.12.1 | Model Context Protocol |
+| MCP SDK | 0.13.0 | Model Context Protocol |
+| A2A | 1.0.0.Beta1 | Agent-to-Agent protocol |
 | JUnit | 6.0.1 | Testing |
 | SLF4J/Logback | 2.0.17/1.5.18 | Logging |
 
@@ -212,6 +213,8 @@ The engine always resolves operation references to metadata before dispatching �
 
 ## TODOs
 
+The list below tracks engineering tasks. For the developer-experience and open-source-readiness roadmap (onboarding, packaging, CI gate, versioning, docs, community scaffolding, operability), see **`DX_PLAN.md`** — the public-facing companion to this section.
+
 ### P0 — Critical (blocks production use)
 
 - [x] **Add authorization enforcement** — Job ownership enforced via `AccessControl` + `JobManager`. Per-user job persistence. Capability enforcement (UCAN `with`/`can`) planned for Phase 3/4.
@@ -264,6 +267,7 @@ The engine always resolves operation references to metadata before dispatching �
 
 ## Module-Specific Guides
 
+- **DX_PLAN.md** — Public developer-experience roadmap: onboarding, packaging, build reproducibility, CI quality gate, versioning, docs, community scaffolding, open-core boundary, operability
 - **venue/docs/GRID_LATTICE_DESIGN.md** — Grid lattice design: addressing, namespaces, UCAN capabilities, federation, agents, lattice mechanics, implementation phases
 - **venue/CLAUDE.md** — Detailed venue module architecture, design objectives, adapter reference, API endpoints, and development guidelines
 - **venue/CLAUDE.local.md** — Working notes on lattice persistence implementation progress
