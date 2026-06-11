@@ -122,7 +122,7 @@ A venue is a single self-contained server. With Docker:
 docker run -p 8080:8080 ghcr.io/covia-ai/covia:latest
 ```
 
-Or download the executable JAR from the [latest snapshot](https://github.com/covia-ai/covia/releases/tag/latest-snapshot) (rebuilt on every `develop` push) and run it (requires **Java 21+**):
+Or download the executable JAR from the [latest release](https://github.com/covia-ai/covia/releases/tag/latest) and run it (requires **Java 21+**):
 
 ```bash
 java -jar covia.jar

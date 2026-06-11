@@ -7,7 +7,7 @@ Covia is the open-source infrastructure for federated AI orchestration. It enabl
 ## Project Structure
 
 ```
-covia/                          # ai.covia:covia:0.0.2-SNAPSHOT (parent POM)
+covia/                          # ai.covia:covia:0.2.0-SNAPSHOT (parent POM)
 ├── covia-core/                 # Grid client library and shared abstractions
 │   └── src/main/java/covia/
 │       ├── api/                #   API field constants (Fields.java)
