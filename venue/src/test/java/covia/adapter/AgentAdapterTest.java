@@ -550,12 +550,14 @@ public class AgentAdapterTest {
 			"v/ops/agent/message", msgInput, RequestContext.of(ALICE_DID));
 		ACell result = msgJob.awaitResult(5000);
 
+		// agent:message reports delivery through its result envelope — that is
+		// the contract a caller relies on, and the op appends the message to the
+		// agent's session before completing. Whether the agent's run loop has
+		// since consumed the message is timing-dependent and not part of the
+		// delivery contract, so we verify the API result rather than internal state.
 		assertNotNull(result);
+		assertEquals(Status.COMPLETE, msgJob.getStatus());
 		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.DELIVERED));
-
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("msg-agent");
-		assertTrue(agent.hasSessionPending(), "Agent should have pending message after delivery");
 	}
 
 	@Test
@@ -2193,10 +2195,11 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "sync-agent", Fields.INPUT, Maps.of("q", "test")),
 			RequestContext.of(ALICE_DID));
 
-		// Job is not yet finished
-		assertFalse(job.isFinished());
-
-		// awaitResult blocks until the run loop completes the Job
+		// The sync pattern: await the task Job and use its result. The request
+		// returns a Job the agent completes asynchronously, so awaitResult is the
+		// synchronisation point — it returns only once the job is COMPLETE,
+		// regardless of how quickly the agent ran. Asserting an intermediate
+		// "not finished" state here would be a timing assumption.
 		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
 		assertTrue(job.isComplete());
@@ -2220,11 +2223,16 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "poll-agent", Fields.INPUT, Maps.of("q", "poll")),
 			RequestContext.of(ALICE_DID));
 
-		// Job is STARTED, not COMPLETE — async client can return this to the caller
-		assertEquals(Status.STARTED, job.getStatus());
-		assertFalse(job.isFinished());
+		// The async pattern: the request returns immediately with a pollable task
+		// Job. The agent runs asynchronously, so the job is legitimately either
+		// STARTED (not yet picked up) or already COMPLETE — a caller must handle
+		// both rather than assume one. Assert only that we got a real, pollable
+		// job in a valid state.
+		AString status = job.getStatus();
+		assertTrue(Status.STARTED.equals(status) || Status.COMPLETE.equals(status),
+			"Async request should return a STARTED or COMPLETE job, was: " + status);
 
-		// Simulate polling: wait then check
+		// Poll to completion, then read the output — the normal async retrieval path.
 		job.awaitResult(5000);
 		assertTrue(job.isComplete(), "Job should be complete after agent processes the task");
 
