@@ -7,7 +7,9 @@ name: Publish Docker image
 #
 # Tags:
 #   :latest  — tracks develop (dev venues: venue-3, venue-4)
-#   :stable  — tracks master (stable venues: venue-test, venue-1, venue-2)
+#   :stable  — tracks master (stable venues: venue-1, venue-2)
+#   :<x.y.z> — release builds (master pushes whose POM version is not a
+#              SNAPSHOT, i.e. the "Release x.y.z" commit) — pin deployments here
 #   :<sha>   — every published build, for pinning and rollback
 
 on:
@@ -51,16 +53,23 @@ jobs:
       id: sha
       run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-    # master publishes the :stable channel, develop publishes :latest
+    # master publishes the :stable channel (plus :x.y.z for release builds),
+    # develop publishes :latest
     - name: Compute image tags
       id: tags
       run: |
+        tags="ghcr.io/covia-ai/covia:${{ steps.sha.outputs.sha }}"
         if [ "${{ github.ref_name }}" = "master" ]; then
-          channel=stable
+          tags="$tags,ghcr.io/covia-ai/covia:stable"
+          version=$(mvn -q help:evaluate -Dexpression=project.version -DforceStdout)
+          case "$version" in
+            *-SNAPSHOT) ;;
+            *) tags="$tags,ghcr.io/covia-ai/covia:${version}" ;;
+          esac
         else
-          channel=latest
+          tags="$tags,ghcr.io/covia-ai/covia:latest"
         fi
-        echo "tags=ghcr.io/covia-ai/covia:${channel},ghcr.io/covia-ai/covia:${{ steps.sha.outputs.sha }}" >> $GITHUB_OUTPUT
+        echo "tags=$tags" >> $GITHUB_OUTPUT
 
     - name: Log in to GHCR
       uses: docker/login-action@v3

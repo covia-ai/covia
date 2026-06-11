@@ -4,7 +4,7 @@ This document describes how to build the Covia project using Maven.
 
 ## Prerequisites
 
-- **Java 21+**: The project compiles for Java 21 (`maven.compiler.release=21`); the published Docker image runs on a Java 25 JRE
+- **Java 21+**: The project compiles for Java 21 (`maven.compiler.release=21`); the published Docker image runs on a Java 25 JRE. This is deliberate policy: source targets Java 21 so client libraries stay broadly consumable, while container images ship the current Java LTS
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
 

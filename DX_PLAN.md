@@ -36,8 +36,8 @@ An honest snapshot, so newcomers know what to expect and contributors know where
 | TypeScript SDK | 💪 Solid | Published to npm, typed, tested |
 | Python SDK | 🔨 Good (alpha) | Published to PyPI, async mirror, well documented |
 | README / first impression | ✅ Done | Rewritten for developers: quickstart, badges, architecture, SDK examples |
-| Onboarding / quickstart (docs) | 🌱 Needs work | README quickstart now exists; the *docs* "Quick Start" still mostly links elsewhere |
-| Published artifacts up to date | 🌱 Needs work | The GitHub `latest` release is `0.0.1` (Jan 2026); `develop` is `0.0.2-SNAPSHOT`. A newcomer who downloads `latest` gets a months-old build that predates much of what the docs describe |
+| Onboarding / quickstart (docs) | ✅ Done | README quickstart and the docs "Getting Started" page both go zero-to-first-operation |
+| Published artifacts up to date | 🌱 Needs work | The GitHub `latest` release is `0.0.1` (Jan 2026); `develop` is `0.0.2-SNAPSHOT`. The README now routes JAR downloads to `latest-snapshot` as an interim fix; a real, current release is still owed |
 | Build reproducibility | ✅ Done | Depends on released Convex 0.8.5 from Maven Central; a clean clone builds in one command |
 | CI quality gate | ✅ Done | `test.yml` runs the full reactor (with tests) on every PR and push to `develop`/`master`; its first run caught three latent flaky tests |
 | Client/auth test coverage | 🔨 In progress | `VenueHTTP` has contract tests against a real venue; dedicated auth-strategy tests remain |
@@ -57,25 +57,25 @@ Three milestones, roughly in order of leverage. Each item has a checkbox so we c
 _Goal: a developer who has never seen Covia can understand it, run it, and invoke their first operation in under ten minutes._
 
 - [x] **Rewrite the repository `README.md` for developers.** The front page now leads with a copy-paste Quickstart (call a live venue, invoke an operation, run your own via Docker/JAR), badges, an architecture diagram, and links into the docs.
-- [ ] 🌱 **Provide a true five-minute quickstart in the docs.** One language, one path, zero to first operation. The README quickstart now does this; the docs' own "Quick Start" still mostly links elsewhere and should mirror it.
-- [ ] 🌱 **Pick one frictionless install and document it end-to-end.** The README now documents a `docker run` one-liner against `ghcr.io/covia-ai/covia:latest`, and the image has its own publish workflow. One supply-side gap remains, tracked under versioning in Milestone 2: the JAR download points at a stale release. (A thin `covia` CLI or a `curl | sh` installer is a stretch goal — see _Open questions_.)
-- [ ] 🌱 **Fill in or hide the documentation stubs.** A few core-concept pages (the Venues and Grid overviews, the A2A adapter page) currently read as "coming soon". Stubs on central concepts undermine confidence — let's finish them or remove them from the nav until they're ready.
+- [x] **Provide a true five-minute quickstart in the docs.** The docs' "Getting Started" page now mirrors the README quickstart: curl a live venue, invoke an operation from TypeScript or Python, run your own venue — zero to first operation on one page.
+- [ ] 🌱 **Pick one frictionless install and document it end-to-end.** The README now documents a `docker run` one-liner against `ghcr.io/covia-ai/covia:latest`, and the image has its own publish workflow; the JAR download points at `latest-snapshot`, so both paths hand newcomers a current build. What remains is choosing the lead path and documenting it end-to-end. (A thin `covia` CLI or a `curl | sh` installer is a stretch goal — see _Open questions_.)
+- [x] **Fill in or hide the documentation stubs.** The Venues and Grid overviews and the A2A adapter page are now real content; no core-concept page reads as "coming soon" any more.
 - [ ] 🌱 **Add a `troubleshooting` / debugging guide.** "My job failed — how do I inspect it?", "How do I read a venue's logs?", common setup pitfalls.
 
 ### Milestone 2 — Trust the Build
 
 _Goal: every clone builds reproducibly, every PR is validated automatically, and the version story is coherent._
 
-- [x] **Add a CI quality gate.** `.github/workflows/test.yml` runs `mvn clean install` (full reactor, with tests) on every pull request and on pushes to `develop`/`master`, building the Convex dependency from source first. Running and green; its first run surfaced three latent flaky tests (now fixed) — exactly the job it's there to do.
+- [x] **Add a CI quality gate.** `.github/workflows/test.yml` runs `mvn clean install` (full reactor, with tests) on every pull request and on pushes to `develop`/`master`. Running and green; its first run surfaced three latent flaky tests (now fixed) — exactly the job it's there to do.
 - [ ] 🌱 **Make the gate a required check and fix the build badge.** Branch protection should require the `Test` workflow for merges to `develop`/`master`, and the README "build" badge should point at it — it currently points at `snapshot-release.yml`, which skips tests, so green only means "it compiled".
 - [x] **Make the build reproducible.** Covia now depends on released **Convex 0.8.5** from Maven Central — a clean clone builds with `mvn clean install`, no Convex source build. The Convex-from-source steps are gone from all CI workflows (saving ~2 minutes per run). Tracking unreleased Convex capabilities is now a deliberate, temporary act: build Convex locally and point `convex.version` at its snapshot, restoring the release pin before merging. See [Convex ↔ Covia dependency](#a-note-on-the-convex-dependency).
 - [x] **Add a `CHANGELOG.md`** — in Keep a Changelog format. Keep it current per release, and make the release-notes link point at it for real.
-- [ ] **Coherent versioning across the product — and ship a current artifact.** The platform, the TypeScript SDK, and the Python SDK sit at very different version numbers, which makes "what's stable?" hard to answer. Concretely, the symptom is live today: the GitHub `latest` release is `0.0.1` (23 Jan 2026) while `develop` is `0.0.2-SNAPSHOT`, so the README's "download the latest release" path hands newcomers a months-old build that predates operations the quickstart invokes. Either point the JAR download at `latest-snapshot` (rebuilt on every `develop` push) or — better — agree a versioning story and cut a real, current `0.1.0` of the platform.
+- [ ] **Coherent versioning across the product — and ship a current artifact.** The versioning story is now agreed (see _Resolved_ under _Open questions_): independent SemVer per artifact, with the platform version naming the product generation. What remains is shipping it — cut **platform `0.1.0`** (the GitHub `latest` release is still `0.0.1` from 23 Jan 2026; the README's JAR download points at `latest-snapshot` as an interim fix), publish the Python SDK to PyPI for real, and add a compatibility matrix to the docs. When the release lands, also flip the quickstart's example venues from the dev tier to the stable tier — today only the dev venues carry the operations the docs invoke.
 - [x] **Decouple the public Docker image from deployment.** `publish-docker.yml` is now the single source of `ghcr.io/covia-ai/covia` tags (`:latest` + `:<sha>` on every `develop` push); the Azure/EC2 deploy workflows just pull the published image after a successful publish.
-- [x] **Reconcile documentation drift.** `BUILD.md` now lists `covia-core`, uses version-agnostic JAR names, and documents the Convex-from-source prerequisite; `deploy/README.md`'s truncated Caddy command and leaked local path are fixed (JARs now download from GitHub releases). JDK facts are stated consistently (build target 21; published image runs 25) — picking a single baseline remains an _Open question_.
+- [x] **Reconcile documentation drift.** `BUILD.md` now lists `covia-core`, uses version-agnostic JAR names, and documents the released-Convex dependency (with the snapshot-override escape hatch); `deploy/README.md`'s truncated Caddy command and leaked local path are fixed (JARs now download from GitHub releases). JDK facts are stated consistently (build target 21; published image runs 25) — picking a single baseline remains an _Open question_.
 - [ ] **Test the client-side auth strategies.** `VenueHTTP` now has contract tests against a real venue (`VenueHTTPTest`); the remaining gap is dedicated coverage for the auth strategies (`NoAuth`, `BearerAuth`, `KeyPairAuth`, `LocalAuth`) — signing round-trips and failure paths against a real `VenueServer`.
 - [x] **Add `Dependabot` and dependency/code scanning.** Dependabot watches Maven and GitHub Actions weekly (Convex excluded — managed manually); CodeQL analyses `develop` pushes and runs weekly.
-- [ ] **Consolidate the SDK story.** We have more than one Python client in the workspace; let's make the supported SDKs obvious and deprecate or redirect the rest. Give the Java client library (`covia-core`) a README and a published artifact so a third party can actually depend on it.
+- [ ] **Consolidate the SDK story.** We have more than one Python client in the workspace; let's make the supported SDKs obvious and deprecate or redirect the rest. Give the Java client library (`covia-core`) a README and a published artifact so a third party can actually depend on it — and when it's published standalone, license it **Apache-2.0** like the other SDK libraries (see _Resolved_ under _Open questions_). Urgent sub-item: the Python SDK's `pip install covia` currently fails — the package exists only on TestPyPI; publish it to the real index.
 
 ### Milestone 3 — Confident Self-Hosting & Ecosystem
 
@@ -97,8 +97,8 @@ _Goal: an operator can run a venue in production, and the surrounding ecosystem 
 A public open project needs the files that tell people how to participate. None of these are large; together they signal that contributions are welcome and taken seriously.
 
 - [x] **`SECURITY.md`** — private disclosure path, response expectations, supported versions, scope, and a note on the federation trust model.
-- [ ] **Wire up private vulnerability reporting.** `SECURITY.md` promises two channels that need switching on: enable *Private vulnerability reporting* in the repo's Security settings, and confirm `security@covia.ai` is a monitored inbox.
-- [x] **`CONTRIBUTING.md`** — how to build (including the Convex-from-source step), test, branch, and submit a change; conventions defer to `AGENTS.md`. Includes a short expectation of professional, good-faith behaviour in project spaces — a deliberate decision *not* to adopt a formal `CODE_OF_CONDUCT.md`, which tends to invite unproductive argument; we'd rather build than legislate behaviour.
+- [ ] **Wire up private vulnerability reporting.** *Private vulnerability reporting* is enabled in the repo's Security settings; what remains is confirming `security@covia.ai` is a monitored inbox.
+- [x] **`CONTRIBUTING.md`** — how to build, test, branch, and submit a change; conventions defer to `AGENTS.md`. Includes a short expectation of professional, good-faith behaviour in project spaces — a deliberate decision *not* to adopt a formal `CODE_OF_CONDUCT.md`, which tends to invite unproductive argument; we'd rather build than legislate behaviour.
 - [x] **Issue & PR templates** (`.github/`) — bug-report and feature-request forms (with private-reporting and Discussions redirects) and a PR checklist matching `CONTRIBUTING.md`.
 - [ ] **A short `ROADMAP` / governance note** — who maintains what, and how decisions get made.
 
@@ -106,7 +106,7 @@ A public open project needs the files that tell people how to participate. None 
 
 "Open core" means a deliberate line between what's open and freely self-hostable and what (if anything) is offered commercially. We owe contributors and adopters a clear, public statement of where that line sits — so that nobody is surprised, and so contributions land on the right side of it. Until we've written that down, treat everything in this repository as the open core.
 
-Related: the project is currently licensed under the **Eclipse Public License 2.0** (inherited from our Convex lineage). That's a deliberate choice worth confirming for an open-core posture — see _Open questions_ below.
+Related: the platform is licensed under the **Eclipse Public License 2.0** (inherited from our Convex lineage), confirmed as the deliberate choice for the open core. The SDK libraries are **Apache-2.0** so that client applications can embed them without licence friction — see _Resolved_ under _Open questions_.
 
 ## A note on the Convex dependency
 
@@ -127,6 +127,9 @@ We review this plan as the project evolves. If you tackle an item, tick it off i
 These are genuine forks in the road where community input would help:
 
 - **Distribution:** is a dedicated `covia` CLI worth building, or do we lead with Docker and the SDKs?
-- **License:** confirm EPL-2.0, or move the core to a more conventional permissive licence (e.g. Apache-2.0) for an open-core model?
-- **Versioning:** independent SemVer per artifact, or a unified version line across platform and SDKs?
-- **Java baseline:** settle on a single supported JDK for building and running.
+
+### Resolved
+
+- **License** _(resolved Jun 2026)_: the platform (this repository) stays **EPL-2.0**; the SDK libraries (TypeScript and Python) are **Apache-2.0**, so client code can embed them without licence friction. If `covia-core` is published as a standalone client artifact, it should follow the SDK side of that line — tracked under _Consolidate the SDK story_.
+- **Versioning** _(resolved Jun 2026)_: independent SemVer per artifact; the **platform version names the product generation** (next: `0.1.0`), and the docs carry a compatibility matrix mapping SDK versions to the platform versions they support.
+- **Java baseline** _(resolved Jun 2026)_: source targets **Java 21** (so client libraries stay broadly consumable); published container images run the **current Java LTS** (25 today).

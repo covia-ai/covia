@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/covia-ai/covia/actions/workflows/snapshot-release.yml"><img src="https://github.com/covia-ai/covia/actions/workflows/snapshot-release.yml/badge.svg?branch=develop" alt="Snapshot build"></a>
+  <a href="https://github.com/covia-ai/covia/actions/workflows/test.yml"><img src="https://github.com/covia-ai/covia/actions/workflows/test.yml/badge.svg?branch=develop" alt="Build & test"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-EPL%202.0-blue.svg" alt="License: EPL 2.0"></a>
   <a href="https://docs.covia.ai"><img src="https://img.shields.io/badge/docs-docs.covia.ai-blue.svg" alt="Documentation"></a>
   <a href="https://discord.gg/fywdrKd8QT"><img src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
@@ -122,7 +122,7 @@ A venue is a single self-contained server. With Docker:
 docker run -p 8080:8080 ghcr.io/covia-ai/covia:latest
 ```
 
-Or download the executable JAR from the [latest release](https://github.com/covia-ai/covia/releases/tag/latest) and run it (requires **Java 21+**):
+Or download the executable JAR from the [latest snapshot](https://github.com/covia-ai/covia/releases/tag/latest-snapshot) (rebuilt on every `develop` push) and run it (requires **Java 21+**):
 
 ```bash
 java -jar covia.jar

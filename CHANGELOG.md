@@ -8,7 +8,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
-Work on `develop`, targeting `0.0.2`. (Not exhaustive — see the git history for detail.)
+Work on `develop`, targeting `0.1.0` — the first release under the agreed versioning story (independent SemVer per artifact; the platform version names the product generation). (Not exhaustive — see the git history for detail.)
 
 ### Added
 - True cross-venue federation: `TwoVenueTestServer` and end-to-end cross-venue tests; `VenueHTTP` client contract tests against a real venue.
@@ -18,7 +18,8 @@ Work on `develop`, targeting `0.0.2`. (Not exhaustive — see the git history fo
 - Persistence resilience: periodic `fsync` sweep with `PersistenceHandler.flush()` bounding unclean-shutdown data loss; hard-kill / soft-kill resilience tests.
 - Developer-experience scaffolding: developer-facing `README.md`, [`DX_PLAN.md`](DX_PLAN.md) public roadmap, `CONTRIBUTING.md`, `SECURITY.md`, this changelog, and a CI build-and-test gate.
 - Issue and pull-request templates, Dependabot (Maven + GitHub Actions), and CodeQL scanning.
-- A dedicated `publish-docker.yml` workflow — the single source of `ghcr.io/covia-ai/covia` image tags (`:latest` + `:<sha>`).
+- A dedicated `publish-docker.yml` workflow — the single source of `ghcr.io/covia-ai/covia` image tags: `:latest` (develop), `:stable` (master), `:<x.y.z>` (release builds), `:<sha>` (every build).
+- A stable venue tier (venue-1, venue-2) running the `:stable` image channel, deployed automatically from `master`.
 
 ### Changed
 - Covia now depends on released **Convex 0.8.5** from Maven Central — a clean clone builds with `mvn clean install`, with no Convex source build. CI workflows no longer build Convex from source.
@@ -30,6 +31,8 @@ Work on `develop`, targeting `0.0.2`. (Not exhaustive — see the git history fo
 - Refactored shared LLM-agent infrastructure into `AbstractLLMAdapter`.
 - The Azure/EC2 deploy workflows now consume the published Docker image instead of each building and pushing their own.
 - Documentation drift fixed: `BUILD.md` covers `covia-core` and the Convex prerequisite; `deploy/README.md` has a working Caddy install and release-based JAR download.
+- Licensing clarified: the platform stays **EPL-2.0**; the SDK libraries (TypeScript, Python) are **Apache-2.0**.
+- README build badge now points at the `Test` workflow (build + full test suite) instead of the snapshot build; the JAR download points at `latest-snapshot` until `0.1.0` ships.
 
 ### Fixed
 - LangChain adapter now fails fast on a missing API key (#91).
