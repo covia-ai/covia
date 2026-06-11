@@ -37,14 +37,5 @@ jobs:
         key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
         restore-keys: ${{ runner.os }}-m2
 
-    # Covia currently builds against an unreleased Convex snapshot, so we build
-    # Convex from source first. Once a released Convex is pinned this step can go
-    # away — see DX_PLAN.md → "Make the build reproducible".
-    - name: Build Convex dependency from develop branch
-      run: |
-        git clone --depth 1 --branch develop https://github.com/Convex-Dev/convex.git /tmp/convex
-        cd /tmp/convex
-        mvn install -DskipTests -q
-
     - name: Build and test (full reactor)
       run: mvn clean install

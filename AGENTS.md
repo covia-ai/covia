@@ -47,7 +47,7 @@ covia/                          # ai.covia:covia:0.0.2-SNAPSHOT (parent POM)
 
 - **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.5-SNAPSHOT** — currently an unreleased build; `mvn install` from `../convex` (`develop`) until a release is pinned. See the build-reproducibility item in `DX_PLAN.md`.
+- **Convex 0.8.5** — released, resolves from Maven Central. To develop against unreleased Convex changes, `mvn install` from `../convex` and point `convex.version` at its snapshot.
 
 ## Build & Run
 
@@ -87,7 +87,7 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.5-SNAPSHOT | Lattice platform, immutable data, cryptography |
+| Convex | 0.8.5 | Lattice platform, immutable data, cryptography |
 | Javalin | 6.7.0 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.5.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 0.13.0 | Model Context Protocol |

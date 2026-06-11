@@ -225,7 +225,7 @@ mvn clean install            # build all modules and run tests
 java -jar venue/target/covia.jar
 ```
 
-> Covia currently builds against an unreleased Convex snapshot, so you may need to build [Convex](https://github.com/Convex-Dev/convex) (`develop`) first. Pinning a released Convex is on the [roadmap](DX_PLAN.md). Full details — module layout, release flow, troubleshooting — are in [`BUILD.md`](BUILD.md).
+> All dependencies — including [Convex](https://github.com/Convex-Dev/convex) — resolve from Maven Central, so a clean clone builds with the one command above. Full details — module layout, release flow, troubleshooting — are in [`BUILD.md`](BUILD.md).
 
 | Module | Purpose |
 |--------|---------|

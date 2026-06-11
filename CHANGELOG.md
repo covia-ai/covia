@@ -21,6 +21,7 @@ Work on `develop`, targeting `0.0.2`. (Not exhaustive — see the git history fo
 - A dedicated `publish-docker.yml` workflow — the single source of `ghcr.io/covia-ai/covia` image tags (`:latest` + `:<sha>`).
 
 ### Changed
+- Covia now depends on released **Convex 0.8.5** from Maven Central — a clean clone builds with `mvn clean install`, with no Convex source build. CI workflows no longer build Convex from source.
 - Renamed `CLAUDE.md` to `AGENTS.md` (a `CLAUDE.md` import pointer remains).
 - `GET /assets` response made consistent; no-limit paging fixed; `asset:list` scoped to the caller's own pinned assets.
 - Documented a strong-consistency contract for `CoviaAdapter` CRUD, with regression tests.

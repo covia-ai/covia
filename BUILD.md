@@ -7,14 +7,8 @@ This document describes how to build the Covia project using Maven.
 - **Java 21+**: The project compiles for Java 21 (`maven.compiler.release=21`); the published Docker image runs on a Java 25 JRE
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
-- **Convex (built from source, for now)**: Covia currently depends on an unreleased Convex snapshot, so a clean clone needs Convex installed to your local Maven repository first:
 
-  ```bash
-  git clone --depth 1 --branch develop https://github.com/Convex-Dev/convex.git
-  cd convex && mvn install -DskipTests
-  ```
-
-  Removing this step is on the roadmap — see *"Make the build reproducible"* in `DX_PLAN.md`.
+All dependencies, including [Convex](https://github.com/Convex-Dev/convex), resolve from Maven Central — a clean clone builds with no extra steps. (To develop against unreleased Convex changes, build Convex from source with `mvn install` and point `convex.version` in the parent POM at its snapshot version.)
 
 ## Project Structure
 

@@ -39,14 +39,6 @@ jobs:
         languages: java-kotlin
         build-mode: manual
 
-    # Covia currently builds against an unreleased Convex snapshot — see
-    # DX_PLAN.md → "Make the build reproducible".
-    - name: Build Convex dependency from develop branch
-      run: |
-        git clone --depth 1 --branch develop https://github.com/Convex-Dev/convex.git /tmp/convex
-        cd /tmp/convex
-        mvn install -DskipTests -q
-
     - name: Build with Maven
       run: mvn clean install -DskipTests
 

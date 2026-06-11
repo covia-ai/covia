@@ -25,15 +25,10 @@ We don't have a formal code of conduct. We expect **professional, good-faith beh
 
 ## Building
 
-Covia currently builds against an **unreleased Convex snapshot** (`0.8.5-SNAPSHOT`), so a clean clone needs Convex built into your local Maven repo first. (Removing this step is on the roadmap — see *"Make the build reproducible"* in `DX_PLAN.md`.)
+All dependencies — including [Convex](https://github.com/Convex-Dev/convex) — resolve from Maven Central, so a clean clone builds in one command:
 
 ```bash
-# 1. Build the Convex dependency from source (once, and after Convex changes)
-git clone --depth 1 --branch develop https://github.com/Convex-Dev/convex.git
-cd convex && mvn install -DskipTests && cd ..
-
-# 2. Build Covia (all modules) and run the tests
-cd covia
+# Build Covia (all modules) and run the tests
 mvn clean install
 
 # Run the venue server
