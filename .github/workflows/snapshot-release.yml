@@ -4,6 +4,12 @@ on:
   push:
     branches: [ develop ]
 
+# Serialise snapshot publishing — concurrent runs race the delete/recreate
+# of the latest-snapshot tag (HTTP 422: tag_name already exists)
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
