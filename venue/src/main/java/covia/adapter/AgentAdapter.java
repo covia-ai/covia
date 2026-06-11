@@ -25,12 +25,13 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
+import covia.adapter.agent.ContextInspectable;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
-import covia.venue.AgentScheduler;
 import covia.venue.AgentState;
 import covia.venue.RequestContext;
+import covia.venue.Scheduler;
 import covia.venue.User;
 import covia.venue.Users;
 
@@ -64,12 +65,15 @@ public class AgentAdapter extends AAdapter {
 
 	private static final AString K_START = Strings.intern("start");
 	private static final AString K_END   = Strings.intern("end");
-	private static final AString PENDING = Strings.intern("PENDING");
 	private static final AString K_SOURCE_ID        = Strings.intern("sourceId");
 	private static final AString K_INCLUDE_TIMELINE = Strings.intern("includeTimeline");
 	private static final AString K_FORKED_FROM      = Strings.intern("forkedFrom");
 	private static final AString K_SYSTEM_PROMPT    = Strings.intern("systemPrompt");
 	private static final AString K_LLM_OPERATION    = Strings.intern("llmOperation");
+	/** Default agent transition operation when none is configured. */
+	private static final AString DEFAULT_TRANSITION_OP = Strings.intern("v/ops/llmagent/chat");
+	/** Default level-3 LLM operation injected for LLM agents (systemPrompt present). */
+	private static final AString DEFAULT_LLM_OP        = Strings.intern("v/ops/langchain/openai");
 
 	/** Maximum run loop iterations before forced exit (safety net) */
 	private static final int MAX_LOOP_ITERATIONS = 20;
@@ -196,6 +200,13 @@ public class AgentAdapter extends AAdapter {
 				case "request" -> {
 					return invokeRequestInternal(ctx, meta, input);
 				}
+				case "trigger" -> {
+					// Zero-Job kick (the scheduler's deferred-wake path and the
+					// LLM tool loop). Fire-and-forget: start the loop per `force`
+					// and return a status snapshot immediately — `wait` does not
+					// apply here. Mints no session.
+					return CompletableFuture.completedFuture(doKick(ctx, input));
+				}
 				default -> {
 					return CompletableFuture.failedFuture(new UnsupportedOperationException(
 						"agent:" + subOp + " requires Job-aware invocation"));
@@ -261,6 +272,34 @@ public class AgentAdapter extends AAdapter {
 		return snap;
 	}
 
+	/**
+	 * {@code force} policy for {@code agent:trigger}: {@code true} (default)
+	 * runs a cycle even when the agent is idle — the historical trigger
+	 * behaviour; {@code false} runs only if there is work (the scheduler's
+	 * deferred-wake path). The flag is additive — absent means {@code true},
+	 * so existing callers are unchanged.
+	 */
+	private static boolean parseForce(ACell input) {
+		ACell v = RT.getIn(input, Fields.FORCE);
+		return (v instanceof CVMBool b) ? b.booleanValue() : true;
+	}
+
+	/**
+	 * Zero-Job trigger kick: start the agent's run loop per {@code force} and
+	 * return a status snapshot immediately. Mints no session; ignores
+	 * {@code wait}. Shared by the scheduler's deferred wake and the LLM tool
+	 * loop. The loop, if started, runs on its own virtual thread.
+	 */
+	private ACell doKick(RequestContext ctx, ACell input) {
+		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		if (agentId == null) throw new IllegalArgumentException("agentId is required");
+		wakeAgent(agentId, ctx, parseForce(input));
+		AgentState agent = getAgent(ctx.getCallerDID(), agentId);
+		AString status = (agent != null) ? agent.getStatus() : null;
+		return Maps.of(
+			Fields.AGENT_ID, agentId,
+			Fields.STATUS,   (status != null) ? status : AgentState.SLEEPING);
+	}
 
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
@@ -355,11 +394,11 @@ public class AgentAdapter extends AAdapter {
 		// defaults directly into record.config instead of duplicating into state.
 		if (config == null) config = Maps.empty();
 		if (!config.containsKey(Fields.OPERATION)) {
-			config = config.assoc(Fields.OPERATION, Strings.create("v/ops/llmagent/chat"));
+			config = config.assoc(Fields.OPERATION, DEFAULT_TRANSITION_OP);
 		}
 		// systemPrompt present implies an LLM agent — ensure llmOperation is set
 		if (config.containsKey(K_SYSTEM_PROMPT) && !config.containsKey(K_LLM_OPERATION)) {
-			config = config.assoc(K_LLM_OPERATION, Strings.create("v/ops/langchain/openai"));
+			config = config.assoc(K_LLM_OPERATION, DEFAULT_LLM_OP);
 		}
 
 		boolean overwrite = CVMBool.TRUE.equals(RT.getIn(input, Fields.OVERWRITE));
@@ -674,13 +713,27 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		Blob sid = resolveOrMintSession(job, agent, input, ctx.getCallerDID());
-		if (sid == null) return;
-		AString sidHex = Strings.create(sid.toHexString());
+		// Trigger never creates a session. A supplied sessionId is resolved
+		// and echoed back; if none is supplied the trigger runs unsessioned.
+		Blob sid = null;
+		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);
+		if (sidCell != null) {
+			AString s = RT.ensureString(sidCell);
+			if (s == null) { job.fail("sessionId must be a hex string"); return; }
+			sid = Blob.fromHex(s.toString());
+			if (sid == null) { job.fail("Invalid sessionId format: " + s); return; }
+		}
+		AString sidHex = (sid != null) ? Strings.create(sid.toHexString()) : null;
 
-		CompletableFuture<ACell> completion = wakeAgent(agentId, ctx, true);
+		boolean force = parseForce(input);
+		CompletableFuture<ACell> completion = wakeAgent(agentId, ctx, force);
 		if (completion == null) {
-			job.fail("Cannot start agent: " + agentId);
+			// force=true (the default) keeps the historical "must start" contract.
+			if (force) { job.fail("Cannot start agent: " + agentId); return; }
+			// force=false: an idle agent with no work is not an error — return a snapshot.
+			AMap<AString, ACell> snap = Maps.of(
+				Fields.AGENT_ID, agentId, Fields.STATUS, agent.getStatus());
+			job.completeWith((sidHex != null) ? snap.assoc(Fields.SESSION_ID, sidHex) : snap);
 			return;
 		}
 
@@ -692,12 +745,12 @@ public class AgentAdapter extends AAdapter {
 		long waitMs = parseWaitMs(input);
 		if (waitMs == 0 && RT.getIn(input, Fields.WAIT) == null) waitMs = -1;
 
-		ACell running = Maps.of(
-			Fields.AGENT_ID,   agentId,
-			Fields.SESSION_ID, sidHex,
-			Fields.STATUS,     AgentState.RUNNING);
+		AMap<AString, ACell> running = Maps.of(
+			Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.RUNNING);
+		if (sidHex != null) running = running.assoc(Fields.SESSION_ID, sidHex);
+		final AString fSidHex = sidHex;
 		awaitRunCompletion(job, completion, waitMs, running,
-			result -> annotateWithSession(result, sidHex));
+			result -> (fSidHex != null) ? annotateWithSession(result, fSidHex) : result);
 	}
 
 	/**
@@ -755,12 +808,13 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Renders the assembled LLM context an agent would see on a fresh
-	 * transition — same ContextBuilder pipeline as the real adapter, but
-	 * without invoking the LLM. Returns the system prompt text, context
-	 * entry labels, tool names, caps, and outputs config as a single map.
-	 * Designed for live debugging: call via {@code agent:context} to see
-	 * exactly what the LLM receives.
+	 * Dispatches {@code agent:context} to the configured transition adapter.
+	 *
+	 * <p>Looks up the agent's transition operation, resolves its adapter, and
+	 * if the adapter implements {@link ContextInspectable}, asks it to render
+	 * its context as JSON. Adapters that do not declare context inspection
+	 * support cause the call to fail with a clear message — AgentAdapter
+	 * holds no opinion on what a context "looks like".</p>
 	 */
 	@SuppressWarnings("unchecked")
 	private void handleContext(Job job, ACell input, RequestContext ctx) {
@@ -778,59 +832,39 @@ public class AgentAdapter extends AAdapter {
 			? (AMap<AString, ACell>) m : null;
 		ACell state = record.get(AgentState.KEY_STATE);
 
-		// Delegate to the actual adapter's code path. For goaltree agents
-		// this calls GoalTreeAdapter.buildFirstIterationL3Input which uses
-		// the same ContextBuilder pipeline, harness tool assembly, output
-		// typing, and L3 input construction as the real transition — the
-		// only difference is we return the L3 input instead of dispatching.
-		ACell taskInput = RT.getIn(input, Strings.intern("task"));
 		AString operation = (recordConfig != null)
-			? RT.ensureString(recordConfig.get(Strings.intern("operation")))
+			? RT.ensureString(recordConfig.get(Fields.OPERATION))
 			: null;
-
-		AMap<AString, ACell> l3Input;
-		if (operation != null && operation.toString().contains("goaltree")) {
-			covia.adapter.agent.GoalTreeAdapter gta =
-				(covia.adapter.agent.GoalTreeAdapter) engine.getAdapter("goaltree");
-			l3Input = gta.buildFirstIterationL3Input(recordConfig, state, taskInput, ctx);
-		} else {
-			// Fallback for non-goaltree agents — basic ContextBuilder only
-			ContextBuilder builder = new ContextBuilder(engine, ctx);
-			ContextBuilder.ContextResult context = builder
-				.withConfig(recordConfig, state)
-				.withSystemPrompt(Vectors.empty())
-				.withContextEntries(state)
-				.withTools()
-				.build();
-			l3Input = covia.adapter.agent.AbstractLLMAdapter.buildL3Input(
-				ContextBuilder.extractConfig(state),
-				context.history(),
-				context.tools());
+		if (operation == null) {
+			job.fail("Agent has no transition operation configured");
+			return;
 		}
 
-		// Serialize as ordered JSON matching the wire format to the LLM.
-		// Convex maps hash-order keys, so we build the JSON directly.
-		AVector<ACell> messages = RT.ensureVector(l3Input.get(Strings.create("messages")));
-		AVector<ACell> tools = RT.ensureVector(l3Input.get(Strings.create("tools")));
-		StringBuilder sb = new StringBuilder("{\n");
-		ACell model = l3Input.get(Strings.create("model"));
-		if (model != null) sb.append("  \"model\": ").append(JSON.toString(model)).append(",\n");
-		ACell rf = l3Input.get(Strings.create("responseFormat"));
-		if (rf != null) sb.append("  \"responseFormat\": ").append(JSON.toString(rf)).append(",\n");
-		sb.append("  \"messages\": [\n");
-		for (long i = 0; i < messages.count(); i++) {
-			if (i > 0) sb.append(",\n");
-			sb.append("    ").append(JSON.toString(messages.get(i)));
+		// Resolve the adapter that handles the agent's transition operation.
+		covia.grid.Asset asset = engine.resolveAsset(operation, ctx);
+		if (asset == null) {
+			job.fail("Could not resolve agent's operation: " + operation);
+			return;
 		}
-		sb.append("\n  ],\n  \"tools\": [\n");
-		for (long i = 0; i < tools.count(); i++) {
-			if (i > 0) sb.append(",\n");
-			sb.append("    ").append(JSON.toString(tools.get(i)));
+		AString adapterRef = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.ADAPTER));
+		if (adapterRef == null) {
+			job.fail("Agent's operation has no adapter: " + operation);
+			return;
 		}
-		sb.append("\n  ]\n}");
+		String adapterName = adapterRef.toString();
+		int colon = adapterName.indexOf(':');
+		if (colon >= 0) adapterName = adapterName.substring(0, colon);
+		AAdapter target = engine.getAdapter(adapterName);
+		if (!(target instanceof ContextInspectable inspectable)) {
+			job.fail("Adapter '" + adapterName + "' does not support context inspection");
+			return;
+		}
+
+		ACell taskInput = RT.getIn(input, Strings.intern("task"));
+		AString rendered = inspectable.inspectContext(recordConfig, state, taskInput, ctx);
 
 		job.setStatus(Status.STARTED);
-		job.completeWith(Strings.create(sb.toString()));
+		job.completeWith(rendered);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -1172,16 +1206,71 @@ public class AgentAdapter extends AAdapter {
 			job.completeWith(immediateResult);
 			return;
 		}
+		// Make the blocking wait cancellable. A per-caller signal races against
+		// the shared run-loop future: job.cancel() completes the signal, which
+		// unblocks THIS wait without cancelling the loop — other waiters attached
+		// to `completion` are unaffected, and we never touch `completion` itself.
+		CompletableFuture<ACell> cancelSignal = new CompletableFuture<>();
+		job.setCancelHook(() -> cancelSignal.complete(null));
+		// A cancel may have landed between STARTED and hook registration.
+		if (job.isFinished()) { job.setCancelHook(null); return; }
+		CompletableFuture<ACell> raced = completion.applyToEither(cancelSignal, x -> x);
 		try {
 			ACell cycleResult = (waitMs < 0)
-				? completion.join()
-				: completion.get(waitMs, TimeUnit.MILLISECONDS);
-			job.completeWith(resultMapper.apply(cycleResult));
-		} catch (TimeoutException e) {
-			job.completeWith(immediateResult);
+				? raced.join()
+				: raced.get(waitMs, TimeUnit.MILLISECONDS);
+			// A cancel during the wait already set CANCELLED — don't overwrite it
+			// with a stale completion result.
+			if (!job.isFinished()) job.completeWith(resultMapper.apply(cycleResult));
 		} catch (Exception e) {
-			job.completeWith(immediateResult);
+			// Bounded wait elapsed, or the loop future failed: RUNNING snapshot,
+			// unless a cancel already finished the job.
+			if (!job.isFinished()) job.completeWith(immediateResult);
+		} finally {
+			job.setCancelHook(null);
+			// Detach `raced` from `completion` on the timeout path so a
+			// never-draining loop doesn't accumulate dependents.
+			cancelSignal.complete(null);
 		}
+	}
+
+	/**
+	 * Waits for the agent's in-flight run (if any) to reach a rest state
+	 * (SLEEPING, SUSPENDED or TERMINATED) and returns that state.
+	 *
+	 * <p><b>Pure observer — it never wakes or starts the agent.</b> It reads the
+	 * run loop's existing completion future from {@link #runningLoops} (the same
+	 * future {@code agent:trigger} awaits): if a run is in flight it attaches and
+	 * waits; otherwise the agent is already at rest and the current status is
+	 * returned at once. No status polling, no thread to leak, and — unlike a
+	 * {@code wakeAgent} call — no side effect on the shared engine. A run that
+	 * ends via error (the loop suspends the agent and completes the future
+	 * exceptionally) still counts as finished; only a run still RUNNING past
+	 * {@code timeoutMs} times out.</p>
+	 *
+	 * <p>Intended for callers observing a run they already triggered; it does not
+	 * wait for a run that has not started yet.</p>
+	 *
+	 * @return the rest state reached (SLEEPING / SUSPENDED / TERMINATED)
+	 * @throws TimeoutException if the run is still RUNNING after {@code timeoutMs}
+	 */
+	AString awaitRunFinished(AString agentId, RequestContext ctx, long timeoutMs)
+			throws TimeoutException {
+		CompletableFuture<ACell> f = runningLoops.get(agentId); // observe only — do NOT wake
+		if (f != null && !f.isDone()) {
+			try {
+				f.get(timeoutMs, TimeUnit.MILLISECONDS);
+			} catch (TimeoutException e) {
+				throw e; // genuinely still running — caller's bound exceeded
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+			} catch (java.util.concurrent.ExecutionException e) {
+				// Run finished via error: the loop suspended the agent and
+				// completed the future exceptionally. That is still a finish.
+			}
+		}
+		AgentState agent = getAgent(ctx.getCallerDID(), agentId);
+		return agent == null ? AgentState.TERMINATED : agent.getStatus();
 	}
 
 	/**
@@ -1592,20 +1681,20 @@ public class AgentAdapter extends AAdapter {
 		// fire, clear it so the scheduler rebuild on restart doesn't re-fire
 		// a wake that's already been serviced. Lattice is authoritative; the
 		// scheduler index is rebuilt from it on boot.
-		AgentScheduler scheduler = engine.scheduler();
+		Scheduler scheduler = engine.gridScheduler();
 		if (scheduler != null && leanError == null) {
 			Blob pickedThreadId = null;
-			AgentScheduler.ThreadKind pickedKind = null;
+			AgentState.ThreadKind pickedKind = null;
 			AMap<AString, ACell> pickedRecord = null;
 			if (pickedTask != null) {
 				pickedThreadId = pickedTask.getKey();
-				pickedKind = AgentScheduler.ThreadKind.TASK;
+				pickedKind = AgentState.ThreadKind.TASK;
 				Index<Blob, ACell> currentTasks = agent.getTasks();
 				ACell tRec = (currentTasks != null) ? currentTasks.get(pickedThreadId) : null;
 				if (tRec instanceof AMap) pickedRecord = (AMap<AString, ACell>) tRec;
 			} else if (pickedSessionBlob != null) {
 				pickedThreadId = pickedSessionBlob;
-				pickedKind = AgentScheduler.ThreadKind.SESSION;
+				pickedKind = AgentState.ThreadKind.SESSION;
 				pickedRecord = agent.getSession(pickedSessionBlob);
 			}
 			if (pickedThreadId != null) {
@@ -1819,21 +1908,6 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Extracts the sessionId blob from a canonical taskdata map. Returns
-	 * null if the value isn't a map or carries no parseable sessionId.
-	 */
-	@SuppressWarnings("unchecked")
-	private static Blob extractSessionIdFromTask(ACell taskValue) {
-		if (!(taskValue instanceof AMap)) return null;
-		ACell sid = ((AMap<AString, ACell>) taskValue).get(Fields.SESSION_ID);
-		if (sid == null) return null;
-		AString sidStr = RT.ensureString(sid);
-		if (sidStr == null) return null;
-		try { return Blob.fromHex(sidStr.toString()); }
-		catch (Exception e) { return null; }
-	}
-
-	/**
 	 * Resolves pending Job IDs to a vector of maps with status and output.
 	 */
 	private AVector<ACell> resolveJobIds(Index<Blob, ACell> ids, AString payloadField) {
@@ -1855,22 +1929,6 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Fails all pending work for an agent that is being abandoned (e.g.
-	 * suspended on a run-loop exception). Sweeps three sources:
-	 * <ul>
-	 *   <li>Tasks still listed in {@code agent.getTasks()} — venue op was
-	 *       never called; the caller's Job is still waiting in PENDING/STARTED.</li>
-	 *   <li>Envelopes parked in {@link #deferredCompletions} — venue op was
-	 *       called but the framework didn't reach {@code completeDeferredJobs}
-	 *       (e.g. exception fired between the inner peek and the post-merge
-	 *       remove). These would otherwise leak indefinitely.</li>
-	 *   <li>Per-session chat slots — {@code agent:chat} reserved a slot
-	 *       awaiting the next response. Any agent error must surface as a
-	 *       chat Job failure rather than leaving the caller blocked forever.</li>
-	 * </ul>
-	 * Each surviving Job is failed with {@code error}.
-	 */
-	/**
 	 * Fails the caller Jobs for a set of queued tasks. Used by the fail-fast
 	 * path on transition errors, where the task queue is drained before
 	 * notification so callers see a settled (SUSPENDED) lattice state. Pass
@@ -1886,6 +1944,22 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
+	/**
+	 * Fails all pending work for an agent that is being abandoned (e.g.
+	 * suspended on a run-loop exception). Sweeps three sources:
+	 * <ul>
+	 *   <li>Tasks still listed in {@code agent.getTasks()} — venue op was
+	 *       never called; the caller's Job is still waiting in PENDING/STARTED.</li>
+	 *   <li>Envelopes parked in {@link #deferredCompletions} — venue op was
+	 *       called but the framework didn't reach {@code completeDeferredJobs}
+	 *       (e.g. exception fired between the inner peek and the post-merge
+	 *       remove). These would otherwise leak indefinitely.</li>
+	 *   <li>Per-session chat slots — {@code agent:chat} reserved a slot
+	 *       awaiting the next response. Any agent error must surface as a
+	 *       chat Job failure rather than leaving the caller blocked forever.</li>
+	 * </ul>
+	 * Each surviving Job is failed with {@code error}.
+	 */
 	@SuppressWarnings("unchecked")
 	private void failAllPendingForAgent(AString callerDID, AString agentId, String error) {
 		AgentState agent = getAgent(callerDID, agentId);

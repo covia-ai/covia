@@ -1,0 +1,41 @@
+name: Test
+
+# Build-and-test quality gate. Runs the full reactor with tests on every pull
+# request and on pushes to the long-lived branches, gating merges.
+# See DX_PLAN.md → Milestone 2 ("Add a CI quality gate").
+
+on:
+  pull_request:
+    branches: [ develop, master ]
+  push:
+    branches: [ develop, master ]
+  workflow_dispatch:
+
+# Supersede in-flight runs when the same branch/PR is pushed again
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v5
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: 'maven'
+
+    - name: Cache Maven packages
+      uses: actions/cache@v5
+      with:
+        path: ~/.m2
+        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+        restore-keys: ${{ runner.os }}-m2
+
+    - name: Build and test (full reactor)
+      run: mvn clean install

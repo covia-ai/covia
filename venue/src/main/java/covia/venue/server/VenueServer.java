@@ -88,13 +88,30 @@ public class VenueServer {
 			this.nodeServer = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			nodeServer.setMergeContext(LatticeContext.create(null, keyPair));
 			nodeServer.launch(); // restore from store BEFORE Engine init
-			// Wire the synchronous persistence handler — used by Engine.flush()
-			// and the close-time final flush. See venue/docs/PERSISTENCE.md §5.0.
-			covia.venue.PersistenceHandler persistHandler = value -> {
-				try {
-					nodeServer.persistSnapshot(value);
-				} catch (java.io.IOException e) {
-					throw new RuntimeException("persistSnapshot failed", e);
+			// Wire the synchronous persistence handler — used by Engine.flush(),
+			// the periodic flush sweep, and the close-time final flush. See
+			// venue/docs/PERSISTENCE.md §5.0.
+			//
+			// persist() pushes the snapshot through the propagator's
+			// setRootData (mmap write); flush() forces fsync so the bytes are
+			// actually on disk before the call returns. Only EtchStore has a
+			// real fsync to call — for other store types (memory, etc.) the
+			// flush is implicitly a no-op.
+			final AStore wiredStore = this.store;
+			covia.venue.PersistenceHandler persistHandler = new covia.venue.PersistenceHandler() {
+				@Override
+				public void persist(ACell value) {
+					try {
+						nodeServer.persistSnapshot(value);
+					} catch (java.io.IOException e) {
+						throw new RuntimeException("persistSnapshot failed", e);
+					}
+				}
+				@Override
+				public void flush() throws java.io.IOException {
+					if (wiredStore instanceof EtchStore es) {
+						es.flush();
+					}
 				}
 			};
 			engine = new Engine(config, nodeServer.getCursor(), keyPair, persistHandler);
@@ -128,6 +145,10 @@ public class VenueServer {
 	 * </ul>
 	 */
 	private static AStore createStore(Config config) throws IOException {
+		if (!config.isStoreConfigured()) {
+			log.warn("No 'store' configured — falling back to ephemeral temp Etch store; data will be deleted on JVM exit. Set 'store' to a file path for persistence, or to \"temp\"/\"memory\" to silence this warning.");
+			return EtchStore.createTemp();
+		}
 		String storePath = config.getStore();
 		if ("memory".equals(storePath)) {
 			log.info("Using in-memory store (no persistence)");
@@ -197,6 +218,7 @@ public class VenueServer {
 					Fields.NAME,"Test Venue",
 					Fields.DESCRIPTION,"Unconfigured test venue",
 					Strings.create("port"),null, // This uses default (find a port)
+					Config.STORE,Strings.create("temp"), // explicit temp — silences unconfigured-store warning
 					Fields.MCP,Maps.of(),
 					Fields.A2A,Maps.of(),
 					Config.AUTH,Maps.of(
@@ -209,6 +231,7 @@ public class VenueServer {
 		server.start();
 		
 		Engine.addDemoAssets(server.getEngine());
+		server.getEngine().provisionConfiguredSecrets();
 		server.getEngine().jobs().recoverJobs();
 
 		// Mount DLFS WebDAV if adapter is registered
@@ -327,6 +350,9 @@ public class VenueServer {
 		if (port==null) port=8080;
 		ServerConnector connector = new ServerConnector(jettyServer);
 		connector.setPort(port);
+		// Deeper accept queue than the JDK/Jetty default (50) so bursts of
+		// concurrent connections queue rather than being refused under load.
+		connector.setAcceptQueueSize(config.getAcceptQueueSize());
 		jettyServer.addConnector(connector);
 	}
 
@@ -394,7 +420,7 @@ public class VenueServer {
 		});
 
 		app.exception(Exception.class, (e, ctx) -> {
-			e.printStackTrace();
+			log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
 			String message = "Unexpected error: " + e;
 			ctx.result(message);
 			ctx.status(500);

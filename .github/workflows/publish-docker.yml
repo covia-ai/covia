@@ -1,0 +1,86 @@
+name: Publish Docker image
+
+# Builds and publishes the public venue image to GHCR. This is the single
+# source of ghcr.io/covia-ai/covia tags — the deploy workflows consume the
+# image rather than building their own (see DX_PLAN.md → "Decouple the
+# public Docker image from deployment").
+#
+# Tags:
+#   :latest  — tracks develop (dev venues: venue-3, venue-4)
+#   :stable  — tracks master (stable venues: venue-1, venue-2)
+#   :<x.y.z> — release builds (master pushes whose POM version is not a
+#              SNAPSHOT, i.e. the "Release x.y.z" commit) — pin deployments here
+#   :<sha>   — every published build, for pinning and rollback
+
+on:
+  push:
+    branches: [ develop, master ]
+  workflow_dispatch:
+
+# Newest commit wins the :latest tag — cancel superseded publishes
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v5
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: 'maven'
+
+    - name: Cache Maven packages
+      uses: actions/cache@v5
+      with:
+        path: ~/.m2
+        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+        restore-keys: ${{ runner.os }}-m2
+
+    - name: Build with Maven
+      run: mvn clean install -DskipTests
+
+    - name: Get short SHA
+      id: sha
+      run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+    # master publishes the :stable channel (plus :x.y.z for release builds),
+    # develop publishes :latest
+    - name: Compute image tags
+      id: tags
+      run: |
+        tags="ghcr.io/covia-ai/covia:${{ steps.sha.outputs.sha }}"
+        if [ "${{ github.ref_name }}" = "master" ]; then
+          tags="$tags,ghcr.io/covia-ai/covia:stable"
+          version=$(mvn -q help:evaluate -Dexpression=project.version -DforceStdout)
+          case "$version" in
+            *-SNAPSHOT) ;;
+            *) tags="$tags,ghcr.io/covia-ai/covia:${version}" ;;
+          esac
+        else
+          tags="$tags,ghcr.io/covia-ai/covia:latest"
+        fi
+        echo "tags=$tags" >> $GITHUB_OUTPUT
+
+    - name: Log in to GHCR
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.tags.outputs.tags }}

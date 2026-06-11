@@ -1,99 +1,93 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
-import covia.venue.AgentScheduler.ThreadKind;
-import covia.venue.AgentScheduler.ThreadRef;
+import covia.api.Fields;
+import covia.venue.AgentState.ThreadKind;
 
 /**
- * Validates {@link Engine#rebuildSchedulerFromLattice} — on boot, the
- * scheduler's in-memory index is rebuilt from session/task {@code wakeTime}
- * fields in the lattice. The lattice is authoritative; a crash that drops
- * scheduler state never loses a scheduled wake.
+ * Validates {@link Engine#rebuildSchedulerFromLattice} — on boot, each agent's
+ * single {@code agent:wake} event is re-derived from the authoritative
+ * per-thread {@code wakeTime} fields in the lattice, healing any drift from a
+ * prior run. The lattice is the source of truth; a stale stored handle never
+ * loses or duplicates a scheduled wake. See GRID_SCHEDULER.md §8.
  */
 public class EngineSchedulerRebuildTest {
 
+	@SuppressWarnings("unchecked")
+	private static convex.core.data.AMap<AString, ACell> event(AVector<ACell> events, long i) {
+		return (convex.core.data.AMap<AString, ACell>) events.get(i);
+	}
+
+	private static long timeOf(AVector<ACell> events, long i) {
+		return ((convex.core.data.prim.CVMLong) event(events, i).get(Scheduler.K_TIME)).longValue();
+	}
+
 	@Test
-	public void testRebuildRegistersExistingSessionAndTaskWakes() throws Exception {
-		// Fresh, isolated engine — not the shared TestEngine, so that
-		// scheduler/lattice state is guaranteed clean for this test.
+	public void testRebuildArmsOneEventAtEarliestAcrossThreads() throws Exception {
 		Engine engine = Engine.createTemp(null);
 		try {
-			AString userDid = Strings.create("did:key:z6Mk-rebuild-test");
+			AString userDid = Strings.intern("did:key:z6Mk-rebuild-test");
+			RequestContext ctx = RequestContext.of(userDid);
 			User user = engine.getVenueState().users().ensure(userDid);
 			AgentState agent = user.ensureAgent("rebuild-agent", Maps.empty(), null);
 
-			// Seed lattice with one session + one task, each carrying a
-			// far-future wakeTime so nothing fires during the test.
+			// One session + one task, each with a far-future wakeTime so
+			// nothing fires during the test. Session is the earlier of the two.
 			Blob sid = Blob.fromHex("aa");
 			agent.ensureSession(sid, userDid);
-
 			Blob taskId = Blob.fromHex("bb");
 			agent.addTask(taskId, Maps.empty());
 
-			long farFuture = System.currentTimeMillis() + 60_000;
-			agent.setThreadWakeTime(engine.scheduler(), userDid,
-				ThreadKind.SESSION, sid, farFuture);
-			agent.setThreadWakeTime(engine.scheduler(), userDid,
-				ThreadKind.TASK, taskId, farFuture);
+			long now = System.currentTimeMillis();
+			long sessionWake = now + 600_000;
+			long taskWake    = now + 1_200_000;
+			agent.setThreadWakeTime(engine.gridScheduler(), userDid,
+				ThreadKind.SESSION, sid, sessionWake);
+			agent.setThreadWakeTime(engine.gridScheduler(), userDid,
+				ThreadKind.TASK, taskId, taskWake);
 
-			ThreadRef sessionRef =
-				new ThreadRef(userDid, agent.getAgentId(), ThreadKind.SESSION, sid);
-			ThreadRef taskRef =
-				new ThreadRef(userDid, agent.getAgentId(), ThreadKind.TASK, taskId);
-			assertTrue(engine.scheduler().contains(sessionRef));
-			assertTrue(engine.scheduler().contains(taskRef));
-			assertEquals(2, engine.scheduler().size());
+			// One armed event at the earliest of the two threads.
+			AVector<ACell> before = engine.gridScheduler().list(ctx);
+			assertEquals(1, before.count());
+			assertEquals(sessionWake, timeOf(before, 0));
 
-			// Simulate a crash: drop the in-memory scheduler index without
-			// touching the lattice. Lattice still carries wakeTime fields.
-			engine.scheduler().cancel(sessionRef);
-			engine.scheduler().cancel(taskRef);
-			assertFalse(engine.scheduler().contains(sessionRef));
-			assertFalse(engine.scheduler().contains(taskRef));
-			assertEquals(0, engine.scheduler().size());
-
-			// Rebuild from lattice — every pre-existing wakeTime should be
-			// re-registered as a ThreadRef.
+			// Re-deriving from the lattice is idempotent: still exactly one
+			// event at the same earliest time (a fresh handle replaces the old).
 			engine.rebuildSchedulerFromLattice();
-			assertTrue(engine.scheduler().contains(sessionRef),
-				"session wake should be rebuilt from lattice");
-			assertTrue(engine.scheduler().contains(taskRef),
-				"task wake should be rebuilt from lattice");
-			assertEquals(2, engine.scheduler().size());
+			AVector<ACell> after = engine.gridScheduler().list(ctx);
+			assertEquals(1, after.count(), "rebuild must not duplicate the wake");
+			assertEquals(AgentState.TRIGGER_OP, event(after, 0).get(Scheduler.K_OP));
+			assertEquals(sessionWake, timeOf(after, 0));
 		} finally {
 			engine.close();
 		}
 	}
 
 	@Test
-	public void testRebuildSkipsEntriesWithoutWakeTime() throws Exception {
+	public void testRebuildArmsNothingWithoutWakeTime() throws Exception {
 		Engine engine = Engine.createTemp(null);
 		try {
-			AString userDid = Strings.create("did:key:z6Mk-rebuild-test-empty");
+			AString userDid = Strings.intern("did:key:z6Mk-rebuild-test-empty");
+			RequestContext ctx = RequestContext.of(userDid);
 			User user = engine.getVenueState().users().ensure(userDid);
 			AgentState agent = user.ensureAgent("no-wakes-agent", Maps.empty(), null);
 
-			// Session + task exist but neither has wakeTime.
-			Blob sid = Blob.fromHex("cc");
-			agent.ensureSession(sid, userDid);
-			Blob taskId = Blob.fromHex("dd");
-			agent.addTask(taskId, Maps.empty());
-
-			// Start clean — no wakes in scheduler.
-			assertEquals(0, engine.scheduler().size());
+			// Session + task exist but neither carries a wakeTime.
+			agent.ensureSession(Blob.fromHex("cc"), userDid);
+			agent.addTask(Blob.fromHex("dd"), Maps.empty());
 
 			engine.rebuildSchedulerFromLattice();
-			assertEquals(0, engine.scheduler().size(),
-				"rebuild should register nothing when no wakeTime fields exist");
+			assertEquals(0, engine.gridScheduler().list(ctx).count(),
+				"rebuild should arm nothing when no wakeTime fields exist");
 		} finally {
 			engine.close();
 		}
@@ -103,10 +97,11 @@ public class EngineSchedulerRebuildTest {
 	public void testRebuildOnEmptyLatticeIsNoop() throws Exception {
 		Engine engine = Engine.createTemp(null);
 		try {
-			// createTemp() already ran rebuild inside the constructor against
-			// an empty lattice; this should still be safe to call again.
+			// The constructor already ran rebuild against an empty lattice;
+			// calling again must remain safe.
 			engine.rebuildSchedulerFromLattice();
-			assertEquals(0, engine.scheduler().size());
+			AString anyone = Strings.intern("did:key:z6Mk-nobody");
+			assertEquals(0, engine.gridScheduler().list(RequestContext.of(anyone)).count());
 		} finally {
 			engine.close();
 		}

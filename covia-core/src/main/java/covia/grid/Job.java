@@ -20,6 +20,7 @@ import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.exception.JobPollingFailedException;
 
 /**
  * Class representing a Covia Job.
@@ -210,6 +211,29 @@ public class Job {
 		} else {
 			f.completeExceptionally(new JobFailedException(this));
 		}
+	}
+
+	/**
+	 * Reports that client-side polling stopped tracking this Job before it
+	 * reached a terminal state — typically a polling timeout or transport
+	 * failure. <b>Does not change the Job's status</b>: the remote work is
+	 * not known to have failed; we just lost visibility. Awaiters of
+	 * {@link #future()} / {@link #awaitResult()} receive a
+	 * {@link JobPollingFailedException} carrying the cause and last-known
+	 * status, so they can re-acquire authoritative state via
+	 * {@code client.getJobStatus(id)} if they care.
+	 *
+	 * <p>Idempotent: subsequent calls have no effect (CompletableFuture
+	 * completion is one-shot).</p>
+	 *
+	 * @param cause the underlying polling failure (must not be null)
+	 */
+	public void pollingFailed(Throwable cause) {
+		CompletableFuture<ACell> f = resultFuture.get();
+		if (f == null) return;
+		AString status = RT.ensureString(getData().get(Fields.STATUS));
+		String lastKnown = (status != null) ? status.toString() : "UNKNOWN";
+		f.completeExceptionally(new JobPollingFailedException(getID(), lastKnown, cause));
 	}
 
 	/**

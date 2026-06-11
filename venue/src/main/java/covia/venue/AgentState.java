@@ -12,6 +12,7 @@ import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
@@ -38,6 +39,14 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_PENDING  = Strings.intern("pending");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
 	private static final AString K_ERROR    = Strings.intern("error");
+	/** Handle of this agent's single pending {@code agent:wake} event in the
+	 *  venue grid scheduler, or absent when no wake is armed. */
+	private static final AString K_WAKE_HANDLE = Strings.intern("wakeHandle");
+
+	/** Operation the scheduler fires to wake this agent — a non-forcing,
+	 *  non-blocking {@code agent:trigger}. Package-visible so scheduler tests
+	 *  assert against the same constant the production wake uses. */
+	static final AString TRIGGER_OP = Strings.intern("v/ops/agent/trigger");
 
 	// Session record field keys (scoped within a single session map)
 	private static final AString K_C        = Strings.intern("c");
@@ -97,6 +106,10 @@ public class AgentState extends ALatticeComponent<ACell> {
 	/** Frame record `conversation` key — vector of turn envelopes and/or
 	 *  compacted segments. */
 	public static final AString KEY_CONVERSATION = K_CONVERSATION;
+
+	/** Identity of a schedulable thread within an agent — a session or a task.
+	 *  Selects which index {@link #setThreadWakeTime} writes the wakeTime into. */
+	public enum ThreadKind { SESSION, TASK }
 
 	private final AString agentId;
 
@@ -390,36 +403,34 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Single-writer helper for per-thread wake scheduling (B8.8). Writes
-	 * {@code wakeTime} on the named session or task record, then registers
-	 * (or cancels) a fire in the {@link AgentScheduler}. See
-	 * {@code venue/docs/SCHEDULER.md §7.5}.
+	 * Single-writer helper for per-thread wake scheduling. Writes
+	 * {@code wakeTime} on the named session or task record, then re-derives
+	 * the agent's single scheduled wake via {@link #rescheduleWake}. See
+	 * {@code venue/docs/GRID_SCHEDULER.md §8}.
 	 *
 	 * <p>Replace-semantics: the new {@code wakeTime} overwrites any prior
-	 * value. Pass {@code wakeTime <= 0} to clear the wake and cancel the
-	 * scheduler fire. A missing session / task is a no-op (no lattice
-	 * write, no scheduler change) — callers should ensure the record
-	 * exists first.</p>
+	 * value on that thread. Pass {@code wakeTime <= 0} to clear it. A missing
+	 * session / task is a no-op (no lattice write, no scheduler change) —
+	 * callers should ensure the record exists first.</p>
 	 *
-	 * <p>Order: lattice write first, then scheduler. A crash between
-	 * the two is recovered by the boot rebuild, which restores the
-	 * scheduler index from the authoritative lattice state.</p>
+	 * <p>Per-thread {@code wakeTime} fields stay the authoritative record of
+	 * "this thread wants to wake at T"; the agent holds at most one
+	 * {@code agent:wake} event in the venue grid scheduler, armed at the
+	 * <i>earliest</i> of them. Per-agent concurrency is zero under the
+	 * virtual-thread-per-agent model (one cycle per agent serialises all
+	 * in-cycle writers), so the read-then-write here needs no lock.</p>
 	 *
-	 * <p>Per-ref concurrency is zero under the virtual-thread-per-agent
-	 * model (one cycle per agent serialises all in-cycle writers). Boot
-	 * rebuild runs before any cycle starts. No per-ref lock needed.</p>
-	 *
-	 * @param scheduler Scheduler to install / cancel the fire on
-	 * @param userDid   Agent owner's DID (for {@link AgentScheduler.ThreadRef})
+	 * @param scheduler Venue grid scheduler to (re)arm the wake on
+	 * @param ownerDID  Agent owner's DID — the wake fires under its authority
 	 * @param kind      SESSION or TASK
 	 * @param threadId  Session or task id (Blob)
 	 * @param wakeTime  Absolute wall-clock millis, or {@code <= 0} to clear
 	 */
 	@SuppressWarnings("unchecked")
-	public void setThreadWakeTime(AgentScheduler scheduler, AString userDid,
-			AgentScheduler.ThreadKind kind, Blob threadId, long wakeTime) {
+	public void setThreadWakeTime(Scheduler scheduler, AString ownerDID,
+			ThreadKind kind, Blob threadId, long wakeTime) {
 		Objects.requireNonNull(scheduler, "scheduler");
-		Objects.requireNonNull(userDid, "userDid");
+		Objects.requireNonNull(ownerDID, "ownerDID");
 		Objects.requireNonNull(kind, "kind");
 		Objects.requireNonNull(threadId, "threadId");
 
@@ -428,19 +439,11 @@ public class AgentState extends ALatticeComponent<ACell> {
 		AMap<AString, ACell> record = getRecord();
 		if (record == null) return;
 
-		boolean present;
-		if (kind == AgentScheduler.ThreadKind.SESSION) {
-			Index<Blob, ACell> sessions = (record.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			present = sessions.get(threadId) instanceof AMap;
-		} else {
-			Index<Blob, ACell> tasks = (record.get(K_TASKS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			present = tasks.get(threadId) instanceof AMap;
-		}
-		if (!present) return;
+		AString key = (kind == ThreadKind.SESSION) ? K_SESSIONS : K_TASKS;
+		Index<Blob, ACell> idx0 = (record.get(key) instanceof Index i)
+			? (Index<Blob, ACell>) i : Index.none();
+		if (!(idx0.get(threadId) instanceof AMap)) return;
 
-		AString key = (kind == AgentScheduler.ThreadKind.SESSION) ? K_SESSIONS : K_TASKS;
 		update(r -> {
 			Index<Blob, ACell> idx = (r.get(key) instanceof Index i)
 				? (Index<Blob, ACell>) i : Index.none();
@@ -453,13 +456,82 @@ public class AgentState extends ALatticeComponent<ACell> {
 			return r.assoc(key, idx.assoc(threadId, updated));
 		});
 
-		AgentScheduler.ThreadRef ref =
-			new AgentScheduler.ThreadRef(userDid, agentId, kind, threadId);
-		if (wakeTime > 0) {
-			scheduler.schedule(ref, wakeTime);
-		} else {
-			scheduler.cancel(ref);
+		rescheduleWake(scheduler, ownerDID);
+	}
+
+	/**
+	 * Re-derive this agent's single scheduled wake from the authoritative
+	 * per-thread {@code wakeTime} fields. Cancels any previously-armed
+	 * {@code agent:wake} event, then — if any thread still wants a wake —
+	 * arms exactly one event at the earliest of them, recording its handle on
+	 * the agent record. Clears the stored handle when no thread wants a wake.
+	 *
+	 * <p>Idempotent: safe to call on boot to rebuild the schedule from the
+	 * lattice regardless of how the prior run ended (a cancel of a missing or
+	 * already-fired handle is a no-op). See {@code venue/docs/GRID_SCHEDULER.md §8}.</p>
+	 *
+	 * <p>The wake is scheduled under the owner's own authority with no extra
+	 * proofs or caps: the owner waking their own agent is the minimum,
+	 * non-escalating authority — the same as a manual {@code agent:wake}. The
+	 * work the run loop then performs still carries each task/session's own
+	 * captured authority.</p>
+	 *
+	 * @param scheduler Venue grid scheduler to (re)arm the wake on
+	 * @param ownerDID  Agent owner's DID — the wake fires under its authority
+	 * @return {@code true} if a wake was armed, {@code false} if none was due
+	 */
+	public boolean rescheduleWake(Scheduler scheduler, AString ownerDID) {
+		Objects.requireNonNull(scheduler, "scheduler");
+		Objects.requireNonNull(ownerDID, "ownerDID");
+
+		AMap<AString, ACell> record = getRecord();
+		if (record == null) return false;
+
+		long earliest = earliestWake(record);
+		RequestContext octx = RequestContext.of(ownerDID);
+
+		ACell oldHandle = record.get(K_WAKE_HANDLE);
+		if (oldHandle instanceof Blob ob) {
+			scheduler.cancel(ob, octx);
 		}
+
+		if (earliest > 0) {
+			// Non-forcing (run only if work), non-blocking (fire-and-forget).
+			Blob handle = scheduler.schedule(TRIGGER_OP,
+				Maps.of(Fields.AGENT_ID, agentId,
+					Fields.FORCE, CVMBool.FALSE,
+					Fields.WAIT, CVMBool.FALSE),
+				octx, earliest);
+			update(r -> r.assoc(K_WAKE_HANDLE, handle));
+			return true;
+		}
+		if (oldHandle != null) {
+			update(r -> r.dissoc(K_WAKE_HANDLE));
+		}
+		return false;
+	}
+
+	/** Earliest positive {@code wakeTime} across all sessions and tasks, or 0 if none. */
+	private static long earliestWake(AMap<AString, ACell> record) {
+		long min = minWakeIn(record.get(K_SESSIONS), Long.MAX_VALUE);
+		min = minWakeIn(record.get(K_TASKS), min);
+		return (min == Long.MAX_VALUE) ? 0L : min;
+	}
+
+	@SuppressWarnings("unchecked")
+	private static long minWakeIn(ACell idxCell, long min) {
+		if (!(idxCell instanceof Index)) return min;
+		Index<Blob, ACell> idx = (Index<Blob, ACell>) idxCell;
+		long cnt = idx.count();
+		for (long i = 0; i < cnt; i++) {
+			ACell rec = idx.entryAt(i).getValue();
+			if (!(rec instanceof AMap)) continue;
+			ACell wt = ((AMap<AString, ACell>) rec).get(Fields.WAKE_TIME);
+			if (wt instanceof CVMLong l && l.longValue() > 0) {
+				min = Math.min(min, l.longValue());
+			}
+		}
+		return min;
 	}
 
 	// ========== CAS operations ==========
@@ -504,31 +576,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 			}
 			return r.assoc(K_STATUS, SLEEPING);
 		});
-	}
-
-	/**
-	 * Returns a future that completes when this agent reaches SLEEPING.
-	 *
-	 * <p>Implemented by polling the agent record (10ms intervals). Used by
-	 * tests to wait for the run loop to quiesce — no need for explicit
-	 * polling loops in test code. Production code should react to session
-	 * pending or task deliveries rather than poll agent status.</p>
-	 *
-	 * <p>The future never completes exceptionally; callers should apply a
-	 * timeout via {@code .get(timeout, unit)}.</p>
-	 */
-	public java.util.concurrent.CompletableFuture<Void> awaitSleeping() {
-		java.util.concurrent.CompletableFuture<Void> cf = new java.util.concurrent.CompletableFuture<>();
-		java.util.concurrent.CompletableFuture.runAsync(() -> {
-			while (!cf.isDone() && !SLEEPING.equals(getStatus())) {
-				try { Thread.sleep(10); } catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
-					return;
-				}
-			}
-			cf.complete(null);
-		});
-		return cf;
 	}
 
 	/**

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -21,17 +22,23 @@ import covia.grid.Job;
 /**
  * Tests for operation resolution: /a/ hash paths, /o/ user-scoped names,
  * and the venue operation registry.
+ *
+ * <p>Uses {@link TestEngine#ENGINE}. Per-test {@code alice} DIDs isolate
+ * writes to {@code /o/} and {@code /w/} (which are user-scoped). For
+ * {@code /v/} writes (venue globals are shared), tests use distinct
+ * paths so they don't collide with each other or with venue-installed
+ * assets read by other tests.</p>
  */
 public class OperationResolutionTest {
 
-	private Engine engine;
-	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
-	private static final RequestContext ALICE = RequestContext.of(ALICE_DID);
+	final Engine engine = TestEngine.ENGINE;
+	private AString aliceDID;
+	private RequestContext alice;
 
 	@BeforeEach
-	public void setup() {
-		engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
+	public void setup(TestInfo info) {
+		aliceDID = TestEngine.uniqueDID(info);
+		alice = RequestContext.of(aliceDID);
 	}
 
 	// ========== /a/<hash> resolution ==========
@@ -70,10 +77,10 @@ public class OperationResolutionTest {
 		);
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/my-echo", Fields.VALUE, opMeta),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
 		// Resolve via /o/ path
-		Asset asset = engine.resolveAsset(Strings.create("/o/my-echo"), ALICE);
+		Asset asset = engine.resolveAsset(Strings.create("/o/my-echo"), alice);
 		assertNotNull(asset, "Should resolve inline operation from /o/ namespace");
 		assertEquals(Strings.create("My Echo"), asset.meta().get(Fields.NAME));
 	}
@@ -90,13 +97,13 @@ public class OperationResolutionTest {
 		);
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/my-echo", Fields.VALUE, opMeta),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
 		// Invoke it by /o/ reference
 		Job job = engine.jobs().invokeOperation(
 			Strings.create("/o/my-echo"),
 			Maps.of("echo", "hello from /o/"),
-			ALICE);
+			alice);
 		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
 		assertEquals(Strings.create("hello from /o/"), RT.getIn(result, "echo"));
@@ -120,15 +127,15 @@ public class OperationResolutionTest {
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/echo-ref",
 				Fields.VALUE, Strings.create("/a/" + echoHash.toHexString())),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
 		// resolvePath returns the literal string (the value IS there)
-		ACell raw = engine.resolvePath(Strings.create("/o/echo-ref"), ALICE);
+		ACell raw = engine.resolvePath(Strings.create("/o/echo-ref"), alice);
 		assertEquals(Strings.create("/a/" + echoHash.toHexString()), raw,
 			"resolvePath should return the literal stored value");
 
 		// resolveAsset returns null — strings are not operations
-		Asset asset = engine.resolveAsset(Strings.create("/o/echo-ref"), ALICE);
+		Asset asset = engine.resolveAsset(Strings.create("/o/echo-ref"), alice);
 		assertNull(asset,
 			"strings stored at /o/<name> are not resolvable as operations (no ref following)");
 	}
@@ -139,14 +146,14 @@ public class OperationResolutionTest {
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/my-ref",
 				Fields.VALUE, Strings.create("/a/" + echoHash.toHexString())),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
 		// Invoking should fail because /o/my-ref is a string, not an operation
 		assertThrows(Exception.class, () -> {
 			engine.jobs().invokeOperation(
 				Strings.create("/o/my-ref"),
 				Maps.of("echo", "via hash ref"),
-				ALICE);
+				alice);
 		}, "invoking a /o/ entry that holds a string should fail explicitly");
 	}
 
@@ -154,7 +161,7 @@ public class OperationResolutionTest {
 
 	@Test
 	public void testResolveNonExistentUserOp() {
-		Asset asset = engine.resolveAsset(Strings.create("/o/no-such-op"), ALICE);
+		Asset asset = engine.resolveAsset(Strings.create("/o/no-such-op"), alice);
 		assertNull(asset, "Non-existent /o/ name should return null");
 	}
 
@@ -176,10 +183,10 @@ public class OperationResolutionTest {
 		);
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/private-op", Fields.VALUE, opMeta),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
 		// Alice can resolve it
-		assertNotNull(engine.resolveAsset(Strings.create("/o/private-op"), ALICE));
+		assertNotNull(engine.resolveAsset(Strings.create("/o/private-op"), alice));
 
 		// Bob cannot
 		assertNull(engine.resolveAsset(Strings.create("/o/private-op"), BOB),
@@ -224,14 +231,14 @@ public class OperationResolutionTest {
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/config/echo-pointer",
 			        Fields.VALUE, Strings.create(echoHash.toHexString())),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
 		// resolvePath returns the literal string
-		ACell raw = engine.resolvePath(Strings.create("w/config/echo-pointer"), ALICE);
+		ACell raw = engine.resolvePath(Strings.create("w/config/echo-pointer"), alice);
 		assertEquals(Strings.create(echoHash.toHexString()), raw);
 
 		// resolveAsset returns null — strings are not operations
-		Asset asset = engine.resolveAsset(Strings.create("w/config/echo-pointer"), ALICE);
+		Asset asset = engine.resolveAsset(Strings.create("w/config/echo-pointer"), alice);
 		assertNull(asset, "string at workspace path is not resolvable as an operation");
 	}
 
@@ -244,9 +251,9 @@ public class OperationResolutionTest {
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/config/op-pointer",
 			        Fields.VALUE, Strings.create("v/test/ops/echo")),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
-		Asset asset = engine.resolveAsset(Strings.create("w/config/op-pointer"), ALICE);
+		Asset asset = engine.resolveAsset(Strings.create("w/config/op-pointer"), alice);
 		assertNull(asset, "op name string at workspace path is not resolvable as an operation");
 	}
 
@@ -263,16 +270,16 @@ public class OperationResolutionTest {
 		);
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/config/inline-op", Fields.VALUE, opMeta),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
-		Asset asset = engine.resolveAsset(Strings.create("w/config/inline-op"), ALICE);
+		Asset asset = engine.resolveAsset(Strings.create("w/config/inline-op"), alice);
 		assertNotNull(asset, "workspace path with inline metadata should resolve");
 		assertEquals(Strings.create("Inline Pipeline"), asset.meta().get(Fields.NAME));
 	}
 
 	@Test
 	public void testResolveWorkspacePathMissing() {
-		assertNull(engine.resolveAsset(Strings.create("w/config/nonexistent"), ALICE));
+		assertNull(engine.resolveAsset(Strings.create("w/config/nonexistent"), alice));
 	}
 
 	@Test
@@ -281,7 +288,7 @@ public class OperationResolutionTest {
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/config/internal-test",
 			        Fields.VALUE, Strings.create("v/test/ops/echo")),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
 		// Internal context can't resolve workspace paths because they're per-user
 		assertNull(engine.resolveAsset(Strings.create("w/config/internal-test")));
@@ -304,7 +311,7 @@ public class OperationResolutionTest {
 		// (matches what asset_store returns when called by an anonymous user)
 		String didUrl = engine.getDIDString().toString() + ":public/a/" + echoHash.toHexString();
 
-		Asset asset = engine.resolveAsset(Strings.create(didUrl), ALICE);
+		Asset asset = engine.resolveAsset(Strings.create(didUrl), alice);
 		assertNotNull(asset, "did:key:VENUE:public/a/<hash> should resolve as local");
 		assertEquals(echoHash, asset.getID());
 	}
@@ -316,7 +323,7 @@ public class OperationResolutionTest {
 		assertNotNull(echoHash);
 
 		String didUrl = engine.getDIDString().toString() + "/a/" + echoHash.toHexString();
-		Asset asset = engine.resolveAsset(Strings.create(didUrl), ALICE);
+		Asset asset = engine.resolveAsset(Strings.create(didUrl), alice);
 		assertNotNull(asset, "did:key:VENUE/a/<hash> should resolve as local");
 		assertEquals(echoHash, asset.getID());
 	}
@@ -327,7 +334,7 @@ public class OperationResolutionTest {
 		// "Unrecognised DID method: key" via Grid.connect
 		String foreignDid = "did:key:z6MkUnknownVenueKeyThatDoesNotExist123456789ABCDEF/a/"
 			+ "0000000000000000000000000000000000000000000000000000000000000000";
-		assertNull(engine.resolveAsset(Strings.create(foreignDid), ALICE),
+		assertNull(engine.resolveAsset(Strings.create(foreignDid), alice),
 			"unknown did:key should return null, not throw");
 	}
 
@@ -343,7 +350,7 @@ public class OperationResolutionTest {
 		Hash echoHash = engine.resolveAsset(Strings.create("v/test/ops/echo")).getID();
 		assertNotNull(echoHash);
 
-		ACell value = engine.resolvePath(Strings.create(echoHash.toHexString()), ALICE);
+		ACell value = engine.resolvePath(Strings.create(echoHash.toHexString()), alice);
 		assertNotNull(value, "bare hex hash should resolve to asset metadata");
 		assertTrue(value instanceof convex.core.data.AMap,
 			"resolved value should be a metadata map");
@@ -353,7 +360,7 @@ public class OperationResolutionTest {
 	public void testResolvePathReturnsAssetMetadataForSlashAHash() {
 		Hash echoHash = engine.resolveAsset(Strings.create("v/test/ops/echo")).getID();
 		ACell value = engine.resolvePath(
-			Strings.create("/a/" + echoHash.toHexString()), ALICE);
+			Strings.create("/a/" + echoHash.toHexString()), alice);
 		assertNotNull(value);
 		assertTrue(value instanceof convex.core.data.AMap);
 	}
@@ -367,9 +374,9 @@ public class OperationResolutionTest {
 		);
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/custom", Fields.VALUE, opMeta),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
-		ACell value = engine.resolvePath(Strings.create("/o/custom"), ALICE);
+		ACell value = engine.resolvePath(Strings.create("/o/custom"), alice);
 		assertEquals(opMeta, value, "resolvePath should return the literal stored map");
 	}
 
@@ -379,9 +386,9 @@ public class OperationResolutionTest {
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/note",
 				Fields.VALUE, Strings.create("just a string")),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
-		ACell value = engine.resolvePath(Strings.create("/o/note"), ALICE);
+		ACell value = engine.resolvePath(Strings.create("/o/note"), alice);
 		assertEquals(Strings.create("just a string"), value);
 	}
 
@@ -390,18 +397,18 @@ public class OperationResolutionTest {
 		ACell raw = Maps.of("kind", "config", "version", CVMLong.create(42));
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/cfg/x", Fields.VALUE, raw),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
-		ACell value = engine.resolvePath(Strings.create("w/cfg/x"), ALICE);
+		ACell value = engine.resolvePath(Strings.create("w/cfg/x"), alice);
 		assertEquals(raw, value);
 	}
 
 	@Test
 	public void testResolvePathReturnsNullForMissingPath() {
-		assertNull(engine.resolvePath(Strings.create("/o/no-such"), ALICE));
-		assertNull(engine.resolvePath(Strings.create("w/no/such/path"), ALICE));
+		assertNull(engine.resolvePath(Strings.create("/o/no-such"), alice));
+		assertNull(engine.resolvePath(Strings.create("w/no/such/path"), alice));
 		assertNull(engine.resolvePath(
-			Strings.create("/a/0000000000000000000000000000000000000000000000000000000000000000"), ALICE));
+			Strings.create("/a/0000000000000000000000000000000000000000000000000000000000000000"), alice));
 	}
 
 	@Test
@@ -413,9 +420,9 @@ public class OperationResolutionTest {
 
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/looks-like-ref", Fields.VALUE, hashStr),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
-		ACell value = engine.resolvePath(Strings.create("/o/looks-like-ref"), ALICE);
+		ACell value = engine.resolvePath(Strings.create("/o/looks-like-ref"), alice);
 		assertEquals(hashStr, value,
 			"resolvePath returns the literal string, NOT the chased target");
 	}
@@ -429,14 +436,14 @@ public class OperationResolutionTest {
 		);
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/has-ref-field", Fields.VALUE, refMap),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
-		ACell value = engine.resolvePath(Strings.create("/o/has-ref-field"), ALICE);
+		ACell value = engine.resolvePath(Strings.create("/o/has-ref-field"), alice);
 		assertEquals(refMap, value,
 			"resolvePath returns the literal map, NOT the chased target");
 
 		// And resolveAsset returns null because it's not a map with operation field
-		Asset asset = engine.resolveAsset(Strings.create("/o/has-ref-field"), ALICE);
+		Asset asset = engine.resolveAsset(Strings.create("/o/has-ref-field"), alice);
 		assertNull(asset, "{ref:...} maps are not callable as operations");
 	}
 
@@ -456,10 +463,10 @@ public class OperationResolutionTest {
 		);
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "o/inline", Fields.VALUE, opMeta),
-			ALICE).awaitResult(5000);
+			alice).awaitResult(5000);
 
-		ACell rawValue = engine.resolvePath(Strings.create("/o/inline"), ALICE);
-		Asset asset = engine.resolveAsset(Strings.create("/o/inline"), ALICE);
+		ACell rawValue = engine.resolvePath(Strings.create("/o/inline"), alice);
+		Asset asset = engine.resolveAsset(Strings.create("/o/inline"), alice);
 
 		assertNotNull(rawValue);
 		assertNotNull(asset);
@@ -484,7 +491,7 @@ public class OperationResolutionTest {
 			engine.venueContext()).awaitResult(5000);
 
 		// Any caller can read it
-		ACell readBack = engine.resolvePath(Strings.create("v/test/entry"), ALICE);
+		ACell readBack = engine.resolvePath(Strings.create("v/test/entry"), alice);
 		assertEquals(value, readBack);
 
 		// Anonymous can also read
@@ -498,7 +505,7 @@ public class OperationResolutionTest {
 		assertThrows(Exception.class, () -> {
 			engine.jobs().invokeOperation("v/ops/covia/write",
 				Maps.of(Fields.PATH, "v/test/forbidden", Fields.VALUE, Strings.create("nope")),
-				ALICE).awaitResult(5000);
+				alice).awaitResult(5000);
 		}, "non-venue caller should be rejected when writing to /v/");
 	}
 
@@ -527,7 +534,7 @@ public class OperationResolutionTest {
 			engine.venueContext()).awaitResult(5000);
 
 		Job job = engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of(Fields.PATH, "v/welcome"), ALICE);
+			Maps.of(Fields.PATH, "v/welcome"), alice);
 		ACell result = job.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
 		assertEquals(Strings.create("hi from venue"), RT.getIn(result, "value"));
@@ -535,28 +542,30 @@ public class OperationResolutionTest {
 
 	@Test
 	public void testVenueGlobalsCanContainStructuredData() {
-		// Maps and vectors should round-trip cleanly through /v/
+		// Maps and vectors should round-trip cleanly through /v/. Use a
+		// test-only path — overwriting v/ops/json/merge would clobber the
+		// venue-installed metadata that other tests in this class read.
 		ACell complex = Maps.of(
-			"name", "JSON Merge",
+			"name", "Test Op",
 			"operation", Maps.of("adapter", "json:merge"),
 			"tags", convex.core.data.Vectors.of(Strings.create("data"), Strings.create("util"))
 		);
 		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "v/ops/json/merge", Fields.VALUE, complex),
+			Maps.of(Fields.PATH, "v/test-ops/structured", Fields.VALUE, complex),
 			engine.venueContext()).awaitResult(5000);
 
 		// Read via /v/ and verify it round-trips
-		ACell readBack = engine.resolvePath(Strings.create("v/ops/json/merge"), ALICE);
+		ACell readBack = engine.resolvePath(Strings.create("v/test-ops/structured"), alice);
 		assertEquals(complex, readBack);
 
 		// And it's resolvable as an Asset because it has an operation field
-		Asset asset = engine.resolveAsset(Strings.create("v/ops/json/merge"), ALICE);
+		Asset asset = engine.resolveAsset(Strings.create("v/test-ops/structured"), alice);
 		assertNotNull(asset, "v/ops entry with operation field should resolve as Asset");
 	}
 
 	@Test
 	public void testVenueGlobalsMissingPathReturnsNull() {
-		ACell value = engine.resolvePath(Strings.create("v/no/such/thing"), ALICE);
+		ACell value = engine.resolvePath(Strings.create("v/no/such/thing"), alice);
 		assertNull(value);
 	}
 
@@ -568,7 +577,7 @@ public class OperationResolutionTest {
 
 	@Test
 	public void testVenueInfoDidIsPopulated() {
-		ACell did = engine.resolvePath(Strings.create("v/info/did"), ALICE);
+		ACell did = engine.resolvePath(Strings.create("v/info/did"), alice);
 		assertNotNull(did, "/v/info/did should be populated at startup");
 		assertEquals(engine.getDIDString(), did,
 			"/v/info/did should match engine.getDIDString()");
@@ -576,14 +585,14 @@ public class OperationResolutionTest {
 
 	@Test
 	public void testVenueInfoVersionIsPopulated() {
-		ACell version = engine.resolvePath(Strings.create("v/info/version"), ALICE);
+		ACell version = engine.resolvePath(Strings.create("v/info/version"), alice);
 		assertNotNull(version, "/v/info/version should be populated at startup");
 		assertTrue(version instanceof AString, "version should be a string");
 	}
 
 	@Test
 	public void testVenueInfoStartedIsPopulated() {
-		ACell started = engine.resolvePath(Strings.create("v/info/started"), ALICE);
+		ACell started = engine.resolvePath(Strings.create("v/info/started"), alice);
 		assertNotNull(started, "/v/info/started should be populated at startup");
 		assertTrue(started instanceof CVMLong, "started should be a long (epoch ms)");
 		long startedMs = ((CVMLong) started).longValue();
@@ -595,7 +604,7 @@ public class OperationResolutionTest {
 
 	@Test
 	public void testVenueInfoProtocolsIsPopulated() {
-		ACell protocols = engine.resolvePath(Strings.create("v/info/protocols"), ALICE);
+		ACell protocols = engine.resolvePath(Strings.create("v/info/protocols"), alice);
 		assertNotNull(protocols, "/v/info/protocols should be populated at startup");
 		assertTrue(protocols instanceof convex.core.data.AVector,
 			"protocols should be a vector");
@@ -605,7 +614,7 @@ public class OperationResolutionTest {
 	public void testVenueInfoAdaptersHasJsonAdapter() {
 		// JSONAdapter is one of the registered adapters; its summary should
 		// be findable at /v/info/adapters/json
-		ACell summary = engine.resolvePath(Strings.create("v/info/adapters/json"), ALICE);
+		ACell summary = engine.resolvePath(Strings.create("v/info/adapters/json"), alice);
 		assertNotNull(summary, "/v/info/adapters/json should exist");
 		assertTrue(summary instanceof AMap, "adapter summary should be a map");
 		assertEquals(Strings.create("json"), RT.getIn(summary, "name"));
@@ -617,7 +626,7 @@ public class OperationResolutionTest {
 	public void testVenueInfoAccessibleViaCoviaRead() {
 		// Universal resolution: covia:read should work for /v/info/ paths
 		Job job = engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of(Fields.PATH, "v/info/did"), ALICE);
+			Maps.of(Fields.PATH, "v/info/did"), alice);
 		ACell result = job.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
 		assertEquals(engine.getDIDString(), RT.getIn(result, "value"));
@@ -634,7 +643,7 @@ public class OperationResolutionTest {
 		String[] ops = { "merge", "cond", "assoc", "select" };
 		for (String op : ops) {
 			ACell value = engine.resolvePath(
-				Strings.create("v/ops/json/" + op), ALICE);
+				Strings.create("v/ops/json/" + op), alice);
 			assertNotNull(value, "/v/ops/json/" + op + " should exist");
 			assertTrue(value instanceof AMap, "should be inline metadata map");
 			AMap<AString, ACell> meta = (AMap<AString, ACell>) value;
@@ -645,7 +654,7 @@ public class OperationResolutionTest {
 
 	@Test
 	public void testJsonMergeAtVOpsHasFullMetadata() {
-		ACell value = engine.resolvePath(Strings.create("v/ops/json/merge"), ALICE);
+		ACell value = engine.resolvePath(Strings.create("v/ops/json/merge"), alice);
 		assertNotNull(value);
 		AMap<AString, ACell> meta = (AMap<AString, ACell>) value;
 		// The metadata should have name, description, and operation
@@ -659,7 +668,7 @@ public class OperationResolutionTest {
 	@Test
 	public void testVOpsEntryIsCallableAsAsset() {
 		// /v/ops entries should resolve as Assets (they have an operation field)
-		Asset asset = engine.resolveAsset(Strings.create("v/ops/json/merge"), ALICE);
+		Asset asset = engine.resolveAsset(Strings.create("v/ops/json/merge"), alice);
 		assertNotNull(asset, "v/ops/json/merge should resolve as Asset");
 	}
 
@@ -667,7 +676,7 @@ public class OperationResolutionTest {
 	public void testVOpsAccessibleViaCoviaList() {
 		// covia:list on v/ops/json should show the four primitives
 		Job job = engine.jobs().invokeOperation("v/ops/covia/list",
-			Maps.of(Fields.PATH, "v/ops/json"), ALICE);
+			Maps.of(Fields.PATH, "v/ops/json"), alice);
 		ACell result = job.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
 		// The result should contain a "keys" entry with the 4 op names

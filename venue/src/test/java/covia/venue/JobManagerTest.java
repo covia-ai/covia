@@ -34,7 +34,9 @@ import covia.exception.AuthException;
  *
  * <p>Remote-venue fallback (where {@code invokeInternal} delegates to the
  * Job-creating path) is not covered here — it requires cross-venue
- * infrastructure and is exercised by {@code GridAdapterTest}.</p>
+ * infrastructure. Real two-venue exercises live in
+	 * {@code covia.venue.grid.CrossVenueTest}; the loopback dispatch path
+	 * inside one venue is covered by {@code GridAdapterTest}.</p>
  */
 public class JobManagerTest {
 

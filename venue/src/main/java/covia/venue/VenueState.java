@@ -123,6 +123,17 @@ public class VenueState extends ALatticeComponent<ACell> {
 	}
 
 	/**
+	 * Gets the lattice cursor at the per-venue {@code :schedule} index, the
+	 * time-ordered store of scheduled events. Used by {@link Scheduler} to
+	 * read, insert, and remove events.
+	 *
+	 * @return Cursor at the :schedule level (value is an {@code Index})
+	 */
+	public ALatticeCursor<ACell> scheduleCursor() {
+		return cursor.path(Covia.SCHEDULE);
+	}
+
+	/**
 	 * Gets the venue's content-addressed blob storage.
 	 *
 	 * @return LatticeStorage instance backed by this venue's cursor

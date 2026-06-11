@@ -1,0 +1,19 @@
+version: 2
+updates:
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      # The Convex dependency is managed manually — it tracks Convex develop
+      # until a released version is pinned (see DX_PLAN.md).
+      - dependency-name: "world.convex:*"
+      # Javalin majors are real migrations (v7 removed OpenAPI classes we
+      # use) — take them deliberately, not via auto-bump. Minors still flow.
+      - dependency-name: "io.javalin*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -1,0 +1,178 @@
+# Venue Module Cleanup Plan
+
+A phased plan to pay down structural debt in the `venue` module while keeping
+the test suite green and **preserving observable behaviour** at every step.
+Derived from a six-cluster architecture review (Jun 2026).
+
+Guiding rules (from the project's stated preferences):
+- **Don't change existing behaviour** — refactors are additive / mechanical; new
+  behaviour is opt-in.
+- **Ask before adding complexity** — extend existing structures before
+  introducing new classes; validate a design before a structural change.
+- **No implicit behaviour in API design** — disambiguate via args/functions, not
+  type-discrimination, structural rules, or prefix conventions.
+- **Don't reinvent lattice navigation** — go through `convex.lattice.cursor`.
+- **Avoid `Strings.create` for fixed strings** — use `Strings.intern` +
+  existing constants.
+- **Instance-based ops** over static-utility-with-overload explosion.
+
+Each item is checkable; build + venue suite must stay green before commit.
+
+---
+
+## Scope summary
+
+82 files, ~27.5k LOC. Healthy lattice/job core; five recurring structural
+debts (four are deviations from the rules above). Tackling the cross-cutting
+themes first yields the most cleanup-per-effort because each is duplicated many
+times.
+
+Already good — **do not touch**: `A2ACodec` (clean pure-function codec — the
+model to copy), `Config` (disciplined typed accessors), `ContextLoader` &
+`GoalTreeContext` (pure functions), `JobManager` (large but cohesive — not a
+god-class), `RequestContext` (clean immutable value).
+
+---
+
+## Phase 0 — Quick wins (mechanical, behaviour-preserving)
+
+Low risk. Shrinks surface, removes drift hazards, builds confidence. Batchable.
+
+### 0a. Dead code
+- [x] `AgentAdapter.extractSessionIdFromTask` — deleted (no callers).
+- [x] `Engine.resolveAssetRef` — deleted (no callers; logic inlined in `resolvePath`/`resolveHash`).
+- [x] `AgentAdapter` unused `PENDING` constant — deleted (zero refs confirmed).
+- [x] `Engine.getRootCursor` — vestigial `@SuppressWarnings("unchecked")` removed (field type matches return type).
+- [x] `GoalTreeContext.describeTask` — deleted + tests (orphan duplicating `describeTransitionInput`'s inline single-task logic).
+- [x] `LLMAgentAdapter.isKnownTask` / `isAlreadyCompleted` — deleted + tests (internal, superseded by the explicit-completion model).
+- [x] `GoalTreeContext.estimateLiveTurnBytes` — deleted + tests + the now-unused `Cells` import (no byte-budget consumer; compaction is count-based).
+- [ ] **Deferred (not Phase 0):** `GoalTreeAdapter.buildTypedRootHarnessTools` is the *canonical* typed-tool builder that 3 inline copies should adopt — keep as the seed for Phase 1 consolidation (do NOT delete).
+- [ ] **Investigate separately:** agent-level `pending` Index in `AgentState` (`addPending`/`getPending`/`extractPending` + `resolveJobIds` plumbing) appears write-only — removing it is a data-path change, not a quick win. Defer to its own task.
+
+### 0b. Orphaned / misattached Javadoc (zero behaviour risk) — DONE
+- [x] `AgentAdapter` — three-source sweep Javadoc moved onto `failAllPendingForAgent`.
+- [x] `JobManager` — `prepareInvocation`'s doc moved to precede `prepareInvocation`.
+- [x] `CoviaAdapter` — `handleWrite`'s Javadoc moved down onto `handleWrite`.
+
+### 0c. `Strings.create` → intern / `Fields.*` (safest, verified subset)
+- [x] `Engine` — `Strings.create("name"|"description"|"operation")` → `Fields.NAME`/`Fields.DESCRIPTION`/`Fields.OPERATION`.
+- [x] `AgentAdapter` — default transition/LLM op refs → interned `DEFAULT_TRANSITION_OP` / `DEFAULT_LLM_OP`.
+- [x] `JVMAdapter` — field-name literals → interned constants + shared `EMPTY`; URLEncoder/URLDecoder Charset overload (dead checked-catch + import removed); inlined the constant input count.
+- [ ] **Deferred:** `CoviaAPI` `"true"` (entangled with the Tier-4 dual-accept of `wait`) and `"[]"` (a borderline bug — empty list returned as a string; fix separately); `MCP` `"includePathPrefixes"`/`"includeAdapters"` (minor).
+- [ ] **Folded into Phase 1 (T2):** `TestAdapter` / `GoalTreeAdapter` schema + message vocab — these are the shared LLM message-protocol keys; the correct fix is referencing the T2 holder, not minting local constants now.
+
+### 0d. Tiny consistency fixes
+- [ ] `Engine.STATUS_MAP` → `static final` (it's genuinely constant; currently a per-instance "constant" field).
+- [ ] `AgentAdapter.K_LLM_OPERATION` — reference `AbstractLLMAdapter.K_LLM_OPERATION` instead of re-declaring a private copy.
+
+**Note on T4 (namespace-prefix unification):** the prefix lists in
+`Engine.isUserNamespacePath` and `ContextLoader.isNamespacePath`/`isAssetReference`
+**diverge** (`t/`, `v/`). Unifying them is therefore *not* behaviour-preserving
+— it requires a deliberate decision about the correct set. Moved to **Phase 1**
+(with a decision needed), not Phase 0.
+
+---
+
+## Phase 1 — Shared contracts (highest leverage)
+
+Many files, but each edit small and mechanical. Behind the green suite.
+
+### T1. Adapter dispatch / parse / error contract in `AAdapter`
+- [ ] Add a `dispatch(meta, handlers)` template (subOp → handler), wrapping the body in `supplyAsync(VIRTUAL_EXECUTOR)` + uniform error→`failedFuture` + one canonical "unknown/missing sub-operation" message.
+- [ ] Add `requireAuth(ctx)` (collapse the copied `callerDID==null` guard in Covia/Asset/Secret/DLFS).
+- [ ] Add `paramOrMeta(input, meta, Fields.X)` (collapse 4 copies: `ConvexAdapter.locateEndpoint`, `GridAdapter.resolveVenue`, `MCPAdapter.getServerUrl`, LangChain url/apiKey).
+- [ ] Promote `GridAdapter.describeFailure` to `AAdapter` (shared error rendering); use it in the default `invoke` `exceptionally` block.
+- [ ] Single `coerceJsonString` helper (collapse the 4 inconsistent JSON-string re-parsers: `AbstractLLMAdapter.ensureParsedInput`, `SchemaAdapter.parseValue`, `GridAdapter.coerceOperationInput`, `Orchestrator.getMap`).
+- [ ] First-class "job-only adapter" affordance so `Orchestrator`/`TestAdapter` stop sabotaging `invokeFuture` (throw vs failedFuture).
+- [ ] Migrate the pure-function adapters first (`JSONAdapter`, `SchemaAdapter`, `JVMAdapter`, `TestAdapter`); fix `MCPAdapter`'s synchronous `throw` from `invokeFuture`.
+
+### T2. LLM message-protocol vocabulary
+- [ ] Add the one missing key (`Fields.ROLE`) + a small `covia.api` holder for `ROLE_*` / `TOOL_CALLS`.
+- [ ] Point `LangChainAdapter`, `AbstractLLMAdapter`, `ContextBuilder`, `GoalTreeContext`, `AgentState`, `TestAdapter` at the shared constants (delete the duplicate declarations).
+- [ ] Extract shared message-scan helpers (`lastUserContent`, `hasToolResults`, `assistantText`, `assistantToolCall`); collapse `TestAdapter`'s ~350 LOC of hand-rolled scans and the producer-side duplication.
+- [ ] Consolidate the typed complete/fail-tool wiring (3 inline copies) onto `GoalTreeAdapter.buildTypedRootHarnessTools`.
+
+### T4. Namespace-prefix single source of truth (decision needed)
+- [ ] Decide the correct prefix set (resolve the `t/`/`v/` divergence deliberately).
+- [ ] One `Set<String>` (ideally derived from `Namespace.*`), consumed by `Engine` and `ContextLoader`.
+
+---
+
+## Phase 2 — God-class / overlong-method extraction
+
+Add new classes — **propose each design before cutting**. One at a time, suite green.
+
+- [ ] **`AgentAdapter` (2173)** → extract `AgentRunLoop` instance class (`runningLoops`/`activeTransitions`/`deferredCompletions`/`activeChats` + `wakeAgent`/`executeRunLoop`/`mergeAndPostProcess`). Collapse the picked-work tuple into a `PickedWork` record (kills the 14-param signature). Collapse `AgentState.mergeRunResult` 3-overload chain into one + param object.
+- [ ] **`Engine` (1665)** → extract `AssetResolver`/`PathResolver` (~370 LOC, cleanest first), then `AdapterRegistry` (trivial), then `VenueProvisioner` (breaks the startup `Engine→JobManager→Engine` cycle; rename `addDemoAssets` away from "demo"), then `PersistenceCoordinator`.
+- [ ] **`CoviaAPI` (948)** → `handleJobLifecycle(...)` helper (4 near-identical handlers, ~120 LOC); consider splitting secrets/DID into their own `ACoviaAPI` subclasses like `UserAPI`.
+- [ ] **`GoalTreeAdapter.runFrame` (~355 LOC)** → extract `selectHarnessTools`/`handleMoreTools`/`assembleFrameHistory`; tool dispatch `if/else` → `switch` mirroring `executeToolCall`.
+- [ ] `JobManager` `(id)`/`(id,ctx)` pairs → `requireOwnedJob(id, ctx)`; collapse the wrappers.
+
+---
+
+## Phase 3 — Lattice-nav unification + CoviaAdapter split
+
+Trickiest; aligns with the existing P2 TODO. Propose design first.
+
+- [ ] Single-pass `resolveExternalPath(cursor, jsonKeys)` (walk lattice + value together); replace `readPath`'s O(n²) descending-prefix loop. Used by `read`/`slice`/`list`/`inspect`.
+- [ ] Collapse `deepGet`/`deepSet`/`deepDelete`/`deepAppend` into one `deepUpdate(root, keys, from, leafOp)` reusing `navigateInto`'s type-dispatch; hoist the `==2` split into one `applyWrite(...)`.
+- [ ] One `requireWritable(ctx, jsonKeys)` (collapse `isWritableNamespace`/`validateWritablePath` + the asymmetric `canWrite` check).
+- [ ] Extract DID-URL resolution + UCAN proof verification from `CoviaAdapter` to a `CoviaAccessControl` helper.
+- [ ] File/DLFS: extract shared tree-walk (`TreeState`/`walkTree`/`humanSize`/`boundedInt`) + one canonical `looksLikeText`; push backend quirks behind the `Root` hierarchy.
+
+---
+
+## Tier 4 — Discuss separately (behaviour / contract changes)
+
+These deviate from "no implicit behaviour" but fixing them changes a contract —
+needs a disambiguation decision, not a silent refactor.
+
+- [ ] `Orchestrator` positional-sentinel spec DSL (type of `v.get(0)` selects meaning); decode duplicated across `scanDeps`/`computeInput`. At minimum share one classifier enum + document the grammar.
+- [ ] `CoviaAPI.invokeOperation` accepts both string `"true"` and JSON boolean for `wait` — pick one declared type (route through `parseWaitMs`).
+- [ ] `AgentAdapter` `parseConfigArg` `startsWith("{")` and `handleCreate` `systemPrompt`-key-sniffing — make the choice explicit.
+
+---
+
+## Borderline bugs surfaced during the smell review (file/fix separately)
+
+Not smells — real defects found while reading. Track as issues.
+
+- [ ] **High** — `GoalTreeAdapter` renders ancestors + active-frame conversation **twice** (`processGoal` `.withFrameStack` *and* `runFrame`), inconsistent eliding → doubled token cost + latent correctness hazard.
+- [ ] **Med** — `CoviaWebApp` does `new MCP(...)` on every adapter-detail page render → leaks a job-update listener + `SseServer` each hit.
+- [ ] **Med** — `looksLikeText` (UTF-8 + control-char ratio) vs `isLikelyText` (NUL-only) classify the same file differently via File-root vs DLFS path.
+- [ ] **Low** — `CoviaAPI.listSecrets` empty case returns the string `"[]"` instead of an empty list.
+
+### Test-suite robustness (hardened)
+- [x] `HTTPTest.testHTTPWithQueryParams` — replaced external httpbin.org with an in-process echo server; deterministic, no longer skipped.
+- [x] `HardKillPersistenceTest.readDLFS` — bounded read-retry absorbs the post-restart DLFS-mount race under parallel load.
+- [x] `AgentAdapterTest.testForkAgentFreshCollections` — suspend the source so its auto-woken run loop can't drain `session.pending` before the assertion (raced under some parallel profiles; surfaced by the dead-helper deletion).
+- [ ] `HTTPTest.testGoogleSearch` / `testGoogleSearchWithFallback` — still hit google.com; `testGoogleSearch` hard-asserts `COMPLETE`. Remaining external-network flakes (not yet hardened).
+
+---
+
+## Progress log
+
+- _2026-06-05_ — Plan created from six-cluster review. Phase 0 started.
+- _2026-06-05_ — **Phase 0 safe batch committed** (6384520): removed dead
+  `PENDING` / `extractSessionIdFromTask` / `resolveAssetRef` + vestigial
+  `@SuppressWarnings`; corrected 3 misattached Javadocs; `Strings.create` →
+  `Fields.*` in Engine. Verified green (191 targeted tests; full suite 1308).
+- _2026-06-05_ — **Flaky tests hardened** (468a0a9): HTTPTest uses an in-process
+  echo server (no httpbin.org); `HardKillPersistenceTest.readDLFS` retries to
+  absorb the post-restart DLFS-mount race. Full suite green, skip count 2→1.
+- _2026-06-05_ — **Helper API analysis done** (0a, test-coupled): none of
+  `isKnownTask` / `isAlreadyCompleted` / `describeTask` / `estimateLiveTurnBytes`
+  is useful live API (internal-superseded, orphan-duplicate, and speculative
+  respectively). Recommended delete + tests; awaiting confirmation.
+- _2026-06-05_ — **Dead helpers deleted** (b2f2848): the four above + their tests
+  removed. The deletion shifted parallel scheduling and exposed a pre-existing
+  race in `testForkAgentFreshCollections`, hardened in the same commit (suspend
+  source before message). Full suite green (1298).
+- _2026-06-05_ — **Strings.create sweep** (3a6a9e9): JVMAdapter (constants +
+  Charset overload + dead-catch removal) and AgentAdapter op-refs. Remaining
+  Strings.create work deferred — CoviaAPI/MCP minor literals + the
+  TestAdapter/GoalTreeAdapter message vocab (folds into Phase 1 T2).
+- _2026-06-05_ — **Phase 0 substantially complete.** Remaining 0c items are
+  deferred by design (T2 / Tier-4 / borderline-bug), not skipped. Net so far:
+  −6 dead methods/constants, 3 Javadocs fixed, 3 racy/flaky tests made
+  deterministic, ~10 dead tests removed; suite 1298 green.

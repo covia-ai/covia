@@ -1,0 +1,71 @@
+name: Deploy to EC2
+
+# Deploys the published image to the EC2 venue host. The image itself is
+# built and pushed by publish-docker.yml — this workflow only pulls and
+# (re)starts the container, after a successful publish or on manual dispatch.
+
+on:
+  workflow_run:
+    workflows: ["Publish Docker image"]
+    types: [completed]
+    branches: [develop]
+  workflow_dispatch:
+
+# Never cancel a mid-flight deploy; queue the newest instead
+concurrency:
+  group: deploy-ec2
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      packages: read
+
+    steps:
+    - name: Deploy to EC2
+      uses: appleboy/ssh-action@v1
+      env:
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USER }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        envs: GHCR_TOKEN
+        script: |
+          # Authenticate to GHCR
+          echo $GHCR_TOKEN | docker login ghcr.io -u github --password-stdin
+
+          # Pull latest image
+          docker pull ghcr.io/covia-ai/covia:latest
+
+          # Stop and remove existing container
+          docker stop covia-venue 2>/dev/null || true
+          docker rm covia-venue 2>/dev/null || true
+
+          # Run new container
+          docker run -d \
+            --name covia-venue \
+            -p 8080:8080 \
+            -v /home/ec2-user/covia-data:/data \
+            --log-driver=awslogs \
+            --log-opt awslogs-region=ap-southeast-1 \
+            --log-opt awslogs-group=/covia/venue \
+            --log-opt awslogs-stream=docker-covia-venue \
+            --log-opt awslogs-create-group=true \
+            --restart unless-stopped \
+            --health-cmd='curl -f --max-time 3 http://localhost:8080/' \
+            --health-interval=30s \
+            --health-timeout=5s \
+            --health-start-period=15s \
+            --health-retries=3 \
+            ghcr.io/covia-ai/covia:latest \
+            java -Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8 -jar covia.jar /data/config.json
+
+          # Wait for health check
+          sleep 10
+          docker inspect --format='{{.State.Health.Status}}' covia-venue
+
+          # Prune old images
+          docker image prune -f

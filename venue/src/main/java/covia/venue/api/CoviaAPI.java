@@ -156,7 +156,7 @@ public class CoviaAPI extends ACoviaAPI {
 		            @OpenApiParam(
 		                name = "limit",
 		                type = Long.class,
-		                description = "The maximum number of assets to return. Must be non-negative and not exceed 1000. Defaults to all remaining assets if not specified.",
+		                description = "The maximum number of assets to return. Must be non-negative and not exceed 1000. If not specified, returns the first page (up to 1000 assets).",
 		                required = false,
 		                example = "100"
 		            )
@@ -164,11 +164,11 @@ public class CoviaAPI extends ACoviaAPI {
 		        responses = {
 		            @OpenApiResponse(
 		                status = "200",
-		                description = "A JSON array of asset IDs as hexadecimal strings.",
+		                description = "A JSON object with total, offset, limit, and an items array of asset ID hashes (hex strings).",
 		                content = {
 		                    @OpenApiContent(
 		                        type = "application/json",
-		                        from = String[].class
+		                        from = Object.class
 		                    )
 		                }
 		            ),
@@ -205,15 +205,25 @@ public class CoviaAPI extends ACoviaAPI {
 		result.put(Fields.TOTAL, n);
 
 		long start=Math.max(0, offset);
-		long actualLimit=(limit<0)?n-start:limit;
-		if (actualLimit>1000) throw new BadRequestResponse("Too many assets requested: "+actualLimit);
+		// No explicit limit → return the first page (capped at 1000) rather than
+		// erroring on catalogs larger than the cap. An explicit over-cap limit is
+		// still rejected so callers don't silently receive fewer than requested.
+		long actualLimit;
+		if (limit<0) {
+			actualLimit=Math.min(Math.max(0, n-start), 1000);
+		} else {
+			if (limit>1000) throw new BadRequestResponse("Too many assets requested: "+limit);
+			actualLimit=limit;
+		}
 		result.put(Fields.OFFSET, start);
 		result.put(Fields.LIMIT, actualLimit);
 
 		List<Hash> assetIDs = venue.listAssetIDs(start, actualLimit);
 		ArrayList<Object> assetsList=new ArrayList<>();
 		for (Hash h : assetIDs) {
-			assetsList.add(h.toCVMHexString());
+			// Bare hex (no 0x prefix) — consistent with asset:list and the jobs
+			// endpoints; Hash.parse accepts it on the client (0x optional).
+			assetsList.add(h.toHexString());
 		}
 		result.put(Fields.ITEMS, assetsList);
 

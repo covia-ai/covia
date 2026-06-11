@@ -41,6 +41,7 @@ import convex.lattice.fs.DLFileSystem;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.api.Fields;
 import covia.lattice.Covia;
+import covia.utils.MimeUtils;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;

@@ -1,0 +1,48 @@
+name: CodeQL
+
+# Static security analysis. Runs on develop pushes and a weekly schedule
+# rather than on every PR — the Java analysis needs a full build (including
+# the Convex-from-source step), and test.yml already gates PRs.
+
+on:
+  push:
+    branches: [ develop ]
+  schedule:
+    - cron: '14 3 * * 1'
+  workflow_dispatch:
+
+# Supersede in-flight analyses when develop moves again
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v5
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: 'maven'
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: java-kotlin
+        build-mode: manual
+
+    - name: Build with Maven
+      run: mvn clean install -DskipTests
+
+    - name: Perform CodeQL analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:java-kotlin"

@@ -54,9 +54,9 @@ class A2AAdapterTest {
 		VenueHTTP covia = TestServer.COVIA;
 		// Async invoke + server-side poll; INPUT_REQUIRED is non-terminal so
 		// invokeSync would block forever.
-		Job seed = covia.invoke("v/ops/a2a/send", Maps.of(
+		Job seed = covia.startJob(Strings.create("v/ops/a2a/send"), Maps.of(
 				Fields.URL, Strings.create(TestServer.BASE_URL),
-				Fields.MESSAGE, coviaMessageRecord("hello from test"))).get();
+				Fields.MESSAGE, coviaMessageRecord("hello from test")));
 
 		AMap<AString, ACell> data = awaitStable(seed.getID());
 		assertEquals(Status.INPUT_REQUIRED, RT.ensureString(data.get(Fields.STATUS)),
@@ -78,9 +78,9 @@ class A2AAdapterTest {
 	void getTask_roundTripsRemoteTaskViaLocalAdapter() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job seed = covia.invoke("v/ops/a2a/send", Maps.of(
+		Job seed = covia.startJob(Strings.create("v/ops/a2a/send"), Maps.of(
 				Fields.URL, Strings.create(TestServer.BASE_URL),
-				Fields.MESSAGE, coviaMessageRecord("seed task"))).get();
+				Fields.MESSAGE, coviaMessageRecord("seed task")));
 		AMap<AString, ACell> data = awaitStable(seed.getID());
 		String remoteTaskId = RT.ensureString(data.get(Fields.REMOTE_TASK_ID)).toString();
 
@@ -119,9 +119,9 @@ class A2AAdapterTest {
 	void cancel_transitionsRemoteToCanceled() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		Job seed = covia.invoke("v/ops/a2a/send", Maps.of(
+		Job seed = covia.startJob(Strings.create("v/ops/a2a/send"), Maps.of(
 				Fields.URL, Strings.create(TestServer.BASE_URL),
-				Fields.MESSAGE, coviaMessageRecord("cancel me"))).get();
+				Fields.MESSAGE, coviaMessageRecord("cancel me")));
 		AMap<AString, ACell> data = awaitStable(seed.getID());
 		String remoteTaskId = RT.ensureString(data.get(Fields.REMOTE_TASK_ID)).toString();
 

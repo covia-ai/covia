@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import convex.core.data.AString;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -14,6 +15,17 @@ import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
 import covia.venue.TestServer;
 
+/**
+ * Single-venue tests for {@link covia.adapter.GridAdapter}. Cases that
+ * pass {@code Fields.VENUE} use {@code TestServer.BASE_URL}, which loops
+ * back to the same {@code TestServer.COVIA} instance — this exercises
+ * the explicit-venue dispatch path on a known-reachable target, but
+ * does <b>not</b> verify any inter-venue behaviour.
+ *
+ * <p>True cross-venue federation (two distinct {@code VenueServer}
+ * instances communicating over HTTP) lives in
+ * {@code covia.venue.grid.CrossVenueTest}.</p>
+ */
 class GridAdapterTest {
 
 	@Test
@@ -32,21 +44,27 @@ class GridAdapterTest {
 		assertEquals("HelloGrid", RT.getIn(job.getOutput(), "result").toString());
 	}
 
+	/**
+	 * grid:run with an explicit {@code venue} field pointing back at the
+	 * same {@code TestServer} instance — exercises the explicit-venue
+	 * dispatch path on a loopback target. For a real cross-venue test see
+	 * {@code covia.venue.grid.CrossVenueTest#runOperationOnRemoteVenue}.
+	 */
 	@Test
-	void runRemoteOperation() throws Exception {
+	void runWithExplicitVenueLoopback() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
 		Job job = covia.invokeSync("v/ops/grid/run", Maps.of(
 				Fields.VENUE, TestServer.BASE_URL,
 				Fields.OPERATION, "v/ops/jvm/string-concat",
 				Fields.INPUT, Maps.of(
-					"first", "Remote",
-					"second", "Run"
+					"first", "Loop",
+					"second", "Back"
 				)));
 
 		assertNotNull(job, "Job should not be null");
-		assertEquals(Status.COMPLETE, job.getStatus(), "Remote grid run should complete successfully");
-		assertEquals("RemoteRun", RT.getIn(job.getOutput(), "result").toString());
+		assertEquals(Status.COMPLETE, job.getStatus(), "Loopback grid run should complete successfully");
+		assertEquals("LoopBack", RT.getIn(job.getOutput(), "result").toString());
 	}
 
 	@Test
@@ -65,8 +83,13 @@ class GridAdapterTest {
 		assertEquals(Status.COMPLETE, RT.ensureString(RT.getIn(job.getOutput(), Fields.STATUS)));
 	}
 
+	/**
+	 * grid:invoke with explicit {@code venue} field — loopback variant.
+	 * For real async cross-venue, see
+	 * {@code covia.venue.grid.CrossVenueTest#invokeAsyncOnRemoteVenue}.
+	 */
 	@Test
-	void invokeRemoteOperation() throws Exception {
+	void invokeWithExplicitVenueLoopback() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
 		Job job = covia.invokeSync("v/ops/grid/invoke", Maps.of(
@@ -74,7 +97,7 @@ class GridAdapterTest {
 				Fields.OPERATION, "v/ops/jvm/string-concat",
 				Fields.INPUT, Maps.of(
 					"first", "Async",
-					"second", "Remote"
+					"second", "Loop"
 				)));
 
 		assertNotNull(job, "Job should not be null");
@@ -122,6 +145,26 @@ class GridAdapterTest {
 		Job resultJob = covia.invokeSync("v/ops/grid/job-result", Maps.of(Fields.ID, jobId));
 		assertEquals(Status.FAILED, resultJob.getStatus());
 		assertNotNull(resultJob.getErrorMessage());
+	}
+
+	/**
+	 * Some MCP clients serialise nested object arguments as JSON strings.
+	 * The {@code grid:run} input field is polymorphic (accepts any type),
+	 * so the schema-driven coercion at the MCP boundary deliberately lets
+	 * those strings through. {@code GridAdapter.invokeRun} re-parses them
+	 * when {@code Config.fixMcpStrings} is enabled (default).
+	 */
+	@Test
+	void runLocalOperationWithJsonStringInput() throws Exception {
+		VenueHTTP covia = TestServer.COVIA;
+
+		Job job = covia.invokeSync("v/ops/grid/run", Maps.of(
+				Fields.OPERATION, "v/ops/jvm/string-concat",
+				Fields.INPUT, Strings.create("{\"first\":\"Json\",\"second\":\"String\"}")));
+
+		assertNotNull(job, "Job should not be null");
+		assertEquals(Status.COMPLETE, job.getStatus(), "Local grid run should parse JSON-string input");
+		assertEquals("JsonString", RT.getIn(job.getOutput(), "result").toString());
 	}
 
 	/**

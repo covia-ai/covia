@@ -4,11 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.ACell;
@@ -521,45 +524,49 @@ public class HTTPTest {
 		}
 	}
 
-	@Test public void testHTTPWithQueryParams() throws InterruptedException, ExecutionException {
+	@Test public void testHTTPWithQueryParams() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		// Test HTTP GET with query parameters using httpbin.org
+		// Deterministic local echo server, replacing the previous external
+		// httpbin.org dependency. That dependency flaked: invokeSync used the
+		// default 5s poll and, when the public endpoint was slow, raised a
+		// ResponseException (poll timeout) that escaped the TimeoutException-only
+		// catch. The echo server reflects the raw query string in the body so we
+		// can still assert the queryParams reached the destination intact.
+		// "localhost" is on the venue's SSRF allowlist (see TestServer).
+		HttpServer echo = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+		echo.createContext("/get", exchange -> {
+			String query = exchange.getRequestURI().getRawQuery();
+			byte[] body = ("echo " + (query == null ? "" : query)).getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			try (OutputStream os = exchange.getResponseBody()) { os.write(body); }
+		});
+		echo.start();
 		try {
+			int port = echo.getAddress().getPort();
 			Job result = covia.invokeSync("v/ops/http/get", Maps.of(
-				"url", "https://httpbin.org/get",
+				"url", "http://localhost:" + port + "/get",
 				"queryParams", Maps.of(
 					"param1", "value1",
 					"param2", "value2",
 					"test", "query parameters"
 				),
 				"headers", Maps.of("User-Agent", "Covia-Test/1.0")
-			));
+			), 10_000);
 
 			assertTrue(result.isComplete(), "HTTP GET with query params should complete");
+			assertEquals(200, RT.ensureLong(RT.getIn(result.getOutput(), "status")).longValue(),
+				"Request with query params should return 200 status");
 
-			// Verify we get a 200 status
-			Object status = RT.getIn(result.getOutput(), "status");
-			assertTrue(status != null, "Should have status in output");
-			long statusCode = RT.ensureLong((convex.core.data.ACell)status).longValue();
-			assumeTrue(statusCode==200); // skip test if failed
-			assertEquals(200, statusCode, "Request with query params should return 200 status");
-
-			// Verify we have a response body
-			Object body = RT.getIn(result.getOutput(), "body");
-			assertTrue(body != null, "Should have body in output");
-			String bodyStr = body.toString();
-			assertTrue(bodyStr.length() > 0, "Response body should contain content");
-
-			// Verify the response contains our query parameters
-			assertTrue(bodyStr.contains("param1"), "Response should contain param1");
-			assertTrue(bodyStr.contains("value1"), "Response should contain value1");
-			assertTrue(bodyStr.contains("param2"), "Response should contain param2");
-			assertTrue(bodyStr.contains("value2"), "Response should contain value2");
-			assertTrue(bodyStr.contains("test"), "Response should contain test");
-			assertTrue(bodyStr.contains("query parameters"), "Response should contain 'query parameters'");
-		} catch (TimeoutException te) {
-			// ignore
+			// The echoed body must reflect every query parameter — proof they
+			// were appended to the outbound URL and reached the destination.
+			String bodyStr = RT.getIn(result.getOutput(), "body").toString();
+			assertTrue(bodyStr.contains("param1=value1"), "Response should echo param1=value1, got: " + bodyStr);
+			assertTrue(bodyStr.contains("param2=value2"), "Response should echo param2=value2, got: " + bodyStr);
+			assertTrue(bodyStr.contains("test=query+parameters") || bodyStr.contains("test=query%20parameters"),
+				"Response should echo the url-encoded 'test' param, got: " + bodyStr);
+		} finally {
+			echo.stop(0);
 		}
 	}
 }

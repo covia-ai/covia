@@ -18,6 +18,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.agent.ContextBuilder;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -49,7 +50,97 @@ public class AgentAdapterTest {
 		BOB_DID = Strings.create(ALICE_DID.toString() + "-bob");
 	}
 
+	/**
+	 * Waits — signal-based, via the run loop's completion future — for the agent
+	 * to reach a rest state (SLEEPING/SUSPENDED/TERMINATED) and returns it; fails
+	 * the test if it is still RUNNING after 10s.
+	 */
+	private AString awaitFinished(AgentState agent) {
+		try {
+			return ((AgentAdapter) engine.getAdapter("agent"))
+				.awaitRunFinished(agent.getAgentId(), RequestContext.of(ALICE_DID), 10_000);
+		} catch (java.util.concurrent.TimeoutException e) {
+			throw new AssertionError("Agent '" + agent.getAgentId()
+				+ "' did not reach a rest state in 10s", e);
+		}
+	}
+
 	// ========== agent:create ==========
+
+	/**
+	 * Regression for #67 and #69: timeline entries must not snapshot the
+	 * full agent config, and empty collection fields (messages/inbox/etc)
+	 * must be elided. Confirms that the Sessions migration's "only include
+	 * non-empty collections" rule (AgentAdapter.java:1509) holds.
+	 */
+	@Test
+	public void testTimelineEntryOmitsConfigAndEmptyCollections() {
+		// Sizable config that would bloat the timeline if snapshotted per transition
+		AMap<AString, ACell> bigConfig = Maps.of(
+			Fields.OPERATION, Strings.create("v/test/ops/echo"),
+			Strings.create("systemPrompt"), Strings.create(
+				"A relatively long system prompt that we want to confirm is NOT "
+				+ "duplicated across every timeline entry. Repeat repeat repeat."),
+			Strings.create("responseFormat"), Maps.of(
+				Strings.create("name"), Strings.create("Report"),
+				Strings.create("schema"), Maps.of("type", "object"))
+		);
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "timeline-shape-agent", Fields.CONFIG, bigConfig),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User u = engine.getVenueState().users().get(ALICE_DID);
+		AgentState a = u.agent("timeline-shape-agent");
+		Blob sid = Blob.fromHex("eeee0001eeee0001eeee0001eeee0001");
+		a.ensureSession(sid, ALICE_DID);
+		a.appendSessionPending(sid, Maps.of(
+			Fields.SESSION_ID, Strings.create(sid.toHexString()),
+			Fields.MESSAGE, Maps.of("content", "hi")));
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "timeline-shape-agent",
+				Fields.WAIT, CVMLong.create(5000)),
+			RequestContext.of(ALICE_DID)).awaitResult(6000);
+
+		AVector<ACell> timeline = u.agent("timeline-shape-agent").getTimeline();
+		assertNotNull(timeline, "Timeline should exist after trigger");
+		assertTrue(timeline.count() >= 1, "At least one timeline entry expected");
+
+		for (ACell entryCell : timeline) {
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> entry = (AMap<AString, ACell>) entryCell;
+
+			// #67: per-entry config snapshot must not appear
+			assertNull(entry.get(AgentState.KEY_CONFIG),
+				"#67: timeline entry must not snapshot full config; got: " + entry);
+			assertNull(entry.get(AgentState.KEY_STATE),
+				"#67: timeline entry must not snapshot full state; got: " + entry);
+
+			// #69: empty collections must be elided, not stored as empty.
+			// RT.ensureVector returns null on a non-vector — guard before
+			// reading count so a regression that stored e.g. an empty map
+			// fails with a clean assertion, not NPE.
+			ACell messages = entry.get(Fields.MESSAGES);
+			if (messages != null) {
+				AVector<?> messagesVec = RT.ensureVector(messages);
+				assertNotNull(messagesVec,
+					"Fields.MESSAGES must be a vector when present; got: " + messages);
+				assertTrue(messagesVec.count() > 0,
+					"#69: empty 'messages' must be omitted, not stored as empty vector");
+			}
+			ACell tasks = entry.get(Fields.TASKS);
+			if (tasks != null) {
+				AVector<?> tasksVec = RT.ensureVector(tasks);
+				assertNotNull(tasksVec,
+					"Fields.TASKS must be a vector when present; got: " + tasks);
+				assertTrue(tasksVec.count() > 0,
+					"#69: empty 'tasks' must be omitted, not stored as empty vector");
+			}
+		}
+	}
 
 	@Test
 	public void testCreateAgent() {
@@ -335,6 +426,17 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "busy-agent"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
+		// Suspend the source before delivering the message. agent:message
+		// auto-wakes the agent (handleMessage -> wakeAgent); a running loop
+		// would drain session.pending before the assertion below, which made
+		// this test race under parallel load. A suspended agent still queues
+		// the message (appendSessionPending runs before wakeAgent) but its loop
+		// won't consume it — so the source's pending is deterministically present.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/suspend",
+			Maps.of(Fields.AGENT_ID, "busy-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
 		// Deliver a message to source
 		engine.jobs().invokeOperation(
 			"v/ops/agent/message",
@@ -448,12 +550,14 @@ public class AgentAdapterTest {
 			"v/ops/agent/message", msgInput, RequestContext.of(ALICE_DID));
 		ACell result = msgJob.awaitResult(5000);
 
+		// agent:message reports delivery through its result envelope — that is
+		// the contract a caller relies on, and the op appends the message to the
+		// agent's session before completing. Whether the agent's run loop has
+		// since consumed the message is timing-dependent and not part of the
+		// delivery contract, so we verify the API result rather than internal state.
 		assertNotNull(result);
+		assertEquals(Status.COMPLETE, msgJob.getStatus());
 		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.DELIVERED));
-
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		AgentState agent = user.agent("msg-agent");
-		assertTrue(agent.hasSessionPending(), "Agent should have pending message after delivery");
 	}
 
 	@Test
@@ -784,8 +888,7 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		reqJob.awaitResult(5000);
 
-		try { agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS); }
-		catch (Exception e) { fail("Agent did not return to SLEEPING: " + e); }
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 
 		AMap<AString, ACell> session = agent.getSession(sid);
 		AVector<ACell> frames = (AVector<ACell>) session.get(AgentState.KEY_FRAMES);
@@ -1081,7 +1184,7 @@ public class AgentAdapterTest {
 		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
 		Blob sid = Blob.fromHex(sidHex.toString());
 
-		agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS);
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 
 		AMap<AString, ACell> session = agent.getSession(sid);
 		assertNotNull(session, "Session record must exist on lattice");
@@ -1122,7 +1225,7 @@ public class AgentAdapterTest {
 		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
 		Blob sid = Blob.fromHex(sidHex.toString());
 
-		agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS);
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 
 		AVector<ACell> sessionPending = agent.getSessionPending(sid);
 		assertEquals(0, sessionPending.count(),
@@ -1520,17 +1623,8 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "shared-name"),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 		engine.jobs().invokeOperation(
-			"v/ops/agent/message",
-			Maps.of(Fields.AGENT_ID, "shared-name", Fields.MESSAGE, Maps.of("from", "alice")),
-			RequestContext.of(ALICE_DID)).awaitResult(5000);
-
-		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "shared-name"),
-			RequestContext.of(BOB_DID)).awaitResult(5000);
-		engine.jobs().invokeOperation(
-			"v/ops/agent/message",
-			Maps.of(Fields.AGENT_ID, "shared-name", Fields.MESSAGE, Maps.of("from", "bob")),
 			RequestContext.of(BOB_DID)).awaitResult(5000);
 
 		User alice = engine.getVenueState().users().get(ALICE_DID);
@@ -1538,6 +1632,22 @@ public class AgentAdapterTest {
 
 		AgentState aliceAgent = alice.agent("shared-name");
 		AgentState bobAgent = bob.agent("shared-name");
+
+		// Deliver directly rather than via agent:message: the op auto-wakes the
+		// agent, whose run loop can drain session.pending before the assertion
+		// reads it (a no-config agent defaults to llmagent:chat, which fails fast
+		// with no LLM and may clear pending first). Direct delivery is the
+		// deterministic path used elsewhere in this file.
+		Blob aliceSid = Blob.fromHex("a1a1000000000000a1a1000000000000");
+		Blob bobSid   = Blob.fromHex("b0b0000000000000b0b0000000000000");
+		aliceAgent.ensureSession(aliceSid, ALICE_DID);
+		aliceAgent.appendSessionPending(aliceSid, Maps.of(
+			Fields.SESSION_ID, Strings.create(aliceSid.toHexString()),
+			Fields.MESSAGE, Maps.of("from", "alice")));
+		bobAgent.ensureSession(bobSid, BOB_DID);
+		bobAgent.appendSessionPending(bobSid, Maps.of(
+			Fields.SESSION_ID, Strings.create(bobSid.toHexString()),
+			Fields.MESSAGE, Maps.of("from", "bob")));
 
 		assertTrue(aliceAgent.hasSessionPending(), "Alice's agent should have pending message");
 		assertTrue(bobAgent.hasSessionPending(), "Bob's agent should have pending message");
@@ -2085,10 +2195,11 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "sync-agent", Fields.INPUT, Maps.of("q", "test")),
 			RequestContext.of(ALICE_DID));
 
-		// Job is not yet finished
-		assertFalse(job.isFinished());
-
-		// awaitResult blocks until the run loop completes the Job
+		// The sync pattern: await the task Job and use its result. The request
+		// returns a Job the agent completes asynchronously, so awaitResult is the
+		// synchronisation point — it returns only once the job is COMPLETE,
+		// regardless of how quickly the agent ran. Asserting an intermediate
+		// "not finished" state here would be a timing assumption.
 		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
 		assertTrue(job.isComplete());
@@ -2112,11 +2223,16 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "poll-agent", Fields.INPUT, Maps.of("q", "poll")),
 			RequestContext.of(ALICE_DID));
 
-		// Job is STARTED, not COMPLETE — async client can return this to the caller
-		assertEquals(Status.STARTED, job.getStatus());
-		assertFalse(job.isFinished());
+		// The async pattern: the request returns immediately with a pollable task
+		// Job. The agent runs asynchronously, so the job is legitimately either
+		// STARTED (not yet picked up) or already COMPLETE — a caller must handle
+		// both rather than assume one. Assert only that we got a real, pollable
+		// job in a valid state.
+		AString status = job.getStatus();
+		assertTrue(Status.STARTED.equals(status) || Status.COMPLETE.equals(status),
+			"Async request should return a STARTED or COMPLETE job, was: " + status);
 
-		// Simulate polling: wait then check
+		// Poll to completion, then read the output — the normal async retrieval path.
 		job.awaitResult(5000);
 		assertTrue(job.isComplete(), "Job should be complete after agent processes the task");
 
@@ -2390,8 +2506,10 @@ public class AgentAdapterTest {
 		assertNotNull(sid, "Completed request envelope must include sessionId");
 	}
 
+	/** Trigger never creates a session: with no sessionId supplied, none is
+	 *  minted and the response carries no sessionId. */
 	@Test
-	public void testTriggerMintsSession() {
+	public void testTriggerDoesNotMintSession() {
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "session-trig",
@@ -2405,11 +2523,11 @@ public class AgentAdapterTest {
 		ACell result = job.awaitResult(5000);
 
 		AString sid = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
-		assertNotNull(sid, "Trigger response should carry a sessionId");
+		assertNull(sid, "Trigger must not mint or return a session when none was supplied");
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("session-trig");
-		assertEquals(1, agent.getSessions().count());
+		assertEquals(0, agent.getSessions().count(), "Trigger must create no session");
 	}
 
 	@Test
@@ -3253,10 +3371,9 @@ public class AgentAdapterTest {
 
 	/**
 	 * When a transition returns a {@code wakeTime} in its result, the
-	 * framework installs it on the picked thread via
-	 * {@code setThreadWakeTime}: lattice record carries {@code wakeTime},
-	 * and the in-memory scheduler contains a {@link
-	 * covia.venue.AgentScheduler.ThreadRef} for that thread.
+	 * framework installs it on the picked thread via {@code setThreadWakeTime}:
+	 * the lattice session record carries {@code wakeTime}, and the venue grid
+	 * scheduler holds a single {@code agent:wake} event armed at that time.
 	 */
 	@Test
 	public void testTransitionWakeTimeSchedulesSessionWake() {
@@ -3281,8 +3398,7 @@ public class AgentAdapterTest {
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("wake-agent");
-		try { agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS); }
-		catch (Exception e) { fail("Agent did not return to SLEEPING: " + e); }
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 
 		// Session id: the chat response carries it back.
 		AString sessionIdStr = (AString) RT.getIn(chatJob.getOutput(), Fields.SESSION_ID);
@@ -3296,15 +3412,24 @@ public class AgentAdapterTest {
 			"session record should carry wakeTime after transition");
 		assertEquals(farFuture, ((CVMLong) lattWake).longValue());
 
-		// Scheduler: ThreadRef installed for SESSION kind.
-		covia.venue.AgentScheduler.ThreadRef ref = new covia.venue.AgentScheduler.ThreadRef(
-			ALICE_DID, Strings.create("wake-agent"),
-			covia.venue.AgentScheduler.ThreadKind.SESSION, sid);
-		assertTrue(engine.scheduler().contains(ref),
-			"scheduler should contain SESSION ref after transition returns wakeTime");
+		// Scheduler: a single agent:wake event armed at the transition's wakeTime.
+		convex.core.data.AVector<ACell> events =
+			engine.gridScheduler().list(RequestContext.of(ALICE_DID));
+		ACell wakeHandle = null;
+		for (long i = 0; i < events.count(); i++) {
+			AMap<AString, ACell> ev = (AMap<AString, ACell>) events.get(i);
+			if (Strings.intern("v/ops/agent/trigger").equals(ev.get(Strings.intern("op")))
+					&& ev.get(Strings.intern("time")) instanceof CVMLong t
+					&& t.longValue() == farFuture) {
+				wakeHandle = ev.get(Strings.intern("handle"));
+				break;
+			}
+		}
+		assertNotNull(wakeHandle,
+			"scheduler should hold an agent:wake event at the transition's wakeTime");
 
-		// Cleanup — don't leak a pending fire into later tests.
-		engine.scheduler().cancel(ref);
+		// Cleanup — cancel so we don't leak a pending fire into later tests.
+		engine.gridScheduler().cancel((Blob) wakeHandle, RequestContext.of(ALICE_DID));
 	}
 
 	// ========== Issue #88: fail-fast on transition error ==========
@@ -3350,8 +3475,7 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("fail-fast-agent");
 
-		try { agent.awaitSleeping().get(5, java.util.concurrent.TimeUnit.SECONDS); }
-		catch (Exception e) { /* may exit via SUSPENDED rather than SLEEPING */ }
+		awaitFinished(agent);
 
 		assertEquals(AgentState.SUSPENDED, agent.getStatus(),
 			"agent must be SUSPENDED after a transition error");

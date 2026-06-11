@@ -190,6 +190,7 @@ Bridges operations to execution environments:
 | `vault` | Health vault (DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
 | `secret` | Secret store | `set`, `extract` |
 | `ucan` | Capability tokens | `issue` |
+| `scheduler` | Deferred grid-op invocation (per-venue `:schedule`) | `schedule`, `cancel`, `trigger`, `list` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
 
 ## API Endpoints
@@ -312,6 +313,29 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 
 Mounts WebDAV at `/dlfs/` for file access to DLFS drives. Off by default.
 
+### Secrets bootstrap
+
+Per-venue config can pre-populate the encrypted per-user secret stores at startup:
+
+```json
+{
+  "secrets": {
+    "venue":  { "OPENAI_API_KEY": "sk-..." },
+    "public": { "OPENAI_API_KEY": "sk-...", "ANTHROPIC_API_KEY": "sk-ant-..." },
+    "did:key:z6MkAlice...": { "FOO": "bar" }
+  }
+}
+```
+
+Top-level keys resolve as follows:
+- `"venue"` → the venue's own DID (used by venue-internal operations and self-issued requests)
+- `"public"` → `<venueDID>:public`, the default identity for unauthenticated callers
+- Anything else → used verbatim; expected to be a literal DID string
+
+Each named secret overwrites any existing value under that name for that user — config is the source of truth at launch. Names not listed are left untouched. Per-secret failures log a warning but do not fail startup. Values are never logged.
+
+**Never commit production secrets here.** Intended for personal dev configs in gitignored locations (e.g. `dev/local.json`).
+
 ## Build & Run
 
 ```bash
@@ -329,7 +353,7 @@ mvn compile && java -cp "target/classes:target/dependency/*" covia.venue.MainVen
 
 - **Main README:** `../README.md` - Project overview
 - **Build Guide:** `../BUILD.md` - Detailed build instructions
-- **Deploy Guide:** `../DEPLOY.md` - Deployment options
+- **Deploy Guide:** `../deploy/README.md` - Deployment options
 - **Core Module:** `../covia-core/` - Grid client and shared abstractions
 - **Online Docs:** https://docs.covia.ai
 

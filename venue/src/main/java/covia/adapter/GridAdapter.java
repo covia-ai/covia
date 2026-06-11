@@ -7,10 +7,12 @@ import java.util.concurrent.TimeoutException;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.grid.Grid;
 import covia.grid.Job;
@@ -72,12 +74,31 @@ public class GridAdapter extends AAdapter {
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		invokeFuture(ctx, meta, input).whenComplete((result, error) -> {
 			if (error != null) {
-				Throwable cause = (error instanceof java.util.concurrent.CompletionException) ? error.getCause() : error;
-				job.fail(cause != null ? cause.getMessage() : error.getMessage());
+				job.fail(describeFailure(error));
 			} else {
 				job.completeWith(result);
 			}
 		});
+	}
+
+	/**
+	 * Render a Throwable into a non-empty diagnostic string for {@code Job.fail}.
+	 * Strips {@code CompletionException}/{@code ExecutionException} wrappers and falls back
+	 * to the exception class name when {@code getMessage()} is null (e.g. some
+	 * {@code ConnectException}s) so connection failures never surface as a blank
+	 * error field.
+	 */
+	private static String describeFailure(Throwable t) {
+		Throwable cause = t;
+		while ((cause instanceof java.util.concurrent.CompletionException
+				|| cause instanceof java.util.concurrent.ExecutionException)
+				&& cause.getCause() != null && cause.getCause() != cause) {
+			cause = cause.getCause();
+		}
+		String msg = cause.getMessage();
+		String type = cause.getClass().getSimpleName();
+		if (msg == null || msg.isBlank()) return type;
+		return type + ": " + msg;
 	}
 
 	/**
@@ -89,7 +110,7 @@ public class GridAdapter extends AAdapter {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("No grid operation specified"));
 		}
 
-        ACell operationInput = RT.getIn(input, Fields.INPUT); // might be null, that's ok
+        ACell operationInput = coerceOperationInput(RT.getIn(input, Fields.INPUT));
         AString venueSpec = resolveVenue(meta, input);
 
         Venue venue = selectVenue(venueSpec, callerDID);
@@ -107,13 +128,36 @@ public class GridAdapter extends AAdapter {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("No grid operation specified"));
 		}
 
-        ACell operationInput = RT.getIn(input, Fields.INPUT); // might be null, that's ok
+        ACell operationInput = coerceOperationInput(RT.getIn(input, Fields.INPUT));
         AString venueSpec = resolveVenue(meta, input);
 
         Venue venue = selectVenue(venueSpec, callerDID);
 
         CompletableFuture<Job> jobFuture = venue.invoke(targetOperation.toString(), operationInput);
         return jobFuture.thenApply(Job::getData);
+	}
+
+	/**
+	 * Workaround for MCP clients that serialise nested object/array arguments
+	 * as JSON strings. The {@code grid_run}/{@code grid_invoke} tool schema
+	 * deliberately accepts polymorphic input (string is a valid member type),
+	 * so the MCP-boundary coercion in {@link covia.venue.api.MCP} cannot fix
+	 * this case. We re-parse here when the inner input arrives as a JSON-
+	 * shaped string. Gated by {@code Config.fixMcpStrings} (default true).
+	 */
+	private ACell coerceOperationInput(ACell operationInput) {
+		if (!(operationInput instanceof AString s)) return operationInput;
+		if (engine == null || !engine.config().isFixMcpStrings()) return operationInput;
+		String str = s.toString();
+		if (str.isEmpty()) return operationInput;
+		char c = str.charAt(0);
+		if (c != '{' && c != '[') return operationInput;
+		try {
+			ACell parsed = JSON.parse(str);
+			if (parsed instanceof AMap || parsed instanceof AVector) return parsed;
+		} catch (Exception ignored) {
+		}
+		return operationInput;
 	}
 
 	private CompletableFuture<ACell> invokeJobStatus(ACell meta, ACell input, AString callerDID) {
@@ -170,9 +214,13 @@ public class GridAdapter extends AAdapter {
     private Blob parseJobId(ACell jobIdCell) {
         if (jobIdCell == null) return null;
         try {
-            return Job.parseID(jobIdCell);
+            Blob id = Job.parseID(jobIdCell);
+            if (id == null) {
+                throw new IllegalArgumentException("Invalid job ID format: " + jobIdCell);
+            }
+            return id;
         } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid job ID", e);
+            throw new IllegalArgumentException("Invalid job ID format: " + jobIdCell, e);
         }
     }
 

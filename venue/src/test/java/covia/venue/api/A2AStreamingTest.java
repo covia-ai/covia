@@ -163,6 +163,9 @@ public class A2AStreamingTest {
 
 		// Consume the stream on a background thread so we can enforce the
 		// timeout from the test thread — JDK's ofLines() blocks indefinitely.
+		// The test thread closes the stream below to stop us; that surfaces
+		// as an UncheckedIOException out of forEach which we swallow — it's
+		// the expected shutdown path, not a test failure.
 		Thread consumer = Thread.ofVirtual().start(() -> {
 			try (java.util.stream.Stream<String> lines = resp.body()) {
 				lines.forEach(line -> {
@@ -176,6 +179,8 @@ public class A2AStreamingTest {
 						synchronized (frames) { frames.notifyAll(); }
 					}
 				});
+			} catch (java.io.UncheckedIOException ignored) {
+				// stream closed by the test thread — expected
 			}
 		});
 

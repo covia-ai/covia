@@ -9,7 +9,6 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.data.util.CellExplorer;
-import convex.core.data.Cells;
 import convex.core.lang.RT;
 
 /**
@@ -29,6 +28,16 @@ import convex.core.lang.RT;
  *
  * <p>System prompt and tool schemas are handled separately by ContextBuilder.
  * This class focuses on the goal-tree-specific sections.</p>
+ *
+ * <h3>Why the layout matters</h3>
+ *
+ * <p>The progressive-budget ancestor rendering in {@link #renderAncestors}
+ * is the central value of the goal-tree design — it's what lets a deep
+ * decomposition stay within a fixed context budget while the active frame
+ * still gets full fidelity. Removing or flattening it collapses goal-tree
+ * to a flat agent. See class-level docs on
+ * {@link covia.adapter.agent.GoalTreeAdapter} and
+ * {@code venue/docs/GOAL_TREE.md} §"Context Assembly".</p>
  */
 public class GoalTreeContext {
 
@@ -118,28 +127,6 @@ public class GoalTreeContext {
 	}
 
 	/**
-	 * Generates a root goal description from a task.
-	 * Tasks have {input, caller?} structure from agent:request.
-	 */
-	public static String describeTask(ACell task) {
-		ACell inputCell = RT.getIn(task, Strings.intern("input"));
-		AString caller = RT.ensureString(RT.getIn(task, Strings.intern("caller")));
-		String text;
-		if (inputCell == null) {
-			text = "(no input)";
-		} else if (inputCell instanceof AString s) {
-			text = truncate(s.toString(), 200);
-		} else {
-			// Structured input — render as string (may be a map like {message: "..."})
-			text = truncate(inputCell.toString(), 200);
-		}
-		StringBuilder sb = new StringBuilder("Task");
-		if (caller != null) sb.append(" from ").append(caller);
-		sb.append(": ").append(text);
-		return sb.toString();
-	}
-
-	/**
 	 * Generates a root goal description from a combination of pending work.
 	 * Summarises multiple messages and tasks into a single description.
 	 */
@@ -226,9 +213,25 @@ public class GoalTreeContext {
 	// ========== Context rendering ==========
 
 	/**
-	 * Renders ancestor frames as a system message. Each ancestor's conversation
-	 * is rendered by CellExplorer at a decreasing budget (parent ~300B,
-	 * grandparent ~150B, etc.).
+	 * Renders ancestor frames as a single system message. Each ancestor's
+	 * conversation is rendered by CellExplorer at a decreasing byte budget
+	 * (parent ~300B, grandparent ~150B, great-grandparent ~80B, floor at
+	 * {@link #MIN_ANCESTOR_BUDGET}).
+	 *
+	 * <p><b>This is the core of the goal-tree value proposition.</b> Without
+	 * progressive ancestor compaction, every level of decomposition would
+	 * push the conversation transcript verbatim into descendants — a 50-turn
+	 * child of a 50-turn parent of a 50-turn grandparent would inherit ~150
+	 * turns of context, defeating the purpose of decomposition. With it, the
+	 * cost of being deep in the stack is bounded regardless of ancestor
+	 * conversation length.</p>
+	 *
+	 * <p><b>Don't be tempted to drop this</b> as a "redundant" pass — the
+	 * subgoal description is an explicit handoff but does <i>not</i> capture
+	 * the parent's tool calls, intermediate findings, or reasoning. The
+	 * ancestor summary surfaces the live state of the parent's work to the
+	 * child, lossily but bounded. See class-level javadoc and
+	 * {@code venue/docs/GOAL_TREE.md} §"Context Assembly" (lines 147–187).</p>
 	 *
 	 * @param frames the full frame stack (last element is active frame)
 	 * @return system message with rendered ancestor context, or null if root frame
@@ -474,23 +477,6 @@ public class GoalTreeContext {
 			if (!isSegment(conversation.get(i))) count++;
 		}
 		return count;
-	}
-
-	/**
-	 * Estimates the byte size of live turns in a frame's conversation.
-	 */
-	public static long estimateLiveTurnBytes(AMap<AString, ACell> frame) {
-		@SuppressWarnings("unchecked")
-		AVector<ACell> conversation = (AVector<ACell>) frame.get(K_CONVERSATION);
-		if (conversation == null) return 0;
-		long bytes = 0;
-		for (long i = 0; i < conversation.count(); i++) {
-			ACell entry = conversation.get(i);
-			if (!isSegment(entry)) {
-				bytes += Cells.storageSize(entry);
-			}
-		}
-		return bytes;
 	}
 
 	// ========== Scoped loads ==========

@@ -1,0 +1,21 @@
+{
+  "name": "Trigger Scheduled Event",
+  "description": "Fire a scheduled event now, ahead of its time, then remove it. Only the event's owner may trigger it. Returns the fired operation's result.",
+  "operation": {
+    "adapter": "scheduler:trigger",
+    "input": {
+      "type": "object",
+      "properties": {
+        "handle": { "type": "string", "description": "Handle of the event to fire now" }
+      },
+      "required": ["handle"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "triggered": { "type": "boolean", "description": "True if the event was fired" },
+        "result": { "description": "Result produced by the fired operation, if any" }
+      }
+    }
+  }
+}

@@ -287,27 +287,20 @@ public class AssetAdapter extends AAdapter {
 
 		AString typeFilter = RT.ensureString(RT.getIn(input, Fields.TYPE));
 
-		// List user's assets + venue-level assets (venue assets are public infrastructure)
-		AMap<ABlob, AVector<?>> allAssets = engine.getAssets();
-		if (ctx != null && ctx.getCallerDID() != null) {
-			covia.venue.User user = engine.getVenueState().users().get(ctx.getCallerDID());
-			if (user != null) {
-				AMap<ABlob, AVector<?>> userAssets = user.assets().getAll();
-				if (userAssets != null) {
-					if (allAssets != null) allAssets = allAssets.merge(userAssets);
-					else allAssets = userAssets;
-				}
-			}
-		}
-		long rawTotal = (allAssets != null) ? allAssets.count() : 0;
+		// List the caller's own pinned assets — the per-user a/ namespace.
+		// Venue-level assets (the operation catalog) are discovered via
+		// covia:functions / covia:adapters / covia:inspect, not here.
+		covia.venue.User user = engine.getVenueState().users().get(ctx.getCallerDID());
+		AMap<ABlob, AVector<?>> userAssets = (user != null) ? user.assets().getAll() : null;
+		long rawTotal = (userAssets != null) ? userAssets.count() : 0;
 
 		AVector<ACell> items = Vectors.empty();
 		long matched = 0;
 		long emitted = 0;
 
-		if (allAssets != null) {
+		if (userAssets != null) {
 			for (long i = 0; i < rawTotal; i++) {
-				var entry = allAssets.entryAt(i);
+				var entry = userAssets.entryAt(i);
 				if (entry == null) continue;
 				AVector<ACell> record = (AVector<ACell>) entry.getValue();
 				AMap<AString, ACell> meta = RT.ensureMap(record.get(AssetStore.POS_META));
@@ -338,8 +331,10 @@ public class AssetAdapter extends AAdapter {
 			}
 		}
 
-		// Total reflects filtered count when filter is active, raw count otherwise
-		long total = (typeFilter != null) ? matched : rawTotal;
+		// Total reflects the number of listable assets (those with metadata),
+		// narrowed to the type filter when one is supplied. The loop runs to
+		// completion (continue, not break, past the page), so matched is exact.
+		long total = matched;
 
 		return Maps.of(
 			Fields.ITEMS, items,

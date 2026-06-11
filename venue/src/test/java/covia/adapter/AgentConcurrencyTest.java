@@ -7,6 +7,7 @@ import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -26,6 +27,7 @@ import covia.grid.Status;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 import covia.venue.User;
 import covia.venue.Users;
 
@@ -42,13 +44,30 @@ import covia.venue.Users;
  */
 public class AgentConcurrencyTest {
 
-	private Engine engine;
-	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");
+	final Engine engine = TestEngine.ENGINE;
+	// Per-test user DID — each test gets its own user namespace, so agent
+	// names like "rapid", "conc-trig" don't collide across tests on the
+	// shared engine.
+	private AString ALICE_DID;
 
 	@BeforeEach
-	public void setup() {
-		engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
+	public void setup(TestInfo info) {
+		ALICE_DID = TestEngine.uniqueDID(info);
+	}
+
+	/**
+	 * Waits — signal-based, via the run loop's completion future — for the agent
+	 * to reach a rest state (SLEEPING/SUSPENDED/TERMINATED) and returns it; fails
+	 * the test if it is still RUNNING after 10s.
+	 */
+	private AString awaitFinished(AgentState agent) {
+		try {
+			return ((AgentAdapter) engine.getAdapter("agent"))
+				.awaitRunFinished(agent.getAgentId(), RequestContext.of(ALICE_DID), 10_000);
+		} catch (java.util.concurrent.TimeoutException e) {
+			throw new AssertionError("Agent '" + agent.getAgentId()
+				+ "' did not reach a rest state in 10s", e);
+		}
 	}
 
 	// ========== Unit: AgentState CAS operations ==========
@@ -181,11 +200,7 @@ public class AgentConcurrencyTest {
 
 		// Agent should be SLEEPING with processed session pending
 		AgentState agent = user.agent("conc-trig");
-		try {
-			agent.awaitSleeping().get(5, TimeUnit.SECONDS);
-		} catch (Exception e) {
-			fail("Timed out waiting for agent to reach SLEEPING: " + e);
-		}
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
 		assertFalse(agent.hasSessionPending(), "Session pending should be drained");
 		// At least 1 timeline entry (possibly 2 if both triggered separate loops)
@@ -240,11 +255,7 @@ public class AgentConcurrencyTest {
 		}
 
 		// Eventually quiesce — all messages processed, agent SLEEPING
-		try {
-			agent.awaitSleeping().get(5, TimeUnit.SECONDS);
-		} catch (Exception e) {
-			fail("Timed out waiting for rapid agent to reach SLEEPING: " + e);
-		}
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 		assertFalse(agent.hasSessionPending(), "All messages should be processed");
 	}
 
@@ -291,11 +302,7 @@ public class AgentConcurrencyTest {
 				"trigger " + i + " job must complete, not fail");
 		}
 
-		try {
-			agent.awaitSleeping().get(10, TimeUnit.SECONDS);
-		} catch (Exception e) {
-			fail("Timed out waiting for barrage agent to reach SLEEPING: " + e);
-		}
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 		assertFalse(agent.hasSessionPending(), "All messages should be processed");
 	}
 
@@ -371,11 +378,7 @@ public class AgentConcurrencyTest {
 		// Agent should be SLEEPING, message processed
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("msg-trig");
-		try {
-			agent.awaitSleeping().get(5, TimeUnit.SECONDS);
-		} catch (Exception e) {
-			fail("Timed out waiting for agent to reach SLEEPING: " + e);
-		}
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
 		assertFalse(agent.hasSessionPending(), "Session pending should be drained");
 	}
@@ -435,11 +438,7 @@ public class AgentConcurrencyTest {
 		// The CAS fix ensures syncState doesn't clobber the run loop's
 		// SLEEPING write.
 		AgentState agent = user.agent("sync-run");
-		try {
-			agent.awaitSleeping().get(5, TimeUnit.SECONDS);
-		} catch (Exception e) {
-			fail("Timed out waiting for agent to reach SLEEPING: " + e);
-		}
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 
 		assertEquals(AgentState.SLEEPING, agent.getStatus(),
 			"Agent should reach SLEEPING after run loop completes — syncState must not clobber");
@@ -480,14 +479,10 @@ public class AgentConcurrencyTest {
 		// Both tasks should have been processed and cleared. The run loop
 		// transitions the agent back to SLEEPING asynchronously after the
 		// awaited task jobs complete — wait deterministically for that
-		// transition via the awaitSleeping() primitive.
+		// transition via awaitFinished() (the run-loop completion future).
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("conc-req");
-		try {
-			agent.awaitSleeping().get(5, TimeUnit.SECONDS);
-		} catch (Exception e) {
-			fail("Timed out waiting for agent to reach SLEEPING: " + e);
-		}
+		assertEquals(AgentState.SLEEPING, awaitFinished(agent));
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
 		assertEquals(0, agent.getTasks().count(), "All tasks should be processed");
 		assertTrue(agent.getTimeline().count() >= 1, "At least one run loop should have executed");

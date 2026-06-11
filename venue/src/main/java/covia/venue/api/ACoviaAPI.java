@@ -1,5 +1,8 @@
 package covia.venue.api;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import convex.api.ContentTypes;
 import convex.core.util.JSON;
 import covia.grid.Venue;
@@ -11,7 +14,9 @@ import io.javalin.http.Context;
  * Base class for Covia Venue APIs
  */
 public abstract class ACoviaAPI  {
-	
+
+	private static final Logger log = LoggerFactory.getLogger(ACoviaAPI.class);
+
 	/**
 	 * Utility method to construct the external base URL
 	 * @param ctx Javalin context
@@ -102,8 +107,8 @@ public abstract class ACoviaAPI  {
 		try {
 			buildRawResult(ctx,JSON.toString(json));
 		} catch (Exception e) {
-			System.err.println("Error in JSON content building: "+json);
-			e.printStackTrace();
+			log.error("Error in JSON content building for {} {}: payload class={}", ctx.method(), ctx.path(),
+					(json == null ? "null" : json.getClass().getName()), e);
 			throw e;
 		}
 	}

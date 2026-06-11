@@ -190,7 +190,12 @@ public class AssetAdapterTest {
 
 	@Test
 	public void testListAssets() {
-		// The demo assets are already loaded by addDemoAssets
+		// asset:list scopes to the caller's own a/ namespace, not the venue
+		// catalog — so store an asset for Alice first, then list it.
+		ACell metadata = Maps.of(Fields.NAME, "Listed Asset", Fields.TYPE, "list-test");
+		engine.jobs().invokeOperation("v/ops/asset/store",
+			Maps.of(Fields.METADATA, metadata), RequestContext.of(ALICE_DID)).awaitResult(5000);
+
 		ACell input = Maps.of(Fields.LIMIT, CVMLong.create(10));
 		Job job = engine.jobs().invokeOperation("v/ops/asset/list", input, RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
@@ -198,7 +203,7 @@ public class AssetAdapterTest {
 		assertNotNull(result);
 		AVector<?> items = (AVector<?>) RT.getIn(result, Fields.ITEMS);
 		assertNotNull(items);
-		assertTrue(items.count() > 0, "Should have demo assets");
+		assertTrue(items.count() > 0, "Should list the caller's own assets");
 
 		CVMLong total = (CVMLong) RT.getIn(result, Fields.TOTAL);
 		assertNotNull(total);

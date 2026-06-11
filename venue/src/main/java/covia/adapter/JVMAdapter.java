@@ -1,6 +1,5 @@
 package covia.adapter;
 
-import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -20,6 +19,16 @@ import covia.venue.RequestContext;
  * Adapter designed for pluggable operations for arbitrary JVM code
  */
 public class JVMAdapter extends AAdapter {
+
+	private static final AString K_FIRST = Strings.intern("first");
+	private static final AString K_SECOND = Strings.intern("second");
+	private static final AString K_SEPARATOR = Strings.intern("separator");
+	private static final AString K_INPUT_COUNT = Strings.intern("inputCount");
+	private static final AString K_TOTAL_LENGTH = Strings.intern("totalLength");
+	private static final AString K_ORIGINAL_LENGTH = Strings.intern("originalLength");
+	private static final AString K_ENCODED_LENGTH = Strings.intern("encodedLength");
+	private static final AString K_DECODED_LENGTH = Strings.intern("decodedLength");
+	private static final AString EMPTY = Strings.intern("");
 
 	@Override
 	public String getName() {
@@ -60,34 +69,25 @@ public class JVMAdapter extends AAdapter {
 
 	private CompletableFuture<ACell> handleStringConcat(ACell input) {
 		try {
-			// Extract input parameters
-			AString first = RT.ensureString(RT.getIn(input, Strings.create("first")));
-			AString second = RT.ensureString(RT.getIn(input, Strings.create("second")));
-			AString separator = RT.ensureString(RT.getIn(input, Strings.create("separator")));
-			
-			// Handle null values - default to empty strings
-			if (first == null) {
-				first = Strings.create("");
-			}
-			if (second == null) {
-				second = Strings.create("");
-			}
-			if (separator == null) {
-				separator = Strings.create("");
-			}
-			
+			// Extract input parameters, defaulting nulls to empty strings
+			AString first = RT.ensureString(RT.getIn(input, K_FIRST));
+			AString second = RT.ensureString(RT.getIn(input, K_SECOND));
+			AString separator = RT.ensureString(RT.getIn(input, K_SEPARATOR));
+			if (first == null) first = EMPTY;
+			if (second == null) second = EMPTY;
+			if (separator == null) separator = EMPTY;
+
 			// Perform string concatenation using AString.append
 			AString result = first.append(separator).append(second);
-			int count = 2; // We always have 2 input strings
-			
+
 			// Create output
 			AMap<AString, ACell> output = Maps.empty();
 			output = output.assoc(Fields.RESULT, result);
-			output = output.assoc(Strings.create("inputCount"), CVMLong.create(count));
-			output = output.assoc(Strings.create("totalLength"), CVMLong.create(result.count()));
-			
+			output = output.assoc(K_INPUT_COUNT, CVMLong.create(2)); // always 2 inputs
+			output = output.assoc(K_TOTAL_LENGTH, CVMLong.create(result.count()));
+
 			return CompletableFuture.completedFuture(output);
-			
+
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
@@ -95,29 +95,21 @@ public class JVMAdapter extends AAdapter {
 	
 	private CompletableFuture<ACell> handleUrlEncode(ACell input) {
 		try {
-			// Extract input parameter
 			AString inputString = RT.ensureString(RT.getIn(input, Fields.INPUT));
-			
-			// Handle null value - default to empty string
-			if (inputString == null) {
-				inputString = Strings.create("");
-			}
-			
-			// Perform URL encoding
-			String javaString = inputString.toString();
-			String encoded = URLEncoder.encode(javaString, StandardCharsets.UTF_8.name());
+			if (inputString == null) inputString = EMPTY;
+
+			// Perform URL encoding (Charset overload — no checked exception)
+			String encoded = URLEncoder.encode(inputString.toString(), StandardCharsets.UTF_8);
 			AString result = Strings.create(encoded);
-			
+
 			// Create output
 			AMap<AString, ACell> output = Maps.empty();
 			output = output.assoc(Fields.RESULT, result);
-			output = output.assoc(Strings.create("originalLength"), CVMLong.create(inputString.count()));
-			output = output.assoc(Strings.create("encodedLength"), CVMLong.create(result.count()));
-			
+			output = output.assoc(K_ORIGINAL_LENGTH, CVMLong.create(inputString.count()));
+			output = output.assoc(K_ENCODED_LENGTH, CVMLong.create(result.count()));
+
 			return CompletableFuture.completedFuture(output);
-			
-		} catch (UnsupportedEncodingException e) {
-			return CompletableFuture.failedFuture(e);
+
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
@@ -125,29 +117,21 @@ public class JVMAdapter extends AAdapter {
 	
 	private CompletableFuture<ACell> handleUrlDecode(ACell input) {
 		try {
-			// Extract input parameter
 			AString inputString = RT.ensureString(RT.getIn(input, Fields.INPUT));
-			
-			// Handle null value - default to empty string
-			if (inputString == null) {
-				inputString = Strings.create("");
-			}
-			
-			// Perform URL decoding
-			String javaString = inputString.toString();
-			String decoded = URLDecoder.decode(javaString, StandardCharsets.UTF_8.name());
+			if (inputString == null) inputString = EMPTY;
+
+			// Perform URL decoding (Charset overload — no checked exception)
+			String decoded = URLDecoder.decode(inputString.toString(), StandardCharsets.UTF_8);
 			AString result = Strings.create(decoded);
-			
+
 			// Create output
 			AMap<AString, ACell> output = Maps.empty();
 			output = output.assoc(Fields.RESULT, result);
-			output = output.assoc(Strings.create("originalLength"), CVMLong.create(inputString.count()));
-			output = output.assoc(Strings.create("decodedLength"), CVMLong.create(result.count()));
-			
+			output = output.assoc(K_ORIGINAL_LENGTH, CVMLong.create(inputString.count()));
+			output = output.assoc(K_DECODED_LENGTH, CVMLong.create(result.count()));
+
 			return CompletableFuture.completedFuture(output);
-			
-		} catch (UnsupportedEncodingException e) {
-			return CompletableFuture.failedFuture(e);
+
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}

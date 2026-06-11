@@ -1,0 +1,27 @@
+services:
+  covia-venue:
+    image: ghcr.io/covia-ai/covia:latest
+    container_name: covia-venue
+    ports:
+      - "8080:8080"
+    volumes:
+      - /home/ec2-user/covia-data:/data
+    command: >
+      java -Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC
+      -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError
+      -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8
+      -jar covia.jar /data/config.json
+    restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ap-southeast-1
+        awslogs-group: /covia/venue
+        awslogs-stream: docker-covia-venue
+        awslogs-create-group: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "--max-time", "3", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3

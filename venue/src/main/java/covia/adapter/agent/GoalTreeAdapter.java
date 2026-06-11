@@ -16,7 +16,6 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
-import covia.adapter.ContextBuilder;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.venue.AgentState;
@@ -36,6 +35,27 @@ import covia.venue.RequestContext;
  * <p>Each transition creates a fresh root frame from the incoming work. The frame
  * stack is in-memory during execution; between transitions only the root frame's
  * conversation is persisted in agent state.</p>
+ *
+ * <h3>Why this design exists — read before "simplifying"</h3>
+ *
+ * <p>The frame stack is <b>not</b> just a decomposition convenience. It is the
+ * mechanism that makes long-running agents tractable: at every inference, the
+ * <i>active</i> frame's conversation is rendered in full while ancestor frames
+ * are progressively summarised at decreasing byte budgets (parent ~300B,
+ * grandparent ~150B, great-grandparent ~80B; see
+ * {@link GoalTreeContext#renderAncestors}). A 50-turn child call costs the same
+ * as a 5-turn child call from the parent's perspective on the next turn —
+ * the grandparent stays small even as descendants explode.</p>
+ *
+ * <p>Without this progressive ancestor rendering, the design collapses to a
+ * flat agent and `subgoal` becomes purely cosmetic. Don't remove the ancestor
+ * pass in {@link GoalTreeContext#renderAncestors} or
+ * {@link ContextBuilder#withFrameStack} thinking it's redundant — it is the
+ * value proposition. {@code compact} is the in-frame analogue (live turns →
+ * single summary segment) for keeping the active frame itself bounded.</p>
+ *
+ * <p>Full design: {@code venue/docs/GOAL_TREE.md} — especially §"Context
+ * Assembly".</p>
  *
  * @see GoalTreeContext for frame data model and context rendering (pure functions)
  * @see AbstractLLMAdapter for shared L3 invocation and tool dispatch
@@ -62,11 +82,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 	// ========== Harness tool definitions ==========
 
-	private static final AString K_DESCRIPTION = Strings.intern("description");
-	private static final AString K_PARAMETERS  = Strings.intern("parameters");
-	private static final AString K_TYPE        = Strings.intern("type");
-	private static final AString K_PROPERTIES  = Strings.intern("properties");
-	private static final AString K_REQUIRED    = Strings.intern("required");
 	private static final AString K_OUTPUTS     = Strings.intern("outputs");
 	private static final AString K_SCHEMA      = Strings.intern("schema");
 	private static final AString K_ADDITIONAL_PROPERTIES = Strings.intern("additionalProperties");
@@ -158,19 +173,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			+ "repeatedly. The data is refreshed automatically each turn. Subgoals "
 			+ "inherit your loaded data. For data you only need once, use covia_read "
 			+ "instead. Call context_unload with the same path to remove it."),
-		K_PARAMETERS, Maps.of(
-			K_TYPE, Strings.create("object"),
-			K_PROPERTIES, Maps.of(
-				Strings.create("path"), Maps.of(
-					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("Workspace path to load (e.g. w/docs/rules, w/vendor-records/acme)")),
-				Strings.create("budget"), Maps.of(
-					K_TYPE, Strings.create("integer"),
-					K_DESCRIPTION, Strings.create("Byte budget for rendering this path (default 500, max 10000)")),
-				Strings.create("label"), Maps.of(
-					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("Optional human-readable label for this context entry"))),
-			K_REQUIRED, Vectors.of(Strings.create("path"))));
+		K_PARAMETERS, CONTEXT_LOAD_PARAMS);
 
 	static final AMap<AString, ACell> TOOL_DEF_CONTEXT_UNLOAD = Maps.of(
 		K_NAME, Strings.create(TOOL_CONTEXT_UNLOAD),
@@ -178,13 +181,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			"Remove a path previously added with context_load. Pass the same "
 			+ "path string you used when loading. Frees context space for other "
 			+ "work or data."),
-		K_PARAMETERS, Maps.of(
-			K_TYPE, Strings.create("object"),
-			K_PROPERTIES, Maps.of(
-				Strings.create("path"), Maps.of(
-					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("The path you passed to context_load"))),
-			K_REQUIRED, Vectors.of(Strings.create("path"))));
+		K_PARAMETERS, CONTEXT_UNLOAD_PARAMS);
 
 	static final AMap<AString, ACell> TOOL_DEF_MORE_TOOLS = Maps.of(
 		K_NAME, Strings.create(TOOL_MORE_TOOLS),
@@ -314,7 +311,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		ContextBuilder.ContextResult context = builder
 			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
 			.withConfig(recordConfig, state)
-			.withSystemPrompt(Vectors.empty())
+			.withSystemPrompt()
 			.withContextEntries(state)
 			.withTools()
 			.build();
@@ -348,6 +345,19 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		return CompletableFuture.supplyAsync(() -> processGoal(null, ctx, input), VIRTUAL_EXECUTOR);
+	}
+
+	/**
+	 * Builds the first-iteration L3 input for {@code agent:context} inspection.
+	 * Same pipeline as the first iteration of {@link #runFrame}: ContextBuilder
+	 * assembly, harness tool merging, optional typed-output handling. Delegates
+	 * to {@link #buildFirstIterationL3Input}, which is also exposed for tests
+	 * that assert on the input directly (without going through the JSON render).
+	 */
+	@Override
+	protected AMap<AString, ACell> buildInspectionInput(
+			AMap<AString, ACell> recordConfig, ACell state, ACell taskInput, RequestContext ctx) {
+		return buildFirstIterationL3Input(recordConfig, state, taskInput, ctx);
 	}
 
 	/**
@@ -448,6 +458,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		ContextBuilder.ContextResult context = builder
 			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
 			.withConfig(recordConfig, state)
+			.withSystemPrompt()
 			.withFrameStack(frames)
 			.withContextEntries(state)
 			.withTools()
@@ -462,11 +473,16 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// Set up capability-scoped context for tool dispatch
 		RequestContext capsCtx = context.capsCtx();
 
+		// Per-tool-call timeout — bounds any single grid op invoked as a tool
+		// so a stuck sub-job cannot hang this loop. Resolved once and shared
+		// with subgoal recursion.
+		long toolCallTimeoutMs = resolveToolCallTimeoutMs(l3Config);
+
 		// Run the root frame. typedHarnessTools (if non-null) injects the
 		// typed complete/fail tools alongside the regular harness/operation
 		// tools, supporting providers that prefer tool calls over response_format.
 		FrameResult result = runFrame(job, frames, 0, l3Config, llmOperation, baseTools,
-			configToolMap, caps, capsCtx, context.history(), typedHarnessTools);
+			configToolMap, caps, capsCtx, context.history(), typedHarnessTools, toolCallTimeoutMs);
 
 		// Config carry-over only — the frame stack lives on the session
 		// record now, so no per-adapter frame state is persisted here.
@@ -575,7 +591,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			AMap<AString, ACell> config, AString llmOperation,
 			AVector<ACell> baseToolsParam, Map<String, AString> configToolMap,
 			AVector<ACell> caps, RequestContext ctx, AVector<ACell> systemMessages,
-			AVector<ACell> typedRootHarnessTools) {
+			AVector<ACell> typedRootHarnessTools, long toolCallTimeoutMs) {
 
 		// Mutable copy — more_tools can append to this mid-run
 		AVector<ACell> baseTools = baseToolsParam;
@@ -811,30 +827,23 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					toolResult = Strings.create("Compacted " + turnsBefore + " turns into segment. Context freed.");
 
 				} else if (TOOL_CONTEXT_LOAD.equals(toolName)) {
-					AString path = RT.ensureString(RT.getIn(toolInput, Strings.create("path")));
+					AString path = RT.ensureString(RT.getIn(toolInput, K_PATH));
 					if (path == null) {
 						toolResult = Strings.create("Error: path is required");
 					} else {
-						long budget = 500;
-						ACell budgetCell = RT.getIn(toolInput, Strings.create("budget"));
-						if (budgetCell instanceof CVMLong l) {
-							budget = Math.max(256, Math.min(l.longValue(), 10_000));
-						}
-						AString label = RT.ensureString(RT.getIn(toolInput, Strings.create("label")));
-						AMap<AString, ACell> entryMeta = Maps.of(
-							Strings.create("budget"), CVMLong.create(budget),
-							Strings.create("ts"), CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()));
-						if (label != null) entryMeta = entryMeta.assoc(Strings.create("label"), label);
-						activeFrame = GoalTreeContext.addLoad(activeFrame, path, entryMeta);
+						long budget = clampLoadBudget(RT.getIn(toolInput, K_BUDGET));
+						AString label = RT.ensureString(RT.getIn(toolInput, K_LABEL));
+						activeFrame = GoalTreeContext.addLoad(activeFrame, path,
+							buildLoadEntryMeta(budget, label));
 						toolResult = Maps.of(
-							Strings.create("path"), path,
+							K_PATH, path,
 							Strings.create("loaded"), CVMBool.TRUE,
-							Strings.create("budget"), CVMLong.create(budget),
+							K_BUDGET, CVMLong.create(budget),
 							Strings.create("note"), Strings.create("Path will appear in context next turn."));
 					}
 
 				} else if (TOOL_CONTEXT_UNLOAD.equals(toolName)) {
-					AString path = RT.ensureString(RT.getIn(toolInput, Strings.create("path")));
+					AString path = RT.ensureString(RT.getIn(toolInput, K_PATH));
 					if (path == null) {
 						toolResult = Strings.create("Error: path is required");
 					} else if (GoalTreeContext.getLoads(activeFrame).get(path) == null) {
@@ -842,7 +851,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					} else {
 						activeFrame = GoalTreeContext.removeLoad(activeFrame, path);
 						toolResult = Maps.of(
-							Strings.create("path"), path,
+							K_PATH, path,
 							Strings.create("unloaded"), CVMBool.TRUE);
 					}
 
@@ -906,7 +915,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					// child also gets responseFormat stripped from its L3
 					// config (handled inside the recursive runFrame).
 					FrameResult childResult = runFrame(job, childFrames, frameIndex + 1,
-						config, llmOperation, baseTools, configToolMap, caps, ctx, systemMessages, null);
+						config, llmOperation, baseTools, configToolMap, caps, ctx, systemMessages, null,
+						toolCallTimeoutMs);
 
 					// Pop child — result becomes tool result in parent
 					AMap<AString, ACell> resultMap = Maps.of(
@@ -918,7 +928,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 				} else {
 					// Config tool or grid dispatch
-					toolResult = dispatchTool(toolName, toolInput, configToolMap, caps, ctx);
+					toolResult = dispatchTool(toolName, toolInput, configToolMap, caps, ctx, toolCallTimeoutMs);
 				}
 
 				// Record tool result in conversation

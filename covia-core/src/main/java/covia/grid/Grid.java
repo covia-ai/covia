@@ -13,7 +13,7 @@ public class Grid {
 
 	/**
 	 * Connect to a grid venue via a DID
-	 * @param did DID e.g. 'did:web:venue-test.covia.ai"
+	 * @param did DID e.g. 'did:web:venue.example.com'
 	 * @return Venue instance
 	 */
 	public static Venue connect(DID did) {
@@ -22,7 +22,7 @@ public class Grid {
 
 	/**
 	 * Connect to a grid venue via a DID with authentication
-	 * @param did DID e.g. 'did:web:venue-test.covia.ai"
+	 * @param did DID e.g. 'did:web:venue.example.com'
 	 * @param auth Authentication provider
 	 * @return Venue instance
 	 */

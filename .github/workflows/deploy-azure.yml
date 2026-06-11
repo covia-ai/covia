@@ -1,0 +1,84 @@
+name: Deploy to Azure
+
+# Deploys the published image to the Azure venue VM. The image itself is
+# built and pushed by publish-docker.yml — this workflow only pulls and
+# (re)starts the container, after a successful publish or on manual dispatch.
+
+on:
+  workflow_run:
+    workflows: ["Publish Docker image"]
+    types: [completed]
+    branches: [develop]
+  workflow_dispatch:
+
+# Never cancel a mid-flight deploy; queue the newest instead
+concurrency:
+  group: deploy-azure
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      packages: read
+
+    steps:
+    - name: Deploy to Azure VM
+      uses: appleboy/ssh-action@v1
+      env:
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        host: ${{ secrets.AZURE_VM_HOST }}
+        username: ${{ secrets.AZURE_VM_USER }}
+        key: ${{ secrets.AZURE_VM_SSH_KEY }}
+        envs: GHCR_TOKEN
+        script: |
+          # Authenticate to GHCR
+          echo $GHCR_TOKEN | docker login ghcr.io -u github --password-stdin
+
+          # Pull latest image
+          docker pull ghcr.io/covia-ai/covia:latest
+
+          # Ensure config exists (venues array format)
+          mkdir -p /home/azureuser/covia-data
+          if [ ! -f /home/azureuser/covia-data/config.json ]; then
+            cat > /home/azureuser/covia-data/config.json <<'CONF'
+          {
+            "venues": [
+              {
+                "name": "Covia Venue (Azure)",
+                "hostname": "venue-4.covia.ai",
+                "store": "/data/venue.etch",
+                "mcp": {}
+              }
+            ]
+          }
+          CONF
+          fi
+          sudo chown -R 1001:1001 /home/azureuser/covia-data
+
+          # Stop and remove existing container
+          docker stop covia-venue 2>/dev/null || true
+          docker rm covia-venue 2>/dev/null || true
+
+          # Run new container
+          docker run -d \
+            --name covia-venue \
+            -p 8080:8080 \
+            -v /home/azureuser/covia-data:/data \
+            --restart unless-stopped \
+            --health-cmd='curl -f --max-time 3 http://localhost:8080/' \
+            --health-interval=30s \
+            --health-timeout=5s \
+            --health-start-period=15s \
+            --health-retries=3 \
+            ghcr.io/covia-ai/covia:latest \
+            java -Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8 -jar covia.jar /data/config.json
+
+          # Wait for health check
+          sleep 10
+          docker inspect --format='{{.State.Health.Status}}' covia-venue
+
+          # Prune old images
+          docker image prune -f

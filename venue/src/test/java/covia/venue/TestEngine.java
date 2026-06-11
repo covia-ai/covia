@@ -24,7 +24,13 @@ import convex.core.data.ACell;
  * (require their own EtchStore) — those should construct their own Engine
  * via the appropriate Engine constructor or {@code VenueServer.launch}.
  * Examples: {@link EnginePersistenceTest}, {@link VenueServerPersistenceTest},
- * {@link VenueRestartTest}, {@link DLFSPersistenceTest}.</p>
+ * {@link VenueRestartTest}, {@link DLFSPersistenceTest},
+	 * {@link EngineSchedulerRebuildTest}. Tests that need bespoke engine
+	 * config (e.g. {@code FileAdapterTest} with custom {@code @TempDir}
+	 * jail roots, or {@code OAuthTest}'s inline {@code createTemp} for
+	 * auth-config variants), and tests that install permanent engine
+	 * callbacks (e.g. {@code DLFSAdapterTest}'s {@code onSync} hook),
+	 * also belong in this category.</p>
  *
  * <p><b>Per-test isolation pattern:</b></p>
  * <pre>{@code

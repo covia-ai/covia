@@ -21,7 +21,6 @@ import convex.core.util.Utils;
 import convex.core.data.prim.CVMBool;
 import convex.core.json.schema.JsonSchema;
 import covia.adapter.AAdapter;
-import covia.adapter.CapabilityChecker;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Asset;
@@ -29,6 +28,7 @@ import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Status;
 import covia.grid.Venue;
+import covia.lattice.CapabilityChecker;
 
 /**
  * Manages job lifecycle, persistence, and in-memory state for active jobs.
@@ -230,16 +230,43 @@ public class JobManager {
 	}
 
 	/**
-	 * Shared invocation prelude: validates metadata, auth, caps, schema;
-	 * returns the adapter ready to invoke. Used by both
-	 * {@link #invokeOperation(AMap, ACell, RequestContext)} (Job path) and
-	 * {@link #invokeInternal(AMap, ACell, RequestContext)} (no-Job path).
-	 *
-	 * @throws IllegalArgumentException invalid meta or schema violation
-	 * @throws AuthException caller not authenticated
-	 * @throws RuntimeException capability denied
-	 * @throws IllegalStateException adapter not registered
+	 * Zero-Job dispatch for the scheduler's deferred firing. Unlike
+	 * {@link #invokeInternal(AString, ACell, RequestContext)}, this re-runs
+	 * {@link #enforceCaps} with the caps carried in {@code ctx}, so a scheduled
+	 * invocation cannot exceed the authority the owner captured at schedule time
+	 * — no capability escalation. Fire with a context carrying the owner's DID
+	 * plus the proofs/caps stapled into the event.
+	 * See {@code venue/docs/GRID_SCHEDULER.md} §5.
 	 */
+	public CompletableFuture<ACell> invokeScheduled(AString ref, ACell input, RequestContext ctx) {
+		if (ref == null) {
+			return CompletableFuture.failedFuture(
+				new IllegalArgumentException("Operation must be specified"));
+		}
+		Asset asset;
+		try {
+			asset = engine.resolveAsset(ref, ctx);
+		} catch (Exception e) {
+			return CompletableFuture.failedFuture(e);
+		}
+		if (asset == null) {
+			return CompletableFuture.failedFuture(
+				new IllegalArgumentException("Cannot resolve operation: " + ref));
+		}
+		Operation op = Operation.from(asset);
+		if (op == null) {
+			return CompletableFuture.failedFuture(
+				new IllegalArgumentException("Asset is not an operation: " + asset.getID()));
+		}
+		AMap<AString, ACell> meta = op.meta();
+		try {
+			enforceCaps(meta, input, ctx);
+		} catch (Exception e) {
+			return CompletableFuture.failedFuture(e);
+		}
+		return invokeInternal(meta, input, ctx);
+	}
+
 	/**
 	 * Enforces capability attenuations on the user-facing dispatch path.
 	 *
@@ -263,6 +290,17 @@ public class JobManager {
 		}
 	}
 
+	/**
+	 * Shared invocation prelude: validates metadata, auth, caps, schema;
+	 * returns the adapter ready to invoke. Used by both
+	 * {@link #invokeOperation(AMap, ACell, RequestContext)} (Job path) and
+	 * {@link #invokeInternal(AMap, ACell, RequestContext)} (no-Job path).
+	 *
+	 * @throws IllegalArgumentException invalid meta or schema violation
+	 * @throws AuthException caller not authenticated
+	 * @throws RuntimeException capability denied
+	 * @throws IllegalStateException adapter not registered
+	 */
 	private AAdapter prepareInvocation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		if (meta == null) throw new IllegalArgumentException("Metadata must be specified");
 		AString callerDID = ctx.getCallerDID();

@@ -4,9 +4,11 @@ This document describes how to build the Covia project using Maven.
 
 ## Prerequisites
 
-- **Java 21**: The project requires Java 21 (JDK 21)
+- **Java 21+**: The project compiles for Java 21 (`maven.compiler.release=21`); the published Docker image runs on a Java 25 JRE. This is deliberate policy: source targets Java 21 so client libraries stay broadly consumable, while container images ship the current Java LTS
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
+
+All dependencies, including [Convex](https://github.com/Convex-Dev/convex), resolve from Maven Central — a clean clone builds with no extra steps. (To develop against unreleased Convex changes, build Convex from source with `mvn install` and point `convex.version` in the parent POM at its snapshot version.)
 
 ## Project Structure
 
@@ -15,6 +17,9 @@ Covia is a multi-module Maven project with the following structure:
 ```
 covia/
 ├── pom.xml                 # Parent POM (aggregator)
+├── covia-core/             # Grid client library and shared abstractions
+│   ├── pom.xml            # Core module POM
+│   └── src/               # Client, auth strategies, core grid types
 ├── venue/                  # Main application module
 │   ├── pom.xml            # Venue module POM
 │   └── src/
@@ -79,11 +84,11 @@ mvn clean compile
 
 ### Venue Module
 
-The venue module produces several artifacts:
+The venue module produces several artifacts (`<version>` is the current Maven version, e.g. `0.0.2-SNAPSHOT`):
 
-- **Standard JAR**: `venue/target/venue-0.0.1-SNAPSHOT.jar`
+- **Standard JAR**: `venue/target/venue-<version>.jar`
 - **Executable JAR**: `venue/target/covia.jar` (with dependencies)
-- **Test JAR**: `venue/target/venue-0.0.1-SNAPSHOT-tests.jar`
+- **Test JAR**: `venue/target/venue-<version>-tests.jar`
 
 The executable JAR (`covia.jar`) is created using the maven-assembly-plugin and includes all dependencies. It can be run directly with:
 
@@ -95,7 +100,7 @@ java -jar venue/target/covia.jar
 
 The workbench module produces:
 
-- **Standard JAR**: `workbench/target/workbench-0.0.1-SNAPSHOT.jar`
+- **Standard JAR**: `workbench/target/workbench-<version>.jar`
 
 
 ## Build Configuration

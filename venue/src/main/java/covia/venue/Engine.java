@@ -56,13 +56,13 @@ import covia.adapter.JSONAdapter;
 import covia.adapter.JVMAdapter;
 import covia.adapter.SchemaAdapter;
 import covia.adapter.LangChainAdapter;
-import covia.adapter.LLMAgentAdapter;
 import covia.adapter.MCPAdapter;
 import covia.adapter.Orchestrator;
 import covia.adapter.SecretAdapter;
 import covia.adapter.DLFSAdapter;
 import covia.adapter.FileAdapter;
 import covia.adapter.VaultAdapter;
+import covia.adapter.agent.LLMAgentAdapter;
 import covia.adapter.UCANAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
@@ -111,10 +111,11 @@ public class Engine {
 	private final JobManager jobManager;
 
 	/**
-	 * Per-thread wake scheduler (B8.8). Fires {@code wakeAgent} when a
-	 * session or task {@code wakeTime} falls due. See {@code venue/docs/SCHEDULER.md §7}.
+	 * Per-venue grid scheduler. Fires any deferred grid operation at a future
+	 * wall-clock time; an agent wake is one consumer (a scheduled
+	 * {@code agent:wake}). See {@code venue/docs/GRID_SCHEDULER.md}.
 	 */
-	private final AgentScheduler scheduler;
+	private final Scheduler gridScheduler;
 
 	/**
 	 * Map of named adapters that can handle different types of operations or resources
@@ -140,6 +141,26 @@ public class Engine {
 
 	/** How often the persistence sweep daemon runs (ms). */
 	private static final long SWEEP_INTERVAL_MS = 100;
+
+	/**
+	 * How often the sweep forces a store-level fsync. The sweep runs every
+	 * {@link #SWEEP_INTERVAL_MS} but only calls {@link PersistenceHandler#flush()}
+	 * if at least this many ms have elapsed since the last flush. Bounds the
+	 * data-loss window on unclean shutdown (kernel panic, power loss, hard
+	 * VM stop) to roughly this interval. App-requested {@link #flush()} resets
+	 * the counter, so explicit flushes naturally suppress the periodic one.
+	 *
+	 * <p>Package-private (non-final, volatile) so tests can shrink the
+	 * interval to exercise the cadence quickly. Tests must restore the
+	 * original value. Volatile ensures the sweep daemon thread sees the
+	 * change without a synchronisation primitive — without this, the JIT
+	 * may cache the field per thread and tests changing it from the test
+	 * thread won't affect the sweep.</p>
+	 */
+	static volatile long FLUSH_INTERVAL_MS = 10_000;
+
+	/** Timestamp of the last completed flush. Initialised at construction. */
+	private volatile long lastFlushMillis;
 
 	/**
 	 * Primary constructor: Engine receives an ALatticeCursor from its caller.
@@ -176,17 +197,21 @@ public class Engine {
 		this.keyPair=keyPair;
 		this.lattice=cursor;
 		this.persistHandler = (persistHandler != null) ? persistHandler : PersistenceHandler.NOOP;
+		this.lastFlushMillis = System.currentTimeMillis();
 		// Set signing context so SignedCursor can sign writes through OwnerLattice
 		LatticeContext ctx = LatticeContext.create(null, this.keyPair);
 		this.lattice.withContext(ctx);
 		initialiseFromCursor();
 		this.jobManager = new JobManager(this);
-		this.scheduler = new AgentScheduler(this::fireScheduledWake);
+		this.gridScheduler = new Scheduler(this);
 		this.contentStorage = createStorage();
 		this.contentStorage.initialise();
 
-		// Lattice is authoritative for per-thread wakes; the scheduler index
-		// is in-memory only and rebuilt on every boot. See SCHEDULER.md §7.
+		// The grid scheduler's authoritative state is the :schedule lattice
+		// index; arm its in-memory alarm from the persisted head. GRID_SCHEDULER.md.
+		gridScheduler.start();
+		// Per-thread agent wakeTimes are authoritative; re-derive each agent's
+		// single agent:wake event from them, healing any drift from a prior run.
 		rebuildSchedulerFromLattice();
 
 		// Ensure the venue's own user record exists in :user-data. The venue
@@ -335,6 +360,16 @@ public class Engine {
 		try {
 			venueState.sync();   // pull fork writes into the root
 			lattice.sync();      // fire NodeServer.onSync → propagator
+			// Periodic durability barrier. The propagator's setRootData
+			// writes new root data to the mmap'd Etch but does not fsync;
+			// the OS may take minutes to write dirty pages out on its own.
+			// Forcing fsync every FLUSH_INTERVAL_MS bounds the unclean-
+			// shutdown data-loss window. Cheap on idle venues — fsync of
+			// an unchanged file is a no-op below the kernel.
+			if (System.currentTimeMillis() - lastFlushMillis >= FLUSH_INTERVAL_MS) {
+				persistHandler.flush();
+				lastFlushMillis = System.currentTimeMillis();
+			}
 		} catch (Exception e) {
 			log.warn("Persistence sweep failed", e);
 		}
@@ -359,7 +394,13 @@ public class Engine {
 	 */
 	public void flush() {
 		venueState.sync();                   // pull fork into root
-		persistHandler.persist(lattice.get()); // synchronous persist
+		persistHandler.persist(lattice.get()); // synchronous persist (mmap)
+		try {
+			persistHandler.flush();            // fsync — durable on disk
+		} catch (java.io.IOException e) {
+			throw new RuntimeException("flush failed", e);
+		}
+		lastFlushMillis = System.currentTimeMillis();
 	}
 
 	/**
@@ -377,10 +418,10 @@ public class Engine {
 		if (!closed.compareAndSet(false, true)) return; // already closed
 
 		// Stop the scheduler first so no new fires land during shutdown. In-
-		// flight fires on virtual threads keep running; their wakeAgent calls
+		// flight fires on virtual threads keep running; their invocations
 		// tolerate a closing venue because the run loops themselves gate on
 		// agent state in the lattice.
-		scheduler.shutdown();
+		gridScheduler.shutdown();
 
 		// Stop accepting new sweep tasks; wait briefly for in-flight sweep to finish.
 		// May be null for in-memory engines that have no persistence handler.
@@ -402,6 +443,7 @@ public class Engine {
 		try {
 			venueState.sync();
 			persistHandler.persist(lattice.get());
+			persistHandler.flush();
 		} catch (Exception e) {
 			log.warn("Final persistence flush failed during close", e);
 		}
@@ -424,6 +466,7 @@ public class Engine {
 		venue.registerAdapter(new ConvexAdapter());
 		venue.registerAdapter(new AgentAdapter());
 		venue.registerAdapter(new SecretAdapter());
+		venue.registerAdapter(new covia.adapter.SchedulerAdapter());
 		venue.registerAdapter(new AuthAdapter());
 		venue.registerAdapter(new UCANAdapter());
 		venue.registerAdapter(new DLFSAdapter());
@@ -561,8 +604,8 @@ public class Engine {
 					ops = ops.conj(Strings.create(catalogPath));
 				}
 				AMap<AString, ACell> summary = Maps.of(
-					Strings.create("name"), Strings.create(adapter.getName()),
-					Strings.create("description"), Strings.create(adapter.getDescription()),
+					Fields.NAME, Strings.create(adapter.getName()),
+					Fields.DESCRIPTION, Strings.create(adapter.getDescription()),
 					Strings.create("operations"), ops);
 				writeVenueInfo("v/info/adapters/" + adapterName, summary, ctx);
 			}
@@ -923,7 +966,7 @@ public class Engine {
 		if (value instanceof AMap) {
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> map = (AMap<AString, ACell>) value;
-			if (map.get(Strings.create("operation")) != null) {
+			if (map.get(Fields.OPERATION) != null) {
 				return Asset.fromMeta(map);
 			}
 		}
@@ -934,7 +977,7 @@ public class Engine {
 	/**
 	 * Returns true if {@code ref} starts with a known user-namespace prefix
 	 * (w/, g/, o/, j/, s/, n/, h/, c/) without a leading slash. Mirrors
-	 * {@link covia.adapter.ContextLoader} so the two resolvers stay aligned.
+	 * {@link covia.adapter.agent.ContextLoader} so the two resolvers stay aligned.
 	 */
 	static boolean isUserNamespacePath(AString ref) {
 		if (ref == null || ref.count() < 2) return false;
@@ -1001,14 +1044,6 @@ public class Engine {
 	 */
 	public Asset resolveAsset(AString ref) {
 		return resolveAsset(ref, venueContext());
-	}
-
-	/**
-	 * Resolves a hash string within the /a/ namespace.
-	 */
-	private Asset resolveAssetRef(AString hashStr) {
-		Hash h = Hash.parse(hashStr);
-		return (h != null) ? getAsset(h) : null;
 	}
 
 	/**
@@ -1423,7 +1458,6 @@ public class Engine {
 	 * Gets the root lattice cursor. Used by adapters that need access to
 	 * top-level lattice regions (e.g. DLFSAdapter for the :dlfs region).
 	 */
-	@SuppressWarnings("unchecked")
 	public ALatticeCursor<Index<Keyword, ACell>> getRootCursor() {
 		return lattice;
 	}
@@ -1456,36 +1490,22 @@ public class Engine {
 	}
 
 	/**
-	 * Gets the per-thread wake scheduler (B8.8).
-	 * @return AgentScheduler instance
+	 * Gets the per-venue grid scheduler — fires deferred grid-operation
+	 * invocations. See {@code venue/docs/GRID_SCHEDULER.md}.
+	 * @return Scheduler instance
 	 */
-	public AgentScheduler scheduler() {
-		return scheduler;
+	public Scheduler gridScheduler() {
+		return gridScheduler;
 	}
 
 	/**
-	 * Fire action for the scheduler — invoked on a fresh virtual thread
-	 * when a session/task {@code wakeTime} falls due. Delegates to the
-	 * agent adapter's {@code wakeAgent} with a scheduler-scoped
-	 * {@link RequestContext}. If the adapter isn't registered (e.g.
-	 * stripped-down test engine), the fire is a no-op.
+	 * Re-derives every agent's single {@code agent:wake} event from the
+	 * authoritative per-thread {@code wakeTime} fields in the lattice. Called
+	 * once during Engine construction: the {@code :schedule} index already
+	 * persists across restarts, but a crash could leave a stored handle stale,
+	 * so each agent is rebuilt idempotently (cancel any prior handle, re-arm at
+	 * the earliest pending wake). See {@code venue/docs/GRID_SCHEDULER.md §8}.
 	 */
-	private void fireScheduledWake(AgentScheduler.ThreadRef ref) {
-		AAdapter a = getAdapter("agent");
-		if (!(a instanceof AgentAdapter agentAdapter)) return;
-		agentAdapter.wakeAgent(
-			ref.agentId(),
-			RequestContext.of(ref.userDid()),
-			false);
-	}
-
-	/**
-	 * Scans the lattice for all session/task {@code wakeTime} fields and
-	 * registers each as a scheduler entry. Called once during Engine
-	 * construction so a restart that drops the in-memory scheduler state
-	 * does not lose any scheduled wakes. See {@code venue/docs/SCHEDULER.md §7}.
-	 */
-	@SuppressWarnings("unchecked")
 	void rebuildSchedulerFromLattice() {
 		AMap<AString, ACell> userData = venueState.users().getAll();
 		if (userData == null || userData.isEmpty()) return;
@@ -1499,44 +1519,15 @@ public class Engine {
 			if (agents == null || agents.isEmpty()) continue;
 			for (var agentEntry : agents.entrySet()) {
 				AString agentId = (AString) agentEntry.getKey();
-				ACell agentVal = agentEntry.getValue();
-				if (!(agentVal instanceof AMap)) continue;
-				AMap<AString, ACell> agentRec = (AMap<AString, ACell>) agentVal;
-				count += scheduleWakesFromIndex(userDid, agentId, agentRec,
-					AgentState.KEY_SESSIONS, AgentScheduler.ThreadKind.SESSION);
-				count += scheduleWakesFromIndex(userDid, agentId, agentRec,
-					AgentState.KEY_TASKS, AgentScheduler.ThreadKind.TASK);
+				if (!(agentEntry.getValue() instanceof AMap)) continue;
+				AgentState agent = user.agent(agentId);
+				if (agent == null) continue;
+				if (agent.rescheduleWake(gridScheduler, userDid)) count++;
 			}
 		}
 		if (count > 0) {
-			log.info("Scheduler: rebuilt {} pending wake(s) from lattice", count);
+			log.info("Scheduler: re-armed {} pending agent wake(s) from lattice", count);
 		}
-	}
-
-	@SuppressWarnings("unchecked")
-	private int scheduleWakesFromIndex(AString userDid, AString agentId,
-			AMap<AString, ACell> agentRec, AString key,
-			AgentScheduler.ThreadKind kind) {
-		ACell v = agentRec.get(key);
-		if (!(v instanceof Index)) return 0;
-		Index<Blob, ACell> idx = (Index<Blob, ACell>) v;
-		int n = 0;
-		long cnt = idx.count();
-		for (long i = 0; i < cnt; i++) {
-			var e = idx.entryAt(i);
-			Blob threadId = (Blob) e.getKey();
-			ACell rec = e.getValue();
-			if (!(rec instanceof AMap)) continue;
-			ACell wt = ((AMap<AString, ACell>) rec).get(Fields.WAKE_TIME);
-			if (!(wt instanceof CVMLong)) continue;
-			long wakeTime = ((CVMLong) wt).longValue();
-			if (wakeTime <= 0) continue;
-			scheduler.schedule(
-				new AgentScheduler.ThreadRef(userDid, agentId, kind, threadId),
-				wakeTime);
-			n++;
-		}
-		return n;
 	}
 
 	// ========== Secret resolution ==========
@@ -1574,6 +1565,92 @@ public class Engine {
 			log.debug("Could not resolve secret '{}': {}", name, e.getMessage());
 			return null;
 		}
+	}
+
+	/**
+	 * Provisions secrets declared in the venue config into the appropriate
+	 * per-user encrypted secret stores.
+	 *
+	 * <p>Reads {@link Config#SECRETS} ({@code {<userKey>: {<name>: <value>}}}).
+	 * Top-level keys resolve as follows:</p>
+	 * <ul>
+	 *   <li>{@code "venue"} — the venue's own DID (see {@link #getDIDString})</li>
+	 *   <li>{@code "public"} — {@code <venueDID>:public}, the anonymous user</li>
+	 *   <li>Anything else — used verbatim; expected to be a literal DID string</li>
+	 * </ul>
+	 *
+	 * <p>Each named secret overwrites any existing value under that name for
+	 * that user. Names not listed in config are left untouched. Per-secret
+	 * failures are logged at warn but do not fail venue startup.</p>
+	 *
+	 * <p>Values themselves are never logged.</p>
+	 *
+	 * @return number of secrets successfully provisioned (0 if none configured)
+	 */
+	@SuppressWarnings("unchecked")
+	public int provisionConfiguredSecrets() {
+		AMap<AString, ACell> secrets = config.getSecrets();
+		if (secrets == null || secrets.isEmpty()) return 0;
+
+		AString venueDID = getDIDString();
+		AString publicDID = Strings.create(venueDID.toString() + ":public");
+		byte[] encKey = SecretStore.deriveKey(keyPair);
+
+		int total = 0;
+		for (long i = 0; i < secrets.count(); i++) {
+			java.util.Map.Entry<AString, ACell> entry = secrets.entryAt(i);
+			AString userKey = entry.getKey();
+			ACell rawNames = entry.getValue();
+			if (!(rawNames instanceof AMap)) {
+				log.warn("Configured secrets for '{}' must be a map; ignoring", userKey);
+				continue;
+			}
+
+			AString targetDID;
+			String userKeyStr = userKey.toString();
+			if ("venue".equals(userKeyStr)) {
+				targetDID = venueDID;
+			} else if ("public".equals(userKeyStr)) {
+				targetDID = publicDID;
+			} else {
+				targetDID = userKey;
+			}
+
+			User user;
+			try {
+				user = venueState.users().ensure(targetDID);
+			} catch (Exception e) {
+				log.warn("Could not resolve user '{}' for configured secrets: {}",
+					userKeyStr, e.getMessage());
+				continue;
+			}
+
+			AMap<AString, ACell> nameMap = (AMap<AString, ACell>) rawNames;
+			int provisioned = 0;
+			for (long j = 0; j < nameMap.count(); j++) {
+				java.util.Map.Entry<AString, ACell> nv = nameMap.entryAt(j);
+				AString name = nv.getKey();
+				AString value = RT.ensureString(nv.getValue());
+				if (value == null) {
+					log.warn("Configured secret '{}' for user '{}' has non-string value; skipping",
+						name, userKeyStr);
+					continue;
+				}
+				try {
+					user.secrets().store(name, value, encKey);
+					provisioned++;
+				} catch (Exception e) {
+					log.warn("Failed to provision secret '{}' for user '{}': {}",
+						name, userKeyStr, e.getMessage());
+				}
+			}
+			if (provisioned > 0) {
+				log.info("Provisioned {} secret(s) for {} ({})",
+					provisioned, userKeyStr, targetDID);
+			}
+			total += provisioned;
+		}
+		return total;
 	}
 
 }

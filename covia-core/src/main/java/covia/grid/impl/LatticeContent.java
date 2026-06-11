@@ -11,13 +11,31 @@ import convex.lattice.cursor.ACursor;
 import covia.grid.AContent;
 
 /**
- * Content implementation that wraps a lattice data cursor
+ * Content implementation that wraps a lattice data cursor.
+ * Content is looked up under the cursor's {@code :data} entry, keyed by the content hash.
  */
 public class LatticeContent extends AContent {
 
-	private ACursor<ACell> cursor;
-	private Hash hash;
-	
+	private final ACursor<ACell> cursor;
+	private final Hash hash;
+
+	private LatticeContent(ACursor<ACell> cursor, Hash hash) {
+		this.cursor = cursor;
+		this.hash = hash;
+	}
+
+	/**
+	 * Create a LatticeContent for the given hash, resolved via the given cursor.
+	 * @param cursor Cursor rooted on a lattice node carrying a {@code :data} entry
+	 * @param hash   Content hash to look up
+	 * @return A new LatticeContent instance
+	 */
+	public static LatticeContent of(ACursor<ACell> cursor, Hash hash) {
+		if (cursor == null) throw new IllegalArgumentException("cursor must not be null");
+		if (hash == null) throw new IllegalArgumentException("hash must not be null");
+		return new LatticeContent(cursor, hash);
+	}
+
 	@Override
 	public ABlob getBlob() throws IOException {
 		ACell data=cursor.get(Keywords.DATA, hash);

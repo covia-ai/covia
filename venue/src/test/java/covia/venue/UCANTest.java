@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
@@ -25,29 +26,40 @@ import covia.grid.Job;
 /**
  * Tests for the UCAN capability flow: issue tokens, present as proofs,
  * verify cross-user access.
+ *
+ * <p>Uses {@link TestEngine#ENGINE}. Per-test key pairs (and therefore
+ * per-test Alice/Bob/Carol DIDs) isolate user namespaces — Alice's
+ * {@code w/shared/doc} and {@code w/private/secret} written in setup
+ * live under a different DID for each test method, so writes don't
+ * collide across tests on the shared engine.</p>
  */
 public class UCANTest {
 
-	private Engine engine;
-	private AKeyPair venueKP;
-	private AString venueDID;
+	final Engine engine = TestEngine.ENGINE;
+	private final AKeyPair venueKP = engine.getKeyPair();
+	private final AString venueDID = engine.getDIDString();
 
-	// Real key pairs so DIDs are valid multikey-encoded
-	private static final AKeyPair ALICE_KP = AKeyPair.generate();
-	private static final AKeyPair BOB_KP = AKeyPair.generate();
-	private static final AKeyPair CAROL_KP = AKeyPair.generate();
-	private static final AString ALICE_DID = UCAN.toDIDKey(ALICE_KP.getAccountKey());
-	private static final AString BOB_DID = UCAN.toDIDKey(BOB_KP.getAccountKey());
-	private static final AString CAROL_DID = UCAN.toDIDKey(CAROL_KP.getAccountKey());
-	private static final RequestContext ALICE = RequestContext.of(ALICE_DID);
-	private static final RequestContext BOB = RequestContext.of(BOB_DID);
+	// Per-test key pairs — fresh DIDs each test method so writes to
+	// /w/shared/doc and /w/private/secret are user-namespaced and isolated.
+	private AKeyPair ALICE_KP;
+	private AKeyPair BOB_KP;
+	private AKeyPair CAROL_KP;
+	private AString ALICE_DID;
+	private AString BOB_DID;
+	private AString CAROL_DID;
+	private RequestContext ALICE;
+	private RequestContext BOB;
 
 	@BeforeEach
-	public void setup() {
-		engine = Engine.createTemp(null);
-		Engine.addDemoAssets(engine);
-		venueKP = engine.getKeyPair();
-		venueDID = engine.getDIDString();
+	public void setup(TestInfo info) {
+		ALICE_KP = AKeyPair.generate();
+		BOB_KP = AKeyPair.generate();
+		CAROL_KP = AKeyPair.generate();
+		ALICE_DID = UCAN.toDIDKey(ALICE_KP.getAccountKey());
+		BOB_DID = UCAN.toDIDKey(BOB_KP.getAccountKey());
+		CAROL_DID = UCAN.toDIDKey(CAROL_KP.getAccountKey());
+		ALICE = RequestContext.of(ALICE_DID);
+		BOB = RequestContext.of(BOB_DID);
 
 		// Alice writes some workspace data
 		engine.jobs().invokeOperation("v/ops/covia/write",

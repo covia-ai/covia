@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or idea
+    url: https://github.com/orgs/covia-ai/discussions
+    about: Ask questions and share ideas in GitHub Discussions.
+  - name: Discord
+    url: https://discord.gg/fywdrKd8QT
+    about: Chat with the team and community.
+  - name: Security vulnerability
+    url: https://github.com/covia-ai/covia/security/advisories/new
+    about: Please report vulnerabilities privately — see SECURITY.md. Do not open a public issue.

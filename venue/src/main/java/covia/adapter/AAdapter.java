@@ -31,7 +31,7 @@ public abstract class AAdapter {
 	 */
 	public static final ExecutorService VIRTUAL_EXECUTOR = ThreadUtils.getVirtualExecutor();
 
-	protected Engine engine;
+	public Engine engine;
 
 	/**
 	 * Index of assets installed by this adapter.

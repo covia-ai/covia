@@ -20,6 +20,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.lattice.NamespaceResolver;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -126,6 +127,43 @@ public class CoviaAdapterTest {
 
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
 		assertNotNull(RT.getIn(result, "value"), "Should return user root");
+	}
+
+	/**
+	 * Regression: covia:read navigating a Blob-keyed {@code Index} by its hex
+	 * key. The sessions Index lives inside the agent's opaque LWW value, so the
+	 * lattice resolver can't descend it — the read falls back to deepGet, whose
+	 * Index branch must parse the hex path segment into the Blob key. This path
+	 * silently returned {@code exists:false} until fixed (found live over MCP,
+	 * not by the map/vector tests above — see CoviaReadIndexNavTest for the
+	 * helper-level unit).
+	 */
+	@Test
+	public void testReadSessionByHexIndexKey() {
+		// wakeresponse returns {response:"ack"}, so the chat slot completes.
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "sess-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/wakeresponse")),
+			ALICE).awaitResult(5000);
+
+		// A chat creates and persists a session keyed by a Blob sid.
+		Job chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "sess-agent", Fields.MESSAGE, Strings.create("hi")),
+			ALICE);
+		AString sid = RT.ensureString(RT.getIn(chat.awaitResult(5000), Fields.SESSION_ID));
+		assertNotNull(sid, "chat should return a sessionId");
+
+		// Whole session record by its hex key (the failing case).
+		Job whole = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "g/sess-agent/sessions/" + sid), ALICE);
+		assertEquals(CVMBool.TRUE, RT.getIn(whole.awaitResult(5000), "exists"),
+			"covia:read must resolve a Blob-keyed Index entry by its hex key");
+
+		// Deep field navigation after the Index step.
+		Job field = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "g/sess-agent/sessions/" + sid + "/meta/turns"), ALICE);
+		assertEquals(CVMBool.TRUE, RT.getIn(field.awaitResult(5000), "exists"),
+			"a deep field after the hex Index key must resolve too");
 	}
 
 	// ========== covia:read — universal resolution forms ==========
@@ -399,8 +437,6 @@ public class CoviaAdapterTest {
 	@Test
 	public void testCannotReadOtherUsersData() {
 		// Bob should not see Alice's agents
-		RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
-
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, "g/test-agent"), BOB);
 		ACell result = readJob.awaitResult(5000);
@@ -411,8 +447,6 @@ public class CoviaAdapterTest {
 
 	@Test
 	public void testCannotListOtherUsersAgents() {
-		RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
-
 		Job listJob = engine.jobs().invokeOperation("v/ops/covia/list",
 			Maps.of(Fields.PATH, "g"), BOB);
 		ACell result = listJob.awaitResult(5000);
@@ -801,8 +835,6 @@ public class CoviaAdapterTest {
 
 	@Test
 	public void testWorkspaceIsolationBetweenUsers() {
-		RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
-
 		// Alice writes to her workspace
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/secret-plans", Fields.VALUE, Strings.create("alice-only")),
@@ -843,7 +875,6 @@ public class CoviaAdapterTest {
 			ALICE).awaitResult(5000);
 
 		// Bob tries to read Alice's workspace via DID-prefixed path
-		RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, ALICE_DID + "/w/public-info"),
 			BOB);
@@ -852,8 +883,21 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
+	public void testCrossUserReadSecretsDenied() {
+		// Alice stores a secret in her per-user secret store
+		engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "TEST_SECRET", Fields.VALUE, Strings.create("topsecret")),
+			ALICE).awaitResult(5000);
+
+		// Bob must not be able to read Alice's encrypted secret blob via DID-prefixed path
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID + "/s/TEST_SECRET"),
+			BOB);
+		assertThrows(Exception.class, () -> readJob.awaitResult(5000));
+	}
+
+	@Test
 	public void testCrossUserListDenied() {
-		RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
 		Job listJob = engine.jobs().invokeOperation("v/ops/covia/list",
 			Maps.of(Fields.PATH, ALICE_DID + "/w"),
 			BOB);
@@ -867,7 +911,6 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "w/events", Fields.VALUE, Strings.create("ev1")),
 			ALICE).awaitResult(5000);
 
-		RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
 		Job sliceJob = engine.jobs().invokeOperation("v/ops/covia/slice",
 			Maps.of(Fields.PATH, ALICE_DID + "/w/events"),
 			BOB);
@@ -877,7 +920,6 @@ public class CoviaAdapterTest {
 	@Test
 	public void testCrossUserReadNonExistentUser() {
 		// Same error as existing user — must not leak user existence
-		RequestContext BOB = RequestContext.of(Strings.create("did:key:z6MkBob"));
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, "did:key:z6MkNobody/w/anything"),
 			BOB);

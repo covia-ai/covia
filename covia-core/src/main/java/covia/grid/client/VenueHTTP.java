@@ -108,6 +108,26 @@ public class VenueHTTP extends Venue {
 	}
 
 	/**
+	 * Sends a request, mapping a low-level connection failure to a clear
+	 * {@link ResponseException} that names the venue. A bare
+	 * {@link java.net.ConnectException} — the server down, unreachable, or its
+	 * accept queue full under load — is otherwise opaque to callers.
+	 */
+	private <T> CompletableFuture<HttpResponse<T>> dispatch(HttpRequest req, HttpResponse.BodyHandler<T> handler) {
+		return httpClient.sendAsync(req, handler).exceptionallyCompose(ex -> {
+			Throwable cause = (ex instanceof java.util.concurrent.CompletionException && ex.getCause() != null)
+				? ex.getCause() : ex;
+			if (cause instanceof java.net.ConnectException) {
+				return CompletableFuture.failedFuture(new ResponseException(
+					"Cannot reach venue at " + baseURI + ": " + cause.getMessage()
+					+ " — server is down, unreachable, or refused the connection "
+					+ "(its accept queue may be full under load)", cause));
+			}
+			return CompletableFuture.failedFuture(ex);
+		});
+	}
+
+	/**
 	 * Adds an asset to the connected venue
 	 * 
 	 * @param jsonMeta JSON metadata string for the asset
@@ -126,7 +146,7 @@ public class VenueHTTP extends Venue {
 			.POST(HttpRequest.BodyPublishers.ofString(JSON.printPretty(meta).toString()))
 			.build();
 		
-		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response -> {
 			if (response.statusCode() != 201) {
 				throw new ResponseException("Failed to add asset: " + response.statusCode() + " - " + response.body(), response);
 			}
@@ -169,7 +189,7 @@ public class VenueHTTP extends Venue {
 			.GET()
 			.build();
 		
-		return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response-> {
+		return dispatch(request, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response-> {
 			if (response.statusCode()!=200) return null;
 			return response.body();
 		});
@@ -185,7 +205,7 @@ public class VenueHTTP extends Venue {
 			.GET()
 			.build();
 		
-		return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response-> {
+		return dispatch(request, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response-> {
 			int code=response.statusCode();
 			if (code!=200) {
 				throw new ResponseException("getStatus returned code: "+code,response);
@@ -361,7 +381,7 @@ public class VenueHTTP extends Venue {
 			))))
 			.build();
 		
-		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			if (response.statusCode() != 201) {
 				throw new ResponseException("Failed to start operation: " + response+" = "+response.body(),response);
 			}
@@ -432,7 +452,7 @@ public class VenueHTTP extends Venue {
 			.GET()
 			.build();
 		
-		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
 				throw new ConversionException("assets API returned status: "+code);
@@ -476,6 +496,13 @@ public class VenueHTTP extends Venue {
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 				job.cancel();
+			} catch (covia.exception.ResponseException e) {
+				// Polling stopped before the Job reached a terminal state
+				// (timeout or transport error). Do NOT mark the Job as
+				// failed — the remote work is still going as far as we
+				// know. Just signal to awaiters that we lost visibility.
+				log.debug("Polling for job {} ended: {}", job.getID(), e.getMessage());
+				job.pollingFailed(e);
 			}
 		});
 	}
@@ -568,7 +595,7 @@ public class VenueHTTP extends Venue {
 			.PUT(HttpRequest.BodyPublishers.ofByteArray(content.getBlob().getBytes()))
 			.build();
 		
-		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApplyAsync(response -> {
 			if (response.statusCode() == 200 || response.statusCode() == 201) {
 				ACell json=JSON.parse(response.body());
 				if (json instanceof AString hashString) {
@@ -608,7 +635,7 @@ public class VenueHTTP extends Venue {
 			.GET()
 			.build();
 
-		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofByteArray()).thenApply(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofByteArray()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code != 200) {
 				throw new ResponseException("Content get failed with status: " +code+" -- asset ID: "+assetID);
@@ -635,7 +662,7 @@ public class VenueHTTP extends Venue {
 			.PUT(HttpRequest.BodyPublishers.ofString(""))
 			.build();
 		
-		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			int code = response.statusCode();
 			if (code == 200) {
 				return JSON.parse(response.body()); // Success
@@ -657,7 +684,7 @@ public class VenueHTTP extends Venue {
 			.PUT(HttpRequest.BodyPublishers.ofString(""))
 			.build();
 
-		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			int code = response.statusCode();
 			if (code == 200) {
 				return JSON.parse(response.body());
@@ -679,7 +706,7 @@ public class VenueHTTP extends Venue {
 			.PUT(HttpRequest.BodyPublishers.ofString(""))
 			.build();
 
-		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			int code = response.statusCode();
 			if (code == 200) {
 				return JSON.parse(response.body());
@@ -701,7 +728,7 @@ public class VenueHTTP extends Venue {
 			.PUT(HttpRequest.BodyPublishers.ofString(""))
 			.build();
 		
-		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			int code = response.statusCode();
 			if (code == 200) {
 				return null; // Success
@@ -722,7 +749,7 @@ public class VenueHTTP extends Venue {
 		HttpRequest req = requestBuilder("jobs/" + jobID.toHexString())
 			.GET()
 			.build();
-		return httpClient.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code == 200) {
 				return RT.ensureMap(JSON.parse(response.body()));

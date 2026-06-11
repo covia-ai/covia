@@ -59,6 +59,17 @@ public class Config {
 	/** Key for venue port */
 	public static final AString PORT = Strings.intern("port");
 
+	/** Key for the HTTP connector's accept-queue (backlog) size */
+	public static final AString ACCEPT_QUEUE_SIZE = Strings.intern("acceptQueueSize");
+
+	/**
+	 * Default accept-queue (backlog) depth. The JDK/Jetty default of 50 is too
+	 * shallow for bursty connection load: when the queue overflows the OS
+	 * refuses new connections (a RST → {@code ConnectException} on Windows)
+	 * instead of queuing them. 1024 absorbs the bursts.
+	 */
+	public static final int DEFAULT_ACCEPT_QUEUE_SIZE = 1024;
+
 	/** Key for MCP configuration */
 	public static final AString MCP = Strings.intern("mcp");
 
@@ -150,6 +161,39 @@ public class Config {
 	/** Key for MCP enabled flag */
 	public static final AString ENABLED = Strings.intern("enabled");
 
+	/**
+	 * Key for the "Fix MCP Strings" workaround flag (top-level, default true).
+	 * Some MCP clients serialise nested object/array arguments as JSON strings
+	 * instead of the structured types declared in the tool schema. When true,
+	 * the venue defensively re-parses such string values into their declared
+	 * shape at the MCP boundary and at {@code grid:run}/{@code grid:invoke}
+	 * dispatch. Set to false to disable the workaround.
+	 */
+	public static final AString FIX_MCP_STRINGS = Strings.intern("fixMcpStrings");
+
+	/**
+	 * Key for the per-venue secrets bootstrap map.
+	 *
+	 * <p>Structure is {@code {<userKey>: {<name>: <value>, ...}, ...}} where
+	 * {@code userKey} is one of:</p>
+	 * <ul>
+	 *   <li>{@code "venue"} — resolves to the venue's own DID (intended for
+	 *       venue-internal operations and self-issued requests).</li>
+	 *   <li>{@code "public"} — resolves to {@code <venueDID>:public} (the
+	 *       default identity for unauthenticated callers).</li>
+	 *   <li>A literal DID string (e.g. {@code "did:key:z…"}) — assigned
+	 *       verbatim to that user's secret store.</li>
+	 * </ul>
+	 *
+	 * <p>Bootstrap runs at server start and overwrites any existing values
+	 * for the listed names — config is the source of truth at launch. Names
+	 * not listed in config are left untouched.</p>
+	 *
+	 * <p><b>Never commit production secrets here.</b> Intended for personal
+	 * dev configs in gitignored locations (e.g. {@code dev/local.json}).</p>
+	 */
+	public static final AString SECRETS = Strings.intern("secrets");
+
 	// ========== Instance fields ==========
 
 	private final AMap<AString, ACell> config;
@@ -207,6 +251,15 @@ public class Config {
 	}
 
 	/**
+	 * Get the HTTP connector accept-queue (backlog) size.
+	 * @return configured value, or {@link #DEFAULT_ACCEPT_QUEUE_SIZE}
+	 */
+	public int getAcceptQueueSize() {
+		CVMLong v = RT.ensureLong(config.get(ACCEPT_QUEUE_SIZE));
+		return (v != null) ? (int) v.longValue() : DEFAULT_ACCEPT_QUEUE_SIZE;
+	}
+
+	/**
 	 * Get the base URL for this venue.
 	 *
 	 * <p>Checks for an explicit "baseUrl" first, then derives from "hostname"
@@ -243,12 +296,44 @@ public class Config {
 	}
 
 	/**
+	 * Whether the {@code store} key was explicitly set in config.
+	 *
+	 * <p>Distinguishes a deliberate {@code "store": "temp"} from a missing key
+	 * (which {@link #getStore()} also resolves to {@code "temp"} as a default).
+	 * Use this to warn operators that data will not survive a restart when the
+	 * fallback fires unintentionally.
+	 *
+	 * @return true if {@code store} is present in the config map
+	 */
+	public boolean isStoreConfigured() {
+		return config.get(STORE) != null;
+	}
+
+	/**
 	 * Get the venue identity seed (Ed25519, 32-byte hex).
 	 * @return Hex seed string, or null if not configured
 	 */
 	public String getSeed() {
 		AString seedVal = RT.ensureString(config.get(SEED));
 		return (seedVal != null) ? seedVal.toString() : null;
+	}
+
+	/**
+	 * Get the configured secrets bootstrap map.
+	 *
+	 * <p>Returns the raw {@code secrets} map from config — the engine's
+	 * bootstrap path is responsible for resolving each top-level key
+	 * (e.g. {@code "venue"}, {@code "public"}, or a literal DID) into a
+	 * concrete user DID and writing the inner {@code name → value} entries
+	 * into that user's encrypted secret store.</p>
+	 *
+	 * @return Secrets map, or null if not configured
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> getSecrets() {
+		ACell raw = config.get(SECRETS);
+		if (raw instanceof AMap) return (AMap<AString, ACell>) raw;
+		return null;
 	}
 
 	// ========== Storage accessors ==========
@@ -405,6 +490,16 @@ public class Config {
 	 */
 	public boolean hasA2A() {
 		return getA2AConfig() != null;
+	}
+
+	/**
+	 * Whether the "Fix MCP Strings" workaround is enabled.
+	 * @return true if the venue should re-parse JSON-string arguments into
+	 *         their declared object/array shape (defaults to true)
+	 */
+	public boolean isFixMcpStrings() {
+		ACell v = config.get(FIX_MCP_STRINGS);
+		return (v == null) || RT.bool(v);
 	}
 
 	// ========== Server config accessors ==========

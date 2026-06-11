@@ -1,6 +1,6 @@
 {
 	"name": "Create Agent",
-	"description": "Creates an agent at g/<agentId> in the caller's namespace. Idempotent on empty slots — call again with the same agentId without overwrite=true and you get a no-op success.\n\nSlot resolution when overwrite=true:\n  empty       → create\n  SLEEPING    → update config in place (timeline preserved)\n  SUSPENDED   → update config in place (timeline preserved)\n  TERMINATED  → wipe and re-create fresh\n  RUNNING     → rejected (suspend or wait for it to finish first)\n\nMinimal example: agent_create(agentId='Helper', config={systemPrompt: 'You summarise documents.'}). The default transition is llmagent:chat with the venue's default model. After creation, send work via agent_request and inspect via agent_info.",
+	"description": "Creates an agent at g/<agentId> in the caller's namespace. Idempotent on empty slots — call again with the same agentId without overwrite=true and you get a no-op success.\n\nSlot resolution when overwrite=true:\n  empty       → create\n  SLEEPING    → update config in place (timeline preserved)\n  SUSPENDED   → update config in place (timeline preserved)\n  TERMINATED  → wipe and re-create fresh\n  RUNNING     → rejected (suspend or wait for it to finish first)\n\nMinimal example: agent_create(agentId='Helper', config={operation: 'v/ops/llmagent/chat', systemPrompt: 'You summarise documents.'}). The 'operation' field must be a resolvable lattice path (e.g. 'v/ops/llmagent/chat' for plain persona chat, 'v/ops/goaltree/chat' for goal-decomposing planners) — bare adapter shorthand like 'llmagent:chat' will not resolve. The default transition is v/ops/llmagent/chat with the venue's default LLM provider (OpenAI). To use a different provider, set llmOperation in config (e.g. 'v/ops/langchain/anthropic' for Claude, 'v/ops/langchain/ollama' for local models); each provider op resolves its API key from the user's secret store via its own default secretKey, or you can override with apiKey='s/<SECRET_NAME>'. After creation, send work via agent_request and inspect via agent_info.",
 	"dateCreated": "2026-02-27T00:00:00Z",
 	"operation": {
 		"adapter": "agent:create",
@@ -9,12 +9,12 @@
 			"properties": {
 				"agentId": { "type": "string", "description": "Human-readable agent name (e.g. 'Alice', 'DataChecker')" },
 				"config": {
-					"description": "Agent configuration. Either an inline map or a string reference that resolves to one — workspace path (e.g. 'w/templates/reader'), asset ref (/a/<hash>), DID URL, or venue operation name. Key fields: systemPrompt (what the agent does), tools (array of operation names it can call), model (LLM model, default gpt-5.4-mini), caps (capability restrictions). A resolved template may also include a 'state' field which is used as the agent's initial state.",
+					"description": "Agent configuration. Either an inline map or a string reference that resolves to one — workspace path (e.g. 'w/templates/reader'), asset ref (/a/<hash>), DID URL, or venue operation name. Key fields: operation (transition op as a full lattice path, e.g. 'v/ops/llmagent/chat'), systemPrompt (what the agent does), llmOperation (LLM provider op path, default 'v/ops/langchain/openai'; set to 'v/ops/langchain/anthropic' for Claude, etc.), model (LLM model id, default gpt-5.4-mini), apiKey (optional 's/<SECRET_NAME>' reference; otherwise the provider op's default secretKey is used), tools (array of operation names it can call), caps (capability restrictions). A resolved template may also include a 'state' field which is used as the agent's initial state.",
 					"oneOf": [
 						{
 							"type": "object",
 							"properties": {
-								"operation": { "type": "string", "description": "Transition operation for the agent (e.g. 'llmagent:chat'). Determines how the agent processes tasks." },
+								"operation": { "type": "string", "description": "Transition operation for the agent — must be a resolvable lattice path (e.g. 'v/ops/llmagent/chat' for persona chat, 'v/ops/goaltree/chat' for goal-decomposing planners). Bare adapter shorthand like 'llmagent:chat' will NOT resolve. Determines how the agent processes tasks." },
 								"systemPrompt": { "type": "string", "description": "System prompt defining the agent's role and behaviour" },
 								"tools": { "type": "array", "description": "Tool operations the agent can call (e.g. ['covia:read', 'covia:write']). Default tools are included automatically." },
 								"model": { "type": "string", "description": "LLM model name (default: gpt-5.4-mini)" },

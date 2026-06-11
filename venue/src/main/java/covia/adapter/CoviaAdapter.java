@@ -12,10 +12,12 @@ import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.ACountable;
 import convex.core.data.util.CellExplorer;
+import convex.core.data.ABlobLike;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.ASet;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Maps;
@@ -30,6 +32,11 @@ import convex.lattice.ALattice;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.api.Fields;
 import covia.grid.Asset;
+import covia.lattice.AgentNamespaceResolver;
+import covia.lattice.NamespaceResolver;
+import covia.lattice.SessionNamespaceResolver;
+import covia.lattice.TempNamespaceResolver;
+import covia.lattice.VenueGlobalsResolver;
 import covia.venue.RequestContext;
 import covia.venue.User;
 import covia.venue.Users;
@@ -83,6 +90,39 @@ import covia.venue.Users;
  * {@link RequestContext} carries an agentId (set by the harness during agent
  * execution), {@code n/foo} is rewritten to {@code g/{agentId}/n/foo},
  * providing agents with a private read/write workspace within their record.</p>
+ *
+ * <h3>Consistency model</h3>
+ *
+ * <p>All native covia CRUD sub-operations ({@code read}, {@code write},
+ * {@code delete}, {@code append}, {@code list}, {@code slice}, {@code copy},
+ * {@code inspect}) are <b>strongly consistent and synchronous</b> on the
+ * in-memory lattice cursor. {@link #invokeFuture} dispatches every handler via
+ * {@link CompletableFuture#completedFuture(Object)} — the cursor mutation has
+ * already completed before the returned future resolves. There is no async
+ * commit phase, no lazy path-index projection, and no
+ * {@code STARTED → COMPLETE} lifecycle for these calls (that pattern belongs
+ * to job-managed operations dispatched through
+ * {@link covia.venue.JobManager}, not to native CRUD).</p>
+ *
+ * <p>Guarantees, for any single caller DID:</p>
+ * <ul>
+ *   <li>A {@code covia:write} is immediately visible to the next
+ *       {@code covia:read}, {@code covia:list}, or {@code covia:slice} on
+ *       the same path or any ancestor.</li>
+ *   <li>A {@code covia:delete} is immediately reflected in subsequent reads
+ *       and lists — no tombstone settling, no eventual visibility.</li>
+ *   <li>{@code covia:list} counts are stable across repeated calls when no
+ *       writers are active.</li>
+ *   <li>Concurrent writes to distinct keys from the same caller all survive
+ *       (no lost updates).</li>
+ * </ul>
+ *
+ * <p>Each caller DID has its own {@link covia.venue.User} lattice — cross-DID
+ * calls target different namespaces and will not see each other's data. If a
+ * caller's effective identity changes between requests (e.g. across a venue
+ * restart that rotated the venue's signing key), apparent "wobble" in counts
+ * or "disappearing" writes are a consequence of that identity change, not of
+ * any consistency gap in this adapter.</p>
  */
 public class CoviaAdapter extends AAdapter {
 
@@ -445,18 +485,6 @@ public class CoviaAdapter extends AAdapter {
 			K_VALUE, value);
 	}
 
-	/**
-	 * Writes a value at a path in the user's lattice.
-	 *
-	 * <p>Only the {@code w/} (workspace) and {@code o/} (operations) namespaces
-	 * accept writes. The path must have at least two segments: namespace and
-	 * top-level key (e.g. {@code "w/my-key"}). Deeper paths are supported
-	 * (e.g. {@code "w/data/nested/field"}) — intermediate maps are created
-	 * as needed via read-modify-write on the top-level entry.</p>
-	 *
-	 * @return {@code {written: true}} on success
-	 * @throws RuntimeException if the path is invalid or targets a non-writable namespace
-	 */
 	// ========== covia:copy — server-side path-to-path duplication ==========
 
 	private static final AString K_FROM = Strings.intern("from");
@@ -501,6 +529,18 @@ public class CoviaAdapter extends AAdapter {
 		return Maps.of(K_COPIED, CVMBool.TRUE);
 	}
 
+	/**
+	 * Writes a value at a path in the user's lattice.
+	 *
+	 * <p>Only the {@code w/} (workspace) and {@code o/} (operations) namespaces
+	 * accept writes. The path must have at least two segments: namespace and
+	 * top-level key (e.g. {@code "w/my-key"}). Deeper paths are supported
+	 * (e.g. {@code "w/data/nested/field"}) — intermediate maps are created
+	 * as needed via read-modify-write on the top-level entry.</p>
+	 *
+	 * @return {@code {written: true}} on success
+	 * @throws RuntimeException if the path is invalid or targets a non-writable namespace
+	 */
 	private ACell handleWrite(RequestContext ctx, ACell input) {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
 		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
@@ -740,11 +780,28 @@ public class CoviaAdapter extends AAdapter {
 	 * Navigates one level into a CVM value. For maps, uses string key lookup.
 	 * For vectors/sequences, parses the key as an integer index.
 	 */
-	@SuppressWarnings("unchecked")
+	@SuppressWarnings({ "unchecked", "rawtypes" })
 	private static ACell navigateInto(ACell value, ACell key) {
 		if (value instanceof AVector<?> vec) {
 			long idx = parseIndex(key);
 			return (idx >= 0 && idx < vec.count()) ? vec.get(idx) : null;
+		}
+		// Index keys are blob-like (sessions, jobs, scheduler handles use Blob
+		// keys, rendered outward as hex by ALattice.toJSONKey). Check Index
+		// before AMap — Index is an AMap subtype. AString is itself ABlobLike, so
+		// try the key directly first (a string-keyed index), then fall back to
+		// parsing an AString as hex into a Blob (a Blob-keyed index).
+		if (value instanceof Index) {
+			Index idx = (Index) value;
+			if (key instanceof ABlobLike) {
+				ACell direct = (ACell) idx.get(key);
+				if (direct != null) return direct;
+			}
+			if (key instanceof AString s) {
+				Blob b = Blob.parse(s.toString());
+				if (b != null) return (ACell) idx.get(b);
+			}
+			return null;
 		}
 		if (value instanceof AMap<?,?> map) {
 			AString strKey = RT.ensureString(key);
@@ -1048,7 +1105,7 @@ public class CoviaAdapter extends AAdapter {
 	 * the user namespace if it does not yet exist. Used by write operations
 	 * that need to store data for a first-time user.
 	 */
-	ALatticeCursor<ACell> ensureUserCursor(RequestContext ctx) {
+	public ALatticeCursor<ACell> ensureUserCursor(RequestContext ctx) {
 		Users users = engine.getVenueState().users();
 		User user = users.ensure(ctx.getCallerDID());
 		return user.cursor();
