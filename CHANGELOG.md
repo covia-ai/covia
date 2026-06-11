@@ -17,6 +17,8 @@ Work on `develop`, targeting `0.0.2`. (Not exhaustive — see the git history fo
 - Per-user secret bootstrap from venue config.
 - Persistence resilience: periodic `fsync` sweep with `PersistenceHandler.flush()` bounding unclean-shutdown data loss; hard-kill / soft-kill resilience tests.
 - Developer-experience scaffolding: developer-facing `README.md`, [`DX_PLAN.md`](DX_PLAN.md) public roadmap, `CONTRIBUTING.md`, `SECURITY.md`, this changelog, and a CI build-and-test gate.
+- Issue and pull-request templates, Dependabot (Maven + GitHub Actions), and CodeQL scanning.
+- A dedicated `publish-docker.yml` workflow — the single source of `ghcr.io/covia-ai/covia` image tags (`:latest` + `:<sha>`).
 
 ### Changed
 - Renamed `CLAUDE.md` to `AGENTS.md` (a `CLAUDE.md` import pointer remains).
@@ -25,6 +27,8 @@ Work on `develop`, targeting `0.0.2`. (Not exhaustive — see the git history fo
 - Logging moved off `printStackTrace`/`System.err` onto SLF4J.
 - Hardened deployment JVM options and container health checks to prevent GC death-spirals.
 - Refactored shared LLM-agent infrastructure into `AbstractLLMAdapter`.
+- The Azure/EC2 deploy workflows now consume the published Docker image instead of each building and pushing their own.
+- Documentation drift fixed: `BUILD.md` covers `covia-core` and the Convex prerequisite; `deploy/README.md` has a working Caddy install and release-based JAR download.
 
 ### Fixed
 - LangChain adapter now fails fast on a missing API key (#91).

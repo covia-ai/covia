@@ -12,23 +12,29 @@ sudo apt update
 
 ## Install Java
 
+The venue requires Java 21 or later; any recent JRE works, e.g.:
+
 ```
 sudo apt-get install -y openjdk-25-jdk
 ```
 
 ## Install Caddy
 
-```
-sudo cp 
+Install Caddy from its official apt repository:
+
+```bash
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update
+sudo apt install -y caddy
 ```
 
-Start caddy:
+Configure `/etc/caddy/Caddyfile` for your domain — the `Caddyfile` in this directory is a working starting point. Then start Caddy:
 
 ```bash
 sudo systemctl start caddy
 ```
-
-Remember to configure the Caddyfile as necessary at `/etc/caddy/CaddyFile`
 
 Can also do:
 
@@ -36,24 +42,22 @@ Can also do:
 sudo caddy start --config /etc/caddy/Caddyfile
 ```
 
-## Cloud Jar 
+## Get the Venue JAR
 
-To upload the covia.jar to bucket using GCloud CLI:
+Download `covia.jar` from the GitHub releases on the server:
 
-```
-gsutil cp C:\Users\mike_\git\covia\venue\target\covia.jar gs://covia-jar-bucket/covia.jar
+```bash
+# Latest stable release
+curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/latest/covia.jar
+
+# Or the latest develop snapshot
+curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/latest-snapshot/covia.jar
 ```
 
-To download the covia.jar on server:
-
-```
-gsutil cp gs://covia-jar-bucket/covia.jar covia.jar
-```
+Alternatively, copy a locally-built JAR (`venue/target/covia.jar`) to the server via `scp` or your own object storage bucket.
 
 
 ## Run Covia Venue Jar
-
-You will need to obtain the runnable `.jar` file for the Covia Venue.
 
 To run normally at the CLI:
 

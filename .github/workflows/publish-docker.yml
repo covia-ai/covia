@@ -1,0 +1,70 @@
+name: Publish Docker image
+
+# Builds and publishes the public venue image to GHCR. This is the single
+# source of ghcr.io/covia-ai/covia tags — the deploy workflows consume the
+# image rather than building their own (see DX_PLAN.md → "Decouple the
+# public Docker image from deployment").
+#
+# Tags:
+#   :latest  — tracks develop
+#   :<sha>   — every published build, for pinning and rollback
+
+on:
+  push:
+    branches: [ develop ]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: 'maven'
+
+    - name: Cache Maven packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.m2
+        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+        restore-keys: ${{ runner.os }}-m2
+
+    # Covia currently builds against an unreleased Convex snapshot — see
+    # DX_PLAN.md → "Make the build reproducible".
+    - name: Build Convex dependency from develop branch
+      run: |
+        git clone --depth 1 --branch develop https://github.com/Convex-Dev/convex.git /tmp/convex
+        cd /tmp/convex
+        mvn install -DskipTests -q
+
+    - name: Build with Maven
+      run: mvn clean install -DskipTests
+
+    - name: Get short SHA
+      id: sha
+      run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+    - name: Log in to GHCR
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        push: true
+        tags: |
+          ghcr.io/covia-ai/covia:latest
+          ghcr.io/covia-ai/covia:${{ steps.sha.outputs.sha }}

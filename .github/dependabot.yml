@@ -1,0 +1,15 @@
+version: 2
+updates:
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      # The Convex dependency is managed manually — it tracks Convex develop
+      # until a released version is pinned (see DX_PLAN.md).
+      - dependency-name: "world.convex:*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

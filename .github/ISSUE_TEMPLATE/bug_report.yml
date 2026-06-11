@@ -1,0 +1,68 @@
+name: Bug report
+description: Something doesn't work as documented or expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. A reproducible report is the fastest route to a fix.
+        **Security vulnerabilities:** please do not report them here — see [SECURITY.md](../blob/develop/SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, and what went wrong?
+      placeholder: Invoking v/ops/... returned ... but the docs say ...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Ideally a copy-paste sequence (curl, SDK snippet, or CLI commands) against a fresh venue.
+      placeholder: |
+        1. java -jar covia.jar
+        2. curl -X POST http://localhost:8080/api/v1/invoke -d '...'
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Release tag, `latest-snapshot`, or `git rev-parse --short HEAD` if built from source.
+      placeholder: latest-snapshot / 0.0.1 / abc1234
+    validations:
+      required: true
+  - type: dropdown
+    id: how-running
+    attributes:
+      label: How are you running Covia?
+      options:
+        - Docker image (ghcr.io/covia-ai/covia)
+        - Executable JAR from a release
+        - Built from source
+        - SDK against a hosted venue (no local install)
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Java version (`java -version`), SDK language/version if relevant.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or output
+      description: Venue log excerpts, stack traces, or job records. Will be formatted as code automatically.
+      render: text
+    validations:
+      required: false

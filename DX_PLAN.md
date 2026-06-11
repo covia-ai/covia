@@ -40,8 +40,8 @@ An honest snapshot, so newcomers know what to expect and contributors know where
 | Published artifacts up to date | 🌱 Needs work | The GitHub `latest` release is `0.0.1` (Jan 2026); `develop` is `0.0.2-SNAPSHOT`. A newcomer who downloads `latest` gets a months-old build that predates much of what the docs describe |
 | Build reproducibility | 🌱 Needs work | Depends on an unreleased Convex snapshot; versions skew across artifacts |
 | CI quality gate | ✅ Done | `test.yml` runs the full reactor (with tests) on every PR and push to `develop`/`master`; its first run caught three latent flaky tests |
-| Client/auth test coverage | 🌱 Needs work | `VenueHTTP` and the auth strategies are untested |
-| Community scaffolding | 🔨 In progress | `CONTRIBUTING`, `SECURITY`, and `CHANGELOG` in place; issue/PR templates and a governance note remain |
+| Client/auth test coverage | 🔨 In progress | `VenueHTTP` has contract tests against a real venue; dedicated auth-strategy tests remain |
+| Community scaffolding | 🔨 In progress | `CONTRIBUTING`, `SECURITY`, `CHANGELOG`, and issue/PR templates in place; a governance note remains |
 | Operability (metrics, health, rate limits) | 🌱 Planned | Tracked below and in `AGENTS.md` |
 
 **Legend:** 💪 solid · 🔨 in progress · 🌱 good area to contribute · ✅ done
@@ -58,7 +58,7 @@ _Goal: a developer who has never seen Covia can understand it, run it, and invok
 
 - [x] **Rewrite the repository `README.md` for developers.** The front page now leads with a copy-paste Quickstart (call a live venue, invoke an operation, run your own via Docker/JAR), badges, an architecture diagram, and links into the docs.
 - [ ] 🌱 **Provide a true five-minute quickstart in the docs.** One language, one path, zero to first operation. The README quickstart now does this; the docs' own "Quick Start" still mostly links elsewhere and should mirror it.
-- [ ] 🌱 **Pick one frictionless install and document it end-to-end.** The README now documents a `docker run` one-liner against `ghcr.io/covia-ai/covia:latest`. Two supply-side gaps remain, both tracked in Milestone 2: the image needs its own publish workflow, and the JAR download points at a stale release. (A thin `covia` CLI or a `curl | sh` installer is a stretch goal — see _Open questions_.)
+- [ ] 🌱 **Pick one frictionless install and document it end-to-end.** The README now documents a `docker run` one-liner against `ghcr.io/covia-ai/covia:latest`, and the image has its own publish workflow. One supply-side gap remains, tracked under versioning in Milestone 2: the JAR download points at a stale release. (A thin `covia` CLI or a `curl | sh` installer is a stretch goal — see _Open questions_.)
 - [ ] 🌱 **Fill in or hide the documentation stubs.** A few core-concept pages (the Venues and Grid overviews, the A2A adapter page) currently read as "coming soon". Stubs on central concepts undermine confidence — let's finish them or remove them from the nav until they're ready.
 - [ ] 🌱 **Add a `troubleshooting` / debugging guide.** "My job failed — how do I inspect it?", "How do I read a venue's logs?", common setup pitfalls.
 
@@ -71,10 +71,10 @@ _Goal: every clone builds reproducibly, every PR is validated automatically, and
 - [ ] **Make the build reproducible.** We currently build against an unreleased Convex snapshot, so a clean clone can't build without first building Convex from source. The end state is to pin a released Convex (or, if we genuinely need to track Convex `develop`, document that coupling explicitly and automate it). A cheaper near-term step: publish `convex 0.8.5-SNAPSHOT` to a snapshot repository (Sonatype OSS snapshots or GitHub Packages) so a clean clone *resolves* the dependency without building Convex from source — unblocking newcomers before a full Convex release lands. See [Convex ↔ Covia dependency](#a-note-on-the-convex-dependency).
 - [x] **Add a `CHANGELOG.md`** — in Keep a Changelog format. Keep it current per release, and make the release-notes link point at it for real.
 - [ ] **Coherent versioning across the product — and ship a current artifact.** The platform, the TypeScript SDK, and the Python SDK sit at very different version numbers, which makes "what's stable?" hard to answer. Concretely, the symptom is live today: the GitHub `latest` release is `0.0.1` (23 Jan 2026) while `develop` is `0.0.2-SNAPSHOT`, so the README's "download the latest release" path hands newcomers a months-old build that predates operations the quickstart invokes. Either point the JAR download at `latest-snapshot` (rebuilt on every `develop` push) or — better — agree a versioning story and cut a real, current `0.1.0` of the platform.
-- [ ] **Decouple the public Docker image from deployment.** `ghcr.io/covia-ai/covia:latest` (the README's `docker run` one-liner) is currently built and pushed as a side-effect of *both* `deploy-azure.yml` and `deploy-ec2.yml` on every `develop` push — a double build racing to the same tag, and one that silently stops updating if the cloud deploys are ever disabled. Give the image its own publish workflow with a clear tagging scheme.
-- [ ] 🌱 **Reconcile documentation drift.** Build guide, `AGENTS.md`, and the POMs disagree on dependency versions and JAR names; the JDK baseline is stated inconsistently; `deploy/README.md` has a truncated command and a leaked local path. A sweep to make the docs match the build.
-- [ ] **Test the client and auth layers.** `VenueHTTP` and the auth strategies (`NoAuth`, `BearerAuth`, `KeyPairAuth`, `LocalAuth`) are the layer every SDK and integration depends on, and they're currently untested. Cover them against a real `VenueServer`.
-- [ ] 🌱 **Add `Dependabot` and dependency/code scanning (e.g. CodeQL).** Standard hygiene for a public repo; low effort, high signal.
+- [x] **Decouple the public Docker image from deployment.** `publish-docker.yml` is now the single source of `ghcr.io/covia-ai/covia` tags (`:latest` + `:<sha>` on every `develop` push); the Azure/EC2 deploy workflows just pull the published image after a successful publish.
+- [x] **Reconcile documentation drift.** `BUILD.md` now lists `covia-core`, uses version-agnostic JAR names, and documents the Convex-from-source prerequisite; `deploy/README.md`'s truncated Caddy command and leaked local path are fixed (JARs now download from GitHub releases). JDK facts are stated consistently (build target 21; published image runs 25) — picking a single baseline remains an _Open question_.
+- [ ] **Test the client-side auth strategies.** `VenueHTTP` now has contract tests against a real venue (`VenueHTTPTest`); the remaining gap is dedicated coverage for the auth strategies (`NoAuth`, `BearerAuth`, `KeyPairAuth`, `LocalAuth`) — signing round-trips and failure paths against a real `VenueServer`.
+- [x] **Add `Dependabot` and dependency/code scanning.** Dependabot watches Maven and GitHub Actions weekly (Convex excluded — managed manually); CodeQL analyses `develop` pushes and runs weekly.
 - [ ] **Consolidate the SDK story.** We have more than one Python client in the workspace; let's make the supported SDKs obvious and deprecate or redirect the rest. Give the Java client library (`covia-core`) a README and a published artifact so a third party can actually depend on it.
 
 ### Milestone 3 — Confident Self-Hosting & Ecosystem
@@ -99,7 +99,7 @@ A public open project needs the files that tell people how to participate. None 
 - [x] **`SECURITY.md`** — private disclosure path, response expectations, supported versions, scope, and a note on the federation trust model.
 - [ ] **Wire up private vulnerability reporting.** `SECURITY.md` promises two channels that need switching on: enable *Private vulnerability reporting* in the repo's Security settings, and confirm `security@covia.ai` is a monitored inbox.
 - [x] **`CONTRIBUTING.md`** — how to build (including the Convex-from-source step), test, branch, and submit a change; conventions defer to `AGENTS.md`. Includes a short expectation of professional, good-faith behaviour in project spaces — a deliberate decision *not* to adopt a formal `CODE_OF_CONDUCT.md`, which tends to invite unproductive argument; we'd rather build than legislate behaviour.
-- [ ] 🌱 **Issue & PR templates** (`.github/`) — light structure that helps reporters give us what we need.
+- [x] **Issue & PR templates** (`.github/`) — bug-report and feature-request forms (with private-reporting and Discussions redirects) and a PR checklist matching `CONTRIBUTING.md`.
 - [ ] **A short `ROADMAP` / governance note** — who maintains what, and how decisions get made.
 
 ## The open-core boundary

@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest an improvement or new capability.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For open-ended ideas or design discussions, [GitHub Discussions](https://github.com/orgs/covia-ai/discussions) is often a better start — issues work best for well-scoped changes.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation where Covia falls short, rather than starting from a solution.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed approach
+      description: How might it work? API sketches, operation names, or examples welcome.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you're using now, or other designs that could solve it.
+    validations:
+      required: false
