@@ -37,10 +37,10 @@ covia/                          # ai.covia:covia:0.0.2-SNAPSHOT (parent POM)
 │   ├── secret/                 #   Manage API keys and credentials
 │   ├── federation/             #   Cross-venue grid operations
 │   └── ucan/                   #   Capability token management
-├── deploy/                     # Deployment configs (Caddyfile, config templates)
-├── Dockerfile                  # Container build (Alpine, Java 25)
-├── BUILD.md                    # Build and release workflow
-└── DEPLOY.md                   # Operator deployment guide
+├── deploy/                     # Deployment: operator guide (README.md), Caddyfile,
+│                               #   azure/ec2 configs, docker/ (dev/local build variants)
+├── Dockerfile                  # Primary container build (Alpine, Java 25)
+└── BUILD.md                    # Build and release workflow
 ```
 
 ## Requirements

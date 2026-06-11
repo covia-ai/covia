@@ -353,7 +353,7 @@ mvn compile && java -cp "target/classes:target/dependency/*" covia.venue.MainVen
 
 - **Main README:** `../README.md` - Project overview
 - **Build Guide:** `../BUILD.md` - Detailed build instructions
-- **Deploy Guide:** `../DEPLOY.md` - Deployment options
+- **Deploy Guide:** `../deploy/README.md` - Deployment options
 - **Core Module:** `../covia-core/` - Grid client and shared abstractions
 - **Online Docs:** https://docs.covia.ai
 
