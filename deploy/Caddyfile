@@ -2,23 +2,15 @@
 #
 # Most defaults are fine
 # This is usually stored at /etc/caddy/Caddyfile
+#
+# Replace venue.example.com with your venue's domain
 
 
 {
-        email admin@covia.ai
+        email admin@example.com
 }
 
-venue-test.covia.ai {
-        # Send requests to 8080 (including HTPPs)
+venue.example.com {
+        # Send requests to the venue server on 8080 (including HTTPS)
         reverse_proxy :8080
-}
-
-venue-1.covia.ai {
-        # Send requests to 8081 (including HTPPs)
-        reverse_proxy :8081
-}
-
-venue-2.covia.ai {
-        # Send requests to 8082 (including HTPPs)
-        reverse_proxy :8082
 }

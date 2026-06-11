@@ -90,8 +90,8 @@ Check which ports you have listening. Should be 80, 443 for Caddy and 8080 for t
 netstat -lntup
 ```
 
-Check the server page
+Check the server page (using your own venue's domain)
 
 ```
-curl https://venue-test.covia.ai
+curl https://venue.example.com/api/v1/status
 ```

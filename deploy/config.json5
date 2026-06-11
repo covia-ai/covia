@@ -1,63 +1,30 @@
 {
 	/*
-	 * Example config for test venues
+	 * Example config for a venue server.
+	 *
+	 * The "venues" array may contain multiple entries to run several
+	 * venues from one JVM (each on its own port) — see local-dev.json
+	 * for a two-venue local example.
 	 */
 	"venues":[
-		// Test venue
 		{
-			"name":"Test Venue",
-			"did":"did:web:venue-test.covia.ai",
-			"hostname":"venue-test.covia.ai",
+			"name":"Example Venue",
+			"did":"did:web:venue.example.com",
+			"hostname":"venue.example.com",
 			"port":8080,
-			
-			// Configure MCP server capabilities
-			"mcp":{
-				"enabled":true
-			},
-			
-			// Configure adapters
-			"adapters":{
-				
-			}
-		},
 
-    // Venue One
-		{
-			"name":"Venue One",
-			"did":"did:web:venue-1.covia.ai",
-			"hostname":"venue-1.covia.ai",
-			"port":8081,
-			
 			// Configure MCP server capabilities
 			"mcp":{
 				"enabled":true
 			},
-			
-			// Configure adapters
-			"adapters":{
-				
-			}
-		},
 
-    // Venue Two
-		{
-			"name":"Venue Two",
-			"did":"did:web:venue-2.covia.ai",
-			"hostname":"venue-2.covia.ai",
-			"port":8082,
-			
-			// Configure MCP server capabilities
-			"mcp":{
-				"enabled":true
-			},
-			
 			// Configure adapters
 			"adapters":{
-				
+
 			}
 		}
 	],
-	
+
 	// Whole-server configuration goes here
 	"convex": {
 		// Config for embedded Convex peer, shared between venue instances

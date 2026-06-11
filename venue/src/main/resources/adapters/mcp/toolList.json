@@ -13,7 +13,7 @@
 				"server": {
 					"type": "string",
 					"description": "URL or DID for the MCP server",
-					"examples":["https://venue-test.covia.ai/mcp","did:web:venue1.covia.ai"]
+					"examples":["https://venue-3.covia.ai/mcp","did:web:venue.example.com"]
 				},
 				"token": {
 					"type": "string",
