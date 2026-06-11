@@ -11,6 +11,11 @@ on:
     - cron: '14 3 * * 1'
   workflow_dispatch:
 
+# Supersede in-flight analyses when develop moves again
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   analyze:
     runs-on: ubuntu-latest

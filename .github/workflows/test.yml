@@ -11,6 +11,11 @@ on:
     branches: [ develop, master ]
   workflow_dispatch:
 
+# Supersede in-flight runs when the same branch/PR is pushed again
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest

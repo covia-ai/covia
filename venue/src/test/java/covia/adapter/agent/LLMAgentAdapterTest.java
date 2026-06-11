@@ -619,13 +619,16 @@ public class LLMAgentAdapterTest {
 		AgentState receiver = user.agent("receiver-agent");
 		assertFalse(receiver.hasSessionPending());
 
-		// Deliver via agent:message (existing path) to verify receiver works
-		engine.jobs().invokeOperation(
+		// Deliver via agent:message (existing path) to verify receiver works.
+		// Delivery is verified through the op's result envelope — the receiver's
+		// run loop wakes on delivery and may drain session.pending before this
+		// test could read it, so internal pending state is not assertable here.
+		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/message",
 			Maps.of(Fields.AGENT_ID, "receiver-agent", Fields.MESSAGE, Strings.create("hello")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		assertTrue(receiver.hasSessionPending());
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.DELIVERED));
 	}
 
 	// ========== Default tools are merged ==========

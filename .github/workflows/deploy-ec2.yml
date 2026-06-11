@@ -11,6 +11,11 @@ on:
     branches: [develop]
   workflow_dispatch:
 
+# Never cancel a mid-flight deploy; queue the newest instead
+concurrency:
+  group: deploy-ec2
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
