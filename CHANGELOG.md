@@ -8,7 +8,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
-Work on `develop`, targeting `0.1.0` — the first release under the agreed versioning story (independent SemVer per artifact; the platform version names the product generation). (Not exhaustive — see the git history for detail.)
+## [0.1.0] - 2026-06-12
+
+The first release under the agreed versioning story (independent SemVer per
+artifact; the platform version names the product generation). Companion
+artifact releases: TypeScript SDK 1.5.0 (npm), Python SDK 0.2.0 (PyPI).
+(Not exhaustive — see the git history for detail.)
 
 ### Added
 - True cross-venue federation: `TwoVenueTestServer` and end-to-end cross-venue tests; `VenueHTTP` client contract tests against a real venue.
@@ -46,5 +51,6 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.0.1...develop
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.1.0...develop
+[0.1.0]: https://github.com/covia-ai/covia/compare/0.0.1...0.1.0
 [0.0.1]: https://github.com/covia-ai/covia/releases/tag/0.0.1
