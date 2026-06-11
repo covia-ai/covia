@@ -1,0 +1,113 @@
+name: Deploy to GCP
+
+# Deploys the :stable image to the GCP host running the long-lived venue
+# trio (venue-test, venue-1, venue-2 — three venues in a single JVM). The
+# image itself is built and pushed by publish-docker.yml on pushes to
+# master — this workflow only pulls and (re)starts the container, after a
+# successful publish or on manual dispatch.
+#
+# Host layout and one-time setup are documented in deploy/gcp/README.md.
+
+on:
+  workflow_run:
+    workflows: ["Publish Docker image"]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+
+# Never cancel a mid-flight deploy; queue the newest instead
+concurrency:
+  group: deploy-gcp
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      packages: read
+
+    steps:
+    - name: Deploy to GCP VM
+      uses: appleboy/ssh-action@v1
+      env:
+        GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        host: ${{ secrets.GCP_VM_HOST }}
+        username: ${{ secrets.GCP_VM_USER }}
+        key: ${{ secrets.GCP_VM_SSH_KEY }}
+        envs: GHCR_TOKEN
+        script: |
+          # The deploy user is not in the docker group by design — all
+          # docker and /srv/covia operations go through (passwordless) sudo
+          # Authenticate to GHCR
+          echo $GHCR_TOKEN | sudo docker login ghcr.io -u github --password-stdin
+
+          # Pull the stable image (published from master)
+          sudo docker pull ghcr.io/covia-ai/covia:stable
+
+          # One JVM hosts all three venues (ports 8080-8082); each venue has
+          # its own store directory so identities (venue.key) stay separate.
+          # Ensure config exists (venues array format)
+          if sudo test ! -f /srv/covia/config.json; then
+            sudo mkdir -p /srv/covia/covia-test-data /srv/covia/covia-1-data /srv/covia/covia-2-data
+            sudo tee /srv/covia/config.json > /dev/null <<CONF
+          {
+            "venues": [
+              {
+                "name": "Covia Test Venue",
+                "hostname": "venue-test.covia.ai",
+                "port": 8080,
+                "store": "/data/covia-test-data/venue.etch",
+                "mcp": {}
+              },
+              {
+                "name": "Covia Venue 1 (Stable)",
+                "hostname": "venue-1.covia.ai",
+                "port": 8081,
+                "store": "/data/covia-1-data/venue.etch",
+                "mcp": {}
+              },
+              {
+                "name": "Covia Venue 2 (Stable)",
+                "hostname": "venue-2.covia.ai",
+                "port": 8082,
+                "store": "/data/covia-2-data/venue.etch",
+                "mcp": {}
+              }
+            ]
+          }
+          CONF
+          fi
+          sudo chown -R 1001:1001 /srv/covia
+
+          # Stop and remove existing container
+          sudo docker stop covia-venue 2>/dev/null || true
+          sudo docker rm covia-venue 2>/dev/null || true
+
+          # Run new container
+          sudo docker run -d \
+            --name covia-venue \
+            -p 8080:8080 -p 8081:8081 -p 8082:8082 \
+            -v /srv/covia:/data \
+            --restart unless-stopped \
+            --health-cmd='curl -f --max-time 3 http://localhost:8080/' \
+            --health-interval=30s \
+            --health-timeout=5s \
+            --health-start-period=15s \
+            --health-retries=3 \
+            ghcr.io/covia-ai/covia:stable \
+            java -Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8 -jar covia.jar /data/config.json
+
+          # Wait for health check
+          sleep 10
+          sudo docker inspect --format='{{.Name}}: {{.State.Health.Status}}' covia-venue
+
+          # All three venues must answer or the deploy fails
+          for P in 8080 8081 8082; do
+            curl -sf --max-time 5 http://localhost:$P/api/v1/status > /dev/null || { echo "port $P NOT responding"; exit 1; }
+            echo "port $P OK"
+          done
+
+          # Prune old images
+          sudo docker image prune -f

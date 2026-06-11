@@ -38,7 +38,7 @@ covia/                          # ai.covia:covia:0.0.2-SNAPSHOT (parent POM)
 │   ├── federation/             #   Cross-venue grid operations
 │   └── ucan/                   #   Capability token management
 ├── deploy/                     # Deployment: operator guide (README.md), Caddyfile,
-│                               #   azure/ec2 configs, docker/ (dev/local build variants)
+│                               #   azure/ec2 (dev venues), gcp (stable venues), docker/
 ├── Dockerfile                  # Primary container build (Alpine, Java 25)
 └── BUILD.md                    # Build and release workflow
 ```

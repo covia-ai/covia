@@ -6,12 +6,13 @@ name: Publish Docker image
 # public Docker image from deployment").
 #
 # Tags:
-#   :latest  — tracks develop
+#   :latest  — tracks develop (dev venues: venue-3, venue-4)
+#   :stable  — tracks master (stable venues: venue-test, venue-1, venue-2)
 #   :<sha>   — every published build, for pinning and rollback
 
 on:
   push:
-    branches: [ develop ]
+    branches: [ develop, master ]
   workflow_dispatch:
 
 # Newest commit wins the :latest tag — cancel superseded publishes
@@ -50,6 +51,17 @@ jobs:
       id: sha
       run: echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
+    # master publishes the :stable channel, develop publishes :latest
+    - name: Compute image tags
+      id: tags
+      run: |
+        if [ "${{ github.ref_name }}" = "master" ]; then
+          channel=stable
+        else
+          channel=latest
+        fi
+        echo "tags=ghcr.io/covia-ai/covia:${channel},ghcr.io/covia-ai/covia:${{ steps.sha.outputs.sha }}" >> $GITHUB_OUTPUT
+
     - name: Log in to GHCR
       uses: docker/login-action@v3
       with:
@@ -62,6 +74,4 @@ jobs:
       with:
         context: .
         push: true
-        tags: |
-          ghcr.io/covia-ai/covia:latest
-          ghcr.io/covia-ai/covia:${{ steps.sha.outputs.sha }}
+        tags: ${{ steps.tags.outputs.tags }}
