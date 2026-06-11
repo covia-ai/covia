@@ -41,7 +41,6 @@ import io.javalin.Javalin;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.HttpResponseException;
 import io.javalin.http.staticfiles.Location;
-import io.javalin.openapi.plugin.DefinitionConfiguration;
 import io.javalin.openapi.plugin.OpenApiPlugin;
 import io.javalin.openapi.plugin.swagger.SwaggerPlugin;
 
@@ -485,13 +484,8 @@ public class VenueServer {
 		config.registerPlugin(new OpenApiPlugin(pluginConfig -> {
             pluginConfig
             //.withDocumentationPath(docsPath)
-            .withDefinitionConfiguration((version, definition) -> {
-            	DefinitionConfiguration def=definition;
-                def=def.withInfo(
-                		info -> {
-							info.setTitle("Covia API");
-							info.setVersion("0.1.0");
-		                });
+            .withDefinitionConfiguration((version, schema) -> {
+                schema.info(info -> info.title("Covia API").version("0.1.0"));
             });
 		}));
 

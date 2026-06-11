@@ -18,7 +18,7 @@
 		<logback.version>1.5.18</logback.version>
 		<slf4j.version>2.0.17</slf4j.version>
 		<hc.version>5.5</hc.version>
-		<javalin.version>6.7.0</javalin.version>
+		<javalin.version>7.2.2</javalin.version>
 		<langchain.version>1.16.2</langchain.version>
 		<mcp.version>0.13.0</mcp.version>
 		<a2a.version>1.0.0.Beta1</a2a.version>
