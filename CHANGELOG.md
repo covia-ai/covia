@@ -11,6 +11,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Changed
 - **Cross-venue reference semantics.** Invoking a `did:web:<venue>/a/<hash>` operation reference now **fetches** the content-addressed definition from the publishing venue (hash-verified) and executes it locally, as an ordinary local job — references denote definitions, never execution sites. The previous reference-inferred remote delegation (which blocked a thread and left no job record on the accepting venue) is removed; cross-venue *execution* is explicit via `grid:run` / `grid:invoke` with a `venue` argument, which records a job on each venue. Semantics pinned by `RemoteAssetFetchTest` / `RemoteOperationTest`; see `venue/docs/OPERATIONS.md` §4.
 - `Grid.connect` resolves `did:web` DIDs with percent-encoded ports (`did:web:host%3A8080`) and uses http for localhost, per the did:web spec note.
+- Named catalog references (`did:web:<venue>/v/ops/<name>`) resolve as fetches too: the name is resolved to an asset id at the publishing venue (names are mutable bindings, trusted at fetch time), then the definition travels over the same hash-verified path. The job record carries the resolved hash — name→hash provenance at invoke time. Fetches remain transient; pin is the explicit adoption act.
 
 ## [0.1.0] - 2026-06-12
 

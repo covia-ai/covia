@@ -145,6 +145,21 @@ public abstract class Venue {
 	}
 
 	/**
+	 * Resolves a named catalog operation to its asset id at this venue.
+	 *
+	 * <p>A name is a mutable binding maintained by the venue — the returned
+	 * id is what the name resolves to NOW, on the venue's word. (Contrast
+	 * with a hash reference, which is self-verifying.) Venues that publish
+	 * a named catalog override this; the default knows no names.</p>
+	 *
+	 * @param name Catalog operation name, e.g. "v/ops/json/merge"
+	 * @return The asset id the name currently binds to, or null if unknown
+	 */
+	public Hash getOperationId(String name) throws IOException {
+		return null;
+	}
+
+	/**
 	 * Register a new asset at this venue.
 	 * @param metadata JSON metadata string
 	 * @return The asset ID (SHA256 hash of metadata)

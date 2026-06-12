@@ -788,6 +788,27 @@ public class VenueHTTP extends Venue {
 	}
 
 	@Override
+	public Hash getOperationId(String name) throws IOException {
+		// Catalog names contain slashes; the operations/{name} route takes a
+		// single path segment, so the name travels percent-encoded.
+		String encoded=java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8);
+		HttpRequest request=requestBuilder("operations/"+encoded)
+				.GET()
+				.build();
+
+		try {
+			HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+			if (response.statusCode()!=200) return null;
+			ACell result=JSON.parse(response.body());
+			ACell idHex=RT.getIn(result, "asset");
+			return (idHex==null) ? null : Hash.parse(idHex.toString());
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			return null;
+		}
+	}
+
+	@Override
 	public Asset getAsset(Hash id) throws IOException {
 		HttpRequest request=requestBuilder("assets/"+id.toHexString())
 				.GET()

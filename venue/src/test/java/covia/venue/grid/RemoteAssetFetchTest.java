@@ -204,6 +204,36 @@ public class RemoteAssetFetchTest {
 			"Content bytes must round-trip unchanged");
 	}
 
+	// ============== Named catalog fetch (bindings, not hashes) ==============
+
+	@Test
+	public void namedFetchResolvesBindingThenHashVerifiedDefinition() {
+		// A catalog name is a mutable binding maintained by the publisher.
+		// Fetching one is two steps: name → id on the publisher's word,
+		// then the definition itself over the SAME hash-verified path as
+		// any hash reference. Both venues install identical built-ins, so
+		// B's binding must resolve to the id A knows for its own copy —
+		// the binding crosses venues, the definition is location-free.
+		Asset fetched = TwoVenueTestServer.ENGINE_A.fetchRemoteNamedAsset(
+			TwoVenueTestServer.BASE_URL_B, "v/ops/jvm/string-concat");
+
+		assertNotNull(fetched, "Venue B binds the name, so the fetch must succeed");
+		Asset ownCopy = TwoVenueTestServer.ENGINE_A.resolveAsset(
+			Strings.create("v/ops/jvm/string-concat"));
+		assertNotNull(ownCopy);
+		assertEquals(ownCopy.getID(), fetched.getID(),
+			"Identical built-in definitions must have identical ids on both venues");
+		assertNull(fetched.getVenue(),
+			"A fetched definition carries no venue, named or not");
+	}
+
+	@Test
+	public void namedFetchOfUnboundNameReturnsNull() {
+		assertNull(TwoVenueTestServer.ENGINE_A.fetchRemoteNamedAsset(
+			TwoVenueTestServer.BASE_URL_B, "v/ops/no/such/name"),
+			"An unbound name is absence, not error");
+	}
+
 	// ============== Misbehaving-venue stub ==============
 
 	/**

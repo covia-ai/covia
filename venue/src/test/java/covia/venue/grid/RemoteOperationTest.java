@@ -17,6 +17,7 @@ import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -170,6 +171,58 @@ public class RemoteOperationTest {
 		// A1 at hop 2: the executing venue records the invoke it accepted.
 		assertTrue(jobOnBReferencesOp(opId),
 			"A1/A3: explicit delegation must create a job on the executing venue");
+	}
+
+	// ============== Named references: binding → hash → local execution ==============
+
+	@Test
+	public void namedRemoteReferenceExecutesLocally() {
+		// A catalog NAME is a mutable binding maintained by the publisher
+		// (trusted at fetch time), unlike a hash reference (self-verified).
+		// Resolution is two steps: name → id on the publisher's word, then
+		// the ordinary hash-verified definition fetch. Everything else
+		// matches the hash case: local execution, local job, transient.
+
+		// Publish a B-only definition: into B's CAS, plus a catalog
+		// binding (venue-caller write to the v/ namespace).
+		AString meta = concatOpMeta("named-fetch");
+		Hash opId = TwoVenueTestServer.ENGINE_B.storeAsset(meta, null);
+		Job bind = TwoVenueTestServer.ENGINE_B.jobs().invokeOperation(
+			"v/ops/covia/write",
+			Maps.of("path", "v/ops/remotetest/concat-named", "value", JSON.parse(meta)),
+			TwoVenueTestServer.ENGINE_B.venueContext());
+		bind.awaitResult(10_000);
+		assertEquals(Status.COMPLETE, bind.getStatus(), "catalog binding write must succeed");
+
+		RequestContext caller = RequestContext.of(Strings.create("did:key:zCallerNamedFetch"));
+
+		// Premise: venue A holds neither the binding nor the definition.
+		assertNull(TwoVenueTestServer.ENGINE_A.getAsset(opId),
+			"Test premise: the definition must not pre-exist on venue A");
+
+		String namedRef = "did:web:localhost%3A" + TwoVenueTestServer.PORT_B
+			+ "/v/ops/remotetest/concat-named";
+		Job job = TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(
+			namedRef, Maps.of("first", "Named", "second", "Binding"), caller);
+		job.awaitResult(10_000);
+
+		assertEquals(Status.COMPLETE, job.getStatus());
+		assertEquals("NamedBinding", RT.getIn(job.getOutput(), "result").toString());
+
+		// The name resolved to a HASH at invoke time, and the job record
+		// carries that hash — provenance survives although the fetch is
+		// transient. (A mutable name in a job record would say nothing;
+		// the hash says exactly which definition ran.)
+		ACell jobData = TwoVenueTestServer.ENGINE_A.jobs().getJobData(job.getID(), caller);
+		assertEquals(opId.toHexString(), RT.getIn(jobData, Fields.OP).toString(),
+			"Job record must carry the hash the name resolved to at invoke time");
+
+		// Transient: neither binding nor definition was adopted by A, and
+		// the publisher served reads only.
+		assertNull(TwoVenueTestServer.ENGINE_A.getAsset(opId),
+			"Named fetch must not implant the definition — pin is explicit");
+		assertFalse(jobOnBReferencesOp(opId),
+			"The publishing venue served reads only — no job there");
 	}
 
 	// ============== A1: unresolvable references are rejected, not jobbed ==============

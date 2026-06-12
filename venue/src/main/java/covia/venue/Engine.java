@@ -1029,7 +1029,8 @@ public class Engine {
 	 */
 	private Asset resolveLocalDIDURL(AString ref) {
 		AssetRef r = parseAssetRef(ref);
-		return (r == null) ? null : lookupLocalAsset(r);
+		// Named refs have no local copy (bindings are publisher-scoped).
+		return (r == null || r.hash() == null) ? null : lookupLocalAsset(r);
 	}
 
 	/**
@@ -1043,17 +1044,26 @@ public class Engine {
 	}
 
 	/**
-	 * A parsed {@code did:<method>:<id>/a/<hash>} reference: which value
-	 * (the hash — content addressing makes this the whole identity), and
-	 * who published it (the DID — relevant only as a fetch location).
-	 * The DID string is kept unescaped ({@code did:key:VENUE:public}, not
+	 * A parsed DID URL asset reference. Two kinds, same semantics
+	 * (references denote definitions, never execution sites), different
+	 * verification:
+	 * <ul>
+	 *   <li><b>Hash</b> ({@code did:…/a/<hash>}) — self-verifying: the
+	 *       hash IS the identity, any copy from anywhere is authoritative.</li>
+	 *   <li><b>Named</b> ({@code did:…/v/ops/<…>}) — a mutable catalog
+	 *       binding maintained by the named principal; resolving it means
+	 *       taking the publisher's word for the name → hash binding (the
+	 *       definition itself is still hash-verified on fetch).</li>
+	 * </ul>
+	 * Exactly one of {@code hash} / {@code name} is non-null. The DID
+	 * string is kept unescaped ({@code did:key:VENUE:public}, not
 	 * URL-encoded) to match user-record keying.
 	 */
-	private record AssetRef(String didString, String method, Hash hash) {}
+	private record AssetRef(String didString, String method, Hash hash, String name) {}
 
 	/**
-	 * Parses a DID URL reference with an {@code /a/<hash>} path. Returns
-	 * null for any other shape (no path, other namespaces, bad hash).
+	 * Parses a DID URL reference with an {@code /a/<hash>} (hash) or
+	 * {@code /v/…} (named catalog) path. Returns null for any other shape.
 	 */
 	private AssetRef parseAssetRef(AString ref) {
 		DIDURL didurl;
@@ -1063,14 +1073,22 @@ public class Engine {
 			return null;
 		}
 		String path = didurl.getPath();
-		if (path == null || !path.startsWith("/a/")) return null;
-		Hash hash = Hash.parse(path.substring(3));
-		if (hash == null) return null;
+		if (path == null) return null;
 
 		// Reconstruct the unescaped DID string — DID.toString() URL-encodes
 		// colons in the id, which would break sub-id keys like "VENUE:public".
 		DID did = didurl.getDID();
-		return new AssetRef("did:" + did.getMethod() + ":" + did.getID(), did.getMethod(), hash);
+		String didString = "did:" + did.getMethod() + ":" + did.getID();
+
+		if (path.startsWith("/a/")) {
+			Hash hash = Hash.parse(path.substring(3));
+			if (hash == null) return null;
+			return new AssetRef(didString, did.getMethod(), hash, null);
+		}
+		if (path.startsWith("/v/")) {
+			return new AssetRef(didString, did.getMethod(), null, path.substring(1));
+		}
+		return null;
 	}
 
 	/**
@@ -1105,6 +1123,11 @@ public class Engine {
 	private Asset resolveDIDURL(AString ref) {
 		AssetRef r = parseAssetRef(ref);
 		if (r == null) return null;
+		if (r.name() != null) {
+			// Named refs are publisher-scoped bindings — OUR v/ops/x is not
+			// THEIR v/ops/x, so there is no local-copy shortcut.
+			return "web".equals(r.method()) ? fetchRemoteNamedAsset(r.didString(), r.name()) : null;
+		}
 		Asset local = lookupLocalAsset(r);
 		if (local != null) return local;
 		return "web".equals(r.method()) ? fetchRemoteAsset(r.didString(), r.hash()) : null;
@@ -1132,6 +1155,35 @@ public class Engine {
 			return null;
 		}
 		return fetchRemoteAsset(remote, id);
+	}
+
+	/**
+	 * Fetches a named catalog operation from a remote venue. Two steps:
+	 * resolve the name to an asset id AT THE PUBLISHER (names are mutable
+	 * bindings — this is the one step taken on the namer's word), then
+	 * fetch the definition itself hash-verified via
+	 * {@link #fetchRemoteAsset(Venue, Hash)}.
+	 *
+	 * <p>Transient like all fetches: nothing is stored locally. The
+	 * binding's resolved hash survives as provenance in whatever job
+	 * record an invocation creates (the job's op field records the hash
+	 * the name resolved to at invoke time).</p>
+	 *
+	 * @param venueConn Remote venue connection string (did:web or URL)
+	 * @param name Catalog operation name, e.g. "v/ops/json/merge"
+	 * @return Verified Asset with metadata, or null if the venue is
+	 *         unreachable or does not bind the name
+	 */
+	public Asset fetchRemoteNamedAsset(String venueConn, String name) {
+		try {
+			Venue remote = Grid.connect(venueConn);
+			Hash id = remote.getOperationId(name);
+			if (id == null) return null;
+			return fetchRemoteAsset(remote, id);
+		} catch (IOException | RuntimeException e) {
+			log.debug("Remote named fetch failed for {}: {}", name, e.getMessage());
+			return null;
+		}
 	}
 
 	/**
