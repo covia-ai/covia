@@ -16,9 +16,11 @@ import convex.auth.did.DID;
 import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
+import convex.core.data.AVector;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
+import convex.core.data.Maps;
 import convex.core.data.Index;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
@@ -26,6 +28,7 @@ import covia.api.Fields;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Job;
+import covia.grid.Status;
 import covia.grid.Venue;
 import covia.venue.RequestContext;
 import covia.venue.TwoVenueTestServer;
@@ -134,8 +137,47 @@ public class RemoteAssetFetchTest {
 	public void fetchFromUnreachableVenueReturnsNull() {
 		// Resolution failure (venue down / wrong address) is "not found",
 		// surfaced by the caller as a clean unresolvable-reference error.
-		Hash id = publishOnB();
+		// Uses a hash unique to this test: a hash fetched by ANY other test
+		// would be served from the definition cache regardless of the
+		// connection string (see cachedDefinitionSurvivesPublisherOutage).
+		AString meta = Strings.create("""
+			{
+			  "name": "Unreachable-venue test artifact",
+			  "description": "Published on B but only ever requested from a dead address."
+			}
+			""");
+		Hash id = TwoVenueTestServer.ENGINE_B.storeAsset(meta, null);
 		assertNull(TwoVenueTestServer.ENGINE_A.fetchRemoteAsset("http://localhost:1", id));
+	}
+
+	// ============== Caching: hashes are identities, venues are hints ==============
+
+	@Test
+	public void cachedDefinitionSurvivesPublisherOutage() {
+		// Definitions are immutable, so a fetched one can be cached by hash
+		// forever — staleness is impossible. Consequence under test: once
+		// ANY venue has supplied the definition, re-resolution succeeds
+		// even when the reference's venue hint is unreachable. The cache is
+		// transient plumbing, not adoption: the asset store stays empty.
+		AString meta = Strings.create("""
+			{
+			  "name": "Cache test artifact (venue B)",
+			  "description": "Fetched once from B, then re-resolved against a dead address."
+			}
+			""");
+		Hash id = TwoVenueTestServer.ENGINE_B.storeAsset(meta, null);
+
+		Asset first = TwoVenueTestServer.ENGINE_A.fetchRemoteAsset(
+			TwoVenueTestServer.BASE_URL_B, id);
+		assertNotNull(first, "First fetch goes to the publisher");
+
+		Asset second = TwoVenueTestServer.ENGINE_A.fetchRemoteAsset("http://localhost:1", id);
+		assertNotNull(second,
+			"Cached definition must be served even when the venue hint is dead");
+		assertEquals(id, second.getID());
+
+		assertNull(TwoVenueTestServer.ENGINE_A.getAsset(id),
+			"The cache is not adoption — nothing lands in the asset store");
 	}
 
 	// ============== Verification: content addressing is the trust boundary ==============
@@ -232,6 +274,109 @@ public class RemoteAssetFetchTest {
 		assertNull(TwoVenueTestServer.ENGINE_A.fetchRemoteNamedAsset(
 			TwoVenueTestServer.BASE_URL_B, "v/ops/no/such/name"),
 			"An unbound name is absence, not error");
+	}
+
+	// ============== Adoption: pin makes a remote definition durable ==============
+
+	@Test
+	public void pinAdoptsRemoteAssetByHashReference() {
+		// Fetch is transient; PIN is the explicit act of adoption. Pinning a
+		// remote hash reference fetches the definition (hash-verified) and
+		// stores it durably in the caller's own /a/ namespace.
+		AString meta = Strings.create("""
+			{
+			  "name": "Pin adoption test artifact (venue B)",
+			  "description": "Published on B, adopted on A via asset:pin."
+			}
+			""");
+		Hash id = TwoVenueTestServer.ENGINE_B.storeAsset(meta, null);
+		AString callerDid = Strings.create("did:key:zPinAdopter");
+		RequestContext caller = RequestContext.of(callerDid);
+		String didRef = "did:web:localhost%3A" + TwoVenueTestServer.PORT_B
+			+ "/a/" + id.toHexString();
+
+		assertNull(TwoVenueTestServer.ENGINE_A.getAsset(id),
+			"Test premise: the definition must not pre-exist on venue A");
+
+		Job pin = TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(
+			"v/ops/asset/pin", Maps.of(Fields.PATH, didRef), caller);
+		pin.awaitResult(10_000);
+		assertEquals(Status.COMPLETE, pin.getStatus());
+
+		// Adopted: the caller now holds the definition durably.
+		assertNotNull(TwoVenueTestServer.ENGINE_A.getAssetRecord(id, callerDid),
+			"Pin must store the fetched definition in the caller's namespace");
+	}
+
+	@Test
+	public void pinAdoptsRemoteContentVerified() throws IOException {
+		// An artifact's declared content is adopted along with its metadata,
+		// and the bytes are verified against the declared sha256 — a venue
+		// can withhold content, but not substitute it.
+		Blob content = Blob.wrap("adoptable content bytes".getBytes());
+		Hash contentHash = Hashing.sha256(content.getBytes());
+		AString meta = Strings.create("""
+			{
+			  "name": "Pin adoption content artifact (venue B)",
+			  "description": "Content-bearing artifact adopted across venues.",
+			  "content": {"sha256": "%s"}
+			}
+			""".formatted(contentHash.toHexString()));
+		Hash id = TwoVenueTestServer.ENGINE_B.storeAsset(meta, null);
+		TwoVenueTestServer.ENGINE_B.putContent(id, new ByteArrayInputStream(content.getBytes()));
+
+		AString callerDid = Strings.create("did:key:zPinContentAdopter");
+		RequestContext caller = RequestContext.of(callerDid);
+		String didRef = "did:web:localhost%3A" + TwoVenueTestServer.PORT_B
+			+ "/a/" + id.toHexString();
+
+		Job pin = TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(
+			"v/ops/asset/pin", Maps.of(Fields.PATH, didRef), caller);
+		pin.awaitResult(10_000);
+		assertEquals(Status.COMPLETE, pin.getStatus());
+
+		AVector<?> record = TwoVenueTestServer.ENGINE_A.getAssetRecord(id, callerDid);
+		assertNotNull(record);
+		assertEquals(content, record.get(covia.venue.AssetStore.POS_CONTENT),
+			"Adopted content must round-trip, verified against the declared sha256");
+	}
+
+	@Test
+	public void pinAdoptsNamedRemoteReference() {
+		// Pinning a named catalog reference adopts whatever definition the
+		// name resolves to AT PIN TIME — the binding stays the publisher's;
+		// the adopted copy is the caller's, frozen at the resolved hash.
+		AString meta = Strings.create("""
+			{
+			  "name": "Pin-named adoption op (venue B)",
+			  "description": "Catalog-named definition adopted across venues.",
+			  "operation": {
+			    "adapter": "jvm:stringConcat",
+			    "input": {"type": "object"}
+			  }
+			}
+			""");
+		Hash id = TwoVenueTestServer.ENGINE_B.storeAsset(meta, null);
+		Job bind = TwoVenueTestServer.ENGINE_B.jobs().invokeOperation(
+			"v/ops/covia/write",
+			Maps.of(Fields.PATH, "v/ops/remotetest/pin-named",
+				Strings.intern("value"), convex.core.util.JSON.parse(meta)),
+			TwoVenueTestServer.ENGINE_B.venueContext());
+		bind.awaitResult(10_000);
+		assertEquals(Status.COMPLETE, bind.getStatus(), "catalog binding write must succeed");
+
+		AString callerDid = Strings.create("did:key:zPinNamedAdopter");
+		RequestContext caller = RequestContext.of(callerDid);
+		String namedRef = "did:web:localhost%3A" + TwoVenueTestServer.PORT_B
+			+ "/v/ops/remotetest/pin-named";
+
+		Job pin = TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(
+			"v/ops/asset/pin", Maps.of(Fields.PATH, namedRef), caller);
+		pin.awaitResult(10_000);
+		assertEquals(Status.COMPLETE, pin.getStatus());
+
+		assertNotNull(TwoVenueTestServer.ENGINE_A.getAssetRecord(id, callerDid),
+			"Pin must adopt the definition the name resolved to, keyed by its hash");
 	}
 
 	// ============== Misbehaving-venue stub ==============

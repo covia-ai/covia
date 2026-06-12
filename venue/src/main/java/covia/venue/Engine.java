@@ -1147,14 +1147,45 @@ public class Engine {
 	 * @return Verified Asset with metadata, or null if the venue is
 	 *         unreachable, the asset is absent, or verification fails
 	 */
+	/**
+	 * Fetched remote definitions, keyed by content hash. Definitions are
+	 * immutable by construction, so entries can never go stale — the cache
+	 * trades repeat network round-trips for nothing. Memory-only and
+	 * transient: this is NOT adoption (pin is), just plumbing. The crude
+	 * size cap guards against unbounded growth from unique-hash traffic;
+	 * clearing it costs only re-fetches.
+	 */
+	private final java.util.concurrent.ConcurrentHashMap<Hash, AString> definitionCache =
+		new java.util.concurrent.ConcurrentHashMap<>();
+	private static final int DEFINITION_CACHE_MAX = 1000;
+
+	private Asset cachedDefinition(Hash id) {
+		AString meta = definitionCache.get(id);
+		return (meta == null) ? null : Asset.create(id, meta);
+	}
+
+	private void cacheDefinition(Asset fetched) {
+		if (fetched == null) return;
+		if (definitionCache.size() >= DEFINITION_CACHE_MAX) definitionCache.clear();
+		definitionCache.put(fetched.getID(), fetched.getMetadata());
+	}
+
 	public Asset fetchRemoteAsset(String venueConn, Hash id) {
+		// Cache first: the hash IS the identity, so for a definition we
+		// already hold the connection string is irrelevant — a venue in a
+		// reference is a retrieval hint, not part of the name.
+		Asset cached = cachedDefinition(id);
+		if (cached != null) return cached;
+
 		Venue remote;
 		try {
 			remote = Grid.connect(venueConn);
 		} catch (IllegalArgumentException e) {
 			return null;
 		}
-		return fetchRemoteAsset(remote, id);
+		Asset fetched = fetchRemoteAsset(remote, id);
+		cacheDefinition(fetched);
+		return fetched;
 	}
 
 	/**
@@ -1177,11 +1208,64 @@ public class Engine {
 	public Asset fetchRemoteNamedAsset(String venueConn, String name) {
 		try {
 			Venue remote = Grid.connect(venueConn);
+			// The BINDING is never cached (names are mutable) — only the
+			// definition the resolved hash identifies.
 			Hash id = remote.getOperationId(name);
 			if (id == null) return null;
-			return fetchRemoteAsset(remote, id);
+			Asset cached = cachedDefinition(id);
+			if (cached != null) return cached;
+			Asset fetched = fetchRemoteAsset(remote, id);
+			cacheDefinition(fetched);
+			return fetched;
 		} catch (IOException | RuntimeException e) {
 			log.debug("Remote named fetch failed for {}: {}", name, e.getMessage());
+			return null;
+		}
+	}
+
+	/**
+	 * Fetches the binary content of a remote asset reference, for adoption
+	 * by {@code asset:pin}. Returns null when the reference is not a
+	 * fetchable remote ref, the asset is absent, or the metadata declares
+	 * no content. When the metadata declares a sha256, the fetched bytes
+	 * are verified against it — substituted content fails loudly rather
+	 * than being adopted.
+	 *
+	 * @param ref Remote DID URL reference (hash or named form)
+	 * @return Content blob, or null if there is none to fetch
+	 */
+	public ACell fetchRemoteContent(AString ref) {
+		AssetRef r = parseAssetRef(ref);
+		if (r == null || !"web".equals(r.method())) return null;
+		try {
+			Venue remote = Grid.connect(r.didString());
+			Hash id = (r.hash() != null) ? r.hash() : remote.getOperationId(r.name());
+			if (id == null) return null;
+
+			Asset def = cachedDefinition(id);
+			if (def == null) def = fetchRemoteAsset(remote, id);
+			if (def == null) return null;
+			ACell contentMeta = RT.getIn(def.meta(), Fields.CONTENT);
+			if (contentMeta == null) return null;
+
+			// Venue-bound handle for the content stream itself.
+			Asset handle = Asset.create(id, def.getMetadata());
+			handle.setVenue(remote);
+			AContent content = handle.getContent();
+			if (content == null) return null;
+			ABlob blob = content.getBlob().toFlatBlob();
+
+			ACell declared = RT.getIn(contentMeta, Fields.SHA256);
+			if (declared != null) {
+				Hash sha = Hashing.sha256(blob.getBytes());
+				if (!sha.toHexString().equals(declared.toString())) {
+					throw new IllegalStateException(
+						"Remote content does not match its declared sha256 for asset " + id);
+				}
+			}
+			return blob;
+		} catch (IOException e) {
+			log.debug("Remote content fetch failed for {}: {}", ref, e.getMessage());
 			return null;
 		}
 	}

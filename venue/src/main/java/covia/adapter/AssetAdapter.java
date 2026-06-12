@@ -18,6 +18,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import covia.grid.Asset;
 import covia.venue.AssetStore;
 import covia.venue.RequestContext;
 
@@ -360,21 +361,43 @@ public class AssetAdapter extends AAdapter {
 		Hash existingHash = parseAssetId(pathStr);
 		if (existingHash != null) {
 			AVector<?> record = engine.getAssetRecord(existingHash, ctx);
-			if (record == null) throw new IllegalArgumentException("Asset not found: " + pathStr);
-			metaString = RT.ensureString(record.get(AssetStore.POS_JSON));
-			content = record.get(AssetStore.POS_CONTENT);
+			if (record != null) {
+				metaString = RT.ensureString(record.get(AssetStore.POS_JSON));
+				content = record.get(AssetStore.POS_CONTENT);
+			} else if (pathStr.startsWith("did:")) {
+				// Remote adoption — pin IS the explicit act that makes a
+				// remote definition durable. Metadata arrives hash-verified;
+				// content (if the metadata declares any) sha256-verified.
+				Asset fetched = engine.resolveAsset(pathStr, ctx);
+				if (fetched == null) throw new IllegalArgumentException("Asset not found: " + pathStr);
+				metaString = fetched.getMetadata();
+				content = engine.fetchRemoteContent(pathStr);
+			} else {
+				throw new IllegalArgumentException("Asset not found: " + pathStr);
+			}
 		} else {
 			// Non-hash reference: walk the universal resolver. The resolved
 			// value is treated as inline metadata; non-asset paths produce
 			// content-less pins.
 			ACell value = engine.resolvePath(pathStr, ctx);
-			if (value == null) throw new IllegalArgumentException("Path not found: " + pathStr);
-			if (!(value instanceof AMap)) {
-				throw new IllegalArgumentException(
-					"Cannot pin non-map value at " + pathStr
-					+ " (got " + value.getClass().getSimpleName() + ")");
+			if (value != null) {
+				if (!(value instanceof AMap)) {
+					throw new IllegalArgumentException(
+						"Cannot pin non-map value at " + pathStr
+						+ " (got " + value.getClass().getSimpleName() + ")");
+				}
+				metaString = JSON.printPretty((AMap<AString, ACell>) value);
+			} else if (pathStr.startsWith("did:")) {
+				// Named remote reference (did:web:.../v/ops/...): adopt like
+				// any other remote definition. resolvePath is local-only, so
+				// a miss here is the expected route for remote bindings.
+				Asset fetched = engine.resolveAsset(pathStr, ctx);
+				if (fetched == null) throw new IllegalArgumentException("Path not found: " + pathStr);
+				metaString = fetched.getMetadata();
+				content = engine.fetchRemoteContent(pathStr);
+			} else {
+				throw new IllegalArgumentException("Path not found: " + pathStr);
 			}
-			metaString = JSON.printPretty((AMap<AString, ACell>) value);
 		}
 
 		// Store into the caller's /a/ namespace.
