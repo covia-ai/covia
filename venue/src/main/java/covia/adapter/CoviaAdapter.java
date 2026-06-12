@@ -745,10 +745,13 @@ public class CoviaAdapter extends AAdapter {
 			ALatticeCursor<ACell> ns = baseCursor.path(new ACell[] { nsKey });
 			ns.updateAndGet(current -> {
 				// Strictly-increasing stamp (same rule as Scheduler.nextStamp):
-				// fast sequential writes within one millisecond must each
-				// dominate the value they replace in either merge order —
-				// an equal-stamp tie resolves by argument order, which the
-				// fork-sync slow path and CAS fallback do not guarantee.
+				// each write strictly dominates the value it replaces, so the
+				// namespace's local lineage is totally ordered and never
+				// depends on tie-breaks. Equal-stamp ties are reserved for
+				// genuinely concurrent values, where LWW prefers "own" — the
+				// side applying a local edit. (Also shields against released
+				// convex 0.8.5, whose fork-sync slow path merged with the
+				// local edit as "other"; fixed on convex develop.)
 				// Computed inside the lambda so CAS retries re-derive it.
 				long stamp = Math.max(Utils.getCurrentTimestamp(),
 					LWWWrapperLattice.timestamp(current) + 1);

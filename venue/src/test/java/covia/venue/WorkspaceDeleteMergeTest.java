@@ -209,11 +209,12 @@ public class WorkspaceDeleteMergeTest {
 	/**
 	 * Fast sequential writes must each strictly dominate the value they
 	 * replace ({@code max(now, current+1)}). With a plain wall-clock stamp,
-	 * two ops in the same millisecond tie — and an equal-stamp tie resolves
-	 * by merge argument order, which the fork-sync slow path and CAS
-	 * fallback do not guarantee. A burst of ops lands well inside one
-	 * millisecond, so strict monotonicity here is the property that makes
-	 * "the last write applied wins" hold.
+	 * two ops in the same millisecond tie — LWW resolves ties in favour of
+	 * "own" (the side applying a local edit), which is correct, but a
+	 * sequential lineage should be totally ordered and never depend on
+	 * tie-breaks at all. A burst of ops lands well inside one millisecond,
+	 * so strict monotonicity is what makes "the last write applied wins"
+	 * unconditional.
 	 */
 	@Test
 	public void testFastSequentialWritesStampStrictlyMonotonic() {
@@ -231,8 +232,8 @@ public class WorkspaceDeleteMergeTest {
 	 * The deterministic same-millisecond case: force the stored stamp ahead
 	 * of the wall clock (as a same-ms predecessor or clock skew would), then
 	 * delete. The delete must stamp {@code current+1} — not {@code now} —
-	 * and so survive a merge with the pre-delete snapshot in BOTH argument
-	 * orders.
+	 * so it strictly dominates the pre-delete snapshot and the merge outcome
+	 * is independent of argument position (no reliance on tie-breaks).
 	 */
 	@SuppressWarnings("unchecked")
 	@Test
