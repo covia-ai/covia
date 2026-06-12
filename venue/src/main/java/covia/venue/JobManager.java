@@ -27,7 +27,6 @@ import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Status;
-import covia.grid.Venue;
 import covia.lattice.CapabilityChecker;
 
 /**
@@ -80,8 +79,8 @@ public class JobManager {
 	/**
 	 * Invoke an operation given a reference. Supports hex hash, DID URL,
 	 * operation name, and adapter:operation strings. Resolves the reference
-	 * to metadata, handles remote delegation, then calls the canonical
-	 * {@link #invokeOperation(AMap, ACell, RequestContext)}.
+	 * to metadata (fetching remote DID-URL definitions if necessary), then
+	 * calls the canonical {@link #invokeOperation(AMap, ACell, RequestContext)}.
 	 *
 	 * @param ref Operation reference (AString)
 	 * @param input Input parameters
@@ -105,13 +104,10 @@ public class JobManager {
 			throw new IllegalArgumentException("Asset is not an operation: " + asset.getID());
 		}
 
-		// Remote delegation
-		Venue opVenue = op.getVenue();
-		if (opVenue != null && !(opVenue instanceof LocalVenue)) {
-			return op.invoke(input).join();
-		}
-
-		// Local — delegate to canonical
+		// Execution is always local: resolution returns a definition (remote
+		// refs are FETCHED by resolveAsset, never delegated), so every
+		// accepted invoke produces a job on THIS venue. Cross-venue
+		// execution is explicit via grid:run / grid:invoke.
 		return invokeOperation(op.meta(), input, ctx);
 	}
 
@@ -160,8 +156,6 @@ public class JobManager {
 	 * Job creation, activeJobs tracking, persistence, and update listeners.
 	 * Calls {@link AAdapter#invokeFuture} directly and returns its future.</p>
 	 *
-	 * <p>Remote operations fall through to the Job-creating path — remote
-	 * dispatch needs a Job on the far side for status tracking.</p>
 	 *
 	 * <p>Cancellation is cooperative: the returned future's
 	 * {@link CompletableFuture#cancel(boolean)} signals the adapter if it
@@ -199,18 +193,8 @@ public class JobManager {
 				new IllegalArgumentException("Asset is not an operation: " + asset.getID()));
 		}
 
-		// Remote operations still need a Job on the far side for status
-		// tracking — fall back to the job-creating path.
-		Venue opVenue = op.getVenue();
-		if (opVenue != null && !(opVenue instanceof LocalVenue)) {
-			try {
-				Job remote = op.invoke(input).join();
-				return remote.future();
-			} catch (Exception e) {
-				return CompletableFuture.failedFuture(e);
-			}
-		}
-
+		// Always local — see invokeOperation(AString,...): resolution
+		// returns definitions, never remote execution handles.
 		return invokeInternal(op.meta(), input, ctx);
 	}
 

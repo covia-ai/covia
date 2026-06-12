@@ -29,7 +29,14 @@ public class Grid {
 	public static Venue connect(DID did, VenueAuth auth) {
 		String method=did.getMethod();
 		if (method.equals("web")) {
-			return VenueHTTP.create(URI.create("https://"+did.getID()), auth);
+			// did:web encodes an optional port with a percent-encoded colon
+			// (did:web:example.com%3A3000) — decode it for the URL form.
+			String host=did.getID().replace("%3A", ":").replace("%3a", ":");
+			// did:web resolves over https; localhost may use http (no TLS
+			// for loopback, per the did:web spec note).
+			String hostName=host.contains(":")?host.substring(0, host.indexOf(':')):host;
+			String scheme=(hostName.equals("localhost")||hostName.equals("127.0.0.1"))?"http":"https";
+			return VenueHTTP.create(URI.create(scheme+"://"+host), auth);
 		}
 		throw new IllegalArgumentException("Unrecognised DID method: "+method);
 	}

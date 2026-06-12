@@ -1,6 +1,6 @@
 {
 	"name": "Grid Run",
-	"description": "Execute an operation and return its result. The operation argument accepts any resolvable form: v/ops/json/merge (venue catalog), o/my-pipeline (your pin), a/<hash> (asset), or did:web:<venue>/v/ops/... (remote venue). Pass input as a JSON map matching the operation's schema. Blocks until complete — use grid_invoke for long-running work.",
+	"description": "Execute an operation and return its result. The operation argument accepts any resolvable form: v/ops/json/merge (venue catalog), o/my-pipeline (your pin), a/<hash> (asset), or did:web:<venue>/a/<hash> (definition fetched from the publishing venue, executed where this op runs). To execute ON another venue, pass its URL or DID in the venue argument. Pass input as a JSON map matching the operation's schema. Blocks until complete — use grid_invoke for long-running work.",
 	"operation": {
 		"adapter": "grid:run",
 		"input": {

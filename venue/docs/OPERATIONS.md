@@ -142,7 +142,7 @@ Any operation argument that accepts a lattice address — `path`, `from`, `id`, 
 | Explicit `/a/<hash>` | `/a/abc123...` | CAS lookup |
 | User namespace path | `o/merge`, `w/notes`, `g/alice/state` | Caller's own lattice region |
 | Virtual prefix | `n/notes`, `t/draft`, `v/ops/json/merge` | Resolved by registered `NamespaceResolver` |
-| DID URL | `did:web:venue.host:v/ops/json/merge`, `did:web:venue.host:u:alice/o/merge` | Cross-user / cross-venue, local or remote |
+| DID URL | `did:key:z6Mk…/a/<hash>`, `did:web:venue.host/a/<hash>` | Asset as published by a principal. Read-side: local copies only. Invocation-side: a local copy if held, else a hash-verified metadata fetch from the publishing venue (`did:web` only) |
 
 A read-side argument never needs to know "is this a hash or a path or a DID?" — the resolver figures it out. Capability checks happen during resolution: the caller needs read access to whatever resolves.
 
@@ -165,12 +165,14 @@ A write-side argument is constrained because you can't write to a content-addres
 2. **`/a/<hash>`** → fetch from CAS
 3. **`/o/<name>`** → caller's own `/o/`
 4. **`/v/<path>`** → venue globals via `VenueGlobalsResolver` (virtual prefix to `<venue-DID>/w/global/<path>`)
-5. **DID URL** (`did:...`) → cross-user / cross-venue
+5. **DID URL** (`did:.../a/<hash>`) → local copies only: the named principal's records, then the venue store. `resolvePath` never touches the network
 6. **Workspace path** (`w/`, `g/`, `o/`, `j/`, etc. without leading slash) → caller's lattice cursor
 
 The resolver returns the **literal value** at the resolved location. It does NOT chase references, follow indirections, or interpret the value in any way. It is a single-step navigation primitive.
 
-`Engine.resolveAsset(ref, ctx)` is a thin composition: `Asset.fromMeta(resolvePath(ref, ctx))`. It returns an `Asset` if the resolved value is a map with an `operation` field, and `null` otherwise. Op-invocation paths (`grid:run`, agent loop) call `resolveAsset` and expect a non-null result; if the resolved value isn't asset-shaped, the op fails explicitly with "operation not found".
+`Engine.resolveAsset(ref, ctx)` is a thin composition: `Asset.fromMeta(resolvePath(ref, ctx))`, plus one invocation-side addition: a remote `did:web:.../a/<hash>` reference whose definition is not held locally is **fetched** from the publishing venue — metadata only, verified to hash to the requested id. It returns an `Asset` if the resolved value is a map with an `operation` field, and `null` otherwise. Op-invocation paths (`grid:run`, agent loop) call `resolveAsset` and expect a non-null result; if the resolved value isn't asset-shaped, the op fails explicitly with "operation not found".
+
+**References denote definitions, never execution sites.** A DID prefix says where a definition can be *fetched from*; whatever is invoked with it executes on the venue that accepted the invoke, as an ordinary local job with local adapters and context. Cross-venue *execution* is always explicit — `grid:run` / `grid:invoke` with a `venue` argument — and produces a job record on each venue: one on the delegating venue for the grid op it accepted, one on the executing venue for the invoke *it* accepted. A definition fetch is a read and creates no job anywhere. (Semantics pinned by `RemoteAssetFetchTest` and `RemoteOperationTest`.)
 
 ### No reference indirection
 

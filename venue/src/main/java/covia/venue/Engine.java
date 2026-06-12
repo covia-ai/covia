@@ -865,7 +865,8 @@ public class Engine {
 	 *
 	 * <p>Returns null for unresolvable refs, remote DID URLs, and refs that
 	 * resolve to a missing lattice cell. Remote DID URLs are handled by
-	 * {@link #resolveAsset(AString, RequestContext)} via federated dispatch.</p>
+	 * {@link #resolveAsset(AString, RequestContext)} via definition fetch —
+	 * resolvePath itself never touches the network.</p>
 	 *
 	 * @param ref Reference string
 	 * @param ctx Request context (caller identity for /o/ and workspace navigation)
@@ -934,8 +935,8 @@ public class Engine {
 
 	/**
 	 * Resolves a reference to an Asset. Composes {@link #resolvePath} with
-	 * {@link Asset#fromMeta}, plus a federation branch for remote DID URLs
-	 * and a deprecated fallback to the legacy global operation registry.
+	 * {@link Asset#fromMeta}, plus a definition-fetch branch for remote DID
+	 * URLs and a deprecated fallback to the legacy global operation registry.
 	 *
 	 * <p>Op-invocation paths ({@code grid:run}, agent loop, orchestration
 	 * step dispatch) use this function. Read-side ops should use
@@ -948,9 +949,9 @@ public class Engine {
 	public Asset resolveAsset(AString ref, RequestContext ctx) {
 		if (ref == null) return null;
 
-		// Remote DID URLs: create a federated Operation. The remote venue
-		// holds the actual metadata; the returned Operation carries enough
-		// to dispatch the call across the wire.
+		// Remote DID URLs: fetch the content-addressed definition from the
+		// publishing venue (hash-verified). The returned Asset carries no
+		// venue — execution, if any, is local. See resolveDIDURL.
 		if (ref.startsWith(NS_DID)) {
 			Asset asset = resolveDIDURL(ref);
 			if (asset != null) return asset;
@@ -1021,19 +1022,14 @@ public class Engine {
 	}
 
 	/**
-	 * Resolves a DID URL to a local Asset only — returns null if the DID is
-	 * remote or unresolvable locally. Used by {@link #resolvePath} which
-	 * does not handle federation. Federation is handled separately by
-	 * {@link #resolveAsset} via {@link #resolveDIDURL}.
+	 * Resolves a DID URL to a local Asset only — returns null if we hold no
+	 * copy. Used by {@link #resolvePath}, which never touches the network.
+	 * Remote definition FETCH happens only on the invocation path, via
+	 * {@link #resolveAsset} → {@link #resolveDIDURL}.
 	 */
 	private Asset resolveLocalDIDURL(AString ref) {
-		Asset full = resolveDIDURL(ref);
-		// resolveDIDURL returns either a local Asset (with metadata) or a
-		// remote federated Operation (whose metadata may not be present).
-		// We treat any Asset whose meta() is non-null as local; remote
-		// Operations have null metadata until they're dispatched.
-		if (full == null) return null;
-		return (full.meta() != null) ? full : null;
+		AssetRef r = parseAssetRef(ref);
+		return (r == null) ? null : lookupLocalAsset(r);
 	}
 
 	/**
@@ -1047,24 +1043,19 @@ public class Engine {
 	}
 
 	/**
-	 * Resolves a DID URL reference using {@link DIDURL} parsing.
-	 * Dispatches on the path namespace prefix. Local DID → local lookup,
-	 * remote DID → remote venue reference.
-	 *
-	 * <p><b>Local DID handling.</b> The venue's own DID may have sub-id
-	 * variants — e.g. {@code did:key:VENUE:public} for the public/anonymous
-	 * user namespace. We treat any DID URL whose method matches the venue's
-	 * own DID method AND whose id starts with the venue's id as local. The
-	 * id-prefix match also catches user DIDs that have stored data, which we
-	 * resolve via the per-user asset record.</p>
-	 *
-	 * <p><b>Federation scope.</b> {@link Grid#connect} currently only handles
-	 * {@code did:web:}. For DID methods this venue cannot federate with —
-	 * including its own {@code did:key} method — we return {@code null}
-	 * rather than throwing, so callers can fall through to other resolution
-	 * forms or surface a clean "not found" error.</p>
+	 * A parsed {@code did:<method>:<id>/a/<hash>} reference: which value
+	 * (the hash — content addressing makes this the whole identity), and
+	 * who published it (the DID — relevant only as a fetch location).
+	 * The DID string is kept unescaped ({@code did:key:VENUE:public}, not
+	 * URL-encoded) to match user-record keying.
 	 */
-	private Asset resolveDIDURL(AString ref) {
+	private record AssetRef(String didString, String method, Hash hash) {}
+
+	/**
+	 * Parses a DID URL reference with an {@code /a/<hash>} path. Returns
+	 * null for any other shape (no path, other namespaces, bad hash).
+	 */
+	private AssetRef parseAssetRef(AString ref) {
 		DIDURL didurl;
 		try {
 			didurl = DIDURL.create(ref.toString());
@@ -1073,73 +1064,100 @@ public class Engine {
 		}
 		String path = didurl.getPath();
 		if (path == null || !path.startsWith("/a/")) return null;
-
 		Hash hash = Hash.parse(path.substring(3));
 		if (hash == null) return null;
 
-		// Compare structurally on parsed (method, id) — NOT on DID.toString(),
-		// which URL-encodes colons in the id and would break sub-id matching
-		// like "VENUE:public".
-		DID venueDID;
+		// Reconstruct the unescaped DID string — DID.toString() URL-encodes
+		// colons in the id, which would break sub-id keys like "VENUE:public".
+		DID did = didurl.getDID();
+		return new AssetRef("did:" + did.getMethod() + ":" + did.getID(), did.getMethod(), hash);
+	}
+
+	/**
+	 * Looks up a parsed asset reference in local stores: the named
+	 * principal's asset records first, then the venue store. Content
+	 * addressing makes any local copy authoritative — the hash alone
+	 * identifies the value, so WHO the reference names cannot change
+	 * what is returned, only where we look first.
+	 */
+	private Asset lookupLocalAsset(AssetRef r) {
+		AVector<?> rec = getAssetRecord(r.hash(), Strings.create(r.didString()));
+		if (rec == null) return null;
+		AString metaString = RT.ensureString(rec.get(AssetStore.POS_JSON));
+		return (metaString != null) ? Asset.create(r.hash(), metaString) : null;
+	}
+
+	/**
+	 * Resolves a {@code did:…/a/<hash>} reference: local copy if we hold
+	 * one, else a hash-verified fetch from the publishing venue.
+	 *
+	 * <p>A reference names a DEFINITION, never an execution site. The DID
+	 * prefix says where the content-addressed metadata can be fetched from;
+	 * anything subsequently invoked with it executes locally, as an ordinary
+	 * local job. Cross-venue EXECUTION is always explicit: grid:run /
+	 * grid:invoke with a venue argument.</p>
+	 *
+	 * <p>{@link Grid#connect} currently only handles {@code did:web:}; for
+	 * DID methods we cannot fetch from — including {@code did:key} — a
+	 * local miss is simply "not found", so callers can fall through to
+	 * other resolution forms or surface a clean error.</p>
+	 */
+	private Asset resolveDIDURL(AString ref) {
+		AssetRef r = parseAssetRef(ref);
+		if (r == null) return null;
+		Asset local = lookupLocalAsset(r);
+		if (local != null) return local;
+		return "web".equals(r.method()) ? fetchRemoteAsset(r.didString(), r.hash()) : null;
+	}
+
+	/**
+	 * Fetches a content-addressed asset definition from a remote venue.
+	 *
+	 * <p>Content addressing is the trust boundary: the fetched metadata must
+	 * hash to the requested id, so the remote venue is purely an availability
+	 * provider — it cannot substitute a different definition. The returned
+	 * Asset carries no venue: holding a definition implies nothing about
+	 * where it executes.</p>
+	 *
+	 * @param venueConn Remote venue connection string (did:web or URL)
+	 * @param id Asset id (CAD3 value hash of the metadata)
+	 * @return Verified Asset with metadata, or null if the venue is
+	 *         unreachable, the asset is absent, or verification fails
+	 */
+	public Asset fetchRemoteAsset(String venueConn, Hash id) {
+		Venue remote;
 		try {
-			venueDID = getDID();
-		} catch (Exception e) {
-			venueDID = null;
-		}
-		DID parsedDID = didurl.getDID();
-		String parsedMethod = parsedDID.getMethod();
-		String parsedID = parsedDID.getID();
-
-		// Local resolution path 1: exact venue DID match
-		if (venueDID != null && venueDID.equals(parsedDID)) {
-			return getAsset(hash);
-		}
-
-		// Local resolution path 2: venue DID with sub-id (e.g. ":public")
-		// The DID URI parser keeps "id:subid" as a single id field. We detect
-		// the sub-id form by checking prefix on the unescaped id. Resolve as
-		// per-user asset (the public user is keyed by "<venueDID>:public");
-		// fall back to venue-level lookup if no user record is present.
-		if (venueDID != null
-				&& parsedMethod.equals(venueDID.getMethod())
-				&& parsedID.startsWith(venueDID.getID() + ":")) {
-			// Reconstruct the unescaped DID string for the user lookup. We
-			// can't use parsedDID.toString() (URL-encodes the colon).
-			AString unescapedDIDString = Strings.create("did:" + parsedMethod + ":" + parsedID);
-			User user = getVenueState().users().get(unescapedDIDString);
-			if (user != null) {
-				AVector<?> rec = getAssetRecord(hash, unescapedDIDString);
-				if (rec != null) {
-					AString metaString = RT.ensureString(rec.get(AssetStore.POS_JSON));
-					if (metaString != null) return Asset.create(hash, metaString);
-				}
-			}
-			// Fall back to venue-level lookup — the asset hash may have been
-			// stored in the venue store independently of any user record.
-			return getAsset(hash);
-		}
-
-		// Local resolution path 3: known user DID (different method/id, stored locally)
-		AString didString = Strings.create("did:" + parsedMethod + ":" + parsedID);
-		User user = getVenueState().users().get(didString);
-		if (user != null) {
-			AVector<?> rec = getAssetRecord(hash, didString);
-			if (rec == null) return null;
-			AString metaString = RT.ensureString(rec.get(AssetStore.POS_JSON));
-			return (metaString != null) ? Asset.create(hash, metaString) : null;
-		}
-
-		// Remote dispatch — only for DID methods Grid.connect can handle.
-		// did:key cannot federate today, so a non-local did:key URL means
-		// "not found" rather than "federate to it".
-		if (!"web".equals(parsedMethod)) {
+			remote = Grid.connect(venueConn);
+		} catch (IllegalArgumentException e) {
 			return null;
 		}
+		return fetchRemoteAsset(remote, id);
+	}
 
-		Venue remoteVenue = Grid.connect(didString.toString());
-		Operation remoteOp = Operation.create(hash, null);
-		remoteOp.setVenue(remoteVenue);
-		return remoteOp;
+	/**
+	 * Fetches and verifies an asset definition from an already-connected
+	 * remote venue. See {@link #fetchRemoteAsset(String, Hash)}.
+	 *
+	 * @param remote Remote venue
+	 * @param id Asset id (CAD3 value hash of the metadata)
+	 * @return Verified Asset with metadata, or null
+	 */
+	public Asset fetchRemoteAsset(Venue remote, Hash id) {
+		try {
+			Asset fetched = remote.getAsset(id);
+			if (fetched == null) return null;
+			// getID() recomputes the CAD3 hash from the returned metadata —
+			// equality with the requested id IS the integrity check. (Also
+			// throws on unparseable metadata, caught below.)
+			if (!id.equals(fetched.getID())) {
+				log.warn("Remote venue returned metadata that does not hash to {} — rejecting", id);
+				return null;
+			}
+			return Asset.create(id, fetched.getMetadata());
+		} catch (IOException | RuntimeException e) {
+			log.debug("Remote asset fetch failed for {}: {}", id, e.getMessage());
+			return null;
+		}
 	}
 
 	/**
