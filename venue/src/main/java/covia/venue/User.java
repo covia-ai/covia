@@ -26,9 +26,9 @@ import covia.lattice.Namespace;
  *   <li>{@code "j"} — user's job references (IndexLattice + LWW)</li>
  *   <li>{@code "g"} — user's agents (MapLattice + AGENT)</li>
  *   <li>{@code "s"} — user's encrypted credentials (MapLattice + LWW)</li>
- *   <li>{@code "w"} — user's workspace data (MapLattice + REPLACE)</li>
- *   <li>{@code "o"} — user's operations (MapLattice + REPLACE)</li>
- *   <li>{@code "h"} — HITL requests (MapLattice + REPLACE, Phase D placeholder)</li>
+ *   <li>{@code "w"} — user's workspace data (LWWWrapperLattice, whole-value)</li>
+ *   <li>{@code "o"} — user's operations (LWWWrapperLattice, whole-value)</li>
+ *   <li>{@code "h"} — HITL requests (LWWWrapperLattice, Phase D placeholder)</li>
  *   <li>{@code "a"} — content-addressed assets (CASLattice, union merge)</li>
  * </ul>
  */

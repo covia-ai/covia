@@ -9,7 +9,6 @@ import convex.core.data.prim.CVMLong;
 import convex.lattice.generic.CASLattice;
 import convex.lattice.generic.FunctionLattice;
 import convex.lattice.generic.IndexLattice;
-import convex.lattice.generic.JSONValueLattice;
 import convex.lattice.generic.KeyedLattice;
 import convex.lattice.generic.LWWLattice;
 import convex.lattice.generic.MapLattice;
@@ -44,9 +43,9 @@ import convex.lattice.fs.DLFSLattice;
  *               "j"  ->  IndexLattice + LWW (user's job references)
  *               "g"  ->  MapLattice + LWW (user's agents — single atomic record per agent)
  *               "s"  ->  MapLattice + LWW (user's encrypted credentials)
- *               "w"  ->  MapLattice + JSONValue (user's workspace — recursive per-key merge)
- *               "o"  ->  MapLattice + JSONValue (user's operations — recursive per-key merge)
- *               "h"  ->  MapLattice + JSONValue (HITL requests — Phase D placeholder)
+ *               "w"  ->  LWWWrapperLattice (user's workspace — whole {updated, data} value, deletions survive merge)
+ *               "o"  ->  LWWWrapperLattice (user's operations — whole {updated, data} value)
+ *               "h"  ->  LWWWrapperLattice (HITL requests — Phase D placeholder)
  *               "a"  ->  CASLattice (user's content-addressed assets)
  *     :meta  ->  CASLattice (shared content-addressable metadata)
  * </pre>
@@ -140,9 +139,13 @@ public final class Covia {
 		"j", IndexLattice.create(LWW),         // user's job references
 		"g", MapLattice.create(AGENT_LWW),     // user's agents (LWW per agent, latest ts wins)
 		"s", MapLattice.create(LWW),           // user's encrypted credentials
-		"w", MapLattice.create(JSONValueLattice.INSTANCE),  // user's workspace (recursive JSON merge)
-		"o", MapLattice.create(JSONValueLattice.INSTANCE),  // user's operations (recursive JSON merge)
-		"h", MapLattice.create(JSONValueLattice.INSTANCE),  // HITL requests (Phase D — placeholder)
+		// w/o/h are whole {updated, data} values replaced as a unit so that
+		// deletions survive merge with earlier snapshots — a per-entry merge
+		// (MapLattice/JSONValueLattice) is a union that re-introduces deleted
+		// keys on every propagator merge-back. Same trade as :schedule below.
+		"w", LWWWrapperLattice.INSTANCE,       // user's workspace
+		"o", LWWWrapperLattice.INSTANCE,       // user's operations
+		"h", LWWWrapperLattice.INSTANCE,       // HITL requests (Phase D — placeholder)
 		"a", CASLattice.create()               // user's content-addressed assets
 	);
 

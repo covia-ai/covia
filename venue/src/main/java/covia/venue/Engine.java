@@ -998,7 +998,10 @@ public class Engine {
 		Users users = venueState.users();
 		User user = users.get(ctx.getCallerDID());
 		if (user == null) return null;
-		return RT.getIn(user.get(), "o", name);
+		// Pre-split keys: the name is a single literal /o/ key (it may
+		// contain slashes). readPath handles the namespace wrapper.
+		return covia.adapter.CoviaAdapter.readPath(user.cursor(),
+			new ACell[] { Strings.create("o"), name });
 	}
 
 	/**

@@ -8,6 +8,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+- `covia:delete` is now durable. The user-writable namespaces (`w/`, `o/`, `h/`) previously merged per-entry (a union), so a deleted key was re-introduced whenever the live cursor merged with a pre-delete snapshot — which the persistence propagator does on every announce round-trip (deletes "came back" within ~30s and after restart). These namespaces are now whole `{updated, data}` values replaced as a unit under LWW (`LWWWrapperLattice`), the same trade the `:schedule` slot made. Write stamps are strictly increasing (`max(now, current+1)`), so fast sequential writes in the same millisecond each dominate the value they replace in either merge order. The wrapper is storage shape only — paths, reads, and lists are unchanged; pre-existing unwrapped workspace data remains readable and is migrated in place by the first write.
+
 ### Changed
 - **Cross-venue reference semantics.** Invoking a `did:web:<venue>/a/<hash>` operation reference now **fetches** the content-addressed definition from the publishing venue (hash-verified) and executes it locally, as an ordinary local job — references denote definitions, never execution sites. The previous reference-inferred remote delegation (which blocked a thread and left no job record on the accepting venue) is removed; cross-venue *execution* is explicit via `grid:run` / `grid:invoke` with a `venue` argument, which records a job on each venue. Semantics pinned by `RemoteAssetFetchTest` / `RemoteOperationTest`; see `venue/docs/OPERATIONS.md` §4.
 - `Grid.connect` resolves `did:web` DIDs with percent-encoded ports (`did:web:host%3A8080`) and uses http for localhost, per the did:web spec note.

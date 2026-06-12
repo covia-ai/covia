@@ -28,11 +28,13 @@ import convex.core.data.prim.CVMLong;
 import convex.core.data.type.Types;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import convex.core.util.Utils;
 import convex.lattice.ALattice;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.api.Fields;
 import covia.grid.Asset;
 import covia.lattice.AgentNamespaceResolver;
+import covia.lattice.LWWWrapperLattice;
 import covia.lattice.NamespaceResolver;
 import covia.lattice.SessionNamespaceResolver;
 import covia.lattice.TempNamespaceResolver;
@@ -72,14 +74,20 @@ import covia.venue.Users;
  *   ├── g/          agents     (MapLattice → per-agent records)
  *   ├── s/          secrets    (MapLattice → encrypted values)
  *   ├── j/          jobs       (IndexLattice → job records by Blob ID)
- *   ├── w/          workspace  (MapLattice → user-writable general-purpose data)
- *   └── o/          operations (MapLattice → user-writable operation definitions)
+ *   ├── w/          workspace  (LWWWrapperLattice → user-writable general-purpose data)
+ *   └── o/          operations (LWWWrapperLattice → user-writable operation definitions)
  * </pre>
  *
  * <p>The {@code w/} and {@code o/} namespaces are user-writable via
  * {@code covia:write} and {@code covia:delete}. All other namespaces
  * ({@code g/}, {@code s/}, {@code j/}) are framework-managed and
  * reject direct writes.</p>
+ *
+ * <p>The user-writable namespaces are stored as whole
+ * {@code {updated, data}} values merged as a unit (so deletions survive
+ * lattice merges — see {@link covia.lattice.LWWWrapperLattice}). The
+ * wrapper is storage shape only: paths address the data inside it, and
+ * reads never see the wrapper fields.</p>
  *
  * <p>Virtual namespaces ({@code n/} for agent workspace, {@code t/} for
  * goal-scoped temp) are resolved by registered {@link NamespaceResolver}
@@ -572,12 +580,9 @@ public class CoviaAdapter extends AAdapter {
 		// Cursor-based virtual (n/) or physical namespace
 		if (vns != null) jsonKeys = vns.remainingKeys();
 		ALatticeCursor<ACell> baseCursor = (vns != null) ? vns.cursor() : ensureUserCursor(ctx);
-		ALatticeCursor<ACell> entryCursor = resolveEntry(baseCursor, jsonKeys);
-		if (jsonKeys.length == 2) {
-			entryCursor.set(value);
-		} else {
-			ACell[] keys = jsonKeys;
-			entryCursor.updateAndGet(current -> deepSet(current, keys, 2, value));
+		final ACell[] keys = jsonKeys;
+		if (!updatePath(baseCursor, keys, (current, from) -> deepSet(current, keys, from, value))) {
+			throw new RuntimeException("Cannot resolve path: " + keys[0] + "/" + keys[1]);
 		}
 		return Maps.of(K_WRITTEN, CVMBool.TRUE);
 	}
@@ -612,18 +617,13 @@ public class CoviaAdapter extends AAdapter {
 			return Maps.of(K_DELETED, CVMBool.TRUE);
 		}
 
-		// Cursor-based virtual (n/) or physical namespace
+		// Cursor-based virtual (n/) or physical namespace. An unresolvable
+		// path is a silent success (delete is idempotent).
 		if (vns != null) jsonKeys = vns.remainingKeys();
 		ALatticeCursor<ACell> cursor = (vns != null) ? vns.cursor() : getUserCursor(ctx);
 		if (cursor == null) return Maps.of(K_DELETED, CVMBool.TRUE);
-		ALatticeCursor<ACell> entryCursor = resolveEntryOrNull(cursor, jsonKeys);
-		if (entryCursor == null) return Maps.of(K_DELETED, CVMBool.TRUE);
-		if (jsonKeys.length == 2) {
-			entryCursor.set(null);
-		} else {
-			ACell[] keys = jsonKeys;
-			entryCursor.updateAndGet(current -> current != null ? deepDelete(current, keys, 2) : null);
-		}
+		final ACell[] keys = jsonKeys;
+		updatePath(cursor, keys, (current, from) -> deepDelete(current, keys, from));
 		return Maps.of(K_DELETED, CVMBool.TRUE);
 	}
 
@@ -647,13 +647,9 @@ public class CoviaAdapter extends AAdapter {
 		ALatticeCursor<ACell> baseCursor = (vns != null) ? vns.cursor() : ensureUserCursor(ctx);
 		ACell element = parseJsonValue(RT.getIn(input, Fields.VALUE));
 
-		ALatticeCursor<ACell> entryCursor = resolveEntry(baseCursor, jsonKeys);
-
-		if (jsonKeys.length == 2) {
-			entryCursor.updateAndGet(current -> appendToVector(current, element));
-		} else {
-			ACell[] keys = jsonKeys;
-			entryCursor.updateAndGet(current -> deepAppend(current, keys, 2, element));
+		final ACell[] keys = jsonKeys;
+		if (!updatePath(baseCursor, keys, (current, from) -> deepAppend(current, keys, from, element))) {
+			throw new RuntimeException("Cannot resolve path: " + keys[0] + "/" + keys[1]);
 		}
 		return Maps.of(K_APPENDED, CVMBool.TRUE);
 	}
@@ -704,23 +700,67 @@ public class CoviaAdapter extends AAdapter {
 
 	/**
 	 * Resolves the first two path segments (namespace + top-level key)
-	 * through the lattice and returns the entry cursor.
+	 * through the lattice and returns the entry cursor, or null if the
+	 * path does not resolve.
 	 */
-	private static ALatticeCursor<ACell> resolveEntry(ALatticeCursor<ACell> userCursor, ACell[] jsonKeys) {
-		ACell[] nsAndKey = new ACell[] { jsonKeys[0], jsonKeys[1] };
-		ACell[] resolved = userCursor.getLattice().resolvePath(nsAndKey);
-		if (resolved == null) {
-			throw new RuntimeException("Cannot resolve path: " + jsonKeys[0] + "/" + jsonKeys[1]);
-		}
-		return userCursor.path(resolved);
-	}
-
-	/** Like {@link #resolveEntry} but returns null instead of throwing. */
 	private static ALatticeCursor<ACell> resolveEntryOrNull(ALatticeCursor<ACell> userCursor, ACell[] jsonKeys) {
 		ACell[] nsAndKey = new ACell[] { jsonKeys[0], jsonKeys[1] };
 		ACell[] resolved = userCursor.getLattice().resolvePath(nsAndKey);
 		if (resolved == null) return null;
 		return userCursor.path(resolved);
+	}
+
+	/**
+	 * A positional update applied at a write target: receives the current
+	 * value at the navigation root and the index in the path keys where that
+	 * root sits, and returns the replacement value.
+	 */
+	@FunctionalInterface
+	private interface PathUpdate {
+		ACell apply(ACell current, int fromIndex);
+	}
+
+	/**
+	 * Applies an update to the value addressed by {@code keys}, using the
+	 * write protocol the namespace's lattice requires:
+	 *
+	 * <ul>
+	 *   <li><b>Whole-value namespaces</b> ({@code w/}, {@code o/}, {@code h/}
+	 *       — {@link LWWWrapperLattice}): the {@code {updated, data}} wrapper
+	 *       is replaced as a unit with a fresh stamp, so the result dominates
+	 *       any earlier snapshot in LWW merges. This is what makes deletes
+	 *       durable across the propagator's merge-back. The update navigates
+	 *       the unwrapped data (fromIndex 1).</li>
+	 *   <li><b>Entry-cursor namespaces</b> (resolver-rewritten paths into
+	 *       {@code g/} etc.): read-modify-write on the entry cursor at
+	 *       namespace/key (fromIndex 2).</li>
+	 * </ul>
+	 *
+	 * @return true if the path was addressable, false if entry resolution failed
+	 */
+	private static boolean updatePath(ALatticeCursor<ACell> baseCursor, ACell[] keys, PathUpdate update) {
+		ALattice<?> lattice = baseCursor.getLattice();
+		ACell nsKey = lattice.resolveKey(keys[0]);
+		if (nsKey != null && lattice.path(nsKey) instanceof LWWWrapperLattice) {
+			ALatticeCursor<ACell> ns = baseCursor.path(new ACell[] { nsKey });
+			ns.updateAndGet(current -> {
+				// Strictly-increasing stamp (same rule as Scheduler.nextStamp):
+				// fast sequential writes within one millisecond must each
+				// dominate the value they replace in either merge order —
+				// an equal-stamp tie resolves by argument order, which the
+				// fork-sync slow path and CAS fallback do not guarantee.
+				// Computed inside the lambda so CAS retries re-derive it.
+				long stamp = Math.max(Utils.getCurrentTimestamp(),
+					LWWWrapperLattice.timestamp(current) + 1);
+				return LWWWrapperLattice.wrap(stamp,
+					update.apply(LWWWrapperLattice.unwrap(current), 1));
+			});
+			return true;
+		}
+		ALatticeCursor<ACell> entry = resolveEntryOrNull(baseCursor, keys);
+		if (entry == null) return false;
+		entry.updateAndGet(current -> update.apply(current, 2));
+		return true;
 	}
 
 	// ========== Type-aware deep navigation ==========
@@ -737,11 +777,12 @@ public class CoviaAdapter extends AAdapter {
 	 * indexing (e.g. {@code "w/events/0"}) that pure lattice resolution cannot.
 	 */
 	public static ACell readPath(ALatticeCursor<ACell> cursor, ACell[] jsonKeys) {
+		ALattice<?> lattice = cursor.getLattice();
 		// Try full lattice resolution first (works for pure-map paths like
 		// g/agent/state/counter where every level is a map).
-		ACell[] resolved = cursor.getLattice().resolvePath(jsonKeys);
+		ACell[] resolved = lattice.resolvePath(jsonKeys);
 		if (resolved != null) {
-			ACell value = cursor.path(resolved).get();
+			ACell value = unwrapAt(lattice, resolved, cursor.path(resolved).get());
 			if (value != null) return value;
 			// Fall through — cursor may have returned null because it cannot
 			// navigate into a vector with a string key. Try prefix-based
@@ -749,19 +790,32 @@ public class CoviaAdapter extends AAdapter {
 		}
 
 		// Resolve progressively shorter prefixes, then navigate the
-		// remainder with type-aware deepGet (handles vector indices).
+		// remainder with type-aware deepGet (handles vector indices, and
+		// wrapped namespaces whose internals are opaque to the lattice).
 		for (int depth = jsonKeys.length - 1; depth >= 1; depth--) {
 			ACell[] prefix = new ACell[depth];
 			System.arraycopy(jsonKeys, 0, prefix, 0, depth);
-			ACell[] resolvedPrefix = cursor.getLattice().resolvePath(prefix);
+			ACell[] resolvedPrefix = lattice.resolvePath(prefix);
 			if (resolvedPrefix != null) {
-				ACell base = cursor.path(resolvedPrefix).get();
+				ACell base = unwrapAt(lattice, resolvedPrefix, cursor.path(resolvedPrefix).get());
 				if (base != null) return deepGet(base, jsonKeys, depth);
 				// base is null — cursor may have failed on a vector index.
 				// Continue to shorter prefix where deepGet can handle it.
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * Unwraps a value read at a resolved path when the lattice node at that
+	 * path is a whole-value wrapped namespace (w/, o/, h/). The
+	 * {@code {updated, data}} wrapper is storage shape, not data — readers
+	 * see only the namespace's data map.
+	 */
+	private static ACell unwrapAt(ALattice<?> lattice, ACell[] resolvedPath, ACell value) {
+		if (value == null) return null;
+		return (lattice.path(resolvedPath) instanceof LWWWrapperLattice)
+			? LWWWrapperLattice.unwrap(value) : value;
 	}
 
 	/**
@@ -861,6 +915,9 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	static ACell deepDelete(ACell root, ACell[] keys, int fromIndex) {
+		// Path addresses this node itself — deleting it yields null
+		// (the whole-entry delete case for entry-cursor namespaces).
+		if (fromIndex >= keys.length) return null;
 		if (root == null) return root;
 		ACell key = keys[fromIndex];
 		boolean isLeaf = (fromIndex == keys.length - 1);
