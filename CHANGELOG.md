@@ -8,6 +8,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-15
+
 ### Added
 - **User memory.** A single `memory` tool (`v/ops/memory`, dispatched by a `command`: `recall` / `remember` / `update` / `forget`) maintains a per-user numbered list of durable facts in the user's workspace — one tool definition rather than four ops, to keep agent tool context small. `recall` doubles as a `config.context` assemble-op (injected as system context every turn) and renders either a flat list or, given a `displayField`, the active/surfaceable values of a slug-keyed map collection — skipping entries whose `status` is not `active`, that are `surfacing: hold`, or that carry a `mergedInto` — so a curated store (e.g. a problem list) can be surfaced with no separate copy. Mutations rewrite the whole list value under LWW, so removals are durable. See `venue/docs/AGENT_CONTEXT.md`.
 - `venue/docs/AGENT_CONTEXT.md` (renamed from `CONTEXT.md`): the agent-context design — entry forms, the specify→return→render data-shape contract, and the failure model.
