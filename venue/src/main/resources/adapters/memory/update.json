@@ -1,0 +1,26 @@
+{
+	"name": "Update memory item",
+	"description": "Replace the text of memory item number n (as shown by memory_recall). The item keeps its position and original timestamp. Use when a remembered fact changes.",
+	"dateCreated": "2026-06-15T00:00:00Z",
+	"operation": {
+		"adapter": "memory:update",
+		"toolName": "memory_update",
+		"input": {
+			"type": "object",
+			"properties": {
+				"n": { "type": "integer", "description": "1-based item number to update (as shown in the numbered list)." },
+				"text": { "type": "string", "description": "The new text for that item." },
+				"path": { "type": "string", "description": "Workspace path of the memory list (default 'w/memory')." }
+			},
+			"required": ["n", "text"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"updated": { "type": "boolean", "description": "True if the item was updated." },
+				"n": { "type": "integer", "description": "The item number updated." },
+				"count": { "type": "integer", "description": "Total items." }
+			}
+		}
+	}
+}

@@ -1,0 +1,25 @@
+{
+	"name": "Forget memory item",
+	"description": "Remove memory item number n (as shown by memory_recall). Remaining items renumber to close the gap. The removal is durable (whole-list replace) and does not re-materialise.",
+	"dateCreated": "2026-06-15T00:00:00Z",
+	"operation": {
+		"adapter": "memory:forget",
+		"toolName": "memory_forget",
+		"input": {
+			"type": "object",
+			"properties": {
+				"n": { "type": "integer", "description": "1-based item number to remove (as shown in the numbered list)." },
+				"path": { "type": "string", "description": "Workspace path of the memory list (default 'w/memory')." }
+			},
+			"required": ["n"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"forgotten": { "type": "boolean", "description": "True if the item was removed." },
+				"n": { "type": "integer", "description": "The item number removed." },
+				"count": { "type": "integer", "description": "Total items after removal." }
+			}
+		}
+	}
+}

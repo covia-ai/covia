@@ -322,13 +322,19 @@ public class ContextLoaderTest {
 	}
 
 	@Test
-	public void testGridOpFailureNotRequired() {
+	public void testGridOpFailureNotRequiredIsVisible() {
+		// A non-required op that ERRORS surfaces a visible "[Context: ... unavailable]"
+		// element (so the LLM knows the source is broken), rather than vanishing.
 		ACell entry = Maps.of(
 			Strings.intern("op"), Strings.create("v/test/ops/error"),
-			Strings.intern("input"), Maps.of(Strings.create("message"), Strings.create("boom"))
+			Strings.intern("input"), Maps.of(Strings.create("message"), Strings.create("boom")),
+			Strings.intern("label"), Strings.create("Risky Op")
 		);
 		ACell msg = loader.resolveEntry(entry, ctx);
-		assertNull(msg, "Failed non-required op should return null");
+		assertNotNull(msg, "Failed non-required op should surface a visible error element, not vanish");
+		String content = RT.ensureString(RT.getIn(msg, Strings.intern("content"))).toString();
+		assertTrue(content.contains("[Context: Risky Op"), "error element keeps the label");
+		assertTrue(content.contains("unavailable"), "error element marks the source unavailable");
 	}
 
 	@Test

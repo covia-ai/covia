@@ -36,7 +36,7 @@ import covia.venue.Users;
  *   <li>Map entries with {@code ref}, {@code text}, {@code label}, {@code required} fields</li>
  * </ul>
  *
- * <p>See {@code venue/docs/CONTEXT.md} for the full design.</p>
+ * <p>See {@code venue/docs/AGENT_CONTEXT.md} for the full design.</p>
  */
 public class ContextLoader {
 
@@ -125,11 +125,16 @@ public class ContextLoader {
 	 * reference, or literal text based on prefix.
 	 */
 	ACell resolveStringEntry(AString ref, RequestContext ctx) {
-		String content = resolveReference(ref, ctx);
-		if (content == null) return null;
-
 		String label = deriveLabel(ref.toString());
-		return systemMessage(label, content);
+		try {
+			String content = resolveReference(ref, ctx);
+			if (content == null) return null;            // absent/empty → skip
+			return systemMessage(label, content);
+		} catch (RuntimeException e) {
+			// String entries carry no `required` flag — surface the failure
+			// visibly so the LLM knows this context source is broken.
+			return errorMessage(label, rootMessage(e));
+		}
 	}
 
 	/**
@@ -161,13 +166,18 @@ public class ContextLoader {
 		// Reference entry
 		AString ref = RT.ensureString(map.get(K_REF));
 		if (ref != null) {
-			String content = resolveReference(ref, ctx);
-			if (content == null) {
-				if (required) throw new RuntimeException("Required context entry not found: " + ref);
-				return null;
-			}
 			String labelStr = (label != null) ? label.toString() : deriveLabel(ref.toString());
-			return systemMessage(labelStr, content);
+			try {
+				String content = resolveReference(ref, ctx);
+				if (content == null) {
+					if (required) throw new RuntimeException("Required context entry not found: " + ref);
+					return null;                          // absent/empty → skip
+				}
+				return systemMessage(labelStr, content);
+			} catch (RuntimeException e) {
+				if (required) throw e;
+				return errorMessage(labelStr, rootMessage(e));   // errored → visible
+			}
 		}
 
 		return null;
@@ -233,10 +243,12 @@ public class ContextLoader {
 			if (pathKeys.length == 0) return null;
 
 			ACell value = CoviaAdapter.readPath(cursor, pathKeys);
-			if (value == null) return null;
+			if (value == null) return null;              // path absent → caller skips
 			return renderValue(value);
+		} catch (RuntimeException e) {
+			throw e;                                      // genuine read error → caller makes it visible
 		} catch (Exception e) {
-			return null;
+			throw new RuntimeException(e);
 		}
 	}
 
@@ -266,9 +278,11 @@ public class ContextLoader {
 			AString desc = RT.ensureString(asset.meta().get(Fields.DESCRIPTION));
 			if (desc != null) return desc.toString();
 
-			return null;
+			return null;                                  // asset has no usable content → caller skips
+		} catch (RuntimeException e) {
+			throw e;                                      // genuine resolution error → caller makes it visible
 		} catch (Exception e) {
-			return null;
+			throw new RuntimeException(e);
 		}
 	}
 
@@ -276,6 +290,7 @@ public class ContextLoader {
 	 * Resolves a grid operation entry by invoking the operation.
 	 */
 	ACell resolveOpEntry(AString op, ACell input, AString label, boolean required, RequestContext ctx) {
+		String labelStr = (label != null) ? label.toString() : "op:" + op;
 		try {
 			// Context loading is framework infrastructure: entries are
 			// declared in the agent's config (visible to the caller before
@@ -286,16 +301,15 @@ public class ContextLoader {
 				.get(10_000, java.util.concurrent.TimeUnit.MILLISECONDS);
 			if (result == null) {
 				if (required) throw new RuntimeException("Required context operation returned null: " + op);
-				return null;
+				return null;                              // produced nothing → skip
 			}
-			String labelStr = (label != null) ? label.toString() : "op:" + op;
 			return systemMessage(labelStr, renderValue(result));
 		} catch (RuntimeException e) {
 			if (required) throw e;
-			return null;
+			return errorMessage(labelStr, rootMessage(e));   // errored → visible
 		} catch (Exception e) {
 			if (required) throw new RuntimeException("Context operation failed: " + op + " — " + e.getMessage(), e);
-			return null;
+			return errorMessage(labelStr, rootMessage(e));   // errored → visible
 		}
 	}
 
@@ -303,6 +317,7 @@ public class ContextLoader {
 	 * Resolves a job result entry by reading the job output.
 	 */
 	ACell resolveJobEntry(AString jobId, AString path, AString label, boolean required, RequestContext ctx) {
+		String labelStr = (label != null) ? label.toString() : "Job " + jobId;
 		try {
 			AMap<AString, ACell> jobData = engine.jobs().getJobData(
 				convex.core.data.Blob.fromHex(jobId.toString()), ctx);
@@ -331,11 +346,10 @@ public class ContextLoader {
 				return null;
 			}
 
-			String labelStr = (label != null) ? label.toString() : "Job " + jobId;
 			return systemMessage(labelStr, renderValue(output));
 		} catch (RuntimeException e) {
 			if (required) throw e;
-			return null;
+			return errorMessage(labelStr, rootMessage(e));   // errored → visible
 		}
 	}
 
@@ -345,6 +359,29 @@ public class ContextLoader {
 	static ACell systemMessage(String label, String content) {
 		String text = (label != null) ? "[Context: " + label + "]\n" + content : content;
 		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(text));
+	}
+
+	/**
+	 * Builds a visible "context source failed" system message. Used when an
+	 * entry ERRORS while resolving (op throws/times out, a read genuinely
+	 * fails) and is not {@code required} — so the LLM sees that this context
+	 * source is broken (and can adapt / retry / tell the user) instead of
+	 * silently operating without it. A merely absent/empty source is skipped,
+	 * not reported here.
+	 */
+	static ACell errorMessage(String label, String reason) {
+		String l = (label != null && !label.isEmpty()) ? label : "context";
+		String r = (reason != null && !reason.isEmpty()) ? reason : "resolution failed";
+		return Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT,
+			Strings.create("[Context: " + l + " — unavailable: " + r + "]"));
+	}
+
+	/** Unwraps the most useful message from a (possibly wrapped) throwable. */
+	static String rootMessage(Throwable e) {
+		Throwable c = e;
+		if (c instanceof java.util.concurrent.ExecutionException && c.getCause() != null) c = c.getCause();
+		String m = c.getMessage();
+		return (m != null && !m.isEmpty()) ? m : c.getClass().getSimpleName();
 	}
 
 	/**

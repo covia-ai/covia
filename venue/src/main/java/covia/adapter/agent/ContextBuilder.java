@@ -15,6 +15,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
+import convex.core.data.type.Types;
 import convex.core.data.util.CellExplorer;
 import convex.core.lang.RT;
 import covia.api.Fields;
@@ -368,7 +369,7 @@ public class ContextBuilder {
 		loader.setCellExplorer(new CellExplorer(entryBudget));
 
 		if (config != null) {
-			AVector<ACell> configContext = RT.ensureVector(config.get(K_CONTEXT));
+			AVector<ACell> configContext = contextVector(config.get(K_CONTEXT), "config.context");
 			AVector<ACell> contextMsgs = loader.resolve(configContext, ctx);
 			for (long i = 0; i < contextMsgs.count(); i++) {
 				ACell msg = contextMsgs.get(i);
@@ -376,7 +377,7 @@ public class ContextBuilder {
 				trackMessage(msg);
 			}
 		}
-		AVector<ACell> stateContext = RT.ensureVector(RT.getIn(state, K_CONTEXT));
+		AVector<ACell> stateContext = contextVector(RT.getIn(state, K_CONTEXT), "state.context");
 		if (stateContext != null) {
 			AVector<ACell> contextMsgs = loader.resolve(stateContext, ctx);
 			for (long i = 0; i < contextMsgs.count(); i++) {
@@ -386,6 +387,26 @@ public class ContextBuilder {
 			}
 		}
 		return this;
+	}
+
+	/**
+	 * Coerces a {@code context} value to a vector of entries.
+	 *
+	 * <p>{@code null}/absent means "no context for this layer" and returns
+	 * {@code null} (the layer is skipped — legitimately optional). Any other
+	 * non-vector value is a <b>configuration error</b> and throws: a malformed
+	 * {@code config.context} / {@code state.context} must fail loudly so the
+	 * agent config gets fixed, rather than being silently dropped (which looks
+	 * like "context isn't working" with no signal). This is distinct from an
+	 * individual entry that can't be resolved (deleted asset, empty path),
+	 * which remains fail-open and is skipped.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	private static AVector<ACell> contextVector(ACell raw, String which) {
+		if (raw == null) return null;
+		if (raw instanceof AVector) return (AVector<ACell>) raw;
+		throw new RuntimeException(which + " must be an array of context entries, got "
+			+ Types.get(raw) + " — fix the agent config");
 	}
 
 	/**

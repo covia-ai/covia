@@ -185,6 +185,37 @@ public class ContextBuilderTest {
 	}
 
 	@Test
+	public void testInvalidConfigContextThrows() {
+		// config.context present but not an array → loud failure (fix the config),
+		// not a silent drop.
+		AMap<AString, ACell> config = Maps.of(K_CONTEXT, Strings.create("not-an-array"));
+		ContextBuilder b = new ContextBuilder(engine, ctx).withConfig(config, null);
+		RuntimeException ex = assertThrows(RuntimeException.class,
+			() -> b.withContextEntries(Maps.empty()));
+		assertTrue(ex.getMessage().contains("config.context"), "message should name the bad field");
+	}
+
+	@Test
+	public void testInvalidStateContextThrows() {
+		// state.context present but not an array → throw.
+		ContextBuilder b = new ContextBuilder(engine, ctx).withConfig(Maps.empty(), null);
+		ACell state = Maps.of(K_CONTEXT, CVMLong.create(5));
+		RuntimeException ex = assertThrows(RuntimeException.class,
+			() -> b.withContextEntries(state));
+		assertTrue(ex.getMessage().contains("state.context"), "message should name the bad field");
+	}
+
+	@Test
+	public void testAbsentContextIsFine() {
+		// No context key anywhere → no error, just no context entries.
+		AMap<AString, ACell> config = Maps.of(Strings.intern("systemPrompt"), Strings.create("Be helpful"));
+		assertDoesNotThrow(() -> new ContextBuilder(engine, ctx)
+			.withConfig(config, null)
+			.withContextEntries(Maps.empty())
+			.build());
+	}
+
+	@Test
 	public void testContextEntriesUseCellExplorer() {
 		// Write structured map to workspace
 		engine.jobs().invokeOperation("v/ops/covia/write",

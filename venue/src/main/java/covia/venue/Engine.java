@@ -460,6 +460,7 @@ public class Engine {
 		venue.registerAdapter(new MCPAdapter());
 		venue.registerAdapter(new LangChainAdapter());
 		venue.registerAdapter(new CoviaAdapter());
+		venue.registerAdapter(new covia.adapter.UserMemoryAdapter());
 		venue.registerAdapter(new AssetAdapter());
 		venue.registerAdapter(new GridAdapter());
 		venue.registerAdapter(new covia.adapter.A2AAdapter());

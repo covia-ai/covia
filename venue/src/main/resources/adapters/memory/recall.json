@@ -1,0 +1,18 @@
+{
+	"name": "Recall Memory",
+	"description": "Render the user's memory as a bare numbered list ('1. ...\\n2. ...', or nothing when empty). The numbers are the handles the agent uses with memory_update and memory_forget. Reference this from an agent's config.context (with a `label` on that entry, e.g. 'User memory') so the list is always present as a '[Context: <label>]' system block.",
+	"dateCreated": "2026-06-15T00:00:00Z",
+	"operation": {
+		"adapter": "memory:recall",
+		"toolName": "memory_recall",
+		"input": {
+			"type": "object",
+			"properties": {
+				"path": { "type": "string", "description": "Workspace path of the memory list (default 'w/memory')." }
+			}
+		},
+		"output": {
+			"description": "A bare numbered text block of memory items, or null when the list is empty. The heading/label is supplied by the config.context entry, not this op."
+		}
+	}
+}

@@ -371,7 +371,7 @@ Context entries can be:
 Two layers: `state.config.context` (stable baseline, loaded every run) and
 `state.context` (dynamic, mutable between runs). Config context loads first.
 
-See [CONTEXT.md](./CONTEXT.md) for the full design: entry format, resolution
+See [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) for the full design: entry format, resolution
 rules, load order, size considerations, and phasing.
 
 ### 3.6 Tool Palette

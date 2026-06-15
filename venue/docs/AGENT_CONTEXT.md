@@ -2,7 +2,7 @@
 
 Design for loading reference material into an agent's working context at run time.
 
-**Status:** Draft — April 2026
+**Status:** Current — implemented (string / workspace / asset / job / op entries; two layers; labelled system messages).
 
 See [AGENT_LOOP.md](./AGENT_LOOP.md) §3.2 for level 2 architecture and `state.config` conventions.
 
@@ -33,7 +33,12 @@ We need a mechanism to **declaratively load reference material into context** be
 
 4. **Injected, not fetched.** Context entries are resolved by the framework (level 2) and injected as system messages before the conversation. The LLM never sees tool calls for context — it just has the material. No history pollution, no wasted tool calls.
 
-5. **Fail-open on load.** If a context reference can't be resolved (deleted asset, empty workspace path), it is silently skipped. The agent runs with whatever context loaded successfully. Context is supplementary — a missing reference should not crash the agent.
+5. **Fail-visible, not fail-silent.** Each entry has three possible outcomes:
+   - **Absent / empty** (deleted asset, empty workspace path, an assemble op that returns nothing) → **skipped** quietly. Context is supplementary; a source with nothing to add should add no noise.
+   - **Errors while resolving** (an assemble op throws or times out, a read genuinely fails) → a **visible** `[Context: <label> — unavailable: <reason>]` system element is injected, so the LLM knows that source is broken and can adapt (retry via a tool, tell the user) rather than silently operating without it.
+   - **`required: true`** → a resolution failure **throws** and fails the turn. Use only for context the agent genuinely cannot run without.
+
+   Separately, the `context` value *itself* must be an **array** (or absent): a present-but-malformed `config.context` / `state.context` (a string, map, number, …) is a configuration error and **throws** so it gets fixed, rather than silently leaving the agent with no context. Net rule: *bad shape → throw; `required` failure → throw; error → visible element; absent/empty → skip.*
 
 6. **Labels.** Each injected system message is prefixed with a label so the LLM knows what it's reading: `[Context: w/docs/ap-rules]` or `[Context: AP Policy Rules]`.
 
@@ -88,31 +93,31 @@ A context entry can invoke a grid operation at load time. The operation's output
 
 ```json
 {
-  "op": "covia:read",
+  "op": "v/ops/covia/read",
   "input": {"path": "w/docs/ap-rules"},
   "label": "AP Policy Rules"
 }
 ```
 
-The presence of an `op` field distinguishes an operation entry from a reference entry. The operation is invoked synchronously at context load time (before the LLM sees any messages). The output is serialised as the context content.
+The presence of an `op` field distinguishes an operation entry from a reference entry. The operation is invoked **fresh every turn** at context load time (before the LLM sees any messages), under the caller's identity. The output becomes the context content. Operation references use the `v/ops/<adapter>/<op>` catalog form. Because they run on every turn, **assemble ops must be read-only / side-effect-free** (a write-on-assemble would fire every turn).
 
-This generalises all other resolution mechanisms — workspace reads, asset fetches, and even cross-venue lookups are all just grid operations:
+This generalises all other resolution mechanisms — workspace reads, asset fetches, cross-venue lookups, and purpose-built "assemble" ops are all just grid operations:
 
 ```json
 // Read from workspace (equivalent to ref: "w/docs/rules")
-{"op": "covia:read", "input": {"path": "w/docs/rules"}}
+{"op": "v/ops/covia/read", "input": {"path": "w/docs/rules"}}
 
-// Fetch asset content
-{"op": "asset:content", "input": {"id": "abc123..."}}
+// Assemble the user's memory as an always-in-context numbered list (see §5.6)
+{"op": "v/ops/memory/recall", "input": {"path": "w/memory"}, "label": "User memory"}
 
 // Call a remote venue
-{"op": "grid:run", "input": {"venue": "did:web:compliance.example.com", "operation": "policy:latest"}}
+{"op": "v/ops/grid/run", "input": {"venue": "did:web:compliance.example.com", "operation": "policy:latest"}}
 
 // Run an orchestration that assembles context from multiple sources
 {"op": "8cd17cbd...", "input": {"scope": "ap"}}
 ```
 
-**Timeout:** Operation context entries should have a timeout (default 10s). If the operation doesn't complete in time, the entry is skipped (or fails if `required: true`).
+**Timeout:** Operation context entries have a timeout (default 10s). If the operation doesn't complete in time, the entry is skipped (or fails if `required: true`).
 
 **Caching:** Operation results are not cached across runs — they are resolved fresh each time. For expensive operations, store the result in workspace and reference it with a path instead.
 
@@ -148,6 +153,25 @@ When a context entry resolves to an asset:
 3. **Structured metadata.** If neither content nor description exists, skip (or fail if `required`).
 
 This means storing a policy document as an artifact (`asset_store` with `contentText`) produces a reusable context entry that any agent can reference.
+
+### 3.6 Return & rendering contract
+
+Whatever an entry resolves to (an op's output, a workspace value, a job result, literal text) flows through one rendering contract before it reaches the model. This is the data-shape agreement between the three layers:
+
+| Layer | Shape |
+|-------|-------|
+| **Specify** (`config.context` / `state.context`) | a JSON **array** of entries (or absent). Wrong shape → throws (§2, principle 5). Each entry is a string or one of the maps above. |
+| **Return** (what the source yields) | **any value**, or nothing. A returned `null` (e.g. an assemble op with nothing to add) means "inject nothing" — the entry is skipped, no empty block. |
+| **Render** (what the model sees) | exactly one `system` message per non-null entry: `[Context: <label>]` followed by the rendered value. **A string is rendered verbatim** (newlines/markdown preserved); **a structured value is rendered as budget-bounded JSON5**. |
+| **On error** (resolution throws) | a visible `[Context: <label> — unavailable: <reason>]` element is injected instead — unless the entry is `required`, which throws and fails the turn (§2, principle 5). |
+
+Consequences for authoring an **assemble op** (an op written to be referenced from `context`):
+
+- Return a **string** when you want exact formatting in the prompt (e.g. a numbered list); return a **map/vector** when a compact JSON5 view is fine — it will be truncated to the per-entry budget.
+- Return **null** to contribute nothing this turn (no empty heading appears).
+- **Throw** (don't return null) when a failure should be visible to the LLM — it becomes an "unavailable" element. Return null only when there is genuinely nothing to add.
+- Supply the **`label`** on the *entry* (not inside the op output) — without it the heading falls back to the raw op path. The op should return only the body.
+- Keep it **read-only** — it runs every turn.
 
 ---
 
@@ -273,6 +297,27 @@ An agent can add context to its own state during a run (via `covia_write` to its
 
 - Agent receives a task with a reference document → adds it to `state.context` → processes on next iteration with full context
 - Agent discovers it needs a procedure → reads it, stores in `state.context` for future runs
+
+### 5.6 Always-in-context user memory (assemble op)
+
+A purpose-built assemble op computes context dynamically. `v/ops/memory/recall` renders the user's memory — a simple, durable, numbered list — as an always-present block:
+
+```json
+// agent config
+"context": [
+  {"op": "v/ops/memory/recall", "input": {"path": "w/memory"}, "label": "User memory"}
+]
+```
+
+Every turn this injects:
+
+```
+[Context: User memory]
+1. Prefers plain-English explanations
+2. Anxious about heart health
+```
+
+The numbers are stable edit handles: the agent (or the user, via the agent) maintains the list with `memory_remember` (append), `memory_update <n>`, and `memory_forget <n>`. The op returns the bare numbered list (the heading comes from the entry `label`), returns nothing when the list is empty (so the entry is skipped), and is read-only — exactly the assemble-op contract from §3.6.
 
 ---
 
