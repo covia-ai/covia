@@ -1,5 +1,7 @@
 package covia.adapter;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -77,18 +79,17 @@ public class UserMemoryAdapter extends AAdapter {
 
 	@Override
 	public String getDescription() {
-		return "Generic per-user memory: a simple, always-in-context numbered list of things to remember "
-			+ "about the user. recall renders the numbered list as system context; remember appends an item; "
-			+ "update and forget edit/remove an item by its number. Stored durably in the user's workspace.";
+		return "Generic per-user memory: ONE tool with a `command` (recall | remember | update | forget) "
+			+ "over a numbered list. recall renders the list (also usable as a config.context assemble-op; "
+			+ "reads a flat list or a map collection); remember appends; update/forget edit by item number. "
+			+ "Stored durably in the user's workspace.";
 	}
 
 	@Override
 	protected void installAssets() {
-		String BASE = "/adapters/memory/";
-		installAsset("memory/recall",   BASE + "recall.json");
-		installAsset("memory/remember", BASE + "remember.json");
-		installAsset("memory/update",   BASE + "update.json");
-		installAsset("memory/forget",   BASE + "forget.json");
+		// A single op/tool (v/ops/memory) dispatched by the `command` input —
+		// one tool definition is far less agent tool-context than four.
+		installAsset("memory", "/adapters/memory/memory.json");
 	}
 
 	@Override
@@ -97,14 +98,17 @@ public class UserMemoryAdapter extends AAdapter {
 		if (ctx.getCallerDID() == null) {
 			return CompletableFuture.failedFuture(new RuntimeException("Authentication required"));
 		}
+		// Dispatch on the `command` field (single tool), mirroring a unified
+		// editor/memory tool rather than four separate ops.
+		String command = strInput(input, "command", "");
 		try {
-			return switch (getSubOperation(meta)) {
+			return switch (command) {
 				case "recall"   -> CompletableFuture.completedFuture(handleRecall(ctx, input));
 				case "remember" -> CompletableFuture.completedFuture(handleRemember(ctx, input));
 				case "update"   -> CompletableFuture.completedFuture(handleUpdate(ctx, input));
 				case "forget"   -> CompletableFuture.completedFuture(handleForget(ctx, input));
-				default -> CompletableFuture.failedFuture(
-					new RuntimeException("Unknown memory operation: " + getSubOperation(meta)));
+				default -> CompletableFuture.failedFuture(new RuntimeException(
+					"memory requires command: recall | remember | update | forget"));
 			};
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -113,19 +117,44 @@ public class UserMemoryAdapter extends AAdapter {
 
 	// ========== recall — render the numbered list ==========
 
+	@SuppressWarnings("unchecked")
 	private ACell handleRecall(RequestContext ctx, ACell input) {
 		String path = path(input);
-		AVector<ACell> list = readList(ctx, path);
-		if (list.isEmpty()) return null; // empty → context entry is skipped (no empty heading)
+		String displayField = strInput(input, "displayField", "text");
+		String noteField = strInput(input, "noteField", null);
 
-		// Return the bare numbered list. The heading is supplied by the caller:
-		// for config.context, the entry's `label` becomes "[Context: <label>]" via
-		// ContextLoader — so recall must NOT prepend its own heading (avoids the
-		// double-label "[Context: ...]\n<own heading>:").
+		ACell value = readValue(ctx, path);
+
+		// Collect display lines. A vector keeps its order (the flat list edited by
+		// position). A map's values are gated to active/surfaceable entries and
+		// sorted for a stable, readable order — this lets recall point straight at
+		// a rich slug-keyed store (e.g. a clinical problem list) with no separate
+		// copy. Either source empty → null (the context entry is skipped).
+		List<String> lines = new ArrayList<>();
+		if (value instanceof AVector<?> vec) {
+			for (long i = 0; i < vec.count(); i++) {
+				ACell e = vec.get(i);
+				if (surfaceable(e)) lines.add(renderLine(e, displayField, noteField));
+			}
+		} else if (value instanceof AMap<?, ?> map) {
+			List<String> rendered = new ArrayList<>();
+			for (var ent : ((AMap<ACell, ACell>) map).entrySet()) {
+				ACell e = ent.getValue();
+				if (surfaceable(e)) rendered.add(renderLine(e, displayField, noteField));
+			}
+			rendered.sort(String::compareTo);
+			lines.addAll(rendered);
+		}
+
+		if (lines.isEmpty()) return null;
+
+		// Bare numbered list — the heading comes from the config.context entry's
+		// `label` (rendered as "[Context: <label>]" by ContextLoader), so recall
+		// must not prepend its own heading.
 		StringBuilder sb = new StringBuilder();
-		for (long i = 0; i < list.count(); i++) {
+		for (int i = 0; i < lines.size(); i++) {
 			if (i > 0) sb.append("\n");
-			sb.append(i + 1).append(". ").append(textOf(list.get(i)));
+			sb.append(i + 1).append(". ").append(lines.get(i));
 		}
 		return Strings.create(sb.toString());
 	}
@@ -210,11 +239,60 @@ public class UserMemoryAdapter extends AAdapter {
 		return (entry != null) ? entry.toString() : "";
 	}
 
+	/** Read the raw value at a path — a vector list, a map collection, or null. */
+	private ACell readValue(RequestContext ctx, String path) {
+		ACell read = invokeCovia("v/ops/covia/read", Maps.of(K_PATH, Strings.create(path)), ctx);
+		return RT.getIn(read, "value");
+	}
+
+	/** The mutable flat list at a path (for remember/update/forget). Refuses to
+	 *  operate on a non-list value so a stray write can't clobber a map store. */
 	@SuppressWarnings("unchecked")
 	private AVector<ACell> readList(RequestContext ctx, String path) {
-		ACell read = invokeCovia("v/ops/covia/read", Maps.of(K_PATH, Strings.create(path)), ctx);
-		ACell value = RT.getIn(read, "value");
-		return (value instanceof AVector) ? (AVector<ACell>) value : Vectors.empty();
+		ACell value = readValue(ctx, path);
+		if (value == null) return Vectors.empty();
+		if (value instanceof AVector) return (AVector<ACell>) value;
+		throw new RuntimeException("memory at " + path + " is not a flat list — remember/update/forget "
+			+ "operate on flat lists; edit a structured store with the covia tools");
+	}
+
+	/**
+	 * Whether an entry should surface. Plain entries always show; map entries
+	 * honour a few optional "is this current?" conventions when present — a
+	 * {@code status} other than "active", {@code surfacing:"hold"}, or a set
+	 * {@code mergedInto} are skipped. Entries lacking these fields are shown.
+	 */
+	private static boolean surfaceable(ACell e) {
+		if (!(e instanceof AMap)) return true;
+		ACell status = RT.getIn(e, "status");
+		if (status != null && !"active".equals(status.toString())) return false;
+		ACell surfacing = RT.getIn(e, "surfacing");
+		if (surfacing != null && "hold".equals(surfacing.toString())) return false;
+		return RT.getIn(e, "mergedInto") == null;
+	}
+
+	/** One display line for an entry: {@code <displayField>[ — <noteField>]}. */
+	private static String renderLine(ACell e, String displayField, String noteField) {
+		String head = fieldText(e, displayField);
+		if (head == null) head = textOf(e);
+		if (noteField != null) {
+			String note = fieldText(e, noteField);
+			if (note != null && !note.isEmpty()) return head + " — " + note;
+		}
+		return head;
+	}
+
+	private static String fieldText(ACell e, String field) {
+		if (e instanceof AMap) {
+			ACell v = RT.getIn(e, field);
+			return (v != null) ? v.toString() : null;
+		}
+		return (e != null) ? e.toString() : null;
+	}
+
+	private static String strInput(ACell input, String key, String dflt) {
+		AString s = RT.ensureString(RT.getIn(input, key));
+		return (s != null) ? s.toString() : dflt;
 	}
 
 	private void writeList(RequestContext ctx, String path, AVector<ACell> list) {

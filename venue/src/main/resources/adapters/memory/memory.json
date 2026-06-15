@@ -1,0 +1,24 @@
+{
+	"name": "Memory",
+	"description": "The user's memory — a numbered list of durable facts to keep in view. Pick the action with `command`: 'recall' renders the numbered list (you rarely need this — it is injected into your context automatically); 'remember' appends a new item; 'update' replaces item n; 'forget' removes item n. Edit by the item numbers shown in the list. Stored durably and scoped to the user.",
+	"dateCreated": "2026-06-15T00:00:00Z",
+	"operation": {
+		"adapter": "memory:manage",
+		"toolName": "memory",
+		"input": {
+			"type": "object",
+			"properties": {
+				"command": { "type": "string", "enum": ["recall", "remember", "update", "forget"], "description": "Action to perform." },
+				"text": { "type": "string", "description": "Item text — for 'remember' (the new item) and 'update' (the replacement)." },
+				"n": { "type": "integer", "description": "1-based item number — for 'update' and 'forget', as shown in the numbered list." },
+				"path": { "type": "string", "description": "Memory list path (default 'w/memory')." },
+				"displayField": { "type": "string", "description": "recall only: when the path holds a map of records, the entry field to show as each line (default 'text')." },
+				"noteField": { "type": "string", "description": "recall only: optional entry field appended after the line as a note." }
+			},
+			"required": ["command"]
+		},
+		"output": {
+			"description": "recall → a numbered text block, or null when empty. remember/update/forget → a small status map (e.g. {remembered|updated|forgotten: true, n, count})."
+		}
+	}
+}

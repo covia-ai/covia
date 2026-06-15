@@ -108,7 +108,7 @@ This generalises all other resolution mechanisms — workspace reads, asset fetc
 {"op": "v/ops/covia/read", "input": {"path": "w/docs/rules"}}
 
 // Assemble the user's memory as an always-in-context numbered list (see §5.6)
-{"op": "v/ops/memory/recall", "input": {"path": "w/memory"}, "label": "User memory"}
+{"op": "v/ops/memory", "input": {"command": "recall", "path": "w/memory"}, "label": "User memory"}
 
 // Call a remote venue
 {"op": "v/ops/grid/run", "input": {"venue": "did:web:compliance.example.com", "operation": "policy:latest"}}
@@ -300,12 +300,12 @@ An agent can add context to its own state during a run (via `covia_write` to its
 
 ### 5.6 Always-in-context user memory (assemble op)
 
-A purpose-built assemble op computes context dynamically. `v/ops/memory/recall` renders the user's memory — a simple, durable, numbered list — as an always-present block:
+A purpose-built assemble op computes context dynamically. The single `v/ops/memory` tool (one tool, dispatched by a `command`) renders the user's memory — a durable numbered list — as an always-present block via `command: "recall"`:
 
 ```json
 // agent config
 "context": [
-  {"op": "v/ops/memory/recall", "input": {"path": "w/memory"}, "label": "User memory"}
+  {"op": "v/ops/memory", "input": {"command": "recall", "path": "w/memory"}, "label": "User memory"}
 ]
 ```
 
@@ -317,7 +317,7 @@ Every turn this injects:
 2. Anxious about heart health
 ```
 
-The numbers are stable edit handles: the agent (or the user, via the agent) maintains the list with `memory_remember` (append), `memory_update <n>`, and `memory_forget <n>`. The op returns the bare numbered list (the heading comes from the entry `label`), returns nothing when the list is empty (so the entry is skipped), and is read-only — exactly the assemble-op contract from §3.6.
+The numbers are stable edit handles: the agent (or the user, via the agent) maintains the list with the same `memory` tool — `command: "remember"` (append), `"update"` (replace item *n*), `"forget"` (remove item *n*). `recall` can also point at a **map** collection (e.g. a slug-keyed clinical problem list) via a `displayField`, rendering its active/surfaceable values as the numbered list. It returns the bare numbered list (the heading comes from the entry `label`), returns nothing when empty (so the entry is skipped), and is read-only — exactly the assemble-op contract from §3.6.
 
 ---
 
