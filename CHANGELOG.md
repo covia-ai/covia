@@ -8,6 +8,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+- **User memory.** A single `memory` tool (`v/ops/memory`, dispatched by a `command`: `recall` / `remember` / `update` / `forget`) maintains a per-user numbered list of durable facts in the user's workspace — one tool definition rather than four ops, to keep agent tool context small. `recall` doubles as a `config.context` assemble-op (injected as system context every turn) and renders either a flat list or, given a `displayField`, the active/surfaceable values of a slug-keyed map collection — skipping entries whose `status` is not `active`, that are `surfacing: hold`, or that carry a `mergedInto` — so a curated store (e.g. a problem list) can be surfaced with no separate copy. Mutations rewrite the whole list value under LWW, so removals are durable. See `venue/docs/AGENT_CONTEXT.md`.
+- `venue/docs/AGENT_CONTEXT.md` (renamed from `CONTEXT.md`): the agent-context design — entry forms, the specify→return→render data-shape contract, and the failure model.
+
 ### Fixed
 - `covia:delete` is now durable. The user-writable namespaces (`w/`, `o/`, `h/`) previously merged per-entry (a union), so a deleted key was re-introduced whenever the live cursor merged with a pre-delete snapshot — which the persistence propagator does on every announce round-trip (deletes "came back" within ~30s and after restart). These namespaces are now whole `{updated, data}` values replaced as a unit under LWW (`LWWWrapperLattice`), the same trade the `:schedule` slot made. Write stamps are strictly increasing (`max(now, current+1)`), so fast sequential writes in the same millisecond each dominate the value they replace in either merge order. The wrapper is storage shape only — paths, reads, and lists are unchanged; pre-existing unwrapped workspace data remains readable and is migrated in place by the first write.
 
@@ -17,6 +21,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Named catalog references (`did:web:<venue>/v/ops/<name>`) resolve as fetches too: the name is resolved to an asset id at the publishing venue (names are mutable bindings, trusted at fetch time), then the definition travels over the same hash-verified path. The job record carries the resolved hash — name→hash provenance at invoke time. Fetches remain transient; pin is the explicit adoption act.
 - `asset:pin` can now actually adopt remote assets: pinning a `did:web:…` reference (hash or named form) fetches the definition hash-verified — plus declared content, verified against its sha256 — and stores it durably in the caller's namespace.
 - Fetched definitions are cached in memory by content hash (immutable, so never stale): repeat invokes of a remote reference no longer re-fetch, and a cached definition resolves even if the reference's venue hint is unreachable. The cache is transient plumbing, not adoption.
+- **Agent context resolution fails loudly, not silently.** A `config.context` / `state.context` that is present but not an array now throws (a malformed value was previously dropped, leaving the agent with no context and no signal). A context entry that *errors* while resolving — an assemble op that throws or times out, a read that genuinely fails — now injects a visible `[Context: <label> — unavailable: <reason>]` element instead of vanishing, so the model can adapt; an absent/empty source is still skipped, and a `required` failure still throws. See `venue/docs/AGENT_CONTEXT.md`.
 
 ## [0.1.0] - 2026-06-12
 
