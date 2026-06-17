@@ -354,14 +354,16 @@ public class ContextBuilderTest {
 	@Test
 	public void testDefaultToolsCached() {
 		// Default tools resolve to the SAME vector across calls — the
-		// per-engine cache returns the cached AVector instance.
+		// per-engine cache returns the cached AVector instance. Default tools
+		// are opt-in (#92), so the config must request them.
+		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
 		ContextBuilder.ContextResult r1 = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(config, null)
 			.withSystemPrompt()
 			.withTools()
 			.build();
 		ContextBuilder.ContextResult r2 = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(config, null)
 			.withSystemPrompt()
 			.withTools()
 			.build();
@@ -379,8 +381,10 @@ public class ContextBuilderTest {
 
 	@Test
 	public void testDefaultToolsBuilt() {
+		// Default tools are opt-in (#92) — request them via config.
+		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(config, null)
 			.withSystemPrompt()
 			.withTools()
 			.build();
@@ -526,8 +530,10 @@ public class ContextBuilderTest {
 	public void testToolDescriptionContainsCatalogPath() {
 		// The LLM-visible description should be prefixed with "Operation: <path>"
 		// so the model sees the lattice address co-located with the tool name.
+		// covia_read lives in the default pack, which is opt-in (#92).
+		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(config, null)
 			.withSystemPrompt()
 			.withTools()
 			.build();
@@ -631,8 +637,11 @@ public class ContextBuilderTest {
 	public void testFullBuildShape() {
 		AVector<ACell> inbox = Vectors.of((ACell) Strings.create("Do something"));
 
+		// defaultTools: true so the build carries the default pack (#92) and the
+		// "tools present" assertion below remains meaningful.
+		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(config, null)
 			.withSystemPrompt()
 			.withContextEntries(Maps.empty())
 			.withPendingResults(null)

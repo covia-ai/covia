@@ -617,7 +617,11 @@ public class ContextBuilder {
 	}
 
 	/**
-	 * Builds tool list from config (defaults + config tools) and extracts caps.
+	 * Builds tool list from config and extracts caps.
+	 *
+	 * <p>By default the agent is advertised only the tools it declares in its
+	 * {@code tools} array (strict allowlist). Setting {@code defaultTools: true}
+	 * in the config opts into the additional {@link #DEFAULT_TOOL_OPS} pack.</p>
 	 *
 	 * <p>The default-tool resolution is cached per Engine via
 	 * {@link #DEFAULT_TOOL_CACHE}: the first call per engine builds the 18
@@ -627,7 +631,12 @@ public class ContextBuilder {
 	 */
 	@SuppressWarnings("unchecked")
 	public ContextBuilder withTools() {
-		boolean useDefaults = config == null || !CVMBool.FALSE.equals(config.get(K_DEFAULT_TOOLS));
+		// Strict allowlist by default (#92): an agent is advertised exactly the
+		// tools it declares, unless it explicitly opts into the default pack
+		// with defaultTools: true. This is fail-safe — a newly-authored agent
+		// does not silently receive 18 extra ops (incl. covia/inspect,
+		// covia/delete, agent/create) it never declared.
+		boolean useDefaults = config != null && CVMBool.TRUE.equals(config.get(K_DEFAULT_TOOLS));
 		configToolMap = new HashMap<>();
 
 		AVector<ACell> baseTools = Vectors.empty();
