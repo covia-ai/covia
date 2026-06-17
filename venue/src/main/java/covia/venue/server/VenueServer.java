@@ -350,10 +350,16 @@ public class VenueServer {
 		if (port==null) port=8080;
 		ServerConnector connector = new ServerConnector(jettyServer);
 		connector.setPort(port);
+		// Restrict the listening interface when a bind address is configured.
+		// When unset, Jetty binds the wildcard address (0.0.0.0 / all
+		// interfaces) — the historical default.
+		String bindAddress = config.getBindAddress();
+		if (bindAddress != null) connector.setHost(bindAddress);
 		// Deeper accept queue than the JDK/Jetty default (50) so bursts of
 		// concurrent connections queue rather than being refused under load.
 		connector.setAcceptQueueSize(config.getAcceptQueueSize());
 		jettyServer.addConnector(connector);
+		log.info("Venue HTTP connector bound to {}:{}", (bindAddress != null) ? bindAddress : "0.0.0.0", port);
 	}
 
 	private Javalin buildApp() {
