@@ -78,7 +78,7 @@ A template is any CVM map. The following fields are recognised:
 | `caps` | array | Capability restrictions (array of {with, can} objects) |
 | `context` | array | Context loading entries (asset hashes, workspace paths) |
 | `responseFormat` | object | Structured output schema ({name, schema}) |
-| `defaultTools` | boolean | Whether to include platform default tools (default: true) |
+| `defaultTools` | boolean | Whether to include the platform default tool pack on top of `tools` (default: false — strict allowlist) |
 | `state` | any | Initial state for the agent (optional) |
 
 All fields are optional. Missing fields get platform defaults.
@@ -260,7 +260,7 @@ Template JSON files live in `venue/src/main/resources/agent-templates/`.
 
 ### Default template (Phase 3b — not yet implemented)
 
-Currently when `agent:create` is called with no config, the hardcoded `DEFAULT_TOOL_OPS` list in `LLMAgentAdapter` (19 tools) is merged in. A future change should replace this with the `worker` template as the default, giving a smaller, more focused default tool set and resolving issue #60. This is a breaking change for existing agents that rely on default tools like `agent:create` or `asset:store`, so needs explicit review before rollout.
+As of #92, agents are strict-allowlist by default: an agent is advertised only the tools it declares in `config.tools`, and opts into the `DEFAULT_TOOL_OPS` pack with `defaultTools: true`. An agent created with no config and no `defaultTools` therefore has no tools. A future change may go further and make a focused template (e.g. `worker`) the default starting point for `agent:create` with no config, resolving issue #60.
 
 ---
 

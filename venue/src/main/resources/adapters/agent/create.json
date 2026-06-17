@@ -16,7 +16,8 @@
 							"properties": {
 								"operation": { "type": "string", "description": "Transition operation for the agent — must be a resolvable lattice path (e.g. 'v/ops/llmagent/chat' for persona chat, 'v/ops/goaltree/chat' for goal-decomposing planners). Bare adapter shorthand like 'llmagent:chat' will NOT resolve. Determines how the agent processes tasks." },
 								"systemPrompt": { "type": "string", "description": "System prompt defining the agent's role and behaviour" },
-								"tools": { "type": "array", "description": "Tool operations the agent can call (e.g. ['covia:read', 'covia:write']). Default tools are included automatically." },
+								"tools": { "type": "array", "description": "Tool operations the agent can call (e.g. ['covia:read', 'covia:write']). This is the agent's exact allowlist — it is advertised only these tools unless defaultTools is true." },
+								"defaultTools": { "type": "boolean", "description": "Opt into the built-in default tool pack (covia read/write/list/etc., asset, grid, schema ops) on top of the declared tools. Defaults to false: the agent sees only its own 'tools' list. Set true for exploratory agents that want the full toolkit without enumerating it." },
 								"model": { "type": "string", "description": "LLM model name (default: gpt-5.4-mini)" },
 								"caps": { "type": "array", "description": "Capability restrictions — array of {with, can} objects limiting what the agent can access" }
 							},

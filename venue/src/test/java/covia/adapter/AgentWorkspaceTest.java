@@ -11,6 +11,7 @@ import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
@@ -47,12 +48,19 @@ public class AgentWorkspaceTest {
 
 	@Test
 	public void testAgentWorkspaceAcrossRuns() {
-		// Create an LLM agent that uses workspace tools
+		// Create an LLM agent that uses workspace tools. Tools are strict
+		// allowlist (#92): declare exactly the workspace ops the workspacellm
+		// test op calls (covia_write / covia_append / covia_read) so the
+		// tool-name → operation-path mapping resolves.
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "workspace-agent",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
 				AgentState.KEY_STATE, Maps.of("config", Maps.of(
-					"llmOperation", "v/test/ops/workspacellm"))),
+					"llmOperation", "v/test/ops/workspacellm",
+					"tools", Vectors.of(
+						Strings.create("v/ops/covia/write"),
+						Strings.create("v/ops/covia/append"),
+						Strings.create("v/ops/covia/read"))))),
 			ALICE).awaitResult(5000);
 
 		// Run 1: agent writes knowledge, appends to log, reads back
