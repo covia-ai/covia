@@ -378,6 +378,19 @@ public class VenueServerTest {
 	}
 
 	@Test
+	public void testBindAddressConfig() {
+		// Unset bindAddress → null, so the connector binds all interfaces
+		// (0.0.0.0). Preserves the historical default (issue #129).
+		assertNull(new Config(Maps.empty()).getBindAddress(),
+			"bindAddress should default to null (wildcard bind)");
+
+		// Explicit bindAddress is returned verbatim for connector.setHost(...)
+		Config loopback = new Config(Maps.of(Config.BIND_ADDRESS, Strings.create("127.0.0.1")));
+		assertEquals("127.0.0.1", loopback.getBindAddress(),
+			"Configured bindAddress should be returned for the connector");
+	}
+
+	@Test
 	public void testAnonymousInvokeGetsPublicDID() throws Exception {
 		// Invoke via HTTP client without auth — should get public DID as caller
 		ACell input = Maps.of("message", "anonymous test");

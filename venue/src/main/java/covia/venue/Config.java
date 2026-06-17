@@ -59,6 +59,14 @@ public class Config {
 	/** Key for venue port */
 	public static final AString PORT = Strings.intern("port");
 
+	/**
+	 * Key for the HTTP connector's bind address (network interface to listen
+	 * on). Distinct from {@link #HOSTNAME}, which is the venue's advertised
+	 * public host. When unset the connector binds all interfaces (0.0.0.0);
+	 * set to {@code "127.0.0.1"} to restrict to loopback.
+	 */
+	public static final AString BIND_ADDRESS = Strings.intern("bindAddress");
+
 	/** Key for the HTTP connector's accept-queue (backlog) size */
 	public static final AString ACCEPT_QUEUE_SIZE = Strings.intern("acceptQueueSize");
 
@@ -239,6 +247,22 @@ public class Config {
 	public String getHostname() {
 		AString hostname = RT.ensureString(config.get(HOSTNAME));
 		return (hostname != null) ? hostname.toString() : "localhost";
+	}
+
+	/**
+	 * Get the configured bind address (network interface the HTTP connector
+	 * listens on).
+	 *
+	 * <p>Unlike {@link #getHostname()} this is a socket bind address, not the
+	 * advertised public host. When unset, returns {@code null} and the
+	 * connector binds all interfaces (0.0.0.0) — preserving the historical
+	 * default. Set to {@code "127.0.0.1"} to restrict the venue to loopback.</p>
+	 *
+	 * @return bind address string, or {@code null} to bind all interfaces
+	 */
+	public String getBindAddress() {
+		AString bindAddress = RT.ensureString(config.get(BIND_ADDRESS));
+		return (bindAddress != null) ? bindAddress.toString() : null;
 	}
 
 	/**
