@@ -276,6 +276,31 @@ public class JobManager {
 	}
 
 	/**
+	 * Validate a completing one-shot job's result against the operation's
+	 * declared output schema, per the operator-configured {@code outputValidation}
+	 * mode ({@code off}/{@code warn}/{@code strict}). Off (the default) does
+	 * nothing — no validation, no logging — so results are never checked unless
+	 * an operator opts in. {@code warn} logs a mismatch; {@code strict} throws so
+	 * the job fails. Unlike input validation (a per-operation {@code strict}
+	 * contract), this is a venue-level operator policy.
+	 *
+	 * @throws IllegalArgumentException in {@code strict} mode when the result
+	 *         does not satisfy the operation's output schema
+	 */
+	public void validateOutput(AMap<AString, ACell> meta, ACell result) {
+		String mode = engine.config().getOutputValidation();
+		if (mode == null || "off".equals(mode)) return;
+		AMap<AString, ACell> outputSchema = getMap(RT.getIn(meta, Fields.OPERATION, Fields.OUTPUT));
+		if (outputSchema == null || outputSchema.isEmpty()) return;
+		String err = JsonSchema.validate(outputSchema, result);
+		if (err == null) return;
+		if ("strict".equals(mode)) {
+			throw new IllegalArgumentException("Output schema violation: " + err);
+		}
+		log.warn("Output schema violation for {}: {}", AAdapter.getAdapterName(meta), err);
+	}
+
+	/**
 	 * Shared invocation prelude: validates metadata, auth, caps, schema;
 	 * returns the adapter ready to invoke. Used by both
 	 * {@link #invokeOperation(AMap, ACell, RequestContext)} (Job path) and

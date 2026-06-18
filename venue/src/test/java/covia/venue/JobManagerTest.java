@@ -275,4 +275,46 @@ public class JobManagerTest {
 		assertTrue(f.cancel(true));
 		assertTrue(f.isCancelled());
 	}
+
+	// ========== Output-schema validation (operator-gated, default off) ==========
+
+	/** Operation meta declaring an {@code object} output schema. */
+	private static AMap<AString, ACell> metaWithObjectOutput() {
+		return Maps.of(Fields.OPERATION, Maps.of(
+			Fields.ADAPTER, Strings.create("test:out"),
+			Fields.OUTPUT, Maps.of(Strings.create("type"), Strings.create("object"))));
+	}
+
+	@Test
+	public void testOutputValidationOffIgnoresBadResult() {
+		// Default config → outputValidation off → a non-object result (which
+		// violates the schema) must NOT raise. No validation, no logging.
+		Engine eng = Engine.createTemp(null);
+		eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object"));
+	}
+
+	@Test
+	public void testOutputValidationStrictFailsBadResult() {
+		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
+		assertThrows(IllegalArgumentException.class,
+			() -> eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object")));
+		// A conforming result (an object) passes.
+		eng.jobs().validateOutput(metaWithObjectOutput(), Maps.empty());
+	}
+
+	@Test
+	public void testOutputValidationWarnDoesNotFail() {
+		// warn logs a mismatch but completes — must not raise.
+		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("warn")));
+		eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object"));
+	}
+
+	@Test
+	public void testOutputValidationNoSchemaIsNoop() {
+		// An operation with no output schema is never validated, even in strict.
+		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, Strings.create("test:out")));
+		eng.jobs().validateOutput(meta, Strings.create("anything"));
+	}
 }

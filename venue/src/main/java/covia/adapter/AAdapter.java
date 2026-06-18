@@ -310,6 +310,9 @@ public abstract class AAdapter {
         // Default one-shot: wire future to job lifecycle
         job.setStatus(Status.STARTED);
         invokeFuture(ctx, meta, input).thenAccept(result -> {
+            // Operator-gated output-schema validation (default off; throws in
+            // strict mode → handled below as a job failure).
+            if (engine != null) engine.jobs().validateOutput(meta, result);
             job.completeWith(result);
         })
         .exceptionally(e -> {

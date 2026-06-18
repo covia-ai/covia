@@ -179,6 +179,9 @@ public class Config {
 	 */
 	public static final AString FIX_MCP_STRINGS = Strings.intern("fixMcpStrings");
 
+	/** Key for the operator's output-schema validation mode (off/warn/strict). */
+	public static final AString OUTPUT_VALIDATION = Strings.intern("outputValidation");
+
 	/**
 	 * Key for the per-venue secrets bootstrap map.
 	 *
@@ -524,6 +527,20 @@ public class Config {
 	public boolean isFixMcpStrings() {
 		ACell v = config.get(FIX_MCP_STRINGS);
 		return (v == null) || RT.bool(v);
+	}
+
+	/**
+	 * Output-schema validation mode applied when a one-shot job completes:
+	 * {@code "off"} (default — no validation, no logging), {@code "warn"} (log a
+	 * warning if the result does not match the operation's output schema), or
+	 * {@code "strict"} (fail the job). This is an operator decision (venue
+	 * config), distinct from the per-operation {@code strict} flag that governs
+	 * input validation — and off by default, so nothing is validated or logged
+	 * unless an operator opts in.
+	 */
+	public String getOutputValidation() {
+		AString v = RT.ensureString(config.get(OUTPUT_VALIDATION));
+		return (v != null) ? v.toString() : "off";
 	}
 
 	// ========== Server config accessors ==========
