@@ -765,7 +765,7 @@ public class AgentAdapterTest {
 		// A never-completing placeholder Job holds the slot.
 		Job placeholder = Job.create(Maps.of(Fields.STATUS, Status.STARTED));
 		agentAdapter.reserveChatSlotForTest(
-			Strings.create("chat-busy-agent"), sid, placeholder);
+			ALICE_DID, Strings.create("chat-busy-agent"), sid, placeholder);
 
 		// Now an agent_chat on the same session must fail fast
 		Job chatJob = engine.jobs().invokeOperation(

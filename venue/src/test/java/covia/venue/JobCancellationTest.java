@@ -176,7 +176,7 @@ public class JobCancellationTest {
 		covia.adapter.AgentAdapter agentAdapter =
 			(covia.adapter.AgentAdapter) engine.getAdapter("agent");
 		AString agentIdStr = Strings.create("chat-cancel-agent");
-		assertNotNull(agentAdapter.getActiveChatForTest(agentIdStr, sid),
+		assertNotNull(agentAdapter.getActiveChatForTest(ALICE_DID, agentIdStr, sid),
 			"Chat slot should be reserved before cancel");
 
 		chatJob.cancel();
@@ -186,7 +186,7 @@ public class JobCancellationTest {
 		// slot immediately via the cancel hook registered in handleChat.
 		// No need to wait for the run loop — the slot is freed synchronously
 		// when chatJob.cancel() fires the hook.
-		assertNull(agentAdapter.getActiveChatForTest(agentIdStr, sid),
+		assertNull(agentAdapter.getActiveChatForTest(ALICE_DID, agentIdStr, sid),
 			"Chat slot should be released immediately on caller-Job cancel");
 	}
 

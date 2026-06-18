@@ -66,6 +66,7 @@ import covia.adapter.agent.LLMAgentAdapter;
 import covia.adapter.UCANAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
+import covia.exception.CoviaException;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Grid;
@@ -1713,16 +1714,23 @@ public class Engine {
 		if (name.isEmpty()) return null;
 
 		User user = venueState.users().get(callerDID);
-		if (user == null) return null;
+		if (user == null) return null;   // identity has no store — genuinely absent
 
+		AString value;
 		try {
 			byte[] encKey = SecretStore.deriveKey(keyPair);
-			AString value = user.secrets().decrypt(Strings.create(name), encKey);
-			return (value != null) ? value.toString() : null;
+			value = user.secrets().decrypt(Strings.create(name), encKey);
 		} catch (Exception e) {
-			log.debug("Could not resolve secret '{}': {}", name, e.getMessage());
-			return null;
+			// A decrypt/key failure is NOT the same as "secret not set".
+			// Collapsing both to null (the old behaviour) masked real errors as
+			// absence and made #91-class identity/key misconfigurations
+			// undiagnosable — a failed resolution looked identical to a missing
+			// key. Surface it loudly instead. Values are never logged.
+			log.warn("Secret '{}' resolution errored for caller {}: {}",
+				name, callerDID, e.toString());
+			throw new CoviaException("Secret resolution failed for '" + name + "'", e);
 		}
+		return (value != null) ? value.toString() : null;   // null == genuinely absent
 	}
 
 	/**
