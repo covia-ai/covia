@@ -11,13 +11,16 @@ import convex.core.data.AccountKey;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.auth.jwt.JWT;
 import convex.auth.ucan.UCAN;
 import convex.auth.ucan.UCANValidator;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.lattice.CapabilityChecker;
 import covia.venue.Auth;
+import covia.venue.RequestContext;
 import covia.venue.auth.JWKSClient;
 import covia.venue.auth.OAuthConfig;
 import io.javalin.Javalin;
@@ -310,5 +313,44 @@ public class AuthMiddleware {
 	 */
 	public static AString getCallerDID(Context ctx) {
 		return ctx.attribute(CALLER_DID_ATTR);
+	}
+
+	/**
+	 * Attach transport-presented UCAN authority to a request context — the single
+	 * seam used by every invoke transport (REST, MCP). Two things, in order:
+	 * <ol>
+	 *   <li><b>Proofs</b> — the cryptographically-verified tokens, for cross-user
+	 *       grant checks (unchanged behaviour).</li>
+	 *   <li><b>Self-attenuation ceiling</b> — capabilities the <em>owner</em>
+	 *       authored over their own resources, restricting this session. Set as
+	 *       {@code caps} so {@code enforceCaps} applies them as a ceiling. Closes
+	 *       the gap where a presented attenuated token ran with full authority
+	 *       (#131).</li>
+	 * </ol>
+	 *
+	 * <p>The owner is the authority over its own namespace; the venue only
+	 * enforces. So the ceiling is taken from tokens the caller authored for
+	 * itself ({@code iss == aud == caller}). A ceiling can only <em>narrow</em>
+	 * the caller's own authority — never widen it — so this is escalation-safe.
+	 * With no token presented, nothing is attached and access is unrestricted
+	 * (the common case).</p>
+	 *
+	 * @param rctx context for the authenticated caller (caller DID already set)
+	 * @param bearer Authorization bearer JWT, or null
+	 * @param ucans transport {@code ucans} vector, or null
+	 * @return rctx with proofs and (if any) the self-cap ceiling attached
+	 */
+	public static RequestContext withTransportAuth(RequestContext rctx, AString bearer,
+			AVector<ACell> ucans) {
+		AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans);
+		if (proofs == null) return rctx;
+		rctx = rctx.withProofs(proofs);
+		AString caller = rctx.getCallerDID();
+		long now = System.currentTimeMillis() / 1000;
+		// TODO(convex-release): replace selfCapabilities with
+		// UCANValidator.capabilitiesFor once covia's Convex dependency includes it.
+		AVector<ACell> caps = CapabilityChecker.selfCapabilities(proofs, caller, caller, now);
+		if (caps != null) rctx = rctx.withCaps(caps);
+		return rctx;
 	}
 }

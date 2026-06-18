@@ -10,7 +10,6 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -443,15 +442,13 @@ public class CoviaAPI extends ACoviaAPI {
 		ACell input=RT.getIn(req, "input");
 		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
 
-		// Attach UCAN proofs. Two transport channels are accepted and merged
-		// through the same trust boundary (parseTransportUCANs):
-		//   1. `ucans` array in the request envelope
-		//   2. `Authorization: Bearer <ucan-jwt>` (IETF UCAN-HTTP) stashed
-		//      by AuthMiddleware as UCAN_BEARER_ATTR when present
+		// Attach transport UCAN authority — proofs (cross-user grants) and the
+		// self-attenuation ceiling (#131) — from both channels: the `ucans`
+		// envelope array and an `Authorization: Bearer <ucan-jwt>` (IETF
+		// UCAN-HTTP) stashed by AuthMiddleware as UCAN_BEARER_ATTR.
 		AVector<ACell> ucans = RT.getIn(req, "ucans");
 		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-		AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans);
-		if (proofs != null) rctx = rctx.withProofs(proofs);
+		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans);
 
 		try {
 			Job job=engine().jobs().invokeOperation(op,input,rctx);

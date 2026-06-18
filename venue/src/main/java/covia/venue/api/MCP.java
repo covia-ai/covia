@@ -10,7 +10,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.auth.ucan.UCANValidator;
 import convex.core.json.schema.JsonSchema;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -385,13 +384,12 @@ public class MCP extends McpServer {
 				AString callerDID = (ctx != null) ? AuthMiddleware.getCallerDID(ctx) : null;
 				RequestContext rctx = RequestContext.of(callerDID);
 
-				// Extract UCAN proofs from both transport channels:
-				//   1. `ucans` in tool arguments
-				//   2. `Authorization: Bearer <ucan-jwt>` stashed by AuthMiddleware
+				// Attach transport UCAN authority — proofs (cross-user grants)
+				// and the self-attenuation ceiling (#131) — from the `ucans` tool
+				// argument and an Authorization bearer UCAN.
 				AVector<ACell> ucans = RT.getIn(arguments, Fields.UCANS);
 				AString bearer = (ctx != null) ? ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR) : null;
-				AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans);
-				if (proofs != null) rctx = rctx.withProofs(proofs);
+				rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans);
 
 				if (engine().config().isFixMcpStrings()) {
 					arguments = coerceJsonStringArgs(arguments, opRef);

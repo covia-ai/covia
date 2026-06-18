@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
+import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -30,7 +31,7 @@ public class CapabilityCheckerTest {
 
 	@Test
 	public void testNullCapsAllowsEverything() {
-		assertNull(CapabilityChecker.check(null, "v/ops/covia/write",
+		assertNull(check(null, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/anything"))));
 	}
 
@@ -87,19 +88,29 @@ public class CapabilityCheckerTest {
 		return result;
 	}
 
+	// Owner under whom resources/caps are canonicalised for these unit checks.
+	// Bare caps and bare resources are both prefixed with this DID, so the
+	// existing bare↔bare match/no-match outcomes are preserved; DID-URL and
+	// scheme-qualified (file://, dlfs://) resources are absolute and unchanged.
+	private static final AString TEST_OWNER = Strings.create("did:key:zTestOwner");
+
+	private static String check(AVector<ACell> caps, String operation, ACell input) {
+		return CapabilityChecker.check(caps, operation, input, TEST_OWNER);
+	}
+
 	// ========== Full check — write access ==========
 
 	@Test
 	public void testAllowWriteToGrantedPath() {
 		AVector<ACell> caps = caps("w/decisions", "crud/write");
-		assertNull(CapabilityChecker.check(caps, "v/ops/covia/write",
+		assertNull(check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/decisions/INV-123"))));
 	}
 
 	@Test
 	public void testDenyWriteToUngrantedPath() {
 		AVector<ACell> caps = caps("w/decisions", "crud/write");
-		assertNotNull(CapabilityChecker.check(caps, "v/ops/covia/write",
+		assertNotNull(check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme"))));
 	}
 
@@ -108,14 +119,14 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testAllowReadFromGrantedPath() {
 		AVector<ACell> caps = caps("w/enrichments", "crud/read");
-		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
+		assertNull(check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/enrichments/INV-123"))));
 	}
 
 	@Test
 	public void testDenyReadFromUngrantedPath() {
 		AVector<ACell> caps = caps("w/enrichments", "crud/read");
-		assertNotNull(CapabilityChecker.check(caps, "v/ops/covia/read",
+		assertNotNull(check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme"))));
 	}
 
@@ -124,14 +135,14 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testExactPathMatch() {
 		AVector<ACell> caps = caps("w/vendor-records", "crud/read");
-		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
+		assertNull(check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records"))));
 	}
 
 	@Test
 	public void testPathPrefixCoversChildren() {
 		AVector<ACell> caps = caps("w/vendor-records", "crud/read");
-		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
+		assertNull(check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme Corp"))));
 	}
 
@@ -139,14 +150,14 @@ public class CapabilityCheckerTest {
 	public void testTrailingSlashCoversBase() {
 		// "w/vendor-records/" should still cover "w/vendor-records"
 		AVector<ACell> caps = caps("w/vendor-records/", "crud/read");
-		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
+		assertNull(check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records"))));
 	}
 
 	@Test
 	public void testTrailingSlashCoversChildren() {
 		AVector<ACell> caps = caps("w/vendor-records/", "crud/read");
-		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
+		assertNull(check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme Corp"))));
 	}
 
@@ -160,15 +171,15 @@ public class CapabilityCheckerTest {
 			"w/vendor-records", "crud/read"
 		);
 		// Allowed
-		assertNull(CapabilityChecker.check(caps, "v/ops/covia/write",
+		assertNull(check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/decisions/INV-123"))));
-		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
+		assertNull(check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/enrichments/INV-123"))));
-		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
+		assertNull(check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme"))));
 
 		// Denied — write to enrichments (only has read)
-		assertNotNull(CapabilityChecker.check(caps, "v/ops/covia/write",
+		assertNotNull(check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/enrichments/INV-123"))));
 	}
 
@@ -177,27 +188,27 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testWildcardCapsAllowsEverything() {
 		AVector<ACell> caps = caps("", "*");
-		assertNull(CapabilityChecker.check(caps, "v/ops/covia/write",
+		assertNull(check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/anything"))));
-		assertNull(CapabilityChecker.check(caps, "v/ops/grid/run",
+		assertNull(check(caps, "v/ops/grid/run",
 			Maps.of(Strings.create("operation"), Strings.create("some-hash"))));
 	}
 
 	@Test
 	public void testCrudPrefixCoversReadWriteDelete() {
 		AVector<ACell> caps = caps("w/", "crud");
-		assertNull(CapabilityChecker.check(caps, "v/ops/covia/read",
+		assertNull(check(caps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/anything"))));
-		assertNull(CapabilityChecker.check(caps, "v/ops/covia/write",
+		assertNull(check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/anything"))));
-		assertNull(CapabilityChecker.check(caps, "v/ops/covia/delete",
+		assertNull(check(caps, "v/ops/covia/delete",
 			Maps.of(Strings.create("path"), Strings.create("w/anything"))));
 	}
 
 	@Test
 	public void testReadDoesNotCoverWrite() {
 		AVector<ACell> caps = caps("w/", "crud/read");
-		assertNotNull(CapabilityChecker.check(caps, "v/ops/covia/write",
+		assertNotNull(check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/anything"))));
 	}
 
@@ -206,19 +217,19 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testAgentRequestCap() {
 		AVector<ACell> caps = caps("g/Alice", "agent/request");
-		assertNull(CapabilityChecker.check(caps, "v/ops/agent/request",
+		assertNull(check(caps, "v/ops/agent/request",
 			Maps.of(Strings.create("agentId"), Strings.create("Alice"))));
 		// Different agent — denied
-		assertNotNull(CapabilityChecker.check(caps, "v/ops/agent/request",
+		assertNotNull(check(caps, "v/ops/agent/request",
 			Maps.of(Strings.create("agentId"), Strings.create("Bob"))));
 	}
 
 	@Test
 	public void testAgentPrefixCoversAll() {
 		AVector<ACell> caps = caps("g/", "agent");
-		assertNull(CapabilityChecker.check(caps, "v/ops/agent/request",
+		assertNull(check(caps, "v/ops/agent/request",
 			Maps.of(Strings.create("agentId"), Strings.create("Alice"))));
-		assertNull(CapabilityChecker.check(caps, "v/ops/agent/message",
+		assertNull(check(caps, "v/ops/agent/message",
 			Maps.of(Strings.create("agentId"), Strings.create("Bob"))));
 	}
 
@@ -227,7 +238,7 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testInvokeCap() {
 		AVector<ACell> caps = caps("", "invoke");
-		assertNull(CapabilityChecker.check(caps, "v/ops/grid/run",
+		assertNull(check(caps, "v/ops/grid/run",
 			Maps.of(Strings.create("operation"), Strings.create("some-hash"))));
 	}
 
@@ -242,7 +253,7 @@ public class CapabilityCheckerTest {
 		AVector<ACell> caps = caps(
 			"w/decisions/", "crud",
 			"w/", "crud/read");
-		String msg = CapabilityChecker.check(caps, "v/ops/covia/write",
+		String msg = check(caps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/audits/INV-123")));
 		assertNotNull(msg);
 		assertTrue(msg.contains("Capability denied"), "Should be flagged as denial: " + msg);
@@ -262,7 +273,7 @@ public class CapabilityCheckerTest {
 	public void testDenialMessageWithEmptyCaps() {
 		// Empty caps array = deny-all. Message should still be sensible
 		// rather than rendering as nonsense.
-		String msg = CapabilityChecker.check(Vectors.empty(), "v/ops/covia/write",
+		String msg = check(Vectors.empty(), "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/anything")));
 		assertNotNull(msg);
 		assertTrue(msg.contains("Your capabilities are: (none)"),
@@ -278,16 +289,16 @@ public class CapabilityCheckerTest {
 			"w/", "crud/read"
 		);
 		// Carol can write decisions
-		assertNull(CapabilityChecker.check(carolCaps, "v/ops/covia/write",
+		assertNull(check(carolCaps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/decisions/INV-2024-0891"))));
 		// Carol can read anything in workspace
-		assertNull(CapabilityChecker.check(carolCaps, "v/ops/covia/read",
+		assertNull(check(carolCaps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/enrichments/INV-2024-0891"))));
 		// Carol CANNOT write to vendor records (only has read on w/)
-		assertNotNull(CapabilityChecker.check(carolCaps, "v/ops/covia/write",
+		assertNotNull(check(carolCaps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme Corp"))));
 		// Carol CANNOT write enrichments
-		assertNotNull(CapabilityChecker.check(carolCaps, "v/ops/covia/write",
+		assertNotNull(check(carolCaps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/enrichments/INV-2024-0891"))));
 	}
 
@@ -300,19 +311,19 @@ public class CapabilityCheckerTest {
 			"w/invoices", "crud/read"
 		);
 		// Bob can write enrichments
-		assertNull(CapabilityChecker.check(bobCaps, "v/ops/covia/write",
+		assertNull(check(bobCaps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/enrichments/INV-2024-0891"))));
 		// Bob can read vendor records
-		assertNull(CapabilityChecker.check(bobCaps, "v/ops/covia/read",
+		assertNull(check(bobCaps, "v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme Corp"))));
 		// Bob can list vendor records
-		assertNull(CapabilityChecker.check(bobCaps, "v/ops/covia/list",
+		assertNull(check(bobCaps, "v/ops/covia/list",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records"))));
 		// Bob CANNOT write to decisions
-		assertNotNull(CapabilityChecker.check(bobCaps, "v/ops/covia/write",
+		assertNotNull(check(bobCaps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/decisions/INV-2024-0891"))));
 		// Bob CANNOT write vendor records
-		assertNotNull(CapabilityChecker.check(bobCaps, "v/ops/covia/write",
+		assertNotNull(check(bobCaps, "v/ops/covia/write",
 			Maps.of(Strings.create("path"), Strings.create("w/vendor-records/Acme Corp"))));
 	}
 
@@ -431,10 +442,10 @@ public class CapabilityCheckerTest {
 		// Cap scoped to file://scratch/ — agent can write within scratch but
 		// not other roots.
 		AVector<ACell> caps = caps("file://scratch/", "crud/write");
-		assertNull(CapabilityChecker.check(caps, "v/ops/file/write",
+		assertNull(check(caps, "v/ops/file/write",
 			Maps.of(Strings.create("root"), Strings.create("scratch"),
 				Strings.create("path"), Strings.create("foo.txt"))));
-		assertNotNull(CapabilityChecker.check(caps, "v/ops/file/write",
+		assertNotNull(check(caps, "v/ops/file/write",
 			Maps.of(Strings.create("root"), Strings.create("data"),
 				Strings.create("path"), Strings.create("foo.txt"))));
 	}
@@ -442,10 +453,10 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testFilePerPathCaps() {
 		AVector<ACell> caps = caps("file://scratch/agent-output/", "crud/write");
-		assertNull(CapabilityChecker.check(caps, "v/ops/file/write",
+		assertNull(check(caps, "v/ops/file/write",
 			Maps.of(Strings.create("root"), Strings.create("scratch"),
 				Strings.create("path"), Strings.create("agent-output/run-123.json"))));
-		assertNotNull(CapabilityChecker.check(caps, "v/ops/file/write",
+		assertNotNull(check(caps, "v/ops/file/write",
 			Maps.of(Strings.create("root"), Strings.create("scratch"),
 				Strings.create("path"), Strings.create("other/secret.txt"))));
 	}
@@ -453,10 +464,10 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testFileReadOnlyCapsRejectWrite() {
 		AVector<ACell> caps = caps("file://", "crud/read");
-		assertNull(CapabilityChecker.check(caps, "v/ops/file/read",
+		assertNull(check(caps, "v/ops/file/read",
 			Maps.of(Strings.create("root"), Strings.create("data"),
 				Strings.create("path"), Strings.create("anything"))));
-		assertNotNull(CapabilityChecker.check(caps, "v/ops/file/write",
+		assertNotNull(check(caps, "v/ops/file/write",
 			Maps.of(Strings.create("root"), Strings.create("data"),
 				Strings.create("path"), Strings.create("anything"))));
 	}
@@ -490,7 +501,7 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testAgentCreateAbility() {
 		AVector<ACell> caps = caps("g/Carol", "agent/create");
-		assertNull(CapabilityChecker.check(caps, "v/ops/agent/create",
+		assertNull(check(caps, "v/ops/agent/create",
 			Maps.of(Strings.create("agentId"), Strings.create("Carol"))));
 	}
 
@@ -498,11 +509,11 @@ public class CapabilityCheckerTest {
 	public void testAgentParentCoversCreate() {
 		// "agent" ability covers every agent/* per the UCAN.md §3.2 hierarchy.
 		AVector<ACell> caps = caps("g/", "agent");
-		assertNull(CapabilityChecker.check(caps, "v/ops/agent/create",
+		assertNull(check(caps, "v/ops/agent/create",
 			Maps.of(Strings.create("agentId"), Strings.create("Carol"))));
-		assertNull(CapabilityChecker.check(caps, "v/ops/agent/request",
+		assertNull(check(caps, "v/ops/agent/request",
 			Maps.of(Strings.create("agentId"), Strings.create("Bob"))));
-		assertNull(CapabilityChecker.check(caps, "v/ops/agent/message",
+		assertNull(check(caps, "v/ops/agent/message",
 			Maps.of(Strings.create("agentId"), Strings.create("Bob"))));
 	}
 
@@ -510,8 +521,8 @@ public class CapabilityCheckerTest {
 	public void testAssetParentCoversStoreAndRead() {
 		// "asset" covers asset/store and asset/read.
 		AVector<ACell> caps = caps("", "asset");
-		assertNull(CapabilityChecker.check(caps, "v/ops/asset/store", Maps.empty()));
-		assertNull(CapabilityChecker.check(caps, "v/ops/asset/get",
+		assertNull(check(caps, "v/ops/asset/store", Maps.empty()));
+		assertNull(check(caps, "v/ops/asset/get",
 			Maps.of(Strings.create("hash"), Strings.create("0xabc"))));
 	}
 
@@ -519,22 +530,22 @@ public class CapabilityCheckerTest {
 	public void testAssetReadDoesNotCoverStore() {
 		AVector<ACell> caps = caps("", "asset/read");
 		// Read allowed
-		assertNull(CapabilityChecker.check(caps, "v/ops/asset/get",
+		assertNull(check(caps, "v/ops/asset/get",
 			Maps.of(Strings.create("hash"), Strings.create("0xabc"))));
 		// Store denied
-		assertNotNull(CapabilityChecker.check(caps, "v/ops/asset/store", Maps.empty()));
+		assertNotNull(check(caps, "v/ops/asset/store", Maps.empty()));
 	}
 
 	@Test
 	public void testDLFSPerDriveCaps() {
 		AVector<ACell> caps = caps("dlfs://scratch/", "crud");
 		// Operations on scratch drive allowed
-		assertNull(CapabilityChecker.check(caps, "v/ops/dlfs/write",
+		assertNull(check(caps, "v/ops/dlfs/write",
 			Maps.of(Strings.create("drive"), Strings.create("scratch"),
 				Strings.create("path"), Strings.create("/foo.txt"),
 				Strings.create("content"), Strings.create("hi"))));
 		// Other drive denied
-		assertNotNull(CapabilityChecker.check(caps, "v/ops/dlfs/write",
+		assertNotNull(check(caps, "v/ops/dlfs/write",
 			Maps.of(Strings.create("drive"), Strings.create("private"),
 				Strings.create("path"), Strings.create("/foo.txt"),
 				Strings.create("content"), Strings.create("hi"))));

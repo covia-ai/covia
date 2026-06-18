@@ -1,11 +1,14 @@
 package covia.lattice;
 
 import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 
 /**
@@ -28,6 +31,43 @@ public class CapabilityChecker {
 	private static final AString K_ROOT = Strings.intern("root");
 
 	/**
+	 * Derive the self-attenuation ceiling from presented proof tokens: the union
+	 * of capabilities the verified tokens grant to {@code caller} under the
+	 * authority {@code issuer}, with temporal bounds re-checked. The result is the
+	 * {@code caps} ceiling enforced by {@link #check}. The owner is the authority
+	 * over its own namespace, so for a self-ceiling {@code issuer == caller}.
+	 *
+	 * <p>Assumes signatures and chains were verified at the transport boundary
+	 * ({@code UCANValidator.parseTransportUCANs}); only temporal bounds are
+	 * re-checked here. Fail-closed: null {@code proofs}/{@code caller}/
+	 * {@code issuer} → null (no ceiling), never a wildcard.</p>
+	 *
+	 * @deprecated Interim shim. This duplicates
+	 *             {@link UCANValidator#capabilitiesFor}, which lives in convex-core
+	 *             but is not yet in covia's released Convex dependency. When covia
+	 *             bumps to a Convex release that includes it, delete this method
+	 *             and call {@code UCANValidator.capabilitiesFor(proofs, caller,
+	 *             issuer, now)} directly.
+	 */
+	@Deprecated
+	public static AVector<ACell> selfCapabilities(AVector<ACell> proofs,
+			AString caller, AString issuer, long now) {
+		if (proofs == null || caller == null || issuer == null) return null;
+		AVector<ACell> result = Vectors.empty();
+		for (long i = 0; i < proofs.count(); i++) {
+			AMap<AString, ACell> tokenMap = RT.ensureMap(proofs.get(i));
+			if (tokenMap == null) continue;
+			UCAN token = UCAN.parse(tokenMap);
+			if (token == null) continue;
+			if (!UCANValidator.checkTemporalBounds(token, now)) continue;
+			if (!caller.equals(token.getAudience())) continue;
+			if (!issuer.equals(token.getIssuer())) continue;
+			result = result.concat(token.getCapabilities());
+		}
+		return result.isEmpty() ? null : result;
+	}
+
+	/**
 	 * Checks whether an operation invocation is allowed by the agent's caps.
 	 *
 	 * @param caps Capability attenuations (null = unrestricted)
@@ -35,12 +75,21 @@ public class CapabilityChecker {
 	 * @param input The tool call input
 	 * @return null if allowed, or an error message string if denied
 	 */
-	public static String check(AVector<ACell> caps, String operation, ACell input) {
+	public static String check(AVector<ACell> caps, String operation, ACell input, AString ownerDID) {
 		if (caps == null) return null; // no caps = full access
 
 		String ability = operationAbility(operation);
-		String resource = extractResource(operation, input);
+		// Resources are matched in canonical, owner-scoped absolute form. A bare
+		// lattice path ("w/health/bp") names the owner's own resource, so it is
+		// prefixed with the owner DID ("<owner>/w/health/bp"); a path that is
+		// already a DID URL (cross-user) or scheme-qualified (file://, dlfs://)
+		// is absolute already. Both the op resource AND each cap's `with` are
+		// canonicalised the same way, so an absolute (token) cap and a bare
+		// (agent-config) cap match a bare own-op identically.
+		String resource = canonicalResource(extractResource(operation, input), ownerDID);
 		if (resource == null) resource = "";
+		AString resourceStr = Strings.create(resource);
+		AString abilityStr = Strings.create(ability);
 
 		for (long i = 0; i < caps.count(); i++) {
 			// Skip non-map entries — defensive against malformed caps data
@@ -48,7 +97,12 @@ public class CapabilityChecker {
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> cap = (AMap<AString, ACell>) capMap;
 
-			if (Capability.covers(cap, resource, ability)) {
+			AString rawWith = RT.ensureString(cap.get(Capability.WITH));
+			String canonWith = canonicalResource(rawWith != null ? rawWith.toString() : null, ownerDID);
+			AString grantWith = (canonWith != null) ? Strings.create(canonWith) : null;
+			AString grantCan = RT.ensureString(cap.get(Capability.CAN));
+
+			if (Capability.covers(grantWith, grantCan, resourceStr, abilityStr)) {
 				return null; // allowed
 			}
 		}
@@ -141,6 +195,29 @@ public class CapabilityChecker {
 			case "dlfs:delete", "dlfs:deleteDrive" -> "crud/delete";
 			default -> "invoke";
 		};
+	}
+
+	/**
+	 * Canonicalises a resource to its absolute, owner-scoped form for matching.
+	 *
+	 * <p>A capability resource is absolute: it names its owner. A bare lattice
+	 * path ({@code "w/health/bp"}) is the owner's own resource and is prefixed
+	 * with the owner DID → {@code "<owner>/w/health/bp"}. A resource that is
+	 * already a DID URL (a cross-user path, {@code "did:key:…/w/…"}) or
+	 * scheme-qualified ({@code "file://…"}, {@code "dlfs://…"}) is absolute as-is
+	 * and returned unchanged. With no owner context ({@code ownerDID == null})
+	 * the resource is returned as given (compare-as-is).</p>
+	 *
+	 * <p>Applied identically to the op's resource and each cap's {@code with}, so
+	 * an absolute (token) grant and a bare (agent-config) grant match a bare
+	 * own-namespace operation the same way.</p>
+	 */
+	static String canonicalResource(String resource, AString ownerDID) {
+		if (resource == null || resource.isEmpty()) return resource;
+		if (resource.startsWith("did:")) return resource;   // already owner-qualified (DID URL)
+		if (resource.contains("://")) return resource;       // scheme-qualified (file://, dlfs://)
+		if (ownerDID == null) return resource;               // no owner context — compare as given
+		return ownerDID + "/" + resource;                    // bare lattice path → owner-scoped
 	}
 
 	/**

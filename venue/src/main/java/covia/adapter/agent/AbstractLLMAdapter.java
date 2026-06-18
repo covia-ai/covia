@@ -279,8 +279,10 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		AString operation = (configToolMap != null) ? configToolMap.get(toolName) : null;
 		String opName = (operation != null) ? operation.toString() : toolName;
 
-		// Check agent capabilities before dispatch
-		String denied = CapabilityChecker.check(caps, opName, input);
+		// Check agent capabilities before dispatch. The agent runs under its
+		// owner's identity (#91), so the caller DID is the owner that scopes
+		// the agent's (owner-relative) config caps.
+		String denied = CapabilityChecker.check(caps, opName, input, ctx.getCallerDID());
 		if (denied != null) return Strings.create("Error: " + denied);
 
 		// Config tools — tool name maps to a resolved operation

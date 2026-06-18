@@ -268,7 +268,8 @@ public class JobManager {
 		if (caps == null) return;
 		String adapterName = AAdapter.getAdapterName(meta);
 		AString opName = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER));
-		String denied = CapabilityChecker.check(caps, opName != null ? opName.toString() : adapterName, input);
+		String denied = CapabilityChecker.check(caps, opName != null ? opName.toString() : adapterName,
+			input, ctx.getCallerDID());
 		if (denied != null) {
 			throw new RuntimeException(denied);
 		}
