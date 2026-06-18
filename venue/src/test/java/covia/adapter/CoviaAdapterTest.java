@@ -1389,6 +1389,40 @@ public class CoviaAdapterTest {
 			RT.getIn(RT.getIn(readResult, "value"), "date"));
 	}
 
+	@Test
+	public void testWriteScalarParentGivesShapeConflict() {
+		// A write that navigates INTO a scalar is a shape conflict — it must
+		// throw (naming the scalar node), not silently clobber the value.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/scal", Fields.VALUE, Strings.create("just a value")),
+			ALICE).awaitResult(5000);
+
+		Job writeJob = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/scal/child", Fields.VALUE, Strings.create("x")), ALICE);
+		String msg = messageChain(assertThrows(Exception.class, () -> writeJob.awaitResult(5000)));
+		assertTrue(msg.contains("scalar value at") && msg.contains("w/scal"),
+			"error must name the scalar node, got: " + msg);
+
+		// Regression: the scalar must NOT have been silently clobbered.
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/scal"), ALICE).awaitResult(5000);
+		assertEquals(Strings.create("just a value"), RT.getIn(read, "value"),
+			"the scalar value must survive a rejected child write");
+	}
+
+	@Test
+	public void testAppendIntoScalarParentGivesShapeConflict() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/scal2", Fields.VALUE, CVMLong.create(42)),
+			ALICE).awaitResult(5000);
+
+		Job appendJob = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "w/scal2/items", Fields.VALUE, Strings.create("x")), ALICE);
+		String msg = messageChain(assertThrows(Exception.class, () -> appendJob.awaitResult(5000)));
+		assertTrue(msg.contains("scalar value at") && msg.contains("w/scal2"),
+			"append into a scalar parent must give the scalar shape-conflict, got: " + msg);
+	}
+
 	/** Flattens an exception's cause chain so assertions match wherever the message surfaced. */
 	private static String messageChain(Throwable t) {
 		StringBuilder sb = new StringBuilder();

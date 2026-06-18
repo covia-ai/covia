@@ -960,6 +960,17 @@ public class CoviaAdapter extends AAdapter {
 			return vec.assoc(idx, deepSet(vec.get(idx), keys, fromIndex + 1, value));
 		}
 
+		// Navigating into an existing non-map, non-vector value is a shape
+		// conflict — the scalar counterpart of the list case above. Only a
+		// genuinely absent (null) intermediate is auto-vivified into a map;
+		// a real value must never be silently clobbered.
+		if (root != null && !(root instanceof AMap)) {
+			String at = buildSubPath(Arrays.copyOfRange(keys, 0, fromIndex));
+			throw new IllegalArgumentException(
+				"Cannot set key '" + key + "' on the scalar value at '" + at
+				+ "': this path holds a value, not a map. To store named keys here, replace "
+				+ "the whole node with a map first (write '" + at + "' = {}).");
+		}
 		// Default: map navigation, creating intermediate maps as needed
 		AMap<AString, ACell> map = (root instanceof AMap)
 			? (AMap<AString, ACell>) root : Maps.empty();
@@ -1046,6 +1057,15 @@ public class CoviaAdapter extends AAdapter {
 			return vec.assoc(idx, deepAppend(vec.get(idx), keys, fromIndex + 1, element));
 		}
 
+		// Shape conflict: cannot navigate into an existing non-map, non-vector
+		// scalar. Auto-vivify only a genuinely absent (null) intermediate.
+		if (root != null && !(root instanceof AMap)) {
+			String at = buildSubPath(Arrays.copyOfRange(keys, 0, fromIndex));
+			throw new IllegalArgumentException(
+				"Cannot set key '" + key + "' on the scalar value at '" + at
+				+ "': this path holds a value, not a map. To store named keys here, replace "
+				+ "the whole node with a map first (write '" + at + "' = {}).");
+		}
 		AMap<AString, ACell> map = (root instanceof AMap)
 			? (AMap<AString, ACell>) root : Maps.empty();
 		AString mapKey = RT.ensureString(key);
