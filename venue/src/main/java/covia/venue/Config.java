@@ -164,6 +164,9 @@ public class Config {
 	/** Key for CORS allowed origins (default: "*" = all) */
 	public static final AString CORS_ORIGINS = Strings.intern("corsOrigins");
 
+	/** Key for the Private Network Access opt-in (default: false). */
+	public static final AString ALLOW_PRIVATE_NETWORK = Strings.intern("allowPrivateNetwork");
+
 	// ========== MCP config keys ==========
 
 	/** Key for MCP enabled flag */
@@ -552,6 +555,17 @@ public class Config {
 	public String getCorsOrigins() {
 		AString origins = RT.ensureString(config.get(CORS_ORIGINS));
 		return (origins != null) ? origins.toString() : "*";
+	}
+
+	/**
+	 * Whether to emit the {@code access-control-allow-private-network} response
+	 * header, which lets a public web origin reach a venue on a private/loopback
+	 * address from the browser. Off by default — it undermines {@code corsOrigins}
+	 * scoping; enable it only for the preview-origin dev workflow that needs it.
+	 */
+	public boolean isAllowPrivateNetwork() {
+		ACell v = config.get(ALLOW_PRIVATE_NETWORK);
+		return (v != null) && RT.bool(v);
 	}
 
 	// ========== Static compatibility ==========

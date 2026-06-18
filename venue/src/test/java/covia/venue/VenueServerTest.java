@@ -34,6 +34,7 @@ import convex.core.data.Hash;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
@@ -62,6 +63,25 @@ public class VenueServerTest {
 		covia = TestServer.COVIA;
 	}
 	
+	/**
+	 * The Private Network Access header must be OFF by default — emitting it
+	 * lets a public web origin reach a localhost venue from the browser
+	 * (covia#130 / GetMine-ai/demo#133 P0-2). Operator opt-in only.
+	 */
+	@Test public void testPrivateNetworkHeaderGatedOff() throws Exception {
+		HttpClient client = HttpClient.newBuilder().build();
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI("http://localhost:" + PORT + "/api/v1/status"))
+			.GET().timeout(Duration.ofSeconds(10)).build();
+		HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+		assertTrue(resp.headers().firstValue("access-control-allow-private-network").isEmpty(),
+			"PNA header must not be emitted by default");
+
+		// Config getter: off by default, on only when explicitly enabled.
+		assertFalse(new Config(Maps.empty()).isAllowPrivateNetwork());
+		assertTrue(new Config(Maps.of(Config.ALLOW_PRIVATE_NETWORK, CVMBool.TRUE)).isAllowPrivateNetwork());
+	}
+
 	/**
 	 * Test for presence of Covia API docs
 	 */

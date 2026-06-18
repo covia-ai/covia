@@ -364,6 +364,7 @@ public class VenueServer {
 
 	private Javalin buildApp() {
 		final String corsOrigins = this.config.getCorsOrigins();
+		final boolean allowPrivateNetwork = this.config.isAllowPrivateNetwork();
 		Javalin app = Javalin.create(config -> {
 			config.bundledPlugins.enableCors(cors -> {
 				cors.addRule(corsConfig -> {
@@ -445,9 +446,14 @@ public class VenueServer {
 		// including CORS preflights handled by the Javalin CORS plugin
 		app.after(ctx->{
 			ctx.header("access-control-allow-origin", corsOrigins);
-			// Allow Private Network Access (PNA) so public origins like preview.covia.ai
-			// can reach a locally-running venue on localhost
-			ctx.header("access-control-allow-private-network", "true");
+			// Private Network Access lets a public web origin reach a venue on a
+			// private/loopback address from the browser. Off by default — it
+			// undermines corsOrigins scoping (a malicious page could read a
+			// localhost venue). Opt in via allowPrivateNetwork for the
+			// preview-origin dev workflow that needs it.
+			if (allowPrivateNetwork) {
+				ctx.header("access-control-allow-private-network", "true");
+			}
 		});
 
 		// Sync lattice state after every mutation-capable request so writes
