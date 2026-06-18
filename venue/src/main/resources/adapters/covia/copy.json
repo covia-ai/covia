@@ -20,9 +20,9 @@
 		"output": {
 			"type": "object",
 			"properties": {
-				"copied": {
+				"pathCreated": {
 					"type": "boolean",
-					"description": "True if the value was successfully copied."
+					"description": "Present and true only if copying had to build a missing parent path at the destination (intermediate hierarchy). Omitted when copied into existing structure. Operation success is conveyed by the job status."
 				}
 			}
 		}

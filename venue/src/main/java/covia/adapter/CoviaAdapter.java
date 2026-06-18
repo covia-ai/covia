@@ -136,15 +136,14 @@ import covia.venue.Users;
 public class CoviaAdapter extends AAdapter {
 
 	private static final AString K_KEYS    = Strings.intern("keys");
-	private static final AString K_COUNT   = Strings.intern("count");
+	private static final AString K_TOTAL_SIZE = Strings.intern("totalSize");
 	private static final AString K_TYPE    = Strings.intern("type");
 	private static final AString K_VALUE   = Strings.intern("value");
 	private static final AString K_VALUES  = Strings.intern("values");
 	private static final AString K_EXISTS  = Strings.intern("exists");
-	private static final AString K_WRITTEN  = Strings.intern("written");
-	private static final AString K_DELETED  = Strings.intern("deleted");
-	private static final AString K_APPENDED  = Strings.intern("appended");
-	private static final AString K_SIZE      = Strings.intern("size");
+	private static final AString K_PATH_CREATED = Strings.intern("pathCreated");
+	private static final AString K_NEW_SIZE     = Strings.intern("newSize");
+	private static final AString K_VALUE_BYTES  = Strings.intern("valueBytes");
 	private static final AString K_TRUNCATED = Strings.intern("truncated");
 	private static final AString K_MAX_SIZE  = Strings.intern("maxSize");
 
@@ -301,7 +300,7 @@ public class CoviaAdapter extends AAdapter {
 				K_EXISTS, CVMBool.TRUE,
 				K_VALUE, null,
 				K_TRUNCATED, CVMBool.TRUE,
-				K_SIZE, CVMLong.create(encodingSize));
+				K_VALUE_BYTES, CVMLong.create(encodingSize));
 		}
 
 		return result(value);
@@ -443,7 +442,7 @@ public class CoviaAdapter extends AAdapter {
 				page = page.conj(vec.get(i));
 			}
 			return Maps.of(K_EXISTS, CVMBool.TRUE, K_TYPE, typeName,
-				K_COUNT, CVMLong.create(total), K_VALUES, page,
+				K_TOTAL_SIZE, CVMLong.create(total), K_VALUES, page,
 				Fields.OFFSET, CVMLong.create(offset));
 
 		} else if (value instanceof AMap<?,?> map) {
@@ -462,7 +461,7 @@ public class CoviaAdapter extends AAdapter {
 				idx++;
 			}
 			return Maps.of(K_EXISTS, CVMBool.TRUE, K_TYPE, typeName,
-				K_COUNT, CVMLong.create(total), K_VALUES, page,
+				K_TOTAL_SIZE, CVMLong.create(total), K_VALUES, page,
 				Fields.OFFSET, CVMLong.create(offset));
 
 		} else if (value instanceof ASet<?> set) {
@@ -478,7 +477,7 @@ public class CoviaAdapter extends AAdapter {
 				idx++;
 			}
 			return Maps.of(K_EXISTS, CVMBool.TRUE, K_TYPE, typeName,
-				K_COUNT, CVMLong.create(total), K_VALUES, page,
+				K_TOTAL_SIZE, CVMLong.create(total), K_VALUES, page,
 				Fields.OFFSET, CVMLong.create(offset));
 
 		} else {
@@ -491,14 +490,14 @@ public class CoviaAdapter extends AAdapter {
 	private static ACell result(ACell value) {
 		return Maps.of(
 			K_EXISTS, CVMBool.of(value != null),
-			K_VALUE, value);
+			K_VALUE, value,
+			K_VALUE_BYTES, CVMLong.create(value == null ? 0 : value.getEncodingLength()));
 	}
 
 	// ========== covia:copy — server-side path-to-path duplication ==========
 
 	private static final AString K_FROM = Strings.intern("from");
 	private static final AString K_TO = Strings.intern("to");
-	private static final AString K_COPIED = Strings.intern("copied");
 
 	/**
 	 * Server-side value duplication: reads a value from {@code from} and
@@ -515,7 +514,8 @@ public class CoviaAdapter extends AAdapter {
 	 * locally ({@code from=did:web:...:w/data to=w/cache/...}), or to
 	 * branch any workspace value.</p>
 	 *
-	 * @return {@code {copied: true}} on success
+	 * @return the destination write's result: {@code {pathCreated: true}} if a
+	 *         missing parent path was built, else an empty map
 	 */
 	private ACell handleCopy(RequestContext ctx, ACell input) {
 		AString from = RT.ensureString(RT.getIn(input, K_FROM));
@@ -531,11 +531,10 @@ public class CoviaAdapter extends AAdapter {
 		}
 
 		// Delegate to handleWrite for the destination, which enforces
-		// writability and per-namespace canWrite checks.
+		// writability and per-namespace canWrite checks. Its result carries
+		// pathCreated (whether the destination needed new hierarchy built).
 		ACell writeInput = Maps.of(Fields.PATH, to, Fields.VALUE, value);
-		handleWrite(ctx, writeInput);
-
-		return Maps.of(K_COPIED, CVMBool.TRUE);
+		return handleWrite(ctx, writeInput);
 	}
 
 	/**
@@ -547,7 +546,8 @@ public class CoviaAdapter extends AAdapter {
 	 * (e.g. {@code "w/data/nested/field"}) — intermediate maps are created
 	 * as needed via read-modify-write on the top-level entry.</p>
 	 *
-	 * @return {@code {written: true}} on success
+	 * @return {@code {pathCreated: true}} if the write had to build a missing
+	 *         parent path (intermediate hierarchy), else an empty map
 	 * @throws RuntimeException if the path is invalid or targets a non-writable namespace
 	 */
 	private ACell handleWrite(RequestContext ctx, ACell input) {
@@ -568,24 +568,35 @@ public class CoviaAdapter extends AAdapter {
 		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
 		if (vns != null && vns.jobId() != null) {
 			ACell[] keys = vns.remainingKeys();
+			final boolean[] built = {false};
 			TempNamespaceResolver.updateTemp(vns.cursor(), vns.jobId(), oldTemp -> {
 				AMap<AString, ACell> map = (oldTemp instanceof AMap) ? (AMap<AString, ACell>) oldTemp : Maps.empty();
 				if (keys.length == 0) return value;
 				if (keys.length == 1) return map.assoc(Strings.create(keys[0].toString()), value);
 				AString topKey = Strings.create(keys[0].toString());
-				return map.assoc(topKey, deepSet(map.get(topKey), keys, 1, value));
+				ACell next = map.assoc(topKey, deepSet(map.get(topKey), keys, 1, value));
+				built[0] = !parentExisted(map, keys, 0);
+				return next;
 			});
-			return Maps.of(K_WRITTEN, CVMBool.TRUE);
+			return built[0] ? Maps.of(K_PATH_CREATED, CVMBool.TRUE) : Maps.empty();
 		}
 
 		// Cursor-based virtual (n/) or physical namespace
 		if (vns != null) jsonKeys = vns.remainingKeys();
 		ALatticeCursor<ACell> baseCursor = (vns != null) ? vns.cursor() : ensureUserCursor(ctx);
 		final ACell[] keys = jsonKeys;
-		if (!updatePath(baseCursor, keys, (current, from) -> deepSet(current, keys, from, value))) {
+		final boolean[] built = {false};
+		// deepSet first so a shape conflict throws its descriptive error (#146);
+		// pathCreated is read from the pre-state and means "a missing parent
+		// container had to be built" — not whether the leaf already had a value.
+		if (!updatePath(baseCursor, keys, (current, from) -> {
+				ACell next = deepSet(current, keys, from, value);
+				built[0] = !parentExisted(current, keys, from);
+				return next;
+			})) {
 			throw new RuntimeException("Cannot resolve path: " + keys[0] + "/" + keys[1]);
 		}
-		return Maps.of(K_WRITTEN, CVMBool.TRUE);
+		return built[0] ? Maps.of(K_PATH_CREATED, CVMBool.TRUE) : Maps.empty();
 	}
 
 	/**
@@ -596,7 +607,11 @@ public class CoviaAdapter extends AAdapter {
 	 * key via read-modify-write. Idempotent — deleting a non-existent key
 	 * succeeds silently.</p>
 	 *
-	 * @return {@code {deleted: true}} on success
+	 * <p>Delete removes only the addressed value; it never prunes the parent
+	 * hierarchy — an emptied parent container is left in place. Success is the
+	 * job status, so there is nothing structural to report.</p>
+	 *
+	 * @return empty map on success
 	 */
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
@@ -615,17 +630,17 @@ public class CoviaAdapter extends AAdapter {
 				if (existing == null) return map;
 				return map.assoc(topKey, deepDelete(existing, keys, 1));
 			});
-			return Maps.of(K_DELETED, CVMBool.TRUE);
+			return Maps.empty();
 		}
 
 		// Cursor-based virtual (n/) or physical namespace. An unresolvable
 		// path is a silent success (delete is idempotent).
 		if (vns != null) jsonKeys = vns.remainingKeys();
 		ALatticeCursor<ACell> cursor = (vns != null) ? vns.cursor() : getUserCursor(ctx);
-		if (cursor == null) return Maps.of(K_DELETED, CVMBool.TRUE);
+		if (cursor == null) return Maps.empty();
 		final ACell[] keys = jsonKeys;
 		updatePath(cursor, keys, (current, from) -> deepDelete(current, keys, from));
-		return Maps.of(K_DELETED, CVMBool.TRUE);
+		return Maps.empty();
 	}
 
 	/**
@@ -636,7 +651,9 @@ public class CoviaAdapter extends AAdapter {
 	 * a vector, the element is appended. Errors if the target is a non-vector
 	 * type.</p>
 	 *
-	 * @return {@code {appended: true}} on success
+	 * @return {@code {newSize}} — the vector's element count after the append —
+	 *         plus {@code pathCreated: true} if a missing parent container had
+	 *         to be built
 	 */
 	private ACell handleAppend(RequestContext ctx, ACell input) {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
@@ -649,10 +666,20 @@ public class CoviaAdapter extends AAdapter {
 		ACell element = parseJsonValue(RT.getIn(input, Fields.VALUE));
 
 		final ACell[] keys = jsonKeys;
-		if (!updatePath(baseCursor, keys, (current, from) -> deepAppend(current, keys, from, element))) {
+		final boolean[] built = {false};
+		final long[] newSize = {0};
+		if (!updatePath(baseCursor, keys, (current, from) -> {
+				ACell next = deepAppend(current, keys, from, element);
+				built[0] = !parentExisted(current, keys, from);
+				ACell leaf = deepGet(next, keys, from);
+				newSize[0] = (leaf instanceof AVector) ? ((AVector<?>) leaf).count() : 0;
+				return next;
+			})) {
 			throw new RuntimeException("Cannot resolve path: " + keys[0] + "/" + keys[1]);
 		}
-		return Maps.of(K_APPENDED, CVMBool.TRUE);
+		AMap<AString, ACell> out = Maps.of(K_NEW_SIZE, CVMLong.create(newSize[0]));
+		if (built[0]) out = out.assoc(K_PATH_CREATED, CVMBool.TRUE);
+		return out;
 	}
 
 	// ========== Write path helpers ==========
@@ -832,6 +859,27 @@ public class CoviaAdapter extends AAdapter {
 			current = navigateInto(current, keys[i]);
 		}
 		return current;
+	}
+
+	/**
+	 * True if the parent container of the leaf — the node at
+	 * {@code keys[from .. length-2]} — already exists in {@code root}. Used to
+	 * derive {@code pathCreated}: a write builds new hierarchy exactly when this
+	 * is false (a missing intermediate container had to be auto-created). It is
+	 * independent of whether a value already sat at the leaf — overwriting an
+	 * existing leaf inside an existing parent is not "path created".
+	 *
+	 * <p>A path that addresses the root level directly (≤1 segment from
+	 * {@code from}) has the namespace container itself as its parent, which
+	 * always exists — so it never counts as creating hierarchy.</p>
+	 */
+	static boolean parentExisted(ACell root, ACell[] keys, int from) {
+		if (keys.length - from <= 1) return true;
+		ACell node = root;
+		for (int i = from; i < keys.length - 1 && node != null; i++) {
+			node = navigateInto(node, keys[i]);
+		}
+		return node != null;
 	}
 
 	/**
@@ -1039,8 +1087,9 @@ public class CoviaAdapter extends AAdapter {
 	 *
 	 * <p>Always includes {@code exists} (true if value is non-null) and
 	 * {@code type} (standard Convex type name from {@link Types#get}).
-	 * Maps additionally include {@code keys} (paginated) and {@code count};
-	 * vectors/countables include {@code count}; sets include {@code values}.</p>
+	 * Maps additionally include {@code keys} (paginated), {@code totalSize} and
+	 * {@code offset}; vectors/countables include {@code totalSize}; sets include
+	 * {@code values} and {@code totalSize}.</p>
 	 */
 	@SuppressWarnings("unchecked")
 	private static ACell describeValue(ACell value, ACell input) {
@@ -1080,22 +1129,21 @@ public class CoviaAdapter extends AAdapter {
 				}
 			}
 
-			desc = Maps.of(K_TYPE, typeName, K_COUNT, CVMLong.create(total), K_KEYS, page);
-			// Include offset when results are truncated so caller knows where to continue
-			if (offset > 0 || page.count() < total) {
-				desc = desc.assoc(Fields.OFFSET, CVMLong.create(offset));
-			}
+			// Always echo offset for the paginated map case so the caller has a
+			// predictable pagination shape (page is K_KEYS; totalSize is the whole).
+			desc = Maps.of(K_TYPE, typeName, K_TOTAL_SIZE, CVMLong.create(total),
+				K_KEYS, page, Fields.OFFSET, CVMLong.create(offset));
 		} else if (value instanceof ASet<?> set) {
 			// Sets: values are the elements — return them directly
 			AVector<ACell> values = Vectors.empty();
 			for (ACell elem : set) {
 				values = values.conj(ALattice.toJSONKey(elem));
 			}
-			desc = Maps.of(K_TYPE, typeName, K_COUNT, CVMLong.create(set.count()), K_VALUES, values);
+			desc = Maps.of(K_TYPE, typeName, K_TOTAL_SIZE, CVMLong.create(set.count()), K_VALUES, values);
 		} else if (value instanceof ACountable<?> countable) {
 			// Vectors, sequences, Index — type and count only.
 			// Use covia:slice to read elements from vectors.
-			desc = Maps.of(K_TYPE, typeName, K_COUNT, CVMLong.create(countable.count()));
+			desc = Maps.of(K_TYPE, typeName, K_TOTAL_SIZE, CVMLong.create(countable.count()));
 		} else {
 			// Scalar — type name only
 			desc = Maps.of(K_TYPE, typeName);

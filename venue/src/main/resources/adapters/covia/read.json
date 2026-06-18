@@ -23,8 +23,8 @@
 			"properties": {
 				"exists": { "type": "boolean", "description": "True if data exists at this path" },
 				"value": { "description": "The value at the path, or null if not found or truncated" },
-				"truncated": { "type": "boolean", "description": "True if the value was too large and was not returned" },
-				"size": { "type": "integer", "description": "Memory size in bytes (only present when truncated)" }
+				"truncated": { "type": "boolean", "description": "Present and true only if the value exceeded maxSize and was not returned. Omitted otherwise." },
+				"valueBytes": { "type": "integer", "description": "Encoding size in bytes of the value at the path. Always present (0 when the path does not exist)." }
 			}
 		}
 	}

@@ -8,6 +8,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+- **covia CRUD operations return meaningful values, not tautological flags.** `covia:write` / `copy` / `delete` / `append` previously returned a constant `{written|copied|deleted|appended: true}` that only restated job success. They now carry actual variables: `write` / `copy` return `{pathCreated: true}` *only* when the write had to build a missing parent path (intermediate hierarchy), omitted otherwise — and independent of whether a value already sat at the leaf; `append` returns `{newSize}` (the vector's element count after the append) plus `pathCreated` when it built hierarchy; `delete` returns an empty map — it removes only the addressed value and never prunes parent hierarchy, so there is nothing structural to report. Read-family field names are now consistent: `covia:read` reports `valueBytes` (always present; was `size`, only on truncation), `truncated` omitted when false; `covia:slice` / `list` report `totalSize` (was `count`) and always echo `offset`. Operation success remains the job's terminal status. Inputs are unchanged. (#132)
+
+### Fixed
+- **An agent's run loop now executes under the agent owner's identity, not the waking caller's.** `wakeAgent` previously captured the triggering caller's `RequestContext`, so under concurrent mixed-identity wakes the loop — and every identity-scoped access during it (secret `/s/`, workspace `w/`, job ownership) — could resolve in the wrong namespace. The run loop is now a pure mechanism keyed on the agent's address (`ownerDID` + `agentId`) and runs under a fresh owner-scoped context carrying none of the waker's proofs or caps; the in-memory run-loop registries key on the full address so two users' same-named agents no longer share a slot. `Engine.resolveSecret` now distinguishes a genuinely absent secret (null) from a decrypt/key error (logged at WARN + thrown) instead of masking both as absence. (#91)
+
 ## [0.2.0] - 2026-06-15
 
 ### Added

@@ -111,7 +111,7 @@ public class WorkspaceDeleteMergeTest {
 		assertEquals(CVMBool.FALSE, RT.getIn(read("w/health-context/remove"), "exists"),
 			"deleted entry must not re-materialise after merge with a pre-delete snapshot");
 		assertEquals(CVMLong.create(1), RT.getIn(read("w/health-context/keep"), "value"));
-		assertEquals(CVMLong.create(1), RT.getIn(list("w/health-context"), "count"));
+		assertEquals(CVMLong.create(1), RT.getIn(list("w/health-context"), "totalSize"));
 	}
 
 	@Test
@@ -139,7 +139,7 @@ public class WorkspaceDeleteMergeTest {
 		mergeBack(preDelete);
 
 		assertEquals(CVMBool.FALSE, RT.getIn(read("w/only"), "exists"));
-		assertEquals(CVMLong.ZERO, RT.getIn(list("w"), "count"),
+		assertEquals(CVMLong.ZERO, RT.getIn(list("w"), "totalSize"),
 			"the namespace must converge to empty, not oscillate back");
 	}
 
@@ -154,7 +154,7 @@ public class WorkspaceDeleteMergeTest {
 			delete("w/bulk/e" + i);
 			mergeBack(snapshot);
 		}
-		assertEquals(CVMLong.ZERO, RT.getIn(list("w/bulk"), "count"));
+		assertEquals(CVMLong.ZERO, RT.getIn(list("w/bulk"), "totalSize"));
 	}
 
 	// ========== Wrapper transparency ==========

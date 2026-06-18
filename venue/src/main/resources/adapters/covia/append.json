@@ -21,7 +21,8 @@
 		"output": {
 			"type": "object",
 			"properties": {
-				"appended": { "type": "boolean", "description": "True if the element was appended successfully" }
+				"newSize": { "type": "integer", "description": "The element count of the vector after the append." },
+				"pathCreated": { "type": "boolean", "description": "Present and true only if the append had to build a missing parent path (intermediate hierarchy). Omitted otherwise." }
 			}
 		}
 	}

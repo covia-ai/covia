@@ -21,7 +21,7 @@
 		"output": {
 			"type": "object",
 			"properties": {
-				"written": { "type": "boolean", "description": "True if the value was written successfully" }
+				"pathCreated": { "type": "boolean", "description": "Present and true only if the write had to build a missing parent path (intermediate hierarchy that did not previously exist). Omitted when written into existing structure. Independent of whether a value already existed at the leaf. Operation success is conveyed by the job status." }
 			}
 		}
 	}

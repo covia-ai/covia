@@ -17,9 +17,8 @@
 		},
 		"output": {
 			"type": "object",
-			"properties": {
-				"deleted": { "type": "boolean", "description": "True if the delete operation completed successfully" }
-			}
+			"description": "Empty on success. Delete removes only the addressed value and never prunes parent hierarchy; success is conveyed by the job status.",
+			"properties": {}
 		}
 	}
 }
