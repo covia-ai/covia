@@ -25,7 +25,17 @@ import covia.venue.RequestContext;
 public class TestAdapter extends AAdapter {
 	
 	public static final Logger log=LoggerFactory.getLogger(TestAdapter.class);
-	
+
+    /**
+     * Test-only sink: the {@code capturectx} op records the {@link RequestContext}
+     * it was invoked under, keyed by the owner DID it ran as (its caller DID).
+     * Lets tests assert deterministically which identity / proofs / caps a
+     * transition actually ran with — including that two same-named agents owned
+     * by different users run under their own identities (see #91).
+     */
+    public static final java.util.concurrent.ConcurrentHashMap<AString, RequestContext> CAPTURED_CTX
+        = new java.util.concurrent.ConcurrentHashMap<>();
+
     private final SecureRandom random = new SecureRandom();
     
     @Override
@@ -49,6 +59,8 @@ public class TestAdapter extends AAdapter {
             switch (testOp) {
                 case "echo":
                     return CompletableFuture.completedFuture(handleEcho(input));
+                case "capturectx":
+                    return CompletableFuture.completedFuture(handleCaptureCtx(ctx, input));
                 case "taskcomplete":
                     return CompletableFuture.completedFuture(handleTaskComplete(ctx, input));
                 case "wakeresponse":
@@ -98,6 +110,7 @@ public class TestAdapter extends AAdapter {
 			// Test primitives — registered under /v/test/ops/<name>, not /v/ops/.
 			installTestAsset("random",       BASE+"randomop.json");
 			installTestAsset("echo",         BASE+"echoop.json");
+			installTestAsset("capturectx",   BASE+"capturectxop.json");
 			installTestAsset("llm",          BASE+"testllm.json");
 			installTestAsset("toolllm",      BASE+"testtoolllm.json");
 			installTestAsset("taskllm",      BASE+"testtaskllm.json");
@@ -201,6 +214,16 @@ public class TestAdapter extends AAdapter {
 
 	private ACell handleEcho(ACell input) {
         // Simply return the input
+        return input;
+    }
+
+    /**
+     * Records the invoking {@link RequestContext} keyed by agentId, then behaves
+     * like echo so the run loop merges cleanly and sleeps. Used by tests to
+     * assert the identity / proofs / caps a transition ran under.
+     */
+    private ACell handleCaptureCtx(RequestContext ctx, ACell input) {
+        if (ctx.getCallerDID() != null) CAPTURED_CTX.put(ctx.getCallerDID(), ctx);
         return input;
     }
 
