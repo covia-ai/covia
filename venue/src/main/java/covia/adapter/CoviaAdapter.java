@@ -1,5 +1,6 @@
 package covia.adapter;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -898,8 +899,15 @@ public class CoviaAdapter extends AAdapter {
 			AVector<ACell> vec = (AVector<ACell>) root;
 			long idx = parseIndex(key);
 			if (idx < 0 || idx >= vec.count()) {
-				throw new RuntimeException(
-					"Vector index out of bounds: " + key + " (size: " + vec.count() + ")");
+				String at = buildSubPath(Arrays.copyOfRange(keys, 0, fromIndex));
+				if (idx >= 0) {   // numeric, just out of range
+					throw new IllegalArgumentException(
+						"List index out of bounds at '" + at + "': " + idx + " (size " + vec.count() + ")");
+				}
+				throw new IllegalArgumentException(   // non-index key on a list = shape conflict
+					"Cannot index the list at '" + at + "' (size " + vec.count() + ") with key '" + key
+					+ "': lists use non-negative integer positions. To store named keys here, replace "
+					+ "the whole node with a map first (write '" + at + "' = {}).");
 			}
 			return vec.assoc(idx, deepSet(vec.get(idx), keys, fromIndex + 1, value));
 		}
@@ -977,8 +985,15 @@ public class CoviaAdapter extends AAdapter {
 			AVector<ACell> vec = (AVector<ACell>) root;
 			long idx = parseIndex(key);
 			if (idx < 0 || idx >= vec.count()) {
-				throw new RuntimeException(
-					"Vector index out of bounds: " + key + " (size: " + vec.count() + ")");
+				String at = buildSubPath(Arrays.copyOfRange(keys, 0, fromIndex));
+				if (idx >= 0) {   // numeric, just out of range
+					throw new IllegalArgumentException(
+						"List index out of bounds at '" + at + "': " + idx + " (size " + vec.count() + ")");
+				}
+				throw new IllegalArgumentException(   // non-index key on a list = shape conflict
+					"Cannot index the list at '" + at + "' (size " + vec.count() + ") with key '" + key
+					+ "': lists use non-negative integer positions. To store named keys here, replace "
+					+ "the whole node with a map first (write '" + at + "' = {}).");
 			}
 			return vec.assoc(idx, deepAppend(vec.get(idx), keys, fromIndex + 1, element));
 		}

@@ -1309,6 +1309,96 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
+	public void testWriteVectorIndexOutOfBoundsMessage() {
+		engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "w/tiny", Fields.VALUE, Strings.create("one")),
+			ALICE).awaitResult(5000);
+
+		Job writeJob = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/tiny/5", Fields.VALUE, Strings.create("oops")),
+			ALICE);
+		String msg = messageChain(assertThrows(Exception.class, () -> writeJob.awaitResult(5000)));
+		// A numeric-but-out-of-range index is reported as an index error, naming path + index.
+		assertTrue(msg.contains("out of bounds"), "expected out-of-bounds error, got: " + msg);
+		assertTrue(msg.contains("w/tiny") && msg.contains("5"),
+			"error should name the path and index, got: " + msg);
+	}
+
+	@Test
+	public void testWriteListWithNonIndexKeyGivesShapeConflict() {
+		// A list pre-exists where the caller then writes a named child
+		// (GetMine-ai/demo#146 — seed residue: w/health/vaccinations as a list).
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/health/vaccinations",
+				Fields.VALUE, Vectors.of(Strings.create("a"), Strings.create("b"))),
+			ALICE).awaitResult(5000);
+
+		Job writeJob = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/health/vaccinations/tetanus",
+				Fields.VALUE, Maps.of("date", "2008-08-04")),
+			ALICE);
+		String msg = messageChain(assertThrows(Exception.class, () -> writeJob.awaitResult(5000)));
+		// Distinct from an index error — names the conflicting node and the remedy.
+		assertFalse(msg.contains("out of bounds"),
+			"a shape conflict must not be reported as an index error: " + msg);
+		assertTrue(msg.contains("w/health/vaccinations"),
+			"error should name the list node, got: " + msg);
+		assertTrue(msg.contains("replace the whole node"),
+			"error should state the remedy, got: " + msg);
+	}
+
+	@Test
+	public void testAppendIntoListWithNonIndexKeyGivesShapeConflict() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/health/vaccinations",
+				Fields.VALUE, Vectors.of(Strings.create("a"))),
+			ALICE).awaitResult(5000);
+
+		Job appendJob = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "w/health/vaccinations/tetanus",
+				Fields.VALUE, Strings.create("x")),
+			ALICE);
+		String msg = messageChain(assertThrows(Exception.class, () -> appendJob.awaitResult(5000)));
+		assertTrue(msg.contains("w/health/vaccinations") && msg.contains("replace the whole node"),
+			"append into a list with a non-index key should give the shape-conflict remedy, got: " + msg);
+	}
+
+	@Test
+	public void testShapeConflictWorkaroundReplacingWholeNode() {
+		// The remedy the error suggests must actually work: replace the whole list
+		// node with a map, then named-child writes land.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/health/vaccinations",
+				Fields.VALUE, Vectors.of(Strings.create("a"), Strings.create("b"))),
+			ALICE).awaitResult(5000);
+
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/health/vaccinations", Fields.VALUE, Maps.empty()),
+			ALICE).awaitResult(5000);
+
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/health/vaccinations/tetanus",
+				Fields.VALUE, Maps.of("date", "2008-08-04")),
+			ALICE).awaitResult(5000);
+
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/health/vaccinations/tetanus"), ALICE);
+		ACell readResult = readJob.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(readResult, "exists"));
+		assertEquals(Strings.create("2008-08-04"),
+			RT.getIn(RT.getIn(readResult, "value"), "date"));
+	}
+
+	/** Flattens an exception's cause chain so assertions match wherever the message surfaced. */
+	private static String messageChain(Throwable t) {
+		StringBuilder sb = new StringBuilder();
+		for (Throwable c = t; c != null; c = c.getCause()) {
+			if (c.getMessage() != null) sb.append(c.getMessage()).append('\n');
+		}
+		return sb.toString();
+	}
+
+	@Test
 	public void testListVectorByIndexPath() {
 		// List a map nested inside a vector element
 		engine.jobs().invokeOperation("v/ops/covia/append",
