@@ -39,6 +39,22 @@ agent_create
 
 Ask the user for the system prompt if not provided. Ensure an OpenAI API key is stored (`secret_set`).
 
+### Create from a template
+
+Pre-built agent configs ship at **`v/agents/templates/<name>`** (browse with `covia_list path=v/agents/templates`). Pass the path as `config`:
+
+```
+agent_create  agentId="Bob"  config="v/agents/templates/worker"
+```
+
+Available: `minimal` (pure reasoning, no tools), `reader` (read-only covia), `worker` (covia CRUD), `analyst` (covia + schema), `manager` / `goaltree` (goal-tree planners), `full` (full default toolset).
+
+Templates default to `llmOperation: v/ops/langchain/openai` + `model: gpt-5.4-mini`. To run on another provider, override after creating — for template-made agents the LLM settings live in the **top-level `config`**:
+
+```
+agent_update  agentId="Bob"  config={ "llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-4-6" }
+```
+
 ### `list` — List all agents
 
 ```
