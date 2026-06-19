@@ -64,16 +64,6 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 */
 	public static final long DEFAULT_TOOL_CALL_TIMEOUT_MS = 300_000L;
 
-	/**
-	 * Defence-in-depth backstop for a single Level 3 LLM inference call. The
-	 * provider socket read timeout (LangChainAdapter IO_TIMEOUT, 120s) is the
-	 * first line of defence; this caps the wait if that timeout fails to fire
-	 * (e.g. an endpoint that streams or keepalives without ever completing the
-	 * response), so a hung LLM call cannot park the agent's virtual thread —
-	 * and leave the agent stuck RUNNING — forever. See covia-ai/covia hang audit.
-	 */
-	public static final long DEFAULT_LLM_CALL_TIMEOUT_MS = 300_000L;
-
 	// ========== Message field keys ==========
 
 	public static final AString K_ROLE       = Strings.intern("role");
@@ -229,26 +219,11 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// what it can DO via tools, not the inference call itself. Trust is
 		// established by going through invokeInternal — the framework path —
 		// rather than the user-facing invokeOperation. Caps stay on ctx.
-		ACell result;
-		try {
-			result = engine.jobs().invokeInternal(llmOperation, l3Input, ctx)
-				.get(DEFAULT_LLM_CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-		} catch (TimeoutException e) {
-			// Backstop above the provider socket timeout — fail the transition
-			// rather than parking the agent's virtual thread indefinitely.
-			throw new JobFailedException("LLM call timed out after "
-				+ DEFAULT_LLM_CALL_TIMEOUT_MS + "ms (" + llmOperation + ")");
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			throw new JobFailedException("LLM call interrupted (" + llmOperation + ")");
-		} catch (java.util.concurrent.ExecutionException e) {
-			// Preserve the original failure that .join() previously surfaced via
-			// CompletionException: re-throw the unwrapped cause.
-			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
-			if (cause instanceof RuntimeException re) throw re;
-			if (cause instanceof Error err) throw err;
-			throw new JobFailedException("LLM call failed (" + llmOperation + "): " + cause.getMessage());
-		}
+		// Park (cheaply, on a virtual thread) until the LLM op completes. No
+		// caller-side wait timeout is imposed here — bounding the actual IO is
+		// the provider op's job (LangChainAdapter's socket timeout); whether to
+		// time out the wait is the caller's decision, not this dispatch helper's.
+		ACell result = engine.jobs().invokeInternal(llmOperation, l3Input, ctx).join();
 
 		// A level-3 op that completes with a failure VALUE — {status: FAILED,
 		// message: ...} from Status.failure (missing/invalid API key, unknown

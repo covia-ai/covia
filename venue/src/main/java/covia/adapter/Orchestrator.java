@@ -51,15 +51,6 @@ public class Orchestrator extends AAdapter {
 
 	private static final AString K_STRICT = Strings.intern("strict");
 
-	/**
-	 * Backstop deadline for a single orchestration step's sub-job. Steps are
-	 * normally bounded by the sub-operation's own timeout (LLM, tool, HTTP);
-	 * this caps a step whose op never reaches a terminal state so one stuck
-	 * step cannot leave the whole orchestration hanging forever. On timeout the
-	 * step fails and the orchestration proceeds (as with any step failure).
-	 */
-	private static final long STEP_AWAIT_TIMEOUT_MS = 3_600_000L; // 1 hour
-
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		AMap<AString, ACell> operation = RT.getIn(meta, Fields.OPERATION);
@@ -326,7 +317,7 @@ public class Orchestrator extends AAdapter {
 						subJob = engine.jobs().invokeOperation(opId, input, ctx);
 					}
 
-					output=subJob.awaitResult(STEP_AWAIT_TIMEOUT_MS);
+					output=subJob.awaitResult();
 
 					// Strict mode: validate step output against the operation's output schema
 					if (strict || CVMBool.TRUE.equals(step.get(K_STRICT))) {
