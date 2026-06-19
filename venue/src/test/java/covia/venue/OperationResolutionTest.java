@@ -54,6 +54,9 @@ public class OperationResolutionTest {
 
 		Asset asset2 = engine.resolveAsset(Strings.create("/a/" + echoHash.toHexString()));
 		assertNotNull(asset2, "Should resolve by /a/ prefixed hash");
+
+		Asset asset3 = engine.resolveAsset(Strings.create("a/" + echoHash.toHexString()));
+		assertNotNull(asset3, "Should resolve by a/ prefixed hash (leading slash optional)");
 	}
 
 	@Test

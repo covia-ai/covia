@@ -845,8 +845,8 @@ public class Engine {
 	// without an "operation" field) is opaque data, not a reference. This
 	// keeps the resolver primitive simple and explicit.
 
-	/** Namespace prefix for immutable content-addressed assets */
-	private static final AString NS_ASSET = Strings.intern("/a/");
+	/** Namespace prefix for immutable content-addressed assets (leading slash optional: a/ or /a/) */
+	private static final AString NS_ASSET = Strings.intern("a/");
 	private static final AString NS_OPS   = Strings.intern("/o/");
 	/** Namespace prefix for DID URLs */
 	private static final AString NS_DID   = Strings.intern("did:");
@@ -866,7 +866,7 @@ public class Engine {
 	 * <p>Accepted input forms:</p>
 	 * <ul>
 	 *   <li>Bare hex hash → asset metadata from CAS</li>
-	 *   <li>{@code /a/<hash>} → asset metadata from CAS</li>
+	 *   <li>{@code a/<hash>} or {@code /a/<hash>} → asset metadata from CAS</li>
 	 *   <li>{@code /o/<name>} → caller's own /o/ entry value</li>
 	 *   <li>Local DID URL with {@code /a/<hash>} path → asset metadata</li>
 	 *   <li>Workspace path ({@code w/...}, {@code g/...}, etc.) → cursor value</li>
@@ -891,9 +891,10 @@ public class Engine {
 			return (asset != null) ? asset.meta() : null;
 		}
 
-		// 2. /a/<hash> → look up in CAS
-		if (ref.startsWith(NS_ASSET)) {
-			Hash ah = Hash.parse(ref.slice(3));
+		// 2. a/<hash> or /a/<hash> → look up in CAS (leading slash optional)
+		AString assetRef = stripLeadingSlash(ref);
+		if (assetRef.startsWith(NS_ASSET)) {
+			Hash ah = Hash.parse(assetRef.slice(2));
 			if (ah == null) return null;
 			Asset asset = getAsset(ah, ctx);
 			return (asset != null) ? asset.meta() : null;
