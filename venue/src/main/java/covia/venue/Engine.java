@@ -23,6 +23,7 @@ import convex.core.crypto.Hashing;
 import convex.core.crypto.util.Multikey;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
+import convex.core.exceptions.MissingDataException;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -944,6 +945,11 @@ public class Engine {
 		if (coviaAdapter == null) return null;
 		try {
 			return coviaAdapter.readVirtualNamespace(ctx, ref);
+		} catch (MissingDataException e) {
+			// Missing committed data is an integrity error, not a genuine
+			// absence — never convert it to a phantom null. Surface it.
+			log.warn("Virtual namespace resolution hit missing data for '{}' — surfacing, not nulling", ref);
+			throw e;
 		} catch (Exception e) {
 			log.warn("Virtual namespace resolution threw for '{}': {}", ref, e.toString());
 			return null;
@@ -1036,6 +1042,13 @@ public class Engine {
 			if (pathKeys.length == 0) return null;
 
 			return covia.adapter.CoviaAdapter.readPath(user.cursor(), pathKeys);
+		} catch (MissingDataException e) {
+			// A missing cell during navigation means committed data is
+			// unreadable — a real integrity bug, NOT a genuine absence.
+			// Converting it to null would report present data as "not found"
+			// and bury the bug. Surface it (with the path for context).
+			log.warn("Workspace path resolution hit missing data for '{}' — surfacing, not nulling", ref);
+			throw e;
 		} catch (Exception e) {
 			// Genuine absence returns null WITHOUT throwing (the null checks
 			// above + readPath returning null). Reaching here means navigation
