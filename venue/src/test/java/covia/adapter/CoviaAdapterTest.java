@@ -250,6 +250,43 @@ public class CoviaAdapterTest {
 		assertEquals(CVMBool.FALSE, RT.getIn(result, "exists"));
 	}
 
+	// ========== covia:write — value required ==========
+
+	@Test
+	public void testWriteWithoutValueFails() {
+		// A write with only a path (no 'value' key) must fail loudly rather than
+		// silently creating a null entry — guards against LLM tool calls that omit
+		// the required argument.
+		Job job = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/novalue"), ALICE);
+		assertThrows(Exception.class, () -> job.awaitResult(5000),
+			"write without a value should fail");
+
+		// The path must not have been created.
+		Job read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/novalue"), ALICE);
+		assertEquals(CVMBool.FALSE, RT.getIn(read.awaitResult(5000), "exists"),
+			"a failed write must not create the path");
+	}
+
+	@Test
+	public void testWriteExplicitNullAllowed() {
+		// An explicit null value is distinct from an absent key: it is the
+		// documented delete semantics and must still be accepted.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nullable", Fields.VALUE, Strings.create("x")), ALICE)
+			.awaitResult(5000);
+		ACell res = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nullable", Fields.VALUE, null), ALICE)
+			.awaitResult(5000);
+		assertNotNull(res, "explicit null write should complete (delete semantics)");
+
+		Job read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/nullable"), ALICE);
+		assertEquals(CVMBool.FALSE, RT.getIn(read.awaitResult(5000), "exists"),
+			"explicit null write should remove the entry");
+	}
+
 	// ========== covia:copy — server-side value duplication ==========
 
 	@Test

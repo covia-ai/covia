@@ -562,6 +562,15 @@ public class CoviaAdapter extends AAdapter {
 				throw new RuntimeException("Write permission denied for namespace: " + jsonKeys[0]);
 			}
 		}
+		// A write must supply a 'value'. An absent key means the caller (often an
+		// LLM tool call) forgot the argument — fail loudly so it retries with the
+		// value instead of silently creating a null entry. An explicit null is
+		// still allowed: that is the documented delete semantics.
+		if (!(input instanceof AMap) || !((AMap<?, ?>) input).containsKey(Fields.VALUE)) {
+			throw new RuntimeException(
+				"Write requires a 'value' field (received path only). Provide the value to "
+				+ "store; to remove an entry pass value: null explicitly, or use covia:delete.");
+		}
 		ACell value = parseJsonValue(RT.getIn(input, Fields.VALUE));
 
 		// Check job-scoped virtual namespace (t/)
