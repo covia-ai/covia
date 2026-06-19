@@ -944,6 +944,7 @@ public class Engine {
 		try {
 			return coviaAdapter.readVirtualNamespace(ctx, ref);
 		} catch (Exception e) {
+			log.warn("Virtual namespace resolution threw for '{}': {}", ref, e.toString());
 			return null;
 		}
 	}
@@ -1035,6 +1036,12 @@ public class Engine {
 
 			return covia.adapter.CoviaAdapter.readPath(user.cursor(), pathKeys);
 		} catch (Exception e) {
+			// Genuine absence returns null WITHOUT throwing (the null checks
+			// above + readPath returning null). Reaching here means navigation
+			// actually threw — abnormal. Don't swallow it into a phantom
+			// "path absent" (that masked a concurrent-read failure as an
+			// intermittent null); log it so the real cause is visible.
+			log.warn("Workspace path resolution threw for '{}': {}", ref, e.toString());
 			return null;
 		}
 	}

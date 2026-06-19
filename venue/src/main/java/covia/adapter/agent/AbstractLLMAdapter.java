@@ -17,6 +17,9 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
+import covia.api.Fields;
+import covia.exception.JobFailedException;
+import covia.grid.Status;
 import covia.lattice.CapabilityChecker;
 import covia.venue.RequestContext;
 
@@ -216,7 +219,21 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// what it can DO via tools, not the inference call itself. Trust is
 		// established by going through invokeInternal — the framework path —
 		// rather than the user-facing invokeOperation. Caps stay on ctx.
-		return engine.jobs().invokeInternal(llmOperation, l3Input, ctx).join();
+		ACell result = engine.jobs().invokeInternal(llmOperation, l3Input, ctx).join();
+
+		// A level-3 op that completes with a failure VALUE — {status: FAILED,
+		// message: ...} from Status.failure (missing/invalid API key, unknown
+		// provider) — is not an assistant message. Without this guard the tool
+		// loop sees no toolCalls and no content and silently emits an empty
+		// response, hiding the real failure. Surface it as a transition failure
+		// so the framework fails the caller's Job with the provider's message.
+		// (An op that throws already propagates exceptionally via join().)
+		if (result instanceof AMap && Status.FAILED.equals(RT.getIn(result, Fields.STATUS))) {
+			AString message = RT.ensureString(RT.getIn(result, Fields.MESSAGE));
+			throw new JobFailedException("LLM call failed (" + llmOperation + "): "
+				+ (message != null ? message.toString() : "no message"));
+		}
+		return result;
 	}
 
 	/**

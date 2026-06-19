@@ -86,6 +86,34 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testLevel3FailureFailsTransition() {
+		// Regression: a level-3 op that completes with a failure VALUE
+		// ({status: FAILED} from Status.failure — here an unresolvable API
+		// key) must fail the transition with the provider's message, NOT be
+		// mistaken for an empty assistant message and silently produce
+		// response:"". Without the guard in AbstractLLMAdapter.invokeLevel3
+		// the missing-key failure was swallowed into an empty response.
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		// apiKey points at a secret that does not exist → resolves to null →
+		// the langchain op returns Status.failure rather than calling out.
+		ACell state = Maps.of("config", Maps.of(
+			"llmOperation", "v/ops/langchain/anthropic",
+			"apiKey", "s/NONEXISTENT_TEST_KEY"));
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "no-key-agent",
+			AgentState.KEY_STATE, state,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "Hello"))
+		);
+
+		covia.exception.JobFailedException ex = assertThrows(
+			covia.exception.JobFailedException.class,
+			() -> adapter.processChat(RequestContext.of(ALICE_DID), input));
+		assertTrue(ex.getMessage() != null && ex.getMessage().contains("API key not found"),
+			"Failure should name the missing API key, was: " + ex.getMessage());
+	}
+
+	@Test
 	public void testMultiTurnConversation() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
