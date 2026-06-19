@@ -23,15 +23,31 @@ import covia.grid.Job;
  * Tests for operation resolution: /a/ hash paths, /o/ user-scoped names,
  * and the venue operation registry.
  *
- * <p>Uses {@link TestEngine#ENGINE}. Per-test {@code alice} DIDs isolate
- * writes to {@code /o/} and {@code /w/} (which are user-scoped). For
- * {@code /v/} writes (venue globals are shared), tests use distinct
- * paths so they don't collide with each other or with venue-installed
- * assets read by other tests.</p>
+ * <p>Uses its OWN {@link Engine}, not the shared {@link TestEngine#ENGINE}.
+ * These tests do write-then-read resolution. The shared engine is concurrently
+ * mutated by other parallel test classes whose HTTP requests trigger
+ * {@code syncState()} → {@code lattice.sync()}; a concurrent flush of the
+ * shared Etch store can transiently fault a lazily-loaded cell during a read
+ * (the de-swallowed navigation exception in #145/#146). Reads themselves are
+ * lock-free and navigate an immutable snapshot — there is no read-logic race —
+ * so the correct fix is isolation, not locking. This class never calls
+ * {@code syncState()}, so its own store stays quiescent and its reads are
+ * deterministic regardless of what other classes do. Per-test {@code alice}
+ * DIDs keep this class's own concurrent methods from colliding on
+ * {@code /o/} and {@code /w/}.</p>
  */
 public class OperationResolutionTest {
 
-	final Engine engine = TestEngine.ENGINE;
+	// Own engine, isolated from the shared TestEngine.ENGINE — see class doc.
+	// Built once for the class; this class's operations are all in-memory and
+	// lock-free (it never triggers syncState), so its concurrent methods share
+	// it safely.
+	private static final Engine engine;
+	static {
+		engine = Engine.createTemp(null);
+		Engine.addDemoAssets(engine);
+	}
+
 	private AString aliceDID;
 	private RequestContext alice;
 
