@@ -56,6 +56,12 @@ public class Config {
 	/** Key for venue hostname */
 	public static final AString HOSTNAME = Strings.intern("hostname");
 
+	/** Key for the venue default LLM provider operation used for new agents. */
+	public static final AString DEFAULT_LLM_OPERATION = Strings.intern("defaultLlmOperation");
+
+	/** Key for the venue default agent transition operation used for new agents. */
+	public static final AString DEFAULT_TRANSITION_OP = Strings.intern("defaultTransitionOp");
+
 	/** Key for venue port */
 	public static final AString PORT = Strings.intern("port");
 
@@ -253,6 +259,29 @@ public class Config {
 	public String getHostname() {
 		AString hostname = RT.ensureString(config.get(HOSTNAME));
 		return (hostname != null) ? hostname.toString() : "localhost";
+	}
+
+	/**
+	 * Venue default LLM provider operation for new agents that declare a
+	 * systemPrompt but no explicit llmOperation. Operator-configurable so a
+	 * venue can default to a different provider (e.g. Anthropic) without code
+	 * changes. Per-provider default <em>models</em> remain in the provider
+	 * adapter — a single venue model default cannot be right across providers.
+	 * @return configured op, or {@code "v/ops/langchain/openai"} if unset
+	 */
+	public AString getDefaultLlmOperation() {
+		AString v = RT.ensureString(config.get(DEFAULT_LLM_OPERATION));
+		return (v != null) ? v : Strings.intern("v/ops/langchain/openai");
+	}
+
+	/**
+	 * Venue default agent transition operation for new agents that don't
+	 * declare one.
+	 * @return configured op, or {@code "v/ops/llmagent/chat"} if unset
+	 */
+	public AString getDefaultTransitionOp() {
+		AString v = RT.ensureString(config.get(DEFAULT_TRANSITION_OP));
+		return (v != null) ? v : Strings.intern("v/ops/llmagent/chat");
 	}
 
 	/**
