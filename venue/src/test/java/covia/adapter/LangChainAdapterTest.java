@@ -386,6 +386,34 @@ public class LangChainAdapterTest {
 		assertNull(LangChainAdapter.toJsonObjectSchema(schema), "Should return null when no properties");
 	}
 
+	@SuppressWarnings({"unchecked", "rawtypes"})
+	@Test
+	public void testToJsonObjectSchemaTypelessValueStaysStructured() {
+		// Mirrors covia/write's input schema: a typed `path` and a typeless `value`.
+		// Regression: the typeless `value` used to be advertised to the LLM as a
+		// string, so a structured object could not be passed and arrived null. It
+		// must now be an open object (additionalProperties allowed), while `path`
+		// stays a string.
+		AMap<AString, ACell> schema = (AMap<AString, ACell>)(AMap) Maps.of(
+			"type", "object",
+			"properties", Maps.of(
+				"path", Maps.of("type", "string"),
+				"value", Maps.of("description", "The value to store (any JSON value)")
+			),
+			"required", Vectors.of("path", "value")
+		);
+
+		JsonObjectSchema result = LangChainAdapter.toJsonObjectSchema(schema);
+		assertNotNull(result);
+		assertEquals(2, result.properties().size(), "Both path and value must be present");
+		assertInstanceOf(JsonStringSchema.class, result.properties().get("path"));
+
+		JsonSchemaElement value = result.properties().get("value");
+		assertInstanceOf(JsonObjectSchema.class, value,
+			"Typeless `value` must be an open object, not a string");
+		assertEquals(Boolean.TRUE, ((JsonObjectSchema) value).additionalProperties());
+	}
+
 	// ========== toSchemaElement ==========
 
 	@SuppressWarnings({"unchecked", "rawtypes"})
@@ -419,10 +447,17 @@ public class LangChainAdapterTest {
 	}
 
 	@Test
-	public void testSchemaElementDefaultsToString() {
-		// No type specified → defaults to string
+	public void testSchemaElementNoTypeIsOpenObject() {
+		// No declared type = "any JSON value". It must be an open object so the LLM
+		// can pass a structured value through. Regression: it used to coerce to a
+		// string, which dropped structured tool-call args (e.g. covia/write's value
+		// arrived null).
 		JsonSchemaElement el = LangChainAdapter.toSchemaElement(schemaMap("description", "no type"));
-		assertInstanceOf(JsonStringSchema.class, el);
+		assertInstanceOf(JsonObjectSchema.class, el);
+		JsonObjectSchema obj = (JsonObjectSchema) el;
+		assertEquals(Boolean.TRUE, obj.additionalProperties(),
+			"Typeless param must allow additional properties so structured values pass through");
+		assertEquals("no type", obj.description());
 	}
 
 	@Test

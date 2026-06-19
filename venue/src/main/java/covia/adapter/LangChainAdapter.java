@@ -643,7 +643,6 @@ public class LangChainAdapter extends AAdapter {
 	static JsonSchemaElement toSchemaElement(AMap<AString, ACell> prop) {
 		AString type = RT.ensureString(prop.get(K_TYPE));
 		AString desc = RT.ensureString(prop.get(K_DESCRIPTION));
-		String typeStr = (type != null) ? type.toString() : "string";
 		String descStr = (desc != null) ? desc.toString() : null;
 
 		// Check for enum values — applies to string type
@@ -663,6 +662,22 @@ public class LangChainAdapter extends AAdapter {
 			}
 		}
 
+		// A property with no declared "type" is an "any JSON value" parameter
+		// (e.g. covia:write's `value`, agent_request's `input`, grid_run's
+		// `input`). LangChain4j's typed schema model has no "any" element, so the
+		// old fallback silently coerced such params to a string — which made the
+		// LLM unable to pass a structured value through (it arrived null). Emit an
+		// open object (additionalProperties allowed) so providers accept it and
+		// the model can supply a structured object. Scalar/array values for a
+		// typeless param remain a known limitation; objects are the common case.
+		if (type == null) {
+			return JsonObjectSchema.builder()
+				.description(descStr)
+				.additionalProperties(true)
+				.build();
+		}
+
+		String typeStr = type.toString();
 		switch (typeStr) {
 			case "string":
 				return JsonStringSchema.builder().description(descStr).build();
