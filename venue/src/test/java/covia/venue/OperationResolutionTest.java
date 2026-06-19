@@ -683,4 +683,47 @@ public class OperationResolutionTest {
 		ACell keys = RT.getIn(result, "keys");
 		assertNotNull(keys, "should list child keys under v/ops/json");
 	}
+
+	// ========== Leading-slash consistency ==========
+	//
+	// A leading slash is optional sugar: "/foo/bar" must resolve identically
+	// to "foo/bar" for every namespace. Hash (/a/) and per-user ops (/o/)
+	// already accepted it; these lock in the same for virtual (v/, n/, ...)
+	// and workspace (w/, g/, ...) namespaces.
+
+	@Test
+	public void testLeadingSlashVirtualNamespace() {
+		assertNotNull(engine.resolveAsset(Strings.create("v/test/ops/echo"), alice),
+			"v/test/ops/echo should resolve without a leading slash");
+		assertNotNull(engine.resolveAsset(Strings.create("/v/test/ops/echo"), alice),
+			"/v/test/ops/echo should resolve identically with a leading slash");
+	}
+
+	@Test
+	public void testLeadingSlashWorkspacePath() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/slash-note", Fields.VALUE, Strings.create("hi")),
+			alice).awaitResult(5000);
+
+		assertEquals(Strings.create("hi"),
+			engine.resolvePath(Strings.create("w/slash-note"), alice),
+			"w/slash-note should resolve without a leading slash");
+		assertEquals(Strings.create("hi"),
+			engine.resolvePath(Strings.create("/w/slash-note"), alice),
+			"/w/slash-note should resolve identically with a leading slash");
+	}
+
+	@Test
+	public void testLeadingSlashUserOpPath() {
+		ACell opMeta = Maps.of("name", "Slash Echo",
+			"operation", Maps.of("adapter", "test:echo"));
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "o/slash-echo", Fields.VALUE, opMeta),
+			alice).awaitResult(5000);
+
+		assertNotNull(engine.resolveAsset(Strings.create("o/slash-echo"), alice),
+			"o/slash-echo should resolve without a leading slash");
+		assertNotNull(engine.resolveAsset(Strings.create("/o/slash-echo"), alice),
+			"/o/slash-echo should resolve identically with a leading slash");
+	}
 }

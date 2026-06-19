@@ -167,9 +167,11 @@ A write-side argument is constrained because you can't write to a content-addres
 3. **`/o/<name>`** → caller's own `/o/`
 4. **`/v/<path>`** → venue globals via `VenueGlobalsResolver` (virtual prefix to `<venue-DID>/w/global/<path>`)
 5. **DID URL** (`did:.../a/<hash>`) → local copies only: the named principal's records, then the venue store. `resolvePath` never touches the network
-6. **Workspace path** (`w/`, `g/`, `o/`, `j/`, etc. without leading slash) → caller's lattice cursor
+6. **Workspace path** (`w/`, `g/`, `o/`, `j/`, etc.) → caller's lattice cursor
 
 The resolver returns the **literal value** at the resolved location. It does NOT chase references, follow indirections, or interpret the value in any way. It is a single-step navigation primitive.
+
+**A leading slash is optional sugar.** Every form above resolves identically with or without a leading slash: `/v/ops/json/merge` is the same as `v/ops/json/merge`, and `/w/notes` the same as `w/notes`. The slash is normalised away before resolution, so the `/v/`, `/o/`, `/a/` notation used throughout this document and the bare `v/`, `o/`, `a/` forms are interchangeable.
 
 `Engine.resolveAsset(ref, ctx)` is a thin composition: `Asset.fromMeta(resolvePath(ref, ctx))`, plus one invocation-side addition: a remote DID URL reference whose definition is not held locally is **fetched** from the publishing venue — metadata only. For a hash reference (`did:web:…/a/<hash>`) the fetch is verified to hash to the requested id; for a named catalog reference (`did:web:…/v/ops/…`) the name is first resolved to an id *at the publisher* (the one step taken on the namer's word — names are mutable bindings), then the definition travels over the same hash-verified path. It returns an `Asset` if the resolved value is a map with an `operation` field, and `null` otherwise. Op-invocation paths (`grid:run`, agent loop) call `resolveAsset` and expect a non-null result; if the resolved value isn't asset-shaped, the op fails explicitly with "operation not found".
 

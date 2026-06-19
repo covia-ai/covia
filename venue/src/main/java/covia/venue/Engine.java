@@ -850,6 +850,13 @@ public class Engine {
 	private static final AString NS_OPS   = Strings.intern("/o/");
 	/** Namespace prefix for DID URLs */
 	private static final AString NS_DID   = Strings.intern("did:");
+	/** Optional leading-slash sugar, stripped before virtual/workspace resolution */
+	private static final AString SLASH    = Strings.intern("/");
+
+	/** Strips a single optional leading slash: {@code "/w/x"} → {@code "w/x"}; {@code "w/x"} unchanged. */
+	private static AString stripLeadingSlash(AString ref) {
+		return ref.startsWith(SLASH) ? ref.slice(1) : ref;
+	}
 
 	/**
 	 * Pure single-step path navigation. Returns the literal value at the
@@ -903,16 +910,22 @@ public class Engine {
 			return (local != null) ? local.meta() : null;
 		}
 
+		// Steps 5–6 cover the virtual and workspace namespaces, where a
+		// leading slash is optional sugar (it is already accepted for /a/ and
+		// /o/ above). Normalise it away once so "/w/notes" resolves exactly
+		// like "w/notes" and "/v/ops/x" like "v/ops/x".
+		AString navRef = stripLeadingSlash(ref);
+
 		// 5. Virtual namespace prefix (n/, v/, ...) — delegate to the
 		// registered resolver via CoviaAdapter. Handles cursor-based
 		// virtual namespaces uniformly. (t/ — job-scoped temp — is not
 		// handled here; covia:read has its own t/ branch.)
-		ACell virtualValue = resolveVirtualNamespace(ref, ctx);
+		ACell virtualValue = resolveVirtualNamespace(navRef, ctx);
 		if (virtualValue != null) return virtualValue;
 
 		// 6. Workspace path (w/, g/, o/, j/, s/, h/) → caller's lattice
-		if (isUserNamespacePath(ref)) {
-			return readWorkspacePathValue(ref, ctx);
+		if (isUserNamespacePath(navRef)) {
+			return readWorkspacePathValue(navRef, ctx);
 		}
 
 		return null;
