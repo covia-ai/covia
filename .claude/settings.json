@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "mcp__*"
+      "mcp__convex-testnet",
+      "mcp__covia-venue",
+      "mcp__local-covia-venue"
     ]
   }
 }
