@@ -38,7 +38,7 @@ import covia.venue.RequestContext;
  *
  * <h3>Tool palette</h3>
  * <p>Unless disabled via {@code defaultTools: false}, agents start with the
- * tool set in {@link #DEFAULT_TOOL_OPS} (covia CRUD, agent lifecycle, asset
+ * tool set in {@link ContextBuilder#DEFAULT_TOOL_OPS} (covia CRUD, agent lifecycle, asset
  * management, schema, grid). Task tools ({@code complete_task},
  * {@code fail_task}) are added dynamically when tasks are pending.</p>
  *
@@ -158,29 +158,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	private static final AVector<ACell> CONTEXT_TOOLS = (AVector<ACell>) Vectors.of(
 		(ACell) TOOL_DEF_CONTEXT_LOAD,
 		(ACell) TOOL_DEF_CONTEXT_UNLOAD
-	);
-
-	/** Default tool operations — resolved via buildConfigTools at runtime */
-	private static final AVector<ACell> DEFAULT_TOOL_OPS = (AVector<ACell>) Vectors.of(
-		(ACell) Strings.create("v/ops/agent/create"),
-		(ACell) Strings.create("v/ops/agent/message"),
-		(ACell) Strings.create("v/ops/agent/request"),
-		(ACell) Strings.create("v/ops/asset/store"),
-		(ACell) Strings.create("v/ops/asset/get"),
-		(ACell) Strings.create("v/ops/asset/list"),
-		(ACell) Strings.create("v/ops/asset/content"),
-		(ACell) Strings.create("v/ops/asset/pin"),
-		(ACell) Strings.create("v/ops/grid/run"),
-		(ACell) Strings.create("v/ops/grid/job-result"),
-		(ACell) Strings.create("v/ops/covia/read"),
-		(ACell) Strings.create("v/ops/covia/write"),
-		(ACell) Strings.create("v/ops/covia/delete"),
-		(ACell) Strings.create("v/ops/covia/append"),
-		(ACell) Strings.create("v/ops/covia/slice"),
-		(ACell) Strings.create("v/ops/covia/list"),
-		(ACell) Strings.create("v/ops/covia/inspect"),
-		(ACell) Strings.create("v/ops/schema/validate"),
-		(ACell) Strings.create("v/ops/schema/infer")
 	);
 
 	/** Task tools only available when there are outstanding tasks */
