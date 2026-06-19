@@ -69,6 +69,8 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.completedFuture(handleLlm(input));
                 case "toolllm":
                     return CompletableFuture.completedFuture(handleToolLlm(input));
+                case "loopllm":
+                    return CompletableFuture.completedFuture(handleLoopLlm(input));
                 case "taskllm":
                     return CompletableFuture.completedFuture(handleTaskLlm(input));
                 case "workspacellm":
@@ -113,6 +115,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("capturectx",   BASE+"capturectxop.json");
 			installTestAsset("llm",          BASE+"testllm.json");
 			installTestAsset("toolllm",      BASE+"testtoolllm.json");
+			installTestAsset("loopllm",      BASE+"testloopllm.json");
 			installTestAsset("taskllm",      BASE+"testtaskllm.json");
 			installTestAsset("workspacellm", BASE+"testworkspacellm.json");
 			installTestAsset("compactllm",   BASE+"testcompactllm.json");
@@ -339,6 +342,23 @@ public class TestAdapter extends AAdapter {
         return Maps.of("role", Strings.create("assistant"), "content", Strings.create("(no messages)"));
     }
     
+    /**
+     * Test LLM that ALWAYS requests a tool call — never returns text and never
+     * completes a task — so the agent tool-call loop runs to MAX_TOOL_ITERATIONS.
+     * Used to verify the agent fails the Job on give-up (covia-ai/covia#138)
+     * instead of leaving a task STARTED.
+     */
+    private ACell handleLoopLlm(ACell input) {
+        return Maps.of(
+            "role", Strings.create("assistant"),
+            "toolCalls", Vectors.of(Maps.of(
+                "id", Strings.create("call_loop"),
+                "name", Strings.create("v/test/ops/echo"),
+                "arguments", Strings.create("{\"echo\":\"loop\"}")
+            ))
+        );
+    }
+
     /**
      * Test LLM for task completion: looks for "[Tasks assigned to you]" in user
      * messages, extracts the first job ID, and calls complete_task. After seeing

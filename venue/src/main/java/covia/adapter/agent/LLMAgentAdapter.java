@@ -21,6 +21,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AgentAdapter;
 import covia.api.Fields;
+import covia.exception.JobFailedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
@@ -474,13 +475,19 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 		}
 
-		// Iteration limit reached
-		log.warn("Tool call loop reached iteration limit ({})", MAX_TOOL_ITERATIONS);
-		newMessages = newMessages.conj(Maps.of(
-			K_ROLE, ROLE_ASSISTANT,
-			K_CONTENT, Strings.create("I reached the maximum number of tool call iterations. Please try again with a simpler request.")
-		));
-		return newMessages;
+		// Iteration limit reached — the agent gave up. Fail the transition so the
+		// task resolves to FAILED instead of hanging STARTED forever behind a
+		// fake-success apology (covia-ai/covia#138). A transition failure also
+		// suspends the agent with the error recorded — appropriate here: an agent
+		// that loops to the tool-call safety limit is misbehaving, so parking it
+		// for inspection (recoverable via agent:resume) is the right reaction, not
+		// silently continuing. The iteration cap already bounds CPU/IO; this makes
+		// the give-up an honest, terminal outcome. (Failing only the task while
+		// keeping the agent SLEEPING would need run-loop changes to distinguish a
+		// task failure from an agent failure — a separate enhancement.)
+		log.warn("Tool call loop reached iteration limit ({}) — failing the transition", MAX_TOOL_ITERATIONS);
+		throw new JobFailedException("Agent reached the tool-call iteration limit ("
+			+ MAX_TOOL_ITERATIONS + ") without completing the task.");
 	}
 
 	// ========== Built-in tool execution ==========

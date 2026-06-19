@@ -552,6 +552,48 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testToolLoopLimitFailsTask() {
+		// Agent whose LLM (loopllm) ALWAYS tool-calls and never completes the
+		// task — the tool loop runs to MAX_TOOL_ITERATIONS. The task Job must
+		// transition to FAILED (the agent gave up) rather than hang STARTED
+		// forever behind a fake-success apology (covia-ai/covia#138). The
+		// iteration cap bounds CPU/IO; this asserts the give-up is terminal.
+		ACell initialState = Maps.of("config", Maps.of("llmOperation", "v/test/ops/loopllm"));
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "loop-agent",
+				AgentState.KEY_STATE, initialState,
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// agent:request — the request Job IS the task Job (taskId == job id).
+		Job taskJob = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(
+				Fields.AGENT_ID, "loop-agent",
+				Fields.INPUT, Maps.of("task", "do something")),
+			RequestContext.of(ALICE_DID));
+
+		// The agent runs, hits the iteration limit, fails the transition →
+		// the task fails (awaitResult throws on a FAILED Job).
+		assertThrows(Exception.class, () -> taskJob.awaitResult(15000),
+			"a task the agent gives up on (iteration limit) must fail, not hang STARTED");
+		assertEquals(Status.FAILED, taskJob.getStatus(),
+			"task Job must transition to FAILED on agent give-up");
+
+		// The give-up is a transition failure, so the agent suspends with the
+		// error recorded (resumable via agent:resume) — its thread is freed and
+		// the task resolved, which is the point. An agent that loops to its
+		// tool-call safety limit is misbehaving, so parking it is appropriate.
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("loop-agent");
+		assertEquals(AgentState.SUSPENDED, agent.getStatus(),
+			"agent suspends (error recorded, resumable, thread freed) after giving up");
+	}
+
+	@Test
 	public void testCompleteTaskDirect() {
 		// Test complete_task via processChat directly (no agent:request pipeline).
 		// Since the venue op `agent:completeTask` reads (agentId, taskId) from

@@ -1,0 +1,22 @@
+{
+	"name": "Test Loop LLM",
+	"description": "Test LLM that ALWAYS requests a tool call and never returns text or completes a task. Drives the agent tool-call loop to its iteration limit, to verify the agent fails the Job on give-up rather than leaving a task STARTED (covia-ai/covia#138).",
+	"dateCreated": "2026-06-19T00:00:00Z",
+	"operation": {
+		"adapter": "test:loopllm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": { "type": "array" },
+				"tools": { "type": "array" }
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": { "type": "string" },
+				"toolCalls": { "type": "array" }
+			}
+		}
+	}
+}
