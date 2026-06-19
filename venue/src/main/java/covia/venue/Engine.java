@@ -1494,6 +1494,11 @@ public class Engine {
 			status=status.assoc(Fields.NAME, name);
 		}
 
+		// Build version so operators can detect version drift across venues.
+		// jarVersion() reads the (shaded) jar's Implementation-Version and falls
+		// back to "dev" when running from classes — never null. See #139.
+		status=status.assoc(Fields.VERSION, Strings.create(jarVersion()));
+
 		return status;
 	}
 

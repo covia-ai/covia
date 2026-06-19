@@ -202,6 +202,12 @@ public class VenueServerTest {
 	public void testStatus() throws InterruptedException, ExecutionException {
 		AMap<AString, ACell> status = covia.getStatus().get();
 		assertTrue(status.get(Fields.TS) instanceof CVMLong);
+		// #139: the status response must report a non-null build version so
+		// operators can detect version drift across venues. Running from classes
+		// this is "dev"; from the shaded jar it is the Implementation-Version.
+		ACell version = status.get(Fields.VERSION);
+		assertNotNull(version, "status must include a non-null version");
+		assertFalse(version.toString().isEmpty(), "version must not be empty");
 	}
 	
 	@Test
