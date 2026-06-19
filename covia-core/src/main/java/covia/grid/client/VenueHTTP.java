@@ -94,6 +94,13 @@ public class VenueHTTP extends Venue {
 	 */
 	private HttpRequest.Builder requestBuilder(URI uri) {
 		HttpRequest.Builder builder = HttpRequest.newBuilder().uri(uri);
+		// Per-request total deadline. connectTimeout only bounds establishing the
+		// TCP connection; without this a connected-but-stalled venue (slow/hung
+		// remote, half-open socket) leaves the request — and any caller that
+		// .join()s it (federation, orchestration) — pending forever. Generous
+		// floor so large content transfers and slow LLM-backed invokes still
+		// complete; grows with the caller's configured job-wait timeout.
+		builder.timeout(Duration.ofMillis(Math.max(timeout, 120_000L)));
 		auth.apply(builder);
 		return builder;
 	}

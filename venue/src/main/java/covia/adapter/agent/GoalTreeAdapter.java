@@ -69,6 +69,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	/** Maximum tool call loop iterations per frame */
 	static final int MAX_ITERATIONS = 50;
 
+	/**
+	 * Maximum subgoal nesting depth. Each {@code subgoal} call recurses into a
+	 * child frame, and each frame can run up to {@link #MAX_ITERATIONS} LLM
+	 * calls — unbounded nesting risks many hours of work and deep stack growth.
+	 * At this depth the harness refuses further decomposition and the model must
+	 * make progress (complete/fail) at the current level.
+	 */
+	static final int MAX_SUBGOAL_DEPTH = 10;
+
 	/** Live turn count above which the auto-compact nudge fires */
 	static final int AUTO_COMPACT_THRESHOLD = 20;
 
@@ -903,28 +912,41 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					String desc = RT.ensureString(RT.getIn(toolInput, Strings.create("description"))).toString();
 					log.info("Subgoal pushed: {}", desc);
 
-					// Push child frame with inherited loads (copy-on-push)
-					AMap<AString, ACell> parentLoads = GoalTreeContext.getLoads(activeFrame);
-					AMap<AString, ACell> childFrame = GoalTreeContext.createFrame(desc, parentLoads);
-					frames = updateFrame(frames, frameIndex, activeFrame);
-					AVector<ACell> childFrames = frames.conj(childFrame);
+					if (frameIndex + 1 >= MAX_SUBGOAL_DEPTH) {
+						// Refuse to nest deeper — subgoal recursion is otherwise
+						// unbounded, and each frame can run up to MAX_ITERATIONS
+						// LLM calls. The model receives this as the tool result and
+						// must make progress (complete/fail) at the current depth.
+						log.warn("Subgoal depth limit ({}) reached — refusing further nesting", MAX_SUBGOAL_DEPTH);
+						toolResult = Maps.of(
+							Strings.create("status"), Strings.create("error"),
+							Strings.create("error"), Strings.create(
+								"Maximum subgoal depth (" + MAX_SUBGOAL_DEPTH + ") reached. Complete or "
+								+ "fail the current goal at this level instead of decomposing further."));
+					} else {
+						// Push child frame with inherited loads (copy-on-push)
+						AMap<AString, ACell> parentLoads = GoalTreeContext.getLoads(activeFrame);
+						AMap<AString, ACell> childFrame = GoalTreeContext.createFrame(desc, parentLoads);
+						frames = updateFrame(frames, frameIndex, activeFrame);
+						AVector<ACell> childFrames = frames.conj(childFrame);
 
-					// Recurse into child. Child frames don't inherit typed
-					// outputs — a subgoal's contract is "return any value to
-					// the parent", not the parent's typed output schema. The
-					// child also gets responseFormat stripped from its L3
-					// config (handled inside the recursive runFrame).
-					FrameResult childResult = runFrame(job, childFrames, frameIndex + 1,
-						config, llmOperation, baseTools, configToolMap, caps, ctx, systemMessages, null,
-						toolCallTimeoutMs);
+						// Recurse into child. Child frames don't inherit typed
+						// outputs — a subgoal's contract is "return any value to
+						// the parent", not the parent's typed output schema. The
+						// child also gets responseFormat stripped from its L3
+						// config (handled inside the recursive runFrame).
+						FrameResult childResult = runFrame(job, childFrames, frameIndex + 1,
+							config, llmOperation, baseTools, configToolMap, caps, ctx, systemMessages, null,
+							toolCallTimeoutMs);
 
-					// Pop child — result becomes tool result in parent
-					AMap<AString, ACell> resultMap = Maps.of(
-						Strings.create("status"), Strings.create(childResult.status()));
-					if (childResult.value() != null) {
-						resultMap = resultMap.assoc(Strings.create("result"), childResult.value());
+						// Pop child — result becomes tool result in parent
+						AMap<AString, ACell> resultMap = Maps.of(
+							Strings.create("status"), Strings.create(childResult.status()));
+						if (childResult.value() != null) {
+							resultMap = resultMap.assoc(Strings.create("result"), childResult.value());
+						}
+						toolResult = resultMap;
 					}
-					toolResult = resultMap;
 
 				} else {
 					// Config tool or grid dispatch

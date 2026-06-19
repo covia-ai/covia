@@ -33,6 +33,13 @@ public class ConvexAdapter extends AAdapter {
 
 	private static final Logger log = LoggerFactory.getLogger(ConvexAdapter.class);
 
+	/**
+	 * Backstop deadline for a Convex peer call (connect + query/transact). The
+	 * Convex client configures no request timeout, so without this a connected-
+	 * but-non-responsive peer leaves the future — and the Job — pending forever.
+	 */
+	private static final long CONVEX_CALL_TIMEOUT_MS = 60_000L;
+
 	private Hash QUERY_OPERATION;
 	private Hash TRANSACT_OPERATION;
 
@@ -142,7 +149,10 @@ public class ConvexAdapter extends AAdapter {
 			}
 
 			return resultFuture.whenComplete((result, error) -> closeQuietly(convex));
-		});
+		})
+		// Backstop so a non-responsive Convex peer cannot leave the Job pending
+		// forever (the Convex client sets no request timeout of its own).
+		.orTimeout(CONVEX_CALL_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
 	}
 
 	private Convex openConvexClient(AMap<AString, ACell> meta, ACell input) throws Exception {
