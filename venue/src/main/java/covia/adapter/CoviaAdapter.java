@@ -722,7 +722,9 @@ public class CoviaAdapter extends AAdapter {
 		String namespace = jsonKeys[0].toString();
 		if (!WRITABLE_NAMESPACES.contains(namespace)) {
 			throw new RuntimeException(
-				"Can only write to 'w' (workspace) or 'o' (operations) namespaces, got: " + namespace);
+				"Namespace '" + namespace + "' is not writable (framework-managed). "
+				+ "Writable namespaces: w/ (workspace), o/ (operation pins); "
+				+ "n/ and t/ are writable within an agent or job run.");
 		}
 	}
 
