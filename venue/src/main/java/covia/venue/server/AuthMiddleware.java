@@ -13,6 +13,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMLong;
 import convex.auth.jwt.JWT;
 import convex.auth.ucan.UCAN;
 import convex.auth.ucan.UCANValidator;
@@ -64,6 +65,9 @@ public class AuthMiddleware {
 	private static final AString SUB = Fields.SUB;
 	private static final AString KID = Fields.KID;
 	private static final AString EMAIL = Fields.EMAIL;
+	private static final AString AUD = Strings.intern("aud");
+	private static final AString EXP = Strings.intern("exp");
+	private static final AString NBF = Strings.intern("nbf");
 
 	// Per-instance state. Was static, which made running multiple VenueServers
 	// in the same JVM (production multi-tenant, parallel test classes) racy:
@@ -71,13 +75,14 @@ public class AuthMiddleware {
 	// causing requests to be attributed to the wrong venue's public DID
 	// and 403'd by AccessControl on cross-venue job lookups.
 	private final AccountKey venueKey;
-	@SuppressWarnings("unused")
 	private final AString venueDID;
 	private final AString publicDID;
 	private final Auth venueAuth;
 	private final Map<String, OAuthConfig> externalProviders;
 	private final boolean publicAccessEnabled;
 	private final AVector<ACell> publicCeiling;
+	private final String audiencePolicy;                  // "verify" | "require"
+	private final java.util.Set<String> acceptedAudiences;
 
 	private AuthMiddleware(AccountKey venueAccountKey, Auth auth, AString venueDIDString) {
 		this.venueKey = venueAccountKey;
@@ -91,6 +96,68 @@ public class AuthMiddleware {
 		// operator-overridable via auth.public.caps. Only relevant when public
 		// access is enabled (otherwise every anonymous request is 401'd).
 		this.publicCeiling = publicAccessEnabled ? auth.getPublicCeiling(publicDID) : null;
+		// Accepted JWT audiences: the venue's own published DID (whatever its
+		// method — did:key, did:web, …) plus any operator allowlist. A bearer
+		// token's `aud` must name one of these (RFC 7519 §4.1.3), so a token
+		// minted for another venue cannot be replayed here. We do NOT assume the
+		// venue's identity is the did:key of its signing key — a did:web venue
+		// publishes did:web, and clients audience tokens to the DID resolved from
+		// did.json; operators add any additional forms via auth.acceptedAudiences.
+		this.audiencePolicy = auth.getAudiencePolicy();
+		java.util.Set<String> aud = new java.util.HashSet<>();
+		aud.add(venueDIDString.toString());
+		aud.addAll(auth.getConfiguredAudiences());
+		this.acceptedAudiences = aud;
+	}
+
+	/** Thrown when a bearer token is otherwise valid (signature, temporal bounds)
+	 *  but its audience does not satisfy the audience policy — surfaced as a hard
+	 *  401, never a silent downgrade to the public identity. */
+	private static final class AudienceRejected extends RuntimeException {
+		private static final long serialVersionUID = 1L;
+		AudienceRejected(String message) { super(message); }
+	}
+
+	/**
+	 * Enforces RFC 7519 §4.1.3 audience restriction. {@code aud} may be a string
+	 * or an array of strings (StringOrURI), compared case-sensitively. A present
+	 * {@code aud} must name an accepted audience; an absent {@code aud} is
+	 * governed by the policy ({@code require} rejects, {@code verify} accepts).
+	 *
+	 * @throws AudienceRejected when the audience is not accepted
+	 */
+	private void requireAudience(ACell aud) {
+		if (aud == null) {
+			if ("require".equals(audiencePolicy)) {
+				throw new AudienceRejected("audience (aud) is required but absent");
+			}
+			return; // verify: tolerate an absent aud (warn-then-enforce migration)
+		}
+		if (aud instanceof AString s) {
+			if (!acceptedAudiences.contains(s.toString())) {
+				throw new AudienceRejected("token audience is not this venue: " + s);
+			}
+			return;
+		}
+		if (aud instanceof AVector<?> arr) {
+			for (long i = 0; i < arr.count(); i++) {
+				AString m = RT.ensureString(arr.get(i));
+				if (m != null && acceptedAudiences.contains(m.toString())) return;
+			}
+			throw new AudienceRejected("token audience list does not include this venue");
+		}
+		throw new AudienceRejected("malformed audience (aud) claim");
+	}
+
+	/** Checks JWT temporal bounds ({@code exp}/{@code nbf}) against {@code now}
+	 *  (epoch seconds): false if expired or not-yet-valid; a token with no bounds
+	 *  is temporally unbounded (true). */
+	private static boolean temporalValid(AMap<AString, ACell> claims, long now) {
+		CVMLong exp = RT.ensureLong(claims.get(EXP));
+		if (exp != null && now >= exp.longValue()) return false;
+		CVMLong nbf = RT.ensureLong(claims.get(NBF));
+		if (nbf != null && now < nbf.longValue()) return false;
+		return true;
 	}
 
 	/**
@@ -176,6 +243,12 @@ public class AuthMiddleware {
 					markPublic(ctx);
 				}
 			}
+		} catch (AudienceRejected e) {
+			// A presented token failed the audience policy — a hard 401, NOT a
+			// silent downgrade to the public identity (the replay defence).
+			log.debug("Bearer token audience rejected: {}", e.getMessage());
+			ctx.status(401).result("Token audience not accepted by this venue");
+			ctx.skipRemainingHandlers();
 		} catch (Exception e) {
 			log.debug("Error processing bearer token", e);
 			if (!publicAccessEnabled) {
@@ -199,7 +272,7 @@ public class AuthMiddleware {
 	 * @return Issuer DID (did:key form) on success, null if the token is not
 	 *         a valid UCAN
 	 */
-	private static AString tryVerifyUCAN(AString jwt) {
+	private AString tryVerifyUCAN(AString jwt) {
 		UCAN token = UCAN.fromJWT(jwt);
 		if (token == null) return null;
 		// A UCAN must declare an audience — this is what distinguishes it from
@@ -219,6 +292,9 @@ public class AuthMiddleware {
 		if (JWT.verifyPublic(jwt, issuerKey) == null) return null;
 		long now = System.currentTimeMillis() / 1000;
 		if (!UCANValidator.checkTemporalBounds(token, now)) return null;
+		// Audience restriction (RFC 7519 §4.1.3): the bearer must be intended for
+		// THIS venue, else a token minted for another venue could be replayed.
+		requireAudience(token.getAudience());
 		return issuer;
 	}
 
@@ -249,6 +325,12 @@ public class AuthMiddleware {
 			return null;
 		}
 
+		// Temporal bounds — previously unchecked, so a self-issued token was
+		// accepted forever; reject expired / not-yet-valid tokens.
+		if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
+		// Audience restriction (RFC 7519 §4.1.3): a self-issued token minted for
+		// another venue must not authenticate here.
+		requireAudience(claims.get(AUD));
 		return sub;
 	}
 

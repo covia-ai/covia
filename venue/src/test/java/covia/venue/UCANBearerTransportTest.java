@@ -176,6 +176,51 @@ public class UCANBearerTransportTest {
 	}
 
 	/**
+	 * AUDIENCE REPLAY DEFENCE (#149): a fully valid UCAN bearer (signed by its
+	 * issuer, in date) whose {@code aud} names a DIFFERENT venue must be rejected
+	 * with 401 — not run as public — so a token minted for venue A cannot be
+	 * replayed to venue B.
+	 */
+	@Test
+	public void testBearerWrongAudienceRejected() throws Exception {
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AKeyPair otherVenue = AKeyPair.generate();             // some OTHER venue
+		AString invocation = UCAN.createJWT(ALICE_KP,
+			otherVenue.getAccountKey(),                         // aud = other venue, not this one
+			exp, Vectors.empty(), null);
+
+		HttpResponse<String> resp = postInvoke(
+			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"message\":\"hi\"}}",
+			invocation.toString());
+		assertEquals(401, resp.statusCode(),
+			"a token aud'd to another venue must be rejected (replay defence), not downgraded to public");
+	}
+
+	/**
+	 * TEMPORAL BOUNDS (#149): a self-issued JWT (kid == sub) that is expired must
+	 * NOT authenticate its subject — self-issued tokens previously skipped the
+	 * temporal check and were accepted forever.
+	 */
+	@Test
+	public void testExpiredSelfIssuedNotAuthenticated() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		AString did = UCAN.toDIDKey(kp.getAccountKey());
+		long expired = (System.currentTimeMillis() / 1000) - 60;
+		// Self-issued JWT: sub = did:key, signed by that key (kid == sub), expired.
+		AMap<AString, ACell> claims = Maps.of(
+			Strings.create("sub"), did,
+			Strings.create("exp"), CVMLong.create(expired));
+		AString jwt = JWT.signPublic(claims, kp);
+
+		HttpResponse<String> resp = postInvoke(
+			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"message\":\"hi\"}}",
+			jwt.toString());
+		assertTrue(resp.statusCode() == 200 || resp.statusCode() == 201);
+		assertNotEquals(did, callerDIDOf(resp),
+			"an expired self-issued token must not authenticate its subject");
+	}
+
+	/**
 	 * Bearer UCAN and body {@code ucans} merge through the same trust boundary.
 	 * Pattern: Bob bears his own invocation UCAN (iss=Bob — establishes
 	 * caller identity), and accompanies it with a venue-issued delegation

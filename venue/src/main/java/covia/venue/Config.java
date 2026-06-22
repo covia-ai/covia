@@ -3,6 +3,7 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
@@ -139,6 +140,16 @@ public class Config {
 	 *  Absent → secure default (read-only); {@code "unrestricted"} → no ceiling
 	 *  (legacy permissive behaviour); an explicit cap array → that ceiling. */
 	public static final AString CAPS = Strings.intern("caps");
+
+	/** Key for the JWT audience policy, under {@code auth}: {@code "verify"}
+	 *  (default — check aud if present) or {@code "require"} (aud must be present
+	 *  and match). A mismatched aud is always rejected under both. */
+	public static final AString AUDIENCE = Strings.intern("audience");
+
+	/** Key for additional accepted JWT audiences, under {@code auth}: an array of
+	 *  strings (e.g. a {@code did:key} form alongside the canonical DID). The
+	 *  venue's own DID(s) are always accepted; this extends the allowlist. */
+	public static final AString ACCEPTED_AUDIENCES = Strings.intern("acceptedAudiences");
 
 	// ========== OAuth config keys (nested under auth) ==========
 
@@ -537,6 +548,32 @@ public class Config {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * JWT audience policy from {@code auth.audience}: {@code "require"} (aud must
+	 * be present and match this venue) or {@code "verify"} (the default — if aud
+	 * is present it must match; if absent, accept). A mismatched aud is always
+	 * rejected; there is no "off".
+	 * @return {@code "require"} or {@code "verify"} (default)
+	 */
+	public String getAudiencePolicy() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		if (authConfig != null) {
+			AString v = RT.ensureString(authConfig.get(AUDIENCE));
+			if (v != null && "require".equals(v.toString())) return "require";
+		}
+		return "verify";
+	}
+
+	/**
+	 * Additional accepted JWT audiences from {@code auth.acceptedAudiences} — an
+	 * array of strings extending the allowlist beyond the venue's own DID(s).
+	 * @return the configured array, or null if unset
+	 */
+	public AVector<ACell> getAcceptedAudiences() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		return (authConfig != null) ? RT.ensureVector(authConfig.get(ACCEPTED_AUDIENCES)) : null;
 	}
 
 	// ========== Protocol config accessors ==========

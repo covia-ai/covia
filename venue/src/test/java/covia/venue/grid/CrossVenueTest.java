@@ -3,6 +3,7 @@ package covia.venue.grid;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
@@ -178,14 +179,17 @@ public class CrossVenueTest {
 	// ============== UCAN issuer policy across venues (Phase C1) ==============
 
 	/**
-	 * Pinned current behaviour: a UCAN signed by venue A's keypair, with
-	 * Bob as audience, presented to venue B as a bearer credential, is
-	 * rejected. Phase C1 of UCAN enforcement requires the receiving venue
-	 * to be the issuer of any token it accepts (CoviaAdapter:1270-1272).
+	 * A UCAN that venue B did not issue and that is not even audienced to venue
+	 * B is rejected when presented to B as a bearer. Venue A signs a token
+	 * delegating to Bob ({@code aud = Bob}); presenting it to B fails audience
+	 * validation (#149) at the transport boundary — a bearer's {@code aud} must
+	 * name the venue it is presented to (RFC 7519 §4.1.3), so a token minted for
+	 * another party cannot be replayed to B.
 	 *
-	 * <p>The token is cryptographically valid (good signature, valid
-	 * audience, in date) — the rejection is a policy decision, not a
-	 * transport failure.</p>
+	 * <p>Before #149 this same token was caught later, at
+	 * {@code CoviaAdapter.verifyProofs}'s issuer check (which requires the
+	 * receiving venue to be the proof's issuer); audience validation now rejects
+	 * it earlier, at the door, as a hard 401.</p>
 	 *
 	 * <p>When Phase C2/C3 introduces cross-issuer trust, the inverse
 	 * assertion lives in {@link #crossVenueUCANIsAccepted()} (currently
@@ -193,13 +197,11 @@ public class CrossVenueTest {
 	 */
 	@Test
 	public void venueAIssuedUCANRejectedByVenueB() throws Exception {
-		// Bob's identity (audience). Generated, not registered — this test
-		// is purely about the issuer policy, not Bob's prior state on B.
+		// Bob's identity (the token's audience). Generated, not registered.
 		AKeyPair bobKP = AKeyPair.generate();
 		AString bobDID = UCAN.toDIDKey(bobKP.getAccountKey());
 
-		// Venue A's keypair signs a UCAN that grants Bob crud/read on
-		// /w/ within Bob's own namespace on venue B.
+		// Venue A's keypair signs a UCAN delegating crud/read to Bob.
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		AKeyPair venueAKP = TwoVenueTestServer.ENGINE_A.getKeyPair();
 		String resource = bobDID + "/w/";
@@ -209,22 +211,20 @@ public class CrossVenueTest {
 			Vectors.empty());
 		String jwt = aIssued.toJWT(venueAKP).toString();
 
-		// Bob hits venue B with venue A's UCAN as a bearer.
-		// AuthMiddleware will accept the bearer and set callerDID = bobDID
-		// (the UCAN's audience under IETF UCAN-HTTP). The proof is then
-		// available on the request, but CoviaAdapter.verifyProofs requires
-		// iss == venueDID. Issuer here is venue A, not B — rejected.
+		// Bob presents venue A's UCAN to venue B. Its audience is Bob, not venue
+		// B — audience validation rejects it with 401 before any job is created.
 		VenueHTTP bobOnB = VenueHTTP.create(
 			URI.create(TwoVenueTestServer.BASE_URL_B),
 			VenueAuth.bearer(jwt));
 		bobOnB.setUser(bobDID.toString());
 
-		Job readJob = bobOnB.invokeAndWait(Strings.create("v/ops/covia/read"),
-			Maps.of(Fields.PATH, bobDID + "/w/somewhere"));
-		assertNotNull(readJob);
-		assertEquals(Status.FAILED, readJob.getStatus(),
-			"Phase C1: UCAN issuer must be the verifying venue. "
-			+ "A-signed token at B must be rejected by CoviaAdapter.verifyProofs.");
+		Throwable t = assertThrows(Throwable.class, () ->
+			bobOnB.invokeAndWait(Strings.create("v/ops/covia/read"),
+				Maps.of(Fields.PATH, bobDID + "/w/somewhere")));
+		StringBuilder chain = new StringBuilder();
+		for (Throwable c = t; c != null; c = c.getCause()) chain.append(c.getMessage()).append(" | ");
+		assertTrue(chain.toString().contains("audience") || chain.toString().contains("401"),
+			"A token not audienced to venue B must be rejected at the transport boundary, got: " + chain);
 	}
 
 	/**

@@ -86,21 +86,24 @@ public class PublicCeilingTest {
 	}
 
 	/**
-	 * An authenticated client whose caller carries no attenuation ceiling: the
-	 * self-signed UCAN's audience is a third party, so it grants the caller
-	 * nothing over itself ({@code selfCapabilities} → null) and the session runs
-	 * unrestricted. Identity still authenticates as the issuer DID.
+	 * An authenticated client whose caller carries no attenuation ceiling. The
+	 * UCAN is audienced to THIS venue (so it passes audience validation — a real
+	 * bearer must be intended for the venue it is presented to), but its audience
+	 * is not the issuer, so it is not a self-delegation: {@code selfCapabilities}
+	 * → null and the session runs unrestricted. Identity authenticates as the
+	 * issuer DID.
 	 */
-	private static VenueHTTP authed(String base) {
+	private static VenueHTTP authed(VenueServer server) {
 		AKeyPair kp = AKeyPair.generate();
 		AString did = UCAN.toDIDKey(kp.getAccountKey());
-		AString aud = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
-		UCAN token = UCAN.create(kp, UCAN.fromDIDKey(aud), exp,
+		// Audience = THIS venue (its account key's DID), so the token passes
+		// audience validation; aud != iss, so it forms no self-attenuation.
+		UCAN token = UCAN.create(kp, server.getEngine().getAccountKey(), exp,
 			Vectors.of(Capability.create(Strings.create(did + "/w/"), Capability.CRUD_READ)),
 			Vectors.empty());
 		String jwt = token.toJWT(kp).toString();
-		VenueHTTP c = VenueHTTP.create(URI.create(base), VenueAuth.bearer(jwt));
+		VenueHTTP c = VenueHTTP.create(URI.create("http://localhost:" + server.port()), VenueAuth.bearer(jwt));
 		c.setTimeout(5000);
 		return c;
 	}
@@ -148,7 +151,7 @@ public class PublicCeilingTest {
 
 	@Test
 	public void authenticatedMutationAllowed() throws Exception {
-		VenueHTTP client = authed(secureBase);
+		VenueHTTP client = authed(secureServer);
 		Job job = client.invokeAndWait(OP_WRITE, Maps.of(
 			Strings.create("path"), Strings.create("w/x"),
 			Strings.create("value"), Strings.create("ok")));

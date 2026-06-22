@@ -34,6 +34,13 @@ import covia.venue.auth.LoginProviders;
  *   },                                //   (reads only); "unrestricted" = no ceiling;
  *                                     //   or an explicit capability array
  *   "tokenExpiry": 86400,             // JWT expiry in seconds (default 24h)
+ *   "audience": "verify",             // JWT aud policy: "verify" (default — if
+ *                                     //   aud present it must match) or "require"
+ *                                     //   (aud must be present AND match). A
+ *                                     //   present-but-wrong aud is always 401.
+ *   "acceptedAudiences": ["did:..."], // extra accepted aud values beyond the
+ *                                     //   venue's own DID (e.g. a did:key form
+ *                                     //   for a did:web venue)
  *   "oauth": {
  *     "google": { "clientId": "...", "clientSecret": "..." },
  *     "microsoft": { "clientId": "...", "clientSecret": "..." },
@@ -58,6 +65,8 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	private final long tokenExpiry;
 	private final boolean publicAccessEnabled;
 	private final ACell publicCapsConfig;
+	private final String audiencePolicy;
+	private final java.util.Set<String> configuredAudiences;
 
 	/**
 	 * Create Auth from an Engine and its venue state.
@@ -75,6 +84,16 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 		this.tokenExpiry = config.getTokenExpiry();
 		this.publicAccessEnabled = config.isPublicAccess();
 		this.publicCapsConfig = config.getPublicCapsConfig();
+		this.audiencePolicy = config.getAudiencePolicy();
+		java.util.Set<String> aud = new java.util.HashSet<>();
+		AVector<ACell> acc = config.getAcceptedAudiences();
+		if (acc != null) {
+			for (long i = 0; i < acc.count(); i++) {
+				AString s = RT.ensureString(acc.get(i));
+				if (s != null) aud.add(s.toString());
+			}
+		}
+		this.configuredAudiences = aud;
 
 		// Create login providers from auth config
 		this.loginProviders = new LoginProviders(engine, config.getAuthConfig());
@@ -107,6 +126,17 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 */
 	public boolean isPublicAccessEnabled() {
 		return publicAccessEnabled;
+	}
+
+	/** JWT audience policy: {@code "require"} or {@code "verify"} (default). */
+	public String getAudiencePolicy() {
+		return audiencePolicy;
+	}
+
+	/** Operator-configured extra accepted JWT audiences (beyond the venue's own
+	 *  DID(s)). Never null; empty if none configured. */
+	public java.util.Set<String> getConfiguredAudiences() {
+		return configuredAudiences;
 	}
 
 	/**
