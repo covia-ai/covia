@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
@@ -19,6 +20,7 @@ import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.util.JSON;
+import covia.grid.Asset;
 import covia.grid.client.VenueHTTP;
 import covia.venue.server.VenueServer;
 
@@ -121,5 +123,27 @@ public class CoviaAssetRefTest {
 	public void unknownReferenceIs404() throws Exception {
 		HttpResponse<String> r = get("/api/v1/assets/w/does/not/exist");
 		assertEquals(404, r.statusCode());
+	}
+
+	@Test
+	public void javaClientResolvesByLatticeAddress() throws Exception {
+		// covia-core's VenueHTTP.resolveAsset(ref) passes the address straight to
+		// the new endpoint — content-addressed and mutable-path forms both yield
+		// the resolved asset with its content-addressed id.
+		Hash h = client.addAsset(META).join();
+
+		Asset byHash = client.resolveAsset("a/" + h.toHexString());
+		assertNotNull(byHash, "client must resolve a/<hash>");
+		assertEquals(h, byHash.getID());
+
+		ACell canonicalMeta = JSON.parse(get("/api/v1/assets/" + h.toHexString()).body());
+		client.invokeAndWait(Strings.create("v/ops/covia/write"), Maps.of(
+			Strings.create("path"), Strings.create("w/client-assets/bar"),
+			Strings.create("value"), canonicalMeta));
+
+		Asset byPath = client.resolveAsset("w/client-assets/bar");
+		assertNotNull(byPath, "client must resolve a workspace path");
+		assertEquals(h, byPath.getID(),
+			"client must resolve a mutable path to the asset's content-addressed id");
 	}
 }
