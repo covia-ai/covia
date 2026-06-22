@@ -92,8 +92,12 @@ public class CoviaAPI extends ACoviaAPI {
 
 	public void addRoutes(Javalin javalin) {
 		javalin.get(ROUTE+"status", this::getStatus);
-		javalin.get(ROUTE+"assets/{id}", this::getAsset); // note {} doesn't match slashes, <> does
+		// <id> matches slashes, so the asset metadata route accepts any lattice
+		// address (a/<hash>, w/…, o/…, <DID>/…) as well as a bare hash. The more
+		// specific {id}/content route below is registered too; Javalin prefers
+		// the more specific match (covered by CoviaAssetRefTest).
 		javalin.get(ROUTE+"assets/{id}/content", this::getContent);
+		javalin.get(ROUTE+"assets/<id>", this::getAsset);
 		javalin.put(ROUTE+"assets/{id}/content", this::putContent);
 
 		javalin.get(ROUTE+"assets", this::getAssets);
@@ -261,34 +265,104 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 	
 
-	@OpenApi(path = ROUTE + "assets/{id}", 
-			methods = HttpMethod.GET, 
+	@OpenApi(path = ROUTE + "assets/{id}",
+			methods = HttpMethod.GET,
 			tags = { "Covia"},
-			summary = "Get Covia asset metadata gievn an asset ID.", 
+			summary = "Get Covia asset metadata given an asset reference.",
 			operationId = CoviaAPI.GET_ASSET,
 			pathParams = {
 					@OpenApiParam(
-							name = "id", 
-							description = "Asset ID, as a hex string.", 
-							required = true, 
-							type = String.class, 
-							example = "0x1234567812345678123456781234567812345678123456781234567812345678") })	
+							name = "id",
+							description = "Asset reference: a bare CAD3 hash, a content-addressed "
+									+ "address (a/<hash>), a workspace/operation path (w/…, o/…), "
+									+ "or a DID URL. Resolved the same way invoke resolves "
+									+ "operation references.",
+							required = true,
+							type = String.class,
+							example = "a/1234567812345678123456781234567812345678123456781234567812345678") })
 	protected void getAsset(Context ctx) {
-		String id=ctx.pathParam("id");
-		Hash assetID=Hash.parse(id);
-		if (assetID==null) throw new BadRequestResponse("Invalid asset ID: " + id);
+		String ref=ctx.pathParam("id");
+		if (ref==null || ref.isEmpty()) throw new BadRequestResponse("Missing asset reference");
+
+		// Caller identity + transport UCAN authority (a bearer UCAN supplies the
+		// proof for cross-DID reads, per the IETF UCAN-HTTP convention).
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
+		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null);
 
 		try {
-			Asset asset=venue.getAsset(assetID);
+			Asset asset=resolveAssetReference(ref, rctx);
 			if (asset==null) {
-				buildError(ctx,404,"Asset not found: "+id);
+				buildError(ctx,404,"Asset not found: "+ref);
 				return;
 			}
+			// Return the resolved content-addressed id alongside the metadata, so a
+			// caller who asked by mutable path still gets a verifiable handle. The
+			// CAD3 value hash is formatting-independent — an ETag is the idiomatic
+			// home for it.
+			Hash resolvedId=asset.getID();
+			if (resolvedId!=null) ctx.header("ETag","\"0x"+resolvedId.toHexString()+"\"");
 			ctx.result(asset.getMetadata().toString());
 			ctx.status(200);
+		} catch (AuthException e) {
+			buildError(ctx,403,"Not authorised to read asset: "+ref);
 		} catch (IOException e) {
 			buildError(ctx,500,"Error retrieving asset: "+e.getMessage());
 		}
+	}
+
+	/**
+	 * Resolves an asset reference to an Asset, accepting any lattice address —
+	 * a bare hash, {@code a/<hash>}, a workspace/operation path ({@code w/…},
+	 * {@code o/…}), or a DID URL — the same addressing scheme {@code invoke}
+	 * uses. Enforces the asset-read capability (consistent with the
+	 * {@code asset:get} operation); cross-DID reads are satisfied by a UCAN
+	 * bearer proof on the request.
+	 *
+	 * @param ref Asset reference (lattice address or bare hash)
+	 * @param ctx Request context (caller identity, capability ceiling, proofs)
+	 * @return the resolved Asset, or null if the reference resolves to nothing
+	 *         or to a non-asset value
+	 */
+	private Asset resolveAssetReference(String ref, RequestContext ctx) throws IOException {
+		AString refStr = Strings.create(ref);
+		ctx.requireCapability(refStr, Strings.intern("asset/read"));
+
+		// Content-addressed forms (bare hex, a/<hash>, did:.../a/<hash>) — fetch
+		// the stored record so the returned bytes are byte-identical to the legacy
+		// assets/<hash> route, keeping content-addressed lookups self-verifying.
+		Hash hash = parseContentAddressedId(ref);
+		if (hash != null) {
+			return venue.getAsset(hash);
+		}
+
+		// Any other lattice address — resolve via the universal resolver (the same
+		// path invoke and covia:read use) and interpret the value as metadata.
+		ACell value = engine().resolvePath(refStr, ctx);
+		if (value instanceof AMap) {
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> meta = (AMap<AString, ACell>) value;
+			return Asset.fromMeta(meta);
+		}
+		// Remote / named DID-URL bindings aren't in the local lattice — fetch the
+		// hash-verified definition from the publishing venue.
+		if (ref.startsWith("did:")) {
+			return engine().resolveAsset(refStr, ctx);
+		}
+		return null;
+	}
+
+	/**
+	 * Strict parse of a content-addressed asset id: a bare hex CAD3 hash,
+	 * {@code a/<hash>}, or a DID URL ending in {@code /a/<hash>}. Returns null
+	 * for mutable lattice paths ({@code w/…}, {@code o/…}), which are resolved
+	 * through the lattice instead.
+	 */
+	private static Hash parseContentAddressedId(String ref) {
+		int aPos = ref.indexOf("/a/");
+		if (aPos >= 0) return Hash.parse(ref.substring(aPos + 3));
+		if (ref.startsWith("a/")) return Hash.parse(ref.substring(2));
+		return Hash.parse(ref);
 	}
 	
 	@OpenApi(path = ROUTE + "assets/{id}/content", 
