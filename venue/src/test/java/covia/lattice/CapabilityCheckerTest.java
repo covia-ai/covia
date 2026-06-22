@@ -821,6 +821,28 @@ public class CapabilityCheckerTest {
 	// ==================================================================
 
 	@Test
+	public void testReadOnlyCeilingIsFailClosedForUnmappedAndInvokeOps() {
+		// The structural property C is really about: the name-keyed operationAbility
+		// switch DEFAULTS to "invoke", which the read-only ceiling does not grant —
+		// so every invoke-class op AND any op nobody mapped is DENIED by default.
+		// A new op that forgets a mapping is therefore fail-CLOSED under a
+		// restrictive ceiling, not fail-open.
+		AString did = Strings.create("did:key:zPublic");
+		AVector<ACell> ceiling = CapabilityChecker.readOnlyCeiling(did);
+		String[] invokeClass = {
+			"test:echo", "jvm:stringConcat", "schema:validate", "langchain:openai",
+			"mcp:toolCall", "convex:transact", "http:post", "ucan:issue",
+			"scheduler:schedule", "grid:run", "agent:trigger",
+			// a deliberately unknown / future op — must also be denied by default
+			"someadapter:brandNewOpNobodyMappedYet",
+		};
+		for (String op : invokeClass) {
+			assertNotNull(CapabilityChecker.check(ceiling, op, Maps.empty(), did),
+				"read-only ceiling must deny invoke-class / unmapped op (fail-closed): " + op);
+		}
+	}
+
+	@Test
 	public void testResourceMatchingRespectsPathBoundary() {
 		// #585 regression: a path grant covers itself + descendants at a '/'
 		// boundary, NOT siblings that merely share a string prefix.
