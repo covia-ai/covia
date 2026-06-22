@@ -242,6 +242,24 @@ public abstract class AAdapter {
     }
 
     /**
+     * Builds the absolute, scheme-qualified capability resource for a
+     * root/drive-addressed adapter op: {@code "<scheme>://<authority>/<path>"}.
+     * A null authority yields the bare {@code "<scheme>://"} namespace resource;
+     * the path's leading slash is stripped so grants compose by prefix
+     * ({@code "file://scratch/"} covers {@code "file://scratch/notes.txt"}).
+     *
+     * <p>Mirrors the boundary's {@code CapabilityChecker.extractResource} for the
+     * {@code file://} and {@code dlfs://} schemes — the single source once
+     * {@code extractResource} is retired.</p>
+     */
+    protected static String schemeResource(String scheme, AString authority, AString path) {
+        if (authority == null) return scheme + "://";
+        String p = (path == null) ? "" : path.toString();
+        if (p.startsWith("/")) p = p.substring(1);
+        return scheme + "://" + authority + "/" + p;
+    }
+
+    /**
      * Extracts the full {@code adapter:operation} string from operation metadata.
      * E.g. for metadata with {@code operation.adapter = "test:echo"}, returns {@code "test:echo"}.
      *

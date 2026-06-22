@@ -306,6 +306,28 @@ public class AgentAdapter extends AAdapter {
 			Fields.STATUS,   (status != null) ? status : AgentState.SLEEPING);
 	}
 
+	/**
+	 * Capability enforcement co-located with the agent op dispatch: each
+	 * user-facing op pins the exact ability it needs on the agent resource
+	 * ({@code g/<agentId>}). A null ceiling (authenticated/internal) is
+	 * unrestricted (no-op). The internal task-lifecycle ops
+	 * ({@code completeTask}/{@code failTask}) and {@code trigger}/reads are not
+	 * gated here — they fall to the boundary net — so an agent with a restricted
+	 * config ceiling can still complete its own tasks during a transition.
+	 */
+	private static void requireAgentCap(RequestContext ctx, ACell input, String subOp) {
+		String ability = switch (subOp) {
+			case "create", "fork" -> "agent/create";
+			case "request"        -> "agent/request";
+			case "message", "chat" -> "agent/message";
+			case "delete", "suspend", "resume", "update", "cancelTask" -> "agent/write";
+			default -> null; // info/list/context (reads), trigger, completeTask/failTask
+		};
+		if (ability == null) return;
+		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		ctx.requireCapability(agentId != null ? "g/" + agentId : null, ability);
+	}
+
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		if (ctx.getCallerDID() == null) {
@@ -313,6 +335,7 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 		try {
+			requireAgentCap(ctx, input, getSubOperation(meta));
 			switch (getSubOperation(meta)) {
 				case "create"  -> handleCreate(job, input, ctx);
 				case "fork"    -> handleFork(job, input, ctx);

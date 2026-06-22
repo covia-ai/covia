@@ -244,6 +244,7 @@ public class CoviaAdapter extends AAdapter {
 	 * {@code covia:slice} to read vector elements in pages.</p>
 	 */
 	private ACell handleRead(RequestContext ctx, ACell input) {
+		requireCap(ctx, input, Capability.CRUD_READ);
 		// Check job-scoped virtual namespace (t/) first — these require
 		// specialised cursor navigation that Engine.resolvePath doesn't handle.
 		ACell pathCell = RT.getIn(input, Fields.PATH);
@@ -366,6 +367,7 @@ public class CoviaAdapter extends AAdapter {
 	 * Resolves a single path and renders the value via CellExplorer.
 	 */
 	private String explorePath(RequestContext ctx, String pathStr, int budget, boolean compact) {
+		ctx.requireCapability(Strings.create(pathStr), Capability.CRUD_READ);
 		ACell[] pathKeys = parseStringPath(pathStr);
 
 		// Check job-scoped virtual namespace (t/)
@@ -416,6 +418,7 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	private ACell handleSlice(RequestContext ctx, ACell input) {
+		requireCap(ctx, input, Capability.CRUD_READ);
 		Object[] target = resolveTargetPath(ctx, input);
 		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
 		ACell[] pathKeys = (ACell[]) target[1];
@@ -522,6 +525,9 @@ public class CoviaAdapter extends AAdapter {
 		AString to = RT.ensureString(RT.getIn(input, K_TO));
 		if (from == null) throw new IllegalArgumentException("'from' is required");
 		if (to == null) throw new IllegalArgumentException("'to' is required");
+
+		// Reads the source (handleWrite enforces crud/write on the destination).
+		ctx.requireCapability(from, Capability.CRUD_READ);
 
 		// Read from source via the canonical universal resolver. Caps
 		// enforcement happens inside resolvePath via the cursor it returns.
@@ -1116,6 +1122,7 @@ public class CoviaAdapter extends AAdapter {
 	 * in the response so the caller knows where to continue.</p>
 	 */
 	private ACell handleList(RequestContext ctx, ACell input) {
+		requireCap(ctx, input, Capability.CRUD_READ);
 		Object[] target = resolveTargetPath(ctx, input);
 		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
 		ACell[] pathKeys = (ACell[]) target[1];

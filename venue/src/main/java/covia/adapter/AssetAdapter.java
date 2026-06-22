@@ -75,6 +75,7 @@ public class AssetAdapter extends AAdapter {
 
 	@SuppressWarnings("unchecked")
 	private ACell handleStore(ACell input, RequestContext ctx) {
+		ctx.requireCapability(Strings.create(""), Strings.intern("asset/store"));
 		ACell metaCell = RT.getIn(input, Fields.METADATA);
 		// Accept metadata as a JSON object or a JSON string (parsed on the fly).
 		// NB: instanceof check on the parsed value is required because RT.ensureMap(null)
@@ -198,6 +199,7 @@ public class AssetAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private ACell handleGet(ACell input, RequestContext ctx) {
 		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
+		ctx.requireCapability(idStr, Strings.intern("asset/read"));
 		if (idStr == null) throw new IllegalArgumentException("id is required");
 
 		// Hash-form refs go through the CAS record (preserves the canonical
@@ -227,6 +229,7 @@ public class AssetAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private ACell handleContent(ACell input, RequestContext ctx) {
 		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
+		ctx.requireCapability(idStr, Strings.intern("asset/read"));
 		if (idStr == null) throw new IllegalArgumentException("id is required");
 
 		// Locate the CAS record for the source. Hash-form refs name the record
@@ -280,6 +283,7 @@ public class AssetAdapter extends AAdapter {
 
 	@SuppressWarnings("unchecked")
 	private ACell handleList(ACell input, RequestContext ctx) {
+		ctx.requireCapability(Strings.create(""), Strings.intern("asset/read"));
 		long offset = 0, limit = 100;
 		ACell offsetCell = RT.getIn(input, Fields.OFFSET);
 		if (offsetCell instanceof CVMLong l) offset = Math.max(0, l.longValue());
@@ -350,6 +354,7 @@ public class AssetAdapter extends AAdapter {
 		AString pathStr = RT.ensureString(RT.getIn(input, Fields.PATH));
 		if (pathStr == null) pathStr = RT.ensureString(RT.getIn(input, Fields.ID));
 		if (pathStr == null) throw new IllegalArgumentException("path is required");
+		ctx.requireCapability(pathStr, Strings.intern("asset/store"));
 
 		AString metaString;
 		ACell content = null;
