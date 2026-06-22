@@ -441,13 +441,16 @@ public class FileAdapterTest {
 	// =========================================================
 	// Capability gating
 
-	private static String capDenialOf(Runnable r) {
+	private static String capDenialOf(java.util.function.Supplier<Job> op) {
+		Job j;
 		try {
-			r.run();
-			return null;
+			j = op.get();
 		} catch (RuntimeException e) {
-			return e.getMessage();
+			return e.getMessage(); // pre-Job (auth) failures still surface synchronously
 		}
+		// Capability denials now fail the Job at the adapter's enforcement point.
+		try { j.awaitResult(5000); } catch (Exception ignored) {}
+		return (j.getStatus() == Status.FAILED) ? String.valueOf(j.getErrorMessage()) : null;
 	}
 
 	@Test

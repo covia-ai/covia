@@ -27,8 +27,6 @@ import convex.core.lang.RT;
  */
 public class CapabilityChecker {
 
-	private static final AString K_PATH = Strings.intern("path");
-	private static final AString K_ROOT = Strings.intern("root");
 
 	/**
 	 * Derive the self-attenuation ceiling from presented proof tokens: the union
@@ -79,48 +77,6 @@ public class CapabilityChecker {
 			}
 		}
 		return result.isEmpty() ? null : result;
-	}
-
-	/**
-	 * Checks whether an operation invocation is allowed by the agent's caps.
-	 *
-	 * @param caps Capability attenuations (null = unrestricted)
-	 * @param operation The operation being invoked (e.g. "v/ops/covia/write")
-	 * @param input The tool call input
-	 * @return null if allowed, or an error message string if denied
-	 */
-	public static String check(AVector<ACell> caps, String operation, ACell input, AString ownerDID) {
-		if (caps == null) return null; // no caps = full access
-
-		String ability = operationAbility(operation);
-		// Resources are matched in canonical, owner-scoped absolute form. A bare
-		// lattice path ("w/health/bp") names the owner's own resource, so it is
-		// prefixed with the owner DID ("<owner>/w/health/bp"); a path that is
-		// already a DID URL (cross-user) or scheme-qualified (file://, dlfs://)
-		// is absolute already. Both the op resource AND each cap's `with` are
-		// canonicalised the same way, so an absolute (token) cap and a bare
-		// (agent-config) cap match a bare own-op identically.
-		String resource = canonicalResource(extractResource(operation, input), ownerDID);
-		if (resource == null) resource = "";
-		AString resourceStr = Strings.create(resource);
-		AString abilityStr = Strings.create(ability);
-
-		if (covered(caps, resourceStr, abilityStr, ownerDID)) return null; // allowed
-
-		// Build an actionable denial message that includes WHAT the agent
-		// can do, not just what it can't. Without this LLMs that hit a
-		// denial often retry the same impossible call because they have no
-		// idea what the actual boundaries are.
-		StringBuilder sb = new StringBuilder("Capability denied: ")
-			.append(operation).append(" requires ").append(ability)
-			.append(" on ").append(resource.isEmpty() ? "(any)" : resource)
-			.append(". Your capabilities are: ");
-		appendCapsList(sb, caps);
-		sb.append(". Retrying the same call will not succeed — the denial is "
-			+ "structural. If your goal cannot be met within these "
-			+ "capabilities, complete with a clear explanation rather than "
-			+ "looping on impossible operations.");
-		return sb.toString();
 	}
 
 	/**
@@ -279,68 +235,6 @@ public class CapabilityChecker {
 	}
 
 	/**
-	 * Maps an operation name to a required ability.
-	 */
-	/**
-	 * Maps an operation reference to a required ability. Accepts both the
-	 * legacy dispatch-string form ({@code "covia:write"}) — which is what
-	 * {@link covia.venue.JobManager} sees in {@code operation.adapter}
-	 * during invocation — and the catalog path form ({@code "v/ops/covia/write"}).
-	 */
-	static String operationAbility(String operation) {
-		return switch (operation) {
-			// Catalog path form
-			case "v/ops/covia/read", "v/ops/covia/list", "v/ops/covia/slice" -> "crud/read";
-			case "v/ops/covia/write", "v/ops/covia/append" -> "crud/write";
-			case "v/ops/covia/delete" -> "crud/delete";
-			case "v/ops/agent/create" -> "agent/create";
-			case "v/ops/agent/request" -> "agent/request";
-			case "v/ops/agent/message" -> "agent/message";
-			case "v/ops/agent/fork" -> "agent/create";
-			case "v/ops/agent/update", "v/ops/agent/delete", "v/ops/agent/suspend",
-				"v/ops/agent/resume", "v/ops/agent/cancelTask" -> "agent/write";
-			case "v/ops/vault/write", "v/ops/vault/mkdir" -> "crud/write";
-			case "v/ops/vault/delete" -> "crud/delete";
-			case "v/ops/secret/set" -> "secret/write";
-			case "v/ops/asset/store" -> "asset/store";
-			case "v/ops/asset/get", "v/ops/asset/list" -> "asset/read";
-			case "v/ops/grid/run" -> "invoke";
-			// File / DLFS share crud/* abilities — same resource shape, same
-			// granted caps cover both surfaces. roots/listDrives are
-			// discovery-only and use crud/read.
-			case "v/ops/file/read", "v/ops/file/list", "v/ops/file/tree", "v/ops/file/stat", "v/ops/file/roots" -> "crud/read";
-			case "v/ops/file/write", "v/ops/file/append", "v/ops/file/mkdir" -> "crud/write";
-			case "v/ops/file/delete" -> "crud/delete";
-			case "v/ops/dlfs/read", "v/ops/dlfs/list", "v/ops/dlfs/tree", "v/ops/dlfs/stat", "v/ops/dlfs/list-drives" -> "crud/read";
-			case "v/ops/dlfs/write", "v/ops/dlfs/append", "v/ops/dlfs/mkdir", "v/ops/dlfs/create-drive" -> "crud/write";
-			case "v/ops/dlfs/delete", "v/ops/dlfs/delete-drive" -> "crud/delete";
-			// Legacy dispatch-string form (operation.adapter)
-			case "covia:read", "covia:list", "covia:slice" -> "crud/read";
-			case "covia:write", "covia:append" -> "crud/write";
-			case "covia:delete" -> "crud/delete";
-			case "agent:create" -> "agent/create";
-			case "agent:request" -> "agent/request";
-			case "agent:message" -> "agent/message";
-			case "agent:fork" -> "agent/create";
-			case "agent:update", "agent:delete", "agent:suspend",
-				"agent:resume", "agent:cancelTask" -> "agent/write";
-			case "vault:write", "vault:mkdir" -> "crud/write";
-			case "vault:delete" -> "crud/delete";
-			case "secret:set" -> "secret/write";
-			case "asset:store" -> "asset/store";
-			case "asset:get", "asset:list" -> "asset/read";
-			case "grid:run" -> "invoke";
-			case "file:read", "file:list", "file:tree", "file:stat", "file:roots" -> "crud/read";
-			case "file:write", "file:append", "file:mkdir" -> "crud/write";
-			case "file:delete" -> "crud/delete";
-			case "dlfs:read", "dlfs:list", "dlfs:tree", "dlfs:stat", "dlfs:listDrives" -> "crud/read";
-			case "dlfs:write", "dlfs:append", "dlfs:mkdir", "dlfs:createDrive" -> "crud/write";
-			case "dlfs:delete", "dlfs:deleteDrive" -> "crud/delete";
-			default -> "invoke";
-		};
-	}
-
-	/**
 	 * Canonicalises a resource to its absolute, owner-scoped form for matching.
 	 *
 	 * <p>A capability resource is absolute: it names its owner. A bare lattice
@@ -363,52 +257,4 @@ public class CapabilityChecker {
 		return ownerDID + "/" + resource;                    // bare lattice path → owner-scoped
 	}
 
-	/**
-	 * Extracts the resource path from a tool call input, if applicable.
-	 * Returns null for operations that don't target a specific path.
-	 */
-	static String extractResource(String operation, ACell input) {
-		// Path-targeted ops: pull the path arg out of the input.
-		if (operation.startsWith("v/ops/covia/") || operation.startsWith("covia:")) {
-			AString path = RT.ensureString(RT.getIn(input, K_PATH));
-			return (path != null) ? path.toString() : null;
-		}
-		// File-adapter ops: resource is the URI "file://<root>/<path>", with
-		// the configured root name as the URI authority. Granters scope at
-		// namespace level ("file://"), per-root ("file://scratch/"), or
-		// per-path ("file://scratch/notes.txt"). Trailing slash on the grant
-		// is the conventional way to cover a subtree.
-		if (operation.startsWith("v/ops/file/") || operation.startsWith("file:")) {
-			AString root = RT.ensureString(RT.getIn(input, K_ROOT));
-			AString path = RT.ensureString(RT.getIn(input, K_PATH));
-			if (root == null) return "file://";
-			String pathPart = (path == null) ? "" : stripLeading(path.toString(), '/');
-			return "file://" + root + "/" + pathPart;
-		}
-		// DLFS ops: same URI shape, "dlfs://<drive>/<path>". listDrives etc.
-		// land on "dlfs://" (the namespace root) when no drive arg is supplied.
-		if (operation.startsWith("v/ops/dlfs/") || operation.startsWith("dlfs:")) {
-			AString drive = RT.ensureString(RT.getIn(input, Strings.intern("drive")));
-			if (drive == null) drive = RT.ensureString(RT.getIn(input, Strings.intern("name")));
-			AString path = RT.ensureString(RT.getIn(input, K_PATH));
-			if (drive == null) return "dlfs://";
-			String pathPart = (path == null) ? "" : stripLeading(path.toString(), '/');
-			return "dlfs://" + drive + "/" + pathPart;
-		}
-		// Agent-targeted ops: derive a g/<id> resource string from the agentId.
-		if ("v/ops/agent/request".equals(operation) || "v/ops/agent/message".equals(operation)
-				|| "v/ops/agent/create".equals(operation)
-				|| "agent:request".equals(operation) || "agent:message".equals(operation)
-				|| "agent:create".equals(operation)) {
-			AString agentId = RT.ensureString(RT.getIn(input, Strings.intern("agentId")));
-			return (agentId != null) ? "g/" + agentId : "g/";
-		}
-		return null;
-	}
-
-	private static String stripLeading(String s, char c) {
-		int i = 0;
-		while (i < s.length() && s.charAt(i) == c) i++;
-		return s.substring(i);
-	}
 }

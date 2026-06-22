@@ -22,6 +22,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.grid.Job;
 
 /**
  * Unit tests for {@link JobManager#invokeInternal}. Covers the zero-Job
@@ -168,13 +169,15 @@ public class JobManagerTest {
 			Strings.create("can"),  Strings.create("crud/read")));
 		RequestContext capCtx = ctx.withCaps(caps);
 
-		RuntimeException ex = assertThrows(RuntimeException.class, () ->
-			engine.jobs().invokeOperation(
-				"v/ops/covia/read",
-				Maps.of(Strings.create("path"), Strings.create("w/forbidden/x")),
-				capCtx));
-		assertTrue(ex.getMessage().startsWith("Capability denied:"),
-			"Expected capability-denied message, got: " + ex.getMessage());
+		// Enforcement is at the adapter's point now: a denial fails the Job
+		// (surfaced at awaitResult), not a synchronous throw from invokeOperation.
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/covia/read",
+			Maps.of(Strings.create("path"), Strings.create("w/forbidden/x")),
+			capCtx);
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertTrue(String.valueOf(job.getErrorMessage()).contains("Capability denied"),
+			"Expected capability-denied message, got: " + job.getErrorMessage());
 	}
 
 	@Test

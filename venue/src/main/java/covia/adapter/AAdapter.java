@@ -248,9 +248,10 @@ public abstract class AAdapter {
      * the path's leading slash is stripped so grants compose by prefix
      * ({@code "file://scratch/"} covers {@code "file://scratch/notes.txt"}).
      *
-     * <p>Mirrors the boundary's {@code CapabilityChecker.extractResource} for the
-     * {@code file://} and {@code dlfs://} schemes — the single source once
-     * {@code extractResource} is retired.</p>
+     * <p>The single source for the {@code file://} and {@code dlfs://} capability
+     * resource: the boundary's name-keyed {@code extractResource} has been
+     * retired, so each adapter builds its own resource here at its enforcement
+     * point.</p>
      */
     protected static String schemeResource(String scheme, AString authority, AString path) {
         if (authority == null) return scheme + "://";

@@ -116,25 +116,26 @@ public class PublicCeilingTest {
 	// ===================== secure read-only default =====================
 
 	@Test
-	public void anonymousMutationDeniedByDefault() {
+	public void anonymousMutationDeniedByDefault() throws Exception {
 		VenueHTTP pub = anon(secureBase);
-		Throwable ex = assertThrows(Throwable.class, () ->
-			pub.invokeAndWait(OP_WRITE, Maps.of(
-				Strings.create("path"), Strings.create("w/x"),
-				Strings.create("value"), Strings.create("nope"))));
-		assertTrue(causeChain(ex).contains("Capability denied"),
-			"public write must be denied under the read-only default, got: " + causeChain(ex));
+		// Denial fails the Job at the adapter's enforcement point.
+		Job job = pub.invokeAndWait(OP_WRITE, Maps.of(
+			Strings.create("path"), Strings.create("w/x"),
+			Strings.create("value"), Strings.create("nope")));
+		assertEquals(Status.FAILED, job.getStatus(), "public write must be denied");
+		assertTrue(String.valueOf(job.getErrorMessage()).contains("Capability denied"),
+			"public write denial must name the cap, got: " + job.getErrorMessage());
 	}
 
 	@Test
-	public void anonymousInvokeDeniedByDefault() {
+	public void anonymousInvokeDeniedByDefault() throws Exception {
 		// Invoking any op creates a job (resource-consuming), so the read-only
 		// ceiling denies it — even an otherwise-harmless echo.
 		VenueHTTP pub = anon(secureBase);
-		Throwable ex = assertThrows(Throwable.class, () ->
-			pub.invokeAndWait(OP_ECHO, Maps.of(Strings.create("hi"), Strings.create("there"))));
-		assertTrue(causeChain(ex).contains("Capability denied"),
-			"public invoke must be denied under the read-only default, got: " + causeChain(ex));
+		Job job = pub.invokeAndWait(OP_ECHO, Maps.of(Strings.create("hi"), Strings.create("there")));
+		assertEquals(Status.FAILED, job.getStatus(), "public invoke must be denied");
+		assertTrue(String.valueOf(job.getErrorMessage()).contains("Capability denied"),
+			"public invoke denial must name the cap, got: " + job.getErrorMessage());
 	}
 
 	@Test

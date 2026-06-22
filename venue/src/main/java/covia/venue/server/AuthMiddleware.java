@@ -376,9 +376,9 @@ public class AuthMiddleware {
 	 *       grant checks (unchanged behaviour).</li>
 	 *   <li><b>Self-attenuation ceiling</b> — capabilities the <em>owner</em>
 	 *       authored over their own resources, restricting this session. Set as
-	 *       {@code caps} so {@code enforceCaps} applies them as a ceiling. Closes
-	 *       the gap where a presented attenuated token ran with full authority
-	 *       (#131).</li>
+	 *       {@code caps} so the executing adapter applies them as a ceiling at its
+	 *       enforcement point. Closes the gap where a presented attenuated token
+	 *       ran with full authority (#131).</li>
 	 * </ol>
 	 *
 	 * <p>The owner is the authority over its own namespace; the venue only

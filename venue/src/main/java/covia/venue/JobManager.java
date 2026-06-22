@@ -27,7 +27,6 @@ import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Status;
-import covia.lattice.CapabilityChecker;
 
 /**
  * Manages job lifecycle, persistence, and in-memory state for active jobs.
@@ -121,10 +120,11 @@ public class JobManager {
 	 * @return Job tracking the execution
 	 */
 	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
-		// Cap-check the context ceiling before dispatch. invokeInternal does
-		// the same — the two paths differ only in Job creation, never in trust.
-		// A null ceiling (framework acting as itself) is unrestricted.
-		enforceCaps(meta, input, ctx);
+		// Capability enforcement is the executing adapter's responsibility: each
+		// op asserts its exact (resource, ability) at its own enforcement point
+		// (requireCapability / requireInvoke), before any side effect. There is
+		// no central name-keyed pre-dispatch check — a denial surfaces as the
+		// adapter failing this Job.
 		AAdapter adapter = prepareInvocation(meta, input, ctx);
 		AString callerDID = ctx.getCallerDID();
 
@@ -138,7 +138,16 @@ public class JobManager {
 		// Preserve existing jobId if already set — parent scope takes precedence
 		// (e.g. GoalTreeAdapter sets root job ID for all tool calls).
 		RequestContext jobCtx = (ctx.getJobId() != null) ? ctx : ctx.withJobId(job.getID());
-		adapter.invoke(job, jobCtx, meta, input);
+		try {
+			adapter.invoke(job, jobCtx, meta, input);
+		} catch (covia.exception.AuthException e) {
+			// A capability denial thrown synchronously from a job-aware adapter's
+			// enforcement point fails the Job — the same surface async adapters
+			// already produce (a denied request was authenticated and dispatched,
+			// so the denial is a FAILED Job, not a thrown exception). Other
+			// synchronous failures (bad input, schema) propagate as before.
+			job.fail(e.getMessage() != null ? e.getMessage() : e.toString());
+		}
 		return job;
 	}
 
@@ -200,11 +209,10 @@ public class JobManager {
 	public CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		AAdapter adapter;
 		try {
-			// Same enforcement as invokeOperation — the only difference between
-			// the two paths is Job creation, never trust. A null ceiling
-			// (framework acting as itself) is unrestricted; a ceiling carried on
-			// the context is enforced wherever the op executes, this path included.
-			enforceCaps(meta, input, ctx);
+			// Enforcement is the adapter's responsibility (see invokeOperation):
+			// the op asserts its cap at its enforcement point; a denial surfaces
+			// as a failed future. invokeInternal differs from invokeOperation only
+			// in Job creation.
 			adapter = prepareInvocation(meta, input, ctx);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -214,38 +222,6 @@ public class JobManager {
 			return (f != null) ? f : CompletableFuture.completedFuture(null);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
-		}
-	}
-
-	/**
-	 * Enforces the capability ceiling carried by the context, on both dispatch
-	 * paths ({@link #invokeOperation} and {@link #invokeInternal} alike) — the
-	 * two differ only in Job creation, not in trust.
-	 *
-	 * <p>The ceiling is a property of the principal the context acts for: a
-	 * {@code null} ceiling ({@link RequestContext#getCaps()}) is unrestricted
-	 * (the framework acting as itself), while a non-null ceiling constrains
-	 * every operation executed under it — sub-operations included, so authority
-	 * composes downward and cannot be escalated by routing through an
-	 * orchestrator or agent.</p>
-	 *
-	 * <p>This is the coarse, name-keyed safety net; the precise, drift-free
-	 * enforcement is the executing adapter's own
-	 * {@link RequestContext#requireCapability(String, String)} call, pinned to
-	 * the exact resource and ability it acts on.</p>
-	 *
-	 * @throws RuntimeException with a {@code Capability denied: ...} message
-	 *         if the ceiling doesn't cover the operation
-	 */
-	private void enforceCaps(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
-		AVector<ACell> caps = ctx.getCaps();
-		if (caps == null) return;
-		String adapterName = AAdapter.getAdapterName(meta);
-		AString opName = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER));
-		String denied = CapabilityChecker.check(caps, opName != null ? opName.toString() : adapterName,
-			input, ctx.getCallerDID());
-		if (denied != null) {
-			throw new RuntimeException(denied);
 		}
 	}
 

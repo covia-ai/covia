@@ -20,7 +20,6 @@ import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Status;
-import covia.lattice.CapabilityChecker;
 import covia.venue.RequestContext;
 
 /**
@@ -296,18 +295,12 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	protected ACell dispatchTool(String toolName, ACell input,
 			Map<String, AString> configToolMap, RequestContext ctx,
 			long timeoutMs) {
-		// Resolve the actual operation name for capability checking
+		// Resolve the operation: a config tool maps the LLM tool name to an op
+		// ref, otherwise the tool name is dispatched as a grid op. Capability
+		// enforcement happens at the dispatched op's OWN enforcement point
+		// (invokeInternal → the adapter's requireCapability / requireInvoke),
+		// under the agent's ceiling carried on ctx — no name-keyed pre-check here.
 		AString operation = (configToolMap != null) ? configToolMap.get(toolName) : null;
-		String opName = (operation != null) ? operation.toString() : toolName;
-
-		// Check the agent's capability ceiling — carried on the context, not a
-		// separate vector. The agent runs under its owner's identity (#91), so
-		// the caller DID scopes the (owner-relative) config caps. invokeInternal
-		// re-checks the same ceiling on dispatch and the executing adapter pins
-		// the exact resource/ability; this early check just yields a friendly
-		// LLM-facing error rather than an exception string.
-		String denied = CapabilityChecker.check(ctx.getCaps(), opName, input, ctx.getCallerDID());
-		if (denied != null) return Strings.create("Error: " + denied);
 
 		// Config tools — tool name maps to a resolved operation
 		if (operation != null) {
