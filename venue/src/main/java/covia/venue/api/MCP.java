@@ -381,8 +381,7 @@ public class MCP extends McpServer {
 			ACell arguments = RT.getIn(params, Fields.ARGUMENTS);
 			if (opRef != null) {
 				Context ctx = McpServer.getCurrentContext();
-				AString callerDID = (ctx != null) ? AuthMiddleware.getCallerDID(ctx) : null;
-				RequestContext rctx = RequestContext.of(callerDID);
+				RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 				// Attach transport UCAN authority — proofs (cross-user grants)
 				// and the self-attenuation ceiling (#131) — from the `ucans` tool

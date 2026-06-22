@@ -90,7 +90,12 @@ public class TwoVenueTestServer {
 			Fields.MCP, Maps.of(),
 			Fields.A2A, Maps.of(),
 			Config.AUTH, Maps.of(
-				Config.PUBLIC, Maps.of(Config.ENABLED, true)
+				Config.PUBLIC, Maps.of(
+					Config.ENABLED, true,
+					// Federation tests invoke ops cross-venue as the public caller,
+					// so run public access unrestricted. PublicCeilingTest covers the
+					// secure read-only default and authenticated access.
+					Config.CAPS, Strings.create("unrestricted"))
 			)
 		));
 	}

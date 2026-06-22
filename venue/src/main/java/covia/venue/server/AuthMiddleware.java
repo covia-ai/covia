@@ -47,6 +47,12 @@ public class AuthMiddleware {
 
 	static final String CALLER_DID_ATTR = "callerDID";
 	/**
+	 * Context attribute holding the capability ceiling for an unauthenticated
+	 * (public) caller, derived from {@code auth.public.caps}. Absent for
+	 * authenticated callers (unrestricted unless a transport token attenuates).
+	 */
+	static final String CALLER_CAPS_ATTR = "callerCaps";
+	/**
 	 * Context attribute holding the raw UCAN JWT extracted from an
 	 * {@code Authorization: Bearer ...} header, when the bearer is a valid
 	 * UCAN (and so also serves as caller authentication). Downstream handlers
@@ -71,6 +77,7 @@ public class AuthMiddleware {
 	private final Auth venueAuth;
 	private final Map<String, OAuthConfig> externalProviders;
 	private final boolean publicAccessEnabled;
+	private final AVector<ACell> publicCeiling;
 
 	private AuthMiddleware(AccountKey venueAccountKey, Auth auth, AString venueDIDString) {
 		this.venueKey = venueAccountKey;
@@ -80,6 +87,10 @@ public class AuthMiddleware {
 		this.publicAccessEnabled = auth.isPublicAccessEnabled();
 		this.externalProviders = auth.getLoginProviders().hasProviders()
 			? auth.getLoginProviders().getProviders() : null;
+		// Capability ceiling for public callers — secure read-only by default,
+		// operator-overridable via auth.public.caps. Only relevant when public
+		// access is enabled (otherwise every anonymous request is 401'd).
+		this.publicCeiling = publicAccessEnabled ? auth.getPublicCeiling(publicDID) : null;
 	}
 
 	/**
@@ -103,6 +114,16 @@ public class AuthMiddleware {
 		return mw;
 	}
 
+	/**
+	 * Attribute an unauthenticated request to the venue's public DID and stash
+	 * the public capability ceiling (if any), so the downstream
+	 * {@link #callerContext} applies it uniformly.
+	 */
+	private void markPublic(Context ctx) {
+		ctx.attribute(CALLER_DID_ATTR, publicDID);
+		if (publicCeiling != null) ctx.attribute(CALLER_CAPS_ATTR, publicCeiling);
+	}
+
 	void extractIdentity(Context ctx) {
 		String auth = ctx.header("Authorization");
 		if (auth == null || !auth.startsWith("Bearer ")) {
@@ -110,7 +131,7 @@ public class AuthMiddleware {
 				ctx.status(401).result("Authentication required");
 				ctx.skipRemainingHandlers();
 			} else {
-				ctx.attribute(CALLER_DID_ATTR, publicDID);
+				markPublic(ctx);
 			}
 			return;
 		}
@@ -121,7 +142,7 @@ public class AuthMiddleware {
 				ctx.status(401).result("Authentication required");
 				ctx.skipRemainingHandlers();
 			} else {
-				ctx.attribute(CALLER_DID_ATTR, publicDID);
+				markPublic(ctx);
 			}
 			return;
 		}
@@ -152,7 +173,7 @@ public class AuthMiddleware {
 					ctx.status(401).result("Invalid or expired token");
 					ctx.skipRemainingHandlers();
 				} else {
-					ctx.attribute(CALLER_DID_ATTR, publicDID);
+					markPublic(ctx);
 				}
 			}
 		} catch (Exception e) {
@@ -161,7 +182,7 @@ public class AuthMiddleware {
 				ctx.status(401).result("Authentication required");
 				ctx.skipRemainingHandlers();
 			} else {
-				ctx.attribute(CALLER_DID_ATTR, publicDID);
+				markPublic(ctx);
 			}
 		}
 	}
@@ -313,6 +334,26 @@ public class AuthMiddleware {
 	 */
 	public static AString getCallerDID(Context ctx) {
 		return ctx.attribute(CALLER_DID_ATTR);
+	}
+
+	/**
+	 * Builds the base {@link RequestContext} for an inbound request: the caller
+	 * DID plus, for unauthenticated (public) callers, the configured capability
+	 * ceiling ({@code auth.public.caps}, default read-only). This is the single
+	 * seam where a request's ceiling is established, before transport-token
+	 * authority ({@link #withTransportAuth}) is layered on. Null-safe: a null
+	 * Javalin context (e.g. an MCP call with no HTTP context) yields
+	 * {@link RequestContext#ANONYMOUS}.
+	 *
+	 * @param ctx Javalin context, or null
+	 * @return the caller's request context with its ceiling applied
+	 */
+	public static RequestContext callerContext(Context ctx) {
+		if (ctx == null) return RequestContext.ANONYMOUS;
+		RequestContext rctx = RequestContext.of(getCallerDID(ctx));
+		AVector<ACell> caps = ctx.attribute(CALLER_CAPS_ATTR);
+		if (caps != null) rctx = rctx.withCaps(caps);
+		return rctx;
 	}
 
 	/**

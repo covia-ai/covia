@@ -215,7 +215,7 @@ public class A2A extends ACoviaAPI {
 			return;
 		}
 		Message incoming = params.message();
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
 
@@ -294,7 +294,7 @@ public class A2A extends ACoviaAPI {
 			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid task id");
 			return;
 		}
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		AMap<AString, ACell> jobData;
 		try {
@@ -324,7 +324,7 @@ public class A2A extends ACoviaAPI {
 			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid task id");
 			return;
 		}
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		AMap<AString, ACell> before;
 		try {
@@ -362,7 +362,7 @@ public class A2A extends ACoviaAPI {
 			return;
 		}
 		Message incoming = params.message();
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
 
@@ -429,7 +429,7 @@ public class A2A extends ACoviaAPI {
 			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid task id");
 			return;
 		}
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		AMap<AString, ACell> jobData;
 		try {

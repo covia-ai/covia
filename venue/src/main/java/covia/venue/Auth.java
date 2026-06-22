@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -13,6 +14,7 @@ import convex.core.util.Utils;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.api.Fields;
+import covia.lattice.CapabilityChecker;
 import covia.venue.auth.LoginProviders;
 
 /**
@@ -26,7 +28,11 @@ import covia.venue.auth.LoginProviders;
  * <h2>Config format</h2>
  * <pre>
  * "auth": {
- *   "public": { "enabled": true },   // allow anonymous access (default: true)
+ *   "public": {
+ *     "enabled": true,                // allow anonymous access (default: true)
+ *     "caps": "unrestricted"          // public ceiling: absent = read-only default
+ *   },                                //   (reads only); "unrestricted" = no ceiling;
+ *                                     //   or an explicit capability array
  *   "tokenExpiry": 86400,             // JWT expiry in seconds (default 24h)
  *   "oauth": {
  *     "google": { "clientId": "...", "clientSecret": "..." },
@@ -51,6 +57,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	private final LoginProviders loginProviders;
 	private final long tokenExpiry;
 	private final boolean publicAccessEnabled;
+	private final ACell publicCapsConfig;
 
 	/**
 	 * Create Auth from an Engine and its venue state.
@@ -67,6 +74,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 		Config config = engine.config();
 		this.tokenExpiry = config.getTokenExpiry();
 		this.publicAccessEnabled = config.isPublicAccess();
+		this.publicCapsConfig = config.getPublicCapsConfig();
 
 		// Create login providers from auth config
 		this.loginProviders = new LoginProviders(engine, config.getAuthConfig());
@@ -99,6 +107,27 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 */
 	public boolean isPublicAccessEnabled() {
 		return publicAccessEnabled;
+	}
+
+	/**
+	 * The capability ceiling applied to unauthenticated (public) callers,
+	 * scoped to {@code publicDID}. Operator policy via {@code auth.public.caps}:
+	 * unconfigured → the secure read-only default
+	 * ({@link CapabilityChecker#readOnlyCeiling}); the literal
+	 * {@code "unrestricted"} → no ceiling (legacy full access); an explicit
+	 * capability vector → that ceiling. Malformed config fails safe to read-only.
+	 *
+	 * @param publicDID the public caller's DID ({@code <venueDID>:public}),
+	 *                  used to scope the default read grant
+	 * @return the ceiling vector, or null for "unrestricted"
+	 */
+	public AVector<ACell> getPublicCeiling(AString publicDID) {
+		if (publicCapsConfig == null) return CapabilityChecker.readOnlyCeiling(publicDID);
+		if (publicCapsConfig instanceof AString s && "unrestricted".equals(s.toString())) return null;
+		AVector<ACell> caps = RT.ensureVector(publicCapsConfig);
+		if (caps != null) return caps;
+		log.warn("auth.public.caps is malformed ({}); defaulting to read-only", publicCapsConfig);
+		return CapabilityChecker.readOnlyCeiling(publicDID);
 	}
 
 	/**

@@ -32,7 +32,13 @@ public class TestServer {
 				),
 				Config.WEBDAV,Maps.of(Config.ENABLED,true),
 				Config.AUTH,Maps.of(
-					Config.PUBLIC,Maps.of(Config.ENABLED,true)
+					Config.PUBLIC,Maps.of(
+						Config.ENABLED,true,
+						// Functional tests exercise operations as the public caller,
+						// so run public access unrestricted here. The secure read-only
+						// default and authenticated access are covered explicitly by
+						// PublicCeilingTest.
+						Config.CAPS,Strings.create("unrestricted"))
 				)));
 		PORT=SERVER.port();
 		BASE_URL="http://localhost:"+PORT;

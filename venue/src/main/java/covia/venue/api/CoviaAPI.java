@@ -440,7 +440,7 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 		ACell input=RT.getIn(req, "input");
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		// Attach transport UCAN authority — proofs (cross-user grants) and the
 		// self-attenuation ceiling (#131) — from both channels: the `ucans`
@@ -504,7 +504,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Job request requires a job ID as a valid hex string");
 			return;
 		}
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		try {
 			AMap<AString,ACell> status=engine().jobs().getJobData(id, rctx);
@@ -543,7 +543,7 @@ public class CoviaAPI extends ACoviaAPI {
 	protected void sendMessage(Context ctx) {
 		Blob id = Blob.parse(ctx.pathParam("id"));
 		ACell message = JSON.parseJSON5(ctx.body());
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> msgMap = (message instanceof AMap)
@@ -583,7 +583,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Job cancellation request requires a job ID as a valid hex string");
 			return;
 		}
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		try {
 			AMap<AString, ACell> status = engine().jobs().cancelJob(id, rctx);
@@ -616,7 +616,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Pause request requires a job ID");
 			return;
 		}
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		try {
 			AMap<AString, ACell> status = engine().jobs().pauseJob(id, rctx);
@@ -651,7 +651,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Resume request requires a job ID");
 			return;
 		}
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		try {
 			AMap<AString, ACell> status = engine().jobs().resumeJob(id, rctx);
@@ -686,7 +686,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Job deletion request requires a job ID as a valid hex string");
 			return;
 		}
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		try {
 			boolean deleted=engine().jobs().deleteJob(id, rctx);
@@ -705,7 +705,7 @@ public class CoviaAPI extends ACoviaAPI {
 			tags = { "Covia"},
 			summary = "Get Covia jobs.")	
 	protected void getJobs(Context ctx) {
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		try {
 			Index<Blob, ACell> jobs = engine().jobs().getJobs(rctx);
 			// Return job IDs as a list
@@ -807,7 +807,7 @@ public class CoviaAPI extends ACoviaAPI {
 			summary = "List secret names for the authenticated caller. Returns names only, never values.",
 			operationId = "listSecrets")
 	protected void listSecrets(Context ctx) {
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		AString callerDID = rctx.getCallerDID();
 		if (callerDID == null) {
 			buildError(ctx, 401, "Authentication required");
@@ -846,7 +846,7 @@ public class CoviaAPI extends ACoviaAPI {
 					description = "Secret value",
 					content= @OpenApiContent(type = "application/json", from = Object.class)))
 	protected void putSecret(Context ctx) {
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		if (rctx.getCallerDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
@@ -882,7 +882,7 @@ public class CoviaAPI extends ACoviaAPI {
 							required = true,
 							type = String.class) })
 	protected void deleteSecret(Context ctx) {
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		AString callerDID = rctx.getCallerDID();
 		if (callerDID == null) {
 			buildError(ctx, 401, "Authentication required");
