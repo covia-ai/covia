@@ -16,10 +16,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
 
+import convex.auth.jwt.JWT;
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -140,6 +142,37 @@ public class UCANBearerTransportTest {
 			invocation.toString());
 		assertTrue(resp.statusCode() == 200 || resp.statusCode() == 201);
 		assertNotEquals(ALICE_DID, callerDIDOf(resp));
+	}
+
+	/**
+	 * EXPLOIT REGRESSION (identity spoofing): a UCAN-shaped JWT signed by the
+	 * attacker's own key but claiming {@code iss = victim} must NOT authenticate
+	 * as the victim. {@code UCAN.fromJWT} verifies the signature against the JWT
+	 * {@code kid} header; the auth layer must additionally bind that signature to
+	 * the claimed issuer, otherwise any caller impersonates any did:key identity
+	 * by signing with their own key and naming the victim as {@code iss}.
+	 */
+	@Test
+	public void testForgedIssuerBearerDoesNotImpersonate() throws Exception {
+		AKeyPair attacker = AKeyPair.generate();
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AString audience = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		// Forge a token whose iss is the victim (Alice) but whose signature is
+		// the attacker's: signPublic sets kid to the attacker's key and signs
+		// with it, while the iss claim names Alice.
+		AMap<AString, ACell> forgedPayload = Maps.of(
+			UCAN.ISS, ALICE_DID,
+			UCAN.AUD, audience,
+			UCAN.EXP, CVMLong.create(exp),
+			UCAN.ATT, Vectors.empty());
+		AString forged = JWT.signPublic(forgedPayload, attacker);
+
+		HttpResponse<String> resp = postInvoke(
+			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"message\":\"hi\"}}",
+			forged.toString());
+		assertTrue(resp.statusCode() == 200 || resp.statusCode() == 201);
+		assertNotEquals(ALICE_DID, callerDIDOf(resp),
+			"A token signed by the attacker but claiming iss=victim must NOT authenticate as the victim");
 	}
 
 	/**

@@ -205,9 +205,21 @@ public class AuthMiddleware {
 		// A UCAN must declare an audience — this is what distinguishes it from
 		// other self-signed EdDSA JWTs that happen to verify.
 		if (token.getAudience() == null) return null;
+		// Bind the signature to the claimed issuer. UCAN.fromJWT verifies the
+		// signature against the JWT `kid` header key — which the caller fully
+		// controls — but attributes identity from the independent `iss` claim.
+		// Without re-verifying against the issuer's OWN key, anyone can sign a
+		// token with their key, set `iss` to any victim DID, and be attributed
+		// that identity. Re-verify against the issuer key (the same signature can
+		// only satisfy both checks when kid-key == iss-key) — mirroring the
+		// kid==sub bind that tryVerifySelfIssued enforces for plain JWTs.
+		AString issuer = token.getIssuer();
+		AccountKey issuerKey = UCAN.fromDIDKey(issuer);
+		if (issuerKey == null) return null;
+		if (JWT.verifyPublic(jwt, issuerKey) == null) return null;
 		long now = System.currentTimeMillis() / 1000;
 		if (!UCANValidator.checkTemporalBounds(token, now)) return null;
-		return token.getIssuer();
+		return issuer;
 	}
 
 	/**
