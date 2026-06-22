@@ -62,7 +62,21 @@ public class CapabilityChecker {
 			if (!UCANValidator.checkTemporalBounds(token, now)) continue;
 			if (!caller.equals(token.getAudience())) continue;
 			if (!issuer.equals(token.getIssuer())) continue;
-			result = result.concat(token.getCapabilities());
+			AVector<ACell> tokenCaps = token.getCapabilities();
+			if (tokenCaps == null) continue;
+			for (long j = 0; j < tokenCaps.count(); j++) {
+				ACell c = tokenCaps.get(j);
+				if (c instanceof AMap<?, ?> m) {
+					@SuppressWarnings("unchecked")
+					AString w = RT.ensureString(((AMap<AString, ACell>) m).get(Capability.WITH));
+					// A self-attenuation may only NARROW the caller's own authority.
+					// An empty/absent `with` is a "match any resource" wildcard
+					// (Convex #585 / UCAN: `with` is required), which broadens
+					// rather than narrows — drop it from the derived ceiling.
+					if (w == null || w.count() == 0) continue;
+				}
+				result = result.conj(c);
+			}
 		}
 		return result.isEmpty() ? null : result;
 	}
@@ -200,8 +214,43 @@ public class CapabilityChecker {
 			AString grantWith = (canonWith != null) ? Strings.create(canonWith) : null;
 			AString grantCan = RT.ensureString(cap.get(Capability.CAN));
 
-			if (Capability.covers(grantWith, grantCan, resourceStr, abilityStr)) return true;
+			// Resource matching is done locally (boundary-aware) rather than via
+			// Capability.resourceCovers, which prefix-matches without a path
+			// segment boundary (Convex #585) — "…/w/notes" would otherwise cover
+			// the sibling "…/w/notesSECRET". Ability matching reuses the already
+			// boundary-aware Capability.abilityCovers (false for a null ability).
+			if (resourceMatches(grantWith, resourceStr)
+					&& Capability.abilityCovers(grantCan, abilityStr)) return true;
 		}
+		return false;
+	}
+
+	/**
+	 * Boundary-aware resource matching — the hardened local replacement for
+	 * {@link Capability#resourceCovers}, which prefix-matches without a path
+	 * segment boundary (Convex #585): a grant on {@code "…/w/notes"} would
+	 * otherwise cover the sibling {@code "…/w/notesSECRET"}, not just descendants
+	 * {@code "…/w/notes/…"}.
+	 *
+	 * <p>A {@code null}/empty grant resource still means "any resource" — the
+	 * venue's own {@code asset/read} grant ({@code {with:""}}) relies on this,
+	 * while <em>user</em>-supplied empty-{@code with} caps are stripped earlier
+	 * at the {@link #selfCapabilities} boundary. A concrete grant matches an
+	 * exact resource, a descendant at a {@code '/'} boundary, or (for a grant
+	 * ending in {@code '/'}) its slash-less parent.</p>
+	 */
+	static boolean resourceMatches(AString grant, AString request) {
+		if (grant == null) return true;                 // wildcard (e.g. venue asset/read grant)
+		long gLen = grant.count();
+		if (gLen == 0) return true;                     // empty = wildcard
+		if (request == null) return false;
+		long rLen = request.count();
+		if (grant.equals(request)) return true;         // exact
+		if (rLen > gLen && request.startsWith(grant)
+				&& (grant.charAt(gLen - 1) == '/' || request.charAt(gLen) == '/')) return true;
+		// Trailing-slash parent: "w/x/" covers "w/x".
+		if (grant.charAt(gLen - 1) == '/' && rLen == gLen - 1
+				&& request.equals(grant.slice(0, gLen - 1))) return true;
 		return false;
 	}
 

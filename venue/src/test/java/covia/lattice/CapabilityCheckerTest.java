@@ -815,6 +815,76 @@ public class CapabilityCheckerTest {
 			"read-only ceiling must allow owner-namespace reads");
 	}
 
+	// ==================================================================
+	// Hardenings A1–A3 (Convex #585 mitigation + self-ceiling hygiene +
+	// explicit cross-user write rejection).
+	// ==================================================================
+
+	@Test
+	public void testResourceMatchingRespectsPathBoundary() {
+		// #585 regression: a path grant covers itself + descendants at a '/'
+		// boundary, NOT siblings that merely share a string prefix.
+		AString did = Strings.create("did:key:zBoundary");
+		AVector<ACell> caps = Vectors.of(
+			Capability.create(Strings.create(did + "/w/notes"), Capability.CRUD_READ));
+		assertNull(CapabilityChecker.allows(caps, "w/notes", "crud/read", did));            // exact
+		assertNull(CapabilityChecker.allows(caps, "w/notes/child", "crud/read", did));      // descendant
+		assertNotNull(CapabilityChecker.allows(caps, "w/notesSECRET", "crud/read", did));   // sibling — DENY
+		assertNotNull(CapabilityChecker.allows(caps, "w/notes-private", "crud/read", did));  // sibling — DENY
+
+		AVector<ACell> capsSlash = Vectors.of(
+			Capability.create(Strings.create(did + "/w/notes/"), Capability.CRUD_READ));
+		assertNull(CapabilityChecker.allows(capsSlash, "w/notes/child", "crud/read", did)); // children
+		assertNotNull(CapabilityChecker.allows(capsSlash, "w/notesX", "crud/read", did));    // sibling — DENY
+	}
+
+	@Test
+	public void testResourceMatchesUnit() {
+		assertTrue(CapabilityChecker.resourceMatches(Strings.create("w/notes"), Strings.create("w/notes")));
+		assertTrue(CapabilityChecker.resourceMatches(Strings.create("w/notes"), Strings.create("w/notes/child")));
+		assertFalse(CapabilityChecker.resourceMatches(Strings.create("w/notes"), Strings.create("w/notesSECRET")));
+		assertTrue(CapabilityChecker.resourceMatches(Strings.create("w/notes/"), Strings.create("w/notes"))); // trailing-slash parent
+		assertTrue(CapabilityChecker.resourceMatches(Strings.create(""), Strings.create("anything")));         // empty = wildcard
+		assertTrue(CapabilityChecker.resourceMatches(null, Strings.create("anything")));                       // null = wildcard
+	}
+
+	@Test
+	public void testSelfCapabilitiesStripsEmptyWithCaps() {
+		convex.core.crypto.AKeyPair kp = convex.core.crypto.AKeyPair.generate();
+		AString did = convex.auth.ucan.UCAN.toDIDKey(kp.getAccountKey());
+		long now = System.currentTimeMillis() / 1000;
+		// Self-token (iss == aud == caller) granting a scoped read AND an
+		// empty-`with` wildcard write. The wildcard must not survive into the
+		// derived self-ceiling — it would broaden, not narrow.
+		AVector<ACell> caps = Vectors.of(
+			Capability.create(Strings.create(did + "/w/notes"), Capability.CRUD_READ),
+			Capability.create(Strings.create(""), Capability.CRUD_WRITE));
+		convex.auth.ucan.UCAN token = convex.auth.ucan.UCAN.create(
+			kp, kp.getAccountKey(), now + 3600, caps, Vectors.empty());
+		AVector<ACell> ceiling = CapabilityChecker.selfCapabilities(
+			Vectors.of(token.toMap()), did, did, now);
+
+		assertNotNull(ceiling);
+		assertNull(CapabilityChecker.allows(ceiling, "w/notes", "crud/read", did));        // scoped read survives
+		assertNotNull(CapabilityChecker.allows(ceiling, "w/anything", "crud/write", did)); // empty-with wildcard dropped
+	}
+
+	@Test
+	public void testCrossUserDIDWritePathRejected() {
+		Engine engine = TestEngine.ENGINE;
+		AString did = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
+		RequestContext ctx = RequestContext.of(did); // authenticated, null ceiling
+		Throwable ex = assertThrows(Throwable.class, () ->
+			engine.jobs().invokeInternal("v/ops/covia/write",
+				Maps.of(Fields.PATH, "did:key:zOtherUser/w/x", Fields.VALUE, Strings.create("v")), ctx).join());
+		StringBuilder msg = new StringBuilder();
+		for (Throwable t = ex; t != null; t = t.getCause()) {
+			if (t.getMessage() != null) msg.append(t.getMessage()).append(" | ");
+		}
+		assertTrue(msg.toString().contains("not supported"),
+			"cross-user DID-URL write must be explicitly rejected, got: " + msg);
+	}
+
 	@Test
 	public void testReadOnlyCeilingStopsMutationsEndToEnd() {
 		Engine engine = TestEngine.ENGINE;

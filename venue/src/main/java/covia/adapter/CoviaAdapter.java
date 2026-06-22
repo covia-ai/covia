@@ -33,6 +33,7 @@ import convex.core.util.Utils;
 import convex.lattice.ALattice;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.Asset;
 import covia.lattice.AgentNamespaceResolver;
 import covia.lattice.LWWWrapperLattice;
@@ -552,6 +553,17 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private static void requireCap(RequestContext ctx, ACell input, AString ability) {
 		AString p = RT.ensureString(RT.getIn(input, Fields.PATH));
+		// MUTATIONS target the caller's OWN namespace via bare paths (w/…, o/…).
+		// Cross-user access via a DID-URL path is supported for READS only (gated
+		// by a presented delegation proof in resolveDIDURL); there is no cross-user
+		// write path. Reject a DID-URL mutation target explicitly and early rather
+		// than relying on the downstream writable-namespace check — defence-in-depth
+		// that survives refactors and gives a clear error. Reads fall through to the
+		// proof-gated resolver.
+		if (p != null && !Capability.CRUD_READ.equals(ability) && p.toString().startsWith("did:")) {
+			throw new AuthException("Cross-user / DID-URL write paths are not supported: " + p
+				+ " — write to your own namespace via a bare path (e.g. w/…).");
+		}
 		ctx.requireCapability(p, ability);
 	}
 
