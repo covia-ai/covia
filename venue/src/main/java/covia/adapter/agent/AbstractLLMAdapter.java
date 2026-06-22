@@ -286,24 +286,27 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * @param toolName the tool name as returned by the LLM
 	 * @param input the tool call arguments
 	 * @param configToolMap mapping of LLM tool names to operation names
-	 * @param caps capability attenuations (null = unrestricted)
-	 * @param ctx request context for the tool dispatch
+	 * @param ctx request context for the tool dispatch — carries the agent's
+	 *        capability ceiling ({@link RequestContext#getCaps()})
 	 * @param timeoutMs per-tool-call wall-clock budget; {@link TimeoutException}
 	 *        is converted to an "Error: tool call timed out" string result so
 	 *        the agent loop can continue
 	 * @return tool result (ACell)
 	 */
 	protected ACell dispatchTool(String toolName, ACell input,
-			Map<String, AString> configToolMap, AVector<ACell> caps, RequestContext ctx,
+			Map<String, AString> configToolMap, RequestContext ctx,
 			long timeoutMs) {
 		// Resolve the actual operation name for capability checking
 		AString operation = (configToolMap != null) ? configToolMap.get(toolName) : null;
 		String opName = (operation != null) ? operation.toString() : toolName;
 
-		// Check agent capabilities before dispatch. The agent runs under its
-		// owner's identity (#91), so the caller DID is the owner that scopes
-		// the agent's (owner-relative) config caps.
-		String denied = CapabilityChecker.check(caps, opName, input, ctx.getCallerDID());
+		// Check the agent's capability ceiling — carried on the context, not a
+		// separate vector. The agent runs under its owner's identity (#91), so
+		// the caller DID scopes the (owner-relative) config caps. invokeInternal
+		// re-checks the same ceiling on dispatch and the executing adapter pins
+		// the exact resource/ability; this early check just yields a friendly
+		// LLM-facing error rather than an exception string.
+		String denied = CapabilityChecker.check(ctx.getCaps(), opName, input, ctx.getCallerDID());
 		if (denied != null) return Strings.create("Error: " + denied);
 
 		// Config tools — tool name maps to a resolved operation

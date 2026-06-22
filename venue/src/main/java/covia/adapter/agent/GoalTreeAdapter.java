@@ -476,7 +476,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// Prepare tool dispatch context
 		AVector<ACell> baseTools = context.tools();
 		Map<String, AString> configToolMap = context.configToolMap();
-		AVector<ACell> caps = context.caps();
 		AString llmOperation = getLLMOperation(l3Config);
 
 		// Set up capability-scoped context for tool dispatch
@@ -491,7 +490,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// typed complete/fail tools alongside the regular harness/operation
 		// tools, supporting providers that prefer tool calls over response_format.
 		FrameResult result = runFrame(job, frames, 0, l3Config, llmOperation, baseTools,
-			configToolMap, caps, capsCtx, context.history(), typedHarnessTools, toolCallTimeoutMs);
+			configToolMap, capsCtx, context.history(), typedHarnessTools, toolCallTimeoutMs);
 
 		// Config carry-over only — the frame stack lives on the session
 		// record now, so no per-adapter frame state is persisted here.
@@ -585,8 +584,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	 * @param llmOperation L3 operation name
 	 * @param baseTools configured operation tools
 	 * @param configToolMap LLM tool name → operation name mapping
-	 * @param caps capability attenuations
-	 * @param ctx request context for tool dispatch
+	 * @param ctx request context for tool dispatch — carries the agent's caps
 	 * @param systemMessages system messages (prompt, context entries)
 	 * @param typedRootHarnessTools typed complete/fail tools injected at the
 	 *        root frame (alongside config-resolved harness tools), or null
@@ -599,7 +597,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	FrameResult runFrame(Job job, AVector<ACell> frames, int frameIndex,
 			AMap<AString, ACell> config, AString llmOperation,
 			AVector<ACell> baseToolsParam, Map<String, AString> configToolMap,
-			AVector<ACell> caps, RequestContext ctx, AVector<ACell> systemMessages,
+			RequestContext ctx, AVector<ACell> systemMessages,
 			AVector<ACell> typedRootHarnessTools, long toolCallTimeoutMs) {
 
 		// Mutable copy — more_tools can append to this mid-run
@@ -936,7 +934,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 						// child also gets responseFormat stripped from its L3
 						// config (handled inside the recursive runFrame).
 						FrameResult childResult = runFrame(job, childFrames, frameIndex + 1,
-							config, llmOperation, baseTools, configToolMap, caps, ctx, systemMessages, null,
+							config, llmOperation, baseTools, configToolMap, ctx, systemMessages, null,
 							toolCallTimeoutMs);
 
 						// Pop child — result becomes tool result in parent
@@ -950,7 +948,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 				} else {
 					// Config tool or grid dispatch
-					toolResult = dispatchTool(toolName, toolInput, configToolMap, caps, ctx, toolCallTimeoutMs);
+					toolResult = dispatchTool(toolName, toolInput, configToolMap, ctx, toolCallTimeoutMs);
 				}
 
 				// Record tool result in conversation

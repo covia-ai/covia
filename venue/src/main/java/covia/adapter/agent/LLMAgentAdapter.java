@@ -283,10 +283,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		AVector<ACell> baseTools = context.tools();
 		Map<String, AString> configToolMap = context.configToolMap();
 		AMap<AString, ACell> config = context.config();
-		AVector<ACell> caps = context.caps();
-
 		// Add agent scope to the capability context — all tool calls carry the agentId
-		// so adapters (e.g. CoviaAdapter) can resolve n/ paths to agent-private workspace
+		// so adapters (e.g. CoviaAdapter) can resolve n/ paths to agent-private workspace.
+		// The agent's config caps already ride on capsCtx (ContextBuilder.capsCtx).
 		RequestContext capsCtx = context.capsCtx().withAgentId(agentId);
 
 		// Extract LLM operation from merged config
@@ -297,7 +296,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 		// Create tool context for built-in tool execution
 		long toolCallTimeoutMs = resolveToolCallTimeoutMs(config);
-		ToolContext toolCtx = new ToolContext(agentId, capsCtx, tasks, pending, configToolMap, caps, activeLoads, toolCallTimeoutMs);
+		ToolContext toolCtx = new ToolContext(agentId, capsCtx, tasks, pending, configToolMap, activeLoads, toolCallTimeoutMs);
 
 		// Invoke level 3 with tool call loop — returns all messages to append
 		// ctx (uncapped) for the L3 LLM call; capsCtx flows through toolCtx for tool dispatch
@@ -510,7 +509,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// Cap-checked, timeout-bounded dispatch via the shared base path.
 		// Resolves config tools, falls through to grid dispatch for unknown names.
 		return dispatchTool(toolName, input, toolCtx.configToolMap,
-			toolCtx.caps, toolCtx.ctx, toolCtx.toolCallTimeoutMs);
+			toolCtx.ctx, toolCtx.toolCallTimeoutMs);
 	}
 
 	/**
@@ -696,25 +695,23 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		final AVector<ACell> tasks;
 		final AVector<ACell> pending;
 		final Map<String, AString> configToolMap;
-		final AVector<ACell> caps;
 		final long toolCallTimeoutMs;
 		AMap<AString, ACell> taskResults;
 		AMap<AString, ACell> loads;
 
 		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
-				Map<String, AString> configToolMap, AVector<ACell> caps, AMap<AString, ACell> loads) {
-			this(agentId, ctx, tasks, pending, configToolMap, caps, loads, DEFAULT_TOOL_CALL_TIMEOUT_MS);
+				Map<String, AString> configToolMap, AMap<AString, ACell> loads) {
+			this(agentId, ctx, tasks, pending, configToolMap, loads, DEFAULT_TOOL_CALL_TIMEOUT_MS);
 		}
 
 		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
-				Map<String, AString> configToolMap, AVector<ACell> caps, AMap<AString, ACell> loads,
+				Map<String, AString> configToolMap, AMap<AString, ACell> loads,
 				long toolCallTimeoutMs) {
 			this.agentId = agentId;
 			this.ctx = ctx;
 			this.tasks = tasks;
 			this.pending = pending;
 			this.configToolMap = (configToolMap != null) ? configToolMap : Map.of();
-			this.caps = caps;
 			this.loads = (loads != null) ? loads : Maps.empty();
 			this.toolCallTimeoutMs = toolCallTimeoutMs;
 		}

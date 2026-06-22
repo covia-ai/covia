@@ -966,13 +966,13 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testBuildOutstandingTaskMessageNoTasks() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		assertNull(LLMAgentAdapter.buildOutstandingTaskMessage(ctx));
 	}
 
 	@Test
 	public void testBuildOutstandingTaskMessageEmptyTasks() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, Vectors.empty(), null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, Vectors.empty(), null, null, null);
 		assertNull(LLMAgentAdapter.buildOutstandingTaskMessage(ctx));
 	}
 
@@ -981,7 +981,7 @@ public class LLMAgentAdapterTest {
 		AVector<ACell> tasks = Vectors.of(
 			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task1")
 		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null);
 		ctx.recordTaskResult(Strings.create("aaa"),
 			Maps.of(Fields.STATUS, Status.COMPLETE));
 
@@ -994,7 +994,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "done-task"),
 			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "pending-task")
 		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null);
 		ctx.recordTaskResult(Strings.create("aaa"),
 			Maps.of(Fields.STATUS, Status.COMPLETE));
 
@@ -1014,7 +1014,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task-one"),
 			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "task-two")
 		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null);
 
 		AMap<AString, ACell> msg = LLMAgentAdapter.buildOutstandingTaskMessage(ctx);
 		assertNotNull(msg);
@@ -1028,7 +1028,7 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testToolContextRecordTaskResult() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		assertNull(ctx.taskResults);
 
 		ctx.recordTaskResult(Strings.create("job1"),
@@ -1212,7 +1212,7 @@ public class LLMAgentAdapterTest {
 	// ========== Context load/unload tests ==========
 
 	@Test public void testContextLoadHandler() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		assertEquals(0, ctx.loads.count());
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
@@ -1224,7 +1224,7 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testContextLoadDefaultBudget() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		adapter.handleContextLoad(Maps.of("path", "w/test"), ctx);
 
@@ -1233,7 +1233,7 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testContextLoadBudgetClamped() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
 		// Over max
@@ -1248,7 +1248,7 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testContextLoadOverwritesSamePath() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		adapter.handleContextLoad(Maps.of("path", "w/data", "budget", 500L, "label", "first"), ctx);
 		adapter.handleContextLoad(Maps.of("path", "w/data", "budget", 1000L, "label", "second"), ctx);
@@ -1260,7 +1260,7 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testContextUnloadHandler() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		adapter.handleContextLoad(Maps.of("path", "w/data"), ctx);
 		assertEquals(1, ctx.loads.count());
@@ -1271,7 +1271,7 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testContextUnloadNotFound() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell result = adapter.handleContextUnload(Maps.of("path", "w/missing"), ctx);
 		assertTrue(result.toString().contains("Error"));
