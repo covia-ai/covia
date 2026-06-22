@@ -47,40 +47,42 @@ public class AudiencePolicyTest {
 
 	private static final AString OP_ECHO = Strings.create("v/test/ops/echo");
 
-	private VenueServer verifyServer;   // default policy + an extra accepted audience
-	private VenueServer requireServer;  // audience = require
+	private VenueServer requireServer;  // audience = require (+ an accepted-audience allowlist)
 	private AString verifyVenueDID;
 	private AString requireVenueDID;
-	/** Extra audience the verifyServer is configured to accept. */
+	/** Extra audience the requireServer is configured to also accept. */
 	private AString extraDID;
 
 	@BeforeAll
 	public void setup() {
 		extraDID = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 
-		verifyServer = VenueServer.launch(Maps.of(
-			Strings.create("port"), 0,
-			Config.AUTH, Maps.of(
-				Config.PUBLIC, Maps.of(Config.ENABLED, true),
-				Config.ACCEPTED_AUDIENCES, Vectors.of(extraDID))));
-		verifyVenueDID = verifyServer.getEngine().getDIDString();
+		// Verify-policy cases run against the shared TestServer (its default policy
+		// IS verify), so no dedicated venue is needed. Only the require policy needs
+		// its own venue — which also carries the accepted-audiences allowlist, so a
+		// single extra venue covers both the require and the allowlist cases.
+		verifyVenueDID = TestServer.ENGINE.getDIDString();
 
 		requireServer = VenueServer.launch(Maps.of(
 			Strings.create("port"), 0,
 			Config.AUTH, Maps.of(
 				Config.PUBLIC, Maps.of(Config.ENABLED, true),
-				Config.AUDIENCE, Strings.create("require"))));
+				Config.AUDIENCE, Strings.create("require"),
+				Config.ACCEPTED_AUDIENCES, Vectors.of(extraDID))));
 		requireVenueDID = requireServer.getEngine().getDIDString();
 	}
 
 	@AfterAll
 	public void teardown() {
-		if (verifyServer != null) try { verifyServer.close(); } catch (Exception ignored) {}
 		if (requireServer != null) try { requireServer.close(); } catch (Exception ignored) {}
 	}
 
 	private static VenueHTTP client(VenueServer server, String jwt) {
-		VenueHTTP c = VenueHTTP.create(URI.create("http://localhost:" + server.port()), VenueAuth.bearer(jwt));
+		return client("http://localhost:" + server.port(), jwt);
+	}
+
+	private static VenueHTTP client(String base, String jwt) {
+		VenueHTTP c = VenueHTTP.create(URI.create(base), VenueAuth.bearer(jwt));
 		c.setTimeout(5000);
 		return c;
 	}
@@ -136,14 +138,14 @@ public class AudiencePolicyTest {
 	@Test
 	public void verifyToleratesMissingAudience() throws Exception {
 		// Default policy: an absent aud is tolerated (the token still authenticates).
-		assertAccepted(client(verifyServer, selfIssued(AKeyPair.generate(), null)));
+		assertAccepted(client(TestServer.BASE_URL, selfIssued(AKeyPair.generate(), null)));
 	}
 
 	@Test
 	public void presentButWrongAudienceRejectedUnderVerify() {
 		// RFC 7519 MUST: a present-but-mismatched aud is rejected even under verify.
 		AString wrong = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
-		assertRejected401(client(verifyServer, selfIssued(AKeyPair.generate(), wrong)));
+		assertRejected401(client(TestServer.BASE_URL, selfIssued(AKeyPair.generate(), wrong)));
 	}
 
 	@Test
@@ -151,19 +153,20 @@ public class AudiencePolicyTest {
 		// aud may be an array (StringOrURI[]); accepted if any element matches.
 		AString other = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 		ACell arrayAud = Vectors.of(other, verifyVenueDID);
-		assertAccepted(client(verifyServer, selfIssued(AKeyPair.generate(), arrayAud)));
+		assertAccepted(client(TestServer.BASE_URL, selfIssued(AKeyPair.generate(), arrayAud)));
 	}
 
 	@Test
 	public void arrayAudienceRejectedWhenItExcludesVenue() {
 		AString o1 = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 		AString o2 = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
-		assertRejected401(client(verifyServer, selfIssued(AKeyPair.generate(), Vectors.of(o1, o2))));
+		assertRejected401(client(TestServer.BASE_URL, selfIssued(AKeyPair.generate(), Vectors.of(o1, o2))));
 	}
 
 	@Test
 	public void configuredAllowlistAudienceAccepted() throws Exception {
-		// auth.acceptedAudiences extends the allowlist beyond the venue's own DID.
-		assertAccepted(client(verifyServer, selfIssued(AKeyPair.generate(), extraDID)));
+		// auth.acceptedAudiences extends the allowlist beyond the venue's own DID
+		// (exercised on the require venue, which carries the allowlist).
+		assertAccepted(client(requireServer, selfIssued(AKeyPair.generate(), extraDID)));
 	}
 }

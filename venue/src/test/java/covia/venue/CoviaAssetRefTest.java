@@ -9,8 +9,6 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
@@ -22,7 +20,6 @@ import convex.core.data.Strings;
 import convex.core.util.JSON;
 import covia.grid.Asset;
 import covia.grid.client.VenueHTTP;
-import covia.venue.server.VenueServer;
 
 /**
  * #150 — retrieve assets by lattice address, not just a hex hash.
@@ -32,6 +29,11 @@ import covia.venue.server.VenueServer;
  * {@code invoke} resolves operation references, returning the resolved asset's
  * canonical metadata plus its content-addressed id (in the ETag). The bare-hash
  * URL stays byte-identical, so existing hash fetches keep working.</p>
+ *
+ * <p>Uses the shared {@link TestServer} (unrestricted public) rather than its own
+ * venue — separate venues are reserved for tests that genuinely need isolated
+ * config or lifecycle, to keep the concurrent venue count (and thus HTTP
+ * connector load) down under parallel execution.</p>
  */
 @TestInstance(Lifecycle.PER_CLASS)
 public class CoviaAssetRefTest {
@@ -39,26 +41,9 @@ public class CoviaAssetRefTest {
 	private static final String META =
 		"{\"name\":\"Ref Test Asset\",\"description\":\"by-address fetch\"}";
 
-	private VenueServer server;
-	private String base;
-	private VenueHTTP client;
+	private final String base = TestServer.BASE_URL;
+	private final VenueHTTP client = TestServer.COVIA;
 	private final HttpClient http = HttpClient.newHttpClient();
-
-	@BeforeAll
-	public void setup() {
-		server = VenueServer.launch(Maps.of(
-			Strings.create("port"), 0,
-			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(
-				Config.ENABLED, true, Config.CAPS, Strings.create("unrestricted")))));
-		base = "http://localhost:" + server.port();
-		client = VenueHTTP.create(URI.create(base));
-		client.setTimeout(5000);
-	}
-
-	@AfterAll
-	public void teardown() {
-		if (server != null) try { server.close(); } catch (Exception ignored) {}
-	}
 
 	private HttpResponse<String> get(String path) throws Exception {
 		return http.send(
@@ -96,10 +81,10 @@ public class CoviaAssetRefTest {
 		// value written to the workspace path hashes back to the same id.
 		ACell canonicalMeta = JSON.parse(get("/api/v1/assets/" + h.toHexString()).body());
 		client.invokeAndWait(Strings.create("v/ops/covia/write"), Maps.of(
-			Strings.create("path"), Strings.create("w/my-assets/foo"),
+			Strings.create("path"), Strings.create("w/asset-ref-test/foo"),
 			Strings.create("value"), canonicalMeta));
 
-		HttpResponse<String> r = get("/api/v1/assets/w/my-assets/foo");
+		HttpResponse<String> r = get("/api/v1/assets/w/asset-ref-test/foo");
 		assertEquals(200, r.statusCode());
 		assertTrue(r.body().contains("Ref Test Asset"));
 		assertTrue(etagHash(r).contains(h.toHexString()),
@@ -128,22 +113,17 @@ public class CoviaAssetRefTest {
 	@Test
 	public void javaClientResolvesByLatticeAddress() throws Exception {
 		// covia-core's VenueHTTP.resolveAsset(ref) passes the address straight to
-		// the new endpoint — content-addressed and mutable-path forms both yield
-		// the resolved asset with its content-addressed id.
+		// the new endpoint. The client code is identical for any ref shape, so the
+		// content-addressed forms exercise it deterministically; server-side
+		// workspace-path resolution is covered by workspacePathResolvesToPinnedAsset.
 		Hash h = client.addAsset(META).join();
 
 		Asset byHash = client.resolveAsset("a/" + h.toHexString());
 		assertNotNull(byHash, "client must resolve a/<hash>");
-		assertEquals(h, byHash.getID());
+		assertEquals(h, byHash.getID(), "client must return the resolved content-addressed id");
 
-		ACell canonicalMeta = JSON.parse(get("/api/v1/assets/" + h.toHexString()).body());
-		client.invokeAndWait(Strings.create("v/ops/covia/write"), Maps.of(
-			Strings.create("path"), Strings.create("w/client-assets/bar"),
-			Strings.create("value"), canonicalMeta));
-
-		Asset byPath = client.resolveAsset("w/client-assets/bar");
-		assertNotNull(byPath, "client must resolve a workspace path");
-		assertEquals(h, byPath.getID(),
-			"client must resolve a mutable path to the asset's content-addressed id");
+		Asset byBareHash = client.resolveAsset(h.toHexString());
+		assertNotNull(byBareHash, "client must resolve a bare hash");
+		assertEquals(h, byBareHash.getID());
 	}
 }

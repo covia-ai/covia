@@ -52,9 +52,9 @@ public class PublicCeilingTest {
 	/** Venue with the secure read-only public default (auth.public.caps absent). */
 	private VenueServer secureServer;
 	private String secureBase;
-	/** Venue with the operator opt-out (auth.public.caps = "unrestricted"). */
-	private VenueServer openServer;
-	private String openBase;
+	/** The shared TestServer runs unrestricted public — reuse it for the operator
+	 *  opt-out case rather than launching a second venue. */
+	private final String openBase = TestServer.BASE_URL;
 
 	@BeforeAll
 	public void setup() {
@@ -63,20 +63,11 @@ public class PublicCeilingTest {
 			Config.AUTH, Maps.of(
 				Config.PUBLIC, Maps.of(Config.ENABLED, true)))); // default → read-only
 		secureBase = "http://localhost:" + secureServer.port();
-
-		openServer = VenueServer.launch(Maps.of(
-			Strings.create("port"), 0,
-			Config.AUTH, Maps.of(
-				Config.PUBLIC, Maps.of(
-					Config.ENABLED, true,
-					Config.CAPS, Strings.create("unrestricted")))));
-		openBase = "http://localhost:" + openServer.port();
 	}
 
 	@AfterAll
 	public void teardown() {
 		if (secureServer != null) try { secureServer.close(); } catch (Exception ignored) {}
-		if (openServer != null) try { openServer.close(); } catch (Exception ignored) {}
 	}
 
 	private static VenueHTTP anon(String base) {
