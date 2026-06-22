@@ -4,7 +4,10 @@ import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import covia.exception.AuthException;
+import covia.lattice.CapabilityChecker;
 
 /**
  * Represents the context of an API request, carrying caller identity,
@@ -43,9 +46,10 @@ public class RequestContext {
 	 * <p>Framework code that needs the venue itself as the caller (engine
 	 * startup, materialisation, recovery) uses
 	 * {@link covia.venue.Engine#venueContext()}, which returns a context
-	 * bound to the venue's own DID. Trust is established by call path —
-	 * {@code JobManager.invokeInternal} skips the cap check, while
-	 * {@code invokeOperation} enforces it.</p>
+	 * bound to the venue's own DID with an unrestricted ({@code null})
+	 * ceiling. Trust is a property of the context's authority, not the call
+	 * path: both {@code JobManager.invokeOperation} and {@code invokeInternal}
+	 * enforce whatever ceiling the context carries.</p>
 	 */
 	public static RequestContext of(AString callerDID) {
 		if (callerDID == null) return ANONYMOUS;
@@ -80,10 +84,12 @@ public class RequestContext {
 	}
 
 	/**
-	 * Returns a new context with capability attenuations. Operations are
-	 * cap-checked against these by {@link covia.venue.JobManager#invokeOperation}
-	 * (the user-facing entry); {@code invokeInternal} (the framework path)
-	 * does not. Null = unrestricted.
+	 * Returns a new context with a capability ceiling. Every operation executed
+	 * under this context is checked against the ceiling at the point it runs —
+	 * by the executing adapter ({@link #requireCapability}) and by the
+	 * {@link covia.venue.JobManager} dispatch safety net, on both the
+	 * {@code invokeOperation} and {@code invokeInternal} paths. The ceiling
+	 * composes downward into sub-operations. {@code null} = unrestricted.
 	 */
 	public RequestContext withCaps(AVector<ACell> caps) {
 		return new RequestContext(this.callerDID, this.proofs, caps, this.agentId, this.jobId, this.sessionId, this.taskId);
@@ -159,6 +165,41 @@ public class RequestContext {
 	 */
 	public AVector<ACell> getCaps() {
 		return caps;
+	}
+
+	/**
+	 * Enforces a capability at the point an operation executes. The executing
+	 * adapter names the <em>exact</em> resource it acts on and the <em>exact</em>
+	 * ability it requires, so the enforced capability is pinned to the
+	 * implementation and cannot drift from a name-keyed mapping. A {@code null}
+	 * ceiling ({@link #getCaps()}) is unrestricted, so this is a no-op for
+	 * internal and authenticated callers that carry no attenuation; only a
+	 * caller with a ceiling set (e.g. the public read-only profile) is gated.
+	 *
+	 * <p>Lattice resources and abilities are {@link AString}s, so this is the
+	 * primary form; see {@link #requireCapability(String, String)} for a
+	 * literal-argument convenience overload.</p>
+	 *
+	 * @param resource the exact resource acted on (bare lattice path, DID URL,
+	 *                 or scheme URI); may be null for "no specific resource"
+	 * @param ability  the exact ability required (e.g.
+	 *                 {@link convex.auth.ucan.Capability#CRUD_WRITE})
+	 * @throws AuthException if the ceiling does not cover {@code (resource, ability)}
+	 */
+	public void requireCapability(AString resource, AString ability) {
+		String denial = CapabilityChecker.allows(caps, resource, ability, callerDID);
+		if (denial != null) throw new AuthException(denial);
+	}
+
+	/**
+	 * {@link String}-literal convenience overload of
+	 * {@link #requireCapability(AString, AString)} — interns the arguments and
+	 * delegates. Use when the resource or ability is a Java string literal
+	 * (e.g. {@code "s/" + name}, {@code "secret/write"}).
+	 */
+	public void requireCapability(String resource, String ability) {
+		requireCapability(resource != null ? Strings.create(resource) : null,
+			ability != null ? Strings.create(ability) : null);
 	}
 
 	/**

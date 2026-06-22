@@ -12,6 +12,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.lattice.CapabilityChecker;
 import covia.venue.Engine;
@@ -360,10 +361,12 @@ public class CapabilityCheckerTest {
 	}
 
 	@Test
-	public void testInvokeInternalBypassesCapCheck() {
-		// invokeInternal is the framework dispatch path — no cap check
-		// applied. Trust is established by going through this entry point
-		// rather than invokeOperation. Caps stay on the ctx (no stripping).
+	public void testInvokeInternalEnforcesContextCeiling() {
+		// Trust is a property of the context's authority, not the call path.
+		// invokeInternal differs from invokeOperation only in Job creation — it
+		// enforces whatever ceiling the context carries. A write outside the
+		// ceiling is denied on BOTH paths; "framework-trusted" is expressed by
+		// an unrestricted (null-caps) context, not by choosing invokeInternal.
 		Engine engine = TestEngine.ENGINE;
 
 		AVector<ACell> caps = Vectors.of(
@@ -378,14 +381,20 @@ public class CapabilityCheckerTest {
 			engine.jobs().invokeOperation("v/ops/covia/write",
 				Maps.of(Fields.PATH, "w/forbidden/doc", Fields.VALUE, Strings.create("nope")), gated));
 
-		// Framework path: same caps, same op, same input, no flag changes —
-		// invokeInternal is trusted by call path, succeeds.
+		// Internal path: same ceiling, same op — also denied. No call-path bypass.
+		assertThrows(Exception.class, () ->
+			engine.jobs().invokeInternal("v/ops/covia/write",
+				Maps.of(Fields.PATH, "w/forbidden/doc", Fields.VALUE, Strings.create("nope")), gated)
+				.join(),
+			"invokeInternal must enforce the context ceiling");
+
+		// Within the ceiling, the internal write succeeds.
 		ACell ok = engine.jobs().invokeInternal("v/ops/covia/write",
-			Maps.of(Fields.PATH, "w/forbidden/doc", Fields.VALUE, Strings.create("ok")), gated)
+			Maps.of(Fields.PATH, "w/allowed/doc", Fields.VALUE, Strings.create("ok")), gated)
 			.join();
 		assertNotNull(ok);
 
-		// Caps remain on the ctx — they didn't get stripped.
+		// The ceiling stays on the ctx — enforcement reads it, never strips it.
 		assertEquals(caps, gated.getCaps());
 	}
 
@@ -710,5 +719,91 @@ public class CapabilityCheckerTest {
 		boolean allowViaCheck = check(ceiling, "v/ops/covia/write", input) == null;
 		assertEquals(allowViaCheck, allowDirect);
 		assertTrue(allowDirect);
+	}
+
+	// ==================================================================
+	// readOnlyCeiling + RequestContext.requireCapability — the public
+	// read-only default and the adapter-facing enforcement primitive.
+	// ==================================================================
+
+	@Test
+	public void testReadOnlyCeilingGrantsOnlyReads() {
+		AString did = Strings.create("did:key:zPublic");
+		AVector<ACell> ceiling = CapabilityChecker.readOnlyCeiling(did);
+		// Reads: own/venue lattice + content-addressed assets
+		assertNull(CapabilityChecker.allows(ceiling, "w/x", "crud/read", did));
+		assertNull(CapabilityChecker.allows(ceiling, "v/ops/covia/read", "crud/read", did));
+		assertNull(CapabilityChecker.allows(ceiling, "0xhash", "asset/read", did));
+		// Every mutating ability denied
+		assertNotNull(CapabilityChecker.allows(ceiling, "w/x", "crud/write", did));
+		assertNotNull(CapabilityChecker.allows(ceiling, "w/x", "crud/delete", did));
+		assertNotNull(CapabilityChecker.allows(ceiling, "s/KEY", "secret/write", did));
+		assertNotNull(CapabilityChecker.allows(ceiling, "g/Bob", "agent/create", did));
+		assertNotNull(CapabilityChecker.allows(ceiling, "0xh", "asset/store", did));
+		assertNotNull(CapabilityChecker.allows(ceiling, "v/test/ops/echo", "invoke", did));
+		// And no cross-user read
+		assertNotNull(CapabilityChecker.allows(ceiling, "did:key:zOther/w/x", "crud/read", did));
+	}
+
+	@Test
+	public void testRequireCapabilityEnforcesReadOnlyCeiling() {
+		AString did = Strings.create("did:key:zPublic");
+		RequestContext ctx = RequestContext.of(did).withCaps(CapabilityChecker.readOnlyCeiling(did));
+		assertDoesNotThrow(() -> ctx.requireCapability("w/notes", "crud/read"));
+		assertThrows(AuthException.class, () -> ctx.requireCapability("w/notes", "crud/write"));
+		assertThrows(AuthException.class, () -> ctx.requireCapability("w/notes", "crud/delete"));
+		assertThrows(AuthException.class, () -> ctx.requireCapability("s/KEY", "secret/write"));
+		assertThrows(AuthException.class, () -> ctx.requireCapability("v/test/ops/echo", "invoke"));
+	}
+
+	@Test
+	public void testRequireCapabilityNullCeilingIsNoOp() {
+		// Authenticated / internal callers carry no ceiling → unrestricted.
+		RequestContext ctx = RequestContext.of(Strings.create("did:key:zAlice"));
+		assertDoesNotThrow(() -> ctx.requireCapability("w/anything", "crud/write"));
+		assertDoesNotThrow(() -> ctx.requireCapability("s/KEY", "secret/write"));
+	}
+
+	@Test
+	public void testAllowsAStringAndStringOverloadsAgree() {
+		AString did = Strings.create("did:key:zPublic");
+		AVector<ACell> ceiling = CapabilityChecker.readOnlyCeiling(did);
+		// The AString-native primary and the String convenience overload must
+		// produce identical verdicts and identical denial messages.
+		assertEquals(
+			CapabilityChecker.allows(ceiling, "w/x", "crud/write", did),
+			CapabilityChecker.allows(ceiling, Strings.create("w/x"), Capability.CRUD_WRITE, did));
+		assertNull(CapabilityChecker.allows(ceiling, Strings.create("w/x"), Capability.CRUD_READ, did));
+		assertNotNull(CapabilityChecker.allows(ceiling, Strings.create("w/x"), Capability.CRUD_WRITE, did));
+	}
+
+	@Test
+	public void testRequireCapabilityAStringOverloadEnforces() {
+		AString did = Strings.create("did:key:zPublic");
+		RequestContext ctx = RequestContext.of(did).withCaps(CapabilityChecker.readOnlyCeiling(did));
+		assertDoesNotThrow(() -> ctx.requireCapability(Strings.create("w/x"), Capability.CRUD_READ));
+		assertThrows(AuthException.class,
+			() -> ctx.requireCapability(Strings.create("w/x"), Capability.CRUD_WRITE));
+	}
+
+	@Test
+	public void testReadOnlyCeilingStopsMutationsEndToEnd() {
+		Engine engine = TestEngine.ENGINE;
+		AString did = convex.auth.ucan.UCAN.toDIDKey(
+			convex.core.crypto.AKeyPair.generate().getAccountKey());
+		RequestContext ctx = RequestContext.of(did).withCaps(CapabilityChecker.readOnlyCeiling(did));
+
+		// Read under a read-only ceiling is allowed (absent path → exists:false).
+		Job read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/x"), ctx);
+		assertNotNull(read.awaitResult(5000), "read is allowed under a read-only ceiling");
+
+		// Mutations are denied.
+		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/x", Fields.VALUE, Strings.create("v")), ctx),
+			"write must be denied under a read-only ceiling");
+		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "w/x"), ctx),
+			"delete must be denied under a read-only ceiling");
 	}
 }

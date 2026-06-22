@@ -120,20 +120,24 @@ public class CapabilityChecker {
 	 * code actually does (unlike a name-keyed {@link #operationAbility} mapping,
 	 * which is a separate source of truth that can fall out of sync).</p>
 	 *
+	 * <p>Lattice resources and abilities are {@link AString}s, so this AString
+	 * form is the primary entry point; a {@link String} overload is provided for
+	 * literal arguments.</p>
+	 *
 	 * @param caps     the caller's granted capability ceiling; {@code null} = unrestricted
 	 * @param resource the exact resource acted on — a bare lattice path
 	 *                 ({@code "w/x"}, owner-scoped), a DID URL, or a scheme URI;
 	 *                 {@code null}/empty means "no specific resource"
-	 * @param ability  the exact ability required (e.g. {@code "crud/write"},
-	 *                 {@code "secret/write"}, {@code "invoke"})
+	 * @param ability  the exact ability required (e.g.
+	 *                 {@link Capability#CRUD_WRITE}, {@code "secret/write"})
 	 * @param ownerDID the caller's DID, used to canonicalise bare resources; may be null
 	 * @return {@code null} if allowed, else an actionable denial message
 	 */
-	public static String allows(AVector<ACell> caps, String resource, String ability, AString ownerDID) {
+	public static String allows(AVector<ACell> caps, AString resource, AString ability, AString ownerDID) {
 		if (caps == null) return null;              // no ceiling = unrestricted
-		String canonResource = canonicalResource(resource, ownerDID);
+		String canonResource = canonicalResource(resource != null ? resource.toString() : null, ownerDID);
 		if (canonResource == null) canonResource = "";
-		String ab = (ability != null) ? ability : "";
+		String ab = (ability != null) ? ability.toString() : "";
 		AString resourceStr = Strings.create(canonResource);
 		AString abilityStr = Strings.create(ab);
 
@@ -145,6 +149,36 @@ public class CapabilityChecker {
 			.append(". Your capabilities are: ");
 		appendCapsList(sb, caps);
 		return sb.toString();
+	}
+
+	/**
+	 * {@link String}-argument convenience overload of
+	 * {@link #allows(AVector, AString, AString, AString)} — interns the literal
+	 * arguments and delegates.
+	 */
+	public static String allows(AVector<ACell> caps, String resource, String ability, AString ownerDID) {
+		return allows(caps,
+			resource != null ? Strings.create(resource) : null,
+			ability != null ? Strings.create(ability) : null,
+			ownerDID);
+	}
+
+	/**
+	 * The default read-only capability ceiling for an identity: read the
+	 * identity's own (owner-scoped) lattice and venue paths, and read
+	 * content-addressed assets. It grants <em>no</em> write, delete, secret,
+	 * agent, asset-store, or invoke ability — so every mutating operation is
+	 * denied. This is the secure-by-default profile for the public/anonymous
+	 * identity; operators widen it explicitly for permissive venues.
+	 *
+	 * @param scopeDID the identity the read grant is scoped to — must be
+	 *                 non-null (e.g. the venue public DID, {@code "<venueDID>:public"});
+	 *                 a null scope would yield an unscoped, over-broad grant
+	 */
+	public static AVector<ACell> readOnlyCeiling(AString scopeDID) {
+		return Vectors.of(
+			Capability.create(scopeDID, Capability.CRUD_READ),
+			Capability.create(Strings.create(""), Strings.create("asset/read")));
 	}
 
 	/**

@@ -316,13 +316,13 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/**
-	 * Invokes an operation with a per-call timeout. The caller
-	 * ({@link #dispatchTool}) has already cap-checked the call explicitly.
-	 * invokeInternal is the framework dispatch path and doesn't apply a
-	 * second cap check, so trust is established by the call path. Internal
-	 * dispatch — no sub-Job created. Times out via
-	 * {@link java.util.concurrent.CompletableFuture#get(long, TimeUnit)} so
-	 * a stuck downstream op cannot hang the agent loop forever.
+	 * Invokes an operation with a per-call timeout, via the no-Job internal
+	 * dispatch path. {@code invokeInternal} enforces the ceiling carried by
+	 * {@code ctx} (today the agent cycle runs unrestricted at the context
+	 * level); {@link #dispatchTool} has additionally checked the call against
+	 * the agent's own config caps. Times out via
+	 * {@link java.util.concurrent.CompletableFuture#get(long, TimeUnit)} so a
+	 * stuck downstream op cannot hang the agent loop forever.
 	 */
 	protected ACell invokeOperation(AString operation, ACell input, RequestContext ctx, long timeoutMs) {
 		ACell opInput = ensureParsedInput(input);

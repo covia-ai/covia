@@ -538,6 +538,18 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
+	 * Enforces the capability for a path-targeted lattice mutation at the point
+	 * it executes — the adapter pins the exact resource (the path) and ability,
+	 * so the enforced cap cannot drift from the implementation. A null ceiling
+	 * (internal/authenticated callers) is unrestricted, so this is a no-op for
+	 * them; a restricted ceiling (e.g. the public read-only profile) is gated.
+	 */
+	private static void requireCap(RequestContext ctx, ACell input, AString ability) {
+		AString p = RT.ensureString(RT.getIn(input, Fields.PATH));
+		ctx.requireCapability(p, ability);
+	}
+
+	/**
 	 * Writes a value at a path in the user's lattice.
 	 *
 	 * <p>Only the {@code w/} (workspace) and {@code o/} (operations) namespaces
@@ -551,6 +563,7 @@ public class CoviaAdapter extends AAdapter {
 	 * @throws RuntimeException if the path is invalid or targets a non-writable namespace
 	 */
 	private ACell handleWrite(RequestContext ctx, ACell input) {
+		requireCap(ctx, input, Capability.CRUD_WRITE);
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
 		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
 		// Per-call write authorisation for virtual namespaces (e.g. /v/
@@ -623,6 +636,7 @@ public class CoviaAdapter extends AAdapter {
 	 * @return empty map on success
 	 */
 	private ACell handleDelete(RequestContext ctx, ACell input) {
+		requireCap(ctx, input, Capability.CRUD_DELETE);
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
 		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
 
@@ -665,6 +679,7 @@ public class CoviaAdapter extends AAdapter {
 	 *         to be built
 	 */
 	private ACell handleAppend(RequestContext ctx, ACell input) {
+		requireCap(ctx, input, Capability.CRUD_WRITE);
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
 		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
 

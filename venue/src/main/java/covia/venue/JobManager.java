@@ -121,10 +121,9 @@ public class JobManager {
 	 * @return Job tracking the execution
 	 */
 	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
-		// User-facing entry: cap-check before dispatch. invokeInternal (the
-		// no-Job framework path) deliberately doesn't — trust is established
-		// by the call path, not by a flag on the context. Adapter-to-adapter
-		// sub-calls go through invokeInternal and are framework-trusted.
+		// Cap-check the context ceiling before dispatch. invokeInternal does
+		// the same — the two paths differ only in Job creation, never in trust.
+		// A null ceiling (framework acting as itself) is unrestricted.
 		enforceCaps(meta, input, ctx);
 		AAdapter adapter = prepareInvocation(meta, input, ctx);
 		AString callerDID = ctx.getCallerDID();
@@ -201,6 +200,11 @@ public class JobManager {
 	public CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		AAdapter adapter;
 		try {
+			// Same enforcement as invokeOperation — the only difference between
+			// the two paths is Job creation, never trust. A null ceiling
+			// (framework acting as itself) is unrestricted; a ceiling carried on
+			// the context is enforced wherever the op executes, this path included.
+			enforceCaps(meta, input, ctx);
 			adapter = prepareInvocation(meta, input, ctx);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -214,54 +218,24 @@ public class JobManager {
 	}
 
 	/**
-	 * Zero-Job dispatch for the scheduler's deferred firing. Unlike
-	 * {@link #invokeInternal(AString, ACell, RequestContext)}, this re-runs
-	 * {@link #enforceCaps} with the caps carried in {@code ctx}, so a scheduled
-	 * invocation cannot exceed the authority the owner captured at schedule time
-	 * — no capability escalation. Fire with a context carrying the owner's DID
-	 * plus the proofs/caps stapled into the event.
-	 * See {@code venue/docs/GRID_SCHEDULER.md} §5.
-	 */
-	public CompletableFuture<ACell> invokeScheduled(AString ref, ACell input, RequestContext ctx) {
-		if (ref == null) {
-			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("Operation must be specified"));
-		}
-		Asset asset;
-		try {
-			asset = engine.resolveAsset(ref, ctx);
-		} catch (Exception e) {
-			return CompletableFuture.failedFuture(e);
-		}
-		if (asset == null) {
-			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("Cannot resolve operation: " + ref));
-		}
-		Operation op = Operation.from(asset);
-		if (op == null) {
-			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("Asset is not an operation: " + asset.getID()));
-		}
-		AMap<AString, ACell> meta = op.meta();
-		try {
-			enforceCaps(meta, input, ctx);
-		} catch (Exception e) {
-			return CompletableFuture.failedFuture(e);
-		}
-		return invokeInternal(meta, input, ctx);
-	}
-
-	/**
-	 * Enforces capability attenuations on the user-facing dispatch path.
+	 * Enforces the capability ceiling carried by the context, on both dispatch
+	 * paths ({@link #invokeOperation} and {@link #invokeInternal} alike) — the
+	 * two differ only in Job creation, not in trust.
 	 *
-	 * <p>Caps gate what an external caller can do via {@link #invokeOperation}.
-	 * Framework code that calls {@link #invokeInternal} (e.g. agent transition
-	 * dispatch, LLM inference, context loading, post-dispatchTool tool invoke)
-	 * has already established trust by the call path — there's no second
-	 * cap check to apply.</p>
+	 * <p>The ceiling is a property of the principal the context acts for: a
+	 * {@code null} ceiling ({@link RequestContext#getCaps()}) is unrestricted
+	 * (the framework acting as itself), while a non-null ceiling constrains
+	 * every operation executed under it — sub-operations included, so authority
+	 * composes downward and cannot be escalated by routing through an
+	 * orchestrator or agent.</p>
+	 *
+	 * <p>This is the coarse, name-keyed safety net; the precise, drift-free
+	 * enforcement is the executing adapter's own
+	 * {@link RequestContext#requireCapability(String, String)} call, pinned to
+	 * the exact resource and ability it acts on.</p>
 	 *
 	 * @throws RuntimeException with a {@code Capability denied: ...} message
-	 *         if the request's caps don't cover the operation
+	 *         if the ceiling doesn't cover the operation
 	 */
 	private void enforceCaps(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		AVector<ACell> caps = ctx.getCaps();

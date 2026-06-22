@@ -120,36 +120,39 @@ public class JobManagerTest {
 	// ========== Capability enforcement ==========
 
 	/**
-	 * invokeInternal is the framework dispatch path and deliberately does
-	 * NOT cap-check. Trust is established by going through this entry point
-	 * rather than by a flag on the context (caps stay attached). The
-	 * user-facing cap check fires on invokeOperation only.
-	 *
-	 * <p>This test guards the invariant: a capped ctx going via the
-	 * framework path is allowed (the caller — internal adapter code — is
-	 * responsible for any explicit checks it wants, e.g. dispatchTool).</p>
+	 * invokeInternal enforces the capability ceiling carried by the context —
+	 * it differs from invokeOperation only in Job creation, never in trust.
+	 * A read outside the ceiling is denied; a read within it proceeds; the
+	 * ceiling is read, never stripped. "Framework-trusted" is expressed by an
+	 * unrestricted (null-caps) context, not by choosing this dispatch path.
 	 */
 	@Test
-	public void testInvokeInternalDoesNotEnforceCaps() throws Exception {
+	public void testInvokeInternalEnforcesContextCeiling() throws Exception {
 		AVector<ACell> caps = Vectors.of(Maps.of(
 			Strings.create("with"), Strings.create("w/allowed"),
 			Strings.create("can"),  Strings.create("crud/read")));
 		RequestContext capCtx = ctx.withCaps(caps);
 
-		// Even though the cap doesn't cover w/forbidden/x, invokeInternal
-		// proceeds — that's the point of the framework path. The op runs
-		// to completion and returns the read result (path doesn't exist
-		// so {value: nil, exists: false}, not a cap denial).
-		ACell result = engine.jobs().invokeInternal(
+		// Outside the ceiling — denied on the internal path too (no bypass).
+		CompletableFuture<ACell> denied = engine.jobs().invokeInternal(
 			"v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/forbidden/x")),
+			capCtx);
+		ExecutionException ex = assertThrows(ExecutionException.class,
+			() -> denied.get(5, TimeUnit.SECONDS));
+		assertTrue(ex.getCause().getMessage().contains("Capability denied"),
+			"invokeInternal must enforce the context ceiling");
+
+		// Within the ceiling — proceeds; absent path reads {exists: false}.
+		ACell result = engine.jobs().invokeInternal(
+			"v/ops/covia/read",
+			Maps.of(Strings.create("path"), Strings.create("w/allowed")),
 			capCtx).get(5, TimeUnit.SECONDS);
 		assertNotNull(result);
-		// Confirm we hit the read path, not the cap-denial path
 		assertEquals(Boolean.FALSE,
 			convex.core.lang.RT.bool(convex.core.lang.RT.getIn(result, "exists")));
 
-		// Caps remain on the ctx — they didn't get stripped.
+		// Caps remain on the ctx — enforcement reads them, never strips them.
 		assertEquals(caps, capCtx.getCaps());
 	}
 

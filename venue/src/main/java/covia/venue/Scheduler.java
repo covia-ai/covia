@@ -55,8 +55,8 @@ import covia.exception.AuthException;
  *
  * <p><b>No escalation.</b> An event captures the owner's DID plus the proofs and
  * caps presented at schedule time, and firing replays exactly those via
- * {@link JobManager#invokeScheduled} (§5 of the design). The scheduler never
- * invents authority.</p>
+ * {@link JobManager#invokeInternal} (§5 of the design), which enforces that
+ * ceiling on dispatch. The scheduler never invents authority.</p>
  */
 public class Scheduler {
 
@@ -302,7 +302,10 @@ public class Scheduler {
 		if (proofs != null) ctx = ctx.withProofs(proofs);
 		AVector<ACell> caps = asVector(rec.get(K_CAPS));
 		if (caps != null) ctx = ctx.withCaps(caps);
-		return engine.jobs().invokeScheduled(opRef, input, ctx);
+		// Zero-Job dispatch under the owner's stapled caps. invokeInternal
+		// enforces that ceiling, so a scheduled fire cannot exceed the
+		// authority the owner captured at schedule time — no escalation.
+		return engine.jobs().invokeInternal(opRef, input, ctx);
 	}
 
 	// ------------------------------------------------------------------ helpers
