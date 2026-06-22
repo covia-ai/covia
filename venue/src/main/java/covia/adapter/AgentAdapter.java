@@ -189,6 +189,7 @@ public class AgentAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		requireInvoke(ctx);
 		// completeTask/failTask are zero-Job (framework invokes from transitions).
 		// request is reachable here from the LLM tool loop — delegates to the
 		// Job-aware path to create a task Job, then races completion against

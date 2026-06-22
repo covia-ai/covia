@@ -180,6 +180,7 @@ public class HTTPAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 
 		AString url=RT.ensureString(RT.getIn(input, Fields.URL));

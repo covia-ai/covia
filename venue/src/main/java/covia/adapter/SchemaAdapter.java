@@ -50,6 +50,7 @@ public class SchemaAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		requireInvoke(ctx);
 		String op = getSubOperation(meta);
 		try {
 			return switch (op) {

@@ -353,6 +353,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		requireInvoke(ctx);
 		return CompletableFuture.supplyAsync(() -> processGoal(null, ctx, input), VIRTUAL_EXECUTOR);
 	}
 

@@ -259,6 +259,26 @@ public abstract class AAdapter {
         return scheme + "://" + authority + "/" + p;
     }
 
+    /** The baseline op-invocation ability — "the right to run an operation".
+     *  Required by adapters that do not act on a specific named lattice resource
+     *  (compute, LLM, external I/O, federation, scheduling, …). */
+    protected static final AString INVOKE = Strings.intern("invoke");
+
+    /**
+     * Asserts the baseline {@link #INVOKE} capability at the adapter's enforcement
+     * point. An invoke-class adapter calls this at the top of its dispatch — before
+     * any side effect — so the capability ceiling is checked where the op actually
+     * runs, with no central name-keyed mapping. A {@code null} ceiling
+     * (authenticated/internal) is unrestricted (no-op); a restricted ceiling
+     * (e.g. the public read-only profile, which withholds {@code invoke}) denies.
+     */
+    protected static void requireInvoke(RequestContext ctx) {
+        // The framework always supplies a context (at minimum ANONYMOUS); a null
+        // ctx only occurs in direct unit-test calls that bypass dispatch — treat
+        // as no enforcement context.
+        if (ctx != null) ctx.requireCapability((AString) null, INVOKE);
+    }
+
     /**
      * Extracts the full {@code adapter:operation} string from operation metadata.
      * E.g. for metadata with {@code operation.adapter = "test:echo"}, returns {@code "test:echo"}.

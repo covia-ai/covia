@@ -61,6 +61,7 @@ public class ConvexAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		requireInvoke(ctx);
 		String op = getSubOperation(meta);
 		return switch (op) {
 			case "query" -> invokeQuery(meta, input);

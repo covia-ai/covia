@@ -52,6 +52,7 @@ public class TestAdapter extends AAdapter {
 
     @Override
     public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+        requireInvoke(ctx);
         String testOp = getSubOperation(meta);
 
         // Handle different test operations
@@ -142,6 +143,7 @@ public class TestAdapter extends AAdapter {
     
     @Override
     public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+        requireInvoke(ctx);
         String subOp = getSubOperation(meta);
         if ("chat".equals(subOp)) {
             // Multi-turn: set INPUT_REQUIRED and wait for messages

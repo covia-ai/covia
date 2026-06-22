@@ -132,6 +132,7 @@ public class LangChainAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
 			return CompletableFuture.completedFuture(

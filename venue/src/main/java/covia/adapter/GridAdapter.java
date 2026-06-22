@@ -56,6 +56,7 @@ public class GridAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		requireInvoke(ctx);
 		String gridOp = getSubOperation(meta);
 		if (gridOp == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid grid operation: no sub-operation in metadata"));
