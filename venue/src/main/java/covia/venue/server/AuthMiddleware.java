@@ -105,7 +105,7 @@ public class AuthMiddleware {
 		// did.json; operators add any additional forms via auth.acceptedAudiences.
 		this.audiencePolicy = auth.getAudiencePolicy();
 		java.util.Set<String> aud = new java.util.HashSet<>();
-		aud.add(venueDIDString.toString());
+		aud.add(venueDID.toString()); // the venue's canonical published DID
 		aud.addAll(auth.getConfiguredAudiences());
 		this.acceptedAudiences = aud;
 	}
@@ -149,14 +149,18 @@ public class AuthMiddleware {
 		throw new AudienceRejected("malformed audience (aud) claim");
 	}
 
+	/** Clock-skew leeway (seconds) applied to JWT temporal bounds — a small grace
+	 *  for clock drift between the signer and this venue (RFC 7519 permits it). */
+	private static final long CLOCK_SKEW_SECONDS = 60;
+
 	/** Checks JWT temporal bounds ({@code exp}/{@code nbf}) against {@code now}
-	 *  (epoch seconds): false if expired or not-yet-valid; a token with no bounds
-	 *  is temporally unbounded (true). */
+	 *  (epoch seconds), with {@link #CLOCK_SKEW_SECONDS} leeway: false if expired
+	 *  or not-yet-valid; a token with no bounds is temporally unbounded (true). */
 	private static boolean temporalValid(AMap<AString, ACell> claims, long now) {
 		CVMLong exp = RT.ensureLong(claims.get(EXP));
-		if (exp != null && now >= exp.longValue()) return false;
+		if (exp != null && now > exp.longValue() + CLOCK_SKEW_SECONDS) return false;
 		CVMLong nbf = RT.ensureLong(claims.get(NBF));
-		if (nbf != null && now < nbf.longValue()) return false;
+		if (nbf != null && now < nbf.longValue() - CLOCK_SKEW_SECONDS) return false;
 		return true;
 	}
 
@@ -261,12 +265,13 @@ public class AuthMiddleware {
 	}
 
 	/**
-	 * Verify a UCAN bearer token. EdDSA signature is verified via the JWT
-	 * {@code kid} header; temporal bounds are checked; the token must have a
-	 * non-null {@code aud} (distinguishing it from generic self-issued auth
-	 * JWTs). On success, the issuer DID is returned as the caller identity —
-	 * matching the IETF UCAN-HTTP bearer convention that the invocation
-	 * token's {@code iss} is the caller.
+	 * Verify a UCAN bearer token. A token is classified as a UCAN by the presence
+	 * of an {@code att} (capability) array — NOT by {@code aud}, since identity
+	 * tokens now legitimately carry {@code aud} too (#149). The EdDSA signature is
+	 * verified against the issuer key, temporal bounds and audience are checked.
+	 * On success, the issuer DID is returned as the caller identity — matching the
+	 * IETF UCAN-HTTP bearer convention that the invocation token's {@code iss} is
+	 * the caller.
 	 *
 	 * @param jwt Bearer token
 	 * @return Issuer DID (did:key form) on success, null if the token is not
@@ -275,17 +280,20 @@ public class AuthMiddleware {
 	private AString tryVerifyUCAN(AString jwt) {
 		UCAN token = UCAN.fromJWT(jwt);
 		if (token == null) return null;
-		// A UCAN must declare an audience — this is what distinguishes it from
-		// other self-signed EdDSA JWTs that happen to verify.
-		if (token.getAudience() == null) return null;
-		// Bind the signature to the claimed issuer. UCAN.fromJWT verifies the
-		// signature against the JWT `kid` header key — which the caller fully
-		// controls — but attributes identity from the independent `iss` claim.
-		// Without re-verifying against the issuer's OWN key, anyone can sign a
-		// token with their key, set `iss` to any victim DID, and be attributed
-		// that identity. Re-verify against the issuer key (the same signature can
-		// only satisfy both checks when kid-key == iss-key) — mirroring the
-		// kid==sub bind that tryVerifySelfIssued enforces for plain JWTs.
+		// Classify by the presence of an `att` (capability) array — NOT `aud`.
+		// Identity tokens now legitimately carry `aud` (#149), so aud-presence
+		// would misroute them through the UCAN path. UCAN.getCapabilities()
+		// collapses absent→empty, so inspect the raw claims: UCAN.create always
+		// writes an `att` field (≥ empty); a plain identity JWT never does.
+		JWT parsed = JWT.parse(jwt);
+		AMap<AString, ACell> claims = (parsed != null) ? parsed.getClaims() : null;
+		if (claims == null || claims.get(UCAN.ATT) == null) return null;
+		// Bind the signature to the claimed issuer. Re-verify against the issuer's
+		// OWN key so identity is attributed only when the signature actually
+		// satisfies the iss key — regardless of how UCAN.fromJWT selects its
+		// verification key. Otherwise anyone could sign with their key, set `iss`
+		// to a victim DID, and be attributed that identity (issuer spoofing).
+		// Mirrors the kid==sub bind that tryVerifySelfIssued enforces.
 		AString issuer = token.getIssuer();
 		AccountKey issuerKey = UCAN.fromDIDKey(issuer);
 		if (issuerKey == null) return null;

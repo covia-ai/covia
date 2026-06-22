@@ -205,7 +205,7 @@ public class UCANBearerTransportTest {
 	public void testExpiredSelfIssuedNotAuthenticated() throws Exception {
 		AKeyPair kp = AKeyPair.generate();
 		AString did = UCAN.toDIDKey(kp.getAccountKey());
-		long expired = (System.currentTimeMillis() / 1000) - 60;
+		long expired = (System.currentTimeMillis() / 1000) - 3600; // well past the clock-skew leeway
 		// Self-issued JWT: sub = did:key, signed by that key (kid == sub), expired.
 		AMap<AString, ACell> claims = Maps.of(
 			Strings.create("sub"), did,
