@@ -207,7 +207,7 @@ The engine always resolves operation references to metadata before dispatching �
 
 ### In Progress
 
-- **Capability enforcement** — `:caps` lattice slot present but not yet enforced; UCAN `with`/`can` checking planned for Phase 3/4
+- **Capability enforcement** — Active. The ceiling is a property of the `RequestContext`, enforced at the point of action (adapter-pinned `requireCapability`, with a name-keyed boundary safety net). `invokeOperation`/`invokeInternal` differ only in Job creation, not trust; ceilings compose downward into sub-operations. Unauthenticated callers default to a read-only ceiling (`crud/read` + `asset/read`), operator-overridable via `auth.public.caps` (#148). **Remaining (Phase 3):** pin the rest of the mutating adapters (`agent:update/delete/fork`, `convex:transact`, …) to their abilities and retire the name-keyed `operationAbility` boundary switch — which would let the read-only default safely grant `invoke` for non-mutating ops (today it denies all invoke, since invocation creates a job).
 
 ---
 
