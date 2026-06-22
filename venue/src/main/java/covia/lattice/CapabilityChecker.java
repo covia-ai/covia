@@ -91,21 +91,7 @@ public class CapabilityChecker {
 		AString resourceStr = Strings.create(resource);
 		AString abilityStr = Strings.create(ability);
 
-		for (long i = 0; i < caps.count(); i++) {
-			// Skip non-map entries — defensive against malformed caps data
-			if (!(caps.get(i) instanceof AMap<?,?> capMap)) continue;
-			@SuppressWarnings("unchecked")
-			AMap<AString, ACell> cap = (AMap<AString, ACell>) capMap;
-
-			AString rawWith = RT.ensureString(cap.get(Capability.WITH));
-			String canonWith = canonicalResource(rawWith != null ? rawWith.toString() : null, ownerDID);
-			AString grantWith = (canonWith != null) ? Strings.create(canonWith) : null;
-			AString grantCan = RT.ensureString(cap.get(Capability.CAN));
-
-			if (Capability.covers(grantWith, grantCan, resourceStr, abilityStr)) {
-				return null; // allowed
-			}
-		}
+		if (covered(caps, resourceStr, abilityStr, ownerDID)) return null; // allowed
 
 		// Build an actionable denial message that includes WHAT the agent
 		// can do, not just what it can't. Without this LLMs that hit a
@@ -121,6 +107,68 @@ public class CapabilityChecker {
 			+ "capabilities, complete with a clear explanation rather than "
 			+ "looping on impossible operations.");
 		return sb.toString();
+	}
+
+	/**
+	 * Checks whether a capability ceiling allows a specific {@code (resource,
+	 * ability)} pair supplied <em>directly</em> by the executing adapter — not
+	 * derived from an operation name.
+	 *
+	 * <p>This is the enforcement primitive meant to be co-located with the code
+	 * that performs the action: the implementation names the exact resource and
+	 * ability it requires, so the enforced capability cannot drift from what the
+	 * code actually does (unlike a name-keyed {@link #operationAbility} mapping,
+	 * which is a separate source of truth that can fall out of sync).</p>
+	 *
+	 * @param caps     the caller's granted capability ceiling; {@code null} = unrestricted
+	 * @param resource the exact resource acted on — a bare lattice path
+	 *                 ({@code "w/x"}, owner-scoped), a DID URL, or a scheme URI;
+	 *                 {@code null}/empty means "no specific resource"
+	 * @param ability  the exact ability required (e.g. {@code "crud/write"},
+	 *                 {@code "secret/write"}, {@code "invoke"})
+	 * @param ownerDID the caller's DID, used to canonicalise bare resources; may be null
+	 * @return {@code null} if allowed, else an actionable denial message
+	 */
+	public static String allows(AVector<ACell> caps, String resource, String ability, AString ownerDID) {
+		if (caps == null) return null;              // no ceiling = unrestricted
+		String canonResource = canonicalResource(resource, ownerDID);
+		if (canonResource == null) canonResource = "";
+		String ab = (ability != null) ? ability : "";
+		AString resourceStr = Strings.create(canonResource);
+		AString abilityStr = Strings.create(ab);
+
+		if (covered(caps, resourceStr, abilityStr, ownerDID)) return null;
+
+		StringBuilder sb = new StringBuilder("Capability denied: requires ")
+			.append(ab.isEmpty() ? "(any ability)" : ab)
+			.append(" on ").append(canonResource.isEmpty() ? "(any)" : canonResource)
+			.append(". Your capabilities are: ");
+		appendCapsList(sb, caps);
+		return sb.toString();
+	}
+
+	/**
+	 * The capability match loop shared by {@link #check} and {@link #allows}:
+	 * returns true iff some grant in {@code caps} covers the already-canonical
+	 * {@code (resourceStr, abilityStr)} request. Non-map and malformed entries
+	 * are skipped defensively (they grant nothing). An empty {@code caps}
+	 * vector therefore grants nothing — only a {@code null} ceiling is "full
+	 * access" (handled by the callers).
+	 */
+	private static boolean covered(AVector<ACell> caps, AString resourceStr, AString abilityStr, AString ownerDID) {
+		for (long i = 0; i < caps.count(); i++) {
+			if (!(caps.get(i) instanceof AMap<?,?> capMap)) continue;
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> cap = (AMap<AString, ACell>) capMap;
+
+			AString rawWith = RT.ensureString(cap.get(Capability.WITH));
+			String canonWith = canonicalResource(rawWith != null ? rawWith.toString() : null, ownerDID);
+			AString grantWith = (canonWith != null) ? Strings.create(canonWith) : null;
+			AString grantCan = RT.ensureString(cap.get(Capability.CAN));
+
+			if (Capability.covers(grantWith, grantCan, resourceStr, abilityStr)) return true;
+		}
+		return false;
 	}
 
 	/**

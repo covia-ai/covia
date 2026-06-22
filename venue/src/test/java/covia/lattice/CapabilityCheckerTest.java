@@ -550,4 +550,165 @@ public class CapabilityCheckerTest {
 				Strings.create("path"), Strings.create("/foo.txt"),
 				Strings.create("content"), Strings.create("hi"))));
 	}
+
+	// ==================================================================
+	// allows(caps, resource, ability, owner) — the pinned-resource primitive
+	// the executing adapter calls. The adapter supplies the EXACT resource and
+	// ability, so the enforced cap can't drift from the implementation. These
+	// are deterministic + adversarial unit checks of the covia-side logic
+	// (null/empty ceiling, malformed grants, cross-user isolation, the
+	// read-only profile); the underlying prefix/hierarchy matching is
+	// convex-core's Capability.covers, exercised through here.
+	// ==================================================================
+
+	private static String allows(AVector<ACell> caps, String resource, String ability) {
+		return CapabilityChecker.allows(caps, resource, ability, TEST_OWNER);
+	}
+
+	@Test
+	public void testAllowsNullCeilingIsUnrestricted() {
+		// null ceiling = full authority (internal/unrestricted callers).
+		assertNull(allows(null, "w/anything", "crud/write"));
+		assertNull(allows(null, "did:key:zOther/w/x", "secret/write"));
+		assertNull(allows(null, null, null));
+	}
+
+	@Test
+	public void testAllowsEmptyCeilingDeniesEverything() {
+		// Empty ceiling grants NOTHING — the crucial distinction from null.
+		// (A bug that treated empty like null would silently grant full access.)
+		assertNotNull(allows(Vectors.empty(), "w/x", "crud/read"));
+		assertNotNull(allows(Vectors.empty(), "w/x", "crud/write"));
+		assertNotNull(allows(Vectors.empty(), "v/test/ops/echo", "invoke"));
+	}
+
+	@Test
+	public void testAllowsExactAndPrefix() {
+		AVector<ACell> ceiling = caps("w/notes", "crud/write");
+		assertNull(allows(ceiling, "w/notes", "crud/write"));          // exact
+		assertNull(allows(ceiling, "w/notes/2026/x", "crud/write"));   // child (prefix)
+		assertNotNull(allows(ceiling, "w/other", "crud/write"));       // sibling — denied
+	}
+
+	@Test
+	public void testAllowsAbilityMismatchAndHierarchy() {
+		// read grant does not cover write...
+		assertNotNull(allows(caps("w/", "crud/read"), "w/x", "crud/write"));
+		// ...but the parent ability covers its children, and * covers all.
+		assertNull(allows(caps("w/", "crud"), "w/x", "crud/write"));
+		assertNull(allows(caps("w/", "crud"), "w/x", "crud/delete"));
+		assertNull(allows(caps("", "*"), "anything", "secret/write"));
+	}
+
+	@Test
+	public void testAllowsAbilityBoundaryNotNaivePrefix() {
+		// Ability matching must respect the "/" boundary: "cru" must NOT cover
+		// "crud/read" (it is a raw string prefix but not a UCAN ability prefix).
+		assertNotNull(allows(caps("w/", "cru"), "w/x", "crud/read"));
+		// And a sibling ability under the same parent is not covered.
+		assertNotNull(allows(caps("w/", "crud/read"), "w/x", "crud/delete"));
+	}
+
+	@Test
+	public void testAllowsCrossUserResourceDenied() {
+		// An owner-scoped read grant must not reach another identity's resource.
+		// This is the isolation property: a restricted (e.g. public) caller
+		// cannot read across users even with a read grant.
+		AVector<ACell> ceiling = Vectors.of(Capability.create(TEST_OWNER, Capability.CRUD_READ));
+		assertNull(allows(ceiling, "w/notes", "crud/read"));                       // own
+		assertNotNull(allows(ceiling, "did:key:zOther/w/notes", "crud/read"));     // cross-user → denied
+	}
+
+	@Test
+	public void testAllowsMultipleCapsAnyMatchWins() {
+		AVector<ACell> ceiling = caps(
+			"w/a", "crud/read",
+			"w/b", "crud/write");
+		assertNull(allows(ceiling, "w/b/x", "crud/write"));   // second grant matches
+		assertNull(allows(ceiling, "w/a/x", "crud/read"));    // first grant matches
+		assertNotNull(allows(ceiling, "w/a/x", "crud/write")); // neither grants write on a
+	}
+
+	@Test
+	public void testAllowsNonMapAndNonMatchingGrantsAreRobust() {
+		// A non-map entry must be skipped without crashing, and well-formed but
+		// non-matching grants must not accidentally allow the request.
+		AVector<ACell> noMatch = Vectors.of(
+			Strings.create("not-a-map"),                                          // skipped, no crash
+			Capability.create(Strings.create("w/different"), Capability.CRUD_READ), // wrong resource
+			Capability.create(Strings.create("g/X"), Strings.create("agent/create"))); // wrong ability+resource
+		assertNotNull(allows(noMatch, "w/x", "crud/read"), "no grant matches → denied");
+
+		// Adding a matching grant flips it to allowed (the non-map is still ignored).
+		AVector<ACell> plusMatch = noMatch.conj(
+			Capability.create(Strings.create("w/x"), Capability.CRUD_READ));
+		assertNull(allows(plusMatch, "w/x", "crud/read"));
+	}
+
+	@Test
+	public void testAllowsGrantWithoutResourceIsBroadNotInert() {
+		// SECURITY FOOT-GUN, asserted explicitly: a grant with an ability but no
+		// `with` is NOT a no-op — an empty/absent `with` covers ANY resource for
+		// that ability, including across users. Profiles must always scope `with`.
+		AVector<ACell> noWith = Vectors.of(
+			Maps.of(Capability.CAN, Strings.create("crud/read")));   // ability, no `with`
+		assertNull(allows(noWith, "w/anything", "crud/read"));        // own — granted
+		assertNull(allows(noWith, "did:key:zOther/w/x", "crud/read")); // cross-user — also granted!
+		assertNotNull(allows(noWith, "w/x", "crud/write"));           // but only that ability
+	}
+
+	@Test
+	public void testAllowsEmptyWithCoversAnyResource() {
+		// An empty `with` grant covers any resource for that ability (used for
+		// content-addressed assets, which are not owner-scoped paths).
+		AVector<ACell> ceiling = Vectors.of(
+			Capability.create(Strings.create(""), Strings.create("asset/read")));
+		assertNull(allows(ceiling, "0xdeadbeef", "asset/read"));
+		assertNull(allows(ceiling, "did:key:zOther/a/0xabc", "asset/read"));
+		assertNotNull(allows(ceiling, "0xdeadbeef", "asset/store")); // wrong ability
+	}
+
+	@Test
+	public void testReadOnlyProfileIsTheSecurityProperty() {
+		// The default public read-only profile: read own/venue paths + read
+		// assets. This is the concrete #148 fix at the helper level.
+		AVector<ACell> profile = Vectors.of(
+			Capability.create(TEST_OWNER, Capability.CRUD_READ),                 // own + venue reads
+			Capability.create(Strings.create(""), Strings.create("asset/read"))); // asset reads
+
+		// Reads allowed
+		assertNull(allows(profile, "w/reviews/x", "crud/read"));
+		assertNull(allows(profile, "v/ops/covia/read", "crud/read"));  // venue path (owner-prefixed) covered
+		assertNull(allows(profile, "0xhash", "asset/read"));
+
+		// Writes denied
+		assertNotNull(allows(profile, "w/reviews/x", "crud/write"));
+		assertNotNull(allows(profile, "w/reviews/x", "crud/delete"));
+		// secret:set denied (the #148 case)
+		assertNotNull(allows(profile, "s/OPENAI_API_KEY", "secret/write"));
+		// arbitrary op invocation denied (read-only)
+		assertNotNull(allows(profile, "v/test/ops/echo", "invoke"));
+		assertNotNull(allows(profile, "g/Bob", "agent/create"));
+	}
+
+	@Test
+	public void testAllowsDenialMessageIsActionable() {
+		String msg = allows(caps("w/notes", "crud/read"), "w/secrets", "crud/write");
+		assertNotNull(msg);
+		assertTrue(msg.contains("Capability denied"), msg);
+		assertTrue(msg.contains("crud/write"), "names the required ability: " + msg);
+		assertTrue(msg.contains("Your capabilities are"), "lists what is granted: " + msg);
+	}
+
+	@Test
+	public void testAllowsMatchesCheckForSameOp() {
+		// Parity: the pinned allows(path, crud/write) and the name-keyed
+		// check(covia:write, {path}) share the match loop and agree.
+		AVector<ACell> ceiling = caps("w/decisions", "crud/write");
+		ACell input = Maps.of(Strings.create("path"), Strings.create("w/decisions/INV-1"));
+		boolean allowDirect = allows(ceiling, "w/decisions/INV-1", "crud/write") == null;
+		boolean allowViaCheck = check(ceiling, "v/ops/covia/write", input) == null;
+		assertEquals(allowViaCheck, allowDirect);
+		assertTrue(allowDirect);
+	}
 }
