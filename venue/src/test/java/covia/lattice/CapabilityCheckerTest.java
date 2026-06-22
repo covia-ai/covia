@@ -787,6 +787,35 @@ public class CapabilityCheckerTest {
 	}
 
 	@Test
+	public void testReadOnlyCeilingDeniesAllVenueMutations() {
+		AString did = Strings.create("did:key:zPublic");
+		AVector<ACell> ceiling = CapabilityChecker.readOnlyCeiling(did);
+		// Drift guard: every operation that mutates a venue resource must map to a
+		// mutating ability the read-only ceiling withholds. A new mutating op that
+		// forgets to map falls through operationAbility() to the generic "invoke"
+		// and would pass IF invoke were ever granted — this test fails first.
+		String[] mutations = {
+			"covia:write", "covia:append", "covia:delete",
+			"asset:store",
+			"agent:create", "agent:fork", "agent:update", "agent:delete",
+			"agent:suspend", "agent:resume", "agent:cancelTask",
+			"file:write", "file:append", "file:mkdir", "file:delete",
+			"dlfs:write", "dlfs:append", "dlfs:mkdir", "dlfs:delete",
+			"dlfs:createDrive", "dlfs:deleteDrive",
+			"vault:write", "vault:mkdir", "vault:delete",
+			"secret:set",
+		};
+		for (String op : mutations) {
+			assertNotNull(CapabilityChecker.check(ceiling, op, Maps.empty(), did),
+				"read-only ceiling must deny mutating op: " + op);
+		}
+		// A read in the owner's own namespace remains allowed.
+		assertNull(CapabilityChecker.check(ceiling, "covia:read",
+			Maps.of(Strings.create("path"), Strings.create("w/x")), did),
+			"read-only ceiling must allow owner-namespace reads");
+	}
+
+	@Test
 	public void testReadOnlyCeilingStopsMutationsEndToEnd() {
 		Engine engine = TestEngine.ENGINE;
 		AString did = convex.auth.ucan.UCAN.toDIDKey(

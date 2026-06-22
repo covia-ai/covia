@@ -247,6 +247,12 @@ public class CapabilityChecker {
 			case "v/ops/agent/create" -> "agent/create";
 			case "v/ops/agent/request" -> "agent/request";
 			case "v/ops/agent/message" -> "agent/message";
+			case "v/ops/agent/fork" -> "agent/create";
+			case "v/ops/agent/update", "v/ops/agent/delete", "v/ops/agent/suspend",
+				"v/ops/agent/resume", "v/ops/agent/cancelTask" -> "agent/write";
+			case "v/ops/vault/write", "v/ops/vault/mkdir" -> "crud/write";
+			case "v/ops/vault/delete" -> "crud/delete";
+			case "v/ops/secret/set" -> "secret/write";
 			case "v/ops/asset/store" -> "asset/store";
 			case "v/ops/asset/get", "v/ops/asset/list" -> "asset/read";
 			case "v/ops/grid/run" -> "invoke";
@@ -266,6 +272,12 @@ public class CapabilityChecker {
 			case "agent:create" -> "agent/create";
 			case "agent:request" -> "agent/request";
 			case "agent:message" -> "agent/message";
+			case "agent:fork" -> "agent/create";
+			case "agent:update", "agent:delete", "agent:suspend",
+				"agent:resume", "agent:cancelTask" -> "agent/write";
+			case "vault:write", "vault:mkdir" -> "crud/write";
+			case "vault:delete" -> "crud/delete";
+			case "secret:set" -> "secret/write";
 			case "asset:store" -> "asset/store";
 			case "asset:get", "asset:list" -> "asset/read";
 			case "grid:run" -> "invoke";
