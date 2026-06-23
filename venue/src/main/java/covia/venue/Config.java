@@ -85,6 +85,30 @@ public class Config {
 	 */
 	public static final int DEFAULT_ACCEPT_QUEUE_SIZE = 1024;
 
+	/** Key for the HTTP connector's NIO selector-thread count */
+	public static final AString HTTP_SELECTORS = Strings.intern("httpSelectors");
+
+	/** Key for the HTTP connector's acceptor-thread count */
+	public static final AString HTTP_ACCEPTORS = Strings.intern("httpAcceptors");
+
+	/**
+	 * Default NIO selector threads per connector. Jetty's own default is
+	 * {@code cores/2} — appropriate for a dedicated server that handles requests
+	 * on its connector thread pool, but wrong for Covia: request handlers run on
+	 * virtual threads ({@code useVirtualThreads=true}), so the selectors only pump
+	 * non-blocking I/O and a couple suffice. The default mattered most when many
+	 * venues run in one JVM (tests): {@code cores/2} each meant N×(cores/2) selector
+	 * platform threads — e.g. 16 venues × 16 on a 32-core box = 256 threads fighting
+	 * for 32 cores, starving the connectors. A small fixed count keeps the thread
+	 * footprint flat in venue count. Operators with a single high-traffic venue can
+	 * raise it.
+	 */
+	public static final int DEFAULT_HTTP_SELECTORS = 2;
+
+	/** Default acceptor threads per connector — one is plenty with a deep accept
+	 *  queue ({@link #DEFAULT_ACCEPT_QUEUE_SIZE}). */
+	public static final int DEFAULT_HTTP_ACCEPTORS = 1;
+
 	/** Key for MCP configuration */
 	public static final AString MCP = Strings.intern("mcp");
 
@@ -332,6 +356,24 @@ public class Config {
 	public int getAcceptQueueSize() {
 		CVMLong v = RT.ensureLong(config.get(ACCEPT_QUEUE_SIZE));
 		return (v != null) ? (int) v.longValue() : DEFAULT_ACCEPT_QUEUE_SIZE;
+	}
+
+	/**
+	 * Get the HTTP connector's NIO selector-thread count.
+	 * @return configured value, or {@link #DEFAULT_HTTP_SELECTORS}
+	 */
+	public int getHttpSelectors() {
+		CVMLong v = RT.ensureLong(config.get(HTTP_SELECTORS));
+		return (v != null) ? (int) v.longValue() : DEFAULT_HTTP_SELECTORS;
+	}
+
+	/**
+	 * Get the HTTP connector's acceptor-thread count.
+	 * @return configured value, or {@link #DEFAULT_HTTP_ACCEPTORS}
+	 */
+	public int getHttpAcceptors() {
+		CVMLong v = RT.ensureLong(config.get(HTTP_ACCEPTORS));
+		return (v != null) ? (int) v.longValue() : DEFAULT_HTTP_ACCEPTORS;
 	}
 
 	/**

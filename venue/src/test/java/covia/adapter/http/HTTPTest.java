@@ -12,6 +12,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
 import com.sun.net.httpserver.HttpServer;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.ACell;
@@ -427,6 +428,7 @@ public class HTTPTest {
 	// External-dependent tests (retained from original, may be flaky)
 	// ====================================================================
 
+	@Tag("integration") // hits the real Google over the network — flaky, off by default
 	@Test public void testGoogleSearch() throws InterruptedException, ExecutionException, TimeoutException {
 		VenueHTTP covia=TestServer.COVIA;
 
@@ -470,6 +472,7 @@ public class HTTPTest {
 		}
 	}
 
+	@Tag("integration") // hits the real Google over the network — flaky, off by default
 	@Test public void testGoogleSearchWithFallback() throws InterruptedException, ExecutionException, TimeoutException {
 		VenueHTTP covia=TestServer.COVIA;
 

@@ -348,7 +348,13 @@ public class VenueServer {
 	
 	protected void setupJettyServer(org.eclipse.jetty.server.Server jettyServer, Integer port) {
 		if (port==null) port=8080;
-		ServerConnector connector = new ServerConnector(jettyServer);
+		// Size the connector's acceptor/selector threads explicitly. Jetty defaults
+		// selectors to cores/2, which is wrong here: handlers run on virtual threads
+		// (useVirtualThreads=true), so the selectors only pump non-blocking I/O. The
+		// default exploded the platform-thread count when many venues share a JVM
+		// (N×cores/2 selectors), starving the connectors. See Config.DEFAULT_HTTP_SELECTORS.
+		ServerConnector connector = new ServerConnector(jettyServer,
+			config.getHttpAcceptors(), config.getHttpSelectors());
 		connector.setPort(port);
 		// Restrict the listening interface when a bind address is configured.
 		// When unset, Jetty binds the wildcard address (0.0.0.0 / all
