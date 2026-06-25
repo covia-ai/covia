@@ -37,7 +37,7 @@ import covia.venue.LocalVenue;
 import covia.venue.RequestContext;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
-import io.javalin.Javalin;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -241,13 +241,13 @@ public class MCP extends McpServer {
 	// ==================== Route registration ====================
 
 	@Override
-	public void addRoutes(Javalin app) {
+	public void addRoutes(RoutesConfig routes) {
 		// McpServer registers POST /mcp and GET /.well-known/mcp
-		super.addRoutes(app);
+		super.addRoutes(routes);
 
 		// SSE session routes
-		app.get("/mcp", this::handleMcpGet);
-		app.delete("/mcp", this::handleMcpDelete);
+		routes.get("/mcp", this::handleMcpGet);
+		routes.delete("/mcp", this::handleMcpDelete);
 	}
 
 	// ==================== Tool listing (dynamic, from adapters) ====================

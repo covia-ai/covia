@@ -39,7 +39,7 @@ import covia.venue.Engine;
 import covia.venue.LocalVenue;
 import covia.venue.api.MCP;
 import covia.venue.api.CoviaAPI;
-import io.javalin.Javalin;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 import j2html.tags.DomContent;
 import j2html.tags.Text;
@@ -54,17 +54,17 @@ public class CoviaWebApp  {
 		this.toolPage = new ToolPage(engine);
 	}
 
-	public void addRoutes(Javalin javalin) {
-		javalin.get("/index.html", this::indexPage);
-		javalin.get("/", this::indexPage);
-		javalin.get("/404.html", this::missingPage);
-		javalin.get("/status", this::statusPage);
-		javalin.get("/config", this::configPage);
-		javalin.get("/adapters", this::adaptersPage);
-		javalin.get("/adapters/{name}", this::adapterDetailPage);
-		javalin.get("/tools/{hash}", ctx -> toolPage.toolDetailPage(ctx, ctx.pathParam("hash")));
-		javalin.get("/llms.txt",this::llmsTxt);
-		javalin.get("/sitemap.xml",this::siteMap);
+	public void addRoutes(RoutesConfig routes) {
+		routes.get("/index.html", this::indexPage);
+		routes.get("/", this::indexPage);
+		routes.get("/404.html", this::missingPage);
+		routes.get("/status", this::statusPage);
+		routes.get("/config", this::configPage);
+		routes.get("/adapters", this::adaptersPage);
+		routes.get("/adapters/{name}", this::adapterDetailPage);
+		routes.get("/tools/{hash}", ctx -> toolPage.toolDetailPage(ctx, ctx.pathParam("hash")));
+		routes.get("/llms.txt",this::llmsTxt);
+		routes.get("/sitemap.xml",this::siteMap);
 
 	}
 	

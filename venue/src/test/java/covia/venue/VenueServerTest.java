@@ -429,4 +429,34 @@ public class VenueServerTest {
 		assertTrue(caller.toString().endsWith(":public"),
 			"Anonymous caller DID should end with :public, got: " + caller);
 	}
+
+	/**
+	 * Catalog operation names contain slashes (e.g. "v/ops/jvm/string-concat")
+	 * and are percent-encoded into a single path segment by the client
+	 * ({@link VenueHTTP#getOperationId}): GET /api/v1/operations/v%2Fops%2F…
+	 * Jetty 12's default UriCompliance rejects %2F as an "ambiguous path
+	 * separator" (400) — Jetty 11 / Javalin's own connector allowed it. The
+	 * venue connector opts back in ({@code VenueServer.setupJettyServer}); this
+	 * test guards that config, so named catalog lookups — and the cross-venue
+	 * named references built on them — keep working after the Javalin 7 / Jetty
+	 * 12 upgrade. Regression guard for the upgrade; see RemoteAssetFetchTest /
+	 * RemoteOperationTest for the end-to-end cross-venue coverage.
+	 */
+	@Test
+	public void testEncodedSlashInCatalogNamePath() throws Exception {
+		String name = "v/ops/jvm/string-concat";
+		String encoded = java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8);
+		HttpClient client = HttpClient.newBuilder().build();
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI("http://localhost:" + PORT + "/api/v1/operations/" + encoded))
+			.GET().timeout(Duration.ofSeconds(10)).build();
+		HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, resp.statusCode(),
+			() -> "Encoded-slash catalog path must not be rejected as ambiguous: "
+				+ resp.statusCode() + " " + resp.body());
+		// The handler resolves the percent-decoded name to a content-addressed id.
+		ACell body = JSON.parse(resp.body());
+		assertNotNull(RT.getIn(body, "asset"),
+			"operations/{name} must return the resolved asset id for a slashed catalog name");
+	}
 }

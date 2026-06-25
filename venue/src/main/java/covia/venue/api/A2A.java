@@ -38,7 +38,7 @@ import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
-import io.javalin.Javalin;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 import io.javalin.http.sse.SseHandler;
 
@@ -102,9 +102,9 @@ public class A2A extends ACoviaAPI {
 		this.agentProvider = new AgentProvider(orgName, orgUrl);
 	}
 
-	public void addRoutes(Javalin javalin) {
-		javalin.get("/.well-known/agent-card.json", this::getAgentCard);
-		javalin.post("/a2a", this::handleJsonRpc);
+	public void addRoutes(RoutesConfig routes) {
+		routes.get("/.well-known/agent-card.json", this::getAgentCard);
+		routes.post("/a2a", this::handleJsonRpc);
 	}
 
 	// ==================== Agent Card ====================

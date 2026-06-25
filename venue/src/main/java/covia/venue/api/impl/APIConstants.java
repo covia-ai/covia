@@ -5,5 +5,5 @@ import io.javalin.http.ContentType;
 
 public class APIConstants {
 
-	ContentType CVX=ContentType.getContentType(ContentTypes.CVX);
+	ContentType CVX=ContentType.Companion.contentType(ContentTypes.CVX);
 }
