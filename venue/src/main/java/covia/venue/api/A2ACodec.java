@@ -141,8 +141,11 @@ public class A2ACodec {
 		String taskId = jobId.toHexString();
 		String contextId = extractContextId(jobData, taskId);
 		TaskStatus status = toTaskStatus(jobData);
-		boolean isFinal = status.state().isFinal();
-		return new TaskStatusUpdateEvent(taskId, status, contextId, isFinal, null);
+		// a2a 1.0.0.Final: TaskStatusUpdateEvent.isFinal() is derived from the
+		// status state (status.state().isFinal()), so the terminal flag is no
+		// longer a constructor argument — the canonical constructor is
+		// (taskId, status, contextId, metadata).
+		return new TaskStatusUpdateEvent(taskId, status, contextId, null);
 	}
 
 	/**
