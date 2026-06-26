@@ -58,9 +58,11 @@ public class McpClientSession implements AutoCloseable {
 	private McpSyncClient doConnect() throws Exception {
 		String mcpUrl = serverUrl.endsWith("/mcp") ? serverUrl : serverUrl + "/mcp";
 		McpClientTransport transport = HttpClientStreamableHttpTransport.builder(mcpUrl)
-				.customizeRequest(b -> {
+				// mcp 2.0 replaced customizeRequest(Consumer<HttpRequest.Builder>)
+				// with a synchronous request customizer invoked per request.
+				.httpRequestCustomizer((builder, method, endpoint, body, context) -> {
 					if (accessToken != null && !accessToken.isEmpty()) {
-						b.header("Authorization", "Bearer " + accessToken);
+						builder.header("Authorization", "Bearer " + accessToken);
 					}
 				})
 				.build();
