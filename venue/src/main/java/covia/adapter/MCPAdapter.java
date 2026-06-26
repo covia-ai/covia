@@ -25,7 +25,6 @@ import covia.venue.RequestContext;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
-import io.modelcontextprotocol.spec.McpSchema.JsonSchema;
 import io.modelcontextprotocol.spec.McpSchema.ListToolsResult;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 
@@ -222,69 +221,27 @@ public class MCPAdapter extends AAdapter {
 	}
 	
 	/**
-	 * Converts MCP JsonSchema to Convex format
-	 * @param jsonSchema The MCP JsonSchema object
-	 * @return ACell representing the JSON schema in Convex format
+	 * Converts an MCP tool's input schema to Convex ACell format.
+	 *
+	 * <p>As of mcp 2.0 {@code Tool.inputSchema()} is a raw
+	 * {@code Map<String,Object>} holding the JSON Schema (earlier releases
+	 * exposed a typed {@code JsonSchema} record). We convert it generically,
+	 * which faithfully preserves the whole schema (type, properties, required,
+	 * {@code $defs}, {@code items}, descriptions, …) rather than copying a
+	 * hand-picked subset of fields.</p>
+	 *
+	 * @param inputSchema The tool's JSON Schema as a raw map (may be null/empty)
+	 * @return ACell representing the schema; a minimal object schema if absent
 	 */
-	private ACell getInputSchema(JsonSchema jsonSchema) {
+	private ACell getInputSchema(Map<String, Object> inputSchema) {
+		if (inputSchema == null || inputSchema.isEmpty()) {
+			return Maps.of(Fields.TYPE, Strings.create("object"));
+		}
 		try {
-			// Build the schema map from the record fields
-			AMap<AString, ACell> schemaMap = Maps.empty();
-			
-			// Add type if present
-			if (jsonSchema.type() != null) {
-				schemaMap = schemaMap.assoc(Fields.TYPE, Strings.create(jsonSchema.type()));
-			}
-
-			// Add properties if present
-			if (jsonSchema.properties() != null && !jsonSchema.properties().isEmpty()) {
-				AMap<AString, ACell> propertiesMap = Maps.empty();
-				for (Map.Entry<String, Object> entry : jsonSchema.properties().entrySet()) {
-					ACell value = convertToConvex(entry.getValue());
-					propertiesMap = propertiesMap.assoc(Strings.create(entry.getKey()), value);
-				}
-				schemaMap = schemaMap.assoc(Fields.PROPERTIES, propertiesMap);
-			}
-
-			// Add required fields if present
-			if (jsonSchema.required() != null && !jsonSchema.required().isEmpty()) {
-				AVector<AString> requiredVector = Vectors.empty();
-				for (String required : jsonSchema.required()) {
-					requiredVector = requiredVector.conj(Strings.create(required));
-				}
-				schemaMap = schemaMap.assoc(Fields.REQUIRED, requiredVector);
-			}
-
-			// Add additionalProperties if present
-			if (jsonSchema.additionalProperties() != null) {
-				schemaMap = schemaMap.assoc(Fields.ADDITIONAL_PROPERTIES, RT.cvm(jsonSchema.additionalProperties()));
-			}
-
-			// Add $defs if present
-			if (jsonSchema.defs() != null && !jsonSchema.defs().isEmpty()) {
-				AMap<AString, ACell> defsMap = Maps.empty();
-				for (Map.Entry<String, Object> entry : jsonSchema.defs().entrySet()) {
-					ACell value = convertToConvex(entry.getValue());
-					defsMap = defsMap.assoc(Strings.create(entry.getKey()), value);
-				}
-				schemaMap = schemaMap.assoc(Fields.DEFS, defsMap);
-			}
-
-			// Add definitions if present (legacy field)
-			if (jsonSchema.definitions() != null && !jsonSchema.definitions().isEmpty()) {
-				AMap<AString, ACell> definitionsMap = Maps.empty();
-				for (Map.Entry<String, Object> entry : jsonSchema.definitions().entrySet()) {
-					ACell value = convertToConvex(entry.getValue());
-					definitionsMap = definitionsMap.assoc(Strings.create(entry.getKey()), value);
-				}
-				schemaMap = schemaMap.assoc(Fields.DEFINITIONS, definitionsMap);
-			}
-			
-			return schemaMap;
-			
+			return convertToConvex(inputSchema);
 		} catch (Exception e) {
 			// If conversion fails, return a basic schema structure
-			log.warn("Failed to convert JsonSchema to Convex format: " + e.getMessage());
+			log.warn("Failed to convert tool input schema to Convex format: " + e.getMessage());
 			return Maps.of(
 				"type", "object",
 				"description", "Input parameters for the tool"
