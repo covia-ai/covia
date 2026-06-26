@@ -37,7 +37,7 @@ import covia.venue.SecretStore;
 import covia.venue.User;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
-import io.javalin.Javalin;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.BadRequestResponse;
 import io.javalin.http.Context;
 import io.javalin.openapi.HttpMethod;
@@ -90,38 +90,38 @@ public class CoviaAPI extends ACoviaAPI {
 		});
 	}
 
-	public void addRoutes(Javalin javalin) {
-		javalin.get(ROUTE+"status", this::getStatus);
+	public void addRoutes(RoutesConfig routes) {
+		routes.get(ROUTE+"status", this::getStatus);
 		// <id> matches slashes, so the asset metadata route accepts any lattice
 		// address (a/<hash>, w/…, o/…, <DID>/…) as well as a bare hash. The more
 		// specific {id}/content route below is registered too; Javalin prefers
 		// the more specific match (covered by CoviaAssetRefTest).
-		javalin.get(ROUTE+"assets/{id}/content", this::getContent);
-		javalin.get(ROUTE+"assets/<id>", this::getAsset);
-		javalin.put(ROUTE+"assets/{id}/content", this::putContent);
+		routes.get(ROUTE+"assets/{id}/content", this::getContent);
+		routes.get(ROUTE+"assets/<id>", this::getAsset);
+		routes.put(ROUTE+"assets/{id}/content", this::putContent);
 
-		javalin.get(ROUTE+"assets", this::getAssets);
-		javalin.post(ROUTE+"assets", this::addAsset);
-		javalin.post(ROUTE+"invoke", this::invokeOperation);
-		javalin.get(ROUTE+"operations", this::getOperations);
-		javalin.get(ROUTE+"operations/{name}", this::getOperation);
-		javalin.get(ROUTE+"jobs/<id>", this::getJobStatus);
-		javalin.post(ROUTE+"jobs/<id>", this::sendMessage);
-		javalin.put(ROUTE+"jobs/<id>/cancel", this::cancelJob);
-		javalin.put(ROUTE+"jobs/<id>/pause", this::pauseJob);
-		javalin.put(ROUTE+"jobs/<id>/resume", this::resumeJob);
-		javalin.put(ROUTE+"jobs/<id>/delete", this::deleteJob);
-		javalin.sse(ROUTE+"jobs/<id>/sse", sseServer.registerSSE);
-		javalin.get(ROUTE+"jobs", this::getJobs);
-		
+		routes.get(ROUTE+"assets", this::getAssets);
+		routes.post(ROUTE+"assets", this::addAsset);
+		routes.post(ROUTE+"invoke", this::invokeOperation);
+		routes.get(ROUTE+"operations", this::getOperations);
+		routes.get(ROUTE+"operations/{name}", this::getOperation);
+		routes.get(ROUTE+"jobs/<id>", this::getJobStatus);
+		routes.post(ROUTE+"jobs/<id>", this::sendMessage);
+		routes.put(ROUTE+"jobs/<id>/cancel", this::cancelJob);
+		routes.put(ROUTE+"jobs/<id>/pause", this::pauseJob);
+		routes.put(ROUTE+"jobs/<id>/resume", this::resumeJob);
+		routes.put(ROUTE+"jobs/<id>/delete", this::deleteJob);
+		routes.sse(ROUTE+"jobs/<id>/sse", sseServer.registerSSE);
+		routes.get(ROUTE+"jobs", this::getJobs);
+
 		// Secrets
-		javalin.get(ROUTE+"secrets", this::listSecrets);
-		javalin.put(ROUTE+"secrets/{name}", this::putSecret);
-		javalin.delete(ROUTE+"secrets/{name}", this::deleteSecret);
+		routes.get(ROUTE+"secrets", this::listSecrets);
+		routes.put(ROUTE+"secrets/{name}", this::putSecret);
+		routes.delete(ROUTE+"secrets/{name}", this::deleteSecret);
 
 		// DIDs
-		javalin.get("/.well-known/did.json", this::getDIDDocument);
-		javalin.get("/a/{id}/did.json", this::getAssetDIDDocument);
+		routes.get("/.well-known/did.json", this::getDIDDocument);
+		routes.get("/a/{id}/did.json", this::getAssetDIDDocument);
 	}
 	 
 	@OpenApi(path = ROUTE + "status", 

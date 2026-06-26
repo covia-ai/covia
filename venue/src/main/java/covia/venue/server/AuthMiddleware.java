@@ -24,7 +24,7 @@ import covia.venue.Auth;
 import covia.venue.RequestContext;
 import covia.venue.auth.JWKSClient;
 import covia.venue.auth.OAuthConfig;
-import io.javalin.Javalin;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 
 /**
@@ -170,18 +170,18 @@ public class AuthMiddleware {
 	 * so multiple VenueServers in the same JVM (production multi-tenant or
 	 * parallel test classes) do not share state.
 	 *
-	 * @param app Javalin application
+	 * @param routes Javalin routes configuration
 	 * @param venueAccountKey The venue's public key for verifying venue-signed JWTs
 	 * @param auth Auth instance for access control configuration
 	 * @param venueDIDString The venue's DID string for deriving user DIDs
 	 * @return The constructed middleware instance (rarely needed by callers,
 	 *         but useful for tests).
 	 */
-	public static AuthMiddleware register(Javalin app, AccountKey venueAccountKey, Auth auth, AString venueDIDString) {
+	public static AuthMiddleware register(RoutesConfig routes, AccountKey venueAccountKey, Auth auth, AString venueDIDString) {
 		AuthMiddleware mw = new AuthMiddleware(venueAccountKey, auth, venueDIDString);
-		app.before("/api/*", mw::extractIdentity);
-		app.before("/a2a", mw::extractIdentity);
-		app.before("/mcp", mw::extractIdentity);
+		routes.before("/api/*", mw::extractIdentity);
+		routes.before("/a2a", mw::extractIdentity);
+		routes.before("/mcp", mw::extractIdentity);
 		return mw;
 	}
 

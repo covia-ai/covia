@@ -6,6 +6,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import org.eclipse.jetty.server.ServerConnector;
+import org.eclipse.jetty.server.HttpConfiguration;
+import org.eclipse.jetty.server.HttpConnectionFactory;
+import org.eclipse.jetty.http.UriCompliance;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -39,9 +42,9 @@ import covia.venue.api.UserAPI;
 import covia.venue.auth.LoginProviders;
 import io.javalin.Javalin;
 import io.javalin.config.JavalinConfig;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.HttpResponseException;
 import io.javalin.http.staticfiles.Location;
-import io.javalin.openapi.plugin.DefinitionConfiguration;
 import io.javalin.openapi.plugin.OpenApiPlugin;
 import io.javalin.openapi.plugin.swagger.SwaggerPlugin;
 
@@ -234,9 +237,6 @@ public class VenueServer {
 		server.getEngine().provisionConfiguredSecrets();
 		server.getEngine().jobs().recoverJobs();
 
-		// Mount DLFS WebDAV if adapter is registered
-		server.mountDLFSWebDAV();
-
 		return server;
 	}
 
@@ -259,9 +259,6 @@ public class VenueServer {
 		}
 
 		javalin=buildApp();
-		AuthMiddleware.register(javalin, engine.getAccountKey(), engine.getAuth(), engine.getDIDString());
-		addLoginRoutes(javalin);
-		addAPIRoutes(javalin);
 		start(javalin,port);
 		log.info("Venue server started on port: "+javalin.port());
 	}
@@ -289,14 +286,17 @@ public class VenueServer {
 
 	
 	/**
-	 * Mounts DLFS WebDAV routes if the DLFS adapter is registered.
-	 * Creates a DLFSDriveManager that delegates to the adapter's
+	 * Mounts DLFS WebDAV routes when WebDAV is enabled in config.
+	 * Creates a DLFSDriveManager that delegates to the DLFS adapter's
 	 * lattice-backed drives.
+	 *
+	 * <p>Routes are registered at server-create time (Javalin 7 requires this),
+	 * but the {@code dlfs} adapter is registered later by {@code addDemoAssets}.
+	 * The manager therefore resolves the adapter <em>lazily per request</em>; a
+	 * request that arrives before the adapter exists simply yields no drive.</p>
 	 */
-	private void mountDLFSWebDAV() {
-		if (!engine.hasAdapter("dlfs")) return;
+	private void mountDLFSWebDAV(RoutesConfig routes) {
 		if (!config.isWebDAVEnabled()) return;
-		DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
 
 		// Wrap the adapter's lattice drives as a DLFSDriveManager for WebDAV.
 		// Unauthenticated requests use the venue's public DID (must match
@@ -309,6 +309,8 @@ public class VenueServer {
 
 			@Override
 			public java.nio.file.FileSystem getDrive(String identity, String driveName) {
+				DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
+				if (dlfs == null) return null; // adapter not registered (yet)
 				try {
 					return dlfs.getDriveForIdentity(resolveIdentity(identity), driveName);
 				} catch (Exception e) {
@@ -319,23 +321,22 @@ public class VenueServer {
 
 			@Override
 			public boolean createDrive(String identity, String driveName) {
-				getDrive(identity, driveName); // auto-creates via DLFS.connect
-				return true;
+				return getDrive(identity, driveName) != null; // auto-creates via DLFS.connect
 			}
 		};
 
 		DLFSWebDAV webdav = new DLFSWebDAV(webdavManager);
-		webdav.addRoutes(javalin);
+		webdav.addRoutes(routes);
 
 		log.info("DLFS WebDAV mounted at /dlfs/");
 	}
 
-	private void addAPIRoutes(Javalin javalin) {
-		api.addRoutes(javalin);
-		userApi.addRoutes(javalin);
-		webApp.addRoutes(javalin);
-		if (mcp!=null) mcp.addRoutes(javalin);
-		if (a2a!=null) a2a.addRoutes(javalin);
+	private void addAPIRoutes(RoutesConfig routes) {
+		api.addRoutes(routes);
+		userApi.addRoutes(routes);
+		webApp.addRoutes(routes);
+		if (mcp!=null) mcp.addRoutes(routes);
+		if (a2a!=null) a2a.addRoutes(routes);
 	}
 	
 
@@ -348,13 +349,26 @@ public class VenueServer {
 	
 	protected void setupJettyServer(org.eclipse.jetty.server.Server jettyServer, Integer port) {
 		if (port==null) port=8080;
+		// Allow encoded path separators (%2F) in URIs. Catalog operation names
+		// contain slashes (e.g. "v/ops/jvm/string-concat") and are percent-encoded
+		// into a single path segment by VenueHTTP.getOperationId — the GET
+		// /api/v1/operations/{name} contract. Jetty 12's default UriCompliance
+		// rejects %2F as an "ambiguous path separator" (400); Jetty 11 and
+		// Javalin's own connector permit it. Since we build the connector
+		// ourselves (below), we must opt back in here or named catalog lookups
+		// — and cross-venue named references — break.
+		HttpConfiguration httpConfig = new HttpConfiguration();
+		httpConfig.setUriCompliance(UriCompliance.from(
+			"DEFAULT,AMBIGUOUS_PATH_SEPARATOR,AMBIGUOUS_PATH_ENCODING"));
+
 		// Size the connector's acceptor/selector threads explicitly. Jetty defaults
 		// selectors to cores/2, which is wrong here: handlers run on virtual threads
 		// (useVirtualThreads=true), so the selectors only pump non-blocking I/O. The
 		// default exploded the platform-thread count when many venues share a JVM
 		// (N×cores/2 selectors), starving the connectors. See Config.DEFAULT_HTTP_SELECTORS.
 		ServerConnector connector = new ServerConnector(jettyServer,
-			config.getHttpAcceptors(), config.getHttpSelectors());
+			config.getHttpAcceptors(), config.getHttpSelectors(),
+			new HttpConnectionFactory(httpConfig));
 		connector.setPort(port);
 		// Restrict the listening interface when a bind address is configured.
 		// When unset, Jetty binds the wildcard address (0.0.0.0 / all
@@ -370,7 +384,6 @@ public class VenueServer {
 
 	private Javalin buildApp() {
 		final String corsOrigins = this.config.getCorsOrigins();
-		final boolean allowPrivateNetwork = this.config.isAllowPrivateNetwork();
 		Javalin app = Javalin.create(config -> {
 			config.bundledPlugins.enableCors(cors -> {
 				cors.addRule(corsConfig -> {
@@ -389,15 +402,13 @@ public class VenueServer {
 				staticFiles.hostedPath = "/";
 				staticFiles.location = Location.CLASSPATH; // Specify resources from classpath
 				staticFiles.directory = "/covia/pub"; // Resource location in classpath
-				staticFiles.precompress = false; // if the files should be pre-compressed and cached in memory
-													// (optimization)
 				staticFiles.aliasCheck = null; // you can configure this to enable symlinks (=
 												// ContextHandler.ApproveAliases())
 				staticFiles.skipFileFunction = req -> false; // you can use this to skip certain files in the dir, based
 																// on the HttpServletRequest
 			});
 			
-			config.useVirtualThreads=true;
+			config.concurrency.useVirtualThreads=true;
 
 			// Raise HTTP body size limit (default 1 MB is too low for vault uploads).
 			config.http.maxRequestSize = 10_000_000L;
@@ -412,34 +423,54 @@ public class VenueServer {
 			// We can't simply setSessionHandler(null) — Jetty NPEs. Instead
 			// we install a custom SessionIdManager whose HouseKeeper has
 			// interval=0, which disables scheduling so no thread is created.
+			// Jetty 12 dropped Server.setSessionIdManager: register it as a
+			// server bean instead — the SessionHandler resolves its manager
+			// from the server beans at startup, so ours (no scavenge thread)
+			// wins over the lazily-created default.
 			config.jetty.modifyServer(server -> {
 				try {
-					org.eclipse.jetty.server.session.DefaultSessionIdManager idMgr =
-						new org.eclipse.jetty.server.session.DefaultSessionIdManager(server);
-					org.eclipse.jetty.server.session.HouseKeeper hk =
-						new org.eclipse.jetty.server.session.HouseKeeper();
+					org.eclipse.jetty.session.DefaultSessionIdManager idMgr =
+						new org.eclipse.jetty.session.DefaultSessionIdManager(server);
+					org.eclipse.jetty.session.HouseKeeper hk =
+						new org.eclipse.jetty.session.HouseKeeper();
 					hk.setIntervalSec(0); // disabled — no scavenge thread
 					idMgr.setSessionHouseKeeper(hk);
-					server.setSessionIdManager(idMgr);
+					server.addBean(idMgr);
 				} catch (Exception e) {
 					log.warn("Failed to disable Jetty session housekeeper", e);
 				}
 			});
+
+			// Javalin 7: every handler (routes, before/after filters, exception
+			// mappers) must be registered via config.routes at create time —
+			// the Javalin instance no longer exposes per-verb registration.
+			addHandlers(config.routes);
 		});
-		
-		
-		app.exception(HttpResponseException.class, (e, ctx) -> {
+
+		return app;
+	}
+
+	/**
+	 * Registers all HTTP handlers on the routes configuration: exception
+	 * mappers, CORS preflight/after filters, the lattice-sync after filters,
+	 * auth middleware, and the login / API / WebDAV routes.
+	 */
+	private void addHandlers(RoutesConfig routes) {
+		final String corsOrigins = this.config.getCorsOrigins();
+		final boolean allowPrivateNetwork = this.config.isAllowPrivateNetwork();
+
+		routes.exception(HttpResponseException.class, (e, ctx) -> {
 			VenueServer.this.api.buildError(ctx,e.getStatus(),e.getMessage());
 		});
 
-		app.exception(Exception.class, (e, ctx) -> {
+		routes.exception(Exception.class, (e, ctx) -> {
 			log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
 			String message = "Unexpected error: " + e;
 			ctx.result(message);
 			ctx.status(500);
 		});
-		
-		app.options("/api/*", ctx-> {
+
+		routes.options("/api/*", ctx-> {
 			ctx.status(204);
 			ctx.removeHeader("Content-type");
 			ctx.header("access-control-allow-headers", "content-type, authorization, x-covia-user");
@@ -448,9 +479,9 @@ public class VenueServer {
 			ctx.header("vary","Origin, Access-Control-Request-Headers");
 		});
 
-		// Use app.after (not afterMatched) so headers are added to ALL responses,
+		// Use after (not afterMatched) so headers are added to ALL responses,
 		// including CORS preflights handled by the Javalin CORS plugin
-		app.after(ctx->{
+		routes.after(ctx->{
 			ctx.header("access-control-allow-origin", corsOrigins);
 			// Private Network Access lets a public web origin reach a venue on a
 			// private/loopback address from the browser. Off by default — it
@@ -467,17 +498,21 @@ public class VenueServer {
 		// (/mcp), and A2A endpoints. Without this, MCP-driven writes
 		// (agent_create, covia_write, asset_store, etc.) live only in
 		// memory and are lost on shutdown — silently.
-		app.after("/api/*", ctx -> engine.syncState());
-		app.after("/mcp",   ctx -> engine.syncState());
-		app.after("/mcp/*", ctx -> engine.syncState());
-		app.after("/a2a",   ctx -> engine.syncState());
-		app.after("/a2a/*", ctx -> engine.syncState());
+		routes.after("/api/*", ctx -> engine.syncState());
+		routes.after("/mcp",   ctx -> engine.syncState());
+		routes.after("/mcp/*", ctx -> engine.syncState());
+		routes.after("/a2a",   ctx -> engine.syncState());
+		routes.after("/a2a/*", ctx -> engine.syncState());
 
+		// Auth middleware: before-handlers extracting caller identity.
+		AuthMiddleware.register(routes, engine.getAccountKey(), engine.getAuth(), engine.getDIDString());
 
-		return app;
+		addLoginRoutes(routes);
+		addAPIRoutes(routes);
+		mountDLFSWebDAV(routes);
 	}
-	
-	private void addLoginRoutes(Javalin app) {
+
+	private void addLoginRoutes(RoutesConfig app) {
 		if (!loginProviders.hasProviders()) return;
 
         // Login route for any provider
@@ -493,29 +528,22 @@ public class VenueServer {
 	}
 
 	protected void addOpenApiPlugins(JavalinConfig config) {
-		//String docsPath="/openapi-plugin/openapi-covia-v1.json";
-		
-		config.registerPlugin(new SwaggerPlugin(swaggerConfiguration->{
-			swaggerConfiguration.setDocumentationPath("/openapi");
-			//swaggerConfiguration.setDocumentationPath(docsPath);
-		}));
+		String docsPath = "/openapi";
 
 		config.registerPlugin(new OpenApiPlugin(pluginConfig -> {
-            pluginConfig
-            //.withDocumentationPath(docsPath)
-            .withDefinitionConfiguration((version, definition) -> {
-            	DefinitionConfiguration def=definition;
-                def=def.withInfo(
-                		info -> {
-							info.setTitle("Covia API");
-							info.setVersion("0.1.0");
-		                });
-            });
+			pluginConfig
+			.withDocumentationPath(docsPath)
+			.withDefinitionConfiguration((version, definition) -> {
+				definition.info(info -> {
+					info.title("Covia API");
+					info.version("0.1.0");
+				});
+			});
 		}));
 
-		//for (JsonSchemaResource generatedJsonSchema : new JsonSchemaLoader().loadGeneratedSchemes()) {
-	    //    System.out.println(generatedJsonSchema.getName());
-	    //}
+		config.registerPlugin(new SwaggerPlugin(swaggerConfiguration->{
+			swaggerConfiguration.documentationPath = docsPath;
+		}));
 	}
 
 	/**

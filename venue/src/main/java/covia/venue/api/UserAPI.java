@@ -13,7 +13,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.api.Fields;
 import covia.grid.Venue;
-import io.javalin.Javalin;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 import io.javalin.openapi.HttpMethod;
 import io.javalin.openapi.OpenApi;
@@ -39,8 +39,8 @@ public class UserAPI extends ACoviaAPI {
 		super(venue);
 	}
 
-	public void addRoutes(Javalin javalin) {
-		javalin.get("/u/{id}/did.json", this::getUserDIDDocument);
+	public void addRoutes(RoutesConfig routes) {
+		routes.get("/u/{id}/did.json", this::getUserDIDDocument);
 	}
 
 	@OpenApi(path = "/u/{id}/did.json",
