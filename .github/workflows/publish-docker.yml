@@ -72,7 +72,7 @@ jobs:
         echo "tags=$tags" >> $GITHUB_OUTPUT
 
     - name: Log in to GHCR
-      uses: docker/login-action@v3
+      uses: docker/login-action@v4
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
