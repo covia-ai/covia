@@ -1,10 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -189,153 +186,98 @@ public class HardKillPersistenceTest {
 	}
 
 	// ========================================================================
-	// Test 1 — Write + flush, then SIGKILL. After restart, the write MUST be
-	// readable. This is the strongest guarantee engine.flush() advertises.
+	// One comprehensive hard-kill resilience test driving TWO child JVMs in
+	// sequence (peak one child alive at a time, vs the previous five parallel
+	// methods that spawned up to six concurrent child JVMs — a JVM-spawn storm
+	// that both dominated the class wall-clock and was a prime source of the
+	// full-suite flakiness in #151).
+	//
+	// Every durability property the old five tests covered is preserved, and
+	// the accumulation across two crash cycles is now exercised against a LARGE
+	// cycle-1 dataset — making this a strictly stronger probe for any
+	// re-persist / merge bug that drops earlier-cycle data:
+	//
+	//   Cycle 1 (child A), then SIGKILL:
+	//     • flushed write           → must survive (the core flush() guarantee)
+	//     • burst of flushed writes → all must survive (coalescing / no lost update)
+	//     • unflushed + sweep wait  → must survive (background sweep durability)
+	//     • unflushed + immediate   → may or may not survive (corruption probe only)
+	//   Cycle 2 (child B), then SIGKILL:
+	//     • restore loads the whole cycle-1 dataset (proves no corruption), adds
+	//       one more flushed write, hard-kills again (accumulation across cycles)
+	//   Reader (in-process restart): every flushed/swept file from BOTH cycles
+	//     must be readable, and a fresh write must still work (etch uncorrupted).
 	// ========================================================================
 	@Test
-	public void testFlushedWriteSurvivesHardKill() throws Exception {
+	public void testHardKillResilienceAcrossCycles() throws Exception {
+		final int BURST = 25;
 		File etchFile = newTempEtch();
 		String storePath = etchFile.getAbsolutePath().replace('\\', '/');
-		AKeyPair venueKey = AKeyPair.createSeeded(5001);
+		AKeyPair venueKey = AKeyPair.createSeeded(5000);
 		String seedHex = venueKey.getSeed().toHexString();
 
+		// ---- Cycle 1: write a large mixed dataset, then hard-kill ----
 		try (Child child = spawn(storePath, seedHex)) {
 			String ready = child.readProto();
 			assertTrue(ready.startsWith("READY "), "child should announce READY: got '" + ready + "'");
 
+			// Flushed write — the strongest guarantee flush() advertises.
 			assertEquals("OK", child.send("WRITE health-vault hello.txt persistent-content"));
 
-			// Hard-kill — Runtime.halt(137) bypasses shutdown hooks.
-			child.stdin.println("HALT");
-			child.stdin.flush();
-			boolean exited = child.process.waitFor(15, TimeUnit.SECONDS);
-			assertTrue(exited, "child should exit after HALT");
-			assertEquals(137, child.process.exitValue(), "expected exit code 137 from Runtime.halt");
-		}
+			// Burst of flushed writes — coalescing path, no lost-update between flushes.
+			for (int i = 0; i < BURST; i++) {
+				assertEquals("OK", child.send("WRITE health-vault burst-" + i + ".txt value-" + i),
+					"burst write #" + i + " should succeed");
+			}
 
-		// Restart against the same store + seed and read it back.
-		VenueServer reader = VenueServer.launch(readerConfig(storePath, seedHex));
-		try {
-			String content = readDLFS(reader, "health-vault", "hello.txt");
-			assertNotNull(content, "DLFS file must survive hard-kill when engine.flush() was called before HALT");
-			assertEquals("persistent-content", content);
-		} finally {
-			reader.close();
-		}
-	}
-
-	// ========================================================================
-	// Test 2 — Write WITHOUT flush, wait for several sweep cycles, then HALT.
-	// The sweep daemon should have synced and propagated the write to disk
-	// well within the wait window (100ms sweep interval + propagator drain).
-	// ========================================================================
-	@Test
-	public void testSweptWriteSurvivesHardKill() throws Exception {
-		File etchFile = newTempEtch();
-		String storePath = etchFile.getAbsolutePath().replace('\\', '/');
-		AKeyPair venueKey = AKeyPair.createSeeded(5002);
-		String seedHex = venueKey.getSeed().toHexString();
-
-		try (Child child = spawn(storePath, seedHex)) {
-			String ready = child.readProto();
-			assertTrue(ready.startsWith("READY "), "child should announce READY: got '" + ready + "'");
-
+			// Unflushed write, then wait out several sweep cycles (100ms interval)
+			// so the background sweep + propagator persist it before the kill.
 			assertEquals("OK", child.send("WRITE_NOFLUSH health-vault sweep.txt swept-content"));
-			// Give the background sweep + propagator generous time.
-			// Sweep interval is 100ms; propagator drain is microseconds-to-ms.
 			assertEquals("OK", child.send("SLEEP 2000"));
 
-			child.stdin.println("HALT");
-			child.stdin.flush();
-			boolean exited = child.process.waitFor(15, TimeUnit.SECONDS);
-			assertTrue(exited, "child should exit after HALT");
-		}
-
-		VenueServer reader = VenueServer.launch(readerConfig(storePath, seedHex));
-		try {
-			String content = readDLFS(reader, "health-vault", "sweep.txt");
-			assertNotNull(content,
-				"DLFS file must survive hard-kill after background sweep has had 2s to run — "
-				+ "if null, either the sweep isn't actually propagating or the propagator's "
-				+ "queue takes longer than 2s to drain");
-			assertEquals("swept-content", content);
-		} finally {
-			reader.close();
-		}
-	}
-
-	// ========================================================================
-	// Test 3 — Burst of flushed writes, then HALT. All N writes must survive.
-	// Exercises the coalescing path and rules out lost-update races between
-	// sequential flushes.
-	// ========================================================================
-	@Test
-	public void testBurstOfFlushedWritesSurvivesHardKill() throws Exception {
-		final int N = 25;
-		File etchFile = newTempEtch();
-		String storePath = etchFile.getAbsolutePath().replace('\\', '/');
-		AKeyPair venueKey = AKeyPair.createSeeded(5003);
-		String seedHex = venueKey.getSeed().toHexString();
-
-		try (Child child = spawn(storePath, seedHex)) {
-			String ready = child.readProto();
-			assertTrue(ready.startsWith("READY "), "child should announce READY: got '" + ready + "'");
-
-			for (int i = 0; i < N; i++) {
-				assertEquals("OK", child.send("WRITE health-vault burst-" + i + ".txt value-" + i),
-					"write #" + i + " should succeed");
-			}
-
-			child.stdin.println("HALT");
-			child.stdin.flush();
-			boolean exited = child.process.waitFor(15, TimeUnit.SECONDS);
-			assertTrue(exited, "child should exit after HALT");
-		}
-
-		VenueServer reader = VenueServer.launch(readerConfig(storePath, seedHex));
-		try {
-			for (int i = 0; i < N; i++) {
-				String content = readDLFS(reader, "health-vault", "burst-" + i + ".txt");
-				assertEquals("value-" + i, content,
-					"burst write #" + i + " must survive hard-kill");
-			}
-		} finally {
-			reader.close();
-		}
-	}
-
-	// ========================================================================
-	// Test 4 — Diagnostic: an UNFLUSHED write with NO sleep before HALT may
-	// or may not survive depending on timing. This test does NOT assert
-	// durability; it asserts that the venue at least restarts cleanly even
-	// if the write was lost mid-flight. The expected lower bound on the
-	// venue's behaviour is "restart works, no etch corruption".
-	// ========================================================================
-	@Test
-	public void testUnflushedImmediateHaltDoesNotCorruptStore() throws Exception {
-		File etchFile = newTempEtch();
-		String storePath = etchFile.getAbsolutePath().replace('\\', '/');
-		AKeyPair venueKey = AKeyPair.createSeeded(5004);
-		String seedHex = venueKey.getSeed().toHexString();
-
-		try (Child child = spawn(storePath, seedHex)) {
-			String ready = child.readProto();
-			assertTrue(ready.startsWith("READY "), "child should announce READY: got '" + ready + "'");
-
-			// Single unflushed write, then immediate halt — race against the sweep.
+			// Unflushed write with NO sleep before the kill — races the sweep, so
+			// survival is not asserted; this is the corruption probe (cycle 2's
+			// restore below proves the store is not corrupted by an aborted write).
 			assertEquals("OK", child.send("WRITE_NOFLUSH health-vault race.txt maybe-survives"));
 
 			child.stdin.println("HALT");
 			child.stdin.flush();
 			boolean exited = child.process.waitFor(15, TimeUnit.SECONDS);
-			assertTrue(exited, "child should exit after HALT");
+			assertTrue(exited, "cycle-1 child should exit after HALT");
+			assertEquals(137, child.process.exitValue(), "expected exit code 137 from Runtime.halt");
 		}
 
-		// Restart must succeed even if the unflushed write was lost.
-		// (We do NOT assert the file is readable — that's a race.)
+		// ---- Cycle 2: restore the cycle-1 dataset, add one write, hard-kill ----
+		try (Child child = spawn(storePath, seedHex)) {
+			String ready = child.readProto();
+			assertTrue(ready.startsWith("READY "), "cycle-2 child should announce READY: got '" + ready + "'");
+
+			// A successful flushed write here proves the restore loaded the prior
+			// store cleanly (no corruption from cycle 1's aborted race.txt write).
+			assertEquals("OK", child.send("WRITE health-vault cycle2.txt second"));
+
+			child.stdin.println("HALT");
+			child.stdin.flush();
+			boolean exited = child.process.waitFor(15, TimeUnit.SECONDS);
+			assertTrue(exited, "cycle-2 child should exit after HALT");
+		}
+
+		// ---- Reader: every durable file from BOTH cycles must survive ----
 		VenueServer reader = VenueServer.launch(readerConfig(storePath, seedHex));
 		try {
-			// A second write after restart must work — proves the etch is uncorrupted.
+			assertEquals("persistent-content", readDLFS(reader, "health-vault", "hello.txt"),
+				"flushed write must survive both hard-kills");
+			for (int i = 0; i < BURST; i++) {
+				assertEquals("value-" + i, readDLFS(reader, "health-vault", "burst-" + i + ".txt"),
+					"burst write #" + i + " must survive both hard-kills");
+			}
+			assertEquals("swept-content", readDLFS(reader, "health-vault", "sweep.txt"),
+				"swept (unflushed) write must survive — sweep had 2s to propagate before the kill");
+			assertEquals("second", readDLFS(reader, "health-vault", "cycle2.txt"),
+				"cycle-2 write must survive its hard-kill (accumulation across cycles)");
+
+			// A fresh write after restart must work — proves the etch is uncorrupted
+			// (subsumes the old standalone corruption test).
 			reader.getEngine().jobs().invokeOperation(
 				"v/ops/dlfs/write",
 				Maps.of("drive", "health-vault", "path", "after-restart.txt", "content", "ok"),
@@ -343,51 +285,7 @@ public class HardKillPersistenceTest {
 			).awaitResult(5000);
 			reader.getEngine().flush();
 			assertEquals("ok", readDLFS(reader, "health-vault", "after-restart.txt"),
-				"writes after restart must still work — etch should not be corrupted by an aborted write");
-		} catch (Exception e) {
-			fail("Venue failed to restart after a hard-killed unflushed write: " + e.getMessage());
-		} finally {
-			reader.close();
-		}
-	}
-
-	// ========================================================================
-	// Test 5 — Survives a second hard-kill cycle. Confirms persistence is
-	// idempotent and additive across multiple crash/restart cycles, not just
-	// a one-shot save/restore.
-	// ========================================================================
-	@Test
-	public void testTwoConsecutiveHardKillCyclesAccumulate() throws Exception {
-		File etchFile = newTempEtch();
-		String storePath = etchFile.getAbsolutePath().replace('\\', '/');
-		AKeyPair venueKey = AKeyPair.createSeeded(5005);
-		String seedHex = venueKey.getSeed().toHexString();
-
-		// Cycle 1
-		try (Child child = spawn(storePath, seedHex)) {
-			assertTrue(child.readProto().startsWith("READY "));
-			assertEquals("OK", child.send("WRITE health-vault cycle1.txt first"));
-			child.stdin.println("HALT");
-			child.stdin.flush();
-			assertTrue(child.process.waitFor(15, TimeUnit.SECONDS));
-		}
-
-		// Cycle 2 — add a second file, hard-kill again
-		try (Child child = spawn(storePath, seedHex)) {
-			assertTrue(child.readProto().startsWith("READY "));
-			assertEquals("OK", child.send("WRITE health-vault cycle2.txt second"));
-			child.stdin.println("HALT");
-			child.stdin.flush();
-			assertTrue(child.process.waitFor(15, TimeUnit.SECONDS));
-		}
-
-		// Read back — both writes from both cycles must survive
-		VenueServer reader = VenueServer.launch(readerConfig(storePath, seedHex));
-		try {
-			assertEquals("first", readDLFS(reader, "health-vault", "cycle1.txt"),
-				"write from cycle 1 must survive both hard-kills");
-			assertEquals("second", readDLFS(reader, "health-vault", "cycle2.txt"),
-				"write from cycle 2 must survive its hard-kill");
+				"writes after restart must still work — etch must not be corrupted");
 		} finally {
 			reader.close();
 		}
