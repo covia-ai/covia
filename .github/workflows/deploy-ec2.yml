@@ -40,9 +40,14 @@ jobs:
           # Pull latest image
           docker pull ghcr.io/covia-ai/covia:latest
 
-          # Stop and remove existing container
+          # Stop legacy systemd service if still present
+          sudo systemctl stop covia-venue.service 2>/dev/null || true
+
+          # Stop and remove existing container (by name, then any container still using port 8080)
           docker stop covia-venue 2>/dev/null || true
           docker rm covia-venue 2>/dev/null || true
+          docker ps -q --filter publish=8080 | xargs -r docker stop
+          docker ps -aq --filter publish=8080 | xargs -r docker rm
 
           # Run new container
           docker run -d \
