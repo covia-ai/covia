@@ -124,6 +124,7 @@ public class LangChainAdapter extends AAdapter {
 		installAsset("langchain/openai",    "/adapters/langchain/openai.json");
 		installAsset("langchain/ollama",    "/adapters/langchain/ollama.json");
 		installAsset("langchain/anthropic", "/adapters/langchain/anthropic.json");
+		installAsset("langchain/gemini",    "/adapters/langchain/gemini.json");
 		installAsset("langchain/xai",       "/adapters/langchain/xai.json");
 
 		// Example configurations — stored in CAS, not in /v/ops/.
@@ -224,7 +225,7 @@ public class LangChainAdapter extends AAdapter {
 	// ========== Model construction ==========
 
 	static boolean providerNeedsApiKey(String provider) {
-		return "openai".equals(provider) || "anthropic".equals(provider);
+		return "openai".equals(provider) || "anthropic".equals(provider) || "gemini".equals(provider);
 	}
 
 	private ChatModel buildProviderModel(String provider, String modelName, String apiKey, AString urlParam) {
@@ -240,6 +241,10 @@ public class LangChainAdapter extends AAdapter {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.anthropic.com/v1/";
 			String model = (modelName != null) ? modelName : "claude-sonnet-4-6";
 			return buildAnthropicModel(apiKey, baseUrl, model, IO_TIMEOUT);
+		} else if ("gemini".equals(provider)) {
+			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://generativelanguage.googleapis.com/v1beta/openai/";
+			String model = (modelName != null) ? modelName : "gemini-2.5-flash";
+			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
 		}
 		return null;
 	}
