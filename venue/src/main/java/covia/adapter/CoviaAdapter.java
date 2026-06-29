@@ -583,16 +583,7 @@ public class CoviaAdapter extends AAdapter {
 	private ACell handleWrite(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
-		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
-		// Per-call write authorisation for virtual namespaces (e.g. /v/
-		// requires the venue identity). Static isWritableNamespace doesn't
-		// know about the caller; canWrite(ctx) does.
-		if (jsonKeys.length > 0) {
-			NamespaceResolver resolver = resolvers.get(jsonKeys[0].toString());
-			if (resolver != null && !resolver.canWrite(ctx)) {
-				throw new RuntimeException("Write permission denied for namespace: " + jsonKeys[0]);
-			}
-		}
+		requireWriteAccess(ctx, jsonKeys);
 		// A write must supply a 'value'. An absent key means the caller (often an
 		// LLM tool call) forgot the argument — fail loudly so it retries with the
 		// value instead of silently creating a null entry. An explicit null is
@@ -656,7 +647,7 @@ public class CoviaAdapter extends AAdapter {
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_DELETE);
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
-		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
+		requireWriteAccess(ctx, jsonKeys);
 
 		// Check job-scoped virtual namespace (t/)
 		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
@@ -699,7 +690,7 @@ public class CoviaAdapter extends AAdapter {
 	private ACell handleAppend(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
-		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
+		requireWriteAccess(ctx, jsonKeys);
 
 		// Cursor-based virtual (n/) or physical namespace
 		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
@@ -768,6 +759,32 @@ public class CoviaAdapter extends AAdapter {
 				+ "Writable namespaces: w/ (workspace), o/ (operation pins); "
 				+ "n/ and t/ are writable within an agent or job run.");
 		}
+	}
+
+	/**
+	 * Checks that the caller has write access to the namespace addressed by
+	 * {@code jsonKeys}. Virtual namespaces with a registered {@link NamespaceResolver}
+	 * (e.g. {@code v/}, {@code n/}, {@code t/}) delegate auth to
+	 * {@link NamespaceResolver#canWrite(RequestContext)}; plain namespaces fall
+	 * back to the {@link #WRITABLE_NAMESPACES} allowlist ({@code w/}, {@code o/}).
+	 *
+	 * <p>Calling this before {@link #validateWritablePath} ensures that resolver-
+	 * managed namespaces (like {@code v/}) aren't blocked by the static allowlist
+	 * before their per-caller auth check can run.</p>
+	 *
+	 * @throws RuntimeException if the caller lacks write access
+	 */
+	private void requireWriteAccess(RequestContext ctx, ACell[] jsonKeys) {
+		if (jsonKeys.length > 0) {
+			NamespaceResolver resolver = resolvers.get(jsonKeys[0].toString());
+			if (resolver != null) {
+				if (!resolver.canWrite(ctx)) {
+					throw new RuntimeException("Write permission denied for namespace: " + jsonKeys[0]);
+				}
+				return;
+			}
+		}
+		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
 	}
 
 	/**
