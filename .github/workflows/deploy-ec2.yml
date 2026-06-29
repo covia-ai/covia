@@ -49,6 +49,21 @@ jobs:
           docker ps -q --filter publish=8080 | xargs -r docker stop
           docker ps -aq --filter publish=8080 | xargs -r docker rm
 
+          # Reset data directory and write fresh config
+          rm -rf /home/ec2-user/covia-data
+          mkdir -p /home/ec2-user/covia-data
+          cat > /home/ec2-user/covia-data/config.json << 'COVIA_CONFIG'
+          {
+            "venues": [{
+              "name": "Covia Venue (EC2)",
+              "hostname": "venue-3.covia.ai",
+              "port": 8080,
+              "store": "/data/venue.etch",
+              "mcp": { "enabled": true }
+            }]
+          }
+          COVIA_CONFIG
+
           # Run new container
           docker run -d \
             --name covia-venue \
