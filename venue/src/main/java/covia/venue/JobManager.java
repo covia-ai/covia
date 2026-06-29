@@ -3,6 +3,7 @@ package covia.venue;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,8 +62,15 @@ public class JobManager {
 
 	// Job ID generation state
 	private final Random rand = new Random();
-	private short jobCounter = 0;
-	private long lastJobTS = 0;
+	/**
+	 * Monotonic 64-bit job-ID prefix: high 48 bits = millisecond timestamp,
+	 * low 16 bits = per-millisecond counter. Advanced atomically as
+	 * {@code max(prev+1, ts<<16)}, so IDs are strictly increasing — hence fully
+	 * ordered and unique — even under concurrent submission, across
+	 * same-millisecond bursts (the counter carries into the timestamp bits past
+	 * 65535/ms), and across a backwards clock step (prev+1 wins).
+	 */
+	private final AtomicLong idPrefix = new AtomicLong(0);
 
 	/**
 	 * Creates a new JobManager.
@@ -835,15 +843,17 @@ public class JobManager {
 	/**
 	 * Generates a unique job ID.
 	 * Format: 6 bytes timestamp + 2 bytes counter + 8 bytes random.
-	 * Time-ordered, unpredictable, collision-resistant.
+	 * Time-ordered, monotonic, unpredictable, collision-resistant, thread-safe.
 	 */
 	private Blob generateJobID(long ts) {
-		if (ts > lastJobTS) jobCounter = 0;
-		lastJobTS = ts;
+		// Strictly-increasing prefix: a new millisecond resets the counter to 0
+		// (ts<<16 wins); a same-millisecond or backwards-clock submission advances
+		// the counter (prev+1 wins), carrying into the timestamp bits if a single
+		// millisecond ever exceeds 65535 IDs. Lock-free via AtomicLong.
+		long prefix = idPrefix.updateAndGet(prev -> Math.max(prev + 1, ts << 16));
 		byte[] bs = new byte[16];
 
-		Utils.writeLong(bs, 0, ts << 16);
-		Utils.writeShort(bs, 6, jobCounter++);
+		Utils.writeLong(bs, 0, prefix);
 		Utils.writeLong(bs, 8, rand.nextLong());
 
 		return Blob.wrap(bs);
