@@ -6,7 +6,8 @@
 	"dateModified": "2025-09-16T00:00:00Z",
 	"keywords":["LLM", "model", "deepseek"],
 	"operation": {
-		"adapter": "langchain:openai",
+		"adapter": "langchain:deepseek",
+		"secretKey": "DEEPSEEK_API_KEY",
 		"secretFields": ["apiKey"],
 
 		"input":{
