@@ -4,6 +4,9 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Consumer;
 
 import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.server.HttpConfiguration;
@@ -78,6 +81,17 @@ public class VenueServer {
 	protected A2A a2a;
 	protected UserAPI userApi;
 	protected LoginProviders loginProviders;
+
+	/**
+	 * Extra Javalin route registrars contributed by an embedder — e.g. a service
+	 * that embeds this venue and exposes additional endpoints alongside the venue
+	 * API. Invoked from {@link #addAPIRoutes} (after {@link AuthMiddleware} is
+	 * registered and within the {@code /api/*} filters), so routes mounted under
+	 * {@code /api/...} inherit caller-identity extraction and post-request lattice
+	 * sync. Populated only via {@link #launch(AMap, List)}; empty by default, so
+	 * the standalone venue behaves exactly as before.
+	 */
+	protected final List<Consumer<RoutesConfig>> extraRouteRegistrars = new ArrayList<>();
 
 	public VenueServer(AMap<AString,ACell> config) {
 		this.config=new Config(config);
@@ -216,6 +230,21 @@ public class VenueServer {
 	 * @return Launched Venue Server instance
 	 */
 	public static VenueServer launch(AMap<AString,ACell> config) {
+		return launch(config, null);
+	}
+
+	/**
+	 * Launch a Venue server, optionally with extra Javalin route registrars
+	 * contributed by an embedder. Each registrar is invoked at server-build time
+	 * (Javalin 7 requires routes at create time), after the auth middleware and
+	 * within the {@code /api/*} filters — so routes mounted under {@code /api/...}
+	 * inherit caller-identity extraction and post-request lattice sync.
+	 *
+	 * @param config Config, or null for default test config.
+	 * @param extraRoutes Additional route registrars, or null/empty for none.
+	 * @return Launched Venue Server instance
+	 */
+	public static VenueServer launch(AMap<AString,ACell> config, List<Consumer<RoutesConfig>> extraRoutes) {
 		if (config==null) {
 			config=Maps.of(
 					Fields.NAME,"Test Venue",
@@ -229,10 +258,11 @@ public class VenueServer {
 					)
 			);
 		}
-		
+
 		VenueServer server= new VenueServer(config);
+		if (extraRoutes!=null) server.extraRouteRegistrars.addAll(extraRoutes);
 		server.start();
-		
+
 		Engine.addDemoAssets(server.getEngine());
 		server.getEngine().provisionConfiguredSecrets();
 		server.getEngine().jobs().recoverJobs();
@@ -337,6 +367,9 @@ public class VenueServer {
 		webApp.addRoutes(routes);
 		if (mcp!=null) mcp.addRoutes(routes);
 		if (a2a!=null) a2a.addRoutes(routes);
+		// Embedder-contributed routes (see extraRouteRegistrars). Registered last,
+		// after the auth middleware, so /api/... routes inherit caller identity + sync.
+		for (Consumer<RoutesConfig> r : extraRouteRegistrars) r.accept(routes);
 	}
 	
 
