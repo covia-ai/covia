@@ -19,6 +19,8 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Vectors;
+import java.util.ArrayList;
+import java.util.List;
 import convex.core.lang.RT;
 import convex.core.util.FileUtils;
 import convex.core.util.JSON;
@@ -63,10 +65,18 @@ public class MainVenue {
 		}
 		
 		AVector<AMap<AString,ACell>> venues=RT.getIn(config, Fields.VENUES);
+		List<VenueServer> servers = new ArrayList<>();
 		for (AMap<AString,ACell> venueConfig: venues) {
-			@SuppressWarnings("unused")
-			VenueServer server=VenueServer.launch(venueConfig);
+			servers.add(VenueServer.launch(venueConfig));
 		}
+
+		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+			log.info("Shutdown signal received — closing {} venue(s)", servers.size());
+			for (VenueServer server : servers) {
+				try { server.close(); } catch (Exception e) { log.warn("Error closing venue", e); }
+			}
+			log.info("All venues closed");
+		}, "shutdown-hook"));
 	}
 	
 	private static void configureLogging(ACell config) throws JoranException, IOException {

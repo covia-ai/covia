@@ -65,6 +65,7 @@ jobs:
           # Run new container
           docker run -d \
             --name covia-venue \
+            --stop-timeout 30 \
             -p 8080:8080 \
             -v /home/azureuser/covia-data:/data \
             --restart unless-stopped \
