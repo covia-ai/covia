@@ -302,6 +302,37 @@ public class Config {
 	}
 
 	/**
+	 * The venue's did:web alias, derived from the configured {@code hostname}:
+	 * {@code did:web:<hostname>} when the hostname is a genuine public domain,
+	 * null otherwise (default/localhost, IP literals, host:port forms).
+	 *
+	 * <p>The alias is <b>discovery only</b> (covia#167): it makes the document
+	 * at {@code /.well-known/did.json} strictly did:web-resolvable. The venue's
+	 * canonical identity remains its did:key — nothing durable (lattice keys,
+	 * UCAN issuer, signatures, asset DID URLs) ever references the did:web
+	 * form, so a domain change or lapse cannot break stored state.</p>
+	 *
+	 * @return {@code did:web:<hostname>}, or null if the hostname is not public
+	 */
+	public AString getWebDID() {
+		String host = getHostname();
+		if (!isPublicHostname(host)) return null;
+		return Strings.create("did:web:" + host);
+	}
+
+	/**
+	 * True iff {@code host} is a plausible public DNS name: contains a dot,
+	 * no port/IPv6 colon, not "localhost", and not an IPv4 literal.
+	 */
+	static boolean isPublicHostname(String host) {
+		if (host == null || host.isEmpty()) return false;
+		if (host.indexOf(':') >= 0) return false;        // port or IPv6 literal
+		if (host.indexOf('.') < 0) return false;          // bare names (localhost, myhost)
+		if (host.matches("[0-9.]+")) return false;        // IPv4 literal
+		return true;
+	}
+
+	/**
 	 * Venue default LLM provider operation for new agents that declare a
 	 * systemPrompt but no explicit llmOperation. Operator-configurable so a
 	 * venue can default to a different provider (e.g. Anthropic) without code

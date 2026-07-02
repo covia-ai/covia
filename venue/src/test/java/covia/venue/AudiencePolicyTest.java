@@ -63,8 +63,11 @@ public class AudiencePolicyTest {
 		// single extra venue covers both the require and the allowlist cases.
 		verifyVenueDID = TestServer.ENGINE.getDIDString();
 
+		// The require venue also carries a public hostname, so it publishes a
+		// did:web alias (covia#167) — covering the alias-audience cases too.
 		requireServer = VenueServer.launch(Maps.of(
 			Strings.create("port"), 0,
+			Config.HOSTNAME, Strings.create("venue-req.example.com"),
 			Config.AUTH, Maps.of(
 				Config.PUBLIC, Maps.of(Config.ENABLED, true),
 				Config.AUDIENCE, Strings.create("require"),
@@ -168,5 +171,24 @@ public class AudiencePolicyTest {
 		// auth.acceptedAudiences extends the allowlist beyond the venue's own DID
 		// (exercised on the require venue, which carries the allowlist).
 		assertAccepted(client(requireServer, selfIssued(AKeyPair.generate(), extraDID)));
+	}
+
+	// ==================== did:web alias audience (covia#167) ====================
+
+	@Test
+	public void webAliasAudienceAccepted() throws Exception {
+		// A strictly-resolving client audiences its token to the DID it resolved
+		// from /.well-known/did.json — the did:web alias when the venue has a
+		// public hostname. The venue accepts the alias; its canonical identity
+		// (and validation key) remains the did:key.
+		assertAccepted(client(requireServer,
+			selfIssued(AKeyPair.generate(), Strings.create("did:web:venue-req.example.com"))));
+	}
+
+	@Test
+	public void wrongWebAliasAudienceRejected() {
+		// A did:web audience for a DIFFERENT domain is not this venue.
+		assertRejected401(client(requireServer,
+			selfIssued(AKeyPair.generate(), Strings.create("did:web:other.example.com"))));
 	}
 }

@@ -107,6 +107,13 @@ public class AuthMiddleware {
 		java.util.Set<String> aud = new java.util.HashSet<>();
 		aud.add(venueDID.toString()); // the venue's canonical published DID
 		aud.addAll(auth.getConfiguredAudiences());
+		// The did:web alias (covia#167): strictly-resolving clients audience
+		// their tokens to the DID they resolved from /.well-known/did.json,
+		// which is the did:web form when a public hostname is configured.
+		// Accepting the alias string here does not change the venue's canonical
+		// did:key identity — validation still uses the venue's own key.
+		AString webDID = auth.getWebDID();
+		if (webDID != null) aud.add(webDID.toString());
 		this.acceptedAudiences = aud;
 	}
 

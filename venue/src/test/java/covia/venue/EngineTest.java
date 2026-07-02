@@ -589,4 +589,45 @@ public class EngineTest {
 		String retrievedContent = new String(retrievedStream.readAllBytes());
 		assertEquals(testContent, retrievedContent);
 	}
+
+	// ========== DID document — did:web alias presentation (covia#167) ==========
+
+	@Test
+	public void testDIDDocumentDefaultsToDIDKey() {
+		// No public hostname (shared temp engine defaults to localhost):
+		// the document id IS the canonical did:key and there is no alias.
+		AMap<AString, ACell> ddo = venue.getDIDDocument("https://localhost:8080/api/v1");
+		assertEquals(venue.getDIDString(), ddo.get(Strings.create("id")));
+		assertNull(ddo.get(Strings.create("alsoKnownAs")));
+	}
+
+	@Test
+	public void testDIDDocumentServesWebAliasForPublicHostname() {
+		Engine webVenue = Engine.createTemp(Maps.of(
+			Config.HOSTNAME, Strings.create("venue-x.example.com")));
+		try {
+			AMap<AString, ACell> ddo = webVenue.getDIDDocument("https://venue-x.example.com/api/v1");
+
+			// Strict did:web resolution: document id equals the DID being resolved.
+			assertEquals(Strings.create("did:web:venue-x.example.com"),
+				ddo.get(Strings.create("id")));
+
+			// The canonical did:key identity is bound via alsoKnownAs.
+			AVector<?> aka = (AVector<?>) ddo.get(Strings.create("alsoKnownAs"));
+			assertNotNull(aka, "alias document must carry alsoKnownAs");
+			assertEquals(webVenue.getDIDString(), aka.get(0));
+			assertTrue(webVenue.getDIDString().toString().startsWith("did:key:"),
+				"canonical venue identity stays did:key");
+
+			// Same ed25519 root of trust: the verification method carries the
+			// venue keypair's multikey, anchored on the did:web document id.
+			ACell vm = ((AVector<?>) ddo.get(Strings.create("verificationMethod"))).get(0);
+			AString mk = RT.ensureString(RT.getIn(vm, "publicKeyMultibase"));
+			assertEquals(convex.core.crypto.util.Multikey.encodePublicKey(webVenue.getAccountKey()), mk);
+			assertEquals(Strings.create("did:web:venue-x.example.com"),
+				RT.getIn(vm, "controller"));
+		} finally {
+			webVenue.close();
+		}
+	}
 }

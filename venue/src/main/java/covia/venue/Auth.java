@@ -67,6 +67,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	private final ACell publicCapsConfig;
 	private final String audiencePolicy;
 	private final java.util.Set<String> configuredAudiences;
+	private final AString webDID;
 
 	/**
 	 * Create Auth from an Engine and its venue state.
@@ -94,6 +95,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 			}
 		}
 		this.configuredAudiences = aud;
+		this.webDID = config.getWebDID();
 
 		// Create login providers from auth config
 		this.loginProviders = new LoginProviders(engine, config.getAuthConfig());
@@ -137,6 +139,12 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 *  DID(s)). Never null; empty if none configured. */
 	public java.util.Set<String> getConfiguredAudiences() {
 		return configuredAudiences;
+	}
+
+	/** The venue's did:web alias ({@link Config#getWebDID()}), or null when no
+	 *  public hostname is configured. Discovery only — see covia#167. */
+	public AString getWebDID() {
+		return webDID;
 	}
 
 	/**

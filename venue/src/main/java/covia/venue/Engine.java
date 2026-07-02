@@ -1582,20 +1582,42 @@ public class Engine {
 		return s;
 	}
 
+	/**
+	 * Builds the venue DID document served at {@code /.well-known/did.json}.
+	 *
+	 * <p>The document {@code id} must equal the DID a resolver asked for (DID
+	 * Core), so when the venue has a public hostname configured the document is
+	 * presented under its <b>did:web alias</b> ({@code did:web:<hostname>}) with
+	 * the canonical did:key in {@code alsoKnownAs} — making strict did:web
+	 * resolution work (covia#167). The alias is a derived, per-request view and
+	 * is discovery only: the venue's identity remains its did:key (the same
+	 * ed25519 key material verifies in both presentations), and nothing durable
+	 * references the did:web form. Without a public hostname the document is
+	 * served under the did:key directly, unchanged.</p>
+	 *
+	 * @param endpoint Service endpoint URL for the CoviaGrid service entry
+	 * @return DID document map
+	 */
 	public AMap<AString, ACell> getDIDDocument(String endpoint) {
-		AString did=getDIDString();
+		AString canonicalDID=getDIDString();
+
+		// Presentation identity: the did:web alias when a public hostname is
+		// configured (and isn't already the canonical DID), else the did:key.
+		AString webDID=config.getWebDID();
+		boolean aliased=(webDID!=null) && !webDID.equals(canonicalDID);
+		AString docID=aliased ? webDID : canonicalDID;
 
 		AString key=Multikey.encodePublicKey(keyPair.getAccountKey());
-		AString keyID=Strings.create(did+"#"+key);
+		AString keyID=Strings.create(docID+"#"+key);
 		AVector<AString> keyVector=Vectors.create(keyID);
 
 		AMap<AString,ACell> ddo=Maps.of(
-			"id", did,
+			"id", docID,
 			"@context", "https://www.w3.org/ns/did/v1",
 			"verificationMethod",Vectors.of(Maps.of(
 						"id",keyID,
 						"type","Multikey",
-						"controller",did,
+						"controller",docID,
 						"publicKeyMultibase",key
 					)),
 			"authentication",keyVector,
@@ -1608,6 +1630,12 @@ public class Engine {
 							"serviceEndpoint",endpoint
 					))
 		);
+
+		// Bind the alias to the canonical identity: consumers resolving
+		// did:web re-bind to the did:key for anything they store or pin.
+		if (aliased) {
+			ddo=ddo.assoc(Strings.intern("alsoKnownAs"), Vectors.create(canonicalDID));
+		}
 
 		return ddo;
 	}
