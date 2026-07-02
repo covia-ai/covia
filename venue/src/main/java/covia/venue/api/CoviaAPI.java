@@ -527,7 +527,14 @@ public class CoviaAPI extends ACoviaAPI {
 										from = InvokeResult.class) })
 					})
 	protected void invokeOperation(Context ctx) {
-		ACell req=JSON.parseJSON5(ctx.body());
+		// A malformed body is the caller's error: 400, never the generic 500.
+		ACell req;
+		try {
+			req = JSON.parseJSON5(ctx.body());
+		} catch (Exception e) {
+			buildError(ctx, 400, "Request body is not valid JSON: " + e.getMessage());
+			return;
+		}
 
 		AString op=RT.ensureString(RT.getIn(req, "operation"));
 		if (op==null) {
@@ -687,7 +694,14 @@ public class CoviaAPI extends ACoviaAPI {
 					})
 	protected void sendMessage(Context ctx) {
 		Blob id = Blob.parse(ctx.pathParam("id"));
-		ACell message = JSON.parseJSON5(ctx.body());
+		// A malformed body is the caller's error: 400, never the generic 500.
+		ACell message;
+		try {
+			message = JSON.parseJSON5(ctx.body());
+		} catch (Exception e) {
+			buildError(ctx, 400, "Request body is not valid JSON: " + e.getMessage());
+			return;
+		}
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		@SuppressWarnings("unchecked")
@@ -998,7 +1012,14 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 
 		String name = ctx.pathParam("name");
-		ACell body = JSON.parseJSON5(ctx.body());
+		// A malformed body is the caller's error: 400, never the generic 500.
+		ACell body;
+		try {
+			body = JSON.parseJSON5(ctx.body());
+		} catch (Exception e) {
+			buildError(ctx, 400, "Request body is not valid JSON: " + e.getMessage());
+			return;
+		}
 		ACell value = RT.getIn(body, "value");
 		if (!(value instanceof AString)) {
 			buildError(ctx, 400, "Request body must contain a 'value' string field");

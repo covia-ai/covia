@@ -292,6 +292,23 @@ public class Config {
 		return RT.ensureString(config.get(DID));
 	}
 
+	/** Config key: whether broken adapter asset resources fail startup (default true). */
+	public static final AString STRICT_ASSETS = Strings.intern("strictAssets");
+
+	/**
+	 * Whether a broken or missing adapter asset resource fails venue startup.
+	 * Default true — a venue booting with silently missing ops is broken
+	 * (same policy as {@code Engine.materialiseVOps}). Set
+	 * {@code "strictAssets": false} to downgrade to warnings — intended for
+	 * test/debug scaffolding only, never production.
+	 *
+	 * @return true if asset installation failures are fatal
+	 */
+	public boolean isStrictAssets() {
+		ACell v = config.get(STRICT_ASSETS);
+		return (v == null) || RT.bool(v);
+	}
+
 	/**
 	 * Get the configured hostname.
 	 * @return Hostname string, defaults to "localhost"

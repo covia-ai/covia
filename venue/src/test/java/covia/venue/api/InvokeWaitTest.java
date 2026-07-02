@@ -2,6 +2,7 @@ package covia.venue.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -111,5 +112,15 @@ public class InvokeWaitTest {
 		HttpResponse<String> resp = invoke("?wait=soon",
 			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"m\":5}}");
 		assertEquals(400, resp.statusCode(), "malformed wait must reject, not silently ignore");
+	}
+
+	@Test
+	public void testMalformedBodyRejected400() throws Exception {
+		// A body that is not valid JSON is the caller's error: 400 with the
+		// parse cause — never the generic 500 (#89 sweep).
+		HttpResponse<String> resp = invoke("", "{not json!!");
+		assertEquals(400, resp.statusCode(), "malformed request body must be a 400, got: " + resp.body());
+		assertTrue(resp.body().contains("not valid JSON"),
+			"the error must say the body failed to parse, got: " + resp.body());
 	}
 }

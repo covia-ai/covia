@@ -69,11 +69,17 @@ public abstract class AAdapter {
 		try {
 			return installAsset(convex.core.util.Utils.readResourceAsAString(resourcePath));
 		} catch (Exception e) {
-			// Log warning but don't fail installation
-			log.warn("Failed to install asset from " + resourcePath ,e);
+			// A missing or unreadable adapter resource is a packaging bug — the
+			// venue would boot with silently missing ops. Fail loudly by default,
+			// matching the Engine.materialiseVOps policy; strictAssets=false
+			// downgrades to a warning for test/debug scaffolding only.
+			if (engine == null || engine.config().isStrictAssets()) {
+				throw new IllegalStateException(
+					"Failed to install adapter asset from " + resourcePath, e);
+			}
+			log.warn("Failed to install asset from {} (tolerated: strictAssets=false)", resourcePath, e);
 			return null;
 		}
-
 	}
 
 	/**

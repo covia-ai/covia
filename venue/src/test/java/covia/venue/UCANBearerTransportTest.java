@@ -102,12 +102,13 @@ public class UCANBearerTransportTest {
 	}
 
 	/**
-	 * A tampered bearer token is not a valid UCAN. Under public-access mode
-	 * the request still completes, but attribution falls through to the
-	 * anonymous/public DID rather than being silently treated as Alice.
+	 * A tampered bearer token is a hard 401 — presenting credentials is an
+	 * explicit identity claim, and failing that claim must be visible. It is
+	 * NEVER silently downgraded to the anonymous/public identity, even with
+	 * public access enabled (#89 sweep).
 	 */
 	@Test
-	public void testTamperedBearerFallsThroughToAnonymous() throws Exception {
+	public void testTamperedBearerRejected401() throws Exception {
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		String jwt = UCAN.createJWT(ALICE_KP, engine.getAccountKey(),
 			exp, Vectors.empty(), null).toString();
@@ -119,20 +120,16 @@ public class UCANBearerTransportTest {
 		HttpResponse<String> resp = postInvoke(
 			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"message\":\"hi\"}}",
 			tampered);
-		assertTrue(resp.statusCode() == 200 || resp.statusCode() == 201);
-		AString caller = callerDIDOf(resp);
-		assertNotNull(caller);
-		assertNotEquals(ALICE_DID, caller,
-			"Tampered bearer must not attribute the request to the purported issuer");
+		assertEquals(401, resp.statusCode(),
+			"a tampered bearer must be rejected, never downgraded to public");
 	}
 
 	/**
-	 * An expired bearer UCAN is rejected at the auth layer (fails temporal
-	 * bounds check). Public-access mode means the request still runs, but
-	 * attribution is anonymous.
+	 * An expired bearer UCAN fails the temporal bounds check → hard 401,
+	 * never a silent downgrade to the public identity.
 	 */
 	@Test
-	public void testExpiredBearerFallsThroughToAnonymous() throws Exception {
+	public void testExpiredBearerRejected401() throws Exception {
 		long expired = (System.currentTimeMillis() / 1000) - 60;
 		AString invocation = UCAN.createJWT(ALICE_KP, engine.getAccountKey(),
 			expired, Vectors.empty(), null);
@@ -140,8 +137,8 @@ public class UCANBearerTransportTest {
 		HttpResponse<String> resp = postInvoke(
 			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"message\":\"hi\"}}",
 			invocation.toString());
-		assertTrue(resp.statusCode() == 200 || resp.statusCode() == 201);
-		assertNotEquals(ALICE_DID, callerDIDOf(resp));
+		assertEquals(401, resp.statusCode(),
+			"an expired bearer must be rejected, never downgraded to public");
 	}
 
 	/**
@@ -170,9 +167,10 @@ public class UCANBearerTransportTest {
 		HttpResponse<String> resp = postInvoke(
 			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"message\":\"hi\"}}",
 			forged.toString());
-		assertTrue(resp.statusCode() == 200 || resp.statusCode() == 201);
-		assertNotEquals(ALICE_DID, callerDIDOf(resp),
-			"A token signed by the attacker but claiming iss=victim must NOT authenticate as the victim");
+		// The forgery fails verification → hard 401 (stronger than the old
+		// contract of merely not attributing the request to the victim).
+		assertEquals(401, resp.statusCode(),
+			"A token signed by the attacker but claiming iss=victim must be rejected outright");
 	}
 
 	/**
@@ -215,9 +213,8 @@ public class UCANBearerTransportTest {
 		HttpResponse<String> resp = postInvoke(
 			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"message\":\"hi\"}}",
 			jwt.toString());
-		assertTrue(resp.statusCode() == 200 || resp.statusCode() == 201);
-		assertNotEquals(did, callerDIDOf(resp),
-			"an expired self-issued token must not authenticate its subject");
+		assertEquals(401, resp.statusCode(),
+			"an expired self-issued token must be rejected, never downgraded to public");
 	}
 
 	/**

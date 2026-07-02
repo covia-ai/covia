@@ -246,13 +246,14 @@ public class AuthMiddleware {
 			if (callerDID != null) {
 				ctx.attribute(CALLER_DID_ATTR, callerDID);
 			} else {
+				// A presented token that fails every verification path is a hard
+				// 401 — NEVER a silent downgrade to the public identity, even when
+				// public access is enabled. Presenting credentials is an explicit
+				// identity claim; failing that claim must be visible to the caller
+				// (an anonymous request without a token still gets public access).
 				log.debug("JWT bearer token failed all verification paths");
-				if (!publicAccessEnabled) {
-					ctx.status(401).result("Invalid or expired token");
-					ctx.skipRemainingHandlers();
-				} else {
-					markPublic(ctx);
-				}
+				ctx.status(401).result("Invalid or expired token");
+				ctx.skipRemainingHandlers();
 			}
 		} catch (AudienceRejected e) {
 			// A presented token failed the audience policy — a hard 401, NOT a
@@ -261,13 +262,12 @@ public class AuthMiddleware {
 			ctx.status(401).result("Token audience not accepted by this venue");
 			ctx.skipRemainingHandlers();
 		} catch (Exception e) {
-			log.debug("Error processing bearer token", e);
-			if (!publicAccessEnabled) {
-				ctx.status(401).result("Authentication required");
-				ctx.skipRemainingHandlers();
-			} else {
-				markPublic(ctx);
-			}
+			// Same rule for unexpected failures while verifying a PRESENTED token
+			// (JWKS outage, parse bug, ...): fail the claim visibly. Warn-level —
+			// this path is abnormal and should be diagnosable, not debug-hidden.
+			log.warn("Error processing bearer token", e);
+			ctx.status(401).result("Authentication failed");
+			ctx.skipRemainingHandlers();
 		}
 	}
 
