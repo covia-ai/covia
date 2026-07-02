@@ -195,7 +195,7 @@ public class MCPAdapter extends AAdapter {
 		McpClientSession session = getOrConnect(serverUrl.toString(), accessToken);
 		try {
 			McpSyncClient client = session.getClient();
-			AMap<AString,ACell> toolArgs = RT.ensureMap(input);
+			AMap<AString,ACell> toolArgs = RT.castMap(input);
 			return makeToolCall(client, toolName, toolArgs);
 		} catch (Exception e) {
 			session.invalidate();

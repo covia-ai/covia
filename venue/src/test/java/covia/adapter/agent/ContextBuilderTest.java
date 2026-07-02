@@ -540,7 +540,7 @@ public class ContextBuilderTest {
 
 		boolean foundCoviaRead = false;
 		for (long i = 0; i < result.tools().count(); i++) {
-			AMap<AString, ACell> tool = RT.ensureMap(result.tools().get(i));
+			AMap<AString, ACell> tool = RT.castMap(result.tools().get(i));
 			AString name = RT.ensureString(tool.get(Strings.intern("name")));
 			if (!"covia_read".equals(name.toString())) continue;
 			foundCoviaRead = true;

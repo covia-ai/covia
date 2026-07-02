@@ -188,7 +188,7 @@ Bridges operations to execution environments:
 | `goaltree` | Goal-tree agent planning | `chat` |
 | `dlfs` | Decentralised file system | `listDrives`, `createDrive`, `deleteDrive`, `list`, `read`, `write`, `mkdir`, `delete` |
 | `vault` | Health vault (DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
-| `secret` | Secret store | `set`, `extract` |
+| `secret` | Secret store | `set`, `extract` (removal via `covia:delete s/<name>`) |
 | `ucan` | Capability tokens | `issue` |
 | `scheduler` | Deferred grid-op invocation (per-venue `:schedule`) | `schedule`, `cancel`, `trigger`, `list` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |

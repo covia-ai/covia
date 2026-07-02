@@ -189,8 +189,8 @@ public class HTTPAdapter extends AAdapter {
 			methodField=Strings.create(subOp);
 		}
 		
-		AMap<AString,AString> headers=RT.ensureMap(RT.getIn(input, Fields.HEADERS));
-		AMap<AString,AString> queryParams=RT.ensureMap(RT.getIn(input, Fields.QUERY_PARAMS));
+		AMap<AString,AString> headers=RT.castMap(RT.getIn(input, Fields.HEADERS));
+		AMap<AString,AString> queryParams=RT.castMap(RT.getIn(input, Fields.QUERY_PARAMS));
 		ACell bodyField=RT.getIn(input, Fields.BODY);
 		AString bearerSecret=RT.ensureString(RT.getIn(input, Fields.BEARER_SECRET));
 		

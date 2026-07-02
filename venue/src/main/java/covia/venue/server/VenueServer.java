@@ -27,6 +27,8 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.Blob;
 import convex.core.store.AStore;
 import convex.etch.EtchStore;
+import convex.core.data.prim.CVMLong;
+import convex.core.util.Utils;
 import convex.lattice.LatticeContext;
 import convex.node.NodeConfig;
 import convex.node.NodeServer;
@@ -103,7 +105,8 @@ public class VenueServer {
 			this.store = createStore(this.config);
 			AKeyPair keyPair = resolveKeyPair(this.config);
 			this.nodeServer = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
-			nodeServer.setMergeContext(LatticeContext.create(null, keyPair));
+			nodeServer.setMergeContext(LatticeContext.create(
+				CVMLong.create(Utils.getCurrentTimestamp()), keyPair));
 			nodeServer.launch(); // restore from store BEFORE Engine init
 			// Wire the synchronous persistence handler — used by Engine.flush(),
 			// the periodic flush sweep, and the close-time final flush. See

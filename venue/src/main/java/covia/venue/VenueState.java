@@ -6,6 +6,8 @@ import convex.core.data.ACell;
 import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
+import convex.core.data.prim.CVMLong;
+import convex.core.util.Utils;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.LatticeContext;
 import convex.lattice.cursor.ALatticeCursor;
@@ -72,7 +74,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 * @return New VenueState instance
 	 */
 	public static VenueState create(AKeyPair kp) {
-		LatticeContext ctx = LatticeContext.create(null, kp);
+		LatticeContext ctx = LatticeContext.create(CVMLong.create(Utils.getCurrentTimestamp()), kp);
 		ALatticeCursor<Index<Keyword, ACell>> root = Cursors.createLattice(Covia.ROOT);
 		root.withContext(ctx);
 		AccountKey ownerKey = kp.getAccountKey();
@@ -168,14 +170,14 @@ public class VenueState extends ALatticeComponent<ACell> {
 	 */
 	public void initialise(ACell did) {
 		// Atomic init via CAS — read-then-set would let a late initialise()
-		// clobber state another thread already wrote. PathCursor's
-		// updateAndGet substitutes valueLattice.zero() (an empty Index for
-		// VENUE) for null, so test by DID presence rather than null-equality.
+		// clobber state another thread already wrote. The venue value is a
+		// keyword-keyed Index; the whole-value-LWW lattice's zero() is null, so
+		// materialise an empty Index for a fresh venue and test by DID presence.
 		cursor.updateAndGet(current -> {
 			@SuppressWarnings("unchecked")
 			Index<Keyword, ACell> v = (current instanceof Index<?,?>)
 				? (Index<Keyword, ACell>) current
-				: (Index<Keyword, ACell>) Covia.VENUE.zero();
+				: Index.none();
 			return v.containsKey(Covia.DID) ? v : v.assoc(Covia.DID, did);
 		});
 	}

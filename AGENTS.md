@@ -127,7 +127,7 @@ Adapter Layer
     ├── GoalTreeAdapter   — goal-tree agent with structured planning
     ├── DLFSAdapter       — decentralised file system (per-user signed drives)
     ├── VaultAdapter      — health vault (thin wrapper over DLFS)
-    ├── SecretAdapter     — secret store operations (set, extract)
+    ├── SecretAdapter     — secret store operations (set, extract; removal via covia:delete s/<name>)
     ├── UCANAdapter       — capability token issuance
     ├── SchedulerAdapter  — deferred grid-op invocation (schedule, cancel, trigger, list)
     └── TestAdapter       — echo, delay, error simulation, chat

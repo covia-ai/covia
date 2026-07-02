@@ -127,11 +127,11 @@ public class ToolPage {
                         div(
                             div(
                                 h5("Input"),
-                                schemaTable(RT.ensureMap(operation.get(Fields.INPUT)))
+                                schemaTable(RT.castMap(operation.get(Fields.INPUT)))
                             ).withStyle("width: 48%; float: left; margin-right: 2%;"),
                             div(
                                 h5("Output"),
-                                schemaTable(RT.ensureMap(operation.get(Fields.OUTPUT)))
+                                schemaTable(RT.castMap(operation.get(Fields.OUTPUT)))
                             ).withStyle("width: 48%; float: left; margin-left: 2%;"),
                             div().withStyle("clear: both;") // Clearfix
                         )
@@ -260,7 +260,7 @@ public class ToolPage {
         }
         
         // Check if it's a JSON Schema with properties
-        AMap<AString, ACell> properties = RT.ensureMap(schema.get(Fields.PROPERTIES));
+        AMap<AString, ACell> properties = RT.castMap(schema.get(Fields.PROPERTIES));
         if (properties == null || properties.isEmpty()) {
             // If no properties, show the schema type
             AString type = RT.ensureString(schema.get(Fields.TYPE));
@@ -282,7 +282,7 @@ public class ToolPage {
             tbody(
                 each(properties, entry -> {
                     AString fieldName = entry.getKey();
-                    AMap<AString, ACell> fieldSchema = RT.ensureMap(entry.getValue());
+                    AMap<AString, ACell> fieldSchema = RT.castMap(entry.getValue());
                     
                     AString type = RT.ensureString(fieldSchema.get(Fields.TYPE));
                     AString description = RT.ensureString(fieldSchema.get(Fields.DESCRIPTION));

@@ -217,7 +217,7 @@ public class VenueHTTP extends Venue {
 			if (code!=200) {
 				throw new ResponseException("getStatus returned code: "+code,response);
 			}
-			return RT.ensureMap(JSON.parse(response.body()));
+			return RT.castMap(JSON.parse(response.body()));
 		});
 	}
 
@@ -759,7 +759,7 @@ public class VenueHTTP extends Venue {
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code == 200) {
-				return RT.ensureMap(JSON.parse(response.body()));
+				return RT.castMap(JSON.parse(response.body()));
 			} else if (code == 404) {
 				return null;
 			} else {

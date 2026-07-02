@@ -181,7 +181,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 			Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 		cursor.updateAndGet(current -> {
 			@SuppressWarnings("unchecked")
-			AMap<AString, AMap<AString, ACell>> m = (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.ensureMap(current);
+			AMap<AString, AMap<AString, ACell>> m = (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.castMap(current);
 			if (m == null) m = Maps.empty();
 			return m.assoc(id, stamped);
 		});
@@ -193,7 +193,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, AMap<AString, ACell>> getUsers() {
-		return (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.ensureMap(cursor.get());
+		return (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.castMap(cursor.get());
 	}
 
 }

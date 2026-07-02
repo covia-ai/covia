@@ -868,6 +868,83 @@ public class CoviaAdapterTest {
 				Maps.of(Fields.PATH, "w/test"), RequestContext.ANONYMOUS));
 	}
 
+	// ========== covia:delete — secrets (s/ is delete-only, #166) ==========
+
+	@Test
+	public void testDeleteOwnSecret() {
+		// Store via secret:set (the only write path into s/) ...
+		engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "doomed-key", Fields.VALUE, Strings.create("sk-123")),
+			ALICE).awaitResult(5000);
+		assertTrue(engine.getVenueState().users().get(ALICE_DID).secrets().exists("doomed-key"),
+			"secret stored before deletion");
+
+		// ... remove via covia:delete s/NAME (whole record)
+		ACell deleteResult = engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "s/doomed-key"), ALICE).awaitResult(5000);
+		assertEquals(Maps.empty(), deleteResult);
+
+		assertFalse(engine.getVenueState().users().get(ALICE_DID).secrets().exists("doomed-key"),
+			"secret removed from the caller's store");
+	}
+
+	@Test
+	public void testSecretDeleteRejectsDeepPath() {
+		// Partial deletion inside an {encrypted, updated} record is never
+		// meaningful — whole records only.
+		Job job = engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "s/some-key/encrypted"), ALICE);
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+	}
+
+	@Test
+	public void testDeleteNonExistentSecretIsIdempotent() {
+		ACell deleteResult = engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "s/never-stored"), ALICE).awaitResult(5000);
+		assertEquals(Maps.empty(), deleteResult);
+	}
+
+	@Test
+	public void testCannotAppendToSecretsNamespace() {
+		// s/ is delete-only on the covia CRUD surface — append stays closed
+		// just like write (records are created exclusively through secret:set).
+		Job job = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "s/my-secret", Fields.VALUE, Strings.create("hack")),
+			ALICE);
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+	}
+
+	@Test
+	public void testSecretDeleteIsPerUser() {
+		// Bare paths address the CALLER's own namespace: Bob deleting s/shared-name
+		// touches Bob's store, never Alice's.
+		engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "shared-name", Fields.VALUE, Strings.create("alice-value")),
+			ALICE).awaitResult(5000);
+
+		engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "s/shared-name"), BOB).awaitResult(5000);
+
+		assertTrue(engine.getVenueState().users().get(ALICE_DID).secrets().exists("shared-name"),
+			"another user's delete must not touch Alice's secret");
+	}
+
+	@Test
+	public void testSecretCanBeRecreatedAfterDelete() {
+		// No tombstone residue: delete then set again yields a normal live record.
+		engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "cycled", Fields.VALUE, Strings.create("v1")),
+			ALICE).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "s/cycled"), ALICE).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "cycled", Fields.VALUE, Strings.create("v2")),
+			ALICE).awaitResult(5000);
+
+		assertTrue(engine.getVenueState().users().get(ALICE_DID).secrets().exists("cycled"),
+			"secret re-created after deletion");
+	}
+
 	// ========== covia:write/read — isolation ==========
 
 	@Test

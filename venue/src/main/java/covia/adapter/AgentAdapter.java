@@ -394,7 +394,7 @@ public class AgentAdapter extends AAdapter {
 			AMap<AString, ACell> defMeta = defAsset.meta();
 
 			// Extract agent config from definition metadata.
-			// NB: use instanceof (not RT.ensureMap) because RT.ensureMap(null) returns
+			// NB: use instanceof (not RT.castMap) because RT.castMap(null) returns
 			// an empty map, which would wrap an empty state.config even when the
 			// definition has no nested agent.config.
 			AString defOp = RT.ensureString(RT.getIn(defMeta, Strings.intern("agent"), Fields.OPERATION));
@@ -811,7 +811,7 @@ public class AgentAdapter extends AAdapter {
 		// Return a lightweight summary. Full state, history, and timeline
 		// are accessible via covia:read path=g/<agentId>/state etc.
 		// NB: stateConfig is only populated by legacy definition-created agents.
-		// Use instanceof (not RT.ensureMap) because RT.ensureMap(null) returns
+		// Use instanceof (not RT.castMap) because RT.castMap(null) returns
 		// an empty map — callers would see a spurious empty stateConfig otherwise.
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> stateConfig =

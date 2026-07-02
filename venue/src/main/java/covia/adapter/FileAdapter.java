@@ -420,7 +420,7 @@ public class FileAdapter extends AAdapter {
 
 		return CompletableFuture.supplyAsync(() -> {
 			try {
-				return dispatch(ctx, subOp, RT.ensureMap(input));
+				return dispatch(ctx, subOp, RT.castMap(input));
 			} catch (Exception e) {
 				throw new RuntimeException(e.getMessage(), e);
 			}

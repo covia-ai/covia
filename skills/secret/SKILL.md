@@ -1,7 +1,7 @@
 ---
 name: secret
 description: Manage secrets on a Covia venue — store API keys and credentials. Use when setting up LLM providers or other integrations that need secrets.
-argument-hint: [set|list] [name]
+argument-hint: [set|list|delete] [name]
 ---
 
 # Secret Management
@@ -29,6 +29,14 @@ covia_list  path=s
 ```
 
 Shows secret names (not values). Values cannot be read back via MCP — they are resolved internally at invocation time.
+
+### `delete <name>` — Remove a secret
+
+```
+covia_delete  path=s/<NAME>
+```
+
+Removes the caller's own secret — whole records only (`s/<NAME>`; deeper paths are rejected). Idempotent: deleting a name that doesn't exist succeeds silently. To rotate a secret, just `set` it again — no delete needed.
 
 ## Common Secrets
 

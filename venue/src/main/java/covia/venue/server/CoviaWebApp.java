@@ -373,9 +373,9 @@ public class CoviaWebApp  {
 					AString metaString = me.getValue();
 					
 					// Parse the metadata string to get the structured metadata
-					AMap<AString, ACell> meta = RT.ensureMap(convex.core.util.JSON.parse(metaString));
+					AMap<AString, ACell> meta = RT.castMap(convex.core.util.JSON.parse(metaString));
 					AMap<AString, ACell> operation = RT.ensureMap(meta.get(Fields.OPERATION));
-					
+
 					if (operation != null) {
 						AString mcpToolName = RT.ensureString(operation.get(Fields.TOOL_NAME));
 						if (mcpToolName != null && toolName.equals(mcpToolName.toString())) {

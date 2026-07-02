@@ -78,7 +78,7 @@ public class AssetAdapter extends AAdapter {
 		ctx.requireCapability(Strings.create(""), Strings.intern("asset/store"));
 		ACell metaCell = RT.getIn(input, Fields.METADATA);
 		// Accept metadata as a JSON object or a JSON string (parsed on the fly).
-		// NB: instanceof check on the parsed value is required because RT.ensureMap(null)
+		// NB: instanceof check on the parsed value is required because RT.castMap(null)
 		// returns an empty map — we need to reject non-object JSON (e.g. "[]", "null").
 		AMap<AString, ACell> metadata;
 		if (metaCell instanceof AMap) {
@@ -129,7 +129,7 @@ public class AssetAdapter extends AAdapter {
 				}
 			} else {
 				// Inject content.sha256 into metadata
-				AMap<AString, ACell> contentMeta = RT.ensureMap(RT.getIn(metadata, Fields.CONTENT));
+				AMap<AString, ACell> contentMeta = RT.castMap(RT.getIn(metadata, Fields.CONTENT));
 				if (contentMeta == null) contentMeta = Maps.empty();
 				contentMeta = contentMeta.assoc(Fields.SHA256, hashHex);
 				metadata = metadata.assoc(Fields.CONTENT, contentMeta);

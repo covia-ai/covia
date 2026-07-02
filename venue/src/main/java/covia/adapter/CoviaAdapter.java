@@ -36,7 +36,6 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Asset;
 import covia.lattice.AgentNamespaceResolver;
-import covia.lattice.LWWWrapperLattice;
 import covia.lattice.NamespaceResolver;
 import covia.lattice.SessionNamespaceResolver;
 import covia.lattice.TempNamespaceResolver;
@@ -72,12 +71,12 @@ import covia.venue.Users;
  *
  * <h3>User namespace structure</h3>
  * <pre>
- *   user-root
- *   ├── g/          agents     (MapLattice → per-agent records)
- *   ├── s/          secrets    (MapLattice → encrypted values)
- *   ├── j/          jobs       (IndexLattice → job records by Blob ID)
- *   ├── w/          workspace  (LWWWrapperLattice → user-writable general-purpose data)
- *   └── o/          operations (LWWWrapperLattice → user-writable operation definitions)
+ *   user-root  (plain navigable JSON under the venue :state region)
+ *   ├── g/          agents     (per-agent records, Blob-keyed Index)
+ *   ├── s/          secrets    (encrypted values)
+ *   ├── j/          jobs       (job records by Blob ID, sorted Index)
+ *   ├── w/          workspace  (user-writable general-purpose data)
+ *   └── o/          operations (user-writable operation definitions)
  * </pre>
  *
  * <p>The {@code w/} and {@code o/} namespaces are user-writable via
@@ -85,11 +84,12 @@ import covia.venue.Users;
  * ({@code g/}, {@code s/}, {@code j/}) are framework-managed and
  * reject direct writes.</p>
  *
- * <p>The user-writable namespaces are stored as whole
- * {@code {updated, data}} values merged as a unit (so deletions survive
- * lattice merges — see {@link covia.lattice.LWWWrapperLattice}). The
- * wrapper is storage shape only: paths address the data inside it, and
- * reads never see the wrapper fields.</p>
+ * <p>All user state lives under the venue {@code :state} region, which merges
+ * whole-value by timestamp and re-stamps on every write (see {@link covia.lattice.Covia}).
+ * Deletions are therefore durable across the propagator's merge-back — the whole
+ * region is replaced by the newer snapshot, not per-key unioned. Writes are a
+ * whole-value read-modify-write on the user's value; structural navigation builds
+ * intermediates by key shape.</p>
  *
  * <p>Virtual namespaces ({@code n/} for agent workspace, {@code t/} for
  * goal-scoped temp) are resolved by registered {@link NamespaceResolver}
@@ -153,6 +153,22 @@ public class CoviaAdapter extends AAdapter {
 
 	/** Namespaces that accept user writes via covia:write and covia:delete. */
 	private static final Set<String> WRITABLE_NAMESPACES = Set.of("w", "o");
+
+	/**
+	 * Namespaces stored as a {@code {updated, data}} container. This is a storage
+	 * shape only (NOT a lattice) — deletion durability comes from the venue-value
+	 * whole-value LWW, not from this wrapper. Paths key transparently into
+	 * {@code data}; {@code updated} is plain per-namespace last-modified metadata
+	 * (real wall-clock, never {@code +1}), and other metadata may live alongside
+	 * it later. Kept partly for backward compatibility with venues persisted while
+	 * these were {@code LWWWrapperLattice}.
+	 */
+	private static final Set<String> WRAPPED_NAMESPACES = Set.of("w", "o", "h");
+
+	/** Wrapper metadata key: per-namespace last-modified wall-clock time. */
+	private static final AString K_UPDATED = Strings.intern("updated");
+	/** Wrapper payload key: the user-visible namespace data. */
+	private static final AString K_DATA = Strings.intern("data");
 
 	/** Registered virtual namespace resolvers, keyed by prefix. */
 	private final Map<String, NamespaceResolver> resolvers = new HashMap<>();
@@ -622,7 +638,10 @@ public class CoviaAdapter extends AAdapter {
 		// container had to be built" — not whether the leaf already had a value.
 		if (!updatePath(baseCursor, keys, (current, from) -> {
 				ACell next = deepSet(current, keys, from, value);
-				built[0] = !parentExisted(current, keys, from);
+				// pathCreated reports building a nested parent below the namespace;
+				// creating the namespace + its direct child (keys.length <= 2) is
+				// not "hierarchy" — so only paths deeper than that can report it.
+				built[0] = keys.length > 2 && !parentExisted(current, keys, from);
 				return next;
 			})) {
 			throw new RuntimeException("Cannot resolve path: " + keys[0] + "/" + keys[1]);
@@ -633,10 +652,13 @@ public class CoviaAdapter extends AAdapter {
 	/**
 	 * Deletes a value at a path in the user's lattice.
 	 *
-	 * <p>Same namespace restrictions as {@link #handleWrite}. For two-segment
-	 * paths, removes the top-level entry. For deeper paths, removes the nested
-	 * key via read-modify-write. Idempotent — deleting a non-existent key
-	 * succeeds silently.</p>
+	 * <p>Same namespace restrictions as {@link #handleWrite}, plus {@code s/}
+	 * (secrets), which is delete-only: records are created exclusively through
+	 * {@code secret:set} (which encrypts), but a caller may remove their own
+	 * secret — whole records only, {@code s/&lt;name&gt;} (#166). For
+	 * two-segment paths, removes the top-level entry. For deeper paths, removes
+	 * the nested key via read-modify-write. Idempotent — deleting a
+	 * non-existent key succeeds silently.</p>
 	 *
 	 * <p>Delete removes only the addressed value; it never prunes the parent
 	 * hierarchy — an emptied parent container is left in place. Success is the
@@ -647,7 +669,7 @@ public class CoviaAdapter extends AAdapter {
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_DELETE);
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
-		requireWriteAccess(ctx, jsonKeys);
+		requireDeleteAccess(ctx, jsonKeys);
 
 		// Check job-scoped virtual namespace (t/)
 		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
@@ -703,7 +725,7 @@ public class CoviaAdapter extends AAdapter {
 		final long[] newSize = {0};
 		if (!updatePath(baseCursor, keys, (current, from) -> {
 				ACell next = deepAppend(current, keys, from, element);
-				built[0] = !parentExisted(current, keys, from);
+				built[0] = keys.length > 2 && !parentExisted(current, keys, from);
 				ACell leaf = deepGet(next, keys, from);
 				newSize[0] = (leaf instanceof AVector) ? ((AVector<?>) leaf).count() : 0;
 				return next;
@@ -787,16 +809,32 @@ public class CoviaAdapter extends AAdapter {
 		if (!isWritableNamespace(jsonKeys)) validateWritablePath(jsonKeys);
 	}
 
+	/** The secrets namespace prefix — delete-only via covia:delete (#166). */
+	private static final String NS_SECRETS = "s";
+
 	/**
-	 * Resolves the first two path segments (namespace + top-level key)
-	 * through the lattice and returns the entry cursor, or null if the
-	 * path does not resolve.
+	 * Delete-side counterpart of {@link #requireWriteAccess}. Accepts everything
+	 * the write side accepts, plus {@code s/} (secrets), which is delete-only:
+	 * secret records are created exclusively through {@code secret:set} (which
+	 * encrypts), so {@code covia:write}/{@code covia:append} keep rejecting
+	 * {@code s/} — but a caller may remove their own secret. A secret delete
+	 * must address a whole record ({@code s/&lt;name&gt;}): partial deletion
+	 * inside an {@code {encrypted, updated}} record is never meaningful and
+	 * would corrupt its shape. The capability side is pinned by the caller
+	 * ({@code crud/delete} on the exact path via {@link #requireCap}).
+	 *
+	 * @throws RuntimeException if the caller lacks delete access
 	 */
-	private static ALatticeCursor<ACell> resolveEntryOrNull(ALatticeCursor<ACell> userCursor, ACell[] jsonKeys) {
-		ACell[] nsAndKey = new ACell[] { jsonKeys[0], jsonKeys[1] };
-		ACell[] resolved = userCursor.getLattice().resolvePath(nsAndKey);
-		if (resolved == null) return null;
-		return userCursor.path(resolved);
+	private void requireDeleteAccess(RequestContext ctx, ACell[] jsonKeys) {
+		if (jsonKeys.length > 0 && NS_SECRETS.equals(jsonKeys[0].toString())
+				&& resolvers.get(NS_SECRETS) == null) {
+			if (jsonKeys.length != 2) {
+				throw new RuntimeException(
+					"Secret deletion must address a whole record, e.g. 's/MY_KEY'");
+			}
+			return;
+		}
+		requireWriteAccess(ctx, jsonKeys);
 	}
 
 	/**
@@ -810,49 +848,53 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * Applies an update to the value addressed by {@code keys}, using the
-	 * write protocol the namespace's lattice requires:
+	 * Applies an update to the value addressed by {@code keys} via a read-modify-
+	 * write on the navigation root ({@code baseCursor}). The write lands through
+	 * the venue {@code :value} stamp-on-write boundary (which re-stamps the whole
+	 * value), and whole-value LWW makes the result — including any deletion —
+	 * durable across the propagator's merge-back. Structural navigation builds
+	 * missing intermediates by key shape.
 	 *
-	 * <ul>
-	 *   <li><b>Whole-value namespaces</b> ({@code w/}, {@code o/}, {@code h/}
-	 *       — {@link LWWWrapperLattice}): the {@code {updated, data}} wrapper
-	 *       is replaced as a unit with a fresh stamp, so the result dominates
-	 *       any earlier snapshot in LWW merges. This is what makes deletes
-	 *       durable across the propagator's merge-back. The update navigates
-	 *       the unwrapped data (fromIndex 1).</li>
-	 *   <li><b>Entry-cursor namespaces</b> (resolver-rewritten paths into
-	 *       {@code g/} etc.): read-modify-write on the entry cursor at
-	 *       namespace/key (fromIndex 2).</li>
-	 * </ul>
+	 * <p>For a {@link #WRAPPED_NAMESPACES wrapped namespace} the stored value is a
+	 * {@code {updated, data}} container: the update runs against the unwrapped
+	 * {@code data} (path index 1) and the namespace is re-wrapped with fresh
+	 * {@code updated} metadata — transparent to callers, who address inside
+	 * {@code data}.
 	 *
-	 * @return true if the path was addressable, false if entry resolution failed
+	 * @return {@code true} (the navigation root is always addressable; a genuine
+	 *         shape conflict throws a descriptive error from {@code deepSet})
 	 */
 	private static boolean updatePath(ALatticeCursor<ACell> baseCursor, ACell[] keys, PathUpdate update) {
-		ALattice<?> lattice = baseCursor.getLattice();
-		ACell nsKey = lattice.resolveKey(keys[0]);
-		if (nsKey != null && lattice.path(nsKey) instanceof LWWWrapperLattice) {
-			ALatticeCursor<ACell> ns = baseCursor.path(new ACell[] { nsKey });
-			ns.updateAndGet(current -> {
-				// Strictly-increasing stamp (same rule as Scheduler.nextStamp):
-				// each write strictly dominates the value it replaces, so the
-				// namespace's local lineage is totally ordered and never
-				// depends on tie-breaks. Equal-stamp ties are reserved for
-				// genuinely concurrent values, where LWW prefers "own" — the
-				// side applying a local edit. (Also shields against released
-				// convex 0.8.5, whose fork-sync slow path merged with the
-				// local edit as "other"; fixed on convex develop.)
-				// Computed inside the lambda so CAS retries re-derive it.
-				long stamp = Math.max(Utils.getCurrentTimestamp(),
-					LWWWrapperLattice.timestamp(current) + 1);
-				return LWWWrapperLattice.wrap(stamp,
-					update.apply(LWWWrapperLattice.unwrap(current), 1));
-			});
+		if (keys.length > 0 && isWrappedNamespace(keys[0])) {
+			// Translate w/foo -> w/data/foo: navigate THROUGH the namespace's
+			// StampingLattice boundary into `data`, then apply the normal deep op
+			// there. Going through the boundary (rather than assoc-ing at the
+			// boundary key) is what (1) lets the StampedCursor stamp `updated`
+			// automatically and (2) actually propagates the write — a direct assoc
+			// at a write-boundary key does not reach storage. Content lives under
+			// `data`; callers never address it (path applied from index 1).
+			baseCursor.path(new ACell[] { keys[0], K_DATA }).updateAndGet(dataValue ->
+				update.apply(dataValue, 1));
 			return true;
 		}
-		ALatticeCursor<ACell> entry = resolveEntryOrNull(baseCursor, keys);
-		if (entry == null) return false;
-		entry.updateAndGet(current -> update.apply(current, 2));
+		baseCursor.updateAndGet(current -> update.apply(current, 0));
 		return true;
+	}
+
+	/** True if {@code key} names a {@code {updated, data}}-wrapped namespace. */
+	private static boolean isWrappedNamespace(ACell key) {
+		return (key != null) && WRAPPED_NAMESPACES.contains(key.toString());
+	}
+
+	/** True if {@code v} has the {@code {updated, data}} storage-wrapper shape. */
+	private static boolean isWrapper(ACell v) {
+		return (v instanceof AMap<?,?> m) && m.containsKey(K_DATA) && m.containsKey(K_UPDATED);
+	}
+
+	/** The user-visible data inside a namespace value (the wrapper is transparent). */
+	@SuppressWarnings("unchecked")
+	private static ACell unwrap(ACell nsValue) {
+		return isWrapper(nsValue) ? ((AMap<AString, ACell>) nsValue).get(K_DATA) : nsValue;
 	}
 
 	// ========== Type-aware deep navigation ==========
@@ -864,50 +906,19 @@ public class CoviaAdapter extends AAdapter {
 	//   - other:    navigation fails (null for reads, error for writes)
 
 	/**
-	 * Reads a value at a path, resolving through the lattice then navigating
-	 * into the value with type-aware deep navigation. This handles vector
-	 * indexing (e.g. {@code "w/events/0"}) that pure lattice resolution cannot.
+	 * Reads a value at a path by navigating into the navigation root's value with
+	 * type-aware deep navigation — handles maps, vector indices (e.g.
+	 * {@code "w/events/0"}), and Index keys. For a {@link #WRAPPED_NAMESPACES
+	 * wrapped namespace} the {@code {updated, data}} container is unwrapped
+	 * transparently, so callers see only the namespace's data.
 	 */
 	public static ACell readPath(ALatticeCursor<ACell> cursor, ACell[] jsonKeys) {
-		ALattice<?> lattice = cursor.getLattice();
-		// Try full lattice resolution first (works for pure-map paths like
-		// g/agent/state/counter where every level is a map).
-		ACell[] resolved = lattice.resolvePath(jsonKeys);
-		if (resolved != null) {
-			ACell value = unwrapAt(lattice, resolved, cursor.path(resolved).get());
-			if (value != null) return value;
-			// Fall through — cursor may have returned null because it cannot
-			// navigate into a vector with a string key. Try prefix-based
-			// resolution with type-aware deepGet.
+		ACell root = cursor.get();
+		if (jsonKeys.length > 0 && isWrappedNamespace(jsonKeys[0])) {
+			ACell data = unwrap(deepGet(root, new ACell[] { jsonKeys[0] }, 0));
+			return (jsonKeys.length == 1) ? data : deepGet(data, jsonKeys, 1);
 		}
-
-		// Resolve progressively shorter prefixes, then navigate the
-		// remainder with type-aware deepGet (handles vector indices, and
-		// wrapped namespaces whose internals are opaque to the lattice).
-		for (int depth = jsonKeys.length - 1; depth >= 1; depth--) {
-			ACell[] prefix = new ACell[depth];
-			System.arraycopy(jsonKeys, 0, prefix, 0, depth);
-			ACell[] resolvedPrefix = lattice.resolvePath(prefix);
-			if (resolvedPrefix != null) {
-				ACell base = unwrapAt(lattice, resolvedPrefix, cursor.path(resolvedPrefix).get());
-				if (base != null) return deepGet(base, jsonKeys, depth);
-				// base is null — cursor may have failed on a vector index.
-				// Continue to shorter prefix where deepGet can handle it.
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * Unwraps a value read at a resolved path when the lattice node at that
-	 * path is a whole-value wrapped namespace (w/, o/, h/). The
-	 * {@code {updated, data}} wrapper is storage shape, not data — readers
-	 * see only the namespace's data map.
-	 */
-	private static ACell unwrapAt(ALattice<?> lattice, ACell[] resolvedPath, ACell value) {
-		if (value == null) return null;
-		return (lattice.path(resolvedPath) instanceof LWWWrapperLattice)
-			? LWWWrapperLattice.unwrap(value) : value;
+		return deepGet(root, jsonKeys, 0);
 	}
 
 	/**

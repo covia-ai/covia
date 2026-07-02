@@ -201,7 +201,8 @@ public class Engine {
 		this.persistHandler = (persistHandler != null) ? persistHandler : PersistenceHandler.NOOP;
 		this.lastFlushMillis = System.currentTimeMillis();
 		// Set signing context so SignedCursor can sign writes through OwnerLattice
-		LatticeContext ctx = LatticeContext.create(null, this.keyPair);
+		LatticeContext ctx = LatticeContext.create(
+			convex.core.data.prim.CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), this.keyPair);
 		this.lattice.withContext(ctx);
 		initialiseFromCursor();
 		this.jobManager = new JobManager(this);
@@ -509,8 +510,8 @@ public class Engine {
 		// entries once and dispatch by bare hex hash for every write.
 		String writeRef = lookupCoviaWriteRef();
 		if (writeRef == null) {
-			log.warn("Cannot materialise /v/ops — covia:write hash not available");
-			return;
+			throw new IllegalStateException(
+				"Cannot materialise /v/ops — covia:write hash not available");
 		}
 		for (var adapter : adapters.values()) {
 			if (adapter == null) continue;
@@ -527,8 +528,11 @@ public class Engine {
 							Fields.VALUE, meta),
 						ctx).awaitResult(5000);
 				} catch (Exception e) {
-					log.warn("Failed to register {} at /{}: {}",
-						adapter.getName(), fullPath, e.getMessage());
+					// Fail loudly — a venue that cannot materialise its own ops
+					// catalog is broken; swallowing this masks the real cause as a
+					// downstream "Cannot resolve operation" cascade.
+					throw new RuntimeException(
+						"Failed to materialise " + adapter.getName() + " at /" + fullPath, e);
 				}
 			}
 		}
@@ -815,7 +819,7 @@ public class Engine {
 	public AMap<AString,ACell> getMetaValue(Hash assetID) {
 		AVector<?> arec=venueState.assets().getRecord(assetID);
 		if (arec==null) return null;
-		// instanceof — RT.ensureMap(null) returns an empty map, which would
+		// instanceof — RT.castMap(null) returns an empty map, which would
 		// violate the "null if not valid metadata" contract.
 		ACell meta = arec.get(AssetStore.POS_META);
 		return (meta instanceof AMap) ? (AMap<AString, ACell>) meta : null;

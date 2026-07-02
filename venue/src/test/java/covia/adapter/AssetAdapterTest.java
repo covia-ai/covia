@@ -135,7 +135,7 @@ public class AssetAdapterTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(result, Strings.create("exists")));
 
 		// Consistent with covia:read — value contains the metadata
-		AMap<AString, ACell> returnedMeta = RT.ensureMap(RT.getIn(result, Fields.VALUE));
+		AMap<AString, ACell> returnedMeta = RT.castMap(RT.getIn(result, Fields.VALUE));
 		assertNotNull(returnedMeta);
 		assertEquals(Strings.create("Retrievable Doc"), returnedMeta.get(Fields.NAME));
 		assertEquals(Strings.create("document"), returnedMeta.get(Fields.TYPE));
@@ -226,7 +226,7 @@ public class AssetAdapterTest {
 		assertNotNull(items);
 		assertEquals(1, items.count(), "Should find exactly one invoice");
 
-		AMap<AString, ACell> item = RT.ensureMap(items.get(0));
+		AMap<AString, ACell> item = RT.castMap(items.get(0));
 		assertEquals(Strings.create("Test Invoice"), item.get(Fields.NAME));
 		assertEquals(Strings.create("invoice"), item.get(Fields.TYPE));
 	}
@@ -380,7 +380,7 @@ public class AssetAdapterTest {
 			Maps.of(Fields.ID, id), RequestContext.of(ALICE_DID));
 		ACell getResult = getJob.awaitResult(5000);
 
-		AMap<AString, ACell> meta = RT.ensureMap(RT.getIn(getResult, Fields.VALUE));
+		AMap<AString, ACell> meta = RT.castMap(RT.getIn(getResult, Fields.VALUE));
 		AString sha = RT.ensureString(RT.getIn(meta, Fields.CONTENT, Fields.SHA256));
 		assertNotNull(sha, "content.sha256 should be auto-injected into metadata");
 		assertTrue(sha.count() > 0);
@@ -460,7 +460,7 @@ public class AssetAdapterTest {
 		AVector<?> items = (AVector<?>) RT.getIn(result, Fields.ITEMS);
 		assertEquals(1, items.count());
 
-		AMap<AString, ACell> item = RT.ensureMap(items.get(0));
+		AMap<AString, ACell> item = RT.castMap(items.get(0));
 		assertNotNull(item.get(Fields.ID), "Item should have id");
 		assertEquals(Strings.create("Structured Item"), item.get(Fields.NAME));
 		assertEquals(Strings.create("structure-test"), item.get(Fields.TYPE));
@@ -553,7 +553,7 @@ public class AssetAdapterTest {
 			Maps.of(Fields.ID, id), RequestContext.of(ALICE_DID));
 		ACell result = getJob.awaitResult(5000);
 
-		AMap<AString, ACell> meta = RT.ensureMap(RT.getIn(result, Fields.VALUE));
+		AMap<AString, ACell> meta = RT.castMap(RT.getIn(result, Fields.VALUE));
 		assertEquals(Strings.create("gpt-4o"),
 			RT.getIn(meta, Strings.create("agent"), Fields.CONFIG, Strings.create("model")));
 		assertEquals(Strings.create("TestSchema"),
@@ -596,7 +596,7 @@ public class AssetAdapterTest {
 			Maps.of(Fields.AGENT_ID, "OverrideAgent"), RequestContext.of(ALICE_DID));
 		ACell queryResult = queryJob.awaitResult(5000);
 
-		AMap<AString, ACell> config = RT.ensureMap(RT.getIn(queryResult, Fields.CONFIG));
+		AMap<AString, ACell> config = RT.castMap(RT.getIn(queryResult, Fields.CONFIG));
 		assertEquals(Strings.create("v/test/ops/echo"), config.get(Fields.OPERATION),
 			"Explicit config should override definition");
 	}
@@ -638,13 +638,13 @@ public class AssetAdapterTest {
 		ACell queryResult = queryJob.awaitResult(5000);
 
 		// Config should have the operation and the definition hash
-		AMap<AString, ACell> config = RT.ensureMap(RT.getIn(queryResult, Fields.CONFIG));
+		AMap<AString, ACell> config = RT.castMap(RT.getIn(queryResult, Fields.CONFIG));
 		assertNotNull(config);
 		assertEquals(Strings.create("v/ops/llmagent/chat"), config.get(Fields.OPERATION));
 		assertEquals(defHash, config.get(Fields.DEFINITION));
 
 		// stateConfig should have the LLM config from definition
-		AMap<AString, ACell> stateConfig = RT.ensureMap(RT.getIn(queryResult, Strings.create("stateConfig")));
+		AMap<AString, ACell> stateConfig = RT.castMap(RT.getIn(queryResult, Strings.create("stateConfig")));
 		assertNotNull(stateConfig, "stateConfig should be populated from definition");
 		assertEquals(Strings.create("gpt-4o"), stateConfig.get(Strings.create("model")));
 	}
@@ -701,7 +701,7 @@ public class AssetAdapterTest {
 		Job getJob = engine.jobs().invokeOperation("v/ops/asset/get", Maps.of(Fields.ID, id), RequestContext.of(ALICE_DID));
 		ACell getResult = getJob.awaitResult(5000);
 
-		AMap<AString, ACell> returnedMeta = RT.ensureMap(RT.getIn(getResult, Fields.VALUE));
+		AMap<AString, ACell> returnedMeta = RT.castMap(RT.getIn(getResult, Fields.VALUE));
 		assertEquals(Strings.create("agent-definition"), returnedMeta.get(Fields.TYPE));
 		assertEquals(Strings.create("v/ops/llmagent/chat"),
 			RT.getIn(returnedMeta, Strings.create("agent"), Fields.OPERATION));
@@ -805,7 +805,7 @@ public class AssetAdapterTest {
 			Maps.of(Fields.ID, returnedHash), RequestContext.of(ALICE_DID));
 		ACell getResult = getJob.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(getResult, Strings.create("exists")));
-		AMap<AString, ACell> meta = RT.ensureMap(RT.getIn(getResult, Fields.VALUE));
+		AMap<AString, ACell> meta = RT.castMap(RT.getIn(getResult, Fields.VALUE));
 		assertNotNull(meta);
 		// json:merge metadata has an "operation" field
 		assertNotNull(meta.get(Fields.OPERATION),
@@ -835,7 +835,7 @@ public class AssetAdapterTest {
 		// The pinned asset should hold the original value as its metadata
 		Job getJob = engine.jobs().invokeOperation("v/ops/asset/get",
 			Maps.of(Fields.ID, hash), RequestContext.of(ALICE_DID));
-		AMap<AString, ACell> meta = RT.ensureMap(RT.getIn(getJob.awaitResult(5000), Fields.VALUE));
+		AMap<AString, ACell> meta = RT.castMap(RT.getIn(getJob.awaitResult(5000), Fields.VALUE));
 		assertEquals(Strings.create("My Note"), meta.get(Fields.NAME));
 		assertEquals(Strings.create("the quick brown fox"), meta.get(Strings.create("body")));
 	}
@@ -892,7 +892,7 @@ public class AssetAdapterTest {
 		ACell result = job.awaitResult(5000);
 
 		assertEquals(CVMBool.TRUE, RT.getIn(result, Strings.create("exists")));
-		AMap<AString, ACell> meta = RT.ensureMap(RT.getIn(result, Fields.VALUE));
+		AMap<AString, ACell> meta = RT.castMap(RT.getIn(result, Fields.VALUE));
 		assertNotNull(meta);
 		// json:merge has an "operation" field
 		assertNotNull(meta.get(Fields.OPERATION));
@@ -928,7 +928,7 @@ public class AssetAdapterTest {
 		ACell result = job.awaitResult(5000);
 
 		assertEquals(CVMBool.TRUE, RT.getIn(result, Strings.create("exists")));
-		AMap<AString, ACell> meta = RT.ensureMap(RT.getIn(result, Fields.VALUE));
+		AMap<AString, ACell> meta = RT.castMap(RT.getIn(result, Fields.VALUE));
 		assertNotNull(meta);
 		assertNotNull(meta.get(Fields.OPERATION));
 	}
