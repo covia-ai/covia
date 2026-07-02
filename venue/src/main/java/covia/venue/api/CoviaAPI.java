@@ -478,10 +478,20 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 	}
 	
-	@OpenApi(path = ROUTE + "invoke", 
-			methods = HttpMethod.POST, 
+	@OpenApi(path = ROUTE + "invoke",
+			methods = HttpMethod.POST,
 			tags = { "Covia"},
-			summary = "Invoke a Covia operation", 
+			summary = "Invoke a Covia operation",
+			description = "Invokes an operation, creating a Job that tracks its execution. "
+					+ "EVERY invocation is asynchronous by default: the response is the job "
+					+ "record (201, with a Location header for the job), which the caller polls "
+					+ "via GET /jobs/{id} (or subscribes via /jobs/{id}/sse) until it reaches a "
+					+ "terminal status carrying the output. Pass wait=true (query parameter or "
+					+ "body field) to block until the job completes — up to 120s — and receive "
+					+ "the finished record directly (200). This contract applies uniformly, "
+					+ "including to meta-operations: e.g. grid:job-result itself returns a local "
+					+ "job that completes with the remote job's result (it supports an op-level "
+					+ "timeout input for bounded waits).",
 			requestBody = @OpenApiRequestBody(
 					description = "Invoke request",
 					content= @OpenApiContent(
@@ -489,7 +499,7 @@ public class CoviaAPI extends ACoviaAPI {
 							from = InvokeRequest.class,
 							exampleObjects = {
 								@OpenApiExampleProperty(name = "operation", value = "random"),
-								@OpenApiExampleProperty(name = "input", 
+								@OpenApiExampleProperty(name = "input",
 										objects = {
 												@OpenApiExampleProperty(name = "length", value = "8")
 										})
@@ -498,13 +508,20 @@ public class CoviaAPI extends ACoviaAPI {
 			operationId = CoviaAPI.INVOKE,
 			responses = {
 					@OpenApiResponse(
-							status = "201", 
-							description = "Operation invoked, with a job status record returned. Job ID can be any string, but by convention 32 characters hex.", 
+							status = "201",
+							description = "Operation invoked asynchronously: a job status record is returned and the Location header names the job to poll. Job ID can be any string, but by convention 32 characters hex.",
 							content = {
 								@OpenApiContent(
-										type = "application/json", 
+										type = "application/json",
+										from = InvokeResult.class) }),
+					@OpenApiResponse(
+							status = "200",
+							description = "With wait=true: the job completed within the wait window and the finished record (including output) is returned directly.",
+							content = {
+								@OpenApiContent(
+										type = "application/json",
 										from = InvokeResult.class) })
-					})	
+					})
 	protected void invokeOperation(Context ctx) {
 		ACell req=JSON.parseJSON5(ctx.body());
 

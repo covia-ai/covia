@@ -203,7 +203,7 @@ Base path: `/api/v1/`
 | `/assets/{id}` | GET | Retrieve asset metadata |
 | `/assets` | POST | Register new asset |
 | `/assets/{id}/content` | GET/PUT | Asset binary content |
-| `/invoke` | POST | Execute an operation |
+| `/invoke` | POST | Execute an operation — async by default (201 + job record to poll); `?wait=true` blocks up to 120s and returns the finished record (200) |
 | `/jobs/{id}` | GET | Job status |
 | `/jobs/{id}/sse` | GET | Server-sent events for job updates |
 | `/.well-known/did.json` | GET | Venue DID document |
