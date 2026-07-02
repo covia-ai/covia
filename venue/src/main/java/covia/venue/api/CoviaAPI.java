@@ -486,12 +486,15 @@ public class CoviaAPI extends ACoviaAPI {
 					+ "EVERY invocation is asynchronous by default: the response is the job "
 					+ "record (201, with a Location header for the job), which the caller polls "
 					+ "via GET /jobs/{id} (or subscribes via /jobs/{id}/sse) until it reaches a "
-					+ "terminal status carrying the output. Pass wait=true (query parameter or "
-					+ "body field) to block until the job completes — up to 120s — and receive "
-					+ "the finished record directly (200). This contract applies uniformly, "
-					+ "including to meta-operations: e.g. grid:job-result itself returns a local "
-					+ "job that completes with the remote job's result (it supports an op-level "
-					+ "timeout input for bounded waits).",
+					+ "terminal status carrying the output. Pass wait (query parameter or body "
+					+ "field) for a synchronous response: true waits up to the 120s cap, an "
+					+ "integer waits up to that many milliseconds (clamped to the cap). If the "
+					+ "job finishes within the window the finished record is returned directly "
+					+ "(200); otherwise the current record is returned (201) and the caller "
+					+ "continues polling. This contract applies uniformly, including to "
+					+ "meta-operations: e.g. grid:job-result itself returns a local job that "
+					+ "completes with the remote job's result (it supports an op-level timeout "
+					+ "input for bounded waits).",
 			requestBody = @OpenApiRequestBody(
 					description = "Invoke request",
 					content= @OpenApiContent(
@@ -548,23 +551,20 @@ public class CoviaAPI extends ACoviaAPI {
 				return;
 			}
 
-			// Check for wait: query param ?wait=true or body field "wait"
-			String waitParam = ctx.queryParam("wait");
-			ACell waitField = RT.getIn(req, "wait");
-			boolean shouldWait = "true".equals(waitParam)
-				|| convex.core.data.prim.CVMBool.TRUE.equals(waitField)
-				|| Strings.create("true").equals(waitField);
+			// Wait window: `wait` (query param or body field) is boolean or an
+			// integer number of milliseconds — true = the full 120s window,
+			// an integer = that many ms (clamped to the cap). See parseWaitMs.
+			long waitMs = parseWaitMs(ctx.queryParam("wait"), RT.getIn(req, "wait"));
 
-			if (shouldWait) {
-				// Block until job completes (120s timeout)
+			if (waitMs > 0) {
 				try {
-					job.awaitResult(120_000);
+					job.awaitResult(waitMs);
 				} catch (Exception e) {
 					// Timeout or failure — return current state
 				}
 			}
 
-			this.buildResult(ctx, shouldWait && job.isComplete() ? 200 : 201, job.getData());
+			this.buildResult(ctx, waitMs > 0 && job.isComplete() ? 200 : 201, job.getData());
 			ctx.header("Location",ROUTE+"jobs/"+job.getID().toHexString());
 		} catch (AuthException e) {
 			this.buildError(ctx, 403, e.getMessage());
@@ -576,11 +576,55 @@ public class CoviaAPI extends ACoviaAPI {
 			log.warn("Unexpected exception handling client invoke",e);
 		}
 	}
-	
-	@OpenApi(path = ROUTE + "jobs/{id}", 
-			methods = HttpMethod.GET, 
+
+	/** Max wait window for a synchronous invoke (ms). A waiting request holds a
+	 *  server thread, so the cap is a resource guard, not a convenience — clients
+	 *  wanting longer waits poll {@code /jobs/{id}} or subscribe via SSE. */
+	static final long MAX_WAIT_MS = 120_000;
+
+	/**
+	 * Parses the invoke {@code wait} parameter, following the same convention as
+	 * the op-level {@code wait} on {@code agent:request}/{@code agent:trigger}:
+	 * absent/false = 0 (asynchronous, the default); boolean {@code true} = the
+	 * full {@link #MAX_WAIT_MS} window; an integer = that many milliseconds,
+	 * clamped to the cap. Accepted from the query string ({@code ?wait=true},
+	 * {@code ?wait=5000}) or the request body ({@code "wait": true},
+	 * {@code "wait": 5000}, numeric strings tolerated). Unparseable values are
+	 * treated as absent.
+	 *
+	 * @param queryParam Raw {@code wait} query parameter (may be null)
+	 * @param bodyField {@code wait} field from the request body (may be null)
+	 * @return Wait window in ms; 0 for the default asynchronous behaviour
+	 */
+	static long parseWaitMs(String queryParam, ACell bodyField) {
+		if (queryParam != null) {
+			String q = queryParam.trim();
+			if ("true".equals(q)) return MAX_WAIT_MS;
+			try {
+				return clampWait(Long.parseLong(q));
+			} catch (NumberFormatException ignored) { /* not boolean or int — try body */ }
+		}
+		if (convex.core.data.prim.CVMBool.TRUE.equals(bodyField)) return MAX_WAIT_MS;
+		if (bodyField instanceof convex.core.data.prim.CVMLong l) return clampWait(l.longValue());
+		if (bodyField instanceof AString s) {
+			String str = s.toString().trim();
+			if ("true".equals(str)) return MAX_WAIT_MS;
+			try {
+				return clampWait(Long.parseLong(str));
+			} catch (NumberFormatException ignored) { /* unparseable — asynchronous */ }
+		}
+		return 0;
+	}
+
+	private static long clampWait(long ms) {
+		if (ms <= 0) return 0;
+		return Math.min(ms, MAX_WAIT_MS);
+	}
+
+	@OpenApi(path = ROUTE + "jobs/{id}",
+			methods = HttpMethod.GET,
 			tags = { "Covia"},
-			summary = "Get the current Covia job status.", 
+			summary = "Get the current Covia job status.",
 			operationId = CoviaAPI.GET_JOB,
 			pathParams = {
 					@OpenApiParam(
