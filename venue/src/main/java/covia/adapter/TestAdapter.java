@@ -70,6 +70,8 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.completedFuture(handleLlm(input));
                 case "toolllm":
                     return CompletableFuture.completedFuture(handleToolLlm(input));
+                case "badargsllm":
+                    return CompletableFuture.completedFuture(handleBadArgsLlm(input));
                 case "loopllm":
                     return CompletableFuture.completedFuture(handleLoopLlm(input));
                 case "taskllm":
@@ -116,6 +118,7 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("capturectx",   BASE+"capturectxop.json");
 			installTestAsset("llm",          BASE+"testllm.json");
 			installTestAsset("toolllm",      BASE+"testtoolllm.json");
+			installTestAsset("badargsllm",   BASE+"testbadargsllm.json");
 			installTestAsset("loopllm",      BASE+"testloopllm.json");
 			installTestAsset("taskllm",      BASE+"testtaskllm.json");
 			installTestAsset("workspacellm", BASE+"testworkspacellm.json");
@@ -344,6 +347,36 @@ public class TestAdapter extends AAdapter {
         return Maps.of("role", Strings.create("assistant"), "content", Strings.create("(no messages)"));
     }
     
+    /**
+     * Test LLM that emits a tool call with MALFORMED (non-JSON) arguments on
+     * its first turn, then echoes the tool result content. Exercises the wire
+     * boundary rule (#89): broken tool arguments must produce a visible tool
+     * error the LLM can react to, never a silent empty-map invocation.
+     */
+    private ACell handleBadArgsLlm(ACell input) {
+        ACell messagesCell = RT.getIn(input, "messages");
+        if (messagesCell instanceof AVector) {
+            @SuppressWarnings("unchecked")
+            AVector<ACell> messages = (AVector<ACell>) messagesCell;
+            for (long i = 0; i < messages.count(); i++) {
+                AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+                if (role != null && "tool".equals(role.toString())) {
+                    AString toolContent = RT.ensureString(RT.getIn(messages.get(i), "content"));
+                    return Maps.of(
+                        "role", Strings.create("assistant"),
+                        "content", Strings.create("Tool said: " + toolContent));
+                }
+            }
+        }
+        return Maps.of(
+            "role", Strings.create("assistant"),
+            "toolCalls", Vectors.of(Maps.of(
+                "id", Strings.create("call_bad"),
+                "name", Strings.create("v/test/ops/echo"),
+                "arguments", Strings.create("not json {{{")
+            )));
+    }
+
     /**
      * Test LLM that ALWAYS requests a tool call — never returns text and never
      * completes a task — so the agent tool-call loop runs to MAX_TOOL_ITERATIONS.

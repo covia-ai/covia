@@ -443,26 +443,30 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 				ACell tc = toolCalls.get(i);
 				AString id = RT.ensureString(RT.getIn(tc, K_ID));
 				AString name = RT.ensureString(RT.getIn(tc, K_NAME));
-				AString arguments = RT.ensureString(RT.getIn(tc, K_ARGUMENTS));
 
-				// Parse arguments
-				ACell toolInput;
+				// Unwrap tool arguments at the LLM wire boundary (the one
+				// tolerant parse). Broken arguments fail THIS tool call with a
+				// visible error the LLM can correct on its next turn — never a
+				// silent Maps.empty() substitution (#89). Structured (non-string)
+				// arguments pass through unchanged.
+				ACell toolInput = null;
+				ACell toolResult = null;
 				try {
-					toolInput = (arguments != null)
-						? convex.core.util.JSON.parse(arguments.toString())
-						: Maps.empty();
-				} catch (Exception e) {
-					toolInput = Maps.empty();
+					toolInput = parseToolArguments(RT.getIn(tc, K_ARGUMENTS));
+				} catch (IllegalArgumentException e) {
+					toolResult = Strings.create("Error: " + e.getMessage());
+					log.warn("Tool call {} has malformed arguments: {}", name, e.getMessage());
 				}
 
 				// Execute the tool — built-in or grid dispatch
-				ACell toolResult;
-				try {
-					String toolName = (name != null) ? name.toString() : "";
-					toolResult = executeToolCall(toolName, toolInput, ctx, toolCtx);
-				} catch (Exception e) {
-					toolResult = Strings.create("Error: " + e.getMessage());
-					log.warn("Tool execution failed: {} — {}", name, e.getMessage());
+				if (toolResult == null) {
+					try {
+						String toolName = (name != null) ? name.toString() : "";
+						toolResult = executeToolCall(toolName, toolInput, ctx, toolCtx);
+					} catch (Exception e) {
+						toolResult = Strings.create("Error: " + e.getMessage());
+						log.warn("Tool execution failed: {} — {}", name, e.getMessage());
+					}
 				}
 
 				// Append tool result message via the shared base helper

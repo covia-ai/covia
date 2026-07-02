@@ -77,48 +77,53 @@ public class AbstractLLMAdapterTest {
 		assertEquals(0, calls.count());
 	}
 
-	// ========== ensureParsedInput ==========
+	// ========== parseToolArguments — the LLM wire boundary (#89) ==========
 
 	@Test
-	public void testEnsureParsedInputNull() {
-		ACell result = AbstractLLMAdapter.ensureParsedInput(null);
-		assertNotNull(result);
-		// Should return empty map
+	public void testParseToolArgumentsAbsent() {
+		// Absent arguments = a no-arg tool call: empty map.
+		ACell result = AbstractLLMAdapter.parseToolArguments(null);
 		assertTrue(result instanceof AMap);
 		assertEquals(0, ((AMap<?, ?>) result).count());
+		assertEquals(result, AbstractLLMAdapter.parseToolArguments(Strings.create("  ")));
 	}
 
 	@Test
-	public void testEnsureParsedInputMap() {
+	public void testParseToolArgumentsStructuredPassThrough() {
+		// Providers that deliver arguments already structured (e.g. Anthropic
+		// input objects) pass through untouched — no re-parse.
 		AMap<AString, ACell> map = Maps.of(Strings.create("key"), Strings.create("value"));
-		ACell result = AbstractLLMAdapter.ensureParsedInput(map);
-		assertSame(map, result); // Should pass through unchanged
-	}
-
-	@Test
-	public void testEnsureParsedInputJsonString() {
-		AString json = Strings.create("{\"key\":\"value\"}");
-		ACell result = AbstractLLMAdapter.ensureParsedInput(json);
-		// Should parse into a map
-		assertTrue(result instanceof AMap);
-		AString val = RT.ensureString(RT.getIn(result, "key"));
-		assertNotNull(val);
-		assertEquals("value", val.toString());
-	}
-
-	@Test
-	public void testEnsureParsedInputNonJsonString() {
-		AString plain = Strings.create("not json");
-		ACell result = AbstractLLMAdapter.ensureParsedInput(plain);
-		// Should return as-is (not parseable)
-		assertSame(plain, result);
-	}
-
-	@Test
-	public void testEnsureParsedInputVector() {
+		assertSame(map, AbstractLLMAdapter.parseToolArguments(map));
 		AVector<ACell> vec = Vectors.of(Strings.create("a"));
-		ACell result = AbstractLLMAdapter.ensureParsedInput(vec);
-		assertSame(vec, result); // Vectors pass through unchanged
+		assertSame(vec, AbstractLLMAdapter.parseToolArguments(vec));
+	}
+
+	@Test
+	public void testParseToolArgumentsJsonString() {
+		// The spec wire format: arguments as a JSON-encoded string.
+		ACell result = AbstractLLMAdapter.parseToolArguments(Strings.create("{\"key\":\"value\"}"));
+		assertTrue(result instanceof AMap);
+		assertEquals("value", RT.ensureString(RT.getIn(result, "key")).toString());
+	}
+
+	@Test
+	public void testParseToolArgumentsDoubleEncoded() {
+		// LLM generosity: a double-stringified object gets one more pass —
+		// the failure shape from the Bob/Charlie repro in #89.
+		ACell result = AbstractLLMAdapter.parseToolArguments(
+			Strings.create("\"{\\\"agentId\\\":\\\"Charlie\\\"}\""));
+		assertTrue(result instanceof AMap, "double-encoded JSON must resolve to the object");
+		assertEquals("Charlie", RT.ensureString(RT.getIn(result, "agentId")).toString());
+	}
+
+	@Test
+	public void testParseToolArgumentsGarbageThrows() {
+		// Outright garbage is a visible error the LLM can correct — never a
+		// silent Maps.empty() substitution or a pass-through.
+		assertThrows(IllegalArgumentException.class,
+			() -> AbstractLLMAdapter.parseToolArguments(Strings.create("not json")));
+		assertThrows(IllegalArgumentException.class,
+			() -> AbstractLLMAdapter.parseToolArguments(Strings.create("{broken")));
 	}
 
 	// ========== toolResultMessage ==========

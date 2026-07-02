@@ -1,0 +1,23 @@
+{
+	"name": "Test Bad-Args LLM",
+	"description": "Test LLM that emits a tool call with malformed (non-JSON) arguments on its first turn, then echoes the tool result content. Used for testing that broken tool arguments produce a visible tool error the LLM can react to, never a silent empty-map invocation.",
+	"dateCreated": "2026-07-02T00:00:00Z",
+	"operation": {
+		"adapter": "test:badargsllm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": { "type": "array" },
+				"tools": { "type": "array" }
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": { "type": "string" },
+				"content": { "type": "string" },
+				"toolCalls": { "type": "array" }
+			}
+		}
+	}
+}

@@ -321,9 +321,12 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * stuck downstream op cannot hang the agent loop forever.
 	 */
 	protected ACell invokeOperation(AString operation, ACell input, RequestContext ctx, long timeoutMs) {
-		ACell opInput = ensureParsedInput(input);
+		// Internal dispatch preserves types exactly — no coercion here. Tool
+		// arguments were already normalised once at the LLM wire boundary
+		// (parseToolArguments); a wrong-shaped input is the caller's error and
+		// surfaces from the op's own validation (#89).
 		try {
-			ACell result = engine.jobs().invokeInternal(operation, opInput, ctx)
+			ACell result = engine.jobs().invokeInternal(operation, input, ctx)
 				.get(timeoutMs, TimeUnit.MILLISECONDS);
 			return (result != null) ? result : Maps.empty();
 		} catch (TimeoutException e) {
@@ -379,23 +382,55 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return msg;
 	}
 
-	// ========== Input parsing ==========
+	// ========== Tool-call argument parsing (the LLM wire boundary) ==========
 
 	/**
-	 * Ensures the input value is a parsed map. LLMs often double-stringify JSON,
-	 * producing a string like "{\"key\": \"val\"}" instead of a map. This parses
-	 * such strings into proper maps.
+	 * Parses LLM tool-call {@code arguments} at the wire boundary. Per the
+	 * OpenAI/Anthropic specs {@code arguments} is a JSON-encoded string, and
+	 * LLMs are external systems whose output we cannot force to be well-formed,
+	 * so this is deliberately generous: absent/empty → empty map;
+	 * already-structured values pass through; a JSON string is parsed; a
+	 * double-encoded string (a parse yielding another JSON-shaped string) gets
+	 * one more pass. Outright garbage <b>throws</b> — callers turn that into a
+	 * structured tool error the LLM sees and can correct on its next turn,
+	 * never a silent {@code Maps.empty()} substitution.
+	 *
+	 * <p>This is the ONE place tolerant parsing is allowed. Everything
+	 * downstream is internal dispatch and must preserve types exactly — no
+	 * re-parsing, no coercion (#89).</p>
+	 *
+	 * @param rawArguments the {@code arguments} cell from an LLM tool call
+	 * @return the parsed arguments value
+	 * @throws IllegalArgumentException if the arguments are not valid JSON
 	 */
-	public static ACell ensureParsedInput(ACell opInput) {
-		if (opInput == null) return Maps.empty();
-		if (opInput instanceof AString s) {
-			try {
-				return convex.core.util.JSON.parse(s.toString());
-			} catch (Exception e) {
-				// Not valid JSON — return as-is
+	public static ACell parseToolArguments(ACell rawArguments) {
+		if (rawArguments == null) return Maps.empty();
+		if (!(rawArguments instanceof AString)) return rawArguments; // already structured
+		String s = rawArguments.toString().trim();
+		if (s.isEmpty()) return Maps.empty();
+		ACell parsed;
+		try {
+			parsed = convex.core.util.JSON.parse(s);
+		} catch (Exception e) {
+			throw new IllegalArgumentException("Tool arguments are not valid JSON: " + snippet(s));
+		}
+		// Double-encoded tolerance: a parse that yields a JSON-shaped string
+		// gets one more pass; if the inner parse fails, keep the outer value
+		// (the op's own input validation reports the precise mismatch).
+		if (parsed instanceof AString inner) {
+			String is = inner.toString().trim();
+			if (!is.isEmpty() && (is.charAt(0) == '{' || is.charAt(0) == '[')) {
+				try {
+					return convex.core.util.JSON.parse(is);
+				} catch (Exception ignored) { /* keep the single-parsed value */ }
 			}
 		}
-		return opInput;
+		return parsed;
+	}
+
+	/** Truncates a value for inclusion in an error message. */
+	private static String snippet(String s) {
+		return (s.length() <= 80) ? s : s.substring(0, 77) + "...";
 	}
 
 	// ========== Config helpers ==========

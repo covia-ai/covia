@@ -804,7 +804,21 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 				ACell tc = toolCalls.get(t);
 				AString toolCallId = RT.ensureString(RT.getIn(tc, K_ID));
 				String toolName = RT.ensureString(RT.getIn(tc, K_NAME)).toString();
-				ACell toolInput = ensureParsedInput(RT.getIn(tc, K_ARGUMENTS));
+
+				// Unwrap tool arguments at the LLM wire boundary (the one
+				// tolerant parse). Broken arguments fail THIS tool call with a
+				// visible error the LLM can correct next turn — never a silent
+				// empty-map substitution (#89).
+				ACell toolInput;
+				try {
+					toolInput = parseToolArguments(RT.getIn(tc, K_ARGUMENTS));
+				} catch (IllegalArgumentException e) {
+					log.warn("Frame[{}] tool call {} has malformed arguments: {}",
+						frameIndex, toolName, e.getMessage());
+					activeFrame = GoalTreeContext.appendTurn(activeFrame,
+						toolResultMessage(toolCallId, toolName, Strings.create("Error: " + e.getMessage())));
+					continue;
+				}
 
 				ACell toolResult;
 

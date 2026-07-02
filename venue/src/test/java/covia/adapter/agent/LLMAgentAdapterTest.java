@@ -432,6 +432,41 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testMalformedToolArgumentsProduceVisibleError() {
+		// #89 acceptance: an LLM emitting broken tool arguments gets a
+		// structured tool error it can react to on the next turn — the tool is
+		// NEVER silently invoked with an empty map. test:badargsllm emits
+		// garbage arguments, then echoes the tool result it receives.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "bad-args-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
+				AgentState.KEY_STATE, Maps.of("config", Maps.of("llmOperation", "v/test/ops/badargsllm"))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("bad-args-agent");
+		Blob sid = Blob.fromHex("44440001444400014444000144440001");
+		agent.ensureSession(sid, ALICE_DID);
+		agent.appendSessionPending(sid, Maps.of(
+			Strings.intern("content"), Strings.create("go")));
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "bad-args-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+
+		AString response = RT.ensureString(
+			RT.getIn(user.agent("bad-args-agent").getTimeline().get(0), Fields.RESULT));
+		assertNotNull(response);
+		assertTrue(response.toString().contains("Error:"),
+			"the LLM must see a visible tool error for its malformed arguments, got: " + response);
+		assertTrue(response.toString().contains("not valid JSON"),
+			"the error must say WHY the arguments were rejected, got: " + response);
+	}
+
+	@Test
 	public void testToolCallLoopDirect() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
@@ -783,43 +818,44 @@ public class LLMAgentAdapterTest {
 		assertEquals("def", result.toString());
 	}
 
-	// ========== Pure function: ensureParsedInput ==========
+	// ========== Dispatch consistency — no internal coercion (#89) ==========
+	// parseToolArguments (the wire-boundary parse) is covered in
+	// AbstractLLMAdapterTest; these lock in that INTERNAL dispatch preserves
+	// types exactly and behaves identically on both tool-dispatch paths.
 
 	@Test
-	public void testEnsureParsedInputNull() {
-		ACell result = LLMAgentAdapter.ensureParsedInput(null);
-		assertEquals(Maps.empty(), result);
+	public void testConfigAndGridDispatchPreserveInputIdentically() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		AMap<AString, ACell> input = Maps.of("agentId", "Charlie", "n", CVMLong.create(7));
+
+		// Config-mapped path: LLM tool name resolves through configToolMap.
+		java.util.Map<String, AString> toolMap = new java.util.HashMap<>();
+		toolMap.put("my_echo", Strings.create("v/test/ops/echo"));
+		ACell viaConfig = adapter.dispatchTool("my_echo", input, toolMap, ctx, 5000);
+
+		// Grid-dispatch path: tool name IS the op reference.
+		ACell viaGrid = adapter.dispatchTool("v/test/ops/echo", input,
+			new java.util.HashMap<>(), ctx, 5000);
+
+		// Same op, same input, both paths: identical result — the
+		// Bob/Charlie divergence (#89) cannot recur.
+		assertEquals(input, viaConfig, "config path must pass the input through exactly");
+		assertEquals(viaConfig, viaGrid, "both dispatch paths must behave identically");
 	}
 
 	@Test
-	public void testEnsureParsedInputMap() {
-		AMap<AString, ACell> map = Maps.of("key", "value");
-		ACell result = LLMAgentAdapter.ensureParsedInput(map);
-		assertSame(map, result);
-	}
+	public void testInternalDispatchDoesNotReparseStrings() {
+		// A string input to internal dispatch STAYS a string — even when it
+		// looks like JSON. Normalisation happens once at the LLM wire
+		// boundary, never inside the dispatch chain.
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		AString jsonish = Strings.create("{\"key\":\"value\"}");
 
-	@Test
-	public void testEnsureParsedInputJsonString() {
-		AString jsonStr = Strings.create("{\"name\": \"alice\", \"age\": 30}");
-		ACell result = LLMAgentAdapter.ensureParsedInput(jsonStr);
-		assertTrue(result instanceof AMap, "Should parse JSON string into a map");
-		assertEquals(Strings.create("alice"), RT.getIn(result, "name"));
-		assertEquals(CVMLong.create(30), RT.getIn(result, "age"));
-	}
-
-	@Test
-	public void testEnsureParsedInputInvalidJsonString() {
-		AString garbage = Strings.create("not valid json {{{");
-		ACell result = LLMAgentAdapter.ensureParsedInput(garbage);
-		// Should return the original string when parsing fails
-		assertSame(garbage, result);
-	}
-
-	@Test
-	public void testEnsureParsedInputVector() {
-		AVector<ACell> vec = Vectors.of(Strings.create("a"), Strings.create("b"));
-		ACell result = LLMAgentAdapter.ensureParsedInput(vec);
-		assertSame(vec, result);
+		ACell result = adapter.dispatchTool("v/test/ops/echo", jsonish,
+			new java.util.HashMap<>(), ctx, 5000);
+		assertEquals(jsonish, result, "internal dispatch must not silently parse string inputs");
 	}
 
 	// ========== Pure function: parseConfigToolEntry ==========
