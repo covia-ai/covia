@@ -19,7 +19,7 @@
 		<slf4j.version>2.0.17</slf4j.version>
 		<hc.version>5.5</hc.version>
 		<javalin.version>7.2.2</javalin.version>
-		<langchain.version>1.16.2</langchain.version>
+		<langchain.version>1.17.1</langchain.version>
 		<mcp.version>2.0.0</mcp.version>
 		<a2a.version>1.0.0.Final</a2a.version>
 	</properties>
