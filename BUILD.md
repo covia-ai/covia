@@ -8,7 +8,7 @@ This document describes how to build the Covia project using Maven.
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
 
-All dependencies, including [Convex](https://github.com/Convex-Dev/convex), resolve from Maven Central — a clean clone builds with no extra steps. (To develop against unreleased Convex changes, build Convex from source with `mvn install` and point `convex.version` in the parent POM at its snapshot version.)
+Most dependencies resolve from Maven Central. **`develop` currently pins an unreleased [Convex](https://github.com/Convex-Dev/convex) (`0.8.7-SNAPSHOT`)** — the new lattice layers the venue state model is built on — so it does *not* resolve from Central yet: build Convex from source first (`mvn install -DskipTests` in a `develop` checkout of the Convex repo). CI does this automatically — each build workflow compiles Convex from source whenever `convex.version` ends in `-SNAPSHOT`, and the step skips itself once the pin returns to a release. When `convex.version` is a released version, a clean clone builds with no extra steps.
 
 ## Project Structure
 

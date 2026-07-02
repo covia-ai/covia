@@ -47,7 +47,7 @@ covia/                          # ai.covia:covia:0.2.0-SNAPSHOT (parent POM)
 
 - **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.6** — released, resolves from Maven Central. To develop against unreleased Convex changes, `mvn install` from `../convex` and point `convex.version` at its snapshot.
+- **Convex 0.8.7-SNAPSHOT** — develop currently pins an unreleased Convex (the new lattice layers the venue state model is built on). Build it locally first: `mvn install -DskipTests` from `../convex` (branch `develop`). CI does the same automatically (each build workflow compiles Convex from source whenever `convex.version` ends in `-SNAPSHOT`). Once Convex 0.8.7 is released the pin returns to a Maven Central release and no local build is needed.
 
 ## Build & Run
 
@@ -87,7 +87,7 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.6 | Lattice platform, immutable data, cryptography |
+| Convex | 0.8.7-SNAPSHOT (local build until release) | Lattice platform, immutable data, cryptography |
 | Javalin | 7.2.2 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.16.2 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.0 | Model Context Protocol |
@@ -152,7 +152,7 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 - **SSE** — Server-sent events for real-time job updates (`/api/v1/jobs/{id}/sse`)
 - **MCP** — Model Context Protocol JSON-RPC endpoint
 - **A2A** — Agent-to-Agent federated protocol
-- **DID** — Decentralized identifiers for venue discovery (`/.well-known/did.json`)
+- **DID** — Decentralized identifiers for venue discovery (`/.well-known/did.json`). Identity is always the venue's `did:key`; a venue with a public `hostname` also publishes a spec-compliant `did:web:<hostname>` alias (`id` = did:web, canonical did:key in `alsoKnownAs`) so strict resolvers work — did:web is discovery, the did:key is identity (#167)
 
 ## Development Conventions
 

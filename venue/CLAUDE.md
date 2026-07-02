@@ -206,7 +206,7 @@ Base path: `/api/v1/`
 | `/invoke` | POST | Execute an operation — async by default (201 + job record to poll); `?wait=true` blocks up to the 120s cap, `?wait=<ms>` up to that many ms (clamped), returning the finished record (200) |
 | `/jobs/{id}` | GET | Job status |
 | `/jobs/{id}/sse` | GET | Server-sent events for job updates |
-| `/.well-known/did.json` | GET | Venue DID document |
+| `/.well-known/did.json` | GET | Venue DID document — `did:web:<hostname>` alias (canonical did:key in `alsoKnownAs`) when a public `hostname` is set, else the did:key document (#167) |
 
 ## Development Guidelines
 
