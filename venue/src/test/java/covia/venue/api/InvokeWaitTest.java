@@ -1,6 +1,7 @@
 package covia.venue.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -31,11 +32,10 @@ public class InvokeWaitTest {
 	@Test
 	public void testQueryParamForms() {
 		assertEquals(CoviaAPI.MAX_WAIT_MS, CoviaAPI.parseWaitMs("true", null));
-		assertEquals(5000L, CoviaAPI.parseWaitMs("5000", null));
-		assertEquals(CoviaAPI.MAX_WAIT_MS, CoviaAPI.parseWaitMs("999999999", null), "clamped to the cap");
 		assertEquals(0L, CoviaAPI.parseWaitMs("false", null));
-		assertEquals(0L, CoviaAPI.parseWaitMs("-5", null), "non-positive means asynchronous");
-		assertEquals(0L, CoviaAPI.parseWaitMs("soon", null), "garbage means asynchronous");
+		assertEquals(5000L, CoviaAPI.parseWaitMs("5000", null));
+		assertEquals(0L, CoviaAPI.parseWaitMs("0", null), "explicit zero = asynchronous");
+		assertEquals(CoviaAPI.MAX_WAIT_MS, CoviaAPI.parseWaitMs("999999999", null), "clamped to the cap");
 		assertEquals(0L, CoviaAPI.parseWaitMs(null, null));
 	}
 
@@ -45,10 +45,19 @@ public class InvokeWaitTest {
 		assertEquals(0L, CoviaAPI.parseWaitMs(null, CVMBool.FALSE));
 		assertEquals(3000L, CoviaAPI.parseWaitMs(null, CVMLong.create(3000)));
 		assertEquals(CoviaAPI.MAX_WAIT_MS, CoviaAPI.parseWaitMs(null, CVMLong.create(Long.MAX_VALUE)), "clamped");
-		// JSON-over-HTTP tolerance: boolean/number arriving as strings
+		// Boolean/number arriving as strings (JSON-over-HTTP clients)
 		assertEquals(CoviaAPI.MAX_WAIT_MS, CoviaAPI.parseWaitMs(null, Strings.create("true")));
 		assertEquals(2500L, CoviaAPI.parseWaitMs(null, Strings.create("2500")));
-		assertEquals(0L, CoviaAPI.parseWaitMs(null, Strings.create("whenever")));
+	}
+
+	@Test
+	public void testMalformedWaitRejected() {
+		// Bad inputs are rejected, never silently treated as absent.
+		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs("soon", null));
+		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs("-5", null));
+		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs(null, Strings.create("whenever")));
+		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs(null, CVMLong.create(-1)));
+		assertThrows(IllegalArgumentException.class, () -> CoviaAPI.parseWaitMs(null, convex.core.data.Maps.of("ms", CVMLong.create(5))));
 	}
 
 	// ========== End-to-end over the real transport ==========
@@ -93,5 +102,14 @@ public class InvokeWaitTest {
 			"{\"operation\":\"v/test/ops/delay\",\"input\":"
 			+ "{\"delay\":3000,\"operation\":\"v/test/ops/echo\",\"input\":{\"m\":4}}}");
 		assertEquals(201, resp.statusCode(), "timeout inside the window degrades to poll");
+	}
+
+	@Test
+	public void testGarbageWaitRejectedBeforeInvocation() throws Exception {
+		// A malformed wait is a 400 — and rejected BEFORE the operation is
+		// invoked, so no orphaned job is created for a bad request.
+		HttpResponse<String> resp = invoke("?wait=soon",
+			"{\"operation\":\"v/test/ops/echo\",\"input\":{\"m\":5}}");
+		assertEquals(400, resp.statusCode(), "malformed wait must reject, not silently ignore");
 	}
 }

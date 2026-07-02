@@ -487,10 +487,11 @@ public class CoviaAPI extends ACoviaAPI {
 					+ "record (201, with a Location header for the job), which the caller polls "
 					+ "via GET /jobs/{id} (or subscribes via /jobs/{id}/sse) until it reaches a "
 					+ "terminal status carrying the output. Pass wait (query parameter or body "
-					+ "field) for a synchronous response: true waits up to the 120s cap, an "
-					+ "integer waits up to that many milliseconds (clamped to the cap). If the "
-					+ "job finishes within the window the finished record is returned directly "
-					+ "(200); otherwise the current record is returned (201) and the caller "
+					+ "field) for a synchronous response: true waits up to the 120s cap, a "
+					+ "non-negative integer waits up to that many milliseconds (clamped to the "
+					+ "cap); any other value is rejected with 400. If the job finishes within "
+					+ "the window the finished record is returned directly (200); otherwise the "
+					+ "current record is returned (201) and the caller "
 					+ "continues polling. This contract applies uniformly, including to "
 					+ "meta-operations: e.g. grid:job-result itself returns a local job that "
 					+ "completes with the remote job's result (it supports an op-level timeout "
@@ -545,16 +546,18 @@ public class CoviaAPI extends ACoviaAPI {
 		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans);
 
 		try {
+			// Wait window: `wait` (query param or body field) is boolean or an
+			// integer number of milliseconds — true = the full 120s window,
+			// an integer = that many ms (clamped to the cap). Parsed BEFORE the
+			// operation is invoked so a malformed value rejects with 400 without
+			// creating a job. See parseWaitMs.
+			long waitMs = parseWaitMs(ctx.queryParam("wait"), RT.getIn(req, "wait"));
+
 			Job job=engine().jobs().invokeOperation(op,input,rctx);
 			if (job==null) {
 				buildError(ctx,404,"Operation does not exist");
 				return;
 			}
-
-			// Wait window: `wait` (query param or body field) is boolean or an
-			// integer number of milliseconds — true = the full 120s window,
-			// an integer = that many ms (clamped to the cap). See parseWaitMs.
-			long waitMs = parseWaitMs(ctx.queryParam("wait"), RT.getIn(req, "wait"));
 
 			if (waitMs > 0) {
 				try {
@@ -586,38 +589,45 @@ public class CoviaAPI extends ACoviaAPI {
 	 * Parses the invoke {@code wait} parameter, following the same convention as
 	 * the op-level {@code wait} on {@code agent:request}/{@code agent:trigger}:
 	 * absent/false = 0 (asynchronous, the default); boolean {@code true} = the
-	 * full {@link #MAX_WAIT_MS} window; an integer = that many milliseconds,
-	 * clamped to the cap. Accepted from the query string ({@code ?wait=true},
-	 * {@code ?wait=5000}) or the request body ({@code "wait": true},
-	 * {@code "wait": 5000}, numeric strings tolerated). Unparseable values are
-	 * treated as absent.
+	 * full {@link #MAX_WAIT_MS} window; a non-negative integer = that many
+	 * milliseconds, clamped to the cap. Accepted from the query string
+	 * ({@code ?wait=true}, {@code ?wait=5000}) or the request body
+	 * ({@code "wait": true}, {@code "wait": 5000}; boolean/numeric strings
+	 * accepted for JSON-over-HTTP clients). Anything else — negative numbers,
+	 * non-numeric strings, other types — is a malformed request and throws;
+	 * bad inputs are rejected, never silently treated as absent.
 	 *
 	 * @param queryParam Raw {@code wait} query parameter (may be null)
 	 * @param bodyField {@code wait} field from the request body (may be null)
 	 * @return Wait window in ms; 0 for the default asynchronous behaviour
+	 * @throws IllegalArgumentException if {@code wait} is present but malformed
 	 */
 	static long parseWaitMs(String queryParam, ACell bodyField) {
-		if (queryParam != null) {
-			String q = queryParam.trim();
-			if ("true".equals(q)) return MAX_WAIT_MS;
-			try {
-				return clampWait(Long.parseLong(q));
-			} catch (NumberFormatException ignored) { /* not boolean or int — try body */ }
-		}
+		if (queryParam != null) return parseWaitToken(queryParam.trim());
+		if (bodyField == null) return 0;
 		if (convex.core.data.prim.CVMBool.TRUE.equals(bodyField)) return MAX_WAIT_MS;
+		if (convex.core.data.prim.CVMBool.FALSE.equals(bodyField)) return 0;
 		if (bodyField instanceof convex.core.data.prim.CVMLong l) return clampWait(l.longValue());
-		if (bodyField instanceof AString s) {
-			String str = s.toString().trim();
-			if ("true".equals(str)) return MAX_WAIT_MS;
-			try {
-				return clampWait(Long.parseLong(str));
-			} catch (NumberFormatException ignored) { /* unparseable — asynchronous */ }
+		if (bodyField instanceof AString s) return parseWaitToken(s.toString().trim());
+		throw new IllegalArgumentException(
+			"Invalid wait value: expected boolean or milliseconds, got " + bodyField.getClass().getSimpleName());
+	}
+
+	/** Parses a textual {@code wait} token: {@code true}/{@code false} or a
+	 *  non-negative integer (ms). Anything else throws. */
+	private static long parseWaitToken(String token) {
+		if ("true".equals(token)) return MAX_WAIT_MS;
+		if ("false".equals(token)) return 0;
+		try {
+			return clampWait(Long.parseLong(token));
+		} catch (NumberFormatException e) {
+			throw new IllegalArgumentException(
+				"Invalid wait value: expected true, false or milliseconds, got '" + token + "'");
 		}
-		return 0;
 	}
 
 	private static long clampWait(long ms) {
-		if (ms <= 0) return 0;
+		if (ms < 0) throw new IllegalArgumentException("Invalid wait value: negative milliseconds " + ms);
 		return Math.min(ms, MAX_WAIT_MS);
 	}
 
