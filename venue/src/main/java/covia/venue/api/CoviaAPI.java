@@ -15,6 +15,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Cells;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Maps;
@@ -1048,6 +1049,29 @@ public class CoviaAPI extends ACoviaAPI {
 				case "count"     -> covia.handleAggregate(rctx, input.dissoc(Strings.intern("groupBy")));
 				default -> throw new IllegalArgumentException("Unknown values op: " + op);
 			};
+			// Content-addressed conditional read — only for `read`, where a path
+			// resolves to a single value whose CAD3 hash is a free, exact validator.
+			// Not applied to list/slice/aggregate/inspect: their bodies depend on
+			// query params, and we deliberately do not hash params or computed
+			// results. Truncated/absent reads carry no value, so no ETag (and thus
+			// no wrong-304 when maxSize varies).
+			if ("read".equals(op)) {
+				// A truncated read withholds the value (its body is the truncation
+				// marker, not the value) so it carries no ETag. Every other read is
+				// a cacheable state and gets a value-hash ETag — including a genuine
+				// null / absent value, whose canonical CAD3 hash is Hash.NULL_HASH,
+				// so polling an empty path can 304 too.
+				boolean truncated = CVMBool.TRUE.equals(RT.getIn(result, Strings.intern("truncated")));
+				if (!truncated) {
+					ACell value = RT.getIn(result, Strings.intern("value"));
+					String etag = "\"0x" + Cells.getHash(value).toHexString() + "\"";
+					ctx.header("ETag", etag);
+					if (etag.equals(ctx.header("If-None-Match"))) {
+						ctx.status(304);
+						return;
+					}
+				}
+			}
 			buildResult(ctx, 200, result);
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());

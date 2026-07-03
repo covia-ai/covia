@@ -6,8 +6,8 @@
 > `count` as the single cardinality word, camelCase fields, and no request echo;
 > `inspect` is the render route (`{result}`). `aggregate` ships as **count
 > (optionally grouped)**; `covia:aggregate` is also an op. Absence is
-> `200 {exists:false}`. **Still TODO:** numeric reductions (`sum`/`min`/`max`,
-> pending a consumer) and the optional ETag/`304` conditional reads.
+> `200 {exists:false}`. `read` supports ETag/`304` conditional reads (value hash).
+> **Still TODO:** numeric reductions (`sum`/`min`/`max`, pending a consumer).
 
 ## Problem
 
@@ -255,17 +255,26 @@ asks for it. The intended grammar, recorded so it lands consistently:
   the overall roll-up. Because group values are already objects, this is additive —
   the grouped shape does not change when reductions arrive.
 
-## ETag / conditional reads (optional)
+## ETag / conditional reads — `read` only
 
-The lattice is content-addressed, so every resolved value *is* a hash — a natural,
-standards-native cache validator for a read-heavy consumer. **Optional** (a venue
-need not implement it; clients that don't send `If-None-Match` are unaffected):
+The lattice is content-addressed, so a value at a specific `path` *is* a single
+CAD3-hashed cell — a free, exact cache validator. Conditional reads are therefore
+supported on **`read` only**:
 
-- Response carries `ETag: "0x<hash>"` — the CAD3 hash of the resolved cell at
-  `path`. For `list`/`slice`/`aggregate` the source cell's hash is a valid
-  validator: if the subtree is unchanged, the derived keys/count are too.
-- `If-None-Match: "0x<hash>"` matching the current value → **304 Not Modified**, no
-  body. A polling consumer then skips re-serialising an unchanged subtree entirely.
+- A `read` returns `ETag: "0x<value-hash>"` — the value's own CAD3 hash, nothing
+  computed. A genuine **null / absent** value is a cacheable state too: its
+  canonical hash is `Hash.NULL_HASH`, so polling an empty path can also 304.
+- `If-None-Match: "0x<hash>"` matching → **304 Not Modified**, no body re-sent (the
+  capability check still runs, since the value is resolved either way).
+- **Truncated** (`maxSize`) reads are the one exception — the body is the truncation
+  marker, not the value, so they carry no ETag (which also avoids a wrong-304 when a
+  client varies `maxSize`).
+
+**Not** applied to `list`/`slice`/`aggregate`/`count`/`inspect`: their bodies depend
+on query params (`limit`/`offset`/`depth`/`groupBy`/`budget`), and the source cell's
+hash alone would validate the *data* but not the *rendering* — a paginated poll
+could get a wrong 304. We deliberately do **not** hash params or computed results, so
+those routes are simply not ETagged (honest, rather than a subtly-broken validator).
 
 ## Capability & auth
 
@@ -334,7 +343,7 @@ restricting) is deferred to a **separate later review**.
 | Code | When |
 |------|------|
 | 200 | Success, **including** absence (`{exists:false}`) and truncation — parity with the ops |
-| 304 | Optional ETag: `If-None-Match` matches the current value hash |
+| 304 | `read` only: `If-None-Match` matches the value's CAD3 hash (conditional read) |
 | 400 | Malformed `path`/params, or an execution-scoped namespace (`t/`, `n/`, `c/`) |
 | 401 | Authentication required (no token, public access disabled) |
 | 403 | Capability denied for the requested path |
@@ -404,5 +413,6 @@ for back-compat with older venues that lack the `/values/*` routes.
   satisfy Σ(group `count`) == top `count`; a missing `groupBy` field lands under the
   `null` key; absent **or scalar** path → `{exists:false}` (no `count`); empty or
   too-deep → `{exists:true, count:0}`; execution-scoped namespaces 400.
-- **ETag (if implemented):** unchanged value + `If-None-Match` → 304; changed value →
-  200 with a new `ETag`.
+- **ETag (`read`):** a value read carries an `ETag`; unchanged value + `If-None-Match`
+  → 304; changed value → 200 with a new `ETag`; `list`/`slice`/`aggregate` carry no
+  `ETag`.

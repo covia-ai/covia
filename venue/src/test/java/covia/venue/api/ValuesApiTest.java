@@ -3,6 +3,7 @@ package covia.venue.api;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
 import java.net.URLEncoder;
@@ -119,6 +120,16 @@ public class ValuesApiTest {
 			HttpResponse.BodyHandlers.ofString());
 	}
 
+	private HttpResponse<String> getIfNoneMatch(String route, String path, String etag) throws Exception {
+		String uri = TestServer.BASE_URL + "/api/v1/values/" + route
+			+ "?path=" + URLEncoder.encode(path, StandardCharsets.UTF_8);
+		return HttpClient.newHttpClient().send(
+			HttpRequest.newBuilder().uri(URI.create(uri))
+				.header("Authorization", "Bearer " + jwt)
+				.header("If-None-Match", etag).GET().build(),
+			HttpResponse.BodyHandlers.ofString());
+	}
+
 	private long jobCount() {
 		User u = TestServer.ENGINE.getVenueState().users().get(callerDID);
 		return (u == null) ? 0 : u.getJobs().count();
@@ -165,6 +176,49 @@ public class ValuesApiTest {
 		HttpResponse<String> r = get("inspect", "w/vBox");
 		assertEquals(200, r.statusCode(), r.body());
 		assertNotNull(RT.getIn(JSON.parse(r.body()), "result"), "inspect must return a rendered result");
+	}
+
+	// ===================== conditional read (ETag) =====================
+
+	@Test
+	public void testReadEtagConditional() throws Exception {
+		write("w/vEtag", Strings.create("v1"));
+
+		HttpResponse<String> r1 = get("read", "w/vEtag");
+		assertEquals(200, r1.statusCode(), r1.body());
+		String etag = r1.headers().firstValue("ETag").orElse(null);
+		assertNotNull(etag, "read must return an ETag");
+
+		// Unchanged value + If-None-Match → 304, no body re-sent.
+		HttpResponse<String> r2 = getIfNoneMatch("read", "w/vEtag", etag);
+		assertEquals(304, r2.statusCode());
+		assertTrue(r2.body().isEmpty(), "304 must not re-send the body");
+
+		// After the value changes its hash differs → ETag miss → 200.
+		write("w/vEtag", Strings.create("v2"));
+		HttpResponse<String> r3 = getIfNoneMatch("read", "w/vEtag", etag);
+		assertEquals(200, r3.statusCode(), "a changed value must not 304 against the old ETag");
+	}
+
+	@Test
+	public void testNullReadHasEtag() throws Exception {
+		// A null / absent value is a cacheable state (canonical nil hash), so it
+		// carries an ETag and honours conditional reads too.
+		HttpResponse<String> r1 = get("read", "w/vNoSuchNullPath");
+		assertEquals(200, r1.statusCode(), r1.body());
+		assertEquals(CVMBool.FALSE, RT.getIn(JSON.parse(r1.body()), "exists"));
+		String etag = r1.headers().firstValue("ETag").orElse(null);
+		assertNotNull(etag, "a null/absent read still carries an ETag");
+		assertEquals(304, getIfNoneMatch("read", "w/vNoSuchNullPath", etag).statusCode(),
+			"unchanged null state → 304");
+	}
+
+	@Test
+	public void testListHasNoEtag() throws Exception {
+		// Only `read` is ETagged — computed/param-dependent bodies are not.
+		HttpResponse<String> r = get("list", "w/vBox");
+		assertEquals(200, r.statusCode(), r.body());
+		assertTrue(r.headers().firstValue("ETag").isEmpty(), "list must not carry an ETag");
 	}
 
 	// ===================== the point of #177 =====================
