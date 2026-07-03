@@ -5,6 +5,7 @@ import convex.core.data.AString;
 import convex.core.data.Strings;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.adapter.CoviaAdapter;
+import covia.exception.WrongScopeException;
 import covia.venue.RequestContext;
 
 /**
@@ -21,7 +22,7 @@ public class AgentNamespaceResolver implements NamespaceResolver {
 	public ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys) {
 		AString agentId = ctx.getAgentId();
 		if (agentId == null) {
-			throw new RuntimeException("Cannot use 'n/' prefix outside agent scope");
+			throw new WrongScopeException("Cannot use 'n/' prefix outside agent scope");
 		}
 
 		// Return user cursor with rewritten keys: n/foo/bar → g/{agentId}/n/foo/bar

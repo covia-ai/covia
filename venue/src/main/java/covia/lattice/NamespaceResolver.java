@@ -27,7 +27,10 @@ public interface NamespaceResolver {
 	 * @param ctx    request context (provides callerDID, agentId, jobId)
 	 * @param keys   full parsed path keys (first element is the prefix, e.g. "n" or "t")
 	 * @return resolved target, or null if the context lacks the required scope
-	 * @throws RuntimeException if the prefix is used outside its required scope
+	 * @throws covia.exception.WrongScopeException if the prefix is used outside its
+	 *         required agent/session scope — a context mismatch that a read treats
+	 *         as absence and a write surfaces as an error (distinct from an auth
+	 *         failure or a malformed path)
 	 */
 	ResolvedNamespace resolve(RequestContext ctx, CoviaAdapter adapter, ACell[] keys);
 

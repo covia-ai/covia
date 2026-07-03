@@ -23,7 +23,6 @@ import convex.core.crypto.Hashing;
 import convex.core.crypto.util.Multikey;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
-import convex.core.exceptions.MissingDataException;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -69,6 +68,7 @@ import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.exception.CoviaException;
 import covia.exception.RemoteFetchException;
+import covia.exception.WrongScopeException;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Grid;
@@ -950,13 +950,12 @@ public class Engine {
 		if (coviaAdapter == null) return null;
 		try {
 			return coviaAdapter.readVirtualNamespace(ctx, ref);
-		} catch (MissingDataException e) {
-			// Missing committed data is an integrity error, not a genuine
-			// absence — never convert it to a phantom null. Surface it.
-			log.warn("Virtual namespace resolution hit missing data for '{}' — surfacing, not nulling", ref);
-			throw e;
-		} catch (Exception e) {
-			log.warn("Virtual namespace resolution threw for '{}': {}", ref, e.toString());
+		} catch (WrongScopeException e) {
+			// The only resolver condition that is a genuine absence for a read: the
+			// prefix (n/, c/) names a scope this context doesn't provide, so there
+			// is no such path here. Everything ELSE — an auth failure, a malformed
+			// path, a lower-level store fault, an abnormal navigation bug — is NOT
+			// absence and propagates rather than being masked as "not found" (#175).
 			return null;
 		}
 	}
@@ -1051,31 +1050,18 @@ public class Engine {
 	 */
 	private ACell readWorkspacePathValue(AString ref, RequestContext ctx) {
 		if (ctx == null || ctx.getCallerDID() == null) return null;
-		try {
-			Users users = venueState.users();
-			User user = users.get(ctx.getCallerDID());
-			if (user == null) return null;
+		Users users = venueState.users();
+		User user = users.get(ctx.getCallerDID());
+		if (user == null) return null;
 
-			ACell[] pathKeys = covia.adapter.CoviaAdapter.parseStringPath(ref.toString());
-			if (pathKeys.length == 0) return null;
+		ACell[] pathKeys = covia.adapter.CoviaAdapter.parseStringPath(ref.toString());
+		if (pathKeys.length == 0) return null;
 
-			return covia.adapter.CoviaAdapter.readPath(user.cursor(), pathKeys);
-		} catch (MissingDataException e) {
-			// A missing cell during navigation means committed data is
-			// unreadable — a real integrity bug, NOT a genuine absence.
-			// Converting it to null would report present data as "not found"
-			// and bury the bug. Surface it (with the path for context).
-			log.warn("Workspace path resolution hit missing data for '{}' — surfacing, not nulling", ref);
-			throw e;
-		} catch (Exception e) {
-			// Genuine absence returns null WITHOUT throwing (the null checks
-			// above + readPath returning null). Reaching here means navigation
-			// actually threw — abnormal. Don't swallow it into a phantom
-			// "path absent" (that masked a concurrent-read failure as an
-			// intermittent null); log it so the real cause is visible.
-			log.warn("Workspace path resolution threw for '{}': {}", ref, e.toString());
-			return null;
-		}
+		// Absence is a null return (no user, empty path, or readPath finding
+		// nothing — none of which throw). Anything that throws is a real failure —
+		// an abnormal navigation error, or a lower-level store fault — and it
+		// propagates rather than collapsing to a phantom "path not found" (#175).
+		return covia.adapter.CoviaAdapter.readPath(user.cursor(), pathKeys);
 	}
 
 	/**
