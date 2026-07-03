@@ -347,7 +347,11 @@ public class VenueServer {
 				try {
 					return dlfs.getDriveForIdentity(resolveIdentity(identity), driveName);
 				} catch (Exception e) {
-					log.debug("WebDAV drive access failed for {}: {}", driveName, e.getMessage());
+					// A real DLFS failure is not the same as "no such drive" — the
+					// WebDAV FileSystem contract forces a null return either way,
+					// but log at warn so the operator can tell them apart (#174).
+					// Surfacing a 5xx to the WebDAV client needs convex-dlfs support.
+					log.warn("WebDAV drive access failed for {}: {}", driveName, e.toString());
 					return null;
 				}
 			}

@@ -68,6 +68,7 @@ import covia.adapter.UCANAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.exception.CoviaException;
+import covia.exception.RemoteFetchException;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Grid;
@@ -1224,9 +1225,9 @@ public class Engine {
 		try {
 			remote = Grid.connect(venueConn);
 		} catch (IllegalArgumentException e) {
-			return null;
+			throw RemoteFetchException.malformedVenue(venueConn, e);
 		}
-		Asset fetched = fetchRemoteAsset(remote, id);
+		Asset fetched = fetchRemoteAsset(remote, id);   // throws on unreachable/integrity; null on a genuine 404
 		cacheDefinition(fetched);
 		return fetched;
 	}
@@ -1249,21 +1250,30 @@ public class Engine {
 	 *         unreachable or does not bind the name
 	 */
 	public Asset fetchRemoteNamedAsset(String venueConn, String name) {
+		Venue remote;
 		try {
-			Venue remote = Grid.connect(venueConn);
-			// The BINDING is never cached (names are mutable) — only the
-			// definition the resolved hash identifies.
-			Hash id = remote.getOperationId(name);
-			if (id == null) return null;
-			Asset cached = cachedDefinition(id);
-			if (cached != null) return cached;
-			Asset fetched = fetchRemoteAsset(remote, id);
-			cacheDefinition(fetched);
-			return fetched;
-		} catch (IOException | RuntimeException e) {
-			log.debug("Remote named fetch failed for {}: {}", name, e.getMessage());
-			return null;
+			remote = Grid.connect(venueConn);
+		} catch (IllegalArgumentException e) {
+			throw RemoteFetchException.malformedVenue(venueConn, e);
 		}
+		// Resolve the name to an id AT THE PUBLISHER. An operational failure here
+		// (venue down / error) is a real error naming the venue — NOT "operation
+		// not found". A reachable venue that simply does not bind the name
+		// returns a null id — that is a genuine absence.
+		Hash id;
+		try {
+			id = remote.getOperationId(name);   // the BINDING is never cached (names are mutable)
+		} catch (IOException | RuntimeException e) {
+			if (e instanceof RemoteFetchException rfe) throw rfe;
+			log.warn("Remote named fetch failed for {} at {}: {}", name, venueConn, e.toString());
+			throw RemoteFetchException.fetchFailed(venueConn, "operation '" + name + "'", e);
+		}
+		if (id == null) return null;   // genuine absence: the venue does not bind this name
+		Asset cached = cachedDefinition(id);
+		if (cached != null) return cached;
+		Asset fetched = fetchRemoteAsset(remote, id);   // throws on unreachable/integrity; null on 404
+		cacheDefinition(fetched);
+		return fetched;
 	}
 
 	/**
@@ -1279,17 +1289,22 @@ public class Engine {
 	 */
 	public ACell fetchRemoteContent(AString ref) {
 		AssetRef r = parseAssetRef(ref);
-		if (r == null || !"web".equals(r.method())) return null;
+		if (r == null || !"web".equals(r.method())) return null;   // not a fetchable remote ref
+		Venue remote;
 		try {
-			Venue remote = Grid.connect(r.didString());
+			remote = Grid.connect(r.didString());
+		} catch (IllegalArgumentException e) {
+			throw RemoteFetchException.malformedVenue(r.didString(), e);
+		}
+		try {
 			Hash id = (r.hash() != null) ? r.hash() : remote.getOperationId(r.name());
-			if (id == null) return null;
+			if (id == null) return null;   // genuine absence: name not bound
 
 			Asset def = cachedDefinition(id);
-			if (def == null) def = fetchRemoteAsset(remote, id);
+			if (def == null) def = fetchRemoteAsset(remote, id);   // throws / null=404
 			if (def == null) return null;
 			ACell contentMeta = RT.getIn(def.meta(), Fields.CONTENT);
-			if (contentMeta == null) return null;
+			if (contentMeta == null) return null;   // metadata declares no content — genuine
 
 			// Venue-bound handle for the content stream itself.
 			Asset handle = Asset.create(id, def.getMetadata());
@@ -1302,14 +1317,15 @@ public class Engine {
 			if (declared != null) {
 				Hash sha = Hashing.sha256(blob.getBytes());
 				if (!sha.toHexString().equals(declared.toString())) {
-					throw new IllegalStateException(
-						"Remote content does not match its declared sha256 for asset " + id);
+					throw RemoteFetchException.integrity(r.didString(), "content of " + id);
 				}
 			}
 			return blob;
-		} catch (IOException e) {
-			log.debug("Remote content fetch failed for {}: {}", ref, e.getMessage());
-			return null;
+		} catch (RemoteFetchException e) {
+			throw e;   // already meaningful (from fetchRemoteAsset or the integrity check)
+		} catch (IOException | RuntimeException e) {
+			log.warn("Remote content fetch failed for {} at {}: {}", ref, r.didString(), e.toString());
+			throw RemoteFetchException.fetchFailed(r.didString(), ref, e);
 		}
 	}
 
@@ -1321,21 +1337,34 @@ public class Engine {
 	 * @param id Asset id (CAD3 value hash of the metadata)
 	 * @return Verified Asset with metadata, or null
 	 */
+	/** Best-effort human label for a venue in an error message — never throws
+	 *  (a label must not be able to crash a fetch). */
+	private static String venueLabel(Venue v) {
+		try {
+			Object did = v.getDID();
+			if (did != null) return did.toString();
+		} catch (RuntimeException ignored) { /* stub / unusable identity */ }
+		return String.valueOf(v);
+	}
+
 	public Asset fetchRemoteAsset(Venue remote, Hash id) {
+		String venue = venueLabel(remote);
 		try {
 			Asset fetched = remote.getAsset(id);
-			if (fetched == null) return null;
+			if (fetched == null) return null;   // genuine absence: the remote answered but has no such asset
 			// getID() recomputes the CAD3 hash from the returned metadata —
 			// equality with the requested id IS the integrity check. (Also
-			// throws on unparseable metadata, caught below.)
+			// throws on unparseable metadata, caught below and treated as a
+			// failed fetch — the remote returned data we cannot verify.)
 			if (!id.equals(fetched.getID())) {
-				log.warn("Remote venue returned metadata that does not hash to {} — rejecting", id);
-				return null;
+				throw RemoteFetchException.integrity(venue, id);
 			}
 			return Asset.create(id, fetched.getMetadata());
+		} catch (RemoteFetchException e) {
+			throw e;
 		} catch (IOException | RuntimeException e) {
-			log.debug("Remote asset fetch failed for {}: {}", id, e.getMessage());
-			return null;
+			log.warn("Remote asset fetch failed for {} at {}: {}", id, venue, e.toString());
+			throw RemoteFetchException.fetchFailed(venue, id, e);
 		}
 	}
 

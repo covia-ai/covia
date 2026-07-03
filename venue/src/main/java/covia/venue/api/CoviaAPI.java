@@ -578,6 +578,11 @@ public class CoviaAPI extends ACoviaAPI {
 			ctx.header("Location",ROUTE+"jobs/"+job.getID().toHexString());
 		} catch (AuthException e) {
 			this.buildError(ctx, 403, e.getMessage());
+		} catch (covia.exception.RemoteFetchException e) {
+			// Resolving the operation required fetching a definition from another
+			// venue, and that upstream fetch failed — a gateway error, not "the
+			// operation does not exist" (#174). The message names the venue.
+			this.buildError(ctx, 502, e.getMessage());
 		} catch (IllegalArgumentException | IllegalStateException e) {
 			this.buildError(ctx, 400, "Error invoking operation: "+e.getClass().getSimpleName()+":"+e.getMessage());
 			return;

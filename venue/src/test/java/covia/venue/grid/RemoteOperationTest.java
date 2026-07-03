@@ -244,6 +244,54 @@ public class RemoteOperationTest {
 	}
 
 	@Test
+	public void invokingOpOnUnreachableVenueFailsMeaningfully() {
+		// The #174 bug: a did:web operation reference whose venue is DOWN must
+		// fail with a message naming the venue — not the misleading generic
+		// "Cannot resolve operation" that made a down venue look like a missing
+		// op. A hash unique to this test avoids the definition cache.
+		Hash opId = TwoVenueTestServer.ENGINE_B.storeAsset(concatOpMeta("unreachable-invoke"), null);
+		RequestContext caller = RequestContext.of(Strings.create("did:key:zCallerUnreachable"));
+		String deadRef = "did:web:localhost%3A1/a/" + opId.toHexString();
+
+		covia.exception.RemoteFetchException ex = assertThrows(
+			covia.exception.RemoteFetchException.class,
+			() -> TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(
+				deadRef, Maps.of("first", "x", "second", "y"), caller));
+		assertFalse(ex.getMessage().contains("Cannot resolve operation"),
+			"a down venue must not masquerade as a missing operation");
+		assertTrue(ex.getMessage().toLowerCase().contains("could not fetch"),
+			"the error must say the fetch failed, got: " + ex.getMessage());
+
+		assertEquals(0, TwoVenueTestServer.ENGINE_A.jobs().getJobs(caller).count(),
+			"a rejected invoke must leave no job record behind");
+	}
+
+	@Test
+	public void agentCreateWithUnreachableDefinitionFailsCleanly() {
+		// A RemoteFetchException thrown by resolveAsset NESTED inside a
+		// job-aware adapter (agent:create resolving its `definition` ref) must
+		// fail the created job cleanly with the meaningful message — never
+		// orphan it (STARTED forever) or crash. Verifies the adapter's
+		// exception-to-job.fail contract holds for the new throw (#174).
+		RequestContext caller = RequestContext.of(Strings.create("did:key:zAgentDefUnreachable"));
+		String deadDef = "did:web:localhost%3A1/a/"
+			+ "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
+		Job job = TwoVenueTestServer.ENGINE_A.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "def-unreachable", Fields.DEFINITION, deadDef),
+			caller);
+
+		covia.exception.JobFailedException ex = assertThrows(
+			covia.exception.JobFailedException.class, () -> job.awaitResult(5000));
+		assertEquals(Status.FAILED, job.getStatus(),
+			"the job must reach FAILED — not hang as STARTED behind the throw");
+		assertTrue(ex.getMessage() != null
+				&& ex.getMessage().toLowerCase().contains("could not fetch"),
+			"the job failure must carry the meaningful fetch error, got: " + ex.getMessage());
+	}
+
+	@Test
 	public void didKeyReferencesCannotBeFetched() {
 		// Fetch scope: only did:web names a fetchable endpoint. A did:key
 		// reference that isn't locally resolvable is "not found" — never a

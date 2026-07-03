@@ -791,7 +791,16 @@ public class ContextBuilder {
 			// Skip harness tools — they're resolved by the adapter, not here
 			if (skipToolNames.contains(operation.toString())) continue;
 
-			Asset asset = engine.resolveAsset(operation, ctx);
+			Asset asset;
+			try {
+				asset = engine.resolveAsset(operation, ctx);
+			} catch (covia.exception.RemoteFetchException e) {
+				// A tool whose definition lives on an unreachable remote venue
+				// must not fail the whole tool list (and the agent turn) — skip
+				// it visibly. Other resolution errors still propagate (#174).
+				log.warn("Config tool: skipping '{}' — remote fetch failed: {}", operation, e.getMessage());
+				continue;
+			}
 			if (asset == null) {
 				log.warn("Config tool: cannot resolve operation '{}'", operation);
 				continue;
