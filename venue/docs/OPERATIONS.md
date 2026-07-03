@@ -177,6 +177,26 @@ The resolver returns the **literal value** at the resolved location. It does NOT
 
 **References denote definitions, never execution sites.** A DID prefix says where a definition can be *fetched from*; whatever is invoked with it executes on the venue that accepted the invoke, as an ordinary local job with local adapters and context. Cross-venue *execution* is always explicit — `grid:run` / `grid:invoke` with a `venue` argument — and produces a job record on each venue: one on the delegating venue for the grid op it accepted, one on the executing venue for the invoke *it* accepted. A definition fetch is a read and creates no job anywhere. (Semantics pinned by `RemoteAssetFetchTest` and `RemoteOperationTest`.)
 
+### Resolution error handling — absence vs failure
+
+Resolution distinguishes a **genuine absence** from an **operational failure**, and never lets one masquerade as the other (#174):
+
+- **Absence is `null`.** A reference that does not resolve — a local miss, or a remote `did:web` reference whose publisher is *reachable but holds no such asset / does not bind the name* — returns `null`. This is an expected outcome; callers handle it. On the invoke path it becomes an explicit **"operation not found"** (HTTP 400 / `IllegalArgumentException`). `resolvePath` never touches the network, so it never fails operationally — its misses are always genuine absences.
+- **Operational failure throws.** When a remote fetch fails for an operational reason — the venue is **unreachable**, returns an **error**, the venue reference is **malformed**, or it returns **metadata that fails the content-addressing check** — `resolveAsset` / the fetch family throw a `RemoteFetchException` naming the venue. A down venue is *not* a missing operation.
+
+**Where the error surfaces** follows one rule: `null` is fine wherever absence is expected; the error is raised where the result is *used* for something that can't work with absence.
+
+| Caller | On operational fetch failure |
+|--------|------------------------------|
+| Direct invoke of a `did:web` op | HTTP **502** (an upstream fetch failed, not a 404), no job created |
+| Job-aware adapter (e.g. `agent:create` resolving a remote `definition`) | the **job fails** cleanly with the message (via the adapter's exception→`job.fail`), never orphaned |
+| `asset:pin` / `asset:get` of a remote ref | the op fails with the meaningful message |
+| Aggregate assembly (agent tool list, `config.context` entries) | **caught and degraded visibly** — the one unreachable ref is skipped / marked unavailable; the rest of the turn proceeds |
+
+This is why remote fetch can throw without breaking speculative resolution: the multi-form `resolvePath` chain is local-only, and the network is touched exclusively for an *explicit* `did:web` reference on the invocation/adoption path — where an operational failure is genuinely the answer, not an absence to fall through.
+
+> Known limitation: `VenueHTTP.getAsset` (covia-core) currently folds a remote **5xx** into `null` before the Engine sees it, so a *reachable-but-errored* venue is not yet distinct from a 404 end-to-end. Unreachable / malformed / integrity failures are all distinguishable today; the 404-vs-5xx client split is a separate covia-core follow-up.
+
 ### No reference indirection
 
 There is no `{ref: ...}` convention or any other "follow this pointer" data shape. The resolver does not interpret values; values are values. If a user wants `/o/<name>` to behave like a redirect to a venue op, they either:

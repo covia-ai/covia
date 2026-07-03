@@ -970,9 +970,22 @@ public class Engine {
 	 * step dispatch) use this function. Read-side ops should use
 	 * {@link #resolvePath} instead.</p>
 	 *
+	 * <p><b>Absence vs failure (#174).</b> Returns {@code null} for a genuine
+	 * absence — the reference does not resolve to an asset (locally or, for a
+	 * remote {@code did:web} reference, the publisher is reachable but has no
+	 * such asset / does not bind the name). It <b>throws</b>
+	 * {@link covia.exception.RemoteFetchException} when a remote fetch fails
+	 * <em>operationally</em> (venue unreachable, remote error, malformed venue
+	 * reference, or metadata that fails the content-addressing check) — a down
+	 * venue is not the same as a missing operation. Callers on a single-ref
+	 * path let it propagate (invoke → HTTP 502, job-aware adapter → job failure);
+	 * aggregate callers that resolve many refs (tool/context assembly) catch it
+	 * and degrade visibly.</p>
+	 *
 	 * @param ref Reference string
 	 * @param ctx Request context (caller identity for /o/ namespace scoping)
-	 * @return Resolved Asset, or null if not resolvable as an asset
+	 * @return Resolved Asset, or null if genuinely not resolvable as an asset
+	 * @throws covia.exception.RemoteFetchException on operational remote-fetch failure
 	 */
 	public Asset resolveAsset(AString ref, RequestContext ctx) {
 		if (ref == null) return null;
@@ -1188,8 +1201,11 @@ public class Engine {
 	 *
 	 * @param venueConn Remote venue connection string (did:web or URL)
 	 * @param id Asset id (CAD3 value hash of the metadata)
-	 * @return Verified Asset with metadata, or null if the venue is
-	 *         unreachable, the asset is absent, or verification fails
+	 * @return Verified Asset with metadata, or null if the asset is genuinely
+	 *         absent (the venue is reachable but holds no such asset)
+	 * @throws covia.exception.RemoteFetchException if the venue is unreachable,
+	 *         returns an error, the connection string is malformed, or the
+	 *         returned metadata fails the content-addressing check (#174)
 	 */
 	/**
 	 * Fetched remote definitions, keyed by content hash. Definitions are
@@ -1246,8 +1262,10 @@ public class Engine {
 	 *
 	 * @param venueConn Remote venue connection string (did:web or URL)
 	 * @param name Catalog operation name, e.g. "v/ops/json/merge"
-	 * @return Verified Asset with metadata, or null if the venue is
-	 *         unreachable or does not bind the name
+	 * @return Verified Asset with metadata, or null if the venue is reachable
+	 *         but does not bind the name (a genuine absence)
+	 * @throws covia.exception.RemoteFetchException if the venue is unreachable,
+	 *         returns an error, or the connection string is malformed (#174)
 	 */
 	public Asset fetchRemoteNamedAsset(String venueConn, String name) {
 		Venue remote;
@@ -1278,14 +1296,17 @@ public class Engine {
 
 	/**
 	 * Fetches the binary content of a remote asset reference, for adoption
-	 * by {@code asset:pin}. Returns null when the reference is not a
-	 * fetchable remote ref, the asset is absent, or the metadata declares
-	 * no content. When the metadata declares a sha256, the fetched bytes
-	 * are verified against it — substituted content fails loudly rather
-	 * than being adopted.
+	 * by {@code asset:pin}. Returns null when there is genuinely nothing to
+	 * fetch: the reference is not a fetchable remote ref, the asset/name is
+	 * absent, or the metadata declares no content. When the metadata declares
+	 * a sha256, the fetched bytes are verified against it — substituted content
+	 * throws rather than being adopted. Operational failures (venue unreachable,
+	 * error, malformed reference) also throw (#174).
 	 *
 	 * @param ref Remote DID URL reference (hash or named form)
-	 * @return Content blob, or null if there is none to fetch
+	 * @return Content blob, or null if there is genuinely none to fetch
+	 * @throws covia.exception.RemoteFetchException on operational fetch failure
+	 *         or a content sha256 mismatch (#174)
 	 */
 	public ACell fetchRemoteContent(AString ref) {
 		AssetRef r = parseAssetRef(ref);
@@ -1335,7 +1356,10 @@ public class Engine {
 	 *
 	 * @param remote Remote venue
 	 * @param id Asset id (CAD3 value hash of the metadata)
-	 * @return Verified Asset with metadata, or null
+	 * @return Verified Asset with metadata, or null if the remote is reachable
+	 *         but holds no such asset (a genuine absence)
+	 * @throws covia.exception.RemoteFetchException if the remote is unreachable,
+	 *         errors, or returns metadata that does not hash to {@code id} (#174)
 	 */
 	/** Best-effort human label for a venue in an error message — never throws
 	 *  (a label must not be able to crash a fetch). */
