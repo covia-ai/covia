@@ -2024,25 +2024,83 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
-	public void testTempWriteIntoScalarThrowsShapeConflict() {
-		RequestContext jobCtx = ALICE.withJobId(newJob());
+	public void testScalarClobberProtectionIsUniformAcrossNamespaces() {
+		// The shape-clobber property (#146, #176): writing or appending a key
+		// BENEATH an existing scalar is a shape conflict — it throws (naming the
+		// node) and leaves the scalar intact, never a silent rebuild. Asserted
+		// identically across every user-writable namespace so t/ (job scope),
+		// n/ (agent scope) and w/ can never drift apart. Before #176 the t/
+		// job-scope branch silently clobbered here.
+		assertScalarClobberProtected(ALICE, "w/svc");
+		assertScalarClobberProtected(ALICE.withAgentId(Strings.create("test-agent")), "n/svc");
+		assertScalarClobberProtected(ALICE.withJobId(newJob()), "t/svc");
+	}
 
-		// t/note holds a scalar...
+	private void assertScalarClobberProtected(RequestContext ctx, String base) {
 		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "t/note", Fields.VALUE, Strings.create("just text")),
+			Maps.of(Fields.PATH, base, Fields.VALUE, Strings.create("scalar-val")),
+			ctx).awaitResult(5000);
+
+		Job w = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, base + "/sub", Fields.VALUE, CVMLong.ONE), ctx);
+		covia.exception.JobFailedException we = assertThrows(
+			covia.exception.JobFailedException.class, () -> w.awaitResult(5000));
+		assertTrue(we.getMessage().contains("scalar"),
+			base + ": write-through-scalar must throw a shape conflict, got: " + we.getMessage());
+
+		Job a = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, base + "/sub", Fields.VALUE, CVMLong.ONE), ctx);
+		covia.exception.JobFailedException ae = assertThrows(
+			covia.exception.JobFailedException.class, () -> a.awaitResult(5000));
+		assertTrue(ae.getMessage().contains("scalar"),
+			base + ": append-through-scalar must throw a shape conflict, got: " + ae.getMessage());
+
+		assertEquals(Strings.create("scalar-val"), RT.getIn(read(ctx, base), "value"),
+			base + ": a rejected shape-conflicting write must not mutate the value");
+	}
+
+	@Test
+	public void testDeleteThroughScalarIsLenientNoOp() {
+		// Deletion is deliberately lenient where writing is strict: deleting a
+		// key BENEATH a scalar is a harmless no-op (nothing to remove), not a
+		// shape conflict — a delete cannot lose data the way a clobbering write
+		// can. Guards the asymmetry so a future "make it consistent with write"
+		// change doesn't wrongly make delete throw. Uniform across w/ and t/.
+		RequestContext[] ctxs = { ALICE, ALICE.withJobId(newJob()) };
+		String[] bases = { "w/dl", "t/dl" };
+		for (int i = 0; i < ctxs.length; i++) {
+			RequestContext ctx = ctxs[i];
+			String base = bases[i];
+			engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, base, Fields.VALUE, Strings.create("keep-me")),
+				ctx).awaitResult(5000);
+
+			ACell del = engine.jobs().invokeOperation("v/ops/covia/delete",
+				Maps.of(Fields.PATH, base + "/sub"), ctx).awaitResult(5000);
+			assertEquals(Maps.empty(), del, base + ": delete-through-scalar is a silent no-op");
+			assertEquals(Strings.create("keep-me"), RT.getIn(read(ctx, base), "value"),
+				base + ": delete-through-scalar must not disturb the scalar");
+		}
+	}
+
+	@Test
+	public void testTempReplaceScalarThenWriteBeneath() {
+		// The documented remedy works in t/: replace the whole node with a map
+		// (addressing the node itself, not navigating through it), then keyed
+		// writes beneath it succeed.
+		RequestContext jobCtx = ALICE.withJobId(newJob());
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/slot", Fields.VALUE, Strings.create("was scalar")),
+			jobCtx).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/slot", Fields.VALUE, Maps.empty()),
 			jobCtx).awaitResult(5000);
 
-		// ...writing a key beneath it is a shape conflict (was a silent clobber
-		// before #176 — the whole point of t/ matching w/).
-		Job job = engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "t/note/sub", Fields.VALUE, CVMLong.create(1)), jobCtx);
-		covia.exception.JobFailedException ex = assertThrows(
-			covia.exception.JobFailedException.class, () -> job.awaitResult(5000));
-		assertTrue(ex.getMessage().contains("scalar"),
-			"t/ scalar-clobber must throw the same shape conflict as w/, got: " + ex.getMessage());
-
-		// The scalar is intact — the failed write changed nothing.
-		assertEquals(Strings.create("just text"), RT.getIn(read(jobCtx, "t/note"), "value"));
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/slot/sub", Fields.VALUE, CVMLong.create(9)),
+			jobCtx).awaitResult(5000);
+		assertEquals(CVMLong.create(9), RT.getIn(read(jobCtx, "t/slot/sub"), "value"),
+			"after replacing the scalar with a map, keyed writes beneath it succeed");
 	}
 
 	@Test
