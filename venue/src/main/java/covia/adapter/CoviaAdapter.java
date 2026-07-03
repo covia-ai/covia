@@ -144,6 +144,12 @@ public class CoviaAdapter extends AAdapter {
 	private static final AString K_EXISTS  = Strings.intern("exists");
 	private static final AString K_PATH_CREATED = Strings.intern("pathCreated");
 	private static final AString K_NEW_SIZE     = Strings.intern("newSize");
+	// Mutation outcome fields (#147): existed = a value was already at the target
+	// before the op (created vs replaced); deleted = a value was removed; index =
+	// where an appended element landed.
+	private static final AString K_EXISTED = Strings.intern("existed");
+	private static final AString K_DELETED = Strings.intern("deleted");
+	private static final AString K_INDEX   = Strings.intern("index");
 	private static final AString K_VALUE_BYTES  = Strings.intern("valueBytes");
 	private static final AString K_TRUNCATED = Strings.intern("truncated");
 	private static final AString K_MAX_SIZE  = Strings.intern("maxSize");
@@ -660,8 +666,9 @@ public class CoviaAdapter extends AAdapter {
 	 * (e.g. {@code "w/data/nested/field"}) — intermediate maps are created
 	 * as needed via read-modify-write on the top-level entry.</p>
 	 *
-	 * @return {@code {pathCreated: true}} if the write had to build a missing
-	 *         parent path (intermediate hierarchy), else an empty map
+	 * @return {@code {existed, pathCreated?}} — {@code existed:false} created a new
+	 *         value, {@code true} replaced an existing one; {@code pathCreated:true}
+	 *         is added when a missing parent hierarchy had to be built
 	 * @throws RuntimeException if the path is invalid or targets a non-writable namespace
 	 */
 	private ACell handleWrite(RequestContext ctx, ACell input) {
@@ -688,7 +695,9 @@ public class CoviaAdapter extends AAdapter {
 		if (vns != null && vns.jobId() != null) {
 			final ACell[] keys = vns.remainingKeys();
 			final boolean[] built = {false};
+			final boolean[] existed = {false};
 			updateTempPath(vns, (current, from) -> {
+				existed[0] = leafExisted(current, keys, from);
 				ACell next = deepSet(current, keys, from, value);
 				// t/ keys carry no namespace prefix (the resolver consumed it), so
 				// "built hierarchy" is one segment shallower than the physical path
@@ -696,7 +705,7 @@ public class CoviaAdapter extends AAdapter {
 				built[0] = keys.length > 1 && !parentExisted(current, keys, from);
 				return next;
 			});
-			return built[0] ? Maps.of(K_PATH_CREATED, CVMBool.TRUE) : Maps.empty();
+			return writeResult(existed[0], built[0]);
 		}
 
 		// Cursor-based virtual (n/) or physical namespace
@@ -704,10 +713,13 @@ public class CoviaAdapter extends AAdapter {
 		ALatticeCursor<ACell> baseCursor = (vns != null) ? vns.cursor() : ensureUserCursor(ctx);
 		final ACell[] keys = jsonKeys;
 		final boolean[] built = {false};
+		final boolean[] existed = {false};
 		// deepSet first so a shape conflict throws its descriptive error (#146);
 		// pathCreated is read from the pre-state and means "a missing parent
-		// container had to be built" — not whether the leaf already had a value.
+		// container had to be built" — not whether the leaf already had a value
+		// (that is `existed`).
 		if (!updatePath(baseCursor, keys, (current, from) -> {
+				existed[0] = leafExisted(current, keys, from);
 				ACell next = deepSet(current, keys, from, value);
 				// pathCreated reports building a nested parent below the namespace;
 				// creating the namespace + its direct child (keys.length <= 2) is
@@ -717,7 +729,18 @@ public class CoviaAdapter extends AAdapter {
 			})) {
 			throw new RuntimeException("Cannot resolve path: " + keys[0] + "/" + keys[1]);
 		}
-		return built[0] ? Maps.of(K_PATH_CREATED, CVMBool.TRUE) : Maps.empty();
+		return writeResult(existed[0], built[0]);
+	}
+
+	/**
+	 * Mutation result shared by {@code covia:write} and {@code covia:copy}:
+	 * {@code existed} (a value was already at the target — created vs replaced) is
+	 * always present; {@code pathCreated} appears only when a missing parent
+	 * hierarchy had to be built.
+	 */
+	private static ACell writeResult(boolean existed, boolean built) {
+		AMap<AString, ACell> out = Maps.of(K_EXISTED, CVMBool.of(existed));
+		return built ? out.assoc(K_PATH_CREATED, CVMBool.TRUE) : out;
 	}
 
 	/**
@@ -732,10 +755,10 @@ public class CoviaAdapter extends AAdapter {
 	 * non-existent key succeeds silently.</p>
 	 *
 	 * <p>Delete removes only the addressed value; it never prunes the parent
-	 * hierarchy — an emptied parent container is left in place. Success is the
-	 * job status, so there is nothing structural to report.</p>
+	 * hierarchy — an emptied parent container is left in place.</p>
 	 *
-	 * @return empty map on success
+	 * @return {@code {deleted}} — {@code true} if a value was present and removed,
+	 *         {@code false} if the path was already absent (idempotent no-op)
 	 */
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_DELETE);
@@ -747,18 +770,26 @@ public class CoviaAdapter extends AAdapter {
 		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
 		if (vns != null && vns.jobId() != null) {
 			final ACell[] keys = vns.remainingKeys();
-			updateTempPath(vns, (current, from) -> deepDelete(current, keys, from));
-			return Maps.empty();
+			final boolean[] deleted = {false};
+			updateTempPath(vns, (current, from) -> {
+				deleted[0] = leafExisted(current, keys, from);
+				return deepDelete(current, keys, from);
+			});
+			return Maps.of(K_DELETED, CVMBool.of(deleted[0]));
 		}
 
 		// Cursor-based virtual (n/) or physical namespace. An unresolvable
 		// path is a silent success (delete is idempotent).
 		if (vns != null) jsonKeys = vns.remainingKeys();
 		ALatticeCursor<ACell> cursor = (vns != null) ? vns.cursor() : getUserCursor(ctx);
-		if (cursor == null) return Maps.empty();
+		if (cursor == null) return Maps.of(K_DELETED, CVMBool.FALSE);
 		final ACell[] keys = jsonKeys;
-		updatePath(cursor, keys, (current, from) -> deepDelete(current, keys, from));
-		return Maps.empty();
+		final boolean[] deleted = {false};
+		updatePath(cursor, keys, (current, from) -> {
+			deleted[0] = leafExisted(current, keys, from);
+			return deepDelete(current, keys, from);
+		});
+		return Maps.of(K_DELETED, CVMBool.of(deleted[0]));
 	}
 
 	/**
@@ -769,9 +800,10 @@ public class CoviaAdapter extends AAdapter {
 	 * a vector, the element is appended. Errors if the target is a non-vector
 	 * type.</p>
 	 *
-	 * @return {@code {newSize}} — the vector's element count after the append —
-	 *         plus {@code pathCreated: true} if a missing parent container had
-	 *         to be built
+	 * @return {@code {existed, index, newSize, pathCreated?}} — {@code existed} =
+	 *         the collection was already there; {@code index} = where the element
+	 *         landed ({@code newSize-1}); {@code newSize} = element count after the
+	 *         append; {@code pathCreated:true} when a missing parent was built
 	 */
 	private ACell handleAppend(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
@@ -788,17 +820,17 @@ public class CoviaAdapter extends AAdapter {
 		if (vns != null && vns.jobId() != null) {
 			final ACell[] keys = vns.remainingKeys();
 			final boolean[] built = {false};
+			final boolean[] existed = {false};
 			final long[] newSize = {0};
 			updateTempPath(vns, (current, from) -> {
+				existed[0] = leafExisted(current, keys, from);
 				ACell next = deepAppend(current, keys, from, element);
 				built[0] = keys.length > 1 && !parentExisted(current, keys, from);
 				ACell leaf = deepGet(next, keys, from);
 				newSize[0] = (leaf instanceof AVector) ? ((AVector<?>) leaf).count() : 0;
 				return next;
 			});
-			AMap<AString, ACell> out = Maps.of(K_NEW_SIZE, CVMLong.create(newSize[0]));
-			if (built[0]) out = out.assoc(K_PATH_CREATED, CVMBool.TRUE);
-			return out;
+			return appendResult(existed[0], newSize[0], built[0]);
 		}
 
 		// Cursor-based virtual (n/) or physical namespace
@@ -807,8 +839,10 @@ public class CoviaAdapter extends AAdapter {
 
 		final ACell[] keys = jsonKeys;
 		final boolean[] built = {false};
+		final boolean[] existed = {false};
 		final long[] newSize = {0};
 		if (!updatePath(baseCursor, keys, (current, from) -> {
+				existed[0] = leafExisted(current, keys, from);
 				ACell next = deepAppend(current, keys, from, element);
 				built[0] = keys.length > 2 && !parentExisted(current, keys, from);
 				ACell leaf = deepGet(next, keys, from);
@@ -817,9 +851,22 @@ public class CoviaAdapter extends AAdapter {
 			})) {
 			throw new RuntimeException("Cannot resolve path: " + keys[0] + "/" + keys[1]);
 		}
-		AMap<AString, ACell> out = Maps.of(K_NEW_SIZE, CVMLong.create(newSize[0]));
-		if (built[0]) out = out.assoc(K_PATH_CREATED, CVMBool.TRUE);
-		return out;
+		return appendResult(existed[0], newSize[0], built[0]);
+	}
+
+	/**
+	 * Result of {@code covia:append}: {@code existed} (the collection was already
+	 * there — extended vs freshly created), {@code index} (the position the element
+	 * landed = {@code newSize - 1}), and {@code newSize} (the resulting element
+	 * count) are always present; {@code pathCreated} appears only when a missing
+	 * parent hierarchy was built.
+	 */
+	private static ACell appendResult(boolean existed, long newSize, boolean built) {
+		AMap<AString, ACell> out = Maps.of(
+			K_EXISTED, CVMBool.of(existed),
+			K_INDEX, CVMLong.create(Math.max(0, newSize - 1)),
+			K_NEW_SIZE, CVMLong.create(newSize));
+		return built ? out.assoc(K_PATH_CREATED, CVMBool.TRUE) : out;
 	}
 
 	// ========== Write path helpers ==========
@@ -1056,6 +1103,23 @@ public class CoviaAdapter extends AAdapter {
 			node = navigateInto(node, keys[i]);
 		}
 		return node != null;
+	}
+
+	/**
+	 * True if the leaf key ({@code keys[length-1]}) already had an entry in
+	 * {@code root} before a mutation — the pre-state that distinguishes a
+	 * <em>created</em> write from a <em>replaced</em> one, and a real delete from a
+	 * no-op. Independent of whether the value there was null (a stored null still
+	 * counts as present). Called with the same {@code (current, keys, from)} the
+	 * write/delete lambda receives, so the namespace wrapper is already unwrapped.
+	 */
+	static boolean leafExisted(ACell root, ACell[] keys, int from) {
+		if (keys.length - from <= 0) return root != null;
+		ACell parent = root;
+		for (int i = from; i < keys.length - 1 && parent != null; i++) {
+			parent = navigateInto(parent, keys[i]);
+		}
+		return containsLeaf(parent, keys[keys.length - 1]);
 	}
 
 	/**

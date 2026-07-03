@@ -878,7 +878,7 @@ public class CoviaAdapterTest {
 		Job deleteJob = engine.jobs().invokeOperation("v/ops/covia/delete",
 			Maps.of(Fields.PATH, "w/ephemeral"), ALICE);
 		ACell deleteResult = deleteJob.awaitResult(5000);
-		assertEquals(Maps.empty(), deleteResult);  // delete reports nothing structural
+		assertEquals(CVMBool.TRUE, RT.getIn(deleteResult, "deleted"), "a value was present and removed");
 
 		// Verify it's gone
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -909,7 +909,7 @@ public class CoviaAdapterTest {
 		Job deleteJob = engine.jobs().invokeOperation("v/ops/covia/delete",
 			Maps.of(Fields.PATH, "w/never-existed"), ALICE);
 		ACell deleteResult = deleteJob.awaitResult(5000);
-		assertEquals(Maps.empty(), deleteResult);  // delete reports nothing structural
+		assertEquals(CVMBool.FALSE, RT.getIn(deleteResult, "deleted"), "no-op: nothing was there");
 	}
 
 	@Test
@@ -962,7 +962,7 @@ public class CoviaAdapterTest {
 		// ... remove via covia:delete s/NAME (whole record)
 		ACell deleteResult = engine.jobs().invokeOperation("v/ops/covia/delete",
 			Maps.of(Fields.PATH, "s/doomed-key"), ALICE).awaitResult(5000);
-		assertEquals(Maps.empty(), deleteResult);
+		assertEquals(CVMBool.TRUE, RT.getIn(deleteResult, "deleted"), "the secret was present and removed");
 
 		assertFalse(engine.getVenueState().users().get(ALICE_DID).secrets().exists("doomed-key"),
 			"secret removed from the caller's store");
@@ -981,7 +981,7 @@ public class CoviaAdapterTest {
 	public void testDeleteNonExistentSecretIsIdempotent() {
 		ACell deleteResult = engine.jobs().invokeOperation("v/ops/covia/delete",
 			Maps.of(Fields.PATH, "s/never-stored"), ALICE).awaitResult(5000);
-		assertEquals(Maps.empty(), deleteResult);
+		assertEquals(CVMBool.FALSE, RT.getIn(deleteResult, "deleted"), "no-op: secret not present");
 	}
 
 	@Test
@@ -992,6 +992,60 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "s/my-secret", Fields.VALUE, Strings.create("hack")),
 			ALICE);
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
+	}
+
+	// ========== #147 mutation outcome fields — existed / index ==========
+
+	@Test
+	public void testWriteReportsCreatedVsReplaced() {
+		ACell created = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/m147", Fields.VALUE, CVMLong.ONE), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(created, "existed"), "first write creates");
+
+		ACell replaced = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/m147", Fields.VALUE, CVMLong.create(2)), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(replaced, "existed"), "second write replaces");
+	}
+
+	@Test
+	public void testReplacingAStoredNullReportsExisted() {
+		// A stored null counts as present — replacing it reports existed:true.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/m147n", Fields.VALUE, null), ALICE).awaitResult(5000);
+		ACell replaced = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/m147n", Fields.VALUE, Strings.create("x")), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(replaced, "existed"), "a stored null is present");
+	}
+
+	@Test
+	public void testAppendReportsExistedIndexAndSize() {
+		ACell first = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "w/m147a", Fields.VALUE, Strings.create("a")), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(first, "existed"), "first append creates the vector");
+		assertEquals(CVMLong.create(0), RT.getIn(first, "index"), "landed at index 0");
+		assertEquals(CVMLong.create(1), RT.getIn(first, "newSize"));
+
+		ACell second = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "w/m147a", Fields.VALUE, Strings.create("b")), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(second, "existed"), "second append extends");
+		assertEquals(CVMLong.create(1), RT.getIn(second, "index"), "landed at index 1");
+		assertEquals(CVMLong.create(2), RT.getIn(second, "newSize"));
+	}
+
+	@Test
+	public void testCopyReportsExisted() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/m147src", Fields.VALUE, Strings.create("s")), ALICE).awaitResult(5000);
+
+		ACell created = engine.jobs().invokeOperation("v/ops/covia/copy",
+			Maps.of(Strings.create("from"), "w/m147src", Strings.create("to"), "w/m147dst"),
+			ALICE).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(created, "existed"), "copy to a new destination creates");
+
+		ACell overwrote = engine.jobs().invokeOperation("v/ops/covia/copy",
+			Maps.of(Strings.create("from"), "w/m147src", Strings.create("to"), "w/m147dst"),
+			ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(overwrote, "existed"), "copy over an existing destination replaces");
 	}
 
 	@Test
@@ -1251,7 +1305,7 @@ public class CoviaAdapterTest {
 		Job deleteJob = engine.jobs().invokeOperation("v/ops/covia/delete",
 			Maps.of(Fields.PATH, "w/data/y"), ALICE);
 		ACell deleteResult = deleteJob.awaitResult(5000);
-		assertEquals(Maps.empty(), deleteResult);  // delete reports nothing structural
+		assertEquals(CVMBool.FALSE, RT.getIn(deleteResult, "deleted"), "no-op: sibling did not exist");
 
 		// Original key still intact
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -1928,7 +1982,7 @@ public class CoviaAdapterTest {
 			Maps.of(Strings.create("path"), Strings.create("n/temp")),
 			agentCtx);
 		ACell result = deleteJob.awaitResult(5000);
-		assertEquals(Maps.empty(), result);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "deleted"), "the agent-scope value was removed");
 
 		// Verify deleted
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -2208,7 +2262,7 @@ public class CoviaAdapterTest {
 
 			ACell del = engine.jobs().invokeOperation("v/ops/covia/delete",
 				Maps.of(Fields.PATH, base + "/sub"), ctx).awaitResult(5000);
-			assertEquals(Maps.empty(), del, base + ": delete-through-scalar is a silent no-op");
+			assertEquals(CVMBool.FALSE, RT.getIn(del, "deleted"), base + ": delete-through-scalar is a no-op");
 			assertEquals(Strings.create("keep-me"), RT.getIn(read(ctx, base), "value"),
 				base + ": delete-through-scalar must not disturb the scalar");
 		}
@@ -2618,7 +2672,7 @@ public class CoviaAdapterTest {
 
 		ACell del = engine.jobs().invokeOperation("v/ops/covia/delete",
 			Maps.of(Fields.PATH, "w/d132/child"), ALICE).awaitResult(5000);
-		assertEquals(Maps.empty(), del);
+		assertEquals(CVMBool.TRUE, RT.getIn(del, "deleted"), "the addressed value was removed");
 
 		assertEquals(CVMBool.FALSE, RT.getIn(engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, "w/d132/child"), ALICE).awaitResult(5000), "exists"));

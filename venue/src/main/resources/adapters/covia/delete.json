@@ -17,8 +17,10 @@
 		},
 		"output": {
 			"type": "object",
-			"description": "Empty on success. Delete removes only the addressed value and never prunes parent hierarchy; success is conveyed by the job status.",
-			"properties": {}
+			"description": "Delete removes only the addressed value and never prunes parent hierarchy.",
+			"properties": {
+				"deleted": { "type": "boolean", "description": "True if a value was present at the path and removed; false if the path was already absent (idempotent no-op)." }
+			}
 		}
 	}
 }

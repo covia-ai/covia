@@ -21,8 +21,9 @@
 		"output": {
 			"type": "object",
 			"properties": {
-				"exists": { "type": "boolean", "description": "True if data exists at this path" },
-				"value": { "description": "The value at the path, or null if not found or truncated" },
+				"exists": { "type": "boolean", "description": "True if a value is present at this path. A stored null counts as present (exists:true, value:null); an absent path is exists:false." },
+				"value": { "description": "The value at the path. May be null either because a null is stored (exists:true) or the path is absent (exists:false) or the value was truncated (truncated:true) — use exists/truncated to disambiguate." },
+				"type": { "type": "string", "description": "Convex type name of the value (e.g. Map, Vector, Set, Index, String, Long). Present on a truncated read so the caller can fall back to covia_list (map) or covia_slice (sequence)." },
 				"truncated": { "type": "boolean", "description": "Present and true only if the value exceeded maxSize and was not returned. Omitted otherwise." },
 				"valueBytes": { "type": "integer", "description": "Encoding size in bytes of the value at the path. Always present (0 when the path does not exist)." }
 			}
