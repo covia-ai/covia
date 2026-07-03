@@ -130,8 +130,11 @@ encodes absence inside the rendered string. Serialised with the existing UTF-8
 ```json
 { "exists": true, "value": { … }, "valueBytes": 512 }
 ```
-`valueBytes` (the value's encoded size) is always included. Absent path →
-`{ "exists": false, "value": null, "valueBytes": 0 }`.
+`valueBytes` (the value's encoded size) is always included. `exists` reflects
+**path presence**: a stored null value reads as `{ "exists": true, "value": null }`
+(the key is there holding null — `list` shows it), *distinct* from an absent path →
+`{ "exists": false, "value": null, "valueBytes": 0 }`. (A null write stores that
+null; removal is `covia:delete`.)
 Over `maxSize` → `{ "exists": true, "type": "Map", "value": null, "truncated": true, "valueBytes": 1234567 }`
 — `type` is included on truncation (new) so the caller knows whether to fall back to
 `list` (map) or `slice` (sequence) instead of guessing.
@@ -261,14 +264,13 @@ The lattice is content-addressed, so a value at a specific `path` *is* a single
 CAD3-hashed cell — a free, exact cache validator. Conditional reads are therefore
 supported on **`read` only**:
 
-- A `read` returns `ETag: "0x<value-hash>"` — the value's own CAD3 hash, nothing
-  computed. A genuine **null / absent** value is a cacheable state too: its
-  canonical hash is `Hash.NULL_HASH`, so polling an empty path can also 304.
+- A `read` of a **present** value carries `ETag: "0x<value-hash>"` — the value's own
+  CAD3 hash, nothing computed. A **stored null** is present too (see below): its
+  canonical hash is `Hash.NULL_HASH`, so it is ETagged and can 304 like any value.
 - `If-None-Match: "0x<hash>"` matching → **304 Not Modified**, no body re-sent (the
   capability check still runs, since the value is resolved either way).
-- **Truncated** (`maxSize`) reads are the one exception — the body is the truncation
-  marker, not the value, so they carry no ETag (which also avoids a wrong-304 when a
-  client varies `maxSize`).
+- **Absent** paths (`exists:false`) and **truncated** reads carry no ETag — a
+  truly-absent path has no value to hash, and a truncated read withholds it.
 
 **Not** applied to `list`/`slice`/`aggregate`/`count`/`inspect`: their bodies depend
 on query params (`limit`/`offset`/`depth`/`groupBy`/`budget`), and the source cell's
@@ -413,6 +415,10 @@ for back-compat with older venues that lack the `/values/*` routes.
   satisfy Σ(group `count`) == top `count`; a missing `groupBy` field lands under the
   `null` key; absent **or scalar** path → `{exists:false}` (no `count`); empty or
   too-deep → `{exists:true, count:0}`; execution-scoped namespaces 400.
-- **ETag (`read`):** a value read carries an `ETag`; unchanged value + `If-None-Match`
-  → 304; changed value → 200 with a new `ETag`; `list`/`slice`/`aggregate` carry no
-  `ETag`.
+- **ETag (`read`):** a present read carries an `ETag`; unchanged value + `If-None-Match`
+  → 304; changed value → 200 with a new `ETag`; a **stored null** is present
+  (`exists:true`) and ETagged; a genuinely **absent** path (`exists:false`) and
+  `list`/`slice`/`aggregate` carry no `ETag`.
+- **null vs absent:** a null write reads as `{exists:true, value:null}` and its key
+  shows in `list`; `delete` makes it absent (`exists:false`); `aggregate` counts a
+  present-null entry.

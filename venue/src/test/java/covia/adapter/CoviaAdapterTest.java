@@ -270,21 +270,101 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
-	public void testWriteExplicitNullAllowed() {
-		// An explicit null value is distinct from an absent key: it is the
-		// documented delete semantics and must still be accepted.
+	public void testWriteExplicitNullStoresPresentNull() {
+		// An explicit null is a value, not a delete: it stores a present null,
+		// distinct from an absent path. covia:read reports exists:true, value:null.
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/nullable", Fields.VALUE, Strings.create("x")), ALICE)
 			.awaitResult(5000);
 		ACell res = engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/nullable", Fields.VALUE, null), ALICE)
 			.awaitResult(5000);
-		assertNotNull(res, "explicit null write should complete (delete semantics)");
+		assertNotNull(res, "explicit null write should complete");
 
-		Job read = engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of(Fields.PATH, "w/nullable"), ALICE);
-		assertEquals(CVMBool.FALSE, RT.getIn(read.awaitResult(5000), "exists"),
-			"explicit null write should remove the entry");
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/nullable"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(read, "exists"),
+			"a stored null is present, not absent");
+		assertNull(RT.getIn(read, "value"), "the stored value is null");
+	}
+
+	// ========== covia null value semantics — present null vs absent ==========
+
+	@Test
+	public void testNullDistinctFromAbsent() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nulls/a", Fields.VALUE, null), ALICE).awaitResult(5000);
+
+		ACell present = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/nulls/a"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(present, "exists"), "a stored null is present");
+		assertNull(RT.getIn(present, "value"));
+
+		ACell absent = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/nulls/neverWritten"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(absent, "exists"), "an unwritten sibling is absent");
+	}
+
+	@Test
+	public void testTopLevelNullIsPresent() {
+		// A two-segment path (parent = the namespace root) must resolve presence too.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/topnull", Fields.VALUE, null), ALICE).awaitResult(5000);
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/topnull"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(read, "exists"));
+		assertNull(RT.getIn(read, "value"));
+	}
+
+	@Test
+	public void testListShowsNullValuedKey() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nlist/a", Fields.VALUE, null), ALICE).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nlist/b", Fields.VALUE, CVMLong.create(5)), ALICE).awaitResult(5000);
+
+		ACell list = engine.jobs().invokeOperation("v/ops/covia/list",
+			Maps.of(Fields.PATH, "w/nlist"), ALICE).awaitResult(5000);
+		assertEquals(CVMLong.create(2), RT.getIn(list, "count"), "a null-valued key is still a key");
+		String keys = String.valueOf(RT.getIn(list, "keys"));
+		assertTrue(keys.contains("a") && keys.contains("b"), "both keys listed, got: " + keys);
+	}
+
+	@Test
+	public void testDeleteRemovesWhereNullDoesNot() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/ndel/a", Fields.VALUE, null), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/ndel/a"), ALICE).awaitResult(5000), "exists"),
+			"null write is present");
+
+		engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "w/ndel/a"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/ndel/a"), ALICE).awaitResult(5000), "exists"),
+			"delete removes the entry — now absent");
+	}
+
+	@Test
+	public void testAggregateCountsNullEntries() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nagg", Fields.VALUE, Maps.of("a", null, "b", CVMLong.create(1))),
+			ALICE).awaitResult(5000);
+		ACell agg = engine.jobs().invokeOperation("v/ops/covia/aggregate",
+			Maps.of(Fields.PATH, "w/nagg"), ALICE).awaitResult(5000);
+		assertEquals(CVMLong.create(2), RT.getIn(agg, "count"), "a present null entry is counted");
+	}
+
+	@Test
+	public void testOverwriteNullWithValue() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nover", Fields.VALUE, null), ALICE).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nover", Fields.VALUE, Strings.create("real")), ALICE).awaitResult(5000);
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/nover"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(read, "exists"));
+		assertEquals(Strings.create("real"), RT.getIn(read, "value"), "null replaced by a real value");
 	}
 
 	// ========== covia:copy — server-side value duplication ==========

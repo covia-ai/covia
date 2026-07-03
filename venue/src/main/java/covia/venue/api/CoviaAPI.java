@@ -1056,13 +1056,12 @@ public class CoviaAPI extends ACoviaAPI {
 			// results. Truncated/absent reads carry no value, so no ETag (and thus
 			// no wrong-304 when maxSize varies).
 			if ("read".equals(op)) {
-				// A truncated read withholds the value (its body is the truncation
-				// marker, not the value) so it carries no ETag. Every other read is
-				// a cacheable state and gets a value-hash ETag — including a genuine
-				// null / absent value, whose canonical CAD3 hash is Hash.NULL_HASH,
-				// so polling an empty path can 304 too.
+				// ETag any present value — including a stored null, whose canonical
+				// CAD3 hash is Hash.NULL_HASH (Cells.getHash(null)). An absent path
+				// (exists:false) and a truncated read (value withheld) carry no ETag.
+				boolean exists = CVMBool.TRUE.equals(RT.getIn(result, Strings.intern("exists")));
 				boolean truncated = CVMBool.TRUE.equals(RT.getIn(result, Strings.intern("truncated")));
-				if (!truncated) {
+				if (exists && !truncated) {
 					ACell value = RT.getIn(result, Strings.intern("value"));
 					String etag = "\"0x" + Cells.getHash(value).toHexString() + "\"";
 					ctx.header("ETag", etag);

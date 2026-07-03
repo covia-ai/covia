@@ -201,16 +201,27 @@ public class ValuesApiTest {
 	}
 
 	@Test
-	public void testNullReadHasEtag() throws Exception {
-		// A null / absent value is a cacheable state (canonical nil hash), so it
-		// carries an ETag and honours conditional reads too.
-		HttpResponse<String> r1 = get("read", "w/vNoSuchNullPath");
+	public void testAbsentReadHasNoEtag() throws Exception {
+		// A genuinely absent path carries no value → no ETag.
+		HttpResponse<String> r = get("read", "w/vNoSuchPath");
+		assertEquals(200, r.statusCode(), r.body());
+		assertEquals(CVMBool.FALSE, RT.getIn(JSON.parse(r.body()), "exists"));
+		assertTrue(r.headers().firstValue("ETag").isEmpty(), "absent read must not carry an ETag");
+	}
+
+	@Test
+	public void testPresentNullReadHasEtag() throws Exception {
+		// A stored null is a present value (distinct from absent): exists:true,
+		// value:null, and it carries an ETag (the canonical nil hash) that 304s.
+		write("w/vNull", null);
+		HttpResponse<String> r1 = get("read", "w/vNull");
 		assertEquals(200, r1.statusCode(), r1.body());
-		assertEquals(CVMBool.FALSE, RT.getIn(JSON.parse(r1.body()), "exists"));
+		ACell m = JSON.parse(r1.body());
+		assertEquals(CVMBool.TRUE, RT.getIn(m, "exists"), "a stored null is present");
+		assertNull(RT.getIn(m, "value"));
 		String etag = r1.headers().firstValue("ETag").orElse(null);
-		assertNotNull(etag, "a null/absent read still carries an ETag");
-		assertEquals(304, getIfNoneMatch("read", "w/vNoSuchNullPath", etag).statusCode(),
-			"unchanged null state → 304");
+		assertNotNull(etag, "present null carries an ETag");
+		assertEquals(304, getIfNoneMatch("read", "w/vNull", etag).statusCode(), "unchanged null → 304");
 	}
 
 	@Test

@@ -272,8 +272,13 @@ public class CoviaAdapter extends AAdapter {
 			NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
 			if (vns != null && vns.jobId() != null) {
 				ACell temp = TempNamespaceResolver.getTemp(vns.cursor(), vns.jobId());
-				ACell value = (vns.remainingKeys().length == 0) ? temp
-					: deepGet(temp, vns.remainingKeys(), 0);
+				ACell[] rem = vns.remainingKeys();
+				ACell value = (rem.length == 0) ? temp : deepGet(temp, rem, 0);
+				// A stored null is a present value, not absent — decide by key presence.
+				if (value == null) {
+					boolean present = (rem.length == 0) ? (temp != null) : leafPresentIn(temp, rem);
+					return result(null, present);
+				}
 				return sizeGuardedResult(value, input);
 			}
 		}
@@ -301,6 +306,11 @@ public class CoviaAdapter extends AAdapter {
 		if (pathKeys.length == 0) return sizeGuardedResult(cursor.get(), input);
 
 		ACell value = readPath(cursor, pathKeys);
+		// A stored null reads back as present (exists:true, value:null), distinct
+		// from an absent path (exists:false) — decided by key presence in the parent.
+		if (value == null) {
+			return result(null, pathPresent(cursor, pathKeys));
+		}
 		return sizeGuardedResult(value, input);
 	}
 
@@ -512,12 +522,64 @@ public class CoviaAdapter extends AAdapter {
 		}
 	}
 
-	/** Wraps a value with an exists flag. Null value → exists: false. */
-	private static ACell result(ACell value) {
+	/** Wraps a value with an explicit exists flag — lets a stored null (present,
+	 *  {@code exists:true}) be distinguished from an absent path. */
+	private static ACell result(ACell value, boolean exists) {
 		return Maps.of(
-			K_EXISTS, CVMBool.of(value != null),
+			K_EXISTS, CVMBool.of(exists),
 			K_VALUE, value,
 			K_VALUE_BYTES, CVMLong.create(value == null ? 0 : value.getEncodingLength()));
+	}
+
+	/** Wraps a value with an exists flag. Null value → exists: false. */
+	private static ACell result(ACell value) {
+		return result(value, value != null);
+	}
+
+	/**
+	 * True if the leaf key of {@code keys} is present in its parent under the
+	 * cursor's (namespace-unwrapped) value — so a stored null value (key present,
+	 * value nil) is distinguished from an absent path. {@code keys.length == 0}
+	 * means the whole namespace, present iff its value is non-null.
+	 */
+	private static boolean pathPresent(ALatticeCursor<ACell> cursor, ACell[] keys) {
+		if (keys.length == 0) return cursor.get() != null;
+		ACell parent = readPath(cursor, java.util.Arrays.copyOf(keys, keys.length - 1));
+		return containsLeaf(parent, keys[keys.length - 1]);
+	}
+
+	/** As {@link #pathPresent} but against a plain root value (job-scoped {@code t/}). */
+	private static boolean leafPresentIn(ACell root, ACell[] keys) {
+		if (keys.length == 0) return root != null;
+		ACell parent = deepGet(root, java.util.Arrays.copyOf(keys, keys.length - 1), 0);
+		return containsLeaf(parent, keys[keys.length - 1]);
+	}
+
+	/**
+	 * True if {@code parent} contains {@code key} — a map/Index key or a vector
+	 * index — independent of whether the value stored there is null. Mirrors the
+	 * key resolution of {@link #navigateInto}.
+	 */
+	@SuppressWarnings({ "unchecked", "rawtypes" })
+	private static boolean containsLeaf(ACell parent, ACell key) {
+		if (parent instanceof AVector<?> vec) {
+			long idx = parseIndex(key);
+			return idx >= 0 && idx < vec.count();
+		}
+		if (parent instanceof Index) {
+			Index idx = (Index) parent;
+			if (key instanceof ABlobLike && idx.containsKey((ACell) key)) return true;
+			if (key instanceof AString s) {
+				Blob b = Blob.parse(s.toString());
+				return b != null && idx.containsKey(b);
+			}
+			return false;
+		}
+		if (parent instanceof AMap<?,?> map) {
+			AString sk = RT.ensureString(key);
+			return sk != null && ((AMap<ACell, ACell>) map).containsKey(sk);
+		}
+		return false;
 	}
 
 	// ========== covia:copy — server-side path-to-path duplication ==========
@@ -607,13 +669,14 @@ public class CoviaAdapter extends AAdapter {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
 		requireWriteAccess(ctx, jsonKeys);
 		// A write must supply a 'value'. An absent key means the caller (often an
-		// LLM tool call) forgot the argument — fail loudly so it retries with the
-		// value instead of silently creating a null entry. An explicit null is
-		// still allowed: that is the documented delete semantics.
+		// LLM tool call) forgot the argument — fail loudly so it retries. An
+		// explicit null is a valid value: it stores a null at the path (present,
+		// distinct from absent — covia:read reports exists:true). Removing an entry
+		// is covia:delete, not a null write.
 		if (!(input instanceof AMap) || !((AMap<?, ?>) input).containsKey(Fields.VALUE)) {
 			throw new RuntimeException(
 				"Write requires a 'value' field (received path only). Provide the value to "
-				+ "store; to remove an entry pass value: null explicitly, or use covia:delete.");
+				+ "store (an explicit null stores a null value); to remove an entry use covia:delete.");
 		}
 		ACell value = parseJsonValue(RT.getIn(input, Fields.VALUE));
 
