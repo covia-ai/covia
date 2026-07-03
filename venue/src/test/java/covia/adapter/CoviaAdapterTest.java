@@ -401,7 +401,7 @@ public class CoviaAdapterTest {
 		AVector<ACell> keys = RT.getIn(result, "keys");
 		assertNotNull(keys);
 		assertTrue(keys.count() > 0, "Agent record should have fields");
-		CVMLong count = RT.getIn(result, "totalSize");
+		CVMLong count = RT.getIn(result, "count");
 		assertEquals(keys.count(), count.longValue());
 	}
 
@@ -433,7 +433,7 @@ public class CoviaAdapterTest {
 		ACell result = job.awaitResult(5000);
 
 		AVector<ACell> keys = RT.getIn(result, "keys");
-		CVMLong total = RT.getIn(result, "totalSize");
+		CVMLong total = RT.getIn(result, "count");
 		assertEquals(3, keys.count(), "Should respect limit");
 		assertEquals(6, total.longValue(), "Total should include all agents (5 + test-agent)");
 		// offset present because results are truncated
@@ -465,7 +465,7 @@ public class CoviaAdapterTest {
 
 		assertNotNull(result);
 		assertEquals(Strings.create("Vector"), RT.getIn(result, "type"));
-		assertNotNull(RT.getIn(result, "totalSize"));
+		assertNotNull(RT.getIn(result, "count"));
 		assertNull(RT.getIn(result, "keys"), "Vectors should not have keys");
 	}
 
@@ -721,7 +721,7 @@ public class CoviaAdapterTest {
 
 		assertEquals(CVMBool.TRUE, RT.getIn(listResult, "exists"));
 		assertEquals(Strings.create("Map"), RT.getIn(listResult, "type"));
-		CVMLong count = RT.getIn(listResult, "totalSize");
+		CVMLong count = RT.getIn(listResult, "count");
 		assertEquals(3, count.longValue());
 	}
 
@@ -1559,7 +1559,7 @@ public class CoviaAdapterTest {
 		ACell result = listJob.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
 		assertEquals(Strings.create("Map"), RT.getIn(result, "type"));
-		assertEquals(CVMLong.create(2), RT.getIn(result, "totalSize"));
+		assertEquals(CVMLong.create(2), RT.getIn(result, "count"));
 	}
 
 	@Test
@@ -1577,7 +1577,7 @@ public class CoviaAdapterTest {
 		ACell result = sliceJob.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
 		assertEquals(Strings.create("Vector"), RT.getIn(result, "type"));
-		assertEquals(CVMLong.create(2), RT.getIn(result, "totalSize"));
+		assertEquals(CVMLong.create(2), RT.getIn(result, "count"));
 	}
 
 	// ========== covia:read — maxSize ==========
@@ -1599,6 +1599,8 @@ public class CoviaAdapterTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "truncated"));
 		assertNull(RT.getIn(result, "value"), "Truncated response should not include value");
 		assertNotNull(RT.getIn(result, "valueBytes"), "Truncated response should include valueBytes");
+		assertEquals(Strings.create("Map"), RT.getIn(result, "type"),
+			"Truncated response includes type so the caller can list/slice instead of guessing");
 	}
 
 	@Test
@@ -1614,6 +1616,55 @@ public class CoviaAdapterTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
 		assertNull(RT.getIn(result, "truncated"), "Small value should not be truncated");
 		assertEquals(Strings.create("tiny"), RT.getIn(result, "value"));
+	}
+
+	// ========== covia:aggregate ==========
+
+	@Test
+	public void testAggregateCountAndDepth() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/agg", Fields.VALUE, Maps.of(
+				"a", Maps.of("x", CVMLong.ONE, "y", CVMLong.create(2)),
+				"b", Maps.of("z", CVMLong.create(3)))),
+			ALICE).awaitResult(5000);
+
+		ACell d1 = engine.jobs().invokeOperation("v/ops/covia/aggregate",
+			Maps.of(Fields.PATH, "w/agg"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(d1, "exists"));
+		assertEquals(CVMLong.create(2), RT.getIn(d1, "count"), "depth 1 = 2 buckets");
+
+		ACell d2 = engine.jobs().invokeOperation("v/ops/covia/aggregate",
+			Maps.of(Fields.PATH, "w/agg", Strings.intern("depth"), CVMLong.create(2)),
+			ALICE).awaitResult(5000);
+		assertEquals(CVMLong.create(3), RT.getIn(d2, "count"), "depth 2 = 3 leaves");
+	}
+
+	@Test
+	public void testAggregateGroupByField() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/aggG", Fields.VALUE, Maps.of(
+				"o1", Maps.of("source", Strings.create("nhs")),
+				"o2", Maps.of("source", Strings.create("nhs")),
+				"o3", Maps.of("source", Strings.create("gp")))),
+			ALICE).awaitResult(5000);
+
+		ACell r = engine.jobs().invokeOperation("v/ops/covia/aggregate",
+			Maps.of(Fields.PATH, "w/aggG", Strings.intern("groupBy"), Strings.create("source")),
+			ALICE).awaitResult(5000);
+		assertEquals(CVMLong.create(3), RT.getIn(r, "count"));
+		ACell groups = RT.getIn(r, "groups");
+		assertEquals(CVMLong.create(2), RT.getIn(RT.getIn(groups, "nhs"), "count"), "Σ group == count");
+		assertEquals(CVMLong.create(1), RT.getIn(RT.getIn(groups, "gp"), "count"));
+	}
+
+	@Test
+	public void testAggregateScalarIsExistsFalse() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/aggS", Fields.VALUE, Strings.create("scalar")),
+			ALICE).awaitResult(5000);
+		ACell r = engine.jobs().invokeOperation("v/ops/covia/aggregate",
+			Maps.of(Fields.PATH, "w/aggS"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(r, "exists"), "a scalar is not a countable collection");
 	}
 
 	// ========== covia:slice — vectors ==========
@@ -1635,7 +1686,7 @@ public class CoviaAdapterTest {
 
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
 		assertEquals(Strings.create("Vector"), RT.getIn(result, "type"));
-		assertEquals(CVMLong.create(5), RT.getIn(result, "totalSize"));
+		assertEquals(CVMLong.create(5), RT.getIn(result, "count"));
 		assertEquals(CVMLong.create(1), RT.getIn(result, "offset"));
 		AVector<ACell> values = RT.getIn(result, "values");
 		assertEquals(2, values.count());
@@ -1678,7 +1729,7 @@ public class CoviaAdapterTest {
 
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
 		assertEquals(Strings.create("Map"), RT.getIn(result, "type"));
-		assertEquals(CVMLong.create(3), RT.getIn(result, "totalSize"));
+		assertEquals(CVMLong.create(3), RT.getIn(result, "count"));
 		AVector<ACell> values = RT.getIn(result, "values");
 		assertEquals(2, values.count());
 		// Each entry should have "key" and "value"
@@ -1860,7 +1911,7 @@ public class CoviaAdapterTest {
 			agentCtx);
 		ACell result = listJob.awaitResult(5000);
 		assertTrue(CVMBool.TRUE.equals(RT.getIn(result, Strings.intern("exists"))));
-		long count = ((CVMLong) RT.getIn(result, Strings.intern("totalSize"))).longValue();
+		long count = ((CVMLong) RT.getIn(result, Strings.intern("count"))).longValue();
 		assertTrue(count >= 2, "Should have at least 2 entries");
 	}
 

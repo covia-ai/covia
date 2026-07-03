@@ -137,7 +137,7 @@ import covia.venue.Users;
 public class CoviaAdapter extends AAdapter {
 
 	private static final AString K_KEYS    = Strings.intern("keys");
-	private static final AString K_TOTAL_SIZE = Strings.intern("totalSize");
+	private static final AString K_COUNT = Strings.intern("count");
 	private static final AString K_TYPE    = Strings.intern("type");
 	private static final AString K_VALUE   = Strings.intern("value");
 	private static final AString K_VALUES  = Strings.intern("values");
@@ -202,6 +202,7 @@ public class CoviaAdapter extends AAdapter {
 		installAsset("covia/slice",   BASE + "slice.json");
 		installAsset("covia/list",    BASE + "list.json");
 		installAsset("covia/inspect", BASE + "inspect.json");
+		installAsset("covia/aggregate", BASE + "aggregate.json");
 
 		// Register built-in virtual namespace resolvers
 		registerResolver("n", new AgentNamespaceResolver());
@@ -228,6 +229,7 @@ public class CoviaAdapter extends AAdapter {
 				case "slice" -> CompletableFuture.completedFuture(handleSlice(ctx, input));
 				case "list" -> CompletableFuture.completedFuture(handleList(ctx, input));
 				case "inspect" -> CompletableFuture.completedFuture(handleInspect(ctx, input));
+				case "aggregate" -> CompletableFuture.completedFuture(handleAggregate(ctx, input));
 				default -> CompletableFuture.failedFuture(
 					new RuntimeException("Unknown covia operation: " + getSubOperation(meta)));
 			};
@@ -260,7 +262,7 @@ public class CoviaAdapter extends AAdapter {
 	 * caller can use {@code covia:list} to inspect the structure or
 	 * {@code covia:slice} to read vector elements in pages.</p>
 	 */
-	private ACell handleRead(RequestContext ctx, ACell input) {
+	public ACell handleRead(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_READ);
 		// Check job-scoped virtual namespace (t/) first — these require
 		// specialised cursor navigation that Engine.resolvePath doesn't handle.
@@ -316,6 +318,7 @@ public class CoviaAdapter extends AAdapter {
 		if (encodingSize > maxSize) {
 			return Maps.of(
 				K_EXISTS, CVMBool.TRUE,
+				K_TYPE, Types.get(value).toAString(),
 				K_VALUE, null,
 				K_TRUNCATED, CVMBool.TRUE,
 				K_VALUE_BYTES, CVMLong.create(encodingSize));
@@ -345,8 +348,11 @@ public class CoviaAdapter extends AAdapter {
 	 *         paths: {@code {result: {path1: "...", path2: "..."}}}
 	 */
 	@SuppressWarnings("unchecked")
-	private ACell handleInspect(RequestContext ctx, ACell input) {
+	public ACell handleInspect(RequestContext ctx, ACell input) {
+		// Accept the uniform single-path `path` param (values API) as well as the
+		// original multi-target `paths`; `paths` wins when both are present.
 		ACell pathsCell = RT.getIn(input, K_PATHS);
+		if (pathsCell == null) pathsCell = RT.getIn(input, Fields.PATH);
 
 		// Budget
 		int budget = DEFAULT_INSPECT_BUDGET;
@@ -434,7 +440,7 @@ public class CoviaAdapter extends AAdapter {
 	 * @return {@code {type, values: [...], count: <total>, offset: <offset>}}
 	 */
 	@SuppressWarnings("unchecked")
-	private ACell handleSlice(RequestContext ctx, ACell input) {
+	public ACell handleSlice(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_READ);
 		Object[] target = resolveTargetPath(ctx, input);
 		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
@@ -462,7 +468,7 @@ public class CoviaAdapter extends AAdapter {
 				page = page.conj(vec.get(i));
 			}
 			return Maps.of(K_EXISTS, CVMBool.TRUE, K_TYPE, typeName,
-				K_TOTAL_SIZE, CVMLong.create(total), K_VALUES, page,
+				K_COUNT, CVMLong.create(total), K_VALUES, page,
 				Fields.OFFSET, CVMLong.create(offset));
 
 		} else if (value instanceof AMap<?,?> map) {
@@ -481,7 +487,7 @@ public class CoviaAdapter extends AAdapter {
 				idx++;
 			}
 			return Maps.of(K_EXISTS, CVMBool.TRUE, K_TYPE, typeName,
-				K_TOTAL_SIZE, CVMLong.create(total), K_VALUES, page,
+				K_COUNT, CVMLong.create(total), K_VALUES, page,
 				Fields.OFFSET, CVMLong.create(offset));
 
 		} else if (value instanceof ASet<?> set) {
@@ -497,7 +503,7 @@ public class CoviaAdapter extends AAdapter {
 				idx++;
 			}
 			return Maps.of(K_EXISTS, CVMBool.TRUE, K_TYPE, typeName,
-				K_TOTAL_SIZE, CVMLong.create(total), K_VALUES, page,
+				K_COUNT, CVMLong.create(total), K_VALUES, page,
 				Fields.OFFSET, CVMLong.create(offset));
 
 		} else {
@@ -1196,7 +1202,7 @@ public class CoviaAdapter extends AAdapter {
 	 * 1000) and {@code offset}. When keys are truncated, {@code offset} is included
 	 * in the response so the caller knows where to continue.</p>
 	 */
-	private ACell handleList(RequestContext ctx, ACell input) {
+	public ACell handleList(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_READ);
 		Object[] target = resolveTargetPath(ctx, input);
 		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
@@ -1210,14 +1216,118 @@ public class CoviaAdapter extends AAdapter {
 		return describeValue(value, input);
 	}
 
+	// ========== covia:aggregate — count entries at a depth, optionally grouped ==========
+
+	private static final AString K_DEPTH    = Strings.intern("depth");
+	private static final AString K_GROUP_BY = Strings.intern("groupBy");
+	private static final AString K_GROUPS   = Strings.intern("groups");
+
+	/**
+	 * Counts the entries reachable by exactly {@code depth} get-steps below a
+	 * path, optionally partitioned by a caller-named field. A "step" is one
+	 * {@code get} into a container (map/Index value, vector/set element), uniform
+	 * across container types. {@code count} is always returned; {@code groupBy}
+	 * adds a {@code groups} breakdown keyed by the field's value, each group a
+	 * {@code {count}} object (so reductions can be added additively later).
+	 *
+	 * <p>{@code exists} means a countable collection is present at the path: an
+	 * absent path or a scalar (nothing to descend into) → {@code {exists:false}};
+	 * an empty or too-deep/ragged collection → {@code {exists:true, count:0}}. No
+	 * shape inference — {@code depth} is the only recursion control, and
+	 * {@code groupBy} names the field explicitly.</p>
+	 *
+	 * @return {@code {exists, count}} or {@code {exists, count, groups:{key:{count}}}}
+	 */
+	@SuppressWarnings("unchecked")
+	public ACell handleAggregate(RequestContext ctx, ACell input) {
+		requireCap(ctx, input, Capability.CRUD_READ);
+		Object[] target = resolveTargetPath(ctx, input);
+		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
+		ACell[] pathKeys = (ACell[]) target[1];
+
+		ACell value = null;
+		if (cursor != null) {
+			value = (pathKeys.length > 0) ? readPath(cursor, pathKeys) : cursor.get();
+		}
+
+		// exists = a countable collection is present (a scalar has nothing to
+		// descend into, so it is not "there" to count).
+		if (!isAggregable(value)) return Maps.of(K_EXISTS, CVMBool.FALSE);
+
+		long depth = 1;
+		ACell depthCell = RT.getIn(input, K_DEPTH);
+		if (depthCell instanceof CVMLong l) depth = Math.max(0, l.longValue());
+
+		// Expand children `depth` times. A branch shorter than depth contributes
+		// nothing (childrenInto of a scalar is empty), so ragged trees are strict.
+		java.util.List<ACell> level = new java.util.ArrayList<>();
+		level.add(value);
+		for (long d = 0; d < depth; d++) {
+			java.util.List<ACell> next = new java.util.ArrayList<>();
+			for (ACell node : level) childrenInto(node, next);
+			level = next;
+		}
+
+		long count = level.size();
+		AString groupBy = RT.ensureString(RT.getIn(input, K_GROUP_BY));
+		if (groupBy == null) {
+			return Maps.of(K_EXISTS, CVMBool.TRUE, K_COUNT, CVMLong.create(count));
+		}
+
+		// Partition by the named field (which may be a relative path resolved by
+		// get into each entry). Σ(group counts) == count by construction.
+		ACell[] fieldKeys = parseStringPath(groupBy.toString());
+		AMap<AString, ACell> groups = Maps.empty();
+		for (ACell entry : level) {
+			ACell fieldVal = (fieldKeys.length == 0) ? entry : deepGet(entry, fieldKeys, 0);
+			AString key = groupKey(fieldVal);
+			ACell existing = groups.get(key);
+			long g = (existing == null) ? 0 : ((CVMLong) RT.getIn(existing, K_COUNT)).longValue();
+			groups = groups.assoc(key, Maps.of(K_COUNT, CVMLong.create(g + 1)));
+		}
+
+		return Maps.of(K_EXISTS, CVMBool.TRUE, K_COUNT, CVMLong.create(count), K_GROUPS, groups);
+	}
+
+	/** A value we can descend into and count: map/Index, vector, or set. */
+	private static boolean isAggregable(ACell v) {
+		return (v instanceof AMap) || (v instanceof AVector) || (v instanceof ASet);
+	}
+
+	/** Appends the child values/elements of one container node to {@code out}. */
+	@SuppressWarnings("unchecked")
+	private static void childrenInto(ACell node, java.util.List<ACell> out) {
+		if (node instanceof AMap<?,?> m) {
+			for (var e : ((AMap<ACell, ACell>) m).entrySet()) out.add(e.getValue());
+		} else if (node instanceof AVector<?> vec) {
+			for (long i = 0; i < vec.count(); i++) out.add(vec.get(i));
+		} else if (node instanceof ASet<?> set) {
+			for (ACell e : set) out.add(e);
+		}
+		// scalar / non-container → no children
+	}
+
+	/**
+	 * JSON-object-safe group key: strings pass through, other values coerce to a
+	 * string key, and a missing field groups under {@code "null"} (object keys
+	 * must be strings, so the null bucket is stringified — visible and lossless).
+	 */
+	private static AString groupKey(ACell fieldVal) {
+		if (fieldVal == null) return Strings.intern("null");
+		if (fieldVal instanceof AString s) return s;
+		ACell jk = ALattice.toJSONKey(fieldVal);
+		return (jk instanceof AString s) ? s : Strings.create(String.valueOf(jk));
+	}
+
 	/**
 	 * Builds a structured description of a CVM value for the list response.
 	 *
 	 * <p>Always includes {@code exists} (true if value is non-null) and
 	 * {@code type} (standard Convex type name from {@link Types#get}).
-	 * Maps additionally include {@code keys} (paginated), {@code totalSize} and
-	 * {@code offset}; vectors/countables include {@code totalSize}; sets include
-	 * {@code values} and {@code totalSize}.</p>
+	 * Keyed collections (maps and Indexes — Index is an {@code AMap} subtype)
+	 * additionally include {@code keys} (paginated), {@code count} and
+	 * {@code offset}; positional collections (vectors, sets) include {@code count}
+	 * only — read their elements via {@code covia:slice}.</p>
 	 */
 	@SuppressWarnings("unchecked")
 	private static ACell describeValue(ACell value, ACell input) {
@@ -1258,20 +1368,16 @@ public class CoviaAdapter extends AAdapter {
 			}
 
 			// Always echo offset for the paginated map case so the caller has a
-			// predictable pagination shape (page is K_KEYS; totalSize is the whole).
-			desc = Maps.of(K_TYPE, typeName, K_TOTAL_SIZE, CVMLong.create(total),
+			// predictable pagination shape (page is K_KEYS; count is the whole).
+			desc = Maps.of(K_TYPE, typeName, K_COUNT, CVMLong.create(total),
 				K_KEYS, page, Fields.OFFSET, CVMLong.create(offset));
 		} else if (value instanceof ASet<?> set) {
-			// Sets: values are the elements — return them directly
-			AVector<ACell> values = Vectors.empty();
-			for (ACell elem : set) {
-				values = values.conj(ALattice.toJSONKey(elem));
-			}
-			desc = Maps.of(K_TYPE, typeName, K_TOTAL_SIZE, CVMLong.create(set.count()), K_VALUES, values);
+			// Sets are positional — type + count only; read elements via covia:slice.
+			desc = Maps.of(K_TYPE, typeName, K_COUNT, CVMLong.create(set.count()));
 		} else if (value instanceof ACountable<?> countable) {
 			// Vectors, sequences, Index — type and count only.
 			// Use covia:slice to read elements from vectors.
-			desc = Maps.of(K_TYPE, typeName, K_TOTAL_SIZE, CVMLong.create(countable.count()));
+			desc = Maps.of(K_TYPE, typeName, K_COUNT, CVMLong.create(countable.count()));
 		} else {
 			// Scalar — type name only
 			desc = Maps.of(K_TYPE, typeName);

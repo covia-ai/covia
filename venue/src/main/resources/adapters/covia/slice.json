@@ -28,7 +28,7 @@
 				"exists": { "type": "boolean" },
 				"type": { "type": "string", "description": "Collection type: Vector, Map, or Set" },
 				"values": { "type": "array", "description": "The entries in the requested range. For maps, each entry is {key, value}." },
-				"totalSize": { "type": "integer", "description": "Total number of entries in the collection (the returned page is in values)." },
+				"count": { "type": "integer", "description": "Total number of entries in the collection (the returned page is in values)." },
 				"offset": { "type": "integer", "description": "Starting index of this page." }
 			}
 		}

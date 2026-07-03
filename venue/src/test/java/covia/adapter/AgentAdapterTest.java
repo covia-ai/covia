@@ -3302,7 +3302,7 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 		assertNotNull(result);
-		assertEquals(CVMLong.create(7), RT.getIn(result, Strings.create("totalSize")));
+		assertEquals(CVMLong.create(7), RT.getIn(result, Strings.create("count")));
 		AVector<ACell> keys = RT.ensureVector(RT.getIn(result, Strings.create("keys")));
 		java.util.Set<String> names = new java.util.HashSet<>();
 		for (long i = 0; i < keys.count(); i++) names.add(keys.get(i).toString());

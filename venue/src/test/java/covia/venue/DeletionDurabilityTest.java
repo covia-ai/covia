@@ -135,7 +135,7 @@ public class DeletionDurabilityTest {
 			delete("w/bulk/e" + i);
 			mergeBack(snap);
 		}
-		assertEquals(CVMLong.ZERO, RT.getIn(list("w/bulk"), "totalSize"),
+		assertEquals(CVMLong.ZERO, RT.getIn(list("w/bulk"), "count"),
 			"repeated delete+merge must converge to empty, not oscillate back");
 	}
 

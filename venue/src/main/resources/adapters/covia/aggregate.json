@@ -1,0 +1,33 @@
+{
+	"name": "Aggregate Lattice Entries",
+	"description": "Count the entries a given number of levels below a lattice path, optionally grouped by a field. A 'step' is one navigation into a container (map/Index value, vector/set element), uniform across types. Use this for authoritative tallies over nested data (e.g. 'how many records under w/health/appointments' with depth=2, or 'how many per source' with groupBy=source) instead of listing and counting client-side. count is always returned; groupBy adds a per-group breakdown. Reads only — creates no job.",
+	"dateCreated": "2026-07-03T00:00:00Z",
+	"operation": {
+		"adapter": "covia:aggregate",
+		"toolName": "covia_aggregate",
+		"input": {
+			"type": "object",
+			"properties": {
+				"path": {
+					"description": "Any resolvable lattice path whose sub-tree you want to tally. Examples: 'w/health/appointments', 'g' (your agents), 'j' (your jobs)."
+				},
+				"depth": {
+					"type": "integer",
+					"description": "How many get-steps below path to count (default 1 = direct children/elements). A branch shorter than depth contributes nothing."
+				},
+				"groupBy": {
+					"type": "string",
+					"description": "Optional field read off each visited entry to partition the count. May be a relative path like 'meta/source'. Entries missing the field group under the 'null' key."
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"exists": { "type": "boolean", "description": "True if a countable collection is present at the path (false for an absent path or a scalar)." },
+				"count": { "type": "integer", "description": "Number of entries visited at the given depth." },
+				"groups": { "type": "object", "description": "Present only with groupBy: maps each distinct field value to a { count } object. Sum of group counts equals count." }
+			}
+		}
+	}
+}

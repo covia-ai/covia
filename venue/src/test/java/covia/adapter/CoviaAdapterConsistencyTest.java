@@ -85,7 +85,7 @@ public class CoviaAdapterConsistencyTest {
 
 	private long listCount(String path, RequestContext ctx) {
 		ACell r = list(path, ctx);
-		CVMLong c = RT.getIn(r, "totalSize");
+		CVMLong c = RT.getIn(r, "count");
 		return (c == null) ? -1 : c.longValue();
 	}
 

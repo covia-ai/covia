@@ -181,7 +181,7 @@ Bridges operations to execution environments:
 | `file` | Filesystem (root-jailed; host/temp/DLFS-backed roots) | `roots`, `list`, `tree`, `read`, `write`, `append`, `delete`, `mkdir`, `stat` |
 | `schema` | JSON Schema operations | `validate`, `validateAll`, `infer`, `coerce`, `check` |
 | `orchestrator` | Multi-step workflows | Custom orchestration |
-| `covia` | Lattice CRUD | `read`, `write`, `delete`, `append`, `slice`, `list`, `functions`, `describe`, `adapters`, `inspect` |
+| `covia` | Lattice CRUD | `read`, `write`, `delete`, `append`, `slice`, `list`, `inspect`, `aggregate`, `functions`, `describe`, `adapters` |
 | `asset` | Content-addressed assets | `store`, `get`, `getContent`, `list`, `pin` |
 | `agent` | Agent lifecycle | `create`, `fork`, `request`, `message`, `trigger`, `query`, `list`, `delete`, `suspend`, `resume`, `update`, `cancelTask` |
 | `llmagent` | LLM agent transitions | `chat` |
@@ -204,6 +204,7 @@ Base path: `/api/v1/`
 | `/assets` | POST | Register new asset |
 | `/assets/{id}/content` | GET/PUT | Asset binary content |
 | `/invoke` | POST | Execute an operation — async by default (201 + job record to poll); `?wait=true` blocks up to the 120s cap, `?wait=<ms>` up to that many ms (clamped), returning the finished record (200) |
+| `/values/{read,list,slice,inspect,aggregate,count}` | GET | Job-free lattice reads (#177) — `?path=…`, synchronous, capability-checked, **no job persisted**. Shares `covia:*` read accessors. `aggregate`/`count` tally entries at a `depth`, optional `groupBy`. See `docs/READ_API.md` |
 | `/jobs/{id}` | GET | Job status |
 | `/jobs/{id}/sse` | GET | Server-sent events for job updates |
 | `/.well-known/did.json` | GET | Venue DID document — `did:web:<hostname>` alias (canonical did:key in `alsoKnownAs`) when a public `hostname` is set, else the did:key document (#167) |

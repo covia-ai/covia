@@ -120,7 +120,7 @@ Adapter Layer
     ├── JVMAdapter        — string utilities
     ├── FileAdapter       — filesystem access (root-jailed; host / temp / DLFS-backed roots)
     ├── SchemaAdapter     — JSON Schema validation, inference, coercion
-    ├── CoviaAdapter      — lattice CRUD (read, write, delete, append, slice, list, functions, describe)
+    ├── CoviaAdapter      — lattice CRUD + reads (read, write, delete, append, slice, list, inspect, aggregate)
     ├── AssetAdapter      — content-addressed asset store/retrieve
     ├── AgentAdapter      — agent lifecycle (create, message, run, fork, templates)
     ├── LLMAgentAdapter   — LLM-backed agent transitions (chat)

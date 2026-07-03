@@ -19,9 +19,12 @@ import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.exceptions.ParseException;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
+import covia.adapter.CoviaAdapter;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.AuthException;
@@ -113,6 +116,15 @@ public class CoviaAPI extends ACoviaAPI {
 		routes.put(ROUTE+"jobs/<id>/delete", this::deleteJob);
 		routes.sse(ROUTE+"jobs/<id>/sse", sseServer.registerSSE);
 		routes.get(ROUTE+"jobs", this::getJobs);
+
+		// Job-free lattice value reads (#177) — synchronous, capability-checked,
+		// no Job persisted. Shares CoviaAdapter's read accessors with covia:* ops.
+		routes.get(ROUTE+"values/read", this::getValueRead);
+		routes.get(ROUTE+"values/list", this::getValueList);
+		routes.get(ROUTE+"values/slice", this::getValueSlice);
+		routes.get(ROUTE+"values/inspect", this::getValueInspect);
+		routes.get(ROUTE+"values/aggregate", this::getValueAggregate);
+		routes.get(ROUTE+"values/count", this::getValueCount);
 
 		// Secrets
 		routes.get(ROUTE+"secrets", this::listSecrets);
@@ -961,6 +973,129 @@ public class CoviaAPI extends ACoviaAPI {
 		} catch (IOException e) {
 			buildError(ctx, 500, "Error resolving operation: " + e.getMessage());
 		}
+	}
+
+	// ========== Lattice value reads (#177) ==========
+
+	@OpenApi(path = ROUTE + "values/read", methods = HttpMethod.GET, tags = { "Values" },
+			summary = "Read the literal value at a lattice path (job-free)", operationId = "valueRead")
+	protected void getValueRead(Context ctx) { handleValueRoute(ctx, "read"); }
+
+	@OpenApi(path = ROUTE + "values/list", methods = HttpMethod.GET, tags = { "Values" },
+			summary = "List the keys / structure of a lattice node (job-free)", operationId = "valueList")
+	protected void getValueList(Context ctx) { handleValueRoute(ctx, "list"); }
+
+	@OpenApi(path = ROUTE + "values/slice", methods = HttpMethod.GET, tags = { "Values" },
+			summary = "Read a paginated slice of a lattice sequence (job-free)", operationId = "valueSlice")
+	protected void getValueSlice(Context ctx) { handleValueRoute(ctx, "slice"); }
+
+	@OpenApi(path = ROUTE + "values/inspect", methods = HttpMethod.GET, tags = { "Values" },
+			summary = "Budget-controlled JSON5 render of a lattice value (job-free)", operationId = "valueInspect")
+	protected void getValueInspect(Context ctx) { handleValueRoute(ctx, "inspect"); }
+
+	@OpenApi(path = ROUTE + "values/aggregate", methods = HttpMethod.GET, tags = { "Values" },
+			summary = "Count entries at a depth, optionally grouped by a field (job-free)", operationId = "valueAggregate")
+	protected void getValueAggregate(Context ctx) { handleValueRoute(ctx, "aggregate"); }
+
+	@OpenApi(path = ROUTE + "values/count", methods = HttpMethod.GET, tags = { "Values" },
+			summary = "Fast-path count of entries at a depth (job-free)", operationId = "valueCount")
+	protected void getValueCount(Context ctx) { handleValueRoute(ctx, "count"); }
+
+	/**
+	 * Shared handler for the job-free {@code /values/*} read routes. Builds the
+	 * caller context (identity + transport UCAN) exactly like the other GET reads,
+	 * assembles the accessor input from query parameters, and dispatches to the
+	 * matching {@link CoviaAdapter} read accessor — with <b>no Job created or
+	 * persisted</b> (the fix for #177). Reads are local-only, so there is no
+	 * remote-fetch surface here; capability enforcement is unchanged from the op path.
+	 *
+	 * @param op one of {@code read}, {@code list}, {@code slice}, {@code inspect}
+	 */
+	private void handleValueRoute(Context ctx, String op) {
+		String path = ctx.queryParam("path");
+		if (path == null || path.isEmpty()) {
+			buildError(ctx, 400, "Missing 'path' query parameter");
+			return;
+		}
+		// Execution-scoped virtual namespaces (t/, n/, c/) need a job/agent/session
+		// context that a plain GET does not carry.
+		if (isExecutionScopedNamespace(path)) {
+			buildError(ctx, 400, "Namespace not readable via the values API: " + firstSegment(path) + "/");
+			return;
+		}
+
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
+		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null);
+
+		AMap<AString, ACell> input;
+		try {
+			input = buildValueInput(ctx, path);
+		} catch (NumberFormatException e) {
+			buildError(ctx, 400, "Invalid integer query parameter: " + e.getMessage());
+			return;
+		}
+
+		CoviaAdapter covia = (CoviaAdapter) engine().getAdapter("covia");
+		try {
+			ACell result = switch (op) {
+				case "read"      -> covia.handleRead(rctx, input);
+				case "list"      -> covia.handleList(rctx, input);
+				case "slice"     -> covia.handleSlice(rctx, input);
+				case "inspect"   -> covia.handleInspect(rctx, input);
+				case "aggregate" -> covia.handleAggregate(rctx, input);
+				// The count fast path is aggregate with no grouping.
+				case "count"     -> covia.handleAggregate(rctx, input.dissoc(Strings.intern("groupBy")));
+				default -> throw new IllegalArgumentException("Unknown values op: " + op);
+			};
+			buildResult(ctx, 200, result);
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (RuntimeException e) {
+			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		}
+	}
+
+	/** Builds the CoviaAdapter read-accessor input map from the request query params. */
+	private static AMap<AString, ACell> buildValueInput(Context ctx, String path) {
+		AMap<AString, ACell> m = Maps.empty();
+		m = m.assoc(Fields.PATH, Strings.create(path));
+		m = putLongParam(m, ctx, "maxSize");
+		m = putLongParam(m, ctx, "limit");
+		m = putLongParam(m, ctx, "offset");
+		m = putLongParam(m, ctx, "budget");
+		m = putLongParam(m, ctx, "depth");
+		String compact = ctx.queryParam("compact");
+		if (compact != null) {
+			m = m.assoc(Strings.intern("compact"),
+					Boolean.parseBoolean(compact) ? CVMBool.TRUE : CVMBool.FALSE);
+		}
+		String groupBy = ctx.queryParam("groupBy");
+		if (groupBy != null && !groupBy.isBlank()) {
+			m = m.assoc(Strings.intern("groupBy"), Strings.create(groupBy));
+		}
+		return m;
+	}
+
+	private static AMap<AString, ACell> putLongParam(AMap<AString, ACell> m, Context ctx, String name) {
+		String v = ctx.queryParam(name);
+		if (v == null || v.isBlank()) return m;
+		return m.assoc(Strings.intern(name), CVMLong.create(Long.parseLong(v.trim())));
+	}
+
+	/** First path segment (namespace prefix) before the first {@code /}. */
+	private static String firstSegment(String path) {
+		int slash = path.indexOf('/');
+		return (slash < 0) ? path : path.substring(0, slash);
+	}
+
+	/**
+	 * True for the job/agent/session-scoped virtual namespaces ({@code t/},
+	 * {@code n/}, {@code c/}) that are only meaningful inside a running job/agent.
+	 */
+	private static boolean isExecutionScopedNamespace(String path) {
+		String seg = firstSegment(path);
+		return seg.equals("t") || seg.equals("n") || seg.equals("c");
 	}
 
 	// ========== Secret endpoints ==========
