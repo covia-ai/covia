@@ -2001,6 +2001,101 @@ public class CoviaAdapterTest {
 			"Should find data written to t/ in same job scope");
 	}
 
+	// ========== t/ behaves like w/ — same shape semantics, job lifecycle (#176) ==========
+
+	@Test
+	public void testTempDeepWriteBuildsHierarchy() {
+		RequestContext jobCtx = ALICE.withJobId(newJob());
+
+		// A deep write auto-vivifies intermediate maps and reports pathCreated,
+		// exactly like w/.
+		ACell writeResult = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/analysis/vendor/score", Fields.VALUE, CVMLong.create(7)),
+			jobCtx).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(writeResult, "pathCreated"),
+			"building t/ hierarchy must report pathCreated, like w/");
+
+		assertEquals(CVMLong.create(7), RT.getIn(read(jobCtx, "t/analysis/vendor/score"), "value"));
+		// A sibling under the built parent survives.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/analysis/vendor/rank", Fields.VALUE, CVMLong.create(1)),
+			jobCtx).awaitResult(5000);
+		assertEquals(CVMLong.create(7), RT.getIn(read(jobCtx, "t/analysis/vendor/score"), "value"));
+	}
+
+	@Test
+	public void testTempWriteIntoScalarThrowsShapeConflict() {
+		RequestContext jobCtx = ALICE.withJobId(newJob());
+
+		// t/note holds a scalar...
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/note", Fields.VALUE, Strings.create("just text")),
+			jobCtx).awaitResult(5000);
+
+		// ...writing a key beneath it is a shape conflict (was a silent clobber
+		// before #176 — the whole point of t/ matching w/).
+		Job job = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/note/sub", Fields.VALUE, CVMLong.create(1)), jobCtx);
+		covia.exception.JobFailedException ex = assertThrows(
+			covia.exception.JobFailedException.class, () -> job.awaitResult(5000));
+		assertTrue(ex.getMessage().contains("scalar"),
+			"t/ scalar-clobber must throw the same shape conflict as w/, got: " + ex.getMessage());
+
+		// The scalar is intact — the failed write changed nothing.
+		assertEquals(Strings.create("just text"), RT.getIn(read(jobCtx, "t/note"), "value"));
+	}
+
+	@Test
+	public void testTempAppend() {
+		RequestContext jobCtx = ALICE.withJobId(newJob());
+
+		// Append into t/ builds the vector and reports newSize — the job-scope
+		// branch that was previously missing entirely (#176).
+		ACell r1 = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "t/log", Fields.VALUE, Strings.create("a")),
+			jobCtx).awaitResult(5000);
+		assertEquals(CVMLong.create(1), RT.getIn(r1, "newSize"));
+		ACell r2 = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "t/log", Fields.VALUE, Strings.create("b")),
+			jobCtx).awaitResult(5000);
+		assertEquals(CVMLong.create(2), RT.getIn(r2, "newSize"));
+
+		// Element read goes through covia's index-aware readPath (core RT.getIn
+		// does not string-index a vector).
+		assertEquals(Strings.create("a"), RT.getIn(read(jobCtx, "t/log/0"), "value"));
+		assertEquals(Strings.create("b"), RT.getIn(read(jobCtx, "t/log/1"), "value"));
+	}
+
+	@Test
+	public void testTempNestedDeleteLeavesSiblings() {
+		RequestContext jobCtx = ALICE.withJobId(newJob());
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/state/keep", Fields.VALUE, CVMLong.create(1)),
+			jobCtx).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/state/drop", Fields.VALUE, CVMLong.create(2)),
+			jobCtx).awaitResult(5000);
+
+		engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "t/state/drop"), jobCtx).awaitResult(5000);
+
+		assertEquals(CVMBool.FALSE, RT.getIn(read(jobCtx, "t/state/drop"), "exists"));
+		assertEquals(CVMLong.create(1), RT.getIn(read(jobCtx, "t/state/keep"), "value"));
+	}
+
+	/** Creates a completed job to scope t/ against. */
+	private Blob newJob() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo",
+			Maps.of(Strings.create("message"), Strings.create("scope")), ALICE);
+		job.awaitResult(5000);
+		return job.getID();
+	}
+
+	private ACell read(RequestContext ctx, String path) {
+		return engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, path), ctx).awaitResult(5000);
+	}
+
 	// ========== covia:inspect ==========
 
 	@Test

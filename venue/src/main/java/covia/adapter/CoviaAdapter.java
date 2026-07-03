@@ -611,18 +611,20 @@ public class CoviaAdapter extends AAdapter {
 		}
 		ACell value = parseJsonValue(RT.getIn(input, Fields.VALUE));
 
-		// Check job-scoped virtual namespace (t/)
+		// Legacy job-scoped t/ (mode 2): the temp value is the navigation root,
+		// so keys are already relative to it. Route through the SAME deepSet as
+		// the physical path — a scalar-clobbering write now throws the same
+		// shape-conflict error instead of silently rebuilding an empty map (#176).
 		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
 		if (vns != null && vns.jobId() != null) {
-			ACell[] keys = vns.remainingKeys();
+			final ACell[] keys = vns.remainingKeys();
 			final boolean[] built = {false};
-			TempNamespaceResolver.updateTemp(vns.cursor(), vns.jobId(), oldTemp -> {
-				AMap<AString, ACell> map = (oldTemp instanceof AMap) ? (AMap<AString, ACell>) oldTemp : Maps.empty();
-				if (keys.length == 0) return value;
-				if (keys.length == 1) return map.assoc(Strings.create(keys[0].toString()), value);
-				AString topKey = Strings.create(keys[0].toString());
-				ACell next = map.assoc(topKey, deepSet(map.get(topKey), keys, 1, value));
-				built[0] = !parentExisted(map, keys, 0);
+			updateTempPath(vns, (current, from) -> {
+				ACell next = deepSet(current, keys, from, value);
+				// t/ keys carry no namespace prefix (the resolver consumed it), so
+				// "built hierarchy" is one segment shallower than the physical path
+				// (whose keys[0] is the namespace): > 1, not > 2.
+				built[0] = keys.length > 1 && !parentExisted(current, keys, from);
 				return next;
 			});
 			return built[0] ? Maps.of(K_PATH_CREATED, CVMBool.TRUE) : Maps.empty();
@@ -671,19 +673,12 @@ public class CoviaAdapter extends AAdapter {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
 		requireDeleteAccess(ctx, jsonKeys);
 
-		// Check job-scoped virtual namespace (t/)
+		// Legacy job-scoped t/ (mode 2): apply the SAME deepDelete as the
+		// physical path against the temp value at the navigation root (#176).
 		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
 		if (vns != null && vns.jobId() != null) {
-			ACell[] keys = vns.remainingKeys();
-			TempNamespaceResolver.updateTemp(vns.cursor(), vns.jobId(), oldTemp -> {
-				AMap<AString, ACell> map = (oldTemp instanceof AMap) ? (AMap<AString, ACell>) oldTemp : Maps.empty();
-				if (keys.length == 0) return null;
-				AString topKey = Strings.create(keys[0].toString());
-				if (keys.length == 1) return map.dissoc(topKey);
-				ACell existing = map.get(topKey);
-				if (existing == null) return map;
-				return map.assoc(topKey, deepDelete(existing, keys, 1));
-			});
+			final ACell[] keys = vns.remainingKeys();
+			updateTempPath(vns, (current, from) -> deepDelete(current, keys, from));
 			return Maps.empty();
 		}
 
@@ -714,11 +709,32 @@ public class CoviaAdapter extends AAdapter {
 		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
 		requireWriteAccess(ctx, jsonKeys);
 
-		// Cursor-based virtual (n/) or physical namespace
 		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
+		ACell element = parseJsonValue(RT.getIn(input, Fields.VALUE));
+
+		// Legacy job-scoped t/ (mode 2): append into the temp value at the
+		// navigation root — the same deepAppend as the physical path. Without
+		// this branch a job-scope t/ append would (wrongly) target the jobs
+		// Index cursor rather than the job record's temp field (#176).
+		if (vns != null && vns.jobId() != null) {
+			final ACell[] keys = vns.remainingKeys();
+			final boolean[] built = {false};
+			final long[] newSize = {0};
+			updateTempPath(vns, (current, from) -> {
+				ACell next = deepAppend(current, keys, from, element);
+				built[0] = keys.length > 1 && !parentExisted(current, keys, from);
+				ACell leaf = deepGet(next, keys, from);
+				newSize[0] = (leaf instanceof AVector) ? ((AVector<?>) leaf).count() : 0;
+				return next;
+			});
+			AMap<AString, ACell> out = Maps.of(K_NEW_SIZE, CVMLong.create(newSize[0]));
+			if (built[0]) out = out.assoc(K_PATH_CREATED, CVMBool.TRUE);
+			return out;
+		}
+
+		// Cursor-based virtual (n/) or physical namespace
 		if (vns != null) jsonKeys = vns.remainingKeys();
 		ALatticeCursor<ACell> baseCursor = (vns != null) ? vns.cursor() : ensureUserCursor(ctx);
-		ACell element = parseJsonValue(RT.getIn(input, Fields.VALUE));
 
 		final ACell[] keys = jsonKeys;
 		final boolean[] built = {false};
@@ -845,6 +861,25 @@ public class CoviaAdapter extends AAdapter {
 	@FunctionalInterface
 	private interface PathUpdate {
 		ACell apply(ACell current, int fromIndex);
+	}
+
+	/**
+	 * Applies a {@link PathUpdate} to the legacy job-scoped {@code t/} temp slot
+	 * (mode 2 — {@code jobId} present, no agent+task scope). The {@code temp}
+	 * value inside the job record is the navigation root, so the update runs at
+	 * path index 0 — exactly as {@link #updatePath} runs it on a cursor value —
+	 * giving {@code t/} writes/deletes/appends the same deep navigation and
+	 * shape-conflict semantics as {@code w/} and the agent-task {@code t/} path.
+	 *
+	 * <p><b>Lifecycle is unchanged:</b> the data still lives in the job record's
+	 * {@code temp} field with its job-scoped lifecycle, written atomically (and
+	 * timestamp-stamped) via {@link TempNamespaceResolver#updateTemp}. Only the
+	 * shape handling is shared with the physical path, not the storage location —
+	 * so a {@code t/} value never outlives or escapes its job record.</p>
+	 */
+	private static void updateTempPath(NamespaceResolver.ResolvedNamespace vns, PathUpdate update) {
+		TempNamespaceResolver.updateTemp(vns.cursor(), vns.jobId(),
+			oldTemp -> update.apply(oldTemp, 0));
 	}
 
 	/**
