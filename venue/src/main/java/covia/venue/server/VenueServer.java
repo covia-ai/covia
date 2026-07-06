@@ -78,6 +78,11 @@ public class VenueServer {
 	protected CoviaWebApp webApp;
 	protected Engine engine;
 
+	/** Guards {@link #close()} so a double-invocation (explicit close + JVM
+	 *  shutdown, or repeated calls) is a safe no-op. */
+	private final java.util.concurrent.atomic.AtomicBoolean closed =
+			new java.util.concurrent.atomic.AtomicBoolean(false);
+
 	protected CoviaAPI api;
 	protected MCP mcp;
 	protected A2A a2a;
@@ -618,6 +623,7 @@ public class VenueServer {
 	 * {@code venue/docs/PERSISTENCE.md} §5.3.</p>
 	 */
 	public void close() {
+		if (!closed.compareAndSet(false, true)) return; // idempotent — already closed
 		if (javalin!=null) {
 			javalin.stop();
 			javalin=null;
