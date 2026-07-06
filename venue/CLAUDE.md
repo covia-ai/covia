@@ -326,6 +326,42 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 
 Mounts WebDAV at `/dlfs/` for file access to DLFS drives. Off by default.
 
+### A2A protocol
+
+```json
+{
+  "a2a": {
+    "defaultChatOp": "v/test/ops/echo",
+    "agentInfo": {
+      "name": "My Venue Agent",
+      "description": "What this agent does",
+      "organization": "Acme",
+      "providerUrl": "https://acme.example"
+    }
+  }
+}
+```
+
+Enables the A2A (Agent-to-Agent) protocol. Off by default — the endpoints are
+registered **only** when an `a2a` block is present. Without it, `POST /a2a` and
+`GET /.well-known/agent-card.json` return `501` with a hint pointing back here
+(rather than an indistinguishable 404).
+
+- `defaultChatOp` — the operation invoked on a fresh `message/send` (no
+  `taskId`). Its Job becomes the A2A Task; its output becomes the Task's
+  artifact. `v/test/ops/echo` needs no LLM secret and is handy for smoke tests;
+  point it at an `llmagent`/`agent` chat op for a real agent.
+- `agentInfo` — surfaced in the agent card (`name`/`description`, plus
+  `organization`/`providerUrl` for the card's `provider`). All optional.
+
+**Auth note:** `message/send` invokes `defaultChatOp` as the *calling*
+identity. Under the default read-only public ceiling an unauthenticated caller
+cannot invoke, so the Task comes back `TASK_STATE_FAILED`. To exercise
+`message/send` from an unauthenticated client, either authenticate the caller
+or widen `auth.public.caps` to permit the op — do the latter only on a
+loopback-bound (`bindAddress: 127.0.0.1`) throwaway venue, never a
+LAN-reachable one. The agent-card GET is public and works regardless.
+
 ### Secrets bootstrap
 
 Per-venue config can pre-populate the encrypted per-user secret stores at startup:

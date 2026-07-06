@@ -373,10 +373,32 @@ public class VenueServer {
 		userApi.addRoutes(routes);
 		webApp.addRoutes(routes);
 		if (mcp!=null) mcp.addRoutes(routes);
-		if (a2a!=null) a2a.addRoutes(routes);
+		if (a2a!=null) {
+			a2a.addRoutes(routes);
+		} else {
+			// A2A is opt-in (it needs an `a2a` config block). When it's absent,
+			// answer the two well-known A2A routes with a helpful hint instead of
+			// the generic catch-all 404, so a developer knows the fix is a config
+			// addition, not a wrong URL (#179).
+			routes.get("/.well-known/agent-card.json", VenueServer::a2aNotConfigured);
+			routes.post("/a2a", VenueServer::a2aNotConfigured);
+		}
 		// Embedder-contributed routes (see extraRouteRegistrars). Registered last,
 		// after the auth middleware, so /api/... routes inherit caller identity + sync.
 		for (Consumer<RoutesConfig> r : extraRouteRegistrars) r.accept(routes);
+	}
+
+	/**
+	 * Fallback handler for the well-known A2A routes when no {@code a2a} config
+	 * block is present. Returns a 501 with a hint pointing at the missing config,
+	 * so the endpoints are self-describing rather than an indistinguishable 404 (#179).
+	 */
+	private static void a2aNotConfigured(io.javalin.http.Context ctx) {
+		ctx.status(501);
+		ctx.header("Content-Type", "application/json");
+		ctx.result("{\"error\":\"A2A is not configured on this venue\","
+				+ "\"hint\":\"Add an \\\"a2a\\\" block with \\\"defaultChatOp\\\" to the venue config "
+				+ "to enable the A2A protocol endpoints (POST /a2a and GET /.well-known/agent-card.json).\"}");
 	}
 	
 
