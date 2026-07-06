@@ -25,6 +25,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.exceptions.ParseException;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
+import covia.adapter.AgentAdapter;
 import covia.adapter.CoviaAdapter;
 import convex.core.util.JSON;
 import covia.api.Fields;
@@ -126,6 +127,11 @@ public class CoviaAPI extends ACoviaAPI {
 		routes.get(ROUTE+"values/inspect", this::getValueInspect);
 		routes.get(ROUTE+"values/aggregate", this::getValueAggregate);
 		routes.get(ROUTE+"values/count", this::getValueCount);
+
+		// Agents — job-free reads (#180), the caller's own agents. Mirrors how
+		// every other entity type is read via GET; no Job persisted.
+		routes.get(ROUTE+"agents", this::getAgents);
+		routes.get(ROUTE+"agents/{id}", this::getAgentInfo);
 
 		// Secrets
 		routes.get(ROUTE+"secrets", this::listSecrets);
@@ -1119,6 +1125,47 @@ public class CoviaAPI extends ACoviaAPI {
 	private static boolean isExecutionScopedNamespace(String path) {
 		String seg = firstSegment(path);
 		return seg.equals("t") || seg.equals("n") || seg.equals("c");
+	}
+
+	// ========== Agent endpoints ==========
+
+	@OpenApi(path = ROUTE + "agents",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "List the authenticated caller's agents (job-free, #180). ?status=true for the status-annotated form; ?includeTerminated=true to include terminated agents.",
+			operationId = "getAgents")
+	protected void getAgents(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		boolean annotated = "true".equals(ctx.queryParam("status"));
+		boolean includeTerminated = "true".equals(ctx.queryParam("includeTerminated"));
+		AgentAdapter agent = (AgentAdapter) engine().getAdapter("agent");
+		buildResult(ctx, 200, agent.listAgents(rctx, includeTerminated, annotated));
+	}
+
+	@OpenApi(path = ROUTE + "agents/{id}",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "Get one of the authenticated caller's agents — the agent:info payload (job-free, #180).",
+			operationId = "getAgentInfo",
+			pathParams = { @OpenApiParam(name = "id", description = "Agent id") })
+	protected void getAgentInfo(Context ctx) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (rctx.getCallerDID() == null) {
+			buildError(ctx, 401, "Authentication required");
+			return;
+		}
+		String id = ctx.pathParam("id");
+		AgentAdapter agent = (AgentAdapter) engine().getAdapter("agent");
+		AMap<AString, ACell> info = agent.agentInfo(rctx, Strings.create(id));
+		if (info == null) {
+			buildError(ctx, 404, "Agent not found: " + id);
+			return;
+		}
+		buildResult(ctx, 200, info);
 	}
 
 	// ========== Secret endpoints ==========

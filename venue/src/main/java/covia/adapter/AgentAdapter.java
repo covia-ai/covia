@@ -808,17 +808,36 @@ public class AgentAdapter extends AAdapter {
 		if (user == null) { job.fail("User not found: " + ctx.getCallerDID()); return; }
 
 		AgentState agent = user.agent(agentId);
-		if (agent == null) { job.fail("Agent not found: " + agentId); return; }
+		if (agent == null || agent.getRecord() == null) { job.fail("Agent not found: " + agentId); return; }
 
+		job.setStatus(Status.STARTED);
+		job.completeWith(buildAgentSummary(agentId, agent));
+	}
+
+	/**
+	 * Job-free read: the caller's agent summary (the {@code agent:info} payload),
+	 * or {@code null} if the caller has no such agent. Shared by {@code agent:info}
+	 * and the job-free {@code GET /api/v1/agents/{id}} route (#180).
+	 */
+	public AMap<AString, ACell> agentInfo(RequestContext ctx, AString agentId) {
+		User user = engine.getVenueState().users().get(ctx.getCallerDID());
+		if (user == null) return null;
+		AgentState agent = user.agent(agentId);
+		if (agent == null || agent.getRecord() == null) return null;
+		return buildAgentSummary(agentId, agent);
+	}
+
+	/**
+	 * Builds the {@code agent:info} summary from a resolved agent — a lightweight
+	 * view; full state, history, and timeline are read via
+	 * {@code covia:read path=g/<agentId>/state} etc.
+	 */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> buildAgentSummary(AString agentId, AgentState agent) {
 		AMap<AString, ACell> record = agent.getRecord();
-		if (record == null) { job.fail("Agent not found: " + agentId); return; }
-
-		// Return a lightweight summary. Full state, history, and timeline
-		// are accessible via covia:read path=g/<agentId>/state etc.
 		// NB: stateConfig is only populated by legacy definition-created agents.
-		// Use instanceof (not RT.castMap) because RT.castMap(null) returns
-		// an empty map — callers would see a spurious empty stateConfig otherwise.
-		@SuppressWarnings("unchecked")
+		// Use instanceof (not RT.castMap) because RT.castMap(null) returns an empty
+		// map — callers would see a spurious empty stateConfig otherwise.
 		AMap<AString, ACell> stateConfig =
 			(RT.getIn(record, AgentState.KEY_STATE, Strings.intern("config")) instanceof AMap<?,?> sc)
 				? (AMap<AString, ACell>) sc : null;
@@ -836,9 +855,7 @@ public class AgentAdapter extends AAdapter {
 		if (tasks != null) summary = summary.assoc(Strings.intern("tasks"), CVMLong.create(tasks.count()));
 		ACell error = record.get(AgentState.KEY_ERROR);
 		if (error != null) summary = summary.assoc(AgentState.KEY_ERROR, error);
-
-		job.setStatus(Status.STARTED);
-		job.completeWith(summary);
+		return summary;
 	}
 
 	/**
@@ -901,12 +918,22 @@ public class AgentAdapter extends AAdapter {
 		job.completeWith(rendered);
 	}
 
-	@SuppressWarnings("unchecked")
 	private void handleList(Job job, ACell input, RequestContext ctx) {
 		boolean includeTerminated = CVMBool.TRUE.equals(RT.getIn(input, Fields.INCLUDE_TERMINATED));
+		job.setStatus(Status.STARTED);
+		job.completeWith(listAgents(ctx, includeTerminated, true));
+	}
 
-		Users users = engine.getVenueState().users();
-		User user = users.get(ctx.getCallerDID());
+	/**
+	 * Job-free read: the caller's agents. Shared by {@code agent:list} and the
+	 * job-free {@code GET /api/v1/agents} route (#180). {@code annotated} controls
+	 * the entry shape: {@code true} → the status-annotated summary maps
+	 * {@code agent:list} returns ({@code {agentId, status, tasks, error?}});
+	 * {@code false} → bare agent ids.
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> listAgents(RequestContext ctx, boolean includeTerminated, boolean annotated) {
+		User user = engine.getVenueState().users().get(ctx.getCallerDID());
 
 		AVector<ACell> agents = Vectors.empty();
 		if (user != null) {
@@ -920,6 +947,11 @@ public class AgentAdapter extends AAdapter {
 
 					ACell status = record.get(AgentState.KEY_STATUS);
 					if (!includeTerminated && AgentState.TERMINATED.equals(status)) continue;
+
+					if (!annotated) {
+						agents = agents.conj(agentId);
+						continue;
+					}
 
 					long taskCount = 0;
 					ACell tasksCell = record.get(AgentState.KEY_TASKS);
@@ -936,8 +968,7 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
-		job.setStatus(Status.STARTED);
-		job.completeWith(Maps.of(Strings.intern("agents"), agents));
+		return Maps.of(Strings.intern("agents"), agents);
 	}
 
 	private void handleDelete(Job job, ACell input, RequestContext ctx) {
