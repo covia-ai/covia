@@ -208,6 +208,43 @@ public class A2AAgentCardTest {
 		assertEquals(200, get(cardPath, bearerFor(AKeyPair.generate())).statusCode());
 	}
 
+	@Test
+	public void publicAgentWithCaps_acceptsAnonMessage_withoutCapsDenies() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		AString ownerDid = didOf(kp);
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(bearerFor(kp)));
+		client.setTimeout(5000);
+
+		// Public agent WITH an explicit a2a.caps ceiling ("unrestricted" for the
+		// test) → an anonymous message/send runs under the owner, bounded by caps.
+		Job withCaps = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Strings.create("agentId"), Strings.create("PubChat"),
+				Strings.create("config"), Maps.of(
+						Strings.create("operation"), Strings.create("v/test/ops/echo"),
+						Strings.create("a2a"), Maps.of(
+								Strings.create("public"), CVMBool.TRUE,
+								Strings.create("caps"), Strings.create("unrestricted")))));
+		assertEquals(Status.COMPLETE, withCaps.getStatus(), "create: " + withCaps.getErrorMessage());
+
+		Object env = rpcEnvelope("pm1", "SendMessage", new MessageSendParams(userMessage("hi public"), null, null));
+
+		HttpResponse<String> anon = post("/a2a/" + ownerDid + "/g/PubChat", env, null);
+		assertEquals(200, anon.statusCode(), anon.body());
+		Map<String, Object> parsed = JsonUtil.OBJECT_MAPPER.fromJson(anon.body(), Map.class);
+		assertNull(parsed.get("error"), "unexpected error: " + parsed.get("error"));
+		assertNotNull(extractTask(parsed));
+
+		// Public agent WITHOUT a2a.caps → discoverable, but an anonymous
+		// message/send is denied (card-only; the owner hasn't bounded a run).
+		Job noCaps = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Strings.create("agentId"), Strings.create("PubNoCaps"),
+				Strings.create("config"), Maps.of(
+						Strings.create("operation"), Strings.create("v/test/ops/echo"),
+						Strings.create("a2a"), Maps.of(Strings.create("public"), CVMBool.TRUE))));
+		assertEquals(Status.COMPLETE, noCaps.getStatus());
+		assertEquals(404, post("/a2a/" + ownerDid + "/g/PubNoCaps", env, null).statusCode());
+	}
+
 	// ---- helpers ----
 
 	private static AString didOf(AKeyPair kp) {

@@ -22,6 +22,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
@@ -31,6 +32,7 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Venue;
+import covia.lattice.CapabilityChecker;
 import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -195,13 +197,6 @@ public class A2A extends ACoviaAPI {
 		else buildError(ctx, 403, "Forbidden");
 	}
 
-	/** Resolve the addressed agent in the (owner) caller's namespace, or null if absent. */
-	private AgentState resolveOwnedAgent(RequestContext rctx, A2ACodec.AgentRef ref) {
-		User user = engine().getVenueState().users().get(rctx.getCallerDID());
-		AgentState agent = (user == null) ? null : user.agent(ref.agentId());
-		return (agent != null && agent.exists()) ? agent : null;
-	}
-
 	/** Resolve the addressed agent in its owner's namespace (from the URL), or null. */
 	private AgentState resolveAgentByOwner(A2ACodec.AgentRef ref) {
 		User user = engine().getVenueState().users().get(ref.ownerDid());
@@ -214,6 +209,41 @@ public class A2A extends ACoviaAPI {
 		AMap<AString, ACell> config = agent.getConfig();
 		return config != null
 				&& CVMBool.TRUE.equals(RT.getIn(config, Strings.intern("a2a"), Strings.intern("public")));
+	}
+
+	/**
+	 * True when a non-owner may <em>interact</em> with a public agent — the agent
+	 * is public AND has an explicit {@code a2a.caps} ceiling (COG-14 §5). Public
+	 * without a ceiling is discoverable (card) but not anonymously interactable:
+	 * running the agent for anonymous callers requires the owner to deliberately
+	 * bound it.
+	 */
+	private static boolean publicInteractionAllowed(AgentState agent) {
+		return isPublic(agent)
+				&& RT.getIn(agent.getConfig(), Strings.intern("a2a"), Strings.intern("caps")) != null;
+	}
+
+	/**
+	 * The context under which a non-owner's message runs on a public agent: the
+	 * <em>owner's</em> identity (so it resolves the owner's agent) narrowed by the
+	 * {@code a2a.caps} ceiling. {@code "unrestricted"} → no ceiling (full owner
+	 * authority — the owner's explicit, logged choice); a malformed value falls
+	 * back to a read-only ceiling. A ceiling can only narrow, so this is
+	 * escalation-safe.
+	 */
+	private RequestContext ownerDispatchContext(A2ACodec.AgentRef ref, AgentState agent) {
+		AString ownerDid = Strings.create(ref.ownerDid());
+		ACell caps = RT.getIn(agent.getConfig(), Strings.intern("a2a"), Strings.intern("caps"));
+		if (caps instanceof AString s && "unrestricted".equals(s.toString())) {
+			log.warn("A2A: public agent {} runs anonymous callers under UNRESTRICTED owner authority", ref.gridAddress());
+			return RequestContext.of(ownerDid);
+		}
+		AVector<ACell> ceiling = RT.ensureVector(caps);
+		if (ceiling == null) {
+			log.warn("A2A: public agent {} has malformed a2a.caps; falling back to read-only", ref.gridAddress());
+			ceiling = CapabilityChecker.readOnlyCeiling(ownerDid);
+		}
+		return RequestContext.of(ownerDid).withCaps(ceiling);
 	}
 
 	/**
@@ -232,9 +262,23 @@ public class A2A extends ACoviaAPI {
 		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(ctx.path());
 		if (ref == null) { buildError(ctx, 404, "Not found"); return; }
 
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		if (!isOwner(rctx, ref)) { denyPerAgentAccess(ctx, rctx); return; }
-		if (resolveOwnedAgent(rctx, ref) == null) { buildError(ctx, 404, "Not found"); return; }
+		AgentState agent = resolveAgentByOwner(ref);
+		if (agent == null) { buildError(ctx, 404, "Not found"); return; }
+
+		RequestContext caller = AuthMiddleware.callerContext(ctx);
+		boolean owner = isOwner(caller, ref);
+		// The context message/send runs under: the owner as themselves, or — for a
+		// public agent with an explicit a2a.caps ceiling — the owner's identity
+		// narrowed by that ceiling (COG-14 §5). Otherwise, no access (404/403).
+		RequestContext dispatch;
+		if (owner) {
+			dispatch = caller;
+		} else if (publicInteractionAllowed(agent)) {
+			dispatch = ownerDispatchContext(ref, agent);
+		} else {
+			denyPerAgentAccess(ctx, caller);
+			return;
+		}
 
 		Map<?, ?> envelope;
 		try {
@@ -257,7 +301,7 @@ public class A2A extends ACoviaAPI {
 			switch (method) {
 				case A2AMethods.SEND_MESSAGE_METHOD -> {
 					MessageSendParams params = parseParams(paramsRaw, MessageSendParams.class);
-					doSendMessageToAgent(ctx, id, params, ref, rctx);
+					doSendMessageToAgent(ctx, id, params, ref, dispatch);
 				}
 				case A2AMethods.GET_TASK_METHOD -> {
 					// A Task is addressed by its (global) id; the front-door handler

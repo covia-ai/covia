@@ -99,9 +99,22 @@ mirrors how the current `GetTask` already hides foreign tasks.)
 
 Two independent levers open a private agent, and both already exist as
 primitives: a **UCAN capability** delegated on the agent's address (fine-grained,
-revocable), and an **explicit public flag** in the agent's config (optionally
-bounded by an attenuated ceiling for anonymous callers). The operator's
-`defaultChatOp` front-door is the venue-level version of the second.
+revocable), and an **explicit public flag** in the agent's config. The public
+flag is `a2a: { public: true, caps: … }` and has two levels:
+
+- `public: true` alone makes the agent's **card discoverable** by anyone (no
+  interaction).
+- adding `caps` makes it **interactable** by non-owners. A non-owner's
+  `message/send` then runs the agent under the *owner's* identity narrowed by
+  that ceiling — `RequestContext.of(ownerDID).withCaps(ceiling)`. A ceiling can
+  only narrow, so it is escalation-safe. `caps: "unrestricted"` is honoured
+  (full owner authority for anonymous callers) with a warning, mirroring
+  `auth.public.caps`; a public agent with **no** `caps` is discoverable but its
+  interaction is **denied** (`publicInteractionAllowed` is false) — the owner
+  must deliberately bound a run.
+
+The operator's `defaultChatOp` front-door is the venue-level version of the
+public flag.
 
 ## Discovery
 
