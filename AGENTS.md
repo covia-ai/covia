@@ -47,7 +47,7 @@ covia/                          # ai.covia:covia:0.2.0-SNAPSHOT (parent POM)
 
 - **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.7-SNAPSHOT** — develop currently pins an unreleased Convex (the new lattice layers the venue state model is built on). Build it locally first: `mvn install -DskipTests` from `../convex` (branch `develop`). CI does the same automatically (each build workflow compiles Convex from source whenever `convex.version` ends in `-SNAPSHOT`). Once Convex 0.8.7 is released the pin returns to a Maven Central release and no local build is needed.
+- **Convex 0.8.7** — pinned to the Maven Central release. A clean clone builds in one command (`mvn clean install`); no local Convex build is needed. To track an unreleased Convex, build it locally (`mvn install -DskipTests` from `../convex`) and point `convex.version` at its `-SNAPSHOT`; CI compiles Convex from source automatically whenever `convex.version` ends in `-SNAPSHOT`.
 
 ## Build & Run
 
@@ -87,7 +87,7 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.7-SNAPSHOT (local build until release) | Lattice platform, immutable data, cryptography |
+| Convex | 0.8.7 | Lattice platform, immutable data, cryptography |
 | Javalin | 7.2.2 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.16.2 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.0 | Model Context Protocol |
