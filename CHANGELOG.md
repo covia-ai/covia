@@ -8,6 +8,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-06
+
 ### Added
 - **Job-free reads: `GET /api/v1/values/{read,list,slice,inspect,aggregate,count}` (#177).** Every lattice read previously went through `POST /invoke`, which persists a job record to the caller's lattice for *every* read — an unbounded write amplification that pushed one vault to ~170k jobs / ~2 GB etch and read latency from ~0.03s to 6–7s. These GET routes expose the *same* `covia:*` read accessors synchronously with **no job created or persisted** — identical capability check (`crud/read`), identical DID-qualified path resolution, local-only (no speculative remote fetch). `path` is a query parameter (lattice paths contain `/`); the execution-scoped virtual namespaces (`t/`, `n/`, `c/`) are rejected since a plain GET carries no job/agent/session context. A new **`covia:aggregate`** op (and `values/aggregate` route) counts the entries a given `depth` below a path — a step is one navigation into a container, uniform across map/Index/vector/set — optionally grouped by a caller-named field (`groupBy`, which may be a relative path); group values are `{count}` objects so numeric reductions can be added later without breaking the shape. `count` is the ungrouped fast path. Absent-or-scalar paths report `{exists:false}`; `s/` reads expose only the encrypted value (plaintext stays behind `secret:extract`). One shared accessor serves both the op and GET forms, so their semantics cannot drift. Design and full surface: `venue/docs/READ_API.md`.
 - **Secrets can be deleted (#166).** `covia:delete path=s/<name>` removes one of the caller's own secrets — whole records only (deeper paths are rejected: partial deletion inside an `{encrypted, updated}` record is never meaningful), idempotent, capability-pinned as `crud/delete` on the exact path so the public read-only ceiling denies it. No new op: the existing CRUD surface is extended, and `s/` stays delete-only (`covia:write`/`append` still reject it — records are created exclusively through `secret:set`'s encryption). Deletion is merge-safe by construction under the whole-value-LWW venue node below, so consumers can drop the empty-value tombstone workaround.
@@ -113,6 +115,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.1.0...develop
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.3.0...develop
+[0.3.0]: https://github.com/covia-ai/covia/compare/0.2.0...0.3.0
+[0.2.0]: https://github.com/covia-ai/covia/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/covia-ai/covia/compare/0.0.1...0.1.0
 [0.0.1]: https://github.com/covia-ai/covia/releases/tag/0.0.1
