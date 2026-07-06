@@ -33,6 +33,7 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.AString;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -177,6 +178,34 @@ public class A2AAgentCardTest {
 		if (cancelErr == null) {
 			assertEquals(taskId, extractTask(cancelResp).id());
 		}
+	}
+
+	@Test
+	public void publicAgentCardIsDiscoverableByAnyone() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		AString ownerDid = didOf(kp);
+
+		// Create an agent that opts into public A2A exposure (a2a.public = true).
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(bearerFor(kp)));
+		client.setTimeout(5000);
+		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Strings.create("agentId"), Strings.create("PublicOne"),
+				Strings.create("config"), Maps.of(
+						Strings.create("name"), Strings.create("Public Agent"),
+						Strings.create("operation"), Strings.create("v/test/ops/echo"),
+						Strings.create("a2a"), Maps.of(Strings.create("public"), CVMBool.TRUE))));
+		assertEquals(Status.COMPLETE, created.getStatus(), "create: " + created.getErrorMessage());
+
+		String cardPath = "/a2a/" + ownerDid + "/g/PublicOne/.well-known/agent-card.json";
+
+		// Anonymous → 200 + card (public discovery).
+		HttpResponse<String> anon = get(cardPath, null);
+		assertEquals(200, anon.statusCode(), anon.body());
+		AgentCard card = JsonUtil.OBJECT_MAPPER.fromJson(anon.body(), AgentCard.class);
+		assertEquals("Public Agent", card.name());
+
+		// Authenticated non-owner → 200 too.
+		assertEquals(200, get(cardPath, bearerFor(AKeyPair.generate())).statusCode());
 	}
 
 	// ---- helpers ----

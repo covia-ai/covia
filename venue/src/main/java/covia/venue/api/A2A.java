@@ -24,6 +24,7 @@ import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
 import covia.api.Fields;
@@ -155,11 +156,14 @@ public class A2A extends ACoviaAPI {
 		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(base);
 		if (ref == null) { buildError(ctx, 404, "Not found"); return; }
 
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		if (!isOwner(rctx, ref)) { denyPerAgentAccess(ctx, rctx); return; }
-
-		AgentState agent = resolveOwnedAgent(rctx, ref);
+		AgentState agent = resolveAgentByOwner(ref);
 		if (agent == null) { buildError(ctx, 404, "Not found"); return; }
+
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		// Private by default: only the owner sees the card, unless the agent is
+		// explicitly marked public (#186). A non-owner denial still hides existence
+		// (404 anon, 403 authed).
+		if (!isOwner(rctx, ref) && !isPublic(agent)) { denyPerAgentAccess(ctx, rctx); return; }
 
 		AMap<AString, ACell> config = agent.getConfig();
 		String name = stringOr(config, "name", ref.agentId());
@@ -196,6 +200,20 @@ public class A2A extends ACoviaAPI {
 		User user = engine().getVenueState().users().get(rctx.getCallerDID());
 		AgentState agent = (user == null) ? null : user.agent(ref.agentId());
 		return (agent != null && agent.exists()) ? agent : null;
+	}
+
+	/** Resolve the addressed agent in its owner's namespace (from the URL), or null. */
+	private AgentState resolveAgentByOwner(A2ACodec.AgentRef ref) {
+		User user = engine().getVenueState().users().get(ref.ownerDid());
+		AgentState agent = (user == null) ? null : user.agent(ref.agentId());
+		return (agent != null && agent.exists()) ? agent : null;
+	}
+
+	/** True when the agent's config opts into public A2A exposure ({@code a2a.public = true}). */
+	private static boolean isPublic(AgentState agent) {
+		AMap<AString, ACell> config = agent.getConfig();
+		return config != null
+				&& CVMBool.TRUE.equals(RT.getIn(config, Strings.intern("a2a"), Strings.intern("public")));
 	}
 
 	/**
