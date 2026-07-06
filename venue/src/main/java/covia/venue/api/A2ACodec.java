@@ -61,49 +61,64 @@ public class A2ACodec {
 
 	// ==================== Per-agent endpoint addressing (COG-14) ====================
 
-	/** Path prefix for per-agent A2A endpoints, below the venue's A2A root. */
-	static final String AGENTS_PREFIX = "/a2a/agents/";
+	/** The venue's A2A root. Everything after it is a resource's grid address. */
+	static final String A2A_PREFIX = "/a2a/";
+
+	/** The lattice namespace agents live under: {@code <ownerDID>/g/<agentId>}. */
+	static final String AGENT_NAMESPACE = "g";
 
 	/**
-	 * A resolved per-agent A2A endpoint: the owner's DID and the agent id,
-	 * which together form the canonical grid address {@code <ownerDID>/g/<agentId>}.
+	 * A resolved per-agent A2A endpoint: the owner's DID and the agent id, which
+	 * together form the canonical grid address {@code <ownerDID>/g/<agentId>}.
 	 */
 	public record AgentRef(String ownerDid, String agentId) {
 		/** The canonical Covia grid address {@code <ownerDID>/g/<agentId>}. */
 		public String gridAddress() {
-			return ownerDid + "/g/" + agentId;
+			return ownerDid + "/" + AGENT_NAMESPACE + "/" + agentId;
 		}
 	}
 
 	/**
-	 * Build the per-agent A2A endpoint URL for {@code <ownerDid>/g/<agentId>}.
+	 * Build the per-agent A2A endpoint URL. The path below the A2A root is the
+	 * agent's canonical grid address verbatim, so a per-agent endpoint is exactly
+	 * {@code <baseUrl>/a2a/<ownerDID>/g/<agentId>} — one addressing vocabulary
+	 * shared with the rest of the lattice, not a parallel one.
 	 *
-	 * <p>The DID and agent id are carried as single path segments. Standard
-	 * {@code did:key} / {@code did:web} DIDs contain no path-reserved slashes
-	 * (a {@code did:web} port is already {@code %3A}-encoded in the DID string),
+	 * <p>The DID, the {@code g} namespace, and the agent id are each a single
+	 * path segment; standard {@code did:key} / {@code did:web} DIDs carry no
+	 * path-reserved slashes (a {@code did:web} port is already {@code %3A}-encoded),
 	 * so they need no escaping.</p>
 	 *
 	 * @param baseUrl the venue's external base URL, without a trailing slash
 	 */
 	public static String agentEndpointUrl(String baseUrl, String ownerDid, String agentId) {
-		return baseUrl + AGENTS_PREFIX + ownerDid + "/" + agentId;
+		return baseUrl + A2A_PREFIX + ownerDid + "/" + AGENT_NAMESPACE + "/" + agentId;
 	}
 
 	/**
-	 * Parse a per-agent A2A endpoint path ({@code /a2a/agents/<ownerDID>/<agentId>})
+	 * Parse a per-agent A2A endpoint path ({@code /a2a/<ownerDID>/g/<agentId>})
 	 * into an {@link AgentRef}, or {@code null} if it is not a well-formed
-	 * per-agent endpoint. The owner DID is the single segment after the prefix;
-	 * the agent id is the single final segment.
+	 * per-agent endpoint. The path below {@code /a2a/} must be an agent grid
+	 * address: a DID, the {@code g} namespace segment, and a single agent id.
 	 */
 	public static AgentRef parseAgentEndpoint(String path) {
-		if (path == null || !path.startsWith(AGENTS_PREFIX)) return null;
-		String rest = path.substring(AGENTS_PREFIX.length());
-		int slash = rest.indexOf('/');
-		if (slash <= 0) return null;                       // need an owner and an agent id
-		String ownerDid = rest.substring(0, slash);
-		String agentId = rest.substring(slash + 1);
-		if (agentId.isEmpty() || agentId.indexOf('/') >= 0) return null; // agent id is the final segment
-		if (!ownerDid.startsWith("did:")) return null;     // owner must be a DID
+		if (path == null || !path.startsWith(A2A_PREFIX)) return null;
+		String address = path.substring(A2A_PREFIX.length());   // <ownerDID>/g/<agentId>
+		// Reject an encoded slash anywhere in the address. The venue's Jetty
+		// rejects a raw %2F in the path by default (covia#153); this guard means
+		// a per-agent endpoint can never smuggle a slash into a segment whatever
+		// the transport's decode behaviour, keeping segment parsing unambiguous.
+		// (A did:web port is %3A, not %2F, so it is unaffected.)
+		if (address.toLowerCase(java.util.Locale.ROOT).contains("%2f")) return null;
+		int firstSlash = address.indexOf('/');
+		if (firstSlash <= 0) return null;
+		String ownerDid = address.substring(0, firstSlash);
+		if (!ownerDid.startsWith("did:")) return null;          // owner must be a DID
+		String tail = address.substring(firstSlash + 1);        // g/<agentId>
+		String nsPrefix = AGENT_NAMESPACE + "/";
+		if (!tail.startsWith(nsPrefix)) return null;            // only the agent namespace
+		String agentId = tail.substring(nsPrefix.length());
+		if (agentId.isEmpty() || agentId.indexOf('/') >= 0) return null; // one final segment
 		return new AgentRef(ownerDid, agentId);
 	}
 

@@ -45,21 +45,31 @@ an impedance layer.
 ## Addressing and endpoints
 
 An agent's canonical address is its grid address, `<ownerDID>/g/<agentId>` (the
-same address used everywhere else in the lattice). A per-agent A2A endpoint
-encodes this address as
+same address used everywhere else in the lattice). A per-agent A2A endpoint puts
+that address **verbatim** below the venue's A2A root:
 
 ```
-/a2a/agents/<ownerDID>/<agentId>
+/a2a/<ownerDID>/g/<agentId>
 ```
 
-below the venue's A2A root, alongside the venue-level `/a2a` front door. The
-owner DID and the agent id are each a single path segment; standard `did:key`
-and `did:web` DIDs contain no path-reserved slashes (a `did:web` port is already
-`%3A`-encoded), so they need no escaping. The card's `provider` names the hosting
-venue and the service interface carries this endpoint URL, so a client reads the
-URL from the card rather than constructing it — the exact path is an
-implementation detail, not part of the wire contract. The endpoint ↔ address
-codec is `A2ACodec.agentEndpointUrl` / `parseAgentEndpoint`.
+alongside the venue-level `/a2a` front door. The path below `/a2a/` *is* the grid
+address — `g` namespace and all — one addressing vocabulary shared with the rest
+of the lattice, not a parallel `/agents/` one. The DID, the `g` namespace, and
+the agent id are each a single path segment; standard `did:key` / `did:web` DIDs
+carry no path-reserved slashes (a `did:web` port is already `%3A`-encoded, which
+is *not* a slash), so they need no escaping.
+
+**Encoded slashes** are handled defensively at both layers: the venue's Jetty
+rejects a raw `%2F` in the path by default (covia#153), and the codec rejects a
+`%2F` anywhere in the address regardless of the transport's decode behaviour — so
+a slash can never be smuggled into a segment. Agent ids are therefore
+single-segment identifiers.
+
+The card's `provider` names the hosting venue and the service interface carries
+this endpoint URL, so a client reads the URL from the card rather than
+constructing it — the exact path is an implementation detail, not part of the
+wire contract. The endpoint ↔ address codec is `A2ACodec.agentEndpointUrl` /
+`parseAgentEndpoint`.
 
 Addressing is **universal and independent of access**: a well-formed endpoint
 exists for any agent. Whether a caller may act on it is decided at resolution

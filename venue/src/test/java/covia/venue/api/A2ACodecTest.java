@@ -310,7 +310,8 @@ public class A2ACodecTest {
 		String agentId = "Alice";
 		// base "" so the built URL is exactly the path a route handler sees.
 		String path = A2ACodec.agentEndpointUrl("", owner, agentId);
-		assertEquals("/a2a/agents/" + owner + "/" + agentId, path);
+		// The path below /a2a/ is the agent's grid address verbatim.
+		assertEquals("/a2a/" + owner + "/g/" + agentId, path);
 
 		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(path);
 		assertNotNull(ref);
@@ -320,34 +321,51 @@ public class A2ACodecTest {
 	}
 
 	@Test
-	public void agentEndpoint_roundTripsDidWebOwner() {
-		// did:web carries its path segments as colons (and a port as %3A), so
-		// the whole DID is still a single, slash-free path segment.
+	public void agentEndpoint_pathBelowRootIsTheGridAddress() {
+		A2ACodec.AgentRef ref = new A2ACodec.AgentRef("did:key:z6MkX", "Alice");
+		assertEquals("/a2a/" + ref.gridAddress(),
+				A2ACodec.agentEndpointUrl("", "did:key:z6MkX", "Alice"));
+	}
+
+	@Test
+	public void agentEndpoint_roundTripsDidWebOwnerWithPort() {
+		// did:web carries its path segments as colons and a port as %3A (which is
+		// NOT a slash), so the whole DID is a single path segment, preserved verbatim.
 		String owner = "did:web:example.com%3A3000:agents:team";
 		String agentId = "planner-1";
 		String path = A2ACodec.agentEndpointUrl("", owner, agentId);
 
 		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(path);
 		assertNotNull(ref);
-		assertEquals(owner, ref.ownerDid());
+		assertEquals(owner, ref.ownerDid());   // %3A port preserved
 		assertEquals(agentId, ref.agentId());
 	}
 
 	@Test
 	public void agentEndpoint_buildUsesExternalBaseUrl() {
 		String url = A2ACodec.agentEndpointUrl("https://venue-3.covia.ai", "did:key:z6MkX", "Bob");
-		assertEquals("https://venue-3.covia.ai/a2a/agents/did:key:z6MkX/Bob", url);
+		assertEquals("https://venue-3.covia.ai/a2a/did:key:z6MkX/g/Bob", url);
 	}
 
 	@Test
 	public void parseAgentEndpoint_rejectsMalformed() {
 		assertNull(A2ACodec.parseAgentEndpoint(null));
-		assertNull(A2ACodec.parseAgentEndpoint("/a2a"));                          // venue-level endpoint
-		assertNull(A2ACodec.parseAgentEndpoint("/a2a/agents/did:key:z6MkX"));     // no agent id
-		assertNull(A2ACodec.parseAgentEndpoint("/a2a/agents/did:key:z6MkX/"));    // empty agent id
-		assertNull(A2ACodec.parseAgentEndpoint("/a2a/agents//Alice"));            // empty owner
-		assertNull(A2ACodec.parseAgentEndpoint("/a2a/agents/not-a-did/Alice"));   // owner not a DID
-		assertNull(A2ACodec.parseAgentEndpoint("/a2a/agents/did:key:z6MkX/a/b")); // agent id must be one segment
-		assertNull(A2ACodec.parseAgentEndpoint("/other/agents/did:key:z6MkX/A")); // wrong prefix
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a"));                           // venue-level front door
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a/did:key:z6MkX"));             // no namespace / agent id
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a/did:key:z6MkX/g"));           // no agent id
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a/did:key:z6MkX/g/"));          // empty agent id
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a//g/Alice"));                  // empty owner
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a/not-a-did/g/Alice"));         // owner not a DID
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a/did:key:z6MkX/o/myop"));      // only the g namespace
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a/did:key:z6MkX/g/a/b"));       // agent id must be one segment
+		assertNull(A2ACodec.parseAgentEndpoint("/other/did:key:z6MkX/g/Alice"));   // wrong root
+	}
+
+	@Test
+	public void parseAgentEndpoint_rejectsEncodedSlash() {
+		// A %2F must never be smuggled into a segment, whatever the decode layer did.
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a/did:key:z6MkX/g/some%2Fagent"));
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a/did:key:z6MkX/g/some%2fagent")); // lowercase
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a/did:web:h%2Fx/g/Alice"));         // in the DID too
 	}
 }
