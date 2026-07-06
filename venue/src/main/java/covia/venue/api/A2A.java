@@ -30,8 +30,11 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Venue;
+import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.User;
+import covia.venue.Users;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
 import io.javalin.config.RoutesConfig;
@@ -101,6 +104,10 @@ public class A2A extends ACoviaAPI {
 	public void addRoutes(RoutesConfig routes) {
 		routes.get("/.well-known/agent-card.json", this::getAgentCard);
 		routes.post("/a2a", this::handleJsonRpc);
+		// Per-agent card (COG-14): GET /a2a/<ownerDID>/g/<agentId>. The <addr>
+		// wildcard captures the grid-address slashes; parsing/validation is in
+		// A2ACodec.parseAgentEndpoint. (Per-agent JSON-RPC POST arrives in #184.)
+		routes.get("/a2a/<addr>", this::getAgentCardFor);
 	}
 
 	// ==================== Agent Card ====================
@@ -120,6 +127,40 @@ public class A2A extends ACoviaAPI {
 		// The venue front-door agent. Per-agent cards share the same builder
 		// (A2ACodec.agentCard), differing only in name/description/endpoint.
 		return A2ACodec.agentCard(agentName, agentDescription, agentVersion, agentProvider, baseUrl + "/a2a");
+	}
+
+	/**
+	 * Per-agent Agent Card (COG-14): {@code GET /a2a/<ownerDID>/g/<agentId>}.
+	 *
+	 * <p>Private by default — the card is disclosed only to the agent's owner.
+	 * A bad address, a non-owner caller, or a missing agent all get a uniform
+	 * {@code 404}, so the endpoint never reveals whether an agent exists.
+	 * Publicly-exposed agents and the authenticated-non-owner {@code 403} path
+	 * are layered on in later steps (#186 / #184).</p>
+	 */
+	protected void getAgentCardFor(Context ctx) {
+		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(ctx.path());
+		if (ref == null) { buildError(ctx, 404, "Not found"); return; }
+
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		AString caller = rctx.getCallerDID();
+		// Owner gate (private by default). Anyone who is not the owner — including
+		// an anonymous caller — gets a 404 that hides the agent's existence.
+		if (caller == null || !ref.ownerDid().equals(caller.toString())) {
+			buildError(ctx, 404, "Not found");
+			return;
+		}
+
+		Users users = engine().getVenueState().users();
+		User user = users.get(caller);
+		AgentState agent = (user == null) ? null : user.agent(ref.agentId());
+		if (agent == null || !agent.exists()) { buildError(ctx, 404, "Not found"); return; }
+
+		AMap<AString, ACell> config = agent.getConfig();
+		String name = stringOr(config, "name", ref.agentId());
+		String description = stringOr(config, "description", "Covia agent " + ref.agentId());
+		String endpoint = A2ACodec.agentEndpointUrl(getExternalBaseUrl(ctx, ""), ref.ownerDid(), ref.agentId());
+		writeJson(ctx, 200, A2ACodec.agentCard(name, description, agentVersion, agentProvider, endpoint));
 	}
 
 	// ==================== JSON-RPC dispatch ====================

@@ -106,8 +106,9 @@ Three surfaces, each scoped by who is asking:
   authenticated / extended-card discovery path; the venue currently answers
   `GetAuthenticatedExtendedCard` with `UnsupportedOperationError`, so this is net-new.
   It leans on a job-free agent list/info read surface (see the agent-list read gap).
-- **Direct addressing** — a caller that already holds an address fetches that
-  agent's card or interacts directly, subject to the same authorisation.
+- **Direct addressing** — a caller that already holds an address does a `GET` on
+  the per-agent endpoint (`/a2a/<ownerDID>/g/<agentId>`) for that agent's card, or
+  `POST`s to it to interact — subject to the same authorisation.
 
 ## Interaction and identifiers
 

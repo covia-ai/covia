@@ -188,6 +188,7 @@ public class AuthMiddleware {
 		AuthMiddleware mw = new AuthMiddleware(venueAccountKey, auth, venueDIDString);
 		routes.before("/api/*", mw::extractIdentity);
 		routes.before("/a2a", mw::extractIdentity);
+		routes.before("/a2a/*", mw::extractIdentity);  // per-agent A2A endpoints (COG-14)
 		routes.before("/mcp", mw::extractIdentity);
 		return mw;
 	}
