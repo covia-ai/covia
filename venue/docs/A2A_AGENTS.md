@@ -116,6 +116,14 @@ flag is `a2a: { public: true, caps: … }` and has two levels:
 The operator's `defaultChatOp` front-door is the venue-level version of the
 public flag.
 
+The **run authority** for a non-owner interaction — whose identity executes, the
+ceiling applied, and how the public and delegated levers differ — is worked out
+in [A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md). In short: the
+agent always runs under its *owner's* identity; the levers are pure admission; a
+public run is narrowed by `a2a.caps`; the named-delegate ceiling (gated by a
+dedicated `agent/request` ability) and initiator-provenance are pending
+ratification there.
+
 ## Discovery
 
 Three surfaces, each scoped by who is asking:
