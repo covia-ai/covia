@@ -2,18 +2,14 @@ package covia.venue.api;
 
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
 import org.a2aproject.sdk.spec.A2AError;
 import org.a2aproject.sdk.spec.A2AErrorCodes;
 import org.a2aproject.sdk.spec.A2AMethods;
-import org.a2aproject.sdk.spec.AgentCapabilities;
 import org.a2aproject.sdk.spec.AgentCard;
-import org.a2aproject.sdk.spec.AgentInterface;
 import org.a2aproject.sdk.spec.AgentProvider;
-import org.a2aproject.sdk.spec.AgentSkill;
 import org.a2aproject.sdk.spec.CancelTaskParams;
 import org.a2aproject.sdk.spec.Message;
 import org.a2aproject.sdk.spec.MessageSendParams;
@@ -121,24 +117,9 @@ public class A2A extends ACoviaAPI {
 	}
 
 	private AgentCard buildAgentCard(String baseUrl) {
-		// Streaming supported via SendStreamingMessage + SubscribeToTask (P2).
-		// Push notifications + extended card still P3.
-		AgentCapabilities capabilities = new AgentCapabilities(true, false, false, null);
-		// AgentInterface requires non-null fields; we don't use tenanted routing,
-		// so pass an empty tenant string per spec "optional" semantics.
-		AgentInterface iface = new AgentInterface("JSONRPC", baseUrl + "/a2a", "", "1.0");
-
-		return AgentCard.builder()
-				.name(agentName)
-				.description(agentDescription)
-				.version(agentVersion)
-				.provider(agentProvider)
-				.capabilities(capabilities)
-				.supportedInterfaces(List.of(iface))
-				.defaultInputModes(List.of("text/plain", "application/json"))
-				.defaultOutputModes(List.of("text/plain", "application/json"))
-				.skills(List.<AgentSkill>of())  // populated from adapter-installed assets in a later pass
-				.build();
+		// The venue front-door agent. Per-agent cards share the same builder
+		// (A2ACodec.agentCard), differing only in name/description/endpoint.
+		return A2ACodec.agentCard(agentName, agentDescription, agentVersion, agentProvider, baseUrl + "/a2a");
 	}
 
 	// ==================== JSON-RPC dispatch ====================

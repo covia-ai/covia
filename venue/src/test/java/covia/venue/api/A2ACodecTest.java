@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.List;
 import java.util.Map;
 
+import org.a2aproject.sdk.spec.AgentCard;
+import org.a2aproject.sdk.spec.AgentProvider;
 import org.a2aproject.sdk.spec.DataPart;
 import org.a2aproject.sdk.spec.Message;
 import org.a2aproject.sdk.spec.Part;
@@ -367,5 +369,26 @@ public class A2ACodecTest {
 		assertNull(A2ACodec.parseAgentEndpoint("/a2a/did:key:z6MkX/g/some%2Fagent"));
 		assertNull(A2ACodec.parseAgentEndpoint("/a2a/did:key:z6MkX/g/some%2fagent")); // lowercase
 		assertNull(A2ACodec.parseAgentEndpoint("/a2a/did:web:h%2Fx/g/Alice"));         // in the DID too
+	}
+
+	// ======== Agent Card rendering (COG-14 / #183) ========
+
+	@Test
+	public void agentCard_buildsFromNameDescriptionProviderAndEndpoint() {
+		AgentProvider provider = new AgentProvider("Covia", "https://covia.ai");
+		String endpoint = "https://venue-3.covia.ai/a2a/did:key:z6MkX/g/Alice";
+		AgentCard card = A2ACodec.agentCard("Alice", "A test agent", "0.3.0", provider, endpoint);
+
+		assertEquals("Alice", card.name());
+		assertEquals("A test agent", card.description());
+		assertEquals("0.3.0", card.version());
+		assertEquals("Covia", card.provider().organization());
+		assertNotNull(card.capabilities());
+		assertNotNull(card.skills());                       // may be empty, never null
+		assertNotNull(card.defaultInputModes());
+		assertEquals(1, card.supportedInterfaces().size());
+		assertEquals("JSONRPC", card.supportedInterfaces().get(0).protocolBinding());
+		// The card's interface carries the endpoint URL the client POSTs to.
+		assertEquals(endpoint, card.supportedInterfaces().get(0).url());
 	}
 }

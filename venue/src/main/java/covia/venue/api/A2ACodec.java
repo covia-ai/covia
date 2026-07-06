@@ -7,6 +7,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import org.a2aproject.sdk.spec.AgentCapabilities;
+import org.a2aproject.sdk.spec.AgentCard;
+import org.a2aproject.sdk.spec.AgentInterface;
+import org.a2aproject.sdk.spec.AgentProvider;
+import org.a2aproject.sdk.spec.AgentSkill;
 import org.a2aproject.sdk.spec.Artifact;
 import org.a2aproject.sdk.spec.DataPart;
 import org.a2aproject.sdk.spec.FilePart;
@@ -120,6 +125,36 @@ public class A2ACodec {
 		String agentId = tail.substring(nsPrefix.length());
 		if (agentId.isEmpty() || agentId.indexOf('/') >= 0) return null; // one final segment
 		return new AgentRef(ownerDid, agentId);
+	}
+
+	// ==================== Agent Card rendering (COG-14) ====================
+
+	/**
+	 * Build an A2A Agent Card. Shared by the venue front-door card and per-agent
+	 * cards (COG-14) — only the name, description, and endpoint URL differ, so the
+	 * capabilities / transports / modes stay consistent across both.
+	 *
+	 * @param name        the agent's display name
+	 * @param description the agent's description
+	 * @param version     the venue/agent version string
+	 * @param provider    the hosting venue, as the card's {@code provider}
+	 * @param endpointUrl the JSON-RPC endpoint clients POST to (the card's interface)
+	 */
+	public static AgentCard agentCard(String name, String description, String version,
+			AgentProvider provider, String endpointUrl) {
+		AgentCapabilities capabilities = new AgentCapabilities(true, false, false, null);
+		AgentInterface iface = new AgentInterface("JSONRPC", endpointUrl, "", "1.0");
+		return AgentCard.builder()
+				.name(name)
+				.description(description)
+				.version(version)
+				.provider(provider)
+				.capabilities(capabilities)
+				.supportedInterfaces(List.of(iface))
+				.defaultInputModes(List.of("text/plain", "application/json"))
+				.defaultOutputModes(List.of("text/plain", "application/json"))
+				.skills(List.<AgentSkill>of())  // populated from the agent's offered ops in a later pass
+				.build();
 	}
 
 	// ==================== TaskState mapping ====================
