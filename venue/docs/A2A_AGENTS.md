@@ -127,6 +127,13 @@ session id`. The A2A status mapping (`A2ACodec`) already translates Covia job /
 task status to A2A task-lifecycle states; extending it from Job-backed tasks to
 session/task-backed interactions is a mapping change, not a new state machine.
 
+Concretely, a per-agent `message/send` (fresh) is submitted to the agent as an
+`agent:request` **task**, which mints the session and returns immediately with a
+non-terminal Task the client polls — `agent:request`'s own capability check is
+the ownership enforcement (facade over the capability layer), so no A2A-specific
+trust branch exists. The precise `contextId = session` surfacing, `GetTask` /
+`CancelTask`, and task continuations (an incoming `taskId`) are follow-ups.
+
 ## Relationship to the venue-as-single-agent model
 
 The current single-agent behaviour stays as the **front-door** case: an operator

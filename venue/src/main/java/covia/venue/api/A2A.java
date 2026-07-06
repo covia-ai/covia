@@ -34,7 +34,6 @@ import covia.venue.AgentState;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.User;
-import covia.venue.Users;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
 import io.javalin.config.RoutesConfig;
@@ -112,8 +111,9 @@ public class A2A extends ACoviaAPI {
 		// agent's base endpoint — GET /a2a/<ownerDID>/g/<agentId>/.well-known/agent-card.json.
 		// The greedy <addr> wildcard captures the base + suffix; getAgentCardFor
 		// strips the suffix and parses the base via A2ACodec.parseAgentEndpoint.
-		// (Per-agent JSON-RPC POST to the base endpoint arrives in #184.)
 		routes.get("/a2a/<addr>", this::getAgentCardFor);
+		// Per-agent JSON-RPC (COG-14 / #184): POST /a2a/<ownerDID>/g/<agentId>.
+		routes.post("/a2a/<addr>", this::handleAgentJsonRpc);
 	}
 
 	// ==================== Agent Card ====================
@@ -156,24 +156,131 @@ public class A2A extends ACoviaAPI {
 		if (ref == null) { buildError(ctx, 404, "Not found"); return; }
 
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
-		AString caller = rctx.getCallerDID();
-		// Owner gate (private by default). Anyone who is not the owner — including
-		// an anonymous caller — gets a 404 that hides the agent's existence.
-		if (caller == null || !ref.ownerDid().equals(caller.toString())) {
-			buildError(ctx, 404, "Not found");
-			return;
-		}
+		if (!isOwner(rctx, ref)) { denyPerAgentAccess(ctx, rctx); return; }
 
-		Users users = engine().getVenueState().users();
-		User user = users.get(caller);
-		AgentState agent = (user == null) ? null : user.agent(ref.agentId());
-		if (agent == null || !agent.exists()) { buildError(ctx, 404, "Not found"); return; }
+		AgentState agent = resolveOwnedAgent(rctx, ref);
+		if (agent == null) { buildError(ctx, 404, "Not found"); return; }
 
 		AMap<AString, ACell> config = agent.getConfig();
 		String name = stringOr(config, "name", ref.agentId());
 		String description = stringOr(config, "description", "Covia agent " + ref.agentId());
 		String endpoint = A2ACodec.agentEndpointUrl(getExternalBaseUrl(ctx, ""), ref.ownerDid(), ref.agentId());
 		writeJson(ctx, 200, A2ACodec.agentCard(name, description, agentVersion, agentProvider, endpoint));
+	}
+
+	// ==================== Per-agent JSON-RPC (COG-14) ====================
+
+	/** True when the caller owns the addressed agent. */
+	private boolean isOwner(RequestContext rctx, A2ACodec.AgentRef ref) {
+		AString caller = rctx.getCallerDID();
+		return caller != null && ref.ownerDid().equals(caller.toString());
+	}
+
+	/** True for the venue's public (unauthenticated) caller identity, per AuthMiddleware. */
+	private boolean isAnonymousCaller(RequestContext rctx) {
+		AString caller = rctx.getCallerDID();
+		return caller == null || (engine().getDIDString() + ":public").equals(caller.toString());
+	}
+
+	/**
+	 * Uniform per-agent denial (COG-14 §4): an anonymous caller gets a 404 that
+	 * hides the agent's existence; an authenticated non-owner gets a 403.
+	 */
+	private void denyPerAgentAccess(Context ctx, RequestContext rctx) {
+		if (isAnonymousCaller(rctx)) buildError(ctx, 404, "Not found");
+		else buildError(ctx, 403, "Forbidden");
+	}
+
+	/** Resolve the addressed agent in the (owner) caller's namespace, or null if absent. */
+	private AgentState resolveOwnedAgent(RequestContext rctx, A2ACodec.AgentRef ref) {
+		User user = engine().getVenueState().users().get(rctx.getCallerDID());
+		AgentState agent = (user == null) ? null : user.agent(ref.agentId());
+		return (agent != null && agent.exists()) ? agent : null;
+	}
+
+	/**
+	 * Per-agent A2A JSON-RPC endpoint: {@code POST /a2a/<ownerDID>/g/<agentId>}.
+	 *
+	 * <p>Access is the same owner gate as the card (private by default) and runs
+	 * <em>before</em> the body is read, so a non-owner never learns an agent
+	 * exists. For an owner, {@code message/send} dispatches to {@code agent:request}
+	 * — whose own capability check enforces ownership too (facade over the
+	 * capability layer) — and the resulting task Job becomes the A2A Task.
+	 * {@code GetTask} / {@code CancelTask} and task continuations are follow-ups.</p>
+	 */
+	protected void handleAgentJsonRpc(Context ctx) {
+		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(ctx.path());
+		if (ref == null) { buildError(ctx, 404, "Not found"); return; }
+
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (!isOwner(rctx, ref)) { denyPerAgentAccess(ctx, rctx); return; }
+		if (resolveOwnedAgent(rctx, ref) == null) { buildError(ctx, 404, "Not found"); return; }
+
+		Map<?, ?> envelope;
+		try {
+			envelope = JsonUtil.OBJECT_MAPPER.fromJson(ctx.body(), Map.class);
+		} catch (Exception e) {
+			writeError(ctx, null, A2AErrorCodes.JSON_PARSE, "Parse error");
+			return;
+		}
+		if (envelope == null) { writeError(ctx, null, A2AErrorCodes.INVALID_REQUEST, "Empty request"); return; }
+
+		Object id = envelope.get("id");
+		Object methodObj = envelope.get("method");
+		Object paramsRaw = envelope.get("params");
+		if (!(methodObj instanceof String method)) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_REQUEST, "Missing or invalid method");
+			return;
+		}
+
+		try {
+			switch (method) {
+				case A2AMethods.SEND_MESSAGE_METHOD -> {
+					MessageSendParams params = parseParams(paramsRaw, MessageSendParams.class);
+					doSendMessageToAgent(ctx, id, params, ref, rctx);
+				}
+				case A2AMethods.GET_TASK_METHOD, A2AMethods.CANCEL_TASK_METHOD ->
+					writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION,
+							"Per-agent " + method + " not yet implemented");
+				default ->
+					writeError(ctx, id, A2AErrorCodes.METHOD_NOT_FOUND, "Method not found: " + method);
+			}
+		} catch (IllegalArgumentException e) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid params: " + e.getMessage());
+		} catch (Exception e) {
+			log.error("Error handling per-agent A2A method {}", method, e);
+			writeError(ctx, id, A2AErrorCodes.INTERNAL, "Internal error: " + e.getMessage());
+		}
+	}
+
+	/**
+	 * Per-agent {@code message/send}: a fresh message is submitted to the agent as
+	 * an {@code agent:request} task; the task Job becomes the A2A Task (async — the
+	 * client polls GetTask). The {@code contextId = session} mapping and task
+	 * continuations (an incoming {@code taskId}) are follow-ups (#185).
+	 */
+	private void doSendMessageToAgent(Context ctx, Object id, MessageSendParams params,
+			A2ACodec.AgentRef ref, RequestContext rctx) {
+		if (params == null || params.message() == null) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "message required");
+			return;
+		}
+		Message incoming = params.message();
+		if (incoming.taskId() != null) {
+			writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, "Per-agent task continuation not yet implemented");
+			return;
+		}
+
+		AMap<AString, ACell> record = A2ACodec.toMessageRecord(incoming, false);
+		Job job;
+		try {
+			ACell input = Maps.of(Fields.AGENT_ID, Strings.create(ref.agentId()), Fields.INPUT, record);
+			job = engine().jobs().invokeOperation("v/ops/agent/request", input, rctx);
+		} catch (IllegalArgumentException e) {
+			writeError(ctx, id, A2AErrorCodes.INVALID_AGENT_RESPONSE, "agent:request failed: " + e.getMessage());
+			return;
+		}
+		writeResult(ctx, id, A2ACodec.toTask(engine().jobs().getJobData(job.getID(), rctx)));
 	}
 
 	// ==================== JSON-RPC dispatch ====================

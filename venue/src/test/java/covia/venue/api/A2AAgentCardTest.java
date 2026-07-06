@@ -2,6 +2,7 @@ package covia.venue.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
@@ -9,9 +10,18 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
 import org.a2aproject.sdk.spec.AgentCard;
+import org.a2aproject.sdk.spec.Message;
+import org.a2aproject.sdk.spec.MessageSendParams;
+import org.a2aproject.sdk.spec.Part;
+import org.a2aproject.sdk.spec.Task;
+import org.a2aproject.sdk.spec.TextPart;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
@@ -51,13 +61,10 @@ public class A2AAgentCardTest {
 
 	@Test
 	public void ownerSeesCard_othersGet404() throws Exception {
-		// Fresh owner identity + a bearer token audienced to this venue (aud != iss
-		// → authenticates as the DID with no self-attenuation, i.e. as itself).
+		// Fresh owner identity + a bearer token audienced to this venue.
 		AKeyPair kp = AKeyPair.generate();
-		AString ownerDid = UCAN.toDIDKey(kp.getAccountKey());
-		long exp = (System.currentTimeMillis() / 1000) + 3600;
-		String jwt = UCAN.create(kp, TestServer.ENGINE.getAccountKey(), exp, Vectors.empty(), Vectors.empty())
-				.toJWT(kp).toString();
+		AString ownerDid = didOf(kp);
+		String jwt = bearerFor(kp);
 
 		// Create a dummy agent as the owner — no LLM: an echo transition op and a
 		// name/description config, which is all the card renders from.
@@ -100,9 +107,94 @@ public class A2AAgentCardTest {
 		assertEquals(404, get("/a2a/" + ownerDid + "/g/Nonexistent/.well-known/agent-card.json", jwt).statusCode());
 	}
 
+	@Test
+	public void ownerSendsMessage_othersDenied() throws Exception {
+		AKeyPair kp = AKeyPair.generate();
+		AString ownerDid = didOf(kp);
+		String jwt = bearerFor(kp);
+
+		// Dummy echo agent (no LLM): agent:request wakes it and it echoes the input.
+		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(jwt));
+		client.setTimeout(5000);
+		Job created = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
+				Strings.create("agentId"), Strings.create("Bob"),
+				Strings.create("config"), Maps.of(
+						Strings.create("name"), Strings.create("Bob Agent"),
+						Strings.create("operation"), Strings.create("v/test/ops/echo"))));
+		assertEquals(Status.COMPLETE, created.getStatus(), "agent create: " + created.getErrorMessage());
+
+		String endpoint = "/a2a/" + ownerDid + "/g/Bob";
+		Object envelope = rpcEnvelope("m1", "SendMessage",
+				new MessageSendParams(userMessage("hi Bob"), null, null));
+
+		// Owner → 200 + a non-terminal Task (async request; client would poll GetTask).
+		HttpResponse<String> ok = post(endpoint, envelope, jwt);
+		assertEquals(200, ok.statusCode(), ok.body());
+		Map<String, Object> parsed = JsonUtil.OBJECT_MAPPER.fromJson(ok.body(), Map.class);
+		assertNull(parsed.get("error"), "unexpected error: " + parsed.get("error"));
+		Task task = extractTask(parsed);
+		assertNotNull(task);
+		assertNotNull(task.id(), "Task.id must be set");
+		assertNotNull(task.status());
+		assertNotNull(task.status().state());
+
+		// Authenticated non-owner → 403.
+		String otherJwt = bearerFor(AKeyPair.generate());
+		assertEquals(403, post(endpoint, envelope, otherJwt).statusCode());
+
+		// Anonymous → 404 (existence hidden).
+		assertEquals(404, post(endpoint, envelope, null).statusCode());
+	}
+
+	// ---- helpers ----
+
+	private static AString didOf(AKeyPair kp) {
+		return UCAN.toDIDKey(kp.getAccountKey());
+	}
+
+	/** A bearer token audienced to this venue — authenticates as the key's DID
+	 *  with no self-attenuation (aud != iss). */
+	private static String bearerFor(AKeyPair kp) {
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		return UCAN.create(kp, TestServer.ENGINE.getAccountKey(), exp, Vectors.empty(), Vectors.empty())
+				.toJWT(kp).toString();
+	}
+
+	private static Message userMessage(String text) {
+		return Message.builder()
+				.role(Message.Role.ROLE_USER)
+				.parts(List.<Part<?>>of(new TextPart(text, null)))
+				.messageId("msg-" + UUID.randomUUID())
+				.build();
+	}
+
+	private static Object rpcEnvelope(String id, String method, Object params) {
+		Map<String, Object> e = new LinkedHashMap<>();
+		e.put("jsonrpc", "2.0");
+		e.put("id", id);
+		e.put("method", method);
+		e.put("params", params);
+		return e;
+	}
+
+	private static Task extractTask(Map<String, Object> rpcResp) {
+		Object result = rpcResp.get("result");
+		if (result == null) return null;
+		return JsonUtil.OBJECT_MAPPER.fromJson(JsonUtil.OBJECT_MAPPER.toJson(result), Task.class);
+	}
+
 	private HttpResponse<String> get(String path, String jwt) throws Exception {
 		HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(BASE_URL + path))
 				.GET().timeout(Duration.ofSeconds(10));
+		if (jwt != null) b.header("Authorization", "Bearer " + jwt);
+		return http.send(b.build(), HttpResponse.BodyHandlers.ofString());
+	}
+
+	private HttpResponse<String> post(String path, Object body, String jwt) throws Exception {
+		HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(BASE_URL + path))
+				.header("Content-Type", "application/json")
+				.POST(HttpRequest.BodyPublishers.ofString(JsonUtil.OBJECT_MAPPER.toJson(body)))
+				.timeout(Duration.ofSeconds(10));
 		if (jwt != null) b.header("Authorization", "Bearer " + jwt);
 		return http.send(b.build(), HttpResponse.BodyHandlers.ofString());
 	}
