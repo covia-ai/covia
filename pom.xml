@@ -16,7 +16,7 @@
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		
 		<logback.version>1.5.37</logback.version>
-		<slf4j.version>2.0.17</slf4j.version>
+		<slf4j.version>2.0.18</slf4j.version>
 		<hc.version>5.5</hc.version>
 		<javalin.version>7.2.2</javalin.version>
 		<langchain.version>1.17.1</langchain.version>
