@@ -59,6 +59,54 @@ public class A2ACodec {
 
 	private A2ACodec() {}
 
+	// ==================== Per-agent endpoint addressing (COG-14) ====================
+
+	/** Path prefix for per-agent A2A endpoints, below the venue's A2A root. */
+	static final String AGENTS_PREFIX = "/a2a/agents/";
+
+	/**
+	 * A resolved per-agent A2A endpoint: the owner's DID and the agent id,
+	 * which together form the canonical grid address {@code <ownerDID>/g/<agentId>}.
+	 */
+	public record AgentRef(String ownerDid, String agentId) {
+		/** The canonical Covia grid address {@code <ownerDID>/g/<agentId>}. */
+		public String gridAddress() {
+			return ownerDid + "/g/" + agentId;
+		}
+	}
+
+	/**
+	 * Build the per-agent A2A endpoint URL for {@code <ownerDid>/g/<agentId>}.
+	 *
+	 * <p>The DID and agent id are carried as single path segments. Standard
+	 * {@code did:key} / {@code did:web} DIDs contain no path-reserved slashes
+	 * (a {@code did:web} port is already {@code %3A}-encoded in the DID string),
+	 * so they need no escaping.</p>
+	 *
+	 * @param baseUrl the venue's external base URL, without a trailing slash
+	 */
+	public static String agentEndpointUrl(String baseUrl, String ownerDid, String agentId) {
+		return baseUrl + AGENTS_PREFIX + ownerDid + "/" + agentId;
+	}
+
+	/**
+	 * Parse a per-agent A2A endpoint path ({@code /a2a/agents/<ownerDID>/<agentId>})
+	 * into an {@link AgentRef}, or {@code null} if it is not a well-formed
+	 * per-agent endpoint. The owner DID is the single segment after the prefix;
+	 * the agent id is the single final segment.
+	 */
+	public static AgentRef parseAgentEndpoint(String path) {
+		if (path == null || !path.startsWith(AGENTS_PREFIX)) return null;
+		String rest = path.substring(AGENTS_PREFIX.length());
+		int slash = rest.indexOf('/');
+		if (slash <= 0) return null;                       // need an owner and an agent id
+		String ownerDid = rest.substring(0, slash);
+		String agentId = rest.substring(slash + 1);
+		if (agentId.isEmpty() || agentId.indexOf('/') >= 0) return null; // agent id is the final segment
+		if (!ownerDid.startsWith("did:")) return null;     // owner must be a DID
+		return new AgentRef(ownerDid, agentId);
+	}
+
 	// ==================== TaskState mapping ====================
 
 	/**

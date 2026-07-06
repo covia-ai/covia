@@ -46,13 +46,24 @@ an impedance layer.
 
 An agent's canonical address is its grid address, `<ownerDID>/g/<agentId>` (the
 same address used everywhere else in the lattice). A per-agent A2A endpoint
-encodes this address; the card's `provider` names the hosting venue and the
-service interface points at that endpoint. `did:key` DIDs are URL-safe as a path
-segment; `did:web` needs the usual escaping.
+encodes this address as
+
+```
+/a2a/agents/<ownerDID>/<agentId>
+```
+
+below the venue's A2A root, alongside the venue-level `/a2a` front door. The
+owner DID and the agent id are each a single path segment; standard `did:key`
+and `did:web` DIDs contain no path-reserved slashes (a `did:web` port is already
+`%3A`-encoded), so they need no escaping. The card's `provider` names the hosting
+venue and the service interface carries this endpoint URL, so a client reads the
+URL from the card rather than constructing it — the exact path is an
+implementation detail, not part of the wire contract. The endpoint ↔ address
+codec is `A2ACodec.agentEndpointUrl` / `parseAgentEndpoint`.
 
 Addressing is **universal and independent of access**: a well-formed endpoint
 exists for any agent. Whether a caller may act on it is decided at resolution
-time, not by hiding the address space.
+time (§ resolution and authorisation), not by hiding the address space.
 
 ## Resolution and authorisation
 

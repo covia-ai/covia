@@ -301,4 +301,53 @@ public class A2ACodecTest {
 		assertNotNull(RT.ensureString(Status.PENDING));
 		assertNotNull(RT.ensureString(Status.COMPLETE));
 	}
+
+	// ======== Per-agent endpoint addressing (COG-14 / #182) ========
+
+	@Test
+	public void agentEndpoint_roundTripsDidKeyOwner() {
+		String owner = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+		String agentId = "Alice";
+		// base "" so the built URL is exactly the path a route handler sees.
+		String path = A2ACodec.agentEndpointUrl("", owner, agentId);
+		assertEquals("/a2a/agents/" + owner + "/" + agentId, path);
+
+		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(path);
+		assertNotNull(ref);
+		assertEquals(owner, ref.ownerDid());
+		assertEquals(agentId, ref.agentId());
+		assertEquals(owner + "/g/" + agentId, ref.gridAddress());
+	}
+
+	@Test
+	public void agentEndpoint_roundTripsDidWebOwner() {
+		// did:web carries its path segments as colons (and a port as %3A), so
+		// the whole DID is still a single, slash-free path segment.
+		String owner = "did:web:example.com%3A3000:agents:team";
+		String agentId = "planner-1";
+		String path = A2ACodec.agentEndpointUrl("", owner, agentId);
+
+		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(path);
+		assertNotNull(ref);
+		assertEquals(owner, ref.ownerDid());
+		assertEquals(agentId, ref.agentId());
+	}
+
+	@Test
+	public void agentEndpoint_buildUsesExternalBaseUrl() {
+		String url = A2ACodec.agentEndpointUrl("https://venue-3.covia.ai", "did:key:z6MkX", "Bob");
+		assertEquals("https://venue-3.covia.ai/a2a/agents/did:key:z6MkX/Bob", url);
+	}
+
+	@Test
+	public void parseAgentEndpoint_rejectsMalformed() {
+		assertNull(A2ACodec.parseAgentEndpoint(null));
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a"));                          // venue-level endpoint
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a/agents/did:key:z6MkX"));     // no agent id
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a/agents/did:key:z6MkX/"));    // empty agent id
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a/agents//Alice"));            // empty owner
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a/agents/not-a-did/Alice"));   // owner not a DID
+		assertNull(A2ACodec.parseAgentEndpoint("/a2a/agents/did:key:z6MkX/a/b")); // agent id must be one segment
+		assertNull(A2ACodec.parseAgentEndpoint("/other/agents/did:key:z6MkX/A")); // wrong prefix
+	}
 }
