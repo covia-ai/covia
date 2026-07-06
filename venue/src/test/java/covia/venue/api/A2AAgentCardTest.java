@@ -72,10 +72,12 @@ public class A2AAgentCardTest {
 		assertEquals(Status.COMPLETE, created.getStatus(),
 				"agent create should succeed: " + created.getErrorMessage());
 
-		String path = "/a2a/" + ownerDid + "/g/Alice";
+		String base = "/a2a/" + ownerDid + "/g/Alice";
+		// A2A-standard card location: the well-known path relative to the agent base.
+		String cardPath = base + "/.well-known/agent-card.json";
 
 		// Owner → 200 + the card rendered from config.
-		HttpResponse<String> ok = get(path, jwt);
+		HttpResponse<String> ok = get(cardPath, jwt);
 		assertEquals(200, ok.statusCode(), ok.body());
 		AgentCard card = JsonUtil.OBJECT_MAPPER.fromJson(ok.body(), AgentCard.class);
 		assertNotNull(card);
@@ -83,15 +85,19 @@ public class A2AAgentCardTest {
 		assertEquals("A dummy test agent", card.description());
 		assertNotNull(card.provider());
 		assertEquals(1, card.supportedInterfaces().size());
-		// The interface carries this exact per-agent endpoint (did:key colons survive HTTP).
-		assertTrue(card.supportedInterfaces().get(0).url().endsWith(path),
-				"interface url should end with " + path + ", got " + card.supportedInterfaces().get(0).url());
+		// The card's interface advertises the base *endpoint* (POST target), not the
+		// card URL — and the did:key colons survive the HTTP path end to end.
+		assertTrue(card.supportedInterfaces().get(0).url().endsWith(base),
+				"interface url should end with " + base + ", got " + card.supportedInterfaces().get(0).url());
+
+		// A bare GET on the base endpoint is not a card location.
+		assertEquals(404, get(base, jwt).statusCode());
 
 		// Anonymous → 404 (existence hidden).
-		assertEquals(404, get(path, null).statusCode());
+		assertEquals(404, get(cardPath, null).statusCode());
 
 		// Owner, but unknown agent → 404.
-		assertEquals(404, get("/a2a/" + ownerDid + "/g/Nonexistent", jwt).statusCode());
+		assertEquals(404, get("/a2a/" + ownerDid + "/g/Nonexistent/.well-known/agent-card.json", jwt).statusCode());
 	}
 
 	private HttpResponse<String> get(String path, String jwt) throws Exception {

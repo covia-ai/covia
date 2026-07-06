@@ -68,6 +68,10 @@ public class A2A extends ACoviaAPI {
 	/** A2A-specific response content type per spec §9 / §11. */
 	static final String A2A_JSON = "application/a2a+json; charset=utf-8";
 
+	/** The A2A well-known Agent Card path — at the origin for the venue front-door
+	 *  agent, and relative to a per-agent base endpoint for per-agent cards. */
+	static final String WELL_KNOWN_CARD_PATH = "/.well-known/agent-card.json";
+
 	/** Required: operation reference invoked on a fresh SendMessage. */
 	private final AString defaultChatOp;
 
@@ -102,11 +106,13 @@ public class A2A extends ACoviaAPI {
 	}
 
 	public void addRoutes(RoutesConfig routes) {
-		routes.get("/.well-known/agent-card.json", this::getAgentCard);
+		routes.get(WELL_KNOWN_CARD_PATH, this::getAgentCard);
 		routes.post("/a2a", this::handleJsonRpc);
-		// Per-agent card (COG-14): GET /a2a/<ownerDID>/g/<agentId>. The <addr>
-		// wildcard captures the grid-address slashes; parsing/validation is in
-		// A2ACodec.parseAgentEndpoint. (Per-agent JSON-RPC POST arrives in #184.)
+		// Per-agent card (COG-14): the standard A2A well-known path relative to the
+		// agent's base endpoint — GET /a2a/<ownerDID>/g/<agentId>/.well-known/agent-card.json.
+		// The greedy <addr> wildcard captures the base + suffix; getAgentCardFor
+		// strips the suffix and parses the base via A2ACodec.parseAgentEndpoint.
+		// (Per-agent JSON-RPC POST to the base endpoint arrives in #184.)
 		routes.get("/a2a/<addr>", this::getAgentCardFor);
 	}
 
@@ -139,7 +145,14 @@ public class A2A extends ACoviaAPI {
 	 * are layered on in later steps (#186 / #184).</p>
 	 */
 	protected void getAgentCardFor(Context ctx) {
-		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(ctx.path());
+		// The card lives at the A2A well-known path relative to the agent's base
+		// endpoint — /a2a/<ownerDID>/g/<agentId>/.well-known/agent-card.json — which
+		// is where a standard A2ACardResolver fetches it given the base URL. A bare
+		// GET on the base endpoint is not a card location.
+		String path = ctx.path();
+		if (!path.endsWith(WELL_KNOWN_CARD_PATH)) { buildError(ctx, 404, "Not found"); return; }
+		String base = path.substring(0, path.length() - WELL_KNOWN_CARD_PATH.length());
+		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(base);
 		if (ref == null) { buildError(ctx, 404, "Not found"); return; }
 
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);

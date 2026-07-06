@@ -65,11 +65,19 @@ rejects a raw `%2F` in the path by default (covia#153), and the codec rejects a
 a slash can never be smuggled into a segment. Agent ids are therefore
 single-segment identifiers.
 
-The card's `provider` names the hosting venue and the service interface carries
-this endpoint URL, so a client reads the URL from the card rather than
-constructing it — the exact path is an implementation detail, not part of the
-wire contract. The endpoint ↔ address codec is `A2ACodec.agentEndpointUrl` /
-`parseAgentEndpoint`.
+The **card** is served at the A2A well-known path *relative to the agent's base
+endpoint* — the location a standard `A2ACardResolver` fetches given the base URL
+(it treats the base as a tenant path and appends `/.well-known/agent-card.json`):
+
+```
+card:      GET  /a2a/<ownerDID>/g/<agentId>/.well-known/agent-card.json
+endpoint:  POST /a2a/<ownerDID>/g/<agentId>          (what the card's interface advertises)
+```
+
+So a client resolves `A2ACardResolver.baseUrl("<venue>/a2a/<ownerDID>/g/<agentId>")`,
+reads the JSON-RPC endpoint from the returned card, and POSTs there. A bare `GET`
+on the base endpoint is not a card location. The endpoint ↔ address codec is
+`A2ACodec.agentEndpointUrl` / `parseAgentEndpoint`.
 
 Addressing is **universal and independent of access**: a well-formed endpoint
 exists for any agent. Whether a caller may act on it is decided at resolution
@@ -106,9 +114,9 @@ Three surfaces, each scoped by who is asking:
   authenticated / extended-card discovery path; the venue currently answers
   `GetAuthenticatedExtendedCard` with `UnsupportedOperationError`, so this is net-new.
   It leans on a job-free agent list/info read surface (see the agent-list read gap).
-- **Direct addressing** — a caller that already holds an address does a `GET` on
-  the per-agent endpoint (`/a2a/<ownerDID>/g/<agentId>`) for that agent's card, or
-  `POST`s to it to interact — subject to the same authorisation.
+- **Direct addressing** — a caller that already holds an agent's base URL fetches
+  its card from the well-known path (`<base>/.well-known/agent-card.json`) and
+  `POST`s to the base to interact — subject to the same authorisation.
 
 ## Interaction and identifiers
 
