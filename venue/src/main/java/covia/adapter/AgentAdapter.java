@@ -611,6 +611,11 @@ public class AgentAdapter extends AAdapter {
 		// loop will retrieve the Job by its ID (== taskId) and complete it.
 		job.setStatus(Status.STARTED);
 
+		// Record the session on the task Job so consumers can recover it for the
+		// task's whole lifecycle (the A2A layer maps A2A contextId = session).
+		// Job.completeWith preserves existing fields, so this survives completion.
+		job.updateData(job.getData().assoc(Fields.SESSION_ID, Strings.create(sid.toHexString())));
+
 		// Wake agent to process the task — force=true because we just added a task
 		// that may not yet be visible via cursor.get() (lattice write race)
 		wakeAgent(ctx.getCallerDID(), agentId, true);

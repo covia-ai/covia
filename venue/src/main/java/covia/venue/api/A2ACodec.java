@@ -472,6 +472,11 @@ public class A2ACodec {
 	}
 
 	private static String extractContextId(AMap<AString, ACell> jobData, String fallback) {
+		// A2A contextId = the agent session (COG-14). A per-agent task Job records
+		// its session under SESSION_ID; prefer that, then an explicit contextId,
+		// then fall back to the Job id (front-door tasks carry neither).
+		AString sid = RT.ensureString(jobData.get(Fields.SESSION_ID));
+		if (sid != null) return sid.toString();
 		AString ctx = RT.ensureString(jobData.get(CONTEXT_ID));
 		return ctx != null ? ctx.toString() : fallback;
 	}

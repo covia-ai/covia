@@ -1,6 +1,7 @@
 package covia.venue.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -139,6 +140,9 @@ public class A2AAgentCardTest {
 		assertNotNull(task.id(), "Task.id must be set");
 		assertNotNull(task.status());
 		assertNotNull(task.status().state());
+		// contextId is the agent session, distinct from the task/Job id (#185).
+		assertNotNull(task.contextId());
+		assertNotEquals(task.id(), task.contextId(), "contextId should be the session, not the Job id");
 
 		// Authenticated non-owner → 403.
 		String otherJwt = bearerFor(AKeyPair.generate());
@@ -156,6 +160,9 @@ public class A2AAgentCardTest {
 		Task fetched = extractTask(getResp);
 		assertNotNull(fetched);
 		assertEquals(taskId, fetched.id());
+		// The session context survives into GetTask (preserved across completion).
+		assertEquals(task.contextId(), fetched.contextId());
+		assertNotEquals(fetched.id(), fetched.contextId());
 
 		// Non-owner GetTask → 403 (gated before the body is processed).
 		assertEquals(403, post(endpoint, rpcEnvelope("g2", "GetTask",

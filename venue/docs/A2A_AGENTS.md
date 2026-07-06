@@ -131,8 +131,12 @@ Concretely, a per-agent `message/send` (fresh) is submitted to the agent as an
 `agent:request` **task**, which mints the session and returns immediately with a
 non-terminal Task the client polls — `agent:request`'s own capability check is
 the ownership enforcement (facade over the capability layer), so no A2A-specific
-trust branch exists. The precise `contextId = session` surfacing, `GetTask` /
-`CancelTask`, and task continuations (an incoming `taskId`) are follow-ups.
+trust branch exists. The task Job records its session under `SESSION_ID` (which
+`Job.completeWith` preserves across completion), so `A2ACodec` surfaces
+`contextId = session` for the task's whole lifecycle — the same on `message/send`
+and on a later `GetTask`. `GetTask` / `CancelTask` reuse the front-door by-id
+handlers (a Task id is a global, caller-scoped Job id). Task continuations (an
+incoming `taskId`) remain a follow-up.
 
 ## Relationship to the venue-as-single-agent model
 
