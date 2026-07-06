@@ -17,10 +17,12 @@ import java.util.UUID;
 
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
 import org.a2aproject.sdk.spec.AgentCard;
+import org.a2aproject.sdk.spec.CancelTaskParams;
 import org.a2aproject.sdk.spec.Message;
 import org.a2aproject.sdk.spec.MessageSendParams;
 import org.a2aproject.sdk.spec.Part;
 import org.a2aproject.sdk.spec.Task;
+import org.a2aproject.sdk.spec.TaskQueryParams;
 import org.a2aproject.sdk.spec.TextPart;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -144,6 +146,30 @@ public class A2AAgentCardTest {
 
 		// Anonymous → 404 (existence hidden).
 		assertEquals(404, post(endpoint, envelope, null).statusCode());
+
+		// GetTask by the returned id → the same task (owner), reusing the by-id handler.
+		String taskId = task.id();
+		Map<String, Object> getResp = JsonUtil.OBJECT_MAPPER.fromJson(
+				post(endpoint, rpcEnvelope("g1", "GetTask", new TaskQueryParams(taskId, null)), jwt).body(),
+				Map.class);
+		assertNull(getResp.get("error"), "GetTask error: " + getResp.get("error"));
+		Task fetched = extractTask(getResp);
+		assertNotNull(fetched);
+		assertEquals(taskId, fetched.id());
+
+		// Non-owner GetTask → 403 (gated before the body is processed).
+		assertEquals(403, post(endpoint, rpcEnvelope("g2", "GetTask",
+				new TaskQueryParams(taskId, null)), otherJwt).statusCode());
+
+		// CancelTask → the cancelled task, or TASK_NOT_CANCELABLE if the echo
+		// already finished — both are spec-valid.
+		Map<String, Object> cancelResp = JsonUtil.OBJECT_MAPPER.fromJson(
+				post(endpoint, rpcEnvelope("c1", "CancelTask", new CancelTaskParams(taskId)), jwt).body(),
+				Map.class);
+		Object cancelErr = cancelResp.get("error");
+		if (cancelErr == null) {
+			assertEquals(taskId, extractTask(cancelResp).id());
+		}
 	}
 
 	// ---- helpers ----

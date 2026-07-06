@@ -206,7 +206,9 @@ public class A2A extends ACoviaAPI {
 	 * exists. For an owner, {@code message/send} dispatches to {@code agent:request}
 	 * — whose own capability check enforces ownership too (facade over the
 	 * capability layer) — and the resulting task Job becomes the A2A Task.
-	 * {@code GetTask} / {@code CancelTask} and task continuations are follow-ups.</p>
+	 * {@code GetTask} / {@code CancelTask} reuse the front-door by-id handlers
+	 * (a Task id is a global, caller-scoped Job id). Task continuations and the
+	 * {@code contextId = session} surfacing are follow-ups (#185).</p>
 	 */
 	protected void handleAgentJsonRpc(Context ctx) {
 		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(ctx.path());
@@ -239,9 +241,17 @@ public class A2A extends ACoviaAPI {
 					MessageSendParams params = parseParams(paramsRaw, MessageSendParams.class);
 					doSendMessageToAgent(ctx, id, params, ref, rctx);
 				}
-				case A2AMethods.GET_TASK_METHOD, A2AMethods.CANCEL_TASK_METHOD ->
-					writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION,
-							"Per-agent " + method + " not yet implemented");
+				case A2AMethods.GET_TASK_METHOD -> {
+					// A Task is addressed by its (global) id; the front-door handler
+					// looks it up caller-scoped, and the owner gate already ran, so
+					// the by-id handler is reused verbatim.
+					TaskQueryParams params = parseParams(paramsRaw, TaskQueryParams.class);
+					doGetTask(ctx, id, params);
+				}
+				case A2AMethods.CANCEL_TASK_METHOD -> {
+					CancelTaskParams params = parseParams(paramsRaw, CancelTaskParams.class);
+					doCancelTask(ctx, id, params);
+				}
 				default ->
 					writeError(ctx, id, A2AErrorCodes.METHOD_NOT_FOUND, "Method not found: " + method);
 			}
