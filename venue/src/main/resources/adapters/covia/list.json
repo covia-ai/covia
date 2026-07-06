@@ -25,11 +25,10 @@
 			"type": "object",
 			"properties": {
 				"exists": { "type": "boolean", "description": "True if data exists at this path" },
-				"type": { "type": "string", "description": "Value type: map, vector, index, set, string, long, boolean, double, blob, null" },
-				"count": { "type": "integer", "description": "Element count (maps, vectors, sets, indices)" },
-				"keys": { "type": "array", "description": "Map keys (only for map type, may be paginated)" },
-				"values": { "type": "array", "description": "Set elements (only for set type)" },
-				"offset": { "type": "integer", "description": "Current offset (only present when map keys are truncated)" }
+				"type": { "type": "string", "description": "Convex type name, e.g. Map, Vector, Index, Set, String, Long, Boolean, Double, Blob, Nil." },
+				"count": { "type": "integer", "description": "Total element count of the collection (maps, vectors, sets, indices)." },
+				"keys": { "type": "array", "description": "Keys of a keyed collection (map or Index), may be paginated. Positional collections (vector, set) return type+count only — read elements via covia_slice." },
+				"offset": { "type": "integer", "description": "Starting index of the returned key page (present for keyed listings)." }
 			}
 		}
 	}

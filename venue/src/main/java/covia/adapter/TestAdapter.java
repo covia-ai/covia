@@ -25,7 +25,17 @@ import covia.venue.RequestContext;
 public class TestAdapter extends AAdapter {
 	
 	public static final Logger log=LoggerFactory.getLogger(TestAdapter.class);
-	
+
+    /**
+     * Test-only sink: the {@code capturectx} op records the {@link RequestContext}
+     * it was invoked under, keyed by the owner DID it ran as (its caller DID).
+     * Lets tests assert deterministically which identity / proofs / caps a
+     * transition actually ran with — including that two same-named agents owned
+     * by different users run under their own identities (see #91).
+     */
+    public static final java.util.concurrent.ConcurrentHashMap<AString, RequestContext> CAPTURED_CTX
+        = new java.util.concurrent.ConcurrentHashMap<>();
+
     private final SecureRandom random = new SecureRandom();
     
     @Override
@@ -42,6 +52,7 @@ public class TestAdapter extends AAdapter {
 
     @Override
     public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+        requireInvoke(ctx);
         String testOp = getSubOperation(meta);
 
         // Handle different test operations
@@ -49,6 +60,8 @@ public class TestAdapter extends AAdapter {
             switch (testOp) {
                 case "echo":
                     return CompletableFuture.completedFuture(handleEcho(input));
+                case "capturectx":
+                    return CompletableFuture.completedFuture(handleCaptureCtx(ctx, input));
                 case "taskcomplete":
                     return CompletableFuture.completedFuture(handleTaskComplete(ctx, input));
                 case "wakeresponse":
@@ -57,6 +70,10 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.completedFuture(handleLlm(input));
                 case "toolllm":
                     return CompletableFuture.completedFuture(handleToolLlm(input));
+                case "badargsllm":
+                    return CompletableFuture.completedFuture(handleBadArgsLlm(input));
+                case "loopllm":
+                    return CompletableFuture.completedFuture(handleLoopLlm(input));
                 case "taskllm":
                     return CompletableFuture.completedFuture(handleTaskLlm(input));
                 case "workspacellm":
@@ -98,8 +115,11 @@ public class TestAdapter extends AAdapter {
 			// Test primitives — registered under /v/test/ops/<name>, not /v/ops/.
 			installTestAsset("random",       BASE+"randomop.json");
 			installTestAsset("echo",         BASE+"echoop.json");
+			installTestAsset("capturectx",   BASE+"capturectxop.json");
 			installTestAsset("llm",          BASE+"testllm.json");
 			installTestAsset("toolllm",      BASE+"testtoolllm.json");
+			installTestAsset("badargsllm",   BASE+"testbadargsllm.json");
+			installTestAsset("loopllm",      BASE+"testloopllm.json");
 			installTestAsset("taskllm",      BASE+"testtaskllm.json");
 			installTestAsset("workspacellm", BASE+"testworkspacellm.json");
 			installTestAsset("compactllm",   BASE+"testcompactllm.json");
@@ -126,6 +146,7 @@ public class TestAdapter extends AAdapter {
     
     @Override
     public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+        requireInvoke(ctx);
         String subOp = getSubOperation(meta);
         if ("chat".equals(subOp)) {
             // Multi-turn: set INPUT_REQUIRED and wait for messages
@@ -201,6 +222,16 @@ public class TestAdapter extends AAdapter {
 
 	private ACell handleEcho(ACell input) {
         // Simply return the input
+        return input;
+    }
+
+    /**
+     * Records the invoking {@link RequestContext} keyed by agentId, then behaves
+     * like echo so the run loop merges cleanly and sleeps. Used by tests to
+     * assert the identity / proofs / caps a transition ran under.
+     */
+    private ACell handleCaptureCtx(RequestContext ctx, ACell input) {
+        if (ctx.getCallerDID() != null) CAPTURED_CTX.put(ctx.getCallerDID(), ctx);
         return input;
     }
 
@@ -316,6 +347,53 @@ public class TestAdapter extends AAdapter {
         return Maps.of("role", Strings.create("assistant"), "content", Strings.create("(no messages)"));
     }
     
+    /**
+     * Test LLM that emits a tool call with MALFORMED (non-JSON) arguments on
+     * its first turn, then echoes the tool result content. Exercises the wire
+     * boundary rule (#89): broken tool arguments must produce a visible tool
+     * error the LLM can react to, never a silent empty-map invocation.
+     */
+    private ACell handleBadArgsLlm(ACell input) {
+        ACell messagesCell = RT.getIn(input, "messages");
+        if (messagesCell instanceof AVector) {
+            @SuppressWarnings("unchecked")
+            AVector<ACell> messages = (AVector<ACell>) messagesCell;
+            for (long i = 0; i < messages.count(); i++) {
+                AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+                if (role != null && "tool".equals(role.toString())) {
+                    AString toolContent = RT.ensureString(RT.getIn(messages.get(i), "content"));
+                    return Maps.of(
+                        "role", Strings.create("assistant"),
+                        "content", Strings.create("Tool said: " + toolContent));
+                }
+            }
+        }
+        return Maps.of(
+            "role", Strings.create("assistant"),
+            "toolCalls", Vectors.of(Maps.of(
+                "id", Strings.create("call_bad"),
+                "name", Strings.create("v/test/ops/echo"),
+                "arguments", Strings.create("not json {{{")
+            )));
+    }
+
+    /**
+     * Test LLM that ALWAYS requests a tool call — never returns text and never
+     * completes a task — so the agent tool-call loop runs to MAX_TOOL_ITERATIONS.
+     * Used to verify the agent fails the Job on give-up (covia-ai/covia#138)
+     * instead of leaving a task STARTED.
+     */
+    private ACell handleLoopLlm(ACell input) {
+        return Maps.of(
+            "role", Strings.create("assistant"),
+            "toolCalls", Vectors.of(Maps.of(
+                "id", Strings.create("call_loop"),
+                "name", Strings.create("v/test/ops/echo"),
+                "arguments", Strings.create("{\"echo\":\"loop\"}")
+            ))
+        );
+    }
+
     /**
      * Test LLM for task completion: looks for "[Tasks assigned to you]" in user
      * messages, extracts the first job ID, and calls complete_task. After seeing

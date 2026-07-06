@@ -45,7 +45,8 @@ public class VenueStateTest {
 	public void testFromRoot() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(convex.lattice.LatticeContext.create(null, kp));
+		root.withContext(convex.lattice.LatticeContext.create(
+			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
 
 		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey());
 
@@ -217,7 +218,7 @@ public class VenueStateTest {
 		assertNull(vs.get());
 
 		// Bootstrap venue state
-		ACell zero = Covia.VENUE.zero().assoc(Covia.DID, Strings.create("did:key:test"));
+		ACell zero = convex.core.data.Index.of(Covia.DID, Strings.create("did:key:test"));
 		vs.set(zero);
 
 		assertNotNull(vs.get());
@@ -229,7 +230,8 @@ public class VenueStateTest {
 	public void testWritesPropagateToRoot() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(convex.lattice.LatticeContext.create(null, kp));
+		root.withContext(convex.lattice.LatticeContext.create(
+			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
 
 		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey());
 		vs.assets().store(Strings.create("{\"name\":\"Propagated\"}"), null);
@@ -245,7 +247,8 @@ public class VenueStateTest {
 	public void testForkWritesNotVisibleBeforeSync() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(convex.lattice.LatticeContext.create(null, kp));
+		root.withContext(convex.lattice.LatticeContext.create(
+			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
 
 		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey());
 		ACell rootBefore = root.get();
@@ -267,7 +270,8 @@ public class VenueStateTest {
 	public void testForkSyncPropagates() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(convex.lattice.LatticeContext.create(null, kp));
+		root.withContext(convex.lattice.LatticeContext.create(
+			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
 
 		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey());
 		VenueState forked = connected.fork();
@@ -297,7 +301,8 @@ public class VenueStateTest {
 	public void testForkMultipleWritesSingleSync() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(convex.lattice.LatticeContext.create(null, kp));
+		root.withContext(convex.lattice.LatticeContext.create(
+			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
 
 		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey());
 		VenueState forked = connected.fork();
@@ -430,7 +435,8 @@ public class VenueStateTest {
 	public void testConcurrentEnsureSameUser() throws Exception {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(convex.lattice.LatticeContext.create(null, kp));
+		root.withContext(convex.lattice.LatticeContext.create(
+			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
 		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey());
 
 		String did = "did:key:zRace";
@@ -471,7 +477,8 @@ public class VenueStateTest {
 	public void testForkSyncIdempotent() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(convex.lattice.LatticeContext.create(null, kp));
+		root.withContext(convex.lattice.LatticeContext.create(
+			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
 
 		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey());
 		VenueState forked = connected.fork();

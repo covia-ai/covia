@@ -6,6 +6,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +24,7 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.FileUtils;
 import convex.core.util.JSON;
+import convex.core.util.Shutdown;
 import covia.api.Fields;
 import covia.venue.server.VenueServer;
 
@@ -63,10 +66,30 @@ public class MainVenue {
 		}
 		
 		AVector<AMap<AString,ACell>> venues=RT.getIn(config, Fields.VENUES);
+		List<VenueServer> servers=new ArrayList<>();
 		for (AMap<AString,ACell> venueConfig: venues) {
-			@SuppressWarnings("unused")
-			VenueServer server=VenueServer.launch(venueConfig);
+			servers.add(VenueServer.launch(venueConfig));
 		}
+
+		// On JVM shutdown (e.g. `docker stop` → SIGTERM) flush each venue's
+		// accumulated state before the process exits. Registered on Convex's
+		// shared, priority-ordered Shutdown registry at a priority BELOW SERVER,
+		// so the venue's high-level flush — the venueState fork merge + fsync via
+		// the idempotent Engine.close() — runs before Convex's own NodeServer
+		// persist (SERVER) and Etch flush (ETCH). Deliberately not a second
+		// Runtime.addShutdownHook: that would run concurrently with Convex's
+		// shutdown and race the store close/flush.
+		Shutdown.addHook(Shutdown.SERVER - 10, () -> {
+			log.info("Shutdown signal received — flushing {} venue(s)", servers.size());
+			for (VenueServer server: servers) {
+				try {
+					server.getEngine().close();
+				} catch (Exception e) {
+					log.warn("Venue flush on shutdown failed", e);
+				}
+			}
+			log.info("All venues flushed");
+		});
 	}
 	
 	private static void configureLogging(ACell config) throws JoranException, IOException {

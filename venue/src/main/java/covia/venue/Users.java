@@ -3,10 +3,10 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
-import covia.lattice.Covia;
 
 /**
  * Cursor wrapper for the venue's user data store.
@@ -61,7 +61,7 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 		// Atomic init: read-then-set is racy under concurrent first-touches —
 		// a late reader could observe null and set(zero), clobbering an earlier
 		// writer's committed user data (jobs, secrets, agents).
-		userCursor.updateAndGet(current -> current != null ? current : Covia.USER.zero());
+		userCursor.updateAndGet(current -> current != null ? current : Maps.empty());
 		return new User(userCursor, did);
 	}
 

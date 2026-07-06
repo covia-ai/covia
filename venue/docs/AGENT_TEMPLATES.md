@@ -31,7 +31,7 @@ A template is a CVM map with the same structure as `agent:create` config. It may
 {
   "name": "Convex Query Worker",
   "systemPrompt": "You query the Convex blockchain and report results...",
-  "tools": ["convex:query", "covia:read", "covia:write"],
+  "tools": ["v/ops/convex/query", "v/ops/covia/read", "v/ops/covia/write"],
   "model": "gpt-5.4-mini",
   "caps": [
     {"with": "w/results/", "can": "crud/write"},
@@ -72,16 +72,18 @@ A template is any CVM map. The following fields are recognised:
 | `name` | string | Human-readable template name |
 | `description` | string | What this agent does (useful for LLM discovery) |
 | `systemPrompt` | string | System prompt defining the agent's role |
-| `tools` | array | Tool operation names the agent can call |
+| `tools` | array | Tool operation lattice paths the agent can call (e.g. `v/ops/covia/read`) |
 | `model` | string | LLM model name (default: gpt-5.4-mini) |
-| `llmOperation` | string | LLM backend operation (default: langchain:openai) |
+| `llmOperation` | string | LLM backend operation path (default: `v/ops/langchain/openai`) |
 | `caps` | array | Capability restrictions (array of {with, can} objects) |
 | `context` | array | Context loading entries (asset hashes, workspace paths) |
 | `responseFormat` | object | Structured output schema ({name, schema}) |
-| `defaultTools` | boolean | Whether to include platform default tools (default: true) |
+| `defaultTools` | boolean | Whether to include the platform default tool pack on top of `tools` (default: false — strict allowlist) |
 | `state` | any | Initial state for the agent (optional) |
 
 All fields are optional. Missing fields get platform defaults.
+
+> **Tool references are operation lattice paths, not adapter shorthand.** Use `v/ops/covia/read`, not `covia:read` — the latter names an *adapter* and will not resolve. The same applies to `operation` and `llmOperation` (e.g. `v/ops/llmagent/chat`, `v/ops/langchain/openai`). The exception is harness tools (`subgoal`, `complete`, `fail`, `compact`, `context_load`, `context_unload`, `more_tools`) — those are bare names, not operations.
 
 ### Example templates
 
@@ -90,7 +92,7 @@ All fields are optional. Missing fields get platform defaults.
 {
   "name": "Data Reader",
   "systemPrompt": "You read and summarise data from workspace.",
-  "tools": ["covia:read", "covia:list"],
+  "tools": ["v/ops/covia/read", "v/ops/covia/list"],
   "defaultTools": false
 }
 ```
@@ -100,7 +102,7 @@ All fields are optional. Missing fields get platform defaults.
 {
   "name": "Invoice Processor",
   "systemPrompt": "You process invoices. Read from w/inbox/, write results to w/processed/.",
-  "tools": ["covia:read", "covia:write"],
+  "tools": ["v/ops/covia/read", "v/ops/covia/write"],
   "caps": [
     {"with": "w/inbox/", "can": "crud/read"},
     {"with": "w/processed/", "can": "crud/write"}
@@ -117,7 +119,7 @@ All fields are optional. Missing fields get platform defaults.
 {
   "name": "Team Lead",
   "systemPrompt": "You create and coordinate worker agents. Use templates from w/templates/ to create specialised workers.",
-  "tools": ["agent:create", "agent:request", "agent:message", "covia:read", "covia:write"]
+  "tools": ["v/ops/agent/create", "v/ops/agent/request", "v/ops/agent/message", "v/ops/covia/read", "v/ops/covia/write"]
 }
 ```
 
@@ -137,7 +139,7 @@ If the resolved map contains a `state` field, it is extracted and used as the ag
 Store a template, then create an agent from it:
 
 ```
-covia_write  path=w/templates/reader  value={"systemPrompt":"You read data.","tools":["covia:read"],"defaultTools":false}
+covia_write  path=w/templates/reader  value={"systemPrompt":"You read data.","tools":["v/ops/covia/read"],"defaultTools":false}
 
 agent_create  agentId=MyReader  config=w/templates/reader
 ```
@@ -147,7 +149,7 @@ agent_create  agentId=MyReader  config=w/templates/reader
 Templates stored as immutable assets are resolved the same way — `config` can be a hash, `/a/<hash>`, or DID URL:
 
 ```
-asset_store  metadata={"name":"Reader Template","systemPrompt":"You read data.","tools":["covia:read"]}
+asset_store  metadata={"name":"Reader Template","systemPrompt":"You read data.","tools":["v/ops/covia/read"]}
 // returns asset id
 
 agent_create  agentId=MyReader  config=/a/<hash>
@@ -156,7 +158,7 @@ agent_create  agentId=MyReader  config=/a/<hash>
 ### Inline
 
 ```
-agent_create  agentId=MyReader  config={"systemPrompt":"You read data.","tools":["covia:read"],"defaultTools":false}
+agent_create  agentId=MyReader  config={"systemPrompt":"You read data.","tools":["v/ops/covia/read"],"defaultTools":false}
 ```
 
 Direct inline config — no indirection. Current behaviour, unchanged.
@@ -247,10 +249,10 @@ Installed at venue startup by `AgentAdapter.installAssets` via `installAgentTemp
 | Path | Tools | Purpose |
 |------|-------|---------|
 | `v/agents/templates/minimal` | (none, `defaultTools: false`) | Pure reasoning, no side effects |
-| `v/agents/templates/reader` | covia:read, covia:list, covia:slice | Read-only data analysis |
-| `v/agents/templates/worker` | covia:read/write/delete/append/slice/list | General data processing |
-| `v/agents/templates/manager` | agent CRUD ops, covia:read/list, grid:run, **subgoal/compact/more_tools** | Agent coordination with goal decomposition |
-| `v/agents/templates/analyst` | covia:read/list/slice, schema:validate/infer/coerce | Data analysis with schema awareness |
+| `v/agents/templates/reader` | `v/ops/covia/read`, `v/ops/covia/list`, `v/ops/covia/slice` | Read-only data analysis |
+| `v/agents/templates/worker` | `v/ops/covia/{read,write,delete,append,slice,list}` | General data processing |
+| `v/agents/templates/manager` | `v/ops/agent/*` CRUD ops, `v/ops/covia/{read,list}`, `v/ops/grid/run`, **subgoal/compact/more_tools** | Agent coordination with goal decomposition |
+| `v/agents/templates/analyst` | `v/ops/covia/{read,list,slice}`, `v/ops/schema/{validate,infer,coerce}` | Data analysis with schema awareness |
 | `v/agents/templates/goaltree` | Curated covia + grid + asset ops + all 7 harness tools | Goal-tree agent with full decomposition support |
 | `v/agents/templates/full` | All default tools + all 7 harness tools (`defaultTools: true`) | Development and exploration |
 
@@ -260,7 +262,7 @@ Template JSON files live in `venue/src/main/resources/agent-templates/`.
 
 ### Default template (Phase 3b — not yet implemented)
 
-Currently when `agent:create` is called with no config, the hardcoded `DEFAULT_TOOL_OPS` list in `LLMAgentAdapter` (19 tools) is merged in. A future change should replace this with the `worker` template as the default, giving a smaller, more focused default tool set and resolving issue #60. This is a breaking change for existing agents that rely on default tools like `agent:create` or `asset:store`, so needs explicit review before rollout.
+As of #92, agents are strict-allowlist by default: an agent is advertised only the tools it declares in `config.tools`, and opts into the `DEFAULT_TOOL_OPS` pack with `defaultTools: true`. An agent created with no config and no `defaultTools` therefore has no tools. A future change may go further and make a focused template (e.g. `worker`) the default starting point for `agent:create` with no config, resolving issue #60.
 
 ---
 

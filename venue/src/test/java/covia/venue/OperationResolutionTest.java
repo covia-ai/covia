@@ -23,15 +23,31 @@ import covia.grid.Job;
  * Tests for operation resolution: /a/ hash paths, /o/ user-scoped names,
  * and the venue operation registry.
  *
- * <p>Uses {@link TestEngine#ENGINE}. Per-test {@code alice} DIDs isolate
- * writes to {@code /o/} and {@code /w/} (which are user-scoped). For
- * {@code /v/} writes (venue globals are shared), tests use distinct
- * paths so they don't collide with each other or with venue-installed
- * assets read by other tests.</p>
+ * <p>Uses its OWN {@link Engine}, not the shared {@link TestEngine#ENGINE}.
+ * These tests do write-then-read resolution. The shared engine is concurrently
+ * mutated by other parallel test classes whose HTTP requests trigger
+ * {@code syncState()} → {@code lattice.sync()}; a concurrent flush of the
+ * shared Etch store can transiently fault a lazily-loaded cell during a read
+ * (the de-swallowed navigation exception in #145/#146). Reads themselves are
+ * lock-free and navigate an immutable snapshot — there is no read-logic race —
+ * so the correct fix is isolation, not locking. This class never calls
+ * {@code syncState()}, so its own store stays quiescent and its reads are
+ * deterministic regardless of what other classes do. Per-test {@code alice}
+ * DIDs keep this class's own concurrent methods from colliding on
+ * {@code /o/} and {@code /w/}.</p>
  */
 public class OperationResolutionTest {
 
-	final Engine engine = TestEngine.ENGINE;
+	// Own engine, isolated from the shared TestEngine.ENGINE — see class doc.
+	// Built once for the class; this class's operations are all in-memory and
+	// lock-free (it never triggers syncState), so its concurrent methods share
+	// it safely.
+	private static final Engine engine;
+	static {
+		engine = Engine.createTemp(null);
+		Engine.addDemoAssets(engine);
+	}
+
 	private AString aliceDID;
 	private RequestContext alice;
 
@@ -54,6 +70,9 @@ public class OperationResolutionTest {
 
 		Asset asset2 = engine.resolveAsset(Strings.create("/a/" + echoHash.toHexString()));
 		assertNotNull(asset2, "Should resolve by /a/ prefixed hash");
+
+		Asset asset3 = engine.resolveAsset(Strings.create("a/" + echoHash.toHexString()));
+		assertNotNull(asset3, "Should resolve by a/ prefixed hash (leading slash optional)");
 	}
 
 	@Test
@@ -682,5 +701,48 @@ public class OperationResolutionTest {
 		// The result should contain a "keys" entry with the 4 op names
 		ACell keys = RT.getIn(result, "keys");
 		assertNotNull(keys, "should list child keys under v/ops/json");
+	}
+
+	// ========== Leading-slash consistency ==========
+	//
+	// A leading slash is optional sugar: "/foo/bar" must resolve identically
+	// to "foo/bar" for every namespace. Hash (/a/) and per-user ops (/o/)
+	// already accepted it; these lock in the same for virtual (v/, n/, ...)
+	// and workspace (w/, g/, ...) namespaces.
+
+	@Test
+	public void testLeadingSlashVirtualNamespace() {
+		assertNotNull(engine.resolveAsset(Strings.create("v/test/ops/echo"), alice),
+			"v/test/ops/echo should resolve without a leading slash");
+		assertNotNull(engine.resolveAsset(Strings.create("/v/test/ops/echo"), alice),
+			"/v/test/ops/echo should resolve identically with a leading slash");
+	}
+
+	@Test
+	public void testLeadingSlashWorkspacePath() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/slash-note", Fields.VALUE, Strings.create("hi")),
+			alice).awaitResult(5000);
+
+		assertEquals(Strings.create("hi"),
+			engine.resolvePath(Strings.create("w/slash-note"), alice),
+			"w/slash-note should resolve without a leading slash");
+		assertEquals(Strings.create("hi"),
+			engine.resolvePath(Strings.create("/w/slash-note"), alice),
+			"/w/slash-note should resolve identically with a leading slash");
+	}
+
+	@Test
+	public void testLeadingSlashUserOpPath() {
+		ACell opMeta = Maps.of("name", "Slash Echo",
+			"operation", Maps.of("adapter", "test:echo"));
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "o/slash-echo", Fields.VALUE, opMeta),
+			alice).awaitResult(5000);
+
+		assertNotNull(engine.resolveAsset(Strings.create("o/slash-echo"), alice),
+			"o/slash-echo should resolve without a leading slash");
+		assertNotNull(engine.resolveAsset(Strings.create("/o/slash-echo"), alice),
+			"/o/slash-echo should resolve identically with a leading slash");
 	}
 }

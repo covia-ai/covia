@@ -22,6 +22,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.grid.Job;
 
 /**
  * Unit tests for {@link JobManager#invokeInternal}. Covers the zero-Job
@@ -120,36 +121,39 @@ public class JobManagerTest {
 	// ========== Capability enforcement ==========
 
 	/**
-	 * invokeInternal is the framework dispatch path and deliberately does
-	 * NOT cap-check. Trust is established by going through this entry point
-	 * rather than by a flag on the context (caps stay attached). The
-	 * user-facing cap check fires on invokeOperation only.
-	 *
-	 * <p>This test guards the invariant: a capped ctx going via the
-	 * framework path is allowed (the caller — internal adapter code — is
-	 * responsible for any explicit checks it wants, e.g. dispatchTool).</p>
+	 * invokeInternal enforces the capability ceiling carried by the context —
+	 * it differs from invokeOperation only in Job creation, never in trust.
+	 * A read outside the ceiling is denied; a read within it proceeds; the
+	 * ceiling is read, never stripped. "Framework-trusted" is expressed by an
+	 * unrestricted (null-caps) context, not by choosing this dispatch path.
 	 */
 	@Test
-	public void testInvokeInternalDoesNotEnforceCaps() throws Exception {
+	public void testInvokeInternalEnforcesContextCeiling() throws Exception {
 		AVector<ACell> caps = Vectors.of(Maps.of(
 			Strings.create("with"), Strings.create("w/allowed"),
 			Strings.create("can"),  Strings.create("crud/read")));
 		RequestContext capCtx = ctx.withCaps(caps);
 
-		// Even though the cap doesn't cover w/forbidden/x, invokeInternal
-		// proceeds — that's the point of the framework path. The op runs
-		// to completion and returns the read result (path doesn't exist
-		// so {value: nil, exists: false}, not a cap denial).
-		ACell result = engine.jobs().invokeInternal(
+		// Outside the ceiling — denied on the internal path too (no bypass).
+		CompletableFuture<ACell> denied = engine.jobs().invokeInternal(
 			"v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/forbidden/x")),
+			capCtx);
+		ExecutionException ex = assertThrows(ExecutionException.class,
+			() -> denied.get(5, TimeUnit.SECONDS));
+		assertTrue(ex.getCause().getMessage().contains("Capability denied"),
+			"invokeInternal must enforce the context ceiling");
+
+		// Within the ceiling — proceeds; absent path reads {exists: false}.
+		ACell result = engine.jobs().invokeInternal(
+			"v/ops/covia/read",
+			Maps.of(Strings.create("path"), Strings.create("w/allowed")),
 			capCtx).get(5, TimeUnit.SECONDS);
 		assertNotNull(result);
-		// Confirm we hit the read path, not the cap-denial path
 		assertEquals(Boolean.FALSE,
 			convex.core.lang.RT.bool(convex.core.lang.RT.getIn(result, "exists")));
 
-		// Caps remain on the ctx — they didn't get stripped.
+		// Caps remain on the ctx — enforcement reads them, never strips them.
 		assertEquals(caps, capCtx.getCaps());
 	}
 
@@ -165,13 +169,15 @@ public class JobManagerTest {
 			Strings.create("can"),  Strings.create("crud/read")));
 		RequestContext capCtx = ctx.withCaps(caps);
 
-		RuntimeException ex = assertThrows(RuntimeException.class, () ->
-			engine.jobs().invokeOperation(
-				"v/ops/covia/read",
-				Maps.of(Strings.create("path"), Strings.create("w/forbidden/x")),
-				capCtx));
-		assertTrue(ex.getMessage().startsWith("Capability denied:"),
-			"Expected capability-denied message, got: " + ex.getMessage());
+		// Enforcement is at the adapter's point now: a denial fails the Job
+		// (surfaced at awaitResult), not a synchronous throw from invokeOperation.
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/covia/read",
+			Maps.of(Strings.create("path"), Strings.create("w/forbidden/x")),
+			capCtx);
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertTrue(String.valueOf(job.getErrorMessage()).contains("Capability denied"),
+			"Expected capability-denied message, got: " + job.getErrorMessage());
 	}
 
 	@Test
@@ -274,5 +280,47 @@ public class JobManagerTest {
 		assertThrows(TimeoutException.class, () -> f.get(100, TimeUnit.MILLISECONDS));
 		assertTrue(f.cancel(true));
 		assertTrue(f.isCancelled());
+	}
+
+	// ========== Output-schema validation (operator-gated, default off) ==========
+
+	/** Operation meta declaring an {@code object} output schema. */
+	private static AMap<AString, ACell> metaWithObjectOutput() {
+		return Maps.of(Fields.OPERATION, Maps.of(
+			Fields.ADAPTER, Strings.create("test:out"),
+			Fields.OUTPUT, Maps.of(Strings.create("type"), Strings.create("object"))));
+	}
+
+	@Test
+	public void testOutputValidationOffIgnoresBadResult() {
+		// Default config → outputValidation off → a non-object result (which
+		// violates the schema) must NOT raise. No validation, no logging.
+		Engine eng = Engine.createTemp(null);
+		eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object"));
+	}
+
+	@Test
+	public void testOutputValidationStrictFailsBadResult() {
+		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
+		assertThrows(IllegalArgumentException.class,
+			() -> eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object")));
+		// A conforming result (an object) passes.
+		eng.jobs().validateOutput(metaWithObjectOutput(), Maps.empty());
+	}
+
+	@Test
+	public void testOutputValidationWarnDoesNotFail() {
+		// warn logs a mismatch but completes — must not raise.
+		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("warn")));
+		eng.jobs().validateOutput(metaWithObjectOutput(), Strings.create("not an object"));
+	}
+
+	@Test
+	public void testOutputValidationNoSchemaIsNoop() {
+		// An operation with no output schema is never validated, even in strict.
+		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
+		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, Strings.create("test:out")));
+		eng.jobs().validateOutput(meta, Strings.create("anything"));
 	}
 }

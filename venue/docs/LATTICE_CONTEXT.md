@@ -27,17 +27,25 @@ Five shorthands, one per scope. Each resolves to a single state bucket. Data is 
 
 ### Lattice Storage
 
-Per-user state under `:user-data/<DID>`:
+Per-user state under `:user-data/<DID>`. These are **interior nodes of the venue
+`:value`** — plain navigable JSON with no independent merge semantics. The merge
+happens only at the venue `:value` root, which is a single whole-value-LWW node
+(newer `:timestamp` wins wholesale, deletions durable — see
+[GRID_LATTICE_DESIGN.md](./GRID_LATTICE_DESIGN.md) §A.2). The `w`/`o`/`h`
+namespaces are stored as a transparent `{updated, data}` container: content lives
+under `data` (callers address `w/foo`, which translates to `w/data/foo`) and
+`updated` is per-namespace last-modified metadata, auto-stamped on write by the
+`StampingLattice` boundary.
 
-| Key | Lattice type | Contents |
-|-----|-------------|----------|
-| `"g"` | MapLattice + AGENT_LWW | Agent records (atomic, ts-based) |
-| `"w"` | MapLattice + JSONValue | User workspace (recursive merge) |
-| `"o"` | MapLattice + JSONValue | User operations (recursive merge) |
-| `"s"` | MapLattice + LWW | Encrypted secrets |
-| `"j"` | IndexLattice + LWW | Job references |
-| `"h"` | MapLattice + JSONValue | HITL requests |
-| `"a"` | CASLattice | Content-addressed assets |
+| Key | Storage shape | Contents |
+|-----|---------------|----------|
+| `"g"` | navigable JSON | Agent records (one atomic map per agent) |
+| `"w"` | `{updated, data}` stamped container | User workspace |
+| `"o"` | `{updated, data}` stamped container | User operations registry |
+| `"s"` | navigable JSON | Encrypted secrets |
+| `"j"` | navigable JSON | Job references |
+| `"h"` | `{updated, data}` stamped container | HITL requests |
+| `"a"` | navigable JSON | Content-addressed asset references |
 
 ### Agent Record
 

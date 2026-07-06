@@ -5,14 +5,28 @@
       "hostname": "localhost",
       "port": 8080,
       "mcp": {},
-      "webdav": { "enabled": true }
+      "webdav": { "enabled": true },
+      "a2a": {
+        "defaultChatOp": "v/test/ops/echo",
+        "agentInfo": {
+          "name": "Local Dev Venue A Agent",
+          "description": "Local A2A test agent (echo op) for protocol testing"
+        }
+      }
     },
     {
       "name": "Local Dev Venue B",
       "hostname": "localhost",
       "port": 8081,
       "mcp": {},
-      "webdav": { "enabled": true }
+      "webdav": { "enabled": true },
+      "a2a": {
+        "defaultChatOp": "v/test/ops/echo",
+        "agentInfo": {
+          "name": "Local Dev Venue B Agent",
+          "description": "Local A2A test agent (echo op) for protocol testing"
+        }
+      }
     }
   ]
 }

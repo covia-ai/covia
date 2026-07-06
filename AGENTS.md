@@ -47,7 +47,7 @@ covia/                          # ai.covia:covia:0.2.0-SNAPSHOT (parent POM)
 
 - **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.5** — released, resolves from Maven Central. To develop against unreleased Convex changes, `mvn install` from `../convex` and point `convex.version` at its snapshot.
+- **Convex 0.8.7** — pinned to the Maven Central release. A clean clone builds in one command (`mvn clean install`); no local Convex build is needed. To track an unreleased Convex, build it locally (`mvn install -DskipTests` from `../convex`) and point `convex.version` at its `-SNAPSHOT`; CI compiles Convex from source automatically whenever `convex.version` ends in `-SNAPSHOT`.
 
 ## Build & Run
 
@@ -87,12 +87,12 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.5 | Lattice platform, immutable data, cryptography |
-| Javalin | 6.7.0 | HTTP server with OpenAPI/Swagger/ReDoc |
-| LangChain4j | 1.5.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
-| MCP SDK | 0.13.0 | Model Context Protocol |
-| A2A | 1.0.0.Beta1 | Agent-to-Agent protocol |
-| JUnit | 6.0.1 | Testing |
+| Convex | 0.8.7 | Lattice platform, immutable data, cryptography |
+| Javalin | 7.2.2 | HTTP server with OpenAPI/Swagger/ReDoc |
+| LangChain4j | 1.16.2 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
+| MCP SDK | 2.0.0 | Model Context Protocol |
+| A2A | 1.0.0.Final | Agent-to-Agent protocol |
+| JUnit | 6.1.0 | Testing |
 | SLF4J/Logback | 2.0.17/1.5.18 | Logging |
 
 ## Architecture Overview
@@ -120,14 +120,14 @@ Adapter Layer
     ├── JVMAdapter        — string utilities
     ├── FileAdapter       — filesystem access (root-jailed; host / temp / DLFS-backed roots)
     ├── SchemaAdapter     — JSON Schema validation, inference, coercion
-    ├── CoviaAdapter      — lattice CRUD (read, write, delete, append, slice, list, functions, describe)
+    ├── CoviaAdapter      — lattice CRUD + reads (read, write, delete, append, slice, list, inspect, aggregate)
     ├── AssetAdapter      — content-addressed asset store/retrieve
     ├── AgentAdapter      — agent lifecycle (create, message, run, fork, templates)
     ├── LLMAgentAdapter   — LLM-backed agent transitions (chat)
     ├── GoalTreeAdapter   — goal-tree agent with structured planning
     ├── DLFSAdapter       — decentralised file system (per-user signed drives)
     ├── VaultAdapter      — health vault (thin wrapper over DLFS)
-    ├── SecretAdapter     — secret store operations (set, extract)
+    ├── SecretAdapter     — secret store operations (set, extract; removal via covia:delete s/<name>)
     ├── UCANAdapter       — capability token issuance
     ├── SchedulerAdapter  — deferred grid-op invocation (schedule, cancel, trigger, list)
     └── TestAdapter       — echo, delay, error simulation, chat
@@ -152,7 +152,7 @@ Defined in code at `venue/src/main/java/covia/lattice/Covia.java`. Full design i
 - **SSE** — Server-sent events for real-time job updates (`/api/v1/jobs/{id}/sse`)
 - **MCP** — Model Context Protocol JSON-RPC endpoint
 - **A2A** — Agent-to-Agent federated protocol
-- **DID** — Decentralized identifiers for venue discovery (`/.well-known/did.json`)
+- **DID** — Decentralized identifiers for venue discovery (`/.well-known/did.json`). Identity is always the venue's `did:key`; a venue with a public `hostname` also publishes a spec-compliant `did:web:<hostname>` alias (`id` = did:web, canonical did:key in `alsoKnownAs`) so strict resolvers work — did:web is discovery, the did:key is identity (#167)
 
 ## Development Conventions
 
@@ -207,7 +207,7 @@ The engine always resolves operation references to metadata before dispatching �
 
 ### In Progress
 
-- **Capability enforcement** — `:caps` lattice slot present but not yet enforced; UCAN `with`/`can` checking planned for Phase 3/4
+- **Capability enforcement** — Active. The ceiling is a property of the `RequestContext`, enforced at the point of action (adapter-pinned `requireCapability`, with a name-keyed boundary safety net). `invokeOperation`/`invokeInternal` differ only in Job creation, not trust; ceilings compose downward into sub-operations. Unauthenticated callers default to a read-only ceiling (`crud/read` + `asset/read`), operator-overridable via `auth.public.caps` (#148). `operationAbility` maps every venue-resource mutation (covia/file/dlfs/vault writes + deletes, `asset:store`, agent lifecycle mutations, `secret:set`) to a withheld ability — drift-guarded by `CapabilityCheckerTest.testReadOnlyCeilingDeniesAllVenueMutations`. The name-keyed boundary is **kept** as a default-deny net (an unknown op → `invoke` → denied under a restrictive ceiling) rather than retired; adapter-pinned `requireCapability` adds resource precision (covia, secret). External/op-invocation classes (`convex:transact`, `ucan:issue`, `scheduler`, `http`) stay `invoke`-classed and are denied to anonymous callers by policy (invocation creates a job). **Optional follow-up:** resource-precise adapter pins for agent-state mutations.
 
 ---
 

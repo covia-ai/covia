@@ -105,6 +105,8 @@ Resources are **DID URLs** — the DID identifies the authority (user/owner), th
 
 This aligns with `DIDURL` from convex-core — the DID is the authority, the path is the namespace scope.
 
+**Canonical vs. shorthand.** A `with` is always absolute (owner-named) as above. For convenience, Covia accepts a **bare** lattice path (`w/projects/foo`) as shorthand for the *caller's own* resource — this is how an agent's `caps` are written. Enforcement canonicalises it to the absolute form (`<callerDID>/w/projects/foo`) before matching, so a bare (own-namespace) grant and a DID-URL grant compare identically. `file://…` and `dlfs://…` resources are already absolute (scheme-qualified) and are left unchanged.
+
 ### 3.2 Abilities (`can`)
 
 Abilities follow UCAN's slash-delimited convention with no leading slash. `*` is the top ability that proves everything. Shorter abilities prove longer ones (prefix hierarchy):
@@ -350,6 +352,24 @@ This is the "resource owner" root of every delegation chain. The venue
 recognises the caller's DID as owning their namespace without requiring
 a token.
 
+**Narrowing the implicit grant (self-attenuation).** The full grant is the
+default. A caller may *narrow* it for a session by presenting an
+**owner-authored** attenuation — a UCAN the owner signed over its own
+resources (`iss == aud == caller`). The venue takes the union of those caps
+and applies it as a ceiling through the standard enforcement path, so the
+session can do only what the attenuation allows. Because the owner is the
+authority over its own namespace and a ceiling can only *narrow* the implicit
+grant — never widen it — this is escalation-safe: the venue merely enforces
+the restriction the owner chose. With no token presented, the full implicit
+grant stands.
+
+A self-attenuation is **owner-signed** — mint it by signing a UCAN with the
+owner's own key (in the embedded/desktop case, the local owner key signs a
+per-launch token that locks the app's session to a subset of the namespace).
+This is distinct from `ucan:issue`, which mints *venue-signed* tokens for
+**cross-user** grants (§5.2); a venue-signed token is not the owner's own
+authority and forms no self-ceiling.
+
 ### 5.2 Cross-User Access
 
 Cross-user access requires a valid proof chain in the `RequestContext`.
@@ -404,6 +424,17 @@ naturally:
 
 Granting `crud` (without a verb suffix) covers read+write+delete uniformly;
 trailing-slash on the resource is the conventional way to cover a subtree.
+
+**Own-namespace enforcement (self-ceiling).** The points above are the
+cross-user checks (a *grant* of access to someone else's resource). When a
+caller presents a self-attenuation (§5.1), the same capability check is also
+applied to the caller's **own** operations as a *ceiling*: the op's resource
+and each presented capability's `with` are canonicalised to absolute
+owner-scoped form (a bare `w/health/bp` → `<callerDID>/w/health/bp`; DID-URL
+and `file://`/`dlfs://` left as-is), then matched with `Capability.covers`.
+Own and cross-user resources thus match by one rule. With no token presented,
+the implicit grant stands and no ceiling applies — so token-less callers are
+unaffected.
 
 ### 5.4 Agent Identity Models
 
@@ -557,8 +588,17 @@ a RequestContext for the tool invocation. The context determines enforcement:
 | Model A (attenuated) | Caller's identity + agent's scoped UCAN | CoviaAdapter checks UCAN before writes |
 | Model B (independent) | Agent's own DID + presented proof chain | Full UCAN verification on every operation |
 
-The enforcement point is the same in all cases — CoviaAdapter's
-`verifyProofs()` method. The difference is what's in the RequestContext.
+Two complementary checks apply, both built on the same `Capability.covers`
+matcher over canonical owner-scoped resources (§3.1):
+
+- **`CapabilityChecker`** enforces a *ceiling* — the agent's config `caps`
+  and any presented self-attenuation (§5.1) — on every operation (`enforceCaps`
+  at job dispatch, and before each tool call). A ceiling can only narrow.
+- **`CoviaAdapter.verifyProofs()`** authorises *cross-user* access against
+  presented proofs (§5.2). A proof grants reach into another namespace.
+
+The difference between agent models is which identity and caps the
+RequestContext carries; the matcher is shared.
 
 For Model A, the key change is that the agent's tool calls go through a
 **restricted RequestContext** instead of inheriting the user's full access.
@@ -577,6 +617,19 @@ and it verifies it on every tool call.
 - Signature verification on every capability check
 - Time bounds (`exp`, `nbf`) enforced
 - Cross-user reads work when valid proof is presented
+
+### Phase C1b: Self-attenuation on the direct invoke path ✓ (#131)
+
+- A presented owner-authored UCAN narrows the caller's own implicit grant (§5.1)
+- `enforceCaps` matches caps against **canonical owner-scoped resources** —
+  bare own-paths resolve to `<callerDID>/…`, the same convention as cross-user
+  (§3.1, §5.3); config caps and token caps interoperate
+- Selection primitive `UCANValidator.capabilitiesFor` in convex-core (covia
+  uses an interim, deprecated `CapabilityChecker.selfCapabilities` until its
+  Convex dependency includes it)
+- Escalation-safe: a ceiling can only narrow, never widen
+- Both invoke transports (REST, MCP) attach it via one seam,
+  `AuthMiddleware.withTransportAuth`
 
 ### Phase C2: Delegation Chains
 

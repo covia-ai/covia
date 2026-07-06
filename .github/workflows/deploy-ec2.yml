@@ -40,13 +40,28 @@ jobs:
           # Pull latest image
           docker pull ghcr.io/covia-ai/covia:latest
 
-          # Stop and remove existing container
+          # Stop legacy systemd service if still present
+          sudo systemctl stop covia-venue.service 2>/dev/null || true
+
+          # Stop and remove existing container (by name, then any container still using port 8080)
           docker stop covia-venue 2>/dev/null || true
           docker rm covia-venue 2>/dev/null || true
+          docker ps -q --filter publish=8080 | xargs -r docker stop
+          docker ps -aq --filter publish=8080 | xargs -r docker rm
+
+          # Ensure data directory exists with correct config (preserve existing etch store)
+          mkdir -p /home/ec2-user/covia-data
+          if [ ! -f /home/ec2-user/covia-data/config.json ]; then
+            printf '{"venues":[{"name":"Covia Venue (EC2)","hostname":"venue-3.covia.ai","port":8080,"store":"/data/venue.etch","mcp":{"enabled":true}}]}\n' \
+              > /home/ec2-user/covia-data/config.json
+          fi
+          # Container runs as UID 1001 (appuser) — grant write access to data dir
+          sudo chown -R 1001:1001 /home/ec2-user/covia-data
 
           # Run new container
           docker run -d \
             --name covia-venue \
+            --stop-timeout 30 \
             -p 8080:8080 \
             -v /home/ec2-user/covia-data:/data \
             --log-driver=awslogs \

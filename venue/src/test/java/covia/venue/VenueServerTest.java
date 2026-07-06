@@ -34,6 +34,7 @@ import convex.core.data.Hash;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
@@ -62,6 +63,25 @@ public class VenueServerTest {
 		covia = TestServer.COVIA;
 	}
 	
+	/**
+	 * The Private Network Access header must be OFF by default — emitting it
+	 * lets a public web origin reach a localhost venue from the browser
+	 * (covia#130 / GetMine-ai/demo#133 P0-2). Operator opt-in only.
+	 */
+	@Test public void testPrivateNetworkHeaderGatedOff() throws Exception {
+		HttpClient client = HttpClient.newBuilder().build();
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI("http://localhost:" + PORT + "/api/v1/status"))
+			.GET().timeout(Duration.ofSeconds(10)).build();
+		HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+		assertTrue(resp.headers().firstValue("access-control-allow-private-network").isEmpty(),
+			"PNA header must not be emitted by default");
+
+		// Config getter: off by default, on only when explicitly enabled.
+		assertFalse(new Config(Maps.empty()).isAllowPrivateNetwork());
+		assertTrue(new Config(Maps.of(Config.ALLOW_PRIVATE_NETWORK, CVMBool.TRUE)).isAllowPrivateNetwork());
+	}
+
 	/**
 	 * Test for presence of Covia API docs
 	 */
@@ -182,6 +202,12 @@ public class VenueServerTest {
 	public void testStatus() throws InterruptedException, ExecutionException {
 		AMap<AString, ACell> status = covia.getStatus().get();
 		assertTrue(status.get(Fields.TS) instanceof CVMLong);
+		// #139: the status response must report a non-null build version so
+		// operators can detect version drift across venues. Running from classes
+		// this is "dev"; from the shaded jar it is the Implementation-Version.
+		ACell version = status.get(Fields.VERSION);
+		assertNotNull(version, "status must include a non-null version");
+		assertFalse(version.toString().isEmpty(), "version must not be empty");
 	}
 	
 	@Test
@@ -378,6 +404,19 @@ public class VenueServerTest {
 	}
 
 	@Test
+	public void testBindAddressConfig() {
+		// Unset bindAddress → null, so the connector binds all interfaces
+		// (0.0.0.0). Preserves the historical default (issue #129).
+		assertNull(new Config(Maps.empty()).getBindAddress(),
+			"bindAddress should default to null (wildcard bind)");
+
+		// Explicit bindAddress is returned verbatim for connector.setHost(...)
+		Config loopback = new Config(Maps.of(Config.BIND_ADDRESS, Strings.create("127.0.0.1")));
+		assertEquals("127.0.0.1", loopback.getBindAddress(),
+			"Configured bindAddress should be returned for the connector");
+	}
+
+	@Test
 	public void testAnonymousInvokeGetsPublicDID() throws Exception {
 		// Invoke via HTTP client without auth — should get public DID as caller
 		ACell input = Maps.of("message", "anonymous test");
@@ -389,5 +428,35 @@ public class VenueServerTest {
 		assertNotNull(caller, "Anonymous invoke should have a caller DID");
 		assertTrue(caller.toString().endsWith(":public"),
 			"Anonymous caller DID should end with :public, got: " + caller);
+	}
+
+	/**
+	 * Catalog operation names contain slashes (e.g. "v/ops/jvm/string-concat")
+	 * and are percent-encoded into a single path segment by the client
+	 * ({@link VenueHTTP#getOperationId}): GET /api/v1/operations/v%2Fops%2F…
+	 * Jetty 12's default UriCompliance rejects %2F as an "ambiguous path
+	 * separator" (400) — Jetty 11 / Javalin's own connector allowed it. The
+	 * venue connector opts back in ({@code VenueServer.setupJettyServer}); this
+	 * test guards that config, so named catalog lookups — and the cross-venue
+	 * named references built on them — keep working after the Javalin 7 / Jetty
+	 * 12 upgrade. Regression guard for the upgrade; see RemoteAssetFetchTest /
+	 * RemoteOperationTest for the end-to-end cross-venue coverage.
+	 */
+	@Test
+	public void testEncodedSlashInCatalogNamePath() throws Exception {
+		String name = "v/ops/jvm/string-concat";
+		String encoded = java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8);
+		HttpClient client = HttpClient.newBuilder().build();
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI("http://localhost:" + PORT + "/api/v1/operations/" + encoded))
+			.GET().timeout(Duration.ofSeconds(10)).build();
+		HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, resp.statusCode(),
+			() -> "Encoded-slash catalog path must not be rejected as ambiguous: "
+				+ resp.statusCode() + " " + resp.body());
+		// The handler resolves the percent-decoded name to a content-addressed id.
+		ACell body = JSON.parse(resp.body());
+		assertNotNull(RT.getIn(body, "asset"),
+			"operations/{name} must return the resolved asset id for a slashed catalog name");
 	}
 }

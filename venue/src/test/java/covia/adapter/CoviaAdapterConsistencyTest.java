@@ -60,11 +60,10 @@ public class CoviaAdapterConsistencyTest {
 	// ========== Helpers ==========
 
 	private void write(String path, ACell value, RequestContext ctx) {
-		Job job = engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, path, Fields.VALUE, value), ctx);
-		ACell r = job.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(r, "written"),
-			"write must report written:true for " + path);
+		// Success is the job reaching COMPLETE (awaitResult throws otherwise);
+		// the output carries pathCreated only when hierarchy was built.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, path, Fields.VALUE, value), ctx).awaitResult(5000);
 	}
 
 	private ACell read(String path, RequestContext ctx) {
@@ -80,10 +79,8 @@ public class CoviaAdapterConsistencyTest {
 	}
 
 	private void delete(String path, RequestContext ctx) {
-		Job job = engine.jobs().invokeOperation("v/ops/covia/delete",
-			Maps.of(Fields.PATH, path), ctx);
-		ACell r = job.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(r, "deleted"));
+		engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, path), ctx).awaitResult(5000);
 	}
 
 	private long listCount(String path, RequestContext ctx) {

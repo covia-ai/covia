@@ -124,7 +124,9 @@ public class LangChainAdapter extends AAdapter {
 		installAsset("langchain/openai",    "/adapters/langchain/openai.json");
 		installAsset("langchain/ollama",    "/adapters/langchain/ollama.json");
 		installAsset("langchain/anthropic", "/adapters/langchain/anthropic.json");
+		installAsset("langchain/gemini",    "/adapters/langchain/gemini.json");
 		installAsset("langchain/xai",       "/adapters/langchain/xai.json");
+		installAsset("langchain/deepseek",  "/adapters/langchain/deepseek.json");
 
 		// Example configurations — stored in CAS, not in /v/ops/.
 		installExampleAsset("/asset-examples/qwen.json");   // langchain:ollama:qwen3
@@ -132,6 +134,7 @@ public class LangChainAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
 			return CompletableFuture.completedFuture(
@@ -223,7 +226,8 @@ public class LangChainAdapter extends AAdapter {
 	// ========== Model construction ==========
 
 	static boolean providerNeedsApiKey(String provider) {
-		return "openai".equals(provider) || "anthropic".equals(provider);
+		return "openai".equals(provider) || "anthropic".equals(provider) || "gemini".equals(provider)
+			|| "xai".equals(provider) || "deepseek".equals(provider);
 	}
 
 	private ChatModel buildProviderModel(String provider, String modelName, String apiKey, AString urlParam) {
@@ -237,8 +241,20 @@ public class LangChainAdapter extends AAdapter {
 			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
 		} else if ("anthropic".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.anthropic.com/v1/";
-			String model = (modelName != null) ? modelName : "claude-sonnet-4-5";
+			String model = (modelName != null) ? modelName : "claude-sonnet-4-6";
 			return buildAnthropicModel(apiKey, baseUrl, model, IO_TIMEOUT);
+		} else if ("gemini".equals(provider)) {
+			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://generativelanguage.googleapis.com/v1beta/openai/";
+			String model = (modelName != null) ? modelName : "gemini-2.5-flash";
+			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
+		} else if ("xai".equals(provider)) {
+			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.x.ai/v1";
+			String model = (modelName != null) ? modelName : "grok-4";
+			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
+		} else if ("deepseek".equals(provider)) {
+			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.deepseek.com/v1";
+			String model = (modelName != null) ? modelName : "deepseek-chat";
+			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
 		}
 		return null;
 	}
@@ -643,7 +659,6 @@ public class LangChainAdapter extends AAdapter {
 	static JsonSchemaElement toSchemaElement(AMap<AString, ACell> prop) {
 		AString type = RT.ensureString(prop.get(K_TYPE));
 		AString desc = RT.ensureString(prop.get(K_DESCRIPTION));
-		String typeStr = (type != null) ? type.toString() : "string";
 		String descStr = (desc != null) ? desc.toString() : null;
 
 		// Check for enum values — applies to string type
@@ -663,6 +678,22 @@ public class LangChainAdapter extends AAdapter {
 			}
 		}
 
+		// A property with no declared "type" is an "any JSON value" parameter
+		// (e.g. covia:write's `value`, agent_request's `input`, grid_run's
+		// `input`). LangChain4j's typed schema model has no "any" element, so the
+		// old fallback silently coerced such params to a string — which made the
+		// LLM unable to pass a structured value through (it arrived null). Emit an
+		// open object (additionalProperties allowed) so providers accept it and
+		// the model can supply a structured object. Scalar/array values for a
+		// typeless param remain a known limitation; objects are the common case.
+		if (type == null) {
+			return JsonObjectSchema.builder()
+				.description(descStr)
+				.additionalProperties(true)
+				.build();
+		}
+
+		String typeStr = type.toString();
 		switch (typeStr) {
 			case "string":
 				return JsonStringSchema.builder().description(descStr).build();

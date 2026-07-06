@@ -5,7 +5,7 @@
 	"dateCreated": "2026-04-15T00:00:00Z",
 	"keywords": ["LLM", "model", "xai", "grok"],
 	"operation": {
-		"adapter": "langchain:openai",
+		"adapter": "langchain:xai",
 		"secretFields": ["apiKey"],
 		"secretKey": "XAI_API_KEY",
 		"input": {

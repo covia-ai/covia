@@ -192,6 +192,39 @@ public class SoftKillPersistenceTest {
 	}
 
 	// ========================================================================
+	// Test 2b — close() is idempotent: calling it twice (e.g. an explicit close
+	// plus the JVM shutdown flush hook) must not throw or corrupt the store, and
+	// the unflushed write must still be durable after restart. (#165)
+	// ========================================================================
+	@Test
+	public void testDoubleCloseIsIdempotentAndDurable() throws Exception {
+		Path etchPath = freshEtchPath("double-close");
+		String storePath = etchPath.toString().replace('\\', '/');
+		String seedHex = AKeyPair.createSeeded(6012).getSeed().toHexString();
+
+		VenueServer server = VenueServer.launch(testConfig(storePath, seedHex));
+		try {
+			writeDLFS(server, "health-vault", "idem.txt", "double-close-content");
+			// No explicit flush — rely on close's final flush.
+		} finally {
+			server.close();
+			server.close(); // second close must be a safe no-op (idempotent)
+		}
+
+		assertTrue(Files.exists(etchPath) && Files.size(etchPath) > 0,
+			"first close must have run the final flush");
+
+		VenueServer reader = VenueServer.launch(testConfig(storePath, seedHex));
+		try {
+			assertEquals("double-close-content",
+				readDLFS(reader, "health-vault", "idem.txt"),
+				"write must survive a double close (second close is a no-op)");
+		} finally {
+			reader.close();
+		}
+	}
+
+	// ========================================================================
 	// Test 3 — Burst of N writes through the venue in one session, then
 	// graceful close + restart. All N must survive at the correct path.
 	// ========================================================================

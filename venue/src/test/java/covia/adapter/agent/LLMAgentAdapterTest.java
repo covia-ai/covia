@@ -86,6 +86,34 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testLevel3FailureFailsTransition() {
+		// Regression: a level-3 op that completes with a failure VALUE
+		// ({status: FAILED} from Status.failure — here an unresolvable API
+		// key) must fail the transition with the provider's message, NOT be
+		// mistaken for an empty assistant message and silently produce
+		// response:"". Without the guard in AbstractLLMAdapter.invokeLevel3
+		// the missing-key failure was swallowed into an empty response.
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		// apiKey points at a secret that does not exist → resolves to null →
+		// the langchain op returns Status.failure rather than calling out.
+		ACell state = Maps.of("config", Maps.of(
+			"llmOperation", "v/ops/langchain/anthropic",
+			"apiKey", "s/NONEXISTENT_TEST_KEY"));
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "no-key-agent",
+			AgentState.KEY_STATE, state,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "Hello"))
+		);
+
+		covia.exception.JobFailedException ex = assertThrows(
+			covia.exception.JobFailedException.class,
+			() -> adapter.processChat(RequestContext.of(ALICE_DID), input));
+		assertTrue(ex.getMessage() != null && ex.getMessage().contains("API key not found"),
+			"Failure should name the missing API key, was: " + ex.getMessage());
+	}
+
+	@Test
 	public void testMultiTurnConversation() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
@@ -404,6 +432,41 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testMalformedToolArgumentsProduceVisibleError() {
+		// #89 acceptance: an LLM emitting broken tool arguments gets a
+		// structured tool error it can react to on the next turn — the tool is
+		// NEVER silently invoked with an empty map. test:badargsllm emits
+		// garbage arguments, then echoes the tool result it receives.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "bad-args-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
+				AgentState.KEY_STATE, Maps.of("config", Maps.of("llmOperation", "v/test/ops/badargsllm"))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("bad-args-agent");
+		Blob sid = Blob.fromHex("44440001444400014444000144440001");
+		agent.ensureSession(sid, ALICE_DID);
+		agent.appendSessionPending(sid, Maps.of(
+			Strings.intern("content"), Strings.create("go")));
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "bad-args-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+
+		AString response = RT.ensureString(
+			RT.getIn(user.agent("bad-args-agent").getTimeline().get(0), Fields.RESULT));
+		assertNotNull(response);
+		assertTrue(response.toString().contains("Error:"),
+			"the LLM must see a visible tool error for its malformed arguments, got: " + response);
+		assertTrue(response.toString().contains("not valid JSON"),
+			"the error must say WHY the arguments were rejected, got: " + response);
+	}
+
+	@Test
 	public void testToolCallLoopDirect() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
@@ -521,6 +584,48 @@ public class LLMAgentAdapterTest {
 		ACell timelineEntry = agent.getTimeline().get(0);
 		assertNotNull(RT.getIn(timelineEntry, Fields.TASK_RESULTS),
 			"Timeline should record task completions");
+	}
+
+	@Test
+	public void testToolLoopLimitFailsTask() {
+		// Agent whose LLM (loopllm) ALWAYS tool-calls and never completes the
+		// task — the tool loop runs to MAX_TOOL_ITERATIONS. The task Job must
+		// transition to FAILED (the agent gave up) rather than hang STARTED
+		// forever behind a fake-success apology (covia-ai/covia#138). The
+		// iteration cap bounds CPU/IO; this asserts the give-up is terminal.
+		ACell initialState = Maps.of("config", Maps.of("llmOperation", "v/test/ops/loopllm"));
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "loop-agent",
+				AgentState.KEY_STATE, initialState,
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// agent:request — the request Job IS the task Job (taskId == job id).
+		Job taskJob = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(
+				Fields.AGENT_ID, "loop-agent",
+				Fields.INPUT, Maps.of("task", "do something")),
+			RequestContext.of(ALICE_DID));
+
+		// The agent runs, hits the iteration limit, fails the transition →
+		// the task fails (awaitResult throws on a FAILED Job).
+		assertThrows(Exception.class, () -> taskJob.awaitResult(15000),
+			"a task the agent gives up on (iteration limit) must fail, not hang STARTED");
+		assertEquals(Status.FAILED, taskJob.getStatus(),
+			"task Job must transition to FAILED on agent give-up");
+
+		// The give-up is a transition failure, so the agent suspends with the
+		// error recorded (resumable via agent:resume) — its thread is freed and
+		// the task resolved, which is the point. An agent that loops to its
+		// tool-call safety limit is misbehaving, so parking it is appropriate.
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("loop-agent");
+		assertEquals(AgentState.SUSPENDED, agent.getStatus(),
+			"agent suspends (error recorded, resumable, thread freed) after giving up");
 	}
 
 	@Test
@@ -713,43 +818,44 @@ public class LLMAgentAdapterTest {
 		assertEquals("def", result.toString());
 	}
 
-	// ========== Pure function: ensureParsedInput ==========
+	// ========== Dispatch consistency — no internal coercion (#89) ==========
+	// parseToolArguments (the wire-boundary parse) is covered in
+	// AbstractLLMAdapterTest; these lock in that INTERNAL dispatch preserves
+	// types exactly and behaves identically on both tool-dispatch paths.
 
 	@Test
-	public void testEnsureParsedInputNull() {
-		ACell result = LLMAgentAdapter.ensureParsedInput(null);
-		assertEquals(Maps.empty(), result);
+	public void testConfigAndGridDispatchPreserveInputIdentically() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		AMap<AString, ACell> input = Maps.of("agentId", "Charlie", "n", CVMLong.create(7));
+
+		// Config-mapped path: LLM tool name resolves through configToolMap.
+		java.util.Map<String, AString> toolMap = new java.util.HashMap<>();
+		toolMap.put("my_echo", Strings.create("v/test/ops/echo"));
+		ACell viaConfig = adapter.dispatchTool("my_echo", input, toolMap, ctx, 5000);
+
+		// Grid-dispatch path: tool name IS the op reference.
+		ACell viaGrid = adapter.dispatchTool("v/test/ops/echo", input,
+			new java.util.HashMap<>(), ctx, 5000);
+
+		// Same op, same input, both paths: identical result — the
+		// Bob/Charlie divergence (#89) cannot recur.
+		assertEquals(input, viaConfig, "config path must pass the input through exactly");
+		assertEquals(viaConfig, viaGrid, "both dispatch paths must behave identically");
 	}
 
 	@Test
-	public void testEnsureParsedInputMap() {
-		AMap<AString, ACell> map = Maps.of("key", "value");
-		ACell result = LLMAgentAdapter.ensureParsedInput(map);
-		assertSame(map, result);
-	}
+	public void testInternalDispatchDoesNotReparseStrings() {
+		// A string input to internal dispatch STAYS a string — even when it
+		// looks like JSON. Normalisation happens once at the LLM wire
+		// boundary, never inside the dispatch chain.
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		AString jsonish = Strings.create("{\"key\":\"value\"}");
 
-	@Test
-	public void testEnsureParsedInputJsonString() {
-		AString jsonStr = Strings.create("{\"name\": \"alice\", \"age\": 30}");
-		ACell result = LLMAgentAdapter.ensureParsedInput(jsonStr);
-		assertTrue(result instanceof AMap, "Should parse JSON string into a map");
-		assertEquals(Strings.create("alice"), RT.getIn(result, "name"));
-		assertEquals(CVMLong.create(30), RT.getIn(result, "age"));
-	}
-
-	@Test
-	public void testEnsureParsedInputInvalidJsonString() {
-		AString garbage = Strings.create("not valid json {{{");
-		ACell result = LLMAgentAdapter.ensureParsedInput(garbage);
-		// Should return the original string when parsing fails
-		assertSame(garbage, result);
-	}
-
-	@Test
-	public void testEnsureParsedInputVector() {
-		AVector<ACell> vec = Vectors.of(Strings.create("a"), Strings.create("b"));
-		ACell result = LLMAgentAdapter.ensureParsedInput(vec);
-		assertSame(vec, result);
+		ACell result = adapter.dispatchTool("v/test/ops/echo", jsonish,
+			new java.util.HashMap<>(), ctx, 5000);
+		assertEquals(jsonish, result, "internal dispatch must not silently parse string inputs");
 	}
 
 	// ========== Pure function: parseConfigToolEntry ==========
@@ -896,13 +1002,13 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testBuildOutstandingTaskMessageNoTasks() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		assertNull(LLMAgentAdapter.buildOutstandingTaskMessage(ctx));
 	}
 
 	@Test
 	public void testBuildOutstandingTaskMessageEmptyTasks() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, Vectors.empty(), null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, Vectors.empty(), null, null, null);
 		assertNull(LLMAgentAdapter.buildOutstandingTaskMessage(ctx));
 	}
 
@@ -911,7 +1017,7 @@ public class LLMAgentAdapterTest {
 		AVector<ACell> tasks = Vectors.of(
 			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task1")
 		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null);
 		ctx.recordTaskResult(Strings.create("aaa"),
 			Maps.of(Fields.STATUS, Status.COMPLETE));
 
@@ -924,7 +1030,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "done-task"),
 			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "pending-task")
 		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null);
 		ctx.recordTaskResult(Strings.create("aaa"),
 			Maps.of(Fields.STATUS, Status.COMPLETE));
 
@@ -944,7 +1050,7 @@ public class LLMAgentAdapterTest {
 			Maps.of(Fields.JOB_ID, "aaa", Fields.INPUT, "task-one"),
 			Maps.of(Fields.JOB_ID, "bbb", Fields.INPUT, "task-two")
 		);
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, tasks, null, null, null);
 
 		AMap<AString, ACell> msg = LLMAgentAdapter.buildOutstandingTaskMessage(ctx);
 		assertNotNull(msg);
@@ -958,7 +1064,7 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testToolContextRecordTaskResult() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		assertNull(ctx.taskResults);
 
 		ctx.recordTaskResult(Strings.create("job1"),
@@ -1142,7 +1248,7 @@ public class LLMAgentAdapterTest {
 	// ========== Context load/unload tests ==========
 
 	@Test public void testContextLoadHandler() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		assertEquals(0, ctx.loads.count());
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
@@ -1154,7 +1260,7 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testContextLoadDefaultBudget() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		adapter.handleContextLoad(Maps.of("path", "w/test"), ctx);
 
@@ -1163,7 +1269,7 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testContextLoadBudgetClamped() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
 		// Over max
@@ -1178,7 +1284,7 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testContextLoadOverwritesSamePath() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		adapter.handleContextLoad(Maps.of("path", "w/data", "budget", 500L, "label", "first"), ctx);
 		adapter.handleContextLoad(Maps.of("path", "w/data", "budget", 1000L, "label", "second"), ctx);
@@ -1190,7 +1296,7 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testContextUnloadHandler() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		adapter.handleContextLoad(Maps.of("path", "w/data"), ctx);
 		assertEquals(1, ctx.loads.count());
@@ -1201,7 +1307,7 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testContextUnloadNotFound() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell result = adapter.handleContextUnload(Maps.of("path", "w/missing"), ctx);
 		assertTrue(result.toString().contains("Error"));

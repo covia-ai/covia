@@ -7,6 +7,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import org.a2aproject.sdk.spec.AgentCapabilities;
+import org.a2aproject.sdk.spec.AgentCard;
+import org.a2aproject.sdk.spec.AgentInterface;
+import org.a2aproject.sdk.spec.AgentProvider;
+import org.a2aproject.sdk.spec.AgentSkill;
 import org.a2aproject.sdk.spec.Artifact;
 import org.a2aproject.sdk.spec.DataPart;
 import org.a2aproject.sdk.spec.FilePart;
@@ -58,6 +63,99 @@ public class A2ACodec {
 	private static final AString ROLE_AGENT = Strings.intern("agent");
 
 	private A2ACodec() {}
+
+	// ==================== Per-agent endpoint addressing (COG-14) ====================
+
+	/** The venue's A2A root. Everything after it is a resource's grid address. */
+	static final String A2A_PREFIX = "/a2a/";
+
+	/** The lattice namespace agents live under: {@code <ownerDID>/g/<agentId>}. */
+	static final String AGENT_NAMESPACE = "g";
+
+	/**
+	 * A resolved per-agent A2A endpoint: the owner's DID and the agent id, which
+	 * together form the canonical grid address {@code <ownerDID>/g/<agentId>}.
+	 */
+	public record AgentRef(String ownerDid, String agentId) {
+		/** The canonical Covia grid address {@code <ownerDID>/g/<agentId>}. */
+		public String gridAddress() {
+			return ownerDid + "/" + AGENT_NAMESPACE + "/" + agentId;
+		}
+	}
+
+	/**
+	 * Build the per-agent A2A endpoint URL. The path below the A2A root is the
+	 * agent's canonical grid address verbatim, so a per-agent endpoint is exactly
+	 * {@code <baseUrl>/a2a/<ownerDID>/g/<agentId>} — one addressing vocabulary
+	 * shared with the rest of the lattice, not a parallel one.
+	 *
+	 * <p>The DID, the {@code g} namespace, and the agent id are each a single
+	 * path segment; standard {@code did:key} / {@code did:web} DIDs carry no
+	 * path-reserved slashes (a {@code did:web} port is already {@code %3A}-encoded),
+	 * so they need no escaping.</p>
+	 *
+	 * @param baseUrl the venue's external base URL, without a trailing slash
+	 */
+	public static String agentEndpointUrl(String baseUrl, String ownerDid, String agentId) {
+		return baseUrl + A2A_PREFIX + ownerDid + "/" + AGENT_NAMESPACE + "/" + agentId;
+	}
+
+	/**
+	 * Parse a per-agent A2A endpoint path ({@code /a2a/<ownerDID>/g/<agentId>})
+	 * into an {@link AgentRef}, or {@code null} if it is not a well-formed
+	 * per-agent endpoint. The path below {@code /a2a/} must be an agent grid
+	 * address: a DID, the {@code g} namespace segment, and a single agent id.
+	 */
+	public static AgentRef parseAgentEndpoint(String path) {
+		if (path == null || !path.startsWith(A2A_PREFIX)) return null;
+		String address = path.substring(A2A_PREFIX.length());   // <ownerDID>/g/<agentId>
+		// Reject an encoded slash anywhere in the address. The venue's Jetty
+		// rejects a raw %2F in the path by default (covia#153); this guard means
+		// a per-agent endpoint can never smuggle a slash into a segment whatever
+		// the transport's decode behaviour, keeping segment parsing unambiguous.
+		// (A did:web port is %3A, not %2F, so it is unaffected.)
+		if (address.toLowerCase(java.util.Locale.ROOT).contains("%2f")) return null;
+		int firstSlash = address.indexOf('/');
+		if (firstSlash <= 0) return null;
+		String ownerDid = address.substring(0, firstSlash);
+		if (!ownerDid.startsWith("did:")) return null;          // owner must be a DID
+		String tail = address.substring(firstSlash + 1);        // g/<agentId>
+		String nsPrefix = AGENT_NAMESPACE + "/";
+		if (!tail.startsWith(nsPrefix)) return null;            // only the agent namespace
+		String agentId = tail.substring(nsPrefix.length());
+		if (agentId.isEmpty() || agentId.indexOf('/') >= 0) return null; // one final segment
+		return new AgentRef(ownerDid, agentId);
+	}
+
+	// ==================== Agent Card rendering (COG-14) ====================
+
+	/**
+	 * Build an A2A Agent Card. Shared by the venue front-door card and per-agent
+	 * cards (COG-14) — only the name, description, and endpoint URL differ, so the
+	 * capabilities / transports / modes stay consistent across both.
+	 *
+	 * @param name        the agent's display name
+	 * @param description the agent's description
+	 * @param version     the venue/agent version string
+	 * @param provider    the hosting venue, as the card's {@code provider}
+	 * @param endpointUrl the JSON-RPC endpoint clients POST to (the card's interface)
+	 */
+	public static AgentCard agentCard(String name, String description, String version,
+			AgentProvider provider, String endpointUrl) {
+		AgentCapabilities capabilities = new AgentCapabilities(true, false, false, null);
+		AgentInterface iface = new AgentInterface("JSONRPC", endpointUrl, "", "1.0");
+		return AgentCard.builder()
+				.name(name)
+				.description(description)
+				.version(version)
+				.provider(provider)
+				.capabilities(capabilities)
+				.supportedInterfaces(List.of(iface))
+				.defaultInputModes(List.of("text/plain", "application/json"))
+				.defaultOutputModes(List.of("text/plain", "application/json"))
+				.skills(List.<AgentSkill>of())  // populated from the agent's offered ops in a later pass
+				.build();
+	}
 
 	// ==================== TaskState mapping ====================
 
@@ -141,8 +239,11 @@ public class A2ACodec {
 		String taskId = jobId.toHexString();
 		String contextId = extractContextId(jobData, taskId);
 		TaskStatus status = toTaskStatus(jobData);
-		boolean isFinal = status.state().isFinal();
-		return new TaskStatusUpdateEvent(taskId, status, contextId, isFinal, null);
+		// a2a 1.0.0.Final: TaskStatusUpdateEvent.isFinal() is derived from the
+		// status state (status.state().isFinal()), so the terminal flag is no
+		// longer a constructor argument — the canonical constructor is
+		// (taskId, status, contextId, metadata).
+		return new TaskStatusUpdateEvent(taskId, status, contextId, null);
 	}
 
 	/**
@@ -371,6 +472,11 @@ public class A2ACodec {
 	}
 
 	private static String extractContextId(AMap<AString, ACell> jobData, String fallback) {
+		// A2A contextId = the agent session (COG-14). A per-agent task Job records
+		// its session under SESSION_ID; prefer that, then an explicit contextId,
+		// then fall back to the Job id (front-door tasks carry neither).
+		AString sid = RT.ensureString(jobData.get(Fields.SESSION_ID));
+		if (sid != null) return sid.toString();
 		AString ctx = RT.ensureString(jobData.get(CONTEXT_ID));
 		return ctx != null ? ctx.toString() : fallback;
 	}

@@ -203,9 +203,15 @@ public class ContextLoader {
 	 * Returns true if the string starts with a known namespace prefix.
 	 */
 	public static boolean isNamespacePath(String ref) {
-		return ref.startsWith("w/") || ref.startsWith("g/") || ref.startsWith("o/")
-			|| ref.startsWith("j/") || ref.startsWith("s/") || ref.startsWith("h/")
-			|| ref.startsWith("n/") || ref.startsWith("c/");
+		if (ref == null) return false;
+		// A leading slash is optional sugar (mirrors Engine.resolvePath): "/w/x"
+		// resolves like "w/x". Normalise it before matching namespace prefixes —
+		// without this, a context entry like "/w/docs/rules" fell through to
+		// literal text instead of resolving the workspace path.
+		String s = ref.startsWith("/") ? ref.substring(1) : ref;
+		return s.startsWith("w/") || s.startsWith("g/") || s.startsWith("o/")
+			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
+			|| s.startsWith("n/") || s.startsWith("c/");
 	}
 
 	/**
@@ -220,11 +226,12 @@ public class ContextLoader {
 		if (ref.startsWith("/a/") || ref.startsWith("/o/")) return true;
 		if (ref.startsWith("did:")) return true;
 		if (ref.length() == 64 && ref.matches("[0-9a-fA-F]+")) return true; // hex hash
-		// Lattice namespace paths
-		if (ref.startsWith("w/") || ref.startsWith("o/") || ref.startsWith("g/")
-			|| ref.startsWith("j/") || ref.startsWith("s/") || ref.startsWith("h/")
-			|| ref.startsWith("n/") || ref.startsWith("t/") || ref.startsWith("c/")
-			|| ref.startsWith("v/")) return true;
+		// Lattice namespace paths — leading slash optional (mirrors resolvePath).
+		String s = ref.startsWith("/") ? ref.substring(1) : ref;
+		if (s.startsWith("w/") || s.startsWith("o/") || s.startsWith("g/")
+			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
+			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/")
+			|| s.startsWith("v/")) return true;
 		return false;
 	}
 

@@ -21,6 +21,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AgentAdapter;
 import covia.api.Fields;
+import covia.exception.JobFailedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
@@ -38,7 +39,7 @@ import covia.venue.RequestContext;
  *
  * <h3>Tool palette</h3>
  * <p>Unless disabled via {@code defaultTools: false}, agents start with the
- * tool set in {@link #DEFAULT_TOOL_OPS} (covia CRUD, agent lifecycle, asset
+ * tool set in {@link ContextBuilder#DEFAULT_TOOL_OPS} (covia CRUD, agent lifecycle, asset
  * management, schema, grid). Task tools ({@code complete_task},
  * {@code fail_task}) are added dynamically when tasks are pending.</p>
  *
@@ -160,29 +161,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		(ACell) TOOL_DEF_CONTEXT_UNLOAD
 	);
 
-	/** Default tool operations — resolved via buildConfigTools at runtime */
-	private static final AVector<ACell> DEFAULT_TOOL_OPS = (AVector<ACell>) Vectors.of(
-		(ACell) Strings.create("v/ops/agent/create"),
-		(ACell) Strings.create("v/ops/agent/message"),
-		(ACell) Strings.create("v/ops/agent/request"),
-		(ACell) Strings.create("v/ops/asset/store"),
-		(ACell) Strings.create("v/ops/asset/get"),
-		(ACell) Strings.create("v/ops/asset/list"),
-		(ACell) Strings.create("v/ops/asset/content"),
-		(ACell) Strings.create("v/ops/asset/pin"),
-		(ACell) Strings.create("v/ops/grid/run"),
-		(ACell) Strings.create("v/ops/grid/job-result"),
-		(ACell) Strings.create("v/ops/covia/read"),
-		(ACell) Strings.create("v/ops/covia/write"),
-		(ACell) Strings.create("v/ops/covia/delete"),
-		(ACell) Strings.create("v/ops/covia/append"),
-		(ACell) Strings.create("v/ops/covia/slice"),
-		(ACell) Strings.create("v/ops/covia/list"),
-		(ACell) Strings.create("v/ops/covia/inspect"),
-		(ACell) Strings.create("v/ops/schema/validate"),
-		(ACell) Strings.create("v/ops/schema/infer")
-	);
-
 	/** Task tools only available when there are outstanding tasks */
 	private static final AVector<ACell> TASK_TOOLS = (AVector<ACell>) Vectors.of(
 		(ACell) TOOL_DEF_COMPLETE_TASK,
@@ -212,6 +190,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		requireInvoke(ctx);
 		return CompletableFuture.supplyAsync(() -> processChat(ctx, input), VIRTUAL_EXECUTOR);
 	}
 
@@ -305,10 +284,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		AVector<ACell> baseTools = context.tools();
 		Map<String, AString> configToolMap = context.configToolMap();
 		AMap<AString, ACell> config = context.config();
-		AVector<ACell> caps = context.caps();
-
 		// Add agent scope to the capability context — all tool calls carry the agentId
-		// so adapters (e.g. CoviaAdapter) can resolve n/ paths to agent-private workspace
+		// so adapters (e.g. CoviaAdapter) can resolve n/ paths to agent-private workspace.
+		// The agent's config caps already ride on capsCtx (ContextBuilder.capsCtx).
 		RequestContext capsCtx = context.capsCtx().withAgentId(agentId);
 
 		// Extract LLM operation from merged config
@@ -319,7 +297,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 		// Create tool context for built-in tool execution
 		long toolCallTimeoutMs = resolveToolCallTimeoutMs(config);
-		ToolContext toolCtx = new ToolContext(agentId, capsCtx, tasks, pending, configToolMap, caps, activeLoads, toolCallTimeoutMs);
+		ToolContext toolCtx = new ToolContext(agentId, capsCtx, tasks, pending, configToolMap, activeLoads, toolCallTimeoutMs);
 
 		// Invoke level 3 with tool call loop — returns all messages to append
 		// ctx (uncapped) for the L3 LLM call; capsCtx flows through toolCtx for tool dispatch
@@ -465,26 +443,30 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 				ACell tc = toolCalls.get(i);
 				AString id = RT.ensureString(RT.getIn(tc, K_ID));
 				AString name = RT.ensureString(RT.getIn(tc, K_NAME));
-				AString arguments = RT.ensureString(RT.getIn(tc, K_ARGUMENTS));
 
-				// Parse arguments
-				ACell toolInput;
+				// Unwrap tool arguments at the LLM wire boundary (the one
+				// tolerant parse). Broken arguments fail THIS tool call with a
+				// visible error the LLM can correct on its next turn — never a
+				// silent Maps.empty() substitution (#89). Structured (non-string)
+				// arguments pass through unchanged.
+				ACell toolInput = null;
+				ACell toolResult = null;
 				try {
-					toolInput = (arguments != null)
-						? convex.core.util.JSON.parse(arguments.toString())
-						: Maps.empty();
-				} catch (Exception e) {
-					toolInput = Maps.empty();
+					toolInput = parseToolArguments(RT.getIn(tc, K_ARGUMENTS));
+				} catch (IllegalArgumentException e) {
+					toolResult = Strings.create("Error: " + e.getMessage());
+					log.warn("Tool call {} has malformed arguments: {}", name, e.getMessage());
 				}
 
 				// Execute the tool — built-in or grid dispatch
-				ACell toolResult;
-				try {
-					String toolName = (name != null) ? name.toString() : "";
-					toolResult = executeToolCall(toolName, toolInput, ctx, toolCtx);
-				} catch (Exception e) {
-					toolResult = Strings.create("Error: " + e.getMessage());
-					log.warn("Tool execution failed: {} — {}", name, e.getMessage());
+				if (toolResult == null) {
+					try {
+						String toolName = (name != null) ? name.toString() : "";
+						toolResult = executeToolCall(toolName, toolInput, ctx, toolCtx);
+					} catch (Exception e) {
+						toolResult = Strings.create("Error: " + e.getMessage());
+						log.warn("Tool execution failed: {} — {}", name, e.getMessage());
+					}
 				}
 
 				// Append tool result message via the shared base helper
@@ -497,13 +479,19 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 		}
 
-		// Iteration limit reached
-		log.warn("Tool call loop reached iteration limit ({})", MAX_TOOL_ITERATIONS);
-		newMessages = newMessages.conj(Maps.of(
-			K_ROLE, ROLE_ASSISTANT,
-			K_CONTENT, Strings.create("I reached the maximum number of tool call iterations. Please try again with a simpler request.")
-		));
-		return newMessages;
+		// Iteration limit reached — the agent gave up. Fail the transition so the
+		// task resolves to FAILED instead of hanging STARTED forever behind a
+		// fake-success apology (covia-ai/covia#138). A transition failure also
+		// suspends the agent with the error recorded — appropriate here: an agent
+		// that loops to the tool-call safety limit is misbehaving, so parking it
+		// for inspection (recoverable via agent:resume) is the right reaction, not
+		// silently continuing. The iteration cap already bounds CPU/IO; this makes
+		// the give-up an honest, terminal outcome. (Failing only the task while
+		// keeping the agent SLEEPING would need run-loop changes to distinguish a
+		// task failure from an agent failure — a separate enhancement.)
+		log.warn("Tool call loop reached iteration limit ({}) — failing the transition", MAX_TOOL_ITERATIONS);
+		throw new JobFailedException("Agent reached the tool-call iteration limit ("
+			+ MAX_TOOL_ITERATIONS + ") without completing the task.");
 	}
 
 	// ========== Built-in tool execution ==========
@@ -526,7 +514,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// Cap-checked, timeout-bounded dispatch via the shared base path.
 		// Resolves config tools, falls through to grid dispatch for unknown names.
 		return dispatchTool(toolName, input, toolCtx.configToolMap,
-			toolCtx.caps, toolCtx.ctx, toolCtx.toolCallTimeoutMs);
+			toolCtx.ctx, toolCtx.toolCallTimeoutMs);
 	}
 
 	/**
@@ -712,25 +700,23 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		final AVector<ACell> tasks;
 		final AVector<ACell> pending;
 		final Map<String, AString> configToolMap;
-		final AVector<ACell> caps;
 		final long toolCallTimeoutMs;
 		AMap<AString, ACell> taskResults;
 		AMap<AString, ACell> loads;
 
 		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
-				Map<String, AString> configToolMap, AVector<ACell> caps, AMap<AString, ACell> loads) {
-			this(agentId, ctx, tasks, pending, configToolMap, caps, loads, DEFAULT_TOOL_CALL_TIMEOUT_MS);
+				Map<String, AString> configToolMap, AMap<AString, ACell> loads) {
+			this(agentId, ctx, tasks, pending, configToolMap, loads, DEFAULT_TOOL_CALL_TIMEOUT_MS);
 		}
 
 		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
-				Map<String, AString> configToolMap, AVector<ACell> caps, AMap<AString, ACell> loads,
+				Map<String, AString> configToolMap, AMap<AString, ACell> loads,
 				long toolCallTimeoutMs) {
 			this.agentId = agentId;
 			this.ctx = ctx;
 			this.tasks = tasks;
 			this.pending = pending;
 			this.configToolMap = (configToolMap != null) ? configToolMap : Map.of();
-			this.caps = caps;
 			this.loads = (loads != null) ? loads : Maps.empty();
 			this.toolCallTimeoutMs = toolCallTimeoutMs;
 		}

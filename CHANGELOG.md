@@ -8,6 +8,53 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-06
+
+### Added
+- Job-free lattice reads: `GET /api/v1/values/{read,list,slice,inspect,aggregate,count}` — synchronous, capability-checked, no job persisted (fixes read-driven job/etch bloat). New `covia:aggregate`/`count` op. See `venue/docs/READ_API.md`. (#177)
+- Secrets can be deleted: `covia:delete path=s/<name>` (whole records, idempotent, capability-gated). (#166)
+- Venues publish a spec-compliant `did:web:<hostname>` alias when a public hostname is set — did:web for discovery, did:key stays canonical. (#167)
+- `POST /invoke` accepts a millisecond `wait` window (`false` async / `true` up to the 120s cap / integer ms); malformed `wait` → 400. (#140)
+- Optional operator-set output-schema validation (`outputValidation: off|warn|strict`, default off). (#51)
+- New first-class LLM providers: Google Gemini, xAI, and DeepSeek. (#158)
+- Configurable HTTP `bindAddress` (defaults to all interfaces). (#129)
+- Configurable venue-wide agent defaults (default LLM and transition op).
+- Build version reported in `GET /status`. (#139)
+
+### Changed
+- **The venue lattice is a single whole-value-LWW node — deletions are durable venue-wide (requires Convex 0.8.7).** Existing venue data loads unchanged. See `venue/docs/GRID_LATTICE_DESIGN.md` §A.2.
+- LLM tool-call arguments are parsed once at the wire boundary; internal dispatch never coerces. (#89, #58)
+- `schema:*` operations treat the value exactly as given — no silent reparse of JSON-looking strings.
+- Adapter asset installation fails loudly on a missing/unreadable resource (`strictAssets: false` downgrades to warnings).
+- Upgraded to Convex 0.8.6, Javalin 7, and Jetty 12. (#152)
+- Upgraded the MCP SDK to 2.0.0 (#156) and the A2A SDK to 1.0.0.Final (#155).
+- Agents are strict-allowlist by default; opt into the default tool pack with `defaultTools: true`. (#92, #134)
+- `covia:write` requires a `value`; path-only writes are rejected.
+- Assets can be retrieved by lattice address, not just hex hash. (#150)
+- The default Anthropic chat operation is now `claude-sonnet-4-6`.
+- Dependency maintenance (logback, FlatLaf, assembly plugin, several GitHub Actions).
+- Private Network Access response header is off by default, gated behind `allowPrivateNetwork`. (#130)
+- covia CRUD operations return meaningful outcomes (`{existed}`, `{deleted}`, `{existed, index, newSize}`) instead of tautological flags; read-family field names unified. (#147, #132)
+
+### Security
+- Capability enforcement is now active — a read-only ceiling for unauthenticated callers, `operationAbility` mapping every venue mutation, operator-overridable via `auth.public.caps`. (#148)
+- JWT audience is validated at the auth boundary; UCANs are classified by their `att` array. (#149)
+- A UCAN bearer's signature is bound to its claimed issuer, closing an identity-spoofing gap.
+- A bearer token that fails verification is a hard 401 — never a silent downgrade to the public identity.
+- Malformed JSON request bodies return 400 with the parse cause, not a generic 500.
+
+### Fixed
+- Path navigation surfaces abnormal errors instead of masking them as phantom absence; scope-misuse gets a typed `WrongScopeException`. (#175)
+- Remote-fetch failures surface as errors (`RemoteFetchException` / HTTP 502), not "not found". (#174)
+- `v/`-namespace startup writes no longer silently no-op after a restart. (#159)
+- Job IDs are monotonic, so the per-user job index and `GET /jobs` listing are fully ordered under concurrency.
+- An agent that exhausts its tool-call iteration limit now fails its task. (#138)
+- A missing intermediate value during path resolution is surfaced, not nulled; a named-key write into a list gives a clear shape-conflict error.
+- A deep write through or into an existing scalar throws a shape conflict instead of silently replacing it.
+- Indefinite-blocking paths found in a hang audit are now bounded.
+- A presented token's attenuation is enforced on the direct `/invoke` path. (#131)
+- An agent's run loop executes under the owner's identity, not the waking caller's. (#91)
+
 ## [0.2.0] - 2026-06-15
 
 ### Added
@@ -68,6 +115,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.1.0...develop
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.3.0...develop
+[0.3.0]: https://github.com/covia-ai/covia/compare/0.2.0...0.3.0
+[0.2.0]: https://github.com/covia-ai/covia/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/covia-ai/covia/compare/0.0.1...0.1.0
 [0.0.1]: https://github.com/covia-ai/covia/releases/tag/0.0.1

@@ -4,24 +4,24 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>ai.covia</groupId>
 	<artifactId>covia</artifactId>
-	<version>0.2.0</version>
+	<version>0.3.0-SNAPSHOT</version>
 	<packaging>pom</packaging>
 
 	<properties>
 		<maven.compiler.release>21</maven.compiler.release>
 		<maven.compiler.source>21</maven.compiler.source>
-		<junit.version>6.1.0</junit.version>
-		<convex.version>0.8.5</convex.version>
+		<junit.version>6.1.1</junit.version>
+		<convex.version>0.8.7</convex.version>
 		<maven.compiler.target>21</maven.compiler.target>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		
-		<logback.version>1.5.18</logback.version>
+		<logback.version>1.5.37</logback.version>
 		<slf4j.version>2.0.17</slf4j.version>
 		<hc.version>5.5</hc.version>
-		<javalin.version>6.7.0</javalin.version>
-		<langchain.version>1.16.2</langchain.version>
-		<mcp.version>0.13.0</mcp.version>
-		<a2a.version>1.0.0.Beta1</a2a.version>
+		<javalin.version>7.2.2</javalin.version>
+		<langchain.version>1.17.1</langchain.version>
+		<mcp.version>2.0.0</mcp.version>
+		<a2a.version>1.0.0.Final</a2a.version>
 	</properties>
 
 	<modules>

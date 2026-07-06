@@ -246,7 +246,7 @@ public class DLFSAdapter extends AAdapter {
 
 		return CompletableFuture.supplyAsync(() -> {
 			try {
-				return dispatch(ctx, subOp, RT.ensureMap(input));
+				return dispatch(ctx, subOp, RT.castMap(input));
 			} catch (Exception e) {
 				throw new RuntimeException(e.getMessage(), e);
 			}
@@ -254,8 +254,29 @@ public class DLFSAdapter extends AAdapter {
 	}
 
 	@SuppressWarnings("unchecked")
+	/**
+	 * Capability enforcement co-located with the DLFS op dispatch. The resource
+	 * is the {@code dlfs://<drive>/<path>} form the grant taxonomy uses (drive
+	 * named via {@code drive}, or {@code name} for drive-level ops); a null
+	 * ceiling (authenticated/internal) is unrestricted (no-op).
+	 */
+	private static void requireDlfsCap(RequestContext ctx, String subOp, AMap<AString, ACell> input) {
+		String ability = switch (subOp) {
+			case "list", "tree", "read", "stat", "listDrives" -> "crud/read";
+			case "write", "append", "mkdir", "createDrive" -> "crud/write";
+			case "delete", "deleteDrive" -> "crud/delete";
+			default -> null;
+		};
+		if (ability == null) return;
+		AString drive = RT.ensureString(RT.getIn(input, FIELD_DRIVE));
+		if (drive == null) drive = RT.ensureString(RT.getIn(input, FIELD_NAME));
+		String resource = schemeResource("dlfs", drive, RT.ensureString(RT.getIn(input, FIELD_PATH)));
+		ctx.requireCapability(resource, ability);
+	}
+
 	private ACell dispatch(RequestContext ctx, String subOp, AMap<AString, ACell> input) throws IOException {
 		if (input == null) input = Maps.empty();
+		requireDlfsCap(ctx, subOp, input);
 
 		return switch (subOp) {
 			case "listDrives" -> handleListDrives(ctx);

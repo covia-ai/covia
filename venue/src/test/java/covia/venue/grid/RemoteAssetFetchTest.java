@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -122,11 +124,12 @@ public class RemoteAssetFetchTest {
 		assertEquals(id, fetched.getID());
 	}
 
-	// ============== Absence and failure are clean nulls ==============
+	// ============== Absence is a null; operational failure is an error (#174) ==============
 
 	@Test
 	public void fetchOfAbsentAssetReturnsNull() {
-		// A hash venue B has never seen — fetch reports absence, not error.
+		// A hash venue B has never seen — B is reachable and answers "no such
+		// asset", so this is a genuine absence: a clean null, NOT an error.
 		Hash absent = Hash.fromHex(
 			"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff");
 		assertNull(TwoVenueTestServer.ENGINE_A.fetchRemoteAsset(
@@ -134,12 +137,13 @@ public class RemoteAssetFetchTest {
 	}
 
 	@Test
-	public void fetchFromUnreachableVenueReturnsNull() {
-		// Resolution failure (venue down / wrong address) is "not found",
-		// surfaced by the caller as a clean unresolvable-reference error.
-		// Uses a hash unique to this test: a hash fetched by ANY other test
-		// would be served from the definition cache regardless of the
-		// connection string (see cachedDefinitionSurvivesPublisherOutage).
+	public void fetchFromUnreachableVenueThrows() {
+		// A venue that cannot be reached is NOT "asset not found" — it throws a
+		// RemoteFetchException naming the venue, so a federated caller learns the
+		// venue is down rather than that the operation does not exist (#174).
+		// Uses a hash unique to this test: a hash fetched by ANY other test would
+		// be served from the definition cache regardless of the connection string
+		// (see cachedDefinitionSurvivesPublisherOutage).
 		AString meta = Strings.create("""
 			{
 			  "name": "Unreachable-venue test artifact",
@@ -147,7 +151,12 @@ public class RemoteAssetFetchTest {
 			}
 			""");
 		Hash id = TwoVenueTestServer.ENGINE_B.storeAsset(meta, null);
-		assertNull(TwoVenueTestServer.ENGINE_A.fetchRemoteAsset("http://localhost:1", id));
+		covia.exception.RemoteFetchException ex = assertThrows(
+			covia.exception.RemoteFetchException.class,
+			() -> TwoVenueTestServer.ENGINE_A.fetchRemoteAsset("http://localhost:1", id));
+		assertTrue(ex.getMessage().toLowerCase().contains("could not fetch")
+				|| ex.getMessage().toLowerCase().contains("venue"),
+			"the error must name the fetch/venue, got: " + ex.getMessage());
 	}
 
 	// ============== Caching: hashes are identities, venues are hints ==============
@@ -184,13 +193,19 @@ public class RemoteAssetFetchTest {
 
 	@Test
 	public void fetchRejectsMetadataThatDoesNotHashToRequestedId() {
-		// A misbehaving venue returns SOMETHING for the requested hash —
-		// but the metadata doesn't hash to it. An honest VenueServer cannot
-		// be made to do this, so the misbehaviour is simulated directly.
+		// A misbehaving venue returns SOMETHING for the requested hash — but the
+		// metadata doesn't hash to it. An honest VenueServer cannot be made to do
+		// this, so the misbehaviour is simulated directly. This is a loud
+		// integrity error (the venue is corrupt or lying), not a silent
+		// not-found: it throws so the caller can distinguish it (#174).
 		Hash requested = publishOnB();
 		Venue tampering = new TamperingVenue();
-		assertNull(TwoVenueTestServer.ENGINE_A.fetchRemoteAsset(tampering, requested),
+		covia.exception.RemoteFetchException ex = assertThrows(
+			covia.exception.RemoteFetchException.class,
+			() -> TwoVenueTestServer.ENGINE_A.fetchRemoteAsset(tampering, requested),
 			"Substituted metadata must be rejected: the hash is the identity");
+		assertTrue(ex.getMessage().contains("does not match"),
+			"integrity failure must be reported as such, got: " + ex.getMessage());
 	}
 
 	// ============== Fetching is a read ==============

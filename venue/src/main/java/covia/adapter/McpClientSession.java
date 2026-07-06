@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
+import io.modelcontextprotocol.client.transport.customizer.McpSyncHttpClientRequestCustomizer;
 import io.modelcontextprotocol.spec.McpClientTransport;
 
 /**
@@ -55,14 +56,31 @@ public class McpClientSession implements AutoCloseable {
 		}
 	}
 
+	/**
+	 * Per-request customizer that attaches {@code Authorization: Bearer <token>}
+	 * to every outbound MCP HTTP request when a non-blank access token is
+	 * configured, and leaves the request untouched otherwise.
+	 *
+	 * <p>mcp 2.0 replaced {@code customizeRequest(Consumer<HttpRequest.Builder>)}
+	 * with {@link McpSyncHttpClientRequestCustomizer}, invoked per request.
+	 * Factored out (package-private) so the auth contract can be unit-tested
+	 * without opening a network connection — see {@code McpClientSessionTest}.</p>
+	 *
+	 * @param accessToken bearer token to attach; null/blank means no auth header
+	 * @return a request customizer applying the above rule
+	 */
+	static McpSyncHttpClientRequestCustomizer bearerAuthCustomizer(String accessToken) {
+		return (builder, method, endpoint, body, context) -> {
+			if (accessToken != null && !accessToken.isEmpty()) {
+				builder.header("Authorization", "Bearer " + accessToken);
+			}
+		};
+	}
+
 	private McpSyncClient doConnect() throws Exception {
 		String mcpUrl = serverUrl.endsWith("/mcp") ? serverUrl : serverUrl + "/mcp";
 		McpClientTransport transport = HttpClientStreamableHttpTransport.builder(mcpUrl)
-				.customizeRequest(b -> {
-					if (accessToken != null && !accessToken.isEmpty()) {
-						b.header("Authorization", "Bearer " + accessToken);
-					}
-				})
+				.httpRequestCustomizer(bearerAuthCustomizer(accessToken))
 				.build();
 		client = McpClient.sync(transport)
 				.requestTimeout(Duration.ofSeconds(10))

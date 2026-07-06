@@ -101,6 +101,9 @@ public class Fields {
 	public static final StringShort DEFS = Strings.intern("$defs");
 	public static final StringShort DEFINITIONS = Strings.intern("definitions");
 
+	// Venue status
+	public static final StringShort VERSION = Strings.intern("version");
+
 	// Lattice navigation
 	public static final StringShort PATH = Strings.intern("path");
 	public static final StringShort VALUE = Strings.intern("value");

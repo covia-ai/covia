@@ -17,7 +17,9 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
-import covia.lattice.CapabilityChecker;
+import covia.api.Fields;
+import covia.exception.JobFailedException;
+import covia.grid.Status;
 import covia.venue.RequestContext;
 
 /**
@@ -216,7 +218,25 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// what it can DO via tools, not the inference call itself. Trust is
 		// established by going through invokeInternal — the framework path —
 		// rather than the user-facing invokeOperation. Caps stay on ctx.
-		return engine.jobs().invokeInternal(llmOperation, l3Input, ctx).join();
+		// Park (cheaply, on a virtual thread) until the LLM op completes. No
+		// caller-side wait timeout is imposed here — bounding the actual IO is
+		// the provider op's job (LangChainAdapter's socket timeout); whether to
+		// time out the wait is the caller's decision, not this dispatch helper's.
+		ACell result = engine.jobs().invokeInternal(llmOperation, l3Input, ctx).join();
+
+		// A level-3 op that completes with a failure VALUE — {status: FAILED,
+		// message: ...} from Status.failure (missing/invalid API key, unknown
+		// provider) — is not an assistant message. Without this guard the tool
+		// loop sees no toolCalls and no content and silently emits an empty
+		// response, hiding the real failure. Surface it as a transition failure
+		// so the framework fails the caller's Job with the provider's message.
+		// (An op that throws already propagates exceptionally via join().)
+		if (result instanceof AMap && Status.FAILED.equals(RT.getIn(result, Fields.STATUS))) {
+			AString message = RT.ensureString(RT.getIn(result, Fields.MESSAGE));
+			throw new JobFailedException("LLM call failed (" + llmOperation + "): "
+				+ (message != null ? message.toString() : "no message"));
+		}
+		return result;
 	}
 
 	/**
@@ -265,23 +285,22 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * @param toolName the tool name as returned by the LLM
 	 * @param input the tool call arguments
 	 * @param configToolMap mapping of LLM tool names to operation names
-	 * @param caps capability attenuations (null = unrestricted)
-	 * @param ctx request context for the tool dispatch
+	 * @param ctx request context for the tool dispatch — carries the agent's
+	 *        capability ceiling ({@link RequestContext#getCaps()})
 	 * @param timeoutMs per-tool-call wall-clock budget; {@link TimeoutException}
 	 *        is converted to an "Error: tool call timed out" string result so
 	 *        the agent loop can continue
 	 * @return tool result (ACell)
 	 */
 	protected ACell dispatchTool(String toolName, ACell input,
-			Map<String, AString> configToolMap, AVector<ACell> caps, RequestContext ctx,
+			Map<String, AString> configToolMap, RequestContext ctx,
 			long timeoutMs) {
-		// Resolve the actual operation name for capability checking
+		// Resolve the operation: a config tool maps the LLM tool name to an op
+		// ref, otherwise the tool name is dispatched as a grid op. Capability
+		// enforcement happens at the dispatched op's OWN enforcement point
+		// (invokeInternal → the adapter's requireCapability / requireInvoke),
+		// under the agent's ceiling carried on ctx — no name-keyed pre-check here.
 		AString operation = (configToolMap != null) ? configToolMap.get(toolName) : null;
-		String opName = (operation != null) ? operation.toString() : toolName;
-
-		// Check agent capabilities before dispatch
-		String denied = CapabilityChecker.check(caps, opName, input);
-		if (denied != null) return Strings.create("Error: " + denied);
 
 		// Config tools — tool name maps to a resolved operation
 		if (operation != null) {
@@ -293,18 +312,21 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/**
-	 * Invokes an operation with a per-call timeout. The caller
-	 * ({@link #dispatchTool}) has already cap-checked the call explicitly.
-	 * invokeInternal is the framework dispatch path and doesn't apply a
-	 * second cap check, so trust is established by the call path. Internal
-	 * dispatch — no sub-Job created. Times out via
-	 * {@link java.util.concurrent.CompletableFuture#get(long, TimeUnit)} so
-	 * a stuck downstream op cannot hang the agent loop forever.
+	 * Invokes an operation with a per-call timeout, via the no-Job internal
+	 * dispatch path. {@code invokeInternal} enforces the ceiling carried by
+	 * {@code ctx} (today the agent cycle runs unrestricted at the context
+	 * level); {@link #dispatchTool} has additionally checked the call against
+	 * the agent's own config caps. Times out via
+	 * {@link java.util.concurrent.CompletableFuture#get(long, TimeUnit)} so a
+	 * stuck downstream op cannot hang the agent loop forever.
 	 */
 	protected ACell invokeOperation(AString operation, ACell input, RequestContext ctx, long timeoutMs) {
-		ACell opInput = ensureParsedInput(input);
+		// Internal dispatch preserves types exactly — no coercion here. Tool
+		// arguments were already normalised once at the LLM wire boundary
+		// (parseToolArguments); a wrong-shaped input is the caller's error and
+		// surfaces from the op's own validation (#89).
 		try {
-			ACell result = engine.jobs().invokeInternal(operation, opInput, ctx)
+			ACell result = engine.jobs().invokeInternal(operation, input, ctx)
 				.get(timeoutMs, TimeUnit.MILLISECONDS);
 			return (result != null) ? result : Maps.empty();
 		} catch (TimeoutException e) {
@@ -360,23 +382,55 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return msg;
 	}
 
-	// ========== Input parsing ==========
+	// ========== Tool-call argument parsing (the LLM wire boundary) ==========
 
 	/**
-	 * Ensures the input value is a parsed map. LLMs often double-stringify JSON,
-	 * producing a string like "{\"key\": \"val\"}" instead of a map. This parses
-	 * such strings into proper maps.
+	 * Parses LLM tool-call {@code arguments} at the wire boundary. Per the
+	 * OpenAI/Anthropic specs {@code arguments} is a JSON-encoded string, and
+	 * LLMs are external systems whose output we cannot force to be well-formed,
+	 * so this is deliberately generous: absent/empty → empty map;
+	 * already-structured values pass through; a JSON string is parsed; a
+	 * double-encoded string (a parse yielding another JSON-shaped string) gets
+	 * one more pass. Outright garbage <b>throws</b> — callers turn that into a
+	 * structured tool error the LLM sees and can correct on its next turn,
+	 * never a silent {@code Maps.empty()} substitution.
+	 *
+	 * <p>This is the ONE place tolerant parsing is allowed. Everything
+	 * downstream is internal dispatch and must preserve types exactly — no
+	 * re-parsing, no coercion (#89).</p>
+	 *
+	 * @param rawArguments the {@code arguments} cell from an LLM tool call
+	 * @return the parsed arguments value
+	 * @throws IllegalArgumentException if the arguments are not valid JSON
 	 */
-	public static ACell ensureParsedInput(ACell opInput) {
-		if (opInput == null) return Maps.empty();
-		if (opInput instanceof AString s) {
-			try {
-				return convex.core.util.JSON.parse(s.toString());
-			} catch (Exception e) {
-				// Not valid JSON — return as-is
+	public static ACell parseToolArguments(ACell rawArguments) {
+		if (rawArguments == null) return Maps.empty();
+		if (!(rawArguments instanceof AString)) return rawArguments; // already structured
+		String s = rawArguments.toString().trim();
+		if (s.isEmpty()) return Maps.empty();
+		ACell parsed;
+		try {
+			parsed = convex.core.util.JSON.parse(s);
+		} catch (Exception e) {
+			throw new IllegalArgumentException("Tool arguments are not valid JSON: " + snippet(s));
+		}
+		// Double-encoded tolerance: a parse that yields a JSON-shaped string
+		// gets one more pass; if the inner parse fails, keep the outer value
+		// (the op's own input validation reports the precise mismatch).
+		if (parsed instanceof AString inner) {
+			String is = inner.toString().trim();
+			if (!is.isEmpty() && (is.charAt(0) == '{' || is.charAt(0) == '[')) {
+				try {
+					return convex.core.util.JSON.parse(is);
+				} catch (Exception ignored) { /* keep the single-parsed value */ }
 			}
 		}
-		return opInput;
+		return parsed;
+	}
+
+	/** Truncates a value for inclusion in an error message. */
+	private static String snippet(String s) {
+		return (s.length() <= 80) ? s : s.substring(0, 77) + "...";
 	}
 
 	// ========== Config helpers ==========

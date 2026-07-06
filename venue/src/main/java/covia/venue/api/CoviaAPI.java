@@ -10,19 +10,22 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Cells;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
+import convex.core.data.prim.CVMLong;
 import convex.core.exceptions.ParseException;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
+import covia.adapter.CoviaAdapter;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.AuthException;
@@ -38,7 +41,7 @@ import covia.venue.SecretStore;
 import covia.venue.User;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
-import io.javalin.Javalin;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.BadRequestResponse;
 import io.javalin.http.Context;
 import io.javalin.openapi.HttpMethod;
@@ -91,34 +94,47 @@ public class CoviaAPI extends ACoviaAPI {
 		});
 	}
 
-	public void addRoutes(Javalin javalin) {
-		javalin.get(ROUTE+"status", this::getStatus);
-		javalin.get(ROUTE+"assets/{id}", this::getAsset); // note {} doesn't match slashes, <> does
-		javalin.get(ROUTE+"assets/{id}/content", this::getContent);
-		javalin.put(ROUTE+"assets/{id}/content", this::putContent);
+	public void addRoutes(RoutesConfig routes) {
+		routes.get(ROUTE+"status", this::getStatus);
+		// <id> matches slashes, so the asset metadata route accepts any lattice
+		// address (a/<hash>, w/…, o/…, <DID>/…) as well as a bare hash. The more
+		// specific {id}/content route below is registered too; Javalin prefers
+		// the more specific match (covered by CoviaAssetRefTest).
+		routes.get(ROUTE+"assets/{id}/content", this::getContent);
+		routes.get(ROUTE+"assets/<id>", this::getAsset);
+		routes.put(ROUTE+"assets/{id}/content", this::putContent);
 
-		javalin.get(ROUTE+"assets", this::getAssets);
-		javalin.post(ROUTE+"assets", this::addAsset);
-		javalin.post(ROUTE+"invoke", this::invokeOperation);
-		javalin.get(ROUTE+"operations", this::getOperations);
-		javalin.get(ROUTE+"operations/{name}", this::getOperation);
-		javalin.get(ROUTE+"jobs/<id>", this::getJobStatus);
-		javalin.post(ROUTE+"jobs/<id>", this::sendMessage);
-		javalin.put(ROUTE+"jobs/<id>/cancel", this::cancelJob);
-		javalin.put(ROUTE+"jobs/<id>/pause", this::pauseJob);
-		javalin.put(ROUTE+"jobs/<id>/resume", this::resumeJob);
-		javalin.put(ROUTE+"jobs/<id>/delete", this::deleteJob);
-		javalin.sse(ROUTE+"jobs/<id>/sse", sseServer.registerSSE);
-		javalin.get(ROUTE+"jobs", this::getJobs);
-		
+		routes.get(ROUTE+"assets", this::getAssets);
+		routes.post(ROUTE+"assets", this::addAsset);
+		routes.post(ROUTE+"invoke", this::invokeOperation);
+		routes.get(ROUTE+"operations", this::getOperations);
+		routes.get(ROUTE+"operations/{name}", this::getOperation);
+		routes.get(ROUTE+"jobs/<id>", this::getJobStatus);
+		routes.post(ROUTE+"jobs/<id>", this::sendMessage);
+		routes.put(ROUTE+"jobs/<id>/cancel", this::cancelJob);
+		routes.put(ROUTE+"jobs/<id>/pause", this::pauseJob);
+		routes.put(ROUTE+"jobs/<id>/resume", this::resumeJob);
+		routes.put(ROUTE+"jobs/<id>/delete", this::deleteJob);
+		routes.sse(ROUTE+"jobs/<id>/sse", sseServer.registerSSE);
+		routes.get(ROUTE+"jobs", this::getJobs);
+
+		// Job-free lattice value reads (#177) — synchronous, capability-checked,
+		// no Job persisted. Shares CoviaAdapter's read accessors with covia:* ops.
+		routes.get(ROUTE+"values/read", this::getValueRead);
+		routes.get(ROUTE+"values/list", this::getValueList);
+		routes.get(ROUTE+"values/slice", this::getValueSlice);
+		routes.get(ROUTE+"values/inspect", this::getValueInspect);
+		routes.get(ROUTE+"values/aggregate", this::getValueAggregate);
+		routes.get(ROUTE+"values/count", this::getValueCount);
+
 		// Secrets
-		javalin.get(ROUTE+"secrets", this::listSecrets);
-		javalin.put(ROUTE+"secrets/{name}", this::putSecret);
-		javalin.delete(ROUTE+"secrets/{name}", this::deleteSecret);
+		routes.get(ROUTE+"secrets", this::listSecrets);
+		routes.put(ROUTE+"secrets/{name}", this::putSecret);
+		routes.delete(ROUTE+"secrets/{name}", this::deleteSecret);
 
 		// DIDs
-		javalin.get("/.well-known/did.json", this::getDIDDocument);
-		javalin.get("/a/{id}/did.json", this::getAssetDIDDocument);
+		routes.get("/.well-known/did.json", this::getDIDDocument);
+		routes.get("/a/{id}/did.json", this::getAssetDIDDocument);
 	}
 	 
 	@OpenApi(path = ROUTE + "status", 
@@ -262,34 +278,104 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 	
 
-	@OpenApi(path = ROUTE + "assets/{id}", 
-			methods = HttpMethod.GET, 
+	@OpenApi(path = ROUTE + "assets/{id}",
+			methods = HttpMethod.GET,
 			tags = { "Covia"},
-			summary = "Get Covia asset metadata gievn an asset ID.", 
+			summary = "Get Covia asset metadata given an asset reference.",
 			operationId = CoviaAPI.GET_ASSET,
 			pathParams = {
 					@OpenApiParam(
-							name = "id", 
-							description = "Asset ID, as a hex string.", 
-							required = true, 
-							type = String.class, 
-							example = "0x1234567812345678123456781234567812345678123456781234567812345678") })	
+							name = "id",
+							description = "Asset reference: a bare CAD3 hash, a content-addressed "
+									+ "address (a/<hash>), a workspace/operation path (w/…, o/…), "
+									+ "or a DID URL. Resolved the same way invoke resolves "
+									+ "operation references.",
+							required = true,
+							type = String.class,
+							example = "a/1234567812345678123456781234567812345678123456781234567812345678") })
 	protected void getAsset(Context ctx) {
-		String id=ctx.pathParam("id");
-		Hash assetID=Hash.parse(id);
-		if (assetID==null) throw new BadRequestResponse("Invalid asset ID: " + id);
+		String ref=ctx.pathParam("id");
+		if (ref==null || ref.isEmpty()) throw new BadRequestResponse("Missing asset reference");
+
+		// Caller identity + transport UCAN authority (a bearer UCAN supplies the
+		// proof for cross-DID reads, per the IETF UCAN-HTTP convention).
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
+		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null);
 
 		try {
-			Asset asset=venue.getAsset(assetID);
+			Asset asset=resolveAssetReference(ref, rctx);
 			if (asset==null) {
-				buildError(ctx,404,"Asset not found: "+id);
+				buildError(ctx,404,"Asset not found: "+ref);
 				return;
 			}
+			// Return the resolved content-addressed id alongside the metadata, so a
+			// caller who asked by mutable path still gets a verifiable handle. The
+			// CAD3 value hash is formatting-independent — an ETag is the idiomatic
+			// home for it.
+			Hash resolvedId=asset.getID();
+			if (resolvedId!=null) ctx.header("ETag","\"0x"+resolvedId.toHexString()+"\"");
 			ctx.result(asset.getMetadata().toString());
 			ctx.status(200);
+		} catch (AuthException e) {
+			buildError(ctx,403,"Not authorised to read asset: "+ref);
 		} catch (IOException e) {
 			buildError(ctx,500,"Error retrieving asset: "+e.getMessage());
 		}
+	}
+
+	/**
+	 * Resolves an asset reference to an Asset, accepting any lattice address —
+	 * a bare hash, {@code a/<hash>}, a workspace/operation path ({@code w/…},
+	 * {@code o/…}), or a DID URL — the same addressing scheme {@code invoke}
+	 * uses. Enforces the asset-read capability (consistent with the
+	 * {@code asset:get} operation); cross-DID reads are satisfied by a UCAN
+	 * bearer proof on the request.
+	 *
+	 * @param ref Asset reference (lattice address or bare hash)
+	 * @param ctx Request context (caller identity, capability ceiling, proofs)
+	 * @return the resolved Asset, or null if the reference resolves to nothing
+	 *         or to a non-asset value
+	 */
+	private Asset resolveAssetReference(String ref, RequestContext ctx) throws IOException {
+		AString refStr = Strings.create(ref);
+		ctx.requireCapability(refStr, Strings.intern("asset/read"));
+
+		// Content-addressed forms (bare hex, a/<hash>, did:.../a/<hash>) — fetch
+		// the stored record so the returned bytes are byte-identical to the legacy
+		// assets/<hash> route, keeping content-addressed lookups self-verifying.
+		Hash hash = parseContentAddressedId(ref);
+		if (hash != null) {
+			return venue.getAsset(hash);
+		}
+
+		// Any other lattice address — resolve via the universal resolver (the same
+		// path invoke and covia:read use) and interpret the value as metadata.
+		ACell value = engine().resolvePath(refStr, ctx);
+		if (value instanceof AMap) {
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> meta = (AMap<AString, ACell>) value;
+			return Asset.fromMeta(meta);
+		}
+		// Remote / named DID-URL bindings aren't in the local lattice — fetch the
+		// hash-verified definition from the publishing venue.
+		if (ref.startsWith("did:")) {
+			return engine().resolveAsset(refStr, ctx);
+		}
+		return null;
+	}
+
+	/**
+	 * Strict parse of a content-addressed asset id: a bare hex CAD3 hash,
+	 * {@code a/<hash>}, or a DID URL ending in {@code /a/<hash>}. Returns null
+	 * for mutable lattice paths ({@code w/…}, {@code o/…}), which are resolved
+	 * through the lattice instead.
+	 */
+	private static Hash parseContentAddressedId(String ref) {
+		int aPos = ref.indexOf("/a/");
+		if (aPos >= 0) return Hash.parse(ref.substring(aPos + 3));
+		if (ref.startsWith("a/")) return Hash.parse(ref.substring(2));
+		return Hash.parse(ref);
 	}
 	
 	@OpenApi(path = ROUTE + "assets/{id}/content", 
@@ -405,10 +491,24 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 	}
 	
-	@OpenApi(path = ROUTE + "invoke", 
-			methods = HttpMethod.POST, 
+	@OpenApi(path = ROUTE + "invoke",
+			methods = HttpMethod.POST,
 			tags = { "Covia"},
-			summary = "Invoke a Covia operation", 
+			summary = "Invoke a Covia operation",
+			description = "Invokes an operation, creating a Job that tracks its execution. "
+					+ "EVERY invocation is asynchronous by default: the response is the job "
+					+ "record (201, with a Location header for the job), which the caller polls "
+					+ "via GET /jobs/{id} (or subscribes via /jobs/{id}/sse) until it reaches a "
+					+ "terminal status carrying the output. Pass wait (query parameter or body "
+					+ "field) for a synchronous response: true waits up to the 120s cap, a "
+					+ "non-negative integer waits up to that many milliseconds (clamped to the "
+					+ "cap); any other value is rejected with 400. If the job finishes within "
+					+ "the window the finished record is returned directly (200); otherwise the "
+					+ "current record is returned (201) and the caller "
+					+ "continues polling. This contract applies uniformly, including to "
+					+ "meta-operations: e.g. grid:job-result itself returns a local job that "
+					+ "completes with the remote job's result (it supports an op-level timeout "
+					+ "input for bounded waits).",
 			requestBody = @OpenApiRequestBody(
 					description = "Invoke request",
 					content= @OpenApiContent(
@@ -416,7 +516,7 @@ public class CoviaAPI extends ACoviaAPI {
 							from = InvokeRequest.class,
 							exampleObjects = {
 								@OpenApiExampleProperty(name = "operation", value = "random"),
-								@OpenApiExampleProperty(name = "input", 
+								@OpenApiExampleProperty(name = "input",
 										objects = {
 												@OpenApiExampleProperty(name = "length", value = "8")
 										})
@@ -425,15 +525,29 @@ public class CoviaAPI extends ACoviaAPI {
 			operationId = CoviaAPI.INVOKE,
 			responses = {
 					@OpenApiResponse(
-							status = "201", 
-							description = "Operation invoked, with a job status record returned. Job ID can be any string, but by convention 32 characters hex.", 
+							status = "201",
+							description = "Operation invoked asynchronously: a job status record is returned and the Location header names the job to poll. Job ID can be any string, but by convention 32 characters hex.",
 							content = {
 								@OpenApiContent(
-										type = "application/json", 
+										type = "application/json",
+										from = InvokeResult.class) }),
+					@OpenApiResponse(
+							status = "200",
+							description = "With wait=true: the job completed within the wait window and the finished record (including output) is returned directly.",
+							content = {
+								@OpenApiContent(
+										type = "application/json",
 										from = InvokeResult.class) })
-					})	
+					})
 	protected void invokeOperation(Context ctx) {
-		ACell req=JSON.parseJSON5(ctx.body());
+		// A malformed body is the caller's error: 400, never the generic 500.
+		ACell req;
+		try {
+			req = JSON.parseJSON5(ctx.body());
+		} catch (Exception e) {
+			buildError(ctx, 400, "Request body is not valid JSON: " + e.getMessage());
+			return;
+		}
 
 		AString op=RT.ensureString(RT.getIn(req, "operation"));
 		if (op==null) {
@@ -441,45 +555,47 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 		ACell input=RT.getIn(req, "input");
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
-		// Attach UCAN proofs. Two transport channels are accepted and merged
-		// through the same trust boundary (parseTransportUCANs):
-		//   1. `ucans` array in the request envelope
-		//   2. `Authorization: Bearer <ucan-jwt>` (IETF UCAN-HTTP) stashed
-		//      by AuthMiddleware as UCAN_BEARER_ATTR when present
+		// Attach transport UCAN authority — proofs (cross-user grants) and the
+		// self-attenuation ceiling (#131) — from both channels: the `ucans`
+		// envelope array and an `Authorization: Bearer <ucan-jwt>` (IETF
+		// UCAN-HTTP) stashed by AuthMiddleware as UCAN_BEARER_ATTR.
 		AVector<ACell> ucans = RT.getIn(req, "ucans");
 		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-		AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans);
-		if (proofs != null) rctx = rctx.withProofs(proofs);
+		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans);
 
 		try {
+			// Wait window: `wait` (query param or body field) is boolean or an
+			// integer number of milliseconds — true = the full 120s window,
+			// an integer = that many ms (clamped to the cap). Parsed BEFORE the
+			// operation is invoked so a malformed value rejects with 400 without
+			// creating a job. See parseWaitMs.
+			long waitMs = parseWaitMs(ctx.queryParam("wait"), RT.getIn(req, "wait"));
+
 			Job job=engine().jobs().invokeOperation(op,input,rctx);
 			if (job==null) {
 				buildError(ctx,404,"Operation does not exist");
 				return;
 			}
 
-			// Check for wait: query param ?wait=true or body field "wait"
-			String waitParam = ctx.queryParam("wait");
-			ACell waitField = RT.getIn(req, "wait");
-			boolean shouldWait = "true".equals(waitParam)
-				|| convex.core.data.prim.CVMBool.TRUE.equals(waitField)
-				|| Strings.create("true").equals(waitField);
-
-			if (shouldWait) {
-				// Block until job completes (120s timeout)
+			if (waitMs > 0) {
 				try {
-					job.awaitResult(120_000);
+					job.awaitResult(waitMs);
 				} catch (Exception e) {
 					// Timeout or failure — return current state
 				}
 			}
 
-			this.buildResult(ctx, shouldWait && job.isComplete() ? 200 : 201, job.getData());
+			this.buildResult(ctx, waitMs > 0 && job.isComplete() ? 200 : 201, job.getData());
 			ctx.header("Location",ROUTE+"jobs/"+job.getID().toHexString());
 		} catch (AuthException e) {
 			this.buildError(ctx, 403, e.getMessage());
+		} catch (covia.exception.RemoteFetchException e) {
+			// Resolving the operation required fetching a definition from another
+			// venue, and that upstream fetch failed — a gateway error, not "the
+			// operation does not exist" (#174). The message names the venue.
+			this.buildError(ctx, 502, e.getMessage());
 		} catch (IllegalArgumentException | IllegalStateException e) {
 			this.buildError(ctx, 400, "Error invoking operation: "+e.getClass().getSimpleName()+":"+e.getMessage());
 			return;
@@ -488,11 +604,62 @@ public class CoviaAPI extends ACoviaAPI {
 			log.warn("Unexpected exception handling client invoke",e);
 		}
 	}
-	
-	@OpenApi(path = ROUTE + "jobs/{id}", 
-			methods = HttpMethod.GET, 
+
+	/** Max wait window for a synchronous invoke (ms). A waiting request holds a
+	 *  server thread, so the cap is a resource guard, not a convenience — clients
+	 *  wanting longer waits poll {@code /jobs/{id}} or subscribe via SSE. */
+	static final long MAX_WAIT_MS = 120_000;
+
+	/**
+	 * Parses the invoke {@code wait} parameter, following the same convention as
+	 * the op-level {@code wait} on {@code agent:request}/{@code agent:trigger}:
+	 * absent/false = 0 (asynchronous, the default); boolean {@code true} = the
+	 * full {@link #MAX_WAIT_MS} window; a non-negative integer = that many
+	 * milliseconds, clamped to the cap. Accepted from the query string
+	 * ({@code ?wait=true}, {@code ?wait=5000}) or the request body
+	 * ({@code "wait": true}, {@code "wait": 5000}; boolean/numeric strings
+	 * accepted for JSON-over-HTTP clients). Anything else — negative numbers,
+	 * non-numeric strings, other types — is a malformed request and throws;
+	 * bad inputs are rejected, never silently treated as absent.
+	 *
+	 * @param queryParam Raw {@code wait} query parameter (may be null)
+	 * @param bodyField {@code wait} field from the request body (may be null)
+	 * @return Wait window in ms; 0 for the default asynchronous behaviour
+	 * @throws IllegalArgumentException if {@code wait} is present but malformed
+	 */
+	static long parseWaitMs(String queryParam, ACell bodyField) {
+		if (queryParam != null) return parseWaitToken(queryParam.trim());
+		if (bodyField == null) return 0;
+		if (convex.core.data.prim.CVMBool.TRUE.equals(bodyField)) return MAX_WAIT_MS;
+		if (convex.core.data.prim.CVMBool.FALSE.equals(bodyField)) return 0;
+		if (bodyField instanceof convex.core.data.prim.CVMLong l) return clampWait(l.longValue());
+		if (bodyField instanceof AString s) return parseWaitToken(s.toString().trim());
+		throw new IllegalArgumentException(
+			"Invalid wait value: expected boolean or milliseconds, got " + bodyField.getClass().getSimpleName());
+	}
+
+	/** Parses a textual {@code wait} token: {@code true}/{@code false} or a
+	 *  non-negative integer (ms). Anything else throws. */
+	private static long parseWaitToken(String token) {
+		if ("true".equals(token)) return MAX_WAIT_MS;
+		if ("false".equals(token)) return 0;
+		try {
+			return clampWait(Long.parseLong(token));
+		} catch (NumberFormatException e) {
+			throw new IllegalArgumentException(
+				"Invalid wait value: expected true, false or milliseconds, got '" + token + "'");
+		}
+	}
+
+	private static long clampWait(long ms) {
+		if (ms < 0) throw new IllegalArgumentException("Invalid wait value: negative milliseconds " + ms);
+		return Math.min(ms, MAX_WAIT_MS);
+	}
+
+	@OpenApi(path = ROUTE + "jobs/{id}",
+			methods = HttpMethod.GET,
 			tags = { "Covia"},
-			summary = "Get the current Covia job status.", 
+			summary = "Get the current Covia job status.",
 			operationId = CoviaAPI.GET_JOB,
 			pathParams = {
 					@OpenApiParam(
@@ -507,7 +674,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Job request requires a job ID as a valid hex string");
 			return;
 		}
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		try {
 			AMap<AString,ACell> status=engine().jobs().getJobData(id, rctx);
@@ -545,8 +712,15 @@ public class CoviaAPI extends ACoviaAPI {
 					})
 	protected void sendMessage(Context ctx) {
 		Blob id = Blob.parse(ctx.pathParam("id"));
-		ACell message = JSON.parseJSON5(ctx.body());
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		// A malformed body is the caller's error: 400, never the generic 500.
+		ACell message;
+		try {
+			message = JSON.parseJSON5(ctx.body());
+		} catch (Exception e) {
+			buildError(ctx, 400, "Request body is not valid JSON: " + e.getMessage());
+			return;
+		}
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		@SuppressWarnings("unchecked")
 		AMap<AString, ACell> msgMap = (message instanceof AMap)
@@ -586,7 +760,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Job cancellation request requires a job ID as a valid hex string");
 			return;
 		}
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		try {
 			AMap<AString, ACell> status = engine().jobs().cancelJob(id, rctx);
@@ -619,7 +793,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Pause request requires a job ID");
 			return;
 		}
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		try {
 			AMap<AString, ACell> status = engine().jobs().pauseJob(id, rctx);
@@ -654,7 +828,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Resume request requires a job ID");
 			return;
 		}
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		try {
 			AMap<AString, ACell> status = engine().jobs().resumeJob(id, rctx);
@@ -689,7 +863,7 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx,400,"Job deletion request requires a job ID as a valid hex string");
 			return;
 		}
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		try {
 			boolean deleted=engine().jobs().deleteJob(id, rctx);
@@ -708,7 +882,7 @@ public class CoviaAPI extends ACoviaAPI {
 			tags = { "Covia"},
 			summary = "Get Covia jobs.")	
 	protected void getJobs(Context ctx) {
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		try {
 			Index<Blob, ACell> jobs = engine().jobs().getJobs(rctx);
 			// Return job IDs as a list
@@ -802,6 +976,151 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 	}
 
+	// ========== Lattice value reads (#177) ==========
+
+	@OpenApi(path = ROUTE + "values/read", methods = HttpMethod.GET, tags = { "Values" },
+			summary = "Read the literal value at a lattice path (job-free)", operationId = "valueRead")
+	protected void getValueRead(Context ctx) { handleValueRoute(ctx, "read"); }
+
+	@OpenApi(path = ROUTE + "values/list", methods = HttpMethod.GET, tags = { "Values" },
+			summary = "List the keys / structure of a lattice node (job-free)", operationId = "valueList")
+	protected void getValueList(Context ctx) { handleValueRoute(ctx, "list"); }
+
+	@OpenApi(path = ROUTE + "values/slice", methods = HttpMethod.GET, tags = { "Values" },
+			summary = "Read a paginated slice of a lattice sequence (job-free)", operationId = "valueSlice")
+	protected void getValueSlice(Context ctx) { handleValueRoute(ctx, "slice"); }
+
+	@OpenApi(path = ROUTE + "values/inspect", methods = HttpMethod.GET, tags = { "Values" },
+			summary = "Budget-controlled JSON5 render of a lattice value (job-free)", operationId = "valueInspect")
+	protected void getValueInspect(Context ctx) { handleValueRoute(ctx, "inspect"); }
+
+	@OpenApi(path = ROUTE + "values/aggregate", methods = HttpMethod.GET, tags = { "Values" },
+			summary = "Count entries at a depth, optionally grouped by a field (job-free)", operationId = "valueAggregate")
+	protected void getValueAggregate(Context ctx) { handleValueRoute(ctx, "aggregate"); }
+
+	@OpenApi(path = ROUTE + "values/count", methods = HttpMethod.GET, tags = { "Values" },
+			summary = "Fast-path count of entries at a depth (job-free)", operationId = "valueCount")
+	protected void getValueCount(Context ctx) { handleValueRoute(ctx, "count"); }
+
+	/**
+	 * Shared handler for the job-free {@code /values/*} read routes. Builds the
+	 * caller context (identity + transport UCAN) exactly like the other GET reads,
+	 * assembles the accessor input from query parameters, and dispatches to the
+	 * matching {@link CoviaAdapter} read accessor — with <b>no Job created or
+	 * persisted</b> (the fix for #177). Reads are local-only, so there is no
+	 * remote-fetch surface here; capability enforcement is unchanged from the op path.
+	 *
+	 * @param op one of {@code read}, {@code list}, {@code slice}, {@code inspect}
+	 */
+	private void handleValueRoute(Context ctx, String op) {
+		String path = ctx.queryParam("path");
+		if (path == null || path.isEmpty()) {
+			buildError(ctx, 400, "Missing 'path' query parameter");
+			return;
+		}
+		// Execution-scoped virtual namespaces (t/, n/, c/) need a job/agent/session
+		// context that a plain GET does not carry.
+		if (isExecutionScopedNamespace(path)) {
+			buildError(ctx, 400, "Namespace not readable via the values API: " + firstSegment(path) + "/");
+			return;
+		}
+
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
+		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, null);
+
+		AMap<AString, ACell> input;
+		try {
+			input = buildValueInput(ctx, path);
+		} catch (NumberFormatException e) {
+			buildError(ctx, 400, "Invalid integer query parameter: " + e.getMessage());
+			return;
+		}
+
+		CoviaAdapter covia = (CoviaAdapter) engine().getAdapter("covia");
+		try {
+			ACell result = switch (op) {
+				case "read"      -> covia.handleRead(rctx, input);
+				case "list"      -> covia.handleList(rctx, input);
+				case "slice"     -> covia.handleSlice(rctx, input);
+				case "inspect"   -> covia.handleInspect(rctx, input);
+				case "aggregate" -> covia.handleAggregate(rctx, input);
+				// The count fast path is aggregate with no grouping.
+				case "count"     -> covia.handleAggregate(rctx, input.dissoc(Strings.intern("groupBy")));
+				default -> throw new IllegalArgumentException("Unknown values op: " + op);
+			};
+			// Content-addressed conditional read — only for `read`, where a path
+			// resolves to a single value whose CAD3 hash is a free, exact validator.
+			// Not applied to list/slice/aggregate/inspect: their bodies depend on
+			// query params, and we deliberately do not hash params or computed
+			// results. Truncated/absent reads carry no value, so no ETag (and thus
+			// no wrong-304 when maxSize varies).
+			if ("read".equals(op)) {
+				// ETag any present value — including a stored null, whose canonical
+				// CAD3 hash is Hash.NULL_HASH (Cells.getHash(null)). An absent path
+				// (exists:false) and a truncated read (value withheld) carry no ETag.
+				boolean exists = CVMBool.TRUE.equals(RT.getIn(result, Strings.intern("exists")));
+				boolean truncated = CVMBool.TRUE.equals(RT.getIn(result, Strings.intern("truncated")));
+				if (exists && !truncated) {
+					ACell value = RT.getIn(result, Strings.intern("value"));
+					String etag = "\"0x" + Cells.getHash(value).toHexString() + "\"";
+					ctx.header("ETag", etag);
+					if (etag.equals(ctx.header("If-None-Match"))) {
+						ctx.status(304);
+						return;
+					}
+				}
+			}
+			buildResult(ctx, 200, result);
+		} catch (AuthException e) {
+			buildError(ctx, 403, e.getMessage());
+		} catch (RuntimeException e) {
+			buildError(ctx, 500, "Read failed: " + e.getMessage());
+		}
+	}
+
+	/** Builds the CoviaAdapter read-accessor input map from the request query params. */
+	private static AMap<AString, ACell> buildValueInput(Context ctx, String path) {
+		AMap<AString, ACell> m = Maps.empty();
+		m = m.assoc(Fields.PATH, Strings.create(path));
+		m = putLongParam(m, ctx, "maxSize");
+		m = putLongParam(m, ctx, "limit");
+		m = putLongParam(m, ctx, "offset");
+		m = putLongParam(m, ctx, "budget");
+		m = putLongParam(m, ctx, "depth");
+		String compact = ctx.queryParam("compact");
+		if (compact != null) {
+			m = m.assoc(Strings.intern("compact"),
+					Boolean.parseBoolean(compact) ? CVMBool.TRUE : CVMBool.FALSE);
+		}
+		String groupBy = ctx.queryParam("groupBy");
+		if (groupBy != null && !groupBy.isBlank()) {
+			m = m.assoc(Strings.intern("groupBy"), Strings.create(groupBy));
+		}
+		return m;
+	}
+
+	private static AMap<AString, ACell> putLongParam(AMap<AString, ACell> m, Context ctx, String name) {
+		String v = ctx.queryParam(name);
+		if (v == null || v.isBlank()) return m;
+		return m.assoc(Strings.intern(name), CVMLong.create(Long.parseLong(v.trim())));
+	}
+
+	/** First path segment (namespace prefix) before the first {@code /}. */
+	private static String firstSegment(String path) {
+		int slash = path.indexOf('/');
+		return (slash < 0) ? path : path.substring(0, slash);
+	}
+
+	/**
+	 * True for the job/agent/session-scoped virtual namespaces ({@code t/},
+	 * {@code n/}, {@code c/}) that are only meaningful inside a running job/agent.
+	 */
+	private static boolean isExecutionScopedNamespace(String path) {
+		String seg = firstSegment(path);
+		return seg.equals("t") || seg.equals("n") || seg.equals("c");
+	}
+
 	// ========== Secret endpoints ==========
 
 	@OpenApi(path = ROUTE + "secrets",
@@ -810,7 +1129,7 @@ public class CoviaAPI extends ACoviaAPI {
 			summary = "List secret names for the authenticated caller. Returns names only, never values.",
 			operationId = "listSecrets")
 	protected void listSecrets(Context ctx) {
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		AString callerDID = rctx.getCallerDID();
 		if (callerDID == null) {
 			buildError(ctx, 401, "Authentication required");
@@ -849,14 +1168,21 @@ public class CoviaAPI extends ACoviaAPI {
 					description = "Secret value",
 					content= @OpenApiContent(type = "application/json", from = Object.class)))
 	protected void putSecret(Context ctx) {
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		if (rctx.getCallerDID() == null) {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
 
 		String name = ctx.pathParam("name");
-		ACell body = JSON.parseJSON5(ctx.body());
+		// A malformed body is the caller's error: 400, never the generic 500.
+		ACell body;
+		try {
+			body = JSON.parseJSON5(ctx.body());
+		} catch (Exception e) {
+			buildError(ctx, 400, "Request body is not valid JSON: " + e.getMessage());
+			return;
+		}
 		ACell value = RT.getIn(body, "value");
 		if (!(value instanceof AString)) {
 			buildError(ctx, 400, "Request body must contain a 'value' string field");
@@ -885,7 +1211,7 @@ public class CoviaAPI extends ACoviaAPI {
 							required = true,
 							type = String.class) })
 	protected void deleteSecret(Context ctx) {
-		RequestContext rctx = RequestContext.of(AuthMiddleware.getCallerDID(ctx));
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		AString callerDID = rctx.getCallerDID();
 		if (callerDID == null) {
 			buildError(ctx, 401, "Authentication required");

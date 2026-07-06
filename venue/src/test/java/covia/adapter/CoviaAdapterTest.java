@@ -250,6 +250,123 @@ public class CoviaAdapterTest {
 		assertEquals(CVMBool.FALSE, RT.getIn(result, "exists"));
 	}
 
+	// ========== covia:write — value required ==========
+
+	@Test
+	public void testWriteWithoutValueFails() {
+		// A write with only a path (no 'value' key) must fail loudly rather than
+		// silently creating a null entry — guards against LLM tool calls that omit
+		// the required argument.
+		Job job = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/novalue"), ALICE);
+		assertThrows(Exception.class, () -> job.awaitResult(5000),
+			"write without a value should fail");
+
+		// The path must not have been created.
+		Job read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/novalue"), ALICE);
+		assertEquals(CVMBool.FALSE, RT.getIn(read.awaitResult(5000), "exists"),
+			"a failed write must not create the path");
+	}
+
+	@Test
+	public void testWriteExplicitNullStoresPresentNull() {
+		// An explicit null is a value, not a delete: it stores a present null,
+		// distinct from an absent path. covia:read reports exists:true, value:null.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nullable", Fields.VALUE, Strings.create("x")), ALICE)
+			.awaitResult(5000);
+		ACell res = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nullable", Fields.VALUE, null), ALICE)
+			.awaitResult(5000);
+		assertNotNull(res, "explicit null write should complete");
+
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/nullable"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(read, "exists"),
+			"a stored null is present, not absent");
+		assertNull(RT.getIn(read, "value"), "the stored value is null");
+	}
+
+	// ========== covia null value semantics — present null vs absent ==========
+
+	@Test
+	public void testNullDistinctFromAbsent() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nulls/a", Fields.VALUE, null), ALICE).awaitResult(5000);
+
+		ACell present = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/nulls/a"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(present, "exists"), "a stored null is present");
+		assertNull(RT.getIn(present, "value"));
+
+		ACell absent = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/nulls/neverWritten"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(absent, "exists"), "an unwritten sibling is absent");
+	}
+
+	@Test
+	public void testTopLevelNullIsPresent() {
+		// A two-segment path (parent = the namespace root) must resolve presence too.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/topnull", Fields.VALUE, null), ALICE).awaitResult(5000);
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/topnull"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(read, "exists"));
+		assertNull(RT.getIn(read, "value"));
+	}
+
+	@Test
+	public void testListShowsNullValuedKey() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nlist/a", Fields.VALUE, null), ALICE).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nlist/b", Fields.VALUE, CVMLong.create(5)), ALICE).awaitResult(5000);
+
+		ACell list = engine.jobs().invokeOperation("v/ops/covia/list",
+			Maps.of(Fields.PATH, "w/nlist"), ALICE).awaitResult(5000);
+		assertEquals(CVMLong.create(2), RT.getIn(list, "count"), "a null-valued key is still a key");
+		String keys = String.valueOf(RT.getIn(list, "keys"));
+		assertTrue(keys.contains("a") && keys.contains("b"), "both keys listed, got: " + keys);
+	}
+
+	@Test
+	public void testDeleteRemovesWhereNullDoesNot() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/ndel/a", Fields.VALUE, null), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/ndel/a"), ALICE).awaitResult(5000), "exists"),
+			"null write is present");
+
+		engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "w/ndel/a"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/ndel/a"), ALICE).awaitResult(5000), "exists"),
+			"delete removes the entry — now absent");
+	}
+
+	@Test
+	public void testAggregateCountsNullEntries() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nagg", Fields.VALUE, Maps.of("a", null, "b", CVMLong.create(1))),
+			ALICE).awaitResult(5000);
+		ACell agg = engine.jobs().invokeOperation("v/ops/covia/aggregate",
+			Maps.of(Fields.PATH, "w/nagg"), ALICE).awaitResult(5000);
+		assertEquals(CVMLong.create(2), RT.getIn(agg, "count"), "a present null entry is counted");
+	}
+
+	@Test
+	public void testOverwriteNullWithValue() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nover", Fields.VALUE, null), ALICE).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/nover", Fields.VALUE, Strings.create("real")), ALICE).awaitResult(5000);
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/nover"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(read, "exists"));
+		assertEquals(Strings.create("real"), RT.getIn(read, "value"), "null replaced by a real value");
+	}
+
 	// ========== covia:copy — server-side value duplication ==========
 
 	@Test
@@ -264,7 +381,7 @@ public class CoviaAdapterTest {
 			Maps.of(Strings.create("from"), "w/source",
 				Strings.create("to"), "w/dest"), ALICE);
 		ACell copyResult = copyJob.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(copyResult, "copied"));
+		assertNull(RT.getIn(copyResult, "pathCreated"));  // top-level copy builds no hierarchy
 
 		// Read both — they should be equal
 		Job readSource = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -283,7 +400,7 @@ public class CoviaAdapterTest {
 			Maps.of(Strings.create("from"), "v/ops/json/merge",
 				Strings.create("to"), "o/my-merge"), ALICE);
 		ACell result = copyJob.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(result, "copied"));
+		assertNull(RT.getIn(result, "pathCreated"));  // top-level copy builds no hierarchy
 
 		// Read the destination — it should be the full operation metadata
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -327,7 +444,7 @@ public class CoviaAdapterTest {
 			Maps.of(Strings.create("from"), echoHash.toHexString(),
 				Strings.create("to"), "o/from-hash"), ALICE);
 		ACell result = copyJob.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(result, "copied"));
+		assertNull(RT.getIn(result, "pathCreated"));  // top-level copy builds no hierarchy
 
 		// Verify the copy is real metadata
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -487,7 +604,7 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "w/notes", Fields.VALUE, Strings.create("hello world")),
 			ALICE);
 		ACell writeResult = writeJob.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(writeResult, "written"));
+		assertNull(RT.getIn(writeResult, "pathCreated"));  // top-level write builds no hierarchy
 
 		// Read it back
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -505,7 +622,7 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "o/my-op", Fields.VALUE, opDef),
 			ALICE);
 		ACell writeResult = writeJob.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(writeResult, "written"));
+		assertNull(RT.getIn(writeResult, "pathCreated"));  // top-level write builds no hierarchy
 
 		// Read it back
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -696,7 +813,7 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "w/first-entry", Fields.VALUE, Strings.create("hello")),
 			CAROL);
 		ACell writeResult = writeJob.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(writeResult, "written"));
+		assertNull(RT.getIn(writeResult, "pathCreated"));  // top-level write builds no hierarchy
 
 		// Read back confirms it persisted
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -761,7 +878,7 @@ public class CoviaAdapterTest {
 		Job deleteJob = engine.jobs().invokeOperation("v/ops/covia/delete",
 			Maps.of(Fields.PATH, "w/ephemeral"), ALICE);
 		ACell deleteResult = deleteJob.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(deleteResult, "deleted"));
+		assertEquals(CVMBool.TRUE, RT.getIn(deleteResult, "deleted"), "a value was present and removed");
 
 		// Verify it's gone
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -792,7 +909,7 @@ public class CoviaAdapterTest {
 		Job deleteJob = engine.jobs().invokeOperation("v/ops/covia/delete",
 			Maps.of(Fields.PATH, "w/never-existed"), ALICE);
 		ACell deleteResult = deleteJob.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(deleteResult, "deleted"));
+		assertEquals(CVMBool.FALSE, RT.getIn(deleteResult, "deleted"), "no-op: nothing was there");
 	}
 
 	@Test
@@ -829,6 +946,137 @@ public class CoviaAdapterTest {
 		assertThrows(AuthException.class, () ->
 			engine.jobs().invokeOperation("v/ops/covia/delete",
 				Maps.of(Fields.PATH, "w/test"), RequestContext.ANONYMOUS));
+	}
+
+	// ========== covia:delete — secrets (s/ is delete-only, #166) ==========
+
+	@Test
+	public void testDeleteOwnSecret() {
+		// Store via secret:set (the only write path into s/) ...
+		engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "doomed-key", Fields.VALUE, Strings.create("sk-123")),
+			ALICE).awaitResult(5000);
+		assertTrue(engine.getVenueState().users().get(ALICE_DID).secrets().exists("doomed-key"),
+			"secret stored before deletion");
+
+		// ... remove via covia:delete s/NAME (whole record)
+		ACell deleteResult = engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "s/doomed-key"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(deleteResult, "deleted"), "the secret was present and removed");
+
+		assertFalse(engine.getVenueState().users().get(ALICE_DID).secrets().exists("doomed-key"),
+			"secret removed from the caller's store");
+	}
+
+	@Test
+	public void testSecretDeleteRejectsDeepPath() {
+		// Partial deletion inside an {encrypted, updated} record is never
+		// meaningful — whole records only.
+		Job job = engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "s/some-key/encrypted"), ALICE);
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+	}
+
+	@Test
+	public void testDeleteNonExistentSecretIsIdempotent() {
+		ACell deleteResult = engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "s/never-stored"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(deleteResult, "deleted"), "no-op: secret not present");
+	}
+
+	@Test
+	public void testCannotAppendToSecretsNamespace() {
+		// s/ is delete-only on the covia CRUD surface — append stays closed
+		// just like write (records are created exclusively through secret:set).
+		Job job = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "s/my-secret", Fields.VALUE, Strings.create("hack")),
+			ALICE);
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+	}
+
+	// ========== #147 mutation outcome fields — existed / index ==========
+
+	@Test
+	public void testWriteReportsCreatedVsReplaced() {
+		ACell created = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/m147", Fields.VALUE, CVMLong.ONE), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(created, "existed"), "first write creates");
+
+		ACell replaced = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/m147", Fields.VALUE, CVMLong.create(2)), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(replaced, "existed"), "second write replaces");
+	}
+
+	@Test
+	public void testReplacingAStoredNullReportsExisted() {
+		// A stored null counts as present — replacing it reports existed:true.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/m147n", Fields.VALUE, null), ALICE).awaitResult(5000);
+		ACell replaced = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/m147n", Fields.VALUE, Strings.create("x")), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(replaced, "existed"), "a stored null is present");
+	}
+
+	@Test
+	public void testAppendReportsExistedIndexAndSize() {
+		ACell first = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "w/m147a", Fields.VALUE, Strings.create("a")), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(first, "existed"), "first append creates the vector");
+		assertEquals(CVMLong.create(0), RT.getIn(first, "index"), "landed at index 0");
+		assertEquals(CVMLong.create(1), RT.getIn(first, "newSize"));
+
+		ACell second = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "w/m147a", Fields.VALUE, Strings.create("b")), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(second, "existed"), "second append extends");
+		assertEquals(CVMLong.create(1), RT.getIn(second, "index"), "landed at index 1");
+		assertEquals(CVMLong.create(2), RT.getIn(second, "newSize"));
+	}
+
+	@Test
+	public void testCopyReportsExisted() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/m147src", Fields.VALUE, Strings.create("s")), ALICE).awaitResult(5000);
+
+		ACell created = engine.jobs().invokeOperation("v/ops/covia/copy",
+			Maps.of(Strings.create("from"), "w/m147src", Strings.create("to"), "w/m147dst"),
+			ALICE).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(created, "existed"), "copy to a new destination creates");
+
+		ACell overwrote = engine.jobs().invokeOperation("v/ops/covia/copy",
+			Maps.of(Strings.create("from"), "w/m147src", Strings.create("to"), "w/m147dst"),
+			ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(overwrote, "existed"), "copy over an existing destination replaces");
+	}
+
+	@Test
+	public void testSecretDeleteIsPerUser() {
+		// Bare paths address the CALLER's own namespace: Bob deleting s/shared-name
+		// touches Bob's store, never Alice's.
+		engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "shared-name", Fields.VALUE, Strings.create("alice-value")),
+			ALICE).awaitResult(5000);
+
+		engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "s/shared-name"), BOB).awaitResult(5000);
+
+		assertTrue(engine.getVenueState().users().get(ALICE_DID).secrets().exists("shared-name"),
+			"another user's delete must not touch Alice's secret");
+	}
+
+	@Test
+	public void testSecretCanBeRecreatedAfterDelete() {
+		// No tombstone residue: delete then set again yields a normal live record.
+		engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "cycled", Fields.VALUE, Strings.create("v1")),
+			ALICE).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "s/cycled"), ALICE).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/secret/set",
+			Maps.of(Fields.NAME, "cycled", Fields.VALUE, Strings.create("v2")),
+			ALICE).awaitResult(5000);
+
+		assertTrue(engine.getVenueState().users().get(ALICE_DID).secrets().exists("cycled"),
+			"secret re-created after deletion");
 	}
 
 	// ========== covia:write/read — isolation ==========
@@ -1057,7 +1305,7 @@ public class CoviaAdapterTest {
 		Job deleteJob = engine.jobs().invokeOperation("v/ops/covia/delete",
 			Maps.of(Fields.PATH, "w/data/y"), ALICE);
 		ACell deleteResult = deleteJob.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(deleteResult, "deleted"));
+		assertEquals(CVMBool.FALSE, RT.getIn(deleteResult, "deleted"), "no-op: sibling did not exist");
 
 		// Original key still intact
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -1075,7 +1323,7 @@ public class CoviaAdapterTest {
 			Maps.of(Fields.PATH, "w/events", Fields.VALUE, Strings.create("event-1")),
 			ALICE);
 		ACell appendResult = appendJob.awaitResult(5000);
-		assertEquals(CVMBool.TRUE, RT.getIn(appendResult, "appended"));
+		assertEquals(CVMLong.create(1), RT.getIn(appendResult, "newSize"));
 
 		// Read back — should be a vector
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -1309,6 +1557,130 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
+	public void testWriteVectorIndexOutOfBoundsMessage() {
+		engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "w/tiny", Fields.VALUE, Strings.create("one")),
+			ALICE).awaitResult(5000);
+
+		Job writeJob = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/tiny/5", Fields.VALUE, Strings.create("oops")),
+			ALICE);
+		String msg = messageChain(assertThrows(Exception.class, () -> writeJob.awaitResult(5000)));
+		// A numeric-but-out-of-range index is reported as an index error, naming path + index.
+		assertTrue(msg.contains("out of bounds"), "expected out-of-bounds error, got: " + msg);
+		assertTrue(msg.contains("w/tiny") && msg.contains("5"),
+			"error should name the path and index, got: " + msg);
+	}
+
+	@Test
+	public void testWriteListWithNonIndexKeyGivesShapeConflict() {
+		// A list pre-exists where the caller then writes a named child
+		// (GetMine-ai/demo#146 — seed residue: w/health/vaccinations as a list).
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/health/vaccinations",
+				Fields.VALUE, Vectors.of(Strings.create("a"), Strings.create("b"))),
+			ALICE).awaitResult(5000);
+
+		Job writeJob = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/health/vaccinations/tetanus",
+				Fields.VALUE, Maps.of("date", "2008-08-04")),
+			ALICE);
+		String msg = messageChain(assertThrows(Exception.class, () -> writeJob.awaitResult(5000)));
+		// Distinct from an index error — names the conflicting node and the remedy.
+		assertFalse(msg.contains("out of bounds"),
+			"a shape conflict must not be reported as an index error: " + msg);
+		assertTrue(msg.contains("w/health/vaccinations"),
+			"error should name the list node, got: " + msg);
+		assertTrue(msg.contains("replace the whole node"),
+			"error should state the remedy, got: " + msg);
+	}
+
+	@Test
+	public void testAppendIntoListWithNonIndexKeyGivesShapeConflict() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/health/vaccinations",
+				Fields.VALUE, Vectors.of(Strings.create("a"))),
+			ALICE).awaitResult(5000);
+
+		Job appendJob = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "w/health/vaccinations/tetanus",
+				Fields.VALUE, Strings.create("x")),
+			ALICE);
+		String msg = messageChain(assertThrows(Exception.class, () -> appendJob.awaitResult(5000)));
+		assertTrue(msg.contains("w/health/vaccinations") && msg.contains("replace the whole node"),
+			"append into a list with a non-index key should give the shape-conflict remedy, got: " + msg);
+	}
+
+	@Test
+	public void testShapeConflictWorkaroundReplacingWholeNode() {
+		// The remedy the error suggests must actually work: replace the whole list
+		// node with a map, then named-child writes land.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/health/vaccinations",
+				Fields.VALUE, Vectors.of(Strings.create("a"), Strings.create("b"))),
+			ALICE).awaitResult(5000);
+
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/health/vaccinations", Fields.VALUE, Maps.empty()),
+			ALICE).awaitResult(5000);
+
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/health/vaccinations/tetanus",
+				Fields.VALUE, Maps.of("date", "2008-08-04")),
+			ALICE).awaitResult(5000);
+
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/health/vaccinations/tetanus"), ALICE);
+		ACell readResult = readJob.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(readResult, "exists"));
+		assertEquals(Strings.create("2008-08-04"),
+			RT.getIn(RT.getIn(readResult, "value"), "date"));
+	}
+
+	@Test
+	public void testWriteScalarParentGivesShapeConflict() {
+		// A write that navigates INTO a scalar is a shape conflict — it must
+		// throw (naming the scalar node), not silently clobber the value.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/scal", Fields.VALUE, Strings.create("just a value")),
+			ALICE).awaitResult(5000);
+
+		Job writeJob = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/scal/child", Fields.VALUE, Strings.create("x")), ALICE);
+		String msg = messageChain(assertThrows(Exception.class, () -> writeJob.awaitResult(5000)));
+		assertTrue(msg.contains("scalar value at") && msg.contains("w/scal"),
+			"error must name the scalar node, got: " + msg);
+
+		// Regression: the scalar must NOT have been silently clobbered.
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/scal"), ALICE).awaitResult(5000);
+		assertEquals(Strings.create("just a value"), RT.getIn(read, "value"),
+			"the scalar value must survive a rejected child write");
+	}
+
+	@Test
+	public void testAppendIntoScalarParentGivesShapeConflict() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/scal2", Fields.VALUE, CVMLong.create(42)),
+			ALICE).awaitResult(5000);
+
+		Job appendJob = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "w/scal2/items", Fields.VALUE, Strings.create("x")), ALICE);
+		String msg = messageChain(assertThrows(Exception.class, () -> appendJob.awaitResult(5000)));
+		assertTrue(msg.contains("scalar value at") && msg.contains("w/scal2"),
+			"append into a scalar parent must give the scalar shape-conflict, got: " + msg);
+	}
+
+	/** Flattens an exception's cause chain so assertions match wherever the message surfaced. */
+	private static String messageChain(Throwable t) {
+		StringBuilder sb = new StringBuilder();
+		for (Throwable c = t; c != null; c = c.getCause()) {
+			if (c.getMessage() != null) sb.append(c.getMessage()).append('\n');
+		}
+		return sb.toString();
+	}
+
+	@Test
 	public void testListVectorByIndexPath() {
 		// List a map nested inside a vector element
 		engine.jobs().invokeOperation("v/ops/covia/append",
@@ -1360,7 +1732,9 @@ public class CoviaAdapterTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "truncated"));
 		assertNull(RT.getIn(result, "value"), "Truncated response should not include value");
-		assertNotNull(RT.getIn(result, "size"), "Truncated response should include size");
+		assertNotNull(RT.getIn(result, "valueBytes"), "Truncated response should include valueBytes");
+		assertEquals(Strings.create("Map"), RT.getIn(result, "type"),
+			"Truncated response includes type so the caller can list/slice instead of guessing");
 	}
 
 	@Test
@@ -1376,6 +1750,55 @@ public class CoviaAdapterTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
 		assertNull(RT.getIn(result, "truncated"), "Small value should not be truncated");
 		assertEquals(Strings.create("tiny"), RT.getIn(result, "value"));
+	}
+
+	// ========== covia:aggregate ==========
+
+	@Test
+	public void testAggregateCountAndDepth() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/agg", Fields.VALUE, Maps.of(
+				"a", Maps.of("x", CVMLong.ONE, "y", CVMLong.create(2)),
+				"b", Maps.of("z", CVMLong.create(3)))),
+			ALICE).awaitResult(5000);
+
+		ACell d1 = engine.jobs().invokeOperation("v/ops/covia/aggregate",
+			Maps.of(Fields.PATH, "w/agg"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(d1, "exists"));
+		assertEquals(CVMLong.create(2), RT.getIn(d1, "count"), "depth 1 = 2 buckets");
+
+		ACell d2 = engine.jobs().invokeOperation("v/ops/covia/aggregate",
+			Maps.of(Fields.PATH, "w/agg", Strings.intern("depth"), CVMLong.create(2)),
+			ALICE).awaitResult(5000);
+		assertEquals(CVMLong.create(3), RT.getIn(d2, "count"), "depth 2 = 3 leaves");
+	}
+
+	@Test
+	public void testAggregateGroupByField() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/aggG", Fields.VALUE, Maps.of(
+				"o1", Maps.of("source", Strings.create("nhs")),
+				"o2", Maps.of("source", Strings.create("nhs")),
+				"o3", Maps.of("source", Strings.create("gp")))),
+			ALICE).awaitResult(5000);
+
+		ACell r = engine.jobs().invokeOperation("v/ops/covia/aggregate",
+			Maps.of(Fields.PATH, "w/aggG", Strings.intern("groupBy"), Strings.create("source")),
+			ALICE).awaitResult(5000);
+		assertEquals(CVMLong.create(3), RT.getIn(r, "count"));
+		ACell groups = RT.getIn(r, "groups");
+		assertEquals(CVMLong.create(2), RT.getIn(RT.getIn(groups, "nhs"), "count"), "Σ group == count");
+		assertEquals(CVMLong.create(1), RT.getIn(RT.getIn(groups, "gp"), "count"));
+	}
+
+	@Test
+	public void testAggregateScalarIsExistsFalse() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/aggS", Fields.VALUE, Strings.create("scalar")),
+			ALICE).awaitResult(5000);
+		ACell r = engine.jobs().invokeOperation("v/ops/covia/aggregate",
+			Maps.of(Fields.PATH, "w/aggS"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(r, "exists"), "a scalar is not a countable collection");
 	}
 
 	// ========== covia:slice — vectors ==========
@@ -1503,7 +1926,7 @@ public class CoviaAdapterTest {
 			agentCtx);
 		ACell result = writeJob.awaitResult(5000);
 		assertNotNull(result);
-		assertTrue(CVMBool.TRUE.equals(RT.getIn(result, Strings.intern("written"))));
+		assertTrue(result instanceof AMap);  // n/ write returns the contract map
 	}
 
 	@Test
@@ -1559,7 +1982,7 @@ public class CoviaAdapterTest {
 			Maps.of(Strings.create("path"), Strings.create("n/temp")),
 			agentCtx);
 		ACell result = deleteJob.awaitResult(5000);
-		assertTrue(CVMBool.TRUE.equals(RT.getIn(result, Strings.intern("deleted"))));
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "deleted"), "the agent-scope value was removed");
 
 		// Verify deleted
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
@@ -1761,6 +2184,159 @@ public class CoviaAdapterTest {
 		ACell result = readJob.awaitResult(5000);
 		assertTrue(RT.bool(RT.getIn(result, "exists")),
 			"Should find data written to t/ in same job scope");
+	}
+
+	// ========== t/ behaves like w/ — same shape semantics, job lifecycle (#176) ==========
+
+	@Test
+	public void testTempDeepWriteBuildsHierarchy() {
+		RequestContext jobCtx = ALICE.withJobId(newJob());
+
+		// A deep write auto-vivifies intermediate maps and reports pathCreated,
+		// exactly like w/.
+		ACell writeResult = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/analysis/vendor/score", Fields.VALUE, CVMLong.create(7)),
+			jobCtx).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(writeResult, "pathCreated"),
+			"building t/ hierarchy must report pathCreated, like w/");
+
+		assertEquals(CVMLong.create(7), RT.getIn(read(jobCtx, "t/analysis/vendor/score"), "value"));
+		// A sibling under the built parent survives.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/analysis/vendor/rank", Fields.VALUE, CVMLong.create(1)),
+			jobCtx).awaitResult(5000);
+		assertEquals(CVMLong.create(7), RT.getIn(read(jobCtx, "t/analysis/vendor/score"), "value"));
+	}
+
+	@Test
+	public void testScalarClobberProtectionIsUniformAcrossNamespaces() {
+		// The shape-clobber property (#146, #176): writing or appending a key
+		// BENEATH an existing scalar is a shape conflict — it throws (naming the
+		// node) and leaves the scalar intact, never a silent rebuild. Asserted
+		// identically across every user-writable namespace so t/ (job scope),
+		// n/ (agent scope) and w/ can never drift apart. Before #176 the t/
+		// job-scope branch silently clobbered here.
+		assertScalarClobberProtected(ALICE, "w/svc");
+		assertScalarClobberProtected(ALICE.withAgentId(Strings.create("test-agent")), "n/svc");
+		assertScalarClobberProtected(ALICE.withJobId(newJob()), "t/svc");
+	}
+
+	private void assertScalarClobberProtected(RequestContext ctx, String base) {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, base, Fields.VALUE, Strings.create("scalar-val")),
+			ctx).awaitResult(5000);
+
+		Job w = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, base + "/sub", Fields.VALUE, CVMLong.ONE), ctx);
+		covia.exception.JobFailedException we = assertThrows(
+			covia.exception.JobFailedException.class, () -> w.awaitResult(5000));
+		assertTrue(we.getMessage().contains("scalar"),
+			base + ": write-through-scalar must throw a shape conflict, got: " + we.getMessage());
+
+		Job a = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, base + "/sub", Fields.VALUE, CVMLong.ONE), ctx);
+		covia.exception.JobFailedException ae = assertThrows(
+			covia.exception.JobFailedException.class, () -> a.awaitResult(5000));
+		assertTrue(ae.getMessage().contains("scalar"),
+			base + ": append-through-scalar must throw a shape conflict, got: " + ae.getMessage());
+
+		assertEquals(Strings.create("scalar-val"), RT.getIn(read(ctx, base), "value"),
+			base + ": a rejected shape-conflicting write must not mutate the value");
+	}
+
+	@Test
+	public void testDeleteThroughScalarIsLenientNoOp() {
+		// Deletion is deliberately lenient where writing is strict: deleting a
+		// key BENEATH a scalar is a harmless no-op (nothing to remove), not a
+		// shape conflict — a delete cannot lose data the way a clobbering write
+		// can. Guards the asymmetry so a future "make it consistent with write"
+		// change doesn't wrongly make delete throw. Uniform across w/ and t/.
+		RequestContext[] ctxs = { ALICE, ALICE.withJobId(newJob()) };
+		String[] bases = { "w/dl", "t/dl" };
+		for (int i = 0; i < ctxs.length; i++) {
+			RequestContext ctx = ctxs[i];
+			String base = bases[i];
+			engine.jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, base, Fields.VALUE, Strings.create("keep-me")),
+				ctx).awaitResult(5000);
+
+			ACell del = engine.jobs().invokeOperation("v/ops/covia/delete",
+				Maps.of(Fields.PATH, base + "/sub"), ctx).awaitResult(5000);
+			assertEquals(CVMBool.FALSE, RT.getIn(del, "deleted"), base + ": delete-through-scalar is a no-op");
+			assertEquals(Strings.create("keep-me"), RT.getIn(read(ctx, base), "value"),
+				base + ": delete-through-scalar must not disturb the scalar");
+		}
+	}
+
+	@Test
+	public void testTempReplaceScalarThenWriteBeneath() {
+		// The documented remedy works in t/: replace the whole node with a map
+		// (addressing the node itself, not navigating through it), then keyed
+		// writes beneath it succeed.
+		RequestContext jobCtx = ALICE.withJobId(newJob());
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/slot", Fields.VALUE, Strings.create("was scalar")),
+			jobCtx).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/slot", Fields.VALUE, Maps.empty()),
+			jobCtx).awaitResult(5000);
+
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/slot/sub", Fields.VALUE, CVMLong.create(9)),
+			jobCtx).awaitResult(5000);
+		assertEquals(CVMLong.create(9), RT.getIn(read(jobCtx, "t/slot/sub"), "value"),
+			"after replacing the scalar with a map, keyed writes beneath it succeed");
+	}
+
+	@Test
+	public void testTempAppend() {
+		RequestContext jobCtx = ALICE.withJobId(newJob());
+
+		// Append into t/ builds the vector and reports newSize — the job-scope
+		// branch that was previously missing entirely (#176).
+		ACell r1 = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "t/log", Fields.VALUE, Strings.create("a")),
+			jobCtx).awaitResult(5000);
+		assertEquals(CVMLong.create(1), RT.getIn(r1, "newSize"));
+		ACell r2 = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "t/log", Fields.VALUE, Strings.create("b")),
+			jobCtx).awaitResult(5000);
+		assertEquals(CVMLong.create(2), RT.getIn(r2, "newSize"));
+
+		// Element read goes through covia's index-aware readPath (core RT.getIn
+		// does not string-index a vector).
+		assertEquals(Strings.create("a"), RT.getIn(read(jobCtx, "t/log/0"), "value"));
+		assertEquals(Strings.create("b"), RT.getIn(read(jobCtx, "t/log/1"), "value"));
+	}
+
+	@Test
+	public void testTempNestedDeleteLeavesSiblings() {
+		RequestContext jobCtx = ALICE.withJobId(newJob());
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/state/keep", Fields.VALUE, CVMLong.create(1)),
+			jobCtx).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "t/state/drop", Fields.VALUE, CVMLong.create(2)),
+			jobCtx).awaitResult(5000);
+
+		engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "t/state/drop"), jobCtx).awaitResult(5000);
+
+		assertEquals(CVMBool.FALSE, RT.getIn(read(jobCtx, "t/state/drop"), "exists"));
+		assertEquals(CVMLong.create(1), RT.getIn(read(jobCtx, "t/state/keep"), "value"));
+	}
+
+	/** Creates a completed job to scope t/ against. */
+	private Blob newJob() {
+		Job job = engine.jobs().invokeOperation("v/test/ops/echo",
+			Maps.of(Strings.create("message"), Strings.create("scope")), ALICE);
+		job.awaitResult(5000);
+		return job.getID();
+	}
+
+	private ACell read(RequestContext ctx, String path) {
+		return engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, path), ctx).awaitResult(5000);
 	}
 
 	// ========== covia:inspect ==========
@@ -2043,6 +2619,81 @@ public class CoviaAdapterTest {
 		assertNotNull(log, "log should exist after concurrent appends");
 		assertEquals(writers * perWriter, log.count(),
 			"all concurrently appended elements must survive");
+	}
+
+	// ========== #132 — meaningful CRUD return values ==========
+
+	@Test
+	public void testWritePathCreatedOnlyWhenHierarchyBuilt() {
+		// First write into a fresh branch builds w/h132/a → pathCreated.
+		ACell r1 = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/h132/a/b", Fields.VALUE, Strings.create("one")),
+			ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(r1, "pathCreated"),
+			"building a missing parent path must report pathCreated");
+
+		// Sibling write into the now-existing parent builds no hierarchy.
+		ACell r2 = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/h132/a/c", Fields.VALUE, Strings.create("two")),
+			ALICE).awaitResult(5000);
+		assertNull(RT.getIn(r2, "pathCreated"), "write into existing parent: omitted");
+
+		// Overwriting an existing leaf is NOT pathCreated — independent of whether
+		// a value already sat at the position.
+		ACell r3 = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/h132/a/b", Fields.VALUE, Strings.create("again")),
+			ALICE).awaitResult(5000);
+		assertNull(RT.getIn(r3, "pathCreated"), "overwrite is not pathCreated");
+	}
+
+	@Test
+	public void testAppendReportsNewSizeAndHierarchy() {
+		// First append builds w/a132/items → newSize 1 + pathCreated.
+		ACell r1 = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "w/a132/items", Fields.VALUE, Strings.create("x")),
+			ALICE).awaitResult(5000);
+		assertEquals(CVMLong.create(1), RT.getIn(r1, "newSize"));
+		assertEquals(CVMBool.TRUE, RT.getIn(r1, "pathCreated"));
+
+		// Second append into the existing vector: newSize grows, no hierarchy.
+		ACell r2 = engine.jobs().invokeOperation("v/ops/covia/append",
+			Maps.of(Fields.PATH, "w/a132/items", Fields.VALUE, Strings.create("y")),
+			ALICE).awaitResult(5000);
+		assertEquals(CVMLong.create(2), RT.getIn(r2, "newSize"));
+		assertNull(RT.getIn(r2, "pathCreated"));
+	}
+
+	@Test
+	public void testDeleteLeavesParentContainer() {
+		// Delete must remove only the addressed value, never prune the parent.
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/d132/child", Fields.VALUE, Strings.create("v")),
+			ALICE).awaitResult(5000);
+
+		ACell del = engine.jobs().invokeOperation("v/ops/covia/delete",
+			Maps.of(Fields.PATH, "w/d132/child"), ALICE).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(del, "deleted"), "the addressed value was removed");
+
+		assertEquals(CVMBool.FALSE, RT.getIn(engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/d132/child"), ALICE).awaitResult(5000), "exists"));
+		// Parent container survives (now empty), not pruned.
+		assertEquals(CVMBool.TRUE, RT.getIn(engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/d132"), ALICE).awaitResult(5000), "exists"),
+			"deleting a child must not remove the parent hierarchy");
+	}
+
+	@Test
+	public void testReadReportsValueBytes() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/vb132", Fields.VALUE, Strings.create("hello")),
+			ALICE).awaitResult(5000);
+
+		ACell r = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/vb132"), ALICE).awaitResult(5000);
+		CVMLong bytes = RT.getIn(r, "valueBytes");
+		assertNotNull(bytes, "read must report valueBytes");
+		assertTrue(bytes.longValue() > 0, "valueBytes must reflect the stored value");
+		assertNull(RT.getIn(r, "truncated"), "truncated omitted when not truncated");
 	}
 
 }

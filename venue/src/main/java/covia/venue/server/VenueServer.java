@@ -4,8 +4,14 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Consumer;
 
 import org.eclipse.jetty.server.ServerConnector;
+import org.eclipse.jetty.server.HttpConfiguration;
+import org.eclipse.jetty.server.HttpConnectionFactory;
+import org.eclipse.jetty.http.UriCompliance;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,6 +27,8 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.Blob;
 import convex.core.store.AStore;
 import convex.etch.EtchStore;
+import convex.core.data.prim.CVMLong;
+import convex.core.util.Utils;
 import convex.lattice.LatticeContext;
 import convex.node.NodeConfig;
 import convex.node.NodeServer;
@@ -39,9 +47,9 @@ import covia.venue.api.UserAPI;
 import covia.venue.auth.LoginProviders;
 import io.javalin.Javalin;
 import io.javalin.config.JavalinConfig;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.HttpResponseException;
 import io.javalin.http.staticfiles.Location;
-import io.javalin.openapi.plugin.DefinitionConfiguration;
 import io.javalin.openapi.plugin.OpenApiPlugin;
 import io.javalin.openapi.plugin.swagger.SwaggerPlugin;
 
@@ -70,11 +78,27 @@ public class VenueServer {
 	protected CoviaWebApp webApp;
 	protected Engine engine;
 
+	/** Guards {@link #close()} so a double-invocation (explicit close + JVM
+	 *  shutdown, or repeated calls) is a safe no-op. */
+	private final java.util.concurrent.atomic.AtomicBoolean closed =
+			new java.util.concurrent.atomic.AtomicBoolean(false);
+
 	protected CoviaAPI api;
 	protected MCP mcp;
 	protected A2A a2a;
 	protected UserAPI userApi;
 	protected LoginProviders loginProviders;
+
+	/**
+	 * Extra Javalin route registrars contributed by an embedder — e.g. a service
+	 * that embeds this venue and exposes additional endpoints alongside the venue
+	 * API. Invoked from {@link #addAPIRoutes} (after {@link AuthMiddleware} is
+	 * registered and within the {@code /api/*} filters), so routes mounted under
+	 * {@code /api/...} inherit caller-identity extraction and post-request lattice
+	 * sync. Populated only via {@link #launch(AMap, List)}; empty by default, so
+	 * the standalone venue behaves exactly as before.
+	 */
+	protected final List<Consumer<RoutesConfig>> extraRouteRegistrars = new ArrayList<>();
 
 	public VenueServer(AMap<AString,ACell> config) {
 		this.config=new Config(config);
@@ -86,7 +110,8 @@ public class VenueServer {
 			this.store = createStore(this.config);
 			AKeyPair keyPair = resolveKeyPair(this.config);
 			this.nodeServer = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
-			nodeServer.setMergeContext(LatticeContext.create(null, keyPair));
+			nodeServer.setMergeContext(LatticeContext.create(
+				CVMLong.create(Utils.getCurrentTimestamp()), keyPair));
 			nodeServer.launch(); // restore from store BEFORE Engine init
 			// Wire the synchronous persistence handler — used by Engine.flush(),
 			// the periodic flush sweep, and the close-time final flush. See
@@ -213,6 +238,21 @@ public class VenueServer {
 	 * @return Launched Venue Server instance
 	 */
 	public static VenueServer launch(AMap<AString,ACell> config) {
+		return launch(config, null);
+	}
+
+	/**
+	 * Launch a Venue server, optionally with extra Javalin route registrars
+	 * contributed by an embedder. Each registrar is invoked at server-build time
+	 * (Javalin 7 requires routes at create time), after the auth middleware and
+	 * within the {@code /api/*} filters — so routes mounted under {@code /api/...}
+	 * inherit caller-identity extraction and post-request lattice sync.
+	 *
+	 * @param config Config, or null for default test config.
+	 * @param extraRoutes Additional route registrars, or null/empty for none.
+	 * @return Launched Venue Server instance
+	 */
+	public static VenueServer launch(AMap<AString,ACell> config, List<Consumer<RoutesConfig>> extraRoutes) {
 		if (config==null) {
 			config=Maps.of(
 					Fields.NAME,"Test Venue",
@@ -226,16 +266,14 @@ public class VenueServer {
 					)
 			);
 		}
-		
+
 		VenueServer server= new VenueServer(config);
+		if (extraRoutes!=null) server.extraRouteRegistrars.addAll(extraRoutes);
 		server.start();
-		
+
 		Engine.addDemoAssets(server.getEngine());
 		server.getEngine().provisionConfiguredSecrets();
 		server.getEngine().jobs().recoverJobs();
-
-		// Mount DLFS WebDAV if adapter is registered
-		server.mountDLFSWebDAV();
 
 		return server;
 	}
@@ -259,9 +297,6 @@ public class VenueServer {
 		}
 
 		javalin=buildApp();
-		AuthMiddleware.register(javalin, engine.getAccountKey(), engine.getAuth(), engine.getDIDString());
-		addLoginRoutes(javalin);
-		addAPIRoutes(javalin);
 		start(javalin,port);
 		log.info("Venue server started on port: "+javalin.port());
 	}
@@ -289,14 +324,17 @@ public class VenueServer {
 
 	
 	/**
-	 * Mounts DLFS WebDAV routes if the DLFS adapter is registered.
-	 * Creates a DLFSDriveManager that delegates to the adapter's
+	 * Mounts DLFS WebDAV routes when WebDAV is enabled in config.
+	 * Creates a DLFSDriveManager that delegates to the DLFS adapter's
 	 * lattice-backed drives.
+	 *
+	 * <p>Routes are registered at server-create time (Javalin 7 requires this),
+	 * but the {@code dlfs} adapter is registered later by {@code addDemoAssets}.
+	 * The manager therefore resolves the adapter <em>lazily per request</em>; a
+	 * request that arrives before the adapter exists simply yields no drive.</p>
 	 */
-	private void mountDLFSWebDAV() {
-		if (!engine.hasAdapter("dlfs")) return;
+	private void mountDLFSWebDAV(RoutesConfig routes) {
 		if (!config.isWebDAVEnabled()) return;
-		DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
 
 		// Wrap the adapter's lattice drives as a DLFSDriveManager for WebDAV.
 		// Unauthenticated requests use the venue's public DID (must match
@@ -309,33 +347,63 @@ public class VenueServer {
 
 			@Override
 			public java.nio.file.FileSystem getDrive(String identity, String driveName) {
+				DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
+				if (dlfs == null) return null; // adapter not registered (yet)
 				try {
 					return dlfs.getDriveForIdentity(resolveIdentity(identity), driveName);
 				} catch (Exception e) {
-					log.debug("WebDAV drive access failed for {}: {}", driveName, e.getMessage());
+					// A real DLFS failure is not the same as "no such drive" — the
+					// WebDAV FileSystem contract forces a null return either way,
+					// but log at warn so the operator can tell them apart (#174).
+					// Surfacing a 5xx to the WebDAV client needs convex-dlfs support.
+					log.warn("WebDAV drive access failed for {}: {}", driveName, e.toString());
 					return null;
 				}
 			}
 
 			@Override
 			public boolean createDrive(String identity, String driveName) {
-				getDrive(identity, driveName); // auto-creates via DLFS.connect
-				return true;
+				return getDrive(identity, driveName) != null; // auto-creates via DLFS.connect
 			}
 		};
 
 		DLFSWebDAV webdav = new DLFSWebDAV(webdavManager);
-		webdav.addRoutes(javalin);
+		webdav.addRoutes(routes);
 
 		log.info("DLFS WebDAV mounted at /dlfs/");
 	}
 
-	private void addAPIRoutes(Javalin javalin) {
-		api.addRoutes(javalin);
-		userApi.addRoutes(javalin);
-		webApp.addRoutes(javalin);
-		if (mcp!=null) mcp.addRoutes(javalin);
-		if (a2a!=null) a2a.addRoutes(javalin);
+	private void addAPIRoutes(RoutesConfig routes) {
+		api.addRoutes(routes);
+		userApi.addRoutes(routes);
+		webApp.addRoutes(routes);
+		if (mcp!=null) mcp.addRoutes(routes);
+		if (a2a!=null) {
+			a2a.addRoutes(routes);
+		} else {
+			// A2A is opt-in (it needs an `a2a` config block). When it's absent,
+			// answer the two well-known A2A routes with a helpful hint instead of
+			// the generic catch-all 404, so a developer knows the fix is a config
+			// addition, not a wrong URL (#179).
+			routes.get("/.well-known/agent-card.json", VenueServer::a2aNotConfigured);
+			routes.post("/a2a", VenueServer::a2aNotConfigured);
+		}
+		// Embedder-contributed routes (see extraRouteRegistrars). Registered last,
+		// after the auth middleware, so /api/... routes inherit caller identity + sync.
+		for (Consumer<RoutesConfig> r : extraRouteRegistrars) r.accept(routes);
+	}
+
+	/**
+	 * Fallback handler for the well-known A2A routes when no {@code a2a} config
+	 * block is present. Returns a 501 with a hint pointing at the missing config,
+	 * so the endpoints are self-describing rather than an indistinguishable 404 (#179).
+	 */
+	private static void a2aNotConfigured(io.javalin.http.Context ctx) {
+		ctx.status(501);
+		ctx.header("Content-Type", "application/json");
+		ctx.result("{\"error\":\"A2A is not configured on this venue\","
+				+ "\"hint\":\"Add an \\\"a2a\\\" block with \\\"defaultChatOp\\\" to the venue config "
+				+ "to enable the A2A protocol endpoints (POST /a2a and GET /.well-known/agent-card.json).\"}");
 	}
 	
 
@@ -348,12 +416,37 @@ public class VenueServer {
 	
 	protected void setupJettyServer(org.eclipse.jetty.server.Server jettyServer, Integer port) {
 		if (port==null) port=8080;
-		ServerConnector connector = new ServerConnector(jettyServer);
+		// Allow encoded path separators (%2F) in URIs. Catalog operation names
+		// contain slashes (e.g. "v/ops/jvm/string-concat") and are percent-encoded
+		// into a single path segment by VenueHTTP.getOperationId — the GET
+		// /api/v1/operations/{name} contract. Jetty 12's default UriCompliance
+		// rejects %2F as an "ambiguous path separator" (400); Jetty 11 and
+		// Javalin's own connector permit it. Since we build the connector
+		// ourselves (below), we must opt back in here or named catalog lookups
+		// — and cross-venue named references — break.
+		HttpConfiguration httpConfig = new HttpConfiguration();
+		httpConfig.setUriCompliance(UriCompliance.from(
+			"DEFAULT,AMBIGUOUS_PATH_SEPARATOR,AMBIGUOUS_PATH_ENCODING"));
+
+		// Size the connector's acceptor/selector threads explicitly. Jetty defaults
+		// selectors to cores/2, which is wrong here: handlers run on virtual threads
+		// (useVirtualThreads=true), so the selectors only pump non-blocking I/O. The
+		// default exploded the platform-thread count when many venues share a JVM
+		// (N×cores/2 selectors), starving the connectors. See Config.DEFAULT_HTTP_SELECTORS.
+		ServerConnector connector = new ServerConnector(jettyServer,
+			config.getHttpAcceptors(), config.getHttpSelectors(),
+			new HttpConnectionFactory(httpConfig));
 		connector.setPort(port);
+		// Restrict the listening interface when a bind address is configured.
+		// When unset, Jetty binds the wildcard address (0.0.0.0 / all
+		// interfaces) — the historical default.
+		String bindAddress = config.getBindAddress();
+		if (bindAddress != null) connector.setHost(bindAddress);
 		// Deeper accept queue than the JDK/Jetty default (50) so bursts of
 		// concurrent connections queue rather than being refused under load.
 		connector.setAcceptQueueSize(config.getAcceptQueueSize());
 		jettyServer.addConnector(connector);
+		log.info("Venue HTTP connector bound to {}:{}", (bindAddress != null) ? bindAddress : "0.0.0.0", port);
 	}
 
 	private Javalin buildApp() {
@@ -376,15 +469,13 @@ public class VenueServer {
 				staticFiles.hostedPath = "/";
 				staticFiles.location = Location.CLASSPATH; // Specify resources from classpath
 				staticFiles.directory = "/covia/pub"; // Resource location in classpath
-				staticFiles.precompress = false; // if the files should be pre-compressed and cached in memory
-													// (optimization)
 				staticFiles.aliasCheck = null; // you can configure this to enable symlinks (=
 												// ContextHandler.ApproveAliases())
 				staticFiles.skipFileFunction = req -> false; // you can use this to skip certain files in the dir, based
 																// on the HttpServletRequest
 			});
 			
-			config.useVirtualThreads=true;
+			config.concurrency.useVirtualThreads=true;
 
 			// Raise HTTP body size limit (default 1 MB is too low for vault uploads).
 			config.http.maxRequestSize = 10_000_000L;
@@ -399,34 +490,54 @@ public class VenueServer {
 			// We can't simply setSessionHandler(null) — Jetty NPEs. Instead
 			// we install a custom SessionIdManager whose HouseKeeper has
 			// interval=0, which disables scheduling so no thread is created.
+			// Jetty 12 dropped Server.setSessionIdManager: register it as a
+			// server bean instead — the SessionHandler resolves its manager
+			// from the server beans at startup, so ours (no scavenge thread)
+			// wins over the lazily-created default.
 			config.jetty.modifyServer(server -> {
 				try {
-					org.eclipse.jetty.server.session.DefaultSessionIdManager idMgr =
-						new org.eclipse.jetty.server.session.DefaultSessionIdManager(server);
-					org.eclipse.jetty.server.session.HouseKeeper hk =
-						new org.eclipse.jetty.server.session.HouseKeeper();
+					org.eclipse.jetty.session.DefaultSessionIdManager idMgr =
+						new org.eclipse.jetty.session.DefaultSessionIdManager(server);
+					org.eclipse.jetty.session.HouseKeeper hk =
+						new org.eclipse.jetty.session.HouseKeeper();
 					hk.setIntervalSec(0); // disabled — no scavenge thread
 					idMgr.setSessionHouseKeeper(hk);
-					server.setSessionIdManager(idMgr);
+					server.addBean(idMgr);
 				} catch (Exception e) {
 					log.warn("Failed to disable Jetty session housekeeper", e);
 				}
 			});
+
+			// Javalin 7: every handler (routes, before/after filters, exception
+			// mappers) must be registered via config.routes at create time —
+			// the Javalin instance no longer exposes per-verb registration.
+			addHandlers(config.routes);
 		});
-		
-		
-		app.exception(HttpResponseException.class, (e, ctx) -> {
+
+		return app;
+	}
+
+	/**
+	 * Registers all HTTP handlers on the routes configuration: exception
+	 * mappers, CORS preflight/after filters, the lattice-sync after filters,
+	 * auth middleware, and the login / API / WebDAV routes.
+	 */
+	private void addHandlers(RoutesConfig routes) {
+		final String corsOrigins = this.config.getCorsOrigins();
+		final boolean allowPrivateNetwork = this.config.isAllowPrivateNetwork();
+
+		routes.exception(HttpResponseException.class, (e, ctx) -> {
 			VenueServer.this.api.buildError(ctx,e.getStatus(),e.getMessage());
 		});
 
-		app.exception(Exception.class, (e, ctx) -> {
+		routes.exception(Exception.class, (e, ctx) -> {
 			log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
 			String message = "Unexpected error: " + e;
 			ctx.result(message);
 			ctx.status(500);
 		});
-		
-		app.options("/api/*", ctx-> {
+
+		routes.options("/api/*", ctx-> {
 			ctx.status(204);
 			ctx.removeHeader("Content-type");
 			ctx.header("access-control-allow-headers", "content-type, authorization, x-covia-user");
@@ -435,13 +546,18 @@ public class VenueServer {
 			ctx.header("vary","Origin, Access-Control-Request-Headers");
 		});
 
-		// Use app.after (not afterMatched) so headers are added to ALL responses,
+		// Use after (not afterMatched) so headers are added to ALL responses,
 		// including CORS preflights handled by the Javalin CORS plugin
-		app.after(ctx->{
+		routes.after(ctx->{
 			ctx.header("access-control-allow-origin", corsOrigins);
-			// Allow Private Network Access (PNA) so public origins like preview.covia.ai
-			// can reach a locally-running venue on localhost
-			ctx.header("access-control-allow-private-network", "true");
+			// Private Network Access lets a public web origin reach a venue on a
+			// private/loopback address from the browser. Off by default — it
+			// undermines corsOrigins scoping (a malicious page could read a
+			// localhost venue). Opt in via allowPrivateNetwork for the
+			// preview-origin dev workflow that needs it.
+			if (allowPrivateNetwork) {
+				ctx.header("access-control-allow-private-network", "true");
+			}
 		});
 
 		// Sync lattice state after every mutation-capable request so writes
@@ -449,17 +565,21 @@ public class VenueServer {
 		// (/mcp), and A2A endpoints. Without this, MCP-driven writes
 		// (agent_create, covia_write, asset_store, etc.) live only in
 		// memory and are lost on shutdown — silently.
-		app.after("/api/*", ctx -> engine.syncState());
-		app.after("/mcp",   ctx -> engine.syncState());
-		app.after("/mcp/*", ctx -> engine.syncState());
-		app.after("/a2a",   ctx -> engine.syncState());
-		app.after("/a2a/*", ctx -> engine.syncState());
+		routes.after("/api/*", ctx -> engine.syncState());
+		routes.after("/mcp",   ctx -> engine.syncState());
+		routes.after("/mcp/*", ctx -> engine.syncState());
+		routes.after("/a2a",   ctx -> engine.syncState());
+		routes.after("/a2a/*", ctx -> engine.syncState());
 
+		// Auth middleware: before-handlers extracting caller identity.
+		AuthMiddleware.register(routes, engine.getAccountKey(), engine.getAuth(), engine.getDIDString());
 
-		return app;
+		addLoginRoutes(routes);
+		addAPIRoutes(routes);
+		mountDLFSWebDAV(routes);
 	}
-	
-	private void addLoginRoutes(Javalin app) {
+
+	private void addLoginRoutes(RoutesConfig app) {
 		if (!loginProviders.hasProviders()) return;
 
         // Login route for any provider
@@ -475,29 +595,22 @@ public class VenueServer {
 	}
 
 	protected void addOpenApiPlugins(JavalinConfig config) {
-		//String docsPath="/openapi-plugin/openapi-covia-v1.json";
-		
-		config.registerPlugin(new SwaggerPlugin(swaggerConfiguration->{
-			swaggerConfiguration.setDocumentationPath("/openapi");
-			//swaggerConfiguration.setDocumentationPath(docsPath);
-		}));
+		String docsPath = "/openapi";
 
 		config.registerPlugin(new OpenApiPlugin(pluginConfig -> {
-            pluginConfig
-            //.withDocumentationPath(docsPath)
-            .withDefinitionConfiguration((version, definition) -> {
-            	DefinitionConfiguration def=definition;
-                def=def.withInfo(
-                		info -> {
-							info.setTitle("Covia API");
-							info.setVersion("0.1.0");
-		                });
-            });
+			pluginConfig
+			.withDocumentationPath(docsPath)
+			.withDefinitionConfiguration((version, definition) -> {
+				definition.info(info -> {
+					info.title("Covia API");
+					info.version("0.1.0");
+				});
+			});
 		}));
 
-		//for (JsonSchemaResource generatedJsonSchema : new JsonSchemaLoader().loadGeneratedSchemes()) {
-	    //    System.out.println(generatedJsonSchema.getName());
-	    //}
+		config.registerPlugin(new SwaggerPlugin(swaggerConfiguration->{
+			swaggerConfiguration.documentationPath = docsPath;
+		}));
 	}
 
 	/**
@@ -510,6 +623,7 @@ public class VenueServer {
 	 * {@code venue/docs/PERSISTENCE.md} §5.3.</p>
 	 */
 	public void close() {
+		if (!closed.compareAndSet(false, true)) return; // idempotent — already closed
 		if (javalin!=null) {
 			javalin.stop();
 			javalin=null;

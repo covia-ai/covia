@@ -21,7 +21,10 @@
 		"output": {
 			"type": "object",
 			"properties": {
-				"appended": { "type": "boolean", "description": "True if the element was appended successfully" }
+				"existed": { "type": "boolean", "description": "Whether the collection was already present before this append: false = a new single-element vector was created, true = an existing vector was extended." },
+				"index": { "type": "integer", "description": "The position the appended element landed at (newSize - 1)." },
+				"newSize": { "type": "integer", "description": "The element count of the vector after the append." },
+				"pathCreated": { "type": "boolean", "description": "Present and true only if the append had to build a missing parent path (intermediate hierarchy). Omitted otherwise." }
 			}
 		}
 	}

@@ -67,7 +67,7 @@ public class VaultAdapter extends AAdapter {
 		}
 
 		// Inject drive name into input
-		AMap<AString, ACell> inputMap = RT.ensureMap(input);
+		AMap<AString, ACell> inputMap = RT.castMap(input);
 		if (inputMap == null) inputMap = Maps.empty();
 		inputMap = inputMap.assoc(FIELD_DRIVE, DRIVE_NAME);
 

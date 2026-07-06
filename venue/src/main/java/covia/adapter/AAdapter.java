@@ -69,11 +69,17 @@ public abstract class AAdapter {
 		try {
 			return installAsset(convex.core.util.Utils.readResourceAsAString(resourcePath));
 		} catch (Exception e) {
-			// Log warning but don't fail installation
-			log.warn("Failed to install asset from " + resourcePath ,e);
+			// A missing or unreadable adapter resource is a packaging bug — the
+			// venue would boot with silently missing ops. Fail loudly by default,
+			// matching the Engine.materialiseVOps policy; strictAssets=false
+			// downgrades to a warning for test/debug scaffolding only.
+			if (engine == null || engine.config().isStrictAssets()) {
+				throw new IllegalStateException(
+					"Failed to install adapter asset from " + resourcePath, e);
+			}
+			log.warn("Failed to install asset from {} (tolerated: strictAssets=false)", resourcePath, e);
 			return null;
 		}
-
 	}
 
 	/**
@@ -242,6 +248,45 @@ public abstract class AAdapter {
     }
 
     /**
+     * Builds the absolute, scheme-qualified capability resource for a
+     * root/drive-addressed adapter op: {@code "<scheme>://<authority>/<path>"}.
+     * A null authority yields the bare {@code "<scheme>://"} namespace resource;
+     * the path's leading slash is stripped so grants compose by prefix
+     * ({@code "file://scratch/"} covers {@code "file://scratch/notes.txt"}).
+     *
+     * <p>The single source for the {@code file://} and {@code dlfs://} capability
+     * resource: the boundary's name-keyed {@code extractResource} has been
+     * retired, so each adapter builds its own resource here at its enforcement
+     * point.</p>
+     */
+    protected static String schemeResource(String scheme, AString authority, AString path) {
+        if (authority == null) return scheme + "://";
+        String p = (path == null) ? "" : path.toString();
+        if (p.startsWith("/")) p = p.substring(1);
+        return scheme + "://" + authority + "/" + p;
+    }
+
+    /** The baseline op-invocation ability — "the right to run an operation".
+     *  Required by adapters that do not act on a specific named lattice resource
+     *  (compute, LLM, external I/O, federation, scheduling, …). */
+    protected static final AString INVOKE = Strings.intern("invoke");
+
+    /**
+     * Asserts the baseline {@link #INVOKE} capability at the adapter's enforcement
+     * point. An invoke-class adapter calls this at the top of its dispatch — before
+     * any side effect — so the capability ceiling is checked where the op actually
+     * runs, with no central name-keyed mapping. A {@code null} ceiling
+     * (authenticated/internal) is unrestricted (no-op); a restricted ceiling
+     * (e.g. the public read-only profile, which withholds {@code invoke}) denies.
+     */
+    protected static void requireInvoke(RequestContext ctx) {
+        // The framework always supplies a context (at minimum ANONYMOUS); a null
+        // ctx only occurs in direct unit-test calls that bypass dispatch — treat
+        // as no enforcement context.
+        if (ctx != null) ctx.requireCapability((AString) null, INVOKE);
+    }
+
+    /**
      * Extracts the full {@code adapter:operation} string from operation metadata.
      * E.g. for metadata with {@code operation.adapter = "test:echo"}, returns {@code "test:echo"}.
      *
@@ -310,6 +355,9 @@ public abstract class AAdapter {
         // Default one-shot: wire future to job lifecycle
         job.setStatus(Status.STARTED);
         invokeFuture(ctx, meta, input).thenAccept(result -> {
+            // Operator-gated output-schema validation (default off; throws in
+            // strict mode → handled below as a job failure).
+            if (engine != null) engine.jobs().validateOutput(meta, result);
             job.completeWith(result);
         })
         .exceptionally(e -> {

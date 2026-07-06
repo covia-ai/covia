@@ -3,6 +3,7 @@ package covia.venue;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
@@ -56,8 +57,22 @@ public class Config {
 	/** Key for venue hostname */
 	public static final AString HOSTNAME = Strings.intern("hostname");
 
+	/** Key for the venue default LLM provider operation used for new agents. */
+	public static final AString DEFAULT_LLM_OPERATION = Strings.intern("defaultLlmOperation");
+
+	/** Key for the venue default agent transition operation used for new agents. */
+	public static final AString DEFAULT_TRANSITION_OP = Strings.intern("defaultTransitionOp");
+
 	/** Key for venue port */
 	public static final AString PORT = Strings.intern("port");
+
+	/**
+	 * Key for the HTTP connector's bind address (network interface to listen
+	 * on). Distinct from {@link #HOSTNAME}, which is the venue's advertised
+	 * public host. When unset the connector binds all interfaces (0.0.0.0);
+	 * set to {@code "127.0.0.1"} to restrict to loopback.
+	 */
+	public static final AString BIND_ADDRESS = Strings.intern("bindAddress");
 
 	/** Key for the HTTP connector's accept-queue (backlog) size */
 	public static final AString ACCEPT_QUEUE_SIZE = Strings.intern("acceptQueueSize");
@@ -69,6 +84,30 @@ public class Config {
 	 * instead of queuing them. 1024 absorbs the bursts.
 	 */
 	public static final int DEFAULT_ACCEPT_QUEUE_SIZE = 1024;
+
+	/** Key for the HTTP connector's NIO selector-thread count */
+	public static final AString HTTP_SELECTORS = Strings.intern("httpSelectors");
+
+	/** Key for the HTTP connector's acceptor-thread count */
+	public static final AString HTTP_ACCEPTORS = Strings.intern("httpAcceptors");
+
+	/**
+	 * Default NIO selector threads per connector. Jetty's own default is
+	 * {@code cores/2} — appropriate for a dedicated server that handles requests
+	 * on its connector thread pool, but wrong for Covia: request handlers run on
+	 * virtual threads ({@code useVirtualThreads=true}), so the selectors only pump
+	 * non-blocking I/O and a couple suffice. The default mattered most when many
+	 * venues run in one JVM (tests): {@code cores/2} each meant N×(cores/2) selector
+	 * platform threads — e.g. 16 venues × 16 on a 32-core box = 256 threads fighting
+	 * for 32 cores, starving the connectors. A small fixed count keeps the thread
+	 * footprint flat in venue count. Operators with a single high-traffic venue can
+	 * raise it.
+	 */
+	public static final int DEFAULT_HTTP_SELECTORS = 2;
+
+	/** Default acceptor threads per connector — one is plenty with a deep accept
+	 *  queue ({@link #DEFAULT_ACCEPT_QUEUE_SIZE}). */
+	public static final int DEFAULT_HTTP_ACCEPTORS = 1;
 
 	/** Key for MCP configuration */
 	public static final AString MCP = Strings.intern("mcp");
@@ -121,6 +160,21 @@ public class Config {
 	/** Key for public (anonymous) access configuration */
 	public static final AString PUBLIC = Strings.intern("public");
 
+	/** Key for the public caller's capability ceiling, under {@code auth.public}.
+	 *  Absent → secure default (read-only); {@code "unrestricted"} → no ceiling
+	 *  (legacy permissive behaviour); an explicit cap array → that ceiling. */
+	public static final AString CAPS = Strings.intern("caps");
+
+	/** Key for the JWT audience policy, under {@code auth}: {@code "verify"}
+	 *  (default — check aud if present) or {@code "require"} (aud must be present
+	 *  and match). A mismatched aud is always rejected under both. */
+	public static final AString AUDIENCE = Strings.intern("audience");
+
+	/** Key for additional accepted JWT audiences, under {@code auth}: an array of
+	 *  strings (e.g. a {@code did:key} form alongside the canonical DID). The
+	 *  venue's own DID(s) are always accepted; this extends the allowlist. */
+	public static final AString ACCEPTED_AUDIENCES = Strings.intern("acceptedAudiences");
+
 	// ========== OAuth config keys (nested under auth) ==========
 
 	/** Key for OAuth providers configuration section */
@@ -156,6 +210,9 @@ public class Config {
 	/** Key for CORS allowed origins (default: "*" = all) */
 	public static final AString CORS_ORIGINS = Strings.intern("corsOrigins");
 
+	/** Key for the Private Network Access opt-in (default: false). */
+	public static final AString ALLOW_PRIVATE_NETWORK = Strings.intern("allowPrivateNetwork");
+
 	// ========== MCP config keys ==========
 
 	/** Key for MCP enabled flag */
@@ -170,6 +227,9 @@ public class Config {
 	 * dispatch. Set to false to disable the workaround.
 	 */
 	public static final AString FIX_MCP_STRINGS = Strings.intern("fixMcpStrings");
+
+	/** Key for the operator's output-schema validation mode (off/warn/strict). */
+	public static final AString OUTPUT_VALIDATION = Strings.intern("outputValidation");
 
 	/**
 	 * Key for the per-venue secrets bootstrap map.
@@ -232,6 +292,23 @@ public class Config {
 		return RT.ensureString(config.get(DID));
 	}
 
+	/** Config key: whether broken adapter asset resources fail startup (default true). */
+	public static final AString STRICT_ASSETS = Strings.intern("strictAssets");
+
+	/**
+	 * Whether a broken or missing adapter asset resource fails venue startup.
+	 * Default true — a venue booting with silently missing ops is broken
+	 * (same policy as {@code Engine.materialiseVOps}). Set
+	 * {@code "strictAssets": false} to downgrade to warnings — intended for
+	 * test/debug scaffolding only, never production.
+	 *
+	 * @return true if asset installation failures are fatal
+	 */
+	public boolean isStrictAssets() {
+		ACell v = config.get(STRICT_ASSETS);
+		return (v == null) || RT.bool(v);
+	}
+
 	/**
 	 * Get the configured hostname.
 	 * @return Hostname string, defaults to "localhost"
@@ -239,6 +316,76 @@ public class Config {
 	public String getHostname() {
 		AString hostname = RT.ensureString(config.get(HOSTNAME));
 		return (hostname != null) ? hostname.toString() : "localhost";
+	}
+
+	/**
+	 * The venue's did:web alias, derived from the configured {@code hostname}:
+	 * {@code did:web:<hostname>} when the hostname is a genuine public domain,
+	 * null otherwise (default/localhost, IP literals, host:port forms).
+	 *
+	 * <p>The alias is <b>discovery only</b> (covia#167): it makes the document
+	 * at {@code /.well-known/did.json} strictly did:web-resolvable. The venue's
+	 * canonical identity remains its did:key — nothing durable (lattice keys,
+	 * UCAN issuer, signatures, asset DID URLs) ever references the did:web
+	 * form, so a domain change or lapse cannot break stored state.</p>
+	 *
+	 * @return {@code did:web:<hostname>}, or null if the hostname is not public
+	 */
+	public AString getWebDID() {
+		String host = getHostname();
+		if (!isPublicHostname(host)) return null;
+		return Strings.create("did:web:" + host);
+	}
+
+	/**
+	 * True iff {@code host} is a plausible public DNS name: contains a dot,
+	 * no port/IPv6 colon, not "localhost", and not an IPv4 literal.
+	 */
+	static boolean isPublicHostname(String host) {
+		if (host == null || host.isEmpty()) return false;
+		if (host.indexOf(':') >= 0) return false;        // port or IPv6 literal
+		if (host.indexOf('.') < 0) return false;          // bare names (localhost, myhost)
+		if (host.matches("[0-9.]+")) return false;        // IPv4 literal
+		return true;
+	}
+
+	/**
+	 * Venue default LLM provider operation for new agents that declare a
+	 * systemPrompt but no explicit llmOperation. Operator-configurable so a
+	 * venue can default to a different provider (e.g. Anthropic) without code
+	 * changes. Per-provider default <em>models</em> remain in the provider
+	 * adapter — a single venue model default cannot be right across providers.
+	 * @return configured op, or {@code "v/ops/langchain/openai"} if unset
+	 */
+	public AString getDefaultLlmOperation() {
+		AString v = RT.ensureString(config.get(DEFAULT_LLM_OPERATION));
+		return (v != null) ? v : Strings.intern("v/ops/langchain/openai");
+	}
+
+	/**
+	 * Venue default agent transition operation for new agents that don't
+	 * declare one.
+	 * @return configured op, or {@code "v/ops/llmagent/chat"} if unset
+	 */
+	public AString getDefaultTransitionOp() {
+		AString v = RT.ensureString(config.get(DEFAULT_TRANSITION_OP));
+		return (v != null) ? v : Strings.intern("v/ops/llmagent/chat");
+	}
+
+	/**
+	 * Get the configured bind address (network interface the HTTP connector
+	 * listens on).
+	 *
+	 * <p>Unlike {@link #getHostname()} this is a socket bind address, not the
+	 * advertised public host. When unset, returns {@code null} and the
+	 * connector binds all interfaces (0.0.0.0) — preserving the historical
+	 * default. Set to {@code "127.0.0.1"} to restrict the venue to loopback.</p>
+	 *
+	 * @return bind address string, or {@code null} to bind all interfaces
+	 */
+	public String getBindAddress() {
+		AString bindAddress = RT.ensureString(config.get(BIND_ADDRESS));
+		return (bindAddress != null) ? bindAddress.toString() : null;
 	}
 
 	/**
@@ -257,6 +404,24 @@ public class Config {
 	public int getAcceptQueueSize() {
 		CVMLong v = RT.ensureLong(config.get(ACCEPT_QUEUE_SIZE));
 		return (v != null) ? (int) v.longValue() : DEFAULT_ACCEPT_QUEUE_SIZE;
+	}
+
+	/**
+	 * Get the HTTP connector's NIO selector-thread count.
+	 * @return configured value, or {@link #DEFAULT_HTTP_SELECTORS}
+	 */
+	public int getHttpSelectors() {
+		CVMLong v = RT.ensureLong(config.get(HTTP_SELECTORS));
+		return (v != null) ? (int) v.longValue() : DEFAULT_HTTP_SELECTORS;
+	}
+
+	/**
+	 * Get the HTTP connector's acceptor-thread count.
+	 * @return configured value, or {@link #DEFAULT_HTTP_ACCEPTORS}
+	 */
+	public int getHttpAcceptors() {
+		CVMLong v = RT.ensureLong(config.get(HTTP_ACCEPTORS));
+		return (v != null) ? (int) v.longValue() : DEFAULT_HTTP_ACCEPTORS;
 	}
 
 	/**
@@ -442,6 +607,23 @@ public class Config {
 	}
 
 	/**
+	 * The raw {@code auth.public.caps} value, used to derive the capability
+	 * ceiling applied to unauthenticated (public) callers. Returns {@code null}
+	 * when unconfigured (the caller then applies the secure read-only default),
+	 * the literal string {@code "unrestricted"} to opt out of any ceiling, or an
+	 * explicit capability vector to use as the ceiling.
+	 *
+	 * @return the configured value, or null if {@code auth.public.caps} is absent
+	 */
+	public ACell getPublicCapsConfig() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		if (authConfig == null) return null;
+		AMap<AString, ACell> publicConfig = RT.ensureMap(authConfig.get(PUBLIC));
+		if (publicConfig == null) return null;
+		return publicConfig.get(CAPS);
+	}
+
+	/**
 	 * Whether public (anonymous) access is enabled.
 	 * Reads auth.public.enabled, defaults to true.
 	 * @return true if public access is enabled
@@ -456,6 +638,32 @@ public class Config {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * JWT audience policy from {@code auth.audience}: {@code "require"} (aud must
+	 * be present and match this venue) or {@code "verify"} (the default — if aud
+	 * is present it must match; if absent, accept). A mismatched aud is always
+	 * rejected; there is no "off".
+	 * @return {@code "require"} or {@code "verify"} (default)
+	 */
+	public String getAudiencePolicy() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		if (authConfig != null) {
+			AString v = RT.ensureString(authConfig.get(AUDIENCE));
+			if (v != null && "require".equals(v.toString())) return "require";
+		}
+		return "verify";
+	}
+
+	/**
+	 * Additional accepted JWT audiences from {@code auth.acceptedAudiences} — an
+	 * array of strings extending the allowlist beyond the venue's own DID(s).
+	 * @return the configured array, or null if unset
+	 */
+	public AVector<ACell> getAcceptedAudiences() {
+		AMap<AString, ACell> authConfig = getAuthConfig();
+		return (authConfig != null) ? RT.ensureVector(authConfig.get(ACCEPTED_AUDIENCES)) : null;
 	}
 
 	// ========== Protocol config accessors ==========
@@ -502,6 +710,20 @@ public class Config {
 		return (v == null) || RT.bool(v);
 	}
 
+	/**
+	 * Output-schema validation mode applied when a one-shot job completes:
+	 * {@code "off"} (default — no validation, no logging), {@code "warn"} (log a
+	 * warning if the result does not match the operation's output schema), or
+	 * {@code "strict"} (fail the job). This is an operator decision (venue
+	 * config), distinct from the per-operation {@code strict} flag that governs
+	 * input validation — and off by default, so nothing is validated or logged
+	 * unless an operator opts in.
+	 */
+	public String getOutputValidation() {
+		AString v = RT.ensureString(config.get(OUTPUT_VALIDATION));
+		return (v != null) ? v.toString() : "off";
+	}
+
 	// ========== Server config accessors ==========
 
 	/**
@@ -511,6 +733,17 @@ public class Config {
 	public String getCorsOrigins() {
 		AString origins = RT.ensureString(config.get(CORS_ORIGINS));
 		return (origins != null) ? origins.toString() : "*";
+	}
+
+	/**
+	 * Whether to emit the {@code access-control-allow-private-network} response
+	 * header, which lets a public web origin reach a venue on a private/loopback
+	 * address from the browser. Off by default — it undermines {@code corsOrigins}
+	 * scoping; enable it only for the preview-origin dev workflow that needs it.
+	 */
+	public boolean isAllowPrivateNetwork() {
+		ACell v = config.get(ALLOW_PRIVATE_NETWORK);
+		return (v != null) && RT.bool(v);
 	}
 
 	// ========== Static compatibility ==========

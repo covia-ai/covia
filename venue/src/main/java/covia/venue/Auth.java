@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -13,6 +14,7 @@ import convex.core.util.Utils;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.api.Fields;
+import covia.lattice.CapabilityChecker;
 import covia.venue.auth.LoginProviders;
 
 /**
@@ -26,8 +28,19 @@ import covia.venue.auth.LoginProviders;
  * <h2>Config format</h2>
  * <pre>
  * "auth": {
- *   "public": { "enabled": true },   // allow anonymous access (default: true)
+ *   "public": {
+ *     "enabled": true,                // allow anonymous access (default: true)
+ *     "caps": "unrestricted"          // public ceiling: absent = read-only default
+ *   },                                //   (reads only); "unrestricted" = no ceiling;
+ *                                     //   or an explicit capability array
  *   "tokenExpiry": 86400,             // JWT expiry in seconds (default 24h)
+ *   "audience": "verify",             // JWT aud policy: "verify" (default — if
+ *                                     //   aud present it must match) or "require"
+ *                                     //   (aud must be present AND match). A
+ *                                     //   present-but-wrong aud is always 401.
+ *   "acceptedAudiences": ["did:..."], // extra accepted aud values beyond the
+ *                                     //   venue's own DID (e.g. a did:key form
+ *                                     //   for a did:web venue)
  *   "oauth": {
  *     "google": { "clientId": "...", "clientSecret": "..." },
  *     "microsoft": { "clientId": "...", "clientSecret": "..." },
@@ -51,6 +64,10 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	private final LoginProviders loginProviders;
 	private final long tokenExpiry;
 	private final boolean publicAccessEnabled;
+	private final ACell publicCapsConfig;
+	private final String audiencePolicy;
+	private final java.util.Set<String> configuredAudiences;
+	private final AString webDID;
 
 	/**
 	 * Create Auth from an Engine and its venue state.
@@ -67,6 +84,18 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 		Config config = engine.config();
 		this.tokenExpiry = config.getTokenExpiry();
 		this.publicAccessEnabled = config.isPublicAccess();
+		this.publicCapsConfig = config.getPublicCapsConfig();
+		this.audiencePolicy = config.getAudiencePolicy();
+		java.util.Set<String> aud = new java.util.HashSet<>();
+		AVector<ACell> acc = config.getAcceptedAudiences();
+		if (acc != null) {
+			for (long i = 0; i < acc.count(); i++) {
+				AString s = RT.ensureString(acc.get(i));
+				if (s != null) aud.add(s.toString());
+			}
+		}
+		this.configuredAudiences = aud;
+		this.webDID = config.getWebDID();
 
 		// Create login providers from auth config
 		this.loginProviders = new LoginProviders(engine, config.getAuthConfig());
@@ -101,6 +130,44 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 		return publicAccessEnabled;
 	}
 
+	/** JWT audience policy: {@code "require"} or {@code "verify"} (default). */
+	public String getAudiencePolicy() {
+		return audiencePolicy;
+	}
+
+	/** Operator-configured extra accepted JWT audiences (beyond the venue's own
+	 *  DID(s)). Never null; empty if none configured. */
+	public java.util.Set<String> getConfiguredAudiences() {
+		return configuredAudiences;
+	}
+
+	/** The venue's did:web alias ({@link Config#getWebDID()}), or null when no
+	 *  public hostname is configured. Discovery only — see covia#167. */
+	public AString getWebDID() {
+		return webDID;
+	}
+
+	/**
+	 * The capability ceiling applied to unauthenticated (public) callers,
+	 * scoped to {@code publicDID}. Operator policy via {@code auth.public.caps}:
+	 * unconfigured → the secure read-only default
+	 * ({@link CapabilityChecker#readOnlyCeiling}); the literal
+	 * {@code "unrestricted"} → no ceiling (legacy full access); an explicit
+	 * capability vector → that ceiling. Malformed config fails safe to read-only.
+	 *
+	 * @param publicDID the public caller's DID ({@code <venueDID>:public}),
+	 *                  used to scope the default read grant
+	 * @return the ceiling vector, or null for "unrestricted"
+	 */
+	public AVector<ACell> getPublicCeiling(AString publicDID) {
+		if (publicCapsConfig == null) return CapabilityChecker.readOnlyCeiling(publicDID);
+		if (publicCapsConfig instanceof AString s && "unrestricted".equals(s.toString())) return null;
+		AVector<ACell> caps = RT.ensureVector(publicCapsConfig);
+		if (caps != null) return caps;
+		log.warn("auth.public.caps is malformed ({}); defaulting to read-only", publicCapsConfig);
+		return CapabilityChecker.readOnlyCeiling(publicDID);
+	}
+
 	/**
 	 * Get a user record by ID
 	 * @param id User identifier as AString (e.g. "alice_gmail_com")
@@ -122,7 +189,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 			Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 		cursor.updateAndGet(current -> {
 			@SuppressWarnings("unchecked")
-			AMap<AString, AMap<AString, ACell>> m = (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.ensureMap(current);
+			AMap<AString, AMap<AString, ACell>> m = (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.castMap(current);
 			if (m == null) m = Maps.empty();
 			return m.assoc(id, stamped);
 		});
@@ -134,7 +201,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, AMap<AString, ACell>> getUsers() {
-		return (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.ensureMap(cursor.get());
+		return (AMap<AString, AMap<AString, ACell>>) (AMap<?,?>) RT.castMap(cursor.get());
 	}
 
 }

@@ -3,6 +3,7 @@ package covia.venue;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,7 +28,6 @@ import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Operation;
 import covia.grid.Status;
-import covia.lattice.CapabilityChecker;
 
 /**
  * Manages job lifecycle, persistence, and in-memory state for active jobs.
@@ -62,8 +62,15 @@ public class JobManager {
 
 	// Job ID generation state
 	private final Random rand = new Random();
-	private short jobCounter = 0;
-	private long lastJobTS = 0;
+	/**
+	 * Monotonic 64-bit job-ID prefix: high 48 bits = millisecond timestamp,
+	 * low 16 bits = per-millisecond counter. Advanced atomically as
+	 * {@code max(prev+1, ts<<16)}, so IDs are strictly increasing — hence fully
+	 * ordered and unique — even under concurrent submission, across
+	 * same-millisecond bursts (the counter carries into the timestamp bits past
+	 * 65535/ms), and across a backwards clock step (prev+1 wins).
+	 */
+	private final AtomicLong idPrefix = new AtomicLong(0);
 
 	/**
 	 * Creates a new JobManager.
@@ -121,11 +128,11 @@ public class JobManager {
 	 * @return Job tracking the execution
 	 */
 	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
-		// User-facing entry: cap-check before dispatch. invokeInternal (the
-		// no-Job framework path) deliberately doesn't — trust is established
-		// by the call path, not by a flag on the context. Adapter-to-adapter
-		// sub-calls go through invokeInternal and are framework-trusted.
-		enforceCaps(meta, input, ctx);
+		// Capability enforcement is the executing adapter's responsibility: each
+		// op asserts its exact (resource, ability) at its own enforcement point
+		// (requireCapability / requireInvoke), before any side effect. There is
+		// no central name-keyed pre-dispatch check — a denial surfaces as the
+		// adapter failing this Job.
 		AAdapter adapter = prepareInvocation(meta, input, ctx);
 		AString callerDID = ctx.getCallerDID();
 
@@ -139,7 +146,16 @@ public class JobManager {
 		// Preserve existing jobId if already set — parent scope takes precedence
 		// (e.g. GoalTreeAdapter sets root job ID for all tool calls).
 		RequestContext jobCtx = (ctx.getJobId() != null) ? ctx : ctx.withJobId(job.getID());
-		adapter.invoke(job, jobCtx, meta, input);
+		try {
+			adapter.invoke(job, jobCtx, meta, input);
+		} catch (covia.exception.AuthException e) {
+			// A capability denial thrown synchronously from a job-aware adapter's
+			// enforcement point fails the Job — the same surface async adapters
+			// already produce (a denied request was authenticated and dispatched,
+			// so the denial is a FAILED Job, not a thrown exception). Other
+			// synchronous failures (bad input, schema) propagate as before.
+			job.fail(e.getMessage() != null ? e.getMessage() : e.toString());
+		}
 		return job;
 	}
 
@@ -201,6 +217,10 @@ public class JobManager {
 	public CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		AAdapter adapter;
 		try {
+			// Enforcement is the adapter's responsibility (see invokeOperation):
+			// the op asserts its cap at its enforcement point; a denial surfaces
+			// as a failed future. invokeInternal differs from invokeOperation only
+			// in Job creation.
 			adapter = prepareInvocation(meta, input, ctx);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
@@ -214,64 +234,28 @@ public class JobManager {
 	}
 
 	/**
-	 * Zero-Job dispatch for the scheduler's deferred firing. Unlike
-	 * {@link #invokeInternal(AString, ACell, RequestContext)}, this re-runs
-	 * {@link #enforceCaps} with the caps carried in {@code ctx}, so a scheduled
-	 * invocation cannot exceed the authority the owner captured at schedule time
-	 * — no capability escalation. Fire with a context carrying the owner's DID
-	 * plus the proofs/caps stapled into the event.
-	 * See {@code venue/docs/GRID_SCHEDULER.md} §5.
-	 */
-	public CompletableFuture<ACell> invokeScheduled(AString ref, ACell input, RequestContext ctx) {
-		if (ref == null) {
-			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("Operation must be specified"));
-		}
-		Asset asset;
-		try {
-			asset = engine.resolveAsset(ref, ctx);
-		} catch (Exception e) {
-			return CompletableFuture.failedFuture(e);
-		}
-		if (asset == null) {
-			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("Cannot resolve operation: " + ref));
-		}
-		Operation op = Operation.from(asset);
-		if (op == null) {
-			return CompletableFuture.failedFuture(
-				new IllegalArgumentException("Asset is not an operation: " + asset.getID()));
-		}
-		AMap<AString, ACell> meta = op.meta();
-		try {
-			enforceCaps(meta, input, ctx);
-		} catch (Exception e) {
-			return CompletableFuture.failedFuture(e);
-		}
-		return invokeInternal(meta, input, ctx);
-	}
-
-	/**
-	 * Enforces capability attenuations on the user-facing dispatch path.
+	 * Validate a completing one-shot job's result against the operation's
+	 * declared output schema, per the operator-configured {@code outputValidation}
+	 * mode ({@code off}/{@code warn}/{@code strict}). Off (the default) does
+	 * nothing — no validation, no logging — so results are never checked unless
+	 * an operator opts in. {@code warn} logs a mismatch; {@code strict} throws so
+	 * the job fails. Unlike input validation (a per-operation {@code strict}
+	 * contract), this is a venue-level operator policy.
 	 *
-	 * <p>Caps gate what an external caller can do via {@link #invokeOperation}.
-	 * Framework code that calls {@link #invokeInternal} (e.g. agent transition
-	 * dispatch, LLM inference, context loading, post-dispatchTool tool invoke)
-	 * has already established trust by the call path — there's no second
-	 * cap check to apply.</p>
-	 *
-	 * @throws RuntimeException with a {@code Capability denied: ...} message
-	 *         if the request's caps don't cover the operation
+	 * @throws IllegalArgumentException in {@code strict} mode when the result
+	 *         does not satisfy the operation's output schema
 	 */
-	private void enforceCaps(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
-		AVector<ACell> caps = ctx.getCaps();
-		if (caps == null) return;
-		String adapterName = AAdapter.getAdapterName(meta);
-		AString opName = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.ADAPTER));
-		String denied = CapabilityChecker.check(caps, opName != null ? opName.toString() : adapterName, input);
-		if (denied != null) {
-			throw new RuntimeException(denied);
+	public void validateOutput(AMap<AString, ACell> meta, ACell result) {
+		String mode = engine.config().getOutputValidation();
+		if (mode == null || "off".equals(mode)) return;
+		AMap<AString, ACell> outputSchema = getMap(RT.getIn(meta, Fields.OPERATION, Fields.OUTPUT));
+		if (outputSchema == null || outputSchema.isEmpty()) return;
+		String err = JsonSchema.validate(outputSchema, result);
+		if (err == null) return;
+		if ("strict".equals(mode)) {
+			throw new IllegalArgumentException("Output schema violation: " + err);
 		}
+		log.warn("Output schema violation for {}: {}", AAdapter.getAdapterName(meta), err);
 	}
 
 	/**
@@ -647,29 +631,33 @@ public class JobManager {
 	 */
 	@SuppressWarnings("unchecked")
 	public void appendToHistory(Blob jobID, AMap<AString, ACell> record, RequestContext ctx) {
-		AMap<AString, ACell> data = getJobData(jobID);
-		if (data == null) {
+		// Read the current record from the active cache, falling back to the
+		// caller's lattice. The ctx-aware read both enforces ownership and finds
+		// a job that has already completed and been evicted from the active
+		// cache — e.g. a synchronously-completing A2A defaultChatOp, which the
+		// old activeJobs-only lookup missed, throwing "Job not found" and
+		// dropping the inbound message from the Task history (#178).
+		AMap<AString, ACell> current = getJobData(jobID, ctx);
+		if (current == null) {
 			throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
 		}
-		if (!engine.getAccessControl().canAccessJob(ctx, data)) {
-			throw new AuthException("Access denied to job: " + jobID.toHexString());
-		}
-		Job job = getJob(jobID);
-		if (job == null) {
-			// Terminal-state job evicted from memory — no-op; history is frozen.
-			return;
-		}
-		if (job.isFinished()) return;
 
-		AMap<AString, ACell> current = job.getData();
 		ACell histCell = current.get(Fields.HISTORY);
 		AVector<ACell> history = (histCell instanceof AVector)
 				? (AVector<ACell>) histCell
 				: convex.core.data.Vectors.empty();
-		AVector<ACell> updated = history.conj(record);
+		AMap<AString, ACell> newData = current.assoc(Fields.HISTORY, history.conj(record));
 
-		AMap<AString, ACell> newData = current.assoc(Fields.HISTORY, updated);
-		job.updateData(newData);
+		// Write back where the record actually lives: mutate the live job if it
+		// is still active (persisted on completion), otherwise persist the
+		// augmented record straight to the lattice so a finished job's Task
+		// history still carries the inbound message rather than silently losing it.
+		Job job = getJob(jobID);
+		if (job != null) {
+			job.updateData(newData);
+		} else {
+			persistJobRecord(jobID, newData, ctx.getCallerDID());
+		}
 	}
 
 	// ========== Job Recovery ==========
@@ -859,15 +847,17 @@ public class JobManager {
 	/**
 	 * Generates a unique job ID.
 	 * Format: 6 bytes timestamp + 2 bytes counter + 8 bytes random.
-	 * Time-ordered, unpredictable, collision-resistant.
+	 * Time-ordered, monotonic, unpredictable, collision-resistant, thread-safe.
 	 */
 	private Blob generateJobID(long ts) {
-		if (ts > lastJobTS) jobCounter = 0;
-		lastJobTS = ts;
+		// Strictly-increasing prefix: a new millisecond resets the counter to 0
+		// (ts<<16 wins); a same-millisecond or backwards-clock submission advances
+		// the counter (prev+1 wins), carrying into the timestamp bits if a single
+		// millisecond ever exceeds 65535 IDs. Lock-free via AtomicLong.
+		long prefix = idPrefix.updateAndGet(prev -> Math.max(prev + 1, ts << 16));
 		byte[] bs = new byte[16];
 
-		Utils.writeLong(bs, 0, ts << 16);
-		Utils.writeShort(bs, 6, jobCounter++);
+		Utils.writeLong(bs, 0, prefix);
 		Utils.writeLong(bs, 8, rand.nextLong());
 
 		return Blob.wrap(bs);

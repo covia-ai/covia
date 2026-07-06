@@ -10,7 +10,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.auth.ucan.UCANValidator;
 import convex.core.json.schema.JsonSchema;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -38,7 +37,7 @@ import covia.venue.LocalVenue;
 import covia.venue.RequestContext;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.SseServer;
-import io.javalin.Javalin;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -242,13 +241,13 @@ public class MCP extends McpServer {
 	// ==================== Route registration ====================
 
 	@Override
-	public void addRoutes(Javalin app) {
+	public void addRoutes(RoutesConfig routes) {
 		// McpServer registers POST /mcp and GET /.well-known/mcp
-		super.addRoutes(app);
+		super.addRoutes(routes);
 
 		// SSE session routes
-		app.get("/mcp", this::handleMcpGet);
-		app.delete("/mcp", this::handleMcpDelete);
+		routes.get("/mcp", this::handleMcpGet);
+		routes.delete("/mcp", this::handleMcpDelete);
 	}
 
 	// ==================== Tool listing (dynamic, from adapters) ====================
@@ -382,16 +381,14 @@ public class MCP extends McpServer {
 			ACell arguments = RT.getIn(params, Fields.ARGUMENTS);
 			if (opRef != null) {
 				Context ctx = McpServer.getCurrentContext();
-				AString callerDID = (ctx != null) ? AuthMiddleware.getCallerDID(ctx) : null;
-				RequestContext rctx = RequestContext.of(callerDID);
+				RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
-				// Extract UCAN proofs from both transport channels:
-				//   1. `ucans` in tool arguments
-				//   2. `Authorization: Bearer <ucan-jwt>` stashed by AuthMiddleware
+				// Attach transport UCAN authority — proofs (cross-user grants)
+				// and the self-attenuation ceiling (#131) — from the `ucans` tool
+				// argument and an Authorization bearer UCAN.
 				AVector<ACell> ucans = RT.getIn(arguments, Fields.UCANS);
 				AString bearer = (ctx != null) ? ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR) : null;
-				AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans);
-				if (proofs != null) rctx = rctx.withProofs(proofs);
+				rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans);
 
 				if (engine().config().isFixMcpStrings()) {
 					arguments = coerceJsonStringArgs(arguments, opRef);

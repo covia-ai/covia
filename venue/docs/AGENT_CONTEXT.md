@@ -2,7 +2,7 @@
 
 Design for loading reference material into an agent's working context at run time.
 
-**Status:** Current — implemented (string / workspace / asset / job / op entries; two layers; labelled system messages).
+**Status:** Current — implemented (string / workspace / asset / job / op entries; configured layer; labelled system messages). §8 designs the unified **configured-vs-agent-managed** model — one entry grammar, resolver, and budget shared across both roles. Target, not yet implemented.
 
 See [AGENT_LOOP.md](./AGENT_LOOP.md) §3.2 for level 2 architecture and `state.config` conventions.
 
@@ -27,9 +27,11 @@ We need a mechanism to **declaratively load reference material into context** be
    - **Workspace references** — paths like `w/docs/ap-rules` that resolve to live data
    - **Asset references** — hashes, `/a/` paths, `/o/` names, operation names, DID URLs — resolved via `engine.resolveAsset()`, loading artifact text content or metadata description
 
-3. **Two layers.** Context lives in two places:
-   - **`state.config.context`** — declared at agent creation, loaded on every run. The agent's baseline knowledge.
-   - **`state.context`** — mutable, added to dynamically. An agent (or its operator) can push context entries into state between runs. Loaded after config context.
+3. **Two roles, one pipeline.** Context exists in two *roles* that share all machinery (see §8):
+   - **Configured** (`config.context`) — declared by whoever configured the agent, loaded every run, the agent's baseline knowledge. **Pinned**: the agent cannot remove it.
+   - **Agent-managed** — the working set the agent curates at run time via `context_load` / `context_unload`. Mutable and evictable.
+
+   Both roles use the same entry grammar (§3), the same resolver and rendering contract (§3.6), and one shared budget. They differ only in *who owns the entry* and *its lifetime* — not in what an entry can be. So the agent can build context from ops, jobs, refs, or text exactly as configuration can.
 
 4. **Injected, not fetched.** Context entries are resolved by the framework (level 2) and injected as system messages before the conversation. The LLM never sees tool calls for context — it just has the material. No history pollution, no wasted tool calls.
 
@@ -184,7 +186,7 @@ Declared at agent creation in `state.config.context`. Loaded on every run. The a
 ```json
 {
   "config": {
-    "llmOperation": "langchain:openai",
+    "llmOperation": "v/ops/langchain/openai",
     "model": "gpt-5.4-mini",
     "systemPrompt": "You are Carol, the AP Payment Approver...",
     "context": [
@@ -367,7 +369,69 @@ Workspace references are resolved fresh on each run (they may change between run
 
 ---
 
-## 8. Phasing
+## 8. Unified Context Model (Configured vs Agent-Managed)
+
+Two roles, one pipeline. This section defines the target model that unifies the configured layer (§4) with the agent-managed runtime layer (the `context_load` / `context_unload` tools) so they share one entry grammar, one resolver, one budget, and one inspection surface — differing only in ownership and lifetime.
+
+### 8.1 The two roles
+
+- **Configured context** — entries in `config.context`. Owned by whoever configured the agent; the agent's standing knowledge. **Pinned**: the agent cannot unload it; it changes only through configuration (`agent_create` / `agent_update`).
+- **Agent-managed context** — the working set the agent curates while pursuing a goal, via `context_load` / `context_unload`. Mutable and evictable. This role subsumes the earlier dynamic `state.context` layer and the runtime `loads` store into a single agent-owned set.
+
+Both are *the same kind of thing*: a set of context entries, each resolved fresh every turn and injected as a labelled system message ahead of the conversation. The distinction is ownership, not mechanism.
+
+### 8.2 Shared entry grammar and capabilities
+
+Every entry — in either role — uses the entry model of §3: a string (path / asset / literal) or a map (`ref`, `text`, `op`+`input`, `job`+`path`) with optional `label`, `required`, and `budget`.
+
+The capability this unification adds: **agent-managed entries are no longer path-only.** The agent can pin a computed result the same way configuration can — an op (`{op, input, label}`), a job result (`{job, path}`), a literal note (`{text}`), or a reference (`{ref}`). *Using ops to build context* becomes available to both roles. An agent can, for example, `context_load {op: "v/ops/memory", input: {command: "recall", …}, label: "User memory"}` to keep a computed view always present — exactly what an operator can declare in config today.
+
+### 8.3 Shared resolution, rendering, and budget
+
+- **Resolver & rendering** — identical for both roles: the contract in §3.6 (skip-absent, fail-visible, required-throws; string verbatim, structured value as budget-bounded JSON5).
+- **One budget** — a single per-agent context budget. Each entry, in either role, carries a per-entry byte budget (declared or derived) that bounds its rendering and is accounted against the total.
+- **Context map** — one live inventory lists every loaded entry with its role, label, and budget, plus total usage and a near-ceiling warning. Configured entries become visible and accounted consistently — today they consume budget but appear in neither the context map nor the safety valve, so a heavy pinned entry can silently starve the working set with no signal.
+
+### 8.4 What differs — role semantics only
+
+| Property | Configured | Agent-managed |
+|----------|-----------|---------------|
+| Declared by | operator / configuration | the agent, at run time |
+| Mutated via | `agent_create` / `agent_update` | `context_load` / `context_unload` (or `agent_update`) |
+| Agent may remove it | No — pinned | Yes |
+| Eviction under budget pressure | Never auto-evicted | LIFO safety-valve eviction (newest first) until back under the warn threshold |
+| Goaltree lifetime | Inherited down the whole frame stack | Scoped to the active frame |
+
+If configured context alone exceeds the budget, that is a configuration error to surface — not something the safety valve silently prunes.
+
+### 8.5 Tool surface
+
+- **`context_load(entry)`** — `entry` is the full §3 entry model (a path string, or a map with `ref` / `text` / `op`+`input` / `job`+`path`, plus `label`, `budget`, `required`). Adds or replaces an entry in the agent-managed set. Takes effect next turn.
+- **`context_unload(ref)`** — removes an agent-managed entry by its reference/label. Removing a configured (pinned) entry is **rejected** — pinned context belongs to the operator, not the agent.
+
+(A future `context_pin` could promote an agent-managed entry to configured; out of scope here.)
+
+### 8.6 Load order
+
+System prompt → configured context → agent-managed context → conversation history → current work (outstanding tasks / pending results). Configured precedes agent-managed so baseline knowledge frames the working set.
+
+### 8.7 Goaltree frame scoping
+
+Agent-managed context is per-frame: a subgoal inherits the configured context but starts with its own empty agent-managed set, curating loads for its sub-task without polluting the parent or siblings. Configured context flows down the stack unchanged. This frame scoping is the one reason the agent-managed store is not a single flat agent-level list — it is the legitimate structural difference the unified model preserves.
+
+### 8.8 What this consolidates
+
+At the design level the unified model collapses the parallel structures that grew up around the two roles:
+
+- The dynamic `state.context` layer and the agent-managed `loads` store become **one agent-managed context set** with a single shape.
+- The separate resolution paths (one for configured entries, one for loaded paths, plus a near-duplicate used by the goaltree assembler) become **one resolver** invoked identically for every entry.
+- Budget accounting, the context map, and the safety valve apply **uniformly** to all entries, scoped by role (evict agent-managed only).
+
+The user-facing distinction — *a configured baseline the agent can't drop* vs *a working set the agent curates* — is preserved deliberately; only the duplicated machinery behind it is merged.
+
+---
+
+## 9. Phasing
 
 | Phase | Scope |
 |-------|-------|
@@ -376,3 +440,4 @@ Workspace references are resolved fresh on each run (they may change between run
 | **F3** | Size guards, truncation, token budget awareness. |
 | **F4** | Agent self-loading context (tool or convention for adding to own `state.context`). |
 | **F5** | Cross-user context with UCAN proof verification. |
+| **F6** | Unify configured + agent-managed context (§8): one entry grammar (agent-managed gains op/job/text entries), one resolver, one budget + context map + eviction; preserve pinned-vs-managed semantics and goaltree frame scoping. |

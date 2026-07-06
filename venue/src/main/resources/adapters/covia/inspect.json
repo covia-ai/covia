@@ -8,8 +8,11 @@
 		"input": {
 			"type": "object",
 			"properties": {
+				"path": {
+					"description": "The path to inspect (the usual case). Any resolvable path, e.g. 'v/info', 'w/vendors', 'v/ops/json/merge'."
+				},
 				"paths": {
-					"description": "A single resolvable path or an array of them. Examples: 'v/info', 'w/vendors', or ['v/ops/json/merge', 'v/ops/json/cond']."
+					"description": "Special case: an array of paths to compare in a single call, sharing the budget equally. Provide either 'path' (single) or 'paths' (multiple)."
 				},
 				"budget": {
 					"type": "integer",
@@ -20,7 +23,7 @@
 					"description": "If true, render single-line JSON5 output (default). If false, pretty-print with indentation."
 				}
 			},
-			"required": ["paths"]
+			"required": []
 		},
 		"output": {
 			"type": "object",

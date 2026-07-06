@@ -273,11 +273,12 @@ public class VenueHTTPTest {
 		// identity through to a gated venue, not merely be present.
 		AKeyPair callerKP = AKeyPair.generate();
 		AString callerDID = UCAN.toDIDKey(callerKP.getAccountKey());
-		AString audienceDID = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 
+		// Audience = THIS venue (so the bearer passes audience validation); the
+		// issuer (caller) is still attributed as the identity.
 		UCAN token = UCAN.create(callerKP,
-			UCAN.fromDIDKey(audienceDID), exp,
+			authServer.getEngine().getAccountKey(), exp,
 			Vectors.of(Capability.create(Strings.create(callerDID + "/w/"), Capability.CRUD_READ)),
 			Vectors.empty());
 		String jwt = token.toJWT(callerKP).toString();

@@ -181,14 +181,14 @@ Bridges operations to execution environments:
 | `file` | Filesystem (root-jailed; host/temp/DLFS-backed roots) | `roots`, `list`, `tree`, `read`, `write`, `append`, `delete`, `mkdir`, `stat` |
 | `schema` | JSON Schema operations | `validate`, `validateAll`, `infer`, `coerce`, `check` |
 | `orchestrator` | Multi-step workflows | Custom orchestration |
-| `covia` | Lattice CRUD | `read`, `write`, `delete`, `append`, `slice`, `list`, `functions`, `describe`, `adapters`, `inspect` |
+| `covia` | Lattice CRUD | `read`, `write`, `delete`, `append`, `slice`, `list`, `inspect`, `aggregate`, `functions`, `describe`, `adapters` |
 | `asset` | Content-addressed assets | `store`, `get`, `getContent`, `list`, `pin` |
 | `agent` | Agent lifecycle | `create`, `fork`, `request`, `message`, `trigger`, `query`, `list`, `delete`, `suspend`, `resume`, `update`, `cancelTask` |
 | `llmagent` | LLM agent transitions | `chat` |
 | `goaltree` | Goal-tree agent planning | `chat` |
 | `dlfs` | Decentralised file system | `listDrives`, `createDrive`, `deleteDrive`, `list`, `read`, `write`, `mkdir`, `delete` |
 | `vault` | Health vault (DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
-| `secret` | Secret store | `set`, `extract` |
+| `secret` | Secret store | `set`, `extract` (removal via `covia:delete s/<name>`) |
 | `ucan` | Capability tokens | `issue` |
 | `scheduler` | Deferred grid-op invocation (per-venue `:schedule`) | `schedule`, `cancel`, `trigger`, `list` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
@@ -203,10 +203,11 @@ Base path: `/api/v1/`
 | `/assets/{id}` | GET | Retrieve asset metadata |
 | `/assets` | POST | Register new asset |
 | `/assets/{id}/content` | GET/PUT | Asset binary content |
-| `/invoke` | POST | Execute an operation |
+| `/invoke` | POST | Execute an operation — async by default (201 + job record to poll); `?wait=true` blocks up to the 120s cap, `?wait=<ms>` up to that many ms (clamped), returning the finished record (200) |
+| `/values/{read,list,slice,inspect,aggregate,count}` | GET | Job-free lattice reads (#177) — `?path=…`, synchronous, capability-checked, **no job persisted**. Shares `covia:*` read accessors. `aggregate`/`count` tally entries at a `depth`, optional `groupBy`. See `docs/READ_API.md` |
 | `/jobs/{id}` | GET | Job status |
 | `/jobs/{id}/sse` | GET | Server-sent events for job updates |
-| `/.well-known/did.json` | GET | Venue DID document |
+| `/.well-known/did.json` | GET | Venue DID document — `did:web:<hostname>` alias (canonical did:key in `alsoKnownAs`) when a public `hostname` is set, else the did:key document (#167) |
 
 ## Development Guidelines
 
@@ -303,6 +304,18 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 - `store`: `"temp"` (default, deleted on exit), `"memory"`, or file path
 - `seed`: Ed25519 hex seed for stable venue identity. If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file.
 
+### Network binding
+
+```json
+{
+  "port": 8080,
+  "bindAddress": "127.0.0.1"
+}
+```
+
+- `port`: HTTP listen port (default `8080`).
+- `bindAddress`: network interface the HTTP connector binds to. When omitted, the venue binds **all interfaces** (`0.0.0.0`) — reachable from the LAN. Set to `"127.0.0.1"` to restrict the venue to loopback (recommended when embedding the venue as a local subprocess). This is the socket bind address and is distinct from `hostname`, which is the venue's *advertised* public host used to derive `baseUrl`/DID.
+
 ### DLFS WebDAV
 
 ```json
@@ -312,6 +325,42 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 ```
 
 Mounts WebDAV at `/dlfs/` for file access to DLFS drives. Off by default.
+
+### A2A protocol
+
+```json
+{
+  "a2a": {
+    "defaultChatOp": "v/test/ops/echo",
+    "agentInfo": {
+      "name": "My Venue Agent",
+      "description": "What this agent does",
+      "organization": "Acme",
+      "providerUrl": "https://acme.example"
+    }
+  }
+}
+```
+
+Enables the A2A (Agent-to-Agent) protocol. Off by default — the endpoints are
+registered **only** when an `a2a` block is present. Without it, `POST /a2a` and
+`GET /.well-known/agent-card.json` return `501` with a hint pointing back here
+(rather than an indistinguishable 404).
+
+- `defaultChatOp` — the operation invoked on a fresh `message/send` (no
+  `taskId`). Its Job becomes the A2A Task; its output becomes the Task's
+  artifact. `v/test/ops/echo` needs no LLM secret and is handy for smoke tests;
+  point it at an `llmagent`/`agent` chat op for a real agent.
+- `agentInfo` — surfaced in the agent card (`name`/`description`, plus
+  `organization`/`providerUrl` for the card's `provider`). All optional.
+
+**Auth note:** `message/send` invokes `defaultChatOp` as the *calling*
+identity. Under the default read-only public ceiling an unauthenticated caller
+cannot invoke, so the Task comes back `TASK_STATE_FAILED`. To exercise
+`message/send` from an unauthenticated client, either authenticate the caller
+or widen `auth.public.caps` to permit the op — do the latter only on a
+loopback-bound (`bindAddress: 127.0.0.1`) throwaway venue, never a
+LAN-reachable one. The agent-card GET is public and works regardless.
 
 ### Secrets bootstrap
 

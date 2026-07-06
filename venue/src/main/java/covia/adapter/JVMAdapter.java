@@ -51,6 +51,7 @@ public class JVMAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		requireInvoke(ctx);
 		String jvmOp = getSubOperation(meta);
 
 		switch (jvmOp) {

@@ -17,7 +17,7 @@ jobs:
       contents: write
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Set up JDK 21
       uses: actions/setup-java@v5
@@ -27,11 +27,27 @@ jobs:
         cache: 'maven'
 
     - name: Cache Maven packages
-      uses: actions/cache@v5
+      uses: actions/cache@v6
       with:
         path: ~/.m2
         key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
         restore-keys: ${{ runner.os }}-m2
+
+    # convex.version may pin an unreleased -SNAPSHOT while validating
+    # convex-side changes (see AGENTS.md). Snapshots are not on Maven
+    # Central, so build the needed modules from convex develop source.
+    # Skips itself when the pin is a release version.
+    - name: Build Convex from source (snapshot pin only)
+      run: |
+        CONVEX_VERSION=$(sed -n 's/.*<convex.version>\(.*\)<\/convex.version>.*/\1/p' pom.xml | head -1)
+        if [[ "$CONVEX_VERSION" == *-SNAPSHOT ]]; then
+          echo "convex.version=$CONVEX_VERSION — building convex develop from source"
+          git clone --depth 1 --branch develop https://github.com/Convex-Dev/convex.git /tmp/convex
+          mvn -f /tmp/convex/pom.xml install -DskipTests -q \
+            -pl convex-core,convex-peer,convex-dlfs,convex-java,convex-restapi -am
+        else
+          echo "convex.version=$CONVEX_VERSION (released) — skipping source build"
+        fi
 
     - name: Build with Maven
       run: mvn clean install -DskipTests

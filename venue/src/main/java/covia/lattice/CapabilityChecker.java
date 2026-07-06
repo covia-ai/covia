@@ -1,11 +1,14 @@
 package covia.lattice;
 
 import convex.auth.ucan.Capability;
+import convex.auth.ucan.UCAN;
+import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 
 /**
@@ -24,49 +27,187 @@ import convex.core.lang.RT;
  */
 public class CapabilityChecker {
 
-	private static final AString K_PATH = Strings.intern("path");
-	private static final AString K_ROOT = Strings.intern("root");
 
 	/**
-	 * Checks whether an operation invocation is allowed by the agent's caps.
+	 * Derive the self-attenuation ceiling from presented proof tokens: the union
+	 * of capabilities the verified tokens grant to {@code caller} under the
+	 * authority {@code issuer}, with temporal bounds re-checked. The result is the
+	 * {@code caps} ceiling enforced by {@link #check}. The owner is the authority
+	 * over its own namespace, so for a self-ceiling {@code issuer == caller}.
 	 *
-	 * @param caps Capability attenuations (null = unrestricted)
-	 * @param operation The operation being invoked (e.g. "v/ops/covia/write")
-	 * @param input The tool call input
-	 * @return null if allowed, or an error message string if denied
+	 * <p>Assumes signatures and chains were verified at the transport boundary
+	 * ({@code UCANValidator.parseTransportUCANs}); only temporal bounds are
+	 * re-checked here. Fail-closed: null {@code proofs}/{@code caller}/
+	 * {@code issuer} → null (no ceiling), never a wildcard.</p>
+	 *
+	 * @deprecated Interim shim. This duplicates
+	 *             {@link UCANValidator#capabilitiesFor}, which lives in convex-core
+	 *             but is not yet in covia's released Convex dependency. When covia
+	 *             bumps to a Convex release that includes it, delete this method
+	 *             and call {@code UCANValidator.capabilitiesFor(proofs, caller,
+	 *             issuer, now)} directly.
 	 */
-	public static String check(AVector<ACell> caps, String operation, ACell input) {
-		if (caps == null) return null; // no caps = full access
+	@Deprecated
+	public static AVector<ACell> selfCapabilities(AVector<ACell> proofs,
+			AString caller, AString issuer, long now) {
+		if (proofs == null || caller == null || issuer == null) return null;
+		AVector<ACell> result = Vectors.empty();
+		for (long i = 0; i < proofs.count(); i++) {
+			AMap<AString, ACell> tokenMap = RT.ensureMap(proofs.get(i));
+			if (tokenMap == null) continue;
+			UCAN token = UCAN.parse(tokenMap);
+			if (token == null) continue;
+			if (!UCANValidator.checkTemporalBounds(token, now)) continue;
+			if (!caller.equals(token.getAudience())) continue;
+			if (!issuer.equals(token.getIssuer())) continue;
+			AVector<ACell> tokenCaps = token.getCapabilities();
+			if (tokenCaps == null) continue;
+			for (long j = 0; j < tokenCaps.count(); j++) {
+				ACell c = tokenCaps.get(j);
+				if (c instanceof AMap<?, ?> m) {
+					@SuppressWarnings("unchecked")
+					AString w = RT.ensureString(((AMap<AString, ACell>) m).get(Capability.WITH));
+					// A self-attenuation may only NARROW the caller's own authority.
+					// An empty/absent `with` is a "match any resource" wildcard
+					// (Convex #585 / UCAN: `with` is required), which broadens
+					// rather than narrows — drop it from the derived ceiling.
+					if (w == null || w.count() == 0) continue;
+				}
+				result = result.conj(c);
+			}
+		}
+		return result.isEmpty() ? null : result;
+	}
 
-		String ability = operationAbility(operation);
-		String resource = extractResource(operation, input);
-		if (resource == null) resource = "";
+	/**
+	 * Checks whether a capability ceiling allows a specific {@code (resource,
+	 * ability)} pair supplied <em>directly</em> by the executing adapter — not
+	 * derived from an operation name.
+	 *
+	 * <p>This is the enforcement primitive meant to be co-located with the code
+	 * that performs the action: the implementation names the exact resource and
+	 * ability it requires, so the enforced capability cannot drift from what the
+	 * code actually does (unlike a name-keyed {@link #operationAbility} mapping,
+	 * which is a separate source of truth that can fall out of sync).</p>
+	 *
+	 * <p>Lattice resources and abilities are {@link AString}s, so this AString
+	 * form is the primary entry point; a {@link String} overload is provided for
+	 * literal arguments.</p>
+	 *
+	 * @param caps     the caller's granted capability ceiling; {@code null} = unrestricted
+	 * @param resource the exact resource acted on — a bare lattice path
+	 *                 ({@code "w/x"}, owner-scoped), a DID URL, or a scheme URI;
+	 *                 {@code null}/empty means "no specific resource"
+	 * @param ability  the exact ability required (e.g.
+	 *                 {@link Capability#CRUD_WRITE}, {@code "secret/write"})
+	 * @param ownerDID the caller's DID, used to canonicalise bare resources; may be null
+	 * @return {@code null} if allowed, else an actionable denial message
+	 */
+	public static String allows(AVector<ACell> caps, AString resource, AString ability, AString ownerDID) {
+		if (caps == null) return null;              // no ceiling = unrestricted
+		String canonResource = canonicalResource(resource != null ? resource.toString() : null, ownerDID);
+		if (canonResource == null) canonResource = "";
+		String ab = (ability != null) ? ability.toString() : "";
+		AString resourceStr = Strings.create(canonResource);
+		AString abilityStr = Strings.create(ab);
 
+		if (covered(caps, resourceStr, abilityStr, ownerDID)) return null;
+
+		StringBuilder sb = new StringBuilder("Capability denied: requires ")
+			.append(ab.isEmpty() ? "(any ability)" : ab)
+			.append(" on ").append(canonResource.isEmpty() ? "(any)" : canonResource)
+			.append(". Your capabilities are: ");
+		appendCapsList(sb, caps);
+		return sb.toString();
+	}
+
+	/**
+	 * {@link String}-argument convenience overload of
+	 * {@link #allows(AVector, AString, AString, AString)} — interns the literal
+	 * arguments and delegates.
+	 */
+	public static String allows(AVector<ACell> caps, String resource, String ability, AString ownerDID) {
+		return allows(caps,
+			resource != null ? Strings.create(resource) : null,
+			ability != null ? Strings.create(ability) : null,
+			ownerDID);
+	}
+
+	/**
+	 * The default read-only capability ceiling for an identity: read the
+	 * identity's own (owner-scoped) lattice and venue paths, and read
+	 * content-addressed assets. It grants <em>no</em> write, delete, secret,
+	 * agent, asset-store, or invoke ability — so every mutating operation is
+	 * denied. This is the secure-by-default profile for the public/anonymous
+	 * identity; operators widen it explicitly for permissive venues.
+	 *
+	 * @param scopeDID the identity the read grant is scoped to — must be
+	 *                 non-null (e.g. the venue public DID, {@code "<venueDID>:public"});
+	 *                 a null scope would yield an unscoped, over-broad grant
+	 */
+	public static AVector<ACell> readOnlyCeiling(AString scopeDID) {
+		return Vectors.of(
+			Capability.create(scopeDID, Capability.CRUD_READ),
+			Capability.create(Strings.create(""), Strings.create("asset/read")));
+	}
+
+	/**
+	 * The capability match loop shared by {@link #check} and {@link #allows}:
+	 * returns true iff some grant in {@code caps} covers the already-canonical
+	 * {@code (resourceStr, abilityStr)} request. Non-map and malformed entries
+	 * are skipped defensively (they grant nothing). An empty {@code caps}
+	 * vector therefore grants nothing — only a {@code null} ceiling is "full
+	 * access" (handled by the callers).
+	 */
+	private static boolean covered(AVector<ACell> caps, AString resourceStr, AString abilityStr, AString ownerDID) {
 		for (long i = 0; i < caps.count(); i++) {
-			// Skip non-map entries — defensive against malformed caps data
 			if (!(caps.get(i) instanceof AMap<?,?> capMap)) continue;
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> cap = (AMap<AString, ACell>) capMap;
 
-			if (Capability.covers(cap, resource, ability)) {
-				return null; // allowed
-			}
-		}
+			AString rawWith = RT.ensureString(cap.get(Capability.WITH));
+			String canonWith = canonicalResource(rawWith != null ? rawWith.toString() : null, ownerDID);
+			AString grantWith = (canonWith != null) ? Strings.create(canonWith) : null;
+			AString grantCan = RT.ensureString(cap.get(Capability.CAN));
 
-		// Build an actionable denial message that includes WHAT the agent
-		// can do, not just what it can't. Without this LLMs that hit a
-		// denial often retry the same impossible call because they have no
-		// idea what the actual boundaries are.
-		StringBuilder sb = new StringBuilder("Capability denied: ")
-			.append(operation).append(" requires ").append(ability)
-			.append(" on ").append(resource.isEmpty() ? "(any)" : resource)
-			.append(". Your capabilities are: ");
-		appendCapsList(sb, caps);
-		sb.append(". Retrying the same call will not succeed — the denial is "
-			+ "structural. If your goal cannot be met within these "
-			+ "capabilities, complete with a clear explanation rather than "
-			+ "looping on impossible operations.");
-		return sb.toString();
+			// Resource matching is done locally (boundary-aware) rather than via
+			// Capability.resourceCovers, which prefix-matches without a path
+			// segment boundary (Convex #585) — "…/w/notes" would otherwise cover
+			// the sibling "…/w/notesSECRET". Ability matching reuses the already
+			// boundary-aware Capability.abilityCovers (false for a null ability).
+			if (resourceMatches(grantWith, resourceStr)
+					&& Capability.abilityCovers(grantCan, abilityStr)) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Boundary-aware resource matching — the hardened local replacement for
+	 * {@link Capability#resourceCovers}, which prefix-matches without a path
+	 * segment boundary (Convex #585): a grant on {@code "…/w/notes"} would
+	 * otherwise cover the sibling {@code "…/w/notesSECRET"}, not just descendants
+	 * {@code "…/w/notes/…"}.
+	 *
+	 * <p>A {@code null}/empty grant resource still means "any resource" — the
+	 * venue's own {@code asset/read} grant ({@code {with:""}}) relies on this,
+	 * while <em>user</em>-supplied empty-{@code with} caps are stripped earlier
+	 * at the {@link #selfCapabilities} boundary. A concrete grant matches an
+	 * exact resource, a descendant at a {@code '/'} boundary, or (for a grant
+	 * ending in {@code '/'}) its slash-less parent.</p>
+	 */
+	static boolean resourceMatches(AString grant, AString request) {
+		if (grant == null) return true;                 // wildcard (e.g. venue asset/read grant)
+		long gLen = grant.count();
+		if (gLen == 0) return true;                     // empty = wildcard
+		if (request == null) return false;
+		long rLen = request.count();
+		if (grant.equals(request)) return true;         // exact
+		if (rLen > gLen && request.startsWith(grant)
+				&& (grant.charAt(gLen - 1) == '/' || request.charAt(gLen) == '/')) return true;
+		// Trailing-slash parent: "w/x/" covers "w/x".
+		if (grant.charAt(gLen - 1) == '/' && rLen == gLen - 1
+				&& request.equals(grant.slice(0, gLen - 1))) return true;
+		return false;
 	}
 
 	/**
@@ -94,101 +235,26 @@ public class CapabilityChecker {
 	}
 
 	/**
-	 * Maps an operation name to a required ability.
+	 * Canonicalises a resource to its absolute, owner-scoped form for matching.
+	 *
+	 * <p>A capability resource is absolute: it names its owner. A bare lattice
+	 * path ({@code "w/health/bp"}) is the owner's own resource and is prefixed
+	 * with the owner DID → {@code "<owner>/w/health/bp"}. A resource that is
+	 * already a DID URL (a cross-user path, {@code "did:key:…/w/…"}) or
+	 * scheme-qualified ({@code "file://…"}, {@code "dlfs://…"}) is absolute as-is
+	 * and returned unchanged. With no owner context ({@code ownerDID == null})
+	 * the resource is returned as given (compare-as-is).</p>
+	 *
+	 * <p>Applied identically to the op's resource and each cap's {@code with}, so
+	 * an absolute (token) grant and a bare (agent-config) grant match a bare
+	 * own-namespace operation the same way.</p>
 	 */
-	/**
-	 * Maps an operation reference to a required ability. Accepts both the
-	 * legacy dispatch-string form ({@code "covia:write"}) — which is what
-	 * {@link covia.venue.JobManager} sees in {@code operation.adapter}
-	 * during invocation — and the catalog path form ({@code "v/ops/covia/write"}).
-	 */
-	static String operationAbility(String operation) {
-		return switch (operation) {
-			// Catalog path form
-			case "v/ops/covia/read", "v/ops/covia/list", "v/ops/covia/slice" -> "crud/read";
-			case "v/ops/covia/write", "v/ops/covia/append" -> "crud/write";
-			case "v/ops/covia/delete" -> "crud/delete";
-			case "v/ops/agent/create" -> "agent/create";
-			case "v/ops/agent/request" -> "agent/request";
-			case "v/ops/agent/message" -> "agent/message";
-			case "v/ops/asset/store" -> "asset/store";
-			case "v/ops/asset/get", "v/ops/asset/list" -> "asset/read";
-			case "v/ops/grid/run" -> "invoke";
-			// File / DLFS share crud/* abilities — same resource shape, same
-			// granted caps cover both surfaces. roots/listDrives are
-			// discovery-only and use crud/read.
-			case "v/ops/file/read", "v/ops/file/list", "v/ops/file/tree", "v/ops/file/stat", "v/ops/file/roots" -> "crud/read";
-			case "v/ops/file/write", "v/ops/file/append", "v/ops/file/mkdir" -> "crud/write";
-			case "v/ops/file/delete" -> "crud/delete";
-			case "v/ops/dlfs/read", "v/ops/dlfs/list", "v/ops/dlfs/tree", "v/ops/dlfs/stat", "v/ops/dlfs/list-drives" -> "crud/read";
-			case "v/ops/dlfs/write", "v/ops/dlfs/append", "v/ops/dlfs/mkdir", "v/ops/dlfs/create-drive" -> "crud/write";
-			case "v/ops/dlfs/delete", "v/ops/dlfs/delete-drive" -> "crud/delete";
-			// Legacy dispatch-string form (operation.adapter)
-			case "covia:read", "covia:list", "covia:slice" -> "crud/read";
-			case "covia:write", "covia:append" -> "crud/write";
-			case "covia:delete" -> "crud/delete";
-			case "agent:create" -> "agent/create";
-			case "agent:request" -> "agent/request";
-			case "agent:message" -> "agent/message";
-			case "asset:store" -> "asset/store";
-			case "asset:get", "asset:list" -> "asset/read";
-			case "grid:run" -> "invoke";
-			case "file:read", "file:list", "file:tree", "file:stat", "file:roots" -> "crud/read";
-			case "file:write", "file:append", "file:mkdir" -> "crud/write";
-			case "file:delete" -> "crud/delete";
-			case "dlfs:read", "dlfs:list", "dlfs:tree", "dlfs:stat", "dlfs:listDrives" -> "crud/read";
-			case "dlfs:write", "dlfs:append", "dlfs:mkdir", "dlfs:createDrive" -> "crud/write";
-			case "dlfs:delete", "dlfs:deleteDrive" -> "crud/delete";
-			default -> "invoke";
-		};
+	static String canonicalResource(String resource, AString ownerDID) {
+		if (resource == null || resource.isEmpty()) return resource;
+		if (resource.startsWith("did:")) return resource;   // already owner-qualified (DID URL)
+		if (resource.contains("://")) return resource;       // scheme-qualified (file://, dlfs://)
+		if (ownerDID == null) return resource;               // no owner context — compare as given
+		return ownerDID + "/" + resource;                    // bare lattice path → owner-scoped
 	}
 
-	/**
-	 * Extracts the resource path from a tool call input, if applicable.
-	 * Returns null for operations that don't target a specific path.
-	 */
-	static String extractResource(String operation, ACell input) {
-		// Path-targeted ops: pull the path arg out of the input.
-		if (operation.startsWith("v/ops/covia/") || operation.startsWith("covia:")) {
-			AString path = RT.ensureString(RT.getIn(input, K_PATH));
-			return (path != null) ? path.toString() : null;
-		}
-		// File-adapter ops: resource is the URI "file://<root>/<path>", with
-		// the configured root name as the URI authority. Granters scope at
-		// namespace level ("file://"), per-root ("file://scratch/"), or
-		// per-path ("file://scratch/notes.txt"). Trailing slash on the grant
-		// is the conventional way to cover a subtree.
-		if (operation.startsWith("v/ops/file/") || operation.startsWith("file:")) {
-			AString root = RT.ensureString(RT.getIn(input, K_ROOT));
-			AString path = RT.ensureString(RT.getIn(input, K_PATH));
-			if (root == null) return "file://";
-			String pathPart = (path == null) ? "" : stripLeading(path.toString(), '/');
-			return "file://" + root + "/" + pathPart;
-		}
-		// DLFS ops: same URI shape, "dlfs://<drive>/<path>". listDrives etc.
-		// land on "dlfs://" (the namespace root) when no drive arg is supplied.
-		if (operation.startsWith("v/ops/dlfs/") || operation.startsWith("dlfs:")) {
-			AString drive = RT.ensureString(RT.getIn(input, Strings.intern("drive")));
-			if (drive == null) drive = RT.ensureString(RT.getIn(input, Strings.intern("name")));
-			AString path = RT.ensureString(RT.getIn(input, K_PATH));
-			if (drive == null) return "dlfs://";
-			String pathPart = (path == null) ? "" : stripLeading(path.toString(), '/');
-			return "dlfs://" + drive + "/" + pathPart;
-		}
-		// Agent-targeted ops: derive a g/<id> resource string from the agentId.
-		if ("v/ops/agent/request".equals(operation) || "v/ops/agent/message".equals(operation)
-				|| "v/ops/agent/create".equals(operation)
-				|| "agent:request".equals(operation) || "agent:message".equals(operation)
-				|| "agent:create".equals(operation)) {
-			AString agentId = RT.ensureString(RT.getIn(input, Strings.intern("agentId")));
-			return (agentId != null) ? "g/" + agentId : "g/";
-		}
-		return null;
-	}
-
-	private static String stripLeading(String s, char c) {
-		int i = 0;
-		while (i < s.length() && s.charAt(i) == c) i++;
-		return s.substring(i);
-	}
 }

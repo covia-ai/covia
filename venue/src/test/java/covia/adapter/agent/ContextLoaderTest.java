@@ -56,6 +56,12 @@ public class ContextLoaderTest {
 		assertTrue(ContextLoader.isNamespacePath("s/secret-name"));
 		assertTrue(ContextLoader.isNamespacePath("h/hitl-request"));
 
+		// Leading slash is optional sugar (mirrors Engine.resolvePath): "/w/x"
+		// must resolve like "w/x" rather than falling through to literal text.
+		assertTrue(ContextLoader.isNamespacePath("/w/docs/rules"));
+		assertTrue(ContextLoader.isNamespacePath("/g/my-agent/state"));
+		assertTrue(ContextLoader.isNamespacePath("/n/notes"));
+
 		assertFalse(ContextLoader.isNamespacePath("Always use British English"));
 		assertFalse(ContextLoader.isNamespacePath("abc123def456"));
 		assertFalse(ContextLoader.isNamespacePath("/a/abc123"));
@@ -78,6 +84,8 @@ public class ContextLoaderTest {
 		// Adapter:op pattern
 		assertTrue(ContextLoader.isAssetReference("v/test/ops/echo"));
 		assertTrue(ContextLoader.isAssetReference("v/ops/langchain/openai"));
+		// Leading slash optional for virtual/namespace forms too
+		assertTrue(ContextLoader.isAssetReference("/v/test/ops/echo"));
 
 		// Literal text — should NOT be asset references
 		assertFalse(ContextLoader.isAssetReference("Always use British English"));

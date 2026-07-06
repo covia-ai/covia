@@ -1,6 +1,6 @@
 {
 	"name": "Write Lattice Data",
-	"description": "Write a value to a writable lattice path (w/, o/, n/, t/). Examples: w/enrichments/INV-001 (persist a work product), o/my-pipeline (pin an operation for grid_run). Intermediate maps are created on demand. Writing null deletes the entry. Use structured values (objects/arrays) rather than serialised strings.",
+	"description": "Write a value to a writable lattice path (w/, o/, n/, t/). Examples: w/enrichments/INV-001 (persist a work product), o/my-pipeline (pin an operation for grid_run). Intermediate maps are created on demand. Writing null stores a null value (present, distinct from absent) — use covia_delete to remove an entry. Use structured values (objects/arrays) rather than serialised strings.",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "covia:write",
@@ -13,7 +13,7 @@
 					"description": "Writable lattice path. Must start with one of: 'w/' (workspace), 'o/' (operation pins), 'n/' (agent scope), 't/' (job temp). Deep paths create intermediate maps."
 				},
 				"value": {
-					"description": "The value to store. Use structured values (objects/arrays/scalars) rather than serialised strings. Null removes the entry."
+					"description": "The value to store. Use structured values (objects/arrays/scalars) rather than serialised strings. Null stores a null value (present, distinct from absent); use covia_delete to remove an entry."
 				}
 			},
 			"required": ["path", "value"]
@@ -21,7 +21,8 @@
 		"output": {
 			"type": "object",
 			"properties": {
-				"written": { "type": "boolean", "description": "True if the value was written successfully" }
+				"existed": { "type": "boolean", "description": "Whether a value was already present at the path before this write: false = a new value was created, true = an existing value was replaced. A stored null counts as present." },
+				"pathCreated": { "type": "boolean", "description": "Present and true only if the write had to build a missing parent path (intermediate hierarchy that did not previously exist). Omitted when written into existing structure. Distinct from 'existed', which is about the leaf value." }
 			}
 		}
 	}

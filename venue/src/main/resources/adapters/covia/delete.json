@@ -1,6 +1,6 @@
 {
 	"name": "Delete Lattice Data",
-	"description": "Delete a value at a writable lattice path (w/, o/, n/, t/). Example: w/scratch/temp-data (clean up workspace). Idempotent — deleting a non-existent path is a no-op.",
+	"description": "Delete a value at a writable lattice path (w/, o/, n/, t/), or remove one of your own secrets (s/NAME — whole records only). Example: w/scratch/temp-data (clean up workspace). Idempotent — deleting a non-existent path is a no-op.",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "covia:delete",
@@ -10,15 +10,16 @@
 			"properties": {
 				"path": {
 					"type": "string",
-					"description": "Writable path to delete. Must start with w/, o/, n/, or t/."
+					"description": "Path to delete. Must start with w/, o/, n/, or t/; s/NAME deletes one of your own secrets (whole records only)."
 				}
 			},
 			"required": ["path"]
 		},
 		"output": {
 			"type": "object",
+			"description": "Delete removes only the addressed value and never prunes parent hierarchy.",
 			"properties": {
-				"deleted": { "type": "boolean", "description": "True if the delete operation completed successfully" }
+				"deleted": { "type": "boolean", "description": "True if a value was present at the path and removed; false if the path was already absent (idempotent no-op)." }
 			}
 		}
 	}

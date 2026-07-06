@@ -420,7 +420,7 @@ public class FileAdapter extends AAdapter {
 
 		return CompletableFuture.supplyAsync(() -> {
 			try {
-				return dispatch(ctx, subOp, RT.ensureMap(input));
+				return dispatch(ctx, subOp, RT.castMap(input));
 			} catch (Exception e) {
 				throw new RuntimeException(e.getMessage(), e);
 			}
@@ -429,6 +429,7 @@ public class FileAdapter extends AAdapter {
 
 	private ACell dispatch(RequestContext ctx, String subOp, AMap<AString, ACell> input) throws IOException {
 		if (input == null) input = Maps.empty();
+		requireFileCap(ctx, subOp, input);
 
 		// roots is the only op that does not require a root parameter.
 		if ("roots".equals(subOp)) return handleRoots();
@@ -450,6 +451,26 @@ public class FileAdapter extends AAdapter {
 			case "stat"   -> handleStat(ctx, input);
 			default       -> throw new IllegalArgumentException("Unknown file operation: " + subOp);
 		};
+	}
+
+	/**
+	 * Capability enforcement co-located with the file op dispatch. The resource
+	 * is the {@code file://<root>/<path>} form the grant taxonomy uses; a null
+	 * ceiling (authenticated/internal) is unrestricted (no-op). Reads, writes,
+	 * and deletes pin {@code crud/read}/{@code crud/write}/{@code crud/delete}.
+	 */
+	private static void requireFileCap(RequestContext ctx, String subOp, AMap<AString, ACell> input) {
+		String ability = switch (subOp) {
+			case "list", "tree", "read", "stat", "roots" -> "crud/read";
+			case "write", "append", "mkdir" -> "crud/write";
+			case "delete" -> "crud/delete";
+			default -> null;
+		};
+		if (ability == null) return;
+		String resource = schemeResource("file",
+			RT.ensureString(RT.getIn(input, FIELD_ROOT)),
+			RT.ensureString(RT.getIn(input, FIELD_PATH)));
+		ctx.requireCapability(resource, ability);
 	}
 
 	// ==================== Handlers ====================

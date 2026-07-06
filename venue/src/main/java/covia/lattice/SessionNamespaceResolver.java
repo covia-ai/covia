@@ -6,6 +6,7 @@ import convex.core.data.Blob;
 import convex.core.data.Strings;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.adapter.CoviaAdapter;
+import covia.exception.WrongScopeException;
 import covia.venue.RequestContext;
 
 /**
@@ -29,7 +30,7 @@ public class SessionNamespaceResolver implements NamespaceResolver {
 		AString agentId = ctx.getAgentId();
 		Blob sessionId = ctx.getSessionId();
 		if (agentId == null || sessionId == null) {
-			throw new RuntimeException(
+			throw new WrongScopeException(
 				"Cannot use 'c/' prefix outside session scope (requires agentId and sessionId on RequestContext)");
 		}
 

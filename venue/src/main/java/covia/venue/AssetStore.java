@@ -55,9 +55,11 @@ public class AssetStore extends ALatticeComponent<Index<AString, AVector<ACell>>
 		Hash id = metaMap.getHash();
 		AVector<ACell> record = Vectors.create(meta, content, metaMap);
 		cursor.updateAndGet(current -> {
-			AMap m = RT.ensureMap(current);
-			if (m == null) m = Index.none();
-			return (Index) m.assoc(id, record);
+			// Content-addressed store is an Index; build one explicitly rather
+			// than relying on RT.castMap (which returns an empty AHashMap, not
+			// an Index, for a null input).
+			Index idx = (current instanceof Index) ? (Index) current : Index.none();
+			return idx.assoc(id, record);
 		});
 		return id;
 	}
@@ -79,7 +81,7 @@ public class AssetStore extends ALatticeComponent<Index<AString, AVector<ACell>>
 	 * @return Map of all assets, or null if uninitialised
 	 */
 	public AMap<ABlob, AVector<?>> getAll() {
-		return RT.ensureMap(cursor.get());
+		return RT.castMap(cursor.get());
 	}
 
 	/**

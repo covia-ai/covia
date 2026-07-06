@@ -69,6 +69,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	/** Maximum tool call loop iterations per frame */
 	static final int MAX_ITERATIONS = 50;
 
+	/**
+	 * Maximum subgoal nesting depth. Each {@code subgoal} call recurses into a
+	 * child frame, and each frame can run up to {@link #MAX_ITERATIONS} LLM
+	 * calls — unbounded nesting risks many hours of work and deep stack growth.
+	 * At this depth the harness refuses further decomposition and the model must
+	 * make progress (complete/fail) at the current level.
+	 */
+	static final int MAX_SUBGOAL_DEPTH = 10;
+
 	/** Live turn count above which the auto-compact nudge fires */
 	static final int AUTO_COMPACT_THRESHOLD = 20;
 
@@ -344,6 +353,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		requireInvoke(ctx);
 		return CompletableFuture.supplyAsync(() -> processGoal(null, ctx, input), VIRTUAL_EXECUTOR);
 	}
 
@@ -467,7 +477,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// Prepare tool dispatch context
 		AVector<ACell> baseTools = context.tools();
 		Map<String, AString> configToolMap = context.configToolMap();
-		AVector<ACell> caps = context.caps();
 		AString llmOperation = getLLMOperation(l3Config);
 
 		// Set up capability-scoped context for tool dispatch
@@ -482,7 +491,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// typed complete/fail tools alongside the regular harness/operation
 		// tools, supporting providers that prefer tool calls over response_format.
 		FrameResult result = runFrame(job, frames, 0, l3Config, llmOperation, baseTools,
-			configToolMap, caps, capsCtx, context.history(), typedHarnessTools, toolCallTimeoutMs);
+			configToolMap, capsCtx, context.history(), typedHarnessTools, toolCallTimeoutMs);
 
 		// Config carry-over only — the frame stack lives on the session
 		// record now, so no per-adapter frame state is persisted here.
@@ -576,8 +585,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	 * @param llmOperation L3 operation name
 	 * @param baseTools configured operation tools
 	 * @param configToolMap LLM tool name → operation name mapping
-	 * @param caps capability attenuations
-	 * @param ctx request context for tool dispatch
+	 * @param ctx request context for tool dispatch — carries the agent's caps
 	 * @param systemMessages system messages (prompt, context entries)
 	 * @param typedRootHarnessTools typed complete/fail tools injected at the
 	 *        root frame (alongside config-resolved harness tools), or null
@@ -590,7 +598,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	FrameResult runFrame(Job job, AVector<ACell> frames, int frameIndex,
 			AMap<AString, ACell> config, AString llmOperation,
 			AVector<ACell> baseToolsParam, Map<String, AString> configToolMap,
-			AVector<ACell> caps, RequestContext ctx, AVector<ACell> systemMessages,
+			RequestContext ctx, AVector<ACell> systemMessages,
 			AVector<ACell> typedRootHarnessTools, long toolCallTimeoutMs) {
 
 		// Mutable copy — more_tools can append to this mid-run
@@ -796,7 +804,21 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 				ACell tc = toolCalls.get(t);
 				AString toolCallId = RT.ensureString(RT.getIn(tc, K_ID));
 				String toolName = RT.ensureString(RT.getIn(tc, K_NAME)).toString();
-				ACell toolInput = ensureParsedInput(RT.getIn(tc, K_ARGUMENTS));
+
+				// Unwrap tool arguments at the LLM wire boundary (the one
+				// tolerant parse). Broken arguments fail THIS tool call with a
+				// visible error the LLM can correct next turn — never a silent
+				// empty-map substitution (#89).
+				ACell toolInput;
+				try {
+					toolInput = parseToolArguments(RT.getIn(tc, K_ARGUMENTS));
+				} catch (IllegalArgumentException e) {
+					log.warn("Frame[{}] tool call {} has malformed arguments: {}",
+						frameIndex, toolName, e.getMessage());
+					activeFrame = GoalTreeContext.appendTurn(activeFrame,
+						toolResultMessage(toolCallId, toolName, Strings.create("Error: " + e.getMessage())));
+					continue;
+				}
 
 				ACell toolResult;
 
@@ -903,32 +925,45 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					String desc = RT.ensureString(RT.getIn(toolInput, Strings.create("description"))).toString();
 					log.info("Subgoal pushed: {}", desc);
 
-					// Push child frame with inherited loads (copy-on-push)
-					AMap<AString, ACell> parentLoads = GoalTreeContext.getLoads(activeFrame);
-					AMap<AString, ACell> childFrame = GoalTreeContext.createFrame(desc, parentLoads);
-					frames = updateFrame(frames, frameIndex, activeFrame);
-					AVector<ACell> childFrames = frames.conj(childFrame);
+					if (frameIndex + 1 >= MAX_SUBGOAL_DEPTH) {
+						// Refuse to nest deeper — subgoal recursion is otherwise
+						// unbounded, and each frame can run up to MAX_ITERATIONS
+						// LLM calls. The model receives this as the tool result and
+						// must make progress (complete/fail) at the current depth.
+						log.warn("Subgoal depth limit ({}) reached — refusing further nesting", MAX_SUBGOAL_DEPTH);
+						toolResult = Maps.of(
+							Strings.create("status"), Strings.create("error"),
+							Strings.create("error"), Strings.create(
+								"Maximum subgoal depth (" + MAX_SUBGOAL_DEPTH + ") reached. Complete or "
+								+ "fail the current goal at this level instead of decomposing further."));
+					} else {
+						// Push child frame with inherited loads (copy-on-push)
+						AMap<AString, ACell> parentLoads = GoalTreeContext.getLoads(activeFrame);
+						AMap<AString, ACell> childFrame = GoalTreeContext.createFrame(desc, parentLoads);
+						frames = updateFrame(frames, frameIndex, activeFrame);
+						AVector<ACell> childFrames = frames.conj(childFrame);
 
-					// Recurse into child. Child frames don't inherit typed
-					// outputs — a subgoal's contract is "return any value to
-					// the parent", not the parent's typed output schema. The
-					// child also gets responseFormat stripped from its L3
-					// config (handled inside the recursive runFrame).
-					FrameResult childResult = runFrame(job, childFrames, frameIndex + 1,
-						config, llmOperation, baseTools, configToolMap, caps, ctx, systemMessages, null,
-						toolCallTimeoutMs);
+						// Recurse into child. Child frames don't inherit typed
+						// outputs — a subgoal's contract is "return any value to
+						// the parent", not the parent's typed output schema. The
+						// child also gets responseFormat stripped from its L3
+						// config (handled inside the recursive runFrame).
+						FrameResult childResult = runFrame(job, childFrames, frameIndex + 1,
+							config, llmOperation, baseTools, configToolMap, ctx, systemMessages, null,
+							toolCallTimeoutMs);
 
-					// Pop child — result becomes tool result in parent
-					AMap<AString, ACell> resultMap = Maps.of(
-						Strings.create("status"), Strings.create(childResult.status()));
-					if (childResult.value() != null) {
-						resultMap = resultMap.assoc(Strings.create("result"), childResult.value());
+						// Pop child — result becomes tool result in parent
+						AMap<AString, ACell> resultMap = Maps.of(
+							Strings.create("status"), Strings.create(childResult.status()));
+						if (childResult.value() != null) {
+							resultMap = resultMap.assoc(Strings.create("result"), childResult.value());
+						}
+						toolResult = resultMap;
 					}
-					toolResult = resultMap;
 
 				} else {
 					// Config tool or grid dispatch
-					toolResult = dispatchTool(toolName, toolInput, configToolMap, caps, ctx, toolCallTimeoutMs);
+					toolResult = dispatchTool(toolName, toolInput, configToolMap, ctx, toolCallTimeoutMs);
 				}
 
 				// Record tool result in conversation

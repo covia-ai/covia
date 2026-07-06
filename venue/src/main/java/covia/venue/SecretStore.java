@@ -74,7 +74,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 			UPDATED_KEY, CVMLong.create(System.currentTimeMillis())
 		);
 		cursor.updateAndGet(current -> {
-			AMap m = RT.ensureMap(current);
+			AMap m = RT.castMap(current);
 			if (m == null) m = Maps.empty();
 			return m.assoc(name, record);
 		});
@@ -100,7 +100,7 @@ public class SecretStore extends ALatticeComponent<AMap<AString, ACell>> {
 		);
 		AtomicBoolean wrote = new AtomicBoolean(false);
 		cursor.updateAndGet(current -> {
-			AMap m = RT.ensureMap(current);
+			AMap m = RT.castMap(current);
 			if (m == null) m = Maps.empty();
 			if (m.containsKey(name)) {
 				wrote.set(false);

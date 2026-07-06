@@ -1,0 +1,10 @@
+{
+	"name": "Capture Context Operation",
+	"description": "Test-only transition op: records the RequestContext it ran under (keyed by agentId) and echoes the input. Used to assert agent run-loop identity (#91).",
+	"dateCreated": "2026-06-17T00:00:00Z",
+	"operation": {
+		"adapter": "test:capturectx",
+		"input": {},
+		"output": {}
+	}
+}

@@ -241,7 +241,7 @@ public class LatticeStorageTest {
 	@Test
 	public void testWithLatticeCursor() throws IOException {
 		// Create a venue lattice state with proper structure
-		var venueState = Covia.VENUE.zero();
+		ACell venueState = Index.none();
 		var gridState = Maps.of(
 			Covia.GRID, Maps.of(
 				Covia.VENUES, Index.of(

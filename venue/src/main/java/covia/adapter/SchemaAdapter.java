@@ -50,6 +50,7 @@ public class SchemaAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		requireInvoke(ctx);
 		String op = getSubOperation(meta);
 		try {
 			return switch (op) {
@@ -68,7 +69,10 @@ public class SchemaAdapter extends AAdapter {
 
 	private ACell handleValidate(ACell input) {
 		AMap<AString, ACell> schema = getMap(RT.getIn(input, K_SCHEMA));
-		ACell value = parseValue(RT.getIn(input, K_VALUE));
+		// The value is validated exactly as given — no silent string→structure
+		// reparse (#89): a JSON-looking string IS a string, and a validation
+		// verdict must apply to what the caller actually sent.
+		ACell value = RT.getIn(input, K_VALUE);
 		if (schema == null) throw new IllegalArgumentException("'schema' is required");
 
 		String err = JsonSchema.validate(schema, value);
@@ -80,7 +84,7 @@ public class SchemaAdapter extends AAdapter {
 
 	private ACell handleValidateAll(ACell input) {
 		AMap<AString, ACell> schema = getMap(RT.getIn(input, K_SCHEMA));
-		ACell value = parseValue(RT.getIn(input, K_VALUE));
+		ACell value = RT.getIn(input, K_VALUE);
 		if (schema == null) throw new IllegalArgumentException("'schema' is required");
 
 		AVector<AString> errors = JsonSchema.validateAll(schema, value);
@@ -91,14 +95,14 @@ public class SchemaAdapter extends AAdapter {
 	}
 
 	private ACell handleInfer(ACell input) {
-		ACell value = parseValue(RT.getIn(input, K_VALUE));
+		ACell value = RT.getIn(input, K_VALUE);
 		AMap<AString, ACell> schema = JsonSchema.infer(value);
 		return Maps.of(K_SCHEMA, schema);
 	}
 
 	private ACell handleCoerce(ACell input) {
 		AMap<AString, ACell> schema = getMap(RT.getIn(input, K_SCHEMA));
-		ACell value = parseValue(RT.getIn(input, K_VALUE));
+		ACell value = RT.getIn(input, K_VALUE);
 		if (schema == null) throw new IllegalArgumentException("'schema' is required");
 
 		ACell coerced = JsonSchema.coerce(schema, value);
@@ -116,33 +120,26 @@ public class SchemaAdapter extends AAdapter {
 		return Maps.of(K_VALID, CVMBool.FALSE, K_ERROR, Strings.create(err));
 	}
 
+	/**
+	 * Resolves the {@code schema} parameter. A schema must be a JSON object;
+	 * a string-encoded schema (LLM callers stringify) is parsed, and a
+	 * malformed one is a caller error reported with its actual cause — never
+	 * silently collapsed to "schema is required" (#89).
+	 */
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> getMap(ACell cell) {
 		if (cell instanceof AMap) return (AMap<AString, ACell>) cell;
-		// LLMs often pass JSON objects as strings — parse them
 		if (cell instanceof AString s) {
+			ACell parsed;
 			try {
-				ACell parsed = convex.core.util.JSON.parse(s.toString());
-				if (parsed instanceof AMap) return (AMap<AString, ACell>) parsed;
-			} catch (Exception e) { /* not valid JSON */ }
+				parsed = convex.core.util.JSON.parse(s.toString());
+			} catch (Exception e) {
+				throw new IllegalArgumentException("'schema' string is not valid JSON: " + e.getMessage());
+			}
+			if (parsed instanceof AMap) return (AMap<AString, ACell>) parsed;
+			throw new IllegalArgumentException(
+				"'schema' must be a JSON object, got: " + (parsed == null ? "null" : parsed.getClass().getSimpleName()));
 		}
 		return null;
-	}
-
-	/**
-	 * Extracts a value from input, parsing JSON strings if the value is a string
-	 * that looks like JSON. LLMs frequently pass structured data as strings.
-	 */
-	private static ACell parseValue(ACell cell) {
-		if (cell instanceof AString s) {
-			String str = s.toString();
-			if ((str.startsWith("{") && str.endsWith("}")) ||
-				(str.startsWith("[") && str.endsWith("]"))) {
-				try {
-					return convex.core.util.JSON.parse(str);
-				} catch (Exception e) { /* not valid JSON, return as string */ }
-			}
-		}
-		return cell;
 	}
 }

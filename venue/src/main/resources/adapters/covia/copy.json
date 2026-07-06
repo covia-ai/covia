@@ -20,9 +20,13 @@
 		"output": {
 			"type": "object",
 			"properties": {
-				"copied": {
+				"existed": {
 					"type": "boolean",
-					"description": "True if the value was successfully copied."
+					"description": "Whether a value was already present at the destination before the copy: false = created, true = an existing value was overwritten."
+				},
+				"pathCreated": {
+					"type": "boolean",
+					"description": "Present and true only if copying had to build a missing parent path at the destination (intermediate hierarchy). Omitted when copied into existing structure. Distinct from 'existed', which is about the destination leaf."
 				}
 			}
 		}

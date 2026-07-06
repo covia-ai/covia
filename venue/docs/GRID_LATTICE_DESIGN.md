@@ -840,6 +840,12 @@ Lattice structure change:
           :ops       → MapLattice (user's named operations)
 ```
 
+> **Note — settled structure.** The sketch above is the Phase 2 planning shape. The
+> venue `:value` ultimately landed as a **single whole-value-LWW node** (not
+> per-region/per-entry LWW), and the dead `:jobs`/`:auth`/`:caps` regions were
+> dropped. Per-user state lives under `:user-data → <DID> → {j, g, s, w, o, h, a}`.
+> See **Appendix A.2** and **Appendix B** for the authoritative current structure.
+
 **Capability representation (lattice-native):**
 
 ```
@@ -941,20 +947,40 @@ Sub-cursors navigate to specific fields (e.g. `venueCursor.path(Covia.ASSETS)`).
 
 For day-to-day operations, the venue works directly with its cursor. It does not interact with the global lattice structure unless syncing with other venues.
 
-### A.2 Merge Semantics Per Component
+### A.2 Merge Semantics
 
-| Component | Lattice Type | Merge Rule | Rationale |
-|-----------|-------------|------------|-----------|
-| `:venues` | OwnerLattice | Per-AccountKey, signature-verified | Each venue merges independently |
-| Venue root | SignedLattice + KeyedLattice | Verify signature, merge contents | Authenticity + convergence |
-| `:assets` | CASLattice (union) | All entries kept | Assets are immutable, content-addressed |
-| `:jobs` | IndexLattice + LWW | Higher `"updated"` timestamp wins | Jobs progress forward |
-| `:users` | MapLattice + LWW | Higher `"updated"` timestamp wins | User records evolve |
-| `:storage` | CASLattice (union) | All entries kept | Same hash = same blob |
-| `:meta` | CASLattice (union) | All entries kept | Same hash = same JSON |
-| `:auth` | MapLattice + LWW | Higher `"updated"` timestamp wins | Auth policy evolves |
-| `:did` | FunctionLattice | First-writer-wins | Set once at creation |
-| Agent record | LWW | Latest `ts` wins | Single venue writes, atomic record |
+The venue **`:value` is a single navigable whole-value-LWW node.** It carries a
+wall-clock `:timestamp`, re-stamped on every write. On merge, the value with the
+newer `:timestamp` wins **wholesale** (tie → own value); the merge does not recurse
+into the interior. This is what makes **deletions durable** — a removed key is
+simply absent from the newer winning value, so it cannot be reintroduced by a
+per-entry union on merge-back (the failure mode of the previous per-entry-LWW
+model).
+
+This is correct because a venue has a **single authoritative writer**: its signing
+key under `:grid → :venues → OwnerLattice → SignedLattice`. Every merge a venue
+performs — propagator merge-back, reload from the Etch store, replica restore — is
+therefore a *stale-vs-fresh snapshot of the same lineage*, never a reconciliation
+of independent concurrent writers. "Newest coherent snapshot wins" is the right
+CRDT for that; per-entry LWW would add no value and would resurrect deleted keys.
+
+The **interior** of `:value` (`:assets`, `:storage`, `:did`, `:users`, `:schedule`,
+`:user-data → <DID> → {j, g, s, w, o, h, a}`) is **plain navigable JSON**: it is
+walked and written structurally but carries no independent merge semantics — the
+merge happens only at the `:value` root. Writes are stamped on the way up by a
+**stamp-on-write boundary** that sources its timestamp from the write clock on the
+`LatticeContext` (the convex `StampingLattice` / `StampedCursor`). The `w`/`o`/`h`
+user namespaces are stored as a transparent `{updated, data}` container: content
+lives under `data` (callers address `w/foo`, which translates to `w/data/foo`;
+they never see `data`), and `updated` is per-namespace last-modified metadata,
+auto-stamped by the same boundary.
+
+| Region | Merge | Rationale |
+|--------|-------|-----------|
+| `:grid → :venues` | OwnerLattice — per-AccountKey, signature-verified | One authoritative signing key per venue |
+| Venue `:value` (whole node) | SignedLattice authenticity wrapping **whole-value LWW** by `:timestamp`, tie → own | Single-writer lineage; deletions durable; interior is plain navigable JSON |
+| `:grid → :meta` | CASLattice (union) | Genuinely shared, multi-writer content-addressed metadata |
+| `:dlfs` (sibling region) | Per-user OwnerLattice → per-file rsync-like DLFS merge | Independent per-user drives — the one legitimate fine-grained CRDT |
 
 All merges satisfy CRDT properties:
 - **Commutative:** `merge(a, b) == merge(b, a)`
@@ -1035,12 +1061,15 @@ Selective sharing is implemented by constructing a partial lattice value contain
 | `KeyedLattice` | Maps different keywords to different child lattices |
 | `SignedLattice<V>` | Wraps values in Ed25519 signatures |
 | `OwnerLattice<V>` | Per-owner signed values with authorisation |
+| `StringKeyedLattice` | Like `KeyedLattice` but `AString` keys over an `AHashMap` (natively JSON-compatible) |
 | `IndexLattice<K,V>` | Sorted radix-tree map with recursive value merge |
 | `MapLattice<K,V>` | Hashmap with recursive value merge |
 | `CASLattice<K,V>` | Content-addressed union merge |
-| `LWWLattice<V>` | Last-writer-wins by extracted timestamp |
+| `JSONLattice` | Structural navigation only — builds a container per key shape; recursive `path`; `merge` throws (merge belongs to the enclosing node, never per-key) |
+| `LWWLattice<V>` | **Whole-value** last-writer-wins merge layer by extracted timestamp (non-recursive; tie → own); delegates navigation to an inner lattice |
+| `StampingLattice<V>` | Stamp-on-write boundary — inserts a `StampedCursor` that re-stamps a value on write, sourcing the timestamp from `LatticeContext`; delegates merge and navigation to an inner lattice |
 | `FunctionLattice<V>` | Custom merge function (e.g. first-writer-wins) |
-| `LatticeContext` | Carries timestamp, signing key, owner verifier during merge |
+| `LatticeContext` | Carries the write-clock timestamp, signing key, and owner verifier; the single write clock for stamp-on-write and signing |
 | `ACursor<V>` | Mutable reference with atomic get/set/update/fork/sync |
 
 ### Covia Definitions
@@ -1049,10 +1078,10 @@ The `covia.lattice.Covia` class defines the complete lattice hierarchy using sta
 
 | Definition | Type | Purpose |
 |------------|------|---------|
-| `Covia.ROOT` | `KeyedLattice` | Root lattice — `:grid` containing `:venues` and `:meta` |
-| `Covia.VENUE` | `KeyedLattice` | Per-venue state — `:assets`, `:jobs`, `:users`, `:storage`, `:auth`, `:did` |
-| `:venues` child | `OwnerLattice` → `SignedLattice` → `KeyedLattice` | Per-AccountKey signed venue state |
-| `:assets`, `:storage`, `:meta` | `CASLattice` | Content-addressed union merge |
-| `:jobs` | `IndexLattice` + `LWWLattice` | Per-job last-writer-wins by `"updated"` timestamp |
-| `:users`, `:auth` | `MapLattice` + `LWWLattice` | Per-entry last-writer-wins by `"updated"` timestamp |
-| `:did` | `FunctionLattice` | First-writer-wins (set once at venue creation) |
+| `Covia.ROOT` | `KeyedLattice` | Root — `:grid` (containing `:venues` and `:meta`) and the sibling `:dlfs` region |
+| `Covia.VENUE` | `StampingLattice` → `LWWLattice` → `KeyedLattice` | The whole per-venue `:value` as a single navigable **whole-value-LWW** node with a stamp-on-write boundary |
+| `:grid → :venues` | `OwnerLattice` → `SignedLattice` → `Covia.VENUE` | Per-AccountKey signed venue state (one authoritative signing key) |
+| Venue interior | `KeyedLattice` (plain-JSON children) | `:assets`, `:storage`, `:did`, `:users`, `:schedule`, `:user-data` — navigated structurally; merged only at `:value` |
+| `:user-data → <DID>` | `MapLattice` → `StringKeyedLattice` | Per-user record: `j`/`g`/`s`/`a` are plain navigable JSON; `w`/`o`/`h` are stamped `{updated, data}` containers (`StampingLattice` over `data`) |
+| `:grid → :meta` | `CASLattice` | Shared content-addressed metadata (multi-writer union) |
+| `:dlfs` | `OwnerLattice` → `MapLattice(DLFSLattice)` | Per-user signed drives, per-file rsync-like merge |

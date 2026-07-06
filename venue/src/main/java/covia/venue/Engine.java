@@ -66,6 +66,9 @@ import covia.adapter.agent.LLMAgentAdapter;
 import covia.adapter.UCANAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
+import covia.exception.CoviaException;
+import covia.exception.RemoteFetchException;
+import covia.exception.WrongScopeException;
 import covia.grid.AContent;
 import covia.grid.Asset;
 import covia.grid.Grid;
@@ -199,7 +202,8 @@ public class Engine {
 		this.persistHandler = (persistHandler != null) ? persistHandler : PersistenceHandler.NOOP;
 		this.lastFlushMillis = System.currentTimeMillis();
 		// Set signing context so SignedCursor can sign writes through OwnerLattice
-		LatticeContext ctx = LatticeContext.create(null, this.keyPair);
+		LatticeContext ctx = LatticeContext.create(
+			convex.core.data.prim.CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), this.keyPair);
 		this.lattice.withContext(ctx);
 		initialiseFromCursor();
 		this.jobManager = new JobManager(this);
@@ -507,8 +511,8 @@ public class Engine {
 		// entries once and dispatch by bare hex hash for every write.
 		String writeRef = lookupCoviaWriteRef();
 		if (writeRef == null) {
-			log.warn("Cannot materialise /v/ops — covia:write hash not available");
-			return;
+			throw new IllegalStateException(
+				"Cannot materialise /v/ops — covia:write hash not available");
 		}
 		for (var adapter : adapters.values()) {
 			if (adapter == null) continue;
@@ -525,8 +529,11 @@ public class Engine {
 							Fields.VALUE, meta),
 						ctx).awaitResult(5000);
 				} catch (Exception e) {
-					log.warn("Failed to register {} at /{}: {}",
-						adapter.getName(), fullPath, e.getMessage());
+					// Fail loudly — a venue that cannot materialise its own ops
+					// catalog is broken; swallowing this masks the real cause as a
+					// downstream "Cannot resolve operation" cascade.
+					throw new RuntimeException(
+						"Failed to materialise " + adapter.getName() + " at /" + fullPath, e);
 				}
 			}
 		}
@@ -813,7 +820,7 @@ public class Engine {
 	public AMap<AString,ACell> getMetaValue(Hash assetID) {
 		AVector<?> arec=venueState.assets().getRecord(assetID);
 		if (arec==null) return null;
-		// instanceof — RT.ensureMap(null) returns an empty map, which would
+		// instanceof — RT.castMap(null) returns an empty map, which would
 		// violate the "null if not valid metadata" contract.
 		ACell meta = arec.get(AssetStore.POS_META);
 		return (meta instanceof AMap) ? (AMap<AString, ACell>) meta : null;
@@ -844,11 +851,18 @@ public class Engine {
 	// without an "operation" field) is opaque data, not a reference. This
 	// keeps the resolver primitive simple and explicit.
 
-	/** Namespace prefix for immutable content-addressed assets */
-	private static final AString NS_ASSET = Strings.intern("/a/");
+	/** Namespace prefix for immutable content-addressed assets (leading slash optional: a/ or /a/) */
+	private static final AString NS_ASSET = Strings.intern("a/");
 	private static final AString NS_OPS   = Strings.intern("/o/");
 	/** Namespace prefix for DID URLs */
 	private static final AString NS_DID   = Strings.intern("did:");
+	/** Optional leading-slash sugar, stripped before virtual/workspace resolution */
+	private static final AString SLASH    = Strings.intern("/");
+
+	/** Strips a single optional leading slash: {@code "/w/x"} → {@code "w/x"}; {@code "w/x"} unchanged. */
+	private static AString stripLeadingSlash(AString ref) {
+		return ref.startsWith(SLASH) ? ref.slice(1) : ref;
+	}
 
 	/**
 	 * Pure single-step path navigation. Returns the literal value at the
@@ -858,7 +872,7 @@ public class Engine {
 	 * <p>Accepted input forms:</p>
 	 * <ul>
 	 *   <li>Bare hex hash → asset metadata from CAS</li>
-	 *   <li>{@code /a/<hash>} → asset metadata from CAS</li>
+	 *   <li>{@code a/<hash>} or {@code /a/<hash>} → asset metadata from CAS</li>
 	 *   <li>{@code /o/<name>} → caller's own /o/ entry value</li>
 	 *   <li>Local DID URL with {@code /a/<hash>} path → asset metadata</li>
 	 *   <li>Workspace path ({@code w/...}, {@code g/...}, etc.) → cursor value</li>
@@ -883,9 +897,10 @@ public class Engine {
 			return (asset != null) ? asset.meta() : null;
 		}
 
-		// 2. /a/<hash> → look up in CAS
-		if (ref.startsWith(NS_ASSET)) {
-			Hash ah = Hash.parse(ref.slice(3));
+		// 2. a/<hash> or /a/<hash> → look up in CAS (leading slash optional)
+		AString assetRef = stripLeadingSlash(ref);
+		if (assetRef.startsWith(NS_ASSET)) {
+			Hash ah = Hash.parse(assetRef.slice(2));
 			if (ah == null) return null;
 			Asset asset = getAsset(ah, ctx);
 			return (asset != null) ? asset.meta() : null;
@@ -902,16 +917,22 @@ public class Engine {
 			return (local != null) ? local.meta() : null;
 		}
 
+		// Steps 5–6 cover the virtual and workspace namespaces, where a
+		// leading slash is optional sugar (it is already accepted for /a/ and
+		// /o/ above). Normalise it away once so "/w/notes" resolves exactly
+		// like "w/notes" and "/v/ops/x" like "v/ops/x".
+		AString navRef = stripLeadingSlash(ref);
+
 		// 5. Virtual namespace prefix (n/, v/, ...) — delegate to the
 		// registered resolver via CoviaAdapter. Handles cursor-based
 		// virtual namespaces uniformly. (t/ — job-scoped temp — is not
 		// handled here; covia:read has its own t/ branch.)
-		ACell virtualValue = resolveVirtualNamespace(ref, ctx);
+		ACell virtualValue = resolveVirtualNamespace(navRef, ctx);
 		if (virtualValue != null) return virtualValue;
 
 		// 6. Workspace path (w/, g/, o/, j/, s/, h/) → caller's lattice
-		if (isUserNamespacePath(ref)) {
-			return readWorkspacePathValue(ref, ctx);
+		if (isUserNamespacePath(navRef)) {
+			return readWorkspacePathValue(navRef, ctx);
 		}
 
 		return null;
@@ -929,7 +950,12 @@ public class Engine {
 		if (coviaAdapter == null) return null;
 		try {
 			return coviaAdapter.readVirtualNamespace(ctx, ref);
-		} catch (Exception e) {
+		} catch (WrongScopeException e) {
+			// The only resolver condition that is a genuine absence for a read: the
+			// prefix (n/, c/) names a scope this context doesn't provide, so there
+			// is no such path here. Everything ELSE — an auth failure, a malformed
+			// path, a lower-level store fault, an abnormal navigation bug — is NOT
+			// absence and propagates rather than being masked as "not found" (#175).
 			return null;
 		}
 	}
@@ -943,9 +969,22 @@ public class Engine {
 	 * step dispatch) use this function. Read-side ops should use
 	 * {@link #resolvePath} instead.</p>
 	 *
+	 * <p><b>Absence vs failure (#174).</b> Returns {@code null} for a genuine
+	 * absence — the reference does not resolve to an asset (locally or, for a
+	 * remote {@code did:web} reference, the publisher is reachable but has no
+	 * such asset / does not bind the name). It <b>throws</b>
+	 * {@link covia.exception.RemoteFetchException} when a remote fetch fails
+	 * <em>operationally</em> (venue unreachable, remote error, malformed venue
+	 * reference, or metadata that fails the content-addressing check) — a down
+	 * venue is not the same as a missing operation. Callers on a single-ref
+	 * path let it propagate (invoke → HTTP 502, job-aware adapter → job failure);
+	 * aggregate callers that resolve many refs (tool/context assembly) catch it
+	 * and degrade visibly.</p>
+	 *
 	 * @param ref Reference string
 	 * @param ctx Request context (caller identity for /o/ namespace scoping)
-	 * @return Resolved Asset, or null if not resolvable as an asset
+	 * @return Resolved Asset, or null if genuinely not resolvable as an asset
+	 * @throws covia.exception.RemoteFetchException on operational remote-fetch failure
 	 */
 	public Asset resolveAsset(AString ref, RequestContext ctx) {
 		if (ref == null) return null;
@@ -1011,18 +1050,18 @@ public class Engine {
 	 */
 	private ACell readWorkspacePathValue(AString ref, RequestContext ctx) {
 		if (ctx == null || ctx.getCallerDID() == null) return null;
-		try {
-			Users users = venueState.users();
-			User user = users.get(ctx.getCallerDID());
-			if (user == null) return null;
+		Users users = venueState.users();
+		User user = users.get(ctx.getCallerDID());
+		if (user == null) return null;
 
-			ACell[] pathKeys = covia.adapter.CoviaAdapter.parseStringPath(ref.toString());
-			if (pathKeys.length == 0) return null;
+		ACell[] pathKeys = covia.adapter.CoviaAdapter.parseStringPath(ref.toString());
+		if (pathKeys.length == 0) return null;
 
-			return covia.adapter.CoviaAdapter.readPath(user.cursor(), pathKeys);
-		} catch (Exception e) {
-			return null;
-		}
+		// Absence is a null return (no user, empty path, or readPath finding
+		// nothing — none of which throw). Anything that throws is a real failure —
+		// an abnormal navigation error, or a lower-level store fault — and it
+		// propagates rather than collapsing to a phantom "path not found" (#175).
+		return covia.adapter.CoviaAdapter.readPath(user.cursor(), pathKeys);
 	}
 
 	/**
@@ -1148,8 +1187,11 @@ public class Engine {
 	 *
 	 * @param venueConn Remote venue connection string (did:web or URL)
 	 * @param id Asset id (CAD3 value hash of the metadata)
-	 * @return Verified Asset with metadata, or null if the venue is
-	 *         unreachable, the asset is absent, or verification fails
+	 * @return Verified Asset with metadata, or null if the asset is genuinely
+	 *         absent (the venue is reachable but holds no such asset)
+	 * @throws covia.exception.RemoteFetchException if the venue is unreachable,
+	 *         returns an error, the connection string is malformed, or the
+	 *         returned metadata fails the content-addressing check (#174)
 	 */
 	/**
 	 * Fetched remote definitions, keyed by content hash. Definitions are
@@ -1185,9 +1227,9 @@ public class Engine {
 		try {
 			remote = Grid.connect(venueConn);
 		} catch (IllegalArgumentException e) {
-			return null;
+			throw RemoteFetchException.malformedVenue(venueConn, e);
 		}
-		Asset fetched = fetchRemoteAsset(remote, id);
+		Asset fetched = fetchRemoteAsset(remote, id);   // throws on unreachable/integrity; null on a genuine 404
 		cacheDefinition(fetched);
 		return fetched;
 	}
@@ -1206,51 +1248,70 @@ public class Engine {
 	 *
 	 * @param venueConn Remote venue connection string (did:web or URL)
 	 * @param name Catalog operation name, e.g. "v/ops/json/merge"
-	 * @return Verified Asset with metadata, or null if the venue is
-	 *         unreachable or does not bind the name
+	 * @return Verified Asset with metadata, or null if the venue is reachable
+	 *         but does not bind the name (a genuine absence)
+	 * @throws covia.exception.RemoteFetchException if the venue is unreachable,
+	 *         returns an error, or the connection string is malformed (#174)
 	 */
 	public Asset fetchRemoteNamedAsset(String venueConn, String name) {
+		Venue remote;
 		try {
-			Venue remote = Grid.connect(venueConn);
-			// The BINDING is never cached (names are mutable) — only the
-			// definition the resolved hash identifies.
-			Hash id = remote.getOperationId(name);
-			if (id == null) return null;
-			Asset cached = cachedDefinition(id);
-			if (cached != null) return cached;
-			Asset fetched = fetchRemoteAsset(remote, id);
-			cacheDefinition(fetched);
-			return fetched;
-		} catch (IOException | RuntimeException e) {
-			log.debug("Remote named fetch failed for {}: {}", name, e.getMessage());
-			return null;
+			remote = Grid.connect(venueConn);
+		} catch (IllegalArgumentException e) {
+			throw RemoteFetchException.malformedVenue(venueConn, e);
 		}
+		// Resolve the name to an id AT THE PUBLISHER. An operational failure here
+		// (venue down / error) is a real error naming the venue — NOT "operation
+		// not found". A reachable venue that simply does not bind the name
+		// returns a null id — that is a genuine absence.
+		Hash id;
+		try {
+			id = remote.getOperationId(name);   // the BINDING is never cached (names are mutable)
+		} catch (IOException | RuntimeException e) {
+			if (e instanceof RemoteFetchException rfe) throw rfe;
+			log.warn("Remote named fetch failed for {} at {}: {}", name, venueConn, e.toString());
+			throw RemoteFetchException.fetchFailed(venueConn, "operation '" + name + "'", e);
+		}
+		if (id == null) return null;   // genuine absence: the venue does not bind this name
+		Asset cached = cachedDefinition(id);
+		if (cached != null) return cached;
+		Asset fetched = fetchRemoteAsset(remote, id);   // throws on unreachable/integrity; null on 404
+		cacheDefinition(fetched);
+		return fetched;
 	}
 
 	/**
 	 * Fetches the binary content of a remote asset reference, for adoption
-	 * by {@code asset:pin}. Returns null when the reference is not a
-	 * fetchable remote ref, the asset is absent, or the metadata declares
-	 * no content. When the metadata declares a sha256, the fetched bytes
-	 * are verified against it — substituted content fails loudly rather
-	 * than being adopted.
+	 * by {@code asset:pin}. Returns null when there is genuinely nothing to
+	 * fetch: the reference is not a fetchable remote ref, the asset/name is
+	 * absent, or the metadata declares no content. When the metadata declares
+	 * a sha256, the fetched bytes are verified against it — substituted content
+	 * throws rather than being adopted. Operational failures (venue unreachable,
+	 * error, malformed reference) also throw (#174).
 	 *
 	 * @param ref Remote DID URL reference (hash or named form)
-	 * @return Content blob, or null if there is none to fetch
+	 * @return Content blob, or null if there is genuinely none to fetch
+	 * @throws covia.exception.RemoteFetchException on operational fetch failure
+	 *         or a content sha256 mismatch (#174)
 	 */
 	public ACell fetchRemoteContent(AString ref) {
 		AssetRef r = parseAssetRef(ref);
-		if (r == null || !"web".equals(r.method())) return null;
+		if (r == null || !"web".equals(r.method())) return null;   // not a fetchable remote ref
+		Venue remote;
 		try {
-			Venue remote = Grid.connect(r.didString());
+			remote = Grid.connect(r.didString());
+		} catch (IllegalArgumentException e) {
+			throw RemoteFetchException.malformedVenue(r.didString(), e);
+		}
+		try {
 			Hash id = (r.hash() != null) ? r.hash() : remote.getOperationId(r.name());
-			if (id == null) return null;
+			if (id == null) return null;   // genuine absence: name not bound
 
 			Asset def = cachedDefinition(id);
-			if (def == null) def = fetchRemoteAsset(remote, id);
+			if (def == null) def = fetchRemoteAsset(remote, id);   // throws / null=404
 			if (def == null) return null;
 			ACell contentMeta = RT.getIn(def.meta(), Fields.CONTENT);
-			if (contentMeta == null) return null;
+			if (contentMeta == null) return null;   // metadata declares no content — genuine
 
 			// Venue-bound handle for the content stream itself.
 			Asset handle = Asset.create(id, def.getMetadata());
@@ -1263,14 +1324,15 @@ public class Engine {
 			if (declared != null) {
 				Hash sha = Hashing.sha256(blob.getBytes());
 				if (!sha.toHexString().equals(declared.toString())) {
-					throw new IllegalStateException(
-						"Remote content does not match its declared sha256 for asset " + id);
+					throw RemoteFetchException.integrity(r.didString(), "content of " + id);
 				}
 			}
 			return blob;
-		} catch (IOException e) {
-			log.debug("Remote content fetch failed for {}: {}", ref, e.getMessage());
-			return null;
+		} catch (RemoteFetchException e) {
+			throw e;   // already meaningful (from fetchRemoteAsset or the integrity check)
+		} catch (IOException | RuntimeException e) {
+			log.warn("Remote content fetch failed for {} at {}: {}", ref, r.didString(), e.toString());
+			throw RemoteFetchException.fetchFailed(r.didString(), ref, e);
 		}
 	}
 
@@ -1280,23 +1342,39 @@ public class Engine {
 	 *
 	 * @param remote Remote venue
 	 * @param id Asset id (CAD3 value hash of the metadata)
-	 * @return Verified Asset with metadata, or null
+	 * @return Verified Asset with metadata, or null if the remote is reachable
+	 *         but holds no such asset (a genuine absence)
+	 * @throws covia.exception.RemoteFetchException if the remote is unreachable,
+	 *         errors, or returns metadata that does not hash to {@code id} (#174)
 	 */
+	/** Best-effort human label for a venue in an error message — never throws
+	 *  (a label must not be able to crash a fetch). */
+	private static String venueLabel(Venue v) {
+		try {
+			Object did = v.getDID();
+			if (did != null) return did.toString();
+		} catch (RuntimeException ignored) { /* stub / unusable identity */ }
+		return String.valueOf(v);
+	}
+
 	public Asset fetchRemoteAsset(Venue remote, Hash id) {
+		String venue = venueLabel(remote);
 		try {
 			Asset fetched = remote.getAsset(id);
-			if (fetched == null) return null;
+			if (fetched == null) return null;   // genuine absence: the remote answered but has no such asset
 			// getID() recomputes the CAD3 hash from the returned metadata —
 			// equality with the requested id IS the integrity check. (Also
-			// throws on unparseable metadata, caught below.)
+			// throws on unparseable metadata, caught below and treated as a
+			// failed fetch — the remote returned data we cannot verify.)
 			if (!id.equals(fetched.getID())) {
-				log.warn("Remote venue returned metadata that does not hash to {} — rejecting", id);
-				return null;
+				throw RemoteFetchException.integrity(venue, id);
 			}
 			return Asset.create(id, fetched.getMetadata());
+		} catch (RemoteFetchException e) {
+			throw e;
 		} catch (IOException | RuntimeException e) {
-			log.debug("Remote asset fetch failed for {}: {}", id, e.getMessage());
-			return null;
+			log.warn("Remote asset fetch failed for {} at {}: {}", id, venue, e.toString());
+			throw RemoteFetchException.fetchFailed(venue, id, e);
 		}
 	}
 
@@ -1472,6 +1550,11 @@ public class Engine {
 			status=status.assoc(Fields.NAME, name);
 		}
 
+		// Build version so operators can detect version drift across venues.
+		// jarVersion() reads the (shaded) jar's Implementation-Version and falls
+		// back to "dev" when running from classes — never null. See #139.
+		status=status.assoc(Fields.VERSION, Strings.create(jarVersion()));
+
 		return status;
 	}
 
@@ -1538,20 +1621,42 @@ public class Engine {
 		return s;
 	}
 
+	/**
+	 * Builds the venue DID document served at {@code /.well-known/did.json}.
+	 *
+	 * <p>The document {@code id} must equal the DID a resolver asked for (DID
+	 * Core), so when the venue has a public hostname configured the document is
+	 * presented under its <b>did:web alias</b> ({@code did:web:<hostname>}) with
+	 * the canonical did:key in {@code alsoKnownAs} — making strict did:web
+	 * resolution work (covia#167). The alias is a derived, per-request view and
+	 * is discovery only: the venue's identity remains its did:key (the same
+	 * ed25519 key material verifies in both presentations), and nothing durable
+	 * references the did:web form. Without a public hostname the document is
+	 * served under the did:key directly, unchanged.</p>
+	 *
+	 * @param endpoint Service endpoint URL for the CoviaGrid service entry
+	 * @return DID document map
+	 */
 	public AMap<AString, ACell> getDIDDocument(String endpoint) {
-		AString did=getDIDString();
+		AString canonicalDID=getDIDString();
+
+		// Presentation identity: the did:web alias when a public hostname is
+		// configured (and isn't already the canonical DID), else the did:key.
+		AString webDID=config.getWebDID();
+		boolean aliased=(webDID!=null) && !webDID.equals(canonicalDID);
+		AString docID=aliased ? webDID : canonicalDID;
 
 		AString key=Multikey.encodePublicKey(keyPair.getAccountKey());
-		AString keyID=Strings.create(did+"#"+key);
+		AString keyID=Strings.create(docID+"#"+key);
 		AVector<AString> keyVector=Vectors.create(keyID);
 
 		AMap<AString,ACell> ddo=Maps.of(
-			"id", did,
+			"id", docID,
 			"@context", "https://www.w3.org/ns/did/v1",
 			"verificationMethod",Vectors.of(Maps.of(
 						"id",keyID,
 						"type","Multikey",
-						"controller",did,
+						"controller",docID,
 						"publicKeyMultibase",key
 					)),
 			"authentication",keyVector,
@@ -1564,6 +1669,12 @@ public class Engine {
 							"serviceEndpoint",endpoint
 					))
 		);
+
+		// Bind the alias to the canonical identity: consumers resolving
+		// did:web re-bind to the did:key for anything they store or pin.
+		if (aliased) {
+			ddo=ddo.assoc(Strings.intern("alsoKnownAs"), Vectors.create(canonicalDID));
+		}
 
 		return ddo;
 	}
@@ -1713,16 +1824,23 @@ public class Engine {
 		if (name.isEmpty()) return null;
 
 		User user = venueState.users().get(callerDID);
-		if (user == null) return null;
+		if (user == null) return null;   // identity has no store — genuinely absent
 
+		AString value;
 		try {
 			byte[] encKey = SecretStore.deriveKey(keyPair);
-			AString value = user.secrets().decrypt(Strings.create(name), encKey);
-			return (value != null) ? value.toString() : null;
+			value = user.secrets().decrypt(Strings.create(name), encKey);
 		} catch (Exception e) {
-			log.debug("Could not resolve secret '{}': {}", name, e.getMessage());
-			return null;
+			// A decrypt/key failure is NOT the same as "secret not set".
+			// Collapsing both to null (the old behaviour) masked real errors as
+			// absence and made #91-class identity/key misconfigurations
+			// undiagnosable — a failed resolution looked identical to a missing
+			// key. Surface it loudly instead. Values are never logged.
+			log.warn("Secret '{}' resolution errored for caller {}: {}",
+				name, callerDID, e.toString());
+			throw new CoviaException("Secret resolution failed for '" + name + "'", e);
 		}
+		return (value != null) ? value.toString() : null;   // null == genuinely absent
 	}
 
 	/**

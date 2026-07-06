@@ -11,16 +11,20 @@ import convex.core.data.AccountKey;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMLong;
 import convex.auth.jwt.JWT;
 import convex.auth.ucan.UCAN;
 import convex.auth.ucan.UCANValidator;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.lattice.CapabilityChecker;
 import covia.venue.Auth;
+import covia.venue.RequestContext;
 import covia.venue.auth.JWKSClient;
 import covia.venue.auth.OAuthConfig;
-import io.javalin.Javalin;
+import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 
 /**
@@ -44,6 +48,12 @@ public class AuthMiddleware {
 
 	static final String CALLER_DID_ATTR = "callerDID";
 	/**
+	 * Context attribute holding the capability ceiling for an unauthenticated
+	 * (public) caller, derived from {@code auth.public.caps}. Absent for
+	 * authenticated callers (unrestricted unless a transport token attenuates).
+	 */
+	static final String CALLER_CAPS_ATTR = "callerCaps";
+	/**
 	 * Context attribute holding the raw UCAN JWT extracted from an
 	 * {@code Authorization: Bearer ...} header, when the bearer is a valid
 	 * UCAN (and so also serves as caller authentication). Downstream handlers
@@ -55,6 +65,9 @@ public class AuthMiddleware {
 	private static final AString SUB = Fields.SUB;
 	private static final AString KID = Fields.KID;
 	private static final AString EMAIL = Fields.EMAIL;
+	private static final AString AUD = Strings.intern("aud");
+	private static final AString EXP = Strings.intern("exp");
+	private static final AString NBF = Strings.intern("nbf");
 
 	// Per-instance state. Was static, which made running multiple VenueServers
 	// in the same JVM (production multi-tenant, parallel test classes) racy:
@@ -62,12 +75,14 @@ public class AuthMiddleware {
 	// causing requests to be attributed to the wrong venue's public DID
 	// and 403'd by AccessControl on cross-venue job lookups.
 	private final AccountKey venueKey;
-	@SuppressWarnings("unused")
 	private final AString venueDID;
 	private final AString publicDID;
 	private final Auth venueAuth;
 	private final Map<String, OAuthConfig> externalProviders;
 	private final boolean publicAccessEnabled;
+	private final AVector<ACell> publicCeiling;
+	private final String audiencePolicy;                  // "verify" | "require"
+	private final java.util.Set<String> acceptedAudiences;
 
 	private AuthMiddleware(AccountKey venueAccountKey, Auth auth, AString venueDIDString) {
 		this.venueKey = venueAccountKey;
@@ -77,6 +92,83 @@ public class AuthMiddleware {
 		this.publicAccessEnabled = auth.isPublicAccessEnabled();
 		this.externalProviders = auth.getLoginProviders().hasProviders()
 			? auth.getLoginProviders().getProviders() : null;
+		// Capability ceiling for public callers — secure read-only by default,
+		// operator-overridable via auth.public.caps. Only relevant when public
+		// access is enabled (otherwise every anonymous request is 401'd).
+		this.publicCeiling = publicAccessEnabled ? auth.getPublicCeiling(publicDID) : null;
+		// Accepted JWT audiences: the venue's own published DID (whatever its
+		// method — did:key, did:web, …) plus any operator allowlist. A bearer
+		// token's `aud` must name one of these (RFC 7519 §4.1.3), so a token
+		// minted for another venue cannot be replayed here. We do NOT assume the
+		// venue's identity is the did:key of its signing key — a did:web venue
+		// publishes did:web, and clients audience tokens to the DID resolved from
+		// did.json; operators add any additional forms via auth.acceptedAudiences.
+		this.audiencePolicy = auth.getAudiencePolicy();
+		java.util.Set<String> aud = new java.util.HashSet<>();
+		aud.add(venueDID.toString()); // the venue's canonical published DID
+		aud.addAll(auth.getConfiguredAudiences());
+		// The did:web alias (covia#167): strictly-resolving clients audience
+		// their tokens to the DID they resolved from /.well-known/did.json,
+		// which is the did:web form when a public hostname is configured.
+		// Accepting the alias string here does not change the venue's canonical
+		// did:key identity — validation still uses the venue's own key.
+		AString webDID = auth.getWebDID();
+		if (webDID != null) aud.add(webDID.toString());
+		this.acceptedAudiences = aud;
+	}
+
+	/** Thrown when a bearer token is otherwise valid (signature, temporal bounds)
+	 *  but its audience does not satisfy the audience policy — surfaced as a hard
+	 *  401, never a silent downgrade to the public identity. */
+	private static final class AudienceRejected extends RuntimeException {
+		private static final long serialVersionUID = 1L;
+		AudienceRejected(String message) { super(message); }
+	}
+
+	/**
+	 * Enforces RFC 7519 §4.1.3 audience restriction. {@code aud} may be a string
+	 * or an array of strings (StringOrURI), compared case-sensitively. A present
+	 * {@code aud} must name an accepted audience; an absent {@code aud} is
+	 * governed by the policy ({@code require} rejects, {@code verify} accepts).
+	 *
+	 * @throws AudienceRejected when the audience is not accepted
+	 */
+	private void requireAudience(ACell aud) {
+		if (aud == null) {
+			if ("require".equals(audiencePolicy)) {
+				throw new AudienceRejected("audience (aud) is required but absent");
+			}
+			return; // verify: tolerate an absent aud (warn-then-enforce migration)
+		}
+		if (aud instanceof AString s) {
+			if (!acceptedAudiences.contains(s.toString())) {
+				throw new AudienceRejected("token audience is not this venue: " + s);
+			}
+			return;
+		}
+		if (aud instanceof AVector<?> arr) {
+			for (long i = 0; i < arr.count(); i++) {
+				AString m = RT.ensureString(arr.get(i));
+				if (m != null && acceptedAudiences.contains(m.toString())) return;
+			}
+			throw new AudienceRejected("token audience list does not include this venue");
+		}
+		throw new AudienceRejected("malformed audience (aud) claim");
+	}
+
+	/** Clock-skew leeway (seconds) applied to JWT temporal bounds — a small grace
+	 *  for clock drift between the signer and this venue (RFC 7519 permits it). */
+	private static final long CLOCK_SKEW_SECONDS = 60;
+
+	/** Checks JWT temporal bounds ({@code exp}/{@code nbf}) against {@code now}
+	 *  (epoch seconds), with {@link #CLOCK_SKEW_SECONDS} leeway: false if expired
+	 *  or not-yet-valid; a token with no bounds is temporally unbounded (true). */
+	private static boolean temporalValid(AMap<AString, ACell> claims, long now) {
+		CVMLong exp = RT.ensureLong(claims.get(EXP));
+		if (exp != null && now > exp.longValue() + CLOCK_SKEW_SECONDS) return false;
+		CVMLong nbf = RT.ensureLong(claims.get(NBF));
+		if (nbf != null && now < nbf.longValue() - CLOCK_SKEW_SECONDS) return false;
+		return true;
 	}
 
 	/**
@@ -85,19 +177,30 @@ public class AuthMiddleware {
 	 * so multiple VenueServers in the same JVM (production multi-tenant or
 	 * parallel test classes) do not share state.
 	 *
-	 * @param app Javalin application
+	 * @param routes Javalin routes configuration
 	 * @param venueAccountKey The venue's public key for verifying venue-signed JWTs
 	 * @param auth Auth instance for access control configuration
 	 * @param venueDIDString The venue's DID string for deriving user DIDs
 	 * @return The constructed middleware instance (rarely needed by callers,
 	 *         but useful for tests).
 	 */
-	public static AuthMiddleware register(Javalin app, AccountKey venueAccountKey, Auth auth, AString venueDIDString) {
+	public static AuthMiddleware register(RoutesConfig routes, AccountKey venueAccountKey, Auth auth, AString venueDIDString) {
 		AuthMiddleware mw = new AuthMiddleware(venueAccountKey, auth, venueDIDString);
-		app.before("/api/*", mw::extractIdentity);
-		app.before("/a2a", mw::extractIdentity);
-		app.before("/mcp", mw::extractIdentity);
+		routes.before("/api/*", mw::extractIdentity);
+		routes.before("/a2a", mw::extractIdentity);
+		routes.before("/a2a/*", mw::extractIdentity);  // per-agent A2A endpoints (COG-14)
+		routes.before("/mcp", mw::extractIdentity);
 		return mw;
+	}
+
+	/**
+	 * Attribute an unauthenticated request to the venue's public DID and stash
+	 * the public capability ceiling (if any), so the downstream
+	 * {@link #callerContext} applies it uniformly.
+	 */
+	private void markPublic(Context ctx) {
+		ctx.attribute(CALLER_DID_ATTR, publicDID);
+		if (publicCeiling != null) ctx.attribute(CALLER_CAPS_ATTR, publicCeiling);
 	}
 
 	void extractIdentity(Context ctx) {
@@ -107,7 +210,7 @@ public class AuthMiddleware {
 				ctx.status(401).result("Authentication required");
 				ctx.skipRemainingHandlers();
 			} else {
-				ctx.attribute(CALLER_DID_ATTR, publicDID);
+				markPublic(ctx);
 			}
 			return;
 		}
@@ -118,7 +221,7 @@ public class AuthMiddleware {
 				ctx.status(401).result("Authentication required");
 				ctx.skipRemainingHandlers();
 			} else {
-				ctx.attribute(CALLER_DID_ATTR, publicDID);
+				markPublic(ctx);
 			}
 			return;
 		}
@@ -144,46 +247,71 @@ public class AuthMiddleware {
 			if (callerDID != null) {
 				ctx.attribute(CALLER_DID_ATTR, callerDID);
 			} else {
+				// A presented token that fails every verification path is a hard
+				// 401 — NEVER a silent downgrade to the public identity, even when
+				// public access is enabled. Presenting credentials is an explicit
+				// identity claim; failing that claim must be visible to the caller
+				// (an anonymous request without a token still gets public access).
 				log.debug("JWT bearer token failed all verification paths");
-				if (!publicAccessEnabled) {
-					ctx.status(401).result("Invalid or expired token");
-					ctx.skipRemainingHandlers();
-				} else {
-					ctx.attribute(CALLER_DID_ATTR, publicDID);
-				}
-			}
-		} catch (Exception e) {
-			log.debug("Error processing bearer token", e);
-			if (!publicAccessEnabled) {
-				ctx.status(401).result("Authentication required");
+				ctx.status(401).result("Invalid or expired token");
 				ctx.skipRemainingHandlers();
-			} else {
-				ctx.attribute(CALLER_DID_ATTR, publicDID);
 			}
+		} catch (AudienceRejected e) {
+			// A presented token failed the audience policy — a hard 401, NOT a
+			// silent downgrade to the public identity (the replay defence).
+			log.debug("Bearer token audience rejected: {}", e.getMessage());
+			ctx.status(401).result("Token audience not accepted by this venue");
+			ctx.skipRemainingHandlers();
+		} catch (Exception e) {
+			// Same rule for unexpected failures while verifying a PRESENTED token
+			// (JWKS outage, parse bug, ...): fail the claim visibly. Warn-level —
+			// this path is abnormal and should be diagnosable, not debug-hidden.
+			log.warn("Error processing bearer token", e);
+			ctx.status(401).result("Authentication failed");
+			ctx.skipRemainingHandlers();
 		}
 	}
 
 	/**
-	 * Verify a UCAN bearer token. EdDSA signature is verified via the JWT
-	 * {@code kid} header; temporal bounds are checked; the token must have a
-	 * non-null {@code aud} (distinguishing it from generic self-issued auth
-	 * JWTs). On success, the issuer DID is returned as the caller identity —
-	 * matching the IETF UCAN-HTTP bearer convention that the invocation
-	 * token's {@code iss} is the caller.
+	 * Verify a UCAN bearer token. A token is classified as a UCAN by the presence
+	 * of an {@code att} (capability) array — NOT by {@code aud}, since identity
+	 * tokens now legitimately carry {@code aud} too (#149). The EdDSA signature is
+	 * verified against the issuer key, temporal bounds and audience are checked.
+	 * On success, the issuer DID is returned as the caller identity — matching the
+	 * IETF UCAN-HTTP bearer convention that the invocation token's {@code iss} is
+	 * the caller.
 	 *
 	 * @param jwt Bearer token
 	 * @return Issuer DID (did:key form) on success, null if the token is not
 	 *         a valid UCAN
 	 */
-	private static AString tryVerifyUCAN(AString jwt) {
+	private AString tryVerifyUCAN(AString jwt) {
 		UCAN token = UCAN.fromJWT(jwt);
 		if (token == null) return null;
-		// A UCAN must declare an audience — this is what distinguishes it from
-		// other self-signed EdDSA JWTs that happen to verify.
-		if (token.getAudience() == null) return null;
+		// Classify by the presence of an `att` (capability) array — NOT `aud`.
+		// Identity tokens now legitimately carry `aud` (#149), so aud-presence
+		// would misroute them through the UCAN path. UCAN.getCapabilities()
+		// collapses absent→empty, so inspect the raw claims: UCAN.create always
+		// writes an `att` field (≥ empty); a plain identity JWT never does.
+		JWT parsed = JWT.parse(jwt);
+		AMap<AString, ACell> claims = (parsed != null) ? parsed.getClaims() : null;
+		if (claims == null || claims.get(UCAN.ATT) == null) return null;
+		// Bind the signature to the claimed issuer. Re-verify against the issuer's
+		// OWN key so identity is attributed only when the signature actually
+		// satisfies the iss key — regardless of how UCAN.fromJWT selects its
+		// verification key. Otherwise anyone could sign with their key, set `iss`
+		// to a victim DID, and be attributed that identity (issuer spoofing).
+		// Mirrors the kid==sub bind that tryVerifySelfIssued enforces.
+		AString issuer = token.getIssuer();
+		AccountKey issuerKey = UCAN.fromDIDKey(issuer);
+		if (issuerKey == null) return null;
+		if (JWT.verifyPublic(jwt, issuerKey) == null) return null;
 		long now = System.currentTimeMillis() / 1000;
 		if (!UCANValidator.checkTemporalBounds(token, now)) return null;
-		return token.getIssuer();
+		// Audience restriction (RFC 7519 §4.1.3): the bearer must be intended for
+		// THIS venue, else a token minted for another venue could be replayed.
+		requireAudience(token.getAudience());
+		return issuer;
 	}
 
 	/**
@@ -213,6 +341,12 @@ public class AuthMiddleware {
 			return null;
 		}
 
+		// Temporal bounds — previously unchecked, so a self-issued token was
+		// accepted forever; reject expired / not-yet-valid tokens.
+		if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
+		// Audience restriction (RFC 7519 §4.1.3): a self-issued token minted for
+		// another venue must not authenticate here.
+		requireAudience(claims.get(AUD));
 		return sub;
 	}
 
@@ -310,5 +444,64 @@ public class AuthMiddleware {
 	 */
 	public static AString getCallerDID(Context ctx) {
 		return ctx.attribute(CALLER_DID_ATTR);
+	}
+
+	/**
+	 * Builds the base {@link RequestContext} for an inbound request: the caller
+	 * DID plus, for unauthenticated (public) callers, the configured capability
+	 * ceiling ({@code auth.public.caps}, default read-only). This is the single
+	 * seam where a request's ceiling is established, before transport-token
+	 * authority ({@link #withTransportAuth}) is layered on. Null-safe: a null
+	 * Javalin context (e.g. an MCP call with no HTTP context) yields
+	 * {@link RequestContext#ANONYMOUS}.
+	 *
+	 * @param ctx Javalin context, or null
+	 * @return the caller's request context with its ceiling applied
+	 */
+	public static RequestContext callerContext(Context ctx) {
+		if (ctx == null) return RequestContext.ANONYMOUS;
+		RequestContext rctx = RequestContext.of(getCallerDID(ctx));
+		AVector<ACell> caps = ctx.attribute(CALLER_CAPS_ATTR);
+		if (caps != null) rctx = rctx.withCaps(caps);
+		return rctx;
+	}
+
+	/**
+	 * Attach transport-presented UCAN authority to a request context — the single
+	 * seam used by every invoke transport (REST, MCP). Two things, in order:
+	 * <ol>
+	 *   <li><b>Proofs</b> — the cryptographically-verified tokens, for cross-user
+	 *       grant checks (unchanged behaviour).</li>
+	 *   <li><b>Self-attenuation ceiling</b> — capabilities the <em>owner</em>
+	 *       authored over their own resources, restricting this session. Set as
+	 *       {@code caps} so the executing adapter applies them as a ceiling at its
+	 *       enforcement point. Closes the gap where a presented attenuated token
+	 *       ran with full authority (#131).</li>
+	 * </ol>
+	 *
+	 * <p>The owner is the authority over its own namespace; the venue only
+	 * enforces. So the ceiling is taken from tokens the caller authored for
+	 * itself ({@code iss == aud == caller}). A ceiling can only <em>narrow</em>
+	 * the caller's own authority — never widen it — so this is escalation-safe.
+	 * With no token presented, nothing is attached and access is unrestricted
+	 * (the common case).</p>
+	 *
+	 * @param rctx context for the authenticated caller (caller DID already set)
+	 * @param bearer Authorization bearer JWT, or null
+	 * @param ucans transport {@code ucans} vector, or null
+	 * @return rctx with proofs and (if any) the self-cap ceiling attached
+	 */
+	public static RequestContext withTransportAuth(RequestContext rctx, AString bearer,
+			AVector<ACell> ucans) {
+		AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans);
+		if (proofs == null) return rctx;
+		rctx = rctx.withProofs(proofs);
+		AString caller = rctx.getCallerDID();
+		long now = System.currentTimeMillis() / 1000;
+		// TODO(convex-release): replace selfCapabilities with
+		// UCANValidator.capabilitiesFor once covia's Convex dependency includes it.
+		AVector<ACell> caps = CapabilityChecker.selfCapabilities(proofs, caller, caller, now);
+		if (caps != null) rctx = rctx.withCaps(caps);
+		return rctx;
 	}
 }

@@ -94,6 +94,13 @@ public class VenueHTTP extends Venue {
 	 */
 	private HttpRequest.Builder requestBuilder(URI uri) {
 		HttpRequest.Builder builder = HttpRequest.newBuilder().uri(uri);
+		// Per-request total deadline. connectTimeout only bounds establishing the
+		// TCP connection; without this a connected-but-stalled venue (slow/hung
+		// remote, half-open socket) leaves the request — and any caller that
+		// .join()s it (federation, orchestration) — pending forever. Generous
+		// floor so large content transfers and slow LLM-backed invokes still
+		// complete; grows with the caller's configured job-wait timeout.
+		builder.timeout(Duration.ofMillis(Math.max(timeout, 120_000L)));
 		auth.apply(builder);
 		return builder;
 	}
@@ -210,7 +217,7 @@ public class VenueHTTP extends Venue {
 			if (code!=200) {
 				throw new ResponseException("getStatus returned code: "+code,response);
 			}
-			return RT.ensureMap(JSON.parse(response.body()));
+			return RT.castMap(JSON.parse(response.body()));
 		});
 	}
 
@@ -752,7 +759,7 @@ public class VenueHTTP extends Venue {
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			int code=response.statusCode();
 			if (code == 200) {
-				return RT.ensureMap(JSON.parse(response.body()));
+				return RT.castMap(JSON.parse(response.body()));
 			} else if (code == 404) {
 				return null;
 			} else {
@@ -828,6 +835,35 @@ public class VenueHTTP extends Venue {
 			return null;
 		}
 		
+	}
+
+	/**
+	 * Resolves an asset by any lattice address — a bare hash, {@code a/<hash>},
+	 * a workspace/operation path ({@code w/…}, {@code o/…}), or a DID URL — by
+	 * delegating resolution to the venue's {@code GET assets/<ref>} endpoint
+	 * (#150). The venue resolves the address and returns the canonical metadata;
+	 * the returned Asset's {@link Asset#getID()} is the resolved content-addressed
+	 * id, which self-verifies for content-addressed references.
+	 *
+	 * @param ref Asset reference (lattice address or bare hash)
+	 * @return the resolved Asset, or null if not found
+	 */
+	@Override
+	public Asset resolveAsset(String ref) throws IOException {
+		if (ref==null) return null;
+		HttpRequest request=requestBuilder("assets/"+ref)
+				.GET()
+				.build();
+		try {
+			HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+			if (response.statusCode()!=200) return null;
+			Asset asset=Asset.forString(Strings.create(response.body()));
+			asset.setVenue(this);
+			return asset;
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			return null;
+		}
 	}
 
 	@Override

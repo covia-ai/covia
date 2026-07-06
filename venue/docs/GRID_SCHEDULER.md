@@ -37,23 +37,24 @@ per-thread `AgentScheduler` that predated this service has been retired.
 ## 2. Lattice model — authoritative and per-venue
 
 The schedule is **lattice state, owned by the venue**, so it survives restarts.
-It is a venue-level slot alongside `:assets`, `:jobs`, and `:users`:
+It is a plain field of the venue `:value`, alongside `:assets`, `:storage`,
+`:users`, and `:user-data`:
 
 ```
-:grid → :venues → <venueDID> → VENUE
-                                ├── :assets    (content-addressed)
-                                ├── :jobs       IndexLattice  (append-only job records)
-                                ├── :schedule   LWW { updated, events }  (replaced as a unit)   ← new
+:grid → :venues → <venueDID> → :value   (a single whole-value-LWW node)
+                                ├── :assets    (content-addressed refs)
+                                ├── :storage   (content-addressed blobs)
+                                ├── :schedule   { updated, events }
                                 ├── :users
-                                └── …
+                                └── :user-data → <DID> → { j, g, s, w, o, h, a }
 ```
 
-The slot value is a single `{ updated, events }` map:
+The `:schedule` value is a single `{ updated, events }` map:
 
 ```
 events = Index keyed by  time (8-byte big-endian unsigned millis) ‖ id (unique bytes)
          value = { op, input, owner, time, proofs?, caps? }
-updated = strictly-increasing stamp; the whole value with the higher stamp wins the merge
+updated = wall-clock stamp of the last mutation
 ```
 
 - The `events` **Index** keeps entries sorted by key, so the key *is* the
@@ -63,23 +64,20 @@ updated = strictly-increasing stamp; the whole value with the higher stamp wins 
   sharing a `time` and gives each a stable identity (minted at schedule time,
   same generator as Job IDs).
 
-**Why the whole value is replaced as a unit (not a per-entry `IndexLattice`).**
-The venue commits its state through a *forked cursor*: `syncState` (and the
-background persistence sweep) merge the fork into the parent with a **lattice
-join**. A per-entry `IndexLattice` join is a key-wise *union* — a key removed on
-cancel or fire has no tombstone, so the union **re-introduces it** after the next
-sync. (Adds are monotonic and survive; only removals break — which is why `:jobs`,
-being append-only, gets away with `IndexLattice`.) Making `:schedule` a whole
-`{updated, events}` value under an `LWW` slot lattice means the merge keeps the
-*latest whole value* — removals included. The Convex `Index` lives **inside** that
-value purely for ordering. See GRID_LATTICE_DESIGN.md and the regression
-`ScheduleSlotMergeTest`.
+**Why removals survive the merge.** The venue commits its state through a
+*forked cursor*: `syncState` (and the background persistence sweep) merge the
+fork into the parent with a **lattice join**. The venue `:value` is a single
+**whole-value-LWW node** (see GRID_LATTICE_DESIGN.md §A.2): on merge the newest
+whole value wins wholesale, so a removed event (cancel or fire) stays removed —
+there is no per-entry `Index` *union* to re-introduce it. `:schedule` is a plain
+field inside that node; its `Index` exists purely for ordering, not merge. The
+`{updated, events}` shape and the strictly-increasing `updated` stamp are
+retained by the scheduler as the events container and a last-mutation marker;
+deletion durability itself comes from the venue-level whole-value LWW.
 
 **Single-writer.** The scheduler's single timer thread (§4) is the sole mutator
-of `:schedule`, so whole-value LWW has no concurrency downside; the
-strictly-increasing `updated` stamp (seeded from the persisted value on boot)
-guarantees the latest write wins the merge. Cross-venue federation of schedules
-is out of scope.
+of `:schedule`, so there is no concurrency downside. Cross-venue federation of
+schedules is out of scope.
 
 **The lattice is the source of truth.** The in-memory firing mechanism (§4) holds
 no durable state beyond the stamp counter — it is rebuilt from the index on boot.
@@ -277,8 +275,9 @@ access; boot catch-up; claim-by-removal (at-most-once).
    operation directly.
 3. **Handle encoding** — the index key surfaced as an opaque hex string
    (`0x…`); `cancel`/`trigger` accept it as a hex string or blob.
-4. **Slot stores the whole `{updated, events}` value under `LWW`** (not a
-   per-entry `IndexLattice`) so removals survive the fork-merge (§2).
+4. **`:schedule` is a plain `{updated, events}` field inside the venue `:value`**,
+   which is a single whole-value-LWW node — so removals survive the fork-merge
+   wholesale, with no per-entry `Index` union to re-introduce them (§2).
 
 **Open:**
 - **Delivery** — at-most-once (claim-then-invoke) is the default; an opt-in

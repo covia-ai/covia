@@ -54,7 +54,7 @@ public class SecretAdapter extends AAdapter {
 		try {
 			switch (op) {
 				case "set":
-					return CompletableFuture.supplyAsync(() -> handleSet(input, callerDID), VIRTUAL_EXECUTOR);
+					return CompletableFuture.supplyAsync(() -> handleSet(ctx, input), VIRTUAL_EXECUTOR);
 				case "extract":
 					// TODO: capability-gated secret extraction
 					return CompletableFuture.failedFuture(
@@ -68,14 +68,20 @@ public class SecretAdapter extends AAdapter {
 		}
 	}
 
-	private ACell handleSet(ACell input, AString callerDID) {
+	private ACell handleSet(RequestContext ctx, ACell input) {
 		AString name = RT.ensureString(RT.getIn(input, Fields.NAME));
 		if (name == null) throw new IllegalArgumentException("name is required");
 
 		AString value = RT.ensureString(RT.getIn(input, K_VALUE));
 		if (value == null) throw new IllegalArgumentException("value is required");
 
-		User user = engine.getVenueState().users().ensure(callerDID);
+		// Pin the capability to the action: writing a secret requires
+		// secret/write on the secret resource. A null ceiling (authenticated /
+		// internal) is unrestricted; a read-only ceiling (the public profile)
+		// is denied here — closing the unauthenticated secret-write gap (#148).
+		ctx.requireCapability("s/" + name, "secret/write");
+
+		User user = engine.getVenueState().users().ensure(ctx.getCallerDID());
 		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
 		user.secrets().store(name, value, encKey);
 

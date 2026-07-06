@@ -216,48 +216,6 @@ public class SecretStoreTest {
 		assertTrue(user2.secrets().exists("key1"), "Secrets should be accessible via wrapper");
 	}
 
-	@Test
-	public void testUserMergeIdempotentViaWrappers() {
-		// Merge a user state with itself should not change observable state
-		AKeyPair kp = AKeyPair.generate();
-		byte[] encKey = SecretStore.deriveKey(kp);
-
-		VenueState vs = VenueState.create(kp);
-		User user = vs.users().ensure("did:key:zTest");
-		user.persistJob(Blob.parse("0x0001"), Maps.of(
-			covia.api.Fields.STATUS, covia.grid.Status.PENDING,
-			covia.api.Fields.UPDATED, convex.core.data.prim.CVMLong.create(1000L)));
-		user.secrets().store("key1", "val1", encKey);
-
-		long jobCountBefore = user.getJobs().count();
-		long secretCountBefore = user.secrets().list().count();
-
-		// Self-merge via lattice (simulates lattice sync)
-		@SuppressWarnings("unchecked")
-		AHashMap<AString, ACell> state = (AHashMap<AString, ACell>) user.get();
-		AHashMap<AString, ACell> merged = Covia.USER.merge(state, state);
-
-		// Merged state should be identical (idempotent)
-		assertEquals(state, merged, "Self-merge must be idempotent");
-		assertEquals(jobCountBefore, user.getJobs().count());
-		assertEquals(secretCountBefore, user.secrets().list().count());
-	}
-
-	// ========== Namespace Key Equivalence ==========
-
-	@Test
-	public void testNamespaceKeyResolution() {
-		// StringKeyedLattice uses AString keys — Namespace constants should resolve
-		assertNotNull(Covia.USER.path(Namespace.J), "AString 'j' should resolve to jobs lattice");
-		assertNotNull(Covia.USER.path(Namespace.G), "AString 'g' should resolve to agents lattice");
-		assertNotNull(Covia.USER.path(Namespace.S), "AString 's' should resolve to secrets lattice");
-
-		// Equivalent AString values should also resolve
-		assertNotNull(Covia.USER.path(Strings.create("j")), "AString 'j' literal should resolve");
-		assertNotNull(Covia.USER.path(Strings.create("g")), "AString 'g' literal should resolve");
-		assertNotNull(Covia.USER.path(Strings.create("s")), "AString 's' literal should resolve");
-	}
-
 	// ========== User Isolation ==========
 
 	@Test
