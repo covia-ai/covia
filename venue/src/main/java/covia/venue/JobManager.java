@@ -631,29 +631,33 @@ public class JobManager {
 	 */
 	@SuppressWarnings("unchecked")
 	public void appendToHistory(Blob jobID, AMap<AString, ACell> record, RequestContext ctx) {
-		AMap<AString, ACell> data = getJobData(jobID);
-		if (data == null) {
+		// Read the current record from the active cache, falling back to the
+		// caller's lattice. The ctx-aware read both enforces ownership and finds
+		// a job that has already completed and been evicted from the active
+		// cache — e.g. a synchronously-completing A2A defaultChatOp, which the
+		// old activeJobs-only lookup missed, throwing "Job not found" and
+		// dropping the inbound message from the Task history (#178).
+		AMap<AString, ACell> current = getJobData(jobID, ctx);
+		if (current == null) {
 			throw new IllegalArgumentException("Job not found: " + jobID.toHexString());
 		}
-		if (!engine.getAccessControl().canAccessJob(ctx, data)) {
-			throw new AuthException("Access denied to job: " + jobID.toHexString());
-		}
-		Job job = getJob(jobID);
-		if (job == null) {
-			// Terminal-state job evicted from memory — no-op; history is frozen.
-			return;
-		}
-		if (job.isFinished()) return;
 
-		AMap<AString, ACell> current = job.getData();
 		ACell histCell = current.get(Fields.HISTORY);
 		AVector<ACell> history = (histCell instanceof AVector)
 				? (AVector<ACell>) histCell
 				: convex.core.data.Vectors.empty();
-		AVector<ACell> updated = history.conj(record);
+		AMap<AString, ACell> newData = current.assoc(Fields.HISTORY, history.conj(record));
 
-		AMap<AString, ACell> newData = current.assoc(Fields.HISTORY, updated);
-		job.updateData(newData);
+		// Write back where the record actually lives: mutate the live job if it
+		// is still active (persisted on completion), otherwise persist the
+		// augmented record straight to the lattice so a finished job's Task
+		// history still carries the inbound message rather than silently losing it.
+		Job job = getJob(jobID);
+		if (job != null) {
+			job.updateData(newData);
+		} else {
+			persistJobRecord(jobID, newData, ctx.getCallerDID());
+		}
 	}
 
 	// ========== Job Recovery ==========
