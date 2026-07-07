@@ -3526,6 +3526,225 @@ public class AgentAdapterTest {
 			"resumed agent must have a clean task queue");
 	}
 
+	// ========== agent:deleteSession ==========
+
+	/**
+	 * Happy path: deleting a session erases the session record AND the
+	 * back-referenced intake job records (the privacy contract — a private
+	 * conversation leaves no content behind), while the deleteSession job
+	 * itself survives as a content-free audit record.
+	 */
+	@Test
+	public void testDeleteSessionErasesSessionAndJobs() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "del-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job msg1 = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, "del-agent",
+				Fields.MESSAGE, Maps.of("content", "private hello")),
+			RequestContext.of(ALICE_DID));
+		AString sidHex = RT.ensureString(RT.getIn(msg1.awaitResult(5000), Fields.SESSION_ID));
+		assertNotNull(sidHex, "message result should carry the sessionId");
+
+		Job msg2 = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, "del-agent",
+				Fields.SESSION_ID, sidHex,
+				Fields.MESSAGE, Maps.of("content", "more private stuff")),
+			RequestContext.of(ALICE_DID));
+		msg2.awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("del-agent");
+		Blob sid = Blob.fromHex(sidHex.toString());
+		assertNotNull(agent.getSession(sid), "session should exist after messages");
+		assertEquals(2, agent.getSessionJobs(sid).count(),
+			"both intake jobs should be back-referenced on the session");
+		assertNotNull(user.getJob(msg1.getID()), "message job record should be persisted");
+
+		Job del = engine.jobs().invokeOperation(
+			"v/ops/agent/delete-session",
+			Maps.of(Fields.AGENT_ID, "del-agent", Fields.SESSION_ID, sidHex),
+			RequestContext.of(ALICE_DID));
+		ACell result = del.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.DELETED));
+		assertEquals(CVMLong.create(2), RT.getIn(result, Fields.JOBS_DELETED));
+
+		assertNull(agent.getSession(sid), "session record should be gone");
+		assertNull(user.getJob(msg1.getID()), "conversation job records should be gone");
+		assertNull(user.getJob(msg2.getID()), "conversation job records should be gone");
+		assertNotNull(user.getJob(del.getID()),
+			"the deletion itself remains as a content-free audit record");
+	}
+
+	@Test
+	public void testDeleteSessionUnknownSessionFails() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "del-unknown-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job del = engine.jobs().invokeOperation(
+			"v/ops/agent/delete-session",
+			Maps.of(Fields.AGENT_ID, "del-unknown-agent",
+				Fields.SESSION_ID, Strings.create("eeee0002eeee0002eeee0002eeee0002")),
+			RequestContext.of(ALICE_DID));
+		try {
+			del.awaitResult(5000);
+			fail("deleteSession should fail for an unknown session");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, del.getStatus());
+			assertTrue(String.valueOf(RT.getIn(del.getData(), Fields.ERROR)).contains("Session not found"));
+		}
+	}
+
+	@Test
+	public void testDeleteSessionRequiresSessionId() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "del-noarg-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job del = engine.jobs().invokeOperation(
+			"v/ops/agent/delete-session",
+			Maps.of(Fields.AGENT_ID, "del-noarg-agent"),
+			RequestContext.of(ALICE_DID));
+		try {
+			del.awaitResult(5000);
+			fail("deleteSession should fail without a sessionId");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, del.getStatus());
+		}
+	}
+
+	/**
+	 * Deleting a session with a chat in flight fails the awaiting chat Job
+	 * ("Session deleted") so the blocked caller unblocks with a clean error,
+	 * and the deletion proceeds. The agent's transition op is
+	 * {@code v/test/ops/never}, so the chat can only end via the delete.
+	 */
+	@Test
+	public void testDeleteSessionFailsInFlightChat() throws Exception {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "del-chat-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, Strings.create("v/test/ops/never"))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job chat = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "del-chat-agent",
+				Fields.MESSAGE, Maps.of("content", "secret")),
+			RequestContext.of(ALICE_DID));
+
+		// Chat mints its session at intake; recover the sid from the agent
+		// record (poll briefly — intake is synchronous but dispatch may not be)
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("del-chat-agent");
+		long deadline = System.currentTimeMillis() + 5000;
+		while (agent.getSessions().count() == 0 && System.currentTimeMillis() < deadline) {
+			Thread.sleep(5);
+		}
+		assertEquals(1, agent.getSessions().count(), "chat should have minted a session");
+		Blob sid = agent.getSessions().entrySet().iterator().next().getKey();
+
+		Job del = engine.jobs().invokeOperation(
+			"v/ops/agent/delete-session",
+			Maps.of(Fields.AGENT_ID, "del-chat-agent",
+				Fields.SESSION_ID, Strings.create(sid.toHexString())),
+			RequestContext.of(ALICE_DID));
+		ACell result = del.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.DELETED));
+
+		try {
+			chat.awaitResult(5000);
+			fail("in-flight chat should have been failed by deleteSession");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, chat.getStatus());
+			assertTrue(String.valueOf(RT.getIn(chat.getData(), Fields.ERROR)).contains("Session deleted"),
+				"chat failure should name the session deletion, got: "
+					+ RT.getIn(chat.getData(), Fields.ERROR));
+		}
+		assertNull(agent.getSession(sid), "session record should be gone");
+	}
+
+	/** The read-only public ceiling denies deleteSession (agent/write). */
+	@Test
+	public void testDeleteSessionDeniedUnderReadOnlyCeiling() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "del-cap-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		Job msg = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, "del-cap-agent",
+				Fields.MESSAGE, Maps.of("content", "hi")),
+			RequestContext.of(ALICE_DID));
+		AString sidHex = RT.ensureString(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
+
+		RequestContext readOnly = RequestContext.of(ALICE_DID)
+			.withCaps(covia.lattice.CapabilityChecker.readOnlyCeiling(ALICE_DID));
+		Job del = engine.jobs().invokeOperation(
+			"v/ops/agent/delete-session",
+			Maps.of(Fields.AGENT_ID, "del-cap-agent", Fields.SESSION_ID, sidHex),
+			readOnly);
+		try {
+			del.awaitResult(5000);
+			fail("read-only ceiling should deny deleteSession");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, del.getStatus());
+		}
+		// Session survives the denied attempt
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		assertNotNull(user.agent("del-cap-agent").getSession(Blob.fromHex(sidHex.toString())));
+	}
+
+	/**
+	 * Operator kill-switch: {@code adapters.agent.sessionDelete: false}
+	 * disables the op venue-wide; sessions are untouched by the failed call.
+	 */
+	@Test
+	public void testDeleteSessionDisabledByConfig() {
+		Engine disabled = Engine.createTemp(Maps.of(
+			covia.venue.Config.ADAPTERS, Maps.of(
+				Strings.create("agent"), Maps.of(
+					Strings.create("sessionDelete"), CVMBool.FALSE)),
+			covia.venue.Config.NAME, Strings.create("no-session-delete")));
+		try {
+			Engine.addDemoAssets(disabled);
+			RequestContext ctx = RequestContext.of(ALICE_DID);
+			disabled.jobs().invokeOperation(
+				"v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, "cfg-agent"), ctx).awaitResult(5000);
+			Job msg = disabled.jobs().invokeOperation(
+				"v/ops/agent/message",
+				Maps.of(Fields.AGENT_ID, "cfg-agent",
+					Fields.MESSAGE, Maps.of("content", "hi")), ctx);
+			AString sidHex = RT.ensureString(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
+
+			Job del = disabled.jobs().invokeOperation(
+				"v/ops/agent/delete-session",
+				Maps.of(Fields.AGENT_ID, "cfg-agent", Fields.SESSION_ID, sidHex), ctx);
+			try {
+				del.awaitResult(5000);
+				fail("deleteSession should be disabled by config");
+			} catch (Exception e) {
+				assertEquals(Status.FAILED, del.getStatus());
+				assertTrue(String.valueOf(RT.getIn(del.getData(), Fields.ERROR)).contains("disabled"),
+					"failure should say the op is disabled, got: "
+						+ RT.getIn(del.getData(), Fields.ERROR));
+			}
+			assertNotNull(disabled.getVenueState().users().get(ALICE_DID)
+				.agent("cfg-agent").getSession(Blob.fromHex(sidHex.toString())),
+				"session must survive a disabled deleteSession call");
+		} finally {
+			disabled.close();
+		}
+	}
+
 	/** Builds the L3 input via the same code path as agent:context and returns tool names. */
 	@SuppressWarnings("unchecked")
 	private java.util.Set<String> runtimeToolNames(String agentId) {

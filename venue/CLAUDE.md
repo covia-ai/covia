@@ -183,7 +183,7 @@ Bridges operations to execution environments:
 | `orchestrator` | Multi-step workflows | Custom orchestration |
 | `covia` | Lattice CRUD | `read`, `write`, `delete`, `append`, `slice`, `list`, `inspect`, `aggregate`, `functions`, `describe`, `adapters` |
 | `asset` | Content-addressed assets | `store`, `get`, `getContent`, `list`, `pin` |
-| `agent` | Agent lifecycle | `create`, `fork`, `request`, `message`, `trigger`, `query`, `list`, `delete`, `suspend`, `resume`, `update`, `cancelTask` |
+| `agent` | Agent lifecycle | `create`, `fork`, `request`, `message`, `trigger`, `query`, `list`, `delete`, `suspend`, `resume`, `update`, `cancelTask`, `deleteSession` |
 | `llmagent` | LLM agent transitions | `chat` |
 | `goaltree` | Goal-tree agent planning | `chat` |
 | `dlfs` | Decentralised file system | `listDrives`, `createDrive`, `deleteDrive`, `list`, `read`, `write`, `mkdir`, `delete` |
@@ -316,6 +316,23 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 
 - `port`: HTTP listen port (default `8080`).
 - `bindAddress`: network interface the HTTP connector binds to. When omitted, the venue binds **all interfaces** (`0.0.0.0`) — reachable from the LAN. Set to `"127.0.0.1"` to restrict the venue to loopback (recommended when embedding the venue as a local subprocess). This is the socket bind address and is distinct from `hostname`, which is the venue's *advertised* public host used to derive `baseUrl`/DID.
+
+### Adapter configuration
+
+```json
+{
+  "adapters": {
+    "agent": { "sessionDelete": false }
+  }
+}
+```
+
+Per-adapter settings, keyed by adapter name (`Config.getAdapterConfig(name)`).
+Currently defined:
+
+- `agent.sessionDelete` — whether `agent:deleteSession` is available
+  (default `true`). Set `false` to disable user-initiated session deletion
+  venue-wide; the op then fails with "disabled on this venue".
 
 ### DLFS WebDAV
 

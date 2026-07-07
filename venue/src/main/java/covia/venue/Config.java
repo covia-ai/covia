@@ -118,6 +118,25 @@ public class Config {
 	/** Key for adapters configuration */
 	public static final AString ADAPTERS = Strings.intern("adapters");
 
+	/**
+	 * Returns the configuration block for a named adapter from the top-level
+	 * {@code adapters} section, or an empty map when absent. Example venue
+	 * config: {@code {"adapters": {"agent": {"sessionDelete": false}}}} —
+	 * {@code getAdapterConfig("agent")} returns {@code {"sessionDelete": false}}.
+	 *
+	 * @param name The adapter name (as returned by {@code AAdapter.getName()})
+	 * @return The adapter's config map, empty if not configured
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> getAdapterConfig(String name) {
+		ACell adapters = config.get(ADAPTERS);
+		if (adapters instanceof AMap) {
+			ACell v = ((AMap<AString, ACell>) adapters).get(Strings.create(name));
+			if (v instanceof AMap) return (AMap<AString, ACell>) v;
+		}
+		return Maps.empty();
+	}
+
 	// ========== Storage config keys ==========
 
 	/** Key for storage configuration section */

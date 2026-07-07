@@ -381,7 +381,7 @@ Created → Active → Idle → Archived
 - **Archived** — explicitly closed; read-only; counts toward audit but not active list
 - **Suspended** — error state; needs manual resume (mirrors agent suspension)
 
-Sessions are **never deleted** by the framework (audit). Archived sessions can be pruned by external tooling if storage demands it.
+Sessions are **never deleted by the framework** (audit). Archived sessions can be pruned by external tooling if storage demands it. Users may explicitly delete their own sessions via `agent:deleteSession` (§7.2).
 
 ### 7.1 Session vs agent lifecycle
 
@@ -389,6 +389,46 @@ Sessions are **never deleted** by the framework (audit). Archived sessions can b
 - Agent RUNNING ↔ one or more sessions executing transitions
 - Agent SUSPENDED ↔ all sessions paused
 - Agent TERMINATED ↔ sessions still readable (audit) but no new transitions
+
+### 7.2 User-initiated deletion — `agent:deleteSession`
+
+A user can hold a private conversation and erase it afterwards.
+`agent:deleteSession {agentId, sessionId}` deletes the conversation in **both**
+places it lives:
+
+1. **The session record** — `g/<agent>/sessions/<sid>` (pending, frames /
+   history, meta) is removed from the agent. Removal is durable: the venue
+   merge is whole-value LWW, so the deleted session is not resurrected on
+   sync, and a concurrent `mergeRunResult` on the same session safely skips
+   its write (`instanceof AMap` guard).
+2. **The intake job records** — every `agent:chat` / `agent:message` /
+   `agent:request` records its Job ID in the session's `meta.jobs`
+   back-references at intake (same CAS as the pending append). deleteSession
+   deletes those caller-owned job records via `JobManager.deleteJob`, which
+   removes the durable record from the owner's job index. Job deletion is
+   ownership-checked per job; refs the caller cannot delete are skipped.
+   Sessions created before back-references existed delete the session
+   record only.
+
+Semantics and caveats:
+
+- **In-flight chat** — an awaiting `agent:chat` Job on the session is failed
+  (`"Session deleted"`) and its slot cleared, so the blocked caller gets a
+  clean error rather than waiting forever.
+- **Audit** — the deleteSession job itself persists only
+  `{agentId, sessionId}`: a content-free record that a deletion happened.
+- **Operator kill-switch** — enabled by default; disable venue-wide with
+  `{"adapters": {"agent": {"sessionDelete": false}}}` in venue config
+  (the op then fails with "disabled on this venue").
+- **Strict resolution** — an unknown `sessionId` fails (`Session not found`);
+  nothing is minted.
+- **Known benign race** — a concurrent `agent:message` carrying the deleted
+  sid can re-mint the session (lenient `resolveOrMintSession`); the new
+  session starts empty.
+- **What deletion does not cover** — content persisted elsewhere by the
+  agent (workspace writes, timeline snapshots referencing the response) is
+  out of scope; suppressing job-content persistence up-front ("private
+  sessions") is tracked as a follow-up.
 
 ---
 

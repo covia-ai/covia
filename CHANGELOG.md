@@ -8,6 +8,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+- `agent:deleteSession` — delete a session on an agent, erasing the conversation: removes the session record and the caller's back-referenced intake job records (chat/message/request), whose IDs are now recorded in the session's `meta.jobs` at intake. An in-flight chat on the session is failed cleanly. Enabled by default; operators disable via `{"adapters": {"agent": {"sessionDelete": false}}}`. See `venue/docs/AGENT_SESSIONS.md` §7.2.
+
+### Changed
+- Job deletion is now permanent: `JobManager.deleteJob` (and `PUT /api/v1/jobs/{id}/delete`) removes the durable record from the owner's job index instead of only evicting the in-memory cache. Previously "deleted" jobs remained readable via the lattice fallback.
+
 ## [0.3.0] - 2026-07-06
 
 ### Added

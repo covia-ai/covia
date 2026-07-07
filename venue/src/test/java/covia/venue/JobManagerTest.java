@@ -323,4 +323,31 @@ public class JobManagerTest {
 			Maps.of(Fields.ADAPTER, Strings.create("test:out")));
 		eng.jobs().validateOutput(meta, Strings.create("anything"));
 	}
+
+	// ========== deleteJob ==========
+
+	/**
+	 * deleteJob must delete permanently: the durable record leaves the
+	 * owner's job index, not just the active cache. (Regression — the
+	 * cache-only implementation left "deleted" jobs readable via the
+	 * lattice fallback of getJobData.)
+	 */
+	@Test
+	public void testDeleteJobRemovesLatticeRecord() {
+		Job job = engine.jobs().invokeOperation(
+			"v/test/ops/echo",
+			Maps.of(Strings.create("hello"), Strings.create("world")),
+			ctx);
+		job.awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(did);
+		assertNotNull(user.getJob(job.getID()), "completed job record should be persisted");
+
+		assertTrue(engine.jobs().deleteJob(job.getID(), ctx));
+		assertNull(user.getJob(job.getID()), "durable record should be removed");
+		assertNull(engine.jobs().getJobData(job.getID(), ctx),
+			"deleted job must not reappear via the lattice fallback");
+		assertFalse(engine.jobs().deleteJob(job.getID(), ctx),
+			"second delete finds nothing");
+	}
 }

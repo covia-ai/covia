@@ -43,6 +43,25 @@ public class ConfigTest {
 		assertEquals("v/ops/goaltree/chat", c.getDefaultTransitionOp().toString());
 	}
 
+	@Test
+	public void testGetAdapterConfigAbsent() {
+		// No adapters section, or an adapter without a block → empty map
+		assertEquals(0, new Config(null).getAdapterConfig("agent").count());
+		Config c = new Config(Maps.of(Config.ADAPTERS,
+			Maps.of(Strings.create("agent"), Maps.of(
+				Strings.create("sessionDelete"), convex.core.data.prim.CVMBool.FALSE))));
+		assertEquals(0, c.getAdapterConfig("covia").count());
+	}
+
+	@Test
+	public void testGetAdapterConfigPresent() {
+		Config c = new Config(Maps.of(Config.ADAPTERS,
+			Maps.of(Strings.create("agent"), Maps.of(
+				Strings.create("sessionDelete"), convex.core.data.prim.CVMBool.FALSE))));
+		assertEquals(convex.core.data.prim.CVMBool.FALSE,
+			c.getAdapterConfig("agent").get(Strings.create("sessionDelete")));
+	}
+
 	// ========== did:web alias derivation (covia#167) ==========
 
 	@Test

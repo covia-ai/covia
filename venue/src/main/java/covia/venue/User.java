@@ -80,6 +80,21 @@ public class User extends ALatticeComponent<ACell> {
 	 * @param jobID Job ID (16-byte Blob: timestamp + counter + random)
 	 * @param record Job status record map
 	 */
+	/**
+	 * Removes a job record from this user's job index, if present. The
+	 * removal is durable: the venue merge is whole-value LWW, so the
+	 * post-delete snapshot wins and the record is not resurrected on sync.
+	 *
+	 * @param jobID Job ID
+	 */
+	@SuppressWarnings("unchecked")
+	public void removeJob(Blob jobID) {
+		cursor.path(Namespace.J).updateAndGet(jobs -> {
+			if (!(jobs instanceof Index)) return jobs;
+			return ((Index<Blob, ACell>) jobs).dissoc(jobID);
+		});
+	}
+
 	@SuppressWarnings("unchecked")
 	public void persistJob(Blob jobID, AMap<AString, ACell> record) {
 		final AMap<AString, ACell> rec = record;

@@ -550,12 +550,19 @@ public class JobManager {
 	}
 
 	/**
-	 * Deletes a job permanently with request context.
+	 * Deletes a job permanently with request context: removes the durable
+	 * record from the owning user's job index (mirror of
+	 * {@link #persistJobRecord}) and evicts the active cache.
 	 * @throws AuthException if the caller does not own the job
 	 */
 	public boolean deleteJob(Blob id, RequestContext ctx) {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return false;
+		AString ownerDID = RT.ensureString(data.get(Fields.CALLER));
+		if (ownerDID != null) {
+			User user = engine.getVenueState().users().get(ownerDID);
+			if (user != null) user.removeJob(id);
+		}
 		// Remove from active cache if present (may already be evicted for terminal jobs)
 		deleteJob(id);
 		return true;

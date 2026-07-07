@@ -259,14 +259,15 @@ public class VenueServerTest {
 		AString cancelledStatus = RT.ensureString(cancelledMap.get(Fields.STATUS));
 		assertEquals("CANCELLED", cancelledStatus.toString(), "Job status should be CANCELLED");
 		
-		// Step 6: Delete the job using the Covia client (removes from active tracking)
+		// Step 6: Delete the job using the Covia client
 		covia.deleteJob(jobIdStr).get(5, TimeUnit.SECONDS);
 
-		// Step 7: Job record persists in lattice for audit trail after deletion
+		// Step 7: Deletion is permanent — the durable record leaves the
+		// owner's job index too (privacy contract: a deleted job must not
+		// remain readable). Callers wanting an audit trail simply don't
+		// delete; deletion is itself an explicit, user-initiated act.
 		AMap<AString, ACell> deletedMap = covia.getJobData(jobIdStr).get(5, TimeUnit.SECONDS);
-		assertNotNull(deletedMap, "Deleted job record should still exist in lattice");
-		assertEquals("CANCELLED", RT.ensureString(deletedMap.get(Fields.STATUS)).toString(),
-				"Persisted record should retain last status");
+		assertNull(deletedMap, "Deleted job record should be gone (404)");
 	}
 	
 	@Test

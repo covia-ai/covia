@@ -128,6 +128,8 @@ public class Fields {
 	public static final StringShort INCLUDE_TERMINATED = Strings.intern("includeTerminated");
 	public static final StringShort TASK_ID = Strings.intern("taskId");
 	public static final StringShort CANCELLED = Strings.intern("cancelled");
+	public static final StringShort DELETED = Strings.intern("deleted");
+	public static final StringShort JOBS_DELETED = Strings.intern("jobsDeleted");
 	public static final StringShort RESPONSE_SCHEMA = Strings.intern("responseSchema");
 	public static final StringShort T = Strings.intern("t");
 
