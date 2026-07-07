@@ -110,6 +110,7 @@ public class CoviaAPI extends ACoviaAPI {
 		routes.post(ROUTE+"invoke", this::invokeOperation);
 		routes.get(ROUTE+"operations", this::getOperations);
 		routes.get(ROUTE+"operations/{name}", this::getOperation);
+		routes.get(ROUTE+"adapters", this::getAdapters);
 		routes.get(ROUTE+"jobs/<id>", this::getJobStatus);
 		routes.post(ROUTE+"jobs/<id>", this::sendMessage);
 		routes.put(ROUTE+"jobs/<id>/cancel", this::cancelJob);
@@ -937,6 +938,25 @@ public class CoviaAPI extends ACoviaAPI {
 				}
 				result.add(opInfo);
 			}
+		}
+		buildResult(ctx, 200, result);
+	}
+
+	@OpenApi(path = ROUTE + "adapters",
+			methods = HttpMethod.GET,
+			tags = { "Covia"},
+			summary = "List all adapters registered on this venue.",
+			operationId = "getAdapters")
+	protected void getAdapters(Context ctx) {
+		ArrayList<Object> result = new ArrayList<>();
+		for (var name : engine().getAdapterNames()) {
+			AAdapter aa = engine().getAdapter(name);
+			if (aa == null) continue;
+			Map<String, Object> info = new HashMap<>();
+			info.put("name", name);
+			info.put("description", aa.getDescription());
+			info.put("operationCount", aa.pendingCatalogEntries.size());
+			result.add(info);
 		}
 		buildResult(ctx, 200, result);
 	}
