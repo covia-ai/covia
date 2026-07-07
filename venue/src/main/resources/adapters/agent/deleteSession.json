@@ -1,6 +1,6 @@
 {
 	"name": "Delete Agent Session",
-	"description": "Deletes a session on an agent, erasing the conversation: removes the session record (history, pending messages, metadata) and deletes the caller's associated job records that carry the conversation content. Use this to hold a private conversation and delete it afterwards. Any in-flight chat on the session is failed. Operators may disable this operation via venue config (adapters.agent.sessionDelete: false).",
+	"description": "Deletes a session on an agent, removing the session record (history, pending messages, metadata). Use this to hold a private conversation and delete it afterwards. Job records are not touched — callers hold their own Job IDs and may delete those separately via the jobs API. Any in-flight chat on the session is failed. Operators may disable this operation via venue config (adapters.agent.sessionDelete: false).",
 	"dateCreated": "2026-07-07T00:00:00Z",
 	"operation": {
 		"adapter": "agent:deleteSession",
@@ -18,8 +18,7 @@
 			"properties": {
 				"agentId": { "type": "string" },
 				"sessionId": { "type": "string" },
-				"deleted": { "type": "boolean" },
-				"jobsDeleted": { "type": "integer", "description": "Number of back-referenced job records deleted along with the session" }
+				"deleted": { "type": "boolean" }
 			}
 		}
 	}

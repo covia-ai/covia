@@ -607,9 +607,6 @@ public class AgentAdapter extends AAdapter {
 			taskData = taskData.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
 		}
 		agent.addTask(taskId, taskData);
-		// Back-reference the task Job on the session so agent:deleteSession
-		// can erase the conversation's job records with it.
-		agent.recordSessionJob(sid, taskId);
 
 		// The Job stays in STARTED state — the standard Job lifecycle (REST ?wait, SDK
 		// job.result()) handles sync vs async from the caller's perspective. The run
@@ -642,7 +639,7 @@ public class AgentAdapter extends AAdapter {
 			Fields.CALLER,     ctx.getCallerDID(),
 			Fields.SESSION_ID, Strings.create(sid.toHexString()),
 			Fields.MESSAGE,    messageContent);
-		agent.appendSessionPending(sid, envelope, job.getID());
+		agent.appendSessionPending(sid, envelope);
 		wakeAgent(ctx.getCallerDID(), agentId);
 
 		job.setStatus(Status.STARTED);
@@ -713,7 +710,7 @@ public class AgentAdapter extends AAdapter {
 			Fields.CALLER,     ctx.getCallerDID(),
 			Fields.SESSION_ID, sidHex,
 			Fields.MESSAGE,    messageContent);
-		agent.appendSessionPending(sid, envelope, job.getID());
+		agent.appendSessionPending(sid, envelope);
 
 		// Stay in STARTED — the run loop will completeWith the agent's
 		// response (or fail) once the next cycle for this session runs.
@@ -1104,22 +1101,21 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * agent:deleteSession — erases a conversation. Removes the session record
-	 * (pending, frames/history, meta) from the agent AND deletes the caller's
-	 * job records back-referenced in the session's {@code meta.jobs} — the
-	 * chat/message/request intake jobs whose input/output carry the
-	 * conversation content. Lets a user hold a private conversation and
-	 * delete it afterwards.
+	 * agent:deleteSession — deletes a session on an agent, removing the
+	 * session record (pending, frames/history, meta). Lets a user hold a
+	 * private conversation and delete it afterwards.
+	 *
+	 * <p>Job records are NOT touched: they belong to their callers, who hold
+	 * the Job IDs from intake and can delete them via the jobs API — or avoid
+	 * persisting conversation content in the first place (see #192, private
+	 * job variants).</p>
 	 *
 	 * <p>Enabled by default; operators disable via venue config
 	 * {@code {"adapters": {"agent": {"sessionDelete": false}}}}.</p>
 	 *
 	 * <p>An in-flight {@code agent:chat} on the session is failed
 	 * ("Session deleted") and its slot cleared, so a blocked caller gets a
-	 * clean error. Sessions created before job back-references were recorded
-	 * delete the session record only. The deleteSession job itself persists
-	 * only {@code {agentId, sessionId}} — a content-free audit record that
-	 * the deletion happened.</p>
+	 * clean error.</p>
 	 */
 	private void handleDeleteSession(Job job, ACell input, RequestContext ctx) {
 		if (!isSessionDeleteEnabled()) {
@@ -1149,9 +1145,6 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		// Snapshot the back-referenced intake jobs before the record vanishes
-		AVector<ACell> jobRefs = agent.getSessionJobs(sid);
-
 		// Fail any in-flight chat awaiting on this session so its caller
 		// unblocks with a clean error (scoped analogue of failAllPendingForAgent)
 		ConcurrentHashMap<Blob, Job> agentChats =
@@ -1165,26 +1158,11 @@ public class AgentAdapter extends AAdapter {
 
 		agent.removeSession(sid);
 
-		// Delete the caller-owned job records carrying the conversation
-		// content. Ownership is enforced per job; refs the caller cannot
-		// delete are skipped rather than failing the whole deletion.
-		long jobsDeleted = 0;
-		for (ACell ref : jobRefs) {
-			if (!(ref instanceof Blob jobId)) continue;
-			if (jobId.equals(job.getID())) continue;
-			try {
-				if (engine.jobs().deleteJob(jobId, ctx)) jobsDeleted++;
-			} catch (Exception e) {
-				// Not the caller's job — leave it to its owner
-			}
-		}
-
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(
-			Fields.AGENT_ID,     agentId,
-			Fields.SESSION_ID,   sidHex,
-			Fields.DELETED,      CVMBool.TRUE,
-			Fields.JOBS_DELETED, CVMLong.create(jobsDeleted)));
+			Fields.AGENT_ID,   agentId,
+			Fields.SESSION_ID, sidHex,
+			Fields.DELETED,    CVMBool.TRUE));
 	}
 
 	/**

@@ -392,23 +392,21 @@ Sessions are **never deleted by the framework** (audit). Archived sessions can b
 
 ### 7.2 User-initiated deletion — `agent:deleteSession`
 
-A user can hold a private conversation and erase it afterwards.
-`agent:deleteSession {agentId, sessionId}` deletes the conversation in **both**
-places it lives:
+A user can hold a private conversation and delete it afterwards.
+`agent:deleteSession {agentId, sessionId}` removes the **session record** —
+`g/<agent>/sessions/<sid>` (pending, frames / history, meta). Removal is
+durable: the venue merge is whole-value LWW, so the deleted session is not
+resurrected on sync, and a concurrent `mergeRunResult` on the same session
+safely skips its write (`instanceof AMap` guard).
 
-1. **The session record** — `g/<agent>/sessions/<sid>` (pending, frames /
-   history, meta) is removed from the agent. Removal is durable: the venue
-   merge is whole-value LWW, so the deleted session is not resurrected on
-   sync, and a concurrent `mergeRunResult` on the same session safely skips
-   its write (`instanceof AMap` guard).
-2. **The intake job records** — every `agent:chat` / `agent:message` /
-   `agent:request` records its Job ID in the session's `meta.jobs`
-   back-references at intake (same CAS as the pending append). deleteSession
-   deletes those caller-owned job records via `JobManager.deleteJob`, which
-   removes the durable record from the owner's job index. Job deletion is
-   ownership-checked per job; refs the caller cannot delete are skipped.
-   Sessions created before back-references existed delete the session
-   record only.
+**Job records are deliberately NOT touched.** Each intake job
+(`agent:chat` / `agent:message` / `agent:request`) belongs to the caller
+who minted it; the caller holds the Job ID from the invocation and can
+delete those records via the jobs API (`JobManager.deleteJob` /
+`PUT /jobs/{id}/delete` — which deletes permanently). The framework does
+not maintain session→job back-references: callers wanting full content
+erasure keep their own job records, or better, use job variants that never
+persist inputs/outputs (#192).
 
 Semantics and caveats:
 
@@ -425,10 +423,10 @@ Semantics and caveats:
 - **Known benign race** — a concurrent `agent:message` carrying the deleted
   sid can re-mint the session (lenient `resolveOrMintSession`); the new
   session starts empty.
-- **What deletion does not cover** — content persisted elsewhere by the
-  agent (workspace writes, timeline snapshots referencing the response) is
-  out of scope; suppressing job-content persistence up-front ("private
-  sessions") is tracked as a follow-up.
+- **What deletion does not cover** — job records (see above) and content
+  persisted elsewhere by the agent (workspace writes, timeline snapshots
+  referencing the response). Suppressing job-content persistence up-front
+  ("private" job variants) is tracked in #192.
 
 ---
 

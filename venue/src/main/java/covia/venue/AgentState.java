@@ -55,10 +55,6 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_PARTIES  = Strings.intern("parties");
 	private static final AString K_CREATED  = Strings.intern("created");
 	private static final AString K_TURNS    = Strings.intern("turns");
-	/** Session meta key: vector of intake Job IDs (Blobs) associated with the
-	 *  session (chat/message/request). Consumed by {@code agent:deleteSession}
-	 *  to erase the conversation's job records along with the session. */
-	private static final AString K_JOBS     = Strings.intern("jobs");
 
 	// Frame record field keys (entries in session.frames). See GOAL_TREE.md.
 	private static final AString K_DESCRIPTION  = Strings.intern("description");
@@ -318,19 +314,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 * Atomically appends an envelope to {@code sessions[sid].pending} (S3b).
 	 * No-op if the session is missing — callers should ensureSession first.
 	 */
-	public void appendSessionPending(Blob sid, ACell envelope) {
-		appendSessionPending(sid, envelope, null);
-	}
-
-	/**
-	 * Atomically appends an envelope to {@code sessions[sid].pending} and,
-	 * when {@code jobId} is non-null, records it in the session's
-	 * {@code meta.jobs} back-references (consumed by
-	 * {@code agent:deleteSession}) — one CAS for both writes.
-	 * No-op if the session is missing — callers should ensureSession first.
-	 */
 	@SuppressWarnings("unchecked")
-	public void appendSessionPending(Blob sid, ACell envelope, Blob jobId) {
+	public void appendSessionPending(Blob sid, ACell envelope) {
 		update(r -> {
 			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
 				? (Index<Blob, ACell>) idx : Index.none();
@@ -340,51 +325,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 			AVector<ACell> pending = (session.get(K_PENDING) instanceof AVector pv)
 				? (AVector<ACell>) pv : Vectors.empty();
 			session = session.assoc(K_PENDING, pending.conj(envelope));
-			if (jobId != null) session = recordJobOnSession(session, jobId);
 			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
 		});
-	}
-
-	/**
-	 * Atomically records an intake Job ID in {@code sessions[sid].meta.jobs}.
-	 * Used by the task intake path ({@code agent:request}), which does not go
-	 * through {@link #appendSessionPending}. No-op if the session is missing.
-	 */
-	@SuppressWarnings("unchecked")
-	public void recordSessionJob(Blob sid, Blob jobId) {
-		update(r -> {
-			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
-				? (Index<Blob, ACell>) idx : Index.none();
-			ACell sv = sessions.get(sid);
-			if (!(sv instanceof AMap)) return r;
-			AMap<AString, ACell> session = recordJobOnSession((AMap<AString, ACell>) sv, jobId);
-			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
-		});
-	}
-
-	/** Conjes {@code jobId} onto the session's {@code meta.jobs} vector. */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> recordJobOnSession(AMap<AString, ACell> session, Blob jobId) {
-		AMap<AString, ACell> meta = (session.get(K_META) instanceof AMap m)
-			? (AMap<AString, ACell>) m : Maps.empty();
-		AVector<ACell> jobs = (meta.get(K_JOBS) instanceof AVector jv)
-			? (AVector<ACell>) jv : Vectors.empty();
-		return session.assoc(K_META, meta.assoc(K_JOBS, jobs.conj(jobId)));
-	}
-
-	/**
-	 * Returns the vector of intake Job IDs recorded in the session's
-	 * {@code meta.jobs}, or an empty vector when the session is missing or
-	 * predates job back-references.
-	 */
-	@SuppressWarnings("unchecked")
-	public AVector<ACell> getSessionJobs(Blob sid) {
-		AMap<AString, ACell> session = getSession(sid);
-		if (session == null) return Vectors.empty();
-		ACell meta = session.get(K_META);
-		if (!(meta instanceof AMap)) return Vectors.empty();
-		ACell v = ((AMap<AString, ACell>) meta).get(K_JOBS);
-		return (v instanceof AVector) ? (AVector<ACell>) v : Vectors.empty();
 	}
 
 	/**

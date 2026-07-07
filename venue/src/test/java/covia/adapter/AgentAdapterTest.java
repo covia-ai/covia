@@ -3529,13 +3529,12 @@ public class AgentAdapterTest {
 	// ========== agent:deleteSession ==========
 
 	/**
-	 * Happy path: deleting a session erases the session record AND the
-	 * back-referenced intake job records (the privacy contract — a private
-	 * conversation leaves no content behind), while the deleteSession job
-	 * itself survives as a content-free audit record.
+	 * Happy path: deleting a session removes the session record and nothing
+	 * else. Job records are the callers' own — they survive the session
+	 * delete and are deletable separately via the jobs API.
 	 */
 	@Test
-	public void testDeleteSessionErasesSessionAndJobs() {
+	public void testDeleteSessionErasesSession() {
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "del-agent"),
@@ -3561,9 +3560,6 @@ public class AgentAdapterTest {
 		AgentState agent = user.agent("del-agent");
 		Blob sid = Blob.fromHex(sidHex.toString());
 		assertNotNull(agent.getSession(sid), "session should exist after messages");
-		assertEquals(2, agent.getSessionJobs(sid).count(),
-			"both intake jobs should be back-referenced on the session");
-		assertNotNull(user.getJob(msg1.getID()), "message job record should be persisted");
 
 		Job del = engine.jobs().invokeOperation(
 			"v/ops/agent/delete-session",
@@ -3571,13 +3567,16 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		ACell result = del.awaitResult(5000);
 		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.DELETED));
-		assertEquals(CVMLong.create(2), RT.getIn(result, Fields.JOBS_DELETED));
 
 		assertNull(agent.getSession(sid), "session record should be gone");
-		assertNull(user.getJob(msg1.getID()), "conversation job records should be gone");
-		assertNull(user.getJob(msg2.getID()), "conversation job records should be gone");
-		assertNotNull(user.getJob(del.getID()),
-			"the deletion itself remains as a content-free audit record");
+		// Job records belong to their callers and are NOT touched — the
+		// caller holds the IDs and may delete them via the jobs API (which
+		// deletes permanently), or use content-free job variants (#192).
+		assertNotNull(user.getJob(msg1.getID()), "job records survive a session delete");
+		assertNotNull(user.getJob(msg2.getID()), "job records survive a session delete");
+		assertTrue(engine.jobs().deleteJob(msg1.getID(), RequestContext.of(ALICE_DID)),
+			"caller can still delete their own job separately");
+		assertNull(user.getJob(msg1.getID()));
 	}
 
 	@Test
