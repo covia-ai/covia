@@ -601,14 +601,13 @@ public class Engine {
 			writeVenueInfo("v/info/protocols", protocols, ctx);
 
 			// /v/info/adapters/<name> — per-adapter summary. The "operations"
-			// field is a vector of full catalog paths drawn from the adapter's
-			// pendingCatalogEntries — each entry is directly invocable via
-			// grid:run. Agents can count with length(operations).
+			// field is a vector of full catalog paths — each entry is directly
+			// invocable via grid:run. Agents can count with length(operations).
 			for (String adapterName : adapters.keySet()) {
 				AAdapter adapter = adapters.get(adapterName);
 				if (adapter == null) continue;
 				AVector<ACell> ops = Vectors.empty();
-				for (String catalogPath : adapter.pendingCatalogEntries.keySet()) {
+				for (String catalogPath : adapter.getOperationPaths()) {
 					ops = ops.conj(Strings.create(catalogPath));
 				}
 				AMap<AString, ACell> summary = Maps.of(

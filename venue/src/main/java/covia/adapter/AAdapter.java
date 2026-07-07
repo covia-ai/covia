@@ -180,6 +180,25 @@ public abstract class AAdapter {
 	public final java.util.Map<String, Hash> pendingCatalogEntries = new java.util.LinkedHashMap<>();
 
 	/**
+	 * Returns the catalog paths of this adapter's installed <em>operations</em>
+	 * ({@code v/ops/...} and {@code v/test/ops/...} entries), in installation
+	 * order. Non-operation catalog entries such as agent templates
+	 * ({@code v/agents/templates/...}) are excluded — they are config assets,
+	 * not invocable operations.
+	 *
+	 * @return List of full catalog paths, each invocable via {@code grid:run}
+	 */
+	public java.util.List<String> getOperationPaths() {
+		java.util.ArrayList<String> paths = new java.util.ArrayList<>();
+		for (String path : pendingCatalogEntries.keySet()) {
+			if (path.startsWith("v/ops/") || path.startsWith("v/test/ops/")) {
+				paths.add(path);
+			}
+		}
+		return paths;
+	}
+
+	/**
 	 * Validates a catalog path: non-empty {@code /}-separated segments,
 	 * each matching {@code [a-z][a-z0-9-]*}, no {@code .} or {@code ..}.
 	 */

@@ -642,6 +642,25 @@ public class OperationResolutionTest {
 	}
 
 	@Test
+	public void testVenueInfoAdapterOperationsExcludeTemplates() {
+		// The agent adapter installs both operations (v/ops/agent/...) and
+		// agent templates (v/agents/templates/...). The templates are config
+		// assets, not invocable operations, so the /v/info/ summary's
+		// operations vector must not include them.
+		ACell summary = engine.resolvePath(Strings.create("v/info/adapters/agent"), alice);
+		assertNotNull(summary, "/v/info/adapters/agent should exist");
+		ACell ops = RT.getIn(summary, "operations");
+		assertTrue(ops instanceof convex.core.data.AVector, "operations should be a vector");
+		convex.core.data.AVector<?> opsVec = (convex.core.data.AVector<?>) ops;
+		assertTrue(opsVec.count() > 0, "agent adapter should list some operations");
+		for (int i = 0; i < opsVec.count(); i++) {
+			String path = opsVec.get(i).toString();
+			assertTrue(path.startsWith("v/ops/") || path.startsWith("v/test/ops/"),
+				"operations entry should be an invocable op path, got: " + path);
+		}
+	}
+
+	@Test
 	public void testVenueInfoAccessibleViaCoviaRead() {
 		// Universal resolution: covia:read should work for /v/info/ paths
 		Job job = engine.jobs().invokeOperation("v/ops/covia/read",

@@ -93,7 +93,7 @@ Semantics, access control, and pin-to-`/a/`-on-invoke behaviour are as already s
 | `/v/info/version` | string | jar manifest / `pom.properties` |
 | `/v/info/started` | long (epoch ms) | `System.currentTimeMillis()` at boot |
 | `/v/info/protocols` | array of strings | enabled protocol handlers (e.g. `["rest","mcp","a2a","dlfs-webdav"]`) |
-| `/v/info/adapters/<name>` | map | per-adapter summary: `{name, description, operations: <count>}` |
+| `/v/info/adapters/<name>` | map | per-adapter summary: `{name, description, operations: [catalog paths]}` — invocable operations only (`v/ops/`, `v/test/ops/`); non-operation catalog entries such as agent templates are excluded |
 
 A single `covia:slice v/info` round trip gives an agent or tool a complete venue introspection view.
 
