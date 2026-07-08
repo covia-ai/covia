@@ -231,6 +231,7 @@ public class Config {
 
 	/** Key for the Private Network Access opt-in (default: false). */
 	public static final AString ALLOW_PRIVATE_NETWORK = Strings.intern("allowPrivateNetwork");
+	public static final AString ENABLE_PRIVATE_JOBS = Strings.intern("enablePrivateJobs");
 
 	// ========== MCP config keys ==========
 
@@ -762,6 +763,18 @@ public class Config {
 	 */
 	public boolean isAllowPrivateNetwork() {
 		ACell v = config.get(ALLOW_PRIVATE_NETWORK);
+		return (v != null) && RT.bool(v);
+	}
+
+	/**
+	 * Whether the venue accepts private (memory-only) jobs (#192): invoked with
+	 * {@code private: true}, never persisted — no record in the caller's job
+	 * index, no lattice write, no recovery, gone on restart. Off by default;
+	 * a private request against a venue without this is an error, never a
+	 * silent downgrade to a persisted job.
+	 */
+	public boolean isPrivateJobsEnabled() {
+		ACell v = config.get(ENABLE_PRIVATE_JOBS);
 		return (v != null) && RT.bool(v);
 	}
 

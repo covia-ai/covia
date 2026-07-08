@@ -135,6 +135,7 @@ public class Fields {
 	// Session related
 	public static final StringShort SESSION_ID = Strings.intern("sessionId");
 	public static final StringShort LOADS = Strings.intern("loads");
+	public static final StringShort PRIVATE = Strings.intern("private");
 	public static final StringShort HISTORY = Strings.intern("history");
 	public static final StringShort PARTIES = Strings.intern("parties");
 	public static final StringShort TURNS = Strings.intern("turns");

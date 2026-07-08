@@ -99,6 +99,18 @@ public class JobManager {
 	}
 
 	public Job invokeOperation(AString ref, ACell input, RequestContext ctx) {
+		return invokeOperation(ref, input, ctx, false);
+	}
+
+	/**
+	 * Invoke with an optional private (memory-only) job (#192): never
+	 * persisted — no record in the caller's job index, no recovery, gone on
+	 * restart. The live Job serves the caller normally (wait, or polling
+	 * while active); on completion it is evicted and forgotten. Requires
+	 * {@code enablePrivateJobs} on the venue — a private request against a
+	 * venue without it is an error, never a silent downgrade.
+	 */
+	public Job invokeOperation(AString ref, ACell input, RequestContext ctx, boolean privateJob) {
 		if (ref == null) throw new IllegalArgumentException("Operation must be specified");
 
 		Asset asset = engine.resolveAsset(ref, ctx);
@@ -115,7 +127,7 @@ public class JobManager {
 		// refs are FETCHED by resolveAsset, never delegated), so every
 		// accepted invoke produces a job on THIS venue. Cross-venue
 		// execution is explicit via grid:run / grid:invoke.
-		return invokeOperation(op.meta(), input, ctx);
+		return invokeOperation(op.meta(), input, ctx, privateJob);
 	}
 
 	/**
@@ -128,6 +140,10 @@ public class JobManager {
 	 * @return Job tracking the execution
 	 */
 	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
+		return invokeOperation(meta, input, ctx, false);
+	}
+
+	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx, boolean privateJob) {
 		// Capability enforcement is the executing adapter's responsibility: each
 		// op asserts its exact (resource, ability) at its own enforcement point
 		// (requireCapability / requireInvoke), before any side effect. There is
@@ -140,7 +156,7 @@ public class JobManager {
 		// Hex hashes are universally resolvable via the resolvePath bare-hex
 		// branch and survive any change in catalog naming or adapter registry.
 		AString opID = Strings.create(meta.getHash().toHexString());
-		Job job = submitJob(opID, meta, input, callerDID);
+		Job job = submitJob(opID, meta, input, callerDID, privateJob);
 
 		// Set jobId on context so adapters can use t/ (job-scoped temp).
 		// Preserve existing jobId if already set — parent scope takes precedence
@@ -367,8 +383,13 @@ public class JobManager {
 	/**
 	 * Submit a Job for an operation.
 	 */
-	private Job submitJob(AString opID, AMap<AString, ACell> meta, ACell input, AString callerDID) {
+	private Job submitJob(AString opID, AMap<AString, ACell> meta, ACell input, AString callerDID,
+			boolean privateJob) {
 		if (callerDID == null) throw new AuthException("Authentication required");
+		if (privateJob && !engine.config().isPrivateJobsEnabled()) {
+			throw new IllegalArgumentException(
+				"Private jobs are not enabled on this venue (set enablePrivateJobs in venue config)");
+		}
 
 		long ts = Utils.getCurrentTimestamp();
 		Blob jobID = generateJobID(ts);
@@ -387,10 +408,10 @@ public class JobManager {
 			status = status.assoc(Fields.NAME, name);
 		}
 
-		VenueJob job = new VenueJob(status, meta, callerDID, this);
+		VenueJob job = new VenueJob(status, meta, callerDID, this, privateJob);
 		activeJobs.put(jobID, job);
 
-		// Persist initial job record
+		// Persist initial job record (no-op for a private job, #192)
 		persistJobRecord(jobID, status, callerDID);
 
 		log.info("Submitted job: {}", jobID);
@@ -798,6 +819,13 @@ public class JobManager {
 	 * This is the single source of truth for all jobs.
 	 */
 	void persistJobRecord(Blob jobID, AMap<AString, ACell> record, AString callerDID) {
+		// Private (memory-only) job (#192): the single persistence choke point
+		// is a no-op — nothing about the job ever touches the lattice. The job
+		// is still in the active cache here for every persist trigger (initial
+		// submit, status updates, history appends): terminal eviction happens
+		// AFTER the final persist call.
+		Job j = activeJobs.get(jobID);
+		if (j instanceof VenueJob vj && vj.isPrivate()) return;
 		User user = engine.getVenueState().users().ensure(callerDID);
 		user.persistJob(jobID, record);
 	}

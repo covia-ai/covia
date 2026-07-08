@@ -19,13 +19,27 @@ public class VenueJob extends Job {
 	private final JobManager manager;
 	private final AMap<AString, ACell> meta;
 	private final AString callerDID;
+	/** Private (memory-only) job (#192): never persisted, gone on restart. */
+	private final boolean privateJob;
 
 	VenueJob(AMap<AString, ACell> record, AMap<AString, ACell> meta,
 			AString callerDID, JobManager manager) {
+		this(record, meta, callerDID, manager, false);
+	}
+
+	VenueJob(AMap<AString, ACell> record, AMap<AString, ACell> meta,
+			AString callerDID, JobManager manager, boolean privateJob) {
 		super(record);
 		this.manager = manager;
 		this.meta = meta;
 		this.callerDID = callerDID;
+		this.privateJob = privateJob;
+	}
+
+	/** True for a private (memory-only) job — {@link JobManager#persistJobRecord}
+	 *  is a no-op for it (#192). */
+	public boolean isPrivate() {
+		return privateJob;
 	}
 
 	@Override

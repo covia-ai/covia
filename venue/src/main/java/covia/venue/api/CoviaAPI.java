@@ -514,7 +514,13 @@ public class CoviaAPI extends ACoviaAPI {
 					+ "continues polling. This contract applies uniformly, including to "
 					+ "meta-operations: e.g. grid:job-result itself returns a local job that "
 					+ "completes with the remote job's result (it supports an op-level timeout "
-					+ "input for bounded waits).",
+					+ "input for bounded waits). Pass private: true (body field) for a "
+					+ "PRIVATE memory-only job (#192): never persisted, absent from the "
+					+ "job index, no recovery, gone on venue restart — use wait to "
+					+ "collect the result, since a completed private job is immediately "
+					+ "forgotten. Requires enablePrivateJobs in the venue config; a "
+					+ "private request against a venue without it fails, never silently "
+					+ "downgrades to a persisted job.",
 			queryParams = {
 					@OpenApiParam(name = "wait", example = "true",
 							description = "Synchronous invoke: 'true' waits up to the 120s cap; a non-negative integer waits up to that many milliseconds (clamped). May also be passed as a body field; any other value is a 400.")
@@ -582,8 +588,11 @@ public class CoviaAPI extends ACoviaAPI {
 			// operation is invoked so a malformed value rejects with 400 without
 			// creating a job. See parseWaitMs.
 			long waitMs = parseWaitMs(ctx.queryParam("wait"), RT.getIn(req, "wait"));
+			// Private (memory-only) job (#192): never persisted; requires
+			// enablePrivateJobs on the venue (else the invoke fails loudly).
+			boolean privateJob = CVMBool.TRUE.equals(RT.getIn(req, "private"));
 
-			Job job=engine().jobs().invokeOperation(op,input,rctx);
+			Job job=engine().jobs().invokeOperation(op,input,rctx,privateJob);
 			if (job==null) {
 				buildError(ctx,404,"Operation does not exist");
 				return;

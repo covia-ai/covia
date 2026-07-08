@@ -334,6 +334,23 @@ Currently defined:
   (default `true`). Set `false` to disable user-initiated session deletion
   venue-wide; the op then fails with "disabled on this venue".
 
+### Private jobs
+
+```json
+{
+  "enablePrivateJobs": true
+}
+```
+
+Off by default. When enabled, an invoke with `private: true` (body field)
+creates a **memory-only job** (#192): never persisted — no record in the
+caller's job index, no lattice write, no recovery, gone on venue restart.
+Use `wait` to collect the result; a completed private job is immediately
+forgotten. A private request against a venue without this flag is an error —
+never a silent downgrade to a persisted job. A private conversation is agent
+intake (`agent:chat` / `agent:request`) invoked private; the session record
+remains the (deletable, `agent:deleteSession`) conversation store.
+
 ### DLFS WebDAV
 
 ```json
