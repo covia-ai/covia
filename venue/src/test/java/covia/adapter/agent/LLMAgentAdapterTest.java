@@ -1324,4 +1324,42 @@ public class LLMAgentAdapterTest {
 		// Null state
 		assertEquals(0, LLMAgentAdapter.extractLoads(null).count());
 	}
+
+	// ========== Wrong-runtime harness tool calls fail diagnosably (#143) ==========
+
+	/**
+	 * A call to another runtime's harness tool is a normal runtime tool failure —
+	 * but the error must name the actual reason ("goaltree harness tool"), not the
+	 * generic "cannot resolve operation" a catalog miss produces. The tool result
+	 * is the agent-visible surface; venue logs are not.
+	 */
+	@Test
+	public void testWrongRuntimeHarnessToolFailsDiagnosably() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+
+		ACell result = adapter.dispatchTool("subgoal", Maps.empty(), Map.of(), ctx, 1000);
+		String msg = RT.ensureString(result).toString();
+		assertTrue(msg.startsWith("Error:"), msg);
+		assertTrue(msg.contains("goaltree harness tool"), msg);
+		assertTrue(msg.contains("llmagent"), msg);
+
+		// The reverse direction: llmagent's harness names under goaltree.
+		GoalTreeAdapter goaltree = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		ACell reverse = goaltree.dispatchTool("complete_task", Maps.empty(), Map.of(), ctx, 1000);
+		String reverseMsg = RT.ensureString(reverse).toString();
+		assertTrue(reverseMsg.contains("llmagent harness tool"), reverseMsg);
+		assertTrue(reverseMsg.contains("goaltree"), reverseMsg);
+
+		// A name shared by both runtimes reports both providers.
+		ACell shared = adapter.dispatchTool("context_load", Maps.empty(), Map.of(), ctx, 1000);
+		String sharedMsg = RT.ensureString(shared).toString();
+		assertTrue(sharedMsg.contains("goaltree, llmagent"), sharedMsg);
+
+		// A genuinely unknown name keeps the ordinary resolution failure.
+		ACell unknown = adapter.dispatchTool("no_such_tool_xyz", Maps.empty(), Map.of(), ctx, 1000);
+		String unknownMsg = RT.ensureString(unknown).toString();
+		assertTrue(unknownMsg.startsWith("Error:"), unknownMsg);
+		assertFalse(unknownMsg.contains("harness tool"), unknownMsg);
+	}
 }

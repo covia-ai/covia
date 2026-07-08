@@ -307,8 +307,33 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			return invokeOperation(operation, input, ctx, timeoutMs);
 		}
 
+		// A harness pseudo-tool name reaching grid dispatch belongs to another
+		// runtime — this runtime's own harness tools were intercepted by the
+		// subclass before falling through. It exists in no catalog, so fail the
+		// call with the actual reason instead of a generic resolution miss (#143).
+		String provider = HarnessNames.PROVIDERS.get(toolName);
+		if (provider != null) {
+			return Strings.create("Error: '" + toolName + "' is a " + provider
+				+ " harness tool — not available under this agent's runtime (" + getName() + ")");
+		}
+
 		// Fall through to grid dispatch
 		return invokeOperation(Strings.create(toolName), input, ctx, timeoutMs);
+	}
+
+	/**
+	 * Every runtime's harness pseudo-tool names → provider label, for diagnosable
+	 * wrong-runtime tool failures. Lazy holder: initialised on first dispatch,
+	 * avoiding subclass-static references during this class's own initialisation.
+	 */
+	private static final class HarnessNames {
+		static final Map<String, String> PROVIDERS;
+		static {
+			Map<String, String> m = new java.util.HashMap<>();
+			for (String n : GoalTreeAdapter.HARNESS_TOOL_REGISTRY.keySet()) m.put(n, "goaltree");
+			for (String n : LLMAgentAdapter.HARNESS_TOOL_NAMES) m.merge(n, "llmagent", (a, b) -> a + ", " + b);
+			PROVIDERS = Map.copyOf(m);
+		}
 	}
 
 	/**

@@ -138,6 +138,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	private static final String TOOL_CONTEXT_LOAD   = "context_load";
 	private static final String TOOL_CONTEXT_UNLOAD = "context_unload";
 
+	/** Harness pseudo-tools this runtime provides — intercepted by the adapter,
+	 *  never dispatched as operations (see {@link AbstractLLMAdapter#dispatchTool}). */
+	static final java.util.Set<String> HARNESS_TOOL_NAMES = java.util.Set.of(
+		TOOL_COMPLETE_TASK, TOOL_FAIL_TASK, TOOL_CONTEXT_LOAD, TOOL_CONTEXT_UNLOAD);
+
 	private static final AMap<AString, ACell> TOOL_DEF_CONTEXT_LOAD = Maps.of(
 		K_NAME, Strings.create(TOOL_CONTEXT_LOAD),
 		K_DESCRIPTION, Strings.create(
