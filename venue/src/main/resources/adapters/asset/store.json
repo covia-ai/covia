@@ -9,8 +9,8 @@
       "type": "object",
       "properties": {
         "metadata": {
-          "type": "object",
-          "description": "Arbitrary JSON metadata for the asset. The asset ID is computed from this object. Include a 'name' field for discoverability and a 'type' field for filtering (e.g. 'agent-definition', 'invoice', 'document')."
+          "type": ["object", "string"],
+          "description": "Arbitrary JSON metadata for the asset, as a JSON object (or a string containing one, parsed on receipt). The asset ID is computed from the stored metadata. Include a 'name' field for discoverability and a 'type' field for filtering (e.g. 'agent-definition', 'invoice', 'document'). When content bytes are supplied, metadata.content must be an object (or absent) — the venue validates or injects content.sha256 into it; any other shape is an error."
         },
         "content": {
           "type": "string",

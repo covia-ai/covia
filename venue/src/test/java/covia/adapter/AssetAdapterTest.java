@@ -327,6 +327,114 @@ public class AssetAdapterTest {
 		}
 	}
 
+	// ========== metadata.content shape rules (#173) ==========
+	// Invariant: stored metadata is exactly what the caller supplied, except the
+	// one documented sha256 injection. Anything that would deviate throws —
+	// the asset ID is the hash of the stored metadata, so a silent rewrite
+	// changes the asset's identity behind the caller's back.
+
+	/** Non-map metadata.content + content bytes was silently REPLACED before #173. */
+	@Test
+	public void testStoreRejectsNonMapContentFieldWithBytes() {
+		ACell metadata = Maps.of(
+			Fields.NAME, "Bad shape",
+			Fields.CONTENT, Strings.create("a caller value the venue must not discard"));
+		ACell input = Maps.of(Fields.METADATA, metadata, K_CONTENT_TEXT, Strings.create("hello"));
+		Job job = engine.jobs().invokeOperation("v/ops/asset/store", input, RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("Non-map metadata.content with content bytes must be rejected");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains("metadata.content must be a JSON object"),
+				job.getErrorMessage());
+		}
+	}
+
+	/** A non-string sha256 was silently overwritten by the injection before #173. */
+	@Test
+	public void testStoreRejectsNonStringSha256() {
+		ACell metadata = Maps.of(
+			Fields.NAME, "Bad hash type",
+			Fields.CONTENT, Maps.of(Fields.SHA256, CVMLong.create(12345)));
+		ACell input = Maps.of(Fields.METADATA, metadata, K_CONTENT_TEXT, Strings.create("hello"));
+		Job job = engine.jobs().invokeOperation("v/ops/asset/store", input, RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("Non-string metadata.content.sha256 must be rejected");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains("sha256 must be a hex string"),
+				job.getErrorMessage());
+		}
+	}
+
+	@Test
+	public void testStoreRejectsMismatchedSha256() {
+		ACell metadata = Maps.of(
+			Fields.NAME, "Wrong hash",
+			Fields.CONTENT, Maps.of(Fields.SHA256, Strings.create("00".repeat(32))));
+		ACell input = Maps.of(Fields.METADATA, metadata, K_CONTENT_TEXT, Strings.create("hello"));
+		Job job = engine.jobs().invokeOperation("v/ops/asset/store", input, RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("Mismatched sha256 must be rejected");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains("hash mismatch"), job.getErrorMessage());
+		}
+	}
+
+	/** Without content bytes the venue never writes into metadata — any shape is the caller's business. */
+	@Test
+	public void testStoreAllowsNonMapContentFieldWithoutBytes() {
+		ACell metadata = Maps.of(
+			Fields.NAME, "Pure metadata",
+			Fields.CONTENT, Strings.create("opaque caller value"));
+		Job job = engine.jobs().invokeOperation("v/ops/asset/store",
+			Maps.of(Fields.METADATA, metadata), RequestContext.of(ALICE_DID));
+		AString id = RT.ensureString(RT.getIn(job.awaitResult(5000), Fields.ID));
+		assertNotNull(id);
+
+		// Stored exactly as supplied — the content field survives untouched.
+		Job getJob = engine.jobs().invokeOperation("v/ops/asset/get",
+			Maps.of(Fields.ID, id), RequestContext.of(ALICE_DID));
+		assertEquals(Strings.create("opaque caller value"),
+			RT.getIn(getJob.awaitResult(5000), Fields.VALUE, Fields.CONTENT));
+	}
+
+	/** A matching declared sha256 stores the metadata byte-identically — no rewrite. */
+	@Test
+	public void testStoreMatchingSha256KeepsMetadataIdentical() {
+		// First store: learn the injected hash for this content.
+		Job first = engine.jobs().invokeOperation("v/ops/asset/store",
+			Maps.of(Fields.METADATA, Maps.of(Fields.NAME, "learn hash"),
+				K_CONTENT_TEXT, Strings.create("stable bytes")),
+			RequestContext.of(ALICE_DID));
+		AString firstId = RT.ensureString(RT.getIn(first.awaitResult(5000), Fields.ID));
+		Job firstGet = engine.jobs().invokeOperation("v/ops/asset/get",
+			Maps.of(Fields.ID, firstId), RequestContext.of(ALICE_DID));
+		AString sha = RT.ensureString(RT.getIn(firstGet.awaitResult(5000),
+			Fields.VALUE, Fields.CONTENT, Fields.SHA256));
+		assertNotNull(sha);
+
+		// Second store: declare the matching hash alongside another field —
+		// the whole content map must survive exactly as supplied.
+		ACell metadata = Maps.of(
+			Fields.NAME, "declared hash",
+			Fields.CONTENT, Maps.of(Fields.SHA256, sha, Strings.create("note"), Strings.create("kept")));
+		Job second = engine.jobs().invokeOperation("v/ops/asset/store",
+			Maps.of(Fields.METADATA, metadata, K_CONTENT_TEXT, Strings.create("stable bytes")),
+			RequestContext.of(ALICE_DID));
+		AString secondId = RT.ensureString(RT.getIn(second.awaitResult(5000), Fields.ID));
+
+		Job secondGet = engine.jobs().invokeOperation("v/ops/asset/get",
+			Maps.of(Fields.ID, secondId), RequestContext.of(ALICE_DID));
+		ACell stored = RT.getIn(secondGet.awaitResult(5000), Fields.VALUE);
+		assertEquals(sha, RT.getIn(stored, Fields.CONTENT, Fields.SHA256));
+		assertEquals(Strings.create("kept"), RT.getIn(stored, Fields.CONTENT, Strings.create("note")));
+	}
+
 	@Test
 	public void testStoreRejectsNonHexContent() {
 		ACell metadata = Maps.of(Fields.NAME, "Bad Content", Fields.TYPE, "test");

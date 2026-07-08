@@ -115,24 +115,42 @@ public class AssetAdapter extends AAdapter {
 			content = toBlob(contentCell);
 		}
 
-		// If content provided, validate or inject content.sha256 in metadata
+		// If content provided, validate or inject content.sha256 in metadata.
+		// Strict shape rules (#173): this is the ONLY place the venue writes into
+		// caller metadata, so it is the only place metadata.content's shape is
+		// policed — a `content` field of any shape is fine on a pure-metadata
+		// asset (no bytes). The asset ID is the hash of the STORED metadata, so
+		// any silent rewrite would change the asset's identity behind the
+		// caller's back: every deviation throws instead.
 		if (content != null) {
 			Hash contentHash = Hashing.sha256(content.getBytes());
 			AString hashHex = Strings.create(contentHash.toHexString());
 
-			AString existingHash = RT.ensureString(RT.getIn(metadata, Fields.CONTENT, Fields.SHA256));
-			if (existingHash != null) {
-				// Validate: declared hash must match actual content
+			ACell contentField = RT.getIn(metadata, Fields.CONTENT);
+			AMap<AString, ACell> contentMeta;
+			if (contentField == null) {
+				contentMeta = Maps.empty();
+			} else if (contentField instanceof AMap) {
+				contentMeta = (AMap<AString, ACell>) contentField;
+			} else {
+				throw new IllegalArgumentException(
+					"metadata.content must be a JSON object when content bytes are supplied");
+			}
+
+			if (contentMeta.containsKey(Fields.SHA256)) {
+				AString existingHash = RT.ensureString(contentMeta.get(Fields.SHA256));
+				if (existingHash == null) {
+					throw new IllegalArgumentException(
+						"metadata.content.sha256 must be a hex string");
+				}
 				if (!existingHash.equals(hashHex)) {
 					throw new IllegalArgumentException(
 						"Content hash mismatch. Declared: " + existingHash + ", Actual: " + hashHex);
 				}
+				// Declared and matching — metadata is stored exactly as supplied.
 			} else {
-				// Inject content.sha256 into metadata
-				AMap<AString, ACell> contentMeta = RT.castMap(RT.getIn(metadata, Fields.CONTENT));
-				if (contentMeta == null) contentMeta = Maps.empty();
-				contentMeta = contentMeta.assoc(Fields.SHA256, hashHex);
-				metadata = metadata.assoc(Fields.CONTENT, contentMeta);
+				// Inject content.sha256 — the one documented write into caller metadata.
+				metadata = metadata.assoc(Fields.CONTENT, contentMeta.assoc(Fields.SHA256, hashHex));
 			}
 		}
 
