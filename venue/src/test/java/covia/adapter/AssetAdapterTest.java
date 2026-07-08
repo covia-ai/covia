@@ -745,16 +745,13 @@ public class AssetAdapterTest {
 			Maps.of(Fields.AGENT_ID, "DefAgent"), RequestContext.of(ALICE_DID));
 		ACell queryResult = queryJob.awaitResult(5000);
 
-		// Config should have the operation and the definition hash
+		// Config should have the operation, the definition hash, and the LLM
+		// settings from the definition — record.config is the single slot (#144)
 		AMap<AString, ACell> config = RT.castMap(RT.getIn(queryResult, Fields.CONFIG));
 		assertNotNull(config);
 		assertEquals(Strings.create("v/ops/llmagent/chat"), config.get(Fields.OPERATION));
 		assertEquals(defHash, config.get(Fields.DEFINITION));
-
-		// stateConfig should have the LLM config from definition
-		AMap<AString, ACell> stateConfig = RT.castMap(RT.getIn(queryResult, Strings.create("stateConfig")));
-		assertNotNull(stateConfig, "stateConfig should be populated from definition");
-		assertEquals(Strings.create("gpt-4o"), stateConfig.get(Strings.create("model")));
+		assertEquals(Strings.create("gpt-4o"), config.get(Strings.create("model")));
 	}
 
 	@Test

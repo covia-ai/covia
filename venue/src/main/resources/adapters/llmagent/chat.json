@@ -8,7 +8,7 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent identifier" },
-				"state": { "description": "Previous conversation state (null on first run). Contains 'config' map (llmOperation, model, systemPrompt, url) and 'history' array of role/content pairs." },
+				"state": { "description": "Previous runtime state (null on first run) — loads and other runtime data. Configuration (llmOperation, model, systemPrompt) arrives separately via 'config' (#144)." },
 				"messages": { "type": "array", "description": "Inbox messages to process as user turns" }
 			},
 			"required": ["agentId"]

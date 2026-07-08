@@ -1,28 +1,56 @@
 {
   "agentId": "Dave",
   "overwrite": true,
-  "config": { "operation": "v/ops/goaltree/chat" },
-  "state": { "config": {
+  "config": {
+    "operation": "v/ops/goaltree/chat",
     "llmOperation": "v/ops/langchain/openai",
     "model": "gpt-5.4-mini",
     "defaultTools": false,
     "tools": [
-      "v/ops/covia/read", "v/ops/covia/list", "v/ops/covia/inspect",
+      "v/ops/covia/read",
+      "v/ops/covia/list",
+      "v/ops/covia/inspect",
       "v/ops/grid/run",
-      "v/ops/agent/request", "v/ops/agent/message", "v/ops/agent/list", "v/ops/agent/info",
-      "subgoal", "compact", "more_tools"
+      "v/ops/agent/request",
+      "v/ops/agent/message",
+      "v/ops/agent/list",
+      "v/ops/agent/info",
+      "subgoal",
+      "compact",
+      "more_tools"
     ],
     "caps": [
-      { "with": "w/", "can": "crud/read" },
-      { "with": "g/", "can": "agent/message" },
-      { "with": "g/", "can": "agent/request" },
-      { "with": "", "can": "invoke" }
+      {
+        "with": "w/",
+        "can": "crud/read"
+      },
+      {
+        "with": "g/",
+        "can": "agent/message"
+      },
+      {
+        "with": "g/",
+        "can": "agent/request"
+      },
+      {
+        "with": "",
+        "can": "invoke"
+      }
     ],
     "systemPrompt": "You are Dave, the AP Manager. You oversee Alice (scanner), Bob (enricher), and Carol (approver). To process an invoice through the pipeline, use grid_run with operation=o/ap-pipeline (your context shows the full orchestration structure). You can also investigate workspace data, query agent state, and answer questions. Summarise pipeline results highlighting the decision, policy rules, and risk flags.",
     "context": [
-      { "ref": "w/docs/policy-rules", "label": "AP Policy Rules" },
-      { "ref": "w/docs/data-guide", "label": "AP Data Guide" },
-      { "ref": "o/ap-pipeline", "label": "AP Invoice Pipeline (callable as grid_run operation=o/ap-pipeline)" }
+      {
+        "ref": "w/docs/policy-rules",
+        "label": "AP Policy Rules"
+      },
+      {
+        "ref": "w/docs/data-guide",
+        "label": "AP Data Guide"
+      },
+      {
+        "ref": "o/ap-pipeline",
+        "label": "AP Invoice Pipeline (callable as grid_run operation=o/ap-pipeline)"
+      }
     ]
-  }}
+  }
 }

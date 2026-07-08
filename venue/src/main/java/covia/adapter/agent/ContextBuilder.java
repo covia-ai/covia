@@ -38,7 +38,7 @@ import covia.venue.RequestContext;
  * <pre>{@code
  * ContextBuilder builder = new ContextBuilder(engine, ctx);
  * ContextResult result = builder
- *     .withConfig(recordConfig, state)
+ *     .withConfig(recordConfig)
  *     .withSystemPrompt()
  *     .withContextEntries(state)
  *     .withPendingResults(pending)
@@ -212,14 +212,12 @@ public class ContextBuilder {
 	// ========== Section builders ==========
 
 	/**
-	 * Merges record-level and state-level config. Must be called first.
+	 * Sets the agent config. Must be called first. Config has a single home —
+	 * {@code record.config}, written by the principal (#144); the runtime's
+	 * {@code state} carries no configuration and none is merged from it.
 	 */
-	@SuppressWarnings("unchecked")
-	public ContextBuilder withConfig(AMap<AString, ACell> recordConfig, ACell state) {
-		AMap<AString, ACell> stateConfig = extractConfig(state);
-		if (recordConfig == null)      this.config = stateConfig;
-		else if (stateConfig == null)  this.config = recordConfig;
-		else                           this.config = recordConfig.merge(stateConfig);
+	public ContextBuilder withConfig(AMap<AString, ACell> config) {
+		this.config = config;
 		return this;
 	}
 
@@ -895,12 +893,6 @@ public class ContextBuilder {
 	}
 
 	// ========== Config helpers ==========
-
-	@SuppressWarnings("unchecked")
-	static AMap<AString, ACell> extractConfig(ACell state) {
-		ACell c = RT.getIn(state, K_CONFIG);
-		return (c instanceof AMap) ? (AMap<AString, ACell>) c : null;
-	}
 
 	static AString getConfigValue(AMap<AString, ACell> config, AString key, AString defaultValue) {
 		if (config == null) return defaultValue;

@@ -188,7 +188,7 @@ Ancestor budget is configurable. Rule of thumb: parent ~300B, grandparent ~150B,
 
 ## Harness Tools (7, opt-in)
 
-GoalTreeAdapter provides 7 built-in tools. **All are opt-in** — agents declare which ones they need in `state.config.tools` alongside operation paths. Zero harness tools by default — a bare chatbot just responds with text.
+GoalTreeAdapter provides 7 built-in tools. **All are opt-in** — agents declare which ones they need in `config.tools` alongside operation paths. Zero harness tools by default — a bare chatbot just responds with text.
 
 ```json5
 "tools": ["subgoal", "compact", "more_tools", "v/ops/covia/read"]
@@ -208,7 +208,7 @@ The registry:
 
 ### Typed outputs auto-inject complete/fail
 
-When `state.config.outputs.complete.schema` is declared, the harness auto-injects typed `complete` and `fail` tools with schema-enforced parameters — no need to list them in `config.tools`. The LLM's tool call arguments must match the declared schema (enforced by OpenAI `strictTools`). Text-only responses are rejected.
+When `config.outputs.complete.schema` is declared, the harness auto-injects typed `complete` and `fail` tools with schema-enforced parameters — no need to list them in `config.tools`. The LLM's tool call arguments must match the declared schema (enforced by OpenAI `strictTools`). Text-only responses are rejected.
 
 ```json5
 "outputs": {

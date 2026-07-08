@@ -210,7 +210,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			AMap<AString, ACell> recordConfig, ACell state, ACell taskInput, RequestContext ctx) {
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
-			.withConfig(recordConfig, state)
+			.withConfig(recordConfig)
 			.withSystemPrompt()
 			.withContextEntries(state)
 			.withTools()
@@ -270,7 +270,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		AVector<ACell> sessionFrames = AgentAdapter.sessionFrames(input);
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
-			.withConfig(recordConfig, state)
+			.withConfig(recordConfig)
 			.withSystemPrompt()                   // always fresh
 			.withContextEntries(state)            // ephemeral
 			.withLoadedPaths(existingLoads)       // ephemeral
@@ -329,11 +329,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		String responseText = (contentText != null) ? contentText.toString() : "";
 
 		// Session.history is the sole conversation record — the adapter
-		// does not maintain its own transcript. State holds only config + loads.
+		// does not maintain its own transcript. State holds only loads:
+		// config's single home is record.config (#144), never written here.
 		AMap<AString, ACell> newState = Maps.empty();
-		if (config != null) {
-			newState = newState.assoc(K_CONFIG, config);
-		}
 		AMap<AString, ACell> finalLoads = toolCtx.getLoads();
 		if (finalLoads != null && finalLoads.count() > 0) {
 			newState = newState.assoc(K_LOADS, finalLoads);
@@ -656,15 +654,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		if (outstanding == 0) return null;
 		sb.append("Use complete_task or fail_task to resolve each task.");
 		return Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(sb.toString()));
-	}
-
-	@SuppressWarnings("unchecked")
-	public
-	static AMap<AString, ACell> extractConfig(ACell state) {
-		if (state == null) return null;
-		ACell c = RT.getIn(state, K_CONFIG);
-		if (c instanceof AMap) return (AMap<AString, ACell>) c;
-		return null;
 	}
 
 	static AString getConfigValue(AMap<AString, ACell> config, AString key, AString defaultValue) {

@@ -405,12 +405,14 @@ public class AgentAdapter extends AAdapter {
 				(RT.getIn(defMeta, Strings.intern("agent"), Fields.CONFIG) instanceof AMap<?,?> dm)
 					? (AMap<AString, ACell>) dm : null;
 
-			// Definition provides defaults; explicit params override
-			if (config == null && defOp != null) {
-				config = Maps.of(Fields.OPERATION, defOp);
+			// Definition provides defaults; explicit params override. Everything
+			// goes into record.config — the single canonical config slot (#144).
+			if (defConfig != null) {
+				config = (config == null) ? defConfig : defConfig.merge(config);
 			}
-			if (initialState == null && defConfig != null) {
-				initialState = Maps.of(Strings.intern("config"), defConfig);
+			if (defOp != null && (config == null || !config.containsKey(Fields.OPERATION))) {
+				if (config == null) config = Maps.empty();
+				config = config.assoc(Fields.OPERATION, defOp);
 			}
 
 			// Store resolved asset ID in config for provenance (full DID URL)
@@ -420,9 +422,16 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
-		// Apply sensible defaults for LLM agents. LLMAgentAdapter.processChat merges
-		// record.config with state.config at chat time (state wins), so we write LLM
-		// defaults directly into record.config instead of duplicating into state.
+		// Config has exactly one home: record.config, written by the principal;
+		// state is written by the runtime (#144). A config map smuggled inside
+		// state would be silently inert — reject loudly.
+		if (RT.getIn(initialState, AgentState.KEY_CONFIG) != null) {
+			job.fail("state.config is not supported — pass agent configuration via the 'config' parameter");
+			return;
+		}
+
+		// Apply sensible defaults for LLM agents — record.config is the single
+		// config slot, read by all runtimes at transition time.
 		if (config == null) config = Maps.empty();
 		if (!config.containsKey(Fields.OPERATION)) {
 			config = config.assoc(Fields.OPERATION, engine.config().getDefaultTransitionOp());
@@ -837,12 +846,6 @@ public class AgentAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> buildAgentSummary(AString agentId, AgentState agent) {
 		AMap<AString, ACell> record = agent.getRecord();
-		// NB: stateConfig is only populated by legacy definition-created agents.
-		// Use instanceof (not RT.castMap) because RT.castMap(null) returns an empty
-		// map — callers would see a spurious empty stateConfig otherwise.
-		AMap<AString, ACell> stateConfig =
-			(RT.getIn(record, AgentState.KEY_STATE, Strings.intern("config")) instanceof AMap<?,?> sc)
-				? (AMap<AString, ACell>) sc : null;
 		AVector<?> timeline = agent.getTimeline();
 		Index<Blob, ACell> tasks = agent.getTasks();
 
@@ -851,8 +854,6 @@ public class AgentAdapter extends AAdapter {
 			Fields.STATUS, record.get(AgentState.KEY_STATUS),
 			Fields.CONFIG, record.get(AgentState.KEY_CONFIG));
 
-		// Include state.config (legacy path — only populated by definition-created agents)
-		if (stateConfig != null) summary = summary.assoc(Strings.intern("stateConfig"), stateConfig);
 		if (timeline != null) summary = summary.assoc(Strings.intern("timelineLength"), CVMLong.create(timeline.count()));
 		if (tasks != null) summary = summary.assoc(Strings.intern("tasks"), CVMLong.create(tasks.count()));
 		ACell error = record.get(AgentState.KEY_ERROR);
@@ -1046,6 +1047,11 @@ public class AgentAdapter extends AAdapter {
 		ACell newState = RT.getIn(input, AgentState.KEY_STATE);
 		if (newConfig == null && newState == null) {
 			job.fail("At least one of 'config' or 'state' must be provided");
+			return;
+		}
+		// Config's single home is record.config (#144) — see handleCreate.
+		if (RT.getIn(newState, AgentState.KEY_CONFIG) != null) {
+			job.fail("state.config is not supported — pass agent configuration via the 'config' parameter");
 			return;
 		}
 

@@ -422,11 +422,10 @@ public class JobCancellationTest {
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, agentId,
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
-				AgentState.KEY_STATE, Maps.of(
-					"config", Maps.of(
-						"llmOperation", "v/test/ops/llm",
-						"systemPrompt", "Echo the user."))),
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/llm",
+					"systemPrompt", "Echo the user.")),
 			ctx).awaitResult(5000);
 	}
 

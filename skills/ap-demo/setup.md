@@ -51,7 +51,7 @@ All use `goaltree:chat` transition with `defaultTools: false`. Typed `outputs` a
 
 - **Curated tools** — each agent gets only the tools its workflow needs. Bob gets 3, Carol gets 2, Alice gets 0. Fewer tools = less confusion, fewer tokens.
 - **Typed outputs** — Bob and Carol declare `outputs.complete.schema`. The harness synthesises a schema-enforced `complete()` tool. Text-only responses are rejected — the LLM must call `complete()`.
-- **Context loading** — `state.config.context` injects reference material as system messages before each run. Keeps system prompts short (identity + behaviour) and shared docs in one place.
+- **Context loading** — `config.context` injects reference material as system messages before each run. Keeps system prompts short (identity + behaviour) and shared docs in one place.
 - **Capability enforcement** — `caps` scope what each agent can read/write. Denied tool calls return an error listing the agent's actual capabilities.
 - **Harness tools opt-in** — Dave gets `subgoal`, `compact`, `more_tools` for complex work. Pipeline agents don't need them.
 
@@ -71,8 +71,8 @@ agent_list  → Alice, Bob, Carol, Dave all SLEEPING
 
 Confirm configs:
 ```
-agent_info  agentId=Bob   → state.config.tools has 3 entries, caps has 5, outputs.complete.schema present
-agent_info  agentId=Carol → state.config.tools has 2 entries, caps has 2, outputs.complete.schema present
-agent_info  agentId=Dave  → state.config.tools has 11 entries (8 ops + 3 harness), caps has 4
-agent_info  agentId=Alice → state.config.caps is [], defaultTools is false
+agent_info  agentId=Bob   → config.tools has 3 entries, caps has 5, outputs.complete.schema present
+agent_info  agentId=Carol → config.tools has 2 entries, caps has 2, outputs.complete.schema present
+agent_info  agentId=Dave  → config.tools has 11 entries (8 ops + 3 harness), caps has 4
+agent_info  agentId=Alice → config.caps is [], defaultTools is false
 ```

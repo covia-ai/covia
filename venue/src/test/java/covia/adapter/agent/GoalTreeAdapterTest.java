@@ -794,31 +794,26 @@ public class GoalTreeAdapterTest {
 	}
 
 	@Test
-	public void testStateConfigPreservedAcrossTransitions() {
-		// state.config (where caps, responseFormat, prompt etc. are stored at agent
-		// create time) must survive a transition. Wiping it would silently strip
-		// schema enforcement on every invocation after the first.
+	public void testStateCarriesNoConfigAfterTransition() {
+		// Config's single home is record.config (#144): the runtime reads it
+		// from the transition input and never writes it into state. Caps and
+		// schema enforcement survive because record.config persists on the
+		// record, not because the adapter carries a copy.
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
-
-		AMap<AString, ACell> stateConfig = Maps.of(
-			Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
-			Strings.create("systemPrompt"), Strings.create("Be brief."));
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "stateful-agent",
-			AgentState.KEY_STATE, Maps.of(AbstractLLMAdapter.K_CONFIG, stateConfig),
 			AgentState.KEY_CONFIG, Maps.of(
-				Strings.create("llmOperation"), Strings.create("v/test/ops/llm")),
+				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
+				Strings.create("systemPrompt"), Strings.create("Be brief.")),
 			Fields.MESSAGES, Vectors.of(
 				(ACell) Maps.of(Strings.create("content"), Strings.create("hi"))));
 
 		ACell output = adapter.processGoal(null, ALICE, input);
 		ACell newState = RT.getIn(output, AgentState.KEY_STATE);
 		assertNotNull(newState);
-		ACell preservedConfig = RT.getIn(newState, AbstractLLMAdapter.K_CONFIG);
-		assertNotNull(preservedConfig, "state.config must survive the transition");
-		assertEquals(stateConfig, preservedConfig,
-			"state.config must be preserved verbatim");
+		assertNull(RT.getIn(newState, AbstractLLMAdapter.K_CONFIG),
+			"state must not carry config");
 	}
 
 	@Test

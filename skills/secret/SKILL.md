@@ -51,4 +51,4 @@ Removes the caller's own secret — whole records only (`s/<NAME>`; deeper paths
 - Secrets are **per-user** — each authenticated DID has its own secret namespace
 - In the local dev venue (public access), all MCP clients share the same secret store
 - The `langchain:openai` adapter resolves `OPENAI_API_KEY` automatically from the caller's secret store
-- For non-OpenAI providers, set the `url` parameter in the agent's `state.config` to point to the compatible endpoint
+- For non-OpenAI providers, set the `url` parameter in the agent's `config` to point to the compatible endpoint

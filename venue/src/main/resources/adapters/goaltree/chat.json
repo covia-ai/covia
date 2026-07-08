@@ -8,7 +8,7 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent identifier" },
-				"state": { "description": "Previous agent state (null on first run). Contains 'config' map (llmOperation, model, systemPrompt, tools, caps, context)." },
+				"state": { "description": "Previous runtime state (null on first run). Configuration (llmOperation, model, systemPrompt, tools, caps) arrives separately via 'config' (#144)." },
 				"messages": { "type": "array", "description": "Inbox messages to process" },
 				"tasks": { "type": "array", "description": "Pending task requests" },
 				"pending": { "type": "array", "description": "Pending job results" }

@@ -18,7 +18,7 @@ These are critical — getting them wrong produces silent failures:
 
 2. **Use `agent_request` with `input` parameter** to submit work — not `task`, not `message`. Requests create trackable Jobs with immutable records.
 
-3. **`state.config` holds the LLM settings** — `llmOperation`, `model`, `systemPrompt`. This is separate from the framework `config`.
+3. **`config` is the single home for ALL agent settings (#144)** — `operation`, `llmOperation`, `model`, `systemPrompt`, `tools`, `caps` all live in the top-level `config` map. Passing a `config` key inside `state` is rejected with an error.
 
 4. **Reset state when changing prompts** — use `agent_update` to clear conversation history, otherwise the LLM carries forward context from previous runs.
 
@@ -75,13 +75,14 @@ Show status, config, pending tasks, timeline length, and last run result.
 
 ### `reset <name>` — Reset an agent (clear history, keep config)
 
-Read the agent's current state.config, then update with fresh state:
+Config lives on the record and survives state changes (#144) — reset by
+replacing state only:
 
 ```
-agent_update  agentId=<name>  state={ "config": { <preserved LLM config> } }
+agent_update  agentId=<name>  state={}
 ```
 
-This clears conversation history while keeping the system prompt and model settings.
+This clears conversation working state while keeping config untouched.
 
 ## Available Transition Operations
 

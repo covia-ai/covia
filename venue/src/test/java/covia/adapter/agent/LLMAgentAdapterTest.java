@@ -47,10 +47,9 @@ public class LLMAgentAdapterTest {
 	// namespace within the shared engine.
 	private AString ALICE_DID;
 
-	/** State with test LLM config — points at test:llm for level 3 */
-	private static final ACell TEST_STATE = Maps.of(
-		"config", Maps.of("llmOperation", "v/test/ops/llm")
-	);
+	/** Record config pointing at test:llm for level 3 — passed to transitions
+	 *  via KEY_CONFIG, the single config slot (#144). State carries no config. */
+	private static final ACell TEST_CONFIG = Maps.of("llmOperation", "v/test/ops/llm");
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -66,7 +65,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "first-run-agent",
-			AgentState.KEY_STATE, TEST_STATE,
+			AgentState.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "Hello world"))
 		);
 
@@ -97,12 +96,12 @@ public class LLMAgentAdapterTest {
 
 		// apiKey points at a secret that does not exist → resolves to null →
 		// the langchain op returns Status.failure rather than calling out.
-		ACell state = Maps.of("config", Maps.of(
+		ACell config = Maps.of(
 			"llmOperation", "v/ops/langchain/anthropic",
-			"apiKey", "s/NONEXISTENT_TEST_KEY"));
+			"apiKey", "s/NONEXISTENT_TEST_KEY");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "no-key-agent",
-			AgentState.KEY_STATE, state,
+			AgentState.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "Hello"))
 		);
 
@@ -120,15 +119,17 @@ public class LLMAgentAdapterTest {
 		// First turn
 		ACell input1 = Maps.of(
 			Fields.AGENT_ID, "multi-turn-agent",
-			AgentState.KEY_STATE, TEST_STATE,
+			AgentState.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "first message"))
 		);
 		ACell output1 = adapter.processChat(RequestContext.of(ALICE_DID), input1);
 		ACell state1 = RT.getIn(output1, AgentState.KEY_STATE);
 
-		// Second turn — pass state from first turn
+		// Second turn — pass state from first turn; config rides on the input
+		// every turn (the framework always passes record.config, #144)
 		ACell input2 = Maps.of(
 			Fields.AGENT_ID, "multi-turn-agent",
+			AgentState.KEY_CONFIG, TEST_CONFIG,
 			AgentState.KEY_STATE, state1,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "second message"))
 		);
@@ -147,10 +148,11 @@ public class LLMAgentAdapterTest {
 		// record — no transcript assertions needed.
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
-		ACell state = TEST_STATE;
+		ACell state = Maps.empty();
 		for (int i = 1; i <= 3; i++) {
 			ACell input = Maps.of(
 				Fields.AGENT_ID, "no-bloat-agent",
+				AgentState.KEY_CONFIG, TEST_CONFIG,
 				AgentState.KEY_STATE, state,
 				Fields.MESSAGES, Vectors.of(Maps.of("content", "turn " + i))
 			);
@@ -171,11 +173,10 @@ public class LLMAgentAdapterTest {
 		// current config, so updates apply immediately.
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
-		ACell state = TEST_STATE;
 		// First turn
 		ACell input1 = Maps.of(
 			Fields.AGENT_ID, "fresh-prompt-agent",
-			AgentState.KEY_STATE, state,
+			AgentState.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hi"))
 		);
 		ACell output1 = adapter.processChat(RequestContext.of(ALICE_DID), input1);
@@ -186,9 +187,10 @@ public class LLMAgentAdapterTest {
 		assertNotNull(response, "First turn should produce a response");
 		assertEquals("hi", response.toString());
 
-		// Config should be preserved in returned state
-		AMap<AString, ACell> config = LLMAgentAdapter.extractConfig(state1);
-		assertNotNull(config, "Config should be preserved in returned state");
+		// State carries no config (#144) and no frozen system message —
+		// the next turn rebuilds the system prompt fresh from record.config.
+		assertNull(RT.getIn(state1, AgentState.KEY_CONFIG),
+			"state must not carry config");
 	}
 
 	@Test
@@ -197,7 +199,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "batch-agent",
-			AgentState.KEY_STATE, TEST_STATE,
+			AgentState.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(
 				Maps.of("content", "message one"),
 				Maps.of("content", "message two"),
@@ -219,14 +221,13 @@ public class LLMAgentAdapterTest {
 		// not persisted to the transcript — see ContextBuilderTest
 		// .testSystemPromptIncludesLatticeReference for the assertion that
 		// the prompt actually reaches the LLM context.
-		ACell initialState = Maps.of(
-			"config", Maps.of("llmOperation", "v/test/ops/llm", "systemPrompt", "You are a pirate")
-		);
+		ACell initialConfig = Maps.of(
+			"llmOperation", "v/test/ops/llm", "systemPrompt", "You are a pirate");
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "pirate-agent",
-			AgentState.KEY_STATE, initialState,
+			AgentState.KEY_CONFIG, initialConfig,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "ahoy"))
 		);
 
@@ -337,37 +338,24 @@ public class LLMAgentAdapterTest {
 
 	// ========== Config ==========
 
+	/** Config has a single home (#144): agent:create rejects state.config loudly. */
 	@Test
-	public void testConfigFromState() {
+	public void testCreateRejectsStateConfig() {
 		ACell initialState = Maps.of(
 			"config", Maps.of("llmOperation", "v/test/ops/llm", "systemPrompt", "Custom prompt")
 		);
-		engine.jobs().invokeOperation(
+		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "config-agent", AgentState.KEY_STATE, initialState),
-			RequestContext.of(ALICE_DID)).awaitResult(5000);
-
-		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
-
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		ACell agentState = user.agent("config-agent").getState();
-
-		ACell input = Maps.of(
-			Fields.AGENT_ID, "config-agent",
-			AgentState.KEY_STATE, agentState,
-			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
-		);
-
-		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
-		assertNotNull(output);
-
-		// Verify that processChat ran cleanly and that the returned state
-		// preserves the merged config.
-		AMap<AString, ACell> returnedConfig = LLMAgentAdapter.extractConfig(
-			RT.getIn(output, AgentState.KEY_STATE));
-		assertNotNull(returnedConfig, "Config should be preserved in returned state");
-		assertEquals(Strings.create("v/test/ops/llm"),
-			returnedConfig.get(Strings.intern("llmOperation")));
+			RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("agent:create must reject state.config");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains("state.config is not supported"),
+				job.getErrorMessage());
+		}
 	}
 
 	@Test
@@ -375,7 +363,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "minimal-agent",
-			AgentState.KEY_STATE, TEST_STATE,
+			AgentState.KEY_CONFIG, TEST_CONFIG,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
@@ -388,22 +376,16 @@ public class LLMAgentAdapterTest {
 		assertEquals("test", response.toString());
 	}
 
-	@Test
-	public void testNullConfigUsesDefaults() {
-		assertNull(LLMAgentAdapter.extractConfig(null));
-		assertNull(LLMAgentAdapter.extractConfig(Maps.empty()));
-	}
-
 	// ========== Tool call loop ==========
 
 	@Test
 	public void testToolCallLoop() {
-		ACell initialState = Maps.of("config", Maps.of("llmOperation", "v/test/ops/toolllm"));
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "tool-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
-				AgentState.KEY_STATE, initialState),
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/toolllm")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Deliver directly to avoid auto-wake
@@ -441,7 +423,7 @@ public class LLMAgentAdapterTest {
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "bad-args-agent",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
-				AgentState.KEY_STATE, Maps.of("config", Maps.of("llmOperation", "v/test/ops/badargsllm"))),
+				AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/badargsllm")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		User user = engine.getVenueState().users().get(ALICE_DID);
@@ -472,7 +454,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "direct-tool-agent",
-			AgentState.KEY_STATE, Maps.of("config", Maps.of("llmOperation", "v/test/ops/toolllm")),
+			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "do something"))
 		);
 
@@ -499,40 +481,34 @@ public class LLMAgentAdapterTest {
 				"required", Vectors.of("title")
 			)
 		);
-		ACell initialState = Maps.of(
-			"config", Maps.of("llmOperation", "v/test/ops/llm", "responseFormat", responseFormat)
-		);
+		ACell initialConfig = Maps.of(
+			"llmOperation", "v/test/ops/llm", "responseFormat", responseFormat);
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "format-agent",
-			AgentState.KEY_STATE, initialState,
+			AgentState.KEY_CONFIG, initialConfig,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "summarise this"))
 		);
 
 		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
 		assertNotNull(output);
 
-		AMap<AString, ACell> returnedConfig = LLMAgentAdapter.extractConfig(
-			RT.getIn(output, AgentState.KEY_STATE));
-		assertNotNull(returnedConfig);
-		ACell returnedFormat = returnedConfig.get(Strings.intern("responseFormat"));
-		assertNotNull(returnedFormat, "responseFormat should be preserved in config");
-
-		AString name = RT.ensureString(RT.getIn(returnedFormat, "name"));
-		assertEquals("Summary", name.toString());
+		// Config is not carried in state (#144) — the responseFormat reaching
+		// the L3 call is exercised by the transition completing cleanly.
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
+		assertNotNull(response, "Should produce a response with a responseFormat config");
 	}
 
 	@Test
 	public void testResponseFormatJsonString() {
-		ACell initialState = Maps.of(
-			"config", Maps.of("llmOperation", "v/test/ops/llm", "responseFormat", "json")
-		);
+		ACell initialConfig = Maps.of(
+			"llmOperation", "v/test/ops/llm", "responseFormat", "json");
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "json-format-agent",
-			AgentState.KEY_STATE, initialState,
+			AgentState.KEY_CONFIG, initialConfig,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "give me json"))
 		);
 
@@ -549,13 +525,13 @@ public class LLMAgentAdapterTest {
 	@Test
 	public void testCompleteTaskEndToEnd() {
 		// Create agent with test:taskllm — a mock LLM that calls complete_task
-		ACell initialState = Maps.of("config", Maps.of("llmOperation", "v/test/ops/taskllm"));
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "task-agent",
-				AgentState.KEY_STATE, initialState,
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/taskllm")
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -593,13 +569,13 @@ public class LLMAgentAdapterTest {
 		// transition to FAILED (the agent gave up) rather than hang STARTED
 		// forever behind a fake-success apology (covia-ai/covia#138). The
 		// iteration cap bounds CPU/IO; this asserts the give-up is terminal.
-		ACell initialState = Maps.of("config", Maps.of("llmOperation", "v/test/ops/loopllm"));
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "loop-agent",
-				AgentState.KEY_STATE, initialState,
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/loopllm")
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
@@ -641,7 +617,7 @@ public class LLMAgentAdapterTest {
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, agentId,
-				AgentState.KEY_STATE, Maps.of("config", Maps.of("llmOperation", "v/test/ops/taskllm")),
+				AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/taskllm"),
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat")
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
@@ -653,7 +629,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, agentId,
-			AgentState.KEY_STATE, Maps.of("config", Maps.of("llmOperation", "v/test/ops/taskllm")),
+			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/taskllm"),
 			Fields.TASKS, Vectors.of(Maps.of(
 				Fields.JOB_ID, Strings.create(taskId.toHexString()),
 				Fields.INPUT, Maps.of("question", "test?")
@@ -694,7 +670,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "invoke-agent",
-			AgentState.KEY_STATE, Maps.of("config", Maps.of("llmOperation", "v/test/ops/toolllm")),
+			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/toolllm"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "call a tool"))
 		);
 
@@ -746,7 +722,7 @@ public class LLMAgentAdapterTest {
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "tools-check",
-			AgentState.KEY_STATE, Maps.of("config", Maps.of("llmOperation", "v/test/ops/llm")),
+			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/llm"),
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "hello"))
 		);
 
@@ -758,33 +734,8 @@ public class LLMAgentAdapterTest {
 		assertEquals("hello", response.toString());
 	}
 
-	// ========== Pure function: extractConfig ==========
-
-	@Test
-	public void testExtractConfigNull() {
-		assertNull(LLMAgentAdapter.extractConfig(null));
-	}
-
-	@Test
-	public void testExtractConfigEmptyState() {
-		assertNull(LLMAgentAdapter.extractConfig(Maps.empty()));
-	}
-
-	@Test
-	public void testExtractConfigPresent() {
-		AMap<AString, ACell> config = Maps.of("llmOperation", "v/test/ops/llm");
-		ACell state = Maps.of("config", config);
-		AMap<AString, ACell> result = LLMAgentAdapter.extractConfig(state);
-		assertNotNull(result);
-		assertEquals(Strings.create("v/test/ops/llm"), result.get(Strings.intern("llmOperation")));
-	}
-
-	@Test
-	public void testExtractConfigNonMap() {
-		// config is a string — should return null
-		ACell state = Maps.of("config", Strings.create("not-a-map"));
-		assertNull(LLMAgentAdapter.extractConfig(state));
-	}
+	// extractConfig removed with the config/state.config collapse (#144) —
+	// config has a single home (record.config) and is never read from state.
 
 	// ========== Pure function: getConfigValue ==========
 
@@ -1100,14 +1051,14 @@ public class LLMAgentAdapterTest {
 		// the logic. Let's test the integration path instead.
 
 		// Create agent with custom tools config, call processChat, verify it works
-		ACell state = Maps.of("config", Maps.of(
+		ACell config = Maps.of(
 			"llmOperation", "v/test/ops/llm",
 			"tools", Vectors.of("v/ops/agent/create", "v/ops/agent/list")
-		));
+		);
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "custom-tools-agent",
-			AgentState.KEY_STATE, state,
+			AgentState.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
@@ -1122,18 +1073,18 @@ public class LLMAgentAdapterTest {
 	public void testBuildConfigToolsMapEntries() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
-		ACell state = Maps.of("config", Maps.of(
+		ACell config = Maps.of(
 			"llmOperation", "v/test/ops/llm",
 			"tools", Vectors.of(
 				Maps.of("operation", "v/ops/agent/create",
 					"name", "make_agent",
 					"description", "Create a new agent")
 			)
-		));
+		);
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "map-tools-agent",
-			AgentState.KEY_STATE, state,
+			AgentState.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
@@ -1147,18 +1098,18 @@ public class LLMAgentAdapterTest {
 	public void testBuildConfigToolsMixedEntries() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
-		ACell state = Maps.of("config", Maps.of(
+		ACell config = Maps.of(
 			"llmOperation", "v/test/ops/llm",
 			"tools", Vectors.of(
 				"v/ops/agent/create",
 				Maps.of("operation", "v/ops/covia/read", "name", "read_data"),
 				"v/ops/agent/list"
 			)
-		));
+		);
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "mixed-tools-agent",
-			AgentState.KEY_STATE, state,
+			AgentState.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
@@ -1170,14 +1121,14 @@ public class LLMAgentAdapterTest {
 	public void testDefaultToolsFalse() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
-		ACell state = Maps.of("config", Maps.of(
+		ACell config = Maps.of(
 			"llmOperation", "v/test/ops/llm",
 			"defaultTools", CVMBool.FALSE
-		));
+		);
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "no-defaults-agent",
-			AgentState.KEY_STATE, state,
+			AgentState.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
@@ -1191,15 +1142,15 @@ public class LLMAgentAdapterTest {
 	public void testDefaultToolsFalseWithCustomTools() {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
-		ACell state = Maps.of("config", Maps.of(
+		ACell config = Maps.of(
 			"llmOperation", "v/test/ops/llm",
 			"defaultTools", CVMBool.FALSE,
 			"tools", Vectors.of("v/ops/agent/create")
-		));
+		);
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "custom-only-agent",
-			AgentState.KEY_STATE, state,
+			AgentState.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
@@ -1212,7 +1163,7 @@ public class LLMAgentAdapterTest {
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
 		// Include invalid entries (number, bool) — should be skipped gracefully
-		ACell state = Maps.of("config", Maps.of(
+		ACell config = Maps.of(
 			"llmOperation", "v/test/ops/llm",
 			"tools", Vectors.of(
 				CVMLong.create(42),       // invalid
@@ -1220,11 +1171,11 @@ public class LLMAgentAdapterTest {
 				CVMBool.TRUE,             // invalid
 				"nonexistent:operation"   // valid format but won't resolve
 			)
-		));
+		);
 
 		ACell input = Maps.of(
 			Fields.AGENT_ID, "invalid-tools-agent",
-			AgentState.KEY_STATE, state,
+			AgentState.KEY_CONFIG, config,
 			Fields.MESSAGES, Vectors.of(Maps.of("content", "test"))
 		);
 
@@ -1236,12 +1187,12 @@ public class LLMAgentAdapterTest {
 	// ========== Helper ==========
 
 	private void createTestAgent(String name) {
-		ACell initialState = Maps.of("config", Maps.of("llmOperation", "v/test/ops/llm"));
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, name,
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
-				AgentState.KEY_STATE, initialState),
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/llm")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 	}
 

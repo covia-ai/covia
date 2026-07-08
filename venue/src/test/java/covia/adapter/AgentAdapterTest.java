@@ -621,12 +621,10 @@ public class AgentAdapterTest {
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, agentId,
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
-				AgentState.KEY_STATE, Maps.of(
-					"config", Maps.of(
-						"llmOperation", "v/test/ops/llm",
-						"systemPrompt", "Echo the user."
-					)
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/llm",
+					"systemPrompt", "Echo the user."
 				)
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
@@ -740,15 +738,13 @@ public class AgentAdapterTest {
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "chat-busy-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
-				AgentState.KEY_STATE, Maps.of(
-					"config", Maps.of(
-						// Wrap delay around the L3 call by using the standard llm op
-						// but with a slow llm. Easiest: use test:delay-llm if it exists,
-						// otherwise just attempt a second call quickly.
-						"llmOperation", "v/test/ops/llm",
-						"systemPrompt", "Echo the user."
-					)
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					// Wrap delay around the L3 call by using the standard llm op
+					// but with a slow llm. Easiest: use test:delay-llm if it exists,
+					// otherwise just attempt a second call quickly.
+					"llmOperation", "v/test/ops/llm",
+					"systemPrompt", "Echo the user."
 				)
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
@@ -920,12 +916,10 @@ public class AgentAdapterTest {
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "hist-err-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
-				AgentState.KEY_STATE, Maps.of(
-					"config", Maps.of(
-						"llmOperation", "v/test/ops/error",
-						"systemPrompt", "x"
-					)
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/error",
+					"systemPrompt", "x"
 				)
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
@@ -1739,12 +1733,10 @@ public class AgentAdapterTest {
 			"v/ops/agent/create",
 			Maps.of(
 				Fields.AGENT_ID, "result-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
-				AgentState.KEY_STATE, Maps.of(
-					"config", Maps.of(
-						"llmOperation", "v/test/ops/llm",
-						"systemPrompt", "You are helpful."
-					)
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/llm",
+					"systemPrompt", "You are helpful."
 				)
 			),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
@@ -3228,34 +3220,56 @@ public class AgentAdapterTest {
 	// ========== agent:update merge semantics ==========
 
 	@Test
-	public void testUpdateMergesStateConfig() {
-		// Create agent with full config
+	public void testUpdateMergesConfig() {
+		// Create agent with full config — record.config is the single slot (#144)
 		ACell createInput = Maps.of(
 			Fields.AGENT_ID, "merge-test",
 			Strings.create("overwrite"), convex.core.data.prim.CVMBool.TRUE,
-			AgentState.KEY_STATE, Maps.of(AgentState.KEY_CONFIG, Maps.of(
+			Fields.CONFIG, Maps.of(
 				Strings.create("model"), Strings.create("gpt-4.1-mini"),
 				Strings.create("systemPrompt"), Strings.create("You are a test agent"),
 				Strings.create("tools"), Vectors.of(
 					(ACell) Strings.create("v/ops/covia/read"),
 					(ACell) Strings.create("v/ops/covia/write")),
 				Strings.create("caps"), Vectors.of(
-					(ACell) Maps.of(Strings.create("with"), Strings.create("w/"), Strings.create("can"), Strings.create("crud"))))));
+					(ACell) Maps.of(Strings.create("with"), Strings.create("w/"), Strings.create("can"), Strings.create("crud")))));
 		engine.jobs().invokeOperation("v/ops/agent/create", createInput, RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Update just the model — other fields should survive
 		ACell updateInput = Maps.of(
 			Fields.AGENT_ID, "merge-test",
-			AgentState.KEY_STATE, Maps.of(AgentState.KEY_CONFIG, Maps.of(
-				Strings.create("model"), Strings.create("gpt-5.4-mini"))));
+			Fields.CONFIG, Maps.of(
+				Strings.create("model"), Strings.create("gpt-5.4-mini")));
 		engine.jobs().invokeOperation("v/ops/agent/update", updateInput, RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Verify: model changed, everything else preserved
-		ACell config = engine.resolvePath(Strings.create("g/merge-test/state/config"), RequestContext.of(ALICE_DID));
+		ACell config = engine.resolvePath(Strings.create("g/merge-test/config"), RequestContext.of(ALICE_DID));
 		assertEquals(Strings.create("gpt-5.4-mini"), RT.getIn(config, Strings.create("model")));
 		assertEquals(Strings.create("You are a test agent"), RT.getIn(config, Strings.create("systemPrompt")));
 		assertNotNull(RT.getIn(config, Strings.create("tools")), "tools should survive model update");
 		assertNotNull(RT.getIn(config, Strings.create("caps")), "caps should survive model update");
+	}
+
+	/** Config has a single home (#144): agent:update rejects state.config loudly. */
+	@Test
+	public void testUpdateRejectsStateConfig() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "no-state-config",
+				Fields.CONFIG, Maps.of(Strings.create("model"), Strings.create("gpt-4o"))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job update = engine.jobs().invokeOperation("v/ops/agent/update",
+			Maps.of(Fields.AGENT_ID, "no-state-config",
+				AgentState.KEY_STATE, Maps.of(AgentState.KEY_CONFIG,
+					Maps.of(Strings.create("model"), Strings.create("gpt-5.4-mini")))),
+			RequestContext.of(ALICE_DID));
+		try {
+			update.awaitResult(5000);
+			fail("agent:update must reject state.config");
+		} catch (Exception e) {
+			assertTrue(update.getErrorMessage().contains("state.config is not supported"),
+				update.getErrorMessage());
+		}
 	}
 
 	@Test
@@ -3268,20 +3282,20 @@ public class AgentAdapterTest {
 		ACell createInput = Maps.of(
 			Fields.AGENT_ID, "null-test",
 			Strings.create("overwrite"), CVMBool.TRUE,
-			AgentState.KEY_STATE, Maps.of(AgentState.KEY_CONFIG, Maps.of(
+			Fields.CONFIG, Maps.of(
 				Strings.create("model"), Strings.create("gpt-4o"),
-				Strings.create("systemPrompt"), Strings.create("Original prompt"))));
+				Strings.create("systemPrompt"), Strings.create("Original prompt")));
 		engine.jobs().invokeOperation("v/ops/agent/create", createInput, RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Update systemPrompt to null
 		ACell updateInput = Maps.of(
 			Fields.AGENT_ID, "null-test",
-			AgentState.KEY_STATE, Maps.of(AgentState.KEY_CONFIG, Maps.of(
-				Strings.create("systemPrompt"), null)));
+			Fields.CONFIG, Maps.of(
+				Strings.create("systemPrompt"), null));
 		engine.jobs().invokeOperation("v/ops/agent/update", updateInput, RequestContext.of(ALICE_DID)).awaitResult(5000);
 
 		// Verify: model preserved, systemPrompt key still exists with null value
-		ACell config = engine.resolvePath(Strings.create("g/null-test/state/config"), RequestContext.of(ALICE_DID));
+		ACell config = engine.resolvePath(Strings.create("g/null-test/config"), RequestContext.of(ALICE_DID));
 		assertEquals(Strings.create("gpt-4o"), RT.getIn(config, Strings.create("model")));
 		AMap<AString, ACell> configMap = (AMap<AString, ACell>) config;
 		assertTrue(configMap.containsKey(Strings.create("systemPrompt")),

@@ -4,7 +4,7 @@ Design for loading reference material into an agent's working context at run tim
 
 **Status:** Current — implemented (string / workspace / asset / job / op entries; configured layer; labelled system messages). §8 designs the unified **configured-vs-agent-managed** model — one entry grammar, resolver, and budget shared across both roles. Target, not yet implemented.
 
-See [AGENT_LOOP.md](./AGENT_LOOP.md) §3.2 for level 2 architecture and `state.config` conventions.
+See [AGENT_LOOP.md](./AGENT_LOOP.md) §3.2 for level 2 architecture and config conventions.
 
 ---
 
@@ -181,7 +181,7 @@ Consequences for authoring an **assemble op** (an op written to be referenced fr
 
 ### 4.1 Config Context (Baseline)
 
-Declared at agent creation in `state.config.context`. Loaded on every run. The agent's standing knowledge base.
+Declared at agent creation in `config.context`. Loaded on every run. The agent's standing knowledge base.
 
 ```json
 {
@@ -219,8 +219,8 @@ An agent that needs temporary reference material (e.g. a briefing document for a
 
 Context is injected as system messages in this order:
 
-1. **System prompt** (from `state.config.systemPrompt`) — always first
-2. **Config context** (from `state.config.context`) — stable baseline
+1. **System prompt** (from `config.systemPrompt`) — always first
+2. **Config context** (from `config.context`) — stable baseline
 3. **State context** (from `state.context`) — dynamic additions
 4. **Conversation history** — existing messages
 5. **Task context** — outstanding tasks (built dynamically per iteration)
@@ -435,7 +435,7 @@ The user-facing distinction — *a configured baseline the agent can't drop* vs 
 
 | Phase | Scope |
 |-------|-------|
-| **F1** | `state.config.context` — string entries (workspace paths, asset refs, inline text). Injected as system messages. Fail-open. |
+| **F1** | `config.context` — string entries (workspace paths, asset refs, inline text). Injected as system messages. Fail-open. |
 | **F2** | `state.context` — dynamic context layer. Map entries with labels and required flag. |
 | **F3** | Size guards, truncation, token budget awareness. |
 | **F4** | Agent self-loading context (tool or convention for adding to own `state.context`). |

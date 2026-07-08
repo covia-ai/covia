@@ -207,7 +207,7 @@ rule engine, workflow, custom code).
 
 For LLM agents (`llmagent:chat`), level 2:
 
-- Reads LLM configuration from `state.config`
+- Reads LLM configuration from `config` (the single config slot, #144)
 - Reads the **session frame stack** from `input.session.frames` — turn
   envelopes `{role, content, ts, source}` live inside `frames[0].conversation`
   (plus any pushed child frames), converted to LLM `{role, content}` messages
@@ -233,7 +233,7 @@ grid operation and works with structured message maps. This makes it pluggable:
 swap the level 3 operation to change provider, use a remote venue via federation,
 or a test mock.
 
-The level 3 operation to invoke is specified in `state.config.llmOperation`
+The level 3 operation to invoke is specified in `config.llmOperation`
 (default: `langchain:openai`). The agent creator picks both the agent loop
 strategy (level 2) and the LLM backend (level 3).
 
@@ -368,7 +368,7 @@ Context entries can be:
 - **Asset references** — hashes, `/a/` paths, `/o/` names, DID URLs resolved via `engine.resolveAsset()`
 - **Grid operation results** — the output of any grid operation, resolved at load time
 
-Two layers: `state.config.context` (stable baseline, loaded every run) and
+Two layers: `config.context` (stable baseline, loaded every run) and
 `state.context` (dynamic, mutable between runs). Config context loads first.
 
 See [AGENT_CONTEXT.md](./AGENT_CONTEXT.md) for the full design: entry format, resolution
@@ -376,7 +376,7 @@ rules, load order, size considerations, and phasing.
 
 ### 3.6 Tool Palette
 
-Agents declare their tools in `state.config.tools` — a curated list of
+Agents declare their tools in `config.tools` — a curated list of
 operation paths and harness tool names. Zero tools by default — a bare
 chatbot just responds with text. Agents that want the built-in tool set
 opt in via `defaultTools: true`.
@@ -403,7 +403,7 @@ All opt-in — include by name in `config.tools` if needed.
 | `context_unload` | Remove pinned data |
 | `more_tools` | Discover and add operations at runtime |
 
-**Typed outputs:** When `state.config.outputs` is set, `complete` and `fail`
+**Typed outputs:** When `config.outputs` is set, `complete` and `fail`
 are auto-injected with schema-enforced parameters — no need to list them in
 `tools`. The LLM's tool call arguments must match the declared schema (enforced
 by OpenAI `strictTools`). Text-only responses are rejected. Flattened: the
@@ -459,7 +459,7 @@ operation in the venue. This means any level can be:
 
 The level 2 operation is specified in the agent's `config.operation` field
 (default set at creation, overridable per-run). The level 3 operation is
-specified by the agent creator in `state.config.llmOperation`.
+specified by the agent creator in `config.llmOperation`.
 
 ### 3.8 Credential Access
 
@@ -535,7 +535,7 @@ agent depends on `overwrite` and the existing status:
 |---|---|---|---|---|---|
 | any           | (empty)      | **CREATED** | fresh record initialised at SLEEPING | `true`  | `false` |
 | absent / `false` | any state | **NOOP**    | record unchanged — idempotent re-run | `false` | `false` |
-| `true`        | `SLEEPING`   | **UPDATED** | `config` and `state.config` replaced; `timeline`, `sessions`, `tasks`, `pending`, `status`, `ts` preserved | `false` | `true` |
+| `true`        | `SLEEPING`   | **UPDATED** | `config` replaced; `timeline`, `sessions`, `tasks`, `pending`, `status`, `ts` preserved | `false` | `true` |
 | `true`        | `SUSPENDED`  | **UPDATED** | as SLEEPING; `error` and SUSPENDED status preserved (caller may resume separately) | `false` | `true` |
 | `true`        | `RUNNING`    | **FAIL**    | job fails: "Cannot update agent X: currently RUNNING. Wait for the active transition to finish, or call agent:cancelTask first." | — | — |
 | `true`        | `TERMINATED` | **CREATED** | `removeAgent` then fresh record — wipes timeline, sessions, tasks, pending, error | `true`  | `false` |
@@ -700,7 +700,7 @@ the response visible to callers without querying agent state separately.
 
 | Operation | Trigger | Effect | Allowed status | New status |
 |-----------|---------|--------|----------------|------------|
-| **Update** | `agent:create overwrite:true` | Replace `config` and `state.config` in place; preserve timeline, sessions, tasks, pending, status, error. See §4.1 slot resolution table. | SLEEPING, SUSPENDED, TERMINATED (wipes) | unchanged (or SLEEPING if was TERMINATED) |
+| **Update** | `agent:create overwrite:true` | Replace `config` in place; preserve timeline, sessions, tasks, pending, status, error. See §4.1 slot resolution table. | SLEEPING, SUSPENDED, TERMINATED (wipes) | unchanged (or SLEEPING if was TERMINATED) |
 | **Suspend** | run loop error (§4.4) | Set `error`, set status → SUSPENDED. State, tasks, pending, sessions unchanged. | RUNNING (internal) | SUSPENDED |
 | **Resume** | `agent:resume` | CAS SUSPENDED→SLEEPING via `tryResume`, clear `error`. Then wake via §4.6 if there is work. | SUSPENDED only | SLEEPING |
 | **Suspend (manual)** | `agent:suspend` | Set status → SUSPENDED with caller-supplied reason. Stops the agent from being woken. | SLEEPING | SUSPENDED |
@@ -976,7 +976,7 @@ L3: LLM call (provider) — single model invocation, no agent semantics
 The step input today carries `state`; the output writes `state` back. In current code:
 
 - `LLMAgentAdapter` reads `state` to extract `loads` (one slot), then writes back `{config, loads}`. The `config` field is a duplicate of the agent record's `K_CONFIG`.
-- `GoalTreeAdapter` round-trips `state.config` solely to preserve config across cycles — explicit comment in `GoalTreeAdapter.java:473-476`: *"Wiping it would silently strip caps/schema enforcement on the second invocation."*
+- ~~`GoalTreeAdapter` round-trips `state.config`~~ — resolved by #144: config has a single home (`record.config`); the runtime never writes it, so no carry-over exists.
 
 Pure duplication. The record's `K_CONFIG` is canonical and is already passed into the step input as `KEY_CONFIG` separately. The only legitimate per-step persistent state is `loads` (LLM only), which can move to a dedicated lattice slot.
 
@@ -1095,7 +1095,7 @@ The framework no longer:
 | Step input fields `tasks`, `pending`, `messages`, `session`, `config` | removed | Adapter reads via `agent.*` accessors |
 | Step output field `state` | removed | No round-trip |
 | Step output field `taskResults` | removed | Use `agent:complete-task` venue op |
-| `state.config` (LLM/goaltree) | merged into record `K_CONFIG` | Already canonical; just stop duplicating |
+| `state.config` (LLM/goaltree) | ~~merged into record `K_CONFIG`~~ DONE (#144) | Collapse shipped: single config slot, state.config rejected at create/update |
 | `state.loads` (LLM) | dedicated slot (`K_LOADS` or adapter namespace) | Only legitimate per-agent persistent state |
 | Framework picks task/session each cycle | adapter reads queue and decides | Cycle scope is the agent, not a task |
 | Loop exits on `hasWork == false` | loop exits on `done: true` from step | Adapter-driven stop condition |
@@ -1150,7 +1150,7 @@ After D-4, §8 is empty. The body of the doc reflects the new model and the bann
 
    Lean: `K_LOADS` on the record for parity with `K_CONFIG`.
 
-3. **Backwards compatibility for persistent agents.** Covia is alpha; assume any persistent agents can be re-created. If we ship a venue with persisted agents that have `state.config`, decide whether D-3 reads ignore-and-rewrite or fail-loudly.
+3. **Backwards compatibility for persistent agents.** Resolved (#144): fail-loudly — `agent:create`/`agent:update` reject `state.config` with a clear error; no migration (alpha, agents re-creatable).
 
 4. **Does Phase D-4 break MCP clients?** The MCP-facing operations (`agent:request`, `agent:message`, `agent:chat`, `agent:trigger`) are unchanged — only the framework↔harness contract moves. External callers should see no difference.
 

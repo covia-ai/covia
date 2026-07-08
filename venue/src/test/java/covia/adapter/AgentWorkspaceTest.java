@@ -54,13 +54,13 @@ public class AgentWorkspaceTest {
 		// tool-name → operation-path mapping resolves.
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "workspace-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
-				AgentState.KEY_STATE, Maps.of("config", Maps.of(
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
 					"llmOperation", "v/test/ops/workspacellm",
 					"tools", Vectors.of(
 						Strings.create("v/ops/covia/write"),
 						Strings.create("v/ops/covia/append"),
-						Strings.create("v/ops/covia/read"))))),
+						Strings.create("v/ops/covia/read")))),
 			ALICE).awaitResult(5000);
 
 		// Run 1: agent writes knowledge, appends to log, reads back

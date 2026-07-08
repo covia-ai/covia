@@ -300,7 +300,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	public AMap<AString, ACell> buildFirstIterationL3Input(
 			AMap<AString, ACell> recordConfig, ACell state, ACell task, RequestContext ctx) {
 		// --- same as processGoal ---
-		AMap<AString, ACell> config = extractConfig(recordConfig, state);
+		AMap<AString, ACell> config = recordConfig;
 		AMap<AString, ACell> outputs = resolveOutputs(config);
 		AMap<AString, ACell> completeSchema = outputsCompleteSchema(outputs);
 		AMap<AString, ACell> l3Config = config;
@@ -319,7 +319,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
 			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
-			.withConfig(recordConfig, state)
+			.withConfig(recordConfig)
 			.withSystemPrompt()
 			.withContextEntries(state)
 			.withTools()
@@ -391,7 +391,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		AVector<ACell> pending = (AVector<ACell>) RT.getIn(input, Fields.PENDING);
 
 		AMap<AString, ACell> recordConfig = (RT.getIn(input, AgentState.KEY_CONFIG) instanceof AMap m) ? m : null;
-		AMap<AString, ACell> config = extractConfig(recordConfig, state);
+		AMap<AString, ACell> config = recordConfig;
 
 		// Resolve the response schema. Order: per-request responseSchema
 		// (passed in agent_request) overrides the agent's config.outputs
@@ -467,7 +467,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
 			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
-			.withConfig(recordConfig, state)
+			.withConfig(recordConfig)
 			.withSystemPrompt()
 			.withFrameStack(frames)
 			.withContextEntries(state)
@@ -493,17 +493,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		FrameResult result = runFrame(job, frames, 0, l3Config, llmOperation, baseTools,
 			configToolMap, capsCtx, context.history(), typedHarnessTools, toolCallTimeoutMs);
 
-		// Config carry-over only — the frame stack lives on the session
-		// record now, so no per-adapter frame state is persisted here.
-		// Config (caps, responseFormat, prompt, loaded paths…) must survive
-		// every transition because agents are typically configured by
-		// writing config into state at create time. Wiping it would
-		// silently strip caps/schema enforcement on the second invocation.
+		// No per-adapter state is persisted here: the frame stack lives on the
+		// session record, and config's single home is record.config (#144) —
+		// the runtime reads config, never writes it.
 		AMap<AString, ACell> newState = Maps.empty();
-		if (state instanceof AMap) {
-			ACell sc = RT.getIn(state, K_CONFIG);
-			if (sc != null) newState = newState.assoc(K_CONFIG, sc);
-		}
 
 		// Lean transition output: emit {response | error}. When a task was
 		// picked this cycle, complete it explicitly via the venue op
@@ -1215,17 +1208,4 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		return result;
 	}
 
-	/** Extracts merged config from record-level and state-level config. */
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> extractConfig(AMap<AString, ACell> recordConfig, ACell state) {
-		AMap<AString, ACell> stateConfig = null;
-		if (state != null) {
-			ACell sc = RT.getIn(state, K_CONFIG);
-			if (sc instanceof AMap) stateConfig = (AMap<AString, ACell>) sc;
-		}
-		if (recordConfig == null) return stateConfig;
-		if (stateConfig == null) return recordConfig;
-		// State config takes precedence
-		return (AMap<AString, ACell>) recordConfig.merge(stateConfig);
-	}
 }

@@ -86,7 +86,7 @@ agent_request  agentId=Dave  input={"task": "Try to write a test value to w/vend
 Show Bob's caps:
 
 ```
-agent_info  agentId=Bob → state.config.caps shows exactly 4 entries
+agent_info  agentId=Bob → config.caps shows exactly 4 entries
 ```
 
 > "Bob can read vendors and POs, write enrichments. Nothing else. Carol can read anything but only write decisions."

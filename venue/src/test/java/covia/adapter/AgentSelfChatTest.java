@@ -47,9 +47,9 @@ public class AgentSelfChatTest {
 		// it returns "handled followup".
 		engine.jobs().invokeOperation("v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "selfchat-agent",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/ops/llmagent/chat"),
-				AgentState.KEY_STATE, Maps.of("config", Maps.of(
-					"llmOperation", "v/test/ops/selfchat"))),
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/selfchat")),
 			ctx).awaitResult(5000);
 
 		AgentState agent = engine.getVenueState().users().get(did)

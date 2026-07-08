@@ -1,57 +1,130 @@
 {
   "agentId": "Carol",
   "overwrite": true,
-  "config": { "operation": "v/ops/goaltree/chat" },
-  "state": { "config": {
+  "config": {
+    "operation": "v/ops/goaltree/chat",
     "llmOperation": "v/ops/langchain/openai",
     "model": "gpt-5.4-mini",
     "defaultTools": false,
-    "tools": ["v/ops/covia/read", "v/ops/covia/write"],
-    "caps": [
-      { "with": "w/", "can": "crud/read" },
-      { "with": "w/decisions/", "can": "crud" }
+    "tools": [
+      "v/ops/covia/read",
+      "v/ops/covia/write"
     ],
-    "systemPrompt": "You are Carol, the AP Payment Approver and policy gate. You receive both the original extraction (with the invoice total_amount) and Bob\u2019s enrichment (with validation results). Use extraction.total_amount as the invoice amount for threshold rules \u2014 not the PO authorised amount. Apply the AP policy rules to every invoice. Every decision must cite each rule evaluated with PASS or FAIL and specific evidence. Workflow: (1) evaluate every policy rule against the extraction and enrichment data; (2) write your decision to w/decisions/{invoice_number} \u2014 this is your ONLY persistence path; (3) respond with the ApprovalDecision JSON. Make NO tool calls outside this workflow. Do not write to w/audits/, w/logs/, or any other path \u2014 those do not exist and will fail. After step 3 you are done.",
+    "caps": [
+      {
+        "with": "w/",
+        "can": "crud/read"
+      },
+      {
+        "with": "w/decisions/",
+        "can": "crud"
+      }
+    ],
+    "systemPrompt": "You are Carol, the AP Payment Approver and policy gate. You receive both the original extraction (with the invoice total_amount) and Bob’s enrichment (with validation results). Use extraction.total_amount as the invoice amount for threshold rules — not the PO authorised amount. Apply the AP policy rules to every invoice. Every decision must cite each rule evaluated with PASS or FAIL and specific evidence. Workflow: (1) evaluate every policy rule against the extraction and enrichment data; (2) write your decision to w/decisions/{invoice_number} — this is your ONLY persistence path; (3) respond with the ApprovalDecision JSON. Make NO tool calls outside this workflow. Do not write to w/audits/, w/logs/, or any other path — those do not exist and will fail. After step 3 you are done.",
     "context": [
-      { "ref": "w/docs/policy-rules", "label": "AP Policy Rules" },
-      { "ref": "w/vendor-records", "label": "Vendor Records (reference)" }
+      {
+        "ref": "w/docs/policy-rules",
+        "label": "AP Policy Rules"
+      },
+      {
+        "ref": "w/vendor-records",
+        "label": "Vendor Records (reference)"
+      }
     ],
     "outputs": {
       "complete": {
         "schema": {
           "type": "object",
           "properties": {
-            "decision": { "type": "string", "description": "APPROVED, ESCALATED, or REJECTED" },
+            "decision": {
+              "type": "string",
+              "description": "APPROVED, ESCALATED, or REJECTED"
+            },
             "invoice_summary": {
               "type": "object",
               "properties": {
-                "vendor": { "type": "string" },
-                "invoice_number": { "type": "string" },
-                "amount": { "type": "number" },
-                "currency": { "type": "string" }
+                "vendor": {
+                  "type": "string"
+                },
+                "invoice_number": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "number"
+                },
+                "currency": {
+                  "type": "string"
+                }
               },
-              "required": ["vendor", "invoice_number", "amount", "currency"],
+              "required": [
+                "vendor",
+                "invoice_number",
+                "amount",
+                "currency"
+              ],
               "additionalProperties": false
             },
-            "policy_rules_applied": { "type": "array", "items": {
-              "type": "object",
-              "properties": {
-                "rule": { "type": "string", "description": "Policy rule ID and name, e.g. AP-001 Amount Threshold" },
-                "result": { "type": "string", "description": "PASS or FAIL" },
-                "detail": { "type": "string", "description": "Specific evidence for the result" }
+            "policy_rules_applied": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "rule": {
+                    "type": "string",
+                    "description": "Policy rule ID and name, e.g. AP-001 Amount Threshold"
+                  },
+                  "result": {
+                    "type": "string",
+                    "description": "PASS or FAIL"
+                  },
+                  "detail": {
+                    "type": "string",
+                    "description": "Specific evidence for the result"
+                  }
+                },
+                "required": [
+                  "rule",
+                  "result",
+                  "detail"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "escalation_target": {
+              "type": "string",
+              "description": "Name and role of the person to escalate to, or empty string if not escalating"
+            },
+            "evidence_considered": {
+              "type": "array",
+              "items": {
+                "type": "string"
               },
-              "required": ["rule", "result", "detail"],
-              "additionalProperties": false
-            }},
-            "escalation_target": { "type": "string", "description": "Name and role of the person to escalate to, or empty string if not escalating" },
-            "evidence_considered": { "type": "array", "items": { "type": "string" }, "description": "Key data points that informed the decision" },
-            "risk_flags": { "type": "array", "items": { "type": "string" }, "description": "Any risk concerns, even if rules passed" },
-            "reasoning": { "type": "string", "description": "Full narrative reasoning for the decision" }
+              "description": "Key data points that informed the decision"
+            },
+            "risk_flags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Any risk concerns, even if rules passed"
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Full narrative reasoning for the decision"
+            }
           },
-          "required": ["decision", "invoice_summary", "policy_rules_applied", "escalation_target", "evidence_considered", "risk_flags", "reasoning"],
+          "required": [
+            "decision",
+            "invoice_summary",
+            "policy_rules_applied",
+            "escalation_target",
+            "evidence_considered",
+            "risk_flags",
+            "reasoning"
+          ],
           "additionalProperties": false
         }
       }
     }
-  }}
+  }
 }

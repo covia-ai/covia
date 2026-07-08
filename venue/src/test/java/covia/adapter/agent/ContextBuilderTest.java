@@ -49,15 +49,15 @@ public class ContextBuilderTest {
 		ctx = RequestContext.of(ALICE_DID);
 	}
 
-	// ========== Config merge ==========
+	// ========== Config (single slot — #144) ==========
 
 	@Test
-	public void testConfigMergeRecordOnly() {
+	public void testConfigFromRecord() {
 		AMap<AString, ACell> recordConfig = Maps.of(
 			Strings.intern("systemPrompt"), Strings.create("Be helpful"));
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(recordConfig, null)
+			.withConfig(recordConfig)
 			.withSystemPrompt()
 			.withTools()
 			.build();
@@ -67,38 +67,21 @@ public class ContextBuilderTest {
 			RT.ensureString(result.config().get(Strings.intern("systemPrompt"))).toString());
 	}
 
+	/** Config has a single home: record.config. A config map inside state is
+	 *  runtime data the builder never reads (#144). */
 	@Test
-	public void testConfigMergeStateOverrides() {
+	public void testStateConfigIsNotRead() {
 		AMap<AString, ACell> recordConfig = Maps.of(
 			Strings.intern("model"), Strings.create("gpt-4o"));
-		ACell state = Maps.of(K_CONFIG, Maps.of(
-			Strings.intern("model"), Strings.create("gpt-3.5")));
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(recordConfig, state)
+			.withConfig(recordConfig)
 			.withSystemPrompt()
 			.withTools()
 			.build();
 
-		// State config overrides record on merge (record.merge(state) — right wins)
-		assertEquals("gpt-3.5",
+		assertEquals("gpt-4o",
 			RT.ensureString(result.config().get(Strings.intern("model"))).toString());
-	}
-
-	@Test
-	public void testConfigMergeStateOnly() {
-		ACell state = Maps.of(K_CONFIG, Maps.of(
-			Strings.intern("systemPrompt"), Strings.create("State prompt")));
-
-		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, state)
-			.withSystemPrompt()
-			.withTools()
-			.build();
-
-		assertNotNull(result.config());
-		assertEquals("State prompt",
-			RT.ensureString(result.config().get(Strings.intern("systemPrompt"))).toString());
 	}
 
 	// ========== System prompt ==========
@@ -106,7 +89,7 @@ public class ContextBuilderTest {
 	@Test
 	public void testSystemPromptPrependedWhenMissing() {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.withTools()
 			.build();
@@ -124,7 +107,7 @@ public class ContextBuilderTest {
 			Strings.intern("systemPrompt"), Strings.create("You are a financial analyst."));
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(config, null)
+			.withConfig(config)
 			.withSystemPrompt()
 			.withTools()
 			.build();
@@ -138,7 +121,7 @@ public class ContextBuilderTest {
 		// Calling withSystemPrompt twice must leave a single system message —
 		// the second call drops the leading system message and rebuilds fresh.
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.withSystemPrompt()
 			.withTools()
@@ -167,7 +150,7 @@ public class ContextBuilderTest {
 			K_CONTEXT, Vectors.of((ACell) Strings.create("w/rules")));
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(config, null)
+			.withConfig(config)
 			.withSystemPrompt()
 			.withContextEntries(Maps.empty())
 			.withTools()
@@ -189,7 +172,7 @@ public class ContextBuilderTest {
 		// config.context present but not an array → loud failure (fix the config),
 		// not a silent drop.
 		AMap<AString, ACell> config = Maps.of(K_CONTEXT, Strings.create("not-an-array"));
-		ContextBuilder b = new ContextBuilder(engine, ctx).withConfig(config, null);
+		ContextBuilder b = new ContextBuilder(engine, ctx).withConfig(config);
 		RuntimeException ex = assertThrows(RuntimeException.class,
 			() -> b.withContextEntries(Maps.empty()));
 		assertTrue(ex.getMessage().contains("config.context"), "message should name the bad field");
@@ -198,7 +181,7 @@ public class ContextBuilderTest {
 	@Test
 	public void testInvalidStateContextThrows() {
 		// state.context present but not an array → throw.
-		ContextBuilder b = new ContextBuilder(engine, ctx).withConfig(Maps.empty(), null);
+		ContextBuilder b = new ContextBuilder(engine, ctx).withConfig(Maps.empty());
 		ACell state = Maps.of(K_CONTEXT, CVMLong.create(5));
 		RuntimeException ex = assertThrows(RuntimeException.class,
 			() -> b.withContextEntries(state));
@@ -210,7 +193,7 @@ public class ContextBuilderTest {
 		// No context key anywhere → no error, just no context entries.
 		AMap<AString, ACell> config = Maps.of(Strings.intern("systemPrompt"), Strings.create("Be helpful"));
 		assertDoesNotThrow(() -> new ContextBuilder(engine, ctx)
-			.withConfig(config, null)
+			.withConfig(config)
 			.withContextEntries(Maps.empty())
 			.build());
 	}
@@ -229,7 +212,7 @@ public class ContextBuilderTest {
 			K_CONTEXT, Vectors.of((ACell) Strings.create("w/structured")));
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(config, null)
+			.withConfig(config)
 			.withSystemPrompt()
 			.withContextEntries(Maps.empty())
 			.withTools()
@@ -255,7 +238,7 @@ public class ContextBuilderTest {
 				Fields.OUTPUT, Strings.create("result data")));
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.withPendingResults(pending)
 			.withTools()
@@ -272,7 +255,7 @@ public class ContextBuilderTest {
 	@Test
 	public void testNoPendingResults() {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.withPendingResults(null)
 			.withTools()
@@ -289,7 +272,7 @@ public class ContextBuilderTest {
 		AVector<ACell> inbox = Vectors.of((ACell) Strings.create("Hello agent"));
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.withInboxMessages(inbox)
 			.withTools()
@@ -308,7 +291,7 @@ public class ContextBuilderTest {
 				Fields.MESSAGE, Strings.create("Please review the report")));
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.withInboxMessages(inbox)
 			.withTools()
@@ -325,7 +308,7 @@ public class ContextBuilderTest {
 	@Test
 	public void testEmptyStateSignalWhenNoInput() {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.withEmptyStateSignal(false)
 			.withTools()
@@ -339,7 +322,7 @@ public class ContextBuilderTest {
 	@Test
 	public void testNoSignalWhenInputPresent() {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.withEmptyStateSignal(true)
 			.withTools()
@@ -358,12 +341,12 @@ public class ContextBuilderTest {
 		// are opt-in (#92), so the config must request them.
 		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
 		ContextBuilder.ContextResult r1 = new ContextBuilder(engine, ctx)
-			.withConfig(config, null)
+			.withConfig(config)
 			.withSystemPrompt()
 			.withTools()
 			.build();
 		ContextBuilder.ContextResult r2 = new ContextBuilder(engine, ctx)
-			.withConfig(config, null)
+			.withConfig(config)
 			.withSystemPrompt()
 			.withTools()
 			.build();
@@ -384,7 +367,7 @@ public class ContextBuilderTest {
 		// Default tools are opt-in (#92) — request them via config.
 		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(config, null)
+			.withConfig(config)
 			.withSystemPrompt()
 			.withTools()
 			.build();
@@ -399,7 +382,7 @@ public class ContextBuilderTest {
 	public void testSystemPromptIncludesSessionContext() {
 		// Every agent should see current date and venue name.
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.build();
 		AString sys = extractSystemContent(result.history());
@@ -416,7 +399,7 @@ public class ContextBuilderTest {
 		AMap<AString, ACell> config = Maps.of(
 			Strings.intern("model"), Strings.create("gpt-4.1-mini"));
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(config, null)
+			.withConfig(config)
 			.withSystemPrompt()
 			.build();
 		AString sys = extractSystemContent(result.history());
@@ -429,7 +412,7 @@ public class ContextBuilderTest {
 	public void testSystemPromptOmitsCapsSectionWhenUnrestricted() {
 		// No caps in config = unrestricted = no caps section
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.build();
 		AString sys = extractSystemContent(result.history());
@@ -450,7 +433,7 @@ public class ContextBuilderTest {
 					Strings.intern("with"), Strings.create("w/"),
 					Strings.intern("can"), Strings.create("crud/read"))));
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(config, null)
+			.withConfig(config)
 			.withSystemPrompt()
 			.build();
 		AString sys = extractSystemContent(result.history());
@@ -474,7 +457,7 @@ public class ContextBuilderTest {
 		AMap<AString, ACell> config = Maps.of(
 			Strings.intern("caps"), Vectors.empty());
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(config, null)
+			.withConfig(config)
 			.withSystemPrompt()
 			.build();
 		AString sys = extractSystemContent(result.history());
@@ -487,7 +470,7 @@ public class ContextBuilderTest {
 	public void testSystemPromptIncludesLatticeReference() {
 		// Default identity prompt → lattice reference appended
 		ContextBuilder.ContextResult defaultResult = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.build();
 		AString defaultSys = extractSystemContent(defaultResult.history());
@@ -504,7 +487,7 @@ public class ContextBuilderTest {
 			Strings.intern("systemPrompt"),
 			Strings.create("You are Carol the AP Approver. Be concise."));
 		ContextBuilder.ContextResult customResult = new ContextBuilder(engine, ctx)
-			.withConfig(customConfig, null)
+			.withConfig(customConfig)
 			.withSystemPrompt()
 			.build();
 		AString customSys = extractSystemContent(customResult.history());
@@ -533,7 +516,7 @@ public class ContextBuilderTest {
 		// covia_read lives in the default pack, which is opt-in (#92).
 		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(config, null)
+			.withConfig(config)
 			.withSystemPrompt()
 			.withTools()
 			.build();
@@ -564,7 +547,7 @@ public class ContextBuilderTest {
 			Strings.intern("defaultTools"), CVMBool.FALSE);
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(config, null)
+			.withConfig(config)
 			.withSystemPrompt()
 			.withTools()
 			.build();
@@ -579,7 +562,7 @@ public class ContextBuilderTest {
 			Strings.intern("caps"), capsVec);
 
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(config, null)
+			.withConfig(config)
 			.withSystemPrompt()
 			.withTools()
 			.build();
@@ -592,7 +575,7 @@ public class ContextBuilderTest {
 	@Test
 	public void testNoCapsUnrestricted() {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.withTools()
 			.build();
@@ -610,7 +593,7 @@ public class ContextBuilderTest {
 		assertEquals(0, builder.getConsumed());
 		assertEquals(100_000, builder.getRemaining());
 
-		builder.withConfig(null, null)
+		builder.withConfig(null)
 			.withSystemPrompt();
 
 		assertTrue(builder.getConsumed() > 0, "System prompt should consume budget");
@@ -621,7 +604,7 @@ public class ContextBuilderTest {
 	@Test
 	public void testBudgetInResult() {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx, 200_000)
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.withTools()
 			.build();
@@ -641,7 +624,7 @@ public class ContextBuilderTest {
 		// "tools present" assertion below remains meaningful.
 		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
-			.withConfig(config, null)
+			.withConfig(config)
 			.withSystemPrompt()
 			.withContextEntries(Maps.empty())
 			.withPendingResults(null)
@@ -725,7 +708,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult result = builder
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.withLoadedPaths(loads)
 			.withTools()
@@ -747,7 +730,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		// Should not throw
-		builder.withConfig(null, null)
+		builder.withConfig(null)
 			.withSystemPrompt()
 			.withLoadedPaths(loads)
 			.withTools()
@@ -762,7 +745,7 @@ public class ContextBuilderTest {
 
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult result = builder
-			.withConfig(null, null)
+			.withConfig(null)
 			.withSystemPrompt()
 			.withContextMap(loads)
 			.withTools()
@@ -791,10 +774,9 @@ public class ContextBuilderTest {
 		AMap<AString, ACell> bigConfig = Maps.of(
 			Strings.intern("systemPrompt"), Strings.create("x".repeat(800)),
 			Strings.intern("defaultTools"), CVMBool.FALSE);
-		ACell state = Maps.of(Strings.intern("config"), bigConfig);
 		ContextBuilder builder = new ContextBuilder(engine, ctx, 1000);
 		ContextBuilder.ContextResult result = builder
-			.withConfig(null, state)
+			.withConfig(bigConfig)
 			.withSystemPrompt()
 			.withContextMap(null)
 			.build();
@@ -809,7 +791,7 @@ public class ContextBuilderTest {
 
 	@Test public void testSafetyValveNoPruneBelow90() {
 		ContextBuilder builder = new ContextBuilder(engine, ctx); // 180k budget
-		builder.withConfig(null, null).withSystemPrompt();
+		builder.withConfig(null).withSystemPrompt();
 
 		AMap<AString, ACell> loads = Maps.of(
 			Strings.create("w/a"), Maps.of(Strings.create("budget"), CVMLong.create(500)));
@@ -824,9 +806,8 @@ public class ContextBuilderTest {
 		AMap<AString, ACell> bigConfig = Maps.of(
 			Strings.intern("systemPrompt"), Strings.create("x".repeat(950)),
 			Strings.intern("defaultTools"), CVMBool.FALSE);
-		ACell state = Maps.of(Strings.intern("config"), bigConfig);
 		ContextBuilder builder = new ContextBuilder(engine, ctx, 1000);
-		builder.withConfig(null, state).withSystemPrompt();
+		builder.withConfig(bigConfig).withSystemPrompt();
 		// Consumed is now > 90% of 1000
 
 		AMap<AString, ACell> loads = Maps.of(

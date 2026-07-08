@@ -615,17 +615,9 @@ public class AgentState extends ALatticeComponent<ACell> {
 			if (state instanceof AMap) {
 				AMap<AString, ACell> existing = (AMap<AString, ACell>) r.get(K_STATE);
 				AMap<AString, ACell> incoming = (AMap<AString, ACell>) state;
-				AMap<AString, ACell> merged = merge(existing, incoming);
-				// Deep-merge state.config so updating one field (e.g. model)
-				// doesn't wipe siblings (e.g. caps, tools, outputs)
-				if (existing != null && incoming.containsKey(K_CONFIG)
-						&& existing.get(K_CONFIG) instanceof AMap
-						&& incoming.get(K_CONFIG) instanceof AMap) {
-					merged = merged.assoc(K_CONFIG, merge(
-						(AMap<AString, ACell>) existing.get(K_CONFIG),
-						(AMap<AString, ACell>) incoming.get(K_CONFIG)));
-				}
-				u = u.assoc(K_STATE, merged);
+				// No state.config special case: config's single home is
+				// record.config (#144); the adapter rejects state.config input.
+				u = u.assoc(K_STATE, merge(existing, incoming));
 			} else if (state != null) {
 				u = u.assoc(K_STATE, state);
 			}
