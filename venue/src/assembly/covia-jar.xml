@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The covia.jar fat-jar assembly: jar-with-dependencies semantics, with one
+     deliberate difference. Every jar built with the javalin-openapi annotation
+     processor carries its generated OpenAPI document at the SAME resource path
+     (openapi-plugin/openapi-default.json). convex-restapi's copy was shadowing
+     the venue's own in the merged jar, so a deployed venue served the Convex
+     chain API document at /openapi instead of the Covia API. Dependency copies
+     are excluded here; only the venue's own document (added by the fileSet)
+     survives — deterministically, with no reliance on merge order. -->
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.1.1"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.1.1 http://maven.apache.org/xsd/assembly-2.1.1.xsd">
+	<id>jar-with-dependencies</id>
+	<formats>
+		<format>jar</format>
+	</formats>
+	<includeBaseDirectory>false</includeBaseDirectory>
+	<dependencySets>
+		<dependencySet>
+			<outputDirectory>/</outputDirectory>
+			<useProjectArtifact>false</useProjectArtifact>
+			<unpack>true</unpack>
+			<scope>runtime</scope>
+			<unpackOptions>
+				<excludes>
+					<exclude>openapi-plugin/**</exclude>
+				</excludes>
+			</unpackOptions>
+		</dependencySet>
+	</dependencySets>
+	<fileSets>
+		<fileSet>
+			<directory>${project.build.outputDirectory}</directory>
+			<outputDirectory>/</outputDirectory>
+		</fileSet>
+	</fileSets>
+</assembly>
