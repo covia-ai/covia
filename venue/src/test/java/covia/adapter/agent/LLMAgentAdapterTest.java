@@ -1264,16 +1264,60 @@ public class LLMAgentAdapterTest {
 		assertTrue(result.toString().contains("Error"));
 	}
 
-	@Test public void testExtractLoadsRoundTrip() {
-		AMap<AString, ACell> loads = Maps.of(
-			Strings.create("w/docs/rules"), Maps.of(Strings.create("budget"), CVMLong.create(500)));
-		ACell state = Maps.of(Strings.create("loads"), loads);
-		AMap<AString, ACell> extracted = LLMAgentAdapter.extractLoads(state);
-		assertEquals(1, extracted.count());
-		assertNotNull(extracted.get(Strings.create("w/docs/rules")));
+	// ========== Context scope chain (#142) ==========
 
-		// Null state
-		assertEquals(0, LLMAgentAdapter.extractLoads(null).count());
+	/** context_unload masks an operator-pinned load with a nil tombstone —
+	 *  this conversation only; the pin itself is untouched. */
+	@Test public void testUnloadMasksConfigLoad() {
+		ToolContext toolCtx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
+		toolCtx.outerLoads = Maps.of(Strings.create("w/pinned"),
+			Maps.of(Strings.create("budget"), CVMLong.create(400)));
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		ACell result = adapter.handleContextUnload(Maps.of("path", "w/pinned"), toolCtx);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "unloaded"), "result: " + result);
+		assertTrue(toolCtx.loads.containsKey(Strings.create("w/pinned")), "tombstone written");
+		assertNull(toolCtx.loads.get(Strings.create("w/pinned")));
+
+		// Re-loading overwrites the tombstone (local un-mask).
+		ACell reload = adapter.handleContextLoad(Maps.of("path", "w/pinned"), toolCtx);
+		assertEquals(CVMBool.TRUE, RT.getIn(reload, "loaded"), "result: " + reload);
+		assertNotNull(toolCtx.loads.get(Strings.create("w/pinned")));
+	}
+
+	/** A cycle with no session in scope has no writable tier. */
+	@Test public void testContextToolsRequireSession() {
+		ToolContext toolCtx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
+		toolCtx.sessionInScope = false;
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		assertTrue(adapter.handleContextLoad(Maps.of("path", "w/x"), toolCtx)
+			.toString().contains("no session in scope"));
+		assertTrue(adapter.handleContextUnload(Maps.of("path", "w/x"), toolCtx)
+			.toString().contains("no session in scope"));
+	}
+
+	/** The transition output carries the session tier for the framework's
+	 *  session merge — and only when a session is in scope. */
+	@Test public void testProcessChatEmitsSessionLoads() {
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		AMap<AString, ACell> tier = Maps.of(Strings.create("w/notes"),
+			Maps.of(Strings.create("budget"), CVMLong.create(300)));
+
+		ACell withSession = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(
+			Fields.AGENT_ID, "loads-agent",
+			AgentState.KEY_CONFIG, TEST_CONFIG,
+			Fields.SESSION, Maps.of(Fields.SESSION_ID, Strings.create("aa00"), Fields.LOADS, tier),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "hi"))));
+		assertEquals(tier, RT.getIn(withSession, Fields.LOADS),
+			"session tier rides the output for the framework merge");
+
+		ACell withoutSession = adapter.processChat(RequestContext.of(ALICE_DID), Maps.of(
+			Fields.AGENT_ID, "loads-agent",
+			AgentState.KEY_CONFIG, TEST_CONFIG,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "hi"))));
+		assertNull(RT.getIn(withoutSession, Fields.LOADS),
+			"no session in scope → no loads on the output");
 	}
 
 	// ========== Wrong-runtime harness tool calls fail diagnosably (#143) ==========

@@ -126,7 +126,13 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			K_PROPERTIES, Maps.of(
 				Strings.create("description"), Maps.of(
 					K_TYPE, Strings.create("string"),
-					K_DESCRIPTION, Strings.create("What the subgoal should accomplish"))),
+					K_DESCRIPTION, Strings.create("What the subgoal should accomplish")),
+				Strings.create("loads"), Maps.of(
+					K_TYPE, Strings.create("object"),
+					K_DESCRIPTION, Strings.create(
+						"Optional context to pre-load for the sub-agent: a map of lattice "
+						+ "path to {budget} (bytes). Added on top of your own loaded data, "
+						+ "which the sub-agent inherits."))),
 			K_REQUIRED, Vectors.of(Strings.create("description"))));
 
 	/*
@@ -321,7 +327,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
 			.withConfig(recordConfig)
 			.withSystemPrompt()
-			.withContextEntries(state)
+			.withContextEntries()
 			.withTools()
 			.build();
 
@@ -470,7 +476,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			.withConfig(recordConfig)
 			.withSystemPrompt()
 			.withFrameStack(frames)
-			.withContextEntries(state)
+			.withContextEntries()
 			.withTools()
 			.build();
 
@@ -487,11 +493,19 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// with subgoal recursion.
 		long toolCallTimeoutMs = resolveToolCallTimeoutMs(l3Config);
 
+		// Outer tiers of the context scope chain (#142): agent (config.loads,
+		// operator-pinned) + session (sessions.<sid>.loads). Constant within a
+		// cycle; frames compose their tier on top (inner shadows/masks outer).
+		AMap<AString, ACell> outerLoads = ContextChain.effective(
+			ContextChain.declaredLoads(RT.getIn(recordConfig, Fields.LOADS), "config.loads"),
+			ContextChain.sessionLoads(input));
+
 		// Run the root frame. typedHarnessTools (if non-null) injects the
 		// typed complete/fail tools alongside the regular harness/operation
 		// tools, supporting providers that prefer tool calls over response_format.
 		FrameResult result = runFrame(job, frames, 0, l3Config, llmOperation, baseTools,
-			configToolMap, capsCtx, context.history(), typedHarnessTools, toolCallTimeoutMs);
+			configToolMap, capsCtx, context.history(), typedHarnessTools, toolCallTimeoutMs,
+			outerLoads);
 
 		// No per-adapter state is persisted here: the frame stack lives on the
 		// session record, and config's single home is record.config (#144) —
@@ -592,7 +606,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			AMap<AString, ACell> config, AString llmOperation,
 			AVector<ACell> baseToolsParam, Map<String, AString> configToolMap,
 			RequestContext ctx, AVector<ACell> systemMessages,
-			AVector<ACell> typedRootHarnessTools, long toolCallTimeoutMs) {
+			AVector<ACell> typedRootHarnessTools, long toolCallTimeoutMs,
+			AMap<AString, ACell> outerLoads) {
 
 		// Mutable copy — more_tools can append to this mid-run
 		AVector<ACell> baseTools = baseToolsParam;
@@ -712,13 +727,17 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			AMap<AString, ACell> ancestorMsg = GoalTreeContext.renderAncestors(frames);
 			if (ancestorMsg != null) fullHistory = fullHistory.conj(ancestorMsg);
 
-			// Loaded data (active frame's loads). The loads map is immutable
-			// and only changes via context-load / context-unload, so reference
-			// compare against the cached key tells us whether to re-render.
+			// Loaded data: the context scope chain (#142) — outer tiers
+			// (config.loads + session.loads, constant within a cycle) composed
+			// with the active frame's tier; frame tombstones mask outer entries.
+			// The frame map is immutable and only changes via context-load /
+			// context-unload, so reference compare against the cached key tells
+			// us whether to re-render.
 			AMap<AString, ACell> frameLoads = GoalTreeContext.getLoads(activeFrame);
 			if (frameLoads != cachedLoadsKey) {
-				cachedLoadsRendered = (frameLoads.count() > 0)
-					? new ContextBuilder(engine, ctx).resolveLoads(frameLoads)
+				AMap<AString, ACell> effectiveLoads = ContextChain.effective(outerLoads, frameLoads);
+				cachedLoadsRendered = (effectiveLoads.count() > 0)
+					? new ContextBuilder(engine, ctx).resolveLoads(effectiveLoads)
 					: Vectors.empty();
 				cachedLoadsKey = frameLoads;
 			}
@@ -861,13 +880,20 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					AString path = RT.ensureString(RT.getIn(toolInput, K_PATH));
 					if (path == null) {
 						toolResult = Strings.create("Error: path is required");
-					} else if (GoalTreeContext.getLoads(activeFrame).get(path) == null) {
-						toolResult = Strings.create("Error: path not loaded: " + path);
 					} else {
-						activeFrame = GoalTreeContext.removeLoad(activeFrame, path);
-						toolResult = Maps.of(
-							K_PATH, path,
-							Strings.create("unloaded"), CVMBool.TRUE);
+						// Lexical unload (#142): removes the frame-tier entry, or
+						// masks an outer-tier load (config/session) with a nil
+						// tombstone for this frame and its children only.
+						AMap<AString, ACell> updated = ContextChain.unload(
+							GoalTreeContext.getLoads(activeFrame), outerLoads, path);
+						if (updated == null) {
+							toolResult = Strings.create("Error: path not in context: " + path);
+						} else {
+							activeFrame = activeFrame.assoc(GoalTreeContext.K_LOADS, updated);
+							toolResult = Maps.of(
+								K_PATH, path,
+								Strings.create("unloaded"), CVMBool.TRUE);
+						}
 					}
 
 				} else if (TOOL_MORE_TOOLS.equals(toolName)) {
@@ -930,28 +956,51 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 								"Maximum subgoal depth (" + MAX_SUBGOAL_DEPTH + ") reached. Complete or "
 								+ "fail the current goal at this level instead of decomposing further."));
 					} else {
-						// Push child frame with inherited loads (copy-on-push)
-						AMap<AString, ACell> parentLoads = GoalTreeContext.getLoads(activeFrame);
-						AMap<AString, ACell> childFrame = GoalTreeContext.createFrame(desc, parentLoads);
-						frames = updateFrame(frames, frameIndex, activeFrame);
-						AVector<ACell> childFrames = frames.conj(childFrame);
-
-						// Recurse into child. Child frames don't inherit typed
-						// outputs — a subgoal's contract is "return any value to
-						// the parent", not the parent's typed output schema. The
-						// child also gets responseFormat stripped from its L3
-						// config (handled inside the recursive runFrame).
-						FrameResult childResult = runFrame(job, childFrames, frameIndex + 1,
-							config, llmOperation, baseTools, configToolMap, ctx, systemMessages, null,
-							toolCallTimeoutMs);
-
-						// Pop child — result becomes tool result in parent
-						AMap<AString, ACell> resultMap = Maps.of(
-							Strings.create("status"), Strings.create(childResult.status()));
-						if (childResult.value() != null) {
-							resultMap = resultMap.assoc(Strings.create("result"), childResult.value());
+						// Push child frame with inherited loads (copy-on-push —
+						// including any tombstones, so masks propagate to children),
+						// overlaid with the subgoal's declared loads (#142): the
+						// frame tier's automatic loads, authored by the parent.
+						AMap<AString, ACell> childLoads = GoalTreeContext.getLoads(activeFrame);
+						AMap<AString, ACell> declared;
+						IllegalArgumentException loadsError = null;
+						try {
+							ACell declaredCell = RT.getIn(toolInput, Fields.LOADS);
+							declared = (declaredCell != null)
+								? ContextChain.declaredLoads(declaredCell, "subgoal loads")
+								: Maps.empty();
+						} catch (IllegalArgumentException e) {
+							loadsError = e;
+							declared = Maps.empty();
 						}
-						toolResult = resultMap;
+						if (loadsError != null) {
+							toolResult = Strings.create("Error: " + loadsError.getMessage());
+						} else {
+							for (var d : declared.entrySet()) {
+								long budget = clampLoadBudget(RT.getIn(d.getValue(), K_BUDGET));
+								childLoads = childLoads.assoc(d.getKey(),
+									buildLoadEntryMeta(budget, null));
+							}
+							AMap<AString, ACell> childFrame = GoalTreeContext.createFrame(desc, childLoads);
+							frames = updateFrame(frames, frameIndex, activeFrame);
+							AVector<ACell> childFrames = frames.conj(childFrame);
+
+							// Recurse into child. Child frames don't inherit typed
+							// outputs — a subgoal's contract is "return any value to
+							// the parent", not the parent's typed output schema. The
+							// child also gets responseFormat stripped from its L3
+							// config (handled inside the recursive runFrame).
+							FrameResult childResult = runFrame(job, childFrames, frameIndex + 1,
+								config, llmOperation, baseTools, configToolMap, ctx, systemMessages, null,
+								toolCallTimeoutMs, outerLoads);
+
+							// Pop child — result becomes tool result in parent
+							AMap<AString, ACell> resultMap = Maps.of(
+								Strings.create("status"), Strings.create(childResult.status()));
+							if (childResult.value() != null) {
+								resultMap = resultMap.assoc(Strings.create("result"), childResult.value());
+							}
+							toolResult = resultMap;
+						}
 					}
 
 				} else {

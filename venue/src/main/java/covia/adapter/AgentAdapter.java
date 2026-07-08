@@ -424,9 +424,15 @@ public class AgentAdapter extends AAdapter {
 
 		// Config has exactly one home: record.config, written by the principal;
 		// state is written by the runtime (#144). A config map smuggled inside
-		// state would be silently inert — reject loudly.
+		// state would be silently inert — reject loudly. Likewise loads (#142):
+		// they live on the context scope chain (config.loads / session loads),
+		// never in agent-level state.
 		if (RT.getIn(initialState, AgentState.KEY_CONFIG) != null) {
 			job.fail("state.config is not supported — pass agent configuration via the 'config' parameter");
+			return;
+		}
+		if (RT.getIn(initialState, Fields.LOADS) != null) {
+			job.fail("state.loads is not supported — loads are per-session (config.loads for operator pins, #142)");
 			return;
 		}
 
@@ -1049,9 +1055,14 @@ public class AgentAdapter extends AAdapter {
 			job.fail("At least one of 'config' or 'state' must be provided");
 			return;
 		}
-		// Config's single home is record.config (#144) — see handleCreate.
+		// Config's single home is record.config (#144), and loads live on the
+		// context scope chain (#142) — see handleCreate.
 		if (RT.getIn(newState, AgentState.KEY_CONFIG) != null) {
 			job.fail("state.config is not supported — pass agent configuration via the 'config' parameter");
+			return;
+		}
+		if (RT.getIn(newState, Fields.LOADS) != null) {
+			job.fail("state.loads is not supported — loads are per-session (config.loads for operator pins, #142)");
 			return;
 		}
 
@@ -1833,14 +1844,20 @@ public class AgentAdapter extends AAdapter {
 			}
 		}
 
+		// Session-tier loads (#142): the transition's final working set for the
+		// picked session (tombstones included), written in the same CAS below.
+		AMap<AString, ACell> sessionLoads =
+			(RT.getIn(transitionResult, Fields.LOADS) instanceof AMap<?, ?> lm)
+				? (AMap<AString, ACell>) lm : null;
+
 		// Merge results atomically (timeline, state, task cleanup, history,
-		// session pending drain). History append lands in the same CAS as
-		// the timeline, so external readers never see a cycle that wrote
-		// one but not the other.
+		// session pending drain, session loads). History append lands in the
+		// same CAS as the timeline, so external readers never see a cycle
+		// that wrote one but not the other.
 		AMap<AString, ACell> merged = agent.mergeRunResult(
 			newState, pickedSession, tasks, taskResults,
 			timelineEntry, pickedSessionBlob, turnsToAppend,
-			presentedSessionPendingCount, adapterFrames);
+			presentedSessionPendingCount, adapterFrames, sessionLoads);
 
 		// Per-thread scheduled wake (B8.8). Transition result may carry a
 		// `wakeTime` (absolute wall-clock millis) requesting a future fire on
@@ -2284,8 +2301,20 @@ public class AgentAdapter extends AAdapter {
 	 * Resolves the sessionId from input, minting a new one if absent, and
 	 * ensures a session record exists on the agent. Returns the sid, or
 	 * {@code null} if the input's sessionId is malformed (job is failed).
+	 *
+	 * <p>An optional {@code loads} input seeds the new session's tier of the
+	 * context scope chain (#142). It applies only when the session is minted
+	 * here; passing it against an existing session is an error, never a
+	 * silent ignore.</p>
 	 */
 	private Blob resolveOrMintSession(Job job, AgentState agent, ACell input, AString caller) {
+		AMap<AString, ACell> initialLoads;
+		try {
+			initialLoads = mintLoads(input);
+		} catch (IllegalArgumentException e) {
+			job.fail(e.getMessage());
+			return null;
+		}
 		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);
 		Blob sid;
 		if (sidCell != null) {
@@ -2296,11 +2325,26 @@ public class AgentAdapter extends AAdapter {
 				job.fail("Invalid sessionId format: " + s);
 				return null;
 			}
+			if (initialLoads != null && agent.getSession(sid) != null) {
+				job.fail("loads can only be passed when a session is created — this session already exists");
+				return null;
+			}
 		} else {
 			sid = generateSessionId();
 		}
-		agent.ensureSession(sid, caller);
+		agent.ensureSession(sid, caller, initialLoads);
 		return sid;
+	}
+
+	/**
+	 * Parses the optional mint-time {@code loads} input ({@code {path: {budget?}}},
+	 * the session tier's declared loads, #142). Returns null when absent;
+	 * throws {@link IllegalArgumentException} on a malformed value.
+	 */
+	private static AMap<AString, ACell> mintLoads(ACell input) {
+		ACell raw = RT.getIn(input, Fields.LOADS);
+		if (raw == null) return null;
+		return covia.adapter.agent.ContextChain.declaredLoads(raw, "loads");
 	}
 
 	/**
@@ -2312,6 +2356,13 @@ public class AgentAdapter extends AAdapter {
 	 * caller supplied no {@code sessionId} at all.
 	 */
 	private Blob resolveSessionForChat(Job job, AgentState agent, ACell input, AString caller) {
+		AMap<AString, ACell> initialLoads;
+		try {
+			initialLoads = mintLoads(input);
+		} catch (IllegalArgumentException e) {
+			job.fail(e.getMessage());
+			return null;
+		}
 		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);
 		if (sidCell != null) {
 			AString s = RT.ensureString(sidCell);
@@ -2322,10 +2373,14 @@ public class AgentAdapter extends AAdapter {
 				job.fail("Unknown sessionId: " + s + " — omit sessionId to start a new session");
 				return null;
 			}
+			if (initialLoads != null) {
+				job.fail("loads can only be passed when a session is created — this session already exists");
+				return null;
+			}
 			return sid;
 		}
 		Blob sid = generateSessionId();
-		agent.ensureSession(sid, caller);
+		agent.ensureSession(sid, caller, initialLoads);
 		return sid;
 	}
 }

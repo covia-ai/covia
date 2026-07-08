@@ -152,7 +152,7 @@ public class ContextBuilderTest {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(config)
 			.withSystemPrompt()
-			.withContextEntries(Maps.empty())
+			.withContextEntries()
 			.withTools()
 			.build();
 
@@ -174,18 +174,8 @@ public class ContextBuilderTest {
 		AMap<AString, ACell> config = Maps.of(K_CONTEXT, Strings.create("not-an-array"));
 		ContextBuilder b = new ContextBuilder(engine, ctx).withConfig(config);
 		RuntimeException ex = assertThrows(RuntimeException.class,
-			() -> b.withContextEntries(Maps.empty()));
+			() -> b.withContextEntries());
 		assertTrue(ex.getMessage().contains("config.context"), "message should name the bad field");
-	}
-
-	@Test
-	public void testInvalidStateContextThrows() {
-		// state.context present but not an array → throw.
-		ContextBuilder b = new ContextBuilder(engine, ctx).withConfig(Maps.empty());
-		ACell state = Maps.of(K_CONTEXT, CVMLong.create(5));
-		RuntimeException ex = assertThrows(RuntimeException.class,
-			() -> b.withContextEntries(state));
-		assertTrue(ex.getMessage().contains("state.context"), "message should name the bad field");
 	}
 
 	@Test
@@ -194,7 +184,7 @@ public class ContextBuilderTest {
 		AMap<AString, ACell> config = Maps.of(Strings.intern("systemPrompt"), Strings.create("Be helpful"));
 		assertDoesNotThrow(() -> new ContextBuilder(engine, ctx)
 			.withConfig(config)
-			.withContextEntries(Maps.empty())
+			.withContextEntries()
 			.build());
 	}
 
@@ -214,7 +204,7 @@ public class ContextBuilderTest {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(config)
 			.withSystemPrompt()
-			.withContextEntries(Maps.empty())
+			.withContextEntries()
 			.withTools()
 			.build();
 
@@ -626,7 +616,7 @@ public class ContextBuilderTest {
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(config)
 			.withSystemPrompt()
-			.withContextEntries(Maps.empty())
+			.withContextEntries()
 			.withPendingResults(null)
 			.withInboxMessages(inbox)
 			.withEmptyStateSignal(true)

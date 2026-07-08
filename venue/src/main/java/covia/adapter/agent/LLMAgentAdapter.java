@@ -82,7 +82,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	private static final Logger log = LoggerFactory.getLogger(LLMAgentAdapter.class);
 
 	// State field keys
-	private static final AString K_LOADS = Strings.intern("loads");
 
 	// Config keys specific to this adapter (parent provides K_CONFIG, K_LLM_OPERATION,
 	// K_MODEL, K_SYSTEM_PROMPT, K_URL, K_API_KEY, K_TOOLS, K_RESPONSE_FORMAT,
@@ -146,8 +145,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	private static final AMap<AString, ACell> TOOL_DEF_CONTEXT_LOAD = Maps.of(
 		K_NAME, Strings.create(TOOL_CONTEXT_LOAD),
 		K_DESCRIPTION, Strings.create(
-			"Add a lattice path to your persistent loaded context. "
+			"Add a lattice path to this conversation's loaded context. "
 			+ "The path is resolved fresh each turn and injected as a system message. "
+			+ "Scoped to the current session — other conversations are unaffected. "
 			+ "Use for reference material you need across multiple turns. "
 			+ "For one-shot reads, use inspect instead. Effect takes place next turn."),
 		K_PARAMETERS, CONTEXT_LOAD_PARAMS);
@@ -155,9 +155,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	private static final AMap<AString, ACell> TOOL_DEF_CONTEXT_UNLOAD = Maps.of(
 		K_NAME, Strings.create(TOOL_CONTEXT_UNLOAD),
 		K_DESCRIPTION, Strings.create(
-			"Remove a path from your persistent loaded context. "
-			+ "Frees the budget allocated to that path. "
-			+ "Cannot unload pinned context entries from config."),
+			"Remove a path from this conversation's loaded context, freeing its "
+			+ "budget. Also hides an operator-pinned load (from config.loads) for "
+			+ "this conversation only — the pin itself is untouched and other "
+			+ "conversations still see it."),
 		K_PARAMETERS, CONTEXT_UNLOAD_PARAMS);
 
 	/** Context tools — always available to agents */
@@ -212,7 +213,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		ContextBuilder.ContextResult context = builder
 			.withConfig(recordConfig)
 			.withSystemPrompt()
-			.withContextEntries(state)
+			.withContextEntries()
 			.withTools()
 			.build();
 
@@ -255,8 +256,15 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			|| (tasks != null && tasks.count() > 0)
 			|| (pending != null && pending.count() > 0);
 
-		// Extract dynamic loaded paths from state
-		AMap<AString, ACell> existingLoads = extractLoads(state);
+		// Context scope chain (#142): agent tier (config.loads, operator-pinned)
+		// → session tier (sessions.<sid>.loads, runtime-managed). The session is
+		// the innermost tier for this runtime; a cycle with no session in scope
+		// has no writable tier and context_load/unload fail diagnosably.
+		boolean sessionInScope = RT.getIn(input, Fields.SESSION) != null;
+		AMap<AString, ACell> configLoads = ContextChain.declaredLoads(
+			RT.getIn(recordConfig, Fields.LOADS), "config.loads");
+		AMap<AString, ACell> sessionTier = ContextChain.sessionLoads(input);
+		AMap<AString, ACell> effectiveLoads = ContextChain.effective(configLoads, sessionTier);
 
 		// Build per-turn LLM context. Ephemeral context model:
 		// (transcript model): system prompt + context entries + loads +
@@ -272,9 +280,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		ContextBuilder.ContextResult context = builder
 			.withConfig(recordConfig)
 			.withSystemPrompt()                   // always fresh
-			.withContextEntries(state)            // ephemeral
-			.withLoadedPaths(existingLoads)       // ephemeral
-			.withContextMap(existingLoads)        // ephemeral
+			.withContextEntries()                 // ephemeral (config.context)
+			.withLoadedPaths(effectiveLoads)      // ephemeral (scope-chain view)
+			.withContextMap(effectiveLoads)       // ephemeral
 			.withFrameStack(sessionFrames)        // session.frames → LLM messages
 			.withPendingResults(pending)          // ephemeral (this turn)
 			.withInboxMessages(messages)          // this turn's user input
@@ -282,8 +290,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			.withTools()
 			.build();
 
-		// Safety valve — may prune loads if budget exceeded
-		AMap<AString, ACell> activeLoads = builder.applySafetyValve(existingLoads);
+		// Safety valve — prunes the SESSION tier only (the agent tier is
+		// operator-pinned and never pruned; #142).
+		AMap<AString, ACell> activeSessionTier = builder.applySafetyValve(sessionTier);
 
 		AVector<ACell> llmMessages = context.history();
 		AVector<ACell> baseTools = context.tools();
@@ -300,9 +309,14 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// Task context is built dynamically per tool-loop iteration (not baked into
 		// history) so the LLM only sees outstanding tasks, not already-resolved ones.
 
-		// Create tool context for built-in tool execution
+		// Create tool context for built-in tool execution. Its loads slot is
+		// the SESSION tier (the innermost writable tier for this runtime);
+		// the agent tier rides along read-only for unload masking decisions.
 		long toolCallTimeoutMs = resolveToolCallTimeoutMs(config);
-		ToolContext toolCtx = new ToolContext(agentId, capsCtx, tasks, pending, configToolMap, activeLoads, toolCallTimeoutMs);
+		ToolContext toolCtx = new ToolContext(agentId, capsCtx, tasks, pending, configToolMap,
+			activeSessionTier, toolCallTimeoutMs);
+		toolCtx.outerLoads = configLoads;
+		toolCtx.sessionInScope = sessionInScope;
 
 		// Invoke level 3 with tool call loop — returns all messages to append
 		// ctx (uncapped) for the L3 LLM call; capsCtx flows through toolCtx for tool dispatch
@@ -328,14 +342,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		AString contentText = RT.ensureString(RT.getIn(lastMsg, K_CONTENT));
 		String responseText = (contentText != null) ? contentText.toString() : "";
 
-		// Session.history is the sole conversation record — the adapter
-		// does not maintain its own transcript. State holds only loads:
-		// config's single home is record.config (#144), never written here.
+		// Session.history is the sole conversation record and loads live on the
+		// session tier (#142) — agent-level state carries nothing for this
+		// runtime (config's single home is record.config, #144).
 		AMap<AString, ACell> newState = Maps.empty();
-		AMap<AString, ACell> finalLoads = toolCtx.getLoads();
-		if (finalLoads != null && finalLoads.count() > 0) {
-			newState = newState.assoc(K_LOADS, finalLoads);
-		}
 		// Lean transition output: emit {state, response | error}. Task
 		// completion (if any) is signalled to the framework by the venue op
 		// invoked from the complete_task / fail_task tool wrappers, which
@@ -350,6 +360,12 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		AMap<AString, ACell> output = Maps.of(
 			AgentState.KEY_STATE, newState,
 			Fields.RESPONSE, Strings.create(responseText));
+		// Session-tier loads (post valve + this cycle's context_load/unload
+		// mutations, tombstones included) — the framework writes them back to
+		// sessions.<sid>.loads inside mergeRunResult's CAS (#142).
+		if (sessionInScope) {
+			output = output.assoc(Fields.LOADS, toolCtx.getLoads());
+		}
 
 		if (toolCtx.taskResults != null && toolCtx.taskResults.count() > 0) {
 			// One-task-per-cycle: take the single entry
@@ -602,7 +618,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	ACell handleContextLoad(ACell input, ToolContext toolCtx) {
 		AString path = RT.ensureString(RT.getIn(input, K_PATH));
 		if (path == null) return Strings.create("Error: path is required");
+		if (!toolCtx.sessionInScope) {
+			return Strings.create("Error: no session in scope — context loads are per-conversation (#142)");
+		}
 
+		// Writes to the innermost tier; overwriting a tombstone un-masks locally.
 		long budget = clampLoadBudget(RT.getIn(input, K_BUDGET));
 		AString label = RT.ensureString(RT.getIn(input, K_LABEL));
 		toolCtx.addLoad(path, buildLoadEntryMeta(budget, label));
@@ -617,12 +637,17 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	ACell handleContextUnload(ACell input, ToolContext toolCtx) {
 		AString path = RT.ensureString(RT.getIn(input, K_PATH));
 		if (path == null) return Strings.create("Error: path is required");
-
-		if (!toolCtx.hasLoad(path)) {
-			return Strings.create("Error: path not loaded: " + path);
+		if (!toolCtx.sessionInScope) {
+			return Strings.create("Error: no session in scope — context loads are per-conversation (#142)");
 		}
 
-		toolCtx.removeLoad(path);
+		// Lexical unload: removes the local entry; masks an outer-tier entry
+		// with a nil tombstone (this conversation only) — see ContextChain.
+		AMap<AString, ACell> updated = ContextChain.unload(toolCtx.loads, toolCtx.outerLoads, path);
+		if (updated == null) {
+			return Strings.create("Error: path not in context: " + path);
+		}
+		toolCtx.loads = updated;
 
 		return Maps.of(
 			K_PATH, path,
@@ -662,13 +687,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		return (val != null) ? val : defaultValue;
 	}
 
-	@SuppressWarnings("unchecked")
-	static AMap<AString, ACell> extractLoads(ACell state) {
-		if (state == null) return Maps.empty();
-		ACell l = RT.getIn(state, K_LOADS);
-		return (l instanceof AMap) ? (AMap<AString, ACell>) l : Maps.empty();
-	}
-
 	/**
 	 * Extracts the JSON Schema from a responseFormat config, if present.
 	 * responseFormat can be: "json" (no schema), "text" (no schema), or {name, schema} (has schema).
@@ -696,7 +714,12 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		final Map<String, AString> configToolMap;
 		final long toolCallTimeoutMs;
 		AMap<AString, ACell> taskResults;
+		/** The innermost writable tier's loads (the session tier, #142). */
 		AMap<AString, ACell> loads;
+		/** Effective loads of the OUTER tiers (agent config.loads) — read-only environment. */
+		AMap<AString, ACell> outerLoads = Maps.empty();
+		/** Whether a session is in scope; without one there is no writable tier. */
+		boolean sessionInScope = true;
 
 		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
 				Map<String, AString> configToolMap, AMap<AString, ACell> loads) {
@@ -722,14 +745,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 		void addLoad(AString path, AMap<AString, ACell> meta) {
 			loads = loads.assoc(path, meta);
-		}
-
-		void removeLoad(AString path) {
-			loads = loads.dissoc(path);
-		}
-
-		boolean hasLoad(AString path) {
-			return loads.get(path) != null;
 		}
 
 		AMap<AString, ACell> getLoads() {

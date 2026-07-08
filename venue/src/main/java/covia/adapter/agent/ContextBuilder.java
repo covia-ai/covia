@@ -356,10 +356,12 @@ public class ContextBuilder {
 	}
 
 	/**
-	 * Resolves context entries from config and state using ContextLoader with CellExplorer.
+	 * Resolves the operator-pinned context entries ({@code config.context})
+	 * using ContextLoader with CellExplorer. The old {@code state.context}
+	 * layer had no writer and is retired (#142) — dynamic context is the
+	 * loads scope chain ({@link ContextChain}).
 	 */
-	@SuppressWarnings("unchecked")
-	public ContextBuilder withContextEntries(ACell state) {
+	public ContextBuilder withContextEntries() {
 		ContextLoader loader = new ContextLoader(engine);
 
 		// Set up CellExplorer with a reasonable per-entry budget
@@ -369,15 +371,6 @@ public class ContextBuilder {
 		if (config != null) {
 			AVector<ACell> configContext = contextVector(config.get(K_CONTEXT), "config.context");
 			AVector<ACell> contextMsgs = loader.resolve(configContext, ctx);
-			for (long i = 0; i < contextMsgs.count(); i++) {
-				ACell msg = contextMsgs.get(i);
-				messages = messages.conj(msg);
-				trackMessage(msg);
-			}
-		}
-		AVector<ACell> stateContext = contextVector(RT.getIn(state, K_CONTEXT), "state.context");
-		if (stateContext != null) {
-			AVector<ACell> contextMsgs = loader.resolve(stateContext, ctx);
 			for (long i = 0; i < contextMsgs.count(); i++) {
 				ACell msg = contextMsgs.get(i);
 				messages = messages.conj(msg);

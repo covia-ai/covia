@@ -3777,4 +3777,109 @@ public class AgentAdapterTest {
 		}
 		return names;
 	}
+
+	// ========== Context scope chain (#142) ==========
+
+	/** Mint-time loads seed the session tier; passing loads against an
+	 *  existing session is an error, never a silent ignore. */
+	@Test
+	public void testChatMintLoadsSeedSessionTier() {
+		createChatAgent("mint-loads-agent");
+		AMap<AString, ACell> loads = Maps.of(
+			Strings.create("w/brief"), Maps.of(Strings.create("budget"), CVMLong.create(400)));
+
+		Job chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "mint-loads-agent",
+				Fields.MESSAGE, Strings.create("hello"),
+				Fields.LOADS, loads),
+			RequestContext.of(ALICE_DID));
+		ACell result = chat.awaitResult(5000);
+		AString sidHex = RT.ensureString(RT.getIn(result, Fields.SESSION_ID));
+		Blob sid = Blob.fromHex(sidHex.toString());
+
+		User u = engine.getVenueState().users().get(ALICE_DID);
+		ACell sessionLoads = RT.getIn(u.agent("mint-loads-agent").getSession(sid), Fields.LOADS);
+		assertEquals(loads, sessionLoads, "mint loads seed the session tier and survive the cycle");
+
+		// Same session again WITH loads → error (mint-only).
+		Job again = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "mint-loads-agent",
+				Fields.MESSAGE, Strings.create("more"),
+				Fields.SESSION_ID, sidHex,
+				Fields.LOADS, loads),
+			RequestContext.of(ALICE_DID));
+		try {
+			again.awaitResult(5000);
+			fail("loads against an existing session must be rejected");
+		} catch (Exception e) {
+			assertTrue(again.getErrorMessage().contains("session is created"),
+				again.getErrorMessage());
+		}
+	}
+
+	/** The motivating #142 bug: one session's loads must not leak into another. */
+	@Test
+	public void testSessionLoadsAreIsolated() {
+		createChatAgent("iso-agent");
+		AMap<AString, ACell> loads = Maps.of(
+			Strings.create("w/acme"), Maps.of(Strings.create("budget"), CVMLong.create(400)));
+
+		// Session A: minted with loads.
+		Job chatA = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "iso-agent",
+				Fields.MESSAGE, Strings.create("A"), Fields.LOADS, loads),
+			RequestContext.of(ALICE_DID));
+		Blob sidA = Blob.fromHex(RT.ensureString(
+			RT.getIn(chatA.awaitResult(5000), Fields.SESSION_ID)).toString());
+
+		// Session B: fresh, no loads.
+		Job chatB = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "iso-agent", Fields.MESSAGE, Strings.create("B")),
+			RequestContext.of(ALICE_DID));
+		Blob sidB = Blob.fromHex(RT.ensureString(
+			RT.getIn(chatB.awaitResult(5000), Fields.SESSION_ID)).toString());
+
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("iso-agent");
+		assertEquals(loads, RT.getIn(agent.getSession(sidA), Fields.LOADS),
+			"session A keeps its loads");
+		ACell loadsB = RT.getIn(agent.getSession(sidB), Fields.LOADS);
+		assertTrue(loadsB == null || ((AMap<?, ?>) loadsB).count() == 0,
+			"session B must not see session A's loads, got: " + loadsB);
+		// And nothing leaks to agent-level state.
+		assertNull(RT.getIn(agent.getState(), Fields.LOADS),
+			"agent-level state carries no loads");
+	}
+
+	/** Loads have no home in agent-level state (#142) — reject loudly, same
+	 *  rule as state.config (#144). */
+	@Test
+	public void testCreateAndUpdateRejectStateLoads() {
+		Job create = engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "no-state-loads",
+				AgentState.KEY_STATE, Maps.of(Fields.LOADS, Maps.of(
+					Strings.create("w/x"), Maps.of(Strings.create("budget"), CVMLong.create(100))))),
+			RequestContext.of(ALICE_DID));
+		try {
+			create.awaitResult(5000);
+			fail("agent:create must reject state.loads");
+		} catch (Exception e) {
+			assertTrue(create.getErrorMessage().contains("state.loads is not supported"),
+				create.getErrorMessage());
+		}
+
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "no-state-loads"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		Job update = engine.jobs().invokeOperation("v/ops/agent/update",
+			Maps.of(Fields.AGENT_ID, "no-state-loads",
+				AgentState.KEY_STATE, Maps.of(Fields.LOADS, Maps.empty())),
+			RequestContext.of(ALICE_DID));
+		try {
+			update.awaitResult(5000);
+			fail("agent:update must reject state.loads");
+		} catch (Exception e) {
+			assertTrue(update.getErrorMessage().contains("state.loads is not supported"),
+				update.getErrorMessage());
+		}
+	}
 }

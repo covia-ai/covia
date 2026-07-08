@@ -36,6 +36,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 	private static final AString K_STATE    = Strings.intern("state");
 	private static final AString K_TASKS    = Strings.intern("tasks");
 	private static final AString K_SESSIONS = Strings.intern("sessions");
+	/** Session-tier loads — the context scope chain's session level (#142). */
+	private static final AString K_LOADS = Strings.intern("loads");
 	private static final AString K_PENDING  = Strings.intern("pending");
 	private static final AString K_TIMELINE = Strings.intern("timeline");
 	private static final AString K_ERROR    = Strings.intern("error");
@@ -263,6 +265,16 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> ensureSession(Blob sid, AString caller) {
+		return ensureSession(sid, caller, null);
+	}
+
+	/**
+	 * Ensures a session exists, seeding its session-tier loads (#142) when it
+	 * is minted here. {@code initialLoads} applies only on creation — an
+	 * existing session's loads are never touched by this method.
+	 */
+	public AMap<AString, ACell> ensureSession(Blob sid, AString caller,
+			AMap<AString, ACell> initialLoads) {
 		update(r -> {
 			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
 				? (Index<Blob, ACell>) idx : Index.none();
@@ -279,6 +291,9 @@ public class AgentState extends ALatticeComponent<ACell> {
 				K_PENDING, Vectors.empty(),
 				K_FRAMES,  Vectors.of(rootFrame),
 				K_META,    meta);
+			if (initialLoads != null && initialLoads.count() > 0) {
+				session = session.assoc(K_LOADS, initialLoads);
+			}
 			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
 		});
 		return getSession(sid);
@@ -655,12 +670,12 @@ public class AgentState extends ALatticeComponent<ACell> {
 			AMap<AString, ACell> taskResults,
 			AMap<AString, ACell> timelineEntry) {
 		return mergeRunResult(newState, consumedSession,
-			presentedTasks, taskResults, timelineEntry, null, null, 0, null);
+			presentedTasks, taskResults, timelineEntry, null, null, 0, null, null);
 	}
 
 	/**
 	 * Back-compat 8-arg overload — no adapter-owned frames. Delegates to the
-	 * 9-arg form with {@code newFrames = null}.
+	 * full form with {@code newFrames = null}.
 	 */
 	public AMap<AString, ACell> mergeRunResult(
 			ACell newState,
@@ -673,7 +688,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 			long presentedSessionPendingCount) {
 		return mergeRunResult(newState, consumedSession, presentedTasks,
 			taskResults, timelineEntry, historySid, turnsToAppend,
-			presentedSessionPendingCount, null);
+			presentedSessionPendingCount, null, null);
 	}
 
 	/**
@@ -717,7 +732,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 			Blob historySid,
 			AVector<ACell> turnsToAppend,
 			long presentedSessionPendingCount,
-			AVector<ACell> newFrames) {
+			AVector<ACell> newFrames,
+			AMap<AString, ACell> sessionLoads) {
 		return update(r -> {
 			// Remove completed tasks, detect new ones
 			Index<Blob, ACell> currentTasks = extractTasks(r);
@@ -731,13 +747,14 @@ public class AgentState extends ALatticeComponent<ACell> {
 				.assoc(K_TIMELINE, timeline.conj(timelineEntry))
 				.dissoc(K_ERROR);
 
-			// Atomic frames[0].conversation append + session.pending drain for
-			// the picked session. Both touch the same session record so we
-			// fold them into one assoc.
+			// Atomic frames[0].conversation append + session.pending drain +
+			// session-tier loads write for the picked session. All touch the
+			// same session record so we fold them into one assoc.
 			boolean hasTurns = turnsToAppend != null && turnsToAppend.count() > 0;
 			boolean hasDrain = presentedSessionPendingCount > 0;
 			boolean hasNewFrames = newFrames != null;
-			if (historySid != null && (hasTurns || hasDrain || hasNewFrames)) {
+			boolean hasLoads = sessionLoads != null;
+			if (historySid != null && (hasTurns || hasDrain || hasNewFrames || hasLoads)) {
 				Index<Blob, ACell> sessions = (updated.get(K_SESSIONS) instanceof Index idx)
 					? (Index<Blob, ACell>) idx : Index.none();
 				ACell sv = sessions.get(historySid);
@@ -749,6 +766,13 @@ public class AgentState extends ALatticeComponent<ACell> {
 					// so concurrent-intake user turns end up at root.
 					if (hasNewFrames) {
 						session = session.assoc(K_FRAMES, newFrames);
+					}
+
+					// Session-tier loads (#142): whole-replace with the cycle's
+					// final working set (tombstones included). Single-writer per
+					// tier — only the run loop writes this slot.
+					if (hasLoads) {
+						session = session.assoc(K_LOADS, sessionLoads);
 					}
 
 					if (hasTurns) {

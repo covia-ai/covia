@@ -20,6 +20,7 @@
 					"type": "object",
 					"description": "Optional JSON Schema. When provided, the agent's response is constrained to match this schema (server-side enforcement via OpenAI structured outputs). Use to get typed structured output from any agent. Overrides the agent's default output schema if it has one."
 				},
+				"loads": { "type": "object", "description": "Optional context to pre-load for the NEW session (the session tier of the context scope chain, #142): map of lattice path to {budget} bytes. Only valid when this call creates the session — an error if the session already exists." },
 				"sessionId": {
 					"type": "string",
 					"description": "Optional session identifier (hex string). Requests sharing a sessionId are treated as part of the same conversation. If omitted, a new session is created and its id returned in the response."

@@ -369,14 +369,31 @@ Workspace references are resolved fresh on each run (they may change between run
 
 ---
 
-## 8. Unified Context Model (Configured vs Agent-Managed)
+## 8. Unified Context Model — the Context Scope Chain (#142)
 
-Two roles, one pipeline. This section defines the target model that unifies the configured layer (§4) with the agent-managed runtime layer (the `context_load` / `context_unload` tools) so they share one entry grammar, one resolver, one budget, and one inspection surface — differing only in ownership and lifetime.
+**Loads form a scope chain with lexical-scoping semantics.** Tiers, outer → inner:
+
+```
+agent (config.loads)  →  session (sessions.<sid>.loads)  →  frame (frame.loads, goaltree)
+```
+
+Every tier has the same two-part shape: **automatic loads declared when the tier's container is created** by that tier's author (the operator at create/update, the caller at session mint via a `loads` param on `agent:chat`/`agent:request`, the parent frame at `subgoal` via its `loads` argument), plus **dynamic entries written by the runtime while the tier is innermost** (`context_load`/`context_unload`).
+
+Rules (implemented in `ContextChain`, pure functions):
+
+- **Assembly = union down the chain, inner shadows outer** on a path collision.
+- **Masking**: `context_unload` of a path supplied by an outer tier writes a **nil tombstone** at the innermost tier — excluded from that tier inward; the outer entry and every other session/frame are untouched. A later `context_load` overwrites the tombstone (local un-mask). Goaltree's copy-on-push frame inheritance copies tombstones too, so masks propagate to child frames.
+- **Inner tiers read outer tiers but never mutate them** — one writer per tier, recursively (the ownership model of #144 applied to scope).
+- **Budget & safety valve respect the hierarchy**: the agent tier (operator-pinned) is never pruned; dynamic tiers prune innermost-first, LIFO by timestamp.
+- **No session in scope** → no writable tier: `context_load`/`unload` fail with a diagnosable tool result.
+- Agent-level `state.loads` and `state.context` are retired; `agent:create`/`update` reject a `loads` (or `config`) key inside `state`.
+
+The two roles below remain the ends of the chain; the session and frame tiers sit between them.
 
 ### 8.1 The two roles
 
-- **Configured context** — entries in `config.context`. Owned by whoever configured the agent; the agent's standing knowledge. **Pinned**: the agent cannot unload it; it changes only through configuration (`agent_create` / `agent_update`).
-- **Agent-managed context** — the working set the agent curates while pursuing a goal, via `context_load` / `context_unload`. Mutable and evictable. This role subsumes the earlier dynamic `state.context` layer and the runtime `loads` store into a single agent-owned set.
+- **Configured context** — entries in `config.context` (rendered entries) and `config.loads` (pinned loads). Owned by whoever configured the agent; the agent's standing knowledge. **Pinned**: the agent cannot remove it (only mask it per-conversation); it changes only through configuration (`agent_create` / `agent_update`).
+- **Agent-managed context** — the working set the agent curates while pursuing a goal via `context_load` / `context_unload`, scoped to the session (llmagent) or frame (goaltree) tier. Mutable and evictable per conversation.
 
 Both are *the same kind of thing*: a set of context entries, each resolved fresh every turn and injected as a labelled system message ahead of the conversation. The distinction is ownership, not mechanism.
 

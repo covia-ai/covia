@@ -9,7 +9,7 @@
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent name to update" },
 				"config": { "type": "object", "description": "Framework config fields to merge. Top-level keys override existing; unspecified keys are preserved." },
-				"state": { "description": "State fields to merge (runtime data only). A 'config' key inside state is rejected — all configuration lives in the 'config' parameter (#144)." }
+				"state": { "description": "State fields to merge (runtime data only). A 'config' key inside state is rejected (#144), as is a 'loads' key — loads live on the context scope chain: config.loads (operator pins) and per-session loads (#142)." }
 			},
 			"required": ["agentId"]
 		},
