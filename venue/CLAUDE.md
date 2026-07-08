@@ -351,6 +351,15 @@ never a silent downgrade to a persisted job. A private conversation is agent
 intake (`agent:chat` / `agent:request`) invoked private; the session record
 remains the (deletable, `agent:deleteSession`) conversation store.
 
+**Operator telemetry is unaffected**: private controls the durable lattice
+record, not operational visibility. The venue still logs job events (ID,
+operation, status transitions, timings) per its logging config, live
+job-update listeners (SSE, MCP notifications) still fire to authorized
+subscribers, and stats counters still count. Note that log lines are
+ID-and-status shaped as a rule, but failure messages can quote content
+fragments — operators wanting content-clean logs address that via logging
+policy (levels, appender redaction), not the job system.
+
 ### DLFS WebDAV
 
 ```json
