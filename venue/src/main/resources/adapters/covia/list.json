@@ -18,6 +18,9 @@
 				"offset": {
 					"type": "integer",
 					"description": "Number of map keys to skip (default 0). Only applies to map types."
+				},
+				"fields": {
+					"description": "Optional field projection (partial response): subpaths to read from each listed child, e.g. [\"status\", \"meta/updated\"] or one comma-separated string. Adds a 'values' map to the response with each field's read result per key. Max 16 fields; applies after limit/offset; requires a keyed node. Output shape only — no filtering or ordering."
 				}
 			}
 		},
@@ -28,7 +31,8 @@
 				"type": { "type": "string", "description": "Convex type name, e.g. Map, Vector, Index, Set, String, Long, Boolean, Double, Blob, Nil." },
 				"count": { "type": "integer", "description": "Total element count of the collection (maps, vectors, sets, indices)." },
 				"keys": { "type": "array", "description": "Keys of a keyed collection (map or Index), may be paginated. Positional collections (vector, set) return type+count only — read elements via covia_slice." },
-				"offset": { "type": "integer", "description": "Starting index of the returned key page (present for keyed listings)." }
+				"offset": { "type": "integer", "description": "Starting index of the returned key page (present for keyed listings)." },
+				"values": { "type": "object", "description": "Present when 'fields' was given: per listed key, each requested field's read result {exists, value, truncated?} — single-read semantics per field." }
 			}
 		}
 	}

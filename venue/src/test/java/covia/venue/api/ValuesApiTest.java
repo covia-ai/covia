@@ -312,4 +312,109 @@ public class ValuesApiTest {
 		assertEquals(400, get("read", "n/agentwork").statusCode(), "n/ is agent-run scoped");
 		assertEquals(400, get("read", "c/session").statusCode(), "c/ is session scoped");
 	}
+
+	// ===================== fields projection (#191) =====================
+
+	/** Seeds a small session-list-shaped collection under a unique path. */
+	private void seedSessions(String path) throws Exception {
+		write(path, Maps.of(
+			Strings.create("s1"), Maps.of(
+				Strings.create("status"), Strings.create("ACTIVE"),
+				Strings.create("meta"), Maps.of(Strings.create("updated"), CVMLong.create(111)),
+				Strings.create("history"), Strings.create("a long payload the view never wants")),
+			Strings.create("s2"), Maps.of(
+				Strings.create("status"), Strings.create("DONE"),
+				Strings.create("meta"), Maps.of(Strings.create("updated"), CVMLong.create(222)))));
+	}
+
+	@Test
+	public void testListProjection() throws Exception {
+		seedSessions("w/vProj");
+		HttpResponse<String> r = getQ("list", "w/vProj", "&fields=status,meta/updated");
+		assertEquals(200, r.statusCode(), r.body());
+		ACell m = JSON.parse(r.body());
+		// The list shape is unchanged — projection only adds `values`.
+		assertEquals(CVMBool.TRUE, RT.getIn(m, "exists"));
+		assertEquals(2, ((AVector<?>) RT.getIn(m, "keys")).count());
+		// Each field carries single-read semantics: {exists, value}.
+		assertEquals(CVMBool.TRUE, RT.getIn(m, "values", "s1", "status", "exists"));
+		assertEquals(Strings.create("ACTIVE"), RT.getIn(m, "values", "s1", "status", "value"));
+		assertEquals(CVMLong.create(111), RT.getIn(m, "values", "s1", "meta/updated", "value"));
+		assertEquals(Strings.create("DONE"), RT.getIn(m, "values", "s2", "status", "value"));
+		assertEquals(CVMLong.create(222), RT.getIn(m, "values", "s2", "meta/updated", "value"));
+		// The payload field was not requested and is not in the response.
+		assertNull(RT.getIn(m, "values", "s1", "history"));
+	}
+
+	@Test
+	public void testListProjectionAbsentFieldIsExistsFalse() throws Exception {
+		seedSessions("w/vProjAbsent");
+		HttpResponse<String> r = getQ("list", "w/vProjAbsent", "&fields=history");
+		assertEquals(200, r.statusCode(), r.body());
+		ACell m = JSON.parse(r.body());
+		assertEquals(CVMBool.TRUE, RT.getIn(m, "values", "s1", "history", "exists"));
+		assertEquals(CVMBool.FALSE, RT.getIn(m, "values", "s2", "history", "exists"),
+			"absent subpath must render exists:false");
+	}
+
+	@Test
+	public void testListProjectionIsPageThenProject() throws Exception {
+		seedSessions("w/vProjPage");
+		HttpResponse<String> r = getQ("list", "w/vProjPage", "&fields=status&limit=1&offset=1");
+		assertEquals(200, r.statusCode(), r.body());
+		ACell m = JSON.parse(r.body());
+		AVector<?> keys = (AVector<?>) RT.getIn(m, "keys");
+		assertEquals(1, keys.count(), "page is one key");
+		// values covers exactly the page — the paged-out key is not projected.
+		AString pageKey = (AString) keys.get(0);
+		assertNotNull(RT.getIn(m, "values", pageKey, "status", "value"));
+		assertEquals(1, ((convex.core.data.AMap<?, ?>) RT.getIn(m, "values")).count());
+	}
+
+	@Test
+	public void testListProjectionFieldInheritsMaxSize() throws Exception {
+		seedSessions("w/vProjTrunc");
+		// maxSize=2 truncates every projected field (single-read semantics per field).
+		HttpResponse<String> r = getQ("list", "w/vProjTrunc", "&fields=status&maxSize=2");
+		assertEquals(200, r.statusCode(), r.body());
+		ACell m = JSON.parse(r.body());
+		assertEquals(CVMBool.TRUE, RT.getIn(m, "values", "s1", "status", "exists"));
+		assertEquals(CVMBool.TRUE, RT.getIn(m, "values", "s1", "status", "truncated"));
+		assertNull(RT.getIn(m, "values", "s1", "status", "value"));
+	}
+
+	@Test
+	public void testListProjectionOnNonKeyedNodeIs400() throws Exception {
+		assertEquals(400, getQ("list", "w/vSeq", "&fields=status").statusCode(),
+			"projection requires a keyed node");
+		assertEquals(400, getQ("list", "w/vGreeting", "&fields=status").statusCode(),
+			"projection on a scalar is a caller error");
+	}
+
+	@Test
+	public void testListProjectionOverFieldCapIs400() throws Exception {
+		StringBuilder many = new StringBuilder("f0");
+		for (int i = 1; i < 17; i++) many.append(",f").append(i);
+		assertEquals(400, getQ("list", "w/vBox", "&fields=" + many).statusCode(),
+			"17 fields exceeds the cap and must be an explicit error");
+	}
+
+	@Test
+	public void testListProjectionAbsentPathIsExistsFalse() throws Exception {
+		HttpResponse<String> r = getQ("list", "w/vProjNoSuch", "&fields=status");
+		assertEquals(200, r.statusCode(), r.body());
+		assertEquals(CVMBool.FALSE, RT.getIn(JSON.parse(r.body()), "exists"));
+	}
+
+	@Test
+	public void testListProjectionOpFormVectorFields() throws Exception {
+		seedSessions("w/vProjOp");
+		// The covia:list op shares the accessor: fields as a vector of strings.
+		Job job = client.invokeAndWait(Strings.create("v/ops/covia/list"), Maps.of(
+			Strings.create("path"), Strings.create("w/vProjOp"),
+			Strings.create("fields"), Vectors.of(Strings.create("status"))));
+		assertEquals(Status.COMPLETE, job.getStatus(), "list op failed: " + job.getErrorMessage());
+		ACell out = job.getOutput();
+		assertEquals(Strings.create("ACTIVE"), RT.getIn(out, "values", "s1", "status", "value"));
+	}
 }

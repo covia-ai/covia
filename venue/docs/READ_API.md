@@ -7,7 +7,32 @@
 > `inspect` is the render route (`{result}`). `aggregate` ships as **count
 > (optionally grouped)**; `covia:aggregate` is also an op. Absence is
 > `200 {exists:false}`. `read` supports ETag/`304` conditional reads (value hash).
+> `list` supports **field projection** (#191, see below).
 > **Still TODO:** numeric reductions (`sum`/`min`/`max`, pending a consumer).
+
+## Field projection on `list` (#191)
+
+`values/list?path=<parent>&fields=status,meta/updated` adds a `values` map to the
+list response: for each key on the current page, the read result of each named
+subpath of that key's child. The standard partial-response / sparse-fieldset
+pattern (JSON:API `fields`, Google AIP-157 field masks, OData `$select`) — it
+fixes the collection-view N+1 (list + N reads) and the oversized-parent read in
+one round trip, against one snapshot of the parent value.
+
+**Pure composition, no new semantics.** Each projected field is defined as
+`values/read` at `<parent>/<key>/<subpath>`: same `{exists, value, truncated?}`
+shape, same per-value `maxSize` guard, stored-null is present, absent is
+`exists:false`. Projection applies **after** the `limit`/`offset` key page
+(page-then-project); work is bounded by `limit × |fields|`, with an explicit
+cap of 16 fields (exceeding → `400`, never silent). A non-keyed node with
+`fields` is a `400`. Filtering and ordering are deliberately excluded: clients
+filter the projected records locally; recency subsets come from key design +
+`slice` (e.g. timestamp-prefixed job IDs). Anything predicate-shaped belongs to
+a future indexed query surface, not this API.
+
+**One capability check suffices**: grants are positive-only and resource
+coverage is prefix-at-segment-boundary (`Capability.covers`), so `crud/read`
+on the parent implies every child subpath.
 
 ## Problem
 

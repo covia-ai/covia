@@ -153,6 +153,11 @@ public class CoviaAdapter extends AAdapter {
 	private static final AString K_VALUE_BYTES  = Strings.intern("valueBytes");
 	private static final AString K_TRUNCATED = Strings.intern("truncated");
 	private static final AString K_MAX_SIZE  = Strings.intern("maxSize");
+	private static final AString K_FIELDS    = Strings.intern("fields");
+
+	/** Cap on projected field count per list call (#191) — exceeding it is an
+	 *  explicit error, never a silent truncation. */
+	private static final int MAX_PROJECT_FIELDS = 16;
 
 	/** Default max memory size (bytes) for covia:read responses. ~1 MB. */
 	private static final long DEFAULT_MAX_SIZE = 1_000_000;
@@ -1340,7 +1345,99 @@ public class CoviaAdapter extends AAdapter {
 			value = (pathKeys.length > 0) ? readPath(cursor, pathKeys) : cursor.get();
 		}
 
-		return describeValue(value, input);
+		ACell desc = describeValue(value, input);
+		ACell fieldsCell = RT.getIn(input, K_FIELDS);
+		if (fieldsCell == null || value == null) return desc;
+		return projectFields((AMap<AString, ACell>) desc, value, fieldsCell, input);
+	}
+
+	/**
+	 * Field projection on a list (#191): the standard partial-response pattern.
+	 * Adds a {@code values} map to the list response — for each key on the
+	 * current page, the read result of each named subpath of that key's child.
+	 *
+	 * <p>Pure composition of existing reads: each projected field carries
+	 * single-read semantics verbatim ({@code {exists, value}}, per-value
+	 * {@code maxSize} → {@code truncated}, stored-null is present), resolved
+	 * against the one value snapshot the list already materialised. Projection
+	 * applies after the {@code limit}/{@code offset} key page. No filtering, no
+	 * ordering — output shape only.</p>
+	 *
+	 * <p>One capability check suffices: {@code crud/read} on the parent was
+	 * already required, grants are positive-only, and resource coverage is
+	 * prefix-based ({@link convex.auth.ucan.Capability#covers}) — so parent
+	 * coverage implies coverage of every child subpath.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	private static ACell projectFields(AMap<AString, ACell> desc, ACell value,
+			ACell fieldsCell, ACell input) {
+		if (!(value instanceof AMap)) {
+			throw new IllegalArgumentException(
+				"fields projection requires a keyed node (map/Index) at the path; found: "
+					+ Types.get(value).toAString());
+		}
+		AString[] fields = parseFieldsParam(fieldsCell);
+
+		AMap<ACell, ACell> m = (AMap<ACell, ACell>) value;
+		long offset = pageOffset(input);
+		long end = Math.min(offset + pageLimit(input), m.count());
+
+		AMap<AString, ACell> values = Maps.empty();
+		long i = 0;
+		for (var entry : m.entrySet()) {
+			if (i >= end) break;
+			if (i++ < offset) continue;
+			ACell child = entry.getValue();
+			AMap<AString, ACell> proj = Maps.empty();
+			for (AString field : fields) {
+				proj = proj.assoc(field, projectField(child, field, input));
+			}
+			values = values.assoc(groupKey(entry.getKey()), proj);
+		}
+		return desc.assoc(K_VALUES, values);
+	}
+
+	/** One projected field = a read at the child's subpath, single-read semantics. */
+	private static ACell projectField(ACell child, AString field, ACell input) {
+		ACell[] fieldKeys = parseStringPath(field.toString());
+		ACell fv = (fieldKeys.length == 0) ? child : deepGet(child, fieldKeys, 0);
+		if (fv == null) {
+			// A stored null is present; an absent subpath is exists:false —
+			// decided by key presence, exactly as covia:read decides it.
+			boolean present = (fieldKeys.length == 0) || leafPresentIn(child, fieldKeys);
+			return result(null, present);
+		}
+		return sizeGuardedResult(fv, input);
+	}
+
+	/**
+	 * Parses the {@code fields} parameter: a comma-separated string (the GET
+	 * form) or a vector of strings (the op form). Blank names are rejected and
+	 * the count is capped — loudly, never silently.
+	 */
+	private static AString[] parseFieldsParam(ACell fieldsCell) {
+		java.util.List<AString> out = new java.util.ArrayList<>();
+		if (fieldsCell instanceof AString s) {
+			for (String part : s.toString().split(",")) {
+				String trimmed = part.trim();
+				if (trimmed.isEmpty()) throw new IllegalArgumentException("fields contains a blank field name");
+				out.add(Strings.create(trimmed));
+			}
+		} else if (fieldsCell instanceof AVector<?> v) {
+			for (long i = 0; i < v.count(); i++) {
+				AString f = RT.ensureString((ACell) v.get(i));
+				if (f == null || f.isEmpty()) throw new IllegalArgumentException("fields entries must be non-empty strings");
+				out.add(f);
+			}
+		} else {
+			throw new IllegalArgumentException("fields must be a comma-separated string or an array of strings");
+		}
+		if (out.isEmpty()) throw new IllegalArgumentException("fields must name at least one subpath");
+		if (out.size() > MAX_PROJECT_FIELDS) {
+			throw new IllegalArgumentException("fields names " + out.size()
+				+ " subpaths; the maximum is " + MAX_PROJECT_FIELDS);
+		}
+		return out.toArray(new AString[0]);
 	}
 
 	// ========== covia:aggregate — count entries at a depth, optionally grouped ==========
@@ -1416,6 +1513,18 @@ public class CoviaAdapter extends AAdapter {
 		return Maps.of(K_EXISTS, CVMBool.TRUE, K_COUNT, CVMLong.create(count), K_GROUPS, groups);
 	}
 
+	/** The key-page size for list responses (default 1000, min 1). */
+	private static long pageLimit(ACell input) {
+		ACell limitCell = RT.getIn(input, Fields.LIMIT);
+		return (limitCell instanceof CVMLong l) ? Math.max(1, l.longValue()) : 1000;
+	}
+
+	/** The key-page start offset for list responses (default 0). */
+	private static long pageOffset(ACell input) {
+		ACell offsetCell = RT.getIn(input, Fields.OFFSET);
+		return (offsetCell instanceof CVMLong l) ? Math.max(0, l.longValue()) : 0;
+	}
+
 	/** A value we can descend into and count: map/Index, vector, or set. */
 	private static boolean isAggregable(ACell v) {
 		return (v instanceof AMap) || (v instanceof AVector) || (v instanceof ASet);
@@ -1475,13 +1584,9 @@ public class CoviaAdapter extends AAdapter {
 				allKeys = allKeys.conj(ALattice.toJSONKey(entry.getKey()));
 			}
 
-			// Pagination
-			long limit = 1000;
-			long offset = 0;
-			ACell limitCell = RT.getIn(input, Fields.LIMIT);
-			ACell offsetCell = RT.getIn(input, Fields.OFFSET);
-			if (limitCell instanceof CVMLong l) limit = Math.max(1, l.longValue());
-			if (offsetCell instanceof CVMLong l) offset = Math.max(0, l.longValue());
+			// Pagination — same window the fields projection uses (page-then-project).
+			long limit = pageLimit(input);
+			long offset = pageOffset(input);
 
 			AVector<ACell> page;
 			if (offset == 0 && limit >= total) {

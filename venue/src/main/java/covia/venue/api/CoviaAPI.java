@@ -1080,6 +1080,10 @@ public class CoviaAPI extends ACoviaAPI {
 			buildResult(ctx, 200, result);
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());
+		} catch (IllegalArgumentException e) {
+			// Bad request parameters (e.g. a fields projection on a non-keyed
+			// node, or over the field cap) — the caller's error, not the venue's.
+			buildError(ctx, 400, e.getMessage());
 		} catch (RuntimeException e) {
 			buildError(ctx, 500, "Read failed: " + e.getMessage());
 		}
@@ -1102,6 +1106,12 @@ public class CoviaAPI extends ACoviaAPI {
 		String groupBy = ctx.queryParam("groupBy");
 		if (groupBy != null && !groupBy.isBlank()) {
 			m = m.assoc(Strings.intern("groupBy"), Strings.create(groupBy));
+		}
+		// Field projection on list (#191): comma-separated subpaths, e.g.
+		// fields=status,meta/updated — parsed and capped by the accessor.
+		String fields = ctx.queryParam("fields");
+		if (fields != null && !fields.isBlank()) {
+			m = m.assoc(Strings.intern("fields"), Strings.create(fields));
 		}
 		return m;
 	}
