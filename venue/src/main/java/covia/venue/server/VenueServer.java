@@ -51,6 +51,7 @@ import io.javalin.config.RoutesConfig;
 import io.javalin.http.HttpResponseException;
 import io.javalin.http.staticfiles.Location;
 import io.javalin.openapi.plugin.OpenApiPlugin;
+import io.javalin.openapi.plugin.redoc.ReDocPlugin;
 import io.javalin.openapi.plugin.swagger.SwaggerPlugin;
 
 /**
@@ -594,6 +595,14 @@ public class VenueServer {
         });
 	}
 
+	/**
+	 * OpenAPI document at {@code /openapi}, rendered at {@code /swagger} and
+	 * {@code /redoc}. The document covers the REST surface ({@code /api/v1/*}
+	 * plus the DID documents); the venue's other protocol endpoints — A2A
+	 * ({@code /a2a*}, agent cards), MCP ({@code /mcp}), and the auth/login
+	 * pages — are deliberately excluded: each has its own discovery mechanism
+	 * (agent card, MCP initialize, login page).
+	 */
 	protected void addOpenApiPlugins(JavalinConfig config) {
 		String docsPath = "/openapi";
 
@@ -602,14 +611,21 @@ public class VenueServer {
 			.withDocumentationPath(docsPath)
 			.withDefinitionConfiguration((version, definition) -> {
 				definition.info(info -> {
-					info.title("Covia API");
-					info.version("0.1.0");
+					// The contract major is the /api/v1 path prefix; info.version
+					// tracks the venue build, which is what fixes the set of
+					// endpoints and parameters this document describes.
+					info.title("Covia API v1");
+					info.version(Utils.getVersion());
 				});
 			});
 		}));
 
 		config.registerPlugin(new SwaggerPlugin(swaggerConfiguration->{
 			swaggerConfiguration.documentationPath = docsPath;
+		}));
+
+		config.registerPlugin(new ReDocPlugin(reDocConfiguration->{
+			reDocConfiguration.documentationPath = docsPath;
 		}));
 	}
 

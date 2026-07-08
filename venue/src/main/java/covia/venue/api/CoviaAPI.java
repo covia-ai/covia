@@ -515,6 +515,10 @@ public class CoviaAPI extends ACoviaAPI {
 					+ "meta-operations: e.g. grid:job-result itself returns a local job that "
 					+ "completes with the remote job's result (it supports an op-level timeout "
 					+ "input for bounded waits).",
+			queryParams = {
+					@OpenApiParam(name = "wait", example = "true",
+							description = "Synchronous invoke: 'true' waits up to the 120s cap; a non-negative integer waits up to that many milliseconds (clamped). May also be passed as a body field; any other value is a 400.")
+			},
 			requestBody = @OpenApiRequestBody(
 					description = "Invoke request",
 					content= @OpenApiContent(
@@ -883,10 +887,27 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 	}
 	
-	@OpenApi(path = ROUTE + "jobs", 
-			methods = HttpMethod.GET, 
+	/**
+	 * Documentation holder for the SSE route registered via
+	 * {@code routes.sse(ROUTE + "jobs/<id>/sse", ...)} in {@code addRoutes} —
+	 * the annotation processor only scans {@code @OpenApi} annotations, and the
+	 * SSE handler is not an annotatable method. Never invoked.
+	 */
+	@OpenApi(path = ROUTE + "jobs/{id}/sse",
+			methods = HttpMethod.GET,
+			tags = { "Covia" },
+			summary = "Server-sent events stream of job status updates",
+			description = "Streams the job's status record as SSE frames until the job reaches a "
+					+ "terminal state. Poll-free alternative to GET /jobs/{id} for watching a running job.",
+			pathParams = { @OpenApiParam(name = "id", description = "Job ID (hex)") },
+			operationId = "jobSse")
+	@SuppressWarnings("unused")
+	private static void docJobSse() {}
+
+	@OpenApi(path = ROUTE + "jobs",
+			methods = HttpMethod.GET,
 			tags = { "Covia"},
-			summary = "Get Covia jobs.")	
+			summary = "Get Covia jobs.")
 	protected void getJobs(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		try {
@@ -985,27 +1006,77 @@ public class CoviaAPI extends ACoviaAPI {
 	// ========== Lattice value reads (#177) ==========
 
 	@OpenApi(path = ROUTE + "values/read", methods = HttpMethod.GET, tags = { "Values" },
-			summary = "Read the literal value at a lattice path (job-free)", operationId = "valueRead")
+			summary = "Read the literal value at a lattice path (job-free)", operationId = "valueRead",
+			queryParams = {
+					@OpenApiParam(name = "path", required = true, example = "w/notes",
+							description = "Lattice path to read, e.g. 'w/notes', 'g/my-agent/status', 'v/info/adapters'."),
+					@OpenApiParam(name = "maxSize", type = Long.class, example = "1000000",
+							description = "Byte guard (default 1000000): a larger value is withheld and the response carries truncated:true with its size.")
+			})
 	protected void getValueRead(Context ctx) { handleValueRoute(ctx, "read"); }
 
 	@OpenApi(path = ROUTE + "values/list", methods = HttpMethod.GET, tags = { "Values" },
-			summary = "List the keys / structure of a lattice node (job-free)", operationId = "valueList")
+			summary = "List the keys / structure of a lattice node (job-free)", operationId = "valueList",
+			queryParams = {
+					@OpenApiParam(name = "path", required = true, example = "g",
+							description = "Lattice path of the node to list."),
+					@OpenApiParam(name = "limit", type = Long.class, example = "100",
+							description = "Maximum keys to return (default 1000). Keyed nodes only."),
+					@OpenApiParam(name = "offset", type = Long.class, example = "0",
+							description = "Keys to skip (default 0). Keyed nodes only."),
+					@OpenApiParam(name = "fields", example = "status,meta/updated",
+							description = "Field projection (#191): comma-separated subpaths to read from each listed child. "
+									+ "Adds a 'values' map — per key on the page, each field's read result {exists, value, truncated?}. "
+									+ "Max 16 fields; applies after limit/offset; requires a keyed node (else 400). Output shape only — no filtering or ordering."),
+					@OpenApiParam(name = "maxSize", type = Long.class,
+							description = "Per-projected-field byte guard when 'fields' is given (default 1000000).")
+			})
 	protected void getValueList(Context ctx) { handleValueRoute(ctx, "list"); }
 
 	@OpenApi(path = ROUTE + "values/slice", methods = HttpMethod.GET, tags = { "Values" },
-			summary = "Read a paginated slice of a lattice sequence (job-free)", operationId = "valueSlice")
+			summary = "Read a paginated slice of a lattice sequence (job-free)", operationId = "valueSlice",
+			queryParams = {
+					@OpenApiParam(name = "path", required = true, example = "w/events",
+							description = "Lattice path of the vector/sequence to slice."),
+					@OpenApiParam(name = "offset", type = Long.class, example = "0",
+							description = "Starting element index (default 0)."),
+					@OpenApiParam(name = "limit", type = Long.class, example = "100",
+							description = "Maximum elements to return (default 100).")
+			})
 	protected void getValueSlice(Context ctx) { handleValueRoute(ctx, "slice"); }
 
 	@OpenApi(path = ROUTE + "values/inspect", methods = HttpMethod.GET, tags = { "Values" },
-			summary = "Budget-controlled JSON5 render of a lattice value (job-free)", operationId = "valueInspect")
+			summary = "Budget-controlled JSON5 render of a lattice value (job-free)", operationId = "valueInspect",
+			queryParams = {
+					@OpenApiParam(name = "path", required = true, example = "g/my-agent",
+							description = "Lattice path to render."),
+					@OpenApiParam(name = "budget", type = Long.class, example = "500",
+							description = "Render budget in bytes (default 500): shape and sample values within the budget."),
+					@OpenApiParam(name = "compact", type = Boolean.class,
+							description = "Compact rendering (no whitespace).")
+			})
 	protected void getValueInspect(Context ctx) { handleValueRoute(ctx, "inspect"); }
 
 	@OpenApi(path = ROUTE + "values/aggregate", methods = HttpMethod.GET, tags = { "Values" },
-			summary = "Count entries at a depth, optionally grouped by a field (job-free)", operationId = "valueAggregate")
+			summary = "Count entries at a depth, optionally grouped by a field (job-free)", operationId = "valueAggregate",
+			queryParams = {
+					@OpenApiParam(name = "path", required = true, example = "j",
+							description = "Lattice path of the collection to aggregate over."),
+					@OpenApiParam(name = "depth", type = Long.class, example = "1",
+							description = "Get-steps below the path to count at (default 1)."),
+					@OpenApiParam(name = "groupBy", example = "status",
+							description = "Optional field (relative subpath) to partition the count by; adds a 'groups' breakdown.")
+			})
 	protected void getValueAggregate(Context ctx) { handleValueRoute(ctx, "aggregate"); }
 
 	@OpenApi(path = ROUTE + "values/count", methods = HttpMethod.GET, tags = { "Values" },
-			summary = "Fast-path count of entries at a depth (job-free)", operationId = "valueCount")
+			summary = "Fast-path count of entries at a depth (job-free)", operationId = "valueCount",
+			queryParams = {
+					@OpenApiParam(name = "path", required = true, example = "j",
+							description = "Lattice path of the collection to count."),
+					@OpenApiParam(name = "depth", type = Long.class, example = "1",
+							description = "Get-steps below the path to count at (default 1).")
+			})
 	protected void getValueCount(Context ctx) { handleValueRoute(ctx, "count"); }
 
 	/**
@@ -1142,8 +1213,14 @@ public class CoviaAPI extends ACoviaAPI {
 	@OpenApi(path = ROUTE + "agents",
 			methods = HttpMethod.GET,
 			tags = { "Covia" },
-			summary = "List the authenticated caller's agents (job-free, #180). ?status=true for the status-annotated form; ?includeTerminated=true to include terminated agents.",
-			operationId = "getAgents")
+			summary = "List the authenticated caller's agents (job-free, #180)",
+			operationId = "getAgents",
+			queryParams = {
+					@OpenApiParam(name = "status", type = Boolean.class,
+							description = "true → the status-annotated form ({agentId, status, tasks, error?}) instead of bare agent ids."),
+					@OpenApiParam(name = "includeTerminated", type = Boolean.class,
+							description = "true → include terminated agents (hidden by default).")
+			})
 	protected void getAgents(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 		if (rctx.getCallerDID() == null) {

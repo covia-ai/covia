@@ -83,7 +83,10 @@ public class VenueServerTest {
 	}
 
 	/**
-	 * Test for presence of Covia API docs
+	 * Test for presence of Covia API docs: the OpenAPI document and both UIs.
+	 * Pins that info.version tracks the venue build (not a hand-maintained
+	 * constant that goes stale) and that the values routes document their
+	 * required {@code path} parameter (they were once parameterless stubs).
 	 */
 	@Test public void testAPIDoc() throws URISyntaxException, InterruptedException, ExecutionException, TimeoutException {
 		HttpClient client = HttpClient.newBuilder().build();
@@ -92,10 +95,28 @@ public class VenueServerTest {
 			.GET()
 			.timeout(Duration.ofSeconds(10))
 			.build();
-		
+
 		CompletableFuture<HttpResponse<String>> future = client.sendAsync(req, HttpResponse.BodyHandlers.ofString());
 		HttpResponse<String> resp = future.get(10000, TimeUnit.MILLISECONDS);
 		assertEquals(200, resp.statusCode(), ()->"Got error response: "+resp);
+
+		ACell spec = convex.core.util.JSON.parse(resp.body());
+		assertEquals(Strings.create(convex.core.util.Utils.getVersion()),
+			RT.getIn(spec, "info", "version"), "info.version must track the venue build");
+		// values/list documents its parameters, path required (regression: stub annotations).
+		ACell params = RT.getIn(spec, "paths", "/api/v1/values/list", "get", "parameters");
+		assertTrue(params instanceof convex.core.data.AVector<?> v && v.count() >= 4,
+			"values/list should document its query params, got: " + params);
+
+		// Both documentation UIs are served.
+		for (String page : new String[] {"/swagger", "/redoc"}) {
+			HttpRequest pageReq = HttpRequest.newBuilder()
+				.uri(new URI("http://localhost:"+PORT+page))
+				.GET().timeout(Duration.ofSeconds(10)).build();
+			HttpResponse<String> pageResp = client.sendAsync(pageReq,
+				HttpResponse.BodyHandlers.ofString()).get(10000, TimeUnit.MILLISECONDS);
+			assertEquals(200, pageResp.statusCode(), ()->page+" should be served: "+pageResp);
+		}
 	}
 
 		/**
