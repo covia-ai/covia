@@ -1,7 +1,9 @@
 package covia.venue.api;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.a2aproject.sdk.jsonrpc.common.json.JsonUtil;
@@ -10,6 +12,7 @@ import org.a2aproject.sdk.spec.A2AErrorCodes;
 import org.a2aproject.sdk.spec.A2AMethods;
 import org.a2aproject.sdk.spec.AgentCard;
 import org.a2aproject.sdk.spec.AgentProvider;
+import org.a2aproject.sdk.spec.AgentSkill;
 import org.a2aproject.sdk.spec.CancelTaskParams;
 import org.a2aproject.sdk.spec.Message;
 import org.a2aproject.sdk.spec.MessageSendParams;
@@ -29,6 +32,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
 import covia.api.Fields;
+import covia.adapter.AgentAdapter;
 import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Venue;
@@ -48,9 +52,10 @@ import io.javalin.http.sse.SseHandler;
  *
  * <p>Implements the A2A Protocol v1.0 JSON-RPC binding: Agent Card discovery
  * at {@code /.well-known/agent-card.json} and JSON-RPC 2.0 at {@code /a2a}.
- * Supports {@code SendMessage}, {@code GetTask}, {@code CancelTask} in P0.
- * Streaming ({@code SendStreamingMessage}, {@code SubscribeToTask}) and
- * push-notification-config methods are intentionally unimplemented for now —
+ * Supports {@code SendMessage}, {@code GetTask}, {@code CancelTask}, streaming
+ * ({@code SendStreamingMessage}, {@code SubscribeToTask}), and
+ * {@code GetExtendedAgentCard} (the authenticated agent catalogue, #187).
+ * Push-notification-config methods are intentionally unimplemented for now —
  * the handler returns {@code UnsupportedOperationError} when called.</p>
  *
  * <p>The venue is modelled as a single agent. Fresh {@code SendMessage}
@@ -167,11 +172,16 @@ public class A2A extends ACoviaAPI {
 		// (404 anon, 403 authed).
 		if (!isOwner(rctx, ref) && !isPublic(agent)) { denyPerAgentAccess(ctx, rctx); return; }
 
+		writeJson(ctx, 200, perAgentCard(ctx, ref, agent));
+	}
+
+	/** Render the per-agent Agent Card from the agent's config (#183). */
+	private AgentCard perAgentCard(Context ctx, A2ACodec.AgentRef ref, AgentState agent) {
 		AMap<AString, ACell> config = agent.getConfig();
 		String name = stringOr(config, "name", ref.agentId());
 		String description = stringOr(config, "description", "Covia agent " + ref.agentId());
 		String endpoint = A2ACodec.agentEndpointUrl(getExternalBaseUrl(ctx, ""), ref.ownerDid(), ref.agentId());
-		writeJson(ctx, 200, A2ACodec.agentCard(name, description, agentVersion, agentProvider, endpoint));
+		return A2ACodec.agentCard(name, description, agentVersion, agentProvider, endpoint);
 	}
 
 	// ==================== Per-agent JSON-RPC (COG-14) ====================
@@ -314,6 +324,10 @@ public class A2A extends ACoviaAPI {
 					CancelTaskParams params = parseParams(paramsRaw, CancelTaskParams.class);
 					doCancelTask(ctx, id, params);
 				}
+				case A2AMethods.GET_EXTENDED_AGENT_CARD_METHOD ->
+					// The access gate already ran; the agent's extended card is
+					// its card — per-agent skills from offered ops are a later pass.
+					writeResult(ctx, id, perAgentCard(ctx, ref, agent));
 				default ->
 					writeError(ctx, id, A2AErrorCodes.METHOD_NOT_FOUND, "Method not found: " + method);
 			}
@@ -403,12 +417,13 @@ public class A2A extends ACoviaAPI {
 							parseParams(paramsRaw, org.a2aproject.sdk.spec.TaskIdParams.class);
 					doSubscribeToTask(ctx, id, params);
 				}
+				case A2AMethods.GET_EXTENDED_AGENT_CARD_METHOD ->
+					doGetExtendedCard(ctx, id);
 				case A2AMethods.SET_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
 				     A2AMethods.GET_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
 				     A2AMethods.LIST_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
 				     A2AMethods.DELETE_TASK_PUSH_NOTIFICATION_CONFIG_METHOD,
-				     A2AMethods.LIST_TASK_METHOD,
-				     A2AMethods.GET_EXTENDED_AGENT_CARD_METHOD ->
+				     A2AMethods.LIST_TASK_METHOD ->
 					writeError(ctx, id, A2AErrorCodes.UNSUPPORTED_OPERATION, "Not yet implemented: " + method);
 				default ->
 					writeError(ctx, id, A2AErrorCodes.METHOD_NOT_FOUND, "Method not found: " + method);
@@ -566,6 +581,49 @@ public class A2A extends ACoviaAPI {
 
 		AMap<AString, ACell> after = engine().jobs().getJobData(taskId, rctx);
 		writeResult(ctx, id, A2ACodec.toTask(after != null ? after : before));
+	}
+
+	/**
+	 * Front-door {@code GetExtendedAgentCard} (#187): the authenticated agent
+	 * catalogue. An authenticated caller gets the venue card extended with one
+	 * skill per agent they are entitled to see — their own agents, per COG-14 §3.
+	 * An anonymous caller sees only the operator front door: the plain card,
+	 * no catalogue (and no error — nothing to disclose, nothing to probe).
+	 */
+	private void doGetExtendedCard(Context ctx, Object id) {
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		String endpoint = getExternalBaseUrl(ctx, "") + "/a2a";
+		List<AgentSkill> skills = isAnonymousCaller(rctx) ? List.of() : catalogueSkills(rctx);
+		writeResult(ctx, id, A2ACodec.agentCard(agentName, agentDescription, agentVersion,
+				agentProvider, endpoint, skills));
+	}
+
+	/**
+	 * One catalogue skill per agent the caller owns, via the job-free agent
+	 * list read (#180) — discovery must never mint jobs. The skill id is the
+	 * agent's grid address, which is also its A2A endpoint path under
+	 * {@code /a2a/}.
+	 */
+	private List<AgentSkill> catalogueSkills(RequestContext rctx) {
+		AgentAdapter agents = (AgentAdapter) engine().getAdapter("agent");
+		AVector<ACell> ids = RT.ensureVector(
+				RT.getIn(agents.listAgents(rctx, false, false), Strings.intern("agents")));
+		if (ids == null || ids.isEmpty()) return List.of();
+
+		String ownerDid = rctx.getCallerDID().toString();
+		User user = engine().getVenueState().users().get(rctx.getCallerDID());
+		List<AgentSkill> skills = new ArrayList<>((int) ids.count());
+		for (long i = 0; i < ids.count(); i++) {
+			AString agentId = RT.ensureString(ids.get(i));
+			if (agentId == null) continue;
+			AgentState agent = (user == null) ? null : user.agent(agentId.toString());
+			AMap<AString, ACell> config = (agent == null) ? null : agent.getConfig();
+			String name = stringOr(config, "name", agentId.toString());
+			String description = stringOr(config, "description", "Covia agent " + agentId);
+			String address = new A2ACodec.AgentRef(ownerDid, agentId.toString()).gridAddress();
+			skills.add(A2ACodec.agentSkill(address, name, description));
+		}
+		return skills;
 	}
 
 	// ==================== Streaming methods ====================

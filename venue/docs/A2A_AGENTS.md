@@ -132,9 +132,12 @@ Three surfaces, each scoped by who is asking:
   venue with none serves the "A2A not configured" response rather than a bare
   404 (already the behaviour when no `a2a` block is configured).
 - **Authenticated catalogue** — the caller's own agents by default. This is A2A's
-  authenticated / extended-card discovery path; the venue currently answers
-  `GetAuthenticatedExtendedCard` with `UnsupportedOperationError`, so this is net-new.
-  It leans on a job-free agent list/info read surface (see the agent-list read gap).
+  authenticated / extended-card discovery path (`GetExtendedAgentCard` in the 1.0
+  binding), implemented in #187: the front-door extended card carries one skill
+  per agent the caller owns, with the skill id = the agent's grid address (which
+  is also its endpoint path under `/a2a/`). An anonymous caller gets the plain
+  front-door card, no catalogue. Backed by the job-free agent list read (#180)
+  — discovery mints no jobs.
 - **Direct addressing** — a caller that already holds an agent's base URL fetches
   its card from the well-known path (`<base>/.well-known/agent-card.json`) and
   `POST`s to the base to interact — subject to the same authorisation.

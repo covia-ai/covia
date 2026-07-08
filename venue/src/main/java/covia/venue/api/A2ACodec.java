@@ -142,7 +142,18 @@ public class A2ACodec {
 	 */
 	public static AgentCard agentCard(String name, String description, String version,
 			AgentProvider provider, String endpointUrl) {
-		AgentCapabilities capabilities = new AgentCapabilities(true, false, false, null);
+		return agentCard(name, description, version, provider, endpointUrl, List.of());
+	}
+
+	/**
+	 * Build an A2A Agent Card carrying skills. Used by the extended-card catalogue
+	 * (#187), where the venue front-door card lists the caller's agents as skills.
+	 */
+	public static AgentCard agentCard(String name, String description, String version,
+			AgentProvider provider, String endpointUrl, List<AgentSkill> skills) {
+		// extendedAgentCard = true: GetExtendedAgentCard is served on both the
+		// front door (the authenticated catalogue, #187) and per-agent endpoints.
+		AgentCapabilities capabilities = new AgentCapabilities(true, false, true, null);
 		AgentInterface iface = new AgentInterface("JSONRPC", endpointUrl, "", "1.0");
 		return AgentCard.builder()
 				.name(name)
@@ -153,8 +164,20 @@ public class A2ACodec {
 				.supportedInterfaces(List.of(iface))
 				.defaultInputModes(List.of("text/plain", "application/json"))
 				.defaultOutputModes(List.of("text/plain", "application/json"))
-				.skills(List.<AgentSkill>of())  // populated from the agent's offered ops in a later pass
+				.skills(skills)
 				.build();
+	}
+
+	/**
+	 * A catalogue entry for the extended card (#187): one skill per agent the
+	 * caller may see. The skill id is the agent's canonical grid address
+	 * ({@code <ownerDID>/g/<agentId>}), which is also its A2A endpoint path —
+	 * a client reaches the agent at {@code <origin>/a2a/<skill.id>} and fetches
+	 * its card at the well-known path below that base.
+	 */
+	public static AgentSkill agentSkill(String gridAddress, String name, String description) {
+		return new AgentSkill(gridAddress, name, description,
+				List.of("covia-agent"), List.of(), List.of(), List.of(), List.of());
 	}
 
 	// ==================== TaskState mapping ====================
