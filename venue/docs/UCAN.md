@@ -10,7 +10,7 @@ Design for User Controlled Authorisation Networks (UCAN) in Covia, using lattice
 
 1. **Consistent with UCAN spec.** Same conceptual model: issuer/audience, attenuated capabilities, delegation chains, cryptographic signatures. Where Covia diverges from the UCAN spec, it is because the encoding uses CAD3/lattice rather than IPLD/DAG-CBOR — not because the authorisation model differs.
 
-2. **Lattice-native.** UCANs are first-class lattice values, stored as content-addressable data in `/a/`. No JWT, no base64, no separate token format. The CAD3 value hash of a UCAN is its canonical identifier. UCANs merge, replicate, and verify like any other lattice data.
+2. **Lattice-native.** UCANs are first-class lattice values, stored as content-addressable data in `/a/`. The CAD3 form is canonical — its value hash is the UCAN's identifier — and UCANs merge, replicate, and verify like any other lattice data. For interoperable *transport* (HTTP `ucans` arrays, bearer headers, cross-venue relay) the standard JWT encoding is used (§4.3); the two encodings carry the same token.
 
 3. **Self-contained.** A UCAN plus its proof chain is sufficient for verification. No callbacks, no token servers, no online authority. This is critical for federated execution where the verifying venue may have no relationship with the issuer.
 
@@ -100,12 +100,16 @@ Resources are **DID URLs** — the DID identifies the authority (user/owner), th
 | `did:key:zAlice.../o/` | All operations |
 | `did:key:zAlice.../g/helper` | Specific agent |
 | `did:key:zAlice.../s/api-key` | Specific secret |
+| `did:key:zAlice.../dlfs/docs/` | All files on Alice's `docs` DLFS drive |
+| `did:key:zAlice.../dlfs/docs/reports/q1.md` | Specific file on that drive |
 
 **Attenuation rule:** A resource URI is a valid attenuation of a parent if it is equal to or a sub-path of the parent. `did:.../w/projects/foo` attenuates `did:.../w/`.
 
+**DLFS is a DID-scoped namespace.** A DLFS drive is addressed as `<ownerDID>/dlfs/<drive>[/<path>]` — a plain DID-URL path where `/dlfs/` is a namespace segment alongside `/w/` and `/j/` (the CAD038 DID-scoped path profile; `RootAuthorityPolicy.ownerDID` derives the owner with no special cases). A caller reaches another user's drive by naming it as a DID-URL `drive` reference (`did:key:zAlice.../docs`); the venue authorises the op against this resource for the ability it needs (`crud/read` for reads, `crud/write` for writes, `crud/delete` for deletes) via the presented proofs (the same `proofsCover` gate as `/w/`). Reads, writes and deletes are all permitted when the proof authorises them; a mutation lands on the owner's drive under the owner's key (custodial), with the caller's identity recorded on the job. An agent's *own* drive is the bare `dlfs/<drive>/<path>` shorthand, canonicalised to `<callerDID>/dlfs/…` like any bare lattice path — so own-drive caps and cross-user grants never alias. The legacy scheme form `dlfs://<drive>/<path>` remains accepted as an own-drive shorthand (normalised to the path form at enforcement); cross-user grants use the path form only. A caller-supplied `asset` reference in a cross-user write resolves under the *caller's* authority, never the drive owner's.
+
 This aligns with `DIDURL` from convex-core — the DID is the authority, the path is the namespace scope.
 
-**Canonical vs. shorthand.** A `with` is always absolute (owner-named) as above. For convenience, Covia accepts a **bare** lattice path (`w/projects/foo`) as shorthand for the *caller's own* resource — this is how an agent's `caps` are written. Enforcement canonicalises it to the absolute form (`<callerDID>/w/projects/foo`) before matching, so a bare (own-namespace) grant and a DID-URL grant compare identically. `file://…` and `dlfs://…` resources are already absolute (scheme-qualified) and are left unchanged.
+**Canonical vs. shorthand.** A `with` is always absolute (owner-named) as above. For convenience, Covia accepts a **bare** lattice path (`w/projects/foo`) as shorthand for the *caller's own* resource — this is how an agent's `caps` are written. Enforcement canonicalises it to the absolute form (`<callerDID>/w/projects/foo`) before matching, so a bare (own-namespace) grant and a DID-URL grant compare identically. The same applies to bare `dlfs/<drive>/…` paths. Only `file://…` resources are scheme-qualified (host-filesystem, not DID-scoped) and are left unchanged.
 
 ### 3.2 Abilities (`can`)
 
@@ -256,10 +260,11 @@ the job across venue boundaries:
 ```json
 grid:invoke { operation: "...", input: {...}, ucans: [...] }
 ```
-This is the *transport*; the *forwarding* (venue A relaying the caller's
-authority into this field on a cross-venue hop) is Phase C3 — today the grid
-wrapper connects anonymously and forwards nothing (§5.6 "Forwarding authority
-across venues", covia#102).
+This is the *transport*; on a cross-venue hop the grid wrapper relays the
+caller's presented tokens into this field, filtered to the provably
+admissible — see §5.6 "Forwarding authority across venues" for the full
+forwarding model (identity tokens, `venue/relay` delegations, the relay
+filter).
 
 **Agent tool calls**: The agent framework (level 2) attaches the user's
 proofs automatically when invoking tools on behalf of the user. Agents
@@ -410,9 +415,9 @@ Venue:
 | `file:read` / `file:list` / `file:stat` / `file:roots` | `{ with: "file://<root>/<path>", can: "crud/read" }` |
 | `file:write` / `file:append` / `file:mkdir` | `{ with: "file://<root>/<path>", can: "crud/write" }` |
 | `file:delete` | `{ with: "file://<root>/<path>", can: "crud/delete" }` |
-| `dlfs:read` / `dlfs:list` / `dlfs:stat` / `dlfs:listDrives` | `{ with: "dlfs://<drive>/<path>", can: "crud/read" }` |
-| `dlfs:write` / `dlfs:append` / `dlfs:mkdir` / `dlfs:createDrive` | `{ with: "dlfs://<drive>/<path>", can: "crud/write" }` |
-| `dlfs:delete` / `dlfs:deleteDrive` | `{ with: "dlfs://<drive>/<path>", can: "crud/delete" }` |
+| `dlfs:read` / `dlfs:list` / `dlfs:stat` / `dlfs:listDrives` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |
+| `dlfs:write` / `dlfs:append` / `dlfs:mkdir` / `dlfs:createDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }` |
+| `dlfs:delete` / `dlfs:deleteDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/delete" }` |
 | `secret:extract` | `{ with: "/s/<name>", can: "secret/decrypt" }` |
 | `agent:create` | `{ with: "/g/<id>", can: "agent/create" }` |
 | `agent:request` (cross-user) | `{ with: "/g/<id>", can: "agent/request" }` |
@@ -422,9 +427,11 @@ Venue:
 | Grid operation invoke | `{ with: "/o/<op>", can: "invoke" }` |
 | Sub-delegation | `{ with: "<path>", can: "ucan/delegate" }` |
 
-File and DLFS resources use URI form so they parse as standard hierarchical
-identifiers (per UCAN convention for `with`). The configured root or drive
-name is the URI authority; the in-root path is the URI path. Grants nest
+File resources use URI form so they parse as standard hierarchical
+identifiers (per UCAN convention for `with`): the configured root is the URI
+authority, the in-root path is the URI path. DLFS resources are DID-scoped
+paths — `dlfs/<drive>/<path>` is a namespace segment under the owner, like
+`w/` (the bare form canonicalises to `<callerDID>/dlfs/…`). Grants nest
 naturally:
 
 | Grant | Covers |
@@ -432,8 +439,8 @@ naturally:
 | `file://` | every configured file root |
 | `file://scratch/` | every path inside the `scratch` root |
 | `file://scratch/agent-output/` | one subtree of one root |
-| `dlfs://` | every drive |
-| `dlfs://health-vault/medications/` | one subtree of one drive |
+| `dlfs/` | every drive of the owner |
+| `dlfs/health-vault/medications/` | one subtree of one drive |
 
 Granting `crud` (without a verb suffix) covers read+write+delete uniformly;
 trailing-slash on the resource is the conventional way to cover a subtree.
@@ -721,13 +728,48 @@ Two things travel, and they are treated differently:
 **Sequencing (safety-critical).** Identity-forwarding must not ship before B
 can verify what is forwarded — otherwise B cannot tell a real relayed identity
 from a spoofed one, which is *worse* than anonymous. So it follows the
-verification phases exactly: forward **proofs + self-sovereign signatures** with
-C3a (owner-rooted verification exists); forward **custodial attestations** with
-C3b (the trust policy exists). Until then the grid wrapper stays anonymous by
-design (see §6 Phase C3, and covia#102 Finding 1). The current code reflects
-this: `GridAdapter.selectVenue` connects to the remote with `VenueAuth.none()`
-and `LocalVenue` rebuilds context from the DID only — no authority is forwarded
-yet, deliberately.
+verification phases exactly: **proofs + self-sovereign signatures with C3a**
+(shipped — see below); **custodial attestations with C3b** (the trust policy
+exists).
+
+**C3a implementation (shipped).** Authority travels **only in the `ucans` proof
+channel** — never in operation input (input is data, persisted in job records;
+a credential there would leak into durable history). Tokens are self-describing,
+so there are no mode flags or auth fields anywhere:
+
+- **Proofs are relayed, filtered to the provably admissible.** The caller's raw
+  transport UCANs (`RequestContext.getRawUcans()`; the parsed maps cannot be
+  re-signed) are relayed in the hop's `ucans` body array. The relay drops only
+  what is *provably inert* at the target — expired/unparseable tokens, and
+  tokens audienced to an identity that is not the hop's principal (e.g. the
+  local caller's own grants when the venue relays as itself). Deeper filtering
+  is not provable (the relay cannot know which resources an operation on the
+  target touches, nor generally the target's DID before contact), so
+  presentation remains the *caller's* disclosure decision: present per-request,
+  not a wallet. The inbound *bearer* is never relayed — it is audienced to the
+  relaying venue (§4.4).
+- **Identity token** — the caller mints a UCAN with an **empty `att`**,
+  audienced to the **target** venue, and presents it in their `ucans`. Pure
+  proof of identity: it grants nothing, and being audience-bound it is unusable
+  at any other venue. The relay just forwards it; the target's ingress accepts
+  a verified identity token as the caller's identity **only on an anonymous
+  transport** (an Authorization header always wins), verifying the caller's own
+  signature — zero trust in the relay. The caller is then the principal at the
+  target: jobs owned by them, their proofs audienced to them apply.
+- **`venue/relay` delegation** — to have the venue hop *as itself*, the caller
+  grants it a capability with `can: venue/relay` (token issued **by the
+  caller**, audienced **to the relaying venue**; conventionally
+  `with: <callerDID>`). The token is simultaneously the instruction and the
+  authorisation — no flag. The issuer-must-be-the-caller rule makes the
+  confused deputy impossible by construction: a relay delegation someone else
+  minted for the venue is not an instruction from this caller. The same token
+  can carry the substantive grants (e.g. `crud/read` over the owner's
+  namespace) whose chain the target verifies to the owner root.
+- **No identity token and no relay delegation** → anonymous hop (the explicit
+  choice for public operations).
+- **Local targets** carry the caller's verified proofs into the local context
+  (`LocalVenue.setProofs`), so a local hop keeps authority exactly like a
+  remote hop forwards it (closes covia#102 Finding 1).
 
 ---
 
@@ -737,6 +779,7 @@ yet, deliberately.
 
 - `Capability.covers()` in convex-core for attenuation matching
 - `ucan:issue` operation creates and signs tokens
+- `ucan:verify` operation verifies a token against the venue's trust policy and explains the verdict (validity, chain depth, root issuer, per-capability root-authority, optional would-it-authorise check)
 - Tokens presented per-request in `RequestContext.proofs`
 - Signature verification on every capability check
 - Time bounds (`exp`, `nbf`) enforced
@@ -785,19 +828,17 @@ Trust anchored at the resource owner, not the verifying venue (§5.6). Each
 track has a *verifying* half (venue B) and a *forwarding* half (venue A); they
 land together, in order of dependency:
 
-**C3a — Self-sovereign.**
-- *Verify:* generalise `CoviaAdapter.verifyProofs` from the Phase C1 shortcut
-  (root `iss` must equal *this* venue) to the §4.4 rule (root `iss` must equal
-  the resource owner's controlling authority `A`, resolved from the owner DID).
-  For a `did:key` / `did:web` owner, `A` is the owner and needs no trust policy —
-  verifiable offline by any venue. The generic primitive (root-authority check +
-  DID→key resolution) lands in convex-core `UCANValidator`
-  (Convex-Dev/convex#635), not covia. Turns green the `@Disabled`
-  `crossVenueUCANIsAccepted` test in `CrossVenueTest`. Backward-compatible: a
-  local custodial user's `A` is this venue, so single-venue grants keep working.
-- *Forward:* venue A relays the caller's proofs and their own signature into the
-  `ucans` envelope (§4.3, §5.6). Replaces the anonymous `GridAdapter.selectVenue`
-  / `LocalVenue` path so cross-venue requests carry authority by default.
+**C3a — Self-sovereign** (current behaviour).
+- *Verify:* root authority follows the §4.4 rule — the chain root must be signed
+  by the resource owner's controlling authority (self-sovereign owners verify
+  offline via `RootAuthorityPolicy.SELF_SOVEREIGN`), or by this venue (the C1
+  arm, kept for venue-issued grants and custodial users). The generic primitive
+  (chain walk + root-authority policy + pluggable DID verification) is
+  convex-core `UCANValidator` (Convex-Dev/convex#635); covia's `proofsCover`
+  composes the policy.
+- *Forward:* the grid wrapper relays the caller's authority per §5.6 — proofs
+  filtered to the provably admissible, identity as an audience-bound identity
+  token, venue-as-delegate via a `venue/relay` capability.
 
 **C3b — Venue-attested (custodial).**
 - *Verify:* accept a root signed by a *remote* controlling venue for its
@@ -818,7 +859,7 @@ attenuation, temporal, revocation) is shared with the single-venue path.
 | Canonical encoding | DAG-CBOR (IPLD) | CAD3 (Convex lattice encoding) |
 | Content addressing | CID (multihash + multicodec) | CAD3 Value Hash (SHA3-256) |
 | Data types | IPLD schema types | CVM types (AMap, AVector, AString, CVMLong, Blob) |
-| Transport encoding | DAG-JSON or JWT | CVM JSON serialisation |
+| Transport encoding | DAG-JSON or JWT | JWT (interop transport); CVM JSON for lattice-native exchange |
 | Storage | Application-specific | Lattice `/a/` namespace (content-addressable, replicated) |
 | Key types | Ed25519, P-256, secp256k1 | Ed25519 (Convex native) |
 | DID methods | Any | `did:key` (primary), `did:web`, `did:convex` |

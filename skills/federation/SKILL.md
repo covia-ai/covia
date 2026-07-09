@@ -79,7 +79,9 @@ grid_run  operation=<op>  input=<input>  venue=<venue-url>
 
 - Operations execute on the **remote** venue — data stays where it's controlled
 - The local venue only sees the result, not intermediate state
-- UCAN capability tokens can travel with requests for fine-grained authorisation
+- UCAN capability tokens travel with requests (the `ucans` proof channel) for fine-grained authorisation; the relaying venue forwards the caller's tokens on cross-venue hops
+- The caller's identity crosses venues as an **identity token** (a UCAN with empty `att`, audienced to the target venue) — the target verifies the caller's own signature, trusting no relay
+- A caller can grant the venue a `venue/relay` capability to have it make the hop authenticated as itself, exercising the caller's delegation
 - Every invocation creates an immutable job record on both venues
 - Venues are identified by DIDs — decentralised, no central registry
 - The same operation interface works locally and across the grid

@@ -505,7 +505,7 @@ Capabilities are expressed as lattice-native UCAN tokens following the UCAN spec
 
 ### Key Properties
 
-- **Lattice-native.** UCANs are content-addressable values in `/a/`. CAD3 value hash is the canonical identifier. No JWT, no base64.
+- **Lattice-native.** UCANs are content-addressable values in `/a/`. CAD3 value hash is the canonical identifier. (Transport uses the JWT encoding — see UCAN.md §4.3; the lattice-native CAD3 form is the storage/canonical representation.)
 - **DID URL resources.** Resource URIs are DID URLs scoping into the user's lattice namespace (e.g. `did:key:zAlice.../w/projects/foo`). Sub-paths attenuate parents.
 - **Standard abilities.** `*` is the top ability. Abilities are slash-delimited without leading slash: `crud/read`, `invoke`, `secret/decrypt`, `agent/message`, `ucan/delegate`. Prefix hierarchy — `crud` proves `crud/read`.
 - **Delegation chains.** Agents sub-delegate narrower capabilities via proof chain references. Attenuation only — never widen.

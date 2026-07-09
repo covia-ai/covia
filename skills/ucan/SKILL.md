@@ -1,7 +1,7 @@
 ---
 name: ucan
 description: Issue and manage UCAN capability tokens — delegate access to workspace, agents, secrets, and operations. Use for demonstrating or configuring Covia's authorisation model.
-argument-hint: [issue|explain]
+argument-hint: [issue|verify|explain]
 ---
 
 # UCAN Capability Management
@@ -64,6 +64,20 @@ ucan_issue
 ```
 
 Returns a signed UCAN token that the audience can present with future requests.
+
+### `verify` — Verify and explain a token
+
+Given a UCAN (JWT string or token map), diagnose it against this venue's trust policy:
+
+```
+ucan_verify
+  token: "<jwt>"
+  with: "<resource>"        # optional — together with can:
+  can: "crud/read"          # asks "would this authorise the request here?"
+  aud: "<audience-DID>"     # optional — defaults to the caller
+```
+
+Reports validity (with a diagnosable reason when invalid — expired, bad signature, unparseable), issuer/audience, delegation chain depth and root issuer, and a per-capability root-authority verdict: `owner` (self-sovereign — signed by the resource owner), `venue` (this venue's grant), or `refused`. Use it whenever a token is rejected and the enforcement error isn't enough.
 
 ### `explain` — Explain the UCAN model
 

@@ -47,7 +47,7 @@ covia/                          # ai.covia:covia:0.2.0-SNAPSHOT (parent POM)
 
 - **Java 21+** (JDK; the published Docker image runs on Java 25)
 - **Maven 3.7+** (enforced by maven-enforcer-plugin)
-- **Convex 0.8.7** — pinned to the Maven Central release. A clean clone builds in one command (`mvn clean install`); no local Convex build is needed. To track an unreleased Convex, build it locally (`mvn install -DskipTests` from `../convex`) and point `convex.version` at its `-SNAPSHOT`; CI compiles Convex from source automatically whenever `convex.version` ends in `-SNAPSHOT`.
+- **Convex 0.8.8** — pinned to the Maven Central release. A clean clone builds in one command (`mvn clean install`); no local Convex build is needed. To track an unreleased Convex, build it locally (`mvn install -DskipTests` from `../convex`) and point `convex.version` at its `-SNAPSHOT`; CI compiles Convex from source automatically whenever `convex.version` ends in `-SNAPSHOT`.
 
 ## Build & Run
 
@@ -87,7 +87,7 @@ mvn test -pl covia-core
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| Convex | 0.8.7 | Lattice platform, immutable data, cryptography |
+| Convex | 0.8.8 | Lattice platform, immutable data, cryptography |
 | Javalin | 7.2.2 | HTTP server with OpenAPI/Swagger/ReDoc |
 | LangChain4j | 1.16.2 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.0 | Model Context Protocol |
@@ -258,7 +258,7 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 ### P3 — Future (design goals from venue/CLAUDE.md)
 
 - [ ] **Asset versioning** — Track version history, deprecation, and lineage in lattice
-- [ ] **Cross-venue trust policies** — Policy-based access control between venues; venue reputation/attestation
+- [ ] **Cross-venue trust policies** — Policy-based access control between venues; venue reputation/attestation. Self-sovereign cross-venue grants + authority forwarding (identity tokens, `venue/relay` delegations) shipped (covia#100 C3a, `venue/docs/UCAN.md` §5.6); remaining = custodial attestation + the venue trust policy (C3b)
 - [ ] **Capability negotiation** — Discovery endpoint for venue capabilities via DID documents
 - [ ] **Signed operations** — Cryptographic attribution for every job submission
 - [ ] **Compliance reporting** — Data lineage tracking and audit log queries
