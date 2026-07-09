@@ -498,8 +498,8 @@ public class AuthMiddleware {
 		rctx = rctx.withProofs(proofs);
 		AString caller = rctx.getCallerDID();
 		long now = System.currentTimeMillis() / 1000;
-		// TODO(convex-release): replace selfCapabilities with
-		// UCANValidator.capabilitiesFor once covia's Convex dependency includes it.
+		// Derives the self-attenuation ceiling: UCANValidator.capabilitiesFor
+		// (convex-core) for selection, plus covia's narrow-only guard.
 		AVector<ACell> caps = CapabilityChecker.selfCapabilities(proofs, caller, caller, now);
 		if (caps != null) rctx = rctx.withCaps(caps);
 		return rctx;

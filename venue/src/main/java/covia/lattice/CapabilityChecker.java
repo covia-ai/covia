@@ -1,7 +1,6 @@
 package covia.lattice;
 
 import convex.auth.ucan.Capability;
-import convex.auth.ucan.UCAN;
 import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -37,46 +36,32 @@ public class CapabilityChecker {
 	 *
 	 * <p>Assumes signatures and chains were verified at the transport boundary
 	 * ({@code UCANValidator.parseTransportUCANs}); only temporal bounds are
-	 * re-checked here. Fail-closed: null {@code proofs}/{@code caller}/
-	 * {@code issuer} → null (no ceiling), never a wildcard.</p>
+	 * re-checked. Fail-closed: null {@code proofs}/{@code caller}/{@code issuer}
+	 * → null (no ceiling), never a wildcard.</p>
 	 *
-	 * @deprecated Interim shim. This duplicates
-	 *             {@link UCANValidator#capabilitiesFor}, which lives in convex-core
-	 *             but is not yet in covia's released Convex dependency. When covia
-	 *             bumps to a Convex release that includes it, delete this method
-	 *             and call {@code UCANValidator.capabilitiesFor(proofs, caller,
-	 *             issuer, now)} directly.
+	 * <p>Selection delegates to {@link UCANValidator#capabilitiesFor} in
+	 * convex-core (the generic UCAN primitive); this adds only covia's
+	 * self-attenuation guard: a self-ceiling may only <b>narrow</b>, so a
+	 * capability with an empty/absent {@code with} — a "match any resource"
+	 * wildcard that would broaden — is dropped from the derived ceiling.</p>
 	 */
-	@Deprecated
 	public static AVector<ACell> selfCapabilities(AVector<ACell> proofs,
 			AString caller, AString issuer, long now) {
-		if (proofs == null || caller == null || issuer == null) return null;
-		AVector<ACell> result = Vectors.empty();
-		for (long i = 0; i < proofs.count(); i++) {
-			AMap<AString, ACell> tokenMap = RT.ensureMap(proofs.get(i));
-			if (tokenMap == null) continue;
-			UCAN token = UCAN.parse(tokenMap);
-			if (token == null) continue;
-			if (!UCANValidator.checkTemporalBounds(token, now)) continue;
-			if (!caller.equals(token.getAudience())) continue;
-			if (!issuer.equals(token.getIssuer())) continue;
-			AVector<ACell> tokenCaps = token.getCapabilities();
-			if (tokenCaps == null) continue;
-			for (long j = 0; j < tokenCaps.count(); j++) {
-				ACell c = tokenCaps.get(j);
-				if (c instanceof AMap<?, ?> m) {
-					@SuppressWarnings("unchecked")
-					AString w = RT.ensureString(((AMap<AString, ACell>) m).get(Capability.WITH));
-					// A self-attenuation may only NARROW the caller's own authority.
-					// An empty/absent `with` is a "match any resource" wildcard
-					// (Convex #585 / UCAN: `with` is required), which broadens
-					// rather than narrows — drop it from the derived ceiling.
-					if (w == null || w.count() == 0) continue;
-				}
-				result = result.conj(c);
+		AVector<ACell> caps = UCANValidator.capabilitiesFor(proofs, caller, issuer, now);
+		if (caps == null) return null;
+		AVector<ACell> narrowed = Vectors.empty();
+		for (long i = 0; i < caps.count(); i++) {
+			ACell c = caps.get(i);
+			if (c instanceof AMap<?, ?> m) {
+				@SuppressWarnings("unchecked")
+				AString w = RT.ensureString(((AMap<AString, ACell>) m).get(Capability.WITH));
+				// Self-attenuation may only NARROW: an empty/absent `with` is a
+				// match-any wildcard that would broaden, so drop it (Convex #585).
+				if (w == null || w.count() == 0) continue;
 			}
+			narrowed = narrowed.conj(c);
 		}
-		return result.isEmpty() ? null : result;
+		return narrowed.isEmpty() ? null : narrowed;
 	}
 
 	/**
