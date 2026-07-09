@@ -17,6 +17,8 @@ import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.data.message.ImageContent;
+import dev.langchain4j.data.message.TextContent;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.request.ResponseFormat;
 import dev.langchain4j.model.chat.request.ResponseFormatType;
@@ -305,6 +307,61 @@ public class LangChainAdapterTest {
 		List<ChatMessage> result = LangChainAdapter.toChatMessages(messages);
 		assertEquals(1, result.size());
 		assertInstanceOf(ToolExecutionResultMessage.class, result.get(0));
+	}
+
+	@Test
+	public void testUserContentBlocksVision() {
+		// covia#198: a user message's content may be an array of blocks —
+		// image (base64) + text — mapped to langchain4j multimodal contents.
+		var messages = Vectors.of(
+			Maps.of("role", "user", "content", Vectors.of(
+				Maps.of("type", "image", "source", Maps.of(
+					"type", "base64", "mediaType", "image/jpeg", "data", "aGVsbG8=")),
+				Maps.of("type", "text", "text", "Extract structured health information")
+			))
+		);
+
+		List<ChatMessage> result = LangChainAdapter.toChatMessages(messages);
+		assertEquals(1, result.size());
+		UserMessage um = assertInstanceOf(UserMessage.class, result.get(0));
+		assertEquals(2, um.contents().size());
+		ImageContent img = assertInstanceOf(ImageContent.class, um.contents().get(0));
+		assertEquals("aGVsbG8=", img.image().base64Data());
+		assertEquals("image/jpeg", img.image().mimeType());
+		TextContent txt = assertInstanceOf(TextContent.class, um.contents().get(1));
+		assertEquals("Extract structured health information", txt.text());
+	}
+
+	@Test
+	public void testUserStringContentStillWorks() {
+		// Back-compat: plain string content is unchanged by the vision support.
+		var messages = Vectors.of(Maps.of("role", "user", "content", "plain text"));
+		List<ChatMessage> result = LangChainAdapter.toChatMessages(messages);
+		UserMessage um = assertInstanceOf(UserMessage.class, result.get(0));
+		assertEquals("plain text", um.singleText());
+	}
+
+	@Test
+	public void testUnknownContentBlockFailsLoudly() {
+		// A silently-dropped block would be a wrong answer — unknown types throw
+		// with a diagnosable message.
+		var messages = Vectors.of(
+			Maps.of("role", "user", "content", Vectors.of(
+				Maps.of("type", "video", "source", Maps.of("data", "x")))));
+		Exception e = assertThrows(IllegalArgumentException.class,
+			() -> LangChainAdapter.toChatMessages(messages));
+		assertTrue(e.getMessage().contains("video"), e.getMessage());
+	}
+
+	@Test
+	public void testImageBlockRequiresBase64Source() {
+		var messages = Vectors.of(
+			Maps.of("role", "user", "content", Vectors.of(
+				Maps.of("type", "image", "source", Maps.of(
+					"type", "url", "url", "https://example.com/x.jpg")))));
+		Exception e = assertThrows(IllegalArgumentException.class,
+			() -> LangChainAdapter.toChatMessages(messages));
+		assertTrue(e.getMessage().contains("base64"), e.getMessage());
 	}
 
 	@Test

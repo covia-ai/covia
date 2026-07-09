@@ -1,30 +1,64 @@
 {
-  "name": "Anthropic Chat",
-  "description": "Chat with Anthropic Claude models using the native Anthropic API. API key resolved from user's secret store (ANTHROPIC_API_KEY by default; override by passing apiKey explicitly or as 's/<SECRET_NAME>'). Supports system prompts, tools, and structured output.",
-  "creator": "Covia",
-  "operation": {
-    "adapter": "langchain:anthropic",
-    "secretFields": ["apiKey"],
-    "secretKey": "ANTHROPIC_API_KEY",
-    "input": {
-      "type": "object",
-      "properties": {
-        "prompt": { "type": "string", "description": "User prompt (simple mode)" },
-        "messages": { "type": "array", "description": "Chat messages (advanced mode)" },
-        "model": { "type": "string", "description": "Model name (default: claude-sonnet-4-6)" },
-        "apiKey": { "type": "string", "secret": true, "description": "Anthropic API key (resolved from secret store by default — see operation.secretKey)" },
-        "url": { "type": "string", "description": "API base URL (default: https://api.anthropic.com/v1/)" },
-        "systemPrompt": { "type": "string", "description": "System prompt" },
-        "tools": { "type": "array", "description": "Tool definitions" }
-      }
-    },
-    "output": {
-      "type": "object",
-      "properties": {
-        "role": { "type": "string" },
-        "content": { "type": "string" },
-        "toolCalls": { "type": "array" }
-      }
-    }
-  }
+	"name": "Anthropic Chat",
+	"description": "Chat with Anthropic Claude models using the native Anthropic API. API key resolved from user's secret store (ANTHROPIC_API_KEY by default; override by passing apiKey explicitly or as 's/<SECRET_NAME>'). Supports system prompts, tools, and structured output.",
+	"creator": "Covia",
+	"operation": {
+		"adapter": "langchain:anthropic",
+		"secretFields": [
+			"apiKey"
+		],
+		"secretKey": "ANTHROPIC_API_KEY",
+		"input": {
+			"type": "object",
+			"properties": {
+				"prompt": {
+					"type": "string",
+					"description": "User prompt (simple mode)"
+				},
+				"messages": {
+					"type": "array",
+					"description": "Chat messages (advanced mode). A user message's content may be a string, or an array of content blocks for vision: [{type:'text', text:'...'}, {type:'image', source:{type:'base64', mediaType:'image/jpeg', data:'...'}}]"
+				},
+				"model": {
+					"type": "string",
+					"description": "Model name (default: claude-sonnet-4-6)"
+				},
+				"apiKey": {
+					"type": "string",
+					"secret": true,
+					"description": "Anthropic API key (resolved from secret store by default — see operation.secretKey)"
+				},
+				"url": {
+					"type": "string",
+					"description": "API base URL (default: https://api.anthropic.com/v1/)"
+				},
+				"systemPrompt": {
+					"type": "string",
+					"description": "System prompt"
+				},
+				"tools": {
+					"type": "array",
+					"description": "Tool definitions"
+				},
+				"maxTokens": {
+					"type": "integer",
+					"description": "Maximum output tokens for the response (bounds cost/latency; e.g. 1024 for extraction calls). Provider default when omitted."
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"content": {
+					"type": "string"
+				},
+				"toolCalls": {
+					"type": "array"
+				}
+			}
+		}
+	}
 }

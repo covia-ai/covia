@@ -26,6 +26,9 @@ import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.data.message.Content;
+import dev.langchain4j.data.message.ImageContent;
+import dev.langchain4j.data.message.TextContent;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
@@ -176,8 +179,14 @@ public class LangChainAdapter extends AAdapter {
 			);
 		}
 
+		// Optional output-token bound (covia#198) — honoured by the anthropic
+		// provider (its API requires max_tokens; the client default stands
+		// otherwise). Other providers currently ignore it.
+		CVMLong maxTokensCell = RT.ensureLong(RT.getIn(input, "maxTokens"));
+		final Integer maxTokens = (maxTokensCell != null) ? (int) maxTokensCell.longValue() : null;
+
 		// Build the ChatModel
-		final ChatModel chatModel = buildProviderModel(provider, finalModelName, apiKey, urlParam);
+		final ChatModel chatModel = buildProviderModel(provider, finalModelName, apiKey, urlParam, maxTokens);
 		if (chatModel == null) {
 			return CompletableFuture.completedFuture(
 				Status.failure("Unknown provider: '" + provider + "'. Supported: 'ollama', 'openai', 'anthropic'")
@@ -230,7 +239,7 @@ public class LangChainAdapter extends AAdapter {
 			|| "xai".equals(provider) || "deepseek".equals(provider);
 	}
 
-	private ChatModel buildProviderModel(String provider, String modelName, String apiKey, AString urlParam) {
+	private ChatModel buildProviderModel(String provider, String modelName, String apiKey, AString urlParam, Integer maxTokens) {
 		if ("ollama".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "http://localhost:11434";
 			String model = (modelName != null) ? modelName : "qwen";
@@ -242,7 +251,7 @@ public class LangChainAdapter extends AAdapter {
 		} else if ("anthropic".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.anthropic.com/v1/";
 			String model = (modelName != null) ? modelName : "claude-sonnet-4-6";
-			return buildAnthropicModel(apiKey, baseUrl, model, IO_TIMEOUT);
+			return buildAnthropicModel(apiKey, baseUrl, model, IO_TIMEOUT, maxTokens);
 		} else if ("gemini".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://generativelanguage.googleapis.com/v1beta/openai/";
 			String model = (modelName != null) ? modelName : "gemini-2.5-flash";
@@ -297,14 +306,21 @@ public class LangChainAdapter extends AAdapter {
 	}
 
 	static ChatModel buildAnthropicModel(String apiKey, String baseUrl, String model, Duration timeout) {
-		return AnthropicChatModel.builder()
+		return buildAnthropicModel(apiKey, baseUrl, model, timeout, null);
+	}
+
+	static ChatModel buildAnthropicModel(String apiKey, String baseUrl, String model, Duration timeout, Integer maxTokens) {
+		AnthropicChatModel.AnthropicChatModelBuilder builder = AnthropicChatModel.builder()
 			.apiKey(apiKey)
 			.baseUrl(baseUrl)
 			.logRequests(false)
 			.logResponses(false)
 			.modelName(model)
-			.timeout(timeout)
-			.build();
+			.timeout(timeout);
+		// Anthropic's API requires max_tokens on every request; when the caller
+		// doesn't bound it, langchain4j's model default applies (covia#198).
+		if (maxTokens != null) builder = builder.maxTokens(maxTokens);
+		return builder.build();
 	}
 
 	// ========== API key resolution ==========
@@ -452,6 +468,54 @@ public class LangChainAdapter extends AAdapter {
 	// ========== Message conversion ==========
 
 	/**
+	 * Converts a user message's content-block array to LangChain4j contents
+	 * (vision support, covia#198). Recognised blocks:
+	 * <ul>
+	 *   <li>{@code {type: "text", text: "…"}}</li>
+	 *   <li>{@code {type: "image", source: {type: "base64", mediaType: "image/jpeg",
+	 *       data: "…"}}}</li>
+	 * </ul>
+	 * Unknown block or source types fail loudly — a silently-dropped image is a
+	 * wrong answer, not a degraded one.
+	 */
+	static List<Content> toUserContents(AVector<ACell> blocks) {
+		List<Content> contents = new ArrayList<>();
+		for (long i = 0; i < blocks.count(); i++) {
+			ACell block = blocks.get(i);
+			AString type = RT.ensureString(RT.getIn(block, "type"));
+			String t = (type != null) ? type.toString() : null;
+			if ("text".equals(t)) {
+				AString text = RT.ensureString(RT.getIn(block, "text"));
+				if (text == null) throw new IllegalArgumentException(
+					"content[" + i + "]: text block requires a 'text' string");
+				contents.add(TextContent.from(text.toString()));
+			} else if ("image".equals(t)) {
+				AString srcType = RT.ensureString(RT.getIn(block, "source", "type"));
+				if (!"base64".equals(srcType != null ? srcType.toString() : null)) {
+					throw new IllegalArgumentException(
+						"content[" + i + "]: image source.type must be \"base64\" (got "
+						+ srcType + ")");
+				}
+				AString mediaType = RT.ensureString(RT.getIn(block, "source", "mediaType"));
+				AString data = RT.ensureString(RT.getIn(block, "source", "data"));
+				if (mediaType == null || data == null) {
+					throw new IllegalArgumentException(
+						"content[" + i + "]: image source requires 'mediaType' and 'data' (base64)");
+				}
+				contents.add(ImageContent.from(data.toString(), mediaType.toString()));
+			} else {
+				throw new IllegalArgumentException(
+					"content[" + i + "]: unknown block type '" + t
+					+ "' — supported: text, image");
+			}
+		}
+		if (contents.isEmpty()) throw new IllegalArgumentException(
+			"user content array must contain at least one block");
+		return contents;
+	}
+
+
+	/**
 	 * Converts Convex message maps to LangChain4j ChatMessage list.
 	 * Supports all message types: system, user, assistant (with toolCalls), tool.
 	 */
@@ -471,8 +535,17 @@ public class LangChainAdapter extends AAdapter {
 					break;
 				}
 				case "user": {
-					AString content = RT.ensureString(RT.getIn(entry, K_CONTENT));
-					if (content != null) result.add(UserMessage.from(content.toString()));
+					ACell contentCell = RT.getIn(entry, K_CONTENT);
+					if (contentCell instanceof AVector) {
+						// Multimodal content blocks (vision, covia#198):
+						// [{type:"text", text:"…"}, {type:"image",
+						//   source:{type:"base64", mediaType:"image/jpeg", data:"…"}}]
+						result.add(UserMessage.from(
+							toUserContents((AVector<ACell>) contentCell)));
+					} else {
+						AString content = RT.ensureString(contentCell);
+						if (content != null) result.add(UserMessage.from(content.toString()));
+					}
 					break;
 				}
 				case "assistant": {
