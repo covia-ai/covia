@@ -222,6 +222,49 @@ public class UCANTest {
 
 	// ========== Cross-user read with proof ==========
 
+	/**
+	 * covia#196: a SELF-SOVEREIGN grant — the resource owner signs the root
+	 * directly, the venue is NOT the issuer — authorises a cross-user read.
+	 * This is the covia#100 enabler: cross-venue tokens rooted by the owner
+	 * verify without naming the verifying venue.
+	 */
+	@Test
+	public void testSelfSovereignWorkspaceGrant() {
+		long exp = (System.currentTimeMillis() / 1000) + HOUR;
+		UCAN token = UCAN.create(ALICE_KP, UCAN.fromDIDKey(BOB_DID), exp,
+			Vectors.of(Capability.create(
+				Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
+			Vectors.empty());
+
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
+			withProofs(BOB, token.toMap()));
+		assertEquals(Strings.create("shared content"),
+			RT.getIn(readJob.awaitResult(5000), "value"));
+	}
+
+	/**
+	 * covia#196: a root signed by a third party — neither the resource owner
+	 * (self-sovereign) nor the venue (custodial) — is refused. This is the
+	 * root-authority check the migration added: without it, anyone could mint
+	 * grants over anyone's resources.
+	 */
+	@Test
+	public void testThirdPartyRootDenied() {
+		long exp = (System.currentTimeMillis() / 1000) + HOUR;
+		// Carol signs a "grant" over ALICE's workspace, audienced to Bob.
+		UCAN token = UCAN.create(CAROL_KP, UCAN.fromDIDKey(BOB_DID), exp,
+			Vectors.of(Capability.create(
+				Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
+			Vectors.empty());
+
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
+			withProofs(BOB, token.toMap()));
+		assertThrows(Exception.class, () -> readJob.awaitResult(5000),
+			"a third-party root must not authorise access to Alice's resources");
+	}
+
 	@Test
 	public void testCrossUserReadWithValidProof() {
 		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/w/", "crud/read", 3600);

@@ -29,10 +29,12 @@ import covia.venue.TestEngine;
  * bypassing {@code JobManager}'s name-keyed boundary net, so these assertions
  * isolate the adapter's own {@code ctx.requireCapability(...)} call: the right
  * resource and the right ability. Under the public read-only ceiling, mutations
- * are denied and lattice/asset reads are allowed; scheme-qualified file/dlfs
- * resources are not covered by the owner-scoped read grant, so those reads are
- * denied too (the secure default for a public caller). A null ceiling
- * (authenticated/internal) is unrestricted — no cap denial on any op.</p>
+ * are denied and owner-scoped reads are allowed — including DLFS, which is a
+ * DID-scoped {@code <did>/dlfs/…} namespace covered by the caller's crud/read
+ * grant like {@code /w/}. Only genuinely scheme-qualified {@code file://}
+ * resources fall outside the owner-scoped grant, so those reads are denied (the
+ * secure default for a public caller). A null ceiling (authenticated/internal)
+ * is unrestricted — no cap denial on any op.</p>
  */
 @TestInstance(Lifecycle.PER_CLASS)
 public class AdapterCapEnforcementTest {
@@ -121,13 +123,16 @@ public class AdapterCapEnforcementTest {
 		assertFalse(capDenied(direct("file", "write", m("root", "scratch", "path", "x.txt"), unrestricted)));
 	}
 
-	// ===================== dlfs (scheme-qualified) =====================
+	// ===================== dlfs (owner-scoped path: <did>/dlfs/…) =====================
 
 	@Test public void dlfsWriteDeniedUnderReadOnly() {
 		assertTrue(capDenied(direct("dlfs", "write", m("drive", "d", "path", "x"), readOnly)));
 	}
-	@Test public void dlfsReadDeniedUnderReadOnly() {
-		assertTrue(capDenied(direct("dlfs", "read", m("drive", "d", "path", "x"), readOnly)));
+	// DLFS is a DID-scoped namespace (<callerDID>/dlfs/…) alongside /w/ and /j/, so a
+	// read-only ceiling's crud/read on the caller's own namespace covers own-drive reads
+	// — same as lattice reads. (Cross-user reads are gated separately by proofsCover.)
+	@Test public void dlfsReadAllowedUnderReadOnly() {
+		assertFalse(capDenied(direct("dlfs", "read", m("drive", "d", "path", "x"), readOnly)));
 	}
 	@Test public void dlfsWriteNotCapDeniedUnrestricted() {
 		assertFalse(capDenied(direct("dlfs", "write", m("drive", "d", "path", "x"), unrestricted)));

@@ -24,8 +24,8 @@ import covia.venue.TestEngine;
  *
  * <p>There is no central name-keyed boundary: each adapter asserts its own cap
  * at its enforcement point (see {@code AdapterCapEnforcementTest}). These tests
- * cover the shared primitives those adapters call — {@link CapabilityChecker#allows},
- * the boundary-aware {@code resourceMatches}, {@code readOnlyCeiling},
+ * cover the shared primitives those adapters call — {@link CapabilityChecker#allows}
+ * (boundary matching via core's {@code Capability.resourceCovers}), {@code readOnlyCeiling},
  * {@code selfCapabilities}, and {@link RequestContext#requireCapability} — plus
  * end-to-end enforcement through {@code JobManager}. Resource/ability prefix
  * matching ultimately delegates to convex-core's {@code Capability.covers},
@@ -363,13 +363,72 @@ public class CapabilityCheckerTest {
 	}
 
 	@Test
-	public void testResourceMatchesUnit() {
-		assertTrue(CapabilityChecker.resourceMatches(Strings.create("w/notes"), Strings.create("w/notes")));
-		assertTrue(CapabilityChecker.resourceMatches(Strings.create("w/notes"), Strings.create("w/notes/child")));
-		assertFalse(CapabilityChecker.resourceMatches(Strings.create("w/notes"), Strings.create("w/notesSECRET")));
-		assertTrue(CapabilityChecker.resourceMatches(Strings.create("w/notes/"), Strings.create("w/notes"))); // trailing-slash parent
-		assertTrue(CapabilityChecker.resourceMatches(Strings.create(""), Strings.create("anything")));         // empty = wildcard
-		assertTrue(CapabilityChecker.resourceMatches(null, Strings.create("anything")));                       // null = wildcard
+	public void testProofsCoverFailsClosed() {
+		// covia#196 boundary pin: malformed or hostile inputs to the cross-user
+		// grant gate must yield false — never true, never a throw.
+		AString caller = Strings.create("did:key:zCaller");
+		AString venue = Strings.create("did:key:zVenue");
+		AString res = Strings.create("did:key:zOwner/w/notes");
+		AString ability = Strings.create("crud/read");
+		long now = System.currentTimeMillis() / 1000;
+
+		// Null inputs → false.
+		assertFalse(CapabilityChecker.proofsCover(null, caller, venue, res, ability, now));
+		assertFalse(CapabilityChecker.proofsCover(Vectors.empty(), null, venue, res, ability, now));
+		assertFalse(CapabilityChecker.proofsCover(Vectors.empty(), caller, venue, null, ability, now));
+		assertFalse(CapabilityChecker.proofsCover(Vectors.empty(), caller, venue, res, null, now));
+		// Null venueDID → the venue arm grants nothing (self-sovereign arm remains).
+		assertFalse(CapabilityChecker.proofsCover(Vectors.empty(), caller, null, res, ability, now));
+
+		// Garbage proof entries (non-map, map with no UCAN fields, nonsense fields)
+		// grant nothing and must not throw.
+		AVector<ACell> garbage = Vectors.of(
+			Strings.create("not-a-token"),
+			convex.core.data.Maps.empty(),
+			convex.core.data.Maps.of(Strings.create("bogus"), Strings.create("junk")));
+		assertFalse(CapabilityChecker.proofsCover(garbage, caller, venue, res, ability, now));
+
+		// A resource with no derivable DID owner (unanchorable scheme): grants
+		// nothing under the self-sovereign arm — fail-closed at the capability.
+		assertFalse(CapabilityChecker.proofsCover(garbage, caller, venue,
+			Strings.create("https://example.com/x"), ability, now));
+	}
+
+	@Test
+	public void testLegacyDlfsSchemeShorthandCoversOwnDrive() {
+		// A ceiling cap written in the legacy scheme form (dlfs://docs/) must cover
+		// the DID-scoped path form the adapter now enforces (dlfs/docs/…), and
+		// vice versa — both canonicalise to <owner>/dlfs/docs/….
+		AString did = Strings.create("did:key:zDlfsCompat");
+		AVector<ACell> legacy = Vectors.of(
+			Capability.create(Strings.create("dlfs://docs/"), Capability.CRUD_READ));
+		assertNull(CapabilityChecker.allows(legacy, "dlfs/docs/notes.txt", "crud/read", did));
+		assertNotNull(CapabilityChecker.allows(legacy, "dlfs/other/notes.txt", "crud/read", did)); // other drive — DENY
+		assertNotNull(CapabilityChecker.allows(legacy, "dlfs/docs/notes.txt", "crud/write", did)); // wrong ability — DENY
+
+		// Path-form cap covers a legacy-form op resource identically.
+		AVector<ACell> pathForm = Vectors.of(
+			Capability.create(Strings.create("dlfs/docs/"), Capability.CRUD_READ));
+		assertNull(CapabilityChecker.allows(pathForm, "dlfs://docs/notes.txt", "crud/read", did));
+
+		// Bare "dlfs://" covers every drive of the owner (legacy wildcard-of-drives).
+		AVector<ACell> allDrives = Vectors.of(
+			Capability.create(Strings.create("dlfs://"), Capability.CRUD_READ));
+		assertNull(CapabilityChecker.allows(allDrives, "dlfs/anything/x", "crud/read", did));
+	}
+
+	@Test
+	public void testEmptyWithGrantIsCeilingWildcard() {
+		// An empty-`with` grant matches any resource — the venue's asset/read
+		// ceiling relies on it. This wildcard lives only in the ceiling (allows)
+		// path, never in the fail-closed UCAN proof path. Boundary matching for
+		// concrete grants is core's Capability.resourceCovers (Convex #585),
+		// exercised via allows() in testResourceBoundaryViaAllows above.
+		AVector<ACell> caps = Vectors.of(
+			Capability.create(Strings.create(""), Strings.create("asset/read")));
+		assertNull(CapabilityChecker.allows(caps, "a/deadbeef", "asset/read", null));   // any resource
+		assertNull(CapabilityChecker.allows(caps, "anything/else", "asset/read", null));
+		assertNotNull(CapabilityChecker.allows(caps, "a/deadbeef", "crud/write", null)); // wrong ability — DENY
 	}
 
 	@Test

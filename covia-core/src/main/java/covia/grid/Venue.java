@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import convex.auth.did.DID;
+import convex.auth.did.DIDURL;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -32,6 +33,17 @@ public abstract class Venue {
 	 */
 	public void setUser(String did) {
 		this.user = (did != null) ? Strings.create(did) : null;
+	}
+
+	/**
+	 * Sets UCAN proof tokens (JWT strings) to present with requests — the
+	 * delegation channel for cross-user / cross-venue access. Base
+	 * implementation is a no-op; transports with a proof channel (HTTP
+	 * {@code ucans} body array) override.
+	 * @param jwts Proof tokens, or null/empty for none
+	 */
+	public void setUcans(java.util.List<String> jwts) {
+		// no-op by default
 	}
 
 	/**
@@ -117,8 +129,8 @@ public abstract class Venue {
 
 	public abstract CompletableFuture<ACell> awaitJobResult(Blob jobId);
 
-	public DID getAssetDID(Hash id) {
-		return getDID().withPath("/a/"+id.toHexString());
+	public DIDURL getAssetDID(Hash id) {
+		return DIDURL.create(getDID()).withPath("/a/"+id.toHexString());
 	}
 
 	protected abstract AContent getAssetContent(Hash id) throws IOException;

@@ -1,6 +1,8 @@
 package covia.lattice;
 
 import convex.auth.ucan.Capability;
+import convex.auth.ucan.RootAuthorityPolicy;
+import convex.auth.ucan.UCAN;
 import convex.auth.ucan.UCANValidator;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -39,24 +41,40 @@ public class CapabilityChecker {
 	 * re-checked. Fail-closed: null {@code proofs}/{@code caller}/{@code issuer}
 	 * → null (no ceiling), never a wildcard.</p>
 	 *
-	 * <p>Selection delegates to {@link UCANValidator#capabilitiesFor} in
-	 * convex-core (the generic UCAN primitive); this adds only covia's
-	 * self-attenuation guard: a self-ceiling may only <b>narrow</b>, so a
-	 * capability with an empty/absent {@code with} — a "match any resource"
-	 * wildcard that would broaden — is dropped from the derived ceiling.</p>
+	 * <p>A self-ceiling is genuinely <b>single-hop</b> and caller-rooted
+	 * ({@code iss == aud == caller}) — no delegation chain, no root-authority
+	 * policy — so it is derived by a local single-hop selection, kept isolated
+	 * from the cross-user proof path ({@link #proofsCover}). On top of the
+	 * selection this adds covia's self-attenuation guard: a self-ceiling may only
+	 * <b>narrow</b>, so a capability with an empty/absent {@code with} — a "match
+	 * any resource" wildcard that would broaden — is dropped from the ceiling.</p>
 	 */
 	public static AVector<ACell> selfCapabilities(AVector<ACell> proofs,
 			AString caller, AString issuer, long now) {
-		AVector<ACell> caps = UCANValidator.capabilitiesFor(proofs, caller, issuer, now);
-		if (caps == null) return null;
+		if (proofs == null || caller == null || issuer == null) return null;
+		// Single-hop selection: union the attenuations of tokens audienced to the
+		// caller AND issued by `issuer` (== caller for a self-ceiling), still in-date.
+		// Uses the typed UCAN accessors (canonical DID comparison), not raw fields.
+		AVector<ACell> caps = Vectors.empty();
+		for (long i = 0; i < proofs.count(); i++) {
+			AMap<AString, ACell> tokenMap = RT.castMap(proofs.get(i));
+			if (tokenMap == null) continue;
+			UCAN token = UCAN.parse(tokenMap);
+			if (token == null) continue;
+			if (!UCANValidator.checkTemporalBounds(token, now)) continue;
+			if (!caller.equals(token.getAudience())) continue;
+			if (!issuer.equals(token.getIssuer())) continue;
+			caps = caps.concat(token.getCapabilities());
+		}
+		if (caps.isEmpty()) return null;
+		// Self-attenuation may only NARROW: drop empty/absent-`with` (match-any)
+		// caps that would broaden the owner's own authority.
 		AVector<ACell> narrowed = Vectors.empty();
 		for (long i = 0; i < caps.count(); i++) {
 			ACell c = caps.get(i);
 			if (c instanceof AMap<?, ?> m) {
 				@SuppressWarnings("unchecked")
 				AString w = RT.ensureString(((AMap<AString, ACell>) m).get(Capability.WITH));
-				// Self-attenuation may only NARROW: an empty/absent `with` is a
-				// match-any wildcard that would broaden, so drop it (Convex #585).
 				if (w == null || w.count() == 0) continue;
 			}
 			narrowed = narrowed.conj(c);
@@ -65,37 +83,38 @@ public class CapabilityChecker {
 	}
 
 	/**
-	 * Cross-user proof check: do the caller's presented {@code proofs} grant
-	 * {@code (resource, ability)}? A proof grants it when it is audienced to the
-	 * caller, issued by {@code venueDID} (Phase C1 — the venue is authority for
-	 * hosted data; generalised in Phase C3, covia#100), in-date, and carries an
-	 * attenuation that {@link Capability#covers covers} the request.
+	 * Cross-user proof check: do the caller's presented {@code proofs} authorise
+	 * {@code (resource, ability)}? Delegates to the convex-core authority layer
+	 * ({@link UCANValidator#isAuthorised}), which checks capability coverage, then
+	 * per-hop delegation attenuation to the chain root, then root authority.
 	 *
-	 * <p>Selection reuses {@link UCANValidator#capabilitiesFor} (convex-core);
-	 * this is the single cross-user grant check — {@code CoviaAdapter.verifyProofs}
-	 * and job-read authorisation both call it, so the model can't drift between
-	 * the lattice-read path and the job path (they are the same right — covia#102).</p>
+	 * <p>Root authority is {@link RootAuthorityPolicy#SELF_SOVEREIGN} (the resource
+	 * owner may root a grant over its own namespace) <b>or</b> the venue (for the
+	 * grants it issues/attests — Phase C1 custodial). The venue arm preserves every
+	 * currently venue-issued grant; the self-sovereign arm is the covia#100 enabler
+	 * (cross-venue tokens rooted by the owner verify without naming the venue).
+	 * covia#100 will later narrow the venue arm to the venue's own custodial users.</p>
+	 *
+	 * <p>This is the single cross-user grant check — {@code CoviaAdapter.verifyProofs}
+	 * and job-read authorisation both call it, so the model can't drift between the
+	 * lattice-read path and the job path (they are the same right — covia#102).
+	 * Signatures/chain structure were verified at transport ingress
+	 * ({@link UCANValidator#parseTransportUCANs}).</p>
 	 *
 	 * @param proofs   the caller's presented UCAN proofs (from the RequestContext)
 	 * @param caller   the caller's DID (proof audience)
-	 * @param venueDID the verifying venue's DID (required proof issuer, Phase C1)
+	 * @param venueDID the venue's DID — accepted as a root authority (Phase C1)
 	 * @param resource the full resource being accessed (e.g. {@code "did:key:z…/j/<id>"})
 	 * @param ability  the required ability (e.g. {@link Capability#CRUD_READ})
 	 * @param now      current time, unix seconds
-	 * @return true if some presented proof grants the request
+	 * @return true if the presented proofs authorise the request
 	 */
 	public static boolean proofsCover(AVector<ACell> proofs, AString caller, AString venueDID,
 			AString resource, AString ability, long now) {
 		if (caller == null || resource == null || ability == null) return false;
-		AVector<ACell> caps = UCANValidator.capabilitiesFor(proofs, caller, venueDID, now);
-		if (caps == null) return false;
-		for (long i = 0; i < caps.count(); i++) {
-			@SuppressWarnings("unchecked")
-			AMap<AString, ACell> cap = (caps.get(i) instanceof AMap<?, ?> m)
-				? (AMap<AString, ACell>) m : null;
-			if (cap != null && Capability.covers(cap, resource, ability)) return true;
-		}
-		return false;
+		RootAuthorityPolicy policy = RootAuthorityPolicy.SELF_SOVEREIGN.or(
+			(root, with) -> venueDID != null && venueDID.equals(root));
+		return UCANValidator.isAuthorised(proofs, caller, resource, ability, policy, now);
 	}
 
 	/**
@@ -189,43 +208,15 @@ public class CapabilityChecker {
 			AString grantWith = (canonWith != null) ? Strings.create(canonWith) : null;
 			AString grantCan = RT.ensureString(cap.get(Capability.CAN));
 
-			// Resource matching is done locally (boundary-aware) rather than via
-			// Capability.resourceCovers, which prefix-matches without a path
-			// segment boundary (Convex #585) — "…/w/notes" would otherwise cover
-			// the sibling "…/w/notesSECRET". Ability matching reuses the already
-			// boundary-aware Capability.abilityCovers (false for a null ability).
-			if (resourceMatches(grantWith, resourceStr)
-					&& Capability.abilityCovers(grantCan, abilityStr)) return true;
+			// A null/empty grant `with` is a "match any resource" wildcard — the
+			// venue's own asset/read ceiling ({with:""}) relies on it. This wildcard
+			// lives ONLY in the ceiling path, never in the fail-closed UCAN proof
+			// path (proofsCover). A concrete grant matches via the boundary-aware
+			// Capability.resourceCovers (Convex #585 fixed); ability via abilityCovers.
+			boolean resourceOK = (grantWith == null || grantWith.count() == 0)
+					|| Capability.resourceCovers(grantWith, resourceStr);
+			if (resourceOK && Capability.abilityCovers(grantCan, abilityStr)) return true;
 		}
-		return false;
-	}
-
-	/**
-	 * Boundary-aware resource matching — the hardened local replacement for
-	 * {@link Capability#resourceCovers}, which prefix-matches without a path
-	 * segment boundary (Convex #585): a grant on {@code "…/w/notes"} would
-	 * otherwise cover the sibling {@code "…/w/notesSECRET"}, not just descendants
-	 * {@code "…/w/notes/…"}.
-	 *
-	 * <p>A {@code null}/empty grant resource still means "any resource" — the
-	 * venue's own {@code asset/read} grant ({@code {with:""}}) relies on this,
-	 * while <em>user</em>-supplied empty-{@code with} caps are stripped earlier
-	 * at the {@link #selfCapabilities} boundary. A concrete grant matches an
-	 * exact resource, a descendant at a {@code '/'} boundary, or (for a grant
-	 * ending in {@code '/'}) its slash-less parent.</p>
-	 */
-	static boolean resourceMatches(AString grant, AString request) {
-		if (grant == null) return true;                 // wildcard (e.g. venue asset/read grant)
-		long gLen = grant.count();
-		if (gLen == 0) return true;                     // empty = wildcard
-		if (request == null) return false;
-		long rLen = request.count();
-		if (grant.equals(request)) return true;         // exact
-		if (rLen > gLen && request.startsWith(grant)
-				&& (grant.charAt(gLen - 1) == '/' || request.charAt(gLen) == '/')) return true;
-		// Trailing-slash parent: "w/x/" covers "w/x".
-		if (grant.charAt(gLen - 1) == '/' && rLen == gLen - 1
-				&& request.equals(grant.slice(0, gLen - 1))) return true;
 		return false;
 	}
 
@@ -259,9 +250,9 @@ public class CapabilityChecker {
 	 * <p>A capability resource is absolute: it names its owner. A bare lattice
 	 * path ({@code "w/health/bp"}) is the owner's own resource and is prefixed
 	 * with the owner DID → {@code "<owner>/w/health/bp"}. A resource that is
-	 * already a DID URL (a cross-user path, {@code "did:key:…/w/…"}) or
-	 * scheme-qualified ({@code "file://…"}, {@code "dlfs://…"}) is absolute as-is
-	 * and returned unchanged. With no owner context ({@code ownerDID == null})
+	 * already a DID URL (a cross-user path, {@code "did:key:…/w/…"}, or the
+	 * DID-scoped {@code "did:key:…/dlfs/…"}) or scheme-qualified ({@code "file://…"})
+	 * is absolute as-is and returned unchanged. With no owner context ({@code ownerDID == null})
 	 * the resource is returned as given (compare-as-is).</p>
 	 *
 	 * <p>Applied identically to the op's resource and each cap's {@code with}, so
@@ -271,7 +262,16 @@ public class CapabilityChecker {
 	static String canonicalResource(String resource, AString ownerDID) {
 		if (resource == null || resource.isEmpty()) return resource;
 		if (resource.startsWith("did:")) return resource;   // already owner-qualified (DID URL)
-		if (resource.contains("://")) return resource;       // scheme-qualified (file://, dlfs://)
+		// Legacy own-drive shorthand: "dlfs://<drive>/…" is accepted and normalised
+		// to the DID-scoped path form "dlfs/<drive>/…" (then owner-scoped below), so
+		// existing agent caps written in the scheme form keep working. Cross-user
+		// UCAN grants use the path form only — the scheme form never reaches the
+		// fail-closed proof path.
+		if (resource.startsWith("dlfs://")) {
+			resource = "dlfs/" + resource.substring("dlfs://".length());
+		} else if (resource.contains("://")) {
+			return resource;                                  // scheme-qualified (file://)
+		}
 		if (ownerDID == null) return resource;               // no owner context — compare as given
 		return ownerDID + "/" + resource;                    // bare lattice path → owner-scoped
 	}

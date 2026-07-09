@@ -17,6 +17,8 @@ import java.util.concurrent.CompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.auth.did.DIDURL;
+import convex.auth.ucan.Capability;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -40,6 +42,7 @@ import convex.lattice.fs.DLFS;
 import convex.lattice.fs.DLFileSystem;
 import convex.lattice.fs.impl.DLFSLocal;
 import covia.api.Fields;
+import covia.lattice.CapabilityChecker;
 import covia.lattice.Covia;
 import covia.utils.MimeUtils;
 import covia.venue.Engine;
@@ -253,43 +256,155 @@ public class DLFSAdapter extends AAdapter {
 		}, VIRTUAL_EXECUTOR);
 	}
 
-	@SuppressWarnings("unchecked")
-	/**
-	 * Capability enforcement co-located with the DLFS op dispatch. The resource
-	 * is the {@code dlfs://<drive>/<path>} form the grant taxonomy uses (drive
-	 * named via {@code drive}, or {@code name} for drive-level ops); a null
-	 * ceiling (authenticated/internal) is unrestricted (no-op).
-	 */
-	private static void requireDlfsCap(RequestContext ctx, String subOp, AMap<AString, ACell> input) {
-		String ability = switch (subOp) {
-			case "list", "tree", "read", "stat", "listDrives" -> "crud/read";
-			case "write", "append", "mkdir", "createDrive" -> "crud/write";
-			case "delete", "deleteDrive" -> "crud/delete";
+	/** The capability ability a DLFS sub-operation requests. It is matched against
+	 *  the caller's grants generically via {@link Capability#covers} — a broader
+	 *  grant ({@code crud}, {@code *}) covers these automatically; we never compare
+	 *  {@code can} values by equality. */
+	private static AString abilityFor(String subOp) {
+		return switch (subOp) {
+			case "list", "tree", "read", "stat", "listDrives" -> Capability.CRUD_READ;
+			case "write", "append", "mkdir", "createDrive" -> Capability.CRUD_WRITE;
+			case "delete", "deleteDrive" -> Capability.CRUD_DELETE;
 			default -> null;
 		};
+	}
+
+	/**
+	 * Builds a DLFS capability resource in plain DID-URL path form:
+	 * {@code [<ownerDID>/]dlfs/<drive>[/<path>]}. A null {@code ownerDID} yields the
+	 * bare own form ({@code dlfs/<drive>/…}, canonicalised to the caller by the
+	 * ceiling check); a non-null owner yields the cross-user form. This is a single
+	 * well-formed DID URL (CAD038 DID-scoped path) — {@code /dlfs/} is a namespace
+	 * segment alongside {@code /w/} and {@code /j/} — so {@code RootAuthorityPolicy}
+	 * derives the owner with no special cases, unlike the old {@code dlfs://} scheme
+	 * form whose embedded {@code ://} normalisers can collapse.
+	 */
+	private static String dlfsResource(AString ownerDID, AString drive, AString pathCell) {
+		StringBuilder sb = new StringBuilder();
+		if (ownerDID != null) sb.append(ownerDID).append('/');
+		sb.append("dlfs");
+		if (drive != null) sb.append('/').append(drive);
+		if (pathCell != null) {
+			String p = pathCell.toString();
+			if (p.startsWith("/")) p = p.substring(1);
+			if (!p.isEmpty()) sb.append('/').append(p);
+		}
+		return sb.toString();
+	}
+
+	/**
+	 * Own-namespace capability enforcement co-located with the DLFS op dispatch.
+	 * The resource is the {@code dlfs/<drive>/<path>} path form (drive named via
+	 * {@code drive}, or {@code name} for drive-level ops), canonicalised to the
+	 * caller by the ceiling check; a null ceiling (authenticated/internal) is
+	 * unrestricted (no-op).
+	 */
+	private static void requireDlfsCap(RequestContext ctx, String subOp, AMap<AString, ACell> input) {
+		AString ability = abilityFor(subOp);
 		if (ability == null) return;
 		AString drive = RT.ensureString(RT.getIn(input, FIELD_DRIVE));
 		if (drive == null) drive = RT.ensureString(RT.getIn(input, FIELD_NAME));
-		String resource = schemeResource("dlfs", drive, RT.ensureString(RT.getIn(input, FIELD_PATH)));
-		ctx.requireCapability(resource, ability);
+		String resource = dlfsResource(null, drive, RT.ensureString(RT.getIn(input, FIELD_PATH)));
+		ctx.requireCapability(Strings.create(resource), ability);
+	}
+
+	/**
+	 * The resolved target of a DLFS file op: either the caller's own drive
+	 * ({@code crossUser == false}) or another user's drive addressed via a
+	 * DID-URL {@code drive} reference (e.g. {@code did:key:zAlice/docs}).
+	 */
+	private record DriveTarget(AString ownerDID, String driveName, boolean crossUser) {}
+
+	/**
+	 * Parses the {@code drive} field. A DID-URL value ({@code did:...}) targets
+	 * another user's drive: the DID identifies the owner and the DID-URL path
+	 * component names the drive (the file path stays in {@code path}). Anything
+	 * else is the caller's own drive.
+	 */
+	private static DriveTarget parseDriveRef(RequestContext ctx, AMap<AString, ACell> input) {
+		AString driveCell = RT.ensureString(input.get(FIELD_DRIVE));
+		if (driveCell == null) return new DriveTarget(null, null, false);
+		String s = driveCell.toString();
+		if (!s.startsWith("did:")) return new DriveTarget(null, s, false);
+		DIDURL didURL = DIDURL.create(s);
+		AString ownerDID = Strings.create(didURL.getDID().toString());
+		String drive = didURL.getPath();
+		if (drive != null && drive.startsWith("/")) drive = drive.substring(1);
+		if (drive == null || drive.isEmpty()) {
+			throw new IllegalArgumentException(
+				"DLFS DID-URL drive reference must name a drive, e.g. did:key:.../<drive>");
+		}
+		boolean cross = !ownerDID.equals(ctx.getCallerDID());
+		return new DriveTarget(ownerDID, drive, cross);
+	}
+
+	/**
+	 * Authorises a cross-user DLFS access: the caller must present UCAN proofs
+	 * covering the owner-scoped resource {@code <ownerDID>/dlfs/<drive>/<path>}
+	 * for the ability the op requires ({@code crud/read} for reads,
+	 * {@code crud/write} for writes, {@code crud/delete} for deletes). Reads,
+	 * writes and deletes are all permitted when the proof authorises them — a
+	 * mutation is applied to the owner's drive under the owner's key (custodial;
+	 * caller identity is recorded on the job). Mirrors
+	 * {@code CoviaAdapter.resolveDIDURL} for {@code /w/} cross-user access — the
+	 * shared {@link CapabilityChecker#proofsCover} check is the single grant
+	 * gate. Signatures/chains were already verified at transport ingress.
+	 */
+	private void authorizeCrossUser(RequestContext ctx, String subOp, DriveTarget target,
+			AMap<AString, ACell> input) {
+		AString ability = abilityFor(subOp);
+		if (ability == null) {
+			throw new IllegalStateException(
+				"Cross-user DLFS access is not permitted for '" + subOp + "' on another user's drive");
+		}
+		AString pathCell = RT.ensureString(RT.getIn(input, FIELD_PATH));
+		String resource = dlfsResource(target.ownerDID(), Strings.create(target.driveName()), pathCell);
+		boolean ok = CapabilityChecker.proofsCover(
+			ctx.getProofs(), ctx.getCallerDID(), engine.getDIDString(),
+			Strings.create(resource), ability,
+			System.currentTimeMillis() / 1000);
+		if (!ok) throw new IllegalStateException(
+			"Access denied: no " + ability + " capability for " + resource);
 	}
 
 	private ACell dispatch(RequestContext ctx, String subOp, AMap<AString, ACell> input) throws IOException {
 		if (input == null) input = Maps.empty();
-		requireDlfsCap(ctx, subOp, input);
+		DriveTarget target = parseDriveRef(ctx, input);
+		RequestContext driveCtx = ctx;
+		if (target.ownerDID() != null) {
+			// Drive named as a DID-URL (did:key:.../<drive>). Rewrite to the bare
+			// drive name for the handlers, then authorise.
+			input = input.assoc(FIELD_DRIVE, Strings.create(target.driveName()));
+			if (target.crossUser()) {
+				// Another user's drive: authorise via presented UCAN proofs against
+				// the owner-scoped resource, then open it under the owner's identity.
+				authorizeCrossUser(ctx, subOp, target, input);
+				driveCtx = RequestContext.of(target.ownerDID());
+			} else {
+				// Own drive addressed explicitly by DID — normal own-ceiling check.
+				requireDlfsCap(ctx, subOp, input);
+			}
+		} else {
+			requireDlfsCap(ctx, subOp, input);
+		}
 
 		return switch (subOp) {
-			case "listDrives" -> handleListDrives(ctx);
-			case "createDrive" -> handleCreateDrive(ctx, input);
-			case "deleteDrive" -> handleDeleteDrive(ctx, input);
-			case "list" -> handleList(ctx, input);
-			case "tree" -> handleTree(ctx, input);
-			case "read" -> handleRead(ctx, input);
-			case "write" -> handleWrite(ctx, input, false);
-			case "append" -> handleWrite(ctx, input, true);
-			case "mkdir" -> handleMkdir(ctx, input);
-			case "delete" -> handleDelete(ctx, input);
-			case "stat" -> handleStat(ctx, input);
+			case "listDrives" -> handleListDrives(driveCtx);
+			case "createDrive" -> handleCreateDrive(driveCtx, input);
+			case "deleteDrive" -> handleDeleteDrive(driveCtx, input);
+			case "list" -> handleList(driveCtx, input);
+			case "tree" -> handleTree(driveCtx, input);
+			case "read" -> handleRead(driveCtx, input);
+			// handleWrite takes BOTH contexts: the drive opens under driveCtx (the
+			// owner, for a cross-user write), but a caller-supplied `asset` ref is
+			// resolved under the CALLER's own context — resolving caller input under
+			// owner authority would let a drive-scoped grant read the owner's other
+			// namespaces (confused deputy).
+			case "write" -> handleWrite(driveCtx, ctx, input, false);
+			case "append" -> handleWrite(driveCtx, ctx, input, true);
+			case "mkdir" -> handleMkdir(driveCtx, input);
+			case "delete" -> handleDelete(driveCtx, input);
+			case "stat" -> handleStat(driveCtx, input);
 			default -> throw new IllegalArgumentException("Unknown DLFS operation: " + subOp);
 		};
 	}
@@ -534,7 +649,14 @@ public class DLFSAdapter extends AAdapter {
 		}
 	}
 
-	private ACell handleWrite(RequestContext ctx, AMap<AString, ACell> input, boolean append) throws IOException {
+	/**
+	 * @param ctx      drive context — the identity whose drive is written (the
+	 *                 owner for an authorised cross-user write)
+	 * @param assetCtx the CALLER's context, used to resolve a caller-supplied
+	 *                 {@code asset} reference under the caller's own authority
+	 */
+	private ACell handleWrite(RequestContext ctx, RequestContext assetCtx,
+			AMap<AString, ACell> input, boolean append) throws IOException {
 		FileSystem fs = requireDrive(ctx, input);
 		AString pathCell = RT.ensureString(input.get(FIELD_PATH));
 		if (pathCell == null) throw new IllegalArgumentException("'path' is required");
@@ -563,7 +685,8 @@ public class DLFSAdapter extends AAdapter {
 		long written;
 
 		if (assetRef != null) {
-			Asset asset = engine.resolveAsset(assetRef, ctx);
+			// Caller-supplied ref → caller's authority, never the drive owner's.
+			Asset asset = engine.resolveAsset(assetRef, assetCtx);
 			if (asset == null) throw new IllegalArgumentException("Asset not found: " + assetRef);
 			try (InputStream is = engine.getContentStream(asset);
 			     OutputStream os = Files.newOutputStream(path,
