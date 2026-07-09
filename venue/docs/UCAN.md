@@ -282,8 +282,16 @@ verify(proofs, requiredCapability):
        - with is equal or parent of required.with (path attenuation)
        - can is equal or parent of required.can (ability attenuation)
        - * covers any ability
-    5. If prf is empty:
-       - ucan.iss must be the resource owner (DID in the with URI)
+    5. If prf is empty (root):                                  ; see §5.6
+       - O = resource owner (DID in the with URI)
+       - A = O's controlling authority:
+           - if O ends in ":u:<user>"  → A = O without that suffix (the venue)
+           - else                       → A = O (self-sovereign)
+       - ucan.iss must == A
+       - Trust: if A == O → accept (owner's own authority, self-certifying);
+                if A is a venue (custodial O) → accept iff A is trusted
+                (Phase C3 policy; local A == this venue is always trusted)
+       - Resolve A's key, verify the root signature
        - Root reached — chain valid
     6. For each parent in prf:
        - Verify parent.aud == ucan.iss (continuous delegation)
@@ -605,6 +613,76 @@ For Model A, the key change is that the agent's tool calls go through a
 The venue becomes the enforcement mechanism — it issued the scoped token
 and it verifies it on every tool call.
 
+### 5.6 Trust Anchors and Federation
+
+Every delegation chain terminates in a **root** — a token whose `prf` is
+empty. The single question that makes verification federatable is: *who is
+allowed to sign that root?* The answer is uniform and derives entirely from
+the resource being accessed, never from the identity of the verifying venue.
+
+**The trust anchor is the authority over the resource owner.** A resource URI
+names its owner (§3.1: `did:…/w/notes` is owned by `did:…`). The root of any
+chain granting access to it must be signed by that owner's controlling
+authority — which is read directly off the owner's DID:
+
+| Owner DID form | Identity class | Controlling authority | Root signer | Trusted because |
+|----------------|----------------|-----------------------|-------------|-----------------|
+| `did:key:z…` | **Self-sovereign** | the owner themselves | the owner (owner-signed) | `did:key` is self-certifying — the key *is* the DID |
+| `did:web:host` | **Self-sovereign** | the owner themselves | the owner (owner-signed) | resolved from `https://host/.well-known/did.json` |
+| `<venueDID>:u:<user>` | **Venue-custodial** | the controlling venue (`<venueDID>`) | that venue (venue-**attested**) | the verifier's trust policy accepts that venue |
+
+The custodial authority is obtained by stripping the `:u:<user>` suffix that
+the venue appends when it mints a user's DID (`LoginProviders`), yielding the
+venue's own DID; a `did:web` custodial DID additionally resolves at
+`/u/<user>/did.json`.
+
+**Owner-rooted (self-sovereign).** A user who holds their own key signs their
+own root. Nothing but their signature is consulted — no venue is asked, no
+trust list, no config sync. This is fully federated by construction: any venue
+can verify a `did:key` root offline. This is the model for embedded/desktop
+owners (each app holds its keypair — see the [Embedded Venue](https://docs.covia.ai/docs/operator-guide/embedded-venue)
+recipe) and the target for cross-venue delegation.
+
+**Venue-attested (custodial).** An OAuth user has no key of their own; the
+venue holds their identity. That venue signs on the user's behalf — the root
+token's `iss` is the **controlling venue**, and the token is an *attestation*:
+"I hold this user's identity and I vouch for this grant over their namespace."
+This is not the venue claiming authority over arbitrary data — it is scoped to
+the namespaces of the users it controls. A verifying venue accepts such a root
+only if its **trust policy** accepts the attesting venue (Phase C3).
+
+**The verifier's own identity is irrelevant.** A venue verifying a request
+asks only: does the chain root in the resource owner's controlling authority,
+and (for a custodial root) do I trust that authority? It never requires the
+root to be its *own* signature. The current implementation's Phase C1 check —
+root `iss` must equal the verifying venue — is the **degenerate case** where
+the controlling authority happens to be the verifying venue itself (a local
+custodial user). Generalising it from "iss == this venue" to "iss == the
+owner's controlling authority, and trusted" is backward-compatible for local
+users and is precisely what unblocks federation (#100).
+
+#### Trust policy for attesting venues (Phase C3)
+
+Self-sovereign roots need no policy — they are self-certifying. Only
+**custodial** roots signed by a *remote* venue require a decision, and the
+degenerate local case (attesting venue == verifying venue) is always trusted.
+For genuinely remote attestations the verifier applies a configurable policy;
+the design supports, in increasing flexibility:
+
+1. **Trusted-issuers allowlist** — `auth.trustedIssuers: [did:web:a.example, …]`.
+   Simple; explicit; needs manual sync.
+2. **Organisation root** — venues in one org each hold a delegation from a
+   shared org DID; a custodial attestation is trusted if it chains to that
+   root. No per-venue enumeration.
+3. **DID-document discovery** — resolve the attesting venue's DID document and
+   apply a policy expressed there (e.g. a federation membership claim).
+
+These are layered, not exclusive: an allowlist can ship first, an org root
+added later, without changing the verification core — which only needs
+"resolve authority A's key; is A trusted for this owner?" The policy is the
+*only* federation-specific surface; the chain-walking, attenuation, temporal,
+and revocation checks are identical to the single-venue path.
+
 ---
 
 ## 6. Implementation Phases
@@ -656,6 +734,25 @@ and it verifies it on every tool call.
 - Agent-to-agent delegation chains
 
 ### Phase C3: Federation
+
+Trust anchored at the resource owner, not the verifying venue (§5.6). Two
+tracks, in order of dependency:
+
+**C3a — Owner-rooted verification (self-sovereign).** Generalise
+`CoviaAdapter.verifyProofs` from the Phase C1 shortcut (root `iss` must equal
+*this* venue) to the §4.4 rule (root `iss` must equal the resource owner's
+controlling authority `A`, resolved from the owner DID). For a self-sovereign
+`did:key` / `did:web` owner, `A` is the owner and needs no trust policy —
+verifiable offline by any venue. Turns green the `@Disabled`
+`crossVenueUCANIsAccepted` test in `CrossVenueTest`. Backward-compatible: a
+local custodial user's `A` is this venue, so single-venue grants keep working.
+
+**C3b — Venue-attested verification + trust policy (custodial).** Accept a
+root signed by a *remote* controlling venue for its custodial user
+(`<venueDID>:u:<user>`), gated by a trust policy — allowlist first
+(`auth.trustedIssuers`), org-root / DID-discovery later (§5.6). This is the
+only federation-specific surface; everything else (chain walk, attenuation,
+temporal, revocation) is shared with the single-venue path.
 
 - Proof chains travel with job submissions across venue boundaries
 - Each venue verifies independently using DID→key resolution
