@@ -8,6 +8,8 @@
 		<version>0.4.0-SNAPSHOT</version>
 	</parent>
 	<artifactId>venue</artifactId>
+	<name>Covia Venue</name>
+	<description>Covia venue server runtime: the grid node that hosts operations, agents, assets, and the REST/MCP/A2A APIs.</description>
 
 	<build>
 		<plugins>

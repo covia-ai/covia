@@ -261,6 +261,60 @@ To create a stable release:
    git push origin develop
    ```
 
+### Publishing to Maven Central
+
+The library modules are published to Maven Central under the `ai.covia` groupId:
+`ai.covia:covia-core`, `ai.covia:venue`, and `ai.covia:workbench` (plus the
+`ai.covia:covia` parent POM). Consumers add them as ordinary dependencies; the
+executable `covia.jar` is an unattached assembly and is **not** published (it
+stays a GitHub-release download).
+
+Publishing uses the [Sonatype Central Publishing plugin](https://central.sonatype.org/publish/publish-portal-maven/)
+and mirrors the Convex setup: pom config lives in the root `pom.xml`
+(`distributionManagement`, `central-publishing-maven-plugin`, source/javadoc
+plugins, and a `release` profile that GPG-signs artifacts). The deploy itself is
+a **local command**, run only after the GitHub Release is confirmed live —
+Maven Central publishes are irreversible.
+
+**One-time setup** (per machine / per operator):
+
+1. **Namespace verification** — verify ownership of the `ai.covia` namespace in
+   the [Central Portal](https://central.sonatype.com/) (a DNS TXT record on
+   `covia.ai`, or GitHub-org verification). Done once for the whole org.
+2. **GPG signing key** — a published signing key. The Convex release key works
+   directly if you already have one:
+   ```bash
+   gpg --list-secret-keys              # confirm a key exists
+   gpg --keyserver keyserver.ubuntu.com --send-keys <KEY_ID>   # publish it once
+   ```
+3. **Central token** — generate a user token in the Central Portal and add it to
+   `~/.m2/settings.xml`:
+   ```xml
+   <settings>
+     <servers>
+       <server>
+         <id>central</id>
+         <username>TOKEN_USERNAME</username>
+         <password>TOKEN_PASSWORD</password>
+       </server>
+     </servers>
+   </settings>
+   ```
+
+**Validate the pipeline first** with a snapshot (freely republishable):
+```bash
+mvn clean deploy    # -SNAPSHOT version → routes to the Central snapshot repo
+```
+
+**Publish a release** — only after the GitHub Release for the tag is live:
+```bash
+mvn clean deploy -Prelease
+```
+`-Prelease` GPG-signs every artifact; the Central plugin bundles all modules
+(main + sources + javadoc + pom + signatures) and, with `autoPublish=true`,
+publishes them to Maven Central. Then verify at
+`https://central.sonatype.com/artifact/ai.covia/covia-core`.
+
 ### Release Artifacts
 
 Both snapshot and stable releases include:
