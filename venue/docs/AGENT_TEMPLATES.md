@@ -281,7 +281,44 @@ This is a fully data-driven workflow — no special APIs, just reading templates
 
 ---
 
-## 8. Implementation
+## 8. Multi-agent pipelines (passing outputs)
+
+When agents chain work — one agent's output feeds the next — there are two mechanisms, and they differ in whether an LLM sits in the *data* path.
+
+### Deterministic: the `orchestrator` operation
+
+For a fixed, known pipeline, define an `orchestrator` operation whose steps reference each other's outputs by index (`[<stepIndex>, <path…>]`, plus `[:const …]` / `[:input …]` / `[:concat …]`). The orchestrator wires each step's output into the next step's input **verbatim**, and runs independent steps in parallel and dependent ones in order — no agent, no LLM, in the data path. This is the right tool whenever the pipeline shape is known ahead of time. See `covia.adapter.Orchestrator`.
+
+### Dynamic: an LLM manager agent
+
+A `manager` agent decides the pipeline at runtime by calling `agent_request` on sub-agents. Here the LLM *is* in the control path, so the data must not be: a model asked to copy a prior agent's full output into the next request will paraphrase or truncate it (issue #71). The convention is **pass references, not payloads**:
+
+- Each worker writes its result to a shared path (`w/pipeline/<run>/step-1`); the manager tells the next worker to read that path.
+- Alternatively the manager passes the job reference `j/<jobId>` of a completed request for the next worker to read.
+- The manager sequences dependent steps (`wait=true`) rather than firing them in parallel.
+
+### Capabilities for handoff
+
+A worker can read a handoff path **only if its capability ceiling covers it** — sharing the owner's namespace is not sufficient. An agent's `config.caps` narrows it to exactly the listed `{with, can}` grants (`ContextBuilder` applies `ctx.withCaps(caps)` to the transition context); an agent with **no** `caps` runs with the owner's full authority and can read any of the owner's paths.
+
+So for a pipeline of *capped* workers, provision the handoff area explicitly:
+
+```json
+{
+  "name": "Pipeline Stage",
+  "tools": ["v/ops/covia/read", "v/ops/covia/write"],
+  "caps": [
+    {"with": "w/pipeline/", "can": "crud/read"},
+    {"with": "w/pipeline/out/", "can": "crud/write"}
+  ]
+}
+```
+
+Every stage can read the shared `w/pipeline/` area; each writes only its own output subpath. Uncapped workers need none of this — but capping is the least-privilege posture for untrusted or externally-facing work, and there the handoff caps are mandatory, not optional.
+
+---
+
+## 9. Implementation
 
 ### Phase 1: `config` accepts string references ✓ DONE
 
@@ -315,7 +352,7 @@ This is a fully data-driven workflow — no special APIs, just reading templates
 
 ---
 
-## 9. Relation to existing features
+## 10. Relation to existing features
 
 | Feature | Relation |
 |---------|----------|
