@@ -37,6 +37,7 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Asset;
 import covia.lattice.AgentNamespaceResolver;
+import covia.lattice.CapabilityChecker;
 import covia.lattice.NamespaceResolver;
 import covia.lattice.SessionNamespaceResolver;
 import covia.lattice.TempNamespaceResolver;
@@ -1917,44 +1918,12 @@ public class CoviaAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private boolean verifyProofs(RequestContext ctx,
 			String requestedResource, String requestedAbility) {
-		AVector<ACell> proofs = ctx.getProofs();
-		if (proofs == null || proofs.count() == 0) return false;
-
-		long now = System.currentTimeMillis() / 1000;
-		AString venueDID = engine.getDIDString();
-
-		for (long i = 0; i < proofs.count(); i++) {
-			if (!(proofs.get(i) instanceof AMap<?,?> tm)) continue;
-			@SuppressWarnings("unchecked")
-			AMap<AString, ACell> tokenMap = (AMap<AString, ACell>) tm;
-
-			UCAN token = UCAN.parse(tokenMap);
-			if (token == null) continue;
-
-			// Re-check temporal bounds only. Signature and chain were
-			// verified at the trust boundary (parseTransportUCANs).
-			if (!UCANValidator.checkTemporalBounds(token, now)) continue;
-
-			// Audience must match caller
-			AString aud = token.getAudience();
-			if (aud == null || !aud.equals(ctx.getCallerDID())) continue;
-
-			// Phase C1: issuer must be the venue (authority for all hosted data).
-			AString iss = token.getIssuer();
-			if (iss == null || !iss.equals(venueDID)) continue;
-
-			// Check attenuations cover the requested resource (full DID URL)
-			AVector<ACell> atts = token.getCapabilities();
-			for (long j = 0; j < atts.count(); j++) {
-				if (!(atts.get(j) instanceof AMap<?,?> am)) continue;
-				@SuppressWarnings("unchecked")
-				AMap<AString, ACell> att = (AMap<AString, ACell>) am;
-				if (Capability.covers(att, requestedResource, requestedAbility)) {
-					return true;
-				}
-			}
-		}
-		return false;
+		// Single cross-user grant check, shared with job-read authorisation
+		// (covia#102) so the lattice-read path and the job path enforce the
+		// same right. Signature + chain already verified at transport ingress.
+		return CapabilityChecker.proofsCover(ctx.getProofs(), ctx.getCallerDID(),
+			engine.getDIDString(), Strings.create(requestedResource),
+			Strings.create(requestedAbility), System.currentTimeMillis() / 1000);
 	}
 
 }

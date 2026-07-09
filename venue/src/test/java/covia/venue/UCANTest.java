@@ -235,6 +235,42 @@ public class UCANTest {
 		assertEquals(Strings.create("shared content"), RT.getIn(result, "value"));
 	}
 
+	/**
+	 * covia#102: reading a job is the same right as reading any {@code j/} path,
+	 * and is delegable. A {@code crud/read} grant on the owner's {@code /j/}
+	 * lets the grantee read the job via BOTH {@code getJobData} (the job path)
+	 * and {@code covia:read did:<owner>/j/<id>} (the lattice path) — one shared
+	 * check. But a read grant does NOT authorise a job mutation.
+	 */
+	@Test
+	public void testCrossUserJobReadWithProofButNotMutation() {
+		// Alice runs a never-completing job → active, owned by Alice.
+		covia.grid.Job aliceJob = engine.jobs().invokeOperation(
+			Strings.create("v/test/ops/never"), Maps.empty(), ALICE);
+		convex.core.data.Blob jobId = aliceJob.getID();
+
+		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/j/", "crud/read", 3600);
+
+		// Path 1 — the job path (getJobData, as grid:jobStatus/GET /jobs/{id} use).
+		AMap<AString, ACell> viaJobData = engine.jobs().getJobData(jobId, withProofs(BOB, token));
+		assertNotNull(viaJobData, "a crud/read grant on /j/ authorises reading the job");
+		assertEquals(ALICE_DID, RT.ensureString(viaJobData.get(Fields.CALLER)));
+
+		// Path 2 — the lattice path (covia:read). Same right, same check.
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID.append("/j/" + jobId.toHexString())),
+			withProofs(BOB, token));
+		assertEquals(CVMBool.TRUE, RT.getIn(readJob.awaitResult(5000), "exists"));
+
+		// Without a proof: denied (fail-closed).
+		assertThrows(Exception.class, () -> engine.jobs().getJobData(jobId, BOB));
+
+		// A read grant is not a write grant: mutation stays owner-only.
+		assertThrows(Exception.class, () -> engine.jobs().cancelJob(jobId, withProofs(BOB, token)));
+
+		engine.jobs().cancelJob(jobId); // cleanup the never-job
+	}
+
 	@Test
 	public void testCrossUserReadSubpathAttenuation() {
 		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/w/shared/", "crud/read", 3600);

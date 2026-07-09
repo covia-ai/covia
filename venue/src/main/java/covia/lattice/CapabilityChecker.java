@@ -65,6 +65,40 @@ public class CapabilityChecker {
 	}
 
 	/**
+	 * Cross-user proof check: do the caller's presented {@code proofs} grant
+	 * {@code (resource, ability)}? A proof grants it when it is audienced to the
+	 * caller, issued by {@code venueDID} (Phase C1 — the venue is authority for
+	 * hosted data; generalised in Phase C3, covia#100), in-date, and carries an
+	 * attenuation that {@link Capability#covers covers} the request.
+	 *
+	 * <p>Selection reuses {@link UCANValidator#capabilitiesFor} (convex-core);
+	 * this is the single cross-user grant check — {@code CoviaAdapter.verifyProofs}
+	 * and job-read authorisation both call it, so the model can't drift between
+	 * the lattice-read path and the job path (they are the same right — covia#102).</p>
+	 *
+	 * @param proofs   the caller's presented UCAN proofs (from the RequestContext)
+	 * @param caller   the caller's DID (proof audience)
+	 * @param venueDID the verifying venue's DID (required proof issuer, Phase C1)
+	 * @param resource the full resource being accessed (e.g. {@code "did:key:z…/j/<id>"})
+	 * @param ability  the required ability (e.g. {@link Capability#CRUD_READ})
+	 * @param now      current time, unix seconds
+	 * @return true if some presented proof grants the request
+	 */
+	public static boolean proofsCover(AVector<ACell> proofs, AString caller, AString venueDID,
+			AString resource, AString ability, long now) {
+		if (caller == null || resource == null || ability == null) return false;
+		AVector<ACell> caps = UCANValidator.capabilitiesFor(proofs, caller, venueDID, now);
+		if (caps == null) return false;
+		for (long i = 0; i < caps.count(); i++) {
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> cap = (caps.get(i) instanceof AMap<?, ?> m)
+				? (AMap<AString, ACell>) m : null;
+			if (cap != null && Capability.covers(cap, resource, ability)) return true;
+		}
+		return false;
+	}
+
+	/**
 	 * Checks whether a capability ceiling allows a specific {@code (resource,
 	 * ability)} pair supplied <em>directly</em> by the executing adapter — not
 	 * derived from an operation name.

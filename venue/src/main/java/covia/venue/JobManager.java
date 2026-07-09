@@ -16,6 +16,8 @@ import convex.core.data.Blob;
 import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.auth.ucan.Capability;
+import covia.lattice.CapabilityChecker;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
@@ -430,18 +432,50 @@ public class JobManager {
 		Job job;
 		job = activeJobs.get(jobID);
 		if (job != null) {
-			if (!engine.getAccessControl().canAccessJob(ctx, job.getData())) {
+			if (!canReadJob(ctx, jobID, job.getData())) {
 				throw new AuthException("Access denied to job: " + jobID.toHexString());
 			}
 			return job.getData();
 		}
 
-		// 2. User's lattice (authoritative)
+		// 2. User's lattice (authoritative). Scoped to the caller's own jobs;
+		// a delegated read of another user's *terminal* (evicted) job goes via
+		// the explicit DID-URL path (covia:read did:<owner>/j/<id>).
 		AString did = ctx.getCallerDID();
 		if (did == null) return null;
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
 		return user.getJob(jobID);
+	}
+
+	/**
+	 * Read authorisation for a job: the owner, or a caller presenting a UCAN
+	 * proof granting {@code crud/read} on the job resource {@code <owner>/j/<id>}
+	 * — the same right as {@code covia:read did:<owner>/j/<id>} (covia#102), via
+	 * the shared {@link CapabilityChecker#proofsCover} check. Reads are
+	 * delegable like any other read; job *mutations* remain owner-only
+	 * ({@link #requireJobOwner}).
+	 */
+	private boolean canReadJob(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
+		if (engine.getAccessControl().canAccessJob(ctx, data)) return true; // owner
+		AString owner = RT.ensureString(data.get(Fields.CALLER));
+		if (owner == null) return false; // venue-internal job — owner/internal only
+		AString resource = owner.append("/j/" + jobID.toHexString());
+		return CapabilityChecker.proofsCover(ctx.getProofs(), ctx.getCallerDID(),
+			engine.getDIDString(), resource, Capability.CRUD_READ,
+			System.currentTimeMillis() / 1000);
+	}
+
+	/**
+	 * Owner-only gate for job <em>mutations</em> (cancel/pause/resume/delete).
+	 * A {@code crud/read} delegation lets a caller read a job but not mutate it,
+	 * so mutations check ownership explicitly rather than relying on the
+	 * read-delegable {@link #getJobData(Blob, RequestContext)}.
+	 */
+	private void requireJobOwner(RequestContext ctx, Blob jobID, AMap<AString, ACell> data) {
+		if (!engine.getAccessControl().canAccessJob(ctx, data)) {
+			throw new AuthException("Access denied to job: " + jobID.toHexString());
+		}
 	}
 
 	/**
@@ -510,7 +544,7 @@ public class JobManager {
 	public AMap<AString, ACell> cancelJob(Blob id, RequestContext ctx) {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return null;
-		// access already checked by getJobData(id, ctx)
+		requireJobOwner(ctx, id, data); // mutation: owner-only, not read-delegable
 		return cancelJob(id);
 	}
 
@@ -529,6 +563,7 @@ public class JobManager {
 	public AMap<AString, ACell> pauseJob(Blob id, RequestContext ctx) {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return null;
+		requireJobOwner(ctx, id, data); // mutation: owner-only
 		return pauseJob(id);
 	}
 
@@ -547,6 +582,7 @@ public class JobManager {
 	public AMap<AString, ACell> resumeJob(Blob id, RequestContext ctx) {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return null;
+		requireJobOwner(ctx, id, data); // mutation: owner-only
 		return resumeJob(id);
 	}
 
@@ -579,6 +615,7 @@ public class JobManager {
 	public boolean deleteJob(Blob id, RequestContext ctx) {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return false;
+		requireJobOwner(ctx, id, data); // mutation: owner-only
 		AString ownerDID = RT.ensureString(data.get(Fields.CALLER));
 		if (ownerDID != null) {
 			User user = engine.getVenueState().users().get(ownerDID);
