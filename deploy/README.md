@@ -2,6 +2,8 @@
 
 This guide is for Venue operators who want to deploy a minimal working venue for testing and development purposes
 
+> Embedding a venue inside a desktop or single-user app (loopback, self-authenticated, one owner)? See the [Embedded Venue](https://docs.covia.ai/docs/operator-guide/embedded-venue) operator guide for that deployment shape.
+
 ## Server Setup
 
 Have a VM instance with a modern Linux Distro, e.g. Ubuntu 25
