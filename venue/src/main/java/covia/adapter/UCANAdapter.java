@@ -27,6 +27,10 @@ import covia.venue.RequestContext;
  */
 public class UCANAdapter extends AAdapter {
 
+	private static final AString K_TOKEN = Strings.intern("token");
+	private static final AString K_AUTHORISES = Strings.intern("authorises");
+	private static final AString K_AUDIENCE = Strings.intern("audience");
+
 	@Override
 	public String getName() {
 		return "ucan";
@@ -40,6 +44,7 @@ public class UCANAdapter extends AAdapter {
 	@Override
 	protected void installAssets() {
 		installAsset("ucan/issue", "/adapters/ucan/issue.json");
+		installAsset("ucan/verify", "/adapters/ucan/verify.json");
 	}
 
 	@Override
@@ -50,7 +55,8 @@ public class UCANAdapter extends AAdapter {
 		}
 		try {
 			return switch (getSubOperation(meta)) {
-				case "issue" -> CompletableFuture.completedFuture(handleIssue(ctx, input));
+				case "issue"  -> CompletableFuture.completedFuture(handleIssue(ctx, input));
+				case "verify" -> CompletableFuture.completedFuture(handleVerify(ctx, input));
 				default -> CompletableFuture.failedFuture(
 					new RuntimeException("Unknown ucan operation: " + getSubOperation(meta)));
 			};
@@ -108,5 +114,121 @@ public class UCANAdapter extends AAdapter {
 		UCAN token = UCAN.create(venueKP, audKey, exp, att, Vectors.empty());
 
 		return Maps.of("token", token.toJWT(venueKP));
+	}
+
+	/**
+	 * Verifies a UCAN token against this venue's trust policy and <b>explains</b>
+	 * the verdict — the diagnostic counterpart to enforcement, which only says
+	 * "Access denied". No signing, no side effects.
+	 *
+	 * <p>Reports signature/temporal/chain validity, the parsed claims, the
+	 * delegation chain depth and root issuer, a per-capability root-authority
+	 * verdict ({@code owner} = self-sovereign, {@code venue} = this venue's
+	 * grant, {@code refused}), and — when {@code with}/{@code can} are supplied —
+	 * whether the token would authorise that request here for the given audience
+	 * (default: the caller).</p>
+	 */
+	private ACell handleVerify(RequestContext ctx, ACell input) {
+		AString tokenStr = RT.ensureString(RT.getIn(input, K_TOKEN));
+		AMap<AString, ACell> tokenMap = RT.castMap(RT.getIn(input, K_TOKEN));
+		if (tokenStr == null && tokenMap == null) {
+			throw new RuntimeException("token is required: a UCAN JWT string or token map");
+		}
+
+		long now = System.currentTimeMillis() / 1000;
+		AString venueDID = engine.getDIDString();
+
+		// Full verification (signature at every hop, temporal bounds, chain structure).
+		UCAN token = null;
+		String failure = null;
+		try {
+			token = (tokenStr != null)
+				? convex.auth.ucan.UCANValidator.validateJWT(tokenStr, now, convex.auth.did.DIDVerifier.CONVEX)
+				: convex.auth.ucan.UCANValidator.validate(UCAN.parse(tokenMap), now, convex.auth.did.DIDVerifier.CONVEX);
+		} catch (Exception e) {
+			failure = e.getMessage();
+		}
+
+		if (token == null) {
+			// Parse WITHOUT verification purely to sharpen the diagnostic.
+			UCAN unverified = null;
+			try {
+				unverified = (tokenStr != null) ? UCAN.parseJWT(tokenStr) : UCAN.parse(tokenMap);
+			} catch (Exception ignored) {}
+			String reason;
+			if (unverified == null) {
+				reason = "unparseable: not a well-formed UCAN" + (failure != null ? " (" + failure + ")" : "");
+			} else if (!convex.auth.ucan.UCANValidator.checkTemporalBounds(unverified, now)) {
+				reason = "expired or not yet valid (exp/nbf out of bounds)";
+			} else {
+				reason = "verification failed: bad signature or invalid delegation chain"
+					+ (failure != null ? " (" + failure + ")" : "");
+			}
+			return Maps.of("valid", false, "reason", reason);
+		}
+
+		// Chain shape: depth and root issuer. A prf entry is a JWT string in
+		// JWT transport form, or a token map in CVM/lattice form — handle both.
+		UCAN root = token;
+		long depth = 0;
+		while (true) {
+			AVector<ACell> prf = root.getProofs();
+			if (prf == null || prf.isEmpty()) break;
+			ACell entry = prf.get(0);
+			UCAN parent = null;
+			AString parentJwt = RT.ensureString(entry);
+			if (parentJwt != null) {
+				parent = UCAN.parseJWT(parentJwt);
+			} else {
+				AMap<AString, ACell> parentMap = RT.castMap(entry);
+				if (parentMap != null) parent = UCAN.parse(parentMap);
+			}
+			if (parent == null) break;
+			root = parent;
+			depth++;
+		}
+		AString rootIssuer = root.getIssuer();
+
+		// Per-capability root-authority verdict under this venue's policy.
+		convex.auth.ucan.RootAuthorityPolicy self = convex.auth.ucan.RootAuthorityPolicy.SELF_SOVEREIGN;
+		AVector<ACell> att = token.getCapabilities();
+		AVector<ACell> verdicts = Vectors.empty();
+		if (att != null) {
+			for (long i = 0; i < att.count(); i++) {
+				AMap<AString, ACell> cap = RT.castMap(att.get(i));
+				AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
+				String verdict;
+				if (self.acceptsRoot(rootIssuer, with)) verdict = "owner";
+				else if (venueDID.equals(rootIssuer)) verdict = "venue";
+				else verdict = "refused";
+				verdicts = verdicts.conj(Maps.of(
+					Capability.WITH, with,
+					Capability.CAN, (cap != null) ? cap.get(Capability.CAN) : null,
+					"rootAuthority", verdict));
+			}
+		}
+
+		AMap<AString, ACell> result = Maps.of(
+			"valid", true,
+			"iss", token.getIssuer(),
+			"aud", token.getAudience(),
+			"exp", CVMLong.create(token.getExpiry()),
+			"chainDepth", CVMLong.create(depth),
+			"rootIssuer", rootIssuer,
+			"att", verdicts);
+
+		// Optional: would this token authorise (with, can) here, for the given
+		// audience (default the caller)? Uses the SAME gate enforcement uses.
+		AString reqWith = RT.ensureString(RT.getIn(input, Capability.WITH));
+		AString reqCan = RT.ensureString(RT.getIn(input, Capability.CAN));
+		if (reqWith != null && reqCan != null) {
+			AString audience = RT.ensureString(RT.getIn(input, UCAN.AUD));
+			if (audience == null) audience = ctx.getCallerDID();
+			boolean authorises = covia.lattice.CapabilityChecker.proofsCover(
+				Vectors.of(token.toMap()), audience, venueDID, reqWith, reqCan, now);
+			result = result.assoc(K_AUTHORISES, convex.core.data.prim.CVMBool.of(authorises));
+			result = result.assoc(K_AUDIENCE, audience);
+		}
+		return result;
 	}
 }

@@ -1,0 +1,45 @@
+{
+	"name": "Verify UCAN Token",
+	"description": "Verifies a UCAN capability token against this venue's trust policy and explains the verdict — the diagnostic counterpart to enforcement. Reports validity (signature at every chain hop, temporal bounds), the parsed claims, the delegation chain depth and root issuer, and a per-capability root-authority verdict: 'owner' (self-sovereign — the chain root is signed by the resource owner), 'venue' (rooted by this venue), or 'refused'. Optionally checks whether the token would authorise a specific request here. Read-only: no signing, no side effects.",
+	"dateCreated": "2026-07-09T00:00:00Z",
+	"operation": {
+		"adapter": "ucan:verify",
+		"toolName": "ucan_verify",
+		"input": {
+			"type": "object",
+			"properties": {
+				"token": {
+					"type": ["string", "object"],
+					"description": "The UCAN to verify: a JWT string (as returned by ucan_issue or minted client-side) or a token map"
+				},
+				"with": {
+					"type": "string",
+					"description": "Optional: a resource — together with 'can', asks whether the token would authorise this request on this venue"
+				},
+				"can": {
+					"type": "string",
+					"description": "Optional: an ability (e.g. crud/read) — together with 'with', asks whether the token would authorise this request"
+				},
+				"aud": {
+					"type": "string",
+					"description": "Optional: the audience to evaluate the authorisation for (defaults to your own DID)"
+				}
+			},
+			"required": ["token"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"valid": { "type": "boolean", "description": "Whether the token verifies (signatures, temporal bounds, chain structure)" },
+				"reason": { "type": "string", "description": "When invalid: a diagnosable explanation (expired, bad signature, unparseable, ...)" },
+				"iss": { "type": "string", "description": "Issuer DID" },
+				"aud": { "type": "string", "description": "Audience DID" },
+				"exp": { "type": "integer", "description": "Expiry (unix seconds)" },
+				"chainDepth": { "type": "integer", "description": "Number of delegation hops above this token (0 = a root grant)" },
+				"rootIssuer": { "type": "string", "description": "The DID that signed the root of the delegation chain" },
+				"att": { "type": "array", "description": "The token's capabilities, each with a rootAuthority verdict: owner | venue | refused" },
+				"authorises": { "type": "boolean", "description": "Present when with/can supplied: whether the token authorises that request here for the audience" }
+			}
+		}
+	}
+}
