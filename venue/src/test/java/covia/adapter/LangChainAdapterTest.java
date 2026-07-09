@@ -309,6 +309,87 @@ public class LangChainAdapterTest {
 		assertInstanceOf(ToolExecutionResultMessage.class, result.get(0));
 	}
 
+	// ========== Asset-referenced images (covia#198) ==========
+
+	@Test
+	public void testImageAssetRefResolved() {
+		// Store a tiny "PNG" as a content asset, reference it from a message,
+		// and check the adapter inlines it (base64 + contentType) at call time.
+		var engine = covia.venue.TestEngine.ENGINE;
+		var ctx = covia.venue.RequestContext.of(convex.core.data.Strings.create("did:key:zImgTest"));
+		byte[] bytes = new byte[] {(byte)0x89, 0x50, 0x4E, 0x47, 1, 2, 3};
+		var meta = Maps.of("name", "scan", "contentType", "image/png");
+		var stored = engine.jobs().invokeOperation("v/ops/asset/store",
+			Maps.of("metadata", meta, "content",
+				convex.core.data.Strings.create("0x" + convex.core.data.Blob.wrap(bytes).toHexString())),
+			ctx).awaitResult(5000);
+		String id = convex.core.lang.RT.ensureString(
+			convex.core.lang.RT.getIn(stored, "id")).toString();
+
+		var messages = Vectors.of(
+			Maps.of("role", "user", "content", Vectors.of(
+				Maps.of("type", "image", "source", Maps.of("type", "asset", "ref", id)),
+				Maps.of("type", "text", "text", "what is this?"))));
+
+		var adapter = (LangChainAdapter) engine.getAdapter("langchain");
+		var resolved = adapter.resolveImageRefs(messages, ctx);
+		var block = convex.core.lang.RT.getIn(resolved.get(0), "content");
+		assertEquals(convex.core.data.Strings.create("base64"),
+			convex.core.lang.RT.getIn(((convex.core.data.AVector<?>) block).get(0), "source", "type"));
+		assertEquals(convex.core.data.Strings.create("image/png"),
+			convex.core.lang.RT.getIn(((convex.core.data.AVector<?>) block).get(0), "source", "mediaType"));
+		assertEquals(convex.core.data.Strings.create(java.util.Base64.getEncoder().encodeToString(bytes)),
+			convex.core.lang.RT.getIn(((convex.core.data.AVector<?>) block).get(0), "source", "data"));
+		// The text block is untouched; the original messages vector is unchanged.
+		assertEquals(convex.core.data.Strings.create("what is this?"),
+			convex.core.lang.RT.getIn(((convex.core.data.AVector<?>) block).get(1), "text"));
+		// And the resolved form converts to a multimodal UserMessage end-to-end.
+		List<ChatMessage> chat = LangChainAdapter.toChatMessages(resolved);
+		UserMessage um = assertInstanceOf(UserMessage.class, chat.get(0));
+		assertEquals(2, um.contents().size());
+	}
+
+	@Test
+	public void testImageRefViaWorkspacePath() {
+		// A workspace slot holding an asset reference string resolves via one hop.
+		var engine = covia.venue.TestEngine.ENGINE;
+		var ctx = covia.venue.RequestContext.of(convex.core.data.Strings.create("did:key:zImgWsTest"));
+		byte[] bytes = new byte[] {(byte)0xFF, (byte)0xD8, (byte)0xFF, (byte)0xE0, 9};
+		var stored = engine.jobs().invokeOperation("v/ops/asset/store",
+			Maps.of("metadata", Maps.of("name", "snap", "contentType", "image/jpeg"),
+				"content", convex.core.data.Strings.create("0x" + convex.core.data.Blob.wrap(bytes).toHexString())),
+			ctx).awaitResult(5000);
+		String id = convex.core.lang.RT.ensureString(
+			convex.core.lang.RT.getIn(stored, "id")).toString();
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/pics/one", "value", id), ctx).awaitResult(5000);
+
+		var messages = Vectors.of(
+			Maps.of("role", "user", "content", Vectors.of(
+				Maps.of("type", "image", "source", Maps.of("type", "asset", "ref", "w/pics/one")))));
+		var adapter = (LangChainAdapter) engine.getAdapter("langchain");
+		var resolved = adapter.resolveImageRefs(messages, ctx);
+		var blocks = (convex.core.data.AVector<?>) convex.core.lang.RT.getIn(resolved.get(0), "content");
+		assertEquals(convex.core.data.Strings.create("image/jpeg"),
+			convex.core.lang.RT.getIn(blocks.get(0), "source", "mediaType"));
+		assertEquals(convex.core.data.Strings.create(java.util.Base64.getEncoder()
+				.encodeToString(new byte[] {(byte)0xFF, (byte)0xD8, (byte)0xFF, (byte)0xE0, 9})),
+			convex.core.lang.RT.getIn(blocks.get(0), "source", "data"));
+	}
+
+	@Test
+	public void testUnresolvableImageRefFailsLoudly() {
+		var engine = covia.venue.TestEngine.ENGINE;
+		var ctx = covia.venue.RequestContext.of(convex.core.data.Strings.create("did:key:zImgMissing"));
+		var messages = Vectors.of(
+			Maps.of("role", "user", "content", Vectors.of(
+				Maps.of("type", "image", "source", Maps.of("type", "asset", "ref", "w/nothing/here")))));
+		var adapter = (LangChainAdapter) engine.getAdapter("langchain");
+		Exception e = assertThrows(IllegalArgumentException.class,
+			() -> adapter.resolveImageRefs(messages, ctx));
+		assertTrue(e.getMessage().contains("w/nothing/here"), e.getMessage());
+	}
+
 	@Test
 	public void testUserContentBlocksVision() {
 		// covia#198: a user message's content may be an array of blocks —

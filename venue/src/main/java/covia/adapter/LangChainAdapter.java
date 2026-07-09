@@ -18,6 +18,7 @@ import convex.core.data.prim.CVMLong;
 import convex.core.util.JSON;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.api.Fields;
 import covia.grid.Status;
 import covia.venue.RequestContext;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
@@ -81,6 +82,11 @@ public class LangChainAdapter extends AAdapter {
 	private static final AString DEFAULT_SYSTEM_PROMPT = Strings.create("You are an AI agent for the Covia platform. Give concise, clear and accurate responses to any user message you receive.");
 
 	// Message field keys
+	static final AString K_SOURCE     = Strings.intern("source");
+	static final AString K_MEDIA_TYPE = Strings.intern("mediaType");
+	static final AString K_DATA       = Strings.intern("data");
+	static final AString V_IMAGE      = Strings.intern("image");
+	static final AString V_BASE64     = Strings.intern("base64");
 	static final AString K_MESSAGES   = Strings.intern("messages");
 	static final AString K_TOOLS      = Strings.intern("tools");
 	static final AString K_ROLE       = Strings.intern("role");
@@ -221,8 +227,12 @@ public class LangChainAdapter extends AAdapter {
 		// Prompt-based callers expect {response: "..."} output
 		final boolean legacyOutput = !(messagesCell instanceof AVector);
 
+		final RequestContext rctx = ctx;
 		return CompletableFuture.supplyAsync(() -> {
-			ACell result = callModel(chatModel, messages, tools, responseFormatCell);
+			// Resolve asset-referenced image blocks to inline data (covia#198):
+			// the job record keeps the ~tiny reference, not the image bytes.
+			AVector<ACell> resolvedMessages = resolveImageRefs(messages, rctx);
+			ACell result = callModel(chatModel, resolvedMessages, tools, responseFormatCell);
 			if (legacyOutput) {
 				// Wrap assistant message as {response: content}
 				AString content = RT.ensureString(RT.getIn(result, K_CONTENT));
@@ -512,6 +522,110 @@ public class LangChainAdapter extends AAdapter {
 		if (contents.isEmpty()) throw new IllegalArgumentException(
 			"user content array must contain at least one block");
 		return contents;
+	}
+
+	/**
+	 * Replaces {@code {type: "image", source: {type: "asset", ref: "…"}}} blocks
+	 * with inline base64 blocks by resolving the reference and reading the
+	 * content — under the <b>caller's</b> authority. This is the preferred way
+	 * to pass images: the venue persists operation input in the job record, so
+	 * an inline base64 image would land (multi-MB, possibly sensitive) in
+	 * durable lattice history, while an asset reference keeps the record tiny
+	 * and content-address deduped. The ref accepts any resolvable form — an
+	 * asset hash ({@code a/<hash>}), a workspace path ({@code w/…}) holding
+	 * either asset metadata or a reference string, or a DID URL.
+	 * Messages without asset image blocks pass through unchanged.
+	 */
+	@SuppressWarnings("unchecked")
+	AVector<ACell> resolveImageRefs(AVector<ACell> messages, RequestContext ctx) {
+		AVector<ACell> out = messages;
+		for (long i = 0; i < messages.count(); i++) {
+			ACell entry = messages.get(i);
+			AString role = RT.ensureString(RT.getIn(entry, K_ROLE));
+			if (role == null || !"user".equals(role.toString())) continue;
+			ACell contentCell = RT.getIn(entry, K_CONTENT);
+			if (!(contentCell instanceof AVector)) continue;
+			AVector<ACell> blocks = (AVector<ACell>) contentCell;
+			AVector<ACell> newBlocks = blocks;
+			for (long j = 0; j < blocks.count(); j++) {
+				ACell block = blocks.get(j);
+				AString type = RT.ensureString(RT.getIn(block, "type"));
+				AString srcType = RT.ensureString(RT.getIn(block, "source", "type"));
+				if (type == null || !"image".equals(type.toString())) continue;
+				if (srcType == null || !"asset".equals(srcType.toString())) continue;
+				newBlocks = newBlocks.assoc(j, resolveImageAsset(block, ctx));
+			}
+			if (newBlocks != blocks) {
+				AMap<AString, ACell> newEntry = ((AMap<AString, ACell>) entry).assoc(K_CONTENT, newBlocks);
+				out = out.assoc(i, newEntry);
+			}
+		}
+		return out;
+	}
+
+	/** Resolves one asset-image block to an inline base64 block. Fail-loud: an
+	 *  unresolvable image is a wrong answer, not a degraded one. */
+	private ACell resolveImageAsset(ACell block, RequestContext ctx) {
+		AString ref = RT.ensureString(RT.getIn(block, "source", "ref"));
+		if (ref == null) throw new IllegalArgumentException(
+			"image asset source requires a 'ref' (asset hash, workspace path, or DID URL)");
+		try {
+			byte[] bytes = null;
+			String mime = null;
+
+			// Locate the CAS record, mirroring asset:content: hash-form refs name
+			// it directly; other refs resolve first (a workspace slot may hold a
+			// reference string — followed one hop — a metadata map, or a raw blob).
+			convex.core.data.AVector<?> record = null;
+			convex.core.data.Hash hash = AssetAdapter.parseAssetId(ref);
+			if (hash != null) {
+				record = engine.getAssetRecord(hash, ctx);
+			} else {
+				ACell value = engine.resolvePath(ref, ctx);
+				if (value instanceof AString s) {
+					convex.core.data.Hash hop = AssetAdapter.parseAssetId(s);
+					if (hop != null) record = engine.getAssetRecord(hop, ctx);
+				} else if (value instanceof AMap) {
+					record = engine.getAssetRecord(((AMap<?, ?>) value).getHash(), ctx);
+				} else if (value instanceof convex.core.data.ABlob b) {
+					bytes = b.getBytes();
+				}
+			}
+			if (record != null) {
+				ACell content = record.get(covia.venue.AssetStore.POS_CONTENT);
+				if (content instanceof convex.core.data.ABlob b) bytes = b.getBytes();
+				ACell metaMap = record.get(covia.venue.AssetStore.POS_META);
+				AString ct = RT.ensureString(RT.getIn(metaMap, Fields.CONTENT_TYPE));
+				if (ct != null) mime = ct.toString();
+			}
+			if (bytes == null || bytes.length == 0) {
+				throw new IllegalArgumentException(
+					"image ref '" + ref + "' did not resolve to asset content");
+			}
+
+			// Explicit mediaType on the block wins; else asset contentType; else sniff.
+			AString mtOverride = RT.ensureString(RT.getIn(block, "source", "mediaType"));
+			if (mtOverride != null) mime = mtOverride.toString();
+			if (mime == null) mime = covia.utils.MimeUtils.guess(ref.toString(), bytes);
+			if (mime == null || !mime.startsWith("image/")) {
+				throw new IllegalArgumentException(
+					"image ref '" + ref + "' has no image media type (got " + mime
+					+ ") — set source.mediaType explicitly");
+			}
+
+			String b64 = java.util.Base64.getEncoder().encodeToString(bytes);
+			return Maps.of(
+				K_TYPE, V_IMAGE,
+				K_SOURCE, Maps.of(
+					K_TYPE, V_BASE64,
+					K_MEDIA_TYPE, Strings.create(mime),
+					K_DATA, Strings.create(b64)));
+		} catch (RuntimeException e) {
+			throw e;
+		} catch (Exception e) {
+			throw new IllegalArgumentException(
+				"failed to read image ref '" + ref + "': " + e.getMessage(), e);
+		}
 	}
 
 

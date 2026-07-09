@@ -198,7 +198,7 @@ public class AssetAdapter extends AAdapter {
 	 * Parses an asset hash from an ID string. Accepts bare hash, a/<hash>,
 	 * /a/<hash>, or did:key:.../a/<hash> formats.
 	 */
-	private static Hash parseAssetId(AString idStr) {
+	static Hash parseAssetId(AString idStr) {
 		if (idStr == null) return null;
 		String s = idStr.toString();
 		// Strip DID prefix if present: did:key:z6Mk.../a/<hash> → <hash>

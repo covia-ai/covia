@@ -17,7 +17,7 @@
 				},
 				"messages": {
 					"type": "array",
-					"description": "Chat messages (advanced mode). A user message's content may be a string, or an array of content blocks for vision: [{type:'text', text:'...'}, {type:'image', source:{type:'base64', mediaType:'image/jpeg', data:'...'}}]"
+					"description": "Chat messages (advanced mode). A user message's content may be a string, or an array of content blocks for vision. PREFERRED for images: reference stored content — {type:'image', source:{type:'asset', ref:'a/<hash> | w/<path> | did:...'}} — resolved at call time under your authority, so the job record keeps a tiny reference instead of megabytes of image data (store once via asset_store, content-address deduped). Inline also supported for small images: {type:'image', source:{type:'base64', mediaType:'image/jpeg', data:'...'}}. Text blocks: {type:'text', text:'...'}"
 				},
 				"model": {
 					"type": "string",
