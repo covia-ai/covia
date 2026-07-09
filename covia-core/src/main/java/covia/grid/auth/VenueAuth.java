@@ -82,6 +82,37 @@ public abstract class VenueAuth {
 	}
 
 	/**
+	 * As {@link #keyPair(AKeyPair)}, with the JWT's {@code aud} claim bound to
+	 * the target venue's DID. RECOMMENDED for any venue whose DID is known: a
+	 * captured token then cannot be replayed at any other venue that accepts
+	 * self-issued tokens (RFC 7519 §4.1.3). Discover the DID with
+	 * {@link VenueDID#discover(String)}.
+	 *
+	 * @param keyPair Ed25519 key pair for signing
+	 * @param audienceDID the target venue's DID (did:key or its did:web alias)
+	 * @return A key pair auth instance audience-bound to the venue
+	 */
+	public static VenueAuth keyPair(AKeyPair keyPair, String audienceDID) {
+		return new KeyPairAuth(keyPair, KeyPairAuth.DEFAULT_TOKEN_LIFETIME, audienceDID);
+	}
+
+	/**
+	 * As {@link #keyPair(AKeyPair, String)}, with an explicit token lifetime.
+	 * The default (300s) suits per-request tokens — signing is effectively
+	 * free, so short lifetimes cost nothing. Longer lifetimes are for minted
+	 * long-lived credentials; pass a null {@code audienceDID} only when the
+	 * target venue's DID is genuinely unknowable.
+	 *
+	 * @param keyPair Ed25519 key pair for signing
+	 * @param audienceDID the target venue's DID, or null for no audience binding
+	 * @param lifetimeSeconds token validity window in seconds (must be positive)
+	 * @return A key pair auth instance
+	 */
+	public static VenueAuth keyPair(AKeyPair keyPair, String audienceDID, long lifetimeSeconds) {
+		return new KeyPairAuth(keyPair, lifetimeSeconds, audienceDID);
+	}
+
+	/**
 	 * Local (trusted) authentication that claims a user identity without
 	 * sending any HTTP credentials. The identity is set on the Venue
 	 * automatically. Intended for in-process use with LocalVenue.

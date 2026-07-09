@@ -19,6 +19,9 @@ import convex.auth.jwt.JWT;
  * <ul>
  *   <li>{@code sub} — a {@code did:key} derived from the public key</li>
  *   <li>{@code iss} — same as {@code sub} (self-issued)</li>
+ *   <li>{@code aud} — the target venue's DID, when configured (RECOMMENDED:
+ *       binds the token to one venue, so a captured JWT cannot be replayed at
+ *       any other venue that accepts self-issued tokens)</li>
  *   <li>{@code iat} — current time</li>
  *   <li>{@code exp} — current time + token lifetime</li>
  * </ul>
@@ -33,23 +36,34 @@ class KeyPairAuth extends VenueAuth {
 
 	private static final AString SUB = Strings.intern("sub");
 	private static final AString ISS = Strings.intern("iss");
+	private static final AString AUD = Strings.intern("aud");
 	private static final AString IAT = Strings.intern("iat");
 	private static final AString EXP = Strings.intern("exp");
 
 	private final AKeyPair keyPair;
 	private final long tokenLifetime;
 	private final String didKey;
+	/** Target venue DID for the {@code aud} claim; null = no audience binding. */
+	private final String audience;
 
 	KeyPairAuth(AKeyPair keyPair) {
-		this(keyPair, DEFAULT_TOKEN_LIFETIME);
+		this(keyPair, DEFAULT_TOKEN_LIFETIME, null);
 	}
 
 	KeyPairAuth(AKeyPair keyPair, long tokenLifetime) {
+		this(keyPair, tokenLifetime, null);
+	}
+
+	KeyPairAuth(AKeyPair keyPair, long tokenLifetime, String audience) {
 		if (keyPair == null) {
 			throw new IllegalArgumentException("Key pair must not be null");
 		}
+		if (tokenLifetime <= 0) {
+			throw new IllegalArgumentException("Token lifetime must be positive");
+		}
 		this.keyPair = keyPair;
 		this.tokenLifetime = tokenLifetime;
+		this.audience = audience;
 		// Pre-compute the did:key from the public key
 		AString multikey = Multikey.encodePublicKey(keyPair.getAccountKey());
 		this.didKey = "did:key:" + multikey;
@@ -64,6 +78,7 @@ class KeyPairAuth extends VenueAuth {
 			IAT, nowSecs,
 			EXP, nowSecs + tokenLifetime
 		);
+		if (audience != null) claims = claims.assoc(AUD, Strings.create(audience));
 		AString jwt = JWT.signPublic(claims, keyPair);
 		builder.header("Authorization", "Bearer " + jwt);
 	}
