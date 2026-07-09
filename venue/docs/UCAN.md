@@ -251,10 +251,15 @@ enclosing HTTP request:
 ```
 
 **Grid operations** (`grid:run`, `grid:invoke`): Optional `ucans` field
-in the operation input. Tokens travel with the job across venue boundaries:
+in the operation input — the envelope channel for authority to travel with
+the job across venue boundaries:
 ```json
 grid:invoke { operation: "...", input: {...}, ucans: [...] }
 ```
+This is the *transport*; the *forwarding* (venue A relaying the caller's
+authority into this field on a cross-venue hop) is Phase C3 — today the grid
+wrapper connects anonymously and forwards nothing (§5.6 "Forwarding authority
+across venues", covia#102).
 
 **Agent tool calls**: The agent framework (level 2) attaches the user's
 proofs automatically when invoking tools on behalf of the user. Agents
@@ -683,6 +688,47 @@ added later, without changing the verification core — which only needs
 *only* federation-specific surface; the chain-walking, attenuation, temporal,
 and revocation checks are identical to the single-venue path.
 
+#### Forwarding authority across venues
+
+The section above is the *verifying* side (venue B). The complement is the
+*forwarding* side: when venue A relays a caller's request to B (e.g.
+`grid:invoke`, `grid:jobStatus`), the caller's authority must travel with it —
+**by default**, not opt-in. A cross-venue request that drops the caller's
+authority is anonymous, which is a safe stopgap but not federation; the target
+is that A forwards, and anonymous becomes the explicit choice for genuinely
+public operations.
+
+Two things travel, and they are treated differently:
+
+- **Proofs (UCANs) — carried freely.** They are self-authenticating: B verifies
+  each against the resource owner's authority (owner-rooted / attested, above).
+  B never *trusts* a forwarded proof, it *verifies* it — so relaying them is
+  safe. The `ucans` request-body array (§4.3) is the transport channel that
+  survives the hop (headers do not).
+- **Identity — carried only as a *proof*, never an assertion.** A must not put
+  a bare "caller = Alice" claim in the request and have B believe it: A could
+  claim any DID (the spoofing hole). A forwarded identity is only admissible if
+  B can verify it:
+  - **Self-sovereign caller** (`did:key`): the caller signs the request/UCAN
+    with their own key; A relays the signature; B verifies it directly (no
+    trust in A). The caller audiences their UCAN to **B** (or to the resource),
+    not to A — a token audienced to A cannot be replayed at B.
+  - **Custodial caller** (OAuth on A, `<A>:u:<user>`): the caller has no key, so
+    **A attests** — A signs "my user `<A>:u:<user>` authenticated to me, and I
+    forward this grant on their behalf," re-audienced to B. B accepts the
+    attestation iff its trust policy accepts A (the venue-attested root, above).
+
+**Sequencing (safety-critical).** Identity-forwarding must not ship before B
+can verify what is forwarded — otherwise B cannot tell a real relayed identity
+from a spoofed one, which is *worse* than anonymous. So it follows the
+verification phases exactly: forward **proofs + self-sovereign signatures** with
+C3a (owner-rooted verification exists); forward **custodial attestations** with
+C3b (the trust policy exists). Until then the grid wrapper stays anonymous by
+design (see §6 Phase C3, and covia#102 Finding 1). The current code reflects
+this: `GridAdapter.selectVenue` connects to the remote with `VenueAuth.none()`
+and `LocalVenue` rebuilds context from the DID only — no authority is forwarded
+yet, deliberately.
+
 ---
 
 ## 6. Implementation Phases
@@ -702,9 +748,9 @@ and revocation checks are identical to the single-venue path.
 - `enforceCaps` matches caps against **canonical owner-scoped resources** —
   bare own-paths resolve to `<callerDID>/…`, the same convention as cross-user
   (§3.1, §5.3); config caps and token caps interoperate
-- Selection primitive `UCANValidator.capabilitiesFor` in convex-core (covia
-  uses an interim, deprecated `CapabilityChecker.selfCapabilities` until its
-  Convex dependency includes it)
+- Selection reuses `UCANValidator.capabilitiesFor` (convex-core);
+  `CapabilityChecker.selfCapabilities` delegates to it and adds only the
+  self-attenuation narrow-only guard (drop empty-`with`)
 - Escalation-safe: a ceiling can only narrow, never widen
 - Both invoke transports (REST, MCP) attach it via one seam,
   `AuthMiddleware.withTransportAuth`
@@ -735,33 +781,37 @@ and revocation checks are identical to the single-venue path.
 
 ### Phase C3: Federation
 
-Trust anchored at the resource owner, not the verifying venue (§5.6). Two
-tracks, in order of dependency:
+Trust anchored at the resource owner, not the verifying venue (§5.6). Each
+track has a *verifying* half (venue B) and a *forwarding* half (venue A); they
+land together, in order of dependency:
 
-**C3a — Owner-rooted verification (self-sovereign).** Generalise
-`CoviaAdapter.verifyProofs` from the Phase C1 shortcut (root `iss` must equal
-*this* venue) to the §4.4 rule (root `iss` must equal the resource owner's
-controlling authority `A`, resolved from the owner DID). For a self-sovereign
-`did:key` / `did:web` owner, `A` is the owner and needs no trust policy —
-verifiable offline by any venue. Turns green the `@Disabled`
-`crossVenueUCANIsAccepted` test in `CrossVenueTest`. Backward-compatible: a
-local custodial user's `A` is this venue, so single-venue grants keep working.
+**C3a — Self-sovereign.**
+- *Verify:* generalise `CoviaAdapter.verifyProofs` from the Phase C1 shortcut
+  (root `iss` must equal *this* venue) to the §4.4 rule (root `iss` must equal
+  the resource owner's controlling authority `A`, resolved from the owner DID).
+  For a `did:key` / `did:web` owner, `A` is the owner and needs no trust policy —
+  verifiable offline by any venue. The generic primitive (root-authority check +
+  DID→key resolution) lands in convex-core `UCANValidator`
+  (Convex-Dev/convex#635), not covia. Turns green the `@Disabled`
+  `crossVenueUCANIsAccepted` test in `CrossVenueTest`. Backward-compatible: a
+  local custodial user's `A` is this venue, so single-venue grants keep working.
+- *Forward:* venue A relays the caller's proofs and their own signature into the
+  `ucans` envelope (§4.3, §5.6). Replaces the anonymous `GridAdapter.selectVenue`
+  / `LocalVenue` path so cross-venue requests carry authority by default.
 
-**C3b — Venue-attested verification + trust policy (custodial).** Accept a
-root signed by a *remote* controlling venue for its custodial user
-(`<venueDID>:u:<user>`), gated by a trust policy — allowlist first
-(`auth.trustedIssuers`), org-root / DID-discovery later (§5.6). This is the
-only federation-specific surface; everything else (chain walk, attenuation,
-temporal, revocation) is shared with the single-venue path.
+**C3b — Venue-attested (custodial).**
+- *Verify:* accept a root signed by a *remote* controlling venue for its
+  custodial user (`<venueDID>:u:<user>`), gated by a trust policy — allowlist
+  first (`auth.trustedIssuers`), org-root / DID-discovery later (§5.6).
+- *Forward:* A attests on behalf of its custodial user (§5.6) and relays the
+  attestation, re-audienced to B.
 
-- Proof chains travel with job submissions across venue boundaries
-- Each venue verifies independently using DID→key resolution
-- Cross-venue capability negotiation
-- Independent agents can operate across venues with portable identity
+This is the only federation-specific surface; everything else (chain walk,
+attenuation, temporal, revocation) is shared with the single-venue path.
 
 ---
 
-## 8. Differences from Standard UCAN
+## 7. Differences from Standard UCAN
 
 | Aspect | Standard UCAN | Covia UCAN |
 |--------|--------------|------------|
