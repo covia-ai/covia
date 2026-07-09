@@ -13,7 +13,7 @@
 				},
 				"maxSize": {
 					"type": "integer",
-					"description": "Maximum memory size in bytes for the returned value (default 1000000). If exceeded, returns truncated: true with the size."
+					"description": "Max CAD3 encoding size (bytes) of the exact returned value (default 1000000). Distinct from covia_inspect's render budget: this caps the exact bytes, not a summary. If exceeded, returns truncated: true with the size (no value) — read never summarises; use covia_inspect for that."
 				}
 			},
 			"required": ["path"]

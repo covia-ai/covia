@@ -1050,7 +1050,10 @@ public class CoviaAPI extends ACoviaAPI {
 					@OpenApiParam(name = "offset", type = Long.class, example = "0",
 							description = "Starting element index (default 0)."),
 					@OpenApiParam(name = "limit", type = Long.class, example = "100",
-							description = "Maximum elements to return (default 100).")
+							description = "Maximum elements to return (default 100)."),
+					@OpenApiParam(name = "maxSize", type = Long.class,
+							description = "Max CAD3 encoding bytes of the returned page (default 1000000); "
+									+ "an oversize page is a 400 (reduce limit) — slice returns exact values, never summarised.")
 			})
 	protected void getValueSlice(Context ctx) { handleValueRoute(ctx, "slice"); }
 

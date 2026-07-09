@@ -18,6 +18,10 @@
 				"limit": {
 					"type": "integer",
 					"description": "Maximum number of entries to return (default 100)."
+				},
+				"maxSize": {
+					"type": "integer",
+					"description": "Max CAD3 encoding size (bytes) of the returned page (default 1000000). Distinct from covia_inspect's render budget — this caps the EXACT returned values. Slice never summarises: an oversize page is an error (reduce limit, or read an oversize entry directly / use covia_inspect for a summarised view)."
 				}
 			},
 			"required": ["path"]

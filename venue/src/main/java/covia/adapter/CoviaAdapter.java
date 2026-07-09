@@ -17,6 +17,7 @@ import convex.core.data.ABlobLike;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Cells;
 import convex.core.data.ASet;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
@@ -326,23 +327,59 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
+	 * The {@code maxSize} cap (CAD3 encoding bytes) for the exact-value read ops
+	 * ({@code covia:read}, {@code covia:slice}). This is CVM storage size — a hard
+	 * cap on the exact return value — and is a distinct concern from
+	 * {@code covia:inspect}'s rendering {@code budget}, which bounds a
+	 * *summarised* view. Default {@value #DEFAULT_MAX_SIZE} bytes.
+	 */
+	private static long resolveMaxSize(ACell input) {
+		ACell maxSizeCell = RT.getIn(input, K_MAX_SIZE);
+		return (maxSizeCell instanceof CVMLong l) ? Math.max(0, l.longValue()) : DEFAULT_MAX_SIZE;
+	}
+
+	/**
+	 * Builds a {@code covia:slice} page response, enforcing the {@code maxSize}
+	 * cap on the exact returned values (#78). Slice returns raw values and never
+	 * summarises — so an oversize page {@code fail}s with a clear, actionable
+	 * error (reduce {@code limit}, or read the oversize entry directly) rather
+	 * than silently returning an unbounded response (the pre-#78 bug) or a
+	 * lossy render. {@code inspect} is the op for a summarised view.
+	 */
+	private static ACell slicePage(AString typeName, long total, AVector<ACell> page,
+			long offset, ACell input) {
+		long maxSize = resolveMaxSize(input);
+		long size = Cells.storageSize(page);
+		if (size > maxSize) {
+			throw new IllegalArgumentException(
+				"slice response " + size + " bytes exceeds maxSize " + maxSize
+				+ " — reduce limit (or, if a single entry is oversize, read it directly "
+				+ "or use covia:inspect for a summarised view). slice returns exact values, never summarised.");
+		}
+		return Maps.of(K_EXISTS, CVMBool.TRUE, K_TYPE, typeName,
+			K_COUNT, CVMLong.create(total), K_VALUES, page,
+			Fields.OFFSET, CVMLong.create(offset));
+	}
+
+	/**
 	 * Returns a read result, applying the maxSize guard if necessary.
 	 */
 	private static ACell sizeGuardedResult(ACell value, ACell input) {
 		if (value == null) return result(null);
 
-		long maxSize = DEFAULT_MAX_SIZE;
-		ACell maxSizeCell = RT.getIn(input, K_MAX_SIZE);
-		if (maxSizeCell instanceof CVMLong l) maxSize = Math.max(0, l.longValue());
+		long maxSize = resolveMaxSize(input);
 
-		long encodingSize = value.getEncodingLength();
-		if (encodingSize > maxSize) {
+		// CVM storage size (recursive) — the true byte footprint of the exact
+		// value, not the container's own encoding (which refs large children
+		// and undercounts). This is what `maxSize` means for read and slice.
+		long storageSize = Cells.storageSize(value);
+		if (storageSize > maxSize) {
 			return Maps.of(
 				K_EXISTS, CVMBool.TRUE,
 				K_TYPE, Types.get(value).toAString(),
 				K_VALUE, null,
 				K_TRUNCATED, CVMBool.TRUE,
-				K_VALUE_BYTES, CVMLong.create(encodingSize));
+				K_VALUE_BYTES, CVMLong.create(storageSize));
 		}
 
 		return result(value);
@@ -488,9 +525,7 @@ public class CoviaAdapter extends AAdapter {
 			for (long i = offset; i < end; i++) {
 				page = page.conj(vec.get(i));
 			}
-			return Maps.of(K_EXISTS, CVMBool.TRUE, K_TYPE, typeName,
-				K_COUNT, CVMLong.create(total), K_VALUES, page,
-				Fields.OFFSET, CVMLong.create(offset));
+			return slicePage(typeName, total, page, offset, input);
 
 		} else if (value instanceof AMap<?,?> map) {
 			AMap<ACell, ACell> m = (AMap<ACell, ACell>) map;
@@ -507,9 +542,7 @@ public class CoviaAdapter extends AAdapter {
 				}
 				idx++;
 			}
-			return Maps.of(K_EXISTS, CVMBool.TRUE, K_TYPE, typeName,
-				K_COUNT, CVMLong.create(total), K_VALUES, page,
-				Fields.OFFSET, CVMLong.create(offset));
+			return slicePage(typeName, total, page, offset, input);
 
 		} else if (value instanceof ASet<?> set) {
 			long total = set.count();
@@ -523,9 +556,7 @@ public class CoviaAdapter extends AAdapter {
 				}
 				idx++;
 			}
-			return Maps.of(K_EXISTS, CVMBool.TRUE, K_TYPE, typeName,
-				K_COUNT, CVMLong.create(total), K_VALUES, page,
-				Fields.OFFSET, CVMLong.create(offset));
+			return slicePage(typeName, total, page, offset, input);
 
 		} else {
 			throw new RuntimeException(

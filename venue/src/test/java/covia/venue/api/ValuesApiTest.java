@@ -171,6 +171,30 @@ public class ValuesApiTest {
 		assertEquals(3, values.count(), "expected three elements, got: " + values);
 	}
 
+	/** #78: slice caps the returned page by maxSize (CAD3 bytes) and FAILS on
+	 *  overflow — exact values, never summarised, never unbounded (the old bug). */
+	@Test
+	public void testSliceMaxSizeFailsOnOverflow() throws Exception {
+		// A vector with one large entry — unbounded before #78.
+		write("w/vBig", Vectors.of(Strings.create("x".repeat(4000)),
+			Strings.create("y".repeat(4000))));
+
+		// Tight maxSize → the page overflows → 400 (not a truncated flag, not a summary).
+		HttpResponse<String> tight = getQ("slice", "w/vBig", "&maxSize=100");
+		assertEquals(400, tight.statusCode(), tight.body());
+		assertTrue(tight.body().contains("maxSize") && tight.body().contains("reduce limit"),
+			"error names the cap and the remedy: " + tight.body());
+
+		// Reducing limit brings the page under the cap → exact values returned.
+		HttpResponse<String> paged = getQ("slice", "w/vBig", "&maxSize=100000&limit=1");
+		assertEquals(200, paged.statusCode(), paged.body());
+		assertEquals(1, ((AVector<?>) RT.getIn(JSON.parse(paged.body()), "values")).count());
+
+		// Generous default cap → whole small collection returns exactly (no regression).
+		HttpResponse<String> ok = get("slice", "w/vSeq");
+		assertEquals(200, ok.statusCode(), ok.body());
+	}
+
 	@Test
 	public void testInspectRenders() throws Exception {
 		HttpResponse<String> r = get("inspect", "w/vBox");
