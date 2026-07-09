@@ -388,7 +388,7 @@ public class MCP extends McpServer {
 				// argument and an Authorization bearer UCAN.
 				AVector<ACell> ucans = RT.getIn(arguments, Fields.UCANS);
 				AString bearer = (ctx != null) ? ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR) : null;
-				rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans);
+				rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans, engine().getDIDString());
 
 				if (engine().config().isFixMcpStrings()) {
 					arguments = coerceJsonStringArgs(arguments, opRef);

@@ -33,6 +33,20 @@ public class LocalVenue extends Venue {
 		return new LocalVenue(e);
 	}
 
+	/** Verified UCAN proofs carried into every local request context — set by
+	 *  the grid wrapper so a local hop keeps the caller's authority just like a
+	 *  remote hop forwards it (covia#100/#102). Null = none. */
+	private convex.core.data.AVector<ACell> proofs;
+
+	public void setProofs(convex.core.data.AVector<ACell> proofs) {
+		this.proofs = proofs;
+	}
+
+	/** Builds the request context for this venue's user, carrying any proofs. */
+	private RequestContext context() {
+		return RequestContext.of(getUser(), proofs);
+	}
+
 	@Override
 	public Asset getAsset(Hash assetID) {
 		Asset asset = engine.getAsset(assetID);
@@ -51,7 +65,7 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public CompletableFuture<Job> invoke(Hash assetID, ACell input) {
-		RequestContext rctx = RequestContext.of(getUser());
+		RequestContext rctx = context();
 		return CompletableFuture.completedFuture(engine.jobs().invokeOperation(assetID.toCVMHexString(), input, rctx));
 	}
 
@@ -61,7 +75,7 @@ public class LocalVenue extends Venue {
 			throw new IllegalArgumentException("Operation must not be null");
 		}
 		try {
-			RequestContext rctx = RequestContext.of(getUser());
+			RequestContext rctx = context();
 			Job job = engine.jobs().invokeOperation(Strings.create(operation), input, rctx);
 			return CompletableFuture.completedFuture(job);
 		} catch (Exception e) {
@@ -71,7 +85,7 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public CompletableFuture<Job> getJob(Blob jobId) {
-		Job job = engine.jobs().getJob(jobId, RequestContext.of(getUser()));
+		Job job = engine.jobs().getJob(jobId, context());
 		if (job == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId.toHexString()));
 		}
@@ -80,7 +94,7 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public CompletableFuture<AMap<AString, ACell>> getJobStatus(Blob jobId) {
-		AMap<AString, ACell> status = engine.jobs().getJobData(jobId, RequestContext.of(getUser()));
+		AMap<AString, ACell> status = engine.jobs().getJobData(jobId, context());
 		if (status == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId.toHexString()));
 		}
@@ -89,7 +103,7 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public CompletableFuture<ACell> awaitJobResult(Blob jobId) {
-		Job job = engine.jobs().getJob(jobId, RequestContext.of(getUser()));
+		Job job = engine.jobs().getJob(jobId, context());
 		if (job == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Job not found: " + jobId.toHexString()));
 		}
@@ -150,27 +164,27 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public AMap<AString, ACell> cancelJob(Blob jobId) {
-		return engine.jobs().cancelJob(jobId, RequestContext.of(getUser()));
+		return engine.jobs().cancelJob(jobId, context());
 	}
 
 	@Override
 	public AMap<AString, ACell> pauseJob(Blob jobId) {
-		return engine.jobs().pauseJob(jobId, RequestContext.of(getUser()));
+		return engine.jobs().pauseJob(jobId, context());
 	}
 
 	@Override
 	public AMap<AString, ACell> resumeJob(Blob jobId) {
-		return engine.jobs().resumeJob(jobId, RequestContext.of(getUser()));
+		return engine.jobs().resumeJob(jobId, context());
 	}
 
 	@Override
 	public boolean deleteJob(Blob jobId) {
-		return engine.jobs().deleteJob(jobId, RequestContext.of(getUser()));
+		return engine.jobs().deleteJob(jobId, context());
 	}
 
 	@Override
 	public List<Blob> listJobs() {
-		Index<Blob, ACell> jobs = engine.jobs().getJobs(RequestContext.of(getUser()));
+		Index<Blob, ACell> jobs = engine.jobs().getJobs(context());
 		long n = jobs.count();
 		List<Blob> result = new ArrayList<>((int) n);
 		for (long i = 0; i < n; i++) {
@@ -181,6 +195,6 @@ public class LocalVenue extends Venue {
 
 	@Override
 	public int sendMessage(String jobId, AMap<AString, ACell> message) {
-		return engine.jobs().deliverMessage(Blob.parse(jobId), message, RequestContext.of(getUser()));
+		return engine.jobs().deliverMessage(Blob.parse(jobId), message, context());
 	}
 }

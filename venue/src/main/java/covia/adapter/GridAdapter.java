@@ -14,9 +14,12 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
+import convex.auth.ucan.UCAN;
+import convex.auth.ucan.UCANValidator;
 import covia.grid.Grid;
 import covia.grid.Job;
 import covia.grid.Venue;
+import covia.grid.auth.VenueAuth;
 import covia.venue.LocalVenue;
 import covia.venue.RequestContext;
 
@@ -61,12 +64,11 @@ public class GridAdapter extends AAdapter {
 		if (gridOp == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Invalid grid operation: no sub-operation in metadata"));
 		}
-		AString callerDID = ctx.getCallerDID();
 		return switch (gridOp) {
-			case "run"       -> invokeRun(meta, input, callerDID);
-			case "invoke"    -> invokeAsync(meta, input, callerDID);
-			case "jobStatus" -> invokeJobStatus(meta, input, callerDID);
-			case "jobResult" -> invokeJobResult(meta, input, callerDID);
+			case "run"       -> invokeRun(ctx, meta, input);
+			case "invoke"    -> invokeAsync(ctx, meta, input);
+			case "jobStatus" -> invokeJobStatus(ctx, meta, input);
+			case "jobResult" -> invokeJobResult(ctx, meta, input);
 			default          -> CompletableFuture.failedFuture(new IllegalArgumentException("Unrecognised grid operation: " + gridOp));
 		};
 	}
@@ -105,7 +107,7 @@ public class GridAdapter extends AAdapter {
 	/**
 	 * Executes a grid operation and waits for completion, returning the finished result.
 	 */
-	private CompletableFuture<ACell> invokeRun(ACell meta, ACell input, AString callerDID) {
+	private CompletableFuture<ACell> invokeRun(RequestContext ctx, ACell meta, ACell input) {
 		AString targetOperation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 		if (targetOperation == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("No grid operation specified"));
@@ -114,7 +116,7 @@ public class GridAdapter extends AAdapter {
         ACell operationInput = coerceOperationInput(RT.getIn(input, Fields.INPUT));
         AString venueSpec = resolveVenue(meta, input);
 
-        Venue venue = selectVenue(venueSpec, callerDID);
+        Venue venue = selectVenue(ctx, venueSpec, input);
 
         CompletableFuture<Job> jobFuture = venue.invoke(targetOperation.toString(), operationInput);
         return jobFuture.thenCompose(Job::future);
@@ -123,7 +125,7 @@ public class GridAdapter extends AAdapter {
 	/**
 	 * Submits a grid operation but returns immediately with the job status payload.
 	 */
-	private CompletableFuture<ACell> invokeAsync(ACell meta, ACell input, AString callerDID) {
+	private CompletableFuture<ACell> invokeAsync(RequestContext ctx, ACell meta, ACell input) {
 		AString targetOperation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 		if (targetOperation == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("No grid operation specified"));
@@ -132,7 +134,7 @@ public class GridAdapter extends AAdapter {
         ACell operationInput = coerceOperationInput(RT.getIn(input, Fields.INPUT));
         AString venueSpec = resolveVenue(meta, input);
 
-        Venue venue = selectVenue(venueSpec, callerDID);
+        Venue venue = selectVenue(ctx, venueSpec, input);
 
         CompletableFuture<Job> jobFuture = venue.invoke(targetOperation.toString(), operationInput);
         return jobFuture.thenApply(Job::getData);
@@ -161,23 +163,23 @@ public class GridAdapter extends AAdapter {
 		return operationInput;
 	}
 
-	private CompletableFuture<ACell> invokeJobStatus(ACell meta, ACell input, AString callerDID) {
+	private CompletableFuture<ACell> invokeJobStatus(RequestContext ctx, ACell meta, ACell input) {
 		Blob jobId = parseJobId(RT.getIn(input, Fields.ID));
 		if (jobId == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Job ID is required"));
 		}
 
-		Venue venue = selectVenue(resolveVenue(meta, input), callerDID);
+		Venue venue = selectVenue(ctx, resolveVenue(meta, input), input);
 		return venue.getJobStatus(jobId).thenApply(status -> status);
 	}
 
-	private CompletableFuture<ACell> invokeJobResult(ACell meta, ACell input, AString callerDID) {
+	private CompletableFuture<ACell> invokeJobResult(RequestContext ctx, ACell meta, ACell input) {
 		Blob jobId = parseJobId(RT.getIn(input, Fields.ID));
 		if (jobId == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("Job ID is required"));
 		}
 
-		Venue venue = selectVenue(resolveVenue(meta, input), callerDID);
+		Venue venue = selectVenue(ctx, resolveVenue(meta, input), input);
 		CompletableFuture<ACell> jobFuture = venue.awaitJobResult(jobId);
 
 		long timeoutMs = parseTimeoutMs(input);
@@ -203,13 +205,153 @@ public class GridAdapter extends AAdapter {
 		return 0;
 	}
 
-    private Venue selectVenue(AString venueSpec, AString callerDID) {
+    /** The ability a caller grants this venue to relay a hop as itself:
+     *  a token {@code {iss: caller, aud: <thisVenue>, att: [{…, can: "venue/relay"}]}}
+     *  is both the instruction and the authorisation — no mode flag. */
+    static final AString RELAY_ABILITY = convex.core.data.Strings.intern("venue/relay");
+
+    /**
+     * Resolves the target venue for a grid op, forwarding the caller's authority
+     * (C3a, covia#100). Authority travels ONLY in the {@code ucans} proof channel
+     * — never in operation input (which is persisted in job records):
+     * <ul>
+     *   <li><b>Proofs are relayed, audience-filtered.</b> Only tokens provably
+     *       admissible at the target travel: audienced to the principal acting
+     *       there, or to the target itself. Tokens audienced elsewhere are
+     *       guaranteed inert at the target (the audience check fails at use), so
+     *       forwarding them would be pure disclosure of the caller's other
+     *       grants/relationships. The caller curates what it presents; the relay
+     *       drops only the provably-irrelevant.</li>
+     *   <li><b>Caller identity</b> travels as an identity token the caller minted
+     *       (a UCAN with empty {@code att}, audienced to the TARGET venue) inside
+     *       their {@code ucans}; the target's ingress verifies the caller's own
+     *       signature — zero trust in this relay. Nothing to do here beyond
+     *       forwarding it.</li>
+     *   <li><b>Venue-as-delegate:</b> when the caller has granted THIS venue a
+     *       {@code venue/relay} capability (token issued by the caller, audienced
+     *       to this venue), the hop authenticates as the venue itself, exercising
+     *       that delegation. The issuer-must-be-the-caller rule is inherent — a
+     *       delegation someone else minted for this venue is not an instruction
+     *       from this caller (confused-deputy safe).</li>
+     * </ul>
+     * No relay instruction and no identity token → anonymous hop (the explicit
+     * choice for public operations). A local target carries the caller's verified
+     * proofs into the local context.
+     */
+    private Venue selectVenue(RequestContext ctx, AString venueSpec, ACell input) {
         if (venueSpec != null) {
-            return Grid.connect(venueSpec.toString());
+            return connectRemote(ctx, venueSpec);
         }
         LocalVenue lv = new LocalVenue(engine);
-        lv.setUser(callerDID);
+        lv.setUser(ctx.getCallerDID());
+        lv.setProofs(ctx.getProofs());
         return lv;
+    }
+
+    private Venue connectRemote(RequestContext ctx, AString venueSpec) {
+        AString venueDID = engine.getDIDString();
+        java.util.List<UCAN> tokens = parsedRawUcans(ctx);
+
+        boolean relayAsSelf = hasRelayInstruction(tokens, ctx.getCallerDID(), venueDID);
+        VenueAuth auth = relayAsSelf
+            ? VenueAuth.keyPair(engine.getKeyPair())
+            : VenueAuth.none();
+
+        // The principal acting at the target: this venue when relaying as itself
+        // (the delegation chain's leaf is audienced to us), else the caller.
+        AString principal = relayAsSelf ? venueDID : ctx.getCallerDID();
+
+        Venue venue = Grid.connect(venueSpec.toString(), auth);
+        venue.setUcans(admissibleTokens(ctx, tokens, principal));
+        return venue;
+    }
+
+    /**
+     * True when the caller has instructed this venue to relay as itself: a
+     * presented token issued BY the caller, audienced TO this venue, carrying a
+     * capability whose ability covers {@link #RELAY_ABILITY}, still in-date.
+     * Signature/chain were verified at transport ingress.
+     */
+    static boolean hasRelayInstruction(java.util.List<UCAN> tokens,
+            AString caller, AString venueDID) {
+        if (tokens == null || caller == null) return false;
+        long now = System.currentTimeMillis() / 1000;
+        for (UCAN token : tokens) {
+            if (!caller.equals(token.getIssuer())) continue;      // instruction must come from OUR caller
+            if (!venueDID.equals(token.getAudience())) continue;  // ...and be addressed to US
+            if (!UCANValidator.checkTemporalBounds(token, now)) continue;
+            AVector<ACell> att = token.getCapabilities();
+            if (att == null) continue;
+            for (long i = 0; i < att.count(); i++) {
+                AMap<AString, ACell> cap = RT.castMap(att.get(i));
+                if (cap == null) continue;
+                AString can = RT.ensureString(cap.get(convex.auth.ucan.Capability.CAN));
+                if (convex.auth.ucan.Capability.abilityCovers(can, RELAY_ABILITY)) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Filters the caller's raw tokens for a hop, relaying only what could be
+     * admissible at the target. Provably inert tokens are dropped — forwarding
+     * them would be pure disclosure of the caller's unrelated grants:
+     * <ul>
+     *   <li><b>expired / unparseable</b> — grant nothing anywhere;</li>
+     *   <li><b>audienced to a non-principal</b> — a token audienced to the local
+     *       caller when the hop's principal is this venue (relay-as-self) can
+     *       authorise nothing at the target.</li>
+     * </ul>
+     * Tokens audienced to <em>other</em> identities are kept: the target's DID is
+     * not generally known before contact (URL venue specs), so a token audienced
+     * "elsewhere" may be the caller's identity token for the target. Presentation
+     * remains the caller's disclosure choice — present per-request, not a wallet.
+     * Returns raw JWT strings; {@code tokens} is index-aligned with
+     * {@link RequestContext#getRawUcans()}.
+     */
+    static java.util.List<String> admissibleTokens(RequestContext ctx,
+            java.util.List<UCAN> tokens, AString principal) {
+        AVector<ACell> raw = ctx.getRawUcans();
+        if (raw == null || tokens == null) return null;
+        long now = System.currentTimeMillis() / 1000;
+        AString caller = ctx.getCallerDID();
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (int i = 0; i < raw.count(); i++) {
+            AString jwt = RT.ensureString(raw.get(i));
+            UCAN token = (i < tokens.size()) ? tokens.get(i) : null;
+            if (jwt == null || token == null) continue;                    // unparseable → don't relay
+            if (!UCANValidator.checkTemporalBounds(token, now)) continue;  // expired → inert
+            AString aud = token.getAudience();
+            if (aud == null) continue;
+            // Provably inert: audienced to the local caller while the principal
+            // at the target is someone else (this venue, relay-as-self mode).
+            if (!aud.equals(principal) && aud.equals(caller)) continue;
+            out.add(jwt.toString());
+        }
+        return out.isEmpty() ? null : out;
+    }
+
+    /** Parses the caller's raw transport tokens (already signature-verified at
+     *  ingress) for audience/issuer inspection; null-padded on parse failure so
+     *  indices align with {@link RequestContext#getRawUcans()}. */
+    static java.util.List<UCAN> parsedRawUcans(RequestContext ctx) {
+        AVector<ACell> raw = ctx.getRawUcans();
+        if (raw == null || raw.isEmpty()) return null;
+        java.util.List<UCAN> out = new java.util.ArrayList<>();
+        long now = System.currentTimeMillis() / 1000;
+        for (long i = 0; i < raw.count(); i++) {
+            UCAN token = null;
+            AString jwt = RT.ensureString(raw.get(i));
+            if (jwt != null) {
+                try {
+                    token = UCANValidator.validateJWT(jwt, now, convex.auth.did.DIDVerifier.CONVEX);
+                } catch (Exception e) {
+                    // defective token: null slot, grants nothing
+                }
+            }
+            out.add(token);
+        }
+        return out;
     }
 
     private Blob parseJobId(ACell jobIdCell) {

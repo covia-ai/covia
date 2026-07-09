@@ -16,6 +16,7 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import convex.auth.jwt.JWT;
 import convex.auth.ucan.UCAN;
+import convex.auth.did.DIDVerifier;
 import convex.auth.ucan.UCANValidator;
 import convex.core.lang.RT;
 import covia.api.Fields;
@@ -493,15 +494,94 @@ public class AuthMiddleware {
 	 */
 	public static RequestContext withTransportAuth(RequestContext rctx, AString bearer,
 			AVector<ACell> ucans) {
-		AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans);
+		return withTransportAuth(rctx, bearer, ucans, null);
+	}
+
+	/**
+	 * As {@link #withTransportAuth(RequestContext, AString, AVector)}, and — when
+	 * {@code venueDID} is supplied and the transport is unauthenticated — derives
+	 * the caller's identity from a presented <b>identity token</b>: a verified
+	 * UCAN with {@code aud == venueDID} and an <b>empty</b> attenuation list
+	 * (pure identity, no dual use as a grant). The issuer signed a token naming
+	 * this venue as audience, so the identity is proven by the caller's own key
+	 * and cannot be replayed at another venue (audience-bound). This is how a
+	 * relayed cross-venue request carries the original caller's identity — the
+	 * relay forwards the token, this venue verifies the caller's signature
+	 * directly (zero trust in the relay). Two identity tokens with different
+	 * issuers are ambiguous and rejected (401-equivalent).
+	 *
+	 * <p>Applies only when the transport is anonymous/public — an Authorization
+	 * header always wins (a transport-authenticated peer, e.g. a relaying venue
+	 * acting as itself, is the caller regardless of what it forwards).</p>
+	 */
+	public static RequestContext withTransportAuth(RequestContext rctx, AString bearer,
+			AVector<ACell> ucans, AString venueDID) {
+		// Verify signatures at ingress with an explicit DID verifier. DIDVerifier.CONVEX
+		// handles did:key; swap to DIDVerifier.forState(state) to also verify did:convex
+		// issuers when those arrive (covia#100).
+		AVector<ACell> proofs = UCANValidator.parseTransportUCANsWithBearer(bearer, ucans, DIDVerifier.CONVEX);
 		if (proofs == null) return rctx;
+
+		// Identity from the proof channel: only for an unauthenticated transport
+		// (no bearer identity), and only when the venue context is known.
+		if (venueDID != null && bearer == null && isPublicOrAnonymous(rctx, venueDID)) {
+			AString identity = identityFromProofs(proofs, venueDID);
+			if (identity != null) {
+				// A proven caller: fresh context — the public read-only ceiling
+				// does not apply to an authenticated identity.
+				rctx = RequestContext.of(identity);
+			}
+		}
+
 		rctx = rctx.withProofs(proofs);
+		// Retain the raw body tokens for cross-venue relay (C3a): proofs are
+		// self-verifying, so forwarding them is safe — but only the original
+		// signed JWTs verify at the next hop, not the parsed maps. The bearer is
+		// NOT retained for relay — it is audienced to THIS venue (#149) and must
+		// never be replayed elsewhere.
+		if (ucans != null && !ucans.isEmpty()) rctx = rctx.withRawUcans(ucans);
 		AString caller = rctx.getCallerDID();
 		long now = System.currentTimeMillis() / 1000;
-		// Derives the self-attenuation ceiling: UCANValidator.capabilitiesFor
-		// (convex-core) for selection, plus covia's narrow-only guard.
+		// Derives the self-attenuation ceiling: a single-hop selection of the caller's
+		// self-authored tokens (iss == aud == caller) plus covia's narrow-only guard.
 		AVector<ACell> caps = CapabilityChecker.selfCapabilities(proofs, caller, caller, now);
 		if (caps != null) rctx = rctx.withCaps(caps);
 		return rctx;
+	}
+
+	/** True when the context carries no authenticated identity: anonymous, or the
+	 *  venue's shared {@code :public} DID. */
+	private static boolean isPublicOrAnonymous(RequestContext rctx, AString venueDID) {
+		AString caller = rctx.getCallerDID();
+		if (caller == null) return true;
+		return caller.toString().equals(venueDID + ":public");
+	}
+
+	/**
+	 * Extracts a caller identity from verified proofs: a UCAN audienced to this
+	 * venue with an empty attenuation list. Returns null when absent; throws on
+	 * ambiguity (two identity tokens with different issuers).
+	 */
+	private static AString identityFromProofs(AVector<ACell> proofs, AString venueDID) {
+		AString identity = null;
+		long now = System.currentTimeMillis() / 1000;
+		for (long i = 0; i < proofs.count(); i++) {
+			AMap<AString, ACell> map = convex.core.lang.RT.castMap(proofs.get(i));
+			if (map == null) continue;
+			convex.auth.ucan.UCAN token = convex.auth.ucan.UCAN.parse(map);
+			if (token == null) continue;
+			if (!venueDID.equals(token.getAudience())) continue;
+			AVector<ACell> att = token.getCapabilities();
+			if (att != null && !att.isEmpty()) continue; // a grant, not an identity token
+			if (!UCANValidator.checkTemporalBounds(token, now)) continue;
+			AString iss = token.getIssuer();
+			if (iss == null || iss.equals(venueDID)) continue;
+			if (identity != null && !identity.equals(iss)) {
+				throw new IllegalStateException(
+					"Ambiguous caller identity: multiple identity tokens with different issuers");
+			}
+			identity = iss;
+		}
+		return identity;
 	}
 }
