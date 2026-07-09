@@ -11,8 +11,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.DoubleSupplier;
+import java.util.function.LongSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,10 +31,12 @@ import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.ConversionException;
+import covia.exception.RateLimitException;
 import covia.exception.ResponseException;
 import covia.grid.AContent;
 import covia.grid.Asset;
@@ -60,6 +66,70 @@ public class VenueHTTP extends Venue {
 	private final HttpClient httpClient;
 	private final URI baseURI;
 	private final VenueAuth auth;
+
+	// ---- 429 backpressure handling ----
+
+	/** Retry policy for HTTP 429 responses. */
+	private RetryPolicy retryPolicy = RetryPolicy.defaults();
+	/** Sleep hook, injectable for deterministic tests (default {@link Thread#sleep}). */
+	private Sleeper sleeper = Thread::sleep;
+	/** Random [0,1) source for full jitter, injectable for tests. */
+	private DoubleSupplier rng = Math::random;
+	/** Millisecond clock, injectable for tests. */
+	private LongSupplier clock = System::currentTimeMillis;
+	/** Optional client-side limit on concurrent in-flight requests; null = unlimited. */
+	private volatile Semaphore requestPermits = null;
+
+	/**
+	 * UCAN proof tokens (JWT strings) presented with every invoke via the
+	 * request-body {@code ucans} array — the transport channel that survives
+	 * cross-venue hops (UCAN.md §4.3). Null = none. These are delegation
+	 * proofs (e.g. a resource owner's grant audienced to this client's
+	 * identity); the venue verifies them at ingress — presenting them costs
+	 * nothing when they don't apply.
+	 */
+	private volatile AVector<ACell> ucans = null;
+
+	/** A single HTTP send attempt (may throw the checked exceptions {@code HttpClient.send} throws). */
+	@FunctionalInterface
+	interface HttpCall { HttpResponse<String> call() throws IOException, InterruptedException; }
+
+	/** Sleep hook, so tests can advance time without waiting. */
+	@FunctionalInterface
+	interface Sleeper { void sleep(long ms) throws InterruptedException; }
+
+	/** Sets the retry policy for 429 responses (null → no retry). */
+	public void setRetryPolicy(RetryPolicy policy) {
+		this.retryPolicy = (policy != null) ? policy : RetryPolicy.noRetry();
+	}
+
+	/**
+	 * Bounds the number of concurrent in-flight requests this client issues —
+	 * coarse client-side backpressure that reduces how often the venue's limits
+	 * are hit. {@code n <= 0} removes the limit (the default).
+	 */
+	public void setMaxConcurrentRequests(int n) {
+		this.requestPermits = (n > 0) ? new Semaphore(n) : null;
+	}
+
+	/**
+	 * Sets the UCAN proof tokens (JWT strings) this client presents with every
+	 * invoke, via the request-body {@code ucans} array. Pass null or an empty
+	 * list to clear. Use for cross-user / cross-venue delegated access: the
+	 * proofs must be audienced to this client's authenticated identity.
+	 */
+	@Override
+	public void setUcans(java.util.List<String> jwts) {
+		if (jwts == null || jwts.isEmpty()) { this.ucans = null; return; }
+		AVector<ACell> v = Vectors.empty();
+		for (String jwt : jwts) v = v.conj(Strings.create(jwt));
+		this.ucans = v;
+	}
+
+	// Package-private test seams (deterministic retry tests):
+	void setSleeper(Sleeper s) { this.sleeper = s; }
+	void setClock(LongSupplier c) { this.clock = c; }
+	void setRng(DoubleSupplier r) { this.rng = r; }
 
 	public VenueHTTP(URI host) {
 		this(host, VenueAuth.none());
@@ -121,6 +191,25 @@ public class VenueHTTP extends Venue {
 	 * accept queue full under load — is otherwise opaque to callers.
 	 */
 	private <T> CompletableFuture<HttpResponse<T>> dispatch(HttpRequest req, HttpResponse.BodyHandler<T> handler) {
+		long deadline = clock.getAsLong() + retryPolicy.maxTotalWaitMs();
+		Semaphore p = requestPermits;
+		if (p == null) return dispatchAttempt(req, handler, 1, deadline);
+		// Client-side concurrency limit: acquire off the caller thread, hold the
+		// permit across this request's retries, release when it finally settles.
+		return CompletableFuture.runAsync(p::acquireUninterruptibly)
+			.thenCompose(x -> dispatchAttempt(req, handler, 1, deadline))
+			.whenComplete((r, e) -> p.release());
+	}
+
+	/**
+	 * One attempt of an async request, retrying on 429 per {@link #retryPolicy}:
+	 * honours {@code Retry-After}, backs off with full jitter, and fails with
+	 * {@link RateLimitException} once attempts / wait budget are exhausted. A bare
+	 * {@link java.net.ConnectException} is mapped to a clear {@link ResponseException}
+	 * naming the venue. Non-429 responses pass through for the caller's own handling.
+	 */
+	private <T> CompletableFuture<HttpResponse<T>> dispatchAttempt(
+			HttpRequest req, HttpResponse.BodyHandler<T> handler, int attempt, long deadline) {
 		return httpClient.sendAsync(req, handler).exceptionallyCompose(ex -> {
 			Throwable cause = (ex instanceof java.util.concurrent.CompletionException && ex.getCause() != null)
 				? ex.getCause() : ex;
@@ -131,7 +220,53 @@ public class VenueHTTP extends Venue {
 					+ "(its accept queue may be full under load)", cause));
 			}
 			return CompletableFuture.failedFuture(ex);
+		}).thenCompose(resp -> {
+			if (resp.statusCode() != 429) return CompletableFuture.completedFuture(resp);
+			long now = clock.getAsLong();
+			long retryAfterMs = RetryPolicy.parseRetryAfterMs(
+				resp.headers().firstValue("Retry-After").orElse(null), now);
+			long delay = retryPolicy.retryDelayMs(attempt, retryAfterMs, deadline - now, rng.getAsDouble());
+			if (delay < 0) return CompletableFuture.failedFuture(rateLimited(retryAfterMs));
+			Executor delayed = CompletableFuture.delayedExecutor(delay, TimeUnit.MILLISECONDS);
+			return CompletableFuture.supplyAsync(() -> null, delayed)
+				.thenCompose(x -> dispatchAttempt(req, handler, attempt + 1, deadline));
 		});
+	}
+
+	/**
+	 * Executes a synchronous request with 429 retry (Retry-After floor, full-jitter
+	 * backoff, bounded attempts / wait budget). Non-429 responses are returned as-is
+	 * for the caller's own status handling; exhausted 429s throw {@link RateLimitException}.
+	 */
+	HttpResponse<String> retrying(HttpCall exec) throws IOException, InterruptedException {
+		long deadline = clock.getAsLong() + retryPolicy.maxTotalWaitMs();
+		for (int attempt = 1; ; attempt++) {
+			HttpResponse<String> resp = exec.call();
+			if (resp.statusCode() != 429) return resp;
+			long now = clock.getAsLong();
+			long retryAfterMs = RetryPolicy.parseRetryAfterMs(
+				resp.headers().firstValue("Retry-After").orElse(null), now);
+			long delay = retryPolicy.retryDelayMs(attempt, retryAfterMs, deadline - now, rng.getAsDouble());
+			if (delay < 0) throw rateLimited(retryAfterMs);
+			sleeper.sleep(delay);
+		}
+	}
+
+	/** Central synchronous send: 429 retry + optional client-side concurrency limit. */
+	private HttpResponse<String> sendSync(HttpRequest req) throws IOException, InterruptedException {
+		Semaphore p = requestPermits;
+		if (p != null) p.acquire();
+		try {
+			return retrying(() -> httpClient.send(req, HttpResponse.BodyHandlers.ofString()));
+		} finally {
+			if (p != null) p.release();
+		}
+	}
+
+	private RateLimitException rateLimited(long retryAfterMs) {
+		return new RateLimitException(
+			"Rate limited by venue (HTTP 429) after " + retryPolicy.maxAttempts() + " attempt(s)",
+			Math.max(1, retryAfterMs / 1000));
 	}
 
 	/**
@@ -380,14 +515,18 @@ public class VenueHTTP extends Venue {
 	 * @return Future containing the job status, likely to be PENDING
 	 */
 	public CompletableFuture<Job> startJobAsync(AString opID, ACell input) {
+		AMap<AString,ACell> reqBody = Maps.of(
+			"operation", opID,
+			"input", input);
+		// Delegation proofs travel in the body `ucans` array (survives hops,
+		// unlike headers) — verified by the venue at ingress.
+		AVector<ACell> proofTokens = this.ucans;
+		if (proofTokens != null) reqBody = reqBody.assoc(Strings.intern("ucans"), proofTokens);
 		HttpRequest req = requestBuilder("invoke")
 			.header("Content-Type", "application/json")
-			.POST(HttpRequest.BodyPublishers.ofString(JSON.toString(Maps.of(
-				"operation", opID,
-				"input", input
-			))))
+			.POST(HttpRequest.BodyPublishers.ofString(JSON.toString(reqBody)))
 			.build();
-		
+
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
 			if (response.statusCode() != 201) {
 				throw new ResponseException("Failed to start operation: " + response+" = "+response.body(),response);
@@ -804,7 +943,7 @@ public class VenueHTTP extends Venue {
 				.build();
 
 		try {
-			HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+			HttpResponse<String> response = sendSync(request);
 			if (response.statusCode()!=200) return null;
 			ACell result=JSON.parse(response.body());
 			ACell idHex=RT.getIn(result, "asset");
@@ -823,7 +962,7 @@ public class VenueHTTP extends Venue {
 			
 		HttpResponse<String> response;
 		try {
-			response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+			response = sendSync(request);
 			if (response.statusCode()!=200) return null;
 			AString metadata=Strings.create(response.body());
 			
@@ -855,7 +994,7 @@ public class VenueHTTP extends Venue {
 				.GET()
 				.build();
 		try {
-			HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+			HttpResponse<String> response = sendSync(request);
 			if (response.statusCode()!=200) return null;
 			Asset asset=Asset.forString(Strings.create(response.body()));
 			asset.setVenue(this);
@@ -934,7 +1073,7 @@ public class VenueHTTP extends Venue {
 			.build();
 
 		try {
-			HttpResponse<String> response = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+			HttpResponse<String> response = sendSync(req);
 			if (response.statusCode() != 200) {
 				throw new ResponseException("Failed to list jobs: " + response.statusCode());
 			}
@@ -965,7 +1104,7 @@ public class VenueHTTP extends Venue {
 			.build();
 
 		try {
-			HttpResponse<String> response = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+			HttpResponse<String> response = sendSync(req);
 			int code = response.statusCode();
 			if (code == 202) {
 				AMap<AString, ACell> body = RT.ensureMap(JSON.parseJSON5(response.body()));

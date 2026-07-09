@@ -74,6 +74,10 @@ public class Config {
 	 */
 	public static final AString BIND_ADDRESS = Strings.intern("bindAddress");
 
+	/** Key for the request rate-limiting config block ({@code enabled}, {@code rps},
+	 *  {@code burst}, {@code maxConcurrentJobsPerUser}). */
+	public static final AString RATE_LIMIT = Strings.intern("rateLimit");
+
 	/** Key for the HTTP connector's accept-queue (backlog) size */
 	public static final AString ACCEPT_QUEUE_SIZE = Strings.intern("acceptQueueSize");
 
@@ -406,6 +410,67 @@ public class Config {
 	public String getBindAddress() {
 		AString bindAddress = RT.ensureString(config.get(BIND_ADDRESS));
 		return (bindAddress != null) ? bindAddress.toString() : null;
+	}
+
+	/** True when the connector binds only the loopback interface. */
+	private boolean isLoopbackBind() {
+		String b = getBindAddress();
+		return b != null && (b.equals("127.0.0.1") || b.equalsIgnoreCase("localhost") || b.equals("::1"));
+	}
+
+	@SuppressWarnings("unchecked")
+	private AMap<AString, ACell> rateLimitConfig() {
+		ACell v = config.get(RATE_LIMIT);
+		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
+	}
+
+	private long rateLimitLong(String key, long dflt) {
+		AMap<AString, ACell> rl = rateLimitConfig();
+		if (rl == null) return dflt;
+		CVMLong v = RT.ensureLong(rl.get(Strings.create(key)));
+		return (v != null) ? v.longValue() : dflt;
+	}
+
+	/**
+	 * Whether request rate limiting is enabled. Default: <b>on</b> for a
+	 * LAN/public bind, <b>off</b> for a loopback bind (the embedded-venue case,
+	 * where the only caller is a trusted local process). An explicit
+	 * {@code rateLimit.enabled} always wins.
+	 */
+	public boolean isRateLimitEnabled() {
+		AMap<AString, ACell> rl = rateLimitConfig();
+		if (rl != null) {
+			ACell e = rl.get(ENABLED);
+			if (e != null) return RT.bool(e);
+		}
+		return !isLoopbackBind();
+	}
+
+	/** Sustained request rate per caller (tokens/second). Default 100 — a coarse
+	 *  flood backstop, deliberately high: the concurrent-job cap is the precise
+	 *  control, so the request rate should rarely bite a legitimate caller. */
+	public double getRateLimitRps() {
+		return rateLimitLong("rps", 100);
+	}
+
+	/** Burst capacity per caller (max tokens). Default 300 — absorbs normal
+	 *  bursts, trips only on genuine floods. */
+	public double getRateLimitBurst() {
+		return rateLimitLong("burst", 300);
+	}
+
+	/** Maximum concurrent (non-terminal) jobs a single caller may hold. Default
+	 *  100. Bounds accumulation of long-lived jobs. A top-level invoke over this
+	 *  limit blocks (see {@link #getRateLimitBlockMs}) then sheds with 429. */
+	public int getMaxConcurrentJobsPerUser() {
+		return (int) rateLimitLong("maxConcurrentJobsPerUser", 100);
+	}
+
+	/** Max time (ms) a top-level invoke blocks waiting for a concurrency permit
+	 *  before shedding with 429. Default 3000. Keep it under typical client read
+	 *  timeouts so a saturated caller gets a clean 429, not a socket timeout. */
+	public long getRateLimitBlockMs() {
+		return rateLimitLong("blockMs", 3000);
 	}
 
 	/**

@@ -3,6 +3,8 @@ package covia.venue;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
@@ -26,6 +28,7 @@ import convex.core.json.schema.JsonSchema;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.exception.RateLimitException;
 import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Operation;
@@ -56,6 +59,17 @@ public class JobManager {
 	/** In-memory cache of active (non-terminal) jobs */
 	private final ConcurrentHashMap<Blob, Job> activeJobs = new ConcurrentHashMap<>();
 
+	/** Per-caller admission semaphores bounding concurrent top-level jobs. */
+	private final ConcurrentHashMap<AString, Semaphore> jobPermits = new ConcurrentHashMap<>();
+
+	/** Job IDs holding an admission permit → caller DID, for exactly-once release. */
+	private final ConcurrentHashMap<Blob, AString> permitHolders = new ConcurrentHashMap<>();
+
+	/** Concurrent-job cap settings, resolved once from venue config. */
+	private final boolean jobCapEnabled;
+	private final int maxConcurrentJobs;
+	private final long jobBlockMs;
+
 	/** Cross-cutting listeners notified on every Job in the venue (REST SSE,
 	 *  MCP notifications). Per-Job subscribers attach directly to the Job
 	 *  via {@link Job#subscribe(java.util.function.Consumer)}. */
@@ -81,6 +95,45 @@ public class JobManager {
 	 */
 	public JobManager(Engine engine) {
 		this.engine = engine;
+		Config cfg = engine.config();
+		this.maxConcurrentJobs = cfg.getMaxConcurrentJobsPerUser();
+		this.jobBlockMs = cfg.getRateLimitBlockMs();
+		this.jobCapEnabled = cfg.isRateLimitEnabled() && maxConcurrentJobs > 0;
+	}
+
+	/**
+	 * Admission control for a top-level invoke: bounds concurrent (non-terminal)
+	 * jobs per caller. Returns {@code true} if a permit was acquired (the caller
+	 * must release it on job terminal via {@link #releaseJobPermit}); returns
+	 * {@code false} when the cap does not apply — disabled, a sub-job (carries a
+	 * parent {@code jobId}, e.g. orchestrator / agent fan-out), or an internal /
+	 * unattributed caller. Blocks up to {@code jobBlockMs} to absorb bursts, then
+	 * sheds with {@link RateLimitException} (→ HTTP 429).
+	 */
+	private boolean acquireJobPermit(RequestContext ctx, AString callerDID) {
+		if (!jobCapEnabled) return false;
+		if (ctx.getJobId() != null) return false; // sub-job — exempt, no self-deadlock
+		if (callerDID == null) return false;       // internal / unattributed — exempt
+		Semaphore sem = jobPermits.computeIfAbsent(callerDID, k -> new Semaphore(maxConcurrentJobs));
+		try {
+			if (sem.tryAcquire(jobBlockMs, TimeUnit.MILLISECONDS)) return true;
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new RateLimitException("Interrupted while awaiting a job slot", 1);
+		}
+		throw new RateLimitException(
+			"Concurrent job limit (" + maxConcurrentJobs + ") reached for caller; retry shortly",
+			Math.max(1, jobBlockMs / 1000));
+	}
+
+	/** Releases the admission permit held by a job, if any. Idempotent — safe to
+	 *  call from both terminal eviction and explicit deletion. */
+	private void releaseJobPermit(Blob jobID) {
+		AString caller = permitHolders.remove(jobID);
+		if (caller != null) {
+			Semaphore sem = jobPermits.get(caller);
+			if (sem != null) sem.release();
+		}
 	}
 
 	// ========== Job Invocation ==========
@@ -154,11 +207,30 @@ public class JobManager {
 		AAdapter adapter = prepareInvocation(meta, input, ctx);
 		AString callerDID = ctx.getCallerDID();
 
+		// Admission control: bound concurrent top-level jobs per caller. Blocks up
+		// to jobBlockMs to absorb bursts, then sheds with RateLimitException (429).
+		// Sub-jobs (parent jobId set) and internal callers are exempt.
+		boolean permit = acquireJobPermit(ctx, callerDID);
+
 		// Persist the bare hex hash of the metadata as the op reference.
 		// Hex hashes are universally resolvable via the resolvePath bare-hex
 		// branch and survive any change in catalog naming or adapter registry.
 		AString opID = Strings.create(meta.getHash().toHexString());
-		Job job = submitJob(opID, meta, input, callerDID, privateJob);
+		Job job;
+		try {
+			job = submitJob(opID, meta, input, callerDID, privateJob);
+		} catch (RuntimeException e) {
+			// Never obtained a jobID to track — release the permit directly.
+			if (permit && callerDID != null) {
+				Semaphore sem = jobPermits.get(callerDID);
+				if (sem != null) sem.release();
+			}
+			throw e;
+		}
+		// Track the permit against the job so it is released exactly once when the
+		// job reaches a terminal state (evictActive) or is deleted. Recorded
+		// before dispatch so a synchronously-completing adapter still finds it.
+		if (permit) permitHolders.put(job.getID(), callerDID);
 
 		// Set jobId on context so adapters can use t/ (job-scoped temp).
 		// Preserve existing jobId if already set — parent scope takes precedence
@@ -628,6 +700,7 @@ public class JobManager {
 
 	public boolean deleteJob(Blob id) {
 		activeJobs.remove(id);
+		releaseJobPermit(id);
 		return true;
 	}
 
@@ -873,6 +946,7 @@ public class JobManager {
 	 */
 	void evictActive(Blob jobID) {
 		activeJobs.remove(jobID);
+		releaseJobPermit(jobID);
 	}
 
 	// ========== Adapter Resolution ==========

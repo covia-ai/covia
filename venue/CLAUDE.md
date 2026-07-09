@@ -317,6 +317,39 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 - `port`: HTTP listen port (default `8080`).
 - `bindAddress`: network interface the HTTP connector binds to. When omitted, the venue binds **all interfaces** (`0.0.0.0`) — reachable from the LAN. Set to `"127.0.0.1"` to restrict the venue to loopback (recommended when embedding the venue as a local subprocess). This is the socket bind address and is distinct from `hostname`, which is the venue's *advertised* public host used to derive `baseUrl`/DID.
 
+### Rate limiting
+
+```json
+{
+  "rateLimit": {
+    "enabled": true,
+    "rps": 100,
+    "burst": 300,
+    "maxConcurrentJobsPerUser": 100,
+    "blockMs": 3000
+  }
+}
+```
+
+Two independent backpressure controls, keyed per caller identity (all anonymous
+callers share the venue `:public` DID → one bucket).
+
+- **Request rate** (`rps`, `burst`) — a per-caller token bucket on `/api/*`,
+  `/mcp`, `/a2a*`. A denied request short-circuits with **429 + `Retry-After`**
+  before any handler runs. Deliberately coarse/high — it's a flood backstop, not
+  a normal-traffic gate; the job cap is the precise control.
+- **Concurrent jobs** (`maxConcurrentJobsPerUser`) — admission control on
+  top-level invokes: a caller at the cap **blocks** up to `blockMs` for a slot
+  to free (a job completing releases it), then sheds with **429 + `Retry-After`**.
+  Sub-jobs (orchestrator / agent fan-out, which carry a parent job id) are
+  **exempt**, so internal fan-out is never throttled. Set `blockMs` under typical
+  client read timeouts so a saturated caller gets a clean 429, not a socket
+  timeout. Set the cap to `0` to disable it.
+
+`enabled` defaults **on** for a LAN/public bind and **off** for a loopback bind
+(the embedded-venue case, where the only caller is a trusted local process); an
+explicit `enabled` always wins.
+
 ### Adapter configuration
 
 ```json

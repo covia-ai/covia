@@ -579,7 +579,10 @@ public class CoviaAPI extends ACoviaAPI {
 		// UCAN-HTTP) stashed by AuthMiddleware as UCAN_BEARER_ATTR.
 		AVector<ACell> ucans = RT.getIn(req, "ucans");
 		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
-		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans);
+		// venueDID enables identity-from-ucans: an anonymous transport carrying a
+		// verified identity token audienced to this venue authenticates as its
+		// issuer (relayed cross-venue callers, covia#100 C3a).
+		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans, engine().getDIDString());
 
 		try {
 			// Wait window: `wait` (query param or body field) is boolean or an
@@ -617,6 +620,12 @@ public class CoviaAPI extends ACoviaAPI {
 			this.buildError(ctx, 502, e.getMessage());
 		} catch (IllegalArgumentException | IllegalStateException e) {
 			this.buildError(ctx, 400, "Error invoking operation: "+e.getClass().getSimpleName()+":"+e.getMessage());
+			return;
+		} catch (covia.exception.RateLimitException e) {
+			// Caller is over an admission/rate limit (e.g. concurrent-job cap) and
+			// the bounded wait elapsed — standard backpressure: 429 + Retry-After.
+			ctx.header("Retry-After", Long.toString(e.getRetryAfterSeconds()));
+			this.buildError(ctx, 429, e.getMessage());
 			return;
 		} catch (Exception e) {
 			this.buildError(ctx, 500, "Unexpected failure invoking operation: "+e);

@@ -32,6 +32,10 @@ public class TestServer {
 					Strings.create("defaultChatOp"), Strings.create("v/test/ops/chat")
 				),
 				Config.WEBDAV,Maps.of(Config.ENABLED,true),
+				// Shared server for the functional suite: the parallel tests hit it
+				// rapidly as one (public) caller, so disable rate limiting here.
+				// Rate-limit behaviour is covered by RateLimiterTest + RateLimitTest.
+				Config.RATE_LIMIT,Maps.of(Config.ENABLED,false),
 				Config.AUTH,Maps.of(
 					Config.PUBLIC,Maps.of(
 						Config.ENABLED,true,
