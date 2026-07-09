@@ -481,4 +481,21 @@ public class VenueServerTest {
 		assertNotNull(RT.getIn(body, "asset"),
 			"operations/{name} must return the resolved asset id for a slashed catalog name");
 	}
+
+	/**
+	 * #153: the connector allows ONLY the encoded-slash relaxation
+	 * (AMBIGUOUS_PATH_SEPARATOR), not AMBIGUOUS_PATH_ENCODING. An encoded dot
+	 * (%2e — the `../` traversal surface) must still be rejected as ambiguous,
+	 * pinning that the compliance scope is not silently re-widened.
+	 */
+	@Test public void testEncodedDotPathRejected() throws Exception {
+		HttpClient client = HttpClient.newBuilder().build();
+		HttpRequest req = HttpRequest.newBuilder()
+			.uri(new URI("http://localhost:" + PORT + "/api/v1/%2e%2e/status"))
+			.GET().timeout(Duration.ofSeconds(10)).build();
+		HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+		assertEquals(400, resp.statusCode(),
+			() -> "Encoded-dot (%2e) path must be rejected — AMBIGUOUS_PATH_ENCODING is not enabled: "
+				+ resp.statusCode() + " " + resp.body());
+	}
 }

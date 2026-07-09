@@ -417,17 +417,24 @@ public class VenueServer {
 	
 	protected void setupJettyServer(org.eclipse.jetty.server.Server jettyServer, Integer port) {
 		if (port==null) port=8080;
-		// Allow encoded path separators (%2F) in URIs. Catalog operation names
-		// contain slashes (e.g. "v/ops/jvm/string-concat") and are percent-encoded
-		// into a single path segment by VenueHTTP.getOperationId — the GET
-		// /api/v1/operations/{name} contract. Jetty 12's default UriCompliance
-		// rejects %2F as an "ambiguous path separator" (400); Jetty 11 and
-		// Javalin's own connector permit it. Since we build the connector
-		// ourselves (below), we must opt back in here or named catalog lookups
-		// — and cross-venue named references — break.
+		// Allow encoded path separators (%2F) in URIs — and ONLY that (#153).
+		// Catalog operation names contain slashes (e.g. "v/ops/jvm/string-concat")
+		// and are percent-encoded into a single path segment by
+		// VenueHTTP.getOperationId — the GET /api/v1/operations/{name} contract.
+		// Jetty 12's default UriCompliance rejects %2F as an "ambiguous path
+		// separator" (400); Jetty 11 and Javalin's own connector permitted it.
+		// Since we build the connector ourselves (below), we opt back in here or
+		// named catalog lookups — and cross-venue named references — break.
+		//
+		// AMBIGUOUS_PATH_ENCODING (encoded dots, %2e → the `../` path-traversal
+		// surface) is deliberately NOT enabled: no route needs it (operation
+		// names have no dot segments; assets/<id> and /a2a/<addr> use raw-slash
+		// wildcards, and A2A rejects %2f outright), so enabling it would only
+		// widen the connector's attack surface. Only AMBIGUOUS_PATH_SEPARATOR is
+		// required for %2F.
 		HttpConfiguration httpConfig = new HttpConfiguration();
 		httpConfig.setUriCompliance(UriCompliance.from(
-			"DEFAULT,AMBIGUOUS_PATH_SEPARATOR,AMBIGUOUS_PATH_ENCODING"));
+			"DEFAULT,AMBIGUOUS_PATH_SEPARATOR"));
 
 		// Size the connector's acceptor/selector threads explicitly. Jetty defaults
 		// selectors to cores/2, which is wrong here: handlers run on virtual threads
