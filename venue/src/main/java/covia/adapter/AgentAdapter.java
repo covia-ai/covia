@@ -1814,26 +1814,39 @@ public class AgentAdapter extends AAdapter {
 		// did NOT emit its own frames stack). When adapterFrames is non-null
 		// the adapter owns every conversation write — framework stays out.
 		// Order: inbox messages → picked task input → assistant response.
+		//
+		// Per-turn caller attribution (#84): opt-in via config.recordCaller.
+		// Off by default (single-party sessions: caller == owner, redundant);
+		// on for multi-party sessions (e.g. A2A-exposed agents) where you need
+		// who-sent-which, not just meta.parties' who's-present.
+		boolean recordCaller = CVMBool.TRUE.equals(
+			RT.getIn(agent.getConfig(), Strings.intern("recordCaller")));
 		AVector<ACell> turnsToAppend = Vectors.empty();
 		if (pickedSessionBlob != null && leanError == null && adapterFrames == null) {
 			if (filteredInbox != null) {
 				for (long i = 0; i < filteredInbox.count(); i++) {
-					ACell msgContent = RT.getIn(filteredInbox.get(i), Fields.MESSAGE);
+					ACell envelope = filteredInbox.get(i);
+					ACell msgContent = RT.getIn(envelope, Fields.MESSAGE);
 					if (msgContent != null) {
-						turnsToAppend = turnsToAppend.conj(Maps.of(
+						AMap<AString, ACell> turn = Maps.of(
 							AgentState.K_ROLE,    AgentState.ROLE_USER,
 							AgentState.K_CONTENT, msgContent,
 							AgentState.K_TURN_TS, CVMLong.create(startTs),
-							AgentState.K_SOURCE,  AgentState.SOURCE_CHAT));
+							AgentState.K_SOURCE,  AgentState.SOURCE_CHAT);
+						turnsToAppend = turnsToAppend.conj(
+							withCaller(turn, recordCaller, RT.getIn(envelope, Fields.CALLER)));
 					}
 				}
 			}
 			if (pickedTaskInput != null) {
-				turnsToAppend = turnsToAppend.conj(Maps.of(
+				AMap<AString, ACell> turn = Maps.of(
 					AgentState.K_ROLE,    AgentState.ROLE_USER,
 					AgentState.K_CONTENT, pickedTaskInput,
 					AgentState.K_TURN_TS, CVMLong.create(startTs),
-					AgentState.K_SOURCE,  AgentState.SOURCE_REQUEST));
+					AgentState.K_SOURCE,  AgentState.SOURCE_REQUEST);
+				ACell taskCaller = (pickedTask != null && pickedTask.getValue() instanceof AMap)
+					? ((AMap<AString, ACell>) pickedTask.getValue()).get(Fields.CALLER) : null;
+				turnsToAppend = turnsToAppend.conj(withCaller(turn, recordCaller, taskCaller));
 			}
 			if (leanResponse != null) {
 				turnsToAppend = turnsToAppend.conj(Maps.of(
@@ -1944,6 +1957,17 @@ public class AgentAdapter extends AAdapter {
 			Fields.TASK_RESULTS, allTaskResults);
 
 		return new IterResult(lastResult, allTaskResults);
+	}
+
+	/**
+	 * Stamps a user turn with its sender's DID (#84) when {@code recordCaller}
+	 * is on and a caller is known. Off by default and a no-op when the caller
+	 * is absent, so single-party sessions carry no redundant per-turn DID.
+	 */
+	private static AMap<AString, ACell> withCaller(AMap<AString, ACell> turn,
+			boolean recordCaller, ACell caller) {
+		if (!recordCaller || caller == null) return turn;
+		return turn.assoc(Fields.CALLER, caller);
 	}
 
 	// ========== Helpers ==========

@@ -851,6 +851,42 @@ public class AgentAdapterTest {
 		AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(Strings.intern("meta"));
 		assertEquals(CVMLong.create(2), meta.get(Strings.intern("turns")),
 			"meta.turns must reflect appended turn count");
+
+		// #84 opt-in off by default: no per-turn caller attribution.
+		assertNull(userTurn.get(Fields.CALLER),
+			"recordCaller off (default) → user turns carry no caller");
+	}
+
+	/** #84: with config.recordCaller, user turns record the sender's DID. */
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testRecordCallerStampsUserTurns() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "caller-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
+					Strings.create("recordCaller"), CVMBool.TRUE)),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job chatJob = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "caller-agent", Fields.MESSAGE, Strings.create("hi")),
+			RequestContext.of(ALICE_DID));
+		AString sidHex = RT.ensureString(RT.getIn(chatJob.awaitResult(5000), Fields.SESSION_ID));
+
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("caller-agent");
+		AVector<ACell> frames = (AVector<ACell>) agent.getSession(Blob.fromHex(sidHex.toString()))
+			.get(AgentState.KEY_FRAMES);
+		AVector<ACell> history = (AVector<ACell>) ((AMap<AString, ACell>) frames.get(0))
+			.get(AgentState.KEY_CONVERSATION);
+
+		AMap<AString, ACell> userTurn = (AMap<AString, ACell>) history.get(0);
+		assertEquals(ALICE_DID, userTurn.get(Fields.CALLER),
+			"user turn records the sender DID when recordCaller is on");
+		// Assistant turns are the agent's own output — never caller-stamped.
+		AMap<AString, ACell> assistantTurn = (AMap<AString, ACell>) history.get(1);
+		assertNull(assistantTurn.get(Fields.CALLER),
+			"assistant turns carry no caller");
 	}
 
 	/**

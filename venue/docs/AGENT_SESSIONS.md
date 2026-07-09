@@ -21,6 +21,8 @@ A **session** is a scoped interaction between parties with its own history and c
 - **Own history / context** — turns, tool calls, tool results, pinned context entries
 - **Jointly owned** — every listed party holds read/append capability; neither is subordinate
 
+`meta.parties` records *who is present*; per-turn *who-sent-which* attribution is opt-in via agent `config.recordCaller: true` (#84), which stamps each user turn with its sender's DID (`caller`). Off by default — for single-party sessions the caller is the owner, so the field is redundant; it earns its keep on multi-party sessions such as A2A-exposed agents. Assistant turns are never caller-stamped (they are the agent's own output).
+
 Sessions live at `g/<agent>/sessions/<sid>/` in the agent's lattice namespace. The hosting venue mints the id; counterparties echo it on subsequent requests, exactly as in MCP.
 
 A session is *just data* — the framework doesn't enforce a particular shape for state or history beyond the standard fields. Different adapter configurations can use sessions differently.
