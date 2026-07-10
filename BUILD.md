@@ -281,12 +281,23 @@ Maven Central publishes are irreversible.
 1. **Namespace verification** — verify ownership of the `ai.covia` namespace in
    the [Central Portal](https://central.sonatype.com/) (a DNS TXT record on
    `covia.ai`, or GitHub-org verification). Done once for the whole org.
-2. **GPG signing key** — a published signing key. The Convex release key works
-   directly if you already have one:
-   ```bash
-   gpg --list-secret-keys              # confirm a key exists
-   gpg --keyserver keyserver.ubuntu.com --send-keys <KEY_ID>   # publish it once
+2. **GPG signing key** — releases are signed with the Covia release key:
+   `Covia Releases <mike@covia.ai>`, ed25519, fingerprint
+   `50211D99AC2D33BBCE2E2E967E88537C3387A49C` (published on
+   keyserver.ubuntu.com and keys.openpgp.org). The fingerprint is pinned in
+   the root pom's `release` profile, so no other key on the operator's ring
+   can be picked up by accident. The gpg *executable* is machine-specific:
+   point Maven at the GnuPG that holds the key via a settings.xml profile,
+   e.g.
+   ```xml
+   <profile>
+     <id>gpg</id>
+     <properties>
+       <gpg.executable>C:\Program Files (x86)\GnuPGin\gpg.exe</gpg.executable>
+     </properties>
+   </profile>
    ```
+   and include it in release commands: `mvn deploy -P release,gpg`.
 3. **Central token** — generate a user token in the Central Portal and add it to
    `~/.m2/settings.xml`:
    ```xml

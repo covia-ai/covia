@@ -153,6 +153,15 @@
 						<groupId>org.apache.maven.plugins</groupId>
 						<artifactId>maven-gpg-plugin</artifactId>
 						<version>3.2.8</version>
+						<configuration>
+							<!-- The Covia release-signing key ("Covia Releases
+							     <mike@covia.ai>", ed25519). Public info — pinning it
+							     here means no other key on the operator's ring can be
+							     picked up by accident. The gpg *executable* is
+							     machine-specific and comes from the operator's
+							     settings.xml gpg profile (see BUILD.md). -->
+							<keyname>50211D99AC2D33BBCE2E2E967E88537C3387A49C</keyname>
+						</configuration>
 						<executions>
 							<execution>
 								<id>sign-artifacts</id>
