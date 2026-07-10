@@ -563,6 +563,47 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testCappedAgentCanCompleteTask() {
+		// Regression (covia#71 live testing): the task-lifecycle ops are
+		// self-scoped (agentId/taskId from the RequestContext) and must stay
+		// callable under a restricted config ceiling. A blanket invoke gate on
+		// AgentAdapter.invokeFuture once denied complete_task to any capped
+		// agent, trapping every capped worker in the tool loop until the
+		// iteration limit — a capped pipeline could never finish a task.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "capped-task-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/taskllm",
+					// Restricted ceiling: one read grant, no invoke ability.
+					"caps", Vectors.of(Maps.of(
+						"with", Strings.create("w/allowed/"),
+						"can", Strings.create("crud/read"))))
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("capped-task-agent");
+		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
+		agent.addTask(taskId, Maps.of("question", "What is 2+2?"));
+
+		Job runJob = engine.jobs().invokeOperation(
+			"v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "capped-task-agent"),
+			RequestContext.of(ALICE_DID));
+		runJob.awaitResult(5000);
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+
+		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		assertEquals(0, agent.getTasks().count(),
+			"a capped agent must be able to complete its own task");
+		assertNotNull(RT.getIn(agent.getTimeline().get(0), Fields.TASK_RESULTS),
+			"the completion must be recorded, not the iteration-limit failure");
+	}
+
+	@Test
 	public void testToolLoopLimitFailsTask() {
 		// Agent whose LLM (loopllm) ALWAYS tool-calls and never completes the
 		// task — the tool loop runs to MAX_TOOL_ITERATIONS. The task Job must

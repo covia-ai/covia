@@ -190,12 +190,17 @@ public class AgentAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		requireInvoke(ctx);
 		// completeTask/failTask are zero-Job (framework invokes from transitions).
 		// request is reachable here from the LLM tool loop — delegates to the
 		// Job-aware path to create a task Job, then races completion against
 		// an optional timeout.
 		String subOp = getSubOperation(meta);
+		// The task-lifecycle ops are self-scoped — agentId/taskId come from the
+		// RequestContext, never the input — and must stay callable under a
+		// restricted transition ceiling (the requireAgentCap contract): a capped
+		// agent that cannot complete/fail its own task is trapped in the tool
+		// loop until the iteration limit. The invoke gate covers everything else.
+		if (!"completeTask".equals(subOp) && !"failTask".equals(subOp)) requireInvoke(ctx);
 		try {
 			switch (subOp) {
 				case "completeTask" -> {
