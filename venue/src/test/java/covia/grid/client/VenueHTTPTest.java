@@ -167,11 +167,14 @@ public class VenueHTTPTest {
 	@Test
 	public void backoffPollLoopCompletesDelayedJob() throws Exception {
 		// A non-instant job forces several poll iterations through the
-		// exponential-backoff loop before COMPLETE is observed.
+		// exponential-backoff loop before COMPLETE is observed. The wait budget
+		// is explicit and generous: this test asserts the loop *completes* —
+		// boundedness is clientPollingTimeoutIsBoundedAndRemoteJobSurvives's
+		// job — and the shared client's 5s default flaked under parallel load.
 		Job job = client.invokeAndWait(OP_DELAY, Maps.of(
 			Fields.DELAY, CVMLong.create(400),
 			Fields.OPERATION, OP_ECHO,
-			Fields.INPUT, Maps.of(Strings.create("k"), Strings.create("v"))));
+			Fields.INPUT, Maps.of(Strings.create("k"), Strings.create("v"))), 30_000);
 		assertEquals(Status.COMPLETE, job.getStatus(),
 			"the backoff poll loop must return the completed result for a delayed job");
 		assertEquals("v", RT.getIn(job.getOutput(), "k").toString());
