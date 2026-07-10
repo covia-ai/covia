@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory;
 
 import convex.auth.did.DID;
 import convex.core.data.ACell;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -90,6 +91,11 @@ public class VenueHTTP extends Venue {
 	 */
 	private volatile AVector<ACell> ucans = null;
 
+	/**
+	 * Connection-level private-jobs mode (#192) — see {@link #setPrivate(boolean)}.
+	 */
+	private volatile boolean privateJobs = false;
+
 	/** A single HTTP send attempt (may throw the checked exceptions {@code HttpClient.send} throws). */
 	@FunctionalInterface
 	interface HttpCall { HttpResponse<String> call() throws IOException, InterruptedException; }
@@ -124,6 +130,23 @@ public class VenueHTTP extends Venue {
 		AVector<ACell> v = Vectors.empty();
 		for (String jwt : jwts) v = v.conj(Strings.create(jwt));
 		this.ucans = v;
+	}
+
+	/**
+	 * Puts this connection in <b>private-jobs mode</b> (#192): every subsequent
+	 * invoke executes as a memory-only job — never persisted to the venue's job
+	 * index, no durable record, gone on venue restart. Requires
+	 * {@code enablePrivateJobs} on the venue; a private request against a venue
+	 * without it fails, never silently downgrades to a persisted job.
+	 *
+	 * <p>Because a completed private job is immediately forgotten by the venue,
+	 * results are collected through the invoke {@code wait} window rather than
+	 * polling — so private mode works with the run-style entry points
+	 * ({@link #invokeAndWait(AString, ACell)}, {@link #invokeSync(String, ACell)});
+	 * the poll-style {@link #invoke(AString, ACell)} throws.</p>
+	 */
+	public void setPrivate(boolean enabled) {
+		this.privateJobs = enabled;
 	}
 
 	// Package-private test seams (deterministic retry tests):
@@ -476,6 +499,12 @@ public class VenueHTTP extends Venue {
 	 * @return Future containing the submitted Job (likely PENDING)
 	 */
 	public CompletableFuture<Job> invoke(AString opID, ACell input)  {
+		if (privateJobs) {
+			throw new IllegalStateException(
+				"Private-jobs mode requires a run-style call (invokeAndWait / invokeSync): "
+				+ "a completed private job is immediately forgotten by the venue, so a "
+				+ "poll-style Job cannot collect its result.");
+		}
 		return startJobAsync(opID, input).thenApply(job -> {
 			startBackgroundPolling(job);
 			return job;
@@ -492,7 +521,7 @@ public class VenueHTTP extends Venue {
 	 * @throws TimeoutException
 	 */
 	public Job startJob(AString opID, ACell input) throws InterruptedException, ExecutionException, TimeoutException {
-		return startJobAsync(opID,input).get(5,TimeUnit.SECONDS);
+		return startJobAsync(opID,input).get(submitTimeoutSecs(),TimeUnit.SECONDS);
 	}
 	
 	/**
@@ -505,7 +534,16 @@ public class VenueHTTP extends Venue {
 	 * @throws TimeoutException
 	 */
 	public Job startJob(Hash opID, ACell input) throws InterruptedException, ExecutionException, TimeoutException {
-		return startJobAsync(opID.toCVMHexString(),input).get(5,TimeUnit.SECONDS);
+		return startJobAsync(opID.toCVMHexString(),input).get(submitTimeoutSecs(),TimeUnit.SECONDS);
+	}
+
+	/**
+	 * How long a synchronous submit may block. Under private-jobs mode the
+	 * invoke response arrives only when the server-side wait window closes
+	 * (up to the venue's 120s cap), so the old 5s submit cap would misfire.
+	 */
+	private long submitTimeoutSecs() {
+		return privateJobs ? 150 : 5;
 	}
 	
 	/**
@@ -522,13 +560,22 @@ public class VenueHTTP extends Venue {
 		// unlike headers) — verified by the venue at ingress.
 		AVector<ACell> proofTokens = this.ucans;
 		if (proofTokens != null) reqBody = reqBody.assoc(Strings.intern("ucans"), proofTokens);
+		if (privateJobs) {
+			// Memory-only job (#192): the result is collected through the invoke
+			// wait window — a completed private job is immediately forgotten, so
+			// polling cannot be relied on. The venue clamps the wait to its cap.
+			reqBody = reqBody.assoc(Fields.PRIVATE, CVMBool.TRUE);
+			reqBody = reqBody.assoc(Fields.WAIT, CVMBool.TRUE);
+		}
 		HttpRequest req = requestBuilder("invoke")
 			.header("Content-Type", "application/json")
 			.POST(HttpRequest.BodyPublishers.ofString(JSON.toString(reqBody)))
 			.build();
 
 		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
-			if (response.statusCode() != 201) {
+			int code = response.statusCode();
+			// 201 = job submitted; 200 = wait window closed with the finished record
+			if (code != 201 && code != 200) {
 				throw new ResponseException("Failed to start operation: " + response+" = "+response.body(),response);
 			}
 			AMap<AString,ACell> body=RT.ensureMap(JSON.parseJSON5(response.body()));
@@ -1123,5 +1170,105 @@ public class VenueHTTP extends Venue {
 		} catch (IOException | InterruptedException e) {
 			throw new ResponseException("Failed to send message to job " + jobId, e);
 		}
+	}
+
+	// ========== Job-free reads (#177, #180) ==========
+
+	/**
+	 * Job-free lattice value read ({@code GET /api/v1/values/<accessor>}) —
+	 * synchronous, capability-checked, and <b>no job is persisted</b> on the
+	 * venue. Use for reads instead of invoking {@code covia:*} ops, which mint
+	 * a durable job record each.
+	 *
+	 * @param accessor One of {@code read}, {@code list}, {@code slice},
+	 *        {@code inspect}, {@code aggregate}, {@code count}
+	 * @param path Lattice path, e.g. {@code "w/notes"} or {@code "v/info/adapters"}
+	 * @return Future for the structured result map
+	 */
+	public CompletableFuture<AMap<AString,ACell>> getValue(String accessor, String path) {
+		String encoded = java.net.URLEncoder.encode(path, java.nio.charset.StandardCharsets.UTF_8);
+		HttpRequest req = requestBuilder("values/" + accessor + "?path=" + encoded)
+			.GET()
+			.build();
+		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+			if (response.statusCode() != 200) {
+				throw new ResponseException("Value read failed: " + response + " = " + response.body(), response);
+			}
+			return RT.castMap(JSON.parse(response.body()));
+		});
+	}
+
+	/**
+	 * Job-free listing of the authenticated caller's agents
+	 * ({@code GET /api/v1/agents}, #180) — the {@code agent:list} payload with
+	 * <b>no job persisted</b>. Terminated agents are hidden by default.
+	 *
+	 * @return Future for the agent list result map
+	 */
+	public CompletableFuture<AMap<AString,ACell>> getAgents() {
+		HttpRequest req = requestBuilder("agents").GET().build();
+		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+			if (response.statusCode() != 200) {
+				throw new ResponseException("Agent list failed: " + response + " = " + response.body(), response);
+			}
+			return RT.castMap(JSON.parse(response.body()));
+		});
+	}
+
+	/**
+	 * Job-free read of one of the authenticated caller's agents
+	 * ({@code GET /api/v1/agents/<id>}, #180) — the {@code agent:info} payload
+	 * with <b>no job persisted</b>.
+	 *
+	 * @param agentId Agent id
+	 * @return Future for the agent info map
+	 */
+	public CompletableFuture<AMap<AString,ACell>> getAgent(String agentId) {
+		HttpRequest req = requestBuilder("agents/" + agentId).GET().build();
+		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+			if (response.statusCode() != 200) {
+				throw new ResponseException("Agent info failed: " + response + " = " + response.body(), response);
+			}
+			return RT.castMap(JSON.parse(response.body()));
+		});
+	}
+
+	// ========== UCAN verify ==========
+
+	/**
+	 * Verifies a UCAN token against the venue's trust policy via the
+	 * {@code ucan:verify} diagnostic op. The result map carries
+	 * {@code valid} / {@code reason}, {@code chainDepth}, {@code rootIssuer},
+	 * and per-capability {@code rootAuthority} verdicts
+	 * ({@code owner} / {@code venue} / {@code refused}).
+	 *
+	 * @param token The UCAN JWT to verify
+	 * @return The verification result map
+	 * @throws InterruptedException if interrupted while waiting
+	 */
+	public AMap<AString,ACell> verifyUcan(String token) throws InterruptedException {
+		return verifyUcan(token, null, null, null);
+	}
+
+	/**
+	 * Verifies a UCAN token, additionally asking whether it would authorise a
+	 * specific request: the result map's {@code authorises} field reports
+	 * whether {@code (with, can)} is covered for the presenting audience
+	 * {@code aud} (venue-side default: the caller).
+	 *
+	 * @param token The UCAN JWT to verify
+	 * @param with Resource for the would-it-authorise check (null to omit)
+	 * @param can Ability for the would-it-authorise check (null to omit)
+	 * @param aud Presenting audience DID (null to omit)
+	 * @return The verification result map
+	 * @throws InterruptedException if interrupted while waiting
+	 */
+	public AMap<AString,ACell> verifyUcan(String token, String with, String can, String aud) throws InterruptedException {
+		AMap<AString,ACell> input = Maps.of(Strings.intern("token"), Strings.create(token));
+		if (with != null) input = input.assoc(Strings.intern("with"), Strings.create(with));
+		if (can != null) input = input.assoc(Strings.intern("can"), Strings.create(can));
+		if (aud != null) input = input.assoc(Strings.intern("aud"), Strings.create(aud));
+		Job job = invokeAndWait(Strings.create("v/ops/ucan/verify"), input);
+		return RT.ensureMap(job.getOutput());
 	}
 }
