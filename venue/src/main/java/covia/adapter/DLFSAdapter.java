@@ -309,6 +309,80 @@ public class DLFSAdapter extends AAdapter {
 	}
 
 	/**
+	 * A parsed DID-scoped DLFS file reference: {@code [<ownerDID>/]dlfs/<drive>/<path>}
+	 * (the legacy {@code dlfs://<drive>/<path>} own-drive shorthand is normalised).
+	 * {@code ownerDID} is null for the bare own-drive form.
+	 */
+	record DlfsFileRef(AString ownerDID, String drive, String path) {}
+
+	/**
+	 * Parses a DID-scoped DLFS file reference, or returns null when {@code ref}
+	 * is not DLFS-shaped (callers fall through to other resolution).
+	 */
+	static DlfsFileRef parseDlfsFileRef(String ref) {
+		if (ref == null) return null;
+		AString owner = null;
+		String rest = ref;
+		if (ref.startsWith("did:")) {
+			if (!ref.contains("/dlfs/")) return null;
+			DIDURL didURL = DIDURL.create(ref);
+			owner = Strings.create(didURL.getDID().toString());
+			rest = didURL.getPath();
+			if (rest != null && rest.startsWith("/")) rest = rest.substring(1);
+		}
+		if (rest == null) return null;
+		if (rest.startsWith("dlfs://")) rest = "dlfs/" + rest.substring("dlfs://".length());
+		if (!rest.startsWith("dlfs/")) return null;
+		rest = rest.substring("dlfs/".length());
+		int slash = rest.indexOf('/');
+		if (slash <= 0 || slash == rest.length() - 1) return null; // need drive AND file path
+		return new DlfsFileRef(owner, rest.substring(0, slash), rest.substring(slash + 1));
+	}
+
+	/**
+	 * Reads a file's raw bytes at a DID-scoped DLFS path, enforcing exactly the
+	 * checks {@code dlfs:read} enforces: the caller's own ceiling for an own
+	 * drive; the cross-user proof gate ({@link CapabilityChecker#proofsCover},
+	 * {@code crud/read} on {@code <owner>/dlfs/<drive>/<path>}) for another
+	 * user's drive. Returns null when {@code ref} is not DLFS-shaped; throws
+	 * (never degrades) on denial or a missing file.
+	 *
+	 * <p>For adapters that consume file content directly (e.g. image references
+	 * in LLM messages, covia#198) — unlike {@code dlfs:read}'s rendered result,
+	 * which returns a WebDAV URL for binary content.</p>
+	 */
+	public byte[] readFileContent(RequestContext ctx, String ref) throws IOException {
+		DlfsFileRef fr = parseDlfsFileRef(ref);
+		if (fr == null) return null;
+
+		RequestContext driveCtx = ctx;
+		boolean cross = fr.ownerDID() != null && !fr.ownerDID().equals(ctx.getCallerDID());
+		if (cross) {
+			String resource = dlfsResource(fr.ownerDID(), Strings.create(fr.drive()),
+				Strings.create(fr.path()));
+			boolean ok = CapabilityChecker.proofsCover(
+				ctx.getProofs(), ctx.getCallerDID(), engine.getDIDString(),
+				Strings.create(resource), Capability.CRUD_READ,
+				System.currentTimeMillis() / 1000);
+			if (!ok) throw new IllegalStateException(
+				"Access denied: no crud/read capability for " + resource);
+			driveCtx = RequestContext.of(fr.ownerDID());
+		} else {
+			ctx.requireCapability(Strings.create(
+				dlfsResource(null, Strings.create(fr.drive()), Strings.create(fr.path()))),
+				Capability.CRUD_READ);
+		}
+
+		FileSystem fs = getDrive(driveCtx, fr.drive());
+		Path path = resolvePath(fs, fr.path());
+		try {
+			return Files.readAllBytes(path);
+		} catch (NoSuchFileException e) {
+			throw new IllegalArgumentException("No file at DLFS path: " + ref);
+		}
+	}
+
+	/**
 	 * The resolved target of a DLFS file op: either the caller's own drive
 	 * ({@code crossUser == false}) or another user's drive addressed via a
 	 * DID-URL {@code drive} reference (e.g. {@code did:key:zAlice/docs}).

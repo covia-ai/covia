@@ -378,6 +378,74 @@ public class LangChainAdapterTest {
 	}
 
 	@Test
+	public void testImageRefFromOwnDlfsDrive() {
+		// A vault/drive file referenced by its DID-scoped DLFS path feeds a
+		// vision call directly — no asset:store hop.
+		var engine = covia.venue.TestEngine.ENGINE;
+		var ctx = covia.venue.RequestContext.of(convex.core.data.Strings.create("did:key:zDlfsImg"));
+		byte[] bytes = new byte[] {(byte)0x89, 0x50, 0x4E, 0x47, 7, 7};
+		String b64 = java.util.Base64.getEncoder().encodeToString(bytes);
+		engine.jobs().invokeOperation("v/ops/dlfs/create-drive",
+			Maps.of("name", "vault"), ctx).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/dlfs/write",
+			Maps.of("drive", "vault", "path", "scan.png", "bytes", b64), ctx).awaitResult(5000);
+
+		var messages = Vectors.of(
+			Maps.of("role", "user", "content", Vectors.of(
+				Maps.of("type", "image", "source", Maps.of("type", "asset", "ref", "dlfs/vault/scan.png")))));
+		var adapter = (LangChainAdapter) engine.getAdapter("langchain");
+		var resolved = adapter.resolveImageRefs(messages, ctx);
+		var blocks = (convex.core.data.AVector<?>) convex.core.lang.RT.getIn(resolved.get(0), "content");
+		assertEquals(convex.core.data.Strings.create("image/png"),
+			convex.core.lang.RT.getIn(blocks.get(0), "source", "mediaType"), "sniffed from filename/bytes");
+		assertEquals(convex.core.data.Strings.create(b64),
+			convex.core.lang.RT.getIn(blocks.get(0), "source", "data"));
+	}
+
+	@Test
+	public void testImageRefFromCrossUserDlfsRequiresProof() {
+		// Alice's drive file referenced cross-user: authorised by a UCAN grant,
+		// denied without one — the same gate dlfs:read enforces.
+		var engine = covia.venue.TestEngine.ENGINE;
+		var aliceKP = convex.core.crypto.AKeyPair.generate();
+		var bobKP = convex.core.crypto.AKeyPair.generate();
+		var aliceDID = convex.auth.ucan.UCAN.toDIDKey(aliceKP.getAccountKey());
+		var bobDID = convex.auth.ucan.UCAN.toDIDKey(bobKP.getAccountKey());
+		var alice = covia.venue.RequestContext.of(aliceDID);
+		byte[] bytes = new byte[] {(byte)0xFF, (byte)0xD8, (byte)0xFF, (byte)0xE0, 5};
+		engine.jobs().invokeOperation("v/ops/dlfs/create-drive",
+			Maps.of("name", "docs"), alice).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/dlfs/write",
+			Maps.of("drive", "docs", "path", "letter.jpg",
+				"bytes", java.util.Base64.getEncoder().encodeToString(bytes)), alice).awaitResult(5000);
+
+		String ref = aliceDID + "/dlfs/docs/letter.jpg";
+		var messages = Vectors.of(
+			Maps.of("role", "user", "content", Vectors.of(
+				Maps.of("type", "image", "source", Maps.of("type", "asset", "ref", ref)))));
+		var adapter = (LangChainAdapter) engine.getAdapter("langchain");
+
+		// Without a proof: denied.
+		var bobNoProof = covia.venue.RequestContext.of(bobDID);
+		assertThrows(Exception.class, () -> adapter.resolveImageRefs(messages, bobNoProof));
+
+		// Alice signs Bob a self-sovereign read grant over the drive.
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		var grant = convex.auth.ucan.UCAN.create(aliceKP,
+			convex.auth.ucan.UCAN.fromDIDKey(bobDID), exp,
+			Vectors.of(convex.auth.ucan.Capability.create(
+				convex.core.data.Strings.create(aliceDID + "/dlfs/docs/"),
+				convex.auth.ucan.Capability.CRUD_READ)),
+			Vectors.empty());
+		var bob = covia.venue.RequestContext.of(bobDID)
+			.withProofs(Vectors.of(grant.toMap()));
+		var resolved = adapter.resolveImageRefs(messages, bob);
+		var blocks = (convex.core.data.AVector<?>) convex.core.lang.RT.getIn(resolved.get(0), "content");
+		assertEquals(convex.core.data.Strings.create("image/jpeg"),
+			convex.core.lang.RT.getIn(blocks.get(0), "source", "mediaType"));
+	}
+
+	@Test
 	public void testUnresolvableImageRefFailsLoudly() {
 		var engine = covia.venue.TestEngine.ENGINE;
 		var ctx = covia.venue.RequestContext.of(convex.core.data.Strings.create("did:key:zImgMissing"));

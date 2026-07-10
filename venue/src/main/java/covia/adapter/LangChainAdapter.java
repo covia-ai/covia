@@ -573,22 +573,33 @@ public class LangChainAdapter extends AAdapter {
 			byte[] bytes = null;
 			String mime = null;
 
-			// Locate the CAS record, mirroring asset:content: hash-form refs name
+			// DID-scoped DLFS file reference ([<ownerDID>/]dlfs/<drive>/<path>):
+			// drive/vault files referenced directly, under the same own-ceiling /
+			// cross-user proof checks as dlfs:read. Lets vault-stored documents
+			// feed vision calls without a duplicate asset:store hop.
+			DLFSAdapter dlfs = (DLFSAdapter) engine.getAdapter("dlfs");
+			if (dlfs != null) {
+				bytes = dlfs.readFileContent(ctx, ref.toString()); // null = not DLFS-shaped
+			}
+
+			// Otherwise locate the CAS record, mirroring asset:content: hash-form refs name
 			// it directly; other refs resolve first (a workspace slot may hold a
 			// reference string — followed one hop — a metadata map, or a raw blob).
 			convex.core.data.AVector<?> record = null;
-			convex.core.data.Hash hash = AssetAdapter.parseAssetId(ref);
-			if (hash != null) {
-				record = engine.getAssetRecord(hash, ctx);
-			} else {
-				ACell value = engine.resolvePath(ref, ctx);
-				if (value instanceof AString s) {
-					convex.core.data.Hash hop = AssetAdapter.parseAssetId(s);
-					if (hop != null) record = engine.getAssetRecord(hop, ctx);
-				} else if (value instanceof AMap) {
-					record = engine.getAssetRecord(((AMap<?, ?>) value).getHash(), ctx);
-				} else if (value instanceof convex.core.data.ABlob b) {
-					bytes = b.getBytes();
+			if (bytes == null) {
+				convex.core.data.Hash hash = AssetAdapter.parseAssetId(ref);
+				if (hash != null) {
+					record = engine.getAssetRecord(hash, ctx);
+				} else {
+					ACell value = engine.resolvePath(ref, ctx);
+					if (value instanceof AString s) {
+						convex.core.data.Hash hop = AssetAdapter.parseAssetId(s);
+						if (hop != null) record = engine.getAssetRecord(hop, ctx);
+					} else if (value instanceof AMap) {
+						record = engine.getAssetRecord(((AMap<?, ?>) value).getHash(), ctx);
+					} else if (value instanceof convex.core.data.ABlob b) {
+						bytes = b.getBytes();
+					}
 				}
 			}
 			if (record != null) {
