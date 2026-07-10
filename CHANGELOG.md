@@ -9,10 +9,41 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ## [Unreleased]
 
 ### Added
+- Cross-venue trust (Phase C3a): **self-sovereign grants** — a resource owner signs delegations with their own `did:key` and they verify on any venue holding the data (no venue involved in issuance); delegation chains with per-hop attenuation; third-party roots refused. Grid hops forward the caller's authority through the `ucans` proof channel: **identity tokens** (empty-`att` UCANs audienced to the target venue) carry the caller's identity across relays, and a **`venue/relay`** delegation has the venue hop as itself. Relays forward only provably-admissible tokens. See COG-15 and `venue/docs/UCAN.md` §5.6. (#100)
+- `ucan:verify` — verifies a token against the venue's trust policy and explains the verdict: validity with a diagnosable reason, delegation chain depth and root issuer, per-capability root-authority verdict (owner / venue / refused), and an optional would-it-authorise check. The diagnostic counterpart to "Access denied".
+- Client-side UCAN minting (`covia.grid.auth.UcanTokens`): `identityToken`, `grant`, `relayDelegation` — the tokens self-sovereign callers sign with their own keys.
+- **Rate limiting and backpressure** — per-caller token-bucket request limits (429 + `Retry-After`) and a concurrent-job cap (admission control: block briefly, then shed) — on by default for non-loopback binds, configurable via the `rateLimit` block. The Java client (`VenueHTTP`) retries 429s automatically (Retry-After floor, full-jitter backoff, bounded) and throws a typed `RateLimitException` on exhaustion. See `venue/CLAUDE.md` §Rate limiting.
+- Cross-user DLFS via UCAN: reads, writes and deletes on another user's drive when the presented proof authorises them (`<owner>/dlfs/<drive>/<path>` resources, delegation chains supported); mutations land under the owner's key with the caller recorded. (#98)
+- Reference-addressed content: `Engine.resolveContent`/`putContent` resolve any content reference — CAS assets, lattice values, and **DLFS drive paths** (a `ContentProvider` seam; DLFS is an alternative content storage mechanism, not a special case). `asset:content` serves drive paths; `dlfs:write asset:` refs accept any resolvable source. Assets may declare DLFS-resident content in metadata: `content: {dlfs, sha256}` is pinned (drift fails loudly), `content: {dlfs}` is a live binding.
+- LangChain vision: user message content accepts image blocks — inline base64 or, preferred, a reference (`a/<hash>`, `w/…`, `dlfs/<drive>/…`, DID URL) resolved at call time under the caller's authority so job records keep bytes out. `maxTokens` honoured on `langchain:anthropic`. (#198)
+- Audience-bound client auth: `VenueAuth.keyPair(kp, venueDID[, lifetime])` binds each self-issued JWT to its target venue (capture-replay containment); `VenueDID.discover(baseUrl)` resolves the DID to bind to from `/.well-known/did.json`. (#199)
+- Job-free agent reads: `GET /api/v1/agents` and `/agents/{id}` share the `agent:list`/`agent:info` accessors with no job persisted. (#180)
+- A2A: authenticated agent catalogue via `GetExtendedAgentCard`. (#187)
+- Values API: field projection (sparse fieldsets) on `values/list`. (#191)
+- Private jobs: `private: true` on invoke creates a memory-only job — never persisted, gone on restart; venue opt-in via `enablePrivateJobs`. Operator telemetry unaffected. (#192)
+- Context scope chain: agent → session → frame context tiers with lexical semantics and tombstone masking. (#142)
+- Session history: opt-in per-turn caller attribution. (#84)
+- `covia:slice` accepts `maxSize` (CVM storage size, distinct from render budget); exact reads fail on overflow rather than summarising. (#78)
 - `agent:deleteSession` — delete a session on an agent, removing the session record (history, pending, meta) so a user can hold a private conversation and delete it afterwards. Job records are not touched — callers hold their own Job IDs and delete those separately. An in-flight chat on the session is failed cleanly. Enabled by default; operators disable via `{"adapters": {"agent": {"sessionDelete": false}}}`. See `venue/docs/AGENT_SESSIONS.md` §7.2.
+- Library modules publish to Maven Central under `ai.covia` (`covia-core`, `venue`, `workbench` + parent); snapshots on the Central snapshots repository. (#33)
 
 ### Changed
+- Convex dependency **0.8.7 → 0.8.8**; UCAN verification migrated onto the convex-core authority layer (`UCANValidator.isAuthorised` with root-authority policy — the enabler for self-sovereign cross-venue trust). `Venue.getAssetDID` now returns `DIDURL` (`DID.withPath` removed upstream). (#196)
+- DLFS capability resources use the DID-scoped path form `dlfs/<drive>/<path>` (owner-prefixed for cross-user); the legacy `dlfs://<drive>/…` scheme form remains an own-drive ceiling shorthand. Own-drive DLFS *reads* are covered by the standard read-only ceiling like `/w/` reads; writes remain denied. (#196)
+- Reading a job is the same delegable right as reading its `j/<id>` lattice path — one shared check; job mutations remain owner-only. (#102)
 - Job deletion is now permanent: `JobManager.deleteJob` (and `PUT /api/v1/jobs/{id}/delete`) removes the durable record from the owner's job index instead of only evicting the in-memory cache. Previously "deleted" jobs remained readable via the lattice fallback.
+- Agent config collapsed to a single canonical `config` slot (was split across `config` / `state.config`). (#144)
+- Agent harness tool calls outside their valid runtime fail at the point of use with a diagnosable error (not venue logs). (#143)
+- `asset:store` rejects `metadata.content` shape deviations instead of silently rewriting (the asset ID is the metadata hash). (#173)
+- Manager/worker agent templates instruct reference-passing handoff (paths / job refs, not payloads) between pipeline stages, with the capability requirements documented. (#71)
+
+### Fixed
+- Confused deputy in cross-user DLFS writes: a caller-supplied `asset:` reference now resolves under the *caller's* authority, never the drive owner's.
+- `dlfs:write` from a plain content asset (metadata without an `operation` field) failed "Asset not found".
+- `covia.jar` served the Convex chain API document at `/openapi`, shadowing covia's own.
+- OpenAPI: route parameters documented, build version tracked, ReDoc restored.
+- Jetty `UriCompliance` narrowed to `AMBIGUOUS_PATH_SEPARATOR` only. (#153)
+- Central snapshots endpoint corrected (`central.sonatype.com`, not `.org`).
 
 ## [0.3.0] - 2026-07-06
 
