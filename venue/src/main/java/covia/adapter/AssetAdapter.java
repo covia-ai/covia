@@ -198,7 +198,9 @@ public class AssetAdapter extends AAdapter {
 	 * Parses an asset hash from an ID string. Accepts bare hash, a/<hash>,
 	 * /a/<hash>, or did:key:.../a/<hash> formats.
 	 */
-	static Hash parseAssetId(AString idStr) {
+	/** Parses hash-form asset references (bare hex, a/<hash>, DID URL /a/ forms).
+	 *  Public: the engine's reference-addressed content resolution uses it. */
+	public static Hash parseAssetId(AString idStr) {
 		if (idStr == null) return null;
 		String s = idStr.toString();
 		// Strip DID prefix if present: did:key:z6Mk.../a/<hash> → <hash>
@@ -249,6 +251,28 @@ public class AssetAdapter extends AAdapter {
 		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
 		ctx.requireCapability(idStr, Strings.intern("asset/read"));
 		if (idStr == null) throw new IllegalArgumentException("id is required");
+
+		// Unified reference-addressed resolution first: DLFS is an alternative
+		// content storage mechanism, so a drive path (dlfs/<drive>/<path>, or
+		// owner-prefixed cross-user) serves content through the same op as a
+		// CAS asset. Providers enforce their own access checks.
+		try {
+			covia.venue.storage.ContentProvider.Resolved resolved = engine.resolveContent(idStr, ctx);
+			if (resolved != null) {
+				long maxSz = DEFAULT_MAX_SIZE;
+				ACell maxSzCell = RT.getIn(input, K_MAX_SIZE);
+				if (maxSzCell instanceof CVMLong l) maxSz = Math.max(1, l.longValue());
+				long sz = resolved.content().getSize();
+				if (sz > maxSz) {
+					return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
+						K_TRUNCATED, CVMBool.TRUE, K_SIZE, CVMLong.create(sz));
+				}
+				return Maps.of(Fields.ID, idStr, K_EXISTS, CVMBool.TRUE,
+					Fields.VALUE, resolved.content().getBlob());
+			}
+		} catch (java.io.IOException e) {
+			throw new IllegalArgumentException("Failed to read content at " + idStr + ": " + e.getMessage(), e);
+		}
 
 		// Locate the CAS record for the source. Hash-form refs name the record
 		// directly. For non-hash refs we resolve the path, derive the CAD3 hash

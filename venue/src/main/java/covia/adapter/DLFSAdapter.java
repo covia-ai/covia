@@ -73,7 +73,7 @@ import covia.venue.User;
  *   <li>{@code dlfs:delete} — delete file or directory</li>
  * </ul>
  */
-public class DLFSAdapter extends AAdapter {
+public class DLFSAdapter extends AAdapter implements covia.venue.storage.ContentProvider {
 
 	private static final Logger log = LoggerFactory.getLogger(DLFSAdapter.class);
 
@@ -340,18 +340,15 @@ public class DLFSAdapter extends AAdapter {
 	}
 
 	/**
-	 * Reads a file's raw bytes at a DID-scoped DLFS path, enforcing exactly the
-	 * checks {@code dlfs:read} enforces: the caller's own ceiling for an own
-	 * drive; the cross-user proof gate ({@link CapabilityChecker#proofsCover},
-	 * {@code crud/read} on {@code <owner>/dlfs/<drive>/<path>}) for another
-	 * user's drive. Returns null when {@code ref} is not DLFS-shaped; throws
-	 * (never degrades) on denial or a missing file.
-	 *
-	 * <p>For adapters that consume file content directly (e.g. image references
-	 * in LLM messages, covia#198) — unlike {@code dlfs:read}'s rendered result,
-	 * which returns a WebDAV URL for binary content.</p>
+	 * Resolves a DID-scoped DLFS file reference to a drive {@link Path},
+	 * enforcing exactly the checks the corresponding op enforces for
+	 * {@code ability}: the caller's own ceiling for an own drive; the
+	 * cross-user proof gate ({@link CapabilityChecker#proofsCover} on
+	 * {@code <owner>/dlfs/<drive>/<path>}) for another user's drive. Returns
+	 * null when {@code ref} is not DLFS-shaped; throws (never degrades) on
+	 * denial.
 	 */
-	public byte[] readFileContent(RequestContext ctx, String ref) throws IOException {
+	private Path resolveAuthorisedFile(RequestContext ctx, String ref, AString ability) {
 		DlfsFileRef fr = parseDlfsFileRef(ref);
 		if (fr == null) return null;
 
@@ -362,24 +359,64 @@ public class DLFSAdapter extends AAdapter {
 				Strings.create(fr.path()));
 			boolean ok = CapabilityChecker.proofsCover(
 				ctx.getProofs(), ctx.getCallerDID(), engine.getDIDString(),
-				Strings.create(resource), Capability.CRUD_READ,
+				Strings.create(resource), ability,
 				System.currentTimeMillis() / 1000);
 			if (!ok) throw new IllegalStateException(
-				"Access denied: no crud/read capability for " + resource);
+				"Access denied: no " + ability + " capability for " + resource);
 			driveCtx = RequestContext.of(fr.ownerDID());
 		} else {
 			ctx.requireCapability(Strings.create(
 				dlfsResource(null, Strings.create(fr.drive()), Strings.create(fr.path()))),
-				Capability.CRUD_READ);
+				ability);
 		}
 
 		FileSystem fs = getDrive(driveCtx, fr.drive());
-		Path path = resolvePath(fs, fr.path());
-		try {
-			return Files.readAllBytes(path);
-		} catch (NoSuchFileException e) {
+		return resolvePath(fs, fr.path());
+	}
+
+	// ========== ContentProvider: DLFS as reference-addressed content storage ==========
+
+	/**
+	 * {@link covia.venue.storage.ContentProvider} read: a DID-scoped DLFS path
+	 * resolves to <b>lazy</b> content over the drive file (streamed on demand,
+	 * never materialised here — see {@link covia.grid.impl.PathContent}), under
+	 * the same checks as {@code dlfs:read}. Content type comes from the file
+	 * name (no I/O); consumers that need byte-sniffing do it after choosing to
+	 * materialise. Null for non-DLFS reference shapes; throws on denial or a
+	 * missing file.
+	 */
+	@Override
+	public covia.venue.storage.ContentProvider.Resolved getContent(AString ref,
+			RequestContext ctx) throws IOException {
+		if (ref == null) return null;
+		Path path = resolveAuthorisedFile(ctx, ref.toString(), Capability.CRUD_READ);
+		if (path == null) return null;
+		if (!Files.exists(path) || Files.isDirectory(path)) {
 			throw new IllegalArgumentException("No file at DLFS path: " + ref);
 		}
+		return new covia.venue.storage.ContentProvider.Resolved(
+			covia.grid.impl.PathContent.of(path), MimeUtils.guessByName(ref.toString()));
+	}
+
+	/**
+	 * {@link covia.venue.storage.ContentProvider} write: stores bytes at a
+	 * DID-scoped DLFS path under the same checks as {@code dlfs:write} — the
+	 * caller's own ceiling ({@code crud/write}) for an own drive, the
+	 * cross-user proof gate for another user's (the mutation lands under the
+	 * owner's key, custodial). False for non-DLFS reference shapes.
+	 */
+	@Override
+	public boolean putContent(AString ref, java.io.InputStream data, String contentType,
+			RequestContext ctx) throws IOException {
+		if (ref == null) return false;
+		Path path = resolveAuthorisedFile(ctx, ref.toString(), Capability.CRUD_WRITE);
+		if (path == null) return false;
+		try (java.io.OutputStream os = Files.newOutputStream(path,
+				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+				StandardOpenOption.WRITE)) {
+			data.transferTo(os);
+		}
+		return true;
 	}
 
 	/**
@@ -760,12 +797,15 @@ public class DLFSAdapter extends AAdapter {
 
 		if (assetRef != null) {
 			// Caller-supplied ref → caller's authority, never the drive owner's.
-			Asset asset = engine.resolveAsset(assetRef, assetCtx);
-			if (asset == null) throw new IllegalArgumentException("Asset not found: " + assetRef);
-			try (InputStream is = engine.getContentStream(asset);
+			// resolveContent spans every storage mechanism: CAS assets (including
+			// plain content assets, not just operation-shaped ones), lattice
+			// values, and other DLFS paths.
+			covia.venue.storage.ContentProvider.Resolved resolved =
+				engine.resolveContent(assetRef, assetCtx);
+			if (resolved == null) throw new IllegalArgumentException("No content at ref: " + assetRef);
+			try (InputStream is = resolved.content().getInputStream();
 			     OutputStream os = Files.newOutputStream(path,
 			         StandardOpenOption.CREATE, mode, StandardOpenOption.WRITE)) {
-				if (is == null) throw new IllegalArgumentException("Asset has no content: " + assetRef);
 				written = is.transferTo(os);
 			}
 		} else {

@@ -1492,6 +1492,80 @@ public class Engine {
 		return getContentStream(asset.meta());
 	}
 
+	// ========== Reference-addressed content (get/put across storage mechanisms) ==========
+
+	/**
+	 * Resolves a reference to content across every storage mechanism, under the
+	 * caller's authority. Adapter-registered {@link covia.venue.storage.ContentProvider}s
+	 * are consulted first (alternative stores like DLFS drives — each enforces
+	 * its own access checks); then the content-addressed store: a hash-form
+	 * asset ref ({@code a/<hash>}, bare hex, DID URL), a lattice path resolving
+	 * to asset metadata or a reference string (followed one hop), or a raw blob
+	 * value. Returns null when nothing content-bearing is found; throws when a
+	 * provider recognises the ref but denies or cannot read it.
+	 *
+	 * @param ref a content reference in any supported form
+	 * @param ctx the caller's request context (authority for all resolution)
+	 * @return resolved content + declared content type, or null
+	 */
+	public covia.venue.storage.ContentProvider.Resolved resolveContent(
+			AString ref, RequestContext ctx) throws IOException {
+		if (ref == null) return null;
+
+		// Alternative storage mechanisms (e.g. DLFS drive paths).
+		for (AAdapter a : adapters.values()) {
+			if (a instanceof covia.venue.storage.ContentProvider p) {
+				covia.venue.storage.ContentProvider.Resolved r = p.getContent(ref, ctx);
+				if (r != null) return r;
+			}
+		}
+
+		// Content-addressed store: locate the CAS record. Hash-form refs name it
+		// directly; other refs resolve first (a lattice slot may hold a reference
+		// string — followed one hop — asset metadata, or a raw blob).
+		AVector<?> record = null;
+		Hash hash = covia.adapter.AssetAdapter.parseAssetId(ref);
+		if (hash != null) {
+			record = getAssetRecord(hash, ctx);
+		} else {
+			ACell value = resolvePath(ref, ctx);
+			if (value instanceof AString s) {
+				Hash hop = covia.adapter.AssetAdapter.parseAssetId(s);
+				if (hop != null) record = getAssetRecord(hop, ctx);
+			} else if (value instanceof AMap) {
+				record = getAssetRecord(((AMap<?, ?>) value).getHash(), ctx);
+			} else if (value instanceof convex.core.data.ABlob b) {
+				return new covia.venue.storage.ContentProvider.Resolved(
+					covia.grid.impl.BlobContent.of(b), null);
+			}
+		}
+		if (record == null) return null;
+		ACell content = record.get(AssetStore.POS_CONTENT);
+		if (!(content instanceof convex.core.data.ABlob b)) return null;
+		AString ct = RT.ensureString(RT.getIn(record.get(AssetStore.POS_META), Fields.CONTENT_TYPE));
+		return new covia.venue.storage.ContentProvider.Resolved(
+			covia.grid.impl.BlobContent.of(b), (ct != null) ? ct.toString() : null);
+	}
+
+	/**
+	 * Stores content at a reference via an adapter-registered
+	 * {@link covia.venue.storage.ContentProvider} (e.g. a DLFS drive path) —
+	 * the write half of reference-addressed content. Returns false when no
+	 * provider recognises the reference (content-addressed storage stays
+	 * hash-keyed via the asset store paths). Providers enforce their own
+	 * access checks and throw on denial.
+	 */
+	public boolean putContent(AString ref, InputStream data, String contentType,
+			RequestContext ctx) throws IOException {
+		if (ref == null) return false;
+		for (AAdapter a : adapters.values()) {
+			if (a instanceof covia.venue.storage.ContentProvider p) {
+				if (p.putContent(ref, data, contentType, ctx)) return true;
+			}
+		}
+		return false;
+	}
+
 	/**
 	 * Puts content for the given Asset
 	 * @param asset Asset with metadata specifying expected content hash

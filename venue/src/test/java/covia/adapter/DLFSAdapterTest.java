@@ -359,4 +359,72 @@ public class DLFSAdapterTest {
 		assertEquals(1, entries.count());
 		assertNotNull(RT.getIn(entries.get(0), "modified"));
 	}
+
+	// ========== DLFS as reference-addressed content storage (ContentProvider) ==========
+
+	@Test
+	public void testAssetContentServesDlfsPath() {
+		// asset:content resolves a DID-scoped DLFS path — DLFS is an alternative
+		// content storage mechanism behind the same op, not a special case.
+		byte[] bytes = new byte[] {(byte)0x89, 0x50, 0x4E, 0x47, 42};
+		run("v/ops/dlfs/create-drive", Maps.of("name", "cp"));
+		run("v/ops/dlfs/write", Maps.of("drive", "cp", "path", "pic.png",
+			"bytes", java.util.Base64.getEncoder().encodeToString(bytes)));
+
+		ACell r = run("v/ops/asset/content", Maps.of("id", "dlfs/cp/pic.png"));
+		assertEquals(convex.core.data.prim.CVMBool.TRUE, RT.getIn(r, "exists"));
+		var value = RT.getIn(r, "value");
+		assertTrue(value instanceof convex.core.data.ABlob, "content should be a Blob");
+		assertArrayEquals(bytes, ((convex.core.data.ABlob) value).getBytes());
+	}
+
+	@Test
+	public void testDlfsWriteFromPlainContentAsset() {
+		// Regression: dlfs:write asset: refs previously resolved via resolveAsset,
+		// which only recognises operation-shaped assets — a PLAIN content asset
+		// failed "Asset not found". The unified Engine.resolveContent fixes it.
+		byte[] bytes = "plain content asset".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		ACell stored = run("v/ops/asset/store", Maps.of(
+			"metadata", Maps.of("name", "doc", "contentType", "text/plain"),
+			"content", convex.core.data.Strings.create(
+				"0x" + convex.core.data.Blob.wrap(bytes).toHexString())));
+		String id = RT.ensureString(RT.getIn(stored, "id")).toString();
+
+		run("v/ops/dlfs/create-drive", Maps.of("name", "docs2"));
+		run("v/ops/dlfs/write", Maps.of("drive", "docs2", "path", "copy.txt", "asset", id));
+
+		ACell read = run("v/ops/dlfs/read", Maps.of("drive", "docs2", "path", "copy.txt"));
+		assertEquals("plain content asset", RT.getIn(read, "content").toString());
+	}
+
+	@Test
+	public void testDlfsWriteFromAnotherDlfsPath() {
+		// dlfs-to-dlfs copy: the asset: ref accepts a DLFS path too.
+		run("v/ops/dlfs/create-drive", Maps.of("name", "src"));
+		run("v/ops/dlfs/create-drive", Maps.of("name", "dst"));
+		run("v/ops/dlfs/write", Maps.of("drive", "src", "path", "a.txt", "content", "across drives"));
+		run("v/ops/dlfs/write", Maps.of("drive", "dst", "path", "b.txt", "asset", "dlfs/src/a.txt"));
+		ACell read = run("v/ops/dlfs/read", Maps.of("drive", "dst", "path", "b.txt"));
+		assertEquals("across drives", RT.getIn(read, "content").toString());
+	}
+
+	@Test
+	public void testEnginePutContentToDlfsPath() throws Exception {
+		// The write half of reference-addressed content: Engine.putContent routes
+		// to the DLFS provider for drive paths.
+		run("v/ops/dlfs/create-drive", Maps.of("name", "put"));
+		byte[] bytes = "put via engine".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		boolean handled = engine.putContent(
+			convex.core.data.Strings.create("dlfs/put/x.txt"),
+			new java.io.ByteArrayInputStream(bytes), "text/plain",
+			covia.venue.RequestContext.of(ALICE_DID));
+		assertTrue(handled, "DLFS provider should handle a drive path");
+		ACell read = run("v/ops/dlfs/read", Maps.of("drive", "put", "path", "x.txt"));
+		assertEquals("put via engine", RT.getIn(read, "content").toString());
+
+		// Non-provider refs are not handled (CAS put stays hash-keyed).
+		assertFalse(engine.putContent(convex.core.data.Strings.create("w/not/dlfs"),
+			new java.io.ByteArrayInputStream(bytes), null,
+			covia.venue.RequestContext.of(ALICE_DID)));
+	}
 }
