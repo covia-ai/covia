@@ -427,4 +427,59 @@ public class DLFSAdapterTest {
 			new java.io.ByteArrayInputStream(bytes), null,
 			covia.venue.RequestContext.of(ALICE_DID)));
 	}
+
+	@Test
+	public void testAssetWithLiveDlfsContent() {
+		// An asset whose metadata declares content: {dlfs: <path>} WITHOUT a
+		// sha256 is a LIVE binding — content is whatever the file currently
+		// holds. The asset identity covers the pointer, not the bytes.
+		run("v/ops/dlfs/create-drive", Maps.of("name", "live"));
+		run("v/ops/dlfs/write", Maps.of("drive", "live", "path", "doc.txt", "content", "version one"));
+		ACell stored = run("v/ops/asset/store", Maps.of("metadata", Maps.of(
+			"name", "current doc", "contentType", "text/plain",
+			"content", Maps.of("dlfs", "dlfs/live/doc.txt"))));
+		String id = RT.ensureString(RT.getIn(stored, "id")).toString();
+
+		ACell r1 = run("v/ops/asset/content", Maps.of("id", id));
+		assertEquals("version one", new String(
+			((convex.core.data.ABlob) RT.getIn(r1, "value")).getBytes(),
+			java.nio.charset.StandardCharsets.UTF_8));
+
+		// The file changes — the SAME asset serves the new content.
+		run("v/ops/dlfs/write", Maps.of("drive", "live", "path", "doc.txt", "content", "version two"));
+		ACell r2 = run("v/ops/asset/content", Maps.of("id", id));
+		assertEquals("version two", new String(
+			((convex.core.data.ABlob) RT.getIn(r2, "value")).getBytes(),
+			java.nio.charset.StandardCharsets.UTF_8));
+	}
+
+	@Test
+	public void testAssetWithPinnedDlfsContentDetectsDrift() {
+		// With content: {dlfs, sha256} the asset is PINNED: bytes are verified on
+		// fetch, and drift after minting fails loudly — never silently-different
+		// content.
+		byte[] original = "pinned bytes".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		String sha = convex.core.crypto.Hashing.sha256(original).toHexString();
+		run("v/ops/dlfs/create-drive", Maps.of("name", "pin2"));
+		run("v/ops/dlfs/write", Maps.of("drive", "pin2", "path", "doc.txt", "content", "pinned bytes"));
+		ACell stored = run("v/ops/asset/store", Maps.of("metadata", Maps.of(
+			"name", "pinned doc", "contentType", "text/plain",
+			"content", Maps.of("dlfs", "dlfs/pin2/doc.txt", "sha256", sha))));
+		String id = RT.ensureString(RT.getIn(stored, "id")).toString();
+
+		// Matching content serves fine.
+		ACell ok = run("v/ops/asset/content", Maps.of("id", id));
+		assertEquals("pinned bytes", new String(
+			((convex.core.data.ABlob) RT.getIn(ok, "value")).getBytes(),
+			java.nio.charset.StandardCharsets.UTF_8));
+
+		// The file drifts — fetching through the asset now fails loudly.
+		run("v/ops/dlfs/write", Maps.of("drive", "pin2", "path", "doc.txt", "content", "tampered"));
+		Exception e = assertThrows(Exception.class,
+			() -> run("v/ops/asset/content", Maps.of("id", id)));
+		StringBuilder chain = new StringBuilder();
+		for (Throwable c = e; c != null; c = c.getCause()) chain.append(c.getMessage()).append(" | ");
+		assertTrue(chain.toString().contains("hash mismatch"),
+			"drift must be a loud hash-mismatch error, got: " + chain);
+	}
 }

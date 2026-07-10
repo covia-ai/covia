@@ -1513,12 +1513,8 @@ public class Engine {
 		if (ref == null) return null;
 
 		// Alternative storage mechanisms (e.g. DLFS drive paths).
-		for (AAdapter a : adapters.values()) {
-			if (a instanceof covia.venue.storage.ContentProvider p) {
-				covia.venue.storage.ContentProvider.Resolved r = p.getContent(ref, ctx);
-				if (r != null) return r;
-			}
-		}
+		covia.venue.storage.ContentProvider.Resolved provided = providerContent(ref, ctx);
+		if (provided != null) return provided;
 
 		// Content-addressed store: locate the CAS record. Hash-form refs name it
 		// directly; other refs resolve first (a lattice slot may hold a reference
@@ -1540,11 +1536,58 @@ public class Engine {
 			}
 		}
 		if (record == null) return null;
+		ACell meta = record.get(AssetStore.POS_META);
+		AString ct = RT.ensureString(RT.getIn(meta, Fields.CONTENT_TYPE));
 		ACell content = record.get(AssetStore.POS_CONTENT);
-		if (!(content instanceof convex.core.data.ABlob b)) return null;
-		AString ct = RT.ensureString(RT.getIn(record.get(AssetStore.POS_META), Fields.CONTENT_TYPE));
-		return new covia.venue.storage.ContentProvider.Resolved(
-			covia.grid.impl.BlobContent.of(b), (ct != null) ? ct.toString() : null);
+		if (content instanceof convex.core.data.ABlob b) {
+			return new covia.venue.storage.ContentProvider.Resolved(
+				covia.grid.impl.BlobContent.of(b), (ct != null) ? ct.toString() : null);
+		}
+
+		// Metadata-declared alternative storage: content.dlfs names a drive path.
+		// With content.sha256 present the asset is PINNED — fetched bytes are
+		// verified against the declared hash (drift after minting fails loudly,
+		// never serves silently-different bytes). Without sha256 the asset is a
+		// LIVE binding: content is whatever the file currently holds, served
+		// lazily, no verification possible (the asset identity covers the
+		// pointer, not the bytes).
+		AString altPath = RT.ensureString(RT.getIn(meta, Fields.CONTENT, "dlfs"));
+		if (altPath != null) {
+			covia.venue.storage.ContentProvider.Resolved r = providerContent(altPath, ctx);
+			if (r == null) {
+				throw new IllegalArgumentException(
+					"Asset declares content at '" + altPath + "' but no storage mechanism resolves it");
+			}
+			String type = (ct != null) ? ct.toString() : r.contentType();
+			AString declaredSha = RT.ensureString(RT.getIn(meta, Fields.CONTENT, Fields.SHA256));
+			if (declaredSha != null) {
+				convex.core.data.ABlob bytes = r.content().getBlob();
+				Hash actual = Hashing.sha256(bytes.getBytes());
+				if (!actual.toHexString().equals(declaredSha.toString())) {
+					throw new IllegalStateException(
+						"Content hash mismatch for asset content at '" + altPath
+						+ "': stored file has changed since the asset was minted (expected "
+						+ declaredSha + ", got " + actual.toHexString() + ") — re-mint the asset");
+				}
+				return new covia.venue.storage.ContentProvider.Resolved(
+					covia.grid.impl.BlobContent.of(bytes), type);
+			}
+			return new covia.venue.storage.ContentProvider.Resolved(r.content(), type);
+		}
+		return null;
+	}
+
+	/** Consults adapter-registered content providers for a reference; null when
+	 *  none recognises its shape. */
+	private covia.venue.storage.ContentProvider.Resolved providerContent(
+			AString ref, RequestContext ctx) throws IOException {
+		for (AAdapter a : adapters.values()) {
+			if (a instanceof covia.venue.storage.ContentProvider p) {
+				covia.venue.storage.ContentProvider.Resolved r = p.getContent(ref, ctx);
+				if (r != null) return r;
+			}
+		}
+		return null;
 	}
 
 	/**
