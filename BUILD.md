@@ -293,7 +293,7 @@ Maven Central publishes are irreversible.
    <profile>
      <id>gpg</id>
      <properties>
-       <gpg.executable>C:\Program Files (x86)\GnuPGin\gpg.exe</gpg.executable>
+       <gpg.executable>C:\Program Files (x86)\GnuPG\bin\gpg.exe</gpg.executable>
      </properties>
    </profile>
    ```
