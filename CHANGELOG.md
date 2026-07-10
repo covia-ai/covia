@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Covia is pre-1.0, so minor versions may include breaking changes.
 
-## [Unreleased]
+## [0.4.0] - 2026-07-10
 
 ### Added
 - Cross-venue trust (Phase C3a): **self-sovereign grants** — a resource owner signs delegations with their own `did:key` and they verify on any venue holding the data (no venue involved in issuance); delegation chains with per-hop attenuation; third-party roots refused. Grid hops forward the caller's authority through the `ucans` proof channel: **identity tokens** (empty-`att` UCANs audienced to the target venue) carry the caller's identity across relays, and a **`venue/relay`** delegation has the venue hop as itself. Relays forward only provably-admissible tokens. See COG-15 and `venue/docs/UCAN.md` §5.6. (#100)
