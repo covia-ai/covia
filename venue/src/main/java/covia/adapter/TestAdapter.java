@@ -335,12 +335,17 @@ public class TestAdapter extends AAdapter {
                     break;
                 }
             }
+            // JSON-escape the interpolated message — session-rendered messages
+            // can contain quotes and newlines, which would otherwise break
+            // the arguments
+            String escaped = lastUserMsg.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
             return Maps.of(
                 "role", Strings.create("assistant"),
                 "toolCalls", Vectors.of(Maps.of(
                     "id", Strings.create("call_1"),
                     "name", Strings.create("v/test/ops/echo"),
-                    "arguments", Strings.create("{\"echo\":\"" + lastUserMsg + "\"}")
+                    "arguments", Strings.create("{\"echo\":\"" + escaped + "\"}")
                 ))
             );
         }

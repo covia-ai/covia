@@ -604,6 +604,74 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testScopedInvokeAllowsInScopeTool() {
+		// #211: an invoke grant scoped to an op-path prefix admits tool calls
+		// under it. toolllm makes one call to v/test/ops/echo, then reports
+		// the tool result as its text response.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "scoped-ok-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/toolllm",
+					"caps", Vectors.of(Maps.of(
+						"with", Strings.create("v/test/ops"),
+						"can", Strings.create("invoke"))))
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "scoped-ok-agent",
+				Fields.MESSAGE, Strings.create("use your tool")),
+			RequestContext.of(ALICE_DID));
+		ACell result = chatJob.awaitResult(10000);
+		String response = RT.getIn(result, Fields.RESPONSE).toString();
+		assertTrue(response.contains("Tool returned"),
+			"in-scope tool call must execute: " + response);
+		assertFalse(response.contains("Error:"),
+			"in-scope tool call must execute cleanly, not be denied: " + response);
+	}
+
+	@Test
+	public void testScopedInvokeDeniesOutOfScopeTool() {
+		// #211: the same agent under an invoke grant that does NOT cover the
+		// tool op — the tool call is denied, the denial (naming the op) is fed
+		// to the model, and the agent handles it in one cycle: no looping to
+		// the iteration limit, agent back to SLEEPING.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "scoped-deny-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/toolllm",
+					"caps", Vectors.of(Maps.of(
+						"with", Strings.create("v/ops/schema"),
+						"can", Strings.create("invoke"))))
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "scoped-deny-agent",
+				Fields.MESSAGE, Strings.create("use your tool")),
+			RequestContext.of(ALICE_DID));
+		ACell result = chatJob.awaitResult(10000);
+		String response = RT.getIn(result, Fields.RESPONSE).toString();
+		assertTrue(response.contains("Capability denied"),
+			"the denial must reach the model as the tool result: " + response);
+		assertTrue(response.contains("v/test/ops/echo"),
+			"the denial must name the blocked op: " + response);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("scoped-deny-agent");
+		assertEquals(AgentState.SLEEPING, agent.getStatus(),
+			"a handled denial is not an agent failure — no suspension, no loop");
+	}
+
+	@Test
 	public void testToolLoopLimitFailsTask() {
 		// Agent whose LLM (loopllm) ALWAYS tool-calls and never completes the
 		// task — the tool loop runs to MAX_TOOL_ITERATIONS. The task Job must

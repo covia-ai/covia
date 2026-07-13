@@ -297,12 +297,21 @@ public abstract class AAdapter {
      * runs, with no central name-keyed mapping. A {@code null} ceiling
      * (authenticated/internal) is unrestricted (no-op); a restricted ceiling
      * (e.g. the public read-only profile, which withholds {@code invoke}) denies.
+     *
+     * <p>The checked resource is the caller-supplied operation reference from
+     * {@link RequestContext#getOp()} (e.g. {@code "v/ops/langchain/openai"}),
+     * so an {@code invoke} grant can be scoped to specific operations:
+     * {@code {"with": "v/ops/getmine", "can": "invoke"}} (#211). A wildcard
+     * grant — {@code {"can": "invoke"}} or {@code {"with": "", "can": "invoke"}}
+     * — covers every invoke, including metadata-direct and hash-form
+     * invocations where no reference path is available ({@code getOp() == null}
+     * → resource-less check, coverable only by the wildcard).</p>
      */
     protected static void requireInvoke(RequestContext ctx) {
         // The framework always supplies a context (at minimum ANONYMOUS); a null
         // ctx only occurs in direct unit-test calls that bypass dispatch — treat
         // as no enforcement context.
-        if (ctx != null) ctx.requireCapability((AString) null, INVOKE);
+        if (ctx != null) ctx.requireCapability(ctx.getOp(), INVOKE);
     }
 
     /**

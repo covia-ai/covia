@@ -182,7 +182,10 @@ public class JobManager {
 		// refs are FETCHED by resolveAsset, never delegated), so every
 		// accepted invoke produces a job on THIS venue. Cross-venue
 		// execution is explicit via grid:run / grid:invoke.
-		return invokeOperation(op.meta(), input, ctx, privateJob);
+		// Scope the context to the caller-supplied reference — the only point
+		// the human path form still exists — so requireInvoke can check a
+		// resource-precise invoke capability (#211).
+		return invokeOperation(op.meta(), input, ctx.withOp(ref), privateJob);
 	}
 
 	/**
@@ -301,7 +304,10 @@ public class JobManager {
 
 		// Always local — see invokeOperation(AString,...): resolution
 		// returns definitions, never remote execution handles.
-		return invokeInternal(op.meta(), input, ctx);
+		// Scope to the caller-supplied reference for resource-precise
+		// invoke-gating (#211) — this seam also covers the agent tool loop,
+		// which dispatches config.tools references through here.
+		return invokeInternal(op.meta(), input, ctx.withOp(ref));
 	}
 
 	public CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {

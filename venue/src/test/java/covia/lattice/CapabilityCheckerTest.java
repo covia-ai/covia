@@ -139,6 +139,63 @@ public class CapabilityCheckerTest {
 		assertNotNull(writeOk.awaitResult(5000), "No caps should mean unrestricted access");
 	}
 
+	// ========== #211 — resource-precise invoke ==========
+
+	@Test
+	public void testAllowsScopedInvokeGrant() {
+		// An invoke grant scoped to an op-path prefix covers ops under it and
+		// nothing else — the "which ops may this agent invoke" attenuation.
+		AVector<ACell> scoped = caps("v/test/ops", "invoke");
+		assertNull(allows(scoped, "v/test/ops/echo", "invoke"));      // child
+		assertNull(allows(scoped, "v/test/ops", "invoke"));           // exact
+		assertNotNull(allows(scoped, "v/ops/http/get", "invoke"));    // outside prefix
+		assertNotNull(allows(scoped, "v/test/opsX", "invoke"));       // boundary — not a child
+		assertNotNull(allows(scoped, null, "invoke"));                // resource-less (meta-direct)
+		assertNotNull(allows(scoped, "0xdeadbeef", "invoke"));        // hash form — path caps don't cover
+	}
+
+	@Test
+	public void testAllowsWildcardInvokeGrantCoversEverything() {
+		// Full invoke scope stays a one-liner: {"can":"invoke"} (with omitted)
+		// and {"with":"", "can":"invoke"} both cover path-form, hash-form and
+		// resource-less invokes — the documented "restricted paths + full tool
+		// access" recipe keeps working after resource-precision (#211).
+		AVector<ACell> noWith = Vectors.of(
+			Maps.of(Capability.CAN, Strings.create("invoke")));
+		AVector<ACell> emptyWith = caps("", "invoke");
+		for (AVector<ACell> ceiling : java.util.List.of(noWith, emptyWith)) {
+			assertNull(allows(ceiling, "v/test/ops/echo", "invoke"));
+			assertNull(allows(ceiling, "0xdeadbeef", "invoke"));
+			assertNull(allows(ceiling, null, "invoke"));
+		}
+	}
+
+	@Test
+	public void testScopedInvokeEndToEnd() {
+		// The op reference the caller supplies reaches requireInvoke via
+		// RequestContext.withOp, so a scoped invoke ceiling admits exactly
+		// the named ops and the denial names the op that was blocked.
+		Engine engine = TestEngine.ENGINE;
+		AVector<ACell> invokeCaps = Vectors.of(
+			Capability.create(Strings.create("v/test/ops/echo"), Strings.create("invoke")));
+		RequestContext ctx = RequestContext.of(
+			convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey())
+		).withCaps(invokeCaps);
+
+		Job ok = engine.jobs().invokeOperation("v/test/ops/echo",
+			Maps.of("data", Strings.create("hi")), ctx);
+		assertNotNull(ok.awaitResult(5000), "in-scope op must be invocable");
+
+		Job denied = engine.jobs().invokeOperation("v/test/ops/random",
+			Maps.of(), ctx);
+		assertThrows(Exception.class, () -> denied.awaitResult(5000),
+			"out-of-scope op must be denied");
+		String err = denied.getErrorMessage();
+		assertTrue(err.contains("Capability denied"), err);
+		assertTrue(err.contains("v/test/ops/random"),
+			"denial must name the blocked op: " + err);
+	}
+
 	// ==================================================================
 	// allows(caps, resource, ability, owner) — the pinned-resource primitive
 	// the executing adapter calls. The adapter supplies the EXACT resource and

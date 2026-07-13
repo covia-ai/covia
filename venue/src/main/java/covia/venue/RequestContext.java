@@ -26,14 +26,22 @@ public class RequestContext {
 	 *  cross-venue hops. Parsed {@link #proofs} cannot be re-signed (a JWT
 	 *  signature covers the JWT bytes), so forwarding requires the originals. */
 	private final AVector<ACell> rawUcans;
+	/** The operation reference being invoked, in the form the caller supplied
+	 *  (e.g. the catalog path {@code "v/ops/langchain/openai"}), or null when
+	 *  the invocation was made directly from resolved metadata. Set by the
+	 *  JobManager ref-form dispatch overloads; consumed by
+	 *  {@code AAdapter.requireInvoke} so an {@code invoke} capability can be
+	 *  scoped to specific operations (#211). */
+	private final AString op;
 
 	/**
 	 * Context for anonymous (unauthenticated) external requests.
 	 */
-	public static final RequestContext ANONYMOUS = new RequestContext(null, null, null, null, null, null, null, null);
+	public static final RequestContext ANONYMOUS = new RequestContext(null, null, null, null, null, null, null, null, null);
 
 	private RequestContext(AString callerDID, AVector<ACell> proofs, AVector<ACell> caps,
-			AString agentId, Blob jobId, Blob sessionId, Blob taskId, AVector<ACell> rawUcans) {
+			AString agentId, Blob jobId, Blob sessionId, Blob taskId, AVector<ACell> rawUcans,
+			AString op) {
 		this.callerDID = callerDID;
 		this.proofs = proofs;
 		this.caps = caps;
@@ -42,6 +50,7 @@ public class RequestContext {
 		this.sessionId = sessionId;
 		this.taskId = taskId;
 		this.rawUcans = rawUcans;
+		this.op = op;
 	}
 
 	/**
@@ -58,7 +67,7 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, null, null, null, null, null, null, null);
+		return new RequestContext(callerDID, null, null, null, null, null, null, null, null);
 	}
 
 	/**
@@ -66,7 +75,7 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID, AVector<ACell> proofs) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, proofs, null, null, null, null, null, null);
+		return new RequestContext(callerDID, proofs, null, null, null, null, null, null, null);
 	}
 
 	/**
@@ -85,7 +94,7 @@ public class RequestContext {
 	 * CAD3-signed tokens directly are implicitly trusted by construction.</p>
 	 */
 	public RequestContext withProofs(AVector<ACell> proofs) {
-		return new RequestContext(this.callerDID, proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans);
+		return new RequestContext(this.callerDID, proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op);
 	}
 
 	/**
@@ -97,7 +106,7 @@ public class RequestContext {
 	 * composes downward into sub-operations. {@code null} = unrestricted.
 	 */
 	public RequestContext withCaps(AVector<ACell> caps) {
-		return new RequestContext(this.callerDID, this.proofs, caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans);
+		return new RequestContext(this.callerDID, this.proofs, caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op);
 	}
 
 	/**
@@ -105,7 +114,7 @@ public class RequestContext {
 	 * resolves to the agent's private workspace at {@code g/{agentId}/n/}.
 	 */
 	public RequestContext withAgentId(AString agentId) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op);
 	}
 
 	/**
@@ -115,7 +124,7 @@ public class RequestContext {
 	 * case the agent/task path takes precedence.
 	 */
 	public RequestContext withJobId(Blob jobId) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, jobId, this.sessionId, this.taskId, this.rawUcans);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, jobId, this.sessionId, this.taskId, this.rawUcans, this.op);
 	}
 
 	/**
@@ -124,7 +133,7 @@ public class RequestContext {
 	 * conversation-scoped slot at {@code g/{agentId}/sessions/{sessionId}/c/}.
 	 */
 	public RequestContext withSessionId(Blob sessionId) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, sessionId, this.taskId, this.rawUcans);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, sessionId, this.taskId, this.rawUcans, this.op);
 	}
 
 	/**
@@ -133,7 +142,30 @@ public class RequestContext {
 	 * private slot at {@code g/{agentId}/tasks/{taskId}/t/}.
 	 */
 	public RequestContext withTaskId(Blob taskId) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, taskId, this.rawUcans);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, taskId, this.rawUcans, this.op);
+	}
+
+	/**
+	 * Returns a new context scoped to the operation reference being invoked, in
+	 * the form the caller supplied (e.g. {@code "v/ops/langchain/openai"}). Set
+	 * by the JobManager ref-form dispatch overloads — the only point where the
+	 * human-authored reference still exists (the resolved metadata does not
+	 * carry its own catalog path). Consumed by {@code AAdapter.requireInvoke}
+	 * so an {@code invoke} capability can be scoped to specific operations
+	 * (#211): {@code {"with": "v/ops/getmine", "can": "invoke"}}.
+	 */
+	public RequestContext withOp(AString op) {
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, op);
+	}
+
+	/**
+	 * Gets the operation reference being invoked as supplied by the caller, or
+	 * null when the invocation was made directly from resolved metadata (in
+	 * which case invoke-gating falls back to a resource-less check, coverable
+	 * only by a wildcard {@code invoke} grant).
+	 */
+	public AString getOp() {
+		return op;
 	}
 
 	/**
@@ -170,7 +202,7 @@ public class RequestContext {
 	 * forwarding — the parsed {@link #getProofs() proofs} cannot be re-signed.
 	 */
 	public RequestContext withRawUcans(AVector<ACell> rawUcans) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, rawUcans);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, rawUcans, this.op);
 	}
 
 	/**

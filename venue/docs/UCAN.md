@@ -625,6 +625,35 @@ For Model A, the key change is that the agent's tool calls go through a
 The venue becomes the enforcement mechanism — it issued the scoped token
 and it verifies it on every tool call.
 
+#### The `invoke` ability under a ceiling (#211)
+
+Invoke-classed operations (compute, LLM, external I/O, federation — anything
+that does not act on a specific named lattice resource) require the `invoke`
+ability. Under a restricted `config.caps` ceiling:
+
+- **Full tool access** is a one-liner: `{"can": "invoke"}` (or the equivalent
+  `{"with": "", "can": "invoke"}`) — an empty/absent `with` is a match-any
+  wildcard in the ceiling path. The standard restricted-but-tool-capable
+  recipe is therefore:
+
+  ```json
+  "caps": [
+    { "with": "w/kill-switch", "can": "crud" },
+    { "can": "invoke" }
+  ]
+  ```
+
+- **Scoped invoke** pins the grant to an op-path prefix, attenuating *which*
+  operations the agent may invoke: `{"with": "v/ops/getmine", "can": "invoke"}`
+  admits `v/ops/getmine/*` and denies every other invoke-classed op. The
+  checked resource is the operation reference as the caller supplied it
+  (`RequestContext.getOp()`), captured at dispatch — the same path form the
+  agent's `config.tools` entries use, so tool-loop calls match naturally.
+
+- **Caveat:** invoking by hex hash (or from resolved metadata directly)
+  carries no path, so only the wildcard grant covers it — a path-scoped
+  invoke ceiling denies hash-form invocation by design (fail-closed).
+
 ### 5.6 Trust Anchors and Federation
 
 Every delegation chain terminates in a **root** — a token whose `prf` is
