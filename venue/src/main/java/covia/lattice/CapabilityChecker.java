@@ -48,6 +48,14 @@ public class CapabilityChecker {
 	 * selection this adds covia's self-attenuation guard: a self-ceiling may only
 	 * <b>narrow</b>, so a capability with an empty/absent {@code with} — a "match
 	 * any resource" wildcard that would broaden — is dropped from the ceiling.</p>
+	 *
+	 * <p><b>Scope of the wildcard-stripping (#211):</b> the guard above applies
+	 * only to ceilings derived here, from UCAN <em>proof tokens</em>. An agent's
+	 * {@code config.caps} array does not pass through this method — it reaches
+	 * the checker unmodified, where an empty-{@code with} grant such as
+	 * {@code {"with": "", "can": "invoke"}} acts as a match-any wildcard (see
+	 * {@link #covered}). That is the supported way to give a restricted agent
+	 * the {@code invoke} ability its tool calls need.</p>
 	 */
 	public static AVector<ACell> selfCapabilities(AVector<ACell> proofs,
 			AString caller, AString issuer, long now) {
@@ -125,8 +133,8 @@ public class CapabilityChecker {
 	 * <p>This is the enforcement primitive meant to be co-located with the code
 	 * that performs the action: the implementation names the exact resource and
 	 * ability it requires, so the enforced capability cannot drift from what the
-	 * code actually does (unlike a name-keyed {@link #operationAbility} mapping,
-	 * which is a separate source of truth that can fall out of sync).</p>
+	 * code actually does (unlike a name-keyed operation→ability mapping, which
+	 * is a separate source of truth that can fall out of sync).</p>
 	 *
 	 * <p>Lattice resources and abilities are {@link AString}s, so this AString
 	 * form is the primary entry point; a {@link String} overload is provided for

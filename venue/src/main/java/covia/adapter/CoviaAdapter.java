@@ -1872,9 +1872,20 @@ public class CoviaAdapter extends AAdapter {
 			if (targetUser != null) {
 				return new Object[] { targetUser.cursor(), pathKeys };
 			}
+			// Proofs verified, so the caller is authorised — disclosing that
+			// the target holds no data here leaks nothing they may not see.
+			throw new AuthException("Access denied: " + targetDID
+				+ " has no data on this venue");
 		}
 
-		throw new RuntimeException("Access denied");
+		// Denials must say what was missing, not just that access failed —
+		// the caller needs the exact (resource, ability) to request a grant.
+		AVector<ACell> proofs = ctx.getProofs();
+		throw new AuthException("Access denied: reading " + requestedResource
+			+ " requires a UCAN proof granting crud/read to " + ctx.getCallerDID()
+			+ ((proofs == null || proofs.isEmpty())
+				? " — no UCAN proofs were presented"
+				: " — the presented UCAN proofs do not cover this resource"));
 	}
 
 	/**
