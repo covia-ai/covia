@@ -596,6 +596,7 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
+		if (failIfSuspended(job, agent, agentId)) return;
 
 		// Mint or reuse a session for this request. Stage 1 scaffold — the
 		// sid is recorded on the task row and returned in the response
@@ -703,6 +704,7 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
+		if (failIfSuspended(job, agent, agentId)) return;
 
 		Blob sid = resolveSessionForChat(job, agent, input, ctx.getCallerDID());
 		if (sid == null) return;
@@ -763,11 +765,7 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
-
-		if (AgentState.SUSPENDED.equals(agent.getStatus())) {
-			job.fail("Agent is suspended: " + agentId);
-			return;
-		}
+		if (failIfSuspended(job, agent, agentId)) return;
 
 		// Trigger never creates a session. A supplied sessionId is resolved
 		// and echoed back; if none is supplied the trigger runs unsessioned.
@@ -992,6 +990,18 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
 
+		// Stop the agent promptly rather than letting an in-flight task run
+		// on (#202). Order matters: notify queued callers first (the sweep
+		// reads the task index via getAgent, which hides TERMINATED agents),
+		// then mark TERMINATED so the run loop exits at its next iteration
+		// check, then cancel any in-flight transition so a slow op unblocks
+		// the loop immediately (mirrors handleSuspend).
+		failAllPendingForAgent(ctx.getCallerDID(), agentId, "Agent deleted: " + agentId);
+		agent.setStatus(AgentState.TERMINATED);
+		CompletableFuture<ACell> activeTransition =
+			activeTransitions.get(new AgentKey(ctx.getCallerDID(), agentId));
+		if (activeTransition != null) activeTransition.cancel(true);
+
 		boolean remove = CVMBool.TRUE.equals(RT.getIn(input, Fields.REMOVE));
 		if (remove) {
 			Users users = engine.getVenueState().users();
@@ -1000,7 +1010,6 @@ public class AgentAdapter extends AAdapter {
 			job.setStatus(Status.STARTED);
 			job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.REMOVED, CVMBool.TRUE));
 		} else {
-			agent.setStatus(AgentState.TERMINATED);
 			job.setStatus(Status.STARTED);
 			job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.TERMINATED));
 		}
@@ -1522,10 +1531,9 @@ public class AgentAdapter extends AAdapter {
 		// resolve in the owner's namespace, deterministically. (#91)
 		final RequestContext agentCtx = RequestContext.of(ownerDID);
 		agent.setStatus(AgentState.RUNNING);
-		final AString finalOp = transitionOp;
 		final CompletableFuture<ACell> finalCompletion = mine;
 		Thread.ofVirtual().start(
-			() -> executeRunLoop(agentId, ownerDID, finalOp, agentCtx, finalCompletion));
+			() -> executeRunLoop(agentId, ownerDID, agentCtx, finalCompletion));
 		return mine;
 	}
 
@@ -1576,8 +1584,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	private void executeRunLoop(AString agentId, AString ownerDID,
-			AString transitionOp, RequestContext ctx,
-			CompletableFuture<ACell> completion) {
+			RequestContext ctx, CompletableFuture<ACell> completion) {
 		// ctx is the agent's OWN owner-scoped context (see wakeAgent) — never a
 		// waking caller's. ownerDID == ctx.getCallerDID() throughout the run.
 		final AgentKey key = new AgentKey(ownerDID, agentId);
@@ -1622,6 +1629,14 @@ public class AgentAdapter extends AAdapter {
 					break;
 				}
 				firstIteration = false;
+
+				// Re-resolve the transition op every cycle: config is read at
+				// transition time, and the record under this agentId may have
+				// been replaced entirely (delete + recreate, #202) while this
+				// loop was blocked — an op captured at launch must not process
+				// the replacement agent's work.
+				AString transitionOp = resolveTransitionOp(ownerDID, agentId);
+				if (transitionOp == null) break;
 
 				long startTs = Utils.getCurrentTimestamp();
 
@@ -1698,10 +1713,23 @@ public class AgentAdapter extends AAdapter {
 					engine.jobs().invokeInternal(transitionOp, transitionInput, cycleCtx);
 				activeTransitions.put(key, transitionFuture);
 
+				// Close the suspend/delete race: if the record was suspended,
+				// terminated or removed between the iteration-top status check
+				// and the put above, the suspender/deleter read an empty
+				// activeTransitions slot and could not cancel — re-check here
+				// (after the put, so one side always sees the other's write)
+				// and cancel locally rather than blocking on a doomed cycle.
+				AgentState recheck = getAgent(ownerDID, agentId);
+				if (recheck == null || AgentState.SUSPENDED.equals(recheck.getStatus())) {
+					transitionFuture.cancel(true);
+				}
+
 				ACell transitionResult;
+				boolean transitionCancelled = false;
 				try {
 					transitionResult = transitionFuture.join();
 				} catch (java.util.concurrent.CancellationException ce) {
+					transitionCancelled = true;
 					transitionResult = Maps.of(Fields.ERROR,
 						Strings.create("Transition cancelled"));
 				} catch (java.util.concurrent.CompletionException e) {
@@ -1710,6 +1738,29 @@ public class AgentAdapter extends AAdapter {
 						Strings.create("Transition failed: " + cause.getMessage()));
 				} finally {
 					activeTransitions.remove(key, transitionFuture);
+				}
+
+				// A cancelled transition is an administrative stop (agent:suspend
+				// or agent:delete cancelled it), not an agent failure — it must
+				// NOT flow into the merge + fail-fast path, which would stamp
+				// SUSPENDED over a TERMINATED record or poison a freshly
+				// recreated agent under the same id (#202). Settle per initiator
+				// and exit; the finally-block re-check handles any new work.
+				if (transitionCancelled) {
+					AString statusNow = agent.getStatus();
+					if (AgentState.SUSPENDED.equals(statusNow)) {
+						// agent:suspend stopped this cycle — record the cause,
+						// drop the queue and fail queued callers, exactly as the
+						// error path settled a suspend-cancel before (#88).
+						AString errStr = Strings.create("Transition cancelled");
+						Index<Blob, ACell> tasksAtCancel = agent.getTasks();
+						agent.suspendAndDrain(errStr);
+						failQueuedTasks(tasksAtCancel, errStr.toString());
+						failAllPendingForAgent(ownerDID, agentId, errStr.toString());
+					}
+					// TERMINATED / removed / replaced: agent:delete has already
+					// settled the record and notified the queued callers.
+					break;
 				}
 
 				IterResult merged = mergeAndPostProcess(
@@ -2227,6 +2278,26 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = getAgent(callerDID, agentId);
 		if (agent == null) job.fail("Agent not found or terminated: " + agentId);
 		return agent;
+	}
+
+	/**
+	 * Fails the caller's Job if the agent is SUSPENDED, naming the suspension
+	 * cause and the remedy. A suspended agent accepts no new work — without
+	 * this gate a request/chat Job would sit STARTED indefinitely with no
+	 * signal to the caller (#201). Note {@code agent:message} deliberately
+	 * bypasses this: it completes immediately and its envelope queues on the
+	 * session for processing after resume.
+	 *
+	 * @return true if the agent was suspended and the Job has been failed
+	 */
+	private boolean failIfSuspended(Job job, AgentState agent, AString agentId) {
+		if (!AgentState.SUSPENDED.equals(agent.getStatus())) return false;
+		AString error = agent.getError();
+		StringBuilder sb = new StringBuilder("Agent is suspended: ").append(agentId);
+		if (error != null) sb.append(" (cause: ").append(error).append(')');
+		sb.append(". Resume with agent:resume.");
+		job.fail(sb.toString());
+		return true;
 	}
 
 	private AgentState requireAgent(AString callerDID, AString agentId) {

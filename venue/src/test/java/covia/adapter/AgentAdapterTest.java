@@ -1929,6 +1929,157 @@ public class AgentAdapterTest {
 		}
 	}
 
+	// ========== #201 / #202 — suspended / deleted agents must not hang callers ==========
+
+	/**
+	 * A request to a SUSPENDED agent must fail fast with the suspension cause
+	 * and the remedy in the message — not sit STARTED indefinitely (#201).
+	 */
+	@Test
+	public void testRequestToSuspendedAgentFailsFast() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "susp-req"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		engine.getVenueState().users().get(ALICE_DID)
+			.agent("susp-req").suspend(Strings.create("simulated LLM outage"));
+
+		Job requestJob = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "susp-req", Fields.INPUT, Maps.of("q", "hello")),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			requestJob.awaitResult(5000);
+			fail("Request to a suspended agent must fail fast");
+		} catch (covia.exception.JobFailedException expected) {}
+		assertEquals(Status.FAILED, requestJob.getStatus(),
+			"request to a suspended agent must FAIL, not hang STARTED");
+		String err = requestJob.getErrorMessage();
+		assertTrue(err.contains("suspended"), "error must name the state: " + err);
+		assertTrue(err.contains("simulated LLM outage"),
+			"error must carry the suspension cause: " + err);
+		assertTrue(err.contains("agent:resume"), "error must name the remedy: " + err);
+	}
+
+	/** Chat counterpart of {@link #testRequestToSuspendedAgentFailsFast} (#201). */
+	@Test
+	public void testChatToSuspendedAgentFailsFast() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "susp-chat"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		engine.getVenueState().users().get(ALICE_DID)
+			.agent("susp-chat").suspend(Strings.create("simulated LLM outage"));
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "susp-chat", Fields.MESSAGE, Strings.create("hi")),
+			RequestContext.of(ALICE_DID));
+
+		try {
+			chatJob.awaitResult(5000);
+			fail("Chat to a suspended agent must fail fast");
+		} catch (covia.exception.JobFailedException expected) {}
+		assertEquals(Status.FAILED, chatJob.getStatus());
+		String err = chatJob.getErrorMessage();
+		assertTrue(err.contains("suspended") && err.contains("simulated LLM outage"),
+			"error must name the state and cause: " + err);
+	}
+
+	/**
+	 * agent:update on a SLEEPING agent must leave it runnable — regression
+	 * guard for the "silently left SUSPENDED after a config update" report
+	 * (#201).
+	 */
+	@Test
+	public void testUpdateKeepsAgentRunnable() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "upd-run",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/update",
+			Maps.of(Fields.AGENT_ID, "upd-run",
+				Fields.CONFIG, Maps.of(Strings.create("note"), Strings.create("updated"))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("upd-run");
+		assertEquals(AgentState.SLEEPING, agent.getStatus(),
+			"a config update must not change a SLEEPING agent's status");
+
+		// And it still processes work after the update
+		Job requestJob = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "upd-run",
+				Fields.INPUT, Maps.of("data", "post-update"),
+				Fields.WAIT, CVMLong.create(5000)),
+			RequestContext.of(ALICE_DID));
+		requestJob.awaitResult(5000);
+		assertEquals(Status.COMPLETE, requestJob.getStatus());
+	}
+
+	/**
+	 * agent:delete must cancel an in-flight task and fail its caller's Job —
+	 * a slow task must not wedge the agent slot until a venue restart (#202).
+	 * The same agentId is then recreated and must process new work.
+	 */
+	@Test
+	public void testDeleteCancelsInFlightTaskAndUnblocksRecreate() throws Exception {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "del-wedge",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job stuck = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "del-wedge", Fields.INPUT, Maps.of("data", "slow")),
+			RequestContext.of(ALICE_DID));
+
+		// Wait until the run loop is live in the never-completing transition
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("del-wedge");
+		long deadline = System.currentTimeMillis() + 5000;
+		while (!AgentState.RUNNING.equals(agent.getStatus())
+				&& System.currentTimeMillis() < deadline) Thread.sleep(10);
+		assertEquals(AgentState.RUNNING, agent.getStatus(),
+			"agent should be blocked in the never-completing transition");
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "del-wedge", Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// The stuck caller is notified, not left on an indefinitely-STARTED Job
+		try {
+			stuck.awaitResult(5000);
+			fail("The in-flight request must fail when the agent is deleted");
+		} catch (covia.exception.JobFailedException expected) {}
+		assertEquals(Status.FAILED, stuck.getStatus());
+		assertTrue(stuck.getErrorMessage().contains("deleted"),
+			"error should say the agent was deleted: " + stuck.getErrorMessage());
+
+		// Recreate the same agentId with a completing transition — the slot
+		// must be usable without a venue restart
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "del-wedge",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job fresh = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "del-wedge",
+				Fields.INPUT, Maps.of("data", "post-recreate"),
+				Fields.WAIT, CVMLong.create(10000)),
+			RequestContext.of(ALICE_DID));
+		fresh.awaitResult(10000);
+		assertEquals(Status.COMPLETE, fresh.getStatus(),
+			"recreated agent must process new work after deleting a wedged one");
+	}
+
 	@Test
 	public void testRequestTimelineIncludesTaskResults() {
 		engine.jobs().invokeOperation(
