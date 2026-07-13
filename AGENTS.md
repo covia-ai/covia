@@ -128,6 +128,7 @@ Adapter Layer
     ├── DLFSAdapter       — decentralised file system (per-user signed drives)
     ├── VaultAdapter      — health vault (thin wrapper over DLFS)
     ├── SecretAdapter     — secret store operations (set, extract; removal via covia:delete s/<name>)
+    ├── UserMemoryAdapter — per-user agent memory (recall/remember/update/forget over one LWW vector, default w/memory)
     ├── UCANAdapter       — capability token issuance
     ├── SchedulerAdapter  — deferred grid-op invocation (schedule, cancel, trigger, list)
     └── TestAdapter       — echo, delay, error simulation, chat

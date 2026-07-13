@@ -189,6 +189,7 @@ Bridges operations to execution environments:
 | `dlfs` | Decentralised file system | `listDrives`, `createDrive`, `deleteDrive`, `list`, `read`, `write`, `mkdir`, `delete` |
 | `vault` | Health vault (DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
 | `secret` | Secret store | `set`, `extract` (removal via `covia:delete s/<name>`) |
+| `memory` | Per-user agent memory — ONE `AVector` at a workspace path (default `w/memory`), every mutation a whole-vector LWW rewrite so removals never re-materialise; edited by 1-based position | `recall`, `remember`, `update`, `forget` |
 | `ucan` | Capability tokens | `issue` |
 | `scheduler` | Deferred grid-op invocation (per-venue `:schedule`) | `schedule`, `cancel`, `trigger`, `list` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
