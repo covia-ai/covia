@@ -116,6 +116,10 @@ public class Fields {
 	public static final StringShort TASKS = Strings.intern("tasks");
 	public static final StringShort PENDING = Strings.intern("pending");
 	public static final StringShort TASK_RESULTS = Strings.intern("taskResults");
+	/** Transition-output diagnostics: tool calls that failed this cycle,
+	 *  as [{name, error}] — persisted to the timeline entry and recorded as
+	 *  system turns in the session conversation (#211). */
+	public static final StringShort TOOL_FAILURES = Strings.intern("toolFailures");
 	public static final StringShort JOB_ID = Strings.intern("jobId");
 	public static final StringShort SNAPSHOT = Strings.intern("snapshot");
 	public static final StringShort AUTO_WAKE = Strings.intern("autoWake");

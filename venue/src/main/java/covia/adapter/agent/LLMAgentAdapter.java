@@ -208,12 +208,20 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 */
 	@Override
 	protected AMap<AString, ACell> buildInspectionInput(
-			AMap<AString, ACell> recordConfig, ACell state, ACell taskInput, RequestContext ctx) {
-		ContextBuilder builder = new ContextBuilder(engine, ctx);
-		ContextBuilder.ContextResult context = builder
+			AMap<AString, ACell> recordConfig, ACell state, ACell taskInput,
+			AMap<AString, ACell> session, RequestContext ctx) {
+		ContextBuilder builder = new ContextBuilder(engine, ctx)
 			.withConfig(recordConfig)
 			.withSystemPrompt()
-			.withContextEntries()
+			.withContextEntries();
+		// Session in scope: render its conversation exactly as a live
+		// transition would (same withFrameStack step as processChat), so the
+		// inspected context includes prior turns and tool-failure diagnostics.
+		AVector<ACell> frames = sessionFramesOf(session);
+		if (frames != null && frames.count() > 0) {
+			builder = builder.withFrameStack(frames);
+		}
+		ContextBuilder.ContextResult context = builder
 			.withTools()
 			.build();
 
@@ -367,6 +375,14 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			output = output.assoc(Fields.LOADS, toolCtx.getLoads());
 		}
 
+		// Tool-failure diagnostics — the framework persists them to the
+		// timeline entry and records them as system turns in the session
+		// conversation, so denials/failures stay observable after the
+		// cycle (#211).
+		if (toolCtx.toolFailures.count() > 0) {
+			output = output.assoc(Fields.TOOL_FAILURES, toolCtx.toolFailures);
+		}
+
 		if (toolCtx.taskResults != null && toolCtx.taskResults.count() > 0) {
 			// One-task-per-cycle: take the single entry
 			var entry = toolCtx.taskResults.entrySet().iterator().next();
@@ -486,6 +502,16 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 						toolResult = Strings.create("Error: " + e.getMessage());
 						log.warn("Tool execution failed: {} — {}", name, e.getMessage());
 					}
+				}
+
+				// Record failures for the transition output — the framework
+				// persists them to the timeline and session so they are
+				// visible after the cycle, not just to the live model (#211).
+				String failure = toolFailureMessage(toolResult);
+				if (failure != null) {
+					toolCtx.toolFailures = toolCtx.toolFailures.conj(Maps.of(
+						K_NAME, (name != null) ? name : Strings.create("unknown"),
+						Fields.ERROR, Strings.create(failure)));
 				}
 
 				// Append tool result message via the shared base helper
@@ -720,6 +746,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		AMap<AString, ACell> outerLoads = Maps.empty();
 		/** Whether a session is in scope; without one there is no writable tier. */
 		boolean sessionInScope = true;
+		/** Tool calls that failed this cycle, as [{name, error}] — emitted on
+		 *  the transition output under {@code Fields.TOOL_FAILURES} so the
+		 *  framework can persist them (timeline + session turns, #211). */
+		AVector<ACell> toolFailures = Vectors.empty();
 
 		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
 				Map<String, AString> configToolMap, AMap<AString, ACell> loads) {

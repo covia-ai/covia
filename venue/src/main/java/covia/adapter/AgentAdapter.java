@@ -923,8 +923,21 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
+		// Optional session scope (#211): with a sessionId the rendered context
+		// includes that session's conversation — prior turns and tool-failure
+		// diagnostics — exactly as a live transition would see it. Without one
+		// the render is the synthetic fresh-transition context, as before.
+		AMap<AString, ACell> session = null;
+		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+		if (sidHex != null) {
+			Blob sid = Blob.fromHex(sidHex.toString());
+			if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
+			session = agent.getSession(sid);
+			if (session == null) { job.fail("Unknown session: " + sidHex); return; }
+		}
+
 		ACell taskInput = RT.getIn(input, Strings.intern("task"));
-		AString rendered = inspectable.inspectContext(recordConfig, state, taskInput, ctx);
+		AString rendered = inspectable.inspectContext(recordConfig, state, taskInput, session, ctx);
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(rendered);
@@ -1858,6 +1871,15 @@ public class AgentAdapter extends AAdapter {
 		}
 		if (taskResults != null) timelineEntry = timelineEntry.assoc(Fields.TASK_RESULTS, taskResults);
 
+		// Tool-failure diagnostics ([{name, error}], #211): persisted on the
+		// timeline entry so a denied/failed tool call is queryable after the
+		// cycle, and recorded as session turns below.
+		AVector<ACell> toolFailures = RT.ensureVector(
+			RT.getIn(transitionResult, Fields.TOOL_FAILURES));
+		if (toolFailures != null && toolFailures.count() > 0) {
+			timelineEntry = timelineEntry.assoc(Fields.TOOL_FAILURES, toolFailures);
+		}
+
 		// Accumulate task results across iterations
 		if (taskResults != null) {
 			for (var entry : taskResults.entrySet()) {
@@ -1903,6 +1925,26 @@ public class AgentAdapter extends AAdapter {
 				ACell taskCaller = (pickedTask != null && pickedTask.getValue() instanceof AMap)
 					? ((AMap<AString, ACell>) pickedTask.getValue()).get(Fields.CALLER) : null;
 				turnsToAppend = turnsToAppend.conj(withCaller(turn, recordCaller, taskCaller));
+			}
+			// Tool failures precede the assistant response (that is the order
+			// they happened). Recorded as system turns so the next cycle's
+			// context re-sends them — the model sees its own prior denials —
+			// and agent:context / lattice reads can surface them (#211).
+			// (goaltree records its own tool trail in frames, so this branch
+			// — adapterFrames == null — never double-records.)
+			if (toolFailures != null) {
+				for (long i = 0; i < toolFailures.count(); i++) {
+					ACell f = toolFailures.get(i);
+					AString failName = RT.ensureString(RT.getIn(f, Fields.NAME));
+					AString failErr = RT.ensureString(RT.getIn(f, Fields.ERROR));
+					turnsToAppend = turnsToAppend.conj(Maps.of(
+						AgentState.K_ROLE,    AgentState.ROLE_SYSTEM,
+						AgentState.K_CONTENT, Strings.create("Tool call '"
+							+ (failName != null ? failName : "unknown") + "' failed: "
+							+ (failErr != null ? failErr : "(no detail)")),
+						AgentState.K_TURN_TS, CVMLong.create(endTs),
+						AgentState.K_SOURCE,  AgentState.SOURCE_TOOL));
+				}
 			}
 			if (leanResponse != null) {
 				turnsToAppend = turnsToAppend.conj(Maps.of(

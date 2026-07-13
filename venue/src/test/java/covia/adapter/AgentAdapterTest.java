@@ -2080,6 +2080,93 @@ public class AgentAdapterTest {
 			"recreated agent must process new work after deleting a wedged one");
 	}
 
+	// ========== #211 — tool failures recorded + visible in agent:context ==========
+
+	/**
+	 * A denied tool call must stay observable after the cycle: on the
+	 * timeline entry ({@code toolFailures}), as a system turn in the session
+	 * conversation (so the next cycle's model sees it), and in
+	 * {@code agent:context} when inspected with the sessionId.
+	 */
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testToolFailureRecordedAndVisibleInContext() {
+		// toolllm calls v/test/ops/echo once, then reports the tool result as
+		// text. The ceiling's invoke grant does not cover echo → denial.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "tool-fail-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					Strings.create("llmOperation"), Strings.create("v/test/ops/toolllm"),
+					Strings.create("caps"), Vectors.of(Maps.of(
+						"with", Strings.create("v/ops/schema"),
+						"can", Strings.create("invoke"))))
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job chatJob = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "tool-fail-agent",
+				Fields.MESSAGE, Strings.create("use your tool")),
+			RequestContext.of(ALICE_DID));
+		ACell chatResult = chatJob.awaitResult(10000);
+		AString sidHex = RT.ensureString(RT.getIn(chatResult, Fields.SESSION_ID));
+		assertNotNull(sidHex, "chat result must carry the sessionId");
+
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("tool-fail-agent");
+
+		// 1. Timeline entry carries the failure diagnostics
+		ACell timelineEntry = agent.getTimeline().get(agent.getTimeline().count() - 1);
+		AVector<ACell> failures = RT.ensureVector(RT.getIn(timelineEntry, Fields.TOOL_FAILURES));
+		assertNotNull(failures, "timeline entry must carry toolFailures");
+		assertTrue(failures.count() > 0);
+		assertTrue(RT.getIn(failures.get(0), Fields.ERROR).toString().contains("Capability denied"),
+			"the recorded failure must carry the denial: " + failures.get(0));
+
+		// 2. Session conversation contains the system/tool-source turn
+		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sidHex.toString()));
+		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
+		assertNotNull(frames, "session must carry frames");
+		AVector<ACell> conversation = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
+		boolean sawFailureTurn = false;
+		for (long i = 0; i < conversation.count(); i++) {
+			ACell turn = conversation.get(i);
+			if (AgentState.SOURCE_TOOL.equals(RT.getIn(turn, "source"))) {
+				String content = String.valueOf(RT.getIn(turn, "content"));
+				assertTrue(content.contains("Capability denied"),
+					"the failure turn must carry the denial: " + content);
+				assertEquals(AgentState.ROLE_SYSTEM, RT.getIn(turn, "role"));
+				sawFailureTurn = true;
+			}
+		}
+		assertTrue(sawFailureTurn, "conversation must record the tool failure as a turn");
+
+		// 3. agent:context with the sessionId renders the failure turn.
+		// (Match on the failure-turn text, not "Capability denied" — the
+		// static caps guidance in the system prompt contains that phrase
+		// for every capped agent, session or not.)
+		Job contextJob = engine.jobs().invokeOperation(
+			"v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "tool-fail-agent",
+				Fields.SESSION_ID, sidHex),
+			RequestContext.of(ALICE_DID));
+		String rendered = String.valueOf(contextJob.awaitResult(5000));
+		assertTrue(rendered.contains("Tool call 'v/test/ops/echo' failed"),
+			"agent:context with sessionId must surface the failure turn: " + rendered);
+
+		// Without a sessionId the synthetic fresh-transition render is
+		// unchanged (no session data, no failure turn).
+		Job freshContext = engine.jobs().invokeOperation(
+			"v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "tool-fail-agent"),
+			RequestContext.of(ALICE_DID));
+		String freshRendered = String.valueOf(freshContext.awaitResult(5000));
+		assertFalse(freshRendered.contains("Tool call 'v/test/ops/echo' failed"),
+			"the sessionless render must stay the synthetic fresh context");
+	}
+
 	@Test
 	public void testRequestTimelineIncludesTaskResults() {
 		engine.jobs().invokeOperation(

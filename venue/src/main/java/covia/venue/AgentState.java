@@ -83,6 +83,8 @@ public class AgentState extends ALatticeComponent<ACell> {
 	public static final AString SOURCE_REQUEST    = Strings.intern("request");
 	public static final AString SOURCE_CHAT       = Strings.intern("chat");
 	public static final AString SOURCE_MESSAGE    = Strings.intern("message");
+	/** Framework-recorded tool-failure diagnostic turn (#211). */
+	public static final AString SOURCE_TOOL       = Strings.intern("tool");
 
 	// Status constants
 	public static final AString SLEEPING   = Strings.intern("SLEEPING");

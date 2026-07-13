@@ -305,6 +305,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> buildFirstIterationL3Input(
 			AMap<AString, ACell> recordConfig, ACell state, ACell task, RequestContext ctx) {
+		return buildFirstIterationL3Input(recordConfig, state, task, null, ctx);
+	}
+
+	/** Session-aware variant: when {@code session} is non-null, the session's
+	 *  frames conversation is rendered into the context via the same
+	 *  {@code withFrameStack} step the live path uses (#211). */
+	public AMap<AString, ACell> buildFirstIterationL3Input(
+			AMap<AString, ACell> recordConfig, ACell state, ACell task,
+			AMap<AString, ACell> session, RequestContext ctx) {
 		// --- same as processGoal ---
 		AMap<AString, ACell> config = recordConfig;
 		AMap<AString, ACell> outputs = resolveOutputs(config);
@@ -322,12 +331,16 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 				(ACell) typedFailTool(failSchema));
 		}
 
-		ContextBuilder builder = new ContextBuilder(engine, ctx);
-		ContextBuilder.ContextResult context = builder
+		ContextBuilder builder = new ContextBuilder(engine, ctx)
 			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
 			.withConfig(recordConfig)
 			.withSystemPrompt()
-			.withContextEntries()
+			.withContextEntries();
+		AVector<ACell> sessionFrames = sessionFramesOf(session);
+		if (sessionFrames != null && sessionFrames.count() > 0) {
+			builder = builder.withFrameStack(sessionFrames);
+		}
+		ContextBuilder.ContextResult context = builder
 			.withTools()
 			.build();
 
@@ -372,8 +385,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	 */
 	@Override
 	protected AMap<AString, ACell> buildInspectionInput(
-			AMap<AString, ACell> recordConfig, ACell state, ACell taskInput, RequestContext ctx) {
-		return buildFirstIterationL3Input(recordConfig, state, taskInput, ctx);
+			AMap<AString, ACell> recordConfig, ACell state, ACell taskInput,
+			AMap<AString, ACell> session, RequestContext ctx) {
+		return buildFirstIterationL3Input(recordConfig, state, taskInput, session, ctx);
 	}
 
 	/**

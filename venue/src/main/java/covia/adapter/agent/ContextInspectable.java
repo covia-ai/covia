@@ -26,11 +26,16 @@ public interface ContextInspectable {
 	 * @param taskInput optional task input — if non-null, the goal user
 	 *        message that would appear on the first iteration is synthesised
 	 *        and included
+	 * @param session optional session record — when non-null, the session's
+	 *        conversation (frames) is included, so the rendered context
+	 *        mirrors what a live transition on that session would see:
+	 *        prior turns, tool-failure diagnostics, the lot (#211)
 	 * @param ctx request context (caller identity, capabilities)
 	 * @return pretty-printed JSON string of the assembled transition input
 	 */
 	AString inspectContext(AMap<AString, ACell> recordConfig,
 	                       ACell state,
 	                       ACell taskInput,
+	                       AMap<AString, ACell> session,
 	                       RequestContext ctx);
 }

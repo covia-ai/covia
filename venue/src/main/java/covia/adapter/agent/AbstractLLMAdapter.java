@@ -177,8 +177,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public final AString inspectContext(AMap<AString, ACell> recordConfig,
 	                                    ACell state,
 	                                    ACell taskInput,
+	                                    AMap<AString, ACell> session,
 	                                    RequestContext ctx) {
-		AMap<AString, ACell> l3Input = buildInspectionInput(recordConfig, state, taskInput, ctx);
+		AMap<AString, ACell> l3Input = buildInspectionInput(recordConfig, state, taskInput, session, ctx);
 		return renderL3InputAsJson(l3Input);
 	}
 
@@ -193,11 +194,20 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * @param state agent state (may be null)
 	 * @param taskInput optional task input — when non-null, append a synthesised
 	 *        user goal message
+	 * @param session optional session record — when non-null, include its
+	 *        frames conversation via {@code withFrameStack}, exactly as the
+	 *        live transition path does (#211)
 	 * @param ctx request context
 	 * @return L3 input map
 	 */
 	protected abstract AMap<AString, ACell> buildInspectionInput(
-		AMap<AString, ACell> recordConfig, ACell state, ACell taskInput, RequestContext ctx);
+		AMap<AString, ACell> recordConfig, ACell state, ACell taskInput,
+		AMap<AString, ACell> session, RequestContext ctx);
+
+	/** The frames vector of a session record, or null when absent. */
+	protected static AVector<ACell> sessionFramesOf(AMap<AString, ACell> session) {
+		return (session != null) ? RT.ensureVector(session.get(Fields.FRAMES)) : null;
+	}
 
 	// ========== Level 3 invocation ==========
 
@@ -334,6 +344,21 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			for (String n : LLMAgentAdapter.HARNESS_TOOL_NAMES) m.merge(n, "llmagent", (a, b) -> a + ", " + b);
 			PROVIDERS = Map.copyOf(m);
 		}
+	}
+
+	/**
+	 * The failure text if a tool result is a failure, else null. Every tool
+	 * failure shape — capability denial, timeout, op error, malformed
+	 * arguments — funnels through the {@code "Error: …"} string convention
+	 * (see {@link #invokeOperation} and the loops' argument-parse guards),
+	 * so this single predicate identifies them all.
+	 */
+	protected static String toolFailureMessage(ACell result) {
+		if (result instanceof AString s) {
+			String str = s.toString();
+			if (str.startsWith("Error:")) return str;
+		}
+		return null;
 	}
 
 	/**
