@@ -110,13 +110,17 @@ public class CoviaAPI extends ACoviaAPI {
 		routes.post(ROUTE+"invoke", this::invokeOperation);
 		routes.get(ROUTE+"operations", this::getOperations);
 		routes.get(ROUTE+"operations/{name}", this::getOperation);
-		routes.get(ROUTE+"jobs/<id>", this::getJobStatus);
-		routes.post(ROUTE+"jobs/<id>", this::sendMessage);
-		routes.put(ROUTE+"jobs/<id>/cancel", this::cancelJob);
-		routes.put(ROUTE+"jobs/<id>/pause", this::pauseJob);
-		routes.put(ROUTE+"jobs/<id>/resume", this::resumeJob);
-		routes.put(ROUTE+"jobs/<id>/delete", this::deleteJob);
-		routes.sse(ROUTE+"jobs/<id>/sse", sseServer.registerSSE);
+		// Job ids are single-segment hex strings, so the job routes use the
+		// segment matcher {id}: a greedy <id> on the GET route also matches
+		// "…/sse", shadowing the SSE route and making job streaming
+		// unreachable (#200).
+		routes.get(ROUTE+"jobs/{id}", this::getJobStatus);
+		routes.post(ROUTE+"jobs/{id}", this::sendMessage);
+		routes.put(ROUTE+"jobs/{id}/cancel", this::cancelJob);
+		routes.put(ROUTE+"jobs/{id}/pause", this::pauseJob);
+		routes.put(ROUTE+"jobs/{id}/resume", this::resumeJob);
+		routes.put(ROUTE+"jobs/{id}/delete", this::deleteJob);
+		routes.sse(ROUTE+"jobs/{id}/sse", sseServer.registerSSE);
 		routes.get(ROUTE+"jobs", this::getJobs);
 
 		// Job-free lattice value reads (#177) — synchronous, capability-checked,

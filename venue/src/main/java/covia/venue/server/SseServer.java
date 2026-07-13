@@ -34,6 +34,11 @@ public class SseServer {
 	 * Extracts job ID from the path parameter and registers the client.
 	 */
 	public Consumer<SseClient> registerSSE = client -> {
+		// Hold the connection open after this handler returns — without
+		// keepAlive Javalin completes the response immediately and the
+		// client never receives subsequent job-update broadcasts (#200).
+		client.keepAlive();
+
 		String jobId = client.ctx().pathParam("id");
 		registerClient(jobId, client);
 
