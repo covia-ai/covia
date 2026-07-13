@@ -672,6 +672,36 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testMaxToolIterationsPerAgentOverride() {
+		// The iteration limit is config-driven: venue default 30, overridable
+		// per agent via config.maxToolIterations. A tight limit of 3 fails a
+		// loopllm agent fast, with the effective limit named in the error.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "tight-loop-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/loopllm",
+					"maxToolIterations", CVMLong.create(3))
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job taskJob = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(
+				Fields.AGENT_ID, "tight-loop-agent",
+				Fields.INPUT, Maps.of("task", "loop")),
+			RequestContext.of(ALICE_DID));
+
+		assertThrows(Exception.class, () -> taskJob.awaitResult(15000));
+		assertEquals(Status.FAILED, taskJob.getStatus());
+		String err = taskJob.getErrorMessage();
+		assertTrue(err.contains("iteration limit (3)"),
+			"the error must name the agent's configured limit: " + err);
+	}
+
+	@Test
 	public void testToolLoopLimitFailsTask() {
 		// Agent whose LLM (loopllm) ALWAYS tool-calls and never completes the
 		// task — the tool loop runs to MAX_TOOL_ITERATIONS. The task Job must

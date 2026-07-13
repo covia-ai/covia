@@ -37,6 +37,18 @@ public class ConfigTest {
 	}
 
 	@Test
+	public void testMaxToolIterationsDefaultAndOverride() {
+		// Unset → 30; operator-configured value wins; invalid (< 1) → default.
+		assertEquals(30, new Config(null).getMaxToolIterations());
+		assertEquals(100, new Config(Maps.of(
+			Config.MAX_TOOL_ITERATIONS, convex.core.data.prim.CVMLong.create(100)))
+			.getMaxToolIterations());
+		assertEquals(30, new Config(Maps.of(
+			Config.MAX_TOOL_ITERATIONS, convex.core.data.prim.CVMLong.create(0)))
+			.getMaxToolIterations());
+	}
+
+	@Test
 	public void testDefaultTransitionOpOverride() {
 		Config c = new Config(Maps.of(
 			Config.DEFAULT_TRANSITION_OP, Strings.create("v/ops/goaltree/chat")));

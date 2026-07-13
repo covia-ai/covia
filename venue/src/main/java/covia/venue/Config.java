@@ -63,6 +63,9 @@ public class Config {
 	/** Key for the venue default agent transition operation used for new agents. */
 	public static final AString DEFAULT_TRANSITION_OP = Strings.intern("defaultTransitionOp");
 
+	/** Key for the venue default tool-call iteration limit per agent transition. */
+	public static final AString MAX_TOOL_ITERATIONS = Strings.intern("maxToolIterations");
+
 	/** Key for venue port */
 	public static final AString PORT = Strings.intern("port");
 
@@ -394,6 +397,18 @@ public class Config {
 	public AString getDefaultTransitionOp() {
 		AString v = RT.ensureString(config.get(DEFAULT_TRANSITION_OP));
 		return (v != null) ? v : Strings.intern("v/ops/llmagent/chat");
+	}
+
+	/** Venue default tool-call iteration limit per agent transition — the
+	 *  runaway-loop backstop, not a work quota. Overridable per agent via
+	 *  {@code config.maxToolIterations}.
+	 *  @return configured limit ({@code >= 1}), or 30 if unset/invalid */
+	public int getMaxToolIterations() {
+		ACell v = config.get(MAX_TOOL_ITERATIONS);
+		if (v instanceof CVMLong l && l.longValue() >= 1) {
+			return (int) Math.min(l.longValue(), Integer.MAX_VALUE);
+		}
+		return 30;
 	}
 
 	/**

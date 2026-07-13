@@ -55,6 +55,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_CAPS            = Strings.intern("caps");
 	public static final AString K_CONTEXT         = Strings.intern("context");
 	public static final AString K_TOOL_CALL_TIMEOUT_MS = Strings.intern("toolCallTimeoutMs");
+	public static final AString K_MAX_TOOL_ITERATIONS  = Strings.intern("maxToolIterations");
 
 	/**
 	 * Per-tool-call timeout default. Bounds the wait on any single grid op
@@ -384,6 +385,22 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		} catch (Exception e) {
 			return Strings.create("Error: " + unwrap(e).getMessage());
 		}
+	}
+
+	/**
+	 * Resolves the tool-call iteration limit for a transition: the agent's
+	 * {@code config.maxToolIterations} when valid ({@code >= 1}), else the
+	 * venue default ({@code maxToolIterations} in venue config, 30 unset).
+	 * A backstop against runaway loops, not a work quota — operators size it
+	 * to the venue's spend tolerance, agents doing legitimately long tool
+	 * sequences raise their own.
+	 */
+	public int resolveMaxToolIterations(AMap<AString, ACell> config) {
+		ACell v = (config != null) ? config.get(K_MAX_TOOL_ITERATIONS) : null;
+		if (v instanceof CVMLong l && l.longValue() >= 1) {
+			return (int) Math.min(l.longValue(), Integer.MAX_VALUE);
+		}
+		return engine.config().getMaxToolIterations();
 	}
 
 	/**

@@ -60,7 +60,9 @@ import covia.venue.RequestContext;
  * <p>When level 3 returns an assistant message with {@code toolCalls}, level 2
  * executes each tool as a grid operation, appends tool result messages, and
  * calls level 3 again. This loops until the LLM returns a text response
- * (no tool calls) or {@link #MAX_TOOL_ITERATIONS} is reached.</p>
+ * (no tool calls) or the tool-call iteration limit is reached (venue
+ * config {@code maxToolIterations}, default 30, overridable per agent via
+ * {@code config.maxToolIterations}).</p>
  *
  * <h3>State structure</h3>
  * <pre>{@code
@@ -91,9 +93,6 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	// Built-in tool names (only task tools remain as built-ins)
 	private static final String TOOL_COMPLETE_TASK = "complete_task";
 	private static final String TOOL_FAIL_TASK     = "fail_task";
-
-	/** Maximum tool call loop iterations to prevent runaway loops */
-	static final int MAX_TOOL_ITERATIONS = 20;
 
 	// ========== Default tool definitions ==========
 	// MCP-style: {name, description, parameters: {type: "object", properties: {...}, required: [...]}}
@@ -424,7 +423,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 		AVector<ACell> newMessages = Vectors.empty();
 
-		for (int iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+		// Runaway-loop backstop: venue default (maxToolIterations, 30),
+		// overridable per agent via config.maxToolIterations.
+		int maxToolIterations = resolveMaxToolIterations(config);
+
+		for (int iteration = 0; iteration < maxToolIterations; iteration++) {
 			// Build level 3 input (full history including new messages from this loop)
 			AVector<ACell> fullHistory = (AVector<ACell>) history.concat(newMessages);
 
@@ -534,9 +537,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// the give-up an honest, terminal outcome. (Failing only the task while
 		// keeping the agent SLEEPING would need run-loop changes to distinguish a
 		// task failure from an agent failure — a separate enhancement.)
-		log.warn("Tool call loop reached iteration limit ({}) — failing the transition", MAX_TOOL_ITERATIONS);
+		log.warn("Tool call loop reached iteration limit ({}) — failing the transition", maxToolIterations);
 		throw new JobFailedException("Agent reached the tool-call iteration limit ("
-			+ MAX_TOOL_ITERATIONS + ") without completing the task.");
+			+ maxToolIterations + ") without completing the task.");
 	}
 
 	// ========== Built-in tool execution ==========
