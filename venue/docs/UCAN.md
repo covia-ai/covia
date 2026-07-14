@@ -354,6 +354,26 @@ Revocations are published to the lattice. Venues check revocation
 lists during verification. Revoking a parent invalidates all
 downstream delegations.
 
+### 4.7 Authenticating — lifting the public read-only ceiling
+
+An unauthenticated caller runs under the venue's public identity, whose
+default ceiling is **read-only** (`crud/read` on its own namespace + `asset/read`;
+no `invoke`, so `POST /api/v1/invoke` of a compute op returns a `FAILED` job with
+`"Capability denied"`). Two ways to gain invoke/write authority:
+
+1. **Authenticate as yourself** — present a self-issued UCAN bearer token:
+   `Authorization: Bearer <ucan-jwt>`, with `aud` = the venue DID (from
+   `GET /.well-known/did.json`). You then run as your own `did:key`, which is
+   unrestricted within its own namespace (own-namespace implicit grant, §5.1).
+   The SDKs mint and attach this for you (Ed25519 keypair auth); the MCP and
+   REST endpoints both honour the header (§4.3).
+2. **Widen the public ceiling (operator, trusted venues only)** — set
+   `auth.public.caps` in the venue config. `"unrestricted"` removes the ceiling
+   for anonymous callers entirely; an array of `{with, can}` grants widens it
+   selectively. Only do this on a loopback-bound (`bindAddress: 127.0.0.1`)
+   development venue, never a LAN/public-reachable one — it hands invoke
+   authority to every anonymous caller.
+
 ---
 
 ## 5. Enforcement
@@ -499,6 +519,13 @@ operates within one user's namespace with restricted permissions.
 4. On each run, level 2 creates a restricted RequestContext with only the agent's token
 5. Tool calls go through CoviaAdapter which verifies the token against the requested path/ability
 6. Writes outside the allowed scope are denied
+
+**Reading an agent's live caps.** An agent's ceiling lives at `config.caps`,
+so read it via the config: `agent:info` (returns the record, whose `config.caps`
+holds the array) or `covia:read g/<agentId>` then `.value.config.caps`. There is
+**no** `g/<agentId>/caps` projection — `covia:read g/<agentId>/caps` returns
+`{exists:false}` (a natural first guess that misleads). Caps are plain lattice
+data under the config, not a separate slot.
 
 **Example — AP Demo enforcement:**
 

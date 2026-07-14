@@ -57,6 +57,15 @@ Templates default to `llmOperation: v/ops/langchain/openai` + `model: gpt-5.4-mi
 agent_update  agentId="Bob"  config={ "llmOperation": "v/ops/langchain/anthropic", "model": "claude-sonnet-4-6" }
 ```
 
+**Tool-capable models (agents with `tools`).** An agent that has `tools` needs a
+model that supports function calling, or every run fails when it first tries a
+tool (`Transition failed: … does not support tools`) — there is no check at
+`agent:create` time. For local **ollama** models: `qwen2.5` works well; the
+Gemma family does **not** (Gemma 3 has no usable tool calling; Gemma 4 returns
+tool calls but is far too slow, ~34s/call). A tools-free agent (e.g. the
+`minimal` template) runs on any model. OpenAI/Anthropic frontier models all
+support tools.
+
 ### `list` — List all agents
 
 ```

@@ -147,6 +147,15 @@ Any operation argument that accepts a lattice address — `path`, `from`, `id`, 
 
 A read-side argument never needs to know "is this a hash or a path or a DID?" — the resolver figures it out. Capability checks happen during resolution: the caller needs read access to whatever resolves.
 
+> **Not accepted: the `adapter:op` dispatch string.** An operation's
+> `operation.adapter` field (e.g. `test:echo`, `covia:write`) is the adapter's
+> internal dispatch concern, **not** an invoke reference — `POST /api/v1/invoke`
+> with `{"operation":"test:echo"}` fails with *"Cannot resolve operation"*.
+> Reference an operation by one of the resolvable forms above: its hash, its
+> catalog path (`v/ops/<adapter>/<op>`, e.g. `v/ops/covia/write`), a pin
+> (`o/…`), or a DID URL. **Test operations live under `v/test/ops/`** — the
+> echo test op is `v/test/ops/echo`, not `v/ops/test/echo`.
+
 ### Argument classification
 
 Op arguments fall into two classes:
