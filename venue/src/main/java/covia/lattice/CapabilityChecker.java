@@ -164,6 +164,15 @@ public class CapabilityChecker {
 			.append(" on ").append(canonResource.isEmpty() ? "(any)" : canonResource)
 			.append(". Your capabilities are: ");
 		appendCapsList(sb, caps);
+		// For the venue's public/anonymous identity, the remedy is an auth
+		// action — point to it (covia#206). Scoped to the public caller (DID
+		// ends ":public") so a capped agent's own-ceiling denial, which it is
+		// meant to just handle (#211), and cross-user denials stay clean.
+		if (ownerDID != null && ownerDID.toString().endsWith(":public")) {
+			sb.append(". Authenticate with a UCAN bearer token (Authorization: "
+				+ "Bearer <jwt>, aud = venue DID) to act as your own identity, or "
+				+ "ask the operator to widen auth.public.caps — see UCAN.md §4.7");
+		}
 		return sb.toString();
 	}
 

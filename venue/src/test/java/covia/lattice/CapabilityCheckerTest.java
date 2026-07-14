@@ -53,6 +53,30 @@ public class CapabilityCheckerTest {
 		return CapabilityChecker.allows(caps, resource, ability, TEST_OWNER);
 	}
 
+	@Test
+	public void testPublicCallerDenialCarriesAuthHint() {
+		// The public/anonymous identity's denial points to the auth remedy
+		// (covia#206) — scoped to the ":public" caller.
+		AVector<ACell> readOnly = CapabilityChecker.readOnlyCeiling(
+			Strings.create("did:key:zVenue:public"));
+		String pub = CapabilityChecker.allows(readOnly, "w/x", "crud/write",
+			Strings.create("did:key:zVenue:public"));
+		assertNotNull(pub);
+		assertTrue(pub.contains("Capability denied"), pub);
+		assertTrue(pub.contains("Authenticate") && pub.contains("UCAN.md"),
+			"public denial must carry the auth hint: " + pub);
+
+		// A capped agent (real DID owner) hitting its own ceiling gets a clean
+		// message — no misleading "authenticate" advice (it already is
+		// authenticated; it should just handle the denial, #211).
+		String agent = CapabilityChecker.allows(readOnly, "w/x", "crud/write",
+			Strings.create("did:key:zRealAgentOwner"));
+		assertNotNull(agent);
+		assertTrue(agent.contains("Capability denied"), agent);
+		assertFalse(agent.contains("Authenticate"),
+			"a real identity's own-ceiling denial must stay clean: " + agent);
+	}
+
 	// ========== End-to-end enforcement at JobManager ==========
 	// Enforcement now happens at the adapter's point, so a denial surfaces as a
 	// FAILED Job — observed at awaitResult, not as a synchronous throw from
