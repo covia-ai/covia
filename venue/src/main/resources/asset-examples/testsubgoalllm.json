@@ -1,0 +1,33 @@
+{
+	"name": "Test subgoalllm",
+	"description": "Test LLM driving subgoal recursion with an observable window: root issues a subgoal; the child calls v/test/ops/never (blocking), then completes; the root completes on the subgoal result.",
+	"dateCreated": "2026-07-14T00:00:00Z",
+	"operation": {
+		"adapter": "test:subgoalllm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": {
+					"type": "array"
+				},
+				"tools": {
+					"type": "array"
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"content": {
+					"type": "string"
+				},
+				"toolCalls": {
+					"type": "array"
+				}
+			}
+		}
+	}
+}

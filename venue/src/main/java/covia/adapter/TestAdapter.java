@@ -74,6 +74,16 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.completedFuture(handleBadArgsLlm(input));
                 case "loopllm":
                     return CompletableFuture.completedFuture(handleLoopLlm(input));
+                case "nevertoolllm":
+                    return CompletableFuture.completedFuture(handleNeverToolLlm(input, false));
+                case "neverfailllm": {
+                    ACell r = handleNeverToolLlm(input, true);
+                    return (r == null)
+                        ? CompletableFuture.failedFuture(new IllegalStateException("scripted L3 failure"))
+                        : CompletableFuture.completedFuture(r);
+                }
+                case "subgoalllm":
+                    return CompletableFuture.completedFuture(handleSubgoalLlm(input));
                 case "taskllm":
                     return CompletableFuture.completedFuture(handleTaskLlm(input));
                 case "workspacellm":
@@ -120,6 +130,9 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("toolllm",      BASE+"testtoolllm.json");
 			installTestAsset("badargsllm",   BASE+"testbadargsllm.json");
 			installTestAsset("loopllm",      BASE+"testloopllm.json");
+			installTestAsset("nevertoolllm", BASE+"testnevertoolllm.json");
+			installTestAsset("neverfailllm", BASE+"testneverfailllm.json");
+			installTestAsset("subgoalllm",   BASE+"testsubgoalllm.json");
 			installTestAsset("taskllm",      BASE+"testtaskllm.json");
 			installTestAsset("workspacellm", BASE+"testworkspacellm.json");
 			installTestAsset("compactllm",   BASE+"testcompactllm.json");
@@ -379,6 +392,89 @@ public class TestAdapter extends AAdapter {
                 "id", Strings.create("call_bad"),
                 "name", Strings.create("v/test/ops/echo"),
                 "arguments", Strings.create("not json {{{")
+            )));
+    }
+
+    /** True if any message in the L3 input has the "tool" role. */
+    @SuppressWarnings("unchecked")
+    private static boolean hasToolResultMessage(ACell input) {
+        ACell messagesCell = RT.getIn(input, "messages");
+        if (!(messagesCell instanceof AVector)) return false;
+        AVector<ACell> messages = (AVector<ACell>) messagesCell;
+        for (long i = 0; i < messages.count(); i++) {
+            AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+            if (role != null && "tool".equals(role.toString())) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Test LLM that calls the never-completing op v/test/ops/never as its
+     * first tool call — with a short toolCallTimeoutMs the dispatch blocks
+     * for a deterministic window, letting tests observe mid-run lattice state
+     * (dangling toolCall, inCycle claim, live frames). After the tool result
+     * (a timeout error) arrives: returns text, or — {@code failAfterTool} —
+     * signals the caller to fail the L3 call (scripted mid-cycle failure).
+     * Returns null in the fail case.
+     */
+    private ACell handleNeverToolLlm(ACell input, boolean failAfterTool) {
+        if (hasToolResultMessage(input)) {
+            if (failAfterTool) return null;
+            return Maps.of(
+                "role", Strings.create("assistant"),
+                "content", Strings.create("gave up on the slow tool"));
+        }
+        return Maps.of(
+            "role", Strings.create("assistant"),
+            "toolCalls", Vectors.of(Maps.of(
+                "id", Strings.create("call_never"),
+                "name", Strings.create("v/test/ops/never"),
+                "arguments", Strings.create("{}")
+            )));
+    }
+
+    /**
+     * Test LLM for subgoal recursion with an observable mid-run window: the
+     * ROOT frame's first turn issues a subgoal; the CHILD frame (recognised
+     * by its goal text) calls the never op (blocking for toolCallTimeoutMs),
+     * then completes with text; the root then completes on seeing the
+     * subgoal's tool result. Drives push → live child frame (with callId)
+     * → atomic pop, all observable on the lattice during the block.
+     */
+    @SuppressWarnings("unchecked")
+    private ACell handleSubgoalLlm(ACell input) {
+        boolean inChild = false;
+        ACell messagesCell = RT.getIn(input, "messages");
+        if (messagesCell instanceof AVector) {
+            AVector<ACell> messages = (AVector<ACell>) messagesCell;
+            for (long i = 0; i < messages.count(); i++) {
+                AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
+                if (content != null && content.toString().contains("run the sub-task")) {
+                    inChild = true;
+                    break;
+                }
+            }
+        }
+        if (hasToolResultMessage(input)) {
+            return Maps.of(
+                "role", Strings.create("assistant"),
+                "content", Strings.create(inChild ? "sub done" : "root done"));
+        }
+        if (inChild) {
+            return Maps.of(
+                "role", Strings.create("assistant"),
+                "toolCalls", Vectors.of(Maps.of(
+                    "id", Strings.create("call_child_never"),
+                    "name", Strings.create("v/test/ops/never"),
+                    "arguments", Strings.create("{}")
+                )));
+        }
+        return Maps.of(
+            "role", Strings.create("assistant"),
+            "toolCalls", Vectors.of(Maps.of(
+                "id", Strings.create("call_subgoal"),
+                "name", Strings.create("subgoal"),
+                "arguments", Strings.create("{\"description\":\"run the sub-task\"}")
             )));
     }
 

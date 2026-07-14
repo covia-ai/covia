@@ -10,6 +10,7 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -60,7 +61,7 @@ import covia.venue.RequestContext;
  * @see GoalTreeContext for frame data model and context rendering (pure functions)
  * @see AbstractLLMAdapter for shared L3 invocation and tool dispatch
  */
-public class GoalTreeAdapter extends AbstractLLMAdapter {
+public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning {
 
 	private static final Logger log = LoggerFactory.getLogger(GoalTreeAdapter.class);
 
@@ -456,30 +457,41 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// the session has no frames yet (first transition).
 		String rootDescription = GoalTreeContext.describeTransitionInput(messages, tasks, pending);
 
-		// Frame stack comes from the session record (step 5 cutover): on the
-		// first transition it's empty and we mint a root frame here; on later
-		// transitions we pick up the persisted stack and continue appending.
-		// Everything we mutate (appendTurn, updateFrame, push/pop) ends up in
-		// this vector, which we emit as Fields.FRAMES at the end so
-		// mergeRunResult can CAS-replace session.frames. Because the adapter
-		// now owns every conversation write, the framework skips its own
-		// assistant/user turn appends when adapterFrames is non-null.
-		AVector<ACell> sessionFrames = covia.adapter.AgentAdapter.sessionFrames(input);
-		AVector<ACell> frames;
-		if (sessionFrames != null && sessionFrames.count() > 0) {
-			frames = sessionFrames;
-		} else {
-			frames = Vectors.of((ACell) GoalTreeContext.createFrame(rootDescription));
-		}
-
-		// Adapter-owned turns: record this cycle's inputs (pending envelopes
-		// and picked task input) as user turns on frames[0].conversation before
-		// the tool loop runs. The framework used to do this in mergeRunResult
-		// but with adapter-emitted frames the framework stays out — otherwise
-		// the user turns would land at the wrong chronological position (after
-		// this cycle's assistant/tool turns).
+		// Frame stack home (lattice-resident frames): for a sessioned run-loop
+		// cycle the stack lives ON the session record and every mutation is an
+		// epoch-fenced CAS — mid-run work is durable and observable, and a
+		// superseded cycle (cancelled, session deleted, agent recreated) is
+		// fenced out. Unsessioned / direct-invoke runs keep the pre-cutover
+		// local behaviour behind the same seam.
 		long cycleTs = convex.core.util.Utils.getCurrentTimestamp();
-		frames = appendCycleInputTurns(frames, messages, input, cycleTs);
+		FrameStore store;
+		{
+			Blob sid = ctx.getSessionId();
+			AgentState agentState = resolveAgentState(ctx, agentId);
+			if (sid != null && agentState != null && agentState.getSession(sid) != null) {
+				// Claim the session for this cycle: epoch + cycle-input turns +
+				// presented-pending drain in ONE CAS (an envelope leaves pending
+				// only in the write that lands its user turn). The framework's
+				// merge skips its own drain/turn-append for FramesOwning adapters.
+				ACell epoch = Blob.createRandom(new java.util.Random(), 8);
+				AVector<ACell> cycleTurns = buildCycleInputTurns(messages, input, cycleTs);
+				long drainCount = (messages != null) ? messages.count() : 0;
+				if (!agentState.beginSessionCycle(sid, epoch, cycleTurns, drainCount)) {
+					return Maps.of(
+						AgentState.KEY_STATE, Maps.empty(),
+						Fields.ERROR, Strings.create("Session vanished before cycle start: " + sid));
+				}
+				store = new FrameStore.LatticeFrameStore(agentState, sid, epoch, ctx.getCancellation());
+			} else {
+				AVector<ACell> sessionFrames = covia.adapter.AgentAdapter.sessionFrames(input);
+				AVector<ACell> frames = (sessionFrames != null && sessionFrames.count() > 0)
+					? sessionFrames
+					: Vectors.of((ACell) GoalTreeContext.createFrame(rootDescription));
+				frames = appendCycleInputTurns(frames, messages, input, cycleTs);
+				store = new FrameStore.LocalFrameStore(frames);
+			}
+		}
+		AVector<ACell> frames = store.frames();
 
 		// Build context (system prompt, tools, caps) via ContextBuilder.
 		// Harness tool names in config.tools are skipped here — they're
@@ -517,7 +529,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		// Run the root frame. typedHarnessTools (if non-null) injects the
 		// typed complete/fail tools alongside the regular harness/operation
 		// tools, supporting providers that prefer tool calls over response_format.
-		FrameResult result = runFrame(job, frames, 0, l3Config, llmOperation, baseTools,
+		FrameResult result = runFrame(job, store, 0, l3Config, llmOperation, baseTools,
 			configToolMap, capsCtx, context.history(), typedHarnessTools, toolCallTimeoutMs,
 			outerLoads);
 
@@ -616,7 +628,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 	 * @return the frame's result
 	 */
 	@SuppressWarnings("unchecked")
-	FrameResult runFrame(Job job, AVector<ACell> frames, int frameIndex,
+	FrameResult runFrame(Job job, FrameStore store, int frameIndex,
 			AMap<AString, ACell> config, AString llmOperation,
 			AVector<ACell> baseToolsParam, Map<String, AString> configToolMap,
 			RequestContext ctx, AVector<ACell> systemMessages,
@@ -685,12 +697,17 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			: (config != null ? config.dissoc(K_RESPONSE_FORMAT) : null);
 
 		// Inject goal as first user message in the conversation (once, not every iteration)
+		AVector<ACell> frames = store.frames();
+		if (frameIndex >= frames.count()) {
+			return FrameResult.failed(Strings.create(
+				"Frame stack no longer holds frame " + frameIndex + " — cycle superseded"), frames);
+		}
 		AMap<AString, ACell> activeFrame = (AMap<AString, ACell>) frames.get(frameIndex);
 		if (GoalTreeContext.countLiveTurns(activeFrame) == 0) {
 			AMap<AString, ACell> goalMsg = GoalTreeContext.renderGoal(activeFrame);
 			if (goalMsg != null) {
 				activeFrame = GoalTreeContext.appendTurn(activeFrame, goalMsg);
-				frames = updateFrame(frames, frameIndex, activeFrame);
+				if (!persist(store, frameIndex, activeFrame)) return abortedResult(store);
 			}
 		}
 
@@ -708,11 +725,20 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 		AVector<ACell> cachedLoadsRendered = Vectors.empty();
 
 		for (int iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-			// Check for cancellation before each L3 call
+			// Stop promptly when this cycle no longer owns the frames — the
+			// transition was cancelled (suspend/delete flips the ctx token),
+			// the session vanished, or a newer cycle claimed it. Frames are
+			// lattice-resident: a superseded cycle must not keep writing.
+			if (store.aborted()) return abortedResult(store);
 			if (job != null && job.isFinished()) {
-				return FrameResult.failed(Strings.create("Job cancelled"), frames);
+				return FrameResult.failed(Strings.create("Job cancelled"), store.frames());
 			}
 
+			frames = store.frames();
+			if (frameIndex >= frames.count()) {
+				return FrameResult.failed(Strings.create(
+					"Frame stack no longer holds frame " + frameIndex + " — cycle superseded"), frames);
+			}
 			activeFrame = (AMap<AString, ACell>) frames.get(frameIndex);
 
 			// Apply deferred compaction before assembling context
@@ -723,7 +749,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 				if (goalMsg != null) {
 					activeFrame = GoalTreeContext.appendTurn(activeFrame, goalMsg);
 				}
-				frames = updateFrame(frames, frameIndex, activeFrame);
+				if (!persist(store, frameIndex, activeFrame)) return abortedResult(store);
 				pendingCompactSummary = null;
 			}
 
@@ -793,9 +819,13 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 				if (typedOutputs && content != null) {
 					try {
 						ACell parsed = convex.core.util.JSON.parse(content.toString());
-						frames = updateFrame(frames, frameIndex,
-							GoalTreeContext.appendTurn(activeFrame, l3Result));
-						return FrameResult.complete(parsed, frames);
+						// Terminal turn + lifecycle marker in one CAS: a clean
+						// completion is never mistaken for a crash tail.
+						AMap<AString, ACell> terminal = GoalTreeContext.withStatus(
+							GoalTreeContext.appendTurn(activeFrame, l3Result),
+							GoalTreeContext.STATUS_COMPLETE);
+						if (!persist(store, frameIndex, terminal)) return abortedResult(store);
+						return FrameResult.complete(parsed, store.frames());
 					} catch (Exception e) {
 						// Schema enforcement should prevent this, but if the LLM
 						// somehow bails to non-JSON text, nudge it to retry.
@@ -808,19 +838,25 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 								"Your response did not parse as JSON. The output must conform "
 								+ "to the declared schema. Respond again with valid JSON."));
 						activeFrame = GoalTreeContext.appendTurn(activeFrame, nudge);
-						frames = updateFrame(frames, frameIndex, activeFrame);
+						if (!persist(store, frameIndex, activeFrame)) return abortedResult(store);
 						continue;
 					}
 				}
 
 				// Untyped: text is the result
-				frames = updateFrame(frames, frameIndex,
-					GoalTreeContext.appendTurn(activeFrame, l3Result));
-				return FrameResult.complete(content, frames);
+				AMap<AString, ACell> terminal = GoalTreeContext.withStatus(
+					GoalTreeContext.appendTurn(activeFrame, l3Result),
+					GoalTreeContext.STATUS_COMPLETE);
+				if (!persist(store, frameIndex, terminal)) return abortedResult(store);
+				return FrameResult.complete(content, store.frames());
 			}
 
-			// Record assistant message (with tool calls) in conversation
+			// Record assistant message (with tool calls) in conversation —
+			// persisted immediately so each LLM response is durable before its
+			// tools execute (a crash mid-tools leaves a detectable dangling
+			// toolCall for resume, instead of losing the response).
 			activeFrame = GoalTreeContext.appendTurn(activeFrame, l3Result);
+			if (!persist(store, frameIndex, activeFrame)) return abortedResult(store);
 
 			// Process each tool call
 			AVector<ACell> toolCalls = getToolCalls(l3Result);
@@ -853,17 +889,22 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					// With typed outputs, OpenAI strictTools enforces schema
 					// conformance at the API level — by the time we see the
 					// call, toolInput already matches the declared schema.
-					activeFrame = GoalTreeContext.appendTurn(activeFrame,
-						toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("complete"))));
-					frames = updateFrame(frames, frameIndex, activeFrame);
-					return FrameResult.complete(toolInput, frames);
+					// Terminal turn + lifecycle marker in one CAS.
+					AMap<AString, ACell> done = GoalTreeContext.withStatus(
+						GoalTreeContext.appendTurn(activeFrame,
+							toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("complete")))),
+						GoalTreeContext.STATUS_COMPLETE);
+					if (!persist(store, frameIndex, done)) return abortedResult(store);
+					return FrameResult.complete(toolInput, store.frames());
 
 				} else if (TOOL_FAIL.equals(toolName)) {
 					// Flattened: the entire tool input IS the error.
-					activeFrame = GoalTreeContext.appendTurn(activeFrame,
-						toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("failed"))));
-					frames = updateFrame(frames, frameIndex, activeFrame);
-					return FrameResult.failed(toolInput, frames);
+					AMap<AString, ACell> done = GoalTreeContext.withStatus(
+						GoalTreeContext.appendTurn(activeFrame,
+							toolResultMessage(toolCallId, toolName, Maps.of(Strings.create("status"), Strings.create("failed")))),
+						GoalTreeContext.STATUS_FAILED);
+					if (!persist(store, frameIndex, done)) return abortedResult(store);
+					return FrameResult.failed(toolInput, store.frames());
 
 				} else if (TOOL_COMPACT.equals(toolName)) {
 					String summary = RT.ensureString(RT.getIn(toolInput, Strings.create("summary"))).toString();
@@ -994,26 +1035,49 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 								childLoads = childLoads.assoc(d.getKey(),
 									buildLoadEntryMeta(budget, null));
 							}
+							// Push: parent snapshot + child frame in one CAS. The
+							// child is stamped with the spawning toolCall id so a
+							// crash resume can match it back to the parent's
+							// dangling call unambiguously (identical descriptions
+							// are legal in one batch).
 							AMap<AString, ACell> childFrame = GoalTreeContext.createFrame(desc, childLoads);
-							frames = updateFrame(frames, frameIndex, activeFrame);
-							AVector<ACell> childFrames = frames.conj(childFrame);
+							if (toolCallId != null) {
+								childFrame = childFrame.assoc(GoalTreeContext.K_CALL_ID, toolCallId);
+							}
+							final AMap<AString, ACell> parentSnapshot = activeFrame;
+							final AMap<AString, ACell> childToPush = childFrame;
+							if (!store.update(f ->
+									updateFrame(f, frameIndex, parentSnapshot).conj(childToPush))) {
+								return abortedResult(store);
+							}
 
 							// Recurse into child. Child frames don't inherit typed
 							// outputs — a subgoal's contract is "return any value to
 							// the parent", not the parent's typed output schema. The
 							// child also gets responseFormat stripped from its L3
 							// config (handled inside the recursive runFrame).
-							FrameResult childResult = runFrame(job, childFrames, frameIndex + 1,
+							FrameResult childResult = runFrame(job, store, frameIndex + 1,
 								config, llmOperation, baseTools, configToolMap, ctx, systemMessages, null,
 								toolCallTimeoutMs, outerLoads);
+							if (store.aborted()) return abortedResult(store);
 
-							// Pop child — result becomes tool result in parent
+							// Pop: record the child's result as the parent's tool
+							// result AND truncate the child — one CAS, so no
+							// observable state has one without the other (I4).
 							AMap<AString, ACell> resultMap = Maps.of(
 								Strings.create("status"), Strings.create(childResult.status()));
 							if (childResult.value() != null) {
 								resultMap = resultMap.assoc(Strings.create("result"), childResult.value());
 							}
-							toolResult = resultMap;
+							AMap<AString, ACell> withResult = GoalTreeContext.appendTurn(activeFrame,
+								toolResultMessage(toolCallId, toolName, resultMap));
+							if (!store.update(f -> updateFrame(
+									(AVector<ACell>) f.slice(0, frameIndex + 1),
+									frameIndex, withResult))) {
+								return abortedResult(store);
+							}
+							activeFrame = withResult;
+							toolResult = null;   // recorded atomically with the pop
 						}
 					}
 
@@ -1022,17 +1086,38 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 					toolResult = dispatchTool(toolName, toolInput, configToolMap, ctx, toolCallTimeoutMs);
 				}
 
-				// Record tool result in conversation
-				activeFrame = GoalTreeContext.appendTurn(activeFrame,
-					toolResultMessage(toolCallId, toolName, toolResult));
+				// Record tool result in conversation (subgoal already recorded
+				// its result inside the atomic pop above)
+				if (toolResult != null) {
+					activeFrame = GoalTreeContext.appendTurn(activeFrame,
+						toolResultMessage(toolCallId, toolName, toolResult));
+				}
 			}
 
-			// Update frame in stack for next iteration
-			frames = updateFrame(frames, frameIndex, activeFrame);
+			// Persist frame for next iteration
+			if (!persist(store, frameIndex, activeFrame)) return abortedResult(store);
 		}
 
 		log.warn("GoalTreeAdapter: max iterations reached for frame");
-		return FrameResult.failed(Strings.create("Max iterations reached"), frames);
+		// Terminal marker in the same CAS as the give-up, so resume never
+		// re-runs a frame that already exhausted its budget.
+		store.update(f -> (frameIndex < f.count())
+			? updateFrame(f, frameIndex, GoalTreeContext.withStatus(
+				(AMap<AString, ACell>) f.get(frameIndex), GoalTreeContext.STATUS_FAILED))
+			: f);
+		return FrameResult.failed(Strings.create("Max iterations reached"), store.frames());
+	}
+
+	/** Persists the active frame back into the stack; false = cycle superseded. */
+	private static boolean persist(FrameStore store, int frameIndex, AMap<AString, ACell> activeFrame) {
+		return store.update(f -> updateFrame(f, frameIndex, activeFrame));
+	}
+
+	/** The uniform give-up result when this cycle no longer owns the frames. */
+	private static FrameResult abortedResult(FrameStore store) {
+		return FrameResult.failed(Strings.create(
+			"Cycle superseded — frames are no longer owned by this transition "
+			+ "(cancelled, session removed, or reclaimed by a newer cycle)"), store.frames());
 	}
 
 	// ========== Helpers ==========
@@ -1103,6 +1188,23 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 			AVector<ACell> messages, ACell input, long ts) {
 		if (frames == null || frames.count() == 0) return frames;
 		AMap<AString, ACell> root = (AMap<AString, ACell>) frames.get(0);
+		AVector<ACell> turns = buildCycleInputTurns(messages, input, ts);
+		for (long i = 0; i < turns.count(); i++) {
+			root = GoalTreeContext.appendTurn(root, turns.get(i));
+		}
+		return frames.assoc(0, root);
+	}
+
+	/**
+	 * Builds this cycle's input turns (pending envelopes as chat-sourced user
+	 * turns, picked task input as a request-sourced user turn) without applying
+	 * them. The lattice path hands these to {@code beginSessionCycle} (applied
+	 * atomically with the pending drain); the local path appends them via
+	 * {@link #appendCycleInputTurns}.
+	 */
+	private static AVector<ACell> buildCycleInputTurns(
+			AVector<ACell> messages, ACell input, long ts) {
+		AVector<ACell> turns = Vectors.empty();
 		CVMLong tsCell = CVMLong.create(ts);
 
 		if (messages != null) {
@@ -1110,7 +1212,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 				ACell envelope = messages.get(i);
 				ACell content = RT.getIn(envelope, Fields.MESSAGE);
 				if (content == null) continue;
-				root = GoalTreeContext.appendTurn(root, Maps.of(
+				turns = turns.conj(Maps.of(
 					covia.venue.AgentState.K_ROLE,    covia.venue.AgentState.ROLE_USER,
 					covia.venue.AgentState.K_CONTENT, content,
 					covia.venue.AgentState.K_TURN_TS, tsCell,
@@ -1120,14 +1222,24 @@ public class GoalTreeAdapter extends AbstractLLMAdapter {
 
 		ACell newInput = RT.getIn(input, Fields.NEW_INPUT);
 		if (newInput != null) {
-			root = GoalTreeContext.appendTurn(root, Maps.of(
+			turns = turns.conj(Maps.of(
 				covia.venue.AgentState.K_ROLE,    covia.venue.AgentState.ROLE_USER,
 				covia.venue.AgentState.K_CONTENT, newInput,
 				covia.venue.AgentState.K_TURN_TS, tsCell,
 				covia.venue.AgentState.K_SOURCE,  covia.venue.AgentState.SOURCE_REQUEST));
 		}
 
-		return frames.assoc(0, root);
+		return turns;
+	}
+
+	/**
+	 * Resolves the caller's AgentState for a run-loop cycle, or null when the
+	 * caller/agent cannot be resolved (direct-invoke and test paths).
+	 */
+	private covia.venue.AgentState resolveAgentState(RequestContext ctx, AString agentId) {
+		if (agentId == null || ctx.getCallerDID() == null) return null;
+		covia.venue.User user = engine.getVenueState().users().get(ctx.getCallerDID());
+		return (user != null) ? user.agent(agentId.toString()) : null;
 	}
 
 	/** True if config declares a responseFormat with a JSON schema (not just "json"/"text"). */

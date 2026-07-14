@@ -26,6 +26,12 @@ public class RequestContext {
 	 *  cross-venue hops. Parsed {@link #proofs} cannot be re-signed (a JWT
 	 *  signature covers the JWT bytes), so forwarding requires the originals. */
 	private final AVector<ACell> rawUcans;
+	/** Cancellation signal for the transition cycle this context drives, or
+	 *  null outside a run-loop cycle. Flipped by the framework alongside
+	 *  {@code transitionFuture.cancel(true)} — cancelling the future does NOT
+	 *  stop the running transition thread, so long-running transition
+	 *  adapters poll this to stop work (and lattice writes) promptly. */
+	private final java.util.concurrent.atomic.AtomicBoolean cancellation;
 	/** The operation reference being invoked, in the form the caller supplied
 	 *  (e.g. the catalog path {@code "v/ops/langchain/openai"}), or null when
 	 *  the invocation was made directly from resolved metadata. Set by the
@@ -37,11 +43,11 @@ public class RequestContext {
 	/**
 	 * Context for anonymous (unauthenticated) external requests.
 	 */
-	public static final RequestContext ANONYMOUS = new RequestContext(null, null, null, null, null, null, null, null, null);
+	public static final RequestContext ANONYMOUS = new RequestContext(null, null, null, null, null, null, null, null, null, null);
 
 	private RequestContext(AString callerDID, AVector<ACell> proofs, AVector<ACell> caps,
 			AString agentId, Blob jobId, Blob sessionId, Blob taskId, AVector<ACell> rawUcans,
-			AString op) {
+			AString op, java.util.concurrent.atomic.AtomicBoolean cancellation) {
 		this.callerDID = callerDID;
 		this.proofs = proofs;
 		this.caps = caps;
@@ -51,6 +57,7 @@ public class RequestContext {
 		this.taskId = taskId;
 		this.rawUcans = rawUcans;
 		this.op = op;
+		this.cancellation = cancellation;
 	}
 
 	/**
@@ -67,7 +74,7 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, null, null, null, null, null, null, null, null);
+		return new RequestContext(callerDID, null, null, null, null, null, null, null, null, null);
 	}
 
 	/**
@@ -75,7 +82,7 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID, AVector<ACell> proofs) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, proofs, null, null, null, null, null, null, null);
+		return new RequestContext(callerDID, proofs, null, null, null, null, null, null, null, null);
 	}
 
 	/**
@@ -94,7 +101,7 @@ public class RequestContext {
 	 * CAD3-signed tokens directly are implicitly trusted by construction.</p>
 	 */
 	public RequestContext withProofs(AVector<ACell> proofs) {
-		return new RequestContext(this.callerDID, proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op);
+		return new RequestContext(this.callerDID, proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op, this.cancellation);
 	}
 
 	/**
@@ -106,7 +113,7 @@ public class RequestContext {
 	 * composes downward into sub-operations. {@code null} = unrestricted.
 	 */
 	public RequestContext withCaps(AVector<ACell> caps) {
-		return new RequestContext(this.callerDID, this.proofs, caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op);
+		return new RequestContext(this.callerDID, this.proofs, caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op, this.cancellation);
 	}
 
 	/**
@@ -114,7 +121,7 @@ public class RequestContext {
 	 * resolves to the agent's private workspace at {@code g/{agentId}/n/}.
 	 */
 	public RequestContext withAgentId(AString agentId) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op, this.cancellation);
 	}
 
 	/**
@@ -124,7 +131,7 @@ public class RequestContext {
 	 * case the agent/task path takes precedence.
 	 */
 	public RequestContext withJobId(Blob jobId) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, jobId, this.sessionId, this.taskId, this.rawUcans, this.op);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, jobId, this.sessionId, this.taskId, this.rawUcans, this.op, this.cancellation);
 	}
 
 	/**
@@ -133,7 +140,7 @@ public class RequestContext {
 	 * conversation-scoped slot at {@code g/{agentId}/sessions/{sessionId}/c/}.
 	 */
 	public RequestContext withSessionId(Blob sessionId) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, sessionId, this.taskId, this.rawUcans, this.op);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, sessionId, this.taskId, this.rawUcans, this.op, this.cancellation);
 	}
 
 	/**
@@ -142,7 +149,7 @@ public class RequestContext {
 	 * private slot at {@code g/{agentId}/tasks/{taskId}/t/}.
 	 */
 	public RequestContext withTaskId(Blob taskId) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, taskId, this.rawUcans, this.op);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, taskId, this.rawUcans, this.op, this.cancellation);
 	}
 
 	/**
@@ -155,7 +162,7 @@ public class RequestContext {
 	 * (#211): {@code {"with": "v/ops/getmine", "can": "invoke"}}.
 	 */
 	public RequestContext withOp(AString op) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, op);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, op, this.cancellation);
 	}
 
 	/**
@@ -166,6 +173,25 @@ public class RequestContext {
 	 */
 	public AString getOp() {
 		return op;
+	}
+
+	/**
+	 * Returns a new context carrying a cancellation signal for the transition
+	 * cycle it drives. Set by the run loop before dispatching a transition;
+	 * flipped alongside {@code transitionFuture.cancel(true)}, which does not
+	 * stop the running transition thread by itself.
+	 */
+	public RequestContext withCancellation(java.util.concurrent.atomic.AtomicBoolean cancellation) {
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op, cancellation);
+	}
+
+	/**
+	 * Gets the transition-cycle cancellation signal, or null when this context
+	 * does not drive a run-loop cycle. Long-running transition adapters poll
+	 * this to stop work promptly after a suspend/delete.
+	 */
+	public java.util.concurrent.atomic.AtomicBoolean getCancellation() {
+		return cancellation;
 	}
 
 	/**
@@ -202,7 +228,7 @@ public class RequestContext {
 	 * forwarding — the parsed {@link #getProofs() proofs} cannot be re-signed.
 	 */
 	public RequestContext withRawUcans(AVector<ACell> rawUcans) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, rawUcans, this.op);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, rawUcans, this.op, this.cancellation);
 	}
 
 	/**

@@ -52,6 +52,33 @@ public class GoalTreeContext {
 	/** Frame-scoped loads (map of path → load metadata) */
 	static final AString K_LOADS = Strings.intern("loads");
 
+	/** Frame lifecycle status: absent while live; {@link #STATUS_COMPLETE} /
+	 *  {@link #STATUS_FAILED} written in the same CAS as the terminal turn,
+	 *  {@link #STATUS_INTERRUPTED} by an operator-suspend settle. Explicit
+	 *  markers, not structural inference — a clean complete() tail is
+	 *  otherwise indistinguishable from a crash tail (crash resume). */
+	static final AString K_STATUS = Strings.intern("status");
+
+	/** The toolCall id of the subgoal call that spawned this (child) frame —
+	 *  stamped at push so crash resume can match a live child back to its
+	 *  parent's dangling toolCall unambiguously (identical descriptions are
+	 *  legal in one batch). */
+	static final AString K_CALL_ID = Strings.intern("callId");
+
+	static final AString STATUS_COMPLETE    = Strings.intern("complete");
+	static final AString STATUS_FAILED      = Strings.intern("failed");
+	static final AString STATUS_INTERRUPTED = Strings.intern("interrupted");
+
+	/** Returns the frame with its lifecycle status set. */
+	public static AMap<AString, ACell> withStatus(AMap<AString, ACell> frame, AString status) {
+		return frame.assoc(K_STATUS, status);
+	}
+
+	/** The frame's lifecycle status, or null while live. */
+	public static AString getStatus(AMap<AString, ACell> frame) {
+		return (frame.get(K_STATUS) instanceof AString s) ? s : null;
+	}
+
 	// ========== CVM keys for compacted segments ==========
 
 	/** Segment summary (LLM-provided) */

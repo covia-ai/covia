@@ -1,0 +1,33 @@
+{
+	"name": "Test neverfailllm",
+	"description": "Test LLM that calls v/test/ops/never as its first tool, then FAILS the L3 call after the tool result \u2014 a scripted mid-cycle transition failure for lattice-frames durability tests.",
+	"dateCreated": "2026-07-14T00:00:00Z",
+	"operation": {
+		"adapter": "test:neverfailllm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": {
+					"type": "array"
+				},
+				"tools": {
+					"type": "array"
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"content": {
+					"type": "string"
+				},
+				"toolCalls": {
+					"type": "array"
+				}
+			}
+		}
+	}
+}

@@ -88,6 +88,12 @@ public class AgentAdapter extends AAdapter {
 	/** Active transition job per agent — allows suspend to cancel running transitions */
 	private final ConcurrentHashMap<AgentKey, CompletableFuture<ACell>> activeTransitions = new ConcurrentHashMap<>();
 
+	/** Cancellation token per active transition — flipped alongside
+	 *  {@code transitionFuture.cancel(true)}, which does NOT stop the running
+	 *  transition thread. Long transitions (goaltree) poll it via the cycle
+	 *  ctx to stop work and lattice writes promptly. */
+	private final ConcurrentHashMap<AgentKey, java.util.concurrent.atomic.AtomicBoolean> activeCancellations = new ConcurrentHashMap<>();
+
 	/**
 	 * Per-agent deferred task completions written by {@code agent:complete-task}
 	 * and {@code agent:fail-task} during a transition cycle. The framework
@@ -1011,9 +1017,7 @@ public class AgentAdapter extends AAdapter {
 		// the loop immediately (mirrors handleSuspend).
 		failAllPendingForAgent(ctx.getCallerDID(), agentId, "Agent deleted: " + agentId);
 		agent.setStatus(AgentState.TERMINATED);
-		CompletableFuture<ACell> activeTransition =
-			activeTransitions.get(new AgentKey(ctx.getCallerDID(), agentId));
-		if (activeTransition != null) activeTransition.cancel(true);
+		cancelActiveTransition(new AgentKey(ctx.getCallerDID(), agentId));
 
 		boolean remove = CVMBool.TRUE.equals(RT.getIn(input, Fields.REMOVE));
 		if (remove) {
@@ -1037,9 +1041,9 @@ public class AgentAdapter extends AAdapter {
 
 		agent.setStatus(AgentState.SUSPENDED);
 
-		// Cancel any active transition so the agent stops promptly
-		CompletableFuture<ACell> activeTransition = activeTransitions.get(new AgentKey(ctx.getCallerDID(), agentId));
-		if (activeTransition != null) activeTransition.cancel(true);
+		// Cancel any active transition so the agent stops promptly (the token
+		// stops the transition thread itself; cancel unblocks the run loop)
+		cancelActiveTransition(new AgentKey(ctx.getCallerDID(), agentId));
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.SUSPENDED));
@@ -1666,12 +1670,13 @@ public class AgentAdapter extends AAdapter {
 				AString pickedSession = pickSessionForCycle(pickedTask, agent);
 				Blob pickedSessionBlob = (pickedSession != null)
 					? Blob.parse(pickedSession.toString()) : null;
-				AVector<ACell> filteredInbox = (pickedSessionBlob != null)
-					? agent.getSessionPending(pickedSessionBlob) : Vectors.empty();
-
+				// Read the session record ONCE and derive the presented inbox
+				// from it — a second lattice read would let a message land in
+				// between, making the drain count, the adapter's view and the
+				// timeline snapshot disagree about what was presented.
 				Job pickedChatJob = null;
 				AMap<AString, ACell> pickedSessionRecord = null;
-				long presentedSessionPendingCount = filteredInbox.count();
+				AVector<ACell> filteredInbox = Vectors.empty();
 				if (pickedSessionBlob != null) {
 					ConcurrentHashMap<Blob, Job> agentChats = activeChats.get(key);
 					if (agentChats != null) {
@@ -1681,7 +1686,12 @@ public class AgentAdapter extends AAdapter {
 						}
 					}
 					pickedSessionRecord = agent.getSession(pickedSessionBlob);
+					if (pickedSessionRecord != null
+							&& pickedSessionRecord.get(AgentState.KEY_PENDING) instanceof AVector<?> pv) {
+						filteredInbox = (AVector<ACell>) pv;
+					}
 				}
+				long presentedSessionPendingCount = filteredInbox.count();
 
 				// Per-cycle ctx: scope to the agent, picked task, and session so
 				// path resolvers (n/, t/, c/) can address the right slot, and
@@ -1716,14 +1726,28 @@ public class AgentAdapter extends AAdapter {
 					transitionInput = transitionInput.assoc(AgentState.KEY_CONFIG, agentConfig);
 				}
 
+				// Does the transition adapter own the session's frames + drain
+				// itself (lattice-resident frames)? Resolved from the ADAPTER,
+				// not the transition output — an errored/cancelled transition
+				// produces no output, and gating on output shape would
+				// double-drain pending and re-append turns the adapter already
+				// wrote live.
+				boolean framesOwned = isFramesOwningOp(transitionOp, ctx);
+
 				// Invoke transition. Blocks on the vthread — cheap, and any
 				// work the transition enqueues on the lattice (e.g. a nested
 				// agent:chat that wakes this same agent) is naturally visible
 				// to the next iteration via hasWork(). A cancelled or errored
 				// future surfaces as an error-shaped transitionResult so the
-				// merge path handles it normally.
+				// merge path handles it normally. The cancellation token rides
+				// the cycle ctx: cancel(true) does not stop the transition
+				// thread, so long transitions poll the token to stop promptly.
+				java.util.concurrent.atomic.AtomicBoolean cancelToken =
+					new java.util.concurrent.atomic.AtomicBoolean(false);
+				activeCancellations.put(key, cancelToken);
 				CompletableFuture<ACell> transitionFuture =
-					engine.jobs().invokeInternal(transitionOp, transitionInput, cycleCtx);
+					engine.jobs().invokeInternal(transitionOp, transitionInput,
+						cycleCtx.withCancellation(cancelToken));
 				activeTransitions.put(key, transitionFuture);
 
 				// Close the suspend/delete race: if the record was suspended,
@@ -1734,6 +1758,7 @@ public class AgentAdapter extends AAdapter {
 				// and cancel locally rather than blocking on a doomed cycle.
 				AgentState recheck = getAgent(ownerDID, agentId);
 				if (recheck == null || AgentState.SUSPENDED.equals(recheck.getStatus())) {
+					cancelToken.set(true);
 					transitionFuture.cancel(true);
 				}
 
@@ -1751,6 +1776,7 @@ public class AgentAdapter extends AAdapter {
 						Strings.create("Transition failed: " + cause.getMessage()));
 				} finally {
 					activeTransitions.remove(key, transitionFuture);
+					activeCancellations.remove(key, cancelToken);
 				}
 
 				// A cancelled transition is an administrative stop (agent:suspend
@@ -1770,6 +1796,14 @@ public class AgentAdapter extends AAdapter {
 						agent.suspendAndDrain(errStr);
 						failQueuedTasks(tasksAtCancel, errStr.toString());
 						failAllPendingForAgent(ownerDID, agentId, errStr.toString());
+						// Settle the session's cycle claim: an administrative
+						// stop is not a crash — the session must not register
+						// as interrupted work (no auto-resume), and the claim
+						// release fences any zombie writes from the stopped
+						// transition thread.
+						if (pickedSessionBlob != null) {
+							agent.clearSessionCycle(pickedSessionBlob);
+						}
 					}
 					// TERMINATED / removed / replaced: agent:delete has already
 					// settled the record and notified the queued callers.
@@ -1777,7 +1811,7 @@ public class AgentAdapter extends AAdapter {
 				}
 
 				IterResult merged = mergeAndPostProcess(
-					agent, agentId, ownerDID, transitionOp, transitionResult, pickedTask,
+					agent, agentId, ownerDID, transitionOp, framesOwned, transitionResult, pickedTask,
 					pickedTaskInput, formattedTasks, pickedSession,
 					pickedSessionBlob, pickedChatJob, filteredInbox,
 					presentedSessionPendingCount, tasks, startTs, allTaskResults);
@@ -1827,7 +1861,7 @@ public class AgentAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private IterResult mergeAndPostProcess(
 			AgentState agent, AString agentId, AString callerDID,
-			AString transitionOp,
+			AString transitionOp, boolean framesOwned,
 			ACell transitionResult, Map.Entry<Blob, ACell> pickedTask,
 			ACell pickedTaskInput, AVector<ACell> formattedTasks,
 			AString pickedSession, Blob pickedSessionBlob, Job pickedChatJob,
@@ -1900,7 +1934,7 @@ public class AgentAdapter extends AAdapter {
 		boolean recordCaller = CVMBool.TRUE.equals(
 			RT.getIn(agent.getConfig(), Strings.intern("recordCaller")));
 		AVector<ACell> turnsToAppend = Vectors.empty();
-		if (pickedSessionBlob != null && leanError == null && adapterFrames == null) {
+		if (pickedSessionBlob != null && leanError == null && adapterFrames == null && !framesOwned) {
 			if (filteredInbox != null) {
 				for (long i = 0; i < filteredInbox.count(); i++) {
 					ACell envelope = filteredInbox.get(i);
@@ -1965,10 +1999,21 @@ public class AgentAdapter extends AAdapter {
 		// session pending drain, session loads). History append lands in the
 		// same CAS as the timeline, so external readers never see a cycle
 		// that wrote one but not the other.
+		//
+		// FramesOwning transitions (lattice-resident frames) already wrote
+		// their frames live and drained the presented pending at cycle start
+		// (beginSessionCycle) — the merge must not re-drain (it would drop
+		// mid-transition arrivals) and must not rewrite frames (the live
+		// stack is authoritative; a merge rewrite would also mask any missed
+		// live-write in testing). The merge still clears the session's
+		// inCycle claim, appends the timeline entry, removes completed tasks
+		// and settles status.
 		AMap<AString, ACell> merged = agent.mergeRunResult(
 			newState, pickedSession, tasks, taskResults,
 			timelineEntry, pickedSessionBlob, turnsToAppend,
-			presentedSessionPendingCount, adapterFrames, sessionLoads);
+			framesOwned ? 0 : presentedSessionPendingCount,
+			framesOwned ? null : adapterFrames,
+			sessionLoads);
 
 		// Per-thread scheduled wake (B8.8). Transition result may carry a
 		// `wakeTime` (absolute wall-clock millis) requesting a future fire on
@@ -2320,6 +2365,37 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = getAgent(callerDID, agentId);
 		if (agent == null) job.fail("Agent not found or terminated: " + agentId);
 		return agent;
+	}
+
+	/**
+	 * Whether the transition op's adapter owns the session's frames and
+	 * pending drain itself ({@link covia.adapter.agent.FramesOwning} —
+	 * lattice-resident frames). Resolved from the adapter, per cycle, so the
+	 * answer survives error/cancel paths where the transition emits no output.
+	 */
+	private boolean isFramesOwningOp(AString opRef, RequestContext ctx) {
+		try {
+			covia.grid.Asset asset = engine.resolveAsset(opRef, ctx);
+			if (asset == null) return false;
+			AString adapterRef = RT.ensureString(RT.getIn(asset.meta(), Fields.OPERATION, Fields.ADAPTER));
+			if (adapterRef == null) return false;
+			String name = adapterRef.toString();
+			int colon = name.indexOf(':');
+			if (colon >= 0) name = name.substring(0, colon);
+			return engine.getAdapter(name) instanceof covia.adapter.agent.FramesOwning;
+		} catch (Exception e) {
+			return false;
+		}
+	}
+
+	/** Flips the agent's active-transition cancellation token (if any) and
+	 *  cancels the transition future — both are needed: cancel unblocks the
+	 *  run loop's join, the token stops the still-running transition thread. */
+	private void cancelActiveTransition(AgentKey key) {
+		java.util.concurrent.atomic.AtomicBoolean token = activeCancellations.get(key);
+		if (token != null) token.set(true);
+		CompletableFuture<ACell> activeTransition = activeTransitions.get(key);
+		if (activeTransition != null) activeTransition.cancel(true);
 	}
 
 	/**

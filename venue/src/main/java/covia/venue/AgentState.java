@@ -447,6 +447,26 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
+	 * Settles a session's cycle claim without a merge — used when an
+	 * interrupted cycle is administratively stopped (operator suspend): the
+	 * claim is released so the session does not register as crashed work,
+	 * and any zombie writes from the stopped cycle are fenced out.
+	 */
+	@SuppressWarnings("unchecked")
+	public void clearSessionCycle(Blob sid) {
+		update(r -> {
+			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
+				? (Index<Blob, ACell>) idx : Index.none();
+			ACell sv = sessions.get(sid);
+			if (!(sv instanceof AMap)) return r;
+			AMap<AString, ACell> session = (AMap<AString, ACell>) sv;
+			AMap<AString, ACell> cleared = session.dissoc(K_IN_CYCLE);
+			if (cleared == session) return r;
+			return r.assoc(K_SESSIONS, sessions.assoc(sid, cleared));
+		});
+	}
+
+	/**
 	 * Appends turns to the session's {@code frames[0].conversation} and bumps
 	 * {@code meta.turns}. Shared by {@link #beginSessionCycle} and
 	 * {@link #mergeRunResult} so the two paths cannot drift. Defensive: mints

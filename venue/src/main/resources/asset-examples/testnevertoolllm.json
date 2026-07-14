@@ -1,0 +1,33 @@
+{
+	"name": "Test nevertoolllm",
+	"description": "Test LLM that calls v/test/ops/never as its first tool (blocking for toolCallTimeoutMs so tests can observe mid-run lattice state), then returns text after the timeout error.",
+	"dateCreated": "2026-07-14T00:00:00Z",
+	"operation": {
+		"adapter": "test:nevertoolllm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": {
+					"type": "array"
+				},
+				"tools": {
+					"type": "array"
+				}
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": {
+					"type": "string"
+				},
+				"content": {
+					"type": "string"
+				},
+				"toolCalls": {
+					"type": "array"
+				}
+			}
+		}
+	}
+}
