@@ -100,3 +100,31 @@ Check the server page (using your own venue's domain)
 ```
 curl https://venue.example.com/api/v1/status
 ```
+## Concurrent SSE Viewers (sizing)
+
+Job streaming (`GET /api/v1/jobs/{id}/sse`) holds one connection per viewer on
+a virtual thread — connections are cheap and do not consume platform threads.
+Measured on a developer-class machine (single venue JVM, default heap):
+
+- **500 concurrent viewers** on one job: all connected in ~2s, the initial
+  `job-update` frame delivered to all 500, and a single broadcast (job status
+  change) reached all 500 in ~2s, zero errors. Platform thread count stayed
+  ~85 regardless of connection count; total JVM working set ~400MB.
+- Broadcast fan-out is sequential per subscriber (~4ms/client per update) —
+  fine for demo-scale audiences on one hot job; thousands of subscribers on a
+  rapidly-updating job would stretch update latency linearly.
+
+**Rate limiter interaction.** SSE connects pass through the per-caller token
+bucket like any `/api/*` request. All anonymous viewers share the `:public`
+bucket, so a thundering herd sheds the overflow with `429 + Retry-After`
+(measured: 500 simultaneous anonymous connects on default limits `rps=100,
+burst=300` → 316 immediate, 184 shed, and every shed client connected on its
+first retry — the whole herd inside 6s). Browser `EventSource` auto-retries,
+so shedding is invisible to real viewers. For larger audiences either raise
+`rateLimit.burst` on the demo venue, or have viewers authenticate as
+self-issued session identities (each gets its own bucket).
+
+**Degradation strategy.** For public demos, pair live streaming with a
+recorded-run fallback: a run's complete record (session frames + timeline) is
+ordinary lattice data — pin it as a content-addressed asset and replay it
+client-side when the venue is unreachable.
