@@ -285,6 +285,30 @@ public class MCPTest {
 		assertTrue(resp.body().contains("error"), "Should return error for unknown tool");
 	}
 
+	/**
+	 * Regression: ops with scalar (non-map) outputs must not lose their result
+	 * over MCP. The protocol layer's toolSuccess casts the payload to a map —
+	 * before the covia-side wrap, agent_context (a JSON-string output) came
+	 * back as an empty {}.
+	 */
+	@Test public void testScalarToolResultSurvives() throws Exception {
+		HttpResponse<String> create = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"agent_create\","
+			+ "\"arguments\":{\"agentId\":\"mcp-scalar-agent\",\"config\":{"
+			+ "\"operation\":\"v/ops/goaltree/chat\",\"llmOperation\":\"v/test/ops/llm\","
+			+ "\"systemPrompt\":\"Scalar test agent.\"}}},\"id\":1}");
+		assertEquals(200, create.statusCode());
+		assertTrue(create.body().contains("mcp-scalar-agent"), create.body());
+
+		HttpResponse<String> ctx = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"agent_context\","
+			+ "\"arguments\":{\"agentId\":\"mcp-scalar-agent\"}},\"id\":2}");
+		assertEquals(200, ctx.statusCode());
+		assertTrue(ctx.body().contains("Scalar test agent"),
+			"the rendered context (a string output) must survive the MCP result "
+			+ "conversion: " + ctx.body().substring(0, Math.min(300, ctx.body().length())));
+	}
+
 	@Test public void testEmptyBatch() throws Exception {
 		HttpResponse<String> resp = postMcp("[]");
 		assertEquals(200, resp.statusCode());
