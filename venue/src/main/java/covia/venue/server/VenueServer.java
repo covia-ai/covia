@@ -280,6 +280,16 @@ public class VenueServer {
 		server.getEngine().provisionConfiguredSecrets();
 		server.getEngine().jobs().recoverJobs();
 
+		// Wake agents with crash-interrupted cycles (a stale session inCycle
+		// claim). recoverJobs re-fires STARTED request/chat jobs, which wakes
+		// their agents; this scan covers interrupted work with no outstanding
+		// job — e.g. message-driven cycles whose intake jobs completed at
+		// delivery. The resumed cycle repairs its frames and continues.
+		if (server.getEngine().getAdapter("agent")
+				instanceof covia.adapter.AgentAdapter agentAdapter) {
+			agentAdapter.wakeInterruptedCycles();
+		}
+
 		return server;
 	}
 

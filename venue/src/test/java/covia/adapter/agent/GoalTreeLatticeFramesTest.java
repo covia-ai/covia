@@ -184,13 +184,21 @@ public class GoalTreeLatticeFramesTest {
 		ACell result = chatJob.awaitResult(15000);
 		assertTrue(String.valueOf(RT.getIn(result, Fields.RESPONSE)).contains("gave up"));
 
-		// Post-cycle: claim released; the presented envelope was drained (its
-		// turn landed at cycle start) but the mid-cycle arrival survived.
-		await(() -> ag.getSessionCycleEpoch(sid) == null, 5000, "inCycle cleared at merge");
-		AVector<ACell> pendingAfter = ag.getSessionPending(sid);
-		assertEquals(1, pendingAfter.count(), "mid-cycle message must survive the merge");
-		assertEquals(Strings.create("mid-cycle message"),
-			RT.getIn(pendingAfter.get(0), Fields.MESSAGE.toString()));
+		// The mid-cycle message must not be LOST (I2): the merge preserves it
+		// (drain 0 for FramesOwning), and the run loop then processes it in a
+		// follow-up cycle — the deterministic end state is its turn in the
+		// conversation, pending empty, agent asleep.
+		await(() -> AgentState.SLEEPING.equals(ag.getStatus())
+				&& ag.getSessionPending(sid).count() == 0
+				&& ag.getSessionCycleEpoch(sid) == null,
+			10000, "follow-up cycle processes the mid-cycle message");
+		AVector<ACell> conv = conversation(frames("live-agent", sid).get(0));
+		long seen = 0;
+		for (long i = 0; i < conv.count(); i++) {
+			if (String.valueOf(RT.getIn(conv.get(i), "content")).contains("mid-cycle message")) seen++;
+		}
+		assertEquals(1, seen,
+			"the mid-cycle message must land in the conversation exactly once: " + conv);
 	}
 
 	// ========== I2 on the failure path ==========

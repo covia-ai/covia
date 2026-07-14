@@ -734,11 +734,20 @@ public class AgentAdapter extends AAdapter {
 		final Job jobRef = job;
 		job.setCancelHook(() -> chatsRef.remove(sidRef, jobRef));
 
-		ACell envelope = Maps.of(
-			Fields.CALLER,     ctx.getCallerDID(),
-			Fields.SESSION_ID, sidHex,
-			Fields.MESSAGE,    messageContent);
-		agent.appendSessionPending(sid, envelope);
+		// The envelope carries the chat Job id so a boot-recovery re-fire of
+		// this STARTED job is idempotent: if the envelope is still pending or
+		// its turn already landed in the conversation (the crashed cycle
+		// drained it), the re-fire re-reserves the slot but does not append a
+		// duplicate — the resumed cycle's response completes this Job.
+		AString jobIdHex = Strings.create(job.getID().toHexString());
+		if (!chatEnvelopeAlreadyDelivered(agent, sid, jobIdHex)) {
+			ACell envelope = Maps.of(
+				Fields.CALLER,     ctx.getCallerDID(),
+				Fields.SESSION_ID, sidHex,
+				Fields.MESSAGE,    messageContent,
+				Fields.JOB_ID,     jobIdHex);
+			agent.appendSessionPending(sid, envelope);
+		}
 
 		// Stay in STARTED — the run loop will completeWith the agent's
 		// response (or fail) once the next cycle for this session runs.
@@ -1945,6 +1954,10 @@ public class AgentAdapter extends AAdapter {
 							AgentState.K_CONTENT, msgContent,
 							AgentState.K_TURN_TS, CVMLong.create(startTs),
 							AgentState.K_SOURCE,  AgentState.SOURCE_CHAT);
+						// Chat-envelope job id travels onto the turn so a
+						// boot-recovery re-fire sees the message landed.
+						ACell envJobId = RT.getIn(envelope, Fields.JOB_ID);
+						if (envJobId != null) turn = turn.assoc(Fields.JOB_ID, envJobId);
 						turnsToAppend = turnsToAppend.conj(
 							withCaller(turn, recordCaller, RT.getIn(envelope, Fields.CALLER)));
 					}
@@ -2386,6 +2399,72 @@ public class AgentAdapter extends AAdapter {
 		} catch (Exception e) {
 			return false;
 		}
+	}
+
+	/**
+	 * True if the chat envelope with this job id already reached the session —
+	 * still pending, or already drained into the root conversation as a turn.
+	 * Makes the boot-recovery re-fire of a STARTED chat job idempotent.
+	 */
+	@SuppressWarnings("unchecked")
+	private static boolean chatEnvelopeAlreadyDelivered(AgentState agent, Blob sid, AString jobIdHex) {
+		AVector<ACell> pending = agent.getSessionPending(sid);
+		for (long i = 0; i < pending.count(); i++) {
+			if (jobIdHex.equals(RT.getIn(pending.get(i), Fields.JOB_ID))) return true;
+		}
+		AMap<AString, ACell> session = agent.getSession(sid);
+		if (session == null) return false;
+		ACell fv = session.get(AgentState.KEY_FRAMES);
+		if (!(fv instanceof AVector<?> frames) || frames.count() == 0) return false;
+		ACell conv = RT.getIn(frames.get(0), "conversation");
+		if (!(conv instanceof AVector<?> turns)) return false;
+		for (long i = 0; i < turns.count(); i++) {
+			if (jobIdHex.equals(RT.getIn(turns.get(i), Fields.JOB_ID))) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Boot scan: wakes every agent that has a session with a stale cycle
+	 * claim ({@code inCycle}) — a cycle the venue crashed out of. Covers
+	 * interrupted work with no outstanding STARTED job to re-fire (e.g.
+	 * message-driven cycles, whose intake jobs completed at delivery).
+	 * Called once at venue launch, after {@code recoverJobs()}.
+	 *
+	 * @return the number of agents woken
+	 */
+	@SuppressWarnings("unchecked")
+	public int wakeInterruptedCycles() {
+		int woken = 0;
+		AMap<AString, ACell> all = engine.getVenueState().users().getAll();
+		if (all == null) return 0;
+		for (var userEntry : all.entrySet()) {
+			AString did = RT.ensureString(userEntry.getKey());
+			if (did == null) continue;
+			covia.venue.User user = engine.getVenueState().users().get(did);
+			if (user == null) continue;
+			AMap<AString, ACell> agents = user.getAgents();
+			if (agents == null) continue;
+			for (var agentEntry : agents.entrySet()) {
+				AString agentId = agentEntry.getKey();
+				AgentState agent = getAgent(did, agentId);
+				if (agent == null) continue;   // terminated / missing
+				boolean interrupted = false;
+				for (var sessionEntry : agent.getSessions().entrySet()) {
+					if (sessionEntry.getValue() instanceof AMap<?, ?> session
+							&& session.get(AgentState.KEY_IN_CYCLE) != null) {
+						interrupted = true;
+						break;
+					}
+				}
+				if (interrupted) {
+					log.info("Waking agent {} — interrupted cycle found on boot", agentId);
+					wakeAgent(did, agentId, true);
+					woken++;
+				}
+			}
+		}
+		return woken;
 	}
 
 	/** Flips the agent's active-transition cancellation token (if any) and

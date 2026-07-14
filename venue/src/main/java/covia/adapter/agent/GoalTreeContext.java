@@ -79,6 +79,128 @@ public class GoalTreeContext {
 		return (frame.get(K_STATUS) instanceof AString s) ? s : null;
 	}
 
+	/** The frame's spawning toolCall id (child frames), or null. */
+	public static AString getCallId(AMap<AString, ACell> frame) {
+		return (frame.get(K_CALL_ID) instanceof AString s) ? s : null;
+	}
+
+	// ========== Crash-resume repair (pure) ==========
+
+	/**
+	 * Repairs a crash-interrupted frame stack: every dangling toolCall — an
+	 * entry of an assistant turn's {@code toolCalls} with no later tool-result
+	 * turn for its id — gets a synthetic tool-result turn appended, so the
+	 * conversation is provider-valid again (tool results must follow their
+	 * assistant message) and the model learns what happened. Never
+	 * re-executes anything: the note tells the agent the call's effects may
+	 * or may not have applied, and the agent decides (autonomy principle).
+	 *
+	 * <p>A dangling call whose id matches a deeper frame's {@code callId} is
+	 * an in-flight subgoal — skipped here; the resume driver pops it with the
+	 * child's own outcome. Null-id calls are matched positionally within
+	 * their batch. At most one synthetic result per call, ever.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	public static AVector<ACell> repairDanglingToolCalls(AVector<ACell> frames, AString note) {
+		// ids handled by live child frames (any depth)
+		java.util.Set<String> childCallIds = new java.util.HashSet<>();
+		for (long i = 0; i < frames.count(); i++) {
+			AString cid = getCallId((AMap<AString, ACell>) frames.get(i));
+			if (cid != null) childCallIds.add(cid.toString());
+		}
+
+		AVector<ACell> repaired = frames;
+		for (long fi = 0; fi < frames.count(); fi++) {
+			AMap<AString, ACell> frame = (AMap<AString, ACell>) repaired.get(fi);
+			AVector<ACell> conv = (frame.get(K_CONVERSATION) instanceof AVector cv)
+				? (AVector<ACell>) cv : Vectors.empty();
+			AVector<ACell> fixed = conv;
+			for (long t = 0; t < conv.count(); t++) {
+				ACell turn = conv.get(t);
+				if (!ROLE_ASSISTANT.equals(RT.getIn(turn, K_ROLE))) continue;
+				ACell tcs = RT.getIn(turn, K_TOOL_CALLS);
+				if (!(tcs instanceof AVector<?> calls) || calls.count() == 0) continue;
+				for (long c = 0; c < calls.count(); c++) {
+					ACell tc = calls.get(c);
+					AString id = RT.ensureString(RT.getIn(tc, Strings.intern("id")));
+					AString name = RT.ensureString(RT.getIn(tc, Strings.intern("name")));
+					if (id != null && childCallIds.contains(id.toString())) continue;
+					if (hasToolResultAfter(fixed, t, id, c)) continue;
+					AMap<AString, ACell> synthetic = Maps.of(
+						K_ROLE, ROLE_TOOL,
+						Strings.intern("id"), (id != null) ? id : Strings.intern("unknown"),
+						Strings.intern("name"), (name != null) ? name : Strings.intern("unknown"),
+						K_CONTENT, note);
+					fixed = fixed.conj(synthetic);
+				}
+			}
+			if (fixed != conv) {
+				repaired = repaired.assoc(fi, frame.assoc(K_CONVERSATION, fixed));
+			}
+		}
+		return repaired;
+	}
+
+	/**
+	 * True if the frame's conversation contains a tool-result turn with the
+	 * given id — the resume driver's pop-dedupe: never synthesise a second
+	 * result for a call the parent already has one for.
+	 */
+	@SuppressWarnings("unchecked")
+	public static boolean hasToolResultFor(AMap<AString, ACell> frame, AString id) {
+		if (id == null) return false;
+		AVector<ACell> conv = (frame.get(K_CONVERSATION) instanceof AVector cv)
+			? (AVector<ACell>) cv : Vectors.empty();
+		for (long i = 0; i < conv.count(); i++) {
+			ACell turn = conv.get(i);
+			if (ROLE_TOOL.equals(RT.getIn(turn, K_ROLE))
+					&& id.equals(RT.getIn(turn, Strings.intern("id")))) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * True if a tool-result turn answering the given call exists after
+	 * position {@code assistantIdx}. Id-matched when the call has an id;
+	 * positional fallback (the {@code callIdx}-th tool turn following the
+	 * assistant turn) for providers that omit ids.
+	 */
+	private static boolean hasToolResultAfter(AVector<ACell> conv, long assistantIdx,
+			AString id, long callIdx) {
+		long toolTurnsSeen = 0;
+		for (long i = assistantIdx + 1; i < conv.count(); i++) {
+			ACell turn = conv.get(i);
+			if (!ROLE_TOOL.equals(RT.getIn(turn, K_ROLE))) continue;
+			if (id != null) {
+				if (id.equals(RT.getIn(turn, Strings.intern("id")))) return true;
+			} else {
+				if (toolTurnsSeen == callIdx) return true;
+			}
+			toolTurnsSeen++;
+		}
+		return false;
+	}
+
+	/**
+	 * Best-effort result value of a terminal frame, for a pop that must be
+	 * synthesised after a crash: a text-completed frame's value is its final
+	 * assistant turn's content. Returns null when unrecoverable (e.g. the
+	 * complete() tool's input was the value and is not stored) — the caller
+	 * substitutes an honest "result may be lost" note.
+	 */
+	@SuppressWarnings("unchecked")
+	public static ACell terminalValue(AMap<AString, ACell> frame) {
+		AVector<ACell> conv = (frame.get(K_CONVERSATION) instanceof AVector cv)
+			? (AVector<ACell>) cv : Vectors.empty();
+		if (conv.count() == 0) return null;
+		ACell last = conv.get(conv.count() - 1);
+		if (ROLE_ASSISTANT.equals(RT.getIn(last, K_ROLE))
+				&& RT.getIn(last, K_TOOL_CALLS) == null) {
+			return RT.getIn(last, K_CONTENT);
+		}
+		return null;
+	}
+
 	// ========== CVM keys for compacted segments ==========
 
 	/** Segment summary (LLM-provided) */

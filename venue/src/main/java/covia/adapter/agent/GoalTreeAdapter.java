@@ -465,23 +465,51 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// local behaviour behind the same seam.
 		long cycleTs = convex.core.util.Utils.getCurrentTimestamp();
 		FrameStore store;
+		boolean resuming = false;
+		boolean tidyInterrupted = false;
 		{
 			Blob sid = ctx.getSessionId();
 			AgentState agentState = resolveAgentState(ctx, agentId);
 			if (sid != null && agentState != null && agentState.getSession(sid) != null) {
-				// Claim the session for this cycle: epoch + cycle-input turns +
-				// presented-pending drain in ONE CAS (an envelope leaves pending
-				// only in the write that lands its user turn). The framework's
-				// merge skips its own drain/turn-append for FramesOwning adapters.
+				// Crash detection: a stale inCycle means the previous cycle's
+				// merge never ran — the venue died mid-cycle. Resume repairs
+				// and continues. (An operator suspend settles the claim, so
+				// interrupted-by-suspend sessions do NOT resume — leftover
+				// child frames are popped un-run below.)
+				resuming = agentState.getSessionCycleEpoch(sid) != null;
+
+				// Claim first (epoch only), repair under the new epoch, THEN
+				// append this cycle's input turns + drain in one CAS — repair
+				// must precede the new user turns so synthetic tool results
+				// land next to their assistant turns (provider ordering).
 				ACell epoch = Blob.createRandom(new java.util.Random(), 8);
+				if (!agentState.beginSessionCycle(sid, epoch, null, 0)) {
+					return Maps.of(
+						AgentState.KEY_STATE, Maps.empty(),
+						Fields.ERROR, Strings.create("Session vanished before cycle start: " + sid));
+				}
+				store = new FrameStore.LatticeFrameStore(agentState, sid, epoch, ctx.getCancellation());
+
+				tidyInterrupted = !resuming && store.frames().count() > 1;
+				if (resuming || tidyInterrupted) {
+					AString note = Strings.create(
+						"Error: venue restarted before this tool call returned — "
+						+ "its effects may or may not have applied; verify before retrying.");
+					if (!store.update(f -> GoalTreeContext.repairDanglingToolCalls(f, note))) {
+						return abortedOutput(store);
+					}
+				}
+
 				AVector<ACell> cycleTurns = buildCycleInputTurns(messages, input, cycleTs);
+				if (resuming) {
+					cycleTurns = dropAlreadyAppendedRequestTurns(cycleTurns, store.frames());
+				}
 				long drainCount = (messages != null) ? messages.count() : 0;
 				if (!agentState.beginSessionCycle(sid, epoch, cycleTurns, drainCount)) {
 					return Maps.of(
 						AgentState.KEY_STATE, Maps.empty(),
 						Fields.ERROR, Strings.create("Session vanished before cycle start: " + sid));
 				}
-				store = new FrameStore.LatticeFrameStore(agentState, sid, epoch, ctx.getCancellation());
 			} else {
 				AVector<ACell> sessionFrames = covia.adapter.AgentAdapter.sessionFrames(input);
 				AVector<ACell> frames = (sessionFrames != null && sessionFrames.count() > 0)
@@ -492,6 +520,15 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			}
 		}
 		AVector<ACell> frames = store.frames();
+		// The shared context is always built from the ROOT view of the stack —
+		// exactly what every pre-cutover cycle saw (clean cycles end
+		// root-only). On a crash resume the stack may still hold live child
+		// frames: the resume driver settles them, and each child's own loop
+		// assembles its own context — rendering a child's conversation into
+		// the shared history here would leak it into the root's context.
+		if (frames.count() > 1) {
+			frames = (AVector<ACell>) frames.slice(0, 1);
+		}
 
 		// Build context (system prompt, tools, caps) via ContextBuilder.
 		// Harness tool names in config.tools are skipped here — they're
@@ -529,9 +566,16 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// Run the root frame. typedHarnessTools (if non-null) injects the
 		// typed complete/fail tools alongside the regular harness/operation
 		// tools, supporting providers that prefer tool calls over response_format.
-		FrameResult result = runFrame(job, store, 0, l3Config, llmOperation, baseTools,
-			configToolMap, capsCtx, context.history(), typedHarnessTools, toolCallTimeoutMs,
-			outerLoads);
+		// A resumed (crash) or interrupted (suspend leftovers) stack first goes
+		// through the driver, which settles child frames deepest-first —
+		// running them only on a crash resume, never after an operator stop.
+		FrameResult result = (resuming || tidyInterrupted)
+			? resumeFrames(job, store, resuming, l3Config, llmOperation, baseTools,
+				configToolMap, capsCtx, context.history(), typedHarnessTools, toolCallTimeoutMs,
+				outerLoads)
+			: runFrame(job, store, 0, l3Config, llmOperation, baseTools,
+				configToolMap, capsCtx, context.history(), typedHarnessTools, toolCallTimeoutMs,
+				outerLoads);
 
 		// No per-adapter state is persisted here: the frame stack lives on the
 		// session record, and config's single home is record.config (#144) —
@@ -1108,6 +1152,130 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		return FrameResult.failed(Strings.create("Max iterations reached"), store.frames());
 	}
 
+	/**
+	 * Settles a non-quiescent frame stack, deepest child first, then runs the
+	 * root. Each child is resolved and popped atomically (result recorded in
+	 * the parent + child truncated, deduped by the child's {@code callId}):
+	 *
+	 * <ul>
+	 *   <li>terminal child (status marker) — popped with its recorded outcome;
+	 *       a text completion's value is recovered from its final turn, an
+	 *       unrecoverable value becomes an honest "may be lost" note. Never
+	 *       re-run (I8).</li>
+	 *   <li>live child, crash resume ({@code runChildren}) — its loop runs to
+	 *       completion (the repaired conversation ends with the synthetic
+	 *       restart results, so the model continues from where it was).</li>
+	 *   <li>live child, interrupted by operator suspend — popped un-run with
+	 *       an "interrupted — re-issue if needed" failure: suspension is a
+	 *       deliberate stop, never auto-resumed (I7).</li>
+	 * </ul>
+	 */
+	private FrameResult resumeFrames(Job job, FrameStore store, boolean runChildren,
+			AMap<AString, ACell> config, AString llmOperation,
+			AVector<ACell> baseTools, Map<String, AString> configToolMap,
+			RequestContext ctx, AVector<ACell> systemMessages,
+			AVector<ACell> typedRootHarnessTools, long toolCallTimeoutMs,
+			AMap<AString, ACell> outerLoads) {
+		while (true) {
+			if (store.aborted()) return abortedResult(store);
+			AVector<ACell> fs = store.frames();
+			int deepest = (int) fs.count() - 1;
+			if (deepest <= 0) break;
+
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> child = (AMap<AString, ACell>) fs.get(deepest);
+			AString status = GoalTreeContext.getStatus(child);
+
+			String popStatus;
+			ACell popValue;
+			if (status != null) {
+				popStatus = GoalTreeContext.STATUS_COMPLETE.equals(status) ? "complete" : "failed";
+				ACell recovered = GoalTreeContext.terminalValue(child);
+				popValue = (recovered != null) ? recovered : Strings.create(
+					"Result may be lost — venue restarted at subgoal completion; "
+					+ "re-issue the subgoal if needed");
+			} else if (runChildren) {
+				FrameResult childResult = runFrame(job, store, deepest, config, llmOperation,
+					baseTools, configToolMap, ctx, systemMessages, null, toolCallTimeoutMs,
+					outerLoads);
+				if (store.aborted()) return abortedResult(store);
+				popStatus = childResult.status();
+				popValue = childResult.value();
+			} else {
+				popStatus = "failed";
+				popValue = Strings.create(
+					"Subgoal interrupted (operator suspend) — not resumed; re-issue if needed");
+			}
+
+			AMap<AString, ACell> resultMap = Maps.of(
+				Strings.create("status"), Strings.create(popStatus));
+			if (popValue != null) {
+				resultMap = resultMap.assoc(Strings.create("result"), popValue);
+			}
+			final AString callId = GoalTreeContext.getCallId(child);
+			final int parentIndex = deepest - 1;
+			final AMap<AString, ACell> popResult = resultMap;
+			boolean ok = store.update(f -> {
+				if (f.count() <= parentIndex) return f;
+				@SuppressWarnings("unchecked")
+				AVector<ACell> truncated = (AVector<ACell>) f.slice(0, parentIndex + 1);
+				@SuppressWarnings("unchecked")
+				AMap<AString, ACell> parent = (AMap<AString, ACell>) truncated.get(parentIndex);
+				if (callId == null || !GoalTreeContext.hasToolResultFor(parent, callId)) {
+					parent = GoalTreeContext.appendTurn(parent,
+						toolResultMessage(callId, TOOL_SUBGOAL, popResult));
+				}
+				return updateFrame(truncated, parentIndex, parent);
+			});
+			if (!ok) return abortedResult(store);
+		}
+
+		return runFrame(job, store, 0, config, llmOperation, baseTools,
+			configToolMap, ctx, systemMessages, typedRootHarnessTools, toolCallTimeoutMs,
+			outerLoads);
+	}
+
+	/**
+	 * Drops request-sourced turns whose content the root conversation already
+	 * carries as a request turn: on a crash resume the interrupted cycle's
+	 * task is re-presented (recoverJobs re-fires the caller's job), but the
+	 * crashed cycle already appended its input turn.
+	 */
+	@SuppressWarnings("unchecked")
+	private static AVector<ACell> dropAlreadyAppendedRequestTurns(
+			AVector<ACell> turns, AVector<ACell> frames) {
+		if (turns.count() == 0 || frames.count() == 0) return turns;
+		AVector<ACell> rootConv = (RT.getIn(frames.get(0), "conversation") instanceof AVector<?> cv)
+			? (AVector<ACell>) cv : Vectors.empty();
+		AVector<ACell> kept = Vectors.empty();
+		for (long i = 0; i < turns.count(); i++) {
+			ACell turn = turns.get(i);
+			boolean duplicate = false;
+			if (covia.venue.AgentState.SOURCE_REQUEST.equals(
+					RT.getIn(turn, covia.venue.AgentState.K_SOURCE))) {
+				ACell content = RT.getIn(turn, "content");
+				for (long j = 0; j < rootConv.count(); j++) {
+					ACell existing = rootConv.get(j);
+					if (covia.venue.AgentState.SOURCE_REQUEST.equals(RT.getIn(existing, "source"))
+							&& java.util.Objects.equals(content, RT.getIn(existing, "content"))) {
+						duplicate = true;
+						break;
+					}
+				}
+			}
+			if (!duplicate) kept = kept.conj(turn);
+		}
+		return kept;
+	}
+
+	/** Transition output for a cycle that lost frame ownership mid-flight. */
+	private static AMap<AString, ACell> abortedOutput(FrameStore store) {
+		FrameResult aborted = abortedResult(store);
+		return Maps.of(
+			AgentState.KEY_STATE, Maps.empty(),
+			Fields.ERROR, aborted.value());
+	}
+
 	/** Persists the active frame back into the stack; false = cycle superseded. */
 	private static boolean persist(FrameStore store, int frameIndex, AMap<AString, ACell> activeFrame) {
 		return store.update(f -> updateFrame(f, frameIndex, activeFrame));
@@ -1212,11 +1380,17 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				ACell envelope = messages.get(i);
 				ACell content = RT.getIn(envelope, Fields.MESSAGE);
 				if (content == null) continue;
-				turns = turns.conj(Maps.of(
+				AMap<AString, ACell> turn = Maps.of(
 					covia.venue.AgentState.K_ROLE,    covia.venue.AgentState.ROLE_USER,
 					covia.venue.AgentState.K_CONTENT, content,
 					covia.venue.AgentState.K_TURN_TS, tsCell,
-					covia.venue.AgentState.K_SOURCE,  covia.venue.AgentState.SOURCE_CHAT));
+					covia.venue.AgentState.K_SOURCE,  covia.venue.AgentState.SOURCE_CHAT);
+				// Provenance for recovery idempotence: a chat envelope's job id
+				// travels onto its turn, so a boot-recovery re-fire can see the
+				// message already landed (LLM rendering strips extra fields).
+				ACell envJobId = RT.getIn(envelope, Fields.JOB_ID);
+				if (envJobId != null) turn = turn.assoc(Fields.JOB_ID, envJobId);
+				turns = turns.conj(turn);
 			}
 		}
 
