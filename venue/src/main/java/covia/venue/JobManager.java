@@ -202,6 +202,9 @@ public class JobManager {
 	}
 
 	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx, boolean privateJob) {
+		// Advance the lattice write clock for this dispatch — the harness owns
+		// write time (see Engine.refreshWriteClock).
+		engine.refreshWriteClock();
 		// Capability enforcement is the executing adapter's responsibility: each
 		// op asserts its exact (resource, ability) at its own enforcement point
 		// (requireCapability / requireInvoke), before any side effect. There is
@@ -311,6 +314,9 @@ public class JobManager {
 	}
 
 	public CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
+		// Advance the lattice write clock — internal dispatch (agent transitions,
+		// tool calls) is high-frequency, so long cycles keep stamping fresh time.
+		engine.refreshWriteClock();
 		AAdapter adapter;
 		try {
 			// Enforcement is the adapter's responsibility (see invokeOperation):

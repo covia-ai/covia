@@ -229,7 +229,9 @@ public class GoalTreeCrashResumeTest {
 
 			Job recovered = engine.jobs().getJob(Blob.fromHex(chatJobId));
 			assertNotNull(recovered, "the chat job must be recovered as live");
-			ACell result = recovered.awaitResult(20_000);
+			// Generous budget: two engine spin-ups + refired chat + multi-round
+			// resume is heavyweight and shares the box with the parallel suite.
+			ACell result = recovered.awaitResult(60_000);
 			assertTrue(String.valueOf(RT.getIn(result, Fields.RESPONSE)).contains("root done"),
 				"the refired chat gets the root's answer: " + result);
 

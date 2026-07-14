@@ -39,8 +39,12 @@ public class UserMetaStampTest {
 		return (v instanceof CVMLong l) ? l.longValue() : -1;
 	}
 
-	private static void tick() {
+	/** Advances the harness write clock past the current stamp. This test
+	 *  mutates the lattice directly (no JobManager dispatch), so it drives
+	 *  the clock policy explicitly — real traffic gets this per dispatch. */
+	private void tick() {
 		try { Thread.sleep(3); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+		engine.refreshWriteClock();
 	}
 
 	@Test
@@ -58,12 +62,16 @@ public class UserMetaStampTest {
 
 	@Test
 	public void testDeepAgentWriteBumpsUpdatedNotCreated() {
-		AgentState agent = user.ensureAgent("meta-agent", Maps.empty(), null);
+		user.ensureAgent("meta-agent", Maps.empty(), null);
 		long created = metaField("created");
 		long before = metaField("updated");
 		assertTrue(created > 0);
 		tick();
 
+		// Wrappers capture the write clock when derived — mint one AFTER the
+		// clock advance, exactly as real traffic does (per-access derivation
+		// after the dispatch refresh).
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("meta-agent");
 		agent.setStatus(AgentState.SUSPENDED);
 
 		assertTrue(metaField("updated") > before,
@@ -74,14 +82,16 @@ public class UserMetaStampTest {
 
 	@Test
 	public void testDeepSessionFrameWriteBumps() {
-		AgentState agent = user.ensureAgent("frame-agent", Maps.empty(), null);
+		user.ensureAgent("frame-agent", Maps.empty(), null).ensureSession(
+			Blob.fromHex("dd112233445566778899aabbccddee01"), ALICE_DID);
 		Blob sid = Blob.fromHex("dd112233445566778899aabbccddee01");
-		agent.ensureSession(sid, ALICE_DID);
 		long before = metaField("updated");
 		tick();
 
 		// A frame write four levels down the subtree still refreshes the
-		// user-level stamp (StampedCursor deep-write re-stamp).
+		// user-level stamp (StampedCursor deep-write re-stamp). Fresh wrapper
+		// after the clock advance, as real per-access derivation gives.
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID).agent("frame-agent");
 		assertTrue(agent.updateSessionFrames(sid, null,
 			frames -> frames.conj(Maps.of(Strings.create("description"), Strings.create("x")))));
 		assertTrue(metaField("updated") > before,

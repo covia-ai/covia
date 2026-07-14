@@ -134,11 +134,27 @@ public final class Covia {
 		return 0;
 	}
 
+	/**
+	 * One-way ratchet for stamp timestamps: never below the stamp the value
+	 * already carries. Cursors capture their LatticeContext when derived, so
+	 * long-lived cursors can hold an older write clock than the engine's
+	 * current one — a plain assoc would REGRESS the stamp, and under
+	 * whole-value LWW a regressed {@code :timestamp} makes the merge discard
+	 * the newer write wholesale (observed as lost content/appends). The
+	 * ratchet makes mixed-age contexts safe by construction, and also guards
+	 * against backwards system-clock steps.
+	 */
+	private static CVMLong ratchet(ACell existing, CVMLong ts) {
+		if (existing instanceof CVMLong prev && prev.longValue() > ts.longValue()) return prev;
+		return ts;
+	}
+
 	/** Injects the write-clock timestamp (from the LatticeContext) into the venue value's {@code :timestamp}. */
 	@SuppressWarnings("unchecked")
 	private static ACell stampVenue(ACell v, CVMLong ts) {
 		if (v instanceof AMap<?,?>) {
-			return ((AMap<ACell, ACell>) v).assoc(K_TIMESTAMP, ts);
+			AMap<ACell, ACell> m = (AMap<ACell, ACell>) v;
+			return m.assoc(K_TIMESTAMP, ratchet(m.get(K_TIMESTAMP), ts));
 		}
 		return v;
 	}
@@ -147,7 +163,8 @@ public final class Covia {
 	@SuppressWarnings("unchecked")
 	private static ACell stampUpdated(ACell v, CVMLong ts) {
 		if (v instanceof AMap<?,?>) {
-			return ((AMap<ACell, ACell>) v).assoc(K_UPDATED, ts);
+			AMap<ACell, ACell> m = (AMap<ACell, ACell>) v;
+			return m.assoc(K_UPDATED, ratchet(m.get(K_UPDATED), ts));
 		}
 		return v;
 	}
@@ -161,15 +178,9 @@ public final class Covia {
 	 * identity-lifecycle policy (TTL/reaping). Idempotent under CAS retry.
 	 * See {@code GRID_LATTICE_DESIGN.md} §"User meta record".
 	 *
-	 * <p><b>Clock source:</b> the context timestamp ({@code ts}) is ignored —
-	 * the engine's LatticeContext carries a boot-time constant (adequate for
-	 * the venue-level LWW stamp, where only cross-restart freshness matters),
-	 * but an activity signal needs a live clock. Reading the wall clock here
-	 * matches the established {@code AgentState.update} K_TS discipline;
-	 * retry re-stamps with a marginally later time, which is harmless for
-	 * activity data. (Convex's {@code LatticeContext.currentTimestamp()}
-	 * live-clock fallback is the eventual clean home once {@code
-	 * StampedCursor} consumes it — tracked as a convex follow-up.)</p>
+	 * <p><b>Clock source:</b> the context write clock ({@code ts}), which the
+	 * harness keeps fresh ({@code Engine.refreshWriteClock} — time is the
+	 * harness's responsibility, convex#561). Pure: safe under CAS retry.</p>
 	 *
 	 * <p><b>Semantics:</b> only writes <em>into</em> the record pass the
 	 * boundary — the bare record-init write in {@code Users.ensure} does not,
@@ -184,9 +195,8 @@ public final class Covia {
 		AMap<ACell, ACell> meta = (user.get(K_META) instanceof AMap<?,?> m)
 			? (AMap<ACell, ACell>) m
 			: (AMap<ACell, ACell>) (AMap<?, ?>) convex.core.data.Maps.empty();
-		CVMLong now = CVMLong.create(convex.core.util.Utils.getCurrentTimestamp());
-		if (meta.get(K_CREATED) == null) meta = meta.assoc(K_CREATED, now);
-		meta = meta.assoc(K_UPDATED, now);
+		if (meta.get(K_CREATED) == null) meta = meta.assoc(K_CREATED, ts);
+		meta = meta.assoc(K_UPDATED, ratchet(meta.get(K_UPDATED), ts));
 		return user.assoc(K_META, meta);
 	}
 

@@ -340,8 +340,39 @@ public class Engine {
 	 * writes within a single HTTP request are batched into one sign + persist.</p>
 	 */
 	public void syncState() {
+		refreshWriteClock();
 		venueState.sync();
 		lattice.sync();
+	}
+
+	/** Last write-clock refresh, epoch millis. Volatile: refreshers race benignly. */
+	private volatile long lastClockRefresh = 0;
+
+	/**
+	 * Advances the lattice write clock: installs a fresh {@link LatticeContext}
+	 * (current wall time + the venue signing key) on the root and venue-state
+	 * cursors, so cursors derived from them stamp writes with current time.
+	 *
+	 * <p>Time is the harness's responsibility — convex lattice code reads the
+	 * timestamp from the context it is given and deliberately never consults
+	 * the system clock itself (determinism, convex#561). A context set once at
+	 * boot therefore freezes the write clock: the venue-level LWW
+	 * {@code :timestamp} and every {@code StampingLattice} field (namespace
+	 * {@code updated}, user {@code meta.updated}) would carry engine start
+	 * time forever. The engine's policy: refresh at every operation dispatch
+	 * ({@code JobManager}) and at every state sync, throttled to at most once
+	 * per few milliseconds. Cursors capture the context when derived, and
+	 * covia derives its lattice cursors per access, so freshness propagates
+	 * immediately.</p>
+	 */
+	public void refreshWriteClock() {
+		long now = Utils.getCurrentTimestamp();
+		if (now - lastClockRefresh < 2) return;   // throttle context churn
+		lastClockRefresh = now;
+		LatticeContext fresh = LatticeContext.create(
+			convex.core.data.prim.CVMLong.create(now), this.keyPair);
+		lattice.withContext(fresh);
+		if (venueState != null) venueState.cursor().withContext(fresh);
 	}
 
 	// ========================================================================
