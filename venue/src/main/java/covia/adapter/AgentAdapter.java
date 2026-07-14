@@ -753,6 +753,11 @@ public class AgentAdapter extends AAdapter {
 		// response (or fail) once the next cycle for this session runs.
 		job.setStatus(Status.STARTED);
 
+		// Record the (possibly just-minted) sessionId on the job so a
+		// boot-recovery re-fire continues THIS session rather than minting a
+		// fresh one (JobManager.refireJob reads it). Mirrors handleRequest.
+		job.updateData(job.getData().assoc(Fields.SESSION_ID, sidHex));
+
 		// Force the wake — we just reserved a slot and added a message,
 		// either of which may not yet be visible via cursor.get().
 		wakeAgent(ctx.getCallerDID(), agentId, true);

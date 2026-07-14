@@ -903,7 +903,22 @@ public class JobManager {
 			return false;
 		}
 
-		adapter.invoke(job, ctx, meta, record.get(Fields.INPUT));
+		// Replay the EFFECTIVE input: the caller's original input plus any
+		// sessionId the first invocation minted (stamped at the record top
+		// level by agent:chat / agent:request). Without it, a re-fired
+		// session-minting job mints a FRESH session instead of continuing the
+		// one it created — producing a spurious duplicate session and a stale
+		// answer to the caller, distinct from the boot-scan resume of the
+		// original session.
+		ACell input = record.get(Fields.INPUT);
+		ACell sid = record.get(Fields.SESSION_ID);
+		if (sid != null && input instanceof AMap<?, ?> && RT.getIn(input, Fields.SESSION_ID) == null) {
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> im = (AMap<AString, ACell>) input;
+			input = im.assoc(Fields.SESSION_ID, sid);
+		}
+
+		adapter.invoke(job, ctx, meta, input);
 		log.info("Re-fired job: {}", jobID);
 		return true;
 	}

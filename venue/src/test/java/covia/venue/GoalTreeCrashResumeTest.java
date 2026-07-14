@@ -25,6 +25,7 @@ import convex.node.NodeServer;
 import covia.adapter.AgentAdapter;
 import covia.api.Fields;
 import covia.grid.Job;
+import covia.grid.Status;
 import covia.lattice.Covia;
 
 /**
@@ -245,6 +246,98 @@ public class GoalTreeCrashResumeTest {
 				"exactly one popped subgoal result (deduped by callId): " + conv);
 			assertEquals(1, countTurnsContaining(conv, "decompose the work"),
 				"chat-refire dedupe: no duplicate user turn: " + conv);
+
+			engine.close();
+			ns.close();
+		}
+	}
+
+	/**
+	 * A chat sent WITHOUT a sessionId (the first-contact case: the venue mints
+	 * one) must, on crash recovery, continue the session it minted — not spawn
+	 * a fresh one. The minted sessionId is stamped on the job so the re-fire
+	 * routes back; otherwise recovery produces a spurious duplicate session and
+	 * answers the caller from it (a stale/hallucinated reply) while the boot
+	 * scan separately resumes the real one. (Regression for the bug the earlier
+	 * tests missed by always pre-supplying an explicit sessionId.)
+	 */
+	@Test
+	public void testCrashResumeMintedSessionNotDuplicated() throws Exception {
+		EtchStore store = EtchStore.createTemp();
+		AKeyPair kp = AKeyPair.generate();
+		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
+		AMap<AString, ACell> config = Maps.of(Config.DID, did);
+		String chatJobId;
+		String sidHex;
+
+		// ===== Stage 1: chat with NO sessionId, crash mid-tool =====
+		{
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			ns.launch();
+			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine.addDemoAssets(engine);
+
+			createGoalAgent(engine, "mint-agent", "v/test/ops/nevertoolllm");
+
+			Job chatJob = engine.jobs().invokeOperation(
+				"v/ops/agent/chat",
+				Maps.of(Fields.AGENT_ID, "mint-agent",
+					Fields.MESSAGE, Strings.create("start the slow job")),   // no sessionId
+				RequestContext.of(ALICE));
+			chatJobId = chatJob.getID().toHexString();
+
+			// The venue minted a session — discover it and wait until parked.
+			await(() -> agent(engine, "mint-agent").getSessions().count() == 1, 5000, "session minted");
+			sidHex = agent(engine, "mint-agent").getSessions().entrySet().iterator().next().getKey().toHexString();
+			Blob sid = Blob.fromHex(sidHex);
+			await(() -> {
+				AVector<ACell> conv = rootConversation(engine, "mint-agent", sid);
+				ACell turn = (conv != null && conv.count() > 0) ? conv.get(conv.count() - 1) : null;
+				return turn != null && RT.getIn(turn, "toolCalls") != null;
+			}, 5000, "parked in the tool");
+
+			engine.flush();
+			engine.close();
+			ns.close();
+		}
+
+		// ===== Stage 2: recover; exactly one session, caller gets ITS answer =====
+		{
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			ns.launch();
+			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine.addDemoAssets(engine);
+
+			engine.jobs().recoverJobs();
+			AgentAdapter aa = (AgentAdapter) engine.getAdapter("agent");
+			aa.wakeInterruptedCycles();
+
+			// Wait for the resumed cycle to finish, then read the caller's job
+			// from its persisted record — the fast mock resume can complete and
+			// evict the live Job from cache before we look, so getJob() would
+			// race to null.
+			Blob sid = Blob.fromHex(sidHex);
+			Blob chatId = Blob.fromHex(chatJobId);
+			RequestContext aliceCtx = RequestContext.of(ALICE);
+			await(() -> agent(engine, "mint-agent").getSessionCycleEpoch(sid) == null
+					&& Status.COMPLETE.equals(
+						RT.getIn(engine.jobs().getJobData(chatId, aliceCtx), Fields.STATUS)),
+				30_000, "resumed cycle completed and the caller's job finished");
+
+			// The one session the chat minted is the only one — no spurious dup.
+			assertEquals(1, agent(engine, "mint-agent").getSessions().count(),
+				"recovery must not mint a second session");
+
+			// The caller's answer IS the resumed session's final assistant turn,
+			// not a fresh hallucinated reply from a duplicate session.
+			AVector<ACell> conv = rootConversation(engine, "mint-agent", sid);
+			String finalTurn = String.valueOf(RT.getIn(conv.get(conv.count() - 1), "content"));
+			String response = String.valueOf(
+				RT.getIn(engine.jobs().getJobData(chatId, aliceCtx), Fields.OUTPUT, Fields.RESPONSE));
+			assertEquals(finalTurn, response,
+				"the caller's answer must be the resumed session's response, not a duplicate's");
+			assertEquals(1, countTurnsContaining(conv, "venue restarted"),
+				"exactly one synthetic restart turn");
 
 			engine.close();
 			ns.close();
