@@ -114,6 +114,12 @@ public final class Covia {
 	/** Wrapper payload key for {@code w}/{@code o}/{@code h}: the namespace content. */
 	public static final AString K_DATA = Strings.intern("data");
 
+	/** User-record metadata slot — framework-owned (not a writable namespace).
+	 *  See {@code GRID_LATTICE_DESIGN.md} §"User meta record". */
+	public static final AString K_META = Strings.intern("meta");
+	/** User-record first-write time, minted once by the stamp. */
+	public static final AString K_CREATED = Strings.intern("created");
+
 	/** Unchecked cast helper: a typed navigation lattice used only for structure. */
 	@SuppressWarnings("unchecked")
 	private static ALattice<ACell> ac(ALattice<?> l) { return (ALattice<ACell>) l; }
@@ -147,6 +153,44 @@ public final class Covia {
 	}
 
 	/**
+	 * Maintains the user record's {@code meta} slot on every write: bumps
+	 * {@code meta.updated} and mints {@code meta.created} on first activity.
+	 * The {@code StampedCursor} deep-write re-stamp means ANY write anywhere
+	 * in a user's subtree (agents, sessions, frames, jobs, secrets,
+	 * workspace) refreshes {@code meta.updated} — the activity signal for
+	 * identity-lifecycle policy (TTL/reaping). Idempotent under CAS retry.
+	 * See {@code GRID_LATTICE_DESIGN.md} §"User meta record".
+	 *
+	 * <p><b>Clock source:</b> the context timestamp ({@code ts}) is ignored —
+	 * the engine's LatticeContext carries a boot-time constant (adequate for
+	 * the venue-level LWW stamp, where only cross-restart freshness matters),
+	 * but an activity signal needs a live clock. Reading the wall clock here
+	 * matches the established {@code AgentState.update} K_TS discipline;
+	 * retry re-stamps with a marginally later time, which is harmless for
+	 * activity data. (Convex's {@code LatticeContext.currentTimestamp()}
+	 * live-clock fallback is the eventual clean home once {@code
+	 * StampedCursor} consumes it — tracked as a convex follow-up.)</p>
+	 *
+	 * <p><b>Semantics:</b> only writes <em>into</em> the record pass the
+	 * boundary — the bare record-init write in {@code Users.ensure} does not,
+	 * so {@code created} marks the identity's first <em>activity</em>, not
+	 * its first touch. Deliberate: an ensured-but-never-used identity has no
+	 * activity to keep alive.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	private static ACell stampUserMeta(ACell v, CVMLong ts) {
+		if (!(v instanceof AMap<?,?>)) return v;
+		AMap<ACell, ACell> user = (AMap<ACell, ACell>) v;
+		AMap<ACell, ACell> meta = (user.get(K_META) instanceof AMap<?,?> m)
+			? (AMap<ACell, ACell>) m
+			: (AMap<ACell, ACell>) (AMap<?, ?>) convex.core.data.Maps.empty();
+		CVMLong now = CVMLong.create(convex.core.util.Utils.getCurrentTimestamp());
+		if (meta.get(K_CREATED) == null) meta = meta.assoc(K_CREATED, now);
+		meta = meta.assoc(K_UPDATED, now);
+		return user.assoc(K_META, meta);
+	}
+
+	/**
 	 * The {@code w}/{@code o}/{@code h} namespaces: stored as {@code {updated, data}},
 	 * with content under {@code data} (navigable JSON) and {@code updated}
 	 * auto-stamped on every write by the {@code StampedCursor} that
@@ -163,15 +207,22 @@ public final class Covia {
 	 * are plain navigable JSON; user-writable {@code w}/{@code o}/{@code h} are the
 	 * stamped {@code {updated, data}} wrappers. Merge is whole-value at {@code :value},
 	 * so these child lattices are used only for navigation and write-stamping.
+	 *
+	 * <p>The whole record sits behind its own stamping boundary: every deep
+	 * write refreshes the record's {@code meta} slot ({@code created} minted
+	 * once, {@code updated} bumped) — see {@link #stampUserMeta} and the
+	 * "User meta record" section of {@code GRID_LATTICE_DESIGN.md}.</p>
 	 */
-	private static final ALattice<ACell> USER_RECORD = ac(StringKeyedLattice.create(
-		"j", JSONLattice.INSTANCE,
-		"g", JSONLattice.INSTANCE,
-		"s", JSONLattice.INSTANCE,
-		"a", JSONLattice.INSTANCE,
-		"w", WRAPPED_NS,
-		"o", WRAPPED_NS,
-		"h", WRAPPED_NS));
+	private static final ALattice<ACell> USER_RECORD = StampingLattice.create(
+		ac(StringKeyedLattice.create(
+			"j", JSONLattice.INSTANCE,
+			"g", JSONLattice.INSTANCE,
+			"s", JSONLattice.INSTANCE,
+			"a", JSONLattice.INSTANCE,
+			"w", WRAPPED_NS,
+			"o", WRAPPED_NS,
+			"h", WRAPPED_NS)),
+		Covia::stampUserMeta);
 
 	/**
 	 * Venue interior — keyword-keyed regions; {@code :user-data} maps each DID to a

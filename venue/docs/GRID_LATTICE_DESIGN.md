@@ -975,6 +975,51 @@ lives under `data` (callers address `w/foo`, which translates to `w/data/foo`;
 they never see `data`), and `updated` is per-namespace last-modified metadata,
 auto-stamped by the same boundary.
 
+### User meta record
+
+Each per-DID user record carries a framework-owned `meta` slot alongside its
+namespace keys:
+
+```
+:user-data → <DID> → { meta: {created, updated},
+                       j, g, s, a, w, o, h }
+```
+
+- **`created`** — epoch millis of the identity's first *activity* (first write
+  into the record). Minted once, never changed.
+- **`updated`** — epoch millis of the most recent write anywhere in the user's
+  subtree. The whole record sits behind its own stamping boundary, so ANY deep
+  write — an agent cycle, a session frame, a persisted job, a secret, a
+  workspace entry — refreshes it automatically at the lattice layer, with no
+  application code involved. Unchanged writes and CRDT merges do not bump it.
+
+`updated` is the activity signal for identity-lifecycle policy: an ephemeral
+identity's idle time is `now - meta.updated`, read by a future TTL/reaper
+mechanism (which pairs with Etch GC for physical reclamation — logical removal
+of an expired user's subtree makes its cells unreachable and therefore
+collectable). Note the signal is *write*-activity: job-free reads do not bump
+it, which is the intended semantics — identities stay alive by doing things.
+
+`meta` is **framework-owned**: it is not a writable namespace (`covia:write`
+addresses `w`/`o`/`h` only), so users cannot forge their own activity. It is
+readable through the ordinary read path (`covia:read <did>/meta`, values API).
+
+The slot is deliberately open for future per-identity fields as venue identity
+management grows. Reserved (not yet implemented) candidates include:
+
+- `class` / `expiresAt` — identity lifecycle class (e.g. ephemeral demo
+  sessions) and explicit expiry, written at mint time by the flow that creates
+  scoped identities;
+- authentication material and policy (e.g. registered credentials, allowed
+  auth methods);
+- `credits` / quota state — per-identity resource budgets (LLM spend, storage),
+  pending the platform metering design;
+- verified links to real-world identity (organisational accounts, KYC-style
+  attestations, cross-venue identity anchors).
+
+New fields belong in `meta` rather than as further top-level record keys, so
+identity metadata stays in one documented place with one ownership rule.
+
 | Region | Merge | Rationale |
 |--------|-------|-----------|
 | `:grid → :venues` | OwnerLattice — per-AccountKey, signature-verified | One authoritative signing key per venue |
