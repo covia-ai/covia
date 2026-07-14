@@ -30,7 +30,7 @@ The goal-tree adapter registers as operation `goaltree:chat`, used in agent conf
 
 **A session IS a root frame.** The session record at `sessions/<sid>` carries a `frames` vector whose first element is the root frame. `frames[0].conversation` is the agent's complete execution and conversation record for that session.
 
-Everything goes here — nothing lives alongside. Live turns from chat/message intake, assistant responses, tool calls, tool results, compacted segments, and subgoal branches are all entries in the same conversation vector. Child frames pushed by `subgoal` live at `frames[1..N]`. The frame stack is lattice data; transitions read it, append to it, and write it back atomically.
+Everything goes here — nothing lives alongside. Live turns from chat/message intake, assistant responses, tool calls, tool results, compacted segments, and subgoal branches are all entries in the same conversation vector. Child frames pushed by `subgoal` live at `frames[1..N]`. The frame stack is lattice data, and it is **lattice-resident during the run**: every mutation is an epoch-fenced CAS on the session record, so the tree is durable and observable while the agent works — not just after the transition merges.
 
 ### Lifecycle
 
@@ -38,13 +38,23 @@ Everything goes here — nothing lives alongside. Live turns from chat/message i
 |-------|--------|
 | Session created | Root frame created, description = session origin (first message, task request, operation invocation) |
 | Chat / message intake | Envelope appended to `sessions/<sid>/pending` |
-| Transition picked | Envelopes drained from pending, appended to root frame conversation as `user` turns |
-| Transition runs | Assistant turns, tool calls, tool results, subgoal branches appended atomically to the active frame |
+| Transition picked | Cycle claims the session (`inCycle` epoch) and, in the same CAS, drains the presented envelopes and appends them to the root conversation as `user` turns — an envelope leaves pending only in the write that lands its turn |
+| Transition runs | Assistant turns persist before their tools execute; tool results, loads changes and compactions persist per iteration — all epoch-fenced writes to the live stack |
 | Agent calls `compact` | Run of live turns collapses into a segment with the agent's summary |
-| Agent calls `subgoal` | Child frame pushed onto `sessions/<sid>/frames`; child conversation builds up; pop on `complete` |
+| Agent calls `subgoal` | Child frame pushed live onto `sessions/<sid>/frames`, stamped with the spawning toolCall id; its conversation builds up on the lattice; pop (parent tool result + child truncation) is one atomic CAS |
 | Session closed | Frames persist on the lattice — no destructive cleanup |
 
 Chat sessions typically never `complete` the root frame — they run indefinitely, appending turns. One-shot invocations (a single grid operation call on a fresh session) do complete the root frame, and the session's role is the same as a single-turn task.
+
+### Persistence, interruption, and crash resume
+
+**Write model.** A sessioned cycle claims the session by writing an `inCycle` epoch; every frame write is fenced on that epoch, so a superseded cycle (cancelled by suspend/delete, session removed, or reclaimed after a crash) cannot corrupt the stack — its writes bounce. The merge at cycle end clears the claim. Terminal frames carry an explicit `status` (`complete` | `failed`), written in the same CAS as their terminal turn, so a clean ending is never mistaken for a crash. Unsessioned and direct-invoke runs keep a local stack and return it in the transition output; sessioned runs emit no copy — the session record is authoritative.
+
+**Durability bound.** Lattice writes reach the store's mmap via the ~100ms sweep and are fsynced every `FLUSH_INTERVAL_MS` (10s default). An unclean kill can therefore lose up to ~10s of the most recent turns — bounded, versus losing the whole in-flight tree before frames were lattice-resident. Cycle semantics are **at-least-once**: a cycle that crashed after its final response but before the merge may re-run, and the model sees its own prior turns.
+
+**Crash resume.** A stale `inCycle` with no live loop means the venue died mid-cycle. On the next wake (a re-fired STARTED request/chat job, or the boot scan that wakes any agent with a stale claim): dangling toolCalls get one synthetic tool-result turn ("venue restarted — effects may or may not have applied; verify before retrying") — nothing is re-executed blindly, the model decides; then the stack settles deepest-first — terminal children pop with their recorded outcome and are never re-run, live children resume their loop, and the root finally consumes any newly arrived input. Chat re-fires are idempotent (the envelope and its drained turn carry the chat job id).
+
+**Operator suspend is not a crash.** Suspend settles the claim, so the session reads as quiescent: nothing auto-resumes. Leftover child frames are popped un-run ("interrupted — re-issue if needed") on the next cycle.
 
 ### Per-question bracketing
 

@@ -301,6 +301,16 @@ There is no `agent:yield` op — yield is the natural state when no completion o
 
 **Framework-populated scope.** The transition runs under a request context scoped to `(agent, session?, task?)`. Any venue op invoked from inside the transition — directly or via the LLM tool loop — sees the correct scope without having to pass IDs explicitly.
 
+**Session-field ownership.** Each session field has exactly one writer class, and cross-field consistency is per-CAS:
+
+| Field | Writer | When |
+|-------|--------|------|
+| `pending` | intake (`appendSessionPending`) appends; the presenting cycle drains | drain happens in the same CAS that lands the drained envelopes' user turns — at cycle start for `FramesOwning` adapters (goaltree, via `beginSessionCycle`), at merge for framework-managed conversations (llmagent) |
+| `frames` | the owning cycle | live epoch-fenced writes for `FramesOwning` adapters; the merge's turn-append for framework-managed conversations. The framework merge never touches frames for `FramesOwning` transitions |
+| `inCycle` | the owning cycle sets it at claim; the merge clears it; the suspend settle clears it | a stale value = crashed cycle (see GOAL_TREE.md §Persistence) — it counts as work for the wake gate and triggers resume |
+| `loads` | the merge (session-tier working set) | unchanged |
+| `meta.turns` | whoever appends root turns (shared helper) | bumped in the same CAS as the append |
+
 **Completion ordering.** `agent:complete_task` / `agent:fail_task` do not finish the caller's pending Job inline. The completion envelope is parked and drained after the transition's timeline + state writes commit. Only then is the pending Job completed. This ordering is load-bearing: any caller awaiting its task observes the timeline and lattice writes for its task before its await returns. Without the deferral, the venue op would race the framework's timeline write and callers could see an empty `taskResults` immediately after unblocking.
 
 The framework around the transition:

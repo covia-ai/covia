@@ -587,15 +587,19 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// (agent:complete-task / agent:fail-task), which parks a completion
 		// envelope into the framework's deferredCompletions map. The run
 		// loop drains that map after mergeRunResult to build taskResults.
-		// Fields.FRAMES carries the final stack so mergeRunResult CAS-
-		// replaces session.frames — when no session is in scope this is a
-		// no-op on the framework side.
+		//
+		// Sessioned (lattice-resident) runs do NOT emit frames: the session
+		// record is the single authoritative copy — every mutation already
+		// landed live, and the FramesOwning marker keeps the framework's
+		// merge out of frames entirely. Only the local-store paths
+		// (unsessioned / direct-invoke) return the stack in the output,
+		// where the caller is the only consumer.
 		boolean failed = "failed".equals(result.status());
 		if (tasks != null && tasks.count() > 0 && ctx.getTaskId() != null) {
 			completeTaskViaVenueOp(ctx, failed, result.value());
 		}
 		AMap<AString, ACell> output = Maps.of(AgentState.KEY_STATE, newState);
-		if (result.frames() != null) {
+		if (store instanceof FrameStore.LocalFrameStore && result.frames() != null) {
 			output = output.assoc(Fields.FRAMES, result.frames());
 		}
 		if (failed) {

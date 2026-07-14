@@ -118,17 +118,18 @@ public class GoalTreeLatticeFramesTest {
 		}
 	}
 
-	// ========== I3: lattice frames == emitted frames ==========
+	// ========== I3: the lattice is the single authoritative copy ==========
 
 	/**
-	 * The load-bearing cutover invariant: after a sessioned cycle, the frames
-	 * on the lattice equal the frames the transition emitted — any mutation
-	 * site missed by the live-write cutover diverges here (the merge no
-	 * longer rewrites frames for FramesOwning adapters, so nothing papers
-	 * over a miss).
+	 * A sessioned cycle writes every frame mutation live and emits NO frames
+	 * on its output — the session record is the single copy (the FramesOwning
+	 * gate keeps the framework's merge out of frames, so a missed live-write
+	 * site would be immediately visible as missing lattice state, with
+	 * nothing papering over it). Direct-invoke (local-store) runs still
+	 * return the stack in the output for their callers.
 	 */
 	@Test
-	public void testLatticeFramesMatchEmittedFrames() {
+	public void testSessionedRunWritesLiveAndEmitsNoFrames() {
 		createAgent("inv-agent", "v/test/ops/llm", 0);
 		Blob sid = mintSession("inv-agent", "aa112233445566778899aabbccddee01");
 
@@ -144,12 +145,28 @@ public class GoalTreeLatticeFramesTest {
 
 		ACell output = adapter.processGoal(null, ctx, input);
 
-		AVector<ACell> emitted = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
-		assertNotNull(emitted, "transition must still emit frames in Stage B");
-		assertEquals(emitted, frames("inv-agent", sid),
-			"lattice frames must equal emitted frames — a mismatch means a "
-			+ "mutation site missed the live-write cutover");
-		assertTrue(conversation(emitted.get(0)).count() > 0, "cycle turns recorded");
+		assertNull(RT.getIn(output, Fields.FRAMES),
+			"a sessioned run must not emit a second copy of the frames");
+		AVector<ACell> lattice = frames("inv-agent", sid);
+		AVector<ACell> conv = conversation(lattice.get(0));
+		assertTrue(conv.count() >= 2,
+			"the cycle's turns (user input + assistant) must be live on the lattice: " + conv);
+		boolean sawInput = false;
+		for (long i = 0; i < conv.count(); i++) {
+			if (String.valueOf(RT.getIn(conv.get(i), "content")).contains("hello lattice")) sawInput = true;
+		}
+		assertTrue(sawInput, "the cycle-input turn must be on the lattice");
+
+		// Direct-invoke (no session scope) still returns frames in the output
+		ACell directOut = adapter.processGoal(null, RequestContext.of(ALICE_DID), Maps.of(
+			Fields.AGENT_ID, "inv-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("v/test/ops/llm"),
+				Strings.create("systemPrompt"), Strings.create("Echo agent.")),
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Strings.create("message"), Strings.create("direct")))));
+		assertNotNull(RT.getIn(directOut, Fields.FRAMES),
+			"direct-invoke runs keep returning frames to their caller");
 	}
 
 	// ========== Mid-run observability + I2 on the success path ==========

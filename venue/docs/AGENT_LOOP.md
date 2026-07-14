@@ -915,6 +915,10 @@ See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
 
 **Status:** Proposed — April 2026. §1–§7 describe the current code; §8 describes the target. Each phase below promotes its content into the body and removes the corresponding stub. When §8 is empty, the body alone is the spec.
 
+### 8.0 Progress note
+
+The goal-tree harness now reads and writes its session frames directly on the lattice during the run (epoch-fenced; see GOAL_TREE.md §Persistence) — the D-1 direction ("adapter reads everything from the lattice") is already real for the frames slot, and the merge's frames responsibilities have moved out of the framework for `FramesOwning` adapters.
+
 ### 8.1 Why this section exists
 
 The run loop and step contract were fitted to an early agent model where:
