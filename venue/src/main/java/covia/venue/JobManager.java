@@ -433,26 +433,6 @@ public class JobManager {
 	}
 
 	/**
-	 * Returns true if the stored input contains any redacted secret values.
-	 */
-	@SuppressWarnings("unchecked")
-	private static boolean hasRedactedSecrets(ACell input, AMap<AString, ACell> meta) {
-		if (!(input instanceof AMap)) return false;
-		ACell sf = RT.getIn(meta, Fields.OPERATION, K_SECRET_FIELDS);
-		if (!(sf instanceof AVector)) return false;
-
-		AMap<AString, ACell> map = (AMap<AString, ACell>) input;
-		AVector<ACell> secretFields = (AVector<ACell>) sf;
-		for (long i = 0; i < secretFields.count(); i++) {
-			AString field = RT.ensureString(secretFields.get(i));
-			if (field != null && Fields.HIDDEN.equals(map.get(field))) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	/**
 	 * Returns a copy of job data with secret fields in the output redacted.
 	 * Uses the same {@code secretFields} list as input redaction.
 	 */
@@ -813,17 +793,35 @@ public class JobManager {
 	// ========== Job Recovery ==========
 
 	/**
-	 * Recovers jobs from the lattice after a restart.
-	 * Walks all users' job indices. PENDING/STARTED jobs are re-fired;
-	 * PAUSED/INPUT_REQUIRED/AUTH_REQUIRED are restored as live objects.
-	 * Terminal jobs are skipped.
+	 * Stabilises jobs from the lattice after a restart. <b>Nothing is ever
+	 * re-executed</b> (#214): recovery leaves every job in a stable, honest
+	 * state so callers can resume, cancel, or retry as they wish.
+	 *
+	 * <ul>
+	 *   <li>PENDING — failed: execution never began; the caller retries.</li>
+	 *   <li>STARTED {@code agent:request} whose task is still in the agent's
+	 *       tasks index — restored as a live Job, still STARTED: the durable
+	 *       task drives completion when the agent's work resumes (long-running
+	 *       jobs survive restarts; callers keep polling by ID).</li>
+	 *   <li>STARTED anything else — failed with a message saying effects may
+	 *       or may not have applied. Re-execution would double side effects
+	 *       (e.g. {@code convex:transact}, {@code http:post}); the caller
+	 *       verifies and retries. A crashed {@code agent:chat} fails too —
+	 *       the session is intact and its id is on the record, so the caller
+	 *       just re-sends.</li>
+	 *   <li>PAUSED / INPUT_REQUIRED / AUTH_REQUIRED — restored (unchanged).</li>
+	 * </ul>
+	 *
+	 * <p>Agent-side work (pending envelopes, queued tasks, interrupted
+	 * {@code inCycle} cycles) is all durable and resumed separately by the
+	 * boot scan ({@code AgentAdapter.wakeAgentsWithWork}).</p>
 	 */
 	@SuppressWarnings("unchecked")
 	public void recoverJobs() {
 		AMap<AString, ACell> userData = engine.getVenueState().users().getAll();
 		if (userData == null || userData.isEmpty()) return;
 
-		int refired = 0, kept = 0, failed = 0;
+		int stabilised = 0, kept = 0;
 		for (var entry : userData.entrySet()) {
 			AString did = (AString) entry.getKey();
 			User user = engine.getVenueState().users().get(did);
@@ -846,11 +844,7 @@ public class JobManager {
 
 				AString status = RT.ensureString(record.get(Fields.STATUS));
 				if (Status.PENDING.equals(status) || Status.STARTED.equals(status)) {
-					if (refireJob(jobID, record, did)) {
-						refired++;
-					} else {
-						failed++;
-					}
+					if (stabiliseJob(jobID, record, status, did)) kept++; else stabilised++;
 				} else {
 					restoreJob(jobID, record, did);
 					kept++;
@@ -858,69 +852,60 @@ public class JobManager {
 			}
 		}
 
-		if (refired > 0 || kept > 0 || failed > 0) {
-			log.info("Job recovery: {} re-fired, {} kept (paused/waiting), {} failed", refired, kept, failed);
+		if (stabilised > 0 || kept > 0) {
+			log.info("Job recovery: {} failed as interrupted, {} restored live", stabilised, kept);
 		}
 	}
 
 	/**
-	 * Re-fires a PENDING/STARTED job from a persisted lattice record.
+	 * Stabilises one PENDING/STARTED job found at boot. Returns true when the
+	 * job was restored live (STARTED {@code agent:request} with its durable
+	 * task still queued), false when it was failed with an honest
+	 * interruption message. See {@link #recoverJobs()} for the contract.
 	 */
-	private boolean refireJob(Blob jobID, AMap<AString, ACell> record, AString callerDID) {
+	private boolean stabiliseJob(Blob jobID, AMap<AString, ACell> record, AString status, AString callerDID) {
+		if (Status.PENDING.equals(status)) {
+			markJobFailed(jobID, record,
+				"Venue restarted before execution began — retry if desired", callerDID);
+			return false;
+		}
+
+		// Classify by the op's adapter dispatch string (e.g. "agent:request").
 		AString opRef = RT.ensureString(record.get(Fields.OP));
-		if (opRef == null) {
-			markJobFailed(jobID, record, "Cannot re-fire: no operation reference", callerDID);
+		Asset asset = (opRef != null) ? engine.resolveAsset(opRef) : null;
+		String adapterOp = (asset != null) ? AAdapter.getAdapterOperation(asset.meta()) : null;
+
+		if ("agent:request".equals(adapterOp)) {
+			// The task index is the durable work marker (taskId == jobID). If
+			// the task is still queued, the job legitimately outlives the
+			// restart: restore it and let the resumed agent complete it.
+			AString agentId = RT.ensureString(RT.getIn(record, Fields.INPUT, Fields.AGENT_ID));
+			User user = engine.getVenueState().users().get(callerDID);
+			AgentState agent = (user != null && agentId != null) ? user.agent(agentId.toString()) : null;
+			Index<Blob, ACell> tasks = (agent != null) ? agent.getTasks() : null;
+			if (tasks != null && tasks.get(jobID) != null) {
+				restoreJob(jobID, record, callerDID);
+				log.info("Restored in-flight task job {} (task still queued)", jobID);
+				return true;
+			}
+			markJobFailed(jobID, record,
+				"Venue restarted as the task concluded — check the agent timeline/session for the result",
+				callerDID);
 			return false;
 		}
 
-		// Resolve operation
-		Asset asset = engine.resolveAsset(opRef);
-		Operation op = (asset != null) ? Operation.from(asset) : null;
-
-		// Resolve adapter
-		AAdapter adapter = resolveAdapterForOp(op, opRef);
-		if (adapter == null) {
-			markJobFailed(jobID, record, "Cannot re-fire: adapter not available for " + opRef, callerDID);
+		if ("agent:chat".equals(adapterOp)) {
+			AString sid = RT.ensureString(record.get(Fields.SESSION_ID));
+			markJobFailed(jobID, record,
+				"Venue restarted mid-conversation — the session is intact; re-send your message"
+				+ ((sid != null) ? " (sessionId " + sid + ")" : ""), callerDID);
 			return false;
 		}
 
-		// Resolve metadata before creating Job (needed for output redaction in processUpdate)
-		AMap<AString, ACell> meta = (op != null) ? op.meta() : null;
-
-		// Create a live Job wrapping the persisted record
-		VenueJob job = new VenueJob(record, meta, callerDID, this);
-
-		activeJobs.put(jobID, job);
-		RequestContext ctx = RequestContext.of(callerDID);
-		if (meta == null) {
-			markJobFailed(jobID, record, "Cannot re-fire: no operation metadata for " + opRef, callerDID);
-			return false;
-		}
-
-		// Fail fast if stored input contains redacted secrets
-		if (hasRedactedSecrets(record.get(Fields.INPUT), meta)) {
-			markJobFailed(jobID, record, "Cannot re-fire: job contains redacted secrets", callerDID);
-			return false;
-		}
-
-		// Replay the EFFECTIVE input: the caller's original input plus any
-		// sessionId the first invocation minted (stamped at the record top
-		// level by agent:chat / agent:request). Without it, a re-fired
-		// session-minting job mints a FRESH session instead of continuing the
-		// one it created — producing a spurious duplicate session and a stale
-		// answer to the caller, distinct from the boot-scan resume of the
-		// original session.
-		ACell input = record.get(Fields.INPUT);
-		ACell sid = record.get(Fields.SESSION_ID);
-		if (sid != null && input instanceof AMap<?, ?> && RT.getIn(input, Fields.SESSION_ID) == null) {
-			@SuppressWarnings("unchecked")
-			AMap<AString, ACell> im = (AMap<AString, ACell>) input;
-			input = im.assoc(Fields.SESSION_ID, sid);
-		}
-
-		adapter.invoke(job, ctx, meta, input);
-		log.info("Re-fired job: {}", jobID);
-		return true;
+		markJobFailed(jobID, record,
+			"Venue restarted during execution — effects may or may not have applied;"
+			+ " verify state before retrying", callerDID);
+		return false;
 	}
 
 	/**
@@ -997,20 +982,6 @@ public class JobManager {
 		if (meta != null) {
 			String adapterName = AAdapter.getAdapterName(meta);
 			if (adapterName != null) return engine.getAdapter(adapterName);
-		}
-		return null;
-	}
-
-	/**
-	 * Resolves the adapter for an operation from its metadata.
-	 */
-	private AAdapter resolveAdapterForOp(Operation op, AString opRef) {
-		if (op != null) {
-			String adapterName = AAdapter.getAdapterName(op.meta());
-			if (adapterName != null) {
-				AAdapter adapter = engine.getAdapter(adapterName);
-				if (adapter != null) return adapter;
-			}
 		}
 		return null;
 	}

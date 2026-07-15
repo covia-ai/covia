@@ -498,6 +498,29 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 					if (!store.update(f -> GoalTreeContext.repairDanglingToolCalls(f, note))) {
 						return abortedOutput(store);
 					}
+					// Verify at the point of use (#214): the repair CAS can
+					// transiently observe stale session state under load and
+					// "succeed" as a no-op — running a frame loop on an
+					// unrepaired conversation blindly re-dispatches pre-crash
+					// tool calls. Check a fresh read (repair returns its input
+					// unchanged when nothing is dangling); retry once, then
+					// fail the resume loudly rather than proceed.
+					AVector<ACell> check = store.frames();
+					if (GoalTreeContext.repairDanglingToolCalls(check, note) != check) {
+						log.warn("Resume repair no-oped on stale frames (agent {}, session {}) — retrying (#214)",
+							agentId, sid);
+						if (!store.update(f -> GoalTreeContext.repairDanglingToolCalls(f, note))) {
+							return abortedOutput(store);
+						}
+						check = store.frames();
+						if (GoalTreeContext.repairDanglingToolCalls(check, note) != check) {
+							return Maps.of(
+								AgentState.KEY_STATE, Maps.empty(),
+								Fields.ERROR, Strings.create(
+									"Crash resume could not repair dangling tool calls for session "
+									+ sid + " — aborting rather than re-executing them (#214)"));
+						}
+					}
 				}
 
 				AVector<ACell> cycleTurns = buildCycleInputTurns(messages, input, cycleTs);
@@ -512,6 +535,16 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				}
 			} else {
 				AVector<ACell> sessionFrames = covia.adapter.AgentAdapter.sessionFrames(input);
+				// A cycle that CARRIES session state but falls through to the
+				// local store is an anomaly: its writes are not durable and any
+				// stale inCycle claim is never repaired. Name the failed
+				// condition — this fallthrough is a bug class, not a mode.
+				if (sessionFrames != null && sessionFrames.count() > 0) {
+					log.warn("Sessioned cycle fell through to LOCAL frames (agent {}): sid={} agentState={} session={}",
+						agentId, sid,
+						(agentState != null),
+						(sid != null && agentState != null) ? (agentState.getSession(sid) != null) : "n/a");
+				}
 				AVector<ACell> frames = (sessionFrames != null && sessionFrames.count() > 0)
 					? sessionFrames
 					: Vectors.of((ACell) GoalTreeContext.createFrame(rootDescription));

@@ -148,9 +148,9 @@ public class GoalTreeCrashResumeTest {
 			assertNotNull(agent(engine, "boot-agent").getSessionCycleEpoch(sid),
 				"stale inCycle claim must survive the restart");
 
-			engine.jobs().recoverJobs();   // nothing to re-fire (message completed at delivery)
+			engine.jobs().recoverJobs();   // nothing in flight (message completed at delivery)
 			AgentAdapter aa = (AgentAdapter) engine.getAdapter("agent");
-			assertEquals(1, aa.wakeInterruptedCycles(),
+			assertEquals(1, aa.wakeAgentsWithWork(),
 				"the boot scan must find and wake the interrupted agent");
 
 			AgentState ag = agent(engine, "boot-agent");
@@ -172,10 +172,12 @@ public class GoalTreeCrashResumeTest {
 	}
 
 	/**
-	 * Crash inside a running subgoal child, recovered via recoverJobs (the
-	 * chat job re-fires — deduped, no duplicate envelope): the repaired child
-	 * resumes, completes, pops atomically into the parent, and the root
-	 * answers the original chat.
+	 * Crash inside a running subgoal child. Recovery never re-executes intake
+	 * (#214): at boot the caller's chat job FAILS honestly (session intact,
+	 * sessionId on the record so the caller can re-engage), and the boot scan
+	 * resumes the agent's interrupted cycle from durable state — the repaired
+	 * child completes, pops atomically into the parent, and the root's answer
+	 * lands in the conversation.
 	 */
 	@Test
 	public void testCrashResumeInsideSubgoalChild() throws Exception {
@@ -226,18 +228,44 @@ public class GoalTreeCrashResumeTest {
 			assertEquals(2, preResume.count(), "child frame survived the crash");
 			assertEquals(Strings.create("call_subgoal"), RT.getIn(preResume.get(1), "callId"));
 
-			engine.jobs().recoverJobs();   // re-fires the STARTED chat job (deduped)
+			engine.jobs().recoverJobs();   // stabilises: fails the in-flight chat job
 
-			Job recovered = engine.jobs().getJob(Blob.fromHex(chatJobId));
-			assertNotNull(recovered, "the chat job must be recovered as live");
-			// Generous budget: two engine spin-ups + refired chat + multi-round
-			// resume is heavyweight and shares the box with the parallel suite.
-			ACell result = recovered.awaitResult(60_000);
-			assertTrue(String.valueOf(RT.getIn(result, Fields.RESPONSE)).contains("root done"),
-				"the refired chat gets the root's answer: " + result);
+			// The caller's chat job fails honestly — never re-executed — with the
+			// sessionId on the record so the caller knows which session to re-engage.
+			RequestContext aliceCtx = RequestContext.of(ALICE);
+			Blob chatId = Blob.fromHex(chatJobId);
+			AMap<AString, ACell> chatData = engine.jobs().getJobData(chatId, aliceCtx);
+			assertEquals(Status.FAILED, RT.getIn(chatData, Fields.STATUS),
+				"in-flight chat fails at boot: " + chatData);
+			String err = String.valueOf(RT.getIn(chatData, Fields.ERROR));
+			assertTrue(err.contains("re-send"), "error tells the caller to re-send: " + err);
+			assertTrue(err.contains(sid.toHexString()), "error names the session: " + err);
+
+			// The agent's own interrupted work resumes from durable state alone.
+			AgentAdapter aa = (AgentAdapter) engine.getAdapter("agent");
+			assertEquals(1, aa.wakeAgentsWithWork(), "boot scan wakes the interrupted agent");
 
 			AgentState ag = agent(engine, "sub-agent");
-			await(() -> ag.getSessionCycleEpoch(sid) == null, 10_000, "claim released");
+			try {
+				await(() -> ag.getSessionCycleEpoch(sid) == null
+						&& countTurnsContaining(rootConversation(engine, "sub-agent", sid), "root done") > 0,
+					30_000, "resumed cycle completes the tree and releases the claim");
+			} catch (AssertionError e) {
+				// Self-diagnosing: dump the durable state AND all thread stacks
+				// (incl. virtual threads) so a stall names its cause.
+				String dumpPath = System.getProperty("java.io.tmpdir")
+					+ "/goaltree-stall-" + System.currentTimeMillis() + ".txt";
+				try {
+					long pid = ProcessHandle.current().pid();
+					new ProcessBuilder("jcmd", Long.toString(pid),
+						"Thread.dump_to_file", "-format=plain", dumpPath)
+						.inheritIO().start().waitFor();
+				} catch (Exception ignored) {}
+				fail("resume stalled — epoch=" + ag.getSessionCycleEpoch(sid)
+					+ " status=" + ag.getStatus()
+					+ " threadDump=" + dumpPath
+					+ " frames=" + frames(engine, "sub-agent", sid), e);
+			}
 
 			AVector<ACell> fs = frames(engine, "sub-agent", sid);
 			assertEquals(1, fs.count(), "child popped — end state is root-only");
@@ -254,12 +282,11 @@ public class GoalTreeCrashResumeTest {
 
 	/**
 	 * A chat sent WITHOUT a sessionId (the first-contact case: the venue mints
-	 * one) must, on crash recovery, continue the session it minted — not spawn
-	 * a fresh one. The minted sessionId is stamped on the job so the re-fire
-	 * routes back; otherwise recovery produces a spurious duplicate session and
-	 * answers the caller from it (a stale/hallucinated reply) while the boot
-	 * scan separately resumes the real one. (Regression for the bug the earlier
-	 * tests missed by always pre-supplying an explicit sessionId.)
+	 * one), crashed mid-cycle. Recovery must leave exactly one session — the
+	 * minted one — and fail the caller's job with that sessionId on the record
+	 * (the stamp is how a caller re-engages the conversation their failed chat
+	 * started). The boot scan alone resumes the interrupted cycle; nothing
+	 * re-executes intake, so no duplicate session can ever be minted (#214).
 	 */
 	@Test
 	public void testCrashResumeMintedSessionNotDuplicated() throws Exception {
@@ -309,35 +336,172 @@ public class GoalTreeCrashResumeTest {
 			Engine.addDemoAssets(engine);
 
 			engine.jobs().recoverJobs();
-			AgentAdapter aa = (AgentAdapter) engine.getAdapter("agent");
-			aa.wakeInterruptedCycles();
 
-			// Wait for the resumed cycle to finish, then read the caller's job
-			// from its persisted record — the fast mock resume can complete and
-			// evict the live Job from cache before we look, so getJob() would
-			// race to null.
+			// The caller's job fails honestly, carrying the MINTED sessionId —
+			// the caller's route back into the conversation their chat started.
 			Blob sid = Blob.fromHex(sidHex);
 			Blob chatId = Blob.fromHex(chatJobId);
 			RequestContext aliceCtx = RequestContext.of(ALICE);
-			await(() -> agent(engine, "mint-agent").getSessionCycleEpoch(sid) == null
-					&& Status.COMPLETE.equals(
-						RT.getIn(engine.jobs().getJobData(chatId, aliceCtx), Fields.STATUS)),
-				30_000, "resumed cycle completed and the caller's job finished");
+			AMap<AString, ACell> chatData = engine.jobs().getJobData(chatId, aliceCtx);
+			assertEquals(Status.FAILED, RT.getIn(chatData, Fields.STATUS),
+				"in-flight chat fails at boot: " + chatData);
+			assertTrue(String.valueOf(RT.getIn(chatData, Fields.ERROR)).contains(sidHex),
+				"the failed job names the minted session: " + chatData);
+
+			// Boot scan resumes the interrupted cycle from durable state.
+			AgentAdapter aa = (AgentAdapter) engine.getAdapter("agent");
+			assertEquals(1, aa.wakeAgentsWithWork(), "boot scan wakes the interrupted agent");
+			await(() -> agent(engine, "mint-agent").getSessionCycleEpoch(sid) == null,
+				30_000, "resumed cycle completed");
 
 			// The one session the chat minted is the only one — no spurious dup.
 			assertEquals(1, agent(engine, "mint-agent").getSessions().count(),
 				"recovery must not mint a second session");
 
-			// The caller's answer IS the resumed session's final assistant turn,
-			// not a fresh hallucinated reply from a duplicate session.
+			// The resumed cycle finished the conversation in that session.
 			AVector<ACell> conv = rootConversation(engine, "mint-agent", sid);
-			String finalTurn = String.valueOf(RT.getIn(conv.get(conv.count() - 1), "content"));
-			String response = String.valueOf(
-				RT.getIn(engine.jobs().getJobData(chatId, aliceCtx), Fields.OUTPUT, Fields.RESPONSE));
-			assertEquals(finalTurn, response,
-				"the caller's answer must be the resumed session's response, not a duplicate's");
 			assertEquals(1, countTurnsContaining(conv, "venue restarted"),
 				"exactly one synthetic restart turn");
+
+			engine.close();
+			ns.close();
+		}
+	}
+
+	/**
+	 * An in-flight {@code agent:request} whose task is still queued at the
+	 * crash is RESTORED at boot, not failed and not re-executed (#214): the
+	 * task index is the durable work marker (taskId == jobID), so the job
+	 * legitimately outlives the restart — callers keep polling by ID — and the
+	 * boot scan wakes the agent to run it.
+	 */
+	@Test
+	public void testCrashRequestJobRestoredWhileTaskQueued() throws Exception {
+		EtchStore store = EtchStore.createTemp();
+		AKeyPair kp = AKeyPair.generate();
+		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
+		AMap<AString, ACell> config = Maps.of(Config.DID, did);
+		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee03");
+		String requestJobId;
+
+		// ===== Stage 1: request parked mid-cycle (task not yet merged out) =====
+		{
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			ns.launch();
+			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine.addDemoAssets(engine);
+
+			createGoalAgent(engine, "task-agent", "v/test/ops/nevertoolllm");
+			agent(engine, "task-agent").ensureSession(sid, ALICE);
+
+			Job requestJob = engine.jobs().invokeOperation(
+				"v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, "task-agent",
+					Fields.SESSION_ID, Strings.create(sid.toHexString()),
+					Fields.INPUT, Strings.create("please use the slow tool")),
+				RequestContext.of(ALICE));
+			requestJobId = requestJob.getID().toHexString();
+
+			await(() -> {
+				AVector<ACell> conv = rootConversation(engine, "task-agent", sid);
+				return conv != null && countTurnsContaining(conv, "toolCalls") > 0;
+			}, 10_000, "cycle parked in the never-tool");
+			assertNotNull(agent(engine, "task-agent").getTasks().get(requestJob.getID()),
+				"task still queued while the cycle runs");
+
+			engine.flush();
+			engine.close();
+			ns.close();
+		}
+
+		// ===== Stage 2: restored live, still STARTED, task queued, agent woken =====
+		{
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			ns.launch();
+			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine.addDemoAssets(engine);
+
+			engine.jobs().recoverJobs();
+
+			Blob reqId = Blob.fromHex(requestJobId);
+			Job restored = engine.jobs().getJob(reqId);
+			assertNotNull(restored, "in-flight task job is restored live, never failed");
+			assertEquals(Status.STARTED, restored.getStatus(),
+				"restored task job stays STARTED — caller keeps awaiting by ID");
+			assertNotNull(agent(engine, "task-agent").getTasks().get(reqId),
+				"the durable task marker survived");
+
+			AgentAdapter aa = (AgentAdapter) engine.getAdapter("agent");
+			assertEquals(1, aa.wakeAgentsWithWork(),
+				"boot scan wakes the agent to run its queued task");
+
+			engine.close();
+			ns.close();
+		}
+	}
+
+	/**
+	 * The converse: an in-flight {@code agent:request} whose task is GONE at
+	 * boot (venue crashed in the window between the merge removing the task
+	 * and the job completion write) fails honestly, pointing the caller at the
+	 * agent's timeline — there is no durable work left to drive completion,
+	 * and recovery never re-executes.
+	 */
+	@Test
+	public void testCrashRequestJobTaskGoneFailsAtBoot() throws Exception {
+		EtchStore store = EtchStore.createTemp();
+		AKeyPair kp = AKeyPair.generate();
+		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
+		AMap<AString, ACell> config = Maps.of(Config.DID, did);
+		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee04");
+		String requestJobId;
+
+		// ===== Stage 1: as above — parked mid-cycle, then crash =====
+		{
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			ns.launch();
+			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine.addDemoAssets(engine);
+
+			createGoalAgent(engine, "gone-agent", "v/test/ops/nevertoolllm");
+			agent(engine, "gone-agent").ensureSession(sid, ALICE);
+
+			Job requestJob = engine.jobs().invokeOperation(
+				"v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, "gone-agent",
+					Fields.SESSION_ID, Strings.create(sid.toHexString()),
+					Fields.INPUT, Strings.create("please use the slow tool")),
+				RequestContext.of(ALICE));
+			requestJobId = requestJob.getID().toHexString();
+
+			await(() -> {
+				AVector<ACell> conv = rootConversation(engine, "gone-agent", sid);
+				return conv != null && countTurnsContaining(conv, "toolCalls") > 0;
+			}, 10_000, "cycle parked in the never-tool");
+
+			engine.flush();
+			engine.close();
+			ns.close();
+		}
+
+		// ===== Stage 2: simulate the merge→completion crash window, recover =====
+		{
+			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+			ns.launch();
+			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine.addDemoAssets(engine);
+
+			// The merge removed the task but the job completion never landed.
+			Blob reqId = Blob.fromHex(requestJobId);
+			agent(engine, "gone-agent").removeTask(reqId);
+
+			engine.jobs().recoverJobs();
+
+			AMap<AString, ACell> data = engine.jobs().getJobData(reqId, RequestContext.of(ALICE));
+			assertEquals(Status.FAILED, RT.getIn(data, Fields.STATUS),
+				"task-gone request job fails at boot: " + data);
+			assertTrue(String.valueOf(RT.getIn(data, Fields.ERROR)).contains("task concluded"),
+				"error points the caller at the agent's result: " + data);
 
 			engine.close();
 			ns.close();

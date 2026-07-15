@@ -178,12 +178,15 @@ public class VenueRestartTest {
 			assertEquals(Status.FAILED, RT.ensureString(errorData.get(Fields.STATUS)),
 					"Error job should still be FAILED");
 
-			// 4g: STARTED job was re-fired by recovery (should be in-memory jobs now)
-			Job recoveredNeverJob = engine2.jobs().getJob(Blob.parse(neverJobId));
-			assertNotNull(recoveredNeverJob, "Never job should be recovered after restart");
-			AString neverStatus = recoveredNeverJob.getStatus();
-			assertTrue(Status.STARTED.equals(neverStatus) || Status.PENDING.equals(neverStatus),
-					"Recovered never job should be STARTED or PENDING, got: " + neverStatus);
+			// 4g: STARTED plain-op job FAILS at boot with an honest interruption
+			// message — recovery never re-executes (#214): re-running would double
+			// side effects for non-idempotent ops. The caller verifies and retries.
+			AMap<AString, ACell> neverData = engine2.jobs().getJobData(Blob.parse(neverJobId), engine2.venueContext());
+			assertNotNull(neverData, "Never job record should survive restart");
+			assertEquals(Status.FAILED, RT.ensureString(neverData.get(Fields.STATUS)),
+					"Interrupted plain-op job should be FAILED after restart");
+			assertTrue(String.valueOf(neverData.get(Fields.ERROR)).contains("may or may not have applied"),
+					"Failure message should say effects are unknown: " + neverData.get(Fields.ERROR));
 
 			// 4h: PAUSED job remains PAUSED after restart (not re-fired)
 			AMap<AString, ACell> pauseData = engine2.jobs().getJobData(Blob.parse(pauseJobId), engine2.venueContext());

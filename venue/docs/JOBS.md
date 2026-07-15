@@ -43,6 +43,26 @@ open design question (covia#209); until then, treat `FAILED` + the error string
 as the authoritative signal, and do not rely on `REJECTED` for capability or
 invalid-input outcomes.
 
+### Recovery on restart (#214)
+
+Recovery **stabilises, never re-executes** — a venue restart leaves every job
+in a stable, honest state so callers can resume, cancel, or retry as they wish.
+Re-execution would double side effects for non-idempotent ops
+(`convex:transact`, `http:post`, …), so nothing is ever re-fired.
+
+| State at crash | At boot | Caller's move |
+|----------------|---------|---------------|
+| `PENDING` | `FAILED` — "restarted before execution began" | retry |
+| `STARTED` (most ops) | `FAILED` — "effects may or may not have applied; verify before retrying" | verify, then retry |
+| `STARTED` `agent:chat` | `FAILED` — session intact; the record's `sessionId` names the conversation | re-send into the same session |
+| `STARTED` `agent:request`, task still queued | restored, stays `STARTED` — the durable task drives completion | keep polling by ID |
+| `STARTED` `agent:request`, task gone | `FAILED` — "task concluded; check the agent timeline" | inspect / retry |
+| `PAUSED` / `INPUT_REQUIRED` / `AUTH_REQUIRED` | restored live | continue as before |
+
+Agent-side work (pending session envelopes, queued tasks, interrupted
+`inCycle` cycles) is all durable and resumes independently via the boot scan
+(`AgentAdapter.wakeAgentsWithWork`).
+
 **Explicitly NOT on the base class:**
 
 - Lattice cursors

@@ -798,7 +798,7 @@ Foundation for all lattice-backed state management.
 - `Covia.ROOT` lattice definition with KeyedLattice composition
 - Per-venue OwnerLattice (one signing slot per venue)
 - Job write-through to lattice on every status update
-- Job recovery on restart (re-fire PENDING/STARTED, restore PAUSED/INPUT_REQUIRED)
+- Job recovery on restart (stabilise, never re-execute: fail interrupted jobs honestly, restore PAUSED/INPUT_REQUIRED and task-backed request jobs)
 - Etch store persistence via `store.setRootData()` / `store.getRootData()`
 
 ### Phase 1: CAD3 Value IDs (DONE)
@@ -1066,7 +1066,7 @@ The venue's Ed25519 keypair signs the venue state at the point of **persistence*
 
 ### A.5 Persistence
 
-**Startup:** Load signed state from Etch store via `store.getRootData()`, verify signature (own keypair), initialise cursors, resume operations. Job recovery walks the `:jobs` index — re-fires PENDING/STARTED jobs via adapter, restores PAUSED/INPUT_REQUIRED/AUTH_REQUIRED as live in-memory Job objects.
+**Startup:** Load signed state from Etch store via `store.getRootData()`, verify signature (own keypair), initialise cursors, resume operations. Job recovery walks the `:jobs` index and **stabilises — nothing is ever re-executed** (re-execution would double side effects for non-idempotent ops): PENDING and interrupted STARTED jobs fail with an honest restart message so callers can verify/retry; STARTED `agent:request` jobs whose durable task is still queued are restored live (long-running jobs survive restarts); PAUSED/INPUT_REQUIRED/AUTH_REQUIRED are restored as live in-memory Job objects. Agent work resumes separately via the boot scan (`wakeAgentsWithWork`), driven purely by durable state (pending envelopes, queued tasks, stale `inCycle` claims).
 
 **Periodic sync:** Sign current venue state, write to Etch via `store.setRootData()`. Frequency is configurable:
 - **On every API request** — Maximum durability, higher IO cost (current default via `app.after("/api/*")`)

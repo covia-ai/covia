@@ -846,28 +846,24 @@ public class AgentAdapter extends AAdapter {
 		final Job jobRef = job;
 		job.setCancelHook(() -> chatsRef.remove(sidRef, jobRef));
 
-		// The envelope carries the chat Job id so a boot-recovery re-fire of
-		// this STARTED job is idempotent: if the envelope is still pending or
-		// its turn already landed in the conversation (the crashed cycle
-		// drained it), the re-fire re-reserves the slot but does not append a
-		// duplicate — the resumed cycle's response completes this Job.
+		// The envelope carries the chat Job id for provenance — turns minted
+		// from it keep the id, tying conversation content back to the job.
 		AString jobIdHex = Strings.create(job.getID().toHexString());
-		if (!chatEnvelopeAlreadyDelivered(agent, sid, jobIdHex)) {
-			ACell envelope = Maps.of(
-				Fields.CALLER,     ctx.getCallerDID(),
-				Fields.SESSION_ID, sidHex,
-				Fields.MESSAGE,    messageContent,
-				Fields.JOB_ID,     jobIdHex);
-			agent.appendSessionPending(sid, envelope);
-		}
+		ACell envelope = Maps.of(
+			Fields.CALLER,     ctx.getCallerDID(),
+			Fields.SESSION_ID, sidHex,
+			Fields.MESSAGE,    messageContent,
+			Fields.JOB_ID,     jobIdHex);
+		agent.appendSessionPending(sid, envelope);
 
 		// Stay in STARTED — the run loop will completeWith the agent's
 		// response (or fail) once the next cycle for this session runs.
 		job.setStatus(Status.STARTED);
 
-		// Record the (possibly just-minted) sessionId on the job so a
-		// boot-recovery re-fire continues THIS session rather than minting a
-		// fresh one (JobManager.refireJob reads it). Mirrors handleRequest.
+		// Record the (possibly just-minted) sessionId on the job so a caller
+		// finding this job failed after a venue restart knows which session to
+		// re-engage (recovery never re-executes intake, #214). Mirrors
+		// handleRequest.
 		job.updateData(job.getData().assoc(Fields.SESSION_ID, sidHex));
 
 		// Force the wake — we just reserved a slot and added a message,
@@ -2519,39 +2515,17 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * True if the chat envelope with this job id already reached the session —
-	 * still pending, or already drained into the root conversation as a turn.
-	 * Makes the boot-recovery re-fire of a STARTED chat job idempotent.
-	 */
-	@SuppressWarnings("unchecked")
-	private static boolean chatEnvelopeAlreadyDelivered(AgentState agent, Blob sid, AString jobIdHex) {
-		AVector<ACell> pending = agent.getSessionPending(sid);
-		for (long i = 0; i < pending.count(); i++) {
-			if (jobIdHex.equals(RT.getIn(pending.get(i), Fields.JOB_ID))) return true;
-		}
-		AMap<AString, ACell> session = agent.getSession(sid);
-		if (session == null) return false;
-		ACell fv = session.get(AgentState.KEY_FRAMES);
-		if (!(fv instanceof AVector<?> frames) || frames.count() == 0) return false;
-		ACell conv = RT.getIn(frames.get(0), "conversation");
-		if (!(conv instanceof AVector<?> turns)) return false;
-		for (long i = 0; i < turns.count(); i++) {
-			if (jobIdHex.equals(RT.getIn(turns.get(i), Fields.JOB_ID))) return true;
-		}
-		return false;
-	}
-
-	/**
-	 * Boot scan: wakes every agent that has a session with a stale cycle
-	 * claim ({@code inCycle}) — a cycle the venue crashed out of. Covers
-	 * interrupted work with no outstanding STARTED job to re-fire (e.g.
-	 * message-driven cycles, whose intake jobs completed at delivery).
-	 * Called once at venue launch, after {@code recoverJobs()}.
+	 * Boot scan: wakes every agent with durable work — pending session
+	 * envelopes, queued tasks, or a stale {@code inCycle} claim from a cycle
+	 * the venue crashed out of. All three are on the lattice, so this scan is
+	 * the single recovery trigger for agent work: recovery never re-executes
+	 * intake ops (#214), it just restarts the loops that durable state says
+	 * have something to do. Called once at venue launch, after
+	 * {@code recoverJobs()} stabilises job records.
 	 *
 	 * @return the number of agents woken
 	 */
-	@SuppressWarnings("unchecked")
-	public int wakeInterruptedCycles() {
+	public int wakeAgentsWithWork() {
 		int woken = 0;
 		AMap<AString, ACell> all = engine.getVenueState().users().getAll();
 		if (all == null) return 0;
@@ -2566,16 +2540,8 @@ public class AgentAdapter extends AAdapter {
 				AString agentId = agentEntry.getKey();
 				AgentState agent = getAgent(did, agentId);
 				if (agent == null) continue;   // terminated / missing
-				boolean interrupted = false;
-				for (var sessionEntry : agent.getSessions().entrySet()) {
-					if (sessionEntry.getValue() instanceof AMap<?, ?> session
-							&& session.get(AgentState.KEY_IN_CYCLE) != null) {
-						interrupted = true;
-						break;
-					}
-				}
-				if (interrupted) {
-					log.info("Waking agent {} — interrupted cycle found on boot", agentId);
+				if (hasWork(agent)) {
+					log.info("Waking agent {} — durable work found on boot", agentId);
 					wakeAgent(did, agentId, true);
 					woken++;
 				}
