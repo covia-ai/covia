@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Covia is pre-1.0, so minor versions may include breaking changes.
 
+## [0.5.0] - 2026-07-15
+
+### Added
+- Lattice-resident goal-tree frames — durable, observable mid-run, crash resume (`venue/docs/GOAL_TREE.md`)
+- Venue identity from a PKCS12 keystore (Convex CLI format) (#208)
+- Startup guard against booting a store with the wrong venue key (#208)
+- Resource-scoped `invoke` capability grants (#211)
+- `agent:create` warnings for non-tool-capable models and unresolvable tools (#205)
+- Configurable tool-loop iteration limit (venue default + per-agent) 
+- User activity stamps (`meta.created` / `meta.updated`)
+- Java client parity: private jobs, `ucan:verify`, job-free reads
+
+### Changed
+- Crash recovery stabilises jobs, never re-executes (`venue/docs/JOBS.md` §Recovery) (#214)
+- Capability denials name the missing capability; public callers get the auth remedy (#206, #209, #211)
+- Agent tool failures recorded on timeline/session, visible via `agent:context` (#211)
+- Write clock refreshed per dispatch/sync
+
+### Fixed
+- Job SSE stream route unreachable (#200)
+- Suspended/deleted agents hanging callers (#201, #202)
+- MCP tool calls losing scalar results
+- Crash-resume could re-dispatch a pre-crash tool call (#214)
+
 ## [0.4.0] - 2026-07-10
 
 ### Added
