@@ -37,7 +37,8 @@
 				"agentId": { "type": "string" },
 				"status": { "type": "string", "description": "Current status of the agent: SLEEPING, RUNNING, SUSPENDED, or TERMINATED" },
 				"created": { "type": "boolean", "description": "True if a new record was written (empty slot or TERMINATED revival)" },
-				"updated": { "type": "boolean", "description": "True if an existing SLEEPING/SUSPENDED record was updated in place; mutually exclusive with created" }
+				"updated": { "type": "boolean", "description": "True if an existing SLEEPING/SUSPENDED record was updated in place; mutually exclusive with created" },
+				"warning": { "type": "string", "description": "Optional non-fatal advisory; present only when the config looks misconfigured but create still succeeded. Currently emitted when the agent declares tools on an Ollama model whose tool-calling support could not be confirmed (no 'tools' capability, or the model is not installed/reachable). Absent when there is nothing to flag." }
 			}
 		}
 	}
