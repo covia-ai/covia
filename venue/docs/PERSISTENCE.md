@@ -227,19 +227,18 @@ Skip the second → root has the writes but the propagator never gets the trigge
 
 The `ForkedLatticeCursor` `parent.updateAndGet` choice is intentional and documented at `convex-core/docs/LATTICE_CURSOR_DESIGN.md:223`. It's there so you can sync the fork mid-life without re-triggering persistence for every upstream component along the chain. The cost is the two-call requirement at the venue layer.
 
-**Why the fork exists.** The SignedCursor boundary signs every write that
-crosses it. Without the fork, every component mutation would do an immediate
-Ed25519 signature (~tens of µs). With the fork, all writes within the sync
-window batch into one signature. Under a 100 ms sweep, "the sync window" is up
-to 100 ms of accumulated component writes. **One signature per sweep cycle
-instead of N per cursor write.** For a busy venue this is a meaningful saving;
-the fork stays for this reason.
+**Why the fork exists.** A signature is the venue's **attestation of a
+coherent whole-venue snapshot** — the states it is willing to persist and
+propagate as its own. Individual writes between snapshots are working state:
+they must NOT be signed, persisted, or broadcast one by one. The fork is the
+snapshot boundary; the sync cadence (per request / sweep / flush) defines
+exactly which states the venue ever attests to. The signature-cost saving
+(one Ed25519 per sync window instead of N per write) is real but secondary.
 
-**Could we drop the fork?** Yes — `venueState` could be the connected cursor
-directly, and we'd only need `lattice.sync()`. The cost is one signature per
-individual cursor write instead of one per sweep cycle. Defensible for a
-low-throughput venue, a measurable regression at scale. Out of scope for this
-design.
+**Could we drop the fork?** No — a connected `venueState` would sign and
+expose every interim write between snapshots, changing what a venue signature
+*means*, not just what it costs. The fork is load-bearing design, not an
+optimisation.
 
 ### 5.1 Background sweep
 

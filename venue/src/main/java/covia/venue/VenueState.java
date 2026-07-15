@@ -33,7 +33,14 @@ import covia.venue.storage.LatticeStorage;
  * <p>The recommended pattern for Engine is: bootstrap with a connected
  * VenueState (so the DID initialisation is signed), then {@link #fork()}
  * for all subsequent request processing. {@code Engine.syncState()} calls
- * {@link #sync()} once per request, batching all writes into a single sign.</p>
+ * {@link #sync()} once per request.</p>
+ *
+ * <p><b>Why the fork is load-bearing, not an optimisation:</b> a signature is
+ * the venue's attestation of a coherent whole-venue snapshot. Individual
+ * writes between snapshots are working state — they must NOT be signed,
+ * persisted, or propagated one by one. The fork is the snapshot boundary:
+ * sync cadence (per request / sweep / flush) defines exactly which states
+ * the venue ever attests to.</p>
  *
  * <p>Provides domain-specific component accessors:</p>
  * <ul>
