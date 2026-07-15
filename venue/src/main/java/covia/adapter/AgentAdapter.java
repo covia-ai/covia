@@ -478,17 +478,32 @@ public class AgentAdapter extends AAdapter {
 			Fields.CREATED, CVMBool.of(slot == SlotResult.CREATED),
 			Fields.UPDATED, CVMBool.of(slot == SlotResult.UPDATED));
 
-		// Advisory only: flag an agent whose declared tools may be ignored by its
-		// configured model (#205). Never fails create — the user can switch or
-		// install a model later.
-		AString warning = toolCapabilityWarning(config, ctx);
-		if (warning != null) {
-			result = result.assoc(Fields.WARNING, warning);
-			log.info("agent:create {} — {}", agentId, warning);
+		// Advisory only: surface anything that looks misconfigured but doesn't
+		// warrant failing create (#205). Emitted as a vector so several checks can
+		// contribute; omitted entirely when clean.
+		AVector<ACell> warnings = collectCreateWarnings(config, ctx);
+		if (!warnings.isEmpty()) {
+			result = result.assoc(Fields.WARNINGS, warnings);
+			for (long i = 0; i < warnings.count(); i++) {
+				log.info("agent:create {} — {}", agentId, warnings.get(i));
+			}
 		}
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(result);
+	}
+
+	/**
+	 * Collects non-fatal create-time advisories for a resolved config. Each entry
+	 * is a human-readable message string; the vector is empty when nothing is
+	 * flagged. New sanity checks append here — the result field ({@code warnings})
+	 * is already a list, so adding one is additive.
+	 */
+	private AVector<ACell> collectCreateWarnings(AMap<AString, ACell> config, RequestContext ctx) {
+		AVector<ACell> warnings = Vectors.empty();
+		AString toolWarn = toolCapabilityWarning(config, ctx);
+		if (toolWarn != null) warnings = warnings.conj(toolWarn);
+		return warnings;
 	}
 
 	/**

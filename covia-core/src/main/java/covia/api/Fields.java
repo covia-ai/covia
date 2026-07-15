@@ -10,8 +10,9 @@ public class Fields {
 	// Job related
 	public static final StringShort CREATED=Strings.intern("created");
 	public static final StringShort UPDATED = Strings.intern("updated");
-	/** Non-fatal advisory attached to an operation result (e.g. a config sanity warning). */
-	public static final StringShort WARNING = Strings.intern("warning");
+	/** Non-fatal advisories attached to an operation result (a vector of message
+	 *  strings, e.g. config sanity warnings). Absent when there are none. */
+	public static final StringShort WARNINGS = Strings.intern("warnings");
 	public static final StringShort INPUT = Strings.intern("input");
 	public static final StringShort OUTPUT = Strings.intern("output");
 	public static final StringShort RESULT = Strings.intern("result");

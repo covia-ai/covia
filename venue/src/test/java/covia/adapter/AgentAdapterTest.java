@@ -208,9 +208,10 @@ public class AgentAdapterTest {
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
-		AString warning = RT.ensureString(RT.getIn(result, Fields.WARNING));
-		assertNotNull(warning, "Ollama + tools with an unverifiable model should carry a warning");
-		assertTrue(warning.toString().contains("qwen2.5"));
+		AVector<ACell> warnings = RT.ensureVector(RT.getIn(result, Fields.WARNINGS));
+		assertNotNull(warnings, "Ollama + tools with an unverifiable model should carry a warning");
+		assertEquals(1, warnings.count());
+		assertTrue(RT.ensureString(warnings.get(0)).toString().contains("qwen2.5"));
 	}
 
 	@Test
@@ -227,7 +228,7 @@ public class AgentAdapterTest {
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
-		assertNull(RT.getIn(result, Fields.WARNING), "No tools → no advisory");
+		assertNull(RT.getIn(result, Fields.WARNINGS), "No tools → no advisory");
 	}
 
 	@Test
@@ -245,7 +246,7 @@ public class AgentAdapterTest {
 			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
-		assertNull(RT.getIn(result, Fields.WARNING), "Non-Ollama provider → no advisory");
+		assertNull(RT.getIn(result, Fields.WARNINGS), "Non-Ollama provider → no advisory");
 	}
 
 	@Test
