@@ -154,15 +154,6 @@ public class VenueState extends ALatticeComponent<ACell> {
 	}
 
 	/**
-	 * Sets the venue state value. Used for initial bootstrapping.
-	 *
-	 * @param value New venue state
-	 */
-	public void set(ACell value) {
-		cursor.set(value);
-	}
-
-	/**
 	 * Initialises this venue with the given DID if not already initialised.
 	 * Sets the venue state to the VENUE lattice zero value with the DID field.
 	 *

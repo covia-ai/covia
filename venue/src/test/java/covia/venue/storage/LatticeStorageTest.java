@@ -170,71 +170,10 @@ public class LatticeStorageTest {
 		assertEquals(2, state.count());
 	}
 
-	@Test
-	public void testMerge() throws IOException {
-		LatticeStorage storage1 = new LatticeStorage();
-		storage1.initialise();
-		LatticeStorage storage2 = new LatticeStorage();
-		storage2.initialise();
-
-		byte[] data1 = "from storage1".getBytes();
-		byte[] data2 = "from storage2".getBytes();
-		Hash h1 = Hashing.sha256(data1);
-		Hash h2 = Hashing.sha256(data2);
-
-		storage1.store(h1, new ByteArrayInputStream(data1));
-		storage2.store(h2, new ByteArrayInputStream(data2));
-
-		storage1.merge(storage2);
-
-		assertEquals(2, storage1.count());
-		assertTrue(storage1.exists(h1));
-		assertTrue(storage1.exists(h2));
-	}
-
-	@Test
-	public void testMergeIdempotent() throws IOException {
-		byte[] data = "idempotent".getBytes();
-		Hash hash = Hashing.sha256(data);
-		storage.store(hash, new ByteArrayInputStream(data));
-
-		Index<ABlob, ABlob> before = storage.getState();
-		storage.merge(before);
-		Index<ABlob, ABlob> after = storage.getState();
-
-		assertEquals(before, after, "Merging same state should be idempotent");
-	}
-
-	@Test
-	public void testMergeCommutative() throws IOException {
-		LatticeStorage s1 = new LatticeStorage();
-		s1.initialise();
-		LatticeStorage s2 = new LatticeStorage();
-		s2.initialise();
-
-		byte[] data1 = "alpha".getBytes();
-		byte[] data2 = "beta".getBytes();
-		Hash h1 = Hashing.sha256(data1);
-		Hash h2 = Hashing.sha256(data2);
-
-		s1.store(h1, new ByteArrayInputStream(data1));
-		s2.store(h2, new ByteArrayInputStream(data2));
-
-		Index<ABlob, ABlob> state1 = s1.getState();
-		Index<ABlob, ABlob> state2 = s2.getState();
-
-		LatticeStorage merged12 = new LatticeStorage();
-		merged12.initialise();
-		merged12.merge(state1);
-		merged12.merge(state2);
-
-		LatticeStorage merged21 = new LatticeStorage();
-		merged21.initialise();
-		merged21.merge(state2);
-		merged21.merge(state1);
-
-		assertEquals(merged12.getState(), merged21.getState(), "Merge should be commutative");
-	}
+	// NOTE: LatticeStorage.merge() was deleted (#214 follow-up) — application
+	// code never merges lattice values directly; convergence is the cursor
+	// layer's job (fork + sync), and CAS union semantics are CASLattice's
+	// (convex-core) to test. Storage writes go through cursor.updateAndGet.
 
 	// ========== Integration with Lattice Cursor ==========
 
@@ -275,63 +214,6 @@ public class LatticeStorageTest {
 		Index<ABlob, ABlob> cursorState = storageCursor.get();
 		assertNotNull(cursorState);
 		assertTrue(cursorState.containsKey(hash));
-	}
-
-	// ========== Real-world Scenarios ==========
-
-	@Test
-	public void testDistributedSync() throws IOException {
-		LatticeStorage node1 = new LatticeStorage();
-		node1.initialise();
-		LatticeStorage node2 = new LatticeStorage();
-		node2.initialise();
-
-		// Node 1 stores data
-		byte[] data1 = "document from node 1".getBytes();
-		Hash h1 = Hashing.sha256(data1);
-		node1.store(h1, new ByteArrayInputStream(data1));
-
-		// Node 2 stores different data
-		byte[] data2 = "document from node 2".getBytes();
-		Hash h2 = Hashing.sha256(data2);
-		node2.store(h2, new ByteArrayInputStream(data2));
-
-		// Sync: each merges the other's state
-		node1.merge(node2);
-		node2.merge(node1);
-
-		// Both should have all data
-		assertEquals(2, node1.count());
-		assertEquals(2, node2.count());
-		assertTrue(node1.exists(h1));
-		assertTrue(node1.exists(h2));
-		assertTrue(node2.exists(h1));
-		assertTrue(node2.exists(h2));
-	}
-
-	@Test
-	public void testContentDeduplication() throws IOException {
-		LatticeStorage s1 = new LatticeStorage();
-		s1.initialise();
-		LatticeStorage s2 = new LatticeStorage();
-		s2.initialise();
-
-		// Both nodes store the same content
-		byte[] sharedData = "shared document".getBytes();
-		Hash sharedHash = Hashing.sha256(sharedData);
-
-		s1.store(sharedHash, new ByteArrayInputStream(sharedData));
-		s2.store(sharedHash, new ByteArrayInputStream(sharedData));
-
-		// Each also stores unique content
-		byte[] unique1 = "unique to s1".getBytes();
-		byte[] unique2 = "unique to s2".getBytes();
-		s1.store(Hashing.sha256(unique1), new ByteArrayInputStream(unique1));
-		s2.store(Hashing.sha256(unique2), new ByteArrayInputStream(unique2));
-
-		// After merge, shared content is not duplicated
-		s1.merge(s2);
-		assertEquals(3, s1.count(), "Shared content should be deduplicated");
 	}
 
 	// ========== Close ==========

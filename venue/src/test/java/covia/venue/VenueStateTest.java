@@ -217,9 +217,9 @@ public class VenueStateTest {
 		// Initially null (no venue state set yet)
 		assertNull(vs.get());
 
-		// Bootstrap venue state
-		ACell zero = convex.core.data.Index.of(Covia.DID, Strings.create("did:key:test"));
-		vs.set(zero);
+		// Bootstrap via the atomic init path (raw set() was removed — app code
+		// mutates through cursor atomics only)
+		vs.initialise(Strings.create("did:key:test"));
 
 		assertNotNull(vs.get());
 	}

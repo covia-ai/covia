@@ -229,43 +229,6 @@ public class LatticeStorage extends AStorage {
 	}
 
 	/**
-	 * Set the storage state.
-	 *
-	 * @param state New state
-	 */
-	private void setState(Index<ABlob, ABlob> state) {
-		if (cursor != null) {
-			cursor.set(state);
-		} else {
-			localState = state;
-		}
-	}
-
-	/**
-	 * Merge another storage state into this one.
-	 *
-	 * <p>This is the core CRDT operation. The merge combines entries from
-	 * both states using union semantics.
-	 *
-	 * @param other The other storage state to merge
-	 */
-	public void merge(Index<ABlob, ABlob> other) {
-		if (other == null) return;
-		Index<ABlob, ABlob> current = getState();
-		Index<ABlob, ABlob> merged = lattice.merge(current, other);
-		setState(merged);
-	}
-
-	/**
-	 * Merge another LatticeStorage into this one.
-	 *
-	 * @param other The other storage to merge
-	 */
-	public void merge(LatticeStorage other) {
-		merge(other.getState());
-	}
-
-	/**
 	 * Get the number of stored items.
 	 *
 	 * @return Number of items in storage
