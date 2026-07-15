@@ -250,6 +250,50 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testCreateWarnsOnUnresolvableTool() {
+		// OpenAI provider (no capability probe) so the only advisory in play is
+		// tool resolution. One tool resolves, one doesn't → warn about the latter.
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "bad-tools",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"tools", Vectors.of(
+					Strings.create("v/ops/covia/list"),   // resolves (distinct from the message's example paths)
+					Strings.create("v/ops/nope"))));       // does not resolve
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		AVector<ACell> warnings = RT.ensureVector(RT.getIn(result, Fields.WARNINGS));
+		assertNotNull(warnings, "unresolvable tool should carry a warning");
+		assertEquals(1, warnings.count());
+		String w = RT.ensureString(warnings.get(0)).toString();
+		assertTrue(w.contains("v/ops/nope"), "warning names the unresolved op");
+		assertFalse(w.contains("v/ops/covia/list"), "warning omits the op that resolves");
+	}
+
+	@Test
+	public void testCreateHarnessToolsNotFlagged() {
+		// Bare harness names (subgoal, complete, …) aren't operation paths — they
+		// must not be reported as unresolvable.
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "harness-tools",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/goaltree/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"tools", Vectors.of(
+					Strings.create("subgoal"),
+					Strings.create("complete"),
+					Strings.create("v/ops/covia/read"))));
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertNull(RT.getIn(result, Fields.WARNINGS), "harness tools + resolvable op → no advisory");
+	}
+
+	@Test
 	public void testCreateAgentWithConfigFromWorkspacePath() {
 		// Store a template map in the caller's workspace
 		AMap<AString, ACell> template = Maps.of(

@@ -827,6 +827,40 @@ public class ContextBuilder {
 	}
 
 	/**
+	 * Best-effort list of config {@code tools} operations that resolve to nothing
+	 * on this venue (#205). Mirrors {@link #buildConfigTools}'s resolution so the
+	 * check can't drift from actual behaviour: harness pseudo-tools are skipped,
+	 * and a tool whose definition lives on an unreachable remote venue is <b>not</b>
+	 * reported (transient, not a config error). Any other resolution error is also
+	 * skipped — this is an advisory, so it only reports the definitive
+	 * "resolves to null" case (the silent-drop that {@code buildConfigTools} logs).
+	 * Returns the unresolved operation strings in order; empty when all resolve.
+	 *
+	 * @param skipToolNames bare harness names to ignore (see
+	 *        {@link AbstractLLMAdapter#allHarnessToolNames()})
+	 */
+	public static java.util.List<String> unresolvableConfigTools(
+			Engine engine, RequestContext ctx, AVector<ACell> toolsVec,
+			java.util.Set<String> skipToolNames) {
+		java.util.List<String> unresolved = new java.util.ArrayList<>();
+		if (toolsVec == null) return unresolved;
+		for (long i = 0; i < toolsVec.count(); i++) {
+			AString[] parsed = parseConfigToolEntry(toolsVec.get(i));
+			if (parsed == null) continue;
+			String operation = parsed[0].toString();
+			if (skipToolNames.contains(operation)) continue;   // harness pseudo-tool
+			Asset asset;
+			try {
+				asset = engine.resolveAsset(parsed[0], ctx);
+			} catch (RuntimeException e) {
+				continue;   // remote unreachable / ambiguous — don't over-warn at create
+			}
+			if (asset == null) unresolved.add(operation);
+		}
+		return unresolved;
+	}
+
+	/**
 	 * Parses a config tool entry (string or map) into its components.
 	 *
 	 * @return Array of [operation, nameOverride, descOverride], or null if invalid

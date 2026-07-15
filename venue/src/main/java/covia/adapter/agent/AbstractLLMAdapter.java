@@ -348,6 +348,17 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	}
 
 	/**
+	 * The union of every runtime's harness pseudo-tool names (goaltree +
+	 * llmagent, e.g. {@code subgoal}, {@code complete}, {@code context_load}).
+	 * These are bare names the adapter resolves itself, not operation paths, so a
+	 * config {@code tools} list may legitimately contain them — callers that
+	 * validate tool-operation resolution skip these.
+	 */
+	public static java.util.Set<String> allHarnessToolNames() {
+		return HarnessNames.PROVIDERS.keySet();
+	}
+
+	/**
 	 * The failure text if a tool result is a failure, else null. Every tool
 	 * failure shape — capability denial, timeout, op error, malformed
 	 * arguments — funnels through the {@code "Error: …"} string convention

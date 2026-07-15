@@ -25,6 +25,8 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
+import covia.adapter.agent.AbstractLLMAdapter;
+import covia.adapter.agent.ContextBuilder;
 import covia.adapter.agent.ContextInspectable;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -503,7 +505,36 @@ public class AgentAdapter extends AAdapter {
 		AVector<ACell> warnings = Vectors.empty();
 		AString toolWarn = toolCapabilityWarning(config, ctx);
 		if (toolWarn != null) warnings = warnings.conj(toolWarn);
+		AString unresolvedWarn = unresolvableToolsWarning(config, ctx);
+		if (unresolvedWarn != null) warnings = warnings.conj(unresolvedWarn);
 		return warnings;
+	}
+
+	/**
+	 * Advisory for config {@code tools} that reference operations which don't
+	 * resolve on this venue right now (#205). Tools are resolved live at every
+	 * context assembly, so an unresolved one is simply omitted from the agent's
+	 * toolset that cycle (and a call to it fails loudly with a resolution error);
+	 * install the operation or fix the path and it becomes available on the next
+	 * cycle — no recreate. This create-time warning just surfaces the likely
+	 * config slip (usually adapter shorthand where a path is required) at the
+	 * moment it's fixable. Warning only. Returns null when every declared tool
+	 * resolves (or none are declared). Harness pseudo-tools ({@code subgoal},
+	 * {@code complete}, …) are not operations and are never flagged.
+	 */
+	private AString unresolvableToolsWarning(AMap<AString, ACell> config, RequestContext ctx) {
+		if (config == null) return null;
+		AVector<ACell> toolsVec = RT.ensureVector(config.get(Strings.intern("tools")));
+		if (toolsVec == null || toolsVec.isEmpty()) return null;
+		java.util.List<String> bad = ContextBuilder.unresolvableConfigTools(
+			engine, ctx, toolsVec, AbstractLLMAdapter.allHarnessToolNames());
+		if (bad.isEmpty()) return null;
+		return Strings.create("agent declares tool operation(s) that don't resolve on this venue: "
+			+ String.join(", ", bad) + ". Tools must be resolvable operation paths"
+			+ " (e.g. 'v/ops/covia/read'), not adapter shorthand (e.g. 'covia:read')."
+			+ " Until each resolves it is left out of the agent's toolset (a call to it"
+			+ " fails with a resolution error); install the operation or fix the path and"
+			+ " it becomes available on the next cycle — this is only a warning.");
 	}
 
 	/**
