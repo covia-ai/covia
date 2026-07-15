@@ -506,9 +506,10 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 					// unchanged when nothing is dangling); retry once, then
 					// fail the resume loudly rather than proceed.
 					AVector<ACell> check = store.frames();
-					if (GoalTreeContext.repairDanglingToolCalls(check, note) != check) {
-						log.warn("Resume repair no-oped on stale frames (agent {}, session {}) — retrying (#214)",
-							agentId, sid);
+					if (check.isEmpty()
+							|| GoalTreeContext.repairDanglingToolCalls(check, note) != check) {
+						log.warn("Resume repair no-oped on stale frames (agent {}, session {}, checkCount {}) — retrying (#214)",
+							agentId, sid, check.count());
 						if (!store.update(f -> GoalTreeContext.repairDanglingToolCalls(f, note))) {
 							return abortedOutput(store);
 						}

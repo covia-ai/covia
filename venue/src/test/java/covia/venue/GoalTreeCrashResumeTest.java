@@ -94,6 +94,22 @@ public class GoalTreeCrashResumeTest {
 	}
 
 	/**
+	 * True when the child frame is parked in the never-tool with its dangling
+	 * assistant toolCall turn DURABLE. Awaiting only {@code frames.count()==2}
+	 * races the child's assistant turn: the crash then lands on a child with
+	 * just the goal turn, there is nothing to repair, and the resumed child
+	 * legitimately re-runs the tool from scratch (at-least-once) — parking for
+	 * the full tool timeout, which is not the scenario these tests pin.
+	 */
+	private static boolean childParkedDurably(Engine engine, String agentId, Blob sid) {
+		AVector<ACell> fs = frames(engine, agentId, sid);
+		if (fs == null || fs.count() != 2) return false;
+		ACell conv = RT.getIn(fs.get(1), "conversation");
+		return conv instanceof AVector<?> v && v.count() >= 2
+			&& String.valueOf(conv).contains("toolCalls");
+	}
+
+	/**
 	 * Message-driven interruption, recovered by the boot scan: the intake job
 	 * completed at delivery, so recoverJobs has nothing to re-fire —
 	 * {@code wakeInterruptedCycles} is the only wake path. The resumed cycle
@@ -206,11 +222,10 @@ public class GoalTreeCrashResumeTest {
 				RequestContext.of(ALICE));
 			chatJobId = chatJob.getID().toHexString();
 
-			// Child frame live on the lattice, parked in its never-tool
-			await(() -> {
-				AVector<ACell> fs = frames(engine, "sub-agent", sid);
-				return fs != null && fs.count() == 2;
-			}, 10_000, "child frame live before the crash");
+			// Child frame live on the lattice, parked in its never-tool — with
+			// the dangling toolCall turn durable (the state the resume repairs).
+			await(() -> childParkedDurably(engine, "sub-agent", sid),
+				10_000, "child parked with its dangling toolCall durable");
 
 			engine.flush();
 			engine.close();
@@ -402,10 +417,13 @@ public class GoalTreeCrashResumeTest {
 				RequestContext.of(ALICE));
 			requestJobId = requestJob.getID().toHexString();
 
+			// nevertoolllm parks at the ROOT (no subgoal child): await the
+			// dangling assistant toolCall turn itself, not just any frame state.
 			await(() -> {
 				AVector<ACell> conv = rootConversation(engine, "task-agent", sid);
-				return conv != null && countTurnsContaining(conv, "toolCalls") > 0;
-			}, 10_000, "cycle parked in the never-tool");
+				return conv != null && conv.count() >= 2
+					&& countTurnsContaining(conv, "toolCalls") > 0;
+			}, 10_000, "root parked with its dangling toolCall durable");
 			assertNotNull(agent(engine, "task-agent").getTasks().get(requestJob.getID()),
 				"task still queued while the cycle runs");
 
@@ -476,8 +494,9 @@ public class GoalTreeCrashResumeTest {
 
 			await(() -> {
 				AVector<ACell> conv = rootConversation(engine, "gone-agent", sid);
-				return conv != null && countTurnsContaining(conv, "toolCalls") > 0;
-			}, 10_000, "cycle parked in the never-tool");
+				return conv != null && conv.count() >= 2
+					&& countTurnsContaining(conv, "toolCalls") > 0;
+			}, 10_000, "root parked with its dangling toolCall durable");
 
 			engine.flush();
 			engine.close();

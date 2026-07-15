@@ -47,8 +47,12 @@ import convex.lattice.fs.DLFSLattice;
  * <p>All mutable, deletable venue state lives under a single {@code :state} node
  * composed from three orthogonal convex lattice layers (see convex#593):</p>
  * <ul>
- *   <li>{@link StampingLattice} — re-stamps {@code :timestamp} with real
- *       wall-clock time on every deep write (never inflated, never {@code +1});</li>
+ *   <li>{@link StampingLattice} — re-stamps {@code :timestamp} on every deep
+ *       write with a strictly-increasing, wall-clock-anchored stamp
+ *       ({@code max(existing+1, clock)}): distinct values must never share the
+ *       LWW merge key, or the positional tie-break makes merges
+ *       non-convergent and committed writes get merged away (#214). Drift
+ *       above real time is bounded by +1ms per write burst;</li>
  *   <li>{@link LWWLattice} — whole-value merge: the newer {@code :timestamp}
  *       wins wholesale (tie → own), never recursing, so <b>deletions survive</b>
  *       the propagator's merge-back;</li>
@@ -149,12 +153,39 @@ public final class Covia {
 		return ts;
 	}
 
-	/** Injects the write-clock timestamp (from the LatticeContext) into the venue value's {@code :timestamp}. */
+	/**
+	 * Strictly-increasing ratchet for LWW <b>merge keys</b>: always above the
+	 * stamp the value already carries, even when the write clock has not
+	 * advanced (same-millisecond writes; the clock-refresh throttle; a
+	 * long-lived cursor's older context). Two DISTINCT venue values carrying
+	 * the SAME {@code :timestamp} are unorderable by whole-value LWW — the
+	 * merge tie-break is positional ("own wins"), so different merge sites
+	 * (fork sync, local reconcile, propagator merge-back) pick different
+	 * winners and the state flip-flops, discarding committed writes
+	 * (covia#214: a crash-resume repair was written, then merged away).
+	 * Strict monotonicity totally orders every successive value from this
+	 * venue's single writer, making every merge site converge identically.
+	 * The stamp is a Lamport-style clock anchored to wall time: at most
+	 * +1ms per write burst ahead of the real clock, caught up as time
+	 * advances. Only applied to values that actually changed
+	 * ({@code StampedCursor} keeps the current cell for unchanged writes),
+	 * so no-op writes never bump it.
+	 */
+	private static CVMLong strictRatchet(ACell existing, CVMLong ts) {
+		if (existing instanceof CVMLong prev && prev.longValue() >= ts.longValue()) {
+			return CVMLong.create(prev.longValue() + 1);
+		}
+		return ts;
+	}
+
+	/** Injects the write-clock timestamp (from the LatticeContext) into the venue
+	 *  value's {@code :timestamp} — the whole-value-LWW merge key, so the stamp
+	 *  must strictly increase on every distinct write (see {@link #strictRatchet}). */
 	@SuppressWarnings("unchecked")
 	private static ACell stampVenue(ACell v, CVMLong ts) {
 		if (v instanceof AMap<?,?>) {
 			AMap<ACell, ACell> m = (AMap<ACell, ACell>) v;
-			return m.assoc(K_TIMESTAMP, ratchet(m.get(K_TIMESTAMP), ts));
+			return m.assoc(K_TIMESTAMP, strictRatchet(m.get(K_TIMESTAMP), ts));
 		}
 		return v;
 	}

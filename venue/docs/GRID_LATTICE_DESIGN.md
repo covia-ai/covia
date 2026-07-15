@@ -950,12 +950,22 @@ For day-to-day operations, the venue works directly with its cursor. It does not
 ### A.2 Merge Semantics
 
 The venue **`:value` is a single navigable whole-value-LWW node.** It carries a
-wall-clock `:timestamp`, re-stamped on every write. On merge, the value with the
-newer `:timestamp` wins **wholesale** (tie → own value); the merge does not recurse
-into the interior. This is what makes **deletions durable** — a removed key is
+`:timestamp` re-stamped on every write with a **strictly-increasing,
+wall-clock-anchored stamp** (`max(existing+1, writeClock)`). On merge, the value
+with the newer `:timestamp` wins **wholesale**; the merge does not recurse into
+the interior. This is what makes **deletions durable** — a removed key is
 simply absent from the newer winning value, so it cannot be reintroduced by a
 per-entry union on merge-back (the failure mode of the previous per-entry-LWW
 model).
+
+Strict stamp monotonicity is load-bearing (#214): two **distinct** venue values
+carrying the **same** stamp are unorderable by LWW, and the tie-break is
+positional ("own wins") — different merge sites (fork sync, propagator
+merge-back) then pick different winners, so the state flip-flops and committed
+writes get merged away. With a single writer per venue, strictly-increasing
+stamps totally order every version and all merge sites converge identically.
+The stamp may drift at most +1ms per write burst ahead of real time (writes
+within one clock tick), catching up as the clock advances.
 
 This is correct because a venue has a **single authoritative writer**: its signing
 key under `:grid → :venues → OwnerLattice → SignedLattice`. Every merge a venue
