@@ -46,6 +46,23 @@ public class Config {
 	/** Key for venue identity seed (Ed25519, 32-byte hex string). */
 	public static final AString SEED = Strings.intern("seed");
 
+	/**
+	 * Key for the venue identity keystore block (#208): a PKCS12 keystore in the
+	 * Convex format, so venue keys can be managed with the Convex CLI
+	 * ({@code convex key generate} etc.). Fields:
+	 * <ul>
+	 *   <li>{@code path} — keystore file; default {@code ~/.convex/keystore.pfx}
+	 *       (env {@code CONVEX_KEYSTORE} fills absence)</li>
+	 *   <li>{@code alias} — key entry alias, required (Convex convention: the
+	 *       hex public key)</li>
+	 *   <li>{@code storepass} — keystore integrity password
+	 *       (env {@code CONVEX_KEYSTORE_PASSWORD} fills absence)</li>
+	 *   <li>{@code keypass} — key entry password
+	 *       (env {@code CONVEX_KEY_PASSWORD} fills absence)</li>
+	 * </ul>
+	 */
+	public static final AString KEYSTORE = Strings.intern("keystore");
+
 	// ========== Venue config keys ==========
 
 	/** Key for venue name */
@@ -581,6 +598,16 @@ public class Config {
 	public String getSeed() {
 		AString seedVal = RT.ensureString(config.get(SEED));
 		return (seedVal != null) ? seedVal.toString() : null;
+	}
+
+	/**
+	 * Get the venue identity keystore block, or null if not configured.
+	 * See {@link #KEYSTORE} for the field contract.
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> getKeystore() {
+		ACell raw = config.get(KEYSTORE);
+		return (raw instanceof AMap) ? (AMap<AString, ACell>) raw : null;
 	}
 
 	/**

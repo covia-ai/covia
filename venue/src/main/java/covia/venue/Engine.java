@@ -30,7 +30,9 @@ import convex.core.data.AccountKey;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Index;
+import convex.core.cvm.Keywords;
 import convex.core.data.Keyword;
+import convex.core.data.MapEntry;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -310,6 +312,13 @@ public class Engine {
 	 * {@link VenueState#sync()}, which merges and signs once.</p>
 	 */
 	protected void initialiseFromCursor() {
+		// Identity guard (#208): booting an existing store with the wrong key
+		// would not fail — venues are keyed by AccountKey, so it would silently
+		// create a fresh empty venue entry alongside the real one, orphaning all
+		// existing data ("where did my agents go?"). A venue without a key that
+		// can sign for its own persisted state is broken; fail before writing.
+		requireKeyMatchesStore();
+
 		// Bootstrap with connected VenueState (writes signed immediately).
 		// DID initialisation must be signed so other peers accept it.
 		VenueState connected = VenueState.fromRoot(lattice, getAccountKey());
@@ -321,6 +330,41 @@ public class Engine {
 
 		this.auth = new Auth(this, venueState.authCursor());
 		this.accessControl = new AccessControl();
+	}
+
+	/**
+	 * Fails startup when the store already contains venue state but none of it
+	 * belongs to this engine's key (#208). A fresh store (no venues) and a
+	 * normal restart (our AccountKey present) both pass; other venues' entries
+	 * alongside ours are fine. The error names the identities found so the
+	 * operator can point {@code seed}/{@code keystore} at the right key.
+	 *
+	 * <p>Note: today a local store only ever holds the venue's own entry;
+	 * if lattice-level federation ever replicates peer venue entries into
+	 * {@code :venues}, a first boot on a pre-replicated store would need this
+	 * check refined (our-entry-absent would no longer imply a wrong key).</p>
+	 */
+	@SuppressWarnings("unchecked")
+	private void requireKeyMatchesStore() {
+		// The :venues level is an OwnerLattice: AHashMap<AccountKey, SignedData>.
+		ACell venuesVal = lattice.path(Covia.GRID, Covia.VENUES).get();
+		if (!(venuesVal instanceof AMap<?, ?> venues) || venues.isEmpty()) return;   // fresh store
+		AMap<ACell, ACell> vs = (AMap<ACell, ACell>) venues;
+		if (vs.containsKey(getAccountKey())) return;                                  // normal restart
+
+		StringBuilder sb = new StringBuilder();
+		for (long i = 0; i < vs.count(); i++) {
+			MapEntry<ACell, ACell> e = vs.entryAt(i);
+			if (i > 0) sb.append(", ");
+			ACell did = RT.getIn(e.getValue(), Keywords.VALUE, Covia.DID);
+			sb.append(did != null ? did : "key " + e.getKey());
+		}
+		throw new IllegalStateException(
+			"Venue key mismatch: this store already holds venue state for [" + sb
+			+ "] but the configured key gives " + getDIDString()
+			+ ". Starting anyway would create a fresh empty venue and orphan the existing"
+			+ " data. Configure the owning key via 'seed' or 'keystore' (or point 'store'"
+			+ " at a different file).");
 	}
 
 	/**

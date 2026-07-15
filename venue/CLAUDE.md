@@ -306,6 +306,40 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 - `store`: `"temp"` (default, deleted on exit), `"memory"`, or file path
 - `seed`: Ed25519 hex seed for stable venue identity. If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file.
 
+### Venue identity
+
+Identity resolution order: `seed` → `keystore` → `venue.key` next to a
+persistent store → freshly generated. A venue on an ephemeral store
+(`temp`/`memory`) without `seed`/`keystore` gets a **new DID every start —
+by design** (#208): a stable identity is something the operator pins
+explicitly, not something the venue persists behind their back.
+
+For managed keys, point the venue at a PKCS12 keystore in the Convex format
+(so keys are created/listed with the Convex CLI — `convex key generate`):
+
+```json
+{
+  "keystore": {
+    "path": "~/.convex/keystore.pfx",
+    "alias": "<hex-public-key>",
+    "storepass": "...",
+    "keypass": "..."
+  }
+}
+```
+
+- `path`: defaults to `~/.convex/keystore.pfx` (env `CONVEX_KEYSTORE` fills absence)
+- `alias`: required — the key entry to use (Convex convention: hex public key)
+- `storepass` / `keypass`: env `CONVEX_KEYSTORE_PASSWORD` / `CONVEX_KEY_PASSWORD`
+  fill absence; missing both config and env is a fatal startup error
+
+Any keystore failure (missing file, bad password, unknown alias) is **fatal** —
+the venue never silently falls back to a generated key. Likewise, booting an
+existing store with a key that owns none of its venue state fails at startup
+naming the store's real owner: venues are keyed by AccountKey, so a wrong key
+would otherwise silently create a fresh empty venue and orphan the existing
+data. Never commit keystore passwords; use env vars or gitignored dev configs.
+
 ### Network binding
 
 ```json

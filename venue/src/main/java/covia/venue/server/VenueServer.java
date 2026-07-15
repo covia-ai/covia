@@ -24,7 +24,10 @@ import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.crypto.AKeyPair;
+import convex.core.crypto.PFXTools;
 import convex.core.data.Blob;
+import convex.core.lang.RT;
+import convex.core.util.FileUtils;
 import convex.core.store.AStore;
 import convex.etch.EtchStore;
 import convex.core.data.prim.CVMLong;
@@ -199,6 +202,8 @@ public class VenueServer {
 	 * Resolves the venue identity keypair from config or key file.
 	 * <ol>
 	 *   <li>Config {@code "seed"} — explicit hex seed (32 bytes)</li>
+	 *   <li>Config {@code "keystore"} — PKCS12 keystore in the Convex format (#208);
+	 *       any load failure is fatal, never a silent fallback to a generated key</li>
 	 *   <li>Key file next to store — auto-persisted on first run</li>
 	 *   <li>Generate new — ephemeral (temp store) or saved to key file (persistent store)</li>
 	 * </ol>
@@ -212,7 +217,15 @@ public class VenueServer {
 			return kp;
 		}
 
-		// 2. Key file next to store (only for persistent stores)
+		// 2. Keystore block in config
+		AMap<AString, ACell> ksConfig = config.getKeystore();
+		if (ksConfig != null) {
+			AKeyPair kp = loadFromKeystore(ksConfig);
+			log.info("Using venue identity from keystore: {}", kp.getAccountKey());
+			return kp;
+		}
+
+		// 3. Key file next to store (only for persistent stores)
 		String storePath = config.getStore();
 		if (!"temp".equals(storePath) && !"memory".equals(storePath)) {
 			Path keyFile = Path.of(storePath).resolveSibling("venue.key");
@@ -223,7 +236,7 @@ public class VenueServer {
 				return kp;
 			}
 
-			// 3. Generate and save to key file
+			// 4. Generate and save to key file
 			AKeyPair kp = AKeyPair.generate();
 			keyFile.getParent().toFile().mkdirs();
 			Files.writeString(keyFile, kp.getSeed().toHexString());
@@ -231,10 +244,71 @@ public class VenueServer {
 			return kp;
 		}
 
-		// Ephemeral store — generate without saving
+		// Ephemeral store — generate without saving. Intended behaviour (#208):
+		// a stable identity is something the operator pins explicitly (seed or
+		// keystore); a throwaway venue gets a throwaway DID.
 		AKeyPair kp = AKeyPair.generate();
 		log.info("Generated ephemeral venue identity: {}", kp.getAccountKey());
 		return kp;
+	}
+
+	/** Default keystore path — the Convex CLI keyring, so venue keys can be
+	 *  managed with {@code convex key generate/list/export}. */
+	static final String DEFAULT_KEYSTORE_PATH = "~/.convex/keystore.pfx";
+
+	/**
+	 * Loads the venue keypair from a PKCS12 keystore per the config block
+	 * (see {@link Config#KEYSTORE}). Every failure is fatal with a message
+	 * naming the missing piece — a venue must never silently boot with a
+	 * different identity than the operator configured (#208).
+	 */
+	static AKeyPair loadFromKeystore(AMap<AString, ACell> ks) {
+		String path = stringField(ks, "path");
+		if (path == null) path = envOr("CONVEX_KEYSTORE", DEFAULT_KEYSTORE_PATH);
+		String alias = stringField(ks, "alias");
+		if (alias == null) throw new IllegalStateException(
+			"keystore config requires an 'alias' naming the venue key entry"
+			+ " (Convex convention: the hex public key — see 'convex key list')");
+		String storepass = stringField(ks, "storepass");
+		if (storepass == null) storepass = System.getenv("CONVEX_KEYSTORE_PASSWORD");
+		if (storepass == null) throw new IllegalStateException(
+			"keystore integrity password not found — set 'storepass' in the keystore"
+			+ " config block or the CONVEX_KEYSTORE_PASSWORD environment variable");
+		String keypass = stringField(ks, "keypass");
+		if (keypass == null) keypass = System.getenv("CONVEX_KEY_PASSWORD");
+		if (keypass == null) throw new IllegalStateException(
+			"key entry password not found — set 'keypass' in the keystore config"
+			+ " block or the CONVEX_KEY_PASSWORD environment variable");
+
+		File file = FileUtils.getFile(path);
+		if (!file.exists()) throw new IllegalStateException(
+			"keystore file not found: " + file + " — create keys with 'convex key generate'"
+			+ " or point 'path' (or CONVEX_KEYSTORE) at an existing PKCS12 keystore");
+		try {
+			java.security.KeyStore store = PFXTools.loadStore(file, storepass.toCharArray());
+			AKeyPair kp = PFXTools.getKeyPair(store, alias, keypass.toCharArray());
+			if (kp == null) throw new IllegalStateException(
+				"keystore " + file + " has no key entry for alias '" + alias + "'");
+			return kp;
+		} catch (IllegalStateException e) {
+			throw e;
+		} catch (Exception e) {
+			throw new IllegalStateException(
+				"failed to load venue key '" + alias + "' from keystore " + file
+				+ ": " + e.getMessage(), e);
+		}
+	}
+
+	/** Reads an optional string field from a config sub-map. */
+	private static String stringField(AMap<AString, ACell> map, String key) {
+		AString v = RT.ensureString(map.get(Strings.intern(key)));
+		return (v != null) ? v.toString() : null;
+	}
+
+	/** Environment variable value, or the default when unset/blank. */
+	private static String envOr(String name, String dflt) {
+		String v = System.getenv(name);
+		return (v != null && !v.isBlank()) ? v : dflt;
 	}
 
 	/**
