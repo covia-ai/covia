@@ -950,22 +950,20 @@ For day-to-day operations, the venue works directly with its cursor. It does not
 ### A.2 Merge Semantics
 
 The venue **`:value` is a single navigable whole-value-LWW node.** It carries a
-`:timestamp` re-stamped on every write with a **strictly-increasing,
-wall-clock-anchored stamp** (`max(existing+1, writeClock)`). On merge, the value
-with the newer `:timestamp` wins **wholesale**; the merge does not recurse into
-the interior. This is what makes **deletions durable** — a removed key is
+wall-clock `:timestamp`, re-stamped on every write (never inflated — a stamp is
+real time, never a `+1` logical bump). On merge, the value with the newer
+`:timestamp` wins **wholesale** (tie → own value); the merge does not recurse
+into the interior. This is what makes **deletions durable** — a removed key is
 simply absent from the newer winning value, so it cannot be reintroduced by a
 per-entry union on merge-back (the failure mode of the previous per-entry-LWW
 model).
 
-Strict stamp monotonicity is load-bearing (#214): two **distinct** venue values
-carrying the **same** stamp are unorderable by LWW, and the tie-break is
-positional ("own wins") — different merge sites (fork sync, propagator
-merge-back) then pick different winners, so the state flip-flops and committed
-writes get merged away. With a single writer per venue, strictly-increasing
-stamps totally order every version and all merge sites converge identically.
-The stamp may drift at most +1ms per write burst ahead of real time (writes
-within one clock tick), catching up as the clock advances.
+Distinct values CAN carry equal stamps (writes within one clock tick). That is
+resolvable because ties prefer `own`: **every merge site must order its
+arguments so the newer side is `own`** — covia's responsibility, typically
+discharged by forking the relevant lattice segment and syncing it (the fork
+sync passes local edits as `own` deliberately). See covia#214 and
+Convex-Dev/convex#641 for the analysis.
 
 This is correct because a venue has a **single authoritative writer**: its signing
 key under `:grid → :venues → OwnerLattice → SignedLattice`. Every merge a venue
