@@ -172,6 +172,82 @@ public class AgentAdapterTest {
 		assertNotNull(storedConfig, "Config should be stored");
 	}
 
+	// ========== #205 — tool-capability advisory on create ==========
+
+	@Test
+	public void testToolWarningForDecision() {
+		// null caps (couldn't determine — unreachable / not installed) → warn
+		AString unknown = AgentAdapter.toolWarningFor("qwen2.5", "http://localhost:11434", null);
+		assertNotNull(unknown);
+		assertTrue(unknown.toString().contains("qwen2.5"));
+
+		// caps without "tools" → warn
+		AString noTools = AgentAdapter.toolWarningFor(
+			"gemma3", "http://localhost:11434", java.util.List.of("completion", "vision"));
+		assertNotNull(noTools);
+		assertTrue(noTools.toString().contains("does not advertise tool-calling"));
+
+		// caps including "tools" → no warning
+		assertNull(AgentAdapter.toolWarningFor(
+			"qwen2.5", "http://localhost:11434", java.util.List.of("completion", "tools")));
+	}
+
+	@Test
+	public void testCreateOllamaWithToolsWarnsWhenUnverifiable() {
+		// url points at a dead port → probe fails fast → "couldn't confirm" advisory.
+		// Deterministic across environments (nothing serves Ollama on port 1).
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "ollama-tooler",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/ollama",
+				"model", "qwen2.5",
+				"url", "http://localhost:1",
+				"tools", Vectors.of(Strings.create("v/ops/covia/read"))));
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		AString warning = RT.ensureString(RT.getIn(result, Fields.WARNING));
+		assertNotNull(warning, "Ollama + tools with an unverifiable model should carry a warning");
+		assertTrue(warning.toString().contains("qwen2.5"));
+	}
+
+	@Test
+	public void testCreateOllamaWithoutToolsNoWarning() {
+		// No tools declared → nothing to check, even for Ollama.
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "ollama-plain",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/ollama",
+				"model", "qwen2.5",
+				"url", "http://localhost:1"));
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertNull(RT.getIn(result, Fields.WARNING), "No tools → no advisory");
+	}
+
+	@Test
+	public void testCreateNonOllamaWithToolsNoWarning() {
+		// Hosted providers don't expose model capabilities in advance — silence
+		// beats a guess, so no probe and no warning.
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "openai-tooler",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"model", "gpt-5.4-mini",
+				"tools", Vectors.of(Strings.create("v/ops/covia/read"))));
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		assertNull(RT.getIn(result, Fields.WARNING), "Non-Ollama provider → no advisory");
+	}
+
 	@Test
 	public void testCreateAgentWithConfigFromWorkspacePath() {
 		// Store a template map in the caller's workspace

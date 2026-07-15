@@ -49,6 +49,8 @@ import dev.langchain4j.model.chat.request.json.JsonSchemaElement;
 import dev.langchain4j.model.chat.request.json.JsonStringSchema;
 import dev.langchain4j.model.anthropic.AnthropicChatModel;
 import dev.langchain4j.model.ollama.OllamaChatModel;
+import dev.langchain4j.model.ollama.OllamaModelCard;
+import dev.langchain4j.model.ollama.OllamaModels;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 
 /**
@@ -247,6 +249,41 @@ public class LangChainAdapter extends AAdapter {
 	static boolean providerNeedsApiKey(String provider) {
 		return "openai".equals(provider) || "anthropic".equals(provider) || "gemini".equals(provider)
 			|| "xai".equals(provider) || "deepseek".equals(provider);
+	}
+
+	/**
+	 * Probes an Ollama server for a model's advertised capabilities — the
+	 * {@code capabilities} list from {@code /api/show}, e.g.
+	 * {@code ["completion", "tools", "vision"]}. This is the only provider whose
+	 * tool-calling support is discoverable in advance: langchain4j's own
+	 * {@code Capability} enum has no tool capability, and the hosted providers'
+	 * {@code /models} endpoints don't report one (#205).
+	 *
+	 * <p>Best-effort and side-effect-free. Returns {@code null} when capabilities
+	 * cannot be determined — the server is unreachable, the model is not
+	 * installed, or the Ollama version predates capability reporting. Callers
+	 * treat {@code null} as "unknown", never as a negative. A short timeout and
+	 * zero retries keep this from stalling its caller when Ollama is absent
+	 * (a refused connection returns immediately).</p>
+	 *
+	 * @param baseUrl Ollama base URL (e.g. {@code http://localhost:11434})
+	 * @param model   model name (e.g. {@code qwen2.5})
+	 * @return the advertised capabilities, or {@code null} if undeterminable
+	 */
+	public static java.util.List<String> ollamaModelCapabilities(String baseUrl, String model) {
+		try {
+			OllamaModelCard card = OllamaModels.builder()
+				.baseUrl(baseUrl)
+				.timeout(Duration.ofSeconds(2))
+				.maxRetries(0)
+				.build()
+				.modelCard(model)
+				.content();
+			java.util.List<String> caps = (card != null) ? card.getCapabilities() : null;
+			return (caps != null && !caps.isEmpty()) ? caps : null;
+		} catch (RuntimeException e) {
+			return null;
+		}
 	}
 
 	private ChatModel buildProviderModel(String provider, String modelName, String apiKey, AString urlParam, Integer maxTokens) {

@@ -478,8 +478,74 @@ public class AgentAdapter extends AAdapter {
 			Fields.CREATED, CVMBool.of(slot == SlotResult.CREATED),
 			Fields.UPDATED, CVMBool.of(slot == SlotResult.UPDATED));
 
+		// Advisory only: flag an agent whose declared tools may be ignored by its
+		// configured model (#205). Never fails create — the user can switch or
+		// install a model later.
+		AString warning = toolCapabilityWarning(config, ctx);
+		if (warning != null) {
+			result = result.assoc(Fields.WARNING, warning);
+			log.info("agent:create {} — {}", agentId, warning);
+		}
+
 		job.setStatus(Status.STARTED);
 		job.completeWith(result);
+	}
+
+	/**
+	 * Best-effort tool-capability advisory for a freshly-configured agent (#205).
+	 * When the agent declares {@code tools} on an Ollama-backed model, probes the
+	 * model's advertised capabilities and returns a warning when tool-calling
+	 * can't be confirmed — either the model reports no {@code tools} capability,
+	 * or it couldn't be reached/verified (not installed yet). Warning only:
+	 * create never fails on this, since the model can be switched or installed
+	 * later. Returns {@code null} when there's nothing to warn about — no tools
+	 * declared, a non-Ollama provider (whose tool support isn't discoverable in
+	 * advance, so silence beats a guess), or a confirmed tool-capable model.
+	 */
+	private AString toolCapabilityWarning(AMap<AString, ACell> config, RequestContext ctx) {
+		if (config == null) return null;
+		AVector<ACell> tools = RT.ensureVector(config.get(Strings.intern("tools")));
+		if (tools == null || tools.isEmpty()) return null;   // no tools → nothing to check
+
+		// Only Ollama exposes model capabilities; skip other providers entirely.
+		AString llmOp = RT.ensureString(config.get(K_LLM_OPERATION));
+		if (llmOp == null) return null;
+		Asset opAsset;
+		try { opAsset = engine.resolveAsset(llmOp, ctx); }
+		catch (RuntimeException e) { return null; }
+		if (opAsset == null) return null;
+		String adapterOp = getAdapterOperation(opAsset.meta());   // e.g. "langchain:ollama"
+		if (adapterOp == null || !adapterOp.startsWith("langchain:ollama")) return null;
+
+		AString modelCell = RT.ensureString(config.get(Strings.intern("model")));
+		String model = (modelCell != null) ? modelCell.toString() : "qwen";  // langchain Ollama default
+		AString urlCell = RT.ensureString(config.get(Strings.intern("url")));
+		String baseUrl = (urlCell != null) ? urlCell.toString() : "http://localhost:11434";
+
+		return toolWarningFor(model, baseUrl,
+			LangChainAdapter.ollamaModelCapabilities(baseUrl, model));
+	}
+
+	/**
+	 * Pure decision half of {@link #toolCapabilityWarning} — given a model, its
+	 * base URL, and the capabilities the probe resolved ({@code null} = couldn't
+	 * determine), returns the advisory string or {@code null} for "no warning".
+	 * Split out so the wording is unit-testable without a live Ollama server.
+	 */
+	static AString toolWarningFor(String model, String baseUrl, java.util.List<String> caps) {
+		if (caps == null) {
+			return Strings.create("agent declares tools but its Ollama model '" + model
+				+ "' could not be confirmed to support tool-calling at " + baseUrl
+				+ " (it may not be installed yet). Install or switch to a tool-capable model"
+				+ " such as qwen2.5 before running — this is only a warning.");
+		}
+		if (!caps.contains("tools")) {
+			return Strings.create("agent declares tools but its Ollama model '" + model
+				+ "' does not advertise tool-calling (capabilities: " + caps
+				+ ") — the model will likely ignore tool calls. Use a tool-capable model"
+				+ " such as qwen2.5, or switch the model later — this is only a warning.");
+		}
+		return null;
 	}
 
 	/** Outcome of resolving the target slot for {@code agent:create}. */
