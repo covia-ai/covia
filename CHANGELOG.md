@@ -12,6 +12,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - System tray icon on desktop launches — open, close venue, exit (`COVIA_NO_TRAY=1` to disable)
 - `VenueAuth.mintToken()` — raw self-issued JWT for stored credentials (aud-bound, explicit lifetime) (#219)
 - Token usage (`tokens: {input, output, total}`) on agent timeline entries, session `meta.tokens`, job records and `agent:context` (#217)
+- Typed outputs work on Anthropic — provider-aware structured output via forced tool calling, transparent to agents (#81)
 
 ### Fixed
 - Task input rendered to models as plain text/JSON, never EDN map literals (#215)

@@ -234,7 +234,7 @@ public class LangChainAdapter extends AAdapter {
 			// Resolve asset-referenced image blocks to inline data (covia#198):
 			// the job record keeps the ~tiny reference, not the image bytes.
 			AVector<ACell> resolvedMessages = resolveImageRefs(messages, rctx);
-			ACell result = callModel(chatModel, resolvedMessages, tools, responseFormatCell);
+			ACell result = callModel(provider, chatModel, resolvedMessages, tools, responseFormatCell);
 			if (legacyOutput) {
 				// Wrap assistant message as {response: content}
 				AString content = RT.ensureString(RT.getIn(result, K_CONTENT));
@@ -398,13 +398,30 @@ public class LangChainAdapter extends AAdapter {
 	 * Calls the LLM with messages, optional tool definitions, and optional response format.
 	 * Returns an assistant message map: {role, content?, toolCalls?}.
 	 *
+	 * <p>Provider-aware structured output (#81): callers request structured
+	 * output uniformly via {@code responseFormat}; THIS is the layer that
+	 * picks the mechanism. Providers with native JSON-schema response_format
+	 * take the direct path; providers without it (Anthropic) are served via
+	 * {@link #callModelForcedTool} — same contract, different plumbing, so
+	 * flipping providers is transparent to agents and harnesses.</p>
+	 *
 	 * @param responseFormatCell Response format: null (default text), "json" or "text" string,
 	 *        or a map {@code {name: "...", schema: {type: "object", ...}}} for strict schema mode
 	 */
-	private static ACell callModel(ChatModel model, AVector<ACell> messages,
+	private static ACell callModel(String provider, ChatModel model, AVector<ACell> messages,
 			AVector<ACell> tools, ACell responseFormatCell) {
 		List<ChatMessage> chatMessages = toChatMessages(messages);
 		ResponseFormat responseFormat = toResponseFormat(responseFormatCell);
+
+		if (responseFormat != null && lacksSchemaResponseFormat(provider)) {
+			if (responseFormat.jsonSchema() != null) {
+				return callModelForcedTool(model, messages, tools, responseFormatCell);
+			}
+			// Plain JSON mode (no schema) is equally unsupported there —
+			// suppress rather than let the provider client reject the
+			// request; conformance falls back to prompt guidance.
+			responseFormat = null;
+		}
 
 		log.debug("LLM call: {} messages, {} tools", chatMessages.size(),
 			(tools != null) ? tools.count() : 0);
@@ -433,6 +450,99 @@ public class LangChainAdapter extends AAdapter {
 				? response.aiMessage().toolExecutionRequests() : "none");
 
 		return toAssistantMessage(response);
+	}
+
+	// ========== Provider-aware structured output (#81) ==========
+
+	/**
+	 * Providers WITHOUT native JSON-schema {@code response_format} support —
+	 * structured output is realised via forced tool calling instead
+	 * (Anthropic's only structured-output mechanism). Kept as a denylist so
+	 * every other provider keeps the direct path exactly as before.
+	 */
+	static boolean lacksSchemaResponseFormat(String provider) {
+		return "anthropic".equals(provider);
+	}
+
+	/**
+	 * Structured output via forced tool calling: a synthetic output tool
+	 * whose parameters ARE the requested schema joins the palette, and tool
+	 * choice is forced ({@code REQUIRED}) — every turn ends in a tool call:
+	 * work tools while working, the output tool to answer. A call to the
+	 * output tool is converted back into a plain assistant TEXT message
+	 * whose content is the arguments JSON, so upstream consumers see exactly
+	 * what native response_format would have produced. Calls to other tools
+	 * pass through unchanged — agent tool loops work normally.
+	 *
+	 * <p>Note for direct API callers: on these providers a schema request
+	 * combined with {@code REQUIRED} means the model cannot end a turn in
+	 * free text. The venue harnesses always offer completion tools alongside
+	 * (typed complete/fail), so agents are unaffected.</p>
+	 */
+	static ACell callModelForcedTool(ChatModel model, AVector<ACell> messages,
+			AVector<ACell> tools, ACell responseFormatCell) {
+		String outName = outputToolName(responseFormatCell);
+		AMap<AString, ACell> outputTool = syntheticOutputTool(outName, responseFormatCell);
+		AVector<ACell> allTools = (tools != null) ? tools.conj(outputTool) : Vectors.of((ACell) outputTool);
+
+		log.debug("LLM call (forced-tool structured output): {} messages, {} tools, output tool '{}'",
+			messages.count(), allTools.count(), outName);
+
+		ChatRequest request = ChatRequest.builder()
+			.messages(toChatMessages(messages))
+			.toolSpecifications(toToolSpecifications(allTools))
+			.toolChoice(dev.langchain4j.model.chat.request.ToolChoice.REQUIRED)
+			.build();
+		ChatResponse response = model.chat(request);
+		return convertOutputToolCall(toAssistantMessage(response), outName);
+	}
+
+	/** The synthetic output tool's name — the responseFormat's own name (the
+	 *  harness passes e.g. "agent_output"), or "structured_output". */
+	static String outputToolName(ACell responseFormatCell) {
+		AString name = RT.ensureString(RT.getIn(responseFormatCell, K_NAME));
+		return (name != null) ? name.toString() : "structured_output";
+	}
+
+	/** A tool definition carrying the requested schema as its parameters —
+	 *  the {@code {name, description, parameters}} shape that
+	 *  {@link #toToolSpecifications} converts. */
+	static AMap<AString, ACell> syntheticOutputTool(String name, ACell responseFormatCell) {
+		AMap<AString, ACell> tool = Maps.of(
+			K_NAME, Strings.create(name),
+			Strings.intern("description"), Strings.intern(
+				"Deliver your final answer by calling this tool with the answer as its arguments. "
+				+ "Call it exactly once, when you have the complete answer."));
+		ACell schema = RT.getIn(responseFormatCell, K_SCHEMA);
+		if (schema instanceof AMap) tool = tool.assoc(K_PARAMETERS, schema);
+		return tool;
+	}
+
+	/**
+	 * If the assistant called the synthetic output tool, rewrites the message
+	 * as a plain text response: content = the call's arguments JSON,
+	 * toolCalls dropped, tokens / finishReason preserved. An answer call
+	 * dominates: any accompanying text preamble (Anthropic sometimes chats
+	 * before a forced tool_use block) and any other parallel tool calls are
+	 * deliberately discarded — content must stay cleanly parseable. Messages
+	 * without an output-tool call pass through unchanged.
+	 */
+	@SuppressWarnings("unchecked")
+	static ACell convertOutputToolCall(ACell assistantMsg, String outputToolName) {
+		ACell tcCell = RT.getIn(assistantMsg, K_TOOL_CALLS);
+		if (!(tcCell instanceof AVector)) return assistantMsg;
+		AVector<ACell> toolCalls = (AVector<ACell>) tcCell;
+		for (long i = 0; i < toolCalls.count(); i++) {
+			ACell tc = toolCalls.get(i);
+			AString name = RT.ensureString(RT.getIn(tc, K_NAME));
+			if (name == null || !outputToolName.equals(name.toString())) continue;
+			ACell args = RT.getIn(tc, K_ARGUMENTS);
+			AString content = (args instanceof AString s) ? s : JSON.print(args);
+			return ((AMap<AString, ACell>) assistantMsg)
+				.dissoc(K_TOOL_CALLS)
+				.assoc(K_CONTENT, content);
+		}
+		return assistantMsg;
 	}
 
 	// ========== Response conversion ==========

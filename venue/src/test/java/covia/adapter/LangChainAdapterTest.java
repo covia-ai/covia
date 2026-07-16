@@ -1112,4 +1112,115 @@ public class LangChainAdapterTest {
 	public void testStripThinkTagsRemoves() {
 		assertEquals("Result", LangChainAdapter.stripThinkTags("<think>some reasoning</think>Result"));
 	}
+
+	// ========== #81 — provider-aware structured output ==========
+
+	private static final ACell RF_SCHEMA = Maps.of(
+		"name", Strings.create("agent_output"),
+		"schema", Maps.of(
+			"type", "object",
+			"properties", Maps.of("answer", Maps.of("type", "integer")),
+			"required", Vectors.of("answer")));
+
+	@Test
+	public void testProviderCapabilityMap() {
+		assertTrue(LangChainAdapter.lacksSchemaResponseFormat("anthropic"));
+		for (String p : new String[] {"openai", "ollama", "gemini", "xai", "deepseek"}) {
+			assertFalse(LangChainAdapter.lacksSchemaResponseFormat(p),
+				p + " keeps the native response_format path");
+		}
+	}
+
+	@Test
+	public void testSyntheticOutputToolCarriesSchema() {
+		AMap<AString, ACell> tool = LangChainAdapter.syntheticOutputTool(
+			"agent_output", RF_SCHEMA);
+		// Round-trip through the real converter — the schema must land as
+		// the tool's parameters, exactly like any configured tool.
+		List<ToolSpecification> specs = LangChainAdapter.toToolSpecifications(
+			Vectors.of((ACell) tool));
+		assertEquals(1, specs.size());
+		assertEquals("agent_output", specs.get(0).name());
+		assertNotNull(specs.get(0).parameters());
+		assertTrue(specs.get(0).parameters().properties().containsKey("answer"));
+	}
+
+	@Test
+	public void testConvertOutputToolCall() {
+		// The reported Anthropic shape: text preamble + forced tool_use block.
+		ACell msg = Maps.of(
+			"role", Strings.create("assistant"),
+			"content", Strings.create("Sure, here is the answer:"),
+			"toolCalls", Vectors.of(Maps.of(
+				"id", Strings.create("tu_1"),
+				"name", Strings.create("agent_output"),
+				"arguments", Strings.create("{\"answer\": 42}"))),
+			"tokens", Maps.of("input", 10L, "output", 5L, "total", 15L));
+
+		ACell converted = LangChainAdapter.convertOutputToolCall(msg, "agent_output");
+		assertEquals("{\"answer\": 42}", RT.getIn(converted, "content").toString(),
+			"content must be the arguments JSON, preamble discarded");
+		assertNull(RT.getIn(converted, "toolCalls"), "the synthetic call must not leak upstream");
+		assertNotNull(RT.getIn(converted, "tokens"), "usage accounting must survive the rewrite");
+
+		// Ordinary tool calls pass through untouched — agent loops unaffected
+		ACell workCall = Maps.of(
+			"role", Strings.create("assistant"),
+			"toolCalls", Vectors.of(Maps.of(
+				"name", Strings.create("covia_read"),
+				"arguments", Strings.create("{\"path\": \"w/x\"}"))));
+		assertSame(workCall, LangChainAdapter.convertOutputToolCall(workCall, "agent_output"));
+
+		// Text-only responses pass through untouched
+		ACell text = Maps.of("role", Strings.create("assistant"),
+			"content", Strings.create("plain reply"));
+		assertSame(text, LangChainAdapter.convertOutputToolCall(text, "agent_output"));
+	}
+
+	@Test
+	public void testForcedToolStructuredCallEndToEnd() {
+		// Stub provider standing in for Anthropic: captures the request the
+		// adapter built, replies with the multi-block shape (text preamble +
+		// forced tool_use). Verifies the whole branch: schema tool added,
+		// tool choice forced, work tools preserved, response converted to
+		// schema-conformant text with usage intact.
+		var captured = new java.util.concurrent.atomic.AtomicReference<dev.langchain4j.model.chat.request.ChatRequest>();
+		dev.langchain4j.model.chat.ChatModel stub = new dev.langchain4j.model.chat.ChatModel() {
+			@Override
+			public ChatResponse chat(dev.langchain4j.model.chat.request.ChatRequest request) {
+				captured.set(request);
+				AiMessage ai = new AiMessage("Let me deliver the answer.",
+					List.of(dev.langchain4j.agent.tool.ToolExecutionRequest.builder()
+						.id("tu_1").name("agent_output")
+						.arguments("{\"answer\": 42}").build()));
+				return ChatResponse.builder()
+					.aiMessage(ai)
+					.tokenUsage(new TokenUsage(10, 5))
+					.finishReason(FinishReason.TOOL_EXECUTION)
+					.build();
+			}
+		};
+
+		convex.core.data.AVector<ACell> messages = Vectors.of(
+			(ACell) Maps.of("role", Strings.create("user"), "content", Strings.create("what is 6*7?")));
+		convex.core.data.AVector<ACell> workTools = Vectors.of(
+			(ACell) Maps.of("name", Strings.create("covia_read"),
+				"description", Strings.create("read a value")));
+
+		ACell result = LangChainAdapter.callModelForcedTool(stub, messages, workTools, RF_SCHEMA);
+
+		// Request shape: both tools present, choice forced
+		var request = captured.get();
+		assertEquals(2, request.toolSpecifications().size(), "work tool + synthetic output tool");
+		assertTrue(request.toolSpecifications().stream().anyMatch(t -> t.name().equals("agent_output")));
+		assertTrue(request.toolSpecifications().stream().anyMatch(t -> t.name().equals("covia_read")));
+		assertEquals(dev.langchain4j.model.chat.request.ToolChoice.REQUIRED, request.toolChoice());
+		assertNull(request.responseFormat(), "no response_format on the forced-tool path");
+
+		// Response: exactly what native response_format would have produced
+		assertEquals("{\"answer\": 42}", RT.getIn(result, "content").toString());
+		assertNull(RT.getIn(result, "toolCalls"));
+		assertEquals(15L, RT.ensureLong(RT.getIn(result, "tokens", "total")).longValue(),
+			"usage must be measured on the forced-tool path too");
+	}
 }

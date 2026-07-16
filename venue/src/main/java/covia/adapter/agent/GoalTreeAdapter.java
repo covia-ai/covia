@@ -432,6 +432,13 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		//      harness extracts the args as the result.
 		// The agent author chooses how to coach the LLM via the system
 		// prompt; the framework wires up both mechanisms.
+		//
+		// Provider handling lives in the ADAPTER (#81): LangChainAdapter
+		// suppresses response_format for providers without native schema
+		// support and realises it via forced tool calling instead, converting
+		// the output-tool call back into schema-conformant text. This harness
+		// stays provider-blind — flipping llmOperation between providers
+		// changes nothing here.
 		AMap<AString, ACell> outputs = resolveOutputs(config);
 		AMap<AString, ACell> defaultSchema = outputsCompleteSchema(outputs);
 		AMap<AString, ACell> perRequestSchema = extractPerRequestResponseSchema(tasks);
