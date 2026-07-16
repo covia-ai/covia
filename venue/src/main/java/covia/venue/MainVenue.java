@@ -90,6 +90,11 @@ public class MainVenue {
 			}
 			log.info("All venues flushed");
 		});
+
+		// Desktop presence: a tray icon per venue with Open / Close / Exit —
+		// best-effort; headless or unsupported desktops (and COVIA_NO_TRAY=1)
+		// run without one. Tray logs why when it installs nothing.
+		Tray.install(servers);
 	}
 	
 	private static void configureLogging(ACell config) throws JoranException, IOException {

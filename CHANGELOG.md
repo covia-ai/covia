@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Covia is pre-1.0, so minor versions may include breaking changes.
 
+## [Unreleased]
+
+### Added
+- System tray icon on desktop launches — open, close venue, exit (`COVIA_NO_TRAY=1` to disable)
+
 ## [0.5.0] - 2026-07-15
 
 ### Added

@@ -352,6 +352,18 @@ data. Never commit keystore passwords; use env vars or gitignored dev configs.
 - `port`: HTTP listen port (default `8080`).
 - `bindAddress`: network interface the HTTP connector binds to. When omitted, the venue binds **all interfaces** (`0.0.0.0`) — reachable from the LAN. Set to `"127.0.0.1"` to restrict the venue to loopback (recommended when embedding the venue as a local subprocess). This is the socket bind address and is distinct from `hostname`, which is the venue's *advertised* public host used to derive `baseUrl`/DID.
 
+### System tray
+
+When `MainVenue` runs on a desktop (not headless), each venue gets a system
+tray icon: hover shows the venue name, port and DID; the menu offers **Open
+Venue** (status page in the browser — double-click does the same), **Close
+Venue** (that venue; the process exits when the last one closes) and **Exit**
+(all venues). Close/Exit run the full shutdown flush, same as SIGTERM.
+
+Strictly best-effort — headless JVMs (Docker, CI, servers) and unsupported
+desktops run without an icon, and a tray failure never takes a venue down.
+Set `COVIA_NO_TRAY=1` to suppress it explicitly. See `covia.venue.Tray`.
+
 ### Rate limiting
 
 ```json
