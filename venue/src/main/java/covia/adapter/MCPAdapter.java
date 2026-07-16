@@ -641,6 +641,17 @@ public class MCPAdapter extends AAdapter {
 		AMap<AString, ACell> opMeta = buildBridgedOpMeta(
 			"Bridged from MCP server at " + url, url, storedAuth, tool, nameOverride, descOverride);
 
+		// Argument defaults: stored on the op (generic dispatch-time merge —
+		// JobManager.applyDefaults); defaulted keys leave the declared
+		// schema's required list so callers know they may omit them.
+		ACell defsCell = RT.getIn(input, Fields.DEFAULT);
+		if (defsCell != null) {
+			AMap<AString, ACell> defaults = RT.ensureMap(defsCell);
+			if (defaults == null) throw new IllegalArgumentException(
+				"default must be an object of argument values to fill in when the caller omits them");
+			if (defaults.count() > 0) opMeta = withDefaults(opMeta, defaults);
+		}
+
 		RequestContext writeCtx = venuePath ? engine.venueContext() : ctx;
 		writeLattice(writeCtx, path, opMeta);
 
@@ -828,6 +839,13 @@ public class MCPAdapter extends AAdapter {
 				} else {
 					newOp = (AMap<AString, ACell>) newOp.dissoc(Fields.OUTPUT);
 				}
+				// Argument defaults survive refresh (they live in the operation
+				// map) — re-subtract them from the fresh schema's required list.
+				AMap<AString, ACell> defs = RT.ensureMap(RT.getIn(newOp, Fields.DEFAULT));
+				if (defs != null && defs.count() > 0) {
+					newOp = newOp.assoc(Fields.INPUT,
+						subtractRequired(RT.getIn(newOp, Fields.INPUT), defs));
+				}
 				AMap<AString, ACell> newMeta = meta.assoc(Fields.OPERATION, newOp);
 				newMeta = withMcpAnnotations(newMeta, tool);
 				if (newMeta.equals(meta)) {
@@ -930,6 +948,39 @@ public class MCPAdapter extends AAdapter {
 			Fields.DESCRIPTION, Strings.create(desc),
 			Fields.OPERATION, operation);
 		return withMcpAnnotations(meta, tool);
+	}
+
+	/** Attaches argument defaults to a bridged op: {@code operation.default}
+	 *  (merged under caller input at dispatch — JobManager.applyDefaults) and
+	 *  drops defaulted keys from the declared schema's {@code required} list.
+	 *  Values may be any type. Purpose-shaping, not policy — callers can
+	 *  override; enforcement is a capability gate's job. */
+	static AMap<AString, ACell> withDefaults(AMap<AString, ACell> meta, AMap<AString, ACell> defaults) {
+		AMap<AString, ACell> operation = RT.ensureMap(RT.getIn(meta, Fields.OPERATION));
+		operation = operation.assoc(Fields.DEFAULT, defaults);
+		operation = operation.assoc(Fields.INPUT,
+			subtractRequired(RT.getIn(operation, Fields.INPUT), defaults));
+		return meta.assoc(Fields.OPERATION, operation);
+	}
+
+	/** Removes defaulted keys from a JSON schema's {@code required} list —
+	 *  the caller may omit them. The properties stay declared (overridable). */
+	@SuppressWarnings("unchecked")
+	static ACell subtractRequired(ACell schema, AMap<AString, ACell> defaults) {
+		AMap<AString, ACell> s = RT.ensureMap(schema);
+		if (s == null) return schema;
+		ACell reqCell = s.get(Strings.intern("required"));
+		if (!(reqCell instanceof AVector<?> req)) return schema;
+		AVector<ACell> remaining = Vectors.empty();
+		for (long i = 0; i < req.count(); i++) {
+			ACell k = req.get(i);
+			if (k instanceof AString ks && defaults.containsKey(ks)) continue;
+			remaining = remaining.conj(k);
+		}
+		if (remaining.count() == req.count()) return schema;
+		return (remaining.count() > 0)
+			? s.assoc(Strings.intern("required"), remaining)
+			: (AMap<AString, ACell>) s.dissoc(Strings.intern("required"));
 	}
 
 	/** Attaches the tool's MCP annotations under {@code mcp.annotations}

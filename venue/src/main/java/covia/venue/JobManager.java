@@ -205,6 +205,10 @@ public class JobManager {
 		// Advance the lattice write clock for this dispatch — the harness owns
 		// write time (see Engine.refreshWriteClock).
 		engine.refreshWriteClock();
+		// Fill in the operation's declared argument defaults BEFORE gate
+		// arming and job creation, so gates, job records and the adapter all
+		// see the one effective input.
+		input = applyDefaults(meta, input);
 		// Arm capability gates (#216): every requireCapability fired during this
 		// invocation can evaluate nb.gate-caveated grants against exactly this
 		// op + input. Installed here because dispatch is the one place with the
@@ -322,6 +326,9 @@ public class JobManager {
 		// Advance the lattice write clock — internal dispatch (agent transitions,
 		// tool calls) is high-frequency, so long cycles keep stamping fresh time.
 		engine.refreshWriteClock();
+		// Argument defaults, exactly as invokeOperation — the two paths differ
+		// only in Job creation, never in the effective input.
+		input = applyDefaults(meta, input);
 		// Arm capability gates (#216) — see invokeOperation. The agent tool loop
 		// dispatches through here, so gated config caps rule on each tool call.
 		ctx = ctx.withInvocation(input, this::evaluateGate);
@@ -341,6 +348,34 @@ public class JobManager {
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
 		}
+	}
+
+	/**
+	 * Applies the operation's declared argument defaults: {@code operation.default}
+	 * is a map merged UNDER the caller's input — caller-supplied values always
+	 * win, and default values may be any cell type (strings, numbers, booleans,
+	 * vectors, maps). Purpose-shaping only, never policy: a caller can override
+	 * any default; enforcement belongs to capability gates (#216).
+	 *
+	 * <p>A null input becomes the defaults map; a non-map input passes through
+	 * untouched (defaults only make sense for named arguments). Shallow,
+	 * top-level merge.</p>
+	 */
+	@SuppressWarnings("unchecked")
+	static ACell applyDefaults(AMap<AString, ACell> meta, ACell input) {
+		ACell defs = RT.getIn(meta, Fields.OPERATION, Fields.DEFAULT);
+		if (!(defs instanceof AMap<?, ?>)) return input;
+		AMap<AString, ACell> defaults = (AMap<AString, ACell>) defs;
+		if (defaults.count() == 0) return input;
+		if (input == null) return defaults;
+		if (!(input instanceof AMap<?, ?>)) return input;
+		AMap<AString, ACell> in = (AMap<AString, ACell>) input;
+		for (var entry : defaults.entrySet()) {
+			if (!in.containsKey(entry.getKey())) {
+				in = in.assoc(entry.getKey(), entry.getValue());
+			}
+		}
+		return in;
 	}
 
 	/** Bound on a single capability-gate evaluation — gates sit on the

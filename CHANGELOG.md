@@ -16,6 +16,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `agent:create` warns when `config.apiKey` holds a raw credential instead of a `s/<name>` secret reference
 - Capability gates — a grant's `nb.gate` names an op that decides per invocation whether the capability applies; runtime-enforced policy limits without a policy language (#216)
 - MCP tool bridging — external MCP tools materialise as catalog operations with caps/gates/jobs applying; curate single tools at chosen paths (`v/ops/mcp/add-tool`, cross-server groups as catalog paths) or mirror whole servers (`v/ops/mcp/add-server`, config-time and dynamic), user and venue scopes (#80)
+- `operation.default` — declarative argument defaults on any operation, merged under the caller's input at dispatch (caller wins; any value type); `add-tool` stores them and drops defaulted keys from the schema's required list (`venue/docs/OPERATIONS.md` §5)
 
 ### Fixed
 - Task input rendered to models as plain text/JSON, never EDN map literals (#215)

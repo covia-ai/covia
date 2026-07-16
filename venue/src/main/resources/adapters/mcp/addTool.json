@@ -12,7 +12,8 @@
 				"path": { "type": "string", "description": "Catalog destination for the bridged op, naming the op itself — e.g. o/research/search_papers (your operations) or v/ops/... (venue catalog, needs mcp/manage)" },
 				"auth": { "type": "string", "description": "Optional bearer credential: a secret reference 's/<name>' (recommended, stored via v/ops/secret/set), a DID-qualified reference 'did:.../s/<name>', or a literal token (discouraged — persists on the lattice)" },
 				"name": { "type": "string", "description": "Optional display-name override for the bridged op" },
-				"description": { "type": "string", "description": "Optional description override — survives refresh (curated refresh never touches name/description)" }
+				"description": { "type": "string", "description": "Optional description override — survives refresh (curated refresh never touches name/description)" },
+				"default": { "type": "object", "description": "Optional argument defaults, any value types — merged under the caller's input at dispatch (caller wins). Defaulted keys leave the schema's required list. Purpose-shaping, not policy: use a capability gate to enforce values. Don't put credentials here — they persist plainly; use auth or the secret store" }
 			},
 			"required": ["server", "tool", "path"]
 		},

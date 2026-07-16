@@ -17,6 +17,7 @@ public class Fields {
 	public static final StringShort OUTPUT = Strings.intern("output");
 	public static final StringShort RESULT = Strings.intern("result");
 	public static final StringShort OPERATION = Strings.intern("operation");
+	public static final StringShort DEFAULT = Strings.intern("default");
 	public static final StringShort MESSAGE = Strings.intern("message");
 	public static final StringShort DELAY = Strings.intern("delay");
 	public static final StringShort ID = Strings.intern("id");

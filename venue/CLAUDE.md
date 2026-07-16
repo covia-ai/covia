@@ -468,12 +468,16 @@ validation all apply because they are ordinary ops. **The tool is the
 entity**; the server is just where it lives. Two management styles:
 
 - **Curated** (`v/ops/mcp/add-tool {server, tool, path, auth?, name?,
-  description?}`): one tool at a caller-chosen catalog path. Groups are just
-  paths — `o/research/search_papers` and `o/research/github_search` can point
-  at different servers with different auth. Registry-free (the asset is
-  self-contained); remove with `covia:delete` on the path — nothing
-  resurrects it. `name`/`description` overrides are yours and survive
-  refresh.
+  description?, default?}`): one tool at a caller-chosen catalog path.
+  Groups are just paths — `o/research/search_papers` and
+  `o/research/github_search` can point at different servers with different
+  auth. Registry-free (the asset is self-contained); remove with
+  `covia:delete` on the path — nothing resurrects it. `name`/`description`
+  overrides are yours and survive refresh. `default` purpose-shapes the
+  tool with argument defaults (any value types; defaulted keys leave
+  `required`; generic `operation.default` mechanism — `docs/OPERATIONS.md`
+  §5): a generic five-field `create_issue` becomes a two-field
+  `report_bug`.
 - **Mirrored** (`v/ops/mcp/add-server {name, url, auth?, scope?}` /
   `remove-server`): ALL of a server's tools under `o/mcp/<server>/` (or
   `v/ops/mcp/<server>/` at venue scope), registry entry for bookkeeping.

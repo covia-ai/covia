@@ -255,6 +255,38 @@ Each entry in `/v/ops/` is **full asset metadata** — the same JSON the adapter
 }
 ```
 
+### Argument defaults (`operation.default`)
+
+Any operation may declare `operation.default`: a map of argument values
+merged **under** the caller's input at dispatch. Caller-supplied values
+always win, and default values may be any type (strings, numbers, booleans,
+arrays, objects). The merge is shallow (top level) and applies to map
+inputs only — a scalar input passes through untouched; a null input becomes
+the defaults map.
+
+```json
+{
+  "name": "Report Covia Bug",
+  "operation": {
+    "adapter": "mcp:tools:call",
+    "remoteToolName": "create_issue",
+    "server": "https://mcp.github.example",
+    "default": { "owner": "covia-ai", "repo": "covia" },
+    "input": { "type": "object", "properties": { "title": {"type": "string"}, "body": {"type": "string"} } }
+  }
+}
+```
+
+Defaults are applied once, in `JobManager` at the dispatch point shared by
+`invokeOperation` and `invokeInternal` — before capability gates are armed
+and before the job record is written, so gates rule on and the job records
+the **effective** input. Every adapter gets the behaviour uniformly.
+
+Defaults are **purpose-shaping, not policy**: a caller can override any
+default. When a value must be constrained, use a capability gate
+(`UCAN.md` §3.3). Don't put credentials in defaults — they persist plainly
+on the lattice; credentials belong in `auth` fields or the secret store.
+
 ### Why inline metadata at the catalog path
 
 1. **Single round trip for invocation.** `grid:run v/ops/json/merge` reads the metadata and dispatches. No follow-up fetch to retrieve schemas.

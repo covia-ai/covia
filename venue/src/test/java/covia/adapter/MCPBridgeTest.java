@@ -312,6 +312,49 @@ public class MCPBridgeTest {
 	}
 
 	@Test
+	public void testAddToolWithDefaults() {
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		// test_random REQUIRES length — the default fills it, purpose-shaping
+		// the generic tool into a no-argument one.
+		Job add = engine.jobs().invokeOperation("v/ops/mcp/add-tool",
+			Maps.of(Fields.SERVER, TestServer.BASE_URL,
+				Fields.TOOL, "test_random",
+				Fields.PATH, "o/shaped/random8",
+				Fields.DEFAULT, Maps.of("length", "8")), ctx);
+		add.awaitResult(15000);
+		assertEquals(Status.COMPLETE, add.getStatus(), String.valueOf(add.getErrorMessage()));
+
+		// The stored op carries the defaults; the defaulted key left required
+		ACell meta = engine.resolveAsset(Strings.create("o/shaped/random8"), ctx).meta();
+		assertEquals("8", RT.getIn(meta, Fields.OPERATION, Fields.DEFAULT, "length").toString());
+		assertNull(RT.getIn(meta, Fields.OPERATION, Fields.INPUT, "required"),
+			"the only required key was defaulted away");
+
+		// A REQUIRED argument filled by default, through the full MCP round trip
+		Job call = engine.jobs().invokeOperation("o/shaped/random8", Maps.empty(), ctx);
+		ACell out = call.awaitResult(15000);
+		assertEquals(Status.COMPLETE, call.getStatus(), String.valueOf(call.getErrorMessage()));
+		assertEquals(16, RT.getIn(out, "bytes").toString().length(), "8 bytes hex-encoded");
+
+		// Caller override wins — purpose-shaping, not policy
+		Job call4 = engine.jobs().invokeOperation("o/shaped/random8",
+			Maps.of("length", "4"), ctx);
+		ACell out4 = call4.awaitResult(15000);
+		assertEquals(Status.COMPLETE, call4.getStatus(), String.valueOf(call4.getErrorMessage()));
+		assertEquals(8, RT.getIn(out4, "bytes").toString().length(), "4 bytes hex-encoded");
+
+		// Curated refresh preserves defaults and re-subtracts required from
+		// the freshly fetched schema — the op must be refresh-stable.
+		Job refresh = engine.jobs().invokeOperation("v/ops/mcp/refresh",
+			Maps.of(Fields.PATH, Strings.create("o/shaped")), ctx);
+		ACell rout = refresh.awaitResult(15000);
+		assertEquals(Status.COMPLETE, refresh.getStatus(), String.valueOf(refresh.getErrorMessage()));
+		assertEquals(1, RT.ensureLong(RT.getIn(rout, "unchanged")).longValue());
+		assertEquals(meta, engine.resolveAsset(Strings.create("o/shaped/random8"), ctx).meta(),
+			"refresh against an unchanged server must not perturb a defaults-shaped op");
+	}
+
+	@Test
 	public void testRefreshRejectsNameAndPathTogether() {
 		RequestContext ctx = RequestContext.of(ALICE_DID);
 		Job both = engine.jobs().invokeOperation("v/ops/mcp/refresh",

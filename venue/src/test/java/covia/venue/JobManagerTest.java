@@ -350,4 +350,74 @@ public class JobManagerTest {
 		assertFalse(engine.jobs().deleteJob(job.getID(), ctx),
 			"second delete finds nothing");
 	}
+
+	// ========== Argument defaults (operation.default) ==========
+
+	private static AMap<AString, ACell> echoWithDefaults(AMap<AString, ACell> defaults) {
+		return Maps.of(Fields.OPERATION, Maps.of(
+			Fields.ADAPTER, Strings.create("test:echo"),
+			Fields.DEFAULT, defaults));
+	}
+
+	@Test
+	public void testDefaultsFillMissingArgs() throws Exception {
+		// Defaults may be ANY value type: string, number, boolean, vector, map
+		AMap<AString, ACell> defaults = Maps.of(
+			Strings.create("s"), Strings.create("dflt"),
+			Strings.create("n"), RT.cvm(42L),
+			Strings.create("b"), CVMBool.TRUE,
+			Strings.create("v"), Vectors.of(Strings.create("x")),
+			Strings.create("m"), Maps.of(Strings.create("k"), Strings.create("v")));
+		ACell result = engine.jobs().invokeInternal(echoWithDefaults(defaults),
+			Maps.of(Strings.create("caller"), Strings.create("arg")), ctx)
+			.get(5, TimeUnit.SECONDS);
+		assertEquals(Strings.create("arg"), RT.getIn(result, "caller"));
+		assertEquals(Strings.create("dflt"), RT.getIn(result, "s"));
+		assertEquals(RT.cvm(42L), RT.getIn(result, "n"));
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "b"));
+		assertEquals(1, RT.ensureVector(RT.getIn(result, "v")).count());
+		assertEquals(Strings.create("v"), RT.getIn(result, "m", "k"));
+	}
+
+	@Test
+	public void testCallerOverridesDefault() throws Exception {
+		// Purpose-shaping, not policy: the caller always wins
+		AMap<AString, ACell> defaults = Maps.of(Strings.create("a"), Strings.create("dflt"));
+		ACell result = engine.jobs().invokeInternal(echoWithDefaults(defaults),
+			Maps.of(Strings.create("a"), Strings.create("mine")), ctx)
+			.get(5, TimeUnit.SECONDS);
+		assertEquals(Strings.create("mine"), RT.getIn(result, "a"));
+	}
+
+	@Test
+	public void testNullInputBecomesDefaults() throws Exception {
+		AMap<AString, ACell> defaults = Maps.of(Strings.create("a"), RT.cvm(1L));
+		ACell result = engine.jobs().invokeInternal(echoWithDefaults(defaults), null, ctx)
+			.get(5, TimeUnit.SECONDS);
+		assertEquals(RT.cvm(1L), RT.getIn(result, "a"));
+	}
+
+	@Test
+	public void testNonMapInputUntouchedByDefaults() throws Exception {
+		// Defaults only make sense for named arguments — scalar inputs pass through
+		AMap<AString, ACell> defaults = Maps.of(Strings.create("a"), RT.cvm(1L));
+		ACell result = engine.jobs().invokeInternal(echoWithDefaults(defaults),
+			Strings.create("scalar"), ctx).get(5, TimeUnit.SECONDS);
+		assertEquals(Strings.create("scalar"), result);
+	}
+
+	@Test
+	public void testDefaultsApplyOnJobPath() {
+		// invokeOperation (Job path) behaves identically to invokeInternal,
+		// and the job record stores the EFFECTIVE input
+		AMap<AString, ACell> defaults = Maps.of(Strings.create("a"), Strings.create("dflt"));
+		Job job = engine.jobs().invokeOperation(echoWithDefaults(defaults),
+			Maps.of(Strings.create("b"), Strings.create("mine")), ctx);
+		ACell result = job.awaitResult(5000);
+		assertEquals(Strings.create("dflt"), RT.getIn(result, "a"));
+		assertEquals(Strings.create("mine"), RT.getIn(result, "b"));
+		ACell recorded = RT.getIn(engine.jobs().getJobData(job.getID(), ctx), Fields.INPUT);
+		assertEquals(Strings.create("dflt"), RT.getIn(recorded, "a"),
+			"the job record must show what actually ran");
+	}
 }
