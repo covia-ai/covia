@@ -250,6 +250,47 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testCreateWarnsOnRawApiKey() {
+		// A raw credential in config persists unredacted on the lattice —
+		// the supported pattern is a secret-store reference.
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "raw-key-agent",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"model", "gpt-5.4-mini",
+				"apiKey", "sk-live-abcdef123456"));
+		ACell result = engine.jobs().invokeOperation(
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		AVector<ACell> warnings = RT.ensureVector(RT.getIn(result, Fields.WARNINGS));
+		assertNotNull(warnings, "raw apiKey in config should carry a warning");
+		assertEquals(1, warnings.count());
+		String w = RT.ensureString(warnings.get(0)).toString();
+		assertTrue(w.contains("v/ops/secret/set"),
+			"warning should name the remedy as an invocable catalog path: " + w);
+		assertTrue(w.contains("s/<name>"), "warning should show the reference form: " + w);
+	}
+
+	@Test
+	public void testCreateSecretRefApiKeyNoWarning() {
+		// Secret references are the supported pattern — both accepted prefixes.
+		for (String ref : new String[] {"s/OPENAI_API_KEY", "/s/OPENAI_API_KEY"}) {
+			ACell input = Maps.of(
+				Fields.AGENT_ID, "ref-key-agent-" + ref.length(),
+				Fields.CONFIG, Maps.of(
+					"operation", "v/ops/llmagent/chat",
+					"llmOperation", "v/ops/langchain/openai",
+					"model", "gpt-5.4-mini",
+					"apiKey", ref));
+			ACell result = engine.jobs().invokeOperation(
+				"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
+			assertNull(RT.getIn(result, Fields.WARNINGS),
+				"secret reference " + ref + " → no advisory");
+		}
+	}
+
+	@Test
 	public void testCreateWarnsOnUnresolvableTool() {
 		// OpenAI provider (no capability probe) so the only advisory in play is
 		// tool resolution. One tool resolves, one doesn't → warn about the latter.

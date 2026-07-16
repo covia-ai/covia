@@ -13,6 +13,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `VenueAuth.mintToken()` — raw self-issued JWT for stored credentials (aud-bound, explicit lifetime) (#219)
 - Token usage (`tokens: {input, output, total}`) on agent timeline entries, session `meta.tokens`, job records and `agent:context` (#217)
 - Typed outputs work on Anthropic — provider-aware structured output via forced tool calling, transparent to agents (#81)
+- `agent:create` warns when `config.apiKey` holds a raw credential instead of a `s/<name>` secret reference
 
 ### Fixed
 - Task input rendered to models as plain text/JSON, never EDN map literals (#215)

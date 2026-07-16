@@ -507,7 +507,32 @@ public class AgentAdapter extends AAdapter {
 		if (toolWarn != null) warnings = warnings.conj(toolWarn);
 		AString unresolvedWarn = unresolvableToolsWarning(config, ctx);
 		if (unresolvedWarn != null) warnings = warnings.conj(unresolvedWarn);
+		AString keyWarn = rawApiKeyWarning(config);
+		if (keyWarn != null) warnings = warnings.conj(keyWarn);
 		return warnings;
+	}
+
+	/**
+	 * Advisory for a raw credential in agent config. Job records redact
+	 * {@code apiKey} inputs, but an agent CONFIG persists on the lattice
+	 * verbatim — a raw key in {@code config.apiKey} is durably stored
+	 * unredacted and visible to anything that can read the agent record.
+	 * The supported pattern is the secret store: store the key via
+	 * {@code v/ops/secret/set}, then reference it as {@code s/<name>}
+	 * (resolved at invocation time, never persisted in the record). Warning
+	 * only — inlined keys on a throwaway dev venue are legitimate.
+	 */
+	static AString rawApiKeyWarning(AMap<AString, ACell> config) {
+		if (config == null) return null;
+		AString apiKey = RT.ensureString(config.get(Strings.intern("apiKey")));
+		if (apiKey == null) return null;
+		String v = apiKey.toString();
+		if (v.startsWith("s/") || v.startsWith("/s/")) return null; // secret reference
+		return Strings.intern("config.apiKey holds a raw credential — agent config"
+			+ " persists unredacted on the lattice. Store the key with the"
+			+ " v/ops/secret/set operation and reference it as s/<name> instead;"
+			+ " secret references are resolved at invocation time and never"
+			+ " persisted in the agent record.");
 	}
 
 	/**
