@@ -504,6 +504,30 @@ public class AgentState extends ALatticeComponent<ACell> {
 		return session;
 	}
 
+	/**
+	 * Adds a cycle's measured {@code {input, output, total}} token counts
+	 * into the session's {@code meta.tokens} running totals (#217). Pure —
+	 * safe under CAS retry. A session without a meta map (shouldn't happen —
+	 * sessions mint meta at creation) is left untouched rather than grown a
+	 * partial one.
+	 */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> bumpMetaTokens(AMap<AString, ACell> session,
+			AMap<AString, ACell> cycleTokens) {
+		if (!(session.get(K_META) instanceof AMap)) return session;
+		AMap<AString, ACell> meta = (AMap<AString, ACell>) session.get(K_META);
+		AMap<AString, ACell> totals = (meta.get(Fields.TOKENS) instanceof AMap tm)
+			? (AMap<AString, ACell>) tm : Maps.empty();
+		for (AString k : new AString[] {Fields.INPUT, Fields.OUTPUT, Fields.TOTAL}) {
+			long add = (cycleTokens.get(k) instanceof CVMLong cl) ? cl.longValue() : 0;
+			if (add == 0) continue;
+			long current = (totals.get(k) instanceof CVMLong cl) ? cl.longValue() : 0;
+			totals = totals.assoc(k, CVMLong.create(current + add));
+		}
+		if (totals.count() == 0) return session;
+		return session.assoc(K_META, meta.assoc(Fields.TOKENS, totals));
+	}
+
 	/** Drops the first {@code drainCount} entries of {@code session.pending},
 	 *  preserving the tail (entries that arrived after the snapshot). Shared
 	 *  by {@link #beginSessionCycle} and {@link #mergeRunResult}. Pure. */
@@ -965,6 +989,17 @@ public class AgentState extends ALatticeComponent<ACell> {
 
 					if (hasDrain) {
 						session = drainPendingPrefix(session, presentedSessionPendingCount);
+					}
+
+					// Session running token totals (#217): mirror the cycle's
+					// measured usage (as recorded on the timeline entry) into
+					// meta.tokens — same CAS, so timeline and session totals
+					// can never disagree.
+					ACell cycleTokens = (timelineEntry != null)
+						? timelineEntry.get(Fields.TOKENS) : null;
+					if (cycleTokens instanceof AMap) {
+						session = bumpMetaTokens(session,
+							(AMap<AString, ACell>) cycleTokens);
 					}
 
 					// The cycle is complete — release the session's inCycle

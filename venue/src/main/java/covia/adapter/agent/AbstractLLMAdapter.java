@@ -210,6 +210,63 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		return (session != null) ? RT.ensureVector(session.get(Fields.FRAMES)) : null;
 	}
 
+	// ========== Token usage tally (#217) ==========
+
+	/**
+	 * Per-transition token tally: {@code [input, output, total, measured]}.
+	 *
+	 * <p>Thread-confined by design: a transition (and every
+	 * {@link #invokeLevel3} call it makes — tool-loop iterations, goal-tree
+	 * subgoal recursion, compaction) runs synchronously on one virtual
+	 * thread, so a ThreadLocal carries the cycle's running totals without
+	 * threading a parameter through the frame recursion. Nested agent
+	 * transitions are dispatched onto their own virtual threads by
+	 * {@code invokeInternal}, so tallies never cross agents.</p>
+	 */
+	private static final ThreadLocal<long[]> TOKEN_TALLY = new ThreadLocal<>();
+
+	/** Opens a fresh tally for this transition (overwrites any stale one). */
+	protected static void beginTokenTally() {
+		TOKEN_TALLY.set(new long[4]);
+	}
+
+	/**
+	 * Closes the tally and returns the cycle's totals as a
+	 * {@code {input, output, total}} map, or null when no L3 call reported
+	 * measured usage — callers must then omit the field entirely (absent
+	 * means "not measured", never zero).
+	 */
+	protected static AMap<AString, ACell> endTokenTally() {
+		long[] t = TOKEN_TALLY.get();
+		TOKEN_TALLY.remove();
+		if (t == null || t[3] == 0) return null;
+		return Maps.of(
+			Fields.INPUT,  CVMLong.create(t[0]),
+			Fields.OUTPUT, CVMLong.create(t[1]),
+			Fields.TOTAL,  CVMLong.create(t[2]));
+	}
+
+	/** Adds an L3 assistant message's {@code tokens} sub-map to the open
+	 *  tally, if any. Missing counts contribute nothing; a missing total is
+	 *  derived from input + output so the invariant total ≥ input + output
+	 *  parts holds across providers that omit it. */
+	static void tallyTokens(ACell l3Result) {
+		long[] t = TOKEN_TALLY.get();
+		if (t == null) return;
+		ACell tokens = RT.getIn(l3Result, Fields.TOKENS);
+		if (!(tokens instanceof AMap)) return;
+		CVMLong in  = RT.ensureLong(RT.getIn(tokens, Fields.INPUT));
+		CVMLong out = RT.ensureLong(RT.getIn(tokens, Fields.OUTPUT));
+		CVMLong tot = RT.ensureLong(RT.getIn(tokens, Fields.TOTAL));
+		if (in == null && out == null && tot == null) return;
+		long inV = (in != null) ? in.longValue() : 0;
+		long outV = (out != null) ? out.longValue() : 0;
+		t[0] += inV;
+		t[1] += outV;
+		t[2] += (tot != null) ? tot.longValue() : inV + outV;
+		t[3] = 1; // measured
+	}
+
 	// ========== Level 3 invocation ==========
 
 	/**
@@ -247,6 +304,9 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			throw new JobFailedException("LLM call failed (" + llmOperation + "): "
 				+ (message != null ? message.toString() : "no message"));
 		}
+		// Provider-reported usage rides the assistant message (tokens
+		// {input, output, total}); add it to this transition's tally (#217).
+		tallyTokens(result);
 		return result;
 	}
 

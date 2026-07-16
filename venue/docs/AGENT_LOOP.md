@@ -669,7 +669,12 @@ run's `finally` block.
      preserved beyond the presented count and picked up by the next
      iteration's work check.
    - Update `state` from the returned value.
-   - Append timeline entry with full audit data (§2.4).
+   - Append timeline entry with full audit data (§2.4). When the
+     transition reports LLM token usage (`tokens: {input, output, total}`,
+     provider-measured — #217), it rides the timeline entry, is mirrored
+     into the picked session's `meta.tokens` running totals in the same
+     CAS, stamped on the assistant turn, and attached to the caller's
+     task/chat job record. Absent means "not measured", never zero.
    - Status is set to `RUNNING` if work remains, else `SLEEPING`.
 6. Complete any picked chat Job and drain parked task completions from
    `agent:complete-task` / `agent:fail-task` calls made during the

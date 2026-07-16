@@ -22,7 +22,13 @@ public class Fields {
 	public static final StringShort ID = Strings.intern("id");
 	public static final StringShort STATUS = Strings.intern("status");	
 	public static final StringShort OP = Strings.intern("op");
-	
+
+	/** Token usage map {@code {input, output, total}} — reported by LLM ops on
+	 *  assistant messages, aggregated per cycle onto agent timeline entries,
+	 *  session {@code meta.tokens} and job records (#217). Counts are
+	 *  provider-measured, never estimated; absence means "not measured". */
+	public static final StringShort TOKENS = Strings.intern("tokens");
+
 	// List / pagination related
 	public static final StringShort ITEMS = Strings.intern("items");
 	public static final StringShort TOTAL = Strings.intern("total");

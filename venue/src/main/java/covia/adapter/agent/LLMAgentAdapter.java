@@ -246,6 +246,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	ACell processChat(RequestContext ctx, ACell input) {
+		// Cycle-scoped token tally (#217): every invokeLevel3 below adds its
+		// provider-reported usage; drained into the transition output at the
+		// end. Thread-confined — see AbstractLLMAdapter.TOKEN_TALLY.
+		beginTokenTally();
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		ACell state = RT.getIn(input, AgentState.KEY_STATE);
 		// S3c: prefer session.pending over agent-level messages when a session
@@ -397,6 +401,13 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 					output = output.assoc(Fields.RESPONSE, taskOutput);
 				}
 			}
+		}
+
+		// Cycle token totals (#217) — measured only; absent means the
+		// provider reported nothing, never zero.
+		AMap<AString, ACell> cycleTokens = endTokenTally();
+		if (cycleTokens != null) {
+			output = output.assoc(Fields.TOKENS, cycleTokens);
 		}
 		return output;
 	}

@@ -403,6 +403,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 */
 	@SuppressWarnings("unchecked")
 	ACell processGoal(Job job, RequestContext ctx, ACell input) {
+		// Cycle-scoped token tally (#217): every invokeLevel3 in the frame
+		// run below (tool iterations, subgoal recursion, compaction — all on
+		// this virtual thread) adds its provider-reported usage; drained
+		// into the transition output at the end.
+		beginTokenTally();
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		ACell state = RT.getIn(input, AgentState.KEY_STATE);
 		// S3c: prefer session.pending over agent-level messages when a session
@@ -640,6 +645,14 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			output = output.assoc(Fields.ERROR, result.value());
 		} else {
 			output = output.assoc(Fields.RESPONSE, result.value());
+		}
+		// Cycle token totals (#217) — measured only; absent means the
+		// provider reported nothing, never zero. Per-call usage additionally
+		// rides each assistant turn in the frame conversation (the raw L3
+		// message, tokens included, is what appendTurn records).
+		AMap<AString, ACell> cycleTokens = endTokenTally();
+		if (cycleTokens != null) {
+			output = output.assoc(Fields.TOKENS, cycleTokens);
 		}
 		return output;
 	}

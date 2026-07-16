@@ -67,37 +67,37 @@ public class TestAdapter extends AAdapter {
                 case "wakeresponse":
                     return CompletableFuture.completedFuture(handleWakeResponse(input));
                 case "llm":
-                    return CompletableFuture.completedFuture(handleLlm(input));
+                    return CompletableFuture.completedFuture(withMockTokens(handleLlm(input), input));
                 case "toolllm":
-                    return CompletableFuture.completedFuture(handleToolLlm(input));
+                    return CompletableFuture.completedFuture(withMockTokens(handleToolLlm(input), input));
                 case "badargsllm":
-                    return CompletableFuture.completedFuture(handleBadArgsLlm(input));
+                    return CompletableFuture.completedFuture(withMockTokens(handleBadArgsLlm(input), input));
                 case "loopllm":
-                    return CompletableFuture.completedFuture(handleLoopLlm(input));
+                    return CompletableFuture.completedFuture(withMockTokens(handleLoopLlm(input), input));
                 case "nevertoolllm":
-                    return CompletableFuture.completedFuture(handleNeverToolLlm(input, false));
+                    return CompletableFuture.completedFuture(withMockTokens(handleNeverToolLlm(input, false), input));
                 case "neverfailllm": {
                     ACell r = handleNeverToolLlm(input, true);
                     return (r == null)
                         ? CompletableFuture.failedFuture(new IllegalStateException("scripted L3 failure"))
-                        : CompletableFuture.completedFuture(r);
+                        : CompletableFuture.completedFuture(withMockTokens(r, input));
                 }
                 case "subgoalllm":
-                    return CompletableFuture.completedFuture(handleSubgoalLlm(input));
+                    return CompletableFuture.completedFuture(withMockTokens(handleSubgoalLlm(input), input));
                 case "taskllm":
-                    return CompletableFuture.completedFuture(handleTaskLlm(input));
+                    return CompletableFuture.completedFuture(withMockTokens(handleTaskLlm(input), input));
                 case "textctlllm":
-                    return CompletableFuture.completedFuture(handleTextCtlLlm(input));
+                    return CompletableFuture.completedFuture(withMockTokens(handleTextCtlLlm(input), input));
                 case "stubbornllm":
-                    return CompletableFuture.completedFuture(Maps.of(
+                    return CompletableFuture.completedFuture(withMockTokens(Maps.of(
                         "role", Strings.create("assistant"),
-                        "content", Strings.create("Working on it.")));
+                        "content", Strings.create("Working on it.")), input));
                 case "workspacellm":
-                    return CompletableFuture.completedFuture(handleWorkspaceLlm(input));
+                    return CompletableFuture.completedFuture(withMockTokens(handleWorkspaceLlm(input), input));
                 case "compactllm":
-                    return CompletableFuture.completedFuture(handleCompactLlm(input));
+                    return CompletableFuture.completedFuture(withMockTokens(handleCompactLlm(input), input));
                 case "selfchat":
-                    return CompletableFuture.completedFuture(handleSelfChatLlm(ctx, input));
+                    return CompletableFuture.completedFuture(withMockTokens(handleSelfChatLlm(ctx, input), input));
                 case "never":
                     return new CompletableFuture<>();
                 case "delay":
@@ -501,6 +501,47 @@ public class TestAdapter extends AAdapter {
                 "arguments", Strings.create("{\"echo\":\"loop\"}")
             ))
         );
+    }
+
+    /**
+     * Deterministic mock token accounting (#217): UTF-8 byte lengths stand in
+     * for provider token counts — {@code input} = the request's message
+     * contents, {@code output} = the reply's content plus tool-call
+     * arguments, {@code total} = their sum. Real plumbing, fake units: lets
+     * tests assert the accounting pipeline end-to-end (timeline entries,
+     * session meta.tokens, job records) without a live LLM. A mock that set
+     * its own {@code tokens} keeps it.
+     */
+    @SuppressWarnings("unchecked")
+    static ACell withMockTokens(ACell msg, ACell input) {
+        if (!(msg instanceof AMap)) return msg;
+        AMap<AString, ACell> m = (AMap<AString, ACell>) msg;
+        if (m.get(Fields.TOKENS) != null) return msg;
+        long in = 0;
+        ACell messagesCell = RT.getIn(input, "messages");
+        if (messagesCell instanceof AVector<?> mv) {
+            for (long i = 0; i < mv.count(); i++) {
+                in += utf8Count(RT.getIn(mv.get(i), "content"));
+            }
+        }
+        long out = utf8Count(RT.getIn(m, "content"));
+        ACell tcs = RT.getIn(m, "toolCalls");
+        if (tcs instanceof AVector<?> tv) {
+            for (long i = 0; i < tv.count(); i++) {
+                out += utf8Count(RT.getIn(tv.get(i), "arguments"));
+            }
+        }
+        return m.assoc(Fields.TOKENS, Maps.of(
+            Fields.INPUT,  CVMLong.create(in),
+            Fields.OUTPUT, CVMLong.create(out),
+            Fields.TOTAL,  CVMLong.create(in + out)));
+    }
+
+    /** UTF-8 byte length of a cell's textual form (0 for null). */
+    static long utf8Count(ACell c) {
+        if (c == null) return 0;
+        if (c instanceof AString s) return s.count();
+        return convex.core.util.JSON.print(c).count();
     }
 
     /**

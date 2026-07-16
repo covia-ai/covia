@@ -36,6 +36,11 @@ ops). What each terminal status means, as the venue actually emits them:
 | `COMPLETE` | The op succeeded; `output` carries the result. |
 | `FAILED` | The op failed — the `error` message carries the reason. This is the **single failure status** the invoke / agent dispatch path emits: execution errors, schema / invalid-input errors, **and authorisation/capability denials** (`"Capability denied: requires <ability> on <resource>. …"`). Distinguish the kind of failure by the error string, not the status. |
 | `CANCELLED` | The caller cancelled the job (`cancel()` / `jobs/{id}/cancel`). |
+
+Agent task/chat job records additionally carry `tokens: {input, output,
+total}` when the cycle's LLM calls reported usage (#217) — provider-measured
+counts, stamped before completion so they ride the persisted record. Absence
+means "not measured", never zero.
 | `REJECTED` | Reserved for a policy/protocol rejection distinct from an execution failure. Core invoke/agent dispatch **does not emit it today** — it is defined in the lifecycle and used by the A2A protocol mapping (`TASK_STATE_REJECTED` ↔ `REJECTED`). A capability denial is a `FAILED` job with a detailed error string, **not** a `REJECTED` job. |
 
 Whether authorisation denials should become a distinct first-class status is an

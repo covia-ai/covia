@@ -147,6 +147,31 @@ public class GoalTreeAdapterTest {
 	}
 
 	@Test
+	public void testTransitionOutputCarriesTokens() {
+		// #217: every invokeLevel3 in the frame run adds its reported usage;
+		// the cycle total (here: one goal call + one tool-result call) rides
+		// the transition output with the total == input + output invariant.
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "tokens-goal-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("v/test/ops/toolllm"),
+				Strings.create("systemPrompt"), Strings.create("You are a test agent.")),
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Strings.create("content"), Strings.create("Do something"))));
+
+		ACell output = adapter.processGoal(null, ALICE, input);
+		ACell tokens = RT.getIn(output, Fields.TOKENS);
+		assertNotNull(tokens, "goal-tree cycle usage must ride the transition output");
+		long in = RT.ensureLong(RT.getIn(tokens, Fields.INPUT)).longValue();
+		long out = RT.ensureLong(RT.getIn(tokens, Fields.OUTPUT)).longValue();
+		assertTrue(in > 0 && out > 0, "both sides measured across the tool loop");
+		assertEquals(in + out, RT.ensureLong(RT.getIn(tokens, Fields.TOTAL)).longValue());
+	}
+
+	@Test
 	public void testTransitionWithToolCall() {
 		// test:toolllm makes one tool call (test:echo), then returns text on seeing results
 		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");

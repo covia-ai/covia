@@ -603,6 +603,138 @@ public class LLMAgentAdapterTest {
 			"the completion must be recorded, not the iteration-limit failure");
 	}
 
+	// ========== #217 — token usage accounting ==========
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testProcessChatOutputCarriesTokens() {
+		// Mock L3 ops report UTF-8-length usage; the cycle total must ride
+		// the transition output with the total == input + output invariant.
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "tokens-direct-agent",
+			AgentState.KEY_CONFIG, Maps.of("llmOperation", "v/test/ops/llm"),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "hello tokens")));
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		AMap<AString, ACell> tokens = (AMap<AString, ACell>) RT.getIn(output, Fields.TOKENS);
+		assertNotNull(tokens, "measured usage must ride the transition output");
+		long in = RT.ensureLong(RT.getIn(tokens, Fields.INPUT)).longValue();
+		long out = RT.ensureLong(RT.getIn(tokens, Fields.OUTPUT)).longValue();
+		long total = RT.ensureLong(RT.getIn(tokens, Fields.TOTAL)).longValue();
+		assertTrue(in > 0, "prompt side must be measured");
+		assertTrue(out > 0, "completion side must be measured");
+		assertEquals(in + out, total);
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testTokensOnTimelineSessionJobAndContext() throws Exception {
+		// The full accounting pipeline over two chat cycles: timeline entries
+		// carry per-cycle usage, session meta.tokens accumulates across
+		// cycles, the chat job record is stamped, and agent:context renders
+		// the measured session totals.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "tokens-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/llm")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job chat1 = engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "tokens-agent",
+				Fields.MESSAGE, Strings.create("first message")),
+			RequestContext.of(ALICE_DID));
+		ACell r1 = chat1.awaitResult(10000);
+		AString sid = RT.ensureString(RT.getIn(r1, Fields.SESSION_ID));
+		assertNotNull(sid);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("tokens-agent");
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+
+		AMap<AString, ACell> t1 = (AMap<AString, ACell>) RT.getIn(
+			agent.getTimeline().get(0), Fields.TOKENS);
+		assertNotNull(t1, "timeline entry must record the cycle's tokens");
+		long total1 = RT.ensureLong(RT.getIn(t1, Fields.TOTAL)).longValue();
+		assertTrue(total1 > 0);
+		assertEquals(RT.ensureLong(RT.getIn(t1, Fields.INPUT)).longValue()
+			+ RT.ensureLong(RT.getIn(t1, Fields.OUTPUT)).longValue(), total1);
+
+		assertEquals(t1, RT.getIn(chat1.getData(), Fields.TOKENS),
+			"chat job record must carry the cycle's tokens");
+
+		Blob sidBlob = Blob.fromHex(sid.toString());
+		long sessTotal1 = RT.ensureLong(RT.getIn(
+			agent.getSession(sidBlob), "meta", "tokens", "total")).longValue();
+		assertEquals(total1, sessTotal1, "session meta mirrors the first cycle");
+
+		// Second cycle on the SAME session — totals must accumulate
+		engine.jobs().invokeOperation(
+			"v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "tokens-agent",
+				Fields.MESSAGE, Strings.create("second, longer message"),
+				Fields.SESSION_ID, sid),
+			RequestContext.of(ALICE_DID)).awaitResult(10000);
+		TestEngine.awaitTimelineCount(agent, 2, 10000);
+
+		AMap<AString, ACell> t2 = (AMap<AString, ACell>) RT.getIn(
+			agent.getTimeline().get(1), Fields.TOKENS);
+		assertNotNull(t2, "second cycle must also be measured");
+		long total2 = RT.ensureLong(RT.getIn(t2, Fields.TOTAL)).longValue();
+		long sessTotal = RT.ensureLong(RT.getIn(
+			agent.getSession(sidBlob), "meta", "tokens", "total")).longValue();
+		assertEquals(total1 + total2, sessTotal,
+			"session totals accumulate across cycles");
+
+		// agent:context surfaces the measured session usage
+		ACell rendered = engine.jobs().invokeOperation(
+			"v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "tokens-agent", Fields.SESSION_ID, sid),
+			RequestContext.of(ALICE_DID)).awaitResult(10000);
+		assertTrue(rendered.toString().contains("Session token usage (measured)"),
+			"context render must include the measured session totals");
+	}
+
+	@Test
+	public void testTaskJobRecordCarriesTokens() throws Exception {
+		// A caller polling a task job must see what the work cost — the
+		// tokens field rides the persisted job record (#217).
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "tokens-task-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/taskllm")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job reqJob = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "tokens-task-agent",
+				Fields.INPUT, Maps.of("task", "answer the question"),
+				Strings.intern("timeout"), CVMLong.create(0)),
+			RequestContext.of(ALICE_DID));
+		ACell snapshot = reqJob.awaitResult(5000);
+		Blob taskJobId = Job.parseID(RT.getIn(snapshot, Fields.ID));
+		assertNotNull(taskJobId, "async request snapshot must carry the task job id");
+
+		// Poll the persisted record, not the active cache — a finished job is
+		// evicted from the cache and lives on as its lattice record.
+		AMap<AString, ACell> record = null;
+		long deadline = System.currentTimeMillis() + 15000;
+		while (System.currentTimeMillis() < deadline) {
+			record = engine.jobs().getJobData(taskJobId, RequestContext.of(ALICE_DID));
+			if (record != null && Job.isFinished(record)) break;
+			Thread.sleep(25);
+		}
+		assertNotNull(record, "task job record must exist");
+		assertEquals(Status.COMPLETE, RT.getIn(record, Fields.STATUS));
+		ACell jobTokens = RT.getIn(record, Fields.TOKENS);
+		assertNotNull(jobTokens, "task job record must carry the cycle's token usage");
+		assertTrue(RT.ensureLong(RT.getIn(jobTokens, Fields.TOTAL)).longValue() > 0);
+	}
+
 	// ========== #215 — textual control tools, task rendering, terminal cap ==========
 
 	@Test

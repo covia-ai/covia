@@ -1067,6 +1067,16 @@ public class AgentAdapter extends AAdapter {
 		ACell taskInput = RT.getIn(input, Strings.intern("task"));
 		AString rendered = inspectable.inspectContext(recordConfig, state, taskInput, session, ctx);
 
+		// Session token totals (#217): measured usage accumulated on
+		// meta.tokens, appended so an inspector sees real counts instead of
+		// estimating from characters. Output stays a rendered string —
+		// structured reads go job-free via values API on the session record.
+		ACell sessionTokens = RT.getIn(session, Strings.intern("meta"), Fields.TOKENS);
+		if (sessionTokens != null) {
+			rendered = Strings.create(rendered + "\n[Session token usage (measured): "
+				+ convex.core.util.JSON.print(sessionTokens) + "]");
+		}
+
 		job.setStatus(Status.STARTED);
 		job.completeWith(rendered);
 	}
@@ -2061,6 +2071,17 @@ public class AgentAdapter extends AAdapter {
 			timelineEntry = timelineEntry.assoc(Fields.TOOL_FAILURES, toolFailures);
 		}
 
+		// Cycle token usage ({input, output, total}, #217): persisted on the
+		// timeline entry; mergeRunResult mirrors it into the picked session's
+		// meta.tokens running totals in the same CAS. Measured only — absent
+		// means the LLM op reported nothing, never zero.
+		AMap<AString, ACell> cycleTokens =
+			(RT.getIn(transitionResult, Fields.TOKENS) instanceof AMap<?, ?> tm)
+				? (AMap<AString, ACell>) tm : null;
+		if (cycleTokens != null) {
+			timelineEntry = timelineEntry.assoc(Fields.TOKENS, cycleTokens);
+		}
+
 		// Accumulate task results across iterations
 		if (taskResults != null) {
 			for (var entry : taskResults.entrySet()) {
@@ -2132,11 +2153,19 @@ public class AgentAdapter extends AAdapter {
 				}
 			}
 			if (leanResponse != null) {
-				turnsToAppend = turnsToAppend.conj(Maps.of(
+				AMap<AString, ACell> assistantTurn = Maps.of(
 					AgentState.K_ROLE,    AgentState.ROLE_ASSISTANT,
 					AgentState.K_CONTENT, leanResponse,
 					AgentState.K_TURN_TS, CVMLong.create(endTs),
-					AgentState.K_SOURCE,  AgentState.SOURCE_TRANSITION));
+					AgentState.K_SOURCE,  AgentState.SOURCE_TRANSITION);
+				// Per-turn usage where known (#217): one assistant turn per
+				// cycle on this path, so the cycle totals ARE its usage.
+				// (Frames-owning adapters record per-call usage on each L3
+				// message they append themselves.)
+				if (cycleTokens != null) {
+					assistantTurn = assistantTurn.assoc(Fields.TOKENS, cycleTokens);
+				}
+				turnsToAppend = turnsToAppend.conj(assistantTurn);
 			}
 		}
 
@@ -2200,6 +2229,18 @@ public class AgentAdapter extends AAdapter {
 						pickedKind, pickedThreadId, requestedWake);
 				}
 			}
+		}
+
+		// Cost attribution (#217): stamp the cycle's token usage onto the
+		// caller-facing job records BEFORE completing them, so the tokens
+		// field rides the same write-through persist as the completion.
+		// Job records accrete (completeWith builds on getData()), so this
+		// survives into the final persisted record.
+		if (cycleTokens != null) {
+			if (pickedTask != null) {
+				attachTokens(engine.jobs().getJob(pickedTask.getKey()), cycleTokens);
+			}
+			attachTokens(pickedChatJob, cycleTokens);
 		}
 
 		// Now that the timeline + state are persisted, claim the parked
@@ -2458,6 +2499,17 @@ public class AgentAdapter extends AAdapter {
 		}
 		AgentState agent = getAgent(ownerDID, agentId);
 		if (agent != null) agent.removeTask(taskId);
+	}
+
+	/** Stamps token usage onto a job's record (#217) — best-effort: an
+	 *  already-finished or racing job just keeps its record as-is. */
+	private static void attachTokens(Job job, AMap<AString, ACell> tokens) {
+		if (job == null || job.isFinished()) return;
+		try {
+			job.updateData(job.getData().assoc(Fields.TOKENS, tokens));
+		} catch (Exception e) {
+			log.debug("Could not attach token usage to job {}: {}", job.getID(), e.toString());
+		}
 	}
 
 	private void failQueuedTasks(Index<Blob, ACell> tasks, String error) {
