@@ -120,7 +120,13 @@ public class CoviaAPI extends ACoviaAPI {
 		routes.put(ROUTE+"jobs/{id}/pause", this::pauseJob);
 		routes.put(ROUTE+"jobs/{id}/resume", this::resumeJob);
 		routes.put(ROUTE+"jobs/{id}/delete", this::deleteJob);
-		routes.sse(ROUTE+"jobs/{id}/sse", sseServer.registerSSE);
+		// Registered as a plain GET (not routes.sse): Javalin's SseHandler
+		// silently no-ops into an empty 200 without an Accept:
+		// text/event-stream header — the worst failure mode for an
+		// integration surface (#222). The /sse path is unambiguous, so
+		// jobSse defaults to streaming and 406s loudly on an explicit
+		// non-SSE Accept.
+		routes.get(ROUTE+"jobs/{id}/sse", this::jobSse);
 		routes.get(ROUTE+"jobs", this::getJobs);
 
 		// Job-free lattice value reads (#177) — synchronous, capability-checked,
@@ -909,22 +915,59 @@ public class CoviaAPI extends ACoviaAPI {
 		}
 	}
 	
-	/**
-	 * Documentation holder for the SSE route registered via
-	 * {@code routes.sse(ROUTE + "jobs/<id>/sse", ...)} in {@code addRoutes} —
-	 * the annotation processor only scans {@code @OpenApi} annotations, and the
-	 * SSE handler is not an annotatable method. Never invoked.
-	 */
 	@OpenApi(path = ROUTE + "jobs/{id}/sse",
 			methods = HttpMethod.GET,
 			tags = { "Covia" },
 			summary = "Server-sent events stream of job status updates",
-			description = "Streams the job's status record as SSE frames until the job reaches a "
-					+ "terminal state. Poll-free alternative to GET /jobs/{id} for watching a running job.",
+			description = "Streams the job's status record as SSE frames on every status change until "
+					+ "the job reaches a terminal state (the final record is the last frame; the stream "
+					+ "then closes). Poll-free alternative to GET /jobs/{id} for watching a running job. "
+					+ "A missing or */* Accept header is treated as text/event-stream — the /sse path is "
+					+ "unambiguous; an explicit non-SSE Accept is rejected with 406.",
 			pathParams = { @OpenApiParam(name = "id", description = "Job ID (hex)") },
 			operationId = "jobSse")
-	@SuppressWarnings("unused")
-	private static void docJobSse() {}
+	protected void jobSse(Context ctx) {
+		Blob id = Blob.parse(ctx.pathParam("id"));
+		if (id == null) {
+			buildError(ctx, 400, "Job request requires a job ID as a valid hex string");
+			return;
+		}
+		// Ownership applies to the stream exactly as to GET /jobs/{id}: the
+		// record resolves under the caller's context or not at all.
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		if (engine().jobs().getJobData(id, rctx) == null) {
+			buildError(ctx, 404, "Job not found: " + id);
+			return;
+		}
+
+		// Accept negotiation (#222): default to SSE, never a silent 200.
+		String accept = ctx.header("Accept");
+		boolean acceptable = accept == null || accept.isBlank()
+			|| accept.contains("text/event-stream") || accept.contains("*/*");
+		if (!acceptable) {
+			buildError(ctx, 406,
+				"This endpoint streams Server-Sent Events; send Accept: text/event-stream (or omit the Accept header)");
+			return;
+		}
+
+		// Mirror io.javalin.http.sse.SseHandler.handle — which hard-requires
+		// the Accept header, hence this hand-rolled equivalent. (SseClient's
+		// constructor is Kotlin-internal but public in bytecode; Javalin is
+		// version-pinned.)
+		ctx.res().setStatus(200);
+		ctx.res().setCharacterEncoding("UTF-8");
+		ctx.res().setContentType("text/event-stream");
+		ctx.res().addHeader("Connection", "close");
+		ctx.res().addHeader("Cache-Control", "no-cache");
+		ctx.res().addHeader("X-Accel-Buffering", "no");
+		try {
+			ctx.res().flushBuffer();
+		} catch (java.io.IOException e) {
+			throw new RuntimeException(e);
+		}
+		ctx.async(cfg -> cfg.timeout = 0L,
+			() -> sseServer.registerSSE.accept(new io.javalin.http.sse.SseClient(ctx)));
+	}
 
 	@OpenApi(path = ROUTE + "jobs",
 			methods = HttpMethod.GET,

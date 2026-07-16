@@ -24,6 +24,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Task input rendered to models as plain text/JSON, never EDN map literals (#215)
 - Control tools emitted as plain text (`complete_task {...}`) now recognised and honoured (#215)
 - A task that burns the whole loop budget fails with a structured error instead of pinning STARTED (#215)
+- Job SSE streams broadcast every status change (subscriptions were keyed by the raw path parameter, so `0x`-form subscribers only ever received the initial frame); terminal frames close the stream; job ownership applies to the stream as to `GET /jobs/{id}` (#225)
+- Job SSE route defaults to `text/event-stream` when the Accept header is missing or `*/*`; an explicit non-SSE Accept gets a 406 with the remedy instead of a silent empty 200 (#222)
 - MCP tool-level errors (`isError`) fail the bridged job with the remote error text instead of completing with an error-shaped payload (#80)
 - Text-only MCP tool results preserved instead of returning null (#80)
 - MCP transport failures name the tool, server and root cause with a remedy, not a raw exception string (#80)

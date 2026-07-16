@@ -14,13 +14,19 @@ import convex.core.data.Blob;
 import convex.core.util.JSON;
 import covia.grid.Job;
 import covia.venue.Engine;
+import covia.venue.RequestContext;
 import io.javalin.http.sse.SseClient;
 
 public class SseServer {
 
 	public static final Logger log=LoggerFactory.getLogger(SseServer.class);
 
-	/** Per-job client subscriptions */
+	/** Per-job client subscriptions, keyed by the job's CANONICAL bare hex id
+	 *  ({@code Blob.toHexString()}) — the same form {@link #broadcastJobUpdate}
+	 *  is called with. Clients may subscribe with any parseable form
+	 *  ({@code 0x}-prefixed as the REST API renders ids, mixed case, …);
+	 *  keying by the raw path parameter broke every broadcast for
+	 *  {@code 0x}-form subscribers (#225). */
 	private final ConcurrentHashMap<String, Set<SseClient>> jobClients = new ConcurrentHashMap<>();
 
 	protected Engine engine;
@@ -30,8 +36,18 @@ public class SseServer {
 	}
 
 	/**
-	 * Javalin SSE handler for per-job event subscriptions.
-	 * Extracts job ID from the path parameter and registers the client.
+	 * Javalin SSE handler for per-job event subscriptions. The HTTP-level
+	 * concerns (id validity, job existence/ownership, Accept negotiation)
+	 * are handled by the route handler BEFORE the stream is committed —
+	 * this consumer owns the stream lifecycle:
+	 *
+	 * <ol>
+	 *   <li>register the client under the canonical job key (BEFORE the
+	 *       initial frame, so a transition in between is never missed)</li>
+	 *   <li>send the current record as the initial {@code job-update} frame</li>
+	 *   <li>a job already terminal streams its final record and closes —
+	 *       there will never be another update</li>
+	 * </ol>
 	 */
 	public Consumer<SseClient> registerSSE = client -> {
 		// Hold the connection open after this handler returns — without
@@ -39,19 +55,33 @@ public class SseServer {
 		// client never receives subsequent job-update broadcasts (#200).
 		client.keepAlive();
 
-		String jobId = client.ctx().pathParam("id");
-		registerClient(jobId, client);
+		Blob jobId = Blob.parse(client.ctx().pathParam("id"));
+		String key = jobId.toHexString();
 
-		// Send current job state as initial event
-		Job job = engine.jobs().getJob(Blob.parse(jobId));
-		if (job != null) {
-			sendJobEvent(client, job);
+		// Resolve the record under the CALLER's context — the stream carries
+		// exactly what GET /jobs/{id} would show this caller.
+		RequestContext rctx = AuthMiddleware.callerContext(client.ctx());
+		AMap<AString, ACell> record = engine.jobs().getJobData(jobId, rctx);
+		if (record == null) {
+			// Vanished between the route check and here (e.g. deleted)
+			client.sendEvent("error", "{\"error\":\"Job not found: " + key + "\"}");
+			client.close();
+			return;
 		}
+		if (Job.isFinished(record)) {
+			// Terminal already — deliver the final record and end the stream
+			client.sendEvent("job-update", JSON.toString(record));
+			client.close();
+			return;
+		}
+
+		registerClient(key, client);
+		client.sendEvent("job-update", JSON.toString(record));
 	};
 
 	/**
 	 * Registers an SSE client to receive updates for a specific job.
-	 * @param jobId Job ID to subscribe to
+	 * @param jobId Canonical job ID (bare hex)
 	 * @param client SSE client
 	 */
 	public void registerClient(String jobId, SseClient client) {
@@ -66,7 +96,7 @@ public class SseServer {
 
 	/**
 	 * Unregisters an SSE client from a job's event stream.
-	 * @param jobId Job ID to unsubscribe from
+	 * @param jobId Canonical job ID (bare hex)
 	 * @param client SSE client
 	 */
 	public void unregisterClient(String jobId, SseClient client) {
@@ -81,31 +111,27 @@ public class SseServer {
 	}
 
 	/**
-	 * Broadcasts a job update event to all SSE clients watching the given job.
-	 * @param jobId Job ID
+	 * Broadcasts a job update event to all SSE clients watching the given
+	 * job. On a terminal update the stream is closed after the frame — the
+	 * documented contract is "streams until the job reaches a terminal
+	 * state", and there will never be another frame to wait for.
+	 *
+	 * @param jobId Canonical job ID (bare hex, {@code Blob.toHexString()} form)
 	 * @param job Job with updated state
 	 */
 	public void broadcastJobUpdate(String jobId, Job job) {
 		Set<SseClient> clients = jobClients.get(jobId);
 		if (clients == null || clients.isEmpty()) return;
 
+		boolean finished = job.isFinished();
 		for (SseClient client : clients) {
 			try {
 				sendJobEvent(client, job);
+				if (finished) client.close(); // onClose unregisters
 			} catch (Exception e) {
 				log.warn("Failed to send SSE event to client for job {}: {}", jobId, e.getMessage());
 			}
 		}
-	}
-
-	/**
-	 * Creates an update listener for a job that broadcasts via SSE.
-	 * Set this on a job via job.setUpdateListener().
-	 * @param jobId Job ID for routing
-	 * @return Consumer that broadcasts job updates to SSE clients
-	 */
-	public Consumer<Job> createJobListener(String jobId) {
-		return job -> broadcastJobUpdate(jobId, job);
 	}
 
 	private void sendJobEvent(SseClient client, Job job) {
