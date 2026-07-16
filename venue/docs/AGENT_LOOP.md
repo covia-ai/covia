@@ -685,6 +685,20 @@ run's `finally` block.
    - Note: task completions made via tool calls during execution are
      **not** rolled back (§3.4.1).
 
+**Iteration budget.** A single loop runs at most `MAX_LOOP_ITERATIONS`
+(20) cycles before forcing sleep — a runaway backstop, not a normal exit.
+A cap hit on genuinely varied work (a long task queue, chat traffic) is
+benign: remaining work re-wakes a fresh loop via the post-exit re-check.
+But if the **same task** was presented for the entire budget without
+resolving, the cap is terminal for that task (#215): its job is FAILED
+with a structured error and the task removed — otherwise the re-check
+relaunches against the same stuck task and the wake/cap cycle burns LLM
+spend forever while the caller's job pins STARTED. Younger queued tasks
+are untouched. Related fallback: control tools emitted as plain assistant
+text (`complete_task {...}` / `fail_task {...}` — common on small models)
+are recognised and honoured by the tool loop, so most stuck cases resolve
+properly before the cap.
+
 After the loop exits (break or exception), the agent is released from
 its running slot and work is re-checked; if work landed during exit, a
 fresh wake is issued. The exit-vs-wake race is closed so no wake is

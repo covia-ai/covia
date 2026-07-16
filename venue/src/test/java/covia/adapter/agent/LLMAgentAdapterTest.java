@@ -603,6 +603,148 @@ public class LLMAgentAdapterTest {
 			"the completion must be recorded, not the iteration-limit failure");
 	}
 
+	// ========== #215 — textual control tools, task rendering, terminal cap ==========
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testRecogniseTextualControlCall() {
+		// The reported small-model pattern: control tool as plain text + JSON args
+		AMap<AString, ACell> msg = Maps.of(
+			"role", Strings.create("assistant"),
+			"content", Strings.create("fail_task {\"error\": \"Task details not provided for resolution.\"}"));
+		AMap<AString, ACell> rewritten = LLMAgentAdapter.recogniseTextualControlCall(msg, 3);
+		assertNotNull(rewritten, "textual fail_task with JSON args must be recognised");
+		AVector<ACell> calls = (AVector<ACell>) RT.getIn(rewritten, "toolCalls");
+		assertEquals(1, calls.count());
+		assertEquals("fail_task", RT.getIn(calls.get(0), "name").toString());
+		assertEquals("Task details not provided for resolution.",
+			RT.getIn(calls.get(0), "arguments", "error").toString());
+		// Original text preserved as content — the transcript stays honest
+		assertEquals(RT.getIn(msg, "content"), RT.getIn(rewritten, "content"));
+
+		// complete_task with nested JSON result
+		AMap<AString, ACell> ct = Maps.of(
+			"role", Strings.create("assistant"),
+			"content", Strings.create("complete_task {\"result\": {\"answer\": 42}}"));
+		AMap<AString, ACell> ctRe = LLMAgentAdapter.recogniseTextualControlCall(ct, 0);
+		assertNotNull(ctRe);
+		AVector<ACell> ctCalls = (AVector<ACell>) RT.getIn(ctRe, "toolCalls");
+		assertEquals("complete_task", RT.getIn(ctCalls.get(0), "name").toString());
+
+		// Colon form
+		assertNotNull(LLMAgentAdapter.recogniseTextualControlCall(Maps.of(
+			"role", Strings.create("assistant"),
+			"content", Strings.create("fail_task: {\"error\": \"nope\"}")), 0));
+
+		// Bare tool name → empty args (the tool's own validation responds)
+		AMap<AString, ACell> bare = LLMAgentAdapter.recogniseTextualControlCall(Maps.of(
+			"role", Strings.create("assistant"),
+			"content", Strings.create("complete_task")), 0);
+		assertNotNull(bare);
+
+		// Prose mentioning a tool name is NOT a call
+		assertNull(LLMAgentAdapter.recogniseTextualControlCall(Maps.of(
+			"role", Strings.create("assistant"),
+			"content", Strings.create("complete_task is unavailable to me right now")), 0));
+		// Ordinary text is untouched
+		assertNull(LLMAgentAdapter.recogniseTextualControlCall(Maps.of(
+			"role", Strings.create("assistant"),
+			"content", Strings.create("The answer is 4.")), 0));
+		// Malformed JSON after the tool name is left alone
+		assertNull(LLMAgentAdapter.recogniseTextualControlCall(Maps.of(
+			"role", Strings.create("assistant"),
+			"content", Strings.create("fail_task {not json")), 0));
+	}
+
+	@Test
+	public void testRenderTaskTextNeverEDN() {
+		// Strings pass through verbatim
+		assertEquals("Pay invoice AR-2214",
+			LLMAgentAdapter.renderTaskText(Strings.create("Pay invoice AR-2214")));
+		// Structured input renders as JSON that round-trips — never the EDN
+		// {"k" "v"} form models misread (#215)
+		ACell input = Maps.of("message", Strings.create("Pay invoice AR-2214"));
+		String rendered = LLMAgentAdapter.renderTaskText(input);
+		assertEquals(input, convex.core.util.JSON.parse(rendered),
+			"rendered task text must be valid JSON preserving the input");
+		assertTrue(rendered.contains("\"message\":"),
+			"JSON key-colon form expected, got: " + rendered);
+		assertEquals("", LLMAgentAdapter.renderTaskText(null));
+	}
+
+	@Test
+	public void testTextualCompleteTaskEndToEnd() {
+		// test:textctlllm emits complete_task as plain TEXT (the #215 qwen2.5
+		// behaviour). The fallback must honour it and resolve the task.
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "textctl-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/textctlllm")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("textctl-agent");
+		Blob taskId = Blob.createRandom(new java.util.Random(), 16);
+		agent.addTask(taskId, Maps.of("task", "Pay invoice AR-2214"));
+
+		Job runJob = engine.jobs().invokeOperation(
+			"v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "textctl-agent"),
+			RequestContext.of(ALICE_DID));
+		runJob.awaitResult(5000);
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+
+		assertEquals(AgentState.SLEEPING, agent.getStatus());
+		assertEquals(0, agent.getTasks().count(),
+			"textually-emitted complete_task must resolve the task");
+		assertNotNull(RT.getIn(agent.getTimeline().get(0), Fields.TASK_RESULTS),
+			"the completion must be recorded on the timeline");
+	}
+
+	@Test
+	public void testStuckTaskFailsTerminallyAtLoopCap() throws Exception {
+		// test:stubbornllm never resolves the task: every cycle is a plain-text
+		// reply, so the run loop burns its whole iteration budget on one task.
+		// The cap must be terminal — the caller's job FAILED with a structured
+		// error and the task removed — not a sleep the wake re-check turns into
+		// another full-budget burn while the job pins STARTED (#215).
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(
+				Fields.AGENT_ID, "stubborn-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/stubbornllm")
+			),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		// Real task job via agent:request — the pinned-STARTED symptom needs an
+		// actual caller job to observe. The awaiting caller must see FAILED
+		// with the structured error, never an eternal STARTED.
+		Job reqJob = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(
+				Fields.AGENT_ID, "stubborn-agent",
+				Fields.INPUT, Maps.of("task", "impossible request")),
+			RequestContext.of(ALICE_DID));
+		Exception ex = assertThrows(Exception.class, () -> reqJob.awaitResult(30000),
+			"the caller's await must terminate in failure, not hang");
+		assertTrue(ex.getMessage().contains("loop iterations"),
+			"error must say what happened, got: " + ex.getMessage());
+		assertTrue(reqJob.isFinished(), "job must not stay STARTED forever");
+		assertEquals(Status.FAILED, reqJob.getStatus());
+
+		// The stuck task is gone; the agent is not poisoned
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("stubborn-agent");
+		assertEquals(0, agent.getTasks().count(), "stuck task must be removed");
+		TestEngine.awaitAgentIdle(agent, 10000);
+	}
+
 	@Test
 	public void testScopedInvokeAllowsInScopeTool() {
 		// #211: an invoke grant scoped to an op-path prefix admits tool calls

@@ -86,6 +86,12 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.completedFuture(handleSubgoalLlm(input));
                 case "taskllm":
                     return CompletableFuture.completedFuture(handleTaskLlm(input));
+                case "textctlllm":
+                    return CompletableFuture.completedFuture(handleTextCtlLlm(input));
+                case "stubbornllm":
+                    return CompletableFuture.completedFuture(Maps.of(
+                        "role", Strings.create("assistant"),
+                        "content", Strings.create("Working on it.")));
                 case "workspacellm":
                     return CompletableFuture.completedFuture(handleWorkspaceLlm(input));
                 case "compactllm":
@@ -134,6 +140,8 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("neverfailllm", BASE+"testneverfailllm.json");
 			installTestAsset("subgoalllm",   BASE+"testsubgoalllm.json");
 			installTestAsset("taskllm",      BASE+"testtaskllm.json");
+			installTestAsset("textctlllm",   BASE+"testtextctlllm.json");
+			installTestAsset("stubbornllm",  BASE+"teststubbornllm.json");
 			installTestAsset("workspacellm", BASE+"testworkspacellm.json");
 			installTestAsset("compactllm",   BASE+"testcompactllm.json");
 			installTestAsset("selfchat",     BASE+"testselfchat.json");
@@ -493,6 +501,42 @@ public class TestAdapter extends AAdapter {
                 "arguments", Strings.create("{\"echo\":\"loop\"}")
             ))
         );
+    }
+
+    /**
+     * Scripted small-model behaviour for #215: emits {@code complete_task}
+     * as plain assistant TEXT (no structural toolCalls) when a task is in
+     * scope. Exercises the harness's textual control-tool fallback — without
+     * it, this reply is unrecognised and the task never resolves.
+     */
+    @SuppressWarnings("unchecked")
+    private ACell handleTextCtlLlm(ACell input) {
+        ACell messagesCell = RT.getIn(input, "messages");
+        if (messagesCell instanceof AVector) {
+            AVector<ACell> messages = (AVector<ACell>) messagesCell;
+            // Tool result already present → the fallback fired; wind down.
+            for (long i = 0; i < messages.count(); i++) {
+                AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+                if (role != null && "tool".equals(role.toString())) {
+                    return Maps.of(
+                        "role", Strings.create("assistant"),
+                        "content", Strings.create("All done."));
+                }
+            }
+            for (long i = 0; i < messages.count(); i++) {
+                AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+                AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
+                if (role != null && "user".equals(role.toString()) && content != null
+                        && content.toString().contains("[Tasks assigned to you]")) {
+                    return Maps.of(
+                        "role", Strings.create("assistant"),
+                        "content", Strings.create(
+                            "complete_task {\"result\": {\"answer\": \"done-via-text\"}}"));
+                }
+            }
+        }
+        return Maps.of("role", Strings.create("assistant"),
+            "content", Strings.create("(no task)"));
     }
 
     /**

@@ -11,6 +11,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Added
 - System tray icon on desktop launches — open, close venue, exit (`COVIA_NO_TRAY=1` to disable)
 
+### Fixed
+- Task input rendered to models as plain text/JSON, never EDN map literals (#215)
+- Control tools emitted as plain text (`complete_task {...}`) now recognised and honoured (#215)
+- A task that burns the whole loop budget fails with a structured error instead of pinning STARTED (#215)
+
 ## [0.5.0] - 2026-07-15
 
 ### Added

@@ -1731,10 +1731,24 @@ public class AgentAdapter extends AAdapter {
 		int iteration = 0;
 		AMap<AString, ACell> allTaskResults = Maps.empty();
 		boolean firstIteration = true;
+		// Stuck-task detection (#215): the oldest task is re-presented every
+		// cycle until it resolves, so the same task id recurring for the whole
+		// iteration budget means the agent burned every cycle without progress.
+		Blob stuckTaskId = null;
+		int stuckCount = 0;
 
 		try {
 			while (true) {
 				if (++iteration > MAX_LOOP_ITERATIONS) {
+					// The cap must be terminal for a stuck task, not a nap: the
+					// task would survive the sleep, the post-exit re-check would
+					// relaunch a fresh loop against it, and the wake/cap cycle
+					// burns LLM spend forever while the caller's job pins
+					// STARTED (#215). A cap hit on genuinely varied work (long
+					// task queue, chat traffic) stays a benign sleep as before.
+					if (stuckTaskId != null && stuckCount >= MAX_LOOP_ITERATIONS) {
+						failStuckTask(ownerDID, agentId, stuckTaskId);
+					}
 					log.warn("Agent {} hit max loop iterations ({}), forcing sleep",
 						agentId, MAX_LOOP_ITERATIONS);
 					break;
@@ -1782,6 +1796,17 @@ public class AgentAdapter extends AAdapter {
 				// Pick at most one task per cycle (oldest by created timestamp).
 				// Multi-task agents fan out across cycles.
 				Map.Entry<Blob, ACell> pickedTask = pickOldestTask(tasks);
+				if (pickedTask != null) {
+					if (stuckTaskId != null && stuckTaskId.equals(pickedTask.getKey())) {
+						stuckCount++;
+					} else {
+						stuckTaskId = pickedTask.getKey();
+						stuckCount = 1;
+					}
+				} else {
+					stuckTaskId = null;
+					stuckCount = 0;
+				}
 				AVector<ACell> formattedTasks = formatPickedTask(pickedTask);
 				AVector<ACell> resolvedPending = resolveJobIds(pending, Fields.OUTPUT);
 
@@ -2413,6 +2438,28 @@ public class AgentAdapter extends AAdapter {
 	 * notification so callers see a settled (SUSPENDED) lattice state. Pass
 	 * the tasks snapshot captured before the drain.
 	 */
+	/**
+	 * Terminal settlement for a task that consumed an entire loop's iteration
+	 * budget without resolving (#215): fail the caller's job with a structured
+	 * error and remove the task, so the loop-cap sleep is an ending rather
+	 * than a pause before the next full-budget burn. Younger queued tasks are
+	 * untouched — the post-exit re-check gives them their own loop.
+	 */
+	private void failStuckTask(AString ownerDID, AString agentId, Blob taskId) {
+		String err = "Agent exceeded " + MAX_LOOP_ITERATIONS
+			+ " loop iterations without resolving the task"
+			+ " — inspect the agent timeline/session for what the model did;"
+			+ " re-submit if appropriate";
+		log.warn("Agent {} stuck on task {} for the whole iteration budget — failing the task job",
+			agentId, taskId);
+		Job pending = engine.jobs().getJob(taskId);
+		if (pending != null && !pending.isFinished()) {
+			pending.fail(err);
+		}
+		AgentState agent = getAgent(ownerDID, agentId);
+		if (agent != null) agent.removeTask(taskId);
+	}
+
 	private void failQueuedTasks(Index<Blob, ACell> tasks, String error) {
 		if (tasks == null) return;
 		for (var entry : tasks.entrySet()) {

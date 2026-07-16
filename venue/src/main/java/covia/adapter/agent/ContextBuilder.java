@@ -346,7 +346,10 @@ public class ContextBuilder {
 			} else if (content == null) {
 				contentStr = Strings.EMPTY;
 			} else {
-				contentStr = Strings.create(content.toString());
+				// JSON, never EDN: a CVM map's toString() prints {"k" "v"}
+				// (no colon), which models misread as noise — the #215 repro
+				// answered "no task details provided" to an EDN-wrapped task.
+				contentStr = convex.core.util.JSON.print(content);
 			}
 			ACell msg = Maps.of(K_ROLE, role, K_CONTENT, contentStr);
 			messages = messages.conj(msg);

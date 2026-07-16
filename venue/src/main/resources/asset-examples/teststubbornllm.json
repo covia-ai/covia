@@ -1,0 +1,22 @@
+{
+	"name": "Test Stubborn LLM",
+	"description": "Test LLM that always replies with plain text and never resolves a task — drives the run loop to its iteration cap. Used to test terminal stuck-task settlement (#215).",
+	"dateCreated": "2026-07-16T00:00:00Z",
+	"operation": {
+		"adapter": "test:stubbornllm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": { "type": "array" },
+				"tools": { "type": "array" }
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": { "type": "string" },
+				"content": { "type": "string" }
+			}
+		}
+	}
+}

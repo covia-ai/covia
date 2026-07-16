@@ -1,0 +1,22 @@
+{
+	"name": "Test Textual Control-Tool LLM",
+	"description": "Test LLM that emits complete_task as plain assistant text instead of a structural tool call — the small-model behaviour from #215. Used to test the harness's textual control-tool fallback.",
+	"dateCreated": "2026-07-16T00:00:00Z",
+	"operation": {
+		"adapter": "test:textctlllm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": { "type": "array" },
+				"tools": { "type": "array" }
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": { "type": "string" },
+				"content": { "type": "string" }
+			}
+		}
+	}
+}

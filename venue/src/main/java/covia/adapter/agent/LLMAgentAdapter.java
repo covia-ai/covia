@@ -449,6 +449,19 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			ACell toolCallsCell = RT.getIn(l3Result, K_TOOL_CALLS);
 			boolean hasToolCalls = (toolCallsCell instanceof AVector) && ((AVector<ACell>) toolCallsCell).count() > 0;
 
+			// Textual control-tool fallback (#215): only when task tools are
+			// actually on offer this iteration — outside a task cycle the same
+			// text is ordinary chat.
+			if (!hasToolCalls && taskMsg != null) {
+				AMap<AString, ACell> rewritten = recogniseTextualControlCall(l3Result, iteration);
+				if (rewritten != null) {
+					log.warn("Assistant emitted a control tool as text — honouring it (#215)");
+					l3Result = rewritten;
+					toolCallsCell = RT.getIn(l3Result, K_TOOL_CALLS);
+					hasToolCalls = true;
+				}
+			}
+
 			if (!hasToolCalls) {
 				// Text-only response — validate against responseFormat schema if present
 				if (config != null) {
@@ -703,11 +716,71 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			ACell caller = RT.getIn(task, Fields.CALLER);
 			sb.append("- Task ").append(jobId);
 			if (caller != null) sb.append(" (from: ").append(caller).append(")");
-			sb.append(": ").append(taskInput).append("\n");
+			sb.append(": ").append(renderTaskText(taskInput)).append("\n");
 		}
 		if (outstanding == 0) return null;
 		sb.append("Use complete_task or fail_task to resolve each task.");
 		return Maps.of(K_ROLE, ROLE_USER, K_CONTENT, Strings.create(sb.toString()));
+	}
+
+	/**
+	 * Renders a task input for the model: strings verbatim, anything else as
+	 * JSON — never a CVM cell's EDN-style {@code toString()}, which models
+	 * misread as noise (#215: qwen2.5 answered "no task details provided" to
+	 * an EDN-wrapped task it handled fine as plain text).
+	 */
+	static String renderTaskText(ACell input) {
+		if (input == null) return "";
+		if (input instanceof AString s) return s.toString();
+		return convex.core.util.JSON.print(input).toString();
+	}
+
+	/**
+	 * Fallback recognition of control tools emitted as plain TEXT (#215):
+	 * smaller models frequently write {@code complete_task {"result": ...}} /
+	 * {@code fail_task {"error": ...}} as assistant text even when the tools
+	 * are offered structurally. Without recognition each such turn burns a
+	 * loop iteration and the task never resolves.
+	 *
+	 * <p>Recognised only when the text starts with the tool name and the
+	 * remainder is blank or a parseable JSON object — prose that merely
+	 * mentions a tool name is left alone. A bare tool name gets empty
+	 * arguments so the tool's own validation surfaces what's missing.</p>
+	 *
+	 * @return an assistant message carrying a synthetic toolCall (original
+	 *         text preserved as content), or null when the text is not a
+	 *         recognisable control-tool emission
+	 */
+	static AMap<AString, ACell> recogniseTextualControlCall(ACell assistantMsg, int iteration) {
+		AString content = RT.ensureString(RT.getIn(assistantMsg, K_CONTENT));
+		if (content == null) return null;
+		String text = content.toString().strip();
+		String tool = null;
+		if (text.startsWith(TOOL_COMPLETE_TASK)) tool = TOOL_COMPLETE_TASK;
+		else if (text.startsWith(TOOL_FAIL_TASK)) tool = TOOL_FAIL_TASK;
+		if (tool == null) return null;
+		String rest = text.substring(tool.length()).strip();
+		if (rest.startsWith(":")) rest = rest.substring(1).strip();
+		ACell args;
+		if (rest.isEmpty()) {
+			args = Maps.empty();
+		} else if (rest.startsWith("{")) {
+			try {
+				args = convex.core.util.JSON.parse(rest);
+			} catch (Exception e) {
+				return null; // not a parseable call — leave the text alone
+			}
+		} else {
+			return null; // prose mentioning the tool name — not a call
+		}
+		AMap<AString, ACell> toolCall = Maps.of(
+			K_ID, Strings.create("text-fallback-" + iteration),
+			K_NAME, Strings.create(tool),
+			K_ARGUMENTS, args);
+		return Maps.of(
+			K_ROLE, ROLE_ASSISTANT,
+			K_CONTENT, content,
+			K_TOOL_CALLS, Vectors.of(toolCall));
 	}
 
 	static AString getConfigValue(AMap<AString, ACell> config, AString key, AString defaultValue) {
