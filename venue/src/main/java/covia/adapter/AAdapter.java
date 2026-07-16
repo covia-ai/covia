@@ -67,7 +67,7 @@ public abstract class AAdapter {
 	 */
 	protected Hash installAsset(String resourcePath) {
 		try {
-			return installAsset(convex.core.util.Utils.readResourceAsAString(resourcePath));
+			return installAsset(readResource(resourcePath));
 		} catch (Exception e) {
 			// A missing or unreadable adapter resource is a packaging bug — the
 			// venue would boot with silently missing ops. Fail loudly by default,
@@ -79,6 +79,25 @@ public abstract class AAdapter {
 			}
 			log.warn("Failed to install asset from {} (tolerated: strictAssets=false)", resourcePath, e);
 			return null;
+		}
+	}
+
+	/**
+	 * Reads an adapter resource, resolving against the ADAPTER's own
+	 * classloader first — a module-packaged adapter (see
+	 * {@link covia.venue.Modules}) finds its asset JSONs inside its module
+	 * jar, which the venue's classloader cannot see into. Falls back to the
+	 * venue classpath for built-in adapters.
+	 *
+	 * @param resourcePath The resource path, e.g. {@code /adapters/sql/query.json}
+	 * @return The resource content
+	 * @throws java.io.IOException If the resource cannot be found or read
+	 */
+	protected convex.core.data.AString readResource(String resourcePath) throws java.io.IOException {
+		java.io.InputStream is = getClass().getResourceAsStream(resourcePath);
+		if (is == null) return convex.core.util.Utils.readResourceAsAString(resourcePath);
+		try (is) {
+			return convex.core.data.Strings.fromStream(is);
 		}
 	}
 

@@ -506,6 +506,36 @@ Failures are LLM-diagnosable at the point of use: a remote tool-level error
 transport failures name the tool, server and root cause with a remedy;
 text-only tool results are preserved (structured content wins when present).
 
+### Venue modules
+
+```json
+{
+  "modules": [
+    "modules/covia-sql-0.6.0-module.jar",
+    { "path": "modules/other.jar", "sha256": "9f2a..." }
+  ]
+}
+```
+
+External adapter jars loaded at boot (#226) — heavyweight or optional
+adapters stay out of covia.jar. A module is a self-contained shaded jar
+compiled against `venue` (provided scope) declaring its adapters via
+`META-INF/services/covia.adapter.AAdapter`; its adapters are ordinary
+adapters (catalog, `/v/info/adapters`, caps/gates/defaults all apply). Each
+module gets a split-delegation classloader: parent-first for
+`covia.*`/`convex.*`/JDK/SLF4J (shared cell types + logging), child-first
+for everything else (dependency isolation). Loading is an OPERATOR act —
+no runtime module-load op exists, deliberately. `sha256` pins content;
+boot fails fast on any load error; no hot-unload (restart to remove).
+
+First module: **covia-sql** (#227) — `v/ops/sql/query` / `v/ops/sql/execute`
+over venue-local convex-db databases (per-user, lattice-backed, created on
+first use; ONE instance, per-user isolation via the `database=` param —
+convex-db 0.8.8 mis-routes DML across multiple instances, Convex-Dev/convex#645)
+and operator-registered JDBC connections (`adapters.sql.databases.<name>`,
+passwords as `s/` secret refs). Callers name a `db`, never a URL. Caps:
+`sql/<db>` × `sql/query`|`sql/execute`.
+
 ### A2A protocol
 
 ```json

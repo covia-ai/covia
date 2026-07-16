@@ -128,6 +128,12 @@ public class Engine {
 	protected final ConcurrentHashMap<String, AAdapter> adapters = new ConcurrentHashMap<>();
 
 	/**
+	 * Classloaders of venue modules loaded into this engine (see {@link Modules}) —
+	 * held for the engine's lifetime, closed on {@link #close()}.
+	 */
+	final java.util.List<AutoCloseable> moduleLoaders = new java.util.ArrayList<>();
+
+	/**
 	 * Persistence callback supplied at construction. Wired by VenueServer to
 	 * NodeServer.persistSnapshot for the production stack; no-op for tests
 	 * and in-memory engines. See {@link PersistenceHandler}.
@@ -526,6 +532,15 @@ public class Engine {
 		} catch (Exception e) {
 			log.warn("Final persistence flush failed during close", e);
 		}
+
+		// Release module classloaders — closes their jar file handles.
+		for (AutoCloseable loader : moduleLoaders) {
+			try {
+				loader.close();
+			} catch (Exception e) {
+				log.warn("Failed to close module classloader", e);
+			}
+		}
 	}
 
 	public static void addDemoAssets(Engine venue) {
@@ -553,6 +568,12 @@ public class Engine {
 		venue.registerAdapter(new VaultAdapter());
 		venue.registerAdapter(new LLMAgentAdapter());
 		venue.registerAdapter(new covia.adapter.agent.GoalTreeAdapter());
+
+		// Load operator-declared venue modules (external adapter jars) BEFORE
+		// materialisation, so module ops enter the catalog with everyone
+		// else's. Fail-fast on any load error — explicit config is explicit
+		// intent.
+		Modules.loadModules(venue);
 
 		// Flush pending /v/ops/ entries from all adapters. Per OPERATIONS.md
 		// §7, installAsset(catalogPath, resourcePath) defers the catalog

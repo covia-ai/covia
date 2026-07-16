@@ -17,6 +17,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Capability gates — a grant's `nb.gate` names an op that decides per invocation whether the capability applies; runtime-enforced policy limits without a policy language (#216)
 - MCP tool bridging — external MCP tools materialise as catalog operations with caps/gates/jobs applying; curate single tools at chosen paths (`v/ops/mcp/add-tool`, cross-server groups as catalog paths) or mirror whole servers (`v/ops/mcp/add-server`, config-time and dynamic), user and venue scopes (#80)
 - `operation.default` — declarative argument defaults on any operation, merged under the caller's input at dispatch (caller wins; any value type); `add-tool` stores them and drops defaulted keys from the schema's required list (`venue/docs/OPERATIONS.md` §5)
+- Venue modules — adapters load from external jars at boot (`modules` config; optional sha256 content pinning; per-module classloader isolation) (#226)
+- SQL adapter as the first venue module (`covia-sql`) — `v/ops/sql/query`/`execute` over per-user lattice-backed convex-db databases and operator-registered JDBC connections; callers name databases, never URLs (#227)
 
 ### Fixed
 - Task input rendered to models as plain text/JSON, never EDN map literals (#215)

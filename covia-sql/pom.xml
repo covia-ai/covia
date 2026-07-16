@@ -1,0 +1,98 @@
+<project xmlns="https://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="https://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>ai.covia</groupId>
+		<artifactId>covia</artifactId>
+		<version>0.5.1-SNAPSHOT</version>
+	</parent>
+	<artifactId>covia-sql</artifactId>
+
+	<name>Covia SQL Module</name>
+	<description>SQL adapter for Covia venues — query/execute over lattice-backed convex-db databases and operator-registered JDBC connections. Packaged as a loadable venue module (the shaded "module" classifier jar), not part of covia.jar.</description>
+
+	<dependencies>
+		<!-- The venue SPI — provided by the loading venue, never bundled -->
+		<dependency>
+			<groupId>ai.covia</groupId>
+			<artifactId>venue</artifactId>
+			<version>${project.version}</version>
+			<scope>provided</scope>
+		</dependency>
+
+		<!-- convex-db (JDBC driver + Calcite). convex-core is excluded: the
+		     venue provides it, and cell-type identity must be shared. -->
+		<dependency>
+			<groupId>world.convex</groupId>
+			<artifactId>convex-db</artifactId>
+			<version>${convex.version}</version>
+			<exclusions>
+				<exclusion>
+					<groupId>world.convex</groupId>
+					<artifactId>convex-core</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<!-- Testing -->
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-api</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-engine</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<!-- The loadable module jar: covia-sql + convex-db + Calcite,
+			     attached with the "module" classifier. The plain jar remains
+			     the Maven artifact. -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-shade-plugin</artifactId>
+				<version>3.6.0</version>
+				<executions>
+					<execution>
+						<phase>package</phase>
+						<goals>
+							<goal>shade</goal>
+						</goals>
+						<configuration>
+							<shadedArtifactAttached>true</shadedArtifactAttached>
+							<shadedClassifierName>module</shadedClassifierName>
+							<artifactSet>
+								<excludes>
+									<!-- Logging resolves parent-first from the venue -->
+									<exclude>org.slf4j:*</exclude>
+									<exclude>ch.qos.logback:*</exclude>
+								</excludes>
+							</artifactSet>
+							<filters>
+								<filter>
+									<artifact>*:*</artifact>
+									<excludes>
+										<exclude>module-info.class</exclude>
+										<exclude>META-INF/*.SF</exclude>
+										<exclude>META-INF/*.DSA</exclude>
+										<exclude>META-INF/*.RSA</exclude>
+									</excludes>
+								</filter>
+							</filters>
+							<transformers>
+								<transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+							</transformers>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+</project>

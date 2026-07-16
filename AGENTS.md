@@ -24,6 +24,8 @@ covia/                          # ai.covia:covia (parent POM)
 │       ├── venue/api/          #   REST API (CoviaAPI), MCP, A2A, UserAPI
 │       ├── venue/server/       #   HTTP server (VenueServer, CoviaWebApp, SSE, AuthMiddleware)
 │       └── venue/storage/      #   Storage backends (Lattice, File, Memory)
+├── covia-sql/                  # SQL adapter venue module (convex-db + Calcite;
+│                               #   shaded "module" jar loaded via config, not in covia.jar)
 ├── workbench/                  # Minimal Swing GUI REPL for demo/testing
 │   └── src/main/java/covia/gui/  Bench, ReplPanel, LAF
 ├── .claude/                    # Claude Code config (settings.json tracked; rest gitignored)

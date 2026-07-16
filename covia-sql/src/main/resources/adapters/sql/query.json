@@ -1,0 +1,27 @@
+{
+	"name": "SQL Query",
+	"description": "Runs a read-only SQL query (SELECT) against a named database and returns the rows. 'db' names a venue-local convex-db database (per-user, lattice-backed, created on first use) or an operator-registered JDBC connection. Use params with ? placeholders for values — safer than interpolating them into the statement. Results are capped at maxRows (default 1000) with truncated: true when more rows were available.",
+	"dateCreated": "2026-07-16T00:00:00Z",
+	"operation": {
+		"adapter": "sql:query",
+		"input": {
+			"type": "object",
+			"properties": {
+				"db": { "type": "string", "description": "Database name, [a-zA-Z0-9_]{1,64}" },
+				"statement": { "type": "string", "description": "SQL SELECT statement, optionally with ? placeholders" },
+				"params": { "type": "array", "description": "Values for ? placeholders, in order" },
+				"maxRows": { "type": "integer", "description": "Row cap (default 1000, max 10000)" }
+			},
+			"required": ["db", "statement"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"columns": { "type": "array", "description": "Column labels" },
+				"rows": { "type": "array", "description": "Row arrays, aligned with columns" },
+				"count": { "type": "integer" },
+				"truncated": { "type": "boolean", "description": "Present and true when more rows were available than maxRows" }
+			}
+		}
+	}
+}

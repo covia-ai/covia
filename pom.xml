@@ -61,6 +61,7 @@
 		<module>workbench</module>
 		<module>venue</module>
 		<module>covia-core</module>
+		<module>covia-sql</module>
 	</modules>
 
 	<build>

@@ -142,6 +142,9 @@ public class Config {
 	/** Key for adapters configuration */
 	public static final AString ADAPTERS = Strings.intern("adapters");
 
+	/** Key for venue modules — external adapter jars loaded at boot (see {@link Modules}) */
+	public static final AString MODULES = Strings.intern("modules");
+
 	/**
 	 * Returns the configuration block for a named adapter from the top-level
 	 * {@code adapters} section, or an empty map when absent. Example venue
@@ -794,6 +797,15 @@ public class Config {
 	}
 
 	// ========== Protocol config accessors ==========
+
+	/**
+	 * Get the configured venue module entries — external adapter jars loaded
+	 * at boot. Each entry is a path string or a {@code {path, sha256?}} map.
+	 * @return The modules config value, or null if none configured
+	 */
+	public ACell getModules() {
+		return config.get(MODULES);
+	}
 
 	/**
 	 * Get the MCP configuration section.
