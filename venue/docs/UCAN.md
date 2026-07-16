@@ -149,6 +149,42 @@ Optional per-capability constraints as a map:
 
 Constraint semantics are application-defined. The UCAN infrastructure verifies attenuation (child constraints must be equal or stricter), but interpretation is delegated to the enforcing adapter.
 
+#### Capability gates (`nb.gate`) — covia#216
+
+The one `nb` constraint covia enforces today is the **gate**: a reference to
+an operation that decides, per invocation, whether the capability applies.
+
+```
+{ with: "o/glassbox/pay-invoice", can: "invoke",
+  nb: { gate: "v/ops/glassbox/pay-gate" } }
+```
+
+The gate op is invoked with `{operation, input, caller}` describing the
+invocation being authorised; the capability applies **iff the gate op
+succeeds**. Arbitrary policy — a three-line checker, an orchestration, a
+lattice lookup against per-caller limits — without a policy language: the
+gate is an ordinary auditable, content-addressed operation. Test gates ship
+in the test adapter: `v/test/ops/allowgate`, `v/test/ops/denygate`, and
+`v/test/ops/amountgate` (passes iff `input.amount <= 2000` — the canonical
+argument-conditional example).
+
+Semantics (see `CapabilityChecker.allows` and `JobManager.evaluateGate`):
+
+- **Ungated grants win first**: a covering grant without a gate authorises
+  outright, and no gate is evaluated. Gates only run when a gated grant is
+  the deciding authority.
+- **Fail-closed, always**: gate op fails → denied with the gate's reason;
+  gate unresolvable, times out (30s), or no evaluator in scope → denied.
+  Never fail-open.
+- **Execution authority**: the gate runs under the *caller's own* authority
+  with no capability ceiling — a ceiling-less context never evaluates gates
+  for the gate's own sub-invocations, which is the recursion guard. No Job
+  is created for gate checks.
+- **Scope (phase 1)**: agent `config.caps` and any venue-side ceiling. Gates
+  in *delegated UCAN tokens* additionally require caveat collection along
+  the proof chain so a delegatee cannot drop a parent's gate — that lands
+  with Convex-Dev/convex#643 (tracked in covia#221).
+
 ### 3.4 Risk Hierarchy
 
 | Capability | Risk |

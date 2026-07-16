@@ -150,6 +150,27 @@ public class CapabilityChecker {
 	 * @return {@code null} if allowed, else an actionable denial message
 	 */
 	public static String allows(AVector<ACell> caps, AString resource, AString ability, AString ownerDID) {
+		return allows(caps, resource, ability, ownerDID, null, null, null);
+	}
+
+	/**
+	 * As {@link #allows(AVector, AString, AString, AString)}, with capability
+	 * gate evaluation (#216). A grant may carry {@code nb: {gate: "v/ops/…"}} —
+	 * the grant then authorises a request only when the gate operation
+	 * succeeds for the invocation being checked. Ungated covering grants are
+	 * checked first and short-circuit (no gate invocations on the common
+	 * path); gates only run when a gated grant is the deciding authority.
+	 * Fail-closed: with no {@code gate} evaluator in scope, gated grants
+	 * cannot authorise anything.
+	 *
+	 * @param opRef the operation reference being invoked (for the gate's
+	 *              {@code operation} field; may be null)
+	 * @param invocationInput the invocation input the gate rules on
+	 * @param gate  the gate evaluator, or null when gates cannot be evaluated
+	 *              in this context
+	 */
+	public static String allows(AVector<ACell> caps, AString resource, AString ability, AString ownerDID,
+			AString opRef, ACell invocationInput, CapabilityGate gate) {
 		if (caps == null) return null;              // no ceiling = unrestricted
 		String canonResource = canonicalResource(resource != null ? resource.toString() : null, ownerDID);
 		if (canonResource == null) canonResource = "";
@@ -157,7 +178,37 @@ public class CapabilityChecker {
 		AString resourceStr = Strings.create(canonResource);
 		AString abilityStr = Strings.create(ab);
 
-		if (covered(caps, resourceStr, abilityStr, ownerDID)) return null;
+		// Pass 1: any covering grant WITHOUT a gate authorises outright.
+		if (covered(caps, resourceStr, abilityStr, ownerDID, false)) return null;
+
+		// Pass 2: covering grants WITH a gate — evaluated in declaration order,
+		// first passing gate wins. Denial details accumulate so a refused
+		// caller sees why each applicable gate said no.
+		StringBuilder gateDenials = null;
+		for (long i = 0; i < caps.count(); i++) {
+			if (!(caps.get(i) instanceof AMap<?, ?> capMap)) continue;
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> cap = (AMap<AString, ACell>) capMap;
+			AString gateOp = gateOf(cap);
+			if (gateOp == null) continue;                       // ungated — pass 1's job
+			if (!grantCovers(cap, resourceStr, abilityStr, ownerDID)) continue;
+			String detail;
+			if (gate == null) {
+				detail = "gate " + gateOp + " cannot be evaluated in this context";
+			} else {
+				detail = gate.evaluate(gateOp, opRef, invocationInput, ownerDID);
+				if (detail == null) return null;                // gate passed — authorised
+			}
+			if (gateDenials == null) gateDenials = new StringBuilder();
+			else gateDenials.append("; ");
+			gateDenials.append(detail);
+		}
+		if (gateDenials != null) {
+			return "Capability denied by gate: " + gateDenials
+				+ ". The grant covering " + (ab.isEmpty() ? "(any ability)" : ab)
+				+ " on " + (canonResource.isEmpty() ? "(any)" : canonResource)
+				+ " is conditional on its gate operation succeeding.";
+		}
 
 		StringBuilder sb = new StringBuilder("Capability denied: requires ")
 			.append(ab.isEmpty() ? "(any ability)" : ab)
@@ -214,27 +265,44 @@ public class CapabilityChecker {
 	 * vector therefore grants nothing — only a {@code null} ceiling is "full
 	 * access" (handled by the callers).
 	 */
-	private static boolean covered(AVector<ACell> caps, AString resourceStr, AString abilityStr, AString ownerDID) {
+	private static boolean covered(AVector<ACell> caps, AString resourceStr, AString abilityStr,
+			AString ownerDID, boolean includeGated) {
 		for (long i = 0; i < caps.count(); i++) {
 			if (!(caps.get(i) instanceof AMap<?,?> capMap)) continue;
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> cap = (AMap<AString, ACell>) capMap;
-
-			AString rawWith = RT.ensureString(cap.get(Capability.WITH));
-			String canonWith = canonicalResource(rawWith != null ? rawWith.toString() : null, ownerDID);
-			AString grantWith = (canonWith != null) ? Strings.create(canonWith) : null;
-			AString grantCan = RT.ensureString(cap.get(Capability.CAN));
-
-			// A null/empty grant `with` is a "match any resource" wildcard — the
-			// venue's own asset/read ceiling ({with:""}) relies on it. This wildcard
-			// lives ONLY in the ceiling path, never in the fail-closed UCAN proof
-			// path (proofsCover). A concrete grant matches via the boundary-aware
-			// Capability.resourceCovers (Convex #585 fixed); ability via abilityCovers.
-			boolean resourceOK = (grantWith == null || grantWith.count() == 0)
-					|| Capability.resourceCovers(grantWith, resourceStr);
-			if (resourceOK && Capability.abilityCovers(grantCan, abilityStr)) return true;
+			if (!includeGated && gateOf(cap) != null) continue;   // gated grants decide in pass 2
+			if (grantCovers(cap, resourceStr, abilityStr, ownerDID)) return true;
 		}
 		return false;
+	}
+
+	/** The grant's {@code nb.gate} operation reference, or null when ungated. */
+	static AString gateOf(AMap<AString, ACell> cap) {
+		ACell nb = cap.get(Capability.NB);
+		if (!(nb instanceof AMap)) return null;
+		return RT.ensureString(((AMap<?, ?>) nb).get(GATE));
+	}
+
+	private static final AString GATE = Strings.intern("gate");
+
+	/** Structural coverage of a single grant — {@code with}/{@code can} only;
+	 *  gate caveats are the callers' concern. */
+	private static boolean grantCovers(AMap<AString, ACell> cap, AString resourceStr,
+			AString abilityStr, AString ownerDID) {
+		AString rawWith = RT.ensureString(cap.get(Capability.WITH));
+		String canonWith = canonicalResource(rawWith != null ? rawWith.toString() : null, ownerDID);
+		AString grantWith = (canonWith != null) ? Strings.create(canonWith) : null;
+		AString grantCan = RT.ensureString(cap.get(Capability.CAN));
+
+		// A null/empty grant `with` is a "match any resource" wildcard — the
+		// venue's own asset/read ceiling ({with:""}) relies on it. This wildcard
+		// lives ONLY in the ceiling path, never in the fail-closed UCAN proof
+		// path (proofsCover). A concrete grant matches via the boundary-aware
+		// Capability.resourceCovers (Convex #585 fixed); ability via abilityCovers.
+		boolean resourceOK = (grantWith == null || grantWith.count() == 0)
+				|| Capability.resourceCovers(grantWith, resourceStr);
+		return resourceOK && Capability.abilityCovers(grantCan, abilityStr);
 	}
 
 	/**

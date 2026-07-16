@@ -1,0 +1,20 @@
+{
+	"name": "Test Amount Gate",
+	"description": "The canonical argument-conditional capability gate (#216): passes iff the gated invocation's input carries amount <= 2000. Fail-closed on a missing or non-numeric amount. Demonstrates policy limits enforced by the runtime, not the prompt.",
+	"dateCreated": "2026-07-16T00:00:00Z",
+	"operation": {
+		"adapter": "test:amountgate",
+		"input": {
+			"type": "object",
+			"properties": {
+				"operation": { "type": "string", "description": "the operation reference being authorised" },
+				"input": { "description": "the invocation input — must carry a numeric 'amount' <= 2000" },
+				"caller": { "type": "string", "description": "the caller's DID" }
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": { "allowed": { "type": "boolean" }, "amount": { "type": "integer" } }
+		}
+	}
+}

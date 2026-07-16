@@ -205,6 +205,11 @@ public class JobManager {
 		// Advance the lattice write clock for this dispatch — the harness owns
 		// write time (see Engine.refreshWriteClock).
 		engine.refreshWriteClock();
+		// Arm capability gates (#216): every requireCapability fired during this
+		// invocation can evaluate nb.gate-caveated grants against exactly this
+		// op + input. Installed here because dispatch is the one place with the
+		// engine, the reference and the input together.
+		ctx = ctx.withInvocation(input, this::evaluateGate);
 		// Capability enforcement is the executing adapter's responsibility: each
 		// op asserts its exact (resource, ability) at its own enforcement point
 		// (requireCapability / requireInvoke), before any side effect. There is
@@ -317,6 +322,9 @@ public class JobManager {
 		// Advance the lattice write clock — internal dispatch (agent transitions,
 		// tool calls) is high-frequency, so long cycles keep stamping fresh time.
 		engine.refreshWriteClock();
+		// Arm capability gates (#216) — see invokeOperation. The agent tool loop
+		// dispatches through here, so gated config caps rule on each tool call.
+		ctx = ctx.withInvocation(input, this::evaluateGate);
 		AAdapter adapter;
 		try {
 			// Enforcement is the adapter's responsibility (see invokeOperation):
@@ -332,6 +340,42 @@ public class JobManager {
 			return (f != null) ? f : CompletableFuture.completedFuture(null);
 		} catch (Exception e) {
 			return CompletableFuture.failedFuture(e);
+		}
+	}
+
+	/** Bound on a single capability-gate evaluation — gates sit on the
+	 *  invocation hot path, so a hung gate must deny, not hang the caller. */
+	private static final long GATE_TIMEOUT_MS = 30_000;
+
+	/**
+	 * Evaluates a capability gate (#216): invokes the grant's {@code nb.gate}
+	 * operation with {@code {operation, input, caller}} describing the
+	 * invocation being authorised. The capability applies iff the gate op
+	 * succeeds; any failure — the op fails, doesn't resolve, or times out —
+	 * denies with the reason (fail-closed, never fail-open).
+	 *
+	 * <p>The gate runs under the CALLER's own authority with no capability
+	 * ceiling: a gate is policy code chosen by whoever configured the grant,
+	 * and a ceiling-less context means the checker never evaluates gates for
+	 * the gate's own sub-invocations — a structural recursion guard, no
+	 * flags. No Job is created (invokeInternal), so gate checks never bloat
+	 * the etch.</p>
+	 */
+	String evaluateGate(AString gateOp, AString opRef, ACell input, AString caller) {
+		try {
+			AMap<AString, ACell> gateInput = Maps.of(
+				Fields.OPERATION, opRef,
+				Fields.INPUT, input,
+				Fields.CALLER, caller);
+			invokeInternal(gateOp, gateInput, RequestContext.of(caller))
+				.get(GATE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+			return null;                                        // gate succeeded — capability applies
+		} catch (java.util.concurrent.TimeoutException e) {
+			return "gate " + gateOp + " timed out after " + GATE_TIMEOUT_MS + "ms";
+		} catch (Exception e) {
+			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
+			String msg = cause.getMessage();
+			return "gate " + gateOp + ": " + (msg != null ? msg : cause.toString());
 		}
 	}
 

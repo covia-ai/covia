@@ -1,0 +1,17 @@
+{
+	"name": "Test Deny Gate",
+	"description": "Capability gate that always fails (#216). A grant carrying nb: {gate: 'v/test/ops/denygate'} never applies — the invocation is denied with the gate's reason. Useful for verifying deny paths end-to-end.",
+	"dateCreated": "2026-07-16T00:00:00Z",
+	"operation": {
+		"adapter": "test:denygate",
+		"input": {
+			"type": "object",
+			"properties": {
+				"operation": { "type": "string", "description": "the operation reference being authorised" },
+				"input": { "description": "the invocation input the gate rules on" },
+				"caller": { "type": "string", "description": "the caller's DID" }
+			}
+		},
+		"output": { "type": "object" }
+	}
+}

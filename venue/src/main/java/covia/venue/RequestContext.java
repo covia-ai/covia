@@ -8,6 +8,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.exception.AuthException;
 import covia.lattice.CapabilityChecker;
+import covia.lattice.CapabilityGate;
 
 /**
  * Represents the context of an API request, carrying caller identity,
@@ -39,15 +40,23 @@ public class RequestContext {
 	 *  {@code AAdapter.requireInvoke} so an {@code invoke} capability can be
 	 *  scoped to specific operations (#211). */
 	private final AString op;
+	/** The input of the invocation this context executes, set by the JobManager
+	 *  dispatch alongside {@link #gate} — capability gates rule on it (#216). */
+	private final ACell invocationInput;
+	/** Gate evaluator for {@code nb.gate}-caveated capability grants, installed
+	 *  by the dispatch layer. Null → gated grants cannot authorise (fail-closed);
+	 *  ungated grants are unaffected (#216). */
+	private final CapabilityGate gate;
 
 	/**
 	 * Context for anonymous (unauthenticated) external requests.
 	 */
-	public static final RequestContext ANONYMOUS = new RequestContext(null, null, null, null, null, null, null, null, null, null);
+	public static final RequestContext ANONYMOUS = new RequestContext(null, null, null, null, null, null, null, null, null, null, null, null);
 
 	private RequestContext(AString callerDID, AVector<ACell> proofs, AVector<ACell> caps,
 			AString agentId, Blob jobId, Blob sessionId, Blob taskId, AVector<ACell> rawUcans,
-			AString op, java.util.concurrent.atomic.AtomicBoolean cancellation) {
+			AString op, java.util.concurrent.atomic.AtomicBoolean cancellation,
+			ACell invocationInput, CapabilityGate gate) {
 		this.callerDID = callerDID;
 		this.proofs = proofs;
 		this.caps = caps;
@@ -58,6 +67,8 @@ public class RequestContext {
 		this.rawUcans = rawUcans;
 		this.op = op;
 		this.cancellation = cancellation;
+		this.invocationInput = invocationInput;
+		this.gate = gate;
 	}
 
 	/**
@@ -74,7 +85,7 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, null, null, null, null, null, null, null, null, null);
+		return new RequestContext(callerDID, null, null, null, null, null, null, null, null, null, null, null);
 	}
 
 	/**
@@ -82,7 +93,7 @@ public class RequestContext {
 	 */
 	public static RequestContext of(AString callerDID, AVector<ACell> proofs) {
 		if (callerDID == null) return ANONYMOUS;
-		return new RequestContext(callerDID, proofs, null, null, null, null, null, null, null, null);
+		return new RequestContext(callerDID, proofs, null, null, null, null, null, null, null, null, null, null);
 	}
 
 	/**
@@ -101,7 +112,7 @@ public class RequestContext {
 	 * CAD3-signed tokens directly are implicitly trusted by construction.</p>
 	 */
 	public RequestContext withProofs(AVector<ACell> proofs) {
-		return new RequestContext(this.callerDID, proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op, this.cancellation);
+		return new RequestContext(this.callerDID, proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op, this.cancellation, this.invocationInput, this.gate);
 	}
 
 	/**
@@ -113,7 +124,7 @@ public class RequestContext {
 	 * composes downward into sub-operations. {@code null} = unrestricted.
 	 */
 	public RequestContext withCaps(AVector<ACell> caps) {
-		return new RequestContext(this.callerDID, this.proofs, caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op, this.cancellation);
+		return new RequestContext(this.callerDID, this.proofs, caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op, this.cancellation, this.invocationInput, this.gate);
 	}
 
 	/**
@@ -121,7 +132,7 @@ public class RequestContext {
 	 * resolves to the agent's private workspace at {@code g/{agentId}/n/}.
 	 */
 	public RequestContext withAgentId(AString agentId) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op, this.cancellation);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op, this.cancellation, this.invocationInput, this.gate);
 	}
 
 	/**
@@ -131,7 +142,7 @@ public class RequestContext {
 	 * case the agent/task path takes precedence.
 	 */
 	public RequestContext withJobId(Blob jobId) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, jobId, this.sessionId, this.taskId, this.rawUcans, this.op, this.cancellation);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, jobId, this.sessionId, this.taskId, this.rawUcans, this.op, this.cancellation, this.invocationInput, this.gate);
 	}
 
 	/**
@@ -140,7 +151,7 @@ public class RequestContext {
 	 * conversation-scoped slot at {@code g/{agentId}/sessions/{sessionId}/c/}.
 	 */
 	public RequestContext withSessionId(Blob sessionId) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, sessionId, this.taskId, this.rawUcans, this.op, this.cancellation);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, sessionId, this.taskId, this.rawUcans, this.op, this.cancellation, this.invocationInput, this.gate);
 	}
 
 	/**
@@ -149,7 +160,7 @@ public class RequestContext {
 	 * private slot at {@code g/{agentId}/tasks/{taskId}/t/}.
 	 */
 	public RequestContext withTaskId(Blob taskId) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, taskId, this.rawUcans, this.op, this.cancellation);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, taskId, this.rawUcans, this.op, this.cancellation, this.invocationInput, this.gate);
 	}
 
 	/**
@@ -162,7 +173,7 @@ public class RequestContext {
 	 * (#211): {@code {"with": "v/ops/getmine", "can": "invoke"}}.
 	 */
 	public RequestContext withOp(AString op) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, op, this.cancellation);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, op, this.cancellation, this.invocationInput, this.gate);
 	}
 
 	/**
@@ -176,13 +187,25 @@ public class RequestContext {
 	}
 
 	/**
+	 * Returns a new context carrying the invocation's input and a gate
+	 * evaluator (#216). Set by the JobManager dispatch methods — the one
+	 * place that has the engine, the operation reference and the invocation
+	 * input together — so {@code nb.gate}-caveated grants can be evaluated
+	 * against the exact invocation being authorised. Contexts without an
+	 * evaluator treat gated grants as unable to authorise (fail-closed).
+	 */
+	public RequestContext withInvocation(ACell invocationInput, CapabilityGate gate) {
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op, this.cancellation, invocationInput, gate);
+	}
+
+	/**
 	 * Returns a new context carrying a cancellation signal for the transition
 	 * cycle it drives. Set by the run loop before dispatching a transition;
 	 * flipped alongside {@code transitionFuture.cancel(true)}, which does not
 	 * stop the running transition thread by itself.
 	 */
 	public RequestContext withCancellation(java.util.concurrent.atomic.AtomicBoolean cancellation) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op, cancellation);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, this.rawUcans, this.op, cancellation, this.invocationInput, this.gate);
 	}
 
 	/**
@@ -228,7 +251,7 @@ public class RequestContext {
 	 * forwarding — the parsed {@link #getProofs() proofs} cannot be re-signed.
 	 */
 	public RequestContext withRawUcans(AVector<ACell> rawUcans) {
-		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, rawUcans, this.op, this.cancellation);
+		return new RequestContext(this.callerDID, this.proofs, this.caps, this.agentId, this.jobId, this.sessionId, this.taskId, rawUcans, this.op, this.cancellation, this.invocationInput, this.gate);
 	}
 
 	/**
@@ -268,7 +291,8 @@ public class RequestContext {
 	 * @throws AuthException if the ceiling does not cover {@code (resource, ability)}
 	 */
 	public void requireCapability(AString resource, AString ability) {
-		String denial = CapabilityChecker.allows(caps, resource, ability, callerDID);
+		String denial = CapabilityChecker.allows(caps, resource, ability, callerDID,
+			op, invocationInput, gate);
 		if (denial != null) throw new AuthException(denial);
 	}
 

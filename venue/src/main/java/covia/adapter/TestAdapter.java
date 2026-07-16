@@ -98,6 +98,18 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.completedFuture(withMockTokens(handleCompactLlm(input), input));
                 case "selfchat":
                     return CompletableFuture.completedFuture(withMockTokens(handleSelfChatLlm(ctx, input), input));
+                case "allowgate":
+                    // Capability gate that always passes (#216) — for wiring tests
+                    // and as the do-nothing gate reference example.
+                    return CompletableFuture.completedFuture(Maps.of(
+                        "allowed", convex.core.data.prim.CVMBool.TRUE));
+                case "denygate":
+                    // Capability gate that always fails — the capability it gates
+                    // never applies. Useful for verifying deny paths end-to-end.
+                    return CompletableFuture.failedFuture(
+                        new IllegalStateException("denied by test policy gate"));
+                case "amountgate":
+                    return handleAmountGate(input);
                 case "never":
                     return new CompletableFuture<>();
                 case "delay":
@@ -145,6 +157,9 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("workspacellm", BASE+"testworkspacellm.json");
 			installTestAsset("compactllm",   BASE+"testcompactllm.json");
 			installTestAsset("selfchat",     BASE+"testselfchat.json");
+			installTestAsset("allowgate",    BASE+"testallowgate.json");
+			installTestAsset("denygate",     BASE+"testdenygate.json");
+			installTestAsset("amountgate",   BASE+"testamountgate.json");
 			installTestAsset("never",        BASE+"neverop.json");
 			installTestAsset("delay",        BASE+"delayop.json");
 			installTestAsset("error",        BASE+"failop.json");
@@ -501,6 +516,29 @@ public class TestAdapter extends AAdapter {
                 "arguments", Strings.create("{\"echo\":\"loop\"}")
             ))
         );
+    }
+
+    /**
+     * The #216 canonical example as a capability gate: passes iff the gated
+     * invocation's input carries {@code amount <= 2000}. Gate input shape is
+     * {@code {operation, input, caller}} — the invocation's own input is under
+     * {@code input}. Fail-closed on a missing or non-numeric amount: a gate
+     * that can't see what it rules on must deny.
+     */
+    private CompletableFuture<ACell> handleAmountGate(ACell input) {
+        ACell amountCell = RT.getIn(input, Fields.INPUT, "amount");
+        CVMLong amount = RT.ensureLong(amountCell);
+        if (amount == null) {
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                "amount gate: no numeric 'amount' in the invocation input — denying by default"));
+        }
+        if (amount.longValue() > 2000) {
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                "amount gate: " + amount + " exceeds the limit of 2000"));
+        }
+        return CompletableFuture.completedFuture(Maps.of(
+            "allowed", convex.core.data.prim.CVMBool.TRUE,
+            "amount", amount));
     }
 
     /**

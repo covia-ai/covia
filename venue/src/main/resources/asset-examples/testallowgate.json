@@ -1,0 +1,20 @@
+{
+	"name": "Test Allow Gate",
+	"description": "Capability gate that always passes (#216). A grant carrying nb: {gate: 'v/test/ops/allowgate'} behaves like an ungated grant — useful for wiring tests and as the reference example of the gate input shape {operation, input, caller}.",
+	"dateCreated": "2026-07-16T00:00:00Z",
+	"operation": {
+		"adapter": "test:allowgate",
+		"input": {
+			"type": "object",
+			"properties": {
+				"operation": { "type": "string", "description": "the operation reference being authorised" },
+				"input": { "description": "the invocation input the gate rules on" },
+				"caller": { "type": "string", "description": "the caller's DID" }
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": { "allowed": { "type": "boolean" } }
+		}
+	}
+}
