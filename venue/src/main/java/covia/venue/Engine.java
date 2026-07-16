@@ -564,6 +564,11 @@ public class Engine {
 		// Per OPERATIONS.md §7, this is re-run on every startup. Idempotent
 		// modulo /v/info/started which legitimately reflects the current boot.
 		venue.materialiseVenueInfo();
+
+		// Bridge config-declared MCP servers (#80). Config is the source of
+		// truth for the names it declares (secrets-bootstrap rule); entries
+		// it doesn't name — dynamically-added servers — are untouched.
+		venue.seedMcpServers();
 	}
 
 	/**
@@ -610,6 +615,41 @@ public class Engine {
 					throw new RuntimeException(
 						"Failed to materialise " + adapter.getName() + " at /" + fullPath, e);
 				}
+			}
+		}
+	}
+
+	/**
+	 * Bridges MCP servers declared in the {@code mcp.servers} config block
+	 * (#80): each is registered at VENUE scope, its tools materialised at
+	 * {@code v/ops/mcp/<name>/<tool>}. Best-effort per server — a server that
+	 * is down at boot logs a warning (run {@code v/ops/mcp/refresh} once it
+	 * is reachable) and never blocks startup; the last-known bridged catalog
+	 * from a previous boot persists on the lattice regardless.
+	 */
+	public void seedMcpServers() {
+		AMap<AString, ACell> mcpConfig = config().getMCPConfig();
+		ACell serversCell = (mcpConfig != null) ? mcpConfig.get(Strings.intern("servers")) : null;
+		if (!(serversCell instanceof AMap)) return;
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> servers = (AMap<AString, ACell>) serversCell;
+		for (var entry : servers.entrySet()) {
+			AString name = entry.getKey();
+			ACell spec = entry.getValue();
+			try {
+				AMap<AString, ACell> input = Maps.of(
+					Fields.NAME, name,
+					Strings.intern("url"), RT.getIn(spec, "url"),
+					Strings.intern("scope"), Strings.intern("venue"));
+				ACell auth = RT.getIn(spec, "auth");
+				if (auth != null) input = input.assoc(Strings.intern("auth"), auth);
+				jobManager.invokeInternal(Strings.create("v/ops/mcp/add-server"),
+					input, venueContext()).join();
+				log.info("Bridged config-declared MCP server '{}'", name);
+			} catch (Exception e) {
+				log.warn("Could not bridge config-declared MCP server '{}' at boot: {} — "
+					+ "the last-known catalog (if any) remains; run v/ops/mcp/refresh "
+					+ "when the server is reachable", name, e.getMessage());
 			}
 		}
 	}

@@ -69,6 +69,29 @@ public class HTTPAdapter extends AAdapter {
 	}
 
 	/**
+	 * Public SSRF guard for other outbound-connecting adapters (MCP server
+	 * bridging, #80): the same validation and the same operator allow/block
+	 * lists as this adapter's own requests — binding a remote server can
+	 * never reach anything a direct HTTP call couldn't.
+	 *
+	 * @param url URL string to validate
+	 * @throws IllegalArgumentException if malformed, blocked or private
+	 */
+	public void requireSafeUrl(String url) {
+		URI uri;
+		try {
+			uri = URI.create(url);
+		} catch (Exception e) {
+			throw new IllegalArgumentException("Malformed URL: " + url);
+		}
+		String scheme = uri.getScheme();
+		if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+			throw new IllegalArgumentException("URL must be http(s): " + url);
+		}
+		validateURL(uri);
+	}
+
+	/**
 	 * Validates a URL for SSRF safety. Blocks private/internal network addresses
 	 * by default. Allow list entries bypass SSRF checks; block list is checked first.
 	 *

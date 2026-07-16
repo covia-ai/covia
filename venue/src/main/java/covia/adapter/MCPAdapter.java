@@ -54,6 +54,9 @@ public class MCPAdapter extends AAdapter {
 	protected void installAssets() {
 		TOOL_CALL  = installAsset("mcp/tools-call", "/adapters/mcp/toolCall.json");
 		TOOLS_LIST = installAsset("mcp/tools-list", "/adapters/mcp/toolList.json");
+		installAsset("mcp/add-server",    "/adapters/mcp/addServer.json");
+		installAsset("mcp/remove-server", "/adapters/mcp/removeServer.json");
+		installAsset("mcp/refresh",       "/adapters/mcp/refresh.json");
 	}
 
 	@Override
@@ -101,14 +104,30 @@ public class MCPAdapter extends AAdapter {
 							throw new JobFailedException("No server URL provided in input (or asset metadata fallback)");
 						}
 
+						// Bridged form (#80): when the OPERATION metadata pins the
+						// remote tool, the op's declared input IS the tool's own
+						// schema — the whole invocation input is the arguments.
+						// The generic tools-call op keeps the wrapped
+						// {server, toolName, arguments} form; explicit
+						// input.arguments always wins for back-compat.
 						AMap<AString,ACell> toolArguments=RT.getIn(input, Fields.ARGUMENTS);
+						if (toolArguments == null
+								&& RT.getIn(meta, Fields.OPERATION, Fields.REMOTE_TOOL_NAME) != null) {
+							toolArguments = (input instanceof AMap)
+								? (AMap<AString,ACell>) input : Maps.empty();
+						}
 						if (toolArguments == null) {
 							throw new JobFailedException("Tool call requires arguments as a JSON object");
 						}
 
-						// Get API access token, if provided
+						// Access token: explicit input wins; else the operation
+						// metadata's auth reference (secret ref, possibly
+						// DID-qualified) resolved at call time — never persisted
+						// as a raw value in the bridged asset.
 						AString token=RT.getIn(input, Fields.TOKEN);
-						String accessToken=(token==null)?null:token.toString();
+						String accessToken=(token!=null)?token.toString()
+							: resolveAuthRef(ctx, RT.ensureString(
+								RT.getIn(meta, Fields.OPERATION, K_AUTH)));
 
 						// Make the MCP tool call
 						return callMCPTool(serverUrl, remoteToolName.toString(), toolArguments, accessToken);
@@ -142,6 +161,28 @@ public class MCPAdapter extends AAdapter {
 			} else {
 				throw new UnsupportedOperationException("Unsupported tools function: " + function);
 			}
+		} else if (feature.equals("server")) {
+			// Server bridging (#80): register / refresh / remove external MCP
+			// servers whose tools materialise as ordinary catalog operations.
+			if (subParts.length < 2) {
+				throw new IllegalArgumentException("MCP server operation requires function (add/remove/refresh)");
+			}
+			String function = subParts[1];
+			return CompletableFuture.supplyAsync(() -> {
+				try {
+					return switch (function) {
+						case "add" -> handleAddServer(ctx, input);
+						case "remove" -> handleRemoveServer(ctx, input);
+						case "refresh" -> handleRefresh(ctx, input);
+						default -> throw new UnsupportedOperationException(
+							"Unsupported server function: " + function);
+					};
+				} catch (JobFailedException | IllegalArgumentException e) {
+					throw e;
+				} catch (Exception e) {
+					throw new JobFailedException(e);
+				}
+			}, VIRTUAL_EXECUTOR);
 		} else {
 			throw new UnsupportedOperationException("Unsupported MCP feature: " + feature);
 		}
@@ -155,13 +196,61 @@ public class MCPAdapter extends AAdapter {
 		AString url = RT.ensureString(RT.getIn(input, Fields.SERVER));
 		if (url != null) return url;
 
-		// Then check metadata
+		// Then check metadata — the operation block (bridged ops, #80), then
+		// the legacy top-level position.
 		if (meta != null) {
+			url = RT.ensureString(RT.getIn(meta, Fields.OPERATION, Fields.SERVER));
+			if (url != null) return url;
 			url = RT.ensureString(meta.get(Fields.SERVER));
 			if (url != null) return url;
 		}
 
 		return null;
+	}
+
+	/**
+	 * Resolves an operation-metadata auth reference to an access token (#80).
+	 * Accepted forms:
+	 * <ul>
+	 *   <li>{@code s/NAME} / {@code /s/NAME} — resolved in the CALLER's secret
+	 *       store (per-caller credentials for a shared bridge)</li>
+	 *   <li>{@code did:…/s/NAME} — DID-qualified secret location, resolved in
+	 *       that identity's store. Phase 1 allows only the venue's own DID or
+	 *       the caller's — anything else fails with a clear message.</li>
+	 *   <li>anything else — treated as a literal token (works, discouraged —
+	 *       same stance as raw {@code apiKey} in agent config)</li>
+	 * </ul>
+	 * Fail-closed: a reference that names a missing secret throws rather than
+	 * silently connecting unauthenticated.
+	 */
+	String resolveAuthRef(RequestContext ctx, AString auth) {
+		if (auth == null) return null;
+		String ref = auth.toString();
+		if (ref.startsWith("s/") || ref.startsWith("/s/")) {
+			String value = engine.resolveSecret(ref, ctx);
+			if (value == null) throw new JobFailedException(
+				"MCP server auth secret not found in your store: " + ref);
+			return value;
+		}
+		if (ref.startsWith("did:")) {
+			int idx = ref.indexOf("/s/");
+			if (idx < 0) throw new JobFailedException(
+				"DID-qualified auth reference must be <did>/s/<name>: " + ref);
+			String ownerDid = ref.substring(0, idx);
+			String name = ref.substring(idx + 3);
+			AString venueDid = engine.getDIDString();
+			boolean allowed = ownerDid.equals(venueDid != null ? venueDid.toString() : null)
+				|| ownerDid.equals(ctx.getCallerDID() != null ? ctx.getCallerDID().toString() : null);
+			if (!allowed) throw new JobFailedException(
+				"MCP server auth secret is owned by " + ownerDid
+				+ " — only the venue's or your own secrets can back a bridged server");
+			String value = engine.resolveSecret("s/" + name,
+				RequestContext.of(Strings.create(ownerDid)));
+			if (value == null) throw new JobFailedException(
+				"MCP server auth secret not found: " + ref);
+			return value;
+		}
+		return ref; // literal token
 	}
 	
 	/**
@@ -319,6 +408,268 @@ public class MCPAdapter extends AAdapter {
 		} catch (Exception e) {
 			session.invalidate();
 			throw e;
+		}
+	}
+
+	// ========== Server bridging (#80) ==========
+
+	private static final AString K_AUTH  = Strings.intern("auth");
+	private static final AString K_URL   = Strings.intern("url");
+	private static final AString K_SCOPE = Strings.intern("scope");
+	private static final AString SCOPE_VENUE = Strings.intern("venue");
+
+	/**
+	 * Registers an external MCP server and materialises its tools as catalog
+	 * operations. Scope {@code user} (default): registry at
+	 * {@code w/mcp/servers/<name>}, ops at the caller's
+	 * {@code o/mcp/<name>/<tool>}. Scope {@code venue}: registry at
+	 * {@code v/mcp/servers/<name>}, ops at {@code v/ops/mcp/<name>/<tool>} —
+	 * requires the {@code mcp/manage} ability on {@code v/mcp}.
+	 *
+	 * <p>The server URL passes the SAME SSRF validation (and operator
+	 * allow/block lists) as the http adapter: binding a remote MCP server can
+	 * never reach anything a direct HTTP call couldn't. Bridged assets are
+	 * self-contained — they work without the registry entry; the registry
+	 * exists for refresh/remove bookkeeping.</p>
+	 */
+	ACell handleAddServer(RequestContext ctx, ACell input) throws Exception {
+		String name = requireServerName(input);
+		AString url = RT.ensureString(RT.getIn(input, K_URL));
+		if (url == null) throw new IllegalArgumentException("url is required");
+		AString auth = RT.ensureString(RT.getIn(input, K_AUTH));
+		boolean venueScope = isVenueScope(ctx, input);
+
+		// SSRF guard — shared with the http adapter, including its allowlist.
+		((HTTPAdapter) engine.getAdapter("http")).requireSafeUrl(url.toString());
+
+		// Discover tools under the REGISTRAR's auth (resolved now, not stored raw)
+		String token = resolveAuthRef(ctx, auth);
+		List<Tool> tools = listRemoteTools(url, token);
+
+		// Normalise a bare secret ref to the registrar's DID-qualified form so
+		// the stored reference has one unambiguous owner (#80 ruling 3).
+		AString storedAuth = qualifyAuthRef(auth, ctx);
+
+		RequestContext writeCtx = venueScope ? engine.venueContext() : ctx;
+		String opsRoot = opsRoot(venueScope, name);
+		AVector<ACell> toolNames = writeBridgedOps(writeCtx, opsRoot, name, url, storedAuth, tools);
+
+		writeLattice(writeCtx, registryPath(venueScope, name), Maps.of(
+			K_URL, url,
+			K_AUTH, storedAuth,
+			Fields.CALLER, ctx.getCallerDID(),
+			Strings.intern("added"), convex.core.data.prim.CVMLong.create(
+				convex.core.util.Utils.getCurrentTimestamp()),
+			Fields.TOTAL, AInteger.create(toolNames.count())));
+
+		AMap<AString, ACell> result = Maps.of(
+			Fields.NAME, Strings.create(name),
+			K_SCOPE, venueScope ? SCOPE_VENUE : Strings.intern("user"),
+			K_URL, url,
+			Strings.intern("tools"), toolNames,
+			Fields.TOTAL, AInteger.create(toolNames.count()));
+		AString authWarn = rawAuthWarning(auth);
+		if (authWarn != null) {
+			result = result.assoc(Fields.WARNINGS, Vectors.of(authWarn));
+		}
+		return result;
+	}
+
+	/** Advisory for a literal credential in a server registration — the
+	 *  registry persists on the lattice. Secret references (bare or
+	 *  DID-qualified) are the supported pattern; null when clean. */
+	static AString rawAuthWarning(AString auth) {
+		if (auth == null) return null;
+		String ref = auth.toString();
+		if (ref.startsWith("s/") || ref.startsWith("/s/") || ref.startsWith("did:")) return null;
+		return Strings.intern(
+			"auth holds a raw credential — the server registry persists on the lattice."
+			+ " Store the token with the v/ops/secret/set operation and reference it as"
+			+ " s/<name> instead.");
+	}
+
+	/** Removes a bridged server: deletes its catalog subtree and registry
+	 *  entry — nothing else (deletion scope is minimal). In-flight calls fail
+	 *  at the point of use. */
+	ACell handleRemoveServer(RequestContext ctx, ACell input) {
+		String name = requireServerName(input);
+		boolean venueScope = isVenueScope(ctx, input);
+		RequestContext writeCtx = venueScope ? engine.venueContext() : ctx;
+		deleteLattice(writeCtx, opsRoot(venueScope, name));
+		deleteLattice(writeCtx, registryPath(venueScope, name));
+		return Maps.of(Fields.NAME, Strings.create(name),
+			Strings.intern("removed"), convex.core.data.prim.CVMBool.TRUE);
+	}
+
+	/** Re-lists a bridged server's tools and reconciles the catalog: new tools
+	 *  added, changed ones re-registered, vanished ones removed. */
+	ACell handleRefresh(RequestContext ctx, ACell input) throws Exception {
+		String name = requireServerName(input);
+		boolean venueScope = isVenueScope(ctx, input);
+		RequestContext writeCtx = venueScope ? engine.venueContext() : ctx;
+
+		ACell reg = readLattice(writeCtx, registryPath(venueScope, name));
+		AString url = RT.ensureString(RT.getIn(reg, K_URL));
+		if (url == null) throw new JobFailedException("Unknown MCP server: " + name
+			+ " (no registry entry at " + registryPath(venueScope, name) + ")");
+		AString auth = RT.ensureString(RT.getIn(reg, K_AUTH));
+
+		String token = resolveAuthRef(ctx, auth);
+		List<Tool> tools = listRemoteTools(url, token);
+
+		// Reconcile: write the fresh set, delete entries no longer served.
+		String opsRoot = opsRoot(venueScope, name);
+		java.util.Set<String> fresh = new java.util.HashSet<>();
+		for (Tool t : tools) fresh.add(t.name());
+		ACell existing = readLattice(writeCtx, opsRoot);
+		if (existing instanceof AMap<?, ?> em) {
+			for (var entry : ((AMap<AString, ACell>) em).entrySet()) {
+				if (!fresh.contains(entry.getKey().toString())) {
+					deleteLattice(writeCtx, opsRoot + "/" + entry.getKey());
+				}
+			}
+		}
+		AVector<ACell> toolNames = writeBridgedOps(writeCtx, opsRoot, name, url, auth, tools);
+		writeLattice(writeCtx, registryPath(venueScope, name),
+			RT.ensureMap(reg).assoc(Fields.TOTAL, AInteger.create(toolNames.count())));
+		return Maps.of(Fields.NAME, Strings.create(name),
+			Strings.intern("tools"), toolNames,
+			Fields.TOTAL, AInteger.create(toolNames.count()));
+	}
+
+	/** Materialises one bridged op per tool; returns the tool names written.
+	 *  Tools with path-unsafe names are skipped with a warning log. */
+	private AVector<ACell> writeBridgedOps(RequestContext writeCtx, String opsRoot,
+			String serverName, AString url, AString auth, List<Tool> tools) {
+		AVector<ACell> written = Vectors.empty();
+		for (Tool tool : tools) {
+			String toolName = tool.name();
+			if (toolName == null || !toolName.matches("[A-Za-z0-9_-]{1,128}")) {
+				log.warn("Skipping MCP tool with path-unsafe name from '{}': {}", serverName, toolName);
+				continue;
+			}
+			AMap<AString, ACell> opMeta = buildBridgedOpMeta(serverName, url, auth, tool);
+			writeLattice(writeCtx, opsRoot + "/" + toolName, opMeta);
+			written = written.conj(Strings.create(toolName));
+		}
+		return written;
+	}
+
+	/**
+	 * The bridged-op asset metadata (#80) — self-contained: dispatchable with
+	 * no registry lookup, hand-authorable without a registry at all. The
+	 * op's declared input IS the tool's own schema, so bridged tools are
+	 * indistinguishable from native ops to schema validation, agent tool
+	 * palettes and the LLM tool conversion. MCP annotations are preserved
+	 * verbatim under {@code mcp.annotations} — advisory display data only
+	 * (server-asserted hints must never widen a capability decision).
+	 */
+	@SuppressWarnings("unchecked")
+	AMap<AString, ACell> buildBridgedOpMeta(String serverName, AString url, AString auth, Tool tool) {
+		String display = (tool.title() != null) ? tool.title()
+			: (tool.annotations() != null && tool.annotations().title() != null)
+				? tool.annotations().title() : tool.name();
+		String desc = (tool.description() != null ? tool.description() : "")
+			+ "\n\n[Bridged from MCP server '" + serverName + "']";
+
+		AMap<AString, ACell> operation = Maps.of(
+			Fields.ADAPTER, Strings.intern("mcp:tools:call"),
+			Fields.REMOTE_TOOL_NAME, Strings.create(tool.name()),
+			Fields.SERVER, url,
+			Fields.INPUT, getInputSchema(tool.inputSchema()));
+		if (auth != null) operation = operation.assoc(K_AUTH, auth);
+		if (tool.outputSchema() != null && !tool.outputSchema().isEmpty()) {
+			operation = operation.assoc(Fields.OUTPUT, getInputSchema(tool.outputSchema()));
+		}
+
+		AMap<AString, ACell> meta = Maps.of(
+			Fields.NAME, Strings.create(display),
+			Fields.DESCRIPTION, Strings.create(desc),
+			Fields.OPERATION, operation);
+		if (tool.annotations() != null) {
+			AMap<AString, ACell> ann = Maps.empty();
+			var a = tool.annotations();
+			if (a.title() != null) ann = ann.assoc(Strings.intern("title"), Strings.create(a.title()));
+			if (a.readOnlyHint() != null) ann = ann.assoc(Strings.intern("readOnlyHint"), convex.core.data.prim.CVMBool.of(a.readOnlyHint()));
+			if (a.destructiveHint() != null) ann = ann.assoc(Strings.intern("destructiveHint"), convex.core.data.prim.CVMBool.of(a.destructiveHint()));
+			if (a.idempotentHint() != null) ann = ann.assoc(Strings.intern("idempotentHint"), convex.core.data.prim.CVMBool.of(a.idempotentHint()));
+			if (a.openWorldHint() != null) ann = ann.assoc(Strings.intern("openWorldHint"), convex.core.data.prim.CVMBool.of(a.openWorldHint()));
+			if (ann.count() > 0) meta = meta.assoc(Strings.intern("mcp"),
+				Maps.of(Strings.intern("annotations"), ann));
+		}
+		return meta;
+	}
+
+	/** Lists a remote server's tools over a pooled session. */
+	private List<Tool> listRemoteTools(AString url, String token) throws Exception {
+		McpClientSession session = getOrConnect(url.toString(), token);
+		try {
+			return session.getClient().listTools().tools();
+		} catch (Exception e) {
+			session.invalidate();
+			throw new JobFailedException("Cannot list tools from MCP server at " + url
+				+ ": " + e.getMessage());
+		}
+	}
+
+	// ---- scope / path / lattice helpers ----
+
+	private static String requireServerName(ACell input) {
+		AString name = RT.ensureString(RT.getIn(input, Fields.NAME));
+		if (name == null || !name.toString().matches("[a-z0-9-]{1,64}")) {
+			throw new IllegalArgumentException(
+				"Server name is required and must match [a-z0-9-]{1,64}");
+		}
+		return name.toString();
+	}
+
+	/** Venue scope requires the {@code mcp/manage} ability on {@code v/mcp} —
+	 *  denied under the public ceiling, grantable by cap. User scope is the
+	 *  default and needs nothing beyond invoking the op. */
+	private static boolean isVenueScope(RequestContext ctx, ACell input) {
+		boolean venueScope = SCOPE_VENUE.equals(RT.ensureString(RT.getIn(input, K_SCOPE)));
+		if (venueScope) ctx.requireCapability("v/mcp", "mcp/manage");
+		return venueScope;
+	}
+
+	private static String opsRoot(boolean venueScope, String name) {
+		return (venueScope ? "v/ops/mcp/" : "o/mcp/") + name;
+	}
+
+	private static String registryPath(boolean venueScope, String name) {
+		return (venueScope ? "v/mcp/servers/" : "w/mcp/servers/") + name;
+	}
+
+	/** Bare {@code s/} refs are stored DID-qualified to the registrar, so the
+	 *  persisted reference names one unambiguous owner. DID-qualified refs and
+	 *  literals pass through unchanged. */
+	private static AString qualifyAuthRef(AString auth, RequestContext ctx) {
+		if (auth == null) return null;
+		String ref = auth.toString();
+		if ((ref.startsWith("s/") || ref.startsWith("/s/")) && ctx.getCallerDID() != null) {
+			String name = ref.startsWith("/s/") ? ref.substring(3) : ref.substring(2);
+			return Strings.create(ctx.getCallerDID() + "/s/" + name);
+		}
+		return auth;
+	}
+
+	private void writeLattice(RequestContext ctx, String path, ACell value) {
+		engine.jobs().invokeInternal(Strings.create("v/ops/covia/write"),
+			Maps.of(Fields.PATH, Strings.create(path), Fields.VALUE, value), ctx).join();
+	}
+
+	private void deleteLattice(RequestContext ctx, String path) {
+		engine.jobs().invokeInternal(Strings.create("v/ops/covia/delete"),
+			Maps.of(Fields.PATH, Strings.create(path)), ctx).join();
+	}
+
+	private ACell readLattice(RequestContext ctx, String path) {
+		try {
+			ACell result = engine.jobs().invokeInternal(Strings.create("v/ops/covia/read"),
+				Maps.of(Fields.PATH, Strings.create(path)), ctx).join();
+			return RT.getIn(result, Fields.VALUE);
+		} catch (Exception e) {
+			return null;
 		}
 	}
 

@@ -450,6 +450,40 @@ policy (levels, appender redaction), not the job system.
 
 Mounts WebDAV at `/dlfs/` for file access to DLFS drives. Off by default.
 
+### MCP server bridging
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "github": { "url": "https://mcp.github.example", "auth": "s/GITHUB_MCP_TOKEN" }
+    }
+  }
+}
+```
+
+Bridges external MCP servers into the catalog (#80): each server's tools
+materialise as ordinary operations — capability grants, gates, job records
+and schema validation all apply because they are ordinary ops. Config-declared
+servers bridge at **venue scope** (`v/ops/mcp/<server>/<tool>`, registry at
+`v/mcp/servers/<name>`) on boot — best-effort per server; one that is down
+logs a warning and the last-known catalog persists (run `v/ops/mcp/refresh`
+when reachable).
+
+Dynamic management via `v/ops/mcp/add-server` / `remove-server` / `refresh`.
+Default scope is **user**: tools land in the caller's own `o/mcp/<server>/`
+namespace; `scope: "venue"` requires the `mcp/manage` ability. Server URLs
+pass the same SSRF validation (and operator allow/block lists) as the http
+adapter. `auth` should be a secret reference (`s/<name>`, stored via
+`v/ops/secret/set`; bare refs are stored DID-qualified to the registrar) —
+resolved at call time, never persisted raw; raw tokens warn.
+
+Bridged assets are self-contained — a hand-authored asset with
+`operation: {adapter: "mcp:tools:call", remoteToolName, server, auth?}` works
+without any registry entry; the registry exists for refresh/remove
+bookkeeping. The bridged op's declared input IS the tool's own schema, so the
+invocation input is passed directly as the tool arguments.
+
 ### A2A protocol
 
 ```json

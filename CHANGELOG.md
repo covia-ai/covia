@@ -15,6 +15,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Typed outputs work on Anthropic — provider-aware structured output via forced tool calling, transparent to agents (#81)
 - `agent:create` warns when `config.apiKey` holds a raw credential instead of a `s/<name>` secret reference
 - Capability gates — a grant's `nb.gate` names an op that decides per invocation whether the capability applies; runtime-enforced policy limits without a policy language (#216)
+- MCP server bridging — external MCP servers' tools materialise as catalog operations with caps/gates/jobs applying; config-time and dynamic (`v/ops/mcp/add-server`), user and venue scopes (#80)
 
 ### Fixed
 - Task input rendered to models as plain text/JSON, never EDN map literals (#215)

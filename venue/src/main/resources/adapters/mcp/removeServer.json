@@ -1,0 +1,23 @@
+{
+	"name": "MCP Remove Server",
+	"description": "Removes a bridged MCP server (#80): deletes its catalog subtree and registry entry — nothing else. In-flight calls fail at the point of use. Scope 'venue' requires the mcp/manage ability.",
+	"dateCreated": "2026-07-16T00:00:00Z",
+	"operation": {
+		"adapter": "mcp:server:remove",
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string", "description": "Registry name of the server to remove" },
+				"scope": { "type": "string", "enum": ["user", "venue"], "description": "Default 'user'; 'venue' requires the mcp/manage ability" }
+			},
+			"required": ["name"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string" },
+				"removed": { "type": "boolean" }
+			}
+		}
+	}
+}

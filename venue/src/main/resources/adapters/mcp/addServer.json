@@ -1,0 +1,28 @@
+{
+	"name": "MCP Add Server",
+	"description": "Bridges an external MCP server into the catalog (#80): lists the server's tools and materialises each as an ordinary operation. Scope 'user' (default) puts them in your o/mcp/<name>/ namespace; scope 'venue' (requires the mcp/manage ability) puts them at v/ops/mcp/<name>/ for everyone. The server URL passes the same SSRF validation as the http adapter. Auth should be a secret reference (s/<name>, stored via v/ops/secret/set) — resolved at call time, never persisted raw.",
+	"dateCreated": "2026-07-16T00:00:00Z",
+	"operation": {
+		"adapter": "mcp:server:add",
+		"input": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string", "description": "Registry name for the server — becomes the catalog path segment; must match [a-z0-9-]{1,64}" },
+				"url": { "type": "string", "description": "Base URL of the MCP server (http/https; the /mcp endpoint is implied)" },
+				"auth": { "type": "string", "description": "Optional bearer credential: a secret reference 's/<name>' (recommended), a DID-qualified reference 'did:.../s/<name>', or a literal token (discouraged — the registry persists on the lattice)" },
+				"scope": { "type": "string", "enum": ["user", "venue"], "description": "Where the bridged ops materialise. Default 'user' (your o/mcp/ namespace); 'venue' (v/ops/mcp/, shared) requires the mcp/manage ability" }
+			},
+			"required": ["name", "url"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"name": { "type": "string" },
+				"scope": { "type": "string" },
+				"tools": { "type": "array", "description": "Names of the bridged tool operations" },
+				"total": { "type": "integer" },
+				"warnings": { "type": "array" }
+			}
+		}
+	}
+}
