@@ -1,0 +1,29 @@
+{
+	"name": "MCP Add Tool",
+	"description": "Curates ONE tool from an MCP server at a catalog path you choose (#80). The bridged op is self-contained (server, tool name, auth reference, schema all in the asset) — no registry entry, and groups are just catalog paths: place tools from different servers under a common prefix (e.g. o/research/) to arrange them as a set. Paths under your own o/ need nothing extra; v/ops/... requires the mcp/manage ability. Remove with covia:delete on the path — nothing resurrects it. To mirror ALL of a server's tools instead, use v/ops/mcp/add-server. Browse a server's tools first with v/ops/mcp/tools-list.",
+	"dateCreated": "2026-07-16T00:00:00Z",
+	"operation": {
+		"adapter": "mcp:tool:add",
+		"input": {
+			"type": "object",
+			"properties": {
+				"server": { "type": "string", "description": "Base URL of the MCP server the tool lives on (http/https)" },
+				"tool": { "type": "string", "description": "The remote tool's name exactly as the server lists it" },
+				"path": { "type": "string", "description": "Catalog destination for the bridged op, naming the op itself — e.g. o/research/search_papers (your operations) or v/ops/... (venue catalog, needs mcp/manage)" },
+				"auth": { "type": "string", "description": "Optional bearer credential: a secret reference 's/<name>' (recommended, stored via v/ops/secret/set), a DID-qualified reference 'did:.../s/<name>', or a literal token (discouraged — persists on the lattice)" },
+				"name": { "type": "string", "description": "Optional display-name override for the bridged op" },
+				"description": { "type": "string", "description": "Optional description override — survives refresh (curated refresh never touches name/description)" }
+			},
+			"required": ["server", "tool", "path"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"tool": { "type": "string" },
+				"path": { "type": "string" },
+				"server": { "type": "string" },
+				"warnings": { "type": "array" }
+			}
+		}
+	}
+}

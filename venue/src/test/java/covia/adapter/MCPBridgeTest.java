@@ -6,6 +6,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import java.util.List;
+
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -20,6 +22,8 @@ import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 import covia.venue.TestServer;
+import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
+import io.modelcontextprotocol.spec.McpSchema.TextContent;
 
 /**
  * MCP server bridging (#80), exercised against the venue's OWN MCP endpoint —
@@ -177,6 +181,208 @@ public class MCPBridgeTest {
 		AString warn = MCPAdapter.rawAuthWarning(Strings.create("raw-token-value"));
 		assertNotNull(warn, "a raw auth credential must carry a warning");
 		assertTrue(warn.toString().contains("v/ops/secret/set"));
+	}
+
+	// ========== Tool-level curation (#80 — the tool is the entity) ==========
+
+	private Job addTool(String path, String tool, RequestContext ctx) {
+		return engine.jobs().invokeOperation("v/ops/mcp/add-tool",
+			Maps.of(Fields.SERVER, TestServer.BASE_URL, Fields.TOOL, tool, Fields.PATH, path), ctx);
+	}
+
+	@Test
+	public void testAddToolCuratedPath() {
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		// Curate one tool at a caller-chosen path, with a display-name override
+		Job add = engine.jobs().invokeOperation("v/ops/mcp/add-tool",
+			Maps.of(Fields.SERVER, TestServer.BASE_URL,
+				Fields.TOOL, "test_echo",
+				Fields.PATH, "o/research/echo",
+				Fields.NAME, "Echo Probe"), ctx);
+		ACell result = add.awaitResult(15000);
+		assertEquals(Status.COMPLETE, add.getStatus(), String.valueOf(add.getErrorMessage()));
+		assertEquals("o/research/echo", RT.getIn(result, Fields.PATH).toString());
+		assertEquals("test_echo", RT.getIn(result, Fields.TOOL).toString());
+
+		covia.grid.Asset asset = engine.resolveAsset(Strings.create("o/research/echo"), ctx);
+		assertNotNull(asset, "curated tool must resolve at its chosen path");
+		ACell meta = asset.meta();
+		assertEquals("Echo Probe", RT.getIn(meta, Fields.NAME).toString());
+		assertTrue(RT.getIn(meta, Fields.DESCRIPTION).toString().contains("Bridged from MCP server at "),
+			"provenance names the server URL");
+		// No registry entry — the asset is self-contained
+		assertEquals("test_echo", RT.getIn(meta, Fields.OPERATION, Fields.REMOTE_TOOL_NAME).toString());
+
+		// And it works: groups are just catalog paths
+		Job call = engine.jobs().invokeOperation("o/research/echo",
+			Maps.of("value", "curated-hello"), ctx);
+		call.awaitResult(15000);
+		assertEquals(Status.COMPLETE, call.getStatus(), String.valueOf(call.getErrorMessage()));
+	}
+
+	@Test
+	public void testAddToolUnknownToolListsAvailable() {
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		Job miss = addTool("o/grpx/none", "no_such_tool_zz", ctx);
+		assertThrows(Exception.class, () -> miss.awaitResult(15000));
+		assertEquals(Status.FAILED, miss.getStatus());
+		String err = miss.getErrorMessage();
+		assertTrue(err.contains("not found"), err);
+		// The error lists available tool names so a model can self-correct
+		// (capped — the shared venue exposes >40 tools — with a pointer to
+		// the full listing).
+		assertTrue(err.contains("Available tools:"), err);
+		assertTrue(err.contains("tools-list"), err);
+	}
+
+	@Test
+	public void testAddToolPathValidation() {
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		Job bad = addTool("w/nope/echo", "test_echo", ctx);
+		assertThrows(Exception.class, () -> bad.awaitResult(15000));
+		assertEquals(Status.FAILED, bad.getStatus());
+		assertTrue(bad.getErrorMessage().contains("path must be under o/"), bad.getErrorMessage());
+	}
+
+	@Test
+	public void testAddToolVenuePathRequiresManage() {
+		RequestContext capped = RequestContext.of(ALICE_DID)
+			.withCaps(CapabilityChecker.readOnlyCeiling(ALICE_DID));
+		Job denied = addTool("v/ops/mcptest/echo", "test_echo", capped);
+		assertThrows(Exception.class, () -> denied.awaitResult(15000));
+		assertEquals(Status.FAILED, denied.getStatus());
+		assertTrue(denied.getErrorMessage().contains("Capability denied"), denied.getErrorMessage());
+
+		Job add = addTool("v/ops/mcptest/echo", "test_echo", engine.venueContext());
+		add.awaitResult(15000);
+		assertEquals(Status.COMPLETE, add.getStatus(), String.valueOf(add.getErrorMessage()));
+		try {
+			assertNotNull(engine.resolveAsset(Strings.create("v/ops/mcptest/echo"), RequestContext.of(ALICE_DID)),
+				"venue-path curated tools are in the shared catalog");
+		} finally {
+			// Shared TestServer catalog doubles as the venue's own MCP tool
+			// list — always remove venue-scope test entries.
+			engine.jobs().invokeOperation("v/ops/covia/delete",
+				Maps.of(Fields.PATH, Strings.create("v/ops/mcptest")),
+				engine.venueContext()).awaitResult(15000);
+		}
+		assertNull(engine.resolveAsset(Strings.create("v/ops/mcptest/echo"), RequestContext.of(ALICE_DID)));
+	}
+
+	@Test
+	public void testRefreshPathCurated() {
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		addTool("o/grp/echo", "test_echo", ctx).awaitResult(15000);
+		// A hand-authored bridged op whose remote tool doesn't exist — the
+		// "server dropped it" case for a curated refresh.
+		ACell ghostMeta = Maps.of(
+			Fields.NAME, Strings.create("Ghost"),
+			Fields.DESCRIPTION, Strings.create("vanished tool"),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("mcp:tools:call"),
+				Fields.REMOTE_TOOL_NAME, Strings.create("no_such_tool_zz"),
+				Fields.SERVER, Strings.create(TestServer.BASE_URL),
+				Fields.INPUT, Maps.of(Fields.TYPE, Strings.create("object"))));
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, Strings.create("o/grp/ghost"), Fields.VALUE, ghostMeta), ctx)
+			.awaitResult(15000);
+
+		Job refresh = engine.jobs().invokeOperation("v/ops/mcp/refresh",
+			Maps.of(Fields.PATH, Strings.create("o/grp")), ctx);
+		ACell out = refresh.awaitResult(15000);
+		assertEquals(Status.COMPLETE, refresh.getStatus(), String.valueOf(refresh.getErrorMessage()));
+		assertEquals(2, RT.ensureLong(RT.getIn(out, Fields.TOTAL)).longValue());
+		assertEquals(0, RT.ensureLong(RT.getIn(out, "updated")).longValue(),
+			"schemas are unchanged against the same server");
+		assertEquals(1, RT.ensureLong(RT.getIn(out, "unchanged")).longValue());
+
+		AVector<ACell> missing = RT.ensureVector(RT.getIn(out, "missing"));
+		assertNotNull(missing);
+		assertEquals(1, missing.count());
+		assertEquals("no_such_tool_zz", RT.getIn(missing.get(0), Fields.TOOL).toString());
+		assertNull(RT.getIn(out, "errors"), "the server itself was reachable");
+
+		// Curated semantics: the vanished tool is REPORTED, never deleted
+		assertNotNull(engine.resolveAsset(Strings.create("o/grp/ghost"), ctx),
+			"curated refresh must not delete hand-picked tools");
+		// And the live one still works
+		Job call = engine.jobs().invokeOperation("o/grp/echo", Maps.of("value", "post-refresh"), ctx);
+		call.awaitResult(15000);
+		assertEquals(Status.COMPLETE, call.getStatus(), String.valueOf(call.getErrorMessage()));
+	}
+
+	@Test
+	public void testRefreshRejectsNameAndPathTogether() {
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		Job both = engine.jobs().invokeOperation("v/ops/mcp/refresh",
+			Maps.of(Fields.NAME, Strings.create("x"), Fields.PATH, Strings.create("o/grp")), ctx);
+		assertThrows(Exception.class, () -> both.awaitResult(15000));
+		assertTrue(both.getErrorMessage().contains("not both"), both.getErrorMessage());
+	}
+
+	// ========== Error comprehensibility (LLM-facing failures) ==========
+
+	@Test
+	public void testBridgedToolErrorSurfaces() {
+		// A remote tool-level error (isError: true per the MCP spec) must FAIL
+		// the bridged job with the remote error text — never complete with an
+		// error-shaped payload the agent has to guess about.
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		addTool("o/errgrp/fail", "test_error", ctx).awaitResult(15000);
+
+		Job call = engine.jobs().invokeOperation("o/errgrp/fail",
+			Maps.of("message", "boom-mcp-xyz"), ctx);
+		assertThrows(Exception.class, () -> call.awaitResult(15000));
+		assertEquals(Status.FAILED, call.getStatus());
+		String err = call.getErrorMessage();
+		assertTrue(err.contains("boom-mcp-xyz"), "remote error text must survive: " + err);
+		assertTrue(err.contains("test_error"), "the failing tool is named: " + err);
+	}
+
+	@Test
+	public void testResultExtraction() {
+		// structuredContent wins when present
+		CallToolResult r1 = new CallToolResult(List.of(new TextContent("ignored")),
+			null, java.util.Map.of("a", 1L), null);
+		ACell v1 = MCPAdapter.successValue(r1);
+		assertEquals(RT.cvm(1L), RT.getIn(v1, "a"));
+		// text-only results are preserved, not dropped
+		CallToolResult r2 = new CallToolResult(List.of(new TextContent("hello")), null, null, null);
+		assertEquals("hello", MCPAdapter.successValue(r2).toString());
+		// multi-block → vector of strings
+		CallToolResult r3 = new CallToolResult(List.of(new TextContent("a"), new TextContent("b")),
+			null, null, null);
+		assertEquals(2, RT.ensureVector(MCPAdapter.successValue(r3)).count());
+		// nothing at all → null
+		CallToolResult r4 = new CallToolResult(List.of(), false, null, null);
+		assertNull(MCPAdapter.successValue(r4));
+	}
+
+	@Test
+	public void testErrorTextExtraction() {
+		// not an error (isError null or false) → null
+		assertNull(MCPAdapter.errorText(new CallToolResult(List.of(new TextContent("x")), null, null, null)));
+		assertNull(MCPAdapter.errorText(new CallToolResult(List.of(new TextContent("x")), false, null, null)));
+		// structuredContent.message preferred
+		assertEquals("nope", MCPAdapter.errorText(new CallToolResult(
+			List.of(new TextContent("fallback")), true, java.util.Map.of("message", "nope"), null)));
+		// text content fallback
+		assertEquals("boom", MCPAdapter.errorText(new CallToolResult(
+			List.of(new TextContent("boom")), true, null, null)));
+		// a bare error still says something useful
+		assertTrue(MCPAdapter.errorText(new CallToolResult(List.of(), true, null, null))
+			.contains("no error detail"));
+	}
+
+	@Test
+	public void testRootCauseMessage() {
+		Exception inner = new java.io.IOException("Connection refused");
+		Exception wrapped = new java.util.concurrent.CompletionException(new RuntimeException(inner));
+		assertEquals("Connection refused", MCPAdapter.rootCauseMessage(wrapped));
+		// message-less chain falls back to the class name
+		assertEquals("IllegalStateException", MCPAdapter.rootCauseMessage(new IllegalStateException()));
+		// a plain message passes through
+		assertEquals("plain", MCPAdapter.rootCauseMessage(new RuntimeException("plain")));
 	}
 
 	private static boolean vectorContains(AVector<ACell> v, String s) {

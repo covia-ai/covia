@@ -450,7 +450,7 @@ policy (levels, appender redaction), not the job system.
 
 Mounts WebDAV at `/dlfs/` for file access to DLFS drives. Off by default.
 
-### MCP server bridging
+### MCP tool bridging
 
 ```json
 {
@@ -462,27 +462,45 @@ Mounts WebDAV at `/dlfs/` for file access to DLFS drives. Off by default.
 }
 ```
 
-Bridges external MCP servers into the catalog (#80): each server's tools
-materialise as ordinary operations — capability grants, gates, job records
-and schema validation all apply because they are ordinary ops. Config-declared
-servers bridge at **venue scope** (`v/ops/mcp/<server>/<tool>`, registry at
-`v/mcp/servers/<name>`) on boot — best-effort per server; one that is down
-logs a warning and the last-known catalog persists (run `v/ops/mcp/refresh`
-when reachable).
+Bridges external MCP tools into the catalog (#80): they materialise as
+ordinary operations — capability grants, gates, job records and schema
+validation all apply because they are ordinary ops. **The tool is the
+entity**; the server is just where it lives. Two management styles:
 
-Dynamic management via `v/ops/mcp/add-server` / `remove-server` / `refresh`.
-Default scope is **user**: tools land in the caller's own `o/mcp/<server>/`
-namespace; `scope: "venue"` requires the `mcp/manage` ability. Server URLs
-pass the same SSRF validation (and operator allow/block lists) as the http
-adapter. `auth` should be a secret reference (`s/<name>`, stored via
+- **Curated** (`v/ops/mcp/add-tool {server, tool, path, auth?, name?,
+  description?}`): one tool at a caller-chosen catalog path. Groups are just
+  paths — `o/research/search_papers` and `o/research/github_search` can point
+  at different servers with different auth. Registry-free (the asset is
+  self-contained); remove with `covia:delete` on the path — nothing
+  resurrects it. `name`/`description` overrides are yours and survive
+  refresh.
+- **Mirrored** (`v/ops/mcp/add-server {name, url, auth?, scope?}` /
+  `remove-server`): ALL of a server's tools under `o/mcp/<server>/` (or
+  `v/ops/mcp/<server>/` at venue scope), registry entry for bookkeeping.
+  Config-declared servers (above) mirror at venue scope on boot —
+  best-effort per server; one that is down logs a warning and the last-known
+  catalog persists.
+
+`v/ops/mcp/refresh` follows the same split: `{name}` reconciles a mirror
+fully (vanished tools deleted); `{path}` refreshes curated tools in place —
+schemas/annotations update, name/description untouched, vanished tools
+**reported in `missing`, never deleted**. Exactly one of `name`/`path`.
+
+Destination paths under the caller's own `o/` need nothing extra; venue-side
+targets (`v/ops/...` or `scope: "venue"`) require the `mcp/manage` ability.
+Server URLs pass the same SSRF validation (and operator allow/block lists) as
+the http adapter. `auth` should be a secret reference (`s/<name>`, stored via
 `v/ops/secret/set`; bare refs are stored DID-qualified to the registrar) —
 resolved at call time, never persisted raw; raw tokens warn.
 
 Bridged assets are self-contained — a hand-authored asset with
 `operation: {adapter: "mcp:tools:call", remoteToolName, server, auth?}` works
-without any registry entry; the registry exists for refresh/remove
-bookkeeping. The bridged op's declared input IS the tool's own schema, so the
-invocation input is passed directly as the tool arguments.
+without any registry entry. The bridged op's declared input IS the tool's own
+schema, so the invocation input is passed directly as the tool arguments.
+Failures are LLM-diagnosable at the point of use: a remote tool-level error
+(`isError` per the MCP spec) fails the job with the remote error text;
+transport failures name the tool, server and root cause with a remedy;
+text-only tool results are preserved (structured content wins when present).
 
 ### A2A protocol
 

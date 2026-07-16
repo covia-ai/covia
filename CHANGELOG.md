@@ -15,12 +15,15 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Typed outputs work on Anthropic — provider-aware structured output via forced tool calling, transparent to agents (#81)
 - `agent:create` warns when `config.apiKey` holds a raw credential instead of a `s/<name>` secret reference
 - Capability gates — a grant's `nb.gate` names an op that decides per invocation whether the capability applies; runtime-enforced policy limits without a policy language (#216)
-- MCP server bridging — external MCP servers' tools materialise as catalog operations with caps/gates/jobs applying; config-time and dynamic (`v/ops/mcp/add-server`), user and venue scopes (#80)
+- MCP tool bridging — external MCP tools materialise as catalog operations with caps/gates/jobs applying; curate single tools at chosen paths (`v/ops/mcp/add-tool`, cross-server groups as catalog paths) or mirror whole servers (`v/ops/mcp/add-server`, config-time and dynamic), user and venue scopes (#80)
 
 ### Fixed
 - Task input rendered to models as plain text/JSON, never EDN map literals (#215)
 - Control tools emitted as plain text (`complete_task {...}`) now recognised and honoured (#215)
 - A task that burns the whole loop budget fails with a structured error instead of pinning STARTED (#215)
+- MCP tool-level errors (`isError`) fail the bridged job with the remote error text instead of completing with an error-shaped payload (#80)
+- Text-only MCP tool results preserved instead of returning null (#80)
+- MCP transport failures name the tool, server and root cause with a remedy, not a raw exception string (#80)
 
 ## [0.5.0] - 2026-07-15
 

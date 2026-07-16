@@ -1,22 +1,27 @@
 {
-	"name": "MCP Refresh Server",
-	"description": "Reconciles a bridged MCP server's catalog against its live tools/list (#80): new tools are added, changed ones re-registered, vanished ones removed. Run after the remote server changes its tool set. Scope 'venue' requires the mcp/manage ability.",
+	"name": "MCP Refresh",
+	"description": "Refreshes bridged MCP tools against their servers' live tools/list (#80), in one of two modes. MIRROR (name): reconciles a registered server's whole subtree — new tools added, changed ones rewritten, vanished ones removed. CURATED (path): walks the bridged ops under a catalog path (one op or a whole group, may span servers), updates input/output schemas and annotations in place; name/description are yours and stay untouched; a tool the server no longer offers is reported in 'missing', never deleted. Provide exactly one of name or path. Venue-side targets require the mcp/manage ability.",
 	"dateCreated": "2026-07-16T00:00:00Z",
 	"operation": {
 		"adapter": "mcp:server:refresh",
 		"input": {
 			"type": "object",
 			"properties": {
-				"name": { "type": "string", "description": "Registry name of the server to refresh" },
-				"scope": { "type": "string", "enum": ["user", "venue"], "description": "Default 'user'; 'venue' requires the mcp/manage ability" }
-			},
-			"required": ["name"]
+				"name": { "type": "string", "description": "Mirror mode: registry name of the server to reconcile" },
+				"path": { "type": "string", "description": "Curated mode: catalog path holding bridged ops — a single op (o/research/search_papers) or a group prefix (o/research)" },
+				"scope": { "type": "string", "enum": ["user", "venue"], "description": "Mirror mode only. Default 'user'; 'venue' requires the mcp/manage ability" }
+			}
 		},
 		"output": {
 			"type": "object",
 			"properties": {
-				"name": { "type": "string" },
-				"tools": { "type": "array" },
+				"name": { "type": "string", "description": "Mirror mode: the refreshed server" },
+				"tools": { "type": "array", "description": "Mirror mode: bridged tool names" },
+				"path": { "type": "string", "description": "Curated mode: the refreshed path" },
+				"updated": { "type": "integer", "description": "Curated mode: ops whose schema changed" },
+				"unchanged": { "type": "integer", "description": "Curated mode: ops already current" },
+				"missing": { "type": "array", "description": "Curated mode: tools the server no longer offers (reported, not deleted)" },
+				"errors": { "type": "array", "description": "Curated mode: servers that could not be listed" },
 				"total": { "type": "integer" }
 			}
 		}

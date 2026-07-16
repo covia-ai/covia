@@ -1,6 +1,6 @@
 {
 	"name": "MCP Add Server",
-	"description": "Bridges an external MCP server into the catalog (#80): lists the server's tools and materialises each as an ordinary operation. Scope 'user' (default) puts them in your o/mcp/<name>/ namespace; scope 'venue' (requires the mcp/manage ability) puts them at v/ops/mcp/<name>/ for everyone. The server URL passes the same SSRF validation as the http adapter. Auth should be a secret reference (s/<name>, stored via v/ops/secret/set) — resolved at call time, never persisted raw.",
+	"description": "Mirrors an external MCP server into the catalog (#80): lists ALL the server's tools and materialises each as an ordinary operation. Scope 'user' (default) puts them in your o/mcp/<name>/ namespace; scope 'venue' (requires the mcp/manage ability) puts them at v/ops/mcp/<name>/ for everyone. To curate individual tools at paths of your choosing (including cross-server groups), use v/ops/mcp/add-tool instead. The server URL passes the same SSRF validation as the http adapter. Auth should be a secret reference (s/<name>, stored via v/ops/secret/set) — resolved at call time, never persisted raw.",
 	"dateCreated": "2026-07-16T00:00:00Z",
 	"operation": {
 		"adapter": "mcp:server:add",
