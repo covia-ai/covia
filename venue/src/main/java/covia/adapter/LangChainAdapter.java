@@ -187,14 +187,20 @@ public class LangChainAdapter extends AAdapter {
 			);
 		}
 
-		// Optional output-token bound (covia#198) — honoured by the anthropic
-		// provider (its API requires max_tokens; the client default stands
-		// otherwise). Other providers currently ignore it.
-		CVMLong maxTokensCell = RT.ensureLong(RT.getIn(input, "maxTokens"));
-		final Integer maxTokens = (maxTokensCell != null) ? (int) maxTokensCell.longValue() : null;
+		// Optional sampling/bounds parameters (#218): temperature and topP pass
+		// through to every provider; maxTokens (covia#198) is honoured by the
+		// anthropic provider (its API requires max_tokens; the client default
+		// stands otherwise) and currently ignored by the others.
+		final ModelTuning tuning = extractTuning(input);
+
+		// Ollama base URL resolution (#224): explicit url > venue config >
+		// OLLAMA_BASE_URL env > localhost default — agents stay
+		// topology-agnostic; only the venue deployment knows where Ollama lives.
+		final String ollamaUrl = "ollama".equals(provider) ? resolveOllamaUrl(urlParam) : null;
+		final AString effectiveUrl = (ollamaUrl != null) ? Strings.create(ollamaUrl) : urlParam;
 
 		// Build the ChatModel
-		final ChatModel chatModel = buildProviderModel(provider, finalModelName, apiKey, urlParam, maxTokens);
+		final ChatModel chatModel = buildProviderModel(provider, finalModelName, apiKey, effectiveUrl, tuning);
 		if (chatModel == null) {
 			return CompletableFuture.completedFuture(
 				Status.failure("Unknown provider: '" + provider + "'. Supported: 'ollama', 'openai', 'anthropic'")
@@ -234,7 +240,17 @@ public class LangChainAdapter extends AAdapter {
 			// Resolve asset-referenced image blocks to inline data (covia#198):
 			// the job record keeps the ~tiny reference, not the image bytes.
 			AVector<ACell> resolvedMessages = resolveImageRefs(messages, rctx);
-			ACell result = callModel(provider, chatModel, resolvedMessages, tools, responseFormatCell);
+			ACell result;
+			try {
+				result = callModel(provider, chatModel, resolvedMessages, tools, responseFormatCell);
+			} catch (RuntimeException e) {
+				// A connect failure against Ollama is almost always topology
+				// (Docker vs host) — turn the bare ConnectException into a
+				// 30-second self-serve diagnosis (#224).
+				String hint = (ollamaUrl != null) ? ollamaConnectHint(ollamaUrl, e) : null;
+				if (hint != null) throw new covia.exception.JobFailedException(hint);
+				throw e;
+			}
 			if (legacyOutput) {
 				// Wrap assistant message as {response: content}
 				AString content = RT.ensureString(RT.getIn(result, K_CONTENT));
@@ -245,6 +261,69 @@ public class LangChainAdapter extends AAdapter {
 	}
 
 	// ========== Model construction ==========
+
+	/** Optional sampling/bounds parameters passed through to the provider
+	 *  builders (#218) — all nullable; provider defaults apply when absent. */
+	record ModelTuning(Integer maxTokens, Double temperature, Double topP) {
+		static final ModelTuning NONE = new ModelTuning(null, null, null);
+	}
+
+	/** Reads maxTokens/temperature/topP from the op input. Numeric fields
+	 *  accept integers and doubles alike — {@code temperature: 0} arrives as
+	 *  a long from JSON and must not be dropped (it's the deterministic-
+	 *  extraction case that motivated #218). */
+	static ModelTuning extractTuning(ACell input) {
+		CVMLong maxTokensCell = RT.ensureLong(RT.getIn(input, "maxTokens"));
+		Integer maxTokens = (maxTokensCell != null) ? (int) maxTokensCell.longValue() : null;
+		return new ModelTuning(maxTokens,
+			asDouble(RT.getIn(input, "temperature"), "temperature"),
+			asDouble(RT.getIn(input, "topP"), "topP"));
+	}
+
+	private static Double asDouble(ACell v, String field) {
+		if (v == null) return null;
+		convex.core.data.prim.CVMDouble d = RT.castDouble(v);
+		if (d == null) throw new IllegalArgumentException(field + " must be a number, got: " + v);
+		return d.doubleValue();
+	}
+
+	/** Ollama base URL (#224): explicit input {@code url} wins, then venue
+	 *  config {@code adapters.langchain.ollamaUrl}, then the
+	 *  {@code OLLAMA_BASE_URL} environment variable, then localhost. */
+	String resolveOllamaUrl(AString urlParam) {
+		AMap<AString, ACell> cfg = (engine != null) ? engine.config().getAdapterConfig("langchain") : null;
+		return resolveOllamaUrl(urlParam, cfg, System.getenv("OLLAMA_BASE_URL"));
+	}
+
+	static String resolveOllamaUrl(AString urlParam, AMap<AString, ACell> adapterConfig, String env) {
+		if (urlParam != null) return urlParam.toString();
+		AString configured = RT.ensureString(RT.getIn(adapterConfig, "ollamaUrl"));
+		if (configured != null) return configured.toString();
+		if (env != null && !env.isBlank()) return env;
+		return "http://localhost:11434";
+	}
+
+	/** A diagnosable message for an Ollama connect failure, or null when the
+	 *  failure isn't connectivity. Names the resolved URL and the venue-level
+	 *  knob — the usual cause is a Dockerised venue reaching for its own
+	 *  localhost (#224). */
+	static String ollamaConnectHint(String resolvedUrl, Throwable e) {
+		boolean connectivity = false;
+		for (Throwable t = e; t != null; t = (t.getCause() != t) ? t.getCause() : null) {
+			if (t instanceof java.net.ConnectException
+					|| t instanceof java.net.UnknownHostException
+					|| t instanceof java.net.NoRouteToHostException
+					|| t instanceof java.net.http.HttpConnectTimeoutException) {
+				connectivity = true;
+				break;
+			}
+		}
+		if (!connectivity) return null;
+		return "Ollama not reachable at " + resolvedUrl
+			+ " — if the venue runs in Docker, set adapters.langchain.ollamaUrl in venue config"
+			+ " (or the OLLAMA_BASE_URL environment variable) to http://host.docker.internal:11434"
+			+ " and start Ollama with OLLAMA_HOST=0.0.0.0";
+	}
 
 	static boolean providerNeedsApiKey(String provider) {
 		return "openai".equals(provider) || "anthropic".equals(provider) || "gemini".equals(provider)
@@ -286,31 +365,31 @@ public class LangChainAdapter extends AAdapter {
 		}
 	}
 
-	private ChatModel buildProviderModel(String provider, String modelName, String apiKey, AString urlParam, Integer maxTokens) {
+	private ChatModel buildProviderModel(String provider, String modelName, String apiKey, AString urlParam, ModelTuning tuning) {
 		if ("ollama".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "http://localhost:11434";
 			String model = (modelName != null) ? modelName : "qwen";
-			return buildOllamaModel(baseUrl, model, IO_TIMEOUT);
+			return buildOllamaModel(baseUrl, model, IO_TIMEOUT, tuning);
 		} else if ("openai".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.openai.com/v1";
 			String model = (modelName != null) ? modelName : "gpt-5.4-mini";
-			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
+			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
 		} else if ("anthropic".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.anthropic.com/v1/";
 			String model = (modelName != null) ? modelName : "claude-sonnet-4-6";
-			return buildAnthropicModel(apiKey, baseUrl, model, IO_TIMEOUT, maxTokens);
+			return buildAnthropicModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
 		} else if ("gemini".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://generativelanguage.googleapis.com/v1beta/openai/";
 			String model = (modelName != null) ? modelName : "gemini-2.5-flash";
-			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
+			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
 		} else if ("xai".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.x.ai/v1";
 			String model = (modelName != null) ? modelName : "grok-4";
-			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
+			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
 		} else if ("deepseek".equals(provider)) {
 			String baseUrl = (urlParam != null) ? urlParam.toString() : "https://api.deepseek.com/v1";
 			String model = (modelName != null) ? modelName : "deepseek-chat";
-			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT);
+			return buildOpenAiModel(apiKey, baseUrl, model, IO_TIMEOUT, tuning);
 		}
 		return null;
 	}
@@ -319,17 +398,19 @@ public class LangChainAdapter extends AAdapter {
 	// leak full prompts and completions (potentially sensitive user data)
 	// to stdout if the langchain4j logger were ever bumped to DEBUG.
 
-	static ChatModel buildOllamaModel(String baseUrl, String model, Duration timeout) {
-		return OllamaChatModel.builder()
+	static ChatModel buildOllamaModel(String baseUrl, String model, Duration timeout, ModelTuning tuning) {
+		var builder = OllamaChatModel.builder()
 			.baseUrl(baseUrl)
 			.logRequests(false)
 			.logResponses(false)
 			.modelName(model)
-			.timeout(timeout)
-			.build();
+			.timeout(timeout);
+		if (tuning.temperature() != null) builder = builder.temperature(tuning.temperature());
+		if (tuning.topP() != null) builder = builder.topP(tuning.topP());
+		return builder.build();
 	}
 
-	static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout) {
+	static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout, ModelTuning tuning) {
 		// strictJsonSchema(true) enables OpenAI structured outputs for the
 		// response_format path — server-enforced schema conformance on the
 		// assistant's text response. This is how typed agent outputs are
@@ -341,22 +422,20 @@ public class LangChainAdapter extends AAdapter {
 		// or grid_run.input) impossible — strict mode reduces them to {} only.
 		// Tool argument validation still happens, just not as strict-mode
 		// pre-validation by OpenAI.
-		return OpenAiChatModel.builder()
+		var builder = OpenAiChatModel.builder()
 			.apiKey(apiKey)
 			.baseUrl(baseUrl)
 			.logRequests(false)
 			.logResponses(false)
 			.modelName(model)
 			.timeout(timeout)
-			.strictJsonSchema(true)
-			.build();
+			.strictJsonSchema(true);
+		if (tuning.temperature() != null) builder = builder.temperature(tuning.temperature());
+		if (tuning.topP() != null) builder = builder.topP(tuning.topP());
+		return builder.build();
 	}
 
-	static ChatModel buildAnthropicModel(String apiKey, String baseUrl, String model, Duration timeout) {
-		return buildAnthropicModel(apiKey, baseUrl, model, timeout, null);
-	}
-
-	static ChatModel buildAnthropicModel(String apiKey, String baseUrl, String model, Duration timeout, Integer maxTokens) {
+	static ChatModel buildAnthropicModel(String apiKey, String baseUrl, String model, Duration timeout, ModelTuning tuning) {
 		AnthropicChatModel.AnthropicChatModelBuilder builder = AnthropicChatModel.builder()
 			.apiKey(apiKey)
 			.baseUrl(baseUrl)
@@ -366,7 +445,9 @@ public class LangChainAdapter extends AAdapter {
 			.timeout(timeout);
 		// Anthropic's API requires max_tokens on every request; when the caller
 		// doesn't bound it, langchain4j's model default applies (covia#198).
-		if (maxTokens != null) builder = builder.maxTokens(maxTokens);
+		if (tuning.maxTokens() != null) builder = builder.maxTokens(tuning.maxTokens());
+		if (tuning.temperature() != null) builder = builder.temperature(tuning.temperature());
+		if (tuning.topP() != null) builder = builder.topP(tuning.topP());
 		return builder.build();
 	}
 

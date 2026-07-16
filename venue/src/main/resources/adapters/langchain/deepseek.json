@@ -35,6 +35,14 @@
 					"type":"string",
 					"description":"Base URL (defaults to https://api.deepseek.com/v1)",
 					"default":"https://api.deepseek.com/v1"
+				},
+				"temperature":{
+					"type":"number",
+					"description":"Sampling temperature (e.g. 0 for deterministic extraction); provider default when omitted"
+				},
+				"topP":{
+					"type":"number",
+					"description":"Nucleus sampling top_p; provider default when omitted"
 				}
 			}
 		},

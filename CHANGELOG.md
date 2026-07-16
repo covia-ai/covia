@@ -19,6 +19,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `operation.default` — declarative argument defaults on any operation, merged under the caller's input at dispatch (caller wins; any value type); `add-tool` stores them and drops defaulted keys from the schema's required list (`venue/docs/OPERATIONS.md` §5)
 - Venue modules — adapters load from external jars at boot (`modules` config; optional sha256 content pinning; per-module classloader isolation) (#226)
 - SQL adapter as the first venue module (`covia-sql`) — `v/ops/sql/query`/`execute` over per-user lattice-backed convex-db databases and operator-registered JDBC connections; callers name databases, never URLs (#227)
+- `temperature` and `topP` on all `v/ops/langchain/*` ops — pass through to every provider; integer or double accepted (#218)
+- Venue-level Ollama base URL — `adapters.langchain.ollamaUrl` config or `OLLAMA_BASE_URL` env resolve when the call carries no `url`, so agents stay topology-agnostic; connect failures name the resolved URL and the knob (#224)
 
 ### Fixed
 - Task input rendered to models as plain text/JSON, never EDN map literals (#215)

@@ -32,6 +32,14 @@
 					"type": "string",
 					"description": "API base URL (default: https://api.anthropic.com/v1/)"
 				},
+				"temperature": {
+					"type": "number",
+					"description": "Sampling temperature (e.g. 0 for deterministic extraction); provider default when omitted"
+				},
+				"topP": {
+					"type": "number",
+					"description": "Nucleus sampling top_p; provider default when omitted"
+				},
 				"systemPrompt": {
 					"type": "string",
 					"description": "System prompt"

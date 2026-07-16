@@ -38,6 +38,14 @@
 					"type":"string",
 					"description":"Gemini base URL (defaults to https://generativelanguage.googleapis.com/v1beta)",
 					"default":"https://generativelanguage.googleapis.com/v1beta"
+				},
+				"temperature":{
+					"type":"number",
+					"description":"Sampling temperature (e.g. 0 for deterministic extraction); provider default when omitted"
+				},
+				"topP":{
+					"type":"number",
+					"description":"Nucleus sampling top_p; provider default when omitted"
 				}
 			}
 		},

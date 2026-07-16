@@ -31,7 +31,15 @@
 				},
 				"url":{
 					"type":"string",
-					"description":"Optional Ollama base URL (defaults to http://localhost:11434)"
+					"description":"Optional Ollama base URL. When omitted, resolves venue-side: adapters.langchain.ollamaUrl config, then the OLLAMA_BASE_URL environment variable, then http://localhost:11434. Keep agents topology-agnostic — set the venue-level knob instead of per-agent URLs"
+				},
+				"temperature":{
+					"type":"number",
+					"description":"Sampling temperature (e.g. 0 for deterministic extraction); provider default when omitted"
+				},
+				"topP":{
+					"type":"number",
+					"description":"Nucleus sampling top_p; provider default when omitted"
 				}
 			}
 		},

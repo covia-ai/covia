@@ -506,6 +506,22 @@ Failures are LLM-diagnosable at the point of use: a remote tool-level error
 transport failures name the tool, server and root cause with a remedy;
 text-only tool results are preserved (structured content wins when present).
 
+### LLM providers (langchain)
+
+`v/ops/langchain/*` inputs carry `model` / `url` / `apiKey` / `maxTokens` /
+`temperature` / `topP` / `tools` / `responseFormat`. `temperature` and `topP`
+pass through to every provider (#218 — accepts integer or double, so
+`temperature: 0` works for deterministic extraction); `maxTokens` is
+honoured by the anthropic provider (its API requires it).
+
+Ollama base URL resolution (#224): explicit input `url`, then venue config
+`adapters.langchain.ollamaUrl`, then the `OLLAMA_BASE_URL` environment
+variable, then `http://localhost:11434`. Keep agents topology-agnostic —
+only the venue deployment knows where Ollama lives (a Dockerised venue
+typically needs `http://host.docker.internal:11434`, with Ollama started as
+`OLLAMA_HOST=0.0.0.0 ollama serve`). A connect failure names the resolved
+URL and this knob instead of a bare ConnectException.
+
 ### Venue modules
 
 ```json

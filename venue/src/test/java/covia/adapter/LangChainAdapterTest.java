@@ -11,6 +11,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
@@ -1222,5 +1223,86 @@ public class LangChainAdapterTest {
 		assertNull(RT.getIn(result, "toolCalls"));
 		assertEquals(15L, RT.ensureLong(RT.getIn(result, "tokens", "total")).longValue(),
 			"usage must be measured on the forced-tool path too");
+	}
+
+	// ========== #218 — temperature / topP pass-through ==========
+
+	@Test
+	public void testTuningReachesProviderModels() {
+		LangChainAdapter.ModelTuning tuning = new LangChainAdapter.ModelTuning(null, 0.0, 0.9);
+
+		var ollama = LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
+			java.time.Duration.ofSeconds(5), tuning);
+		assertEquals(0.0, ollama.defaultRequestParameters().temperature());
+		assertEquals(0.9, ollama.defaultRequestParameters().topP());
+
+		var openai = LangChainAdapter.buildOpenAiModel("key", "https://api.openai.com/v1", "gpt-5.4-mini",
+			java.time.Duration.ofSeconds(5), tuning);
+		assertEquals(0.0, openai.defaultRequestParameters().temperature());
+		assertEquals(0.9, openai.defaultRequestParameters().topP());
+
+		var anthropic = LangChainAdapter.buildAnthropicModel("key", "https://api.anthropic.com/v1/",
+			"claude-sonnet-4-6", java.time.Duration.ofSeconds(5), tuning);
+		assertEquals(0.0, anthropic.defaultRequestParameters().temperature());
+		assertEquals(0.9, anthropic.defaultRequestParameters().topP());
+
+		// Absent tuning leaves provider defaults alone (no crash, no forced values)
+		var plain = LangChainAdapter.buildOllamaModel("http://localhost:11434", "qwen",
+			java.time.Duration.ofSeconds(5), LangChainAdapter.ModelTuning.NONE);
+		assertNull(plain.defaultRequestParameters().temperature());
+	}
+
+	@Test
+	public void testExtractTuningAcceptsIntegerNumbers() {
+		// temperature: 0 arrives as a LONG from JSON — the deterministic-
+		// extraction case that motivated #218 must not be dropped
+		ACell input = JSON.parse("{\"temperature\": 0, \"topP\": 1, \"maxTokens\": 512}");
+		LangChainAdapter.ModelTuning t = LangChainAdapter.extractTuning(input);
+		assertEquals(0.0, t.temperature());
+		assertEquals(1.0, t.topP());
+		assertEquals(512, t.maxTokens());
+
+		LangChainAdapter.ModelTuning none = LangChainAdapter.extractTuning(JSON.parse("{}"));
+		assertNull(none.temperature());
+		assertNull(none.topP());
+		assertNull(none.maxTokens());
+
+		assertThrows(IllegalArgumentException.class,
+			() -> LangChainAdapter.extractTuning(JSON.parse("{\"temperature\": \"hot\"}")));
+	}
+
+	// ========== #224 — Ollama base URL resolution + connect hint ==========
+
+	@Test
+	public void testResolveOllamaUrlPrecedence() {
+		AString explicit = Strings.create("http://explicit:11434");
+		AMap<AString, ACell> cfg = Maps.of(Strings.create("ollamaUrl"),
+			Strings.create("http://from-config:11434"));
+
+		assertEquals("http://explicit:11434",
+			LangChainAdapter.resolveOllamaUrl(explicit, cfg, "http://from-env:11434"));
+		assertEquals("http://from-config:11434",
+			LangChainAdapter.resolveOllamaUrl(null, cfg, "http://from-env:11434"));
+		assertEquals("http://from-env:11434",
+			LangChainAdapter.resolveOllamaUrl(null, null, "http://from-env:11434"));
+		assertEquals("http://localhost:11434",
+			LangChainAdapter.resolveOllamaUrl(null, null, null));
+		assertEquals("http://localhost:11434",
+			LangChainAdapter.resolveOllamaUrl(null, Maps.empty(), "  "));
+	}
+
+	@Test
+	public void testOllamaConnectHint() {
+		RuntimeException connect = new RuntimeException("request failed",
+			new java.net.ConnectException("Connection refused"));
+		String hint = LangChainAdapter.ollamaConnectHint("http://localhost:11434", connect);
+		assertNotNull(hint);
+		assertTrue(hint.contains("http://localhost:11434"), hint);
+		assertTrue(hint.contains("adapters.langchain.ollamaUrl"), hint);
+		assertTrue(hint.contains("host.docker.internal"), hint);
+
+		// Non-connectivity failures pass through untouched
+		assertNull(LangChainAdapter.ollamaConnectHint("http://localhost:11434",
+			new RuntimeException("model not found: qwen")));
 	}
 }

@@ -36,6 +36,14 @@
 					"description": "Base URL. Defaults to OpenAI. Set to use other providers (e.g. https://api.deepseek.com/v1).",
 					"default": "https://api.openai.com/v1"
 				},
+				"temperature": {
+					"type": "number",
+					"description": "Sampling temperature (e.g. 0 for deterministic extraction); provider default when omitted"
+				},
+				"topP": {
+					"type": "number",
+					"description": "Nucleus sampling top_p; provider default when omitted"
+				},
 				"tools": {
 					"type": "array",
 					"description": "Tool definitions for function calling."
