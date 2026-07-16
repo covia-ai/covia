@@ -50,6 +50,34 @@ public abstract class VenueAuth {
 	}
 
 	/**
+	 * Mint the raw credential token this strategy would attach to a request —
+	 * for callers that need to STORE a credential (typically long-lived and
+	 * audience-bound, e.g. handed to a proxy as an API key) rather than
+	 * authenticate a request in flight.
+	 *
+	 * <p>For key-pair auth the token carries exactly the claims
+	 * {@link #apply} signs, using the instance's configured audience and
+	 * lifetime — mint a long-lived credential from a purpose-configured
+	 * instance:
+	 * <pre>{@code
+	 * String token = VenueAuth.keyPair(kp, venueDID, 30 * 24 * 3600).mintToken();
+	 * }</pre>
+	 *
+	 * <p>Rotation of a stored token is the caller's responsibility;
+	 * {@code apply()} never needs rotation because it signs fresh per
+	 * request. Bind {@code aud} for anything long-lived — a captured
+	 * aud-less token replays anywhere self-issued tokens are accepted.
+	 *
+	 * @return The signed token string
+	 * @throws UnsupportedOperationException for strategies that cannot mint
+	 *         (none, bearer, local — they hold no signing key)
+	 */
+	public String mintToken() {
+		throw new UnsupportedOperationException(
+			getClass().getSimpleName() + " cannot mint tokens");
+	}
+
+	/**
 	 * No authentication. Requests are sent without credentials.
 	 * @return A no-op auth instance
 	 */

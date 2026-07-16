@@ -34,12 +34,6 @@ class KeyPairAuth extends VenueAuth {
 	/** Default token lifetime: 5 minutes */
 	public static final long DEFAULT_TOKEN_LIFETIME = 300;
 
-	private static final AString SUB = Strings.intern("sub");
-	private static final AString ISS = Strings.intern("iss");
-	private static final AString AUD = Strings.intern("aud");
-	private static final AString IAT = Strings.intern("iat");
-	private static final AString EXP = Strings.intern("exp");
-
 	private final AKeyPair keyPair;
 	private final long tokenLifetime;
 	private final String didKey;
@@ -71,16 +65,31 @@ class KeyPairAuth extends VenueAuth {
 
 	@Override
 	public void apply(HttpRequest.Builder builder) {
+		builder.header("Authorization", "Bearer " + buildToken());
+	}
+
+	@Override
+	public String mintToken() {
+		return buildToken().toString();
+	}
+
+	/**
+	 * The ONE place the claim set exists — {@code sub}/{@code iss} = the
+	 * key's did:key, {@code aud} when configured, {@code iat} now,
+	 * {@code exp} now + lifetime — signed with {@link JWT#signPublic}.
+	 * Shared by {@link #apply} and {@link #mintToken} so a minted token is
+	 * exactly what a request would carry, by construction.
+	 */
+	private AString buildToken() {
 		long nowSecs = System.currentTimeMillis() / 1000;
 		AMap<AString, ACell> claims = Maps.of(
-			SUB, Strings.create(didKey),
-			ISS, Strings.create(didKey),
-			IAT, nowSecs,
-			EXP, nowSecs + tokenLifetime
+			JWT.SUB, Strings.create(didKey),
+			JWT.ISS, Strings.create(didKey),
+			JWT.IAT, nowSecs,
+			JWT.EXP, nowSecs + tokenLifetime
 		);
-		if (audience != null) claims = claims.assoc(AUD, Strings.create(audience));
-		AString jwt = JWT.signPublic(claims, keyPair);
-		builder.header("Authorization", "Bearer " + jwt);
+		if (audience != null) claims = claims.assoc(JWT.AUD, Strings.create(audience));
+		return JWT.signPublic(claims, keyPair);
 	}
 
 	/**

@@ -10,6 +10,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 - System tray icon on desktop launches — open, close venue, exit (`COVIA_NO_TRAY=1` to disable)
+- `VenueAuth.mintToken()` — raw self-issued JWT for stored credentials (aud-bound, explicit lifetime) (#219)
 
 ### Fixed
 - Task input rendered to models as plain text/JSON, never EDN map literals (#215)
