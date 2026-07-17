@@ -32,7 +32,10 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.AInteger;
+import convex.core.data.prim.CVMBool;
+import convex.core.json.schema.JsonSchema;
 import convex.core.lang.RT;
+import convex.core.util.JSON;
 import covia.adapter.MCPAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
@@ -479,6 +482,104 @@ public class MCPTest {
 		AMap<AString, ACell> out = RT.ensureMap(assetGet.get(Fields.OUTPUT_SCHEMA));
 		assertNotNull(out, "asset_get declares an object output — it must advertise it");
 		assertEquals(Fields.OBJECT, out.get(Fields.TYPE));
+	}
+
+	// ========== MCP spec conformance (2025-06-18) — call-result shapes ==========
+
+	/**
+	 * Object-result shape: a tool that advertises an outputSchema MUST return
+	 * structuredContent conforming to it on every call, and SHOULD also
+	 * serialise the same JSON as a text content item. content is REQUIRED on
+	 * every tool result.
+	 */
+	@Test public void testCallResultObjectConformance() throws Exception {
+		HttpResponse<String> resp = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"asset_get\","
+			+ "\"arguments\":{\"id\":\"v/ops/asset/get\"}},\"id\":\"conf-1\"}");
+		assertEquals(200, resp.statusCode());
+		AMap<AString, ACell> body = RT.ensureMap(JSON.parse(resp.body()));
+		assertNotNull(body, resp.body());
+		assertEquals(Strings.create("2.0"), body.get(Strings.create("jsonrpc")));
+		assertEquals(Strings.create("conf-1"), body.get(Strings.create("id")), "JSON-RPC id must be echoed");
+		assertNull(body.get(Strings.create("error")), "success must not be a JSON-RPC error: " + resp.body());
+
+		AMap<AString, ACell> result = RT.ensureMap(body.get(Fields.RESULT));
+		assertNotNull(result);
+		assertEquals(CVMBool.FALSE, result.get(Strings.create("isError")));
+
+		AVector<ACell> content = RT.ensureVector(result.get(Strings.create("content")));
+		assertNotNull(content, "content is REQUIRED on every tool result");
+		assertTrue(content.count() > 0);
+		AMap<AString, ACell> first = RT.ensureMap(content.get(0));
+		assertEquals(Strings.create("text"), first.get(Fields.TYPE),
+			"structured results should also serialise as a text content item");
+		assertNotNull(RT.ensureString(first.get(Strings.create("text"))));
+
+		AMap<AString, ACell> structured = RT.ensureMap(result.get(Strings.create("structuredContent")));
+		assertNotNull(structured, "an advertised outputSchema obliges structuredContent on every result");
+		AMap<AString, ACell> advertised = RT.ensureMap(findTool("asset_get").get(Fields.OUTPUT_SCHEMA));
+		assertNotNull(advertised);
+		String err = JsonSchema.validate(advertised, structured);
+		assertNull(err, "structuredContent must conform to the advertised outputSchema: " + err);
+	}
+
+	/**
+	 * Scalar-result shape: a non-object result arrives as a text content item
+	 * and MUST NOT carry structuredContent — MCP permits structuredContent
+	 * only for JSON objects, which is also why such tools advertise no
+	 * outputSchema (testOutputSchemaOnlyForObjectOutputs).
+	 */
+	@Test public void testCallResultScalarConformance() throws Exception {
+		HttpResponse<String> create = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"agent_create\","
+			+ "\"arguments\":{\"agentId\":\"mcp-conf-agent\",\"config\":{"
+			+ "\"operation\":\"v/ops/goaltree/chat\",\"llmOperation\":\"v/test/ops/llm\","
+			+ "\"systemPrompt\":\"Conformance probe agent.\"}}},\"id\":1}");
+		assertEquals(200, create.statusCode());
+
+		HttpResponse<String> resp = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"agent_context\","
+			+ "\"arguments\":{\"agentId\":\"mcp-conf-agent\"}},\"id\":2}");
+		assertEquals(200, resp.statusCode());
+		AMap<AString, ACell> body = RT.ensureMap(JSON.parse(resp.body()));
+		assertNull(body.get(Strings.create("error")), resp.body());
+		AMap<AString, ACell> result = RT.ensureMap(body.get(Fields.RESULT));
+		assertNotNull(result);
+		assertEquals(CVMBool.FALSE, result.get(Strings.create("isError")));
+
+		AVector<ACell> content = RT.ensureVector(result.get(Strings.create("content")));
+		assertNotNull(content, "content is REQUIRED on every tool result");
+		AMap<AString, ACell> first = RT.ensureMap(content.get(0));
+		assertEquals(Strings.create("text"), first.get(Fields.TYPE));
+		AString text = RT.ensureString(first.get(Strings.create("text")));
+		assertNotNull(text);
+		assertTrue(text.toString().contains("Conformance probe agent"),
+			"the scalar payload must survive as text: " + text);
+
+		assertNull(result.get(Strings.create("structuredContent")),
+			"non-object results must not carry structuredContent");
+	}
+
+	/**
+	 * Failure shape: a tool-level failure is a protocol-valid RESULT with
+	 * {@code isError: true} carrying the diagnosable message — NOT a JSON-RPC
+	 * error (reserved for protocol faults like unknown tools). Per spec this
+	 * is what lets an LLM client read the message and self-correct.
+	 */
+	@Test public void testCallResultErrorConformance() throws Exception {
+		HttpResponse<String> resp = postMcp(
+			"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"test_error\","
+			+ "\"arguments\":{}},\"id\":3}");
+		assertEquals(200, resp.statusCode(), "tool failure still travels as HTTP 200");
+		AMap<AString, ACell> body = RT.ensureMap(JSON.parse(resp.body()));
+		assertNull(body.get(Strings.create("error")),
+			"tool failure must not be a JSON-RPC error: " + resp.body());
+		AMap<AString, ACell> result = RT.ensureMap(body.get(Fields.RESULT));
+		assertNotNull(result);
+		assertEquals(CVMBool.TRUE, result.get(Strings.create("isError")));
+		AVector<ACell> content = RT.ensureVector(result.get(Strings.create("content")));
+		assertNotNull(content, "an isError result still carries content for the client to read");
+		assertTrue(content.count() > 0);
 	}
 
 	/** Finds a tool entry by MCP tool name across all adapters, or null. */
