@@ -115,8 +115,13 @@ public class VenueServer {
 		// Create NodeServer with Covia lattice (local-only, no network port)
 		// Launch immediately so restore happens before Engine reads the cursor.
 		try {
+			// Whether the persistent store file predates this launch must be
+			// captured BEFORE createStore opens (and thereby creates) it —
+			// resolveKeyPair uses it to tell a first launch from a relaunch
+			// that has lost its identity (#232).
+			boolean storePreexisted = storeFileExists(this.config);
 			this.store = createStore(this.config);
-			AKeyPair keyPair = resolveKeyPair(this.config);
+			AKeyPair keyPair = resolveKeyPair(this.config, storePreexisted);
 			this.nodeServer = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			nodeServer.setMergeContext(LatticeContext.create(
 				CVMLong.create(Utils.getCurrentTimestamp()), keyPair));
@@ -208,7 +213,14 @@ public class VenueServer {
 	 *   <li>Generate new — ephemeral (temp store) or saved to key file (persistent store)</li>
 	 * </ol>
 	 */
-	private static AKeyPair resolveKeyPair(Config config) throws IOException {
+	/** True when the config names a persistent store whose file already exists. */
+	private static boolean storeFileExists(Config config) {
+		String storePath = config.getStore();
+		if (storePath == null || "temp".equals(storePath) || "memory".equals(storePath)) return false;
+		return Files.exists(Path.of(storePath));
+	}
+
+	private static AKeyPair resolveKeyPair(Config config, boolean storePreexisted) throws IOException {
 		// 1. Explicit seed in config
 		String seedHex = config.getSeed();
 		if (seedHex != null) {
@@ -236,7 +248,18 @@ public class VenueServer {
 				return kp;
 			}
 
-			// 4. Generate and save to key file
+			// 4. Pre-existing store but no identity source — a CONFIG ERROR
+			// (#232). Silently minting a fresh DID would orphan every client's
+			// state: logins, agents and secrets all bind to the venue identity.
+			if (storePreexisted) {
+				throw new IllegalStateException(
+					"Venue store " + storePath + " exists but no venue identity is configured: "
+					+ "no 'seed', no 'keystore', and no venue.key beside the store. Restore "
+					+ keyFile + " or configure the original seed/keystore. To deliberately "
+					+ "start a fresh venue, delete or move the store file.");
+			}
+
+			// First launch of a new persistent store: generate and save.
 			AKeyPair kp = AKeyPair.generate();
 			keyFile.getParent().toFile().mkdirs();
 			Files.writeString(keyFile, kp.getSeed().toHexString());

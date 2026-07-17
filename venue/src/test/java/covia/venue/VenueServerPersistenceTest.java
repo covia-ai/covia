@@ -144,6 +144,52 @@ public class VenueServerPersistenceTest {
 	}
 
 	/**
+	 * Venue identity lifecycle (#232): first launch of a new persistent store
+	 * may generate and save venue.key; relaunching an EXISTING store without
+	 * any identity source (seed, keystore, venue.key) is a CONFIG ERROR —
+	 * never a silent fresh DID, which would orphan every client's state.
+	 */
+	@SuppressWarnings("unchecked")
+	@Test
+	public void testRelaunchWithoutIdentityIsConfigError() throws Exception {
+		// Private directory: venue.key is written as a SIBLING of the store,
+		// so a bare %TEMP% store would share one venue.key with every other
+		// same-dir test.
+		java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("venue-noid-");
+		dir.toFile().deleteOnExit();
+		String storePath = dir.resolve("venue.etch").toString().replace('\\', '/');
+		java.nio.file.Path keyFile = dir.resolve("venue.key");
+		keyFile.toFile().deleteOnExit();
+		dir.resolve("venue.etch").toFile().deleteOnExit();
+
+		AMap<AString, ACell> config = (AMap<AString, ACell>) (AMap<?,?>) Maps.of(
+			Fields.NAME, Strings.create("No-Identity Venue"),
+			Strings.create("port"), 0,
+			Config.STORE, Strings.create(storePath));
+
+		// First launch: allowed — identity generated and saved beside the store.
+		VenueServer server = VenueServer.launch(config);
+		String did1 = String.valueOf(server.getEngine().getDIDString());
+		server.close();
+		assertTrue(java.nio.file.Files.exists(keyFile),
+			"first launch saves venue.key beside the store");
+
+		// Relaunch with venue.key intact: same identity.
+		VenueServer server2 = VenueServer.launch(config);
+		assertEquals(did1, String.valueOf(server2.getEngine().getDIDString()),
+			"identity survives relaunch via venue.key");
+		server2.close();
+
+		// venue.key lost: relaunching the existing store must fail loudly.
+		java.nio.file.Files.delete(keyFile);
+		Exception e = assertThrows(Exception.class, () -> VenueServer.launch(config));
+		String msg = String.valueOf(e.getMessage())
+			+ (e.getCause() != null ? " " + e.getCause().getMessage() : "");
+		assertTrue(msg.contains("no venue identity is configured"),
+			"config-error message expected, got: " + msg);
+	}
+
+	/**
 	 * Verify the propagator persists data before graceful close.
 	 * Write → wait for propagator → close → restart → read.
 	 */
