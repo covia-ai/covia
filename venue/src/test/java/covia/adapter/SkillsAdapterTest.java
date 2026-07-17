@@ -107,12 +107,22 @@ public class SkillsAdapterTest {
 		RequestContext venueCtx = RequestContext.of(engine.getDIDString());
 		write("v/skills/venue-demo", Maps.of(
 			Fields.DESCRIPTION, Strings.create("A venue-installed skill")), venueCtx);
-
-		ACell result = invoke(Maps.of(
-			Strings.create("command"), Strings.create("list"),
-			K_SOURCES, Vectors.of(Strings.create("v/skills"))), ctx);
-		assertNotNull(result);
-		assertTrue(result.toString().contains("- venue-demo — A venue-installed skill"), result.toString());
+		try {
+			ACell result = invoke(Maps.of(
+				Strings.create("command"), Strings.create("list"),
+				K_SOURCES, Vectors.of(Strings.create("v/skills"))), ctx);
+			assertNotNull(result);
+			assertTrue(result.toString().contains("- venue-demo — A venue-installed skill"), result.toString());
+		} finally {
+			// Shared-engine hygiene: leave v/skills as shipped.
+			try {
+				engine.jobs().invokeInternal("v/ops/covia/delete",
+					Maps.of(Fields.PATH, Strings.create("v/skills/venue-demo")), venueCtx)
+					.get(5, TimeUnit.SECONDS);
+			} catch (Exception e) {
+				throw new RuntimeException(e);
+			}
+		}
 	}
 
 	// ========== read ==========

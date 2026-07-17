@@ -70,7 +70,7 @@ public class SkillsAdapter extends AAdapter {
 	static final String[] LIBRARY = {
 		"workspace", "assets", "agents", "orchestration", "grid", "files",
 		"secrets", "scheduling", "memory", "convex", "mcp", "http", "auth",
-		"skills"
+		"skills", "skill-authoring"
 	};
 
 	@Override

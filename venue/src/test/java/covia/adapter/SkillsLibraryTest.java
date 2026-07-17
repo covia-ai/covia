@@ -84,9 +84,27 @@ public class SkillsLibraryTest {
 		}
 		assertFalse(index.contains("INVALID"), index);
 		assertFalse(index.contains("unavailable"), index);
-		// Context efficiency: the always-in-context index stays compact.
-		assertTrue(index.length() < 2500,
-			"index should stay compact (" + index.length() + " chars):\n" + index);
+
+		// Context-efficiency guard, computed over the LIBRARY resources alone —
+		// deterministic under the shared engine (other tests may legitimately
+		// write extra venue skills; their lines must not fail the library's
+		// budget, nor mask real description creep).
+		StringBuilder libIndex = new StringBuilder();
+		for (String name : SkillsAdapter.LIBRARY) {
+			ACell meta = convex.core.util.JSON.parse(readResource("/skills/" + name + ".json"));
+			libIndex.append("- ").append(name).append(" — ")
+				.append(RT.ensureString(RT.getIn(meta, "description"))).append('\n');
+		}
+		assertTrue(libIndex.length() < 2500,
+			"library index should stay compact (" + libIndex.length() + " chars):\n" + libIndex);
+	}
+
+	private static String readResource(String path) {
+		try (java.io.InputStream is = SkillsLibraryTest.class.getResourceAsStream(path)) {
+			return new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+		} catch (Exception e) {
+			throw new RuntimeException("cannot read " + path, e);
+		}
 	}
 
 	@Test

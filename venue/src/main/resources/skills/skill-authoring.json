@@ -1,0 +1,15 @@
+{
+	"name": "skill-authoring",
+	"description": "Build good skills: the full recipe for shape, body style, tool bundles, storage, testing and sharing. Load when creating or improving a skill.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Skill authoring\nA skill is an ASSET: ordinary metadata plus a `skill` facet. Minimum viable:\n```\n{\"description\": \"One line: what it does — and when to load it\",\n \"content\": {\"inline\": \"...markdown body...\"},\n \"skill\": {\"tools\": [\"v/ops/...\"]}}\n```\n\nShape rules:\n- `description` is the index line — `what — when to load`. Never documentation.\n- The body is the asset's CONTENT: `content.inline` for small bodies; asset_store with `contentText` for bigger or shared ones; `content: {dlfs: path}` binds a live file (add `content.sha256` to pin the bytes). No content at all = a pure toolset (its description line shows when loaded).\n- `skill.tools`: FULL catalog paths (`v/ops/...`, `o/...`). Curate the minimal set the skill teaches — overlap with other skills is fine (tool names dedup). Optional: `skill.budget` (default load budget), `skill.context` (bundled context entries).\n- An asset with BOTH an `operation` facet and a `skill` facet is a self-documenting tool: loading it injects its manual and offers the op itself.\n- The SKILL.md format works as-is: frontmatter `name`/`description` + markdown body, in `content.inline` or stored `contentText`.\n\nBody style (your reader is an LLM mid-task):\n- Tight and imperative. Schemas as used: `op {args} -> result`. Gotchas inline where they bite. Aim for 1-2KB — a loaded body costs budget every turn; put big references in a workspace doc the body points at (context_load).\n- Name operations by catalog path — unambiguous, and callable directly as a tool name if needed.\n\nStore, test, share:\n- Personal: covia_write to `w/skills/<name>` — shadows a same-named venue skill; edits are LIVE (loaded copies re-render next turn).\n- Shared: asset_store `{metadata, contentText}` -> immutable `a/<hash>`; drop the ref string into any skills directory, or hand it to another agent to skill_load `{ref}` directly.\n- Verify before shipping: skills `{command: \"read\", ref}` shows exactly what a loader gets; then skill_load `{ref}` and exercise the tools — unresolvable tool paths are reported under `unresolved` in the load result."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/covia/write",
+			"v/ops/asset/store",
+			"v/ops/skills"
+		]
+	}
+}
