@@ -500,49 +500,83 @@ public class VenueServer {
 		org.eclipse.jetty.server.Server jettyServer=app.jettyServer().server();
 		setupJettyServer(jettyServer,port);
 		app.start();
-
+		addSecondLoopbackConnector(jettyServer);
 	}
-	
+
 	protected void setupJettyServer(org.eclipse.jetty.server.Server jettyServer, Integer port) {
 		if (port==null) port=8080;
-		// Allow encoded path separators (%2F) in URIs — and ONLY that (#153).
-		// Catalog operation names contain slashes (e.g. "v/ops/jvm/string-concat")
-		// and are percent-encoded into a single path segment by
-		// VenueHTTP.getOperationId — the GET /api/v1/operations/{name} contract.
-		// Jetty 12's default UriCompliance rejects %2F as an "ambiguous path
-		// separator" (400); Jetty 11 and Javalin's own connector permitted it.
-		// Since we build the connector ourselves (below), we opt back in here or
-		// named catalog lookups — and cross-venue named references — break.
-		//
-		// AMBIGUOUS_PATH_ENCODING (encoded dots, %2e → the `../` path-traversal
-		// surface) is deliberately NOT enabled: no route needs it (operation
-		// names have no dot segments; assets/<id> and /a2a/<addr> use raw-slash
-		// wildcards, and A2A rejects %2f outright), so enabling it would only
-		// widen the connector's attack surface. Only AMBIGUOUS_PATH_SEPARATOR is
-		// required for %2F.
-		HttpConfiguration httpConfig = new HttpConfiguration();
-		httpConfig.setUriCompliance(UriCompliance.from(
-			"DEFAULT,AMBIGUOUS_PATH_SEPARATOR"));
-
-		// Size the connector's acceptor/selector threads explicitly. Jetty defaults
-		// selectors to cores/2, which is wrong here: handlers run on virtual threads
-		// (useVirtualThreads=true), so the selectors only pump non-blocking I/O. The
-		// default exploded the platform-thread count when many venues share a JVM
-		// (N×cores/2 selectors), starving the connectors. See Config.DEFAULT_HTTP_SELECTORS.
-		ServerConnector connector = new ServerConnector(jettyServer,
-			config.getHttpAcceptors(), config.getHttpSelectors(),
-			new HttpConnectionFactory(httpConfig));
+		ServerConnector connector = buildConnector(jettyServer);
 		connector.setPort(port);
 		// Restrict the listening interface when a bind address is configured.
 		// When unset, Jetty binds the wildcard address (0.0.0.0 / all
 		// interfaces) — the historical default.
 		String bindAddress = config.getBindAddress();
 		if (bindAddress != null) connector.setHost(bindAddress);
-		// Deeper accept queue than the JDK/Jetty default (50) so bursts of
-		// concurrent connections queue rather than being refused under load.
-		connector.setAcceptQueueSize(config.getAcceptQueueSize());
 		jettyServer.addConnector(connector);
 		log.info("Venue HTTP connector bound to {}:{}", (bindAddress != null) ? bindAddress : "0.0.0.0", port);
+	}
+
+	/**
+	 * Builds an HTTP connector with the venue's connector policy.
+	 *
+	 * <p>URI compliance: encoded path separators (%2F) are allowed — and ONLY
+	 * that (#153). Catalog operation names contain slashes (e.g.
+	 * "v/ops/jvm/string-concat") and are percent-encoded into a single path
+	 * segment by VenueHTTP.getOperationId — the GET /api/v1/operations/{name}
+	 * contract. Jetty 12's default UriCompliance rejects %2F as an "ambiguous
+	 * path separator" (400). AMBIGUOUS_PATH_ENCODING (encoded dots, %2e → the
+	 * `../` path-traversal surface) is deliberately NOT enabled: no route
+	 * needs it, so enabling it would only widen the attack surface.</p>
+	 *
+	 * <p>Acceptor/selector threads are sized explicitly. Jetty defaults
+	 * selectors to cores/2, which is wrong here: handlers run on virtual
+	 * threads, so the selectors only pump non-blocking I/O — the default
+	 * exploded the platform-thread count when many venues share a JVM. See
+	 * Config.DEFAULT_HTTP_SELECTORS. The accept queue is deeper than the
+	 * Jetty default (50) so connection bursts queue rather than refuse.</p>
+	 */
+	private ServerConnector buildConnector(org.eclipse.jetty.server.Server jettyServer) {
+		HttpConfiguration httpConfig = new HttpConfiguration();
+		httpConfig.setUriCompliance(UriCompliance.from(
+			"DEFAULT,AMBIGUOUS_PATH_SEPARATOR"));
+		ServerConnector connector = new ServerConnector(jettyServer,
+			config.getHttpAcceptors(), config.getHttpSelectors(),
+			new HttpConnectionFactory(httpConfig));
+		connector.setAcceptQueueSize(config.getAcceptQueueSize());
+		return connector;
+	}
+
+	/**
+	 * A loopback bind serves BOTH loopback protocols (#231): a venue bound to
+	 * 127.0.0.1 answers ::1 too (and vice versa), so browsers that resolve
+	 * {@code localhost} to the other family don't hang on connect (no
+	 * listener, no RST). Added AFTER start on the actual bound port (so
+	 * ephemeral port 0 mirrors correctly) and strictly best-effort — a
+	 * machine without the second protocol keeps its venue.
+	 */
+	private void addSecondLoopbackConnector(org.eclipse.jetty.server.Server jettyServer) {
+		String bindAddress = config.getBindAddress();
+		if (bindAddress == null || !isLoopback(bindAddress)) return;
+		String other = bindAddress.contains(":") ? "127.0.0.1" : "::1";
+		try {
+			int actualPort = ((ServerConnector) jettyServer.getConnectors()[0]).getLocalPort();
+			ServerConnector second = buildConnector(jettyServer);
+			second.setPort(actualPort);
+			second.setHost(other);
+			jettyServer.addConnector(second);
+			second.start();
+			log.info("Loopback bind also listening on {}:{}", other, actualPort);
+		} catch (Exception e) {
+			log.warn("Second loopback connector ({}) unavailable: {}", other, e.getMessage());
+		}
+	}
+
+	private static boolean isLoopback(String host) {
+		try {
+			return java.net.InetAddress.getByName(host).isLoopbackAddress();
+		} catch (Exception e) {
+			return false;
+		}
 	}
 
 	private Javalin buildApp() {

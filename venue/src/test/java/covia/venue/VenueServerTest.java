@@ -425,6 +425,41 @@ public class VenueServerTest {
 			"Should return 200 or 201, got " + resp.statusCode() + ": " + resp.body());
 	}
 
+	/**
+	 * A loopback bind answers on BOTH loopback protocols (#231): browsers
+	 * resolving localhost to ::1 must not hang against a 127.0.0.1 venue.
+	 */
+	@Test
+	public void testLoopbackBindServesBothProtocols() throws Exception {
+		org.junit.jupiter.api.Assumptions.assumeTrue(ipv6LoopbackAvailable(),
+			"no IPv6 loopback on this machine");
+		VenueServer server = VenueServer.launch(Maps.of(
+			Strings.create("port"), CVMLong.create(0),
+			Strings.create("bindAddress"), Strings.create("127.0.0.1")));
+		try {
+			int port = server.port();
+			HttpClient client = HttpClient.newHttpClient();
+			for (String host : new String[] {"127.0.0.1", "[::1]"}) {
+				HttpResponse<String> r = client.send(HttpRequest.newBuilder()
+					.uri(new URI("http://" + host + ":" + port + "/api/v1/status"))
+					.GET().timeout(Duration.ofSeconds(5)).build(),
+					HttpResponse.BodyHandlers.ofString());
+				assertEquals(200, r.statusCode(), "status via " + host);
+			}
+		} finally {
+			server.close();
+		}
+	}
+
+	private static boolean ipv6LoopbackAvailable() {
+		try (java.net.ServerSocket s = new java.net.ServerSocket(
+				0, 1, java.net.InetAddress.getByName("::1"))) {
+			return true;
+		} catch (Exception e) {
+			return false;
+		}
+	}
+
 	@Test
 	public void testBindAddressConfig() {
 		// Unset bindAddress → null, so the connector binds all interfaces
