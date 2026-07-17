@@ -191,6 +191,26 @@ public class ContextBuilder {
 	/** Tool names to skip during resolution (handled externally, e.g. harness tools) */
 	private java.util.Set<String> skipToolNames = java.util.Set.of();
 
+	/** The in-scope session id (hex), surfaced in the system prompt so the
+	 *  agent can address its own conversation from deferred work. */
+	private String sessionIdHex;
+
+	/**
+	 * Declares the in-scope session id, rendered into the system prompt's
+	 * session-context line ({@code Session: <hex>}). Call before
+	 * {@link #withSystemPrompt()}. Accepts a Blob or hex string cell; null /
+	 * unrecognised values leave the line out (no session in scope).
+	 */
+	public ContextBuilder withSessionId(ACell sid) {
+		if (sid instanceof convex.core.data.ABlob b && !(sid instanceof AString)) {
+			this.sessionIdHex = b.toHexString();
+		} else {
+			AString s = RT.ensureString(sid);
+			if (s != null) this.sessionIdHex = s.toString();
+		}
+		return this;
+	}
+
 	public ContextBuilder(Engine engine, RequestContext ctx) {
 		this(engine, ctx, DEFAULT_BUDGET);
 	}
@@ -262,6 +282,11 @@ public class ContextBuilder {
 		// Model name, if configured — helps the LLM self-calibrate
 		AString model = getConfigValue(config, Strings.intern("model"), null);
 		if (model != null) sb.append(". Model: ").append(model);
+		// The conversation's session id, when one is in scope — the agent's
+		// handle for REPORTING BACK into this conversation from deferred work:
+		// a scheduled agent:request carrying this sessionId runs in this
+		// session, so its turns land in the history the user reads.
+		if (sessionIdHex != null) sb.append(". Session: ").append(sessionIdHex);
 		sb.append('.');
 
 		// Include lattice reference when the agent has tools (default or explicit).

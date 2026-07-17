@@ -500,6 +500,21 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test
+	public void testSessionIdVisibleInInspectedContext() {
+		// The report-back handle: a sessioned cycle's system prompt names its
+		// session id, so the agent can schedule agent:request {sessionId}
+		// back into this conversation.
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		AMap<AString, ACell> l3 = adapter.buildInspectionInput(
+			Maps.of("llmOperation", "v/test/ops/llm"), null, null,
+			Maps.of(Fields.ID, Blob.fromHex("11bb11bb11bb11bb11bb11bb11bb11bb")),
+			RequestContext.of(ALICE_DID));
+		AVector<ACell> messages = RT.ensureVector(RT.getIn(l3, Fields.MESSAGES));
+		String prompt = RT.ensureString(RT.getIn(messages.get(0), "content")).toString();
+		assertTrue(prompt.contains("Session: 11bb11bb11bb11bb11bb11bb11bb11bb"), prompt);
+	}
+
+	@Test
 	public void testMalformedConfigSkillsFailsTransition() {
 		// A malformed config.skills is a configuration error — the transition
 		// fails loudly rather than silently dropping the skills feature.

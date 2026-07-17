@@ -236,6 +236,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 		ContextBuilder builder = new ContextBuilder(engine, ctx)
 			.withConfig(recordConfig)
+			.withSessionId(RT.getIn(session, Fields.ID))
 			.withSystemPrompt()
 			.withContextEntries()
 			.withSkillsIndex(effectiveLoads);
@@ -316,6 +317,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
 			.withConfig(recordConfig)
+			.withSessionId(RT.getIn(input, Fields.SESSION, Fields.ID))
 			.withSystemPrompt()                   // always fresh
 			.withContextEntries()                 // ephemeral (config.context)
 			.withSkillsIndex(effectiveLoads)      // ephemeral (config.skills index)

@@ -188,6 +188,39 @@ public class ContextBuilderTest {
 			.build());
 	}
 
+	// ========== withSessionId (report-back handle) ==========
+
+	@Test
+	public void testSessionIdInSystemPrompt() {
+		// The in-scope session id is the agent's handle for reporting back
+		// into its own conversation from deferred work (scheduled
+		// agent:request {sessionId}), so it must be visible in context.
+		convex.core.data.Blob sid = convex.core.data.Blob.fromHex("00aa00aa00aa00aa00aa00aa00aa00aa");
+		ContextBuilder.ContextResult withSid = new ContextBuilder(engine, ctx)
+			.withConfig(Maps.of(Strings.intern("systemPrompt"), Strings.create("Hi")))
+			.withSessionId(sid)
+			.withSystemPrompt()
+			.build();
+		String prompt = RT.ensureString(RT.getIn(withSid.history().get(0), K_CONTENT)).toString();
+		assertTrue(prompt.contains("Session: 00aa00aa00aa00aa00aa00aa00aa00aa"), prompt);
+
+		// Hex-string form works too; absent session → no Session line.
+		ContextBuilder.ContextResult hexForm = new ContextBuilder(engine, ctx)
+			.withConfig(Maps.of(Strings.intern("systemPrompt"), Strings.create("Hi")))
+			.withSessionId(Strings.create("beef0001"))
+			.withSystemPrompt()
+			.build();
+		assertTrue(RT.ensureString(RT.getIn(hexForm.history().get(0), K_CONTENT))
+			.toString().contains("Session: beef0001"));
+
+		ContextBuilder.ContextResult without = new ContextBuilder(engine, ctx)
+			.withConfig(Maps.of(Strings.intern("systemPrompt"), Strings.create("Hi")))
+			.withSystemPrompt()
+			.build();
+		assertFalse(RT.ensureString(RT.getIn(without.history().get(0), K_CONTENT))
+			.toString().contains("Session:"));
+	}
+
 	// ========== withSkillsIndex (config.skills — SKILLS.md §4) ==========
 
 	private void writeSkill(String path, String description) {

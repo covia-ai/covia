@@ -366,6 +366,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		ContextBuilder builder = new ContextBuilder(engine, ctx)
 			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
 			.withConfig(recordConfig)
+			.withSessionId(RT.getIn(session, Fields.ID))
 			.withSystemPrompt()
 			.withContextEntries()
 			.withSkillsIndex(indexLoads);
@@ -630,6 +631,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		ContextBuilder.ContextResult context = builder
 			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
 			.withConfig(recordConfig)
+			.withSessionId(RT.getIn(input, Fields.SESSION, Fields.ID))
 			.withSystemPrompt()
 			.withFrameStack(frames)
 			.withContextEntries()
