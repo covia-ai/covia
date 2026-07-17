@@ -1,0 +1,16 @@
+{
+	"name": "tasks",
+	"description": "Delegate, track, receive and complete tasks — the flow of work between agents. Load when assigning work, coordinating a pipeline, or handling tasks in your own queue.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Tasks\nWork flows between agents as TASKS — tracked Jobs with an owner, input and result. A task's id IS its job id: everything about it lives at `j/<id>`.\n\n**Delegating:**\n- agent_request `{agentId, input, sessionId?, wait?}` creates the task. The input must be SELF-CONTAINED — instructions, data or paths, and the expected output form — the worker sees nothing else. Never send `input: {}`.\n- As a tool call this waits ~5s then returns a snapshot `{id, status}` while the task keeps running: poll covia_read `j/<id>` for status and output, or pass `wait: <ms>` to block longer.\n- Pass a `sessionId` to run the task in a conversation (the worker's turns join that history — your own current session shows as `Session:` in your context).\n- Chaining: pass REFERENCES, not payloads. Have each worker WRITE its result to an agreed path (`w/pipeline/<run>/step-1`) and tell the next worker to READ it — copying outputs between requests truncates and loses data. Confirm a step completed (wait or poll) before starting its dependants.\n- Fan-out: fire several requests with short waits, collect by polling their job ids. Capped workers need read grants on shared paths and write grants on their own outputs.\n\n**Receiving (tasks in YOUR queue):**\n- Outstanding tasks appear in your context as `[Tasks assigned to you]`, with complete_task / fail_task offered.\n- complete_task `{result}` is TERMINAL and the ONLY channel back to the requester — chat text on that turn is NOT seen by them. Call it once, with the actual answer.\n- fail_task `{error}` when you cannot fulfil the task — a clear reason beats a fake success. Reaching your iteration limit fails the task terminally.\n\n**Managing:**\n- agent_info `{agentId}` shows an agent's status and queue depth; agent_cancel_task `{agentId, taskId}` withdraws a queued task from an agent you manage.\n- Stale work in your own queue? Complete or fail it honestly — never leave a caller pinned on a job that will not resolve."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/agent/request",
+			"v/ops/agent/cancel-task",
+			"v/ops/agent/info",
+			"v/ops/covia/read"
+		]
+	}
+}

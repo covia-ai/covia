@@ -68,9 +68,9 @@ public class SkillsAdapter extends AAdapter {
 	 * same name (first source wins).
 	 */
 	static final String[] LIBRARY = {
-		"workspace", "assets", "agents", "orchestration", "grid", "files",
-		"secrets", "scheduling", "memory", "convex", "mcp", "http", "auth",
-		"skills", "skill-authoring"
+		"workspace", "assets", "agents", "tasks", "orchestration", "grid",
+		"files", "secrets", "scheduling", "memory", "convex", "mcp", "http",
+		"auth", "skills", "skill-authoring"
 	};
 
 	@Override

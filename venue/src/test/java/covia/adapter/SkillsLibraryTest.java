@@ -95,8 +95,12 @@ public class SkillsLibraryTest {
 			libIndex.append("- ").append(name).append(" — ")
 				.append(RT.ensureString(RT.getIn(meta, "description"))).append('\n');
 		}
-		assertTrue(libIndex.length() < 2500,
-			"library index should stay compact (" + libIndex.length() + " chars):\n" + libIndex);
+		// Per-skill budget: the bound scales with deliberate library growth
+		// while still catching description creep on individual skills.
+		int budget = SkillsAdapter.LIBRARY.length * 170;
+		assertTrue(libIndex.length() < budget,
+			"library index should stay compact (" + libIndex.length() + "/" + budget
+				+ " chars):\n" + libIndex);
 	}
 
 	private static String readResource(String path) {
