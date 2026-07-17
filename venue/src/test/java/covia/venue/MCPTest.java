@@ -3,6 +3,7 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -441,9 +442,57 @@ public class MCPTest {
 				@SuppressWarnings("unchecked")
 				AMap<AString, ACell> inputSchema = (AMap<AString, ACell>) tool.get(Fields.INPUT_SCHEMA);
 				assertNotNull(inputSchema, "Tool " + toolName + " should have inputSchema");
+				// MCP tool inputs are always objects. Declared schemas pass
+				// through to clients as written (no silent type-stamping), so
+				// the authoring rule is enforced here instead.
+				assertEquals(Fields.OBJECT, inputSchema.get(Fields.TYPE),
+					"Tool " + toolName + " must declare an object input schema");
 				assertSchemaValid(inputSchema, toolName + ".inputSchema", VALID_TYPES, NON_SCHEMA_KEYS);
+
+				@SuppressWarnings("unchecked")
+				AMap<AString, ACell> outputSchema = (AMap<AString, ACell>) tool.get(Fields.OUTPUT_SCHEMA);
+				if (outputSchema != null) {
+					// A declared outputSchema obliges results to carry conforming
+					// structuredContent, which MCP permits only for objects —
+					// non-object outputs must make no schema claim.
+					assertEquals(Fields.OBJECT, outputSchema.get(Fields.TYPE),
+						"Tool " + toolName + " advertises a non-object outputSchema");
+					assertSchemaValid(outputSchema, toolName + ".outputSchema", VALID_TYPES, NON_SCHEMA_KEYS);
+				}
 			}
 		}
+	}
+
+	/**
+	 * Scalar-output tools make NO outputSchema claim (a declared outputSchema
+	 * obliges structuredContent, which MCP permits only for JSON objects);
+	 * object-output tools advertise their declared schema unmodified.
+	 */
+	@Test public void testOutputSchemaOnlyForObjectOutputs() {
+		AMap<AString, ACell> agentContext = findTool("agent_context");
+		assertNotNull(agentContext, "agent_context tool should be listed");
+		assertNull(agentContext.get(Fields.OUTPUT_SCHEMA),
+			"agent_context returns a string — it must not advertise an outputSchema");
+
+		AMap<AString, ACell> assetGet = findTool("asset_get");
+		assertNotNull(assetGet, "asset_get tool should be listed");
+		AMap<AString, ACell> out = RT.ensureMap(assetGet.get(Fields.OUTPUT_SCHEMA));
+		assertNotNull(out, "asset_get declares an object output — it must advertise it");
+		assertEquals(Fields.OBJECT, out.get(Fields.TYPE));
+	}
+
+	/** Finds a tool entry by MCP tool name across all adapters, or null. */
+	private AMap<AString, ACell> findTool(String name) {
+		for (String adapterName : venue.getAdapterNames()) {
+			var adapter = venue.getAdapter(adapterName);
+			if (adapter == null) continue;
+			AVector<AMap<AString, ACell>> tools = mcpApi.listTools(adapter);
+			for (long i = 0; i < tools.count(); i++) {
+				AMap<AString, ACell> tool = tools.get(i);
+				if (Strings.create(name).equals(tool.get(Fields.NAME))) return tool;
+			}
+		}
+		return null;
 	}
 
 	@SuppressWarnings("unchecked")

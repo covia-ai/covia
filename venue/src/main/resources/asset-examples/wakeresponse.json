@@ -4,7 +4,7 @@
 	"dateCreated": "2026-04-18T00:00:00Z",
 	"operation": {
 		"adapter": "test:wakeresponse",
-		"input": {},
-		"output": {}
+		"input": { "type": "object" },
+		"output": { "type": "object" }
 	}
 }

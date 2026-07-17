@@ -566,15 +566,29 @@ public class MCP extends McpServer {
 	private AMap<AString, ACell> buildToolEntry(AString toolName, AMap<AString, ACell> meta) {
 		AMap<AString, ACell> op = RT.ensureMap(RT.getIn(meta, Fields.OPERATION));
 		if (op == null) return null;
-		AMap<AString, ACell> inputSchema = ensureSchema(RT.getIn(op, Fields.INPUT));
-		AMap<AString, ACell> outputSchema = ensureSchema(RT.getIn(op, Fields.OUTPUT));
-		return Maps.of(
+		// MCP requires inputSchema on every tool; an op declaring none takes
+		// an unconstrained object. Declared schemas pass through as written —
+		// testToolSchemasValid enforces that authors declare type: object.
+		AMap<AString, ACell> declaredInput = RT.ensureMap(RT.getIn(op, Fields.INPUT));
+		AMap<AString, ACell> inputSchema = (declaredInput != null)
+			? prepareSchema(declaredInput)
+			: Maps.of(Fields.TYPE, Fields.OBJECT);
+		AMap<AString, ACell> entry = Maps.of(
 			Fields.NAME, toolName,
 			Fields.TITLE, RT.getIn(meta, Fields.NAME),
 			Fields.DESCRIPTION, RT.getIn(meta, Fields.DESCRIPTION),
-			Fields.INPUT_SCHEMA, inputSchema,
-			Fields.OUTPUT_SCHEMA, outputSchema
+			Fields.INPUT_SCHEMA, inputSchema
 		);
+		// A declared outputSchema obliges every result to carry conforming
+		// structuredContent, which MCP permits only for JSON objects (spec
+		// 2025-06-18) — so only genuinely object-typed declared outputs are
+		// advertised; scalar and undeclared outputs make no schema claim and
+		// arrive as text content.
+		AMap<AString, ACell> declaredOutput = RT.ensureMap(RT.getIn(op, Fields.OUTPUT));
+		if (declaredOutput != null && Fields.OBJECT.equals(declaredOutput.get(Fields.TYPE))) {
+			entry = entry.assoc(Fields.OUTPUT_SCHEMA, prepareSchema(declaredOutput));
+		}
+		return entry;
 	}
 
 	/**
@@ -592,16 +606,16 @@ public class MCP extends McpServer {
 	private static final AString SECRET_KEY = Strings.intern("secret");
 	private static final AString SECRET_FIELDS_KEY = Strings.intern("secretFields");
 
-	private AMap<AString, ACell> ensureSchema(AMap<AString, ACell> schema) {
-		if (schema == null) schema = Maps.empty();
-		// Strip Covia-specific non-standard keys recursively before exposing to MCP clients
+	/** Prepare a declared schema for MCP exposure: strip covia-internal keys
+	 *  and warn on structurally invalid schemas. Never invents or rewrites
+	 *  fields — what the op declares is what clients see; conformance of the
+	 *  declarations is test-enforced, not silently patched. */
+	private AMap<AString, ACell> prepareSchema(AMap<AString, ACell> schema) {
 		schema = stripKeys(schema);
-		// Validate schema structure — log warning for bad schemas
 		String err = JsonSchema.checkSchema(schema);
 		if (err != null) {
 			log.warn("Invalid MCP tool schema: {}", err);
 		}
-		schema = schema.assoc(Fields.TYPE, Fields.OBJECT);
 		return schema;
 	}
 
