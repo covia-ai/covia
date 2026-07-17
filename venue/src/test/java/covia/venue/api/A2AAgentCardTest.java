@@ -232,7 +232,20 @@ public class A2AAgentCardTest {
 		assertEquals(200, anon.statusCode(), anon.body());
 		Map<String, Object> parsed = JsonUtil.OBJECT_MAPPER.fromJson(anon.body(), Map.class);
 		assertNull(parsed.get("error"), "unexpected error: " + parsed.get("error"));
-		assertNotNull(extractTask(parsed));
+		Task anonTask = extractTask(parsed);
+		assertNotNull(anonTask);
+
+		// The anonymous sender polls its own task by id on the same endpoint.
+		// The lookup runs under the gated dispatch (owner) context, so a task
+		// minted through this endpoint stays visible to the remote sender —
+		// without this, the outbound a2a:send mirror can never observe
+		// completion of a task it created on a public agent.
+		Map<String, Object> polled = JsonUtil.OBJECT_MAPPER.fromJson(
+				post("/a2a/" + ownerDid + "/g/PubChat",
+						rpcEnvelope("pg1", "GetTask", new TaskQueryParams(anonTask.id(), null)), null).body(),
+				Map.class);
+		assertNull(polled.get("error"), "anonymous sender must be able to poll its task: " + polled.get("error"));
+		assertEquals(anonTask.id(), extractTask(polled).id());
 
 		// Public agent WITHOUT a2a.caps → discoverable, but an anonymous
 		// message/send is denied (card-only; the owner hasn't bounded a run).

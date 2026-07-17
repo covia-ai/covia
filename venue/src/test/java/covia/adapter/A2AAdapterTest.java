@@ -29,6 +29,49 @@ import covia.venue.api.A2ACodec;
  */
 class A2AAdapterTest {
 
+	// ==================== normaliseRpcUrl ====================
+
+	@Test
+	void normaliseRpcUrl_handlesFrontDoorAndPerAgentEndpoints() {
+		// Front door: bare base URL gets /a2a appended (trailing slash stripped).
+		assertEquals("http://venue:8080/a2a", A2AAdapter.normaliseRpcUrl("http://venue:8080"));
+		assertEquals("http://venue:8080/a2a", A2AAdapter.normaliseRpcUrl("http://venue:8080/"));
+		assertEquals("http://venue:8080/a2a", A2AAdapter.normaliseRpcUrl("http://venue:8080/a2a"));
+		// Per-agent endpoint (COG-14): used verbatim — appending /a2a would
+		// corrupt the agent address and 404 at the remote.
+		String agent = "http://venue:8080/a2a/did:key:z6MkTest/g/concierge";
+		assertEquals(agent, A2AAdapter.normaliseRpcUrl(agent));
+		assertEquals(agent, A2AAdapter.normaliseRpcUrl(agent + "/"));
+		// A reverse-proxied venue under a subpath keeps its endpoint too.
+		assertEquals("https://host/covia/a2a", A2AAdapter.normaliseRpcUrl("https://host/covia/a2a"));
+	}
+
+	// ==================== send via the internal path ====================
+
+	@Test
+	void send_invokableInternally_delegatesToJob() throws Exception {
+		// Regression (#85 delegation pattern, caught live by an agent calling
+		// a2a_send as a tool): send is implemented only in the Job-aware
+		// dispatch, so the zero-Job internal path must delegate to a real,
+		// owner-attributed Job — not throw "Unknown a2a sub-operation".
+		RequestContext ctx = RequestContext.of(Strings.create("did:test:a2a:internal"));
+		var engine = covia.venue.TestServer.ENGINE;
+		long before = engine.jobs().getJobs(ctx).count();
+		try {
+			engine.jobs().invokeInternal("v/ops/a2a/send",
+				Maps.of(Fields.URL, Strings.create("http://127.0.0.1:9/a2a"),
+					Fields.MESSAGE, coviaMessageRecord("internal hello")),
+				ctx).get(30, java.util.concurrent.TimeUnit.SECONDS);
+		} catch (java.util.concurrent.ExecutionException e) {
+			// Transport failure against the unreachable remote is expected —
+			// the regression is the internal path rejecting send outright.
+			String msg = String.valueOf(e.getCause().getMessage());
+			assertTrue(!msg.contains("Unknown a2a sub-operation"), msg);
+		}
+		assertTrue(engine.jobs().getJobs(ctx).count() > before,
+			"internal a2a:send must persist a mirror Job");
+	}
+
 	// ==================== getAgentCard ====================
 
 	@Test

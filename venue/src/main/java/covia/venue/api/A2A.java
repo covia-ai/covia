@@ -314,15 +314,18 @@ public class A2A extends ACoviaAPI {
 					doSendMessageToAgent(ctx, id, params, ref, dispatch);
 				}
 				case A2AMethods.GET_TASK_METHOD -> {
-					// A Task is addressed by its (global) id; the front-door handler
-					// looks it up caller-scoped, and the owner gate already ran, so
-					// the by-id handler is reused verbatim.
+					// A Task is addressed by its (global) id, and access was decided
+					// by the per-agent gate above — so the lookup runs under the
+					// gated DISPATCH context. For a public-with-caps agent that is
+					// the owner's identity: tasks minted through this endpoint stay
+					// pollable by their remote (anonymous) senders, who hold the
+					// unguessable task id as their credential.
 					TaskQueryParams params = parseParams(paramsRaw, TaskQueryParams.class);
-					doGetTask(ctx, id, params);
+					doGetTask(ctx, id, params, dispatch);
 				}
 				case A2AMethods.CANCEL_TASK_METHOD -> {
 					CancelTaskParams params = parseParams(paramsRaw, CancelTaskParams.class);
-					doCancelTask(ctx, id, params);
+					doCancelTask(ctx, id, params, dispatch);
 				}
 				case A2AMethods.GET_EXTENDED_AGENT_CARD_METHOD ->
 					// The access gate already ran; the agent's extended card is
@@ -402,11 +405,11 @@ public class A2A extends ACoviaAPI {
 				}
 				case A2AMethods.GET_TASK_METHOD -> {
 					TaskQueryParams params = parseParams(paramsRaw, TaskQueryParams.class);
-					doGetTask(ctx, id, params);
+					doGetTask(ctx, id, params, AuthMiddleware.callerContext(ctx));
 				}
 				case A2AMethods.CANCEL_TASK_METHOD -> {
 					CancelTaskParams params = parseParams(paramsRaw, CancelTaskParams.class);
-					doCancelTask(ctx, id, params);
+					doCancelTask(ctx, id, params, AuthMiddleware.callerContext(ctx));
 				}
 				case A2AMethods.SEND_STREAMING_MESSAGE_METHOD -> {
 					MessageSendParams params = parseParams(paramsRaw, MessageSendParams.class);
@@ -510,7 +513,9 @@ public class A2A extends ACoviaAPI {
 		writeResult(ctx, id, A2ACodec.toTask(jobData));
 	}
 
-	private void doGetTask(Context ctx, Object id, TaskQueryParams params) {
+	/** {@code rctx} is the context access was granted under: the caller for the
+	 *  front door, the gated dispatch context for a per-agent endpoint. */
+	private void doGetTask(Context ctx, Object id, TaskQueryParams params, RequestContext rctx) {
 		if (params == null || params.id() == null) {
 			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "id required");
 			return;
@@ -523,7 +528,6 @@ public class A2A extends ACoviaAPI {
 			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid task id");
 			return;
 		}
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		AMap<AString, ACell> jobData;
 		try {
@@ -540,7 +544,9 @@ public class A2A extends ACoviaAPI {
 		writeResult(ctx, id, A2ACodec.toTask(jobData));
 	}
 
-	private void doCancelTask(Context ctx, Object id, CancelTaskParams params) {
+	/** {@code rctx} is the context access was granted under: the caller for the
+	 *  front door, the gated dispatch context for a per-agent endpoint. */
+	private void doCancelTask(Context ctx, Object id, CancelTaskParams params, RequestContext rctx) {
 		if (params == null || params.id() == null) {
 			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "id required");
 			return;
@@ -553,7 +559,6 @@ public class A2A extends ACoviaAPI {
 			writeError(ctx, id, A2AErrorCodes.INVALID_PARAMS, "Invalid task id");
 			return;
 		}
-		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
 		AMap<AString, ACell> before;
 		try {

@@ -125,6 +125,15 @@ public class A2AAdapter extends AAdapter {
 			case "getAgentCard" -> fetchAgentCard(input);
 			case "getTask"      -> rpcCall(input, A2AMethods.GET_TASK_METHOD, idParams(input));
 			case "cancel"       -> rpcCall(input, A2AMethods.CANCEL_TASK_METHOD, idParams(input));
+			case "send" -> {
+				// Job-worthy (the #85 delegation pattern, caught live by an agent
+				// calling a2a_send as a tool): send exists only in the Job-aware
+				// dispatch — the mirror needs a real Job for status propagation,
+				// the cancel hook, and the remote task id. Delegate the zero-Job
+				// internal path to an owner-attributed Job rather than rejecting.
+				Job job = engine.jobs().invokeOperation(meta, input, ctx);
+				yield job.future().thenApply(x -> x);
+			}
 			default -> CompletableFuture.failedFuture(
 					new IllegalArgumentException("Unknown a2a sub-operation: " + subOp));
 		};
@@ -248,12 +257,22 @@ public class A2AAdapter extends AAdapter {
 				});
 	}
 
-	private static String normaliseRpcUrl(String url) {
+	static String normaliseRpcUrl(String url) {
 		if (url == null || url.isBlank()) {
 			throw new IllegalArgumentException("url must not be empty");
 		}
-		if (url.endsWith(A2A_RPC_PATH)) return url;
 		if (url.endsWith("/")) url = url.substring(0, url.length() - 1);
+		// Already an A2A endpoint — the venue front door (…/a2a) or a
+		// per-agent endpoint below it (…/a2a/<ownerDID>/g/<agentId>): use it
+		// verbatim. Appending /a2a to a per-agent endpoint would corrupt the
+		// agent address and 404 at the remote.
+		String path;
+		try {
+			path = URI.create(url).getPath();
+		} catch (IllegalArgumentException e) {
+			path = null; // not a parseable URI — fall through; the request build fails with the real error
+		}
+		if (path != null && (path.endsWith(A2A_RPC_PATH) || path.contains(A2A_RPC_PATH + "/"))) return url;
 		return url + A2A_RPC_PATH;
 	}
 
