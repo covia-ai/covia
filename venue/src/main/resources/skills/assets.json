@@ -1,0 +1,17 @@
+{
+	"name": "assets",
+	"description": "Store and retrieve content-addressed assets — immutable, hash-identified, shareable across venues. Load when you need versioned documents, shared definitions, or binary content.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Assets\nAn asset is an immutable value identified by the hash of its metadata map. Store once, reference anywhere.\n\n- store `{metadata, contentText?}` -> `{id}`. `metadata` is a JSON map (name, description, ...); `contentText` stores a UTF-8 body alongside. The id is a DID URL ending `/a/<hash>`.\n- get `{id}` -> metadata; content `{id}` -> the stored body; list shows your assets; pin `{id}` keeps a copy locally.\n- References resolve in many forms: bare 64-hex hash, `a/<hash>`, `/a/<hash>`, `did:...:/a/<hash>`.\n\nContent conventions (all inside metadata, covered by the asset's hash):\n- `content: {inline: \"text\"}` — small body directly in metadata, no upload.\n- `content: {sha256: ...}` — pins uploaded/external bytes (drift fails loudly).\n- `content: {dlfs: \"path\"}` — binds to a DLFS file; live unless sha256-pinned.\n\nAssets are immutable: to update, store a new version and re-point references. Use assets for anything shared, versioned, or cross-venue; use `w/` workspace for mutable state."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/asset/store",
+			"v/ops/asset/get",
+			"v/ops/asset/content",
+			"v/ops/asset/list",
+			"v/ops/asset/pin"
+		]
+	}
+}

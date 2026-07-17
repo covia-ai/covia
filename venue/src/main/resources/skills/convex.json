@@ -1,0 +1,14 @@
+{
+	"name": "convex",
+	"description": "Query and transact on the Convex lattice network (CVM) — balances, contracts, on-chain state. Load for anything blockchain-side.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Convex\n- query `{source, address?, peer?}` — read-only CVM execution, free, no signature. Example: `(balance #128)`.\n- transact `{source, address, seed?, peer?}` — a signed transaction that changes state; costs juice. Credentials via secret refs, never inline.\n\nWriting CVM (Convex Lisp) source:\n- NEVER use `import` in generated source — it mutates the account environment and wastes juice.\n- Single call: `(@convex.fungible/transfer #128 #13 100)` — `@name.path` resolves via CNS at runtime.\n- Multiple calls: `(let [fun @convex.fungible] (fun/transfer ...) (fun/balance ...))`.\n- Addresses are `#123` literals. The native coin is CVM: 1 CVM = 10^9 copper (all on-chain amounts are copper).\n\nPrefer query for anything read-only — transactions are irreversible and metered. Echo the exact source you executed when reporting results."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/convex/query",
+			"v/ops/convex/transact"
+		]
+	}
+}

@@ -58,10 +58,28 @@ public class SkillsAdapter extends AAdapter {
 			+ "skills with covia:write or asset:store.";
 	}
 
+	/**
+	 * The venue skill library — one skill per covia mechanism, materialised at
+	 * {@code v/skills/<name>} on boot. Bodies ship in {@code content.inline}
+	 * (one JSON resource per skill, no separate content upload). Agent
+	 * templates declare {@code skills: ["w/skills", "v/skills"]}, so
+	 * out-of-the-box agents see the whole library in their [Skills] index —
+	 * and a user's own {@code w/skills/<name>} shadows the venue skill of the
+	 * same name (first source wins).
+	 */
+	static final String[] LIBRARY = {
+		"workspace", "assets", "agents", "orchestration", "grid", "files",
+		"secrets", "scheduling", "memory", "convex", "mcp", "http", "auth",
+		"skills"
+	};
+
 	@Override
 	protected void installAssets() {
 		// A single op/tool (v/ops/skills) dispatched by the `command` input.
 		installAsset("skills", "/adapters/skills/skills.json");
+		for (String name : LIBRARY) {
+			installSkill(name, "/skills/" + name + ".json");
+		}
 	}
 
 	@Override

@@ -1,0 +1,13 @@
+{
+	"name": "memory",
+	"description": "Durable user memory — a numbered list of facts kept in view across conversations. Load to remember, revise or forget things about the user or your standing task.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Memory\nOne tool, dispatched by `command`:\n- `{command: \"remember\", text}` appends a new item.\n- `{command: \"update\", n, text}` replaces item n; `{command: \"forget\", n}` removes it. Numbers are the 1-based positions shown in the rendered list — the number you see is the number you edit.\n- `{command: \"recall\"}` renders the numbered list (rarely needed — operators usually pin it into context via a config.context assemble entry, so it is already in view).\n\nConventions:\n- Keep items short, factual, one fact per item. Revise rather than duplicate.\n- The list lives at `w/memory` by default (`path` overrides); every edit rewrites the whole list, so removals are durable.\n- Memory is per-user: acting as a user, you maintain THEIR memory."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/memory"
+		]
+	}
+}

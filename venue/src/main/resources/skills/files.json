@@ -1,0 +1,22 @@
+{
+	"name": "files",
+	"description": "File-style storage: root-jailed host/temp filesystems and per-user DLFS drives (decentralised, signed, WebDAV-mountable). Load for reading or writing file content rather than structured lattice values.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Files\nTwo mechanisms; pick by need:\n\n**file** — venue-configured roots (host directories or temp scratch), root-jailed:\n- roots lists what this venue offers; list/tree `{root, path}` browse; read `{root, path}` / write `{root, path, content}` move UTF-8 text; mkdir creates directories. Also under `v/ops/file/`: append, delete, stat.\n\n**dlfs** — YOUR decentralised drives: per-user, signed, replicated lattice filesystems (also mountable over WebDAV when the venue enables it):\n- list-drives shows yours; create-drive `{name}` makes one; read/write `{drive, path, content}` move file content; also under `v/ops/dlfs/`: list, tree, mkdir, append, delete, stat, delete-drive.\n\nChoosing storage:\n- Structured queryable state -> workspace (`w/`). Immutable shared values -> assets. File-shaped content, external tools, WebDAV access -> dlfs. Host-machine file exchange -> file roots.\n- An asset can bind its content to a DLFS file (`content: {dlfs: path}`) — live document, stable identity.\n- File ops act on the caller's authority: `file://` roots need explicit capability grants; dlfs drives are yours by ownership."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/file/roots",
+			"v/ops/file/list",
+			"v/ops/file/tree",
+			"v/ops/file/read",
+			"v/ops/file/write",
+			"v/ops/file/mkdir",
+			"v/ops/dlfs/list-drives",
+			"v/ops/dlfs/create-drive",
+			"v/ops/dlfs/read",
+			"v/ops/dlfs/write"
+		]
+	}
+}

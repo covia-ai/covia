@@ -1,0 +1,15 @@
+{
+	"name": "http",
+	"description": "Fetch web pages and call external HTTP APIs (SSRF-protected outbound requests). Load to pull data from, or push data to, the open web.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## HTTP / Web\n- get `{url, headers?}` fetches a resource; post `{url, body, headers?}` sends data. Responses carry status, headers and body text.\n- URL-encode query values with `v/ops/jvm/url-encode` before interpolating them.\n\nRules:\n- Requests are SSRF-protected and pass the venue operator's allow/block lists — a refusal names the policy, not a network fault.\n- Credentials in headers should come from secret refs (`s/<name>`), never inline tokens.\n- Prefer structured APIs over scraping; check a response's status before trusting its body; large bodies count against your context — extract what you need and store the rest (workspace or assets) rather than re-fetching.\n- For another VENUE, use grid ops (hash-verified, identity-carrying) — http is for the outside web."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}

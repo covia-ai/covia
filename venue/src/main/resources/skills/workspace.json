@@ -1,0 +1,20 @@
+{
+	"name": "workspace",
+	"description": "Read and write your durable lattice workspace — paths, namespaces, lists, deep structures. Load before storing or querying any per-user data.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Workspace\nYour durable, per-user data store. Paths are slash-separated and navigate deep structures: `w/reports/2026/q3`, vector indices `w/events/0`.\n\nNamespaces: `w/` general data, `o/` your published operations, `g/` your agents, `j/` jobs, `s/` secret names, `v/` the venue catalog (read-only).\n\n- read `{path}` -> `{value, exists}`; list `{path}` lists keys; inspect `{path}` shows structure without full data; slice `{path, offset?, limit?}` pages vectors/maps; aggregate `{path, depth?, groupBy?}` counts entries.\n- write `{path, value}` — any JSON value; deep paths auto-create parent maps; whole-value replace.\n- append `{path, value}` appends to a vector (creates it if absent).\n- delete `{path}` removes the entry durably (never re-materialises).\n\nRules:\n- Big values: inspect or slice BEFORE read (read has a size guard).\n- Copy any resolvable value into your workspace with `v/ops/covia/copy` `{from, to}`.\n- Op references anywhere in configs must be FULL catalog paths (`v/ops/covia/read`), never adapter shorthand (`covia:read`) — shorthand does not resolve."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/covia/read",
+			"v/ops/covia/write",
+			"v/ops/covia/list",
+			"v/ops/covia/slice",
+			"v/ops/covia/append",
+			"v/ops/covia/delete",
+			"v/ops/covia/inspect",
+			"v/ops/covia/aggregate"
+		]
+	}
+}

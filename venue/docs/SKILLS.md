@@ -327,7 +327,9 @@ covia_write path=w/skills/pdf-processing value="a/<hash-from-store>"
 agent_update agentId=Carol config={"skills": ["w/skills", "v/skills"]}
 ```
 
-Venue-installed skills ship as classpath resources registered by an adapter via `installSkill(name, resource)` and materialise at `v/skills/<name>` on boot (the `v/agents/templates` mechanism), content in CAS. No production starter skills ship in v1.
+Venue-installed skills ship as classpath resources registered by an adapter via `installSkill(name, resource)` and materialise at `v/skills/<name>` on boot (the `v/agents/templates` mechanism).
+
+**The venue skill library** ships this way (`SkillsAdapter.LIBRARY`, resources under `venue/src/main/resources/skills/`): one skill per covia mechanism — `workspace`, `assets`, `agents`, `orchestration`, `grid`, `files`, `secrets`, `scheduling`, `memory`, `convex`, `mcp`, `http`, `auth`, and the meta skill `skills` (how to discover, load and author skills). Bodies live in `content.inline`; each declares the ops it teaches. The standard agent templates (all but `minimal`) declare `skills: ["w/skills", "v/skills"]`, so out-of-the-box agents boot with the full library in their index and `skill_load` offered — `w/skills` first, so a user's own skill shadows a same-named venue skill. `SkillsLibraryTest` drift-guards the library: every declared tool must resolve on the venue.
 
 ---
 

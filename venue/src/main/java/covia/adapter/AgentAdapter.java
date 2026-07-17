@@ -188,6 +188,7 @@ public class AgentAdapter extends AAdapter {
 		// Discoverable via covia_list path=v/agents/templates and usable in
 		// agent:create via config="v/agents/templates/<name>".
 		installAgentTemplate("minimal",  "/agent-templates/minimal.json");
+		installAgentTemplate("skilled",  "/agent-templates/skilled.json");
 		installAgentTemplate("reader",   "/agent-templates/reader.json");
 		installAgentTemplate("worker",   "/agent-templates/worker.json");
 		installAgentTemplate("manager",  "/agent-templates/manager.json");

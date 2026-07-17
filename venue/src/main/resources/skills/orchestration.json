@@ -1,0 +1,19 @@
+{
+	"name": "orchestration",
+	"description": "Compose multi-step pipelines as orchestration assets, plus JSON/schema plumbing ops for shaping data between steps. Load to automate repeatable multi-op workflows.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Orchestration\nAn orchestration is an ASSET whose `operation.adapter` is `\"orchestrator\"`, with a `steps` array and a `result` map. Store it (assets skill), then invoke it like any operation — each step becomes a tracked sub-job.\n\nStep shape: `{op: \"v/ops/...\", name, input: <binding>}`. Bindings select data:\n- `[\"input\", \"key\"]` — from the pipeline input\n- `[0, \"field\"]` — from step 0's output\n- `[\"const\", <value>]` — a literal\n- a map of `{param: <binding>}` builds the step input per key.\n\n`result: {field: <binding>}` shapes the final output the same way. Declare `operation.input`/`output` JSON Schemas so callers (and agents) see the contract.\n\nGlue ops for ad-hoc shaping:\n- `v/ops/json/select` extract by path; `json/merge` deep-merge; `json/assoc` set a key; `json/cond` branch.\n- `v/ops/schema/validate` check a value against JSON Schema; `schema/coerce` bend types; `schema/infer` propose a schema from an example.\n\nSteps may invoke ANY op, including remote ones via grid ops (load the grid skill). Prefer idempotent steps — pipelines may be re-run."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/json/select",
+			"v/ops/json/merge",
+			"v/ops/json/assoc",
+			"v/ops/json/cond",
+			"v/ops/schema/validate",
+			"v/ops/schema/coerce",
+			"v/ops/schema/infer"
+		]
+	}
+}

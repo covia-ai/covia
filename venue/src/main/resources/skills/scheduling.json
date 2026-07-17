@@ -1,0 +1,16 @@
+{
+	"name": "scheduling",
+	"description": "Defer any operation to run later — at a time, or after a delay. Load for reminders, delayed follow-ups, or timed automation.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Scheduling\n- schedule `{operation, input, time? | after?}` — registers a deferred invocation of ANY catalog op. `time` is an absolute timestamp (ISO8601 or epoch ms); `after` is a delay in ms. Returns a schedule entry id.\n- list shows your pending schedules; cancel `{id}` removes one; trigger `{id}` fires it immediately.\n\nSemantics:\n- The scheduled call runs under YOUR authority, with the capabilities captured when you scheduled it — grant what the op will need at schedule time, never assume ambient authority later.\n- Schedules persist on the venue and survive restarts.\n- To schedule agent work, schedule `v/ops/agent/request` (a tracked task lands in the agent's queue when it fires).\n- Recurring behaviour: have the scheduled op (or agent) schedule the next occurrence — there is no cron syntax."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/scheduler/schedule",
+			"v/ops/scheduler/list",
+			"v/ops/scheduler/cancel",
+			"v/ops/scheduler/trigger"
+		]
+	}
+}
