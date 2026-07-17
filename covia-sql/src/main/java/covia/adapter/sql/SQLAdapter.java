@@ -201,11 +201,8 @@ public class SQLAdapter extends AAdapter {
 			+ " — or register '" + db + "' under adapters.sql.databases in venue config");
 		String scoped = sanitise(caller.toString()) + "__" + db;
 		// ONE convex-db instance for all venue-local databases, with per-user
-		// isolation via the database parameter INSIDE it. One instance = one
-		// store — and convex-db 0.8.8 mis-routes DML when several instances
-		// share a JVM (ConvexSchemaFactory.getTable resolves by first-match
-		// across all instances), so single-instance is also the correct
-		// posture today.
+		// isolation via the database parameter inside it: one instance = one
+		// store, so a venue's local SQL state lives in a single Etch file.
 		AString path = RT.ensureString(RT.getIn(cfg, "path"));
 		String url = (path != null)
 			? "jdbc:convex:file:" + path + ";database=" + scoped

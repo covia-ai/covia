@@ -37,14 +37,15 @@ public class SQLAdapterTest {
 	static void boot() {
 		// One operator-registered "external" connection for the shared-db
 		// test — itself a convex-db mem database, so the suite stays
-		// self-contained. Same INSTANCE as venue-local databases (distinct
-		// database inside it): convex-db 0.8.8 mis-routes DML when several
-		// instances share a JVM, so everything stays on one instance.
+		// self-contained. Deliberately a SEPARATE instance from the venue-local
+		// one: convex-db 0.8.9 fixed cross-instance DML routing
+		// (Convex-Dev/convex#645), and running the shared-db tests against a
+		// second instance keeps that fix regression-guarded from our side.
 		AMap<AString, ACell> config = Maps.of(Config.ADAPTERS, Maps.of(
 			Strings.create("sql"), Maps.of(
 				Strings.create("databases"), Maps.of(
 					Strings.create("shareddb"), Maps.of(
-						Strings.create("url"), Strings.create("jdbc:convex:mem:covia_sql;database=shared_ext_test"))))));
+						Strings.create("url"), Strings.create("jdbc:convex:mem:shared_ext;database=shared_ext_test"))))));
 		engine = Engine.createTemp(config);
 		engine.registerAdapter(new SQLAdapter());
 		Engine.addDemoAssets(engine);
@@ -118,6 +119,21 @@ public class SQLAdapterTest {
 		assertEquals("seven", RT.ensureVector(rows(out).get(0)).get(0).toString());
 	}
 
+	@Test
+	public void testSingleColumnTable() {
+		// Regression for Convex-Dev/convex#646 (fixed in convex-db 0.8.9):
+		// INSERT into a single-column table used to fail with a
+		// ClassCastException in DML execution.
+		exec(ctx, "db6", "CREATE TABLE tags (tag VARCHAR)");
+		exec(ctx, "db6", "INSERT INTO tags VALUES ('solo')");
+		exec(ctx, "db6", "INSERT INTO tags VALUES (?)", Strings.create("bound"));
+
+		ACell out = query(ctx, "db6", "SELECT tag FROM tags ORDER BY tag", null, null);
+		assertEquals(2, RT.ensureLong(RT.getIn(out, "count")).longValue());
+		assertEquals("bound", RT.ensureVector(rows(out).get(0)).get(0).toString());
+		assertEquals("solo", RT.ensureVector(rows(out).get(1)).get(0).toString());
+	}
+
 	// ========== Isolation and sharing ==========
 
 	@Test
@@ -125,8 +141,6 @@ public class SQLAdapterTest {
 		RequestContext alice = RequestContext.of(Strings.create("did:test:sql:iso-alice"));
 		RequestContext bob = RequestContext.of(Strings.create("did:test:sql:iso-bob"));
 
-		// Two columns — single-column INSERT is broken upstream in
-		// convex-db 0.8.8 (String → Object[] cast in DML execution)
 		exec(alice, "mine", "CREATE TABLE secrets (id INTEGER, k VARCHAR)");
 		exec(alice, "mine", "INSERT INTO secrets VALUES (1, 'alice-only')");
 
@@ -157,7 +171,6 @@ public class SQLAdapterTest {
 
 	@Test
 	public void testTruncationFlag() {
-		// Two columns — single-column INSERT is broken upstream (see above)
 		exec(ctx, "db3", "CREATE TABLE n (i INTEGER, tag VARCHAR)");
 		for (int i = 0; i < 5; i++) {
 			exec(ctx, "db3", "INSERT INTO n VALUES (" + i + ", 'row')");
