@@ -2031,8 +2031,21 @@ public class Engine {
 		return Maps.of(
 				 "assets",getAssets().size(),
 				 "users",usersMap != null ? usersMap.count() : 0,
-				 "ops",opCount
+				 "ops",opCount,
+				 "jobs",countJobs()
 				);
+	}
+
+	/** Total persisted jobs across all users — the {@code stats.jobs} count (#229). */
+	public long countJobs() {
+		AMap<AString, ACell> userData = getVenueState().users().getAll();
+		if (userData == null) return 0;
+		long total = 0;
+		for (var entry : userData.entrySet()) {
+			User user = getVenueState().users().get((AString) entry.getKey());
+			if (user != null) total += user.getJobs().count();
+		}
+		return total;
 	}
 
 	/**

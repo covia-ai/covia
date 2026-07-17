@@ -164,8 +164,13 @@ public class CoviaAPI extends ACoviaAPI {
 		// Add the external base URL
 		result=result.assoc(Fields.URL,RT.cvm(getExternalBaseUrl(ctx,null)));
 
-		// Add the stats
-		result=result.assoc(STATS_FIELD,engine().getStats());
+		// Add the stats, plus the caller's own job count (#229) — anonymous
+		// callers see the shared public identity's count.
+		AMap<AString,ACell> stats = engine().getStats();
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		stats = stats.assoc(Strings.intern("userJobs"),
+			RT.cvm(engine().jobs().getJobs(rctx).count()));
+		result=result.assoc(STATS_FIELD,stats);
 
 		buildResult(ctx,200,result);
 	}
@@ -972,17 +977,53 @@ public class CoviaAPI extends ACoviaAPI {
 	@OpenApi(path = ROUTE + "jobs",
 			methods = HttpMethod.GET,
 			tags = { "Covia"},
-			summary = "Get Covia jobs.")
+			summary = "List the caller's jobs — a paged {items, total, offset, limit} envelope of "
+				+ "job ids in chronological order (#229). The listing is always scoped to the "
+				+ "authenticated caller's own jobs.",
+			queryParams = {
+					@OpenApiParam(name = "offset", type = Integer.class,
+							description = "Starting index (default 0)."),
+					@OpenApiParam(name = "limit", type = Integer.class,
+							description = "Maximum ids returned (default first page of 1000; explicit max 1000).")
+			})
 	protected void getJobs(Context ctx) {
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		long offset=-1;
+		long limit=-1;
+		try {
+			String off = ctx.queryParam("offset");
+			if (off!=null) offset=Long.parseLong(off);
+			String lim = ctx.queryParam("limit");
+			if (lim!=null) {
+				limit=Long.parseLong(lim);
+				if (limit<0) throw new BadRequestResponse("Negative limit");
+			}
+		} catch (NumberFormatException e) {
+			buildError(ctx,400,"Invalid offset or limit");
+			return;
+		}
 		try {
 			Index<Blob, ACell> jobs = engine().jobs().getJobs(rctx);
-			// Return job IDs as a list
+			// Same envelope and paging rules as GET /assets (#229).
 			long n = jobs.count();
-			ArrayList<Object> result = new ArrayList<>((int) n);
-			for (long i = 0; i < n; i++) {
-				result.add(jobs.entryAt(i).getKey().toHexString());
+			long start = Math.max(0, offset);
+			long actualLimit;
+			if (limit<0) {
+				actualLimit = Math.min(Math.max(0, n-start), 1000);
+			} else {
+				if (limit>1000) throw new BadRequestResponse("Too many jobs requested: "+limit);
+				actualLimit = limit;
 			}
+			Map<Object,Object> result = new HashMap<>();
+			result.put(Fields.TOTAL, n);
+			result.put(Fields.OFFSET, start);
+			result.put(Fields.LIMIT, actualLimit);
+			long end = Math.min(n, start + actualLimit);
+			ArrayList<Object> items = new ArrayList<>((int) Math.max(0, end - start));
+			for (long i = start; i < end; i++) {
+				items.add(jobs.entryAt(i).getKey().toHexString());
+			}
+			result.put(Fields.ITEMS, items);
 			buildResult(ctx, result);
 		} catch (AuthException e) {
 			buildError(ctx, 403, e.getMessage());

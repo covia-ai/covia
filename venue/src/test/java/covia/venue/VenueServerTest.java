@@ -29,6 +29,7 @@ import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
 import convex.core.data.Keyword;
@@ -423,6 +424,49 @@ public class VenueServerTest {
 		HttpResponse<String> resp = future.get(10000, TimeUnit.MILLISECONDS);
 		assertTrue(resp.statusCode() == 200 || resp.statusCode() == 201,
 			"Should return 200 or 201, got " + resp.statusCode() + ": " + resp.body());
+	}
+
+	/**
+	 * GET /jobs returns the paged {items, total, offset, limit} envelope
+	 * (#229) — same contract as GET /assets — honouring limit.
+	 */
+	@Test
+	public void testJobsListingEnvelope() throws Exception {
+		// At least one job for the (anonymous → public) caller.
+		covia.invokeAndWait(Strings.create("v/test/ops/echo"),
+			Maps.of(Strings.create("x"), CVMLong.create(1)));
+
+		HttpClient client = HttpClient.newHttpClient();
+		HttpResponse<String> r = client.send(HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL + "/api/v1/jobs?limit=1"))
+			.GET().timeout(Duration.ofSeconds(10)).build(),
+			HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, r.statusCode(), r.body());
+		ACell body = JSON.parse(r.body());
+		assertEquals(1L, RT.ensureLong(RT.getIn(body, "limit")).longValue());
+		assertTrue(RT.ensureLong(RT.getIn(body, "total")).longValue() >= 1, r.body());
+		assertEquals(0L, RT.ensureLong(RT.getIn(body, "offset")).longValue());
+		AVector<?> items = (AVector<?>) RT.getIn(body, "items");
+		assertEquals(1, items.count(), "limit=1 returns exactly one id");
+		assertTrue(items.get(0) instanceof AString, "items are job id strings");
+	}
+
+	/** /status stats carry venue-wide and caller job counts (#229). */
+	@Test
+	public void testStatusStatsIncludeJobCounts() throws Exception {
+		covia.invokeAndWait(Strings.create("v/test/ops/echo"),
+			Maps.of(Strings.create("x"), CVMLong.create(2)));
+		HttpClient client = HttpClient.newHttpClient();
+		HttpResponse<String> r = client.send(HttpRequest.newBuilder()
+			.uri(new URI(BASE_URL + "/api/v1/status"))
+			.GET().timeout(Duration.ofSeconds(10)).build(),
+			HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, r.statusCode(), r.body());
+		ACell stats = RT.getIn(JSON.parse(r.body()), "stats");
+		assertTrue(RT.ensureLong(RT.getIn(stats, "jobs")).longValue() >= 1,
+			"stats.jobs counts venue-wide jobs");
+		assertTrue(RT.ensureLong(RT.getIn(stats, "userJobs")).longValue() >= 1,
+			"stats.userJobs counts the caller's jobs");
 	}
 
 	/**
