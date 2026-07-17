@@ -8,6 +8,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+_Nothing yet._
+
 ## [0.6.0] - 2026-07-17
 
 ### Added
