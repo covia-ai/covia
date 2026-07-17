@@ -25,6 +25,7 @@ import covia.exception.JobFailedException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 
 /**
@@ -135,11 +136,13 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	// Built-in context tool names
 	private static final String TOOL_CONTEXT_LOAD   = "context_load";
 	private static final String TOOL_CONTEXT_UNLOAD = "context_unload";
+	private static final String TOOL_SKILL_LOAD     = "skill_load";
 
 	/** Harness pseudo-tools this runtime provides — intercepted by the adapter,
 	 *  never dispatched as operations (see {@link AbstractLLMAdapter#dispatchTool}). */
 	static final java.util.Set<String> HARNESS_TOOL_NAMES = java.util.Set.of(
-		TOOL_COMPLETE_TASK, TOOL_FAIL_TASK, TOOL_CONTEXT_LOAD, TOOL_CONTEXT_UNLOAD);
+		TOOL_COMPLETE_TASK, TOOL_FAIL_TASK, TOOL_CONTEXT_LOAD, TOOL_CONTEXT_UNLOAD,
+		TOOL_SKILL_LOAD);
 
 	private static final AMap<AString, ACell> TOOL_DEF_CONTEXT_LOAD = Maps.of(
 		K_NAME, Strings.create(TOOL_CONTEXT_LOAD),
@@ -165,6 +168,18 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		(ACell) TOOL_DEF_CONTEXT_LOAD,
 		(ACell) TOOL_DEF_CONTEXT_UNLOAD
 	);
+
+	/** Offered only when the agent declares skill sources ({@code config.skills}).
+	 *  The adapter holds no skills semantics — loading delegates to
+	 *  {@link Skills#load} and rendering/activation to the context assembly. */
+	private static final AMap<AString, ACell> TOOL_DEF_SKILL_LOAD = Maps.of(
+		K_NAME, Strings.create(TOOL_SKILL_LOAD),
+		K_DESCRIPTION, Strings.create(
+			"Load a skill from the [Skills] index by name (or any skill by direct ref). "
+			+ "The result includes the skill's full instructions for immediate use; they "
+			+ "also stay in your context each turn until you context_unload the skill's "
+			+ "path. The skill's tools join your palette from your next step."),
+		K_PARAMETERS, SKILL_LOAD_PARAMS);
 
 	/** Task tools only available when there are outstanding tasks */
 	private static final AVector<ACell> TASK_TOOLS = (AVector<ACell>) Vectors.of(
@@ -209,10 +224,21 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	protected AMap<AString, ACell> buildInspectionInput(
 			AMap<AString, ACell> recordConfig, ACell state, ACell taskInput,
 			AMap<AString, ACell> session, RequestContext ctx) {
+		// Same scope-chain view as processChat (agent tier + session tier), so
+		// the inspected skills index carries the right (loaded) markers.
+		AMap<AString, ACell> configLoads = ContextChain.declaredLoads(
+			RT.getIn(recordConfig, Fields.LOADS), "config.loads");
+		ACell sessLoads = RT.getIn(session, Fields.LOADS);
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> sessionTier = (sessLoads instanceof AMap)
+			? (AMap<AString, ACell>) sessLoads : null;
+		AMap<AString, ACell> effectiveLoads = ContextChain.effective(configLoads, sessionTier);
+
 		ContextBuilder builder = new ContextBuilder(engine, ctx)
 			.withConfig(recordConfig)
 			.withSystemPrompt()
-			.withContextEntries();
+			.withContextEntries()
+			.withSkillsIndex(effectiveLoads);
 		// Session in scope: render its conversation exactly as a live
 		// transition would (same withFrameStack step as processChat), so the
 		// inspected context includes prior turns and tool-failure diagnostics.
@@ -292,6 +318,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			.withConfig(recordConfig)
 			.withSystemPrompt()                   // always fresh
 			.withContextEntries()                 // ephemeral (config.context)
+			.withSkillsIndex(effectiveLoads)      // ephemeral (config.skills index)
 			.withLoadedPaths(effectiveLoads)      // ephemeral (scope-chain view)
 			.withContextMap(effectiveLoads)       // ephemeral
 			.withFrameStack(sessionFrames)        // session.frames → LLM messages
@@ -320,6 +347,14 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// Task context is built dynamically per tool-loop iteration (not baked into
 		// history) so the LLM only sees outstanding tasks, not already-resolved ones.
 
+		// Offer skill_load only when the agent declares skill sources. The
+		// sources ride on the tool context as an opaque vector — all skills
+		// semantics live in Skills / the context assembly, not this adapter.
+		AVector<ACell> skillSources = Skills.sourcesOf(config);
+		if (skillSources.count() > 0) {
+			baseTools = (AVector<ACell>) Vectors.of((ACell) TOOL_DEF_SKILL_LOAD).concat(baseTools);
+		}
+
 		// Create tool context for built-in tool execution. Its loads slot is
 		// the SESSION tier (the innermost writable tier for this runtime);
 		// the agent tier rides along read-only for unload masking decisions.
@@ -328,6 +363,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			activeSessionTier, toolCallTimeoutMs);
 		toolCtx.outerLoads = configLoads;
 		toolCtx.sessionInScope = sessionInScope;
+		toolCtx.skillSources = skillSources;
+		toolCtx.fixedToolNames = fixedToolNames(baseTools);
 
 		// Invoke level 3 with tool call loop — returns all messages to append
 		// ctx (uncapped) for the L3 LLM call; capsCtx flows through toolCtx for tool dispatch
@@ -448,10 +485,15 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 				fullHistory = fullHistory.conj(taskMsg);
 			}
 
-			// Include task tools when tasks remain; context tools always available
+			// Include task tools when tasks remain; context tools always available.
+			// Loads-contributed tools (the generic "a loads entry may declare
+			// tools" rule) recompute when the loads tier changes, so a
+			// skill_load mid-loop activates its tools on the NEXT iteration of
+			// this same transition, and an unload retracts them.
+			AVector<ACell> loadTools = toolCtx.loadTools(engine);
 			AVector<ACell> tools = (taskMsg != null)
-				? (AVector<ACell>) TASK_TOOLS.concat(CONTEXT_TOOLS).concat(baseTools)
-				: (AVector<ACell>) CONTEXT_TOOLS.concat(baseTools);
+				? (AVector<ACell>) TASK_TOOLS.concat(CONTEXT_TOOLS).concat(baseTools).concat(loadTools)
+				: (AVector<ACell>) CONTEXT_TOOLS.concat(baseTools).concat(loadTools);
 
 			// Dispatch to level 3 — internal, no sub-Job created
 			ACell l3Result = invokeLevel3(llmOperation, config, fullHistory, tools, ctx);
@@ -582,6 +624,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// Built-in context tools (harness-level, like task tools)
 		if (TOOL_CONTEXT_LOAD.equals(toolName)) return handleContextLoad(input, toolCtx);
 		if (TOOL_CONTEXT_UNLOAD.equals(toolName)) return handleContextUnload(input, toolCtx);
+		if (TOOL_SKILL_LOAD.equals(toolName)) return handleSkillLoad(input, toolCtx);
 
 		// Cap-checked, timeout-bounded dispatch via the shared base path.
 		// Resolves config tools, falls through to grid dispatch for unknown names.
@@ -685,6 +728,33 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			Strings.create("loaded"), CVMBool.TRUE,
 			K_BUDGET, CVMLong.create(budget),
 			Strings.create("note"), Strings.create("Path will appear in context next turn. Use inspect for immediate reads."));
+	}
+
+	/**
+	 * {@code skill_load} — thin glue only: the adapter checks the tier is
+	 * writable, delegates ALL skill semantics to {@link Skills#load}, and
+	 * writes the returned entry into the loads tier exactly as
+	 * {@code context_load} does. Rendering and tool activation then follow
+	 * from the entry via the generic context assembly (ContextBuilder), so
+	 * this runtime carries no knowledge of what a skill IS.
+	 */
+	ACell handleSkillLoad(ACell input, ToolContext toolCtx) {
+		if (!toolCtx.sessionInScope) {
+			return Strings.create("Error: no session in scope — skill loads are per-conversation (#142)");
+		}
+		try {
+			// The effective view feeds content-identity dedup: the same skill
+			// reached via a different address must not load twice.
+			Skills.LoadOutcome out = Skills.load(engine, toolCtx.ctx, toolCtx.skillSources, input,
+				ContextChain.effective(toolCtx.outerLoads, toolCtx.loads));
+			if (out.entryMeta() != null) {
+				toolCtx.addLoad(out.path(), out.entryMeta());
+			}
+			return out.result();
+		} catch (RuntimeException e) {
+			String msg = (e.getMessage() != null) ? e.getMessage() : e.getClass().getSimpleName();
+			return Strings.create("Error: skill_load failed: " + msg);
+		}
 	}
 
 	ACell handleContextUnload(ACell input, ToolContext toolCtx) {
@@ -800,6 +870,20 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		return (val != null) ? val : defaultValue;
 	}
 
+	/** The names of every tool offered outside the loads mechanism this cycle
+	 *  (harness pseudo-tools + config/base tools) — loads-contributed tools
+	 *  dedup against these. */
+	private static java.util.Set<String> fixedToolNames(AVector<ACell> baseTools) {
+		java.util.Set<String> names = new java.util.HashSet<>(HARNESS_TOOL_NAMES);
+		if (baseTools != null) {
+			for (long i = 0; i < baseTools.count(); i++) {
+				AString n = RT.ensureString(RT.getIn(baseTools.get(i), K_NAME));
+				if (n != null) names.add(n.toString());
+			}
+		}
+		return names;
+	}
+
 	/**
 	 * Extracts the JSON Schema from a responseFormat config, if present.
 	 * responseFormat can be: "json" (no schema), "text" (no schema), or {name, schema} (has schema).
@@ -837,6 +921,33 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		 *  the transition output under {@code Fields.TOOL_FAILURES} so the
 		 *  framework can persist them (timeline + session turns, #211). */
 		AVector<ACell> toolFailures = Vectors.empty();
+		/** Skill sources from {@code config.skills} — opaque to this runtime
+		 *  ({@link Skills} owns the semantics). */
+		AVector<ACell> skillSources = Vectors.empty();
+		/** Tool names offered outside the loads mechanism (harness + config
+		 *  tools) — loads-contributed tools dedup against these. */
+		java.util.Set<String> fixedToolNames = java.util.Set.of();
+		private AMap<AString, ACell> loadToolsKey;
+		private AVector<ACell> loadToolsCache;
+
+		/**
+		 * Tools contributed by the effective loads — the generic "a loads
+		 * entry may declare tools" rule ({@link ContextBuilder#loadsToolDefs}).
+		 * Recomputed only when the writable tier changes (the maps are
+		 * immutable, so a reference compare suffices): a load activates its
+		 * tools on the next loop iteration, an unload retracts them. Dispatch
+		 * routes accumulate into {@link #configToolMap}.
+		 */
+		AVector<ACell> loadTools(Engine engine) {
+			if (loads == loadToolsKey && loadToolsCache != null) return loadToolsCache;
+			java.util.Map<String, AString> routes = new java.util.HashMap<>();
+			AVector<ACell> defs = ContextBuilder.loadsToolDefs(engine, ctx,
+				ContextChain.effective(outerLoads, loads), fixedToolNames, routes);
+			configToolMap.putAll(routes);
+			loadToolsKey = loads;
+			loadToolsCache = defs;
+			return defs;
+		}
 
 		ToolContext(AString agentId, RequestContext ctx, AVector<ACell> tasks, AVector<ACell> pending,
 				Map<String, AString> configToolMap, AMap<AString, ACell> loads) {
@@ -850,7 +961,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			this.ctx = ctx;
 			this.tasks = tasks;
 			this.pending = pending;
-			this.configToolMap = (configToolMap != null) ? configToolMap : Map.of();
+			// Mutable default: loadTools accumulates dispatch routes here.
+			this.configToolMap = (configToolMap != null) ? configToolMap : new java.util.HashMap<>();
 			this.loads = (loads != null) ? loads : Maps.empty();
 			this.toolCallTimeoutMs = toolCallTimeoutMs;
 		}

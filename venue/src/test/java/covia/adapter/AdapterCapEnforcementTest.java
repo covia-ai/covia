@@ -110,6 +110,25 @@ public class AdapterCapEnforcementTest {
 		assertFalse(capDenied(direct("asset", "store", Maps.empty(), unrestricted)));
 	}
 
+	// ===================== skills (read-only discovery) =====================
+
+	@Test public void skillsListAllowedUnderReadOnly() {
+		// Default sources (w/skills + v/skills) sit inside the owner-scoped
+		// read grant — venue skills are publicly discoverable.
+		assertFalse(capDenied(direct("skills", "manage", m("command", "list"), readOnly)));
+	}
+	@Test public void skillsReadByAssetRefAllowedUnderReadOnly() {
+		// asset/read is in the ceiling; a missing asset errors but is not a denial.
+		assertFalse(capDenied(direct("skills", "manage",
+			m("command", "read", "ref", "a/" + "00".repeat(32)), readOnly)));
+	}
+	@Test public void skillsListCrossUserSourceDeniedUnderReadOnly() {
+		AMap<AString, ACell> input = m("command", "list").assoc(
+			Strings.create("sources"),
+			convex.core.data.Vectors.of(Strings.create("did:key:zSomeoneElse/w/skills")));
+		assertTrue(capDenied(direct("skills", "manage", input, readOnly)));
+	}
+
 	// ===================== file (scheme-qualified) =====================
 
 	@Test public void fileWriteDeniedUnderReadOnly() {

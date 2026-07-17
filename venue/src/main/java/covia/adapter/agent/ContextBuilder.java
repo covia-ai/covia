@@ -64,6 +64,7 @@ public class ContextBuilder {
 	private static final AString K_TOOLS         = Strings.intern("tools");
 	private static final AString K_DEFAULT_TOOLS = Strings.intern("defaultTools");
 	private static final AString K_CONTEXT       = Strings.intern("context");
+	private static final AString K_SKILLS        = Strings.intern("skills");
 	private static final AString K_CAPS          = Strings.intern("caps");
 	private static final AString K_ROLE          = Strings.intern("role");
 	private static final AString K_CONTENT       = Strings.intern("content");
@@ -403,6 +404,65 @@ public class ContextBuilder {
 			+ Types.get(raw) + " — fix the agent config");
 	}
 
+	/** Preamble ahead of the skills index lines — tells the model what the
+	 *  block is and how to act on it (see venue/docs/SKILLS.md §4.2). */
+	private static final String SKILLS_PREAMBLE =
+		"[Skills]\n"
+		+ "Named skill packs you can load with skill_load({name: \"...\"}). Loading injects the\n"
+		+ "skill's instructions into your context (persists across turns; unload with\n"
+		+ "context_unload) and adds its tools to your palette.\n";
+
+	/**
+	 * Injects the skills index — one compact system message listing the
+	 * skills discoverable from the agent's {@code config.skills} sources,
+	 * with a {@code (loaded)} marker against skills already in effective
+	 * context (see venue/docs/SKILLS.md §4). Resolved fresh each turn, like
+	 * every other ephemeral section. No-op when the agent declares no skill
+	 * sources or the sources yield nothing; a malformed {@code config.skills}
+	 * throws (same rule as {@code config.context} — a configuration error
+	 * must fail loudly, not vanish).
+	 *
+	 * @param effectiveLoads Effective loads for the {@code (loaded)} marker;
+	 *        null when no loads tier is in scope
+	 */
+	public ContextBuilder withSkillsIndex(AMap<AString, ACell> effectiveLoads) {
+		if (config == null) return this;
+		AVector<ACell> sources = skillSources(config.get(K_SKILLS));
+		if (sources.count() == 0) return this;
+
+		String index = Skills.renderIndex(engine, ctx, sources, effectiveLoads);
+		if (index == null) return this;                      // nothing anywhere → no block
+
+		ACell msg = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT,
+			Strings.create(SKILLS_PREAMBLE + index));
+		messages = messages.conj(msg);
+		trackMessage(msg);
+		return this;
+	}
+
+	/**
+	 * Coerces a {@code config.skills} value to a vector of source ref strings.
+	 * Absent → empty (no skills for this agent). A non-vector value or a
+	 * non-string entry is a configuration error and throws — mirroring
+	 * {@link #contextVector}'s malformed-shape rule.
+	 */
+	@SuppressWarnings("unchecked")
+	public static AVector<ACell> skillSources(ACell raw) {
+		if (raw == null) return Vectors.empty();
+		if (!(raw instanceof AVector)) {
+			throw new RuntimeException("config.skills must be an array of skill source refs, got "
+				+ Types.get(raw) + " — fix the agent config");
+		}
+		AVector<ACell> sources = (AVector<ACell>) raw;
+		for (long i = 0; i < sources.count(); i++) {
+			if (RT.ensureString(sources.get(i)) == null) {
+				throw new RuntimeException("config.skills entries must be source ref strings, got "
+					+ Types.get(sources.get(i)) + " — fix the agent config");
+			}
+		}
+		return sources;
+	}
+
 	/**
 	 * Resolves loaded paths and returns them as a vector of messages.
 	 * Does not modify builder state — suitable for GoalTreeAdapter which
@@ -414,6 +474,7 @@ public class ContextBuilder {
 
 		ContextLoader loader = new ContextLoader(engine);
 		AVector<ACell> result = Vectors.empty();
+		java.util.Set<convex.core.data.Hash> seenSkillIds = new java.util.HashSet<>();
 
 		for (var entry : loads.entrySet()) {
 			AString path = entry.getKey();
@@ -426,24 +487,23 @@ public class ContextBuilder {
 			}
 
 			loader.setCellExplorer(new CellExplorer(entryBudget));
-			ACell msg = loader.resolveEntry(path, ctx);
-			if (msg != null) {
-				result = result.conj(msg);
-			}
+			result = (AVector<ACell>) result.concat(renderLoadEntry(loader, path, meta, seenSkillIds));
 		}
 		return result;
 	}
 
 	/**
-	 * Resolves dynamically loaded paths from the agent's state.loads map.
+	 * Resolves dynamically loaded paths from the loads scope chain.
 	 * Each entry is resolved fresh using ContextLoader with per-entry CellExplorer budget.
-	 * Entries that exceed remaining budget or fail to resolve are silently skipped.
+	 * Data entries that exceed remaining budget or fail to resolve are silently
+	 * skipped; skill entries fail VISIBLY (see {@link #renderLoadEntry}).
 	 */
 	@SuppressWarnings("unchecked")
 	public ContextBuilder withLoadedPaths(AMap<AString, ACell> loads) {
 		if (loads == null || loads.count() == 0) return this;
 
 		ContextLoader loader = new ContextLoader(engine);
+		java.util.Set<convex.core.data.Hash> seenSkillIds = new java.util.HashSet<>();
 
 		for (var entry : loads.entrySet()) {
 			AString path = entry.getKey();
@@ -455,16 +515,116 @@ public class ContextBuilder {
 				entryBudget = (int) Math.max(MIN_ENTRY_BUDGET, Math.min(l.longValue(), 10_000));
 			}
 
-			if (entryBudget > getRemaining()) continue;
+			if (entryBudget > getRemaining()) {
+				// Data loads skip silently under budget pressure; a skill the
+				// agent loaded must not silently vanish — it changes behaviour.
+				if (Skills.isSkillEntry(meta)) {
+					ACell notice = Skills.skillErrorMessage(loadLabel(path, meta),
+						"context budget exhausted — unload something or raise the budget");
+					messages = messages.conj(notice);
+					trackMessage(notice);
+				}
+				continue;
+			}
 
 			loader.setCellExplorer(new CellExplorer(entryBudget));
-			ACell msg = loader.resolveEntry(path, ctx);
-			if (msg != null) {
+			AVector<ACell> rendered = renderLoadEntry(loader, path, meta, seenSkillIds);
+			for (long i = 0; i < rendered.count(); i++) {
+				ACell msg = rendered.get(i);
 				messages = messages.conj(msg);
 				trackMessage(msg);
 			}
 		}
 		return this;
+	}
+
+	/**
+	 * Renders one loads entry to its context messages. This is the single
+	 * place that knows about entry KINDS — adapters just pass loads through,
+	 * so the same assembly can host a variety of additions:
+	 * <ul>
+	 *   <li><b>Skill entries</b> ({@code skill: true} — SKILLS.md §6): the
+	 *       skill re-resolves from the entry key and renders as
+	 *       {@code [Skill: <name>]} + body verbatim, followed by the skill's
+	 *       own context entries. Failures are <b>visible</b> — a skill the
+	 *       agent loaded must not silently disappear.</li>
+	 *   <li><b>Everything else</b>: the standard context-entry resolution of
+	 *       the key (absent → skipped, errors → ContextLoader's visible
+	 *       element).</li>
+	 * </ul>
+	 */
+	private AVector<ACell> renderLoadEntry(ContextLoader loader, AString path,
+			AMap<AString, ACell> meta, java.util.Set<convex.core.data.Hash> seenSkillIds) {
+		if (Skills.isSkillEntry(meta)) {
+			try {
+				Skills.ResolvedSkill skill = Skills.resolveRef(engine, ctx, path);
+				// Content-identity dedup across the render pass: skills are
+				// content-addressed, so the same skill loaded under two
+				// addresses (or at two tiers) renders its body once. The
+				// identity is LIVE (from this resolution — cell hashes are
+				// memoised), accumulated transiently; nothing persisted.
+				if (skill.id() != null && !seenSkillIds.add(skill.id())) {
+					return Vectors.empty();
+				}
+				AVector<ACell> msgs = Vectors.of(
+					Skills.renderSkillMessage(skill.name(), skill.displayBody()));
+				if (skill.contextEntries().count() > 0) {
+					msgs = msgs.concat(loader.resolve(skill.contextEntries(), ctx));
+				}
+				return msgs;
+			} catch (RuntimeException e) {
+				return Vectors.of(Skills.skillErrorMessage(loadLabel(path, meta),
+					ContextLoader.rootMessage(e)));
+			}
+		}
+		ACell msg = loader.resolveEntry(path, ctx);
+		return (msg != null) ? Vectors.of((ACell) msg) : Vectors.empty();
+	}
+
+	/** An entry's display label: its {@code label} else its path. */
+	private static String loadLabel(AString path, AMap<AString, ACell> meta) {
+		AString label = RT.ensureString(meta.get(Strings.intern("label")));
+		return (label != null) ? label.toString() : path.toString();
+	}
+
+	/**
+	 * Resolves the tool declarations carried by loads entries into LLM tool
+	 * definitions — the generic <b>"a loads entry may contribute tools to the
+	 * palette"</b> rule. Any entry whose spec carries a {@code tools} vector
+	 * of operation refs contributes (skills are the first producer — SKILLS.md
+	 * §5.3 — but the mechanism is kind-agnostic). Definitions resolve fresh
+	 * (same liveness as {@code config.tools}), deduplicated against
+	 * {@code excludeNames} and each other; {@code toolMap} gains the dispatch
+	 * routes of the returned defs.
+	 */
+	@SuppressWarnings("unchecked")
+	public static AVector<ACell> loadsToolDefs(Engine engine, RequestContext ctx,
+			AMap<AString, ACell> effectiveLoads, java.util.Set<String> excludeNames,
+			Map<String, AString> toolMap) {
+		AVector<ACell> added = Vectors.empty();
+		if (effectiveLoads == null || effectiveLoads.count() == 0) return added;
+
+		java.util.Set<String> names = new java.util.HashSet<>();
+		if (excludeNames != null) names.addAll(excludeNames);
+
+		ContextBuilder resolver = new ContextBuilder(engine, ctx);
+		for (var entry : effectiveLoads.entrySet()) {
+			ACell spec = entry.getValue();
+			if (!(spec instanceof AMap)) continue;
+			AVector<ACell> ops = RT.ensureVector(((AMap<AString, ACell>) spec).get(K_TOOLS));
+			if (ops == null || ops.count() == 0) continue;
+			Map<String, AString> newMap = new HashMap<>();
+			AVector<ACell> defs = resolver.buildConfigTools(ops, newMap);
+			for (long i = 0; i < defs.count(); i++) {
+				ACell def = defs.get(i);
+				AString n = RT.ensureString(RT.getIn(def, K_NAME));
+				if (n == null || !names.add(n.toString())) continue;
+				added = added.conj(def);
+				AString route = newMap.get(n.toString());
+				if (route != null) toolMap.put(n.toString(), route);
+			}
+		}
+		return added;
 	}
 
 	/**
@@ -491,7 +651,9 @@ public class ContextBuilder {
 				AString label = RT.ensureString(meta.get(Strings.intern("label")));
 				sb.append("  ").append(path);
 				if (label != null) sb.append(" — ").append(label);
-				sb.append(" [").append(budget).append("B]\n");
+				sb.append(" [").append(budget).append("B]");
+				if (Skills.isSkillEntry(meta)) sb.append(" (skill)");
+				sb.append('\n');
 			}
 		}
 

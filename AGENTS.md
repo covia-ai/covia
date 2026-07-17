@@ -131,6 +131,7 @@ Adapter Layer
     ├── VaultAdapter      — health vault (thin wrapper over DLFS)
     ├── SecretAdapter     — secret store operations (set, extract; removal via covia:delete s/<name>)
     ├── UserMemoryAdapter — per-user agent memory (recall/remember/update/forget over one LWW vector, default w/memory)
+    ├── SkillsAdapter     — agent skills discovery (list/read over named instruction+tool bundles; see venue/docs/SKILLS.md)
     ├── UCANAdapter       — capability token issuance
     ├── SchedulerAdapter  — deferred grid-op invocation (schedule, cancel, trigger, list)
     └── TestAdapter       — echo, delay, error simulation, chat

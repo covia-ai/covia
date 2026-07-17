@@ -64,12 +64,153 @@ public class GoalTreeAdapterTest {
 		assertNotNull(job.getStatus());
 	}
 
+	// ========== skill_load in the goal-tree loop (SKILLS.md §5, §7) ==========
+
+	/** Fixture: the 'alpha' skill (body + one tool) and the probe value its
+	 *  tool reads — same shape as LLMAgentAdapterTest's. */
+	private void writeAlphaSkill() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/skills/alpha",
+				"value", Maps.of(
+					"description", "Alpha skill",
+					"content", Maps.of("inline", "Use covia_read on w/probe."),
+					"skill", Maps.of("tools", Vectors.of(Strings.create("v/ops/covia/read"))))),
+			ALICE).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/probe", "value", "probe-value"), ALICE).awaitResult(5000);
+	}
+
+	@Test
+	public void testSkillAdoptionDuringGoalRun() {
+		// The operative-loop proof for goaltree: within one transition the
+		// mock loads the skill (written to the FRAME tier), the palette gains
+		// covia_read on the next iteration, and the tool dispatches.
+		writeAlphaSkill();
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "skill-goal-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("v/test/ops/skillllm"),
+				Strings.create("skills"), Vectors.of(Strings.create("w/skills"))),
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Strings.create("content"), Strings.create("use the alpha skill"))));
+
+		ACell output = adapter.processGoal(null, ALICE, input);
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
+		assertNotNull(response);
+		assertTrue(response.toString().contains("SKILL_TOOL_RESULT"), response.toString());
+		assertTrue(response.toString().contains("probe-value"), response.toString());
+
+		// The skill entry landed on the root FRAME's loads tier.
+		AVector<ACell> frames = RT.ensureVector(RT.getIn(output, Fields.FRAMES));
+		assertNotNull(frames);
+		AMap<AString, ACell> rootLoads = GoalTreeContext.getLoads(
+			(AMap<AString, ACell>) frames.get(0));
+		assertTrue(Skills.isSkillEntry(rootLoads.get(Strings.create("w/skills/alpha"))),
+			"skill entry must persist on the frame tier: " + rootLoads);
+	}
+
+	@Test
+	public void testSubgoalInheritsAndMasksSkillLoads() {
+		// Frame-tier scoping: a child frame inherits the parent's skill entry
+		// (copy-on-push), contributes its tools, and can mask it locally with
+		// a tombstone without touching the parent.
+		writeAlphaSkill();
+		Skills.ResolvedSkill skill = Skills.resolveRef(engine, ALICE, Strings.create("w/skills/alpha"));
+		AMap<AString, ACell> skillMeta = Skills.buildSkillLoadMeta(2000, skill);
+
+		AMap<AString, ACell> parent = GoalTreeContext.createFrame("root goal");
+		parent = GoalTreeContext.addLoad(parent, Strings.create("w/skills/alpha"), skillMeta);
+
+		// Copy-on-push inheritance (the subgoal path: child seeded from parent loads)
+		AMap<AString, ACell> child = GoalTreeContext.createFrame("sub goal",
+			GoalTreeContext.getLoads(parent));
+		AMap<AString, ACell> childLoads = GoalTreeContext.getLoads(child);
+		assertTrue(Skills.isSkillEntry(childLoads.get(Strings.create("w/skills/alpha"))));
+
+		// The inherited entry contributes tools in the child's effective view
+		java.util.Map<String, AString> routes = new java.util.HashMap<>();
+		AVector<ACell> defs = ContextBuilder.loadsToolDefs(engine, ALICE,
+			ContextChain.effective(childLoads), java.util.Set.of(), routes);
+		assertEquals(1, defs.count());
+		assertEquals("covia_read", RT.getIn(defs.get(0), Strings.intern("name")).toString());
+
+		// Masking: unload in the child writes a tombstone; the child's
+		// effective view loses body AND tools, the parent is untouched.
+		AMap<AString, ACell> masked = ContextChain.unload(
+			childLoads, GoalTreeContext.getLoads(parent), Strings.create("w/skills/alpha"));
+		assertNotNull(masked);
+		AMap<AString, ACell> childEffective = ContextChain.effective(
+			GoalTreeContext.getLoads(parent), masked);
+		assertEquals(0, childEffective.count());
+		assertEquals(0, ContextBuilder.loadsToolDefs(engine, ALICE,
+			childEffective, java.util.Set.of(), new java.util.HashMap<>()).count());
+		assertTrue(Skills.isSkillEntry(
+			GoalTreeContext.getLoads(parent).get(Strings.create("w/skills/alpha"))),
+			"parent tier untouched by the child's mask");
+	}
+
+	@Test
+	public void testMoreToolsMidLoopAdoption() {
+		// The pre-existing more_tools mechanism, exercised end-to-end for the
+		// first time: the mock adds v/test/ops/echo mid-run, sees it offered
+		// on the next iteration, calls it, and reports the result. Also
+		// exercises the loads-tools dedup baseline refresh on baseTools growth.
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "more-tools-agent",
+			AgentState.KEY_STATE, null,
+			AgentState.KEY_CONFIG, Maps.of(
+				Strings.create("llmOperation"), Strings.create("v/test/ops/moretoolsllm"),
+				Strings.create("tools"), Vectors.of(Strings.create("more_tools"))),
+			Fields.MESSAGES, Vectors.of(
+				(ACell) Maps.of(Strings.create("content"), Strings.create("get more tools"))));
+
+		ACell output = adapter.processGoal(null, ALICE, input);
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
+		assertNotNull(response);
+		assertTrue(response.toString().contains("MORE_TOOLS_RESULT"), response.toString());
+		assertTrue(response.toString().contains("mid-loop"), response.toString());
+	}
+
+	// ========== Skills index (config.skills — SKILLS.md §4) ==========
+
+	@Test
+	public void testSkillsIndexInFirstIterationContext() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/skills/alpha",
+				"value", Maps.of("description", "Alpha skill")),
+			ALICE).awaitResult(5000);
+
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		AMap<AString, ACell> config = Maps.of(
+			"llmOperation", "v/test/ops/llm",
+			"skills", Vectors.of(Strings.create("w/skills")));
+
+		AMap<AString, ACell> l3 = adapter.buildFirstIterationL3Input(config, null, null, ALICE);
+		AVector<ACell> messages = RT.ensureVector(RT.getIn(l3, Fields.MESSAGES));
+		assertNotNull(messages);
+		boolean found = false;
+		for (long i = 0; i < messages.count(); i++) {
+			AString c = RT.ensureString(RT.getIn(messages.get(i), "content"));
+			if (c != null && c.toString().contains("[Skills]")
+					&& c.toString().contains("- alpha — Alpha skill")) {
+				found = true;
+				break;
+			}
+		}
+		assertTrue(found, "skills index should be injected as a system message");
+	}
+
 	// ========== Tool definitions ==========
 
 	@Test
 	public void testHarnessToolRegistry() {
-		// All 7 harness tools are in the registry
-		assertEquals(7, GoalTreeAdapter.HARNESS_TOOL_REGISTRY.size());
+		// All 8 harness tools are in the registry
+		assertEquals(8, GoalTreeAdapter.HARNESS_TOOL_REGISTRY.size());
 		assertTrue(GoalTreeAdapter.isHarnessTool("subgoal"));
 		assertTrue(GoalTreeAdapter.isHarnessTool("complete"));
 		assertTrue(GoalTreeAdapter.isHarnessTool("fail"));
@@ -77,6 +218,7 @@ public class GoalTreeAdapterTest {
 		assertTrue(GoalTreeAdapter.isHarnessTool("context_load"));
 		assertTrue(GoalTreeAdapter.isHarnessTool("context_unload"));
 		assertTrue(GoalTreeAdapter.isHarnessTool("more_tools"));
+		assertTrue(GoalTreeAdapter.isHarnessTool("skill_load"));
 		assertFalse(GoalTreeAdapter.isHarnessTool("covia_read"));
 
 		// Each definition has name, description, parameters

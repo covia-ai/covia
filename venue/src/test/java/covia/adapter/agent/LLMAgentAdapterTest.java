@@ -466,6 +466,296 @@ public class LLMAgentAdapterTest {
 		assertTrue(response.toString().contains("Tool returned:"));
 	}
 
+	// ========== Skills index (config.skills — SKILLS.md §4) ==========
+
+	@Test
+	public void testSkillsIndexInContext() {
+		// Fixture skill in the caller's workspace
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/skills/alpha",
+				"value", Maps.of("description", "Alpha skill")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		AMap<AString, ACell> config = Maps.of(
+			"llmOperation", "v/test/ops/llm",
+			"skills", Vectors.of(Strings.create("w/skills")));
+
+		// Inspection uses the same builder chain as processChat — the index
+		// must appear as a system message in the assembled L3 input.
+		AMap<AString, ACell> l3 = adapter.buildInspectionInput(
+			config, null, null, null, RequestContext.of(ALICE_DID));
+		AVector<ACell> messages = RT.ensureVector(RT.getIn(l3, Fields.MESSAGES));
+		assertNotNull(messages);
+		boolean found = false;
+		for (long i = 0; i < messages.count(); i++) {
+			AString c = RT.ensureString(RT.getIn(messages.get(i), "content"));
+			if (c != null && c.toString().contains("[Skills]")
+					&& c.toString().contains("- alpha — Alpha skill")) {
+				found = true;
+				break;
+			}
+		}
+		assertTrue(found, "skills index should be injected as a system message");
+	}
+
+	@Test
+	public void testMalformedConfigSkillsFailsTransition() {
+		// A malformed config.skills is a configuration error — the transition
+		// fails loudly rather than silently dropping the skills feature.
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "bad-skills-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"skills", "w/skills"),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "hello")));
+
+		RuntimeException e = assertThrows(RuntimeException.class,
+			() -> adapter.processChat(RequestContext.of(ALICE_DID), input));
+		assertTrue(e.getMessage().contains("config.skills"), e.getMessage());
+	}
+
+	// ========== skill_load (SKILLS.md §5) ==========
+
+	/** Fixture: the 'alpha' skill (body + one tool) and the probe value its
+	 *  tool reads. */
+	private void writeAlphaSkill() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/skills/alpha",
+				"value", Maps.of(
+					"description", "Alpha skill",
+					"content", Maps.of("inline", "Use covia_read on w/probe."),
+					"skill", Maps.of("tools", Vectors.of(Strings.create("v/ops/covia/read"))))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/probe", "value", "probe-value"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+	}
+
+	private ToolContext skillToolCtx() {
+		ToolContext ctx = new ToolContext(Strings.create("agent"),
+			RequestContext.of(ALICE_DID), null, null, null, null);
+		ctx.skillSources = Vectors.of((ACell) Strings.create("w/skills"));
+		return ctx;
+	}
+
+	@Test public void testSkillLoadHandler() {
+		writeAlphaSkill();
+		ToolContext ctx = skillToolCtx();
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		ACell result = adapter.handleSkillLoad(Maps.of("name", "alpha"), ctx);
+		assertTrue(RT.getIn(result, "loaded") != null, result.toString());
+		assertEquals("Use covia_read on w/probe.", RT.getIn(result, "body").toString());
+		AVector<ACell> toolNames = RT.ensureVector(RT.getIn(result, "tools"));
+		assertEquals(1, toolNames.count());
+		assertEquals("covia_read", toolNames.get(0).toString());
+
+		// The loads entry: skill-flagged, budgeted, denormalised tool refs.
+		AMap<AString, ACell> meta = (AMap<AString, ACell>) ctx.loads.get(Strings.create("w/skills/alpha"));
+		assertNotNull(meta);
+		assertTrue(Skills.isSkillEntry(meta));
+		assertEquals(2000L, ((CVMLong) meta.get(Strings.create("budget"))).longValue());
+		assertEquals("alpha", meta.get(Strings.create("label")).toString());
+		assertEquals("v/ops/covia/read",
+			RT.ensureVector(meta.get(Strings.create("tools"))).get(0).toString());
+	}
+
+	@Test public void testSkillLoadValidation() {
+		writeAlphaSkill();
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		// Exactly one of name/ref
+		assertTrue(adapter.handleSkillLoad(Maps.empty(), skillToolCtx())
+			.toString().contains("exactly one"));
+		assertTrue(adapter.handleSkillLoad(
+			Maps.of("name", "alpha", "ref", "w/skills/alpha"), skillToolCtx())
+			.toString().contains("exactly one"));
+
+		// Unknown skill → diagnosable error naming it
+		assertTrue(adapter.handleSkillLoad(Maps.of("name", "ghost"), skillToolCtx())
+			.toString().contains("ghost"));
+
+		// No session in scope → no writable tier
+		ToolContext noSession = skillToolCtx();
+		noSession.sessionInScope = false;
+		assertTrue(adapter.handleSkillLoad(Maps.of("name", "alpha"), noSession)
+			.toString().contains("no session in scope"));
+	}
+
+	@Test public void testSkillLoadBudgetPrecedence() {
+		writeAlphaSkill();
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		// Caller budget wins (clamped)
+		ToolContext c1 = skillToolCtx();
+		adapter.handleSkillLoad(Maps.of("name", "alpha", "budget", 50L), c1);
+		assertEquals(256L, ((CVMLong) RT.getIn(
+			c1.loads.get(Strings.create("w/skills/alpha")), "budget")).longValue());
+
+		// skill.budget facet beats the default
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/skills/budgeted",
+				"value", Maps.of(
+					"description", "Budgeted skill",
+					"skill", Maps.of("budget", 5000L))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		ToolContext c2 = skillToolCtx();
+		adapter.handleSkillLoad(Maps.of("name", "budgeted"), c2);
+		assertEquals(5000L, ((CVMLong) RT.getIn(
+			c2.loads.get(Strings.create("w/skills/budgeted")), "budget")).longValue());
+	}
+
+	@Test public void testSkillToolsFollowLoads() {
+		// The generic rule: loads-contributed tools mirror effective loads —
+		// a load activates them, an unload retracts them, mid-transition.
+		writeAlphaSkill();
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ToolContext ctx = skillToolCtx();
+
+		assertEquals(0, ctx.loadTools(engine).count());
+		adapter.handleSkillLoad(Maps.of("name", "alpha"), ctx);
+		AVector<ACell> active = ctx.loadTools(engine);
+		assertEquals(1, active.count());
+		assertEquals("covia_read", RT.getIn(active.get(0), Fields.NAME).toString());
+		assertEquals("v/ops/covia/read", ctx.configToolMap.get("covia_read").toString());
+
+		adapter.handleContextUnload(Maps.of("path", "w/skills/alpha"), ctx);
+		assertEquals(0, ctx.loadTools(engine).count());
+	}
+
+	@Test public void testSkillToolDedupAgainstFixedPalette() {
+		// A skill declaring a tool the agent already offers (config/harness)
+		// contributes nothing — and must not clobber the existing dispatch route.
+		writeAlphaSkill();
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ToolContext ctx = skillToolCtx();
+		ctx.fixedToolNames = java.util.Set.of("covia_read");
+		adapter.handleSkillLoad(Maps.of("name", "alpha"), ctx);
+		assertEquals(0, ctx.loadTools(engine).count());
+		assertNull(ctx.configToolMap.get("covia_read"),
+			"an excluded def must not write a dispatch route");
+	}
+
+	@Test public void testSkillLoadDedupsByContentIdentity() {
+		// The same skill content under two addresses loads ONCE — skills are
+		// content-addressed, so identity is the metadata hash, not the path.
+		writeAlphaSkill();
+		AMap<AString, ACell> sameSkill = Maps.of(
+			"description", "Alpha skill",
+			"content", Maps.of("inline", "Use covia_read on w/probe."),
+			"skill", Maps.of("tools", Vectors.of(Strings.create("v/ops/covia/read"))));
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/skills/beta", "value", sameSkill),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ToolContext ctx = skillToolCtx();
+		adapter.handleSkillLoad(Maps.of("name", "alpha"), ctx);
+		ACell second = adapter.handleSkillLoad(Maps.of("name", "beta"), ctx);
+
+		assertEquals(1, ctx.loads.count(), "identical content must not load twice");
+		assertEquals(1, ctx.loadTools(engine).count());
+		assertTrue(second.toString().contains("Already loaded"), second.toString());
+		assertTrue(second.toString().contains("w/skills/alpha"), second.toString());
+	}
+
+	@Test public void testRepeatedSkillLoadKeepsSingleEntry() {
+		// Loads are keyed by canonical path — reloading the same skill
+		// overwrites, never duplicates entry or tool def.
+		writeAlphaSkill();
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ToolContext ctx = skillToolCtx();
+		adapter.handleSkillLoad(Maps.of("name", "alpha"), ctx);
+		adapter.handleSkillLoad(Maps.of("name", "alpha", "budget", 3000L), ctx);
+		assertEquals(1, ctx.loads.count());
+		assertEquals(1, ctx.loadTools(engine).count());
+		assertEquals(3000L, ((CVMLong) RT.getIn(
+			ctx.loads.get(Strings.create("w/skills/alpha")), "budget")).longValue());
+	}
+
+	@Test
+	public void testSkillAdoptionDuringChat() {
+		// The operative-loop proof: within ONE chat transition the mock loads
+		// the skill, the palette gains covia_read on the next iteration, and
+		// the tool actually dispatches — load → palette → dispatch, one turn.
+		writeAlphaSkill();
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "skill-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/skillllm",
+				"skills", Vectors.of(Strings.create("w/skills"))),
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "use the alpha skill")),
+			Fields.SESSION, Maps.of(Fields.ID, Strings.create("s1")));
+
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
+		assertNotNull(response);
+		assertTrue(response.toString().contains("SKILL_TOOL_RESULT"), response.toString());
+		assertTrue(response.toString().contains("probe-value"), response.toString());
+
+		// The session tier on the output carries the skill entry (persisted
+		// by the framework's loads write-back).
+		AMap<AString, ACell> loads = (AMap<AString, ACell>) RT.getIn(output, Fields.LOADS);
+		assertNotNull(loads, "session in scope → loads emitted on the output");
+		assertTrue(Skills.isSkillEntry(loads.get(Strings.create("w/skills/alpha"))));
+	}
+
+	@Test
+	public void testSkillPersistsAcrossTurns() {
+		// e2e through the run loop: turn 1 adopts the skill; turn 2 sees the
+		// re-rendered [Skill: alpha] body and the persisted tool palette
+		// WITHOUT reloading.
+		writeAlphaSkill();
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "skill-e2e-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/skillllm",
+					"skills", Vectors.of(Strings.create("w/skills")))),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState agent = user.agent("skill-e2e-agent");
+		Blob sid = Blob.fromHex("44440001444400014444000144440001");
+		agent.ensureSession(sid, ALICE_DID);
+		agent.appendSessionPending(sid, Maps.of(
+			Strings.intern("content"), Strings.create("use the alpha skill")));
+
+		engine.jobs().invokeOperation("v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "skill-e2e-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		TestEngine.awaitTimelineCount(agent, 1, 10000);
+
+		agent = user.agent("skill-e2e-agent");
+		AString turn1 = RT.ensureString(RT.getIn(agent.getTimeline().get(0), Fields.RESULT));
+		assertTrue(turn1.toString().contains("SKILL_TOOL_RESULT"), turn1.toString());
+
+		// The skill entry landed on the session's loads tier.
+		AMap<AString, ACell> session = agent.getSession(sid);
+		AMap<AString, ACell> loads = (AMap<AString, ACell>) RT.getIn(session, "loads");
+		assertNotNull(loads);
+		assertTrue(Skills.isSkillEntry(loads.get(Strings.create("w/skills/alpha"))));
+
+		// Turn 2: body re-renders and tools re-contribute from the persisted
+		// entry — no reload.
+		agent.appendSessionPending(sid, Maps.of(
+			Strings.intern("content"), Strings.create("carry on")));
+		engine.jobs().invokeOperation("v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "skill-e2e-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		TestEngine.awaitTimelineCount(agent, 2, 10000);
+
+		agent = user.agent("skill-e2e-agent");
+		AString turn2 = RT.ensureString(RT.getIn(agent.getTimeline().get(1), Fields.RESULT));
+		assertTrue(turn2.toString().contains("SKILL_BODY_PRESENT"), turn2.toString());
+		assertTrue(turn2.toString().contains("SKILL_TOOLS_ACTIVE"), turn2.toString());
+	}
+
 	// ========== Response format ==========
 
 	@Test

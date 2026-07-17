@@ -555,6 +555,7 @@ public class Engine {
 		venue.registerAdapter(new LangChainAdapter());
 		venue.registerAdapter(new CoviaAdapter());
 		venue.registerAdapter(new covia.adapter.UserMemoryAdapter());
+		venue.registerAdapter(new covia.adapter.SkillsAdapter());
 		venue.registerAdapter(new AssetAdapter());
 		venue.registerAdapter(new GridAdapter());
 		venue.registerAdapter(new covia.adapter.A2AAdapter());
@@ -1654,30 +1655,49 @@ public class Engine {
 
 		// Content-addressed store: locate the CAS record. Hash-form refs name it
 		// directly; other refs resolve first (a lattice slot may hold a reference
-		// string — followed one hop — asset metadata, or a raw blob).
+		// string — followed one hop — asset metadata, or a raw blob). A metadata
+		// map with no CAS record (e.g. hand-written in a workspace) still serves
+		// its metadata-DECLARED content (content.inline / content.dlfs below).
 		AVector<?> record = null;
+		ACell meta = null;
 		Hash hash = covia.adapter.AssetAdapter.parseAssetId(ref);
 		if (hash != null) {
 			record = getAssetRecord(hash, ctx);
+			if (record != null) meta = record.get(AssetStore.POS_META);
 		} else {
 			ACell value = resolvePath(ref, ctx);
 			if (value instanceof AString s) {
 				Hash hop = covia.adapter.AssetAdapter.parseAssetId(s);
 				if (hop != null) record = getAssetRecord(hop, ctx);
+				if (record != null) meta = record.get(AssetStore.POS_META);
 			} else if (value instanceof AMap) {
 				record = getAssetRecord(((AMap<?, ?>) value).getHash(), ctx);
+				meta = (record != null) ? record.get(AssetStore.POS_META) : value;
 			} else if (value instanceof convex.core.data.ABlob b) {
 				return new covia.venue.storage.ContentProvider.Resolved(
 					covia.grid.impl.BlobContent.of(b), null);
 			}
 		}
-		if (record == null) return null;
-		ACell meta = record.get(AssetStore.POS_META);
+		if (meta == null) return null;
 		AString ct = RT.ensureString(RT.getIn(meta, Fields.CONTENT_TYPE));
-		ACell content = record.get(AssetStore.POS_CONTENT);
-		if (content instanceof convex.core.data.ABlob b) {
+		if (record != null) {
+			ACell content = record.get(AssetStore.POS_CONTENT);
+			if (content instanceof convex.core.data.ABlob b) {
+				return new covia.venue.storage.ContentProvider.Resolved(
+					covia.grid.impl.BlobContent.of(b), (ct != null) ? ct.toString() : null);
+			}
+		}
+
+		// Metadata-declared inline content: content.inline carries small textual
+		// content directly in the metadata map. The bytes are part of the
+		// metadata itself, so the asset's identity hash already covers them —
+		// there is no separate verification (unlike content.dlfs below).
+		AString inline = RT.ensureString(RT.getIn(meta, Fields.CONTENT, "inline"));
+		if (inline != null) {
+			convex.core.data.ABlob bytes = convex.core.data.Blob.wrap(
+				inline.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
 			return new covia.venue.storage.ContentProvider.Resolved(
-				covia.grid.impl.BlobContent.of(b), (ct != null) ? ct.toString() : null);
+				covia.grid.impl.BlobContent.of(bytes), (ct != null) ? ct.toString() : null);
 		}
 
 		// Metadata-declared alternative storage: content.dlfs names a drive path.

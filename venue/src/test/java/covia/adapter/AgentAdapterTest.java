@@ -291,6 +291,68 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testCreateWarnsOnUnresolvableSkillsSource() {
+		// A skills source that resolves to nothing is only an advisory —
+		// sources resolve live each turn, so creating the source later just works.
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "skills-nothing-agent",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"model", "gpt-5.4-mini",
+				"skills", Vectors.of(Strings.create("w/skills"))));
+		ACell result = engine.jobs().invokeOperation(
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		AVector<ACell> warnings = RT.ensureVector(RT.getIn(result, Fields.WARNINGS));
+		assertNotNull(warnings, "unresolvable skills source should carry a warning");
+		String w = RT.ensureString(warnings.get(0)).toString();
+		assertTrue(w.contains("w/skills"), w);
+		assertTrue(w.contains("only a warning"), w);
+	}
+
+	@Test
+	public void testCreateWarnsOnMalformedSkills() {
+		// A malformed config.skills THROWS at transition time — flag it at
+		// create, when it's fixable.
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "skills-malformed-agent",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"model", "gpt-5.4-mini",
+				"skills", "w/skills"));
+		ACell result = engine.jobs().invokeOperation(
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		AVector<ACell> warnings = RT.ensureVector(RT.getIn(result, Fields.WARNINGS));
+		assertNotNull(warnings, "malformed config.skills should carry a warning");
+		String w = RT.ensureString(warnings.get(0)).toString();
+		assertTrue(w.contains("config.skills"), w);
+		assertTrue(w.contains("fail at transition time"), w);
+	}
+
+	@Test
+	public void testCreateResolvableSkillsNoWarning() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/skills/demo",
+				"value", Maps.of("description", "A demo skill")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "skills-ok-agent",
+			Fields.CONFIG, Maps.of(
+				"operation", "v/ops/llmagent/chat",
+				"llmOperation", "v/ops/langchain/openai",
+				"model", "gpt-5.4-mini",
+				"skills", Vectors.of(Strings.create("w/skills"))));
+		ACell result = engine.jobs().invokeOperation(
+			"v/ops/agent/create", input, RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		assertNull(RT.getIn(result, Fields.WARNINGS), "resolvable skills source → no advisory");
+	}
+
+	@Test
 	public void testCreateWarnsOnUnresolvableTool() {
 		// OpenAI provider (no capability probe) so the only advisory in play is
 		// tool resolution. One tool resolves, one doesn't → warn about the latter.

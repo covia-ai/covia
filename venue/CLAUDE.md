@@ -190,6 +190,7 @@ Bridges operations to execution environments:
 | `vault` | Health vault (DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
 | `secret` | Secret store | `set`, `extract` (removal via `covia:delete s/<name>`) |
 | `memory` | Per-user agent memory — ONE `AVector` at a workspace path (default `w/memory`), every mutation a whole-vector LWW rewrite so removals never re-materialise; edited by 1-based position | `recall`, `remember`, `update`, `forget` |
+| `skills` | Agent skills — named instruction+tool bundles discovered from `w/skills`/`v/skills`/assets and loaded via the `skill_load` harness tool (see `docs/SKILLS.md`); read-only | `list`, `read` (single command-dispatched op) |
 | `ucan` | Capability tokens | `issue` |
 | `scheduler` | Deferred grid-op invocation (per-venue `:schedule`) | `schedule`, `cancel`, `trigger`, `list` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |

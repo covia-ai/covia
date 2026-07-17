@@ -172,6 +172,23 @@ public abstract class AAdapter {
 	}
 
 	/**
+	 * Installs a venue skill under {@code /v/skills/<catalogPath>}. Skills are
+	 * asset metadata maps (name, description, optional {@code skill} facet)
+	 * discovered via the {@code v/skills} source and loaded by agents with
+	 * {@code skill_load} — see {@code venue/docs/SKILLS.md}. The materialised
+	 * catalog entry is the metadata; a skill whose body is content (rather
+	 * than its description or a {@code content.dlfs} binding) needs that
+	 * content stored in the CAS separately.
+	 *
+	 * @param catalogPath The skill name (e.g. {@code "summarise"})
+	 * @param resourcePath Resource path of the skill metadata JSON
+	 * @return The asset hash, or {@code null} if installation failed
+	 */
+	protected Hash installSkill(String catalogPath, String resourcePath) {
+		return installAssetAt("v/skills/", catalogPath, resourcePath);
+	}
+
+	/**
 	 * Shared implementation: store the asset, validate the catalog path, and
 	 * defer the materialisation write until {@link covia.venue.Engine#materialiseVOps}.
 	 */

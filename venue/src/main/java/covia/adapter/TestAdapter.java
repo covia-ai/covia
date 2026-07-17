@@ -68,6 +68,10 @@ public class TestAdapter extends AAdapter {
                     return CompletableFuture.completedFuture(handleWakeResponse(input));
                 case "llm":
                     return CompletableFuture.completedFuture(withMockTokens(handleLlm(input), input));
+                case "skillllm":
+                    return CompletableFuture.completedFuture(withMockTokens(handleSkillLlm(input), input));
+                case "moretoolsllm":
+                    return CompletableFuture.completedFuture(withMockTokens(handleMoreToolsLlm(input), input));
                 case "toolllm":
                     return CompletableFuture.completedFuture(withMockTokens(handleToolLlm(input), input));
                 case "badargsllm":
@@ -146,6 +150,8 @@ public class TestAdapter extends AAdapter {
 			installTestAsset("capturectx",   BASE+"capturectxop.json");
 			installTestAsset("llm",          BASE+"testllm.json");
 			installTestAsset("toolllm",      BASE+"testtoolllm.json");
+			installTestAsset("skillllm",     BASE+"testskillllm.json");
+			installTestAsset("moretoolsllm", BASE+"testmoretoolsllm.json");
 			installTestAsset("badargsllm",   BASE+"testbadargsllm.json");
 			installTestAsset("loopllm",      BASE+"testloopllm.json");
 			installTestAsset("nevertoolllm", BASE+"testnevertoolllm.json");
@@ -388,6 +394,155 @@ public class TestAdapter extends AAdapter {
         return Maps.of("role", Strings.create("assistant"), "content", Strings.create("(no messages)"));
     }
     
+    /**
+     * Test LLM driving skill adoption DURING a chat (SKILLS.md §5): loads a
+     * skill mid-transition and honestly verifies same-transition adoption —
+     * the skill's tool must be OFFERED on the next loop iteration and must
+     * actually DISPATCH. State machine over the input messages/tools:
+     * <ol>
+     *   <li>fresh → call {@code skill_load {name: "alpha"}}</li>
+     *   <li>skill_load result seen → if the palette now offers
+     *       {@code covia_read} (the skill's tool), CALL it on {@code w/probe};
+     *       else respond {@code SKILL_TOOLS_MISSING}</li>
+     *   <li>covia_read result seen → respond
+     *       {@code SKILL_TOOL_RESULT: <content>} — proves load → palette →
+     *       dispatch all worked inside one chat transition</li>
+     *   <li>later turns ({@code [Skill: alpha]} system message present) →
+     *       respond {@code SKILL_BODY_PRESENT} plus
+     *       {@code SKILL_TOOLS_ACTIVE}/{@code SKILL_TOOLS_MISSING} for the
+     *       persisted palette</li>
+     * </ol>
+     */
+    @SuppressWarnings("unchecked")
+    private ACell handleSkillLlm(ACell input) {
+        AVector<ACell> messages = (RT.getIn(input, "messages") instanceof AVector<?> v)
+            ? (AVector<ACell>) v : Vectors.empty();
+        AVector<ACell> tools = (RT.getIn(input, "tools") instanceof AVector<?> v)
+            ? (AVector<ACell>) v : Vectors.empty();
+
+        boolean coviaReadOffered = false;
+        for (long i = 0; i < tools.count(); i++) {
+            AString n = RT.ensureString(RT.getIn(tools.get(i), "name"));
+            if (n != null && "covia_read".equals(n.toString())) { coviaReadOffered = true; break; }
+        }
+
+        boolean skillBodyPresent = false, skillLoadResult = false, coviaReadResult = false;
+        String coviaReadContent = "";
+        for (long i = 0; i < messages.count(); i++) {
+            ACell msg = messages.get(i);
+            AString role = RT.ensureString(RT.getIn(msg, "role"));
+            AString content = RT.ensureString(RT.getIn(msg, "content"));
+            if (role == null) continue;
+            if ("system".equals(role.toString()) && content != null
+                    && content.toString().contains("[Skill: alpha]")) {
+                skillBodyPresent = true;
+            }
+            if ("tool".equals(role.toString())) {
+                AString name = RT.ensureString(RT.getIn(msg, "name"));
+                if (name != null && "skill_load".equals(name.toString())) skillLoadResult = true;
+                if (name != null && "covia_read".equals(name.toString())) {
+                    coviaReadResult = true;
+                    ACell structured = RT.getIn(msg, "structuredContent");
+                    coviaReadContent = (structured != null)
+                        ? convex.core.util.JSON.print(structured).toString()
+                        : ((content != null) ? content.toString() : "");
+                }
+            }
+        }
+
+        // Branch order matters across the two runtimes: goaltree re-renders
+        // loads every ITERATION, so the [Skill:] body can appear mid-run right
+        // after the load — in-conversation tool evidence must win over body
+        // presence. llmagent's persisted history keeps only user/assistant
+        // turns, so on a later TURN only the body marker remains.
+        if (coviaReadResult) {
+            return Maps.of("role", Strings.create("assistant"),
+                "content", Strings.create("SKILL_TOOL_RESULT: " + coviaReadContent));
+        }
+        if (skillLoadResult) {
+            if (!coviaReadOffered) {
+                return Maps.of("role", Strings.create("assistant"),
+                    "content", Strings.create("SKILL_TOOLS_MISSING"));
+            }
+            return Maps.of("role", Strings.create("assistant"),
+                "toolCalls", Vectors.of(Maps.of(
+                    "id", Strings.create("call_read"),
+                    "name", Strings.create("covia_read"),
+                    "arguments", Strings.create("{\"path\":\"w/probe\"}"))));
+        }
+        if (skillBodyPresent) {
+            // A later turn: the persisted loads entry re-rendered the body and
+            // re-contributed the tools.
+            return Maps.of("role", Strings.create("assistant"),
+                "content", Strings.create("SKILL_BODY_PRESENT "
+                    + (coviaReadOffered ? "SKILL_TOOLS_ACTIVE" : "SKILL_TOOLS_MISSING")));
+        }
+        return Maps.of("role", Strings.create("assistant"),
+            "toolCalls", Vectors.of(Maps.of(
+                "id", Strings.create("call_skill"),
+                "name", Strings.create("skill_load"),
+                "arguments", Strings.create("{\"name\":\"alpha\"}"))));
+    }
+
+    /**
+     * Test LLM driving more_tools mid-run adoption: adds {@code v/test/ops/echo}
+     * to its tool set, verifies the derived {@code test_echo} tool is OFFERED
+     * on the next iteration, calls it, and reports the result. The goaltree
+     * analogue of {@link #handleSkillLlm} for the raw op-path mechanism.
+     */
+    @SuppressWarnings("unchecked")
+    private ACell handleMoreToolsLlm(ACell input) {
+        AVector<ACell> messages = (RT.getIn(input, "messages") instanceof AVector<?> v)
+            ? (AVector<ACell>) v : Vectors.empty();
+        AVector<ACell> tools = (RT.getIn(input, "tools") instanceof AVector<?> v)
+            ? (AVector<ACell>) v : Vectors.empty();
+
+        boolean echoOffered = false;
+        for (long i = 0; i < tools.count(); i++) {
+            AString n = RT.ensureString(RT.getIn(tools.get(i), "name"));
+            if (n != null && "test_echo".equals(n.toString())) { echoOffered = true; break; }
+        }
+
+        boolean moreToolsResult = false, echoResult = false;
+        String echoContent = "";
+        for (long i = 0; i < messages.count(); i++) {
+            ACell msg = messages.get(i);
+            AString role = RT.ensureString(RT.getIn(msg, "role"));
+            if (role == null || !"tool".equals(role.toString())) continue;
+            AString name = RT.ensureString(RT.getIn(msg, "name"));
+            if (name != null && "more_tools".equals(name.toString())) moreToolsResult = true;
+            if (name != null && "test_echo".equals(name.toString())) {
+                echoResult = true;
+                ACell structured = RT.getIn(msg, "structuredContent");
+                AString content = RT.ensureString(RT.getIn(msg, "content"));
+                echoContent = (structured != null)
+                    ? convex.core.util.JSON.print(structured).toString()
+                    : ((content != null) ? content.toString() : "");
+            }
+        }
+
+        if (echoResult) {
+            return Maps.of("role", Strings.create("assistant"),
+                "content", Strings.create("MORE_TOOLS_RESULT: " + echoContent));
+        }
+        if (moreToolsResult) {
+            if (!echoOffered) {
+                return Maps.of("role", Strings.create("assistant"),
+                    "content", Strings.create("MORE_TOOLS_MISSING"));
+            }
+            return Maps.of("role", Strings.create("assistant"),
+                "toolCalls", Vectors.of(Maps.of(
+                    "id", Strings.create("call_echo"),
+                    "name", Strings.create("test_echo"),
+                    "arguments", Strings.create("{\"echo\":\"mid-loop\"}"))));
+        }
+        return Maps.of("role", Strings.create("assistant"),
+            "toolCalls", Vectors.of(Maps.of(
+                "id", Strings.create("call_more"),
+                "name", Strings.create("more_tools"),
+                "arguments", Strings.create("{\"operations\":[\"v/test/ops/echo\"]}"))));
+    }
+
     /**
      * Test LLM that emits a tool call with MALFORMED (non-JSON) arguments on
      * its first turn, then echoes the tool result content. Exercises the wire

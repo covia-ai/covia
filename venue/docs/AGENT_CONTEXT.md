@@ -2,7 +2,7 @@
 
 Design for loading reference material into an agent's working context at run time.
 
-**Status:** Current — implemented (string / workspace / asset / job / op entries; configured layer; labelled system messages). §8 designs the unified **configured-vs-agent-managed** model — one entry grammar, resolver, and budget shared across both roles. Target, not yet implemented.
+**Status:** Current — implemented (string / workspace / asset / job / op entries; configured layer; labelled system messages). §8's scope chain (agent → session → frame tiers) is **implemented** (`ContextChain`, #142); the old `state.context` dynamic layer described in §4.2–4.3 is **retired** — dynamic context is the loads scope chain. Skills ([SKILLS.md](./SKILLS.md)) build on loads entries: a skill-flagged entry renders its instructions and contributes tools via the generic "a loads entry may declare `tools`" rule.
 
 See [AGENT_LOOP.md](./AGENT_LOOP.md) §3.2 for level 2 architecture and config conventions.
 

@@ -1,0 +1,23 @@
+{
+	"name": "Test More-Tools LLM",
+	"description": "Test LLM driving more_tools mid-run adoption. Fresh: calls more_tools to add v/test/ops/echo. After the result: calls the derived test_echo tool (proving same-run palette activation). After that result: reports MORE_TOOLS_RESULT.",
+	"dateCreated": "2026-07-17T00:00:00Z",
+	"operation": {
+		"adapter": "test:moretoolsllm",
+		"input": {
+			"type": "object",
+			"properties": {
+				"messages": { "type": "array" },
+				"tools": { "type": "array" }
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"role": { "type": "string" },
+				"content": { "type": "string" },
+				"toolCalls": { "type": "array" }
+			}
+		}
+	}
+}

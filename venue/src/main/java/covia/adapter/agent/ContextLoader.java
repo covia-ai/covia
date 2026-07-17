@@ -7,7 +7,6 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
-import convex.core.data.Hash;
 import convex.core.data.util.CellExplorer;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -17,7 +16,6 @@ import covia.adapter.CoviaAdapter;
 import covia.api.Fields;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.grid.Asset;
-import covia.venue.AssetStore;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.User;
@@ -227,8 +225,9 @@ public class ContextLoader {
 		if (ref.startsWith("did:")) return true;
 		if (ref.length() == 64 && ref.matches("[0-9a-fA-F]+")) return true; // hex hash
 		// Lattice namespace paths — leading slash optional (mirrors resolvePath).
+		// a/ is the bare asset-ref form (matches AssetAdapter.parseAssetId).
 		String s = ref.startsWith("/") ? ref.substring(1) : ref;
-		if (s.startsWith("w/") || s.startsWith("o/") || s.startsWith("g/")
+		if (s.startsWith("a/") || s.startsWith("w/") || s.startsWith("o/") || s.startsWith("g/")
 			|| s.startsWith("j/") || s.startsWith("s/") || s.startsWith("h/")
 			|| s.startsWith("n/") || s.startsWith("t/") || s.startsWith("c/")
 			|| s.startsWith("v/")) return true;
@@ -261,31 +260,51 @@ public class ContextLoader {
 
 	/**
 	 * Resolves an asset reference and extracts text content.
-	 * Tries: artifact content (UTF-8) → metadata description → null.
+	 *
+	 * <p>Layered: the venue's universal content resolution first
+	 * ({@link Engine#resolveContent} — CAS blob, {@code content.dlfs}
+	 * pinned/live bindings, provider refs; handles content-only artifacts
+	 * that have no {@code operation} field), then the resolved value's
+	 * {@code description} (asset-metadata maps) or its rendered form (data
+	 * values, e.g. {@code v/info/...}), then {@link Engine#resolveAsset}
+	 * for the remote-DID definition-fetch path. Null when nothing usable
+	 * is found → caller skips.</p>
 	 */
 	String resolveAssetContent(AString ref, RequestContext ctx) {
 		// If it doesn't look like a reference, treat as literal text
 		if (!isAssetReference(ref.toString())) return ref.toString();
 
 		try {
-			Asset asset = engine.resolveAsset(ref, ctx);
-			if (asset == null) return null;
-
-			// Try text content payload — user assets first, venue fallback
-			Hash assetHash = asset.getID();
-			AVector<?> record = engine.getAssetRecord(assetHash, ctx);
-			if (record != null) {
-				ACell content = record.get(AssetStore.POS_CONTENT);
-				if (content instanceof ABlob blob && blob.count() > 0) {
+			// 1. Content, via the universal resolution chain (UTF-8 decode).
+			covia.venue.storage.ContentProvider.Resolved resolved = engine.resolveContent(ref, ctx);
+			if (resolved != null && resolved.content() != null) {
+				ABlob blob = resolved.content().getBlob();
+				if (blob != null && blob.count() > 0) {
 					return new String(blob.getBytes(), StandardCharsets.UTF_8);
 				}
 			}
 
-			// Fall back to description
-			AString desc = RT.ensureString(asset.meta().get(Fields.DESCRIPTION));
-			if (desc != null) return desc.toString();
+			// 2. No content — a metadata map falls back to its description
+			// (the standard asset convention); any other resolved value
+			// renders directly (v/ data paths, catalog entries).
+			ACell value = engine.resolvePath(ref, ctx);
+			if (value != null) {
+				if (value instanceof AMap) {
+					AString desc = RT.ensureString(((AMap<?, ?>) value).get(Fields.DESCRIPTION));
+					if (desc != null) return desc.toString();
+				}
+				return renderValue(value);
+			}
 
-			return null;                                  // asset has no usable content → caller skips
+			// 3. Remote DID definitions (resolveAsset's fetch path) — local
+			// resolution found nothing.
+			Asset asset = engine.resolveAsset(ref, ctx);
+			if (asset != null) {
+				AString desc = RT.ensureString(asset.meta().get(Fields.DESCRIPTION));
+				if (desc != null) return desc.toString();
+			}
+
+			return null;                                  // nothing usable → caller skips
 		} catch (RuntimeException e) {
 			throw e;                                      // genuine resolution error → caller makes it visible
 		} catch (Exception e) {

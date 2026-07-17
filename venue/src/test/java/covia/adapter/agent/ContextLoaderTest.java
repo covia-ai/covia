@@ -199,6 +199,74 @@ public class ContextLoaderTest {
 	}
 
 	@Test
+	public void testContentOnlyArtifactByHashForms() {
+		// Regression: a content-only artifact (no `operation` field) must load
+		// by its hash forms. Previously resolveAssetContent went through
+		// resolveAsset, which requires an operation field — bare-hash and a/
+		// refs to plain artifacts silently skipped (and bare a/<hash> wasn't
+		// recognised as a reference at all). Content now resolves via
+		// Engine.resolveContent.
+		Job storeJob = engine.jobs().invokeOperation("v/ops/asset/store",
+			Maps.of(
+				Strings.create("metadata"), Maps.of(
+					Strings.create("name"), Strings.create("Plain Artifact"),
+					Strings.create("type"), Strings.create("document")),
+				Strings.create("contentText"), Strings.create("Artifact body text.")),
+			ctx);
+		AString assetId = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Strings.intern("id")));
+		Hash hash = covia.adapter.AssetAdapter.parseAssetId(assetId);
+		assertNotNull(hash);
+
+		// Bare a/<hash> form
+		ACell msg = loader.resolveEntry(Strings.create("a/" + hash.toHexString()), ctx);
+		assertNotNull(msg, "a/<hash> ref to a content-only artifact should resolve");
+		assertTrue(RT.getIn(msg, Strings.intern("content")).toString()
+			.contains("Artifact body text."));
+
+		// Bare 64-hex form
+		ACell msg2 = loader.resolveEntry(Strings.create(hash.toHexString()), ctx);
+		assertNotNull(msg2, "bare hash ref to a content-only artifact should resolve");
+		assertTrue(RT.getIn(msg2, Strings.intern("content")).toString()
+			.contains("Artifact body text."));
+	}
+
+	@Test
+	public void testBareAssetRefRecognised() {
+		assertTrue(ContextLoader.isAssetReference("a/" + "0".repeat(64)));
+	}
+
+	@Test
+	public void testInlineContentDeclaration() {
+		// content.inline — metadata-declared inline content, served by
+		// Engine.resolveContent for any content consumer. The stored asset
+		// has NO uploaded content blob; the body lives in the metadata.
+		Job storeJob = engine.jobs().invokeOperation("v/ops/asset/store",
+			Maps.of(Strings.create("metadata"), Maps.of(
+				Strings.create("name"), Strings.create("Inline Doc"),
+				Strings.create("content"), Maps.of(
+					Strings.create("inline"), Strings.create("The inline body text.")))),
+			ctx);
+		AString assetId = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Strings.intern("id")));
+		Hash hash = covia.adapter.AssetAdapter.parseAssetId(assetId);
+
+		ACell msg = loader.resolveEntry(Strings.create("a/" + hash.toHexString()), ctx);
+		assertNotNull(msg, "content.inline metadata should resolve as context");
+		assertTrue(RT.getIn(msg, Strings.intern("content")).toString()
+			.contains("The inline body text."));
+	}
+
+	@Test
+	public void testVenueDataPathResolves() {
+		// Regression: a v/ data path (a non-operation catalog value, e.g. an
+		// agent template) previously died in resolveAsset and was silently
+		// skipped. It now renders — description for asset-metadata maps.
+		ACell msg = loader.resolveEntry(Strings.create("v/agents/templates/minimal"), ctx);
+		assertNotNull(msg, "v/ data path should resolve as context");
+		String content = RT.getIn(msg, Strings.intern("content")).toString();
+		assertTrue(content.contains("[Context: v/agents/templates/minimal]"), content);
+	}
+
+	@Test
 	public void testAssetDescriptionFallback() {
 		// Store an asset without content — should fall back to description
 		Job storeJob = engine.jobs().invokeOperation("v/ops/asset/store",

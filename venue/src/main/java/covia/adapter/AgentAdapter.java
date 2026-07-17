@@ -507,9 +507,46 @@ public class AgentAdapter extends AAdapter {
 		if (toolWarn != null) warnings = warnings.conj(toolWarn);
 		AString unresolvedWarn = unresolvableToolsWarning(config, ctx);
 		if (unresolvedWarn != null) warnings = warnings.conj(unresolvedWarn);
+		AString skillsWarn = skillSourcesWarning(config, ctx);
+		if (skillsWarn != null) warnings = warnings.conj(skillsWarn);
 		AString keyWarn = rawApiKeyWarning(config);
 		if (keyWarn != null) warnings = warnings.conj(keyWarn);
 		return warnings;
+	}
+
+	/**
+	 * Advisory for {@code config.skills} (see venue/docs/SKILLS.md). Two cases:
+	 * a malformed shape (non-array, non-string entry) — which will THROW at
+	 * transition time, so it's flagged here at the moment it's fixable — and
+	 * sources that resolve to nothing right now. The latter is only a warning:
+	 * sources resolve live each turn, so a source created later simply starts
+	 * appearing in the skills index — no recreate needed.
+	 */
+	private AString skillSourcesWarning(AMap<AString, ACell> config, RequestContext ctx) {
+		if (config == null) return null;
+		ACell raw = config.get(Strings.intern("skills"));
+		if (raw == null) return null;
+		AVector<ACell> sources;
+		try {
+			sources = ContextBuilder.skillSources(raw);
+		} catch (RuntimeException e) {
+			return Strings.create(e.getMessage()
+				+ " (the agent will fail at transition time until this is fixed)");
+		}
+		java.util.List<String> unresolved = new java.util.ArrayList<>();
+		for (long i = 0; i < sources.count(); i++) {
+			AString source = RT.ensureString(sources.get(i));
+			try {
+				if (engine.resolvePath(source, ctx) == null) unresolved.add(source.toString());
+			} catch (RuntimeException e) {
+				// Transient resolution errors aren't config errors — don't over-warn.
+			}
+		}
+		if (unresolved.isEmpty()) return null;
+		return Strings.create("agent declares skills source(s) that resolve to nothing right now: "
+			+ String.join(", ", unresolved) + ". Sources resolve live each turn, so a source"
+			+ " created later starts appearing in the skills index automatically — this is"
+			+ " only a warning.");
 	}
 
 	/**
@@ -2518,12 +2555,15 @@ public class AgentAdapter extends AAdapter {
 			+ " re-submit if appropriate";
 		log.warn("Agent {} stuck on task {} for the whole iteration budget — failing the task job",
 			agentId, taskId);
+		// Drain before notification (the settled-state rule, S2.7c-2): the
+		// task leaves the agent's Index BEFORE the caller's job fails, so an
+		// awaitResult caller never observes the stuck task still queued.
+		AgentState agent = getAgent(ownerDID, agentId);
+		if (agent != null) agent.removeTask(taskId);
 		Job pending = engine.jobs().getJob(taskId);
 		if (pending != null && !pending.isFinished()) {
 			pending.fail(err);
 		}
-		AgentState agent = getAgent(ownerDID, agentId);
-		if (agent != null) agent.removeTask(taskId);
 	}
 
 	/** Stamps token usage onto a job's record (#217) — best-effort: an

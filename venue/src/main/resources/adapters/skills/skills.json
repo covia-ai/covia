@@ -1,0 +1,22 @@
+{
+	"name": "Skills",
+	"description": "Discover agent skills — named bundles of instructions, context, and tools. Pick the action with `command`: 'list' renders the skill index, one '- name — description' line per skill (or null when no skills exist; also usable as a config.context assemble-op); 'read' returns one skill in full. Skills live in workspace directories (w/skills), the venue catalog (v/skills), or content-addressed assets. Read-only — author skills with covia:write or asset:store.",
+	"dateCreated": "2026-07-17T00:00:00Z",
+	"operation": {
+		"adapter": "skills:manage",
+		"toolName": "skills",
+		"input": {
+			"type": "object",
+			"properties": {
+				"command": { "type": "string", "enum": ["list", "read"], "description": "Action to perform." },
+				"sources": { "type": "array", "items": { "type": "string" }, "description": "Skill sources — directory paths (w/skills, v/skills) or asset refs (a/<hash>). Default: [\"w/skills\", \"v/skills\"]." },
+				"name": { "type": "string", "description": "read only: a skill name from the index, looked up across sources." },
+				"ref": { "type": "string", "description": "read only: direct skill address (a/<hash>, v/skills/<x>, w/skills/<x>) — alternative to name." }
+			},
+			"required": ["command"]
+		},
+		"output": {
+			"description": "list → the skill index text (one '- name — description' line per skill), or null when no skills exist. read → {name, description, body?, tools, context?, path} — body present when the skill has content (a contentless skill is a pure toolset)."
+		}
+	}
+}

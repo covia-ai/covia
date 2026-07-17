@@ -89,6 +89,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	static final String TOOL_CONTEXT_LOAD   = "context_load";
 	static final String TOOL_CONTEXT_UNLOAD = "context_unload";
 	static final String TOOL_MORE_TOOLS     = "more_tools";
+	static final String TOOL_SKILL_LOAD     = "skill_load";
 
 	// ========== Harness tool definitions ==========
 
@@ -215,10 +216,21 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 					Strings.create("items"), Maps.of(K_TYPE, Strings.create("string")))),
 			K_REQUIRED, Vectors.of(Strings.create("operations"))));
 
+	static final AMap<AString, ACell> TOOL_DEF_SKILL_LOAD = Maps.of(
+		K_NAME, Strings.create(TOOL_SKILL_LOAD),
+		K_DESCRIPTION, Strings.create(
+			"Load a skill from the [Skills] index by name (or any skill by direct ref). "
+			+ "The result includes the skill's full instructions for immediate use; they "
+			+ "also stay in your context each turn until you context_unload the skill's "
+			+ "path. The skill's tools join your palette from your next step. Subgoals "
+			+ "inherit your loaded skills."),
+		K_PARAMETERS, SKILL_LOAD_PARAMS);
+
 	/**
 	 * Registry of all optional harness tool definitions by name.
 	 * Agents opt into harness tools by listing their names in config.tools
-	 * alongside regular operation paths.
+	 * alongside regular operation paths. ({@code skill_load} is also offered
+	 * automatically when the agent declares {@code config.skills}.)
 	 */
 	static final Map<String, AMap<AString, ACell>> HARNESS_TOOL_REGISTRY = Map.of(
 		TOOL_SUBGOAL, TOOL_DEF_SUBGOAL,
@@ -227,7 +239,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		TOOL_COMPACT, TOOL_DEF_COMPACT,
 		TOOL_CONTEXT_LOAD, TOOL_DEF_CONTEXT_LOAD,
 		TOOL_CONTEXT_UNLOAD, TOOL_DEF_CONTEXT_UNLOAD,
-		TOOL_MORE_TOOLS, TOOL_DEF_MORE_TOOLS);
+		TOOL_MORE_TOOLS, TOOL_DEF_MORE_TOOLS,
+		TOOL_SKILL_LOAD, TOOL_DEF_SKILL_LOAD);
 
 	/**
 	 * Resolves harness tools from the agent's config.tools list.
@@ -332,12 +345,30 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				(ACell) typedFailTool(failSchema));
 		}
 
+		// Same scope-chain view as processGoal (agent + session tiers, plus the
+		// root frame's tier when a session carries frames), so the inspected
+		// skills index carries the right (loaded) markers.
+		AMap<AString, ACell> configLoads = ContextChain.declaredLoads(
+			RT.getIn(recordConfig, Fields.LOADS), "config.loads");
+		ACell sessLoads = RT.getIn(session, Fields.LOADS);
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> sessionTier = (sessLoads instanceof AMap)
+			? (AMap<AString, ACell>) sessLoads : null;
+		AMap<AString, ACell> indexLoads = ContextChain.effective(configLoads, sessionTier);
+		AVector<ACell> sessionFrames = sessionFramesOf(session);
+		if (sessionFrames != null && sessionFrames.count() > 0
+				&& sessionFrames.get(0) instanceof AMap) {
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) sessionFrames.get(0);
+			indexLoads = ContextChain.effective(indexLoads, GoalTreeContext.getLoads(rootFrame));
+		}
+
 		ContextBuilder builder = new ContextBuilder(engine, ctx)
 			.withSkipToolNames(HARNESS_TOOL_REGISTRY.keySet())
 			.withConfig(recordConfig)
 			.withSystemPrompt()
-			.withContextEntries();
-		AVector<ACell> sessionFrames = sessionFramesOf(session);
+			.withContextEntries()
+			.withSkillsIndex(indexLoads);
 		if (sessionFrames != null && sessionFrames.count() > 0) {
 			builder = builder.withFrameStack(sessionFrames);
 		}
@@ -576,6 +607,22 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			frames = (AVector<ACell>) frames.slice(0, 1);
 		}
 
+		// Outer tiers of the context scope chain (#142): agent (config.loads,
+		// operator-pinned) + session (sessions.<sid>.loads). Constant within a
+		// cycle; frames compose their tier on top (inner shadows/masks outer).
+		AMap<AString, ACell> outerLoads = ContextChain.effective(
+			ContextChain.declaredLoads(RT.getIn(recordConfig, Fields.LOADS), "config.loads"),
+			ContextChain.sessionLoads(input));
+
+		// The skills index marks (loaded) against the cycle-start effective
+		// view — outer tiers plus the root frame's tier.
+		AMap<AString, ACell> indexLoads = outerLoads;
+		if (frames.count() > 0 && frames.get(0) instanceof AMap) {
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> rootFrame = (AMap<AString, ACell>) frames.get(0);
+			indexLoads = ContextChain.effective(outerLoads, GoalTreeContext.getLoads(rootFrame));
+		}
+
 		// Build context (system prompt, tools, caps) via ContextBuilder.
 		// Harness tool names in config.tools are skipped here — they're
 		// resolved separately by resolveHarnessTools / buildTypedRootHarnessTools.
@@ -586,6 +633,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			.withSystemPrompt()
 			.withFrameStack(frames)
 			.withContextEntries()
+			.withSkillsIndex(indexLoads)
 			.withTools()
 			.build();
 
@@ -601,13 +649,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		// so a stuck sub-job cannot hang this loop. Resolved once and shared
 		// with subgoal recursion.
 		long toolCallTimeoutMs = resolveToolCallTimeoutMs(l3Config);
-
-		// Outer tiers of the context scope chain (#142): agent (config.loads,
-		// operator-pinned) + session (sessions.<sid>.loads). Constant within a
-		// cycle; frames compose their tier on top (inner shadows/masks outer).
-		AMap<AString, ACell> outerLoads = ContextChain.effective(
-			ContextChain.declaredLoads(RT.getIn(recordConfig, Fields.LOADS), "config.loads"),
-			ContextChain.sessionLoads(input));
 
 		// Run the root frame. typedHarnessTools (if non-null) injects the
 		// typed complete/fail tools alongside the regular harness/operation
@@ -789,6 +830,14 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			}
 			harnessForFrame = filtered;
 		}
+		// Offer skill_load automatically when the agent declares skill sources
+		// (config.skills) — same rule as llmagent; bare-name opt-in via
+		// config.tools also works through the registry. Skills semantics live
+		// in Skills/ContextBuilder; this runtime only offers and glues.
+		if (Skills.sourcesOf(config).count() > 0
+				&& !hasToolNamed(harnessForFrame, TOOL_SKILL_LOAD)) {
+			harnessForFrame = harnessForFrame.conj(TOOL_DEF_SKILL_LOAD);
+		}
 		// Typed outputs only at the root frame — children produce free-form
 		// results back to their parent
 		boolean typedOutputs = (frameIndex == 0 && typedRootHarnessTools != null);
@@ -820,11 +869,19 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 		// Cache for resolved loads — re-rendered only when the loads map
 		// reference changes (which only happens when the agent calls
-		// context-load or context-unload). Saves resolving the same paths
-		// fresh every iteration of the tool loop, which can be ~50 reads
-		// per loaded path per frame for long-running goals.
+		// context-load, context-unload or skill_load). Saves resolving the
+		// same paths fresh every iteration of the tool loop, which can be
+		// ~50 reads per loaded path per frame for long-running goals.
 		AMap<AString, ACell> cachedLoadsKey = null;
 		AVector<ACell> cachedLoadsRendered = Vectors.empty();
+		// Loads-contributed tools (the generic "a loads entry may declare
+		// tools" rule) — recomputed when the frame's loads change (a
+		// skill_load activates its tools on the next iteration; an unload
+		// retracts them) or when baseTools grew (more_tools), which shifts
+		// the dedup baseline.
+		AMap<AString, ACell> cachedLoadToolsKey = null;
+		AVector<ACell> cachedLoadToolsBase = null;
+		AVector<ACell> cachedLoadTools = Vectors.empty();
 
 		for (int iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
 			// Stop promptly when this cycle no longer owns the frames — the
@@ -855,10 +912,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				pendingCompactSummary = null;
 			}
 
-			// Assemble tools = harness + base (recomputed each iteration
-			// so more_tools additions are picked up)
-			AVector<ACell> tools = (AVector<ACell>) harnessForFrame.concat(baseTools);
-
 			// Assemble full context for this inference
 			AVector<ACell> fullHistory = systemMessages;
 
@@ -886,6 +939,28 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			if (cachedLoadsRendered.count() > 0) {
 				fullHistory = (AVector<ACell>) fullHistory.concat(cachedLoadsRendered);
 			}
+
+			// Loads-contributed tools (generic rule, shared with llmagent):
+			// derived from the same effective view, recomputed on a loads or
+			// baseTools reference change (both maps/vectors are immutable).
+			if (frameLoads != cachedLoadToolsKey || baseTools != cachedLoadToolsBase) {
+				java.util.Set<String> exclude = new java.util.HashSet<>(HARNESS_TOOL_REGISTRY.keySet());
+				for (long j = 0; j < baseTools.count(); j++) {
+					ACell n = RT.getIn(baseTools.get(j), K_NAME);
+					if (n != null) exclude.add(n.toString());
+				}
+				java.util.Map<String, AString> routes = new java.util.HashMap<>();
+				cachedLoadTools = ContextBuilder.loadsToolDefs(engine, ctx,
+					ContextChain.effective(outerLoads, frameLoads), exclude, routes);
+				configToolMap.putAll(routes);
+				cachedLoadToolsKey = frameLoads;
+				cachedLoadToolsBase = baseTools;
+			}
+
+			// Assemble tools = harness + base + loads-contributed (recomputed
+			// each iteration so more_tools and skill_load additions are picked up)
+			AVector<ACell> tools = (AVector<ACell>) harnessForFrame.concat(baseTools)
+				.concat(cachedLoadTools);
 
 			// Conversation (segments + live turns — includes goal as first user message).
 			// Default render elides prior cycles' tool scratch (assistant.toolCalls
@@ -1051,6 +1126,24 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 								K_PATH, path,
 								Strings.create("unloaded"), CVMBool.TRUE);
 						}
+					}
+
+				} else if (TOOL_SKILL_LOAD.equals(toolName)) {
+					// Thin glue only, mirroring llmagent: all skill semantics
+					// live in Skills.load; this runtime just writes the entry
+					// to its innermost tier — the active FRAME (inherited
+					// copy-on-push by subgoals, unloadable per frame).
+					try {
+						Skills.LoadOutcome out = Skills.load(engine, ctx,
+							Skills.sourcesOf(config), toolInput,
+							ContextChain.effective(outerLoads, GoalTreeContext.getLoads(activeFrame)));
+						if (out.entryMeta() != null) {
+							activeFrame = GoalTreeContext.addLoad(activeFrame, out.path(), out.entryMeta());
+						}
+						toolResult = out.result();
+					} catch (RuntimeException e) {
+						String msg = (e.getMessage() != null) ? e.getMessage() : e.getClass().getSimpleName();
+						toolResult = Strings.create("Error: skill_load failed: " + msg);
 					}
 
 				} else if (TOOL_MORE_TOOLS.equals(toolName)) {
@@ -1373,11 +1466,16 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 
 	/** Returns true if the tool set includes the compact tool. */
 	private static boolean hasCompactTool(AVector<ACell> tools) {
+		return hasToolNamed(tools, TOOL_COMPACT);
+	}
+
+	/** Returns true if the tool set includes a definition with the given name. */
+	private static boolean hasToolNamed(AVector<ACell> tools, String toolName) {
 		for (long i = 0; i < tools.count(); i++) {
 			ACell tool = tools.get(i);
 			if (tool instanceof AMap) {
-				ACell name = ((AMap<?,?>) tool).get(Strings.intern("name"));
-				if (name != null && TOOL_COMPACT.equals(name.toString())) return true;
+				ACell name = ((AMap<?,?>) tool).get(K_NAME);
+				if (name != null && toolName.equals(name.toString())) return true;
 			}
 		}
 		return false;

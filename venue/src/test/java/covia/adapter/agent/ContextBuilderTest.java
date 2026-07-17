@@ -188,6 +188,213 @@ public class ContextBuilderTest {
 			.build());
 	}
 
+	// ========== withSkillsIndex (config.skills — SKILLS.md §4) ==========
+
+	private void writeSkill(String path, String description) {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Strings.create("path"), Strings.create(path),
+				Strings.create("value"), Maps.of(
+					Strings.create("description"), Strings.create(description))),
+			ctx).awaitResult(5000);
+	}
+
+	/** Concatenated content of every message in the built history. */
+	private static String allContent(ContextBuilder.ContextResult result) {
+		StringBuilder sb = new StringBuilder();
+		for (long i = 0; i < result.history().count(); i++) {
+			AString c = RT.ensureString(RT.getIn(result.history().get(i), K_CONTENT));
+			if (c != null) sb.append(c).append('\n');
+		}
+		return sb.toString();
+	}
+
+	@Test
+	public void testSkillsIndexInjected() {
+		writeSkill("w/skills/alpha", "Alpha skill");
+		AMap<AString, ACell> config = Maps.of(
+			Strings.intern("skills"), Vectors.of((ACell) Strings.create("w/skills")));
+
+		ContextBuilder builder = new ContextBuilder(engine, ctx);
+		ContextBuilder.ContextResult result = builder
+			.withConfig(config)
+			.withSystemPrompt()
+			.withContextEntries()
+			.withSkillsIndex(null)
+			.withTools()
+			.build();
+
+		String all = allContent(result);
+		assertTrue(all.contains("[Skills]"), all);
+		assertTrue(all.contains("- alpha — Alpha skill"), all);
+		assertTrue(all.contains("skill_load"), "preamble should name the load tool");
+		assertFalse(all.contains("(loaded)"), all);
+
+		// Budget-tracked: the same build without the index consumes less.
+		ContextBuilder.ContextResult without = new ContextBuilder(engine, ctx)
+			.withConfig(config)
+			.withSystemPrompt()
+			.withContextEntries()
+			.withTools()
+			.build();
+		assertTrue(result.bytesConsumed() > without.bytesConsumed(),
+			"skills index must be tracked against the budget");
+	}
+
+	@Test
+	public void testSkillsIndexLoadedMarker() {
+		writeSkill("w/skills/alpha", "Alpha skill");
+		AMap<AString, ACell> config = Maps.of(
+			Strings.intern("skills"), Vectors.of((ACell) Strings.create("w/skills")));
+		AMap<AString, ACell> effectiveLoads = Maps.of(
+			Strings.create("w/skills/alpha"), Maps.of(
+				Strings.create("skill"), CVMBool.TRUE,
+				Strings.create("budget"), CVMLong.create(2000)));
+
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withConfig(config)
+			.withSkillsIndex(effectiveLoads)
+			.build();
+
+		assertTrue(allContent(result).contains("- alpha — Alpha skill (loaded)"));
+	}
+
+	@Test
+	public void testSkillsIndexAbsentOrEmpty() {
+		// No config.skills → no block.
+		ContextBuilder.ContextResult none = new ContextBuilder(engine, ctx)
+			.withConfig(Maps.of(Strings.intern("systemPrompt"), Strings.create("Hi")))
+			.withSystemPrompt()
+			.withSkillsIndex(null)
+			.build();
+		assertFalse(allContent(none).contains("[Skills]"));
+
+		// Empty sources / sources that resolve to nothing → no block either.
+		ContextBuilder.ContextResult empty = new ContextBuilder(engine, ctx)
+			.withConfig(Maps.of(Strings.intern("skills"), Vectors.empty()))
+			.withSkillsIndex(null)
+			.build();
+		assertFalse(allContent(empty).contains("[Skills]"));
+
+		ContextBuilder.ContextResult absent = new ContextBuilder(engine, ctx)
+			.withConfig(Maps.of(Strings.intern("skills"),
+				Vectors.of((ACell) Strings.create("w/no-skills-here"))))
+			.withSkillsIndex(null)
+			.build();
+		assertFalse(allContent(absent).contains("[Skills]"));
+	}
+
+	@Test
+	public void testInvalidConfigSkillsThrows() {
+		// Malformed config.skills fails loudly — same rule as config.context.
+		ContextBuilder notArray = new ContextBuilder(engine, ctx)
+			.withConfig(Maps.of(Strings.intern("skills"), Strings.create("w/skills")));
+		RuntimeException e1 = assertThrows(RuntimeException.class,
+			() -> notArray.withSkillsIndex(null));
+		assertTrue(e1.getMessage().contains("config.skills"), e1.getMessage());
+
+		ContextBuilder badEntry = new ContextBuilder(engine, ctx)
+			.withConfig(Maps.of(Strings.intern("skills"), Vectors.of(CVMLong.create(42))));
+		RuntimeException e2 = assertThrows(RuntimeException.class,
+			() -> badEntry.withSkillsIndex(null));
+		assertTrue(e2.getMessage().contains("config.skills"), e2.getMessage());
+	}
+
+	// ========== Skill entries in loads (SKILLS.md §6) ==========
+
+	private AMap<AString, ACell> alphaSkillLoads() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Strings.create("path"), Strings.create("w/skills/alpha"),
+				Strings.create("value"), Maps.of(
+					Strings.create("description"), Strings.create("Alpha skill"),
+					Strings.create("content"), Maps.of(
+						Strings.create("inline"), Strings.create("## Alpha\nDo the thing.")),
+					Strings.create("skill"), Maps.of(
+						Strings.create("context"), Vectors.of(Maps.of(
+							Strings.create("text"), Strings.create("Alpha extra context"),
+							Strings.create("label"), Strings.create("Alpha notes")))))),
+			ctx).awaitResult(5000);
+		Skills.ResolvedSkill s = Skills.resolveRef(engine, ctx, Strings.create("w/skills/alpha"));
+		return Maps.of(Strings.create("w/skills/alpha"), Skills.buildSkillLoadMeta(2000, s));
+	}
+
+	@Test
+	public void testSkillEntryRendersBodyAndContext() {
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withLoadedPaths(alphaSkillLoads())
+			.build();
+		String all = allContent(result);
+		assertTrue(all.contains("[Skill: alpha]\n## Alpha\nDo the thing."),
+			"body renders verbatim under the [Skill:] label: " + all);
+		assertTrue(all.contains("[Context: Alpha notes]"), all);
+		assertTrue(all.contains("Alpha extra context"), all);
+	}
+
+	@Test
+	public void testVanishedSkillRendersVisibly() {
+		// A loaded skill that no longer resolves must NOT silently disappear.
+		AMap<AString, ACell> loads = Maps.of(
+			Strings.create("w/skills/ghost"), Maps.of(
+				Strings.create("skill"), CVMBool.TRUE,
+				Strings.create("budget"), CVMLong.create(2000),
+				Strings.create("label"), Strings.create("ghost")));
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withLoadedPaths(loads)
+			.build();
+		String all = allContent(result);
+		assertTrue(all.contains("[Skill: ghost — unavailable:"), all);
+	}
+
+	@Test
+	public void testOverBudgetSkillRendersVisibly() {
+		// Data loads skip silently under budget pressure; skill entries warn.
+		AMap<AString, ACell> loads = alphaSkillLoads();
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx, 300)
+			.withLoadedPaths(loads)
+			.build();
+		String all = allContent(result);
+		assertTrue(all.contains("[Skill: alpha — unavailable: context budget exhausted"), all);
+		assertFalse(all.contains("Do the thing."), all);
+	}
+
+	@Test
+	public void testDuplicateSkillEntriesRenderOnce() {
+		// Same content identity under two RESOLVABLE paths (e.g. loaded at
+		// different tiers or via different addresses) → the body renders once.
+		AMap<AString, ACell> one = alphaSkillLoads();
+		AMap<AString, ACell> entryMeta = (AMap<AString, ACell>)
+			one.get(Strings.create("w/skills/alpha"));
+		// A byte-identical copy of the skill at a second address — same
+		// metadata map, same content identity.
+		engine.jobs().invokeOperation("v/ops/covia/copy",
+			Maps.of(Strings.create("from"), Strings.create("w/skills/alpha"),
+				Strings.create("to"), Strings.create("w/skills/alias")),
+			ctx).awaitResult(5000);
+		AMap<AString, ACell> both = one.assoc(Strings.create("w/skills/alias"), entryMeta);
+
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withLoadedPaths(both)
+			.build();
+		String all = allContent(result);
+		// One body, one [Skill:] block — whichever address renders it (map
+		// iteration order picks; content identity guarantees they're the same).
+		int firstBody = all.indexOf("## Alpha\nDo the thing.");
+		assertTrue(firstBody >= 0, all);
+		assertEquals(-1, all.indexOf("## Alpha\nDo the thing.", firstBody + 1),
+			"duplicate skill content must render once: " + all);
+		int firstBlock = all.indexOf("[Skill: ");
+		assertEquals(-1, all.indexOf("[Skill: ", firstBlock + 1),
+			"one [Skill:] block for one content identity: " + all);
+	}
+
+	@Test
+	public void testContextMapSkillMarker() {
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withContextMap(alphaSkillLoads())
+			.build();
+		String all = allContent(result);
+		assertTrue(all.contains("w/skills/alpha — alpha [2000B] (skill)"), all);
+	}
+
 	@Test
 	public void testContextEntriesUseCellExplorer() {
 		// Write structured map to workspace

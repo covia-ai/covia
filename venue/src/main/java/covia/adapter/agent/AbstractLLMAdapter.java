@@ -136,12 +136,47 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * {@link #CONTEXT_LOAD_MAX_BUDGET}].
 	 */
 	public static long clampLoadBudget(ACell budgetCell) {
+		return clampLoadBudget(budgetCell, CONTEXT_LOAD_DEFAULT_BUDGET);
+	}
+
+	/** As {@link #clampLoadBudget(ACell)} with a caller-chosen default. */
+	public static long clampLoadBudget(ACell budgetCell, long defaultBudget) {
 		if (budgetCell instanceof CVMLong l) {
 			return Math.max(CONTEXT_LOAD_MIN_BUDGET,
 				Math.min(l.longValue(), CONTEXT_LOAD_MAX_BUDGET));
 		}
-		return CONTEXT_LOAD_DEFAULT_BUDGET;
+		return Math.max(CONTEXT_LOAD_MIN_BUDGET,
+			Math.min(defaultBudget, CONTEXT_LOAD_MAX_BUDGET));
 	}
+
+	// ========== skill_load — shared schema (SKILLS.md §5) ==========
+
+	public static final AString K_REF = Strings.intern("ref");
+
+	/** Default accounting budget for a loaded skill — bodies run bigger than
+	 *  data loads (overridable per call, and per skill via {@code skill.budget}). */
+	public static final long SKILL_LOAD_DEFAULT_BUDGET = 2_000L;
+
+	/**
+	 * Shared parameter schema for the {@code skill_load} tool. Exactly one of
+	 * {@code name} / {@code ref} — enforced by the handler, where the error is
+	 * diagnosable, rather than by schema {@code required}.
+	 */
+	public static final AMap<AString, ACell> SKILL_LOAD_PARAMS = Maps.of(
+		K_TYPE, Strings.create("object"),
+		K_PROPERTIES, Maps.of(
+			K_NAME, Maps.of(
+				K_TYPE, Strings.create("string"),
+				K_DESCRIPTION, Strings.create(
+					"A skill name from the [Skills] index")),
+			K_REF, Maps.of(
+				K_TYPE, Strings.create("string"),
+				K_DESCRIPTION, Strings.create(
+					"Direct skill address (a/<hash>, v/skills/<x>, w/skills/<x>) — alternative to name")),
+			K_BUDGET, Maps.of(
+				K_TYPE, Strings.create("integer"),
+				K_DESCRIPTION, Strings.create(
+					"Accounting budget for the skill's context entry (default 2000, max 10000)"))));
 
 	/**
 	 * Builds the loaded-context entry metadata: {@code {budget, ts, label?}}.
