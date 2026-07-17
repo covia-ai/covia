@@ -36,6 +36,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - MCP tools/list schemas pass through as declared; `outputSchema` advertised only for object-typed outputs
 - DLFS WebDAV advertises `DAV: 1` only — unenforced class-2 locking is no longer claimed
 - `GET /api/v1/agents` returns the same enriched entries as `agent:list`; `?status=false` for bare ids (#233)
+- `GET /api/v1/jobs` returns the paged assets-style `{items, total, offset, limit}` envelope; `stats.jobs` and `stats.userJobs` on `/status` (#229)
+- Relaunching an existing persistent store without a configured venue identity is a startup error, never a silent fresh DID (#232)
 - covia-sql supports single-column tables (convex#646 fixed)
 - Agent lifecycle ops invoked as agent tools delegate to real, owner-attributed Jobs
 
