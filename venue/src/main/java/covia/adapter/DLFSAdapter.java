@@ -179,9 +179,11 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		ALatticeCursor<Index<Keyword, ACell>> rootCursor = engine.getRootCursor();
 		ALatticeCursor<?> dlfsCursor = rootCursor.path(Covia.DLFS);
 
+		// Deliberate LOCAL override on this per-request view: DLFS writes sign
+		// with the USER's drive key, not the venue key the root context carries.
 		LatticeContext lctx = LatticeContext.create(
 			CVMLong.create(System.currentTimeMillis()), dlfsKey);
-		dlfsCursor.withContext(lctx);
+		dlfsCursor.setContext(lctx);
 
 		AccountKey ak = dlfsKey.getAccountKey();
 		return dlfsCursor.path(ak, convex.core.cvm.Keywords.VALUE);

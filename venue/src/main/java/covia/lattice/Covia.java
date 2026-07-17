@@ -136,20 +136,24 @@ public final class Covia {
 
 	/**
 	 * One-way ratchet for stamp timestamps: never below the stamp the value
-	 * already carries. Cursors capture their LatticeContext when derived, so
-	 * long-lived cursors can hold an older write clock than the engine's
-	 * current one — a plain assoc would REGRESS the stamp, and under
-	 * whole-value LWW a regressed {@code :timestamp} makes the merge discard
-	 * the newer write wholesale (observed as lost content/appends). The
-	 * ratchet makes mixed-age contexts safe by construction, and also guards
-	 * against backwards system-clock steps.
+	 * already carries. Derived cursors inherit the engine's current write
+	 * clock live (Convex 0.8.9, convex#640), but forked cursors deliberately
+	 * capture their fork-time context, so a long agent cycle can still write
+	 * under an older clock than the engine's current one — a plain assoc
+	 * would REGRESS the stamp, and under whole-value LWW a regressed
+	 * {@code :timestamp} makes the merge discard the newer write wholesale
+	 * (observed as lost content/appends). The ratchet makes mixed-age
+	 * contexts safe by construction, and also guards against backwards
+	 * system-clock steps.
 	 *
 	 * <p>Timestamps are never inflated past the write clock (no {@code +1}
 	 * Lamport-style bumps): a stamp is real wall-clock time. Equal stamps on
-	 * distinct values are resolvable — merge sites order their arguments so
-	 * the newer side is {@code own} (own wins ties), which is covia's
-	 * responsibility to get right, typically via fork + sync of the relevant
-	 * lattice segment. See covia#214 / Convex-Dev/convex#641.</p>
+	 * distinct values are resolvable because the merge is DIRECTIONAL — the
+	 * contract documented by Convex 0.8.9 (convex#641): {@code own} wins an
+	 * unresolved tie, and fork/sync reconciliation treats the local edit as
+	 * own. Covia's merge sites order their arguments so the newer side is
+	 * {@code own}, typically via fork + sync of the relevant lattice
+	 * segment. See covia#214.</p>
 	 */
 	private static CVMLong ratchet(ACell existing, CVMLong ts) {
 		if (existing instanceof CVMLong prev && prev.longValue() > ts.longValue()) return prev;

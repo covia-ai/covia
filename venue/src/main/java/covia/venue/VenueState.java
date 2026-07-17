@@ -83,7 +83,7 @@ public class VenueState extends ALatticeComponent<ACell> {
 	public static VenueState create(AKeyPair kp) {
 		LatticeContext ctx = LatticeContext.create(CVMLong.create(Utils.getCurrentTimestamp()), kp);
 		ALatticeCursor<Index<Keyword, ACell>> root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(ctx);
+		root.setContext(ctx);
 		AccountKey ownerKey = kp.getAccountKey();
 		ALatticeCursor<ACell> venueCursor = root.path(
 			Covia.GRID, Covia.VENUES, ownerKey, Keywords.VALUE);

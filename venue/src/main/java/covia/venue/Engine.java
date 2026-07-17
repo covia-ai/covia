@@ -212,7 +212,7 @@ public class Engine {
 		// Set signing context so SignedCursor can sign writes through OwnerLattice
 		LatticeContext ctx = LatticeContext.create(
 			convex.core.data.prim.CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), this.keyPair);
-		this.lattice.withContext(ctx);
+		this.lattice.setContext(ctx);
 		initialiseFromCursor();
 		this.jobManager = new JobManager(this);
 		this.gridScheduler = new Scheduler(this);
@@ -332,6 +332,10 @@ public class Engine {
 
 		// Fork: subsequent writes accumulate locally (unsigned).
 		// Engine.syncState() calls venueState.sync() to merge + sign once.
+		// NB a fork never inherits its parent's context live (it captures the
+		// fork-time context — ForkedLatticeCursor.getInheritedContext), so
+		// refreshWriteClock must advance this long-lived fork's clock
+		// explicitly alongside the root's.
 		this.venueState = connected.fork();
 
 		this.auth = new Auth(this, venueState.authCursor());
@@ -411,9 +415,18 @@ public class Engine {
 	 * {@code updated}, user {@code meta.updated}) would carry engine start
 	 * time forever. The engine's policy: refresh at every operation dispatch
 	 * ({@code JobManager}) and at every state sync, throttled to at most once
-	 * per few milliseconds. Cursors capture the context when derived, and
-	 * covia derives its lattice cursors per access, so freshness propagates
-	 * immediately.</p>
+	 * per few milliseconds.</p>
+	 *
+	 * <p>Two refresh points, no more: since Convex 0.8.9 (convex#640)
+	 * derived cursors inherit their parent's current effective context live,
+	 * so refreshing the root reaches every derived view — including
+	 * long-held ones — without per-cursor re-stamping. FORKED cursors are
+	 * the deliberate exception: a fork captures its fork-time context and
+	 * never inherits live (its {@code sync} still merges under the parent's
+	 * current context), so the engine's long-lived venue-state fork is
+	 * refreshed explicitly alongside the root. Per-cycle forks elsewhere
+	 * keep their captured context — the stamp ratchet and directional merge
+	 * make mixed-age contexts safe.</p>
 	 */
 	public void refreshWriteClock() {
 		long now = Utils.getCurrentTimestamp();
@@ -421,8 +434,8 @@ public class Engine {
 		lastClockRefresh = now;
 		LatticeContext fresh = LatticeContext.create(
 			convex.core.data.prim.CVMLong.create(now), this.keyPair);
-		lattice.withContext(fresh);
-		if (venueState != null) venueState.cursor().withContext(fresh);
+		lattice.setContext(fresh);
+		if (venueState != null) venueState.cursor().setContext(fresh);
 	}
 
 	// ========================================================================

@@ -45,7 +45,7 @@ public class VenueStateTest {
 	public void testFromRoot() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(convex.lattice.LatticeContext.create(
+		root.setContext(convex.lattice.LatticeContext.create(
 			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
 
 		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey());
@@ -230,7 +230,7 @@ public class VenueStateTest {
 	public void testWritesPropagateToRoot() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(convex.lattice.LatticeContext.create(
+		root.setContext(convex.lattice.LatticeContext.create(
 			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
 
 		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey());
@@ -247,7 +247,7 @@ public class VenueStateTest {
 	public void testForkWritesNotVisibleBeforeSync() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(convex.lattice.LatticeContext.create(
+		root.setContext(convex.lattice.LatticeContext.create(
 			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
 
 		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey());
@@ -270,7 +270,7 @@ public class VenueStateTest {
 	public void testForkSyncPropagates() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(convex.lattice.LatticeContext.create(
+		root.setContext(convex.lattice.LatticeContext.create(
 			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
 
 		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey());
@@ -301,7 +301,7 @@ public class VenueStateTest {
 	public void testForkMultipleWritesSingleSync() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(convex.lattice.LatticeContext.create(
+		root.setContext(convex.lattice.LatticeContext.create(
 			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
 
 		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey());
@@ -435,7 +435,7 @@ public class VenueStateTest {
 	public void testConcurrentEnsureSameUser() throws Exception {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(convex.lattice.LatticeContext.create(
+		root.setContext(convex.lattice.LatticeContext.create(
 			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
 		VenueState vs = VenueState.fromRoot(root, kp.getAccountKey());
 
@@ -477,7 +477,7 @@ public class VenueStateTest {
 	public void testForkSyncIdempotent() {
 		AKeyPair kp = AKeyPair.generate();
 		var root = Cursors.createLattice(Covia.ROOT);
-		root.withContext(convex.lattice.LatticeContext.create(
+		root.setContext(convex.lattice.LatticeContext.create(
 			CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), kp));
 
 		VenueState connected = VenueState.fromRoot(root, kp.getAccountKey());

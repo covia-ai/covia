@@ -400,13 +400,9 @@ public class MCP extends McpServer {
 					return toolError("Tool call timed out after " + (TOOL_CALL_TIMEOUT_MS / 1000)
 						+ "s. Job ID: " + job.getID().toHexString());
 				}
-				// The protocol layer's toolSuccess casts the payload to a map and
-				// silently turns anything else into {} — ops with scalar outputs
-				// (e.g. agent:context returns a JSON string) would lose their
-				// result entirely. Wrap non-map results.
-				ACell structured = (result instanceof convex.core.data.AMap<?, ?> || result == null)
-					? result : Maps.of(Fields.RESULT, result);
-				return toolSuccess(structured);
+				// Scalar (non-map) results render as an MCP text result in the
+				// protocol layer (Convex 0.8.9) — no covia-side wrapping needed.
+				return toolSuccess(result);
 			} else {
 				return protocolError(-32602, "Unknown tool: " + toolName);
 			}
