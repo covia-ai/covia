@@ -150,6 +150,7 @@ public class A2AAdapter extends AAdapter {
 
 		HttpRequest req;
 		try {
+			requireSafeUrl(url);
 			req = HttpRequest.newBuilder(URI.create(url))
 					.GET()
 					.timeout(Duration.ofSeconds(30))
@@ -170,6 +171,17 @@ public class A2AAdapter extends AAdapter {
 					String body = resp.body();
 					return JSON.parse(body);
 				});
+	}
+
+	/** SSRF guard shared with the http adapter, including its operator
+	 *  allow/block lists (#234): an A2A target can never reach anything a
+	 *  direct HTTP call couldn't. Fails closed if the http adapter is absent. */
+	private void requireSafeUrl(String url) {
+		AAdapter http = engine.getAdapter("http");
+		if (!(http instanceof HTTPAdapter h)) {
+			throw new IllegalStateException("SSRF validation unavailable: http adapter not registered");
+		}
+		h.requireSafeUrl(url);
 	}
 
 	private static String normaliseAgentCardUrl(String url) {
@@ -209,6 +221,7 @@ public class A2AAdapter extends AAdapter {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("url required"));
 		}
 		String url = normaliseRpcUrl(urlCell.toString());
+		requireSafeUrl(url);
 
 		Map<String, Object> envelope = new LinkedHashMap<>();
 		envelope.put("jsonrpc", "2.0");
@@ -283,6 +296,12 @@ public class A2AAdapter extends AAdapter {
 		AString urlCell = RT.ensureString(RT.getIn(input, Fields.URL));
 		if (urlCell == null) { job.fail("url required"); return; }
 		String rpcUrl = normaliseRpcUrl(urlCell.toString());
+		try {
+			requireSafeUrl(rpcUrl);
+		} catch (IllegalArgumentException e) {
+			job.fail(e.getMessage());
+			return;
+		}
 
 		ACell messageRaw = RT.getIn(input, Fields.MESSAGE);
 		if (!(messageRaw instanceof AMap)) { job.fail("message required"); return; }

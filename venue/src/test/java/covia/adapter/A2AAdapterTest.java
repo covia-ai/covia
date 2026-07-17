@@ -2,6 +2,7 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -28,6 +29,20 @@ import covia.venue.api.A2ACodec;
  * wire format drifts from the spec, these tests break.
  */
 class A2AAdapterTest {
+
+	// ==================== SSRF parity ====================
+
+	@Test
+	void outboundUrlsPassSsrfValidation() throws Exception {
+		// Parity with the http/mcp adapters (#234): outbound A2A targets pass
+		// the same SSRF checks and operator allow/block lists. A site-local
+		// literal is refused without touching the network.
+		Job card = TestServer.COVIA.startJob(Strings.create("v/ops/a2a/agent-card"), Maps.of(
+			Fields.URL, Strings.create("http://10.0.0.1/agent")));
+		assertThrows(Exception.class, () -> card.awaitResult(10000));
+		assertEquals(Status.FAILED, card.getStatus());
+		assertTrue(card.getErrorMessage().contains("private/internal"), card.getErrorMessage());
+	}
 
 	// ==================== normaliseRpcUrl ====================
 
