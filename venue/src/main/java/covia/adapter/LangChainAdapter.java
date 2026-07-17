@@ -14,6 +14,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.util.JSON;
 import convex.core.data.Vectors;
@@ -138,6 +139,7 @@ public class LangChainAdapter extends AAdapter {
 		installAsset("langchain/gemini",    "/adapters/langchain/gemini.json");
 		installAsset("langchain/xai",       "/adapters/langchain/xai.json");
 		installAsset("langchain/deepseek",  "/adapters/langchain/deepseek.json");
+		installAsset("langchain/models",    "/adapters/langchain/models.json");
 
 		// Example configurations — stored in CAS, not in /v/ops/.
 		installExampleAsset("/asset-examples/qwen.json");   // langchain:ollama:qwen3
@@ -151,6 +153,13 @@ public class LangChainAdapter extends AAdapter {
 			return CompletableFuture.completedFuture(
 				Status.failure("Method not specified. Use 'langchain:ollama:modelName' or 'langchain:openai'")
 			);
+		}
+
+		// Discovery: providers + models with CALLER-RELATIVE readiness (see
+		// the models skill). IO-bound (ollama probe) → virtual executor.
+		if ("models".equals(subOp)) {
+			final ACell modelsInput = input;
+			return CompletableFuture.supplyAsync(() -> handleModels(ctx, modelsInput), VIRTUAL_EXECUTOR);
 		}
 
 		// subOp may be "ollama:modelName" or "openai" etc.
@@ -452,6 +461,118 @@ public class LangChainAdapter extends AAdapter {
 	}
 
 	// ========== API key resolution ==========
+
+	// ========== Provider/model discovery (langchain:models) ==========
+
+	/** Hosted providers and their conventional secret names — matching each
+	 *  provider op's {@code operation.secretKey} exactly. */
+	private static final String[][] HOSTED_PROVIDERS = {
+		{"openai",    "OPENAI_API_KEY"},
+		{"anthropic", "ANTHROPIC_API_KEY"},
+		{"gemini",    "GOOGLE_API_KEY"},
+		{"deepseek",  "DEEPSEEK_API_KEY"},
+		{"xai",       "XAI_API_KEY"},
+	};
+
+	/** Built-in model hints per provider — deliberately conservative (only
+	 *  ids known-good at release). The operator overrides per venue via
+	 *  config {@code adapters.langchain.models.<provider>}, so drift is a
+	 *  config edit, not a code release. */
+	private static final AMap<AString, ACell> BUILTIN_MODELS = Maps.of(
+		Strings.intern("openai"), Vectors.of((ACell) Strings.intern("gpt-5.4-mini")),
+		Strings.intern("anthropic"), Vectors.of(
+			(ACell) Strings.intern("claude-opus-4-8"),
+			(ACell) Strings.intern("claude-sonnet-5"),
+			(ACell) Strings.intern("claude-haiku-4-5-20251001")));
+
+	/**
+	 * {@code langchain:models} — provider/model discovery with
+	 * <b>caller-relative</b> readiness. A hosted provider is {@code ready}
+	 * when the CALLER's secret store resolves its conventional key name (the
+	 * value is discarded and never surfaced); ollama is {@code ready} when
+	 * its resolved base URL responds, and its {@code models} list is the
+	 * server's live installed set. Readiness cannot be venue-static: secrets
+	 * are per-user, so the same venue answers differently per caller.
+	 */
+	private ACell handleModels(RequestContext ctx, ACell input) {
+		AString filter = RT.ensureString(RT.getIn(input, "provider"));
+		AMap<AString, ACell> adapterCfg = (engine != null)
+			? engine.config().getAdapterConfig("langchain") : null;
+
+		AVector<ACell> providers = Vectors.empty();
+		for (String[] hp : HOSTED_PROVIDERS) {
+			if (filter != null && !filter.toString().equals(hp[0])) continue;
+			boolean ready = false;
+			try {
+				// Presence check only — the value is never returned.
+				ready = engine.resolveSecret(hp[1], ctx) != null;
+			} catch (Exception e) {
+				// No store / anonymous caller → not ready.
+			}
+			providers = providers.conj(Maps.of(
+				Strings.intern("op"), Strings.create("v/ops/langchain/" + hp[0]),
+				Strings.intern("provider"), Strings.intern(hp[0]),
+				Strings.intern("keySecret"), Strings.intern(hp[1]),
+				Strings.intern("ready"), ready ? CVMBool.TRUE : CVMBool.FALSE,
+				Strings.intern("models"), modelsFor(hp[0], adapterCfg)));
+		}
+
+		if (filter == null || "ollama".equals(filter.toString())) {
+			providers = providers.conj(ollamaEntry(adapterCfg));
+		}
+		return Maps.of(Strings.intern("providers"), providers);
+	}
+
+	/** Model hints for a provider: venue config override
+	 *  ({@code adapters.langchain.models.<provider>}) wins, else the
+	 *  conservative built-ins, else empty. */
+	static AVector<ACell> modelsFor(String provider, AMap<AString, ACell> adapterConfig) {
+		AVector<ACell> configured = RT.ensureVector(RT.getIn(adapterConfig, "models", provider));
+		if (configured != null) return configured;
+		AVector<ACell> builtin = RT.ensureVector(BUILTIN_MODELS.get(Strings.create(provider)));
+		return (builtin != null) ? builtin : Vectors.empty();
+	}
+
+	/** Live ollama entry: reachability of the resolved base URL (#224 chain)
+	 *  and the server's installed models via {@code /api/tags}. */
+	private AMap<AString, ACell> ollamaEntry(AMap<AString, ACell> adapterCfg) {
+		String url = resolveOllamaUrl(null, adapterCfg, System.getenv("OLLAMA_BASE_URL"));
+		AVector<ACell> models = Vectors.empty();
+		boolean ready = false;
+		String note = null;
+		try {
+			java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+				.connectTimeout(java.time.Duration.ofSeconds(2)).build();
+			java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder(
+					java.net.URI.create(url + "/api/tags"))
+				.timeout(java.time.Duration.ofSeconds(3)).GET().build();
+			java.net.http.HttpResponse<String> resp = client.send(req,
+				java.net.http.HttpResponse.BodyHandlers.ofString());
+			if (resp.statusCode() == 200) {
+				ready = true;
+				ACell parsed = convex.core.util.JSON.parse(resp.body());
+				AVector<ACell> tags = RT.ensureVector(RT.getIn(parsed, "models"));
+				if (tags != null) {
+					for (long i = 0; i < tags.count(); i++) {
+						AString name = RT.ensureString(RT.getIn(tags.get(i), "name"));
+						if (name != null) models = models.conj(name);
+					}
+				}
+			} else {
+				note = "HTTP " + resp.statusCode() + " from " + url;
+			}
+		} catch (Exception e) {
+			note = "unreachable at " + url + " — venue knob: adapters.langchain.ollamaUrl";
+		}
+		AMap<AString, ACell> entry = Maps.of(
+			Strings.intern("op"), Strings.intern("v/ops/langchain/ollama"),
+			Strings.intern("provider"), Strings.intern("ollama"),
+			Strings.intern("url"), Strings.create(url),
+			Strings.intern("ready"), ready ? CVMBool.TRUE : CVMBool.FALSE,
+			Strings.intern("models"), models);
+		if (note != null) entry = entry.assoc(Strings.intern("note"), Strings.create(note));
+		return entry;
+	}
 
 	private String resolveApiKey(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
 		AString apiKeyParam = RT.ensureString(RT.getIn(input, "apiKey"));

@@ -1,0 +1,13 @@
+{
+	"name": "models",
+	"description": "Discover which LLM providers and models are READY on this venue under your identity, and how to choose one. Load before setting llmOperation/model for any agent.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Models\nCall `v/ops/langchain/models` `{provider?}` -> `{providers: [{op, provider, keySecret, ready, models, url?, note?}]}`.\n\nReading the answer:\n- `ready` is CALLER-RELATIVE: for hosted providers it means YOUR secret store holds the provider's key (`keySecret` names it; the value is never shown). For ollama it means the server at `url` is reachable — and its `models` list is the live installed set.\n- Hosted `models` lists are HINTS (conservative built-ins; the operator extends them via venue config `adapters.langchain.models.<provider>`). Any id the provider accepts works.\n\nChoosing:\n- Pick a provider with `ready: true`. Configure the agent: `llmOperation` = the entry's `op`, `model` = a model id, `apiKey` = `\"s/<keySecret>\"`.\n- Not ready? Store the key first (secrets skill: set `{name: <keySecret>, value}`), or for ollama fix reachability (the entry's `note` names the venue knob).\n- Ollama + tools: pick a tool-capable model — qwen2.5 works well; the Gemma family does not tool-call usefully. Tool-free agents can use any model.\n- anthropic honours `maxTokens` (its API requires one; a default applies). `temperature`/`topP` pass through to every provider.\n\nGotcha when creating agents: templates default to openai/gpt-5.4-mini — on a venue where openai is not ready for you, override `llmOperation`/`model`/`apiKey` at create time or the new agent fails at its first LLM call. Check readiness BEFORE delegating to a freshly made agent."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/langchain/models"
+		]
+	}
+}

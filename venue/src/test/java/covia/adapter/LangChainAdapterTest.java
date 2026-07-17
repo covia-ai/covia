@@ -1305,4 +1305,75 @@ public class LangChainAdapterTest {
 		assertNull(LangChainAdapter.ollamaConnectHint("http://localhost:11434",
 			new RuntimeException("model not found: qwen")));
 	}
+
+	// ========== langchain:models discovery ==========
+
+	@Test
+	public void testModelsForConfigOverrideAndBuiltins() {
+		// Built-ins: conservative hints
+		assertTrue(LangChainAdapter.modelsFor("anthropic", null).toString().contains("claude-opus-4-8"));
+		assertTrue(LangChainAdapter.modelsFor("openai", null).toString().contains("gpt-5.4-mini"));
+		assertEquals(0, LangChainAdapter.modelsFor("gemini", null).count());
+
+		// Venue config override wins wholesale
+		AMap<AString, ACell> cfg = Maps.of(
+			Strings.create("models"), Maps.of(
+				Strings.create("anthropic"), Vectors.of((ACell) Strings.create("claude-fable-5"))));
+		assertEquals("claude-fable-5",
+			LangChainAdapter.modelsFor("anthropic", cfg).get(0).toString());
+	}
+
+	@Test
+	public void testModelsDiscoveryCallerRelative() throws Exception {
+		// Readiness must reflect the CALLER's secret store — same venue,
+		// different callers, different answers.
+		covia.venue.Engine engine = covia.venue.TestEngine.ENGINE;
+		AString did = Strings.create("did:key:z6Mk-test-models-discovery");
+		covia.venue.RequestContext ctx = covia.venue.RequestContext.of(did);
+
+		ACell before = engine.jobs().invokeInternal("v/ops/langchain/models",
+			Maps.of(Strings.create("provider"), Strings.create("anthropic")), ctx)
+			.get(10, java.util.concurrent.TimeUnit.SECONDS);
+		AMap<AString, ACell> entry = RT.castMap(
+			RT.ensureVector(RT.getIn(before, "providers")).get(0));
+		assertEquals("anthropic", RT.getIn(entry, "provider").toString());
+		assertEquals("ANTHROPIC_API_KEY", RT.getIn(entry, "keySecret").toString());
+		assertEquals(convex.core.data.prim.CVMBool.FALSE, RT.getIn(entry, "ready"));
+
+		// Store the key → ready flips, for this caller only. The VALUE never
+		// appears anywhere in the discovery output.
+		engine.jobs().invokeInternal("v/ops/secret/set",
+			Maps.of(Strings.create("name"), Strings.create("ANTHROPIC_API_KEY"),
+				Strings.create("value"), Strings.create("sk-test-dummy")), ctx)
+			.get(5, java.util.concurrent.TimeUnit.SECONDS);
+		ACell after = engine.jobs().invokeInternal("v/ops/langchain/models",
+			Maps.of(Strings.create("provider"), Strings.create("anthropic")), ctx)
+			.get(10, java.util.concurrent.TimeUnit.SECONDS);
+		assertEquals(convex.core.data.prim.CVMBool.TRUE,
+			RT.getIn(RT.ensureVector(RT.getIn(after, "providers")).get(0), "ready"));
+		assertFalse(after.toString().contains("sk-test-dummy"),
+			"secret values must never surface in discovery output");
+
+		ACell other = engine.jobs().invokeInternal("v/ops/langchain/models",
+			Maps.of(Strings.create("provider"), Strings.create("anthropic")),
+			covia.venue.RequestContext.of(Strings.create("did:key:z6Mk-test-models-other")))
+			.get(10, java.util.concurrent.TimeUnit.SECONDS);
+		assertEquals(convex.core.data.prim.CVMBool.FALSE,
+			RT.getIn(RT.ensureVector(RT.getIn(other, "providers")).get(0), "ready"),
+			"readiness is caller-relative — another caller sees not-ready");
+	}
+
+	@Test
+	public void testModelsDiscoveryFullListing() throws Exception {
+		covia.venue.Engine engine = covia.venue.TestEngine.ENGINE;
+		ACell result = engine.jobs().invokeInternal("v/ops/langchain/models", Maps.empty(),
+			covia.venue.RequestContext.of(Strings.create("did:key:z6Mk-test-models-full")))
+			.get(15, java.util.concurrent.TimeUnit.SECONDS);
+		var providers = RT.ensureVector(RT.getIn(result, "providers"));
+		assertEquals(6, providers.count(), "5 hosted + ollama");
+		AMap<AString, ACell> ollama = RT.castMap(providers.get(5));
+		assertEquals("ollama", RT.getIn(ollama, "provider").toString());
+		assertNotNull(RT.getIn(ollama, "url"), "ollama entry always names its resolved url");
+		assertNotNull(RT.getIn(ollama, "ready"));
+	}
 }

@@ -1,0 +1,18 @@
+{
+	"name": "LLM Models",
+	"description": "Discover LLM providers and models on this venue, with CALLER-RELATIVE readiness. Returns {providers: [{op, provider, keySecret, ready, models, url?, note?}]}. 'ready' reflects whether YOUR secret store holds the provider's conventional key (the value is never returned) — or, for ollama, live server reachability with its installed model list. Hosted model lists are hints: conservative built-ins, operator-overridable via venue config adapters.langchain.models.<provider>.",
+	"dateCreated": "2026-07-17T00:00:00Z",
+	"operation": {
+		"adapter": "langchain:models",
+		"toolName": "llm_models",
+		"input": {
+			"type": "object",
+			"properties": {
+				"provider": { "type": "string", "description": "Optional filter: openai | anthropic | gemini | deepseek | xai | ollama" }
+			}
+		},
+		"output": {
+			"description": "{providers: [{op, provider, keySecret, ready, models, url?, note?}]} — pick a ready provider; configure agents with llmOperation = op, apiKey = 's/<keySecret>'."
+		}
+	}
+}
