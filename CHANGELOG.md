@@ -9,28 +9,48 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ## [Unreleased]
 
 ### Added
-- System tray icon on desktop launches — open, close venue, exit (`COVIA_NO_TRAY=1` to disable)
-- `VenueAuth.mintToken()` — raw self-issued JWT for stored credentials (aud-bound, explicit lifetime) (#219)
-- Token usage (`tokens: {input, output, total}`) on agent timeline entries, session `meta.tokens`, job records and `agent:context` (#217)
-- Typed outputs work on Anthropic — provider-aware structured output via forced tool calling, transparent to agents (#81)
-- `agent:create` warns when `config.apiKey` holds a raw credential instead of a `s/<name>` secret reference
-- Capability gates — a grant's `nb.gate` names an op that decides per invocation whether the capability applies; runtime-enforced policy limits without a policy language (#216)
-- MCP tool bridging — external MCP tools materialise as catalog operations with caps/gates/jobs applying; curate single tools at chosen paths (`v/ops/mcp/add-tool`, cross-server groups as catalog paths) or mirror whole servers (`v/ops/mcp/add-server`, config-time and dynamic), user and venue scopes (#80)
-- `operation.default` — declarative argument defaults on any operation, merged under the caller's input at dispatch (caller wins; any value type); `add-tool` stores them and drops defaulted keys from the schema's required list (`venue/docs/OPERATIONS.md` §5)
-- Venue modules — adapters load from external jars at boot (`modules` config; optional sha256 content pinning; per-module classloader isolation) (#226)
-- SQL adapter as the first venue module (`covia-sql`) — `v/ops/sql/query`/`execute` over per-user lattice-backed convex-db databases and operator-registered JDBC connections; callers name databases, never URLs (#227)
-- `temperature` and `topP` on all `v/ops/langchain/*` ops — pass through to every provider; integer or double accepted (#218)
-- Venue-level Ollama base URL — `adapters.langchain.ollamaUrl` config or `OLLAMA_BASE_URL` env resolve when the call carries no `url`, so agents stay topology-agnostic; connect failures name the resolved URL and the knob (#224)
+- Agent skills — discoverable instruction+tool bundles agents load on demand with `skill_load`; skills are ordinary assets (`venue/docs/SKILLS.md`)
+- Venue skill library — 20 skills covering every covia mechanism, from workspace and agents to grid, a2a, discovery and provenance
+- `v/ops/skills` — list and read skills over workspace, venue and asset sources
+- Skills-first agent templates — `skilled` (recommended default), caps-pinned `reader`, discovery-only `minimal`
+- Venue modules ship their own skills from their own jars (covia-sql's `sql` skill)
+- `langchain:models` — provider and model discovery with caller-relative readiness (#221)
+- Per-agent A2A publishing — `a2a.public` for a discoverable card, `a2a.caps` ceiling to accept stranger messages
+- Agents report back into a conversation — `agent:request` with `sessionId` runs the task in that session
+- Token usage on job records, agent timelines, sessions and `agent:context` (#217)
+- Capability gates — a grant applies only when its named gating op approves the invocation (#216)
+- MCP tool bridging — external MCP tools become ordinary catalog operations, curated singly or mirrored per server (#80)
+- `operation.default` — declarative argument defaults on any operation (`venue/docs/OPERATIONS.md` §5)
+- Venue modules — external adapter jars loaded at boot with classloader isolation (#226)
+- SQL venue module (covia-sql) — per-user lattice-backed databases and operator-registered JDBC connections (#227)
+- Typed outputs on Anthropic — provider-aware forced tool calling, transparent to agents (#81)
+- `temperature` and `topP` on all langchain ops (#218); venue-level Ollama base URL (#224)
+- `VenueAuth.mintToken()` — self-issued JWTs for stored credentials (#219)
+- `agent:create` warns on raw credentials in `config.apiKey`
+- System tray icon on desktop launches (`COVIA_NO_TRAY=1` to disable)
+- MCP spec-conformance tests — tools/list schemas and call-result shapes
+
+### Changed
+- Convex 0.8.9 — live lattice-context inheritance, Etch online GC, convex-db fixes (#221)
+- MCP scalar tool results are text content, not `{result: …}` — the upstream rendering, shim removed
+- MCP tools/list schemas pass through as declared; `outputSchema` advertised only for object-typed outputs
+- DLFS WebDAV advertises `DAV: 1` only — unenforced class-2 locking is no longer claimed
+- `GET /api/v1/agents` returns the same enriched entries as `agent:list`; `?status=false` for bare ids (#233)
+- covia-sql supports single-column tables (convex#646 fixed)
+- Agent lifecycle ops invoked as agent tools delegate to real, owner-attributed Jobs
 
 ### Fixed
-- Task input rendered to models as plain text/JSON, never EDN map literals (#215)
-- Control tools emitted as plain text (`complete_task {...}`) now recognised and honoured (#215)
-- A task that burns the whole loop budget fails with a structured error instead of pinning STARTED (#215)
-- Job SSE streams broadcast every status change (subscriptions were keyed by the raw path parameter, so `0x`-form subscribers only ever received the initial frame); terminal frames close the stream; job ownership applies to the stream as to `GET /jobs/{id}` (#225)
-- Job SSE route defaults to `text/event-stream` when the Accept header is missing or `*/*`; an explicit non-SSE Accept gets a 406 with the remedy instead of a silent empty 200 (#222)
-- MCP tool-level errors (`isError`) fail the bridged job with the remote error text instead of completing with an error-shaped payload (#80)
-- Text-only MCP tool results preserved instead of returning null (#80)
-- MCP transport failures name the tool, server and root cause with a remedy, not a raw exception string (#80)
+- Loopback-bound venues answer on both 127.0.0.1 and ::1 (#231)
+- Outbound A2A URLs pass the http adapter's SSRF checks and operator allow/block lists (#234)
+- Outbound `a2a:send` no longer corrupts per-agent endpoint URLs (#234)
+- Anonymous A2A senders can poll and cancel tasks they created on public agents (#234)
+- `a2a:send` works as an agent tool (#234)
+- Task input rendered to models as plain text/JSON, never EDN literals (#215)
+- Text-form control tool calls (`complete_task {...}`) recognised and honoured (#215)
+- A task that exhausts the loop budget fails structurally instead of pinning STARTED (#215)
+- Job SSE streams broadcast every status change and close on terminal frames (#225)
+- Job SSE defaults to `text/event-stream` on missing/wildcard Accept; non-SSE Accept gets 406 with remedy (#222)
+- Bridged MCP tool errors fail the job with the remote error text; text-only results preserved; transport failures name tool, server and cause (#80)
 
 ## [0.5.0] - 2026-07-15
 
