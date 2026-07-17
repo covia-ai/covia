@@ -5,12 +5,19 @@
 	<parent>
 		<groupId>ai.covia</groupId>
 		<artifactId>covia</artifactId>
-		<version>0.5.1-SNAPSHOT</version>
+		<version>0.6.0</version>
 	</parent>
 	<artifactId>covia-sql</artifactId>
 
 	<name>Covia SQL Module</name>
 	<description>SQL adapter for Covia venues — query/execute over lattice-backed convex-db databases and operator-registered JDBC connections. Packaged as a loadable venue module (the shaded "module" classifier jar), not part of covia.jar.</description>
+
+	<properties>
+		<!-- A loadable venue module, not a consumer library — never published to
+		     Maven Central (the parent's central-publishing plugin would otherwise
+		     bundle it). Built and installed locally as part of the reactor. -->
+		<maven.deploy.skip>true</maven.deploy.skip>
+	</properties>
 
 	<dependencies>
 		<!-- The venue SPI — provided by the loading venue, never bundled -->

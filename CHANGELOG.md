@@ -8,10 +8,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-17
+
 ### Added
 - Agent skills — discoverable instruction+tool bundles agents load on demand with `skill_load`; skills are ordinary assets (`venue/docs/SKILLS.md`)
 - Venue skill library — 20 skills covering every covia mechanism, from workspace and agents to grid, a2a, discovery and provenance
-- `v/ops/skills` — list and read skills over workspace, venue and asset sources
+- `v/ops/skills` — list and read skills over workspace, venue and asset sources; exposed in the default MCP tool palette
 - Skills-first agent templates — `skilled` (recommended default), caps-pinned `reader`, discovery-only `minimal`
 - Venue modules ship their own skills from their own jars (covia-sql's `sql` skill)
 - `langchain:models` — provider and model discovery with caller-relative readiness (#221)
