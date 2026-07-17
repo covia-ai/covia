@@ -484,6 +484,13 @@ public class MCPTest {
 		assertEquals(Fields.OBJECT, out.get(Fields.TYPE));
 	}
 
+	/** The skills discovery op is in the default MCP palette so external
+	 *  clients can find and read venue skills. */
+	@Test public void testSkillsOpExposedOverMCP() {
+		assertNotNull(findTool("skills"),
+			"the skills discovery op should be MCP-exposed by default");
+	}
+
 	// ========== MCP spec conformance (2025-06-18) — call-result shapes ==========
 
 	/**

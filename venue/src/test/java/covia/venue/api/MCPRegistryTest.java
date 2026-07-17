@@ -71,8 +71,8 @@ public class MCPRegistryTest {
 	@Test public void testDefaultExposesOnlyAllowlistedGroups() {
 		MCP mcp = mcp(freshEngine(), Maps.empty());
 		Set<String> groups = groupsOf(toolNames(mcp));
-		assertEquals(Set.of("agent", "asset", "covia", "grid", "secret"), groups,
-			"Default include set should expose exactly the 5 allowlisted groups");
+		assertEquals(Set.of("agent", "asset", "covia", "grid", "secret", "skills"), groups,
+			"Default include set should expose exactly the allowlisted groups");
 	}
 
 	@Test public void testDefaultHidesUtilityAdapters() {
@@ -126,7 +126,7 @@ public class MCPRegistryTest {
 		MCP mcp = mcp(freshEngine(),
 			Maps.of(K_INCLUDE_ADAPTERS, Vectors.empty()));
 		Set<String> groups = groupsOf(toolNames(mcp));
-		assertEquals(Set.of("agent", "asset", "covia", "grid", "secret"), groups);
+		assertEquals(Set.of("agent", "asset", "covia", "grid", "secret", "skills"), groups);
 	}
 
 	// ==================== Path-prefix filter ====================

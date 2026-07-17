@@ -73,7 +73,7 @@ public class MCP extends McpServer {
 	 * an explicit list to override the default.</p>
 	 */
 	private static final java.util.Set<String> DEFAULT_INCLUDE_ADAPTERS =
-		java.util.Set.of("covia", "grid", "asset", "secret", "agent");
+		java.util.Set.of("covia", "grid", "asset", "secret", "agent", "skills");
 
 	/** Wildcard token in {@code includeAdapters} meaning "expose all groups". */
 	private static final String INCLUDE_ALL = "*";
