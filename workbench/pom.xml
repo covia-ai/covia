@@ -10,7 +10,7 @@
   <description>Covia Workbench: a minimal Swing GUI REPL for demoing and testing a venue.</description>
 
   <properties>
-    <flatlaf.version>3.7.1</flatlaf.version>
+    <flatlaf.version>3.7.2</flatlaf.version>
   </properties>
   
   <dependencies>
