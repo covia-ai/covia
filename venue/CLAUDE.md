@@ -207,7 +207,8 @@ Base path: `/api/v1/`
 | `/assets/{id}/content` | GET/PUT | Asset binary content |
 | `/invoke` | POST | Execute an operation — async by default (201 + job record to poll); `?wait=true` blocks up to the 120s cap, `?wait=<ms>` up to that many ms (clamped), returning the finished record (200) |
 | `/values/{read,list,slice,inspect,aggregate,count}` | GET | Job-free lattice reads (#177) — `?path=…`, synchronous, capability-checked, **no job persisted**. Shares `covia:*` read accessors. `aggregate`/`count` tally entries at a `depth`, optional `groupBy`. See `docs/READ_API.md` |
-| `/agents`, `/agents/{id}` | GET | Job-free agent listings (#180) — the caller's own agents, sharing `agent:list`/`agent:info` accessors, **no job persisted**. `?status=true` for the status-annotated form, `?includeTerminated=true` to include terminated |
+| `/agents`, `/agents/{id}` | GET | Job-free agent listings (#180) — the caller's own agents, sharing `agent:list`/`agent:info` accessors, **no job persisted**. Entries default to the enriched `{agentId, status, tasks}` form matching `agent:list` (#233); `?status=false` for bare ids, `?includeTerminated=true` to include terminated |
+| `/jobs` | GET | The caller's jobs as a paged `{items, total, offset, limit}` envelope of ids, chronological (#229) |
 | `/jobs/{id}` | GET | Job status |
 | `/jobs/{id}/sse` | GET | Server-sent events for job updates |
 | `/.well-known/did.json` | GET | Venue DID document — `did:web:<hostname>` alias (canonical did:key in `alsoKnownAs`) when a public `hostname` is set, else the did:key document (#167) |
@@ -589,6 +590,21 @@ cannot invoke, so the Task comes back `TASK_STATE_FAILED`. To exercise
 or widen `auth.public.caps` to permit the op — do the latter only on a
 loopback-bound (`bindAddress: 127.0.0.1`) throwaway venue, never a
 LAN-reachable one. The agent-card GET is public and works regardless.
+
+**Per-agent endpoints (COG-14):** beyond the front door, every agent is
+addressable at `POST /a2a/<ownerDID>/g/<agentId>` (JSON-RPC `SendMessage` →
+`agent:request` task Job = A2A Task; `GetTask`, `CancelTask`,
+`GetExtendedAgentCard`), with its card at the A2A well-known path below that
+base. Private by default: the owner interacts as themselves; anonymous
+non-owners get an existence-hiding 404, authenticated non-owners 403.
+Publishing is per-agent config: `a2a: {public: true}` makes the card
+discoverable; adding an explicit `a2a.caps` ceiling accepts stranger
+messages, dispatched as the OWNER narrowed by that ceiling — it must include
+`agent/request` plus whatever the agent's own work needs. `"unrestricted"`
+grants full owner authority (logged loudly). Wire method names are SDK-style
+(`SendMessage`, not `message/send`). Per-agent task continuation (incoming
+`taskId`) is not yet implemented (#234). Outbound `v/ops/a2a/*` ops pass the
+http adapter's SSRF checks and operator allow/block lists.
 
 ### Secrets bootstrap
 
