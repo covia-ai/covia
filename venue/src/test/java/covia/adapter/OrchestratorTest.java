@@ -38,6 +38,33 @@ public class OrchestratorTest {
 		ALICE_DID = TestEngine.uniqueDID(info);
 	}
 
+	// ========== Internal invocation (the LLM tool-loop seam) ==========
+
+	@Test
+	public void testOrchestrationInvokableInternally() throws Exception {
+		// Regression (#85 fall-out): an orchestration reached via the zero-Job
+		// internal path (e.g. invoked as an LLM tool from a skills-bundled
+		// pipeline) must delegate to the Job-aware dispatch, not throw
+		// UnsupportedOperationException.
+		AMap<AString, ACell> meta = Maps.of(
+			Fields.NAME, Strings.create("inline-orch"),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("orchestrator"),
+				Fields.STEPS, Vectors.of(Maps.of(
+					Strings.create("op"), Strings.create("v/test/ops/echo"),
+					Strings.create("input"), Vectors.of(
+						Strings.create("const"),
+						Maps.of(Strings.create("echo"), Strings.create("orch-internal"))))),
+				Fields.RESULT, Maps.of(
+					Strings.create("out"), Vectors.of(CVMLong.create(0)))));
+
+		ACell result = engine.jobs().invokeInternal(meta, Maps.empty(), RequestContext.of(ALICE_DID))
+			.get(10, java.util.concurrent.TimeUnit.SECONDS);
+		assertNotNull(result);
+		assertEquals(Strings.create("orch-internal"),
+			RT.getIn(result, Strings.create("out"), Strings.create("echo")));
+	}
+
 	// ========== Input resolution via JSON-stored orchestration ==========
 
 	@Test

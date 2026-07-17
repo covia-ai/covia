@@ -290,6 +290,61 @@ public class AgentAdapterTest {
 		}
 	}
 
+	// ========== Agent ops via the internal path (the LLM tool-loop seam) ==========
+
+	@Test
+	public void testAgentLifecycleOpsInvokableInternally() throws Exception {
+		// Regression (#85 fall-out, caught live by an agent calling agent_create
+		// as a tool): lifecycle ops reached via the zero-Job internal path must
+		// delegate to the Job-aware dispatch — a real, owner-attributed Job —
+		// not throw UnsupportedOperationException.
+		ACell created = engine.jobs().invokeInternal("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "tool-made",
+				Fields.CONFIG, Maps.of("llmOperation", "v/test/ops/llm")),
+			RequestContext.of(ALICE_DID)).get(5, java.util.concurrent.TimeUnit.SECONDS);
+		assertEquals(CVMBool.TRUE, RT.getIn(created, Strings.create("created")));
+
+		// Job-worthy: the create is on the record as a persisted Job.
+		boolean createJobFound = false;
+		for (var e : engine.jobs().getJobs(RequestContext.of(ALICE_DID)).entrySet()) {
+			ACell in = RT.getIn(e.getValue(), Fields.INPUT);
+			if (Strings.create("tool-made").equals(RT.getIn(in, Fields.AGENT_ID))) {
+				createJobFound = true;
+				break;
+			}
+		}
+		assertTrue(createJobFound, "internal agent:create must persist an audit Job");
+
+		ACell updated = engine.jobs().invokeInternal("v/ops/agent/update",
+			Maps.of(Fields.AGENT_ID, "tool-made",
+				Fields.CONFIG, Maps.of("model", "gpt-5.4-mini")),
+			RequestContext.of(ALICE_DID)).get(5, java.util.concurrent.TimeUnit.SECONDS);
+		assertNotNull(updated);
+	}
+
+	@Test
+	public void testAgentReadsStayJobFreeInternally() throws Exception {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "readable",
+				Fields.CONFIG, Maps.of("llmOperation", "v/test/ops/llm")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		long jobsBefore = engine.jobs().getJobs(RequestContext.of(ALICE_DID)).count();
+
+		ACell list = engine.jobs().invokeInternal("v/ops/agent/list", Maps.empty(),
+			RequestContext.of(ALICE_DID)).get(5, java.util.concurrent.TimeUnit.SECONDS);
+		AVector<ACell> agents = RT.ensureVector(RT.getIn(list, Strings.create("agents")));
+		assertNotNull(agents);
+
+		ACell info = engine.jobs().invokeInternal("v/ops/agent/info",
+			Maps.of(Fields.AGENT_ID, "readable"),
+			RequestContext.of(ALICE_DID)).get(5, java.util.concurrent.TimeUnit.SECONDS);
+		assertEquals(Strings.create("readable"), RT.getIn(info, Fields.AGENT_ID));
+
+		// Reads share the #180 job-free accessors: no new Jobs minted.
+		assertEquals(jobsBefore, engine.jobs().getJobs(RequestContext.of(ALICE_DID)).count(),
+			"agent list/info via the internal path must not create Jobs");
+	}
+
 	@Test
 	public void testCreateWarnsOnUnresolvableSkillsSource() {
 		// A skills source that resolves to nothing is only an advisory —

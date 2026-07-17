@@ -46,7 +46,13 @@ public class Orchestrator extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		throw new UnsupportedOperationException("Invalid call to orchestrator");
+		// Orchestrations are job-worthy: each run is a tracked Job with
+		// sub-jobs per step. The internal path (LLM tool loop, context
+		// assemble ops — e.g. a skills-bundled pipeline invoked as a tool)
+		// delegates to the Job-aware dispatch — same RequestContext, same
+		// capability ceiling — instead of rejecting the call (#85 fall-out).
+		Job job = engine.jobs().invokeOperation(meta, input, ctx);
+		return job.future().thenApply(x -> x);
 	}
 
 	private static final AString K_STRICT = Strings.intern("strict");

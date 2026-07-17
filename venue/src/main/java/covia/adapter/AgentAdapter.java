@@ -228,9 +228,39 @@ public class AgentAdapter extends AAdapter {
 					// apply here. Mints no session.
 					return CompletableFuture.completedFuture(doKick(ctx, input));
 				}
+				case "list" -> {
+					// Job-free read (#180): shares the /agents route accessor.
+					boolean includeTerminated = CVMBool.TRUE.equals(RT.getIn(input, Fields.INCLUDE_TERMINATED));
+					return CompletableFuture.completedFuture(listAgents(ctx, includeTerminated, true));
+				}
+				case "info" -> {
+					// Job-free read (#180): shares the /agents/{id} route accessor.
+					AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+					if (agentId == null) {
+						return CompletableFuture.failedFuture(
+							new IllegalArgumentException("agentId is required"));
+					}
+					AMap<AString, ACell> summary = agentInfo(ctx, agentId);
+					if (summary == null) {
+						return CompletableFuture.failedFuture(
+							new IllegalArgumentException("Agent not found or terminated: " + agentId));
+					}
+					return CompletableFuture.completedFuture(summary);
+				}
 				default -> {
-					return CompletableFuture.failedFuture(new UnsupportedOperationException(
-						"agent:" + subOp + " requires Job-aware invocation"));
+					// Everything else — create, update, fork, chat, message,
+					// delete, suspend, resume, cancelTask, deleteSession,
+					// context — is JOB-WORTHY by design: an agent creating,
+					// reconfiguring or conversing with another agent is a
+					// system-of-record action, so the internal path (LLM tool
+					// loop, context assemble ops) delegates to the Job-aware
+					// dispatch and gets a real, owner-attributed Job — same
+					// RequestContext, same capability ceiling. This is the
+					// delegation pattern `request` established above; the
+					// internal path previously rejected these outright (#85
+					// fall-out), breaking agent ops as LLM tools.
+					Job job = engine.jobs().invokeOperation(meta, input, ctx);
+					return job.future().thenApply(x -> x);
 				}
 			}
 		} catch (Exception e) {
