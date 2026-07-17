@@ -204,4 +204,28 @@ public class SQLAdapterTest {
 		assertEquals(Status.FAILED, bad.getStatus());
 		assertTrue(bad.getErrorMessage().contains("db5"), bad.getErrorMessage());
 	}
+
+	// ========== Module-shipped skill ==========
+
+	/**
+	 * The module ships its own agent skill (SKILLS.md): the resource lives in
+	 * the module jar and installs to {@code v/skills/sql} exactly when the
+	 * module is loaded. Mirrors the venue's SkillsLibraryTest guards — the
+	 * skill must resolve with a real body and every declared tool must
+	 * resolve on the venue.
+	 */
+	@Test
+	public void testSqlSkillShipsWithModule() {
+		covia.adapter.agent.Skills.ResolvedSkill s =
+			covia.adapter.agent.Skills.resolveRef(engine, ctx, Strings.create("v/skills/sql"));
+		assertEquals("sql", s.name());
+		assertNotNull(s.body(), "sql skill should carry an inline body");
+		AVector<ACell> tools = s.toolOps();
+		assertTrue(tools.count() >= 2, "sql skill should declare its ops as tools");
+		for (long i = 0; i < tools.count(); i++) {
+			AString toolRef = RT.ensureString(tools.get(i));
+			assertNotNull(engine.resolveAsset(toolRef, ctx),
+				toolRef + " declared by the sql skill must resolve");
+		}
+	}
 }

@@ -66,11 +66,17 @@ public class SkillsAdapter extends AAdapter {
 	 * out-of-the-box agents see the whole library in their [Skills] index —
 	 * and a user's own {@code w/skills/<name>} shadows the venue skill of the
 	 * same name (first source wins).
+	 *
+	 * <p>This list covers only covia.jar built-ins. Module adapters ship
+	 * their own skills from their own jars via {@code installSkill} (e.g.
+	 * covia-sql's {@code sql} skill) — present exactly when the module is
+	 * loaded, never listed here.</p>
 	 */
 	static final String[] LIBRARY = {
-		"workspace", "assets", "agents", "tasks", "models", "orchestration",
-		"grid", "files", "secrets", "scheduling", "memory", "convex", "mcp",
-		"http", "auth", "skills", "skill-authoring"
+		"workspace", "assets", "discovery", "provenance", "agents", "tasks",
+		"models", "orchestration", "grid", "a2a", "files", "secrets",
+		"scheduling", "memory", "convex", "mcp", "http", "auth", "skills",
+		"skill-authoring"
 	};
 
 	@Override

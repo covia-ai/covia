@@ -95,6 +95,10 @@ public class SQLAdapter extends AAdapter {
 	protected void installAssets() {
 		installAsset("sql/query",   "/adapters/sql/query.json");
 		installAsset("sql/execute", "/adapters/sql/execute.json");
+		// The skill travels with the capability: readResource resolves against
+		// the module jar's own classloader, so v/skills/sql exists exactly when
+		// this module is loaded.
+		installSkill("sql", "/skills/sql.json");
 	}
 
 	@Override

@@ -551,7 +551,9 @@ first use; ONE instance, per-user isolation via the `database=` param —
 convex-db 0.8.8 mis-routes DML across multiple instances, Convex-Dev/convex#645)
 and operator-registered JDBC connections (`adapters.sql.databases.<name>`,
 passwords as `s/` secret refs). Callers name a `db`, never a URL. Caps:
-`sql/<db>` × `sql/query`|`sql/execute`.
+`sql/<db>` × `sql/query`|`sql/execute`. The module ships its own `sql`
+agent skill from its jar (materialises at `v/skills/sql` exactly when the
+module is loaded — the module-shipped-skill pattern, see `docs/SKILLS.md`).
 
 ### A2A protocol
 

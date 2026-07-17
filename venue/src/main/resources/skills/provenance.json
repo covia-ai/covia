@@ -1,0 +1,17 @@
+{
+	"name": "provenance",
+	"description": "The audit trail: every invocation leaves an immutable job record. Load to inspect what ran, debug failures, or verify another agent's work.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Provenance\nA venue is a system of record: every operation invocation persists a job record under `j/` in the caller's namespace, and every job names its caller.\n- list `{path: \"j\"}` — your job IDs. read `{path: \"j/<id>\"}` — one record: `operation`, `input`, `status`, `created`/`updated` (epoch ms), then `output` on success or `error` on failure.\n- Status lifecycle: PENDING → STARTED → COMPLETE | FAILED | CANCELLED (also PAUSED, INPUT_REQUIRED, AUTH_REQUIRED). Jobs have no framework timeout — STARTED can be legitimately long-running.\n- Agent history: `g/<agent>/timeline` (slice it — one entry per run cycle), sessions under `g/<agent>/sessions`, the conversation at `.../sessions/<sid>/frames/0/conversation`.\n\nRules:\n- Debug by READING the record, not re-running: a failed delegation's task job carries the `error`; the worker's timeline shows what it actually did.\n- Verify claims — your own or another agent's — against records rather than narration.\n- inspect/slice large indexes and vectors before read (size guards apply); aggregate summarises without reading.\n- Reads never create jobs. Jobs on other venues: grid job-status / job-result (grid skill).\n- Fields named in an op's `secretFields` are redacted in records — absence there is by design."
+	},
+	"skill": {
+		"tools": [
+			"v/ops/covia/list",
+			"v/ops/covia/read",
+			"v/ops/covia/slice",
+			"v/ops/covia/inspect",
+			"v/ops/covia/aggregate"
+		]
+	}
+}
