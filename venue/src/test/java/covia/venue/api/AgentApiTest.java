@@ -118,15 +118,25 @@ public class AgentApiTest {
 	// ===================== functional =====================
 
 	@Test
-	public void testListReturnsIds() throws Exception {
+	public void testListDefaultsToAnnotated() throws Exception {
+		// One canonical shape across both transports (#233): the REST default
+		// matches agent:list's enriched entries, so clients read .agentId,
+		// .status and .tasks without a per-agent fan-out.
 		HttpResponse<String> r = get("agents", true);
 		assertEquals(200, r.statusCode(), r.body());
 		ACell body = JSON.parse(r.body());
 		assertTrue(listHas(body, "AgentAlpha"), r.body());
 		assertTrue(listHas(body, "AgentBeta"), r.body());
-		// The default form is bare ids (strings), not annotated maps.
 		AVector<?> agents = (AVector<?>) RT.getIn(body, "agents");
-		assertTrue(agents.get(0) instanceof AString, "default list entries are bare ids");
+		ACell first = agents.get(0);
+		assertTrue(first instanceof AMap, "default list entries are annotated maps");
+		assertNotNull(RT.getIn(first, "agentId"));
+		assertNotNull(RT.getIn(first, "status"));
+		assertNotNull(RT.getIn(first, "tasks"));
+
+		// status=false opts into the lean bare-id form.
+		AVector<?> lean = (AVector<?>) RT.getIn(JSON.parse(get("agents?status=false", true).body()), "agents");
+		assertTrue(lean.get(0) instanceof AString, "status=false entries are bare ids");
 	}
 
 	@Test

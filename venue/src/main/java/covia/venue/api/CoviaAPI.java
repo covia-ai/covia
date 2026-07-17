@@ -1285,7 +1285,7 @@ public class CoviaAPI extends ACoviaAPI {
 			operationId = "getAgents",
 			queryParams = {
 					@OpenApiParam(name = "status", type = Boolean.class,
-							description = "true → the status-annotated form ({agentId, status, tasks, error?}) instead of bare agent ids."),
+							description = "false → bare agent ids instead of the default status-annotated form ({agentId, status, tasks, error?})."),
 					@OpenApiParam(name = "includeTerminated", type = Boolean.class,
 							description = "true → include terminated agents (hidden by default).")
 			})
@@ -1295,7 +1295,11 @@ public class CoviaAPI extends ACoviaAPI {
 			buildError(ctx, 401, "Authentication required");
 			return;
 		}
-		boolean annotated = "true".equals(ctx.queryParam("status"));
+		// One canonical shape across both transports (#233): default to the
+		// same enriched entries agent:list returns — clients read .agentId,
+		// .status, .tasks without an N+1 fan-out. status=false opts into the
+		// lean bare-id form.
+		boolean annotated = !"false".equals(ctx.queryParam("status"));
 		boolean includeTerminated = "true".equals(ctx.queryParam("includeTerminated"));
 		AgentAdapter agent = (AgentAdapter) engine().getAdapter("agent");
 		buildResult(ctx, 200, agent.listAgents(rctx, includeTerminated, annotated));
