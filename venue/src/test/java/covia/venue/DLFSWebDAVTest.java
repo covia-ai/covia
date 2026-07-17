@@ -135,7 +135,10 @@ public class DLFSWebDAVTest {
 
 		String dav = res.headers().firstValue("DAV").orElse("");
 		assertTrue(dav.contains("1"), "DAV header should include class 1");
-		assertTrue(dav.contains("2"), "DAV header should include class 2");
+		// Convex 0.8.9 deliberately stopped advertising class 2: LOCK/UNLOCK/
+		// PROPPATCH now fail explicitly instead of returning unenforced fake
+		// success, which is unsafe for clients. Pin the honest advertisement.
+		assertFalse(dav.contains("2"), "DAV header must not advertise unenforced class 2 (locking)");
 
 		String msAuthor = res.headers().firstValue("MS-Author-Via").orElse("");
 		assertEquals("DAV", msAuthor, "MS-Author-Via should be DAV");
