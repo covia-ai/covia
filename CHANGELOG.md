@@ -14,6 +14,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Job pause/resume is adapter opt-in; resume never re-invokes from stored input
 - Agent LLM calls are time-bounded (`llmTimeoutMs`) and interrupt the provider on cancel
 - Default agent tool pack trimmed to read-only — skills add tools on demand (#60)
+- Bare UCAN grant resources mean the issuer's own namespace — canonicalised at issuance (custodial) and evaluation (self-sovereign)
 
 ### Fixed
 - `a/<hash>` references resolve without a leading slash

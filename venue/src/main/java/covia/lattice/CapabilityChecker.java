@@ -122,7 +122,95 @@ public class CapabilityChecker {
 		if (caller == null || resource == null || ability == null) return false;
 		RootAuthorityPolicy policy = RootAuthorityPolicy.SELF_SOVEREIGN.or(
 			(root, with) -> venueDID != null && venueDID.equals(root));
-		return UCANValidator.isAuthorised(proofs, caller, resource, ability, policy, now);
+		// Bare `with` paths mean the TOKEN ISSUER's own namespace — resolved here,
+		// at evaluation, against the signed `iss` that travels with every token.
+		// The `with` form is covia-specific; convex-core validates structure and
+		// signatures and treats resources as opaque, so the relying party
+		// normalises its view of the verified claims before the authority check.
+		return UCANValidator.isAuthorised(normaliseProofs(proofs), caller, resource, ability, policy, now);
+	}
+
+	/**
+	 * Normalises verified UCAN token maps so a bare capability resource means
+	 * <b>the token issuer's own namespace</b>: each bare (non-DID, non-scheme),
+	 * non-empty {@code att[i].with} is rewritten to {@code "<iss>/<path>"} (one
+	 * leading slash stripped). Applied recursively through map-form {@code prf}
+	 * chains, each hop against its own issuer — so a bare path in a
+	 * re-delegation binds to the re-delegator, and passing another principal's
+	 * authority onward still requires the absolute form.
+	 *
+	 * <p>Empty {@code with} stays empty (inert in the proof path — a
+	 * whole-namespace grant must be written explicitly); scheme forms
+	 * ({@code file://}, {@code dlfs://}) are untouched (not issuable, and
+	 * fail-closed at the root policy). JWT-string {@code prf} entries cannot be
+	 * rewritten and are left as-is — bare paths inside them stay inert, exactly
+	 * the pre-normalisation behaviour.</p>
+	 *
+	 * <p>Safe with respect to integrity: signatures are verified over the wire
+	 * form at transport ingress; the authority layer consumes verified claim
+	 * maps and performs no re-verification, so normalising the relying party's
+	 * in-memory view cannot invalidate a token.</p>
+	 */
+	public static AVector<ACell> normaliseProofs(AVector<ACell> proofs) {
+		if (proofs == null) return null;
+		AVector<ACell> out = Vectors.empty();
+		for (long i = 0; i < proofs.count(); i++) {
+			ACell entry = proofs.get(i);
+			AMap<AString, ACell> m = RT.castMap(entry);
+			out = out.conj((m != null) ? normaliseTokenMap(m) : entry);
+		}
+		return out;
+	}
+
+	/** Normalises one token map — full {@code {header, payload, sig}} form or a
+	 *  bare payload map ({@code att} at top level); anything else unchanged. */
+	private static ACell normaliseTokenMap(AMap<AString, ACell> token) {
+		AMap<AString, ACell> payload = RT.castMap(token.get(UCAN.PAYLOAD));
+		if (payload != null) {
+			AMap<AString, ACell> normalised = normalisePayload(payload);
+			return (normalised == payload) ? token : token.assoc(UCAN.PAYLOAD, normalised);
+		}
+		if (token.containsKey(UCAN.ATT)) return normalisePayload(token);
+		return token;
+	}
+
+	private static AMap<AString, ACell> normalisePayload(AMap<AString, ACell> payload) {
+		AString iss = RT.ensureString(payload.get(UCAN.ISS));
+		if (iss == null) return payload;
+		ACell attCell = payload.get(UCAN.ATT);
+		if (attCell instanceof AVector<?> attVec) {
+			AVector<ACell> newAtt = Vectors.empty();
+			boolean changed = false;
+			for (long i = 0; i < attVec.count(); i++) {
+				ACell capCell = attVec.get(i);
+				AMap<AString, ACell> cap = RT.castMap(capCell);
+				AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
+				String w = (with != null) ? with.toString() : null;
+				if (w != null && !w.isEmpty() && !w.startsWith("did:") && !w.contains("://")) {
+					String path = w.startsWith("/") ? w.substring(1) : w;
+					if (!path.isEmpty()) {
+						capCell = cap.assoc(Capability.WITH, Strings.create(iss + "/" + path));
+						changed = true;
+					}
+				}
+				newAtt = newAtt.conj(capCell);
+			}
+			if (changed) payload = payload.assoc(UCAN.ATT, newAtt);
+		}
+		ACell prfCell = payload.get(UCAN.PRF);
+		if (prfCell instanceof AVector<?> prfVec) {
+			AVector<ACell> newPrf = Vectors.empty();
+			boolean changed = false;
+			for (long i = 0; i < prfVec.count(); i++) {
+				ACell p = prfVec.get(i);
+				AMap<AString, ACell> pm = RT.castMap(p);
+				ACell np = (pm != null) ? normaliseTokenMap(pm) : p;
+				if (np != p) changed = true;
+				newPrf = newPrf.conj(np);
+			}
+			if (changed) payload = payload.assoc(UCAN.PRF, newPrf);
+		}
+		return payload;
 	}
 
 	/**
