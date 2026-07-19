@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Future;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -245,28 +246,45 @@ public class LangChainAdapter extends AAdapter {
 		final boolean legacyOutput = !(messagesCell instanceof AVector);
 
 		final RequestContext rctx = ctx;
-		return CompletableFuture.supplyAsync(() -> {
-			// Resolve asset-referenced image blocks to inline data (covia#198):
-			// the job record keeps the ~tiny reference, not the image bytes.
-			AVector<ACell> resolvedMessages = resolveImageRefs(messages, rctx);
-			ACell result;
+		// Interruptible execution: submit() (not supplyAsync) so that cancelling
+		// the returned future interrupts the worker thread, closing the in-flight
+		// HTTP call to the provider. CompletableFuture.cancel(true) alone never
+		// interrupts supplyAsync work — the whenComplete bridge below forwards
+		// cancellation to the submitted task. This covers both paths: the default
+		// job-aware invoke wires Job.cancel() to future.cancel(true), and the
+		// agent loop's L3 timeout (AbstractLLMAdapter.invokeLevel3) cancels the
+		// future directly.
+		final CompletableFuture<ACell> pending = new CompletableFuture<>();
+		Future<?> worker = VIRTUAL_EXECUTOR.submit(() -> {
 			try {
-				result = callModel(provider, chatModel, resolvedMessages, tools, responseFormatCell);
-			} catch (RuntimeException e) {
-				// A connect failure against Ollama is almost always topology
-				// (Docker vs host) — turn the bare ConnectException into a
-				// 30-second self-serve diagnosis (#224).
-				String hint = (ollamaUrl != null) ? ollamaConnectHint(ollamaUrl, e) : null;
-				if (hint != null) throw new covia.exception.JobFailedException(hint);
-				throw e;
+				// Resolve asset-referenced image blocks to inline data (covia#198):
+				// the job record keeps the ~tiny reference, not the image bytes.
+				AVector<ACell> resolvedMessages = resolveImageRefs(messages, rctx);
+				ACell result;
+				try {
+					result = callModel(provider, chatModel, resolvedMessages, tools, responseFormatCell);
+				} catch (RuntimeException e) {
+					// A connect failure against Ollama is almost always topology
+					// (Docker vs host) — turn the bare ConnectException into a
+					// 30-second self-serve diagnosis (#224).
+					String hint = (ollamaUrl != null) ? ollamaConnectHint(ollamaUrl, e) : null;
+					if (hint != null) throw new covia.exception.JobFailedException(hint);
+					throw e;
+				}
+				if (legacyOutput) {
+					// Wrap assistant message as {response: content}
+					AString content = RT.ensureString(RT.getIn(result, K_CONTENT));
+					result = Maps.of(Strings.intern("response"), (content != null) ? content : Strings.create(""));
+				}
+				pending.complete(result);
+			} catch (Throwable t) {
+				pending.completeExceptionally(t);
 			}
-			if (legacyOutput) {
-				// Wrap assistant message as {response: content}
-				AString content = RT.ensureString(RT.getIn(result, K_CONTENT));
-				return (ACell) Maps.of(Strings.intern("response"), (content != null) ? content : Strings.create(""));
-			}
-			return result;
-		}, VIRTUAL_EXECUTOR);
+		});
+		pending.whenComplete((r, e) -> {
+			if (pending.isCancelled()) worker.cancel(true);
+		});
+		return pending;
 	}
 
 	// ========== Model construction ==========

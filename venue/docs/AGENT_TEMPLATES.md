@@ -346,9 +346,10 @@ Every stage can read the shared `w/pipeline/` area; each writes only its own out
 
 ### Phase 3b: Swap default
 
-- Change `LLMAgentAdapter` to use a smaller default tool set (e.g. match `v/agents/templates/worker`) instead of the current 19-tool `DEFAULT_TOOL_OPS`
-- Resolves #60 (too many default tools)
-- Breaking change — needs explicit review before rollout (impacts all agents that rely on current defaults)
+✓ Done (differently): `DEFAULT_TOOL_OPS` is now a deliberately minimal read-only
+pack (`covia/read`, `covia/list`) rather than a template swap — skills add
+capability tools on demand via `skill_load`, and the pack is opt-in
+(`defaultTools: true`, #92). Resolves #60 (too many default tools).
 
 ---
 

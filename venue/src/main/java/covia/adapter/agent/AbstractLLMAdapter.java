@@ -1,6 +1,8 @@
 package covia.adapter.agent;
 
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -56,6 +58,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	public static final AString K_CONTEXT         = Strings.intern("context");
 	public static final AString K_TOOL_CALL_TIMEOUT_MS = Strings.intern("toolCallTimeoutMs");
 	public static final AString K_MAX_TOOL_ITERATIONS  = Strings.intern("maxToolIterations");
+	public static final AString K_LLM_TIMEOUT_MS       = Strings.intern("llmTimeoutMs");
 
 	/**
 	 * Per-tool-call timeout default. Bounds the wait on any single grid op
@@ -63,6 +66,15 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * run loop indefinitely. See covia-ai/covia#82.
 	 */
 	public static final long DEFAULT_TOOL_CALL_TIMEOUT_MS = 300_000L;
+
+	/**
+	 * Per-call timeout default for the level 3 LLM invocation. Bounds the wait
+	 * on a single provider call so a hung HTTP connection (or a provider that
+	 * ignores its own client-side timeout) cannot stall an agent run loop
+	 * indefinitely. On timeout the L3 invocation is cancelled — interrupting
+	 * the provider worker — and the transition fails.
+	 */
+	public static final long DEFAULT_LLM_TIMEOUT_MS = 120_000L;
 
 	// ========== Message field keys ==========
 
@@ -321,11 +333,29 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// what it can DO via tools, not the inference call itself. Trust is
 		// established by going through invokeInternal — the framework path —
 		// rather than the user-facing invokeOperation. Caps stay on ctx.
-		// Park (cheaply, on a virtual thread) until the LLM op completes. No
-		// caller-side wait timeout is imposed here — bounding the actual IO is
-		// the provider op's job (LangChainAdapter's socket timeout); whether to
-		// time out the wait is the caller's decision, not this dispatch helper's.
-		ACell result = engine.jobs().invokeInternal(llmOperation, l3Input, ctx).join();
+		// Park (cheaply, on a virtual thread) until the LLM op completes,
+		// bounded by llmTimeoutMs: a hung provider connection must fail the
+		// transition, not stall the agent run loop indefinitely. On timeout the
+		// invocation is cancelled — LangChainAdapter bridges cancellation to a
+		// worker-thread interrupt, closing the in-flight HTTP call.
+		long llmTimeoutMs = resolveLlmTimeoutMs(config);
+		CompletableFuture<ACell> invocation = engine.jobs().invokeInternal(llmOperation, l3Input, ctx);
+		ACell result;
+		try {
+			result = invocation.get(llmTimeoutMs, TimeUnit.MILLISECONDS);
+		} catch (TimeoutException e) {
+			invocation.cancel(true);
+			throw new JobFailedException("LLM call timed out after " + llmTimeoutMs
+				+ "ms (" + llmOperation + ")");
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			invocation.cancel(true);
+			throw new JobFailedException("Interrupted while waiting for LLM call (" + llmOperation + ")");
+		} catch (ExecutionException e) {
+			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
+			if (cause instanceof RuntimeException re) throw re;
+			throw new JobFailedException("LLM call failed (" + llmOperation + "): " + cause.getMessage());
+		}
 
 		// A level-3 op that completes with a failure VALUE — {status: FAILED,
 		// message: ...} from Status.failure (missing/invalid API key, unknown
@@ -521,6 +551,20 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 			if (ms >= 1000) return ms;
 		}
 		return DEFAULT_TOOL_CALL_TIMEOUT_MS;
+	}
+
+	/**
+	 * Resolves the per-call level 3 LLM timeout from the agent's merged config.
+	 * Accepts CVMLong (ms) with a 1s minimum; falls back to
+	 * {@link #DEFAULT_LLM_TIMEOUT_MS} if absent, non-numeric, or below it.
+	 */
+	public static long resolveLlmTimeoutMs(AMap<AString, ACell> config) {
+		ACell v = (config != null) ? config.get(K_LLM_TIMEOUT_MS) : null;
+		if (v instanceof CVMLong l) {
+			long ms = l.longValue();
+			if (ms >= 1000) return ms;
+		}
+		return DEFAULT_LLM_TIMEOUT_MS;
 	}
 
 	/**

@@ -609,6 +609,24 @@ public class ContextBuilderTest {
 	}
 
 	@Test
+	public void testDefaultToolPackIsMinimalReadOnly() {
+		// The default pack is deliberately minimal: read-only situational
+		// awareness only. Capability tools (writes, agent lifecycle, assets,
+		// grid, schema) arrive via skills or the explicit config tools
+		// allowlist — this drift-guards against the pack silently regrowing.
+		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
+		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
+			.withConfig(config)
+			.withSystemPrompt()
+			.withTools()
+			.build();
+
+		assertEquals(java.util.Set.of("covia_read", "covia_list"),
+			result.configToolMap().keySet(),
+			"default pack must stay minimal and read-only — add tools via skills instead");
+	}
+
+	@Test
 	public void testSystemPromptIncludesSessionContext() {
 		// Every agent should see current date and venue name.
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)

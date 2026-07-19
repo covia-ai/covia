@@ -56,6 +56,42 @@ public class LLMAgentAdapterTest {
 		ALICE_DID = TestEngine.uniqueDID(info);
 	}
 
+	// ========== L3 LLM timeout ==========
+
+	@Test
+	public void testLlmTimeoutFailsTransition() {
+		// A hung provider call (test:never never completes) must fail the
+		// transition after llmTimeoutMs, not park the run loop forever.
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell config = Maps.of(
+			"llmOperation", "v/test/ops/never",
+			"llmTimeoutMs", 1000);
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "llm-timeout-agent",
+			AgentState.KEY_CONFIG, config,
+			Fields.MESSAGES, Vectors.of(Maps.of("content", "hang forever")));
+
+		long start = System.currentTimeMillis();
+		covia.exception.JobFailedException e = assertThrows(
+			covia.exception.JobFailedException.class,
+			() -> adapter.processChat(RequestContext.of(ALICE_DID), input));
+		assertTrue(e.getMessage().contains("timed out"),
+			"expected a timeout failure, got: " + e.getMessage());
+		assertTrue(System.currentTimeMillis() - start < 60_000,
+			"timeout must bound the wait");
+	}
+
+	@Test
+	public void testResolveLlmTimeoutMs() {
+		assertEquals(AbstractLLMAdapter.DEFAULT_LLM_TIMEOUT_MS,
+			AbstractLLMAdapter.resolveLlmTimeoutMs(null));
+		// Below the 1s minimum → default
+		assertEquals(AbstractLLMAdapter.DEFAULT_LLM_TIMEOUT_MS,
+			AbstractLLMAdapter.resolveLlmTimeoutMs(Maps.of("llmTimeoutMs", 10)));
+		assertEquals(5000L,
+			AbstractLLMAdapter.resolveLlmTimeoutMs(Maps.of("llmTimeoutMs", 5000)));
+	}
+
 	// ========== Direct invocation with test:llm ==========
 
 	@Test

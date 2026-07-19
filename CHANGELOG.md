@@ -12,6 +12,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Job lifecycle hardening — atomic updates, post-commit persistence, shutdown admission gate
 - Job polling improved — caller-side timeouts no longer fail jobs
 - Job pause/resume is adapter opt-in; resume never re-invokes from stored input
+- Agent LLM calls are time-bounded (`llmTimeoutMs`) and interrupt the provider on cancel
+- Default agent tool pack trimmed to read-only — skills add tools on demand (#60)
 
 ### Fixed
 - `a/<hash>` references resolve without a leading slash

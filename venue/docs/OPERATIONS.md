@@ -451,7 +451,7 @@ All examples use the same primitives, parameterised by path. Pagination, federat
 
 ### From an agent's perspective
 
-Agents that declare these tools (or opt into the default pack with `defaultTools: true`) have `covia_list`, `covia_read`, `covia_slice`, `covia_inspect` available for discovery — **no discovery-specific tools needed.** When granted, the agent system prompt includes a one-line hint:
+Agents that declare these tools (or opt into the default pack with `defaultTools: true`, which carries `covia_read` and `covia_list`) have the lattice read primitives available for discovery — **no discovery-specific tools needed.** When granted, the agent system prompt includes a one-line hint:
 
 > Operations live in `/v/ops/` (venue defaults) and your own `/o/` (your pins). Adapter info lives in `/v/info/adapters/`. Use `covia:list` to discover, `covia:read` to read details.
 
