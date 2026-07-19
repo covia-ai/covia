@@ -266,6 +266,41 @@ public class UCANTest {
 	}
 
 	@Test
+	public void testIssueRejectsBareWith() {
+		// A bare (non-DID) `with` is ambiguous about whose resource it names —
+		// issuance requires the issuer-qualified DID URL form, always.
+		long exp = (System.currentTimeMillis() / 1000) + HOUR;
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(
+				UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create("w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(exp)),
+			ALICE);
+		assertThrows(Exception.class, () -> job.awaitResult(5000),
+			"issuance must reject a bare (non-DID-qualified) with");
+	}
+
+	@Test
+	public void testBareWithGrantConfersNothing() {
+		// Even a validly signed token is inert when its `with` is a bare path:
+		// no derivable owner → SELF_SOVEREIGN refuses the root, and the bare
+		// resource cannot cover any DID-qualified request. A bare `with` is
+		// never reinterpreted against the presenter's or the target's namespace.
+		long exp = (System.currentTimeMillis() / 1000) + HOUR;
+		UCAN token = UCAN.create(ALICE_KP, UCAN.fromDIDKey(BOB_DID), exp,
+			Vectors.of(Capability.create(
+				Strings.create("w/"), Capability.CRUD_READ)),
+			Vectors.empty());
+
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
+			withProofs(BOB, token.toMap()));
+		assertThrows(Exception.class, () -> readJob.awaitResult(5000),
+			"a bare-with grant must confer nothing, even against the issuer's own resources");
+	}
+
+	@Test
 	public void testCrossUserReadWithValidProof() {
 		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/w/", "crud/read", 3600);
 
