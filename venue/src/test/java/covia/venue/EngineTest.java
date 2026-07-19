@@ -250,6 +250,24 @@ public class EngineTest {
 	}
 
 	@Test
+	public void testResolveAssetHashNamespaceForms() {
+		assertEquals(echoOpId, venue.resolveHash("a/" + echoOpId.toHexString()));
+		assertEquals(echoOpId, venue.resolveHash("/a/" + echoOpId.toHexString()));
+	}
+
+	@Test
+	public void testClosedEngineRejectsNewDispatch() {
+		Engine closedEngine = Engine.createTemp(null);
+		Engine.addDemoAssets(closedEngine);
+		closedEngine.close();
+		assertThrows(IllegalStateException.class, () -> closedEngine.jobs().invokeOperation(
+			"v/test/ops/echo", Maps.empty(), closedEngine.venueContext()));
+		assertTrue(closedEngine.jobs().invokeInternal(
+			"v/test/ops/echo", Maps.empty(), closedEngine.venueContext())
+			.isCompletedExceptionally());
+	}
+
+	@Test
 	public void testResolveAssetHashDIDKeyURL() {
 		String didUrl = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK/a/" + echoOpId.toHexString();
 		Hash resolved = venue.resolveHash(didUrl);

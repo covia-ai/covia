@@ -21,8 +21,10 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.adapter.AAdapter;
 import covia.exception.AuthException;
 import covia.grid.Job;
+import covia.grid.Status;
 
 /**
  * Unit tests for {@link JobManager#invokeInternal}. Covers the zero-Job
@@ -322,6 +324,67 @@ public class JobManagerTest {
 		AMap<AString, ACell> meta = Maps.of(Fields.OPERATION,
 			Maps.of(Fields.ADAPTER, Strings.create("test:out")));
 		eng.jobs().validateOutput(meta, Strings.create("anything"));
+	}
+
+	@Test
+	public void testStrictOutputValidationCoversJobAwareAdapterOverride() {
+		Engine eng = Engine.createTemp(Maps.of(Config.OUTPUT_VALIDATION, Strings.create("strict")));
+		try {
+			eng.registerAdapter(new AAdapter() {
+				@Override public String getName() { return "custom-output"; }
+				@Override public String getDescription() { return "test"; }
+				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+						AMap<AString, ACell> m, ACell in) {
+					return CompletableFuture.completedFuture(Strings.create("bad"));
+				}
+				@Override public void invoke(Job job, RequestContext c,
+						AMap<AString, ACell> m, ACell in) {
+					job.setStatus(Status.STARTED);
+					job.completeWith(Strings.create("not an object"));
+				}
+			});
+			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("custom-output:run"),
+				Fields.OUTPUT, Maps.of(Strings.create("type"), Strings.create("object"))));
+			Job job = eng.jobs().invokeOperation(meta, Maps.empty(), eng.venueContext());
+			assertThrows(Exception.class, () -> job.awaitResult(1000));
+			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains("Output schema violation"));
+		} finally {
+			eng.close();
+		}
+	}
+
+	@Test
+	public void testInputSecretsRemainRedactedOnLaterJobUpdates() {
+		Engine eng = Engine.createTemp(null);
+		try {
+			eng.registerAdapter(new AAdapter() {
+				@Override public String getName() { return "secret-update"; }
+				@Override public String getDescription() { return "test"; }
+				@Override public CompletableFuture<ACell> invokeFuture(RequestContext c,
+						AMap<AString, ACell> m, ACell in) {
+					return CompletableFuture.completedFuture(in);
+				}
+				@Override public void invoke(Job job, RequestContext c,
+						AMap<AString, ACell> m, ACell in) {
+					job.setStatus(Status.STARTED);
+					job.update(data -> data.assoc(Fields.INPUT, in));
+					job.completeWith(Maps.empty());
+				}
+			});
+			AString token = Strings.create("token");
+			AMap<AString, ACell> meta = Maps.of(Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("secret-update:run"),
+				Strings.create("secretFields"), Vectors.of(token)));
+			Job job = eng.jobs().invokeOperation(meta,
+				Maps.of(token, Strings.create("plaintext")), eng.venueContext());
+			job.awaitResult(1000);
+			AMap<AString, ACell> durable = eng.jobs().getJobData(job.getID(), eng.venueContext());
+			assertEquals(Fields.HIDDEN, RT.getIn(durable, Fields.INPUT, token));
+		} finally {
+			eng.close();
+		}
 	}
 
 	// ========== deleteJob ==========

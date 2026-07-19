@@ -18,6 +18,7 @@ import convex.auth.ucan.UCAN;
 import convex.auth.ucan.UCANValidator;
 import covia.grid.Grid;
 import covia.grid.Job;
+import covia.grid.Status;
 import covia.grid.Venue;
 import covia.grid.auth.VenueAuth;
 import covia.venue.LocalVenue;
@@ -75,7 +76,10 @@ public class GridAdapter extends AAdapter {
 
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		invokeFuture(ctx, meta, input).whenComplete((result, error) -> {
+		job.setStatus(Status.STARTED);
+		CompletableFuture<ACell> invocation = invokeFuture(ctx, meta, input);
+		job.setCancelHook(() -> invocation.cancel(true));
+		invocation.whenComplete((result, error) -> {
 			if (error != null) {
 				job.fail(describeFailure(error));
 			} else {

@@ -5,6 +5,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.slf4j.Logger;
@@ -56,14 +57,26 @@ public class JobManager {
 
 	private final Engine engine;
 
+	/** Admission gate closed before engine shutdown begins. */
+	private final AtomicBoolean accepting = new AtomicBoolean(true);
+
 	/** In-memory cache of active (non-terminal) jobs */
 	private final ConcurrentHashMap<Blob, Job> activeJobs = new ConcurrentHashMap<>();
 
 	/** Per-caller admission semaphores bounding concurrent top-level jobs. */
-	private final ConcurrentHashMap<AString, Semaphore> jobPermits = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<AString, JobSemaphore> jobPermits = new ConcurrentHashMap<>();
 
 	/** Job IDs holding an admission permit → caller DID, for exactly-once release. */
 	private final ConcurrentHashMap<Blob, AString> permitHolders = new ConcurrentHashMap<>();
+
+	/** Semaphore with a recovery reservation hook. Negative permits are useful
+	 *  when a restart restores more active jobs than the current configured cap:
+	 *  new work remains blocked until enough restored jobs finish. */
+	private static final class JobSemaphore extends Semaphore {
+		private static final long serialVersionUID = 1L;
+		JobSemaphore(int permits) { super(permits); }
+		void reserveRecovered() { reducePermits(1); }
+	}
 
 	/** Concurrent-job cap settings, resolved once from venue config. */
 	private final boolean jobCapEnabled;
@@ -114,7 +127,7 @@ public class JobManager {
 		if (!jobCapEnabled) return false;
 		if (ctx.getJobId() != null) return false; // sub-job — exempt, no self-deadlock
 		if (callerDID == null) return false;       // internal / unattributed — exempt
-		Semaphore sem = jobPermits.computeIfAbsent(callerDID, k -> new Semaphore(maxConcurrentJobs));
+		JobSemaphore sem = jobPermits.computeIfAbsent(callerDID, k -> new JobSemaphore(maxConcurrentJobs));
 		try {
 			if (sem.tryAcquire(jobBlockMs, TimeUnit.MILLISECONDS)) return true;
 		} catch (InterruptedException e) {
@@ -131,7 +144,7 @@ public class JobManager {
 	private void releaseJobPermit(Blob jobID) {
 		AString caller = permitHolders.remove(jobID);
 		if (caller != null) {
-			Semaphore sem = jobPermits.get(caller);
+			JobSemaphore sem = jobPermits.get(caller);
 			if (sem != null) sem.release();
 		}
 	}
@@ -202,6 +215,7 @@ public class JobManager {
 	}
 
 	public Job invokeOperation(AMap<AString, ACell> meta, ACell input, RequestContext ctx, boolean privateJob) {
+		requireAccepting();
 		// Advance the lattice write clock for this dispatch — the harness owns
 		// write time (see Engine.refreshWriteClock).
 		engine.refreshWriteClock();
@@ -237,7 +251,7 @@ public class JobManager {
 		} catch (RuntimeException e) {
 			// Never obtained a jobID to track — release the permit directly.
 			if (permit && callerDID != null) {
-				Semaphore sem = jobPermits.get(callerDID);
+				JobSemaphore sem = jobPermits.get(callerDID);
 				if (sem != null) sem.release();
 			}
 			throw e;
@@ -260,6 +274,13 @@ public class JobManager {
 			// so the denial is a FAILED Job, not a thrown exception). Other
 			// synchronous failures (bad input, schema) propagate as before.
 			job.fail(e.getMessage() != null ? e.getMessage() : e.toString());
+		} catch (RuntimeException e) {
+			// Once a Job has been created, every adapter failure must become a
+			// terminal record. Preserve the existing synchronous API error surface
+			// after recording the failure, rather than stranding a PENDING/STARTED
+			// job that no worker can ever complete.
+			job.fail(e.getMessage() != null ? e.getMessage() : e.toString());
+			throw e;
 		}
 		return job;
 	}
@@ -323,6 +344,10 @@ public class JobManager {
 	}
 
 	public CompletableFuture<ACell> invokeInternal(AMap<AString, ACell> meta, ACell input, RequestContext ctx) {
+		if (!accepting.get()) {
+			return CompletableFuture.failedFuture(
+				new IllegalStateException("Venue is shutting down; new operations are not accepted"));
+		}
 		// Advance the lattice write clock — internal dispatch (agent transitions,
 		// tool calls) is high-frequency, so long cycles keep stamping fresh time.
 		engine.refreshWriteClock();
@@ -523,6 +548,18 @@ public class JobManager {
 		return jobData.assoc(Fields.OUTPUT, redacted);
 	}
 
+	/** Redacts both directions on every durable transition. Adapters may update
+	 *  a job record after submission, so redacting only the initial input is not
+	 *  sufficient to maintain the persistence invariant. */
+	static AMap<AString, ACell> redactJobSecrets(AMap<AString, ACell> jobData,
+			AMap<AString, ACell> meta) {
+		AMap<AString, ACell> redacted = redactOutputSecrets(jobData, meta);
+		ACell input = redacted.get(Fields.INPUT);
+		if (input == null) return redacted;
+		ACell safeInput = redactSecrets(input, meta);
+		return (safeInput == input) ? redacted : redacted.assoc(Fields.INPUT, safeInput);
+	}
+
 	// ========== Job Submission ==========
 
 	/**
@@ -707,15 +744,23 @@ public class JobManager {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return null;
 		requireJobOwner(ctx, id, data); // mutation: owner-only
-		return pauseJob(id);
+		Job job = activeJobs.get(id);
+		if (job == null) return null;
+		AMap<AString, ACell> meta = resolveJobMeta(job);
+		AAdapter adapter = resolveJobAdapter(job);
+		if (adapter == null || meta == null) {
+			throw new IllegalStateException("Job adapter is unavailable");
+		}
+		adapter.pause(job, ctx.withJobId(id), meta);
+		return job.getData();
 	}
 
 	public AMap<AString, ACell> pauseJob(Blob id) {
-		Job job;
-		job = activeJobs.get(id);
+		Job job = activeJobs.get(id);
 		if (job == null) return null;
-		job.pause();
-		return job.getData();
+		AString caller = RT.ensureString(job.getData().get(Fields.CALLER));
+		RequestContext ctx = (caller != null) ? RequestContext.of(caller) : engine.venueContext();
+		return pauseJob(id, ctx);
 	}
 
 	/**
@@ -726,27 +771,24 @@ public class JobManager {
 		AMap<AString, ACell> data = getJobData(id, ctx);
 		if (data == null) return null;
 		requireJobOwner(ctx, id, data); // mutation: owner-only
-		return resumeJob(id);
+		Job job = activeJobs.get(id);
+		if (job == null) return null;
+		AMap<AString, ACell> meta = resolveJobMeta(job);
+		AAdapter adapter = resolveJobAdapter(job);
+		if (adapter == null || meta == null) {
+			throw new IllegalStateException("Job adapter is unavailable");
+		}
+		adapter.resume(job, ctx.withJobId(id), meta);
+		return job.getData();
 	}
 
 	public AMap<AString, ACell> resumeJob(Blob id) {
 		Job job;
 		job = activeJobs.get(id);
 		if (job == null) return null;
-		job.resume();
-
-		// Re-engage the adapter
-		AAdapter adapter = resolveJobAdapter(job);
-		if (adapter != null) {
-			AMap<AString, ACell> meta = resolveJobMeta(job);
-			AString callerDID = RT.ensureString(job.getData().get(Fields.CALLER));
-			RequestContext ctx = (callerDID != null) ? RequestContext.of(callerDID) : engine.venueContext();
-			if (meta != null) {
-				adapter.invoke(job, ctx, meta, job.getData().get(Fields.INPUT));
-			}
-		}
-
-		return job.getData();
+		AString caller = RT.ensureString(job.getData().get(Fields.CALLER));
+		RequestContext ctx = (caller != null) ? RequestContext.of(caller) : engine.venueContext();
+		return resumeJob(id, ctx);
 	}
 
 	/**
@@ -863,7 +905,12 @@ public class JobManager {
 		// history still carries the inbound message rather than silently losing it.
 		Job job = getJob(jobID);
 		if (job != null) {
-			job.updateData(newData);
+			job.update(data -> {
+				ACell liveHistCell = data.get(Fields.HISTORY);
+				AVector<ACell> liveHistory = (liveHistCell instanceof AVector)
+					? (AVector<ACell>) liveHistCell : convex.core.data.Vectors.empty();
+				return data.assoc(Fields.HISTORY, liveHistory.conj(record));
+			});
 		} else {
 			persistJobRecord(jobID, newData, ctx.getCallerDID());
 		}
@@ -1002,6 +1049,12 @@ public class JobManager {
 		VenueJob job = new VenueJob(record, meta, callerDID, this);
 
 		activeJobs.put(jobID, job);
+		if (jobCapEnabled && callerDID != null) {
+			JobSemaphore sem = jobPermits.computeIfAbsent(callerDID,
+				k -> new JobSemaphore(maxConcurrentJobs));
+			sem.reserveRecovered();
+			permitHolders.put(jobID, callerDID);
+		}
 	}
 
 	private void markJobFailed(Blob jobID, AMap<AString, ACell> record, String reason, AString callerDID) {
@@ -1122,5 +1175,16 @@ public class JobManager {
 	 */
 	public AString getVenueDID() {
 		return engine.getDIDString();
+	}
+
+	/** Stops all new top-level and internal dispatch before persistence shutdown. */
+	void beginShutdown() {
+		accepting.set(false);
+	}
+
+	private void requireAccepting() {
+		if (!accepting.get()) {
+			throw new IllegalStateException("Venue is shutting down; new operations are not accepted");
+		}
 	}
 }

@@ -154,6 +154,25 @@ public class VenueServer {
 			};
 			engine = new Engine(config, nodeServer.getCursor(), keyPair, persistHandler);
 		} catch (Exception e) {
+			// Construction may fail after the store is opened and NodeServer is
+			// launched (identity mismatch, invalid storage, scheduler rebuild,
+			// etc.). Roll back those resources so the store is not left locked.
+			if (nodeServer != null) {
+				try {
+					nodeServer.close();
+				} catch (Exception closeFailure) {
+					e.addSuppressed(closeFailure);
+				}
+				nodeServer = null;
+			}
+			if (store != null) {
+				try {
+					store.close();
+				} catch (Exception closeFailure) {
+					e.addSuppressed(closeFailure);
+				}
+				store = null;
+			}
 			throw new RuntimeException("Failed to create venue engine", e);
 		}
 

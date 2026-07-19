@@ -514,11 +514,10 @@ public class Engine {
 	 */
 	public void close() {
 		if (!closed.compareAndSet(false, true)) return; // already closed
+		jobManager.beginShutdown();
 
-		// Stop the scheduler first so no new fires land during shutdown. In-
-		// flight fires on virtual threads keep running; their invocations
-		// tolerate a closing venue because the run loops themselves gate on
-		// agent state in the lattice.
+		// Stop the scheduler after closing job admission so a timer racing with
+		// shutdown cannot submit fresh work after the final persistence barrier.
 		gridScheduler.shutdown();
 
 		// Stop accepting new sweep tasks; wait briefly for in-flight sweep to finish.
@@ -1546,9 +1545,10 @@ public class Engine {
 		Hash h = Hash.parse(ref);
 		if (h != null) return h;
 
-		// 2. Namespace prefix
-		if (ref.startsWith(NS_ASSET)) {
-			return Hash.parse(ref.slice(3));
+		// 2. Namespace prefix (leading slash is optional, as in resolvePath)
+		AString assetRef = stripLeadingSlash(ref);
+		if (assetRef.startsWith(NS_ASSET)) {
+			return Hash.parse(assetRef.slice(2));
 		}
 
 		// 3. DID URL (local only — no remote dispatch)

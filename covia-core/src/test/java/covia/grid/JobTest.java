@@ -20,8 +20,35 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.exception.JobPollingFailedException;
 
 public class JobTest {
+
+	@Test
+	public void testTimedAwaitDoesNotFailAuthoritativeJob() {
+		Job job = Job.create(Maps.of(
+			Fields.ID, Blob.parse("0x00112233445566778899aabbccddeeff"),
+			Fields.STATUS, Status.STARTED));
+
+		assertThrows(JobPollingFailedException.class, () -> job.awaitResult(10));
+		assertEquals(Status.STARTED, job.getStatus(),
+			"a caller-side wait timeout must not mutate the authoritative job");
+
+		job.completeWith(Strings.create("eventual result"));
+		assertEquals(Strings.create("eventual result"), job.awaitResult(100));
+	}
+
+	@Test
+	public void testPollingFailureDoesNotChangeLastKnownStatus() {
+		Job job = Job.create(Maps.of(
+			Fields.ID, Blob.parse("0x00112233445566778899aabbccddee00"),
+			Fields.STATUS, Status.STARTED));
+		job.future();
+		job.pollingFailed(new RuntimeException("transport lost"));
+
+		assertThrows(JobPollingFailedException.class, job::awaitResult);
+		assertEquals(Status.STARTED, job.getStatus());
+	}
 
 	@Test public void testIDParse() {
 		assertEquals(Blob.parse("0x1234"),Job.parseID("0x1234"));

@@ -418,19 +418,30 @@ public abstract class AAdapter {
     public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
         // Default one-shot: wire future to job lifecycle
         job.setStatus(Status.STARTED);
-        invokeFuture(ctx, meta, input).thenAccept(result -> {
-            // Operator-gated output-schema validation (default off; throws in
-            // strict mode → handled below as a job failure).
-            if (engine != null) engine.jobs().validateOutput(meta, result);
-            job.completeWith(result);
-        })
+		CompletableFuture<ACell> invocation;
+		try {
+			invocation = invokeFuture(ctx, meta, input);
+			if (invocation == null) invocation = CompletableFuture.completedFuture(null);
+		} catch (RuntimeException e) {
+			String message = e.getMessage();
+			job.fail(message != null ? message : e.toString());
+			throw e;
+		}
+		final CompletableFuture<ACell> running = invocation;
+		job.setCancelHook(() -> running.cancel(true));
+        running.thenAccept(job::completeWith)
         .exceptionally(e -> {
-            if (e instanceof CancellationException) {
+			Throwable cause = e;
+			while ((cause instanceof java.util.concurrent.CompletionException
+					|| cause instanceof java.util.concurrent.ExecutionException)
+					&& cause.getCause() != null && cause.getCause() != cause) {
+				cause = cause.getCause();
+			}
+			if (cause instanceof CancellationException) {
                 job.cancel();
             } else {
-                Throwable cause = (e instanceof java.util.concurrent.CompletionException && e.getCause() != null)
-                    ? e.getCause() : e;
-                job.fail(cause.getMessage());
+				String message = cause.getMessage();
+				job.fail(message != null ? message : cause.toString());
             }
             return null;
         });
@@ -455,5 +466,24 @@ public abstract class AAdapter {
     public boolean supportsMultiTurn() {
     	return false;
     }
+
+	/**
+	 * Pauses an active execution. The default is deliberately unsupported:
+	 * changing only the Job status while adapter work continues is not a pause.
+	 * Adapters that can genuinely suspend work must override this method and
+	 * perform the status transition themselves.
+	 */
+	public void pause(Job job, RequestContext ctx, AMap<AString, ACell> meta) {
+		throw new IllegalStateException("Adapter does not support pausing: " + getName());
+	}
+
+	/**
+	 * Resumes a previously paused execution from adapter-owned state. The
+	 * default never re-invokes the operation from its stored input because that
+	 * can duplicate non-idempotent effects and loses request authority.
+	 */
+	public void resume(Job job, RequestContext ctx, AMap<AString, ACell> meta) {
+		throw new IllegalStateException("Adapter does not support resuming: " + getName());
+	}
 
 }

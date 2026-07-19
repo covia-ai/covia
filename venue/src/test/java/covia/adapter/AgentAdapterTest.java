@@ -2161,12 +2161,13 @@ public class AgentAdapterTest {
 		assertFalse(requestJob.isFinished(),
 			"Job should not be finished when the agent transition never completes");
 
-		// awaitResult with a short timeout should throw rather than block forever
+		// A short caller-side wait should time out without failing the durable job.
 		try {
 			requestJob.awaitResult(100);
 			fail("awaitResult should throw when the job cannot complete within the timeout");
-		} catch (covia.exception.JobFailedException e) {
-			// Expected — timeout
+		} catch (covia.exception.JobPollingFailedException e) {
+			assertEquals(Status.STARTED, requestJob.getStatus(),
+				"timing out locally must not fail the long-running request");
 		}
 	}
 

@@ -328,12 +328,11 @@ public class VenueServerTest {
 		assertEquals(Status.PAUSED, job.getStatus(), "Pause op should auto-pause");
 		String jobId = job.getID().toHexString();
 
-		// Resume via API — adapter re-invoked, completes with original input
-		AMap<AString, ACell> resumedStatus = covia.resumeJob(jobId).get(5, TimeUnit.SECONDS);
-		assertNotNull(resumedStatus);
-		// After resume, adapter is re-invoked — pause op will pause again
-		assertEquals("PAUSED", RT.ensureString(resumedStatus.get(Fields.STATUS)).toString(),
-				"Pause op re-invocation should pause again");
+		// Generic resume must not re-invoke an operation from persisted input:
+		// that could duplicate effects. This adapter exposes message-based resume
+		// for the pause op instead, so the generic endpoint rejects it.
+		assertThrows(Exception.class,
+				() -> covia.resumeJob(jobId).get(5, TimeUnit.SECONDS));
 
 		// Cancel to clean up
 		covia.cancelJob(jobId).get(5, TimeUnit.SECONDS);

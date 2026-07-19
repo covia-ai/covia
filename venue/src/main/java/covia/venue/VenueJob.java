@@ -44,16 +44,31 @@ public class VenueJob extends Job {
 
 	@Override
 	public AMap<AString, ACell> processUpdate(AMap<AString, ACell> newData) {
-		newData = newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
-		manager.persistJobRecord(getID(), JobManager.redactOutputSecrets(newData, meta), callerDID);
-		if (Job.isFinished(newData)) {
-			manager.evictActive(getID());
-		}
-		return newData;
+		return newData.assoc(Fields.UPDATED, CVMLong.create(Utils.getCurrentTimestamp()));
 	}
 
 	@Override
 	public void onUpdate(AMap<AString, ACell> newData) {
+		if (!privateJob) {
+			manager.persistJobRecord(getID(),
+				JobManager.redactJobSecrets(newData, meta), callerDID);
+		}
 		manager.notifyGlobalListeners(this);
+	}
+
+	@Override
+	public void onFinish(AMap<AString, ACell> finalData) {
+		manager.evictActive(getID());
+	}
+
+	@Override
+	public void completeWith(ACell result) {
+		try {
+			manager.validateOutput(meta, result);
+		} catch (RuntimeException e) {
+			fail(e.getMessage() != null ? e.getMessage() : e.toString());
+			return;
+		}
+		super.completeWith(result);
 	}
 }

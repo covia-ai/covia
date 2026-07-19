@@ -236,8 +236,24 @@ public class TestAdapter extends AAdapter {
 
     @Override
     public boolean supportsMultiTurn() {
-        return true;
+		return true;
     }
+
+	@Override
+	public void pause(Job job, RequestContext ctx, AMap<AString, ACell> meta) {
+		if (!"never".equals(getSubOperation(meta))) {
+			super.pause(job, ctx, meta);
+		}
+		job.pause();
+	}
+
+	@Override
+	public void resume(Job job, RequestContext ctx, AMap<AString, ACell> meta) {
+		if (!"never".equals(getSubOperation(meta))) {
+			super.resume(job, ctx, meta);
+		}
+		job.resume();
+	}
 
     private void handleDelay(Job job, RequestContext ctx, ACell input) {
     	// Use submit() (not CompletableFuture.runAsync) so the returned Future
@@ -1041,4 +1057,4 @@ public class TestAdapter extends AAdapter {
             "bytes", Strings.create(hex.toString())
         );
     }
-} 
+}

@@ -8,7 +8,14 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
-_Nothing yet._
+### Changed
+- Job lifecycle hardening — atomic updates, post-commit persistence, shutdown admission gate
+- Job polling improved — caller-side timeouts no longer fail jobs
+- Job pause/resume is adapter opt-in; resume never re-invokes from stored input
+
+### Fixed
+- `a/<hash>` references resolve without a leading slash
+- Store unlocked when engine construction fails
 
 ## [0.6.0] - 2026-07-17
 

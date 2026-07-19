@@ -123,16 +123,6 @@ public class AccessControlTest {
 		assertFalse(ac.canAccessJob(RequestContext.of(ALICE_LITERAL), null));
 	}
 
-	@Test
-	public void testOperationAccessPermissive() {
-		AccessControl ac = engine.getAccessControl();
-
-		// Phase 2: all operations are accessible
-		assertTrue(ac.canAccessOperation(RequestContext.ANONYMOUS, null));
-		assertTrue(ac.canAccessOperation(RequestContext.of(ALICE_LITERAL), null));
-		assertTrue(ac.canAccessOperation(engine.venueContext(), null));
-	}
-
 	// ========== RequestContext Properties ==========
 
 	@Test

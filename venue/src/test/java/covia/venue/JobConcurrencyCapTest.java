@@ -5,10 +5,17 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.AString;
+import convex.core.data.ACell;
+import convex.core.data.Index;
+import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.crypto.AKeyPair;
+import convex.lattice.cursor.Cursors;
+import convex.lattice.cursor.RootLatticeCursor;
 import covia.exception.RateLimitException;
 import covia.grid.Job;
+import covia.lattice.Covia;
 
 /**
  * Concurrent-job cap: per-caller admission control on top-level invokes.
@@ -93,5 +100,37 @@ public class JobConcurrencyCapTest {
 		Engine e = capEngine(0);                    // 0 → cap disabled
 		RequestContext alice = caller("did:key:zAliceUnlimited");
 		for (int i = 0; i < 5; i++) assertNotNull(never(e, alice));
+	}
+
+	@Test
+	public void testRecoveredPausedJobsConsumePermits() throws Exception {
+		convex.core.data.AMap<AString, ACell> config = Maps.of(
+			Config.RATE_LIMIT, Maps.of(
+				Config.ENABLED, true,
+				Strings.create("maxConcurrentJobsPerUser"), 1L,
+				Strings.create("blockMs"), 0L));
+		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		AKeyPair keyPair = AKeyPair.generate();
+		RequestContext alice = caller("did:key:zAliceRecoveredCap");
+		Job paused;
+
+		Engine first = new Engine(config, cursor, keyPair);
+		Engine.addDemoAssets(first);
+		paused = never(first, alice);
+		first.jobs().pauseJob(paused.getID(), alice);
+		first.syncState();
+		first.close();
+
+		Engine second = new Engine(config, cursor, keyPair);
+		try {
+			Engine.addDemoAssets(second);
+			second.jobs().recoverJobs();
+			assertThrows(RateLimitException.class, () -> never(second, alice),
+				"a restored non-terminal job must still occupy the caller's slot");
+			second.jobs().cancelJob(paused.getID(), alice);
+			assertNotNull(never(second, alice), "finishing the restored job must release its slot");
+		} finally {
+			second.close();
+		}
 	}
 }

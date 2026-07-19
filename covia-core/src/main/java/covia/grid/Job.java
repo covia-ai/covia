@@ -26,10 +26,9 @@ import covia.exception.JobPollingFailedException;
  * Class representing a Covia Job.
  *
  * <p>Thread-safe without locks: uses {@link AtomicReference} for the job data
- * so virtual threads are never pinned to carrier threads. All side effects
- * in the update path (lattice persistence, future completion) are idempotent,
- * so concurrent updates are safe — the CAS ensures terminal states are
- * sticky (once finished, the data reference never changes).</p>
+ * so virtual threads are never pinned to carrier threads. The CAS makes
+ * terminal states sticky and post-commit hooks run only for the winning
+ * transition, keeping persistence and listeners aligned with memory.</p>
  */
 public class Job {
 
@@ -137,32 +136,46 @@ public class Job {
 	 * @param newData New job status data
 	 */
 	public void updateData(AMap<AString, ACell> newData) {
-		// Pre-process: may add timestamp, persist to lattice (all idempotent)
-		newData = processUpdate(newData);
-		if (newData == null) return;
+		commitUpdate(ignored -> newData);
+	}
 
-		// Atomic state transition — terminal states are sticky
-		final AMap<AString, ACell> prepared = newData;
-		AMap<AString, ACell> prev = data.getAndUpdate(current -> {
-			if (isFinished(current)) return current;
-			AMap<AString, ACell> d = prepared;
+	/**
+	 * Applies an update with a CAS loop and runs side effects only for the
+	 * transition that actually commits. The updater may be retried when another
+	 * thread wins the race, so it must be side-effect free.
+	 */
+	private void commitUpdate(UnaryOperator<AMap<AString, ACell>> updater) {
+		while (true) {
+			AMap<AString, ACell> current = data.get();
+			if (isFinished(current)) return;
+
+			AMap<AString, ACell> next = updater.apply(current);
+			if (next == null) return;
+			next = processUpdate(next);
+			if (next == null) return;
 			if (current != null && !current.isEmpty()) {
-				d = d.assoc(PREV, current);
+				next = next.assoc(PREV, current);
 			}
-			return d;
-		});
 
-		// CAS was a no-op if already finished
-		if (isFinished(prev)) return;
+			if (!data.compareAndSet(current, next)) continue;
 
-		// Post-update side effects
-		AMap<AString, ACell> current = data.get();
-		onUpdate(current);
-		notifyListeners();
-
-		if (isFinished(current)) {
-			completeResultFuture();
-			onFinish(current);
+			// Persistence, listeners and eviction observe exactly the value that
+			// won the CAS. A losing terminal update has no external side effects.
+			// Terminal completion/eviction must still run if persistence reports an
+			// error; otherwise the committed Job would hang in the active cache.
+			try {
+				onUpdate(next);
+			} finally {
+				try {
+					notifyListeners();
+				} finally {
+					if (isFinished(next)) {
+						completeResultFuture();
+						onFinish(next);
+					}
+				}
+			}
+			return;
 		}
 	}
 
@@ -237,15 +250,10 @@ public class Job {
 	}
 
 	/**
-	 * Hook called before the atomic data update. Subclasses may override to
-	 * modify data or perform side effects (e.g. lattice persistence).
-	 *
-	 * <p><b>Side effects MUST be idempotent</b> — concurrent callers may invoke
-	 * this for data that is ultimately discarded by the CAS (e.g. if the job
-	 * reached a terminal state between processUpdate and the CAS). Lattice
-	 * persistence is naturally idempotent via CRDT merge.</p>
-	 *
-	 * TODO: consider is this is sensible
+	 * Hook called while preparing an atomic data update. Subclasses may override
+	 * to add derived fields such as timestamps. This hook must be side-effect
+	 * free because it may be retried after a concurrent CAS failure. External
+	 * effects belong in {@link #onUpdate(AMap)}, which runs only after commit.
 	 *
 	 * @param newData new status data of the Job
 	 * @return updated version of the data, or null to cancel the update
@@ -376,7 +384,10 @@ public class Job {
 	 */
 	public void pause() {
 		if (isFinished()) throw new IllegalStateException("Job already finished");
-		updateData(data.get().assoc(Fields.STATUS, Status.PAUSED));
+		if (!Status.STARTED.equals(getStatus())) {
+			throw new IllegalStateException("Job is not running: " + getStatus());
+		}
+		update(job -> job.assoc(Fields.STATUS, Status.PAUSED));
 	}
 
 	/**
@@ -387,20 +398,19 @@ public class Job {
 	public void resume() {
 		if (isFinished()) throw new IllegalStateException("Job already finished");
 		if (!isPaused()) throw new IllegalStateException("Job is not paused: " + getStatus());
-		updateData(data.get().assoc(Fields.STATUS, Status.STARTED));
+		update(job -> job.assoc(Fields.STATUS, Status.STARTED));
 	}
 
 	public void setStatus(AString newStatus) {
 		if (isFinished()) throw new IllegalStateException("Job already finished");
-		updateData(data.get().assoc(Fields.STATUS, newStatus));
+		update(job -> job.assoc(Fields.STATUS, newStatus));
 	}
 
 	public void completeWith(ACell result) {
 		if (isFinished()) throw new IllegalStateException("Job already finished");
-		AMap<AString, ACell> newData = getData();
-		newData = newData.assoc(Fields.STATUS, Status.COMPLETE);
-		newData = newData.assoc(Fields.OUTPUT, result);
-		updateData(newData);
+		update(job -> job
+			.assoc(Fields.STATUS, Status.COMPLETE)
+			.assoc(Fields.OUTPUT, result));
 	}
 
 	/**
@@ -418,8 +428,8 @@ public class Job {
 			if (cause instanceof JobFailedException) {
 				throw (JobFailedException) cause;
 			}
-			fail(cause.getMessage());
-			throw new JobFailedException(this);
+			if (cause instanceof RuntimeException re) throw re;
+			throw pollingStopped(cause);
 		}
 	}
 
@@ -435,20 +445,24 @@ public class Job {
 		try {
 			return (T) future().get(timeoutMillis, TimeUnit.MILLISECONDS);
 		} catch (TimeoutException e) {
-			fail("Job timed out after " + timeoutMillis + "ms");
-			throw new JobFailedException(this);
+			throw pollingStopped(e);
 		} catch (ExecutionException e) {
 			Throwable cause = e.getCause();
 			if (cause instanceof JobFailedException) {
 				throw (JobFailedException) cause;
 			}
-			fail(cause.getMessage());
-			throw new JobFailedException(this);
+			if (cause instanceof RuntimeException re) throw re;
+			throw pollingStopped(cause);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			fail("Interrupted while waiting for result");
-			throw new JobFailedException(this);
+			throw pollingStopped(e);
 		}
+	}
+
+	private JobPollingFailedException pollingStopped(Throwable cause) {
+		AString status = getStatus();
+		String lastKnown = (status != null) ? status.toString() : "UNKNOWN";
+		return new JobPollingFailedException(getID(), lastKnown, cause);
 	}
 
 	/**
@@ -488,9 +502,7 @@ public class Job {
 	 * @param updater Function to apply to current data
 	 */
 	public void update(UnaryOperator<AMap<AString, ACell>> updater) {
-		AMap<AString, ACell> oldData = getData();
-		AMap<AString, ACell> newData = updater.apply(oldData);
-		updateData(newData);
+		commitUpdate(updater);
 	}
 
 	/**
