@@ -100,9 +100,13 @@ Venues must serve as a **trusted system of record**:
 
 **Job Lifecycle:**
 ```
-PENDING -> STARTED -> COMPLETE | FAILED | CANCELLED | REJECTED
-         └-> PAUSED -> INPUT_REQUIRED | AUTH_REQUIRED
+PENDING -> STARTED -> COMPLETE | FAILED | CANCELLED | REJECTED   (terminal, sticky)
+STARTED <-> PAUSED | INPUT_REQUIRED | AUTH_REQUIRED              (paused family)
 ```
+Pause is `STARTED`-only and adapter opt-in; the paused family resumes to
+`STARTED` via resume (PAUSED) or message delivery (INPUT_REQUIRED /
+AUTH_REQUIRED). No framework-level timeout: jobs may wait days or months,
+and a caller-side wait timeout never mutates the job (see COG-8).
 
 **Design Goals:**
 - Implement signed job submissions with DID-based identity
@@ -260,9 +264,11 @@ Assets are defined as JSON with this structure:
 
 ```java
 // All job operations go through engine.jobs() — never directly on Engine
-Job job = engine.jobs().invokeOperation(opRef, input, callerDID);  // callerDID required
-Job job = engine.jobs().invokeOperation(opRef, input, requestCtx); // or via RequestContext
-ACell result = job.awaitResult();                                   // blocks until complete
+Job job = engine.jobs().invokeOperation(opRef, input, requestCtx); // RequestContext carries caller
+ACell result = job.awaitResult();          // blocks until terminal (no framework timeout)
+ACell result = job.awaitResult(60_000);    // bounded caller-side wait — throws
+                                           // JobPollingFailedException on timeout WITHOUT
+                                           // mutating the job; re-attach by job ID later
 
 // Query jobs (scoped by caller identity)
 Index<Blob, ACell> myJobs = engine.jobs().getJobs(requestCtx);
@@ -270,6 +276,9 @@ AMap<AString, ACell> data = engine.jobs().getJobData(jobID, requestCtx);
 
 // Lifecycle control
 engine.jobs().cancelJob(jobID, requestCtx);
+// Pause/resume are ADAPTER OPT-IN (AAdapter.pause/resume default to throwing):
+// most operations reject them (HTTP 409). Pause is STARTED-only; resume never
+// re-invokes the operation from stored input.
 engine.jobs().pauseJob(jobID, requestCtx);
 engine.jobs().resumeJob(jobID, requestCtx);
 ```
