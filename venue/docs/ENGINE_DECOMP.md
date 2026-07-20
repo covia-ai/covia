@@ -83,11 +83,16 @@ tests), in this order of decreasing payoff:
 3. **AdapterRegistry** — `register/get/has/remove/getAdapterNames`; make
    install/remove transactional and own `AutoCloseable` adapters/modules.
 4. **SecretService** — `resolveSecret`, `provisionConfiguredSecrets`.
+5. **VenueProvisioner** — venue bootstrap/provisioning (`materialiseVOps`,
+   `seedMcpServers`, `materialiseVenueInfo`, and `addDemoAssets` renamed away
+   from "demo"). Extracting this breaks the `Engine → JobManager → Engine`
+   construction cycle and lets the composition root order startup
+   deterministically. Do it last — after the pure extractions.
 
 **Residual Engine = composition root.** It constructs and owns the subsystems
 with **transactional startup** (construction either completes or closes every
-resource — no partial catalog state), owns the seams (§2), and runs an
-**ordered close** (§6).
+resource — no partial catalog state), invokes the `VenueProvisioner` once the
+subsystems exist, owns the seams (§2), and runs an **ordered close** (§6).
 
 **Acceptance-criteria mapping (from #241):** narrow API + focused tests → per
 subsystem; atomic adapter install → AdapterRegistry; "close closes all owned
