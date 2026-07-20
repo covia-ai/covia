@@ -11,6 +11,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Added
 - HITL requests (COG-16) — `hitl:request`/`respond`/`list` over the per-user `h/` inbox, typed asks, choice-bound grants with echo-consent, restart-safe expiry; `hitl` skill
 - `Hitl` builders (covia-core) — fluent, transport-portable construction of HITL requests, asks and responses
+- Federated job observation carries caller proofs — `X-Covia-Ucans` header on body-less job reads; cross-venue HITL verified end-to-end
 - `ucan:issue` is a granting surface — mints over another principal's resource under a presented `grant/<ability>` right, expiry-capped by the right's validity
 
 ### Changed

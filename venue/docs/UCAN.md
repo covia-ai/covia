@@ -255,6 +255,14 @@ The audience presents UCAN tokens in the `RequestContext` on a
 **per-request basis**. Each request carries its own proof set — there is
 no server-side token store and no session-level capability state.
 
+Enveloped requests carry proofs in the body `ucans` array; **body-less
+requests** (job observation GETs) carry the same JWTs comma-separated in
+the `X-Covia-Ucans` header (`VenueHTTP.UCANS_HEADER`), explicitly attached
+by the sender and verified identically at ingress
+(`AuthMiddleware.headerUcans`). This is what lets a federated hop observe
+the remote job it created — the identity token authenticates the caller on
+the read exactly as on the invoke.
+
 ```
 RequestContext:
   callerDID: "did:key:zBob..."

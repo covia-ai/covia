@@ -185,6 +185,14 @@ public class VenueHTTP extends Venue {
 	 * @param uri The request URI
 	 * @return Pre-authenticated request builder
 	 */
+	/**
+	 * Header carrying the caller's UCAN proofs on body-less requests (job
+	 * observation GETs): comma-separated JWTs, verified at venue ingress
+	 * exactly like the request-body {@code ucans} array. Commas cannot occur
+	 * inside a JWT, so the encoding is unambiguous.
+	 */
+	public static final String UCANS_HEADER = "X-Covia-Ucans";
+
 	private HttpRequest.Builder requestBuilder(URI uri) {
 		HttpRequest.Builder builder = HttpRequest.newBuilder().uri(uri);
 		// Per-request total deadline. connectTimeout only bounds establishing the
@@ -195,6 +203,19 @@ public class VenueHTTP extends Venue {
 		// complete; grows with the caller's configured job-wait timeout.
 		builder.timeout(Duration.ofMillis(Math.max(timeout, 120_000L)));
 		auth.apply(builder);
+		// Proofs also ride a header so body-less requests (GET /jobs/{id} and
+		// friends) carry the caller's authority — without this, a federated
+		// hop can invoke a remote job but never observe it (identity tokens
+		// and delegations only travelled in the invoke body).
+		AVector<ACell> proofTokens = this.ucans;
+		if (proofTokens != null) {
+			StringBuilder sb = new StringBuilder();
+			for (long i = 0; i < proofTokens.count(); i++) {
+				if (i > 0) sb.append(',');
+				sb.append(proofTokens.get(i).toString());
+			}
+			builder.header(UCANS_HEADER, sb.toString());
+		}
 		return builder;
 	}
 
