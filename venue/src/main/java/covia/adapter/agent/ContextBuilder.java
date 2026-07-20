@@ -261,12 +261,12 @@ public class ContextBuilder {
 		if (identity == null) identity = DEFAULT_IDENTITY_PROMPT;
 		StringBuilder sb = new StringBuilder(identity.toString());
 
-		// Session context: date/time and venue identity. Always included —
-		// agents that write timestamps, evaluate dates, or need to refer
-		// to their venue have no other way to get this information.
-		sb.append("\n\nCurrent date: ")
-		  .append(java.time.LocalDate.now().toString())
-		  .append(". Venue: ").append(engine.getName());
+		// Session context: venue identity and stable ids ONLY. The current
+		// date is deliberately NOT here — the system prompt is the head of
+		// every provider's cached prefix (OpenAI automatic prefix caching,
+		// Anthropic cache_control on system+tools), so it must contain no
+		// changing values. The date rides withCurrentDate() at the TAIL.
+		sb.append("\n\nVenue: ").append(engine.getName());
 		// Model name, if configured — helps the LLM self-calibrate
 		AString model = getConfigValue(config, Strings.intern("model"), null);
 		if (model != null) sb.append(". Model: ").append(model);
@@ -641,7 +641,25 @@ public class ContextBuilder {
 	}
 
 	/**
+	 * Appends the current date as a small tail message. Kept OUT of the system
+	 * prompt so the cacheable prefix (system + reference + history) contains no
+	 * changing values — this message busts only itself, once a day.
+	 */
+	public ContextBuilder withCurrentDate() {
+		ACell msg = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT,
+			Strings.create("Current date: " + java.time.LocalDate.now() + "."));
+		messages = messages.conj(msg);
+		trackMessage(msg);
+		return this;
+	}
+
+	/**
 	 * Appends a compact context map showing budget status and loaded paths.
+	 *
+	 * <p><b>Call this LAST among message sections</b>: the budget numbers
+	 * change on every build, so anything after this message is uncacheable by
+	 * prefix-cached providers. At the tail it busts only itself — and reports
+	 * the most accurate totals.</p>
 	 */
 	@SuppressWarnings("unchecked")
 	public ContextBuilder withContextMap(AMap<AString, ACell> loads) {

@@ -22,6 +22,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Agent LLM calls are time-bounded (`llmTimeoutMs`) and interrupt the provider on cancel
 - Default agent tool pack trimmed to read-only — skills add tools on demand (#60)
 - Bare UCAN grant resources mean the issuer's own namespace — canonicalised at issuance (custodial) and evaluation (self-sovereign)
+- Agent context assembly is prompt-cache-friendly — volatile values (date, budget map) moved to the tail; Anthropic system/tools caching enabled
 
 ### Fixed
 - `a/<hash>` references resolve without a leading slash

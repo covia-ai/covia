@@ -320,15 +320,16 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		ContextBuilder.ContextResult context = builder
 			.withConfig(recordConfig)
 			.withSessionId(RT.getIn(input, Fields.SESSION, Fields.ID))
-			.withSystemPrompt()                   // always fresh
-			.withContextEntries()                 // ephemeral (config.context)
-			.withSkillsIndex(effectiveLoads)      // ephemeral (config.skills index)
-			.withLoadedPaths(effectiveLoads)      // ephemeral (scope-chain view)
-			.withContextMap(effectiveLoads)       // ephemeral
-			.withFrameStack(sessionFrames)        // session.frames → LLM messages
-			.withPendingResults(pending)          // ephemeral (this turn)
+			.withSystemPrompt()                   // stable — head of the cached prefix
+			.withContextEntries()                 // stable while config.context unchanged
+			.withSkillsIndex(effectiveLoads)      // stable while loads unchanged
+			.withLoadedPaths(effectiveLoads)      // stable while loads unchanged
+			.withFrameStack(sessionFrames)        // session history — append-only
+			.withPendingResults(pending)          // this turn
 			.withInboxMessages(messages)          // this turn's user input
 			.withEmptyStateSignal(hasInput)
+			.withCurrentDate()                    // volatile (daily) → tail, after the prefix
+			.withContextMap(effectiveLoads)       // volatile (every build) → LAST message
 			.withTools()
 			.build();
 
