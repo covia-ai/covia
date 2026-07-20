@@ -374,6 +374,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			builder = builder.withFrameStack(sessionFrames);
 		}
 		ContextBuilder.ContextResult context = builder
+			.withCurrentDate()                    // volatile (daily) → tail, cache-stable prefix
 			.withTools()
 			.build();
 
@@ -636,6 +637,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			.withFrameStack(frames)
 			.withContextEntries()
 			.withSkillsIndex(indexLoads)
+			.withCurrentDate()                    // volatile (daily) → tail, cache-stable prefix
 			.withTools()
 			.build();
 

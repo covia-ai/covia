@@ -628,18 +628,55 @@ public class ContextBuilderTest {
 
 	@Test
 	public void testSystemPromptIncludesSessionContext() {
-		// Every agent should see current date and venue name.
+		// Venue name in the system prompt; the current date rides a TAIL
+		// message (withCurrentDate) so the cacheable prefix stays stable.
 		ContextBuilder.ContextResult result = new ContextBuilder(engine, ctx)
 			.withConfig(null)
 			.withSystemPrompt()
+			.withCurrentDate()
 			.build();
 		AString sys = extractSystemContent(result.history());
 		assertNotNull(sys);
 		String content = sys.toString();
-		assertTrue(content.contains("Current date:"),
-			"System prompt should include current date: " + content);
 		assertTrue(content.contains("Venue:"),
 			"System prompt should include venue name: " + content);
+		// CACHE GUARD: no changing values in the system prompt — the date
+		// must never creep back into the head of the cached prefix.
+		assertFalse(content.contains(java.time.LocalDate.now().toString()),
+			"system prompt must not contain the current date (cache buster): " + content);
+		// The date is present, as the last message.
+		AString tail = RT.ensureString(RT.getIn(
+			result.history().get(result.history().count() - 1), K_CONTENT));
+		assertTrue(tail.toString().contains(java.time.LocalDate.now().toString()),
+			"the date rides the tail message: " + tail);
+	}
+
+	@Test
+	public void testCachePrefixStability() {
+		// Two identical builds must produce IDENTICAL message sequences —
+		// prefix-cached providers (OpenAI automatic, Anthropic cache_control)
+		// only reuse a byte-stable prefix. Any per-build variation here is a
+		// cache buster and a regression.
+		AMap<AString, ACell> config = Maps.of(Strings.intern("defaultTools"), CVMBool.TRUE);
+		ContextBuilder.ContextResult r1 = new ContextBuilder(engine, ctx)
+			.withConfig(config).withSystemPrompt().withContextEntries()
+			.withCurrentDate().withTools().build();
+		ContextBuilder.ContextResult r2 = new ContextBuilder(engine, ctx)
+			.withConfig(config).withSystemPrompt().withContextEntries()
+			.withCurrentDate().withTools().build();
+		assertEquals(r1.history(), r2.history(),
+			"identical inputs must assemble identical messages (cache-stable)");
+		assertEquals(r1.tools(), r2.tools(),
+			"tool definitions must be build-stable (part of the cached prefix)");
+
+		// The volatile context map must be the LAST message when present.
+		ContextBuilder.ContextResult mapped = new ContextBuilder(engine, ctx)
+			.withConfig(config).withSystemPrompt().withCurrentDate()
+			.withContextMap(null).withTools().build();
+		AString last = RT.ensureString(RT.getIn(
+			mapped.history().get(mapped.history().count() - 1), K_CONTENT));
+		assertTrue(last.toString().startsWith("[Context Map]"),
+			"the per-build-volatile context map must sit at the tail: " + last);
 	}
 
 	@Test

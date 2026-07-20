@@ -469,7 +469,13 @@ public class LangChainAdapter extends AAdapter {
 			.logRequests(false)
 			.logResponses(false)
 			.modelName(model)
-			.timeout(timeout);
+			.timeout(timeout)
+			// Anthropic prompt caching is explicit opt-in: mark the system
+			// prompt and tool definitions with cache_control. ContextBuilder
+			// keeps both stable across calls (no changing values in the early
+			// context), so agent loops reuse the cached prefix every iteration.
+			.cacheSystemMessages(true)
+			.cacheTools(true);
 		// Anthropic's API requires max_tokens on every request; when the caller
 		// doesn't bound it, langchain4j's model default applies (covia#198).
 		if (tuning.maxTokens() != null) builder = builder.maxTokens(tuning.maxTokens());
