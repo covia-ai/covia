@@ -1,0 +1,28 @@
+{
+	"name": "HITL Request",
+	"description": "Ask a human for decisions, approvals or information. Delivers a durable request into the target user's h/ inbox and returns a Job that stays INPUT_REQUIRED until the human answers (Job COMPLETE with the response), rejects, or the request expires (Job FAILED). Asks are typed: text (free text), approval (yes/no), choice (pick one option), checkboxes (pick many). Approval asks and options may offer capability grants ({with, can, exp?}) that are issued ONLY if the human makes that choice and explicitly echoes the grant. Omit user to ask your own owner. There is no framework timeout — set timeout (seconds) for time-sensitive asks and handle the FAILED outcome.",
+	"creator": "Covia",
+	"operation": {
+		"adapter": "hitl:request",
+		"toolName": "hitl_request",
+		"input": {
+			"type": "object",
+			"properties": {
+				"user": { "type": "string", "description": "Target responder DID. Omit to ask the calling user (an agent asking its owner). Cross-user delivery requires a hitl/request delegation from the target." },
+				"title": { "type": "string", "description": "Short human-readable summary of what is being asked." },
+				"description": { "type": "string", "description": "Markdown context for the decision — the human sees only this record, not your conversation, so include everything needed to decide." },
+				"asks": {
+					"type": "array",
+					"description": "One or more asks. Each: {id, type: text|approval|choice|checkboxes, prompt, required?, comment?, options? (choice/checkboxes: [{id, label, description?, grants?}]), grants? (approval only)}.",
+					"items": { "type": "object" }
+				},
+				"timeout": { "type": "integer", "description": "Seconds until the request expires (Job FAILED, record status 'expired'). Omit for no expiry." }
+			},
+			"required": ["title", "asks"]
+		},
+		"output": {
+			"type": "object",
+			"description": "On completion: {id, outcome: 'answer', answers: {askId: answer}, comments?, comment?, grants?, token?} — token is a UCAN carrying any echoed-and-approved grants."
+		}
+	}
+}

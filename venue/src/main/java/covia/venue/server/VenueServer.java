@@ -406,6 +406,15 @@ public class VenueServer {
 			agentAdapter.wakeAgentsWithWork();
 		}
 
+		// Re-arm HITL expiry timers from durable `expires` stamps (COG-16:
+		// expiry MUST survive restarts). recoverJobs restored the parked
+		// INPUT_REQUIRED jobs these open records refer to; overdue requests
+		// expire immediately, future ones get fresh timers.
+		if (server.getEngine().getAdapter("hitl")
+				instanceof covia.adapter.HITLAdapter hitlAdapter) {
+			hitlAdapter.rearmExpiries();
+		}
+
 		return server;
 	}
 

@@ -1,0 +1,28 @@
+{
+	"name": "HITL Respond",
+	"description": "Resolve a HITL request in YOUR OWN h/ inbox: answer it or reject it. Answering completes the requester's Job with your answers; rejecting fails it with your comment as the reason. If the request offered capability grants, echo the ones you approve in 'grants' — the venue issues exactly the intersection of what you echo and what your choices actually triggered (approved approval asks, selected options); echoing anything else fails the response. Answer forms: text → string, approval → boolean, choice → option id, checkboxes → array of option ids.",
+	"creator": "Covia",
+	"operation": {
+		"adapter": "hitl:respond",
+		"toolName": "hitl_respond",
+		"input": {
+			"type": "object",
+			"properties": {
+				"id": { "type": "string", "description": "Request id (from your h/ inbox — list with hitl_list or covia_list path=h/)." },
+				"outcome": { "type": "string", "enum": ["answer", "reject"], "description": "'answer' resolves the request with your answers; 'reject' refuses it." },
+				"answers": { "type": "object", "description": "Map of ask id → answer, in the form the ask type requires. Required asks must be answered for 'answer'." },
+				"comments": { "type": "object", "description": "Optional map of ask id → free-text comment." },
+				"comment": { "type": "string", "description": "Overall comment; for 'reject' this is the rejection reason the requester sees." },
+				"grants": { "type": "array", "description": "The offered grants you explicitly approve, echoed as {with, can}. Omit to confer nothing.", "items": { "type": "object" } }
+			},
+			"required": ["id", "outcome"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"id": { "type": "string" },
+				"status": { "type": "string", "description": "'answered' or 'rejected'" }
+			}
+		}
+	}
+}

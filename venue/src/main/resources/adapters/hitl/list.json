@@ -1,0 +1,22 @@
+{
+	"name": "HITL List",
+	"description": "List the HITL requests in your own h/ inbox — pending asks awaiting your decision and resolved ones. Filter by status: open, answered, rejected, expired, cancelled. Read a full request (asks, offered grants) with covia_read path=h/<id>.",
+	"creator": "Covia",
+	"operation": {
+		"adapter": "hitl:list",
+		"toolName": "hitl_list",
+		"input": {
+			"type": "object",
+			"properties": {
+				"status": { "type": "string", "description": "Optional status filter: open | answered | rejected | expired | cancelled. Omit for all." }
+			}
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"items": { "type": "array", "description": "Request summaries: {id, from, title, status, created, expires?}" },
+				"count": { "type": "integer" }
+			}
+		}
+	}
+}
