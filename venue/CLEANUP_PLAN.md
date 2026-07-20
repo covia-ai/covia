@@ -82,8 +82,7 @@ Many files, but each edit small and mechanical. Behind the green suite.
   re-parsers: `AbstractLLMAdapter.ensureParsedInput`, `SchemaAdapter.parseValue`,
   `GridAdapter.coerceOperationInput`, `Orchestrator.getMap`).
 - [ ] First-class "job-only adapter" affordance so `Orchestrator`/`TestAdapter`
-  stop sabotaging `invokeFuture` (throw vs failedFuture). Aligns with the
-  single-dispatch-wiring goal in `venue/docs/ENGINE_DECOMP.md` §5.
+  stop sabotaging `invokeFuture` (throw vs failedFuture).
 - [ ] Migrate the pure-function adapters first (`JSONAdapter`, `SchemaAdapter`,
   `JVMAdapter`, `TestAdapter`); fix `MCPAdapter`'s synchronous `throw` from
   `invokeFuture`.
@@ -117,13 +116,11 @@ Add new classes — **propose each design before cutting**. One at a time, suite
   `wakeAgent`/`executeRunLoop`/`mergeAndPostProcess`). Collapse the picked-work
   tuple into a `PickedWork` record (kills the 14-param signature). Collapse
   `AgentState.mergeRunResult`'s overload chain into one + param object.
-- [ ] **`Engine` decomposition** → decided design, sequence, and the
-  subsystem-vs-seam split live in **`venue/docs/ENGINE_DECOMP.md`**. In short:
-  extract `AssetResolver`/`PathResolver`, `AdapterRegistry`, `ContentRouter`,
-  `SecretService`, and a `VenueProvisioner` (breaks the
-  `Engine → JobManager → Engine` startup cycle). Persistence is **not**
-  extracted — it stays an Engine **seam** behind `PersistenceHandler` (see
-  PERSISTENCE.md); the earlier `PersistenceCoordinator` idea is superseded.
+- [ ] **`Engine` decomposition** → extract `AssetResolver`/`PathResolver`,
+  `AdapterRegistry`, `ContentRouter`, `SecretService`, and a `VenueProvisioner`
+  (breaks the `Engine → JobManager → Engine` startup cycle). Persistence stays
+  an Engine **seam** behind `PersistenceHandler` (see PERSISTENCE.md) — **not**
+  extracted.
 - [ ] **`CoviaAPI`** → `handleJobLifecycle(...)` helper (4 near-identical
   handlers); consider splitting secrets/DID into their own `ACoviaAPI`
   subclasses like `UserAPI`.
