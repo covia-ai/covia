@@ -11,26 +11,30 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
-import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.grid.hitl.Hitl;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 
 /**
- * HITL lifecycle (COG-16): record in the target's h/ inbox + Job carrier +
- * response op. Includes the adversarial set: delivery without a hitl/request
- * delegation, non-target respond, echo of untriggered/unoffered grants,
- * answer-shape violations, respond-after-expiry, and cancel.
+ * HITL end-to-end (COG-16), driven through the {@link Hitl} builders — the
+ * clean flow this adapter exists for:
+ *
+ * <pre>request (Job parks INPUT_REQUIRED) → respond → Job completion</pre>
+ *
+ * Includes the adversarial set: delivery without a hitl/request delegation,
+ * non-target respond, echo of untriggered/unoffered grants, answer-shape
+ * violations, respond-after-expiry, and cancel. Domain-rule edge cases are
+ * unit-tested engine-free in {@code HitlValidationTest}.
  *
  * <p>Per-test key pairs isolate user namespaces on the shared engine.</p>
  */
@@ -74,29 +78,23 @@ public class HITLAdapterTest {
 		return RT.castMap(RT.getIn(result, "value"));
 	}
 
-	private static AVector<ACell> approvalAsk(String id, ACell grants) {
-		AMap<AString, ACell> ask = Maps.of(
-			"id", id, "type", "approval", "prompt", "Approve?", "required", CVMBool.TRUE);
-		if (grants != null) ask = ask.assoc(HITLAdapter.K_GRANTS, grants);
-		return Vectors.of((ACell) ask);
-	}
-
-	// ========== Lifecycle ==========
+	// ========== The clean drive: request → respond → completion ==========
 
 	@Test
 	public void testAnswerLifecycle() {
-		Job job = request(ALICE, Maps.of(
-			"title", "Pay invoice",
-			"description", "Invoice INV-1 for testing",
-			"asks", approvalAsk("pay", null)));
+		// 1. Request — the Job parks awaiting the human.
+		Job job = request(ALICE, Hitl.request("Pay invoice")
+			.description("Invoice INV-1 for testing")
+			.ask(Hitl.approval("pay", "Approve payment?").required())
+			.build());
 		assertEquals(Status.INPUT_REQUIRED, job.getStatus(),
 			"a delivered HITL request parks the job awaiting the human");
 		String id = job.getID().toHexString();
 
 		AMap<AString, ACell> record = readRecord(ALICE, id);
 		assertNotNull(record, "the record must land in the target's h/ inbox");
-		assertEquals(HITLAdapter.S_OPEN, record.get(HITLAdapter.K_STATUS));
-		assertEquals(ALICE_DID, record.get(HITLAdapter.K_FROM),
+		assertEquals(Hitl.OPEN, record.get(Hitl.STATUS));
+		assertEquals(ALICE_DID, record.get(Hitl.FROM),
 			"from is the VERIFIED caller identity, venue-set");
 
 		// The inbox listing shows the open ask.
@@ -104,134 +102,128 @@ public class HITLAdapterTest {
 			Maps.of("status", "open"), ALICE).awaitResult(5000);
 		assertTrue(RT.ensureLong(RT.getIn(list, "count")).longValue() >= 1);
 
-		respond(ALICE, Maps.of("id", id, "outcome", "answer",
-			"answers", Maps.of("pay", CVMBool.TRUE),
-			"comment", "approved"));
+		// 2. Respond — the inbox owner answers.
+		respond(ALICE, Hitl.answer(id)
+			.answer("pay", true)
+			.comment("approved")
+			.build());
 
+		// 3. Completion — the requester's Job resolves with the response.
 		assertEquals(Status.COMPLETE, job.getStatus());
 		ACell output = job.getOutput();
 		assertEquals(CVMBool.TRUE, RT.getIn(output, "answers", "pay"));
 		assertEquals(Strings.create(id), RT.getIn(output, "id"));
-		assertEquals(HITLAdapter.S_ANSWERED, readRecord(ALICE, id).get(HITLAdapter.K_STATUS));
+		assertEquals(Hitl.ANSWERED, readRecord(ALICE, id).get(Hitl.STATUS));
 	}
 
 	@Test
 	public void testRejectFailsJob() {
-		Job job = request(ALICE, Maps.of("title", "Pay?", "asks", approvalAsk("pay", null)));
+		Job job = request(ALICE, Hitl.request("Pay?")
+			.ask(Hitl.approval("pay", "Pay?").required()).build());
 		String id = job.getID().toHexString();
 
-		respond(ALICE, Maps.of("id", id, "outcome", "reject", "comment", "Wrong PO"));
+		respond(ALICE, Hitl.reject(id, "Wrong PO"));
 
 		assertEquals(Status.FAILED, job.getStatus());
 		assertTrue(job.getErrorMessage().contains("rejected"));
 		assertTrue(job.getErrorMessage().contains("Wrong PO"),
 			"the rejection reason must travel in the job error — the requester cannot read the inbox");
-		assertEquals(HITLAdapter.S_REJECTED, readRecord(ALICE, id).get(HITLAdapter.K_STATUS));
+		assertEquals(Hitl.REJECTED, readRecord(ALICE, id).get(Hitl.STATUS));
 	}
 
-	// ========== Validation (adversarial) ==========
+	// ========== Validation at the adapter boundary (adversarial) ==========
 
 	@Test
 	public void testAnswerValidationAdversarial() {
-		Job job = request(ALICE, Maps.of("title", "Setup",
-			"asks", Vectors.of(
-				(ACell) Maps.of("id", "pay", "type", "approval", "prompt", "Pay?", "required", CVMBool.TRUE),
-				(ACell) Maps.of("id", "tier", "type", "choice", "prompt", "Tier?",
-					"options", Vectors.of(
-						(ACell) Maps.of("id", "fast", "label", "Fast"),
-						(ACell) Maps.of("id", "best", "label", "Best"))))));
+		Job job = request(ALICE, Hitl.request("Setup")
+			.ask(Hitl.approval("pay", "Pay?").required())
+			.ask(Hitl.choice("tier", "Tier?").option("fast", "Fast").option("best", "Best"))
+			.build());
 		String id = job.getID().toHexString();
 
 		// Missing required ask
 		assertThrows(Exception.class, () -> respond(ALICE,
-			Maps.of("id", id, "outcome", "answer", "answers", Maps.of("tier", "fast"))));
+			Hitl.answer(id).answer("tier", "fast").build()));
 		// Unknown option id
 		assertThrows(Exception.class, () -> respond(ALICE,
-			Maps.of("id", id, "outcome", "answer",
-				"answers", Maps.of("pay", CVMBool.TRUE, "tier", "zzz"))));
+			Hitl.answer(id).answer("pay", true).answer("tier", "zzz").build()));
 		// Unknown ask id
 		assertThrows(Exception.class, () -> respond(ALICE,
-			Maps.of("id", id, "outcome", "answer",
-				"answers", Maps.of("pay", CVMBool.TRUE, "bogus", "x"))));
+			Hitl.answer(id).answer("pay", true).answer("bogus", "x").build()));
 		// Wrong answer shape for approval
 		assertThrows(Exception.class, () -> respond(ALICE,
-			Maps.of("id", id, "outcome", "answer", "answers", Maps.of("pay", "yes"))));
+			Hitl.answer(id).answer("pay", "yes").build()));
 
 		// Failed responses left the record open and the job unfinished...
-		assertEquals(HITLAdapter.S_OPEN, readRecord(ALICE, id).get(HITLAdapter.K_STATUS));
+		assertEquals(Hitl.OPEN, readRecord(ALICE, id).get(Hitl.STATUS));
 		assertFalse(job.isFinished());
 		// ...and a valid response still resolves it.
-		respond(ALICE, Maps.of("id", id, "outcome", "answer",
-			"answers", Maps.of("pay", CVMBool.TRUE, "tier", "fast")));
+		respond(ALICE, Hitl.answer(id).answer("pay", true).answer("tier", "fast").build());
 		assertEquals(Status.COMPLETE, job.getStatus());
 	}
 
 	@Test
 	public void testRequestValidationAdversarial() {
-		// Empty asks
-		assertThrows(Exception.class, () -> request(ALICE,
-			Maps.of("title", "t", "asks", Vectors.empty())));
+		// Empty asks — rejected synchronously, no record, no parked job.
+		assertThrows(Exception.class, () -> request(ALICE, Hitl.request("t").build()));
 		// Unknown ask type
 		assertThrows(Exception.class, () -> request(ALICE,
-			Maps.of("title", "t", "asks", Vectors.of(
-				(ACell) Maps.of("id", "a", "type", "essay", "prompt", "p")))));
-		// choice without options
-		assertThrows(Exception.class, () -> request(ALICE,
-			Maps.of("title", "t", "asks", Vectors.of(
-				(ACell) Maps.of("id", "a", "type", "choice", "prompt", "p")))));
+			Maps.of(Hitl.TITLE, Strings.create("t"), Hitl.ASKS, Vectors.of(
+				(ACell) Maps.of(Hitl.ID, Strings.create("a"),
+					Hitl.TYPE, Strings.create("essay"), Hitl.PROMPT, Strings.create("p"))))));
 		// Grants on a TEXT ask — a grant must ride an explicit choice
 		assertThrows(Exception.class, () -> request(ALICE,
-			Maps.of("title", "t", "asks", Vectors.of(
-				(ACell) Maps.of("id", "a", "type", "text", "prompt", "p",
-					"grants", Vectors.of((ACell) Capability.create(
-						Strings.create("w/x"), Capability.CRUD_READ)))))));
+			Maps.of(Hitl.TITLE, Strings.create("t"), Hitl.ASKS, Vectors.of(
+				(ACell) Hitl.text("a", "p").build().assoc(Hitl.GRANTS,
+					Vectors.of((ACell) Hitl.grant("w/x", "crud/read")))))));
 	}
 
 	// ========== Echo-consent grants ==========
 
 	@Test
 	public void testEchoConsentGrants() {
-		ACell offered = Vectors.of((ACell) Capability.create(
-			Strings.create("w/reports/"), Capability.CRUD_READ));
-
 		// ADVERSARIAL: echoing the grant while DENYING the approval — not triggered.
-		Job denied = request(ALICE, Maps.of("title", "g", "asks", approvalAsk("access", offered)));
+		Job denied = request(ALICE, Hitl.request("g")
+			.ask(Hitl.approval("access", "Grant?").grant("w/reports/", "crud/read")).build());
 		assertThrows(Exception.class, () -> respond(ALICE,
-			Maps.of("id", denied.getID().toHexString(), "outcome", "answer",
-				"answers", Maps.of("access", CVMBool.FALSE),
-				"grants", offered)));
+			Hitl.answer(denied.getID().toHexString())
+				.answer("access", false)
+				.echo("w/reports/", "crud/read")
+				.build()));
 		assertFalse(denied.isFinished(), "a failed response must not resolve the job");
 
 		// ADVERSARIAL: echoing a grant that was never offered.
-		Job crafted = request(ALICE, Maps.of("title", "g", "asks", approvalAsk("access", offered)));
+		Job crafted = request(ALICE, Hitl.request("g")
+			.ask(Hitl.approval("access", "Grant?").grant("w/reports/", "crud/read")).build());
 		assertThrows(Exception.class, () -> respond(ALICE,
-			Maps.of("id", crafted.getID().toHexString(), "outcome", "answer",
-				"answers", Maps.of("access", CVMBool.TRUE),
-				"grants", Vectors.of((ACell) Capability.create(
-					Strings.create("w/private/"), Strings.create("crud"))))));
+			Hitl.answer(crafted.getID().toHexString())
+				.answer("access", true)
+				.echo("w/private/", "crud")
+				.build()));
 
 		// Approving WITHOUT echoing confers nothing.
-		Job silent = request(ALICE, Maps.of("title", "g", "asks", approvalAsk("access", offered)));
-		respond(ALICE, Maps.of("id", silent.getID().toHexString(), "outcome", "answer",
-			"answers", Maps.of("access", CVMBool.TRUE)));
+		Job silent = request(ALICE, Hitl.request("g")
+			.ask(Hitl.approval("access", "Grant?").grant("w/reports/", "crud/read")).build());
+		respond(ALICE, Hitl.answer(silent.getID().toHexString()).answer("access", true).build());
 		assertEquals(Status.COMPLETE, silent.getStatus());
 		assertNull(RT.getIn(silent.getOutput(), "token"), "no echo, no token");
 		assertNull(RT.getIn(silent.getOutput(), "grants"));
 
 		// Approve + echo → token issued, audienced to the requester, resource
-		// canonicalised to the RESPONDER's namespace.
-		Job granted = request(ALICE, Maps.of("title", "g", "asks", approvalAsk("access", offered)));
-		respond(ALICE, Maps.of("id", granted.getID().toHexString(), "outcome", "answer",
-			"answers", Maps.of("access", CVMBool.TRUE),
-			"grants", offered));
+		// canonicalised to the RESPONDER's namespace at issuance.
+		Job granted = request(ALICE, Hitl.request("g")
+			.ask(Hitl.approval("access", "Grant?").grant("w/reports/", "crud/read")).build());
+		respond(ALICE, Hitl.answer(granted.getID().toHexString())
+			.answer("access", true)
+			.echo("w/reports/", "crud/read")
+			.build());
 		assertEquals(Status.COMPLETE, granted.getStatus());
 		AString jwt = RT.ensureString(RT.getIn(granted.getOutput(), "token"));
 		assertNotNull(jwt, "echoed-and-triggered grants must issue a token");
 		UCAN token = UCAN.fromJWT(jwt);
 		assertEquals(ALICE_DID, token.getAudience(), "audience is the requester");
 		assertEquals(Strings.create(ALICE_DID + "/w/reports/"),
-			RT.getIn(token.getCapabilities().get(0), Capability.WITH),
-			"bare offered resources canonicalise to the responder's namespace at issuance");
+			RT.getIn(token.getCapabilities().get(0), Capability.WITH));
 	}
 
 	// ========== Cross-user delivery ==========
@@ -239,8 +231,8 @@ public class HITLAdapterTest {
 	@Test
 	public void testCrossUserDelivery() {
 		// ADVERSARIAL: no delegation → delivery denied, job FAILED, no record.
-		Job blocked = request(BOB, Maps.of("user", ALICE_DID,
-			"title", "gimme", "asks", approvalAsk("ok", null)));
+		Job blocked = request(BOB, Hitl.request("gimme").to(ALICE_DID.toString())
+			.ask(Hitl.approval("ok", "OK?")).build());
 		assertEquals(Status.FAILED, blocked.getStatus());
 		assertTrue(blocked.getErrorMessage().contains("hitl/request"));
 		assertNull(readRecord(ALICE, blocked.getID().toHexString()),
@@ -252,28 +244,29 @@ public class HITLAdapterTest {
 			Vectors.of(Capability.create(
 				Strings.create(ALICE_DID + "/h/"), HITLAdapter.ABILITY_HITL_REQUEST)),
 			Vectors.empty());
-		ACell offered = Vectors.of((ACell) Capability.create(
-			Strings.create("w/reports/"), Capability.CRUD_READ));
 		Job job = request(BOB.withProofs(Vectors.of(delegation.toMap())),
-			Maps.of("user", ALICE_DID, "title", "Report access",
-				"asks", approvalAsk("access", offered)));
+			Hitl.request("Report access").to(ALICE_DID.toString())
+				.ask(Hitl.approval("access", "Grant report access?")
+					.grant("w/reports/", "crud/read"))
+				.build());
 		assertEquals(Status.INPUT_REQUIRED, job.getStatus());
 		String id = job.getID().toHexString();
 
 		AMap<AString, ACell> record = readRecord(ALICE, id);
-		assertEquals(BOB_DID, record.get(HITLAdapter.K_FROM),
+		assertEquals(BOB_DID, record.get(Hitl.FROM),
 			"from is Bob — the verified requester, not the inbox owner");
 
 		// ADVERSARIAL: the requester cannot respond — the record is not in HIS inbox.
 		assertThrows(Exception.class, () -> respond(BOB,
-			Maps.of("id", id, "outcome", "answer", "answers", Maps.of("access", CVMBool.TRUE))));
-		assertEquals(HITLAdapter.S_OPEN, readRecord(ALICE, id).get(HITLAdapter.K_STATUS));
+			Hitl.answer(id).answer("access", true).build()));
+		assertEquals(Hitl.OPEN, readRecord(ALICE, id).get(Hitl.STATUS));
 
 		// Alice answers, approving and echoing the grant: Bob's job completes
 		// with a token audienced to BOB over ALICE's resource.
-		respond(ALICE, Maps.of("id", id, "outcome", "answer",
-			"answers", Maps.of("access", CVMBool.TRUE),
-			"grants", offered));
+		respond(ALICE, Hitl.answer(id)
+			.answer("access", true)
+			.echo("w/reports/", "crud/read")
+			.build());
 		assertEquals(Status.COMPLETE, job.getStatus());
 		UCAN token = UCAN.fromJWT(RT.ensureString(RT.getIn(job.getOutput(), "token")));
 		assertEquals(BOB_DID, token.getAudience());
@@ -285,9 +278,8 @@ public class HITLAdapterTest {
 
 	@Test
 	public void testExpiry() {
-		Job job = request(ALICE, Maps.of("title", "quick",
-			"asks", approvalAsk("ok", null),
-			"timeout", CVMLong.create(1)));
+		Job job = request(ALICE, Hitl.request("quick")
+			.ask(Hitl.approval("ok", "OK?")).timeout(1).build());
 		String id = job.getID().toHexString();
 		assertEquals(Status.INPUT_REQUIRED, job.getStatus());
 
@@ -295,23 +287,24 @@ public class HITLAdapterTest {
 		assertThrows(JobFailedException.class, () -> job.awaitResult(15000));
 		assertEquals(Status.FAILED, job.getStatus());
 		assertTrue(job.getErrorMessage().contains("expired"));
-		assertEquals(HITLAdapter.S_EXPIRED, readRecord(ALICE, id).get(HITLAdapter.K_STATUS));
+		assertEquals(Hitl.EXPIRED, readRecord(ALICE, id).get(Hitl.STATUS));
 
 		// ADVERSARIAL: responding to an expired request must fail.
 		assertThrows(Exception.class, () -> respond(ALICE,
-			Maps.of("id", id, "outcome", "answer", "answers", Maps.of("ok", CVMBool.TRUE))));
+			Hitl.answer(id).answer("ok", true).build()));
 	}
 
 	@Test
 	public void testCancelMarksRecordCancelled() {
-		Job job = request(ALICE, Maps.of("title", "c", "asks", approvalAsk("ok", null)));
+		Job job = request(ALICE, Hitl.request("c")
+			.ask(Hitl.approval("ok", "OK?")).build());
 		String id = job.getID().toHexString();
 
 		engine.jobs().cancelJob(job.getID(), ALICE);
 		assertEquals(Status.CANCELLED, job.getStatus());
-		assertEquals(HITLAdapter.S_CANCELLED, readRecord(ALICE, id).get(HITLAdapter.K_STATUS),
+		assertEquals(Hitl.CANCELLED, readRecord(ALICE, id).get(Hitl.STATUS),
 			"the cancel hook marks the inbox record cancelled");
 		assertThrows(Exception.class, () -> respond(ALICE,
-			Maps.of("id", id, "outcome", "answer", "answers", Maps.of("ok", CVMBool.TRUE))));
+			Hitl.answer(id).answer("ok", true).build()));
 	}
 }

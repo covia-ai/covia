@@ -1,7 +1,5 @@
 package covia.adapter;
 
-import java.util.HashSet;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -10,7 +8,6 @@ import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -19,12 +16,13 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
-import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import covia.adapter.hitl.HitlValidation;
 import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.grid.hitl.Hitl;
 import covia.lattice.CapabilityChecker;
 import covia.venue.RequestContext;
 import covia.venue.User;
@@ -48,68 +46,17 @@ import covia.venue.User;
  *       {@code h/}).</li>
  * </ul>
  *
- * <p>Delivery into another user's inbox is a cross-user act gated by the
- * {@code hitl/request} ability on {@code <target>/h/} — checked against the
- * caller's ceiling and, cross-user, their presented proofs. Records are
- * venue-mediated: {@code h/} is not writable via {@code covia:write}, so
- * {@code from} is always the verified caller identity.</p>
- *
- * <p>Grants ride explicit choices only (approval asks and options). On an
- * {@code answer} outcome the response must ECHO the grants it approves; the
- * venue issues exactly the intersection of echoed and offered-and-triggered,
- * via {@code ucan:issue} under the responder's own authority (the granting
- * surface, COG-17).</p>
+ * <p>This adapter owns authorisation, persistence and job control only. The
+ * domain rules — ask/answer validation and the echo-consent grant intersection
+ * — live in {@link HitlValidation} (pure, engine-free); the shared field
+ * vocabulary and client builders live in {@link Hitl} (covia-core). The clean
+ * drive is: {@code hitl:request} (Job parks {@code INPUT_REQUIRED}) →
+ * {@code hitl:respond} by the inbox owner → Job completes with the response
+ * (or fails on reject/expiry).</p>
  */
 public class HITLAdapter extends AAdapter {
 
 	private static final Logger log = LoggerFactory.getLogger(HITLAdapter.class);
-
-	// ========== Record field keys ==========
-
-	static final AString K_ID          = Strings.intern("id");
-	static final AString K_FROM        = Strings.intern("from");
-	static final AString K_AGENT       = Strings.intern("agent");
-	static final AString K_TITLE       = Strings.intern("title");
-	static final AString K_DESCRIPTION = Strings.intern("description");
-	static final AString K_ASKS        = Strings.intern("asks");
-	static final AString K_STATUS      = Strings.intern("status");
-	static final AString K_CREATED     = Strings.intern("created");
-	static final AString K_EXPIRES     = Strings.intern("expires");
-	static final AString K_RESPONSE    = Strings.intern("response");
-
-	// Ask / option fields
-	static final AString K_TYPE     = Strings.intern("type");
-	static final AString K_PROMPT   = Strings.intern("prompt");
-	static final AString K_OPTIONS  = Strings.intern("options");
-	static final AString K_REQUIRED = Strings.intern("required");
-	static final AString K_LABEL    = Strings.intern("label");
-	static final AString K_GRANTS   = Strings.intern("grants");
-
-	// Request / response fields
-	static final AString K_USER     = Strings.intern("user");
-	static final AString K_TIMEOUT  = Strings.intern("timeout");
-	static final AString K_OUTCOME  = Strings.intern("outcome");
-	static final AString K_ANSWERS  = Strings.intern("answers");
-	static final AString K_COMMENTS = Strings.intern("comments");
-	static final AString K_COMMENT  = Strings.intern("comment");
-	static final AString K_TOKEN    = Strings.intern("token");
-	static final AString K_ITEMS    = Strings.intern("items");
-	static final AString K_COUNT    = Strings.intern("count");
-
-	// Record statuses
-	static final AString S_OPEN      = Strings.intern("open");
-	static final AString S_ANSWERED  = Strings.intern("answered");
-	static final AString S_REJECTED  = Strings.intern("rejected");
-	static final AString S_EXPIRED   = Strings.intern("expired");
-	static final AString S_CANCELLED = Strings.intern("cancelled");
-
-	// Ask types / outcomes
-	static final AString T_TEXT       = Strings.intern("text");
-	static final AString T_APPROVAL   = Strings.intern("approval");
-	static final AString T_CHOICE     = Strings.intern("choice");
-	static final AString T_CHECKBOXES = Strings.intern("checkboxes");
-	static final AString O_ANSWER = Strings.intern("answer");
-	static final AString O_REJECT = Strings.intern("reject");
 
 	/** Delivery ability for cross-user asks: {@code hitl/request} on {@code <target>/h/}. */
 	public static final AString ABILITY_HITL_REQUEST = Strings.intern("hitl/request");
@@ -179,77 +126,84 @@ public class HITLAdapter extends AAdapter {
 		handleRequest(job, ctx, input); // throws -> JobManager fails the job
 	}
 
-	// ========== hitl:request ==========
+	// ========== hitl:request — validate, authorise, deliver, park ==========
 
-	@SuppressWarnings("unchecked")
 	private void handleRequest(Job job, RequestContext ctx, ACell input) {
 		AString caller = ctx.getCallerDID();
 		if (caller == null) throw new AuthException("Authentication required for HITL requests");
 
-		AString target = RT.ensureString(RT.getIn(input, K_USER));
+		AString target = RT.ensureString(RT.getIn(input, Hitl.USER));
 		if (target == null) target = caller;
-
-		AString title = RT.ensureString(RT.getIn(input, K_TITLE));
+		AString title = RT.ensureString(RT.getIn(input, Hitl.TITLE));
 		if (title == null) throw new IllegalArgumentException("title is required");
-		AVector<ACell> asks = validateAsks(RT.getIn(input, K_ASKS));
+		AVector<ACell> asks = HitlValidation.validateAsks(RT.getIn(input, Hitl.ASKS));
+		Long timeoutSecs = parseTimeout(RT.getIn(input, Hitl.TIMEOUT));
 
-		// Delivery authorisation: a self-ask is always permitted; delivering into
-		// ANOTHER user's inbox requires hitl/request on <target>/h/ — checked
-		// against the caller's ceiling AND (cross-user) their presented proofs.
-		if (!target.equals(caller)) {
-			AString resource = Strings.create(target + "/h/");
-			ctx.requireCapability(resource, ABILITY_HITL_REQUEST);
-			long now = System.currentTimeMillis() / 1000;
-			if (!CapabilityChecker.proofsCover(ctx.getProofs(), caller, engine.getDIDString(),
-					resource, ABILITY_HITL_REQUEST, now)) {
-				throw new AuthException("HITL delivery denied: requires " + ABILITY_HITL_REQUEST
-					+ " on " + resource + " — present a delegation from the target user "
-					+ "(transport ucans / bearer)");
-			}
-		}
+		requireDeliverable(ctx, caller, target);
 
+		// Build and deliver the record (venue-mediated: `from` is the verified
+		// caller, and h/ is not writable via covia:write), then park the Job.
 		long nowMs = System.currentTimeMillis();
 		AString id = Strings.create(job.getID().toHexString());
-		AMap<AString, ACell> record = Maps.of(
-			K_ID, id,
-			K_FROM, caller,
-			K_TITLE, title,
-			K_ASKS, asks,
-			K_STATUS, S_OPEN,
-			K_CREATED, CVMLong.create(nowMs));
-		AString description = RT.ensureString(RT.getIn(input, K_DESCRIPTION));
-		if (description != null) record = record.assoc(K_DESCRIPTION, description);
-		AString agentId = ctx.getAgentId();
-		if (agentId != null) record = record.assoc(K_AGENT, agentId);
+		AMap<AString, ACell> record = buildRecord(id, caller, ctx.getAgentId(), title,
+			RT.ensureString(RT.getIn(input, Hitl.DESCRIPTION)), asks, nowMs, timeoutSecs);
 
-		Long timeoutSecs = null;
-		ACell timeoutCell = RT.getIn(input, K_TIMEOUT);
-		if (timeoutCell != null) {
-			CVMLong t = RT.ensureLong(timeoutCell);
-			if (t == null || t.longValue() <= 0) {
-				throw new IllegalArgumentException("timeout must be a positive number of seconds");
-			}
-			timeoutSecs = t.longValue();
-			record = record.assoc(K_EXPIRES, CVMLong.create(nowMs + timeoutSecs * 1000));
-		}
-
-		// Venue-mediated delivery into the target's inbox, then park the Job.
 		final AString targetDID = target;
 		engine.getVenueState().users().ensure(targetDID).putHitlRequest(id, record);
 		Blob jobId = job.getID();
-		job.setCancelHook(() -> markResolved(targetDID, id, S_CANCELLED, null));
+		job.setCancelHook(() -> markResolved(targetDID, id, Hitl.CANCELLED, null));
 		job.setStatus(Status.INPUT_REQUIRED);
 		if (timeoutSecs != null) scheduleExpiry(targetDID, id, jobId, timeoutSecs * 1000);
 		log.info("HITL request {} delivered to {} (from {})", id, targetDID, caller);
 	}
 
-	// ========== hitl:respond ==========
+	/** A self-ask is always permitted; delivering into ANOTHER user's inbox
+	 *  requires hitl/request on {@code <target>/h/} — checked against the
+	 *  caller's ceiling AND (cross-user) their presented proofs. */
+	private void requireDeliverable(RequestContext ctx, AString caller, AString target) {
+		if (target.equals(caller)) return;
+		AString resource = Strings.create(target + "/h/");
+		ctx.requireCapability(resource, ABILITY_HITL_REQUEST);
+		long now = System.currentTimeMillis() / 1000;
+		if (!CapabilityChecker.proofsCover(ctx.getProofs(), caller, engine.getDIDString(),
+				resource, ABILITY_HITL_REQUEST, now)) {
+			throw new AuthException("HITL delivery denied: requires " + ABILITY_HITL_REQUEST
+				+ " on " + resource + " — present a delegation from the target user "
+				+ "(transport ucans / bearer)");
+		}
+	}
+
+	private static AMap<AString, ACell> buildRecord(AString id, AString from, AString agentId,
+			AString title, AString description, AVector<ACell> asks, long nowMs, Long timeoutSecs) {
+		AMap<AString, ACell> record = Maps.of(
+			Hitl.ID, id,
+			Hitl.FROM, from,
+			Hitl.TITLE, title,
+			Hitl.ASKS, asks,
+			Hitl.STATUS, Hitl.OPEN,
+			Hitl.CREATED, CVMLong.create(nowMs));
+		if (description != null) record = record.assoc(Hitl.DESCRIPTION, description);
+		if (agentId != null) record = record.assoc(Hitl.AGENT, agentId);
+		if (timeoutSecs != null) record = record.assoc(Hitl.EXPIRES, CVMLong.create(nowMs + timeoutSecs * 1000));
+		return record;
+	}
+
+	private static Long parseTimeout(ACell timeoutCell) {
+		if (timeoutCell == null) return null;
+		CVMLong t = RT.ensureLong(timeoutCell);
+		if (t == null || t.longValue() <= 0) {
+			throw new IllegalArgumentException("timeout must be a positive number of seconds");
+		}
+		return t.longValue();
+	}
+
+	// ========== hitl:respond — resolve record and job ==========
 
 	@SuppressWarnings("unchecked")
 	private ACell handleRespond(RequestContext ctx, ACell input) {
 		AString caller = ctx.getCallerDID();
 		if (caller == null) throw new AuthException("Authentication required");
-		AString id = RT.ensureString(RT.getIn(input, K_ID));
+		AString id = RT.ensureString(RT.getIn(input, Hitl.ID));
 		if (id == null) throw new IllegalArgumentException("id is required");
 
 		// Structural authorisation: respond reads the CALLER's own inbox only.
@@ -258,61 +212,72 @@ public class HITLAdapter extends AAdapter {
 		if (record == null) {
 			throw new IllegalArgumentException("No HITL request " + id + " in your inbox");
 		}
-		if (!S_OPEN.equals(record.get(K_STATUS))) {
+		if (!Hitl.OPEN.equals(record.get(Hitl.STATUS))) {
 			throw new IllegalStateException("HITL request " + id + " is not open (status: "
-				+ record.get(K_STATUS) + ")");
+				+ record.get(Hitl.STATUS) + ")");
 		}
 		// Lazy expiry: a due-but-untriggered timer (e.g. lost on restart before
 		// re-arm) must not let an expired request be answered.
-		CVMLong expires = RT.ensureLong(record.get(K_EXPIRES));
+		CVMLong expires = RT.ensureLong(record.get(Hitl.EXPIRES));
 		if (expires != null && System.currentTimeMillis() > expires.longValue()) {
 			expireRequest(caller, id, Blob.parse(id.toString()));
 			throw new IllegalStateException("HITL request " + id + " has expired");
 		}
 
-		AString outcome = RT.ensureString(RT.getIn(input, K_OUTCOME));
-		if (!O_ANSWER.equals(outcome) && !O_REJECT.equals(outcome)) {
-			throw new IllegalArgumentException("outcome must be 'answer' or 'reject'");
-		}
-		AString comment = RT.ensureString(RT.getIn(input, K_COMMENT));
+		AString outcome = RT.ensureString(RT.getIn(input, Hitl.OUTCOME));
+		AString comment = RT.ensureString(RT.getIn(input, Hitl.COMMENT));
 		Job job = engine.jobs().getJob(Blob.parse(id.toString()));
-
-		if (O_REJECT.equals(outcome)) {
-			AMap<AString, ACell> response = Maps.of(K_OUTCOME, O_REJECT);
-			if (comment != null) response = response.assoc(K_COMMENT, comment);
-			user.putHitlRequest(id, record.assoc(K_STATUS, S_REJECTED).assoc(K_RESPONSE, response));
-			if (job != null && !job.isFinished()) {
-				job.fail("HITL request rejected" + (comment != null ? ": " + comment : ""));
-			}
-			return Maps.of(K_ID, id, K_STATUS, S_REJECTED);
+		if (Hitl.REJECT.equals(outcome)) {
+			return resolveReject(user, id, record, comment, job);
 		}
+		if (Hitl.ANSWER.equals(outcome)) {
+			return resolveAnswer(user, id, record, input, comment, job);
+		}
+		throw new IllegalArgumentException("outcome must be 'answer' or 'reject'");
+	}
 
-		// outcome == answer: validate against the asks, collecting triggered offers.
-		AVector<ACell> asks = (AVector<ACell>) RT.getIn(record, K_ASKS);
-		ACell answersCell = RT.getIn(input, K_ANSWERS);
+	private ACell resolveReject(User user, AString id, AMap<AString, ACell> record,
+			AString comment, Job job) {
+		AMap<AString, ACell> response = Maps.of(Hitl.OUTCOME, Hitl.REJECT);
+		if (comment != null) response = response.assoc(Hitl.COMMENT, comment);
+		user.putHitlRequest(id, record.assoc(Hitl.STATUS, Hitl.REJECTED).assoc(Hitl.RESPONSE, response));
+		if (job != null && !job.isFinished()) {
+			// The reason must travel in the job error — the requester cannot
+			// read the responder's inbox.
+			job.fail("HITL request rejected" + (comment != null ? ": " + comment : ""));
+		}
+		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.REJECTED);
+	}
+
+	@SuppressWarnings("unchecked")
+	private ACell resolveAnswer(User user, AString id, AMap<AString, ACell> record,
+			ACell input, AString comment, Job job) {
+		AVector<ACell> asks = (AVector<ACell>) RT.getIn(record, Hitl.ASKS);
+		ACell answersCell = RT.getIn(input, Hitl.ANSWERS);
 		AMap<AString, ACell> answers = (answersCell instanceof AMap)
 			? (AMap<AString, ACell>) answersCell : Maps.empty();
-		AVector<ACell> triggered = validateAnswers(asks, answers);
 
-		// Echo-consent: issue exactly the intersection of echoed and triggered.
-		AVector<ACell> approved = intersectEchoedGrants(RT.getIn(input, K_GRANTS), triggered);
+		// Domain rules: validate answers, compute triggered offers, then the
+		// echo-consent intersection — all pure (HitlValidation).
+		AVector<ACell> triggered = HitlValidation.validateAnswers(asks, answers);
+		AVector<ACell> approved = HitlValidation.intersectEchoedGrants(RT.getIn(input, Hitl.GRANTS), triggered);
 		AString token = (approved.count() > 0)
-			? issueGrants(caller, RT.ensureString(record.get(K_FROM)), approved)
+			? issueGrants(user.getDID(), RT.ensureString(record.get(Hitl.FROM)), approved)
 			: null;
 
-		AMap<AString, ACell> response = Maps.of(K_OUTCOME, O_ANSWER, K_ANSWERS, answers);
-		ACell comments = RT.getIn(input, K_COMMENTS);
-		if (comments instanceof AMap) response = response.assoc(K_COMMENTS, comments);
-		if (comment != null) response = response.assoc(K_COMMENT, comment);
-		if (approved.count() > 0) response = response.assoc(K_GRANTS, approved);
-		user.putHitlRequest(id, record.assoc(K_STATUS, S_ANSWERED).assoc(K_RESPONSE, response));
+		AMap<AString, ACell> response = Maps.of(Hitl.OUTCOME, Hitl.ANSWER, Hitl.ANSWERS, answers);
+		ACell comments = RT.getIn(input, Hitl.COMMENTS);
+		if (comments instanceof AMap) response = response.assoc(Hitl.COMMENTS, comments);
+		if (comment != null) response = response.assoc(Hitl.COMMENT, comment);
+		if (approved.count() > 0) response = response.assoc(Hitl.GRANTS, approved);
+		user.putHitlRequest(id, record.assoc(Hitl.STATUS, Hitl.ANSWERED).assoc(Hitl.RESPONSE, response));
 
 		if (job != null && !job.isFinished()) {
-			AMap<AString, ACell> output = response.assoc(K_ID, id);
-			if (token != null) output = output.assoc(K_TOKEN, token);
+			AMap<AString, ACell> output = response.assoc(Hitl.ID, id);
+			if (token != null) output = output.assoc(Hitl.TOKEN, token);
 			job.completeWith(output);
 		}
-		return Maps.of(K_ID, id, K_STATUS, S_ANSWERED);
+		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.ANSWERED);
 	}
 
 	/** Issues the approved grants as a single token via the granting surface
@@ -323,16 +288,16 @@ public class HITLAdapter extends AAdapter {
 		long now = System.currentTimeMillis() / 1000;
 		long exp = now + DEFAULT_GRANT_LIFETIME_SECS;
 		for (long i = 0; i < approved.count(); i++) {
-			CVMLong g = RT.ensureLong(RT.getIn(approved.get(i), Strings.intern("exp")));
+			CVMLong g = RT.ensureLong(RT.getIn(approved.get(i), Hitl.EXP));
 			if (g != null && g.longValue() > now && g.longValue() < exp) exp = g.longValue();
 		}
 		try {
 			ACell result = engine.jobs().invokeInternal("v/ops/ucan/issue",
 				Maps.of(Strings.intern("aud"), requester,
 					Strings.intern("att"), approved,
-					Strings.intern("exp"), CVMLong.create(exp)),
+					Hitl.EXP, CVMLong.create(exp)),
 				RequestContext.of(responder)).get(30, TimeUnit.SECONDS);
-			AString token = RT.ensureString(RT.getIn(result, K_TOKEN));
+			AString token = RT.ensureString(RT.getIn(result, Hitl.TOKEN));
 			if (token == null) throw new IllegalStateException("ucan:issue returned no token");
 			return token;
 		} catch (RuntimeException e) {
@@ -349,216 +314,24 @@ public class HITLAdapter extends AAdapter {
 	private ACell handleList(RequestContext ctx, ACell input) {
 		AString caller = ctx.getCallerDID();
 		if (caller == null) throw new AuthException("Authentication required");
-		AString filter = RT.ensureString(RT.getIn(input, K_STATUS));
+		AString filter = RT.ensureString(RT.getIn(input, Hitl.STATUS));
 		AMap<AString, ACell> all = engine.getVenueState().users().ensure(caller).getHitlRequests();
 		AVector<ACell> items = Vectors.empty();
 		for (long i = 0; i < all.count(); i++) {
 			ACell v = all.entryAt(i).getValue();
 			if (!(v instanceof AMap)) continue;
 			AMap<AString, ACell> rec = (AMap<AString, ACell>) v;
-			if (filter != null && !filter.equals(rec.get(K_STATUS))) continue;
+			if (filter != null && !filter.equals(rec.get(Hitl.STATUS))) continue;
 			AMap<AString, ACell> summary = Maps.of(
-				K_ID, rec.get(K_ID),
-				K_FROM, rec.get(K_FROM),
-				K_TITLE, rec.get(K_TITLE),
-				K_STATUS, rec.get(K_STATUS),
-				K_CREATED, rec.get(K_CREATED));
-			if (rec.get(K_EXPIRES) != null) summary = summary.assoc(K_EXPIRES, rec.get(K_EXPIRES));
+				Hitl.ID, rec.get(Hitl.ID),
+				Hitl.FROM, rec.get(Hitl.FROM),
+				Hitl.TITLE, rec.get(Hitl.TITLE),
+				Hitl.STATUS, rec.get(Hitl.STATUS),
+				Hitl.CREATED, rec.get(Hitl.CREATED));
+			if (rec.get(Hitl.EXPIRES) != null) summary = summary.assoc(Hitl.EXPIRES, rec.get(Hitl.EXPIRES));
 			items = items.conj(summary);
 		}
-		return Maps.of(K_ITEMS, items, K_COUNT, CVMLong.create(items.count()));
-	}
-
-	// ========== Validation ==========
-
-	private static final Set<String> ASK_TYPES = Set.of("text", "approval", "choice", "checkboxes");
-
-	/** Validates the asks at submission (COG-16): ids unique, types known,
-	 *  options present/unique where required, grants only on approval asks and
-	 *  options. Throws IllegalArgumentException — no record, no parked job. */
-	@SuppressWarnings("unchecked")
-	static AVector<ACell> validateAsks(ACell asksCell) {
-		if (!(asksCell instanceof AVector) || ((AVector<ACell>) asksCell).count() == 0) {
-			throw new IllegalArgumentException("asks must be a non-empty array");
-		}
-		AVector<ACell> asks = (AVector<ACell>) asksCell;
-		Set<String> ids = new HashSet<>();
-		for (long i = 0; i < asks.count(); i++) {
-			AMap<AString, ACell> ask = RT.castMap(asks.get(i));
-			if (ask == null) throw new IllegalArgumentException("asks[" + i + "] must be an object");
-			AString id = RT.ensureString(ask.get(K_ID));
-			AString type = RT.ensureString(ask.get(K_TYPE));
-			AString prompt = RT.ensureString(ask.get(K_PROMPT));
-			if (id == null || !ids.add(id.toString())) {
-				throw new IllegalArgumentException("asks[" + i + "].id is required and must be unique");
-			}
-			if (type == null || !ASK_TYPES.contains(type.toString())) {
-				throw new IllegalArgumentException("asks[" + i + "].type must be one of " + ASK_TYPES);
-			}
-			if (prompt == null) throw new IllegalArgumentException("asks[" + i + "].prompt is required");
-			boolean optionType = T_CHOICE.equals(type) || T_CHECKBOXES.equals(type);
-			ACell optionsCell = ask.get(K_OPTIONS);
-			if (optionType) {
-				if (!(optionsCell instanceof AVector) || ((AVector<ACell>) optionsCell).count() == 0) {
-					throw new IllegalArgumentException("asks[" + i + "].options must be a non-empty array");
-				}
-				Set<String> optionIds = new HashSet<>();
-				AVector<ACell> options = (AVector<ACell>) optionsCell;
-				for (long j = 0; j < options.count(); j++) {
-					AMap<AString, ACell> opt = RT.castMap(options.get(j));
-					AString optId = (opt != null) ? RT.ensureString(opt.get(K_ID)) : null;
-					if (opt == null || optId == null || !optionIds.add(optId.toString())) {
-						throw new IllegalArgumentException("asks[" + i + "].options[" + j
-							+ "] must be an object with a unique id");
-					}
-					validateGrantList(opt.get(K_GRANTS), "asks[" + i + "].options[" + j + "]");
-				}
-			} else if (optionsCell != null) {
-				throw new IllegalArgumentException("asks[" + i + "]: options only apply to choice/checkboxes");
-			}
-			// Grants attach ONLY where an explicit choice confers them:
-			// approval asks and options (validated above). Nowhere else.
-			ACell grants = ask.get(K_GRANTS);
-			if (grants != null && !T_APPROVAL.equals(type)) {
-				throw new IllegalArgumentException("asks[" + i + "]: grants only attach to approval "
-					+ "asks and options — a grant must be the consequence of an explicit choice");
-			}
-			validateGrantList(grants, "asks[" + i + "]");
-		}
-		return asks;
-	}
-
-	private static void validateGrantList(ACell grantsCell, String where) {
-		if (grantsCell == null) return;
-		if (!(grantsCell instanceof AVector)) {
-			throw new IllegalArgumentException(where + ".grants must be an array");
-		}
-		AVector<ACell> grants = (AVector<ACell>) grantsCell;
-		for (long i = 0; i < grants.count(); i++) {
-			AMap<AString, ACell> g = RT.castMap(grants.get(i));
-			if (g == null || RT.ensureString(g.get(Capability.WITH)) == null
-					|| RT.ensureString(g.get(Capability.CAN)) == null) {
-				throw new IllegalArgumentException(where + ".grants[" + i + "] must be {with, can, exp?}");
-			}
-		}
-	}
-
-	/** Validates the answers against the asks; returns the OFFERED grants that
-	 *  the choices actually triggered (approved approval asks, selected options). */
-	@SuppressWarnings("unchecked")
-	static AVector<ACell> validateAnswers(AVector<ACell> asks, AMap<AString, ACell> answers) {
-		AVector<ACell> triggered = Vectors.empty();
-		Set<String> askIds = new HashSet<>();
-		for (long i = 0; i < asks.count(); i++) {
-			AMap<AString, ACell> ask = (AMap<AString, ACell>) asks.get(i);
-			AString askId = RT.ensureString(ask.get(K_ID));
-			askIds.add(askId.toString());
-			AString type = RT.ensureString(ask.get(K_TYPE));
-			ACell answer = answers.get(askId);
-			if (answer == null) {
-				if (CVMBool.TRUE.equals(ask.get(K_REQUIRED))) {
-					throw new IllegalArgumentException("required ask '" + askId + "' is unanswered");
-				}
-				continue;
-			}
-			if (T_TEXT.equals(type)) {
-				if (RT.ensureString(answer) == null) {
-					throw new IllegalArgumentException("answer for '" + askId + "' must be a string");
-				}
-			} else if (T_APPROVAL.equals(type)) {
-				if (!(answer instanceof CVMBool)) {
-					throw new IllegalArgumentException("answer for '" + askId + "' must be a boolean");
-				}
-				if (CVMBool.TRUE.equals(answer)) {
-					triggered = appendGrants(triggered, ask.get(K_GRANTS));
-				}
-			} else { // choice / checkboxes
-				AVector<ACell> options = (AVector<ACell>) ask.get(K_OPTIONS);
-				if (T_CHOICE.equals(type)) {
-					AMap<AString, ACell> opt = findOption(options, RT.ensureString(answer));
-					if (opt == null) {
-						throw new IllegalArgumentException("answer for '" + askId + "' must name an option id");
-					}
-					triggered = appendGrants(triggered, opt.get(K_GRANTS));
-				} else {
-					if (!(answer instanceof AVector)) {
-						throw new IllegalArgumentException("answer for '" + askId + "' must be an array of option ids");
-					}
-					Set<String> seen = new HashSet<>();
-					AVector<ACell> selected = (AVector<ACell>) answer;
-					for (long j = 0; j < selected.count(); j++) {
-						AString optId = RT.ensureString(selected.get(j));
-						AMap<AString, ACell> opt = findOption(options, optId);
-						if (opt == null || !seen.add(optId.toString())) {
-							throw new IllegalArgumentException("answer for '" + askId
-								+ "' contains an unknown or duplicate option id");
-						}
-						triggered = appendGrants(triggered, opt.get(K_GRANTS));
-					}
-				}
-			}
-		}
-		// Unknown answer keys are an error — answers bind to asks, exactly.
-		for (long i = 0; i < answers.count(); i++) {
-			AString key = RT.ensureString(answers.entryAt(i).getKey());
-			if (key == null || !askIds.contains(key.toString())) {
-				throw new IllegalArgumentException("answers contains unknown ask id: " + key);
-			}
-		}
-		return triggered;
-	}
-
-	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> findOption(AVector<ACell> options, AString optId) {
-		if (optId == null || options == null) return null;
-		for (long i = 0; i < options.count(); i++) {
-			AMap<AString, ACell> opt = (AMap<AString, ACell>) options.get(i);
-			if (optId.equals(opt.get(K_ID))) return opt;
-		}
-		return null;
-	}
-
-	private static AVector<ACell> appendGrants(AVector<ACell> acc, ACell grantsCell) {
-		if (!(grantsCell instanceof AVector)) return acc;
-		AVector<ACell> grants = (AVector<ACell>) grantsCell;
-		for (long i = 0; i < grants.count(); i++) acc = acc.conj(grants.get(i));
-		return acc;
-	}
-
-	/** Echo-consent (COG-16): the venue issues exactly the intersection of the
-	 *  ECHOED grants and the offers actually TRIGGERED by the choices made. An
-	 *  echoed grant that was not offered-and-triggered fails the response. The
-	 *  issued capability is always the OFFER's own map (with/can/exp as offered),
-	 *  matched by {with, can} equality. */
-	static AVector<ACell> intersectEchoedGrants(ACell echoedCell, AVector<ACell> triggered) {
-		if (echoedCell == null) return Vectors.empty();
-		if (!(echoedCell instanceof AVector)) {
-			throw new IllegalArgumentException("grants must be an array of {with, can} capabilities");
-		}
-		AVector<ACell> echoed = (AVector<ACell>) echoedCell;
-		AVector<ACell> approved = Vectors.empty();
-		for (long i = 0; i < echoed.count(); i++) {
-			AMap<AString, ACell> e = RT.castMap(echoed.get(i));
-			AString with = (e != null) ? RT.ensureString(e.get(Capability.WITH)) : null;
-			AString can = (e != null) ? RT.ensureString(e.get(Capability.CAN)) : null;
-			ACell match = null;
-			if (with != null && can != null) {
-				for (long j = 0; j < triggered.count(); j++) {
-					ACell offer = triggered.get(j);
-					if (with.equals(RT.getIn(offer, Capability.WITH))
-							&& can.equals(RT.getIn(offer, Capability.CAN))) {
-						match = offer;
-						break;
-					}
-				}
-			}
-			if (match == null) {
-				throw new IllegalArgumentException("echoed grant " + i + " was not offered by the "
-					+ "choices made — the venue issues only offered-and-triggered grants");
-			}
-			approved = approved.conj(match);
-		}
-		return approved;
+		return Maps.of(Hitl.ITEMS, items, Hitl.COUNT, CVMLong.create(items.count()));
 	}
 
 	// ========== Expiry ==========
@@ -576,7 +349,7 @@ public class HITLAdapter extends AAdapter {
 	/** Expires an open request: record → expired, job → FAILED. Terminal-state
 	 *  stickiness makes the race against a response commit exactly one winner. */
 	private void expireRequest(AString targetDID, AString id, Blob jobId) {
-		boolean marked = markResolved(targetDID, id, S_EXPIRED, null);
+		boolean marked = markResolved(targetDID, id, Hitl.EXPIRED, null);
 		if (!marked) return; // already resolved
 		Job job = engine.jobs().getJob(jobId);
 		if (job != null && !job.isFinished()) job.fail("HITL request expired");
@@ -588,9 +361,9 @@ public class HITLAdapter extends AAdapter {
 	private boolean markResolved(AString targetDID, AString id, AString status, AMap<AString, ACell> response) {
 		User user = engine.getVenueState().users().ensure(targetDID);
 		AMap<AString, ACell> record = user.getHitlRequest(id);
-		if (record == null || !S_OPEN.equals(record.get(K_STATUS))) return false;
-		AMap<AString, ACell> updated = record.assoc(K_STATUS, status);
-		if (response != null) updated = updated.assoc(K_RESPONSE, response);
+		if (record == null || !Hitl.OPEN.equals(record.get(Hitl.STATUS))) return false;
+		AMap<AString, ACell> updated = record.assoc(Hitl.STATUS, status);
+		if (response != null) updated = updated.assoc(Hitl.RESPONSE, response);
 		user.putHitlRequest(id, updated);
 		return true;
 	}
@@ -619,10 +392,10 @@ public class HITLAdapter extends AAdapter {
 				ACell v = reqs.entryAt(i).getValue();
 				if (!(v instanceof AMap)) continue;
 				AMap<AString, ACell> rec = (AMap<AString, ACell>) v;
-				if (!S_OPEN.equals(rec.get(K_STATUS))) continue;
-				CVMLong expires = RT.ensureLong(rec.get(K_EXPIRES));
+				if (!Hitl.OPEN.equals(rec.get(Hitl.STATUS))) continue;
+				CVMLong expires = RT.ensureLong(rec.get(Hitl.EXPIRES));
 				if (expires == null) continue;
-				AString id = RT.ensureString(rec.get(K_ID));
+				AString id = RT.ensureString(rec.get(Hitl.ID));
 				if (id == null) continue;
 				Blob jobId = Blob.parse(id.toString());
 				long delay = expires.longValue() - nowMs;
