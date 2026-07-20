@@ -217,7 +217,7 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 
 - [x] Decompose Engine.java — `JobManager` extracted; callers use `engine.jobs()`.
 
-- [ ] **Complete LatticeContent** — Missing constructor and field initialization; cannot be properly instantiated.
+- [ ] **Wire LatticeContent into pinned content-addressable storage** — the `AContent` view over content pinned in the lattice `:data` region (content rides state replication, addressed by hash; pairs with `asset:pin`). Implemented and unit-tested; awaiting its consumer in the storage backend / client SDK.
   - File: `covia-core/.../grid/impl/LatticeContent.java`
 
 - [ ] **Add VenueHTTP test coverage** — HTTP client layer has zero tests. Cover invoke, polling, content upload/download, error handling.
