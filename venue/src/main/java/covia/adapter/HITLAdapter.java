@@ -205,6 +205,12 @@ public class HITLAdapter extends AAdapter {
 		if (caller == null) throw new AuthException("Authentication required");
 		AString id = RT.ensureString(RT.getIn(input, Hitl.ID));
 		if (id == null) throw new IllegalArgumentException("id is required");
+		// Records key on bare hex, but REST renders job ids 0x-prefixed —
+		// accept both, so a pasted job id just works.
+		String idStr = id.toString();
+		if (idStr.startsWith("0x") || idStr.startsWith("0X")) {
+			id = Strings.create(idStr.substring(2));
+		}
 
 		// Structural authorisation: respond reads the CALLER's own inbox only.
 		User user = engine.getVenueState().users().ensure(caller);
