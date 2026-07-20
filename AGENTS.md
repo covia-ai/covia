@@ -38,6 +38,7 @@ covia/                          # ai.covia:covia (parent POM)
 │   ├── workspace/              #   Browse/read/write lattice data
 │   ├── secret/                 #   Manage API keys and credentials
 │   ├── federation/             #   Cross-venue grid operations
+│   ├── hitl/                   #   Human-in-the-Loop requests (send, respond, teach agents, test)
 │   └── ucan/                   #   Capability token management
 ├── deploy/                     # Deployment: operator guide (README.md), Caddyfile,
 │                               #   azure/ec2 (dev venues), gcp (stable venues), docker/
@@ -308,6 +309,7 @@ Skills then work as `/skill-name` in **CLI**, **Desktop Chat**, and **IDE Cowork
 | `/asset` | Store and retrieve content-addressed assets |
 | `/federation` | Cross-venue grid operations demo |
 | `/grid-test` | Smoke test venue operations |
+| `/hitl` | Human-in-the-Loop — send asks, review/answer the h/ inbox, teach agents, smoke test |
 | `/orchestrate` | Multi-step workflow pipelines |
 | `/secret` | Manage API keys and credentials |
 | `/ucan` | UCAN capability token management |
