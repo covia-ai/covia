@@ -427,25 +427,67 @@ public abstract class AAdapter {
 			job.fail(message != null ? message : e.toString());
 			throw e;
 		}
-		final CompletableFuture<ACell> running = invocation;
-		job.setCancelHook(() -> running.cancel(true));
-        running.thenAccept(job::completeWith)
-        .exceptionally(e -> {
-			Throwable cause = e;
-			while ((cause instanceof java.util.concurrent.CompletionException
-					|| cause instanceof java.util.concurrent.ExecutionException)
-					&& cause.getCause() != null && cause.getCause() != cause) {
-				cause = cause.getCause();
-			}
-			if (cause instanceof CancellationException) {
-                job.cancel();
-            } else {
-				String message = cause.getMessage();
-				job.fail(message != null ? message : cause.toString());
-            }
-            return null;
-        });
+		bridgeToJob(job, invocation);
     }
+
+	// ===== Shared future -> Job completion bridge =====
+
+	/**
+	 * Bridge a future to a Job's lifecycle: wire the standard cancel hook
+	 * ({@code future.cancel(true)}), then settle the job when the future
+	 * completes. The canonical one-shot completion path. Adapters that manage
+	 * their own cancellation (e.g. a remote cancel) set their own hook and call
+	 * {@link #completeFromJobFuture} instead.
+	 */
+	protected static void bridgeToJob(Job job, CompletableFuture<ACell> future) {
+		job.setCancelHook(() -> future.cancel(true));
+		completeFromJobFuture(job, future);
+	}
+
+	/**
+	 * Settle a Job when {@code future} completes, without touching the cancel
+	 * hook. Use when the adapter has already wired a bespoke cancel hook.
+	 */
+	protected static void completeFromJobFuture(Job job, CompletableFuture<ACell> future) {
+		future.whenComplete((result, error) -> settleJob(job, result, error));
+	}
+
+	/**
+	 * Map a completed {@code (result, error)} pair onto Job verbs — the single
+	 * place completion, cancellation and failure are decided. Terminal
+	 * stickiness makes this safe after a racing cancel/complete.
+	 */
+	protected static void settleJob(Job job, ACell result, Throwable error) {
+		if (error == null) {
+			job.completeWith(result);
+		} else if (unwrap(error) instanceof CancellationException) {
+			job.cancel();
+		} else {
+			job.fail(describeFailure(error));
+		}
+	}
+
+	/** Unwrap {@code CompletionException}/{@code ExecutionException} wrappers to the root cause. */
+	protected static Throwable unwrap(Throwable t) {
+		Throwable cause = t;
+		while ((cause instanceof java.util.concurrent.CompletionException
+				|| cause instanceof java.util.concurrent.ExecutionException)
+				&& cause.getCause() != null && cause.getCause() != cause) {
+			cause = cause.getCause();
+		}
+		return cause;
+	}
+
+	/**
+	 * Render a Throwable into a non-empty diagnostic string for {@link Job#fail}:
+	 * unwrap async wrappers, use the message when present, else fall back to the
+	 * exception's {@code toString()} so a failure never surfaces as a blank error.
+	 */
+	protected static String describeFailure(Throwable t) {
+		Throwable cause = unwrap(t);
+		String msg = cause.getMessage();
+		return (msg != null && !msg.isBlank()) ? msg : cause.toString();
+	}
 
     /**
      * Handles a message delivered to a running job.
