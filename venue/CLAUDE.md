@@ -2,101 +2,58 @@
 
 ## Overview
 
-The **venue** module is the core runtime server for Covia - a federated AI orchestration platform. A Venue is a node in the Covia Grid that hosts and executes operations, manages assets, and participates in the federated network.
+The **venue** module is the core runtime server for Covia. A Venue is a node
+in the Covia Grid that hosts and executes operations, manages assets and
+agents, and participates in the federated network.
 
 **Main Entry Point:** `covia.venue.MainVenue`
 **Core Engine:** `covia.venue.Engine`
-**Technology Stack:** Java 21, Maven, Convex Lattice, Javalin
+**Stack:** Java 21, Maven, Convex Lattice, Javalin
 
 ## Project Structure
 
 ```
 venue/
 ├── src/main/java/covia/
-│   ├── venue/           # Core venue runtime
-│   │   ├── Engine.java          # Core state: adapters, assets, content, identity (~770 lines)
-│   │   ├── JobManager.java      # Job lifecycle: submit, query, persist, recover (~720 lines)
-│   │   ├── VenueState.java      # Lattice state wrapper (assets, jobs, users, auth cursors)
-│   │   ├── Users.java           # Per-user lattice wrapper (:user-data cursor)
-│   │   ├── User.java            # Single user's lattice state (jobs, workspace)
-│   │   ├── AccessControl.java   # Job ownership enforcement, capability checking
-│   │   ├── MainVenue.java       # Application entry point
-│   │   ├── LocalVenue.java      # Local venue implementation (delegates to Engine + JobManager)
-│   │   ├── RequestContext.java   # Caller identity context (INTERNAL, ANONYMOUS, authenticated)
-│   │   ├── api/                 # REST API (CoviaAPI.java)
-│   │   ├── server/              # HTTP server configuration
-│   │   ├── storage/             # Content storage abstractions
-│   │   ├── lattice/             # Lattice cursor management
-│   │   └── auth/                # Authentication/authorization
-│   └── adapter/         # Adapter implementations
-│       ├── AAdapter.java        # Abstract base adapter
-│       ├── GridAdapter.java     # Federated grid operations
-│       ├── ConvexAdapter.java   # Convex blockchain operations
-│       ├── MCPAdapter.java      # Model Context Protocol
-│       ├── LangChainAdapter.java # AI/LLM integration
-│       └── ...
+│   ├── venue/           # Core runtime
+│   │   ├── Engine.java          # Core state: adapters, assets, content, identity
+│   │   ├── JobManager.java      # Job lifecycle: submit, query, persist, recover
+│   │   ├── VenueState.java      # Lattice state wrapper (assets, jobs, users, auth)
+│   │   ├── Users.java / User.java  # Per-user lattice state (jobs, agents, workspace, h/ inbox)
+│   │   ├── AccessControl.java   # Job ownership enforcement
+│   │   ├── Auth.java            # Auth config, public ceiling, login providers
+│   │   ├── RequestContext.java  # Caller identity, proofs, capability ceiling
+│   │   ├── api/                 # REST (CoviaAPI), MCP, A2A, UserAPI
+│   │   ├── server/              # HTTP server, AuthMiddleware, SSE
+│   │   └── storage/             # Content storage backends
+│   ├── adapter/         # Adapter implementations (AAdapter base + ~25 adapters)
+│   └── lattice/         # Lattice definitions (Covia.java), CapabilityChecker
 ├── src/main/resources/
-│   ├── adapters/        # Adapter asset definitions (JSON)
-│   └── asset-examples/  # Example asset metadata
-└── pom.xml
+│   ├── adapters/        # Operation asset definitions (JSON, per adapter)
+│   ├── skills/          # Venue skill library (agent-loadable instruction+tool bundles)
+│   └── agent-templates/ # Standard agent templates
+└── docs/                # Module design docs (see Related Documentation)
 ```
 
-## Design Objectives
+## Key Abstractions
 
-The following objectives should guide all development work on operations and assets:
-
-### 1. Universal Capabilities via the Grid API
-
-Operations and assets must be **universally exposable** across the federated grid network:
-
-- **Protocol Agnostic:** Assets should be invocable via REST API, MCP, direct Java calls, or any future protocol
-- **Self-Describing:** Every asset must carry complete metadata (JSON schema for inputs/outputs, descriptions, versioning)
-- **Interoperable:** Operations should work seamlessly whether executed locally or on a remote venue
-- **Discoverable:** Assets should be queryable and browsable by agents and humans alike
-
-**Current Pattern:**
-```json
-{
-  "name": "Operation Name",
-  "description": "LLM-friendly description of what this does",
-  "operation": {
-    "adapter": "adapter:operation",
-    "input": { "type": "object", "properties": {...} },
-    "output": { "type": "object", "properties": {...} }
-  }
-}
-```
-
-**Design Goals:**
-- Standardize asset metadata schema across all adapters
-- Enable capability negotiation between venues
-- Support versioned operations with backwards compatibility
-- Provide rich semantic descriptions for AI agent consumption
-
-### 2. Full Utilization of Convex Lattice Technology
-
-Leverage Convex Lattice for **performance, power, and integrity**:
-
-- **Immutable Data Structures:** All state changes use Convex's persistent data structures (AMap, AVector, Index)
-- **Content-Addressed Storage:** Assets identified by CAD3 value hash (SHA3-256 of canonical encoding)
-- **Conflict-Free Replication:** Lattice cursors enable distributed state without coordination overhead
-- **Cryptographic Verification:** All data can be verified using Convex's hash-based integrity
-
-**Lattice Structure:** Defined in `src/main/java/covia/lattice/Covia.java`. Full design in `docs/GRID_LATTICE_DESIGN.md`.
-
-**Design Goals:**
-- Enable cross-venue state synchronization via lattice merging
-- Implement asset versioning with lattice-based history
-- Use lattice for distributed consensus on shared operations
-
-### 3. System of Record for Agents/Organizations
-
-Venues must serve as a **trusted system of record**:
-
-- **Audit Trail:** Every operation invocation produces an immutable job record
-- **Provenance Tracking:** Track the origin, transformations, and ownership of all assets
-- **Access Control:** Fine-grained permissions on who can invoke what operations
-- **Accountability:** Signed operations with cryptographic attribution
+- **Asset** — immutable, content-addressed resource (CAD3 value hash).
+  Operations, artifacts, or references.
+- **Operation** — an Asset with an `operation` field; executed by an adapter,
+  with JSON Schema input/output. See `docs/OPERATIONS.md`.
+- **Job** — execution state for an invocation. No framework-level timeout;
+  terminal states sticky; caller-side wait timeouts never mutate the job.
+  Full implementation semantics: `docs/JOBS.md`; protocol: COG-8.
+- **Adapter** — bridges operations to execution. Extends `AAdapter`; receives
+  resolved metadata (never null) and a `RequestContext`; returns
+  `CompletableFuture` (or overrides the job-aware `invoke` for direct job
+  control — multi-turn, orchestration, HITL).
+- **RequestContext** — caller DID, verified UCAN proofs, capability ceiling,
+  execution scopes. `requireCapability(resource, ability)` is the
+  point-of-action enforcement primitive; `Engine.crossUserAllows` is the
+  single cross-user gate (public-user parity + delegation proofs).
+- **Lattice** — CRDT-based persistent state. Structure defined in
+  `covia.lattice.Covia`; design in `docs/GRID_LATTICE_DESIGN.md`.
 
 **Job Lifecycle:**
 ```
@@ -105,72 +62,7 @@ STARTED <-> PAUSED | INPUT_REQUIRED | AUTH_REQUIRED              (paused family)
 ```
 Pause is `STARTED`-only and adapter opt-in; the paused family resumes to
 `STARTED` via resume (PAUSED) or message delivery (INPUT_REQUIRED /
-AUTH_REQUIRED). No framework-level timeout: jobs may wait days or months,
-and a caller-side wait timeout never mutates the job (see COG-8).
-
-**Design Goals:**
-- Implement signed job submissions with DID-based identity
-- Create queryable audit logs with lattice-backed storage
-- Support organizational hierarchies and delegated permissions
-- Enable compliance reporting and data lineage tracking
-
-### 4. Federated Model with Decentralized Identity
-
-The grid operates on a **federated trust model**:
-
-- **Decentralized Identifiers (DIDs):** Each venue has a DID for identity (`did:key:...`)
-- **Venue Trust:** Different venues can have different trust levels and capabilities
-- **Cross-Venue Invocation:** Operations can delegate to remote venues via `grid:run` / `grid:invoke`
-- **Data Sovereignty:** Data stays where it's controlled; only results cross boundaries
-
-**DID Document Structure:**
-```json
-{
-  "id": "did:key:z...",
-  "@context": "https://www.w3.org/ns/did/v1",
-  "verificationMethod": [...],
-  "service": [{ "type": "CoviaGridEndpoint", "serviceEndpoint": "..." }]
-}
-```
-
-**Design Goals:**
-- Implement venue capability discovery via DID documents
-- Support trust policies (which venues can invoke what)
-- Enable credential delegation for cross-organization workflows
-- Build reputation/attestation system for venue reliability
-
-## Key Abstractions
-
-### Asset (`covia.grid.Asset`)
-An immutable, content-addressed resource with metadata. Assets can be:
-- **Operations:** Executable capabilities with input/output schemas
-- **Artifacts:** Arbitrary content (files, models, datasets)
-- **References:** Pointers to external resources
-
-### Operation (`covia.grid.Operation`)
-A specialized Asset that can be invoked. Operations are:
-- Identified by CAD3 value hash of their metadata
-- Associated with an adapter that handles execution
-- Self-describing via JSON Schema for inputs/outputs
-
-### Job (`covia.grid.Job`)
-A running or completed invocation of an operation:
-- Has a unique ID (timestamp + counter + random)
-- Tracks status, input, output, errors
-- Supports async completion via CompletableFuture
-- Can be paused, cancelled, or awaited
-- Every job has an owner (caller DID) — required, never null
-
-### JobManager (`covia.venue.JobManager`)
-Manages the full job lifecycle. Accessed via `engine.jobs()`. Handles submission, queries, per-user lattice persistence, access control, and recovery on restart.
-
-### Adapter (`covia.adapter.AAdapter`)
-Bridges operations to execution environments:
-- Installs assets on registration
-- Receives resolved metadata and `RequestContext` for every invocation (meta is never null)
-- Uses `getSubOperation(meta)` to extract the adapter-specific operation name
-- Returns results asynchronously via `CompletableFuture`
-- For multi-turn or orchestration adapters, override the job-aware `invoke` method for direct job control
+AUTH_REQUIRED).
 
 ## Adapter Reference
 
@@ -178,25 +70,27 @@ Bridges operations to execution environments:
 |---------|---------|------------|
 | `grid` | Federated grid operations | `run`, `invoke`, `jobStatus`, `jobResult` |
 | `convex` | Convex blockchain | `query`, `transact` |
-| `mcp` | Model Context Protocol | `toolList`, `toolCall` |
-| `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `deepseek` |
+| `mcp` | Model Context Protocol | `toolList`, `toolCall`, bridging ops |
+| `langchain` | AI/LLM models | `openai`, `ollama`, `anthropic`, `gemini`, `deepseek`, `models` |
 | `http` | HTTP requests (SSRF-protected) | `get`, `post` |
 | `jvm` | JVM utilities | `stringConcat`, `urlEncode`, `urlDecode` |
-| `file` | Filesystem (root-jailed; host/temp/DLFS-backed roots) | `roots`, `list`, `tree`, `read`, `write`, `append`, `delete`, `mkdir`, `stat` |
-| `schema` | JSON Schema operations | `validate`, `validateAll`, `infer`, `coerce`, `check` |
+| `file` | Filesystem (root-jailed) | `roots`, `list`, `tree`, `read`, `write`, `append`, `delete`, `mkdir`, `stat` |
+| `schema` | JSON Schema | `validate`, `validateAll`, `infer`, `coerce`, `check` |
 | `orchestrator` | Multi-step workflows | Custom orchestration |
 | `covia` | Lattice CRUD | `read`, `write`, `delete`, `append`, `slice`, `list`, `inspect`, `aggregate`, `functions`, `describe`, `adapters` |
 | `asset` | Content-addressed assets | `store`, `get`, `getContent`, `list`, `pin` |
 | `agent` | Agent lifecycle | `create`, `fork`, `request`, `message`, `trigger`, `query`, `list`, `delete`, `suspend`, `resume`, `update`, `cancelTask`, `deleteSession` |
 | `llmagent` | LLM agent transitions | `chat` |
 | `goaltree` | Goal-tree agent planning | `chat` |
+| `hitl` | Human-in-the-Loop (COG-16) | `request`, `respond`, `list` over the per-user `h/` inbox |
 | `dlfs` | Decentralised file system | `listDrives`, `createDrive`, `deleteDrive`, `list`, `read`, `write`, `mkdir`, `delete` |
 | `vault` | Health vault (DLFS wrapper) | `read`, `write`, `list`, `mkdir`, `delete` |
 | `secret` | Secret store | `set`, `extract` (removal via `covia:delete s/<name>`) |
-| `memory` | Per-user agent memory — ONE `AVector` at a workspace path (default `w/memory`), every mutation a whole-vector LWW rewrite so removals never re-materialise; edited by 1-based position | `recall`, `remember`, `update`, `forget` |
-| `skills` | Agent skills — named instruction+tool bundles discovered from `w/skills`/`v/skills`/assets and loaded via the `skill_load` harness tool (see `docs/SKILLS.md`); read-only | `list`, `read` (single command-dispatched op) |
-| `ucan` | Capability tokens | `issue` |
-| `scheduler` | Deferred grid-op invocation (per-venue `:schedule`) | `schedule`, `cancel`, `trigger`, `list` |
+| `memory` | Per-user agent memory (one LWW vector, default `w/memory`) | `recall`, `remember`, `update`, `forget` |
+| `skills` | Agent skills discovery (see `docs/SKILLS.md`) | `list`, `read` (command-dispatched) |
+| `ucan` | Capability tokens — granting surface (COG-17) | `issue`, `verify` |
+| `scheduler` | Deferred grid-op invocation | `schedule`, `cancel`, `trigger`, `list` |
+| `auth` | Authentication ops | login/token flows |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
 
 ## API Endpoints
@@ -206,59 +100,54 @@ Base path: `/api/v1/`
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/status` | GET | Venue status and health |
-| `/assets/{id}` | GET | Retrieve asset metadata |
-| `/assets` | POST | Register new asset |
-| `/assets/{id}/content` | GET/PUT | Asset binary content |
-| `/invoke` | POST | Execute an operation — async by default (201 + job record to poll); `?wait=true` blocks up to the 120s cap, `?wait=<ms>` up to that many ms (clamped), returning the finished record (200) |
-| `/values/{read,list,slice,inspect,aggregate,count}` | GET | Job-free lattice reads (#177) — `?path=…`, synchronous, capability-checked, **no job persisted**. Shares `covia:*` read accessors. `aggregate`/`count` tally entries at a `depth`, optional `groupBy`. See `docs/READ_API.md` |
-| `/agents`, `/agents/{id}` | GET | Job-free agent listings (#180) — the caller's own agents, sharing `agent:list`/`agent:info` accessors, **no job persisted**. Entries default to the enriched `{agentId, status, tasks}` form matching `agent:list` (#233); `?status=false` for bare ids, `?includeTerminated=true` to include terminated |
-| `/jobs` | GET | The caller's jobs as a paged `{items, total, offset, limit}` envelope of ids, chronological (#229) |
-| `/jobs/{id}` | GET | Job status |
-| `/jobs/{id}/sse` | GET | Server-sent events for job updates |
-| `/.well-known/did.json` | GET | Venue DID document — `did:web:<hostname>` alias (canonical did:key in `alsoKnownAs`) when a public `hostname` is set, else the did:key document (#167) |
+| `/assets/{id}` | GET | Asset metadata; `/assets` POST registers; `/{id}/content` GET/PUT |
+| `/invoke` | POST | Execute an operation — async by default (201 + job record); `?wait=true` blocks up to the 120s cap, `?wait=<ms>` up to that many ms |
+| `/values/{read,list,slice,inspect,aggregate,count}` | GET | Job-free lattice reads (#177) — synchronous, capability-checked, no job persisted. See `docs/READ_API.md` |
+| `/agents`, `/agents/{id}` | GET | Job-free agent listings (#180, #233) |
+| `/jobs` | GET | Caller's jobs as a paged `{items, total, offset, limit}` envelope (#229) |
+| `/jobs/{id}` | GET | Job status. Proofs ride the `X-Covia-Ucans` header on body-less reads (federated observation) |
+| `/jobs/{id}` | POST | Message delivery to a running job (202/403/404/409) |
+| `/jobs/{id}/{cancel,pause,resume,delete}` | PUT | Lifecycle control (pause/resume are adapter opt-in → 409 otherwise) |
+| `/jobs/{id}/sse` | GET | Server-sent job updates (closes on terminal) |
+| `/.well-known/did.json` | GET | Venue DID document (#167) |
+
+MCP endpoint at `/mcp`; A2A at `/a2a` when configured (see `docs/CONFIG.md`).
 
 ## Development Guidelines
 
 ### Adding a New Adapter
 
 1. Create a class extending `AAdapter` in `covia.adapter`
-2. Implement `getName()`, `getDescription()`, and the invocation method (receives `RequestContext`, resolved metadata, and input)
-3. Use `getSubOperation(meta)` to extract the adapter-specific operation name from metadata
+2. Implement `getName()`, `getDescription()`, and the invocation method
+   (receives `RequestContext`, resolved metadata, and input)
+3. Use `getSubOperation(meta)` to extract the adapter-specific op name
 4. Override `installAssets()` to register default operations
 5. Create JSON asset definitions in `src/main/resources/adapters/{name}/`
-6. Register in `Engine.addDemoAssets()` or via configuration
+6. Register in `Engine.addDemoAssets()`
 
-The engine always resolves operation references to metadata before dispatching — adapters never receive null metadata. For adapters that need direct job control (multi-turn, orchestration), override the job-aware invocation method instead of the simple future-returning one.
+The engine always resolves operation references to metadata before dispatch —
+adapters never receive null metadata. For adapters that need direct job
+control (multi-turn, orchestration), override the job-aware `invoke` method
+instead of the future-returning one, and enforce capabilities at the point of
+action with `ctx.requireCapability(resource, ability)`.
 
-### Creating Asset Metadata
-
-Assets are defined as JSON with this structure:
+### Asset Metadata
 
 ```json
 {
   "name": "Human-readable name",
-  "description": "Detailed description for agents/humans",
-  "creator": "Author or organization",
-  "dateCreated": "ISO8601 timestamp",
+  "description": "LLM-friendly description",
   "operation": {
     "adapter": "adaptername:operation",
     "toolName": "mcpToolName",
-    "input": {
-      "type": "object",
-      "properties": {
-        "param1": { "type": "string", "description": "..." }
-      },
-      "required": ["param1"]
-    },
-    "output": {
-      "type": "object",
-      "properties": {
-        "result": { "type": "string", "description": "..." }
-      }
-    }
+    "input":  { "type": "object", "properties": {"param1": {"type": "string"}}, "required": ["param1"] },
+    "output": { "type": "object", "properties": {"result": {"type": "string"}} }
   }
 }
 ```
+
+Optional: `secretFields` (redacted in persisted job records), `default`
+(argument defaults, `docs/OPERATIONS.md` §5).
 
 ### Working with Jobs
 
@@ -286,386 +175,48 @@ engine.jobs().resumeJob(jobID, requestCtx);
 ### Working with Lattice State
 
 ```java
-// Via VenueState application wrappers (preferred)
 Hash id = engine.storeAsset(metadataString, contentBlob);
 
-// Per-user access (jobs, agents, secrets, workspace)
-VenueState vs = engine.getVenueState();
-User user = vs.users().ensure(callerDID);
+// Per-user access (jobs, agents, secrets, workspace, h/ inbox)
+User user = engine.getVenueState().users().ensure(callerDID);
 Index<Blob, ACell> userJobs = user.getJobs();
 ```
 
 ### Testing
 
-- Unit tests in `src/test/java/`
-- Use `Engine.createTemp()` for test instances
-- Asset examples in `src/main/resources/asset-examples/` for validation
+- Use the shared `TestEngine.ENGINE` with per-test DIDs (`TestEngine.uniqueDID`)
+  — never a fresh Engine per test unless persistence/restart is under test
+- Cross-venue tests use the shared `TwoVenueTestServer` (static venues,
+  per-test identities) — never spin venues per test
+- `mvn test -pl venue` runs the module; asset examples in
+  `src/main/resources/asset-examples/`
 
 ## Configuration
 
-### Persistence
+Full operator reference: **`docs/CONFIG.md`** — persistence & identity
+(seed/keystore/venue.key), network binding, rate limiting, public access
+(`auth.public.caps`), per-adapter config, private jobs, DLFS WebDAV, MCP tool
+bridging, LLM providers, venue modules, A2A, secrets bootstrap.
 
-Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
-
-```json
-{
-  "store": "/data/venue.etch",
-  "seed": "hex-ed25519-seed"
-}
-```
-
-- `store`: `"temp"` (default, deleted on exit), `"memory"`, or file path
-- `seed`: Ed25519 hex seed for stable venue identity. If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file.
-
-### Venue identity
-
-Identity resolution order: `seed` → `keystore` → `venue.key` next to a
-persistent store → freshly generated. A venue on an ephemeral store
-(`temp`/`memory`) without `seed`/`keystore` gets a **new DID every start —
-by design** (#208): a stable identity is something the operator pins
-explicitly, not something the venue persists behind their back.
-
-For managed keys, point the venue at a PKCS12 keystore in the Convex format
-(so keys are created/listed with the Convex CLI — `convex key generate`):
-
-```json
-{
-  "keystore": {
-    "path": "~/.convex/keystore.pfx",
-    "alias": "<hex-public-key>",
-    "storepass": "...",
-    "keypass": "..."
-  }
-}
-```
-
-- `path`: defaults to `~/.convex/keystore.pfx` (env `CONVEX_KEYSTORE` fills absence)
-- `alias`: required — the key entry to use (Convex convention: hex public key)
-- `storepass` / `keypass`: env `CONVEX_KEYSTORE_PASSWORD` / `CONVEX_KEY_PASSWORD`
-  fill absence; missing both config and env is a fatal startup error
-
-Any keystore failure (missing file, bad password, unknown alias) is **fatal** —
-the venue never silently falls back to a generated key. Likewise, booting an
-existing store with a key that owns none of its venue state fails at startup
-naming the store's real owner: venues are keyed by AccountKey, so a wrong key
-would otherwise silently create a fresh empty venue and orphan the existing
-data. Never commit keystore passwords; use env vars or gitignored dev configs.
-
-### Network binding
-
-```json
-{
-  "port": 8080,
-  "bindAddress": "127.0.0.1"
-}
-```
-
-- `port`: HTTP listen port (default `8080`).
-- `bindAddress`: network interface the HTTP connector binds to. When omitted, the venue binds **all interfaces** (`0.0.0.0`) — reachable from the LAN. Set to `"127.0.0.1"` to restrict the venue to loopback (recommended when embedding the venue as a local subprocess). This is the socket bind address and is distinct from `hostname`, which is the venue's *advertised* public host used to derive `baseUrl`/DID.
-
-### System tray
-
-When `MainVenue` runs on a desktop (not headless), each venue gets a system
-tray icon: hover shows the venue name, port and DID; the menu offers **Open
-Venue** (status page in the browser — double-click does the same), **Close
-Venue** (that venue; the process exits when the last one closes) and **Exit**
-(all venues). Close/Exit run the full shutdown flush, same as SIGTERM.
-
-Strictly best-effort — headless JVMs (Docker, CI, servers) and unsupported
-desktops run without an icon, and a tray failure never takes a venue down.
-Set `COVIA_NO_TRAY=1` to suppress it explicitly. See `covia.venue.Tray`.
-
-### Rate limiting
-
-```json
-{
-  "rateLimit": {
-    "enabled": true,
-    "rps": 100,
-    "burst": 300,
-    "maxConcurrentJobsPerUser": 100,
-    "blockMs": 3000
-  }
-}
-```
-
-Two independent backpressure controls, keyed per caller identity (all anonymous
-callers share the venue `:public` DID → one bucket).
-
-- **Request rate** (`rps`, `burst`) — a per-caller token bucket on `/api/*`,
-  `/mcp`, `/a2a*`. A denied request short-circuits with **429 + `Retry-After`**
-  before any handler runs. Deliberately coarse/high — it's a flood backstop, not
-  a normal-traffic gate; the job cap is the precise control.
-- **Concurrent jobs** (`maxConcurrentJobsPerUser`) — admission control on
-  top-level invokes: a caller at the cap **blocks** up to `blockMs` for a slot
-  to free (a job completing releases it), then sheds with **429 + `Retry-After`**.
-  Sub-jobs (orchestrator / agent fan-out, which carry a parent job id) are
-  **exempt**, so internal fan-out is never throttled. Set `blockMs` under typical
-  client read timeouts so a saturated caller gets a clean 429, not a socket
-  timeout. Set the cap to `0` to disable it.
-
-`enabled` defaults **on** for a LAN/public bind and **off** for a loopback bind
-(the embedded-venue case, where the only caller is a trusted local process); an
-explicit `enabled` always wins.
-
-### Adapter configuration
-
-```json
-{
-  "adapters": {
-    "agent": { "sessionDelete": false }
-  }
-}
-```
-
-Per-adapter settings, keyed by adapter name (`Config.getAdapterConfig(name)`).
-Currently defined:
-
-- `agent.sessionDelete` — whether `agent:deleteSession` is available
-  (default `true`). Set `false` to disable user-initiated session deletion
-  venue-wide; the op then fails with "disabled on this venue".
-
-### Private jobs
-
-```json
-{
-  "enablePrivateJobs": true
-}
-```
-
-Off by default. When enabled, an invoke with `private: true` (body field)
-creates a **memory-only job** (#192): never persisted — no record in the
-caller's job index, no lattice write, no recovery, gone on venue restart.
-Use `wait` to collect the result; a completed private job is immediately
-forgotten. A private request against a venue without this flag is an error —
-never a silent downgrade to a persisted job. A private conversation is agent
-intake (`agent:chat` / `agent:request`) invoked private; the session record
-remains the (deletable, `agent:deleteSession`) conversation store.
-
-**Operator telemetry is unaffected**: private controls the durable lattice
-record, not operational visibility. The venue still logs job events (ID,
-operation, status transitions, timings) per its logging config, live
-job-update listeners (SSE, MCP notifications) still fire to authorized
-subscribers, and stats counters still count. Note that log lines are
-ID-and-status shaped as a rule, but failure messages can quote content
-fragments — operators wanting content-clean logs address that via logging
-policy (levels, appender redaction), not the job system.
-
-### DLFS WebDAV
-
-```json
-{
-  "webdav": { "enabled": true }
-}
-```
-
-Mounts WebDAV at `/dlfs/` for file access to DLFS drives. Off by default.
-
-### MCP tool bridging
-
-```json
-{
-  "mcp": {
-    "servers": {
-      "github": { "url": "https://mcp.github.example", "auth": "s/GITHUB_MCP_TOKEN" }
-    }
-  }
-}
-```
-
-Bridges external MCP tools into the catalog (#80): they materialise as
-ordinary operations — capability grants, gates, job records and schema
-validation all apply because they are ordinary ops. **The tool is the
-entity**; the server is just where it lives. Two management styles:
-
-- **Curated** (`v/ops/mcp/add-tool {server, tool, path, auth?, name?,
-  description?, default?}`): one tool at a caller-chosen catalog path.
-  Groups are just paths — `o/research/search_papers` and
-  `o/research/github_search` can point at different servers with different
-  auth. Registry-free (the asset is self-contained); remove with
-  `covia:delete` on the path — nothing resurrects it. `name`/`description`
-  overrides are yours and survive refresh. `default` purpose-shapes the
-  tool with argument defaults (any value types; defaulted keys leave
-  `required`; generic `operation.default` mechanism — `docs/OPERATIONS.md`
-  §5): a generic five-field `create_issue` becomes a two-field
-  `report_bug`.
-- **Mirrored** (`v/ops/mcp/add-server {name, url, auth?, scope?}` /
-  `remove-server`): ALL of a server's tools under `o/mcp/<server>/` (or
-  `v/ops/mcp/<server>/` at venue scope), registry entry for bookkeeping.
-  Config-declared servers (above) mirror at venue scope on boot —
-  best-effort per server; one that is down logs a warning and the last-known
-  catalog persists.
-
-`v/ops/mcp/refresh` follows the same split: `{name}` reconciles a mirror
-fully (vanished tools deleted); `{path}` refreshes curated tools in place —
-schemas/annotations update, name/description untouched, vanished tools
-**reported in `missing`, never deleted**. Exactly one of `name`/`path`.
-
-Destination paths under the caller's own `o/` need nothing extra; venue-side
-targets (`v/ops/...` or `scope: "venue"`) require the `mcp/manage` ability.
-Server URLs pass the same SSRF validation (and operator allow/block lists) as
-the http adapter. `auth` should be a secret reference (`s/<name>`, stored via
-`v/ops/secret/set`; bare refs are stored DID-qualified to the registrar) —
-resolved at call time, never persisted raw; raw tokens warn.
-
-Bridged assets are self-contained — a hand-authored asset with
-`operation: {adapter: "mcp:tools:call", remoteToolName, server, auth?}` works
-without any registry entry. The bridged op's declared input IS the tool's own
-schema, so the invocation input is passed directly as the tool arguments.
-Failures are LLM-diagnosable at the point of use: a remote tool-level error
-(`isError` per the MCP spec) fails the job with the remote error text;
-transport failures name the tool, server and root cause with a remedy;
-text-only tool results are preserved (structured content wins when present).
-
-### LLM providers (langchain)
-
-`v/ops/langchain/*` inputs carry `model` / `url` / `apiKey` / `maxTokens` /
-`temperature` / `topP` / `tools` / `responseFormat`. `temperature` and `topP`
-pass through to every provider (#218 — accepts integer or double, so
-`temperature: 0` works for deterministic extraction); `maxTokens` is
-honoured by the anthropic provider (its API requires it).
-
-Ollama base URL resolution (#224): explicit input `url`, then venue config
-`adapters.langchain.ollamaUrl`, then the `OLLAMA_BASE_URL` environment
-variable, then `http://localhost:11434`. Keep agents topology-agnostic —
-only the venue deployment knows where Ollama lives (a Dockerised venue
-typically needs `http://host.docker.internal:11434`, with Ollama started as
-`OLLAMA_HOST=0.0.0.0 ollama serve`). A connect failure names the resolved
-URL and this knob instead of a bare ConnectException.
-
-### Venue modules
-
-```json
-{
-  "modules": [
-    "modules/covia-sql-0.6.0-module.jar",
-    { "path": "modules/other.jar", "sha256": "9f2a..." }
-  ]
-}
-```
-
-External adapter jars loaded at boot (#226) — heavyweight or optional
-adapters stay out of covia.jar. A module is a self-contained shaded jar
-compiled against `venue` (provided scope) declaring its adapters via
-`META-INF/services/covia.adapter.AAdapter`; its adapters are ordinary
-adapters (catalog, `/v/info/adapters`, caps/gates/defaults all apply). Each
-module gets a split-delegation classloader: parent-first for
-`covia.*`/`convex.*`/JDK/SLF4J (shared cell types + logging), child-first
-for everything else (dependency isolation). Loading is an OPERATOR act —
-no runtime module-load op exists, deliberately. `sha256` pins content;
-boot fails fast on any load error; no hot-unload (restart to remove).
-
-First module: **covia-sql** (#227) — `v/ops/sql/query` / `v/ops/sql/execute`
-over venue-local convex-db databases (per-user, lattice-backed, created on
-first use; ONE instance = one store, per-user isolation via the `database=`
-param) and operator-registered JDBC connections
-(`adapters.sql.databases.<name>`, passwords as `s/` secret refs). Callers name a `db`, never a URL. Caps:
-`sql/<db>` × `sql/query`|`sql/execute`. The module ships its own `sql`
-agent skill from its jar (materialises at `v/skills/sql` exactly when the
-module is loaded — the module-shipped-skill pattern, see `docs/SKILLS.md`).
-
-### A2A protocol
-
-```json
-{
-  "a2a": {
-    "defaultChatOp": "v/test/ops/echo",
-    "agentInfo": {
-      "name": "My Venue Agent",
-      "description": "What this agent does",
-      "organization": "Acme",
-      "providerUrl": "https://acme.example"
-    }
-  }
-}
-```
-
-Enables the A2A (Agent-to-Agent) protocol. Off by default — the endpoints are
-registered **only** when an `a2a` block is present. Without it, `POST /a2a` and
-`GET /.well-known/agent-card.json` return `501` with a hint pointing back here
-(rather than an indistinguishable 404).
-
-- `defaultChatOp` — the operation invoked on a fresh `message/send` (no
-  `taskId`). Its Job becomes the A2A Task; its output becomes the Task's
-  artifact. `v/test/ops/echo` needs no LLM secret and is handy for smoke tests;
-  point it at an `llmagent`/`agent` chat op for a real agent.
-- `agentInfo` — surfaced in the agent card (`name`/`description`, plus
-  `organization`/`providerUrl` for the card's `provider`). All optional.
-
-**Auth note:** `message/send` invokes `defaultChatOp` as the *calling*
-identity. Under the default read-only public ceiling an unauthenticated caller
-cannot invoke, so the Task comes back `TASK_STATE_FAILED`. To exercise
-`message/send` from an unauthenticated client, either authenticate the caller
-or widen `auth.public.caps` to permit the op — do the latter only on a
-loopback-bound (`bindAddress: 127.0.0.1`) throwaway venue, never a
-LAN-reachable one. The agent-card GET is public and works regardless.
-
-**Per-agent endpoints (COG-14):** beyond the front door, every agent is
-addressable at `POST /a2a/<ownerDID>/g/<agentId>` (JSON-RPC `SendMessage` →
-`agent:request` task Job = A2A Task; `GetTask`, `CancelTask`,
-`GetExtendedAgentCard`), with its card at the A2A well-known path below that
-base. Private by default: the owner interacts as themselves; anonymous
-non-owners get an existence-hiding 404, authenticated non-owners 403.
-Publishing is per-agent config: `a2a: {public: true}` makes the card
-discoverable; adding an explicit `a2a.caps` ceiling accepts stranger
-messages, dispatched as the OWNER narrowed by that ceiling — it must include
-`agent/request` plus whatever the agent's own work needs. `"unrestricted"`
-grants full owner authority (logged loudly). Wire method names are SDK-style
-(`SendMessage`, not `message/send`). Per-agent task continuation (incoming
-`taskId`) is not yet implemented (#234). Outbound `v/ops/a2a/*` ops pass the
-http adapter's SSRF checks and operator allow/block lists.
-
-### Secrets bootstrap
-
-Per-venue config can pre-populate the encrypted per-user secret stores at startup:
-
-```json
-{
-  "secrets": {
-    "venue":  { "OPENAI_API_KEY": "sk-..." },
-    "public": { "OPENAI_API_KEY": "sk-...", "ANTHROPIC_API_KEY": "sk-ant-..." },
-    "did:key:z6MkAlice...": { "FOO": "bar" }
-  }
-}
-```
-
-Top-level keys resolve as follows:
-- `"venue"` → the venue's own DID (used by venue-internal operations and self-issued requests)
-- `"public"` → `<venueDID>:public`, the default identity for unauthenticated callers
-- Anything else → used verbatim; expected to be a literal DID string
-
-Each named secret overwrites any existing value under that name for that user — config is the source of truth at launch. Names not listed are left untouched. Per-secret failures log a warning but do not fail startup. Values are never logged.
-
-**Never commit production secrets here.** Intended for personal dev configs in gitignored locations (e.g. `dev/local.json`).
+Quick dev shapes: `java -jar covia.jar` (defaults, port 8080) or
+`java -jar covia.jar local-dev.json` (two ephemeral venues, 8080/8081).
 
 ## Build & Run
 
 ```bash
-# Build
-mvn clean install
-
-# Run
+mvn clean install            # produces venue/target/covia.jar (install phase, not package!)
 java -jar target/covia.jar [config.json]
-
-# Development
-mvn compile && java -cp "target/classes:target/dependency/*" covia.venue.MainVenue
 ```
 
 ## Related Documentation
 
-- **Main README:** `../README.md` - Project overview
-- **Build Guide:** `../BUILD.md` - Detailed build instructions
-- **Deploy Guide:** `../deploy/README.md` - Deployment options
-- **Core Module:** `../covia-core/` - Grid client and shared abstractions
-- **Online Docs:** https://docs.covia.ai
-
-## Key Improvement Areas
-
-When working on operations and assets, focus on:
-
-1. **Schema Standardization:** Ensure all adapters use consistent input/output schemas
-2. **Lattice Integration:** Move more state into lattice for better integrity/replication
-3. **DID Integration:** Strengthen identity and capability discovery
-4. **Audit Completeness:** Capture full provenance for every operation
-5. **Cross-Venue Trust:** Implement policy-based access control between venues
-6. **Agent Ergonomics:** Make operations easily discoverable and invocable by AI agents
+- `docs/CONFIG.md` — operator configuration reference
+- `docs/JOBS.md` — job implementation semantics (COG-8 companion)
+- `docs/UCAN.md` — capabilities, granting surface, proof channels
+- `docs/SKILLS.md` — agent skill system
+- `docs/OPERATIONS.md` — operation model, defaults, discovery
+- `docs/GRID_LATTICE_DESIGN.md` — lattice design
+- `docs/AGENT_LOOP.md`, `docs/AGENT_SESSIONS.md`, `docs/AGENT_TEMPLATES.md`,
+  `docs/GOAL_TREE.md` — agent architecture
+- `docs/READ_API.md` — job-free read surface
+- `../AGENTS.md` — project-level guide; `../BUILD.md` — release flow
