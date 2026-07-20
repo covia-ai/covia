@@ -641,9 +641,7 @@ public class JobManager {
 		AString owner = RT.ensureString(data.get(Fields.CALLER));
 		if (owner == null) return false; // venue-internal job — owner/internal only
 		AString resource = owner.append("/j/" + jobID.toHexString());
-		return CapabilityChecker.proofsCover(ctx.getProofs(), ctx.getCallerDID(),
-			engine.getDIDString(), resource, Capability.CRUD_READ,
-			System.currentTimeMillis() / 1000);
+		return engine.crossUserAllows(ctx, resource, Capability.CRUD_READ);
 	}
 
 	/**

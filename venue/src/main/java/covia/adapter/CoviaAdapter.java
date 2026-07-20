@@ -1929,12 +1929,11 @@ public class CoviaAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private boolean verifyProofs(RequestContext ctx,
 			String requestedResource, String requestedAbility) {
-		// Single cross-user grant check, shared with job-read authorisation
-		// (covia#102) so the lattice-read path and the job path enforce the
-		// same right. Signature + chain already verified at transport ingress.
-		return CapabilityChecker.proofsCover(ctx.getProofs(), ctx.getCallerDID(),
-			engine.getDIDString(), Strings.create(requestedResource),
-			Strings.create(requestedAbility), System.currentTimeMillis() / 1000);
+		// Single cross-user gate (covia#102), shared with job-read
+		// authorisation — public-owned resources and presented proofs are
+		// both decided there. Signatures verified at transport ingress.
+		return engine.crossUserAllows(ctx, Strings.create(requestedResource),
+			Strings.create(requestedAbility));
 	}
 
 }

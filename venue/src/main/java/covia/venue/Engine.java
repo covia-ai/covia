@@ -2098,6 +2098,43 @@ public class Engine {
 		}
 	}
 
+	// ========== Cross-user authorisation ==========
+
+	/**
+	 * The single cross-user authorisation gate (covia#102): may this caller
+	 * act on a resource belonging to another user?
+	 *
+	 * <p>Two rights compose, checked in order:</p>
+	 * <ol>
+	 *   <li><b>Ambient public access</b> (covia#254) — a resource owned by the
+	 *       venue's PUBLIC identity follows the public capability ceiling for
+	 *       ANY caller: an authenticated caller is at least as privileged as
+	 *       the anonymous one. Checked only when the resource is actually
+	 *       public-owned; tracks operator policy ({@code auth.public.caps} —
+	 *       default read-only, widened at the operator's own risk).</li>
+	 *   <li><b>Presented UCAN proofs</b> — the pure fail-closed delegation
+	 *       check ({@link covia.lattice.CapabilityChecker#proofsCover}).</li>
+	 * </ol>
+	 */
+	public boolean crossUserAllows(RequestContext ctx, AString resource, AString ability) {
+		if (ctx == null || resource == null || ability == null) return false;
+		if (auth.isPublicAccessEnabled()) {
+			String publicDIDStr = getDIDString().toString() + ":public";
+			String r = resource.toString();
+			if (r.equals(publicDIDStr) || r.startsWith(publicDIDStr + "/")) {
+				AString publicDID = Strings.create(publicDIDStr);
+				convex.core.data.AVector<ACell> ceiling = auth.getPublicCeiling(publicDID);
+				// null ceiling = operator-configured unrestricted public access
+				if (ceiling == null || covia.lattice.CapabilityChecker.allows(
+						ceiling, resource, ability, publicDID) == null) {
+					return true;
+				}
+			}
+		}
+		return covia.lattice.CapabilityChecker.proofsCover(ctx.getProofs(), ctx.getCallerDID(),
+			getDIDString(), resource, ability, System.currentTimeMillis() / 1000);
+	}
+
 	// ========== Secret resolution ==========
 
 	/**
@@ -2123,12 +2160,28 @@ public class Engine {
 		if (name.isEmpty()) return null;
 
 		User user = venueState.users().get(callerDID);
-		if (user == null) return null;   // identity has no store — genuinely absent
 
-		AString value;
+		AString value = null;
 		try {
 			byte[] encKey = SecretStore.deriveKey(keyPair);
-			value = user.secrets().decrypt(Strings.create(name), encKey);
+			if (user != null) {
+				value = user.secrets().decrypt(Strings.create(name), encKey);
+			}
+			// covia#254: fall back to the PUBLIC user's store — the anonymous
+			// public caller resolves these as their own, and an authenticated
+			// caller is at least as privileged. RESOLUTION-ONLY: the value flows
+			// into operations (secretFields-redacted in records); secret:extract
+			// remains gated separately, so this never enables disclosure. The
+			// caller's own secret of the same name always shadows the public one.
+			if (value == null) {
+				String publicDIDStr = getDIDString().toString() + ":public";
+				if (!publicDIDStr.equals(callerDID.toString())) {
+					User publicUser = venueState.users().get(Strings.create(publicDIDStr));
+					if (publicUser != null) {
+						value = publicUser.secrets().decrypt(Strings.create(name), encKey);
+					}
+				}
+			}
 		} catch (Exception e) {
 			// A decrypt/key failure is NOT the same as "secret not set".
 			// Collapsing both to null (the old behaviour) masked real errors as
