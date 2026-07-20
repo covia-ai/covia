@@ -131,6 +131,15 @@ public class HITLAdapterTest {
 		assertEquals(Hitl.REJECTED, readRecord(ALICE, id).get(Hitl.STATUS));
 	}
 
+	@Test
+	public void testRespondAcceptsPrefixedJobId() {
+		// REST renders job ids 0x-prefixed; records key on bare hex. A pasted
+		// job id must work for respond (live smoke-test finding).
+		Job job = request(ALICE, Hitl.request("x").ask(Hitl.approval("ok", "OK?")).build());
+		respond(ALICE, Hitl.answer("0x" + job.getID().toHexString()).answer("ok", true).build());
+		assertEquals(Status.COMPLETE, job.getStatus());
+	}
+
 	// ========== Validation at the adapter boundary (adversarial) ==========
 
 	@Test

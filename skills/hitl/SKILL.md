@@ -127,4 +127,5 @@ Run these in order against a dev venue; each step states its expected outcome. (
 | "echoed grant ... was not offered" | The echo doesn't match an offer your choices triggered — echo exactly the offered `{with, can}`, only for choices you made |
 | "HITL request ... is not open" | Already answered/rejected/expired/cancelled — check `covia_read path=h/<id>` status |
 | Tool call timed out | Normal for long asks — the job id is in the result; poll `covia_read path=j/<id>` |
+| Record not found at `h/<id>` | Record ids are bare hex; strip a leading `0x` from a job id for `covia_read` paths (`hitl_respond` accepts both forms) |
 | Job stuck `INPUT_REQUIRED` after venue restart | Expected — open asks survive restarts (expiry timers re-arm at boot); just respond normally |
