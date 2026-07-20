@@ -44,10 +44,12 @@ What each terminal status means, as the venue actually emits them:
 | `CANCELLED` | The caller cancelled the job (`cancel()` / `jobs/{id}/cancel`). |
 | `REJECTED` | Reserved for a policy/protocol rejection distinct from an execution failure. Core invoke/agent dispatch **does not emit it today** — it is defined in the lifecycle and used by the A2A protocol mapping (`TASK_STATE_REJECTED` ↔ `REJECTED`). A capability denial is a `FAILED` job with a detailed error string, **not** a `REJECTED` job. |
 
-Whether authorisation denials should become a distinct first-class status is an
-open design question (covia#209); until then, treat `FAILED` + the error string
-as the authoritative signal, and do not rely on `REJECTED` for capability or
-invalid-input outcomes.
+This is **ruled, not open** (covia#209, closed): denials stay `FAILED` because
+nested jobs make a status-level distinction impossible — a child sub-job's
+denial surfaces as a `FAILED` parent, so error introspection is unavoidable and
+a partial denial status would be wrong at exactly that boundary. Treat `FAILED`
++ the error string (which names the withheld resource + ability) as the
+authoritative signal; `REJECTED` is reserved for the A2A protocol mapping.
 
 Agent task/chat job records additionally carry `tokens: {input, output,
 total}` when the cycle's LLM calls reported usage (#217) — provider-measured
