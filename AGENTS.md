@@ -132,6 +132,7 @@ Adapter Layer
     ├── SecretAdapter     — secret store operations (set, extract; removal via covia:delete s/<name>)
     ├── UserMemoryAdapter — per-user agent memory (recall/remember/update/forget over one LWW vector, default w/memory)
     ├── SkillsAdapter     — agent skills discovery (list/read over named instruction+tool bundles; see venue/docs/SKILLS.md)
+    ├── HITLAdapter       — human-in-the-loop requests (request/respond/list over the per-user h/ inbox; COG-16)
     ├── UCANAdapter       — capability token issuance
     ├── SchedulerAdapter  — deferred grid-op invocation (schedule, cancel, trigger, list)
     └── TestAdapter       — echo, delay, error simulation, chat

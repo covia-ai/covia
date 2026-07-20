@@ -216,4 +216,51 @@ public class User extends ALatticeComponent<ACell> {
 		return cursor.get();
 	}
 
+	// ========== HITL inbox (h/ namespace, COG-16) ==========
+
+	/** Inner content key of the {@code {updated, data}} wrapped namespaces. */
+	private static final AString K_DATA = Strings.intern("data");
+
+	/**
+	 * Gets this user's HITL request records ({@code h/} inbox) keyed by
+	 * request id. Never null.
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> getHitlRequests() {
+		ACell v = cursor.path(Namespace.H, K_DATA).get();
+		return (v instanceof AMap) ? (AMap<AString, ACell>) v : convex.core.data.Maps.empty();
+	}
+
+	/**
+	 * Gets a single HITL request record from this user's inbox.
+	 *
+	 * @param id Request id (job id hex)
+	 * @return Record map, or null if absent
+	 */
+	@SuppressWarnings("unchecked")
+	public AMap<AString, ACell> getHitlRequest(AString id) {
+		ACell v = getHitlRequests().get(id);
+		return (v instanceof AMap) ? (AMap<AString, ACell>) v : null;
+	}
+
+	/**
+	 * Writes a HITL request record into this user's inbox. Venue-mediated —
+	 * records are created and resolved only by the framework (the {@code h/}
+	 * namespace is not writable via {@code covia:write}). The write goes
+	 * THROUGH the namespace's stamping boundary into {@code data} so the
+	 * wrapper's {@code updated} stamp refreshes and the write propagates.
+	 *
+	 * @param id Request id (job id hex)
+	 * @param record Request record map
+	 */
+	@SuppressWarnings("unchecked")
+	public void putHitlRequest(AString id, AMap<AString, ACell> record) {
+		cursor.path(Namespace.H, K_DATA).updateAndGet(data -> {
+			AMap<AString, ACell> m = (data instanceof AMap)
+				? (AMap<AString, ACell>) data
+				: convex.core.data.Maps.empty();
+			return m.assoc(id, record);
+		});
+	}
+
 }

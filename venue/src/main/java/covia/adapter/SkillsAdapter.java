@@ -76,7 +76,7 @@ public class SkillsAdapter extends AAdapter {
 		"workspace", "assets", "discovery", "provenance", "agents", "tasks",
 		"models", "orchestration", "grid", "a2a", "files", "secrets",
 		"scheduling", "memory", "convex", "mcp", "http", "auth", "skills",
-		"skill-authoring"
+		"skill-authoring", "hitl"
 	};
 
 	@Override

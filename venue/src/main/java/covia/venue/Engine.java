@@ -581,6 +581,7 @@ public class Engine {
 		venue.registerAdapter(new VaultAdapter());
 		venue.registerAdapter(new LLMAgentAdapter());
 		venue.registerAdapter(new covia.adapter.agent.GoalTreeAdapter());
+		venue.registerAdapter(new covia.adapter.HITLAdapter());
 
 		// Load operator-declared venue modules (external adapter jars) BEFORE
 		// materialisation, so module ops enter the catalog with everyone

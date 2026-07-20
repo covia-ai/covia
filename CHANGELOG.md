@@ -9,6 +9,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ## [Unreleased]
 
 ### Added
+- HITL requests (COG-16) — `hitl:request`/`respond`/`list` over the per-user `h/` inbox, typed asks, choice-bound grants with echo-consent, restart-safe expiry; `hitl` skill
 - `ucan:issue` is a granting surface — mints over another principal's resource under a presented `grant/<ability>` right, expiry-capped by the right's validity
 
 ### Changed
