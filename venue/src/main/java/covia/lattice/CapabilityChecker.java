@@ -432,7 +432,7 @@ public class CapabilityChecker {
 	 * an absolute (token) grant and a bare (agent-config) grant match a bare
 	 * own-namespace operation the same way.</p>
 	 */
-	static String canonicalResource(String resource, AString ownerDID) {
+	public static String canonicalResource(String resource, AString ownerDID) {
 		if (resource == null || resource.isEmpty()) return resource;
 		if (resource.startsWith("did:")) return resource;   // already owner-qualified (DID URL)
 		// Legacy own-drive shorthand: "dlfs://<drive>/…" is accepted and normalised

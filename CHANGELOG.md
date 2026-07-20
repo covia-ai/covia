@@ -8,6 +8,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+- `ucan:issue` is a granting surface — mints over another principal's resource under a presented `grant/<ability>` right, expiry-capped by the right's validity
+
 ### Changed
 - Job lifecycle hardening — atomic updates, post-commit persistence, shutdown admission gate
 - Job polling improved — caller-side timeouts no longer fail jobs

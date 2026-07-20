@@ -340,6 +340,212 @@ public class UCANTest {
 			"a bare-with grant binds to its issuer, not to the requested target");
 	}
 
+	// ========== Granting rights at issuance (COG-17) ==========
+	//
+	// grant/X binds token PRODUCTION: the issuance surface mints over another
+	// principal's resource only when the caller's presented proofs cover
+	// grant/<can> on it. Verification stays grant-agnostic.
+
+	/** Steward mints a read grant under a held granting right, end-to-end. */
+	@Test
+	public void testIssueWithGrantingRight() {
+		RequestContext CAROL = RequestContext.of(CAROL_DID);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/shared/doc", Fields.VALUE, Strings.create("carol content")),
+			CAROL).awaitResult(5000);
+
+		long now = System.currentTimeMillis() / 1000;
+		UCAN grantRight = UCAN.create(CAROL_KP, UCAN.fromDIDKey(ALICE_DID), now + 2 * HOUR,
+			Vectors.of(Capability.create(
+				Strings.create(CAROL_DID + "/w/"), Strings.create("grant/crud/read"))),
+			Vectors.empty());
+
+		// Alice mints for Bob, inside the granting right's validity window.
+		Job issueJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CAROL_DID + "/w/shared/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(now + HOUR)),
+			withProofs(ALICE, grantRight.toMap()));
+		AString jwt = RT.ensureString(RT.getIn(issueJob.awaitResult(5000), "token"));
+		assertNotNull(jwt, "a held granting right must let the surface mint");
+
+		// End-to-end: Bob reads Carol's doc with the minted, chain-free token.
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, CAROL_DID + "/w/shared/doc"),
+			withProofs(BOB, UCAN.fromJWT(jwt).toMap()));
+		assertEquals(Strings.create("carol content"),
+			RT.getIn(readJob.awaitResult(5000), "value"));
+	}
+
+	/** ADVERSARIAL: a USE right is not a granting right — holding crud/read
+	 *  does not let the surface mint crud/read for someone else. */
+	@Test
+	public void testIssueWithUseRightOnlyDenied() {
+		long now = System.currentTimeMillis() / 1000;
+		UCAN useRight = UCAN.create(CAROL_KP, UCAN.fromDIDKey(ALICE_DID), now + 2 * HOUR,
+			Vectors.of(Capability.create(
+				Strings.create(CAROL_DID + "/w/"), Capability.CRUD_READ)),
+			Vectors.empty());
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CAROL_DID + "/w/shared/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(now + HOUR)),
+			withProofs(ALICE, useRight.toMap()));
+		assertThrows(Exception.class, () -> job.awaitResult(5000),
+			"holding crud/read must not mint — grant/crud/read is required");
+	}
+
+	/** ADVERSARIAL: the granting right's resource scope binds — a right over
+	 *  w/shared/ cannot mint over w/private/. */
+	@Test
+	public void testIssueGrantingRightWrongResourceDenied() {
+		long now = System.currentTimeMillis() / 1000;
+		UCAN grantRight = UCAN.create(CAROL_KP, UCAN.fromDIDKey(ALICE_DID), now + 2 * HOUR,
+			Vectors.of(Capability.create(
+				Strings.create(CAROL_DID + "/w/shared/"), Strings.create("grant/crud/read"))),
+			Vectors.empty());
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CAROL_DID + "/w/private/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(now + HOUR)),
+			withProofs(ALICE, grantRight.toMap()));
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+	}
+
+	/** ADVERSARIAL: grant/crud/read mints exactly crud/read — not crud/write,
+	 *  and not another grant/crud/read (stewardship re-grant needs grant/grant/…). */
+	@Test
+	public void testIssueGrantingRightWrongAbilityDenied() {
+		long now = System.currentTimeMillis() / 1000;
+		UCAN grantRight = UCAN.create(CAROL_KP, UCAN.fromDIDKey(ALICE_DID), now + 2 * HOUR,
+			Vectors.of(Capability.create(
+				Strings.create(CAROL_DID + "/w/"), Strings.create("grant/crud/read"))),
+			Vectors.empty());
+
+		Job writeJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CAROL_DID + "/w/"), Capability.CRUD_WRITE)),
+				UCAN.EXP, CVMLong.create(now + HOUR)),
+			withProofs(ALICE, grantRight.toMap()));
+		assertThrows(Exception.class, () -> writeJob.awaitResult(5000),
+			"grant/crud/read must not mint crud/write");
+
+		Job regrantJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CAROL_DID + "/w/"), Strings.create("grant/crud/read"))),
+				UCAN.EXP, CVMLong.create(now + HOUR)),
+			withProofs(ALICE, grantRight.toMap()));
+		assertThrows(Exception.class, () -> regrantJob.awaitResult(5000),
+			"re-granting the granting right requires grant/grant/crud/read");
+	}
+
+	/** ADVERSARIAL: minted authority must not outlive the granting right that
+	 *  enables it — an exp beyond the right's validity is refused. */
+	@Test
+	public void testIssueOutlivingGrantingRightDenied() {
+		long now = System.currentTimeMillis() / 1000;
+		UCAN grantRight = UCAN.create(CAROL_KP, UCAN.fromDIDKey(ALICE_DID), now + HOUR,
+			Vectors.of(Capability.create(
+				Strings.create(CAROL_DID + "/w/"), Strings.create("grant/crud/read"))),
+			Vectors.empty());
+
+		Job longJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CAROL_DID + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(now + 2 * HOUR)),
+			withProofs(ALICE, grantRight.toMap()));
+		assertThrows(Exception.class, () -> longJob.awaitResult(5000),
+			"minted exp beyond the granting right's validity must be refused");
+
+		Job shortJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CAROL_DID + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(now + HOUR / 2)),
+			withProofs(ALICE, grantRight.toMap()));
+		assertNotNull(RT.getIn(shortJob.awaitResult(5000), "token"),
+			"an exp inside the granting right's validity must mint");
+	}
+
+	/** ADVERSARIAL: a "granting right" signed by a non-owner third party roots
+	 *  no authority — the surface must refuse to mint under it. */
+	@Test
+	public void testIssueThirdPartyGrantingRightDenied() {
+		long now = System.currentTimeMillis() / 1000;
+		// Bob (who does not own Carol's namespace) "grants" Alice a granting right over it.
+		UCAN rogue = UCAN.create(BOB_KP, UCAN.fromDIDKey(ALICE_DID), now + 2 * HOUR,
+			Vectors.of(Capability.create(
+				Strings.create(CAROL_DID + "/w/"), Strings.create("grant/crud/read"))),
+			Vectors.empty());
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CAROL_DID + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(now + HOUR)),
+			withProofs(ALICE, rogue.toMap()));
+		assertThrows(Exception.class, () -> job.awaitResult(5000),
+			"a third-party granting right must root nothing");
+	}
+
+	/** Recursion: grant/grant/crud/read appoints a steward (mints grant/crud/read),
+	 *  who can then mint reads — but the appointer cannot mint reads directly. */
+	@Test
+	public void testIssueRecursiveGrantingRight() {
+		RequestContext CAROL = RequestContext.of(CAROL_DID);
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/shared/doc", Fields.VALUE, Strings.create("carol content")),
+			CAROL).awaitResult(5000);
+
+		long now = System.currentTimeMillis() / 1000;
+		UCAN metaRight = UCAN.create(CAROL_KP, UCAN.fromDIDKey(ALICE_DID), now + 3 * HOUR,
+			Vectors.of(Capability.create(
+				Strings.create(CAROL_DID + "/w/"), Strings.create("grant/grant/crud/read"))),
+			Vectors.empty());
+
+		// grant/grant/crud/read does NOT cover grant/crud/read — no direct use-grants.
+		Job directJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CAROL_DID + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(now + HOUR)),
+			withProofs(ALICE, metaRight.toMap()));
+		assertThrows(Exception.class, () -> directJob.awaitResult(5000),
+			"grant/grant/crud/read must not mint crud/read directly");
+
+		// Appoint Bob as steward: mint grant/crud/read for him.
+		Job stewardJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CAROL_DID + "/w/"), Strings.create("grant/crud/read"))),
+				UCAN.EXP, CVMLong.create(now + 2 * HOUR)),
+			withProofs(ALICE, metaRight.toMap()));
+		AString stewardJwt = RT.ensureString(RT.getIn(stewardJob.awaitResult(5000), "token"));
+		assertNotNull(stewardJwt, "the meta-right must appoint a steward");
+
+		// The steward mints a read for Dave, who then reads Carol's doc.
+		AKeyPair DAVE_KP = AKeyPair.generate();
+		AString DAVE_DID = UCAN.toDIDKey(DAVE_KP.getAccountKey());
+		Job daveGrantJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, DAVE_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CAROL_DID + "/w/shared/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(now + HOUR)),
+			withProofs(BOB, UCAN.fromJWT(stewardJwt).toMap()));
+		AString daveJwt = RT.ensureString(RT.getIn(daveGrantJob.awaitResult(5000), "token"));
+
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, CAROL_DID + "/w/shared/doc"),
+			withProofs(RequestContext.of(DAVE_DID), UCAN.fromJWT(daveJwt).toMap()));
+		assertEquals(Strings.create("carol content"),
+			RT.getIn(readJob.awaitResult(5000), "value"));
+	}
+
 	@Test
 	public void testCrossUserReadWithValidProof() {
 		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/w/", "crud/read", 3600);
