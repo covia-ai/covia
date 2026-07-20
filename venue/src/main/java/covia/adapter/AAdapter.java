@@ -467,23 +467,4 @@ public abstract class AAdapter {
     	return false;
     }
 
-	/**
-	 * Pauses an active execution. The default is deliberately unsupported:
-	 * changing only the Job status while adapter work continues is not a pause.
-	 * Adapters that can genuinely suspend work must override this method and
-	 * perform the status transition themselves.
-	 */
-	public void pause(Job job, RequestContext ctx, AMap<AString, ACell> meta) {
-		throw new IllegalStateException("Adapter does not support pausing: " + getName());
-	}
-
-	/**
-	 * Resumes a previously paused execution from adapter-owned state. The
-	 * default never re-invokes the operation from its stored input because that
-	 * can duplicate non-idempotent effects and loses request authority.
-	 */
-	public void resume(Job job, RequestContext ctx, AMap<AString, ACell> meta) {
-		throw new IllegalStateException("Adapter does not support resuming: " + getName());
-	}
-
 }

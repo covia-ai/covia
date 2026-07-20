@@ -744,12 +744,7 @@ public class JobManager {
 		requireJobOwner(ctx, id, data); // mutation: owner-only
 		Job job = activeJobs.get(id);
 		if (job == null) return null;
-		AMap<AString, ACell> meta = resolveJobMeta(job);
-		AAdapter adapter = resolveJobAdapter(job);
-		if (adapter == null || meta == null) {
-			throw new IllegalStateException("Job adapter is unavailable");
-		}
-		adapter.pause(job, ctx.withJobId(id), meta);
+		job.pause();
 		return job.getData();
 	}
 
@@ -771,12 +766,7 @@ public class JobManager {
 		requireJobOwner(ctx, id, data); // mutation: owner-only
 		Job job = activeJobs.get(id);
 		if (job == null) return null;
-		AMap<AString, ACell> meta = resolveJobMeta(job);
-		AAdapter adapter = resolveJobAdapter(job);
-		if (adapter == null || meta == null) {
-			throw new IllegalStateException("Job adapter is unavailable");
-		}
-		adapter.resume(job, ctx.withJobId(id), meta);
+		job.resume();
 		return job.getData();
 	}
 

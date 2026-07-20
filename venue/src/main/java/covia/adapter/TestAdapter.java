@@ -200,6 +200,14 @@ public class TestAdapter extends AAdapter {
         } else if ("delay".equals(subOp)) {
             // Delay: needs Job for caller DID propagation to sub-invocation
             handleDelay(job, ctx, input);
+        } else if ("never".equals(subOp)) {
+            // Never completes. Run the default one-shot path (starts the
+            // never-completing future and wires the cancel hook), then register
+            // pause/resume hooks so the generic lifecycle endpoints work. There
+            // is no real work to suspend, so the hooks are status-only markers.
+            super.invoke(job, ctx, meta, input);
+            job.setPauseHook(() -> {});
+            job.setResumeHook(() -> {});
         } else {
             // Default one-shot path
             super.invoke(job, ctx, meta, input);
@@ -238,22 +246,6 @@ public class TestAdapter extends AAdapter {
     public boolean supportsMultiTurn() {
 		return true;
     }
-
-	@Override
-	public void pause(Job job, RequestContext ctx, AMap<AString, ACell> meta) {
-		if (!"never".equals(getSubOperation(meta))) {
-			super.pause(job, ctx, meta);
-		}
-		job.pause();
-	}
-
-	@Override
-	public void resume(Job job, RequestContext ctx, AMap<AString, ACell> meta) {
-		if (!"never".equals(getSubOperation(meta))) {
-			super.resume(job, ctx, meta);
-		}
-		job.resume();
-	}
 
     private void handleDelay(Job job, RequestContext ctx, ACell input) {
     	// Use submit() (not CompletableFuture.runAsync) so the returned Future

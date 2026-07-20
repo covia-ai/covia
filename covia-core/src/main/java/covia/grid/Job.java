@@ -49,6 +49,21 @@ public class Job {
 	 */
 	private volatile Runnable onCancel = null;
 
+	/**
+	 * Optional pause hook, invoked by {@link #pause()} so the executing adapter
+	 * can actually suspend its work rather than merely flipping the status.
+	 * Registered via {@link #setPauseHook} when a suspendable execution starts;
+	 * absence means the job cannot be paused (a bare status flip is not a pause).
+	 */
+	private volatile Runnable onPause = null;
+
+	/**
+	 * Optional resume hook, invoked by {@link #resume()} to restart the adapter's
+	 * suspended work. Registered via {@link #setResumeHook}; absence means the
+	 * generic resume path is unsupported (advance via message delivery instead).
+	 */
+	private volatile Runnable onResume = null;
+
 	/** Key for previous state pointer in job data */
 	public static final AString PREV = Strings.intern("prev");
 
@@ -379,25 +394,59 @@ public class Job {
 	}
 
 	/**
-	 * Pause this Job, if it is currently running (STARTED).
-	 * @throws IllegalStateException if the job is already finished
+	 * Register a pause hook invoked by {@link #pause()}. Adapters that can
+	 * genuinely suspend work register one when they start executing; the hook
+	 * performs the suspension. Registering a hook is what makes a job pausable.
+	 *
+	 * @param hook the pause callback, or null to clear
+	 */
+	public void setPauseHook(Runnable hook) {
+		this.onPause = hook;
+	}
+
+	/**
+	 * Register a resume hook invoked by {@link #resume()} to restart the
+	 * adapter's suspended work. Registering a hook is what makes a job resumable
+	 * via the generic resume path (vs message-based advancement).
+	 *
+	 * @param hook the resume callback, or null to clear
+	 */
+	public void setResumeHook(Runnable hook) {
+		this.onResume = hook;
+	}
+
+	/**
+	 * Pause this Job. Runs the registered {@linkplain #setPauseHook pause hook}
+	 * so the adapter actually suspends its work, then flips STARTED &rarr; PAUSED.
+	 * @throws IllegalStateException if the job is finished, not STARTED, or has no
+	 *         pause hook registered (a status flip while work continues is not a
+	 *         pause; unsupported pause surfaces as HTTP 409).
 	 */
 	public void pause() {
 		if (isFinished()) throw new IllegalStateException("Job already finished");
 		if (!Status.STARTED.equals(getStatus())) {
 			throw new IllegalStateException("Job is not running: " + getStatus());
 		}
+		Runnable hook = onPause;
+		if (hook == null) throw new IllegalStateException("Job does not support pausing");
+		hook.run();
 		update(job -> job.assoc(Fields.STATUS, Status.PAUSED));
 	}
 
 	/**
 	 * Resume this Job from a paused state (PAUSED, INPUT_REQUIRED, AUTH_REQUIRED).
-	 * Sets status back to STARTED.
-	 * @throws IllegalStateException if the job is not paused or is finished
+	 * Runs the registered {@linkplain #setResumeHook resume hook} to restart the
+	 * adapter's suspended work, then flips back to STARTED.
+	 * @throws IllegalStateException if the job is finished, not paused, or has no
+	 *         resume hook registered (generic resume never re-invokes from stored
+	 *         input; unsupported resume surfaces as HTTP 409).
 	 */
 	public void resume() {
 		if (isFinished()) throw new IllegalStateException("Job already finished");
 		if (!isPaused()) throw new IllegalStateException("Job is not paused: " + getStatus());
+		Runnable hook = onResume;
+		if (hook == null) throw new IllegalStateException("Job does not support resuming");
+		hook.run();
 		update(job -> job.assoc(Fields.STATUS, Status.STARTED));
 	}
 

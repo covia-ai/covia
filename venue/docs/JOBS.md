@@ -97,18 +97,21 @@ for days, weeks, or months (workflows, HITL, agents). Consequences:
   cancellation to a worker-thread interrupt, closing in-flight HTTP calls.
 - Best-effort: side effects already produced are not undone.
 
-## Pause and resume — adapter opt-in
+## Pause and resume — Job verbs, hook opt-in
 
-- `AAdapter.pause`/`resume` **default to throwing**: changing only the
-  status while work continues underneath is not a pause. Adapters that can
-  genuinely suspend override both (surfaced as HTTP 409 otherwise).
-- `Job.pause()` is `STARTED`-only; `resume()` accepts the whole paused
-  family.
-- Resume **never re-invokes the operation from its stored input** — that
-  would duplicate non-idempotent side effects and lose request authority.
-  Resumption continues from adapter-owned suspended state.
-- `INPUT_REQUIRED`/`AUTH_REQUIRED` jobs are advanced by **message
-  delivery**, not the resume endpoint.
+- Pause/resume are **`Job` verbs**: `job.pause()` / `job.resume()`. There is no
+  parallel adapter pause path — an adapter opts in by registering a **pause /
+  resume hook** (`Job.setPauseHook`/`setResumeHook`, symmetric to the cancel
+  hook) when it starts a suspendable execution. The hook is how the adapter
+  actually suspends or restarts its work.
+- A job with **no hook rejects** pause/resume (`IllegalStateException` → HTTP
+  409): changing only the status while work continues underneath is not a pause.
+- `Job.pause()` is `STARTED`-only; `resume()` accepts the whole paused family.
+- Resume **never re-invokes the operation from its stored input** — that would
+  duplicate non-idempotent side effects and lose request authority. Resumption
+  continues from adapter-owned suspended state (the resume hook's closure).
+- `INPUT_REQUIRED`/`AUTH_REQUIRED` jobs are advanced by **message delivery**,
+  not the resume endpoint (they register no resume hook).
 
 ## Message delivery — no per-job queue
 
