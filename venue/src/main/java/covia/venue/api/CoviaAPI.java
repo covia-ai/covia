@@ -718,6 +718,14 @@ public class CoviaAPI extends ACoviaAPI {
 			return;
 		}
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		// Job reads are delegable and federated observation must carry the
+		// caller's authority: attach transport proofs from the bearer and the
+		// X-Covia-Ucans header (a GET has no body for the ucans array). With
+		// venueDID set, an identity token authenticates a relayed caller —
+		// this is how a grid hop observes the remote job it created.
+		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
+		rctx = AuthMiddleware.withTransportAuth(rctx, bearer,
+			AuthMiddleware.headerUcans(ctx), engine().getDIDString());
 
 		try {
 			AMap<AString,ACell> status=engine().jobs().getJobData(id, rctx);

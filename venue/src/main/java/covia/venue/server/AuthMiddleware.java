@@ -498,6 +498,25 @@ public class AuthMiddleware {
 	}
 
 	/**
+	 * Raw JWT strings from the {@code X-Covia-Ucans} header (comma-separated),
+	 * in the same vector shape as the request-body {@code ucans} array —
+	 * verified downstream by {@link #withTransportAuth} exactly like body
+	 * proofs. The header channel exists for body-less requests (job
+	 * observation GETs): without it a federated hop can invoke a remote job
+	 * but never observe it. Returns null when the header is absent or empty.
+	 */
+	public static AVector<ACell> headerUcans(Context ctx) {
+		String h = ctx.header(covia.grid.client.VenueHTTP.UCANS_HEADER);
+		if (h == null || h.isBlank()) return null;
+		AVector<ACell> v = convex.core.data.Vectors.empty();
+		for (String part : h.split(",")) {
+			String t = part.trim();
+			if (!t.isEmpty()) v = v.conj(Strings.create(t));
+		}
+		return v.isEmpty() ? null : v;
+	}
+
+	/**
 	 * As {@link #withTransportAuth(RequestContext, AString, AVector)}, and — when
 	 * {@code venueDID} is supplied and the transport is unauthenticated — derives
 	 * the caller's identity from a presented <b>identity token</b>: a verified
