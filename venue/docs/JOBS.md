@@ -1,46 +1,47 @@
-# Jobs — Target Design
+# Jobs — Implementation Semantics
 
-The `Job` abstraction: a clean contract over a (potentially remote)
-request–response to an operation. Implementations may differ
-(venue-hosted, remote-client, in-process) but the core contract is small,
-the core class holds no runtime machinery it can't justify, and
-implementation concerns stay in subclasses.
+The venue-side contract for Jobs as implemented. The protocol-level
+specification is **COG-8: Jobs** (covia-docs); this document is the
+implementation companion: what the code guarantees, where, and why.
+The REST surface is tabulated in `venue/CLAUDE.md` (API Endpoints) and is
+not duplicated here.
 
 ## Core contract
 
-A `Job` is a handle to a request for an operation. It exposes:
+A `Job` (covia-core, `covia.grid.Job`) is a handle to a request for an
+operation:
 
 ```java
-public class Job {
-    Blob getID();                              // unique identity
-    AString getStatus();                       // current status (snapshot)
-    AMap<AString, ACell> getData();            // current record snapshot
-    CompletableFuture<ACell> getResult();      // eventual result
-    ACell awaitResult();                       // blocking convenience
-    ACell awaitResult(long timeoutMs);         // bounded blocking convenience
-    void cancel();                             // request cancellation
-    boolean isFinished();                      // terminal?
-}
+Blob getID();                              // unique identity
+AString getStatus();                       // current status (snapshot)
+AMap<AString, ACell> getData();            // current record snapshot
+CompletableFuture<ACell> future();         // lazy result future
+ACell awaitResult();                       // block until terminal
+ACell awaitResult(long timeoutMs);         // bounded caller-side wait
+void cancel();                             // request cancellation
+boolean isFinished();                      // terminal?
+boolean isPaused();                        // paused family?
 ```
 
-That's it. Everything else is an implementation concern.
+`Job` is concrete and serves as the remote/read-only handle (constructed
+from a record snapshot). Venue-side machinery lives in `VenueJob`
+(persistence, redaction, output validation); there are no other subclasses.
 
-## Job status semantics
+## Lifecycle and status semantics
 
-The lifecycle is `PENDING → STARTED → COMPLETE | FAILED | CANCELLED | REJECTED`
-(plus `PAUSED`, `INPUT_REQUIRED`, `AUTH_REQUIRED` for multi-turn / interactive
-ops). What each terminal status means, as the venue actually emits them:
+`PENDING → STARTED → COMPLETE | FAILED | CANCELLED | REJECTED` (terminal,
+**sticky**), plus the paused family `PAUSED`, `INPUT_REQUIRED`,
+`AUTH_REQUIRED` (each resumes to `STARTED`). `Status.TIMEOUT` exists as a
+constant for protocol interop but is emitted by no code path — there is no
+timeout status, by design (see Waiting below).
+
+What each terminal status means, as the venue actually emits them:
 
 | Status | Meaning |
 |--------|---------|
 | `COMPLETE` | The op succeeded; `output` carries the result. |
 | `FAILED` | The op failed — the `error` message carries the reason. This is the **single failure status** the invoke / agent dispatch path emits: execution errors, schema / invalid-input errors, **and authorisation/capability denials** (`"Capability denied: requires <ability> on <resource>. …"`). Distinguish the kind of failure by the error string, not the status. |
 | `CANCELLED` | The caller cancelled the job (`cancel()` / `jobs/{id}/cancel`). |
-
-Agent task/chat job records additionally carry `tokens: {input, output,
-total}` when the cycle's LLM calls reported usage (#217) — provider-measured
-counts, stamped before completion so they ride the persisted record. Absence
-means "not measured", never zero.
 | `REJECTED` | Reserved for a policy/protocol rejection distinct from an execution failure. Core invoke/agent dispatch **does not emit it today** — it is defined in the lifecycle and used by the A2A protocol mapping (`TASK_STATE_REJECTED` ↔ `REJECTED`). A capability denial is a `FAILED` job with a detailed error string, **not** a `REJECTED` job. |
 
 Whether authorisation denials should become a distinct first-class status is an
@@ -48,7 +49,87 @@ open design question (covia#209); until then, treat `FAILED` + the error string
 as the authoritative signal, and do not rely on `REJECTED` for capability or
 invalid-input outcomes.
 
-### Recovery on restart (#214)
+Agent task/chat job records additionally carry `tokens: {input, output,
+total}` when the cycle's LLM calls reported usage (#217) — provider-measured
+counts, stamped before completion so they ride the persisted record. Absence
+means "not measured", never zero.
+
+## The update path — CAS-committed, terminal-sticky
+
+All Job mutations funnel through `Job.commitUpdate` (a CAS loop):
+
+- The **updater and `processUpdate` are side-effect free** — they may be
+  retried when another thread wins the race. `VenueJob.processUpdate` only
+  stamps `updated`.
+- **Post-commit hooks observe exactly the committed value**: `onUpdate`
+  (persistence + listeners/SSE) and, on a terminal transition, result-future
+  completion and `onFinish` (active-cache eviction, permit release). A losing
+  update has **no external side effects**.
+- **Terminal states are sticky**: once finished, every further mutation
+  no-ops. Racing resolutions (completion vs cancellation vs expiry) commit
+  exactly one winner.
+- Each committed record embeds its predecessor under `prev`, forming the
+  state-history chain (COG-8's chain model).
+
+## Waiting and polling — no framework timeout
+
+Jobs have **no framework-level timeout**; they may legitimately run or wait
+for days, weeks, or months (workflows, HITL, agents). Consequences:
+
+- `awaitResult(timeoutMs)` is a **caller-side** bound. On expiry it throws
+  `JobPollingFailedException` (carrying the last-known status) and **does not
+  mutate the job**. The caller re-attaches later by job ID.
+- `JobFailedException` is thrown only when the job itself actually failed.
+  `JobPollingFailedException` (a sibling, not a subclass) means "your view
+  stopped; the job is unaffected" — also used by the client SDK
+  (`VenueHTTP.pollingFailed`) on transport loss.
+- Adapters SHOULD bound their own IO (socket timeouts, `llmTimeoutMs` for
+  agent LLM calls) — bounding real work is the operation's job, never the
+  framework's.
+
+## Cancellation
+
+- `cancel()` marks the job `CANCELLED` and runs the registered **cancel
+  hook**. The default adapter path wires the hook to `future.cancel(true)`;
+  adapters that submit interruptible work (e.g. LangChainAdapter) bridge
+  cancellation to a worker-thread interrupt, closing in-flight HTTP calls.
+- Best-effort: side effects already produced are not undone.
+
+## Pause and resume — adapter opt-in
+
+- `AAdapter.pause`/`resume` **default to throwing**: changing only the
+  status while work continues underneath is not a pause. Adapters that can
+  genuinely suspend override both (surfaced as HTTP 409 otherwise).
+- `Job.pause()` is `STARTED`-only; `resume()` accepts the whole paused
+  family.
+- Resume **never re-invokes the operation from its stored input** — that
+  would duplicate non-idempotent side effects and lose request authority.
+  Resumption continues from adapter-owned suspended state.
+- `INPUT_REQUIRED`/`AUTH_REQUIRED` jobs are advanced by **message
+  delivery**, not the resume endpoint.
+
+## Message delivery — no per-job queue
+
+`POST /jobs/{id}` → `JobManager.deliverMessage` → `adapter.handleMessage`,
+dispatched only when the adapter declares `supportsMultiTurn()`. Delivery to
+a terminal job is rejected (409). The base `Job` holds **no message queue**;
+buffering, when needed, is the receiving operation's concern (agents queue
+inbound messages durably in `session.pending` — see AGENT_SESSIONS.md).
+
+## Persistence, redaction, validation
+
+- `VenueJob.onUpdate` persists the record to the caller's lattice
+  (`:user-data/<DID>/:j/<id>`) **post-commit**, applying
+  `redactJobSecrets` — both `input` and `output` redacted per the
+  operation's `secretFields` — on **every durable write**, since adapters
+  may update records after submission.
+- **Private jobs** (#192, `private: true` + `enablePrivateJobs`) are never
+  persisted: memory-only, no recovery, gone on restart.
+- `VenueJob.completeWith` runs output-schema validation first; in strict
+  mode a violation fails the job instead of completing it. This covers every
+  completion path, including job-aware adapter overrides.
+
+## Recovery on restart (#214)
 
 Recovery **stabilises, never re-executes** — a venue restart leaves every job
 in a stable, honest state so callers can resume, cancel, or retry as they wish.
@@ -64,164 +145,31 @@ Re-execution would double side effects for non-idempotent ops
 | `STARTED` `agent:request`, task gone | `FAILED` — "task concluded; check the agent timeline" | inspect / retry |
 | `PAUSED` / `INPUT_REQUIRED` / `AUTH_REQUIRED` | restored live | continue as before |
 
+Restored non-terminal jobs **re-occupy their caller's concurrency-cap
+permit** (`JobSemaphore.reserveRecovered`, which may drive permits negative):
+after a restart the cap still holds, and new work admits only as restored
+jobs finish.
+
 Agent-side work (pending session envelopes, queued tasks, interrupted
 `inCycle` cycles) is all durable and resumes independently via the boot scan
 (`AgentAdapter.wakeAgentsWithWork`).
 
-**Explicitly NOT on the base class:**
+## Admission
 
-- Lattice cursors
-- Message queues
-- In-flight `Future<?>` handles for interruptible cancel
-- Listener registrations
-- Operation metadata
-- Persistence / recovery
-- Message-delivery machinery
+- **Shutdown gate**: `Engine.close()` calls `JobManager.beginShutdown()`
+  *before* stopping the scheduler — `invokeOperation` then throws and
+  `invokeInternal` returns a failed future, so nothing (including a racing
+  timer) can submit fresh work after the final persistence barrier.
+- **Per-caller concurrency cap**: see `venue/CLAUDE.md` § Rate limiting.
+  Sub-jobs (carrying a parent job id) are exempt.
 
-Each of those is runtime state for a particular *way* of running a Job. The
-client SDK has no use for a message queue or a cursor. A venue doesn't need
-a different `Job` class just because it also persists; it needs a subclass
-that adds persistence.
+## invokeOperation vs invokeInternal
 
-## Shape of the class hierarchy
+Two dispatch paths with **identical trust, capability, defaults, and gate
+handling** — they differ only in Job creation:
 
-```
-Job  (covia-core)
-  ├─ VenueJob   — venue-hosted: lattice cursor at :user-data/DID/:j/<id>,
-  │              durable, replicable, recoverable on restart
-  ├─ RemoteJob  — client-side handle to a Job on a remote venue:
-  │              polls status over HTTP/SSE, no local state beyond the future
-  └─ LocalJob   — in-process Job with arbitrary completion mechanism
-                  (direct callback, test harness, non-lattice execution)
-```
-
-`Job` is concrete enough to be useful as a remote-readable handle (constructed
-from a record snapshot), but contains no machinery a remote handle can't use.
-Venue-side machinery lives in `VenueJob`.
-
-## `VenueJob` — target shape
-
-```java
-class VenueJob extends Job {
-    // narrow cursor at this Job's own path
-    final ALatticeCursor<AMap<AString, ACell>> cursor;
-
-    @Override void setStatus(AString s)            { writeThen(r -> r.assoc(K_STATUS, s)); }
-    @Override void completeWith(ACell out)         { writeThen(r -> terminalSet(r, COMPLETE, K_OUTPUT, out));
-                                                      future.complete(out); }
-    @Override void fail(String msg)                { writeThen(r -> terminalSet(r, FAILED, K_ERROR, Strings.create(msg)));
-                                                      future.completeExceptionally(new JobFailedException(this)); }
-
-    private void writeThen(UnaryOperator<AMap<AString,ACell>> fn) {
-        cursor.updateAndGet(r -> isTerminal(r) ? r : fn.apply(r));
-    }
-}
-```
-
-Every state transition is one atomic `updateAndGet` at the Job's own path.
-The lambda gates invalid transitions (no-op once terminal). The cursor is
-the source of truth; the base class's future is completed *after* the
-durable write.
-
-### Lattice shape
-
-```
-:user-data  →  <callerDID>  →  :j  →  <jobID>  →  { status, input, output, error, ts, op, ... }
-```
-
-Each Job has a unique ID, so no two Jobs share a path. Writes are
-contention-free at the record level — two Jobs with distinct IDs write to
-disjoint paths and compose via lattice merge at the enclosing Index.
-
-### Sync boundaries
-
-Signing and persistence are decoupled from Job writes:
-
-| Event | Trigger | Action |
-|---|---|---|
-| Job transition | adapter / run loop / client | narrow `updateAndGet` at VenueJob's cursor. No sign, no persist. |
-| Sign + persist | HTTP `after` hook, periodic sweep, explicit flush | `venueState.sync()` then `lattice.sync()`. Batched. |
-
-Thousands of Job updates can land between sync points. Writes are cheap
-and concurrent; durability is batched.
-
-## Why this removes contention
-
-The current engine-wide fork routes every write through one shared
-`AtomicReference`. The CAS lambda grows with accumulated write volume, and
-concurrent writers serialise even when their target paths are disjoint.
-
-`VenueJob` cursors resolve to the root directly. Each `updateAndGet` is a
-small `assocIn` at a disjoint path. CAS retries are cheap (microseconds);
-lattice merge at the enclosing `Index` is commutative and associative so
-concurrent siblings compose without conflict.
-
-This is what the lattice architecture is for — we'd been fighting it by
-funnelling writes through one fork.
-
-## Multi-turn delivery (replaces in-memory message queue)
-
-The current base `Job` has a `ConcurrentLinkedQueue<AMap>` for multi-turn
-adapters. It's in-process, non-durable, and duplicates the lattice inbox
-pattern already used by `AgentState`.
-
-Target: **remove `messageQueue` from `Job` entirely**. If a multi-turn
-adapter needs buffered message delivery, `VenueJob` exposes a lattice-backed
-inbox at its own path — same `cursor.updateAndGet` primitive:
-
-```
-:user-data  →  <callerDID>  →  :j  →  <jobID>  →  :inbox  →  [message, ...]
-```
-
-Same shape, same durability guarantees, same contention model as other
-lattice state. Adapter reads the inbox through the cursor; delivery writes
-through the cursor. Survives restarts; replicates across peers.
-
-## Why both `JobStore` and `JobManager`?
-
-| Class | Today | Target |
-|---|---|---|
-| **`JobStore`** | Cursor wrapper at `:jobs` level; CRUD on a shared Index | **Removed.** The parent Index at `:user-data/DID/:j` is just the natural view when you read the parent path; no abstraction needed. |
-| **`JobManager`** | Runtime coordinator + in-memory cache + futures + recovery + access control + message-delivery | Slimmed: dispatch + future-cache + recovery scan + access control. No state ownership, no cursor ownership, no message-queue ownership. |
-
-The two-layer split was historical (Phase 2.5 in `CLAUDE.local.md`) and
-made sense when Jobs were "entries in a shared Index owned by a store".
-Under the target design, Jobs own their own cursors — the "store" role
-disappears.
-
-## From here to there
-
-1. Define `VenueJob extends Job` with a narrow path cursor rooted at
-   `path(USER_DATA, ctx.did, J, jobID)`. `JobManager.createJob(...)` returns
-   a `VenueJob`.
-2. Move cursor-writing transition methods to `VenueJob`. Base `Job` keeps
-   only the future-completion side (or delegates terminal completion back
-   to the base after the cursor write).
-3. Remove `messageQueue`, `workFuture`, `updateListener`, `operation` from
-   base `Job`. Each moves to the subclass that actually uses it — likely
-   `VenueJob` for the first three; `operation` is mostly a cached
-   convenience and can become a getter against cursor data.
-4. Remove `JobStore` (86 lines, 6 refs). Migrate call sites to read through
-   Job's cursor or the parent Index via `cursor.get()`.
-5. Stop routing Job writes through `Engine.venueState`. Path cursors go
-   directly to the root.
-6. Add a concurrent-submission regression test that currently flakes under
-   the shared fork; target is near-constant per-Job latency under
-   parallelism.
-
-Non-goals:
-- Changing the signed-lattice model or persistence story.
-- Removing forks where they genuinely fit (batched single-writer workloads
-  like multi-step agent transitions).
-- Fixing the same pattern in `AgentState` / `AssetStore` / `SecretStore` —
-  each is a mechanically similar follow-on refactor, one subsystem at a
-  time.
-
-## Testing
-
-- Concurrent Job submission tests should scale with core count under the
-  target design. Currently they flake because all writers funnel through
-  one fork.
-- A regression test: N threads each submit M Jobs and await completion.
-  Total wall time should be dominated by per-Job work, not contention.
-  This test is the catalyst for the design change.
+- `invokeOperation` — creates and persists a tracked Job (the caller-facing
+  accountability unit).
+- `invokeInternal` — zero-Job dispatch for framework composition: agent
+  transitions, LLM calls, tool calls, capability gates. Returns the
+  adapter's future directly (so cancellation propagates to the executor).

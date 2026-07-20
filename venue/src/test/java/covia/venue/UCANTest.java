@@ -266,6 +266,81 @@ public class UCANTest {
 	}
 
 	@Test
+	public void testIssueCanonicalisesBareWith() {
+		// Custodial issuance: the venue signs (iss = venue), so a bare path from
+		// the caller MUST be absolutised to the CALLER's DID before signing —
+		// stored-bare would mean the venue's own namespace, not the caller's.
+		long exp = (System.currentTimeMillis() / 1000) + HOUR;
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(
+				UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create("w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(exp)),
+			ALICE);
+		AString jwt = RT.ensureString(RT.getIn(job.awaitResult(5000), "token"));
+		UCAN parsed = UCAN.fromJWT(jwt);
+		assertEquals(Strings.create(ALICE_DID + "/w/"),
+			RT.getIn(parsed.getCapabilities().get(0), Capability.WITH),
+			"a bare with must be canonicalised to the issuer-principal's namespace");
+
+		// An empty with would silently grant the whole namespace — rejected;
+		// whole-namespace grants must be written explicitly.
+		Job emptyJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(Strings.create(""), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(exp)),
+			ALICE);
+		assertThrows(Exception.class, () -> emptyJob.awaitResult(5000));
+
+		// Scheme forms have no DID owner — not issuable; use the path form.
+		Job schemeJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(Strings.create("dlfs://docs/x"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(exp)),
+			ALICE);
+		assertThrows(Exception.class, () -> schemeJob.awaitResult(5000));
+	}
+
+	@Test
+	public void testBareWithBindsToIssuer() {
+		// Self-sovereign: a bare `with` means THE TOKEN ISSUER's own namespace,
+		// resolved at evaluation against the signed iss. Alice signing bare "w/"
+		// grants Alice's workspace — nothing else.
+		long exp = (System.currentTimeMillis() / 1000) + HOUR;
+		UCAN token = UCAN.create(ALICE_KP, UCAN.fromDIDKey(BOB_DID), exp,
+			Vectors.of(Capability.create(
+				Strings.create("w/"), Capability.CRUD_READ)),
+			Vectors.empty());
+
+		// Positive: Bob reads Alice's doc with Alice's bare-with grant.
+		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
+			withProofs(BOB, token.toMap()));
+		assertEquals(Strings.create("shared content"),
+			RT.getIn(readJob.awaitResult(5000), "value"));
+
+		// Negative: the SAME token must not reach any other principal's
+		// namespace — bare binds to iss, never the presenter or the target.
+		Job carolJob = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, CAROL_DID + "/w/shared/doc"),
+			withProofs(BOB, token.toMap()));
+		assertThrows(Exception.class, () -> carolJob.awaitResult(5000));
+
+		// Negative: a third party signing a bare with grants only their OWN
+		// namespace — it must not canonicalise against the target's.
+		UCAN carolToken = UCAN.create(CAROL_KP, UCAN.fromDIDKey(BOB_DID), exp,
+			Vectors.of(Capability.create(
+				Strings.create("w/"), Capability.CRUD_READ)),
+			Vectors.empty());
+		Job aliceViaCarol = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
+			withProofs(BOB, carolToken.toMap()));
+		assertThrows(Exception.class, () -> aliceViaCarol.awaitResult(5000),
+			"a bare-with grant binds to its issuer, not to the requested target");
+	}
+
+	@Test
 	public void testCrossUserReadWithValidProof() {
 		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/w/", "crud/read", 3600);
 

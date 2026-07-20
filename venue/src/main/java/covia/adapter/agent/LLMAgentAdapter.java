@@ -39,10 +39,12 @@ import covia.venue.RequestContext;
  * structured message maps and invokes level 3 via the grid operation dispatch.</p>
  *
  * <h3>Tool palette</h3>
- * <p>Unless disabled via {@code defaultTools: false}, agents start with the
- * tool set in {@link ContextBuilder#DEFAULT_TOOL_OPS} (covia CRUD, agent lifecycle, asset
- * management, schema, grid). Task tools ({@code complete_task},
- * {@code fail_task}) are added dynamically when tasks are pending.</p>
+ * <p>Agents are advertised exactly the tools they declare in config
+ * {@code tools} (strict allowlist, #92). {@code defaultTools: true} adds the
+ * deliberately minimal read-only pack in
+ * {@link ContextBuilder#DEFAULT_TOOL_OPS}; capability tools arrive via skills
+ * ({@code skill_load}). Task tools ({@code complete_task}, {@code fail_task})
+ * are added dynamically when tasks are pending.</p>
  *
  * <p>Additional tools can be configured via {@code tools} in the agent's config.
  * Each entry is a string (operation name) or map with {@code operation} plus optional

@@ -750,6 +750,7 @@ public class CoviaAPI extends ACoviaAPI {
 					content= @OpenApiContent(type = "application/json", from = Object.class)),
 			responses = {
 					@OpenApiResponse(status = "202", description = "Message accepted and queued"),
+					@OpenApiResponse(status = "403", description = "Caller is not the job owner"),
 					@OpenApiResponse(status = "404", description = "Job not found"),
 					@OpenApiResponse(status = "409", description = "Job is in terminal state")
 					})

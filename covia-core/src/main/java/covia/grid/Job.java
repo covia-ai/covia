@@ -434,11 +434,17 @@ public class Job {
 	}
 
 	/**
-	 * Waits for the job to complete and returns the result, with a timeout.
+	 * Waits for the job to complete and returns the result, with a caller-side
+	 * timeout. A wait timeout is purely a client concern: it never mutates the
+	 * job, which continues (or keeps waiting) unaffected — re-attach later by
+	 * job ID.
 	 * @param <T> Expected type of ACell result, for convenience
 	 * @param timeoutMillis Maximum time to wait in milliseconds
 	 * @return Result of job
-	 * @throws JobFailedException if job failed or timed out
+	 * @throws JobFailedException if the job itself failed
+	 * @throws covia.exception.JobPollingFailedException if the wait timed out
+	 *         or was interrupted (carries the last-known status; the job is
+	 *         NOT affected)
 	 */
 	@SuppressWarnings("unchecked")
 	public <T extends ACell> T awaitResult(long timeoutMillis) {

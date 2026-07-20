@@ -92,16 +92,42 @@ public class UCANAdapter extends AAdapter {
 		}
 		long exp = expCell.longValue();
 
-		// Validate: all 'with' fields must be DID URLs scoped to the caller's namespace
+		// Canonicalise + validate 'with' fields. A bare path names the ISSUER's
+		// own resource and is qualified with the caller's DID before signing, so
+		// the token in the wild always carries the absolute form (verification
+		// never canonicalises — a bare `with` in a presented token is inert).
+		// Explicit DID URLs must lie within the caller's own namespace; scheme
+		// forms (file://, dlfs://) are not issuable — use the DID-scoped path form.
 		AString callerDID = ctx.getCallerDID();
 		String callerPrefix = callerDID.toString() + "/";
+		AVector<ACell> canonAtt = Vectors.empty();
 		for (long i = 0; i < att.count(); i++) {
-			AString with = RT.ensureString(RT.getIn(att.get(i), Capability.WITH));
-			if (with == null || !with.toString().startsWith(callerPrefix)) {
-				throw new RuntimeException(
-					"att[" + i + "].with must be a DID URL in your namespace (e.g. " + callerPrefix + "w/)");
+			AMap<AString, ACell> cap = RT.castMap(att.get(i));
+			AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
+			String w = (with != null) ? with.toString() : null;
+			if (cap == null || w == null || w.contains("://")) {
+				throw new RuntimeException("att[" + i + "].with must be a resource path — "
+					+ "bare (scoped to your own namespace, e.g. w/) or a DID URL in your "
+					+ "namespace (e.g. " + callerPrefix + "w/)");
 			}
+			if (w.startsWith("did:")) {
+				if (!w.startsWith(callerPrefix)) {
+					throw new RuntimeException("att[" + i + "].with must be within your own "
+						+ "namespace (" + callerPrefix + "…) — you cannot issue grants over "
+						+ "another principal's resources");
+				}
+			} else {
+				String path = w.startsWith("/") ? w.substring(1) : w;
+				if (path.isEmpty()) {
+					throw new RuntimeException("att[" + i + "].with must name a resource — "
+						+ "an empty path would grant your entire namespace; say so explicitly ("
+						+ callerPrefix + ") if that is intended");
+				}
+				cap = cap.assoc(Capability.WITH, Strings.create(callerPrefix + path));
+			}
+			canonAtt = canonAtt.conj(cap);
 		}
+		att = canonAtt;
 
 		// Resolve audience public key from DID
 		AccountKey audKey = UCAN.fromDIDKey(audDID);

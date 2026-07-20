@@ -153,26 +153,14 @@ public class ContextBuilder {
 		}
 	}
 
-	/** Default tool operations — resolved at runtime via engine */
+	/** Default tool operations — deliberately minimal: read-only situational
+	 *  awareness (inspect the workspace and catalog, discover what exists).
+	 *  Everything with side effects arrives via skills — {@code skill_load}
+	 *  activates a skill's tool bundle mid-transition — or the agent's explicit
+	 *  config {@code tools} allowlist. */
 	static final AVector<ACell> DEFAULT_TOOL_OPS = (AVector<ACell>) Vectors.of(
-		(ACell) Strings.create("v/ops/agent/create"),
-		(ACell) Strings.create("v/ops/agent/message"),
-		(ACell) Strings.create("v/ops/agent/request"),
-		(ACell) Strings.create("v/ops/asset/store"),
-		(ACell) Strings.create("v/ops/asset/get"),
-		(ACell) Strings.create("v/ops/asset/list"),
-		(ACell) Strings.create("v/ops/asset/content"),
-		(ACell) Strings.create("v/ops/asset/pin"),
-		(ACell) Strings.create("v/ops/grid/run"),
 		(ACell) Strings.create("v/ops/covia/read"),
-		(ACell) Strings.create("v/ops/covia/write"),
-		(ACell) Strings.create("v/ops/covia/delete"),
-		(ACell) Strings.create("v/ops/covia/append"),
-		(ACell) Strings.create("v/ops/covia/slice"),
-		(ACell) Strings.create("v/ops/covia/list"),
-		(ACell) Strings.create("v/ops/covia/inspect"),
-		(ACell) Strings.create("v/ops/schema/validate"),
-		(ACell) Strings.create("v/ops/schema/infer")
+		(ACell) Strings.create("v/ops/covia/list")
 	);
 
 	// Instance state
@@ -805,7 +793,7 @@ public class ContextBuilder {
 	 * in the config opts into the additional {@link #DEFAULT_TOOL_OPS} pack.</p>
 	 *
 	 * <p>The default-tool resolution is cached per Engine via
-	 * {@link #DEFAULT_TOOL_CACHE}: the first call per engine builds the 18
+	 * {@link #DEFAULT_TOOL_CACHE}: the first call per engine builds the
 	 * default tool definitions; subsequent calls reuse them. Per-config
 	 * tools are still rebuilt fresh each call since they may include
 	 * user-scoped {@code /o/<name>} references.</p>
@@ -815,8 +803,9 @@ public class ContextBuilder {
 		// Strict allowlist by default (#92): an agent is advertised exactly the
 		// tools it declares, unless it explicitly opts into the default pack
 		// with defaultTools: true. This is fail-safe — a newly-authored agent
-		// does not silently receive 18 extra ops (incl. covia/inspect,
-		// covia/delete, agent/create) it never declared.
+		// does not silently receive ops it never declared. The pack itself is
+		// deliberately minimal (read-only workspace access) — capability tools
+		// arrive via skills or the config tools allowlist.
 		boolean useDefaults = config != null && CVMBool.TRUE.equals(config.get(K_DEFAULT_TOOLS));
 		configToolMap = new HashMap<>();
 
