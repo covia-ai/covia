@@ -109,7 +109,13 @@ Resources are **DID URLs** — the DID identifies the authority (user/owner), th
 
 This aligns with `DIDURL` from convex-core — the DID is the authority, the path is the namespace scope.
 
-**Canonical vs. shorthand.** A `with` is always absolute (owner-named) as above. For convenience, Covia accepts a **bare** lattice path (`w/projects/foo`) as shorthand for the *caller's own* resource — this is how an agent's `caps` are written. Enforcement canonicalises it to the absolute form (`<callerDID>/w/projects/foo`) before matching, so a bare (own-namespace) grant and a DID-URL grant compare identically. The same applies to bare `dlfs/<drive>/…` paths. Only `file://…` resources are scheme-qualified (host-filesystem, not DID-scoped) and are left unchanged.
+**Canonical vs. shorthand.** A canonical `with` is absolute (owner-named) as above; a **bare** lattice path is shorthand whose owner is implied by context, always the same principal: **the authority whose grant it is**.
+
+- **Agent caps / self-attenuation ceilings**: a bare `w/projects/foo` is the *caller's own* resource; enforcement canonicalises it to `<callerDID>/w/projects/foo` before matching, so bare and DID-URL grants compare identically. The same applies to bare `dlfs/<drive>/…` paths.
+- **Signed UCAN tokens**: a bare `with` means the **token issuer's own** namespace, resolved at evaluation against the token's signed `iss` (`CapabilityChecker.normaliseProofs`, applied inside `proofsCover` recursively per chain hop — a bare path in a re-delegation binds to the re-delegator). A self-sovereign owner can therefore sign bare paths naturally; they can never be reinterpreted against the presenter or the target.
+- **Custodial issuance** (`ucan:issue`): the venue signs, so its `iss` is not the caller — bare paths are absolutised to the *caller's* DID before signing (§4.1). Tokens minted by the venue always carry the canonical form.
+
+Only `file://…` resources are scheme-qualified (host-filesystem, not DID-scoped) and are left unchanged; scheme forms are not issuable.
 
 ### 3.2 Abilities (`can`)
 
@@ -212,9 +218,26 @@ ucan:issue {
 }
 ```
 
-The venue signs the token with the caller's key (resolved from their DID)
+The venue signs the token with the **venue key pair** (the venue is the
+issuer — custodial attestation on the authenticated caller's instruction)
 and returns the complete signed token. The token is self-contained — it
 includes everything needed for verification.
+
+Resource rules at issuance (`UCANAdapter.handleIssue`):
+
+- A **bare** path (`/w/`, `w/projects/`) is absolutised to the *caller's*
+  DID before signing — in a venue-signed token a stored-bare path would
+  denote the venue's own namespace (§3.1). Empty paths and scheme forms
+  are rejected.
+- A DID URL in the **caller's own namespace** is issuable on root
+  authority — ownership is the authority.
+- A DID URL in **another principal's namespace** is issuable only under a
+  held **granting right** (COG-17): the caller's transport-presented
+  proofs must cover `grant/<can>` on the resource (proofs travel in the
+  proof channel, never in operation input), and the minted `exp` must not
+  outlive the enabling right (coverage is re-evaluated at the minted
+  expiry). This makes `ucan:issue` a *granting surface* — the `grant/…`
+  rule binds token production; chain resolution stays grant-agnostic.
 
 ### 4.2 Delivery
 
@@ -876,6 +899,17 @@ so there are no mode flags or auth fields anywhere:
 - Signature verification on every capability check
 - Time bounds (`exp`, `nbf`) enforced
 - Cross-user reads work when valid proof is presented
+
+### Phase C1c: Issuer-bound bare resources + granting surface ✓ (COG-17)
+
+- Bare `with` in signed tokens resolves against the token's `iss` at
+  evaluation (`normaliseProofs` in `proofsCover`, per chain hop)
+- `ucan:issue` absolutises bare paths to the caller DID before signing;
+  mints over another principal's resource only under a presented
+  `grant/<can>` granting right, with `exp` capped by the right's validity
+- `ucan:verify` canonicalises bare queried resources against the audience
+  so diagnostics match enforcement
+- Verification remains grant-agnostic — `grant/…` binds production only
 
 ### Phase C1b: Self-attenuation on the direct invoke path ✓ (#131)
 

@@ -16,6 +16,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.lattice.CapabilityChecker;
 import covia.venue.RequestContext;
 
 /**
@@ -96,10 +97,16 @@ public class UCANAdapter extends AAdapter {
 		// own resource and is qualified with the caller's DID before signing, so
 		// the token in the wild always carries the absolute form (verification
 		// never canonicalises — a bare `with` in a presented token is inert).
-		// Explicit DID URLs must lie within the caller's own namespace; scheme
-		// forms (file://, dlfs://) are not issuable — use the DID-scoped path form.
+		// Scheme forms (file://, dlfs://) are not issuable — use the DID-scoped
+		// path form. A DID URL outside the caller's namespace is issuable ONLY
+		// under a held GRANTING RIGHT (COG-17): the caller's presented proofs
+		// must cover grant/<can> on the resource. This is issuance as a granting
+		// surface — the grant/ rule binds token production, never resolution.
+		// Proofs travel in the transport proof channel (COG-15), never in
+		// operation input (input is persisted in job records).
 		AString callerDID = ctx.getCallerDID();
 		String callerPrefix = callerDID.toString() + "/";
+		long now = System.currentTimeMillis() / 1000;
 		AVector<ACell> canonAtt = Vectors.empty();
 		for (long i = 0; i < att.count(); i++) {
 			AMap<AString, ACell> cap = RT.castMap(att.get(i));
@@ -107,14 +114,34 @@ public class UCANAdapter extends AAdapter {
 			String w = (with != null) ? with.toString() : null;
 			if (cap == null || w == null || w.contains("://")) {
 				throw new RuntimeException("att[" + i + "].with must be a resource path — "
-					+ "bare (scoped to your own namespace, e.g. w/) or a DID URL in your "
-					+ "namespace (e.g. " + callerPrefix + "w/)");
+					+ "bare (scoped to your own namespace, e.g. w/) or a DID URL "
+					+ "(e.g. " + callerPrefix + "w/)");
+			}
+			AString can = RT.ensureString(cap.get(Capability.CAN));
+			if (can == null) {
+				throw new RuntimeException("att[" + i + "].can (ability) is required");
 			}
 			if (w.startsWith("did:")) {
 				if (!w.startsWith(callerPrefix)) {
-					throw new RuntimeException("att[" + i + "].with must be within your own "
-						+ "namespace (" + callerPrefix + "…) — you cannot issue grants over "
-						+ "another principal's resources");
+					// Held granting right: minting over another principal's resource
+					// requires proofs covering grant/<can> on it — and the minted
+					// authority must not outlive the granting right enabling it
+					// (checked by evaluating the same coverage at the minted expiry).
+					AString grantAbility = Strings.create("grant/" + can);
+					AString resource = Strings.create(w);
+					if (!CapabilityChecker.proofsCover(ctx.getProofs(), callerDID,
+							engine.getDIDString(), resource, grantAbility, now)) {
+						throw new RuntimeException("att[" + i + "].with is outside your namespace "
+							+ "and your presented proofs do not establish the granting right "
+							+ grantAbility + " over " + w + " — present a delegation from the "
+							+ "resource owner (transport ucans / bearer), or use your own namespace");
+					}
+					if (!CapabilityChecker.proofsCover(ctx.getProofs(), callerDID,
+							engine.getDIDString(), resource, grantAbility, exp - 1)) {
+						throw new RuntimeException("att[" + i + "]: exp exceeds the validity of the "
+							+ "granting right enabling this issuance — minted authority must not "
+							+ "outlive the right it was minted under; request a shorter exp");
+					}
 				}
 			} else {
 				String path = w.startsWith("/") ? w.substring(1) : w;
@@ -250,8 +277,13 @@ public class UCANAdapter extends AAdapter {
 		if (reqWith != null && reqCan != null) {
 			AString audience = RT.ensureString(RT.getIn(input, UCAN.AUD));
 			if (audience == null) audience = ctx.getCallerDID();
-			boolean authorises = covia.lattice.CapabilityChecker.proofsCover(
-				Vectors.of(token.toMap()), audience, venueDID, reqWith, reqCan, now);
+			// Canonicalise a bare queried resource against the audience — the
+			// same rule enforcement applies to a caller's bare paths — so the
+			// diagnostic answers match what enforcement would actually decide.
+			String canonWith = CapabilityChecker.canonicalResource(reqWith.toString(), audience);
+			boolean authorises = CapabilityChecker.proofsCover(
+				Vectors.of(token.toMap()), audience, venueDID,
+				Strings.create(canonWith), reqCan, now);
 			result = result.assoc(K_AUTHORISES, convex.core.data.prim.CVMBool.of(authorises));
 			result = result.assoc(K_AUDIENCE, audience);
 		}
