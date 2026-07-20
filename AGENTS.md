@@ -113,30 +113,12 @@ Engine (core state, adapters, assets, content, identity)
     ├── Content Storage   (lattice / file / memory)
     └── JobManager        (job lifecycle, per-user persistence, recovery)
     |
-Adapter Layer
-    ├── GridAdapter       — cross-venue federation (grid:run, grid:invoke)
-    ├── LangChainAdapter  — LLM inference (openai, ollama, anthropic, gemini, deepseek)
-    ├── MCPAdapter        — MCP tool discovery and invocation
-    ├── ConvexAdapter     — blockchain queries and transactions
-    ├── HTTPAdapter       — outbound HTTP requests (with SSRF protection)
-    ├── Orchestrator      — multi-step workflow coordination
-    ├── JVMAdapter        — string utilities
-    ├── FileAdapter       — filesystem access (root-jailed; host / temp / DLFS-backed roots)
-    ├── SchemaAdapter     — JSON Schema validation, inference, coercion
-    ├── CoviaAdapter      — lattice CRUD + reads (read, write, delete, append, slice, list, inspect, aggregate)
-    ├── AssetAdapter      — content-addressed asset store/retrieve
-    ├── AgentAdapter      — agent lifecycle (create, message, run, fork, templates)
-    ├── LLMAgentAdapter   — LLM-backed agent transitions (chat)
-    ├── GoalTreeAdapter   — goal-tree agent with structured planning
-    ├── DLFSAdapter       — decentralised file system (per-user signed drives)
-    ├── VaultAdapter      — health vault (thin wrapper over DLFS)
-    ├── SecretAdapter     — secret store operations (set, extract; removal via covia:delete s/<name>)
-    ├── UserMemoryAdapter — per-user agent memory (recall/remember/update/forget over one LWW vector, default w/memory)
-    ├── SkillsAdapter     — agent skills discovery (list/read over named instruction+tool bundles; see venue/docs/SKILLS.md)
-    ├── HITLAdapter       — human-in-the-loop requests (request/respond/list over the per-user h/ inbox; COG-16)
-    ├── UCANAdapter       — capability token issuance
-    ├── SchedulerAdapter  — deferred grid-op invocation (schedule, cancel, trigger, list)
-    └── TestAdapter       — echo, delay, error simulation, chat
+Adapter Layer (~25 pluggable adapters — canonical table in venue/CLAUDE.md)
+    ├── Data & state:  covia (lattice CRUD), asset, dlfs, vault, memory, secret, file
+    ├── Execution:     langchain (LLMs), mcp, http, convex, jvm, schema, orchestrator, scheduler
+    ├── Agents:        agent, llmagent, goaltree, skills, hitl (COG-16 h/ inbox)
+    ├── Federation:    grid (run/invoke/jobStatus), ucan (granting surface, COG-17)
+    └── Testing:       test (echo, delay, never, chat, pause, ...)
 ```
 
 ### Core Abstractions
@@ -213,7 +195,7 @@ The engine always resolves operation references to metadata before dispatching �
 
 ### In Progress
 
-- **Capability enforcement** — Active. The ceiling is a property of the `RequestContext`, enforced at the point of action (adapter-pinned `requireCapability`, with a name-keyed boundary safety net). `invokeOperation`/`invokeInternal` differ only in Job creation, not trust; ceilings compose downward into sub-operations. Unauthenticated callers default to a read-only ceiling (`crud/read` + `asset/read`), operator-overridable via `auth.public.caps` (#148). `operationAbility` maps every venue-resource mutation (covia/file/dlfs/vault writes + deletes, `asset:store`, agent lifecycle mutations, `secret:set`) to a withheld ability — drift-guarded by `CapabilityCheckerTest.testReadOnlyCeilingDeniesAllVenueMutations`. The name-keyed boundary is **kept** as a default-deny net (an unknown op → `invoke` → denied under a restrictive ceiling) rather than retired; adapter-pinned `requireCapability` adds resource precision (covia, secret). External/op-invocation classes (`convex:transact`, `ucan:issue`, `scheduler`, `http`) stay `invoke`-classed and are denied to anonymous callers by policy (invocation creates a job). **Optional follow-up:** resource-precise adapter pins for agent-state mutations.
+- **Capability enforcement** — largely landed: point-of-action `requireCapability` (adapter-pinned) + the single cross-user gate `Engine.crossUserAllows` (public-user parity #254 + UCAN proofs); granting is production-gated at surfaces (`ucan:issue`, HITL) per COG-17. See `venue/docs/UCAN.md`. Remaining: custodial attestation trust policy (C3b), resource-precise pins for agent-state mutations.
 
 ---
 
@@ -223,22 +205,17 @@ The list below tracks engineering tasks. For the developer-experience and open-s
 
 ### P0 — Critical (blocks production use)
 
-- [x] **Add authorization enforcement** — Job ownership enforced via `AccessControl` + `JobManager`. Per-user job persistence. Capability enforcement (UCAN `with`/`can`) planned for Phase 3/4.
-
-- [x] **Agent workspace CRUD** — `/w/`, `/o/`, `/h/` namespaces with full CRUD, deep path navigation, vector indexing, JSONValueLattice, `/o/` operation resolution, default agent tools.
-
-- [x] **UCAN capability enforcement (Phase C1)** — Venue-signed UCAN tokens via `ucan:issue`. Per-request proof presentation in `RequestContext`. Cross-user reads verified via `UCANValidator` + `Capability.covers()` from convex-core. Full DID URL resources. Transport-level `ucans` field in REST envelope. Adversarial tests (forged signature, wrong audience, expired, wrong ability).
+- [x] Authorization enforcement, agent workspace CRUD (`/w/`, `/o/`, `/h/`), UCAN capability enforcement — shipped; see `venue/docs/UCAN.md` and COG-13/16/17.
 
 ### P1 — High (security and reliability)
 
-- [x] **Secure credential handling** — SecretStore provides per-user encrypted storage. `secretFields` in operation metadata redacts sensitive fields in stored job records (both input and output). `secret:set` operation for storing secrets. Secret references (`s/NAME`) resolved at invocation time via `engine.resolveSecret()`. Capability-gated `secret:extract` planned.
+- [x] Secure credential handling — per-user encrypted SecretStore, `secretFields` redaction, `s/NAME` resolution (public-store fallback, #254); capability-gated `secret:extract` still pending.
 
-- [ ] **Add rate limiting** — No rate limiting anywhere (operations, uploads, outbound requests). Add per-user and per-operation limits.
-  - Files: `venue/.../venue/server/VenueServer.java`, `venue/.../venue/Engine.java`
+- [ ] **Per-operation rate limiting** — request-rate and concurrent-job caps exist (see `venue/docs/CONFIG.md`); per-operation limits do not.
 
 ### P2 — Medium (code quality and operability)
 
-- [x] **Decompose Engine.java** — `JobManager` extracted for job lifecycle. Callers use `engine.jobs()`.
+- [x] Decompose Engine.java — `JobManager` extracted; callers use `engine.jobs()`.
 
 - [ ] **Complete LatticeContent** — Missing constructor and field initialization; cannot be properly instantiated.
   - File: `covia-core/.../grid/impl/LatticeContent.java`
@@ -298,7 +275,7 @@ Skills then work as `/skill-name` in **CLI**, **Desktop Chat**, and **IDE Cowork
 
 ### Shared Configuration
 
-`.claude/settings.json` is committed and provides the default MCP server config. Environment-specific overrides go in `.claude/settings.local.json` (gitignored).
+`.mcp.json` (committed) defines the shared MCP server config; `.claude/settings.json` (committed) holds tool permissions. Environment-specific overrides go in `.claude/settings.local.json` (gitignored).
 
 ### Available Skills
 
@@ -312,6 +289,7 @@ Skills then work as `/skill-name` in **CLI**, **Desktop Chat**, and **IDE Cowork
 | `/hitl` | Human-in-the-Loop — send asks, review/answer the h/ inbox, teach agents, smoke test |
 | `/orchestrate` | Multi-step workflow pipelines |
 | `/secret` | Manage API keys and credentials |
+| `/test-agent` | Create, test, and diagnose agents on a live venue (full feedback loop) |
 | `/ucan` | UCAN capability token management |
 | `/venue-setup` | Build and run a venue — local, VM, or Docker |
 | `/venue-status` | Quick venue health check — adapters, agents, workspace |
