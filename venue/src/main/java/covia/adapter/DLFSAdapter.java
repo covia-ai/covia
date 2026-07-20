@@ -359,10 +359,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (cross) {
 			String resource = dlfsResource(fr.ownerDID(), Strings.create(fr.drive()),
 				Strings.create(fr.path()));
-			boolean ok = CapabilityChecker.proofsCover(
-				ctx.getProofs(), ctx.getCallerDID(), engine.getDIDString(),
-				Strings.create(resource), ability,
-				System.currentTimeMillis() / 1000);
+			boolean ok = engine.crossUserAllows(ctx, Strings.create(resource), ability);
 			if (!ok) throw new IllegalStateException(
 				"Access denied: no " + ability + " capability for " + resource);
 			driveCtx = RequestContext.of(fr.ownerDID());
@@ -472,10 +469,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		}
 		AString pathCell = RT.ensureString(RT.getIn(input, FIELD_PATH));
 		String resource = dlfsResource(target.ownerDID(), Strings.create(target.driveName()), pathCell);
-		boolean ok = CapabilityChecker.proofsCover(
-			ctx.getProofs(), ctx.getCallerDID(), engine.getDIDString(),
-			Strings.create(resource), ability,
-			System.currentTimeMillis() / 1000);
+		boolean ok = engine.crossUserAllows(ctx, Strings.create(resource), ability);
 		if (!ok) throw new IllegalStateException(
 			"Access denied: no " + ability + " capability for " + resource);
 	}
