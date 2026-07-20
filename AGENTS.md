@@ -277,23 +277,12 @@ Skills then work as `/skill-name` in **CLI**, **Desktop Chat**, and **IDE Cowork
 
 `.mcp.json` (committed) defines the shared MCP server config; `.claude/settings.json` (committed) holds tool permissions. Environment-specific overrides go in `.claude/settings.local.json` (gitignored).
 
-### Available Skills
+### Discovering Skills
 
-| Skill | Purpose |
-|-------|---------|
-| `/agent` | Create, configure, and manage agents (handles config gotchas) |
-| `/ap-demo` | AP invoice audit trail demo with Alice/Bob/Carol agents |
-| `/asset` | Store and retrieve content-addressed assets |
-| `/federation` | Cross-venue grid operations demo |
-| `/grid-test` | Smoke test venue operations |
-| `/hitl` | Human-in-the-Loop — send asks, review/answer the h/ inbox, teach agents, smoke test |
-| `/orchestrate` | Multi-step workflow pipelines |
-| `/secret` | Manage API keys and credentials |
-| `/test-agent` | Create, test, and diagnose agents on a live venue (full feedback loop) |
-| `/ucan` | UCAN capability token management |
-| `/venue-setup` | Build and run a venue — local, VM, or Docker |
-| `/venue-status` | Quick venue health check — adapters, agents, workspace |
-| `/workspace` | Browse and manage lattice namespace data |
+Skills are self-describing: each `skills/<name>/SKILL.md` carries a frontmatter
+`description` that the Claude Code harness surfaces automatically in-session —
+no list is maintained here (it would only drift). Browse `skills/` for the
+full set; invoke as `/<name>`.
 
 ## Resources
 
