@@ -77,35 +77,7 @@ public class GridAdapter extends AAdapter {
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		job.setStatus(Status.STARTED);
-		CompletableFuture<ACell> invocation = invokeFuture(ctx, meta, input);
-		job.setCancelHook(() -> invocation.cancel(true));
-		invocation.whenComplete((result, error) -> {
-			if (error != null) {
-				job.fail(describeFailure(error));
-			} else {
-				job.completeWith(result);
-			}
-		});
-	}
-
-	/**
-	 * Render a Throwable into a non-empty diagnostic string for {@code Job.fail}.
-	 * Strips {@code CompletionException}/{@code ExecutionException} wrappers and falls back
-	 * to the exception class name when {@code getMessage()} is null (e.g. some
-	 * {@code ConnectException}s) so connection failures never surface as a blank
-	 * error field.
-	 */
-	private static String describeFailure(Throwable t) {
-		Throwable cause = t;
-		while ((cause instanceof java.util.concurrent.CompletionException
-				|| cause instanceof java.util.concurrent.ExecutionException)
-				&& cause.getCause() != null && cause.getCause() != cause) {
-			cause = cause.getCause();
-		}
-		String msg = cause.getMessage();
-		String type = cause.getClass().getSimpleName();
-		if (msg == null || msg.isBlank()) return type;
-		return type + ": " + msg;
+		bridgeToJob(job, invokeFuture(ctx, meta, input));
 	}
 
 	/**
