@@ -7,6 +7,7 @@ import convex.core.data.Blob;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.exception.AuthException;
+import covia.grid.Authority;
 import covia.lattice.CapabilityChecker;
 import covia.lattice.CapabilityGate;
 
@@ -94,6 +95,16 @@ public class RequestContext {
 	public static RequestContext of(AString callerDID, AVector<ACell> proofs) {
 		if (callerDID == null) return ANONYMOUS;
 		return new RequestContext(callerDID, proofs, null, null, null, null, null, null, null, null, null, null);
+	}
+
+	/**
+	 * Creates a RequestContext from an {@link Authority} — the caller's identity
+	 * plus the grants (verified UCAN delegations) it carries. Returns ANONYMOUS
+	 * for a null or anonymous authority.
+	 */
+	public static RequestContext ofAuthority(Authority authority) {
+		if (authority == null || authority.isAnonymous()) return ANONYMOUS;
+		return of(authority.getDID(), authority.getProofs());
 	}
 
 	/**
@@ -243,6 +254,17 @@ public class RequestContext {
 	 */
 	public AVector<ACell> getProofs() {
 		return proofs;
+	}
+
+	/**
+	 * The caller's {@link Authority} — identity plus carried grants — as a single
+	 * immutable value. A convenience view over {@link #getCallerDID()} and
+	 * {@link #getProofs()}: the request path's credential in one object. (When the
+	 * authority centralisation lands, {@code RequestContext} will hold this
+	 * directly; today it is derived, so no existing getter's contract changes.)
+	 */
+	public Authority getAuthority() {
+		return Authority.of(callerDID, proofs);
 	}
 
 	/**
