@@ -155,15 +155,15 @@ and which operations may safely act on it. There are four states:
 | Status | Meaning | Run loop | Mutations allowed |
 |--------|---------|----------|-------------------|
 | `SLEEPING` | Idle, no transition active. Default after create or after a successful run with no remaining work. | Not running. `wakeAgent` triggers it. | All. Safe to update config in place. |
-| `RUNNING` | A transition is currently in flight on a virtual thread. Record mutations go through atomic cursor updates. | Running. New work is appended to `tasks`/`session.pending` and picked up on next iteration. | Task/session appends only. **Config mutation is racy and rejected** — the in-flight transition has already captured the old config. |
-| `SUSPENDED` | Last run failed with an error. Dormant — does not auto-retry. State, tasks, pending, and sessions preserved. | Not running. Resume via `tryResume` (clears error, returns to SLEEPING). | All. In-place config update is allowed and preserves the error so the caller can decide whether to resume after fixing the underlying cause. |
+| `RUNNING` | A transition is currently in flight on a virtual thread. Record mutations go through atomic cursor updates. | Running. New work is appended to `tasks`/`session.pending` and picked up on next iteration. | Task/session appends are allowed. In-place config mutation is rejected because the transition captured the old config; `agent:create overwrite:true` may instead halt the loop and replace the complete record. |
+| `SUSPENDED` | Last run failed with an error. Dormant — does not auto-retry. State, pending messages, sessions, and history are preserved; failed tasks are drained. | Not running. Resume via `tryResume` to keep the record, or replace it via `agent:create overwrite:true`. | All. Overwrite deletes the complete old record and creates a clean SLEEPING agent so no stale transition state can survive (#237). |
 | `TERMINATED` | Logically deleted. Slot still occupies the namespace key (so the ID is reserved) but the agent is dead. | Cannot run. `agent:request` / `agent:message` / `agent:trigger` all fail. | None — only `agent:create overwrite:true` revives the slot, which **wipes timeline, sessions, tasks, pending, error** and starts fresh. |
 
 **State transitions** are documented in §4: `create` (→SLEEPING), `wakeAgent`
 (SLEEPING→RUNNING via CAS, §4.6), run loop completion (RUNNING→SLEEPING or
 RUNNING→SUSPENDED, §4.4), `agent:resume` (SUSPENDED→SLEEPING, §4.5),
 `agent:delete` (any→TERMINATED, §4.5), and `agent:create overwrite:true`
-(SLEEPING/SUSPENDED→same status with new config, TERMINATED→fresh SLEEPING).
+(any record→fresh SLEEPING replacement, halting an active loop first).
 
 ---
 
@@ -523,10 +523,12 @@ functions.
 | `agentId` | yes | Identifier for the agent slot in the caller's `g/` namespace |
 | `config` | no | Framework-level config (typically just `{operation: "..."}`) |
 | `state` | no | Initial state (typically `{config: {systemPrompt, caps, tools, ...}}`) |
-| `overwrite` | no | If true, an occupied slot is updated or wiped according to the slot resolution table below |
+| `overwrite` | no | If true, halt if necessary, then delete and recreate any occupied slot. A RUNNING agent cannot overwrite itself from inside its own transition. |
 
-**Outputs:** `{agentId, status, created: bool, updated: bool}`. Exactly one of
-`created` and `updated` is true on success.
+**Outputs:** `{agentId, status, created: bool, updated: bool}`. `created` is true
+for a new or replaced record. `updated` is a deprecated compatibility field and
+is always false; use `agent:update` for history-preserving mutation. Both are
+false for an idempotent no-op.
 
 **Slot resolution.** What happens when the target slot already contains an
 agent depends on `overwrite` and the existing status:
@@ -535,27 +537,29 @@ agent depends on `overwrite` and the existing status:
 |---|---|---|---|---|---|
 | any           | (empty)      | **CREATED** | fresh record initialised at SLEEPING | `true`  | `false` |
 | absent / `false` | any state | **NOOP**    | record unchanged — idempotent re-run | `false` | `false` |
-| `true`        | `SLEEPING`   | **UPDATED** | `config` replaced; `timeline`, `sessions`, `tasks`, `pending`, `status`, `ts` preserved | `false` | `true` |
-| `true`        | `SUSPENDED`  | **UPDATED** | as SLEEPING; `error` and SUSPENDED status preserved (caller may resume separately) | `false` | `true` |
-| `true`        | `RUNNING`    | **FAIL**    | job fails: "Cannot update agent X: currently RUNNING. Wait for the active transition to finish, or call agent:cancelTask first." | — | — |
+| `true`        | `SLEEPING`   | **CREATED** | old record removed; fresh SLEEPING record; all runtime state/history wiped | `true` | `false` |
+| `true`        | `SUSPENDED`  | **CREATED** | old record removed; fresh SLEEPING record; stale transition/error/history wiped | `true` | `false` |
+| `true`        | `RUNNING`    | **CREATED** | fail pending callers; mark TERMINATED; cancel and await old loop; remove; create fresh SLEEPING record | `true` | `false` |
 | `true`        | `TERMINATED` | **CREATED** | `removeAgent` then fresh record — wipes timeline, sessions, tasks, pending, error | `true`  | `false` |
 
-**Why RUNNING is rejected.** A transition currently in flight has already
-captured the old `config` when it started. Mutating `config` mid-run produces
-a Frankenstein agent — old policy for the current turn, new policy for the
-next — that surfaces as a hard-to-debug "why is the agent using the old
-policy" mystery. Forcing the caller to wait for SLEEPING (or explicitly
-cancel) eliminates the race.
+**Why RUNNING is halted before replacement.** A transition currently in flight
+has already captured the old `config`. Overwrite therefore never mutates that
+record in place: it marks the old record TERMINATED, cancels and awaits its run
+loop, then deletes it before creating the replacement. Waiting prevents the
+old loop from writing into the reused ID. An agent cannot overwrite itself from
+inside its own running transition because awaiting that same loop would
+deadlock; an external caller may overwrite it.
 
-**Why SLEEPING / SUSPENDED are safe.** Both are dormant: no run loop is
-executing a transition, no thread is reading the config. The update is
-atomic on the agent record, so there is no partial-write window. The next
-wake reads the new config.
+**Why SLEEPING / SUSPENDED are replaceable.** Both are dormant: no run loop is
+executing a transition. Replacement removes the complete record before
+initialising the new one, so stale config, state, queues, sessions, errors, and
+history cannot leak into the replacement. Use `agent:update` when preserving
+history is intentional.
 
 **Why TERMINATED wipes.** TERMINATED is the explicit "throw it all out" signal.
-If the caller wanted to preserve history, they would have updated in-place from
-SLEEPING/SUSPENDED instead of deleting first. Reviving a TERMINATED slot
-restarts at SLEEPING with a fresh timeline.
+All overwrite paths use the same delete-and-create rule. Reviving a TERMINATED
+slot therefore has the same semantics as replacing SLEEPING or SUSPENDED:
+SLEEPING with a fresh timeline.
 
 **Idempotent re-runs.** Without `overwrite`, calling `agent:create` on an
 existing slot is a no-op. This makes setup scripts safe to re-run after partial
@@ -719,7 +723,7 @@ the response visible to callers without querying agent state separately.
 
 | Operation | Trigger | Effect | Allowed status | New status |
 |-----------|---------|--------|----------------|------------|
-| **Update** | `agent:create overwrite:true` | Replace `config` in place; preserve timeline, sessions, tasks, pending, status, error. See §4.1 slot resolution table. | SLEEPING, SUSPENDED, TERMINATED (wipes) | unchanged (or SLEEPING if was TERMINATED) |
+| **Replace** | `agent:create overwrite:true` | Halt an active loop if necessary, delete the complete old record, and create a clean one. Config, state, timeline, sessions, tasks, pending work, inbox, and errors are wiped. See §4.1 slot resolution table. | any; self-overwrite while RUNNING rejected | SLEEPING |
 | **Suspend** | run loop error (§4.4) | Set `error`, set status → SUSPENDED. State, tasks, pending, sessions unchanged. | RUNNING (internal) | SUSPENDED |
 | **Resume** | `agent:resume` | CAS SUSPENDED→SLEEPING via `tryResume`, clear `error`. Then wake via §4.6 if there is work. | SUSPENDED only | SLEEPING |
 | **Suspend (manual)** | `agent:suspend` | Set status → SUSPENDED with caller-supplied reason. Stops the agent from being woken. | SLEEPING | SUSPENDED |
@@ -743,9 +747,10 @@ mutations is handled by reading the current record inside the merge
 - RUNNING is a transient state held only while the run loop's transition function
   is executing or its merge step is pending. It is the only status under which
   config mutations are rejected.
-- SUSPENDED preserves all queues so a resumed agent picks up where it stopped.
-  In-place updates while SUSPENDED do **not** auto-resume — that is the caller's
-  decision (typically: fix the cause, update the config, then `agent:resume`).
+- SUSPENDED preserves session/history state but failed transition tasks and
+  cycle claims are settled before suspension. `agent:resume` preserves that
+  record; `agent:create overwrite:true` deliberately deletes it and creates a
+  clean SLEEPING replacement.
 
 ### 4.6 Scheduling — `wakeAgent`
 

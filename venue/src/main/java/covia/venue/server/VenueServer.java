@@ -631,19 +631,7 @@ public class VenueServer {
 	}
 
 	private Javalin buildApp() {
-		final String corsOrigins = this.config.getCorsOrigins();
 		Javalin app = Javalin.create(config -> {
-			config.bundledPlugins.enableCors(cors -> {
-				cors.addRule(corsConfig -> {
-					if ("*".equals(corsOrigins)) {
-						corsConfig.anyHost();
-					} else {
-						corsConfig.allowHost(corsOrigins);
-					}
-					corsConfig.exposeHeader("X-Covia-User");
-				});
-			});
-			
 			addOpenApiPlugins(config);
 
 			config.staticFiles.add(staticFiles -> {
@@ -704,7 +692,7 @@ public class VenueServer {
 	 * auth middleware, and the login / API / WebDAV routes.
 	 */
 	private void addHandlers(RoutesConfig routes) {
-		final String corsOrigins = this.config.getCorsOrigins();
+		final Config.CorsPolicy corsPolicy = this.config.getCorsPolicy();
 		final boolean allowPrivateNetwork = this.config.isAllowPrivateNetwork();
 
 		routes.exception(HttpResponseException.class, (e, ctx) -> {
@@ -718,28 +706,11 @@ public class VenueServer {
 			ctx.status(500);
 		});
 
-		routes.options("/api/*", ctx-> {
-			ctx.status(204);
-			ctx.removeHeader("Content-type");
-			ctx.header("access-control-allow-headers", "content-type, authorization, x-covia-user");
-			ctx.header("access-control-allow-methods", "GET,HEAD,PUT,PATCH,POST,DELETE");
-			ctx.header("access-control-allow-origin", corsOrigins);
-			ctx.header("vary","Origin, Access-Control-Request-Headers");
-		});
-
-		// Use after (not afterMatched) so headers are added to ALL responses,
-		// including CORS preflights handled by the Javalin CORS plugin
-		routes.after(ctx->{
-			ctx.header("access-control-allow-origin", corsOrigins);
-			// Private Network Access lets a public web origin reach a venue on a
-			// private/loopback address from the browser. Off by default — it
-			// undermines corsOrigins scoping (a malicious page could read a
-			// localhost venue). Opt in via allowPrivateNetwork for the
-			// preview-origin dev workflow that needs it.
-			if (allowPrivateNetwork) {
-				ctx.header("access-control-allow-private-network", "true");
-			}
-		});
+		// One owner for CORS admission and response headers. The old combination
+		// of Javalin's plugin plus an unconditional after-filter could reject an
+		// origin with 400 and then add an allow header anyway. A parsed policy also
+		// lets the loopback sentinel match literal hosts on any port without DNS.
+		routes.before(ctx -> applyCorsPolicy(ctx, corsPolicy, allowPrivateNetwork));
 
 		// Sync lattice state after every mutation-capable request so writes
 		// are durable across restart. Covers REST (/api/*), MCP JSON-RPC
@@ -772,6 +743,57 @@ public class VenueServer {
 		addLoginRoutes(routes);
 		addAPIRoutes(routes);
 		mountDLFSWebDAV(routes);
+	}
+
+	/** Applies CORS before routing so a denied origin cannot reach a handler. */
+	private void applyCorsPolicy(Context ctx, Config.CorsPolicy policy,
+			boolean allowPrivateNetwork) {
+		if (!policy.enabled()) return; // explicit opt-out: no CORS headers or rejection
+
+		String origin = ctx.header("Origin");
+		if (origin == null) {
+			// Preserve the legacy wildcard behaviour: non-CORS responses also
+			// advertise '*'. Specific policies cannot choose a value without Origin.
+			if (policy.anyOrigin()) {
+				ctx.header("Access-Control-Allow-Origin", "*");
+				ctx.header("Access-Control-Expose-Headers", "X-Covia-User");
+				if (allowPrivateNetwork) {
+					ctx.header("Access-Control-Allow-Private-Network", "true");
+				}
+			}
+			return;
+		}
+
+		String allowed = policy.allowedOriginHeader(origin);
+		if (allowed == null) {
+			ctx.status(400).result("CORS origin denied");
+			ctx.skipRemainingHandlers();
+			return;
+		}
+
+		ctx.header("Access-Control-Allow-Origin", allowed);
+		ctx.header("Access-Control-Expose-Headers", "X-Covia-User");
+		if (!"*".equals(allowed)) ctx.header("Vary", "Origin");
+		// Private Network Access lets a public web origin reach a venue on a
+		// private/loopback address from the browser. Off by default and emitted
+		// only after the request origin passes the configured CORS policy.
+		if (allowPrivateNetwork) {
+			ctx.header("Access-Control-Allow-Private-Network", "true");
+		}
+
+		// Handle browser preflights here rather than on /api/* only. MCP and A2A
+		// are also browser-facing HTTP surfaces and were covered by Javalin's
+		// former global CORS plugin.
+		if ("OPTIONS".equalsIgnoreCase(ctx.method().toString())
+				&& ctx.header("Access-Control-Request-Method") != null) {
+			ctx.status(204);
+			ctx.removeHeader("Content-type");
+			ctx.header("Access-Control-Allow-Headers",
+				"content-type, authorization, x-covia-user");
+			ctx.header("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE");
+			ctx.header("Vary", "Origin, Access-Control-Request-Headers");
+			ctx.skipRemainingHandlers();
+		}
 	}
 
 	/**

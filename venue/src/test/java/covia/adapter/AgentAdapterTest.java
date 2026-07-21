@@ -152,6 +152,19 @@ public class AgentAdapterTest {
 		assertNotNull(result, "Create should return a result");
 		assertEquals(Strings.create("my-assistant"), RT.getIn(result, Fields.AGENT_ID));
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
+
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID)
+			.agent("my-assistant");
+		AMap<AString, ACell> config = agent.getConfig();
+		assertEquals(engine.config().getDefaultTransitionOp(), config.get(Fields.OPERATION));
+		assertEquals(engine.config().getDefaultLlmOperation(),
+			config.get(Strings.intern("llmOperation")));
+		assertEquals(2, RT.ensureVector(config.get(Strings.intern("tools"))).count(),
+			"no-config agent should start with skilled read/list tools");
+		assertEquals(2, RT.ensureVector(config.get(Strings.intern("skills"))).count(),
+			"no-config agent should discover workspace and venue skills");
+		assertNull(config.get(Strings.intern("model")),
+			"venue/provider should choose the default model");
 	}
 
 	@Test
@@ -1134,6 +1147,39 @@ public class AgentAdapterTest {
 		// #84 opt-in off by default: no per-turn caller attribution.
 		assertNull(userTurn.get(Fields.CALLER),
 			"recordCaller off (default) → user turns carry no caller");
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void testLlmToolTrailPersistedOnceInSessionHistory() {
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "tool-history-agent",
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/ops/llmagent/chat",
+					"llmOperation", "v/test/ops/toolllm")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job chat = engine.jobs().invokeOperation("v/ops/agent/chat",
+			Maps.of(Fields.AGENT_ID, "tool-history-agent",
+				Fields.MESSAGE, "audit this tool"),
+			RequestContext.of(ALICE_DID));
+		AString sid = RT.ensureString(RT.getIn(chat.awaitResult(5000), Fields.SESSION_ID));
+
+		AgentState agent = engine.getVenueState().users().get(ALICE_DID)
+			.agent("tool-history-agent");
+		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sid.toString()));
+		AVector<ACell> frames = RT.ensureVector(session.get(Fields.FRAMES));
+		AVector<ACell> conversation = RT.ensureVector(
+			RT.getIn(frames.get(0), AgentState.KEY_CONVERSATION));
+		assertEquals(4, conversation.count(),
+			"user + assistant(tool call) + tool result + final assistant");
+		assertEquals("user", RT.getIn(conversation.get(0), "role").toString());
+		assertEquals("assistant", RT.getIn(conversation.get(1), "role").toString());
+		assertNotNull(RT.getIn(conversation.get(1), "toolCalls"));
+		assertEquals("tool", RT.getIn(conversation.get(2), "role").toString());
+		assertEquals("assistant", RT.getIn(conversation.get(3), "role").toString());
+		assertNull(RT.getIn(conversation.get(3), "toolCalls"));
+		assertEquals(CVMLong.create(4), RT.getIn(session, "meta", "turns"));
 	}
 
 	/** #84: with config.recordCaller, user turns record the sender's DID. */
@@ -2411,17 +2457,23 @@ public class AgentAdapterTest {
 		assertNotNull(frames, "session must carry frames");
 		AVector<ACell> conversation = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
 		boolean sawFailureTurn = false;
+		boolean sawRawToolTurn = false;
 		for (long i = 0; i < conversation.count(); i++) {
 			ACell turn = conversation.get(i);
 			if (AgentState.SOURCE_TOOL.equals(RT.getIn(turn, "source"))) {
 				String content = String.valueOf(RT.getIn(turn, "content"));
 				assertTrue(content.contains("Capability denied"),
 					"the failure turn must carry the denial: " + content);
-				assertEquals(AgentState.ROLE_SYSTEM, RT.getIn(turn, "role"));
-				sawFailureTurn = true;
+				if (AgentState.ROLE_SYSTEM.equals(RT.getIn(turn, "role"))) {
+					sawFailureTurn = true;
+				} else if (Strings.intern("tool").equals(RT.getIn(turn, "role"))) {
+					sawRawToolTurn = true;
+				}
 			}
 		}
 		assertTrue(sawFailureTurn, "conversation must record the tool failure as a turn");
+		assertTrue(sawRawToolTurn,
+			"conversation must retain the provider-shaped tool result for audit");
 
 		// 3. agent:context with the sessionId renders the failure turn.
 		// (Match on the failure-turn text, not "Capability denied" — the
@@ -3353,24 +3405,25 @@ public class AgentAdapterTest {
 	}
 
 	@Test
-	public void testCreateOverwriteSleepingUpdatesInPlace() {
-		// Create a SLEEPING agent with initial config and let it accrue some
-		// state we want to preserve across the update
+	public void testCreateOverwriteSleepingReplacesRecord() {
+		// Create a SLEEPING agent with old-only config and runtime state. A true
+		// overwrite must discard all of it; agent:update owns merge semantics.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "live-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
+				Fields.CONFIG, Maps.of(
+					Fields.OPERATION, "v/test/ops/echo",
+					"oldOnly", "must disappear")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		// Manually seed session pending so we can verify it survives
+		// Seed session state so replacement-vs-update is observable.
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState pre = user.agent("live-ow");
 		Blob owSid = Blob.fromHex("abab0001abab0001abab0001abab0001");
 		pre.ensureSession(owSid, ALICE_DID);
 		pre.appendSessionPending(owSid, Strings.create("hello"));
-		long preTs = pre.getTs();
 
-		// Overwrite a SLEEPING agent — in-place update, status preserved
+		// Overwrite a SLEEPING agent — delete the old record and create fresh.
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "live-ow",
@@ -3379,35 +3432,50 @@ public class AgentAdapterTest {
 			RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 
-		assertEquals(CVMBool.FALSE, RT.getIn(result, Fields.CREATED), "should be updated, not created");
-		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.UPDATED));
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CREATED));
+		assertEquals(CVMBool.FALSE, RT.getIn(result, Fields.UPDATED));
 		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 
-		// Config replaced
+		// Config and runtime record are replacements, not shallow merges.
 		AgentState post = user.agent("live-ow");
 		assertEquals(Strings.create("v/test/ops/taskcomplete"), post.getConfig().get(Fields.OPERATION));
-		// Session pending preserved (the unprocessed "hello" message is still there)
-		assertTrue(post.hasSessionPending(), "session pending should survive in-place update");
-		AVector<ACell> owPending = post.getSessionPending(owSid);
-		assertEquals(1, owPending.count());
-		assertEquals(Strings.create("hello"), owPending.get(0));
-		// ts advanced
-		assertTrue(post.getTs() >= preTs, "ts should advance on update");
+		assertNull(post.getConfig().get(Strings.create("oldOnly")));
+		assertFalse(post.hasSessionPending(), "replacement must discard old session work");
+		assertNull(post.getSession(owSid), "replacement must discard old sessions");
+		assertEquals(0, post.getTimeline().count());
 	}
 
 	@Test
-	public void testCreateOverwriteSuspendedUpdatesInPlace() {
-		// Create then suspend the agent — error state, dormant
+	public void testCreateOverwriteSuspendedRecoversWithNewConfig() {
+		// Reproduce #237: the old transition fails and suspends the agent.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "susp-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/error")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		user.agent("susp-ow").suspend(Strings.create("simulated failure"));
-		assertEquals(AgentState.SUSPENDED, user.agent("susp-ow").getStatus());
+		Job failedRequest = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "susp-ow",
+				Fields.INPUT, Maps.of("q", "fail on old provider"),
+				Fields.WAIT, CVMLong.create(5000)),
+			RequestContext.of(ALICE_DID));
+		try {
+			failedRequest.awaitResult(5000);
+			fail("old transition must fail");
+		} catch (covia.exception.JobFailedException expected) {
+			// expected
+		}
 
-		// Overwrite SUSPENDED — in-place update, error and status preserved
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState suspended = user.agent("susp-ow");
+		awaitFinished(suspended);
+		assertEquals(AgentState.SUSPENDED, suspended.getStatus());
+		assertNotNull(suspended.getError());
+		long timelineBefore = suspended.getTimeline().count();
+		assertEquals(1, timelineBefore, "failed transition should remain in history");
+
+		// Overwrite with a working transition. This must recover the slot rather
+		// than leave it poisoned by the old provider/configuration.
 		ACell result = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "susp-ow",
@@ -3415,49 +3483,96 @@ public class AgentAdapterTest {
 				Fields.OVERWRITE, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
 
-		assertEquals(CVMBool.FALSE, RT.getIn(result, Fields.CREATED));
-		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.UPDATED));
+		assertEquals(CVMBool.TRUE, RT.getIn(result, Fields.CREATED));
+		assertEquals(CVMBool.FALSE, RT.getIn(result, Fields.UPDATED));
+		assertEquals(AgentState.SLEEPING, RT.getIn(result, Fields.STATUS));
 
 		AgentState post = user.agent("susp-ow");
 		assertEquals(Strings.create("v/test/ops/taskcomplete"), post.getConfig().get(Fields.OPERATION));
-		// Status stays SUSPENDED — caller can resume separately
-		assertEquals(AgentState.SUSPENDED, post.getStatus());
-		assertEquals(Strings.create("simulated failure"), post.getError(),
-			"error should be preserved across in-place update");
+		assertEquals(AgentState.SLEEPING, post.getStatus());
+		assertNull(post.getError(), "overwrite must clear the stale provider error");
+		assertEquals(0, post.getTimeline().count(),
+			"overwrite must replace the old runtime record and timeline");
+
+		// A new request must execute the replacement operation. Replaying the old
+		// error transition here is the original #237 failure mode.
+		ACell recovered = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "susp-ow",
+				Fields.INPUT, Maps.of("q", "use new provider"),
+				Fields.WAIT, CVMLong.create(5000)),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertNotNull(RT.getIn(recovered, Fields.OUTPUT, "completed"),
+			"request must run through the replacement taskcomplete operation");
+		awaitFinished(post);
+		assertEquals(AgentState.SLEEPING, post.getStatus());
+		assertEquals(1, post.getTimeline().count());
 	}
 
 	@Test
-	public void testCreateOverwriteRunningFails() {
-		// Create then force the agent into RUNNING (simulating an active transition)
+	public void testCreateOverwriteRunningHaltsAndReplaces() throws Exception {
+		// A never-completing transition makes halt-before-replace observable.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "run-ow",
-				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")),
 			RequestContext.of(ALICE_DID)).awaitResult(5000);
-		User user = engine.getVenueState().users().get(ALICE_DID);
-		user.agent("run-ow").setStatus(AgentState.RUNNING);
+		Job stuck = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "run-ow", Fields.INPUT, Maps.of("q", "never")),
+			RequestContext.of(ALICE_DID));
 
-		// Overwrite RUNNING must fail loudly — race risk
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AgentState old = user.agent("run-ow");
+		long deadline = System.currentTimeMillis() + 5000;
+		while (!AgentState.RUNNING.equals(old.getStatus())
+				&& System.currentTimeMillis() < deadline) Thread.sleep(10);
+		assertEquals(AgentState.RUNNING, old.getStatus());
+
+		// History-preserving mutation cannot safely swap config under an active
+		// transition; callers must either wait or choose full replacement.
+		Job unsafeUpdate = engine.jobs().invokeOperation(
+			"v/ops/agent/update",
+			Maps.of(Fields.AGENT_ID, "run-ow",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID));
+		try {
+			unsafeUpdate.awaitResult(5000);
+			fail("agent:update must reject RUNNING config mutation");
+		} catch (covia.exception.JobFailedException expected) {
+			// expected
+		}
+		assertEquals(Strings.create("v/test/ops/never"),
+			old.getConfig().get(Fields.OPERATION));
+
+		// Overwrite halts and settles the old loop before installing the replacement.
 		Job job = engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "run-ow",
 				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete"),
 				Fields.OVERWRITE, CVMBool.TRUE),
 			RequestContext.of(ALICE_DID));
+		ACell replaced = job.awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(replaced, Fields.CREATED));
+		assertEquals(CVMBool.FALSE, RT.getIn(replaced, Fields.UPDATED));
+		assertEquals(AgentState.SLEEPING, RT.getIn(replaced, Fields.STATUS));
 		try {
-			job.awaitResult(5000);
-			fail("Should fail when overwriting a RUNNING agent");
-		} catch (Exception e) {
-			assertEquals(Status.FAILED, job.getStatus());
-			// Error message should mention RUNNING and how to recover
-			String err = job.getErrorMessage();
-			assertTrue(err != null && err.contains("RUNNING"),
-				"error should mention RUNNING: " + err);
+			stuck.awaitResult(5000);
+			fail("overwritten agent's active request must fail");
+		} catch (covia.exception.JobFailedException expected) {
+			// expected
 		}
+		assertTrue(stuck.getErrorMessage().contains("overwritten"));
 
-		// Original config must be untouched
-		assertEquals(Strings.create("v/test/ops/echo"),
-			user.agent("run-ow").getConfig().get(Fields.OPERATION));
+		AgentState fresh = user.agent("run-ow");
+		assertEquals(Strings.create("v/test/ops/taskcomplete"),
+			fresh.getConfig().get(Fields.OPERATION));
+		ACell result = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "run-ow", Fields.INPUT, Maps.of("q", "fresh"),
+				Fields.WAIT, CVMLong.create(5000)),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertNotNull(RT.getIn(result, Fields.OUTPUT, "completed"));
 	}
 
 	@Test

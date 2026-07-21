@@ -153,6 +153,10 @@ public class Fields {
 	public static final StringShort PRIVATE = Strings.intern("private");
 	public static final StringShort HISTORY = Strings.intern("history");
 	public static final StringShort PARTIES = Strings.intern("parties");
+	/** Session metadata count and transition-output turn vector. In transition
+	 *  output, contains non-terminal assistant/tool turns produced before the
+	 *  final {@link #RESPONSE}; the framework inserts them between user input
+	 *  and the terminal assistant response. */
 	public static final StringShort TURNS = Strings.intern("turns");
 	public static final StringShort C = Strings.intern("c");
 

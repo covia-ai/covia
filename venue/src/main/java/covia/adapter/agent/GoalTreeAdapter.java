@@ -50,9 +50,11 @@ import covia.venue.RequestContext;
  *
  * <p>Without this progressive ancestor rendering, the design collapses to a
  * flat agent and `subgoal` becomes purely cosmetic. Don't remove the ancestor
- * pass in {@link GoalTreeContext#renderAncestors} or
- * {@link ContextBuilder#withFrameStack} thinking it's redundant — it is the
- * value proposition. {@code compact} is the in-frame analogue (live turns →
+ * pass in {@link GoalTreeContext#renderAncestors} or the active-frame render
+ * in {@link #runFrame} thinking they're redundant — together they are the
+ * value proposition. {@code ContextBuilder#withFrameStack} is the inspection
+ * counterpart; the live driver owns frame rendering so the conversation is
+ * added exactly once. {@code compact} is the in-frame analogue (live turns →
  * single summary segment) for keeping the active frame itself bounded.</p>
  *
  * <p>Full design: {@code venue/docs/GOAL_TREE.md} — especially §"Context
@@ -323,8 +325,9 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	}
 
 	/** Session-aware variant: when {@code session} is non-null, the session's
-	 *  frames conversation is rendered into the context via the same
-	 *  {@code withFrameStack} step the live path uses (#211). */
+	 *  frames conversation is rendered for inspection via {@code withFrameStack},
+	 *  using the same {@code renderConversationFor} policy as the live driver
+	 *  without duplicating the live driver's frame assembly (#211). */
 	public AMap<AString, ACell> buildFirstIterationL3Input(
 			AMap<AString, ACell> recordConfig, ACell state, ACell task,
 			AMap<AString, ACell> session, RequestContext ctx) {
@@ -634,7 +637,6 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 			.withConfig(recordConfig)
 			.withSessionId(RT.getIn(input, Fields.SESSION, Fields.ID))
 			.withSystemPrompt()
-			.withFrameStack(frames)
 			.withContextEntries()
 			.withSkillsIndex(indexLoads)
 			.withCurrentDate()                    // volatile (daily) → tail, cache-stable prefix

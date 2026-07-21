@@ -95,9 +95,11 @@ public class ContextBuilder {
 		"## Covia Lattice\n"
 		+ "You operate on the Covia grid — a federated network of venues hosting "
 		+ "operations, agents, and persistent data.\n"
+		+ "These namespaces describe what may exist, not what you can currently do. "
+		+ "Only claim or use capabilities backed by tools actually offered to you.\n"
 		+ "\n"
 		+ "User namespaces (scoped to current user):\n"
-		+ "  w/  Workspace — persistent data you manage on the user's behalf\n"
+		+ "  w/  Workspace — persistent user data\n"
 		+ "  o/  Operation pins — named operations saved for reuse\n"
 		+ "  n/  Agent-private — your notes, plans, state (persists across transitions)\n"
 		+ "  t/  Temporary — job-scoped scratch space (cleaned up when job ends)\n"
@@ -277,14 +279,10 @@ public class ContextBuilder {
 		if (sessionIdHex != null) sb.append(". Session: ").append(sessionIdHex);
 		sb.append('.');
 
-		// Include lattice reference when the agent has tools (default or explicit).
-		// Agents with no tools (e.g. pure extraction) don't need namespace docs.
-		boolean hasTools = config == null
-			|| !CVMBool.FALSE.equals(config.get(K_DEFAULT_TOOLS))
-			|| config.get(K_TOOLS) != null;
-		if (hasTools) {
-			sb.append("\n\n").append(LATTICE_REFERENCE.toString());
-		}
+		// Namespace literacy is useful even for a reasoning-only agent because
+		// paths can arrive in user input or configured context. The reference
+		// explicitly distinguishes addressability from actual tool capability.
+		sb.append("\n\n").append(LATTICE_REFERENCE.toString());
 		String capsSection = renderCapsForPrompt(
 			RT.ensureVector(config != null ? config.get(K_CAPS) : null));
 		if (capsSection != null) {
@@ -345,7 +343,7 @@ public class ContextBuilder {
 		ACell activeCell = frames.get(frames.count() - 1);
 		if (!(activeCell instanceof AMap)) return this;
 		AVector<ACell> rendered = covia.adapter.agent.GoalTreeContext
-			.renderConversation((AMap<AString, ACell>) activeCell);
+			.renderConversationFor((AMap<AString, ACell>) activeCell, config);
 
 		for (long i = 0; i < rendered.count(); i++) {
 			ACell entry = rendered.get(i);
@@ -365,7 +363,17 @@ public class ContextBuilder {
 				// answered "no task details provided" to an EDN-wrapped task.
 				contentStr = convex.core.util.JSON.print(content);
 			}
-			ACell msg = Maps.of(K_ROLE, role, K_CONTENT, contentStr);
+			AMap<AString, ACell> msg = Maps.of(K_ROLE, role, K_CONTENT, contentStr);
+			// Keep provider-significant tool fields while dropping framework-only
+			// metadata such as ts/source/caller. This matters for renderHistory=full
+			// and for any repaired in-flight conversation: assistant toolCalls must
+			// remain paired with their tool-result id/name payloads.
+			for (AString key : java.util.List.of(
+					Strings.intern("toolCalls"), Strings.intern("id"),
+					K_NAME, Fields.STRUCTURED_CONTENT)) {
+				ACell value = m.get(key);
+				if (value != null) msg = msg.assoc(key, value);
+			}
 			messages = messages.conj(msg);
 			trackMessage(msg);
 		}

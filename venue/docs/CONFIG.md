@@ -64,6 +64,47 @@ data. Never commit keystore passwords; use env vars or gitignored dev configs.
 - `port`: HTTP listen port (default `8080`).
 - `bindAddress`: network interface the HTTP connector binds to. When omitted, the venue binds **all interfaces** (`0.0.0.0`) — reachable from the LAN. Set to `"127.0.0.1"` to restrict the venue to loopback (recommended when embedding the venue as a local subprocess). This is the socket bind address and is distinct from `hostname`, which is the venue's *advertised* public host used to derive `baseUrl`/DID.
 
+## Browser origins (CORS)
+
+`corsOrigins` controls which browser origins may read venue responses. The
+legacy string form remains supported, while an array can name every legitimate
+frontend explicitly:
+
+```json
+{
+  "corsOrigins": [
+    "https://app.example.com",
+    "https://admin.example.com",
+    "loopback"
+  ],
+  "allowPrivateNetwork": false
+}
+```
+
+Supported forms:
+
+- Omitted or `"*"` — allow every valid HTTP(S) origin. This remains the
+  compatibility default, but is permissive for venues holding private data.
+- One origin string — allow exactly that browser origin.
+- An array of origin strings — allow any listed origin.
+- `"loopback"` — allow literal `localhost`, `127.0.0.1`, or `::1` on any
+  port, over HTTP or HTTPS. Matching never resolves DNS, so names such as
+  `localhost.example` do not qualify.
+- `false`, `"none"`, or `[]` — disable CORS entirely: requests still work,
+  but no `Access-Control-Allow-Origin` header is emitted.
+
+Specific-origin and loopback responses echo the accepted request origin and
+emit `Vary: Origin`; a denied browser origin receives HTTP 400 without an
+allow-origin header. Entries should be origins only (`scheme://host[:port]`),
+not URLs with paths. For compatibility with the previous Javalin setting, a
+bare configured host defaults to HTTPS. Invalid or ambiguous configuration
+fails at startup rather than silently widening access.
+
+`allowPrivateNetwork` opts into the browser Private Network Access response
+header after the origin passes the CORS policy. It defaults to `false`; enable
+it only when a public frontend genuinely needs to reach a private or
+loopback-bound venue.
+
 ## System tray
 
 When `MainVenue` runs on a desktop (not headless), each venue gets a system

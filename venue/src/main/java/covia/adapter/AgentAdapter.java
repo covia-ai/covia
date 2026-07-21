@@ -73,6 +73,8 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_FORKED_FROM      = Strings.intern("forkedFrom");
 	private static final AString K_SYSTEM_PROMPT    = Strings.intern("systemPrompt");
 	private static final AString K_LLM_OPERATION    = Strings.intern("llmOperation");
+	private static final AString K_MODEL            = Strings.intern("model");
+	private static final AString DEFAULT_AGENT_TEMPLATE = Strings.intern("v/agents/templates/skilled");
 
 	/** Maximum run loop iterations before forced exit (safety net) */
 	private static final int MAX_LOOP_ITERATIONS = 20;
@@ -414,11 +416,28 @@ public class AgentAdapter extends AAdapter {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) { job.fail("agentId is required"); return; }
 
+		ACell configArg = RT.getIn(input, Fields.CONFIG);
 		AMap<AString, ACell> config;
 		try {
-			config = parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx);
+			config = parseConfigArg(configArg, ctx);
 		} catch (IllegalArgumentException e) {
 			job.fail(e.getMessage()); return;
+		}
+		// A genuinely omitted config means "give me the useful platform
+		// default", not a tool-less shell. Reuse the installed skilled template
+		// for its prompt/read-list/skills policy, but leave provider and model to
+		// this venue: templates are portable examples and their pinned provider
+		// defaults must not override operator configuration.
+		if (configArg == null) {
+			config = resolveConfigRef(DEFAULT_AGENT_TEMPLATE, ctx);
+			if (config == null) {
+				job.fail("Default agent template is unavailable: " + DEFAULT_AGENT_TEMPLATE);
+				return;
+			}
+			config = config
+				.assoc(Fields.OPERATION, engine.config().getDefaultTransitionOp())
+				.assoc(K_LLM_OPERATION, engine.config().getDefaultLlmOperation())
+				.dissoc(K_MODEL);
 		}
 
 		ACell initialState = RT.getIn(input, AgentState.KEY_STATE);
@@ -497,20 +516,20 @@ public class AgentAdapter extends AAdapter {
 		User user = users.ensure(ctx.getCallerDID());
 
 		// Resolve what to do with the target slot. See resolveCreateSlot for the
-		// full state machine — empty slots create, occupied slots update or no-op
-		// based on overwrite flag and current status.
-		SlotResult slot = resolveCreateSlot(job, user, agentId, overwrite, config, initialState);
+		// full state machine — overwrite means replacement, while its absence is
+		// an idempotent no-op for an occupied slot.
+		SlotResult slot = resolveCreateSlot(job, user, agentId, overwrite, ctx);
 		if (slot == SlotResult.FAILED) return;
 
-		// ensureAgent is a no-op when the agent already exists; for UPDATED slots
-		// the in-place update has already happened inside resolveCreateSlot.
+		// ensureAgent is a no-op for NOOP slots; CREATED slots are empty because
+		// resolveCreateSlot removed any record selected for replacement.
 		AgentState agent = user.ensureAgent(agentId, config, initialState);
 
 		AMap<AString, ACell> result = Maps.of(
 			Fields.AGENT_ID, agentId,
 			Fields.STATUS, agent.getStatus(),
 			Fields.CREATED, CVMBool.of(slot == SlotResult.CREATED),
-			Fields.UPDATED, CVMBool.of(slot == SlotResult.UPDATED));
+			Fields.UPDATED, CVMBool.FALSE);
 
 		// Advisory only: surface anything that looks misconfigured but doesn't
 		// warrant failing create (#205). Emitted as a vector so several checks can
@@ -689,51 +708,62 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/** Outcome of resolving the target slot for {@code agent:create}. */
-	private enum SlotResult { CREATED, UPDATED, NOOP, FAILED }
+	private enum SlotResult { CREATED, NOOP, FAILED }
 
 	/**
 	 * State machine for {@code agent:create}'s target slot. Determines whether
-	 * to create a fresh record, update an existing one in place, no-op, or fail.
+	 * to create a fresh record, replace an existing one, no-op, or fail.
 	 *
 	 * <table>
 	 *   <caption>Slot resolution matrix</caption>
 	 *   <tr><th>{@code overwrite}</th><th>Existing status</th><th>Result</th><th>Side effect</th></tr>
 	 *   <tr><td>any</td>            <td>(empty)</td>      <td>CREATED</td><td>none — caller initialises</td></tr>
 	 *   <tr><td>false</td>          <td>any</td>          <td>NOOP</td>   <td>none — idempotent</td></tr>
-	 *   <tr><td>true</td>           <td>TERMINATED</td>   <td>CREATED</td><td>removeAgent — fresh start, timeline wiped</td></tr>
-	 *   <tr><td>true</td>           <td>SLEEPING</td>     <td>UPDATED</td><td>updateConfigAndState — timeline preserved</td></tr>
-	 *   <tr><td>true</td>           <td>SUSPENDED</td>    <td>UPDATED</td><td>updateConfigAndState — timeline + error preserved</td></tr>
-	 *   <tr><td>true</td>           <td>RUNNING</td>      <td>FAILED</td> <td>job.fail — racy, unsafe to mutate mid-run</td></tr>
+	 *   <tr><td>true</td>           <td>TERMINATED</td>   <td>CREATED</td><td>removeAgent — fresh start</td></tr>
+	 *   <tr><td>true</td>           <td>SLEEPING</td>     <td>CREATED</td><td>removeAgent — fresh start</td></tr>
+	 *   <tr><td>true</td>           <td>SUSPENDED</td>    <td>CREATED</td><td>removeAgent — fresh start</td></tr>
+	 *   <tr><td>true</td>           <td>RUNNING</td>      <td>CREATED</td><td>terminate, cancel and await old loop; then fresh start</td></tr>
 	 * </table>
 	 *
-	 * <p>The RUNNING rejection is the only loud failure: a transition currently
-	 * in flight has already captured the OLD config at its start, so a mid-run
-	 * config swap would surface as a "why is the agent using the old prompt"
-	 * mystery on the next run. Callers should wait for the agent to return to
-	 * SLEEPING (e.g. via {@code agent:trigger}'s wait semantics) or cancel the
-	 * active task with {@code agent:cancelTask}.</p>
+	 * <p>A running agent is halted before replacement: pending callers are
+	 * failed, status is set to TERMINATED, the active transition is cancelled,
+	 * and the old loop is awaited before its record is removed. Self-overwrite
+	 * from inside that same loop is rejected to avoid waiting on itself.</p>
 	 */
-	private SlotResult resolveCreateSlot(Job job, User user, AString agentId, boolean overwrite,
-			AMap<AString, ACell> newConfig, ACell newState) {
+	private SlotResult resolveCreateSlot(
+			Job job, User user, AString agentId, boolean overwrite, RequestContext ctx) {
 		AgentState existing = user.agent(agentId);
 		if (existing == null || !existing.exists()) return SlotResult.CREATED;
 
 		if (!overwrite) return SlotResult.NOOP;
 
-		AString status = existing.getStatus();
-		if (AgentState.TERMINATED.equals(status)) {
-			// Fresh start — wipe timeline, tasks, inbox, the lot
-			user.removeAgent(agentId);
-			return SlotResult.CREATED;
-		}
-		if (AgentState.RUNNING.equals(status)) {
-			job.fail("Cannot update agent " + agentId + ": currently RUNNING. "
-				+ "Wait for the active transition to finish, or call agent:cancelTask first.");
+		AString ownerDID = user.getDID();
+		AgentKey key = new AgentKey(ownerDID, agentId);
+		CompletableFuture<ACell> oldLoop = runningLoops.get(key);
+		if (agentId.equals(ctx.getAgentId()) && oldLoop != null && !oldLoop.isDone()) {
+			job.fail("Agent cannot overwrite itself while RUNNING: " + agentId);
 			return SlotResult.FAILED;
 		}
-		// SLEEPING / SUSPENDED — in-place update preserves timeline, inbox, tasks, pending, status
-		existing.updateConfigAndState(newConfig, newState);
-		return SlotResult.UPDATED;
+
+		// Stop before remove: this is the same cancellation contract as
+		// agent:delete, with an additional join so no old loop can write into the
+		// fresh record under the reused id.
+		failAllPendingForAgent(ownerDID, agentId, "Agent overwritten: " + agentId);
+		existing.setStatus(AgentState.TERMINATED);
+		cancelActiveTransition(key);
+		if (oldLoop != null && !oldLoop.isDone()) {
+			try {
+				oldLoop.join();
+			} catch (java.util.concurrent.CompletionException
+					| java.util.concurrent.CancellationException ignored) {
+				// The old record is being discarded; only loop termination matters.
+			}
+		}
+		// A true overwrite is delete + create. This deliberately wipes config,
+		// state, timeline, sessions, tasks, pending, inbox and errors (#237).
+		// Callers that need history-preserving mutation use agent:update instead.
+		user.removeAgent(agentId);
+		return SlotResult.CREATED;
 	}
 
 	/**
@@ -1305,6 +1335,11 @@ public class AgentAdapter extends AAdapter {
 
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
+		if (AgentState.RUNNING.equals(agent.getStatus())) {
+			job.fail("Cannot update agent " + agentId + ": currently RUNNING. "
+				+ "Wait for it to finish, or replace it with agent:create overwrite=true.");
+			return;
+		}
 
 		AMap<AString, ACell> newConfig = (AMap<AString, ACell>) RT.getIn(input, Fields.CONFIG);
 		ACell newState = RT.getIn(input, AgentState.KEY_STATE);
@@ -2212,6 +2247,12 @@ public class AgentAdapter extends AAdapter {
 		if (toolFailures != null && toolFailures.count() > 0) {
 			timelineEntry = timelineEntry.assoc(Fields.TOOL_FAILURES, toolFailures);
 		}
+		// Adapter-emitted non-terminal turns (currently llmagent tool-call and
+		// tool-result messages). These slot between framework-authored user input
+		// and the final response; unlike Fields.FRAMES they do not transfer frame
+		// ownership to the adapter.
+		AVector<ACell> transitionTurns = RT.ensureVector(
+			RT.getIn(transitionResult, Fields.TURNS));
 
 		// Cycle token usage ({input, output, total}, #217): persisted on the
 		// timeline entry; mergeRunResult mirrors it into the picked session's
@@ -2273,6 +2314,13 @@ public class AgentAdapter extends AAdapter {
 				ACell taskCaller = (pickedTask != null && pickedTask.getValue() instanceof AMap)
 					? ((AMap<AString, ACell>) pickedTask.getValue()).get(Fields.CALLER) : null;
 				turnsToAppend = turnsToAppend.conj(withCaller(turn, recordCaller, taskCaller));
+			}
+			if (transitionTurns != null) {
+				for (long i = 0; i < transitionTurns.count(); i++) {
+					AMap<AString, ACell> turn = normaliseTransitionTurn(
+						transitionTurns.get(i), endTs);
+					if (turn != null) turnsToAppend = turnsToAppend.conj(turn);
+				}
 			}
 			// Tool failures precede the assistant response (that is the order
 			// they happened). Recorded as system turns so the next cycle's
@@ -2445,6 +2493,26 @@ public class AgentAdapter extends AAdapter {
 			boolean recordCaller, ACell caller) {
 		if (!recordCaller || caller == null) return turn;
 		return turn.assoc(Fields.CALLER, caller);
+	}
+
+	/** Adds framework audit metadata to an adapter-emitted LLM/tool message
+	 * while preserving provider-significant fields such as toolCalls, id, name,
+	 * and structuredContent. Invalid/non-message entries are ignored. */
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> normaliseTransitionTurn(ACell value, long ts) {
+		if (!(value instanceof AMap<?, ?> raw)) return null;
+		AMap<AString, ACell> turn = (AMap<AString, ACell>) raw;
+		AString role = RT.ensureString(turn.get(AgentState.K_ROLE));
+		if (role == null) return null;
+		if (turn.get(AgentState.K_TURN_TS) == null) {
+			turn = turn.assoc(AgentState.K_TURN_TS, CVMLong.create(ts));
+		}
+		if (turn.get(AgentState.K_SOURCE) == null) {
+			turn = turn.assoc(AgentState.K_SOURCE,
+				Strings.intern("tool").equals(role)
+					? AgentState.SOURCE_TOOL : AgentState.SOURCE_TRANSITION);
+		}
+		return turn;
 	}
 
 	// ========== Helpers ==========

@@ -766,6 +766,8 @@ public class ContextBuilderTest {
 			"Default system prompt should describe workspace namespace");
 		assertTrue(defaultSys.toString().contains("v/ops"),
 			"Default system prompt should mention v/ops catalog");
+		assertTrue(defaultSys.toString().contains("Only claim or use capabilities backed by tools"),
+			"Namespace reference must not imply that addressability grants a capability");
 
 		// Custom identity prompt → lattice reference STILL appended
 		AMap<AString, ACell> customConfig = Maps.of(

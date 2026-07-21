@@ -35,6 +35,7 @@ import convex.core.data.Hash;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -81,6 +82,102 @@ public class VenueServerTest {
 		// Config getter: off by default, on only when explicitly enabled.
 		assertFalse(new Config(Maps.empty()).isAllowPrivateNetwork());
 		assertTrue(new Config(Maps.of(Config.ALLOW_PRIVATE_NETWORK, CVMBool.TRUE)).isAllowPrivateNetwork());
+	}
+
+	@Test public void testCorsOriginListAndPreflight() throws Exception {
+		VenueServer server = VenueServer.launch(Maps.of(
+			Config.PORT, CVMLong.create(0),
+			Config.CORS_ORIGINS, Vectors.of(
+				Strings.create("https://app.example"),
+				Strings.create("https://admin.example"))));
+		try {
+			for (String origin : new String[] {"https://app.example", "https://admin.example"}) {
+				HttpResponse<String> response = corsGet(server, origin);
+				assertEquals(200, response.statusCode(), response.body());
+				assertEquals(origin, response.headers()
+					.firstValue("access-control-allow-origin").orElse(null));
+			}
+
+			HttpResponse<String> denied = corsGet(server, "https://evil.example");
+			assertEquals(400, denied.statusCode());
+			assertTrue(denied.headers().firstValue("access-control-allow-origin").isEmpty());
+
+			HttpResponse<String> preflight = corsPreflight(server, "https://app.example");
+			assertEquals(204, preflight.statusCode());
+			assertEquals("https://app.example", preflight.headers()
+				.firstValue("access-control-allow-origin").orElse(null));
+			assertTrue(preflight.headers().firstValue("vary").orElse("").contains("Origin"));
+
+			// Preflight is global, not REST-only: browser MCP clients need the
+			// same policy and headers before their JSON-RPC POST.
+			HttpResponse<String> mcpPreflight = corsPreflight(
+				server, "https://app.example", "/mcp");
+			assertEquals(204, mcpPreflight.statusCode());
+			assertEquals("https://app.example", mcpPreflight.headers()
+				.firstValue("access-control-allow-origin").orElse(null));
+		} finally {
+			server.close();
+		}
+	}
+
+	@Test public void testCorsLoopbackIsLiteralAndAllowsAnyPort() throws Exception {
+		VenueServer server = VenueServer.launch(Maps.of(
+			Config.PORT, CVMLong.create(0),
+			Config.CORS_ORIGINS, Strings.create("loopback")));
+		try {
+			for (String origin : new String[] {
+					"http://localhost:3000", "https://127.0.0.1:9443", "http://[::1]:8080"}) {
+				HttpResponse<String> response = corsGet(server, origin);
+				assertEquals(200, response.statusCode(), origin);
+				assertEquals(origin, response.headers()
+					.firstValue("access-control-allow-origin").orElse(null));
+			}
+			for (String origin : new String[] {
+					"http://localhost.evil:3000", "http://127.0.0.2:3000"}) {
+				HttpResponse<String> response = corsGet(server, origin);
+				assertEquals(400, response.statusCode(), origin);
+				assertTrue(response.headers().firstValue("access-control-allow-origin").isEmpty());
+			}
+		} finally {
+			server.close();
+		}
+	}
+
+	@Test public void testCorsCanBeDisabledEntirely() throws Exception {
+		VenueServer server = VenueServer.launch(Maps.of(
+			Config.PORT, CVMLong.create(0),
+			Config.CORS_ORIGINS, CVMBool.FALSE));
+		try {
+			HttpResponse<String> response = corsGet(server, "https://app.example");
+			assertEquals(200, response.statusCode(), response.body());
+			assertTrue(response.headers().firstValue("access-control-allow-origin").isEmpty());
+		} finally {
+			server.close();
+		}
+	}
+
+	private static HttpResponse<String> corsGet(VenueServer server, String origin) throws Exception {
+		return HttpClient.newHttpClient().send(HttpRequest.newBuilder()
+			.uri(new URI("http://localhost:" + server.port() + "/api/v1/status"))
+			.header("Origin", origin)
+			.GET().timeout(Duration.ofSeconds(10)).build(),
+			HttpResponse.BodyHandlers.ofString());
+	}
+
+	private static HttpResponse<String> corsPreflight(VenueServer server, String origin) throws Exception {
+		return corsPreflight(server, origin, "/api/v1/status");
+	}
+
+	private static HttpResponse<String> corsPreflight(
+			VenueServer server, String origin, String path) throws Exception {
+		return HttpClient.newHttpClient().send(HttpRequest.newBuilder()
+			.uri(new URI("http://localhost:" + server.port() + path))
+			.header("Origin", origin)
+			.header("Access-Control-Request-Method", "GET")
+			.header("Access-Control-Request-Headers", "authorization")
+			.method("OPTIONS", HttpRequest.BodyPublishers.noBody())
+			.timeout(Duration.ofSeconds(10)).build(),
+			HttpResponse.BodyHandlers.ofString());
 	}
 
 	/**

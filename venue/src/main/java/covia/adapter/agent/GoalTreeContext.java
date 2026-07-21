@@ -497,6 +497,12 @@ public class GoalTreeContext {
 				messages = messages.conj(turn);
 			} else if (ROLE_ASSISTANT.equals(role) && !hasToolCalls(turn)) {
 				messages = messages.conj(turn);
+			} else if (ROLE_SYSTEM.equals(role)
+					&& covia.venue.AgentState.SOURCE_TOOL.equals(
+						RT.getIn(turn, covia.venue.AgentState.K_SOURCE))) {
+				// Framework-synthesised failure diagnostics are durable context,
+				// not scratch: retain them after eliding the raw tool exchange.
+				messages = messages.conj(turn);
 			}
 			// else: assistant(toolCalls) or tool — elided.
 		}

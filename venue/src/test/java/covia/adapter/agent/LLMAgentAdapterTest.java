@@ -500,6 +500,15 @@ public class LLMAgentAdapterTest {
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response);
 		assertTrue(response.toString().contains("Tool returned:"));
+
+		AVector<ACell> turns = RT.ensureVector(
+			RT.getIn(output, Fields.TURNS));
+		assertNotNull(turns, "tool exchanges must be emitted for session audit");
+		assertEquals(2, turns.count(),
+			"terminal assistant stays in response; only tool-call + result are emitted");
+		assertEquals("assistant", RT.getIn(turns.get(0), "role").toString());
+		assertNotNull(RT.getIn(turns.get(0), "toolCalls"));
+		assertEquals("tool", RT.getIn(turns.get(1), "role").toString());
 	}
 
 	// ========== Skills index (config.skills — SKILLS.md §4) ==========
@@ -548,6 +557,43 @@ public class LLMAgentAdapterTest {
 		AVector<ACell> messages = RT.ensureVector(RT.getIn(l3, Fields.MESSAGES));
 		String prompt = RT.ensureString(RT.getIn(messages.get(0), "content")).toString();
 		assertTrue(prompt.contains("Session: 11bb11bb11bb11bb11bb11bb11bb11bb"), prompt);
+	}
+
+	@Test
+	public void testInspectionMirrorsLoadedContextAndRuntimeTools() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/inspection-probe", "value", "probe-visible"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		AMap<AString, ACell> load = Maps.of(
+			"budget", CVMLong.create(500),
+			"ts", CVMLong.create(1),
+			"label", Strings.create("Probe"));
+		AMap<AString, ACell> session = Maps.of(
+			Fields.ID, Blob.fromHex("22bb22bb22bb22bb22bb22bb22bb22bb"),
+			Fields.LOADS, Maps.of("w/inspection-probe", load),
+			Fields.FRAMES, Vectors.of((ACell) Maps.of(
+				AgentState.KEY_CONVERSATION, Vectors.empty())));
+
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		AMap<AString, ACell> l3 = adapter.buildInspectionInput(
+			Maps.of("llmOperation", "v/test/ops/llm"), null, null,
+			session, RequestContext.of(ALICE_DID));
+
+		String renderedMessages = convex.core.util.JSON.print(
+			RT.getIn(l3, Fields.MESSAGES)).toString();
+		assertTrue(renderedMessages.contains("probe-visible"), renderedMessages);
+		assertTrue(renderedMessages.contains("[Context Map]"), renderedMessages);
+		assertTrue(renderedMessages.contains("w/inspection-probe"), renderedMessages);
+
+		AVector<ACell> tools = RT.ensureVector(RT.getIn(l3, Fields.TOOLS));
+		java.util.Set<String> names = new java.util.HashSet<>();
+		for (long i = 0; i < tools.count(); i++) {
+			AString name = RT.ensureString(RT.getIn(tools.get(i), Fields.NAME));
+			if (name != null) names.add(name.toString());
+		}
+		assertTrue(names.contains("context_load"), names.toString());
+		assertTrue(names.contains("context_unload"), names.toString());
 	}
 
 	@Test
