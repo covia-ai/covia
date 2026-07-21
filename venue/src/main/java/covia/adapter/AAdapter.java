@@ -343,11 +343,16 @@ public abstract class AAdapter {
      * invocations where no reference path is available ({@code getOp() == null}
      * → resource-less check, coverable only by the wildcard).</p>
      */
-    protected static void requireInvoke(RequestContext ctx) {
+    protected void requireInvoke(RequestContext ctx) {
         // The framework always supplies a context (at minimum ANONYMOUS); a null
         // ctx only occurs in direct unit-test calls that bypass dispatch — treat
-        // as no enforcement context.
-        if (ctx != null) ctx.requireCapability(ctx.getOp(), INVOKE);
+        // as no enforcement context. Route through the single authority seam so an
+        // invoke grant may be satisfied by a config grant OR a presented proof
+        // (additive); fall back to the ceiling-only check when no engine is wired
+        // (adapters constructed directly in unit tests).
+        if (ctx == null) return;
+        if (engine != null) engine.requireAuthority(ctx, ctx.getOp(), INVOKE);
+        else ctx.requireCapability(ctx.getOp(), INVOKE);
     }
 
     /**
