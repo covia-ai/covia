@@ -678,20 +678,19 @@ public class CoviaAdapter extends AAdapter {
 	 * (internal/authenticated callers) is unrestricted, so this is a no-op for
 	 * them; a restricted ceiling (e.g. the public read-only profile) is gated.
 	 */
-	private static void requireCap(RequestContext ctx, ACell input, AString ability) {
+	private void requireCap(RequestContext ctx, ACell input, AString ability) {
 		AString p = RT.ensureString(RT.getIn(input, Fields.PATH));
 		// MUTATIONS target the caller's OWN namespace via bare paths (w/…, o/…).
-		// Cross-user access via a DID-URL path is supported for READS only (gated
-		// by a presented delegation proof in resolveDIDURL); there is no cross-user
-		// write path. Reject a DID-URL mutation target explicitly and early rather
-		// than relying on the downstream writable-namespace check — defence-in-depth
-		// that survives refactors and gives a clear error. Reads fall through to the
-		// proof-gated resolver.
+		// Cross-user access via a DID-URL path is supported for READS only (a
+		// presented delegation proof authorises it through the authority seam);
+		// there is no cross-user write path. Reject a DID-URL mutation target
+		// explicitly and early — defence-in-depth that survives refactors and gives
+		// a clear error. Reads fall through to the proof-gated seam.
 		if (p != null && !Capability.CRUD_READ.equals(ability) && p.toString().startsWith("did:")) {
 			throw new AuthException("Cross-user / DID-URL write paths are not supported: " + p
 				+ " — write to your own namespace via a bare path (e.g. w/…).");
 		}
-		ctx.requireCapability(p, ability);
+		engine.requireAuthority(ctx, p, ability);
 	}
 
 	/**

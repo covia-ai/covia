@@ -2149,12 +2149,12 @@ public class Engine {
 		// A cross-user proof (or the public read ceiling) authorises independently
 		// of the caller's own ceiling — the additive cross-user grant.
 		if (crossUserAllows(ctx, resource, ability)) return true;
-		// Own-authority dimension. A null ceiling is unrestricted, but ONLY for
-		// own / unscoped resources — reaching another user's namespace always needs
-		// a proof (handled above), never the fast path.
-		if (ctx.getCaps() == null) {
-			return isOwnOrUnscoped(resource, ctx.getCallerDID());
-		}
+		// Own-authority ceiling. A null ceiling is unrestricted (the fast path);
+		// otherwise the caller's config grants must cover the resource. An
+		// unrestricted caller's cross-user reach is still gated by the adapter's
+		// own cross-user resolver (which routes through crossUserAllows above) —
+		// the fast path bypasses the ceiling, never the proof requirement.
+		if (ctx.getCaps() == null) return true;
 		return ctx.ceilingDenial(resource, ability) == null;
 	}
 
@@ -2170,22 +2170,6 @@ public class Engine {
 			: "Capability denied: requires " + (ability != null ? ability : "(any ability)")
 				+ " on " + (resource != null ? resource : "(any)")
 				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""));
-	}
-
-	/**
-	 * True when {@code resource} is the caller's own / an unscoped resource (a bare
-	 * lattice path, the caller's own DID-URL, a content-addressed asset, or a
-	 * scheme-qualified path) — i.e. NOT another user's DID-scoped namespace. Gates
-	 * the {@code null}-caps fast path so it can never authorise cross-user access.
-	 */
-	private static boolean isOwnOrUnscoped(AString resource, AString callerDID) {
-		String canon = covia.lattice.CapabilityChecker.canonicalResource(
-			resource != null ? resource.toString() : null, callerDID);
-		if (canon == null || canon.isEmpty()) return true;   // no specific / content-addressed
-		if (!canon.startsWith("did:")) return true;          // scheme-qualified (file://, …)
-		if (callerDID == null) return false;                 // anonymous cannot own a DID-scoped path
-		String c = callerDID.toString();
-		return canon.equals(c) || canon.startsWith(c + "/");
 	}
 
 	// ========== Secret resolution ==========
