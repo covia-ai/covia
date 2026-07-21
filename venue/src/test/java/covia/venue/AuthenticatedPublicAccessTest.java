@@ -21,10 +21,10 @@ import covia.grid.Status;
 /**
  * covia#254: an authenticated caller is at least as privileged as the
  * anonymous public caller — access to the PUBLIC user's resources follows
- * the public capability ceiling (default read-only), for any caller.
+ * the public capability scope (default read-only), for any caller.
  *
- * <p>Parity is ceiling-governed, never hard-coded: what these tests assert
- * under the default ceiling widens automatically (and deliberately —
+ * <p>Parity is scope-governed, never hard-coded: what these tests assert
+ * under the default scope widens automatically (and deliberately —
  * caveat emptor) when an operator widens {@code auth.public.caps}.</p>
  */
 public class AuthenticatedPublicAccessTest {
@@ -74,9 +74,9 @@ public class AuthenticatedPublicAccessTest {
 
 	@Test
 	public void testPublicWriteParityDeniedByDefault() {
-		// The default public ceiling is read-only, and cross-user DID-URL
+		// The default public scope is read-only, and cross-user DID-URL
 		// writes remain blocked — write parity arrives only if/when the write
-		// path supports public-targeted cursors under a widened ceiling.
+		// path supports public-targeted cursors under a widened scope.
 		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, PUBLIC_DID + "/w/x", Fields.VALUE, Strings.create("nope")),
 			ALICE).awaitResult(5000));
@@ -87,11 +87,11 @@ public class AuthenticatedPublicAccessTest {
 	@Test
 	public void testAuthenticatedReadsPublicJob() {
 		// ACTIVE public job — readable via the job surface (hot-cache path,
-		// canReadJob's public-ceiling fallback).
+		// canReadJob's public-scope fallback).
 		Job activeJob = engine.jobs().invokeOperation("v/test/ops/never", Maps.empty(), PUBLIC);
 		try {
 			AMap<AString, ACell> viaAlice = engine.jobs().getJobData(activeJob.getID(), ALICE);
-			assertNotNull(viaAlice, "active public-owned jobs are readable per the public ceiling");
+			assertNotNull(viaAlice, "active public-owned jobs are readable per the public scope");
 			assertEquals(PUBLIC_DID, viaAlice.get(Fields.CALLER));
 
 			// Parity, not blanket access: Bob's active job stays owner-only.
@@ -109,7 +109,7 @@ public class AuthenticatedPublicAccessTest {
 
 		// TERMINAL public job — cross-user terminal reads go via the DID-URL
 		// lattice path (same rule as delegated reads), hitting the
-		// verifyProofs public-ceiling fallback.
+		// verifyProofs public-scope fallback.
 		Job doneJob = engine.jobs().invokeOperation("v/test/ops/echo",
 			Maps.of("text", "hello"), PUBLIC);
 		doneJob.awaitResult(5000);
@@ -144,10 +144,10 @@ public class AuthenticatedPublicAccessTest {
 
 	@Test
 	public void testSecretExtractionRemainsClosed() {
-		// covia#254 ruling: extraction is CEILING-governed, not hard-coded —
+		// covia#254 ruling: extraction is SCOPE-governed, not hard-coded —
 		// today it is universally denied (gated implementation pending). When
 		// implemented it must require secret/decrypt, which the DEFAULT public
-		// ceiling withholds; an operator widening auth.public.caps to include
+		// scope withholds; an operator widening auth.public.caps to include
 		// it gets exactly what they asked for (caveat emptor). This test pins
 		// the closed state so that change is a conscious decision.
 		engine.jobs().invokeOperation("v/ops/secret/set",

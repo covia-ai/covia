@@ -383,9 +383,9 @@ public class MCP extends McpServer {
 				Context ctx = McpServer.getCurrentContext();
 				RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
-				// Attach transport UCAN authority — proofs (cross-user grants)
-				// and the self-attenuation ceiling (#131) — from the `ucans` tool
-				// argument and an Authorization bearer UCAN.
+				// Attach transport UCAN authority — proofs are additive cross-user
+				// grants — from the `ucans` tool argument and an Authorization
+				// bearer UCAN.
 				AVector<ACell> ucans = RT.getIn(arguments, Fields.UCANS);
 				AString bearer = (ctx != null) ? ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR) : null;
 				rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans, engine().getDIDString());

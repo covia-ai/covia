@@ -11,6 +11,7 @@ import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 
 /**
  * Checks agent tool calls against declared capability attenuations.
@@ -27,68 +28,6 @@ import convex.core.lang.RT;
  * <p>See {@code venue/docs/UCAN.md §5.4} for the full design.</p>
  */
 public class CapabilityChecker {
-
-
-	/**
-	 * Derive the self-attenuation ceiling from presented proof tokens: the union
-	 * of capabilities the verified tokens grant to {@code caller} under the
-	 * authority {@code issuer}, with temporal bounds re-checked. The result is the
-	 * {@code caps} ceiling enforced by {@link #check}. The owner is the authority
-	 * over its own namespace, so for a self-ceiling {@code issuer == caller}.
-	 *
-	 * <p>Assumes signatures and chains were verified at the transport boundary
-	 * ({@code UCANValidator.parseTransportUCANs}); only temporal bounds are
-	 * re-checked. Fail-closed: null {@code proofs}/{@code caller}/{@code issuer}
-	 * → null (no ceiling), never a wildcard.</p>
-	 *
-	 * <p>A self-ceiling is genuinely <b>single-hop</b> and caller-rooted
-	 * ({@code iss == aud == caller}) — no delegation chain, no root-authority
-	 * policy — so it is derived by a local single-hop selection, kept isolated
-	 * from the cross-user proof path ({@link #proofsCover}). On top of the
-	 * selection this adds covia's self-attenuation guard: a self-ceiling may only
-	 * <b>narrow</b>, so a capability with an empty/absent {@code with} — a "match
-	 * any resource" wildcard that would broaden — is dropped from the ceiling.</p>
-	 *
-	 * <p><b>Scope of the wildcard-stripping (#211):</b> the guard above applies
-	 * only to ceilings derived here, from UCAN <em>proof tokens</em>. An agent's
-	 * {@code config.caps} array does not pass through this method — it reaches
-	 * the checker unmodified, where an empty-{@code with} grant such as
-	 * {@code {"with": "", "can": "invoke"}} acts as a match-any wildcard (see
-	 * {@link #covered}). That is the supported way to give a restricted agent
-	 * the {@code invoke} ability its tool calls need.</p>
-	 */
-	public static AVector<ACell> selfCapabilities(AVector<ACell> proofs,
-			AString caller, AString issuer, long now) {
-		if (proofs == null || caller == null || issuer == null) return null;
-		// Single-hop selection: union the attenuations of tokens audienced to the
-		// caller AND issued by `issuer` (== caller for a self-ceiling), still in-date.
-		// Uses the typed UCAN accessors (canonical DID comparison), not raw fields.
-		AVector<ACell> caps = Vectors.empty();
-		for (long i = 0; i < proofs.count(); i++) {
-			AMap<AString, ACell> tokenMap = RT.castMap(proofs.get(i));
-			if (tokenMap == null) continue;
-			UCAN token = UCAN.parse(tokenMap);
-			if (token == null) continue;
-			if (!UCANValidator.checkTemporalBounds(token, now)) continue;
-			if (!caller.equals(token.getAudience())) continue;
-			if (!issuer.equals(token.getIssuer())) continue;
-			caps = caps.concat(token.getCapabilities());
-		}
-		if (caps.isEmpty()) return null;
-		// Self-attenuation may only NARROW: drop empty/absent-`with` (match-any)
-		// caps that would broaden the owner's own authority.
-		AVector<ACell> narrowed = Vectors.empty();
-		for (long i = 0; i < caps.count(); i++) {
-			ACell c = caps.get(i);
-			if (c instanceof AMap<?, ?> m) {
-				@SuppressWarnings("unchecked")
-				AString w = RT.ensureString(((AMap<AString, ACell>) m).get(Capability.WITH));
-				if (w == null || w.count() == 0) continue;
-			}
-			narrowed = narrowed.conj(c);
-		}
-		return narrowed.isEmpty() ? null : narrowed;
-	}
 
 	/**
 	 * Cross-user proof check: do the caller's presented {@code proofs} authorise
@@ -214,9 +153,10 @@ public class CapabilityChecker {
 	}
 
 	/**
-	 * Checks whether a capability ceiling allows a specific {@code (resource,
-	 * ability)} pair supplied <em>directly</em> by the executing adapter — not
-	 * derived from an operation name.
+	 * Checks whether a capability scope — the grants a caller holds — covers a
+	 * specific {@code (resource, ability)} pair supplied <em>directly</em> by the
+	 * executing adapter, not derived from an operation name. Either a grant covers
+	 * it or you don't have the right; a {@code null} scope is unrestricted.
 	 *
 	 * <p>This is the enforcement primitive meant to be co-located with the code
 	 * that performs the action: the implementation names the exact resource and
@@ -228,7 +168,7 @@ public class CapabilityChecker {
 	 * form is the primary entry point; a {@link String} overload is provided for
 	 * literal arguments.</p>
 	 *
-	 * @param caps     the caller's granted capability ceiling; {@code null} = unrestricted
+	 * @param caps     the caller's held grant scope; {@code null} = unrestricted
 	 * @param resource the exact resource acted on — a bare lattice path
 	 *                 ({@code "w/x"}, owner-scoped), a DID URL, or a scheme URI;
 	 *                 {@code null}/empty means "no specific resource"
@@ -259,7 +199,7 @@ public class CapabilityChecker {
 	 */
 	public static String allows(AVector<ACell> caps, AString resource, AString ability, AString ownerDID,
 			AString opRef, ACell invocationInput, CapabilityGate gate) {
-		if (caps == null) return null;              // no ceiling = unrestricted
+		if (caps == null) return null;              // no scope = unrestricted (no bounding grants)
 		String canonResource = canonicalResource(resource != null ? resource.toString() : null, ownerDID);
 		if (canonResource == null) canonResource = "";
 		String ab = (ability != null) ? ability.toString() : "";
@@ -305,7 +245,7 @@ public class CapabilityChecker {
 		appendCapsList(sb, caps);
 		// For the venue's public/anonymous identity, the remedy is an auth
 		// action — point to it (covia#206). Scoped to the public caller (DID
-		// ends ":public") so a capped agent's own-ceiling denial, which it is
+		// ends ":public") so a scoped agent's own-scope denial, which it is
 		// meant to just handle (#211), and cross-user denials stay clean.
 		if (ownerDID != null && ownerDID.toString().endsWith(":public")) {
 			sb.append(". Authenticate with a UCAN bearer token (Authorization: "
@@ -328,7 +268,7 @@ public class CapabilityChecker {
 	}
 
 	/**
-	 * The default read-only capability ceiling for an identity: read the
+	 * The default read-only capability grant scope for an identity: read the
 	 * identity's own (owner-scoped) lattice and venue paths, and read
 	 * content-addressed assets. It grants <em>no</em> write, delete, secret,
 	 * agent, asset-store, or invoke ability — so every mutating operation is
@@ -339,10 +279,10 @@ public class CapabilityChecker {
 	 *                 non-null (e.g. the venue public DID, {@code "<venueDID>:public"});
 	 *                 a null scope would yield an unscoped, over-broad grant
 	 */
-	public static AVector<ACell> readOnlyCeiling(AString scopeDID) {
+	public static AVector<ACell> readOnlyScope(AString scopeDID) {
 		return Vectors.of(
 			Capability.create(scopeDID, Capability.CRUD_READ),
-			Capability.create(Strings.create(""), Strings.create("asset/read")));
+			Capability.create(Strings.create(""), Abilities.ASSET_READ));
 	}
 
 	/**
@@ -350,7 +290,7 @@ public class CapabilityChecker {
 	 * returns true iff some grant in {@code caps} covers the already-canonical
 	 * {@code (resourceStr, abilityStr)} request. Non-map and malformed entries
 	 * are skipped defensively (they grant nothing). An empty {@code caps}
-	 * vector therefore grants nothing — only a {@code null} ceiling is "full
+	 * vector therefore grants nothing — only a {@code null} scope is "full
 	 * access" (handled by the callers).
 	 */
 	private static boolean covered(AVector<ACell> caps, AString resourceStr, AString abilityStr,
@@ -384,8 +324,8 @@ public class CapabilityChecker {
 		AString grantCan = RT.ensureString(cap.get(Capability.CAN));
 
 		// A null/empty grant `with` is a "match any resource" wildcard — the
-		// venue's own asset/read ceiling ({with:""}) relies on it. This wildcard
-		// lives ONLY in the ceiling path, never in the fail-closed UCAN proof
+		// venue's own asset/read grant ({with:""}) relies on it. This wildcard
+		// lives ONLY in the grant-scope path, never in the fail-closed UCAN proof
 		// path (proofsCover). A concrete grant matches via the boundary-aware
 		// Capability.resourceCovers (Convex #585 fixed); ability via abilityCovers.
 		boolean resourceOK = (grantWith == null || grantWith.count() == 0)

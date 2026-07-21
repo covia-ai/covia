@@ -20,7 +20,6 @@ import convex.auth.did.DIDVerifier;
 import convex.auth.ucan.UCANValidator;
 import convex.core.lang.RT;
 import covia.api.Fields;
-import covia.lattice.CapabilityChecker;
 import covia.venue.Auth;
 import covia.venue.RequestContext;
 import covia.venue.auth.JWKSClient;
@@ -49,7 +48,7 @@ public class AuthMiddleware {
 
 	static final String CALLER_DID_ATTR = "callerDID";
 	/**
-	 * Context attribute holding the capability ceiling for an unauthenticated
+	 * Context attribute holding the capability grant scope for an unauthenticated
 	 * (public) caller, derived from {@code auth.public.caps}. Absent for
 	 * authenticated callers (unrestricted unless a transport token attenuates).
 	 */
@@ -81,7 +80,7 @@ public class AuthMiddleware {
 	private final Auth venueAuth;
 	private final Map<String, OAuthConfig> externalProviders;
 	private final boolean publicAccessEnabled;
-	private final AVector<ACell> publicCeiling;
+	private final AVector<ACell> publicScope;
 	private final String audiencePolicy;                  // "verify" | "require"
 	private final java.util.Set<String> acceptedAudiences;
 
@@ -93,10 +92,10 @@ public class AuthMiddleware {
 		this.publicAccessEnabled = auth.isPublicAccessEnabled();
 		this.externalProviders = auth.getLoginProviders().hasProviders()
 			? auth.getLoginProviders().getProviders() : null;
-		// Capability ceiling for public callers — secure read-only by default,
+		// Capability grant scope for public callers — secure read-only by default,
 		// operator-overridable via auth.public.caps. Only relevant when public
 		// access is enabled (otherwise every anonymous request is 401'd).
-		this.publicCeiling = publicAccessEnabled ? auth.getPublicCeiling(publicDID) : null;
+		this.publicScope = publicAccessEnabled ? auth.getPublicScope(publicDID) : null;
 		// Accepted JWT audiences: the venue's own published DID (whatever its
 		// method — did:key, did:web, …) plus any operator allowlist. A bearer
 		// token's `aud` must name one of these (RFC 7519 §4.1.3), so a token
@@ -196,12 +195,12 @@ public class AuthMiddleware {
 
 	/**
 	 * Attribute an unauthenticated request to the venue's public DID and stash
-	 * the public capability ceiling (if any), so the downstream
+	 * the public capability grant scope (if any), so the downstream
 	 * {@link #callerContext} applies it uniformly.
 	 */
 	private void markPublic(Context ctx) {
 		ctx.attribute(CALLER_DID_ATTR, publicDID);
-		if (publicCeiling != null) ctx.attribute(CALLER_CAPS_ATTR, publicCeiling);
+		if (publicScope != null) ctx.attribute(CALLER_CAPS_ATTR, publicScope);
 	}
 
 	void extractIdentity(Context ctx) {
@@ -450,14 +449,14 @@ public class AuthMiddleware {
 	/**
 	 * Builds the base {@link RequestContext} for an inbound request: the caller
 	 * DID plus, for unauthenticated (public) callers, the configured capability
-	 * ceiling ({@code auth.public.caps}, default read-only). This is the single
-	 * seam where a request's ceiling is established, before transport-token
+	 * grant scope ({@code auth.public.caps}, default read-only). This is the single
+	 * seam where a request's grant scope is established, before transport-token
 	 * authority ({@link #withTransportAuth}) is layered on. Null-safe: a null
 	 * Javalin context (e.g. an MCP call with no HTTP context) yields
 	 * {@link RequestContext#ANONYMOUS}.
 	 *
 	 * @param ctx Javalin context, or null
-	 * @return the caller's request context with its ceiling applied
+	 * @return the caller's request context with its grant scope applied
 	 */
 	public static RequestContext callerContext(Context ctx) {
 		if (ctx == null) return RequestContext.ANONYMOUS;
@@ -469,28 +468,21 @@ public class AuthMiddleware {
 
 	/**
 	 * Attach transport-presented UCAN authority to a request context — the single
-	 * seam used by every invoke transport (REST, MCP). Two things, in order:
-	 * <ol>
-	 *   <li><b>Proofs</b> — the cryptographically-verified tokens, for cross-user
-	 *       grant checks (unchanged behaviour).</li>
-	 *   <li><b>Self-attenuation ceiling</b> — capabilities the <em>owner</em>
-	 *       authored over their own resources, restricting this session. Set as
-	 *       {@code caps} so the executing adapter applies them as a ceiling at its
-	 *       enforcement point. Closes the gap where a presented attenuated token
-	 *       ran with full authority (#131).</li>
-	 * </ol>
+	 * seam used by every invoke transport (REST, MCP). Presented proofs are the
+	 * cryptographically-verified tokens, attached for <b>cross-user grant
+	 * checks</b> (§5.2). Proofs are <b>additive</b>: a token only ever <em>adds</em>
+	 * a grant, it never subtracts from the caller's own authority — so there is no
+	 * wire-level self-attenuation. To act with reduced authority, run under a
+	 * narrower {@link covia.grid.Authority} (an agent's {@code config.caps}) or
+	 * present only the UCANs the request needs.
 	 *
-	 * <p>The owner is the authority over its own namespace; the venue only
-	 * enforces. So the ceiling is taken from tokens the caller authored for
-	 * itself ({@code iss == aud == caller}). A ceiling can only <em>narrow</em>
-	 * the caller's own authority — never widen it — so this is escalation-safe.
-	 * With no token presented, nothing is attached and access is unrestricted
+	 * <p>With no token presented, nothing is attached and access is unrestricted
 	 * (the common case).</p>
 	 *
 	 * @param rctx context for the authenticated caller (caller DID already set)
 	 * @param bearer Authorization bearer JWT, or null
 	 * @param ucans transport {@code ucans} vector, or null
-	 * @return rctx with proofs and (if any) the self-cap ceiling attached
+	 * @return rctx with the presented proofs attached
 	 */
 	public static RequestContext withTransportAuth(RequestContext rctx, AString bearer,
 			AVector<ACell> ucans) {
@@ -546,7 +538,7 @@ public class AuthMiddleware {
 		if (venueDID != null && bearer == null && isPublicOrAnonymous(rctx, venueDID)) {
 			AString identity = identityFromProofs(proofs, venueDID);
 			if (identity != null) {
-				// A proven caller: fresh context — the public read-only ceiling
+				// A proven caller: fresh context — the public read-only grant scope
 				// does not apply to an authenticated identity.
 				rctx = RequestContext.of(identity);
 			}
@@ -559,12 +551,10 @@ public class AuthMiddleware {
 		// NOT retained for relay — it is audienced to THIS venue (#149) and must
 		// never be replayed elsewhere.
 		if (ucans != null && !ucans.isEmpty()) rctx = rctx.withRawUcans(ucans);
-		AString caller = rctx.getCallerDID();
-		long now = System.currentTimeMillis() / 1000;
-		// Derives the self-attenuation ceiling: a single-hop selection of the caller's
-		// self-authored tokens (iss == aud == caller) plus covia's narrow-only guard.
-		AVector<ACell> caps = CapabilityChecker.selfCapabilities(proofs, caller, caller, now);
-		if (caps != null) rctx = rctx.withCaps(caps);
+		// No self-attenuation from the wire: presented proofs are additive grants,
+		// never subtractive. To act with reduced authority, hand the
+		// callee a narrower Authority (Authority.of(did, grants)) or present only the
+		// UCANs the request needs — you never send everything and then subtract.
 		return rctx;
 	}
 

@@ -415,8 +415,8 @@ public class JobManager {
 	 * denies with the reason (fail-closed, never fail-open).
 	 *
 	 * <p>The gate runs under the CALLER's own authority with no capability
-	 * ceiling: a gate is policy code chosen by whoever configured the grant,
-	 * and a ceiling-less context means the checker never evaluates gates for
+	 * scope: a gate is policy code chosen by whoever configured the grant,
+	 * and a scope-less context means the checker never evaluates gates for
 	 * the gate's own sub-invocations — a structural recursion guard, no
 	 * flags. No Job is created (invokeInternal), so gate checks never bloat
 	 * the etch.</p>

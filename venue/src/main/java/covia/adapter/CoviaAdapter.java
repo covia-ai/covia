@@ -449,7 +449,7 @@ public class CoviaAdapter extends AAdapter {
 	 * Resolves a single path and renders the value via CellExplorer.
 	 */
 	private String explorePath(RequestContext ctx, String pathStr, int budget, boolean compact) {
-		ctx.requireCapability(Strings.create(pathStr), Capability.CRUD_READ);
+		engine.requireAuthority(ctx,Strings.create(pathStr), Capability.CRUD_READ);
 		ACell[] pathKeys = parseStringPath(pathStr);
 
 		// Check job-scoped virtual namespace (t/)
@@ -655,7 +655,7 @@ public class CoviaAdapter extends AAdapter {
 		if (to == null) throw new IllegalArgumentException("'to' is required");
 
 		// Reads the source (handleWrite enforces crud/write on the destination).
-		ctx.requireCapability(from, Capability.CRUD_READ);
+		engine.requireAuthority(ctx,from, Capability.CRUD_READ);
 
 		// Read from source via the canonical universal resolver. Caps
 		// enforcement happens inside resolvePath via the cursor it returns.
@@ -674,24 +674,23 @@ public class CoviaAdapter extends AAdapter {
 	/**
 	 * Enforces the capability for a path-targeted lattice mutation at the point
 	 * it executes — the adapter pins the exact resource (the path) and ability,
-	 * so the enforced cap cannot drift from the implementation. A null ceiling
+	 * so the enforced cap cannot drift from the implementation. A null grant scope
 	 * (internal/authenticated callers) is unrestricted, so this is a no-op for
-	 * them; a restricted ceiling (e.g. the public read-only profile) is gated.
+	 * them; a restricted scope (e.g. the public read-only profile) is gated.
 	 */
-	private static void requireCap(RequestContext ctx, ACell input, AString ability) {
+	private void requireCap(RequestContext ctx, ACell input, AString ability) {
 		AString p = RT.ensureString(RT.getIn(input, Fields.PATH));
 		// MUTATIONS target the caller's OWN namespace via bare paths (w/…, o/…).
-		// Cross-user access via a DID-URL path is supported for READS only (gated
-		// by a presented delegation proof in resolveDIDURL); there is no cross-user
-		// write path. Reject a DID-URL mutation target explicitly and early rather
-		// than relying on the downstream writable-namespace check — defence-in-depth
-		// that survives refactors and gives a clear error. Reads fall through to the
-		// proof-gated resolver.
+		// Cross-user access via a DID-URL path is supported for READS only (a
+		// presented delegation proof authorises it through the authority seam);
+		// there is no cross-user write path. Reject a DID-URL mutation target
+		// explicitly and early — defence-in-depth that survives refactors and gives
+		// a clear error. Reads fall through to the proof-gated seam.
 		if (p != null && !Capability.CRUD_READ.equals(ability) && p.toString().startsWith("did:")) {
 			throw new AuthException("Cross-user / DID-URL write paths are not supported: " + p
 				+ " — write to your own namespace via a bare path (e.g. w/…).");
 		}
-		ctx.requireCapability(p, ability);
+		engine.requireAuthority(ctx, p, ability);
 	}
 
 	/**

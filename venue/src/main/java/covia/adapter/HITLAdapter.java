@@ -19,6 +19,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.hitl.HitlValidation;
+import covia.api.Abilities;
 import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -59,7 +60,7 @@ public class HITLAdapter extends AAdapter {
 	private static final Logger log = LoggerFactory.getLogger(HITLAdapter.class);
 
 	/** Delivery ability for cross-user asks: {@code hitl/request} on {@code <target>/h/}. */
-	public static final AString ABILITY_HITL_REQUEST = Strings.intern("hitl/request");
+	public static final AString ABILITY_HITL_REQUEST = Abilities.HITL_REQUEST;
 
 	/** Default lifetime for grants offered without an explicit {@code exp} (7 days). */
 	static final long DEFAULT_GRANT_LIFETIME_SECS = 7 * 24 * 3600L;
@@ -159,11 +160,11 @@ public class HITLAdapter extends AAdapter {
 
 	/** A self-ask is always permitted; delivering into ANOTHER user's inbox
 	 *  requires hitl/request on {@code <target>/h/} — checked against the
-	 *  caller's ceiling AND (cross-user) their presented proofs. */
+	 *  caller's grant scope AND (cross-user) their presented proofs. */
 	private void requireDeliverable(RequestContext ctx, AString caller, AString target) {
 		if (target.equals(caller)) return;
 		AString resource = Strings.create(target + "/h/");
-		ctx.requireCapability(resource, ABILITY_HITL_REQUEST);
+		engine.requireAuthority(ctx,resource, ABILITY_HITL_REQUEST);
 		long now = System.currentTimeMillis() / 1000;
 		if (!CapabilityChecker.proofsCover(ctx.getProofs(), caller, engine.getDIDString(),
 				resource, ABILITY_HITL_REQUEST, now)) {

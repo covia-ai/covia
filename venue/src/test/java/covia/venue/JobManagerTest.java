@@ -123,20 +123,20 @@ public class JobManagerTest {
 	// ========== Capability enforcement ==========
 
 	/**
-	 * invokeInternal enforces the capability ceiling carried by the context —
+	 * invokeInternal enforces the capability scope carried by the context —
 	 * it differs from invokeOperation only in Job creation, never in trust.
-	 * A read outside the ceiling is denied; a read within it proceeds; the
-	 * ceiling is read, never stripped. "Framework-trusted" is expressed by an
+	 * A read outside the scope is denied; a read within it proceeds; the
+	 * scope is read, never stripped. "Framework-trusted" is expressed by an
 	 * unrestricted (null-caps) context, not by choosing this dispatch path.
 	 */
 	@Test
-	public void testInvokeInternalEnforcesContextCeiling() throws Exception {
+	public void testInvokeInternalEnforcesContextScope() throws Exception {
 		AVector<ACell> caps = Vectors.of(Maps.of(
 			Strings.create("with"), Strings.create("w/allowed"),
 			Strings.create("can"),  Strings.create("crud/read")));
 		RequestContext capCtx = ctx.withCaps(caps);
 
-		// Outside the ceiling — denied on the internal path too (no bypass).
+		// Outside the scope — denied on the internal path too (no bypass).
 		CompletableFuture<ACell> denied = engine.jobs().invokeInternal(
 			"v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/forbidden/x")),
@@ -144,9 +144,9 @@ public class JobManagerTest {
 		ExecutionException ex = assertThrows(ExecutionException.class,
 			() -> denied.get(5, TimeUnit.SECONDS));
 		assertTrue(ex.getCause().getMessage().contains("Capability denied"),
-			"invokeInternal must enforce the context ceiling");
+			"invokeInternal must enforce the context scope");
 
-		// Within the ceiling — proceeds; absent path reads {exists: false}.
+		// Within the scope — proceeds; absent path reads {exists: false}.
 		ACell result = engine.jobs().invokeInternal(
 			"v/ops/covia/read",
 			Maps.of(Strings.create("path"), Strings.create("w/allowed")),

@@ -19,7 +19,7 @@ import covia.venue.RequestContext;
  * returns null / false for anything else, so providers compose by namespace.</p>
  *
  * <p><b>Access control is the provider's responsibility</b> — each enforces the
- * same checks its own operations enforce (ceilings, cross-user proofs), and
+ * same checks its own operations enforce (grant scope, cross-user proofs), and
  * throws on denial rather than degrading.</p>
  */
 public interface ContentProvider {

@@ -184,8 +184,8 @@ public class SQLAdapterTest {
 	// ========== Capabilities ==========
 
 	@Test
-	public void testCapabilityDeniedUnderPublicCeiling() {
-		RequestContext capped = ctx.withCaps(CapabilityChecker.readOnlyCeiling(did));
+	public void testCapabilityDeniedUnderPublicScope() {
+		RequestContext capped = ctx.withCaps(CapabilityChecker.readOnlyScope(did));
 		Job denied = engine.jobs().invokeOperation("v/ops/sql/query",
 			Maps.of(Strings.create("db"), Strings.create("db4"),
 				Strings.create("statement"), Strings.create("SELECT 1")),

@@ -28,6 +28,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.adapter.CoviaAdapter;
 import convex.core.util.JSON;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.AContent;
@@ -354,13 +355,13 @@ public class CoviaAPI extends ACoviaAPI {
 	 * bearer proof on the request.
 	 *
 	 * @param ref Asset reference (lattice address or bare hash)
-	 * @param ctx Request context (caller identity, capability ceiling, proofs)
+	 * @param ctx Request context (caller identity, grant scope, proofs)
 	 * @return the resolved Asset, or null if the reference resolves to nothing
 	 *         or to a non-asset value
 	 */
 	private Asset resolveAssetReference(String ref, RequestContext ctx) throws IOException {
 		AString refStr = Strings.create(ref);
-		ctx.requireCapability(refStr, Strings.intern("asset/read"));
+		engine().requireAuthority(ctx,refStr, Abilities.ASSET_READ);
 
 		// Content-addressed forms (bare hex, a/<hash>, did:.../a/<hash>) — fetch
 		// the stored record so the returned bytes are byte-identical to the legacy
@@ -588,10 +589,10 @@ public class CoviaAPI extends ACoviaAPI {
 		ACell input=RT.getIn(req, "input");
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
-		// Attach transport UCAN authority — proofs (cross-user grants) and the
-		// self-attenuation ceiling (#131) — from both channels: the `ucans`
-		// envelope array and an `Authorization: Bearer <ucan-jwt>` (IETF
-		// UCAN-HTTP) stashed by AuthMiddleware as UCAN_BEARER_ATTR.
+		// Attach transport UCAN authority — proofs are additive cross-user grants —
+		// from both channels: the `ucans` envelope array and an
+		// `Authorization: Bearer <ucan-jwt>` (IETF UCAN-HTTP) stashed by
+		// AuthMiddleware as UCAN_BEARER_ATTR.
 		AVector<ACell> ucans = RT.getIn(req, "ucans");
 		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
 		// venueDID enables identity-from-ucans: an anonymous transport carrying a

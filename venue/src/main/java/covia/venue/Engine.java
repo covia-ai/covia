@@ -2107,7 +2107,7 @@ public class Engine {
 	 * <p>Two rights compose, checked in order:</p>
 	 * <ol>
 	 *   <li><b>Ambient public access</b> (covia#254) — a resource owned by the
-	 *       venue's PUBLIC identity follows the public capability ceiling for
+	 *       venue's PUBLIC identity follows the public capability grant scope for
 	 *       ANY caller: an authenticated caller is at least as privileged as
 	 *       the anonymous one. Checked only when the resource is actually
 	 *       public-owned; tracks operator policy ({@code auth.public.caps} —
@@ -2123,16 +2123,67 @@ public class Engine {
 			String r = resource.toString();
 			if (r.equals(publicDIDStr) || r.startsWith(publicDIDStr + "/")) {
 				AString publicDID = Strings.create(publicDIDStr);
-				convex.core.data.AVector<ACell> ceiling = auth.getPublicCeiling(publicDID);
-				// null ceiling = operator-configured unrestricted public access
-				if (ceiling == null || covia.lattice.CapabilityChecker.allows(
-						ceiling, resource, ability, publicDID) == null) {
+				convex.core.data.AVector<ACell> publicScope = auth.getPublicScope(publicDID);
+				// null scope = operator-configured unrestricted public access
+				if (publicScope == null || covia.lattice.CapabilityChecker.allows(
+						publicScope, resource, ability, publicDID) == null) {
 					return true;
 				}
 			}
 		}
 		return covia.lattice.CapabilityChecker.proofsCover(ctx.getProofs(), ctx.getCallerDID(),
 			getDIDString(), resource, ability, System.currentTimeMillis() / 1000);
+	}
+
+	/**
+	 * The single authorisation seam. Does the caller's authority cover
+	 * {@code (resource, ability)}? Grants are <b>additive</b> — <em>either you
+	 * have the right or you don't</em>: an inherent (unrestricted, own-namespace)
+	 * grant, an agent {@code config.caps} grant, or a cross-user proof each
+	 * independently authorise; nothing subtracts. Callers pass the credential (the
+	 * {@link RequestContext}, wrapping an {@code Authority}) and the exact
+	 * resource+ability they guard — all the logic (the {@code null}-scope fast
+	 * path, own-vs-cross-user routing, grant coverage, and proof-chain validation)
+	 * lives here, never at the call site.
+	 */
+	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability) {
+		if (ctx == null) return false;
+		// A cross-user proof (or the public read grant) authorises independently of
+		// the caller's own scope — the additive cross-user grant.
+		if (crossUserAllows(ctx, resource, ability)) return true;
+		// Own-authority scope. A null scope is unrestricted (the fast path);
+		// otherwise a grant in the caller's scope must cover the resource. An
+		// unrestricted caller's cross-user reach is still gated by the adapter's
+		// own cross-user resolver (which routes through crossUserAllows above) —
+		// the fast path skips the scope check, never the proof requirement.
+		if (ctx.getCaps() == null) return true;
+		return ctx.grantsDenial(resource, ability) == null;
+	}
+
+	/**
+	 * Throwing form of {@link #authorityCovers}: enforces the authority at a point
+	 * of action, raising {@link covia.exception.AuthException} with an actionable
+	 * message when the caller's authority does not cover the request.
+	 */
+	public void requireAuthority(RequestContext ctx, AString resource, AString ability) {
+		if (authorityCovers(ctx, resource, ability)) return;
+		String denial = (ctx != null && ctx.getCaps() != null) ? ctx.grantsDenial(resource, ability) : null;
+		throw new covia.exception.AuthException(denial != null ? denial
+			: "Capability denied: requires " + (ability != null ? ability : "(any ability)")
+				+ " on " + (resource != null ? resource : "(any)")
+				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""));
+	}
+
+	/**
+	 * {@link String}-literal convenience overload of
+	 * {@link #requireAuthority(RequestContext, AString, AString)} — mirrors
+	 * {@link RequestContext#requireCapability(String, String)}; the conversion to
+	 * {@link AString} happens here, not at the call site.
+	 */
+	public void requireAuthority(RequestContext ctx, String resource, String ability) {
+		requireAuthority(ctx,
+			resource != null ? Strings.create(resource) : null,
+			ability != null ? Strings.create(ability) : null);
 	}
 
 	// ========== Secret resolution ==========

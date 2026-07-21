@@ -26,24 +26,24 @@ import covia.grid.client.VenueHTTP;
 import covia.venue.server.VenueServer;
 
 /**
- * #148 — the public read-only capability ceiling, end to end through the HTTP
+ * #148 — the public read-only capability scope, end to end through the HTTP
  * auth layer.
  *
  * <p>Verifies the three properties of the secure-by-default public profile:
  * <ol>
  *   <li>an unauthenticated (public) caller may <b>read</b> but may not
  *       <b>mutate</b> or <b>invoke</b> — invoking any operation creates a job
- *       and is therefore resource-consuming, so the read-only ceiling denies it;</li>
- *   <li>authenticating (with no token attenuation) lifts the ceiling;</li>
+ *       and is therefore resource-consuming, so the read-only scope denies it;</li>
+ *   <li>authenticating (with no token attenuation) lifts the scope;</li>
  *   <li>an operator can opt out via {@code auth.public.caps = "unrestricted"}.</li>
  * </ol>
  *
  * <p>The shared {@link TestServer} runs unrestricted (its functional tests
  * invoke as the public caller); this class launches its own venues to exercise
- * the ceiling itself.</p>
+ * the scope itself.</p>
  */
 @TestInstance(Lifecycle.PER_CLASS)
-public class PublicCeilingTest {
+public class PublicScopeTest {
 
 	private static final AString OP_WRITE = Strings.create("v/ops/covia/write");
 	private static final AString OP_READ  = Strings.create("v/ops/covia/read");
@@ -77,19 +77,18 @@ public class PublicCeilingTest {
 	}
 
 	/**
-	 * An authenticated client whose caller carries no attenuation ceiling. The
+	 * An authenticated client whose caller carries no attenuation scope. The
 	 * UCAN is audienced to THIS venue (so it passes audience validation — a real
-	 * bearer must be intended for the venue it is presented to), but its audience
-	 * is not the issuer, so it is not a self-delegation: {@code selfCapabilities}
-	 * → null and the session runs unrestricted. Identity authenticates as the
-	 * issuer DID.
+	 * bearer must be intended for the venue it is presented to). Presented proofs
+	 * are additive grants, never a subtractive scope, so the session runs
+	 * unrestricted; identity authenticates as the issuer DID.
 	 */
 	private static VenueHTTP authed(VenueServer server) {
 		AKeyPair kp = AKeyPair.generate();
 		AString did = UCAN.toDIDKey(kp.getAccountKey());
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		// Audience = THIS venue (its account key's DID), so the token passes
-		// audience validation; aud != iss, so it forms no self-attenuation.
+		// audience validation; the bearer authenticates identity, not a scope.
 		UCAN token = UCAN.create(kp, server.getEngine().getAccountKey(), exp,
 			Vectors.of(Capability.create(Strings.create(did + "/w/"), Capability.CRUD_READ)),
 			Vectors.empty());
@@ -124,7 +123,7 @@ public class PublicCeilingTest {
 	@Test
 	public void anonymousInvokeDeniedByDefault() throws Exception {
 		// Invoking any op creates a job (resource-consuming), so the read-only
-		// ceiling denies it — even an otherwise-harmless echo.
+		// scope denies it — even an otherwise-harmless echo.
 		VenueHTTP pub = anon(secureBase);
 		Job job = pub.invokeAndWait(OP_ECHO, Maps.of(Strings.create("hi"), Strings.create("there")));
 		assertEquals(Status.FAILED, job.getStatus(), "public invoke must be denied");

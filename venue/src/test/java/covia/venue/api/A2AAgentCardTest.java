@@ -215,7 +215,7 @@ public class A2AAgentCardTest {
 		VenueHTTP client = VenueHTTP.create(URI.create(BASE_URL), VenueAuth.bearer(bearerFor(kp)));
 		client.setTimeout(5000);
 
-		// Public agent WITH an explicit a2a.caps ceiling ("unrestricted" for the
+		// Public agent WITH an explicit a2a.caps scope ("unrestricted" for the
 		// test) → an anonymous message/send runs under the owner, bounded by caps.
 		Job withCaps = client.invokeAndWait(Strings.create("v/ops/agent/create"), Maps.of(
 				Strings.create("agentId"), Strings.create("PubChat"),
@@ -264,8 +264,8 @@ public class A2AAgentCardTest {
 		return UCAN.toDIDKey(kp.getAccountKey());
 	}
 
-	/** A bearer token audienced to this venue — authenticates as the key's DID
-	 *  with no self-attenuation (aud != iss). */
+	/** A bearer token audienced to this venue — authenticates as the key's DID;
+	 *  a bearer carries identity, never a grant scope. */
 	private static String bearerFor(AKeyPair kp) {
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		return UCAN.create(kp, TestServer.ENGINE.getAccountKey(), exp, Vectors.empty(), Vectors.empty())

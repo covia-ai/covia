@@ -50,7 +50,7 @@ public class Orchestrator extends AAdapter {
 		// sub-jobs per step. The internal path (LLM tool loop, context
 		// assemble ops — e.g. a skills-bundled pipeline invoked as a tool)
 		// delegates to the Job-aware dispatch — same RequestContext, same
-		// capability ceiling — instead of rejecting the call (#85 fall-out).
+		// grant scope — instead of rejecting the call (#85 fall-out).
 		Job job = engine.jobs().invokeOperation(meta, input, ctx);
 		return job.future().thenApply(x -> x);
 	}

@@ -12,6 +12,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.agent.Skills;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.venue.RequestContext;
 
@@ -29,7 +30,7 @@ import covia.venue.RequestContext;
  * the existing {@code covia:write} (workspace) and {@code asset:store}
  * (immutable assets). Reads pin {@code crud/read} on path sources and
  * {@code asset/read} on content-addressed refs — both inside the anonymous
- * read-only ceiling, so venue skills are publicly discoverable.</p>
+ * read-only grant scope, so venue skills are publicly discoverable.</p>
  */
 public class SkillsAdapter extends AAdapter {
 
@@ -37,7 +38,7 @@ public class SkillsAdapter extends AAdapter {
 	static final AVector<ACell> DEFAULT_SOURCES = Vectors.of(
 		Strings.intern("w/skills"), Strings.intern("v/skills"));
 
-	private static final AString ASSET_READ = Strings.intern("asset/read");
+	private static final AString ASSET_READ = Abilities.ASSET_READ;
 	private static final AString K_SOURCES  = Strings.intern("sources");
 	private static final AString K_REF      = Strings.intern("ref");
 	private static final AString K_BODY     = Strings.intern("body");
@@ -92,7 +93,7 @@ public class SkillsAdapter extends AAdapter {
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		// No authentication precondition: v/skills is publicly discoverable.
 		// The per-source capability pins below do the gating (an anonymous
-		// caller's read-only ceiling covers own-namespace reads + asset/read).
+		// caller's read-only grant scope covers own-namespace reads + asset/read).
 		String command = strInput(input, "command");
 		try {
 			return switch (command) {
@@ -162,7 +163,7 @@ public class SkillsAdapter extends AAdapter {
 		return sources;
 	}
 
-	private static void requireReadCaps(RequestContext ctx, AVector<ACell> sources) {
+	private void requireReadCaps(RequestContext ctx, AVector<ACell> sources) {
 		for (long i = 0; i < sources.count(); i++) {
 			AString source = RT.ensureString(sources.get(i));
 			if (source == null) throw new IllegalArgumentException(
@@ -174,11 +175,11 @@ public class SkillsAdapter extends AAdapter {
 	/** Pins the read capability for one source: {@code asset/read} for
 	 *  content-addressed refs, {@code crud/read} for paths — mirroring
 	 *  AssetAdapter and CoviaAdapter's read pins exactly. */
-	private static void requireReadCap(RequestContext ctx, AString source) {
+	private void requireReadCap(RequestContext ctx, AString source) {
 		if (AssetAdapter.parseAssetId(source) != null) {
-			ctx.requireCapability(source, ASSET_READ);
+			engine.requireAuthority(ctx,source, ASSET_READ);
 		} else {
-			ctx.requireCapability(source, Capability.CRUD_READ);
+			engine.requireAuthority(ctx,source, Capability.CRUD_READ);
 		}
 	}
 

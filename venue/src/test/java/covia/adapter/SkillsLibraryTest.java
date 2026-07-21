@@ -134,7 +134,7 @@ public class SkillsLibraryTest {
 		// invocation (verified live — skill loading grants no authority).
 		ACell config = engine.resolvePath(Strings.create("v/agents/templates/reader"), ctx);
 		AVector<ACell> caps = RT.ensureVector(RT.getIn(config, "caps"));
-		assertNotNull(caps, "reader must pin a capability ceiling");
+		assertNotNull(caps, "reader must pin a capability");
 		assertEquals(2, caps.count());
 		assertEquals("crud/read", RT.getIn(caps.get(0), "can").toString());
 		assertEquals("asset/read", RT.getIn(caps.get(1), "can").toString());

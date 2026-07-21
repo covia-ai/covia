@@ -223,8 +223,8 @@ public class A2A extends ACoviaAPI {
 
 	/**
 	 * True when a non-owner may <em>interact</em> with a public agent — the agent
-	 * is public AND has an explicit {@code a2a.caps} ceiling (COG-14 §5). Public
-	 * without a ceiling is discoverable (card) but not anonymously interactable:
+	 * is public AND has an explicit {@code a2a.caps} grant scope (COG-14 §5). Public
+	 * without one is discoverable (card) but not anonymously interactable:
 	 * running the agent for anonymous callers requires the owner to deliberately
 	 * bound it.
 	 */
@@ -236,10 +236,10 @@ public class A2A extends ACoviaAPI {
 	/**
 	 * The context under which a non-owner's message runs on a public agent: the
 	 * <em>owner's</em> identity (so it resolves the owner's agent) narrowed by the
-	 * {@code a2a.caps} ceiling. {@code "unrestricted"} → no ceiling (full owner
+	 * {@code a2a.caps} grant scope. {@code "unrestricted"} → no scope (full owner
 	 * authority — the owner's explicit, logged choice); a malformed value falls
-	 * back to a read-only ceiling. A ceiling can only narrow, so this is
-	 * escalation-safe.
+	 * back to a read-only scope. A grant scope can only narrow what the caller may
+	 * do, so this is escalation-safe.
 	 */
 	private RequestContext ownerDispatchContext(A2ACodec.AgentRef ref, AgentState agent) {
 		AString ownerDid = Strings.create(ref.ownerDid());
@@ -248,12 +248,12 @@ public class A2A extends ACoviaAPI {
 			log.warn("A2A: public agent {} runs anonymous callers under UNRESTRICTED owner authority", ref.gridAddress());
 			return RequestContext.of(ownerDid);
 		}
-		AVector<ACell> ceiling = RT.ensureVector(caps);
-		if (ceiling == null) {
+		AVector<ACell> scope = RT.ensureVector(caps);
+		if (scope == null) {
 			log.warn("A2A: public agent {} has malformed a2a.caps; falling back to read-only", ref.gridAddress());
-			ceiling = CapabilityChecker.readOnlyCeiling(ownerDid);
+			scope = CapabilityChecker.readOnlyScope(ownerDid);
 		}
-		return RequestContext.of(ownerDid).withCaps(ceiling);
+		return RequestContext.of(ownerDid).withCaps(scope);
 	}
 
 	/**
@@ -278,8 +278,8 @@ public class A2A extends ACoviaAPI {
 		RequestContext caller = AuthMiddleware.callerContext(ctx);
 		boolean owner = isOwner(caller, ref);
 		// The context message/send runs under: the owner as themselves, or — for a
-		// public agent with an explicit a2a.caps ceiling — the owner's identity
-		// narrowed by that ceiling (COG-14 §5). Otherwise, no access (404/403).
+		// public agent with an explicit a2a.caps grant scope — the owner's identity
+		// narrowed by that scope (COG-14 §5). Otherwise, no access (404/403).
 		RequestContext dispatch;
 		if (owner) {
 			dispatch = caller;

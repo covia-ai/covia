@@ -32,6 +32,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
+import covia.api.Abilities;
 import covia.venue.RequestContext;
 import covia.venue.Scheduler;
 import covia.venue.User;
@@ -206,7 +207,7 @@ public class AgentAdapter extends AAdapter {
 		String subOp = getSubOperation(meta);
 		// The task-lifecycle ops are self-scoped — agentId/taskId come from the
 		// RequestContext, never the input — and must stay callable under a
-		// restricted transition ceiling (the requireAgentCap contract): a capped
+		// restricted transition scope (the requireAgentCap contract): a scoped
 		// agent that cannot complete/fail its own task is trapped in the tool
 		// loop until the iteration limit. The invoke gate covers everything else.
 		if (!"completeTask".equals(subOp) && !"failTask".equals(subOp)) requireInvoke(ctx);
@@ -255,7 +256,7 @@ public class AgentAdapter extends AAdapter {
 					// system-of-record action, so the internal path (LLM tool
 					// loop, context assemble ops) delegates to the Job-aware
 					// dispatch and gets a real, owner-attributed Job — same
-					// RequestContext, same capability ceiling. This is the
+					// RequestContext, same grant scope. This is the
 					// delegation pattern `request` established above; the
 					// internal path previously rejected these outright (#85
 					// fall-out), breaking agent ops as LLM tools.
@@ -355,23 +356,23 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * Capability enforcement co-located with the agent op dispatch: each
 	 * user-facing op pins the exact ability it needs on the agent resource
-	 * ({@code g/<agentId>}). A null ceiling (authenticated/internal) is
+	 * ({@code g/<agentId>}). A null grant scope (authenticated/internal) is
 	 * unrestricted (no-op). The internal task-lifecycle ops
 	 * ({@code completeTask}/{@code failTask}) and {@code trigger}/reads are not
 	 * gated here — they fall to the boundary net — so an agent with a restricted
-	 * config ceiling can still complete its own tasks during a transition.
+	 * config scope can still complete its own tasks during a transition.
 	 */
-	private static void requireAgentCap(RequestContext ctx, ACell input, String subOp) {
-		String ability = switch (subOp) {
-			case "create", "fork" -> "agent/create";
-			case "request"        -> "agent/request";
-			case "message", "chat" -> "agent/message";
-			case "delete", "suspend", "resume", "update", "cancelTask", "deleteSession" -> "agent/write";
+	private void requireAgentCap(RequestContext ctx, ACell input, String subOp) {
+		AString ability = switch (subOp) {
+			case "create", "fork" -> Abilities.AGENT_CREATE;
+			case "request"        -> Abilities.AGENT_REQUEST;
+			case "message", "chat" -> Abilities.AGENT_MESSAGE;
+			case "delete", "suspend", "resume", "update", "cancelTask", "deleteSession" -> Abilities.AGENT_WRITE;
 			default -> null; // info/list/context (reads), trigger, completeTask/failTask
 		};
 		if (ability == null) return;
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
-		ctx.requireCapability(agentId != null ? "g/" + agentId : null, ability);
+		engine.requireAuthority(ctx, agentId != null ? Strings.create("g/" + agentId) : null, ability);
 	}
 
 	@Override

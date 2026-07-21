@@ -329,9 +329,9 @@ public abstract class AAdapter {
     /**
      * Asserts the baseline {@link #INVOKE} capability at the adapter's enforcement
      * point. An invoke-class adapter calls this at the top of its dispatch — before
-     * any side effect — so the capability ceiling is checked where the op actually
-     * runs, with no central name-keyed mapping. A {@code null} ceiling
-     * (authenticated/internal) is unrestricted (no-op); a restricted ceiling
+     * any side effect — so the capability check happens where the op actually
+     * runs, with no central name-keyed mapping. A {@code null} grant scope
+     * (authenticated/internal) is unrestricted (no-op); a restricted scope
      * (e.g. the public read-only profile, which withholds {@code invoke}) denies.
      *
      * <p>The checked resource is the caller-supplied operation reference from
@@ -343,11 +343,16 @@ public abstract class AAdapter {
      * invocations where no reference path is available ({@code getOp() == null}
      * → resource-less check, coverable only by the wildcard).</p>
      */
-    protected static void requireInvoke(RequestContext ctx) {
+    protected void requireInvoke(RequestContext ctx) {
         // The framework always supplies a context (at minimum ANONYMOUS); a null
         // ctx only occurs in direct unit-test calls that bypass dispatch — treat
-        // as no enforcement context.
-        if (ctx != null) ctx.requireCapability(ctx.getOp(), INVOKE);
+        // as no enforcement context. Route through the single authority seam so an
+        // invoke grant may be satisfied by a config grant OR a presented proof
+        // (additive); fall back to the scope-only check when no engine is wired
+        // (adapters constructed directly in unit tests).
+        if (ctx == null) return;
+        if (engine != null) engine.requireAuthority(ctx, ctx.getOp(), INVOKE);
+        else ctx.requireCapability(ctx.getOp(), INVOKE);
     }
 
     /**

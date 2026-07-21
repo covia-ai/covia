@@ -65,7 +65,7 @@ public class ValuesApiTest {
 	@BeforeAll
 	public void setup() throws Exception {
 		// A fresh authenticated caller. Audience = the venue (passes validation);
-		// aud != iss, so no self-attenuation → an unrestricted authenticated
+		// a bearer carries identity, never a grant scope → an unrestricted authenticated
 		// session that reads/writes its own workspace. The DID is unique to this
 		// class, isolating its job count from every other test.
 		AKeyPair kp = AKeyPair.generate();

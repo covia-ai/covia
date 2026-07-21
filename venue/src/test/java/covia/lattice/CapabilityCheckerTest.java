@@ -25,8 +25,8 @@ import covia.venue.TestEngine;
  * <p>There is no central name-keyed boundary: each adapter asserts its own cap
  * at its enforcement point (see {@code AdapterCapEnforcementTest}). These tests
  * cover the shared primitives those adapters call — {@link CapabilityChecker#allows}
- * (boundary matching via core's {@code Capability.resourceCovers}), {@code readOnlyCeiling},
- * {@code selfCapabilities}, and {@link RequestContext#requireCapability} — plus
+ * (boundary matching via core's {@code Capability.resourceCovers}), {@code readOnlyScope},
+ * and {@link RequestContext#requireCapability} — plus
  * end-to-end enforcement through {@code JobManager}. Resource/ability prefix
  * matching ultimately delegates to convex-core's {@code Capability.covers},
  * exercised through here.</p>
@@ -57,7 +57,7 @@ public class CapabilityCheckerTest {
 	public void testPublicCallerDenialCarriesAuthHint() {
 		// The public/anonymous identity's denial points to the auth remedy
 		// (covia#206) — scoped to the ":public" caller.
-		AVector<ACell> readOnly = CapabilityChecker.readOnlyCeiling(
+		AVector<ACell> readOnly = CapabilityChecker.readOnlyScope(
 			Strings.create("did:key:zVenue:public"));
 		String pub = CapabilityChecker.allows(readOnly, "w/x", "crud/write",
 			Strings.create("did:key:zVenue:public"));
@@ -66,7 +66,7 @@ public class CapabilityCheckerTest {
 		assertTrue(pub.contains("Authenticate") && pub.contains("UCAN.md"),
 			"public denial must carry the auth hint: " + pub);
 
-		// A capped agent (real DID owner) hitting its own ceiling gets a clean
+		// A capped agent (real DID owner) hitting its own scope gets a clean
 		// message — no misleading "authenticate" advice (it already is
 		// authenticated; it should just handle the denial, #211).
 		String agent = CapabilityChecker.allows(readOnly, "w/x", "crud/write",
@@ -74,7 +74,7 @@ public class CapabilityCheckerTest {
 		assertNotNull(agent);
 		assertTrue(agent.contains("Capability denied"), agent);
 		assertFalse(agent.contains("Authenticate"),
-			"a real identity's own-ceiling denial must stay clean: " + agent);
+			"a real identity's own-scope denial must stay clean: " + agent);
 	}
 
 	// ========== End-to-end enforcement at JobManager ==========
@@ -114,10 +114,10 @@ public class CapabilityCheckerTest {
 	}
 
 	@Test
-	public void testInvokeInternalEnforcesContextCeiling() {
+	public void testInvokeInternalEnforcesContextScope() {
 		// Trust is a property of the context's authority, not the call path.
 		// invokeInternal differs from invokeOperation only in Job creation — both
-		// enforce whatever ceiling the context carries via the adapter's pin.
+		// enforce whatever scope the context carries via the adapter's pin.
 		Engine engine = TestEngine.ENGINE;
 
 		AVector<ACell> caps = Vectors.of(
@@ -133,20 +133,20 @@ public class CapabilityCheckerTest {
 				Maps.of(Fields.PATH, "w/forbidden/doc", Fields.VALUE, Strings.create("nope")), gated)
 				.awaitResult(5000));
 
-		// Internal path: same ceiling, same op — also denied. No call-path bypass.
+		// Internal path: same scope, same op — also denied. No call-path bypass.
 		assertThrows(Exception.class, () ->
 			engine.jobs().invokeInternal("v/ops/covia/write",
 				Maps.of(Fields.PATH, "w/forbidden/doc", Fields.VALUE, Strings.create("nope")), gated)
 				.join(),
-			"invokeInternal must enforce the context ceiling");
+			"invokeInternal must enforce the context scope");
 
-		// Within the ceiling, the internal write succeeds.
+		// Within the scope, the internal write succeeds.
 		ACell ok = engine.jobs().invokeInternal("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/allowed/doc", Fields.VALUE, Strings.create("ok")), gated)
 			.join();
 		assertNotNull(ok);
 
-		// The ceiling stays on the ctx — enforcement reads it, never strips it.
+		// The scope stays on the ctx — enforcement reads it, never strips it.
 		assertEquals(caps, gated.getCaps());
 	}
 
@@ -180,24 +180,24 @@ public class CapabilityCheckerTest {
 
 	@Test
 	public void testAllowsWildcardInvokeGrantCoversEverything() {
-		// Full invoke scope stays a one-liner: {"can":"invoke"} (with omitted)
+		// A full invoke grant stays a one-liner: {"can":"invoke"} (with omitted)
 		// and {"with":"", "can":"invoke"} both cover path-form, hash-form and
 		// resource-less invokes — the documented "restricted paths + full tool
 		// access" recipe keeps working after resource-precision (#211).
 		AVector<ACell> noWith = Vectors.of(
 			Maps.of(Capability.CAN, Strings.create("invoke")));
 		AVector<ACell> emptyWith = caps("", "invoke");
-		for (AVector<ACell> ceiling : java.util.List.of(noWith, emptyWith)) {
-			assertNull(allows(ceiling, "v/test/ops/echo", "invoke"));
-			assertNull(allows(ceiling, "0xdeadbeef", "invoke"));
-			assertNull(allows(ceiling, null, "invoke"));
+		for (AVector<ACell> scope : java.util.List.of(noWith, emptyWith)) {
+			assertNull(allows(scope, "v/test/ops/echo", "invoke"));
+			assertNull(allows(scope, "0xdeadbeef", "invoke"));
+			assertNull(allows(scope, null, "invoke"));
 		}
 	}
 
 	@Test
 	public void testScopedInvokeEndToEnd() {
 		// The op reference the caller supplies reaches requireInvoke via
-		// RequestContext.withOp, so a scoped invoke ceiling admits exactly
+		// RequestContext.withOp, so a scoped invoke grant admits exactly
 		// the named ops and the denial names the op that was blocked.
 		Engine engine = TestEngine.ENGINE;
 		AVector<ACell> invokeCaps = Vectors.of(
@@ -227,16 +227,16 @@ public class CapabilityCheckerTest {
 	// ==================================================================
 
 	@Test
-	public void testAllowsNullCeilingIsUnrestricted() {
-		// null ceiling = full authority (internal/unrestricted callers).
+	public void testAllowsNullScopeIsUnrestricted() {
+		// null scope = full authority (internal/unrestricted callers).
 		assertNull(allows(null, "w/anything", "crud/write"));
 		assertNull(allows(null, "did:key:zOther/w/x", "secret/write"));
 		assertNull(allows(null, null, null));
 	}
 
 	@Test
-	public void testAllowsEmptyCeilingDeniesEverything() {
-		// Empty ceiling grants NOTHING — the crucial distinction from null.
+	public void testAllowsEmptyScopeDeniesEverything() {
+		// Empty scope grants NOTHING — the crucial distinction from null.
 		assertNotNull(allows(Vectors.empty(), "w/x", "crud/read"));
 		assertNotNull(allows(Vectors.empty(), "w/x", "crud/write"));
 		assertNotNull(allows(Vectors.empty(), "v/test/ops/echo", "invoke"));
@@ -244,10 +244,10 @@ public class CapabilityCheckerTest {
 
 	@Test
 	public void testAllowsExactAndPrefix() {
-		AVector<ACell> ceiling = caps("w/notes", "crud/write");
-		assertNull(allows(ceiling, "w/notes", "crud/write"));          // exact
-		assertNull(allows(ceiling, "w/notes/2026/x", "crud/write"));   // child (prefix)
-		assertNotNull(allows(ceiling, "w/other", "crud/write"));       // sibling — denied
+		AVector<ACell> scope = caps("w/notes", "crud/write");
+		assertNull(allows(scope, "w/notes", "crud/write"));          // exact
+		assertNull(allows(scope, "w/notes/2026/x", "crud/write"));   // child (prefix)
+		assertNotNull(allows(scope, "w/other", "crud/write"));       // sibling — denied
 	}
 
 	@Test
@@ -272,19 +272,19 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testAllowsCrossUserResourceDenied() {
 		// An owner-scoped read grant must not reach another identity's resource.
-		AVector<ACell> ceiling = Vectors.of(Capability.create(TEST_OWNER, Capability.CRUD_READ));
-		assertNull(allows(ceiling, "w/notes", "crud/read"));                       // own
-		assertNotNull(allows(ceiling, "did:key:zOther/w/notes", "crud/read"));     // cross-user → denied
+		AVector<ACell> scope = Vectors.of(Capability.create(TEST_OWNER, Capability.CRUD_READ));
+		assertNull(allows(scope, "w/notes", "crud/read"));                       // own
+		assertNotNull(allows(scope, "did:key:zOther/w/notes", "crud/read"));     // cross-user → denied
 	}
 
 	@Test
 	public void testAllowsMultipleCapsAnyMatchWins() {
-		AVector<ACell> ceiling = caps(
+		AVector<ACell> scope = caps(
 			"w/a", "crud/read",
 			"w/b", "crud/write");
-		assertNull(allows(ceiling, "w/b/x", "crud/write"));   // second grant matches
-		assertNull(allows(ceiling, "w/a/x", "crud/read"));    // first grant matches
-		assertNotNull(allows(ceiling, "w/a/x", "crud/write")); // neither grants write on a
+		assertNull(allows(scope, "w/b/x", "crud/write"));   // second grant matches
+		assertNull(allows(scope, "w/a/x", "crud/read"));    // first grant matches
+		assertNotNull(allows(scope, "w/a/x", "crud/write")); // neither grants write on a
 	}
 
 	@Test
@@ -316,11 +316,11 @@ public class CapabilityCheckerTest {
 	public void testAllowsEmptyWithCoversAnyResource() {
 		// An empty `with` grant covers any resource for that ability (used for
 		// content-addressed assets, which are not owner-scoped paths).
-		AVector<ACell> ceiling = Vectors.of(
+		AVector<ACell> scope = Vectors.of(
 			Capability.create(Strings.create(""), Strings.create("asset/read")));
-		assertNull(allows(ceiling, "0xdeadbeef", "asset/read"));
-		assertNull(allows(ceiling, "did:key:zOther/a/0xabc", "asset/read"));
-		assertNotNull(allows(ceiling, "0xdeadbeef", "asset/store")); // wrong ability
+		assertNull(allows(scope, "0xdeadbeef", "asset/read"));
+		assertNull(allows(scope, "did:key:zOther/a/0xabc", "asset/read"));
+		assertNotNull(allows(scope, "0xdeadbeef", "asset/store")); // wrong ability
 	}
 
 	@Test
@@ -356,33 +356,33 @@ public class CapabilityCheckerTest {
 	}
 
 	// ==================================================================
-	// readOnlyCeiling + RequestContext.requireCapability — the public
+	// readOnlyScope + RequestContext.requireCapability — the public
 	// read-only default and the adapter-facing enforcement primitive.
 	// ==================================================================
 
 	@Test
-	public void testReadOnlyCeilingGrantsOnlyReads() {
+	public void testReadOnlyScopeGrantsOnlyReads() {
 		AString did = Strings.create("did:key:zPublic");
-		AVector<ACell> ceiling = CapabilityChecker.readOnlyCeiling(did);
+		AVector<ACell> scope = CapabilityChecker.readOnlyScope(did);
 		// Reads: own/venue lattice + content-addressed assets
-		assertNull(CapabilityChecker.allows(ceiling, "w/x", "crud/read", did));
-		assertNull(CapabilityChecker.allows(ceiling, "v/ops/covia/read", "crud/read", did));
-		assertNull(CapabilityChecker.allows(ceiling, "0xhash", "asset/read", did));
+		assertNull(CapabilityChecker.allows(scope, "w/x", "crud/read", did));
+		assertNull(CapabilityChecker.allows(scope, "v/ops/covia/read", "crud/read", did));
+		assertNull(CapabilityChecker.allows(scope, "0xhash", "asset/read", did));
 		// Every mutating ability denied
-		assertNotNull(CapabilityChecker.allows(ceiling, "w/x", "crud/write", did));
-		assertNotNull(CapabilityChecker.allows(ceiling, "w/x", "crud/delete", did));
-		assertNotNull(CapabilityChecker.allows(ceiling, "s/KEY", "secret/write", did));
-		assertNotNull(CapabilityChecker.allows(ceiling, "g/Bob", "agent/create", did));
-		assertNotNull(CapabilityChecker.allows(ceiling, "0xh", "asset/store", did));
-		assertNotNull(CapabilityChecker.allows(ceiling, "v/test/ops/echo", "invoke", did));
+		assertNotNull(CapabilityChecker.allows(scope, "w/x", "crud/write", did));
+		assertNotNull(CapabilityChecker.allows(scope, "w/x", "crud/delete", did));
+		assertNotNull(CapabilityChecker.allows(scope, "s/KEY", "secret/write", did));
+		assertNotNull(CapabilityChecker.allows(scope, "g/Bob", "agent/create", did));
+		assertNotNull(CapabilityChecker.allows(scope, "0xh", "asset/store", did));
+		assertNotNull(CapabilityChecker.allows(scope, "v/test/ops/echo", "invoke", did));
 		// And no cross-user read
-		assertNotNull(CapabilityChecker.allows(ceiling, "did:key:zOther/w/x", "crud/read", did));
+		assertNotNull(CapabilityChecker.allows(scope, "did:key:zOther/w/x", "crud/read", did));
 	}
 
 	@Test
-	public void testRequireCapabilityEnforcesReadOnlyCeiling() {
+	public void testRequireCapabilityEnforcesReadOnlyScope() {
 		AString did = Strings.create("did:key:zPublic");
-		RequestContext ctx = RequestContext.of(did).withCaps(CapabilityChecker.readOnlyCeiling(did));
+		RequestContext ctx = RequestContext.of(did).withCaps(CapabilityChecker.readOnlyScope(did));
 		assertDoesNotThrow(() -> ctx.requireCapability("w/notes", "crud/read"));
 		assertThrows(AuthException.class, () -> ctx.requireCapability("w/notes", "crud/write"));
 		assertThrows(AuthException.class, () -> ctx.requireCapability("w/notes", "crud/delete"));
@@ -391,8 +391,8 @@ public class CapabilityCheckerTest {
 	}
 
 	@Test
-	public void testRequireCapabilityNullCeilingIsNoOp() {
-		// Authenticated / internal callers carry no ceiling → unrestricted.
+	public void testRequireCapabilityNullScopeIsNoOp() {
+		// Authenticated / internal callers carry no scope → unrestricted.
 		RequestContext ctx = RequestContext.of(Strings.create("did:key:zAlice"));
 		assertDoesNotThrow(() -> ctx.requireCapability("w/anything", "crud/write"));
 		assertDoesNotThrow(() -> ctx.requireCapability("s/KEY", "secret/write"));
@@ -401,28 +401,27 @@ public class CapabilityCheckerTest {
 	@Test
 	public void testAllowsAStringAndStringOverloadsAgree() {
 		AString did = Strings.create("did:key:zPublic");
-		AVector<ACell> ceiling = CapabilityChecker.readOnlyCeiling(did);
+		AVector<ACell> scope = CapabilityChecker.readOnlyScope(did);
 		// The AString-native primary and the String convenience overload must
 		// produce identical verdicts and identical denial messages.
 		assertEquals(
-			CapabilityChecker.allows(ceiling, "w/x", "crud/write", did),
-			CapabilityChecker.allows(ceiling, Strings.create("w/x"), Capability.CRUD_WRITE, did));
-		assertNull(CapabilityChecker.allows(ceiling, Strings.create("w/x"), Capability.CRUD_READ, did));
-		assertNotNull(CapabilityChecker.allows(ceiling, Strings.create("w/x"), Capability.CRUD_WRITE, did));
+			CapabilityChecker.allows(scope, "w/x", "crud/write", did),
+			CapabilityChecker.allows(scope, Strings.create("w/x"), Capability.CRUD_WRITE, did));
+		assertNull(CapabilityChecker.allows(scope, Strings.create("w/x"), Capability.CRUD_READ, did));
+		assertNotNull(CapabilityChecker.allows(scope, Strings.create("w/x"), Capability.CRUD_WRITE, did));
 	}
 
 	@Test
 	public void testRequireCapabilityAStringOverloadEnforces() {
 		AString did = Strings.create("did:key:zPublic");
-		RequestContext ctx = RequestContext.of(did).withCaps(CapabilityChecker.readOnlyCeiling(did));
+		RequestContext ctx = RequestContext.of(did).withCaps(CapabilityChecker.readOnlyScope(did));
 		assertDoesNotThrow(() -> ctx.requireCapability(Strings.create("w/x"), Capability.CRUD_READ));
 		assertThrows(AuthException.class,
 			() -> ctx.requireCapability(Strings.create("w/x"), Capability.CRUD_WRITE));
 	}
 
 	// ==================================================================
-	// Hardenings (Convex #585 mitigation + self-ceiling hygiene + explicit
-	// cross-user write rejection).
+	// Hardenings (Convex #585 mitigation + explicit cross-user write rejection).
 	// ==================================================================
 
 	@Test
@@ -477,7 +476,7 @@ public class CapabilityCheckerTest {
 
 	@Test
 	public void testLegacyDlfsSchemeShorthandCoversOwnDrive() {
-		// A ceiling cap written in the legacy scheme form (dlfs://docs/) must cover
+		// A scope cap written in the legacy scheme form (dlfs://docs/) must cover
 		// the DID-scoped path form the adapter now enforces (dlfs/docs/…), and
 		// vice versa — both canonicalise to <owner>/dlfs/docs/….
 		AString did = Strings.create("did:key:zDlfsCompat");
@@ -499,9 +498,9 @@ public class CapabilityCheckerTest {
 	}
 
 	@Test
-	public void testEmptyWithGrantIsCeilingWildcard() {
+	public void testEmptyWithGrantIsScopeWildcard() {
 		// An empty-`with` grant matches any resource — the venue's asset/read
-		// ceiling relies on it. This wildcard lives only in the ceiling (allows)
+		// scope relies on it. This wildcard lives only in the scope (allows)
 		// path, never in the fail-closed UCAN proof path. Boundary matching for
 		// concrete grants is core's Capability.resourceCovers (Convex #585),
 		// exercised via allows() in testResourceBoundaryViaAllows above.
@@ -513,31 +512,10 @@ public class CapabilityCheckerTest {
 	}
 
 	@Test
-	public void testSelfCapabilitiesStripsEmptyWithCaps() {
-		convex.core.crypto.AKeyPair kp = convex.core.crypto.AKeyPair.generate();
-		AString did = convex.auth.ucan.UCAN.toDIDKey(kp.getAccountKey());
-		long now = System.currentTimeMillis() / 1000;
-		// Self-token (iss == aud == caller) granting a scoped read AND an
-		// empty-`with` wildcard write. The wildcard must not survive into the
-		// derived self-ceiling — it would broaden, not narrow.
-		AVector<ACell> caps = Vectors.of(
-			Capability.create(Strings.create(did + "/w/notes"), Capability.CRUD_READ),
-			Capability.create(Strings.create(""), Capability.CRUD_WRITE));
-		convex.auth.ucan.UCAN token = convex.auth.ucan.UCAN.create(
-			kp, kp.getAccountKey(), now + 3600, caps, Vectors.empty());
-		AVector<ACell> ceiling = CapabilityChecker.selfCapabilities(
-			Vectors.of(token.toMap()), did, did, now);
-
-		assertNotNull(ceiling);
-		assertNull(CapabilityChecker.allows(ceiling, "w/notes", "crud/read", did));        // scoped read survives
-		assertNotNull(CapabilityChecker.allows(ceiling, "w/anything", "crud/write", did)); // empty-with wildcard dropped
-	}
-
-	@Test
 	public void testCrossUserDIDWritePathRejected() {
 		Engine engine = TestEngine.ENGINE;
 		AString did = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
-		RequestContext ctx = RequestContext.of(did); // authenticated, null ceiling
+		RequestContext ctx = RequestContext.of(did); // authenticated, null scope
 		Throwable ex = assertThrows(Throwable.class, () ->
 			engine.jobs().invokeInternal("v/ops/covia/write",
 				Maps.of(Fields.PATH, "did:key:zOtherUser/w/x", Fields.VALUE, Strings.create("v")), ctx).join());
@@ -550,28 +528,28 @@ public class CapabilityCheckerTest {
 	}
 
 	@Test
-	public void testReadOnlyCeilingStopsMutationsEndToEnd() {
+	public void testReadOnlyScopeStopsMutationsEndToEnd() {
 		Engine engine = TestEngine.ENGINE;
 		AString did = convex.auth.ucan.UCAN.toDIDKey(
 			convex.core.crypto.AKeyPair.generate().getAccountKey());
-		RequestContext ctx = RequestContext.of(did).withCaps(CapabilityChecker.readOnlyCeiling(did));
+		RequestContext ctx = RequestContext.of(did).withCaps(CapabilityChecker.readOnlyScope(did));
 
-		// Read under a read-only ceiling is allowed (absent path → exists:false).
+		// Read under a read-only scope is allowed (absent path → exists:false).
 		Job read = engine.jobs().invokeOperation("v/ops/covia/read",
 			Maps.of(Fields.PATH, "w/x"), ctx);
-		assertNotNull(read.awaitResult(5000), "read is allowed under a read-only ceiling");
+		assertNotNull(read.awaitResult(5000), "read is allowed under a read-only scope");
 
 		// Mutations are denied — the adapter fails the Job (observed at awaitResult).
 		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/x", Fields.VALUE, Strings.create("v")), ctx).awaitResult(5000),
-			"write must be denied under a read-only ceiling");
+			"write must be denied under a read-only scope");
 		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/covia/delete",
 			Maps.of(Fields.PATH, "w/x"), ctx).awaitResult(5000),
-			"delete must be denied under a read-only ceiling");
+			"delete must be denied under a read-only scope");
 		// s/ deletes take the delete-only namespace branch (#166) — the capability
 		// gate must still apply there (requireCap runs before the namespace rule).
 		assertThrows(Exception.class, () -> engine.jobs().invokeOperation("v/ops/covia/delete",
 			Maps.of(Fields.PATH, "s/x"), ctx).awaitResult(5000),
-			"secret delete must be denied under a read-only ceiling");
+			"secret delete must be denied under a read-only scope");
 	}
 }

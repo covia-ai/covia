@@ -28,12 +28,12 @@ import covia.venue.TestEngine;
  * <p>Each op is invoked <b>directly</b> on its adapter ({@code invokeFuture}),
  * bypassing {@code JobManager}'s name-keyed boundary net, so these assertions
  * isolate the adapter's own {@code ctx.requireCapability(...)} call: the right
- * resource and the right ability. Under the public read-only ceiling, mutations
+ * resource and the right ability. Under the public read-only scope, mutations
  * are denied and owner-scoped reads are allowed — including DLFS, which is a
  * DID-scoped {@code <did>/dlfs/…} namespace covered by the caller's crud/read
  * grant like {@code /w/}. Only genuinely scheme-qualified {@code file://}
  * resources fall outside the owner-scoped grant, so those reads are denied (the
- * secure default for a public caller). A null ceiling (authenticated/internal)
+ * secure default for a public caller). A null scope (authenticated/internal)
  * is unrestricted — no cap denial on any op.</p>
  */
 @TestInstance(Lifecycle.PER_CLASS)
@@ -41,13 +41,13 @@ public class AdapterCapEnforcementTest {
 
 	private static Engine engine;
 	private static final AString DID = Strings.create("did:key:zCapEnforceTest");
-	private static RequestContext readOnly;     // public read-only ceiling
-	private static RequestContext unrestricted; // null ceiling
+	private static RequestContext readOnly;     // public read-only scope
+	private static RequestContext unrestricted; // null scope
 
 	@BeforeAll
 	public void setup() {
 		engine = TestEngine.ENGINE;
-		readOnly = RequestContext.of(DID).withCaps(CapabilityChecker.readOnlyCeiling(DID));
+		readOnly = RequestContext.of(DID).withCaps(CapabilityChecker.readOnlyScope(DID));
 		unrestricted = RequestContext.of(DID); // no caps
 	}
 
@@ -106,7 +106,7 @@ public class AdapterCapEnforcementTest {
 		assertFalse(capDenied(direct("asset", "get", m(Fields.ID, "0xabc123"), readOnly)));
 	}
 	@Test public void assetStoreNotCapDeniedUnrestricted() {
-		// Null ceiling: no cap denial (may still error for missing metadata).
+		// Null scope: no cap denial (may still error for missing metadata).
 		assertFalse(capDenied(direct("asset", "store", Maps.empty(), unrestricted)));
 	}
 
@@ -118,7 +118,7 @@ public class AdapterCapEnforcementTest {
 		assertFalse(capDenied(direct("skills", "manage", m("command", "list"), readOnly)));
 	}
 	@Test public void skillsReadByAssetRefAllowedUnderReadOnly() {
-		// asset/read is in the ceiling; a missing asset errors but is not a denial.
+		// asset/read is in the scope; a missing asset errors but is not a denial.
 		assertFalse(capDenied(direct("skills", "manage",
 			m("command", "read", "ref", "a/" + "00".repeat(32)), readOnly)));
 	}
@@ -148,7 +148,7 @@ public class AdapterCapEnforcementTest {
 		assertTrue(capDenied(direct("dlfs", "write", m("drive", "d", "path", "x"), readOnly)));
 	}
 	// DLFS is a DID-scoped namespace (<callerDID>/dlfs/…) alongside /w/ and /j/, so a
-	// read-only ceiling's crud/read on the caller's own namespace covers own-drive reads
+	// read-only scope's crud/read on the caller's own namespace covers own-drive reads
 	// — same as lattice reads. (Cross-user reads are gated separately by proofsCover.)
 	@Test public void dlfsReadAllowedUnderReadOnly() {
 		assertFalse(capDenied(direct("dlfs", "read", m("drive", "d", "path", "x"), readOnly)));

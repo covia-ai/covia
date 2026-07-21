@@ -111,7 +111,7 @@ This aligns with `DIDURL` from convex-core — the DID is the authority, the pat
 
 **Canonical vs. shorthand.** A canonical `with` is absolute (owner-named) as above; a **bare** lattice path is shorthand whose owner is implied by context, always the same principal: **the authority whose grant it is**.
 
-- **Agent caps / self-attenuation ceilings**: a bare `w/projects/foo` is the *caller's own* resource; enforcement canonicalises it to `<callerDID>/w/projects/foo` before matching, so bare and DID-URL grants compare identically. The same applies to bare `dlfs/<drive>/…` paths.
+- **Agent caps (config ceilings)**: a bare `w/projects/foo` is the *caller's own* resource; enforcement canonicalises it to `<callerDID>/w/projects/foo` before matching, so bare and DID-URL grants compare identically. The same applies to bare `dlfs/<drive>/…` paths.
 - **Signed UCAN tokens**: a bare `with` means the **token issuer's own** namespace, resolved at evaluation against the token's signed `iss` (`CapabilityChecker.normaliseProofs`, applied inside `proofsCover` recursively per chain hop — a bare path in a re-delegation binds to the re-delegator). A self-sovereign owner can therefore sign bare paths naturally; they can never be reinterpreted against the presenter or the target.
 - **Custodial issuance** (`ucan:issue`): the venue signs, so its `iss` is not the caller — bare paths are absolutised to the *caller's* DID before signing (§4.1). Tokens minted by the venue always carry the canonical form.
 
@@ -457,23 +457,18 @@ This is the "resource owner" root of every delegation chain. The venue
 recognises the caller's DID as owning their namespace without requiring
 a token.
 
-**Narrowing the implicit grant (self-attenuation).** The full grant is the
-default. A caller may *narrow* it for a session by presenting an
-**owner-authored** attenuation — a UCAN the owner signed over its own
-resources (`iss == aud == caller`). The venue takes the union of those caps
-and applies it as a ceiling through the standard enforcement path, so the
-session can do only what the attenuation allows. Because the owner is the
-authority over its own namespace and a ceiling can only *narrow* the implicit
-grant — never widen it — this is escalation-safe: the venue merely enforces
-the restriction the owner chose. With no token presented, the full implicit
-grant stands.
+**Reducing authority.** The full implicit grant is the default, and presented
+proofs are **additive** — a UCAN only ever *adds* a grant, it never subtracts
+from the caller's own authority. There is therefore no wire-level
+self-attenuation: a caller never sends "everything" and then narrows it. To act
+with reduced authority:
 
-A self-attenuation is **owner-signed** — mint it by signing a UCAN with the
-owner's own key (in the embedded/desktop case, the local owner key signs a
-per-launch token that locks the app's session to a subset of the namespace).
-This is distinct from `ucan:issue`, which mints *venue-signed* tokens for
-**cross-user** grants (§5.2); a venue-signed token is not the owner's own
-authority and forms no self-ceiling.
+- **Within a venue** — hand the callee a narrower `Authority`
+  (`Authority.of(did, grants)`). An owner spawning an agent gives it exactly the
+  caps it should start with (its `config.caps`), which the agent may later
+  *augment* with additional grants — e.g. a time-limited token (§5.2).
+- **Externally** — present only the UCANs the request actually needs, never the
+  caller's whole authority.
 
 ### 5.2 Cross-User Access
 
@@ -532,16 +527,15 @@ naturally:
 Granting `crud` (without a verb suffix) covers read+write+delete uniformly;
 trailing-slash on the resource is the conventional way to cover a subtree.
 
-**Own-namespace enforcement (self-ceiling).** The points above are the
-cross-user checks (a *grant* of access to someone else's resource). When a
-caller presents a self-attenuation (§5.1), the same capability check is also
-applied to the caller's **own** operations as a *ceiling*: the op's resource
-and each presented capability's `with` are canonicalised to absolute
-owner-scoped form (a bare `w/health/bp` → `<callerDID>/w/health/bp`; DID-URL
-and `file://`/`dlfs://` left as-is), then matched with `Capability.covers`.
-Own and cross-user resources thus match by one rule. With no token presented,
-the implicit grant stands and no ceiling applies — so token-less callers are
-unaffected.
+**Own-namespace enforcement (ceiling).** The points above are the cross-user
+checks (a *grant* of access to someone else's resource). A caller running under
+a **narrower Authority** — an agent started with `config.caps` (§5.4) — has the
+same capability check applied to its **own** operations as a *ceiling*: the op's
+resource and each grant's `with` are canonicalised to absolute owner-scoped form
+(a bare `w/health/bp` → `<callerDID>/w/health/bp`; DID-URL and `file://`/`dlfs://`
+left as-is), then matched with `Capability.covers`. Own and cross-user resources
+thus match by one rule. A caller with no ceiling (the null-caps fast path) holds
+the full implicit grant and is unaffected.
 
 ### 5.4 Agent Identity Models
 
@@ -706,8 +700,8 @@ Two complementary checks apply, both built on the same `Capability.covers`
 matcher over canonical owner-scoped resources (§3.1):
 
 - **`CapabilityChecker`** enforces a *ceiling* — the agent's config `caps`
-  and any presented self-attenuation (§5.1) — on every operation (`enforceCaps`
-  at job dispatch, and before each tool call). A ceiling can only narrow.
+  (§5.4) — on every operation (`enforceCaps` at job dispatch, and before each
+  tool call). A ceiling can only narrow.
 - **`CoviaAdapter.verifyProofs()`** authorises *cross-user* access against
   presented proofs (§5.2). A proof grants reach into another namespace.
 
@@ -918,19 +912,6 @@ so there are no mode flags or auth fields anywhere:
 - `ucan:verify` canonicalises bare queried resources against the audience
   so diagnostics match enforcement
 - Verification remains grant-agnostic — `grant/…` binds production only
-
-### Phase C1b: Self-attenuation on the direct invoke path ✓ (#131)
-
-- A presented owner-authored UCAN narrows the caller's own implicit grant (§5.1)
-- `enforceCaps` matches caps against **canonical owner-scoped resources** —
-  bare own-paths resolve to `<callerDID>/…`, the same convention as cross-user
-  (§3.1, §5.3); config caps and token caps interoperate
-- Selection reuses `UCANValidator.capabilitiesFor` (convex-core);
-  `CapabilityChecker.selfCapabilities` delegates to it and adds only the
-  self-attenuation narrow-only guard (drop empty-`with`)
-- Escalation-safe: a ceiling can only narrow, never widen
-- Both invoke transports (REST, MCP) attach it via one seam,
-  `AuthMiddleware.withTransportAuth`
 
 ### Phase C2: Delegation Chains
 
