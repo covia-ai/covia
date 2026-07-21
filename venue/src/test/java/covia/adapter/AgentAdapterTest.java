@@ -2372,7 +2372,7 @@ public class AgentAdapterTest {
 	@SuppressWarnings("unchecked")
 	public void testToolFailureRecordedAndVisibleInContext() {
 		// toolllm calls v/test/ops/echo once, then reports the tool result as
-		// text. The ceiling's invoke grant does not cover echo → denial.
+		// text. The scope's invoke grant does not cover echo → denial.
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(
@@ -4238,9 +4238,9 @@ public class AgentAdapterTest {
 		assertNull(agent.getSession(sid), "session record should be gone");
 	}
 
-	/** The read-only public ceiling denies deleteSession (agent/write). */
+	/** The read-only public scope denies deleteSession (agent/write). */
 	@Test
-	public void testDeleteSessionDeniedUnderReadOnlyCeiling() {
+	public void testDeleteSessionDeniedUnderReadOnlyScope() {
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",
 			Maps.of(Fields.AGENT_ID, "del-cap-agent"),
@@ -4253,14 +4253,14 @@ public class AgentAdapterTest {
 		AString sidHex = RT.ensureString(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
 
 		RequestContext readOnly = RequestContext.of(ALICE_DID)
-			.withCaps(covia.lattice.CapabilityChecker.readOnlyCeiling(ALICE_DID));
+			.withCaps(covia.lattice.CapabilityChecker.readOnlyScope(ALICE_DID));
 		Job del = engine.jobs().invokeOperation(
 			"v/ops/agent/delete-session",
 			Maps.of(Fields.AGENT_ID, "del-cap-agent", Fields.SESSION_ID, sidHex),
 			readOnly);
 		try {
 			del.awaitResult(5000);
-			fail("read-only ceiling should deny deleteSession");
+			fail("read-only scope should deny deleteSession");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, del.getStatus());
 		}

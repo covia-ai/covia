@@ -13,7 +13,7 @@ import convex.core.data.Vectors;
 
 /**
  * Unit coverage for the unified {@code Engine.authorityCovers} seam: the
- * {@code null}-caps fast path (unrestricted ceiling), config-grant coverage, and
+ * {@code null}-caps fast path (unrestricted scope), config-grant coverage, and
  * the additive routing (a config-capped caller needs a proof for a resource its
  * config does not grant). Proof-backed cross-user access is exercised end-to-end
  * by AccessControlTest / CoviaAdapterTest / DLFSCrossUserTest.
@@ -29,11 +29,11 @@ public class AuthorityCoversTest {
 	@Test
 	public void testNullCapsUnrestricted() {
 		AString alice = TestEngine.uniqueDID("own-alice");
-		RequestContext ctx = RequestContext.of(alice);   // null caps → unrestricted ceiling
+		RequestContext ctx = RequestContext.of(alice);   // null caps → unrestricted scope
 		assertTrue(ENGINE.authorityCovers(ctx, Strings.create("w/x"), Capability.CRUD_WRITE));
 		assertTrue(ENGINE.authorityCovers(ctx, Strings.create("o/y"), Capability.CRUD_READ));
-		// content-addressed asset read — unrestricted at the ceiling (the adapter's
-		// resolver, not the ceiling, is the gate for any cross-user reach)
+		// content-addressed asset read — unrestricted at the scope (the adapter's
+		// resolver, not the scope, is the gate for any cross-user reach)
 		assertTrue(ENGINE.authorityCovers(ctx,
 			Strings.create(ENGINE.getDIDString() + "/a/00"), Capability.CRUD_READ));
 	}
@@ -56,7 +56,7 @@ public class AuthorityCoversTest {
 		AString bob = TestEngine.uniqueDID("xu-bob");
 		RequestContext ctx = withCaps(RequestContext.of(alice),
 			Capability.create(Strings.create("w/reports"), Capability.CRUD_READ));
-		// config-capped, cross-user resource, no proof → denied (ceiling denies, no proof)
+		// config-capped, cross-user resource, no proof → denied (scope denies, no proof)
 		assertFalse(ENGINE.authorityCovers(ctx, Strings.create(bob + "/w/x"), Capability.CRUD_READ));
 	}
 }

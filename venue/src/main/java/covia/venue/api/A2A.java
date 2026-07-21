@@ -251,7 +251,7 @@ public class A2A extends ACoviaAPI {
 		AVector<ACell> scope = RT.ensureVector(caps);
 		if (scope == null) {
 			log.warn("A2A: public agent {} has malformed a2a.caps; falling back to read-only", ref.gridAddress());
-			scope = CapabilityChecker.readOnlyCeiling(ownerDid);
+			scope = CapabilityChecker.readOnlyScope(ownerDid);
 		}
 		return RequestContext.of(ownerDid).withCaps(scope);
 	}

@@ -2123,7 +2123,7 @@ public class Engine {
 			String r = resource.toString();
 			if (r.equals(publicDIDStr) || r.startsWith(publicDIDStr + "/")) {
 				AString publicDID = Strings.create(publicDIDStr);
-				convex.core.data.AVector<ACell> publicScope = auth.getPublicCeiling(publicDID);
+				convex.core.data.AVector<ACell> publicScope = auth.getPublicScope(publicDID);
 				// null scope = operator-configured unrestricted public access
 				if (publicScope == null || covia.lattice.CapabilityChecker.allows(
 						publicScope, resource, ability, publicDID) == null) {

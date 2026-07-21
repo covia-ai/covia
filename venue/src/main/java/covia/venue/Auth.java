@@ -151,7 +151,7 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 * The capability grant scope applied to unauthenticated (public) callers,
 	 * scoped to {@code publicDID}. Operator policy via {@code auth.public.caps}:
 	 * unconfigured → the secure read-only default
-	 * ({@link CapabilityChecker#readOnlyCeiling}); the literal
+	 * ({@link CapabilityChecker#readOnlyScope}); the literal
 	 * {@code "unrestricted"} → no scope (legacy full access); an explicit
 	 * capability vector → that scope. Malformed config fails safe to read-only.
 	 *
@@ -159,13 +159,13 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	 *                  used to scope the default read grant
 	 * @return the grant-scope vector, or null for "unrestricted"
 	 */
-	public AVector<ACell> getPublicCeiling(AString publicDID) {
-		if (publicCapsConfig == null) return CapabilityChecker.readOnlyCeiling(publicDID);
+	public AVector<ACell> getPublicScope(AString publicDID) {
+		if (publicCapsConfig == null) return CapabilityChecker.readOnlyScope(publicDID);
 		if (publicCapsConfig instanceof AString s && "unrestricted".equals(s.toString())) return null;
 		AVector<ACell> caps = RT.ensureVector(publicCapsConfig);
 		if (caps != null) return caps;
 		log.warn("auth.public.caps is malformed ({}); defaulting to read-only", publicCapsConfig);
-		return CapabilityChecker.readOnlyCeiling(publicDID);
+		return CapabilityChecker.readOnlyScope(publicDID);
 	}
 
 	/**

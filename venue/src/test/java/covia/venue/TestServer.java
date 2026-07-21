@@ -42,7 +42,7 @@ public class TestServer {
 						// Functional tests exercise operations as the public caller,
 						// so run public access unrestricted here. The secure read-only
 						// default and authenticated access are covered explicitly by
-						// PublicCeilingTest.
+						// PublicScopeTest.
 						Config.CAPS,Strings.create("unrestricted"))
 				)));
 		PORT=SERVER.port();

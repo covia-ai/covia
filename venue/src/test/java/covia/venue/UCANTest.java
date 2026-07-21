@@ -76,10 +76,10 @@ public class UCANTest {
 
 	@Test
 	public void testNoTokenIsUnrestricted() {
-		// No bearer/ucans → no ceiling → full authority over own namespace.
-		// Presented proofs are additive grants, never a subtractive self-ceiling:
-		// to act with reduced authority, use a narrower Authority (Authority.of(
-		// did, grants)) or present only the UCANs the request needs.
+		// No bearer/ucans → no scope → full authority over own namespace.
+		// Presented proofs are additive grants, never subtractive: to act with
+		// reduced authority, use a narrower Authority (Authority.of(did, grants))
+		// or present only the UCANs the request needs.
 		RequestContext rctx = AuthMiddleware.withTransportAuth(
 			RequestContext.of(ALICE_DID), null, null);
 		assertNull(rctx.getCaps());

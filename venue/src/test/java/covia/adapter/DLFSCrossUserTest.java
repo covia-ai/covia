@@ -133,10 +133,10 @@ public class DLFSCrossUserTest {
 
 	@Test
 	public void testConfigCappedCallerUsesProofAdditively() {
-		// Alice is capped to read only her own w/reports — her ceiling does NOT
+		// Alice is capped to read only her own w/reports — her scope does NOT
 		// reach Bob's namespace. A self-sovereign proof from Bob grants her read of
 		// his resource; under the additive model that authorises regardless of her
-		// ceiling. This is the core behaviour change, checked at the seam directly.
+		// scope. This is the core behaviour change, checked at the seam directly.
 		AVector<ACell> aliceCaps = Vectors.of(
 			Capability.create(Strings.create("w/reports"), Capability.CRUD_READ));
 		AString bobResource = Strings.create(BOB_DID + "/dlfs/docs/shared/report.md");
@@ -147,9 +147,9 @@ public class DLFSCrossUserTest {
 		RequestContext cappedWithProof = withProofs(cappedNoProof, bobGrant);
 
 		assertFalse(engine.authorityCovers(cappedNoProof, bobResource, Capability.CRUD_READ),
-			"capped caller, no proof — the ceiling does not reach Bob");
+			"capped caller, no proof — the scope does not reach Bob");
 		assertTrue(engine.authorityCovers(cappedWithProof, bobResource, Capability.CRUD_READ),
-			"capped caller + valid proof — additive, authorised despite the ceiling");
+			"capped caller + valid proof — additive, authorised despite the scope");
 	}
 
 	// ========== Self-sovereign + delegation chains (covia#196) ==========

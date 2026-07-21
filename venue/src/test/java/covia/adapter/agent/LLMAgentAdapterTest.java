@@ -907,7 +907,7 @@ public class LLMAgentAdapterTest {
 	public void testCappedAgentCanCompleteTask() {
 		// Regression (covia#71 live testing): the task-lifecycle ops are
 		// self-scoped (agentId/taskId from the RequestContext) and must stay
-		// callable under a restricted config ceiling. A blanket invoke gate on
+		// callable under a restricted config scope. A blanket invoke gate on
 		// AgentAdapter.invokeFuture once denied complete_task to any capped
 		// agent, trapping every capped worker in the tool loop until the
 		// iteration limit — a capped pipeline could never finish a task.
@@ -918,7 +918,7 @@ public class LLMAgentAdapterTest {
 				Fields.CONFIG, Maps.of(
 					Fields.OPERATION, "v/ops/llmagent/chat",
 					"llmOperation", "v/test/ops/taskllm",
-					// Restricted ceiling: one read grant, no invoke ability.
+					// Restricted scope: one read grant, no invoke ability.
 					"caps", Vectors.of(Maps.of(
 						"with", Strings.create("w/allowed/"),
 						"can", Strings.create("crud/read"))))

@@ -97,9 +97,9 @@ public class MCPBridgeTest {
 
 	@Test
 	public void testVenueScopeRequiresManageAbility() {
-		// A caller under the public read-only ceiling must be denied venue scope
+		// A caller under the public read-only scope must be denied venue scope
 		RequestContext capped = RequestContext.of(ALICE_DID)
-			.withCaps(CapabilityChecker.readOnlyCeiling(ALICE_DID));
+			.withCaps(CapabilityChecker.readOnlyScope(ALICE_DID));
 		Job denied = addServer("selfc", TestServer.BASE_URL, "venue", capped);
 		assertThrows(Exception.class, () -> denied.awaitResult(15000));
 		assertEquals(Status.FAILED, denied.getStatus());
@@ -247,7 +247,7 @@ public class MCPBridgeTest {
 	@Test
 	public void testAddToolVenuePathRequiresManage() {
 		RequestContext capped = RequestContext.of(ALICE_DID)
-			.withCaps(CapabilityChecker.readOnlyCeiling(ALICE_DID));
+			.withCaps(CapabilityChecker.readOnlyScope(ALICE_DID));
 		Job denied = addTool("v/ops/mcptest/echo", "test_echo", capped);
 		assertThrows(Exception.class, () -> denied.awaitResult(15000));
 		assertEquals(Status.FAILED, denied.getStatus());

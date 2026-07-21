@@ -279,7 +279,7 @@ public class CapabilityChecker {
 	 *                 non-null (e.g. the venue public DID, {@code "<venueDID>:public"});
 	 *                 a null scope would yield an unscoped, over-broad grant
 	 */
-	public static AVector<ACell> readOnlyCeiling(AString scopeDID) {
+	public static AVector<ACell> readOnlyScope(AString scopeDID) {
 		return Vectors.of(
 			Capability.create(scopeDID, Capability.CRUD_READ),
 			Capability.create(Strings.create(""), Abilities.ASSET_READ));

@@ -80,7 +80,7 @@ public class AuthMiddleware {
 	private final Auth venueAuth;
 	private final Map<String, OAuthConfig> externalProviders;
 	private final boolean publicAccessEnabled;
-	private final AVector<ACell> publicCeiling;
+	private final AVector<ACell> publicScope;
 	private final String audiencePolicy;                  // "verify" | "require"
 	private final java.util.Set<String> acceptedAudiences;
 
@@ -95,7 +95,7 @@ public class AuthMiddleware {
 		// Capability grant scope for public callers — secure read-only by default,
 		// operator-overridable via auth.public.caps. Only relevant when public
 		// access is enabled (otherwise every anonymous request is 401'd).
-		this.publicCeiling = publicAccessEnabled ? auth.getPublicCeiling(publicDID) : null;
+		this.publicScope = publicAccessEnabled ? auth.getPublicScope(publicDID) : null;
 		// Accepted JWT audiences: the venue's own published DID (whatever its
 		// method — did:key, did:web, …) plus any operator allowlist. A bearer
 		// token's `aud` must name one of these (RFC 7519 §4.1.3), so a token
@@ -200,7 +200,7 @@ public class AuthMiddleware {
 	 */
 	private void markPublic(Context ctx) {
 		ctx.attribute(CALLER_DID_ATTR, publicDID);
-		if (publicCeiling != null) ctx.attribute(CALLER_CAPS_ATTR, publicCeiling);
+		if (publicScope != null) ctx.attribute(CALLER_CAPS_ATTR, publicScope);
 	}
 
 	void extractIdentity(Context ctx) {
