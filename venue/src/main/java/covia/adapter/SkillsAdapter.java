@@ -12,6 +12,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.agent.Skills;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.venue.RequestContext;
 
@@ -37,7 +38,7 @@ public class SkillsAdapter extends AAdapter {
 	static final AVector<ACell> DEFAULT_SOURCES = Vectors.of(
 		Strings.intern("w/skills"), Strings.intern("v/skills"));
 
-	private static final AString ASSET_READ = Strings.intern("asset/read");
+	private static final AString ASSET_READ = Abilities.ASSET_READ;
 	private static final AString K_SOURCES  = Strings.intern("sources");
 	private static final AString K_REF      = Strings.intern("ref");
 	private static final AString K_BODY     = Strings.intern("body");

@@ -17,6 +17,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Asset;
 import covia.venue.AssetStore;
@@ -75,7 +76,7 @@ public class AssetAdapter extends AAdapter {
 
 	@SuppressWarnings("unchecked")
 	private ACell handleStore(ACell input, RequestContext ctx) {
-		engine.requireAuthority(ctx,Strings.create(""), Strings.intern("asset/store"));
+		engine.requireAuthority(ctx,Strings.create(""), Abilities.ASSET_STORE);
 		ACell metaCell = RT.getIn(input, Fields.METADATA);
 		// Accept metadata as a JSON object or a JSON string (parsed on the fly).
 		// NB: instanceof check on the parsed value is required because RT.castMap(null)
@@ -219,7 +220,7 @@ public class AssetAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private ACell handleGet(ACell input, RequestContext ctx) {
 		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
-		engine.requireAuthority(ctx,idStr, Strings.intern("asset/read"));
+		engine.requireAuthority(ctx,idStr, Abilities.ASSET_READ);
 		if (idStr == null) throw new IllegalArgumentException("id is required");
 
 		// Hash-form refs go through the CAS record (preserves the canonical
@@ -249,7 +250,7 @@ public class AssetAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private ACell handleContent(ACell input, RequestContext ctx) {
 		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
-		engine.requireAuthority(ctx,idStr, Strings.intern("asset/read"));
+		engine.requireAuthority(ctx,idStr, Abilities.ASSET_READ);
 		if (idStr == null) throw new IllegalArgumentException("id is required");
 
 		// Unified reference-addressed resolution first: DLFS is an alternative
@@ -325,7 +326,7 @@ public class AssetAdapter extends AAdapter {
 
 	@SuppressWarnings("unchecked")
 	private ACell handleList(ACell input, RequestContext ctx) {
-		engine.requireAuthority(ctx,Strings.create(""), Strings.intern("asset/read"));
+		engine.requireAuthority(ctx,Strings.create(""), Abilities.ASSET_READ);
 		long offset = 0, limit = 100;
 		ACell offsetCell = RT.getIn(input, Fields.OFFSET);
 		if (offsetCell instanceof CVMLong l) offset = Math.max(0, l.longValue());
@@ -396,7 +397,7 @@ public class AssetAdapter extends AAdapter {
 		AString pathStr = RT.ensureString(RT.getIn(input, Fields.PATH));
 		if (pathStr == null) pathStr = RT.ensureString(RT.getIn(input, Fields.ID));
 		if (pathStr == null) throw new IllegalArgumentException("path is required");
-		engine.requireAuthority(ctx,pathStr, Strings.intern("asset/store"));
+		engine.requireAuthority(ctx,pathStr, Abilities.ASSET_STORE);
 
 		AString metaString;
 		ACell content = null;

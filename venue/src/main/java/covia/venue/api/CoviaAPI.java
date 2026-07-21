@@ -28,6 +28,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.adapter.CoviaAdapter;
 import convex.core.util.JSON;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.AContent;
@@ -360,7 +361,7 @@ public class CoviaAPI extends ACoviaAPI {
 	 */
 	private Asset resolveAssetReference(String ref, RequestContext ctx) throws IOException {
 		AString refStr = Strings.create(ref);
-		engine().requireAuthority(ctx,refStr, Strings.intern("asset/read"));
+		engine().requireAuthority(ctx,refStr, Abilities.ASSET_READ);
 
 		// Content-addressed forms (bare hex, a/<hash>, did:.../a/<hash>) — fetch
 		// the stored record so the returned bytes are byte-identical to the legacy

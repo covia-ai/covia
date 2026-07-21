@@ -1,0 +1,29 @@
+package covia.api;
+
+import convex.core.data.AString;
+import convex.core.data.Strings;
+
+/**
+ * Shared covia capability abilities — the {@code can} of a UCAN grant.
+ *
+ * <p>One home for the covia-specific ability strings so they are never
+ * inline-interned or duplicated per adapter. The generic CRUD abilities
+ * ({@code crud/read}, {@code crud/write}, {@code crud/delete}) and {@code invoke}
+ * live on {@link convex.auth.ucan.Capability}; these are the covia-domain
+ * additions on top.</p>
+ */
+public final class Abilities {
+
+	private Abilities() {}
+
+	public static final AString ASSET_READ    = Strings.intern("asset/read");
+	public static final AString ASSET_STORE   = Strings.intern("asset/store");
+	public static final AString SECRET_WRITE  = Strings.intern("secret/write");
+	public static final AString MCP_MANAGE    = Strings.intern("mcp/manage");
+	public static final AString HITL_REQUEST  = Strings.intern("hitl/request");
+	public static final AString AGENT_MESSAGE = Strings.intern("agent/message");
+	public static final AString AGENT_WRITE   = Strings.intern("agent/write");
+
+	/** The venue-scoped MCP management resource guarded by {@link #MCP_MANAGE}. */
+	public static final AString V_MCP = Strings.intern("v/mcp");
+}

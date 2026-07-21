@@ -19,6 +19,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.hitl.HitlValidation;
+import covia.api.Abilities;
 import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -59,7 +60,7 @@ public class HITLAdapter extends AAdapter {
 	private static final Logger log = LoggerFactory.getLogger(HITLAdapter.class);
 
 	/** Delivery ability for cross-user asks: {@code hitl/request} on {@code <target>/h/}. */
-	public static final AString ABILITY_HITL_REQUEST = Strings.intern("hitl/request");
+	public static final AString ABILITY_HITL_REQUEST = Abilities.HITL_REQUEST;
 
 	/** Default lifetime for grants offered without an explicit {@code exp} (7 days). */
 	static final long DEFAULT_GRANT_LIFETIME_SECS = 7 * 24 * 3600L;

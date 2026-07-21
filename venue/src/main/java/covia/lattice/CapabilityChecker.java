@@ -11,6 +11,7 @@ import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 
 /**
  * Checks agent tool calls against declared capability attenuations.
@@ -342,7 +343,7 @@ public class CapabilityChecker {
 	public static AVector<ACell> readOnlyCeiling(AString scopeDID) {
 		return Vectors.of(
 			Capability.create(scopeDID, Capability.CRUD_READ),
-			Capability.create(Strings.create(""), Strings.create("asset/read")));
+			Capability.create(Strings.create(""), Abilities.ASSET_READ));
 	}
 
 	/**
