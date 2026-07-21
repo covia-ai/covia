@@ -301,13 +301,13 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 * caller by the ceiling check; a null ceiling (authenticated/internal) is
 	 * unrestricted (no-op).
 	 */
-	private static void requireDlfsCap(RequestContext ctx, String subOp, AMap<AString, ACell> input) {
+	private void requireDlfsCap(RequestContext ctx, String subOp, AMap<AString, ACell> input) {
 		AString ability = abilityFor(subOp);
 		if (ability == null) return;
 		AString drive = RT.ensureString(RT.getIn(input, FIELD_DRIVE));
 		if (drive == null) drive = RT.ensureString(RT.getIn(input, FIELD_NAME));
 		String resource = dlfsResource(null, drive, RT.ensureString(RT.getIn(input, FIELD_PATH)));
-		ctx.requireCapability(Strings.create(resource), ability);
+		engine.requireAuthority(ctx, Strings.create(resource), ability);
 	}
 
 	/**
@@ -364,7 +364,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 				"Access denied: no " + ability + " capability for " + resource);
 			driveCtx = RequestContext.of(fr.ownerDID());
 		} else {
-			ctx.requireCapability(Strings.create(
+			engine.requireAuthority(ctx, Strings.create(
 				dlfsResource(null, Strings.create(fr.drive()), Strings.create(fr.path()))),
 				ability);
 		}

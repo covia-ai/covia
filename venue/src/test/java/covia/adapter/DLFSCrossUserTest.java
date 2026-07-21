@@ -129,6 +129,29 @@ public class DLFSCrossUserTest {
 		return token.toMap();
 	}
 
+	// ========== Additive authority (config grant OR proof) ==========
+
+	@Test
+	public void testConfigCappedCallerUsesProofAdditively() {
+		// Alice is capped to read only her own w/reports — her ceiling does NOT
+		// reach Bob's namespace. A self-sovereign proof from Bob grants her read of
+		// his resource; under the additive model that authorises regardless of her
+		// ceiling. This is the core behaviour change, checked at the seam directly.
+		AVector<ACell> aliceCaps = Vectors.of(
+			Capability.create(Strings.create("w/reports"), Capability.CRUD_READ));
+		AString bobResource = Strings.create(BOB_DID + "/dlfs/docs/shared/report.md");
+		AMap<AString, ACell> bobGrant = ownerToken(BOB_KP, ALICE_DID,
+			BOB_DID + "/dlfs/docs/", "crud/read", 3600);
+
+		RequestContext cappedNoProof = RequestContext.of(ALICE_DID).withCaps(aliceCaps);
+		RequestContext cappedWithProof = withProofs(cappedNoProof, bobGrant);
+
+		assertFalse(engine.authorityCovers(cappedNoProof, bobResource, Capability.CRUD_READ),
+			"capped caller, no proof — the ceiling does not reach Bob");
+		assertTrue(engine.authorityCovers(cappedWithProof, bobResource, Capability.CRUD_READ),
+			"capped caller + valid proof — additive, authorised despite the ceiling");
+	}
+
 	// ========== Self-sovereign + delegation chains (covia#196) ==========
 
 	@Test
