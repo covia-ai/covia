@@ -275,7 +275,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 * Builds a DLFS capability resource in plain DID-URL path form:
 	 * {@code [<ownerDID>/]dlfs/<drive>[/<path>]}. A null {@code ownerDID} yields the
 	 * bare own form ({@code dlfs/<drive>/…}, canonicalised to the caller by the
-	 * ceiling check); a non-null owner yields the cross-user form. This is a single
+	 * grant-scope check); a non-null owner yields the cross-user form. This is a single
 	 * well-formed DID URL (CAD038 DID-scoped path) — {@code /dlfs/} is a namespace
 	 * segment alongside {@code /w/} and {@code /j/} — so {@code RootAuthorityPolicy}
 	 * derives the owner with no special cases, unlike the old {@code dlfs://} scheme
@@ -298,7 +298,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 * Own-namespace capability enforcement co-located with the DLFS op dispatch.
 	 * The resource is the {@code dlfs/<drive>/<path>} path form (drive named via
 	 * {@code drive}, or {@code name} for drive-level ops), canonicalised to the
-	 * caller by the ceiling check; a null ceiling (authenticated/internal) is
+	 * caller by the grant-scope check; a null grant scope (authenticated/internal) is
 	 * unrestricted (no-op).
 	 */
 	private void requireDlfsCap(RequestContext ctx, String subOp, AMap<AString, ACell> input) {
@@ -344,7 +344,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	/**
 	 * Resolves a DID-scoped DLFS file reference to a drive {@link Path},
 	 * enforcing exactly the checks the corresponding op enforces for
-	 * {@code ability}: the caller's own ceiling for an own drive; the
+	 * {@code ability}: the caller's own grant scope for an own drive; the
 	 * cross-user proof gate ({@link CapabilityChecker#proofsCover} on
 	 * {@code <owner>/dlfs/<drive>/<path>}) for another user's drive. Returns
 	 * null when {@code ref} is not DLFS-shaped; throws (never degrades) on
@@ -400,7 +400,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	/**
 	 * {@link covia.venue.storage.ContentProvider} write: stores bytes at a
 	 * DID-scoped DLFS path under the same checks as {@code dlfs:write} — the
-	 * caller's own ceiling ({@code crud/write}) for an own drive, the
+	 * caller's own grant scope ({@code crud/write}) for an own drive, the
 	 * cross-user proof gate for another user's (the mutation lands under the
 	 * owner's key, custodial). False for non-DLFS reference shapes.
 	 */
@@ -488,7 +488,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 				authorizeCrossUser(ctx, subOp, target, input);
 				driveCtx = RequestContext.of(target.ownerDID());
 			} else {
-				// Own drive addressed explicitly by DID — normal own-ceiling check.
+				// Own drive addressed explicitly by DID — normal own-scope check.
 				requireDlfsCap(ctx, subOp, input);
 			}
 		} else {

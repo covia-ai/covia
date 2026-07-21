@@ -30,7 +30,7 @@ import covia.venue.RequestContext;
  * the existing {@code covia:write} (workspace) and {@code asset:store}
  * (immutable assets). Reads pin {@code crud/read} on path sources and
  * {@code asset/read} on content-addressed refs — both inside the anonymous
- * read-only ceiling, so venue skills are publicly discoverable.</p>
+ * read-only grant scope, so venue skills are publicly discoverable.</p>
  */
 public class SkillsAdapter extends AAdapter {
 
@@ -93,7 +93,7 @@ public class SkillsAdapter extends AAdapter {
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		// No authentication precondition: v/skills is publicly discoverable.
 		// The per-source capability pins below do the gating (an anonymous
-		// caller's read-only ceiling covers own-namespace reads + asset/read).
+		// caller's read-only grant scope covers own-namespace reads + asset/read).
 		String command = strInput(input, "command");
 		try {
 			return switch (command) {

@@ -77,8 +77,8 @@ public class SecretAdapter extends AAdapter {
 		if (value == null) throw new IllegalArgumentException("value is required");
 
 		// Pin the capability to the action: writing a secret requires
-		// secret/write on the secret resource. A null ceiling (authenticated /
-		// internal) is unrestricted; a read-only ceiling (the public profile)
+		// secret/write on the secret resource. A null grant scope (authenticated /
+		// internal) is unrestricted; a read-only scope (the public profile)
 		// is denied here — closing the unauthenticated secret-write gap (#148).
 		engine.requireAuthority(ctx, Strings.create("s/" + name), Abilities.SECRET_WRITE);
 

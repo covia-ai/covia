@@ -245,7 +245,7 @@ public class CapabilityChecker {
 		appendCapsList(sb, caps);
 		// For the venue's public/anonymous identity, the remedy is an auth
 		// action — point to it (covia#206). Scoped to the public caller (DID
-		// ends ":public") so a capped agent's own-ceiling denial, which it is
+		// ends ":public") so a scoped agent's own-scope denial, which it is
 		// meant to just handle (#211), and cross-user denials stay clean.
 		if (ownerDID != null && ownerDID.toString().endsWith(":public")) {
 			sb.append(". Authenticate with a UCAN bearer token (Authorization: "
@@ -268,7 +268,7 @@ public class CapabilityChecker {
 	}
 
 	/**
-	 * The default read-only capability ceiling for an identity: read the
+	 * The default read-only capability grant scope for an identity: read the
 	 * identity's own (owner-scoped) lattice and venue paths, and read
 	 * content-addressed assets. It grants <em>no</em> write, delete, secret,
 	 * agent, asset-store, or invoke ability — so every mutating operation is
@@ -290,7 +290,7 @@ public class CapabilityChecker {
 	 * returns true iff some grant in {@code caps} covers the already-canonical
 	 * {@code (resourceStr, abilityStr)} request. Non-map and malformed entries
 	 * are skipped defensively (they grant nothing). An empty {@code caps}
-	 * vector therefore grants nothing — only a {@code null} ceiling is "full
+	 * vector therefore grants nothing — only a {@code null} scope is "full
 	 * access" (handled by the callers).
 	 */
 	private static boolean covered(AVector<ACell> caps, AString resourceStr, AString abilityStr,
@@ -324,8 +324,8 @@ public class CapabilityChecker {
 		AString grantCan = RT.ensureString(cap.get(Capability.CAN));
 
 		// A null/empty grant `with` is a "match any resource" wildcard — the
-		// venue's own asset/read ceiling ({with:""}) relies on it. This wildcard
-		// lives ONLY in the ceiling path, never in the fail-closed UCAN proof
+		// venue's own asset/read grant ({with:""}) relies on it. This wildcard
+		// lives ONLY in the grant-scope path, never in the fail-closed UCAN proof
 		// path (proofsCover). A concrete grant matches via the boundary-aware
 		// Capability.resourceCovers (Convex #585 fixed); ability via abilityCovers.
 		boolean resourceOK = (grantWith == null || grantWith.count() == 0)

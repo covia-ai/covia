@@ -160,7 +160,7 @@ public class HITLAdapter extends AAdapter {
 
 	/** A self-ask is always permitted; delivering into ANOTHER user's inbox
 	 *  requires hitl/request on {@code <target>/h/} — checked against the
-	 *  caller's ceiling AND (cross-user) their presented proofs. */
+	 *  caller's grant scope AND (cross-user) their presented proofs. */
 	private void requireDeliverable(RequestContext ctx, AString caller, AString target) {
 		if (target.equals(caller)) return;
 		AString resource = Strings.create(target + "/h/");

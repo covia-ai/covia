@@ -457,7 +457,7 @@ public class FileAdapter extends AAdapter {
 	/**
 	 * Capability enforcement co-located with the file op dispatch. The resource
 	 * is the {@code file://<root>/<path>} form the grant taxonomy uses; a null
-	 * ceiling (authenticated/internal) is unrestricted (no-op). Reads, writes,
+	 * grant scope (authenticated/internal) is unrestricted (no-op). Reads, writes,
 	 * and deletes pin {@code crud/read}/{@code crud/write}/{@code crud/delete}.
 	 */
 	private void requireFileCap(RequestContext ctx, String subOp, AMap<AString, ACell> input) {

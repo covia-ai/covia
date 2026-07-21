@@ -1026,7 +1026,7 @@ public class MCPAdapter extends AAdapter {
 	}
 
 	/** Venue scope requires the {@code mcp/manage} ability on {@code v/mcp} —
-	 *  denied under the public ceiling, grantable by cap. User scope is the
+	 *  denied under the public grant scope, grantable by cap. User scope is the
 	 *  default and needs nothing beyond invoking the op. */
 	private boolean isVenueScope(RequestContext ctx, ACell input) {
 		boolean venueScope = SCOPE_VENUE.equals(RT.ensureString(RT.getIn(input, K_SCOPE)));

@@ -30,8 +30,8 @@ import covia.venue.auth.LoginProviders;
  * "auth": {
  *   "public": {
  *     "enabled": true,                // allow anonymous access (default: true)
- *     "caps": "unrestricted"          // public ceiling: absent = read-only default
- *   },                                //   (reads only); "unrestricted" = no ceiling;
+ *     "caps": "unrestricted"          // public grant scope: absent = read-only default
+ *   },                                //   (reads only); "unrestricted" = no scope;
  *                                     //   or an explicit capability array
  *   "tokenExpiry": 86400,             // JWT expiry in seconds (default 24h)
  *   "audience": "verify",             // JWT aud policy: "verify" (default — if
@@ -148,16 +148,16 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 	}
 
 	/**
-	 * The capability ceiling applied to unauthenticated (public) callers,
+	 * The capability grant scope applied to unauthenticated (public) callers,
 	 * scoped to {@code publicDID}. Operator policy via {@code auth.public.caps}:
 	 * unconfigured → the secure read-only default
 	 * ({@link CapabilityChecker#readOnlyCeiling}); the literal
-	 * {@code "unrestricted"} → no ceiling (legacy full access); an explicit
-	 * capability vector → that ceiling. Malformed config fails safe to read-only.
+	 * {@code "unrestricted"} → no scope (legacy full access); an explicit
+	 * capability vector → that scope. Malformed config fails safe to read-only.
 	 *
 	 * @param publicDID the public caller's DID ({@code <venueDID>:public}),
 	 *                  used to scope the default read grant
-	 * @return the ceiling vector, or null for "unrestricted"
+	 * @return the grant-scope vector, or null for "unrestricted"
 	 */
 	public AVector<ACell> getPublicCeiling(AString publicDID) {
 		if (publicCapsConfig == null) return CapabilityChecker.readOnlyCeiling(publicDID);

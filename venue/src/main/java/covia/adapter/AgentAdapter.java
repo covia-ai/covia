@@ -207,7 +207,7 @@ public class AgentAdapter extends AAdapter {
 		String subOp = getSubOperation(meta);
 		// The task-lifecycle ops are self-scoped — agentId/taskId come from the
 		// RequestContext, never the input — and must stay callable under a
-		// restricted transition ceiling (the requireAgentCap contract): a capped
+		// restricted transition scope (the requireAgentCap contract): a scoped
 		// agent that cannot complete/fail its own task is trapped in the tool
 		// loop until the iteration limit. The invoke gate covers everything else.
 		if (!"completeTask".equals(subOp) && !"failTask".equals(subOp)) requireInvoke(ctx);
@@ -256,7 +256,7 @@ public class AgentAdapter extends AAdapter {
 					// system-of-record action, so the internal path (LLM tool
 					// loop, context assemble ops) delegates to the Job-aware
 					// dispatch and gets a real, owner-attributed Job — same
-					// RequestContext, same capability ceiling. This is the
+					// RequestContext, same grant scope. This is the
 					// delegation pattern `request` established above; the
 					// internal path previously rejected these outright (#85
 					// fall-out), breaking agent ops as LLM tools.
@@ -356,11 +356,11 @@ public class AgentAdapter extends AAdapter {
 	/**
 	 * Capability enforcement co-located with the agent op dispatch: each
 	 * user-facing op pins the exact ability it needs on the agent resource
-	 * ({@code g/<agentId>}). A null ceiling (authenticated/internal) is
+	 * ({@code g/<agentId>}). A null grant scope (authenticated/internal) is
 	 * unrestricted (no-op). The internal task-lifecycle ops
 	 * ({@code completeTask}/{@code failTask}) and {@code trigger}/reads are not
 	 * gated here — they fall to the boundary net — so an agent with a restricted
-	 * config ceiling can still complete its own tasks during a transition.
+	 * config scope can still complete its own tasks during a transition.
 	 */
 	private void requireAgentCap(RequestContext ctx, ACell input, String subOp) {
 		AString ability = switch (subOp) {

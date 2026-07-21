@@ -206,9 +206,9 @@ public class Config {
 	/** Key for public (anonymous) access configuration */
 	public static final AString PUBLIC = Strings.intern("public");
 
-	/** Key for the public caller's capability ceiling, under {@code auth.public}.
-	 *  Absent → secure default (read-only); {@code "unrestricted"} → no ceiling
-	 *  (legacy permissive behaviour); an explicit cap array → that ceiling. */
+	/** Key for the public caller's capability grant scope, under {@code auth.public}.
+	 *  Absent → secure default (read-only); {@code "unrestricted"} → no scope
+	 *  (legacy permissive behaviour); an explicit cap array → that scope. */
 	public static final AString CAPS = Strings.intern("caps");
 
 	/** Key for the JWT audience policy, under {@code auth}: {@code "verify"}
@@ -738,10 +738,10 @@ public class Config {
 
 	/**
 	 * The raw {@code auth.public.caps} value, used to derive the capability
-	 * ceiling applied to unauthenticated (public) callers. Returns {@code null}
+	 * grant scope applied to unauthenticated (public) callers. Returns {@code null}
 	 * when unconfigured (the caller then applies the secure read-only default),
-	 * the literal string {@code "unrestricted"} to opt out of any ceiling, or an
-	 * explicit capability vector to use as the ceiling.
+	 * the literal string {@code "unrestricted"} to opt out of any scope, or an
+	 * explicit capability vector to use as the scope.
 	 *
 	 * @return the configured value, or null if {@code auth.public.caps} is absent
 	 */

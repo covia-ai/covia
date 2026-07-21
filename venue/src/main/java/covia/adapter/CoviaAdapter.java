@@ -674,9 +674,9 @@ public class CoviaAdapter extends AAdapter {
 	/**
 	 * Enforces the capability for a path-targeted lattice mutation at the point
 	 * it executes — the adapter pins the exact resource (the path) and ability,
-	 * so the enforced cap cannot drift from the implementation. A null ceiling
+	 * so the enforced cap cannot drift from the implementation. A null grant scope
 	 * (internal/authenticated callers) is unrestricted, so this is a no-op for
-	 * them; a restricted ceiling (e.g. the public read-only profile) is gated.
+	 * them; a restricted scope (e.g. the public read-only profile) is gated.
 	 */
 	private void requireCap(RequestContext ctx, ACell input, AString ability) {
 		AString p = RT.ensureString(RT.getIn(input, Fields.PATH));

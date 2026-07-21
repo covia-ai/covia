@@ -48,7 +48,7 @@ public class AuthMiddleware {
 
 	static final String CALLER_DID_ATTR = "callerDID";
 	/**
-	 * Context attribute holding the capability ceiling for an unauthenticated
+	 * Context attribute holding the capability grant scope for an unauthenticated
 	 * (public) caller, derived from {@code auth.public.caps}. Absent for
 	 * authenticated callers (unrestricted unless a transport token attenuates).
 	 */
@@ -92,7 +92,7 @@ public class AuthMiddleware {
 		this.publicAccessEnabled = auth.isPublicAccessEnabled();
 		this.externalProviders = auth.getLoginProviders().hasProviders()
 			? auth.getLoginProviders().getProviders() : null;
-		// Capability ceiling for public callers — secure read-only by default,
+		// Capability grant scope for public callers — secure read-only by default,
 		// operator-overridable via auth.public.caps. Only relevant when public
 		// access is enabled (otherwise every anonymous request is 401'd).
 		this.publicCeiling = publicAccessEnabled ? auth.getPublicCeiling(publicDID) : null;
@@ -195,7 +195,7 @@ public class AuthMiddleware {
 
 	/**
 	 * Attribute an unauthenticated request to the venue's public DID and stash
-	 * the public capability ceiling (if any), so the downstream
+	 * the public capability grant scope (if any), so the downstream
 	 * {@link #callerContext} applies it uniformly.
 	 */
 	private void markPublic(Context ctx) {
@@ -449,14 +449,14 @@ public class AuthMiddleware {
 	/**
 	 * Builds the base {@link RequestContext} for an inbound request: the caller
 	 * DID plus, for unauthenticated (public) callers, the configured capability
-	 * ceiling ({@code auth.public.caps}, default read-only). This is the single
-	 * seam where a request's ceiling is established, before transport-token
+	 * grant scope ({@code auth.public.caps}, default read-only). This is the single
+	 * seam where a request's grant scope is established, before transport-token
 	 * authority ({@link #withTransportAuth}) is layered on. Null-safe: a null
 	 * Javalin context (e.g. an MCP call with no HTTP context) yields
 	 * {@link RequestContext#ANONYMOUS}.
 	 *
 	 * @param ctx Javalin context, or null
-	 * @return the caller's request context with its ceiling applied
+	 * @return the caller's request context with its grant scope applied
 	 */
 	public static RequestContext callerContext(Context ctx) {
 		if (ctx == null) return RequestContext.ANONYMOUS;
@@ -538,7 +538,7 @@ public class AuthMiddleware {
 		if (venueDID != null && bearer == null && isPublicOrAnonymous(rctx, venueDID)) {
 			AString identity = identityFromProofs(proofs, venueDID);
 			if (identity != null) {
-				// A proven caller: fresh context — the public read-only ceiling
+				// A proven caller: fresh context — the public read-only grant scope
 				// does not apply to an authenticated identity.
 				rctx = RequestContext.of(identity);
 			}
@@ -552,7 +552,7 @@ public class AuthMiddleware {
 		// never be replayed elsewhere.
 		if (ucans != null && !ucans.isEmpty()) rctx = rctx.withRawUcans(ucans);
 		// No self-attenuation from the wire: presented proofs are additive grants,
-		// never a subtractive self-ceiling. To act with reduced authority, hand the
+		// never subtractive. To act with reduced authority, hand the
 		// callee a narrower Authority (Authority.of(did, grants)) or present only the
 		// UCANs the request needs — you never send everything and then subtract.
 		return rctx;

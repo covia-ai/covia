@@ -422,7 +422,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 	 * @param input the tool call arguments
 	 * @param configToolMap mapping of LLM tool names to operation names
 	 * @param ctx request context for the tool dispatch — carries the agent's
-	 *        capability ceiling ({@link RequestContext#getCaps()})
+	 *        grant scope ({@link RequestContext#getCaps()})
 	 * @param timeoutMs per-tool-call wall-clock budget; {@link TimeoutException}
 	 *        is converted to an "Error: tool call timed out" string result so
 	 *        the agent loop can continue
@@ -435,7 +435,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 		// ref, otherwise the tool name is dispatched as a grid op. Capability
 		// enforcement happens at the dispatched op's OWN enforcement point
 		// (invokeInternal → the adapter's requireCapability / requireInvoke),
-		// under the agent's ceiling carried on ctx — no name-keyed pre-check here.
+		// under the agent's grant scope carried on ctx — no name-keyed pre-check here.
 		AString operation = (configToolMap != null) ? configToolMap.get(toolName) : null;
 
 		// Config tools — tool name maps to a resolved operation
@@ -500,7 +500,7 @@ public abstract class AbstractLLMAdapter extends AAdapter implements ContextInsp
 
 	/**
 	 * Invokes an operation with a per-call timeout, via the no-Job internal
-	 * dispatch path. {@code invokeInternal} enforces the ceiling carried by
+	 * dispatch path. {@code invokeInternal} enforces the grant scope carried by
 	 * {@code ctx} (today the agent cycle runs unrestricted at the context
 	 * level); {@link #dispatchTool} has additionally checked the call against
 	 * the agent's own config caps. Times out via

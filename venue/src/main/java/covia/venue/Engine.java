@@ -2107,7 +2107,7 @@ public class Engine {
 	 * <p>Two rights compose, checked in order:</p>
 	 * <ol>
 	 *   <li><b>Ambient public access</b> (covia#254) — a resource owned by the
-	 *       venue's PUBLIC identity follows the public capability ceiling for
+	 *       venue's PUBLIC identity follows the public capability grant scope for
 	 *       ANY caller: an authenticated caller is at least as privileged as
 	 *       the anonymous one. Checked only when the resource is actually
 	 *       public-owned; tracks operator policy ({@code auth.public.caps} —
@@ -2123,10 +2123,10 @@ public class Engine {
 			String r = resource.toString();
 			if (r.equals(publicDIDStr) || r.startsWith(publicDIDStr + "/")) {
 				AString publicDID = Strings.create(publicDIDStr);
-				convex.core.data.AVector<ACell> ceiling = auth.getPublicCeiling(publicDID);
-				// null ceiling = operator-configured unrestricted public access
-				if (ceiling == null || covia.lattice.CapabilityChecker.allows(
-						ceiling, resource, ability, publicDID) == null) {
+				convex.core.data.AVector<ACell> publicScope = auth.getPublicCeiling(publicDID);
+				// null scope = operator-configured unrestricted public access
+				if (publicScope == null || covia.lattice.CapabilityChecker.allows(
+						publicScope, resource, ability, publicDID) == null) {
 					return true;
 				}
 			}

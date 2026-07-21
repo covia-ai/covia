@@ -355,7 +355,7 @@ public class CoviaAPI extends ACoviaAPI {
 	 * bearer proof on the request.
 	 *
 	 * @param ref Asset reference (lattice address or bare hash)
-	 * @param ctx Request context (caller identity, capability ceiling, proofs)
+	 * @param ctx Request context (caller identity, grant scope, proofs)
 	 * @return the resolved Asset, or null if the reference resolves to nothing
 	 *         or to a non-asset value
 	 */
