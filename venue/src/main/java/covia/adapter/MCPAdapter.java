@@ -21,6 +21,7 @@ import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
+import covia.api.Abilities;
 import covia.venue.RequestContext;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
@@ -618,7 +619,7 @@ public class MCPAdapter extends AAdapter {
 		}
 		String path = requireToolPath(input);
 		boolean venuePath = path.startsWith("v/");
-		if (venuePath) engine.requireAuthority(ctx,"v/mcp", "mcp/manage");
+		if (venuePath) engine.requireAuthority(ctx, Abilities.V_MCP, Abilities.MCP_MANAGE);
 
 		// SSRF guard — shared with the http adapter, including its allowlist.
 		((HTTPAdapter) engine.getAdapter("http")).requireSafeUrl(url.toString());
@@ -779,7 +780,7 @@ public class MCPAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	ACell refreshPath(RequestContext ctx, String path) {
 		boolean venuePath = path.startsWith("v/");
-		if (venuePath) engine.requireAuthority(ctx,"v/mcp", "mcp/manage");
+		if (venuePath) engine.requireAuthority(ctx, Abilities.V_MCP, Abilities.MCP_MANAGE);
 		RequestContext writeCtx = venuePath ? engine.venueContext() : ctx;
 
 		ACell root = readLattice(writeCtx, path);
@@ -1029,7 +1030,7 @@ public class MCPAdapter extends AAdapter {
 	 *  default and needs nothing beyond invoking the op. */
 	private boolean isVenueScope(RequestContext ctx, ACell input) {
 		boolean venueScope = SCOPE_VENUE.equals(RT.ensureString(RT.getIn(input, K_SCOPE)));
-		if (venueScope) engine.requireAuthority(ctx,"v/mcp", "mcp/manage");
+		if (venueScope) engine.requireAuthority(ctx, Abilities.V_MCP, Abilities.MCP_MANAGE);
 		return venueScope;
 	}
 

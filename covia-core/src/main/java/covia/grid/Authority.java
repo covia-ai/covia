@@ -18,10 +18,10 @@ import convex.core.data.Vectors;
  * job id).</p>
  *
  * <p><b>Grants are additive.</b> An {@code Authority} can be augmented with
- * further delegations (e.g. a short-lived, audience-bound UCAN handed to an
- * agent for a specific task) via {@link #withProof}/{@link #withProofs}. There is
- * no ceiling here: attenuation is a property of each individual delegation (you
- * can only delegate what you hold, and you mint it narrow), not of the
+ * further delegations (e.g. a short-lived, audience-bound UCAN handed to an agent
+ * for a specific task) via {@link #withGrant}/{@link #withGrants}. There is no
+ * ceiling here: attenuation is a property of each individual delegation (you can
+ * only delegate what you hold, and you mint it narrow), not of the
  * {@code Authority} as a whole.</p>
  *
  * <p>Immutable and thread-safe: every {@code with*} method returns a new
@@ -32,15 +32,15 @@ public final class Authority {
 	/** Caller identity (DID), or {@code null} for anonymous. */
 	private final AString did;
 
-	/** Verified UCAN delegation tokens this authority carries. Never null. */
-	private final AVector<ACell> proofs;
+	/** Verified UCAN delegation grants this authority carries. Never null. */
+	private final AVector<ACell> grants;
 
 	/** The anonymous authority: no identity, no grants. */
 	public static final Authority ANONYMOUS = new Authority(null, Vectors.empty());
 
-	private Authority(AString did, AVector<ACell> proofs) {
+	private Authority(AString did, AVector<ACell> grants) {
 		this.did = did;
-		this.proofs = (proofs != null) ? proofs : Vectors.empty();
+		this.grants = (grants != null) ? grants : Vectors.empty();
 	}
 
 	/**
@@ -54,10 +54,10 @@ public final class Authority {
 	/**
 	 * An authority for the given identity carrying the given verified grants.
 	 * @param did Caller DID, or null for anonymous
-	 * @param proofs Verified UCAN delegation tokens (null treated as none)
+	 * @param grants Verified UCAN delegation tokens (null treated as none)
 	 */
-	public static Authority of(AString did, AVector<ACell> proofs) {
-		return new Authority(did, proofs);
+	public static Authority of(AString did, AVector<ACell> grants) {
+		return new Authority(did, grants);
 	}
 
 	/** The caller identity, or null if anonymous. */
@@ -66,8 +66,8 @@ public final class Authority {
 	}
 
 	/** The grants (verified UCAN delegations) this authority carries; never null. */
-	public AVector<ACell> getProofs() {
-		return proofs;
+	public AVector<ACell> getGrants() {
+		return grants;
 	}
 
 	/** True if this authority carries no identity. */
@@ -76,42 +76,44 @@ public final class Authority {
 	}
 
 	/** True if this authority carries at least one grant. */
-	public boolean hasProofs() {
-		return !proofs.isEmpty();
+	public boolean hasGrants() {
+		return !grants.isEmpty();
 	}
 
 	/**
-	 * Returns a copy of this authority augmented with one additional grant.
-	 * @param proof a verified UCAN delegation token (ignored if null)
+	 * Returns a copy of this authority augmented with one additional grant — the
+	 * primary way an authority acquires extra authority (e.g. a time-limited,
+	 * audience-bound UCAN handed to an agent for a task).
+	 * @param grant a verified UCAN delegation token (ignored if null)
 	 */
-	public Authority withProof(ACell proof) {
-		if (proof == null) return this;
-		return new Authority(did, proofs.concat(Vectors.of(proof)));
+	public Authority withGrant(ACell grant) {
+		if (grant == null) return this;
+		return new Authority(did, grants.concat(Vectors.of(grant)));
 	}
 
 	/**
 	 * Returns a copy of this authority augmented with additional grants.
 	 * @param more verified UCAN delegation tokens (null/empty is a no-op)
 	 */
-	public Authority withProofs(AVector<ACell> more) {
+	public Authority withGrants(AVector<ACell> more) {
 		if (more == null || more.isEmpty()) return this;
-		return new Authority(did, proofs.concat(more));
+		return new Authority(did, grants.concat(more));
 	}
 
 	@Override
 	public boolean equals(Object o) {
 		if (this == o) return true;
 		if (!(o instanceof Authority a)) return false;
-		return Objects.equals(did, a.did) && proofs.equals(a.proofs);
+		return Objects.equals(did, a.did) && grants.equals(a.grants);
 	}
 
 	@Override
 	public int hashCode() {
-		return Objects.hash(did, proofs);
+		return Objects.hash(did, grants);
 	}
 
 	@Override
 	public String toString() {
-		return "Authority[" + (did != null ? did : "anonymous") + ", grants=" + proofs.count() + "]";
+		return "Authority[" + (did != null ? did : "anonymous") + ", grants=" + grants.count() + "]";
 	}
 }

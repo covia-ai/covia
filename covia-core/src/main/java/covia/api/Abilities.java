@@ -21,6 +21,8 @@ public final class Abilities {
 	public static final AString SECRET_WRITE  = Strings.intern("secret/write");
 	public static final AString MCP_MANAGE    = Strings.intern("mcp/manage");
 	public static final AString HITL_REQUEST  = Strings.intern("hitl/request");
+	public static final AString AGENT_CREATE  = Strings.intern("agent/create");
+	public static final AString AGENT_REQUEST = Strings.intern("agent/request");
 	public static final AString AGENT_MESSAGE = Strings.intern("agent/message");
 	public static final AString AGENT_WRITE   = Strings.intern("agent/write");
 

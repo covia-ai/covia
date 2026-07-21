@@ -104,7 +104,7 @@ public class RequestContext {
 	 */
 	public static RequestContext ofAuthority(Authority authority) {
 		if (authority == null || authority.isAnonymous()) return ANONYMOUS;
-		return of(authority.getDID(), authority.getProofs());
+		return of(authority.getDID(), authority.getGrants());
 	}
 
 	/**

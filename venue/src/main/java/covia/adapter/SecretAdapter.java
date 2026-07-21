@@ -11,6 +11,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
+import covia.api.Abilities;
 import covia.venue.RequestContext;
 import covia.venue.SecretStore;
 import covia.venue.User;
@@ -79,7 +80,7 @@ public class SecretAdapter extends AAdapter {
 		// secret/write on the secret resource. A null ceiling (authenticated /
 		// internal) is unrestricted; a read-only ceiling (the public profile)
 		// is denied here — closing the unauthenticated secret-write gap (#148).
-		engine.requireAuthority(ctx,"s/" + name, "secret/write");
+		engine.requireAuthority(ctx, Strings.create("s/" + name), Abilities.SECRET_WRITE);
 
 		User user = engine.getVenueState().users().ensure(ctx.getCallerDID());
 		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());

@@ -24,7 +24,7 @@ public class RequestContextAuthorityTest {
 		RequestContext ctx = RequestContext.of(ALICE, Vectors.of(GRANT));
 		Authority a = ctx.getAuthority();
 		assertEquals(ALICE, a.getDID());
-		assertEquals(1, a.getProofs().count());
+		assertEquals(1, a.getGrants().count());
 		// the derived view does not disturb the existing getters
 		assertEquals(ALICE, ctx.getCallerDID());
 		assertEquals(1, ctx.getProofs().count());
@@ -45,7 +45,7 @@ public class RequestContextAuthorityTest {
 		RequestContext ctx = RequestContext.of(ALICE);
 		assertNull(ctx.getProofs());
 		// while the Authority view normalises to an empty, never-null grant set
-		assertTrue(ctx.getAuthority().getProofs().isEmpty());
+		assertTrue(ctx.getAuthority().getGrants().isEmpty());
 	}
 
 	@Test

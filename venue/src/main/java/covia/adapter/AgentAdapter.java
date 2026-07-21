@@ -32,6 +32,7 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.AgentState;
+import covia.api.Abilities;
 import covia.venue.RequestContext;
 import covia.venue.Scheduler;
 import covia.venue.User;
@@ -362,16 +363,16 @@ public class AgentAdapter extends AAdapter {
 	 * config ceiling can still complete its own tasks during a transition.
 	 */
 	private void requireAgentCap(RequestContext ctx, ACell input, String subOp) {
-		String ability = switch (subOp) {
-			case "create", "fork" -> "agent/create";
-			case "request"        -> "agent/request";
-			case "message", "chat" -> "agent/message";
-			case "delete", "suspend", "resume", "update", "cancelTask", "deleteSession" -> "agent/write";
+		AString ability = switch (subOp) {
+			case "create", "fork" -> Abilities.AGENT_CREATE;
+			case "request"        -> Abilities.AGENT_REQUEST;
+			case "message", "chat" -> Abilities.AGENT_MESSAGE;
+			case "delete", "suspend", "resume", "update", "cancelTask", "deleteSession" -> Abilities.AGENT_WRITE;
 			default -> null; // info/list/context (reads), trigger, completeTask/failTask
 		};
 		if (ability == null) return;
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
-		engine.requireAuthority(ctx,agentId != null ? "g/" + agentId : null, ability);
+		engine.requireAuthority(ctx, agentId != null ? Strings.create("g/" + agentId) : null, ability);
 	}
 
 	@Override
