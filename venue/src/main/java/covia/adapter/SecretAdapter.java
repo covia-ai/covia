@@ -79,7 +79,7 @@ public class SecretAdapter extends AAdapter {
 		// secret/write on the secret resource. A null ceiling (authenticated /
 		// internal) is unrestricted; a read-only ceiling (the public profile)
 		// is denied here — closing the unauthenticated secret-write gap (#148).
-		ctx.requireCapability("s/" + name, "secret/write");
+		engine.requireAuthority(ctx,"s/" + name, "secret/write");
 
 		User user = engine.getVenueState().users().ensure(ctx.getCallerDID());
 		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());

@@ -162,7 +162,7 @@ public class SkillsAdapter extends AAdapter {
 		return sources;
 	}
 
-	private static void requireReadCaps(RequestContext ctx, AVector<ACell> sources) {
+	private void requireReadCaps(RequestContext ctx, AVector<ACell> sources) {
 		for (long i = 0; i < sources.count(); i++) {
 			AString source = RT.ensureString(sources.get(i));
 			if (source == null) throw new IllegalArgumentException(
@@ -174,11 +174,11 @@ public class SkillsAdapter extends AAdapter {
 	/** Pins the read capability for one source: {@code asset/read} for
 	 *  content-addressed refs, {@code crud/read} for paths — mirroring
 	 *  AssetAdapter and CoviaAdapter's read pins exactly. */
-	private static void requireReadCap(RequestContext ctx, AString source) {
+	private void requireReadCap(RequestContext ctx, AString source) {
 		if (AssetAdapter.parseAssetId(source) != null) {
-			ctx.requireCapability(source, ASSET_READ);
+			engine.requireAuthority(ctx,source, ASSET_READ);
 		} else {
-			ctx.requireCapability(source, Capability.CRUD_READ);
+			engine.requireAuthority(ctx,source, Capability.CRUD_READ);
 		}
 	}
 

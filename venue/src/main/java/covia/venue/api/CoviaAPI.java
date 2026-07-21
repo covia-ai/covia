@@ -360,7 +360,7 @@ public class CoviaAPI extends ACoviaAPI {
 	 */
 	private Asset resolveAssetReference(String ref, RequestContext ctx) throws IOException {
 		AString refStr = Strings.create(ref);
-		ctx.requireCapability(refStr, Strings.intern("asset/read"));
+		engine().requireAuthority(ctx,refStr, Strings.intern("asset/read"));
 
 		// Content-addressed forms (bare hex, a/<hash>, did:.../a/<hash>) — fetch
 		// the stored record so the returned bytes are byte-identical to the legacy

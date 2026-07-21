@@ -361,7 +361,7 @@ public class AgentAdapter extends AAdapter {
 	 * gated here — they fall to the boundary net — so an agent with a restricted
 	 * config ceiling can still complete its own tasks during a transition.
 	 */
-	private static void requireAgentCap(RequestContext ctx, ACell input, String subOp) {
+	private void requireAgentCap(RequestContext ctx, ACell input, String subOp) {
 		String ability = switch (subOp) {
 			case "create", "fork" -> "agent/create";
 			case "request"        -> "agent/request";
@@ -371,7 +371,7 @@ public class AgentAdapter extends AAdapter {
 		};
 		if (ability == null) return;
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
-		ctx.requireCapability(agentId != null ? "g/" + agentId : null, ability);
+		engine.requireAuthority(ctx,agentId != null ? "g/" + agentId : null, ability);
 	}
 
 	@Override

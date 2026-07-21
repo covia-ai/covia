@@ -2172,6 +2172,18 @@ public class Engine {
 				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""));
 	}
 
+	/**
+	 * {@link String}-literal convenience overload of
+	 * {@link #requireAuthority(RequestContext, AString, AString)} — mirrors
+	 * {@link RequestContext#requireCapability(String, String)}; the conversion to
+	 * {@link AString} happens here, not at the call site.
+	 */
+	public void requireAuthority(RequestContext ctx, String resource, String ability) {
+		requireAuthority(ctx,
+			resource != null ? Strings.create(resource) : null,
+			ability != null ? Strings.create(ability) : null);
+	}
+
 	// ========== Secret resolution ==========
 
 	/**

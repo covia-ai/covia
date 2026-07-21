@@ -459,7 +459,7 @@ public class FileAdapter extends AAdapter {
 	 * ceiling (authenticated/internal) is unrestricted (no-op). Reads, writes,
 	 * and deletes pin {@code crud/read}/{@code crud/write}/{@code crud/delete}.
 	 */
-	private static void requireFileCap(RequestContext ctx, String subOp, AMap<AString, ACell> input) {
+	private void requireFileCap(RequestContext ctx, String subOp, AMap<AString, ACell> input) {
 		String ability = switch (subOp) {
 			case "list", "tree", "read", "stat", "roots" -> "crud/read";
 			case "write", "append", "mkdir" -> "crud/write";
@@ -470,7 +470,7 @@ public class FileAdapter extends AAdapter {
 		String resource = schemeResource("file",
 			RT.ensureString(RT.getIn(input, FIELD_ROOT)),
 			RT.ensureString(RT.getIn(input, FIELD_PATH)));
-		ctx.requireCapability(resource, ability);
+		engine.requireAuthority(ctx,resource, ability);
 	}
 
 	// ==================== Handlers ====================

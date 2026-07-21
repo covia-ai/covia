@@ -618,7 +618,7 @@ public class MCPAdapter extends AAdapter {
 		}
 		String path = requireToolPath(input);
 		boolean venuePath = path.startsWith("v/");
-		if (venuePath) ctx.requireCapability("v/mcp", "mcp/manage");
+		if (venuePath) engine.requireAuthority(ctx,"v/mcp", "mcp/manage");
 
 		// SSRF guard — shared with the http adapter, including its allowlist.
 		((HTTPAdapter) engine.getAdapter("http")).requireSafeUrl(url.toString());
@@ -779,7 +779,7 @@ public class MCPAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	ACell refreshPath(RequestContext ctx, String path) {
 		boolean venuePath = path.startsWith("v/");
-		if (venuePath) ctx.requireCapability("v/mcp", "mcp/manage");
+		if (venuePath) engine.requireAuthority(ctx,"v/mcp", "mcp/manage");
 		RequestContext writeCtx = venuePath ? engine.venueContext() : ctx;
 
 		ACell root = readLattice(writeCtx, path);
@@ -1027,9 +1027,9 @@ public class MCPAdapter extends AAdapter {
 	/** Venue scope requires the {@code mcp/manage} ability on {@code v/mcp} —
 	 *  denied under the public ceiling, grantable by cap. User scope is the
 	 *  default and needs nothing beyond invoking the op. */
-	private static boolean isVenueScope(RequestContext ctx, ACell input) {
+	private boolean isVenueScope(RequestContext ctx, ACell input) {
 		boolean venueScope = SCOPE_VENUE.equals(RT.ensureString(RT.getIn(input, K_SCOPE)));
-		if (venueScope) ctx.requireCapability("v/mcp", "mcp/manage");
+		if (venueScope) engine.requireAuthority(ctx,"v/mcp", "mcp/manage");
 		return venueScope;
 	}
 

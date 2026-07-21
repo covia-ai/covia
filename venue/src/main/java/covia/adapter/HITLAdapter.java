@@ -163,7 +163,7 @@ public class HITLAdapter extends AAdapter {
 	private void requireDeliverable(RequestContext ctx, AString caller, AString target) {
 		if (target.equals(caller)) return;
 		AString resource = Strings.create(target + "/h/");
-		ctx.requireCapability(resource, ABILITY_HITL_REQUEST);
+		engine.requireAuthority(ctx,resource, ABILITY_HITL_REQUEST);
 		long now = System.currentTimeMillis() / 1000;
 		if (!CapabilityChecker.proofsCover(ctx.getProofs(), caller, engine.getDIDString(),
 				resource, ABILITY_HITL_REQUEST, now)) {

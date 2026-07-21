@@ -449,7 +449,7 @@ public class CoviaAdapter extends AAdapter {
 	 * Resolves a single path and renders the value via CellExplorer.
 	 */
 	private String explorePath(RequestContext ctx, String pathStr, int budget, boolean compact) {
-		ctx.requireCapability(Strings.create(pathStr), Capability.CRUD_READ);
+		engine.requireAuthority(ctx,Strings.create(pathStr), Capability.CRUD_READ);
 		ACell[] pathKeys = parseStringPath(pathStr);
 
 		// Check job-scoped virtual namespace (t/)
@@ -655,7 +655,7 @@ public class CoviaAdapter extends AAdapter {
 		if (to == null) throw new IllegalArgumentException("'to' is required");
 
 		// Reads the source (handleWrite enforces crud/write on the destination).
-		ctx.requireCapability(from, Capability.CRUD_READ);
+		engine.requireAuthority(ctx,from, Capability.CRUD_READ);
 
 		// Read from source via the canonical universal resolver. Caps
 		// enforcement happens inside resolvePath via the cursor it returns.
