@@ -313,9 +313,14 @@ public class GoalTreeLatticeFramesTest {
 		chat("zombie-agent", sid, "block please");
 		await(() -> ag.getSessionCycleEpoch(sid) != null, 5000, "cycle claimed");
 
-		// Suspend while the transition is parked in the tool: the settle
-		// clears the cycle claim, which fences every later write from the
-		// still-running transition thread (cancel does not stop it).
+		// The epoch the parked transition thread holds — exactly what its later,
+		// post-tool "zombie" writes will carry once cancel fails to stop it.
+		ACell zombieEpoch = ag.getSessionCycleEpoch(sid);
+		assertNotNull(zombieEpoch, "cycle epoch must be claimed before suspend");
+
+		// Suspend while the transition is parked in the tool: the settle clears
+		// the cycle claim, which fences every later write from the still-running
+		// transition thread (cancel does not stop it).
 		engine.jobs().invokeOperation(
 			"v/ops/agent/suspend",
 			Maps.of(Fields.AGENT_ID, "zombie-agent"),
@@ -327,11 +332,16 @@ public class GoalTreeLatticeFramesTest {
 
 		AVector<ACell> atSuspend = frames("zombie-agent", sid);
 
-		// Let the zombie's tool timeout fire and its post-tool writes get
-		// fenced: frames must not change after the settle.
-		Thread.sleep(2500);
+		// Deterministic I1 check (no timing dance): a frame write bearing the
+		// pre-suspend epoch — the exact write the zombie transition attempts when
+		// its tool finally returns — is rejected by the released claim and cannot
+		// touch the frames. Drives the fence directly rather than sleeping and
+		// hoping the tool timeout fired.
+		boolean applied = ag.updateSessionFrames(sid, zombieEpoch,
+			f -> f.conj(Maps.of(Strings.create("zombie"), Strings.create("write"))));
+		assertFalse(applied, "a write with the superseded cycle epoch must be fenced (I1)");
 		assertEquals(atSuspend, frames("zombie-agent", sid),
-			"zombie transition writes after the suspend settle must be fenced (I1)");
+			"fenced zombie write must not change frames (I1)");
 		assertNull(ag.getSessionCycleEpoch(sid), "claim stays released");
 	}
 
