@@ -1,0 +1,31 @@
+{
+  "name": "Create Zip Archive",
+  "description": "Build a zip archive from files and/or directories under a filesystem root. 'root' names the source root; 'path' (single) or 'paths' (array) name the files/directories to include — entry names preserve the given relative paths (zip -r style), directories are added recursively. Output goes to a file when 'destRoot'+'destPath' are given (must be a writable root); otherwise a content-addressed asset is produced and its reference returned (optionally named via 'name'). Capped against runaway entry counts.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "archive:zip",
+    "toolName": "archive_zip",
+    "input": {
+      "type": "object",
+      "properties": {
+        "root": { "type": "string", "description": "Source root containing the files to zip" },
+        "path": { "type": "string", "description": "A single file/directory to include (relative to 'root')" },
+        "paths": { "type": "array", "description": "Files/directories to include (relative to 'root')", "items": { "type": "string" } },
+        "destRoot": { "type": "string", "description": "Output root for the .zip file (omit to produce an asset)" },
+        "destPath": { "type": "string", "description": "Output .zip path relative to 'destRoot'" },
+        "name": { "type": "string", "description": "Asset name when producing an asset (default 'archive.zip')" }
+      },
+      "required": ["root"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "entries": { "type": "integer", "description": "Number of entries written" },
+        "bytes": { "type": "integer", "description": "Size of the resulting zip in bytes" },
+        "asset": { "type": "string", "description": "Asset reference (when producing an asset)" },
+        "destRoot": { "type": "string", "description": "Output root (when writing a file)" },
+        "destPath": { "type": "string", "description": "Output path (when writing a file)" }
+      }
+    }
+  }
+}

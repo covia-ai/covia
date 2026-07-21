@@ -1,0 +1,26 @@
+{
+  "name": "List Archive",
+  "description": "List the entries of a zip or jar archive without extracting it. The archive source is exactly one of: a filesystem 'root'+'path' file, a content-addressed 'asset' reference, or inline base64 'bytes'. Returns each entry's name, uncompressed size, compressed size, directory flag, and modified time. Large archives are capped: 'count' is the true total, 'entries' is capped and 'truncated' indicates when more exist.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "archive:list",
+    "toolName": "archive_list",
+    "input": {
+      "type": "object",
+      "properties": {
+        "root": { "type": "string", "description": "Configured file root of the archive (with 'path')" },
+        "path": { "type": "string", "description": "Archive file path relative to 'root'" },
+        "asset": { "type": "string", "description": "Content-addressed asset reference to the archive bytes" },
+        "bytes": { "type": "string", "description": "Base64-encoded archive bytes (inline source)" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "entries": { "type": "array", "description": "Entry metadata (capped)", "items": { "type": "object" } },
+        "count": { "type": "integer", "description": "True total number of entries" },
+        "truncated": { "type": "boolean", "description": "True if more entries exist than are listed" }
+      }
+    }
+  }
+}

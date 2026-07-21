@@ -1,0 +1,31 @@
+{
+  "name": "Extract Archive",
+  "description": "Extract a zip or jar archive into a filesystem directory. The archive source is exactly one of: a 'root'+'path' file, a content-addressed 'asset', or inline base64 'bytes'. Files are written under 'destRoot' (a writable root) at optional 'destPath', which is created if needed. Extraction is jailed to the destination (zip-slip protected — entries that escape are rejected) and capped against zip bombs. Returns the number of entries extracted, total bytes written, and a (capped) list of extracted file paths.",
+  "creator": "Covia",
+  "operation": {
+    "adapter": "archive:extract",
+    "toolName": "archive_extract",
+    "input": {
+      "type": "object",
+      "properties": {
+        "root": { "type": "string", "description": "Source archive root (with 'path')" },
+        "path": { "type": "string", "description": "Source archive path relative to 'root'" },
+        "asset": { "type": "string", "description": "Source asset reference to the archive bytes" },
+        "bytes": { "type": "string", "description": "Base64-encoded source archive bytes" },
+        "destRoot": { "type": "string", "description": "Destination root to extract into (must be writable)" },
+        "destPath": { "type": "string", "description": "Destination directory relative to 'destRoot' (default: root itself)" }
+      },
+      "required": ["destRoot"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "extracted": { "type": "integer", "description": "Number of entries processed" },
+        "bytes": { "type": "integer", "description": "Total uncompressed bytes written" },
+        "destRoot": { "type": "string", "description": "Destination root" },
+        "files": { "type": "array", "description": "Extracted file paths (capped)", "items": { "type": "string" } },
+        "truncated": { "type": "boolean", "description": "True if more files were extracted than are listed" }
+      }
+    }
+  }
+}

@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
@@ -403,10 +404,127 @@ public class FileAdapter extends AAdapter {
 		return r;
 	}
 
+	// ==================== Archive read-through (jdk.zipfs) ====================
+
+	/** A resolved target: a plain filesystem path, or an entry inside a mounted
+	 *  archive. {@link #close} releases the archive filesystem and its per-archive
+	 *  lock when present; a plain path closes to nothing. */
+	private record Resolved(Path path, FileSystem archiveFs,
+			java.util.concurrent.locks.ReentrantLock lock) implements java.io.Closeable {
+		@Override public void close() throws IOException {
+			try { if (archiveFs != null) archiveFs.close(); }
+			finally { if (lock != null) lock.unlock(); }
+		}
+	}
+
+	/** Per-archive mount lock — {@code jdk.zipfs} keys a FileSystem by the archive
+	 *  path and rejects a second concurrent mount, so reads of the SAME archive
+	 *  serialise while reads of different archives run in parallel. */
+	private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>
+		archiveLocks = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
+	 * Resolves a {@code (root, path)} pair, transparently descending into a
+	 * zip/jar when the path carries a {@code !} archive-entry separator
+	 * ({@code app.zip!/dir/file} — the standard jar-URL convention). The archive
+	 * itself is resolved and jailed like any file and <b>must already exist</b>;
+	 * it is mounted <b>existing-only</b> via {@code jdk.zipfs} (never created — a
+	 * read of a missing archive fails, it does not fabricate one). The entry is
+	 * jailed within the archive root. With no {@code !} this is a plain
+	 * {@link #resolvePath} wrapped in a no-op {@link Resolved}.
+	 *
+	 * <p>Read-only: writing into an archive is not a {@code file:} side effect
+	 * (see {@link #rejectArchiveEntry}); use the {@code archive} adapter.</p>
+	 */
+	private Resolved resolveEntry(RequestContext ctx, String rootName, String userPath, boolean mustExist) throws IOException {
+		int bang = (userPath == null) ? -1 : userPath.indexOf('!');
+		if (bang < 0) {
+			return new Resolved(resolvePath(ctx, rootName, userPath, mustExist), null, null);
+		}
+		String archivePart = userPath.substring(0, bang);
+		String entryPart = userPath.substring(bang + 1);
+
+		// The archive must exist and be a regular file — never created here.
+		Path archive = resolvePath(ctx, rootName, archivePart, true);
+		if (!Files.isRegularFile(archive)) {
+			throw new IllegalArgumentException("Not an archive file: " + archivePart);
+		}
+
+		java.util.concurrent.locks.ReentrantLock lock = archiveLocks.computeIfAbsent(
+			archive.toRealPath().toString(), k -> new java.util.concurrent.locks.ReentrantLock());
+		lock.lock();
+		FileSystem fs;
+		try {
+			// Existing-only mount: no {"create":"true"} env, so a non-zip or a
+			// missing file fails here rather than fabricating an archive.
+			fs = java.nio.file.FileSystems.newFileSystem(archive);
+		} catch (Exception mountErr) {
+			lock.unlock();
+			throw new IllegalArgumentException("Not a readable zip/jar archive: " + archivePart
+				+ " (" + mountErr.getClass().getSimpleName() + ")");
+		}
+		try {
+			Path zipRoot = fs.getRootDirectories().iterator().next();
+			String stripped = entryPart;
+			while (!stripped.isEmpty() && (stripped.charAt(0) == '/' || stripped.charAt(0) == '\\')) {
+				stripped = stripped.substring(1);
+			}
+			Path entry = stripped.isEmpty() ? zipRoot : zipRoot.resolve(stripped).normalize();
+			if (!entry.startsWith(zipRoot)) {
+				throw new IllegalArgumentException("Path escapes archive '" + archivePart + "': " + entryPart);
+			}
+			if (mustExist && !Files.exists(entry)) {
+				throw new NoSuchFileException(rootName + ":" + userPath);
+			}
+			return new Resolved(entry, fs, lock);
+		} catch (RuntimeException | IOException e) {
+			try { fs.close(); } catch (IOException ignored) { }
+			lock.unlock();
+			throw e;
+		}
+	}
+
+	/** Rejects an archive-entry path ({@code x.zip!/…}) on a write-class op —
+	 *  {@code file:} sees into archives read-only; mutate them via the archive adapter. */
+	private static void rejectArchiveEntry(String pathArg, String verb) {
+		if (pathArg != null && pathArg.indexOf('!') >= 0) {
+			throw new IllegalArgumentException("Cannot " + verb + " an archive entry ('" + pathArg
+				+ "') — file access to archives is read-only; use archive:zip / archive:extract");
+		}
+	}
+
 	private void requireWritable(String rootName) {
 		if (requireRoot(rootName).readOnly) {
 			throw new IllegalArgumentException("Root '" + rootName + "' is read-only");
 		}
+	}
+
+	// ==================== Sibling-adapter API ====================
+	// A single source of truth for the file roots and their jail. Sibling
+	// adapters that operate on the same roots (e.g. ArchiveAdapter) resolve
+	// through here rather than duplicating the root config or the escape checks.
+	// These do NOT check capabilities — the caller enforces its own at the point
+	// of action, naming the exact file:// resource and ability it requires.
+
+	/**
+	 * Resolves a {@code (root, path)} pair to a jailed absolute path inside the
+	 * named root, for reuse by sibling adapters. Throws on an unknown root or a
+	 * path that escapes the root (lexically or via a symlink).
+	 *
+	 * @param mustExist require the resolved path to exist (else {@link NoSuchFileException})
+	 */
+	public Path resolve(RequestContext ctx, String root, String path, boolean mustExist) throws IOException {
+		return resolvePath(ctx, root, path, mustExist);
+	}
+
+	/** True if the named root is read-only; throws if the root is unknown. */
+	public boolean isReadOnlyRoot(String root) {
+		return requireRoot(root).readOnly;
+	}
+
+	/** Throws if the named root is read-only or unknown. */
+	public void requireWritableRoot(String root) {
+		requireWritable(root);
 	}
 
 	// ==================== Invocation ====================
@@ -497,28 +615,30 @@ public class FileAdapter extends AAdapter {
 	private ACell handleList(RequestContext ctx, AMap<AString, ACell> input) throws IOException {
 		String rootName = stringArg(input, FIELD_ROOT);
 		String pathArg = stringArg(input, FIELD_PATH);
-		Path dir = resolvePath(ctx, rootName, pathArg, true);
-		if (!Files.isDirectory(dir)) {
-			throw new IllegalArgumentException("Not a directory: " + pathArg);
-		}
-
-		AVector<ACell> entries = Vectors.empty();
-		try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
-			for (Path child : stream) {
-				BasicFileAttributes attrs = Files.readAttributes(child, BasicFileAttributes.class);
-				String type = attrs.isDirectory() ? "directory"
-					: attrs.isRegularFile() ? "file"
-					: attrs.isSymbolicLink() ? "symlink"
-					: "other";
-				entries = entries.conj(Maps.of(
-					"name", child.getFileName().toString(),
-					"type", type,
-					"size", CVMLong.create(attrs.size()),
-					"modified", CVMLong.create(attrs.lastModifiedTime().toMillis())
-				));
+		try (Resolved r = resolveEntry(ctx, rootName, pathArg, true)) {
+			Path dir = r.path();
+			if (!Files.isDirectory(dir)) {
+				throw new IllegalArgumentException("Not a directory: " + pathArg);
 			}
+
+			AVector<ACell> entries = Vectors.empty();
+			try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+				for (Path child : stream) {
+					BasicFileAttributes attrs = Files.readAttributes(child, BasicFileAttributes.class);
+					String type = attrs.isDirectory() ? "directory"
+						: attrs.isRegularFile() ? "file"
+						: attrs.isSymbolicLink() ? "symlink"
+						: "other";
+					entries = entries.conj(Maps.of(
+						"name", child.getFileName().toString(),
+						"type", type,
+						"size", CVMLong.create(attrs.size()),
+						"modified", CVMLong.create(attrs.lastModifiedTime().toMillis())
+					));
+				}
+			}
+			return Maps.of("entries", entries);
 		}
-		return Maps.of("entries", entries);
 	}
 
 	/** Tree-walk state shared across the recursion. */
@@ -539,19 +659,20 @@ public class FileAdapter extends AAdapter {
 		AString infoCell = RT.ensureString(input.get(Strings.create("info")));
 		String info = (infoCell != null) ? infoCell.toString() : null;
 
-		Path dir = resolvePath(ctx, rootName, pathArg, true);
-		if (!Files.isDirectory(dir)) {
-			throw new IllegalArgumentException("Not a directory: " + pathArg);
+		try (Resolved r = resolveEntry(ctx, rootName, pathArg, true)) {
+			Path dir = r.path();
+			if (!Files.isDirectory(dir)) {
+				throw new IllegalArgumentException("Not a directory: " + pathArg);
+			}
+
+			TreeState state = new TreeState();
+			walkTree(dir, 0, maxDepth, maxEntries, info, state);
+
+			return Maps.of(
+				"tree", state.out.toString(),
+				"truncated", CVMBool.create(state.truncated)
+			);
 		}
-
-		TreeState state = new TreeState();
-		walkTree(dir, 0, maxDepth, maxEntries, info, state);
-
-		AMap<AString, ACell> out = Maps.of(
-			"tree", state.out.toString(),
-			"truncated", CVMBool.create(state.truncated)
-		);
-		return out;
 	}
 
 	private static void walkTree(Path dir, int depth, int maxDepth, int maxEntries,
@@ -612,15 +733,18 @@ public class FileAdapter extends AAdapter {
 		String mode = stringArg(input, FIELD_MODE);
 		if (mode == null || mode.isEmpty()) mode = "auto";
 
-		Path file = resolvePath(ctx, rootName, pathArg, true);
-		if (!Files.isRegularFile(file)) {
-			throw new IllegalArgumentException("Not a regular file: " + pathArg);
+		byte[] bytes;
+		String mime;
+		try (Resolved r = resolveEntry(ctx, rootName, pathArg, true)) {
+			Path file = r.path();
+			if (!Files.isRegularFile(file)) {
+				throw new IllegalArgumentException("Not a regular file: " + pathArg);
+			}
+			bytes = Files.readAllBytes(file);
+			mime = MimeUtils.guess(file.getFileName() != null
+				? file.getFileName().toString() : "", bytes);
 		}
-
-		byte[] bytes = Files.readAllBytes(file);
 		CVMLong size = CVMLong.create(bytes.length);
-		String mime = MimeUtils.guess(file.getFileName() != null
-			? file.getFileName().toString() : "", bytes);
 
 		switch (mode) {
 			case "text": {
@@ -681,6 +805,7 @@ public class FileAdapter extends AAdapter {
 		String rootName = stringArg(input, FIELD_ROOT);
 		String pathArg = stringArg(input, FIELD_PATH);
 		requireWritable(rootName);
+		rejectArchiveEntry(pathArg, "write");
 
 		Path file = resolvePath(ctx, rootName, pathArg, false);
 		Path parent = file.getParent();
@@ -701,6 +826,7 @@ public class FileAdapter extends AAdapter {
 		String rootName = stringArg(input, FIELD_ROOT);
 		String pathArg = stringArg(input, FIELD_PATH);
 		requireWritable(rootName);
+		rejectArchiveEntry(pathArg, "append to");
 
 		Path file = resolvePath(ctx, rootName, pathArg, false);
 		boolean existed = fileExists(file);
@@ -717,6 +843,7 @@ public class FileAdapter extends AAdapter {
 		String pathArg = stringArg(input, FIELD_PATH);
 		boolean recursive = RT.bool(input.get(FIELD_RECURSIVE));
 		requireWritable(rootName);
+		rejectArchiveEntry(pathArg, "delete");
 
 		Path target = resolvePath(ctx, rootName, pathArg, false);
 		if (!Files.exists(target)) {
@@ -745,6 +872,7 @@ public class FileAdapter extends AAdapter {
 		String pathArg = stringArg(input, FIELD_PATH);
 		boolean parents = RT.bool(input.get(FIELD_PARENTS));
 		requireWritable(rootName);
+		rejectArchiveEntry(pathArg, "create");
 
 		Path target = resolvePath(ctx, rootName, pathArg, false);
 		boolean existed = Files.exists(target);
@@ -767,28 +895,30 @@ public class FileAdapter extends AAdapter {
 		String rootName = stringArg(input, FIELD_ROOT);
 		String pathArg = stringArg(input, FIELD_PATH);
 
-		Path target = resolvePath(ctx, rootName, pathArg, false);
-		if (!Files.exists(target)) {
-			return Maps.of("exists", CVMBool.FALSE);
+		try (Resolved r = resolveEntry(ctx, rootName, pathArg, false)) {
+			Path target = r.path();
+			if (!Files.exists(target)) {
+				return Maps.of("exists", CVMBool.FALSE);
+			}
+			BasicFileAttributes attrs = Files.readAttributes(target, BasicFileAttributes.class);
+			String type = attrs.isDirectory() ? "directory"
+				: attrs.isRegularFile() ? "file"
+				: attrs.isSymbolicLink() ? "symlink"
+				: "other";
+			AMap<AString, ACell> out = Maps.of(
+				"exists", CVMBool.TRUE,
+				"type", type,
+				"size", CVMLong.create(attrs.size()),
+				"modified", CVMLong.create(attrs.lastModifiedTime().toMillis()),
+				"readOnly", CVMBool.create(requireRoot(rootName).readOnly)
+			);
+			if (attrs.isRegularFile()) {
+				String mime = MimeUtils.guess(target.getFileName() != null
+					? target.getFileName().toString() : "", null);
+				out = out.assoc(Strings.create("mime"), Strings.create(mime));
+			}
+			return out;
 		}
-		BasicFileAttributes attrs = Files.readAttributes(target, BasicFileAttributes.class);
-		String type = attrs.isDirectory() ? "directory"
-			: attrs.isRegularFile() ? "file"
-			: attrs.isSymbolicLink() ? "symlink"
-			: "other";
-		AMap<AString, ACell> out = Maps.of(
-			"exists", CVMBool.TRUE,
-			"type", type,
-			"size", CVMLong.create(attrs.size()),
-			"modified", CVMLong.create(attrs.lastModifiedTime().toMillis()),
-			"readOnly", CVMBool.create(requireRoot(rootName).readOnly)
-		);
-		if (attrs.isRegularFile()) {
-			String mime = MimeUtils.guess(target.getFileName() != null
-				? target.getFileName().toString() : "", null);
-			out = out.assoc(Strings.create("mime"), Strings.create(mime));
-		}
-		return out;
 	}
 
 	// ==================== Helpers ====================

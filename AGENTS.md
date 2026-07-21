@@ -114,7 +114,7 @@ Engine (core state, adapters, assets, content, identity)
     └── JobManager        (job lifecycle, per-user persistence, recovery)
     |
 Adapter Layer (~25 pluggable adapters — canonical table in venue/CLAUDE.md)
-    ├── Data & state:  covia (lattice CRUD), asset, dlfs, vault, memory, secret, file
+    ├── Data & state:  covia (lattice CRUD), asset, dlfs, vault, memory, secret, file, archive
     ├── Execution:     langchain (LLMs), mcp, http, convex, jvm, schema, orchestrator, scheduler
     ├── Agents:        agent, llmagent, goaltree, skills, hitl (COG-16 h/ inbox)
     ├── Federation:    grid (run/invoke/jobStatus), ucan (granting surface, COG-17)
