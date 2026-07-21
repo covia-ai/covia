@@ -52,7 +52,7 @@ archive_zip  root=work  paths=["a.txt","logs/"]  name=bundle.zip
 
 ## `peek` — read a file inside an archive without unpacking
 
-`file_read` / `file_list` / `file_stat` / `file_tree` descend into an archive when the path carries a `!/` entry separator (the standard jar-URL form). The archive must already exist; nothing is unpacked or created.
+`file_read` / `file_list` / `file_stat` / `file_tree` descend into a `.zip`/`.jar` when the path carries a `!/` entry separator right after the archive name (the standard jar-URL form). A `!` anywhere else is an ordinary filename character. The archive must already exist; nothing is unpacked or created.
 
 ```
 file_read  root=work  path=releases/app.zip!/META-INF/MANIFEST.MF

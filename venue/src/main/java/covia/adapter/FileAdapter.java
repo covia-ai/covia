@@ -437,7 +437,7 @@ public class FileAdapter extends AAdapter {
 	 * (see {@link #rejectArchiveEntry}); use the {@code archive} adapter.</p>
 	 */
 	private Resolved resolveEntry(RequestContext ctx, String rootName, String userPath, boolean mustExist) throws IOException {
-		int bang = (userPath == null) ? -1 : userPath.indexOf('!');
+		int bang = archiveBang(userPath);
 		if (bang < 0) {
 			return new Resolved(resolvePath(ctx, rootName, userPath, mustExist), null, null);
 		}
@@ -484,10 +484,35 @@ public class FileAdapter extends AAdapter {
 		}
 	}
 
+	/** Recognised archive extensions whose {@code !} is an entry separator. */
+	private static final String[] ARCHIVE_EXTS = { ".zip", ".jar" };
+
+	/**
+	 * Index of the archive-entry separator {@code !} in a path, but only when it
+	 * immediately follows a recognised archive extension ({@code .zip}/{@code .jar},
+	 * case-insensitive) — so a literal {@code !} in an ordinary filename is not
+	 * mistaken for an archive descent. {@code !} is a jar-URL construct, not a
+	 * file-path one, so plain {@code file:} paths keep it literal. Returns -1 when
+	 * the path does not reference an archive entry.
+	 */
+	private static int archiveBang(String path) {
+		if (path == null) return -1;
+		String lower = path.toLowerCase(java.util.Locale.ROOT);
+		int best = -1;
+		for (String ext : ARCHIVE_EXTS) {
+			int idx = lower.indexOf(ext + "!");
+			if (idx >= 0) {
+				int bang = idx + ext.length(); // the '!' sits right after the extension
+				if (best < 0 || bang < best) best = bang;
+			}
+		}
+		return best;
+	}
+
 	/** Rejects an archive-entry path ({@code x.zip!/…}) on a write-class op —
 	 *  {@code file:} sees into archives read-only; mutate them via the archive adapter. */
 	private static void rejectArchiveEntry(String pathArg, String verb) {
-		if (pathArg != null && pathArg.indexOf('!') >= 0) {
+		if (archiveBang(pathArg) >= 0) {
 			throw new IllegalArgumentException("Cannot " + verb + " an archive entry ('" + pathArg
 				+ "') — file access to archives is read-only; use archive:zip / archive:extract");
 		}

@@ -52,6 +52,8 @@ public class FileArchiveReadTest {
 			zos.closeEntry();
 		}
 		Files.writeString(workspace.resolve("notazip.txt"), "plain");
+		// A .zip-named file that is NOT actually a zip — exercises the mount failure.
+		Files.writeString(workspace.resolve("fake.zip"), "not really a zip");
 	}
 
 	private RequestContext ctx() { return RequestContext.of(Strings.create(DID)); }
@@ -124,10 +126,20 @@ public class FileArchiveReadTest {
 
 	@Test
 	public void testReadNonZipFails() {
-		Job job = runRaw("v/ops/file/read", Maps.of("root", "work", "path", "notazip.txt!/x"));
+		// .zip extension triggers archive mode; the bytes are not a zip → mount fails.
+		Job job = runRaw("v/ops/file/read", Maps.of("root", "work", "path", "fake.zip!/x"));
 		assertEquals(Status.FAILED, job.getStatus(), "a non-zip file must not mount as an archive");
 		assertTrue(job.getErrorMessage().toLowerCase().contains("archive"),
 			"error should mention archive: " + job.getErrorMessage());
+	}
+
+	@Test
+	public void testLiteralBangFilenameIsLiteral() {
+		// '!' NOT following a .zip/.jar extension is an ordinary filename character
+		// (jar-URL '!' is an archive construct, not a file-path one) — round-trips.
+		run("v/ops/file/write", Maps.of("root", "work", "path", "note!important.txt", "content", "hi"));
+		ACell r = run("v/ops/file/read", Maps.of("root", "work", "path", "note!important.txt"));
+		assertEquals("hi", RT.ensureString(RT.getIn(r, "content")).toString());
 	}
 
 	@Test
