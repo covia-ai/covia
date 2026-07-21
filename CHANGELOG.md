@@ -14,6 +14,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Federated job observation carries caller proofs — `X-Covia-Ucans` header on body-less job reads; cross-venue HITL verified end-to-end
 - Authenticated callers get public-user access per the public ceiling (#254) — reads, public jobs, DLFS, and secret resolution fallback (use-only, never extraction)
 - `ucan:issue` is a granting surface — mints over another principal's resource under a presented `grant/<ability>` right, expiry-capped by the right's validity
+- Archive adapter (zip/jar) — `archive:list`/`extract`/`zip` over file roots, from/to a root file, CAS asset, or inline bytes; zip-slip + zip-bomb guarded. `file:read`/`list`/`stat`/`tree` see into archives via `x.zip!/entry` (jdk.zipfs, read-only, never fabricates an archive). `archive` skill
 
 ### Changed
 - Job lifecycle hardening — atomic updates, post-commit persistence, shutdown admission gate
