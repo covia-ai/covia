@@ -291,7 +291,8 @@ public class HTTPAdapter extends AAdapter {
 				}
 				String resolved = engine.resolveSecret(bearerSecret.toString(), ctx);
 				if (resolved == null) {
-					throw new IllegalArgumentException("Could not resolve bearerSecret reference: " + bearerSecret);
+					throw new IllegalArgumentException("Cannot resolve bearerSecret '" + bearerSecret
+						+ "'; store it with secret:set or pass an existing s/<name> reference");
 				}
 				requestBuilder.setHeader("Authorization", "Bearer " + resolved);
 			}

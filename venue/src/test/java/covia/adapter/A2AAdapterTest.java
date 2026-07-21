@@ -211,7 +211,15 @@ class A2AAdapterTest {
 		VenueHTTP covia = TestServer.COVIA;
 		Job job = covia.invokeSync("v/ops/a2a/agent-card", Maps.of());
 		assertEquals(Status.FAILED, job.getStatus());
-		assertNotNull(job.getErrorMessage());
+		assertTrue(job.getErrorMessage().contains("'url' is required"), job.getErrorMessage());
+	}
+
+	@Test
+	void getTask_missingIdNamesRemoteTaskId() throws Exception {
+		Job job = TestServer.COVIA.invokeSync("v/ops/a2a/get-task", Maps.of(
+			Fields.URL, Strings.create(TestServer.BASE_URL)));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.getErrorMessage().contains("remote A2A task ID"), job.getErrorMessage());
 	}
 
 	// ==================== helpers ====================

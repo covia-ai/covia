@@ -1058,10 +1058,11 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				try {
 					toolInput = parseToolArguments(RT.getIn(tc, K_ARGUMENTS));
 				} catch (IllegalArgumentException e) {
+					String detail = describeFailure(e);
 					log.warn("Frame[{}] tool call {} has malformed arguments: {}",
-						frameIndex, toolName, e.getMessage());
+						frameIndex, toolName, detail);
 					activeFrame = GoalTreeContext.appendTurn(activeFrame,
-						toolResultMessage(toolCallId, toolName, Strings.create("Error: " + e.getMessage())));
+						toolResultMessage(toolCallId, toolName, Strings.create("Error: " + detail)));
 					continue;
 				}
 
@@ -1148,8 +1149,7 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 						}
 						toolResult = out.result();
 					} catch (RuntimeException e) {
-						String msg = (e.getMessage() != null) ? e.getMessage() : e.getClass().getSimpleName();
-						toolResult = Strings.create("Error: skill_load failed: " + msg);
+						toolResult = Strings.create("Error: skill_load failed: " + describeFailure(e));
 					}
 
 				} else if (TOOL_MORE_TOOLS.equals(toolName)) {

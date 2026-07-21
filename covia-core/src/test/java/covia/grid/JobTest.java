@@ -86,6 +86,20 @@ public class JobTest {
 		assertTrue(job.isFinished());
 	}
 
+	@Test
+	public void testPauseAndResumeErrorsExplainExpectedStateOrAction() {
+		Job pending = Job.create(Maps.of(Fields.ID, "pending", Fields.STATUS, Status.PENDING));
+		IllegalStateException pendingPause = assertThrows(IllegalStateException.class, pending::pause);
+		assertTrue(pendingPause.getMessage().contains("expected STARTED"));
+
+		Job running = Job.create(Maps.of(Fields.ID, "running", Fields.STATUS, Status.STARTED));
+		IllegalStateException unsupportedPause = assertThrows(IllegalStateException.class, running::pause);
+		assertTrue(unsupportedPause.getMessage().contains("cancel it if appropriate"));
+
+		IllegalStateException runningResume = assertThrows(IllegalStateException.class, running::resume);
+		assertTrue(runningResume.getMessage().contains("expected PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED"));
+	}
+
 	/**
 	 * Test that awaitResult() returns immediately when job completes successfully
 	 */

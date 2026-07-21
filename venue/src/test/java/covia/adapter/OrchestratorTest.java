@@ -476,7 +476,30 @@ public class OrchestratorTest {
 			fail("Should fail when a step fails");
 		} catch (Exception e) {
 			assertEquals(Status.FAILED, job.getStatus());
+			String error = job.getErrorMessage();
+			assertTrue(error.contains("step 0"), error);
+			assertTrue(error.contains("v/test/ops/error"), error);
+			assertTrue(error.contains("boom"), error);
 		}
+	}
+
+	@Test
+	public void testEmptyStepsExplainRequirement() {
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Empty Test",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [],
+					"result": {}
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.empty(), RequestContext.of(ALICE_DID));
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertTrue(job.getErrorMessage().contains("at least one step"), job.getErrorMessage());
 	}
 
 	// ========== Concat input spec ==========

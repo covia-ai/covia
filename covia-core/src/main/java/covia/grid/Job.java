@@ -423,12 +423,15 @@ public class Job {
 	 *         pause; unsupported pause surfaces as HTTP 409).
 	 */
 	public void pause() {
-		if (isFinished()) throw new IllegalStateException("Job already finished");
+		if (isFinished()) throw new IllegalStateException(
+			"Cannot pause job: status is terminal (" + getStatus() + ")");
 		if (!Status.STARTED.equals(getStatus())) {
-			throw new IllegalStateException("Job is not running: " + getStatus());
+			throw new IllegalStateException(
+				"Cannot pause job: status is " + getStatus() + "; expected STARTED");
 		}
 		Runnable hook = onPause;
-		if (hook == null) throw new IllegalStateException("Job does not support pausing");
+		if (hook == null) throw new IllegalStateException(
+			"Cannot pause job: its operation does not support pausing; cancel it if appropriate");
 		hook.run();
 		update(job -> job.assoc(Fields.STATUS, Status.PAUSED));
 	}
@@ -442,10 +445,14 @@ public class Job {
 	 *         input; unsupported resume surfaces as HTTP 409).
 	 */
 	public void resume() {
-		if (isFinished()) throw new IllegalStateException("Job already finished");
-		if (!isPaused()) throw new IllegalStateException("Job is not paused: " + getStatus());
+		if (isFinished()) throw new IllegalStateException(
+			"Cannot resume job: status is terminal (" + getStatus() + ")");
+		if (!isPaused()) throw new IllegalStateException(
+			"Cannot resume job: status is " + getStatus()
+				+ "; expected PAUSED, INPUT_REQUIRED, or AUTH_REQUIRED");
 		Runnable hook = onResume;
-		if (hook == null) throw new IllegalStateException("Job does not support resuming");
+		if (hook == null) throw new IllegalStateException(
+			"Cannot resume job: its operation does not provide a resume action");
 		hook.run();
 		update(job -> job.assoc(Fields.STATUS, Status.STARTED));
 	}

@@ -1926,6 +1926,26 @@ public class AgentAdapterTest {
 		assertEquals(1, agent.getTimeline().count(), "Transition should have run once");
 	}
 
+	@Test
+	public void testTriggerWithoutOperationNamesRecovery() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "unconfigured-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		// Simulate a legacy/corrupt record whose config lacks the transition op.
+		AgentState unconfigured = engine.getVenueState().users().get(ALICE_DID)
+			.agent("unconfigured-agent");
+		unconfigured.putRecord(unconfigured.getRecord().assoc(AgentState.KEY_CONFIG, Maps.empty()));
+
+		Job job = engine.jobs().invokeOperation(
+			"v/ops/agent/trigger",
+			Maps.of(Fields.AGENT_ID, "unconfigured-agent"),
+			RequestContext.of(ALICE_DID));
+		assertThrows(covia.exception.JobFailedException.class, () -> job.awaitResult(5000));
+		assertTrue(job.getErrorMessage().contains("config.operation"), job.getErrorMessage());
+		assertTrue(job.getErrorMessage().contains("agent:update"), job.getErrorMessage());
+	}
+
 	/**
 	 * Regression for #64 — phantom RUNNING state. If the agent's lattice status
 	 * shows RUNNING but no live run exists (crash-recovery remnant, stale

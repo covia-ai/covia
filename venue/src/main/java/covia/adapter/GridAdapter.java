@@ -86,7 +86,8 @@ public class GridAdapter extends AAdapter {
 	private CompletableFuture<ACell> invokeRun(RequestContext ctx, ACell meta, ACell input) {
 		AString targetOperation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 		if (targetOperation == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("No grid operation specified"));
+			return CompletableFuture.failedFuture(new IllegalArgumentException(
+				"'operation' is required; pass an operation path or asset hash"));
 		}
 
         ACell operationInput = coerceOperationInput(RT.getIn(input, Fields.INPUT));
@@ -104,7 +105,8 @@ public class GridAdapter extends AAdapter {
 	private CompletableFuture<ACell> invokeAsync(RequestContext ctx, ACell meta, ACell input) {
 		AString targetOperation = RT.ensureString(RT.getIn(input, Fields.OPERATION));
 		if (targetOperation == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("No grid operation specified"));
+			return CompletableFuture.failedFuture(new IllegalArgumentException(
+				"'operation' is required; pass an operation path or asset hash"));
 		}
 
         ACell operationInput = coerceOperationInput(RT.getIn(input, Fields.INPUT));
@@ -142,7 +144,8 @@ public class GridAdapter extends AAdapter {
 	private CompletableFuture<ACell> invokeJobStatus(RequestContext ctx, ACell meta, ACell input) {
 		Blob jobId = parseJobId(RT.getIn(input, Fields.ID));
 		if (jobId == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("Job ID is required"));
+			return CompletableFuture.failedFuture(new IllegalArgumentException(
+				"'id' is required; use the job ID returned by grid:invoke"));
 		}
 
 		Venue venue = selectVenue(ctx, resolveVenue(meta, input), input);
@@ -152,7 +155,8 @@ public class GridAdapter extends AAdapter {
 	private CompletableFuture<ACell> invokeJobResult(RequestContext ctx, ACell meta, ACell input) {
 		Blob jobId = parseJobId(RT.getIn(input, Fields.ID));
 		if (jobId == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("Job ID is required"));
+			return CompletableFuture.failedFuture(new IllegalArgumentException(
+				"'id' is required; use the job ID returned by grid:invoke"));
 		}
 
 		Venue venue = selectVenue(ctx, resolveVenue(meta, input), input);

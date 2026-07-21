@@ -123,8 +123,8 @@ public class A2AAdapter extends AAdapter {
 		}
 		return switch (subOp) {
 			case "getAgentCard" -> fetchAgentCard(input);
-			case "getTask"      -> rpcCall(input, A2AMethods.GET_TASK_METHOD, idParams(input));
-			case "cancel"       -> rpcCall(input, A2AMethods.CANCEL_TASK_METHOD, idParams(input));
+			case "getTask"      -> rpcCallWithId(input, A2AMethods.GET_TASK_METHOD);
+			case "cancel"       -> rpcCallWithId(input, A2AMethods.CANCEL_TASK_METHOD);
 			case "send" -> {
 				// Job-worthy (the #85 delegation pattern, caught live by an agent
 				// calling a2a_send as a tool): send exists only in the Job-aware
@@ -144,12 +144,13 @@ public class A2AAdapter extends AAdapter {
 	private CompletableFuture<ACell> fetchAgentCard(ACell input) {
 		AString urlCell = RT.ensureString(RT.getIn(input, Fields.URL));
 		if (urlCell == null) {
-			return CompletableFuture.failedFuture(new IllegalArgumentException("url required"));
+			return CompletableFuture.failedFuture(new IllegalArgumentException(
+				"'url' is required (remote A2A base or RPC URL)"));
 		}
-		String url = normaliseAgentCardUrl(urlCell.toString());
-
+		String url;
 		HttpRequest req;
 		try {
+			url = normaliseAgentCardUrl(urlCell.toString());
 			requireSafeUrl(url);
 			req = HttpRequest.newBuilder(URI.create(url))
 					.GET()
@@ -163,7 +164,8 @@ public class A2AAdapter extends AAdapter {
 				.thenApply(resp -> {
 					int sc = resp.statusCode();
 					if (sc < 200 || sc >= 300) {
-						throw new RuntimeException("Agent card fetch failed: HTTP " + sc);
+						throw new RuntimeException("Agent card fetch failed: HTTP " + sc + ": "
+							+ conciseDetail(resp.body(), 512));
 					}
 					// Round-trip through the SDK mapper so the response is parsed
 					// (and any drift in upstream card format is flagged loudly).
@@ -203,11 +205,20 @@ public class A2AAdapter extends AAdapter {
 	private static Map<String, Object> idParams(ACell input) {
 		AString id = RT.ensureString(RT.getIn(input, Fields.ID));
 		if (id == null) {
-			throw new IllegalArgumentException("id required");
+			throw new IllegalArgumentException("'id' is required (remote A2A task ID)");
 		}
 		Map<String, Object> p = new LinkedHashMap<>();
 		p.put("id", id.toString());
 		return p;
+	}
+
+	/** Keep missing/invalid RPC input on the normal failed-Job path. */
+	private CompletableFuture<ACell> rpcCallWithId(ACell input, String method) {
+		try {
+			return rpcCall(input, method, idParams(input));
+		} catch (IllegalArgumentException e) {
+			return CompletableFuture.failedFuture(e);
+		}
 	}
 
 	/**
@@ -220,9 +231,6 @@ public class A2AAdapter extends AAdapter {
 		if (urlCell == null) {
 			return CompletableFuture.failedFuture(new IllegalArgumentException("url required"));
 		}
-		String url = normaliseRpcUrl(urlCell.toString());
-		requireSafeUrl(url);
-
 		Map<String, Object> envelope = new LinkedHashMap<>();
 		envelope.put("jsonrpc", "2.0");
 		envelope.put("id", UUID.randomUUID().toString());
@@ -233,6 +241,8 @@ public class A2AAdapter extends AAdapter {
 
 		HttpRequest req;
 		try {
+			String url = normaliseRpcUrl(urlCell.toString());
+			requireSafeUrl(url);
 			req = HttpRequest.newBuilder(URI.create(url))
 					.header("Content-Type", "application/json")
 					.header("Accept", "application/a2a+json, application/json")
@@ -249,7 +259,8 @@ public class A2AAdapter extends AAdapter {
 					// Per spec §9, JSON-RPC errors still arrive with HTTP 200;
 					// we only reject on non-2xx transport-level failures.
 					if (sc < 200 || sc >= 300) {
-						throw new RuntimeException("A2A RPC failed: HTTP " + sc + " — " + resp.body());
+						throw new RuntimeException("A2A RPC failed: HTTP " + sc + ": "
+							+ conciseDetail(resp.body(), 512));
 					}
 					ACell parsed = JSON.parse(resp.body());
 					if (!(parsed instanceof AMap)) {
@@ -259,7 +270,7 @@ public class A2AAdapter extends AAdapter {
 					AMap<AString, ACell> parsedMap = (AMap<AString, ACell>) parsed;
 					ACell err = parsedMap.get(Fields.ERROR);
 					if (err != null) {
-						throw new RuntimeException("A2A error: " + err);
+						throw new RuntimeException("A2A error: " + conciseDetail(err, 512));
 					}
 					ACell result = parsedMap.get(Fields.RESULT);
 					if (result == null) {
@@ -294,17 +305,20 @@ public class A2AAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private void doSendMirrored(Job job, ACell input) {
 		AString urlCell = RT.ensureString(RT.getIn(input, Fields.URL));
-		if (urlCell == null) { job.fail("url required"); return; }
-		String rpcUrl = normaliseRpcUrl(urlCell.toString());
+		if (urlCell == null) { job.fail("'url' is required (remote A2A base or RPC URL)"); return; }
+		String rpcUrl;
 		try {
+			rpcUrl = normaliseRpcUrl(urlCell.toString());
 			requireSafeUrl(rpcUrl);
 		} catch (IllegalArgumentException e) {
-			job.fail(e.getMessage());
+			job.fail(describeFailure(e));
 			return;
 		}
 
 		ACell messageRaw = RT.getIn(input, Fields.MESSAGE);
-		if (!(messageRaw instanceof AMap)) { job.fail("message required"); return; }
+		if (!(messageRaw instanceof AMap)) {
+			job.fail("'message' is required and must be an A2A message object"); return;
+		}
 
 		AString continuationTaskIdCell = RT.ensureString(RT.getIn(input, Fields.TASK_ID));
 		String continuationTaskId = continuationTaskIdCell != null ? continuationTaskIdCell.toString() : null;
@@ -312,7 +326,9 @@ public class A2AAdapter extends AAdapter {
 		// Build the outbound Message. Roles from local records are not trusted
 		// for outbound — we're acting as the user from the remote agent's POV.
 		Message parsed = A2ACodec.fromMessageRecord((AMap<AString, ACell>) messageRaw, null, continuationTaskId);
-		if (parsed == null) { job.fail("message could not be parsed"); return; }
+		if (parsed == null) {
+			job.fail("Invalid 'message': include at least one supported A2A message part"); return;
+		}
 		Message outbound = Message.builder()
 				.role(Message.Role.ROLE_USER)
 				.parts(parsed.parts())
@@ -332,7 +348,8 @@ public class A2AAdapter extends AAdapter {
 					if (err != null) {
 						Throwable cause = (err instanceof java.util.concurrent.CompletionException && err.getCause() != null)
 								? err.getCause() : err;
-						job.fail("SendMessage transport failure: " + cause.getMessage());
+						job.fail("SendMessage transport failed: " + describeFailure(cause)
+							+ "; verify 'url' and retry");
 						return;
 					}
 					handleSendResponse(job, rpcUrl, resp);
@@ -341,19 +358,20 @@ public class A2AAdapter extends AAdapter {
 
 	private void handleSendResponse(Job job, String rpcUrl, HttpResponse<String> resp) {
 		if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
-			job.fail("Remote SendMessage failed: HTTP " + resp.statusCode() + " — " + resp.body());
+			job.fail("Remote SendMessage failed: HTTP " + resp.statusCode() + ": "
+				+ conciseDetail(resp.body(), 512));
 			return;
 		}
 		Map<?, ?> envReply;
 		try {
 			envReply = JsonUtil.OBJECT_MAPPER.fromJson(resp.body(), Map.class);
 		} catch (Exception e) {
-			job.fail("Remote SendMessage response not valid JSON: " + e.getMessage());
+			job.fail("Remote SendMessage returned invalid JSON: " + describeFailure(e));
 			return;
 		}
 		Object error = envReply.get("error");
 		if (error != null) {
-			job.fail("Remote SendMessage error: " + error);
+			job.fail("Remote SendMessage error: " + conciseDetail(error, 512));
 			return;
 		}
 		Object result = envReply.get("result");
@@ -373,7 +391,7 @@ public class A2AAdapter extends AAdapter {
 			remoteTask = JsonUtil.OBJECT_MAPPER.fromJson(resultJson, Task.class);
 			taskCell = unwrapKind(JSON.parse(resultJson), "task");
 		} catch (Exception e) {
-			job.fail("Remote SendMessage result not a Task: " + e.getMessage());
+			job.fail("Remote SendMessage result is not a valid Task: " + describeFailure(e));
 			return;
 		}
 		ACell rawResultCell = taskCell; // renamed, same semantics below
@@ -464,14 +482,15 @@ public class A2AAdapter extends AAdapter {
 		HttpRequest req = postEnvelope(rpcUrl, envelope);
 		HttpResponse<String> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
 		if (resp.statusCode() < 200 || resp.statusCode() >= 300) {
-			throw new RuntimeException("HTTP " + resp.statusCode());
+			throw new RuntimeException("Remote getTask failed: HTTP " + resp.statusCode()
+				+ ": " + conciseDetail(resp.body(), 512));
 		}
 		@SuppressWarnings("rawtypes")
 		Map envReply = JsonUtil.OBJECT_MAPPER.fromJson(resp.body(), Map.class);
 		Object error = envReply.get("error");
-		if (error != null) throw new RuntimeException("remote error: " + error);
+		if (error != null) throw new RuntimeException("Remote getTask error: " + conciseDetail(error, 512));
 		Object result = envReply.get("result");
-		if (result == null) throw new RuntimeException("no result");
+		if (result == null) throw new RuntimeException("Remote getTask response has neither result nor error");
 		String resultJson = JsonUtil.OBJECT_MAPPER.toJson(result);
 		Task task = JsonUtil.OBJECT_MAPPER.fromJson(resultJson, Task.class);
 		ACell raw = unwrapKind(JSON.parse(resultJson), "task");

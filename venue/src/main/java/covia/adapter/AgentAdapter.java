@@ -246,7 +246,8 @@ public class AgentAdapter extends AAdapter {
 					AMap<AString, ACell> summary = agentInfo(ctx, agentId);
 					if (summary == null) {
 						return CompletableFuture.failedFuture(
-							new IllegalArgumentException("Agent not found or terminated: " + agentId));
+							new IllegalArgumentException("Agent '" + agentId
+								+ "' was not found or is terminated; use agent:list or agent:create"));
 					}
 					return CompletableFuture.completedFuture(summary);
 				}
@@ -406,7 +407,7 @@ public class AgentAdapter extends AAdapter {
 				default             -> job.fail("Unknown agent operation: " + getSubOperation(meta));
 			}
 		} catch (Exception e) {
-			job.fail(e.getMessage());
+			job.fail(describeFailure(e));
 		}
 	}
 
@@ -421,7 +422,7 @@ public class AgentAdapter extends AAdapter {
 		try {
 			config = parseConfigArg(configArg, ctx);
 		} catch (IllegalArgumentException e) {
-			job.fail(e.getMessage()); return;
+			job.fail(describeFailure(e)); return;
 		}
 		// A genuinely omitted config means "give me the useful platform
 		// default", not a tool-less shell. Reuse the installed skilled template
@@ -581,7 +582,7 @@ public class AgentAdapter extends AAdapter {
 		try {
 			sources = ContextBuilder.skillSources(raw);
 		} catch (RuntimeException e) {
-			return Strings.create(e.getMessage()
+			return Strings.create(describeFailure(e)
 				+ " (the agent will fail at transition time until this is fixed)");
 		}
 		java.util.List<String> unresolved = new java.util.ArrayList<>();
@@ -797,7 +798,7 @@ public class AgentAdapter extends AAdapter {
 		try {
 			overrideConfig = parseConfigArg(RT.getIn(input, Fields.CONFIG), ctx);
 		} catch (IllegalArgumentException e) {
-			job.fail(e.getMessage()); return;
+			job.fail(describeFailure(e)); return;
 		}
 		AMap<AString, ACell> sourceConfig = source.getConfig();
 		AMap<AString, ACell> forkConfig = (overrideConfig == null) ? sourceConfig
@@ -1035,7 +1036,17 @@ public class AgentAdapter extends AAdapter {
 		CompletableFuture<ACell> completion = wakeAgent(ctx.getCallerDID(), agentId, force);
 		if (completion == null) {
 			// force=true (the default) keeps the historical "must start" contract.
-			if (force) { job.fail("Cannot start agent: " + agentId); return; }
+			if (force) {
+				AString transitionOp = resolveTransitionOp(ctx.getCallerDID(), agentId);
+				if (transitionOp == null) {
+					job.fail("Cannot start agent '" + agentId
+						+ "': config.operation is missing or invalid; fix it with agent:update");
+				} else {
+					job.fail("Cannot start agent '" + agentId + "': status is " + agent.getStatus()
+						+ "; inspect with agent:info");
+				}
+				return;
+			}
 			// force=false: an idle agent with no work is not an error — return a snapshot.
 			AMap<AString, ACell> snap = Maps.of(
 				Fields.AGENT_ID, agentId, Fields.STATUS, agent.getStatus());
@@ -1318,7 +1329,8 @@ public class AgentAdapter extends AAdapter {
 
 		// Atomic CAS: SUSPENDED → SLEEPING, clear error
 		if (!agent.tryResume()) {
-			job.fail("Agent is not suspended (status: " + agent.getStatus() + ")");
+			job.fail("Cannot resume agent '" + agentId + "': status is " + agent.getStatus()
+				+ "; agent:resume requires SUSPENDED");
 			return;
 		}
 
@@ -1491,7 +1503,7 @@ public class AgentAdapter extends AAdapter {
 			job.setStatus(Status.STARTED);
 			job.completeWith(doCompleteTask(input, ctx));
 		} catch (Exception e) {
-			job.fail(e.getMessage());
+			job.fail(describeFailure(e));
 		}
 	}
 
@@ -1568,7 +1580,7 @@ public class AgentAdapter extends AAdapter {
 			job.setStatus(Status.STARTED);
 			job.completeWith(doFailTask(input, ctx));
 		} catch (Exception e) {
-			job.fail(e.getMessage());
+			job.fail(describeFailure(e));
 		}
 	}
 
@@ -2107,7 +2119,7 @@ public class AgentAdapter extends AAdapter {
 				} catch (java.util.concurrent.CompletionException e) {
 					Throwable cause = (e.getCause() != null) ? e.getCause() : e;
 					transitionResult = Maps.of(Fields.ERROR,
-						Strings.create("Transition failed: " + cause.getMessage()));
+						Strings.create("Transition failed: " + describeFailure(cause)));
 				} finally {
 					activeTransitions.remove(key, transitionFuture);
 					activeCancellations.remove(key, cancelToken);
@@ -2170,9 +2182,10 @@ public class AgentAdapter extends AAdapter {
 				Fields.RESULT, lastResult != null ? RT.getIn(lastResult, Fields.RESULT) : null,
 				Fields.TASK_RESULTS, allTaskResults));
 		} catch (Exception e) {
+			String failure = describeFailure(e);
 			suspendOnError(ownerDID, agentId, e);
-			failAllPendingForAgent(ownerDID, agentId, e.getMessage());
-			completion.completeExceptionally(new RuntimeException(e.getMessage()));
+			failAllPendingForAgent(ownerDID, agentId, failure);
+			completion.completeExceptionally(new RuntimeException(failure, e));
 		} finally {
 			// Release the launcher slot, then re-check for wakes that may
 			// have arrived while this loop was exiting. remove(key, value)
@@ -2781,7 +2794,7 @@ public class AgentAdapter extends AAdapter {
 	private void suspendOnError(AString callerDID, AString agentId, Exception e) {
 		try {
 			AgentState agent = getAgent(callerDID, agentId);
-			if (agent != null) agent.suspend(Strings.create(e.getMessage()));
+			if (agent != null) agent.suspend(Strings.create(describeFailure(e)));
 		} catch (Exception inner) {
 			log.warn("Failed to set agent error state", inner);
 		}
@@ -2801,7 +2814,8 @@ public class AgentAdapter extends AAdapter {
 
 	private AgentState lookupAgent(Job job, AString callerDID, AString agentId) {
 		AgentState agent = getAgent(callerDID, agentId);
-		if (agent == null) job.fail("Agent not found or terminated: " + agentId);
+		if (agent == null) job.fail("Agent '" + agentId
+			+ "' was not found or is terminated; use agent:list or agent:create");
 		return agent;
 	}
 
@@ -2885,16 +2899,17 @@ public class AgentAdapter extends AAdapter {
 	private boolean failIfSuspended(Job job, AgentState agent, AString agentId) {
 		if (!AgentState.SUSPENDED.equals(agent.getStatus())) return false;
 		AString error = agent.getError();
-		StringBuilder sb = new StringBuilder("Agent is suspended: ").append(agentId);
-		if (error != null) sb.append(" (cause: ").append(error).append(')');
-		sb.append(". Resume with agent:resume.");
+		StringBuilder sb = new StringBuilder("Agent '").append(agentId).append("' is suspended");
+		if (error != null) sb.append(": ").append(conciseDetail(error, 512));
+		sb.append("; fix the cause, then use agent:resume");
 		job.fail(sb.toString());
 		return true;
 	}
 
 	private AgentState requireAgent(AString callerDID, AString agentId) {
 		AgentState agent = getAgent(callerDID, agentId);
-		if (agent == null) throw new IllegalArgumentException("Agent not found or terminated: " + agentId);
+		if (agent == null) throw new IllegalArgumentException("Agent '" + agentId
+			+ "' was not found or is terminated; use agent:list or agent:create");
 		return agent;
 	}
 
@@ -3004,7 +3019,7 @@ public class AgentAdapter extends AAdapter {
 		try {
 			initialLoads = mintLoads(input);
 		} catch (IllegalArgumentException e) {
-			job.fail(e.getMessage());
+			job.fail(describeFailure(e));
 			return null;
 		}
 		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);
@@ -3052,7 +3067,7 @@ public class AgentAdapter extends AAdapter {
 		try {
 			initialLoads = mintLoads(input);
 		} catch (IllegalArgumentException e) {
-			job.fail(e.getMessage());
+			job.fail(describeFailure(e));
 			return null;
 		}
 		ACell sidCell = RT.getIn(input, Fields.SESSION_ID);

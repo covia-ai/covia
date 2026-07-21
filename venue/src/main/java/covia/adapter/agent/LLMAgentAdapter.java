@@ -586,8 +586,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 				try {
 					toolInput = parseToolArguments(RT.getIn(tc, K_ARGUMENTS));
 				} catch (IllegalArgumentException e) {
-					toolResult = Strings.create("Error: " + e.getMessage());
-					log.warn("Tool call {} has malformed arguments: {}", name, e.getMessage());
+					String detail = describeFailure(e);
+					toolResult = Strings.create("Error: " + detail);
+					log.warn("Tool call {} has malformed arguments: {}", name, detail);
 				}
 
 				// Execute the tool — built-in or grid dispatch
@@ -596,8 +597,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 						String toolName = (name != null) ? name.toString() : "";
 						toolResult = executeToolCall(toolName, toolInput, ctx, toolCtx);
 					} catch (Exception e) {
-						toolResult = Strings.create("Error: " + e.getMessage());
-						log.warn("Tool execution failed: {} — {}", name, e.getMessage());
+						String detail = describeFailure(e);
+						toolResult = Strings.create("Error: " + detail);
+						log.warn("Tool execution failed: {} — {}", name, detail);
 					}
 				}
 
@@ -780,8 +782,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			}
 			return out.result();
 		} catch (RuntimeException e) {
-			String msg = (e.getMessage() != null) ? e.getMessage() : e.getClass().getSimpleName();
-			return Strings.create("Error: skill_load failed: " + msg);
+			return Strings.create("Error: skill_load failed: " + describeFailure(e));
 		}
 	}
 
