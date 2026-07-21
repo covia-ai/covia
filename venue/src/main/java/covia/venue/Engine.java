@@ -2135,6 +2135,59 @@ public class Engine {
 			getDIDString(), resource, ability, System.currentTimeMillis() / 1000);
 	}
 
+	/**
+	 * The single authorisation seam. Does the caller's authority cover
+	 * {@code (resource, ability)}? Grants are <b>additive</b>: an inherent
+	 * (unrestricted, own-namespace) grant, an agent {@code config.caps} grant, or
+	 * a cross-user proof each independently authorise. Callers pass the credential
+	 * (the {@link RequestContext}) and the exact resource+ability they guard — all
+	 * the logic (the {@code null}-caps fast path, own-vs-cross-user routing, grant
+	 * coverage, and proof-chain validation) lives here, never at the call site.
+	 */
+	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability) {
+		if (ctx == null) return false;
+		// A cross-user proof (or the public read ceiling) authorises independently
+		// of the caller's own ceiling — the additive cross-user grant.
+		if (crossUserAllows(ctx, resource, ability)) return true;
+		// Own-authority dimension. A null ceiling is unrestricted, but ONLY for
+		// own / unscoped resources — reaching another user's namespace always needs
+		// a proof (handled above), never the fast path.
+		if (ctx.getCaps() == null) {
+			return isOwnOrUnscoped(resource, ctx.getCallerDID());
+		}
+		return ctx.ceilingDenial(resource, ability) == null;
+	}
+
+	/**
+	 * Throwing form of {@link #authorityCovers}: enforces the authority at a point
+	 * of action, raising {@link covia.exception.AuthException} with an actionable
+	 * message when the caller's authority does not cover the request.
+	 */
+	public void requireAuthority(RequestContext ctx, AString resource, AString ability) {
+		if (authorityCovers(ctx, resource, ability)) return;
+		String denial = (ctx != null && ctx.getCaps() != null) ? ctx.ceilingDenial(resource, ability) : null;
+		throw new covia.exception.AuthException(denial != null ? denial
+			: "Capability denied: requires " + (ability != null ? ability : "(any ability)")
+				+ " on " + (resource != null ? resource : "(any)")
+				+ (ctx == null || ctx.getCallerDID() == null ? " (authenticate to act as an identity)" : ""));
+	}
+
+	/**
+	 * True when {@code resource} is the caller's own / an unscoped resource (a bare
+	 * lattice path, the caller's own DID-URL, a content-addressed asset, or a
+	 * scheme-qualified path) — i.e. NOT another user's DID-scoped namespace. Gates
+	 * the {@code null}-caps fast path so it can never authorise cross-user access.
+	 */
+	private static boolean isOwnOrUnscoped(AString resource, AString callerDID) {
+		String canon = covia.lattice.CapabilityChecker.canonicalResource(
+			resource != null ? resource.toString() : null, callerDID);
+		if (canon == null || canon.isEmpty()) return true;   // no specific / content-addressed
+		if (!canon.startsWith("did:")) return true;          // scheme-qualified (file://, …)
+		if (callerDID == null) return false;                 // anonymous cannot own a DID-scoped path
+		String c = callerDID.toString();
+		return canon.equals(c) || canon.startsWith(c + "/");
+	}
+
 	// ========== Secret resolution ==========
 
 	/**

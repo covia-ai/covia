@@ -313,9 +313,20 @@ public class RequestContext {
 	 * @throws AuthException if the ceiling does not cover {@code (resource, ability)}
 	 */
 	public void requireCapability(AString resource, AString ability) {
-		String denial = CapabilityChecker.allows(caps, resource, ability, callerDID,
-			op, invocationInput, gate);
+		String denial = ceilingDenial(resource, ability);
 		if (denial != null) throw new AuthException(denial);
+	}
+
+	/**
+	 * The ceiling check against this context's own fields: the denial message if
+	 * the caller's {@code caps} ceiling does <em>not</em> cover
+	 * {@code (resource, ability)}, or {@code null} if it does (a {@code null}
+	 * ceiling is unrestricted). Package-visible so the {@code Engine} authority
+	 * seam ({@code authorityCovers}) can compose it with the cross-user proof
+	 * check without re-plumbing {@code op}/{@code invocationInput}/{@code gate}.
+	 */
+	String ceilingDenial(AString resource, AString ability) {
+		return CapabilityChecker.allows(caps, resource, ability, callerDID, op, invocationInput, gate);
 	}
 
 	/**
