@@ -153,9 +153,10 @@ public class CapabilityChecker {
 	}
 
 	/**
-	 * Checks whether a capability ceiling allows a specific {@code (resource,
-	 * ability)} pair supplied <em>directly</em> by the executing adapter — not
-	 * derived from an operation name.
+	 * Checks whether a capability scope — the grants a caller holds — covers a
+	 * specific {@code (resource, ability)} pair supplied <em>directly</em> by the
+	 * executing adapter, not derived from an operation name. Either a grant covers
+	 * it or you don't have the right; a {@code null} scope is unrestricted.
 	 *
 	 * <p>This is the enforcement primitive meant to be co-located with the code
 	 * that performs the action: the implementation names the exact resource and
@@ -167,7 +168,7 @@ public class CapabilityChecker {
 	 * form is the primary entry point; a {@link String} overload is provided for
 	 * literal arguments.</p>
 	 *
-	 * @param caps     the caller's granted capability ceiling; {@code null} = unrestricted
+	 * @param caps     the caller's held grant scope; {@code null} = unrestricted
 	 * @param resource the exact resource acted on — a bare lattice path
 	 *                 ({@code "w/x"}, owner-scoped), a DID URL, or a scheme URI;
 	 *                 {@code null}/empty means "no specific resource"
@@ -198,7 +199,7 @@ public class CapabilityChecker {
 	 */
 	public static String allows(AVector<ACell> caps, AString resource, AString ability, AString ownerDID,
 			AString opRef, ACell invocationInput, CapabilityGate gate) {
-		if (caps == null) return null;              // no ceiling = unrestricted
+		if (caps == null) return null;              // no scope = unrestricted (no bounding grants)
 		String canonResource = canonicalResource(resource != null ? resource.toString() : null, ownerDID);
 		if (canonResource == null) canonResource = "";
 		String ab = (ability != null) ? ability.toString() : "";

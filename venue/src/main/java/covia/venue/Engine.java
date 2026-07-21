@@ -2137,25 +2137,27 @@ public class Engine {
 
 	/**
 	 * The single authorisation seam. Does the caller's authority cover
-	 * {@code (resource, ability)}? Grants are <b>additive</b>: an inherent
-	 * (unrestricted, own-namespace) grant, an agent {@code config.caps} grant, or
-	 * a cross-user proof each independently authorise. Callers pass the credential
-	 * (the {@link RequestContext}) and the exact resource+ability they guard — all
-	 * the logic (the {@code null}-caps fast path, own-vs-cross-user routing, grant
-	 * coverage, and proof-chain validation) lives here, never at the call site.
+	 * {@code (resource, ability)}? Grants are <b>additive</b> — <em>either you
+	 * have the right or you don't</em>: an inherent (unrestricted, own-namespace)
+	 * grant, an agent {@code config.caps} grant, or a cross-user proof each
+	 * independently authorise; nothing subtracts. Callers pass the credential (the
+	 * {@link RequestContext}, wrapping an {@code Authority}) and the exact
+	 * resource+ability they guard — all the logic (the {@code null}-scope fast
+	 * path, own-vs-cross-user routing, grant coverage, and proof-chain validation)
+	 * lives here, never at the call site.
 	 */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability) {
 		if (ctx == null) return false;
-		// A cross-user proof (or the public read ceiling) authorises independently
-		// of the caller's own ceiling — the additive cross-user grant.
+		// A cross-user proof (or the public read grant) authorises independently of
+		// the caller's own scope — the additive cross-user grant.
 		if (crossUserAllows(ctx, resource, ability)) return true;
-		// Own-authority ceiling. A null ceiling is unrestricted (the fast path);
-		// otherwise the caller's config grants must cover the resource. An
+		// Own-authority scope. A null scope is unrestricted (the fast path);
+		// otherwise a grant in the caller's scope must cover the resource. An
 		// unrestricted caller's cross-user reach is still gated by the adapter's
 		// own cross-user resolver (which routes through crossUserAllows above) —
-		// the fast path bypasses the ceiling, never the proof requirement.
+		// the fast path skips the scope check, never the proof requirement.
 		if (ctx.getCaps() == null) return true;
-		return ctx.ceilingDenial(resource, ability) == null;
+		return ctx.grantsDenial(resource, ability) == null;
 	}
 
 	/**
@@ -2165,7 +2167,7 @@ public class Engine {
 	 */
 	public void requireAuthority(RequestContext ctx, AString resource, AString ability) {
 		if (authorityCovers(ctx, resource, ability)) return;
-		String denial = (ctx != null && ctx.getCaps() != null) ? ctx.ceilingDenial(resource, ability) : null;
+		String denial = (ctx != null && ctx.getCaps() != null) ? ctx.grantsDenial(resource, ability) : null;
 		throw new covia.exception.AuthException(denial != null ? denial
 			: "Capability denied: requires " + (ability != null ? ability : "(any ability)")
 				+ " on " + (resource != null ? resource : "(any)")
