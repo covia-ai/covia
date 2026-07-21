@@ -409,6 +409,34 @@ public class FileAdapter extends AAdapter {
 		}
 	}
 
+	// ==================== Sibling-adapter API ====================
+	// A single source of truth for the file roots and their jail. Sibling
+	// adapters that operate on the same roots (e.g. ArchiveAdapter) resolve
+	// through here rather than duplicating the root config or the escape checks.
+	// These do NOT check capabilities — the caller enforces its own at the point
+	// of action, naming the exact file:// resource and ability it requires.
+
+	/**
+	 * Resolves a {@code (root, path)} pair to a jailed absolute path inside the
+	 * named root, for reuse by sibling adapters. Throws on an unknown root or a
+	 * path that escapes the root (lexically or via a symlink).
+	 *
+	 * @param mustExist require the resolved path to exist (else {@link NoSuchFileException})
+	 */
+	public Path resolve(RequestContext ctx, String root, String path, boolean mustExist) throws IOException {
+		return resolvePath(ctx, root, path, mustExist);
+	}
+
+	/** True if the named root is read-only; throws if the root is unknown. */
+	public boolean isReadOnlyRoot(String root) {
+		return requireRoot(root).readOnly;
+	}
+
+	/** Throws if the named root is read-only or unknown. */
+	public void requireWritableRoot(String root) {
+		requireWritable(root);
+	}
+
 	// ==================== Invocation ====================
 
 	@Override

@@ -560,6 +560,7 @@ public class Engine {
 		venue.registerAdapter(new HTTPAdapter());
 		venue.registerAdapter(new JVMAdapter());
 		venue.registerAdapter(new FileAdapter());
+		venue.registerAdapter(new covia.adapter.ArchiveAdapter());
 		venue.registerAdapter(new SchemaAdapter());
 		venue.registerAdapter(new JSONAdapter());
 		venue.registerAdapter(new Orchestrator());
