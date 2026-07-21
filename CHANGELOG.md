@@ -31,6 +31,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Fixed
 - `a/<hash>` references resolve without a leading slash
 - Store unlocked when engine construction fails
+- `agent:completeTask`/`failTask` tolerate the documented cross-thread lattice read lag (#214) — the in-scope task is re-read before failing "Task not found", removing a rare race (delete→recreate) where a committed task was transiently invisible to the transition thread
 
 ## [0.6.0] - 2026-07-17
 

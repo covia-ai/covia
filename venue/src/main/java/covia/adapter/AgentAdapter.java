@@ -1460,6 +1460,34 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
+	/** Bounded read retries when resolving an in-scope task (#214 lattice read lag). */
+	private static final int TASK_READ_ATTEMPTS = 10;
+	private static final long TASK_READ_BACKOFF_MS = 25;
+
+	/**
+	 * Resolves the in-scope task index, waiting out the cross-thread lattice read
+	 * lag (#214): a task committed via {@code addTask} before the wake can be
+	 * transiently invisible to a fresh read on this transition thread. Re-reads a
+	 * fresh {@link AgentState} view up to {@link #TASK_READ_ATTEMPTS} times;
+	 * returns the live task index once the task appears, or null if it stays
+	 * absent (genuinely gone — double-complete, or the agent deleted mid-run,
+	 * which {@link #getAgent} reports as null for a TERMINATED agent).
+	 */
+	private Index<Blob, ACell> awaitScopedTaskIndex(AString callerDID, AString agentId, Blob taskId) {
+		for (int attempt = 0; attempt < TASK_READ_ATTEMPTS; attempt++) {
+			try {
+				Thread.sleep(TASK_READ_BACKOFF_MS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				return null;
+			}
+			AgentState agent = getAgent(callerDID, agentId);
+			Index<Blob, ACell> tasks = (agent != null) ? agent.getTasks() : null;
+			if (tasks != null && tasks.get(taskId) != null) return tasks;
+		}
+		return null;
+	}
+
 	private ACell doCompleteTask(ACell input, RequestContext ctx) {
 		AString agentId = ctx.getAgentId();
 		Blob taskId = ctx.getTaskId();
@@ -1471,7 +1499,17 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = requireAgent(ctx.getCallerDID(), agentId);
 		Index<Blob, ACell> tasks = agent.getTasks();
 		if (tasks == null || tasks.get(taskId) == null) {
-			throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
+			// Tolerate the documented cross-thread lattice read lag (#214): the run
+			// loop scoped this cycle to a task it observed, and handleRequest commits
+			// addTask (a CAS) before waking the loop — yet this completeTask/failTask
+			// runs on a SEPARATE transition thread whose fresh read can transiently
+			// lag that commit. Re-read before concluding the task is genuinely gone
+			// (double-complete, or the agent deleted mid-transition). Mirrors the
+			// verify-at-point-of-use guard the resume path already applies (#214).
+			tasks = awaitScopedTaskIndex(ctx.getCallerDID(), agentId, taskId);
+			if (tasks == null) {
+				throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
+			}
 		}
 
 		ACell result = RT.getIn(input, Fields.RESULT);
@@ -1510,7 +1548,17 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = requireAgent(ctx.getCallerDID(), agentId);
 		Index<Blob, ACell> tasks = agent.getTasks();
 		if (tasks == null || tasks.get(taskId) == null) {
-			throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
+			// Tolerate the documented cross-thread lattice read lag (#214): the run
+			// loop scoped this cycle to a task it observed, and handleRequest commits
+			// addTask (a CAS) before waking the loop — yet this completeTask/failTask
+			// runs on a SEPARATE transition thread whose fresh read can transiently
+			// lag that commit. Re-read before concluding the task is genuinely gone
+			// (double-complete, or the agent deleted mid-transition). Mirrors the
+			// verify-at-point-of-use guard the resume path already applies (#214).
+			tasks = awaitScopedTaskIndex(ctx.getCallerDID(), agentId, taskId);
+			if (tasks == null) {
+				throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
+			}
 		}
 
 		ACell errorCell = RT.getIn(input, Fields.ERROR);
