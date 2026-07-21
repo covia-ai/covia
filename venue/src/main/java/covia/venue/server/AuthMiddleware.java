@@ -20,7 +20,6 @@ import convex.auth.did.DIDVerifier;
 import convex.auth.ucan.UCANValidator;
 import convex.core.lang.RT;
 import covia.api.Fields;
-import covia.lattice.CapabilityChecker;
 import covia.venue.Auth;
 import covia.venue.RequestContext;
 import covia.venue.auth.JWKSClient;
@@ -469,28 +468,21 @@ public class AuthMiddleware {
 
 	/**
 	 * Attach transport-presented UCAN authority to a request context — the single
-	 * seam used by every invoke transport (REST, MCP). Two things, in order:
-	 * <ol>
-	 *   <li><b>Proofs</b> — the cryptographically-verified tokens, for cross-user
-	 *       grant checks (unchanged behaviour).</li>
-	 *   <li><b>Self-attenuation ceiling</b> — capabilities the <em>owner</em>
-	 *       authored over their own resources, restricting this session. Set as
-	 *       {@code caps} so the executing adapter applies them as a ceiling at its
-	 *       enforcement point. Closes the gap where a presented attenuated token
-	 *       ran with full authority (#131).</li>
-	 * </ol>
+	 * seam used by every invoke transport (REST, MCP). Presented proofs are the
+	 * cryptographically-verified tokens, attached for <b>cross-user grant
+	 * checks</b> (§5.2). Proofs are <b>additive</b>: a token only ever <em>adds</em>
+	 * a grant, it never subtracts from the caller's own authority — so there is no
+	 * wire-level self-attenuation. To act with reduced authority, run under a
+	 * narrower {@link covia.grid.Authority} (an agent's {@code config.caps}) or
+	 * present only the UCANs the request needs.
 	 *
-	 * <p>The owner is the authority over its own namespace; the venue only
-	 * enforces. So the ceiling is taken from tokens the caller authored for
-	 * itself ({@code iss == aud == caller}). A ceiling can only <em>narrow</em>
-	 * the caller's own authority — never widen it — so this is escalation-safe.
-	 * With no token presented, nothing is attached and access is unrestricted
+	 * <p>With no token presented, nothing is attached and access is unrestricted
 	 * (the common case).</p>
 	 *
 	 * @param rctx context for the authenticated caller (caller DID already set)
 	 * @param bearer Authorization bearer JWT, or null
 	 * @param ucans transport {@code ucans} vector, or null
-	 * @return rctx with proofs and (if any) the self-cap ceiling attached
+	 * @return rctx with the presented proofs attached
 	 */
 	public static RequestContext withTransportAuth(RequestContext rctx, AString bearer,
 			AVector<ACell> ucans) {
@@ -559,12 +551,10 @@ public class AuthMiddleware {
 		// NOT retained for relay — it is audienced to THIS venue (#149) and must
 		// never be replayed elsewhere.
 		if (ucans != null && !ucans.isEmpty()) rctx = rctx.withRawUcans(ucans);
-		AString caller = rctx.getCallerDID();
-		long now = System.currentTimeMillis() / 1000;
-		// Derives the self-attenuation ceiling: a single-hop selection of the caller's
-		// self-authored tokens (iss == aud == caller) plus covia's narrow-only guard.
-		AVector<ACell> caps = CapabilityChecker.selfCapabilities(proofs, caller, caller, now);
-		if (caps != null) rctx = rctx.withCaps(caps);
+		// No self-attenuation from the wire: presented proofs are additive grants,
+		// never a subtractive self-ceiling. To act with reduced authority, hand the
+		// callee a narrower Authority (Authority.of(did, grants)) or present only the
+		// UCANs the request needs — you never send everything and then subtract.
 		return rctx;
 	}
 

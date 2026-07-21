@@ -64,7 +64,7 @@ public class AgentApiTest {
 	@BeforeAll
 	public void setup() throws Exception {
 		// A fresh authenticated caller. Audience = the venue (passes validation);
-		// aud != iss, so no self-attenuation → an unrestricted authenticated
+		// a bearer carries identity, never a ceiling → an unrestricted authenticated
 		// session that may create/list its own agents. The DID is unique to this
 		// class, isolating its job count from every other test.
 		AKeyPair kp = AKeyPair.generate();

@@ -72,111 +72,20 @@ public class UCANTest {
 			ALICE).awaitResult(5000);
 	}
 
-	// ========== #131 — self-attenuation ceiling on the direct invoke path ==========
-	//
-	// The owner is the authority over its own namespace; the venue enforces. A
-	// self-ceiling is an owner-authored attenuation over the owner's own
-	// resources (iss == aud == caller). withTransportAuth derives it (via
-	// CapabilityChecker.selfCapabilities) and sets it as caps; enforceCaps applies
-	// it against owner-scoped (canonical) resources. A token NOT authored by the
-	// owner (e.g. venue-signed) forms no self-ceiling.
-
 	private static final long HOUR = 3600;
-
-	/** A token the owner signs for itself (iss == aud == owner) — the authority
-	 *  over its own namespace attenuating its own session. */
-	private AString ownerToken(AKeyPair ownerKP, AVector<ACell> caps) {
-		return UCAN.createJWT(ownerKP, ownerKP.getAccountKey(),
-			(System.currentTimeMillis() / 1000) + HOUR, caps, null);
-	}
-
-	/** A venue-signed token (iss == venue) audienced to the owner — not the
-	 *  owner's own authority, so it forms no self-ceiling. */
-	private AString venueToken(AString audienceDID, AVector<ACell> caps) {
-		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
-			Maps.of(UCAN.AUD, audienceDID, UCAN.ATT, caps,
-				UCAN.EXP, CVMLong.create((System.currentTimeMillis() / 1000) + HOUR)), ALICE);
-		return RT.ensureString(RT.getIn(job.awaitResult(5000), "token"));
-	}
-
-	/** One capability over an absolute (owner-scoped) resource. */
-	private static AVector<ACell> caps(String withResource, AString can) {
-		return Vectors.of((ACell) Capability.create(Strings.create(withResource), can));
-	}
-
-	@Test
-	public void testSelfCapabilitiesNullArgsFailClosed() {
-		long now = System.currentTimeMillis() / 1000;
-		AVector<ACell> proofs = UCANValidator.parseTransportUCANs(
-			Vectors.of(ownerToken(ALICE_KP, caps(ALICE_DID + "/w/health", Capability.CRUD))));
-		assertNull(CapabilityChecker.selfCapabilities(null, ALICE_DID, ALICE_DID, now));
-		assertNull(CapabilityChecker.selfCapabilities(proofs, null, ALICE_DID, now));
-		assertNull(CapabilityChecker.selfCapabilities(proofs, ALICE_DID, null, now));
-	}
-
-	@Test
-	public void testSelfCapabilitiesOwnerAuthoredIncluded() {
-		// Owner signs an attenuation for itself → forms the ceiling.
-		AVector<ACell> proofs = UCANValidator.parseTransportUCANs(
-			Vectors.of(ownerToken(ALICE_KP, caps(ALICE_DID + "/w/health", Capability.CRUD))));
-		AVector<ACell> derived = CapabilityChecker.selfCapabilities(
-			proofs, ALICE_DID, ALICE_DID, System.currentTimeMillis() / 1000);
-		assertNotNull(derived);
-		assertEquals(1L, derived.count());
-	}
-
-	@Test
-	public void testSelfCapabilitiesNonOwnerIssuerExcluded() {
-		// Venue-signed (iss == venue, not the owner) is not the owner's own
-		// authority → no self-ceiling. The owner is the authority over its namespace.
-		AVector<ACell> proofs = UCANValidator.parseTransportUCANs(
-			Vectors.of(venueToken(ALICE_DID, caps(ALICE_DID + "/w/health", Capability.CRUD))));
-		assertNull(CapabilityChecker.selfCapabilities(
-			proofs, ALICE_DID, ALICE_DID, System.currentTimeMillis() / 1000));
-	}
-
-	@Test
-	public void testAttenuatedTokenRestrictsInvoke() {
-		// Owner-authored, scoped to its own w/health only.
-		AString jwt = ownerToken(ALICE_KP, caps(ALICE_DID + "/w/health", Capability.CRUD));
-		RequestContext rctx = AuthMiddleware.withTransportAuth(
-			RequestContext.of(ALICE_DID), jwt, null);
-		assertNotNull(rctx.getCaps(), "an owner-authored attenuation must set a ceiling");
-
-		// In scope: own w/health write allowed (resource canonicalises to
-		// <ALICE_DID>/w/health/bp, covered by the <ALICE_DID>/w/health grant).
-		engine.jobs().invokeOperation("v/ops/covia/write",
-			Maps.of(Fields.PATH, "w/health/bp", Fields.VALUE, Strings.create("120/80")),
-			rctx).awaitResult(5000);
-
-		// Out of scope: own w/other write denied — the ceiling, deterministically.
-		// enforceCaps throws synchronously from invokeOperation, so wrap that call.
-		Throwable ex = assertThrows(Exception.class, () ->
-			engine.jobs().invokeOperation("v/ops/covia/write",
-				Maps.of(Fields.PATH, "w/other/x", Fields.VALUE, Strings.create("nope")), rctx)
-				.awaitResult(5000));
-		assertTrue(messageChain(ex).contains("Capability denied"),
-			"out-of-scope op must be denied: " + messageChain(ex));
-	}
 
 	@Test
 	public void testNoTokenIsUnrestricted() {
-		// No bearer/ucans → no ceiling → full authority over own namespace
-		// (regression guard: existing token-less callers are unaffected).
+		// No bearer/ucans → no ceiling → full authority over own namespace.
+		// Presented proofs are additive grants, never a subtractive self-ceiling:
+		// to act with reduced authority, use a narrower Authority (Authority.of(
+		// did, grants)) or present only the UCANs the request needs.
 		RequestContext rctx = AuthMiddleware.withTransportAuth(
 			RequestContext.of(ALICE_DID), null, null);
 		assertNull(rctx.getCaps());
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/other/free", Fields.VALUE, Strings.create("ok")),
 			rctx).awaitResult(5000);  // no throw
-	}
-
-	private static String messageChain(Throwable t) {
-		StringBuilder sb = new StringBuilder();
-		for (Throwable c = t; c != null; c = c.getCause()) {
-			if (c.getMessage() != null) sb.append(c.getMessage()).append('\n');
-		}
-		return sb.toString();
 	}
 
 	// ========== ucan:issue ==========

@@ -29,68 +29,6 @@ import covia.api.Abilities;
  */
 public class CapabilityChecker {
 
-
-	/**
-	 * Derive the self-attenuation ceiling from presented proof tokens: the union
-	 * of capabilities the verified tokens grant to {@code caller} under the
-	 * authority {@code issuer}, with temporal bounds re-checked. The result is the
-	 * {@code caps} ceiling enforced by {@link #check}. The owner is the authority
-	 * over its own namespace, so for a self-ceiling {@code issuer == caller}.
-	 *
-	 * <p>Assumes signatures and chains were verified at the transport boundary
-	 * ({@code UCANValidator.parseTransportUCANs}); only temporal bounds are
-	 * re-checked. Fail-closed: null {@code proofs}/{@code caller}/{@code issuer}
-	 * → null (no ceiling), never a wildcard.</p>
-	 *
-	 * <p>A self-ceiling is genuinely <b>single-hop</b> and caller-rooted
-	 * ({@code iss == aud == caller}) — no delegation chain, no root-authority
-	 * policy — so it is derived by a local single-hop selection, kept isolated
-	 * from the cross-user proof path ({@link #proofsCover}). On top of the
-	 * selection this adds covia's self-attenuation guard: a self-ceiling may only
-	 * <b>narrow</b>, so a capability with an empty/absent {@code with} — a "match
-	 * any resource" wildcard that would broaden — is dropped from the ceiling.</p>
-	 *
-	 * <p><b>Scope of the wildcard-stripping (#211):</b> the guard above applies
-	 * only to ceilings derived here, from UCAN <em>proof tokens</em>. An agent's
-	 * {@code config.caps} array does not pass through this method — it reaches
-	 * the checker unmodified, where an empty-{@code with} grant such as
-	 * {@code {"with": "", "can": "invoke"}} acts as a match-any wildcard (see
-	 * {@link #covered}). That is the supported way to give a restricted agent
-	 * the {@code invoke} ability its tool calls need.</p>
-	 */
-	public static AVector<ACell> selfCapabilities(AVector<ACell> proofs,
-			AString caller, AString issuer, long now) {
-		if (proofs == null || caller == null || issuer == null) return null;
-		// Single-hop selection: union the attenuations of tokens audienced to the
-		// caller AND issued by `issuer` (== caller for a self-ceiling), still in-date.
-		// Uses the typed UCAN accessors (canonical DID comparison), not raw fields.
-		AVector<ACell> caps = Vectors.empty();
-		for (long i = 0; i < proofs.count(); i++) {
-			AMap<AString, ACell> tokenMap = RT.castMap(proofs.get(i));
-			if (tokenMap == null) continue;
-			UCAN token = UCAN.parse(tokenMap);
-			if (token == null) continue;
-			if (!UCANValidator.checkTemporalBounds(token, now)) continue;
-			if (!caller.equals(token.getAudience())) continue;
-			if (!issuer.equals(token.getIssuer())) continue;
-			caps = caps.concat(token.getCapabilities());
-		}
-		if (caps.isEmpty()) return null;
-		// Self-attenuation may only NARROW: drop empty/absent-`with` (match-any)
-		// caps that would broaden the owner's own authority.
-		AVector<ACell> narrowed = Vectors.empty();
-		for (long i = 0; i < caps.count(); i++) {
-			ACell c = caps.get(i);
-			if (c instanceof AMap<?, ?> m) {
-				@SuppressWarnings("unchecked")
-				AString w = RT.ensureString(((AMap<AString, ACell>) m).get(Capability.WITH));
-				if (w == null || w.count() == 0) continue;
-			}
-			narrowed = narrowed.conj(c);
-		}
-		return narrowed.isEmpty() ? null : narrowed;
-	}
-
 	/**
 	 * Cross-user proof check: do the caller's presented {@code proofs} authorise
 	 * {@code (resource, ability)}? Delegates to the convex-core authority layer

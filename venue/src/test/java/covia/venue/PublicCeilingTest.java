@@ -79,17 +79,16 @@ public class PublicCeilingTest {
 	/**
 	 * An authenticated client whose caller carries no attenuation ceiling. The
 	 * UCAN is audienced to THIS venue (so it passes audience validation — a real
-	 * bearer must be intended for the venue it is presented to), but its audience
-	 * is not the issuer, so it is not a self-delegation: {@code selfCapabilities}
-	 * → null and the session runs unrestricted. Identity authenticates as the
-	 * issuer DID.
+	 * bearer must be intended for the venue it is presented to). Presented proofs
+	 * are additive grants, never a subtractive ceiling, so the session runs
+	 * unrestricted; identity authenticates as the issuer DID.
 	 */
 	private static VenueHTTP authed(VenueServer server) {
 		AKeyPair kp = AKeyPair.generate();
 		AString did = UCAN.toDIDKey(kp.getAccountKey());
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		// Audience = THIS venue (its account key's DID), so the token passes
-		// audience validation; aud != iss, so it forms no self-attenuation.
+		// audience validation; the bearer authenticates identity, not a ceiling.
 		UCAN token = UCAN.create(kp, server.getEngine().getAccountKey(), exp,
 			Vectors.of(Capability.create(Strings.create(did + "/w/"), Capability.CRUD_READ)),
 			Vectors.empty());

@@ -24,6 +24,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Bare UCAN grant resources mean the issuer's own namespace — canonicalised at issuance (custodial) and evaluation (self-sovereign)
 - Agent context assembly is prompt-cache-friendly — volatile values (date, budget map) moved to the tail; Anthropic system/tools caching enabled
 
+### Removed
+- Wire self-attenuation on `/invoke` (#131) — presented proofs are additive-only; reduce authority via a narrower `Authority`, not subtractive tokens
+
 ### Fixed
 - `a/<hash>` references resolve without a leading slash
 - Store unlocked when engine construction fails

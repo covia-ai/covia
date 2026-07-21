@@ -264,8 +264,8 @@ public class A2AAgentCardTest {
 		return UCAN.toDIDKey(kp.getAccountKey());
 	}
 
-	/** A bearer token audienced to this venue — authenticates as the key's DID
-	 *  with no self-attenuation (aud != iss). */
+	/** A bearer token audienced to this venue — authenticates as the key's DID;
+	 *  a bearer carries identity, never a ceiling. */
 	private static String bearerFor(AKeyPair kp) {
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 		return UCAN.create(kp, TestServer.ENGINE.getAccountKey(), exp, Vectors.empty(), Vectors.empty())

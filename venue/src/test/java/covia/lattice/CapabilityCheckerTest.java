@@ -26,7 +26,7 @@ import covia.venue.TestEngine;
  * at its enforcement point (see {@code AdapterCapEnforcementTest}). These tests
  * cover the shared primitives those adapters call — {@link CapabilityChecker#allows}
  * (boundary matching via core's {@code Capability.resourceCovers}), {@code readOnlyCeiling},
- * {@code selfCapabilities}, and {@link RequestContext#requireCapability} — plus
+ * and {@link RequestContext#requireCapability} — plus
  * end-to-end enforcement through {@code JobManager}. Resource/ability prefix
  * matching ultimately delegates to convex-core's {@code Capability.covers},
  * exercised through here.</p>
@@ -421,8 +421,7 @@ public class CapabilityCheckerTest {
 	}
 
 	// ==================================================================
-	// Hardenings (Convex #585 mitigation + self-ceiling hygiene + explicit
-	// cross-user write rejection).
+	// Hardenings (Convex #585 mitigation + explicit cross-user write rejection).
 	// ==================================================================
 
 	@Test
@@ -510,27 +509,6 @@ public class CapabilityCheckerTest {
 		assertNull(CapabilityChecker.allows(caps, "a/deadbeef", "asset/read", null));   // any resource
 		assertNull(CapabilityChecker.allows(caps, "anything/else", "asset/read", null));
 		assertNotNull(CapabilityChecker.allows(caps, "a/deadbeef", "crud/write", null)); // wrong ability — DENY
-	}
-
-	@Test
-	public void testSelfCapabilitiesStripsEmptyWithCaps() {
-		convex.core.crypto.AKeyPair kp = convex.core.crypto.AKeyPair.generate();
-		AString did = convex.auth.ucan.UCAN.toDIDKey(kp.getAccountKey());
-		long now = System.currentTimeMillis() / 1000;
-		// Self-token (iss == aud == caller) granting a scoped read AND an
-		// empty-`with` wildcard write. The wildcard must not survive into the
-		// derived self-ceiling — it would broaden, not narrow.
-		AVector<ACell> caps = Vectors.of(
-			Capability.create(Strings.create(did + "/w/notes"), Capability.CRUD_READ),
-			Capability.create(Strings.create(""), Capability.CRUD_WRITE));
-		convex.auth.ucan.UCAN token = convex.auth.ucan.UCAN.create(
-			kp, kp.getAccountKey(), now + 3600, caps, Vectors.empty());
-		AVector<ACell> ceiling = CapabilityChecker.selfCapabilities(
-			Vectors.of(token.toMap()), did, did, now);
-
-		assertNotNull(ceiling);
-		assertNull(CapabilityChecker.allows(ceiling, "w/notes", "crud/read", did));        // scoped read survives
-		assertNotNull(CapabilityChecker.allows(ceiling, "w/anything", "crud/write", did)); // empty-with wildcard dropped
 	}
 
 	@Test

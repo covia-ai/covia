@@ -589,10 +589,10 @@ public class CoviaAPI extends ACoviaAPI {
 		ACell input=RT.getIn(req, "input");
 		RequestContext rctx = AuthMiddleware.callerContext(ctx);
 
-		// Attach transport UCAN authority — proofs (cross-user grants) and the
-		// self-attenuation ceiling (#131) — from both channels: the `ucans`
-		// envelope array and an `Authorization: Bearer <ucan-jwt>` (IETF
-		// UCAN-HTTP) stashed by AuthMiddleware as UCAN_BEARER_ATTR.
+		// Attach transport UCAN authority — proofs are additive cross-user grants —
+		// from both channels: the `ucans` envelope array and an
+		// `Authorization: Bearer <ucan-jwt>` (IETF UCAN-HTTP) stashed by
+		// AuthMiddleware as UCAN_BEARER_ATTR.
 		AVector<ACell> ucans = RT.getIn(req, "ucans");
 		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
 		// venueDID enables identity-from-ucans: an anonymous transport carrying a
