@@ -161,10 +161,19 @@ public class VenueServer {
 				}
 			};
 			engine = new Engine(config, nodeServer.getCursor(), keyPair, persistHandler);
+			engine.start();
 		} catch (Exception e) {
-			// Construction may fail after the store is opened and NodeServer is
-			// launched (identity mismatch, invalid storage, scheduler rebuild,
-			// etc.). Roll back those resources so the store is not left locked.
+			// Engine construction is inert; start() owns and rolls back its active
+			// resources. close() remains safe here for NEW or failed engines.
+			if (engine != null) {
+				try {
+					engine.close();
+				} catch (Exception closeFailure) {
+					e.addSuppressed(closeFailure);
+				}
+				engine = null;
+			}
+			// Roll back the outer server/store resources so the store is not locked.
 			if (nodeServer != null) {
 				try {
 					nodeServer.close();

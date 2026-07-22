@@ -128,7 +128,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			createGoalAgent(engine, "boot-agent", "v/test/ops/nevertoolllm");
@@ -158,7 +158,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			// Mid-cycle state survived the crash
@@ -210,7 +210,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			createGoalAgent(engine, "sub-agent", "v/test/ops/subgoalllm");
@@ -238,7 +238,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			AVector<ACell> preResume = frames(engine, "sub-agent", sid);
@@ -319,7 +319,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			createGoalAgent(engine, "mint-agent", "v/test/ops/nevertoolllm");
@@ -350,7 +350,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			engine.jobs().recoverJobs();
@@ -407,7 +407,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			createGoalAgent(engine, "task-agent", "v/test/ops/nevertoolllm");
@@ -440,7 +440,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			engine.jobs().recoverJobs();
@@ -483,7 +483,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			createGoalAgent(engine, "gone-agent", "v/test/ops/nevertoolllm");
@@ -512,7 +512,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			// The merge removed the task but the job completion never landed.

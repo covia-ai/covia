@@ -11,7 +11,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -98,7 +97,7 @@ public class Engine {
 	/**
 	 * Storage instance for content associated with assets
 	 */
-	protected final AStorage contentStorage;
+	protected AStorage contentStorage;
 
 	/**
 	 * Venue lattice using Covia.ROOT structure see COG-004.
@@ -148,10 +147,11 @@ public class Engine {
 	 * root and triggers the lattice's sync callback so the propagator
 	 * persists durable. See {@code venue/docs/PERSISTENCE.md}.
 	 */
-	private final ScheduledExecutorService persistenceSweep;
+	private ScheduledExecutorService persistenceSweep;
 
-	/** Atomic close flag — prevents double-close and serves as the sweep daemon's stop signal. */
-	private final AtomicBoolean closed = new AtomicBoolean(false);
+	/** Explicit lifecycle: construction is inert; start/close own active resources. */
+	private enum Lifecycle { NEW, STARTING, STARTED, FAILED, CLOSING, CLOSED }
+	private volatile Lifecycle lifecycle = Lifecycle.NEW;
 
 	/** How often the persistence sweep daemon runs (ms). */
 	private static final long SWEEP_INTERVAL_MS = 100;
@@ -177,16 +177,16 @@ public class Engine {
 	private volatile long lastFlushMillis;
 
 	/**
-	 * Primary constructor: Engine receives an ALatticeCursor from its caller.
-	 * Engine is agnostic to persistence and replication — it just uses the cursor.
-	 * Generates a new random key pair for this venue.
+	 * Primary constructor: assembles an inert Engine around the caller's cursor.
+	 * Call {@link #start()} before use. Generates a random venue key pair.
 	 */
 	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor) throws IOException {
 		this(config, cursor, AKeyPair.generate(), PersistenceHandler.NOOP);
 	}
 
 	/**
-	 * Constructor with explicit key pair. Use when the venue identity must be
+	 * Inert constructor with explicit key pair. Call {@link #start()} before use.
+	 * Use when the venue identity must be
 	 * stable across restarts (same AccountKey = same OwnerLattice slot).
 	 *
 	 * <p>Uses a no-op persistence handler — appropriate for in-memory venues
@@ -199,7 +199,8 @@ public class Engine {
 	}
 
 	/**
-	 * Canonical constructor with persistence handler.
+	 * Canonical inert constructor with persistence handler. Call {@link #start()}
+	 * before use.
 	 *
 	 * <p>The handler is invoked synchronously by {@link #flush()} (and during
 	 * the close-time final flush) to make the venue's lattice value durable.
@@ -212,39 +213,61 @@ public class Engine {
 		this.lattice=cursor;
 		this.persistHandler = (persistHandler != null) ? persistHandler : PersistenceHandler.NOOP;
 		this.lastFlushMillis = System.currentTimeMillis();
-		// Set signing context so SignedCursor can sign writes through OwnerLattice
-		LatticeContext ctx = LatticeContext.create(
-			convex.core.data.prim.CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), this.keyPair);
-		this.lattice.setContext(ctx);
-		initialiseFromCursor();
 		this.jobManager = new JobManager(this);
 		this.gridScheduler = new Scheduler(this);
-		this.contentStorage = createStorage();
-		this.contentStorage.initialise();
+	}
 
-		// The grid scheduler's authoritative state is the :schedule lattice
-		// index; arm its in-memory alarm from the persisted head. GRID_SCHEDULER.md.
-		gridScheduler.start();
-		// Per-thread agent wakeTimes are authoritative; re-derive each agent's
-		// single agent:wake event from them, healing any drift from a prior run.
-		rebuildSchedulerFromLattice();
+	/**
+	 * Starts this engine and all resources it owns.
+	 *
+	 * <p>Construction is deliberately inert so callers retain an Engine
+	 * reference before any storage or threads are started. Startup is
+	 * all-or-nothing: a failure closes every resource acquired so far in the
+	 * reverse of startup order, then rethrows the original failure.</p>
+	 *
+	 * @return this engine
+	 * @throws IOException if content storage cannot be initialised
+	 */
+	public synchronized Engine start() throws IOException {
+		if (lifecycle == Lifecycle.STARTED) return this;
+		if (lifecycle != Lifecycle.NEW) {
+			throw new IllegalStateException("Engine cannot start from state " + lifecycle);
+		}
+		lifecycle = Lifecycle.STARTING;
+		try {
+			// Set signing context only when active startup begins.
+			LatticeContext ctx = LatticeContext.create(
+				CVMLong.create(Utils.getCurrentTimestamp()), this.keyPair);
+			this.lattice.setContext(ctx);
+			initialiseFromCursor();
 
-		// Ensure the venue's own user record exists in :user-data. The venue
-		// is treated as a user (it has its own DID and keypair) so that the
-		// /v/ virtual namespace can resolve to its /w/global/ sub-tree
-		// (per OPERATIONS.md §3). Idempotent — Users.ensure creates if
-		// missing, returns existing otherwise.
+			this.contentStorage = createStorage();
+			this.contentStorage.initialise();
+
+			// The authoritative schedule is persisted in the lattice. Start its
+			// in-memory alarm, then heal per-agent wake handles from durable state.
+			gridScheduler.start();
+			rebuildSchedulerFromLattice();
+
+			bootstrapUsers();
+			startPersistenceSweep();
+			lifecycle = Lifecycle.STARTED;
+			return this;
+		} catch (IOException | RuntimeException | Error failure) {
+			lifecycle = Lifecycle.FAILED;
+			closeStartedResources(false, failure);
+			throw failure;
+		}
+	}
+
+	private void bootstrapUsers() {
+		// The venue is also a user, providing its /v/ virtual namespace.
 		this.venueState.users().ensure(getDIDString());
-		// The anonymous transport principal is framework-owned, not a visitor
-		// registration. Bootstrap it whenever public access is enabled so the
-		// admission policy can remain fail-closed for unknown external DIDs.
+		// :public is one framework-owned shared principal, not a visitor account.
 		if (this.config.isPublicAccess()) {
 			this.venueState.users().ensure(Strings.create(getDIDString() + ":public"));
 		}
-		// The OAuth/login directory is an explicit venue-managed registry. Keep
-		// its existing DIDs admitted across upgrades from the older split-store
-		// implementation, where login records did not always have a matching
-		// :user-data entry yet.
+		// Admit venue-managed login identities created by the older split store.
 		AMap<AString, AMap<AString, ACell>> knownUsers = auth.getUsers();
 		if (knownUsers != null) {
 			for (var entry : knownUsers.entrySet()) {
@@ -252,22 +275,18 @@ public class Engine {
 				if (did != null) this.venueState.users().ensure(did);
 			}
 		}
+	}
 
-		// Start the persistence sweep daemon ONLY if a real persistence
-		// handler is wired. In-memory engines (createTemp, NOOP handler)
-		// have nothing to flush to, so the sweep is meaningless and would
-		// just leak a thread per test.
-		if (this.persistHandler != PersistenceHandler.NOOP) {
-			this.persistenceSweep = Executors.newSingleThreadScheduledExecutor(r -> {
-				Thread t = new Thread(r, "covia-persistence-sweep");
-				t.setDaemon(true);
-				return t;
-			});
-			this.persistenceSweep.scheduleWithFixedDelay(
-				this::sweep, SWEEP_INTERVAL_MS, SWEEP_INTERVAL_MS, TimeUnit.MILLISECONDS);
-		} else {
-			this.persistenceSweep = null;
-		}
+	private void startPersistenceSweep() {
+		// In-memory engines have nothing external to flush and get no daemon.
+		if (this.persistHandler == PersistenceHandler.NOOP) return;
+		this.persistenceSweep = Executors.newSingleThreadScheduledExecutor(r -> {
+			Thread t = new Thread(r, "covia-persistence-sweep");
+			t.setDaemon(true);
+			return t;
+		});
+		this.persistenceSweep.scheduleWithFixedDelay(
+			this::sweep, SWEEP_INTERVAL_MS, SWEEP_INTERVAL_MS, TimeUnit.MILLISECONDS);
 	}
 
 
@@ -284,7 +303,7 @@ public class Engine {
 	 *
 	 * @return Configured storage instance
 	 */
-	private AStorage createStorage() {
+	protected AStorage createStorage() {
 		AString storageType = config.getStorageType();
 		String storagePath = config.getStoragePath();
 
@@ -474,7 +493,7 @@ public class Engine {
 	 * idle venues.</p>
 	 */
 	private void sweep() {
-		if (closed.get()) return;
+		if (lifecycle != Lifecycle.STARTED) return;
 		try {
 			venueState.sync();   // pull fork writes into the root
 			lattice.sync();      // fire NodeServer.onSync → propagator
@@ -532,47 +551,85 @@ public class Engine {
 	 *
 	 * <p>Idempotent — calling close more than once is safe.</p>
 	 */
-	public void close() {
-		if (!closed.compareAndSet(false, true)) return; // already closed
+	public synchronized void close() {
+		if (lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.CLOSING) return;
+		boolean flush = lifecycle == Lifecycle.STARTED;
+		lifecycle = Lifecycle.CLOSING;
+		closeStartedResources(flush, null);
+		lifecycle = Lifecycle.CLOSED;
+	}
+
+	/** Releases resources in the reverse of {@link #start()} acquisition order. */
+	private void closeStartedResources(boolean flush, Throwable startupFailure) {
 		jobManager.beginShutdown();
 
-		// Stop the scheduler after closing job admission so a timer racing with
-		// shutdown cannot submit fresh work after the final persistence barrier.
-		gridScheduler.shutdown();
-
-		// Stop accepting new sweep tasks; wait briefly for in-flight sweep to finish.
-		// May be null for in-memory engines that have no persistence handler.
-		if (persistenceSweep != null) {
-			persistenceSweep.shutdown();
+		// Module loaders/adapters are installed after core Engine startup, so
+		// release their classloaders before unwinding the core resources.
+		for (int i = moduleLoaders.size() - 1; i >= 0; i--) {
 			try {
-				if (!persistenceSweep.awaitTermination(2, TimeUnit.SECONDS)) {
-					persistenceSweep.shutdownNow();
+				moduleLoaders.get(i).close();
+			} catch (Exception e) {
+				recordCloseFailure(startupFailure, "Failed to close module classloader", e);
+			}
+		}
+		moduleLoaders.clear();
+
+		// Persistence sweep is acquired last, so it is stopped first.
+		ScheduledExecutorService sweepExecutor = persistenceSweep;
+		persistenceSweep = null;
+		if (sweepExecutor != null) {
+			sweepExecutor.shutdown();
+			try {
+				if (!sweepExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+					sweepExecutor.shutdownNow();
 				}
 			} catch (InterruptedException e) {
-				persistenceSweep.shutdownNow();
+				sweepExecutor.shutdownNow();
 				Thread.currentThread().interrupt();
+				recordCloseFailure(startupFailure, "Interrupted while stopping persistence sweep", e);
 			}
 		}
 
-		// Final synchronous flush — guarantees the venueState fork's writes
-		// are on disk before VenueServer's nodeServer.close() reads from
-		// the root cursor for its graceful drain.
+		// Stop timers before the final durability barrier so no new jobs or
+		// lattice writes can race with that barrier.
 		try {
-			venueState.sync();
-			persistHandler.persist(lattice.get());
-			persistHandler.flush();
-		} catch (Exception e) {
-			log.warn("Final persistence flush failed during close", e);
+			gridScheduler.shutdown();
+		} catch (RuntimeException e) {
+			recordCloseFailure(startupFailure, "Failed to stop scheduler", e);
 		}
 
-		// Release module classloaders — closes their jar file handles.
-		for (AutoCloseable loader : moduleLoaders) {
+		if (flush && venueState != null) {
 			try {
-				loader.close();
+				venueState.sync();
+				persistHandler.persist(lattice.get());
+				persistHandler.flush();
 			} catch (Exception e) {
-				log.warn("Failed to close module classloader", e);
+				recordCloseFailure(startupFailure, "Final persistence flush failed during close", e);
 			}
 		}
+
+		AStorage storage = contentStorage;
+		contentStorage = null;
+		if (storage != null) {
+			try {
+				storage.close();
+			} catch (RuntimeException e) {
+				recordCloseFailure(startupFailure, "Failed to close content storage", e);
+			}
+		}
+	}
+
+	private static void recordCloseFailure(Throwable startupFailure, String message, Throwable failure) {
+		if (startupFailure != null) {
+			startupFailure.addSuppressed(failure);
+		} else {
+			log.warn(message, failure);
+		}
+	}
+
+	/** True only after start completed successfully and before close began. */
+	public boolean isStarted() {
+		return lifecycle == Lifecycle.STARTED;
 	}
 
 	public static void addDemoAssets(Engine venue) {
@@ -912,7 +969,7 @@ public class Engine {
 	public static Engine createTemp(AMap<AString,ACell> config) {
 		try {
 			RootLatticeCursor<Index<Keyword,ACell>> cursor = Cursors.createLattice(Covia.ROOT);
-			return new Engine(config, cursor);
+			return new Engine(config, cursor).start();
 		} catch (IOException e) {
 			throw new Error(e);
 		}
@@ -2175,7 +2232,7 @@ public class Engine {
 	/**
 	 * Re-derives every agent's single {@code agent:wake} event from the
 	 * authoritative per-thread {@code wakeTime} fields in the lattice. Called
-	 * once during Engine construction: the {@code :schedule} index already
+	 * once during {@link #start()}: the {@code :schedule} index already
 	 * persists across restarts, but a crash could leave a stored handle stale,
 	 * so each agent is rebuilt idempotently (cancel any prior handle, re-arm at
 	 * the earliest pending wake). See {@code venue/docs/GRID_SCHEDULER.md §8}.
