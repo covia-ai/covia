@@ -23,7 +23,7 @@ import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 
 /**
- * covia#98 — cross-user DLFS access via venue-issued UCAN.
+ * covia#98 — cross-user DLFS access via owner-issued UCAN.
  *
  * <p>DLFS drives are per-user (signed with the owner's key). A caller reaches
  * another user's drive by naming it as a DID-URL {@code drive} reference
@@ -43,8 +43,6 @@ import covia.venue.TestEngine;
 public class DLFSCrossUserTest {
 
 	final Engine engine = TestEngine.ENGINE;
-	private final AKeyPair venueKP = engine.getKeyPair();
-
 	private AKeyPair ALICE_KP;
 	private AKeyPair BOB_KP;
 	private AKeyPair CAROL_KP;
@@ -85,14 +83,15 @@ public class DLFSCrossUserTest {
 		return engine.jobs().invokeOperation(op, input, ctx).awaitResult(5000);
 	}
 
-	/** A venue-signed UCAN granting {@code audience} the {@code ability} over
+	/** An owner-signed UCAN granting {@code audience} the {@code ability} over
 	 *  {@code <ownerDID><path>} (path already includes the leading '/'). */
 	private AMap<AString, ACell> issueToken(AString audience, AString ownerDID,
 			String path, String ability, long ttlSeconds) {
 		long exp = (System.currentTimeMillis() / 1000) + ttlSeconds;
+		assertEquals(ALICE_DID, ownerDID, "test helper only owns Alice's signing key");
 		String withURI = ownerDID.toString() + path;
 		UCAN token = UCAN.create(
-			venueKP,
+			ALICE_KP,
 			UCAN.fromDIDKey(audience),
 			exp,
 			Vectors.of(Capability.create(Strings.create(withURI), Strings.create(ability))),

@@ -60,6 +60,7 @@ public class SoftKillPersistenceTest {
 			Strings.create("port"), 0,
 			Config.STORE, Strings.create(storePath),
 			Config.SEED, Strings.create(seedHex),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, true))
 		);
 	}
@@ -70,6 +71,7 @@ public class SoftKillPersistenceTest {
 			Fields.NAME, Strings.create("Soft-Kill Test Venue"),
 			Strings.create("port"), 0,
 			Config.STORE, Strings.create(storePath),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, true))
 		);
 	}

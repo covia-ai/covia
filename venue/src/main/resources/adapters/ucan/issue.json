@@ -1,6 +1,6 @@
 {
 	"name": "Issue UCAN Token",
-	"description": "Creates a venue-signed UCAN capability token. The venue is the issuer. The token grants the audience (aud) the specified capabilities (att) until expiry (exp). Present the returned token as a proof on subsequent requests that require the granted capabilities.",
+	"description": "Creates a venue-signed UCAN capability token for resources controlled by this venue or one of its managed custodial users. The venue is the issuer. Self-sovereign DID owners must sign UCANs with their own key using a client SDK. The token grants the audience (aud) the specified capabilities (att) until expiry (exp).",
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "ucan:issue",
@@ -14,7 +14,7 @@
 				},
 				"att": {
 					"type": "array",
-					"description": "Attenuations — array of {with, can} capability pairs",
+					"description": "Attenuations — array of {with, can} capability pairs for venue-controlled resources",
 					"items": {
 						"type": "object",
 						"properties": {

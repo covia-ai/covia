@@ -3,7 +3,9 @@ package covia.adapter;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
@@ -23,7 +25,7 @@ import covia.grid.Status;
 import covia.grid.hitl.Hitl;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
-import covia.venue.TestEngine;
+import covia.venue.Config;
 
 /**
  * HITL end-to-end (COG-16), driven through the {@link Hitl} builders — the
@@ -40,9 +42,14 @@ import covia.venue.TestEngine;
  */
 public class HITLAdapterTest {
 
-	private final Engine engine = TestEngine.ENGINE;
+	private static final Engine engine;
+	static {
+		engine = Engine.createTemp(Maps.of(
+			Config.HOSTNAME, Strings.create("hitl.test.covia.example"),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		Engine.addDemoAssets(engine);
+	}
 
-	private AKeyPair ALICE_KP;
 	private AKeyPair BOB_KP;
 	private AString ALICE_DID;
 	private AString BOB_DID;
@@ -52,13 +59,19 @@ public class HITLAdapterTest {
 	private static final long HOUR = 3600;
 
 	@BeforeEach
-	public void setup() {
-		ALICE_KP = AKeyPair.generate();
+	public void setup(TestInfo info) {
 		BOB_KP = AKeyPair.generate();
-		ALICE_DID = UCAN.toDIDKey(ALICE_KP.getAccountKey());
+		String method = info.getTestMethod().map(m -> m.getName()).orElse("unknown");
+		ALICE_DID = engine.managedUserDID(Strings.create("hitl-" + method));
+		engine.getVenueState().users().ensure(ALICE_DID);
 		BOB_DID = UCAN.toDIDKey(BOB_KP.getAccountKey());
 		ALICE = RequestContext.of(ALICE_DID);
 		BOB = RequestContext.of(BOB_DID);
+	}
+
+	@AfterAll
+	static void closeEngine() {
+		engine.close();
 	}
 
 	// ========== Helpers ==========
@@ -247,9 +260,9 @@ public class HITLAdapterTest {
 		assertNull(readRecord(ALICE, blocked.getID().toHexString()),
 			"a denied delivery must leave no record in the target's inbox");
 
-		// With an Alice-signed hitl/request delegation, delivery succeeds.
+		// With a venue-signed delegation for managed Alice, delivery succeeds.
 		long exp = (System.currentTimeMillis() / 1000) + HOUR;
-		UCAN delegation = UCAN.create(ALICE_KP, UCAN.fromDIDKey(BOB_DID), exp,
+		UCAN delegation = UCAN.create(engine.getKeyPair(), UCAN.fromDIDKey(BOB_DID), exp,
 			Vectors.of(Capability.create(
 				Strings.create(ALICE_DID + "/h/"), HITLAdapter.ABILITY_HITL_REQUEST)),
 			Vectors.empty());

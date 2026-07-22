@@ -1,6 +1,7 @@
 package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -33,6 +34,18 @@ public class AAdapterInstallTest {
 			return java.util.concurrent.CompletableFuture.completedFuture(null);
 		}
 		Hash probeInstall(String resourcePath) { return installAsset(resourcePath); }
+		static String probeFailure(Throwable error) { return describeFailure(error); }
+	}
+
+	@Test
+	public void testFailureDescriptionIsNonBlankSingleLineAndBounded() {
+		assertEquals("java.lang.RuntimeException",
+			ProbeAdapter.probeFailure(new RuntimeException()));
+		String detail = ProbeAdapter.probeFailure(
+			new RuntimeException("first line\n" + "x".repeat(2000)));
+		assertTrue(!detail.contains("\n"), detail);
+		assertTrue(detail.startsWith("first line "), detail);
+		assertTrue(detail.length() <= 1025, "bounded diagnostic was " + detail.length() + " chars");
 	}
 
 	@Test

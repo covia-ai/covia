@@ -59,7 +59,7 @@ public class SecretAdapter extends AAdapter {
 				case "extract":
 					// TODO: capability-gated secret extraction
 					return CompletableFuture.failedFuture(
-						new AuthException("No capability to extract secrets"));
+						new AuthException("Secret extraction denied; pass an s/<name> reference instead of plaintext"));
 				default:
 					return CompletableFuture.failedFuture(
 						new IllegalArgumentException("Unknown secret operation: " + op));

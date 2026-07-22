@@ -35,12 +35,11 @@ public class CapabilityChecker {
 	 * ({@link UCANValidator#isAuthorised}), which checks capability coverage, then
 	 * per-hop delegation attenuation to the chain root, then root authority.
 	 *
-	 * <p>Root authority is {@link RootAuthorityPolicy#SELF_SOVEREIGN} (the resource
-	 * owner may root a grant over its own namespace) <b>or</b> the venue (for the
-	 * grants it issues/attests — Phase C1 custodial). The venue arm preserves every
-	 * currently venue-issued grant; the self-sovereign arm is the covia#100 enabler
-	 * (cross-venue tokens rooted by the owner verify without naming the venue).
-	 * covia#100 will later narrow the venue arm to the venue's own custodial users.</p>
+	 * <p>The caller supplies the complete root-authority policy. In Covia this is
+	 * normally the self-sovereign owner rule plus a narrowly scoped local-custodial
+	 * rule from {@code Engine.rootAuthorityPolicy()}. Keeping venue identity policy
+	 * out of this generic checker prevents a venue signature from accidentally
+	 * becoming root authority over every DID namespace.</p>
 	 *
 	 * <p>This is the single cross-user grant check — {@code CoviaAdapter.verifyProofs}
 	 * and job-read authorisation both call it, so the model can't drift between the
@@ -50,23 +49,21 @@ public class CapabilityChecker {
 	 *
 	 * @param proofs   the caller's presented UCAN proofs (from the RequestContext)
 	 * @param caller   the caller's DID (proof audience)
-	 * @param venueDID the venue's DID — accepted as a root authority (Phase C1)
+	 * @param rootPolicy policy deciding who may root authority for the resource
 	 * @param resource the full resource being accessed (e.g. {@code "did:key:z…/j/<id>"})
 	 * @param ability  the required ability (e.g. {@link Capability#CRUD_READ})
 	 * @param now      current time, unix seconds
 	 * @return true if the presented proofs authorise the request
 	 */
-	public static boolean proofsCover(AVector<ACell> proofs, AString caller, AString venueDID,
+	public static boolean proofsCover(AVector<ACell> proofs, AString caller, RootAuthorityPolicy rootPolicy,
 			AString resource, AString ability, long now) {
-		if (caller == null || resource == null || ability == null) return false;
-		RootAuthorityPolicy policy = RootAuthorityPolicy.SELF_SOVEREIGN.or(
-			(root, with) -> venueDID != null && venueDID.equals(root));
+		if (caller == null || rootPolicy == null || resource == null || ability == null) return false;
 		// Bare `with` paths mean the TOKEN ISSUER's own namespace — resolved here,
 		// at evaluation, against the signed `iss` that travels with every token.
 		// The `with` form is covia-specific; convex-core validates structure and
 		// signatures and treats resources as opaque, so the relying party
 		// normalises its view of the verified claims before the authority check.
-		return UCANValidator.isAuthorised(normaliseProofs(proofs), caller, resource, ability, policy, now);
+		return UCANValidator.isAuthorised(normaliseProofs(proofs), caller, resource, ability, rootPolicy, now);
 	}
 
 	/**

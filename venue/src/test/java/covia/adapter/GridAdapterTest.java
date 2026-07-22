@@ -2,6 +2,7 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
@@ -27,6 +28,20 @@ import covia.venue.TestServer;
  * {@code covia.venue.grid.CrossVenueTest}.</p>
  */
 class GridAdapterTest {
+
+	@Test
+	void missingOperationNamesExpectedInput() throws Exception {
+		Job job = TestServer.COVIA.invokeSync("v/ops/grid/run", Maps.empty());
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.getErrorMessage().contains("'operation' is required"), job.getErrorMessage());
+	}
+
+	@Test
+	void missingJobIdNamesItsSource() throws Exception {
+		Job job = TestServer.COVIA.invokeSync("v/ops/grid/job-status", Maps.empty());
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.getErrorMessage().contains("returned by grid:invoke"), job.getErrorMessage());
+	}
 
 	@Test
 	void runLocalOperation() throws Exception {

@@ -50,8 +50,8 @@ public class TwoVenueTestServer {
 	public static final VenueHTTP COVIA_B;
 
 	static {
-		SERVER_A = launchVenue(SEED_A);
-		SERVER_B = launchVenue(SEED_B);
+		SERVER_A = launchVenue(SEED_A, "venue-a.test.covia.example");
+		SERVER_B = launchVenue(SEED_B, "venue-b.test.covia.example");
 
 		ENGINE_A = SERVER_A.getEngine();
 		ENGINE_B = SERVER_B.getEngine();
@@ -83,10 +83,12 @@ public class TwoVenueTestServer {
 		}, "two-venue-test-server-shutdown"));
 	}
 
-	private static VenueServer launchVenue(String seedHex) {
+	private static VenueServer launchVenue(String seedHex, String hostname) {
 		return VenueServer.launch(Maps.of(
 			Strings.create("port"), 0, // ephemeral
 			Strings.create("seed"), Strings.create(seedHex),
+			Config.HOSTNAME, Strings.create(hostname),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Fields.MCP, Maps.of(),
 			Fields.A2A, Maps.of(),
 			Config.AUTH, Maps.of(

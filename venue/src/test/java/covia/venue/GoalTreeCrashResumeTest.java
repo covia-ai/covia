@@ -120,14 +120,15 @@ public class GoalTreeCrashResumeTest {
 		EtchStore store = EtchStore.createTemp();
 		AKeyPair kp = AKeyPair.generate();
 		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
-		AMap<AString, ACell> config = Maps.of(Config.DID, did);
+		AMap<AString, ACell> config = Maps.of(Config.DID, did,
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee01");
 
 		// ===== Stage 1: run until parked mid-cycle, then "crash" =====
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			createGoalAgent(engine, "boot-agent", "v/test/ops/nevertoolllm");
@@ -157,7 +158,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			// Mid-cycle state survived the crash
@@ -200,7 +201,8 @@ public class GoalTreeCrashResumeTest {
 		EtchStore store = EtchStore.createTemp();
 		AKeyPair kp = AKeyPair.generate();
 		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
-		AMap<AString, ACell> config = Maps.of(Config.DID, did);
+		AMap<AString, ACell> config = Maps.of(Config.DID, did,
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee02");
 		String chatJobId;
 
@@ -208,7 +210,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			createGoalAgent(engine, "sub-agent", "v/test/ops/subgoalllm");
@@ -236,7 +238,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			AVector<ACell> preResume = frames(engine, "sub-agent", sid);
@@ -308,7 +310,8 @@ public class GoalTreeCrashResumeTest {
 		EtchStore store = EtchStore.createTemp();
 		AKeyPair kp = AKeyPair.generate();
 		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
-		AMap<AString, ACell> config = Maps.of(Config.DID, did);
+		AMap<AString, ACell> config = Maps.of(Config.DID, did,
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 		String chatJobId;
 		String sidHex;
 
@@ -316,7 +319,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			createGoalAgent(engine, "mint-agent", "v/test/ops/nevertoolllm");
@@ -347,7 +350,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			engine.jobs().recoverJobs();
@@ -395,7 +398,8 @@ public class GoalTreeCrashResumeTest {
 		EtchStore store = EtchStore.createTemp();
 		AKeyPair kp = AKeyPair.generate();
 		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
-		AMap<AString, ACell> config = Maps.of(Config.DID, did);
+		AMap<AString, ACell> config = Maps.of(Config.DID, did,
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee03");
 		String requestJobId;
 
@@ -403,7 +407,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			createGoalAgent(engine, "task-agent", "v/test/ops/nevertoolllm");
@@ -436,7 +440,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			engine.jobs().recoverJobs();
@@ -470,7 +474,8 @@ public class GoalTreeCrashResumeTest {
 		EtchStore store = EtchStore.createTemp();
 		AKeyPair kp = AKeyPair.generate();
 		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
-		AMap<AString, ACell> config = Maps.of(Config.DID, did);
+		AMap<AString, ACell> config = Maps.of(Config.DID, did,
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee04");
 		String requestJobId;
 
@@ -478,7 +483,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			createGoalAgent(engine, "gone-agent", "v/test/ops/nevertoolllm");
@@ -507,7 +512,7 @@ public class GoalTreeCrashResumeTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(config, ns.getCursor(), kp);
+			Engine engine = new Engine(config, ns.getCursor(), kp).start();
 			Engine.addDemoAssets(engine);
 
 			// The merge removed the task but the job completion never landed.

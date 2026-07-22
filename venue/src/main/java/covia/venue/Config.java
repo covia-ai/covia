@@ -1,11 +1,19 @@
 package covia.venue;
 
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 
@@ -145,6 +153,12 @@ public class Config {
 	/** Key for venue modules — external adapter jars loaded at boot (see {@link Modules}) */
 	public static final AString MODULES = Strings.intern("modules");
 
+	/** User admission and registration configuration block. */
+	public static final AString USERS = Strings.intern("users");
+
+	/** Whether an authenticated, previously unknown DID is registered on first use. */
+	public static final AString AUTO_CREATE = Strings.intern("autoCreate");
+
 	/**
 	 * Returns the configuration block for a named adapter from the top-level
 	 * {@code adapters} section, or an empty map when absent. Example venue
@@ -253,7 +267,9 @@ public class Config {
 
 	// ========== Server config keys ==========
 
-	/** Key for CORS allowed origins (default: "*" = all) */
+	/** Key for CORS allowed origins. Accepts a string, vector of strings, or
+	 * {@code false}; default is {@code "*"}. The {@code "loopback"} sentinel
+	 * matches literal localhost/127.0.0.1/::1 origins on any port. */
 	public static final AString CORS_ORIGINS = Strings.intern("corsOrigins");
 
 	/** Key for the Private Network Access opt-in (default: false). */
@@ -771,6 +787,19 @@ public class Config {
 	}
 
 	/**
+	 * Whether authenticated DIDs are automatically registered on first use.
+	 * Defaults to false: authenticating an identity is not itself authority to
+	 * create an account at this venue. Public test venues can opt in with
+	 * {@code "users": {"autoCreate": true}}.
+	 */
+	public boolean isUserAutoCreate() {
+		AMap<AString, ACell> users = RT.ensureMap(config.get(USERS));
+		if (users == null) return false;
+		ACell value = users.get(AUTO_CREATE);
+		return value != null && RT.bool(value);
+	}
+
+	/**
 	 * JWT audience policy from {@code auth.audience}: {@code "require"} (aud must
 	 * be present and match this venue) or {@code "verify"} (the default — if aud
 	 * is present it must match; if absent, accept). A mismatched aud is always
@@ -866,12 +895,174 @@ public class Config {
 	// ========== Server config accessors ==========
 
 	/**
-	 * Get the CORS allowed origins.
-	 * @return Allowed origins string, or "*" if not configured (allow all)
+	 * Parsed CORS policy. Exact origins use browser origin semantics (scheme,
+	 * literal host, and effective port); the loopback sentinel never performs a
+	 * DNS lookup, avoiding DNS-rebinding expansion of the allow-list.
 	 */
+	public static final class CorsPolicy {
+		private final boolean enabled;
+		private final boolean anyOrigin;
+		private final boolean loopback;
+		private final List<String> origins;
+		private final List<ParsedOrigin> parsedOrigins;
+
+		private CorsPolicy(boolean enabled, boolean anyOrigin, boolean loopback,
+				List<String> origins) {
+			this.enabled = enabled;
+			this.anyOrigin = anyOrigin;
+			this.loopback = loopback;
+			this.origins = List.copyOf(origins);
+			this.parsedOrigins = this.origins.stream()
+				.map(origin -> ParsedOrigin.parseConfigured(origin, "corsOrigins entry"))
+				.toList();
+		}
+
+		public boolean enabled() { return enabled; }
+		public boolean anyOrigin() { return anyOrigin; }
+		public boolean loopback() { return loopback; }
+		public List<String> origins() { return origins; }
+
+		/**
+		 * Returns the value to emit in Access-Control-Allow-Origin, or null when
+		 * the request origin is not allowed. The caller echoes the original,
+		 * browser-serialised origin for specific policies and emits {@code *} only
+		 * for the wildcard policy.
+		 */
+		public String allowedOriginHeader(String requestOrigin) {
+			if (!enabled || requestOrigin == null) return null;
+			ParsedOrigin candidate;
+			try {
+				candidate = ParsedOrigin.parse(requestOrigin, "Origin header");
+			} catch (IllegalArgumentException e) {
+				return null;
+			}
+			if (anyOrigin) return "*";
+			if (parsedOrigins.contains(candidate)) return requestOrigin;
+			if (loopback && candidate.isLiteralLoopback()) return requestOrigin;
+			return null;
+		}
+	}
+
+	/** Normalised RFC 6454-style HTTP(S) origin tuple. */
+	private record ParsedOrigin(String scheme, String host, int port) {
+		/** Javalin's legacy allowHost accepted a bare host and supplied HTTPS. */
+		static ParsedOrigin parseConfigured(String raw, String label) {
+			String value = (raw != null && !raw.contains("://")) ? "https://" + raw : raw;
+			return parse(value, label);
+		}
+
+		static ParsedOrigin parse(String raw, String label) {
+			if (raw == null || raw.isBlank()) {
+				throw new IllegalArgumentException(label + " must not be empty");
+			}
+			String value = raw.trim();
+			try {
+				URI uri = new URI(value);
+				String scheme = uri.getScheme();
+				String host = uri.getHost();
+				if (scheme == null || host == null || uri.isOpaque()
+						|| uri.getRawUserInfo() != null || uri.getRawQuery() != null
+						|| uri.getRawFragment() != null
+						|| (uri.getRawPath() != null && !uri.getRawPath().isEmpty())) {
+					throw new IllegalArgumentException(label + " is not an origin: " + raw);
+				}
+				scheme = scheme.toLowerCase(Locale.ROOT);
+				if (!"http".equals(scheme) && !"https".equals(scheme)) {
+					throw new IllegalArgumentException(label + " must use http or https: " + raw);
+				}
+				host = host.toLowerCase(Locale.ROOT);
+				if (host.startsWith("[") && host.endsWith("]")) {
+					host = host.substring(1, host.length() - 1);
+				}
+				int port = uri.getPort();
+				if (port > 65535) {
+					throw new IllegalArgumentException(label + " has an invalid port: " + raw);
+				}
+				if (port < 0) port = "https".equals(scheme) ? 443 : 80;
+				return new ParsedOrigin(scheme, host, port);
+			} catch (URISyntaxException e) {
+				throw new IllegalArgumentException(label + " is not a valid origin: " + raw, e);
+			}
+		}
+
+		boolean isLiteralLoopback() {
+			return "localhost".equals(host) || "127.0.0.1".equals(host) || "::1".equals(host);
+		}
+	}
+
+	/**
+	 * Parse {@code corsOrigins}. Supported forms:
+	 * <ul>
+	 *   <li>omitted or {@code "*"}: allow every valid HTTP(S) origin</li>
+	 *   <li>one origin string: allow that origin</li>
+	 *   <li>an array: allow all listed origins; may include {@code "loopback"}</li>
+	 *   <li>{@code "loopback"}: literal localhost / IPv4 / IPv6 loopback, any port</li>
+	 *   <li>{@code false}, {@code "none"}, or an empty array: disable CORS</li>
+	 * </ul>
+	 * Invalid or ambiguous forms fail at startup rather than widening to {@code *}.
+	 */
+	public CorsPolicy getCorsPolicy() {
+		ACell raw = config.get(CORS_ORIGINS);
+		if (raw == null) return new CorsPolicy(true, true, false, List.of());
+		if (CVMBool.FALSE.equals(raw)) return new CorsPolicy(false, false, false, List.of());
+
+		ArrayList<String> values = new ArrayList<>();
+		if (raw instanceof AString s) {
+			values.add(s.toString());
+		} else if (raw instanceof AVector<?> vector) {
+			for (long i = 0; i < vector.count(); i++) {
+				AString value = RT.ensureString(vector.get(i));
+				if (value == null) {
+					throw new IllegalArgumentException("corsOrigins array entries must be strings");
+				}
+				values.add(value.toString());
+			}
+		} else {
+			throw new IllegalArgumentException(
+				"corsOrigins must be a string, an array of strings, or false");
+		}
+
+		if (values.isEmpty()) return new CorsPolicy(false, false, false, List.of());
+		LinkedHashSet<String> exact = new LinkedHashSet<>();
+		boolean any = false;
+		boolean loopback = false;
+		boolean none = false;
+		for (String rawValue : values) {
+			String value = rawValue.trim();
+			switch (value) {
+				case "*" -> any = true;
+				case "loopback" -> loopback = true;
+				case "none" -> none = true;
+				default -> {
+					ParsedOrigin.parseConfigured(value, "corsOrigins entry");
+					exact.add(value);
+				}
+			}
+		}
+		if (none) {
+			if (values.size() != 1) {
+				throw new IllegalArgumentException(
+					"corsOrigins 'none' cannot be combined with allowed origins");
+			}
+			return new CorsPolicy(false, false, false, List.of());
+		}
+		return new CorsPolicy(true, any, loopback, new ArrayList<>(exact));
+	}
+
+	/**
+	 * Legacy scalar CORS accessor. New code should use {@link #getCorsPolicy()}.
+	 * @return the scalar policy, or null when CORS is disabled
+	 * @throws IllegalStateException when the configured policy cannot be
+	 * represented by one string
+	 */
+	@Deprecated
 	public String getCorsOrigins() {
-		AString origins = RT.ensureString(config.get(CORS_ORIGINS));
-		return (origins != null) ? origins.toString() : "*";
+		CorsPolicy policy = getCorsPolicy();
+		if (!policy.enabled()) return null;
+		if (policy.anyOrigin()) return "*";
+		if (policy.loopback() && policy.origins().isEmpty()) return "loopback";
+		if (!policy.loopback() && policy.origins().size() == 1) return policy.origins().get(0);
+		throw new IllegalStateException("CORS policy has multiple origins; use getCorsPolicy()");
 	}
 
 	/**

@@ -69,7 +69,9 @@ public class ModuleLoaderTest {
 	}
 
 	private static Engine bootWith(ACell modulesEntry) throws Exception {
-		AMap<AString, ACell> config = Maps.of(Config.MODULES, Vectors.of(modulesEntry));
+		AMap<AString, ACell> config = Maps.of(
+			Config.MODULES, Vectors.of(modulesEntry),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 		Engine engine = Engine.createTemp(config);
 		Engine.addDemoAssets(engine);
 		return engine;

@@ -29,6 +29,7 @@ import convex.core.lang.RT;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
+import covia.venue.Config;
 import covia.venue.RequestContext;
 
 public class ArchiveAdapterTest {
@@ -42,6 +43,7 @@ public class ArchiveAdapterTest {
 	@BeforeAll
 	static void setup() throws IOException {
 		engine = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			"file", Maps.of("roots", Maps.of(
 				"work", workspace.toAbsolutePath().toString(),
 				"ro", Maps.of(

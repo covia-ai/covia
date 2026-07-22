@@ -85,6 +85,7 @@ public class VenueHTTPTest {
 
 		authServer = VenueServer.launch(Maps.of(
 			Strings.create("port"), 0, // ephemeral
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.AUTH, Maps.of(
 				Config.PUBLIC, Maps.of(Config.ENABLED, false)
 			)));

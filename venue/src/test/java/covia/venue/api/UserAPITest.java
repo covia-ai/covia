@@ -13,6 +13,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
@@ -20,38 +21,55 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.lang.RT;
+import convex.core.crypto.util.Multikey;
+import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.venue.Engine;
-import covia.venue.TestServer;
+import covia.venue.Config;
+import covia.venue.server.VenueServer;
 
 @TestInstance(Lifecycle.PER_CLASS)
 public class UserAPITest {
 
-	static final int PORT = TestServer.PORT;
 	static final AString ALICE = Strings.intern("alice");
 	static final AString BOB = Strings.intern("bob");
 	Engine engine;
+	VenueServer server;
+	int port;
 
 	@BeforeAll
 	public void setup() throws Exception {
-		assertNotNull(TestServer.SERVER, "Test server should be running");
-		engine = TestServer.ENGINE;
+		server = VenueServer.launch(Maps.of(
+			Strings.create("port"), 0,
+			Config.HOSTNAME, Strings.create("test.covia.example")));
+		engine = server.getEngine();
+		port = server.port();
+	}
+
+	@AfterAll
+	public void close() {
+		if (server != null) server.close();
 	}
 
 	@Test
 	void testUserDIDDocument() throws Exception {
-		// Add a user to the database
-		String userDID = "did:web:example.com:u:alice";
-		engine.getAuth().putUser(ALICE, Maps.of(
-			Fields.DID, Strings.create(userDID)
-		));
+		// Provision through the public user-management seam. Resolution must use
+		// the resulting authoritative :user-data record, not require an OAuth row.
+		ACell created = engine.jobs().invokeInternal("v/ops/user/create",
+			Maps.of("username", ALICE), engine.venueContext()).get(10, TimeUnit.SECONDS);
+		String userDID = RT.ensureString(RT.getIn(created, Fields.DID)).toString();
+		assertEquals("did:web:test.covia.example:u:alice", userDID);
+		assertEquals(null, engine.getAuth().getUser(ALICE),
+			"DID resolution must not depend on the OAuth login directory");
 
 		// Fetch the DID document via HTTP
 		HttpClient client = HttpClient.newBuilder().build();
 		HttpRequest req = HttpRequest.newBuilder()
-			.uri(new URI("http://localhost:" + PORT + "/u/alice/did.json"))
+			.uri(new URI("http://localhost:" + port + "/u/alice/did.json"))
 			.GET()
 			.timeout(Duration.ofSeconds(10))
 			.build();
@@ -60,26 +78,51 @@ public class UserAPITest {
 		HttpResponse<String> resp = future.get(10000, TimeUnit.MILLISECONDS);
 
 		assertEquals(200, resp.statusCode(), "Expected 200 OK response");
-		String body = resp.body();
-		assertNotNull(body);
+		AMap<AString, ACell> doc = RT.ensureMap(JSON.parse(resp.body()));
+		assertNotNull(doc);
 
-		// Verify the DID document contains the user's DID
-		assertTrue(body.contains(userDID), "Should contain user DID: " + body);
+		AString did = Strings.create(userDID);
+		AString venueDID = engine.getDIDString();
+		AString keyID = Strings.create(userDID + "#venue-key");
+		assertEquals(did, doc.get(Strings.create("id")));
+		assertEquals(venueDID, doc.get(Strings.create("controller")));
+		assertEquals(Strings.create("https://www.w3.org/ns/did/v1"),
+			doc.get(Strings.create("@context")));
 
-		// Verify the venue is the controller
-		String venueDID = engine.getDIDString().toString();
-		assertTrue(body.contains(venueDID), "Should contain venue DID as controller: " + body);
+		AVector<ACell> methods = RT.ensureVector(doc.get(Strings.create("verificationMethod")));
+		assertEquals(1L, methods.count(), "managed users expose only the venue-controlled key");
+		AMap<AString, ACell> method = RT.ensureMap(methods.get(0));
+		assertEquals(keyID, method.get(Strings.create("id")));
+		assertEquals(venueDID, method.get(Strings.create("controller")));
+		assertEquals(Multikey.encodePublicKey(engine.getAccountKey()),
+			method.get(Strings.create("publicKeyMultibase")),
+			"the DID document must expose the venue key, not a minted user key");
+		assertEquals(keyID, RT.ensureVector(doc.get(Strings.create("authentication"))).get(0));
+		assertEquals(keyID, RT.ensureVector(doc.get(Strings.create("assertionMethod"))).get(0));
+	}
 
-		// Verify standard DID document fields
-		assertTrue(body.contains("\"@context\""), "Should contain @context");
-		assertTrue(body.contains("\"verificationMethod\""), "Should contain verificationMethod");
+	@Test
+	void externalOrOAuthRecordsCannotClaimTheLocalDidWebRoute() throws Exception {
+		AString alias = Strings.create("oauth_alias");
+		AString external = Strings.create("did:web:identity.example:u:mallory");
+		engine.getAuth().putUser(alias, Maps.of(Fields.DID, external));
+		engine.getVenueState().users().ensure(external);
+
+		HttpResponse<String> resp = HttpClient.newHttpClient().send(
+			HttpRequest.newBuilder()
+				.uri(new URI("http://localhost:" + port + "/u/oauth_alias/did.json"))
+				.GET().timeout(Duration.ofSeconds(10)).build(),
+			HttpResponse.BodyHandlers.ofString());
+
+		assertEquals(404, resp.statusCode(),
+			"an external DID and an OAuth alias must not publish a local managed DID document");
 	}
 
 	@Test
 	void testUnknownUserReturns404() throws Exception {
 		HttpClient client = HttpClient.newBuilder().build();
 		HttpRequest req = HttpRequest.newBuilder()
-			.uri(new URI("http://localhost:" + PORT + "/u/unknown_user_xyz/did.json"))
+			.uri(new URI("http://localhost:" + port + "/u/unknown_user_xyz/did.json"))
 			.GET()
 			.timeout(Duration.ofSeconds(10))
 			.build();

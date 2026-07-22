@@ -20,6 +20,7 @@ import convex.core.lang.RT;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.lattice.Covia;
 import covia.venue.Engine;
+import covia.venue.Config;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 
@@ -33,7 +34,8 @@ public class DLFSAdapterTest {
 
 	@BeforeAll
 	static void setup() {
-		engine = Engine.createTemp(null);
+		engine = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
 		Engine.addDemoAssets(engine);
 	}
 

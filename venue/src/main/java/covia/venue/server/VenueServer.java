@@ -4,8 +4,12 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 
 import org.eclipse.jetty.server.ServerConnector;
@@ -70,6 +74,10 @@ import io.javalin.openapi.plugin.swagger.SwaggerPlugin;
 public class VenueServer {
 	
 	public static Logger log=LoggerFactory.getLogger(VenueServer.class);;
+
+	/** POSIX mode for the raw venue seed: readable and writable only by its owner. */
+	private static final Set<PosixFilePermission> OWNER_ONLY_KEY_PERMISSIONS =
+		PosixFilePermissions.fromString("rw-------");
 	
 	protected final Config config;
 
@@ -153,10 +161,19 @@ public class VenueServer {
 				}
 			};
 			engine = new Engine(config, nodeServer.getCursor(), keyPair, persistHandler);
+			engine.start();
 		} catch (Exception e) {
-			// Construction may fail after the store is opened and NodeServer is
-			// launched (identity mismatch, invalid storage, scheduler rebuild,
-			// etc.). Roll back those resources so the store is not left locked.
+			// Engine construction is inert; start() owns and rolls back its active
+			// resources. close() remains safe here for NEW or failed engines.
+			if (engine != null) {
+				try {
+					engine.close();
+				} catch (Exception closeFailure) {
+					e.addSuppressed(closeFailure);
+				}
+				engine = null;
+			}
+			// Roll back the outer server/store resources so the store is not locked.
 			if (nodeServer != null) {
 				try {
 					nodeServer.close();
@@ -261,6 +278,7 @@ public class VenueServer {
 		if (!"temp".equals(storePath) && !"memory".equals(storePath)) {
 			Path keyFile = Path.of(storePath).resolveSibling("venue.key");
 			if (Files.exists(keyFile)) {
+				restrictVenueKeyPermissions(keyFile);
 				String hex = Files.readString(keyFile).trim();
 				AKeyPair kp = AKeyPair.create(Blob.fromHex(hex));
 				log.info("Using venue identity from key file: {}", kp.getAccountKey());
@@ -280,8 +298,7 @@ public class VenueServer {
 
 			// First launch of a new persistent store: generate and save.
 			AKeyPair kp = AKeyPair.generate();
-			keyFile.getParent().toFile().mkdirs();
-			Files.writeString(keyFile, kp.getSeed().toHexString());
+			writeVenueKey(keyFile, kp.getSeed().toHexString());
 			log.info("Generated venue identity (saved to {}): {}", keyFile, kp.getAccountKey());
 			return kp;
 		}
@@ -292,6 +309,37 @@ public class VenueServer {
 		AKeyPair kp = AKeyPair.generate();
 		log.info("Generated ephemeral venue identity: {}", kp.getAccountKey());
 		return kp;
+	}
+
+	/** Creates a raw venue seed with owner-only POSIX permissions from birth. */
+	private static void writeVenueKey(Path keyFile, String seedHex) throws IOException {
+		Path parent = keyFile.getParent();
+		if (parent != null) Files.createDirectories(parent);
+		try {
+			Files.createFile(keyFile,
+				PosixFilePermissions.asFileAttribute(OWNER_ONLY_KEY_PERMISSIONS));
+		} catch (UnsupportedOperationException e) {
+			// Windows and other non-POSIX filesystems use their inherited ACLs.
+			Files.createFile(keyFile);
+		}
+		Files.writeString(keyFile, seedHex, StandardOpenOption.WRITE);
+		restrictVenueKeyPermissions(keyFile);
+	}
+
+	/**
+	 * Repairs existing raw key files on every launch. Permission repair is
+	 * best-effort so an unsupported filesystem or ACL policy cannot strand an
+	 * existing venue identity; failures are actionable in the operator log.
+	 */
+	private static void restrictVenueKeyPermissions(Path keyFile) {
+		try {
+			Files.setPosixFilePermissions(keyFile, OWNER_ONLY_KEY_PERMISSIONS);
+		} catch (UnsupportedOperationException e) {
+			// Expected on Windows and other non-POSIX filesystems.
+		} catch (IOException | SecurityException e) {
+			log.warn("Could not restrict venue identity key {} to owner-only access; "
+				+ "secure this file manually: {}", keyFile, e.getMessage());
+		}
 	}
 
 	/** Default keystore path — the Convex CLI keyring, so venue keys can be
@@ -368,6 +416,9 @@ public class VenueServer {
 	 * (Javalin 7 requires routes at create time), after the auth middleware and
 	 * within the {@code /api/*} filters — so routes mounted under {@code /api/...}
 	 * inherit caller-identity extraction and post-request lattice sync.
+	 * Adapter/module installation, catalog materialisation, secret provisioning,
+	 * and recovery all complete before the HTTP listener is published. Any
+	 * failure closes the partially assembled server in reverse ownership order.
 	 *
 	 * @param config Config, or null for default test config.
 	 * @param extraRoutes Additional route registrars, or null/empty for none.
@@ -388,34 +439,40 @@ public class VenueServer {
 			);
 		}
 
-		VenueServer server= new VenueServer(config);
-		if (extraRoutes!=null) server.extraRouteRegistrars.addAll(extraRoutes);
-		server.start();
+		VenueServer server = null;
+		try {
+			server = new VenueServer(config);
+			if (extraRoutes != null) server.extraRouteRegistrars.addAll(extraRoutes);
 
-		Engine.addDemoAssets(server.getEngine());
-		server.getEngine().provisionConfiguredSecrets();
-		server.getEngine().jobs().recoverJobs();
+			// Complete every fallible bootstrap phase before publishing an HTTP
+			// listener. A caller must never observe a half-populated venue.
+			server.bootstrap();
+			server.start();
+			return server;
+		} catch (RuntimeException | Error failure) {
+			if (server != null) server.closeResources(failure);
+			throw failure;
+		}
+	}
+
+	/** Complete durable/runtime bootstrap before the server becomes reachable. */
+	private void bootstrap() {
+		Engine.addDemoAssets(engine);
+		engine.provisionConfiguredSecrets();
+		engine.jobs().recoverJobs();
 
 		// Wake agents with durable work (pending envelopes, queued tasks, or a
 		// stale inCycle claim from an interrupted cycle). recoverJobs only
 		// stabilises job records — it never re-executes anything (#214) — so
-		// this scan is the single trigger that restarts agent loops after a
-		// restart. Resumed cycles repair their frames and continue.
-		if (server.getEngine().getAdapter("agent")
-				instanceof covia.adapter.AgentAdapter agentAdapter) {
+		// this scan is the single trigger that restarts agent loops after restart.
+		if (engine.getAdapter("agent") instanceof covia.adapter.AgentAdapter agentAdapter) {
 			agentAdapter.wakeAgentsWithWork();
 		}
 
-		// Re-arm HITL expiry timers from durable `expires` stamps (COG-16:
-		// expiry MUST survive restarts). recoverJobs restored the parked
-		// INPUT_REQUIRED jobs these open records refer to; overdue requests
-		// expire immediately, future ones get fresh timers.
-		if (server.getEngine().getAdapter("hitl")
-				instanceof covia.adapter.HITLAdapter hitlAdapter) {
+		// HITL expiry is durable and must be re-armed before requests are served.
+		if (engine.getAdapter("hitl") instanceof covia.adapter.HITLAdapter hitlAdapter) {
 			hitlAdapter.rearmExpiries();
 		}
-
-		return server;
 	}
 
 	/**
@@ -631,19 +688,7 @@ public class VenueServer {
 	}
 
 	private Javalin buildApp() {
-		final String corsOrigins = this.config.getCorsOrigins();
 		Javalin app = Javalin.create(config -> {
-			config.bundledPlugins.enableCors(cors -> {
-				cors.addRule(corsConfig -> {
-					if ("*".equals(corsOrigins)) {
-						corsConfig.anyHost();
-					} else {
-						corsConfig.allowHost(corsOrigins);
-					}
-					corsConfig.exposeHeader("X-Covia-User");
-				});
-			});
-			
 			addOpenApiPlugins(config);
 
 			config.staticFiles.add(staticFiles -> {
@@ -704,7 +749,7 @@ public class VenueServer {
 	 * auth middleware, and the login / API / WebDAV routes.
 	 */
 	private void addHandlers(RoutesConfig routes) {
-		final String corsOrigins = this.config.getCorsOrigins();
+		final Config.CorsPolicy corsPolicy = this.config.getCorsPolicy();
 		final boolean allowPrivateNetwork = this.config.isAllowPrivateNetwork();
 
 		routes.exception(HttpResponseException.class, (e, ctx) -> {
@@ -718,28 +763,11 @@ public class VenueServer {
 			ctx.status(500);
 		});
 
-		routes.options("/api/*", ctx-> {
-			ctx.status(204);
-			ctx.removeHeader("Content-type");
-			ctx.header("access-control-allow-headers", "content-type, authorization, x-covia-user");
-			ctx.header("access-control-allow-methods", "GET,HEAD,PUT,PATCH,POST,DELETE");
-			ctx.header("access-control-allow-origin", corsOrigins);
-			ctx.header("vary","Origin, Access-Control-Request-Headers");
-		});
-
-		// Use after (not afterMatched) so headers are added to ALL responses,
-		// including CORS preflights handled by the Javalin CORS plugin
-		routes.after(ctx->{
-			ctx.header("access-control-allow-origin", corsOrigins);
-			// Private Network Access lets a public web origin reach a venue on a
-			// private/loopback address from the browser. Off by default — it
-			// undermines corsOrigins scoping (a malicious page could read a
-			// localhost venue). Opt in via allowPrivateNetwork for the
-			// preview-origin dev workflow that needs it.
-			if (allowPrivateNetwork) {
-				ctx.header("access-control-allow-private-network", "true");
-			}
-		});
+		// One owner for CORS admission and response headers. The old combination
+		// of Javalin's plugin plus an unconditional after-filter could reject an
+		// origin with 400 and then add an allow header anyway. A parsed policy also
+		// lets the loopback sentinel match literal hosts on any port without DNS.
+		routes.before(ctx -> applyCorsPolicy(ctx, corsPolicy, allowPrivateNetwork));
 
 		// Sync lattice state after every mutation-capable request so writes
 		// are durable across restart. Covers REST (/api/*), MCP JSON-RPC
@@ -753,7 +781,7 @@ public class VenueServer {
 		routes.after("/a2a/*", ctx -> engine.syncState());
 
 		// Auth middleware: before-handlers extracting caller identity.
-		AuthMiddleware.register(routes, engine.getAccountKey(), engine.getAuth(), engine.getDIDString());
+		AuthMiddleware.register(routes, engine);
 
 		// Rate limiting: per-caller token bucket, keyed on the identity the auth
 		// middleware just resolved (all anonymous callers share the venue :public
@@ -772,6 +800,57 @@ public class VenueServer {
 		addLoginRoutes(routes);
 		addAPIRoutes(routes);
 		mountDLFSWebDAV(routes);
+	}
+
+	/** Applies CORS before routing so a denied origin cannot reach a handler. */
+	private void applyCorsPolicy(Context ctx, Config.CorsPolicy policy,
+			boolean allowPrivateNetwork) {
+		if (!policy.enabled()) return; // explicit opt-out: no CORS headers or rejection
+
+		String origin = ctx.header("Origin");
+		if (origin == null) {
+			// Preserve the legacy wildcard behaviour: non-CORS responses also
+			// advertise '*'. Specific policies cannot choose a value without Origin.
+			if (policy.anyOrigin()) {
+				ctx.header("Access-Control-Allow-Origin", "*");
+				ctx.header("Access-Control-Expose-Headers", "X-Covia-User");
+				if (allowPrivateNetwork) {
+					ctx.header("Access-Control-Allow-Private-Network", "true");
+				}
+			}
+			return;
+		}
+
+		String allowed = policy.allowedOriginHeader(origin);
+		if (allowed == null) {
+			ctx.status(400).result("CORS origin denied");
+			ctx.skipRemainingHandlers();
+			return;
+		}
+
+		ctx.header("Access-Control-Allow-Origin", allowed);
+		ctx.header("Access-Control-Expose-Headers", "X-Covia-User");
+		if (!"*".equals(allowed)) ctx.header("Vary", "Origin");
+		// Private Network Access lets a public web origin reach a venue on a
+		// private/loopback address from the browser. Off by default and emitted
+		// only after the request origin passes the configured CORS policy.
+		if (allowPrivateNetwork) {
+			ctx.header("Access-Control-Allow-Private-Network", "true");
+		}
+
+		// Handle browser preflights here rather than on /api/* only. MCP and A2A
+		// are also browser-facing HTTP surfaces and were covered by Javalin's
+		// former global CORS plugin.
+		if ("OPTIONS".equalsIgnoreCase(ctx.method().toString())
+				&& ctx.header("Access-Control-Request-Method") != null) {
+			ctx.status(204);
+			ctx.removeHeader("Content-type");
+			ctx.header("Access-Control-Allow-Headers",
+				"content-type, authorization, x-covia-user");
+			ctx.header("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE");
+			ctx.header("Vary", "Origin, Access-Control-Request-Headers");
+			ctx.skipRemainingHandlers();
+		}
 	}
 
 	/**
@@ -853,28 +932,57 @@ public class VenueServer {
 	 * {@code venue/docs/PERSISTENCE.md} §5.3.</p>
 	 */
 	public void close() {
+		closeResources(null);
+	}
+
+	/**
+	 * Releases server resources in reverse ownership order. During failed
+	 * launch, cleanup failures are suppressed onto the initiating failure;
+	 * during normal close they are logged and cleanup continues.
+	 */
+	private void closeResources(Throwable launchFailure) {
 		if (!closed.compareAndSet(false, true)) return; // idempotent — already closed
-		if (javalin!=null) {
-			javalin.stop();
-			javalin=null;
-		}
-		if (engine!=null) {
+		Javalin app = javalin;
+		javalin = null;
+		if (app != null) {
 			try {
-				engine.close(); // stops sweep daemon, runs final synchronous flush
-			} catch (Exception e) {
-				log.warn("Engine close failed", e);
+				app.stop();
+			} catch (RuntimeException e) {
+				recordCloseFailure(launchFailure, "HTTP server close failed", e);
 			}
 		}
-		if (nodeServer!=null) {
+		Engine ownedEngine = engine;
+		if (ownedEngine != null) {
 			try {
-				nodeServer.close(); // graceful drain — now sees the engine's final flush
+				ownedEngine.close(); // stops sweep daemon, runs final synchronous flush
+			} catch (RuntimeException e) {
+				recordCloseFailure(launchFailure, "Engine close failed", e);
+			}
+		}
+		NodeServer<Index<Keyword, ACell>> ownedNode = nodeServer;
+		if (ownedNode != null) {
+			try {
+				ownedNode.close(); // graceful drain — now sees the engine's final flush
 			} catch (IOException e) {
-				log.warn("NodeServer close failed", e);
+				recordCloseFailure(launchFailure, "NodeServer close failed", e);
 			}
 		}
-		if (store!=null) {
-			store.close();
-			store=null;
+		AStore ownedStore = store;
+		store = null;
+		if (ownedStore != null) {
+			try {
+				ownedStore.close();
+			} catch (RuntimeException e) {
+				recordCloseFailure(launchFailure, "Store close failed", e);
+			}
+		}
+	}
+
+	private static void recordCloseFailure(Throwable launchFailure, String message, Throwable failure) {
+		if (launchFailure != null) {
+			launchFailure.addSuppressed(failure);
+		} else {
+			log.warn(message, failure);
 		}
 	}
 }

@@ -33,7 +33,9 @@ public class PrivateJobsTest {
 
 	@BeforeAll
 	public void setup() {
-		engine = Engine.createTemp(Maps.of(Config.ENABLE_PRIVATE_JOBS, CVMBool.TRUE));
+		engine = Engine.createTemp(Maps.of(
+			Config.ENABLE_PRIVATE_JOBS, CVMBool.TRUE,
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
 		Engine.addDemoAssets(engine);
 		ALICE = Strings.create("did:key:zPrivateJobsTestAlice");
 	}

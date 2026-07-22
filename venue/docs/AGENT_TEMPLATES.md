@@ -260,9 +260,9 @@ Installed at venue startup by `AgentAdapter.installAssets` via `installAgentTemp
 
 Template JSON files live in `venue/src/main/resources/agent-templates/`.
 
-### Default template (Phase 3b — not yet implemented)
+### Default template
 
-As of #92, agents are strict-allowlist by default: an agent is advertised only the tools it declares in `config.tools`, and opts into the `DEFAULT_TOOL_OPS` pack with `defaultTools: true`. An agent created with no config and no `defaultTools` therefore has no tools. A future change may go further and make a focused template (e.g. `worker`) the default starting point for `agent:create` with no config, resolving issue #60.
+`agent:create` with no `config` starts from `v/agents/templates/skilled`: a lean read/list base plus skills loaded on demand. The venue's configured transition and LLM provider replace the portable template defaults, and the provider chooses its own default model. Passing an explicit map—including `{}`—continues to mean exactly that configuration and does not acquire template capabilities implicitly.
 
 ---
 
@@ -346,10 +346,9 @@ Every stage can read the shared `w/pipeline/` area; each writes only its own out
 
 ### Phase 3b: Swap default
 
-✓ Done (differently): `DEFAULT_TOOL_OPS` is now a deliberately minimal read-only
-pack (`covia/read`, `covia/list`) rather than a template swap — skills add
-capability tools on demand via `skill_load`, and the pack is opt-in
-(`defaultTools: true`, #92). Resolves #60 (too many default tools).
+✓ Done: no-config creation uses the `skilled` template, whose deliberately
+minimal read-only base (`covia/read`, `covia/list`) is extended on demand via
+`skill_load`. Explicit configs remain strict allowlists (#92).
 
 ---
 

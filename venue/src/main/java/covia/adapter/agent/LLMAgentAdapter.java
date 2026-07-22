@@ -241,7 +241,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			.withSessionId(RT.getIn(session, Fields.ID))
 			.withSystemPrompt()
 			.withContextEntries()
-			.withSkillsIndex(effectiveLoads);
+			.withSkillsIndex(effectiveLoads)
+			.withLoadedPaths(effectiveLoads);
 		// Session in scope: render its conversation exactly as a live
 		// transition would (same withFrameStack step as processChat), so the
 		// inspected context includes prior turns and tool-failure diagnostics.
@@ -250,6 +251,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			builder = builder.withFrameStack(frames);
 		}
 		ContextBuilder.ContextResult context = builder
+			.withCurrentDate()
+			.withContextMap(effectiveLoads)
 			.withTools()
 			.build();
 
@@ -260,7 +263,19 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			history = history.conj(goalMsg);
 		}
 
-		return buildL3Input(context.config(), history, context.tools());
+		// Mirror the live llmagent first iteration, including runtime-owned
+		// context tools, optional skill_load, and tools contributed by loads.
+		// ContextBuilder only resolves catalog operations; harness tools live here.
+		AVector<ACell> tools = (AVector<ACell>) CONTEXT_TOOLS.concat(context.tools());
+		if (Skills.sourcesOf(context.config()).count() > 0) {
+			tools = (AVector<ACell>) Vectors.of((ACell) TOOL_DEF_SKILL_LOAD).concat(tools);
+		}
+		Map<String, AString> ignoredRoutes = new java.util.HashMap<>();
+		AVector<ACell> loadTools = ContextBuilder.loadsToolDefs(engine, ctx,
+			effectiveLoads, fixedToolNames(tools), ignoredRoutes);
+		tools = (AVector<ACell>) tools.concat(loadTools);
+
+		return buildL3Input(context.config(), history, tools);
 	}
 
 	/**
@@ -413,6 +428,14 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		AMap<AString, ACell> output = Maps.of(
 			AgentState.KEY_STATE, newState,
 			Fields.RESPONSE, Strings.create(responseText));
+		// Preserve the non-terminal assistant/tool exchange for audit. The
+		// framework appends these after the cycle's user input and before the
+		// final response, so it retains chronological order without duplicating
+		// the terminal assistant turn it already materialises from `response`.
+		if (newMessagesFiltered.count() > 1) {
+			output = output.assoc(Fields.TURNS,
+				newMessagesFiltered.slice(0, newMessagesFiltered.count() - 1));
+		}
 		// Session-tier loads (post valve + this cycle's context_load/unload
 		// mutations, tombstones included) — the framework writes them back to
 		// sessions.<sid>.loads inside mergeRunResult's CAS (#142).
@@ -563,8 +586,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 				try {
 					toolInput = parseToolArguments(RT.getIn(tc, K_ARGUMENTS));
 				} catch (IllegalArgumentException e) {
-					toolResult = Strings.create("Error: " + e.getMessage());
-					log.warn("Tool call {} has malformed arguments: {}", name, e.getMessage());
+					String detail = describeFailure(e);
+					toolResult = Strings.create("Error: " + detail);
+					log.warn("Tool call {} has malformed arguments: {}", name, detail);
 				}
 
 				// Execute the tool — built-in or grid dispatch
@@ -573,8 +597,9 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 						String toolName = (name != null) ? name.toString() : "";
 						toolResult = executeToolCall(toolName, toolInput, ctx, toolCtx);
 					} catch (Exception e) {
-						toolResult = Strings.create("Error: " + e.getMessage());
-						log.warn("Tool execution failed: {} — {}", name, e.getMessage());
+						String detail = describeFailure(e);
+						toolResult = Strings.create("Error: " + detail);
+						log.warn("Tool execution failed: {} — {}", name, detail);
 					}
 				}
 
@@ -757,8 +782,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			}
 			return out.result();
 		} catch (RuntimeException e) {
-			String msg = (e.getMessage() != null) ? e.getMessage() : e.getClass().getSimpleName();
-			return Strings.create("Error: skill_load failed: " + msg);
+			return Strings.create("Error: skill_load failed: " + describeFailure(e));
 		}
 	}
 

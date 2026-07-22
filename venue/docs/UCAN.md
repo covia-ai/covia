@@ -113,7 +113,7 @@ This aligns with `DIDURL` from convex-core — the DID is the authority, the pat
 
 - **Agent caps (config ceilings)**: a bare `w/projects/foo` is the *caller's own* resource; enforcement canonicalises it to `<callerDID>/w/projects/foo` before matching, so bare and DID-URL grants compare identically. The same applies to bare `dlfs/<drive>/…` paths.
 - **Signed UCAN tokens**: a bare `with` means the **token issuer's own** namespace, resolved at evaluation against the token's signed `iss` (`CapabilityChecker.normaliseProofs`, applied inside `proofsCover` recursively per chain hop — a bare path in a re-delegation binds to the re-delegator). A self-sovereign owner can therefore sign bare paths naturally; they can never be reinterpreted against the presenter or the target.
-- **Custodial issuance** (`ucan:issue`): the venue signs, so its `iss` is not the caller — bare paths are absolutised to the *caller's* DID before signing (§4.1). Tokens minted by the venue always carry the canonical form.
+- **Custodial issuance** (`ucan:issue`): the venue signs for its own resources or a locally managed `did:web:<host>:u:<user>`, so its `iss` is not the caller — bare paths are absolutised to the *caller's* DID before signing (§4.1). Self-sovereign owners sign client-side. Tokens minted by the venue always carry the canonical form.
 
 Only `file://…` resources are scheme-qualified (host-filesystem, not DID-scoped) and are left unchanged; scheme forms are not issuable.
 
@@ -208,7 +208,8 @@ Semantics (see `CapabilityChecker.allows` and `JobManager.evaluateGate`):
 
 ### 4.1 Issuing
 
-The resource owner creates and signs a UCAN token using `ucan:issue`:
+For a venue-managed custodial identity, the venue creates and signs a UCAN
+token using `ucan:issue`:
 
 ```json
 ucan:issue {
@@ -220,8 +221,10 @@ ucan:issue {
 
 The venue signs the token with the **venue key pair** (the venue is the
 issuer — custodial attestation on the authenticated caller's instruction)
-and returns the complete signed token. The token is self-contained — it
-includes everything needed for verification.
+and returns the complete signed token. A self-sovereign owner (`did:key`, or
+an externally controlled DID) instead signs with their own key using the
+client SDK; registering that DID at a venue does not make the venue its
+controller.
 
 Resource rules at issuance (`UCANAdapter.handleIssue`):
 
@@ -229,15 +232,19 @@ Resource rules at issuance (`UCANAdapter.handleIssue`):
   DID before signing — in a venue-signed token a stored-bare path would
   denote the venue's own namespace (§3.1). Empty paths and scheme forms
   are rejected.
-- A DID URL in the **caller's own namespace** is issuable on root
-  authority — ownership is the authority.
+- A DID URL in the **caller's own namespace** is issuable by this operation
+  only when the caller is a locally managed custodial user. A self-sovereign
+  caller must sign client-side.
 - A DID URL in **another principal's namespace** is issuable only under a
   held **granting right** (COG-17): the caller's transport-presented
   proofs must cover `grant/<can>` on the resource (proofs travel in the
   proof channel, never in operation input), and the minted `exp` must not
   outlive the enabling right (coverage is re-evaluated at the minted
-  expiry). This makes `ucan:issue` a *granting surface* — the `grant/…`
-  rule binds token production; chain resolution stays grant-agnostic.
+  expiry), and the resource must still be controlled by this venue (the
+  venue's own DID or a local custodial user). A granting right cannot turn
+  the venue into root authority for an external DID. This makes `ucan:issue`
+  a *granting surface* — the `grant/…` rule binds token production; chain
+  resolution stays grant-agnostic.
 
 ### 4.2 Delivery
 
@@ -895,7 +902,8 @@ so there are no mode flags or auth fields anywhere:
 ### Phase C1: Signed UCAN Tokens ✓
 
 - `Capability.covers()` in convex-core for attenuation matching
-- `ucan:issue` operation creates and signs tokens
+- `ucan:issue` creates venue-signed roots only for venue-controlled resources;
+  self-sovereign owners sign client-side
 - `ucan:verify` operation verifies a token against the venue's trust policy and explains the verdict (validity, chain depth, root issuer, per-capability root-authority, optional would-it-authorise check)
 - Tokens presented per-request in `RequestContext.proofs`
 - Signature verification on every capability check
@@ -907,8 +915,9 @@ so there are no mode flags or auth fields anywhere:
 - Bare `with` in signed tokens resolves against the token's `iss` at
   evaluation (`normaliseProofs` in `proofsCover`, per chain hop)
 - `ucan:issue` absolutises bare paths to the caller DID before signing;
-  mints over another principal's resource only under a presented
-  `grant/<can>` granting right, with `exp` capped by the right's validity
+  mints over another locally controlled principal's resource only under a
+  presented `grant/<can>` granting right, with `exp` capped by the right's
+  validity; external DID roots are never venue-minted
 - `ucan:verify` canonicalises bare queried resources against the audience
   so diagnostics match enforcement
 - Verification remains grant-agnostic — `grant/…` binds production only
@@ -946,8 +955,8 @@ land together, in order of dependency:
 **C3a — Self-sovereign** (current behaviour).
 - *Verify:* root authority follows the §4.4 rule — the chain root must be signed
   by the resource owner's controlling authority (self-sovereign owners verify
-  offline via `RootAuthorityPolicy.SELF_SOVEREIGN`), or by this venue (the C1
-  arm, kept for venue-issued grants and custodial users). The generic primitive
+  offline via `RootAuthorityPolicy.SELF_SOVEREIGN`), or by this venue only for
+  its locally managed custodial users. The generic primitive
   (chain walk + root-authority policy + pluggable DID verification) is
   convex-core `UCANValidator` (Convex-Dev/convex#635); covia's `proofsCover`
   composes the policy.

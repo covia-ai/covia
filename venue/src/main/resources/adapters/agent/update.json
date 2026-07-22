@@ -1,6 +1,6 @@
 {
 	"name": "Update Agent",
-	"description": "Update an agent's configuration and/or state. Both `config` and `state.config` are shallow-merged into the existing values — partial updates preserve siblings. Updating just `state.config.model` keeps tools, caps, outputs, and systemPrompt intact. Framework-managed fields (status, tasks, inbox, timeline) are never affected. Use this to tweak agent settings without recreating.",
+	"description": "Update a non-running agent's configuration and/or runtime state while preserving its history. `config` and `state` are each shallow-merged into their existing values, so partial updates preserve sibling fields. Agent configuration has one home: pass model, tools, caps, outputs, and systemPrompt under `config`; `state.config` is rejected. Framework-managed fields (status, tasks, inbox, timeline) are never affected. RUNNING is rejected because its active transition already captured the old config; wait for it to finish or use agent:create overwrite=true to halt and replace it.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "agent:update",

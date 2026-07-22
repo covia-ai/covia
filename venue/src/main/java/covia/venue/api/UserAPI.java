@@ -11,8 +11,8 @@ import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
-import covia.api.Fields;
 import covia.grid.Venue;
+import covia.venue.User;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 import io.javalin.openapi.HttpMethod;
@@ -71,16 +71,27 @@ public class UserAPI extends ACoviaAPI {
 			return;
 		}
 
-		// Look up user from the user database
-		AMap<AString, ACell> userRecord = engine().getAuth().getUser(Strings.create(userId));
-		if (userRecord == null) {
+		final AString did;
+		try {
+			did = engine().managedUserDID(Strings.create(userId));
+		} catch (IllegalArgumentException e) {
+			buildError(ctx, 400, e.getMessage());
+			return;
+		} catch (IllegalStateException e) {
+			buildError(ctx, 404, "This venue does not publish managed user DIDs");
+			return;
+		}
+
+		// :user-data is the authoritative account registry. The OAuth directory
+		// stores login/provider metadata and must not decide whether a DID exists.
+		User user = engine().getVenueState().users().get(did);
+		if (user == null) {
 			buildError(ctx, 404, "User not found: " + userId);
 			return;
 		}
 
 		try {
-			String baseUrl = getExternalBaseUrl(ctx, "");
-			AMap<AString, ACell> didDocument = createUserDIDDocument(userId, userRecord, baseUrl);
+			AMap<AString, ACell> didDocument = createUserDIDDocument(did);
 			buildResult(ctx, didDocument);
 		} catch (Exception e) {
 			log.error("Error generating user DID document", e);
@@ -95,22 +106,10 @@ public class UserAPI extends ACoviaAPI {
 	 * This allows others to verify venue-signed JWTs for this user by resolving
 	 * the DID document and checking that the venue's key is listed.
 	 *
-	 * @param userId User identifier (e.g. "alice")
-	 * @param userRecord User record from the user database (must contain "did")
-	 * @param baseUrl Base URL of this venue (e.g. "https://venue.example.com")
+	 * @param did venue-managed user DID
 	 * @return DID Document as a map
 	 */
-	private AMap<AString, ACell> createUserDIDDocument(String userId, AMap<AString, ACell> userRecord, String baseUrl) {
-		// Use the DID from the user record if available, otherwise derive from venue DID
-		AString userDID = convex.core.lang.RT.ensureString(userRecord.get(Fields.DID));
-		AString did;
-		if (userDID != null) {
-			did = userDID;
-		} else {
-			// Derive user DID by appending to venue DID
-			did = Strings.create(engine().getDIDString() + ":u:" + userId);
-		}
-
+	private AMap<AString, ACell> createUserDIDDocument(AString did) {
 		// The venue is the controller — its key is the verification method
 		AString venueDID = engine().getDIDString();
 		AString venueKey = Multikey.encodePublicKey(engine().getAccountKey());
@@ -133,26 +132,4 @@ public class UserAPI extends ACoviaAPI {
 		return ddo;
 	}
 
-	/**
-	 * Extract the host (with port if non-standard) from a base URL.
-	 * e.g. "https://venue.example.com" -> "venue.example.com"
-	 *      "http://localhost:8080" -> "localhost%3A8080"
-	 * did:web spec requires percent-encoding colons in the host.
-	 */
-	static String extractHost(String baseUrl) {
-		String host = baseUrl;
-		// Strip scheme
-		int schemeEnd = host.indexOf("://");
-		if (schemeEnd >= 0) {
-			host = host.substring(schemeEnd + 3);
-		}
-		// Strip path
-		int pathStart = host.indexOf('/');
-		if (pathStart >= 0) {
-			host = host.substring(0, pathStart);
-		}
-		// Percent-encode colons per did:web spec
-		host = host.replace(":", "%3A");
-		return host;
-	}
 }

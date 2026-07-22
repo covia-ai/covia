@@ -3,10 +3,13 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
+import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 
 import org.junit.jupiter.api.Test;
@@ -18,6 +21,8 @@ import convex.core.data.AString;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
+import convex.core.data.prim.CVMLong;
 import covia.api.Fields;
 import covia.venue.server.VenueServer;
 
@@ -58,6 +63,56 @@ public class VenueServerPersistenceTest {
 			Config.WEBDAV, Maps.of(Config.ENABLED, true),
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, true))
 		);
+	}
+
+	private static boolean failureContains(Throwable failure, String text) {
+		for (Throwable current = failure; current != null; current = current.getCause()) {
+			if (String.valueOf(current.getMessage()).contains(text)) return true;
+		}
+		return false;
+	}
+
+	@Test
+	public void testBootstrapFailureNeverPublishesAndReleasesOwnedResources() throws Exception {
+		File etchFile = File.createTempFile("venue-bootstrap-fail-", ".etch");
+		etchFile.delete();
+		etchFile.deleteOnExit();
+		String storePath = etchFile.getAbsolutePath().replace('\\', '/');
+		String seed = AKeyPair.createSeeded(424242).getSeed().toHexString();
+
+		int port;
+		try (ServerSocket reservation = new ServerSocket(0)) {
+			port = reservation.getLocalPort();
+		}
+		String missingModule = etchFile.toPath().resolveSibling("missing-module.jar")
+			.toString().replace('\\', '/');
+		AMap<AString, ACell> failingConfig = testConfig(storePath, seed)
+			.assoc(Config.PORT, CVMLong.create(port))
+			.assoc(Config.MODULES, Vectors.of(Strings.create(missingModule)));
+
+		RuntimeException failure = assertThrows(RuntimeException.class,
+			() -> VenueServer.launch(failingConfig));
+		assertTrue(failureContains(failure, "Module jar not found"),
+			"launch must preserve the bootstrap diagnostic: " + failure);
+
+		// HTTP publication is the final launch step, so a bootstrap failure must
+		// never have bound the configured port (and rollback must release it even
+		// if an HTTP implementation began setup internally).
+		try (ServerSocket rebound = new ServerSocket(port)) {
+			assertTrue(rebound.isBound(), "failed launch must leave no HTTP listener");
+		}
+
+		// The same persistent store must be immediately reusable, proving the
+		// Engine, NodeServer and Etch store were all released by launch rollback.
+		VenueServer recovered = VenueServer.launch(testConfig(storePath, seed));
+		try {
+			assertTrue(recovered.getEngine().isStarted());
+			assertNotNull(recovered.getEngine().resolveAsset(
+				Strings.create("v/ops/agent/create"), recovered.getEngine().venueContext()),
+				"a returned server must expose a fully bootstrapped adapter catalog");
+		} finally {
+			recovered.close();
+		}
 	}
 
 	/**
@@ -173,12 +228,26 @@ public class VenueServerPersistenceTest {
 		server.close();
 		assertTrue(java.nio.file.Files.exists(keyFile),
 			"first launch saves venue.key beside the store");
+		boolean posix = Files.getFileStore(keyFile).supportsFileAttributeView("posix");
+		if (posix) {
+			assertEquals(PosixFilePermissions.fromString("rw-------"),
+				Files.getPosixFilePermissions(keyFile),
+				"new venue.key must be owner-only");
+			// Simulate an existing installation created with permissive defaults.
+			Files.setPosixFilePermissions(keyFile,
+				PosixFilePermissions.fromString("rw-r--r--"));
+		}
 
 		// Relaunch with venue.key intact: same identity.
 		VenueServer server2 = VenueServer.launch(config);
 		assertEquals(did1, String.valueOf(server2.getEngine().getDIDString()),
 			"identity survives relaunch via venue.key");
 		server2.close();
+		if (posix) {
+			assertEquals(PosixFilePermissions.fromString("rw-------"),
+				Files.getPosixFilePermissions(keyFile),
+				"launch must repair permissions on an existing venue.key");
+		}
 
 		// venue.key lost: relaunching the existing store must fail loudly.
 		java.nio.file.Files.delete(keyFile);

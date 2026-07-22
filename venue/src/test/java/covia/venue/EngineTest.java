@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -24,6 +25,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
+import convex.core.data.Index;
 import convex.core.data.Keyword;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -31,6 +33,8 @@ import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import convex.core.util.Utils;
+import convex.lattice.cursor.Cursors;
+import convex.lattice.cursor.RootLatticeCursor;
 import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Asset;
@@ -38,6 +42,9 @@ import covia.grid.Assets;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.impl.BlobContent;
+import covia.lattice.Covia;
+import covia.venue.storage.AStorage;
+import covia.venue.storage.MemoryStorage;
 
 public class EngineTest {
 	final Engine venue = TestEngine.ENGINE;
@@ -47,6 +54,46 @@ public class EngineTest {
 	Hash randomOpId;
 	Hash echoOpId;
 	Hash qwenOpId;
+
+	private static final class TrackingStorage extends MemoryStorage {
+		boolean initialised;
+		boolean closed;
+
+		@Override
+		public void initialise() {
+			initialised = true;
+		}
+
+		@Override
+		public void close() {
+			closed = true;
+			super.close();
+		}
+	}
+
+	private static final class LifecycleTestEngine extends Engine {
+		final TrackingStorage storage = new TrackingStorage();
+		final boolean failAfterSchedulerStart;
+
+		LifecycleTestEngine(RootLatticeCursor<Index<Keyword, ACell>> cursor,
+				boolean failAfterSchedulerStart) throws IOException {
+			super(null, cursor);
+			this.failAfterSchedulerStart = failAfterSchedulerStart;
+		}
+
+		@Override
+		protected AStorage createStorage() {
+			return storage;
+		}
+
+		@Override
+		void rebuildSchedulerFromLattice() {
+			if (failAfterSchedulerStart) {
+				throw new IllegalStateException("injected scheduler-rebuild failure");
+			}
+			super.rebuildSchedulerFromLattice();
+		}
+	}
 
 	@BeforeEach
 	public void setup() throws IOException {
@@ -66,6 +113,48 @@ public class EngineTest {
 		assertEquals(id,Assets.calcID(EMPTY_META));
 		ACell md=venue.getMetadata(id);
 		assertEquals(EMPTY_META,md);
+	}
+
+	@Test
+	public void testConstructionIsInertAndCloseMirrorsStart() throws Exception {
+		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, false);
+
+		assertFalse(engine.isStarted());
+		assertNull(engine.venueState, "constructor must not initialise lattice state");
+		assertNull(engine.contentStorage, "constructor must not create content storage");
+
+		assertEquals(engine, engine.start(), "start returns the engine for explicit create/start composition");
+		assertTrue(engine.isStarted());
+		assertTrue(engine.storage.initialised);
+		assertEquals(engine, engine.start(), "start is idempotent after success");
+
+		engine.close();
+		engine.close();
+		assertFalse(engine.isStarted());
+		assertTrue(engine.storage.closed, "close must release storage acquired by start");
+		assertThrows(IllegalStateException.class, engine::start,
+			"a closed engine cannot be restarted with already-closed resources");
+	}
+
+	@Test
+	public void testFailedStartRollsBackAcquiredResources() throws Exception {
+		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
+		LifecycleTestEngine engine = new LifecycleTestEngine(cursor, true);
+
+		IllegalStateException failure = assertThrows(IllegalStateException.class, engine::start);
+		assertTrue(failure.getMessage().contains("injected scheduler-rebuild failure"));
+		assertFalse(engine.isStarted());
+		assertTrue(engine.storage.initialised);
+		assertTrue(engine.storage.closed,
+			"failed start must close storage after shutting down the scheduler");
+		assertThrows(IllegalStateException.class, engine.gridScheduler()::start,
+			"failed start must shut down the scheduler it started");
+
+		// The caller retains the Engine reference and close remains safe after
+		// automatic rollback, including repeated cleanup by an outer owner.
+		engine.close();
+		engine.close();
 	}
 
 	@Test public void testAddAsset() throws InterruptedException, ExecutionException {

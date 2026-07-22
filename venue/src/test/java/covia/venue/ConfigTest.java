@@ -1,12 +1,17 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 
 /**
  * Tests for venue {@link Config} default-resolution getters — in particular the
@@ -14,6 +19,14 @@ import convex.core.data.Strings;
  * hardcoded constants in {@code AgentAdapter}.
  */
 public class ConfigTest {
+
+	@Test
+	public void testUserAutoCreateDefaultsOffAndCanBeEnabled() {
+		assertFalse(new Config(null).isUserAutoCreate());
+		assertTrue(new Config(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, CVMBool.TRUE)))
+			.isUserAutoCreate());
+	}
 
 	@Test
 	public void testDefaultLlmOperationFallback() {
@@ -100,5 +113,69 @@ public class ConfigTest {
 
 	private static Object webDIDFor(String host) {
 		return new Config(Maps.of(Config.HOSTNAME, Strings.create(host))).getWebDID();
+	}
+
+	// ========== CORS policy (covia#267) ==========
+
+	@Test
+	public void testCorsPolicyLegacyAndDefaultForms() {
+		Config.CorsPolicy defaults = new Config(null).getCorsPolicy();
+		assertTrue(defaults.enabled());
+		assertTrue(defaults.anyOrigin());
+		assertEquals("*", defaults.allowedOriginHeader("https://anything.example"));
+
+		Config.CorsPolicy single = new Config(Maps.of(
+			Config.CORS_ORIGINS, Strings.create("https://app.example"))).getCorsPolicy();
+		assertEquals("https://app.example",
+			single.allowedOriginHeader("https://app.example"));
+		assertNull(single.allowedOriginHeader("https://other.example"));
+
+		// Backwards compatibility with Javalin allowHost: a bare configured
+		// host receives the legacy default HTTPS scheme.
+		Config.CorsPolicy bare = new Config(Maps.of(
+			Config.CORS_ORIGINS, Strings.create("app.example"))).getCorsPolicy();
+		assertEquals("https://app.example",
+			bare.allowedOriginHeader("https://app.example"));
+		assertNull(bare.allowedOriginHeader("http://app.example"));
+	}
+
+	@Test
+	public void testCorsPolicyListAndLoopbackSentinel() {
+		Config.CorsPolicy policy = new Config(Maps.of(
+			Config.CORS_ORIGINS, Vectors.of(
+				Strings.create("https://app.example"),
+				Strings.create("loopback")))).getCorsPolicy();
+
+		assertEquals("https://app.example",
+			policy.allowedOriginHeader("https://app.example"));
+		assertEquals("http://localhost:3000",
+			policy.allowedOriginHeader("http://localhost:3000"));
+		assertEquals("https://127.0.0.1:9443",
+			policy.allowedOriginHeader("https://127.0.0.1:9443"));
+		assertEquals("http://[::1]:8080",
+			policy.allowedOriginHeader("http://[::1]:8080"));
+		assertNull(policy.allowedOriginHeader("http://localhost.evil:3000"));
+		assertNull(policy.allowedOriginHeader("http://127.0.0.2:3000"));
+	}
+
+	@Test
+	public void testCorsPolicyCanBeDisabled() {
+		for (Object value : new Object[] {CVMBool.FALSE, Strings.create("none"), Vectors.empty()}) {
+			Config.CorsPolicy policy = new Config(Maps.of(Config.CORS_ORIGINS, value))
+				.getCorsPolicy();
+			assertFalse(policy.enabled());
+			assertNull(policy.allowedOriginHeader("https://app.example"));
+		}
+	}
+
+	@Test
+	public void testCorsPolicyRejectsAmbiguousOrMalformedConfig() {
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.CORS_ORIGINS, Vectors.of(Strings.create("none"),
+				Strings.create("https://app.example")))).getCorsPolicy());
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.CORS_ORIGINS, Strings.create("https://app.example/path"))).getCorsPolicy());
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.CORS_ORIGINS, CVMBool.TRUE)).getCorsPolicy());
 	}
 }

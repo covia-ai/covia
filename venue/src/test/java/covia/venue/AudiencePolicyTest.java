@@ -68,6 +68,7 @@ public class AudiencePolicyTest {
 		requireServer = VenueServer.launch(Maps.of(
 			Strings.create("port"), 0,
 			Config.HOSTNAME, Strings.create("venue-req.example.com"),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.AUTH, Maps.of(
 				Config.PUBLIC, Maps.of(Config.ENABLED, true),
 				Config.AUDIENCE, Strings.create("require"),
@@ -99,6 +100,17 @@ public class AudiencePolicyTest {
 			Strings.create("exp"), CVMLong.create((System.currentTimeMillis() / 1000) + 3600));
 		if (aud != null) claims = claims.assoc(Strings.create("aud"), aud);
 		return JWT.signPublic(claims, kp).toString();
+	}
+
+	/** Venue-issued login/session JWT for a managed user. */
+	private static String venueSigned(VenueServer server, AString sub, AString iss,
+			ACell aud, long exp) {
+		AMap<AString, ACell> claims = Maps.of(
+			Strings.create("sub"), sub,
+			Strings.create("iss"), iss,
+			Strings.create("exp"), CVMLong.create(exp));
+		if (aud != null) claims = claims.assoc(Strings.create("aud"), aud);
+		return JWT.signPublic(claims, server.getEngine().getKeyPair()).toString();
 	}
 
 	/** A UCAN audienced to the given venue, in date, no caps. */
@@ -134,6 +146,46 @@ public class AudiencePolicyTest {
 	@Test
 	public void requireAcceptsVenueAudience() throws Exception {
 		assertAccepted(client(requireServer, ucanFor(AKeyPair.generate(), requireVenueDID)));
+	}
+
+	@Test
+	public void managedUserSessionRequiresVenueSignatureAndValidClaims() throws Exception {
+		Engine venue = requireServer.getEngine();
+		AString managed = venue.managedUserDID(Strings.create("managed-session"));
+		long now = System.currentTimeMillis() / 1000;
+
+		assertAccepted(client(requireServer,
+			venueSigned(requireServer, managed, requireVenueDID, requireVenueDID, now + 3600)));
+
+		AKeyPair attacker = AKeyPair.generate();
+		AMap<AString, ACell> forgedClaims = Maps.of(
+			Strings.create("sub"), managed,
+			Strings.create("iss"), requireVenueDID,
+			Strings.create("aud"), requireVenueDID,
+			Strings.create("exp"), CVMLong.create(now + 3600));
+		assertRejected401(client(requireServer,
+			JWT.signPublic(forgedClaims, attacker).toString()));
+
+		assertRejected401(client(requireServer,
+			venueSigned(requireServer, managed, requireVenueDID, requireVenueDID, now - 3600)));
+		assertRejected401(client(requireServer,
+			venueSigned(requireServer, managed, requireVenueDID,
+				UCAN.toDIDKey(AKeyPair.generate().getAccountKey()), now + 3600)));
+		assertRejected401(client(requireServer,
+			venueSigned(requireServer, managed,
+				Strings.create("did:web:attacker.example"), requireVenueDID, now + 3600)));
+		assertRejected401(client(requireServer,
+			venueSigned(requireServer, Strings.create("not-a-did"),
+				requireVenueDID, requireVenueDID, now + 3600)));
+	}
+
+	@Test
+	public void requireRejectsVenueSessionWithoutAudience() {
+		Engine venue = requireServer.getEngine();
+		AString managed = venue.managedUserDID(Strings.create("missing-session-aud"));
+		assertRejected401(client(requireServer,
+			venueSigned(requireServer, managed, requireVenueDID, null,
+				(System.currentTimeMillis() / 1000) + 3600)));
 	}
 
 	// =============================== verify ================================

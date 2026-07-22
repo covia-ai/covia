@@ -24,6 +24,7 @@ import covia.venue.RequestContext;
 public abstract class AAdapter {
 
 	private static final Logger log=LoggerFactory.getLogger(AAdapter.class);
+	private static final int MAX_FAILURE_CHARS = 1024;
 
 	/**
 	 * Virtual thread executor for IO-bound blocking operations.
@@ -428,8 +429,7 @@ public abstract class AAdapter {
 			invocation = invokeFuture(ctx, meta, input);
 			if (invocation == null) invocation = CompletableFuture.completedFuture(null);
 		} catch (RuntimeException e) {
-			String message = e.getMessage();
-			job.fail(message != null ? message : e.toString());
+			job.fail(describeFailure(e));
 			throw e;
 		}
 		bridgeToJob(job, invocation);
@@ -489,9 +489,23 @@ public abstract class AAdapter {
 	 * exception's {@code toString()} so a failure never surfaces as a blank error.
 	 */
 	protected static String describeFailure(Throwable t) {
+		if (t == null) return "Operation failed without an error detail";
 		Throwable cause = unwrap(t);
 		String msg = cause.getMessage();
-		return (msg != null && !msg.isBlank()) ? msg : cause.toString();
+		return conciseDetail((msg != null && !msg.isBlank()) ? msg : cause.toString(), MAX_FAILURE_CHARS);
+	}
+
+	/**
+	 * Render bounded, single-line detail suitable for a Job error. This is
+	 * intentionally cheap: external response bodies and exception text must not
+	 * turn a useful diagnostic into an unbounded prompt payload.
+	 */
+	protected static String conciseDetail(Object value, int maxChars) {
+		if (value == null) return "no detail";
+		String text = String.valueOf(value).trim();
+		if (text.isEmpty()) return "no detail";
+		if (text.length() > maxChars) text = text.substring(0, maxChars) + "…";
+		return text.replace('\r', ' ').replace('\n', ' ');
 	}
 
     /**

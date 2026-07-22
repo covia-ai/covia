@@ -46,7 +46,7 @@ public class VenueIdentityGuardTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(configFor(kpA), ns.getCursor(), kpA);
+			Engine engine = new Engine(configFor(kpA), ns.getCursor(), kpA).start();
 			assertEquals(didFor(kpA), engine.getDIDString().toString());
 			engine.flush();
 			engine.close();
@@ -59,7 +59,7 @@ public class VenueIdentityGuardTest {
 			ns.launch();
 			try {
 				IllegalStateException e = assertThrows(IllegalStateException.class,
-					() -> new Engine(configFor(kpB), ns.getCursor(), kpB));
+					() -> new Engine(configFor(kpB), ns.getCursor(), kpB).start());
 				assertTrue(e.getMessage().contains(didFor(kpA)),
 					"error names the owning identity: " + e.getMessage());
 				assertTrue(e.getMessage().contains(didFor(kpB)),
@@ -73,7 +73,7 @@ public class VenueIdentityGuardTest {
 		{
 			NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			ns.launch();
-			Engine engine = new Engine(configFor(kpA), ns.getCursor(), kpA);
+			Engine engine = new Engine(configFor(kpA), ns.getCursor(), kpA).start();
 			assertEquals(didFor(kpA), engine.getDIDString().toString());
 			engine.close();
 			ns.close();

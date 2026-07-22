@@ -1,0 +1,25 @@
+{
+  "name": "User info",
+  "description": "Returns registration information for the caller, or for another DID when authorised by the venue.",
+  "operation": {
+    "adapter": "user:info",
+    "input": {
+      "type": "object",
+      "properties": {
+        "did": {
+          "type": "string",
+          "description": "User DID; defaults to the authenticated caller"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "did": { "type": "string" },
+        "registered": { "type": "boolean" },
+        "meta": { "type": "object" }
+      },
+      "required": ["did", "registered"]
+    }
+  }
+}

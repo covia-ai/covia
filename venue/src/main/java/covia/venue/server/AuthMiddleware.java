@@ -14,13 +14,16 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
+import convex.auth.did.DID;
 import convex.auth.jwt.JWT;
 import convex.auth.ucan.UCAN;
 import convex.auth.did.DIDVerifier;
 import convex.auth.ucan.UCANValidator;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.venue.Auth;
+import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.auth.JWKSClient;
 import covia.venue.auth.OAuthConfig;
@@ -65,6 +68,7 @@ public class AuthMiddleware {
 	private static final AString SUB = Fields.SUB;
 	private static final AString KID = Fields.KID;
 	private static final AString EMAIL = Fields.EMAIL;
+	private static final AString ISS = Strings.intern("iss");
 	private static final AString AUD = Strings.intern("aud");
 	private static final AString EXP = Strings.intern("exp");
 	private static final AString NBF = Strings.intern("nbf");
@@ -83,11 +87,14 @@ public class AuthMiddleware {
 	private final AVector<ACell> publicScope;
 	private final String audiencePolicy;                  // "verify" | "require"
 	private final java.util.Set<String> acceptedAudiences;
+	private final Engine engine;
 
-	private AuthMiddleware(AccountKey venueAccountKey, Auth auth, AString venueDIDString) {
-		this.venueKey = venueAccountKey;
-		this.venueDID = venueDIDString;
-		this.publicDID = Strings.create(venueDIDString + ":public");
+	private AuthMiddleware(Engine engine) {
+		this.engine = engine;
+		this.venueKey = engine.getAccountKey();
+		this.venueDID = engine.getDIDString();
+		this.publicDID = Strings.create(venueDID + ":public");
+		Auth auth = engine.getAuth();
 		this.venueAuth = auth;
 		this.publicAccessEnabled = auth.isPublicAccessEnabled();
 		this.externalProviders = auth.getLoginProviders().hasProviders()
@@ -178,14 +185,12 @@ public class AuthMiddleware {
 	 * parallel test classes) do not share state.
 	 *
 	 * @param routes Javalin routes configuration
-	 * @param venueAccountKey The venue's public key for verifying venue-signed JWTs
-	 * @param auth Auth instance for access control configuration
-	 * @param venueDIDString The venue's DID string for deriving user DIDs
+	 * @param engine venue engine providing identity, authentication and user admission
 	 * @return The constructed middleware instance (rarely needed by callers,
 	 *         but useful for tests).
 	 */
-	public static AuthMiddleware register(RoutesConfig routes, AccountKey venueAccountKey, Auth auth, AString venueDIDString) {
-		AuthMiddleware mw = new AuthMiddleware(venueAccountKey, auth, venueDIDString);
+	public static AuthMiddleware register(RoutesConfig routes, Engine engine) {
+		AuthMiddleware mw = new AuthMiddleware(engine);
 		routes.before("/api/*", mw::extractIdentity);
 		routes.before("/a2a", mw::extractIdentity);
 		routes.before("/a2a/*", mw::extractIdentity);  // per-agent A2A endpoints (COG-14)
@@ -201,6 +206,19 @@ public class AuthMiddleware {
 	private void markPublic(Context ctx) {
 		ctx.attribute(CALLER_DID_ATTR, publicDID);
 		if (publicScope != null) ctx.attribute(CALLER_CAPS_ATTR, publicScope);
+	}
+
+	/** Records an authenticated identity only after the venue admits its DID. */
+	private boolean markAuthenticated(Context ctx, AString callerDID) {
+		try {
+			engine.admitUser(callerDID);
+			ctx.attribute(CALLER_DID_ATTR, callerDID);
+			return true;
+		} catch (AuthException e) {
+			ctx.status(403).result(e.getMessage());
+			ctx.skipRemainingHandlers();
+			return false;
+		}
 	}
 
 	void extractIdentity(Context ctx) {
@@ -245,7 +263,7 @@ public class AuthMiddleware {
 				callerDID = tryVerifyExternalProvider(jwt);
 			}
 			if (callerDID != null) {
-				ctx.attribute(CALLER_DID_ATTR, callerDID);
+				if (!markAuthenticated(ctx, callerDID)) return;
 			} else {
 				// A presented token that fails every verification path is a hard
 				// 401 — NEVER a silent downgrade to the public identity, even when
@@ -358,7 +376,23 @@ public class AuthMiddleware {
 		AMap<AString, ACell> claims = JWT.verifyPublic(jwt, venueKey);
 		if (claims == null) return null;
 
-		return RT.ensureString(claims.get(SUB));
+		// A venue session is an attestation BY this venue, not a bearer signed
+		// "as" the managed user. Bind the claims to that model explicitly: a
+		// token that verifies with the venue key must not claim another issuer, stale
+		// sessions must expire, and tokens intended for another venue must not be
+		// replayed here.
+		if (!venueDID.equals(RT.ensureString(claims.get(ISS)))) return null;
+		if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
+		requireAudience(claims.get(AUD));
+
+		AString sub = RT.ensureString(claims.get(SUB));
+		if (sub == null) return null;
+		try {
+			if (DID.fromString(sub.toString()) == null) return null;
+		} catch (RuntimeException e) {
+			return null;
+		}
+		return sub;
 	}
 
 	/**

@@ -108,7 +108,7 @@ public class EngineFlushSweepTest {
 
 	private static Engine engineWith(CountingHandler handler) throws Exception {
 		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
-		return new Engine(testConfig(), cursor, AKeyPair.generate(), handler);
+		return new Engine(testConfig(), cursor, AKeyPair.generate(), handler).start();
 	}
 
 	private static void sleep(long ms) throws InterruptedException {
@@ -201,15 +201,15 @@ public class EngineFlushSweepTest {
 	@Test
 	public void testNoopHandlerSkipsSweepFlush() throws Exception {
 		// Use a counting wrapper that delegates to NOOP semantics for persist
-		// but records flushes — except the constructor passes the canonical
+		// but records flushes — except startup receives the canonical
 		// NOOP, so the wrapper isn't seen by Engine. Instead we just verify
-		// that constructing a NOOP-handler engine doesn't throw and closes
+		// that starting a NOOP-handler engine doesn't throw and closes
 		// cleanly. The branch tested here is the `persistHandler == NOOP`
-		// guard in the Engine constructor; behavioural verification of the
+		// guard in Engine.start(); behavioural verification of the
 		// "no sweep thread" path is covered by the existing
 		// EnginePersistenceTest suite.
 		RootLatticeCursor<Index<Keyword, ACell>> cursor = Cursors.createLattice(Covia.ROOT);
-		Engine engine = new Engine(testConfig(), cursor, AKeyPair.generate(), PersistenceHandler.NOOP);
+		Engine engine = new Engine(testConfig(), cursor, AKeyPair.generate(), PersistenceHandler.NOOP).start();
 		// engine.flush() on a NOOP-handler engine must still work and not throw.
 		engine.flush();
 		engine.close();

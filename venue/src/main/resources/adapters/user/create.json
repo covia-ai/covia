@@ -1,0 +1,29 @@
+{
+  "name": "Create user",
+  "description": "Registers a user DID at this venue. Venue administrators may supply any valid DID, or a username to derive did:web:<venue>:u:<username>. Idempotent: created is false when already registered.",
+  "operation": {
+    "adapter": "user:create",
+    "input": {
+      "type": "object",
+      "properties": {
+        "did": {
+          "type": "string",
+          "description": "Any valid DID, including a self-sovereign did:key or an externally managed DID"
+        },
+        "username": {
+          "type": "string",
+          "description": "Venue-managed username; requires a public venue hostname and becomes did:web:<venue>:u:<username>"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "did": { "type": "string" },
+        "registered": { "type": "boolean" },
+        "created": { "type": "boolean" }
+      },
+      "required": ["did", "registered", "created"]
+    }
+  }
+}

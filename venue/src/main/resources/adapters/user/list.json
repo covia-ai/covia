@@ -1,0 +1,19 @@
+{
+  "name": "List users",
+  "description": "Lists users registered at this venue. Requires venue user-read authority.",
+  "operation": {
+    "adapter": "user:list",
+    "input": {
+      "type": "object",
+      "properties": {}
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "users": { "type": "array" },
+        "total": { "type": "integer" }
+      },
+      "required": ["users", "total"]
+    }
+  }
+}

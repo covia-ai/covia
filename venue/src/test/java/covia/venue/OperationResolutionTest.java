@@ -44,7 +44,8 @@ public class OperationResolutionTest {
 	// it safely.
 	private static final Engine engine;
 	static {
-		engine = Engine.createTemp(null);
+		engine = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
 		Engine.addDemoAssets(engine);
 	}
 

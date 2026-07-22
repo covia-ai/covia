@@ -1,6 +1,6 @@
 {
 	"name": "Delete Agent",
-	"description": "Terminates an agent. The agent will no longer accept messages, tasks, or triggers. By default the agent record is preserved (TERMINATED status) for audit purposes. Set remove=true to delete the record entirely, freeing the name for reuse.",
+	"description": "Terminates one agent or an exact list of agents in a single Job. Supply exactly one of agentId or agentIds; prefixes and wildcard deletion are not supported. By default records are preserved with TERMINATED status for audit. Set remove=true to remove records entirely, freeing their names and making unreachable storage eligible for Etch garbage collection. Every requested ID is validated before deletion begins.",
 	"dateCreated": "2026-03-07T00:00:00Z",
 	"operation": {
 		"adapter": "agent:delete",
@@ -8,16 +8,33 @@
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string", "description": "Agent name to delete" },
+				"agentIds": {
+					"type": "array",
+					"description": "Exact agent names to delete in one Job. No prefixes or wildcards. All IDs must exist; maximum 100.",
+					"items": { "type": "string" },
+					"minItems": 1,
+					"maxItems": 100,
+					"uniqueItems": true
+				},
 				"remove": { "type": "boolean", "description": "If true, remove the agent record entirely instead of marking as TERMINATED. Default false." }
 			},
-			"required": ["agentId"]
+			"oneOf": [
+				{ "required": ["agentId"] },
+				{ "required": ["agentIds"] }
+			]
 		},
 		"output": {
 			"type": "object",
 			"properties": {
 				"agentId": { "type": "string" },
 				"status": { "type": "string", "description": "Final status (TERMINATED)" },
-				"removed": { "type": "boolean", "description": "True if the record was removed" }
+				"removed": { "type": "boolean", "description": "True if the record was removed" },
+				"agents": {
+					"type": "array",
+					"description": "Per-agent results for the agentIds form",
+					"items": { "type": "object" }
+				},
+				"total": { "type": "integer", "description": "Number of agents deleted in the agentIds form" }
 			}
 		}
 	}

@@ -16,7 +16,7 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 ```
 
 - `store`: `"temp"` (default, deleted on exit), `"memory"`, or file path
-- `seed`: Ed25519 hex seed for stable venue identity. If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file.
+- `seed`: Ed25519 hex seed for stable venue identity. If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file. On POSIX filesystems this raw seed is created with owner-only permissions (`0600`), and existing key-file permissions are repaired on each launch. On non-POSIX filesystems it inherits the platform ACL policy.
 
 ## Venue identity
 
@@ -63,6 +63,47 @@ data. Never commit keystore passwords; use env vars or gitignored dev configs.
 
 - `port`: HTTP listen port (default `8080`).
 - `bindAddress`: network interface the HTTP connector binds to. When omitted, the venue binds **all interfaces** (`0.0.0.0`) — reachable from the LAN. Set to `"127.0.0.1"` to restrict the venue to loopback (recommended when embedding the venue as a local subprocess). This is the socket bind address and is distinct from `hostname`, which is the venue's *advertised* public host used to derive `baseUrl`/DID.
+
+## Browser origins (CORS)
+
+`corsOrigins` controls which browser origins may read venue responses. The
+legacy string form remains supported, while an array can name every legitimate
+frontend explicitly:
+
+```json
+{
+  "corsOrigins": [
+    "https://app.example.com",
+    "https://admin.example.com",
+    "loopback"
+  ],
+  "allowPrivateNetwork": false
+}
+```
+
+Supported forms:
+
+- Omitted or `"*"` — allow every valid HTTP(S) origin. This remains the
+  compatibility default, but is permissive for venues holding private data.
+- One origin string — allow exactly that browser origin.
+- An array of origin strings — allow any listed origin.
+- `"loopback"` — allow literal `localhost`, `127.0.0.1`, or `::1` on any
+  port, over HTTP or HTTPS. Matching never resolves DNS, so names such as
+  `localhost.example` do not qualify.
+- `false`, `"none"`, or `[]` — disable CORS entirely: requests still work,
+  but no `Access-Control-Allow-Origin` header is emitted.
+
+Specific-origin and loopback responses echo the accepted request origin and
+emit `Vary: Origin`; a denied browser origin receives HTTP 400 without an
+allow-origin header. Entries should be origins only (`scheme://host[:port]`),
+not URLs with paths. For compatibility with the previous Javalin setting, a
+bare configured host defaults to HTTPS. Invalid or ambiguous configuration
+fails at startup rather than silently widening access.
+
+`allowPrivateNetwork` opts into the browser Private Network Access response
+header after the origin passes the CORS policy. It defaults to `false`; enable
+it only when a public frontend genuinely needs to reach a private or
+loopback-bound venue.
 
 ## System tray
 
@@ -122,6 +163,40 @@ capability ceiling: unset `caps` → the secure read-only default; an explicit
 `{with, can}` array → that ceiling; `"unrestricted"` → no ceiling (loopback
 dev only). Authenticated callers hold the public-user grants ambiently
 (covia#254) — the ceiling governs both. See `docs/UCAN.md` §4.7.
+
+## User registration (`users`)
+
+Authentication proves control of a DID; it does not create a venue account.
+By default, a previously unknown authenticated DID receives HTTP 403 with an
+actionable registration message, before a job or user state is persisted.
+
+```json
+{
+  "users": { "autoCreate": false }
+}
+```
+
+- `autoCreate` defaults to `false`. Keep this setting for private and
+  production venues, and provision accounts explicitly with
+  `v/ops/user/create`.
+- Set `autoCreate` to `true` only when authenticated first-use registration is
+  intended, such as a public test venue. The checked-in `local-dev.json` opts
+  in explicitly.
+
+A runtime user ID is always a DID and may use any DID method. `user:create`
+accepts a full DID directly (for example a self-sovereign `did:key`) or a
+venue-managed `username`. A username requires a public `hostname` and derives
+`did:web:<hostname>:u:<username>` — for example
+`did:web:venue-1.covia.ai:u:alice`. `user:create` and `user:list` are
+venue-administrative operations: invoke directly as the venue, or present a
+venue-issued UCAN covering `<venueDID>/users` with `user/create` or
+`user/read`. OAuth callbacks are trusted venue provisioners and create the
+same did:web-managed account explicitly.
+
+Registering a full external DID admits that identity to use the venue; it does
+not transfer control of the DID to the venue. A self-sovereign user signs their
+own UCAN roots. Only username-created `did:web:<hostname>:u:<username>` users
+are custodial identities for which the venue may sign roots.
 
 ## Adapter configuration
 

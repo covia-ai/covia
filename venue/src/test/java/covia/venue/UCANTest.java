@@ -3,6 +3,7 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
@@ -37,7 +38,13 @@ import covia.venue.server.AuthMiddleware;
  */
 public class UCANTest {
 
-	final Engine engine = TestEngine.ENGINE;
+	private static final Engine engine;
+	static {
+		engine = Engine.createTemp(Maps.of(
+			Config.HOSTNAME, Strings.create("ucan.test.covia.example"),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		Engine.addDemoAssets(engine);
+	}
 	private final AKeyPair venueKP = engine.getKeyPair();
 	private final AString venueDID = engine.getDIDString();
 
@@ -49,8 +56,10 @@ public class UCANTest {
 	private AString ALICE_DID;
 	private AString BOB_DID;
 	private AString CAROL_DID;
+	private AString CUSTODIAL_DID;
 	private RequestContext ALICE;
 	private RequestContext BOB;
+	private RequestContext CUSTODIAL;
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -60,8 +69,12 @@ public class UCANTest {
 		ALICE_DID = UCAN.toDIDKey(ALICE_KP.getAccountKey());
 		BOB_DID = UCAN.toDIDKey(BOB_KP.getAccountKey());
 		CAROL_DID = UCAN.toDIDKey(CAROL_KP.getAccountKey());
+		String method = info.getTestMethod().map(m -> m.getName()).orElse("unknown");
+		CUSTODIAL_DID = engine.managedUserDID(Strings.create("ucan-" + method));
+		engine.getVenueState().users().ensure(CUSTODIAL_DID);
 		ALICE = RequestContext.of(ALICE_DID);
 		BOB = RequestContext.of(BOB_DID);
+		CUSTODIAL = RequestContext.of(CUSTODIAL_DID);
 
 		// Alice writes some workspace data
 		engine.jobs().invokeOperation("v/ops/covia/write",
@@ -73,6 +86,11 @@ public class UCANTest {
 	}
 
 	private static final long HOUR = 3600;
+
+	@AfterAll
+	static void closeEngine() {
+		engine.close();
+	}
 
 	@Test
 	public void testNoTokenIsUnrestricted() {
@@ -98,9 +116,9 @@ public class UCANTest {
 			Maps.of(
 				UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
+					Strings.create(CUSTODIAL_DID + "/w/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(exp)),
-			ALICE);
+			CUSTODIAL);
 		ACell result = job.awaitResult(5000);
 
 		// ucan:issue returns {"token": "<jwt>"}
@@ -125,8 +143,73 @@ public class UCANTest {
 				UCAN.ATT, Vectors.of(Capability.create(
 					Strings.create(BOB_DID + "/w/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(exp)),
-			ALICE);
+			CUSTODIAL);
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
+	}
+
+	@Test
+	public void testIssueRejectsVenueRootForSelfSovereignCaller() {
+		long exp = (System.currentTimeMillis() / 1000) + HOUR;
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(exp)),
+			ALICE);
+		Exception denied = assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertTrue(denied.getMessage().contains("must sign the UCAN with their own key"));
+	}
+
+	@Test
+	public void testIssueRejectsVenueRootForExternalDidWebCaller() {
+		AString external = Strings.create("did:web:identity.example:u:eve");
+		engine.getVenueState().users().ensure(external);
+		long exp = (System.currentTimeMillis() / 1000) + HOUR;
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(external + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(exp)),
+			RequestContext.of(external));
+		Exception denied = assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertTrue(denied.getMessage().contains("not controlled by this venue"));
+	}
+
+	@Test
+	public void testGrantingProofCannotTurnVenueIntoSelfSovereignRoot() {
+		long now = System.currentTimeMillis() / 1000;
+		UCAN ownerGrantingRight = UCAN.create(ALICE_KP, UCAN.fromDIDKey(BOB_DID), now + 2 * HOUR,
+			Vectors.of(Capability.create(
+				Strings.create(ALICE_DID + "/w/"), Strings.create("grant/crud/read"))),
+			Vectors.empty());
+
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, CAROL_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(now + HOUR)),
+			withProofs(BOB, ownerGrantingRight.toMap()));
+
+		Exception denied = assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertTrue(denied.getMessage().contains("must sign the UCAN with their own key"),
+			"even a valid granting proof cannot make the venue a root for a self-sovereign DID");
+	}
+
+	@Test
+	public void testManagedDidWebCanBeAudienceWithoutAUserKey() {
+		AString audience = engine.managedUserDID(Strings.create("ucan-audience"));
+		long exp = (System.currentTimeMillis() / 1000) + HOUR;
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, audience,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CUSTODIAL_DID + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(exp)),
+			CUSTODIAL);
+
+		UCAN token = UCAN.fromJWT(RT.ensureString(RT.getIn(job.awaitResult(5000), "token")));
+		assertEquals(audience, token.getAudience());
+		assertEquals(venueDID, token.getIssuer(),
+			"the venue signs for custodial users; the audience needs no independent key");
 	}
 
 	// ========== Cross-user read with proof ==========
@@ -186,10 +269,10 @@ public class UCANTest {
 				UCAN.ATT, Vectors.of(Capability.create(
 					Strings.create("w/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(exp)),
-			ALICE);
+			CUSTODIAL);
 		AString jwt = RT.ensureString(RT.getIn(job.awaitResult(5000), "token"));
 		UCAN parsed = UCAN.fromJWT(jwt);
-		assertEquals(Strings.create(ALICE_DID + "/w/"),
+		assertEquals(Strings.create(CUSTODIAL_DID + "/w/"),
 			RT.getIn(parsed.getCapabilities().get(0), Capability.WITH),
 			"a bare with must be canonicalised to the issuer-principal's namespace");
 
@@ -199,7 +282,7 @@ public class UCANTest {
 			Maps.of(UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(Strings.create(""), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(exp)),
-			ALICE);
+			CUSTODIAL);
 		assertThrows(Exception.class, () -> emptyJob.awaitResult(5000));
 
 		// Scheme forms have no DID owner — not issuable; use the path form.
@@ -207,7 +290,7 @@ public class UCANTest {
 			Maps.of(UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(Strings.create("dlfs://docs/x"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(exp)),
-			ALICE);
+			CUSTODIAL);
 		assertThrows(Exception.class, () -> schemeJob.awaitResult(5000));
 	}
 
@@ -258,22 +341,21 @@ public class UCANTest {
 	/** Steward mints a read grant under a held granting right, end-to-end. */
 	@Test
 	public void testIssueWithGrantingRight() {
-		RequestContext CAROL = RequestContext.of(CAROL_DID);
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/shared/doc", Fields.VALUE, Strings.create("carol content")),
-			CAROL).awaitResult(5000);
+			CUSTODIAL).awaitResult(5000);
 
 		long now = System.currentTimeMillis() / 1000;
-		UCAN grantRight = UCAN.create(CAROL_KP, UCAN.fromDIDKey(ALICE_DID), now + 2 * HOUR,
+		UCAN grantRight = UCAN.create(venueKP, UCAN.fromDIDKey(ALICE_DID), now + 2 * HOUR,
 			Vectors.of(Capability.create(
-				Strings.create(CAROL_DID + "/w/"), Strings.create("grant/crud/read"))),
+				Strings.create(CUSTODIAL_DID + "/w/"), Strings.create("grant/crud/read"))),
 			Vectors.empty());
 
 		// Alice mints for Bob, inside the granting right's validity window.
 		Job issueJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(CAROL_DID + "/w/shared/"), Capability.CRUD_READ)),
+					Strings.create(CUSTODIAL_DID + "/w/shared/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(now + HOUR)),
 			withProofs(ALICE, grantRight.toMap()));
 		AString jwt = RT.ensureString(RT.getIn(issueJob.awaitResult(5000), "token"));
@@ -281,7 +363,7 @@ public class UCANTest {
 
 		// End-to-end: Bob reads Carol's doc with the minted, chain-free token.
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of(Fields.PATH, CAROL_DID + "/w/shared/doc"),
+			Maps.of(Fields.PATH, CUSTODIAL_DID + "/w/shared/doc"),
 			withProofs(BOB, UCAN.fromJWT(jwt).toMap()));
 		assertEquals(Strings.create("carol content"),
 			RT.getIn(readJob.awaitResult(5000), "value"));
@@ -292,14 +374,14 @@ public class UCANTest {
 	@Test
 	public void testIssueWithUseRightOnlyDenied() {
 		long now = System.currentTimeMillis() / 1000;
-		UCAN useRight = UCAN.create(CAROL_KP, UCAN.fromDIDKey(ALICE_DID), now + 2 * HOUR,
+		UCAN useRight = UCAN.create(venueKP, UCAN.fromDIDKey(ALICE_DID), now + 2 * HOUR,
 			Vectors.of(Capability.create(
-				Strings.create(CAROL_DID + "/w/"), Capability.CRUD_READ)),
+				Strings.create(CUSTODIAL_DID + "/w/"), Capability.CRUD_READ)),
 			Vectors.empty());
 		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(CAROL_DID + "/w/shared/"), Capability.CRUD_READ)),
+					Strings.create(CUSTODIAL_DID + "/w/shared/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(now + HOUR)),
 			withProofs(ALICE, useRight.toMap()));
 		assertThrows(Exception.class, () -> job.awaitResult(5000),
@@ -311,14 +393,14 @@ public class UCANTest {
 	@Test
 	public void testIssueGrantingRightWrongResourceDenied() {
 		long now = System.currentTimeMillis() / 1000;
-		UCAN grantRight = UCAN.create(CAROL_KP, UCAN.fromDIDKey(ALICE_DID), now + 2 * HOUR,
+		UCAN grantRight = UCAN.create(venueKP, UCAN.fromDIDKey(ALICE_DID), now + 2 * HOUR,
 			Vectors.of(Capability.create(
-				Strings.create(CAROL_DID + "/w/shared/"), Strings.create("grant/crud/read"))),
+				Strings.create(CUSTODIAL_DID + "/w/shared/"), Strings.create("grant/crud/read"))),
 			Vectors.empty());
 		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(CAROL_DID + "/w/private/"), Capability.CRUD_READ)),
+					Strings.create(CUSTODIAL_DID + "/w/private/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(now + HOUR)),
 			withProofs(ALICE, grantRight.toMap()));
 		assertThrows(Exception.class, () -> job.awaitResult(5000));
@@ -329,15 +411,15 @@ public class UCANTest {
 	@Test
 	public void testIssueGrantingRightWrongAbilityDenied() {
 		long now = System.currentTimeMillis() / 1000;
-		UCAN grantRight = UCAN.create(CAROL_KP, UCAN.fromDIDKey(ALICE_DID), now + 2 * HOUR,
+		UCAN grantRight = UCAN.create(venueKP, UCAN.fromDIDKey(ALICE_DID), now + 2 * HOUR,
 			Vectors.of(Capability.create(
-				Strings.create(CAROL_DID + "/w/"), Strings.create("grant/crud/read"))),
+				Strings.create(CUSTODIAL_DID + "/w/"), Strings.create("grant/crud/read"))),
 			Vectors.empty());
 
 		Job writeJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(CAROL_DID + "/w/"), Capability.CRUD_WRITE)),
+					Strings.create(CUSTODIAL_DID + "/w/"), Capability.CRUD_WRITE)),
 				UCAN.EXP, CVMLong.create(now + HOUR)),
 			withProofs(ALICE, grantRight.toMap()));
 		assertThrows(Exception.class, () -> writeJob.awaitResult(5000),
@@ -346,7 +428,7 @@ public class UCANTest {
 		Job regrantJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(CAROL_DID + "/w/"), Strings.create("grant/crud/read"))),
+					Strings.create(CUSTODIAL_DID + "/w/"), Strings.create("grant/crud/read"))),
 				UCAN.EXP, CVMLong.create(now + HOUR)),
 			withProofs(ALICE, grantRight.toMap()));
 		assertThrows(Exception.class, () -> regrantJob.awaitResult(5000),
@@ -358,15 +440,15 @@ public class UCANTest {
 	@Test
 	public void testIssueOutlivingGrantingRightDenied() {
 		long now = System.currentTimeMillis() / 1000;
-		UCAN grantRight = UCAN.create(CAROL_KP, UCAN.fromDIDKey(ALICE_DID), now + HOUR,
+		UCAN grantRight = UCAN.create(venueKP, UCAN.fromDIDKey(ALICE_DID), now + HOUR,
 			Vectors.of(Capability.create(
-				Strings.create(CAROL_DID + "/w/"), Strings.create("grant/crud/read"))),
+				Strings.create(CUSTODIAL_DID + "/w/"), Strings.create("grant/crud/read"))),
 			Vectors.empty());
 
 		Job longJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(CAROL_DID + "/w/"), Capability.CRUD_READ)),
+					Strings.create(CUSTODIAL_DID + "/w/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(now + 2 * HOUR)),
 			withProofs(ALICE, grantRight.toMap()));
 		assertThrows(Exception.class, () -> longJob.awaitResult(5000),
@@ -375,7 +457,7 @@ public class UCANTest {
 		Job shortJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(CAROL_DID + "/w/"), Capability.CRUD_READ)),
+					Strings.create(CUSTODIAL_DID + "/w/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(now + HOUR / 2)),
 			withProofs(ALICE, grantRight.toMap()));
 		assertNotNull(RT.getIn(shortJob.awaitResult(5000), "token"),
@@ -387,15 +469,15 @@ public class UCANTest {
 	@Test
 	public void testIssueThirdPartyGrantingRightDenied() {
 		long now = System.currentTimeMillis() / 1000;
-		// Bob (who does not own Carol's namespace) "grants" Alice a granting right over it.
+		// Bob (who does not control the managed namespace) "grants" Alice a granting right over it.
 		UCAN rogue = UCAN.create(BOB_KP, UCAN.fromDIDKey(ALICE_DID), now + 2 * HOUR,
 			Vectors.of(Capability.create(
-				Strings.create(CAROL_DID + "/w/"), Strings.create("grant/crud/read"))),
+				Strings.create(CUSTODIAL_DID + "/w/"), Strings.create("grant/crud/read"))),
 			Vectors.empty());
 		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(CAROL_DID + "/w/"), Capability.CRUD_READ)),
+					Strings.create(CUSTODIAL_DID + "/w/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(now + HOUR)),
 			withProofs(ALICE, rogue.toMap()));
 		assertThrows(Exception.class, () -> job.awaitResult(5000),
@@ -406,22 +488,21 @@ public class UCANTest {
 	 *  who can then mint reads — but the appointer cannot mint reads directly. */
 	@Test
 	public void testIssueRecursiveGrantingRight() {
-		RequestContext CAROL = RequestContext.of(CAROL_DID);
 		engine.jobs().invokeOperation("v/ops/covia/write",
 			Maps.of(Fields.PATH, "w/shared/doc", Fields.VALUE, Strings.create("carol content")),
-			CAROL).awaitResult(5000);
+			CUSTODIAL).awaitResult(5000);
 
 		long now = System.currentTimeMillis() / 1000;
-		UCAN metaRight = UCAN.create(CAROL_KP, UCAN.fromDIDKey(ALICE_DID), now + 3 * HOUR,
+		UCAN metaRight = UCAN.create(venueKP, UCAN.fromDIDKey(ALICE_DID), now + 3 * HOUR,
 			Vectors.of(Capability.create(
-				Strings.create(CAROL_DID + "/w/"), Strings.create("grant/grant/crud/read"))),
+				Strings.create(CUSTODIAL_DID + "/w/"), Strings.create("grant/grant/crud/read"))),
 			Vectors.empty());
 
 		// grant/grant/crud/read does NOT cover grant/crud/read — no direct use-grants.
 		Job directJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(CAROL_DID + "/w/"), Capability.CRUD_READ)),
+					Strings.create(CUSTODIAL_DID + "/w/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(now + HOUR)),
 			withProofs(ALICE, metaRight.toMap()));
 		assertThrows(Exception.class, () -> directJob.awaitResult(5000),
@@ -431,7 +512,7 @@ public class UCANTest {
 		Job stewardJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(UCAN.AUD, BOB_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(CAROL_DID + "/w/"), Strings.create("grant/crud/read"))),
+					Strings.create(CUSTODIAL_DID + "/w/"), Strings.create("grant/crud/read"))),
 				UCAN.EXP, CVMLong.create(now + 2 * HOUR)),
 			withProofs(ALICE, metaRight.toMap()));
 		AString stewardJwt = RT.ensureString(RT.getIn(stewardJob.awaitResult(5000), "token"));
@@ -443,13 +524,13 @@ public class UCANTest {
 		Job daveGrantJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
 			Maps.of(UCAN.AUD, DAVE_DID,
 				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(CAROL_DID + "/w/shared/"), Capability.CRUD_READ)),
+					Strings.create(CUSTODIAL_DID + "/w/shared/"), Capability.CRUD_READ)),
 				UCAN.EXP, CVMLong.create(now + HOUR)),
 			withProofs(BOB, UCAN.fromJWT(stewardJwt).toMap()));
 		AString daveJwt = RT.ensureString(RT.getIn(daveGrantJob.awaitResult(5000), "token"));
 
 		Job readJob = engine.jobs().invokeOperation("v/ops/covia/read",
-			Maps.of(Fields.PATH, CAROL_DID + "/w/shared/doc"),
+			Maps.of(Fields.PATH, CUSTODIAL_DID + "/w/shared/doc"),
 			withProofs(RequestContext.of(DAVE_DID), UCAN.fromJWT(daveJwt).toMap()));
 		assertEquals(Strings.create("carol content"),
 			RT.getIn(readJob.awaitResult(5000), "value"));
@@ -592,14 +673,10 @@ public class UCANTest {
 	@Test
 	public void testCrossUserReadViaJWTTransport() {
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
-		Job issueJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
-			Maps.of(
-				UCAN.AUD, BOB_DID,
-				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
-				UCAN.EXP, CVMLong.create(exp)),
-			ALICE);
-		AString jwt = RT.ensureString(RT.getIn(issueJob.awaitResult(5000), "token"));
+		AString jwt = UCAN.createJWT(ALICE_KP, UCAN.fromDIDKey(BOB_DID), exp,
+			Vectors.of(Capability.create(
+				Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
+			Vectors.empty());
 		assertNotNull(jwt);
 
 		AVector<ACell> proofs = UCANValidator.parseTransportUCANs(Vectors.of(jwt));
@@ -621,14 +698,10 @@ public class UCANTest {
 	@Test
 	public void testTamperedJWTRejectedAtIngress() {
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
-		Job issueJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
-			Maps.of(
-				UCAN.AUD, BOB_DID,
-				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
-				UCAN.EXP, CVMLong.create(exp)),
-			ALICE);
-		String jwt = RT.ensureString(RT.getIn(issueJob.awaitResult(5000), "token")).toString();
+		String jwt = UCAN.createJWT(ALICE_KP, UCAN.fromDIDKey(BOB_DID), exp,
+			Vectors.of(Capability.create(
+				Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
+			Vectors.empty()).toString();
 
 		// Flip a character in the signature segment (last dot-separated part)
 		int lastDot = jwt.lastIndexOf('.');
@@ -671,18 +744,13 @@ public class UCANTest {
 
 	// ========== Helper ==========
 
-	/**
-	 * Issues a venue-signed UCAN token for testing.
-	 * The venue DID is the issuer (resource owner for all hosted data).
-	 */
-	/**
-	 * Issues a venue-signed UCAN token. The 'with' is a full DID URL.
-	 */
+	/** Issues an owner-signed UCAN token. The 'with' is a full DID URL. */
 	private AMap<AString, ACell> issueToken(AString audience, AString ownerDID, String path, String ability, long ttlSeconds) {
+		assertEquals(ALICE_DID, ownerDID, "test helper only owns Alice's signing key");
 		long exp = (System.currentTimeMillis() / 1000) + ttlSeconds;
 		String withURI = ownerDID.toString() + path;
 		UCAN token = UCAN.create(
-			venueKP,
+			ALICE_KP,
 			UCAN.fromDIDKey(audience),
 			exp,
 			Vectors.of(Capability.create(Strings.create(withURI), Strings.create(ability))),

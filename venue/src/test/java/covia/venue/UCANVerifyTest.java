@@ -3,6 +3,7 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
@@ -29,13 +30,24 @@ import covia.grid.auth.UcanTokens;
  */
 public class UCANVerifyTest {
 
-	final Engine engine = TestEngine.ENGINE;
+	private static final Engine engine;
+	static {
+		engine = Engine.createTemp(Maps.of(
+			Config.HOSTNAME, Strings.create("verify.test.covia.example"),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
+		Engine.addDemoAssets(engine);
+	}
 
 	private AKeyPair ALICE_KP;
 	private AKeyPair BOB_KP;
 	private AString ALICE_DID;
 	private AString BOB_DID;
 	private RequestContext ALICE;
+
+	@AfterAll
+	static void closeEngine() {
+		engine.close();
+	}
 
 	@BeforeEach
 	public void setup(TestInfo info) {
@@ -71,11 +83,14 @@ public class UCANVerifyTest {
 	@Test
 	public void testVenueIssuedTokenVerifiesAsVenueRooted() {
 		// Issue via the venue op, then verify the returned JWT.
+		AString managed = engine.managedUserDID(Strings.create("verify-custodial"));
+		engine.getVenueState().users().ensure(managed);
 		ACell issued = engine.jobs().invokeOperation("v/ops/ucan/issue", Maps.of(
 			UCAN.AUD, BOB_DID,
 			UCAN.ATT, Vectors.of(Capability.create(
-				Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
-			UCAN.EXP, (System.currentTimeMillis() / 1000) + 3600), ALICE).awaitResult(5000);
+				Strings.create(managed + "/w/"), Capability.CRUD_READ)),
+			UCAN.EXP, (System.currentTimeMillis() / 1000) + 3600),
+			RequestContext.of(managed)).awaitResult(5000);
 		AString jwt = RT.ensureString(RT.getIn(issued, "token"));
 		assertNotNull(jwt);
 

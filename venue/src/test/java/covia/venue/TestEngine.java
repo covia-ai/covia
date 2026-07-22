@@ -1,6 +1,7 @@
 package covia.venue;
 
 import convex.core.data.Strings;
+import convex.core.data.Maps;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Index;
@@ -54,7 +55,8 @@ public class TestEngine {
 	public static final Engine ENGINE;
 
 	static {
-		ENGINE = Engine.createTemp(null);
+		ENGINE = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true)));
 		Engine.addDemoAssets(ENGINE);
 	}
 

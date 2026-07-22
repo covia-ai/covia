@@ -62,6 +62,14 @@ public class Orchestrator extends AAdapter {
 		requireInvoke(ctx);
 		AMap<AString, ACell> operation = RT.getIn(meta, Fields.OPERATION);
 		AVector<?> steps=RT.ensureVector(operation.get(Fields.STEPS));
+		if (steps == null) {
+			job.fail("Orchestration metadata requires an 'operation.steps' array");
+			return;
+		}
+		if (steps.isEmpty()) {
+			job.fail("Orchestration requires at least one step");
+			return;
+		}
 		ACell resultSpec=operation.get(Fields.RESULT);
 		boolean strict = CVMBool.TRUE.equals(operation.get(K_STRICT));
 		Orchestration orch=new Orchestration(job,ctx,input,steps,resultSpec,strict);
@@ -96,10 +104,14 @@ public class Orchestrator extends AAdapter {
 				// instanceof — RT.ensureMap(null) returns an empty map, which
 				// would swallow the error case and fail confusingly downstream.
 				if (!(steps.get(i) instanceof AMap<?,?> sm)) {
-					throw new IllegalArgumentException("Step must be defined as a map object but was: "+steps.get(i));
+					throw new IllegalArgumentException("Orchestration step " + i + " must be an object");
 				}
 				@SuppressWarnings("unchecked")
 				AMap<AString, ACell> step = (AMap<AString, ACell>) sm;
+				if (RT.ensureString(step.get(Fields.OP)) == null) {
+					throw new IllegalArgumentException(
+						"Orchestration step " + i + " requires string field 'op'");
+				}
 				SubTask task=new SubTask(i,step);
 				subTasks.add(task);
 			}
@@ -160,7 +172,12 @@ public class Orchestrator extends AAdapter {
 						
 						if (!task.subJob.isComplete()) {
 							// the subtask finished but was not complete, so the whole orchestration has failed
-							job.fail("Failed due to subtask "+task.stepNum+" ("+task.subJob.getStatus()+")");
+							ACell detail = task.subJob.getData().get(Fields.ERROR);
+							String op = String.valueOf(task.step.get(Fields.OP));
+							String reason = (detail == null)
+								? "ended with status " + task.subJob.getStatus()
+								: conciseDetail(detail, 512);
+							job.fail("Orchestration step " + task.stepNum + " (" + op + ") failed: " + reason);
 						}
 						
 						// mark dependency as completed for any subsequent steps
@@ -194,7 +211,7 @@ public class Orchestrator extends AAdapter {
 				orchOutput=computeInput(resultSpec,Vectors.empty());
 				job.completeWith(orchOutput);
 			} catch (Exception e) {
-				job.fail(e.getMessage());
+				job.fail(describeFailure(e));
 			}
 		}
 		
@@ -206,10 +223,16 @@ public class Orchestrator extends AAdapter {
 				ACell code=v.get(0);
 				if (code instanceof CVMLong cvmix) {
 					int ix=Utils.checkedInt(cvmix.longValue());
+					if (ix < 0 || ix >= subTasks.size()) {
+						throw new IllegalArgumentException("Input spec at " + path + " references step " + ix
+							+ "; valid range is 0.." + (subTasks.size() - 1));
+					}
 					SubTask source=subTasks.get(ix);
 					ACell value=RT.getIn(source.output, v.subVector(1,n-1).toCellArray());
 					return value;
 				} else if (Fields.CONST.equals(code)) {
+					if (n < 2) throw new IllegalArgumentException(
+						"Constant input spec at " + path + " requires a value");
 					ACell value=v.get(1);
 					return value;
 				} else if (Fields.INPUT.equals(code)) {
@@ -223,7 +246,8 @@ public class Orchestrator extends AAdapter {
 					}
 					return Strings.create(sb.toString());
 				} else {
-					throw new IllegalArgumentException("Unrecognised source type in: "+v);
+					throw new IllegalArgumentException("Unrecognised input source at " + path + ": "
+						+ conciseDetail(v, 256));
 				}
 			} else if (inputSpec instanceof AMap m) {
 				int mc=Utils.checkedInt(m.count());
@@ -238,7 +262,8 @@ public class Orchestrator extends AAdapter {
 				}
 				return m;
 			} else {
-				throw new IllegalArgumentException("Unrecognised input spec: "+inputSpec+" at path "+path);
+				throw new IllegalArgumentException("Unrecognised input spec at " + path + ": "
+					+ conciseDetail(inputSpec, 256));
 			}
 		}
 
@@ -335,9 +360,11 @@ public class Orchestrator extends AAdapter {
 				} catch (Exception e) {
 					if (DEBUG_ORCH) System.err.println(e);
 					if (subJob == null) {
-						subJob = Job.failure("Failed to run orchestrator subtask: " + e.getMessage());
+						String op = String.valueOf(step.get(Fields.OP));
+						subJob = Job.failure("Orchestration step " + stepNum + " (" + op
+							+ ") could not start: " + describeFailure(e));
 					} else {
-						subJob.fail("Failed to run orchestrator subtask: " + e.getMessage());
+						subJob.fail("Orchestration step " + stepNum + " failed: " + describeFailure(e));
 					}
 					completionQueue.add(this);
 				}

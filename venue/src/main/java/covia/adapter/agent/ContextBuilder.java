@@ -95,9 +95,11 @@ public class ContextBuilder {
 		"## Covia Lattice\n"
 		+ "You operate on the Covia grid — a federated network of venues hosting "
 		+ "operations, agents, and persistent data.\n"
+		+ "These namespaces describe what may exist, not what you can currently do. "
+		+ "Only claim or use capabilities backed by tools actually offered to you.\n"
 		+ "\n"
 		+ "User namespaces (scoped to current user):\n"
-		+ "  w/  Workspace — persistent data you manage on the user's behalf\n"
+		+ "  w/  Workspace — persistent user data\n"
 		+ "  o/  Operation pins — named operations saved for reuse\n"
 		+ "  n/  Agent-private — your notes, plans, state (persists across transitions)\n"
 		+ "  t/  Temporary — job-scoped scratch space (cleaned up when job ends)\n"
@@ -277,14 +279,10 @@ public class ContextBuilder {
 		if (sessionIdHex != null) sb.append(". Session: ").append(sessionIdHex);
 		sb.append('.');
 
-		// Include lattice reference when the agent has tools (default or explicit).
-		// Agents with no tools (e.g. pure extraction) don't need namespace docs.
-		boolean hasTools = config == null
-			|| !CVMBool.FALSE.equals(config.get(K_DEFAULT_TOOLS))
-			|| config.get(K_TOOLS) != null;
-		if (hasTools) {
-			sb.append("\n\n").append(LATTICE_REFERENCE.toString());
-		}
+		// Namespace literacy is useful even for a reasoning-only agent because
+		// paths can arrive in user input or configured context. The reference
+		// explicitly distinguishes addressability from actual tool capability.
+		sb.append("\n\n").append(LATTICE_REFERENCE.toString());
 		String capsSection = renderCapsForPrompt(
 			RT.ensureVector(config != null ? config.get(K_CAPS) : null));
 		if (capsSection != null) {
@@ -308,8 +306,9 @@ public class ContextBuilder {
 	 *   <li>Compacted segments → system messages of the form
 	 *       {@code [Compacted: N turns] summary}.</li>
 	 *   <li>Live turns {@code {role, content, ts, source}} → LLM messages
-	 *       {@code {role, content}} with content stringified. {@code ts} and
-	 *       {@code source} are dropped — vendor APIs require only role/content.</li>
+	 *       {@code {role, content}} with content stringified. Caller provenance
+	 *       is rendered consistently with live inbox messages; other framework
+	 *       metadata such as {@code ts} and {@code source} is dropped.</li>
 	 * </ul></p>
 	 *
 	 * <p>In the degenerate single-frame case (LLMAgentAdapter, GoalTreeAdapter
@@ -345,27 +344,13 @@ public class ContextBuilder {
 		ACell activeCell = frames.get(frames.count() - 1);
 		if (!(activeCell instanceof AMap)) return this;
 		AVector<ACell> rendered = covia.adapter.agent.GoalTreeContext
-			.renderConversation((AMap<AString, ACell>) activeCell);
+			.renderConversationFor((AMap<AString, ACell>) activeCell, config);
 
 		for (long i = 0; i < rendered.count(); i++) {
 			ACell entry = rendered.get(i);
-			if (!(entry instanceof AMap)) continue;
-			AMap<AString, ACell> m = (AMap<AString, ACell>) entry;
-			ACell role = m.get(K_ROLE);
-			if (!(role instanceof AString)) continue;
-			ACell content = m.get(K_CONTENT);
-			AString contentStr;
-			if (content instanceof AString s) {
-				contentStr = s;
-			} else if (content == null) {
-				contentStr = Strings.EMPTY;
-			} else {
-				// JSON, never EDN: a CVM map's toString() prints {"k" "v"}
-				// (no colon), which models misread as noise — the #215 repro
-				// answered "no task details provided" to an EDN-wrapped task.
-				contentStr = convex.core.util.JSON.print(content);
-			}
-			ACell msg = Maps.of(K_ROLE, role, K_CONTENT, contentStr);
+			AMap<AString, ACell> msg = renderMessageForContext(entry, null,
+				(ctx != null) ? ctx.getCallerDID() : null);
+			if (msg == null) continue;
 			messages = messages.conj(msg);
 			trackMessage(msg);
 		}
@@ -758,35 +743,80 @@ public class ContextBuilder {
 	}
 
 	/**
-	 * Appends each inbox message as a user turn with provenance.
+	 * Appends each inbox message as a user turn. Provenance for the current
+	 * authenticated caller is redundant and omitted; a genuinely different
+	 * sender is identified with a neutral authenticated-sender label.
 	 */
-	@SuppressWarnings("unchecked")
 	public ContextBuilder withInboxMessages(AVector<ACell> inboxMessages) {
 		if (inboxMessages == null) return this;
 		for (long i = 0; i < inboxMessages.count(); i++) {
-			ACell msg = inboxMessages.get(i);
-			AString content = null;
-			if (msg instanceof AString s) {
-				content = s;
-			} else if (msg instanceof AMap) {
-				ACell caller = RT.getIn(msg, Fields.CALLER);
-				ACell msgBody = RT.getIn(msg, Fields.MESSAGE);
-				if (msgBody != null) {
-					String prefix = (caller != null) ? "[Message from: " + caller + "]\n" : "[Message]\n";
-					content = Strings.create(prefix + msgBody);
-				} else {
-					AString c = RT.ensureString(RT.getIn(msg, K_CONTENT));
-					if (c != null) content = c;
-					else content = Strings.create(msg.toString());
-				}
-			}
-			if (content != null) {
-				ACell userMsg = Maps.of(K_ROLE, ROLE_USER, K_CONTENT, content);
-				messages = messages.conj(userMsg);
-				trackMessage(userMsg);
-			}
+			AMap<AString, ACell> userMsg = renderMessageForContext(
+				inboxMessages.get(i), ROLE_USER,
+				(ctx != null) ? ctx.getCallerDID() : null);
+			if (userMsg == null) continue;
+			messages = messages.conj(userMsg);
+			trackMessage(userMsg);
 		}
 		return this;
+	}
+
+	/**
+	 * Converts one stored turn or live inbox envelope into the provider-facing
+	 * message shape. This is the single attribution path for both sources.
+	 *
+	 * @param value stored turn, inbox envelope, or raw message string
+	 * @param defaultRole role used when {@code value} has none; null requires one
+	 * @param currentCaller authenticated principal in the current run context
+	 * @return provider-facing message, or null when no role can be established
+	 */
+	@SuppressWarnings("unchecked")
+	static AMap<AString, ACell> renderMessageForContext(ACell value,
+			AString defaultRole, AString currentCaller) {
+		AString role = defaultRole;
+		AString caller = null;
+		ACell content = value;
+		AMap<AString, ACell> source = null;
+
+		if (value instanceof AMap<?, ?> raw) {
+			source = (AMap<AString, ACell>) raw;
+			AString sourceRole = RT.ensureString(source.get(K_ROLE));
+			if (sourceRole != null) role = sourceRole;
+			caller = RT.ensureString(source.get(Fields.CALLER));
+			content = source.get(Fields.MESSAGE);
+			if (content == null) content = source.get(K_CONTENT);
+			// Preserve the old diagnostic fallback for malformed inbox envelopes.
+			if (content == null && defaultRole != null) content = source;
+		}
+
+		if (role == null) return null;
+		AString contentStr;
+		if (content instanceof AString s) {
+			contentStr = s;
+		} else if (content == null) {
+			contentStr = Strings.EMPTY;
+		} else {
+			// JSON, never EDN: CVM map toString() output is hard for models to read.
+			contentStr = convex.core.util.JSON.print(content);
+		}
+
+		if (ROLE_USER.equals(role) && caller != null && !caller.equals(currentCaller)) {
+			contentStr = Strings.create("[Authenticated sender: " + caller + "]\n" + contentStr);
+		}
+
+		AMap<AString, ACell> message = Maps.of(
+			K_ROLE, role,
+			K_CONTENT, contentStr);
+		if (source == null) return message;
+
+		// Keep provider-significant tool fields while dropping framework-only
+		// metadata. Attribution has already been folded into user content above.
+		for (AString key : java.util.List.of(
+				Strings.intern("toolCalls"), Strings.intern("id"),
+				K_NAME, Fields.STRUCTURED_CONTENT)) {
+			ACell fieldValue = source.get(key);
+			if (fieldValue != null) message = message.assoc(key, fieldValue);
+		}
+		return message;
 	}
 
 	/**

@@ -280,7 +280,9 @@ input: {
 output: ACell           — the response value (or null), appended to c/history
 ```
 
-If the return value is non-null, the framework appends it as a turn to `c/history`. For chat work, the return value also completes the chat Job. For task work, completion is **explicit**: the agent (or LLM tool loop) invokes `agent:complete_task` to finish; if no completion op was invoked during the transition, the task yields and stays in the queue.
+If the return value is non-null, the framework appends it as the terminal turn in `c/history`. A transition may also return `turns`: non-terminal assistant tool-call and tool-result messages that the framework inserts immediately before that terminal turn. This keeps one chronologically ordered audit transcript without making the framework understand provider-specific tool execution. For chat work, the return value also completes the chat Job. For task work, completion is **explicit**: the agent (or LLM tool loop) invokes `agent:complete_task` to finish; if no completion op was invoked during the transition, the task yields and stays in the queue.
+
+**Stored history vs model context.** The session retains the complete transcript: user input, assistant tool calls, tool results, durable failure diagnostics, and the final assistant response. The default LLM rendering elides raw tool-call/result scratch from completed prior cycles, while keeping user/final-assistant turns and failure diagnostics. The active cycle is always rendered in full so provider tool-call pairing remains valid. Set `config.renderHistory` to `"full"` for debugging or replay that requires the complete provider-shaped history. This is a render-time view only; it never deletes audit data.
 
 **State updates during a transition.** All routed by RequestContext scoped to `(agent, session, task?)`:
 
@@ -321,7 +323,8 @@ The framework around the transition:
 4. Provides the snapshots as transition input under their shorthand names
 5. Invokes the transition adapter
 6. On adapter return:
-   - If return value non-null → append turn to `c/history`
+   - Append adapter-emitted non-terminal `turns`, if any, to `c/history`
+   - If return value non-null → append one terminal turn to `c/history`
    - If chat picked: complete chat Job with return value (yield only if return is null — rare)
    - If task picked: completed iff `agent:complete_task` / `agent:fail_task` was invoked during transition; otherwise yield, apply falloff (§6.3)
    - If message picked: no completion concept (return value already emitted to history)

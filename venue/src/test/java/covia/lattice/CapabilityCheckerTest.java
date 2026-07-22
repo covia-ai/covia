@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 
 import convex.auth.ucan.Capability;
+import convex.auth.ucan.RootAuthorityPolicy;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -451,13 +452,14 @@ public class CapabilityCheckerTest {
 		AString res = Strings.create("did:key:zOwner/w/notes");
 		AString ability = Strings.create("crud/read");
 		long now = System.currentTimeMillis() / 1000;
+		RootAuthorityPolicy policy = RootAuthorityPolicy.SELF_SOVEREIGN.or(
+			(root, with) -> venue.equals(root));
 
 		// Null inputs → false.
-		assertFalse(CapabilityChecker.proofsCover(null, caller, venue, res, ability, now));
-		assertFalse(CapabilityChecker.proofsCover(Vectors.empty(), null, venue, res, ability, now));
-		assertFalse(CapabilityChecker.proofsCover(Vectors.empty(), caller, venue, null, ability, now));
-		assertFalse(CapabilityChecker.proofsCover(Vectors.empty(), caller, venue, res, null, now));
-		// Null venueDID → the venue arm grants nothing (self-sovereign arm remains).
+		assertFalse(CapabilityChecker.proofsCover(null, caller, policy, res, ability, now));
+		assertFalse(CapabilityChecker.proofsCover(Vectors.empty(), null, policy, res, ability, now));
+		assertFalse(CapabilityChecker.proofsCover(Vectors.empty(), caller, policy, null, ability, now));
+		assertFalse(CapabilityChecker.proofsCover(Vectors.empty(), caller, policy, res, null, now));
 		assertFalse(CapabilityChecker.proofsCover(Vectors.empty(), caller, null, res, ability, now));
 
 		// Garbage proof entries (non-map, map with no UCAN fields, nonsense fields)
@@ -466,11 +468,11 @@ public class CapabilityCheckerTest {
 			Strings.create("not-a-token"),
 			convex.core.data.Maps.empty(),
 			convex.core.data.Maps.of(Strings.create("bogus"), Strings.create("junk")));
-		assertFalse(CapabilityChecker.proofsCover(garbage, caller, venue, res, ability, now));
+		assertFalse(CapabilityChecker.proofsCover(garbage, caller, policy, res, ability, now));
 
 		// A resource with no derivable DID owner (unanchorable scheme): grants
 		// nothing under the self-sovereign arm — fail-closed at the capability.
-		assertFalse(CapabilityChecker.proofsCover(garbage, caller, venue,
+		assertFalse(CapabilityChecker.proofsCover(garbage, caller, policy,
 			Strings.create("https://example.com/x"), ability, now));
 	}
 

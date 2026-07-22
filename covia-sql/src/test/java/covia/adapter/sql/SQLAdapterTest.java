@@ -41,11 +41,13 @@ public class SQLAdapterTest {
 		// one: convex-db 0.8.9 fixed cross-instance DML routing
 		// (Convex-Dev/convex#645), and running the shared-db tests against a
 		// second instance keeps that fix regression-guarded from our side.
-		AMap<AString, ACell> config = Maps.of(Config.ADAPTERS, Maps.of(
-			Strings.create("sql"), Maps.of(
-				Strings.create("databases"), Maps.of(
-					Strings.create("shareddb"), Maps.of(
-						Strings.create("url"), Strings.create("jdbc:convex:mem:shared_ext;database=shared_ext_test"))))));
+		AMap<AString, ACell> config = Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			Config.ADAPTERS, Maps.of(
+				Strings.create("sql"), Maps.of(
+					Strings.create("databases"), Maps.of(
+						Strings.create("shareddb"), Maps.of(
+							Strings.create("url"), Strings.create("jdbc:convex:mem:shared_ext;database=shared_ext_test"))))));
 		engine = Engine.createTemp(config);
 		engine.registerAdapter(new SQLAdapter());
 		Engine.addDemoAssets(engine);

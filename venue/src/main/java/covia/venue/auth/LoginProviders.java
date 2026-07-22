@@ -205,16 +205,23 @@ public class LoginProviders {
 				.assoc(Fields.PROVIDER, Strings.create(providerName))
 				.assoc(Fields.PROVIDER_SUB, Strings.create(identity.sub));
 
-			// Set DID for user (appended to venue DID)
-			AString userDID = Strings.create(engine.getDIDString() + ":u:" + userId);
+			// OAuth is a trusted venue provisioner. Managed usernames live under
+			// the venue's did:web namespace; the runtime account store still accepts
+			// arbitrary DIDs for self-sovereign identities provisioned elsewhere.
+			// Preserve an existing account DID across upgrades / hostname changes;
+			// only new managed users receive the current did:web-derived ID.
+			AString userDID = RT.ensureString(userRecord.get(Fields.DID));
+			if (userDID == null) userDID = engine.managedUserDID(userId);
 			userRecord = userRecord.assoc(Fields.DID, userDID);
 			engine.getAuth().putUser(userId, userRecord);
+			engine.getVenueState().users().ensure(userDID);
 
 			// 4. Issue venue-signed EdDSA JWT
 			long nowSecs = System.currentTimeMillis() / 1000;
 			AMap<AString, ACell> claims = Maps.of(
 				"sub", userDID,
 				"iss", engine.getDIDString(),
+				"aud", engine.getDIDString(),
 				"iat", nowSecs,
 				"exp", nowSecs + engine.getAuth().getTokenExpiry()
 			);

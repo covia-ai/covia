@@ -36,6 +36,12 @@ public class TestAdapter extends AAdapter {
     public static final java.util.concurrent.ConcurrentHashMap<AString, RequestContext> CAPTURED_CTX
         = new java.util.concurrent.ConcurrentHashMap<>();
 
+    /** Test-only capture of the latest mock-LLM input per agent. This makes
+     * context-assembly assertions deterministic without changing production
+     * provider adapters. */
+    public static final java.util.concurrent.ConcurrentHashMap<AString, ACell> CAPTURED_LLM_INPUT
+        = new java.util.concurrent.ConcurrentHashMap<>();
+
     private final SecureRandom random = new SecureRandom();
     
     @Override
@@ -67,6 +73,7 @@ public class TestAdapter extends AAdapter {
                 case "wakeresponse":
                     return CompletableFuture.completedFuture(handleWakeResponse(input));
                 case "llm":
+					if (ctx.getAgentId() != null) CAPTURED_LLM_INPUT.put(ctx.getAgentId(), input);
                     return CompletableFuture.completedFuture(withMockTokens(handleLlm(input), input));
                 case "skillllm":
                     return CompletableFuture.completedFuture(withMockTokens(handleSkillLlm(input), input));

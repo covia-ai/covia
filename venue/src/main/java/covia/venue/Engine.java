@@ -11,13 +11,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.auth.did.DID;
 import convex.auth.did.DIDURL;
+import convex.auth.ucan.RootAuthorityPolicy;
 import convex.core.crypto.AKeyPair;
 import convex.core.crypto.Hashing;
 import convex.core.crypto.util.Multikey;
@@ -50,6 +50,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.adapter.AssetAdapter;
 import covia.adapter.AuthAdapter;
+import covia.adapter.UserAdapter;
 import covia.adapter.ConvexAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.adapter.GridAdapter;
@@ -69,6 +70,7 @@ import covia.adapter.UCANAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.exception.CoviaException;
+import covia.exception.AuthException;
 import covia.exception.RemoteFetchException;
 import covia.exception.WrongScopeException;
 import covia.grid.AContent;
@@ -95,7 +97,7 @@ public class Engine {
 	/**
 	 * Storage instance for content associated with assets
 	 */
-	protected final AStorage contentStorage;
+	protected AStorage contentStorage;
 
 	/**
 	 * Venue lattice using Covia.ROOT structure see COG-004.
@@ -145,10 +147,11 @@ public class Engine {
 	 * root and triggers the lattice's sync callback so the propagator
 	 * persists durable. See {@code venue/docs/PERSISTENCE.md}.
 	 */
-	private final ScheduledExecutorService persistenceSweep;
+	private ScheduledExecutorService persistenceSweep;
 
-	/** Atomic close flag — prevents double-close and serves as the sweep daemon's stop signal. */
-	private final AtomicBoolean closed = new AtomicBoolean(false);
+	/** Explicit lifecycle: construction is inert; start/close own active resources. */
+	private enum Lifecycle { NEW, STARTING, STARTED, FAILED, CLOSING, CLOSED }
+	private volatile Lifecycle lifecycle = Lifecycle.NEW;
 
 	/** How often the persistence sweep daemon runs (ms). */
 	private static final long SWEEP_INTERVAL_MS = 100;
@@ -174,16 +177,16 @@ public class Engine {
 	private volatile long lastFlushMillis;
 
 	/**
-	 * Primary constructor: Engine receives an ALatticeCursor from its caller.
-	 * Engine is agnostic to persistence and replication — it just uses the cursor.
-	 * Generates a new random key pair for this venue.
+	 * Primary constructor: assembles an inert Engine around the caller's cursor.
+	 * Call {@link #start()} before use. Generates a random venue key pair.
 	 */
 	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor) throws IOException {
 		this(config, cursor, AKeyPair.generate(), PersistenceHandler.NOOP);
 	}
 
 	/**
-	 * Constructor with explicit key pair. Use when the venue identity must be
+	 * Inert constructor with explicit key pair. Call {@link #start()} before use.
+	 * Use when the venue identity must be
 	 * stable across restarts (same AccountKey = same OwnerLattice slot).
 	 *
 	 * <p>Uses a no-op persistence handler — appropriate for in-memory venues
@@ -196,7 +199,8 @@ public class Engine {
 	}
 
 	/**
-	 * Canonical constructor with persistence handler.
+	 * Canonical inert constructor with persistence handler. Call {@link #start()}
+	 * before use.
 	 *
 	 * <p>The handler is invoked synchronously by {@link #flush()} (and during
 	 * the close-time final flush) to make the venue's lattice value durable.
@@ -209,45 +213,80 @@ public class Engine {
 		this.lattice=cursor;
 		this.persistHandler = (persistHandler != null) ? persistHandler : PersistenceHandler.NOOP;
 		this.lastFlushMillis = System.currentTimeMillis();
-		// Set signing context so SignedCursor can sign writes through OwnerLattice
-		LatticeContext ctx = LatticeContext.create(
-			convex.core.data.prim.CVMLong.create(convex.core.util.Utils.getCurrentTimestamp()), this.keyPair);
-		this.lattice.setContext(ctx);
-		initialiseFromCursor();
 		this.jobManager = new JobManager(this);
 		this.gridScheduler = new Scheduler(this);
-		this.contentStorage = createStorage();
-		this.contentStorage.initialise();
+	}
 
-		// The grid scheduler's authoritative state is the :schedule lattice
-		// index; arm its in-memory alarm from the persisted head. GRID_SCHEDULER.md.
-		gridScheduler.start();
-		// Per-thread agent wakeTimes are authoritative; re-derive each agent's
-		// single agent:wake event from them, healing any drift from a prior run.
-		rebuildSchedulerFromLattice();
-
-		// Ensure the venue's own user record exists in :user-data. The venue
-		// is treated as a user (it has its own DID and keypair) so that the
-		// /v/ virtual namespace can resolve to its /w/global/ sub-tree
-		// (per OPERATIONS.md §3). Idempotent — Users.ensure creates if
-		// missing, returns existing otherwise.
-		this.venueState.users().ensure(getDIDString());
-
-		// Start the persistence sweep daemon ONLY if a real persistence
-		// handler is wired. In-memory engines (createTemp, NOOP handler)
-		// have nothing to flush to, so the sweep is meaningless and would
-		// just leak a thread per test.
-		if (this.persistHandler != PersistenceHandler.NOOP) {
-			this.persistenceSweep = Executors.newSingleThreadScheduledExecutor(r -> {
-				Thread t = new Thread(r, "covia-persistence-sweep");
-				t.setDaemon(true);
-				return t;
-			});
-			this.persistenceSweep.scheduleWithFixedDelay(
-				this::sweep, SWEEP_INTERVAL_MS, SWEEP_INTERVAL_MS, TimeUnit.MILLISECONDS);
-		} else {
-			this.persistenceSweep = null;
+	/**
+	 * Starts this engine and all resources it owns.
+	 *
+	 * <p>Construction is deliberately inert so callers retain an Engine
+	 * reference before any storage or threads are started. Startup is
+	 * all-or-nothing: a failure closes every resource acquired so far in the
+	 * reverse of startup order, then rethrows the original failure.</p>
+	 *
+	 * @return this engine
+	 * @throws IOException if content storage cannot be initialised
+	 */
+	public synchronized Engine start() throws IOException {
+		if (lifecycle == Lifecycle.STARTED) return this;
+		if (lifecycle != Lifecycle.NEW) {
+			throw new IllegalStateException("Engine cannot start from state " + lifecycle);
 		}
+		lifecycle = Lifecycle.STARTING;
+		try {
+			// Set signing context only when active startup begins.
+			LatticeContext ctx = LatticeContext.create(
+				CVMLong.create(Utils.getCurrentTimestamp()), this.keyPair);
+			this.lattice.setContext(ctx);
+			initialiseFromCursor();
+
+			this.contentStorage = createStorage();
+			this.contentStorage.initialise();
+
+			// The authoritative schedule is persisted in the lattice. Start its
+			// in-memory alarm, then heal per-agent wake handles from durable state.
+			gridScheduler.start();
+			rebuildSchedulerFromLattice();
+
+			bootstrapUsers();
+			startPersistenceSweep();
+			lifecycle = Lifecycle.STARTED;
+			return this;
+		} catch (IOException | RuntimeException | Error failure) {
+			lifecycle = Lifecycle.FAILED;
+			closeStartedResources(false, failure);
+			throw failure;
+		}
+	}
+
+	private void bootstrapUsers() {
+		// The venue is also a user, providing its /v/ virtual namespace.
+		this.venueState.users().ensure(getDIDString());
+		// :public is one framework-owned shared principal, not a visitor account.
+		if (this.config.isPublicAccess()) {
+			this.venueState.users().ensure(Strings.create(getDIDString() + ":public"));
+		}
+		// Admit venue-managed login identities created by the older split store.
+		AMap<AString, AMap<AString, ACell>> knownUsers = auth.getUsers();
+		if (knownUsers != null) {
+			for (var entry : knownUsers.entrySet()) {
+				AString did = RT.ensureString(entry.getValue().get(Fields.DID));
+				if (did != null) this.venueState.users().ensure(did);
+			}
+		}
+	}
+
+	private void startPersistenceSweep() {
+		// In-memory engines have nothing external to flush and get no daemon.
+		if (this.persistHandler == PersistenceHandler.NOOP) return;
+		this.persistenceSweep = Executors.newSingleThreadScheduledExecutor(r -> {
+			Thread t = new Thread(r, "covia-persistence-sweep");
+			t.setDaemon(true);
+			return t;
+		});
+		this.persistenceSweep.scheduleWithFixedDelay(
+			this::sweep, SWEEP_INTERVAL_MS, SWEEP_INTERVAL_MS, TimeUnit.MILLISECONDS);
 	}
 
 
@@ -264,7 +303,7 @@ public class Engine {
 	 *
 	 * @return Configured storage instance
 	 */
-	private AStorage createStorage() {
+	protected AStorage createStorage() {
 		AString storageType = config.getStorageType();
 		String storagePath = config.getStoragePath();
 
@@ -454,7 +493,7 @@ public class Engine {
 	 * idle venues.</p>
 	 */
 	private void sweep() {
-		if (closed.get()) return;
+		if (lifecycle != Lifecycle.STARTED) return;
 		try {
 			venueState.sync();   // pull fork writes into the root
 			lattice.sync();      // fire NodeServer.onSync → propagator
@@ -512,47 +551,85 @@ public class Engine {
 	 *
 	 * <p>Idempotent — calling close more than once is safe.</p>
 	 */
-	public void close() {
-		if (!closed.compareAndSet(false, true)) return; // already closed
+	public synchronized void close() {
+		if (lifecycle == Lifecycle.CLOSED || lifecycle == Lifecycle.CLOSING) return;
+		boolean flush = lifecycle == Lifecycle.STARTED;
+		lifecycle = Lifecycle.CLOSING;
+		closeStartedResources(flush, null);
+		lifecycle = Lifecycle.CLOSED;
+	}
+
+	/** Releases resources in the reverse of {@link #start()} acquisition order. */
+	private void closeStartedResources(boolean flush, Throwable startupFailure) {
 		jobManager.beginShutdown();
 
-		// Stop the scheduler after closing job admission so a timer racing with
-		// shutdown cannot submit fresh work after the final persistence barrier.
-		gridScheduler.shutdown();
-
-		// Stop accepting new sweep tasks; wait briefly for in-flight sweep to finish.
-		// May be null for in-memory engines that have no persistence handler.
-		if (persistenceSweep != null) {
-			persistenceSweep.shutdown();
+		// Module loaders/adapters are installed after core Engine startup, so
+		// release their classloaders before unwinding the core resources.
+		for (int i = moduleLoaders.size() - 1; i >= 0; i--) {
 			try {
-				if (!persistenceSweep.awaitTermination(2, TimeUnit.SECONDS)) {
-					persistenceSweep.shutdownNow();
+				moduleLoaders.get(i).close();
+			} catch (Exception e) {
+				recordCloseFailure(startupFailure, "Failed to close module classloader", e);
+			}
+		}
+		moduleLoaders.clear();
+
+		// Persistence sweep is acquired last, so it is stopped first.
+		ScheduledExecutorService sweepExecutor = persistenceSweep;
+		persistenceSweep = null;
+		if (sweepExecutor != null) {
+			sweepExecutor.shutdown();
+			try {
+				if (!sweepExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+					sweepExecutor.shutdownNow();
 				}
 			} catch (InterruptedException e) {
-				persistenceSweep.shutdownNow();
+				sweepExecutor.shutdownNow();
 				Thread.currentThread().interrupt();
+				recordCloseFailure(startupFailure, "Interrupted while stopping persistence sweep", e);
 			}
 		}
 
-		// Final synchronous flush — guarantees the venueState fork's writes
-		// are on disk before VenueServer's nodeServer.close() reads from
-		// the root cursor for its graceful drain.
+		// Stop timers before the final durability barrier so no new jobs or
+		// lattice writes can race with that barrier.
 		try {
-			venueState.sync();
-			persistHandler.persist(lattice.get());
-			persistHandler.flush();
-		} catch (Exception e) {
-			log.warn("Final persistence flush failed during close", e);
+			gridScheduler.shutdown();
+		} catch (RuntimeException e) {
+			recordCloseFailure(startupFailure, "Failed to stop scheduler", e);
 		}
 
-		// Release module classloaders — closes their jar file handles.
-		for (AutoCloseable loader : moduleLoaders) {
+		if (flush && venueState != null) {
 			try {
-				loader.close();
+				venueState.sync();
+				persistHandler.persist(lattice.get());
+				persistHandler.flush();
 			} catch (Exception e) {
-				log.warn("Failed to close module classloader", e);
+				recordCloseFailure(startupFailure, "Final persistence flush failed during close", e);
 			}
 		}
+
+		AStorage storage = contentStorage;
+		contentStorage = null;
+		if (storage != null) {
+			try {
+				storage.close();
+			} catch (RuntimeException e) {
+				recordCloseFailure(startupFailure, "Failed to close content storage", e);
+			}
+		}
+	}
+
+	private static void recordCloseFailure(Throwable startupFailure, String message, Throwable failure) {
+		if (startupFailure != null) {
+			startupFailure.addSuppressed(failure);
+		} else {
+			log.warn(message, failure);
+		}
+	}
+
+	/** True only after start completed successfully and before close began. */
+	public boolean isStarted() {
+		return lifecycle == Lifecycle.STARTED;
 	}
 
 	public static void addDemoAssets(Engine venue) {
@@ -577,6 +654,7 @@ public class Engine {
 		venue.registerAdapter(new SecretAdapter());
 		venue.registerAdapter(new covia.adapter.SchedulerAdapter());
 		venue.registerAdapter(new AuthAdapter());
+		venue.registerAdapter(new UserAdapter());
 		venue.registerAdapter(new UCANAdapter());
 		venue.registerAdapter(new DLFSAdapter());
 		venue.registerAdapter(new VaultAdapter());
@@ -590,16 +668,10 @@ public class Engine {
 		// intent.
 		Modules.loadModules(venue);
 
-		// Flush pending /v/ops/ entries from all adapters. Per OPERATIONS.md
-		// §7, installAsset(catalogPath, resourcePath) defers the catalog
-		// write until after all adapters are registered, because covia:write
-		// (which the materialiser uses) requires CoviaAdapter to be present.
-		venue.materialiseVOps();
-
-		// Materialise /v/info/ from venue config + registered adapters.
-		// Per OPERATIONS.md §7, this is re-run on every startup. Idempotent
-		// modulo /v/info/started which legitimately reflects the current boot.
-		venue.materialiseVenueInfo();
+		// Publish the adapter catalog and venue information as one native lattice
+		// transaction. All writes and validation happen on a child fork; one sync
+		// makes the complete bootstrap snapshot visible without creating Jobs.
+		venue.materialiseBootstrapState();
 
 		// Bridge config-declared MCP servers (#80). Config is the source of
 		// truth for the names it declares (secrets-bootstrap rule); entries
@@ -612,47 +684,25 @@ public class Engine {
 	 * {@link covia.adapter.AAdapter#installAsset(String, String)} and
 	 * {@link covia.adapter.AAdapter#installTestAsset(String, String)}. Each
 	 * entry is written to its full target path (e.g. {@code v/ops/json/merge}
-	 * or {@code v/test/ops/echo}) as inline asset metadata via
-	 * {@code covia:write} with internal context.
+	 * or {@code v/test/ops/echo}) as inline asset metadata on a child lattice
+	 * fork.
 	 *
-	 * <p>Called once at startup after all adapters are registered (so that
-	 * {@code CoviaAdapter} — which provides {@code covia:write} — is
-	 * available). Idempotent on re-run.</p>
+	 * <p>This catalog-only method is retained for callers that explicitly need
+	 * it. Normal startup uses {@link #materialiseBootstrapState()} so catalog
+	 * and venue information become visible together.</p>
 	 */
 	public void materialiseVOps() {
-		RequestContext ctx = venueContext();
-		// Bootstrap: covia:write is itself a v/ops/ entry that doesn't yet
-		// exist when materialisation begins, so we can't reference it by
-		// catalog path. Look up its hash from the CoviaAdapter's pending
-		// entries once and dispatch by bare hex hash for every write.
-		String writeRef = lookupCoviaWriteRef();
-		if (writeRef == null) {
-			throw new IllegalStateException(
-				"Cannot materialise /v/ops — covia:write hash not available");
-		}
-		for (var adapter : adapters.values()) {
-			if (adapter == null) continue;
-			for (var entry : adapter.pendingCatalogEntries.entrySet()) {
-				String fullPath = entry.getKey();
-				Hash hash = entry.getValue();
-				try {
-					AString metaString = adapter.getInstalledAssets().get(hash);
-					if (metaString == null) continue;
-					ACell meta = convex.core.util.JSON.parse(metaString);
-					jobManager.invokeOperation(writeRef,
-						Maps.of(
-							Fields.PATH, Strings.create(fullPath),
-							Fields.VALUE, meta),
-						ctx).awaitResult(5000);
-				} catch (Exception e) {
-					// Fail loudly — a venue that cannot materialise its own ops
-					// catalog is broken; swallowing this masks the real cause as a
-					// downstream "Cannot resolve operation" cascade.
-					throw new RuntimeException(
-						"Failed to materialise " + adapter.getName() + " at /" + fullPath, e);
-				}
-			}
-		}
+		VenueBootstrapMaterializer.materialiseAdapterCatalog(this);
+	}
+
+	/**
+	 * Materialises the adapter catalog and {@code /v/info/} snapshot together.
+	 * The complete snapshot is built and validated on a child fork, then
+	 * published to the Engine's live fork with one {@code sync()}. A failure
+	 * before that point leaves the live state unchanged and creates no Jobs.
+	 */
+	public void materialiseBootstrapState() {
+		VenueBootstrapMaterializer.materialiseBootstrapState(this);
 	}
 
 	/**
@@ -691,20 +741,6 @@ public class Engine {
 	}
 
 	/**
-	 * Look up the covia:write asset hash from the CoviaAdapter's pending
-	 * catalog entries. Used by the venue startup materialiser to invoke
-	 * writes before {@code v/ops/covia/write} is itself materialised.
-	 *
-	 * @return the bare hex hash of covia:write, or null if unavailable
-	 */
-	private String lookupCoviaWriteRef() {
-		AAdapter coviaAdapter = adapters.get("covia");
-		if (coviaAdapter == null) return null;
-		Hash hash = coviaAdapter.pendingCatalogEntries.get("v/ops/covia/write");
-		return (hash != null) ? hash.toHexString() : null;
-	}
-
-	/**
 	 * Writes the venue introspection data to {@code /v/info/} sub-paths.
 	 * Called once at startup after all adapters are registered, and any
 	 * time the venue wants to refresh the information.
@@ -719,81 +755,21 @@ public class Engine {
 	 *   <li>{@code /v/info/adapters/&lt;name&gt;} — per-adapter summary</li>
 	 * </ul>
 	 *
-	 * <p>Writes go through the {@code covia:write} op with
-	 * {@link RequestContext#INTERNAL}, which the {@code v/} resolver
-	 * recognises as the venue identity.</p>
+	 * <p>Writes use the same cursor path semantics as {@code covia:write}, but
+	 * execute directly on a child lattice fork and publish with one sync. No
+	 * operation invocation or Job is involved.</p>
 	 */
 	public void materialiseVenueInfo() {
-		try {
-			RequestContext ctx = venueContext();
-
-			// /v/info/name
-			AString name = config.getName();
-			if (name != null) writeVenueInfo("v/info/name", name, ctx);
-
-			// /v/info/did
-			AString did = getDIDString();
-			if (did != null) writeVenueInfo("v/info/did", did, ctx);
-
-			// /v/info/version
-			String version = jarVersion();
-			if (version != null) writeVenueInfo("v/info/version", Strings.create(version), ctx);
-
-			// /v/info/started — current boot time
-			writeVenueInfo("v/info/started", CVMLong.create(System.currentTimeMillis()), ctx);
-
-			// /v/info/protocols — list of enabled protocol handlers (left
-			// as a TODO until VenueServer wires it; for now write what the
-			// engine knows about its own surface)
-			AVector<ACell> protocols = Vectors.of(
-				(ACell) Strings.create("rest"),
-				(ACell) Strings.create("mcp"),
-				(ACell) Strings.create("a2a"));
-			writeVenueInfo("v/info/protocols", protocols, ctx);
-
-			// /v/info/adapters/<name> — per-adapter summary. The "operations"
-			// field is a vector of full catalog paths — each entry is directly
-			// invocable via grid:run. Agents can count with length(operations).
-			for (String adapterName : adapters.keySet()) {
-				AAdapter adapter = adapters.get(adapterName);
-				if (adapter == null) continue;
-				AVector<ACell> ops = Vectors.empty();
-				for (String catalogPath : adapter.getOperationPaths()) {
-					ops = ops.conj(Strings.create(catalogPath));
-				}
-				AMap<AString, ACell> summary = Maps.of(
-					Fields.NAME, Strings.create(adapter.getName()),
-					Fields.DESCRIPTION, Strings.create(adapter.getDescription()),
-					Strings.create("operations"), ops);
-				writeVenueInfo("v/info/adapters/" + adapterName, summary, ctx);
-			}
-		} catch (Exception e) {
-			log.warn("Failed to materialise /v/info/", e);
-		}
-	}
-
-	private void writeVenueInfo(String path, ACell value, RequestContext ctx) {
-		// Same bootstrap rule as materialiseVOps: invoke covia:write by hash
-		// because v/ops/covia/write may not be materialised yet (and even
-		// after it is, going through it adds no value here).
-		String writeRef = lookupCoviaWriteRef();
-		if (writeRef == null) return;
-		try {
-			jobManager.invokeOperation(writeRef,
-				Maps.of(Fields.PATH, Strings.create(path), Fields.VALUE, value),
-				ctx).awaitResult(5000);
-		} catch (Exception e) {
-			log.warn("Failed to write {}: {}", path, e.getMessage());
-		}
+		VenueBootstrapMaterializer.materialiseVenueInformation(this);
 	}
 
 	/**
-	 * Best-effort jar version lookup. Returns null if the version can't be
-	 * determined (e.g. running from IDE classes rather than a packaged jar).
+	 * Best-effort jar version lookup. Returns {@code "dev"} when running from
+	 * IDE classes rather than a packaged jar.
 	 */
-	private static String jarVersion() {
+	static String jarVersion() {
 		Package pkg = Engine.class.getPackage();
-		if (pkg == null) return null;
+		if (pkg == null) return "dev";
 		String v = pkg.getImplementationVersion();
 		return (v != null) ? v : "dev";
 	}
@@ -891,7 +867,7 @@ public class Engine {
 	public static Engine createTemp(AMap<AString,ACell> config) {
 		try {
 			RootLatticeCursor<Index<Keyword,ACell>> cursor = Cursors.createLattice(Covia.ROOT);
-			return new Engine(config, cursor);
+			return new Engine(config, cursor).start();
 		} catch (IOException e) {
 			throw new Error(e);
 		}
@@ -1909,6 +1885,90 @@ public class Engine {
 	}
 
 	/**
+	 * Converts a venue-managed username to its canonical user DID. Publicly
+	 * named venues use their did:web alias (for example
+	 * {@code did:web:venue-1.covia.ai:u:alice}). A public hostname is required
+	 * because a did:key identifies one key and is not a namespace for managed
+	 * usernames.
+	 */
+	public AString managedUserDID(AString username) {
+		if (username == null || username.isEmpty()) {
+			throw new IllegalArgumentException("username is required");
+		}
+		if (!username.toString().matches("[A-Za-z0-9._-]+")) {
+			throw new IllegalArgumentException(
+				"username may contain only letters, numbers, '.', '_' and '-'");
+		}
+		AString base = config.getWebDID();
+		if (base == null) {
+			throw new IllegalStateException("Venue-managed usernames require a public hostname "
+				+ "so they can use did:web; pass a full user DID instead");
+		}
+		return Strings.create(base + ":u:" + username);
+	}
+
+	/**
+	 * Whether a DID is a venue-managed user identity minted under this venue's
+	 * current {@code did:web} namespace.
+	 *
+	 * <p>This is deliberately stricter than a textual prefix check: the suffix
+	 * must be one username segment accepted by {@link #managedUserDID(AString)}.
+	 * An arbitrary DID merely registered at this venue remains externally
+	 * controlled and must never be mistaken for a custodial identity.</p>
+	 */
+	public boolean isManagedUserDID(AString did) {
+		AString base = config.getWebDID();
+		if (base == null || did == null) return false;
+		String prefix = base + ":u:";
+		String value = did.toString();
+		if (!value.startsWith(prefix)) return false;
+		String username = value.substring(prefix.length());
+		return !username.isEmpty() && username.matches("[A-Za-z0-9._-]+");
+	}
+
+	/**
+	 * Root-authority policy for resources enforced by this venue.
+	 *
+	 * <p>Self-sovereign owners root their own grants. The venue may additionally
+	 * attest only for user DIDs it minted under its managed {@code did:web}
+	 * namespace. Merely registering an arbitrary external DID does not transfer
+	 * control of that identity or make the venue authoritative for its resources.</p>
+	 */
+	public RootAuthorityPolicy rootAuthorityPolicy() {
+		AString venueDID = getDIDString();
+		return RootAuthorityPolicy.SELF_SOVEREIGN.or((root, resource) -> {
+			if (!venueDID.equals(root) || resource == null) return false;
+			DID owner = RootAuthorityPolicy.ownerDID(resource);
+			if (owner == null) return false;
+			AString ownerDID = Strings.create("did:" + owner.getMethod() + ":" + owner.getID());
+			return isManagedUserDID(ownerDID);
+		});
+	}
+
+	/** Evaluate presented proofs under this venue's complete root policy. */
+	public boolean proofsCover(RequestContext ctx, AString resource, AString ability, long now) {
+		if (ctx == null) return false;
+		return covia.lattice.CapabilityChecker.proofsCover(ctx.getProofs(), ctx.getCallerDID(),
+			rootAuthorityPolicy(), resource, ability, now);
+	}
+
+	/**
+	 * Resolves the runtime account for an authenticated DID. Authentication
+	 * proves control of an identity; it does not implicitly provision an
+	 * account unless the venue explicitly enables users.autoCreate.
+	 */
+	public User admitUser(AString did) {
+		if (did == null) throw new AuthException("Authentication required");
+		Users users = venueState.users();
+		User user = users.get(did);
+		if (user != null) return user;
+		if (config.isUserAutoCreate()) return users.ensure(did);
+		throw new AuthException("User is not registered at this venue: " + did
+			+ ". Ask a venue administrator to provision it with user:create; "
+			+ "public test venues may enable users.autoCreate.");
+	}
+
+	/**
 	 * Builds the venue DID document served at {@code /.well-known/did.json}.
 	 *
 	 * <p>The document {@code id} must equal the DID a resolver asked for (DID
@@ -2070,7 +2130,7 @@ public class Engine {
 	/**
 	 * Re-derives every agent's single {@code agent:wake} event from the
 	 * authoritative per-thread {@code wakeTime} fields in the lattice. Called
-	 * once during Engine construction: the {@code :schedule} index already
+	 * once during {@link #start()}: the {@code :schedule} index already
 	 * persists across restarts, but a crash could leave a stored handle stale,
 	 * so each agent is rebuilt idempotently (cancel any prior handle, re-arm at
 	 * the earliest pending wake). See {@code venue/docs/GRID_SCHEDULER.md §8}.
@@ -2132,8 +2192,7 @@ public class Engine {
 				}
 			}
 		}
-		return covia.lattice.CapabilityChecker.proofsCover(ctx.getProofs(), ctx.getCallerDID(),
-			getDIDString(), resource, ability, System.currentTimeMillis() / 1000);
+		return proofsCover(ctx, resource, ability, System.currentTimeMillis() / 1000);
 	}
 
 	/**

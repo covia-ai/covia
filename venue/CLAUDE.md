@@ -92,6 +92,7 @@ AUTH_REQUIRED).
 | `ucan` | Capability tokens — granting surface (COG-17) | `issue`, `verify` |
 | `scheduler` | Deferred grid-op invocation | `schedule`, `cancel`, `trigger`, `list` |
 | `auth` | Authentication ops | login/token flows |
+| `user` | Explicit user registration and discovery (arbitrary DIDs; venue-managed did:web usernames) | `create`, `info`, `list` |
 | `test` | Testing | `echo`, `delay`, `fail`, `never`, `random`, `chat`, `pause`, `taskComplete` |
 
 ## API Endpoints
@@ -197,7 +198,8 @@ Index<Blob, ACell> userJobs = user.getJobs();
 
 Full operator reference: **`docs/CONFIG.md`** — persistence & identity
 (seed/keystore/venue.key), network binding, rate limiting, public access
-(`auth.public.caps`), per-adapter config, private jobs, DLFS WebDAV, MCP tool
+(`auth.public.caps`), user admission (`users.autoCreate`), per-adapter config,
+private jobs, DLFS WebDAV, MCP tool
 bridging, LLM providers, venue modules, A2A, secrets bootstrap.
 
 Quick dev shapes: `java -jar covia.jar` (defaults, port 8080) or

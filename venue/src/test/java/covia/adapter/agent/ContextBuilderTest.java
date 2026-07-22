@@ -514,7 +514,7 @@ public class ContextBuilderTest {
 	}
 
 	@Test
-	public void testInboxMapMessageWithProvenance() {
+	public void testInboxMapMessageWithExternalProvenance() {
 		AVector<ACell> inbox = Vectors.of(
 			(ACell) Maps.of(
 				Fields.CALLER, Strings.create("did:key:z6MkBob"),
@@ -529,8 +529,42 @@ public class ContextBuilderTest {
 
 		ACell last = result.history().get(result.history().count() - 1);
 		String content = RT.ensureString(RT.getIn(last, K_CONTENT)).toString();
-		assertTrue(content.contains("[Message from: did:key:z6MkBob]"));
+		assertTrue(content.contains("[Authenticated sender: did:key:z6MkBob]"));
 		assertTrue(content.contains("Please review the report"));
+	}
+
+	@Test
+	public void testRenderMessageOmitsCurrentCallerAttribution() {
+		AMap<AString, ACell> envelope = Maps.of(
+			Fields.CALLER, ALICE_DID,
+			Fields.MESSAGE, Strings.create("This is me"));
+
+		AMap<AString, ACell> rendered = ContextBuilder.renderMessageForContext(
+			envelope, Strings.intern("user"), ALICE_DID);
+
+		assertEquals("user", RT.getIn(rendered, K_ROLE).toString());
+		assertEquals("This is me", RT.getIn(rendered, K_CONTENT).toString());
+	}
+
+	@Test
+	public void testRenderMessageAttributesDifferentCallerConsistently() {
+		AString bob = Strings.create("did:key:z6MkBob");
+		AMap<AString, ACell> envelope = Maps.of(
+			Fields.CALLER, bob,
+			Fields.MESSAGE, Strings.create("Please review the report"));
+		AMap<AString, ACell> storedTurn = Maps.of(
+			K_ROLE, Strings.intern("user"),
+			K_CONTENT, Strings.create("Please review the report"),
+			Fields.CALLER, bob);
+
+		AMap<AString, ACell> live = ContextBuilder.renderMessageForContext(
+			envelope, Strings.intern("user"), ALICE_DID);
+		AMap<AString, ACell> persisted = ContextBuilder.renderMessageForContext(
+			storedTurn, null, ALICE_DID);
+
+		assertEquals(live, persisted);
+		assertEquals("[Authenticated sender: did:key:z6MkBob]\nPlease review the report",
+			RT.getIn(live, K_CONTENT).toString());
 	}
 
 	// ========== Empty state signal ==========
@@ -766,6 +800,8 @@ public class ContextBuilderTest {
 			"Default system prompt should describe workspace namespace");
 		assertTrue(defaultSys.toString().contains("v/ops"),
 			"Default system prompt should mention v/ops catalog");
+		assertTrue(defaultSys.toString().contains("Only claim or use capabilities backed by tools"),
+			"Namespace reference must not imply that addressability grants a capability");
 
 		// Custom identity prompt → lattice reference STILL appended
 		AMap<AString, ACell> customConfig = Maps.of(

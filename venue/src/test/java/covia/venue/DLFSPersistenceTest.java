@@ -45,7 +45,8 @@ public class DLFSPersistenceTest {
 			node.setMergeContext(LatticeContext.create(null, venueKey));
 			node.launch();
 
-			Engine engine = new Engine(Maps.empty(), node.getCursor(), venueKey);
+			Engine engine = new Engine(Maps.of(
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), node.getCursor(), venueKey).start();
 			Engine.addDemoAssets(engine);
 
 			// Write via DLFS adapter
@@ -110,7 +111,8 @@ public class DLFSPersistenceTest {
 			assertNotNull(dlfs, ":dlfs region should survive restart");
 
 			// Check the cursor chain that DLFSAdapter would use
-			Engine engine = new Engine(Maps.empty(), node.getCursor(), venueKey);
+			Engine engine = new Engine(Maps.of(
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true)), node.getCursor(), venueKey).start();
 			Engine.addDemoAssets(engine);
 
 			// Navigate the same path DLFSAdapter.getUserDLFSCursor() takes

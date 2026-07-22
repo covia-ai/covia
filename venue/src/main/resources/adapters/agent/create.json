@@ -1,6 +1,6 @@
 {
 	"name": "Create Agent",
-	"description": "Creates an agent at g/<agentId> in the caller's namespace. Idempotent on empty slots — call again with the same agentId without overwrite=true and you get a no-op success.\n\nSlot resolution when overwrite=true:\n  empty       → create\n  SLEEPING    → update config in place (timeline preserved)\n  SUSPENDED   → update config in place (timeline preserved)\n  TERMINATED  → wipe and re-create fresh\n  RUNNING     → rejected (suspend or wait for it to finish first)\n\nMinimal example: agent_create(agentId='Helper', config={operation: 'v/ops/llmagent/chat', systemPrompt: 'You summarise documents.'}). The 'operation' field must be a resolvable lattice path (e.g. 'v/ops/llmagent/chat' for plain persona chat, 'v/ops/goaltree/chat' for goal-decomposing planners) — bare adapter shorthand like 'llmagent:chat' will not resolve. The default transition is v/ops/llmagent/chat with the venue's default LLM provider (OpenAI). To use a different provider, set llmOperation in config (e.g. 'v/ops/langchain/anthropic' for Claude, 'v/ops/langchain/ollama' for local models); each provider op resolves its API key from the user's secret store via its own default secretKey, or you can override with apiKey='s/<SECRET_NAME>'. After creation, send work via agent_request and inspect via agent_info.",
+	"description": "Creates an agent at g/<agentId> in the caller's namespace. Idempotent on empty slots — call again with the same agentId without overwrite=true and you get a no-op success.\n\nOmit config for the recommended skilled default: read/list tools plus skills loaded on demand, using the venue's default transition and LLM provider. Pass config={} only when you intentionally want an explicit minimal configuration.\n\nWith overwrite=true, any occupied slot is deleted and recreated as a clean SLEEPING agent. A RUNNING agent is first marked TERMINATED, its pending callers are failed, and its active transition is cancelled and awaited. Config, state, timeline, sessions, tasks, pending work, inbox, and errors are wiped. An agent cannot overwrite itself from inside its own running transition. Use agent:update when history-preserving config mutation is intended.\n\nCustom example: agent_create(agentId='Helper', config={operation: 'v/ops/llmagent/chat', systemPrompt: 'You summarise documents.'}). The 'operation' field must be a resolvable lattice path (e.g. 'v/ops/llmagent/chat' for plain persona chat, 'v/ops/goaltree/chat' for goal-decomposing planners) — bare adapter shorthand like 'llmagent:chat' will not resolve. To use a different provider, set llmOperation in config (e.g. 'v/ops/langchain/anthropic' for Claude, 'v/ops/langchain/ollama' for local models); each provider op resolves its API key from the user's secret store via its own default secretKey, or you can override with apiKey='s/<SECRET_NAME>'. After creation, send work via agent_request and inspect via agent_info.",
 	"dateCreated": "2026-02-27T00:00:00Z",
 	"operation": {
 		"adapter": "agent:create",
@@ -27,7 +27,7 @@
 					]
 				},
 				"definition": { "type": "string", "description": "Asset ID of an agent definition using the legacy nested format (meta.agent.config). For the unified approach, pass the reference directly in 'config'." },
-				"overwrite": { "type": "boolean", "description": "If true and the slot is occupied: SLEEPING/SUSPENDED → update config in place (timeline preserved); TERMINATED → wipe and re-create; RUNNING → fail. If false (default), an occupied slot is a no-op." }
+				"overwrite": { "type": "boolean", "description": "If true, halt if necessary, then delete and recreate any occupied slot as a clean SLEEPING agent. All old runtime state and history are discarded. A RUNNING agent cannot overwrite itself from inside its own transition. Use agent:update for history-preserving config changes. If false (default), an occupied slot is a no-op." }
 			},
 			"required": ["agentId"]
 		},
@@ -36,8 +36,8 @@
 			"properties": {
 				"agentId": { "type": "string" },
 				"status": { "type": "string", "description": "Current status of the agent: SLEEPING, RUNNING, SUSPENDED, or TERMINATED" },
-				"created": { "type": "boolean", "description": "True if a new record was written (empty slot or TERMINATED revival)" },
-				"updated": { "type": "boolean", "description": "True if an existing SLEEPING/SUSPENDED record was updated in place; mutually exclusive with created" },
+				"created": { "type": "boolean", "description": "True if a new record was written, including replacement via overwrite=true" },
+				"updated": { "type": "boolean", "deprecated": true, "description": "Deprecated compatibility field; always false because agent:create no longer updates occupied records in place. Use agent:update for history-preserving mutation." },
 				"warnings": { "type": "array", "items": { "type": "string" }, "description": "Optional non-fatal advisories; present and non-empty only when the config looks misconfigured but create still succeeded. Each entry is a human-readable message. Currently the only advisory: the agent declares tools on an Ollama model whose tool-calling support could not be confirmed (no 'tools' capability, or the model is not installed/reachable). Absent when there is nothing to flag." }
 			}
 		}

@@ -15,6 +15,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
+import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import convex.core.data.Blob;
 import covia.grid.Job;
@@ -286,6 +287,36 @@ public class GoalTreeAdapterTest {
 		AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
 		assertNotNull(response, "Should have a response");
 		assertTrue(response.toString().length() > 0, "Response should not be empty");
+	}
+
+	@Test
+	public void testRootConversationSentOnceToLlm() {
+		GoalTreeAdapter adapter = (GoalTreeAdapter) engine.getAdapter("goaltree");
+		AString agentId = Strings.create("capture-root-agent");
+		String unique = "root-turn-appears-once";
+		TestAdapter.CAPTURED_LLM_INPUT.remove(agentId);
+
+		ACell input = Maps.of(
+			Fields.AGENT_ID, agentId,
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/llm",
+				"systemPrompt", "Test root history."),
+			Fields.MESSAGES, Vectors.of((ACell) Maps.of(
+				Fields.MESSAGE, Strings.create(unique))));
+
+		adapter.processGoal(null, ALICE.withAgentId(agentId), input);
+		ACell captured = TestAdapter.CAPTURED_LLM_INPUT.get(agentId);
+		assertNotNull(captured, "mock LLM input should be captured for this agent");
+		AVector<ACell> messages = RT.ensureVector(RT.getIn(captured, Fields.MESSAGES));
+		int matches = 0;
+		for (long i = 0; i < messages.count(); i++) {
+			AString role = RT.ensureString(RT.getIn(messages.get(i), "role"));
+			AString content = RT.ensureString(RT.getIn(messages.get(i), "content"));
+			if ("user".equals(String.valueOf(role))
+					&& unique.equals(String.valueOf(content))) matches++;
+		}
+		assertEquals(1, matches,
+			"shared context and runFrame must not both append the root conversation");
 	}
 
 	@Test
