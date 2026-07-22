@@ -6,6 +6,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -19,6 +20,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.agent.ContextBuilder;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -3341,6 +3343,105 @@ public class AgentAdapterTest {
 		User user = engine.getVenueState().users().get(ALICE_DID);
 		AgentState agent = user.agent("rem-agent");
 		assertNull(agent, "Agent record should be removed");
+	}
+
+	@Test
+	public void testDeleteExactAgentListInOneJob() {
+		for (String id : new String[] {"batch-a", "batch-b", "batch-c"}) {
+			engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, id), RequestContext.of(ALICE_DID)).awaitResult(5000);
+		}
+
+		ACell result = engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of("agentIds", Vectors.of("batch-a", "batch-b", "batch-c")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		assertEquals(3L, RT.ensureLong(RT.getIn(result, Fields.TOTAL)).longValue());
+		AVector<?> deleted = RT.ensureVector(RT.getIn(result, "agents"));
+		assertEquals(3L, deleted.count());
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		for (String id : new String[] {"batch-a", "batch-b", "batch-c"}) {
+			assertEquals(AgentState.TERMINATED, user.agent(id).getStatus());
+		}
+	}
+
+	@Test
+	public void testBatchRemoveCleansAlreadyTerminatedAgentForEtchGc() {
+		for (String id : new String[] {"batch-old", "batch-live"}) {
+			engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, id), RequestContext.of(ALICE_DID)).awaitResult(5000);
+		}
+		engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "batch-old"), RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		ACell result = engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of("agentIds", Vectors.of("batch-old", "batch-live"),
+				Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		assertEquals(2L, RT.ensureLong(RT.getIn(result, Fields.TOTAL)).longValue());
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		assertNull(user.agent("batch-old"));
+		assertNull(user.agent("batch-live"));
+	}
+
+	@Test
+	public void testBatchDeletePreflightPreventsPartialMutation() {
+		for (String id : new String[] {"preflight-a", "preflight-b"}) {
+			engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, id), RequestContext.of(ALICE_DID)).awaitResult(5000);
+		}
+
+		Job delete = engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of("agentIds", Vectors.of("preflight-a", "missing", "preflight-b"),
+				Fields.REMOVE, CVMBool.TRUE),
+			RequestContext.of(ALICE_DID));
+		assertThrows(Exception.class, () -> delete.awaitResult(5000));
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		assertEquals(AgentState.SLEEPING, user.agent("preflight-a").getStatus());
+		assertEquals(AgentState.SLEEPING, user.agent("preflight-b").getStatus());
+	}
+
+	@Test
+	public void testBatchDeleteRejectsAmbiguousAndDuplicateInputs() {
+		Job both = engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of(Fields.AGENT_ID, "one", "agentIds", Vectors.of("two")),
+			RequestContext.of(ALICE_DID));
+		assertThrows(Exception.class, () -> both.awaitResult(5000));
+
+		Job duplicate = engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of("agentIds", Vectors.of("same", "same")),
+			RequestContext.of(ALICE_DID));
+		assertThrows(Exception.class, () -> duplicate.awaitResult(5000));
+
+		Job empty = engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of("agentIds", Vectors.empty()), RequestContext.of(ALICE_DID));
+		assertThrows(Exception.class, () -> empty.awaitResult(5000));
+
+		Job nonString = engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of("agentIds", Vectors.of("valid", CVMLong.ONE)),
+			RequestContext.of(ALICE_DID));
+		assertThrows(Exception.class, () -> nonString.awaitResult(5000));
+	}
+
+	@Test
+	public void testBatchDeleteRequiresAuthorityForEveryAgent() {
+		for (String id : new String[] {"cap-batch-a", "cap-batch-b"}) {
+			engine.jobs().invokeOperation("v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, id), RequestContext.of(ALICE_DID)).awaitResult(5000);
+		}
+		RequestContext onlyA = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			Capability.create(Strings.create("g/cap-batch-a"), Abilities.AGENT_WRITE)));
+
+		Job denied = engine.jobs().invokeOperation("v/ops/agent/delete",
+			Maps.of("agentIds", Vectors.of("cap-batch-a", "cap-batch-b"),
+				Fields.REMOVE, CVMBool.TRUE), onlyA);
+		assertThrows(Exception.class, () -> denied.awaitResult(5000));
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		assertNotNull(user.agent("cap-batch-a"), "capability preflight must prevent partial deletion");
+		assertNotNull(user.agent("cap-batch-b"), "ungranted agent must remain untouched");
 	}
 
 	@Test

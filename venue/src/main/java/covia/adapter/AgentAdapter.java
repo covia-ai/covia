@@ -1,5 +1,6 @@
 package covia.adapter;
 
+import java.util.HashSet;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -71,6 +72,8 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_SOURCE_ID        = Strings.intern("sourceId");
 	private static final AString K_INCLUDE_TIMELINE = Strings.intern("includeTimeline");
 	private static final AString K_FORKED_FROM      = Strings.intern("forkedFrom");
+	private static final AString K_AGENT_IDS        = Strings.intern("agentIds");
+	private static final AString K_AGENTS           = Strings.intern("agents");
 	private static final AString K_SYSTEM_PROMPT    = Strings.intern("systemPrompt");
 	private static final AString K_LLM_OPERATION    = Strings.intern("llmOperation");
 	private static final AString K_MODEL            = Strings.intern("model");
@@ -374,6 +377,14 @@ public class AgentAdapter extends AAdapter {
 			default -> null; // info/list/context (reads), trigger, completeTask/failTask
 		};
 		if (ability == null) return;
+		if ("delete".equals(subOp) && RT.getIn(input, K_AGENT_IDS) != null) {
+			DeleteRequest request = parseDeleteRequest(input);
+			for (long i = 0; i < request.agentIds().count(); i++) {
+				engine.requireAuthority(ctx,
+					Strings.create("g/" + request.agentIds().get(i)), ability);
+			}
+			return;
+		}
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		engine.requireAuthority(ctx, agentId != null ? Strings.create("g/" + agentId) : null, ability);
 	}
@@ -1275,29 +1286,120 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	private void handleDelete(Job job, ACell input, RequestContext ctx) {
-		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
-		if (agentId == null) { job.fail("agentId is required"); return; }
-
+		DeleteRequest request;
+		try {
+			request = parseDeleteRequest(input);
+		} catch (IllegalArgumentException e) {
+			job.fail(e.getMessage());
+			return;
+		}
+		boolean remove = CVMBool.TRUE.equals(RT.getIn(input, Fields.REMOVE));
 		Users users = engine.getVenueState().users();
 		User user = users.get(ctx.getCallerDID());
-		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
-		if (agent == null) return;
+		if (user == null) {
+			job.fail("No agents found for caller " + ctx.getCallerDID());
+			return;
+		}
 
-		// A successful delete means the execution loop has stopped. This makes
-		// delete(remove=true) safe to follow immediately with create using the
-		// same id: the old loop cannot write into the new record.
-		if (!haltAgent(job, user, agent, agentId, ctx,
-				"Agent deleted: " + agentId, "delete")) return;
+		// Validate the full exact-ID set before mutating anything. Runtime races
+		// can still change a slot after this preflight, but ordinary bad input
+		// (including one missing ID in a batch) never causes a partial delete.
+		for (long i = 0; i < request.agentIds().count(); i++) {
+			AString agentId = request.agentIds().get(i);
+			AgentState agent = user.agent(agentId);
+			if (agent == null || !agent.exists()) {
+				job.fail("Agent not found: " + agentId + " (no agents were deleted)");
+				return;
+			}
+			CompletableFuture<ACell> loop = runningLoops.get(
+				new AgentKey(ctx.getCallerDID(), agentId));
+			if (agentId.equals(ctx.getAgentId()) && loop != null && !loop.isDone()) {
+				job.fail("Agent cannot delete itself while RUNNING: " + agentId
+					+ " (no agents were deleted; schedule deletion for after the current run)");
+				return;
+			}
+		}
 
-		boolean remove = CVMBool.TRUE.equals(RT.getIn(input, Fields.REMOVE));
+		AVector<ACell> results = Vectors.empty();
+		for (long i = 0; i < request.agentIds().count(); i++) {
+			AString agentId = request.agentIds().get(i);
+			AMap<AString, ACell> result = deleteOneAgent(job, user, agentId, ctx, remove);
+			if (result == null) return;
+			results = results.conj(result);
+		}
+
+		job.setStatus(Status.STARTED);
+		if (request.batch()) {
+			job.completeWith(Maps.of(
+				K_AGENTS, results,
+				Fields.TOTAL, CVMLong.create(results.count())));
+		} else {
+			job.completeWith(results.get(0));
+		}
+	}
+
+	private static final int MAX_DELETE_BATCH = 100;
+
+	private record DeleteRequest(AVector<AString> agentIds, boolean batch) {}
+
+	/** Parse the backward-compatible single-id form or the exact-id batch form. */
+	@SuppressWarnings("unchecked")
+	private static DeleteRequest parseDeleteRequest(ACell input) {
+		ACell singleCell = RT.getIn(input, Fields.AGENT_ID);
+		ACell batchCell = RT.getIn(input, K_AGENT_IDS);
+		if (singleCell != null && batchCell != null) {
+			throw new IllegalArgumentException("Specify exactly one of agentId or agentIds");
+		}
+		if (singleCell != null) {
+			if (!(singleCell instanceof AString agentId)) {
+				throw new IllegalArgumentException("agentId must be a string");
+			}
+			return new DeleteRequest(Vectors.of(agentId), false);
+		}
+		if (!(batchCell instanceof AVector<?> raw)) {
+			throw new IllegalArgumentException("Specify agentId or a non-empty agentIds array");
+		}
+		if (raw.count() == 0) {
+			throw new IllegalArgumentException("agentIds must not be empty");
+		}
+		if (raw.count() > MAX_DELETE_BATCH) {
+			throw new IllegalArgumentException("agentIds supports at most " + MAX_DELETE_BATCH + " agents per call");
+		}
+		AVector<AString> ids = Vectors.empty();
+		HashSet<String> seen = new HashSet<>();
+		for (long i = 0; i < raw.count(); i++) {
+			if (!(raw.get(i) instanceof AString id)) {
+				throw new IllegalArgumentException("agentIds[" + i + "] must be a string");
+			}
+			if (!seen.add(id.toString())) {
+				throw new IllegalArgumentException("agentIds contains duplicate: " + id);
+			}
+			ids = ids.conj(id);
+		}
+		return new DeleteRequest(ids, true);
+	}
+
+	/** Shared single-agent deletion semantics used by both wire shapes. */
+	private AMap<AString, ACell> deleteOneAgent(Job job, User user, AString agentId,
+			RequestContext ctx, boolean remove) {
+		AgentState agent = user.agent(agentId);
+		if (agent == null || !agent.exists()) {
+			job.fail("Agent disappeared during deletion: " + agentId);
+			return null;
+		}
+
+		// Logical deletion is idempotent. Physical deletion also accepts an
+		// already-TERMINATED record, allowing a later cleanup pass to make its
+		// old lattice values unreachable and eligible for Etch collection.
+		if (!AgentState.TERMINATED.equals(agent.getStatus())) {
+			if (!haltAgent(job, user, agent, agentId, ctx,
+					"Agent deleted: " + agentId, "delete")) return null;
+		}
 		if (remove) {
 			user.removeAgent(agentId);
-			job.setStatus(Status.STARTED);
-			job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.REMOVED, CVMBool.TRUE));
-		} else {
-			job.setStatus(Status.STARTED);
-			job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.TERMINATED));
+			return Maps.of(Fields.AGENT_ID, agentId, Fields.REMOVED, CVMBool.TRUE);
 		}
+		return Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.TERMINATED);
 	}
 
 	private void handleSuspend(Job job, ACell input, RequestContext ctx) {

@@ -729,7 +729,7 @@ the response visible to callers without querying agent state separately.
 | **Suspend (manual)** | `agent:suspend` | Set status → SUSPENDED with caller-supplied reason. Stops the agent from being woken. | SLEEPING | SUSPENDED |
 | **Trigger** | `agent:trigger` | Wake the agent and (optionally) wait for the run loop to drain. Fails on TERMINATED. See §4.6. | SLEEPING, RUNNING | RUNNING then SLEEPING |
 | **Cancel task** | `agent:cancelTask` | Remove a pending task from the agent's `tasks` index. Does not affect the run loop directly. | any except TERMINATED | unchanged |
-| **Delete** | `agent:delete` | Default: set status → TERMINATED (record retained for audit). With `remove:true`: physically remove the lattice slot. | any | TERMINATED (or absent) |
+| **Delete** | `agent:delete` | Accepts exactly one `agentId` or an exact `agentIds` list (maximum 100; no prefixes/wildcards). One Job halts each named agent. Default: set status → TERMINATED (record retained for audit). With `remove:true`: physically remove each lattice slot, making unreachable storage eligible for Etch GC. The full list is validated before deletion starts. | any | TERMINATED (or absent) |
 | **Fork** | `agent:fork` | Create a NEW agent at a different `agentId` from this one's config + optional state + optional timeline. The source is untouched; the target slot must be empty unless `overwrite:true` and TERMINATED. | source must not be TERMINATED | new agent SLEEPING |
 
 **All mutations are atomic.** Each operation is a single compare-and-swap
