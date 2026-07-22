@@ -34,6 +34,7 @@ public class JobConcurrencyCapTest {
 	/** Engine with the cap enabled and zero block time (immediate shed). */
 	private static Engine capEngine(int cap) {
 		Engine e = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.RATE_LIMIT, Maps.of(
 				Config.ENABLED, true,
 				Strings.create("maxConcurrentJobsPerUser"), (long) cap,
@@ -105,6 +106,7 @@ public class JobConcurrencyCapTest {
 	@Test
 	public void testRecoveredPausedJobsConsumePermits() throws Exception {
 		convex.core.data.AMap<AString, ACell> config = Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.RATE_LIMIT, Maps.of(
 				Config.ENABLED, true,
 				Strings.create("maxConcurrentJobsPerUser"), 1L,

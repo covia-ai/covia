@@ -56,6 +56,7 @@ public class HardKillTestChild {
 			Strings.create("port"), 0,
 			Config.STORE, Strings.create(storePath),
 			Config.SEED, Strings.create(seedHex),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(Config.ENABLED, true))
 		);
 	}

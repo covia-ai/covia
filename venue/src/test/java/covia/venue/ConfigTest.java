@@ -21,6 +21,14 @@ import convex.core.data.prim.CVMBool;
 public class ConfigTest {
 
 	@Test
+	public void testUserAutoCreateDefaultsOffAndCanBeEnabled() {
+		assertFalse(new Config(null).isUserAutoCreate());
+		assertTrue(new Config(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, CVMBool.TRUE)))
+			.isUserAutoCreate());
+	}
+
+	@Test
 	public void testDefaultLlmOperationFallback() {
 		// Unset → the built-in default provider op.
 		assertEquals("v/ops/langchain/openai",

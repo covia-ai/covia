@@ -87,6 +87,7 @@ public class TwoVenueTestServer {
 		return VenueServer.launch(Maps.of(
 			Strings.create("port"), 0, // ephemeral
 			Strings.create("seed"), Strings.create(seedHex),
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Fields.MCP, Maps.of(),
 			Fields.A2A, Maps.of(),
 			Config.AUTH, Maps.of(

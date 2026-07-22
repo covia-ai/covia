@@ -150,7 +150,12 @@ public class HITLAdapter extends AAdapter {
 			RT.ensureString(RT.getIn(input, Hitl.DESCRIPTION)), asks, nowMs, timeoutSecs);
 
 		final AString targetDID = target;
-		engine.getVenueState().users().ensure(targetDID).putHitlRequest(id, record);
+		User targetUser = engine.getVenueState().users().get(targetDID);
+		if (targetUser == null) {
+			throw new IllegalArgumentException("HITL target user is not registered at this venue: "
+				+ targetDID);
+		}
+		targetUser.putHitlRequest(id, record);
 		Blob jobId = job.getID();
 		job.setCancelHook(() -> markResolved(targetDID, id, Hitl.CANCELLED, null));
 		job.setStatus(Status.INPUT_REQUIRED);
@@ -214,7 +219,8 @@ public class HITLAdapter extends AAdapter {
 		}
 
 		// Structural authorisation: respond reads the CALLER's own inbox only.
-		User user = engine.getVenueState().users().ensure(caller);
+		User user = engine.getVenueState().users().get(caller);
+		if (user == null) throw new AuthException("User is not registered at this venue: " + caller);
 		AMap<AString, ACell> record = user.getHitlRequest(id);
 		if (record == null) {
 			throw new IllegalArgumentException("No HITL request " + id + " in your inbox");
@@ -322,7 +328,9 @@ public class HITLAdapter extends AAdapter {
 		AString caller = ctx.getCallerDID();
 		if (caller == null) throw new AuthException("Authentication required");
 		AString filter = RT.ensureString(RT.getIn(input, Hitl.STATUS));
-		AMap<AString, ACell> all = engine.getVenueState().users().ensure(caller).getHitlRequests();
+		User user = engine.getVenueState().users().get(caller);
+		if (user == null) throw new AuthException("User is not registered at this venue: " + caller);
+		AMap<AString, ACell> all = user.getHitlRequests();
 		AVector<ACell> items = Vectors.empty();
 		for (long i = 0; i < all.count(); i++) {
 			ACell v = all.entryAt(i).getValue();
@@ -366,7 +374,8 @@ public class HITLAdapter extends AAdapter {
 	/** Marks an OPEN record with a terminal status; returns false if it was
 	 *  already resolved (no overwrite of an answered/rejected record). */
 	private boolean markResolved(AString targetDID, AString id, AString status, AMap<AString, ACell> response) {
-		User user = engine.getVenueState().users().ensure(targetDID);
+		User user = engine.getVenueState().users().get(targetDID);
+		if (user == null) return false;
 		AMap<AString, ACell> record = user.getHitlRequest(id);
 		if (record == null || !Hitl.OPEN.equals(record.get(Hitl.STATUS))) return false;
 		AMap<AString, ACell> updated = record.assoc(Hitl.STATUS, status);
@@ -393,7 +402,8 @@ public class HITLAdapter extends AAdapter {
 		for (long u = 0; u < all.count(); u++) {
 			AString did = RT.ensureString(all.entryAt(u).getKey());
 			if (did == null) continue;
-			User user = engine.getVenueState().users().ensure(did);
+			User user = engine.getVenueState().users().get(did);
+			if (user == null) continue;
 			AMap<AString, ACell> reqs = user.getHitlRequests();
 			for (long i = 0; i < reqs.count(); i++) {
 				ACell v = reqs.entryAt(i).getValue();

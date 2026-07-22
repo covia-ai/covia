@@ -94,6 +94,9 @@ public class HitlFederationTest {
 		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
 		AKeyPair bobKP = AKeyPair.generate();
 		AString bobDID = UCAN.toDIDKey(bobKP.getAccountKey());
+		// The inbox owner must already be a registered user on venue B; HITL
+		// delivery is not an account-provisioning side effect.
+		TwoVenueTestServer.ENGINE_B.getVenueState().users().create(aliceDID);
 
 		// Alice delegates hitl/request over her inbox to Bob (self-sovereign).
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
@@ -174,6 +177,7 @@ public class HitlFederationTest {
 		AKeyPair aliceKP = AKeyPair.generate();
 		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
 		AKeyPair bobKP = AKeyPair.generate();
+		TwoVenueTestServer.ENGINE_B.getVenueState().users().create(aliceDID);
 
 		// Bob presents ONLY his identity token — no delegation from Alice.
 		VenueHTTP bobOnA = VenueHTTP.create(

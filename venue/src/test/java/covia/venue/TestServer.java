@@ -22,6 +22,7 @@ public class TestServer {
 		SERVER=VenueServer.launch(Maps.of(
 				Strings.create("port"),0, // ephemeral port
 				Config.ENABLE_PRIVATE_JOBS, true,
+				Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 				Fields.MCP,Maps.of(
 					Strings.create("includePathPrefixes"),
 					convex.core.data.Vectors.of(Strings.create("v/ops/"), Strings.create("v/test/ops/")),

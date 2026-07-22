@@ -22,6 +22,7 @@ import convex.core.lang.RT;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
+import covia.venue.Config;
 import covia.venue.RequestContext;
 
 /** FileAdapter read-through into zip/jar archives via the {@code x.zip!/entry}
@@ -37,6 +38,7 @@ public class FileArchiveReadTest {
 	@BeforeAll
 	static void setup() throws IOException {
 		engine = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			"file", Maps.of("roots", Maps.of("work", workspace.toAbsolutePath().toString()))));
 		Engine.addDemoAssets(engine);
 

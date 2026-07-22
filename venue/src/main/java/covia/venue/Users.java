@@ -66,6 +66,22 @@ public class Users extends ALatticeComponent<AMap<AString, ACell>> {
 	}
 
 	/**
+	 * Atomically creates an empty registration for a DID if it is not already
+	 * present. Unlike {@link #ensure(AString)}, this reports whether the call
+	 * actually created the record, which makes administrative provisioning
+	 * idempotent and observable.
+	 *
+	 * @param did user DID
+	 * @return true when a new registration was created
+	 */
+	public boolean create(AString did) {
+		ALatticeCursor<ACell> userCursor = cursor.path(did);
+		ACell previous = userCursor.getAndUpdate(
+			current -> current != null ? current : Maps.empty());
+		return previous == null;
+	}
+
+	/**
 	 * Gets all user data for iteration (e.g. job recovery).
 	 *
 	 * @return Map of DID string to user state, or null if none

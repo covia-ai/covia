@@ -4411,6 +4411,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testDeleteSessionDisabledByConfig() {
 		Engine disabled = Engine.createTemp(Maps.of(
+			covia.venue.Config.USERS, Maps.of(covia.venue.Config.AUTO_CREATE, true),
 			covia.venue.Config.ADAPTERS, Maps.of(
 				Strings.create("agent"), Maps.of(
 					Strings.create("sessionDelete"), CVMBool.FALSE)),

@@ -153,6 +153,12 @@ public class Config {
 	/** Key for venue modules — external adapter jars loaded at boot (see {@link Modules}) */
 	public static final AString MODULES = Strings.intern("modules");
 
+	/** User admission and registration configuration block. */
+	public static final AString USERS = Strings.intern("users");
+
+	/** Whether an authenticated, previously unknown DID is registered on first use. */
+	public static final AString AUTO_CREATE = Strings.intern("autoCreate");
+
 	/**
 	 * Returns the configuration block for a named adapter from the top-level
 	 * {@code adapters} section, or an empty map when absent. Example venue
@@ -778,6 +784,19 @@ public class Config {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * Whether authenticated DIDs are automatically registered on first use.
+	 * Defaults to false: authenticating an identity is not itself authority to
+	 * create an account at this venue. Public test venues can opt in with
+	 * {@code "users": {"autoCreate": true}}.
+	 */
+	public boolean isUserAutoCreate() {
+		AMap<AString, ACell> users = RT.ensureMap(config.get(USERS));
+		if (users == null) return false;
+		ACell value = users.get(AUTO_CREATE);
+		return value != null && RT.bool(value);
 	}
 
 	/**

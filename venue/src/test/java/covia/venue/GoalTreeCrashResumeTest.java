@@ -120,7 +120,8 @@ public class GoalTreeCrashResumeTest {
 		EtchStore store = EtchStore.createTemp();
 		AKeyPair kp = AKeyPair.generate();
 		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
-		AMap<AString, ACell> config = Maps.of(Config.DID, did);
+		AMap<AString, ACell> config = Maps.of(Config.DID, did,
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee01");
 
 		// ===== Stage 1: run until parked mid-cycle, then "crash" =====
@@ -200,7 +201,8 @@ public class GoalTreeCrashResumeTest {
 		EtchStore store = EtchStore.createTemp();
 		AKeyPair kp = AKeyPair.generate();
 		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
-		AMap<AString, ACell> config = Maps.of(Config.DID, did);
+		AMap<AString, ACell> config = Maps.of(Config.DID, did,
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee02");
 		String chatJobId;
 
@@ -308,7 +310,8 @@ public class GoalTreeCrashResumeTest {
 		EtchStore store = EtchStore.createTemp();
 		AKeyPair kp = AKeyPair.generate();
 		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
-		AMap<AString, ACell> config = Maps.of(Config.DID, did);
+		AMap<AString, ACell> config = Maps.of(Config.DID, did,
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 		String chatJobId;
 		String sidHex;
 
@@ -395,7 +398,8 @@ public class GoalTreeCrashResumeTest {
 		EtchStore store = EtchStore.createTemp();
 		AKeyPair kp = AKeyPair.generate();
 		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
-		AMap<AString, ACell> config = Maps.of(Config.DID, did);
+		AMap<AString, ACell> config = Maps.of(Config.DID, did,
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee03");
 		String requestJobId;
 
@@ -470,7 +474,8 @@ public class GoalTreeCrashResumeTest {
 		EtchStore store = EtchStore.createTemp();
 		AKeyPair kp = AKeyPair.generate();
 		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
-		AMap<AString, ACell> config = Maps.of(Config.DID, did);
+		AMap<AString, ACell> config = Maps.of(Config.DID, did,
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
 		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee04");
 		String requestJobId;
 

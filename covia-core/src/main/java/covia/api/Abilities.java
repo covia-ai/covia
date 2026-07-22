@@ -25,6 +25,8 @@ public final class Abilities {
 	public static final AString AGENT_REQUEST = Strings.intern("agent/request");
 	public static final AString AGENT_MESSAGE = Strings.intern("agent/message");
 	public static final AString AGENT_WRITE   = Strings.intern("agent/write");
+	public static final AString USER_CREATE   = Strings.intern("user/create");
+	public static final AString USER_READ     = Strings.intern("user/read");
 
 	/** The venue-scoped MCP management resource guarded by {@link #MCP_MANAGE}. */
 	public static final AString V_MCP = Strings.intern("v/mcp");

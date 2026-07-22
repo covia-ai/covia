@@ -60,6 +60,7 @@ public class PublicScopeTest {
 	public void setup() {
 		secureServer = VenueServer.launch(Maps.of(
 			Strings.create("port"), 0, // ephemeral
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			Config.AUTH, Maps.of(
 				Config.PUBLIC, Maps.of(Config.ENABLED, true)))); // default → read-only
 		secureBase = "http://localhost:" + secureServer.port();

@@ -763,7 +763,7 @@ public class VenueServer {
 		routes.after("/a2a/*", ctx -> engine.syncState());
 
 		// Auth middleware: before-handlers extracting caller identity.
-		AuthMiddleware.register(routes, engine.getAccountKey(), engine.getAuth(), engine.getDIDString());
+		AuthMiddleware.register(routes, engine);
 
 		// Rate limiting: per-caller token bucket, keyed on the identity the auth
 		// middleware just resolved (all anonymous callers share the venue :public

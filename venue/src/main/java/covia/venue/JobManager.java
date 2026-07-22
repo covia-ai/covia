@@ -479,6 +479,11 @@ public class JobManager {
 		if (meta == null) throw new IllegalArgumentException("Metadata must be specified");
 		AString callerDID = ctx.getCallerDID();
 		if (callerDID == null) throw new AuthException("Authentication required");
+		// Authentication establishes who the caller is; admission establishes
+		// whether that DID has an account at this venue. Keep this in the shared
+		// invocation prelude so HTTP, MCP, A2A, proof-channel and internal job
+		// paths cannot drift or persist a job before the decision is made.
+		engine.admitUser(callerDID);
 
 		String adapterName = AAdapter.getAdapterName(meta);
 		if (adapterName == null) {

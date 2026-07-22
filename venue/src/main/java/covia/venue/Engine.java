@@ -50,6 +50,7 @@ import covia.adapter.AAdapter;
 import covia.adapter.AgentAdapter;
 import covia.adapter.AssetAdapter;
 import covia.adapter.AuthAdapter;
+import covia.adapter.UserAdapter;
 import covia.adapter.ConvexAdapter;
 import covia.adapter.CoviaAdapter;
 import covia.adapter.GridAdapter;
@@ -69,6 +70,7 @@ import covia.adapter.UCANAdapter;
 import covia.adapter.TestAdapter;
 import covia.api.Fields;
 import covia.exception.CoviaException;
+import covia.exception.AuthException;
 import covia.exception.RemoteFetchException;
 import covia.exception.WrongScopeException;
 import covia.grid.AContent;
@@ -232,6 +234,23 @@ public class Engine {
 		// (per OPERATIONS.md §3). Idempotent — Users.ensure creates if
 		// missing, returns existing otherwise.
 		this.venueState.users().ensure(getDIDString());
+		// The anonymous transport principal is framework-owned, not a visitor
+		// registration. Bootstrap it whenever public access is enabled so the
+		// admission policy can remain fail-closed for unknown external DIDs.
+		if (this.config.isPublicAccess()) {
+			this.venueState.users().ensure(Strings.create(getDIDString() + ":public"));
+		}
+		// The OAuth/login directory is an explicit venue-managed registry. Keep
+		// its existing DIDs admitted across upgrades from the older split-store
+		// implementation, where login records did not always have a matching
+		// :user-data entry yet.
+		AMap<AString, AMap<AString, ACell>> knownUsers = auth.getUsers();
+		if (knownUsers != null) {
+			for (var entry : knownUsers.entrySet()) {
+				AString did = RT.ensureString(entry.getValue().get(Fields.DID));
+				if (did != null) this.venueState.users().ensure(did);
+			}
+		}
 
 		// Start the persistence sweep daemon ONLY if a real persistence
 		// handler is wired. In-memory engines (createTemp, NOOP handler)
@@ -577,6 +596,7 @@ public class Engine {
 		venue.registerAdapter(new SecretAdapter());
 		venue.registerAdapter(new covia.adapter.SchedulerAdapter());
 		venue.registerAdapter(new AuthAdapter());
+		venue.registerAdapter(new UserAdapter());
 		venue.registerAdapter(new UCANAdapter());
 		venue.registerAdapter(new DLFSAdapter());
 		venue.registerAdapter(new VaultAdapter());
@@ -1906,6 +1926,45 @@ public class Engine {
 			s=Strings.create("did:key:"+key);
 		}
 		return s;
+	}
+
+	/**
+	 * Converts a venue-managed username to its canonical user DID. Publicly
+	 * named venues use their did:web alias (for example
+	 * {@code did:web:venue-1.covia.ai:u:alice}). A public hostname is required
+	 * because a did:key identifies one key and is not a namespace for managed
+	 * usernames.
+	 */
+	public AString managedUserDID(AString username) {
+		if (username == null || username.isEmpty()) {
+			throw new IllegalArgumentException("username is required");
+		}
+		if (!username.toString().matches("[A-Za-z0-9._-]+")) {
+			throw new IllegalArgumentException(
+				"username may contain only letters, numbers, '.', '_' and '-'");
+		}
+		AString base = config.getWebDID();
+		if (base == null) {
+			throw new IllegalStateException("Venue-managed usernames require a public hostname "
+				+ "so they can use did:web; pass a full user DID instead");
+		}
+		return Strings.create(base + ":u:" + username);
+	}
+
+	/**
+	 * Resolves the runtime account for an authenticated DID. Authentication
+	 * proves control of an identity; it does not implicitly provision an
+	 * account unless the venue explicitly enables users.autoCreate.
+	 */
+	public User admitUser(AString did) {
+		if (did == null) throw new AuthException("Authentication required");
+		Users users = venueState.users();
+		User user = users.get(did);
+		if (user != null) return user;
+		if (config.isUserAutoCreate()) return users.ensure(did);
+		throw new AuthException("User is not registered at this venue: " + did
+			+ ". Ask a venue administrator to provision it with user:create; "
+			+ "public test venues may enable users.autoCreate.");
 	}
 
 	/**

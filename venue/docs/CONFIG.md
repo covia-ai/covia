@@ -164,6 +164,35 @@ capability ceiling: unset `caps` → the secure read-only default; an explicit
 dev only). Authenticated callers hold the public-user grants ambiently
 (covia#254) — the ceiling governs both. See `docs/UCAN.md` §4.7.
 
+## User registration (`users`)
+
+Authentication proves control of a DID; it does not create a venue account.
+By default, a previously unknown authenticated DID receives HTTP 403 with an
+actionable registration message, before a job or user state is persisted.
+
+```json
+{
+  "users": { "autoCreate": false }
+}
+```
+
+- `autoCreate` defaults to `false`. Keep this setting for private and
+  production venues, and provision accounts explicitly with
+  `v/ops/user/create`.
+- Set `autoCreate` to `true` only when authenticated first-use registration is
+  intended, such as a public test venue. The checked-in `local-dev.json` opts
+  in explicitly.
+
+A runtime user ID is always a DID and may use any DID method. `user:create`
+accepts a full DID directly (for example a self-sovereign `did:key`) or a
+venue-managed `username`. A username requires a public `hostname` and derives
+`did:web:<hostname>:u:<username>` — for example
+`did:web:venue-1.covia.ai:u:alice`. `user:create` and `user:list` are
+venue-administrative operations: invoke directly as the venue, or present a
+venue-issued UCAN covering `<venueDID>/users` with `user/create` or
+`user/read`. OAuth callbacks are trusted venue provisioners and create the
+same did:web-managed account explicitly.
+
 ## Adapter configuration
 
 ```json

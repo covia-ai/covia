@@ -24,6 +24,7 @@ import convex.core.lang.RT;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Engine;
+import covia.venue.Config;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
 
@@ -38,6 +39,7 @@ public class FileAdapterTest {
 	@BeforeAll
 	static void setup() {
 		engine = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			"file", Maps.of(
 				"roots", Maps.of(
 					"work", workspace.toAbsolutePath().toString(),
@@ -87,6 +89,7 @@ public class FileAdapterTest {
 	public void testRootDescriptionInRoots() {
 		// Build an isolated engine with description on one root.
 		Engine eng = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			"file", Maps.of("roots", Maps.of(
 				"docs", Maps.of(
 					"path", workspace.toAbsolutePath().toString(),
@@ -623,6 +626,7 @@ public class FileAdapterTest {
 		// Configure a file: root that points at a DLFS drive. Operations should
 		// route through DLFS but use the same file: surface as host roots.
 		Engine eng = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			"file", Maps.of("roots", Maps.of(
 				"shared", Maps.of("dlfs", "shared-drive")
 			))
@@ -672,6 +676,7 @@ public class FileAdapterTest {
 		// Each caller's drive view is signed with their own key — writes by
 		// one DID must not be visible to another.
 		Engine eng = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			"file", Maps.of("roots", Maps.of(
 				"private", Maps.of("dlfs", "private-drive")
 			))
@@ -725,6 +730,7 @@ public class FileAdapterTest {
 		// Configure an engine with an explicit temp root and verify it lands
 		// in the system tmp dir, is writable, and is cleaned up on demand.
 		Engine tempEng = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
 			"file", Maps.of("roots", Maps.of(
 				"scratch", Maps.of("temp", true, "prefix", "fa-test-")
 			))
