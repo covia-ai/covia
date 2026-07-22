@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import convex.auth.ucan.UCAN;
+import convex.auth.ucan.RootAuthorityPolicy;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -73,6 +74,22 @@ class UserAdapterTest {
 		AString expected = Strings.create("did:web:venue-1.covia.ai:u:alice");
 		assertEquals(expected, RT.getIn(managed, Fields.DID));
 		assertNotNull(engine.getVenueState().users().get(expected));
+	}
+
+	@Test
+	void venueRootAuthorityIsLimitedToItsManagedUsers() {
+		RootAuthorityPolicy policy = engine.rootAuthorityPolicy();
+		AString venue = engine.getDIDString();
+		AString managed = Strings.create("did:web:venue-1.covia.ai:u:alice");
+		AString self = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		AString external = Strings.create("did:web:identity.example:u:bob");
+
+		assertTrue(policy.acceptsRoot(venue, Strings.create(managed + "/w/notes")));
+		assertTrue(policy.acceptsRoot(self, Strings.create(self + "/w/notes")));
+		assertTrue(!policy.acceptsRoot(venue, Strings.create(self + "/w/notes")),
+			"registration must not transfer control of a self-sovereign DID");
+		assertTrue(!policy.acceptsRoot(venue, Strings.create(external + "/w/notes")),
+			"a similarly shaped DID on another domain is not locally custodial");
 	}
 
 	@Test

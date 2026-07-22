@@ -24,7 +24,6 @@ import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.hitl.Hitl;
-import covia.lattice.CapabilityChecker;
 import covia.venue.RequestContext;
 import covia.venue.User;
 
@@ -171,8 +170,7 @@ public class HITLAdapter extends AAdapter {
 		AString resource = Strings.create(target + "/h/");
 		engine.requireAuthority(ctx,resource, ABILITY_HITL_REQUEST);
 		long now = System.currentTimeMillis() / 1000;
-		if (!CapabilityChecker.proofsCover(ctx.getProofs(), caller, engine.getDIDString(),
-				resource, ABILITY_HITL_REQUEST, now)) {
+		if (!engine.proofsCover(ctx, resource, ABILITY_HITL_REQUEST, now)) {
 			throw new AuthException("HITL delivery denied: requires " + ABILITY_HITL_REQUEST
 				+ " on " + resource + " — present a delegation from the target user "
 				+ "(transport ucans / bearer)");

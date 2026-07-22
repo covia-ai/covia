@@ -193,6 +193,11 @@ venue-issued UCAN covering `<venueDID>/users` with `user/create` or
 `user/read`. OAuth callbacks are trusted venue provisioners and create the
 same did:web-managed account explicitly.
 
+Registering a full external DID admits that identity to use the venue; it does
+not transfer control of the DID to the venue. A self-sovereign user signs their
+own UCAN roots. Only username-created `did:web:<hostname>:u:<username>` users
+are custodial identities for which the venue may sign roots.
+
 ## Adapter configuration
 
 ```json

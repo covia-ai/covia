@@ -13,6 +13,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
@@ -22,36 +23,50 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.venue.Engine;
-import covia.venue.TestServer;
+import covia.venue.Config;
+import covia.venue.server.VenueServer;
 
 @TestInstance(Lifecycle.PER_CLASS)
 public class UserAPITest {
 
-	static final int PORT = TestServer.PORT;
 	static final AString ALICE = Strings.intern("alice");
 	static final AString BOB = Strings.intern("bob");
 	Engine engine;
+	VenueServer server;
+	int port;
 
 	@BeforeAll
 	public void setup() throws Exception {
-		assertNotNull(TestServer.SERVER, "Test server should be running");
-		engine = TestServer.ENGINE;
+		server = VenueServer.launch(Maps.of(
+			Strings.create("port"), 0,
+			Config.HOSTNAME, Strings.create("test.covia.example")));
+		engine = server.getEngine();
+		port = server.port();
+	}
+
+	@AfterAll
+	public void close() {
+		if (server != null) server.close();
 	}
 
 	@Test
 	void testUserDIDDocument() throws Exception {
-		// Add a user to the database
-		String userDID = "did:web:example.com:u:alice";
-		engine.getAuth().putUser(ALICE, Maps.of(
-			Fields.DID, Strings.create(userDID)
-		));
+		// Provision through the public user-management seam. Resolution must use
+		// the resulting authoritative :user-data record, not require an OAuth row.
+		ACell created = engine.jobs().invokeInternal("v/ops/user/create",
+			Maps.of("username", ALICE), engine.venueContext()).get(10, TimeUnit.SECONDS);
+		String userDID = RT.ensureString(RT.getIn(created, Fields.DID)).toString();
+		assertEquals("did:web:test.covia.example:u:alice", userDID);
+		assertEquals(null, engine.getAuth().getUser(ALICE),
+			"DID resolution must not depend on the OAuth login directory");
 
 		// Fetch the DID document via HTTP
 		HttpClient client = HttpClient.newBuilder().build();
 		HttpRequest req = HttpRequest.newBuilder()
-			.uri(new URI("http://localhost:" + PORT + "/u/alice/did.json"))
+			.uri(new URI("http://localhost:" + port + "/u/alice/did.json"))
 			.GET()
 			.timeout(Duration.ofSeconds(10))
 			.build();
@@ -79,7 +94,7 @@ public class UserAPITest {
 	void testUnknownUserReturns404() throws Exception {
 		HttpClient client = HttpClient.newBuilder().build();
 		HttpRequest req = HttpRequest.newBuilder()
-			.uri(new URI("http://localhost:" + PORT + "/u/unknown_user_xyz/did.json"))
+			.uri(new URI("http://localhost:" + port + "/u/unknown_user_xyz/did.json"))
 			.GET()
 			.timeout(Duration.ofSeconds(10))
 			.build();

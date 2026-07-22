@@ -928,7 +928,7 @@ See GRID_LATTICE_DESIGN.md §12 for the full roadmap.
 | **B7** | Lattice-native run loop: per-agent lock, status-based exclusion, merge-at-write-time, `wakeAgent`, `Job.awaitResult(timeout)` | ✓ Complete |
 | **B10** | Agent workspace CRUD: `/w/`, `/o/`, `/h/` namespaces, deep paths, vector indexing, JSONValueLattice, DID URL cross-user paths, default tools | ✓ Complete |
 | **B11** | `/o/` operation resolution, `agent:create` default tool, `covia:adapters`, langchain cleanup, JobManager simplification | ✓ Complete |
-| **C1** | UCAN proofs: venue-signed tokens (`ucan:issue`), per-request proof verification, full DID URL resources, `Capability.covers()`, cross-user reads with valid proof chain | ✓ Complete |
+| **C1** | UCAN proofs: owner-signed tokens plus venue-signed custodial tokens (`ucan:issue`), per-request proof verification, full DID URL resources, `Capability.covers()`, cross-user reads with valid proof chain | ✓ Complete |
 | **C2** | Delegation chains — proof chain walking, attenuation validation, agent sub-delegation, revocation | Planned |
 | **D** | HITL requests (`/h/` namespace), cross-user messaging | Planned |
 | **E** | Agent forking, cross-venue migration, federated UCAN validation | Planned |

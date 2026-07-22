@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
+import convex.auth.jwt.JWT;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -83,6 +84,15 @@ public class HitlFederationTest {
 		return (id != null && id.startsWith("0x")) ? id.substring(2) : id;
 	}
 
+	private static String managedBearer(AString userDID) {
+		long now = System.currentTimeMillis() / 1000;
+		return JWT.signPublic(Maps.of(
+			"sub", userDID,
+			"iss", TwoVenueTestServer.ENGINE_B.getDIDString(),
+			"iat", now,
+			"exp", now + 300), TwoVenueTestServer.ENGINE_B.getKeyPair()).toString();
+	}
+
 	/**
 	 * The full COG-16 cross-venue flow: delegated delivery, remote park,
 	 * response on B, completion observed (with the granted token) through A.
@@ -90,8 +100,8 @@ public class HitlFederationTest {
 	@Test
 	public void hitlRequestAcrossVenues() throws Exception {
 		// Alice: inbox on venue B. Bob: requester, calling via venue A.
-		AKeyPair aliceKP = AKeyPair.generate();
-		AString aliceDID = UCAN.toDIDKey(aliceKP.getAccountKey());
+		AString aliceDID = TwoVenueTestServer.ENGINE_B.managedUserDID(
+			Strings.create("alice-hitl-federation"));
 		AKeyPair bobKP = AKeyPair.generate();
 		AString bobDID = UCAN.toDIDKey(bobKP.getAccountKey());
 		// The inbox owner must already be a registered user on venue B; HITL
@@ -100,10 +110,11 @@ public class HitlFederationTest {
 
 		// Alice delegates hitl/request over her inbox to Bob (self-sovereign).
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
-		String hitlGrant = UCAN.create(aliceKP, UCAN.fromDIDKey(bobDID), exp,
+		String hitlGrant = UCAN.create(TwoVenueTestServer.ENGINE_B.getKeyPair(),
+			UCAN.fromDIDKey(bobDID), exp,
 			Vectors.of(Capability.create(
 				Strings.create(aliceDID + "/h/"), HITLAdapter.ABILITY_HITL_REQUEST)),
-			Vectors.empty()).toJWT(aliceKP).toString();
+			Vectors.empty()).toJWT(TwoVenueTestServer.ENGINE_B.getKeyPair()).toString();
 
 		// Bob calls VENUE A; his ucans carry the delegation plus his identity
 		// token for venue B. The grid op input carries data only (COG-15).
@@ -139,7 +150,7 @@ public class HitlFederationTest {
 
 		// Alice answers ON VENUE B, approving and echoing the offered grant.
 		VenueHTTP aliceOnB = VenueHTTP.create(
-			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.keyPair(aliceKP));
+			URI.create(TwoVenueTestServer.BASE_URL_B), VenueAuth.bearer(managedBearer(aliceDID)));
 		Job respond = aliceOnB.invokeAndWait(Strings.create("v/ops/hitl/respond"),
 			Hitl.answer(remoteId)
 				.answer("access", true)

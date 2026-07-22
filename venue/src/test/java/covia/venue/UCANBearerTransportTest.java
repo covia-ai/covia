@@ -228,16 +228,11 @@ public class UCANBearerTransportTest {
 	public void testBearerAndBodyDelegationGrantCrossUserRead() throws Exception {
 		long exp = (System.currentTimeMillis() / 1000) + 3600;
 
-		// 1. Alice asks the venue (via engine-direct) to issue a delegation
-		//    to Bob over her namespace.
-		Job issueJob = engine.jobs().invokeOperation("v/ops/ucan/issue",
-			Maps.of(
-				UCAN.AUD, BOB_DID,
-				UCAN.ATT, Vectors.of(Capability.create(
-					Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
-				UCAN.EXP, CVMLong.create(exp)),
-			RequestContext.of(ALICE_DID));
-		AString delegation = RT.ensureString(RT.getIn(issueJob.awaitResult(5000), "token"));
+		// 1. Self-sovereign Alice signs the delegation to Bob herself.
+		AString delegation = UCAN.createJWT(ALICE_KP, UCAN.fromDIDKey(BOB_DID), exp,
+			Vectors.of(Capability.create(
+				Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
+			Vectors.empty());
 		assertNotNull(delegation);
 
 		// 2. Bob creates his own invocation UCAN (signed by Bob's key).

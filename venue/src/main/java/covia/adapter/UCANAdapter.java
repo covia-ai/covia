@@ -4,27 +4,29 @@ import java.util.concurrent.CompletableFuture;
 
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.UCAN;
+import convex.auth.did.DID;
+import convex.auth.jwt.JWT;
 import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
-import convex.core.data.AccountKey;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.exception.AuthException;
 import covia.lattice.CapabilityChecker;
 import covia.venue.RequestContext;
 
 /**
  * Adapter for UCAN token operations.
  *
- * <p>Phase C1: venue-signed tokens. The venue is the issuer (resource owner
- * for all data it hosts). User-issued tokens (signed with user's own key)
- * require client-side signing — deferred to Phase C2.</p>
+ * <p>The issuance operation creates venue-signed roots for the venue's own
+ * resources and its managed custodial users. Self-sovereign users issue with
+ * their own key using the client SDK; the venue must not impersonate them.</p>
  */
 public class UCANAdapter extends AAdapter {
 
@@ -67,11 +69,12 @@ public class UCANAdapter extends AAdapter {
 	}
 
 	/**
-	 * Issues a venue-signed UCAN token.
+	 * Issues a venue-signed UCAN token for a venue-controlled resource.
 	 *
 	 * <p>The venue signs with its own key pair. The issuer DID is the venue's DID.
-	 * The caller must be authenticated. The token grants capabilities on the
-	 * venue's hosted resources.</p>
+	 * The caller must be authenticated. The resource must be owned by the venue
+	 * or one of its managed custodial users; self-sovereign owners sign with
+	 * their own key client-side.</p>
 	 *
 	 * @return The complete signed UCAN token as a CVM map
 	 */
@@ -129,15 +132,13 @@ public class UCANAdapter extends AAdapter {
 					// (checked by evaluating the same coverage at the minted expiry).
 					AString grantAbility = Strings.create("grant/" + can);
 					AString resource = Strings.create(w);
-					if (!CapabilityChecker.proofsCover(ctx.getProofs(), callerDID,
-							engine.getDIDString(), resource, grantAbility, now)) {
+					if (!engine.proofsCover(ctx, resource, grantAbility, now)) {
 						throw new RuntimeException("att[" + i + "].with is outside your namespace "
 							+ "and your presented proofs do not establish the granting right "
 							+ grantAbility + " over " + w + " — present a delegation from the "
 							+ "resource owner (transport ucans / bearer), or use your own namespace");
 					}
-					if (!CapabilityChecker.proofsCover(ctx.getProofs(), callerDID,
-							engine.getDIDString(), resource, grantAbility, exp - 1)) {
+					if (!engine.proofsCover(ctx, resource, grantAbility, exp - 1)) {
 						throw new RuntimeException("att[" + i + "]: exp exceeds the validity of the "
 							+ "granting right enabling this issuance — minted authority must not "
 							+ "outlive the right it was minted under; request a shorter exp");
@@ -156,17 +157,42 @@ public class UCANAdapter extends AAdapter {
 		}
 		att = canonAtt;
 
-		// Resolve audience public key from DID
-		AccountKey audKey = UCAN.fromDIDKey(audDID);
-		if (audKey == null) {
-			throw new RuntimeException("Cannot resolve audience public key from DID: " + audDID);
+		// This operation signs a new ROOT with the venue key. That is valid only
+		// for resources the venue actually controls: its own DID or one of its
+		// managed custodial users. A self-sovereign caller must sign with their
+		// own key client-side; a held use/grant proof cannot turn the venue into
+		// the root authority for an unrelated DID.
+		AString venueDID = engine.getDIDString();
+		for (long i = 0; i < att.count(); i++) {
+			AMap<AString, ACell> cap = RT.castMap(att.get(i));
+			AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
+			if (!engine.rootAuthorityPolicy().acceptsRoot(venueDID, with)) {
+				throw new AuthException("Cannot issue a venue-signed root grant for " + with
+					+ ": the resource is not controlled by this venue. Self-sovereign DID "
+					+ "owners must sign the UCAN with their own key; use user:create with a "
+					+ "username only for a venue-managed custodial identity");
+			}
 		}
 
-		// Sign with venue key pair — venue is the issuer, return as JWT
+		// Audience is an identity, not necessarily a key. Custodial did:web users
+		// intentionally have no independent key, so requiring did:key here would
+		// make it impossible to delegate to them. Validate DID syntax, then sign
+		// the standard UCAN claims directly with the venue issuer key.
+		try {
+			if (DID.fromString(audDID.toString()) == null) throw new IllegalArgumentException();
+		} catch (RuntimeException e) {
+			throw new IllegalArgumentException("aud must be a valid audience DID: " + audDID);
+		}
 		AKeyPair venueKP = engine.getKeyPair();
-		UCAN token = UCAN.create(venueKP, audKey, exp, att, Vectors.empty());
+		AMap<AString, ACell> claims = Maps.of(
+			UCAN.ISS, venueDID,
+			UCAN.AUD, audDID,
+			UCAN.EXP, CVMLong.create(exp),
+			UCAN.ATT, att,
+			UCAN.PRF, Vectors.empty());
+		AString token = JWT.signPublic(claims, venueKP);
 
-		return Maps.of("token", token.toJWT(venueKP));
+		return Maps.of("token", token);
 	}
 
 	/**
@@ -244,6 +270,7 @@ public class UCANAdapter extends AAdapter {
 
 		// Per-capability root-authority verdict under this venue's policy.
 		convex.auth.ucan.RootAuthorityPolicy self = convex.auth.ucan.RootAuthorityPolicy.SELF_SOVEREIGN;
+		convex.auth.ucan.RootAuthorityPolicy venuePolicy = engine.rootAuthorityPolicy();
 		AVector<ACell> att = token.getCapabilities();
 		AVector<ACell> verdicts = Vectors.empty();
 		if (att != null) {
@@ -252,7 +279,7 @@ public class UCANAdapter extends AAdapter {
 				AString with = (cap != null) ? RT.ensureString(cap.get(Capability.WITH)) : null;
 				String verdict;
 				if (self.acceptsRoot(rootIssuer, with)) verdict = "owner";
-				else if (venueDID.equals(rootIssuer)) verdict = "venue";
+				else if (venuePolicy.acceptsRoot(rootIssuer, with)) verdict = "venue";
 				else verdict = "refused";
 				verdicts = verdicts.conj(Maps.of(
 					Capability.WITH, with,
@@ -282,7 +309,7 @@ public class UCANAdapter extends AAdapter {
 			// diagnostic answers match what enforcement would actually decide.
 			String canonWith = CapabilityChecker.canonicalResource(reqWith.toString(), audience);
 			boolean authorises = CapabilityChecker.proofsCover(
-				Vectors.of(token.toMap()), audience, venueDID,
+				Vectors.of(token.toMap()), audience, engine.rootAuthorityPolicy(),
 				Strings.create(canonWith), reqCan, now);
 			result = result.assoc(K_AUTHORISES, convex.core.data.prim.CVMBool.of(authorises));
 			result = result.assoc(K_AUDIENCE, audience);

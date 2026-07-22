@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 
 import convex.auth.did.DID;
 import convex.auth.did.DIDURL;
+import convex.auth.ucan.RootAuthorityPolicy;
 import convex.core.crypto.AKeyPair;
 import convex.core.crypto.Hashing;
 import convex.core.crypto.util.Multikey;
@@ -1952,6 +1953,51 @@ public class Engine {
 	}
 
 	/**
+	 * Whether a DID is a venue-managed user identity minted under this venue's
+	 * current {@code did:web} namespace.
+	 *
+	 * <p>This is deliberately stricter than a textual prefix check: the suffix
+	 * must be one username segment accepted by {@link #managedUserDID(AString)}.
+	 * An arbitrary DID merely registered at this venue remains externally
+	 * controlled and must never be mistaken for a custodial identity.</p>
+	 */
+	public boolean isManagedUserDID(AString did) {
+		AString base = config.getWebDID();
+		if (base == null || did == null) return false;
+		String prefix = base + ":u:";
+		String value = did.toString();
+		if (!value.startsWith(prefix)) return false;
+		String username = value.substring(prefix.length());
+		return !username.isEmpty() && username.matches("[A-Za-z0-9._-]+");
+	}
+
+	/**
+	 * Root-authority policy for resources enforced by this venue.
+	 *
+	 * <p>Self-sovereign owners root their own grants. The venue may additionally
+	 * attest only for user DIDs it minted under its managed {@code did:web}
+	 * namespace. Merely registering an arbitrary external DID does not transfer
+	 * control of that identity or make the venue authoritative for its resources.</p>
+	 */
+	public RootAuthorityPolicy rootAuthorityPolicy() {
+		AString venueDID = getDIDString();
+		return RootAuthorityPolicy.SELF_SOVEREIGN.or((root, resource) -> {
+			if (!venueDID.equals(root) || resource == null) return false;
+			DID owner = RootAuthorityPolicy.ownerDID(resource);
+			if (owner == null) return false;
+			AString ownerDID = Strings.create("did:" + owner.getMethod() + ":" + owner.getID());
+			return isManagedUserDID(ownerDID);
+		});
+	}
+
+	/** Evaluate presented proofs under this venue's complete root policy. */
+	public boolean proofsCover(RequestContext ctx, AString resource, AString ability, long now) {
+		if (ctx == null) return false;
+		return covia.lattice.CapabilityChecker.proofsCover(ctx.getProofs(), ctx.getCallerDID(),
+			rootAuthorityPolicy(), resource, ability, now);
+	}
+
+	/**
 	 * Resolves the runtime account for an authenticated DID. Authentication
 	 * proves control of an identity; it does not implicitly provision an
 	 * account unless the venue explicitly enables users.autoCreate.
@@ -2191,8 +2237,7 @@ public class Engine {
 				}
 			}
 		}
-		return covia.lattice.CapabilityChecker.proofsCover(ctx.getProofs(), ctx.getCallerDID(),
-			getDIDString(), resource, ability, System.currentTimeMillis() / 1000);
+		return proofsCover(ctx, resource, ability, System.currentTimeMillis() / 1000);
 	}
 
 	/**

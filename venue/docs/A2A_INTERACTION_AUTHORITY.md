@@ -118,15 +118,14 @@ distinct ceilings; the alternative collapses them. This is the decision to ratif
 - **Public flag** — `a2a.public` on the agent config admits anonymous callers to
   discovery; `a2a.caps` additionally admits them to interaction (per above).
 
-- **Named grant** — the owner issues a UCAN via the venue (`ucan:issue`), which
-  already constrains every grant's resource to the owner's own namespace, so an
-  owner can only delegate *their own* agent. The grant's audience is the
+- **Named grant** — a self-sovereign owner signs a UCAN with their own key; a
+  venue-managed custodial owner may use `ucan:issue`. The grant's audience is the
   delegate; its ability is **`agent/request`** — a dedicated ability, chosen so
   that "may interact with this agent" does not leak the broader `invoke`
   authority, and so the ability namespace has room to grow (`agent/message`,
   `agent/chat`) hierarchically. The delegate presents the token; it is verified
-  as any cross-user proof is (issuer is the venue as the C1 authority, audience
-  is the caller, temporal bounds hold, and the grant **covers** the agent
+  as any cross-user proof is (the root is the self-sovereign owner or its
+  controlling venue, audience is the caller, temporal bounds hold, and the grant **covers** the agent
   resource with boundary-aware matching so a grant on `…/g/agent` cannot cover a
   sibling `…/g/agentX`).
 
