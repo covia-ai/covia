@@ -469,21 +469,24 @@ Engine startup:
      for each adapter:
        adapter.install(engine)
          # Adapter calls installAsset(catalogPath, resourcePath) for each primitive.
-         # installAsset: stores meta in /a/<hash> AND inline at /v/ops/<catalogPath>.
+         # installAsset stores immutable meta in /a/<hash> and records the
+         # catalog declaration for publication after every adapter is present.
 
-  2. Materialise /v/info/
-     write v/info/name       ← config.name
-     write v/info/did        ← venueDID
-     write v/info/version    ← jarVersion()
-     write v/info/started    ← System.currentTimeMillis()
-     write v/info/protocols  ← enabledProtocols()
-     for each registered adapter:
-       write v/info/adapters/<name> ← {name, description, operations: opCount}
+  2. Build the venue-owned bootstrap snapshot on a child VenueState fork
+     for each catalog declaration:
+       write and read-validate its full v/... path on the child fork
+     write and read-validate v/info/name, did, version, started, protocols
+     replace v/info/adapters with summaries of the registered adapters
 
-  3. Sweep stale /v/ entries (see §10)
+  3. Publish with one childFork.sync()
+     # This is the only visibility point. A build or validation failure
+     # discards the child fork and leaves the live venue state unchanged.
+
+  4. Connect config-declared MCP servers
+     # External connection side effects happen after lattice publication.
 ```
 
-The materialisation step is **re-run on every startup** and is idempotent (modulo `started`, which legitimately reflects the current boot time): same adapters and same config produce the same paths. Persistence of `/v/` across restarts is therefore largely cosmetic — the lattice converges to the same state each boot.
+The materialisation step is **re-run on every startup** and is idempotent (modulo `started`, which legitimately reflects the current boot time): same adapters and same config produce the same paths. It uses direct lattice cursor writes, not operation invocation, so bootstrap creates no Jobs. There is no parallel catalog representation: the child lattice fork is both the build target and the value being validated.
 
 ### `installAsset` API
 
@@ -531,7 +534,7 @@ A separate `installTestAsset(catalogPath, resourcePath)` method writes to `/v/te
 | Operation | Mechanism |
 |-----------|-----------|
 | Read `/v/...` | Resolver returns the value unconditionally. No UCAN required. |
-| Write `/v/...` (startup) | Engine code uses `RequestContext.INTERNAL`, which the resolver recognises as the venue identity. |
+| Write `/v/...` (startup) | Engine owns the venue-user cursor and writes to a child `VenueState` fork before one `sync()`; no external authorization surface or Job is involved. |
 | Write `/v/...` (operator) | JWT signed by the venue keypair. The auth middleware identifies the caller as the venue's own DID; the resolver allows the write. |
 | Write `/v/...` (anyone else) | Resolver rejects with a permission error. |
 
@@ -543,15 +546,13 @@ User `/o/` capability semantics are unchanged from GRID_LATTICE_DESIGN §6.
 
 ---
 
-## 9. Sweep semantics
+## 9. Refresh semantics
 
-Because `/v/ops/` and `/v/info/adapters/` are re-materialised on every startup, **stale entries from removed adapters or renamed operations are automatically swept** as part of the materialisation step.
+Registered catalog declarations are re-materialised on every startup. The materialiser replaces `/v/info/adapters/` with a complete snapshot, so summaries for removed adapters cannot survive a restart.
 
-Implementation: before writing the new entries, the materialiser snapshots the current `/v/ops/` and `/v/info/adapters/` keys, computes the diff against the new set, and removes keys that are no longer present. This is cheap (one map-diff per startup) and keeps `/v/` consistent with the venue's actual installed adapters.
+The operation and skill catalog namespaces are intentionally updated in place rather than cleared wholesale. Those namespaces may also contain dynamically bridged MCP tools or operator-managed entries that are not adapter bootstrap declarations. Removing such entries requires an owner-aware garbage-collection policy; the bootstrap transaction does not guess ownership.
 
-The sweep does **not** touch `/o/` — user pins are sacred, and a user can pin a stale reference if they want to. If the referenced asset still exists in `/a/` (which content addressing guarantees as long as it's not garbage-collected), the pin still resolves.
-
-The sweep does **not** touch `/v/info/` leaf paths other than `/v/info/adapters/` — the other fields (`name`, `did`, `version`, `started`, `protocols`) are always overwritten on materialisation, so there's no stale-key concern.
+The refresh does **not** touch `/o/` — user pins are sacred, and a user can pin a stale reference if they want to. If the referenced asset still exists in `/a/` (which content addressing guarantees as long as it is not garbage-collected), the pin still resolves.
 
 ---
 

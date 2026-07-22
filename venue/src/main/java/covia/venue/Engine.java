@@ -668,16 +668,10 @@ public class Engine {
 		// intent.
 		Modules.loadModules(venue);
 
-		// Flush pending /v/ops/ entries from all adapters. Per OPERATIONS.md
-		// §7, installAsset(catalogPath, resourcePath) defers the catalog
-		// write until after all adapters are registered, because covia:write
-		// (which the materialiser uses) requires CoviaAdapter to be present.
-		venue.materialiseVOps();
-
-		// Materialise /v/info/ from venue config + registered adapters.
-		// Per OPERATIONS.md §7, this is re-run on every startup. Idempotent
-		// modulo /v/info/started which legitimately reflects the current boot.
-		venue.materialiseVenueInfo();
+		// Publish the adapter catalog and venue information as one native lattice
+		// transaction. All writes and validation happen on a child fork; one sync
+		// makes the complete bootstrap snapshot visible without creating Jobs.
+		venue.materialiseBootstrapState();
 
 		// Bridge config-declared MCP servers (#80). Config is the source of
 		// truth for the names it declares (secrets-bootstrap rule); entries
@@ -690,47 +684,25 @@ public class Engine {
 	 * {@link covia.adapter.AAdapter#installAsset(String, String)} and
 	 * {@link covia.adapter.AAdapter#installTestAsset(String, String)}. Each
 	 * entry is written to its full target path (e.g. {@code v/ops/json/merge}
-	 * or {@code v/test/ops/echo}) as inline asset metadata via
-	 * {@code covia:write} with internal context.
+	 * or {@code v/test/ops/echo}) as inline asset metadata on a child lattice
+	 * fork.
 	 *
-	 * <p>Called once at startup after all adapters are registered (so that
-	 * {@code CoviaAdapter} — which provides {@code covia:write} — is
-	 * available). Idempotent on re-run.</p>
+	 * <p>This catalog-only method is retained for callers that explicitly need
+	 * it. Normal startup uses {@link #materialiseBootstrapState()} so catalog
+	 * and venue information become visible together.</p>
 	 */
 	public void materialiseVOps() {
-		RequestContext ctx = venueContext();
-		// Bootstrap: covia:write is itself a v/ops/ entry that doesn't yet
-		// exist when materialisation begins, so we can't reference it by
-		// catalog path. Look up its hash from the CoviaAdapter's pending
-		// entries once and dispatch by bare hex hash for every write.
-		String writeRef = lookupCoviaWriteRef();
-		if (writeRef == null) {
-			throw new IllegalStateException(
-				"Cannot materialise /v/ops — covia:write hash not available");
-		}
-		for (var adapter : adapters.values()) {
-			if (adapter == null) continue;
-			for (var entry : adapter.pendingCatalogEntries.entrySet()) {
-				String fullPath = entry.getKey();
-				Hash hash = entry.getValue();
-				try {
-					AString metaString = adapter.getInstalledAssets().get(hash);
-					if (metaString == null) continue;
-					ACell meta = convex.core.util.JSON.parse(metaString);
-					jobManager.invokeOperation(writeRef,
-						Maps.of(
-							Fields.PATH, Strings.create(fullPath),
-							Fields.VALUE, meta),
-						ctx).awaitResult(5000);
-				} catch (Exception e) {
-					// Fail loudly — a venue that cannot materialise its own ops
-					// catalog is broken; swallowing this masks the real cause as a
-					// downstream "Cannot resolve operation" cascade.
-					throw new RuntimeException(
-						"Failed to materialise " + adapter.getName() + " at /" + fullPath, e);
-				}
-			}
-		}
+		VenueBootstrapMaterializer.materialiseAdapterCatalog(this);
+	}
+
+	/**
+	 * Materialises the adapter catalog and {@code /v/info/} snapshot together.
+	 * The complete snapshot is built and validated on a child fork, then
+	 * published to the Engine's live fork with one {@code sync()}. A failure
+	 * before that point leaves the live state unchanged and creates no Jobs.
+	 */
+	public void materialiseBootstrapState() {
+		VenueBootstrapMaterializer.materialiseBootstrapState(this);
 	}
 
 	/**
@@ -769,20 +741,6 @@ public class Engine {
 	}
 
 	/**
-	 * Look up the covia:write asset hash from the CoviaAdapter's pending
-	 * catalog entries. Used by the venue startup materialiser to invoke
-	 * writes before {@code v/ops/covia/write} is itself materialised.
-	 *
-	 * @return the bare hex hash of covia:write, or null if unavailable
-	 */
-	private String lookupCoviaWriteRef() {
-		AAdapter coviaAdapter = adapters.get("covia");
-		if (coviaAdapter == null) return null;
-		Hash hash = coviaAdapter.pendingCatalogEntries.get("v/ops/covia/write");
-		return (hash != null) ? hash.toHexString() : null;
-	}
-
-	/**
 	 * Writes the venue introspection data to {@code /v/info/} sub-paths.
 	 * Called once at startup after all adapters are registered, and any
 	 * time the venue wants to refresh the information.
@@ -797,81 +755,21 @@ public class Engine {
 	 *   <li>{@code /v/info/adapters/&lt;name&gt;} — per-adapter summary</li>
 	 * </ul>
 	 *
-	 * <p>Writes go through the {@code covia:write} op with
-	 * {@link RequestContext#INTERNAL}, which the {@code v/} resolver
-	 * recognises as the venue identity.</p>
+	 * <p>Writes use the same cursor path semantics as {@code covia:write}, but
+	 * execute directly on a child lattice fork and publish with one sync. No
+	 * operation invocation or Job is involved.</p>
 	 */
 	public void materialiseVenueInfo() {
-		try {
-			RequestContext ctx = venueContext();
-
-			// /v/info/name
-			AString name = config.getName();
-			if (name != null) writeVenueInfo("v/info/name", name, ctx);
-
-			// /v/info/did
-			AString did = getDIDString();
-			if (did != null) writeVenueInfo("v/info/did", did, ctx);
-
-			// /v/info/version
-			String version = jarVersion();
-			if (version != null) writeVenueInfo("v/info/version", Strings.create(version), ctx);
-
-			// /v/info/started — current boot time
-			writeVenueInfo("v/info/started", CVMLong.create(System.currentTimeMillis()), ctx);
-
-			// /v/info/protocols — list of enabled protocol handlers (left
-			// as a TODO until VenueServer wires it; for now write what the
-			// engine knows about its own surface)
-			AVector<ACell> protocols = Vectors.of(
-				(ACell) Strings.create("rest"),
-				(ACell) Strings.create("mcp"),
-				(ACell) Strings.create("a2a"));
-			writeVenueInfo("v/info/protocols", protocols, ctx);
-
-			// /v/info/adapters/<name> — per-adapter summary. The "operations"
-			// field is a vector of full catalog paths — each entry is directly
-			// invocable via grid:run. Agents can count with length(operations).
-			for (String adapterName : adapters.keySet()) {
-				AAdapter adapter = adapters.get(adapterName);
-				if (adapter == null) continue;
-				AVector<ACell> ops = Vectors.empty();
-				for (String catalogPath : adapter.getOperationPaths()) {
-					ops = ops.conj(Strings.create(catalogPath));
-				}
-				AMap<AString, ACell> summary = Maps.of(
-					Fields.NAME, Strings.create(adapter.getName()),
-					Fields.DESCRIPTION, Strings.create(adapter.getDescription()),
-					Strings.create("operations"), ops);
-				writeVenueInfo("v/info/adapters/" + adapterName, summary, ctx);
-			}
-		} catch (Exception e) {
-			log.warn("Failed to materialise /v/info/", e);
-		}
-	}
-
-	private void writeVenueInfo(String path, ACell value, RequestContext ctx) {
-		// Same bootstrap rule as materialiseVOps: invoke covia:write by hash
-		// because v/ops/covia/write may not be materialised yet (and even
-		// after it is, going through it adds no value here).
-		String writeRef = lookupCoviaWriteRef();
-		if (writeRef == null) return;
-		try {
-			jobManager.invokeOperation(writeRef,
-				Maps.of(Fields.PATH, Strings.create(path), Fields.VALUE, value),
-				ctx).awaitResult(5000);
-		} catch (Exception e) {
-			log.warn("Failed to write {}: {}", path, e.getMessage());
-		}
+		VenueBootstrapMaterializer.materialiseVenueInformation(this);
 	}
 
 	/**
-	 * Best-effort jar version lookup. Returns null if the version can't be
-	 * determined (e.g. running from IDE classes rather than a packaged jar).
+	 * Best-effort jar version lookup. Returns {@code "dev"} when running from
+	 * IDE classes rather than a packaged jar.
 	 */
-	private static String jarVersion() {
+	static String jarVersion() {
 		Package pkg = Engine.class.getPackage();
-		if (pkg == null) return null;
+		if (pkg == null) return "dev";
 		String v = pkg.getImplementationVersion();
 		return (v != null) ? v : "dev";
 	}

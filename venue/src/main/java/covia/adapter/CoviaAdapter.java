@@ -1068,6 +1068,29 @@ public class CoviaAdapter extends AAdapter {
 		return true;
 	}
 
+	/**
+	 * Writes directly through an already-authorised lattice cursor using the
+	 * same wrapped-namespace and deep-path semantics as {@code covia:write}.
+	 *
+	 * <p>This is an internal composition primitive for framework-owned state
+	 * transactions such as venue bootstrap. It deliberately performs no
+	 * capability check and creates no Job: possession of the target cursor is
+	 * the authority boundary. External requests must continue to use the
+	 * adapter operation.</p>
+	 *
+	 * @param baseCursor cursor at a user namespace root
+	 * @param keys path keys relative to that root
+	 * @param value value to store
+	 */
+	public static void writePathToCursor(
+			ALatticeCursor<ACell> baseCursor, ACell[] keys, ACell value) {
+		if (baseCursor == null) throw new IllegalArgumentException("baseCursor is required");
+		if (keys == null || keys.length == 0) {
+			throw new IllegalArgumentException("A non-empty cursor-relative path is required");
+		}
+		updatePath(baseCursor, keys, (current, from) -> deepSet(current, keys, from, value));
+	}
+
 	/** True if {@code key} names a {@code {updated, data}}-wrapped namespace. */
 	private static boolean isWrappedNamespace(ACell key) {
 		return (key != null) && WRAPPED_NAMESPACES.contains(key.toString());
