@@ -1,6 +1,7 @@
 package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -28,6 +29,7 @@ import covia.exception.AuthException;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.User;
 
 class UserAdapterTest {
 
@@ -77,6 +79,19 @@ class UserAdapterTest {
 	}
 
 	@Test
+	void managedAccountCreationDoesNotMintAUserIdentityKey() throws Exception {
+		ACell created = create(Maps.of("username", "no-user-key"));
+		AString did = RT.ensureString(RT.getIn(created, Fields.DID));
+		User user = engine.getVenueState().users().get(did);
+
+		assertNotNull(user);
+		assertEquals(Maps.empty(), user.get(),
+			"account provisioning should create only an empty user-state record");
+		assertTrue(user.secrets().list().isEmpty(),
+			"creating a custodial account must not mint or store a per-user identity key");
+	}
+
+	@Test
 	void venueRootAuthorityIsLimitedToItsManagedUsers() {
 		RootAuthorityPolicy policy = engine.rootAuthorityPolicy();
 		AString venue = engine.getDIDString();
@@ -86,10 +101,16 @@ class UserAdapterTest {
 
 		assertTrue(policy.acceptsRoot(venue, Strings.create(managed + "/w/notes")));
 		assertTrue(policy.acceptsRoot(self, Strings.create(self + "/w/notes")));
-		assertTrue(!policy.acceptsRoot(venue, Strings.create(self + "/w/notes")),
+		assertFalse(policy.acceptsRoot(venue, Strings.create(self + "/w/notes")),
 			"registration must not transfer control of a self-sovereign DID");
-		assertTrue(!policy.acceptsRoot(venue, Strings.create(external + "/w/notes")),
+		assertFalse(policy.acceptsRoot(venue, Strings.create(external + "/w/notes")),
 			"a similarly shaped DID on another domain is not locally custodial");
+		assertFalse(policy.acceptsRoot(venue,
+			Strings.create("did:web:venue-1.covia.ai.evil:u:alice/w/notes")),
+			"a hostname-prefix lookalike must not enter the managed namespace");
+		assertFalse(policy.acceptsRoot(venue,
+			Strings.create(managed + ":admin/w/notes")),
+			"a nested managed-DID suffix must not be accepted as a username");
 	}
 
 	@Test

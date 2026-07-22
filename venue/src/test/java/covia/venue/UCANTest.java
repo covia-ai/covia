@@ -160,6 +160,58 @@ public class UCANTest {
 		assertTrue(denied.getMessage().contains("must sign the UCAN with their own key"));
 	}
 
+	@Test
+	public void testIssueRejectsVenueRootForExternalDidWebCaller() {
+		AString external = Strings.create("did:web:identity.example:u:eve");
+		engine.getVenueState().users().ensure(external);
+		long exp = (System.currentTimeMillis() / 1000) + HOUR;
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(external + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(exp)),
+			RequestContext.of(external));
+		Exception denied = assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertTrue(denied.getMessage().contains("not controlled by this venue"));
+	}
+
+	@Test
+	public void testGrantingProofCannotTurnVenueIntoSelfSovereignRoot() {
+		long now = System.currentTimeMillis() / 1000;
+		UCAN ownerGrantingRight = UCAN.create(ALICE_KP, UCAN.fromDIDKey(BOB_DID), now + 2 * HOUR,
+			Vectors.of(Capability.create(
+				Strings.create(ALICE_DID + "/w/"), Strings.create("grant/crud/read"))),
+			Vectors.empty());
+
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, CAROL_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(ALICE_DID + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(now + HOUR)),
+			withProofs(BOB, ownerGrantingRight.toMap()));
+
+		Exception denied = assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertTrue(denied.getMessage().contains("must sign the UCAN with their own key"),
+			"even a valid granting proof cannot make the venue a root for a self-sovereign DID");
+	}
+
+	@Test
+	public void testManagedDidWebCanBeAudienceWithoutAUserKey() {
+		AString audience = engine.managedUserDID(Strings.create("ucan-audience"));
+		long exp = (System.currentTimeMillis() / 1000) + HOUR;
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(UCAN.AUD, audience,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CUSTODIAL_DID + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, CVMLong.create(exp)),
+			CUSTODIAL);
+
+		UCAN token = UCAN.fromJWT(RT.ensureString(RT.getIn(job.awaitResult(5000), "token")));
+		assertEquals(audience, token.getAudience());
+		assertEquals(venueDID, token.getIssuer(),
+			"the venue signs for custodial users; the audience needs no independent key");
+	}
+
 	// ========== Cross-user read with proof ==========
 
 	/**

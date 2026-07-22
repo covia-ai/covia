@@ -14,6 +14,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
+import convex.auth.did.DID;
 import convex.auth.jwt.JWT;
 import convex.auth.ucan.UCAN;
 import convex.auth.did.DIDVerifier;
@@ -67,6 +68,7 @@ public class AuthMiddleware {
 	private static final AString SUB = Fields.SUB;
 	private static final AString KID = Fields.KID;
 	private static final AString EMAIL = Fields.EMAIL;
+	private static final AString ISS = Strings.intern("iss");
 	private static final AString AUD = Strings.intern("aud");
 	private static final AString EXP = Strings.intern("exp");
 	private static final AString NBF = Strings.intern("nbf");
@@ -374,7 +376,23 @@ public class AuthMiddleware {
 		AMap<AString, ACell> claims = JWT.verifyPublic(jwt, venueKey);
 		if (claims == null) return null;
 
-		return RT.ensureString(claims.get(SUB));
+		// A venue session is an attestation BY this venue, not a bearer signed
+		// "as" the managed user. Bind the claims to that model explicitly: a
+		// token that verifies with the venue key must not claim another issuer, stale
+		// sessions must expire, and tokens intended for another venue must not be
+		// replayed here.
+		if (!venueDID.equals(RT.ensureString(claims.get(ISS)))) return null;
+		if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
+		requireAudience(claims.get(AUD));
+
+		AString sub = RT.ensureString(claims.get(SUB));
+		if (sub == null) return null;
+		try {
+			if (DID.fromString(sub.toString()) == null) return null;
+		} catch (RuntimeException e) {
+			return null;
+		}
+		return sub;
 	}
 
 	/**

@@ -163,6 +163,7 @@ public class OAuthTest {
 		AMap<AString, ACell> claims = Maps.of(
 			"sub", userDID,
 			"iss", engine.getDIDString(),
+			"aud", engine.getDIDString(),
 			"iat", nowSecs,
 			"exp", nowSecs + engine.getAuth().getTokenExpiry()
 		);
@@ -173,6 +174,7 @@ public class OAuthTest {
 		AMap<AString, ACell> verified = JWT.verifyPublic(jwt, engine.getAccountKey());
 		assertNotNull(verified, "Venue-signed JWT should verify with venue's public key");
 		assertEquals(userDID, verified.get(Strings.intern("sub")).toString());
+		assertEquals(engine.getDIDString(), verified.get(Strings.intern("aud")));
 	}
 
 	@Test

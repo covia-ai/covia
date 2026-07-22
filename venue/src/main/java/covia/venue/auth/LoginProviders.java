@@ -221,6 +221,7 @@ public class LoginProviders {
 			AMap<AString, ACell> claims = Maps.of(
 				"sub", userDID,
 				"iss", engine.getDIDString(),
+				"aud", engine.getDIDString(),
 				"iat", nowSecs,
 				"exp", nowSecs + engine.getAuth().getTokenExpiry()
 			);
