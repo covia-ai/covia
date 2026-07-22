@@ -4,8 +4,12 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 
 import org.eclipse.jetty.server.ServerConnector;
@@ -70,6 +74,10 @@ import io.javalin.openapi.plugin.swagger.SwaggerPlugin;
 public class VenueServer {
 	
 	public static Logger log=LoggerFactory.getLogger(VenueServer.class);;
+
+	/** POSIX mode for the raw venue seed: readable and writable only by its owner. */
+	private static final Set<PosixFilePermission> OWNER_ONLY_KEY_PERMISSIONS =
+		PosixFilePermissions.fromString("rw-------");
 	
 	protected final Config config;
 
@@ -261,6 +269,7 @@ public class VenueServer {
 		if (!"temp".equals(storePath) && !"memory".equals(storePath)) {
 			Path keyFile = Path.of(storePath).resolveSibling("venue.key");
 			if (Files.exists(keyFile)) {
+				restrictVenueKeyPermissions(keyFile);
 				String hex = Files.readString(keyFile).trim();
 				AKeyPair kp = AKeyPair.create(Blob.fromHex(hex));
 				log.info("Using venue identity from key file: {}", kp.getAccountKey());
@@ -280,8 +289,7 @@ public class VenueServer {
 
 			// First launch of a new persistent store: generate and save.
 			AKeyPair kp = AKeyPair.generate();
-			keyFile.getParent().toFile().mkdirs();
-			Files.writeString(keyFile, kp.getSeed().toHexString());
+			writeVenueKey(keyFile, kp.getSeed().toHexString());
 			log.info("Generated venue identity (saved to {}): {}", keyFile, kp.getAccountKey());
 			return kp;
 		}
@@ -292,6 +300,37 @@ public class VenueServer {
 		AKeyPair kp = AKeyPair.generate();
 		log.info("Generated ephemeral venue identity: {}", kp.getAccountKey());
 		return kp;
+	}
+
+	/** Creates a raw venue seed with owner-only POSIX permissions from birth. */
+	private static void writeVenueKey(Path keyFile, String seedHex) throws IOException {
+		Path parent = keyFile.getParent();
+		if (parent != null) Files.createDirectories(parent);
+		try {
+			Files.createFile(keyFile,
+				PosixFilePermissions.asFileAttribute(OWNER_ONLY_KEY_PERMISSIONS));
+		} catch (UnsupportedOperationException e) {
+			// Windows and other non-POSIX filesystems use their inherited ACLs.
+			Files.createFile(keyFile);
+		}
+		Files.writeString(keyFile, seedHex, StandardOpenOption.WRITE);
+		restrictVenueKeyPermissions(keyFile);
+	}
+
+	/**
+	 * Repairs existing raw key files on every launch. Permission repair is
+	 * best-effort so an unsupported filesystem or ACL policy cannot strand an
+	 * existing venue identity; failures are actionable in the operator log.
+	 */
+	private static void restrictVenueKeyPermissions(Path keyFile) {
+		try {
+			Files.setPosixFilePermissions(keyFile, OWNER_ONLY_KEY_PERMISSIONS);
+		} catch (UnsupportedOperationException e) {
+			// Expected on Windows and other non-POSIX filesystems.
+		} catch (IOException | SecurityException e) {
+			log.warn("Could not restrict venue identity key {} to owner-only access; "
+				+ "secure this file manually: {}", keyFile, e.getMessage());
+		}
 	}
 
 	/** Default keystore path — the Convex CLI keyring, so venue keys can be

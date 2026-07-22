@@ -16,7 +16,7 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 ```
 
 - `store`: `"temp"` (default, deleted on exit), `"memory"`, or file path
-- `seed`: Ed25519 hex seed for stable venue identity. If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file.
+- `seed`: Ed25519 hex seed for stable venue identity. If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file. On POSIX filesystems this raw seed is created with owner-only permissions (`0600`), and existing key-file permissions are repaired on each launch. On non-POSIX filesystems it inherits the platform ACL policy.
 
 ## Venue identity
 

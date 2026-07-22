@@ -7,6 +7,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 
 import org.junit.jupiter.api.Test;
@@ -173,12 +175,26 @@ public class VenueServerPersistenceTest {
 		server.close();
 		assertTrue(java.nio.file.Files.exists(keyFile),
 			"first launch saves venue.key beside the store");
+		boolean posix = Files.getFileStore(keyFile).supportsFileAttributeView("posix");
+		if (posix) {
+			assertEquals(PosixFilePermissions.fromString("rw-------"),
+				Files.getPosixFilePermissions(keyFile),
+				"new venue.key must be owner-only");
+			// Simulate an existing installation created with permissive defaults.
+			Files.setPosixFilePermissions(keyFile,
+				PosixFilePermissions.fromString("rw-r--r--"));
+		}
 
 		// Relaunch with venue.key intact: same identity.
 		VenueServer server2 = VenueServer.launch(config);
 		assertEquals(did1, String.valueOf(server2.getEngine().getDIDString()),
 			"identity survives relaunch via venue.key");
 		server2.close();
+		if (posix) {
+			assertEquals(PosixFilePermissions.fromString("rw-------"),
+				Files.getPosixFilePermissions(keyFile),
+				"launch must repair permissions on an existing venue.key");
+		}
 
 		// venue.key lost: relaunching the existing store must fail loudly.
 		java.nio.file.Files.delete(keyFile);
