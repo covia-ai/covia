@@ -416,6 +416,9 @@ public class VenueServer {
 	 * (Javalin 7 requires routes at create time), after the auth middleware and
 	 * within the {@code /api/*} filters — so routes mounted under {@code /api/...}
 	 * inherit caller-identity extraction and post-request lattice sync.
+	 * Adapter/module installation, catalog materialisation, secret provisioning,
+	 * and recovery all complete before the HTTP listener is published. Any
+	 * failure closes the partially assembled server in reverse ownership order.
 	 *
 	 * @param config Config, or null for default test config.
 	 * @param extraRoutes Additional route registrars, or null/empty for none.
@@ -436,34 +439,40 @@ public class VenueServer {
 			);
 		}
 
-		VenueServer server= new VenueServer(config);
-		if (extraRoutes!=null) server.extraRouteRegistrars.addAll(extraRoutes);
-		server.start();
+		VenueServer server = null;
+		try {
+			server = new VenueServer(config);
+			if (extraRoutes != null) server.extraRouteRegistrars.addAll(extraRoutes);
 
-		Engine.addDemoAssets(server.getEngine());
-		server.getEngine().provisionConfiguredSecrets();
-		server.getEngine().jobs().recoverJobs();
+			// Complete every fallible bootstrap phase before publishing an HTTP
+			// listener. A caller must never observe a half-populated venue.
+			server.bootstrap();
+			server.start();
+			return server;
+		} catch (RuntimeException | Error failure) {
+			if (server != null) server.closeResources(failure);
+			throw failure;
+		}
+	}
+
+	/** Complete durable/runtime bootstrap before the server becomes reachable. */
+	private void bootstrap() {
+		Engine.addDemoAssets(engine);
+		engine.provisionConfiguredSecrets();
+		engine.jobs().recoverJobs();
 
 		// Wake agents with durable work (pending envelopes, queued tasks, or a
 		// stale inCycle claim from an interrupted cycle). recoverJobs only
 		// stabilises job records — it never re-executes anything (#214) — so
-		// this scan is the single trigger that restarts agent loops after a
-		// restart. Resumed cycles repair their frames and continue.
-		if (server.getEngine().getAdapter("agent")
-				instanceof covia.adapter.AgentAdapter agentAdapter) {
+		// this scan is the single trigger that restarts agent loops after restart.
+		if (engine.getAdapter("agent") instanceof covia.adapter.AgentAdapter agentAdapter) {
 			agentAdapter.wakeAgentsWithWork();
 		}
 
-		// Re-arm HITL expiry timers from durable `expires` stamps (COG-16:
-		// expiry MUST survive restarts). recoverJobs restored the parked
-		// INPUT_REQUIRED jobs these open records refer to; overdue requests
-		// expire immediately, future ones get fresh timers.
-		if (server.getEngine().getAdapter("hitl")
-				instanceof covia.adapter.HITLAdapter hitlAdapter) {
+		// HITL expiry is durable and must be re-armed before requests are served.
+		if (engine.getAdapter("hitl") instanceof covia.adapter.HITLAdapter hitlAdapter) {
 			hitlAdapter.rearmExpiries();
 		}
-
-		return server;
 	}
 
 	/**
@@ -923,28 +932,57 @@ public class VenueServer {
 	 * {@code venue/docs/PERSISTENCE.md} §5.3.</p>
 	 */
 	public void close() {
+		closeResources(null);
+	}
+
+	/**
+	 * Releases server resources in reverse ownership order. During failed
+	 * launch, cleanup failures are suppressed onto the initiating failure;
+	 * during normal close they are logged and cleanup continues.
+	 */
+	private void closeResources(Throwable launchFailure) {
 		if (!closed.compareAndSet(false, true)) return; // idempotent — already closed
-		if (javalin!=null) {
-			javalin.stop();
-			javalin=null;
-		}
-		if (engine!=null) {
+		Javalin app = javalin;
+		javalin = null;
+		if (app != null) {
 			try {
-				engine.close(); // stops sweep daemon, runs final synchronous flush
-			} catch (Exception e) {
-				log.warn("Engine close failed", e);
+				app.stop();
+			} catch (RuntimeException e) {
+				recordCloseFailure(launchFailure, "HTTP server close failed", e);
 			}
 		}
-		if (nodeServer!=null) {
+		Engine ownedEngine = engine;
+		if (ownedEngine != null) {
 			try {
-				nodeServer.close(); // graceful drain — now sees the engine's final flush
+				ownedEngine.close(); // stops sweep daemon, runs final synchronous flush
+			} catch (RuntimeException e) {
+				recordCloseFailure(launchFailure, "Engine close failed", e);
+			}
+		}
+		NodeServer<Index<Keyword, ACell>> ownedNode = nodeServer;
+		if (ownedNode != null) {
+			try {
+				ownedNode.close(); // graceful drain — now sees the engine's final flush
 			} catch (IOException e) {
-				log.warn("NodeServer close failed", e);
+				recordCloseFailure(launchFailure, "NodeServer close failed", e);
 			}
 		}
-		if (store!=null) {
-			store.close();
-			store=null;
+		AStore ownedStore = store;
+		store = null;
+		if (ownedStore != null) {
+			try {
+				ownedStore.close();
+			} catch (RuntimeException e) {
+				recordCloseFailure(launchFailure, "Store close failed", e);
+			}
+		}
+	}
+
+	private static void recordCloseFailure(Throwable launchFailure, String message, Throwable failure) {
+		if (launchFailure != null) {
+			launchFailure.addSuppressed(failure);
+		} else {
+			log.warn(message, failure);
 		}
 	}
 }
