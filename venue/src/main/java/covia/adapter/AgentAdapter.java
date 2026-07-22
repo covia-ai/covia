@@ -738,33 +738,38 @@ public class AgentAdapter extends AAdapter {
 
 		if (!overwrite) return SlotResult.NOOP;
 
+		if (!haltAgent(job, user, existing, agentId, ctx,
+				"Agent overwritten: " + agentId, "overwrite")) return SlotResult.FAILED;
+		// A true overwrite is delete + create. This deliberately wipes config,
+		// state, timeline, sessions, tasks, pending, inbox and errors (#237).
+		// Callers that need history-preserving mutation use agent:update instead.
+		user.removeAgent(agentId);
+		return SlotResult.CREATED;
+	}
+
+	/** Stops an agent and waits for its run loop before its record may be reused. */
+	private boolean haltAgent(Job job, User user, AgentState agent, AString agentId,
+			RequestContext ctx, String pendingError, String action) {
 		AString ownerDID = user.getDID();
 		AgentKey key = new AgentKey(ownerDID, agentId);
 		CompletableFuture<ACell> oldLoop = runningLoops.get(key);
 		if (agentId.equals(ctx.getAgentId()) && oldLoop != null && !oldLoop.isDone()) {
-			job.fail("Agent cannot overwrite itself while RUNNING: " + agentId);
-			return SlotResult.FAILED;
+			job.fail("Agent cannot " + action + " itself while RUNNING: " + agentId);
+			return false;
 		}
 
-		// Stop before remove: this is the same cancellation contract as
-		// agent:delete, with an additional join so no old loop can write into the
-		// fresh record under the reused id.
-		failAllPendingForAgent(ownerDID, agentId, "Agent overwritten: " + agentId);
-		existing.setStatus(AgentState.TERMINATED);
+		failAllPendingForAgent(ownerDID, agentId, pendingError);
+		agent.setStatus(AgentState.TERMINATED);
 		cancelActiveTransition(key);
 		if (oldLoop != null && !oldLoop.isDone()) {
 			try {
 				oldLoop.join();
 			} catch (java.util.concurrent.CompletionException
 					| java.util.concurrent.CancellationException ignored) {
-				// The old record is being discarded; only loop termination matters.
+				// The requested terminal state is already set; only loop exit matters.
 			}
 		}
-		// A true overwrite is delete + create. This deliberately wipes config,
-		// state, timeline, sessions, tasks, pending, inbox and errors (#237).
-		// Callers that need history-preserving mutation use agent:update instead.
-		user.removeAgent(agentId);
-		return SlotResult.CREATED;
+		return true;
 	}
 
 	/**
@@ -882,8 +887,8 @@ public class AgentAdapter extends AAdapter {
 		// Job.completeWith preserves existing fields, so this survives completion.
 		job.updateData(job.getData().assoc(Fields.SESSION_ID, Strings.create(sid.toHexString())));
 
-		// Wake agent to process the task — force=true because we just added a task
-		// that may not yet be visible via cursor.get() (lattice write race)
+		// Each accepted request guarantees a processing attempt, so bypass the
+		// optional-work launch gate.
 		wakeAgent(ctx.getCallerDID(), agentId, true);
 	}
 
@@ -991,8 +996,8 @@ public class AgentAdapter extends AAdapter {
 		// handleRequest.
 		job.updateData(job.getData().assoc(Fields.SESSION_ID, sidHex));
 
-		// Force the wake — we just reserved a slot and added a message,
-		// either of which may not yet be visible via cursor.get().
+		// Each accepted chat guarantees a processing attempt, so bypass the
+		// optional-work launch gate.
 		wakeAgent(ctx.getCallerDID(), agentId, true);
 	}
 
@@ -1273,23 +1278,19 @@ public class AgentAdapter extends AAdapter {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) { job.fail("agentId is required"); return; }
 
+		Users users = engine.getVenueState().users();
+		User user = users.get(ctx.getCallerDID());
 		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
 		if (agent == null) return;
 
-		// Stop the agent promptly rather than letting an in-flight task run
-		// on (#202). Order matters: notify queued callers first (the sweep
-		// reads the task index via getAgent, which hides TERMINATED agents),
-		// then mark TERMINATED so the run loop exits at its next iteration
-		// check, then cancel any in-flight transition so a slow op unblocks
-		// the loop immediately (mirrors handleSuspend).
-		failAllPendingForAgent(ctx.getCallerDID(), agentId, "Agent deleted: " + agentId);
-		agent.setStatus(AgentState.TERMINATED);
-		cancelActiveTransition(new AgentKey(ctx.getCallerDID(), agentId));
+		// A successful delete means the execution loop has stopped. This makes
+		// delete(remove=true) safe to follow immediately with create using the
+		// same id: the old loop cannot write into the new record.
+		if (!haltAgent(job, user, agent, agentId, ctx,
+				"Agent deleted: " + agentId, "delete")) return;
 
 		boolean remove = CVMBool.TRUE.equals(RT.getIn(input, Fields.REMOVE));
 		if (remove) {
-			Users users = engine.getVenueState().users();
-			User user = users.get(ctx.getCallerDID());
 			user.removeAgent(agentId);
 			job.setStatus(Status.STARTED);
 			job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.REMOVED, CVMBool.TRUE));
@@ -1395,14 +1396,11 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		// Check task exists
-		Index<Blob, ACell> tasks = agent.getTasks();
-		if (tasks.get(taskId) == null) {
+		// Claim atomically so cancel cannot race completion or another cancel.
+		if (agent.takeTask(taskId) == null) {
 			job.fail("Task not found: " + taskIdHex);
 			return;
 		}
-
-		agent.removeTask(taskId);
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(
@@ -1507,34 +1505,6 @@ public class AgentAdapter extends AAdapter {
 		}
 	}
 
-	/** Bounded read retries when resolving an in-scope task (#214 lattice read lag). */
-	private static final int TASK_READ_ATTEMPTS = 10;
-	private static final long TASK_READ_BACKOFF_MS = 25;
-
-	/**
-	 * Resolves the in-scope task index, waiting out the cross-thread lattice read
-	 * lag (#214): a task committed via {@code addTask} before the wake can be
-	 * transiently invisible to a fresh read on this transition thread. Re-reads a
-	 * fresh {@link AgentState} view up to {@link #TASK_READ_ATTEMPTS} times;
-	 * returns the live task index once the task appears, or null if it stays
-	 * absent (genuinely gone — double-complete, or the agent deleted mid-run,
-	 * which {@link #getAgent} reports as null for a TERMINATED agent).
-	 */
-	private Index<Blob, ACell> awaitScopedTaskIndex(AString callerDID, AString agentId, Blob taskId) {
-		for (int attempt = 0; attempt < TASK_READ_ATTEMPTS; attempt++) {
-			try {
-				Thread.sleep(TASK_READ_BACKOFF_MS);
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-				return null;
-			}
-			AgentState agent = getAgent(callerDID, agentId);
-			Index<Blob, ACell> tasks = (agent != null) ? agent.getTasks() : null;
-			if (tasks != null && tasks.get(taskId) != null) return tasks;
-		}
-		return null;
-	}
-
 	private ACell doCompleteTask(ACell input, RequestContext ctx) {
 		AString agentId = ctx.getAgentId();
 		Blob taskId = ctx.getTaskId();
@@ -1544,24 +1514,11 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		AgentState agent = requireAgent(ctx.getCallerDID(), agentId);
-		Index<Blob, ACell> tasks = agent.getTasks();
-		if (tasks == null || tasks.get(taskId) == null) {
-			// Tolerate the documented cross-thread lattice read lag (#214): the run
-			// loop scoped this cycle to a task it observed, and handleRequest commits
-			// addTask (a CAS) before waking the loop — yet this completeTask/failTask
-			// runs on a SEPARATE transition thread whose fresh read can transiently
-			// lag that commit. Re-read before concluding the task is genuinely gone
-			// (double-complete, or the agent deleted mid-transition). Mirrors the
-			// verify-at-point-of-use guard the resume path already applies (#214).
-			tasks = awaitScopedTaskIndex(ctx.getCallerDID(), agentId, taskId);
-			if (tasks == null) {
-				throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
-			}
-		}
+		ACell task = agent.takeTask(taskId);
+		if (task == null) throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
 
 		ACell result = RT.getIn(input, Fields.RESULT);
-		parkCompletion(ctx.getCallerDID(), agentId, tasks, taskId, Status.COMPLETE, Fields.OUTPUT, result);
-		agent.removeTask(taskId);
+		parkCompletion(ctx.getCallerDID(), agentId, task, taskId, Status.COMPLETE, Fields.OUTPUT, result);
 
 		return Maps.of(
 			Fields.AGENT_ID, agentId,
@@ -1593,25 +1550,12 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		AgentState agent = requireAgent(ctx.getCallerDID(), agentId);
-		Index<Blob, ACell> tasks = agent.getTasks();
-		if (tasks == null || tasks.get(taskId) == null) {
-			// Tolerate the documented cross-thread lattice read lag (#214): the run
-			// loop scoped this cycle to a task it observed, and handleRequest commits
-			// addTask (a CAS) before waking the loop — yet this completeTask/failTask
-			// runs on a SEPARATE transition thread whose fresh read can transiently
-			// lag that commit. Re-read before concluding the task is genuinely gone
-			// (double-complete, or the agent deleted mid-transition). Mirrors the
-			// verify-at-point-of-use guard the resume path already applies (#214).
-			tasks = awaitScopedTaskIndex(ctx.getCallerDID(), agentId, taskId);
-			if (tasks == null) {
-				throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
-			}
-		}
+		ACell task = agent.takeTask(taskId);
+		if (task == null) throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
 
 		ACell errorCell = RT.getIn(input, Fields.ERROR);
 		AString errorStr = (errorCell == null) ? Strings.create("Task failed") : Strings.create(errorCell.toString());
-		parkCompletion(ctx.getCallerDID(), agentId, tasks, taskId, Status.FAILED, Fields.ERROR, errorStr);
-		agent.removeTask(taskId);
+		parkCompletion(ctx.getCallerDID(), agentId, task, taskId, Status.FAILED, Fields.ERROR, errorStr);
 
 		return Maps.of(
 			Fields.AGENT_ID, agentId,
@@ -1626,13 +1570,13 @@ public class AgentAdapter extends AAdapter {
 	 * timeline / state writes are visible. Shared by
 	 * {@link #handleCompleteTask} and {@link #handleFailTask}.
 	 */
-	private void parkCompletion(AString ownerDID, AString agentId, Index<Blob, ACell> tasks, Blob taskId,
+	private void parkCompletion(AString ownerDID, AString agentId, ACell task, Blob taskId,
 			AString status, AString valueField, ACell value) {
 		AMap<AString, ACell> envelope = Maps.of(
 			Fields.ID,     taskId,
 			Fields.STATUS, status,
 			valueField,    value);
-		ACell sid = extractTaskSessionId(tasks, taskId);
+		ACell sid = extractTaskSessionId(task);
 		if (sid != null) envelope = envelope.assoc(Fields.SESSION_ID, sid);
 		deferredCompletions
 			.computeIfAbsent(new AgentKey(ownerDID, agentId), k -> new ConcurrentHashMap<>())
@@ -1826,7 +1770,7 @@ public class AgentAdapter extends AAdapter {
 		if (existing != null && !existing.isDone()) return existing;
 
 		// Phantom RUNNING recovery (#64): if lattice shows RUNNING but no
-		// live loop in our map, it's a crash remnant or stale write. Correct
+		// live loop in our map, it's a crash remnant or inconsistent persisted state. Correct
 		// to SLEEPING so a fresh loop can start; otherwise the agent would
 		// be locked out indefinitely.
 		AString status = agent.getStatus();
@@ -2586,15 +2530,13 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Looks up the sessionId recorded on the task row keyed by the given
-	 * task id, or returns null if absent or malformed.
+	 * Reads the sessionId recorded on a claimed task row, or returns null if
+	 * absent or malformed.
 	 */
 	@SuppressWarnings("unchecked")
-	private static ACell extractTaskSessionId(Index<Blob, ACell> tasks, Blob taskId) {
-		if (tasks == null || taskId == null) return null;
-		ACell row = tasks.get(taskId);
-		if (!(row instanceof AMap)) return null;
-		return ((AMap<AString, ACell>) row).get(Fields.SESSION_ID);
+	private static ACell extractTaskSessionId(ACell task) {
+		if (!(task instanceof AMap)) return null;
+		return ((AMap<AString, ACell>) task).get(Fields.SESSION_ID);
 	}
 
 	/**

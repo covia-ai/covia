@@ -637,6 +637,22 @@ public class AgentState extends ALatticeComponent<ACell> {
 		update(r -> r.assoc(K_TASKS, extractTasks(r).dissoc(taskId)));
 	}
 
+	/**
+	 * Atomically claims a task by removing and returning its row.
+	 *
+	 * <p>Exactly one concurrent completion, failure, or cancellation can receive
+	 * a non-null result. Later attempts observe the task as absent and fail
+	 * immediately.</p>
+	 */
+	public ACell takeTask(Blob taskId) {
+		AMap<AString, ACell> before = getAndUpdate(r -> {
+			Index<Blob, ACell> tasks = extractTasks(r);
+			if (tasks.get(taskId) == null) return r;
+			return r.assoc(K_TASKS, tasks.dissoc(taskId));
+		});
+		return (before == null) ? null : extractTasks(before).get(taskId);
+	}
+
 	public void addPending(Blob jobId, ACell snapshot) {
 		update(r -> r.assoc(K_PENDING, extractPending(r).assoc(jobId, snapshot)));
 	}

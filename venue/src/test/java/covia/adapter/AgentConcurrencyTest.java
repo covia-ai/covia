@@ -3,6 +3,7 @@ package covia.adapter;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -85,6 +86,43 @@ public class AgentConcurrencyTest {
 		assertEquals(AgentState.SLEEPING, agent.getStatus());
 
 		assertFalse(agent.tryResume(), "Resume should fail from SLEEPING");
+	}
+
+	@Test
+	public void testTakeTaskHasExactlyOneConcurrentWinner() throws Exception {
+		Users users = engine.getVenueState().users();
+		User user = users.ensure(ALICE_DID);
+		AgentState agent = user.ensureAgent("take-task-test", Maps.empty(), null);
+		Blob taskId = Blob.fromHex("cafe");
+		ACell task = Maps.of(Fields.MESSAGE, Strings.create("claim once"));
+		agent.addTask(taskId, task);
+
+		CountDownLatch ready = new CountDownLatch(2);
+		CountDownLatch start = new CountDownLatch(1);
+		java.util.function.Supplier<ACell> claim = () -> {
+			ready.countDown();
+			try {
+				if (!start.await(5, TimeUnit.SECONDS)) {
+					throw new AssertionError("Timed out waiting to start concurrent task claims");
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new AssertionError("Interrupted while waiting to claim task", e);
+			}
+			return agent.takeTask(taskId);
+		};
+
+		CompletableFuture<ACell> first = CompletableFuture.supplyAsync(claim);
+		CompletableFuture<ACell> second = CompletableFuture.supplyAsync(claim);
+		assertTrue(ready.await(5, TimeUnit.SECONDS), "Both claimants should be ready");
+		start.countDown();
+
+		ACell firstResult = first.get(5, TimeUnit.SECONDS);
+		ACell secondResult = second.get(5, TimeUnit.SECONDS);
+		assertEquals(1, (firstResult != null ? 1 : 0) + (secondResult != null ? 1 : 0),
+			"Exactly one concurrent claimant must receive the task");
+		assertEquals(task, firstResult != null ? firstResult : secondResult);
+		assertNull(agent.getTasks().get(taskId));
 	}
 
 	// ========== Unit: mergeRunResult ==========
