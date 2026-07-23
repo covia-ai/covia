@@ -195,7 +195,9 @@ public class SQLAdapter extends AAdapter {
 			return DriverManager.getConnection(url.toString(), props);
 		}
 
-		AString caller = ctx.getCallerDID();
+		// Scoped to the USER: an agent shares its owner's venue-local database
+		// rather than getting a private one the owner cannot see.
+		AString caller = ctx.getUserDID();
 		if (caller == null) throw new JobFailedException(
 			"Venue-local SQL databases require an authenticated caller"
 			+ " — or register '" + db + "' under adapters.sql.databases in venue config");

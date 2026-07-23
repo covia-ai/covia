@@ -179,6 +179,12 @@ public class Fields {
 
 	// Identity / authorization
 	public static final StringShort CALLER = Strings.intern("caller");
+	/** The principal that actually performed an invocation, when that is not the
+	 *  owning {@link #CALLER} — an agent sub-principal ({@code <owner>:g:<id>}).
+	 *  Absent means the owner acted directly, so ordinary job records are
+	 *  unchanged and no migration is implied. Attribution only: ownership,
+	 *  access control and quota all key on {@code caller}. */
+	public static final StringShort ACTOR = Strings.intern("actor");
 	public static final StringShort ROLES = Strings.intern("roles");
 	public static final StringShort REQUIRES = Strings.intern("requires");
 	public static final StringShort EMAIL = Strings.intern("email");

@@ -389,7 +389,8 @@ public class ArchiveAdapter extends AAdapter {
 					Fields.SHA256, sha)
 			);
 			var hash = engine.storeUserAsset(JSON.printPretty(meta), content, ctx);
-			AString didUrl = ctx.getCallerDID().append("/a/" + hash.toHexString());
+			// storeUserAsset writes into the user's /a/, so the URL must name the user.
+			AString didUrl = ctx.getUserDID().append("/a/" + hash.toHexString());
 			return Maps.of(
 				"entries", CVMLong.create(entryCount[0]),
 				"bytes", CVMLong.create(size),

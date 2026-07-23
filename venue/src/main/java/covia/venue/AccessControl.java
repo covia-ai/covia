@@ -38,7 +38,9 @@ public class AccessControl {
 		if (jobData == null) return false;
 		AString jobCaller = RT.ensureString(jobData.get(Fields.CALLER));
 		if (jobCaller == null) return false;          // venue-internal job
-		AString callerDID = ctx.getCallerDID();
+		// Jobs are owned by the user, so ownership compares on the user DID: an
+		// agent sub-principal can reach the jobs it ran for its owner.
+		AString callerDID = ctx.getUserDID();
 		if (callerDID == null) return false;          // anonymous
 		return jobCaller.equals(callerDID);
 	}

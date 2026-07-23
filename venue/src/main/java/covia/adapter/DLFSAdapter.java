@@ -135,7 +135,10 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 	 * @return User's DLFS keypair (never null)
 	 */
 	private AKeyPair ensureUserKeyPair(RequestContext ctx) {
-		AString callerDID = ctx.getCallerDID();
+		// Drives belong to the user. An agent shares its owner's DLFS keypair
+		// rather than minting one of its own, which would orphan it from every
+		// drive the owner has.
+		AString callerDID = ctx.getUserDID();
 		if (callerDID == null) throw new IllegalArgumentException("Authentication required for DLFS access");
 
 		User user = engine.getVenueState().users().ensure(callerDID);
@@ -355,7 +358,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 		if (fr == null) return null;
 
 		RequestContext driveCtx = ctx;
-		boolean cross = fr.ownerDID() != null && !fr.ownerDID().equals(ctx.getCallerDID());
+		boolean cross = fr.ownerDID() != null && !fr.ownerDID().equals(ctx.getUserDID());
 		if (cross) {
 			String resource = dlfsResource(fr.ownerDID(), Strings.create(fr.drive()),
 				Strings.create(fr.path()));
@@ -444,7 +447,7 @@ public class DLFSAdapter extends AAdapter implements covia.venue.storage.Content
 			throw new IllegalArgumentException(
 				"DLFS DID-URL drive reference must name a drive, e.g. did:key:.../<drive>");
 		}
-		boolean cross = !ownerDID.equals(ctx.getCallerDID());
+		boolean cross = !ownerDID.equals(ctx.getUserDID());
 		return new DriveTarget(ownerDID, drive, cross);
 	}
 

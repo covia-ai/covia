@@ -841,7 +841,7 @@ public class Engine {
 	 * Stores an asset in the caller's per-user CAS namespace.
 	 */
 	public Hash storeUserAsset(AString meta, ACell content, RequestContext ctx) {
-		AString callerDID = ctx.getCallerDID();
+		AString callerDID = ctx.getUserDID();
 		if (callerDID == null) throw new IllegalArgumentException("Authentication required to store assets");
 		User user = getVenueState().users().ensure(callerDID);
 		Hash id = user.assets().store(meta, content);
@@ -879,8 +879,8 @@ public class Engine {
 	 */
 	public AVector<?> getAssetRecord(Hash assetID, RequestContext ctx) {
 		// Check user's /a/ first
-		if (ctx != null && ctx.getCallerDID() != null) {
-			User user = getVenueState().users().get(ctx.getCallerDID());
+		if (ctx != null && ctx.getUserDID() != null) {
+			User user = getVenueState().users().get(ctx.getUserDID());
 			if (user != null) {
 				AVector<?> arec = user.assets().getRecord(assetID);
 				if (arec != null) return arec;
@@ -1160,9 +1160,9 @@ public class Engine {
 	 * No interpretation, no asset wrapping, no reference chasing.
 	 */
 	private ACell readUserOpValue(AString name, RequestContext ctx) {
-		if (ctx == null || ctx.getCallerDID() == null) return null;
+		if (ctx == null || ctx.getUserDID() == null) return null;
 		Users users = venueState.users();
-		User user = users.get(ctx.getCallerDID());
+		User user = users.get(ctx.getUserDID());
 		if (user == null) return null;
 		// Pre-split keys: the name is a single literal /o/ key (it may
 		// contain slashes). readPath handles the namespace wrapper.
@@ -1175,9 +1175,9 @@ public class Engine {
 	 * lattice cursor. Returns whatever's there, with no interpretation.
 	 */
 	private ACell readWorkspacePathValue(AString ref, RequestContext ctx) {
-		if (ctx == null || ctx.getCallerDID() == null) return null;
+		if (ctx == null || ctx.getUserDID() == null) return null;
 		Users users = venueState.users();
-		User user = users.get(ctx.getCallerDID());
+		User user = users.get(ctx.getUserDID());
 		if (user == null) return null;
 
 		ACell[] pathKeys = covia.adapter.CoviaAdapter.parseStringPath(ref.toString());
@@ -1959,6 +1959,7 @@ public class Engine {
 	 */
 	public User admitUser(AString did) {
 		if (did == null) throw new AuthException("Authentication required");
+		requireNotSubPrincipal(did);
 		Users users = venueState.users();
 		User user = users.get(did);
 		if (user != null) return user;
@@ -1966,6 +1967,32 @@ public class Engine {
 		throw new AuthException("User is not registered at this venue: " + did
 			+ ". Ask a venue administrator to provision it with user:create; "
 			+ "public test venues may enable users.autoCreate.");
+	}
+
+	/**
+	 * Rejects an agent-shaped DID where a <em>user</em> identity is required.
+	 *
+	 * <p>An agent DID is {@code <owner>:g:<agentId>}, and that nesting is
+	 * load-bearing: {@code Principals.userOf} resolves it to the owner's
+	 * namespace. Admitting such a DID as a user in its own right would therefore
+	 * hand its bearer the namespace of whoever the prefix names. Agents are
+	 * minted by the venue as sub-principals of an existing account — they are
+	 * never registered, never authenticate, and so must never reach a user
+	 * record. Keeping that invariant at the admission boundary is what makes the
+	 * name safe to parse everywhere else.</p>
+	 *
+	 * <p>No current authentication path can produce such a DID (a self-issued
+	 * subject must be a {@code did:key} whose multikey decodes to the presented
+	 * key, and venue-minted usernames admit no colon), so this is defence in
+	 * depth against a future path — or an operator registering one by hand.</p>
+	 */
+	public void requireNotSubPrincipal(AString did) {
+		if (covia.grid.Principals.isAgentDID(did)) {
+			throw new AuthException("Not a user identity: " + did
+				+ " names an agent sub-principal of " + covia.grid.Principals.userOf(did)
+				+ ". Agents are created with agent:create under an existing account, "
+				+ "not registered as users.");
+		}
 	}
 
 	/**
@@ -2249,19 +2276,24 @@ public class Engine {
 	// ========== Secret resolution ==========
 
 	/**
-	 * Resolves a secret from the caller's secret store.
+	 * Resolves a secret from the calling user's secret store.
 	 *
 	 * <p>Accepts both {@code "/s/NAME"} and bare {@code "NAME"} formats.
-	 * The caller's identity is taken from the {@link RequestContext} for
-	 * access control — only the caller's own secrets are accessible.</p>
+	 * The store is the caller's <em>user</em> namespace ({@code ctx.getUserDID()})
+	 * — only that user's own secrets are accessible. An agent sub-principal
+	 * resolves its owner's secrets, which is the whole point of it running inside
+	 * the owner's namespace: an agent has no store of its own, and keying this on
+	 * the acting identity instead would make every agent's secrets vanish. Which
+	 * secrets an agent may actually use is bounded by its capability scope, not by
+	 * which store it reads.</p>
 	 *
 	 * @param secretRef Secret name or "/s/NAME" reference
-	 * @param ctx Request context (caller identity for access control)
+	 * @param ctx Request context (namespace identity for access control)
 	 * @return Decrypted plaintext, or null if not found or not authorised
 	 */
 	public String resolveSecret(String secretRef, RequestContext ctx) {
 		if (secretRef == null || ctx == null) return null;
-		AString callerDID = ctx.getCallerDID();
+		AString callerDID = ctx.getUserDID();
 		if (callerDID == null) return null;
 
 		// Strip s/ or /s/ prefix if present

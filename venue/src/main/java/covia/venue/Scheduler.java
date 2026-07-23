@@ -66,8 +66,14 @@ public class Scheduler {
 	static final AString K_OP = Strings.intern("op");
 	/** Event record field: the input cell passed to the operation. */
 	static final AString K_INPUT = Strings.intern("input");
-	/** Event record field: the owner DID (identity the operation runs as). */
+	/** Event record field: the owning user DID. Ownership key for
+	 *  list/cancel/trigger, and the namespace the fired operation runs in. */
 	static final AString K_OWNER = Strings.intern("owner");
+	/** Event record field: the agent sub-principal that scheduled this event,
+	 *  when not the owner itself. Mirrors {@code Fields.ACTOR} on job records —
+	 *  the event fires as this identity, but the OWNER still administers it, so
+	 *  a user keeps sight of what their agents have queued. */
+	static final AString K_ACTOR = Strings.intern("actor");
 	/** Event record field: captured UCAN proofs (AVector), replayed at fire time. */
 	static final AString K_PROOFS = Strings.intern("proofs");
 	/** Event record field: captured capability attenuations (AVector). */
@@ -120,16 +126,19 @@ public class Scheduler {
 	 * for replay. Returns the event handle (its index key).
 	 */
 	public Blob schedule(AString opRef, ACell input, RequestContext ctx, long wakeTime) {
-		AString owner = ctx.getCallerDID();
+		AString owner = ctx.getUserDID();
 		if (owner == null) throw new AuthException("Scheduling requires an authenticated caller");
+		// Owned by the user, fired as whoever scheduled it — so an agent's queued
+		// work stays visible to (and cancellable by) the account it runs in.
+		AString actor = ctx.isSubPrincipal() ? ctx.getCallerDID() : null;
 		AVector<ACell> proofs = ctx.getProofs();
 		AVector<ACell> caps = ctx.getCaps();
-		return onTimer(() -> doSchedule(opRef, input, owner, proofs, caps, wakeTime));
+		return onTimer(() -> doSchedule(opRef, input, owner, actor, proofs, caps, wakeTime));
 	}
 
 	/** Cancel a scheduled event by handle. Owner-only. Returns false if absent. */
 	public boolean cancel(Blob handle, RequestContext ctx) {
-		return onTimer(() -> doCancel(handle, ctx.getCallerDID()));
+		return onTimer(() -> doCancel(handle, ctx.getUserDID()));
 	}
 
 	/**
@@ -140,7 +149,7 @@ public class Scheduler {
 	public CompletableFuture<ACell> trigger(Blob handle, RequestContext ctx) {
 		AMap<AString, ACell> rec;
 		try {
-			rec = onTimer(() -> doClaim(handle, ctx.getCallerDID()));
+			rec = onTimer(() -> doClaim(handle, ctx.getUserDID()));
 		} catch (RuntimeException e) {
 			return CompletableFuture.failedFuture(e);
 		}
@@ -151,9 +160,10 @@ public class Scheduler {
 		return invokeFor(rec);
 	}
 
-	/** The caller's pending events, each as {@code {handle, op, time}}, time-ordered. */
+	/** The calling user's pending events, each as {@code {handle, op, time}},
+	 *  time-ordered — including those queued by their agents. */
 	public AVector<ACell> list(RequestContext ctx) {
-		AString caller = ctx.getCallerDID();
+		AString caller = ctx.getUserDID();
 		Index<Blob, ACell> idx = index();
 		AVector<ACell> out = Vectors.empty();
 		long cnt = idx.count();
@@ -192,13 +202,14 @@ public class Scheduler {
 
 	// ------------------------------------------------------- timer-thread bodies
 
-	private Blob doSchedule(AString opRef, ACell input, AString owner,
+	private Blob doSchedule(AString opRef, ACell input, AString owner, AString actor,
 			AVector<ACell> proofs, AVector<ACell> caps, long wakeTime) {
 		Blob key = mintKey(wakeTime);
 		AMap<AString, ACell> rec = Maps.of(
 			K_OP, opRef,
 			K_OWNER, owner,
 			K_TIME, CVMLong.create(wakeTime));
+		if (actor != null) rec = rec.assoc(K_ACTOR, actor);
 		if (input != null) rec = rec.assoc(K_INPUT, input);
 		if (proofs != null) rec = rec.assoc(K_PROOFS, proofs);
 		if (caps != null) rec = rec.assoc(K_CAPS, caps);
@@ -297,7 +308,11 @@ public class Scheduler {
 		AString opRef = RT.ensureString(rec.get(K_OP));
 		ACell input = rec.get(K_INPUT);
 		AString owner = RT.ensureString(rec.get(K_OWNER));
-		RequestContext ctx = RequestContext.of(owner);
+		// Fire as the scheduling agent when there was one. Authority.of recovers
+		// the owning namespace from the agent DID, so a replayed sub-principal
+		// still resolves the owner's secrets and workspace.
+		AString actor = RT.ensureString(rec.get(K_ACTOR));
+		RequestContext ctx = RequestContext.of((actor != null) ? actor : owner);
 		AVector<ACell> proofs = asVector(rec.get(K_PROOFS));
 		if (proofs != null) ctx = ctx.withProofs(proofs);
 		AVector<ACell> caps = asVector(rec.get(K_CAPS));

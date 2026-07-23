@@ -351,8 +351,8 @@ public class AgentAdapter extends AAdapter {
 	private ACell doKick(RequestContext ctx, ACell input) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) throw new IllegalArgumentException("agentId is required");
-		wakeAgent(ctx.getCallerDID(), agentId, parseForce(input));
-		AgentState agent = getAgent(ctx.getCallerDID(), agentId);
+		wakeAgent(ctx.getUserDID(), agentId, parseForce(input));
+		AgentState agent = getAgent(ctx.getUserDID(), agentId);
 		AString status = (agent != null) ? agent.getStatus() : null;
 		return Maps.of(
 			Fields.AGENT_ID, agentId,
@@ -493,7 +493,9 @@ public class AgentAdapter extends AAdapter {
 
 			// Store resolved asset ID in config for provenance (full DID URL)
 			if (config != null) {
-				AString defID = ctx.getCallerDID().append("/a/" + defAsset.getID().toHexString());
+				// The asset lives in the user's /a/, so the DID URL must name the
+				// user — an agent-scoped URL would not resolve.
+				AString defID = ctx.getUserDID().append("/a/" + defAsset.getID().toHexString());
 				config = config.assoc(Fields.DEFINITION, defID);
 			}
 		}
@@ -525,7 +527,7 @@ public class AgentAdapter extends AAdapter {
 
 		boolean overwrite = CVMBool.TRUE.equals(RT.getIn(input, Fields.OVERWRITE));
 		Users users = engine.getVenueState().users();
-		User user = users.ensure(ctx.getCallerDID());
+		User user = users.ensure(ctx.getUserDID());
 
 		// Resolve what to do with the target slot. See resolveCreateSlot for the
 		// full state machine — overwrite means replacement, while its absence is
@@ -798,7 +800,7 @@ public class AgentAdapter extends AAdapter {
 		if (agentId == null) { job.fail("agentId is required"); return; }
 
 		Users users = engine.getVenueState().users();
-		User user = users.ensure(ctx.getCallerDID());
+		User user = users.ensure(ctx.getUserDID());
 
 		// Resolve source agent
 		AgentState source = user.agent(sourceId);
@@ -853,7 +855,7 @@ public class AgentAdapter extends AAdapter {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) { job.fail("agentId is required"); return; }
 
-		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
+		AgentState agent = lookupAgent(job, ctx.getUserDID(), agentId);
 		if (agent == null) return;
 		if (failIfSuspended(job, agent, agentId)) return;
 
@@ -900,14 +902,14 @@ public class AgentAdapter extends AAdapter {
 
 		// Each accepted request guarantees a processing attempt, so bypass the
 		// optional-work launch gate.
-		wakeAgent(ctx.getCallerDID(), agentId, true);
+		wakeAgent(ctx.getUserDID(), agentId, true);
 	}
 
 	private void handleMessage(Job job, ACell input, RequestContext ctx) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) { job.fail("agentId is required"); return; }
 
-		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
+		AgentState agent = lookupAgent(job, ctx.getUserDID(), agentId);
 		if (agent == null) return;
 
 		Blob sid = resolveOrMintSession(job, agent, input, ctx.getCallerDID());
@@ -920,7 +922,7 @@ public class AgentAdapter extends AAdapter {
 			Fields.SESSION_ID, Strings.create(sid.toHexString()),
 			Fields.MESSAGE,    messageContent);
 		agent.appendSessionPending(sid, envelope);
-		wakeAgent(ctx.getCallerDID(), agentId);
+		wakeAgent(ctx.getUserDID(), agentId);
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(
@@ -961,7 +963,7 @@ public class AgentAdapter extends AAdapter {
 		ACell messageContent = RT.getIn(input, Fields.MESSAGE);
 		if (messageContent == null) { job.fail("message is required"); return; }
 
-		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
+		AgentState agent = lookupAgent(job, ctx.getUserDID(), agentId);
 		if (agent == null) return;
 		if (failIfSuspended(job, agent, agentId)) return;
 
@@ -975,7 +977,7 @@ public class AgentAdapter extends AAdapter {
 		// slot. Register a cancel hook so the caller cancelling their own
 		// Job immediately frees the slot for a retry.
 		ConcurrentHashMap<Blob, Job> agentChats = activeChats
-			.computeIfAbsent(new AgentKey(ctx.getCallerDID(), agentId), k -> new ConcurrentHashMap<>());
+			.computeIfAbsent(new AgentKey(ctx.getUserDID(), agentId), k -> new ConcurrentHashMap<>());
 		Job existing = agentChats.get(sid);
 		if (existing != null && !existing.isFinished()) {
 			job.fail("Session " + sidHex + " already has an in-flight chat");
@@ -1009,7 +1011,7 @@ public class AgentAdapter extends AAdapter {
 
 		// Each accepted chat guarantees a processing attempt, so bypass the
 		// optional-work launch gate.
-		wakeAgent(ctx.getCallerDID(), agentId, true);
+		wakeAgent(ctx.getUserDID(), agentId, true);
 	}
 
 	/**
@@ -1032,7 +1034,7 @@ public class AgentAdapter extends AAdapter {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) { job.fail("agentId is required"); return; }
 
-		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
+		AgentState agent = lookupAgent(job, ctx.getUserDID(), agentId);
 		if (agent == null) return;
 		if (failIfSuspended(job, agent, agentId)) return;
 
@@ -1049,11 +1051,11 @@ public class AgentAdapter extends AAdapter {
 		AString sidHex = (sid != null) ? Strings.create(sid.toHexString()) : null;
 
 		boolean force = parseForce(input);
-		CompletableFuture<ACell> completion = wakeAgent(ctx.getCallerDID(), agentId, force);
+		CompletableFuture<ACell> completion = wakeAgent(ctx.getUserDID(), agentId, force);
 		if (completion == null) {
 			// force=true (the default) keeps the historical "must start" contract.
 			if (force) {
-				AString transitionOp = resolveTransitionOp(ctx.getCallerDID(), agentId);
+				AString transitionOp = resolveTransitionOp(ctx.getUserDID(), agentId);
 				if (transitionOp == null) {
 					job.fail("Cannot start agent '" + agentId
 						+ "': config.operation is missing or invalid; fix it with agent:update");
@@ -1103,8 +1105,8 @@ public class AgentAdapter extends AAdapter {
 		if (agentId == null) { job.fail("agentId is required"); return; }
 
 		Users users = engine.getVenueState().users();
-		User user = users.get(ctx.getCallerDID());
-		if (user == null) { job.fail("User not found: " + ctx.getCallerDID()); return; }
+		User user = users.get(ctx.getUserDID());
+		if (user == null) { job.fail("User not found: " + ctx.getUserDID()); return; }
 
 		AgentState agent = user.agent(agentId);
 		if (agent == null || agent.getRecord() == null) { job.fail("Agent not found: " + agentId); return; }
@@ -1119,7 +1121,7 @@ public class AgentAdapter extends AAdapter {
 	 * and the job-free {@code GET /api/v1/agents/{id}} route (#180).
 	 */
 	public AMap<AString, ACell> agentInfo(RequestContext ctx, AString agentId) {
-		User user = engine.getVenueState().users().get(ctx.getCallerDID());
+		User user = engine.getVenueState().users().get(ctx.getUserDID());
 		if (user == null) return null;
 		AgentState agent = user.agent(agentId);
 		if (agent == null || agent.getRecord() == null) return null;
@@ -1164,7 +1166,7 @@ public class AgentAdapter extends AAdapter {
 		if (agentId == null) { job.fail("agentId is required"); return; }
 
 		Users users = engine.getVenueState().users();
-		User user = users.get(ctx.getCallerDID());
+		User user = users.get(ctx.getUserDID());
 		if (user == null) { job.fail("User not found"); return; }
 		AgentState agent = user.agent(agentId);
 		if (agent == null) { job.fail("Agent not found: " + agentId); return; }
@@ -1247,7 +1249,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	@SuppressWarnings("unchecked")
 	public AMap<AString, ACell> listAgents(RequestContext ctx, boolean includeTerminated, boolean annotated) {
-		User user = engine.getVenueState().users().get(ctx.getCallerDID());
+		User user = engine.getVenueState().users().get(ctx.getUserDID());
 
 		AVector<ACell> agents = Vectors.empty();
 		if (user != null) {
@@ -1295,9 +1297,9 @@ public class AgentAdapter extends AAdapter {
 		}
 		boolean remove = CVMBool.TRUE.equals(RT.getIn(input, Fields.REMOVE));
 		Users users = engine.getVenueState().users();
-		User user = users.get(ctx.getCallerDID());
+		User user = users.get(ctx.getUserDID());
 		if (user == null) {
-			job.fail("No agents found for caller " + ctx.getCallerDID());
+			job.fail("No agents found for caller " + ctx.getUserDID());
 			return;
 		}
 
@@ -1312,7 +1314,7 @@ public class AgentAdapter extends AAdapter {
 				return;
 			}
 			CompletableFuture<ACell> loop = runningLoops.get(
-				new AgentKey(ctx.getCallerDID(), agentId));
+				new AgentKey(ctx.getUserDID(), agentId));
 			if (agentId.equals(ctx.getAgentId()) && loop != null && !loop.isDone()) {
 				job.fail("Agent cannot delete itself while RUNNING: " + agentId
 					+ " (no agents were deleted; schedule deletion for after the current run)");
@@ -1406,14 +1408,14 @@ public class AgentAdapter extends AAdapter {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) { job.fail("agentId is required"); return; }
 
-		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
+		AgentState agent = lookupAgent(job, ctx.getUserDID(), agentId);
 		if (agent == null) return;
 
 		agent.setStatus(AgentState.SUSPENDED);
 
 		// Cancel any active transition so the agent stops promptly (the token
 		// stops the transition thread itself; cancel unblocks the run loop)
-		cancelActiveTransition(new AgentKey(ctx.getCallerDID(), agentId));
+		cancelActiveTransition(new AgentKey(ctx.getUserDID(), agentId));
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.SUSPENDED));
@@ -1423,7 +1425,7 @@ public class AgentAdapter extends AAdapter {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) { job.fail("agentId is required"); return; }
 
-		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
+		AgentState agent = lookupAgent(job, ctx.getUserDID(), agentId);
 		if (agent == null) return;
 
 		// Default autoWake to true
@@ -1437,7 +1439,7 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 
-		if (autoWake) wakeAgent(ctx.getCallerDID(), agentId, false);
+		if (autoWake) wakeAgent(ctx.getUserDID(), agentId, false);
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(Fields.AGENT_ID, agentId, Fields.STATUS, AgentState.SLEEPING));
@@ -1448,7 +1450,7 @@ public class AgentAdapter extends AAdapter {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) { job.fail("agentId is required"); return; }
 
-		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
+		AgentState agent = lookupAgent(job, ctx.getUserDID(), agentId);
 		if (agent == null) return;
 		if (AgentState.RUNNING.equals(agent.getStatus())) {
 			job.fail("Cannot update agent " + agentId + ": currently RUNNING. "
@@ -1486,7 +1488,7 @@ public class AgentAdapter extends AAdapter {
 		AString taskIdHex = RT.ensureString(RT.getIn(input, Fields.TASK_ID));
 		if (taskIdHex == null) { job.fail("taskId is required"); return; }
 
-		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
+		AgentState agent = lookupAgent(job, ctx.getUserDID(), agentId);
 		if (agent == null) return;
 
 		// Parse hex task ID to Blob
@@ -1550,7 +1552,7 @@ public class AgentAdapter extends AAdapter {
 		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
 		if (sidHex == null) { job.fail("sessionId is required"); return; }
 
-		AgentState agent = lookupAgent(job, ctx.getCallerDID(), agentId);
+		AgentState agent = lookupAgent(job, ctx.getUserDID(), agentId);
 		if (agent == null) return;
 
 		Blob sid;
@@ -1569,7 +1571,7 @@ public class AgentAdapter extends AAdapter {
 		// Fail any in-flight chat awaiting on this session so its caller
 		// unblocks with a clean error (scoped analogue of failAllPendingForAgent)
 		ConcurrentHashMap<Blob, Job> agentChats =
-			activeChats.get(new AgentKey(ctx.getCallerDID(), agentId));
+			activeChats.get(new AgentKey(ctx.getUserDID(), agentId));
 		if (agentChats != null) {
 			Job chatJob = agentChats.remove(sid);
 			if (chatJob != null && !chatJob.isFinished()) {
@@ -1615,12 +1617,12 @@ public class AgentAdapter extends AAdapter {
 				"agent:completeTask requires task scope (agentId + taskId in RequestContext)");
 		}
 
-		AgentState agent = requireAgent(ctx.getCallerDID(), agentId);
+		AgentState agent = requireAgent(ctx.getUserDID(), agentId);
 		ACell task = agent.takeTask(taskId);
 		if (task == null) throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
 
 		ACell result = RT.getIn(input, Fields.RESULT);
-		parkCompletion(ctx.getCallerDID(), agentId, task, taskId, Status.COMPLETE, Fields.OUTPUT, result);
+		parkCompletion(ctx.getUserDID(), agentId, task, taskId, Status.COMPLETE, Fields.OUTPUT, result);
 
 		return Maps.of(
 			Fields.AGENT_ID, agentId,
@@ -1651,13 +1653,13 @@ public class AgentAdapter extends AAdapter {
 				"agent:failTask requires task scope (agentId + taskId in RequestContext)");
 		}
 
-		AgentState agent = requireAgent(ctx.getCallerDID(), agentId);
+		AgentState agent = requireAgent(ctx.getUserDID(), agentId);
 		ACell task = agent.takeTask(taskId);
 		if (task == null) throw new IllegalArgumentException("Task not found: " + taskId.toHexString());
 
 		ACell errorCell = RT.getIn(input, Fields.ERROR);
 		AString errorStr = (errorCell == null) ? Strings.create("Task failed") : Strings.create(errorCell.toString());
-		parkCompletion(ctx.getCallerDID(), agentId, task, taskId, Status.FAILED, Fields.ERROR, errorStr);
+		parkCompletion(ctx.getUserDID(), agentId, task, taskId, Status.FAILED, Fields.ERROR, errorStr);
 
 		return Maps.of(
 			Fields.AGENT_ID, agentId,
@@ -1813,7 +1815,7 @@ public class AgentAdapter extends AAdapter {
 	 */
 	AString awaitRunFinished(AString agentId, RequestContext ctx, long timeoutMs)
 			throws TimeoutException {
-		CompletableFuture<ACell> f = runningLoops.get(new AgentKey(ctx.getCallerDID(), agentId)); // observe only — do NOT wake
+		CompletableFuture<ACell> f = runningLoops.get(new AgentKey(ctx.getUserDID(), agentId)); // observe only — do NOT wake
 		if (f != null && !f.isDone()) {
 			try {
 				f.get(timeoutMs, TimeUnit.MILLISECONDS);
@@ -1826,7 +1828,7 @@ public class AgentAdapter extends AAdapter {
 				// completed the future exceptionally. That is still a finish.
 			}
 		}
-		AgentState agent = getAgent(ctx.getCallerDID(), agentId);
+		AgentState agent = getAgent(ctx.getUserDID(), agentId);
 		return agent == null ? AgentState.TERMINATED : agent.getStatus();
 	}
 
@@ -1907,13 +1909,15 @@ public class AgentAdapter extends AAdapter {
 			return installed;
 		}
 
-		// The run loop executes under the agent owner's OWN authority — a fresh
-		// context carrying none of the waking caller's proofs, caps, job or
+		// The run loop executes as the AGENT, within its OWNER's namespace — a
+		// fresh context carrying none of the waking caller's proofs, caps, job or
 		// session. Which caller won the launch CAS above must never leak into
-		// the agent's execution: every identity-scoped access during the run
-		// (secrets /s/, workspace w/, job ownership, per-user cursors) must
-		// resolve in the owner's namespace, deterministically. (#91)
-		final RequestContext agentCtx = RequestContext.of(ownerDID);
+		// the agent's execution: every namespace-scoped access during the run
+		// (secrets /s/, workspace w/, job ownership, per-user cursors) resolves
+		// in the owner's namespace, deterministically (#91), while the caller
+		// identity is the agent's own sub-principal DID so what the agent did is
+		// attributable to the agent rather than to the human who owns it.
+		final RequestContext agentCtx = RequestContext.ofAgent(ownerDID, agentId);
 		agent.setStatus(AgentState.RUNNING);
 		final CompletableFuture<ACell> finalCompletion = mine;
 		Thread.ofVirtual().start(
@@ -1969,8 +1973,9 @@ public class AgentAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private void executeRunLoop(AString agentId, AString ownerDID,
 			RequestContext ctx, CompletableFuture<ACell> completion) {
-		// ctx is the agent's OWN owner-scoped context (see wakeAgent) — never a
-		// waking caller's. ownerDID == ctx.getCallerDID() throughout the run.
+		// ctx is the agent's OWN context (see wakeAgent) — never a waking
+		// caller's. Throughout the run ownerDID == ctx.getUserDID(), while
+		// ctx.getCallerDID() is the agent's own sub-principal DID.
 		final AgentKey key = new AgentKey(ownerDID, agentId);
 		ACell lastResult = null;
 		int iteration = 0;

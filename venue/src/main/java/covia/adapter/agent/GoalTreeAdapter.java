@@ -1573,8 +1573,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 	 * caller/agent cannot be resolved (direct-invoke and test paths).
 	 */
 	private covia.venue.AgentState resolveAgentState(RequestContext ctx, AString agentId) {
-		if (agentId == null || ctx.getCallerDID() == null) return null;
-		covia.venue.User user = engine.getVenueState().users().get(ctx.getCallerDID());
+		if (agentId == null || ctx.getUserDID() == null) return null;
+		covia.venue.User user = engine.getVenueState().users().get(ctx.getUserDID());
 		return (user != null) ? user.agent(agentId.toString()) : null;
 	}
 

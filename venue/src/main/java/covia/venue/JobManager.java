@@ -234,12 +234,18 @@ public class JobManager {
 		// no central name-keyed pre-dispatch check — a denial surfaces as the
 		// adapter failing this Job.
 		AAdapter adapter = prepareInvocation(meta, input, ctx);
-		AString callerDID = ctx.getCallerDID();
+		// Jobs are owned by, quota'd against, and persisted into the USER's
+		// namespace. An agent sub-principal runs inside its owner's account: it
+		// must not open a job store of its own (its jobs would vanish from the
+		// owner's listing) nor a second admission bucket (it would multiply the
+		// owner's concurrency cap). Who *acted* stays on the context —
+		// ctx.getCallerDID() / ctx.getAgentId().
+		AString ownerDID = ctx.getUserDID();
 
-		// Admission control: bound concurrent top-level jobs per caller. Blocks up
+		// Admission control: bound concurrent top-level jobs per user. Blocks up
 		// to jobBlockMs to absorb bursts, then sheds with RateLimitException (429).
 		// Sub-jobs (parent jobId set) and internal callers are exempt.
-		boolean permit = acquireJobPermit(ctx, callerDID);
+		boolean permit = acquireJobPermit(ctx, ownerDID);
 
 		// Persist the bare hex hash of the metadata as the op reference.
 		// Hex hashes are universally resolvable via the resolvePath bare-hex
@@ -247,11 +253,11 @@ public class JobManager {
 		AString opID = Strings.create(meta.getHash().toHexString());
 		Job job;
 		try {
-			job = submitJob(opID, meta, input, callerDID, privateJob);
+			job = submitJob(opID, meta, input, ownerDID, ctx.getCallerDID(), privateJob);
 		} catch (RuntimeException e) {
 			// Never obtained a jobID to track — release the permit directly.
-			if (permit && callerDID != null) {
-				JobSemaphore sem = jobPermits.get(callerDID);
+			if (permit && ownerDID != null) {
+				JobSemaphore sem = jobPermits.get(ownerDID);
 				if (sem != null) sem.release();
 			}
 			throw e;
@@ -259,7 +265,7 @@ public class JobManager {
 		// Track the permit against the job so it is released exactly once when the
 		// job reaches a terminal state (evictActive) or is deleted. Recorded
 		// before dispatch so a synchronously-completing adapter still finds it.
-		if (permit) permitHolders.put(job.getID(), callerDID);
+		if (permit) permitHolders.put(job.getID(), ownerDID);
 
 		// Set jobId on context so adapters can use t/ (job-scoped temp).
 		// Preserve existing jobId if already set — parent scope takes precedence
@@ -483,7 +489,9 @@ public class JobManager {
 		// whether that DID has an account at this venue. Keep this in the shared
 		// invocation prelude so HTTP, MCP, A2A, proof-channel and internal job
 		// paths cannot drift or persist a job before the decision is made.
-		engine.admitUser(callerDID);
+		// Admission is a question about the *account*: an agent sub-principal is
+		// admitted through its owner, never registered as a user in its own right.
+		engine.admitUser(ctx.getUserDID());
 
 		String adapterName = AAdapter.getAdapterName(meta);
 		if (adapterName == null) {
@@ -569,9 +577,16 @@ public class JobManager {
 
 	/**
 	 * Submit a Job for an operation.
+	 *
+	 * @param callerDID the owning user — the namespace the job is persisted into,
+	 *        and what ownership, access control and quota key on
+	 * @param actorDID the principal that actually invoked. Recorded as
+	 *        {@link Fields#ACTOR} only when it differs from {@code callerDID},
+	 *        i.e. when an agent sub-principal acted on the owner's behalf, so a
+	 *        job record answers "who did this" and not merely "whose account".
 	 */
 	private Job submitJob(AString opID, AMap<AString, ACell> meta, ACell input, AString callerDID,
-			boolean privateJob) {
+			AString actorDID, boolean privateJob) {
 		if (callerDID == null) throw new AuthException("Authentication required");
 		if (privateJob && !engine.config().isPrivateJobsEnabled()) {
 			throw new IllegalArgumentException(
@@ -589,6 +604,11 @@ public class JobManager {
 				Fields.CREATED, CVMLong.create(ts),
 				Fields.INPUT, redactSecrets(input, meta),
 				Fields.CALLER, callerDID);
+
+		// Attribution: name the acting agent when it is not the owner itself.
+		if (actorDID != null && !actorDID.equals(callerDID)) {
+			status = status.assoc(Fields.ACTOR, actorDID);
+		}
 
 		AString name = RT.ensureString(RT.getIn(meta, Fields.NAME));
 		if (name != null) {
@@ -626,7 +646,7 @@ public class JobManager {
 		// 2. User's lattice (authoritative). Scoped to the caller's own jobs;
 		// a delegated read of another user's *terminal* (evicted) job goes via
 		// the explicit DID-URL path (covia:read did:<owner>/j/<id>).
-		AString did = ctx.getCallerDID();
+		AString did = ctx.getUserDID();
 		if (did == null) return null;
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
@@ -690,7 +710,7 @@ public class JobManager {
 		if (job != null) return job;
 
 		// Fall back to user's lattice
-		AString did = ctx.getCallerDID();
+		AString did = ctx.getUserDID();
 		if (did == null) return null;
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return null;
@@ -704,7 +724,7 @@ public class JobManager {
 	 * Reads directly from the user's per-user lattice.
 	 */
 	public Index<Blob, ACell> getJobs(RequestContext ctx) {
-		AString did = ctx.getCallerDID();
+		AString did = ctx.getUserDID();
 		if (did == null) return Index.none();
 		User user = engine.getVenueState().users().get(did);
 		if (user == null) return Index.none();
@@ -905,7 +925,8 @@ public class JobManager {
 				return data.assoc(Fields.HISTORY, liveHistory.conj(record));
 			});
 		} else {
-			persistJobRecord(jobID, newData, ctx.getCallerDID());
+			// Persisted into the owning user's lattice, not the acting agent's.
+			persistJobRecord(jobID, newData, ctx.getUserDID());
 		}
 	}
 

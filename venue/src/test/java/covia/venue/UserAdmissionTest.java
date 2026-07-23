@@ -22,6 +22,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import covia.exception.AuthException;
 import covia.exception.ResponseException;
+import covia.grid.Principals;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 import covia.venue.server.VenueServer;
@@ -89,6 +90,36 @@ class UserAdmissionTest {
 			engine.jobs().invokeInternal("v/test/ops/echo", Maps.of(),
 				RequestContext.of(did)).get(5, TimeUnit.SECONDS);
 			assertNotNull(engine.getVenueState().users().get(did));
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
+	void agentShapedDIDIsNeverAdmittedAsAUser() {
+		// <owner>:g:<id> resolves to the owner's namespace, so letting an external
+		// principal authenticate as one would hand its bearer that whole account —
+		// the sharp edge of a parseable sub-principal name. admitUser is the
+		// authentication boundary (AuthMiddleware.markAuthenticated calls it with
+		// the raw presented DID), so the guard belongs there and nowhere else.
+		// Rejected even with autoCreate on, the configuration where an unknown DID
+		// would otherwise self-register.
+		Engine engine = configuredEngine(true);
+		try {
+			AString owner = newDID();
+			engine.getVenueState().users().ensure(owner);
+			AString impostor = Principals.agentDID(owner, Strings.create("pwn"));
+
+			assertThrows(AuthException.class, () -> engine.admitUser(impostor));
+			assertNull(engine.getVenueState().users().get(impostor),
+				"an agent-shaped DID must never gain a user record");
+
+			// Deliberately NOT guarded: a RequestContext built in-process is
+			// trusted by construction, and a sub-principal context is exactly what
+			// AgentAdapter.wakeAgent must be able to build. Such a context admits
+			// through its OWNER, which is the intended behaviour — an agent runs
+			// inside an account that already exists.
+			assertEquals(owner, RequestContext.of(impostor).getUserDID());
 		} finally {
 			engine.close();
 		}

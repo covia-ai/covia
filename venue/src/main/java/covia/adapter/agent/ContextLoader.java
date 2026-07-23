@@ -241,7 +241,7 @@ public class ContextLoader {
 	String resolveWorkspacePath(String path, RequestContext ctx) {
 		try {
 			Users users = engine.getVenueState().users();
-			User user = users.get(ctx.getCallerDID());
+			User user = users.get(ctx.getUserDID());
 			if (user == null) return null;
 
 			ALatticeCursor<ACell> cursor = user.cursor();

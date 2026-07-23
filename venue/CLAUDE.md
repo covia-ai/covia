@@ -48,10 +48,15 @@ venue/
   resolved metadata (never null) and a `RequestContext`; returns
   `CompletableFuture` (or overrides the job-aware `invoke` for direct job
   control — multi-turn, orchestration, HITL).
-- **RequestContext** — caller DID, verified UCAN proofs, capability ceiling,
-  execution scopes. `requireCapability(resource, ability)` is the
+- **RequestContext** — caller DID, verified UCAN proofs, capability scope,
+  execution scopes. `Engine.requireAuthority(ctx, resource, ability)` is the
   point-of-action enforcement primitive; `Engine.crossUserAllows` is the
   single cross-user gate (public-user parity + delegation proofs).
+  **Two identities, never conflated**: `getCallerDID()` is *who acted*
+  (attribution, delegation audience, granting authority); `getUserDID()` is
+  *whose namespace* (bare paths, workspace, secrets, jobs, inbox, quota). They
+  differ only for an agent sub-principal, `<ownerDID>:g:<agentId>` — see
+  `docs/UCAN.md` §5.4.
 - **Lattice** — CRDT-based persistent state. Structure defined in
   `covia.lattice.Covia`; design in `docs/GRID_LATTICE_DESIGN.md`.
 
