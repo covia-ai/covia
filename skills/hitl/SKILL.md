@@ -93,7 +93,7 @@ The requester presents that token (transport `ucans` / bearer) when calling `hit
 
 ### `agent` — teach a resident Covia agent to use HITL
 
-Resident agents get HITL from the venue skill library (`v/skills/hitl`) — every standard template already declares `skills: ["w/skills", "v/skills"]`, so the skill appears in the agent's [Skills] index and `skill_load` activates the `hitl_request`/`hitl_respond`/`hitl_list` tools mid-transition. To make an agent actually use it:
+Resident agents get HITL from the venue skill library (`v/skills/hitl`) — every standard template already declares `skills: ["w/skills", "v/skills"]`, so the skill appears in the agent's [Skills] index and `skill_load` activates the `hitl_request`/`hitl_list` tools mid-transition. Agents ask and watch; they **cannot** answer — `hitl_respond` is refused for an agent sub-principal, since resolving an ask issues grants under the inbox owner's authority (see `venue/docs/UCAN.md` §5.4). To make an agent actually use it:
 
 1. **Check the skill is visible** — `agent_context` (or ask the agent "what skills do you see?") should list `hitl` in the index. If the agent's config overrides `skills`, ensure `v/skills` is in the sources.
 2. **Instruct it in the system prompt** — add HITL policy to `config.systemPrompt` at creation (see `/agent` for creation mechanics):

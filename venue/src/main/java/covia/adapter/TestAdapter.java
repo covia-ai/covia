@@ -28,8 +28,9 @@ public class TestAdapter extends AAdapter {
 
     /**
      * Test-only sink: the {@code capturectx} op records the {@link RequestContext}
-     * it was invoked under, keyed by the owner DID it ran as (its caller DID).
-     * Lets tests assert deterministically which identity / proofs / caps a
+     * it was invoked under, keyed by the <b>user</b> DID whose namespace it ran in
+     * ({@code ctx.getUserDID()}) — for an agent transition, its owner. Lets tests
+     * assert deterministically which identity / namespace / proofs / caps a
      * transition actually ran with — including that two same-named agents owned
      * by different users run under their own identities (see #91).
      */
@@ -288,7 +289,7 @@ public class TestAdapter extends AAdapter {
      * assert the identity / proofs / caps a transition ran under.
      */
     private ACell handleCaptureCtx(RequestContext ctx, ACell input) {
-        if (ctx.getCallerDID() != null) CAPTURED_CTX.put(ctx.getCallerDID(), ctx);
+        if (ctx.getUserDID() != null) CAPTURED_CTX.put(ctx.getUserDID(), ctx);
         return input;
     }
 

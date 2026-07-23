@@ -7,6 +7,7 @@ import convex.core.data.Blob;
 import convex.core.data.Strings;
 import covia.exception.AuthException;
 import covia.grid.Authority;
+import covia.grid.Principals;
 import covia.lattice.CapabilityChecker;
 import covia.lattice.CapabilityGate;
 
@@ -102,6 +103,23 @@ public class RequestContext {
 	public static RequestContext of(AString callerDID, AVector<ACell> proofs) {
 		if (callerDID == null) return ANONYMOUS;
 		return new RequestContext(Authority.of(callerDID).withProofs(proofs), null, null, null, null, null, null, null, null, null);
+	}
+
+	/**
+	 * Creates a RequestContext for an <b>agent sub-principal</b> of
+	 * {@code userDID}: the caller is the agent's own DID
+	 * ({@code <userDID>:g:<agentId>}), while the namespace it acts within stays
+	 * the owner's. Also sets the agent execution scope, so {@code n/} resolves to
+	 * the agent's private workspace.
+	 *
+	 * <p>Used by the agent run loop, which knows the owner as an address
+	 * component rather than as a caller — the waking caller's identity never
+	 * reaches the loop (#91), and the agent's own identity now names it.</p>
+	 */
+	public static RequestContext ofAgent(AString userDID, AString agentId) {
+		if (userDID == null || agentId == null) return ANONYMOUS;
+		return new RequestContext(Authority.ofAgent(userDID, agentId), agentId,
+			null, null, null, null, null, null, null, null);
 	}
 
 	/**
@@ -254,6 +272,42 @@ public class RequestContext {
 	}
 
 	/**
+	 * The user whose namespace this request acts within: the owning user for an
+	 * agent sub-principal, and {@link #getCallerDID()} for everyone else.
+	 *
+	 * <p><b>Use this for namespace questions</b> — which per-user lattice record,
+	 * whose secret store, whose workspace a bare {@code w/foo} names. <b>Use
+	 * {@link #getCallerDID()} for identity questions</b> — who acted (attribution),
+	 * who a delegation is audienced to, and who holds granting authority. An
+	 * agent works inside its owner's namespace but is not its owner; conflating
+	 * the two is how a caller's identity leaks into state it should not reach
+	 * (#91), and how an agent would silently acquire its owner's granting reach.</p>
+	 */
+	public AString getUserDID() {
+		return authority.getUserDID();
+	}
+
+	/**
+	 * True if this context acts as an agent sub-principal — the caller is an
+	 * agent DID and {@link #getUserDID()} names a different, owning principal.
+	 */
+	public boolean isSubPrincipal() {
+		return authority.isSubPrincipal();
+	}
+
+	/**
+	 * How {@code targetDID} stands relative to this caller — itself, its owning
+	 * user, another principal under the same user, or a foreign one.
+	 *
+	 * <p>Proximity is not permission: a same-user target is a reasonable place to
+	 * relax <em>friction</em> (an agent addressing its own owner, say), never a
+	 * substitute for a capability check.</p>
+	 */
+	public Principals.Relation relationTo(AString targetDID) {
+		return Principals.relate(getCallerDID(), getUserDID(), targetDID);
+	}
+
+	/**
 	 * Returns true if this is an anonymous (unauthenticated) request.
 	 */
 	public boolean isAnonymous() {
@@ -333,9 +387,18 @@ public class RequestContext {
 	 * authority seam ({@code authorityCovers}) can compose it with the cross-user
 	 * proof check without re-plumbing {@code op}/{@code invocationInput}/{@code
 	 * gate}.
+	 *
+	 * <p>Bare paths canonicalise against {@link #getUserDID()}, not the caller —
+	 * this is the single point at which the ceiling path decides <em>whose
+	 * namespace</em> {@code w/foo} names. For an agent that is its owner's, so a
+	 * {@code config.caps} grant of {@code w/decisions/} keeps meaning the owner's
+	 * workspace once the agent has a DID of its own. The request resource and
+	 * every grant's {@code with} canonicalise against the same DID inside
+	 * {@code allows}, so they still match. The proof path is unaffected: bare
+	 * {@code with} in a token binds to that token's signed {@code iss}.</p>
 	 */
 	String grantsDenial(AString resource, AString ability) {
-		return CapabilityChecker.allows(authority.getGrants(), resource, ability, authority.getDID(), op, invocationInput, gate);
+		return CapabilityChecker.allows(authority.getGrants(), resource, ability, authority.getUserDID(), op, invocationInput, gate);
 	}
 
 	/**

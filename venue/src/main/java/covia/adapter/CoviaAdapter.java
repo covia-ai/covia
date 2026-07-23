@@ -1738,7 +1738,12 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ALatticeCursor<ACell> getUserCursor(RequestContext ctx) {
 		Users users = engine.getVenueState().users();
-		User user = users.get(ctx.getCallerDID());
+		// The USER's record, not the acting principal's: an agent sub-principal
+		// works inside its owner's namespace and has no lattice record of its own.
+		// This must agree with how bare paths canonicalise in the capability check
+		// (RequestContext.grantsDenial), or an agent would be granted w/foo in one
+		// namespace and read it from another.
+		User user = users.get(ctx.getUserDID());
 		if (user == null) return null;
 		return user.cursor();
 	}
@@ -1750,7 +1755,7 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	public ALatticeCursor<ACell> ensureUserCursor(RequestContext ctx) {
 		Users users = engine.getVenueState().users();
-		User user = users.ensure(ctx.getCallerDID());
+		User user = users.ensure(ctx.getUserDID());
 		return user.cursor();
 	}
 
@@ -1880,8 +1885,11 @@ public class CoviaAdapter extends AAdapter {
 		// Parse the DID URL path component into namespace keys
 		ACell[] pathKeys = parseStringPath(didURL.getPath());
 
-		if (targetDID.equals(ctx.getCallerDID())) {
-			// Own namespace with explicit DID — allowed
+		if (targetDID.equals(ctx.getUserDID())) {
+			// Own namespace with explicit DID — allowed. Compared against the user
+			// DID so an explicit did:<owner>/w/x behaves identically to a bare w/x
+			// (which canonicalises to the same place); the capability scope still
+			// bounds what an agent may reach there.
 			return new Object[] { getUserCursor(ctx), pathKeys };
 		}
 

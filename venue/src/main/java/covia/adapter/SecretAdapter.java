@@ -82,7 +82,9 @@ public class SecretAdapter extends AAdapter {
 		// is denied here — closing the unauthenticated secret-write gap (#148).
 		engine.requireAuthority(ctx, Strings.create("s/" + name), Abilities.SECRET_WRITE);
 
-		User user = engine.getVenueState().users().ensure(ctx.getCallerDID());
+		// Secrets live in the user's store; an agent writes into its owner's,
+		// gated above by secret/write in its capability scope.
+		User user = engine.getVenueState().users().ensure(ctx.getUserDID());
 		byte[] encKey = SecretStore.deriveKey(engine.getKeyPair());
 		user.secrets().store(name, value, encKey);
 

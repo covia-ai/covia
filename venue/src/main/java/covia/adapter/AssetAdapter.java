@@ -159,7 +159,7 @@ public class AssetAdapter extends AAdapter {
 		Hash id = engine.storeUserAsset(jsonString, content, ctx);
 
 		// Return full DID URL: did:key:zCaller.../a/<hash>
-		AString didUrl = ctx.getCallerDID().append("/a/" + id.toHexString());
+		AString didUrl = ctx.getUserDID().append("/a/" +id.toHexString());
 		return Maps.of(
 			Fields.ID, didUrl,
 			Fields.STORED, CVMBool.TRUE);
@@ -338,7 +338,7 @@ public class AssetAdapter extends AAdapter {
 		// List the caller's own pinned assets — the per-user a/ namespace.
 		// Venue-level assets (the operation catalog) are discovered via
 		// covia:functions / covia:adapters / covia:inspect, not here.
-		covia.venue.User user = engine.getVenueState().users().get(ctx.getCallerDID());
+		covia.venue.User user = engine.getVenueState().users().get(ctx.getUserDID());
 		AMap<ABlob, AVector<?>> userAssets = (user != null) ? user.assets().getAll() : null;
 		long rawTotal = (userAssets != null) ? userAssets.count() : 0;
 
@@ -454,7 +454,7 @@ public class AssetAdapter extends AAdapter {
 		// Return the caller's DID URL plus the bare hex hash. The path is
 		// directly usable as input to other read-side ops; the hash is
 		// convenient for version comparison.
-		AString didUrl = ctx.getCallerDID().append("/a/" + hash.toHexString());
+		AString didUrl = ctx.getUserDID().append("/a/" +hash.toHexString());
 		return Maps.of(
 			Fields.PATH, didUrl,
 			Strings.intern("hash"), Strings.create(hash.toHexString()));

@@ -39,6 +39,11 @@ public final class Authority {
 	/** Caller identity (DID), or {@code null} for anonymous. */
 	private final AString did;
 
+	/** The user whose namespace this authority acts within, when that differs
+	 *  from {@link #did} (an agent sub-principal). {@code null} = the principal
+	 *  is its own user. Read through {@link #getUserDID()}, never directly. */
+	private final AString user;
+
 	/** The caller's own held capability scope. {@code null} = unrestricted. */
 	private final AVector<ACell> grants;
 
@@ -46,10 +51,13 @@ public final class Authority {
 	private final AVector<ACell> proofs;
 
 	/** The anonymous authority: no identity, unrestricted-irrelevant, no proofs. */
-	public static final Authority ANONYMOUS = new Authority(null, null, null);
+	public static final Authority ANONYMOUS = new Authority(null, null, null, null);
 
-	private Authority(AString did, AVector<ACell> grants, AVector<ACell> proofs) {
+	private Authority(AString did, AString user, AVector<ACell> grants, AVector<ACell> proofs) {
 		this.did = did;
+		// An authority that is its own user stores null, so equality does not
+		// split identical principals over a redundant field.
+		this.user = (user != null && user.equals(did)) ? null : user;
 		this.grants = grants;
 		this.proofs = proofs;
 	}
@@ -57,26 +65,75 @@ public final class Authority {
 	/**
 	 * An authority for the given identity, unrestricted ({@code null} scope) and
 	 * carrying no presented proofs.
+	 *
+	 * <p>The namespace is <b>recovered from the DID</b> ({@link Principals#userOf}),
+	 * so reconstructing a context from a stored identity is lossless: a scheduled
+	 * event, a recovered job or a capability gate that replays as
+	 * {@code <owner>:g:<agent>} still resolves in the owner's namespace. This is
+	 * the point of a syntactically nested sub-principal — the relation travels
+	 * with the name and survives persistence, where an out-of-band field would
+	 * not. A DID that names no agent is its own user, so this is a no-op for
+	 * every ordinary principal.</p>
+	 *
 	 * @param did Caller DID, or null for anonymous
 	 */
 	public static Authority of(AString did) {
-		return (did == null) ? ANONYMOUS : new Authority(did, null, null);
+		return (did == null) ? ANONYMOUS : new Authority(did, Principals.userOf(did), null, null);
 	}
 
 	/**
 	 * An authority for the given identity bound to the given capability scope.
 	 * A {@code null} scope is unrestricted; a non-null scope binds the principal
-	 * to exactly those capabilities (an agent's {@code config.caps}).
+	 * to exactly those capabilities (an agent's {@code config.caps}). The
+	 * namespace is recovered from the DID, as in {@link #of(AString)}.
 	 * @param did Caller DID, or null for anonymous
 	 * @param grants the held capability scope, or null for unrestricted
 	 */
 	public static Authority of(AString did, AVector<ACell> grants) {
-		return (did == null && grants == null) ? ANONYMOUS : new Authority(did, grants, null);
+		return (did == null && grants == null) ? ANONYMOUS
+			: new Authority(did, Principals.userOf(did), grants, null);
+	}
+
+	/**
+	 * An authority for an <b>agent sub-principal</b> of {@code userDID}: identity
+	 * is the agent's own DID ({@code <userDID>:g:<agentId>}), while the namespace
+	 * it acts within remains the owner's.
+	 *
+	 * <p>The agent is the principal — it is who acted, and who a delegation may be
+	 * audienced to — but its bare lattice paths still resolve in the owner's
+	 * namespace, because that is where its workspace, secrets and inbox live. The
+	 * scope starts unrestricted; bind it with {@link #withGrantScope} from the
+	 * agent's {@code config.caps}.</p>
+	 *
+	 * @param userDID the owning user's DID
+	 * @param agentId the agent identifier within that user's namespace
+	 */
+	public static Authority ofAgent(AString userDID, AString agentId) {
+		if (userDID == null) return ANONYMOUS;
+		return new Authority(Principals.agentDID(userDID, agentId), userDID, null, null);
 	}
 
 	/** The caller identity, or null if anonymous. */
 	public AString getDID() {
 		return did;
+	}
+
+	/**
+	 * The user whose namespace this authority acts within — the owner for an agent
+	 * sub-principal, and {@link #getDID()} for every other principal.
+	 *
+	 * <p>This is the DID that resolves bare lattice paths and per-user state
+	 * (workspace, secrets, jobs, inbox). It is <b>not</b> an identity: use
+	 * {@link #getDID()} for attribution, for a delegation audience, and for any
+	 * decision about who is acting.</p>
+	 */
+	public AString getUserDID() {
+		return (user != null) ? user : did;
+	}
+
+	/** True if this authority acts within another principal's namespace. */
+	public boolean isSubPrincipal() {
+		return user != null;
 	}
 
 	/** The held capability scope; {@code null} = unrestricted (the fast path). */
@@ -112,7 +169,7 @@ public final class Authority {
 	 */
 	public Authority withGrant(ACell grant) {
 		if (grant == null || grants == null) return this;
-		return new Authority(did, grants.concat(Vectors.of(grant)), proofs);
+		return new Authority(did, user, grants.concat(Vectors.of(grant)), proofs);
 	}
 
 	/**
@@ -122,7 +179,7 @@ public final class Authority {
 	 */
 	public Authority withGrants(AVector<ACell> more) {
 		if (more == null || more.isEmpty() || grants == null) return this;
-		return new Authority(did, grants.concat(more), proofs);
+		return new Authority(did, user, grants.concat(more), proofs);
 	}
 
 	/**
@@ -131,7 +188,7 @@ public final class Authority {
 	 * Identity and presented proofs are preserved.
 	 */
 	public Authority withGrantScope(AVector<ACell> grants) {
-		return new Authority(did, grants, proofs);
+		return new Authority(did, user, grants, proofs);
 	}
 
 	/**
@@ -143,7 +200,7 @@ public final class Authority {
 	 * authorisation re-checks only temporal bounds and policy, never signatures.</p>
 	 */
 	public Authority withProofs(AVector<ACell> proofs) {
-		return new Authority(did, grants, proofs);
+		return new Authority(did, user, grants, proofs);
 	}
 
 	@Override
@@ -151,18 +208,20 @@ public final class Authority {
 		if (this == o) return true;
 		if (!(o instanceof Authority a)) return false;
 		return Objects.equals(did, a.did)
+			&& Objects.equals(user, a.user)
 			&& Objects.equals(grants, a.grants)
 			&& Objects.equals(proofs, a.proofs);
 	}
 
 	@Override
 	public int hashCode() {
-		return Objects.hash(did, grants, proofs);
+		return Objects.hash(did, user, grants, proofs);
 	}
 
 	@Override
 	public String toString() {
 		return "Authority[" + (did != null ? did : "anonymous")
+			+ (user != null ? " of " + user : "")
 			+ ", grants=" + (grants != null ? grants.count() : "unrestricted")
 			+ ", proofs=" + (proofs != null ? proofs.count() : 0) + "]";
 	}

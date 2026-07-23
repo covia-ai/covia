@@ -265,7 +265,7 @@ public class MCPAdapter extends AAdapter {
 			String name = ref.substring(idx + 3);
 			AString venueDid = engine.getDIDString();
 			boolean allowed = ownerDid.equals(venueDid != null ? venueDid.toString() : null)
-				|| ownerDid.equals(ctx.getCallerDID() != null ? ctx.getCallerDID().toString() : null);
+				|| ownerDid.equals(ctx.getUserDID() != null ? ctx.getUserDID().toString() : null);
 			if (!allowed) throw new JobFailedException(
 				"MCP server auth secret is owned by " + ownerDid
 				+ " — only the venue's or your own secrets can back a bridged server");
@@ -1048,9 +1048,10 @@ public class MCPAdapter extends AAdapter {
 	private static AString qualifyAuthRef(AString auth, RequestContext ctx) {
 		if (auth == null) return null;
 		String ref = auth.toString();
-		if ((ref.startsWith("s/") || ref.startsWith("/s/")) && ctx.getCallerDID() != null) {
+		if ((ref.startsWith("s/") || ref.startsWith("/s/")) && ctx.getUserDID() != null) {
+			// Secrets live in the user's store, so qualify against the user.
 			String name = ref.startsWith("/s/") ? ref.substring(3) : ref.substring(2);
-			return Strings.create(ctx.getCallerDID() + "/s/" + name);
+			return Strings.create(ctx.getUserDID() + "/s/" + name);
 		}
 		return auth;
 	}

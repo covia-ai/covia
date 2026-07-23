@@ -550,19 +550,60 @@ Agents need capabilities to act in the world. The critical question is
 **identity** — does the agent act as the user, or as itself? Covia supports
 both models, and they compose naturally via UCAN delegation.
 
+#### Identity versus namespace
+
+An agent is a **sub-principal of its owner**, named
+`<ownerDID>:g:<agentId>` — the same `g` namespace its state lives in, so one
+vocabulary names it as a principal and as a lattice location. Suffixing a DID
+is the existing convention (`<venueDID>:public`), and it composes over any DID
+method.
+
+Two questions must not be conflated, and the context answers them separately:
+
+| Question | Accessor | Used for |
+|---|---|---|
+| **Who acted?** | `ctx.getCallerDID()` | attribution (`actor` on job records), delegation audience, granting authority |
+| **Whose namespace?** | `ctx.getUserDID()` | bare path resolution, workspace, secrets, jobs, inbox, quota |
+
+For every ordinary principal the two are equal, so this is a no-op outside
+agent execution. For an agent, `w/foo` still means the **owner's** workspace —
+that is the namespace it lives and works in — while the agent remains a
+distinct principal. `RequestContext.grantsDenial` canonicalises bare paths
+against `getUserDID()`, applying the same DID to the request resource and to
+every grant's `with`, so agent `config.caps` written as `w/decisions/` keep
+their meaning. The proof path is unaffected: a bare `with` in a token binds to
+that token's signed `iss`.
+
+The nesting is recoverable by parsing (`Principals.userOf`), and
+`Authority.of(did)` uses it, so reconstructing a context from a stored DID is
+lossless — a scheduled event or capability gate that replays as
+`<owner>:g:<agent>` still resolves the owner's namespace. That parse is
+therefore load-bearing for authorisation, which is why a user identity may
+never be agent-shaped: `Engine.admitUser` rejects one at the authentication
+boundary.
+
+Being a sub-principal is **proximity, not permission**.
+`ctx.relationTo(target)` classifies a target as `SELF`, `OWNER`, `SAME_USER`
+or `FOREIGN`, and that ordering may relax *friction* — an agent addressing its
+own owner's HITL inbox needs no delegation — but never substitutes for a
+capability check. What an agent may do is bounded by its capability scope, never
+by its name.
+
 #### Model A: User-Scoped Agent (Attenuated Delegation)
 
-The agent has **no independent identity**. It acts under the user's DID with
-attenuated capabilities. The user creates the agent and declares what it
-can do — the venue issues a scoped UCAN at creation time.
+The agent has **no key of its own**. It acts as its own sub-principal DID
+within the user's namespace, bounded by attenuated capabilities; the venue
+signs on the owner's behalf. The user creates the agent and declares what it
+can do.
 
 ```
 User DID: did:key:zAlice...
 Agent ID: Carol
+Agent DID: did:key:zAlice...:g:Carol
 
 Delegation at creation:
   iss: did:key:zAlice
-  aud: did:key:zAlice.../g/Carol       ; agent-scoped audience (DID URL)
+  aud: did:key:zAlice...:g:Carol        ; the agent sub-principal
   att: [
     { with: "did:key:zAlice.../w/decisions/", can: "crud/write" },
     { with: "did:key:zAlice.../w/enrichments/", can: "crud/read" }
@@ -574,15 +615,25 @@ When Carol's tool calls execute, the framework wraps her RequestContext
 with only this token. Carol can write to `w/decisions/` but not
 `w/vendor-records/`. She can read enrichments but not secrets.
 
-**Identity:** `did:key:zAlice.../g/Carol` (a DID URL under Alice's namespace)
+**Identity:** `did:key:zAlice...:g:Carol` (a sub-principal of Alice)
 **Keys:** None — the venue signs on Alice's behalf
+**Granting:** none, and **the gate is identity, not scope**. Both granting
+surfaces refuse an agent context outright (COG-17): `ucan:issue` directly, and
+`hitl:respond` because answering an ask mints a grant under the *inbox owner's*
+authority — an agent reaching it would approve its own request. An agent that
+must confer authority asks its human, and only the human can answer.
+
+This is why the guards are pinned to identity. An agent with no `config.caps`
+holds a `null` scope, which the `authorityCovers` fast path treats as
+unrestricted; a scope-based defence would therefore be absent on exactly the
+agent that most needs bounding.
 **Best for:** Pipeline agents, task workers, scoped automations — anything that
 operates within one user's namespace with restricted permissions.
 
 **How it works at runtime:**
 
 1. `agent:create` with `caps` field declares the agent's attenuations
-2. Venue issues a UCAN: issuer = user DID, audience = agent DID URL
+2. Venue issues a UCAN: issuer = user DID, audience = agent DID
 3. Token stored in agent record (alongside config, state, etc.)
 4. On each run, level 2 creates a restricted RequestContext with only the agent's token
 5. Tool calls go through CoviaAdapter which verifies the token against the requested path/ability
@@ -604,7 +655,12 @@ data under the config, not a separate slot.
 | Carol | `crud/read` on `w/enrichments/`; `crud/write` on `w/decisions/` | Write to `w/enrichments/`, read secrets |
 | Dave | `crud/read` on `w/`; `invoke` on orchestration | Write to `w/` (read-only manager) |
 
-#### Model B: Independent Agent (Own DID)
+#### Model B: Independent Agent (Own DID) — not implemented
+
+> **Status: design only.** `agent:create` has no `identity` option and mints no
+> keys. Agents today are Model A sub-principals: a distinct DID, no key of their
+> own. Model B is what a *key* would add — the ability to sign, to be delegated
+> to by other users, and to survive migration to another venue.
 
 The agent has its own **cryptographic identity** — its own Ed25519 keypair and
 DID. It can sign UCANs, receive delegations from multiple users, and act
@@ -646,10 +702,16 @@ multiple users, agents that need to issue their own sub-delegations.
 
 #### Composing Both Models
 
-The models compose. A user-scoped agent (Model A) can be upgraded to
-independent (Model B) by generating a keypair. An independent agent
-can be constrained by the delegations it receives — it can only do
-what someone has explicitly granted.
+The models compose, and the sub-principal DID is the hinge: a Model A agent
+already *is* a principal, so upgrading to Model B means giving that principal a
+key, not renaming it. An independent agent can be constrained by the
+delegations it receives — it can only do what someone has explicitly granted.
+
+Note the trade the nested name makes. It survives persistence (the owner is
+recoverable from the DID) and it reads unambiguously, but it is not
+self-certifying, so it cannot travel to a venue that does not host the owner.
+A flat `did:key` would invert both properties. That is the real distinction
+between the two models, more than the presence of a keypair.
 
 ```
                     Alice (user)
@@ -931,7 +993,7 @@ so there are no mode flags or auth fields anywhere:
 ### Phase C2a: Agent Capability Scoping (Model A)
 
 - `caps` field in agent create specifies attenuations
-- Venue issues scoped UCAN at agent creation (issuer = user, audience = agent DID URL)
+- Venue issues scoped UCAN at agent creation (issuer = user, audience = agent DID)
 - Token stored in agent record
 - Level 2 wraps tool call RequestContext with agent's token
 - CoviaAdapter enforces write/read restrictions via token verification

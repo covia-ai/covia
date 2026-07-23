@@ -15,6 +15,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Authenticated callers get public-user access per the public ceiling (#254) — reads, public jobs, DLFS, and secret resolution fallback (use-only, never extraction)
 - `ucan:issue` is a granting surface — mints over another principal's resource under a presented `grant/<ability>` right, expiry-capped by the right's validity
 - Archive adapter (zip/jar) — `archive:list`/`extract`/`zip` over file roots, from/to a root file, CAS asset, or inline bytes; zip-slip + zip-bomb guarded. `file:read`/`list`/`stat`/`tree` see into archives via `x.zip!/entry` (jdk.zipfs, read-only, never fabricates an archive). `archive` skill
+- Agents are sub-principals with their own DID, `<ownerDID>:g:<agentId>` — identity (`getCallerDID`) split from namespace (`getUserDID`), so an agent acts as itself inside its owner's namespace
+- Job records name the acting agent in `actor`; absent means the owner acted directly
+- `Principals` (covia-core) — agent DID minting/parsing and the `SELF`/`OWNER`/`SAME_USER`/`FOREIGN` relation
 
 ### Changed
 - Job lifecycle hardening — atomic updates, post-commit persistence, shutdown admission gate
@@ -24,6 +27,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Default agent tool pack trimmed to read-only — skills add tools on demand (#60)
 - Bare UCAN grant resources mean the issuer's own namespace — canonicalised at issuance (custodial) and evaluation (self-sovereign)
 - Agent context assembly is prompt-cache-friendly — volatile values (date, budget map) moved to the tail; Anthropic system/tools caching enabled
+
+- `ucan:issue` and `hitl:respond` refuse agent contexts — agents hold no granting authority (COG-17); only the human owning an inbox may answer an ask
+- Scheduled events are owned by the user and fire as the agent that queued them
 
 ### Removed
 - Wire self-attenuation on `/invoke` (#131) — presented proofs are additive-only; reduce authority via a narrower `Authority`, not subtractive tokens

@@ -133,7 +133,10 @@ public class HITLAdapter extends AAdapter {
 		if (caller == null) throw new AuthException("Authentication required for HITL requests");
 
 		AString target = RT.ensureString(RT.getIn(input, Hitl.USER));
-		if (target == null) target = caller;
+		// Default target is the calling USER — for an agent, its owner. "Ask my
+		// human" is the whole point of HITL, and an agent has no inbox of its own
+		// to deliver into.
+		if (target == null) target = ctx.getUserDID();
 		AString title = RT.ensureString(RT.getIn(input, Hitl.TITLE));
 		if (title == null) throw new IllegalArgumentException("title is required");
 		AVector<ACell> asks = HitlValidation.validateAsks(RT.getIn(input, Hitl.ASKS));
@@ -162,11 +165,15 @@ public class HITLAdapter extends AAdapter {
 		log.info("HITL request {} delivered to {} (from {})", id, targetDID, caller);
 	}
 
-	/** A self-ask is always permitted; delivering into ANOTHER user's inbox
-	 *  requires hitl/request on {@code <target>/h/} — checked against the
-	 *  caller's grant scope AND (cross-user) their presented proofs. */
+	/** An ask within the caller's own user family is always permitted — a user
+	 *  asking themselves, or an agent asking the owner whose namespace it runs
+	 *  in (the documented default, which needs no delegation). Delivering into
+	 *  ANOTHER user's inbox requires hitl/request on {@code <target>/h/} —
+	 *  checked against the caller's grant scope AND (cross-user) their presented
+	 *  proofs. Proximity relaxes friction here, not authorisation: a foreign
+	 *  target still needs a delegation. */
 	private void requireDeliverable(RequestContext ctx, AString caller, AString target) {
-		if (target.equals(caller)) return;
+		if (ctx.relationTo(target).isSameUser()) return;
 		AString resource = Strings.create(target + "/h/");
 		engine.requireAuthority(ctx,resource, ABILITY_HITL_REQUEST);
 		long now = System.currentTimeMillis() / 1000;
@@ -205,7 +212,23 @@ public class HITLAdapter extends AAdapter {
 
 	@SuppressWarnings("unchecked")
 	private ACell handleRespond(RequestContext ctx, ACell input) {
-		AString caller = ctx.getCallerDID();
+		// Answering is a GRANTING SURFACE (COG-17): an approved ask mints a
+		// venue-signed UCAN under the responder's authority. The responder is the
+		// inbox owner, so an agent reaching here would answer its OWN request and
+		// grant itself authority as its owner — laundering the ucan:issue
+		// restriction through the one surface that exists to put a human in the
+		// loop. A capability scope is no defence: an agent trusted with a null
+		// (unrestricted) scope is exactly the one that could do it. So the gate is
+		// on identity, not on scope.
+		if (ctx.isSubPrincipal()) {
+			throw new AuthException("Agents cannot answer HITL requests: "
+				+ ctx.getCallerDID() + " would be responding on behalf of "
+				+ ctx.getUserDID() + ", and an approved ask issues a capability grant. "
+				+ "Only the human who owns the inbox can answer.");
+		}
+		// The inbox is the user's, and any grant approved here is issued under the
+		// user's own identity — agents hold no granting authority (COG-17).
+		AString caller = ctx.getUserDID();
 		if (caller == null) throw new AuthException("Authentication required");
 		AString id = RT.ensureString(RT.getIn(input, Hitl.ID));
 		if (id == null) throw new IllegalArgumentException("id is required");
@@ -323,7 +346,7 @@ public class HITLAdapter extends AAdapter {
 
 	@SuppressWarnings("unchecked")
 	private ACell handleList(RequestContext ctx, ACell input) {
-		AString caller = ctx.getCallerDID();
+		AString caller = ctx.getUserDID();
 		if (caller == null) throw new AuthException("Authentication required");
 		AString filter = RT.ensureString(RT.getIn(input, Hitl.STATUS));
 		User user = engine.getVenueState().users().get(caller);

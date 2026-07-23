@@ -79,6 +79,22 @@ public class UCANAdapter extends AAdapter {
 	 * @return The complete signed UCAN token as a CVM map
 	 */
 	private ACell handleIssue(RequestContext ctx, ACell input) {
+		// Issuance is a GRANTING SURFACE (COG-17), so it is gated on who is
+		// asking, before anything is canonicalised. An agent sub-principal acts
+		// *within* its owner's namespace but does not speak *for* it: were it to
+		// reach here, its bare `with` paths would absolutise against the acting
+		// DID and it could mint venue-signed roots over resources it merely has
+		// use of — granting itself, or a third party, authority its owner never
+		// delegated. An agent that must confer authority asks its human for it
+		// (HITL echo-consent), which issues under the responder's own identity.
+		if (ctx.isSubPrincipal()) {
+			throw new AuthException("Agents cannot issue capability grants: "
+				+ ctx.getCallerDID() + " acts within the namespace of "
+				+ ctx.getUserDID() + " but holds no granting authority over it. "
+				+ "Request the grant from the namespace owner (v/ops/hitl/request) "
+				+ "instead of minting one");
+		}
+
 		AString audDID = RT.ensureString(RT.getIn(input, UCAN.AUD));
 		if (audDID == null) {
 			throw new RuntimeException("aud (audience DID) is required");

@@ -87,6 +87,10 @@ public class UserAdapter extends AAdapter {
 		} else {
 			did = requireDID(engine.managedUserDID(username));
 		}
+		// A user identity must never be agent-shaped: <owner>:g:<id> resolves to
+		// the owner's namespace, so registering one would grant its bearer that
+		// account.
+		engine.requireNotSubPrincipal(did);
 
 		boolean created = engine.getVenueState().users().create(did);
 		return Maps.of(
