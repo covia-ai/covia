@@ -177,9 +177,21 @@ public class Orchestrator extends AAdapter {
 							String reason = (detail == null)
 								? "ended with status " + task.subJob.getStatus()
 								: conciseDetail(detail, 512);
-							job.fail("Orchestration step " + task.stepNum + " (" + op + ") failed: " + reason);
+							// Report the FIRST failure: it is the cause, and later ones are
+							// likely consequences. Terminal job states are sticky, so a
+							// second fail() would be ignored regardless.
+							if (!job.isFinished()) {
+								job.fail("Orchestration step " + task.stepNum + " (" + op + ") failed: " + reason);
+							}
+							// A failed step NEVER satisfies a dependency (#281). Leaving its
+							// index in its dependents' `deps` is precisely what stops them
+							// running: a step whose input never arrived must not execute with
+							// nulls and apply its side effects. Marking the orchestration
+							// failed does not stop the scheduler, so containment has to come
+							// from the dependency graph itself.
+							continue;
 						}
-						
+
 						// mark dependency as completed for any subsequent steps
 						Integer completedIndex=task.stepNum;
 						for (int i=task.stepNum+1; i<n; i++) {
@@ -201,8 +213,18 @@ public class Orchestrator extends AAdapter {
 						jd=jd.assoc(Fields.STEPS, srs);
 						return jd;
 					});
+
+					// Fail fast: once the orchestration has failed, start nothing further.
+					// Not just an optimisation — without this the loop keeps launching
+					// steps that are merely independent of the failure, doing more work
+					// and applying more side effects on behalf of a run that can no
+					// longer succeed. Steps ALREADY in flight are deliberately left to
+					// finish: their effects are in motion and cannot be unwound here,
+					// and cancelling a sibling unrelated to the failure would be its own
+					// surprise. Step statuses are recorded above before returning.
+					if (job.isFinished()) return;
 				}
-				
+
 				// job already finished (cancelled or otherwise failed...)
 				if (job.isFinished()) return;
 				

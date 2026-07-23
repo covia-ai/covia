@@ -755,7 +755,94 @@ public class OrchestratorTest {
 		assertNotNull(result, "Non-strict should always pass");
 	}
 
+	// ========== Failure containment (#281) ==========
+
+	@Test
+	public void testFailedStepDoesNotRunItsDependents() {
+		// The reported case: a write gated behind a step that failed. Before the
+		// fix the completion loop released a failed step's dependencies
+		// unconditionally, so the dependent became ready, ran with null inputs and
+		// applied its side effect — turning a failed orchestration into a
+		// partially applied one.
+		String path = "w/orch281/gated";
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Gated write",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/test/ops/error", "input": { "message": ["const", "denied"] } },
+						{ "op": "v/ops/covia/write", "input": {
+							"path":  ["input", "p"],
+							"value": [0, "result"] } }
+					],
+					"result": { "written": [1] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("p"), Strings.create(path)),
+			RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("Orchestration should fail when step 0 fails");
+		} catch (Exception expected) {
+			assertEquals(Status.FAILED, job.getStatus());
+		}
+
+		assertFalse(readExists(path),
+			"step 1 depends on failed step 0, so it must not have written " + path);
+	}
+
+	@Test
+	public void testFailureStopsLaterStepsFromStarting() {
+		// Containment is not only about direct dependents. Once the run has
+		// failed, no further step should start at all — otherwise a step whose
+		// own dependency succeeded still applies side effects on behalf of an
+		// orchestration that can no longer succeed. Step 2 depends on step 1
+		// (which succeeds), not on the failing step 0.
+		String path = "w/orch281/independent";
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Fail fast",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/test/ops/error", "input": { "message": ["const", "denied"] } },
+						{ "op": "v/test/ops/echo",  "input": ["const", {"value": "ok"}] },
+						{ "op": "v/ops/covia/write", "input": {
+							"path":  ["input", "p"],
+							"value": [1, "value"] } }
+					],
+					"result": { "written": [2] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("p"), Strings.create(path)),
+			RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("Orchestration should fail when step 0 fails");
+		} catch (Exception expected) {
+			assertEquals(Status.FAILED, job.getStatus());
+		}
+
+		assertFalse(readExists(path),
+			"no step may start once the orchestration has failed; " + path + " was written");
+	}
+
 	// ========== Helper ==========
+
+	/** True if {@code path} holds data in ALICE's namespace. */
+	private boolean readExists(String path) {
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Strings.create("path"), Strings.create(path)),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		return CVMBool.TRUE.equals(RT.getIn(read, Strings.create("exists")));
+	}
 
 	/**
 	 * Stores a JSON orchestration string as an asset and returns the hex hash for invocation.

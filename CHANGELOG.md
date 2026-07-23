@@ -35,6 +35,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Wire self-attenuation on `/invoke` (#131) — presented proofs are additive-only; reduce authority via a narrower `Authority`, not subtractive tokens
 
 ### Fixed
+- Orchestration failure containment (#281) — a failed step no longer releases its dependents, and no further step starts once a run has failed, so a failed orchestration cannot apply downstream side effects
 - `a/<hash>` references resolve without a leading slash
 - Store unlocked when engine construction fails
 - `agent:completeTask`/`failTask` tolerate the documented cross-thread lattice read lag (#214) — the in-scope task is re-read before failing "Task not found", removing a rare race (delete→recreate) where a committed task was transiently invisible to the transition thread
