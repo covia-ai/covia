@@ -15,6 +15,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Authenticated callers get public-user access per the public ceiling (#254) — reads, public jobs, DLFS, and secret resolution fallback (use-only, never extraction)
 - `ucan:issue` is a granting surface — mints over another principal's resource under a presented `grant/<ability>` right, expiry-capped by the right's validity
 - Archive adapter (zip/jar) — `archive:list`/`extract`/`zip` over file roots, from/to a root file, CAS asset, or inline bytes; zip-slip + zip-bomb guarded. `file:read`/`list`/`stat`/`tree` see into archives via `x.zip!/entry` (jdk.zipfs, read-only, never fabricates an archive). `archive` skill
+- Orchestration `["array", <binding>...]` — builds an array computing each element, so a step input can reference prior steps inside an array (makes `v/ops/json/cond` usable in an orchestration); `["const", …]` freezes its subtree and cannot express this (#281)
 - Agents are sub-principals with their own DID, `<ownerDID>:g:<agentId>` — identity (`getCallerDID`) split from namespace (`getUserDID`), so an agent acts as itself inside its owner's namespace
 - Job records name the acting agent in `actor`; absent means the owner acted directly
 - `Principals` (covia-core) — agent DID minting/parsing and the `SELF`/`OWNER`/`SAME_USER`/`FOREIGN` relation

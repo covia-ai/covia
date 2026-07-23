@@ -267,6 +267,18 @@ public class Orchestrator extends AAdapter {
 						if (part != null) sb.append(part.toString());
 					}
 					return Strings.create(sb.toString());
+				} else if (Fields.ARRAY.equals(code)) {
+					// An array literal whose ELEMENTS are each computed. Needed because
+					// a vector is otherwise always an expression here, so there was no
+					// way to build an array referencing prior steps — the exact shape
+					// ops like v/ops/json/cond require for `cases`. ["const", …] is no
+					// substitute: it freezes the whole subtree, leaving inner bindings
+					// as inert vectors. ["array"] with no elements is the empty array.
+					AVector<ACell> out = Vectors.empty();
+					for (long i = 1; i < n; i++) {
+						out = out.conj(computeInput(v.get(i), path));
+					}
+					return out;
 				} else {
 					throw new IllegalArgumentException("Unrecognised input source at " + path + ": "
 						+ conciseDetail(v, 256));
@@ -343,6 +355,15 @@ public class Orchestrator extends AAdapter {
 						accDeps.add(ix);
 					} else if (Fields.CONCAT.equals(code)) {
 						// Recurse into each concat element to find step references
+						for (long i=1; i<v.count(); i++) {
+							scanDeps(accDeps, v.get(i));
+						}
+					} else if (Fields.ARRAY.equals(code)) {
+						// Must mirror computeInput exactly: an array's elements are
+						// computed, so a step reference inside one is a real dependency.
+						// Missing it here would let the step start before its input
+						// exists and silently resolve to null — worse than the failure
+						// this whole binding form exists to enable.
 						for (long i=1; i<v.count(); i++) {
 							scanDeps(accDeps, v.get(i));
 						}

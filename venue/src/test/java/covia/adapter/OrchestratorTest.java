@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -755,6 +756,108 @@ public class OrchestratorTest {
 		assertNotNull(result, "Non-strict should always pass");
 	}
 
+	// ========== Array literals (#281) ==========
+
+	@Test
+	public void testArrayLiteralComputesItsElements() {
+		// A vector is otherwise always an expression, so this is the only way to
+		// build an array whose contents reference prior steps — the shape ops
+		// like v/ops/json/cond require for `cases`. ["const", …] cannot do it:
+		// it freezes the subtree and leaves inner bindings as inert vectors.
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Array literal",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/test/ops/echo", "input": ["const", {"value": "from-step-0"}] },
+						{ "op": "v/test/ops/echo", "input": {
+							"cases": ["array",
+								{ "when": [0, "value"], "then": ["input", "v"] },
+								["const", "literal"]
+							] } }
+					],
+					"result": { "cases": [1, "cases"] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("v"), Strings.create("payload")),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		AVector<ACell> cases = RT.ensureVector(RT.getIn(result, Strings.create("cases")));
+		assertNotNull(cases, "array binding must produce a vector");
+		assertEquals(2L, cases.count());
+		// Element 0 is a map whose values were each computed...
+		assertEquals(Strings.create("from-step-0"),
+			RT.getIn(cases.get(0), Strings.create("when")));
+		assertEquals(Strings.create("payload"),
+			RT.getIn(cases.get(0), Strings.create("then")));
+		// ...and elements are computed independently, so a const sits alongside.
+		assertEquals(Strings.create("literal"), cases.get(1));
+	}
+
+	@Test
+	public void testStepReferenceInsideArrayCreatesDependency() {
+		// scanDeps must mirror computeInput. Step 0 is deliberately slow: were the
+		// reference buried in the array not scanned as a dependency, step 1 would
+		// start immediately and resolve [0,"value"] against a step that has
+		// produced nothing — silently yielding null rather than failing.
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Array dependency",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/test/ops/delay", "input": {
+							"operation": ["const", "v/test/ops/echo"],
+							"input":     ["const", {"value": "late"}],
+							"delay":     ["const", 300] } },
+						{ "op": "v/test/ops/echo", "input": {
+							"items": ["array", [0, "value"]] } }
+					],
+					"result": { "items": [1, "items"] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.empty(), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(10000);
+
+		AVector<ACell> items = RT.ensureVector(RT.getIn(result, Strings.create("items")));
+		assertNotNull(items);
+		assertEquals(1L, items.count());
+		assertEquals(Strings.create("late"), items.get(0),
+			"step 1 must wait for step 0; null here means the dependency inside the array was missed");
+	}
+
+	@Test
+	public void testEmptyArrayLiteral() {
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Empty array",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/test/ops/echo", "input": { "items": ["array"] } }
+					],
+					"result": { "items": [0, "items"] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.empty(), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		AVector<ACell> items = RT.ensureVector(RT.getIn(result, Strings.create("items")));
+		assertNotNull(items, "[\"array\"] must produce an empty vector, not an error");
+		assertEquals(0L, items.count());
+	}
+
 	// ========== Failure containment (#281) ==========
 
 	@Test
@@ -798,10 +901,19 @@ public class OrchestratorTest {
 	@Test
 	public void testFailureStopsLaterStepsFromStarting() {
 		// Containment is not only about direct dependents. Once the run has
-		// failed, no further step should start at all — otherwise a step whose
-		// own dependency succeeded still applies side effects on behalf of an
+		// failed, no further step should start — otherwise a step whose own
+		// dependency succeeded still applies side effects on behalf of an
 		// orchestration that can no longer succeed. Step 2 depends on step 1
 		// (which succeeds), not on the failing step 0.
+		//
+		// Step 1 is deliberately slow so the ordering is deterministic: step 0
+		// fails immediately, while step 1 is still in flight, so step 2 can only
+		// have become ready in a LATER iteration. Without the fail-fast return
+		// the loop would wait for step 1, release step 2, and write. (With a fast
+		// step 1 this is a genuine race — it may complete and release step 2
+		// before any failure is observed — and no scheduler change can prevent
+		// that, which is why steps already ready or in flight are documented as
+		// running to completion.)
 		String path = "w/orch281/independent";
 		String hash = storeJsonOrchestration("""
 			{
@@ -810,7 +922,10 @@ public class OrchestratorTest {
 					"adapter": "orchestrator",
 					"steps": [
 						{ "op": "v/test/ops/error", "input": { "message": ["const", "denied"] } },
-						{ "op": "v/test/ops/echo",  "input": ["const", {"value": "ok"}] },
+						{ "op": "v/test/ops/delay", "input": {
+							"operation": ["const", "v/test/ops/echo"],
+							"input":     ["const", {"value": "ok"}],
+							"delay":     ["const", 500] } },
 						{ "op": "v/ops/covia/write", "input": {
 							"path":  ["input", "p"],
 							"value": [1, "value"] } }
@@ -828,6 +943,16 @@ public class OrchestratorTest {
 			fail("Orchestration should fail when step 0 fails");
 		} catch (Exception expected) {
 			assertEquals(Status.FAILED, job.getStatus());
+		}
+
+		// Proving a negative needs a bounded wait. The job fails almost at once,
+		// but step 1 only finishes at ~500ms — and it is releasing step 2 that
+		// would cause the write. Check well past that point, or the assertion
+		// would pass even against the unfixed code.
+		try {
+			Thread.sleep(1500);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
 		}
 
 		assertFalse(readExists(path),
