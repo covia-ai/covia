@@ -9,40 +9,44 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ## [Unreleased]
 
 ### Added
-- HITL requests (COG-16) — `hitl:request`/`respond`/`list` over the per-user `h/` inbox, typed asks, choice-bound grants with echo-consent, restart-safe expiry; `hitl` skill
-- `Hitl` builders (covia-core) — fluent, transport-portable construction of HITL requests, asks and responses
-- Federated job observation carries caller proofs — `X-Covia-Ucans` header on body-less job reads; cross-venue HITL verified end-to-end
-- Authenticated callers get public-user access per the public scope (#254) — reads, public jobs, DLFS, and secret resolution fallback (use-only, never extraction)
-- `ucan:issue` is a granting surface — mints over another principal's resource under a presented `grant/<ability>` right, expiry-capped by the right's validity
-- Archive adapter (zip/jar) — `archive:list`/`extract`/`zip` over file roots, from/to a root file, CAS asset, or inline bytes; zip-slip + zip-bomb guarded. `file:read`/`list`/`stat`/`tree` see into archives via `x.zip!/entry` (jdk.zipfs, read-only, never fabricates an archive). `archive` skill
-- Orchestration `["array", <binding>...]` — builds an array computing each element, so a step input can reference prior steps inside an array (makes `v/ops/json/cond` usable in an orchestration); `["const", …]` freezes its subtree and cannot express this (#281)
-- Agents are sub-principals with their own DID, `<ownerDID>:g:<agentId>` — identity (`getCallerDID`) split from namespace (`getUserDID`), so an agent acts as itself inside its owner's namespace
-- Job records name the acting agent in `actor`; absent means the owner acted directly
-- `Principals` (covia-core) — agent DID minting/parsing and the `SELF`/`OWNER`/`SAME_USER`/`FOREIGN` relation
+- HITL requests (COG-16) — typed asks, echo-consent grants over the per-user `h/` inbox; `hitl` skill
+- `Hitl` builders (covia-core)
+- HITL `token` ask — transports a user-signed self-sovereign token for cross-venue access (COG-19, #292)
+- Agents are sub-principals with their own DID `<ownerDID>:g:<agentId>` — identity split from namespace (#280)
+- Job records name the acting agent in `actor` (#280)
+- `Principals` (covia-core) — agent DID minting/parsing and the SELF/OWNER/SAME_USER/FOREIGN relation
+- `ucan:issue` granting surface — mint under a presented `grant/<ability>` right (COG-17)
+- Federated job observation carries caller proofs (`X-Covia-Ucans` header)
+- Authenticated callers get public-user access (#254)
+- Archive adapter (zip/jar); `file` reads see into archives via `x.zip!/entry`
+- Orchestration `["array", …]` binding — an array whose elements reference prior steps (#281)
 
 ### Changed
-- Job lifecycle hardening — atomic updates, post-commit persistence, shutdown admission gate
-- Job polling improved — caller-side timeouts no longer fail jobs
-- Job pause/resume is adapter opt-in; resume never re-invokes from stored input
-- Agent LLM calls are time-bounded (`llmTimeoutMs`) and interrupt the provider on cancel
-- Default agent tool pack trimmed to read-only — skills add tools on demand (#60)
-- Bare UCAN grant resources mean the issuer's own namespace — canonicalised at issuance (custodial) and evaluation (self-sovereign)
-- Agent context assembly is prompt-cache-friendly — volatile values (date, budget map) moved to the tail; Anthropic system/tools caching enabled
-
-- `ucan:issue` and `hitl:respond` refuse agent contexts — agents hold no granting authority (COG-17); only the human owning an inbox may answer an ask
-- Scheduled events are owned by the user and fire as the agent that queued them
+- Dependency bumps — Convex 0.8.10, LangChain4j 1.18.0, Logback 1.6.0, A2A 1.1.0.Final
+- `ucan:issue` and `hitl:respond` refuse agent contexts — agents hold no granting authority (COG-17)
+- Private Network Access defaults on for loopback-bound venues (#286)
+- MCP tool schemas are type-less, not union arrays — strict client SDKs connect (#275)
+- Scheduled events are owned by the user, fire as the agent that queued them
+- Job lifecycle hardening — atomic updates, post-commit persistence, shutdown gate
+- Job polling — caller-side timeouts no longer fail jobs
+- Job pause/resume is adapter opt-in
+- Agent LLM calls are time-bounded (`llmTimeoutMs`)
+- Default agent tool pack trimmed to read-only (#60)
+- Bare UCAN grant resources mean the issuer's own namespace
+- Agent context assembly is prompt-cache-friendly
 
 ### Removed
-- Wire self-attenuation on `/invoke` (#131) — presented proofs are additive-only; reduce authority via a narrower `Authority`, not subtractive tokens
+- Wire self-attenuation on `/invoke` — presented proofs are additive-only (#131)
+- MCP `notifications/jobUpdate` broadcast — off-spec, flooded strict clients (#274)
 
 ### Fixed
-- REST `GET /assets/{id}/content` serves every content form, not just hashed blobs (#289) — inline (`content.inline`), record (`POS_CONTENT`) and dlfs content no longer 500. Content access is unified through one resolver (`resolveContent`), so the REST endpoint, the SDK `getContent()`, `v/ops/asset/content` and file/archive reads all serve content identically
-- An unanswered agent tool call is repaired on every conversation load (#271) — a turn aborted mid-tool-call no longer leaves a `tool_use` with no result, which providers reject outright and which permanently poisoned the session until a venue restart
-- Orchestration failure containment (#281) — a failed step no longer releases its dependents, and no further step starts once a run has failed, so a failed orchestration cannot apply downstream side effects
-- Orchestration specs are validated at construction (#281) — a malformed step or `result` spec fails before any step runs rather than mid-run with side effects already applied; note this rejects a bad spec even where execution would never have reached it
+- REST `GET /assets/{id}/content` serves inline/record/dlfs content, not just blobs (#289)
+- Unanswered agent tool call repaired on load — sessions no longer poisoned by a mid-call abort (#271)
+- Orchestration failure containment — a failed step no longer runs its dependents (#281)
+- Orchestration specs validated at construction, not mid-run (#281)
 - `a/<hash>` references resolve without a leading slash
 - Store unlocked when engine construction fails
-- `agent:completeTask`/`failTask` tolerate the documented cross-thread lattice read lag (#214) — the in-scope task is re-read before failing "Task not found", removing a rare race (delete→recreate) where a committed task was transiently invisible to the transition thread
+- `agent:completeTask`/`failTask` tolerate cross-thread lattice read lag (#214)
 
 ## [0.6.0] - 2026-07-17
 
