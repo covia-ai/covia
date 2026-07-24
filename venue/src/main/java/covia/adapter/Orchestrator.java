@@ -115,6 +115,12 @@ public class Orchestrator extends AAdapter {
 				SubTask task=new SubTask(i,step);
 				subTasks.add(task);
 			}
+			// The result spec is evaluated only after every step has completed, so a
+			// malformed one used to surface at the very end — the worst moment, with
+			// all side effects already applied and no step to blame. Validate it here
+			// instead. It may reference ANY step, hence the limit of n. Dependencies
+			// are irrelevant (nothing runs after it), so they are discarded.
+			scanSpec(new HashSet<Integer>(), resultSpec, n, Vectors.empty());
 		}
 
 		private static final boolean DEBUG_ORCH=false;
@@ -177,9 +183,21 @@ public class Orchestrator extends AAdapter {
 							String reason = (detail == null)
 								? "ended with status " + task.subJob.getStatus()
 								: conciseDetail(detail, 512);
-							job.fail("Orchestration step " + task.stepNum + " (" + op + ") failed: " + reason);
+							// Report the FIRST failure: it is the cause, and later ones are
+							// likely consequences. Terminal job states are sticky, so a
+							// second fail() would be ignored regardless.
+							if (!job.isFinished()) {
+								job.fail("Orchestration step " + task.stepNum + " (" + op + ") failed: " + reason);
+							}
+							// A failed step NEVER satisfies a dependency (#281). Leaving its
+							// index in its dependents' `deps` is precisely what stops them
+							// running: a step whose input never arrived must not execute with
+							// nulls and apply its side effects. Marking the orchestration
+							// failed does not stop the scheduler, so containment has to come
+							// from the dependency graph itself.
+							continue;
 						}
-						
+
 						// mark dependency as completed for any subsequent steps
 						Integer completedIndex=task.stepNum;
 						for (int i=task.stepNum+1; i<n; i++) {
@@ -201,8 +219,18 @@ public class Orchestrator extends AAdapter {
 						jd=jd.assoc(Fields.STEPS, srs);
 						return jd;
 					});
+
+					// Fail fast: once the orchestration has failed, start nothing further.
+					// Not just an optimisation — without this the loop keeps launching
+					// steps that are merely independent of the failure, doing more work
+					// and applying more side effects on behalf of a run that can no
+					// longer succeed. Steps ALREADY in flight are deliberately left to
+					// finish: their effects are in motion and cannot be unwound here,
+					// and cancelling a sibling unrelated to the failure would be its own
+					// surprise. Step statuses are recorded above before returning.
+					if (job.isFinished()) return;
 				}
-				
+
 				// job already finished (cancelled or otherwise failed...)
 				if (job.isFinished()) return;
 				
@@ -245,6 +273,18 @@ public class Orchestrator extends AAdapter {
 						if (part != null) sb.append(part.toString());
 					}
 					return Strings.create(sb.toString());
+				} else if (Fields.ARRAY.equals(code)) {
+					// An array literal whose ELEMENTS are each computed. Needed because
+					// a vector is otherwise always an expression here, so there was no
+					// way to build an array referencing prior steps — the exact shape
+					// ops like v/ops/json/cond require for `cases`. ["const", …] is no
+					// substitute: it freezes the whole subtree, leaving inner bindings
+					// as inert vectors. ["array"] with no elements is the empty array.
+					AVector<ACell> out = Vectors.empty();
+					for (long i = 1; i < n; i++) {
+						out = out.conj(computeInput(v.get(i), path));
+					}
+					return out;
 				} else {
 					throw new IllegalArgumentException("Unrecognised input source at " + path + ": "
 						+ conciseDetail(v, 256));
@@ -265,6 +305,78 @@ public class Orchestrator extends AAdapter {
 				throw new IllegalArgumentException("Unrecognised input spec at " + path + ": "
 					+ conciseDetail(inputSpec, 256));
 			}
+		}
+
+		/**
+		 * Walks a spec at CONSTRUCTION time, collecting the step indices it depends
+		 * on and validating its structure.
+		 *
+		 * <p>This is {@link #computeInput} with evaluation removed and dependency
+		 * collection added — the same grammar walked twice. The two <b>must agree
+		 * on what is acceptable</b>: previously this walk had no {@code else}, so an
+		 * unrecognised head or a bare scalar was silently ignored here and only
+		 * thrown by {@code computeInput} when the step ran. A malformed spec
+		 * therefore passed construction and failed mid-run, after earlier steps had
+		 * already applied their side effects (covia#281). Rejecting here fails the
+		 * whole orchestration before any step starts.</p>
+		 *
+		 * <p>Note the deliberate asymmetry: {@code ["const", v]} freezes its
+		 * subtree, so it is neither recursed into for dependencies nor validated —
+		 * a literal may contain anything, including something that merely looks
+		 * like a step reference.</p>
+		 *
+		 * <p>This only moves failures earlier; it does not change which specs are
+		 * valid. An <em>absent</em> ({@code null}) spec is left alone — absence is a
+		 * different question from malformedness, and is still handled downstream.</p>
+		 *
+		 * @param stepLimit exclusive upper bound on referencable step index: a
+		 *        step's own index (may reference only earlier steps), or the step
+		 *        count for the {@code result} spec (may reference any step)
+		 */
+		private HashSet<Integer> scanSpec(HashSet<Integer> accDeps, ACell spec, int stepLimit, AVector<ACell> path) {
+			if (spec == null) return accDeps;
+			if (spec instanceof AVector v) {
+				long vn=v.count();
+				if (vn==0) throw new IllegalArgumentException("Empty vector in input spec at " + path);
+				ACell code=v.get(0);
+				if (code instanceof CVMLong cvmix) {
+					int ix=Utils.checkedInt(cvmix.longValue());
+					if ((ix<0)||(ix>=stepLimit)) {
+						throw new IllegalArgumentException("Input spec at " + path + " references step " + ix
+							+ "; only steps 0.." + (stepLimit-1) + " are available here"
+							+ (stepLimit==0 ? " (the first step can reference no earlier step)" : ""));
+					}
+					accDeps.add(ix);
+				} else if (Fields.CONST.equals(code)) {
+					if (vn<2) throw new IllegalArgumentException(
+						"Constant input spec at " + path + " requires a value");
+					// Frozen subtree — intentionally not recursed into.
+				} else if (Fields.INPUT.equals(code)) {
+					// Orchestration input — no step dependency.
+				} else if (Fields.CONCAT.equals(code) || Fields.ARRAY.equals(code)) {
+					// Elements are computed, so references inside them are real
+					// dependencies. Any future head that computes its elements MUST
+					// be added here too, or its step would start before its input
+					// exists and silently resolve to null.
+					for (long i=1; i<vn; i++) {
+						scanSpec(accDeps, v.get(i), stepLimit, path);
+					}
+				} else {
+					throw new IllegalArgumentException("Unrecognised input source at " + path + ": "
+						+ conciseDetail(v, 256));
+				}
+			} else if (spec instanceof AMap m) {
+				int c=Utils.checkedInt(m.count());
+				for (int i=0; i<c; i++) {
+					@SuppressWarnings("unchecked")
+					MapEntry<AString,ACell> me=(MapEntry<AString,ACell>)m.entryAt(i);
+					scanSpec(accDeps, me.getValue(), stepLimit, path.append(me.getKey()));
+				}
+			} else {
+				throw new IllegalArgumentException("Unrecognised input spec at " + path + ": "
+					+ conciseDetail(spec, 256));
+			}
+			return accDeps;
 		}
 
 		/**
@@ -306,32 +418,8 @@ public class Orchestrator extends AAdapter {
 			public SubTask(int i, AMap<AString, ACell> step) {
 				this.step=step;
 				this.stepNum=i;
-				this.deps=scanDeps(new HashSet<Integer>(),step.get(Fields.INPUT));
-			}
-
-			private HashSet<Integer> scanDeps(HashSet<Integer> accDeps, ACell inputSpec) {
-				if (inputSpec instanceof AVector v) {
-					if (v.count()==0) throw new IllegalStateException("Empty vector in input value");
-					ACell code=v.get(0);
-					if (code instanceof CVMLong cvmix) {
-						int ix=Utils.checkedInt(cvmix.longValue());
-						if ((ix<0)||(ix>=stepNum)) {
-							throw new IllegalArgumentException("Step can only refer to previous step(s) but was "+ix+" in step "+stepNum+" for spec "+inputSpec);
-						}
-						accDeps.add(ix);
-					} else if (Fields.CONCAT.equals(code)) {
-						// Recurse into each concat element to find step references
-						for (long i=1; i<v.count(); i++) {
-							scanDeps(accDeps, v.get(i));
-						}
-					}
-				} else if (inputSpec instanceof AMap m) {
-					int c=Utils.checkedInt(m.count());
-					for (int i=0; i<c; i++) {
-						scanDeps(accDeps,m.entryAt(i).getValue());
-					}
-				}
-				return accDeps;
+				// A step may reference only EARLIER steps, so the limit is its own index.
+				this.deps=scanSpec(new HashSet<Integer>(),step.get(Fields.INPUT),i,Vectors.empty());
 			}
 
 			@Override

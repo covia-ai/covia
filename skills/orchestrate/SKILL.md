@@ -105,6 +105,34 @@ Essential for building dynamic workspace paths, e.g. writing per-record results:
 
 Step references inside concat create dependencies (the orchestrator scans recursively).
 
+#### 5. Array literals — `["array", spec, ...]`
+
+Builds an array, computing **each element**. A vector is otherwise always a binding expression, so this is the only way to produce an array whose contents reference prior steps:
+
+```json
+["array", ["const", "a"], [0, "name"], ["input", "x"]]
+// → ["a", "report", "PAYLOAD"]
+
+["array"]                        // → [] (empty array)
+```
+
+`["const", [...]]` is **not** a substitute — it freezes the whole subtree, so bindings nested inside stay as literal vectors instead of resolving.
+
+This is what makes `v/ops/json/cond` usable in an orchestration, since its `cases` input is an array of maps whose branches reference prior steps:
+
+```json
+{
+  "op": "v/ops/json/cond",
+  "input": {
+    "cases": ["array",
+      { "when": [0, "answers", "approve"], "then": ["input", "value"] }
+    ]
+  }
+}
+```
+
+Step references inside an array create dependencies, exactly as with `concat`.
+
 #### Composing inputs
 
 Input specs can be nested in maps to build structured inputs:

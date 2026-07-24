@@ -53,6 +53,11 @@ public class Fields {
 	public static final StringShort STEPS = Strings.intern("steps");
 	public static final StringShort CONST = Strings.intern("const");
 	public static final StringShort CONCAT = Strings.intern("concat");
+	/** Orchestration binding head building an array whose ELEMENTS are computed.
+	 *  A vector is otherwise always an expression, so this is the only way to
+	 *  produce an array that references prior steps ({@code ["const", …]} freezes
+	 *  its whole subtree and leaves inner bindings inert). */
+	public static final StringShort ARRAY = Strings.intern("array");
 	
 	// HTTP related
 	public static final StringShort HEADERS = Strings.intern("headers");

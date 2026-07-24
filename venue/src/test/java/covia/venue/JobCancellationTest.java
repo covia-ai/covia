@@ -290,8 +290,12 @@ public class JobCancellationTest {
 						Strings.create("input"), Maps.empty()),
 					(ACell) Maps.of(
 						Strings.create("op"), Strings.create("v/test/ops/echo"),
+						// Every leaf of a step input is a binding, so a literal needs
+						// ["const", …]. A bare scalar is rejected — previously only when
+						// the step ran, which for this fixture was never (step 0 blocks
+						// and the test cancels), so the malformed spec went unnoticed.
 						Strings.create("input"), Maps.of(
-							Strings.create("value"), Strings.create("step2")),
+							Strings.create("value"), Vectors.of(Fields.CONST, Strings.create("step2"))),
 						Strings.create("deps"), Vectors.of((ACell) CVMLong.create(0))))));
 
 		String metaJson = convex.core.util.JSON.toString(pipeline);

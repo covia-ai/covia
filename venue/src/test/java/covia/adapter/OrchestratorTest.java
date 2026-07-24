@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
+import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -755,7 +756,350 @@ public class OrchestratorTest {
 		assertNotNull(result, "Non-strict should always pass");
 	}
 
+	// ========== Array literals (#281) ==========
+
+	@Test
+	public void testArrayLiteralComputesItsElements() {
+		// A vector is otherwise always an expression, so this is the only way to
+		// build an array whose contents reference prior steps — the shape ops
+		// like v/ops/json/cond require for `cases`. ["const", …] cannot do it:
+		// it freezes the subtree and leaves inner bindings as inert vectors.
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Array literal",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/test/ops/echo", "input": ["const", {"value": "from-step-0"}] },
+						{ "op": "v/test/ops/echo", "input": {
+							"cases": ["array",
+								{ "when": [0, "value"], "then": ["input", "v"] },
+								["const", "literal"]
+							] } }
+					],
+					"result": { "cases": [1, "cases"] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("v"), Strings.create("payload")),
+			RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		AVector<ACell> cases = RT.ensureVector(RT.getIn(result, Strings.create("cases")));
+		assertNotNull(cases, "array binding must produce a vector");
+		assertEquals(2L, cases.count());
+		// Element 0 is a map whose values were each computed...
+		assertEquals(Strings.create("from-step-0"),
+			RT.getIn(cases.get(0), Strings.create("when")));
+		assertEquals(Strings.create("payload"),
+			RT.getIn(cases.get(0), Strings.create("then")));
+		// ...and elements are computed independently, so a const sits alongside.
+		assertEquals(Strings.create("literal"), cases.get(1));
+	}
+
+	@Test
+	public void testStepReferenceInsideArrayCreatesDependency() {
+		// scanDeps must mirror computeInput. Step 0 is deliberately slow: were the
+		// reference buried in the array not scanned as a dependency, step 1 would
+		// start immediately and resolve [0,"value"] against a step that has
+		// produced nothing — silently yielding null rather than failing.
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Array dependency",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/test/ops/delay", "input": {
+							"operation": ["const", "v/test/ops/echo"],
+							"input":     ["const", {"value": "late"}],
+							"delay":     ["const", 300] } },
+						{ "op": "v/test/ops/echo", "input": {
+							"items": ["array", [0, "value"]] } }
+					],
+					"result": { "items": [1, "items"] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.empty(), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(10000);
+
+		AVector<ACell> items = RT.ensureVector(RT.getIn(result, Strings.create("items")));
+		assertNotNull(items);
+		assertEquals(1L, items.count());
+		assertEquals(Strings.create("late"), items.get(0),
+			"step 1 must wait for step 0; null here means the dependency inside the array was missed");
+	}
+
+	@Test
+	public void testEmptyArrayLiteral() {
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Empty array",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/test/ops/echo", "input": { "items": ["array"] } }
+					],
+					"result": { "items": [0, "items"] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.empty(), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		AVector<ACell> items = RT.ensureVector(RT.getIn(result, Strings.create("items")));
+		assertNotNull(items, "[\"array\"] must produce an empty vector, not an error");
+		assertEquals(0L, items.count());
+	}
+
+	// ========== Spec validation at construction (#281) ==========
+
+	@Test
+	public void testMalformedStepSpecFailsBeforeAnyStepRuns() {
+		// The reason validation belongs at construction: a typo in step 1 must not
+		// let step 0 run and apply its side effect first. The dependency walk used
+		// to silently ignore what computeInput rejects, so the orchestration
+		// started, wrote, and only then failed on the bad spec.
+		String path = "w/orch281/validate-step";
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Bad spec downstream",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/ops/covia/write", "input": {
+							"path":  ["input", "p"],
+							"value": ["const", "SHOULD-NOT-EXIST"] } },
+						{ "op": "v/test/ops/echo", "input": { "bad": ["nonsense", 1] } }
+					],
+					"result": { "ok": ["const", true] }
+				}
+			}
+		""");
+
+		// Rejection is synchronous: the adapter throws during construction, so
+		// JobManager records the terminal failure and rethrows (JobManager:283).
+		assertThrows(RuntimeException.class, () ->
+			engine.jobs().invokeOperation(hash,
+				Maps.of(Strings.create("p"), Strings.create(path)),
+				RequestContext.of(ALICE_DID)),
+			"orchestration should be rejected for the malformed step 1 spec");
+
+		assertFalse(readExists(path),
+			"validation must precede execution; step 0 wrote " + path + " before the bad spec was caught");
+	}
+
+	@Test
+	public void testMalformedResultSpecFailsBeforeAnyStepRuns() {
+		// The result spec is evaluated only after every step completes, so a typo
+		// there used to surface at the very end — with all side effects applied
+		// and no step to blame.
+		String path = "w/orch281/validate-result";
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Bad result spec",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/ops/covia/write", "input": {
+							"path":  ["input", "p"],
+							"value": ["const", "SHOULD-NOT-EXIST"] } }
+					],
+					"result": { "oops": ["nonsense"] }
+				}
+			}
+		""");
+
+		assertThrows(RuntimeException.class, () ->
+			engine.jobs().invokeOperation(hash,
+				Maps.of(Strings.create("p"), Strings.create(path)),
+				RequestContext.of(ALICE_DID)),
+			"orchestration should be rejected for the malformed result spec");
+
+		assertFalse(readExists(path),
+			"a malformed result must be caught before any step runs; " + path + " was written");
+	}
+
+	@Test
+	public void testInvalidSpecFormsAreRejected() {
+		// Every form computeInput rejects must also be rejected by the dependency
+		// walk, or it fails mid-run instead of at construction.
+		assertSpecRejected("{ \"k\": [\"nonsense\", 1] }", "Unrecognised input source");
+		assertSpecRejected("{ \"k\": \"a bare string\" }", "Unrecognised input spec");
+		assertSpecRejected("{ \"k\": 42 }",                "Unrecognised input spec");
+		assertSpecRejected("{ \"k\": [\"const\"] }",       "requires a value");
+		assertSpecRejected("{ \"k\": [] }",                "Empty vector");
+		// Step 0 can reference no earlier step, so any index is out of range.
+		assertSpecRejected("{ \"k\": [0, \"x\"] }",        "references step 0");
+		// Nested inside the forms that DO recurse.
+		assertSpecRejected("{ \"k\": [\"array\", [\"nonsense\"]] }",  "Unrecognised input source");
+		assertSpecRejected("{ \"k\": [\"concat\", [\"nonsense\"]] }", "Unrecognised input source");
+	}
+
+	@Test
+	public void testConstSubtreeIsNeitherScannedNorValidated() {
+		// ["const", …] freezes its subtree, so neither walk descends into it. A
+		// literal may therefore contain anything — including something that merely
+		// LOOKS like a step reference. Were const scanned, [99, …] would be
+		// rejected as an out-of-range step.
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Frozen const",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/test/ops/echo", "input": {
+							"literal": ["const", [99, "not-a-step-ref"]] } }
+					],
+					"result": { "literal": [0, "literal"] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.empty(), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		AVector<ACell> literal = RT.ensureVector(RT.getIn(result, Strings.create("literal")));
+		assertNotNull(literal, "const subtree must survive verbatim");
+		assertEquals(2L, literal.count());
+		assertEquals(CVMLong.create(99), literal.get(0));
+	}
+
+	/**
+	 * Asserts an orchestration whose single step carries {@code inputSpecJson} is
+	 * rejected, and that the reported error names the problem.
+	 */
+	private void assertSpecRejected(String inputSpecJson, String expectedFragment) {
+		String hash = storeJsonOrchestration(
+			"{ \"name\": \"Spec check\", \"operation\": { \"adapter\": \"orchestrator\","
+			+ " \"steps\": [ { \"op\": \"v/test/ops/echo\", \"input\": " + inputSpecJson + " } ],"
+			+ " \"result\": { \"r\": [0] } } }");
+
+		RuntimeException e = assertThrows(RuntimeException.class, () ->
+			engine.jobs().invokeOperation(hash, Maps.empty(), RequestContext.of(ALICE_DID)),
+			"spec should have been rejected: " + inputSpecJson);
+		assertTrue(e.getMessage() != null && e.getMessage().contains(expectedFragment),
+			"for spec " + inputSpecJson + " expected error containing '"
+				+ expectedFragment + "' but got: " + e.getMessage());
+	}
+
+	// ========== Failure containment (#281) ==========
+
+	@Test
+	public void testFailedStepDoesNotRunItsDependents() {
+		// The reported case: a write gated behind a step that failed. Before the
+		// fix the completion loop released a failed step's dependencies
+		// unconditionally, so the dependent became ready, ran with null inputs and
+		// applied its side effect — turning a failed orchestration into a
+		// partially applied one.
+		String path = "w/orch281/gated";
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Gated write",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/test/ops/error", "input": { "message": ["const", "denied"] } },
+						{ "op": "v/ops/covia/write", "input": {
+							"path":  ["input", "p"],
+							"value": [0, "result"] } }
+					],
+					"result": { "written": [1] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("p"), Strings.create(path)),
+			RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("Orchestration should fail when step 0 fails");
+		} catch (Exception expected) {
+			assertEquals(Status.FAILED, job.getStatus());
+		}
+
+		assertFalse(readExists(path),
+			"step 1 depends on failed step 0, so it must not have written " + path);
+	}
+
+	@Test
+	public void testFailureStopsLaterStepsFromStarting() {
+		// Containment is not only about direct dependents. Once the run has
+		// failed, no further step should start — otherwise a step whose own
+		// dependency succeeded still applies side effects on behalf of an
+		// orchestration that can no longer succeed. Step 2 depends on step 1
+		// (which succeeds), not on the failing step 0.
+		//
+		// Step 1 is deliberately slow so the ordering is deterministic: step 0
+		// fails immediately, while step 1 is still in flight, so step 2 can only
+		// have become ready in a LATER iteration. Without the fail-fast return
+		// the loop would wait for step 1, release step 2, and write. (With a fast
+		// step 1 this is a genuine race — it may complete and release step 2
+		// before any failure is observed — and no scheduler change can prevent
+		// that, which is why steps already ready or in flight are documented as
+		// running to completion.)
+		String path = "w/orch281/independent";
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Fail fast",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/test/ops/error", "input": { "message": ["const", "denied"] } },
+						{ "op": "v/test/ops/delay", "input": {
+							"operation": ["const", "v/test/ops/echo"],
+							"input":     ["const", {"value": "ok"}],
+							"delay":     ["const", 500] } },
+						{ "op": "v/ops/covia/write", "input": {
+							"path":  ["input", "p"],
+							"value": [1, "value"] } }
+					],
+					"result": { "written": [2] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("p"), Strings.create(path)),
+			RequestContext.of(ALICE_DID));
+		try {
+			job.awaitResult(5000);
+			fail("Orchestration should fail when step 0 fails");
+		} catch (Exception expected) {
+			assertEquals(Status.FAILED, job.getStatus());
+		}
+
+		// Proving a negative needs a bounded wait. The job fails almost at once,
+		// but step 1 only finishes at ~500ms — and it is releasing step 2 that
+		// would cause the write. Check well past that point, or the assertion
+		// would pass even against the unfixed code.
+		try {
+			Thread.sleep(1500);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
+
+		assertFalse(readExists(path),
+			"no step may start once the orchestration has failed; " + path + " was written");
+	}
+
 	// ========== Helper ==========
+
+	/** True if {@code path} holds data in ALICE's namespace. */
+	private boolean readExists(String path) {
+		ACell read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Strings.create("path"), Strings.create(path)),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		return CVMBool.TRUE.equals(RT.getIn(read, Strings.create("exists")));
+	}
 
 	/**
 	 * Stores a JSON orchestration string as an asset and returns the hex hash for invocation.
