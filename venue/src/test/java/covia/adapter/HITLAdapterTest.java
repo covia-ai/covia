@@ -22,6 +22,7 @@ import covia.api.Fields;
 import covia.exception.JobFailedException;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.grid.auth.UcanTokens;
 import covia.grid.hitl.Hitl;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -127,6 +128,91 @@ public class HITLAdapterTest {
 		assertEquals(CVMBool.TRUE, RT.getIn(output, "answers", "pay"));
 		assertEquals(Strings.create(id), RT.getIn(output, "id"));
 		assertEquals(Hitl.ANSWERED, readRecord(ALICE, id).get(Hitl.STATUS));
+	}
+
+	// ========== Token transport (COG-19): self-sovereign cross-venue tokens ==========
+
+	/** Builds a self-ask request carrying one token ask audienced to {@code aud}. */
+	private AMap<AString, ACell> tokenRequest(AString aud) {
+		return Maps.of(
+			Hitl.TITLE, Strings.create("Cross-venue access"),
+			Hitl.ASKS, Vectors.of(Maps.of(
+				Hitl.ID,       Strings.create("b-access"),
+				Hitl.TYPE,     Hitl.TOKEN_ASK,
+				Hitl.PROMPT,   Strings.create("Grant the agent read on your invoices at venue B?"),
+				Hitl.REQUIRED, CVMBool.TRUE,
+				Hitl.TOKEN,    Maps.of(
+					Hitl.CAPS,     Vectors.of(Maps.of(
+						Hitl.WITH, Strings.create("did:web:b.example/w/invoices/"),
+						Hitl.CAN,  Strings.create("crud/read"))),
+					Hitl.AUDIENCE, aud,
+					Hitl.VENUE,    Strings.create("did:web:b.example")))));
+	}
+
+	private AMap<AString, ACell> tokenAnswer(String id, String jwt) {
+		return Maps.of(
+			Hitl.ID, Strings.create(id),
+			Hitl.OUTCOME, Hitl.ANSWER,
+			Hitl.ANSWERS, Maps.of(Strings.create("b-access"), Strings.create(jwt)));
+	}
+
+	@Test
+	public void testTokenAskTransportsSignedToken() {
+		engine.getVenueState().users().ensure(BOB_DID);   // BOB is the self-sovereign responder
+		AString agentDID = UCAN.toDIDKey(AKeyPair.generate().getAccountKey()); // requester/session audience
+
+		Job job = request(BOB, tokenRequest(agentDID));
+		assertEquals(Status.INPUT_REQUIRED, job.getStatus());
+		String id = job.getID().toHexString();
+
+		// BOB signs a self-sovereign UCAN with their OWN key (what the frontend does).
+		String jwt = UcanTokens.grant(BOB_KP, agentDID.toString(),
+			BOB_DID + "/w/invoices/", "crud/read", HOUR);
+
+		respond(BOB, tokenAnswer(id, jwt));
+
+		assertEquals(Status.COMPLETE, job.getStatus());
+		ACell output = job.getOutput();
+		// The signed token is delivered on the requester's job output, keyed by ask id.
+		assertEquals(Strings.create(jwt), RT.getIn(output, Hitl.TOKENS, Strings.create("b-access")),
+			"the transported token must reach the requester");
+		// It is a secret: redacted from the job-output answers AND the durable record.
+		assertNotEquals(Strings.create(jwt), RT.getIn(output, Hitl.ANSWERS, Strings.create("b-access")),
+			"the raw token must not sit in the answers map");
+		AMap<AString, ACell> rec = readRecord(BOB, id);
+		assertNotEquals(Strings.create(jwt),
+			RT.getIn(rec, Hitl.RESPONSE, Hitl.ANSWERS, Strings.create("b-access")),
+			"the raw token must not be persisted in the durable inbox record");
+	}
+
+	@Test
+	public void testTokenAskRejectsWrongSigner() {
+		engine.getVenueState().users().ensure(BOB_DID);
+		AString agentDID = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		Job job = request(BOB, tokenRequest(agentDID));
+		String id = job.getID().toHexString();
+
+		// Signed by someone else's key — iss != the responder.
+		String forged = UcanTokens.grant(AKeyPair.generate(), agentDID.toString(),
+			BOB_DID + "/w/invoices/", "crud/read", HOUR);
+		assertThrows(RuntimeException.class, () -> respond(BOB, tokenAnswer(id, forged)),
+			"a token not signed by the responder must be refused");
+		assertEquals(Status.INPUT_REQUIRED, job.getStatus(), "the request stays open");
+	}
+
+	@Test
+	public void testTokenAskRejectsWrongAudience() {
+		engine.getVenueState().users().ensure(BOB_DID);
+		AString agentDID = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		AString otherDID = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		Job job = request(BOB, tokenRequest(agentDID));
+		String id = job.getID().toHexString();
+
+		// Correctly signed by BOB, but audienced to the wrong principal.
+		String misAud = UcanTokens.grant(BOB_KP, otherDID.toString(),
+			BOB_DID + "/w/invoices/", "crud/read", HOUR);
+		assertThrows(RuntimeException.class, () -> respond(BOB, tokenAnswer(id, misAud)),
+			"a token audienced to someone other than the requester must be refused");
 	}
 
 	@Test

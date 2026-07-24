@@ -24,7 +24,7 @@ import covia.grid.hitl.Hitl;
  */
 public class HitlValidation {
 
-	private static final Set<String> ASK_TYPES = Set.of("text", "approval", "choice", "checkboxes");
+	private static final Set<String> ASK_TYPES = Set.of("text", "approval", "choice", "checkboxes", "token");
 
 	private HitlValidation() {}
 
@@ -85,8 +85,43 @@ public class HitlValidation {
 					+ "asks and options — a grant must be the consequence of an explicit choice");
 			}
 			validateGrantList(grants, "asks[" + i + "]");
+
+			// A token ask (COG-19) carries a request spec for a self-sovereign
+			// token the human signs client-side — not a grant the venue mints.
+			if (Hitl.TOKEN_ASK.equals(type)) {
+				validateTokenSpec(ask.get(Hitl.TOKEN), "asks[" + i + "]");
+			}
 		}
 		return asks;
+	}
+
+	/**
+	 * Validates a {@code token}-ask request spec (COG-19):
+	 * {@code {caps:[{with,can}], exp?, audience?, venue?}}. The spec describes the
+	 * token the requester wants; the human decides what to actually sign. Only
+	 * {@code caps} is required — a non-empty list of {@code {with, can}} pairs.
+	 * {@code exp}/{@code audience}/{@code venue} are optional hints; no policy is
+	 * enforced here (the responder is authoritative over their own key).
+	 */
+	@SuppressWarnings("unchecked")
+	private static void validateTokenSpec(ACell specCell, String where) {
+		AMap<AString, ACell> spec = RT.castMap(specCell);
+		if (spec == null) {
+			throw new IllegalArgumentException(where + ".token spec is required for a token ask: "
+				+ "{caps:[{with,can}], exp?, audience?, venue?}");
+		}
+		ACell capsCell = spec.get(Hitl.CAPS);
+		if (!(capsCell instanceof AVector) || ((AVector<ACell>) capsCell).count() == 0) {
+			throw new IllegalArgumentException(where + ".token.caps must be a non-empty array of {with, can}");
+		}
+		AVector<ACell> caps = (AVector<ACell>) capsCell;
+		for (long i = 0; i < caps.count(); i++) {
+			AMap<AString, ACell> c = RT.castMap(caps.get(i));
+			if (c == null || RT.ensureString(c.get(Hitl.WITH)) == null
+					|| RT.ensureString(c.get(Hitl.CAN)) == null) {
+				throw new IllegalArgumentException(where + ".token.caps[" + i + "] must be {with, can}");
+			}
+		}
 	}
 
 	private static void validateGrantList(ACell grantsCell, String where) {
@@ -134,6 +169,16 @@ public class HitlValidation {
 			if (Hitl.TEXT.equals(type)) {
 				if (RT.ensureString(answer) == null) {
 					throw new IllegalArgumentException("answer for '" + askId + "' must be a string");
+				}
+			} else if (Hitl.TOKEN_ASK.equals(type)) {
+				// The answer is a client-signed UCAN JWT. Its structure/signature/
+				// audience are verified in HITLAdapter (crypto lives with the
+				// engine, not in these pure rules); here we only require a string.
+				// Token asks trigger NO grants — the signed token is transported,
+				// not minted.
+				if (RT.ensureString(answer) == null) {
+					throw new IllegalArgumentException("answer for '" + askId
+						+ "' must be a signed token (a UCAN JWT string)");
 				}
 			} else if (Hitl.APPROVAL.equals(type)) {
 				if (!(answer instanceof CVMBool)) {

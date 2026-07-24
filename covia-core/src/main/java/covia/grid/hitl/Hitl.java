@@ -79,6 +79,18 @@ public class Hitl {
 	public static final AString CAN  = Strings.intern("can");
 	public static final AString EXP  = Strings.intern("exp");
 
+	// ===== Token-ask (COG-18) — self-sovereign cross-venue token transport =====
+	/** Token-ask request spec: requested capabilities, {@code [{with, can}]}. */
+	public static final AString CAPS     = Strings.intern("caps");
+	/** Token-ask request spec: intended audience DID of the signed token
+	 *  (default = the request's {@code from}, the requesting agent). */
+	public static final AString AUDIENCE = Strings.intern("audience");
+	/** Token-ask request spec: the target venue (informational, for the UI). */
+	public static final AString VENUE    = Strings.intern("venue");
+	/** Job-output field: transported self-sovereign tokens, ask id → signed JWT.
+	 *  Distinct from {@link #TOKEN} (a venue-MINTED grant token). */
+	public static final AString TOKENS   = Strings.intern("tokens");
+
 	// ========== Record statuses ==========
 
 	public static final AString OPEN      = Strings.intern("open");
@@ -93,6 +105,11 @@ public class Hitl {
 	public static final AString APPROVAL   = Strings.intern("approval");
 	public static final AString CHOICE     = Strings.intern("choice");
 	public static final AString CHECKBOXES = Strings.intern("checkboxes");
+	/** COG-18: a request for a self-sovereign access token. The human signs a
+	 *  UCAN with their own key client-side; the answer is that signed JWT, which
+	 *  the venue verifies and TRANSPORTS (never mints). Its request spec lives
+	 *  under the ask's {@code token} field ({@link #TOKEN}). */
+	public static final AString TOKEN_ASK  = Strings.intern("token");
 
 	// ========== Outcomes ==========
 

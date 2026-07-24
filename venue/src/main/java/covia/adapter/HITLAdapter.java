@@ -18,6 +18,10 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
+import convex.core.data.AccountKey;
+import convex.auth.jwt.JWT;
+import convex.auth.ucan.UCAN;
+import convex.auth.ucan.UCANValidator;
 import covia.adapter.hitl.HitlValidation;
 import covia.api.Abilities;
 import covia.exception.AuthException;
@@ -299,7 +303,31 @@ public class HITLAdapter extends AAdapter {
 			? issueGrants(user.getDID(), RT.ensureString(record.get(Hitl.FROM)), approved)
 			: null;
 
-		AMap<AString, ACell> response = Maps.of(Hitl.OUTCOME, Hitl.ANSWER, Hitl.ANSWERS, answers);
+		// Transported self-sovereign tokens (COG-19): a token ask's answer is a
+		// UCAN the responder signed with their OWN key. Verify provenance (their
+		// signature, the requested audience, a live expiry) and carry it to the
+		// requester — never mint, never re-sign. The signed token is a secret, so
+		// it is REDACTED from the durable inbox record and delivered only on the
+		// requester's job output.
+		AString requester = RT.ensureString(record.get(Hitl.FROM));
+		AMap<AString, ACell> transported = Maps.empty();
+		AMap<AString, ACell> recordedAnswers = answers;
+		long tnow = System.currentTimeMillis() / 1000;
+		for (long i = 0; i < asks.count(); i++) {
+			AMap<AString, ACell> ask = (AMap<AString, ACell>) asks.get(i);
+			if (!Hitl.TOKEN_ASK.equals(RT.ensureString(ask.get(Hitl.TYPE)))) continue;
+			AString askId = RT.ensureString(ask.get(Hitl.ID));
+			AString jwt = RT.ensureString(answers.get(askId));
+			if (jwt == null) continue; // unanswered optional token ask
+			AString pinnedAud = RT.ensureString(RT.getIn(ask.get(Hitl.TOKEN), Hitl.AUDIENCE));
+			AString expectedAud = (pinnedAud != null) ? pinnedAud : requester;
+			verifyTransportedToken(jwt, user.getDID(), expectedAud, tnow);
+			transported = transported.assoc(askId, jwt);
+			recordedAnswers = recordedAnswers.assoc(askId,
+				Strings.create("<signed token delivered to requester>"));
+		}
+
+		AMap<AString, ACell> response = Maps.of(Hitl.OUTCOME, Hitl.ANSWER, Hitl.ANSWERS, recordedAnswers);
 		ACell comments = RT.getIn(input, Hitl.COMMENTS);
 		if (comments instanceof AMap) response = response.assoc(Hitl.COMMENTS, comments);
 		if (comment != null) response = response.assoc(Hitl.COMMENT, comment);
@@ -309,9 +337,63 @@ public class HITLAdapter extends AAdapter {
 		if (job != null && !job.isFinished()) {
 			AMap<AString, ACell> output = response.assoc(Hitl.ID, id);
 			if (token != null) output = output.assoc(Hitl.TOKEN, token);
+			// The full signed tokens ride the requester's job output (never the
+			// durable inbox record); the requester reads them by ask id.
+			if (transported.count() > 0) output = output.assoc(Hitl.TOKENS, transported);
 			job.completeWith(output);
 		}
 		return Maps.of(Hitl.ID, id, Hitl.STATUS, Hitl.ANSWERED);
+	}
+
+	/**
+	 * Verifies a self-sovereign token the responder signed client-side (COG-19),
+	 * before transporting it to the requester. This is provenance validation, not
+	 * policy: the venue confirms the human actually signed this token for the
+	 * requested audience with a live expiry — it never mints, re-signs, or judges
+	 * the capabilities (the responder is authoritative over their own key).
+	 *
+	 * @param jwt         the signed UCAN JWT (the answer)
+	 * @param responder   the answering user's DID — must be the token's {@code iss}
+	 * @param expectedAud the audience the request asked for (pinned, or the
+	 *                    requester by default) — must be the token's {@code aud}
+	 * @param now         current time, unix seconds
+	 * @throws AuthException / IllegalArgumentException on any failure
+	 */
+	private void verifyTransportedToken(AString jwt, AString responder, AString expectedAud, long now) {
+		UCAN token = UCAN.fromJWT(jwt);
+		if (token == null) {
+			throw new IllegalArgumentException("token answer is not a valid UCAN JWT");
+		}
+		// iss must be the answering human — not something an agent slipped in.
+		AString issuer = token.getIssuer();
+		if (issuer == null || !issuer.equals(responder)) {
+			throw new AuthException("token must be signed by you (iss=" + responder
+				+ "); got iss=" + issuer);
+		}
+		// Signature must verify against the issuer's OWN did:key (self-sovereign).
+		AccountKey issuerKey = UCAN.fromDIDKey(issuer);
+		if (issuerKey == null) {
+			throw new AuthException("token issuer must be a did:key (self-sovereign signer): " + issuer);
+		}
+		if (JWT.verifyPublic(jwt, issuerKey) == null) {
+			throw new AuthException("token signature does not verify against your key");
+		}
+		// A bounded lifetime is required, and must be live now.
+		JWT parsed = JWT.parse(jwt);
+		AMap<AString, ACell> claims = (parsed != null) ? parsed.getClaims() : null;
+		if (claims == null || claims.get(UCAN.EXP) == null) {
+			throw new IllegalArgumentException("token must carry an exp (bounded lifetime)");
+		}
+		if (!UCANValidator.checkTemporalBounds(token, now)) {
+			throw new IllegalArgumentException("token is expired or not yet valid");
+		}
+		// Audience binding: the token is usable only by the principal it was
+		// requested for, so leakage from a persisted job record cannot be replayed.
+		AString aud = token.getAudience();
+		if (aud == null || !aud.equals(expectedAud)) {
+			throw new AuthException("token aud must be " + expectedAud
+				+ " (the requester); got aud=" + aud);
+		}
 	}
 
 	/** Issues the approved grants as a single token via the granting surface

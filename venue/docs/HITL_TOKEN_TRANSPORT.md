@@ -107,9 +107,17 @@ transports.
    security-critical (below).
 4. `exp` is present and not already past.
 
-On success the token flows to the requester's job output under `token`, the same
-delivery path the venue-signed grant token uses today — same channel, different
-provenance.
+On success the token flows to the requester's job output under **`tokens`** (ask
+id → signed JWT), kept distinct from the venue-**minted** `token` a grant ask
+produces. It is **redacted from the durable inbox record and the job-output
+`answers`** — delivered only via `tokens` — because a signed token is a secret
+(see below).
+
+> **Implemented** as of this design landing: the `token` ask type, its spec
+> validation, and the verify-and-transport response path (`HitlValidation`,
+> `HITLAdapter.verifyTransportedToken` / `resolveAnswer`). What remains is the
+> presentation half at the far venue (see the crux) and any SDK builder /
+> frontend UI.
 
 **This is inherently a self-sovereign-user feature.** `iss` must be a `did:key`
 the human can sign with. A venue-managed `did:web` custodial user has no client
