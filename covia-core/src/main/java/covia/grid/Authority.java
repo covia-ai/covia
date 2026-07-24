@@ -15,8 +15,8 @@ import convex.core.data.Vectors;
  * state (execution scopes, job id).
  *
  * <p><b>Two grant sources, one rule.</b> An action is authorised iff a grant
- * covers it — <em>either you have the right or you don't</em>. There is no
- * ceiling: nothing here subtracts. Grants arrive two ways, both additive:</p>
+ * covers it — <em>either you have the right or you don't</em>. Nothing
+ * subtracts. Grants arrive two ways, both additive:</p>
  * <ul>
  *   <li><b>{@code grants}</b> — the caller's own held capability scope (an
  *       agent's {@code config.caps}). {@code null} means an <em>unrestricted</em>

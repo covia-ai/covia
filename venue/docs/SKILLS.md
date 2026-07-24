@@ -289,7 +289,7 @@ One command-dispatched op at `v/ops/skills` (tool name `skills`), following the 
 | `list` | `sources?` (defaults to `["w/skills", "v/skills"]`) | The rendered index text — a string, or null when no skills exist (the assemble-op contract: null → entry skipped) |
 | `read` | exactly one of `name` (looked up across `sources?`) / `ref` | `{name, description, body?, tools, context?, path}` — `body` present when the skill has content |
 
-Capability pins, per source actually read: workspace/venue/DID paths → `crud/read`; content-addressed refs → `asset/read`. Both sit inside the anonymous read-only ceiling, so venue skills are publicly discoverable. There is **no write surface** — skills are authored with `covia:write` and `asset:store`.
+Capability pins, per source actually read: workspace/venue/DID paths → `crud/read`; content-addressed refs → `asset/read`. Both sit inside the anonymous read-only scope, so venue skills are publicly discoverable. There is **no write surface** — skills are authored with `covia:write` and `asset:store`.
 
 Because `list` honours the assemble-op contract, an operator can pin the index into any agent the data-driven way instead of using `config.skills`:
 

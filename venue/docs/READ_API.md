@@ -95,7 +95,7 @@ CoviaAdapter
   ```
 
   — calls the accessor, and serialises via `buildResult(ctx, 200, value)`. No job,
-  no future, no adapter dispatch. The caller's ceiling and UCAN proofs ride along
+  no future, no adapter dispatch. The caller's scope and UCAN proofs ride along
   inside the accessor's `requireCapability`.
 
 `aggregate` is one new pure function that walks the value the read already
@@ -308,9 +308,9 @@ those routes are simply not ETagged (honest, rather than a subtly-broken validat
 Unchanged from the invoke path; only the job is dropped.
 
 - `AuthMiddleware` already runs `before("/api/*")`, so caller identity, the
-  public-read ceiling, and any presented UCAN are attached before the handler.
+  public-read scope, and any presented UCAN are attached before the handler.
 - The accessor calls `ctx.requireCapability(path, "crud/read")`. Unauthenticated
-  callers carry the read-only public ceiling (`crud/read` + `asset/read`), so they
+  callers carry the read-only public scope (`crud/read` + `asset/read`), so they
   can read public / their-own data and are denied cross-user paths unless a UCAN
   proof covers them — **exactly** as `covia:read` via invoke behaves today.
 - Cap denied → **403**. Auth required (no token, public access disabled) → **401**.
@@ -338,7 +338,7 @@ a fully-qualified path works anywhere a relative one does.
 **Capability enforcement is what differs, not the plumbing.** The accessor calls
 `requireCapability` with the full DID-URL resource, so:
 
-- own DID (relative or qualified) → allowed under the normal ceiling;
+- own DID (relative or qualified) → allowed under the normal scope;
 - another user's DID → **denied (403)** unless the caller presents a UCAN proof
   whose resource covers that DID-URL path — identical to `covia:read` today.
 

@@ -43,14 +43,14 @@ Any run — owner-initiated or not — is bounded by the intersection of:
   (the `CapabilityChecker` gate on its tool calls) bounds what the agent may
   *ever* do, independent of any caller — including the owner's own interactions.
   This is the owner's standing statement: "this is what my agent is allowed to
-  do." It is the **absolute ceiling** on every run.
+  do." It is the **absolute bound** on every run.
 
 - **Layer 1 — admission.** Owner (always); anonymous/public (via the agent's
   public flag); a named delegate (via a UCAN grant). Denials are leak-shaped —
   an anonymous caller gets *not-found*, an authenticated caller without standing
   gets *forbidden* — so the address space is not a disclosure oracle.
 
-- **Layer 2 — the interaction ceiling.** A *further* narrowing applied to the
+- **Layer 2 — the interaction scope.** A *further* narrowing applied to the
   owner-identity run when the initiator is **not** the owner, so that an outside
   party can never drive the agent at the owner's unrestricted authority even
   within Layer 0. This is the new concept this document pins down.
@@ -72,7 +72,7 @@ it was admitted. Collapsing the two (recording only the owner as "caller") loses
 the accountability the venue exists to provide — "who caused this" is exactly the
 question a system of record must answer. This is a required field, not a nicety.
 
-## The interaction ceiling, per admission class
+## The interaction scope, per admission class
 
 Layer 2 is the open design point. Its value depends only on **how the caller was
 admitted** (Layer 1), never on the caller's own ambient authority:
@@ -81,7 +81,7 @@ admitted** (Layer 1), never on the caller's own ambient authority:
   Layer 0.
 
 - **Public / anonymous** — bounded by the agent's configured **`a2a.caps`**,
-  the *public interaction ceiling*. This is a required, owner-declared bound: a
+  the *public interaction scope*. This is a required, owner-declared bound: a
   public agent with no `a2a.caps` is discoverable (its card) but **not
   interactable** — the owner must deliberately bound what an anonymous run may
   do. `a2a.caps: "unrestricted"` is honoured (with a warning) as the owner's
@@ -96,14 +96,14 @@ admitted** (Layer 1), never on the caller's own ambient authority:
   "unrestricted is honoured because the owner chose it" rule, one step stronger:
   issuing a capability that names a specific principal *and* a specific agent is
   a deliberate, higher-bar trust decision than flipping a public flag, so it
-  warrants at least the authority the public ceiling could grant. The owner may
-  optionally attach a **narrower** ceiling to a specific grant to restrict that
+  warrants at least the authority the public scope could grant. The owner may
+  optionally attach a **narrower** scope to a specific grant to restrict that
   delegate further (narrowing-only — a grant can never widen beyond Layer 0).
 
 The invariant this produces:
 
-> `a2a.caps` is the **public** interaction ceiling — not "all non-owner". Layer 0
-> (the agent's own config caps) is the absolute ceiling for **every** run. No
+> `a2a.caps` is the **public** interaction scope — not "all non-owner". Layer 0
+> (the agent's own config caps) is the absolute bound for **every** run. No
 > interaction, by anyone other than the owner, can ever cause the agent to exceed
 > Layer 0.
 
@@ -111,7 +111,7 @@ The trade-off to weigh: a uniform "`a2a.caps` bounds *every* non-owner run,
 delegates included" is simpler to reason about, but it makes a named grant unable
 to express more trust than the anonymous public gets — which defeats the point of
 naming a delegate. The recommendation above keeps the two admission classes with
-distinct ceilings; the alternative collapses them. This is the decision to ratify.
+distinct scopes; the alternative collapses them. This is the decision to ratify.
 
 ## Admission mechanics (logical)
 
@@ -131,7 +131,7 @@ distinct ceilings; the alternative collapses them. This is the decision to ratif
 
 Both levers are pure **admission**; neither changes the execution identity (still
 the owner) — they only decide whether a run happens and, for the public lever,
-which ceiling applies.
+which scope applies.
 
 ## Lifecycle and boundaries
 
@@ -160,10 +160,10 @@ which ceiling applies.
 
 ## Decisions to ratify
 
-1. **Named-delegate ceiling** — Layer-0-only by default (recommended), vs a
+1. **Named-delegate scope** — Layer-0-only by default (recommended), vs a
    uniform `a2a.caps` for all non-owner runs, vs a separate owner-configured
-   "delegated ceiling". This is the central call.
-2. **Per-grant narrowing** — support an optional narrower ceiling attached to a
+   "delegated scope". This is the central call.
+2. **Per-grant narrowing** — support an optional narrower scope attached to a
    specific grant now, or defer to C2.
 3. **Initiator provenance** — the field/shape recording the initiator alongside
    the owner authority on a non-owner task/session (name, and whether it also

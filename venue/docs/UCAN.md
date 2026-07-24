@@ -111,7 +111,7 @@ This aligns with `DIDURL` from convex-core — the DID is the authority, the pat
 
 **Canonical vs. shorthand.** A canonical `with` is absolute (owner-named) as above; a **bare** lattice path is shorthand whose owner is implied by context, always the same principal: **the authority whose grant it is**.
 
-- **Agent caps (config ceilings)**: a bare `w/projects/foo` is the *caller's own* resource; enforcement canonicalises it to `<callerDID>/w/projects/foo` before matching, so bare and DID-URL grants compare identically. The same applies to bare `dlfs/<drive>/…` paths.
+- **Agent caps (config scopes)**: a bare `w/projects/foo` is the *caller's own* resource; enforcement canonicalises it to `<callerDID>/w/projects/foo` before matching, so bare and DID-URL grants compare identically. The same applies to bare `dlfs/<drive>/…` paths.
 - **Signed UCAN tokens**: a bare `with` means the **token issuer's own** namespace, resolved at evaluation against the token's signed `iss` (`CapabilityChecker.normaliseProofs`, applied inside `proofsCover` recursively per chain hop — a bare path in a re-delegation binds to the re-delegator). A self-sovereign owner can therefore sign bare paths naturally; they can never be reinterpreted against the presenter or the target.
 - **Custodial issuance** (`ucan:issue`): the venue signs for its own resources or a locally managed `did:web:<host>:u:<user>`, so its `iss` is not the caller — bare paths are absolutised to the *caller's* DID before signing (§4.1). Self-sovereign owners sign client-side. Tokens minted by the venue always carry the canonical form.
 
@@ -183,10 +183,10 @@ Semantics (see `CapabilityChecker.allows` and `JobManager.evaluateGate`):
   gate unresolvable, times out (30s), or no evaluator in scope → denied.
   Never fail-open.
 - **Execution authority**: the gate runs under the *caller's own* authority
-  with no capability ceiling — a ceiling-less context never evaluates gates
+  with no capability scope — a scope-less context never evaluates gates
   for the gate's own sub-invocations, which is the recursion guard. No Job
   is created for gate checks.
-- **Scope (phase 1)**: agent `config.caps` and any venue-side ceiling. Gates
+- **Scope (phase 1)**: agent `config.caps` and any venue-side scope. Gates
   in *delegated UCAN tokens* additionally require caveat collection along
   the proof chain so a delegatee cannot drop a parent's gate — that lands
   with Convex-Dev/convex#643 (tracked in covia#221).
@@ -428,10 +428,10 @@ Revocations are published to the lattice. Venues check revocation
 lists during verification. Revoking a parent invalidates all
 downstream delegations.
 
-### 4.7 Authenticating — lifting the public read-only ceiling
+### 4.7 Authenticating — lifting the public read-only scope
 
 An unauthenticated caller runs under the venue's public identity, whose
-default ceiling is **read-only** (`crud/read` on its own namespace + `asset/read`;
+default scope is **read-only** (`crud/read` on its own namespace + `asset/read`;
 no `invoke`, so `POST /api/v1/invoke` of a compute op returns a `FAILED` job with
 `"Capability denied"`). Two ways to gain invoke/write authority:
 
@@ -441,8 +441,8 @@ no `invoke`, so `POST /api/v1/invoke` of a compute op returns a `FAILED` job wit
    unrestricted within its own namespace (own-namespace implicit grant, §5.1).
    The SDKs mint and attach this for you (Ed25519 keypair auth); the MCP and
    REST endpoints both honour the header (§4.3).
-2. **Widen the public ceiling (operator, trusted venues only)** — set
-   `auth.public.caps` in the venue config. `"unrestricted"` removes the ceiling
+2. **Widen the public scope (operator, trusted venues only)** — set
+   `auth.public.caps` in the venue config. `"unrestricted"` removes the scope
    for anonymous callers entirely; an array of `{with, can}` grants widens it
    selectively. Only do this on a loopback-bound (`bindAddress: 127.0.0.1`)
    development venue, never a LAN/public-reachable one — it hands invoke
@@ -534,14 +534,14 @@ naturally:
 Granting `crud` (without a verb suffix) covers read+write+delete uniformly;
 trailing-slash on the resource is the conventional way to cover a subtree.
 
-**Own-namespace enforcement (ceiling).** The points above are the cross-user
+**Own-namespace enforcement (scope).** The points above are the cross-user
 checks (a *grant* of access to someone else's resource). A caller running under
 a **narrower Authority** — an agent started with `config.caps` (§5.4) — has the
-same capability check applied to its **own** operations as a *ceiling*: the op's
+same capability check applied to its **own** operations as a *scope*: the op's
 resource and each grant's `with` are canonicalised to absolute owner-scoped form
 (a bare `w/health/bp` → `<callerDID>/w/health/bp`; DID-URL and `file://`/`dlfs://`
 left as-is), then matched with `Capability.covers`. Own and cross-user resources
-thus match by one rule. A caller with no ceiling (the null-caps fast path) holds
+thus match by one rule. A caller with no scope (the null-caps fast path) holds
 the full implicit grant and is unaffected.
 
 ### 5.4 Agent Identity Models
@@ -639,7 +639,7 @@ operates within one user's namespace with restricted permissions.
 5. Tool calls go through CoviaAdapter which verifies the token against the requested path/ability
 6. Writes outside the allowed scope are denied
 
-**Reading an agent's live caps.** An agent's ceiling lives at `config.caps`,
+**Reading an agent's live caps.** An agent's scope lives at `config.caps`,
 so read it via the config: `agent:info` (returns the record, whose `config.caps`
 holds the array) or `covia:read g/<agentId>` then `.value.config.caps`. There is
 **no** `g/<agentId>/caps` projection — `covia:read g/<agentId>/caps` returns
@@ -768,9 +768,9 @@ a RequestContext for the tool invocation. The context determines enforcement:
 Two complementary checks apply, both built on the same `Capability.covers`
 matcher over canonical owner-scoped resources (§3.1):
 
-- **`CapabilityChecker`** enforces a *ceiling* — the agent's config `caps`
+- **`CapabilityChecker`** enforces a *scope* — the agent's config `caps`
   (§5.4) — on every operation (`enforceCaps` at job dispatch, and before each
-  tool call). A ceiling can only narrow.
+  tool call). A scope can only narrow.
 - **`CoviaAdapter.verifyProofs()`** authorises *cross-user* access against
   presented proofs (§5.2). A proof grants reach into another namespace.
 
@@ -782,15 +782,15 @@ For Model A, the key change is that the agent's tool calls go through a
 The venue becomes the enforcement mechanism — it issued the scoped token
 and it verifies it on every tool call.
 
-#### The `invoke` ability under a ceiling (#211)
+#### The `invoke` ability under a scope (#211)
 
 Invoke-classed operations (compute, LLM, external I/O, federation — anything
 that does not act on a specific named lattice resource) require the `invoke`
-ability. Under a restricted `config.caps` ceiling:
+ability. Under a restricted `config.caps` scope:
 
 - **Full tool access** is a one-liner: `{"can": "invoke"}` (or the equivalent
   `{"with": "", "can": "invoke"}`) — an empty/absent `with` is a match-any
-  wildcard in the ceiling path. The standard restricted-but-tool-capable
+  wildcard in the grant-scope path. The standard restricted-but-tool-capable
   recipe is therefore:
 
   ```json
@@ -809,7 +809,7 @@ ability. Under a restricted `config.caps` ceiling:
 
 - **Caveat:** invoking by hex hash (or from resolved metadata directly)
   carries no path, so only the wildcard grant covers it — a path-scoped
-  invoke ceiling denies hash-form invocation by design (fail-closed).
+  invoke grant denies hash-form invocation by design (fail-closed).
 
 ### 5.6 Trust Anchors and Federation
 

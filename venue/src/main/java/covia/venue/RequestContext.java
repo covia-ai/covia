@@ -21,7 +21,8 @@ import covia.lattice.CapabilityGate;
  * <p>Authorisation lives on the {@code Authority}: an action is allowed iff a
  * grant covers it — <em>either you have the right or you don't</em>. A
  * {@code null} capability scope ({@link #getCaps()}) is an unrestricted
- * principal (the fast path), not a ceiling; presented proofs are additive.</p>
+ * principal (the fast path) with no bounding grants; nothing subtracts, and
+ * presented proofs are additive.</p>
  */
 public class RequestContext {
 
@@ -349,7 +350,7 @@ public class RequestContext {
 	/**
 	 * Gets the caller's held capability scope, or null if unrestricted. When
 	 * non-null, an operation is authorised only if a grant in the scope covers
-	 * it (there is no ceiling — a null scope simply has no bounding grants).
+	 * it; a null scope simply has no bounding grants (nothing subtracts).
 	 */
 	public AVector<ACell> getCaps() {
 		return authority.getGrants();
@@ -389,7 +390,7 @@ public class RequestContext {
 	 * gate}.
 	 *
 	 * <p>Bare paths canonicalise against {@link #getUserDID()}, not the caller —
-	 * this is the single point at which the ceiling path decides <em>whose
+	 * this is the single point at which the grant-scope check decides <em>whose
 	 * namespace</em> {@code w/foo} names. For an agent that is its owner's, so a
 	 * {@code config.caps} grant of {@code w/decisions/} keeps meaning the owner's
 	 * workspace once the agent has a DID of its own. The request resource and

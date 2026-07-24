@@ -159,10 +159,10 @@ explicit `enabled` always wins.
 ```
 
 Anonymous callers are attributed to `<venueDID>:public` under the public
-capability ceiling: unset `caps` → the secure read-only default; an explicit
-`{with, can}` array → that ceiling; `"unrestricted"` → no ceiling (loopback
+capability scope: unset `caps` → the secure read-only default; an explicit
+`{with, can}` array → that scope; `"unrestricted"` → no scope (loopback
 dev only). Authenticated callers hold the public-user grants ambiently
-(covia#254) — the ceiling governs both. See `docs/UCAN.md` §4.7.
+(covia#254) — the scope governs both. See `docs/UCAN.md` §4.7.
 
 ## User registration (`users`)
 
@@ -387,7 +387,7 @@ registered **only** when an `a2a` block is present. Without it, `POST /a2a` and
   `organization`/`providerUrl` for the card's `provider`). All optional.
 
 **Auth note:** `message/send` invokes `defaultChatOp` as the *calling*
-identity. Under the default read-only public ceiling an unauthenticated caller
+identity. Under the default read-only public scope an unauthenticated caller
 cannot invoke, so the Task comes back `TASK_STATE_FAILED`. To exercise
 `message/send` from an unauthenticated client, either authenticate the caller
 or widen `auth.public.caps` to permit the op — do the latter only on a
@@ -401,8 +401,8 @@ addressable at `POST /a2a/<ownerDID>/g/<agentId>` (JSON-RPC `SendMessage` →
 base. Private by default: the owner interacts as themselves; anonymous
 non-owners get an existence-hiding 404, authenticated non-owners 403.
 Publishing is per-agent config: `a2a: {public: true}` makes the card
-discoverable; adding an explicit `a2a.caps` ceiling accepts stranger
-messages, dispatched as the OWNER narrowed by that ceiling — it must include
+discoverable; adding an explicit `a2a.caps` scope accepts stranger
+messages, dispatched as the OWNER narrowed by that scope — it must include
 `agent/request` plus whatever the agent's own work needs. `"unrestricted"`
 grants full owner authority (logged loudly). Wire method names are SDK-style
 (`SendMessage`, not `message/send`). Per-agent task continuation (incoming

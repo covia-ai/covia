@@ -106,7 +106,7 @@ flag is `a2a: { public: true, caps: … }` and has two levels:
   interaction).
 - adding `caps` makes it **interactable** by non-owners. A non-owner's
   `message/send` then runs the agent under the *owner's* identity narrowed by
-  that ceiling — `RequestContext.of(ownerDID).withCaps(ceiling)`. A ceiling can
+  that scope — `RequestContext.of(ownerDID).withCaps(scope)`. A scope can
   only narrow, so it is escalation-safe. `caps: "unrestricted"` is honoured
   (full owner authority for anonymous callers) with a warning, mirroring
   `auth.public.caps`; a public agent with **no** `caps` is discoverable but its
@@ -117,10 +117,10 @@ The operator's `defaultChatOp` front-door is the venue-level version of the
 public flag.
 
 The **run authority** for a non-owner interaction — whose identity executes, the
-ceiling applied, and how the public and delegated levers differ — is worked out
+scope applied, and how the public and delegated levers differ — is worked out
 in [A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md). In short: the
 agent always runs under its *owner's* identity; the levers are pure admission; a
-public run is narrowed by `a2a.caps`; the named-delegate ceiling (gated by a
+public run is narrowed by `a2a.caps`; the named-delegate scope (gated by a
 dedicated `agent/request` ability) and initiator-provenance are pending
 ratification there.
 
@@ -179,5 +179,5 @@ Logical pieces this design implies (not an implementation plan):
   agent list/info read surface.
 - The interaction mapping shifting from `Task = Job` to `context = session,
   task = task`.
-- The per-agent public flag and its attenuated anonymous ceiling, alongside the
+- The per-agent public flag and its attenuated anonymous scope, alongside the
   existing UCAN delegation path.

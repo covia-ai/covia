@@ -407,7 +407,7 @@ The capability this unification adds: **agent-managed entries are no longer path
 
 - **Resolver & rendering** — identical for both roles: the contract in §3.6 (skip-absent, fail-visible, required-throws; string verbatim, structured value as budget-bounded JSON5).
 - **One budget** — a single per-agent context budget. Each entry, in either role, carries a per-entry byte budget (declared or derived) that bounds its rendering and is accounted against the total.
-- **Context map** — one live inventory lists every loaded entry with its role, label, and budget, plus total usage and a near-ceiling warning. Configured entries become visible and accounted consistently — today they consume budget but appear in neither the context map nor the safety valve, so a heavy pinned entry can silently starve the working set with no signal.
+- **Context map** — one live inventory lists every loaded entry with its role, label, and budget, plus total usage and a near-scope warning. Configured entries become visible and accounted consistently — today they consume budget but appear in neither the context map nor the safety valve, so a heavy pinned entry can silently starve the working set with no signal.
 
 ### 8.4 What differs — role semantics only
 

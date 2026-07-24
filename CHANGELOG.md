@@ -12,7 +12,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - HITL requests (COG-16) — `hitl:request`/`respond`/`list` over the per-user `h/` inbox, typed asks, choice-bound grants with echo-consent, restart-safe expiry; `hitl` skill
 - `Hitl` builders (covia-core) — fluent, transport-portable construction of HITL requests, asks and responses
 - Federated job observation carries caller proofs — `X-Covia-Ucans` header on body-less job reads; cross-venue HITL verified end-to-end
-- Authenticated callers get public-user access per the public ceiling (#254) — reads, public jobs, DLFS, and secret resolution fallback (use-only, never extraction)
+- Authenticated callers get public-user access per the public scope (#254) — reads, public jobs, DLFS, and secret resolution fallback (use-only, never extraction)
 - `ucan:issue` is a granting surface — mints over another principal's resource under a presented `grant/<ability>` right, expiry-capped by the right's validity
 - Archive adapter (zip/jar) — `archive:list`/`extract`/`zip` over file roots, from/to a root file, CAS asset, or inline bytes; zip-slip + zip-bomb guarded. `file:read`/`list`/`stat`/`tree` see into archives via `x.zip!/entry` (jdk.zipfs, read-only, never fabricates an archive). `archive` skill
 - Orchestration `["array", <binding>...]` — builds an array computing each element, so a step input can reference prior steps inside an array (makes `v/ops/json/cond` usable in an orchestration); `["const", …]` freezes its subtree and cannot express this (#281)
