@@ -813,6 +813,11 @@ ability. Under a restricted `config.caps` scope:
 
 ### 5.6 Trust Anchors and Federation
 
+> For how a resident **agent** obtains a user-signed token to act on another
+> venue — the human signs client-side, the venue only transports — see
+> [HITL_TOKEN_TRANSPORT.md](./HITL_TOKEN_TRANSPORT.md) (COG-18, design;
+> covia#292).
+
 Every delegation chain terminates in a **root** — a token whose `prf` is
 empty. The single question that makes verification federatable is: *who is
 allowed to sign that root?* The answer is uniform and derives entirely from
