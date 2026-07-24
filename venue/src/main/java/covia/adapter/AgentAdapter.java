@@ -1453,8 +1453,17 @@ public class AgentAdapter extends AAdapter {
 		AgentState agent = lookupAgent(job, ctx.getUserDID(), agentId);
 		if (agent == null) return;
 		if (AgentState.RUNNING.equals(agent.getStatus())) {
+			// A running transition has already captured its config (including caps)
+			// for the duration of its tool loop, so mutating the record mid-run
+			// would not affect it and is refused by design. To revoke authority or
+			// otherwise reconfigure a running agent, HALT it first: agent:suspend
+			// cancels the in-flight transition promptly (no further tool call
+			// runs), the update then applies to the stopped agent, and agent:resume
+			// restarts it under the new config. This is the kill-switch pattern —
+			// the caller halts, then updates.
 			job.fail("Cannot update agent " + agentId + ": currently RUNNING. "
-				+ "Wait for it to finish, or replace it with agent:create overwrite=true.");
+				+ "Suspend it first (agent:suspend) to halt the run, then update and "
+				+ "resume; or replace it with agent:create overwrite=true.");
 			return;
 		}
 
