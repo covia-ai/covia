@@ -680,16 +680,13 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private void requireCap(RequestContext ctx, ACell input, AString ability) {
 		AString p = RT.ensureString(RT.getIn(input, Fields.PATH));
-		// MUTATIONS target the caller's OWN namespace via bare paths (w/…, o/…).
-		// Cross-user access via a DID-URL path is supported for READS only (a
-		// presented delegation proof authorises it through the authority seam);
-		// there is no cross-user write path. Reject a DID-URL mutation target
-		// explicitly and early — defence-in-depth that survives refactors and gives
-		// a clear error. Reads fall through to the proof-gated seam.
-		if (p != null && !Capability.CRUD_READ.equals(ability) && p.toString().startsWith("did:")) {
-			throw new AuthException("Cross-user / DID-URL write paths are not supported: " + p
-				+ " — write to your own namespace via a bare path (e.g. w/…).");
-		}
+		// One seam for every ability — read or mutation. A bare path is enforced
+		// against the caller's own namespace; a DID-URL path against the owner's,
+		// where the true cross-user gate is the resolver (resolveDIDURL →
+		// crossUserAllows), because the null-scope fast path here authorises the
+		// caller's own namespace only. A restricted (agent) scope that covers
+		// neither is failed closed here, early, before any cursor is touched —
+		// symmetric with reads, which pass through this same call.
 		engine.requireAuthority(ctx, p, ability);
 	}
 
@@ -709,7 +706,11 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleWrite(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
-		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
+		// A DID-URL path writes to the owner's namespace (authorised at the same
+		// proof-gated resolver reads use); a bare path to the caller's own. When
+		// present, xu = [ownerCursor, DID-relative keys] — never a virtual ns.
+		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE, true);
+		ACell[] jsonKeys = (xu != null) ? (ACell[]) xu[1] : parsePath(RT.getIn(input, Fields.PATH));
 		requireWriteAccess(ctx, jsonKeys);
 		// A write must supply a 'value'. An absent key means the caller (often an
 		// LLM tool call) forgot the argument — fail loudly so it retries. An
@@ -727,7 +728,7 @@ public class CoviaAdapter extends AAdapter {
 		// so keys are already relative to it. Route through the SAME deepSet as
 		// the physical path — a scalar-clobbering write now throws the same
 		// shape-conflict error instead of silently rebuilding an empty map (#176).
-		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
+		NamespaceResolver.ResolvedNamespace vns = (xu != null) ? null : resolveVirtual(ctx, jsonKeys);
 		if (vns != null && vns.jobId() != null) {
 			final ACell[] keys = vns.remainingKeys();
 			final boolean[] built = {false};
@@ -744,9 +745,11 @@ public class CoviaAdapter extends AAdapter {
 			return writeResult(existed[0], built[0]);
 		}
 
-		// Cursor-based virtual (n/) or physical namespace
+		// Cross-user owner cursor, cursor-based virtual (n/), or own physical namespace
 		if (vns != null) jsonKeys = vns.remainingKeys();
-		ALatticeCursor<ACell> baseCursor = (vns != null) ? vns.cursor() : ensureUserCursor(ctx);
+		@SuppressWarnings("unchecked")
+		ALatticeCursor<ACell> baseCursor = (xu != null) ? (ALatticeCursor<ACell>) xu[0]
+			: (vns != null) ? vns.cursor() : ensureUserCursor(ctx);
 		final ACell[] keys = jsonKeys;
 		final boolean[] built = {false};
 		final boolean[] existed = {false};
@@ -798,12 +801,16 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_DELETE);
-		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
+		// A DID-URL path deletes from the owner's namespace (crud/delete enforced
+		// at the shared resolver). create=false: an absent owner namespace has
+		// nothing to remove, and delete stays idempotent without materialising it.
+		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_DELETE, false);
+		ACell[] jsonKeys = (xu != null) ? (ACell[]) xu[1] : parsePath(RT.getIn(input, Fields.PATH));
 		requireDeleteAccess(ctx, jsonKeys);
 
 		// Legacy job-scoped t/ (mode 2): apply the SAME deepDelete as the
 		// physical path against the temp value at the navigation root (#176).
-		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
+		NamespaceResolver.ResolvedNamespace vns = (xu != null) ? null : resolveVirtual(ctx, jsonKeys);
 		if (vns != null && vns.jobId() != null) {
 			final ACell[] keys = vns.remainingKeys();
 			final boolean[] deleted = {false};
@@ -814,10 +821,12 @@ public class CoviaAdapter extends AAdapter {
 			return Maps.of(K_DELETED, CVMBool.of(deleted[0]));
 		}
 
-		// Cursor-based virtual (n/) or physical namespace. An unresolvable
-		// path is a silent success (delete is idempotent).
+		// Cross-user owner cursor, cursor-based virtual (n/), or own physical
+		// namespace. An unresolvable path is a silent success (delete is idempotent).
 		if (vns != null) jsonKeys = vns.remainingKeys();
-		ALatticeCursor<ACell> cursor = (vns != null) ? vns.cursor() : getUserCursor(ctx);
+		@SuppressWarnings("unchecked")
+		ALatticeCursor<ACell> cursor = (xu != null) ? (ALatticeCursor<ACell>) xu[0]
+			: (vns != null) ? vns.cursor() : getUserCursor(ctx);
 		if (cursor == null) return Maps.of(K_DELETED, CVMBool.FALSE);
 		final ACell[] keys = jsonKeys;
 		final boolean[] deleted = {false};
@@ -843,10 +852,13 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleAppend(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
-		ACell[] jsonKeys = parsePath(RT.getIn(input, Fields.PATH));
+		// A DID-URL path appends into the owner's namespace (crud/write enforced
+		// at the shared resolver); a bare path into the caller's own.
+		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE, true);
+		ACell[] jsonKeys = (xu != null) ? (ACell[]) xu[1] : parsePath(RT.getIn(input, Fields.PATH));
 		requireWriteAccess(ctx, jsonKeys);
 
-		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, jsonKeys);
+		NamespaceResolver.ResolvedNamespace vns = (xu != null) ? null : resolveVirtual(ctx, jsonKeys);
 		ACell element = parseJsonValue(RT.getIn(input, Fields.VALUE));
 
 		// Legacy job-scoped t/ (mode 2): append into the temp value at the
@@ -869,9 +881,11 @@ public class CoviaAdapter extends AAdapter {
 			return appendResult(existed[0], newSize[0], built[0]);
 		}
 
-		// Cursor-based virtual (n/) or physical namespace
+		// Cross-user owner cursor, cursor-based virtual (n/), or own physical namespace
 		if (vns != null) jsonKeys = vns.remainingKeys();
-		ALatticeCursor<ACell> baseCursor = (vns != null) ? vns.cursor() : ensureUserCursor(ctx);
+		@SuppressWarnings("unchecked")
+		ALatticeCursor<ACell> baseCursor = (xu != null) ? (ALatticeCursor<ACell>) xu[0]
+			: (vns != null) ? vns.cursor() : ensureUserCursor(ctx);
 
 		final ACell[] keys = jsonKeys;
 		final boolean[] built = {false};
@@ -1799,7 +1813,7 @@ public class CoviaAdapter extends AAdapter {
 		// Check if the raw path string is a DID URL (starts with "did:")
 		AString pathStr = RT.ensureString(pathCell);
 		if (pathStr != null && pathStr.toString().startsWith("did:")) {
-			return resolveDIDURL(ctx, pathStr.toString());
+			return resolveDIDURL(ctx, pathStr.toString(), Capability.CRUD_READ, false);
 		}
 
 		ACell[] pathKeys = parsePath(pathCell);
@@ -1875,10 +1889,22 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * Resolves a DID URL path like {@code "did:key:z6MkAlice/w/notes"} into
-	 * a target cursor and namespace-relative path keys.
+	 * Resolves a DID URL path like {@code "did:key:z6MkAlice/w/notes"} into a
+	 * target cursor and namespace-relative path keys, enforcing {@code ability}
+	 * on the target resource. This is the single cross-user resolver, shared by
+	 * reads and mutations: reading passes {@code crud/read}, a write/append
+	 * {@code crud/write}, a delete {@code crud/delete}. There is no separate
+	 * write path and no special-case reject — a mutation is authorised by exactly
+	 * the same proof-gated gate ({@link #verifyProofs} → {@code crossUserAllows})
+	 * a read is, just with the mutation's ability.
+	 *
+	 * @param ability the ability to enforce on the target resource
+	 * @param create  materialise the owner's namespace if absent (write/append),
+	 *                versus leave it null (read/delete — nothing to read or remove)
+	 * @return {@code [cursor, pathKeys]}; {@code cursor} may be null when
+	 *         {@code create} is false and the target has no namespace here
 	 */
-	private Object[] resolveDIDURL(RequestContext ctx, String rawPath) {
+	private Object[] resolveDIDURL(RequestContext ctx, String rawPath, AString ability, boolean create) {
 		DIDURL didURL = DIDURL.create(rawPath);
 		AString targetDID = Strings.create(didURL.getDID().toString());
 
@@ -1886,36 +1912,51 @@ public class CoviaAdapter extends AAdapter {
 		ACell[] pathKeys = parseStringPath(didURL.getPath());
 
 		if (targetDID.equals(ctx.getUserDID())) {
-			// Own namespace with explicit DID — allowed. Compared against the user
-			// DID so an explicit did:<owner>/w/x behaves identically to a bare w/x
-			// (which canonicalises to the same place); the capability scope still
-			// bounds what an agent may reach there.
-			return new Object[] { getUserCursor(ctx), pathKeys };
+			// Own namespace with explicit DID — behaves identically to a bare path
+			// (which canonicalises to the same place); no cross-user proof needed,
+			// the capability scope already bounds what an agent may reach there.
+			ALatticeCursor<ACell> own = create ? ensureUserCursor(ctx) : getUserCursor(ctx);
+			return new Object[] { own, pathKeys };
 		}
 
-		// Cross-user access — verify UCAN proofs
-		// Build full DID URL for the requested resource
+		// Cross-user access — the proof-gated seam (no null-scope fast path) is
+		// authoritative here. Build the full DID URL for the requested resource.
 		String requestedResource = targetDID.toString() + buildSubPath(pathKeys);
-		if (verifyProofs(ctx, requestedResource, "crud/read")) {
+		if (verifyProofs(ctx, requestedResource, ability.toString())) {
 			Users users = engine.getVenueState().users();
-			User targetUser = users.get(targetDID);
-			if (targetUser != null) {
-				return new Object[] { targetUser.cursor(), pathKeys };
-			}
-			// Proofs verified, so the caller is authorised — disclosing that
-			// the target holds no data here leaks nothing they may not see.
-			throw new AuthException("Access denied: " + targetDID
-				+ " has no data on this venue");
+			// A first delegated write may be the owner's first touch on this venue,
+			// exactly as an own first write creates the caller's namespace.
+			User targetUser = create ? users.ensure(targetDID) : users.get(targetDID);
+			// Authorised, but the owner has no namespace here yet (only possible for
+			// create=false — read/delete). A null cursor flows to the same empty
+			// result the caller's own absent namespace gives: read → exists:false,
+			// delete → deleted:false (idempotent). No leak — the caller is authorised.
+			return new Object[] { (targetUser == null) ? null : targetUser.cursor(), pathKeys };
 		}
 
 		// Denials must say what was missing, not just that access failed —
 		// the caller needs the exact (resource, ability) to request a grant.
 		AVector<ACell> proofs = ctx.getProofs();
-		throw new AuthException("Access denied: reading " + requestedResource
-			+ " requires a UCAN proof granting crud/read to " + ctx.getCallerDID()
+		throw new AuthException("Access denied: " + ability + " on " + requestedResource
+			+ " requires a UCAN proof granting " + ability + " to " + ctx.getCallerDID()
 			+ ((proofs == null || proofs.isEmpty())
 				? " — no UCAN proofs were presented"
 				: " — the presented UCAN proofs do not cover this resource"));
+	}
+
+	/**
+	 * The DID-URL mutation target for {@code write}/{@code delete}/{@code append}:
+	 * {@code [cursor, pathKeys]} against the owner's namespace when the path is a
+	 * DID URL, else {@code null} (the caller uses its own-cursor flow). A DID URL
+	 * never names a virtual ({@code n/}, {@code t/}) namespace, so this fully
+	 * determines the target. Authority for {@code ability} is enforced here,
+	 * through the same {@link #resolveDIDURL} gate reads use.
+	 */
+	private Object[] didUrlMutationTarget(RequestContext ctx, ACell pathCell,
+			AString ability, boolean create) {
+		AString pathStr = RT.ensureString(pathCell);
+		if (pathStr == null || !pathStr.toString().startsWith("did:")) return null;
+		return resolveDIDURL(ctx, pathStr.toString(), ability, create);
 	}
 
 	/**

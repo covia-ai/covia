@@ -514,10 +514,14 @@ public class CapabilityCheckerTest {
 	}
 
 	@Test
-	public void testCrossUserDIDWritePathRejected() {
+	public void testCrossUserDIDWriteWithoutProofFailsClosed() {
+		// A cross-user DID-URL write is no longer blanket-rejected; it routes through
+		// the same proof-gated seam reads use (covia#295). With no covering proof it
+		// still fails closed — but the null-scope fast path must NOT authorise it, so
+		// the gate is the cross-user resolver (crossUserAllows), not requireAuthority.
 		Engine engine = TestEngine.ENGINE;
 		AString did = convex.auth.ucan.UCAN.toDIDKey(convex.core.crypto.AKeyPair.generate().getAccountKey());
-		RequestContext ctx = RequestContext.of(did); // authenticated, null scope
+		RequestContext ctx = RequestContext.of(did); // authenticated, null scope, no proofs
 		Throwable ex = assertThrows(Throwable.class, () ->
 			engine.jobs().invokeInternal("v/ops/covia/write",
 				Maps.of(Fields.PATH, "did:key:zOtherUser/w/x", Fields.VALUE, Strings.create("v")), ctx).join());
@@ -525,8 +529,8 @@ public class CapabilityCheckerTest {
 		for (Throwable t = ex; t != null; t = t.getCause()) {
 			if (t.getMessage() != null) msg.append(t.getMessage()).append(" | ");
 		}
-		assertTrue(msg.toString().contains("not supported"),
-			"cross-user DID-URL write must be explicitly rejected, got: " + msg);
+		assertTrue(msg.toString().contains("Access denied") && msg.toString().contains("crud/write"),
+			"cross-user DID-URL write with no proof must be denied at the proof gate, got: " + msg);
 	}
 
 	@Test

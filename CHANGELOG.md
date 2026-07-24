@@ -40,6 +40,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - MCP `notifications/jobUpdate` broadcast — off-spec, flooded strict clients (#274)
 
 ### Fixed
+- Cross-user lattice writes work with a `crud/write` proof — `covia:write`/`append`/`delete` route through the same proof gate reads use (#295)
 - REST `GET /assets/{id}/content` serves inline/record/dlfs content, not just blobs (#289)
 - Unanswered agent tool call repaired on load — sessions no longer poisoned by a mid-call abort (#271)
 - Orchestration failure containment — a failed step no longer runs its dependents (#281)

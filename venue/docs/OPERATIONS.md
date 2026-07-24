@@ -163,7 +163,7 @@ Op arguments fall into two classes:
 | Class | Acceptable forms | Used by |
 |-------|------------------|---------|
 | **Resolvable address** (read-side) | Any of the forms above | `covia:read path`, `covia:list path`, `covia:slice path`, `covia:inspect path`, `covia:copy from`, `asset:get id`, `asset:content id`, `asset:pin path`, `grid:run operation` |
-| **Mutable target** (write-side) | Writable lattice paths only: `o/...`, `w/...`, `g/<own-agent>/...`, `s/...`, virtual writable namespaces (`n/`, `t/`) | `covia:write path`, `covia:append path`, `covia:delete path`, `covia:copy to` |
+| **Mutable target** (write-side) | Writable lattice paths only: `o/...`, `w/...`, `g/<own-agent>/...`, `s/...`, virtual writable namespaces (`n/`, `t/`); or an owner-scoped DID-URL form of one (`did:key:zOwner.../w/...`) when a UCAN proof grants the mutation | `covia:write path`, `covia:append path`, `covia:delete path`, `covia:copy to` |
 
 A write-side argument is constrained because you can't write to a content-addressed location (`/a/` is hash-determined), to a read-only namespace (`/v/` from non-venue callers), or to another user's namespace without UCAN delegation.
 
