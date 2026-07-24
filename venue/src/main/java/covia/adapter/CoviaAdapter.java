@@ -680,14 +680,56 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private void requireCap(RequestContext ctx, ACell input, AString ability) {
 		AString p = RT.ensureString(RT.getIn(input, Fields.PATH));
-		// One seam for every ability — read or mutation. A bare path is enforced
-		// against the caller's own namespace; a DID-URL path against the owner's,
-		// where the true cross-user gate is the resolver (resolveDIDURL →
-		// crossUserAllows), because the null-scope fast path here authorises the
-		// caller's own namespace only. A restricted (agent) scope that covers
-		// neither is failed closed here, early, before any cursor is touched —
-		// symmetric with reads, which pass through this same call.
+		// The single authorisation gate for lattice access — "am I authorised for
+		// this path?", branching on ownership, not across call sites:
+		//   • own namespace (a bare path, or an explicit did:<self>/…), and
+		//     content-addressed /a/ reads (ownerless — the hash is the capability)
+		//     → the additive scope+proof seam, whose null-scope fast path means
+		//     "unrestricted over my own namespace";
+		//   • another user's private namespace (did:<other>/w|s|j|g|o/…) → the
+		//     proof/public gate only, which has NO ambient own-namespace fast path,
+		//     so a null scope cannot reach it. A crud/<ability> delegation rooted
+		//     in the owner authorises it, symmetrically for reads and mutations.
+		// resolveDIDURL then only *locates* the owner's cursor — it does not
+		// re-authorise. One gate, here.
+		if (isCrossUserPrivatePath(ctx, p)) {
+			if (!engine.crossUserAllows(ctx, p, ability)) throw crossUserDenial(ctx, p, ability);
+			return;
+		}
 		engine.requireAuthority(ctx, p, ability);
+	}
+
+	/**
+	 * True when {@code p} is a DID-URL path into <em>another</em> user's private
+	 * lattice namespace — the one case that must be gated by a presented proof (or
+	 * public policy) rather than the caller's ambient own-namespace authority. A
+	 * bare/relative path, an explicit own DID, and a content-addressed {@code /a/}
+	 * resource are all "the caller's own" for authorisation and take the scope
+	 * seam. Owner is the DID prefix (everything before the first {@code /}); the
+	 * namespace is the next segment.
+	 */
+	private boolean isCrossUserPrivatePath(RequestContext ctx, AString p) {
+		if (p == null) return false;
+		String s = p.toString();
+		if (!s.startsWith("did:")) return false;              // bare/relative → own namespace
+		int slash = s.indexOf('/');
+		if (slash < 0) return false;                          // a bare DID, no lattice path
+		if (Strings.create(s.substring(0, slash)).equals(ctx.getUserDID())) return false; // own DID
+		String rest = s.substring(slash + 1);                 // namespace segment onward
+		int next = rest.indexOf('/');
+		String ns = (next < 0) ? rest : rest.substring(0, next);
+		return !"a".equals(ns);                               // /a/ is content-addressed, ownerless
+	}
+
+	/** The cross-user denial: names the exact (ability, resource) and what proof
+	 *  would satisfy it, so a caller can request the right grant. */
+	private AuthException crossUserDenial(RequestContext ctx, AString resource, AString ability) {
+		AVector<ACell> proofs = ctx.getProofs();
+		return new AuthException("Access denied: " + ability + " on " + resource
+			+ " requires a UCAN proof granting " + ability + " to " + ctx.getCallerDID()
+			+ ((proofs == null || proofs.isEmpty())
+				? " — no UCAN proofs were presented"
+				: " — the presented UCAN proofs do not cover this resource"));
 	}
 
 	/**
@@ -706,10 +748,10 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleWrite(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
-		// A DID-URL path writes to the owner's namespace (authorised at the same
-		// proof-gated resolver reads use); a bare path to the caller's own. When
-		// present, xu = [ownerCursor, DID-relative keys] — never a virtual ns.
-		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE, true);
+		// A DID-URL path writes to the owner's namespace (authorised in requireCap
+		// above); a bare path to the caller's own. When present, xu = [ownerCursor,
+		// DID-relative keys] — never a virtual ns.
+		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), true);
 		ACell[] jsonKeys = (xu != null) ? (ACell[]) xu[1] : parsePath(RT.getIn(input, Fields.PATH));
 		requireWriteAccess(ctx, jsonKeys);
 		// A write must supply a 'value'. An absent key means the caller (often an
@@ -801,10 +843,10 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleDelete(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_DELETE);
-		// A DID-URL path deletes from the owner's namespace (crud/delete enforced
-		// at the shared resolver). create=false: an absent owner namespace has
-		// nothing to remove, and delete stays idempotent without materialising it.
-		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_DELETE, false);
+		// A DID-URL path deletes from the owner's namespace (authorised in
+		// requireCap above). create=false: an absent owner namespace has nothing to
+		// remove, and delete stays idempotent without materialising it.
+		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), false);
 		ACell[] jsonKeys = (xu != null) ? (ACell[]) xu[1] : parsePath(RT.getIn(input, Fields.PATH));
 		requireDeleteAccess(ctx, jsonKeys);
 
@@ -852,9 +894,9 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	private ACell handleAppend(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_WRITE);
-		// A DID-URL path appends into the owner's namespace (crud/write enforced
-		// at the shared resolver); a bare path into the caller's own.
-		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), Capability.CRUD_WRITE, true);
+		// A DID-URL path appends into the owner's namespace (authorised in
+		// requireCap above); a bare path into the caller's own.
+		Object[] xu = didUrlMutationTarget(ctx, RT.getIn(input, Fields.PATH), true);
 		ACell[] jsonKeys = (xu != null) ? (ACell[]) xu[1] : parsePath(RT.getIn(input, Fields.PATH));
 		requireWriteAccess(ctx, jsonKeys);
 
@@ -1813,7 +1855,7 @@ public class CoviaAdapter extends AAdapter {
 		// Check if the raw path string is a DID URL (starts with "did:")
 		AString pathStr = RT.ensureString(pathCell);
 		if (pathStr != null && pathStr.toString().startsWith("did:")) {
-			return resolveDIDURL(ctx, pathStr.toString(), Capability.CRUD_READ, false);
+			return resolveDIDURL(ctx, pathStr.toString(), false);
 		}
 
 		ACell[] pathKeys = parsePath(pathCell);
@@ -1889,59 +1931,35 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * Resolves a DID URL path like {@code "did:key:z6MkAlice/w/notes"} into a
-	 * target cursor and namespace-relative path keys, enforcing {@code ability}
-	 * on the target resource. This is the single cross-user resolver, shared by
-	 * reads and mutations: reading passes {@code crud/read}, a write/append
-	 * {@code crud/write}, a delete {@code crud/delete}. There is no separate
-	 * write path and no special-case reject — a mutation is authorised by exactly
-	 * the same proof-gated gate ({@link #verifyProofs} → {@code crossUserAllows})
-	 * a read is, just with the mutation's ability.
+	 * <em>Locates</em> a DID URL path like {@code "did:key:z6MkAlice/w/notes"} —
+	 * a target cursor and namespace-relative keys. Authorisation is not repeated
+	 * here: {@link #requireCap} is the single gate and always runs first (own
+	 * paths through the scope seam, cross-user paths through the proof gate), so
+	 * by the time this resolves a cursor the caller is already authorised. Shared
+	 * verbatim by reads and mutations.
 	 *
-	 * @param ability the ability to enforce on the target resource
-	 * @param create  materialise the owner's namespace if absent (write/append),
-	 *                versus leave it null (read/delete — nothing to read or remove)
-	 * @return {@code [cursor, pathKeys]}; {@code cursor} may be null when
+	 * @param create materialise the owner's namespace if absent (write/append) —
+	 *               a first delegated write may be the owner's first touch here,
+	 *               exactly as an own first write creates the caller's namespace —
+	 *               versus leave it null (read/delete: an absent namespace reads
+	 *               as {@code exists:false} / deletes idempotently)
+	 * @return {@code [cursor, pathKeys]}; {@code cursor} is null when
 	 *         {@code create} is false and the target has no namespace here
 	 */
-	private Object[] resolveDIDURL(RequestContext ctx, String rawPath, AString ability, boolean create) {
+	private Object[] resolveDIDURL(RequestContext ctx, String rawPath, boolean create) {
 		DIDURL didURL = DIDURL.create(rawPath);
 		AString targetDID = Strings.create(didURL.getDID().toString());
-
-		// Parse the DID URL path component into namespace keys
 		ACell[] pathKeys = parseStringPath(didURL.getPath());
 
 		if (targetDID.equals(ctx.getUserDID())) {
-			// Own namespace with explicit DID — behaves identically to a bare path
-			// (which canonicalises to the same place); no cross-user proof needed,
-			// the capability scope already bounds what an agent may reach there.
+			// Own namespace via explicit DID — same place a bare path canonicalises to.
 			ALatticeCursor<ACell> own = create ? ensureUserCursor(ctx) : getUserCursor(ctx);
 			return new Object[] { own, pathKeys };
 		}
-
-		// Cross-user access — the proof-gated seam (no null-scope fast path) is
-		// authoritative here. Build the full DID URL for the requested resource.
-		String requestedResource = targetDID.toString() + buildSubPath(pathKeys);
-		if (verifyProofs(ctx, requestedResource, ability.toString())) {
-			Users users = engine.getVenueState().users();
-			// A first delegated write may be the owner's first touch on this venue,
-			// exactly as an own first write creates the caller's namespace.
-			User targetUser = create ? users.ensure(targetDID) : users.get(targetDID);
-			// Authorised, but the owner has no namespace here yet (only possible for
-			// create=false — read/delete). A null cursor flows to the same empty
-			// result the caller's own absent namespace gives: read → exists:false,
-			// delete → deleted:false (idempotent). No leak — the caller is authorised.
-			return new Object[] { (targetUser == null) ? null : targetUser.cursor(), pathKeys };
-		}
-
-		// Denials must say what was missing, not just that access failed —
-		// the caller needs the exact (resource, ability) to request a grant.
-		AVector<ACell> proofs = ctx.getProofs();
-		throw new AuthException("Access denied: " + ability + " on " + requestedResource
-			+ " requires a UCAN proof granting " + ability + " to " + ctx.getCallerDID()
-			+ ((proofs == null || proofs.isEmpty())
-				? " — no UCAN proofs were presented"
-				: " — the presented UCAN proofs do not cover this resource"));
+		// Cross-user: requireCap already authorised (or threw). Just locate.
+		Users users = engine.getVenueState().users();
+		User targetUser = create ? users.ensure(targetDID) : users.get(targetDID);
+		return new Object[] { (targetUser == null) ? null : targetUser.cursor(), pathKeys };
 	}
 
 	/**
@@ -1949,14 +1967,13 @@ public class CoviaAdapter extends AAdapter {
 	 * {@code [cursor, pathKeys]} against the owner's namespace when the path is a
 	 * DID URL, else {@code null} (the caller uses its own-cursor flow). A DID URL
 	 * never names a virtual ({@code n/}, {@code t/}) namespace, so this fully
-	 * determines the target. Authority for {@code ability} is enforced here,
-	 * through the same {@link #resolveDIDURL} gate reads use.
+	 * determines the target. Authorisation is enforced upstream in
+	 * {@link #requireCap}; this only locates.
 	 */
-	private Object[] didUrlMutationTarget(RequestContext ctx, ACell pathCell,
-			AString ability, boolean create) {
+	private Object[] didUrlMutationTarget(RequestContext ctx, ACell pathCell, boolean create) {
 		AString pathStr = RT.ensureString(pathCell);
 		if (pathStr == null || !pathStr.toString().startsWith("did:")) return null;
-		return resolveDIDURL(ctx, pathStr.toString(), ability, create);
+		return resolveDIDURL(ctx, pathStr.toString(), create);
 	}
 
 	/**
@@ -1969,42 +1986,6 @@ public class CoviaAdapter extends AAdapter {
 			sb.append('/').append(key);
 		}
 		return sb.toString();
-	}
-
-	/**
-	 * Verifies that the request context contains a valid UCAN proof
-	 * granting the caller the requested capability on the target DID's resource.
-	 *
-	 * <p>For each proof token in the context:</p>
-	 * <ol>
-	 *   <li>Parse as UCAN</li>
-	 *   <li>Re-check temporal bounds (signature and chain are already verified
-	 *       at transport ingress — see {@link UCANValidator#parseTransportUCANs})</li>
-	 *   <li>Check audience matches caller</li>
-	 *   <li>Check issuer matches the venue (Phase C1: venue is authority for
-	 *       all hosted data)</li>
-	 *   <li>Check attenuations cover the requested capability via {@link Capability#covers}</li>
-	 * </ol>
-	 *
-	 * <p>Signature verification is <b>not</b> repeated here. The trust
-	 * boundary is {@code RequestContext.withProofs(...)}; tokens reach it
-	 * only through {@link UCANValidator#parseTransportUCANs} (for transport)
-	 * or direct test fixtures. Re-verifying a JWT-origin token via
-	 * {@link UCAN#verifySignature()} would fail anyway, because that method
-	 * verifies the stored signature against CVM-encoded payload bytes while
-	 * JWT signatures cover base64url JWT bytes.</p>
-	 *
-	 * @param requestedResource Full DID URL (e.g. "did:key:zAlice.../w/notes")
-	 * @param requestedAbility Ability string (e.g. "crud/read")
-	 */
-	@SuppressWarnings("unchecked")
-	private boolean verifyProofs(RequestContext ctx,
-			String requestedResource, String requestedAbility) {
-		// Single cross-user gate (covia#102), shared with job-read
-		// authorisation — public-owned resources and presented proofs are
-		// both decided there. Signatures verified at transport ingress.
-		return engine.crossUserAllows(ctx, Strings.create(requestedResource),
-			Strings.create(requestedAbility));
 	}
 
 }
