@@ -92,11 +92,11 @@ mvn test -pl covia-core
 |------------|---------|---------|
 | Convex | 0.8.9 | Lattice platform, immutable data, cryptography |
 | Javalin | 7.2.2 | HTTP server with OpenAPI/Swagger/ReDoc |
-| LangChain4j | 1.17.2 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
+| LangChain4j | 1.18.0 | LLM orchestration (OpenAI, Ollama, Gemini, DeepSeek) |
 | MCP SDK | 2.0.0 | Model Context Protocol |
-| A2A | 1.0.0.Final | Agent-to-Agent protocol |
+| A2A | 1.1.0.Final | Agent-to-Agent protocol |
 | JUnit | 6.1.1 | Testing |
-| SLF4J/Logback | 2.0.18/1.5.37 | Logging |
+| SLF4J/Logback | 2.0.18/1.6.0 | Logging |
 
 ## Architecture Overview
 
