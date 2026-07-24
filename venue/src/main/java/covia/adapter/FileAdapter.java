@@ -987,11 +987,13 @@ public class FileAdapter extends AAdapter {
 		java.nio.file.OpenOption[] options = writeOptions(target, mode);
 
 		if (assetRef != null) {
-			Asset asset = engine.resolveAsset(assetRef, ctx);
-			if (asset == null) throw new IllegalArgumentException("Asset not found: " + assetRef);
-			try (InputStream is = engine.getContentStream(asset);
+			// Universal resolver under the caller's authority: serves every content
+			// form (inline, content-store blob, POS_CONTENT, dlfs), not just hashed
+			// blobs (covia#289).
+			covia.venue.storage.ContentProvider.Resolved resolved = engine.resolveContent(assetRef, ctx);
+			if (resolved == null) throw new IllegalArgumentException("Asset has no content: " + assetRef);
+			try (InputStream is = resolved.content().getInputStream();
 			     OutputStream os = Files.newOutputStream(target, options)) {
-				if (is == null) throw new IllegalArgumentException("Asset has no content: " + assetRef);
 				return is.transferTo(os);
 			}
 		}

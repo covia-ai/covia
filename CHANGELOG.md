@@ -36,6 +36,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Wire self-attenuation on `/invoke` (#131) — presented proofs are additive-only; reduce authority via a narrower `Authority`, not subtractive tokens
 
 ### Fixed
+- REST `GET /assets/{id}/content` serves every content form, not just hashed blobs (#289) — inline (`content.inline`), record (`POS_CONTENT`) and dlfs content no longer 500. Content access is unified through one resolver (`resolveContent`), so the REST endpoint, the SDK `getContent()`, `v/ops/asset/content` and file/archive reads all serve content identically
 - An unanswered agent tool call is repaired on every conversation load (#271) — a turn aborted mid-tool-call no longer leaves a `tool_use` with no result, which providers reject outright and which permanently poisoned the session until a venue restart
 - Orchestration failure containment (#281) — a failed step no longer releases its dependents, and no further step starts once a run has failed, so a failed orchestration cannot apply downstream side effects
 - Orchestration specs are validated at construction (#281) — a malformed step or `result` spec fails before any step runs rather than mid-run with side effects already applied; note this rejects a bad spec even where execution would never have reached it

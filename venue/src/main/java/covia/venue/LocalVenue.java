@@ -112,7 +112,14 @@ public class LocalVenue extends Venue {
 
 	@Override
 	protected AContent getAssetContent(Hash id) throws IOException {
-		return engine.getContent(id);
+		// The universal resolver serves every content form identically — inline,
+		// content-store blob, per-record POS_CONTENT, dlfs. Both the REST
+		// /assets/{id}/content endpoint and the client Asset.getContent() reach
+		// here, so routing through it (rather than the blob-only getContent) is
+		// what makes inline content fetchable over HTTP (covia#289).
+		covia.venue.storage.ContentProvider.Resolved resolved =
+			engine.resolveContent(convex.core.data.Strings.create(id.toHexString()), context());
+		return (resolved == null) ? null : resolved.content();
 	}
 
 	// ------------------------------------------------------------------

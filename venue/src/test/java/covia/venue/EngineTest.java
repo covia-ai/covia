@@ -106,6 +106,48 @@ public class EngineTest {
 	}
 
 	@Test
+	public void testResolveContentServesEveryForm() throws IOException {
+		// One resolver, every content form (covia#289). Before unification the
+		// metadata-only path served content-store blobs but threw on inline, while
+		// resolveContent served inline/POS_CONTENT but silently missed content-store
+		// blobs — disjoint halves. resolveContent must now serve all of them.
+		var ctx = venue.venueContext();
+
+		// (a) content.inline — bytes embedded in metadata, no blob anywhere.
+		String inlineBody = "# Inline\nlives in metadata";
+		String inlineMeta = "{\"name\":\"inline-form\",\"content\":"
+			+ "{\"contentType\":\"text/markdown\",\"inline\":\"# Inline\\nlives in metadata\"}}";
+		Hash inlineId = venue.storeAsset(Strings.create(inlineMeta), null);
+		var inlineResolved = venue.resolveContent(Strings.create(inlineId.toHexString()), ctx);
+		assertNotNull(inlineResolved, "inline content must resolve");
+		assertEquals(inlineBody, new String(inlineResolved.content().getBlob().getBytes(),
+			java.nio.charset.StandardCharsets.UTF_8));
+
+		// (b) POS_CONTENT — a content blob stored in the asset record (asset:store
+		// with content), no content.sha256 in the metadata.
+		Blob posBytes = Blob.wrap("record-slot bytes".getBytes());
+		Hash posId = venue.storeAsset(EMPTY_META, posBytes);
+		var posResolved = venue.resolveContent(Strings.create(posId.toHexString()), ctx);
+		assertNotNull(posResolved, "POS_CONTENT must resolve");
+		assertEquals(posBytes, posResolved.content().getBlob());
+
+		// (c) content.sha256 — a blob in the global content store (PUT /content).
+		Blob blob = Blob.wrap("uploaded blob bytes".getBytes());
+		Hash sha = Hashing.sha256(blob.getBytes());
+		String shaMeta = "{\"name\":\"sha-form\",\"content\":{\"sha256\":\"" + sha.toHexString() + "\"}}";
+		Hash shaId = venue.storeAsset(Strings.create(shaMeta), null);
+		venue.putContent(shaId, new java.io.ByteArrayInputStream(blob.getBytes()));
+		var shaResolved = venue.resolveContent(Strings.create(shaId.toHexString()), ctx);
+		assertNotNull(shaResolved, "content-store blob must resolve");
+		assertEquals(blob, shaResolved.content().getBlob());
+
+		// The metadata-only path agrees with the universal one for the forms it
+		// can serve (inline, sha256) — no divergence.
+		assertNotNull(venue.getContent(venue.getMetaValue(inlineId)), "getContent(meta) serves inline");
+		assertNotNull(venue.getContent(venue.getMetaValue(shaId)), "getContent(meta) serves sha256");
+	}
+
+	@Test
 	public void testTempVenue() throws IOException {
 		Blob content=Blob.EMPTY;
 		Hash id=venue.storeAsset(EMPTY_META,content);

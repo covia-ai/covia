@@ -485,6 +485,29 @@ public class VenueServerTest {
 	}
 
 	@Test
+	public void testInlineContentOverHTTP() throws Exception {
+		// covia#289: an asset whose content is declared inline (content.inline, no
+		// blob upload) must be fetchable through GET /assets/{id}/content — the
+		// same endpoint the SDK's getContent() uses. This 500'd before the content
+		// paths were unified, because the REST handler took the blob-only route.
+		String body = "# Hello\nThis body lives in metadata.";
+		ACell metadata = Maps.of(
+			Fields.NAME, "inline-demo",
+			Fields.CONTENT, Maps.of(
+				Fields.CONTENT_TYPE, "text/markdown",
+				Fields.INLINE, body));
+
+		Hash assetId = covia.addAsset(metadata).get(5, TimeUnit.SECONDS);
+		assertNotNull(assetId);
+
+		// No addContent step — the bytes are in the metadata itself.
+		AContent retrieved = covia.getContent(assetId.toString()).get(5, TimeUnit.SECONDS);
+		assertNotNull(retrieved, "inline content must be retrievable over HTTP (#289)");
+		assertEquals(body, new String(retrieved.getBlob().getBytes(),
+			java.nio.charset.StandardCharsets.UTF_8));
+	}
+
+	@Test
 	public void testHTTPInvokeAgentCreate() throws Exception {
 		// Reproduce: POST /invoke with agent:create — should not hang
 		HttpClient client = HttpClient.newBuilder().build();

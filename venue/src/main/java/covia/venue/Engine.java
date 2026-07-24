@@ -1563,16 +1563,35 @@ public class Engine {
 	 * @return Content stream, or null if not available / does not exist
 	 */
 	public InputStream getContentStream(AMap<AString,ACell> meta) throws IOException {
-		if (meta==null) return null;
-		AMap<AString,ACell> content=RT.ensureMap(meta.get(Fields.CONTENT));
-		if (content==null) return null;
-		Hash contentHash=Hash.parse(RT.ensureString(content.get(Fields.SHA256)));
-		if (contentHash==null) {
-			throw new IllegalArgumentException("Metadata does not have valid content hash");
+		AContent c = contentFromMeta(meta);
+		return (c == null) ? null : c.getInputStream();
+	}
+
+	/**
+	 * Content derivable from metadata <em>alone</em>: {@code content.inline} bytes
+	 * (embedded in the metadata, so covered by the asset identity hash) or a
+	 * {@code content.sha256} blob from the global content store (the
+	 * {@code PUT /content} upload path). No asset record ({@code POS_CONTENT}) or
+	 * caller authority ({@code content.dlfs}) is needed.
+	 *
+	 * <p>This is the single place both content forms are decoded.
+	 * {@link #resolveContent} composes it with the record and provider lookups, so
+	 * the metadata-only path ({@link #getContent(AMap)}) and the universal
+	 * reference path can never diverge on inline vs blob content — the split that
+	 * left {@code GET /assets/{id}/content} throwing on inline (covia#289).</p>
+	 *
+	 * @return the content, or {@code null} when the metadata declares neither form
+	 */
+	private AContent contentFromMeta(AMap<AString,ACell> meta) throws IOException {
+		if (meta == null) return null;
+		AString inline = RT.ensureString(RT.getIn(meta, Fields.CONTENT, Fields.INLINE));
+		if (inline != null) {
+			return covia.grid.impl.BlobContent.of(convex.core.data.Blob.wrap(
+				inline.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
 		}
-		AContent c = contentStorage.getContent(contentHash);
-		if (c==null) return null;
-		return c.getInputStream();
+		Hash contentHash = Hash.parse(RT.ensureString(RT.getIn(meta, Fields.CONTENT, Fields.SHA256)));
+		if (contentHash != null) return contentStorage.getContent(contentHash);
+		return null;
 	}
 
 	/**
@@ -1581,14 +1600,7 @@ public class Engine {
 	 * @return Content, or null if not available / does not exist
 	 */
 	public AContent getContent(AMap<AString,ACell> meta) throws IOException {
-		if (meta==null) return null;
-		AMap<AString,ACell> content=RT.ensureMap(meta.get(Fields.CONTENT));
-		if (content==null) return null;
-		Hash contentHash=Hash.parse(RT.ensureString(content.get(Fields.SHA256)));
-		if (contentHash==null) {
-			throw new IllegalArgumentException("Metadata does not have valid content hash");
-		}
-		return contentStorage.getContent(contentHash);
+		return contentFromMeta(meta);
 	}
 
 
@@ -1679,16 +1691,18 @@ public class Engine {
 			}
 		}
 
-		// Metadata-declared inline content: content.inline carries small textual
-		// content directly in the metadata map. The bytes are part of the
-		// metadata itself, so the asset's identity hash already covers them —
-		// there is no separate verification (unlike content.dlfs below).
-		AString inline = RT.ensureString(RT.getIn(meta, Fields.CONTENT, "inline"));
-		if (inline != null) {
-			convex.core.data.ABlob bytes = convex.core.data.Blob.wrap(
-				inline.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+		// Content the metadata carries directly: content.inline bytes, or a
+		// content.sha256 blob in the global content store (the PUT /content upload
+		// path). Decoded by the shared contentFromMeta helper, so this universal
+		// path and the metadata-only getContent(meta) never diverge (covia#289).
+		// A dlfs-PINNED asset also declares content.sha256 for verification but
+		// keeps its bytes in the drive, so a content-store miss here falls through
+		// to the dlfs branch below.
+		AMap<AString,ACell> metaMap = RT.ensureMap(meta);
+		AContent metaContent = contentFromMeta(metaMap);
+		if (metaContent != null) {
 			return new covia.venue.storage.ContentProvider.Resolved(
-				covia.grid.impl.BlobContent.of(bytes), (ct != null) ? ct.toString() : null);
+				metaContent, (ct != null) ? ct.toString() : null);
 		}
 
 		// Metadata-declared alternative storage: content.dlfs names a drive path.
