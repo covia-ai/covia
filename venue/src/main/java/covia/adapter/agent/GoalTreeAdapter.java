@@ -538,10 +538,26 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 				}
 				store = new FrameStore.LatticeFrameStore(agentState, sid, epoch, ctx.getCancellation());
 
+				// Drives frame settling below (:665) — a crash resume runs child
+				// frames, an operator stop does not. Repair is deliberately NOT
+				// gated on it; see below.
 				tidyInterrupted = !resuming && store.frames().count() > 1;
-				if (resuming || tidyInterrupted) {
+
+				// An unanswered tool call is simply a FAILED tool call (#271).
+				// Tool failures are already ordinary outcomes everywhere else —
+				// a timeout, a denial or malformed arguments all come back as an
+				// "Error: …" tool result the model reads and recovers from — so a
+				// call that never returned gets the same treatment, and the agent
+				// decides what to do. Repairing only when the session LOOKS
+				// crashed (resuming/tidyInterrupted) left any other abort — a
+				// cancelled transition, a failed CAS, a suspend — with a
+				// tool_use carrying no tool_result. Providers reject such a
+				// history outright, so one transient failure poisoned the session
+				// permanently, with nothing to heal it short of a venue restart.
+				// Repairing on every load makes that state unreachable.
+				if (store.frames().count() > 0) {
 					AString note = Strings.create(
-						"Error: venue restarted before this tool call returned — "
+						"Error: this tool call did not return — "
 						+ "its effects may or may not have applied; verify before retrying.");
 					if (!store.update(f -> GoalTreeContext.repairDanglingToolCalls(f, note))) {
 						return abortedOutput(store);
