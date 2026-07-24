@@ -9,7 +9,6 @@
 			"type": "object",
 			"properties": {
 				"token": {
-					"type": ["string", "object"],
 					"description": "The UCAN to verify: a JWT string (as returned by ucan_issue or minted client-side) or a token map"
 				},
 				"with": {

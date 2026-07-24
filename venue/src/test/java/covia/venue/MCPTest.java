@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -611,6 +612,14 @@ public class MCPTest {
 		if (typeVal instanceof AString ts) {
 			assertTrue(validTypes.contains(ts.toString()),
 				path + " has invalid type: \"" + ts + "\"");
+		} else if (typeVal instanceof AVector) {
+			// Union type arrays (e.g. ["null","object",...]) are valid JSON Schema
+			// but strict MCP client SDKs reject them — CrewAI's tool converter
+			// crashes on the whole tool list at connect (covia#275). Front-door
+			// tool schemas must express "any shape" type-less (description only),
+			// never as a type array.
+			fail(path + " uses a union type array " + typeVal + " — strict MCP "
+				+ "clients reject these; make it type-less (description only) instead (covia#275)");
 		}
 
 		// Check no non-standard keys
