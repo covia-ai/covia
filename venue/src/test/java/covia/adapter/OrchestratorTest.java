@@ -858,6 +858,138 @@ public class OrchestratorTest {
 		assertEquals(0L, items.count());
 	}
 
+	// ========== Spec validation at construction (#281) ==========
+
+	@Test
+	public void testMalformedStepSpecFailsBeforeAnyStepRuns() {
+		// The reason validation belongs at construction: a typo in step 1 must not
+		// let step 0 run and apply its side effect first. The dependency walk used
+		// to silently ignore what computeInput rejects, so the orchestration
+		// started, wrote, and only then failed on the bad spec.
+		String path = "w/orch281/validate-step";
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Bad spec downstream",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/ops/covia/write", "input": {
+							"path":  ["input", "p"],
+							"value": ["const", "SHOULD-NOT-EXIST"] } },
+						{ "op": "v/test/ops/echo", "input": { "bad": ["nonsense", 1] } }
+					],
+					"result": { "ok": ["const", true] }
+				}
+			}
+		""");
+
+		// Rejection is synchronous: the adapter throws during construction, so
+		// JobManager records the terminal failure and rethrows (JobManager:283).
+		assertThrows(RuntimeException.class, () ->
+			engine.jobs().invokeOperation(hash,
+				Maps.of(Strings.create("p"), Strings.create(path)),
+				RequestContext.of(ALICE_DID)),
+			"orchestration should be rejected for the malformed step 1 spec");
+
+		assertFalse(readExists(path),
+			"validation must precede execution; step 0 wrote " + path + " before the bad spec was caught");
+	}
+
+	@Test
+	public void testMalformedResultSpecFailsBeforeAnyStepRuns() {
+		// The result spec is evaluated only after every step completes, so a typo
+		// there used to surface at the very end — with all side effects applied
+		// and no step to blame.
+		String path = "w/orch281/validate-result";
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Bad result spec",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/ops/covia/write", "input": {
+							"path":  ["input", "p"],
+							"value": ["const", "SHOULD-NOT-EXIST"] } }
+					],
+					"result": { "oops": ["nonsense"] }
+				}
+			}
+		""");
+
+		assertThrows(RuntimeException.class, () ->
+			engine.jobs().invokeOperation(hash,
+				Maps.of(Strings.create("p"), Strings.create(path)),
+				RequestContext.of(ALICE_DID)),
+			"orchestration should be rejected for the malformed result spec");
+
+		assertFalse(readExists(path),
+			"a malformed result must be caught before any step runs; " + path + " was written");
+	}
+
+	@Test
+	public void testInvalidSpecFormsAreRejected() {
+		// Every form computeInput rejects must also be rejected by the dependency
+		// walk, or it fails mid-run instead of at construction.
+		assertSpecRejected("{ \"k\": [\"nonsense\", 1] }", "Unrecognised input source");
+		assertSpecRejected("{ \"k\": \"a bare string\" }", "Unrecognised input spec");
+		assertSpecRejected("{ \"k\": 42 }",                "Unrecognised input spec");
+		assertSpecRejected("{ \"k\": [\"const\"] }",       "requires a value");
+		assertSpecRejected("{ \"k\": [] }",                "Empty vector");
+		// Step 0 can reference no earlier step, so any index is out of range.
+		assertSpecRejected("{ \"k\": [0, \"x\"] }",        "references step 0");
+		// Nested inside the forms that DO recurse.
+		assertSpecRejected("{ \"k\": [\"array\", [\"nonsense\"]] }",  "Unrecognised input source");
+		assertSpecRejected("{ \"k\": [\"concat\", [\"nonsense\"]] }", "Unrecognised input source");
+	}
+
+	@Test
+	public void testConstSubtreeIsNeitherScannedNorValidated() {
+		// ["const", …] freezes its subtree, so neither walk descends into it. A
+		// literal may therefore contain anything — including something that merely
+		// LOOKS like a step reference. Were const scanned, [99, …] would be
+		// rejected as an out-of-range step.
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Frozen const",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{ "op": "v/test/ops/echo", "input": {
+							"literal": ["const", [99, "not-a-step-ref"]] } }
+					],
+					"result": { "literal": [0, "literal"] }
+				}
+			}
+		""");
+
+		Job job = engine.jobs().invokeOperation(hash,
+			Maps.empty(), RequestContext.of(ALICE_DID));
+		ACell result = job.awaitResult(5000);
+
+		AVector<ACell> literal = RT.ensureVector(RT.getIn(result, Strings.create("literal")));
+		assertNotNull(literal, "const subtree must survive verbatim");
+		assertEquals(2L, literal.count());
+		assertEquals(CVMLong.create(99), literal.get(0));
+	}
+
+	/**
+	 * Asserts an orchestration whose single step carries {@code inputSpecJson} is
+	 * rejected, and that the reported error names the problem.
+	 */
+	private void assertSpecRejected(String inputSpecJson, String expectedFragment) {
+		String hash = storeJsonOrchestration(
+			"{ \"name\": \"Spec check\", \"operation\": { \"adapter\": \"orchestrator\","
+			+ " \"steps\": [ { \"op\": \"v/test/ops/echo\", \"input\": " + inputSpecJson + " } ],"
+			+ " \"result\": { \"r\": [0] } } }");
+
+		RuntimeException e = assertThrows(RuntimeException.class, () ->
+			engine.jobs().invokeOperation(hash, Maps.empty(), RequestContext.of(ALICE_DID)),
+			"spec should have been rejected: " + inputSpecJson);
+		assertTrue(e.getMessage() != null && e.getMessage().contains(expectedFragment),
+			"for spec " + inputSpecJson + " expected error containing '"
+				+ expectedFragment + "' but got: " + e.getMessage());
+	}
+
 	// ========== Failure containment (#281) ==========
 
 	@Test
