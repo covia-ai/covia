@@ -176,13 +176,95 @@ public class GoalTreeCrashResumeTest {
 				15_000, "resumed cycle completes and releases the claim");
 
 			AVector<ACell> conv = rootConversation(engine, "boot-agent", sid);
-			assertEquals(1, countTurnsContaining(conv, "venue restarted"),
-				"exactly one synthetic restart result for the dangling call: " + conv);
+			assertEquals(1, countTurnsContaining(conv, "did not return"),
+				"exactly one synthetic error result for the dangling call: " + conv);
 			assertTrue(countTurnsContaining(conv, "gave up") > 0,
 				"the model continued from the synthetic result: " + conv);
 			assertEquals(1, countTurnsContaining(conv, "please use the slow tool"),
 				"no duplicated user turn on resume");
 
+			engine.close();
+			ns.close();
+		}
+	}
+
+	/**
+	 * An unanswered tool call is repaired WITHOUT a restart (#271).
+	 *
+	 * <p>Every other tool failure — timeout, denial, malformed arguments — already
+	 * comes back as an {@code "Error: …"} tool result the model reads and recovers
+	 * from. A call that never returned must be no different. Repair used to be
+	 * gated on the session looking crashed, so any other abort left a
+	 * {@code tool_use} with no {@code tool_result}; providers reject such a
+	 * history outright, so one transient failure poisoned the session
+	 * permanently — every later message on it failed while fresh sessions worked.</p>
+	 *
+	 * <p>{@code agent:suspend} reproduces it deterministically with no process
+	 * death: it cancels the in-flight transition AND clears the cycle claim, so
+	 * the session presents as perfectly clean while its conversation still holds
+	 * the dangling call. Nothing here restarts the venue.</p>
+	 */
+	@Test
+	public void testAbortedTurnRepairsWithoutRestart() throws Exception {
+		EtchStore store = EtchStore.createTemp();
+		AKeyPair kp = AKeyPair.generate();
+		String did = "did:key:" + Multikey.encodePublicKey(kp.getAccountKey());
+		AMap<AString, ACell> config = Maps.of(Config.DID, did,
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true));
+		Blob sid = Blob.fromHex("cc112233445566778899aabbccddee09");
+
+		NodeServer<Index<Keyword, ACell>> ns = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
+		ns.launch();
+		Engine engine = new Engine(config, ns.getCursor(), kp).start();
+		Engine.addDemoAssets(engine);
+		try {
+			createGoalAgent(engine, "nokill-agent", "v/test/ops/nevertoolllm");
+			agent(engine, "nokill-agent").ensureSession(sid, ALICE);
+
+			engine.jobs().invokeOperation(
+				"v/ops/agent/message",
+				Maps.of(Fields.AGENT_ID, "nokill-agent",
+					Fields.SESSION_ID, Strings.create(sid.toHexString()),
+					Fields.MESSAGE, Strings.create("please use the slow tool")),
+				RequestContext.of(ALICE)).awaitResult(5000);
+
+			await(() -> {
+				AVector<ACell> conv = rootConversation(engine, "nokill-agent", sid);
+				return conv != null && countTurnsContaining(conv, "toolCalls") > 0;
+			}, 10_000, "cycle parked in the never-tool");
+
+			// Abort the turn in place — no crash, no restart.
+			engine.jobs().invokeOperation(
+				"v/ops/agent/suspend",
+				Maps.of(Fields.AGENT_ID, "nokill-agent"),
+				RequestContext.of(ALICE)).awaitResult(5000);
+
+			// The poisoned shape: the session looks clean (no cycle claim), yet
+			// the conversation still carries a tool call with no result.
+			await(() -> agent(engine, "nokill-agent").getSessionCycleEpoch(sid) == null,
+				10_000, "cycle claim cleared by suspend");
+			assertTrue(countTurnsContaining(
+					rootConversation(engine, "nokill-agent", sid), "toolCalls") > 0,
+				"precondition: the dangling toolCall is still on the lattice");
+
+			engine.jobs().invokeOperation(
+				"v/ops/agent/resume",
+				Maps.of(Fields.AGENT_ID, "nokill-agent"),
+				RequestContext.of(ALICE)).awaitResult(5000);
+
+			// Next turn on the SAME session: loading the conversation must heal
+			// the dangling call rather than hand the provider an invalid history.
+			engine.jobs().invokeOperation(
+				"v/ops/agent/message",
+				Maps.of(Fields.AGENT_ID, "nokill-agent",
+					Fields.SESSION_ID, Strings.create(sid.toHexString()),
+					Fields.MESSAGE, Strings.create("are you still there")),
+				RequestContext.of(ALICE)).awaitResult(5000);
+
+			await(() -> countTurnsContaining(
+					rootConversation(engine, "nokill-agent", sid), "did not return") == 1,
+				10_000, "dangling call answered with a synthetic error result, no restart involved");
+		} finally {
 			engine.close();
 			ns.close();
 		}
@@ -378,8 +460,8 @@ public class GoalTreeCrashResumeTest {
 
 			// The resumed cycle finished the conversation in that session.
 			AVector<ACell> conv = rootConversation(engine, "mint-agent", sid);
-			assertEquals(1, countTurnsContaining(conv, "venue restarted"),
-				"exactly one synthetic restart turn");
+			assertEquals(1, countTurnsContaining(conv, "did not return"),
+				"exactly one synthetic error turn");
 
 			engine.close();
 			ns.close();
