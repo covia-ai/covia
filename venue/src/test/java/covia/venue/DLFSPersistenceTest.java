@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import convex.core.data.ACell;
@@ -26,6 +27,10 @@ import covia.lattice.Covia;
  * Tests DLFS data persistence through the full venue stack:
  * DLFSAdapter → cursor chain → NodeServer propagator → Etch store → restore.
  */
+// Durability guarantee: forks real JVMs / relaunches venues to prove crash
+// and restart survival. Slow and unavoidably so — excluded from the default
+// `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
+@Tag("durability")
 public class DLFSPersistenceTest {
 
 	static final AString ALICE_DID = Strings.create("did:key:z6MkAlice");

@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
@@ -49,6 +50,10 @@ import covia.venue.server.VenueServer;
  * cached cursor in the second VenueServer happens to return the right
  * value in memory.</p>
  */
+// Durability guarantee: forks real JVMs / relaunches venues to prove crash
+// and restart survival. Slow and unavoidably so — excluded from the default
+// `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
+@Tag("durability")
 public class SoftKillPersistenceTest {
 
 	private static final AString ALICE_DID = Strings.create("did:key:z6MkSoftKillAlice");

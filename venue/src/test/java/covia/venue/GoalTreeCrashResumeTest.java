@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.function.BooleanSupplier;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
@@ -37,6 +38,10 @@ import covia.lattice.Covia;
  * parked deterministically in a {@code v/test/ops/never} tool call with a
  * long timeout, so the "crash" (engine close) always lands mid-cycle.
  */
+// Durability guarantee: forks real JVMs / relaunches venues to prove crash
+// and restart survival. Slow and unavoidably so — excluded from the default
+// `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
+@Tag("durability")
 public class GoalTreeCrashResumeTest {
 
 	private static final AString ALICE = Strings.create("did:key:z6MkCrashResumeAlice");

@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
@@ -44,6 +45,10 @@ import covia.venue.server.VenueServer;
  * <p>See {@code venue/docs/PERSISTENCE.md} §7 for the test plan these
  * implement.</p>
  */
+// Durability guarantee: forks real JVMs / relaunches venues to prove crash
+// and restart survival. Slow and unavoidably so — excluded from the default
+// `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
+@Tag("durability")
 public class HardKillPersistenceTest {
 
 	private static final AString ALICE_DID = HardKillTestChild.ALICE_DID;

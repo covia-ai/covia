@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.TimeUnit;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
@@ -34,6 +35,10 @@ import covia.venue.RequestContext;
  * shut down, restart from the same store, and recover all assets, jobs,
  * and content correctly.
  */
+// Durability guarantee: forks real JVMs / relaunches venues to prove crash
+// and restart survival. Slow and unavoidably so — excluded from the default
+// `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
+@Tag("durability")
 public class VenueRestartTest {
 
 	@Test

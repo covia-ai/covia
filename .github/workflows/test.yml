@@ -54,4 +54,8 @@ jobs:
         fi
 
     - name: Build and test (full reactor)
-      run: mvn clean install
+      # Override the default exclusions to RUN the durability group (crash/restart
+      # survival tests) — they are excluded from the local `mvn test` inner loop
+      # for speed but must gate every push. `integration` stays excluded (external
+      # services: network/Ollama).
+      run: mvn clean install -Dcovia.excludedTestGroups=integration

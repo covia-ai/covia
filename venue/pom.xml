@@ -11,6 +11,16 @@
 	<name>Covia Venue</name>
 	<description>Covia venue server runtime: the grid node that hosts operations, agents, assets, and the REST/MCP/A2A APIs.</description>
 
+	<properties>
+		<!-- Test groups excluded from the default `mvn test`. `integration` hits
+		     external services (network/Ollama); `durability` forks real JVMs and
+		     relaunches venues for crash/restart survival (~14s, dominated by the
+		     hard-kill test). CI overrides this to run durability on every push:
+		     `-Dcovia.excludedTestGroups=integration`. Run durability locally with
+		     the same override, or a single class via `-Dtest=`. -->
+		<covia.excludedTestGroups>integration,durability</covia.excludedTestGroups>
+	</properties>
+
 	<build>
 		<plugins>
 			<plugin>
@@ -18,9 +28,11 @@
 				<artifactId>maven-surefire-plugin</artifactId>
 				<version>3.5.6</version>
 				<configuration>
-					<!-- Skip integration tests by default. Run them explicitly with
-					     mvn test -Dgroups=integration -DexcludedGroups= -->
-					<excludedGroups>integration</excludedGroups>
+					<!-- Default excludes integration + durability (see the
+					     covia.excludedTestGroups property above). Run an excluded
+					     group explicitly with e.g. mvn test -Dgroups=durability
+					     -Dcovia.excludedTestGroups= -->
+					<excludedGroups>${covia.excludedTestGroups}</excludedGroups>
 				</configuration>
 			</plugin>
 			<plugin>

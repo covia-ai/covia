@@ -12,6 +12,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
@@ -55,6 +56,10 @@ import covia.venue.server.VenueServer;
  * dependency is {@code latch.await(timeout)} which is bounded and
  * deterministic given a working implementation.</p>
  */
+// Durability guarantee: forks real JVMs / relaunches venues to prove crash
+// and restart survival. Slow and unavoidably so — excluded from the default
+// `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
+@Tag("durability")
 public class EnginePersistenceTest {
 
 	private static final AString ALICE_DID = Strings.create("did:key:z6MkAlicePersistTest");

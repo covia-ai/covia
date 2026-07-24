@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import convex.core.crypto.AKeyPair;
@@ -36,6 +37,10 @@ import covia.venue.server.VenueServer;
  * Engine.initialiseFromCursor() (which read an empty cursor). Fixed by moving
  * launch() into the VenueServer constructor.
  */
+// Durability guarantee: forks real JVMs / relaunches venues to prove crash
+// and restart survival. Slow and unavoidably so — excluded from the default
+// `mvn test` inner loop, run on every push via CI (-DexcludedGroups=integration).
+@Tag("durability")
 public class VenueServerPersistenceTest {
 
 	private HttpClient http = HttpClient.newBuilder()
