@@ -48,7 +48,7 @@
 		<maven.compiler.target>21</maven.compiler.target>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		
-		<logback.version>1.5.37</logback.version>
+		<logback.version>1.6.0</logback.version>
 		<slf4j.version>2.0.18</slf4j.version>
 		<hc.version>5.5</hc.version>
 		<javalin.version>7.2.2</javalin.version>
