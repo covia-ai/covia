@@ -1,8 +1,8 @@
-# HITL Self-Sovereign Token Transport (COG-18, design)
+# HITL Self-Sovereign Token Transport (COG-19, design)
 
 How a resident agent obtains a capability token it can use on **another
 venue** — by asking its human, who signs the token with their own key. The
-protocol-level specification is **COG-18** (covia-docs); this document is the
+protocol-level specification is **COG-19** (covia-docs); this document is the
 implementation-facing design. It builds on COG-16 (HITL, `venue/docs`/the
 `hitl` skill) and COG-17 (granting surfaces, [UCAN.md](./UCAN.md) §4.1); it is a
 proposal — the decisions it must settle are at the end.

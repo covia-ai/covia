@@ -815,7 +815,7 @@ ability. Under a restricted `config.caps` scope:
 
 > For how a resident **agent** obtains a user-signed token to act on another
 > venue — the human signs client-side, the venue only transports — see
-> [HITL_TOKEN_TRANSPORT.md](./HITL_TOKEN_TRANSPORT.md) (COG-18, design;
+> [HITL_TOKEN_TRANSPORT.md](./HITL_TOKEN_TRANSPORT.md) (COG-19, design;
 > covia#292).
 
 Every delegation chain terminates in a **root** — a token whose `prf` is

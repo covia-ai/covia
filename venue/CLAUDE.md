@@ -222,7 +222,7 @@ java -jar target/covia.jar [config.json]
 - `docs/CONFIG.md` — operator configuration reference
 - `docs/JOBS.md` — job implementation semantics (COG-8 companion)
 - `docs/UCAN.md` — capabilities, granting surface, proof channels
-- `docs/HITL_TOKEN_TRANSPORT.md` — COG-18 design (proposal): HITL transport of
+- `docs/HITL_TOKEN_TRANSPORT.md` — COG-19 design (proposal): HITL transport of
   a user-signed, self-sovereign token for cross-venue access (covia#292)
 - `docs/SKILLS.md` — agent skill system
 - `docs/OPERATIONS.md` — operation model, defaults, discovery
