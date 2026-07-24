@@ -66,22 +66,55 @@ public class VenueServerTest {
 	}
 	
 	/**
-	 * The Private Network Access header must be OFF by default — emitting it
-	 * lets a public web origin reach a localhost venue from the browser
-	 * (covia#130 / GetMine-ai/demo#133 P0-2). Operator opt-in only.
+	 * Private Network Access default follows the bind (covia#286, refining
+	 * covia#130). A non-loopback venue keeps it OFF — emitting it would let a
+	 * public web origin reach a private-network venue from the browser. A
+	 * loopback-bound venue answers PNA preflights so the "hosted page → your own
+	 * localhost venue" flow works; an explicit setting overrides either way.
 	 */
-	@Test public void testPrivateNetworkHeaderGatedOff() throws Exception {
+	@Test public void testPrivateNetworkHeaderFollowsBind() throws Exception {
+		// The shared TestServer sets no bindAddress → all-interfaces → PNA off.
 		HttpClient client = HttpClient.newBuilder().build();
 		HttpRequest req = HttpRequest.newBuilder()
 			.uri(new URI("http://localhost:" + PORT + "/api/v1/status"))
 			.GET().timeout(Duration.ofSeconds(10)).build();
 		HttpResponse<String> resp = client.send(req, HttpResponse.BodyHandlers.ofString());
 		assertTrue(resp.headers().firstValue("access-control-allow-private-network").isEmpty(),
-			"PNA header must not be emitted by default");
+			"PNA header must not be emitted on a non-loopback bind");
 
-		// Config getter: off by default, on only when explicitly enabled.
-		assertFalse(new Config(Maps.empty()).isAllowPrivateNetwork());
-		assertTrue(new Config(Maps.of(Config.ALLOW_PRIVATE_NETWORK, CVMBool.TRUE)).isAllowPrivateNetwork());
+		// Default OFF for a non-loopback bind (empty config = all interfaces).
+		assertFalse(new Config(Maps.empty()).isAllowPrivateNetwork(),
+			"default off when not loopback-bound");
+		// Default ON for a loopback bind — the localhost first-touch flow.
+		assertTrue(new Config(Maps.of(Config.BIND_ADDRESS, Strings.create("127.0.0.1")))
+			.isAllowPrivateNetwork(), "loopback bind answers PNA by default");
+		// Explicit setting overrides the bind default in both directions.
+		assertTrue(new Config(Maps.of(Config.ALLOW_PRIVATE_NETWORK, CVMBool.TRUE))
+			.isAllowPrivateNetwork(), "explicit true overrides a non-loopback bind");
+		assertFalse(new Config(Maps.of(
+				Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
+				Config.ALLOW_PRIVATE_NETWORK, CVMBool.FALSE))
+			.isAllowPrivateNetwork(), "explicit false overrides a loopback bind");
+	}
+
+	/**
+	 * End-to-end #286: a loopback-bound venue answers PNA preflights with
+	 * Access-Control-Allow-Private-Network: true, so a hosted https page can
+	 * reach the user's own localhost venue instead of failing with TypeError.
+	 */
+	@Test public void testLoopbackVenueAnswersPnaPreflight() throws Exception {
+		VenueServer server = VenueServer.launch(Maps.of(
+			Config.PORT, CVMLong.create(0),
+			Config.BIND_ADDRESS, Strings.create("127.0.0.1")));
+		try {
+			HttpResponse<String> preflight = corsPreflight(server, "https://demo.example");
+			assertEquals(204, preflight.statusCode());
+			assertEquals("true", preflight.headers()
+				.firstValue("access-control-allow-private-network").orElse(null),
+				"a loopback venue must answer PNA preflights by default (#286)");
+		} finally {
+			server.close();
+		}
 	}
 
 	@Test public void testCorsOriginListAndPreflight() throws Exception {

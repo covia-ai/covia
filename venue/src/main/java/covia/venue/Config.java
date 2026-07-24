@@ -1067,13 +1067,26 @@ public class Config {
 
 	/**
 	 * Whether to emit the {@code access-control-allow-private-network} response
-	 * header, which lets a public web origin reach a venue on a private/loopback
-	 * address from the browser. Off by default — it undermines {@code corsOrigins}
-	 * scoping; enable it only for the preview-origin dev workflow that needs it.
+	 * header, which lets a public web origin reach this venue on a
+	 * private/loopback address from the browser (Chrome Private Network Access).
+	 *
+	 * <p><b>Default follows the bind (covia#286):</b> a loopback-bound venue
+	 * answers PNA preflights, so a hosted https page can reach the user's own
+	 * localhost venue — the venue is reachable only from its own machine, which
+	 * is exactly the case PNA is meant to permit with server consent. A public-
+	 * or LAN-bound venue keeps it off: PNA protects private networks from public
+	 * origins, and a public-internet venue never receives a PNA preflight anyway.
+	 * The same loopback signal already gates the rate-limit default.</p>
+	 *
+	 * <p>An explicit {@code allowPrivateNetwork} setting overrides the default in
+	 * either direction — set {@code true} to answer PNA preflights on a non-
+	 * loopback dev venue (accepting that a public origin may then reach it across
+	 * the private network), or {@code false} to refuse them even on loopback.</p>
 	 */
 	public boolean isAllowPrivateNetwork() {
 		ACell v = config.get(ALLOW_PRIVATE_NETWORK);
-		return (v != null) && RT.bool(v);
+		if (v != null) return RT.bool(v);   // explicit override, either direction
+		return isLoopbackBind();
 	}
 
 	/**

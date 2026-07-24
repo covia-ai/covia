@@ -100,10 +100,27 @@ not URLs with paths. For compatibility with the previous Javalin setting, a
 bare configured host defaults to HTTPS. Invalid or ambiguous configuration
 fails at startup rather than silently widening access.
 
-`allowPrivateNetwork` opts into the browser Private Network Access response
-header after the origin passes the CORS policy. It defaults to `false`; enable
-it only when a public frontend genuinely needs to reach a private or
-loopback-bound venue.
+`allowPrivateNetwork` emits the browser Private Network Access response header
+(`Access-Control-Allow-Private-Network: true`) after the origin passes the CORS
+policy, so a hosted https page can reach this venue on a loopback/private
+address (Chrome/Edge/Firefox otherwise fail such a fetch with `TypeError`).
+
+Its **default follows the bind**: a loopback-bound venue (`bindAddress` of
+`127.0.0.1`/`localhost`/`::1`) answers PNA preflights automatically — that is
+the "hosted demo → the venue you just started locally" first-touch flow, and a
+loopback venue is reachable only from its own machine. A public- or LAN-bound
+venue (including the default all-interfaces bind) keeps it **off**: PNA exists
+to stop public origins reaching private-network services, and a public-internet
+venue never receives a PNA preflight anyway. Set `allowPrivateNetwork` explicitly
+to override in either direction — `true` to answer preflights on a non-loopback
+dev venue (accepting that a public origin may then reach it across the private
+network), or `false` to refuse them even on loopback. The checked-in
+`local-dev.json` sets it `true` so the demo flow works on its all-interfaces bind.
+
+> **Safari caveat:** Safari has no PNA opt-in and blocks localhost-from-https
+> regardless of this header. The universal answer for a hosted page reaching a
+> local venue is an https venue (or a tunnel); the header unblocks the
+> Chrome/Edge/Firefox majority only.
 
 ## System tray
 
