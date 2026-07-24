@@ -682,17 +682,19 @@ public class CoviaAdapter extends AAdapter {
 		AString p = RT.ensureString(RT.getIn(input, Fields.PATH));
 		// The single authorisation gate for lattice access — "am I authorised for
 		// this path?", branching on ownership, not across call sites:
-		//   • own namespace (a bare path, or an explicit did:<self>/…), and
-		//     content-addressed /a/ reads (ownerless — the hash is the capability)
+		//   • the caller's own namespace (a bare path, or an explicit did:<self>/…)
 		//     → the additive scope+proof seam, whose null-scope fast path means
 		//     "unrestricted over my own namespace";
-		//   • another user's private namespace (did:<other>/w|s|j|g|o/…) → the
-		//     proof/public gate only, which has NO ambient own-namespace fast path,
-		//     so a null scope cannot reach it. A crud/<ability> delegation rooted
-		//     in the owner authorises it, symmetrically for reads and mutations.
-		// resolveDIDURL then only *locates* the owner's cursor — it does not
-		// re-authorise. One gate, here.
-		if (isCrossUserPrivatePath(ctx, p)) {
+		//   • another user's namespace (did:<other>/…, every namespace is per-DID
+		//     — w/, o/, s/, g/, j/, a/, …) → the proof/public gate only, which has
+		//     NO ambient own-namespace fast path, so a null scope cannot reach it.
+		//     A crud/<ability> delegation rooted in the owner authorises it.
+		// The lone exception is a content-addressed *read* (did:…/a/<hash>): an
+		// asset is identified by its hash, which is itself the read capability, so
+		// it resolves to a local copy under any DID (universal resolution) and is
+		// not owner-gated for reads. resolveDIDURL then only *locates* the owner's
+		// cursor — it does not re-authorise. One gate, here.
+		if (isCrossUserPath(ctx, p) && !isContentAddressedRead(p, ability)) {
 			if (!engine.crossUserAllows(ctx, p, ability)) throw crossUserDenial(ctx, p, ability);
 			return;
 		}
@@ -700,25 +702,38 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * True when {@code p} is a DID-URL path into <em>another</em> user's private
-	 * lattice namespace — the one case that must be gated by a presented proof (or
-	 * public policy) rather than the caller's ambient own-namespace authority. A
-	 * bare/relative path, an explicit own DID, and a content-addressed {@code /a/}
-	 * resource are all "the caller's own" for authorisation and take the scope
-	 * seam. Owner is the DID prefix (everything before the first {@code /}); the
-	 * namespace is the next segment.
+	 * True when {@code p} is a DID-URL path naming <em>another</em> user's
+	 * namespace — authorised by a presented proof (or public policy) rather than
+	 * the caller's ambient own-namespace authority. Every namespace is per-DID
+	 * (w/, o/, s/, g/, j/, a/, …); a bare/relative path and an explicit own DID
+	 * are the caller's own and take the scope seam. Owner is the DID prefix
+	 * (everything before the first {@code /}).
 	 */
-	private boolean isCrossUserPrivatePath(RequestContext ctx, AString p) {
+	private boolean isCrossUserPath(RequestContext ctx, AString p) {
 		if (p == null) return false;
 		String s = p.toString();
 		if (!s.startsWith("did:")) return false;              // bare/relative → own namespace
 		int slash = s.indexOf('/');
 		if (slash < 0) return false;                          // a bare DID, no lattice path
-		if (Strings.create(s.substring(0, slash)).equals(ctx.getUserDID())) return false; // own DID
-		String rest = s.substring(slash + 1);                 // namespace segment onward
-		int next = rest.indexOf('/');
-		String ns = (next < 0) ? rest : rest.substring(0, next);
-		return !"a".equals(ns);                               // /a/ is content-addressed, ownerless
+		return !Strings.create(s.substring(0, slash)).equals(ctx.getUserDID());
+	}
+
+	/**
+	 * A content-addressed asset <em>read</em>: a {@code /a/<hash>} path (bare or
+	 * DID-scoped) with a read ability. The CAD3 hash is the content's identity and
+	 * its read capability, so the asset resolves to a local copy under ANY DID
+	 * (universal resolution, {@code Engine.resolvePath}) — the DID prefix is a
+	 * locality hint, not an owner boundary — and such a read is therefore not
+	 * cross-user-gated. Reads only: {@code /a/} is not a writable namespace, so a
+	 * mutation is never widened by this.
+	 */
+	private static boolean isContentAddressedRead(AString p, AString ability) {
+		if (p == null || !Capability.CRUD_READ.equals(ability)) return false;
+		String s = p.toString();
+		int slash = s.startsWith("did:") ? s.indexOf('/') : -1;
+		String rest = (slash >= 0) ? s.substring(slash + 1) : s;
+		if (rest.startsWith("/")) rest = rest.substring(1);
+		return rest.startsWith("a/");
 	}
 
 	/** The cross-user denial: names the exact (ability, resource) and what proof
