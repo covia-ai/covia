@@ -109,9 +109,6 @@ public class MCP extends McpServer {
 		this.sseServer = new SseServer(engine());
 		this.includedAdapters = readIncludedAdapters(mcpConfig);
 		this.includePathPrefixes = readIncludePathPrefixes(mcpConfig);
-
-		// Register MCP SSE job notification broadcaster
-		engine().jobs().addJobUpdateListener(this::broadcastJobNotification);
 	}
 
 	private static java.util.List<String> readIncludePathPrefixes(AMap<AString, ACell> mcpConfig) {
@@ -519,34 +516,6 @@ public class MCP extends McpServer {
 		}
 		session.close();
 		ctx.status(200);
-	}
-
-	// ==================== Job notifications ====================
-
-	private void broadcastJobNotification(Job job) {
-		if (sessions.isEmpty()) return;
-		var jobId = job.getID();
-		if (jobId == null) return;
-
-		AMap<AString, ACell> notification = Maps.of(
-			"jsonrpc", "2.0",
-			"method", "notifications/jobUpdate",
-			"params", Maps.of(
-				"jobId", jobId,
-				"status", job.getStatus()
-			)
-		);
-
-		String data = JSON.print(notification).toString();
-		for (McpSession session : sessions.values()) {
-			for (SseConnection conn : session.sseConnections) {
-				try {
-					conn.sendEvent("message", data);
-				} catch (Exception e) {
-					log.debug("Failed to send MCP SSE notification", e);
-				}
-			}
-		}
 	}
 
 	// ==================== Tool metadata helpers ====================
