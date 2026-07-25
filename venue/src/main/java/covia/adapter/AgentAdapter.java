@@ -2321,7 +2321,8 @@ public class AgentAdapter extends AAdapter {
 
 		// Tool-failure diagnostics ([{name, error}], #211): persisted on the
 		// timeline entry so a denied/failed tool call is queryable after the
-		// cycle, and recorded as session turns below.
+		// cycle. The adapter's provider-shaped role:tool result in Fields.TURNS
+		// is the single session record of the same failure (#290).
 		AVector<ACell> toolFailures = RT.ensureVector(
 			RT.getIn(transitionResult, Fields.TOOL_FAILURES));
 		if (toolFailures != null && toolFailures.count() > 0) {
@@ -2400,26 +2401,6 @@ public class AgentAdapter extends AAdapter {
 					AMap<AString, ACell> turn = normaliseTransitionTurn(
 						transitionTurns.get(i), endTs);
 					if (turn != null) turnsToAppend = turnsToAppend.conj(turn);
-				}
-			}
-			// Tool failures precede the assistant response (that is the order
-			// they happened). Recorded as system turns so the next cycle's
-			// context re-sends them — the model sees its own prior denials —
-			// and agent:context / lattice reads can surface them (#211).
-			// (goaltree records its own tool trail in frames, so this branch
-			// — adapterFrames == null — never double-records.)
-			if (toolFailures != null) {
-				for (long i = 0; i < toolFailures.count(); i++) {
-					ACell f = toolFailures.get(i);
-					AString failName = RT.ensureString(RT.getIn(f, Fields.NAME));
-					AString failErr = RT.ensureString(RT.getIn(f, Fields.ERROR));
-					turnsToAppend = turnsToAppend.conj(Maps.of(
-						AgentState.K_ROLE,    AgentState.ROLE_SYSTEM,
-						AgentState.K_CONTENT, Strings.create("Tool call '"
-							+ (failName != null ? failName : "unknown") + "' failed: "
-							+ (failErr != null ? failErr : "(no detail)")),
-						AgentState.K_TURN_TS, CVMLong.create(endTs),
-						AgentState.K_SOURCE,  AgentState.SOURCE_TOOL));
 				}
 			}
 			if (leanResponse != null) {

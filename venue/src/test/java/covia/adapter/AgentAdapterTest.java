@@ -2432,9 +2432,10 @@ public class AgentAdapterTest {
 
 	/**
 	 * A denied tool call must stay observable after the cycle: on the
-	 * timeline entry ({@code toolFailures}), as a system turn in the session
-	 * conversation (so the next cycle's model sees it), and in
-	 * {@code agent:context} when inspected with the sessionId.
+	 * timeline entry ({@code toolFailures}), once as the provider-shaped tool
+	 * result in the session conversation, and in {@code agent:context} when
+	 * inspected with the sessionId. It must not also be copied into a synthetic
+	 * system turn (#290).
 	 */
 	@Test
 	@SuppressWarnings("unchecked")
@@ -2473,41 +2474,35 @@ public class AgentAdapterTest {
 		assertTrue(RT.getIn(failures.get(0), Fields.ERROR).toString().contains("Capability denied"),
 			"the recorded failure must carry the denial: " + failures.get(0));
 
-		// 2. Session conversation contains the system/tool-source turn
+		// 2. Session conversation contains exactly one tool failure turn: the
+		// provider-shaped result needed to keep the conversation valid.
 		AMap<AString, ACell> session = agent.getSession(Blob.fromHex(sidHex.toString()));
 		AVector<ACell> frames = RT.ensureVector(RT.getIn(session, Fields.FRAMES));
 		assertNotNull(frames, "session must carry frames");
 		AVector<ACell> conversation = RT.ensureVector(RT.getIn(frames.get(0), "conversation"));
-		boolean sawFailureTurn = false;
-		boolean sawRawToolTurn = false;
+		int failureTurns = 0;
 		for (long i = 0; i < conversation.count(); i++) {
 			ACell turn = conversation.get(i);
 			if (AgentState.SOURCE_TOOL.equals(RT.getIn(turn, "source"))) {
 				String content = String.valueOf(RT.getIn(turn, "content"));
 				assertTrue(content.contains("Capability denied"),
 					"the failure turn must carry the denial: " + content);
-				if (AgentState.ROLE_SYSTEM.equals(RT.getIn(turn, "role"))) {
-					sawFailureTurn = true;
-				} else if (Strings.intern("tool").equals(RT.getIn(turn, "role"))) {
-					sawRawToolTurn = true;
-				}
+				assertEquals(Strings.intern("tool"), RT.getIn(turn, "role"),
+					"tool failures must not be duplicated as synthetic system turns");
+				failureTurns++;
 			}
 		}
-		assertTrue(sawFailureTurn, "conversation must record the tool failure as a turn");
-		assertTrue(sawRawToolTurn,
-			"conversation must retain the provider-shaped tool result for audit");
+		assertEquals(1, failureTurns,
+			"conversation must retain one provider-shaped tool failure result");
 
-		// 3. agent:context with the sessionId renders the failure turn.
-		// (Match on the failure-turn text, not "Capability denied" — the
-		// static caps guidance in the system prompt contains that phrase
-		// for every capped agent, session or not.)
+		// 3. agent:context with the sessionId renders the provider-shaped failure.
 		Job contextJob = engine.jobs().invokeOperation(
 			"v/ops/agent/context",
 			Maps.of(Fields.AGENT_ID, "tool-fail-agent",
 				Fields.SESSION_ID, sidHex),
 			RequestContext.of(ALICE_DID));
 		String rendered = String.valueOf(contextJob.awaitResult(5000));
-		assertTrue(rendered.contains("Tool call 'v/test/ops/echo' failed"),
+		assertTrue(rendered.contains("Capability denied"),
 			"agent:context with sessionId must surface the failure turn: " + rendered);
 
 		// Without a sessionId the synthetic fresh-transition render is
@@ -2517,7 +2512,7 @@ public class AgentAdapterTest {
 			Maps.of(Fields.AGENT_ID, "tool-fail-agent"),
 			RequestContext.of(ALICE_DID));
 		String freshRendered = String.valueOf(freshContext.awaitResult(5000));
-		assertFalse(freshRendered.contains("Tool call 'v/test/ops/echo' failed"),
+		assertFalse(freshRendered.contains("Error: Capability denied"),
 			"the sessionless render must stay the synthetic fresh context");
 	}
 
