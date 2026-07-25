@@ -34,7 +34,6 @@ import convex.core.util.Utils;
 import convex.lattice.ALattice;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.api.Fields;
-import covia.exception.AuthException;
 import covia.grid.Asset;
 import covia.lattice.AgentNamespaceResolver;
 import covia.lattice.CapabilityChecker;
@@ -679,54 +678,12 @@ public class CoviaAdapter extends AAdapter {
 	 * them; a restricted scope (e.g. the public read-only profile) is gated.
 	 */
 	private void requireCap(RequestContext ctx, ACell input, AString ability) {
-		AString p = RT.ensureString(RT.getIn(input, Fields.PATH));
-		// The single authorisation gate for lattice access — "am I authorised for
-		// this path?", branching on ownership, not across call sites:
-		//   • the caller's own namespace (a bare path, or an explicit did:<self>/…)
-		//     → the additive scope+proof seam, whose null-scope fast path means
-		//     "unrestricted over my own namespace";
-		//   • another user's namespace (did:<other>/…) → the proof/public gate
-		//     only, which has NO ambient own-namespace fast path, so a null scope
-		//     cannot reach it. A crud/<ability> delegation rooted in the owner
-		//     authorises it, symmetrically for reads and mutations.
-		// Every namespace is per-DID (w/, o/, s/, g/, j/, a/, …) so this is
-		// uniform — a DID-scoped /a/ read of another user's asset is their private
-		// store and is gated like any other; the venue's own public catalog is
-		// allowed by crossUserAllows, not by a special case here. resolveDIDURL
-		// then only *locates* the owner's cursor — it does not re-authorise.
-		if (isCrossUserPath(ctx, p)) {
-			if (!engine.crossUserAllows(ctx, p, ability)) throw crossUserDenial(ctx, p, ability);
-			return;
-		}
-		engine.requireAuthority(ctx, p, ability);
-	}
-
-	/**
-	 * True when {@code p} is a DID-URL path naming <em>another</em> user's
-	 * namespace — authorised by a presented proof (or public policy) rather than
-	 * the caller's ambient own-namespace authority. Every namespace is per-DID
-	 * (w/, o/, s/, g/, j/, a/, …); a bare/relative path and an explicit own DID
-	 * are the caller's own and take the scope seam. Owner is the DID prefix
-	 * (everything before the first {@code /}).
-	 */
-	private boolean isCrossUserPath(RequestContext ctx, AString p) {
-		if (p == null) return false;
-		String s = p.toString();
-		if (!s.startsWith("did:")) return false;              // bare/relative → own namespace
-		int slash = s.indexOf('/');
-		if (slash < 0) return false;                          // a bare DID, no lattice path
-		return !Strings.create(s.substring(0, slash)).equals(ctx.getUserDID());
-	}
-
-	/** The cross-user denial: names the exact (ability, resource) and what proof
-	 *  would satisfy it, so a caller can request the right grant. */
-	private AuthException crossUserDenial(RequestContext ctx, AString resource, AString ability) {
-		AVector<ACell> proofs = ctx.getProofs();
-		return new AuthException("Access denied: " + ability + " on " + resource
-			+ " requires a UCAN proof granting " + ability + " to " + ctx.getCallerDID()
-			+ ((proofs == null || proofs.isEmpty())
-				? " — no UCAN proofs were presented"
-				: " — the presented UCAN proofs do not cover this resource"));
+		// One gate for every lattice op — read or mutation. requireLocalAccess is
+		// the shared local-access check (a/ governed exactly like w/): the caller's
+		// own namespace goes through the scope seam; another user's needs a proof
+		// (or public/venue-catalog policy), else a denial. resolveDIDURL then only
+		// *locates* the owner's cursor — it does not re-authorise.
+		engine.requireLocalAccess(ctx, RT.ensureString(RT.getIn(input, Fields.PATH)), ability);
 	}
 
 	/**

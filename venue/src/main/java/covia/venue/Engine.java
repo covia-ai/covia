@@ -2256,23 +2256,26 @@ public class Engine {
 	}
 
 	/**
-	 * LOCAL read authorisation for a per-DID resource ({@code a/}, {@code w/},
-	 * {@code s/}, …), governed uniformly — an asset ({@code a/}) exactly like a
-	 * workspace path ({@code w/}). The caller's own resource is covered by their
-	 * scope; another user's needs read rights (a presented proof, or public /
-	 * venue-catalog policy). A cross-user resource the caller has no rights to is a
-	 * <b>denial</b>, never a silent miss.
+	 * The single gate for LOCAL, per-DID resource access ({@code a/}, {@code w/},
+	 * {@code s/}, {@code g/}, {@code j/}, …), governed uniformly for reads and
+	 * mutations alike — an asset ({@code a/}) exactly like a workspace path
+	 * ({@code w/}). The caller's own resource goes through the capability scope
+	 * seam; another user's needs {@code ability} rights (a presented proof, or
+	 * public / venue-catalog policy). A cross-user resource the caller has no
+	 * rights to is a <b>denial</b>, never a silent miss.
 	 *
-	 * <p>Returns the DID whose store the value must be read from — the caller's own
-	 * for an own/bare resource, the named owner for an authorised cross-user read —
-	 * so the read returns exactly what the caller is entitled to.</p>
+	 * <p>Returns the DID whose namespace the operation targets — the caller's own
+	 * for an own/bare resource, the named owner for an authorised cross-user
+	 * access — so a read serves, and a write lands in, exactly the right store.
+	 * Callers that locate the target separately (e.g. via {@code resolveDIDURL})
+	 * may ignore the return.</p>
 	 *
-	 * <p>This is the LOCAL gate. It is not the invoke path (invoking an operation
-	 * is a capability, not a read of its owner's namespace) and it is not for
-	 * remote references (another venue's DID), which federation resolves by asking
-	 * that venue.</p>
+	 * <p>This is the LOCAL access gate. It is not the invoke path (invoking an
+	 * operation is a capability, not access to its owner's namespace) and it is
+	 * not for remote references (another venue's DID), which federation resolves
+	 * by asking that venue.</p>
 	 */
-	public AString requireReadOwner(RequestContext ctx, AString resource, AString ability) {
+	public AString requireLocalAccess(RequestContext ctx, AString resource, AString ability) {
 		if (ownedByCaller(ctx, resource)) {
 			requireAuthority(ctx, resource, ability);           // own namespace → scope seam
 			return (ctx != null) ? ctx.getUserDID() : null;
@@ -2280,7 +2283,7 @@ public class Engine {
 		if (!crossUserAllows(ctx, resource, ability)) {
 			convex.core.data.AVector<ACell> proofs = (ctx != null) ? ctx.getProofs() : null;
 			throw new covia.exception.AuthException("Access denied: " + ability + " on " + resource
-				+ " — reading another user's resource requires read rights"
+				+ " — accessing another user's resource requires " + ability + " rights"
 				+ ((proofs == null || proofs.isEmpty())
 					? " (no proof presented)" : " (the presented proofs do not cover it)"));
 		}

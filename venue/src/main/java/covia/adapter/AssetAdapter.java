@@ -225,7 +225,7 @@ public class AssetAdapter extends AAdapter {
 		// another user's asset needs read rights — a cross-user ref the caller
 		// can't cover is a denial, not a silent miss. readAs is the store to read
 		// from (own, or the owner's for an authorised cross-user read).
-		AString readAs = engine.requireReadOwner(ctx, idStr, Abilities.ASSET_READ);
+		AString readAs = engine.requireLocalAccess(ctx, idStr, Abilities.ASSET_READ);
 
 		// Hash-form refs go through the CAS record (preserves the canonical
 		// metadata bytes). Other forms walk the universal resolver.
@@ -286,7 +286,7 @@ public class AssetAdapter extends AAdapter {
 
 		// CAS fallback: an asset (a/) is per-DID like w — gate the cross-user read
 		// (deny, not a silent miss) and read the owner's record when authorised.
-		AString readAs = engine.requireReadOwner(ctx, idStr, Abilities.ASSET_READ);
+		AString readAs = engine.requireLocalAccess(ctx, idStr, Abilities.ASSET_READ);
 
 		// Locate the CAS record for the source. Hash-form refs name the record
 		// directly. For non-hash refs we resolve the path, derive the CAD3 hash
