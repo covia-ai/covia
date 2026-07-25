@@ -644,6 +644,41 @@ public class UCANTest {
 	}
 
 	@Test
+	public void testCrossUserReadEnforcesGateFromDelegationRoot() {
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AString resource = Strings.create(ALICE_DID + "/w/");
+
+		UCAN deniedRoot = UCAN.create(ALICE_KP, CAROL_KP.getAccountKey(), exp,
+			Vectors.of(Capability.create(resource, Capability.CRUD,
+				Maps.of("gate", "v/test/ops/denygate"))),
+			Vectors.empty());
+		UCAN deniedLeaf = UCAN.create(CAROL_KP, BOB_KP.getAccountKey(), exp,
+			Vectors.of(Capability.create(resource, Capability.CRUD_READ)),
+			Vectors.of(deniedRoot.toMap()));
+
+		Job denied = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
+			withProofs(BOB, deniedLeaf.toMap()));
+		assertThrows(Exception.class, () -> denied.awaitResult(5000),
+			"a leaf delegation must not drop its parent's denying gate");
+
+		UCAN allowedRoot = UCAN.create(ALICE_KP, CAROL_KP.getAccountKey(), exp,
+			Vectors.of(Capability.create(resource, Capability.CRUD,
+				Maps.of("gate", "v/test/ops/allowgate"))),
+			Vectors.empty());
+		UCAN allowedLeaf = UCAN.create(CAROL_KP, BOB_KP.getAccountKey(), exp,
+			Vectors.of(Capability.create(resource, Capability.CRUD_READ)),
+			Vectors.of(allowedRoot.toMap()));
+
+		Job allowed = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/shared/doc"),
+			withProofs(BOB, allowedLeaf.toMap()));
+		assertEquals(Strings.create("shared content"),
+			RT.getIn(allowed.awaitResult(5000), "value"),
+			"a passing root gate permits the attenuated leaf grant");
+	}
+
+	@Test
 	public void testCrossUserListWithProof() {
 		AMap<AString, ACell> token = issueToken(BOB_DID, ALICE_DID, "/w/", "crud/read", 3600);
 

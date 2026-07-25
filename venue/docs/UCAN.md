@@ -153,7 +153,12 @@ Optional per-capability constraints as a map:
 { with: "did:.../o/langchain:openai", can: "invoke", nb: { rateLimit: 100 } }
 ```
 
-Constraint semantics are application-defined. The UCAN infrastructure verifies attenuation (child constraints must be equal or stricter), but interpretation is delegated to the enforcing adapter.
+Constraint semantics are application-defined. Convex verifies the signed
+delegation structure and supplies each complete root-to-leaf capability path;
+Covia interprets the constraints on the selected path. A malformed or unknown
+constraint fails closed — it never becomes an unconditional grant. The examples
+above are illustrative future vocabulary; `gate` is the constraint implemented
+today.
 
 #### Capability gates (`nb.gate`) — covia#216
 
@@ -176,20 +181,21 @@ argument-conditional example).
 
 Semantics (see `CapabilityChecker.allows` and `JobManager.evaluateGate`):
 
-- **Ungated grants win first**: a covering grant without a gate authorises
-  outright, and no gate is evaluated. Gates only run when a gated grant is
-  the deciding authority.
+- **Ungated alternatives win first**: a covering local grant without a gate,
+  or a complete delegated proof path without gates, authorises outright.
+  An ungated leaf does not erase a gate on its parent.
 - **Fail-closed, always**: gate op fails → denied with the gate's reason;
-  gate unresolvable, times out (30s), or no evaluator in scope → denied.
-  Never fail-open.
-- **Execution authority**: the gate runs under the *caller's own* authority
-  with no capability scope — a scope-less context never evaluates gates
-  for the gate's own sub-invocations, which is the recursion guard. No Job
-  is created for gate checks.
-- **Scope (phase 1)**: agent `config.caps` and any venue-side scope. Gates
-  in *delegated UCAN tokens* additionally require caveat collection along
-  the proof chain so a delegatee cannot drop a parent's gate — that lands
-  with Convex-Dev/convex#643 (tracked in covia#221).
+  gate unresolvable, times out (30s), no evaluator in scope, or an unknown /
+  malformed constraint → denied. Never fail-open.
+- **Execution authority**: the gate runs under a constrained derivative of
+  the caller: the caller's ordinary ungated scope plus a synthetic right to
+  invoke the gate itself, but no presented UCAN proofs. Nested gated grants
+  are disabled structurally by the gate-evaluation flag. No Job is created.
+- **Delegation paths**: every gate from root through leaf must pass. Distinct
+  proof paths are alternatives; the first fully accepted path authorises.
+  A repeated gate reference is evaluated once for the immutable
+  `{operation, input, caller}` decision. Path collection is provided by
+  Convex-Dev/convex#643.
 
 ### 3.4 Risk Hierarchy
 

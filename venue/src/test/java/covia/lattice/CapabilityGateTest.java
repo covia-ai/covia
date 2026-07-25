@@ -8,7 +8,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
+import convex.auth.ucan.Capability;
+import convex.auth.ucan.RootAuthorityPolicy;
+import convex.auth.ucan.UCAN;
+import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
@@ -122,6 +127,166 @@ public class CapabilityGateTest {
 			Strings.create("v/test/ops/echo"), null,
 			(g, op, in, c) -> "gate-a".equals(g.toString()) ? "a refuses" : null);
 		assertNull(denial, "any passing gate among covering gated grants authorises");
+	}
+
+	// ========== Delegated UCAN path caveats ==========
+
+	private record ProofChain(AVector<ACell> proofs, AString caller, AString resource) {}
+
+	private static AMap<AString, ACell> proofCap(AString resource, AString ability,
+			String gateOp) {
+		if (gateOp == null) return Capability.create(resource, ability);
+		return Capability.create(resource, ability,
+			Maps.of("gate", Strings.create(gateOp)));
+	}
+
+	private static ProofChain proofChain(String rootGate, String leafGate) {
+		AKeyPair owner = AKeyPair.generate();
+		AKeyPair delegate = AKeyPair.generate();
+		AKeyPair caller = AKeyPair.generate();
+		AString ownerDID = UCAN.toDIDKey(owner.getAccountKey());
+		AString callerDID = UCAN.toDIDKey(caller.getAccountKey());
+		AString resource = Strings.create(ownerDID + "/w/shared");
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+
+		UCAN root = UCAN.create(owner, delegate.getAccountKey(), exp,
+			Vectors.of(proofCap(resource, Capability.CRUD, rootGate)), Vectors.empty());
+		UCAN leaf = UCAN.create(delegate, caller.getAccountKey(), exp,
+			Vectors.of(proofCap(resource, Capability.CRUD_READ, leafGate)),
+			Vectors.of(root.toMap()));
+		return new ProofChain(Vectors.of(leaf.toMap()), callerDID, resource);
+	}
+
+	@Test
+	public void testDelegatedProofRequiresEveryGateOnPath() {
+		ProofChain chain = proofChain("root-gate", "leaf-gate");
+		AtomicInteger rootChecks = new AtomicInteger();
+		AtomicInteger leafChecks = new AtomicInteger();
+		boolean allowed = CapabilityChecker.proofsCover(chain.proofs(), chain.caller(),
+			RootAuthorityPolicy.SELF_SOVEREIGN, chain.resource(), Capability.CRUD_READ,
+			System.currentTimeMillis() / 1000, Strings.create("v/ops/covia/read"),
+			Maps.of(Fields.PATH, chain.resource()), (gate, op, input, caller) -> {
+				if ("root-gate".equals(gate.toString())) {
+					rootChecks.incrementAndGet();
+					return null;
+				}
+				leafChecks.incrementAndGet();
+				return "leaf refuses";
+			});
+
+		assertFalse(allowed, "every caveat from root through leaf must pass");
+		assertEquals(1, rootChecks.get());
+		assertEquals(1, leafChecks.get());
+	}
+
+	@Test
+	public void testDelegatedProofCannotDropParentGate() {
+		ProofChain chain = proofChain("parent-denies", null);
+		AtomicInteger checks = new AtomicInteger();
+		boolean allowed = CapabilityChecker.proofsCover(chain.proofs(), chain.caller(),
+			RootAuthorityPolicy.SELF_SOVEREIGN, chain.resource(), Capability.CRUD_READ,
+			System.currentTimeMillis() / 1000, Strings.create("v/ops/covia/read"), null,
+			(gate, op, input, caller) -> {
+				checks.incrementAndGet();
+				return "parent refuses";
+			});
+
+		assertFalse(allowed, "an ungated leaf must not erase its parent's gate");
+		assertEquals(1, checks.get());
+	}
+
+	@Test
+	public void testDelegatedProofCachesRepeatedGateWithinDecision() {
+		ProofChain chain = proofChain("same-gate", "same-gate");
+		AtomicInteger checks = new AtomicInteger();
+		boolean allowed = CapabilityChecker.proofsCover(chain.proofs(), chain.caller(),
+			RootAuthorityPolicy.SELF_SOVEREIGN, chain.resource(), Capability.CRUD_READ,
+			System.currentTimeMillis() / 1000, Strings.create("v/ops/covia/read"), null,
+			(gate, op, input, caller) -> {
+				checks.incrementAndGet();
+				return null;
+			});
+
+		assertTrue(allowed);
+		assertEquals(1, checks.get(),
+			"the same policy operation rules on one immutable invocation only once");
+	}
+
+	@Test
+	public void testDelegatedProofAlternativePathMayAuthorise() {
+		AKeyPair owner = AKeyPair.generate();
+		AKeyPair delegate = AKeyPair.generate();
+		AKeyPair caller = AKeyPair.generate();
+		AString ownerDID = UCAN.toDIDKey(owner.getAccountKey());
+		AString callerDID = UCAN.toDIDKey(caller.getAccountKey());
+		AString resource = Strings.create(ownerDID + "/w/shared");
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		UCAN deniedRoot = UCAN.create(owner, delegate.getAccountKey(), exp,
+			Vectors.of(proofCap(resource, Capability.CRUD, "deny-path")), Vectors.empty());
+		UCAN allowedRoot = UCAN.create(owner, delegate.getAccountKey(), exp,
+			Vectors.of(proofCap(resource, Capability.CRUD, "allow-path")), Vectors.empty());
+		UCAN leaf = UCAN.create(delegate, caller.getAccountKey(), exp,
+			Vectors.of(proofCap(resource, Capability.CRUD_READ, null)),
+			Vectors.of(deniedRoot.toMap(), allowedRoot.toMap()));
+		AtomicInteger checks = new AtomicInteger();
+
+		boolean allowed = CapabilityChecker.proofsCover(Vectors.of(leaf.toMap()), callerDID,
+			RootAuthorityPolicy.SELF_SOVEREIGN, resource, Capability.CRUD_READ,
+			System.currentTimeMillis() / 1000, Strings.create("v/ops/covia/read"), null,
+			(gate, op, input, audience) -> {
+				checks.incrementAndGet();
+				return "deny-path".equals(gate.toString()) ? "this path refuses" : null;
+			});
+
+		assertTrue(allowed, "a separate, fully accepted proof path may authorise");
+		assertEquals(2, checks.get(), "the denied path is skipped before trying the alternative");
+	}
+
+	@Test
+	public void testDelegatedProofCaveatsFailClosedWithoutEvaluator() {
+		ProofChain chain = proofChain("allow-if-run", null);
+		long now = System.currentTimeMillis() / 1000;
+
+		assertFalse(CapabilityChecker.proofsCover(chain.proofs(), chain.caller(),
+			RootAuthorityPolicy.SELF_SOVEREIGN, chain.resource(), Capability.CRUD_READ, now),
+			"a caveated proof cannot authorise where no invocation evaluator exists");
+		assertTrue(CapabilityChecker.proofsStructurallyCover(chain.proofs(), chain.caller(),
+			RootAuthorityPolicy.SELF_SOVEREIGN, chain.resource(), Capability.CRUD_READ, now),
+			"the explicitly structural check still answers chain/lifetime questions");
+	}
+
+	@Test
+	public void testUnknownAndMalformedCaveatsFailClosed() {
+		AString resource = Strings.create("did:key:zOwner/w/shared");
+		AVector<ACell> unknownLocal = Vectors.of(Capability.create(resource,
+			Capability.CRUD_READ, Maps.of("maxItems", 10)));
+		AVector<ACell> malformedLocal = Vectors.of(Maps.of(
+			Capability.WITH, resource,
+			Capability.CAN, Capability.CRUD_READ,
+			Capability.NB, Strings.create("not-a-map")));
+
+		assertNotNull(CapabilityChecker.allows(unknownLocal, resource,
+			Capability.CRUD_READ, null, null, null, (g, o, i, c) -> null));
+		assertNotNull(CapabilityChecker.allows(malformedLocal, resource,
+			Capability.CRUD_READ, null, null, null, (g, o, i, c) -> null));
+
+		AKeyPair owner = AKeyPair.generate();
+		AKeyPair caller = AKeyPair.generate();
+		AString ownerDID = UCAN.toDIDKey(owner.getAccountKey());
+		AString callerDID = UCAN.toDIDKey(caller.getAccountKey());
+		AString proofResource = Strings.create(ownerDID + "/w/shared");
+		long now = System.currentTimeMillis() / 1000;
+		UCAN unknownProof = UCAN.create(owner, caller.getAccountKey(), now + 3600,
+			Vectors.of(Capability.create(proofResource, Capability.CRUD_READ,
+				Maps.of("maxItems", 10))),
+			Vectors.empty());
+		assertFalse(CapabilityChecker.proofsCover(Vectors.of(unknownProof.toMap()), callerDID,
+			RootAuthorityPolicy.SELF_SOVEREIGN, proofResource, Capability.CRUD_READ, now,
+			null, null, (g, o, i, c) -> null),
+			"an unsupported caveat on a delegated proof must not become unconditional");
+		assertTrue(CapabilityChecker.proofsStructurallyCover(
+			Vectors.of(unknownProof.toMap()), callerDID,
+			RootAuthorityPolicy.SELF_SOVEREIGN, proofResource, Capability.CRUD_READ, now));
 	}
 
 	// ========== End-to-end: real gates through the dispatch path ==========

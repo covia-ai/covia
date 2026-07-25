@@ -179,13 +179,10 @@ public class HITLAdapter extends AAdapter {
 	private void requireDeliverable(RequestContext ctx, AString caller, AString target) {
 		if (ctx.relationTo(target).isSameUser()) return;
 		AString resource = Strings.create(target + "/h/");
-		engine.requireAuthority(ctx,resource, ABILITY_HITL_REQUEST);
-		long now = System.currentTimeMillis() / 1000;
-		if (!engine.proofsCover(ctx, resource, ABILITY_HITL_REQUEST, now)) {
-			throw new AuthException("HITL delivery denied: requires " + ABILITY_HITL_REQUEST
-				+ " on " + resource + " — present a delegation from the target user "
-				+ "(transport ucans / bearer)");
-		}
+		// A foreign inbox is a local cross-user resource: enter the common gate
+		// once so public policy/proofs and any delegated caveats are evaluated
+		// exactly once.
+		engine.requireLocalAccess(ctx, resource, ABILITY_HITL_REQUEST);
 	}
 
 	private static AMap<AString, ACell> buildRecord(AString id, AString from, AString agentId,

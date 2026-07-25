@@ -1,5 +1,11 @@
 package covia.lattice;
 
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Predicate;
+
 import convex.auth.ucan.Capability;
 import convex.auth.ucan.RootAuthorityPolicy;
 import convex.auth.ucan.UCAN;
@@ -29,6 +35,8 @@ import covia.api.Abilities;
  */
 public class CapabilityChecker {
 
+	private static final AString GATE = Strings.intern("gate");
+
 	/**
 	 * Cross-user proof check: do the caller's presented {@code proofs} authorise
 	 * {@code (resource, ability)}? Delegates to the convex-core authority layer
@@ -57,13 +65,113 @@ public class CapabilityChecker {
 	 */
 	public static boolean proofsCover(AVector<ACell> proofs, AString caller, RootAuthorityPolicy rootPolicy,
 			AString resource, AString ability, long now) {
+		return proofsCover(proofs, caller, rootPolicy, resource, ability, now,
+			null, null, null);
+	}
+
+	/**
+	 * Cross-user proof check with application caveat enforcement.
+	 *
+	 * <p>Convex verifies the proof structure and supplies every structurally valid
+	 * root-to-leaf capability path. Covia then interprets the caveats on that
+	 * complete path: every {@code nb.gate} must pass, while malformed or unknown
+	 * caveats reject that path. Paths are alternatives, so another structurally
+	 * valid path may still authorise. A missing evaluator rejects gated paths.
+	 * Repeated references to the same gate are evaluated once per authorisation
+	 * decision because the operation, input and caller are identical throughout
+	 * that decision.</p>
+	 */
+	public static boolean proofsCover(AVector<ACell> proofs, AString caller, RootAuthorityPolicy rootPolicy,
+			AString resource, AString ability, long now, AString opRef,
+			ACell invocationInput, CapabilityGate gate) {
 		if (caller == null || rootPolicy == null || resource == null || ability == null) return false;
 		// Bare `with` paths mean the TOKEN ISSUER's own namespace — resolved here,
 		// at evaluation, against the signed `iss` that travels with every token.
 		// The `with` form is covia-specific; convex-core validates structure and
 		// signatures and treats resources as opaque, so the relying party
 		// normalises its view of the verified claims before the authority check.
-		return UCANValidator.isAuthorised(normaliseProofs(proofs), caller, resource, ability, rootPolicy, now);
+		Predicate<AVector<ACell>> caveats = new ProofCaveatEvaluator(
+			opRef, invocationInput, caller, gate);
+		return UCANValidator.isAuthorised(normaliseProofs(proofs), caller, resource,
+			ability, rootPolicy, now, caveats);
+	}
+
+	/**
+	 * Structural proof check that deliberately does not interpret application
+	 * caveats. This is not an enforcement primitive. It exists for questions such
+	 * as whether a granting right remains structurally and temporally valid at a
+	 * future expiry horizon; runtime access must use {@link #proofsCover}.
+	 */
+	public static boolean proofsStructurallyCover(AVector<ACell> proofs, AString caller,
+			RootAuthorityPolicy rootPolicy, AString resource, AString ability, long now) {
+		if (caller == null || rootPolicy == null || resource == null || ability == null) return false;
+		return UCANValidator.isAuthorised(normaliseProofs(proofs), caller, resource,
+			ability, rootPolicy, now);
+	}
+
+	private record Caveats(boolean valid, AString gate) {
+		private static final Caveats NONE = new Caveats(true, null);
+		private static final Caveats INVALID = new Caveats(false, null);
+	}
+
+	/**
+	 * Parse the caveats Covia knows how to enforce. Unknown or malformed caveats
+	 * are invalid rather than silently becoming an unconditional grant.
+	 */
+	private static Caveats caveatsOf(AMap<AString, ACell> cap) {
+		if (cap == null || !cap.containsKey(Capability.NB)) return Caveats.NONE;
+		AMap<AString, ACell> nb = RT.castMap(cap.get(Capability.NB));
+		if (nb == null) return Caveats.INVALID;
+		if (nb.isEmpty()) return Caveats.NONE;
+		if (nb.count() != 1 || !nb.containsKey(GATE)) return Caveats.INVALID;
+		AString gateOp = RT.ensureString(nb.get(GATE));
+		if (gateOp == null || gateOp.count() == 0) return Caveats.INVALID;
+		return new Caveats(true, gateOp);
+	}
+
+	/** Stateful per-decision predicate passed to convex-core's proof walker. */
+	private static final class ProofCaveatEvaluator implements Predicate<AVector<ACell>> {
+		private final AString opRef;
+		private final ACell input;
+		private final AString caller;
+		private final CapabilityGate gate;
+		private final Map<AString, Boolean> gateResults = new HashMap<>();
+
+		private ProofCaveatEvaluator(AString opRef, ACell input, AString caller,
+				CapabilityGate gate) {
+			this.opRef = opRef;
+			this.input = input;
+			this.caller = caller;
+			this.gate = gate;
+		}
+
+		@Override
+		public boolean test(AVector<ACell> path) {
+			if (path == null) return false;
+			Set<AString> gates = new LinkedHashSet<>();
+			for (long i = 0; i < path.count(); i++) {
+				AMap<AString, ACell> cap = RT.castMap(path.get(i));
+				if (cap == null) return false;
+				Caveats caveats = caveatsOf(cap);
+				if (!caveats.valid()) return false;
+				if (caveats.gate() != null) gates.add(caveats.gate());
+			}
+			if (gates.isEmpty()) return true;
+			if (gate == null) return false;
+			for (AString gateOp : gates) {
+				Boolean allowed = gateResults.get(gateOp);
+				if (allowed == null && !gateResults.containsKey(gateOp)) {
+					try {
+						allowed = (gate.evaluate(gateOp, opRef, input, caller) == null);
+					} catch (Throwable t) {
+						allowed = false;
+					}
+					gateResults.put(gateOp, allowed);
+				}
+				if (!allowed) return false;
+			}
+			return true;
+		}
 	}
 
 	/**
@@ -203,8 +311,8 @@ public class CapabilityChecker {
 		AString resourceStr = Strings.create(canonResource);
 		AString abilityStr = Strings.create(ab);
 
-		// Pass 1: any covering grant WITHOUT a gate authorises outright.
-		if (covered(caps, resourceStr, abilityStr, ownerDID, false)) return null;
+		// Pass 1: any covering, valid grant WITHOUT a caveat authorises outright.
+		if (coveredUngated(caps, resourceStr, abilityStr, ownerDID)) return null;
 
 		// Pass 2: covering grants WITH a gate — evaluated in declaration order,
 		// first passing gate wins. Denial details accumulate so a refused
@@ -214,8 +322,9 @@ public class CapabilityChecker {
 			if (!(caps.get(i) instanceof AMap<?, ?> capMap)) continue;
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> cap = (AMap<AString, ACell>) capMap;
-			AString gateOp = gateOf(cap);
-			if (gateOp == null) continue;                       // ungated — pass 1's job
+			Caveats caveats = caveatsOf(cap);
+			if (!caveats.valid() || caveats.gate() == null) continue;
+			AString gateOp = caveats.gate();
 			if (!grantCovers(cap, resourceStr, abilityStr, ownerDID)) continue;
 			String detail;
 			if (gate == null) {
@@ -290,26 +399,18 @@ public class CapabilityChecker {
 	 * vector therefore grants nothing — only a {@code null} scope is "full
 	 * access" (handled by the callers).
 	 */
-	private static boolean covered(AVector<ACell> caps, AString resourceStr, AString abilityStr,
-			AString ownerDID, boolean includeGated) {
+	private static boolean coveredUngated(AVector<ACell> caps, AString resourceStr,
+			AString abilityStr, AString ownerDID) {
 		for (long i = 0; i < caps.count(); i++) {
 			if (!(caps.get(i) instanceof AMap<?,?> capMap)) continue;
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> cap = (AMap<AString, ACell>) capMap;
-			if (!includeGated && gateOf(cap) != null) continue;   // gated grants decide in pass 2
+			Caveats caveats = caveatsOf(cap);
+			if (!caveats.valid() || caveats.gate() != null) continue;
 			if (grantCovers(cap, resourceStr, abilityStr, ownerDID)) return true;
 		}
 		return false;
 	}
-
-	/** The grant's {@code nb.gate} operation reference, or null when ungated. */
-	static AString gateOf(AMap<AString, ACell> cap) {
-		ACell nb = cap.get(Capability.NB);
-		if (!(nb instanceof AMap)) return null;
-		return RT.ensureString(((AMap<?, ?>) nb).get(GATE));
-	}
-
-	private static final AString GATE = Strings.intern("gate");
 
 	/** Structural coverage of a single grant — {@code with}/{@code can} only;
 	 *  gate caveats are the callers' concern. */

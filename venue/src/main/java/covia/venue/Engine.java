@@ -1970,8 +1970,21 @@ public class Engine {
 	/** Evaluate presented proofs under this venue's complete root policy. */
 	public boolean proofsCover(RequestContext ctx, AString resource, AString ability, long now) {
 		if (ctx == null) return false;
-		return covia.lattice.CapabilityChecker.proofsCover(ctx.getProofs(), ctx.getCallerDID(),
-			rootAuthorityPolicy(), resource, ability, now);
+		return ctx.delegatedProofsCover(rootAuthorityPolicy(), resource, ability, now);
+	}
+
+	/**
+	 * Structural/temporal proof check without application caveat evaluation.
+	 * This is intentionally separate from {@link #proofsCover}: callers may use
+	 * it for a future validity horizon or diagnostics, never to permit a runtime
+	 * action.
+	 */
+	public boolean proofsStructurallyCover(RequestContext ctx, AString resource,
+			AString ability, long now) {
+		if (ctx == null) return false;
+		return covia.lattice.CapabilityChecker.proofsStructurallyCover(
+			ctx.getProofs(), ctx.getCallerDID(), rootAuthorityPolicy(),
+			resource, ability, now);
 	}
 
 	/**

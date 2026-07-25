@@ -165,6 +165,25 @@ public class UCANVerifyTest {
 		assertEquals(CVMBool.FALSE, RT.getIn(wrongAud, "authorises"));
 	}
 
+	@Test
+	public void testAuthorisesCheckDoesNotIgnoreCaveats() {
+		long exp = (System.currentTimeMillis() / 1000) + 3600;
+		AString jwt = UCAN.createJWT(ALICE_KP, BOB_KP.getAccountKey(), exp,
+			Vectors.of(Capability.create(
+				Strings.create(ALICE_DID + "/w/shared/"), Capability.CRUD_READ,
+				Maps.of("gate", "v/test/ops/allowgate"))),
+			Vectors.empty());
+
+		ACell result = verify(Maps.of(
+			"token", jwt,
+			"with", ALICE_DID + "/w/shared/doc", "can", "crud/read",
+			"aud", BOB_DID));
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "valid"),
+			"the signed token and delegation structure are valid");
+		assertEquals(CVMBool.FALSE, RT.getIn(result, "authorises"),
+			"the diagnostic has no concrete invocation in which to run the gate");
+	}
+
 	// ========== Diagnosable failures ==========
 
 	@Test

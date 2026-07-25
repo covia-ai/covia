@@ -154,7 +154,11 @@ public class UCANAdapter extends AAdapter {
 							+ grantAbility + " over " + w + " — present a delegation from the "
 							+ "resource owner (transport ucans / bearer), or use your own namespace");
 					}
-					if (!engine.proofsCover(ctx, resource, grantAbility, exp - 1)) {
+					// This second check asks only whether the granting chain still
+					// exists at the minted token's expiry horizon. Dynamic gates rule
+					// on the issuance happening now (the check above); they must not
+					// execute a second time against an imaginary future invocation.
+					if (!engine.proofsStructurallyCover(ctx, resource, grantAbility, exp - 1)) {
 						throw new RuntimeException("att[" + i + "]: exp exceeds the validity of the "
 							+ "granting right enabling this issuance — minted authority must not "
 							+ "outlive the right it was minted under; request a shorter exp");
@@ -321,8 +325,10 @@ public class UCANAdapter extends AAdapter {
 			AString audience = RT.ensureString(RT.getIn(input, UCAN.AUD));
 			if (audience == null) audience = ctx.getCallerDID();
 			// Canonicalise a bare queried resource against the audience — the
-			// same rule enforcement applies to a caller's bare paths — so the
-			// diagnostic answers match what enforcement would actually decide.
+			// same rule enforcement applies to a caller's bare paths. No concrete
+			// invocation/gate evaluator exists in this diagnostic, so a caveated
+			// path reports authorises:false rather than silently ignoring its
+			// policy.
 			String canonWith = CapabilityChecker.canonicalResource(reqWith.toString(), audience);
 			boolean authorises = CapabilityChecker.proofsCover(
 				Vectors.of(token.toMap()), audience, engine.rootAuthorityPolicy(),

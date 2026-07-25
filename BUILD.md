@@ -8,7 +8,7 @@ This document describes how to build the Covia project using Maven.
 - **Maven 3.7+**: Minimum Maven version required (enforced by maven-enforcer-plugin)
 - **Git**: For cloning the repository
 
-All dependencies resolve from Maven Central, including [Convex](https://github.com/Convex-Dev/convex) (`0.8.9`) — the lattice layers the venue state model is built on. A clean clone builds with no extra steps (`mvn clean install`). To track an unreleased Convex, build it from source (`mvn install -DskipTests` in a `develop` checkout of the Convex repo) and point `convex.version` at its `-SNAPSHOT`; CI compiles Convex from source automatically whenever `convex.version` ends in `-SNAPSHOT`, and the step skips itself for a released pin.
+All dependencies resolve from Maven Central, including [Convex](https://github.com/Convex-Dev/convex) (`0.8.10`) — the lattice layers the venue state model is built on. A clean clone builds with no extra steps (`mvn clean install`). To track an unreleased Convex, build it from source (`mvn install -DskipTests` in a `develop` checkout of the Convex repo) and point `convex.version` at its `-SNAPSHOT`; CI compiles Convex from source automatically whenever `convex.version` ends in `-SNAPSHOT`, and the step skips itself for a released pin.
 
 ## Project Structure
 
@@ -336,4 +336,4 @@ Both snapshot and stable releases include:
 
 - **Latest stable**: [latest](https://github.com/covia-ai/covia/releases/tag/latest)
 - **Latest snapshot**: [latest-snapshot](https://github.com/covia-ai/covia/releases/tag/latest-snapshot)
-- **Specific version**: `https://github.com/covia-ai/covia/releases/tag/<version>` 
+- **Specific version**: `https://github.com/covia-ai/covia/releases/tag/<version>`

@@ -1,6 +1,7 @@
 package covia.venue;
 
 import convex.auth.ucan.Capability;
+import convex.auth.ucan.RootAuthorityPolicy;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.AVector;
@@ -361,6 +362,19 @@ public class RequestContext {
 	 */
 	public AVector<ACell> getProofs() {
 		return authority.getProofs();
+	}
+
+	/**
+	 * Evaluate this context's presented UCAN proofs for a runtime action.
+	 * Structural chain checks live in convex-core; application caveats are
+	 * interpreted by {@link CapabilityChecker} using the invocation and gate
+	 * evaluator carried by this context. Keeping those execution details here
+	 * avoids exposing mutable-looking policy plumbing as public getters.
+	 */
+	boolean delegatedProofsCover(RootAuthorityPolicy rootPolicy, AString resource,
+			AString ability, long now) {
+		return CapabilityChecker.proofsCover(authority.getProofs(), authority.getDID(),
+			rootPolicy, resource, ability, now, op, invocationInput, gate);
 	}
 
 	/**
