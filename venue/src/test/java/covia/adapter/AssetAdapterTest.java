@@ -531,12 +531,13 @@ public class AssetAdapterTest {
 		assertEquals(Strings.create("Alice's Asset"),
 			RT.getIn(aliceResult, Fields.VALUE, Fields.NAME));
 
-		// Bob CANNOT see Alice's user-scoped asset (per-user namespace)
+		// Bob CANNOT read Alice's asset. An asset (a/) is per-DID exactly like a
+		// workspace path (w/): without read rights this is an AUTH DENIAL, not a
+		// silent exists:false (covia#295) — "no access", not "not found".
 		Job bobGetJob = engine.jobs().invokeOperation("v/ops/asset/get",
 			Maps.of(Fields.ID, id), RequestContext.of(BOB_DID));
-		ACell bobResult = bobGetJob.awaitResult(5000);
-		assertEquals(CVMBool.FALSE, RT.getIn(bobResult, "exists"),
-			"Bob should not see Alice's user-scoped asset");
+		assertThrows(Exception.class, () -> bobGetJob.awaitResult(5000),
+			"Bob has no read rights to Alice's asset — auth denial, not exists:false");
 	}
 
 	// ========== List edge cases ==========

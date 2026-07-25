@@ -2256,6 +2256,61 @@ public class Engine {
 	}
 
 	/**
+	 * LOCAL read authorisation for a per-DID resource ({@code a/}, {@code w/},
+	 * {@code s/}, …), governed uniformly — an asset ({@code a/}) exactly like a
+	 * workspace path ({@code w/}). The caller's own resource is covered by their
+	 * scope; another user's needs read rights (a presented proof, or public /
+	 * venue-catalog policy). A cross-user resource the caller has no rights to is a
+	 * <b>denial</b>, never a silent miss.
+	 *
+	 * <p>Returns the DID whose store the value must be read from — the caller's own
+	 * for an own/bare resource, the named owner for an authorised cross-user read —
+	 * so the read returns exactly what the caller is entitled to.</p>
+	 *
+	 * <p>This is the LOCAL gate. It is not the invoke path (invoking an operation
+	 * is a capability, not a read of its owner's namespace) and it is not for
+	 * remote references (another venue's DID), which federation resolves by asking
+	 * that venue.</p>
+	 */
+	public AString requireReadOwner(RequestContext ctx, AString resource, AString ability) {
+		if (ownedByCaller(ctx, resource)) {
+			requireAuthority(ctx, resource, ability);           // own namespace → scope seam
+			return (ctx != null) ? ctx.getUserDID() : null;
+		}
+		if (!crossUserAllows(ctx, resource, ability)) {
+			convex.core.data.AVector<ACell> proofs = (ctx != null) ? ctx.getProofs() : null;
+			throw new covia.exception.AuthException("Access denied: " + ability + " on " + resource
+				+ " — reading another user's resource requires read rights"
+				+ ((proofs == null || proofs.isEmpty())
+					? " (no proof presented)" : " (the presented proofs do not cover it)"));
+		}
+		return ownerOf(resource);                               // authorised cross-user → the owner's store
+	}
+
+	/** True when {@code resource} is the caller's own: a bare/relative/scheme path,
+	 *  a resource-less check ({@code null}), or an explicit {@code did:<self>/…}. A
+	 *  {@code did:<other>/…} path is another principal's. Owner = the DID prefix
+	 *  before the first {@code /}, compared to the caller's namespace by equality. */
+	private static boolean ownedByCaller(RequestContext ctx, AString resource) {
+		if (resource == null || ctx == null) return true;
+		String s = resource.toString();
+		if (!s.startsWith("did:")) return true;
+		int slash = s.indexOf('/');
+		AString owner = Strings.create(slash < 0 ? s : s.substring(0, slash));
+		return owner.equals(ctx.getUserDID());
+	}
+
+	/** The owner DID of a {@code did:<owner>/…} resource (prefix before the first
+	 *  {@code /}), or null for a bare/relative resource. */
+	private static AString ownerOf(AString resource) {
+		if (resource == null) return null;
+		String s = resource.toString();
+		if (!s.startsWith("did:")) return null;
+		int slash = s.indexOf('/');
+		return Strings.create(slash < 0 ? s : s.substring(0, slash));
+	}
+
+	/**
 	 * The single authorisation seam. Does the caller's authority cover
 	 * {@code (resource, ability)}? Grants are <b>additive</b> — <em>either you
 	 * have the right or you don't</em>: an inherent (unrestricted, own-namespace)

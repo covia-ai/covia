@@ -268,6 +268,32 @@ public class CoviaCrossUserWriteTest {
 	}
 
 	@Test
+	public void testCrossUserAssetGetWithProof() {
+		// asset:get of another user's asset works WITH read rights — the gate
+		// resolves the OWNER's store (a is like w: denied without rights, served
+		// with them). Uses the asset/read ability that asset:get enforces.
+		ACell stored = run("v/ops/asset/store",
+			Maps.of(Fields.METADATA, Maps.of("name", Strings.create("shared-via-get"))), ALICE);
+		AString assetPath = RT.ensureString(RT.getIn(stored, Fields.ID));  // did:alice/a/<hash>
+
+		AMap<AString, ACell> grant = ownerToken(ALICE_KP, BOB_DID, assetPath.toString(), "asset/read", 3600);
+		ACell got = run("v/ops/asset/get", Maps.of(Fields.ID, assetPath), withProofs(BOB, grant));
+		assertEquals(CVMBool.TRUE, RT.getIn(got, "exists"));
+		assertEquals(Strings.create("shared-via-get"), RT.getIn(RT.getIn(got, "value"), "name"));
+	}
+
+	@Test
+	public void testCrossUserAssetGetDeniedWithoutProof() {
+		// Symmetric denial via asset:get (the covia#295 report was asset visibility).
+		ACell stored = run("v/ops/asset/store",
+			Maps.of(Fields.METADATA, Maps.of("name", Strings.create("private-asset"))), ALICE);
+		AString assetPath = RT.ensureString(RT.getIn(stored, Fields.ID));
+		Job get = engine.jobs().invokeOperation("v/ops/asset/get", Maps.of(Fields.ID, assetPath), BOB);
+		assertThrows(Exception.class, () -> get.awaitResult(5000),
+			"asset:get of another user's asset without rights is a denial, not exists:false");
+	}
+
+	@Test
 	public void testOwnerReadsOwnAssetByDidUrl() {
 		ACell stored = run("v/ops/asset/store",
 			Maps.of(Fields.METADATA, Maps.of("name", Strings.create("my-asset"))), ALICE);

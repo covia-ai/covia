@@ -220,15 +220,19 @@ public class AssetAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private ACell handleGet(ACell input, RequestContext ctx) {
 		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
-		engine.requireAuthority(ctx,idStr, Abilities.ASSET_READ);
 		if (idStr == null) throw new IllegalArgumentException("id is required");
+		// An asset (a/) is per-DID exactly like a workspace path (w/): reading
+		// another user's asset needs read rights — a cross-user ref the caller
+		// can't cover is a denial, not a silent miss. readAs is the store to read
+		// from (own, or the owner's for an authorised cross-user read).
+		AString readAs = engine.requireReadOwner(ctx, idStr, Abilities.ASSET_READ);
 
 		// Hash-form refs go through the CAS record (preserves the canonical
 		// metadata bytes). Other forms walk the universal resolver.
 		AMap<AString, ACell> meta = null;
 		Hash hash = parseAssetId(idStr);
 		if (hash != null) {
-			AVector<?> record = engine.getAssetRecord(hash, ctx);
+			AVector<?> record = engine.getAssetRecord(hash, readAs);
 			if (record != null) {
 				meta = RT.ensureMap(record.get(AssetStore.POS_META));
 			}
@@ -250,13 +254,18 @@ public class AssetAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	private ACell handleContent(ACell input, RequestContext ctx) {
 		AString idStr = RT.ensureString(RT.getIn(input, Fields.ID));
-		engine.requireAuthority(ctx,idStr, Abilities.ASSET_READ);
 		if (idStr == null) throw new IllegalArgumentException("id is required");
+		// Own-scope enforcement for the content-provider path (a restricted scope
+		// must grant asset/read); permissive for null scope. The cross-user gate is
+		// on the CAS fallback below, and DLFS providers gate themselves (crud/read).
+		engine.requireAuthority(ctx, idStr, Abilities.ASSET_READ);
 
 		// Unified reference-addressed resolution first: DLFS is an alternative
 		// content storage mechanism, so a drive path (dlfs/<drive>/<path>, or
 		// owner-prefixed cross-user) serves content through the same op as a
-		// CAS asset. Providers enforce their own access checks.
+		// CAS asset. Providers enforce their own access checks (their own
+		// crud/read cross-user gate), so the CAS gate below is applied only to the
+		// CAS fallback, which needs asset/read.
 		try {
 			covia.venue.storage.ContentProvider.Resolved resolved = engine.resolveContent(idStr, ctx);
 			if (resolved != null) {
@@ -275,6 +284,10 @@ public class AssetAdapter extends AAdapter {
 			throw new IllegalArgumentException("Failed to read content at " + idStr + ": " + e.getMessage(), e);
 		}
 
+		// CAS fallback: an asset (a/) is per-DID like w — gate the cross-user read
+		// (deny, not a silent miss) and read the owner's record when authorised.
+		AString readAs = engine.requireReadOwner(ctx, idStr, Abilities.ASSET_READ);
+
 		// Locate the CAS record for the source. Hash-form refs name the record
 		// directly. For non-hash refs we resolve the path, derive the CAD3 hash
 		// of the resulting metadata, and look up the same record by hash —
@@ -283,12 +296,12 @@ public class AssetAdapter extends AAdapter {
 		AVector<?> record = null;
 		Hash hash = parseAssetId(idStr);
 		if (hash != null) {
-			record = engine.getAssetRecord(hash, ctx);
+			record = engine.getAssetRecord(hash, readAs);
 		} else {
 			ACell value = engine.resolvePath(idStr, ctx);
 			if (value instanceof AMap) {
 				Hash derived = ((AMap<AString, ACell>) value).getHash();
-				record = engine.getAssetRecord(derived, ctx);
+				record = engine.getAssetRecord(derived, readAs);
 			}
 		}
 
