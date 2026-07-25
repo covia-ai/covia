@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory;
 
 import convex.auth.did.DID;
 import convex.auth.did.DIDURL;
+import convex.auth.ucan.Capability;
 import convex.auth.ucan.RootAuthorityPolicy;
 import convex.core.crypto.AKeyPair;
 import convex.core.crypto.Hashing;
@@ -68,6 +69,7 @@ import covia.adapter.VaultAdapter;
 import covia.adapter.agent.LLMAgentAdapter;
 import covia.adapter.UCANAdapter;
 import covia.adapter.TestAdapter;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.CoviaException;
 import covia.exception.AuthException;
@@ -2220,6 +2222,14 @@ public class Engine {
 	 */
 	public boolean crossUserAllows(RequestContext ctx, AString resource, AString ability) {
 		if (ctx == null || resource == null || ability == null) return false;
+		// The venue's own asset catalog is public. getAssetRecord resolves every
+		// caller's bare-hash reads through the venue store, so the venue's own
+		// <venueDID>/a/<hash> assets are readable by anyone; the DID-scoped form of
+		// the same read is therefore allowed too. This is NOT true of another
+		// user's /a/ — that is their private asset store, reached (covia:read →
+		// resolveLocalDIDURL) via the named DID, and needs a proof: knowing a hash
+		// is not authorisation to read someone else's asset.
+		if (isVenueCatalogRead(resource, ability)) return true;
 		if (auth.isPublicAccessEnabled()) {
 			String publicDIDStr = getDIDString().toString() + ":public";
 			String r = resource.toString();
@@ -2234,6 +2244,15 @@ public class Engine {
 			}
 		}
 		return proofsCover(ctx, resource, ability, System.currentTimeMillis() / 1000);
+	}
+
+	/** A read of the venue's OWN content-addressed catalog ({@code <venueDID>/a/…}).
+	 *  These assets live in the shared venue store that every caller's bare-hash
+	 *  read already falls back to, so the catalog is public — but only for reads,
+	 *  and only for the venue's own DID (another user's {@code /a/} is private). */
+	private boolean isVenueCatalogRead(AString resource, AString ability) {
+		if (!Capability.CRUD_READ.equals(ability) && !Abilities.ASSET_READ.equals(ability)) return false;
+		return resource.toString().startsWith(getDIDString().toString() + "/a/");
 	}
 
 	/**

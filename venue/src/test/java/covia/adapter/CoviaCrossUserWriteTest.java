@@ -234,6 +234,51 @@ public class CoviaCrossUserWriteTest {
 		assertThrows(Exception.class, () -> write.awaitResult(5000));
 	}
 
+	// ========== Cross-user asset (/a/) reads — private, NOT open-by-hash (covia#295) ==========
+
+	@Test
+	public void testCrossUserAssetReadDeniedWithoutProof() {
+		// Alice stores a private asset in her own /a/ store.
+		ACell stored = run("v/ops/asset/store",
+			Maps.of(Fields.METADATA, Maps.of("name", Strings.create("alice-secret"))), ALICE);
+		AString assetPath = RT.ensureString(RT.getIn(stored, Fields.ID));  // did:alice/a/<hash>
+
+		// Bob cannot read it by naming the DID URL: the hash is an ID, not a read
+		// capability — knowing it does not entitle him to another user's asset. The
+		// covia:read path reaches Alice's private store via the named DID, so this
+		// MUST fail closed at the gate.
+		Job read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, assetPath), BOB);
+		assertThrows(Exception.class, () -> read.awaitResult(5000),
+			"a cross-user /a/ read must be gated, not open by hash");
+	}
+
+	@Test
+	public void testCrossUserAssetReadWithProof() {
+		ACell stored = run("v/ops/asset/store",
+			Maps.of(Fields.METADATA, Maps.of("name", Strings.create("shared-asset"))), ALICE);
+		AString assetPath = RT.ensureString(RT.getIn(stored, Fields.ID));
+
+		// A crud/read grant from Alice over that asset authorises Bob's read —
+		// delegated, exactly like a workspace read.
+		AMap<AString, ACell> grant = ownerToken(ALICE_KP, BOB_DID, assetPath.toString(), "crud/read", 3600);
+		ACell result = run("v/ops/covia/read", Maps.of(Fields.PATH, assetPath), withProofs(BOB, grant));
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
+		assertEquals(Strings.create("shared-asset"), RT.getIn(RT.getIn(result, "value"), "name"));
+	}
+
+	@Test
+	public void testOwnerReadsOwnAssetByDidUrl() {
+		ACell stored = run("v/ops/asset/store",
+			Maps.of(Fields.METADATA, Maps.of("name", Strings.create("my-asset"))), ALICE);
+		AString assetPath = RT.ensureString(RT.getIn(stored, Fields.ID));
+
+		// Alice reads her own asset by its DID URL — own namespace, no proof.
+		ACell result = run("v/ops/covia/read", Maps.of(Fields.PATH, assetPath), ALICE);
+		assertEquals(CVMBool.TRUE, RT.getIn(result, "exists"));
+		assertEquals(Strings.create("my-asset"), RT.getIn(RT.getIn(result, "value"), "name"));
+	}
+
 	// ========== Own namespace via explicit DID (previously hard-rejected) ==========
 
 	@Test
