@@ -25,6 +25,8 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    outputs:
+      image: ghcr.io/covia-ai/covia:${{ steps.sha.outputs.sha }}
     permissions:
       contents: read
       packages: write
@@ -100,3 +102,60 @@ jobs:
         context: .
         push: true
         tags: ${{ steps.tags.outputs.tags }}
+
+  verify-public:
+    name: Verify anonymous pull and invocation
+    needs: publish
+    runs-on: ubuntu-latest
+    # A fresh runner with no package permission and no registry login catches
+    # a private/unlinked GHCR package even when the authenticated push succeeds.
+    permissions: {}
+    steps:
+    - name: Pull the published image anonymously
+      env:
+        IMAGE: ${{ needs.publish.outputs.image }}
+      run: |
+        for attempt in 1 2 3 4 5; do
+          if docker pull "$IMAGE"; then
+            echo "Anonymous access verified: $IMAGE"
+            exit 0
+          fi
+          echo "Image not anonymously visible yet (attempt $attempt/5)"
+          sleep 5
+        done
+        echo "::error::Published image is not anonymously accessible: $IMAGE"
+        exit 1
+
+    - name: Run an anonymous invocation
+      env:
+        IMAGE: ${{ needs.publish.outputs.image }}
+      run: |
+        cleanup() {
+          docker rm -f covia-public-smoke >/dev/null 2>&1 || true
+        }
+        trap cleanup EXIT
+
+        docker run -d --name covia-public-smoke \
+          -p 127.0.0.1:18080:8080 \
+          "$IMAGE" /app/config/docker-local.json
+
+        for attempt in $(seq 1 30); do
+          if curl --fail --silent http://127.0.0.1:18080/ >/dev/null; then
+            break
+          fi
+          if [ "$attempt" = 30 ]; then
+            docker logs covia-public-smoke
+            echo "::error::Published venue did not become ready"
+            exit 1
+          fi
+          sleep 1
+        done
+
+        curl --fail-with-body --silent --show-error \
+          -X POST http://127.0.0.1:18080/api/v1/invoke \
+          -H "Content-Type: application/json" \
+          -d '{"operation":"v/ops/schema/infer","input":{"value":{"name":"Ada","age":36}},"wait":true}' \
+          | tee /tmp/covia-invoke.json
+
+        jq -e '.status == "COMPLETE" and .output.schema.type == "object"' \
+          /tmp/covia-invoke.json >/dev/null

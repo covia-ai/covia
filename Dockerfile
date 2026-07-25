@@ -6,6 +6,10 @@
 # Use Eclipse Temurin 25 LTS as base image (modern JVM)
 FROM eclipse-temurin:25-jre-alpine
 
+LABEL org.opencontainers.image.source="https://github.com/covia-ai/covia" \
+      org.opencontainers.image.description="Covia federated AI orchestration venue" \
+      org.opencontainers.image.licenses="EPL-2.0"
+
 # Set working directory
 WORKDIR /app
 
@@ -23,6 +27,11 @@ COPY venue/target/covia.jar /app/covia.jar
 
 # Copy any additional resources if needed
 COPY venue/src/main/resources/ /app/resources/
+
+# Explicit, ephemeral local-test configuration. The default launch remains
+# read-only; this config is selected only when its path is passed as an image
+# argument and should be published on the host loopback interface only.
+COPY docker-local.json /app/config/docker-local.json
 
 # Change ownership to non-root user
 RUN chown -R appuser:appgroup /app
@@ -45,5 +54,7 @@ ENV JAVA_OPTS="-XX:+UseContainerSupport \
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/ || exit 1
 
-# Run the application
-CMD ["sh", "-c", "java $JAVA_OPTS -jar covia.jar"] 
+# Run the application. Additional Docker arguments are forwarded to MainVenue,
+# so `docker run IMAGE /app/config/docker-local.json` selects a config without
+# replacing the Java command.
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/covia.jar \"$@\"", "--"]

@@ -40,6 +40,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - MCP `notifications/jobUpdate` broadcast — off-spec, flooded strict clients (#274)
 
 ### Fixed
+- The GHCR venue image is anonymously pullable, repository-linked, and continuously checked for public access (#212)
 - Failed agent tool calls are recorded once in session conversations, while retaining structured timeline diagnostics (#290)
 - Cross-user lattice writes work with a `crud/write` proof — `covia:write`/`append`/`delete` route through the same proof gate reads use (#295)
 - REST `GET /assets/{id}/content` serves inline/record/dlfs content, not just blobs (#289)

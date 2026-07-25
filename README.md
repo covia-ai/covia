@@ -119,8 +119,20 @@ print(result)  # {'schema': {'type': 'object', ...}}
 A venue is a single self-contained server. With Docker:
 
 ```bash
-docker run -p 8080:8080 ghcr.io/covia-ai/covia:latest
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/covia-ai/covia:latest
 ```
+
+The default venue has a read-only anonymous capability scope. For a throwaway,
+invoke-capable local venue, select the image's explicit ephemeral test config:
+
+```bash
+docker run --rm -p 127.0.0.1:8080:8080 \
+  ghcr.io/covia-ai/covia:latest /app/config/docker-local.json
+```
+
+That config grants unrestricted anonymous capabilities and deletes its state on
+exit. Keep the host-side bind exactly on `127.0.0.1`; do not expose this test
+configuration to a LAN or the internet.
 
 Or download the executable JAR from the [latest release](https://github.com/covia-ai/covia/releases/tag/latest) and run it (requires **Java 21+**):
 
