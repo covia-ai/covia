@@ -106,6 +106,9 @@ public class A2AAdapter extends AAdapter {
 	 */
 	@Override
 	public void invoke(Job job, RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		// The send branch bypasses AAdapter's future-based default, so pin the
+		// operation capability before it performs any outbound work.
+		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 		if ("send".equals(subOp)) {
 			doSendMirrored(job, input);
@@ -116,6 +119,7 @@ public class A2AAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
+		requireInvoke(ctx);
 		String subOp = getSubOperation(meta);
 		if (subOp == null) {
 			return CompletableFuture.failedFuture(

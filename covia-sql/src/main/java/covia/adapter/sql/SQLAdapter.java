@@ -119,7 +119,7 @@ public class SQLAdapter extends AAdapter {
 
 	ACell handleQuery(RequestContext ctx, ACell input) {
 		String db = requireDb(input);
-		ctx.requireCapability("sql/" + db, "sql/query");
+		engine.requireAuthority(ctx, Strings.create("sql/" + db), Strings.create("sql/query"));
 		String statement = requireStatement(input);
 		AVector<ACell> params = RT.ensureVector(RT.getIn(input, K_PARAMS));
 		long maxRows = maxRows(input);
@@ -149,7 +149,7 @@ public class SQLAdapter extends AAdapter {
 
 	ACell handleExecute(RequestContext ctx, ACell input) {
 		String db = requireDb(input);
-		ctx.requireCapability("sql/" + db, "sql/execute");
+		engine.requireAuthority(ctx, Strings.create("sql/" + db), Strings.create("sql/execute"));
 		String statement = requireStatement(input);
 		AVector<ACell> params = RT.ensureVector(RT.getIn(input, K_PARAMS));
 

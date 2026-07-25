@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -9,9 +10,11 @@ import org.junit.jupiter.api.Test;
 
 import convex.core.data.ACell;
 import convex.core.data.AString;
+import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import covia.grid.Authority;
+import covia.lattice.CapabilityChecker;
 
 /** Covers RequestContext wrapping an Authority (getAuthority / ofAuthority) and
  *  the credential getters reading through to it. */
@@ -70,5 +73,30 @@ public class RequestContextAuthorityTest {
 		assertTrue(RequestContext.ANONYMOUS.getAuthority().isAnonymous());
 		assertSame(RequestContext.ANONYMOUS, RequestContext.ofAuthority(null));
 		assertSame(RequestContext.ANONYMOUS, RequestContext.ofAuthority(Authority.ANONYMOUS));
+	}
+
+	@Test
+	public void testGateContextIsConstrainedAndNonRecursive() {
+		AString gateOp = Strings.create("v/test/ops/allowgate");
+		ACell gatedWrite = Maps.of(
+			"with", Strings.create("w/private"),
+			"can", Strings.create("crud/write"),
+			"nb", Maps.of("gate", gateOp));
+		RequestContext original = RequestContext.of(ALICE)
+			.withCaps(Vectors.of(gatedWrite))
+			.withProofs(Vectors.of(PROOF));
+
+		RequestContext gateCtx = original.forGateEvaluation(gateOp);
+
+		assertTrue(gateCtx.isGateEvaluation());
+		assertNull(gateCtx.getProofs(),
+			"gate policy code must not inherit additive cross-user delegations");
+		assertNull(CapabilityChecker.allows(gateCtx.getCaps(), gateOp,
+			Strings.create("invoke"), ALICE, gateOp, null, null),
+			"the gate receives only the synthetic right to invoke itself");
+		assertNotNull(CapabilityChecker.allows(gateCtx.getCaps(),
+			Strings.create("w/private"), Strings.create("crud/write"),
+			ALICE, gateOp, null, null),
+			"the original gated grant stays fail-closed during gate execution");
 	}
 }

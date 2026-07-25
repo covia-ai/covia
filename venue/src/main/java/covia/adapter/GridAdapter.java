@@ -215,16 +215,18 @@ public class GridAdapter extends AAdapter {
      *       from this caller (confused-deputy safe).</li>
      * </ul>
      * No relay instruction and no identity token → anonymous hop (the explicit
-     * choice for public operations). A local target carries the caller's verified
-     * proofs into the local context.
+     * choice for public operations). A local target carries the complete caller
+     * context because there is no transport boundary at which to reconstruct it.
      */
     private Venue selectVenue(RequestContext ctx, AString venueSpec, ACell input) {
         if (venueSpec != null) {
             return connectRemote(ctx, venueSpec);
         }
         LocalVenue lv = new LocalVenue(engine);
-        lv.setUser(ctx.getCallerDID());
-        lv.setProofs(ctx.getProofs());
+        // An in-process hop has no transport boundary at which to reconstruct
+        // authority. Carry the complete immutable context so agent caps,
+        // sub-principal scope, proofs, cancellation and parent job scope survive.
+        lv.setRequestContext(ctx);
         return lv;
     }
 

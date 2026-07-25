@@ -1120,15 +1120,21 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 					if (path == null) {
 						toolResult = Strings.create("Error: path is required");
 					} else {
-						long budget = clampLoadBudget(RT.getIn(toolInput, K_BUDGET));
-						AString label = RT.ensureString(RT.getIn(toolInput, K_LABEL));
-						activeFrame = GoalTreeContext.addLoad(activeFrame, path,
-							buildLoadEntryMeta(budget, label));
-						toolResult = Maps.of(
-							K_PATH, path,
-							Strings.create("loaded"), CVMBool.TRUE,
-							K_BUDGET, CVMLong.create(budget),
-							Strings.create("note"), Strings.create("Path will appear in context next turn."));
+						try {
+							new ContextLoader(engine).requireReadAccess(path, ctx);
+							long budget = clampLoadBudget(RT.getIn(toolInput, K_BUDGET));
+							AString label = RT.ensureString(RT.getIn(toolInput, K_LABEL));
+							activeFrame = GoalTreeContext.addLoad(activeFrame, path,
+								buildLoadEntryMeta(budget, label));
+							toolResult = Maps.of(
+								K_PATH, path,
+								Strings.create("loaded"), CVMBool.TRUE,
+								K_BUDGET, CVMLong.create(budget),
+								Strings.create("note"), Strings.create("Path will appear in context next turn."));
+						} catch (RuntimeException e) {
+							toolResult = Strings.create(
+								"Error: context_load denied: " + describeFailure(e));
+						}
 					}
 
 				} else if (TOOL_CONTEXT_UNLOAD.equals(toolName)) {

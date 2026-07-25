@@ -86,6 +86,19 @@ public class SkillsTest {
 		return Skills.resolveRef(engine, ctx, Strings.create(ref));
 	}
 
+	@Test
+	public void testDirectSkillLoadHonoursAgentReadScope() {
+		write("w/skills/private", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Owner-only instructions"),
+			"content", Maps.of("inline", Strings.create("Do not expose"))));
+
+		RequestContext denied = ctx.withCaps(Vectors.empty());
+		assertThrows(covia.exception.AuthException.class, () ->
+			Skills.load(engine, denied, Vectors.of(Strings.create("w/skills")),
+				Maps.of("ref", Strings.create("w/skills/private")), Maps.empty()),
+			"skill_load is a read action even though it is implemented by the harness");
+	}
+
 	// ========== resolveRef: the body chain ==========
 
 	@Test

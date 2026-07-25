@@ -2,6 +2,7 @@ package covia.adapter;
 
 import java.util.concurrent.CompletableFuture;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -410,7 +411,14 @@ public class AssetAdapter extends AAdapter {
 		AString pathStr = RT.ensureString(RT.getIn(input, Fields.PATH));
 		if (pathStr == null) pathStr = RT.ensureString(RT.getIn(input, Fields.ID));
 		if (pathStr == null) throw new IllegalArgumentException("path is required");
-		engine.requireAuthority(ctx,pathStr, Abilities.ASSET_STORE);
+		// Pin has two distinct authority questions: may the caller read the
+		// source, and may it create a durable asset in its own store? Do not ask
+		// for asset/store on the source path — that both misses private-read
+		// ownership and describes the wrong action.
+		AString readAbility = (parseAssetId(pathStr) != null)
+			? Abilities.ASSET_READ : Capability.CRUD_READ;
+		engine.requireResourceAccess(ctx, pathStr, readAbility);
+		engine.requireAuthority(ctx, Strings.create("a/"), Abilities.ASSET_STORE);
 
 		AString metaString;
 		ACell content = null;

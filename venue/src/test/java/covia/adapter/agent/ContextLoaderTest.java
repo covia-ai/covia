@@ -17,6 +17,7 @@ import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.util.CellExplorer;
 import convex.core.lang.RT;
+import convex.auth.ucan.Capability;
 import covia.adapter.agent.ContextLoader;
 import covia.api.Fields;
 import covia.grid.Job;
@@ -112,6 +113,25 @@ public class ContextLoaderTest {
 		ACell msg2 = ContextLoader.systemMessage(null, "Plain text");
 		AString content2 = RT.ensureString(RT.getIn(msg2, Strings.intern("content")));
 		assertEquals("Plain text", content2.toString());
+	}
+
+	@Test
+	public void testWorkspaceLoadHonoursRestrictedAgentReadScope() throws Exception {
+		// context_load is a harness tool rather than an adapter dispatch, but the
+		// eventual read must still go through the same capability seam. An empty
+		// scope is deny-all, not permission to read the owner's workspace.
+		engine.jobs().invokeInternal("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/private-context", Fields.VALUE, "owner only"), ctx)
+			.get(5, java.util.concurrent.TimeUnit.SECONDS);
+
+		RequestContext denied = ctx.withCaps(Vectors.empty());
+		assertThrows(covia.exception.AuthException.class,
+			() -> loader.resolveWorkspacePath("w/private-context", denied));
+
+		RequestContext allowed = ctx.withCaps(Vectors.of(Capability.create(
+			Strings.create("w/private-context"), Strings.create("crud/read"))));
+		assertNotNull(loader.resolveWorkspacePath("w/private-context", allowed),
+			"an exact crud/read grant permits the dynamic context read");
 	}
 
 	// ========== Literal text entries ==========

@@ -331,6 +331,10 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		// pending/inbox → empty signal. System prompt goes first for
 		// primacy, new input goes last for recency.
 		AVector<ACell> sessionFrames = AgentAdapter.sessionFrames(input);
+		AVector<ACell> configuredCaps = RT.ensureVector(
+			recordConfig != null ? recordConfig.get(Strings.intern("caps")) : null);
+		RequestContext loadCtx = ((configuredCaps != null)
+			? ctx.withCaps(configuredCaps) : ctx).withAgentId(agentId);
 		ContextBuilder builder = new ContextBuilder(engine, ctx);
 		ContextBuilder.ContextResult context = builder
 			.withConfig(recordConfig)
@@ -338,7 +342,7 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			.withSystemPrompt()                   // stable — head of the cached prefix
 			.withContextEntries()                 // stable while config.context unchanged
 			.withSkillsIndex(effectiveLoads)      // stable while loads unchanged
-			.withLoadedPaths(effectiveLoads)      // stable while loads unchanged
+			.withLoadedPaths(effectiveLoads, loadCtx) // model-selected reads use agent caps
 			.withFrameStack(sessionFrames)        // session history — append-only
 			.withPendingResults(pending)          // this turn
 			.withInboxMessages(messages)          // this turn's user input
@@ -746,6 +750,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		if (path == null) return Strings.create("Error: path is required");
 		if (!toolCtx.sessionInScope) {
 			return Strings.create("Error: no session in scope — context loads are per-conversation (#142)");
+		}
+		try {
+			new ContextLoader(engine).requireReadAccess(path, toolCtx.ctx);
+		} catch (RuntimeException e) {
+			return Strings.create("Error: context_load denied: " + describeFailure(e));
 		}
 
 		// Writes to the innermost tier; overwriting a tombstone un-masks locally.

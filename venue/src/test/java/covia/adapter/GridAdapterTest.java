@@ -2,18 +2,24 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import convex.auth.ucan.Capability;
+import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.grid.client.VenueHTTP;
+import covia.venue.RequestContext;
+import covia.venue.TestEngine;
 import covia.venue.TestServer;
 
 /**
@@ -28,6 +34,27 @@ import covia.venue.TestServer;
  * {@code covia.venue.grid.CrossVenueTest}.</p>
  */
 class GridAdapterTest {
+
+	@Test
+	void localRunPreservesTheCallersCapabilityScope() {
+		// The outer grant permits exactly grid:run. A local hop must carry that
+		// same restricted authority into the target invocation; rebuilding a
+		// context from only the DID would turn null caps into unrestricted access
+		// and incorrectly allow the JVM operation.
+		AString caller = Strings.create("did:key:zGridScopedCaller");
+		ACell gridInvoke = Capability.create(
+			Strings.create("v/ops/grid/run"), Strings.create("invoke"));
+		RequestContext scoped = RequestContext.of(caller).withCaps(Vectors.of(gridInvoke));
+
+		Job job = TestEngine.ENGINE.jobs().invokeOperation("v/ops/grid/run", Maps.of(
+			Fields.OPERATION, "v/ops/jvm/string-concat",
+			Fields.INPUT, Maps.of("first", "must", "second", "deny")), scoped);
+
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertEquals(Status.FAILED, job.getStatus());
+		assertTrue(job.getErrorMessage().contains("Capability denied"), job.getErrorMessage());
+		assertTrue(job.getErrorMessage().contains("v/ops/jvm/string-concat"), job.getErrorMessage());
+	}
 
 	@Test
 	void missingOperationNamesExpectedInput() throws Exception {

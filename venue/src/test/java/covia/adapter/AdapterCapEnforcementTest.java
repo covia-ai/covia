@@ -1,6 +1,7 @@
 package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.TimeUnit;
@@ -15,7 +16,11 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
+import convex.auth.ucan.Capability;
 import covia.api.Fields;
+import covia.grid.Job;
+import covia.grid.Status;
 import covia.lattice.CapabilityChecker;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -26,8 +31,7 @@ import covia.venue.TestEngine;
  * checks that each resource adapter performs at its execution point.
  *
  * <p>Each op is invoked <b>directly</b> on its adapter ({@code invokeFuture}),
- * bypassing {@code JobManager}'s name-keyed boundary net, so these assertions
- * isolate the adapter's own {@code ctx.requireCapability(...)} call: the right
+ * so these assertions isolate the adapter's own point-of-action gate: the right
  * resource and the right ability. Under the public read-only scope, mutations
  * are denied and owner-scoped reads are allowed — including DLFS, which is a
  * DID-scoped {@code <did>/dlfs/…} namespace covered by the caller's crud/read
@@ -155,5 +159,29 @@ public class AdapterCapEnforcementTest {
 	}
 	@Test public void dlfsWriteNotCapDeniedUnrestricted() {
 		assertFalse(capDenied(direct("dlfs", "write", m("drive", "d", "path", "x"), unrestricted)));
+	}
+
+	// ===================== job-aware invoke gates =====================
+
+	@Test public void a2aFuturePathRequiresInvokeBeforeOutboundWork() {
+		assertTrue(capDenied(direct("a2a", "getAgentCard",
+			m(Fields.URL, "http://10.0.0.1/a2a"), readOnly)),
+			"A2A must deny at requireInvoke before URL validation or network work");
+	}
+
+	@Test public void agentJobPathRequiresInvokeAsWellAsTheActionAbility() {
+		String agentId = "cap-invoke-" + System.nanoTime();
+		// Deliberately grant the action-specific right but not invocation of the
+		// operation definition. The Job-aware override must enforce both, exactly
+		// like AgentAdapter.invokeFuture does.
+		RequestContext actionOnly = RequestContext.of(DID).withCaps(Vectors.of(
+			Capability.create(Strings.create("g/" + agentId), Strings.create("agent/create"))));
+		Job job = engine.jobs().invokeOperation("v/ops/agent/create",
+			m(Fields.AGENT_ID, agentId, Fields.CONFIG,
+				Maps.of(Fields.OPERATION, Strings.create("v/ops/llmagent/chat"))),
+			actionOnly);
+		assertThrows(Exception.class, () -> job.awaitResult(5000));
+		assertTrue(job.getStatus().equals(Status.FAILED));
+		assertTrue(job.getErrorMessage().contains("invoke"), job.getErrorMessage());
 	}
 }

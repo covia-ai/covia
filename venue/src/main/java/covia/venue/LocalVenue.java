@@ -38,12 +38,31 @@ public class LocalVenue extends Venue {
 	 *  remote hop forwards it (covia#100/#102). Null = none. */
 	private convex.core.data.AVector<ACell> proofs;
 
+	/**
+	 * Complete immutable request context for an in-process hop. A local grid
+	 * invocation must preserve the same scoped authority as its caller; rebuilding
+	 * a context from only the DID and proofs would turn a restricted agent's
+	 * non-null grant scope into unrestricted ({@code null}) authority.
+	 */
+	private RequestContext requestContext;
+
 	public void setProofs(convex.core.data.AVector<ACell> proofs) {
 		this.proofs = proofs;
 	}
 
-	/** Builds the request context for this venue's user, carrying any proofs. */
+	/**
+	 * Carries a complete caller context across an in-process venue boundary.
+	 * RequestContext is immutable, and JobManager derives operation/job scope from
+	 * it without mutating this prototype.
+	 */
+	public void setRequestContext(RequestContext requestContext) {
+		this.requestContext = requestContext;
+		if (requestContext != null) setUser(requestContext.getCallerDID());
+	}
+
+	/** Builds the request context for this venue's user, carrying any authority. */
 	private RequestContext context() {
+		if (requestContext != null) return requestContext;
 		return RequestContext.of(getUser(), proofs);
 	}
 

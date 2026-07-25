@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -12,6 +13,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
@@ -847,6 +849,30 @@ public class AssetAdapterTest {
 		assertEquals(hex, returnedHash.toString(), "Pinning a CAS asset preserves its hash");
 		assertTrue(returnedPath.toString().endsWith("/a/" + hex),
 			"Returned path should be the caller's DID URL for the pinned hash");
+	}
+
+	@Test
+	public void testPinSeparatesSourceReadFromDestinationStoreAuthority() {
+		Job storeJob = engine.jobs().invokeOperation("v/ops/asset/store",
+			Maps.of(Fields.METADATA, Maps.of(Fields.NAME, "Scoped pin source")),
+			RequestContext.of(ALICE_DID));
+		AString didUrl = RT.ensureString(RT.getIn(storeJob.awaitResult(5000), Fields.ID));
+		AString source = Strings.create("a/" + hashFromPath(didUrl));
+
+		RequestContext storeOnly = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			Capability.create(Strings.create("a/"), Strings.create("asset/store"))));
+		Job denied = engine.jobs().invokeOperation("v/ops/asset/pin",
+			Maps.of(K_PATH, source), storeOnly);
+		assertThrows(Exception.class, () -> denied.awaitResult(5000),
+			"permission to create the destination does not imply source read access");
+
+		RequestContext readAndStore = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			Capability.create(source, Strings.create("asset/read")),
+			Capability.create(Strings.create("a/"), Strings.create("asset/store"))));
+		Job allowed = engine.jobs().invokeOperation("v/ops/asset/pin",
+			Maps.of(K_PATH, source), readAndStore);
+		assertNotNull(allowed.awaitResult(5000),
+			"pin succeeds when both independently described actions are granted");
 	}
 
 	@Test

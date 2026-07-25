@@ -396,8 +396,15 @@ public class AgentAdapter extends AAdapter {
 			return;
 		}
 		try {
-			requireAgentCap(ctx, input, getSubOperation(meta));
-			switch (getSubOperation(meta)) {
+			String subOp = getSubOperation(meta);
+			// Keep the Job-aware path identical to invokeFuture: task completion
+			// is context-bound framework plumbing; every other user-facing
+			// operation requires invocation of its exact definition.
+			if (!"completeTask".equals(subOp) && !"failTask".equals(subOp)) {
+				requireInvoke(ctx);
+			}
+			requireAgentCap(ctx, input, subOp);
+			switch (subOp) {
 				case "create"  -> handleCreate(job, input, ctx);
 				case "fork"    -> handleFork(job, input, ctx);
 				case "request" -> handleRequest(job, input, ctx);

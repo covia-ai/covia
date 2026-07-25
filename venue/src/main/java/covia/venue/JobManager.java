@@ -227,7 +227,11 @@ public class JobManager {
 		// invocation can evaluate nb.gate-caveated grants against exactly this
 		// op + input. Installed here because dispatch is the one place with the
 		// engine, the reference and the input together.
-		ctx = ctx.withInvocation(input, this::evaluateGate);
+		RequestContext authorityCtx = ctx;
+		ctx = ctx.isGateEvaluation()
+			? ctx.withInvocation(input, null)
+			: ctx.withInvocation(input, (gateOp, opRef, gateInput, caller) ->
+				evaluateGate(gateOp, opRef, gateInput, caller, authorityCtx));
 		// Capability enforcement is the executing adapter's responsibility: each
 		// op asserts its exact (resource, ability) at its own enforcement point
 		// (requireCapability / requireInvoke), before any side effect. There is
@@ -362,7 +366,11 @@ public class JobManager {
 		input = applyDefaults(meta, input);
 		// Arm capability gates (#216) — see invokeOperation. The agent tool loop
 		// dispatches through here, so gated config caps rule on each tool call.
-		ctx = ctx.withInvocation(input, this::evaluateGate);
+		RequestContext authorityCtx = ctx;
+		ctx = ctx.isGateEvaluation()
+			? ctx.withInvocation(input, null)
+			: ctx.withInvocation(input, (gateOp, opRef, gateInput, caller) ->
+				evaluateGate(gateOp, opRef, gateInput, caller, authorityCtx));
 		AAdapter adapter;
 		try {
 			// Enforcement is the adapter's responsibility (see invokeOperation):
@@ -420,20 +428,20 @@ public class JobManager {
 	 * succeeds; any failure — the op fails, doesn't resolve, or times out —
 	 * denies with the reason (fail-closed, never fail-open).
 	 *
-	 * <p>The gate runs under the CALLER's own authority with no capability
-	 * scope: a gate is policy code chosen by whoever configured the grant,
-	 * and a scope-less context means the checker never evaluates gates for
-	 * the gate's own sub-invocations — a structural recursion guard, no
-	 * flags. No Job is created (invokeInternal), so gate checks never bloat
-	 * the etch.</p>
+	 * <p>The gate runs under a constrained derivative of the caller's authority:
+	 * it may invoke the gate definition itself and use ordinary ungated grants,
+	 * but it receives neither unrestricted scope nor additive UCAN proofs.
+	 * Nested gated grants are disabled structurally by the gate-evaluation flag.
+	 * No Job is created (invokeInternal), so checks never bloat the etch.</p>
 	 */
-	String evaluateGate(AString gateOp, AString opRef, ACell input, AString caller) {
+	String evaluateGate(AString gateOp, AString opRef, ACell input, AString caller,
+			RequestContext authorityCtx) {
 		try {
 			AMap<AString, ACell> gateInput = Maps.of(
 				Fields.OPERATION, opRef,
 				Fields.INPUT, input,
 				Fields.CALLER, caller);
-			invokeInternal(gateOp, gateInput, RequestContext.of(caller))
+			invokeInternal(gateOp, gateInput, authorityCtx.forGateEvaluation(gateOp))
 				.get(GATE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
 			return null;                                        // gate succeeded — capability applies
 		} catch (java.util.concurrent.TimeoutException e) {

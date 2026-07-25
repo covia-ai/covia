@@ -2,6 +2,7 @@ package covia.adapter.agent;
 
 import java.nio.charset.StandardCharsets;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -12,7 +13,9 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
+import covia.adapter.AssetAdapter;
 import covia.adapter.CoviaAdapter;
+import covia.api.Abilities;
 import covia.api.Fields;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.grid.Asset;
@@ -240,6 +243,7 @@ public class ContextLoader {
 	 */
 	String resolveWorkspacePath(String path, RequestContext ctx) {
 		try {
+			requireReadAccess(Strings.create(path), ctx);
 			Users users = engine.getVenueState().users();
 			User user = users.get(ctx.getUserDID());
 			if (user == null) return null;
@@ -275,6 +279,7 @@ public class ContextLoader {
 		if (!isAssetReference(ref.toString())) return ref.toString();
 
 		try {
+			requireReadAccess(ref, ctx);
 			// 1. Content, via the universal resolution chain (UTF-8 decode).
 			covia.venue.storage.ContentProvider.Resolved resolved = engine.resolveContent(ref, ctx);
 			if (resolved != null && resolved.content() != null) {
@@ -310,6 +315,20 @@ public class ContextLoader {
 		} catch (Exception e) {
 			throw new RuntimeException(e);
 		}
+	}
+
+	/**
+	 * Enforces the read represented by a dynamic context reference. Harness
+	 * tools do not pass through an adapter, so this is their equivalent
+	 * point-of-action gate.
+	 */
+	void requireReadAccess(AString ref, RequestContext ctx) {
+		if (ref == null) return;
+		String value = ref.toString();
+		if (!isNamespacePath(value) && !isAssetReference(value)) return; // literal text
+		AString ability = (AssetAdapter.parseAssetId(ref) != null)
+			? Abilities.ASSET_READ : Capability.CRUD_READ;
+		engine.requireResourceAccess(ctx, ref, ability);
 	}
 
 	/**

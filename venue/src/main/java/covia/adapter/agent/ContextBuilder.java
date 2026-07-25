@@ -485,7 +485,8 @@ public class ContextBuilder {
 			}
 
 			loader.setCellExplorer(new CellExplorer(entryBudget));
-			result = (AVector<ACell>) result.concat(renderLoadEntry(loader, path, meta, seenSkillIds));
+			result = (AVector<ACell>) result.concat(
+				renderLoadEntry(loader, path, meta, seenSkillIds, ctx));
 		}
 		return result;
 	}
@@ -498,6 +499,16 @@ public class ContextBuilder {
 	 */
 	@SuppressWarnings("unchecked")
 	public ContextBuilder withLoadedPaths(AMap<AString, ACell> loads) {
+		return withLoadedPaths(loads, ctx);
+	}
+
+	/**
+	 * Resolves dynamically loaded paths under an explicit authority context.
+	 * Static config context may be operator-pinned, while model-selected loads
+	 * must use the agent's capability-scoped context.
+	 */
+	public ContextBuilder withLoadedPaths(AMap<AString, ACell> loads,
+			RequestContext resolutionCtx) {
 		if (loads == null || loads.count() == 0) return this;
 
 		ContextLoader loader = new ContextLoader(engine);
@@ -526,7 +537,8 @@ public class ContextBuilder {
 			}
 
 			loader.setCellExplorer(new CellExplorer(entryBudget));
-			AVector<ACell> rendered = renderLoadEntry(loader, path, meta, seenSkillIds);
+			AVector<ACell> rendered = renderLoadEntry(
+				loader, path, meta, seenSkillIds, resolutionCtx);
 			for (long i = 0; i < rendered.count(); i++) {
 				ACell msg = rendered.get(i);
 				messages = messages.conj(msg);
@@ -552,10 +564,11 @@ public class ContextBuilder {
 	 * </ul>
 	 */
 	private AVector<ACell> renderLoadEntry(ContextLoader loader, AString path,
-			AMap<AString, ACell> meta, java.util.Set<convex.core.data.Hash> seenSkillIds) {
+			AMap<AString, ACell> meta, java.util.Set<convex.core.data.Hash> seenSkillIds,
+			RequestContext resolutionCtx) {
 		if (Skills.isSkillEntry(meta)) {
 			try {
-				Skills.ResolvedSkill skill = Skills.resolveRef(engine, ctx, path);
+				Skills.ResolvedSkill skill = Skills.resolveRef(engine, resolutionCtx, path);
 				// Content-identity dedup across the render pass: skills are
 				// content-addressed, so the same skill loaded under two
 				// addresses (or at two tiers) renders its body once. The
@@ -567,7 +580,7 @@ public class ContextBuilder {
 				AVector<ACell> msgs = Vectors.of(
 					Skills.renderSkillMessage(skill.name(), skill.displayBody()));
 				if (skill.contextEntries().count() > 0) {
-					msgs = msgs.concat(loader.resolve(skill.contextEntries(), ctx));
+					msgs = msgs.concat(loader.resolve(skill.contextEntries(), resolutionCtx));
 				}
 				return msgs;
 			} catch (RuntimeException e) {
@@ -575,7 +588,7 @@ public class ContextBuilder {
 					ContextLoader.rootMessage(e)));
 			}
 		}
-		ACell msg = loader.resolveEntry(path, ctx);
+		ACell msg = loader.resolveEntry(path, resolutionCtx);
 		return (msg != null) ? Vectors.of((ACell) msg) : Vectors.empty();
 	}
 

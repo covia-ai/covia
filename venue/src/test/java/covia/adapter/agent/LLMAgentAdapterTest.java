@@ -1753,7 +1753,8 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testBuildOutstandingTaskMessageNoTasks() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"),
+			RequestContext.of(ALICE_DID), null, null, null, null);
 		assertNull(LLMAgentAdapter.buildOutstandingTaskMessage(ctx));
 	}
 
@@ -1815,7 +1816,8 @@ public class LLMAgentAdapterTest {
 
 	@Test
 	public void testToolContextRecordTaskResult() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"),
+			RequestContext.of(ALICE_DID), null, null, null, null);
 		assertNull(ctx.taskResults);
 
 		ctx.recordTaskResult(Strings.create("job1"),
@@ -1999,7 +2001,8 @@ public class LLMAgentAdapterTest {
 	// ========== Context load/unload tests ==========
 
 	@Test public void testContextLoadHandler() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"),
+			RequestContext.of(ALICE_DID), null, null, null, null);
 		assertEquals(0, ctx.loads.count());
 
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
@@ -2011,7 +2014,8 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testContextLoadDefaultBudget() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"),
+			RequestContext.of(ALICE_DID), null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		adapter.handleContextLoad(Maps.of("path", "w/test"), ctx);
 
@@ -2020,7 +2024,8 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testContextLoadBudgetClamped() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"),
+			RequestContext.of(ALICE_DID), null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
 		// Over max
@@ -2035,7 +2040,8 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testContextLoadOverwritesSamePath() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"),
+			RequestContext.of(ALICE_DID), null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		adapter.handleContextLoad(Maps.of("path", "w/data", "budget", 500L, "label", "first"), ctx);
 		adapter.handleContextLoad(Maps.of("path", "w/data", "budget", 1000L, "label", "second"), ctx);
@@ -2047,7 +2053,8 @@ public class LLMAgentAdapterTest {
 	}
 
 	@Test public void testContextUnloadHandler() {
-		ToolContext ctx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
+		ToolContext ctx = new ToolContext(Strings.create("agent"),
+			RequestContext.of(ALICE_DID), null, null, null, null);
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 		adapter.handleContextLoad(Maps.of("path", "w/data"), ctx);
 		assertEquals(1, ctx.loads.count());
@@ -2055,6 +2062,19 @@ public class LLMAgentAdapterTest {
 		ACell result = adapter.handleContextUnload(Maps.of("path", "w/data"), ctx);
 		assertTrue(result.toString().contains("unloaded"));
 		assertEquals(0, ctx.loads.count());
+	}
+
+	@Test public void testContextLoadRejectsPathOutsideAgentScope() {
+		ToolContext ctx = new ToolContext(Strings.create("agent"),
+			RequestContext.of(ALICE_DID).withCaps(Vectors.empty()),
+			null, null, null, null);
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+
+		ACell result = adapter.handleContextLoad(Maps.of("path", "w/private"), ctx);
+
+		assertTrue(result.toString().contains("denied"), result.toString());
+		assertEquals(0, ctx.loads.count(),
+			"a denied path must not be persisted for a later unscoped render");
 	}
 
 	@Test public void testContextUnloadNotFound() {
@@ -2069,7 +2089,8 @@ public class LLMAgentAdapterTest {
 	/** context_unload masks an operator-pinned load with a nil tombstone —
 	 *  this conversation only; the pin itself is untouched. */
 	@Test public void testUnloadMasksConfigLoad() {
-		ToolContext toolCtx = new ToolContext(Strings.create("agent"), null, null, null, null, null);
+		ToolContext toolCtx = new ToolContext(Strings.create("agent"),
+			RequestContext.of(ALICE_DID), null, null, null, null);
 		toolCtx.outerLoads = Maps.of(Strings.create("w/pinned"),
 			Maps.of(Strings.create("budget"), CVMLong.create(400)));
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");

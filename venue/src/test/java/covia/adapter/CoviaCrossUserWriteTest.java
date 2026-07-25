@@ -268,6 +268,55 @@ public class CoviaCrossUserWriteTest {
 	}
 
 	@Test
+	public void testCrossUserPrivateOperationCannotBeInvokedWithoutAssetRead() {
+		// Operation resolution is itself a read of Alice's private /a/ record.
+		// The adapter's later invoke check must not be able to hide an
+		// unauthorised definition lookup performed before dispatch.
+		ACell stored = run("v/ops/asset/store", Maps.of(
+			Fields.METADATA, Maps.of(
+				Fields.NAME, Strings.create("alice-private-operation"),
+				Fields.OPERATION, Maps.of(
+					Fields.ADAPTER, Strings.create("json:select")))), ALICE);
+		AString operation = RT.ensureString(RT.getIn(stored, Fields.ID));
+
+		assertThrows(Exception.class, () ->
+			engine.jobs().invokeOperation(operation, Maps.of(
+				"key", "answer",
+				"cases", Maps.of("answer", "private")), BOB),
+			"resolving another user's private operation requires asset/read");
+
+		AMap<AString, ACell> readGrant = ownerToken(ALICE_KP, BOB_DID,
+			operation.toString(), "asset/read", 3600);
+		ACell result = run(operation.toString(), Maps.of(
+			"key", "answer",
+			"cases", Maps.of("answer", "shared")), withProofs(BOB, readGrant));
+		assertEquals(Strings.create("shared"), RT.getIn(result, "result"),
+			"an explicit asset/read delegation makes the definition invokable");
+	}
+
+	@Test
+	public void testCopyChecksTheCrossUserSourceBeforeWritingLocally() {
+		ACell stored = run("v/ops/asset/store",
+			Maps.of(Fields.METADATA, Maps.of(Fields.NAME, "alice-copy-source")), ALICE);
+		AString source = RT.ensureString(RT.getIn(stored, Fields.ID));
+		AMap<AString, ACell> copyInput = Maps.of(
+			"from", source,
+			"to", Strings.create("w/copied-from-alice"));
+
+		Job denied = engine.jobs().invokeOperation("v/ops/covia/copy", copyInput, BOB);
+		assertThrows(Exception.class, () -> denied.awaitResult(5000),
+			"copy must not treat an unrestricted own scope as cross-user read authority");
+
+		AMap<AString, ACell> readGrant = ownerToken(ALICE_KP, BOB_DID,
+			source.toString(), "crud/read", 3600);
+		run("v/ops/covia/copy", copyInput, withProofs(BOB, readGrant));
+		ACell copied = run("v/ops/covia/read",
+			Maps.of(Fields.PATH, "w/copied-from-alice"), BOB);
+		assertEquals(Strings.create("alice-copy-source"),
+			RT.getIn(copied, Fields.VALUE, Fields.NAME));
+	}
+
+	@Test
 	public void testCrossUserAssetGetWithProof() {
 		// asset:get of another user's asset works WITH read rights — the gate
 		// resolves the OWNER's store (a is like w: denied without rights, served

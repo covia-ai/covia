@@ -177,9 +177,9 @@ public class SkillsAdapter extends AAdapter {
 	 *  AssetAdapter and CoviaAdapter's read pins exactly. */
 	private void requireReadCap(RequestContext ctx, AString source) {
 		if (AssetAdapter.parseAssetId(source) != null) {
-			engine.requireAuthority(ctx,source, ASSET_READ);
+			engine.requireResourceAccess(ctx, source, ASSET_READ);
 		} else {
-			engine.requireAuthority(ctx,source, Capability.CRUD_READ);
+			engine.requireResourceAccess(ctx, source, Capability.CRUD_READ);
 		}
 	}
 

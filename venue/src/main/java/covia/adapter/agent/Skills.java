@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -19,6 +20,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.adapter.AssetAdapter;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -126,6 +128,7 @@ public final class Skills {
 				throw new IllegalArgumentException("skills sources must be strings — got: " + sources.get(i));
 			}
 			try {
+				requireRead(engine, ctx, source);
 				if (AssetAdapter.parseAssetId(source) != null) {
 					// Asset ref source → a single skill
 					addEntry(out, seen, describe(engine, ctx, source, engine.resolvePath(source, ctx), source));
@@ -239,6 +242,7 @@ public final class Skills {
 					}
 					continue;
 				}
+				requireRead(engine, ctx, source);
 				ACell value = engine.resolvePath(source, ctx);
 				if (!(value instanceof AMap)) continue;
 				ACell entry = ((AMap<?, ?>) value).get(Strings.create(name));
@@ -258,6 +262,7 @@ public final class Skills {
 	 * or inline markdown). Throws with a diagnosable message on failure.
 	 */
 	public static ResolvedSkill resolveRef(Engine engine, RequestContext ctx, AString ref) {
+		requireRead(engine, ctx, ref);
 		ACell value = engine.resolvePath(ref, ctx);
 		return resolveValue(engine, ctx, ref, ref, value, true);
 	}
@@ -283,6 +288,7 @@ public final class Skills {
 			if (ContextLoader.isAssetReference(str)) {
 				// String reference — one hop to the skill asset (no chains,
 				// matching Engine.resolveContent's one-hop rule).
+				requireRead(engine, ctx, s);
 				ACell target = engine.resolvePath(s, ctx);
 				if (target == null) throw new RuntimeException("skill reference does not resolve: " + str);
 				if (target instanceof AString) {
@@ -344,6 +350,14 @@ public final class Skills {
 
 		throw new RuntimeException("skill at " + path
 			+ " is not a skill (expected asset metadata, a reference, or markdown text)");
+	}
+
+	/** Shared read pin for every skill source/ref, including harness skill_load. */
+	private static void requireRead(Engine engine, RequestContext ctx, AString ref) {
+		if (ref == null) return;
+		AString ability = (AssetAdapter.parseAssetId(ref) != null)
+			? Abilities.ASSET_READ : Capability.CRUD_READ;
+		engine.requireResourceAccess(ctx, ref, ability);
 	}
 
 	private static AVector<ACell> facetVector(AMap<AString, ACell> facet, AString key, AString path) {
@@ -484,6 +498,7 @@ public final class Skills {
 
 	/** Resolution without the body read (identity + index fields only). */
 	private static ResolvedSkill resolveRefLight(Engine engine, RequestContext ctx, AString ref) {
+		requireRead(engine, ctx, ref);
 		return resolveValue(engine, ctx, ref, ref, engine.resolvePath(ref, ctx), false);
 	}
 

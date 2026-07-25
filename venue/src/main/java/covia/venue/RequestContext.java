@@ -1,9 +1,11 @@
 package covia.venue;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Vectors;
 import convex.core.data.Strings;
 import covia.exception.AuthException;
 import covia.grid.Authority;
@@ -58,6 +60,9 @@ public class RequestContext {
 	 *  by the dispatch layer. Null → gated grants cannot authorise (fail-closed);
 	 *  ungated grants are unaffected (#216). */
 	private final CapabilityGate gate;
+	/** True only while executing a capability's policy gate. Prevents nested
+	 * dispatch from arming gated grants recursively. */
+	private final boolean gateEvaluation;
 
 	/**
 	 * Context for anonymous (unauthenticated) external requests.
@@ -69,6 +74,14 @@ public class RequestContext {
 			Blob taskId, AVector<ACell> rawUcans, AString op,
 			java.util.concurrent.atomic.AtomicBoolean cancellation,
 			ACell invocationInput, CapabilityGate gate) {
+		this(authority, agentId, jobId, sessionId, taskId, rawUcans, op,
+			cancellation, invocationInput, gate, false);
+	}
+
+	private RequestContext(Authority authority, AString agentId, Blob jobId, Blob sessionId,
+			Blob taskId, AVector<ACell> rawUcans, AString op,
+			java.util.concurrent.atomic.AtomicBoolean cancellation,
+			ACell invocationInput, CapabilityGate gate, boolean gateEvaluation) {
 		this.authority = (authority != null) ? authority : Authority.ANONYMOUS;
 		this.agentId = agentId;
 		this.jobId = jobId;
@@ -79,6 +92,7 @@ public class RequestContext {
 		this.cancellation = cancellation;
 		this.invocationInput = invocationInput;
 		this.gate = gate;
+		this.gateEvaluation = gateEvaluation;
 	}
 
 	/**
@@ -149,20 +163,18 @@ public class RequestContext {
 	 * CAD3-signed tokens directly are implicitly trusted by construction.</p>
 	 */
 	public RequestContext withProofs(AVector<ACell> proofs) {
-		return new RequestContext(authority.withProofs(proofs), agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate);
+		return new RequestContext(authority.withProofs(proofs), agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation);
 	}
 
 	/**
 	 * Returns a new context whose capability scope is replaced. Every operation
-	 * executed under this context is checked against that scope at the point it
-	 * runs — by the executing adapter ({@link #requireCapability}) and by the
-	 * {@link covia.venue.JobManager} dispatch safety net, on both the
-	 * {@code invokeOperation} and {@code invokeInternal} paths. The scope
-	 * composes downward into sub-operations. {@code null} = unrestricted (an
-	 * action is allowed iff a grant covers it, and there are no bounding grants).
+	 * executed under this context is checked against that scope at the adapter's
+	 * point of action ({@link #requireCapability} / Engine's common gates), on
+	 * both Job and zero-Job dispatch paths. The scope composes downward into
+	 * sub-operations. {@code null} = unrestricted.
 	 */
 	public RequestContext withCaps(AVector<ACell> caps) {
-		return new RequestContext(authority.withGrantScope(caps), agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate);
+		return new RequestContext(authority.withGrantScope(caps), agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation);
 	}
 
 	/**
@@ -170,7 +182,7 @@ public class RequestContext {
 	 * resolves to the agent's private workspace at {@code g/{agentId}/n/}.
 	 */
 	public RequestContext withAgentId(AString agentId) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation);
 	}
 
 	/**
@@ -180,7 +192,7 @@ public class RequestContext {
 	 * case the agent/task path takes precedence.
 	 */
 	public RequestContext withJobId(Blob jobId) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation);
 	}
 
 	/**
@@ -189,7 +201,7 @@ public class RequestContext {
 	 * conversation-scoped slot at {@code g/{agentId}/sessions/{sessionId}/c/}.
 	 */
 	public RequestContext withSessionId(Blob sessionId) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation);
 	}
 
 	/**
@@ -198,7 +210,7 @@ public class RequestContext {
 	 * private slot at {@code g/{agentId}/tasks/{taskId}/t/}.
 	 */
 	public RequestContext withTaskId(Blob taskId) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation);
 	}
 
 	/**
@@ -211,7 +223,7 @@ public class RequestContext {
 	 * (#211): {@code {"with": "v/ops/getmine", "can": "invoke"}}.
 	 */
 	public RequestContext withOp(AString op) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation);
 	}
 
 	/**
@@ -233,7 +245,29 @@ public class RequestContext {
 	 * evaluator treat gated grants as unable to authorise (fail-closed).
 	 */
 	public RequestContext withInvocation(ACell invocationInput, CapabilityGate gate) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation);
+	}
+
+	/**
+	 * Builds the constrained context used to execute an {@code nb.gate}
+	 * operation. The gate may invoke its own definition and use the caller's
+	 * ordinary ungated grants, but it does not receive an unrestricted scope or
+	 * additive cross-user proofs. Gated grants remain fail-closed because nested
+	 * dispatch does not install a gate evaluator while this flag is set.
+	 */
+	RequestContext forGateEvaluation(AString gateOp) {
+		AVector<ACell> grants = authority.getGrants();
+		if (grants == null) grants = Vectors.empty();
+		if (gateOp != null) {
+			grants = grants.conj(Capability.create(gateOp, Strings.intern("invoke")));
+		}
+		Authority gateAuthority = authority.withGrantScope(grants).withProofs(null);
+		return new RequestContext(gateAuthority, agentId, jobId, sessionId, taskId,
+			null, gateOp, cancellation, null, null, true);
+	}
+
+	boolean isGateEvaluation() {
+		return gateEvaluation;
 	}
 
 	/**
@@ -243,7 +277,7 @@ public class RequestContext {
 	 * stop the running transition thread by itself.
 	 */
 	public RequestContext withCancellation(java.util.concurrent.atomic.AtomicBoolean cancellation) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation);
 	}
 
 	/**
@@ -335,7 +369,7 @@ public class RequestContext {
 	 * forwarding — the parsed {@link #getProofs() proofs} cannot be re-signed.
 	 */
 	public RequestContext withRawUcans(AVector<ACell> rawUcans) {
-		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate);
+		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation);
 	}
 
 	/**

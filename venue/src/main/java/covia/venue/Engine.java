@@ -1121,7 +1121,7 @@ public class Engine {
 		// publishing venue (hash-verified). The returned Asset carries no
 		// venue — execution, if any, is local. See resolveDIDURL.
 		if (ref.startsWith(NS_DID)) {
-			Asset asset = resolveDIDURL(ref);
+			Asset asset = resolveDIDURL(ref, ctx);
 			if (asset != null) return asset;
 			// Fall through — DID URL might be unresolvable but other forms
 			// could match (rare; defensive).
@@ -1291,7 +1291,7 @@ public class Engine {
 	 * local miss is simply "not found", so callers can fall through to
 	 * other resolution forms or surface a clean error.</p>
 	 */
-	private Asset resolveDIDURL(AString ref) {
+	private Asset resolveDIDURL(AString ref, RequestContext ctx) {
 		AssetRef r = parseAssetRef(ref);
 		if (r == null) return null;
 		if (r.name() != null) {
@@ -1300,7 +1300,13 @@ public class Engine {
 			return "web".equals(r.method()) ? fetchRemoteNamedAsset(r.didString(), r.name()) : null;
 		}
 		Asset local = lookupLocalAsset(r);
-		if (local != null) return local;
+		if (local != null) {
+			// Definition resolution precedes adapter dispatch, so it must enforce
+			// the private /a/ read itself. A later invoke capability is a separate
+			// right and cannot retroactively authorise this lookup.
+			requireResourceAccess(ctx, ref, Abilities.ASSET_READ);
+			return local;
+		}
 		return "web".equals(r.method()) ? fetchRemoteAsset(r.didString(), r.hash()) : null;
 	}
 
@@ -2290,6 +2296,31 @@ public class Engine {
 		return ownerOf(resource);                               // authorised cross-user → the owner's store
 	}
 
+	/**
+	 * Common point-of-action gate for a resource that may be either caller-owned,
+	 * another principal on this venue, or a remote/scheme reference.
+	 *
+	 * <p>Absolute DID resources belonging to a principal whose user record lives
+	 * here go through {@link #requireLocalAccess}; this prevents the null-scope
+	 * own-resource fast path from authorising a different local user's data.
+	 * Bare, scheme-qualified and genuinely remote resources use the normal
+	 * capability seam.</p>
+	 */
+	public void requireResourceAccess(RequestContext ctx, AString resource, AString ability) {
+		if (isLocalDIDResource(resource)) {
+			requireLocalAccess(ctx, resource, ability);
+		} else {
+			requireAuthority(ctx, resource, ability);
+		}
+	}
+
+	/** Whether an absolute DID resource names a principal stored by this venue. */
+	private boolean isLocalDIDResource(AString resource) {
+		AString owner = ownerOf(resource);
+		if (owner == null) return false;
+		return venueState.users().get(owner) != null;
+	}
+
 	/** True when {@code resource} is the caller's own: a bare/relative/scheme path,
 	 *  a resource-less check ({@code null}), or an explicit {@code did:<self>/…}. A
 	 *  {@code did:<other>/…} path is another principal's. Owner = the DID prefix
@@ -2320,9 +2351,10 @@ public class Engine {
 	 * grant, an agent {@code config.caps} grant, or a cross-user proof each
 	 * independently authorise; nothing subtracts. Callers pass the credential (the
 	 * {@link RequestContext}, wrapping an {@code Authority}) and the exact
-	 * resource+ability they guard — all the logic (the {@code null}-scope fast
-	 * path, own-vs-cross-user routing, grant coverage, and proof-chain validation)
-	 * lives here, never at the call site.
+	 * resource+ability they guard. This method is the own/scoped authority seam;
+	 * a resource that may name another local principal must enter through
+	 * {@link #requireResourceAccess}, which classifies ownership before reaching
+	 * the {@code null}-scope fast path.
 	 */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability) {
 		if (ctx == null) return false;
