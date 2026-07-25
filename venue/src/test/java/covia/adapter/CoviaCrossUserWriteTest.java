@@ -279,6 +279,85 @@ public class CoviaCrossUserWriteTest {
 		assertEquals(Strings.create("my-asset"), RT.getIn(RT.getIn(result, "value"), "name"));
 	}
 
+	// ========== Adversarial: DIDs whose id contains colons (did:web :u:/:g:) ==========
+
+	private static final AString ALICE_WEB = Strings.create("did:web:venue.example:u:alice");
+	private static final AString BOB_WEB   = Strings.create("did:web:venue.example:u:bob");
+
+	@Test
+	public void testColonDidForeignReadDenied() {
+		// Security property: the gate must still see a FOREIGN owner for a did:web
+		// user DID with :u: segments, and deny without a proof.
+		RequestContext alice = RequestContext.of(ALICE_WEB);
+		Job read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, BOB_WEB + "/w/secret"), alice);
+		assertThrows(Exception.class, () -> read.awaitResult(5000),
+			"a foreign colon-DID resource must be gated");
+	}
+
+	@Test
+	public void testColonDidForeignWriteDenied() {
+		RequestContext alice = RequestContext.of(ALICE_WEB);
+		Job write = engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, BOB_WEB + "/w/x", Fields.VALUE, Strings.create("nope")), alice);
+		assertThrows(Exception.class, () -> write.awaitResult(5000),
+			"a foreign colon-DID write must be gated");
+	}
+
+	@Test
+	public void testColonDidOwnNamespaceConsistent() {
+		// Consistency property: a did:web user writes to its own namespace via the
+		// explicit DID form, then reads it back via the bare path. Both must address
+		// the SAME namespace — owner detection must agree between the write
+		// (resolveDIDURL) and the bare read (getUserCursor), for a colon-id DID.
+		RequestContext alice = RequestContext.of(ALICE_WEB);
+		run("v/ops/covia/write",
+			Maps.of(Fields.PATH, ALICE_WEB + "/w/foo", Fields.VALUE, Strings.create("mine")), alice);
+		ACell read = run("v/ops/covia/read", Maps.of(Fields.PATH, "w/foo"), alice);
+		assertEquals(CVMBool.TRUE, RT.getIn(read, "exists"),
+			"own explicit-DID write must be visible via the bare path");
+		assertEquals(Strings.create("mine"), RT.getIn(read, "value"));
+	}
+
+	@Test
+	public void testAgentReachesOwnerNamespaceViaExplicitDid() {
+		// An agent sub-principal (<owner>:g:carol) works inside its OWNER's
+		// namespace. A write to <owner>/w/… by explicit DID must be treated as own
+		// (getUserDID projects the agent to its owner), landing where the owner's
+		// bare reads look — not gated as cross-user.
+		RequestContext agent = RequestContext.of(Strings.create(ALICE_DID.toString() + ":g:carol"));
+		run("v/ops/covia/write",
+			Maps.of(Fields.PATH, ALICE_DID + "/w/agentnote", Fields.VALUE, Strings.create("by carol")), agent);
+		ACell read = run("v/ops/covia/read", Maps.of(Fields.PATH, "w/agentnote"), ALICE);
+		assertEquals(Strings.create("by carol"), RT.getIn(read, "value"),
+			"an agent's write to its owner's namespace must be the owner's own data");
+	}
+
+	@Test
+	public void testPrefixLookalikeDidIsForeign() {
+		// A resource DID that merely STARTS WITH the caller's DID (a different
+		// principal sharing a prefix) must be foreign — owner comparison is exact
+		// equality, never prefix matching.
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		AString lookalike = Strings.create(ALICE_DID.toString() + "evil");
+		Job read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, lookalike + "/w/x"), alice);
+		assertThrows(Exception.class, () -> read.awaitResult(5000),
+			"a prefix-lookalike DID must be foreign, not own");
+	}
+
+	@Test
+	public void testVenueNonCatalogNamespaceNotPublic() {
+		// The venue-catalog public rule (crossUserAllows) is /a/-only: the venue's
+		// OTHER namespaces (e.g. its own workspace) are NOT exposed by it.
+		RequestContext alice = RequestContext.of(ALICE_DID);
+		AString venueW = Strings.create(engine.getDIDString().toString() + "/w/venue-secret");
+		Job read = engine.jobs().invokeOperation("v/ops/covia/read",
+			Maps.of(Fields.PATH, venueW), alice);
+		assertThrows(Exception.class, () -> read.awaitResult(5000),
+			"the venue's non-/a/ namespaces must not be public via the catalog rule");
+	}
+
 	// ========== Own namespace via explicit DID (previously hard-rejected) ==========
 
 	@Test
