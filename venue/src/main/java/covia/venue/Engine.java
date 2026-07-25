@@ -2268,15 +2268,18 @@ public class Engine {
 	 */
 	public boolean authorityCovers(RequestContext ctx, AString resource, AString ability) {
 		if (ctx == null) return false;
-		// A cross-user proof (or the public read grant) authorises independently of
-		// the caller's own scope — the additive cross-user grant.
-		if (crossUserAllows(ctx, resource, ability)) return true;
-		// Own-authority scope. A null scope is unrestricted (the fast path);
-		// otherwise a grant in the caller's scope must cover the resource. An
-		// unrestricted caller's cross-user reach is still gated by the adapter's
-		// own cross-user resolver (which routes through crossUserAllows above) —
-		// the fast path skips the scope check, never the proof requirement.
+		// Fast path FIRST — the common case by far. A null scope is unrestricted:
+		// the caller carries no capability restriction, so they are authorised over
+		// their OWN namespace with no proof/public evaluation at all. Every ordinary
+		// authenticated user is null-scope; their cross-user reach is gated
+		// separately by the adapter (which calls crossUserAllows directly), never by
+		// this fast path — so returning here is correct AND skips the string
+		// building, clock read and proof walk that crossUserAllows would do.
 		if (ctx.getCaps() == null) return true;
+		// Restricted (agent) scope. Grants are additive: a presented cross-user
+		// proof (or the public read grant) authorises independently of the caller's
+		// scope; otherwise a grant in the scope must cover the resource.
+		if (crossUserAllows(ctx, resource, ability)) return true;
 		return ctx.grantsDenial(resource, ability) == null;
 	}
 
