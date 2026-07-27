@@ -58,12 +58,17 @@ jobs:
           # Container runs as UID 1001 (appuser) — grant write access to data dir
           sudo chown -R 1001:1001 /home/ec2-user/covia-data
 
-          # Run new container
+          # Run new container. The image's ENTRYPOINT already invokes java and
+          # forwards CMD as arguments to MainVenue (see Dockerfile) — CMD must
+          # be just the config path, not a full java command line, or the
+          # entrypoint double-invokes java and MainVenue receives "java" as
+          # its config path instead of the real one.
           docker run -d \
             --name covia-venue \
             --stop-timeout 30 \
             -p 8080:8080 \
             -v /home/ec2-user/covia-data:/data \
+            -e JAVA_OPTS="-Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8" \
             --log-driver=awslogs \
             --log-opt awslogs-region=ap-southeast-1 \
             --log-opt awslogs-group=/covia/venue \
@@ -76,11 +81,22 @@ jobs:
             --health-start-period=15s \
             --health-retries=3 \
             ghcr.io/covia-ai/covia:latest \
-            java -Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8 -jar covia.jar /data/config.json
+            /data/config.json
 
-          # Wait for health check
-          sleep 10
-          docker inspect --format='{{.State.Health.Status}}' covia-venue
+          # Wait for the health check to settle; fail the deploy rather than
+          # leaving a crash-looping container behind a green checkmark.
+          status="starting"
+          for i in $(seq 1 18); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' covia-venue 2>/dev/null || echo "unknown")
+            echo "Health status: $status"
+            [ "$status" = "healthy" ] && break
+            sleep 5
+          done
+          if [ "$status" != "healthy" ]; then
+            echo "::error::covia-venue did not become healthy — deploy failed"
+            docker logs --tail 80 covia-venue
+            exit 1
+          fi
 
           # Prune old images
           docker image prune -f
