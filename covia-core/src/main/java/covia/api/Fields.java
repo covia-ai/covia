@@ -53,6 +53,14 @@ public class Fields {
 	public static final StringShort STEPS = Strings.intern("steps");
 	public static final StringShort CONST = Strings.intern("const");
 	public static final StringShort CONCAT = Strings.intern("concat");
+	/** Step-level ordered map specification. Its {@code in} binding must resolve
+	 *  to an {@code ADataStructure}; each element is exposed through
+	 *  {@code ["item", ...]} and its ordinal through {@code ["index"]}. */
+	public static final StringShort FOREACH = Strings.intern("foreach");
+	public static final StringShort IN = Strings.intern("in");
+	public static final StringShort ITEM = Strings.intern("item");
+	public static final StringShort INDEX = Strings.intern("index");
+	public static final StringShort MAX_CONCURRENCY = Strings.intern("maxConcurrency");
 	/** Orchestration binding head building an array whose ELEMENTS are computed.
 	 *  A vector is otherwise always an expression, so this is the only way to
 	 *  produce an array that references prior steps ({@code ["const", …]} freezes

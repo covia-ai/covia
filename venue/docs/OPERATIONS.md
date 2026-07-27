@@ -353,6 +353,47 @@ covia:write path=o/merge value={
 
 This is a regular orchestration. When invoked, the orchestrator dispatches to whatever `v/ops/json/merge` currently is, so the user gets live tracking. There is no special "alias" concept in the resolver — aliasing is just a small orchestration pattern.
 
+### Ordered foreach steps
+
+A step may invoke the same operation once for every element in a Convex
+`ADataStructure` and collate the outputs into an ordered vector:
+
+```json
+{
+  "op": "v/ops/example/enrich",
+  "foreach": {
+    "in": ["input", "records"],
+    "maxConcurrency": 4
+  },
+  "input": {
+    "record": ["item"],
+    "position": ["index"]
+  }
+}
+```
+
+`foreach.in` uses the normal orchestration binding grammar and participates in
+dependency discovery. `["item", ...]` selects from the current element;
+`["index"]` is its zero-based ordinal. These bindings are valid only in that
+foreach step's `input`.
+
+All `ADataStructure` values use their standard `count()` / `get(long)`
+interface. Vectors, lists and sets yield their elements. Maps and indexes yield
+their `MapEntry` elements, which have the vector shape `[key, value]` and can be
+addressed with `["item", 0]` and `["item", 1]`. Output order always matches
+input iteration order, regardless of completion order. An empty input succeeds
+with `[]`; any value that is not an `ADataStructure` fails before a child job is
+started.
+
+Each iteration is a normal tracked operation invocation and therefore passes
+through the same authorization gate as a non-orchestrated call. The venue
+limits fan-out and concurrency through `adapters.orchestrator.maxItems` and
+`maxConcurrency` (see `CONFIG.md`). Child inputs and invocation requests are
+issued serially by the loop scheduler; concurrency applies to child jobs already
+in process. On the first observed item failure the loop stops admitting new
+work, lets already-running items finish, fails without publishing a partial
+output, and does not release dependent steps.
+
 ### Frozen versions via content addressing
 
 A user who wants a specific version of a venue op (one that doesn't change if the venue updates the catalog) uses `covia:copy` and verifies the hash with `asset:pin` if needed:

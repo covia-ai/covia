@@ -9,7 +9,9 @@ import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Hash;
+import convex.core.data.Index;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -20,6 +22,7 @@ import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
+import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -858,6 +861,413 @@ public class OrchestratorTest {
 		assertEquals(0L, items.count());
 	}
 
+	// ========== Foreach ==========
+
+	@Test
+	public void testForeachCollectionAndChaining() {
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Foreach chain",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{
+							"op": "v/test/ops/echo",
+							"foreach": { "in": ["input", "items"] },
+							"input": {
+								"value": ["item"],
+								"position": ["index"]
+							}
+						},
+						{
+							"op": "v/test/ops/echo",
+							"foreach": { "in": [0] },
+							"input": {
+								"value": ["item", "value"],
+								"firstIndex": ["item", "position"],
+								"secondIndex": ["index"]
+							}
+						}
+					],
+					"result": { "items": [1] }
+				}
+			}
+		""");
+
+		Job job=engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("items"),Vectors.of("alpha","beta","gamma")),
+			RequestContext.of(ALICE_DID));
+		AVector<ACell> result=RT.ensureVector(
+			RT.getIn(job.awaitResult(10000),Strings.create("items")));
+
+		assertNotNull(result);
+		assertEquals(3L,result.count());
+		for (int i=0;i<3;i++) {
+			assertEquals(Strings.create(new String[]{"alpha","beta","gamma"}[i]),
+				RT.getIn(result.get(i),Strings.create("value")));
+			assertEquals(CVMLong.create(i),
+				RT.getIn(result.get(i),Strings.create("firstIndex")));
+			assertEquals(CVMLong.create(i),
+				RT.getIn(result.get(i),Strings.create("secondIndex")));
+		}
+	}
+
+	@Test
+	public void testForeachMapUsesEntryVectors() {
+		String hash=storeJsonOrchestration("""
+			{
+				"name": "Foreach map",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [{
+						"op": "v/test/ops/echo",
+						"foreach": { "in": ["input", "data"] },
+						"input": ["item"]
+					}],
+					"result": { "entries": [0] }
+				}
+			}
+		""");
+		AMap<AString,ACell> data=Maps.of(
+			Strings.create("alice"),CVMLong.create(10),
+			Strings.create("bob"),CVMLong.create(20));
+
+		Job job=engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("data"),data),RequestContext.of(ALICE_DID));
+		AVector<ACell> entries=RT.ensureVector(
+			RT.getIn(job.awaitResult(10000),Strings.create("entries")));
+
+		assertNotNull(entries);
+		assertArrayEquals(data.toCellArray(),entries.toCellArray(),
+			"AMap.get(long) entries must pass through as [key value] vectors");
+		assertEquals(2L,((AVector<?>)entries.get(0)).count());
+	}
+
+	@Test
+	public void testForeachIndexUsesStandardDataStructureInterface() {
+		String hash=storeJsonOrchestration("""
+			{
+				"name": "Foreach index",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [{
+						"op": "v/test/ops/echo",
+						"foreach": { "in": ["input", "data"] },
+						"input": {
+							"key": ["item", 0],
+							"value": ["item", 1]
+						}
+					}],
+					"result": { "entries": [0] }
+				}
+			}
+		""");
+		Blob keyA=Blob.fromHex("00000000000000000000000000000001");
+		Blob keyB=Blob.fromHex("00000000000000000000000000000002");
+		Index<Blob,AString> data=Index.of(
+			keyA,Strings.create("one"),
+			keyB,Strings.create("two"));
+
+		Job job=engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("data"),data),RequestContext.of(ALICE_DID));
+		AVector<ACell> entries=RT.ensureVector(
+			RT.getIn(job.awaitResult(10000),Strings.create("entries")));
+
+		assertNotNull(entries);
+		assertEquals(data.count(),entries.count());
+		for (int i=0;i<entries.count();i++) {
+			assertEquals(data.get(i).get(0),
+				RT.getIn(entries.get(i),Strings.create("key")));
+			assertEquals(data.get(i).get(1),
+				RT.getIn(entries.get(i),Strings.create("value")));
+		}
+	}
+
+	@Test
+	public void testForeachPreservesInputOrderWhenItemsCompleteOutOfOrder() {
+		String hash=storeJsonOrchestration("""
+			{
+				"name": "Ordered foreach",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [{
+						"op": "v/test/ops/delay",
+						"foreach": {
+							"in": ["input", "items"],
+							"maxConcurrency": 3
+						},
+						"input": {
+							"operation": ["const", "v/test/ops/echo"],
+							"input": { "value": ["item", "value"] },
+							"delay": ["item", "delay"]
+						}
+					}],
+					"result": { "items": [0] }
+				}
+			}
+		""");
+		AVector<ACell> input=Vectors.of(
+			Maps.of("value","first","delay",300L),
+			Maps.of("value","second","delay",20L),
+			Maps.of("value","third","delay",100L));
+
+		Job job=engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("items"),input),RequestContext.of(ALICE_DID));
+		AVector<ACell> result=RT.ensureVector(
+			RT.getIn(job.awaitResult(10000),Strings.create("items")));
+
+		assertEquals(Strings.create("first"),RT.getIn(result.get(0),Strings.create("value")));
+		assertEquals(Strings.create("second"),RT.getIn(result.get(1),Strings.create("value")));
+		assertEquals(Strings.create("third"),RT.getIn(result.get(2),Strings.create("value")));
+	}
+
+	@Test
+	public void testForeachEmptyDataStructureProducesEmptyVector() {
+		String hash=storeJsonOrchestration("""
+			{
+				"name": "Empty foreach",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [{
+						"op": "v/test/ops/echo",
+						"foreach": { "in": ["input", "items"] },
+						"input": ["item"]
+					}],
+					"result": { "items": [0] }
+				}
+			}
+		""");
+
+		Job job=engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("items"),Vectors.empty()),RequestContext.of(ALICE_DID));
+		AVector<ACell> result=RT.ensureVector(
+			RT.getIn(job.awaitResult(5000),Strings.create("items")));
+
+		assertNotNull(result);
+		assertTrue(result.isEmpty());
+	}
+
+	@Test
+	public void testForeachRejectsNonDataStructureBeforeLaunchingItems() {
+		String hash=storeJsonOrchestration("""
+			{
+				"name": "Invalid foreach source",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [{
+						"op": "v/test/ops/echo",
+						"foreach": { "in": ["input", "items"] },
+						"input": ["item"]
+					}],
+					"result": { "items": [0] }
+				}
+			}
+		""");
+
+		Job job=engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("items"),CVMLong.create(42)),
+			RequestContext.of(ALICE_DID));
+		assertThrows(RuntimeException.class,() -> job.awaitResult(5000));
+		assertTrue(job.getErrorMessage().contains("expected an ADataStructure"),
+			job.getErrorMessage());
+	}
+
+	@Test
+	public void testForeachRejectsOversizedInputBeforeLaunchingItems() {
+		String hash=storeJsonOrchestration("""
+			{
+				"name": "Oversized foreach source",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [{
+						"op": "v/test/ops/echo",
+						"foreach": { "in": ["input", "items"] },
+						"input": ["item"]
+					}],
+					"result": { "items": [0] }
+				}
+			}
+		""");
+
+		Job job=engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("items"),Vectors.repeat(CVMLong.ZERO,51)),
+			RequestContext.of(ALICE_DID));
+		assertThrows(RuntimeException.class,() -> job.awaitResult(5000));
+		assertTrue(job.getErrorMessage().contains("venue limit is 50"),
+			job.getErrorMessage());
+	}
+
+	@Test
+	public void testForeachExplicitNullMaxItemsRemovesConfiguredCap() {
+		Engine unlimited=Engine.createTemp(Maps.of(
+			Config.USERS,Maps.of(Config.AUTO_CREATE,CVMBool.TRUE),
+			Config.ADAPTERS,Maps.of(
+				Strings.create("orchestrator"),
+				Maps.of(Strings.create("maxItems"),null))));
+		try {
+			Engine.addDemoAssets(unlimited);
+			String hash=storeJsonOrchestration(unlimited,"""
+				{
+					"name": "Unlimited foreach source",
+					"operation": {
+						"adapter": "orchestrator",
+						"steps": [{
+							"op": "v/test/ops/echo",
+							"foreach": { "in": ["input", "items"] },
+							"input": ["item"]
+						}],
+						"result": { "items": [0] }
+					}
+				}
+			""");
+
+			AString caller=Strings.create(ALICE_DID + "-unlimited");
+			Job job=unlimited.jobs().invokeOperation(hash,
+				Maps.of(Strings.create("items"),Vectors.repeat(CVMLong.ZERO,51)),
+				RequestContext.of(caller));
+			AVector<ACell> result=RT.ensureVector(
+				RT.getIn(job.awaitResult(10000),Strings.create("items")));
+			assertEquals(51L,result.count(),
+				"explicit maxItems:null must remove the default limit");
+		} finally {
+			unlimited.close();
+		}
+	}
+
+	@Test
+	public void testMalformedForeachConfigurationRejectedAtConstruction() {
+		String missingIn=storeJsonOrchestration("""
+			{
+				"name": "Missing foreach source",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [{
+						"op": "v/test/ops/echo",
+						"foreach": {},
+						"input": ["item"]
+					}],
+					"result": { "items": [0] }
+				}
+			}
+		""");
+		RuntimeException missing=assertThrows(RuntimeException.class,() ->
+			engine.jobs().invokeOperation(missingIn,Maps.empty(),RequestContext.of(ALICE_DID)));
+		assertTrue(missing.getMessage().contains("requires field 'in'"),missing.getMessage());
+
+		String badConcurrency=storeJsonOrchestration("""
+			{
+				"name": "Invalid foreach concurrency",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [{
+						"op": "v/test/ops/echo",
+						"foreach": {
+							"in": ["input", "items"],
+							"maxConcurrency": 0
+						},
+						"input": ["item"]
+					}],
+					"result": { "items": [0] }
+				}
+			}
+		""");
+		RuntimeException concurrency=assertThrows(RuntimeException.class,() ->
+			engine.jobs().invokeOperation(
+				badConcurrency,Maps.empty(),RequestContext.of(ALICE_DID)));
+		assertTrue(concurrency.getMessage().contains("must be a positive integer"),
+			concurrency.getMessage());
+	}
+
+	@Test
+	public void testForeachStrictModeValidatesEachItem() {
+		// The physical echo child Job is already COMPLETE when strict validation
+		// runs. The foreach's logical step status must still fail on item 1 rather
+		// than treating the completed child status as authoritative.
+		String stringOnlyEcho=storeJsonOrchestration("""
+			{
+				"name": "String-only echo",
+				"operation": {
+					"adapter": "test:echo",
+					"output": { "type": "string" }
+				}
+			}
+		""");
+		String hash=storeJsonOrchestration("""
+			{
+				"name": "Strict foreach",
+				"operation": {
+					"adapter": "orchestrator",
+					"strict": true,
+					"steps": [{
+						"op": "%s",
+						"foreach": {
+							"in": ["input", "items"],
+							"maxConcurrency": 1
+						},
+						"input": ["item"]
+					}],
+					"result": { "items": [0] }
+				}
+			}
+		""".formatted(stringOnlyEcho));
+
+		Job job=engine.jobs().invokeOperation(hash,
+			Maps.of(Strings.create("items"),Vectors.of(
+				Strings.create("valid"),
+				Maps.of(Strings.create("not"),Strings.create("a string")))),
+			RequestContext.of(ALICE_DID));
+
+		assertThrows(RuntimeException.class,() -> job.awaitResult(5000));
+		assertTrue(job.getErrorMessage().contains("foreach item 1"),job.getErrorMessage());
+		assertTrue(job.getErrorMessage().contains("schema violation"),job.getErrorMessage());
+	}
+
+	@Test
+	public void testForeachFailureStopsAdmittingItemsAndBlocksDependentStep() {
+		String path="w/orch-foreach/should-not-run";
+		String hash=storeJsonOrchestration("""
+			{
+				"name": "Failing foreach",
+				"operation": {
+					"adapter": "orchestrator",
+					"steps": [
+						{
+							"op": "v/test/ops/error",
+							"foreach": {
+								"in": ["input", "items"],
+								"maxConcurrency": 1
+							},
+							"input": { "message": ["item"] }
+						},
+						{
+							"op": "v/ops/covia/write",
+							"input": {
+								"path": ["input", "path"],
+								"value": [0]
+							}
+						}
+					],
+					"result": { "value": [1] }
+				}
+			}
+		""");
+
+		Job job=engine.jobs().invokeOperation(hash,
+			Maps.of(
+				Strings.create("items"),Vectors.of("first","second","third"),
+				Strings.create("path"),Strings.create(path)),
+			RequestContext.of(ALICE_DID));
+		assertThrows(RuntimeException.class,() -> job.awaitResult(5000));
+		assertTrue(job.getErrorMessage().contains("foreach item 0"),job.getErrorMessage());
+		assertFalse(readExists(path),"a step depending on a failed foreach must not run");
+
+		AVector<ACell> stepData=RT.ensureVector(job.getData().get(Fields.STEPS));
+		assertNotNull(stepData,"failed foreach summary must be persisted before parent failure");
+		AVector<ACell> launched=RT.ensureVector(RT.getIn(stepData.get(0),Fields.ITEMS));
+		assertEquals(1L,launched.count(),
+			"maxConcurrency=1 must not admit later items after the first failure");
+	}
+
 	// ========== Spec validation at construction (#281) ==========
 
 	@Test
@@ -940,6 +1350,8 @@ public class OrchestratorTest {
 		// Nested inside the forms that DO recurse.
 		assertSpecRejected("{ \"k\": [\"array\", [\"nonsense\"]] }",  "Unrecognised input source");
 		assertSpecRejected("{ \"k\": [\"concat\", [\"nonsense\"]] }", "Unrecognised input source");
+		assertSpecRejected("{ \"k\": [\"item\"] }",                   "only valid inside a foreach");
+		assertSpecRejected("{ \"k\": [\"index\"] }",                  "only valid inside a foreach");
 	}
 
 	@Test
@@ -1105,8 +1517,12 @@ public class OrchestratorTest {
 	 * Stores a JSON orchestration string as an asset and returns the hex hash for invocation.
 	 */
 	private String storeJsonOrchestration(String json) {
+		return storeJsonOrchestration(engine,json);
+	}
+
+	private String storeJsonOrchestration(Engine target, String json) {
 		AString metaString = Strings.create(json);
-		Hash hash = engine.storeAsset(metaString, null);
+		Hash hash = target.storeAsset(metaString, null);
 		return hash.toHexString();
 	}
 }

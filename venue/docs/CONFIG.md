@@ -220,7 +220,11 @@ are custodial identities for which the venue may sign roots.
 ```json
 {
   "adapters": {
-    "agent": { "sessionDelete": false }
+    "agent": { "sessionDelete": false },
+    "orchestrator": {
+      "maxItems": 50,
+      "maxConcurrency": 8
+    }
   }
 }
 ```
@@ -231,6 +235,16 @@ Currently defined:
 - `agent.sessionDelete` — whether `agent:deleteSession` is available
   (default `true`). Set `false` to disable user-initiated session deletion
   venue-wide; the op then fails with "disabled on this venue".
+- `orchestrator.maxItems` — maximum number of elements accepted by one
+  `foreach` step (default `50`). The complete input is rejected before any
+  iteration starts when this limit is exceeded. Set explicitly to `null` for no
+  orchestrator-level item cap (normal Convex/JVM representation limits still
+  apply).
+- `orchestrator.maxConcurrency` — maximum child jobs in process for one
+  `foreach` step (default `8`). A step may request a lower value through
+  `foreach.maxConcurrency`, but cannot exceed this venue ceiling. The
+  orchestrator resolves inputs and issues child invocations serially; only
+  waiting for the issued jobs is concurrent.
 
 ## Private jobs
 
