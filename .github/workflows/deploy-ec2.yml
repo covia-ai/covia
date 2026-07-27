@@ -86,11 +86,14 @@ jobs:
           # Wait for the health check to settle; fail the deploy rather than
           # leaving a crash-looping container behind a green checkmark.
           status="starting"
-          for i in $(seq 1 18); do
+          # Cover the full health window: 15s start period + three 30s
+          # intervals + check time, with a final boundary inspection.
+          for i in $(seq 1 25); do
             status=$(docker inspect --format='{{.State.Health.Status}}' covia-venue 2>/dev/null || echo "unknown")
             echo "Health status: $status"
             [ "$status" = "healthy" ] && break
-            sleep 5
+            [ "$status" = "unhealthy" ] && break
+            [ "$i" -lt 25 ] && sleep 5
           done
           if [ "$status" != "healthy" ]; then
             echo "::error::covia-venue did not become healthy — deploy failed"
