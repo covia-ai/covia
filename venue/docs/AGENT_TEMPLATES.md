@@ -291,11 +291,21 @@ For a fixed, known pipeline, define an `orchestrator` operation whose steps refe
 
 ### Dynamic: an LLM manager agent
 
-A `manager` agent decides the pipeline at runtime by calling `agent_request` on sub-agents. Here the LLM *is* in the control path, so the data must not be: a model asked to copy a prior agent's full output into the next request will paraphrase or truncate it (issue #71). The convention is **pass references, not payloads**:
+A `manager` agent decides the pipeline at runtime by calling `agent_request` on sub-agents. Here the LLM *is* in the control path, so the data must not be: a model asked to copy a prior agent's full output into the next request will paraphrase or truncate it (issue #71). Use the structural `outputPath` handoff so the manager receives a receipt, not the payload:
 
-- Each worker writes its result to a shared path (`w/pipeline/<run>/step-1`); the manager tells the next worker to read that path.
+- Pass `outputPath="w/pipeline/<run>/step-1"` to `agent_request`. On successful completion the framework writes the worker's full result there and returns `{status, outputPath, bytes}` without `output`.
+- Tell the next worker to read that path. The handoff cell is the exact worker result; the manager never copies it through model context.
 - Alternatively the manager passes the job reference `j/<jobId>` of a completed request for the next worker to read.
-- The manager sequences dependent steps (`wait=true`) rather than firing them in parallel.
+- Requests without `outputPath` retain the existing direct-output response.
+- The manager sequences dependent steps (a sufficient `timeout`, or polls an
+  async task to completion) rather than firing them in parallel.
+
+`outputPath` uses normal Covia path resolution. Relative and execution-scoped paths
+(`w/`, `t/`, `c/`, `n/`) resolve in the requesting manager's captured context;
+authorised owner-scoped DID URLs use the same cross-user checks as `covia:write`;
+and foreign `did:web` paths dispatch the write to the destination venue. Both
+venues enforce the requester's authority at write time. Failed or cancelled tasks
+write nothing.
 
 ### Capabilities for handoff
 
@@ -314,7 +324,13 @@ So for a pipeline of *capped* workers, provision the handoff area explicitly:
 }
 ```
 
-Every stage can read the shared `w/pipeline/` area; each writes only its own output subpath. Uncapped workers need none of this — but capping is the least-privilege posture for untrusted or externally-facing work, and there the handoff caps are mandatory, not optional.
+Every stage can read the shared `w/pipeline/` area. With structural handoff the
+**manager** needs `crud/write` on each `outputPath`, because the framework writes
+under the requester's captured ceiling; each consumer needs `crud/read` on its
+input path. The producing worker does not need write authority merely to return
+its result. Uncapped agents need none of these explicit grants — but capping is
+the least-privilege posture for untrusted or externally-facing work, and there
+the handoff caps are mandatory, not optional.
 
 ---
 
