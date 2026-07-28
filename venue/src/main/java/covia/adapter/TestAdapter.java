@@ -466,16 +466,68 @@ public class TestAdapter extends AAdapter {
             }
         }
 
-        // Branch order matters across the two runtimes: goaltree re-renders
-        // loads every ITERATION, so the [Skill:] body can appear mid-run right
-        // after the load — in-conversation tool evidence must win over body
-        // presence. llmagent's persisted history keeps only user/assistant
-        // turns, so on a later TURN only the body marker remains.
+        boolean genericContextLifecycle = false;
+        boolean contextLoadResult = false, contextUnloadResult = false;
+        boolean immediateContextMarker = false;
+        for (long i = 0; i < messages.count(); i++) {
+            ACell msg = messages.get(i);
+            AString role = RT.ensureString(RT.getIn(msg, "role"));
+            AString content = RT.ensureString(RT.getIn(msg, "content"));
+            if (role != null && "user".equals(role.toString()) && content != null
+                    && content.toString().contains("generic context lifecycle")) {
+                genericContextLifecycle = true;
+            }
+            if (role != null && "system".equals(role.toString()) && content != null
+                    && content.toString().contains("IMMEDIATE_CONTEXT_MARKER")) {
+                immediateContextMarker = true;
+            }
+            if (role != null && "tool".equals(role.toString())) {
+                AString name = RT.ensureString(RT.getIn(msg, "name"));
+                if (name != null && "context_load".equals(name.toString())) contextLoadResult = true;
+                if (name != null && "context_unload".equals(name.toString())) contextUnloadResult = true;
+            }
+        }
+
+        // Generic context lifecycle mode proves both directions in one
+        // transition: load content appears on the next inference, then unload
+        // removes it on the following inference.
+        if (genericContextLifecycle) {
+            if (contextUnloadResult) {
+                return Maps.of("role", Strings.create("assistant"),
+                    "content", Strings.create(immediateContextMarker
+                        ? "CONTEXT_UNLOAD_FAILED"
+                        : "CONTEXT_LOAD_AND_UNLOAD_IMMEDIATE"));
+            }
+            if (contextLoadResult) {
+                if (!immediateContextMarker) {
+                    return Maps.of("role", Strings.create("assistant"),
+                        "content", Strings.create("CONTEXT_LOAD_MISSING"));
+                }
+                return Maps.of("role", Strings.create("assistant"),
+                    "toolCalls", Vectors.of(Maps.of(
+                        "id", Strings.create("call_context_unload"),
+                        "name", Strings.create("context_unload"),
+                        "arguments", Strings.create("{\"path\":\"w/context-immediate\"}"))));
+            }
+            return Maps.of("role", Strings.create("assistant"),
+                "toolCalls", Vectors.of(Maps.of(
+                    "id", Strings.create("call_context_load"),
+                    "name", Strings.create("context_load"),
+                    "arguments", Strings.create(
+                        "{\"path\":\"w/context-immediate\",\"budget\":500}"))));
+        }
+
+        // In-conversation tool evidence wins over body presence: both agent
+        // runtimes now re-render a newly loaded skill before the next inference.
         if (coviaReadResult) {
             return Maps.of("role", Strings.create("assistant"),
                 "content", Strings.create("SKILL_TOOL_RESULT: " + coviaReadContent));
         }
         if (skillLoadResult) {
+            if (!skillBodyPresent) {
+                return Maps.of("role", Strings.create("assistant"),
+                    "content", Strings.create("SKILL_BODY_MISSING"));
+            }
             if (!coviaReadOffered) {
                 return Maps.of("role", Strings.create("assistant"),
                     "content", Strings.create("SKILL_TOOLS_MISSING"));

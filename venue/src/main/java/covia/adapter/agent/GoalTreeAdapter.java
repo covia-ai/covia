@@ -189,7 +189,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 		K_DESCRIPTION, Strings.create(
 			"Keep data from a workspace path visible in your context across turns. "
 			+ "Use for rules, schemas, or reference material you need to consult "
-			+ "repeatedly. The data is refreshed automatically each turn. Subgoals "
+			+ "repeatedly. The data is visible on the next model invocation and "
+			+ "refreshed automatically thereafter. Subgoals "
 			+ "inherit your loaded data. For data you only need once, use covia_read "
 			+ "instead. Call context_unload with the same path to remove it."),
 		K_PARAMETERS, CONTEXT_LOAD_PARAMS);
@@ -1130,7 +1131,8 @@ public class GoalTreeAdapter extends AbstractLLMAdapter implements FramesOwning 
 								K_PATH, path,
 								Strings.create("loaded"), CVMBool.TRUE,
 								K_BUDGET, CVMLong.create(budget),
-								Strings.create("note"), Strings.create("Path will appear in context next turn."));
+								Strings.create("note"), Strings.create(
+									"Path is loaded and will be visible on the next model invocation."));
 						} catch (RuntimeException e) {
 							toolResult = Strings.create(
 								"Error: context_load denied: " + describeFailure(e));

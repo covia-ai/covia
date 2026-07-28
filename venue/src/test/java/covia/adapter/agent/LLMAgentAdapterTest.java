@@ -775,8 +775,9 @@ public class LLMAgentAdapterTest {
 	@Test
 	public void testSkillAdoptionDuringChat() {
 		// The operative-loop proof: within ONE chat transition the mock loads
-		// the skill, the palette gains covia_read on the next iteration, and
-		// the tool actually dispatches — load → palette → dispatch, one turn.
+		// the skill, its body becomes visible and the palette gains covia_read
+		// on the next iteration, and the tool actually dispatches — load →
+		// context + palette → dispatch, one turn.
 		writeAlphaSkill();
 		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
 
@@ -799,6 +800,34 @@ public class LLMAgentAdapterTest {
 		AMap<AString, ACell> loads = (AMap<AString, ACell>) RT.getIn(output, Fields.LOADS);
 		assertNotNull(loads, "session in scope → loads emitted on the output");
 		assertTrue(Skills.isSkillEntry(loads.get(Strings.create("w/skills/alpha"))));
+	}
+
+	@Test
+	public void testContextLoadAndUnloadAreVisibleWithinCurrentTransition() {
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of("path", "w/context-immediate",
+				"value", "IMMEDIATE_CONTEXT_MARKER"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		ACell input = Maps.of(
+			Fields.AGENT_ID, "context-immediate-agent",
+			AgentState.KEY_CONFIG, Maps.of(
+				"llmOperation", "v/test/ops/skillllm"),
+			Fields.MESSAGES, Vectors.of(Maps.of(
+				"content", "run generic context lifecycle")),
+			Fields.SESSION, Maps.of(Fields.ID, Strings.create("context-session")));
+
+		ACell output = adapter.processChat(RequestContext.of(ALICE_DID), input);
+		assertEquals("CONTEXT_LOAD_AND_UNLOAD_IMMEDIATE",
+			RT.ensureString(RT.getIn(output, Fields.RESPONSE)).toString());
+
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> loads =
+			(AMap<AString, ACell>) RT.getIn(output, Fields.LOADS);
+		assertNotNull(loads);
+		assertNull(loads.get(Strings.create("w/context-immediate")),
+			"the same-cycle unload must also persist");
 	}
 
 	@Test

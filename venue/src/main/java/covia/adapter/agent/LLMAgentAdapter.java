@@ -150,10 +150,11 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 		K_NAME, Strings.create(TOOL_CONTEXT_LOAD),
 		K_DESCRIPTION, Strings.create(
 			"Add a lattice path to this conversation's loaded context. "
-			+ "The path is resolved fresh each turn and injected as a system message. "
+			+ "The path is resolved fresh and injected as a system message on the "
+			+ "next model invocation, including within the current tool loop. "
 			+ "Scoped to the current session — other conversations are unaffected. "
 			+ "Use for reference material you need across multiple turns. "
-			+ "For one-shot reads, use inspect instead. Effect takes place next turn."),
+			+ "For one-shot reads, use inspect instead when available."),
 		K_PARAMETERS, CONTEXT_LOAD_PARAMS);
 
 	private static final AMap<AString, ACell> TOOL_DEF_CONTEXT_UNLOAD = Maps.of(
@@ -335,22 +336,16 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			recordConfig != null ? recordConfig.get(Strings.intern("caps")) : null);
 		RequestContext loadCtx = ((configuredCaps != null)
 			? ctx.withCaps(configuredCaps) : ctx).withAgentId(agentId);
-		ContextBuilder builder = new ContextBuilder(engine, ctx);
-		ContextBuilder.ContextResult context = builder
-			.withConfig(recordConfig)
-			.withSessionId(RT.getIn(input, Fields.SESSION, Fields.ID))
-			.withSystemPrompt()                   // stable — head of the cached prefix
-			.withContextEntries()                 // stable while config.context unchanged
-			.withSkillsIndex(effectiveLoads)      // stable while loads unchanged
-			.withLoadedPaths(effectiveLoads, loadCtx) // model-selected reads use agent caps
-			.withFrameStack(sessionFrames)        // session history — append-only
-			.withPendingResults(pending)          // this turn
-			.withInboxMessages(messages)          // this turn's user input
-			.withEmptyStateSignal(hasInput)
-			.withCurrentDate()                    // volatile (daily) → tail, after the prefix
-			.withContextMap(effectiveLoads)       // volatile (every build) → LAST message
-			.withTools()
-			.build();
+		ChatContext chatContext = new ChatContext(
+			recordConfig,
+			RT.getIn(input, Fields.SESSION, Fields.ID),
+			sessionFrames,
+			pending,
+			messages,
+			hasInput);
+		ContextBuilder builder = buildChatContext(chatContext, effectiveLoads, ctx, loadCtx)
+			.withTools();
+		ContextBuilder.ContextResult context = builder.build();
 
 		// Safety valve — prunes the SESSION tier only (the agent tier is
 		// operator-pinned and never pruned; #142).
@@ -392,8 +387,15 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 
 		// Invoke level 3 with tool call loop — returns all messages to append
 		// ctx (uncapped) for the L3 LLM call; capsCtx flows through toolCtx for tool dispatch
+		// The first history was rendered from sessionTier. Normally the safety
+		// valve returns that same immutable map and toolCtx starts with an
+		// equivalent empty map when no tier exists. If it pruned, retain the old
+		// key so the loop detects the mismatch and refreshes before inference.
+		AMap<AString, ACell> renderedLoadsKey =
+			(activeSessionTier == sessionTier) ? toolCtx.loads : sessionTier;
 		AVector<ACell> newMessages = invokeWithToolLoop(
-			llmOperation, config, llmMessages, baseTools, ctx, toolCtx);
+			llmOperation, config, llmMessages, baseTools, ctx, toolCtx,
+			chatContext, renderedLoadsKey);
 
 		// Filter out empty assistant messages (e.g. when LLM produces only <think> tags)
 		// to avoid polluting the transcript with useless entries
@@ -482,6 +484,45 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	}
 
 	/**
+	 * Immutable inputs used to rebuild the ephemeral portion of one chat
+	 * transition. Loaded paths are deliberately absent: the tool loop supplies
+	 * the current effective loads on every refresh.
+	 */
+	private record ChatContext(
+		AMap<AString, ACell> config,
+		ACell sessionId,
+		AVector<ACell> sessionFrames,
+		AVector<ACell> pending,
+		AVector<ACell> messages,
+		boolean hasInput) {}
+
+	/**
+	 * Builds the provider-facing history for the current load scope. Keeping
+	 * this assembly in one place ensures the first inference and a mid-loop
+	 * context_load/context_unload refresh have identical ordering, budgets,
+	 * capability-scoped resolution, skill markers, and context-map reporting.
+	 */
+	private ContextBuilder buildChatContext(
+			ChatContext chat,
+			AMap<AString, ACell> effectiveLoads,
+			RequestContext ctx,
+			RequestContext loadCtx) {
+		return new ContextBuilder(engine, ctx)
+			.withConfig(chat.config())
+			.withSessionId(chat.sessionId())
+			.withSystemPrompt()                        // stable — cached prefix head
+			.withContextEntries()                      // stable config.context
+			.withSkillsIndex(effectiveLoads)           // refresh loaded markers
+			.withLoadedPaths(effectiveLoads, loadCtx)  // agent-capability authority
+			.withFrameStack(chat.sessionFrames())      // persistent conversation
+			.withPendingResults(chat.pending())        // this transition
+			.withInboxMessages(chat.messages())        // current user input
+			.withEmptyStateSignal(chat.hasInput())
+			.withCurrentDate()                         // volatile tail
+			.withContextMap(effectiveLoads);           // always last
+	}
+
+	/**
 	 * Invokes level 3 with a tool call loop.
 	 *
 	 * <p>Calls the LLM operation. If the response contains {@code toolCalls},
@@ -499,17 +540,34 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 	private AVector<ACell> invokeWithToolLoop(
 			AString llmOperation, AMap<AString, ACell> config,
 			AVector<ACell> history, AVector<ACell> baseTools, RequestContext ctx,
-			ToolContext toolCtx) {
+			ToolContext toolCtx, ChatContext chatContext,
+			AMap<AString, ACell> renderedLoadsKey) {
 
 		AVector<ACell> newMessages = Vectors.empty();
+		AVector<ACell> loopHistory = history;
 
 		// Runaway-loop backstop: venue default (maxToolIterations, 30),
 		// overridable per agent via config.maxToolIterations.
 		int maxToolIterations = resolveMaxToolIterations(config);
 
 		for (int iteration = 0; iteration < maxToolIterations; iteration++) {
-			// Build level 3 input (full history including new messages from this loop)
-			AVector<ACell> fullHistory = (AVector<ACell>) history.concat(newMessages);
+			// context_load/context_unload/skill_load mutate the immutable
+			// session-tier map. Rebuild the complete ephemeral history before the
+			// very next model invocation so the requesting agent sees the new
+			// content immediately. The rendered messages never enter newMessages,
+			// and therefore never pollute the persisted conversation transcript.
+			if (toolCtx.loads != renderedLoadsKey) {
+				AMap<AString, ACell> effectiveLoads =
+					ContextChain.effective(toolCtx.outerLoads, toolCtx.loads);
+				loopHistory = buildChatContext(
+					chatContext, effectiveLoads, ctx, toolCtx.ctx).build().history();
+				renderedLoadsKey = toolCtx.loads;
+			}
+
+			// Build level 3 input (fresh ephemeral context plus this loop's
+			// assistant/tool exchange).
+			AVector<ACell> fullHistory =
+				(AVector<ACell>) loopHistory.concat(newMessages);
 
 			// Inject dynamic task context — only outstanding (unresolved) tasks
 			ACell taskMsg = buildOutstandingTaskMessage(toolCtx);
@@ -766,7 +824,8 @@ public class LLMAgentAdapter extends AbstractLLMAdapter {
 			K_PATH, path,
 			Strings.create("loaded"), CVMBool.TRUE,
 			K_BUDGET, CVMLong.create(budget),
-			Strings.create("note"), Strings.create("Path will appear in context next turn. Use inspect for immediate reads."));
+			Strings.create("note"), Strings.create(
+				"Path is loaded and will be visible on the next model invocation."));
 	}
 
 	/**
