@@ -2481,14 +2481,7 @@ public class CoviaAdapterTest {
 		assertTrue(rendered.contains("deep data"), "Should render nested values");
 	}
 
-	// ========== Sub-stage 1: c/ and t/ resolver wiring (inert) ==========
-	//
-	// Sub-stage 1 wires the new c/ (session) and agent+task scope of t/
-	// resolvers but does NOT yet wire up the cursor-based write path through
-	// Index<Blob, ACell> entries. These tests verify scope detection and
-	// helpful errors. Read/write functionality through these prefixes lands
-	// in later sub-stages once session/task records have specialised access
-	// helpers (analogous to TempNamespaceResolver.updateTemp for jobId scope).
+	// ========== c/ and t/ scoped storage ==========
 
 	@Test
 	public void testSessionRejectsWithoutSessionId() {
@@ -2513,10 +2506,9 @@ public class CoviaAdapterTest {
 	}
 
 	@Test
-	public void testSessionResolverRewritesPath() {
-		// Direct resolver-level test: c/draft + agent + session scope rewrites
-		// to ["g", agentId, "sessions", sessionId, "c", "draft"] on the
-		// caller's user cursor.
+	public void testSessionResolverCarriesAtomicScope() {
+		// Sessions live inside an atomic agent LWW record. The resolver positions
+		// at the agent and carries the session selector for specialised access.
 		AString agentId = Strings.create("test-agent");
 		Blob sessionId = Blob.fromHex("aa11bb22cc33dd44");
 		RequestContext ctx = ALICE.withAgentId(agentId).withSessionId(sessionId);
@@ -2525,21 +2517,17 @@ public class CoviaAdapterTest {
 		ACell[] keys = CoviaAdapter.parseStringPath("c/draft");
 		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx, keys);
 		assertNotNull(vns);
+		assertEquals(agentId, vns.agentId());
+		assertEquals(sessionId, vns.sessionId());
 		ACell[] rk = vns.remainingKeys();
-		assertEquals(6, rk.length);
-		assertEquals("g", rk[0].toString());
-		assertEquals(agentId, rk[1]);
-		assertEquals("sessions", rk[2].toString());
-		assertEquals(sessionId, rk[3]);
-		assertEquals("c", rk[4].toString());
-		assertEquals("draft", rk[5].toString());
+		assertEquals(1, rk.length);
+		assertEquals("draft", rk[0].toString());
 	}
 
 	@Test
-	public void testTempResolverPrefersAgentTaskScope() {
-		// When agentId+taskId both set, t/ rewrites to a concrete cursor path
-		// rather than the legacy job-scoped flow. jobId is still set by
-		// JobManager but agent+task takes precedence.
+	public void testTempResolverUsesTaskJobAsSingleStore() {
+		// taskId is the caller-facing Job ID. When the run loop also carries its
+		// own infrastructure jobId, t/ must use the task Job's temp field.
 		AString agentId = Strings.create("test-agent");
 		Blob taskId = Blob.fromHex("01020304");
 		RequestContext ctx = ALICE.withAgentId(agentId).withTaskId(taskId)
@@ -2549,15 +2537,10 @@ public class CoviaAdapterTest {
 		ACell[] keys = CoviaAdapter.parseStringPath("t/draft");
 		NamespaceResolver.ResolvedNamespace vns = covia.resolveVirtual(ctx, keys);
 		assertNotNull(vns);
-		assertNull(vns.jobId(), "agent+task scope must not use legacy jobId path");
+		assertEquals(taskId, vns.jobId(), "focused task Job must beat transition job");
 		ACell[] rk = vns.remainingKeys();
-		assertEquals(6, rk.length);
-		assertEquals("g", rk[0].toString());
-		assertEquals(agentId, rk[1]);
-		assertEquals("tasks", rk[2].toString());
-		assertEquals(taskId, rk[3]);
-		assertEquals("t", rk[4].toString());
-		assertEquals("draft", rk[5].toString());
+		assertEquals(1, rk.length);
+		assertEquals("draft", rk[0].toString());
 	}
 
 	@Test

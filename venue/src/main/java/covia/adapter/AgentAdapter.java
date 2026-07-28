@@ -872,10 +872,10 @@ public class AgentAdapter extends AAdapter {
 		Blob sid = resolveOrMintSession(job, agent, input, ctx.getCallerDID());
 		if (sid == null) return;
 
-		// Build canonical taskdata map: {input, caller, created, sessionId, responseSchema?, t: {}}
+		// Build canonical taskdata map: {input, caller, created, sessionId, responseSchema?}
 		// Task rows are transient — status/result/error live on the Job record
-		// and in the agent timeline's taskResults snapshot. The 't' slot is
-		// reserved for per-task scratch.
+		// and in the agent timeline's taskResults snapshot. Per-task t/ scratch
+		// lives on that same Job's persistent temp field, not this queue row.
 		//
 		// Task ID == caller's Job ID. There is no separate task identifier:
 		// the request Job is the system of record, and the task entry in the
@@ -890,8 +890,7 @@ public class AgentAdapter extends AAdapter {
 			Fields.INPUT,      taskInput,
 			Fields.CALLER,     ctx.getCallerDID(),
 			Fields.CREATED,    CVMLong.create(Utils.getCurrentTimestamp()),
-			Fields.SESSION_ID, Strings.create(sid.toHexString()),
-			Fields.T,          Maps.empty());
+			Fields.SESSION_ID, Strings.create(sid.toHexString()));
 		if (responseSchema instanceof AMap) {
 			taskData = taskData.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
 		}

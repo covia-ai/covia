@@ -13,7 +13,7 @@ Five shorthands, one per scope. Each resolves to a single state bucket. Data is 
 
 | Prefix | Resolves to | Scope | Writes accepted while… |
 |--------|------------|-------|------------------------|
-| `t/` | `g/{agent}/tasks/{taskId}/t/...` | Task state (currently focused job) | A task is focused |
+| `t/` | `j/{taskId}/temp/...` | Task/Job scratch (the task ID is its `agent:request` Job ID) | A task or Job is focused |
 | `c/` | `g/{agent}/sessions/{sid}/c/...` | Session / conversation state | A session is active |
 | `n/` | `g/{agent}/n/...` | Agent state (cross-session) | Agent is not TERMINATED |
 | `w/` | `<DID>/w/...` | User shared data | Always |
@@ -85,7 +85,7 @@ A task may contain a goal tree (`goals` field inside taskdata); a goal tree alwa
 | Agent writes | Resolves to |
 |-------------|-------------|
 | `n/notes/x` | `g/alice/n/notes/x` (agent-private) |
-| `t/snapshot` | `g/alice/tasks/{taskId}/t/snapshot` — focused task's scratch |
+| `t/snapshot` | `j/{taskId}/temp/snapshot` — focused task Job's scratch |
 | `c/topic` | `g/alice/sessions/{sid}/c/topic` — active session's scratch |
 | `w/data/x` | `<DID>/w/data/x` (user shared) |
 | `o/myop` | `<DID>/o/myop` (user operations) |
@@ -717,7 +717,7 @@ Covia: RAII for attention (records stay; only the active window contracts and ex
 13. **Goal tree at bottom of context.** Adjacent to current turn for recency attention.
 14. **Harness continuation prompt.** Always appended. States current goal, scoped loads, and suggested next step.
 15. **Context map is simple.** Paths + budgets + scopes. No result tracking, no TTL countdowns.
-16. **Destination shorthand (agent scope only).** `n/` → `g/{agent}/n/`, `t/` → current task's scratch (`g/{agent}/tasks/{taskId}/t/`), `c/` → current session's scratch (`g/{agent}/sessions/{sid}/c/`), `w/` → `<DID>/w/`, `o/` → `<DID>/o/`. Full paths work everywhere.
+16. **Destination shorthand (agent scope only).** `n/` → `g/{agent}/n/`, `t/` → current task Job's scratch (`j/{taskId}/temp/`; task ID = `agent:request` Job ID), `c/` → current session's scratch (`g/{agent}/sessions/{sid}/c/`), `w/` → `<DID>/w/`, `o/` → `<DID>/o/`. Full paths work everywhere.
 17. **Single root goal in active context.** Harness manages a queue of pending tasks. Each new Covia task starts with a fresh root goal.
 18. **Safety valve.** 70%: harness warns in continuation prompt. 90%: auto-prune — unload global loads (most recently loaded first), then truncate oldest conversation turns from the active view. Never touches pinned or scoped loads, and never alters the lattice record.
 19. **Scope incentivises decomposition.** Want automatic active-context shrinkage? Break work into goals.

@@ -15,24 +15,16 @@ import covia.adapter.CoviaAdapter;
 import covia.venue.RequestContext;
 
 /**
- * Resolves the {@code t/} virtual namespace to an ephemeral, scope-private
- * slot. The resolver has two modes depending on what scope is present on
- * the {@link RequestContext}:
+ * Resolves the {@code t/} virtual namespace to the current Job's persistent
+ * {@code temp} field.
  *
- * <ol>
- *   <li><b>Agent + task scope.</b> When both {@code agentId} and {@code taskId}
- *       are set, {@code t/draft} resolves to the caller's cursor with rewritten
- *       keys {@code ["g", agentId, "tasks", taskId, "t", "draft"]}. This is
- *       the preferred path for agent task work — each task keeps its own
- *       temp slot within its record, and the cursor flow in
- *       {@link CoviaAdapter} treats it as an ordinary writable path.</li>
- *   <li><b>Job scope (legacy).</b> When only {@code jobId} is set (no agent
- *       context), {@code t/draft} resolves to remaining keys {@code ["draft"]}
- *       over the user's jobs index cursor. Reads and writes go through
- *       {@link #getTemp}/{@link #updateTemp} for atomic access to the
- *       specific job record's {@code temp} field. This preserves the
- *       goal-tree execution path that predates per-task scopes.</li>
- * </ol>
+ * <p>A Covia agent task is its caller-facing {@code agent:request} Job:
+ * {@code taskId == jobId}. The agent's {@code tasks} index is only the pending
+ * work queue. Keeping a second {@code t} slot on that transient queue row lost
+ * scratch data as soon as the task was claimed/completed. Both ordinary Job
+ * scope and agent task scope therefore use the Job record as the single system
+ * of record. When a task is focused its id takes precedence over the run-loop's
+ * own infrastructure Job id.</p>
  *
  * <p>If neither scope is present the resolver throws helpfully rather than
  * silently returning the wrong location.</p>
@@ -48,21 +40,15 @@ public class TempNamespaceResolver implements NamespaceResolver {
 		Blob taskId = ctx.getTaskId();
 		Blob jobId = ctx.getJobId();
 
-		// Preferred: agent + task scope — rewrite to a concrete lattice path.
-		if (agentId != null && taskId != null) {
-			ALatticeCursor<ACell> userCursor = adapter.ensureUserCursor(ctx);
-			ACell[] rewritten = new ACell[keys.length + 4];
-			rewritten[0] = Strings.create("g");
-			rewritten[1] = agentId;
-			rewritten[2] = Strings.create("tasks");
-			rewritten[3] = taskId;
-			rewritten[4] = Strings.create("t");
-			System.arraycopy(keys, 1, rewritten, 5, keys.length - 1);
-			return new ResolvedNamespace(userCursor, rewritten);
+		if (taskId != null && agentId == null) {
+			throw new RuntimeException(
+				"Cannot use task-scoped 't/' without agentId on RequestContext");
 		}
 
-		// Legacy: job scope — specialised cursor access via getTemp/updateTemp.
-		if (jobId != null) {
+		// A focused task is the caller-facing Job. Prefer it over the internal
+		// transition/trigger Job that may also be present on the cycle context.
+		Blob scopedJobId = (taskId != null) ? taskId : jobId;
+		if (scopedJobId != null) {
 			ALatticeCursor<ACell> userCursor = adapter.ensureUserCursor(ctx);
 			ACell[] jPath = userCursor.getLattice().resolvePath(new ACell[] { Strings.create("j") });
 			if (jPath == null) {
@@ -72,7 +58,7 @@ public class TempNamespaceResolver implements NamespaceResolver {
 
 			ACell[] remaining = new ACell[keys.length - 1];
 			System.arraycopy(keys, 1, remaining, 0, remaining.length);
-			return new ResolvedNamespace(jobsCursor, remaining, jobId);
+			return new ResolvedNamespace(jobsCursor, remaining, scopedJobId);
 		}
 
 		throw new RuntimeException(

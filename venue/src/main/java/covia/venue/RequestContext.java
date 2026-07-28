@@ -188,9 +188,9 @@ public class RequestContext {
 
 	/**
 	 * Returns a new context with job scope. When set, the {@code t/} path prefix
-	 * resolves to the job's temp field at {@code j/{jobId}/temp/} (legacy
-	 * goal-tree behaviour) unless an agent + task scope is also set, in which
-	 * case the agent/task path takes precedence.
+	 * resolves to the Job's temp field at {@code j/{jobId}/temp/}. When an
+	 * agent task is also focused, its task id (which is the caller-facing Job
+	 * id) takes precedence over an internal transition Job id.
 	 */
 	public RequestContext withJobId(Blob jobId) {
 		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation);
@@ -207,8 +207,10 @@ public class RequestContext {
 
 	/**
 	 * Returns a new context with task scope. When set together with an
-	 * {@code agentId}, the {@code t/} path prefix resolves to the task's
-	 * private slot at {@code g/{agentId}/tasks/{taskId}/t/}.
+	 * {@code agentId}, the {@code t/} path prefix resolves to the task Job's
+	 * temp field at {@code j/{taskId}/temp/}. A task id is its
+	 * {@code agent:request} Job id; the agent's task index is only a pending
+	 * work queue.
 	 */
 	public RequestContext withTaskId(Blob taskId) {
 		return new RequestContext(authority, agentId, jobId, sessionId, taskId, rawUcans, op, cancellation, invocationInput, gate, gateEvaluation);
@@ -472,7 +474,7 @@ public class RequestContext {
 	/**
 	 * Gets the job ID for job-scoped operations, or null if not in job scope.
 	 * When set, the {@code t/} path prefix resolves to the job's temp field
-	 * (unless an agent + task scope is also set, which takes precedence).
+	 * (unless a focused task id is also set, which takes precedence).
 	 */
 	public Blob getJobId() {
 		return jobId;
@@ -490,7 +492,7 @@ public class RequestContext {
 	/**
 	 * Gets the task ID for task-scoped operations, or null if not in task
 	 * scope. Used together with {@link #getAgentId()} to resolve the
-	 * {@code t/} prefix to a per-task slot.
+	 * {@code t/} prefix to the task Job's temp field.
 	 */
 	public Blob getTaskId() {
 		return taskId;

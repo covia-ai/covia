@@ -77,7 +77,7 @@ g/<agent>/
 
 Other framework-managed fields on the agent record (status, scheduling, error, caps, timeline entries) are documented where they are authoritative — see [GRID_LATTICE_DESIGN.md §4.3](./GRID_LATTICE_DESIGN.md) for the top-level shape, [SCHEDULER.md](./SCHEDULER.md) for wake state, and [AGENT_LOOP.md](./AGENT_LOOP.md) for timeline entry structure.
 
-**User scratch space** for the agent, session, and task lives in the virtual namespaces `n/`, `c/`, and `t/` respectively — see [GRID_LATTICE_DESIGN.md §4.5](./GRID_LATTICE_DESIGN.md). These are for arbitrary user data; framework-managed state (status, `wakeTime`, task input/result, etc.) is accessed through dedicated APIs, not via these shortcuts.
+**User scratch space** for the agent, session, and task lives in the virtual namespaces `n/`, `c/`, and `t/` respectively — see [GRID_LATTICE_DESIGN.md §4.5](./GRID_LATTICE_DESIGN.md). Task scratch is stored once on the task Job at `j/<taskId>/temp/`; it is not duplicated on the transient `g/<agent>/tasks` queue row. These are for arbitrary user data; framework-managed state (status, `wakeTime`, task input/result, etc.) is accessed through dedicated APIs, not via these shortcuts.
 
 Tasks and sessions are **orthogonal**. A task is a Covia job assigned to the agent; a session is a conversational scope. A task MAY reference a session it was spawned from (via `sessionId` inside its taskdata) but does not live under it. A session MAY reference the tasks it spawned, but its history doesn't require one.
 

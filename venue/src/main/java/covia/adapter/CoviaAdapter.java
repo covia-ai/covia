@@ -282,8 +282,8 @@ public class CoviaAdapter extends AAdapter {
 		if (pathCell != null) {
 			ACell[] pathKeys = parsePath(pathCell);
 			NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
-			if (vns != null && vns.jobId() != null) {
-				ACell temp = TempNamespaceResolver.getTemp(vns.cursor(), vns.jobId());
+			if (vns != null && (vns.jobId() != null || vns.sessionId() != null)) {
+				ACell temp = scopedRoot(vns);
 				ACell[] rem = vns.remainingKeys();
 				ACell value = (rem.length == 0) ? temp : deepGet(temp, rem, 0);
 				// A stored null is a present value, not absent — decide by key presence.
@@ -451,10 +451,10 @@ public class CoviaAdapter extends AAdapter {
 		engine.requireResourceAccess(ctx, Strings.create(pathStr), Capability.CRUD_READ);
 		ACell[] pathKeys = parseStringPath(pathStr);
 
-		// Check job-scoped virtual namespace (t/)
+		// Check atomic embedded virtual namespaces (t/ Job temp, c/ session state).
 		NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
-		if (vns != null && vns.jobId() != null) {
-			ACell temp = TempNamespaceResolver.getTemp(vns.cursor(), vns.jobId());
+		if (vns != null && (vns.jobId() != null || vns.sessionId() != null)) {
+			ACell temp = scopedRoot(vns);
 			ACell value = (vns.remainingKeys().length == 0) ? temp
 				: deepGet(temp, vns.remainingKeys(), 0);
 			if (value == null) return "null /* not found: " + pathStr + " */";
@@ -500,13 +500,7 @@ public class CoviaAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	public ACell handleSlice(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_READ);
-		Object[] target = resolveTargetPath(ctx, input);
-		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
-		ACell[] pathKeys = (ACell[]) target[1];
-
-		if (cursor == null) return Maps.of(K_EXISTS, CVMBool.FALSE);
-
-		ACell value = (pathKeys.length > 0) ? readPath(cursor, pathKeys) : cursor.get();
+		ACell value = readInputValue(ctx, input);
 		if (value == null) return Maps.of(K_EXISTS, CVMBool.FALSE);
 
 		long limit = 100;
@@ -720,7 +714,7 @@ public class CoviaAdapter extends AAdapter {
 		}
 		ACell value = parseJsonValue(RT.getIn(input, Fields.VALUE));
 
-		// Legacy job-scoped t/ (mode 2): the temp value is the navigation root,
+		// Job/task-scoped t/: the Job temp value is the navigation root,
 		// so keys are already relative to it. Route through the SAME deepSet as
 		// the physical path — a scalar-clobbering write now throws the same
 		// shape-conflict error instead of silently rebuilding an empty map (#176).
@@ -735,6 +729,18 @@ public class CoviaAdapter extends AAdapter {
 				// t/ keys carry no namespace prefix (the resolver consumed it), so
 				// "built hierarchy" is one segment shallower than the physical path
 				// (whose keys[0] is the namespace): > 1, not > 2.
+				built[0] = keys.length > 1 && !parentExisted(current, keys, from);
+				return next;
+			});
+			return writeResult(existed[0], built[0]);
+		}
+		if (vns != null && vns.sessionId() != null) {
+			final ACell[] keys = vns.remainingKeys();
+			final boolean[] built = {false};
+			final boolean[] existed = {false};
+			updateSessionPath(vns, (current, from) -> {
+				existed[0] = leafExisted(current, keys, from);
+				ACell next = deepSet(current, keys, from, value);
 				built[0] = keys.length > 1 && !parentExisted(current, keys, from);
 				return next;
 			});
@@ -804,13 +810,22 @@ public class CoviaAdapter extends AAdapter {
 		ACell[] jsonKeys = (xu != null) ? (ACell[]) xu[1] : parsePath(RT.getIn(input, Fields.PATH));
 		requireDeleteAccess(ctx, jsonKeys);
 
-		// Legacy job-scoped t/ (mode 2): apply the SAME deepDelete as the
+		// Job/task-scoped t/: apply the SAME deepDelete as the
 		// physical path against the temp value at the navigation root (#176).
 		NamespaceResolver.ResolvedNamespace vns = (xu != null) ? null : resolveVirtual(ctx, jsonKeys);
 		if (vns != null && vns.jobId() != null) {
 			final ACell[] keys = vns.remainingKeys();
 			final boolean[] deleted = {false};
 			updateTempPath(vns, (current, from) -> {
+				deleted[0] = leafExisted(current, keys, from);
+				return deepDelete(current, keys, from);
+			});
+			return Maps.of(K_DELETED, CVMBool.of(deleted[0]));
+		}
+		if (vns != null && vns.sessionId() != null) {
+			final ACell[] keys = vns.remainingKeys();
+			final boolean[] deleted = {false};
+			updateSessionPath(vns, (current, from) -> {
 				deleted[0] = leafExisted(current, keys, from);
 				return deepDelete(current, keys, from);
 			});
@@ -857,7 +872,7 @@ public class CoviaAdapter extends AAdapter {
 		NamespaceResolver.ResolvedNamespace vns = (xu != null) ? null : resolveVirtual(ctx, jsonKeys);
 		ACell element = parseJsonValue(RT.getIn(input, Fields.VALUE));
 
-		// Legacy job-scoped t/ (mode 2): append into the temp value at the
+		// Job/task-scoped t/: append into the Job temp value at the
 		// navigation root — the same deepAppend as the physical path. Without
 		// this branch a job-scope t/ append would (wrongly) target the jobs
 		// Index cursor rather than the job record's temp field (#176).
@@ -867,6 +882,21 @@ public class CoviaAdapter extends AAdapter {
 			final boolean[] existed = {false};
 			final long[] newSize = {0};
 			updateTempPath(vns, (current, from) -> {
+				existed[0] = leafExisted(current, keys, from);
+				ACell next = deepAppend(current, keys, from, element);
+				built[0] = keys.length > 1 && !parentExisted(current, keys, from);
+				ACell leaf = deepGet(next, keys, from);
+				newSize[0] = (leaf instanceof AVector) ? ((AVector<?>) leaf).count() : 0;
+				return next;
+			});
+			return appendResult(existed[0], newSize[0], built[0]);
+		}
+		if (vns != null && vns.sessionId() != null) {
+			final ACell[] keys = vns.remainingKeys();
+			final boolean[] built = {false};
+			final boolean[] existed = {false};
+			final long[] newSize = {0};
+			updateSessionPath(vns, (current, from) -> {
 				existed[0] = leafExisted(current, keys, from);
 				ACell next = deepAppend(current, keys, from, element);
 				built[0] = keys.length > 1 && !parentExisted(current, keys, from);
@@ -1026,22 +1056,62 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
-	 * Applies a {@link PathUpdate} to the legacy job-scoped {@code t/} temp slot
-	 * (mode 2 — {@code jobId} present, no agent+task scope). The {@code temp}
-	 * value inside the job record is the navigation root, so the update runs at
-	 * path index 0 — exactly as {@link #updatePath} runs it on a cursor value —
-	 * giving {@code t/} writes/deletes/appends the same deep navigation and
-	 * shape-conflict semantics as {@code w/} and the agent-task {@code t/} path.
+	 * Applies a {@link PathUpdate} to the Job-backed {@code t/} temp slot. A
+	 * focused agent task uses its task id as the Job id; an ordinary operation
+	 * uses its current job id. The {@code temp} value inside the Job record is
+	 * the navigation root, so the update runs at path index 0 — exactly as
+	 * {@link #updatePath} runs it on a cursor value — giving every {@code t/}
+	 * write/delete/append the same deep navigation and shape-conflict semantics.
 	 *
-	 * <p><b>Lifecycle is unchanged:</b> the data still lives in the job record's
-	 * {@code temp} field with its job-scoped lifecycle, written atomically (and
-	 * timestamp-stamped) via {@link TempNamespaceResolver#updateTemp}. Only the
-	 * shape handling is shared with the physical path, not the storage location —
-	 * so a {@code t/} value never outlives or escapes its job record.</p>
+	 * <p>The data lives once in the Job record's {@code temp} field and is
+	 * timestamp-stamped atomically via
+	 * {@link TempNamespaceResolver#updateTemp}.</p>
 	 */
 	private static void updateTempPath(NamespaceResolver.ResolvedNamespace vns, PathUpdate update) {
 		TempNamespaceResolver.updateTemp(vns.cursor(), vns.jobId(),
 			oldTemp -> update.apply(oldTemp, 0));
+	}
+
+	/** Applies a deep mutation to the current session's user-scratch root. */
+	private static void updateSessionPath(
+			NamespaceResolver.ResolvedNamespace vns, PathUpdate update) {
+		SessionNamespaceResolver.updateSessionState(vns.cursor(), vns.sessionId(),
+			oldState -> update.apply(oldState, 0));
+	}
+
+	/** Materialises the root value of an atomic embedded virtual namespace. */
+	private static ACell scopedRoot(NamespaceResolver.ResolvedNamespace vns) {
+		if (vns.jobId() != null) {
+			return TempNamespaceResolver.getTemp(vns.cursor(), vns.jobId());
+		}
+		if (vns.sessionId() != null) {
+			return SessionNamespaceResolver.getSessionState(vns.cursor(), vns.sessionId());
+		}
+		return null;
+	}
+
+	/**
+	 * Reads the literal value targeted by an accessor input, including atomic
+	 * embedded virtual namespaces whose parent record cannot be cursor-navigated.
+	 */
+	private ACell readInputValue(RequestContext ctx, ACell input) {
+		ACell pathCell = RT.getIn(input, Fields.PATH);
+		AString pathString = RT.ensureString(pathCell);
+		if (pathString == null || !pathString.toString().startsWith("did:")) {
+			ACell[] pathKeys = parsePath(pathCell);
+			NamespaceResolver.ResolvedNamespace vns = resolveVirtual(ctx, pathKeys);
+			if (vns != null && (vns.jobId() != null || vns.sessionId() != null)) {
+				ACell root = scopedRoot(vns);
+				return (vns.remainingKeys().length == 0)
+					? root : deepGet(root, vns.remainingKeys(), 0);
+			}
+		}
+
+		Object[] target = resolveTargetPath(ctx, input);
+		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
+		ACell[] pathKeys = (ACell[]) target[1];
+		if (cursor == null) return null;
+		return (pathKeys.length > 0) ? readPath(cursor, pathKeys) : cursor.get();
 	}
 
 	/**
@@ -1400,14 +1470,7 @@ public class CoviaAdapter extends AAdapter {
 	 */
 	public ACell handleList(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_READ);
-		Object[] target = resolveTargetPath(ctx, input);
-		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
-		ACell[] pathKeys = (ACell[]) target[1];
-
-		ACell value = null;
-		if (cursor != null) {
-			value = (pathKeys.length > 0) ? readPath(cursor, pathKeys) : cursor.get();
-		}
+		ACell value = readInputValue(ctx, input);
 
 		ACell desc = describeValue(value, input);
 		ACell fieldsCell = RT.getIn(input, K_FIELDS);
@@ -1529,14 +1592,7 @@ public class CoviaAdapter extends AAdapter {
 	@SuppressWarnings("unchecked")
 	public ACell handleAggregate(RequestContext ctx, ACell input) {
 		requireCap(ctx, input, Capability.CRUD_READ);
-		Object[] target = resolveTargetPath(ctx, input);
-		ALatticeCursor<ACell> cursor = (ALatticeCursor<ACell>) target[0];
-		ACell[] pathKeys = (ACell[]) target[1];
-
-		ACell value = null;
-		if (cursor != null) {
-			value = (pathKeys.length > 0) ? readPath(cursor, pathKeys) : cursor.get();
-		}
+		ACell value = readInputValue(ctx, input);
 
 		// exists = a countable collection is present (a scalar has nothing to
 		// descend into, so it is not "there" to count).

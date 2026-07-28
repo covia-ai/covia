@@ -1,6 +1,7 @@
 package covia.lattice;
 
 import convex.core.data.ACell;
+import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.lattice.cursor.ALatticeCursor;
 import covia.adapter.CoviaAdapter;
@@ -51,13 +52,20 @@ public interface NamespaceResolver {
 
 	/**
 	 * Result of namespace resolution: a cursor positioned at the namespace root
-	 * and the remaining path keys to navigate within it. For job-scoped
-	 * namespaces (e.g. {@code t/}), includes the jobId for targeted access.
+	 * and the remaining path keys to navigate within it. Atomic embedded scopes
+	 * carry their selector ids so the adapter can update their parent record
+	 * safely rather than trying to cursor through an opaque LWW value.
 	 */
-	record ResolvedNamespace(ALatticeCursor<ACell> cursor, ACell[] remainingKeys, Blob jobId) {
-		/** Constructor for non-job-scoped namespaces. */
+	record ResolvedNamespace(ALatticeCursor<ACell> cursor, ACell[] remainingKeys,
+			Blob jobId, AString agentId, Blob sessionId) {
+		/** Constructor for ordinary cursor-based namespaces. */
 		ResolvedNamespace(ALatticeCursor<ACell> cursor, ACell[] remainingKeys) {
-			this(cursor, remainingKeys, null);
+			this(cursor, remainingKeys, null, null, null);
+		}
+
+		/** Constructor for a Job-backed namespace. */
+		ResolvedNamespace(ALatticeCursor<ACell> cursor, ACell[] remainingKeys, Blob jobId) {
+			this(cursor, remainingKeys, jobId, null, null);
 		}
 	}
 }
