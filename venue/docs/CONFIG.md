@@ -181,6 +181,44 @@ capability scope: unset `caps` → the secure read-only default; an explicit
 dev only). Authenticated callers hold the public-user grants ambiently
 (covia#254) — the scope governs both. See `docs/UCAN.md` §4.7.
 
+## MCP authentication
+
+MCP discovery is always public. `GET /.well-known/mcp` advertises the
+streamable HTTP endpoint and its effective authentication requirement, while
+`GET /.well-known/oauth-protected-resource/mcp` publishes RFC 9728-shaped
+protected-resource metadata. Neither document exposes the configured DID
+allowlist.
+
+```json
+{
+  "mcp": {
+    "auth": {
+      "required": true,
+      "allowedDids": [
+        "did:key:z..."
+      ]
+    }
+  }
+}
+```
+
+- `required` defaults to the inverse of `auth.public.enabled`. Setting it to
+  `false` cannot override a venue-wide `auth.public.enabled: false` policy.
+- A non-empty `allowedDids` list implies `required: true`. Bearer
+  authentication runs first, including temporal and audience validation, then
+  the authenticated caller DID is checked against the list.
+- Missing or invalid MCP credentials receive HTTP 401 with a
+  `WWW-Authenticate: Bearer` challenge pointing to the protected-resource
+  metadata. An authenticated DID outside the allowlist receives HTTP 403.
+
+Covia currently accepts its DID/UCAN bearer profiles rather than acting as an
+OAuth 2.1 authorization server. The protected-resource document therefore
+uses standard RFC 9728 fields where truthful and carries the Covia bearer
+expectation in the namespaced `_meta["ai.covia/authentication"]` extension.
+It deliberately does not advertise a fictional `authorization_servers`
+entry. A future OAuth bridge can add that standard field without changing the
+discovery URLs.
+
 ## User registration (`users`)
 
 Authentication proves control of a DID; it does not create a venue account.

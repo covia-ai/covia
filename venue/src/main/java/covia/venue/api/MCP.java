@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.api.ContentTypes;
 import convex.core.json.schema.JsonSchema;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -17,7 +18,6 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Hash;
 import convex.core.data.Index;
-import convex.core.data.MapEntry;
 import convex.core.data.MapEntry;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -92,6 +92,12 @@ public class MCP extends McpServer {
 	 */
 	private final java.util.List<String> includePathPrefixes;
 
+	/** Effective MCP transport authentication policy. Discovery stays public. */
+	private final boolean authRequired;
+
+	/** Optional allowlist applied after bearer authentication. */
+	private final java.util.Set<String> allowedDids;
+
 	/**
 	 * Registry of MCP-exposed tools: sanitised MCP tool name → op reference path
 	 * (e.g. {@code "v/ops/json/merge"}). Listing walks this map; tool calls
@@ -109,6 +115,8 @@ public class MCP extends McpServer {
 		this.sseServer = new SseServer(engine());
 		this.includedAdapters = readIncludedAdapters(mcpConfig);
 		this.includePathPrefixes = readIncludePathPrefixes(mcpConfig);
+		this.authRequired = engine().config().isMCPAuthRequired();
+		this.allowedDids = engine().config().getMCPAllowedDids();
 	}
 
 	private static java.util.List<String> readIncludePathPrefixes(AMap<AString, ACell> mcpConfig) {
@@ -239,12 +247,86 @@ public class MCP extends McpServer {
 
 	@Override
 	public void addRoutes(RoutesConfig routes) {
-		// McpServer registers POST /mcp and GET /.well-known/mcp
-		super.addRoutes(routes);
+		// Keep the MCP library's transport behaviour while owning discovery so
+		// Covia can publish its authentication policy. Well-known metadata is a
+		// public bootstrap surface; authentication applies only to /mcp.
+		routes.before("/mcp", this::validateMcpOrigin);
+		routes.post("/mcp", this::handlePost);
+		routes.get("/.well-known/mcp", this::handleWellKnown);
+		routes.get("/.well-known/oauth-protected-resource/mcp",
+			this::handleProtectedResourceMetadata);
 
 		// SSE session routes
 		routes.get("/mcp", this::handleMcpGet);
 		routes.delete("/mcp", this::handleMcpDelete);
+	}
+
+	private void validateMcpOrigin(Context ctx) {
+		String origin = ctx.header("Origin");
+		if (origin != null && !isOriginAllowed(origin)) {
+			throw new io.javalin.http.ForbiddenResponse("Forbidden: invalid origin");
+		}
+	}
+
+	/**
+	 * Public MCP server discovery. The base fields preserve the Convex MCP
+	 * library's discovery shape. Covia-specific authentication information is
+	 * namespaced in {@code _meta}, following MCP's extension convention.
+	 */
+	private void handleWellKnown(Context ctx) {
+		String resource = mcpResource(ctx);
+		AMap<AString, ACell> authentication = coviaAuthenticationMetadata(ctx);
+		AMap<AString, ACell> result = Maps.of(
+			"mcp_version", "1.0",
+			"server_url", resource,
+			"description", getServerInfo().get(Strings.create("title")),
+			"endpoint", Maps.of("path", "/mcp", "transport", "streamable-http"),
+			"_meta", Maps.of("ai.covia/authentication", authentication)
+		);
+		ctx.contentType(ContentTypes.JSON);
+		ctx.result(JSON.print(result).toString());
+	}
+
+	/**
+	 * RFC 9728 protected-resource metadata for the path-specific MCP resource.
+	 *
+	 * <p>Covia bearer tokens are DID/UCAN JWTs rather than OAuth access tokens,
+	 * so no fictional OAuth authorisation server is advertised. RFC 9728 permits
+	 * additional metadata and requires clients to ignore unknown members; the
+	 * Covia profile is therefore carried in a namespaced {@code _meta} member.
+	 * A future OAuth bridge can add the standard {@code authorization_servers}
+	 * member without changing this endpoint.</p>
+	 */
+	private void handleProtectedResourceMetadata(Context ctx) {
+		AMap<AString, ACell> result = Maps.of(
+			"resource", mcpResource(ctx),
+			"resource_name", engine().getName(),
+			"bearer_methods_supported", Vectors.of("header"),
+			"_meta", Maps.of("ai.covia/authentication", coviaAuthenticationMetadata(ctx))
+		);
+		ctx.contentType(ContentTypes.JSON);
+		ctx.result(JSON.print(result).toString());
+	}
+
+	private AMap<AString, ACell> coviaAuthenticationMetadata(Context ctx) {
+		return Maps.of(
+			"required", authRequired,
+			"scheme", "Bearer",
+			"bearer_token_profiles",
+				Vectors.of("ucan-jwt", "self-issued-did-jwt", "venue-session-jwt"),
+			"caller_identity", "DID",
+			"did_allowlist", !allowedDids.isEmpty(),
+			"protected_resource_metadata", protectedResourceMetadata(ctx)
+		);
+	}
+
+	private static String mcpResource(Context ctx) {
+		return ACoviaAPI.getExternalBaseUrl(ctx, null) + "/mcp";
+	}
+
+	private static String protectedResourceMetadata(Context ctx) {
+		return ACoviaAPI.getExternalBaseUrl(ctx, null)
+			+ "/.well-known/oauth-protected-resource/mcp";
 	}
 
 	// ==================== Tool listing (dynamic, from adapters) ====================

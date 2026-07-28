@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import java.security.interfaces.RSAPublicKey;
 import java.util.Map;
+import java.util.Set;
 
 import convex.core.crypto.util.Multikey;
 import convex.core.data.AccountKey;
@@ -23,8 +24,10 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.venue.Auth;
+import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
+import covia.venue.api.ACoviaAPI;
 import covia.venue.auth.JWKSClient;
 import covia.venue.auth.OAuthConfig;
 import io.javalin.config.RoutesConfig;
@@ -194,7 +197,15 @@ public class AuthMiddleware {
 		routes.before("/api/*", mw::extractIdentity);
 		routes.before("/a2a", mw::extractIdentity);
 		routes.before("/a2a/*", mw::extractIdentity);  // per-agent A2A endpoints (COG-14)
-		routes.before("/mcp", mw::extractIdentity);
+		Config config = engine.config();
+		if (config.hasMCP()) {
+			boolean required = config.isMCPAuthRequired();
+			Set<String> allowedDids = config.getMCPAllowedDids();
+			routes.before("/mcp", ctx -> mw.extractMCPIdentity(ctx, required, allowedDids));
+			// Fail closed for future transport sub-routes. Public discovery lives
+			// under /.well-known and is deliberately outside this filter.
+			routes.before("/mcp/*", ctx -> mw.extractMCPIdentity(ctx, required, allowedDids));
+		}
 		return mw;
 	}
 
@@ -222,11 +233,35 @@ public class AuthMiddleware {
 	}
 
 	void extractIdentity(Context ctx) {
+		extractIdentity(ctx, publicAccessEnabled, null);
+	}
+
+	private void extractMCPIdentity(Context ctx, boolean required, Set<String> allowedDids) {
+		String resourceMetadata = ACoviaAPI.getExternalBaseUrl(ctx, null)
+			+ "/.well-known/oauth-protected-resource/mcp";
+		extractIdentity(ctx, !required && publicAccessEnabled, resourceMetadata);
+		AString callerDID = ctx.attribute(CALLER_DID_ATTR);
+		if (callerDID == null) return; // authentication already rejected the request
+		if (!allowedDids.isEmpty() && !allowedDids.contains(callerDID.toString())) {
+			ctx.status(403).result("Caller DID is not allowed to use MCP");
+			ctx.skipRemainingHandlers();
+		}
+	}
+
+	private void rejectUnauthorized(Context ctx, String message, String resourceMetadata) {
+		if (resourceMetadata != null) {
+			ctx.header("WWW-Authenticate",
+				"Bearer resource_metadata=\"" + resourceMetadata + "\"");
+		}
+		ctx.status(401).result(message);
+		ctx.skipRemainingHandlers();
+	}
+
+	private void extractIdentity(Context ctx, boolean allowPublic, String resourceMetadata) {
 		String auth = ctx.header("Authorization");
 		if (auth == null || !auth.startsWith("Bearer ")) {
-			if (!publicAccessEnabled) {
-				ctx.status(401).result("Authentication required");
-				ctx.skipRemainingHandlers();
+			if (!allowPublic) {
+				rejectUnauthorized(ctx, "Authentication required", resourceMetadata);
 			} else {
 				markPublic(ctx);
 			}
@@ -235,9 +270,8 @@ public class AuthMiddleware {
 
 		String token = auth.substring(7).trim();
 		if (token.isEmpty()) {
-			if (!publicAccessEnabled) {
-				ctx.status(401).result("Authentication required");
-				ctx.skipRemainingHandlers();
+			if (!allowPublic) {
+				rejectUnauthorized(ctx, "Authentication required", resourceMetadata);
 			} else {
 				markPublic(ctx);
 			}
@@ -271,22 +305,20 @@ public class AuthMiddleware {
 				// identity claim; failing that claim must be visible to the caller
 				// (an anonymous request without a token still gets public access).
 				log.debug("JWT bearer token failed all verification paths");
-				ctx.status(401).result("Invalid or expired token");
-				ctx.skipRemainingHandlers();
+				rejectUnauthorized(ctx, "Invalid or expired token", resourceMetadata);
 			}
 		} catch (AudienceRejected e) {
 			// A presented token failed the audience policy — a hard 401, NOT a
 			// silent downgrade to the public identity (the replay defence).
 			log.debug("Bearer token audience rejected: {}", e.getMessage());
-			ctx.status(401).result("Token audience not accepted by this venue");
-			ctx.skipRemainingHandlers();
+			rejectUnauthorized(ctx, "Token audience not accepted by this venue",
+				resourceMetadata);
 		} catch (Exception e) {
 			// Same rule for unexpected failures while verifying a PRESENTED token
 			// (JWKS outage, parse bug, ...): fail the claim visibly. Warn-level —
 			// this path is abnormal and should be diagnosable, not debug-hidden.
 			log.warn("Error processing bearer token", e);
-			ctx.status(401).result("Authentication failed");
-			ctx.skipRemainingHandlers();
+			rejectUnauthorized(ctx, "Authentication failed", resourceMetadata);
 		}
 	}
 

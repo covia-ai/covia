@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -280,6 +281,12 @@ public class Config {
 
 	/** Key for MCP enabled flag */
 	public static final AString ENABLED = Strings.intern("enabled");
+
+	/** Key for an explicit authentication requirement. */
+	public static final AString REQUIRED = Strings.intern("required");
+
+	/** Key for an allowlist of authenticated caller DIDs. */
+	public static final AString ALLOWED_DIDS = Strings.intern("allowedDids");
 
 	/**
 	 * Key for the "Fix MCP Strings" workaround flag (top-level, default true).
@@ -842,6 +849,63 @@ public class Config {
 	 */
 	public AMap<AString, ACell> getMCPConfig() {
 		return RT.ensureMap(config.get(MCP));
+	}
+
+	private AMap<AString, ACell> getMCPAuthConfig() {
+		AMap<AString, ACell> mcp = getMCPConfig();
+		ACell raw = (mcp == null) ? null : mcp.get(AUTH);
+		if (raw == null) return null;
+		AMap<AString, ACell> auth = RT.ensureMap(raw);
+		if (auth == null) {
+			throw new IllegalArgumentException("mcp.auth must be an object");
+		}
+		return auth;
+	}
+
+	/**
+	 * Whether the MCP transport requires a bearer-authenticated caller.
+	 *
+	 * <p>{@code mcp.auth.required} defaults to the inverse of venue-wide public
+	 * access. An MCP DID allowlist also implies authentication. An explicit
+	 * {@code false} never re-opens MCP when venue-wide public access is disabled.
+	 * Discovery metadata remains public independently of this setting.</p>
+	 *
+	 * @return true when anonymous MCP transport requests must be rejected
+	 */
+	public boolean isMCPAuthRequired() {
+		AMap<AString, ACell> auth = getMCPAuthConfig();
+		ACell raw = (auth == null) ? null : auth.get(REQUIRED);
+		if (raw != null && !(raw instanceof CVMBool)) {
+			throw new IllegalArgumentException("mcp.auth.required must be a boolean");
+		}
+		boolean configuredRequired = (raw == null) ? !isPublicAccess() : CVMBool.TRUE.equals(raw);
+		return configuredRequired || !isPublicAccess() || !getMCPAllowedDids().isEmpty();
+	}
+
+	/**
+	 * Authenticated caller DIDs allowed to use the MCP transport. Empty means
+	 * every admitted authenticated DID is allowed.
+	 *
+	 * @return immutable DID allowlist
+	 */
+	public Set<String> getMCPAllowedDids() {
+		AMap<AString, ACell> auth = getMCPAuthConfig();
+		ACell raw = (auth == null) ? null : auth.get(ALLOWED_DIDS);
+		if (raw == null) return Set.of();
+		if (!(raw instanceof AVector<?> vector)) {
+			throw new IllegalArgumentException("mcp.auth.allowedDids must be an array of DID strings");
+		}
+		LinkedHashSet<String> result = new LinkedHashSet<>();
+		for (long i = 0; i < vector.count(); i++) {
+			AString entry = RT.ensureString(vector.get(i));
+			String did = (entry == null) ? null : entry.toString().trim();
+			if (did == null || !did.startsWith("did:") || did.length() <= 4) {
+				throw new IllegalArgumentException(
+					"mcp.auth.allowedDids entries must be non-empty DID strings");
+			}
+			result.add(did);
+		}
+		return Set.copyOf(result);
 	}
 
 	/**
