@@ -10,6 +10,7 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
 import convex.core.data.Hash;
+import convex.core.data.Maps;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
@@ -247,6 +248,25 @@ public class GridAdapter extends AAdapter {
         venue.setUcans(admissibleTokens(ctx, tokens, principal));
         return venue;
     }
+
+	/**
+	 * Writes a value at a mutable path hosted by another venue.
+	 *
+	 * <p>The caller's authority is checked locally against the exact destination
+	 * before any network request, then the ordinary {@code covia:write}
+	 * operation checks it again at the destination. Raw UCANs are forwarded by
+	 * {@link #connectRemote}; no framework-only bypass exists on either side.</p>
+	 */
+	CompletableFuture<ACell> writeRemotePath(RequestContext ctx, AString venueSpec,
+			AString path, ACell value) {
+		ACell writeInput = Maps.of(Fields.PATH, path, Fields.VALUE, value);
+		RequestContext writeCtx = ctx.withInvocation(writeInput, null);
+		engine.requireResourceAccess(writeCtx, path, convex.auth.ucan.Capability.CRUD_WRITE);
+		Venue venue = connectRemote(ctx, venueSpec);
+		return venue.invoke("v/ops/covia/write",
+				writeInput)
+			.thenCompose(Job::future);
+	}
 
     /**
      * True when the caller has instructed this venue to relay as itself: a

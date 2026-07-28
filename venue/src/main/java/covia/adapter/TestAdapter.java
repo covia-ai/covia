@@ -304,6 +304,24 @@ public class TestAdapter extends AAdapter {
      */
     private ACell handleTaskComplete(RequestContext ctx, ACell input) {
         ACell newInput = RT.getIn(input, Fields.NEW_INPUT);
+        ACell delayCell = RT.getIn(newInput, Fields.DELAY);
+        if (delayCell instanceof CVMLong delay && delay.longValue() > 0) {
+            try {
+                Thread.sleep(delay.longValue());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("taskcomplete interrupted", e);
+            }
+        }
+        AString readPath = RT.ensureString(RT.getIn(newInput, "readPath"));
+        if (readPath != null) {
+            ACell read = ((CoviaAdapter) engine.getAdapter("covia"))
+                .handleRead(ctx, Maps.of(Fields.PATH, readPath));
+            if (!convex.core.data.prim.CVMBool.TRUE.equals(RT.getIn(read, "exists"))) {
+                throw new IllegalArgumentException("taskcomplete input path not found: " + readPath);
+            }
+            newInput = RT.getIn(read, Fields.VALUE);
+        }
         ACell response = Maps.of(Strings.create("completed"), newInput);
 
         if (ctx.getTaskId() != null) {

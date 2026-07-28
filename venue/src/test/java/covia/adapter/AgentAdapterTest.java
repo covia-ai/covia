@@ -13,6 +13,7 @@ import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Cells;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -2791,6 +2792,282 @@ public class AgentAdapterTest {
 		AgentState agent = user.agent("envelope-agent");
 		assertEquals(0, agent.getTasks().count(),
 			"Venue op must remove the task entry from the agent's Index");
+	}
+
+	// ========== issue #71 — structural outputPath handoff ==========
+
+	@Test
+	public void testRequestWithoutOutputPathRetainsDirectOutput() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "direct-output-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		ACell payload = Maps.of("chapter", "direct");
+		ACell envelope = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "direct-output-agent", Fields.INPUT, payload),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		assertEquals(Maps.of("completed", payload), RT.getIn(envelope, Fields.OUTPUT));
+		assertNull(RT.getIn(envelope, Fields.OUTPUT_PATH));
+		assertNull(RT.getIn(envelope, Fields.BYTES));
+	}
+
+	@Test
+	public void testOutputPathWritesResultAndReturnsReceipt() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "handoff-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		ACell payload = Maps.of("chapter", "lossless", "lines", Vectors.of("a", "b"));
+		ACell expected = Maps.of("completed", payload);
+		AString path = Strings.create("w/pipeline/run-71/stage-1");
+		ACell receipt = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "handoff-agent", Fields.INPUT, payload,
+				Fields.OUTPUT_PATH, path),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		assertEquals(Status.COMPLETE, RT.getIn(receipt, Fields.STATUS));
+		assertEquals(path, RT.getIn(receipt, Fields.OUTPUT_PATH));
+		assertEquals(CVMLong.create(Cells.storageSize(expected)), RT.getIn(receipt, Fields.BYTES));
+		assertNull(RT.getIn(receipt, Fields.OUTPUT),
+			"Receipt must not put the worker payload back in manager context");
+
+		ACell read = engine.jobs().invokeOperation(
+			"v/ops/covia/read", Maps.of(Fields.PATH, path),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(CVMBool.TRUE, RT.getIn(read, "exists"));
+		assertEquals(expected, RT.getIn(read, Fields.VALUE),
+			"Stored handoff must be byte-identical to the worker result");
+	}
+
+	@Test
+	public void testThreeStageOutputPathPipelinePassesOnlyReceipts() {
+		RequestContext owner = RequestContext.of(ALICE_DID);
+		for (String id : new String[] {"pipeline-stage-1", "pipeline-stage-2", "pipeline-stage-3"}) {
+			engine.jobs().invokeOperation(
+				"v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, id,
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+				owner).awaitResult(5000);
+		}
+
+		AString p1 = Strings.create("w/pipeline/run-71/three-stage/1");
+		AString p2 = Strings.create("w/pipeline/run-71/three-stage/2");
+		AString p3 = Strings.create("w/pipeline/run-71/three-stage/3");
+		ACell seed = Maps.of("text", "verbatim \u2603 payload", "items", Vectors.of(1, 2, 3));
+
+		ACell r1 = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "pipeline-stage-1", Fields.INPUT, seed,
+				Fields.OUTPUT_PATH, p1), owner).awaitResult(5000);
+		ACell r2 = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "pipeline-stage-2",
+				Fields.INPUT, Maps.of("readPath", p1),
+				Fields.OUTPUT_PATH, p2), owner).awaitResult(5000);
+		ACell r3 = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "pipeline-stage-3",
+				Fields.INPUT, Maps.of("readPath", p2),
+				Fields.OUTPUT_PATH, p3), owner).awaitResult(5000);
+
+		for (ACell receipt : new ACell[] {r1, r2, r3}) {
+			assertNull(RT.getIn(receipt, Fields.OUTPUT),
+				"Every manager-visible stage result must be a receipt only");
+			assertNotNull(RT.getIn(receipt, Fields.OUTPUT_PATH));
+		}
+
+		ACell stage1 = RT.getIn(engine.jobs().invokeOperation(
+			"v/ops/covia/read", Maps.of(Fields.PATH, p1), owner).awaitResult(5000), Fields.VALUE);
+		ACell stage2 = RT.getIn(engine.jobs().invokeOperation(
+			"v/ops/covia/read", Maps.of(Fields.PATH, p2), owner).awaitResult(5000), Fields.VALUE);
+		ACell stage3 = RT.getIn(engine.jobs().invokeOperation(
+			"v/ops/covia/read", Maps.of(Fields.PATH, p3), owner).awaitResult(5000), Fields.VALUE);
+		assertEquals(Maps.of("completed", seed), stage1);
+		assertEquals(Maps.of("completed", stage1), stage2,
+			"Stage 2 must observe stage 1's exact stored cell");
+		assertEquals(Maps.of("completed", stage2), stage3,
+			"Stage 3 must observe stage 2's exact stored cell");
+	}
+
+	@Test
+	public void testOutputPathDeferredCompletionPollsToReceipt() throws Exception {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "deferred-handoff-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		ACell payload = Maps.of("stage", 2, Fields.DELAY, 150);
+		AString path = Strings.create("w/pipeline/run-71/deferred");
+		ACell snapshot = engine.jobs().invokeInternal(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "deferred-handoff-agent",
+				Fields.INPUT, payload,
+				Fields.OUTPUT_PATH, path,
+				Fields.TIMEOUT, 0),
+			RequestContext.of(ALICE_DID)).get(5000, java.util.concurrent.TimeUnit.MILLISECONDS);
+
+		assertEquals(Status.STARTED, RT.getIn(snapshot, Fields.STATUS));
+		Blob taskId = Job.parseID(RT.getIn(snapshot, Fields.ID));
+		assertNotNull(taskId);
+		Job task = engine.jobs().getJob(taskId);
+		ACell receipt = task.awaitResult(5000);
+		assertEquals(path, RT.getIn(receipt, Fields.OUTPUT_PATH));
+		assertNull(RT.getIn(receipt, Fields.OUTPUT));
+
+		ACell read = engine.jobs().invokeOperation(
+			"v/ops/covia/read", Maps.of(Fields.PATH, path),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(Maps.of("completed", payload), RT.getIn(read, Fields.VALUE));
+	}
+
+	@Test
+	public void testOutputPathUsesRequestersExecutionScope() {
+		Job parent = engine.jobs().invokeOperation(
+			"v/test/ops/never", Maps.empty(), RequestContext.of(ALICE_DID));
+		RequestContext scoped = RequestContext.of(ALICE_DID).withJobId(parent.getID());
+		try {
+			engine.jobs().invokeOperation(
+				"v/ops/agent/create",
+				Maps.of(Fields.AGENT_ID, "scoped-handoff-agent",
+					Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+				RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+			ACell payload = Maps.of("scope", "parent-job");
+			ACell receipt = engine.jobs().invokeOperation(
+				"v/ops/agent/request",
+				Maps.of(Fields.AGENT_ID, "scoped-handoff-agent",
+					Fields.INPUT, payload,
+					Fields.OUTPUT_PATH, "t/handoff"),
+				scoped).awaitResult(5000);
+			assertEquals(Strings.create("t/handoff"), RT.getIn(receipt, Fields.OUTPUT_PATH));
+
+			ACell read = engine.jobs().invokeOperation(
+				"v/ops/covia/read", Maps.of(Fields.PATH, "t/handoff"), scoped)
+				.awaitResult(5000);
+			assertEquals(Maps.of("completed", payload), RT.getIn(read, Fields.VALUE));
+		} finally {
+			parent.cancel();
+		}
+	}
+
+	@Test
+	public void testOutputPathDeniedByCapturedManagerCapsWritesNothing() {
+		String agentId = "capped-handoff-agent";
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, agentId,
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/taskcomplete")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		RequestContext capped = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			Capability.create(Strings.create("v/ops/agent/request"), Strings.create("invoke")),
+			Capability.create(Strings.create("g/" + agentId), Abilities.AGENT_REQUEST)));
+		AString path = Strings.create("w/pipeline/run-71/denied");
+		Job request = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, agentId,
+				Fields.INPUT, Maps.of("q", "denied"),
+				Fields.OUTPUT_PATH, path),
+			capped);
+
+		assertThrows(covia.exception.JobFailedException.class, () -> request.awaitResult(5000));
+		assertTrue(request.getErrorMessage().contains("crud/write"),
+			"Failure should identify the missing destination authority");
+
+		ACell read = engine.jobs().invokeOperation(
+			"v/ops/covia/read", Maps.of(Fields.PATH, path),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(read, "exists"));
+	}
+
+	@Test
+	public void testHandoffConsumerNeedsReadAuthority() {
+		AString path = Strings.create("w/pipeline/run-71/consumer-cap");
+		ACell value = Maps.of("exact", Vectors.of("one", "two"));
+		engine.jobs().invokeOperation(
+			"v/ops/covia/write", Maps.of(Fields.PATH, path, Fields.VALUE, value),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		ACell invokeRead = Capability.create(
+			Strings.create("v/ops/covia/read"), Strings.create("invoke"));
+		RequestContext denied = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			invokeRead,
+			Capability.create(Strings.create("w/elsewhere"), Strings.create("crud/read"))));
+		Job deniedRead = engine.jobs().invokeOperation(
+			"v/ops/covia/read", Maps.of(Fields.PATH, path), denied);
+		assertThrows(covia.exception.JobFailedException.class, () -> deniedRead.awaitResult(5000));
+
+		RequestContext allowed = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			invokeRead,
+			Capability.create(path, Strings.create("crud/read"))));
+		ACell read = engine.jobs().invokeOperation(
+			"v/ops/covia/read", Maps.of(Fields.PATH, path), allowed).awaitResult(5000);
+		assertEquals(value, RT.getIn(read, Fields.VALUE));
+	}
+
+	@Test
+	public void testOutputPathFailureWritesNothing() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "failed-handoff-agent",
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/error")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		AString path = Strings.create("w/pipeline/run-71/failed");
+		Job request = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, "failed-handoff-agent",
+				Fields.INPUT, Maps.of("q", "fail"),
+				Fields.OUTPUT_PATH, path),
+			RequestContext.of(ALICE_DID));
+		assertThrows(covia.exception.JobFailedException.class, () -> request.awaitResult(5000));
+
+		ACell read = engine.jobs().invokeOperation(
+			"v/ops/covia/read", Maps.of(Fields.PATH, path),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(read, "exists"));
+	}
+
+	@Test
+	public void testOutputPathCancellationWritesNothing() {
+		String agentId = "cancelled-handoff-agent";
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, agentId,
+				Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/never")),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		AString path = Strings.create("w/pipeline/run-71/cancelled");
+		Job request = engine.jobs().invokeOperation(
+			"v/ops/agent/request",
+			Maps.of(Fields.AGENT_ID, agentId,
+				Fields.INPUT, Maps.of("q", "cancel"),
+				Fields.OUTPUT_PATH, path),
+			RequestContext.of(ALICE_DID));
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/cancel-task",
+			Maps.of(Fields.AGENT_ID, agentId,
+				Fields.TASK_ID, request.getID().toHexString()),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(Status.CANCELLED, request.getStatus());
+
+		ACell read = engine.jobs().invokeOperation(
+			"v/ops/covia/read", Maps.of(Fields.PATH, path),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertEquals(CVMBool.FALSE, RT.getIn(read, "exists"));
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/suspend", Maps.of(Fields.AGENT_ID, agentId),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
 	}
 
 	// ========== agent:request — sync/async consistency ==========

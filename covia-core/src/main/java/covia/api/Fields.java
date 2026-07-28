@@ -15,6 +15,10 @@ public class Fields {
 	public static final StringShort WARNINGS = Strings.intern("warnings");
 	public static final StringShort INPUT = Strings.intern("input");
 	public static final StringShort OUTPUT = Strings.intern("output");
+	/** Optional destination for structurally handing off an operation result. */
+	public static final StringShort OUTPUT_PATH = Strings.intern("outputPath");
+	/** Recursive CVM storage size of a value, used by small result receipts. */
+	public static final StringShort BYTES = Strings.intern("bytes");
 	public static final StringShort RESULT = Strings.intern("result");
 	public static final StringShort OPERATION = Strings.intern("operation");
 	public static final StringShort DEFAULT = Strings.intern("default");

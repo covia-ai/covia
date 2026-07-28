@@ -16,6 +16,10 @@
 					"type": "integer",
 					"description": "Milliseconds to wait synchronously for the agent to complete. Default 5000ms. On timeout the response is a STARTED snapshot with the task Job id — poll via grid_job_result to retrieve the final result later. Set to 0 for pure async (snapshot returned immediately)."
 				},
+				"outputPath": {
+					"type": "string",
+					"description": "Optional mutable Covia path for structural result handoff (for example w/pipeline/run1/chapter1, t/stage1, or an authorised DID-URL path). On successful completion the framework writes the worker's full result there under the requester's captured authority and returns a small {status, outputPath, bytes} receipt instead of the payload. Remote did:web paths are resolved through federation. If omitted, the existing direct output response is unchanged. Failed or cancelled tasks write nothing."
+				},
 				"responseSchema": {
 					"type": "object",
 					"description": "Optional JSON Schema. When provided, the agent's response is constrained to match this schema (server-side enforcement via OpenAI structured outputs). Use to get typed structured output from any agent. Overrides the agent's default output schema if it has one."

@@ -2327,11 +2327,30 @@ public class Engine {
 		}
 	}
 
-	/** Whether an absolute DID resource names a principal stored by this venue. */
-	private boolean isLocalDIDResource(AString resource) {
+	/**
+	 * Whether an absolute DID resource is hosted by this venue.
+	 *
+	 * <p>An existing user record is authoritative. The venue's canonical DID,
+	 * public principal, did:web alias, and managed users are also local before
+	 * their first write creates a user record. Callers that route mutable paths
+	 * use this distinction to avoid creating a shadow local user for a genuinely
+	 * remote did:web target.</p>
+	 */
+	public boolean isLocalDIDResource(AString resource) {
 		AString owner = ownerOf(resource);
 		if (owner == null) return false;
-		return venueState.users().get(owner) != null;
+		if (venueState.users().get(owner) != null) return true;
+
+		String value = owner.toString();
+		String venue = getDIDString().toString();
+		if (value.equals(venue) || value.equals(venue + ":public")) return true;
+
+		AString web = config.getWebDID();
+		if (web == null) return false;
+		String webValue = web.toString();
+		return value.equals(webValue)
+			|| value.equals(webValue + ":public")
+			|| value.startsWith(webValue + ":u:");
 	}
 
 	/** True when {@code resource} is the caller's own: a bare/relative/scheme path,

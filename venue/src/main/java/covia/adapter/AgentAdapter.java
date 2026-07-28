@@ -17,6 +17,7 @@ import convex.core.util.JSON;
 import covia.grid.Asset;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Cells;
 import convex.core.data.Hash;
 import convex.core.data.Index;
 import convex.core.data.Maps;
@@ -77,6 +78,16 @@ public class AgentAdapter extends AAdapter {
 	private static final AString K_SYSTEM_PROMPT    = Strings.intern("systemPrompt");
 	private static final AString K_LLM_OPERATION    = Strings.intern("llmOperation");
 	private static final AString K_MODEL            = Strings.intern("model");
+	/** Persisted, non-secret requester scope used to reconstruct an output
+	 * handoff after a venue restart. Live requests use the complete immutable
+	 * RequestContext held in {@link #outputContexts}; raw bearer UCANs are never
+	 * written into agent state. */
+	private static final AString K_OUTPUT_CONTEXT   = Strings.intern("outputContext");
+	private static final AString K_CONTEXT_CAPS     = Strings.intern("caps");
+	private static final AString K_CONTEXT_AGENT_ID = Strings.intern("agentId");
+	private static final AString K_CONTEXT_JOB_ID   = Strings.intern("jobId");
+	private static final AString K_CONTEXT_SESSION_ID = Strings.intern("sessionId");
+	private static final AString K_CONTEXT_TASK_ID  = Strings.intern("taskId");
 	private static final AString DEFAULT_AGENT_TEMPLATE = Strings.intern("v/agents/templates/skilled");
 
 	/** Maximum run loop iterations before forced exit (safety net) */
@@ -110,6 +121,16 @@ public class AgentAdapter extends AAdapter {
 	 * persisted. Inner key is the task (== caller Job) ID.
 	 */
 	private final ConcurrentHashMap<AgentKey, ConcurrentHashMap<Blob, AMap<AString, ACell>>> deferredCompletions
+		= new ConcurrentHashMap<>();
+
+	/**
+	 * Complete requester contexts for live {@code outputPath} handoffs, keyed by
+	 * the request Job (= task) ID. This preserves execution scopes and verified
+	 * proof/raw-UCAN material without persisting bearer credentials in lattice
+	 * state. The task row carries a non-secret identity/caps/scope snapshot as a
+	 * restart-safe fallback for own-resource writes.
+	 */
+	private final ConcurrentHashMap<Blob, RequestContext> outputContexts
 		= new ConcurrentHashMap<>();
 
 	/**
@@ -861,6 +882,13 @@ public class AgentAdapter extends AAdapter {
 	private void handleRequest(Job job, ACell input, RequestContext ctx) {
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
 		if (agentId == null) { job.fail("agentId is required"); return; }
+		ACell outputPathCell = RT.getIn(input, Fields.OUTPUT_PATH);
+		AString outputPath = RT.ensureString(outputPathCell);
+		if (outputPathCell != null
+				&& (outputPath == null || outputPath.toString().trim().isEmpty())) {
+			job.fail("outputPath must be a non-empty string");
+			return;
+		}
 
 		AgentState agent = lookupAgent(job, ctx.getUserDID(), agentId);
 		if (agent == null) return;
@@ -893,6 +921,12 @@ public class AgentAdapter extends AAdapter {
 			Fields.SESSION_ID, Strings.create(sid.toHexString()));
 		if (responseSchema instanceof AMap) {
 			taskData = taskData.assoc(Fields.RESPONSE_SCHEMA, responseSchema);
+		}
+		if (outputPath != null) {
+			taskData = taskData
+				.assoc(Fields.OUTPUT_PATH, outputPath)
+				.assoc(K_OUTPUT_CONTEXT, snapshotOutputContext(ctx));
+			outputContexts.put(taskId, ctx);
 		}
 		agent.addTask(taskId, taskData);
 
@@ -1520,6 +1554,9 @@ public class AgentAdapter extends AAdapter {
 			job.fail("Task not found: " + taskIdHex);
 			return;
 		}
+		outputContexts.remove(taskId);
+		Job pending = engine.jobs().getJob(taskId);
+		if (pending != null && !pending.isFinished()) pending.cancel();
 
 		job.setStatus(Status.STARTED);
 		job.completeWith(Maps.of(
@@ -1697,6 +1734,12 @@ public class AgentAdapter extends AAdapter {
 			valueField,    value);
 		ACell sid = extractTaskSessionId(task);
 		if (sid != null) envelope = envelope.assoc(Fields.SESSION_ID, sid);
+		if (task instanceof AMap<?, ?> taskMap) {
+			ACell outputPath = taskMap.get(Fields.OUTPUT_PATH);
+			if (outputPath != null) envelope = envelope.assoc(Fields.OUTPUT_PATH, outputPath);
+			ACell outputContext = taskMap.get(K_OUTPUT_CONTEXT);
+			if (outputContext != null) envelope = envelope.assoc(K_OUTPUT_CONTEXT, outputContext);
+		}
 		deferredCompletions
 			.computeIfAbsent(new AgentKey(ownerDID, agentId), k -> new ConcurrentHashMap<>())
 			.put(taskId, envelope);
@@ -1731,17 +1774,116 @@ public class AgentAdapter extends AAdapter {
 	private void completeDeferredJobs(ConcurrentHashMap<Blob, AMap<AString, ACell>> deferred) {
 		if (deferred == null) return;
 		for (var e : deferred.entrySet()) {
-			Job pendingJob = engine.jobs().getJob(e.getKey());
-			if (pendingJob == null || pendingJob.isFinished()) continue;
+			Blob taskId = e.getKey();
+			Job pendingJob = engine.jobs().getJob(taskId);
+			if (pendingJob == null || pendingJob.isFinished()) {
+				outputContexts.remove(taskId);
+				continue;
+			}
 			AMap<AString, ACell> envelope = e.getValue();
 			AString status = RT.ensureString(envelope.get(Fields.STATUS));
 			if (Status.FAILED.equals(status)) {
+				outputContexts.remove(taskId);
 				ACell err = envelope.get(Fields.ERROR);
 				pendingJob.fail(err == null ? "Task failed" : err.toString());
 			} else {
-				pendingJob.completeWith(envelope);
+				AString outputPath = RT.ensureString(envelope.get(Fields.OUTPUT_PATH));
+				if (outputPath == null) {
+					// Compatibility contract: without outputPath the exact
+					// historical envelope (including the full output) survives.
+					pendingJob.completeWith(envelope);
+					continue;
+				}
+
+				RequestContext outputCtx = outputContexts.remove(taskId);
+				if (outputCtx == null) {
+					outputCtx = restoreOutputContext(envelope.get(K_OUTPUT_CONTEXT));
+				}
+				if (outputCtx == null) {
+					pendingJob.fail("Output handoff failed for '" + outputPath
+						+ "': requester authority is unavailable");
+					continue;
+				}
+
+				ACell output = envelope.get(Fields.OUTPUT);
+				CompletableFuture<ACell> write;
+				try {
+					CoviaAdapter covia = (CoviaAdapter) engine.getAdapter("covia");
+					if (covia == null) throw new IllegalStateException("covia adapter is unavailable");
+					write = covia.writeResolvedPath(outputCtx, outputPath, output);
+				} catch (Exception ex) {
+					write = CompletableFuture.failedFuture(ex);
+				}
+				write.whenComplete((ignored, failure) -> {
+					// A cancellation that won before the handoff completed stays
+					// terminal and never exposes a success receipt.
+					if (pendingJob.isFinished()) return;
+					if (failure != null) {
+						Throwable cause = failure;
+						while ((cause instanceof java.util.concurrent.CompletionException
+								|| cause instanceof java.util.concurrent.ExecutionException)
+								&& cause.getCause() != null) {
+							cause = cause.getCause();
+						}
+						pendingJob.fail("Output handoff failed for '" + outputPath
+							+ "': " + describeFailure(cause));
+						return;
+					}
+					pendingJob.completeWith(buildOutputReceipt(envelope, outputPath, output));
+				});
 			}
 		}
+	}
+
+	/** Captures identity, cap ceiling and execution scopes without bearer UCANs. */
+	private static AMap<AString, ACell> snapshotOutputContext(RequestContext ctx) {
+		AMap<AString, ACell> snapshot = Maps.of(Fields.CALLER, ctx.getCallerDID());
+		if (ctx.getCaps() != null) snapshot = snapshot.assoc(K_CONTEXT_CAPS, ctx.getCaps());
+		if (ctx.getAgentId() != null) snapshot = snapshot.assoc(K_CONTEXT_AGENT_ID, ctx.getAgentId());
+		if (ctx.getJobId() != null) snapshot = snapshot.assoc(K_CONTEXT_JOB_ID, ctx.getJobId());
+		if (ctx.getSessionId() != null) snapshot = snapshot.assoc(K_CONTEXT_SESSION_ID, ctx.getSessionId());
+		if (ctx.getTaskId() != null) snapshot = snapshot.assoc(K_CONTEXT_TASK_ID, ctx.getTaskId());
+		return snapshot;
+	}
+
+	/**
+	 * Restores the non-secret portion of a captured context after restart.
+	 * Proof-backed cross-user/federated authority deliberately cannot be
+	 * reconstructed: raw bearer credentials are never persisted.
+	 */
+	@SuppressWarnings("unchecked")
+	private static RequestContext restoreOutputContext(ACell snapshotCell) {
+		if (!(snapshotCell instanceof AMap<?, ?> raw)) return null;
+		AMap<AString, ACell> snapshot = (AMap<AString, ACell>) raw;
+		AString caller = RT.ensureString(snapshot.get(Fields.CALLER));
+		if (caller == null) return null;
+		RequestContext ctx = RequestContext.of(caller);
+		if (snapshot.containsKey(K_CONTEXT_CAPS)) {
+			AVector<ACell> caps = RT.ensureVector(snapshot.get(K_CONTEXT_CAPS));
+			if (caps == null) return null;
+			ctx = ctx.withCaps(caps);
+		}
+		ACell agentId = snapshot.get(K_CONTEXT_AGENT_ID);
+		if (agentId != null) ctx = ctx.withAgentId(RT.ensureString(agentId));
+		ACell jobId = snapshot.get(K_CONTEXT_JOB_ID);
+		if (jobId instanceof Blob b) ctx = ctx.withJobId(b);
+		ACell sessionId = snapshot.get(K_CONTEXT_SESSION_ID);
+		if (sessionId instanceof Blob b) ctx = ctx.withSessionId(b);
+		ACell taskId = snapshot.get(K_CONTEXT_TASK_ID);
+		if (taskId instanceof Blob b) ctx = ctx.withTaskId(b);
+		return ctx;
+	}
+
+	/** Small completion envelope used only when outputPath was requested. */
+	private static AMap<AString, ACell> buildOutputReceipt(
+			AMap<AString, ACell> envelope, AString outputPath, ACell output) {
+		AMap<AString, ACell> receipt = Maps.of(
+			Fields.ID, envelope.get(Fields.ID),
+			Fields.STATUS, Status.COMPLETE,
+			Fields.OUTPUT_PATH, outputPath,
+			Fields.BYTES, CVMLong.create(Cells.storageSize(output)));
+		ACell sid = envelope.get(Fields.SESSION_ID);
+		return (sid != null) ? receipt.assoc(Fields.SESSION_ID, sid) : receipt;
 	}
 
 	// ========== Wake and run management ==========
@@ -2766,6 +2908,7 @@ public class AgentAdapter extends AAdapter {
 		// awaitResult caller never observes the stuck task still queued.
 		AgentState agent = getAgent(ownerDID, agentId);
 		if (agent != null) agent.removeTask(taskId);
+		outputContexts.remove(taskId);
 		Job pending = engine.jobs().getJob(taskId);
 		if (pending != null && !pending.isFinished()) {
 			pending.fail(err);
@@ -2786,6 +2929,7 @@ public class AgentAdapter extends AAdapter {
 	private void failQueuedTasks(Index<Blob, ACell> tasks, String error) {
 		if (tasks == null) return;
 		for (var entry : tasks.entrySet()) {
+			outputContexts.remove(entry.getKey());
 			Job pending = engine.jobs().getJob(entry.getKey());
 			if (pending != null && !pending.isFinished()) {
 				pending.fail(error);
@@ -2828,6 +2972,7 @@ public class AgentAdapter extends AAdapter {
 			deferredCompletions.remove(key);
 		if (deferred != null) {
 			for (var e : deferred.entrySet()) {
+				outputContexts.remove(e.getKey());
 				Job pending = engine.jobs().getJob(e.getKey());
 				if (pending != null && !pending.isFinished()) {
 					pending.fail(error);

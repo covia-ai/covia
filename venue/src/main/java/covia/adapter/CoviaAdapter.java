@@ -774,6 +774,55 @@ public class CoviaAdapter extends AAdapter {
 	}
 
 	/**
+	 * Writes through the canonical mutable-path resolver, including federation
+	 * for a foreign {@code did:web} destination.
+	 *
+	 * <p>Bare paths, execution-scoped virtual paths, local users, and local
+	 * did:web aliases use {@link #handleWrite}. A genuinely foreign did:web
+	 * target is dispatched to that venue's ordinary {@code covia:write}; this
+	 * prevents an output handoff from silently materialising a remote owner as a
+	 * shadow user in the local lattice.</p>
+	 */
+	CompletableFuture<ACell> writeResolvedPath(RequestContext ctx, AString path, ACell value) {
+		AString remoteVenue = remoteVenueFor(path);
+		if (remoteVenue == null || engine.isLocalDIDResource(path)) {
+			ACell writeInput = Maps.of(Fields.PATH, path, Fields.VALUE, value);
+			// This is framework composition rather than an invoked covia:write
+			// Job. Rebind the capability input so a gate can never accidentally
+			// authorise against the preceding agent:request input; without a gate
+			// evaluator, gated grants fail closed while ordinary grants work.
+			return CompletableFuture.completedFuture(
+				handleWrite(ctx.withInvocation(writeInput, null), writeInput));
+		}
+		AAdapter adapter = engine.getAdapter("grid");
+		if (!(adapter instanceof GridAdapter grid)) {
+			return CompletableFuture.failedFuture(
+				new IllegalStateException("Remote output path requires the grid adapter"));
+		}
+		return grid.writeRemotePath(ctx, remoteVenue, path, value);
+	}
+
+	/**
+	 * Extracts the routable venue DID from a foreign Covia did:web path.
+	 * Venue-managed users and agent sub-principals live below {@code :u:};
+	 * {@code :public} is likewise a venue child. Other did:web owners are used
+	 * as-is. Non-web DIDs have no network location and retain local DID-path
+	 * semantics.
+	 */
+	static AString remoteVenueFor(AString path) {
+		if (path == null) return null;
+		String value = path.toString();
+		if (!value.startsWith("did:web:")) return null;
+		int slash = value.indexOf('/');
+		if (slash < 0) return null;
+		String owner = value.substring(0, slash);
+		int user = owner.indexOf(":u:", "did:web:".length());
+		if (user > 0) owner = owner.substring(0, user);
+		else if (owner.endsWith(":public")) owner = owner.substring(0, owner.length() - ":public".length());
+		return Strings.create(owner);
+	}
+
+	/**
 	 * Mutation result shared by {@code covia:write} and {@code covia:copy}:
 	 * {@code existed} (a value was already at the target — created vs replaced) is
 	 * always present; {@code pathCreated} appears only when a missing parent
