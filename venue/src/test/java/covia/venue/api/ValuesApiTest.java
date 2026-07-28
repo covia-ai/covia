@@ -25,6 +25,7 @@ import convex.core.crypto.AKeyPair;
 import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.AVector;
+import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -33,9 +34,11 @@ import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.JSON;
 import covia.grid.Job;
+import covia.grid.Principals;
 import covia.grid.Status;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
+import covia.venue.RequestContext;
 import covia.venue.TestServer;
 import covia.venue.User;
 
@@ -61,6 +64,9 @@ public class ValuesApiTest {
 	private AString callerDID;
 	private String jwt;
 	private VenueHTTP client;
+	private final AString scopedAgentId = Strings.create("values-agent");
+	private final Blob scopedSessionId = Blob.fromHex("00112233445566778899aabbccddeeff");
+	private Blob scopedTaskId;
 
 	@BeforeAll
 	public void setup() throws Exception {
@@ -80,7 +86,8 @@ public class ValuesApiTest {
 
 		// Seed known data (each write persists one job under callerDID — the
 		// job-free test captures its baseline afterwards).
-		write("w/vGreeting", Strings.create("hello"));
+		Job taskJob = write("w/vGreeting", Strings.create("hello"));
+		scopedTaskId = taskJob.getID();
 		write("w/vBox", Maps.of(Strings.create("a"), CVMLong.create(1),
 								 Strings.create("b"), CVMLong.create(2)));
 		write("w/vSeq", Vectors.of(CVMLong.create(10), CVMLong.create(20), CVMLong.create(30)));
@@ -93,13 +100,36 @@ public class ValuesApiTest {
 			Strings.create("o1"), Maps.of(Strings.create("source"), Strings.create("nhs")),
 			Strings.create("o2"), Maps.of(Strings.create("source"), Strings.create("nhs")),
 			Strings.create("o3"), Maps.of(Strings.create("source"), Strings.create("gp"))));
+
+		// Seed all three execution-scoped stores without creating extra Jobs.
+		// In particular, task scratch is backed by the existing task Job record.
+		User scopedUser = TestServer.ENGINE.getVenueState().users().get(callerDID);
+		scopedUser.ensureAgent(scopedAgentId, Maps.empty(), null)
+			.ensureSession(scopedSessionId, callerDID);
+		RequestContext base = RequestContext.of(callerDID).withAgentId(scopedAgentId);
+		TestServer.ENGINE.jobs().invokeInternal(OP_WRITE, Maps.of(
+			Strings.create("path"), Strings.create("n/note"),
+			Strings.create("value"), Strings.create("agent-note")), base).join();
+		TestServer.ENGINE.jobs().invokeInternal(OP_WRITE, Maps.of(
+			Strings.create("path"), Strings.create("n/seq"),
+			Strings.create("value"), Vectors.of(CVMLong.create(1), CVMLong.create(2))),
+			base).join();
+		TestServer.ENGINE.jobs().invokeInternal(OP_WRITE, Maps.of(
+			Strings.create("path"), Strings.create("c/note"),
+			Strings.create("value"), Strings.create("session-note")),
+			base.withSessionId(scopedSessionId)).join();
+		TestServer.ENGINE.jobs().invokeInternal(OP_WRITE, Maps.of(
+			Strings.create("path"), Strings.create("t/note"),
+			Strings.create("value"), Strings.create("task-note")),
+			base.withTaskId(scopedTaskId)).join();
 	}
 
-	private void write(String path, ACell value) throws Exception {
+	private Job write(String path, ACell value) throws Exception {
 		Job job = client.invokeAndWait(OP_WRITE, Maps.of(
 			Strings.create("path"), Strings.create(path),
 			Strings.create("value"), value));
 		assertEquals(Status.COMPLETE, job.getStatus(), "seed write failed: " + job.getErrorMessage());
+		return job;
 	}
 
 	private HttpResponse<String> get(String route, String path) throws Exception {
@@ -331,10 +361,83 @@ public class ValuesApiTest {
 	}
 
 	@Test
-	public void testExecutionScopedNamespacesRejected() throws Exception {
-		assertEquals(400, get("read", "t/scratch").statusCode(), "t/ is job-scoped");
-		assertEquals(400, get("read", "n/agentwork").statusCode(), "n/ is agent-run scoped");
-		assertEquals(400, get("read", "c/session").statusCode(), "c/ is session scoped");
+	public void testExecutionScopedNamespacesRequireSelectors() throws Exception {
+		assertEquals(400, get("read", "t/scratch").statusCode());
+		assertEquals(400, get("read", "n/agentwork").statusCode());
+		assertEquals(400, get("read", "c/session").statusCode());
+	}
+
+	@Test
+	public void testReadAgentScopedValue() throws Exception {
+		HttpResponse<String> r = getQ("read", "n/note", "&agent=" + scopedAgentId);
+		assertEquals(200, r.statusCode(), r.body());
+		assertEquals(Strings.create("agent-note"), RT.getIn(JSON.parse(r.body()), "value"));
+		assertEquals("private, no-store",
+			r.headers().firstValue("Cache-Control").orElse(null));
+	}
+
+	@Test
+	public void testReadTaskScopedValueFromJobStore() throws Exception {
+		HttpResponse<String> r = getQ("read", "t/note",
+			"&agent=" + scopedAgentId + "&task=" + scopedTaskId.toHexString());
+		assertEquals(200, r.statusCode(), r.body());
+		assertEquals(Strings.create("task-note"), RT.getIn(JSON.parse(r.body()), "value"));
+
+		// The shorthand and physical path are views of one value, not duplicated
+		// task-row and Job-row stores.
+		HttpResponse<String> physical = get("read",
+			"j/" + scopedTaskId.toHexString() + "/temp/note");
+		assertEquals(200, physical.statusCode(), physical.body());
+		assertEquals(Strings.create("task-note"), RT.getIn(JSON.parse(physical.body()), "value"));
+	}
+
+	@Test
+	public void testReadSessionScopedValue() throws Exception {
+		HttpResponse<String> r = getQ("read", "c/note",
+			"&agent=" + scopedAgentId + "&session=" + scopedSessionId.toHexString());
+		assertEquals(200, r.statusCode(), r.body());
+		assertEquals(Strings.create("session-note"), RT.getIn(JSON.parse(r.body()), "value"));
+	}
+
+	@Test
+	public void testAllReadAccessorsAcceptExplicitScopes() throws Exception {
+		String agent = "&agent=" + scopedAgentId;
+		String task = agent + "&task=" + scopedTaskId.toHexString();
+		String session = agent + "&session=" + scopedSessionId.toHexString();
+
+		assertEquals(200, getQ("list", "t", task).statusCode());
+		assertEquals(200, getQ("slice", "n/seq", agent).statusCode());
+		assertEquals(200, getQ("inspect", "c/note", session).statusCode());
+		assertEquals(200, getQ("aggregate", "c", session).statusCode());
+		assertEquals(200, getQ("count", "t", task).statusCode());
+	}
+
+	@Test
+	public void testFullAgentDIDSelectsOwnerNamespace() throws Exception {
+		AString agentDID = Principals.agentDID(callerDID, scopedAgentId);
+		HttpResponse<String> r = getQ("read", "n/note",
+			"&agent=" + URLEncoder.encode(agentDID.toString(), StandardCharsets.UTF_8));
+		assertEquals(200, r.statusCode(), r.body());
+		assertEquals(Strings.create("agent-note"), RT.getIn(JSON.parse(r.body()), "value"));
+	}
+
+	@Test
+	public void testForeignAgentDIDIsAuthorisedAsExpandedResource() throws Exception {
+		AString foreignOwner = UCAN.toDIDKey(AKeyPair.generate().getAccountKey());
+		AString foreignAgent = Principals.agentDID(foreignOwner, Strings.create("other"));
+		HttpResponse<String> r = getQ("read", "n/does-not-exist",
+			"&agent=" + URLEncoder.encode(foreignAgent.toString(), StandardCharsets.UTF_8));
+		assertEquals(403, r.statusCode(), r.body());
+	}
+
+	@Test
+	public void testScopedSelectorsRejectContradictions() throws Exception {
+		assertEquals(400, getQ("read", "n/note",
+			"&agent=" + scopedAgentId + "&task=" + scopedTaskId.toHexString()).statusCode());
+		assertEquals(400, getQ("read", "w/vGreeting",
+			"&agent=" + scopedAgentId).statusCode());
+		assertEquals(400, getQ("read", "t/note",
+			"&agent=" + scopedAgentId + "&task=not-hex").statusCode());
 	}
 
 	// ===================== fields projection (#191) =====================

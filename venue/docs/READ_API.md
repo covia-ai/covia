@@ -348,13 +348,22 @@ state for that DID. If the DID is not hosted here the result is ordinary absence
 venue (Principle 5). Cross-**venue** reads remain a federation concern (grid ops),
 not part of this surface.
 
-The execution-scoped virtual namespaces are **rejected** — they are only meaningful
-inside a running job/agent and have no caller context on a plain GET:
+Execution-scoped virtual namespaces use explicit query selectors:
 
-- `t/` — job-scoped scratch (needs a `jobId`)
-- `n/`, `c/` — agent-run / session scoped (need `agentId` / `sessionId`)
+- `n/<path>&agent=<agent>` — agent scratch. `agent` is either a bare id under
+  the authenticated caller's user namespace or a full agent DID.
+- `t/<path>&agent=<agent>&task=<taskId>` — task scratch. A task is its
+  `agent:request` Job, so this reads the single durable
+  `j/<taskId>/temp/<path>` backing value.
+- `c/<path>&agent=<agent>&session=<sessionId>` — session scratch at
+  `g/<agent>/sessions/<sessionId>/c/<path>`.
 
-Rejected namespace → **400** with a message naming the namespace.
+The handler expands the shorthand to that exact DID-qualified persistent
+resource **before** the capability check; it never installs caller-supplied ids
+onto the authenticated `RequestContext`. A full foreign agent DID therefore
+requires a UCAN proof covering the expanded resource. Missing, malformed, or
+contradictory selectors are **400**. Scoped responses carry
+`Cache-Control: private, no-store`.
 
 **Secrets (`s/`) — encrypted values only; extract stays gated.** A `s/<name>` read
 returns the **encrypted** stored value, gated by `crud/read`. That is safe to
@@ -371,7 +380,7 @@ restricting) is deferred to a **separate later review**.
 |------|------|
 | 200 | Success, **including** absence (`{exists:false}`) and truncation — parity with the ops |
 | 304 | `read` only: `If-None-Match` matches the value's CAD3 hash (conditional read) |
-| 400 | Malformed `path`/params, or an execution-scoped namespace (`t/`, `n/`, `c/`) |
+| 400 | Malformed `path`/params or missing/contradictory execution-scope selectors |
 | 401 | Authentication required (no token, public access disabled) |
 | 403 | Capability denied for the requested path |
 
