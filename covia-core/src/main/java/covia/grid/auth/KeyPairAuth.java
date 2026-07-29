@@ -17,7 +17,8 @@ import convex.auth.jwt.JWT;
  * <p>Generates a fresh, short-lived JWT for each request. The JWT is signed
  * with the provided key pair and contains:
  * <ul>
- *   <li>{@code sub} — a {@code did:key} derived from the public key</li>
+ *   <li>{@code sub} — normally the key's {@code did:key}, or a stable named
+ *       DID whose venue-owned authentication record admits this key</li>
  *   <li>{@code iss} — same as {@code sub} (self-issued)</li>
  *   <li>{@code aud} — the target venue's DID, when configured (RECOMMENDED:
  *       binds the token to one venue, so a captured JWT cannot be replayed at
@@ -37,6 +38,8 @@ class KeyPairAuth extends VenueAuth {
 	private final AKeyPair keyPair;
 	private final long tokenLifetime;
 	private final String didKey;
+	/** Identity asserted in {@code iss}/{@code sub}; normally {@link #didKey}. */
+	private final String subject;
 	/** Target venue DID for the {@code aud} claim; null = no audience binding. */
 	private final String audience;
 
@@ -49,6 +52,15 @@ class KeyPairAuth extends VenueAuth {
 	}
 
 	KeyPairAuth(AKeyPair keyPair, long tokenLifetime, String audience) {
+		this(keyPair, null, tokenLifetime, audience);
+	}
+
+	/**
+	 * Creates a key-pair authenticator whose stable subject may differ from the
+	 * signing key's {@code did:key}. The target venue must have registered this
+	 * public key as an authentication method for the asserted subject.
+	 */
+	KeyPairAuth(AKeyPair keyPair, String subject, long tokenLifetime, String audience) {
 		if (keyPair == null) {
 			throw new IllegalArgumentException("Key pair must not be null");
 		}
@@ -61,6 +73,7 @@ class KeyPairAuth extends VenueAuth {
 		// Pre-compute the did:key from the public key
 		AString multikey = Multikey.encodePublicKey(keyPair.getAccountKey());
 		this.didKey = "did:key:" + multikey;
+		this.subject = (subject != null) ? subject : didKey;
 	}
 
 	@Override
@@ -75,7 +88,7 @@ class KeyPairAuth extends VenueAuth {
 
 	/**
 	 * The ONE place the claim set exists — {@code sub}/{@code iss} = the
-	 * key's did:key, {@code aud} when configured, {@code iat} now,
+	 * configured subject, {@code aud} when configured, {@code iat} now,
 	 * {@code exp} now + lifetime — signed with {@link JWT#signPublic}.
 	 * Shared by {@link #apply} and {@link #mintToken} so a minted token is
 	 * exactly what a request would carry, by construction.
@@ -83,8 +96,8 @@ class KeyPairAuth extends VenueAuth {
 	private AString buildToken() {
 		long nowSecs = System.currentTimeMillis() / 1000;
 		AMap<AString, ACell> claims = Maps.of(
-			JWT.SUB, Strings.create(didKey),
-			JWT.ISS, Strings.create(didKey),
+			JWT.SUB, Strings.create(subject),
+			JWT.ISS, Strings.create(subject),
 			JWT.IAT, nowSecs,
 			JWT.EXP, nowSecs + tokenLifetime
 		);
@@ -93,11 +106,11 @@ class KeyPairAuth extends VenueAuth {
 	}
 
 	/**
-	 * Get the DID (did:key) for this key pair.
-	 * @return The did:key string
+	 * Get the identity asserted by this authentication strategy.
+	 * @return the stable subject DID
 	 */
 	@Override
 	public String getDID() {
-		return didKey;
+		return subject;
 	}
 }

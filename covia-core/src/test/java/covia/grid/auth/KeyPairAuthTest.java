@@ -70,6 +70,45 @@ public class KeyPairAuthTest {
 		assertThrows(IllegalArgumentException.class, () -> VenueAuth.keyPair(kp, null, -5));
 	}
 
+	@Test
+	public void testNamedUserClaimsAndIdentity() {
+		AKeyPair kp = AKeyPair.generate();
+		String subject = "did:web:venue.example:u:alice";
+		String audience = "did:key:z6MkExampleVenueDID";
+		VenueAuth auth = VenueAuth.namedKeyPair(kp, subject, audience);
+
+		AMap<AString, ACell> claims = claimsFor(auth);
+		assertEquals(Strings.create(subject), RT.getIn(claims, "sub"));
+		assertEquals(Strings.create(subject), RT.getIn(claims, "iss"));
+		assertEquals(Strings.create(audience), RT.getIn(claims, "aud"));
+		assertEquals(subject, auth.getDID());
+
+		AMap<AString, ACell> minted =
+			JWT.verifyPublic(Strings.create(auth.mintToken()));
+		assertNotNull(minted);
+		assertEquals(Strings.create(subject), RT.getIn(minted, "sub"));
+		assertEquals(Strings.create(subject), RT.getIn(minted, "iss"));
+		assertEquals(Strings.create(audience), RT.getIn(minted, "aud"));
+	}
+
+	@Test
+	public void testNamedUserRequiresSubjectAndAudienceDids() {
+		AKeyPair kp = AKeyPair.generate();
+		String subject = "did:web:venue.example:u:alice";
+		String audience = "did:key:z6MkExampleVenueDID";
+
+		assertThrows(IllegalArgumentException.class,
+			() -> VenueAuth.namedKeyPair(kp, null, audience));
+		assertThrows(IllegalArgumentException.class,
+			() -> VenueAuth.namedKeyPair(kp, "alice", audience));
+		assertThrows(IllegalArgumentException.class,
+			() -> VenueAuth.namedKeyPair(kp, subject, null));
+		assertThrows(IllegalArgumentException.class,
+			() -> VenueAuth.namedKeyPair(kp, subject, "venue.example"));
+		assertThrows(IllegalArgumentException.class,
+			() -> VenueAuth.namedKeyPair(kp, subject, audience, 0));
+	}
+
 	// ========== mintToken (#219) ==========
 
 	@Test

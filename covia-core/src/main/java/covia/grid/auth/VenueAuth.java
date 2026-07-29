@@ -2,6 +2,7 @@ package covia.grid.auth;
 
 import java.net.http.HttpRequest;
 
+import convex.auth.did.DID;
 import convex.core.crypto.AKeyPair;
 
 /**
@@ -16,6 +17,8 @@ import convex.core.crypto.AKeyPair;
  *   <li>{@link #none()} — no authentication (default)</li>
  *   <li>{@link #bearer(String)} — static bearer token</li>
  *   <li>{@link #keyPair(AKeyPair)} — self-issued EdDSA JWT per request</li>
+ *   <li>{@link #namedKeyPair(AKeyPair, String, String)} — self-issued named
+ *       identity JWT using a registered public key</li>
  * </ul>
  *
  * <p>Custom implementations can be created by extending this class:
@@ -138,6 +141,54 @@ public abstract class VenueAuth {
 	 */
 	public static VenueAuth keyPair(AKeyPair keyPair, String audienceDID, long lifetimeSeconds) {
 		return new KeyPairAuth(keyPair, lifetimeSeconds, audienceDID);
+	}
+
+	/**
+	 * Self-issued EdDSA authentication as a stable named DID using one of that
+	 * identity's registered public keys.
+	 *
+	 * <p>The token carries {@code iss == sub == subjectDID}, is signed by
+	 * {@code keyPair}, and is audience-bound to {@code audienceDID}. The target
+	 * venue admits it only when that public key is active in the named user's
+	 * venue-owned authentication record. The private key remains client-side.
+	 *
+	 * @param keyPair registered Ed25519 authentication key
+	 * @param subjectDID stable named identity asserted in {@code iss}/{@code sub}
+	 * @param audienceDID target venue DID
+	 * @return a named-user key-pair authentication strategy
+	 */
+	public static VenueAuth namedKeyPair(AKeyPair keyPair, String subjectDID,
+			String audienceDID) {
+		return namedKeyPair(keyPair, subjectDID, audienceDID,
+			KeyPairAuth.DEFAULT_TOKEN_LIFETIME);
+	}
+
+	/**
+	 * As {@link #namedKeyPair(AKeyPair, String, String)}, with an explicit token
+	 * lifetime. Named credentials always require an audience: they assert a
+	 * venue-managed identity and must not become generic bearer credentials.
+	 *
+	 * @param keyPair registered Ed25519 authentication key
+	 * @param subjectDID stable named identity asserted in {@code iss}/{@code sub}
+	 * @param audienceDID target venue DID
+	 * @param lifetimeSeconds token validity window in seconds
+	 * @return a named-user key-pair authentication strategy
+	 */
+	public static VenueAuth namedKeyPair(AKeyPair keyPair, String subjectDID,
+			String audienceDID, long lifetimeSeconds) {
+		requireDID(subjectDID, "subjectDID");
+		requireDID(audienceDID, "audienceDID");
+		return new KeyPairAuth(keyPair, subjectDID, lifetimeSeconds, audienceDID);
+	}
+
+	private static void requireDID(String value, String label) {
+		try {
+			if (value == null || value.isBlank() || DID.fromString(value) == null) {
+				throw new IllegalArgumentException(label + " must be a valid DID");
+			}
+		} catch (RuntimeException e) {
+			throw new IllegalArgumentException(label + " must be a DID");
+		}
 	}
 
 	/**

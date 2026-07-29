@@ -269,6 +269,19 @@ bindings; self-management is allowed, while cross-user changes require
 `user/authentication-manage` on `<venueDID>/users`. Revocation retains an
 audit tombstone and takes effect on the next request.
 
+Java clients use the same key without hand-building JWTs:
+
+```java
+VenueAuth auth = VenueAuth.namedKeyPair(
+    keyPair,
+    "did:web:venue.example:u:alice",
+    venueDID);
+Venue venue = Grid.connect("https://venue.example", auth);
+```
+
+The strategy signs a fresh short-lived, audience-bound token for each request;
+`mintToken()` is available for transports that need the raw bearer credential.
+
 Registering a full external DID admits that identity to use the venue; it does
 not transfer control of the DID to the venue. A self-sovereign user signs their
 own UCAN roots. For username-created

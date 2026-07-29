@@ -91,8 +91,10 @@ public class NamedUserAuthTest {
 
 	@Test
 	void registeredKeyAuthenticatesAsStableNamedDid() throws Exception {
-		assertAccepted(namedToken(aliceKey, aliceDID, aliceDID,
-			server.getEngine().getDIDString()));
+		VenueAuth auth = VenueAuth.namedKeyPair(
+			aliceKey, aliceDID.toString(), server.getEngine().getDIDString().toString());
+		assertEquals(aliceDID.toString(), auth.getDID());
+		assertAccepted(client(auth));
 	}
 
 	@Test
@@ -172,6 +174,11 @@ public class NamedUserAuthTest {
 		assertNotNull(job);
 	}
 
+	private void assertAccepted(VenueHTTP client) throws Exception {
+		Job job = client.invokeAndWait(OP_ECHO, Maps.of(Fields.VALUE, "ok"));
+		assertNotNull(job);
+	}
+
 	private void assertRejected(String token) {
 		Throwable failure = assertThrows(Throwable.class,
 			() -> client(token).invokeAndWait(OP_ECHO, Maps.of(Fields.VALUE, "denied")));
@@ -183,8 +190,12 @@ public class NamedUserAuthTest {
 	}
 
 	private VenueHTTP client(String token) {
+		return client(VenueAuth.bearer(token));
+	}
+
+	private VenueHTTP client(VenueAuth auth) {
 		VenueHTTP client = VenueHTTP.create(
-			URI.create("http://localhost:" + server.port()), VenueAuth.bearer(token));
+			URI.create("http://localhost:" + server.port()), auth);
 		client.setTimeout(5000);
 		return client;
 	}
