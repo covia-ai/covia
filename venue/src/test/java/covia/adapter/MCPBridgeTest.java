@@ -385,15 +385,17 @@ public class MCPBridgeTest {
 	@Test
 	public void testResultExtraction() {
 		// structuredContent wins when present
-		CallToolResult r1 = new CallToolResult(List.of(new TextContent("ignored")),
+		CallToolResult r1 = new CallToolResult(List.of(TextContent.builder("ignored").build()),
 			null, java.util.Map.of("a", 1L), null);
 		ACell v1 = MCPAdapter.successValue(r1);
 		assertEquals(RT.cvm(1L), RT.getIn(v1, "a"));
 		// text-only results are preserved, not dropped
-		CallToolResult r2 = new CallToolResult(List.of(new TextContent("hello")), null, null, null);
+		CallToolResult r2 = new CallToolResult(List.of(TextContent.builder("hello").build()), null, null, null);
 		assertEquals("hello", MCPAdapter.successValue(r2).toString());
 		// multi-block → vector of strings
-		CallToolResult r3 = new CallToolResult(List.of(new TextContent("a"), new TextContent("b")),
+		CallToolResult r3 = new CallToolResult(List.of(
+			TextContent.builder("a").build(),
+			TextContent.builder("b").build()),
 			null, null, null);
 		assertEquals(2, RT.ensureVector(MCPAdapter.successValue(r3)).count());
 		// nothing at all → null
@@ -404,14 +406,17 @@ public class MCPBridgeTest {
 	@Test
 	public void testErrorTextExtraction() {
 		// not an error (isError null or false) → null
-		assertNull(MCPAdapter.errorText(new CallToolResult(List.of(new TextContent("x")), null, null, null)));
-		assertNull(MCPAdapter.errorText(new CallToolResult(List.of(new TextContent("x")), false, null, null)));
+		assertNull(MCPAdapter.errorText(new CallToolResult(
+			List.of(TextContent.builder("x").build()), null, null, null)));
+		assertNull(MCPAdapter.errorText(new CallToolResult(
+			List.of(TextContent.builder("x").build()), false, null, null)));
 		// structuredContent.message preferred
 		assertEquals("nope", MCPAdapter.errorText(new CallToolResult(
-			List.of(new TextContent("fallback")), true, java.util.Map.of("message", "nope"), null)));
+			List.of(TextContent.builder("fallback").build()),
+			true, java.util.Map.of("message", "nope"), null)));
 		// text content fallback
 		assertEquals("boom", MCPAdapter.errorText(new CallToolResult(
-			List.of(new TextContent("boom")), true, null, null)));
+			List.of(TextContent.builder("boom").build()), true, null, null)));
 		// a bare error still says something useful
 		assertTrue(MCPAdapter.errorText(new CallToolResult(List.of(), true, null, null))
 			.contains("no error detail"));

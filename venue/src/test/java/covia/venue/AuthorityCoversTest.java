@@ -23,7 +23,7 @@ public class AuthorityCoversTest {
 	private static final Engine ENGINE = TestEngine.ENGINE;
 
 	private static RequestContext withCaps(RequestContext ctx, ACell... grants) {
-		return ctx.withCaps(Vectors.of(grants));
+		return ctx.withCaps(Vectors.create(grants));
 	}
 
 	@Test

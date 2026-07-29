@@ -1675,6 +1675,12 @@ public class CoviaAPI extends ACoviaAPI {
 			tags = { "DID"},
 			summary = "Get the DID document for an asset", 
 			operationId = "getAssetDIDDocument",
+			pathParams = {
+					@OpenApiParam(
+							name = "id",
+							description = "Asset identifier",
+							required = true)
+			},
 			responses = {
 					@OpenApiResponse(
 							status = "200", 

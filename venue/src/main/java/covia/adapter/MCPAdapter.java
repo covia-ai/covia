@@ -325,8 +325,7 @@ public class MCPAdapter extends AAdapter {
 		}
 
 		@SuppressWarnings("unchecked")
-		CallToolRequest request = CallToolRequest.builder()
-			.name(toolName)
+		CallToolRequest request = CallToolRequest.builder(toolName)
 			.arguments((Map<String,Object>)JSON.json(RT.castMap(input)))
 			.build();
 

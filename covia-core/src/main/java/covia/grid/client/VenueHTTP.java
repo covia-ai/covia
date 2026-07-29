@@ -728,7 +728,7 @@ public class VenueHTTP extends Venue {
 	 * <p><b>Timeout semantics:</b> This is a <em>client-side</em> polling timeout only.
 	 * The remote job continues running on the venue regardless of whether this
 	 * client times out. After a timeout, callers can re-acquire the latest job
-	 * status by calling {@link #getJobStatus(AString)} with the job ID — the job
+	 * status by calling {@link #getJobStatus(Blob)} with the job ID — the job
 	 * may have completed, failed, or still be running.
 	 *
 	 * @param job Any Job, presumably not yet finished
@@ -746,7 +746,7 @@ public class VenueHTTP extends Venue {
 	 * <p><b>Timeout semantics:</b> This is a <em>client-side</em> polling timeout only.
 	 * The remote job continues running on the venue regardless of whether this
 	 * client times out. After a timeout, callers can re-acquire the latest job
-	 * status by calling {@link #getJobStatus(AString)} with the job ID — the job
+	 * status by calling {@link #getJobStatus(Blob)} with the job ID — the job
 	 * may have completed, failed, or still be running.
 	 *
 	 * @param job Any Job, presumably not yet finished
