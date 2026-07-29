@@ -8,6 +8,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-30
+
 ### Added
 - HITL requests (COG-16) — typed asks, echo-consent grants over the per-user `h/` inbox; `hitl` skill
 - `Hitl` builders (covia-core)
@@ -289,7 +291,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.6.0...develop
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.7.0...develop
+[0.7.0]: https://github.com/covia-ai/covia/compare/0.6.0...0.7.0
 [0.6.0]: https://github.com/covia-ai/covia/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/covia-ai/covia/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/covia-ai/covia/compare/0.3.0...0.4.0
