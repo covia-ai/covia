@@ -222,7 +222,7 @@ A venue exposes the same capabilities over multiple protocols:
 |----------|---------|---------|
 | TypeScript / JavaScript | [`@covia/covia-sdk`](https://www.npmjs.com/package/@covia/covia-sdk) | `npm install @covia/covia-sdk` |
 | Python | [`covia`](https://pypi.org/project/covia/) | `pip install covia` |
-| Java | `ai.covia:covia-core` | build from source (Maven artifact coming — see [`DX_PLAN.md`](DX_PLAN.md)) |
+| Java | [`ai.covia:covia-core`](https://central.sonatype.com/artifact/ai.covia/covia-core) | Maven Central |
 
 Each SDK can connect by URL, DNS name, or DID, and supports Ed25519 keypair and bearer authentication. See the [SDK docs](https://docs.covia.ai/docs/user-guide/sdk/) for the full surface (operations, jobs, assets, agents, workspace, secrets, UCAN).
 

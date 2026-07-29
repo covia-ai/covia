@@ -212,7 +212,8 @@ This ensures all tests pass and the build is ready for deployment.
 
 ### Snapshot Releases
 
-Snapshot builds are automatically created on every push to the `develop` branch. These are available at:
+Snapshot builds are automatically created after the full test workflow passes
+for a push to the `develop` branch. These are available at:
 
 - [latest-snapshot](https://github.com/covia-ai/covia/releases/tag/latest-snapshot)
 
@@ -331,6 +332,7 @@ publishes them to Maven Central. Then verify at
 Both snapshot and stable releases include:
 
 - `covia.jar` - The executable venue server JAR with all dependencies
+- `covia.jar.sha256` - SHA-256 checksum for the executable JAR
 
 ### Download Links
 

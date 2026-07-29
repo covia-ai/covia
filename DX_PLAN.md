@@ -2,7 +2,7 @@
 
 This is our shared, public roadmap for making Covia a joy to **adopt, build on, self-host, and contribute to**. It's deliberately open: if something here resonates, pick it up; if you think we've got a priority wrong, [open a discussion](https://github.com/orgs/covia-ai/discussions) or say so on [Discord](https://discord.gg/fywdrKd8QT). Nothing in this document is set in stone — it's a conversation.
 
-> **TL;DR for the impatient:** the Covia *engine* is in good shape — clean adapter architecture, a real lattice foundation, multi-protocol surface (REST / MCP / A2A / DID), ~1,300 passing tests gating every PR, and published TypeScript and Python SDKs. What we're focused on now is the *experience around* that engine: getting a newcomer from `git clone` to "I ran my first federated operation" in minutes, and shipping current, coherently-versioned artifacts.
+> **TL;DR for the impatient:** the Covia *engine* is in good shape — clean adapter architecture, a real lattice foundation, multi-protocol surface (REST / MCP / A2A / DID), 2,000+ passing tests gating every PR, and published Java, TypeScript, and Python SDKs. What we're focused on now is the *experience around* that engine: getting a newcomer from `git clone` to "I ran my first federated operation" in minutes, and shipping current, coherently-versioned artifacts.
 
 ---
 
@@ -31,14 +31,14 @@ An honest snapshot, so newcomers know what to expect and contributors know where
 | Area | State | Notes |
 |------|-------|-------|
 | Core engine & adapters | 💪 Solid | Clean `AAdapter` abstraction, ~20 adapters, lattice-backed state |
-| Test suite (engine) | 💪 Solid | ~1,300 tests, fast in-JVM parallel run |
+| Test suite (engine) | 💪 Solid | 2,000+ tests, fast in-JVM parallel run |
 | REST API reference docs | 💪 Solid | Comprehensive, hand-written, examples throughout |
 | TypeScript SDK | 💪 Solid | Published to npm, typed, tested |
 | Python SDK | 🔨 Good (alpha) | Published to PyPI, async mirror, well documented |
 | README / first impression | ✅ Done | Rewritten for developers: quickstart, badges, architecture, SDK examples |
 | Onboarding / quickstart (docs) | ✅ Done | README quickstart and the docs "Getting Started" page both go zero-to-first-operation |
-| Published artifacts up to date | ✅ Done | Platform `0.1.0` (12 Jun 2026) on GitHub releases + `ghcr :stable`/`:0.1.0`; TS SDK 1.5.0 on npm; Python SDK 0.2.0 on PyPI |
-| Build reproducibility | ✅ Done | Depends on released Convex 0.8.5 from Maven Central; a clean clone builds in one command |
+| Published artifacts up to date | ✅ Done | Platform `0.6.0` on GitHub, GHCR, and Maven Central; TS SDK 1.7.3 on npm; Python SDK 0.6.0 on PyPI |
+| Build reproducibility | ✅ Done | Depends on released Convex 0.8.10 from Maven Central; a clean clone builds in one command |
 | CI quality gate | ✅ Done | `test.yml` runs the full reactor (with tests) on every PR and push to `develop`/`master`; its first run caught three latent flaky tests |
 | Client/auth test coverage | 🔨 In progress | `VenueHTTP` has contract tests against a real venue; dedicated auth-strategy tests remain |
 | Community scaffolding | 🔨 In progress | `CONTRIBUTING`, `SECURITY`, `CHANGELOG`, and issue/PR templates in place; a governance note remains |
@@ -68,14 +68,14 @@ _Goal: every clone builds reproducibly, every PR is validated automatically, and
 
 - [x] **Add a CI quality gate.** `.github/workflows/test.yml` runs `mvn clean install` (full reactor, with tests) on every pull request and on pushes to `develop`/`master`. Running and green; its first run surfaced three latent flaky tests (now fixed) — exactly the job it's there to do.
 - [x] **Make the gate a required check and fix the build badge.** Branch protection on `develop` and `master` now requires the `build-and-test` check for merges (admin direct pushes exempt), and the README "build" badge points at the `Test` workflow.
-- [x] **Make the build reproducible.** Covia now depends on released **Convex 0.8.7** from Maven Central — a clean clone builds with `mvn clean install`, no Convex source build. The Convex-from-source steps are gone from all CI workflows (saving ~2 minutes per run). Tracking unreleased Convex capabilities is now a deliberate, temporary act: build Convex locally and point `convex.version` at its snapshot, restoring the release pin before merging. See [Convex ↔ Covia dependency](#a-note-on-the-convex-dependency).
+- [x] **Make the build reproducible.** Covia now depends on released **Convex 0.8.10** from Maven Central — a clean clone builds with `mvn clean install`, no Convex source build. CI conditionally builds Convex from source only when `convex.version` deliberately names a snapshot. Restore a released pin before shipping. See [Convex ↔ Covia dependency](#a-note-on-the-convex-dependency).
 - [x] **Add a `CHANGELOG.md`** — in Keep a Changelog format. Keep it current per release, and make the release-notes link point at it for real.
-- [x] **Coherent versioning across the product — and ship a current artifact.** The versioning story is agreed (see _Resolved_ under _Open questions_) and shipped: **platform `0.1.0`** released 12 Jun 2026 (GitHub `latest`, `ghcr :stable`/`:0.1.0`), TypeScript SDK **1.5.0** on npm, Python SDK **0.2.0** on PyPI — `pip install covia` works. Remaining follow-ons live elsewhere: a docs compatibility matrix (SDK ↔ platform) under _Consolidate the SDK story_, and flipping the quickstart's example venues to the stable tier (deferred — dev venues are fine for now).
-- [x] **Decouple the public Docker image from deployment.** `publish-docker.yml` is now the single source of `ghcr.io/covia-ai/covia` tags (`:latest` + `:<sha>` on every `develop` push); the Azure/EC2 deploy workflows just pull the published image after a successful publish.
+- [x] **Coherent versioning across the product — and ship a current artifact.** The versioning story is agreed (see _Resolved_ under _Open questions_) and shipped: **platform `0.6.0`** on GitHub, GHCR, and Maven Central, TypeScript SDK **1.7.3** on npm, and Python SDK **0.6.0** on PyPI. Remaining follow-ons live under _Consolidate the SDK story_.
+- [x] **Decouple the public Docker image from deployment.** `publish-docker.yml` is the single source of `ghcr.io/covia-ai/covia` tags. It publishes the exact commit that passed the full `Test` workflow; Azure/EC2/GCP deploy only after that publish succeeds.
 - [x] **Reconcile documentation drift.** `BUILD.md` now lists `covia-core`, uses version-agnostic JAR names, and documents the released-Convex dependency (with the snapshot-override escape hatch); `deploy/README.md`'s truncated Caddy command and leaked local path are fixed (JARs now download from GitHub releases). JDK facts are stated consistently (build target 21; published image runs 25) — picking a single baseline remains an _Open question_.
 - [ ] **Test the client-side auth strategies.** `VenueHTTP` now has contract tests against a real venue (`VenueHTTPTest`); the remaining gap is dedicated coverage for the auth strategies (`NoAuth`, `BearerAuth`, `KeyPairAuth`, `LocalAuth`) — signing round-trips and failure paths against a real `VenueServer`.
 - [x] **Add `Dependabot` and dependency/code scanning.** Dependabot watches Maven and GitHub Actions weekly (Convex excluded — managed manually); CodeQL analyses `develop` pushes and runs weekly.
-- [ ] **Consolidate the SDK story.** We have more than one Python client in the workspace; let's make the supported SDKs obvious and deprecate or redirect the rest. Give the Java client library (`covia-core`) a README and a published artifact so a third party can actually depend on it — and when it's published standalone, license it **Apache-2.0** like the other SDK libraries (see _Resolved_ under _Open questions_). Add a compatibility matrix to the docs mapping SDK versions to the platform versions they support (current: platform 0.1.0 ↔ TS SDK 1.5.0 ↔ Python SDK 0.2.0). The Python SDK is now genuinely on PyPI (`pip install covia` → 0.2.0).
+- [ ] **Consolidate the SDK story.** Make the supported SDKs obvious and deprecate or redirect older clients. `covia-core` is now published to Maven Central; it still needs a focused client README and an explicit SDK-side licensing decision. Keep the docs compatibility matrix current (platform 0.6.0 ↔ TS SDK 1.7.3 ↔ Python SDK 0.6.0).
 
 ### Milestone 3 — Confident Self-Hosting & Ecosystem
 
@@ -110,7 +110,7 @@ Related: the platform is licensed under the **Eclipse Public License 2.0** (inhe
 
 ## A note on the Convex dependency
 
-Covia is built on the [Convex](https://github.com/Convex-Dev/convex) lattice platform and tends to track its latest capabilities. Covia depends on **released Convex artifacts from Maven Central** (currently 0.8.5), so a clean clone always builds. When development genuinely needs an unreleased Convex capability, the coupling is deliberate and temporary: build Convex from source, point `convex.version` at its snapshot locally, and restore the release pin (bumping to the next Convex release) before the work merges.
+Covia is built on the [Convex](https://github.com/Convex-Dev/convex) lattice platform and tends to track its latest capabilities. Covia depends on **released Convex artifacts from Maven Central** (currently 0.8.10), so a clean clone always builds. When development genuinely needs an unreleased Convex capability, the coupling is deliberate and temporary: build Convex from source, point `convex.version` at its snapshot locally, and restore the release pin (bumping to the next Convex release) before the work merges.
 
 ---
 
@@ -131,5 +131,5 @@ These are genuine forks in the road where community input would help:
 ### Resolved
 
 - **License** _(resolved Jun 2026)_: the platform (this repository) stays **EPL-2.0**; the SDK libraries (TypeScript and Python) are **Apache-2.0**, so client code can embed them without licence friction. If `covia-core` is published as a standalone client artifact, it should follow the SDK side of that line — tracked under _Consolidate the SDK story_.
-- **Versioning** _(resolved Jun 2026)_: independent SemVer per artifact; the **platform version names the product generation** (next: `0.1.0`), and the docs carry a compatibility matrix mapping SDK versions to the platform versions they support.
+- **Versioning** _(resolved Jun 2026)_: independent SemVer per artifact; the **platform version names the product generation**, and the docs carry a compatibility matrix mapping SDK versions to the platform versions they support.
 - **Java baseline** _(resolved Jun 2026)_: source targets **Java 21** (so client libraries stay broadly consumable); published container images run the **current Java LTS** (25 today).

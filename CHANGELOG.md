@@ -20,9 +20,22 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Authenticated callers get public-user access (#254)
 - Archive adapter (zip/jar); `file` reads see into archives via `x.zip!/entry`
 - Orchestration `["array", …]` binding — an array whose elements reference prior steps (#281)
+- Bounded orchestration `foreach` steps
+- Structural agent output handoffs via `go.outputPath`, with direct output when
+  no path is configured
+- Job-free reads of execution-scoped task/session state
+- Named venue-user authentication keys with stable user identity, rotation,
+  revocation, and short-lived client credential minting
+- MCP discovery metadata describing whether authentication is required and
+  which Covia authentication mechanism clients should use
+- Configurable venue root page content, redirect, or static file for
+  operator-branded public entry points
+- Config validation with warnings for unknown fields by default and opt-in
+  strict rejection; malformed known fields always fail startup
 
 ### Changed
-- Dependency bumps — Convex 0.8.10, LangChain4j 1.18.0, Logback 1.6.0, A2A 1.1.0.Final
+- Dependency bumps — Convex 0.8.10, LangChain4j 1.18.1, Logback 1.6.1,
+  JUnit 6.1.2, A2A 1.1.0.Final
 - `ucan:issue` and `hitl:respond` refuse agent contexts — agents hold no granting authority (COG-17)
 - Private Network Access defaults on for loopback-bound venues (#286)
 - MCP tool schemas are type-less, not union arrays — strict client SDKs connect (#275)
@@ -34,6 +47,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Default agent tool pack trimmed to read-only (#60)
 - Bare UCAN grant resources mean the issuer's own namespace
 - Agent context assembly is prompt-cache-friendly
+- Task scratch state uses the owning job record rather than a parallel task
+  store
+- Persistent venue stores can be opened by the operator and handed into venue
+  startup, with transactional ownership and failure cleanup
+- MCP tool declarations expose operation safety annotations
 
 ### Removed
 - Wire self-attenuation on `/invoke` — presented proofs are additive-only (#131)
@@ -50,6 +68,15 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - `a/<hash>` references resolve without a leading slash
 - Store unlocked when engine construction fails
 - `agent:completeTask`/`failTask` tolerate cross-thread lattice read lag (#214)
+- MCP sessions are bound to the authenticated creator and cannot be attached
+  to or terminated by another allowed principal
+- MCP-supplied UCAN proofs are transport-only and are never persisted in job
+  input
+- Revoked named-user keys immediately lose access, including to existing MCP
+  session identifiers; rotated keys for the same user retain the stable subject
+- MCP configuration validates supported fields and DID allowlist entries
+- The public Docker image is invoked after publishing to verify anonymous pull
+  and a real operation round trip
 
 ## [0.6.0] - 2026-07-17
 
@@ -262,7 +289,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.5.0...develop
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.6.0...develop
+[0.6.0]: https://github.com/covia-ai/covia/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/covia-ai/covia/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/covia-ai/covia/compare/0.3.0...0.4.0
 [0.3.0]: https://github.com/covia-ai/covia/compare/0.2.0...0.3.0
