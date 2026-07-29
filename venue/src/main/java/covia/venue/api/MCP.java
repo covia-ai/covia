@@ -64,6 +64,13 @@ public class MCP extends McpServer {
 	private final ConcurrentHashMap<String, McpSession> sessions = new ConcurrentHashMap<>();
 
 	/**
+	 * Authenticated principal that created each MCP session. A session ID is
+	 * routing state, not a bearer credential: subsequent GET/DELETE requests
+	 * must still be made by the same caller that initialized the session.
+	 */
+	private final ConcurrentHashMap<String, AString> sessionOwners = new ConcurrentHashMap<>();
+
+	/**
 	 * Default allowlist of adapter-name groups exposed via MCP. Operations
 	 * outside these groups are presumed to be venue-internal utilities (HTTP,
 	 * JSON, schema, LLM providers, etc.) — useful inside orchestrations
@@ -468,6 +475,14 @@ public class MCP extends McpServer {
 				AVector<ACell> ucans = RT.getIn(arguments, Fields.UCANS);
 				AString bearer = (ctx != null) ? ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR) : null;
 				rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans, engine().getDIDString());
+				// `ucans` is transport authority, not operation input. Never let
+				// raw proof JWTs enter durable Job records, adapter logs, or agent
+				// timelines merely because MCP carries them inside tool arguments.
+				if (ucans != null && arguments instanceof AMap<?, ?> map) {
+					@SuppressWarnings("unchecked")
+					AMap<AString, ACell> argMap = (AMap<AString, ACell>) map;
+					arguments = argMap.dissoc(Fields.UCANS);
+				}
 
 				if (engine().config().isFixMcpStrings()) {
 					arguments = coerceJsonStringArgs(arguments, opRef);
@@ -501,7 +516,11 @@ public class MCP extends McpServer {
 			McpSession session = new McpSession(UUID.randomUUID().toString());
 			sessions.put(session.id, session);
 			Context ctx = McpServer.getCurrentContext();
-			if (ctx != null) ctx.header(HEADER_SESSION_ID, session.id);
+			if (ctx != null) {
+				AString caller = AuthMiddleware.getCallerDID(ctx);
+				if (caller != null) sessionOwners.put(session.id, caller);
+				ctx.header(HEADER_SESSION_ID, session.id);
+			}
 		}
 		return response;
 	}
@@ -545,7 +564,7 @@ public class MCP extends McpServer {
 
 		String sessionId = ctx.header(HEADER_SESSION_ID);
 		McpSession session = (sessionId != null) ? sessions.get(sessionId) : null;
-		if (session == null) {
+		if (session == null || !sessionOwnedByCaller(ctx, sessionId)) {
 			ctx.status(400);
 			return;
 		}
@@ -591,13 +610,26 @@ public class MCP extends McpServer {
 			ctx.status(400);
 			return;
 		}
+		if (!sessions.containsKey(sessionId) || !sessionOwnedByCaller(ctx, sessionId)) {
+			ctx.status(404);
+			return;
+		}
 		McpSession session = sessions.remove(sessionId);
 		if (session == null) {
 			ctx.status(404);
 			return;
 		}
+		sessionOwners.remove(sessionId);
 		session.close();
 		ctx.status(200);
+	}
+
+	/** True only when the current authenticated/public principal owns a session. */
+	private boolean sessionOwnedByCaller(Context ctx, String sessionId) {
+		if (sessionId == null) return false;
+		AString owner = sessionOwners.get(sessionId);
+		AString caller = AuthMiddleware.getCallerDID(ctx);
+		return owner != null && owner.equals(caller);
 	}
 
 	// ==================== Tool metadata helpers ====================
