@@ -20,6 +20,7 @@ import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.venue.Engine;
@@ -202,5 +203,28 @@ public class MCPRegistryTest {
 		Set<String> first = toolNames(mcp);
 		Set<String> second = toolNames(mcp);
 		assertEquals(first, second, "Registry must be stable across listTools calls");
+	}
+
+	@Test public void testToolAnnotationsPassThrough() {
+		AMap<AString, ACell> annotations = Maps.of(
+			Strings.create("title"), Strings.create("Revoke beta access"),
+			Strings.create("readOnlyHint"), CVMBool.FALSE,
+			Strings.create("destructiveHint"), CVMBool.TRUE,
+			Strings.create("idempotentHint"), CVMBool.TRUE,
+			Strings.create("openWorldHint"), CVMBool.FALSE);
+		AMap<AString, ACell> meta = Maps.of(
+			Fields.NAME, Strings.create("Revoke beta access"),
+			Fields.DESCRIPTION, Strings.create("Revokes an outstanding beta invitation."),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("access:revoke"),
+				Fields.INPUT, Maps.of(Fields.TYPE, Fields.OBJECT)),
+			Strings.create("mcp"), Maps.of(Strings.create("annotations"), annotations));
+
+		AMap<AString, ACell> tool = mcp(freshEngine(), Maps.empty())
+			.buildToolEntry(Strings.create("access_revoke"), meta);
+
+		assertNotNull(tool);
+		assertEquals(annotations, tool.get(Strings.create("annotations")),
+			"MCP safety annotations must reach tools/list unchanged");
 	}
 }

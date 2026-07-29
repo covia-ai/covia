@@ -614,7 +614,7 @@ public class MCP extends McpServer {
 	 * Returns null if the metadata has no map-form operation (e.g. is a
 	 * string-ref template).
 	 */
-	private AMap<AString, ACell> buildToolEntry(AString toolName, AMap<AString, ACell> meta) {
+	AMap<AString, ACell> buildToolEntry(AString toolName, AMap<AString, ACell> meta) {
 		AMap<AString, ACell> op = RT.ensureMap(RT.getIn(meta, Fields.OPERATION));
 		if (op == null) return null;
 		// MCP requires inputSchema on every tool; an op declaring none takes
@@ -638,6 +638,15 @@ public class MCP extends McpServer {
 		AMap<AString, ACell> declaredOutput = RT.ensureMap(RT.getIn(op, Fields.OUTPUT));
 		if (declaredOutput != null && Fields.OBJECT.equals(declaredOutput.get(Fields.TYPE))) {
 			entry = entry.assoc(Fields.OUTPUT_SCHEMA, prepareSchema(declaredOutput));
+		}
+		// MCP annotations are advisory client hints (read-only, destructive,
+		// idempotent, open-world and title). Native and bridged operations store
+		// them under mcp.annotations; expose them verbatim so clients can apply
+		// confirmation UX without treating the hints as authorisation.
+		AMap<AString, ACell> annotations =
+			RT.ensureMap(RT.getIn(meta, Strings.intern("mcp"), Strings.intern("annotations")));
+		if (annotations != null && annotations.count() > 0) {
+			entry = entry.assoc(Strings.intern("annotations"), annotations);
 		}
 		return entry;
 	}
