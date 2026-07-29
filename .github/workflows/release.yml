@@ -90,6 +90,7 @@ jobs:
         gh release delete latest --yes || true
         git push origin :refs/tags/latest || true
         gh release create latest \
+          --target "$GITHUB_SHA" \
           --title "Latest Release (${{ steps.tag.outputs.tag }})" \
           --notes "## Latest Stable Release
 
