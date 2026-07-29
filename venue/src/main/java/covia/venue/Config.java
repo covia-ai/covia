@@ -156,6 +156,7 @@ public class Config {
 
 	/** User admission and registration configuration block. */
 	public static final AString USERS = Strings.intern("users");
+	public static final AString BOOTSTRAP = Strings.intern("bootstrap");
 
 	/** Whether an authenticated, previously unknown DID is registered on first use. */
 	public static final AString AUTO_CREATE = Strings.intern("autoCreate");
@@ -804,6 +805,17 @@ public class Config {
 		if (users == null) return false;
 		ACell value = users.get(AUTO_CREATE);
 		return value != null && RT.bool(value);
+	}
+
+	/**
+	 * Named venue users to provision on first boot. Each map entry is keyed by
+	 * local username and may declare {@code authenticationKeys: [did:key:...]}.
+	 * The engine applies these keys only when no authenticator history exists;
+	 * subsequent startup never rotates or reactivates identity material.
+	 */
+	public AMap<AString, ACell> getUserBootstrapConfig() {
+		AMap<AString, ACell> users = RT.ensureMap(config.get(USERS));
+		return (users != null) ? RT.ensureMap(users.get(BOOTSTRAP)) : null;
 	}
 
 	/**

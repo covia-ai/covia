@@ -13,6 +13,11 @@
         "username": {
           "type": "string",
           "description": "Venue-managed username; requires a public venue hostname and becomes did:web:<venue>:u:<username>"
+        },
+        "authenticationKeys": {
+          "type": "array",
+          "description": "Optional initial public did:key authenticators for a venue-managed username",
+          "items": { "type": "string" }
         }
       }
     },

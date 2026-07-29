@@ -1,0 +1,32 @@
+{
+  "name": "List user authentication keys",
+  "description": "Lists active and revoked public authenticator records for a venue-managed named user. Defaults to the caller.",
+  "mcp": {
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "operation": {
+    "adapter": "user:authentication-list",
+    "input": {
+      "type": "object",
+      "properties": {
+        "did": {
+          "type": "string",
+          "description": "Venue-managed named user DID; defaults to the authenticated caller"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "did": { "type": "string" },
+        "authenticationKeys": { "type": "object" }
+      },
+      "required": ["did", "authenticationKeys"]
+    }
+  }
+}

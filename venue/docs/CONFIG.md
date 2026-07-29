@@ -227,7 +227,14 @@ actionable registration message, before a job or user state is persisted.
 
 ```json
 {
-  "users": { "autoCreate": false }
+  "users": {
+    "autoCreate": false,
+    "bootstrap": {
+      "alice": {
+        "authenticationKeys": ["did:key:z6Mk..."]
+      }
+    }
+  }
 }
 ```
 
@@ -237,6 +244,10 @@ actionable registration message, before a job or user state is persisted.
 - Set `autoCreate` to `true` only when authenticated first-use registration is
   intended, such as a public test venue. The checked-in `local-dev.json` opts
   in explicitly.
+- `bootstrap` provisions named venue users and their public `did:key`
+  authenticators before HTTP starts. It is first-use only: once a user has any
+  authenticator history, later startup never adds, revokes or reactivates keys.
+  Private keys never belong in venue configuration or lattice state.
 
 A runtime user ID is always a DID and may use any DID method. `user:create`
 accepts a full DID directly (for example a self-sovereign `did:key`) or a
@@ -248,10 +259,22 @@ venue-issued UCAN covering `<venueDID>/users` with `user/create` or
 `user/read`. OAuth callbacks are trusted venue provisioners and create the
 same did:web-managed account explicitly.
 
+A venue-managed named user may authenticate with any active public key bound
+to its authentication-directory record. The self-issued JWT uses the stable
+named DID for both `iss` and `sub`, the target venue DID as `aud`, and the
+registered multikey in `kid`. Active methods are published in
+`/u/<username>/did.json`. `user:authentication-add`,
+`user:authentication-revoke`, and `user:authentication-list` manage the
+bindings; self-management is allowed, while cross-user changes require
+`user/authentication-manage` on `<venueDID>/users`. Revocation retains an
+audit tombstone and takes effect on the next request.
+
 Registering a full external DID admits that identity to use the venue; it does
 not transfer control of the DID to the venue. A self-sovereign user signs their
-own UCAN roots. Only username-created `did:web:<hostname>:u:<username>` users
-are custodial identities for which the venue may sign roots.
+own UCAN roots. For username-created
+`did:web:<hostname>:u:<username>` users the venue remains the did:web
+controller and may issue venue sessions, while registered user-held keys
+provide direct self-sovereign authentication as the stable named DID.
 
 ## Adapter configuration
 

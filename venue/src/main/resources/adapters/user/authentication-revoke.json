@@ -1,0 +1,38 @@
+{
+  "name": "Revoke user authentication key",
+  "description": "Revokes a venue-managed named user's public authenticator while retaining its audit tombstone.",
+  "mcp": {
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "operation": {
+    "adapter": "user:authentication-revoke",
+    "input": {
+      "type": "object",
+      "properties": {
+        "did": {
+          "type": "string",
+          "description": "Venue-managed named user DID; defaults to the authenticated caller"
+        },
+        "key": {
+          "type": "string",
+          "description": "Public did:key authenticator to revoke"
+        }
+      },
+      "required": ["key"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "did": { "type": "string" },
+        "key": { "type": "string" },
+        "revoked": { "type": "boolean" }
+      },
+      "required": ["did", "key", "revoked"]
+    }
+  }
+}

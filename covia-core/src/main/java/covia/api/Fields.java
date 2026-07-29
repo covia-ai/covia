@@ -209,6 +209,14 @@ public class Fields {
 	public static final StringShort PROVIDER_SUB = Strings.intern("providerSub");
 	public static final StringShort SUB = Strings.intern("sub");
 	public static final StringShort KID = Strings.intern("kid");
+	/** Venue-owned public authenticator registry on a named user record. */
+	public static final StringShort AUTHENTICATION_KEYS = Strings.intern("authenticationKeys");
+	public static final StringShort KEY = Strings.intern("key");
+	public static final StringShort LABEL = Strings.intern("label");
+	public static final StringShort ADDED_AT = Strings.intern("addedAt");
+	public static final StringShort ADDED_BY = Strings.intern("addedBy");
+	public static final StringShort REVOKED_AT = Strings.intern("revokedAt");
+	public static final StringShort REVOKED_BY = Strings.intern("revokedBy");
 
 	// Convex related
 	public static final StringShort PEER = Strings.intern("peer");

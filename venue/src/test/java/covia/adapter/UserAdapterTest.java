@@ -53,6 +53,9 @@ class UserAdapterTest {
 		assertNotNull(engine.resolvePath(Strings.create("v/ops/user/create"), engine.venueContext()));
 		assertNotNull(engine.resolvePath(Strings.create("v/ops/user/info"), engine.venueContext()));
 		assertNotNull(engine.resolvePath(Strings.create("v/ops/user/list"), engine.venueContext()));
+		assertNotNull(engine.resolvePath(Strings.create("v/ops/user/authentication-add"), engine.venueContext()));
+		assertNotNull(engine.resolvePath(Strings.create("v/ops/user/authentication-revoke"), engine.venueContext()));
+		assertNotNull(engine.resolvePath(Strings.create("v/ops/user/authentication-list"), engine.venueContext()));
 	}
 
 	@Test
@@ -76,6 +79,8 @@ class UserAdapterTest {
 		AString expected = Strings.create("did:web:venue-1.covia.ai:u:alice");
 		assertEquals(expected, RT.getIn(managed, Fields.DID));
 		assertNotNull(engine.getVenueState().users().get(expected));
+		assertEquals(expected,
+			engine.getAuth().getUser(Strings.create("alice")).get(Fields.DID));
 	}
 
 	@Test

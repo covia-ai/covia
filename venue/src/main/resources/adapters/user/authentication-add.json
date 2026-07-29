@@ -1,0 +1,42 @@
+{
+  "name": "Add user authentication key",
+  "description": "Adds a public did:key authenticator to a venue-managed named user. Defaults to the caller. Revoked keys cannot be reactivated.",
+  "mcp": {
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  "operation": {
+    "adapter": "user:authentication-add",
+    "input": {
+      "type": "object",
+      "properties": {
+        "did": {
+          "type": "string",
+          "description": "Venue-managed named user DID; defaults to the authenticated caller"
+        },
+        "key": {
+          "type": "string",
+          "description": "Public did:key authenticator"
+        },
+        "label": {
+          "type": "string",
+          "description": "Optional operator-facing device label"
+        }
+      },
+      "required": ["key"]
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "did": { "type": "string" },
+        "key": { "type": "string" },
+        "added": { "type": "boolean" }
+      },
+      "required": ["did", "key", "added"]
+    }
+  }
+}

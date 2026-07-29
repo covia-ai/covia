@@ -277,6 +277,73 @@ public class Engine {
 				if (did != null) this.venueState.users().ensure(did);
 			}
 		}
+		bootstrapConfiguredNamedUsers();
+	}
+
+	/**
+	 * First-use provisioning for operator-declared named users. Configuration is
+	 * deliberately bootstrap-only: once a user has any authenticator history,
+	 * later startup never adds, revokes or reactivates keys.
+	 */
+	private void bootstrapConfiguredNamedUsers() {
+		AMap<AString, ACell> configured = config.getUserBootstrapConfig();
+		if (configured == null || configured.isEmpty()) return;
+
+		// Validate the complete declaration before writing anything.
+		java.util.HashSet<AString> declaredKeys = new java.util.HashSet<>();
+		for (var entry : configured.entrySet()) {
+			AString id = entry.getKey();
+			AString did = managedUserDID(id); // validates username + hostname
+			AMap<AString, ACell> existingUser = auth.getUser(id);
+			if (existingUser != null
+					&& !did.equals(RT.ensureString(existingUser.get(Fields.DID)))) {
+				throw new IllegalStateException("Named user " + id
+					+ " is already bound to a different DID");
+			}
+			AMap<AString, ACell> spec = RT.ensureMap(entry.getValue());
+			AVector<ACell> keys = (spec != null)
+				? RT.ensureVector(spec.get(Fields.AUTHENTICATION_KEYS)) : null;
+			if (keys == null || keys.isEmpty()) {
+				throw new IllegalArgumentException("users.bootstrap." + id
+					+ " requires a non-empty authenticationKeys array");
+			}
+			for (long i = 0; i < keys.count(); i++) {
+				AString key = RT.ensureString(keys.get(i));
+				Auth.requireValidAuthenticationKey(key);
+				if (!declaredKeys.add(key)) {
+					throw new IllegalArgumentException(
+						"One authentication key cannot bootstrap two named users");
+				}
+				AMap<AString, AMap<AString, ACell>> known = auth.getUsers();
+				if (known != null) {
+					for (var other : known.entrySet()) {
+						if (other.getKey().equals(id)) continue;
+						AMap<AString, ACell> otherKeys = RT.ensureMap(
+							other.getValue().get(Fields.AUTHENTICATION_KEYS));
+						if (otherKeys != null && otherKeys.containsKey(key)) {
+							throw new IllegalArgumentException(
+								"Authentication key is already bound to named user "
+								+ other.getKey());
+						}
+					}
+				}
+			}
+			// Make the exact DID computation part of validation, even though the
+			// value is recomputed below after the all-or-nothing validation pass.
+			if (did == null) throw new IllegalStateException("Managed user DID unavailable");
+		}
+
+		for (var entry : configured.entrySet()) {
+			AString id = entry.getKey();
+			AString did = managedUserDID(id);
+			AMap<AString, ACell> spec = RT.ensureMap(entry.getValue());
+			AVector<ACell> keys =
+				RT.ensureVector(spec.get(Fields.AUTHENTICATION_KEYS));
+			venueState.users().ensure(did);
+			auth.ensureManagedUser(id, did);
+			if (!auth.getAuthenticationKeys(id).isEmpty()) continue;
+			auth.addAuthenticationKeys(id, keys, getDIDString());
+		}
 	}
 
 	private void startPersistenceSweep() {
@@ -1939,13 +2006,22 @@ public class Engine {
 	 * controlled and must never be mistaken for a custodial identity.</p>
 	 */
 	public boolean isManagedUserDID(AString did) {
+		return managedUserName(did) != null;
+	}
+
+	/**
+	 * Local username encoded by a venue-managed DID, or null when the DID is
+	 * outside this venue's exact named-user namespace.
+	 */
+	public AString managedUserName(AString did) {
 		AString base = config.getWebDID();
-		if (base == null || did == null) return false;
+		if (base == null || did == null) return null;
 		String prefix = base + ":u:";
 		String value = did.toString();
-		if (!value.startsWith(prefix)) return false;
+		if (!value.startsWith(prefix)) return null;
 		String username = value.substring(prefix.length());
-		return !username.isEmpty() && username.matches("[A-Za-z0-9._-]+");
+		if (username.isEmpty() || !username.matches("[A-Za-z0-9._-]+")) return null;
+		return Strings.create(username);
 	}
 
 	/**

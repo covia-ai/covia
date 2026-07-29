@@ -24,8 +24,10 @@ import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import convex.core.crypto.util.Multikey;
+import convex.core.crypto.AKeyPair;
 import convex.core.util.JSON;
 import covia.api.Fields;
 import covia.venue.Engine;
@@ -57,14 +59,18 @@ public class UserAPITest {
 
 	@Test
 	void testUserDIDDocument() throws Exception {
+		AString userKey = Strings.create("did:key:"
+			+ Multikey.encodePublicKey(AKeyPair.generate().getAccountKey()));
 		// Provision through the public user-management seam. Resolution must use
-		// the resulting authoritative :user-data record, not require an OAuth row.
+		// the authoritative :user-data account plus its venue-owned authenticator row.
 		ACell created = engine.jobs().invokeInternal("v/ops/user/create",
-			Maps.of("username", ALICE), engine.venueContext()).get(10, TimeUnit.SECONDS);
+			Maps.of("username", ALICE,
+				Fields.AUTHENTICATION_KEYS, Vectors.of(userKey)),
+			engine.venueContext()).get(10, TimeUnit.SECONDS);
 		String userDID = RT.ensureString(RT.getIn(created, Fields.DID)).toString();
 		assertEquals("did:web:test.covia.example:u:alice", userDID);
-		assertEquals(null, engine.getAuth().getUser(ALICE),
-			"DID resolution must not depend on the OAuth login directory");
+		assertEquals(Strings.create(userDID),
+			engine.getAuth().getUser(ALICE).get(Fields.DID));
 
 		// Fetch the DID document via HTTP
 		HttpClient client = HttpClient.newBuilder().build();
@@ -90,7 +96,8 @@ public class UserAPITest {
 			doc.get(Strings.create("@context")));
 
 		AVector<ACell> methods = RT.ensureVector(doc.get(Strings.create("verificationMethod")));
-		assertEquals(1L, methods.count(), "managed users expose only the venue-controlled key");
+		assertEquals(2L, methods.count(),
+			"managed users expose the venue key and active user-held keys");
 		AMap<AString, ACell> method = RT.ensureMap(methods.get(0));
 		assertEquals(keyID, method.get(Strings.create("id")));
 		assertEquals(venueDID, method.get(Strings.create("controller")));
@@ -98,6 +105,12 @@ public class UserAPITest {
 			method.get(Strings.create("publicKeyMultibase")),
 			"the DID document must expose the venue key, not a minted user key");
 		assertEquals(keyID, RT.ensureVector(doc.get(Strings.create("authentication"))).get(0));
+		AMap<AString, ACell> userMethod = RT.ensureMap(methods.get(1));
+		AString multikey = Strings.create(userKey.toString().substring("did:key:".length()));
+		assertEquals(Strings.create(userDID + "#" + multikey),
+			userMethod.get(Strings.create("id")));
+		assertEquals(Strings.create(userDID), userMethod.get(Strings.create("controller")));
+		assertEquals(multikey, userMethod.get(Strings.create("publicKeyMultibase")));
 		assertEquals(keyID, RT.ensureVector(doc.get(Strings.create("assertionMethod"))).get(0));
 	}
 

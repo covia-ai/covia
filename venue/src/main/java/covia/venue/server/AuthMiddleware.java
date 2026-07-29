@@ -37,8 +37,9 @@ import io.javalin.http.Context;
  * Middleware for extracting caller identity from JWT bearer tokens.
  *
  * Supports three verification modes:
- * 1. Self-issued EdDSA JWTs: the kid header encodes the signer's public key,
- *    and the sub claim must be a did:key matching that key.
+ * 1. Self-issued EdDSA JWTs: the kid header encodes the signer's public key.
+ *    The sub claim is either the matching did:key or a local named-user DID
+ *    whose venue-owned authentication record admits that key.
  * 2. Venue-signed JWTs: signed by the venue's own key. The sub claim contains
  *    the user's DID (e.g. did:web:venue.host:u:alice).
  * 3. External provider RS256 JWTs: verified against configured OAuth provider
@@ -365,30 +366,33 @@ public class AuthMiddleware {
 	}
 
 	/**
-	 * Verify a self-issued JWT where the kid header matches the did:key in the sub claim.
+	 * Verify a self-issued JWT. A did:key subject is bound directly to the
+	 * header key; a local named-user subject is bound through the venue-owned
+	 * authentication-key registry.
 	 */
 	private AString tryVerifySelfIssued(AString jwt) {
-		AMap<AString, ACell> claims = JWT.verifyPublic(jwt);
-		if (claims == null) return null;
+		JWT parsed = JWT.parse(jwt);
+		if (parsed == null || !"EdDSA".equals(parsed.getAlgorithm())) return null;
+		AMap<AString, ACell> claims = parsed.getClaims();
 
 		AString sub = RT.ensureString(claims.get(SUB));
 		if (sub == null) return null;
+		AString keyDID = authenticationKeyDID(jwt, sub);
+		if (keyDID == null) return null;
+		AccountKey signingKey = Multikey.decodePublicKey(
+			keyDID.toString().substring("did:key:".length()));
+		if (signingKey == null || JWT.verifyPublic(jwt, signingKey) == null) return null;
 
-		// For self-issued tokens, verify kid matches the did:key in sub
 		String subStr = sub.toString();
 		if (subStr.startsWith("did:key:")) {
-			// Extract multikey from did:key:z6Mk... and verify it matches the kid
-			String multikey = subStr.substring("did:key:".length());
-			AccountKey subKey = Multikey.decodePublicKey(multikey);
-			if (subKey == null) return null;
-
-			// Decode kid from header to compare
-			AccountKey kidKey = extractKidKey(jwt);
-			if (kidKey == null || !kidKey.equals(subKey)) return null;
-		}
-		// Non did:key subs can't be self-issued (need venue or external authority)
-		else {
-			return null;
+			if (!sub.equals(keyDID)) return null;
+		} else {
+			AString userId = engine.managedUserName(sub);
+			if (userId == null) return null; // never resolve a foreign did:web
+			if (!sub.equals(RT.ensureString(claims.get(ISS)))) return null;
+			AMap<AString, ACell> record = venueAuth.getUser(userId);
+			if (record == null || !sub.equals(record.get(Fields.DID))) return null;
+			if (!venueAuth.isAuthenticationKeyActive(userId, keyDID)) return null;
 		}
 
 		// Temporal bounds — previously unchecked, so a self-issued token was
@@ -428,21 +432,27 @@ public class AuthMiddleware {
 	}
 
 	/**
-	 * Extract the AccountKey from the kid header of a JWT.
+	 * Resolve the header {@code kid} to a canonical did:key. Convex JWT
+	 * signers use the bare multikey; named-user-aware signers may use either
+	 * {@code did:key:<multikey>} or {@code <subject>#<multikey>}.
 	 */
-	private static AccountKey extractKidKey(AString jwt) {
+	private static AString authenticationKeyDID(AString jwt, AString subject) {
 		try {
-			String s = jwt.toString();
-			int dot1 = s.indexOf('.');
-			if (dot1 < 0) return null;
-			String headerB64 = s.substring(0, dot1);
-			byte[] headerBytes = java.util.Base64.getUrlDecoder().decode(headerB64);
-			AMap<AString, ACell> header = RT.ensureMap(
-				convex.core.util.JSON.parse(Strings.wrap(headerBytes)));
-			if (header == null) return null;
-			AString kid = RT.ensureString(header.get(KID));
+			JWT parsed = JWT.parse(jwt);
+			if (parsed == null) return null;
+			AString kid = RT.ensureString(parsed.getHeader().get(KID));
 			if (kid == null) return null;
-			return Multikey.decodePublicKey(kid.toString());
+			String value = kid.toString();
+			String multikey;
+			if (value.startsWith("did:key:")) {
+				multikey = value.substring("did:key:".length());
+			} else {
+				String namedPrefix = subject + "#";
+				multikey = value.startsWith(namedPrefix)
+					? value.substring(namedPrefix.length()) : value;
+			}
+			if (Multikey.decodePublicKey(multikey) == null) return null;
+			return Strings.create("did:key:" + multikey);
 		} catch (Exception e) {
 			return null;
 		}

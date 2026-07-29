@@ -3,11 +3,15 @@ package covia.venue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.auth.did.DID;
+import convex.core.crypto.util.Multikey;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import convex.core.util.Utils;
@@ -57,6 +61,8 @@ import covia.venue.auth.LoginProviders;
 public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>> {
 
 	private static final Logger log = LoggerFactory.getLogger(Auth.class);
+	public static final AString ACTIVE = Strings.intern("active");
+	public static final AString REVOKED = Strings.intern("revoked");
 
 	/** Default token expiry: 24 hours in seconds */
 	public static final long DEFAULT_TOKEN_EXPIRY = 86400;
@@ -193,6 +199,197 @@ public class Auth extends ALatticeComponent<AMap<AString, AMap<AString, ACell>>>
 			if (m == null) m = Maps.empty();
 			return m.assoc(id, stamped);
 		});
+	}
+
+	/**
+	 * Creates the venue-owned authentication-directory row for a managed user,
+	 * or verifies the existing row still names the same stable DID.
+	 *
+	 * @return true when the row was created
+	 */
+	public synchronized boolean ensureManagedUser(AString id, AString did) {
+		AMap<AString, ACell> existing = getUser(id);
+		if (existing != null) {
+			AString stored = RT.ensureString(existing.get(Fields.DID));
+			if (!did.equals(stored)) {
+				throw new IllegalStateException("Named user " + id
+					+ " is already bound to a different DID: " + stored);
+			}
+			return false;
+		}
+		putUser(id, Maps.of(Fields.DID, did, Fields.NAME, id));
+		return true;
+	}
+
+	/** Public authenticator lifecycle records for one named user. */
+	public AMap<AString, ACell> getAuthenticationKeys(AString id) {
+		AMap<AString, ACell> record = getUser(id);
+		if (record == null) return Maps.empty();
+		AMap<AString, ACell> keys = RT.ensureMap(record.get(Fields.AUTHENTICATION_KEYS));
+		return (keys != null) ? keys : Maps.empty();
+	}
+
+	/** True when the named user's key is currently admitted for authentication. */
+	public boolean isAuthenticationKeyActive(AString id, AString keyDID) {
+		AMap<AString, ACell> entry =
+			RT.ensureMap(getAuthenticationKeys(id).get(keyDID));
+		return entry != null && ACTIVE.equals(entry.get(Fields.STATUS));
+	}
+
+	/** Active public key DIDs, in deterministic lattice-map order. */
+	public AVector<ACell> getActiveAuthenticationKeys(AString id) {
+		AVector<ACell> result = Vectors.empty();
+		for (var entry : getAuthenticationKeys(id).entrySet()) {
+			AMap<AString, ACell> state = RT.ensureMap(entry.getValue());
+			if (state != null && ACTIVE.equals(state.get(Fields.STATUS))) {
+				result = result.conj(entry.getKey());
+			}
+		}
+		return result;
+	}
+
+	/**
+	 * Adds one public {@code did:key} authenticator. A key may have history under
+	 * only one named user on this venue, and a revoked key is never silently
+	 * reactivated.
+	 *
+	 * @return true when a new active binding was added; false when already active
+	 */
+	public synchronized boolean addAuthenticationKey(AString id, AString keyDID,
+			AString actorDID, AString label) {
+		requireValidAuthenticationKey(keyDID);
+		requireActorDID(actorDID);
+		AMap<AString, ACell> user = getUser(id);
+		if (user == null) throw new IllegalArgumentException("Unknown named user: " + id);
+		requireKeyNotBoundElsewhere(id, keyDID);
+
+		AMap<AString, ACell> keys = getAuthenticationKeys(id);
+		AMap<AString, ACell> existing = RT.ensureMap(keys.get(keyDID));
+		if (existing != null) {
+			if (ACTIVE.equals(existing.get(Fields.STATUS))) return false;
+			throw new IllegalArgumentException(
+				"Revoked authentication keys cannot be reactivated");
+		}
+
+		long now = Utils.getCurrentTimestamp();
+		AMap<AString, ACell> state = Maps.of(
+			Fields.STATUS, ACTIVE,
+			Fields.ADDED_AT, CVMLong.create(now),
+			Fields.ADDED_BY, actorDID);
+		if (label != null && !label.isEmpty()) state = state.assoc(Fields.LABEL, label);
+		putUser(id, user.assoc(Fields.AUTHENTICATION_KEYS, keys.assoc(keyDID, state)));
+		return true;
+	}
+
+	/**
+	 * Atomically installs an initial set of public authenticators. The complete
+	 * set is validated before the user record is changed.
+	 *
+	 * @return number of newly installed keys
+	 */
+	public synchronized long addAuthenticationKeys(AString id,
+			AVector<ACell> keyDIDs, AString actorDID) {
+		if (keyDIDs == null || keyDIDs.isEmpty()) {
+			throw new IllegalArgumentException("At least one authentication key is required");
+		}
+		requireActorDID(actorDID);
+		AMap<AString, ACell> user = getUser(id);
+		if (user == null) throw new IllegalArgumentException("Unknown named user: " + id);
+
+		AMap<AString, ACell> keys = getAuthenticationKeys(id);
+		java.util.HashSet<AString> requested = new java.util.HashSet<>();
+		for (long i = 0; i < keyDIDs.count(); i++) {
+			AString keyDID = RT.ensureString(keyDIDs.get(i));
+			requireValidAuthenticationKey(keyDID);
+			if (!requested.add(keyDID)) {
+				throw new IllegalArgumentException("Duplicate authentication key");
+			}
+			requireKeyNotBoundElsewhere(id, keyDID);
+			AMap<AString, ACell> existing = RT.ensureMap(keys.get(keyDID));
+			if (existing != null && !ACTIVE.equals(existing.get(Fields.STATUS))) {
+				throw new IllegalArgumentException(
+					"Revoked authentication keys cannot be reactivated");
+			}
+		}
+
+		long added = 0;
+		long now = Utils.getCurrentTimestamp();
+		for (AString keyDID : requested) {
+			if (keys.containsKey(keyDID)) continue;
+			keys = keys.assoc(keyDID, Maps.of(
+				Fields.STATUS, ACTIVE,
+				Fields.ADDED_AT, CVMLong.create(now),
+				Fields.ADDED_BY, actorDID));
+			added++;
+		}
+		if (added > 0) {
+			putUser(id, user.assoc(Fields.AUTHENTICATION_KEYS, keys));
+		}
+		return added;
+	}
+
+	/**
+	 * Revokes one authenticator while retaining its audit tombstone.
+	 *
+	 * @param allowLast true only for direct venue recovery authority
+	 * @return true when an active key was revoked; false when absent/already revoked
+	 */
+	public synchronized boolean revokeAuthenticationKey(AString id, AString keyDID,
+			AString actorDID, boolean allowLast) {
+		requireActorDID(actorDID);
+		AMap<AString, ACell> user = getUser(id);
+		if (user == null) throw new IllegalArgumentException("Unknown named user: " + id);
+		AMap<AString, ACell> keys = getAuthenticationKeys(id);
+		AMap<AString, ACell> existing = RT.ensureMap(keys.get(keyDID));
+		if (existing == null || REVOKED.equals(existing.get(Fields.STATUS))) return false;
+		if (!ACTIVE.equals(existing.get(Fields.STATUS))) {
+			throw new IllegalStateException("Malformed authentication key status");
+		}
+		if (!allowLast && getActiveAuthenticationKeys(id).count() <= 1) {
+			throw new IllegalArgumentException(
+				"Cannot revoke the final active authentication key");
+		}
+		AMap<AString, ACell> revoked = existing
+			.assoc(Fields.STATUS, REVOKED)
+			.assoc(Fields.REVOKED_AT, CVMLong.create(Utils.getCurrentTimestamp()))
+			.assoc(Fields.REVOKED_BY, actorDID);
+		putUser(id, user.assoc(Fields.AUTHENTICATION_KEYS, keys.assoc(keyDID, revoked)));
+		return true;
+	}
+
+	private void requireKeyNotBoundElsewhere(AString id, AString keyDID) {
+		AMap<AString, AMap<AString, ACell>> users = getUsers();
+		if (users == null) return;
+		for (var other : users.entrySet()) {
+			if (other.getKey().equals(id)) continue;
+			AMap<AString, ACell> otherKeys =
+				RT.ensureMap(other.getValue().get(Fields.AUTHENTICATION_KEYS));
+			if (otherKeys != null && otherKeys.containsKey(keyDID)) {
+				throw new IllegalArgumentException(
+					"Authentication key is already bound to named user " + other.getKey());
+			}
+		}
+	}
+
+	private static void requireActorDID(AString actorDID) {
+		if (actorDID == null) {
+			throw new IllegalArgumentException("Authentication key actor DID is required");
+		}
+	}
+
+	static void requireValidAuthenticationKey(AString keyDID) {
+		if (keyDID == null || !keyDID.toString().startsWith("did:key:")) {
+			throw new IllegalArgumentException("Authentication key must be a did:key");
+		}
+		String multikey = keyDID.toString().substring("did:key:".length());
+		try {
+			if (DID.fromString(keyDID.toString()) == null
+					|| Multikey.decodePublicKey(multikey) == null) {
+				throw new IllegalArgumentException("Invalid did:key authentication key");
+			}
+		} catch (RuntimeException e) {
+			throw new IllegalArgumentException("Invalid did:key authentication key", e);
+		}
 	}
 
 	/**

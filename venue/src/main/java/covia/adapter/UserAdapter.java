@@ -36,6 +36,8 @@ public class UserAdapter extends AAdapter {
 	private static final AString CREATED = Fields.CREATED;
 	private static final AString USERS = Strings.intern("users");
 	private static final AString TOTAL = Strings.intern("total");
+	private static final AString ADDED = Strings.intern("added");
+	private static final AString REVOKED = Strings.intern("revoked");
 
 	@Override
 	public String getName() {
@@ -53,6 +55,9 @@ public class UserAdapter extends AAdapter {
 		installAsset("user/create", "/adapters/user/create.json");
 		installAsset("user/info", "/adapters/user/info.json");
 		installAsset("user/list", "/adapters/user/list.json");
+		installAsset("user/authentication-add", "/adapters/user/authentication-add.json");
+		installAsset("user/authentication-revoke", "/adapters/user/authentication-revoke.json");
+		installAsset("user/authentication-list", "/adapters/user/authentication-list.json");
 	}
 
 	@Override
@@ -64,6 +69,9 @@ public class UserAdapter extends AAdapter {
 				case "create" -> create(ctx, input);
 				case "info" -> info(ctx, input);
 				case "list" -> list(ctx);
+				case "authentication-add" -> authenticationAdd(ctx, input);
+				case "authentication-revoke" -> authenticationRevoke(ctx, input);
+				case "authentication-list" -> authenticationList(ctx, input);
 				default -> throw new IllegalArgumentException(
 					"Unknown user operation: " + getSubOperation(meta));
 			});
@@ -76,9 +84,15 @@ public class UserAdapter extends AAdapter {
 		requireVenueUserAuthority(ctx, Abilities.USER_CREATE);
 		AString suppliedDID = RT.ensureString(RT.getIn(input, Fields.DID));
 		AString username = RT.ensureString(RT.getIn(input, USERNAME));
+		AVector<ACell> authenticationKeys =
+			RT.ensureVector(RT.getIn(input, Fields.AUTHENTICATION_KEYS));
 		if ((suppliedDID == null) == (username == null)) {
 			throw new IllegalArgumentException(
 				"Specify exactly one of 'did' or 'username'");
+		}
+		if (suppliedDID != null && authenticationKeys != null) {
+			throw new IllegalArgumentException(
+				"authenticationKeys are supported only for venue-managed usernames");
 		}
 
 		AString did;
@@ -93,6 +107,28 @@ public class UserAdapter extends AAdapter {
 		engine.requireNotSubPrincipal(did);
 
 		boolean created = engine.getVenueState().users().create(did);
+		if (username != null) {
+			engine.getAuth().ensureManagedUser(username, did);
+			if (authenticationKeys != null) {
+				AMap<AString, ACell> existing =
+					engine.getAuth().getAuthenticationKeys(username);
+				if (existing.isEmpty()) {
+					engine.getAuth().addAuthenticationKeys(
+						username, authenticationKeys, ctx.getCallerDID());
+				} else {
+					// Preserve create's idempotency: a repeated identical request
+					// is harmless, but rotation uses the explicit add operation.
+					for (long i = 0; i < authenticationKeys.count(); i++) {
+						AString key = RT.ensureString(authenticationKeys.get(i));
+						if (!engine.getAuth().isAuthenticationKeyActive(username, key)) {
+							throw new IllegalArgumentException(
+								"Named user already has authenticator history; "
+								+ "use user:authentication-add for rotation");
+						}
+					}
+				}
+			}
+		}
 		return Maps.of(
 			Fields.DID, did,
 			REGISTERED, CVMBool.TRUE,
@@ -126,6 +162,63 @@ public class UserAdapter extends AAdapter {
 			}
 		}
 		return Maps.of(USERS, result, TOTAL, CVMLong.create(result.count()));
+	}
+
+	private ACell authenticationAdd(RequestContext ctx, ACell input) {
+		AString did = targetManagedUser(ctx, input, Abilities.USER_AUTH_MANAGE);
+		AString id = engine.managedUserName(did);
+		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
+		AString label = RT.ensureString(RT.getIn(input, Fields.LABEL));
+		if (key == null) throw new IllegalArgumentException("key is required");
+		boolean added = engine.getAuth().addAuthenticationKey(
+			id, key, ctx.getCallerDID(), label);
+		engine.flush();
+		return Maps.of(
+			Fields.DID, did,
+			Fields.KEY, key,
+			ADDED, CVMBool.create(added));
+	}
+
+	private ACell authenticationRevoke(RequestContext ctx, ACell input) {
+		AString did = targetManagedUser(ctx, input, Abilities.USER_AUTH_MANAGE);
+		AString id = engine.managedUserName(did);
+		AString key = RT.ensureString(RT.getIn(input, Fields.KEY));
+		if (key == null) throw new IllegalArgumentException("key is required");
+		boolean directVenue = engine.getDIDString().equals(ctx.getCallerDID())
+			&& ctx.getAgentId() == null;
+		boolean revoked = engine.getAuth().revokeAuthenticationKey(
+			id, key, ctx.getCallerDID(), directVenue);
+		engine.flush();
+		return Maps.of(
+			Fields.DID, did,
+			Fields.KEY, key,
+			REVOKED, CVMBool.create(revoked));
+	}
+
+	private ACell authenticationList(RequestContext ctx, ACell input) {
+		AString did = targetManagedUser(ctx, input, Abilities.USER_READ);
+		AString id = engine.managedUserName(did);
+		return Maps.of(
+			Fields.DID, did,
+			Fields.AUTHENTICATION_KEYS, engine.getAuth().getAuthenticationKeys(id));
+	}
+
+	/**
+	 * Resolve a local managed-user target. Self-management is allowed only for
+	 * the named user itself (never an agent sub-principal); every other target
+	 * goes through the venue-rooted user authority seam.
+	 */
+	private AString targetManagedUser(RequestContext ctx, ACell input, AString ability) {
+		AString did = RT.ensureString(RT.getIn(input, Fields.DID));
+		if (did == null) did = ctx.getCallerDID();
+		if (did == null) throw new AuthException("Authentication required");
+		if (engine.managedUserName(did) == null) {
+			throw new IllegalArgumentException(
+				"Authentication keys belong only to venue-managed named users");
+		}
+		if (did.equals(ctx.getCallerDID()) && ctx.getAgentId() == null) return did;
+		requireVenueUserAuthority(ctx, ability);
+		return did;
 	}
 
 	private AMap<AString, ACell> summary(User user) {
