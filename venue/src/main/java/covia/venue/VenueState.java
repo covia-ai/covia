@@ -1,12 +1,23 @@
 package covia.venue;
 
+import java.io.IOException;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Objects;
+import java.util.Set;
+
 import convex.core.crypto.AKeyPair;
 import convex.core.cvm.Keywords;
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AccountKey;
 import convex.core.data.Index;
 import convex.core.data.Keyword;
+import convex.core.data.MapEntry;
 import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
+import convex.core.store.AStore;
 import convex.core.util.Utils;
 import convex.lattice.ALatticeComponent;
 import convex.lattice.LatticeContext;
@@ -102,6 +113,41 @@ public class VenueState extends ALatticeComponent<ACell> {
 		ALatticeCursor<ACell> venueCursor = root.path(
 			Covia.GRID, Covia.VENUES, ownerKey, Keywords.VALUE);
 		return new VenueState(venueCursor, ownerKey);
+	}
+
+	/**
+	 * Reads the venue owner keys recorded in an already-open store without
+	 * constructing a {@link Engine} or binding a venue identity.
+	 *
+	 * <p>This method neither mutates nor closes the store; ownership remains with
+	 * the caller. A fresh store has no venue keys and returns an empty set.</p>
+	 *
+	 * @param store Open Covia lattice store.
+	 * @return Immutable set of persisted venue owner keys.
+	 * @throws IOException if the persisted root cannot be read.
+	 */
+	@SuppressWarnings("unchecked")
+	public static Set<AccountKey> peekVenueKeys(AStore store) throws IOException {
+		ACell root = Objects.requireNonNull(store, "store").getRootData();
+		if (root == null) return Set.of();
+
+		ACell value = RT.getIn(root, Covia.GRID, Covia.VENUES);
+		if (!(value instanceof AMap<?, ?> venues) || venues.isEmpty()) return Set.of();
+
+		LinkedHashSet<AccountKey> keys = new LinkedHashSet<>();
+		AMap<ACell, ACell> entries = (AMap<ACell, ACell>) venues;
+		for (long i = 0; i < entries.count(); i++) {
+			MapEntry<ACell, ACell> entry = entries.entryAt(i);
+			ACell rawKey = entry.getKey();
+			if (rawKey instanceof AccountKey key) {
+				keys.add(key);
+			} else if (rawKey instanceof ABlob blob && blob.count() == AccountKey.LENGTH) {
+				// Map-key canonicalisation may decode AccountKey as its equivalent
+				// 32-byte blob; restore the domain type for callers.
+				keys.add(AccountKey.create(blob));
+			}
+		}
+		return Collections.unmodifiableSet(keys);
 	}
 
 	/**

@@ -9,6 +9,7 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -108,8 +109,8 @@ public class VenueServer {
 	 * API. Invoked from {@link #addAPIRoutes} (after {@link AuthMiddleware} is
 	 * registered and within the {@code /api/*} filters), so routes mounted under
 	 * {@code /api/...} inherit caller-identity extraction and post-request lattice
-	 * sync. Populated only via {@link #launch(AMap, List)}; empty by default, so
-	 * the standalone venue behaves exactly as before.
+	 * sync. Populated only by launch overloads that accept route registrars;
+	 * empty by default, so the standalone venue behaves exactly as before.
 	 */
 	protected final List<Consumer<RoutesConfig>> extraRouteRegistrars = new ArrayList<>();
 
@@ -117,18 +118,37 @@ public class VenueServer {
 	private RateLimiter rateLimiter;
 
 	public VenueServer(AMap<AString,ACell> config) {
+		this(config, null);
+	}
+
+	/**
+	 * Constructs a venue around an optional caller-opened store.
+	 *
+	 * <p>When {@code adoptedStore} is non-null, ownership transfers immediately:
+	 * this constructor closes it if construction fails, and {@link #close()} closes
+	 * it after a successful launch.</p>
+	 */
+	private VenueServer(AMap<AString,ACell> config, AStore adoptedStore) {
 		this.config=new Config(config);
 		this.convex=null; // TODO:
 
 		// Create NodeServer with Covia lattice (local-only, no network port)
 		// Launch immediately so restore happens before Engine reads the cursor.
 		try {
-			// Whether the persistent store file predates this launch must be
-			// captured BEFORE createStore opens (and thereby creates) it —
-			// resolveKeyPair uses it to tell a first launch from a relaunch
-			// that has lost its identity (#232).
-			boolean storePreexisted = storeFileExists(this.config);
-			this.store = createStore(this.config);
+			boolean storePreexisted;
+			if (adoptedStore != null) {
+				this.store = adoptedStore;
+				// An open store may not be file-backed or correspond to Config.STORE.
+				// Persisted root data is the reliable signal that this is a relaunch.
+				storePreexisted = this.store.getRootData() != null;
+			} else {
+				// Whether the persistent store file predates this launch must be
+				// captured BEFORE createStore opens (and thereby creates) it —
+				// resolveKeyPair uses it to tell a first launch from a relaunch
+				// that has lost its identity (#232).
+				storePreexisted = storeFileExists(this.config);
+				this.store = createStore(this.config);
+			}
 			AKeyPair keyPair = resolveKeyPair(this.config, storePreexisted);
 			this.nodeServer = new NodeServer<>(Covia.ROOT, store, NodeConfig.port(-1));
 			nodeServer.setMergeContext(LatticeContext.create(
@@ -407,7 +427,39 @@ public class VenueServer {
 	 * @return Launched Venue Server instance
 	 */
 	public static VenueServer launch(AMap<AString,ACell> config) {
-		return launch(config, null);
+		return launchInternal(config, null, null);
+	}
+
+	/**
+	 * Launches a venue using a caller-opened store instead of opening the store
+	 * named by {@link Config#STORE}.
+	 *
+	 * <p>Ownership transfers at method entry. The venue closes the store on
+	 * normal {@link #close()} and on every construction or launch failure. The
+	 * remaining config, including venue identity resolution, is unchanged;
+	 * embedders should normally provide the recovered identity via
+	 * {@code seed} or {@code keystore}.</p>
+	 *
+	 * @param config Config, or null for default test config.
+	 * @param store Open store to adopt; must not be null.
+	 * @return Launched Venue Server instance.
+	 */
+	public static VenueServer launch(AMap<AString,ACell> config, AStore store) {
+		return launchInternal(config, Objects.requireNonNull(store, "store"), null);
+	}
+
+	/**
+	 * Launches a venue with both a caller-opened store and embedder routes.
+	 * Store ownership follows {@link #launch(AMap, AStore)}.
+	 *
+	 * @param config Config, or null for default test config.
+	 * @param store Open store to adopt; must not be null.
+	 * @param extraRoutes Additional route registrars, or null/empty for none.
+	 * @return Launched Venue Server instance.
+	 */
+	public static VenueServer launch(AMap<AString,ACell> config, AStore store,
+			List<Consumer<RoutesConfig>> extraRoutes) {
+		return launchInternal(config, Objects.requireNonNull(store, "store"), extraRoutes);
 	}
 
 	/**
@@ -425,6 +477,11 @@ public class VenueServer {
 	 * @return Launched Venue Server instance
 	 */
 	public static VenueServer launch(AMap<AString,ACell> config, List<Consumer<RoutesConfig>> extraRoutes) {
+		return launchInternal(config, null, extraRoutes);
+	}
+
+	private static VenueServer launchInternal(AMap<AString,ACell> config,
+			AStore adoptedStore, List<Consumer<RoutesConfig>> extraRoutes) {
 		if (config==null) {
 			config=Maps.of(
 					Fields.NAME,"Test Venue",
@@ -441,7 +498,7 @@ public class VenueServer {
 
 		VenueServer server = null;
 		try {
-			server = new VenueServer(config);
+			server = new VenueServer(config, adoptedStore);
 			if (extraRoutes != null) server.extraRouteRegistrars.addAll(extraRoutes);
 
 			// Complete every fallible bootstrap phase before publishing an HTTP

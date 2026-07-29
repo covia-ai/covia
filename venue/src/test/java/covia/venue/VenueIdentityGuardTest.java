@@ -2,6 +2,7 @@ package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -117,5 +118,49 @@ public class VenueIdentityGuardTest {
 		} finally {
 			reopened.close();
 		}
+	}
+
+	@Test
+	public void peekKeysThenLaunchWithAdoptedStore() throws Exception {
+		Path dir = Files.createTempDirectory("venue-adopt-store-");
+		Path storePath = dir.resolve("venue.etch");
+		dir.toFile().deleteOnExit();
+		storePath.toFile().deleteOnExit();
+		AKeyPair owner = AKeyPair.createSeeded(30701);
+
+		VenueServer initial = VenueServer.launch(serverConfig(storePath, owner));
+		initial.close();
+
+		EtchStore adopted = EtchStore.create(storePath.toFile());
+		assertEquals(java.util.Set.of(owner.getAccountKey()), VenueState.peekVenueKeys(adopted));
+
+		VenueServer relaunched = VenueServer.launch(
+			serverConfig(storePath, owner), adopted, java.util.List.of());
+		assertSame(adopted, relaunched.getStore(), "launch must use the caller's store instance");
+		relaunched.close();
+
+		EtchStore reopened = EtchStore.create(storePath.toFile());
+		reopened.close(); // successful venue close owns and releases the adopted store
+	}
+
+	@Test
+	public void failedLaunchClosesAdoptedStore() throws Exception {
+		Path dir = Files.createTempDirectory("venue-adopt-failure-");
+		Path storePath = dir.resolve("venue.etch");
+		dir.toFile().deleteOnExit();
+		storePath.toFile().deleteOnExit();
+		AKeyPair owner = AKeyPair.createSeeded(30702);
+		AKeyPair wrong = AKeyPair.createSeeded(30703);
+
+		VenueServer initial = VenueServer.launch(serverConfig(storePath, owner));
+		initial.close();
+
+		EtchStore adopted = EtchStore.create(storePath.toFile());
+		RuntimeException failure = assertThrows(RuntimeException.class,
+			() -> VenueServer.launch(serverConfig(storePath, wrong), adopted));
+		assertTrue(String.valueOf(failure.getCause()).contains("Venue key mismatch"));
+
+		EtchStore reopened = EtchStore.create(storePath.toFile());
+		reopened.close(); // failed venue launch also owns and releases the store
 	}
 }
