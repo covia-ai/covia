@@ -12,7 +12,6 @@ on:
   workflow_run:
     workflows: ["Publish Docker image"]
     types: [completed]
-    branches: [master]
   workflow_dispatch:
 
 # Never cancel a mid-flight deploy; queue the newest instead
@@ -23,7 +22,14 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event.workflow_run.conclusion == 'success' &&
+          endsWith(github.event.workflow_run.display_title, '[master]')
+        )
+      }}
     permissions:
       packages: read
 

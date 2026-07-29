@@ -1,4 +1,5 @@
 name: Publish Docker image
+run-name: Publish Docker image [${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}]
 
 # Builds and publishes the public venue image to GHCR. This is the single
 # source of ghcr.io/covia-ai/covia tags — the deploy workflows consume the
