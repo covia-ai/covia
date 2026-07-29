@@ -251,7 +251,8 @@ public abstract class AAdapter {
 
 	/**
 	 * Helper method to install a constructed asset.
-	 * @param resourcePath The resource path to read the asset from
+	 * @param meta Constructed asset metadata
+	 * @return Hash of the installed asset
 	 */
 	protected Hash installAsset(AMap<AString,ACell> meta) {
 		return installAsset(JSON.printPretty(meta));

@@ -33,11 +33,10 @@ import covia.venue.RequestContext;
  * <h3>Storage</h3>
  * <p>The list is a single {@code AVector} stored at a configurable workspace
  * path (default {@code w/memory}). Every mutation rewrites the <b>whole vector</b>
- * via {@code covia:write}, which is a whole-value LWW replace
- * ({@link covia.lattice.LWWWrapperLattice}) — so removals are durable and never
- * re-materialise (this also avoids the per-key delete concern in
- * GetMine-ai/demo#134). Per-user DID scoping comes from the {@code covia:*} ops
- * for free; this adapter holds no identity logic.</p>
+ * via {@code covia:write}, which is a whole-value LWW replace, so removals are
+ * durable and never re-materialise (this also avoids the per-key delete concern
+ * in GetMine-ai/demo#134). Per-user DID scoping comes from the {@code covia:*}
+ * ops for free; this adapter holds no identity logic.</p>
  *
  * <h3>Numbering</h3>
  * <p>Display numbers are 1-based positions in the vector. {@code update}/{@code forget}

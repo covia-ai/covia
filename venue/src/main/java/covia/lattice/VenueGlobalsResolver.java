@@ -23,11 +23,10 @@ import covia.venue.RequestContext;
  * resolved cursor is the venue user's cursor, retrieved via
  * {@link CoviaAdapter#ensureUserCursor(AString)}.</p>
  *
- * <p><b>Access policy.</b> Reads are universally allowed; writes require
- * the venue identity (either {@link RequestContext#isInternal()} or a
- * caller DID equal to the venue's own DID). The {@link #canWrite}
- * override enforces this; reads bypass it because they don't go through
- * a write check.</p>
+ * <p><b>Access policy.</b> Reads are universally allowed; writes require a
+ * caller DID equal to the venue's own DID. The {@link #canWrite} override
+ * enforces this; reads bypass it because they don't go through a write
+ * check.</p>
  */
 public class VenueGlobalsResolver implements NamespaceResolver {
 

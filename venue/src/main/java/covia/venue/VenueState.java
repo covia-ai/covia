@@ -56,7 +56,6 @@ import covia.venue.storage.LatticeStorage;
  * <p>Provides domain-specific component accessors:</p>
  * <ul>
  *   <li>{@link #assets()} — content-addressed asset store</li>
- *   <li>{@link #jobs()} — timestamp-ordered job store</li>
  *   <li>{@link #users()} — per-user data store</li>
  *   <li>{@link #storage()} — content-addressed blob storage</li>
  * </ul>

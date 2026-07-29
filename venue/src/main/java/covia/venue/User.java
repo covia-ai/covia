@@ -16,8 +16,8 @@ import covia.lattice.Namespace;
  *
  * <p>Wraps a lattice cursor at {@code :user-data → <did>} within the
  * venue state. Provides typed accessors for per-user data. Created by
- * {@link VenueState#user(AString)} (returns null if the user doesn't
- * exist) or {@link VenueState#ensureUser(AString)} (creates if needed).</p>
+ * {@link Users#get(AString)} (returns null if the user doesn't exist) or
+ * {@link Users#ensure(AString)} (creates if needed).</p>
  *
  * <p>Follows the same lattice app wrapper pattern as {@link AssetStore}.
  * The per-user lattice uses short AString-compatible keys from
