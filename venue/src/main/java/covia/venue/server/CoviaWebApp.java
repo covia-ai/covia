@@ -22,6 +22,8 @@ import static j2html.TagCreator.thead;
 import static j2html.TagCreator.tr;
 import static j2html.TagCreator.ul;
 import static j2html.TagCreator.tag;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
@@ -35,6 +37,7 @@ import convex.core.lang.RT;
 import convex.core.util.Utils;
 import covia.adapter.AAdapter;
 import covia.api.Fields;
+import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.LocalVenue;
 import covia.venue.api.MCP;
@@ -56,7 +59,7 @@ public class CoviaWebApp  {
 
 	public void addRoutes(RoutesConfig routes) {
 		routes.get("/index.html", this::indexPage);
-		routes.get("/", this::indexPage);
+		routes.get("/", this::rootPage);
 		routes.get("/404.html", this::missingPage);
 		routes.get("/status", this::statusPage);
 		routes.get("/config", this::configPage);
@@ -66,6 +69,21 @@ public class CoviaWebApp  {
 		routes.get("/llms.txt",this::llmsTxt);
 		routes.get("/sitemap.xml",this::siteMap);
 
+	}
+
+	private void rootPage(Context ctx) throws IOException {
+		Config.RootPage root = engine.config().getRootPage();
+		if (root == null) {
+			indexPage(ctx);
+			return;
+		}
+		if (root.isRedirect()) {
+			ctx.redirect(root.redirect());
+			return;
+		}
+		ctx.header("Content-Type", "text/html; charset=utf-8");
+		ctx.result(Files.readString(root.file()));
+		ctx.status(200);
 	}
 	
 	private void indexPage(Context ctx) {

@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -24,6 +26,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.TestInstance.Lifecycle;
+import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.crypto.Hashing;
 import convex.core.data.ACell;
@@ -57,12 +60,68 @@ public class VenueServerTest {
 	VenueServer venueServer;
 	Engine venue;
 	VenueHTTP covia;
+
+	@TempDir
+	Path tempDir;
 	
 	@BeforeAll
 	public void setupServer() throws Exception {
 		venueServer=TestServer.SERVER;
 		venue=TestServer.ENGINE;
 		covia = TestServer.COVIA;
+	}
+
+	@Test
+	public void testOperatorRootPageRedirectKeepsBuiltInIndex() throws Exception {
+		VenueServer server = VenueServer.launch(Maps.of(
+			Config.PORT, CVMLong.create(0),
+			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
+			Config.ROOT_PAGE, Maps.of(
+				Config.REDIRECT, Strings.create("https://operator.example/"))));
+		try {
+			HttpClient client = HttpClient.newBuilder()
+				.followRedirects(HttpClient.Redirect.NEVER).build();
+			HttpResponse<String> root = client.send(HttpRequest.newBuilder()
+				.uri(new URI("http://127.0.0.1:" + server.port() + "/"))
+				.GET().timeout(Duration.ofSeconds(5)).build(),
+				HttpResponse.BodyHandlers.ofString());
+			assertEquals(302, root.statusCode());
+			assertEquals("https://operator.example/",
+				root.headers().firstValue("location").orElse(null));
+
+			HttpResponse<String> builtIn = client.send(HttpRequest.newBuilder()
+				.uri(new URI("http://127.0.0.1:" + server.port() + "/index.html"))
+				.GET().timeout(Duration.ofSeconds(5)).build(),
+				HttpResponse.BodyHandlers.ofString());
+			assertEquals(200, builtIn.statusCode());
+			assertTrue(builtIn.body().contains("Covia AI"));
+		} finally {
+			server.close();
+		}
+	}
+
+	@Test
+	public void testOperatorRootPageFile() throws Exception {
+		Path page = tempDir.resolve("operator-index.html");
+		Files.writeString(page, "<!doctype html><title>Operator</title><h1>Mine</h1>");
+		VenueServer server = VenueServer.launch(Maps.of(
+			Config.PORT, CVMLong.create(0),
+			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
+			Config.ROOT_PAGE, Maps.of(
+				Config.FILE, Strings.create(page.toString()))));
+		try {
+			HttpResponse<String> root = HttpClient.newHttpClient().send(
+				HttpRequest.newBuilder()
+					.uri(new URI("http://127.0.0.1:" + server.port() + "/"))
+					.GET().timeout(Duration.ofSeconds(5)).build(),
+				HttpResponse.BodyHandlers.ofString());
+			assertEquals(200, root.statusCode());
+			assertTrue(root.headers().firstValue("content-type").orElse("")
+				.startsWith("text/html"));
+			assertTrue(root.body().contains("<h1>Mine</h1>"));
+		} finally {
+			server.close();
+		}
 	}
 	
 	/**

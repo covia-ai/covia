@@ -210,7 +210,17 @@ public class Engine {
 	 */
 	public Engine(AMap<AString, ACell> config, ALatticeCursor<Index<Keyword,ACell>> cursor,
 			AKeyPair keyPair, PersistenceHandler persistHandler) throws IOException {
-		this.config=new Config(config);
+		this(new Config(config), cursor, keyPair, persistHandler);
+	}
+
+	/**
+	 * Canonical constructor for a caller that has already validated and resolved
+	 * its Config. VenueServer uses this to reuse the same instance without
+	 * validating twice (and duplicating unknown-field warnings).
+	 */
+	public Engine(Config config, ALatticeCursor<Index<Keyword,ACell>> cursor,
+			AKeyPair keyPair, PersistenceHandler persistHandler) throws IOException {
+		this.config=java.util.Objects.requireNonNull(config, "config");
 		this.keyPair=keyPair;
 		this.lattice=cursor;
 		this.persistHandler = (persistHandler != null) ? persistHandler : PersistenceHandler.NOOP;

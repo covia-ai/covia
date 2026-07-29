@@ -1,10 +1,10 @@
 {
-  "enablePrivateJobs": true,
   "venues": [
     {
       "name": "Local Dev Venue A",
       "hostname": "localhost",
       "port": 8080,
+      "enablePrivateJobs": true,
       "allowPrivateNetwork": true,
       "users": { "autoCreate": true },
       "mcp": {},
@@ -21,6 +21,7 @@
       "name": "Local Dev Venue B",
       "hostname": "localhost",
       "port": 8081,
+      "enablePrivateJobs": true,
       "allowPrivateNetwork": true,
       "users": { "autoCreate": true },
       "mcp": {},

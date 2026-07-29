@@ -51,14 +51,94 @@ public class ConfigTest {
 
 	@Test
 	public void testMaxToolIterationsDefaultAndOverride() {
-		// Unset → 30; operator-configured value wins; invalid (< 1) → default.
+		// Unset → 30; operator-configured value wins; malformed known values fail.
 		assertEquals(30, new Config(null).getMaxToolIterations());
 		assertEquals(100, new Config(Maps.of(
 			Config.MAX_TOOL_ITERATIONS, convex.core.data.prim.CVMLong.create(100)))
 			.getMaxToolIterations());
-		assertEquals(30, new Config(Maps.of(
-			Config.MAX_TOOL_ITERATIONS, convex.core.data.prim.CVMLong.create(0)))
-			.getMaxToolIterations());
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.MAX_TOOL_ITERATIONS, convex.core.data.prim.CVMLong.create(0))));
+	}
+
+	@Test
+	public void testUnknownFieldsWarnUnlessStrict() {
+		// Compatibility default: a field from a newer runtime is retained and ignored.
+		Config compatible = new Config(Maps.of(
+			Strings.create("futureFeature"), Strings.create("value")));
+		assertEquals("value",
+			compatible.getMap().get(Strings.create("futureFeature")).toString());
+
+		IllegalArgumentException strict = assertThrows(IllegalArgumentException.class,
+			() -> new Config(Maps.of(
+				Config.STRICT_CONFIG, CVMBool.TRUE,
+				Strings.create("futureFeature"), Strings.create("value"))));
+		assertTrue(strict.getMessage().contains("venue.futureFeature"));
+
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.STRICT_CONFIG, CVMBool.TRUE,
+			Config.RATE_LIMIT, Maps.of(Strings.create("rsp"), 10L))));
+	}
+
+	@Test
+	public void testKnownMalformedFieldsAlwaysFail() {
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.PORT, Strings.create("8080"))));
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.AUTH, Strings.create("public"))));
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.AUTH, Maps.of(Config.AUDIENCE, Strings.create("optional")))));
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.RATE_LIMIT, Maps.of(Strings.create("rps"), 0L))));
+	}
+
+	@Test
+	public void testExtensibleAdapterConfigAllowedInStrictMode() {
+		Config c = new Config(Maps.of(
+			Config.STRICT_CONFIG, CVMBool.TRUE,
+			Config.ADAPTERS, Maps.of(
+				Strings.create("future-adapter"),
+				Maps.of(Strings.create("vendorOption"), Strings.create("ok")))));
+		assertEquals("ok", c.getAdapterConfig("future-adapter")
+			.get(Strings.create("vendorOption")).toString());
+	}
+
+	@Test
+	public void testRootPagePolicyIsUnambiguousAndSafe() {
+		Config redirect = new Config(Maps.of(
+			Config.ROOT_PAGE, Maps.of(
+				Config.REDIRECT, Strings.create("/operator"))));
+		assertEquals("/operator", redirect.getRootPage().redirect());
+		assertTrue(redirect.getRootPage().isRedirect());
+
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.ROOT_PAGE, Maps.empty())));
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.ROOT_PAGE, Maps.of(
+				Config.REDIRECT, Strings.create("//evil.example")))));
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.ROOT_PAGE, Maps.of(
+				Config.FILE, Strings.create("definitely-not-a-real-file.html")))));
+	}
+
+	@Test
+	public void testStandaloneStrictConfigIsInheritedByVenues() {
+		var venues = Config.validateServerConfig(Maps.of(
+			Config.STRICT_CONFIG, CVMBool.TRUE,
+			Config.VENUES, Vectors.of(Maps.of(
+				Config.NAME, Strings.create("Strict venue")))));
+		assertEquals(1, venues.size());
+		assertEquals(CVMBool.TRUE, venues.get(0).get(Config.STRICT_CONFIG));
+
+		assertThrows(IllegalArgumentException.class, () -> {
+			var inherited = Config.validateServerConfig(Maps.of(
+				Config.STRICT_CONFIG, CVMBool.TRUE,
+				Config.VENUES, Vectors.of(Maps.of(
+					Strings.create("typoField"), Strings.create("value")))));
+			new Config(inherited.get(0));
+		});
+		assertThrows(IllegalArgumentException.class,
+			() -> Config.validateServerConfig(Maps.of(
+				Config.VENUES, Strings.create("not-an-array"))));
 	}
 
 	@Test

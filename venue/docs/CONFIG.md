@@ -4,6 +4,64 @@ The complete operator configuration reference for a Covia venue. Values live
 in the JSON config passed to `covia.jar` (see `local-dev.json` for the
 ephemeral dev shape and the venue-setup skill for persistent personal configs).
 
+## Validation
+
+Core venue configuration is validated completely before storage or the HTTP
+listener is opened. A known field with the wrong type, an out-of-range value,
+or an unsupported enum value is always a fatal startup error; Covia never
+silently substitutes a default for malformed operator intent.
+
+Unknown core fields warn by default and are ignored. This keeps a configuration
+usable across mixed Covia versions while still making typos visible in operator
+logs. Production and CI deployments can reject them:
+
+```json
+{
+  "strictConfig": true
+}
+```
+
+At the standalone document root, `strictConfig` validates the server document
+and is inherited by every entry in `venues` unless that venue explicitly
+overrides it. It may also be set on one venue only. Strictness applies to known
+nested core blocks such as `auth`, `rateLimit`, `mcp`, and `rootPage`.
+Adapter-specific configuration, file-root names, user bootstrap entries, and
+secret names remain extensible rather than being mistaken for unknown Covia
+fields.
+
+## Public root page
+
+The built-in Covia server summary is the default `/` page. A venue operator can
+replace that public face without changing the API, discovery, or documentation
+routes.
+
+Redirect `/` to an operator application:
+
+```json
+{
+  "rootPage": {
+    "redirect": "https://app.example.com/"
+  }
+}
+```
+
+Or serve an operator-owned HTML file:
+
+```json
+{
+  "rootPage": {
+    "file": "/srv/venue-public/index.html"
+  }
+}
+```
+
+Exactly one of `redirect` or `file` is required. Redirects may be absolute
+HTTP(S) URLs or same-origin paths beginning with `/`. A file must exist and be
+readable at startup; relative paths resolve against the venue process working
+directory. It is read for each request so an operator can update the page
+without restarting the venue. The built-in diagnostics page remains available
+at `/index.html`.
+
 ## Persistence
 
 Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:

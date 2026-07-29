@@ -180,7 +180,7 @@ public class VenueServer {
 					}
 				}
 			};
-			engine = new Engine(config, nodeServer.getCursor(), keyPair, persistHandler);
+			engine = new Engine(this.config, nodeServer.getCursor(), keyPair, persistHandler);
 			engine.start();
 		} catch (Exception e) {
 			// Engine construction is inert; start() owns and rolls back its active

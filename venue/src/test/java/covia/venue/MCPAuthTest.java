@@ -3,6 +3,7 @@ package covia.venue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
@@ -156,37 +157,15 @@ public class MCPAuthTest {
 
 	@Test
 	void invalidPolicyShapesFailClosed() {
-		Config malformedAuth = new Config(Maps.of(
-			Fields.MCP, Maps.of(Config.AUTH, CVMBool.TRUE)));
-		boolean authRejected = false;
-		try {
-			malformedAuth.isMCPAuthRequired();
-		} catch (IllegalArgumentException expected) {
-			authRejected = true;
-		}
-		assertTrue(authRejected);
-
-		Config malformedRequired = new Config(Maps.of(
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Fields.MCP, Maps.of(Config.AUTH, CVMBool.TRUE))));
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
 			Fields.MCP, Maps.of(
-				Config.AUTH, Maps.of(Config.REQUIRED, Strings.create("yes")))));
-		boolean requiredRejected = false;
-		try {
-			malformedRequired.isMCPAuthRequired();
-		} catch (IllegalArgumentException expected) {
-			requiredRejected = true;
-		}
-		assertTrue(requiredRejected);
-
-		Config malformedAllowlist = new Config(Maps.of(
+				Config.AUTH, Maps.of(Config.REQUIRED, Strings.create("yes"))))));
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
 			Fields.MCP, Maps.of(
-				Config.AUTH, Maps.of(Config.ALLOWED_DIDS, Strings.create("did:key:z")))));
-		boolean allowlistRejected = false;
-		try {
-			malformedAllowlist.getMCPAllowedDids();
-		} catch (IllegalArgumentException expected) {
-			allowlistRejected = true;
-		}
-		assertTrue(allowlistRejected);
+				Config.AUTH, Maps.of(
+					Config.ALLOWED_DIDS, Strings.create("did:key:z"))))));
 	}
 
 	@Test

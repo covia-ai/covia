@@ -18,7 +18,6 @@ import ch.qos.logback.core.joran.spi.JoranException;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
-import convex.core.data.AVector;
 import convex.core.data.Maps;
 import convex.core.data.Vectors;
 import convex.core.lang.RT;
@@ -65,7 +64,7 @@ public class MainVenue {
 									Fields.MCP,Maps.of())));
 		}
 		
-		AVector<AMap<AString,ACell>> venues=RT.getIn(config, Fields.VENUES);
+		List<AMap<AString, ACell>> venues = Config.validateServerConfig(config);
 		List<VenueServer> servers=new ArrayList<>();
 		for (AMap<AString,ACell> venueConfig: venues) {
 			servers.add(VenueServer.launch(venueConfig));

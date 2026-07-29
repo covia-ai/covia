@@ -2,11 +2,17 @@ package covia.venue;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -32,6 +38,8 @@ import convex.core.lang.RT;
  */
 public class Config {
 
+	private static final Logger log = LoggerFactory.getLogger(Config.class);
+
 	// ========== Top-level config keys ==========
 
 	/** Key for venues array */
@@ -39,6 +47,12 @@ public class Config {
 
 	/** Key for Convex peer configuration */
 	public static final AString CONVEX = Strings.intern("convex");
+
+	/**
+	 * Reject unknown core configuration fields instead of warning about them.
+	 * Known fields are type/range checked regardless of this setting.
+	 */
+	public static final AString STRICT_CONFIG = Strings.intern("strictConfig");
 
 	// ========== Lattice store config keys ==========
 
@@ -82,6 +96,14 @@ public class Config {
 
 	/** Key for venue hostname */
 	public static final AString HOSTNAME = Strings.intern("hostname");
+
+	/**
+	 * Root-page policy. The value is an object containing exactly one of:
+	 * {@code {"redirect": "https://operator.example"}} or
+	 * {@code {"file": "public/index.html"}}.
+	 */
+	public static final AString ROOT_PAGE = Strings.intern("rootPage");
+	public static final AString REDIRECT = Strings.intern("redirect");
 
 	/** Key for the venue default LLM provider operation used for new agents. */
 	public static final AString DEFAULT_LLM_OPERATION = Strings.intern("defaultLlmOperation");
@@ -329,12 +351,442 @@ public class Config {
 
 	private final AMap<AString, ACell> config;
 
+	private static final Set<String> KNOWN_FIELDS = Set.of(
+		"name", "description", "did", "hostname", "rootPage",
+		"defaultLlmOperation", "defaultTransitionOp", "maxToolIterations",
+		"port", "bindAddress", "baseUrl", "rateLimit", "acceptQueueSize",
+		"httpSelectors", "httpAcceptors", "mcp", "a2a", "adapters",
+		"modules", "users", "store", "seed", "keystore", "storage",
+		"maxContentSize", "auth", "webdav", "file", "corsOrigins",
+		"allowPrivateNetwork", "enablePrivateJobs", "fixMcpStrings",
+		"outputValidation", "secrets", "strictAssets", "strictConfig");
+
 	/**
 	 * Create a Config wrapping the given venue config map.
 	 * @param config Venue config map, or null for empty defaults
 	 */
 	public Config(AMap<AString, ACell> config) {
 		this.config = (config == null) ? Maps.empty() : config;
+		validate();
+	}
+
+	/**
+	 * Validates the standalone server document and returns its venue maps.
+	 * A server-level {@code strictConfig: true} is inherited by venues that do
+	 * not set their own value.
+	 *
+	 * @param serverConfig complete config document containing {@code venues}
+	 * @return validated venue config maps
+	 */
+	@SuppressWarnings("unchecked")
+	public static List<AMap<AString, ACell>> validateServerConfig(
+			AMap<AString, ACell> serverConfig) {
+		if (serverConfig == null) {
+			throw malformed("server", "must be an object");
+		}
+		boolean strict = optionalBoolean(
+			serverConfig, STRICT_CONFIG, "strictConfig", false);
+		validateUnknownFields(serverConfig,
+			Set.of("venues", "convex", "operations", "strictConfig"),
+			"server", strict);
+		optionalMap(serverConfig, CONVEX, "convex");
+		optionalMap(serverConfig, Strings.intern("operations"), "operations");
+
+		ACell rawVenues = serverConfig.get(VENUES);
+		if (!(rawVenues instanceof AVector<?> venues) || venues.count() == 0) {
+			throw malformed("venues", "must be a non-empty array of venue objects");
+		}
+		ArrayList<AMap<AString, ACell>> result = new ArrayList<>();
+		for (long i = 0; i < venues.count(); i++) {
+			ACell entry = venues.get(i);
+			if (!(entry instanceof AMap<?, ?>)) {
+				throw malformed("venues[" + i + "]", "must be an object");
+			}
+			AMap<AString, ACell> venue = (AMap<AString, ACell>) entry;
+			if (strict && venue.get(STRICT_CONFIG) == null) {
+				venue = venue.assoc(STRICT_CONFIG, CVMBool.TRUE);
+			}
+			result.add(venue);
+		}
+		return List.copyOf(result);
+	}
+
+	/**
+	 * Validates every core field eagerly. Unknown fields remain compatible by
+	 * default: they produce an operator warning because modules and future Covia
+	 * versions may introduce fields this runtime does not understand. Setting
+	 * {@code strictConfig: true} upgrades those warnings to a startup failure.
+	 */
+	private void validate() {
+		boolean strict = optionalBoolean(config, STRICT_CONFIG, "strictConfig", false);
+		validateUnknownFields(config, KNOWN_FIELDS, "venue", strict);
+
+		optionalString(config, NAME, "name");
+		optionalString(config, Strings.intern("description"), "description");
+		optionalString(config, DID, "did");
+		optionalString(config, HOSTNAME, "hostname");
+		optionalString(config, DEFAULT_LLM_OPERATION, "defaultLlmOperation");
+		optionalString(config, DEFAULT_TRANSITION_OP, "defaultTransitionOp");
+		optionalString(config, BIND_ADDRESS, "bindAddress");
+		optionalString(config, STORE, "store");
+		optionalString(config, SEED, "seed");
+
+		optionalLong(config, MAX_TOOL_ITERATIONS, "maxToolIterations", 1, Integer.MAX_VALUE);
+		optionalLong(config, PORT, "port", 0, 65_535);
+		optionalLong(config, ACCEPT_QUEUE_SIZE, "acceptQueueSize", 1, Integer.MAX_VALUE);
+		optionalLong(config, HTTP_SELECTORS, "httpSelectors", 1, Integer.MAX_VALUE);
+		optionalLong(config, HTTP_ACCEPTORS, "httpAcceptors", 0, Integer.MAX_VALUE);
+		optionalLong(config, MAX_CONTENT_SIZE, "maxContentSize", 1, Long.MAX_VALUE);
+
+		optionalBoolean(config, STRICT_ASSETS, "strictAssets", true);
+		optionalBoolean(config, FIX_MCP_STRINGS, "fixMcpStrings", true);
+		optionalBoolean(config, ALLOW_PRIVATE_NETWORK, "allowPrivateNetwork", false);
+		optionalBoolean(config, ENABLE_PRIVATE_JOBS, "enablePrivateJobs", false);
+
+		validateBaseUrl();
+		validateRootPage(strict);
+		validateRateLimit(strict);
+		validateKeystore(strict);
+		validateStorage(strict);
+		validateWebDav(strict);
+		validateFile(strict);
+		validateAuth(strict);
+		validateUsers(strict);
+		validateMcp(strict);
+		validateA2a(strict);
+		validateMapField(ADAPTERS, "adapters");
+		validateMapField(SECRETS, "secrets");
+		validateModules(strict);
+
+		// Reuse the canonical parser so malformed CORS never silently widens.
+		getCorsPolicy();
+
+		AString outputValidation = optionalString(
+			config, OUTPUT_VALIDATION, "outputValidation");
+		if (outputValidation != null
+				&& !Set.of("off", "warn", "strict").contains(outputValidation.toString())) {
+			throw malformed("outputValidation", "must be one of off, warn, strict");
+		}
+	}
+
+	private void validateBaseUrl() {
+		AString raw = optionalString(config, BASE_URL, "baseUrl");
+		if (raw == null) return;
+		try {
+			URI uri = new URI(raw.toString());
+			if (!uri.isAbsolute()
+				|| (!"http".equalsIgnoreCase(uri.getScheme())
+					&& !"https".equalsIgnoreCase(uri.getScheme()))
+				|| uri.getHost() == null || uri.getRawFragment() != null
+				|| uri.getRawQuery() != null) {
+				throw malformed("baseUrl", "must be an absolute HTTP(S) origin or base path");
+			}
+		} catch (URISyntaxException e) {
+			throw malformed("baseUrl", "must be a valid absolute HTTP(S) URL");
+		}
+	}
+
+	private void validateRootPage(boolean strict) {
+		AMap<AString, ACell> root = optionalMap(config, ROOT_PAGE, "rootPage");
+		if (root == null) return;
+		validateUnknownFields(root, Set.of("redirect", "file"), "rootPage", strict);
+		AString redirect = optionalString(root, REDIRECT, "rootPage.redirect");
+		AString file = optionalString(root, FILE, "rootPage.file");
+		if ((redirect == null) == (file == null)) {
+			throw malformed("rootPage", "must contain exactly one of redirect or file");
+		}
+		if (redirect != null) validateRedirect(redirect.toString());
+		if (file != null) validateRootFile(file.toString());
+	}
+
+	private static void validateRedirect(String target) {
+		if (target.isBlank() || target.indexOf('\r') >= 0 || target.indexOf('\n') >= 0) {
+			throw malformed("rootPage.redirect", "must be a non-empty URL or absolute path");
+		}
+		if (target.startsWith("/") && !target.startsWith("//")) {
+			if ("/".equals(target)) {
+				throw malformed("rootPage.redirect", "must not redirect / to itself");
+			}
+			return;
+		}
+		try {
+			URI uri = new URI(target);
+			if (!uri.isAbsolute() || uri.getHost() == null
+				|| (!"http".equalsIgnoreCase(uri.getScheme())
+					&& !"https".equalsIgnoreCase(uri.getScheme()))) {
+				throw malformed("rootPage.redirect",
+					"must be an absolute HTTP(S) URL or a path beginning with /");
+			}
+		} catch (URISyntaxException e) {
+			throw malformed("rootPage.redirect",
+				"must be a valid absolute HTTP(S) URL or absolute path");
+		}
+	}
+
+	private static void validateRootFile(String configuredPath) {
+		if (configuredPath.isBlank()) {
+			throw malformed("rootPage.file", "must not be empty");
+		}
+		try {
+			Path path = Path.of(configuredPath);
+			if (!Files.isRegularFile(path) || !Files.isReadable(path)) {
+				throw malformed("rootPage.file",
+					"must name a readable regular file: " + path.toAbsolutePath());
+			}
+		} catch (InvalidPathException e) {
+			throw malformed("rootPage.file", "is not a valid filesystem path");
+		}
+	}
+
+	private void validateRateLimit(boolean strict) {
+		AMap<AString, ACell> rate = optionalMap(config, RATE_LIMIT, "rateLimit");
+		if (rate == null) return;
+		validateUnknownFields(rate,
+			Set.of("enabled", "rps", "burst", "maxConcurrentJobsPerUser", "blockMs"),
+			"rateLimit", strict);
+		optionalBoolean(rate, ENABLED, "rateLimit.enabled", false);
+		optionalLong(rate, Strings.intern("rps"), "rateLimit.rps", 1, Long.MAX_VALUE);
+		optionalLong(rate, Strings.intern("burst"), "rateLimit.burst", 1, Long.MAX_VALUE);
+		optionalLong(rate, Strings.intern("maxConcurrentJobsPerUser"),
+			"rateLimit.maxConcurrentJobsPerUser", 0, Integer.MAX_VALUE);
+		optionalLong(rate, Strings.intern("blockMs"), "rateLimit.blockMs", 0, Long.MAX_VALUE);
+	}
+
+	private void validateKeystore(boolean strict) {
+		AMap<AString, ACell> keystore = optionalMap(config, KEYSTORE, "keystore");
+		if (keystore == null) return;
+		validateUnknownFields(keystore,
+			Set.of("path", "alias", "storepass", "keypass"), "keystore", strict);
+		for (String field : List.of("path", "alias", "storepass", "keypass")) {
+			optionalString(keystore, Strings.intern(field), "keystore." + field);
+		}
+	}
+
+	private void validateStorage(boolean strict) {
+		AMap<AString, ACell> storage = optionalMap(config, STORAGE, "storage");
+		if (storage == null) return;
+		validateUnknownFields(storage, Set.of("content", "path"), "storage", strict);
+		AString content = optionalString(storage, CONTENT, "storage.content");
+		optionalString(storage, PATH, "storage.path");
+		if (content != null && !Set.of("lattice", "memory", "file", "dlfs")
+				.contains(content.toString())) {
+			throw malformed("storage.content",
+				"must be one of lattice, memory, file, dlfs");
+		}
+	}
+
+	private void validateWebDav(boolean strict) {
+		AMap<AString, ACell> webdav = optionalMap(config, WEBDAV, "webdav");
+		if (webdav == null) return;
+		validateUnknownFields(webdav, Set.of("enabled"), "webdav", strict);
+		optionalBoolean(webdav, ENABLED, "webdav.enabled", false);
+	}
+
+	private void validateFile(boolean strict) {
+		AMap<AString, ACell> file = optionalMap(config, FILE, "file");
+		if (file == null) return;
+		validateUnknownFields(file, Set.of("roots"), "file", strict);
+		// File roots are intentionally extensible and are validated by FileAdapter.
+		optionalMap(file, ROOTS, "file.roots");
+	}
+
+	private void validateAuth(boolean strict) {
+		AMap<AString, ACell> auth = optionalMap(config, AUTH, "auth");
+		if (auth == null) return;
+		validateUnknownFields(auth,
+			Set.of("tokenExpiry", "public", "audience", "acceptedAudiences", "oauth"),
+			"auth", strict);
+		optionalLong(auth, TOKEN_EXPIRY, "auth.tokenExpiry", 1, Long.MAX_VALUE);
+
+		AString audience = optionalString(auth, AUDIENCE, "auth.audience");
+		if (audience != null && !Set.of("verify", "require").contains(audience.toString())) {
+			throw malformed("auth.audience", "must be verify or require");
+		}
+		optionalStringVector(auth, ACCEPTED_AUDIENCES, "auth.acceptedAudiences");
+
+		AMap<AString, ACell> publicConfig = optionalMap(auth, PUBLIC, "auth.public");
+		if (publicConfig != null) {
+			validateUnknownFields(publicConfig, Set.of("enabled", "caps"),
+				"auth.public", strict);
+			optionalBoolean(publicConfig, ENABLED, "auth.public.enabled", true);
+			ACell caps = publicConfig.get(CAPS);
+			if (caps != null && !(caps instanceof AString) && !(caps instanceof AVector)) {
+				throw malformed("auth.public.caps",
+					"must be \"unrestricted\" or an array of capabilities");
+			}
+			if (caps instanceof AString s && !"unrestricted".equals(s.toString())) {
+				throw malformed("auth.public.caps",
+					"the only supported string value is unrestricted");
+			}
+		}
+
+		AMap<AString, ACell> oauth = optionalMap(auth, OAUTH, "auth.oauth");
+		if (oauth != null) {
+			validateUnknownFields(oauth, Set.of("google", "microsoft", "github"),
+				"auth.oauth", strict);
+			for (String provider : List.of("google", "microsoft", "github")) {
+				AMap<AString, ACell> providerConfig = optionalMap(
+					oauth, Strings.intern(provider), "auth.oauth." + provider);
+				if (providerConfig == null) continue;
+				validateUnknownFields(providerConfig, Set.of("clientId", "clientSecret"),
+					"auth.oauth." + provider, strict);
+				AString clientId = optionalString(providerConfig, CLIENT_ID,
+					"auth.oauth." + provider + ".clientId");
+				AString clientSecret = optionalString(providerConfig, CLIENT_SECRET,
+					"auth.oauth." + provider + ".clientSecret");
+				if ((clientId == null) != (clientSecret == null)) {
+					throw malformed("auth.oauth." + provider,
+						"must provide both clientId and clientSecret");
+				}
+			}
+		}
+	}
+
+	private void validateUsers(boolean strict) {
+		AMap<AString, ACell> users = optionalMap(config, USERS, "users");
+		if (users == null) return;
+		validateUnknownFields(users, Set.of("autoCreate", "bootstrap"), "users", strict);
+		optionalBoolean(users, AUTO_CREATE, "users.autoCreate", false);
+		optionalMap(users, BOOTSTRAP, "users.bootstrap");
+	}
+
+	private void validateMcp(boolean strict) {
+		AMap<AString, ACell> mcp = optionalMap(config, MCP, "mcp");
+		if (mcp == null) return;
+		validateUnknownFields(mcp, Set.of("enabled", "auth"), "mcp", strict);
+		optionalBoolean(mcp, ENABLED, "mcp.enabled", true);
+		AMap<AString, ACell> auth = optionalMap(mcp, AUTH, "mcp.auth");
+		if (auth == null) return;
+		validateUnknownFields(auth, Set.of("required", "allowedDids"), "mcp.auth", strict);
+		optionalBoolean(auth, REQUIRED, "mcp.auth.required", false);
+		optionalStringVector(auth, ALLOWED_DIDS, "mcp.auth.allowedDids");
+		// Preserve the existing DID-shape validation, now at construction time.
+		getMCPAllowedDids();
+	}
+
+	private void validateA2a(boolean strict) {
+		AMap<AString, ACell> a2a = optionalMap(config, A2A, "a2a");
+		if (a2a == null) return;
+		validateUnknownFields(a2a, Set.of("defaultChatOp", "agentInfo"), "a2a", strict);
+		optionalString(a2a, Strings.intern("defaultChatOp"), "a2a.defaultChatOp");
+		AMap<AString, ACell> info = optionalMap(
+			a2a, Strings.intern("agentInfo"), "a2a.agentInfo");
+		if (info == null) return;
+		validateUnknownFields(info,
+			Set.of("name", "description", "version", "organization", "providerUrl"),
+			"a2a.agentInfo", strict);
+		for (String field :
+			List.of("name", "description", "version", "organization", "providerUrl")) {
+			optionalString(info, Strings.intern(field), "a2a.agentInfo." + field);
+		}
+	}
+
+	private void validateModules(boolean strict) {
+		ACell raw = config.get(MODULES);
+		if (raw == null) return;
+		if (!(raw instanceof AVector<?> modules)) {
+			throw malformed("modules", "must be an array");
+		}
+		for (long i = 0; i < modules.count(); i++) {
+			ACell entry = modules.get(i);
+			if (entry instanceof AString) continue;
+			if (!(entry instanceof AMap<?, ?>)) {
+				throw malformed("modules[" + i + "]",
+					"must be a path string or an object");
+			}
+			@SuppressWarnings("unchecked")
+			AMap<AString, ACell> module = (AMap<AString, ACell>) entry;
+			validateUnknownFields(module, Set.of("path", "sha256"),
+				"modules[" + i + "]", strict);
+			if (optionalString(module, PATH, "modules[" + i + "].path") == null) {
+				throw malformed("modules[" + i + "].path", "is required");
+			}
+			optionalString(module, Strings.intern("sha256"), "modules[" + i + "].sha256");
+		}
+	}
+
+	private void validateMapField(AString key, String path) {
+		AMap<AString, ACell> map = optionalMap(config, key, path);
+		if (map == null) return;
+		for (var entry : map.entrySet()) {
+			if (ADAPTERS.equals(key) && !(entry.getValue() instanceof AMap)) {
+				throw malformed(path + "." + entry.getKey(), "must be an object");
+			}
+			if (SECRETS.equals(key) && !(entry.getValue() instanceof AMap)) {
+				throw malformed(path + "." + entry.getKey(),
+					"must be an object of secret names and values");
+			}
+		}
+	}
+
+	private static void validateUnknownFields(AMap<AString, ACell> map,
+			Set<String> known, String path, boolean strict) {
+		ArrayList<String> unknown = new ArrayList<>();
+		for (var entry : map.entrySet()) {
+			Object key = entry.getKey();
+			String name = (key instanceof AString s) ? s.toString() : String.valueOf(key);
+			if (!known.contains(name)) unknown.add(path + "." + name);
+		}
+		if (unknown.isEmpty()) return;
+		String message = "Unknown configuration field" + (unknown.size() == 1 ? "" : "s")
+			+ ": " + String.join(", ", unknown);
+		if (strict) throw new IllegalArgumentException(message);
+		log.warn("{} (ignored; set strictConfig=true to reject)", message);
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> optionalMap(AMap<AString, ACell> map,
+			AString key, String path) {
+		ACell value = map.get(key);
+		if (value == null) return null;
+		if (!(value instanceof AMap)) throw malformed(path, "must be an object");
+		return (AMap<AString, ACell>) value;
+	}
+
+	private static AString optionalString(AMap<AString, ACell> map,
+			AString key, String path) {
+		ACell value = map.get(key);
+		if (value == null) return null;
+		if (!(value instanceof AString s)) throw malformed(path, "must be a string");
+		return s;
+	}
+
+	private static boolean optionalBoolean(AMap<AString, ACell> map,
+			AString key, String path, boolean defaultValue) {
+		ACell value = map.get(key);
+		if (value == null) return defaultValue;
+		if (!(value instanceof CVMBool b)) throw malformed(path, "must be a boolean");
+		return CVMBool.TRUE.equals(b);
+	}
+
+	private static long optionalLong(AMap<AString, ACell> map, AString key,
+			String path, long minimum, long maximum) {
+		ACell value = map.get(key);
+		if (value == null) return minimum;
+		if (!(value instanceof CVMLong number)) throw malformed(path, "must be an integer");
+		long result = number.longValue();
+		if (result < minimum || result > maximum) {
+			throw malformed(path, "must be between " + minimum + " and " + maximum);
+		}
+		return result;
+	}
+
+	private static AVector<?> optionalStringVector(AMap<AString, ACell> map,
+			AString key, String path) {
+		ACell value = map.get(key);
+		if (value == null) return null;
+		if (!(value instanceof AVector<?> vector)) throw malformed(path, "must be an array");
+		for (long i = 0; i < vector.count(); i++) {
+			if (!(vector.get(i) instanceof AString)) {
+				throw malformed(path + "[" + i + "]", "must be a string");
+			}
+		}
+		return vector;
+	}
+
+	private static IllegalArgumentException malformed(String path, String requirement) {
+		return new IllegalArgumentException("Invalid configuration field '" + path + "': "
+			+ requirement);
 	}
 
 	/**
@@ -343,6 +795,28 @@ public class Config {
 	 */
 	public AMap<AString, ACell> getMap() {
 		return config;
+	}
+
+	/** Resolved venue root-page policy, or null for the built-in Covia page. */
+	public record RootPage(String redirect, Path file) {
+		public boolean isRedirect() {
+			return redirect != null;
+		}
+	}
+
+	/**
+	 * Returns the operator-owned root-page policy. A relative file path is
+	 * resolved against the venue process working directory.
+	 *
+	 * @return redirect/file policy, or null to render Covia's built-in page
+	 */
+	public RootPage getRootPage() {
+		AMap<AString, ACell> root = optionalMap(config, ROOT_PAGE, "rootPage");
+		if (root == null) return null;
+		AString redirect = optionalString(root, REDIRECT, "rootPage.redirect");
+		if (redirect != null) return new RootPage(redirect.toString(), null);
+		AString file = optionalString(root, FILE, "rootPage.file");
+		return new RootPage(null, Path.of(file.toString()).toAbsolutePath().normalize());
 	}
 
 	// ========== Typed accessors ==========
@@ -446,7 +920,7 @@ public class Config {
 	/** Venue default tool-call iteration limit per agent transition — the
 	 *  runaway-loop backstop, not a work quota. Overridable per agent via
 	 *  {@code config.maxToolIterations}.
-	 *  @return configured limit ({@code >= 1}), or 30 if unset/invalid */
+	 *  @return configured limit ({@code >= 1}), or 30 if unset */
 	public int getMaxToolIterations() {
 		ACell v = config.get(MAX_TOOL_ITERATIONS);
 		if (v instanceof CVMLong l && l.longValue() >= 1) {
