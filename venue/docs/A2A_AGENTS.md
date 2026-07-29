@@ -7,15 +7,17 @@ is authoritative. For the agent model itself see [AGENT_SESSIONS.md](./AGENT_SES
 and [AGENT_LOOP.md](./AGENT_LOOP.md); for the capability model see the venue
 access-control design and COG-10 / COG-13.
 
-## Baseline and target
+## Front door and per-agent surface
 
 The venue's simplest A2A model treats the **whole venue as one agent**: a single
 front-door Agent Card and a single configured chat operation. In that model the
 venue's real agents — the `AgentAdapter` agents, each with its own config,
-sessions, tasks and tool palette — are not individually reachable.
+sessions, tasks and tool palette — are reached through separate per-agent
+endpoints.
 
-The target is additive: each agent is exposed as its own A2A agent, and the
-single front-door agent is kept as a special case (the operator's public agent).
+Both surfaces are implemented and additive: each hosted agent can be exposed as
+its own A2A agent, while the single front-door agent remains the operator's
+venue-level public agent.
 
 ## The model
 
@@ -105,7 +107,7 @@ flag is `a2a: { public: true, caps: … }` and has two levels:
 - `public: true` alone makes the agent's **card discoverable** by anyone (no
   interaction).
 - adding `caps` makes it **interactable** by non-owners. A non-owner's
-  `message/send` then runs the agent under the *owner's* identity narrowed by
+  `SendMessage` then runs the agent under the *owner's* identity narrowed by
   that scope — `RequestContext.of(ownerDID).withCaps(scope)`. A scope can
   only narrow, so it is escalation-safe. `caps: "unrestricted"` is honoured
   (full owner authority for anonymous callers) with a warning, mirroring
@@ -151,16 +153,16 @@ session id`. The A2A status mapping (`A2ACodec`) already translates Covia job /
 task status to A2A task-lifecycle states; extending it from Job-backed tasks to
 session/task-backed interactions is a mapping change, not a new state machine.
 
-Concretely, a per-agent `message/send` (fresh) is submitted to the agent as an
+Concretely, a per-agent `SendMessage` (fresh) is submitted to the agent as an
 `agent:request` **task**, which mints the session and returns immediately with a
 non-terminal Task the client polls — `agent:request`'s own capability check is
 the ownership enforcement (facade over the capability layer), so no A2A-specific
 trust branch exists. The task Job records its session under `SESSION_ID` (which
 `Job.completeWith` preserves across completion), so `A2ACodec` surfaces
-`contextId = session` for the task's whole lifecycle — the same on `message/send`
+`contextId = session` for the task's whole lifecycle — the same on `SendMessage`
 and on a later `GetTask`. `GetTask` / `CancelTask` reuse the front-door by-id
-handlers (a Task id is a global, caller-scoped Job id). Task continuations (an
-incoming `taskId`) remain a follow-up.
+handlers (a Task id is a global, caller-scoped Job id). Task continuations with
+an incoming `taskId` are not yet implemented (#306).
 
 ## Relationship to the venue-as-single-agent model
 
@@ -169,15 +171,25 @@ who configures one public agent keeps exactly today's well-known card. Per-agent
 exposure is additive — new endpoints and the authenticated catalogue — and does
 not change the front door.
 
-## Build-out threads
+## Implementation status and follow-ups
 
-Logical pieces this design implies (not an implementation plan):
+Shipped:
 
-- Per-agent endpoint routing and card rendering from agent config + skills from
-  the agent's offered operations.
-- The authenticated catalogue / `GetAuthenticatedExtendedCard`, over a job-free
-  agent list/info read surface.
-- The interaction mapping shifting from `Task = Job` to `context = session,
-  task = task`.
-- The per-agent public flag and its attenuated anonymous scope, alongside the
-  existing UCAN delegation path.
+- Per-agent endpoint routing and card rendering from agent config and offered
+  operations.
+- Authenticated catalogue discovery over the job-free agent-list read surface.
+- Per-agent `SendMessage` dispatch through `agent:request`, with Task = task Job
+  and `contextId` = session.
+- Private-by-default cards, explicit public publication, and attenuated
+  anonymous interaction scopes alongside UCAN delegation.
+- `GetTask` and `CancelTask` on the per-agent endpoint.
+
+The route, publication and task-mapping contract is covered by
+`A2AAgentCardTest`; common JSON-RPC and codec behavior is covered by `A2ATest`,
+`A2ACodecTest` and `A2AExtendedCardTest`.
+
+Open protocol work:
+
+- #304 — relay authenticated caller authority for outbound A2A requests.
+- #305 — define stable reattachment when a turn outlives the synchronous wait.
+- #306 — support per-agent multi-turn continuation with incoming `taskId`.

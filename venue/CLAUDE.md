@@ -118,7 +118,43 @@ Base path: `/api/v1/`
 | `/jobs/{id}/sse` | GET | Server-sent job updates (closes on terminal) |
 | `/.well-known/did.json` | GET | Venue DID document (#167) |
 
-MCP endpoint at `/mcp`; A2A at `/a2a` when configured (see `docs/CONFIG.md`).
+MCP endpoint at `/mcp`; A2A is opt-in with an `a2a` config block.
+
+### A2A surfaces
+
+Covia exposes both the venue front door and individual hosted agents:
+
+| Surface | Card | JSON-RPC endpoint |
+|----------|------|-------------------|
+| Venue front door | `GET /.well-known/agent-card.json` | `POST /a2a` |
+| Hosted agent | `GET /a2a/<ownerDID>/g/<agentId>/.well-known/agent-card.json` | `POST /a2a/<ownerDID>/g/<agentId>` |
+
+The front door invokes `a2a.defaultChatOp` for a fresh `SendMessage`. A
+per-agent `SendMessage` invokes `agent:request`; the resulting Covia task Job
+is the A2A Task, and its session is the A2A `contextId`. `GetTask` and
+`CancelTask` use the same per-agent endpoint.
+
+Per-agent exposure is private by default. The owner may always address their
+agent. Agent config `a2a: {public: true}` publishes the card; an explicit
+`a2a.caps` additionally permits anonymous interaction, running under the
+owner's identity narrowed by that scope. Card-only publication does not grant
+interaction. Anonymous denials are existence-hiding 404s; authenticated
+callers without standing receive 403. Native authentication and UCAN checks
+still apply—A2A introduces no new authority.
+
+Detailed addressing, publication, identifier mapping and access semantics are
+in [`docs/A2A_AGENTS.md`](docs/A2A_AGENTS.md), the implementation companion to
+COG-14. Operator configuration and a minimal request example are in
+[`docs/CONFIG.md`](docs/CONFIG.md#a2a-protocol); the non-owner authority model
+is in [`docs/A2A_INTERACTION_AUTHORITY.md`](docs/A2A_INTERACTION_AUTHORITY.md).
+
+Current boundaries:
+
+- Per-agent continuation with an incoming `taskId` is not implemented (#306).
+- Turns exceeding the synchronous wait boundary need stable reattachment
+  semantics (#305).
+- Outbound `a2a` adapter calls do not yet relay authenticated caller authority
+  to a remote venue (#304); anonymous publication remains usable.
 
 ## Development Guidelines
 

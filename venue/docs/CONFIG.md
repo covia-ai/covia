@@ -542,22 +542,22 @@ registered **only** when an `a2a` block is present. Without it, `POST /a2a` and
 `GET /.well-known/agent-card.json` return `501` with a hint pointing back here
 (rather than an indistinguishable 404).
 
-- `defaultChatOp` — the operation invoked on a fresh `message/send` (no
+- `defaultChatOp` — the operation invoked on a fresh `SendMessage` (no
   `taskId`). Its Job becomes the A2A Task; its output becomes the Task's
   artifact. `v/test/ops/echo` needs no LLM secret and is handy for smoke tests;
   point it at an `llmagent`/`agent` chat op for a real agent.
 - `agentInfo` — surfaced in the agent card (`name`/`description`, plus
   `organization`/`providerUrl` for the card's `provider`). All optional.
 
-**Auth note:** `message/send` invokes `defaultChatOp` as the *calling*
+**Auth note:** `SendMessage` invokes `defaultChatOp` as the *calling*
 identity. Under the default read-only public scope an unauthenticated caller
 cannot invoke, so the Task comes back `TASK_STATE_FAILED`. To exercise
-`message/send` from an unauthenticated client, either authenticate the caller
+`SendMessage` from an unauthenticated client, either authenticate the caller
 or widen `auth.public.caps` to permit the op — do the latter only on a
 loopback-bound (`bindAddress: 127.0.0.1`) throwaway venue, never a
 LAN-reachable one. The agent-card GET is public and works regardless.
 
-**Per-agent endpoints (COG-14):** beyond the front door, every agent is
+**Per-agent endpoints (COG-14):** beyond the front door, every hosted agent is
 addressable at `POST /a2a/<ownerDID>/g/<agentId>` (JSON-RPC `SendMessage` →
 `agent:request` task Job = A2A Task; `GetTask`, `CancelTask`,
 `GetExtendedAgentCard`), with its card at the A2A well-known path below that
@@ -568,9 +568,46 @@ discoverable; adding an explicit `a2a.caps` scope accepts stranger
 messages, dispatched as the OWNER narrowed by that scope — it must include
 `agent/request` plus whatever the agent's own work needs. `"unrestricted"`
 grants full owner authority (logged loudly). Wire method names are SDK-style
-(`SendMessage`, not `message/send`). Per-agent task continuation (incoming
-`taskId`) is not yet implemented (#234). Outbound `v/ops/a2a/*` ops pass the
-http adapter's SSRF checks and operator allow/block lists.
+(`SendMessage`, not `message/send`). The full addressing, discovery and
+publication model is in [A2A_AGENTS.md](./A2A_AGENTS.md), the implementation
+companion to COG-14; non-owner run authority is detailed in
+[A2A_INTERACTION_AUTHORITY.md](./A2A_INTERACTION_AUTHORITY.md).
+
+Minimal authenticated per-agent request:
+
+```bash
+# The base URL is also the URL given to a standard A2A card resolver.
+AGENT_URL="$VENUE/a2a/$OWNER_DID/g/$AGENT_ID"
+curl -sS "$AGENT_URL/.well-known/agent-card.json" \
+  -H "Authorization: Bearer $TOKEN"
+
+curl -sS "$AGENT_URL" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{
+    "jsonrpc": "2.0",
+    "id": "send-1",
+    "method": "SendMessage",
+    "params": {
+      "message": {
+        "role": "ROLE_USER",
+        "parts": [{"text": "Hello"}],
+        "messageId": "message-1"
+      }
+    }
+  }'
+```
+
+The result is an A2A Task. Poll its `id` at the same `AGENT_URL` with
+`{"jsonrpc":"2.0","id":"get-1","method":"GetTask","params":{"id":"<task-id>"}}`.
+The `Authorization` header may be omitted only when the agent is explicitly
+published with an `a2a.caps` scope that permits the interaction.
+
+Current boundaries: incoming per-agent `taskId` continuation is not implemented
+(#306); long-running turns still need stable synchronous-boundary reattachment
+(#305); and outbound `v/ops/a2a/*` calls do not yet relay caller authority to a
+remote venue (#304). Outbound calls do pass the HTTP adapter's SSRF checks and
+operator allow/block lists.
 
 ## Secrets bootstrap
 

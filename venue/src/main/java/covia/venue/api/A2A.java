@@ -58,11 +58,13 @@ import io.javalin.http.sse.SseHandler;
  * Push-notification-config methods are intentionally unimplemented for now —
  * the handler returns {@code UnsupportedOperationError} when called.</p>
  *
- * <p>The venue is modelled as a single agent. Fresh {@code SendMessage}
- * (no {@code taskId}) invokes the configured {@code defaultChatOp} which
- * produces a Covia Job; the Job ID becomes the A2A Task ID. Continuations
- * ({@code taskId} set) flow through {@link covia.venue.JobManager#deliverMessage}
- * which dispatches to the adapter's multi-turn handler.</p>
+ * <p>The venue front door is modelled as a single agent. Fresh
+ * {@code SendMessage} (no {@code taskId}) invokes the configured
+ * {@code defaultChatOp}, producing a Covia Job whose ID becomes the A2A Task
+ * ID. Continuations ({@code taskId} set) flow through
+ * {@link covia.venue.JobManager#deliverMessage}, which dispatches to the
+ * adapter's multi-turn handler. Hosted agents are also exposed at per-agent
+ * endpoints under {@code /a2a/<ownerDID>/g/<agentId>}.</p>
  *
  * <p>Wire format uses spec POJOs (gson via {@link JsonUtil#OBJECT_MAPPER})
  * at the HTTP boundary; {@link A2ACodec} translates to/from Covia's ACell
@@ -259,14 +261,15 @@ public class A2A extends ACoviaAPI {
 	/**
 	 * Per-agent A2A JSON-RPC endpoint: {@code POST /a2a/<ownerDID>/g/<agentId>}.
 	 *
-	 * <p>Access is the same owner gate as the card (private by default) and runs
-	 * <em>before</em> the body is read, so a non-owner never learns an agent
-	 * exists. For an owner, {@code message/send} dispatches to {@code agent:request}
-	 * — whose own capability check enforces ownership too (facade over the
-	 * capability layer) — and the resulting task Job becomes the A2A Task.
-	 * {@code GetTask} / {@code CancelTask} reuse the front-door by-id handlers
-	 * (a Task id is a global, caller-scoped Job id). Task continuations and the
-	 * {@code contextId = session} surfacing are follow-ups (#185).</p>
+	 * <p>Access is private by default and is checked <em>before</em> the body is
+	 * read. Anonymous denials hide existence with 404; authenticated callers
+	 * without standing receive 403. {@code SendMessage} dispatches to
+	 * {@code agent:request} — whose own capability check enforces ownership too
+	 * (facade over the capability layer) — and the resulting task Job becomes the
+	 * A2A Task, with {@code contextId = session}. {@code GetTask} /
+	 * {@code CancelTask} reuse the front-door by-id handlers (a Task id is a
+	 * global, caller-scoped Job id). Incoming task continuation is tracked in
+	 * #306.</p>
 	 */
 	protected void handleAgentJsonRpc(Context ctx) {
 		A2ACodec.AgentRef ref = A2ACodec.parseAgentEndpoint(ctx.path());
@@ -277,7 +280,7 @@ public class A2A extends ACoviaAPI {
 
 		RequestContext caller = AuthMiddleware.callerContext(ctx);
 		boolean owner = isOwner(caller, ref);
-		// The context message/send runs under: the owner as themselves, or — for a
+		// SendMessage runs under: the owner as themselves, or — for a
 		// public agent with an explicit a2a.caps grant scope — the owner's identity
 		// narrowed by that scope (COG-14 §5). Otherwise, no access (404/403).
 		RequestContext dispatch;
@@ -343,10 +346,10 @@ public class A2A extends ACoviaAPI {
 	}
 
 	/**
-	 * Per-agent {@code message/send}: a fresh message is submitted to the agent as
+	 * Per-agent {@code SendMessage}: a fresh message is submitted to the agent as
 	 * an {@code agent:request} task; the task Job becomes the A2A Task (async — the
 	 * client polls GetTask). The {@code contextId = session} mapping and task
-	 * continuations (an incoming {@code taskId}) are follow-ups (#185).
+	 * continuations with an incoming {@code taskId} are tracked in #306.
 	 */
 	private void doSendMessageToAgent(Context ctx, Object id, MessageSendParams params,
 			A2ACodec.AgentRef ref, RequestContext rctx) {
