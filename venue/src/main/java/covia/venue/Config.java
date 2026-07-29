@@ -653,8 +653,16 @@ public class Config {
 	private void validateMcp(boolean strict) {
 		AMap<AString, ACell> mcp = optionalMap(config, MCP, "mcp");
 		if (mcp == null) return;
-		validateUnknownFields(mcp, Set.of("enabled", "auth"), "mcp", strict);
+		validateUnknownFields(mcp, Set.of(
+			"enabled", "auth", "includeAdapters", "includePathPrefixes",
+			"serverInfo", "servers"), "mcp", strict);
 		optionalBoolean(mcp, ENABLED, "mcp.enabled", true);
+		optionalStringVector(mcp, Strings.intern("includeAdapters"),
+			"mcp.includeAdapters");
+		optionalStringVector(mcp, Strings.intern("includePathPrefixes"),
+			"mcp.includePathPrefixes");
+		optionalMap(mcp, Strings.intern("serverInfo"), "mcp.serverInfo");
+		optionalMap(mcp, Strings.intern("servers"), "mcp.servers");
 		AMap<AString, ACell> auth = optionalMap(mcp, AUTH, "mcp.auth");
 		if (auth == null) return;
 		validateUnknownFields(auth, Set.of("required", "allowedDids"), "mcp.auth", strict);
@@ -1388,6 +1396,15 @@ public class Config {
 			if (did == null || !did.startsWith("did:") || did.length() <= 4) {
 				throw new IllegalArgumentException(
 					"mcp.auth.allowedDids entries must be non-empty DID strings");
+			}
+			try {
+				if (convex.auth.did.DID.fromString(did) == null) {
+					throw new IllegalArgumentException(
+						"mcp.auth.allowedDids entry is not a valid DID: " + did);
+				}
+			} catch (RuntimeException e) {
+				throw new IllegalArgumentException(
+					"mcp.auth.allowedDids entry is not a valid DID: " + did, e);
 			}
 			result.add(did);
 		}

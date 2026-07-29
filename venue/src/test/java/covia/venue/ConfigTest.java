@@ -89,6 +89,28 @@ public class ConfigTest {
 			Config.AUTH, Maps.of(Config.AUDIENCE, Strings.create("optional")))));
 		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
 			Config.RATE_LIMIT, Maps.of(Strings.create("rps"), 0L))));
+		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
+			Config.MCP, Maps.of(
+				Config.AUTH, Maps.of(
+					Config.ALLOWED_DIDS, Vectors.of("did:not valid"))))));
+	}
+
+	@Test
+	public void testSupportedMcpFieldsPassStrictValidation() {
+		String allowedDid = "did:web:venue.example:u:admin";
+		Config strict = new Config(Maps.of(
+			Config.STRICT_CONFIG, true,
+			Config.MCP, Maps.of(
+				Config.ENABLED, true,
+				"includeAdapters", Vectors.of("covia", "user"),
+				"includePathPrefixes", Vectors.of("v/ops/"),
+				"serverInfo", Maps.of("name", "strict-test"),
+				"servers", Maps.empty(),
+				Config.AUTH, Maps.of(
+					Config.REQUIRED, true,
+					Config.ALLOWED_DIDS, Vectors.of(allowedDid)))));
+		assertTrue(strict.isMCPAuthRequired());
+		assertTrue(strict.getMCPAllowedDids().contains(allowedDid));
 	}
 
 	@Test
