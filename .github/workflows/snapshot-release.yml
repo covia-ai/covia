@@ -1,7 +1,9 @@
 name: Snapshot Release
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Test"]
+    types: [completed]
     branches: [ develop ]
 
 # Serialise snapshot publishing — concurrent runs race the delete/recreate
@@ -13,11 +15,16 @@ concurrency:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: write
 
     steps:
     - uses: actions/checkout@v7
+      with:
+        # Build the exact commit that passed the Test workflow, not the latest
+        # develop commit at the time this runner starts.
+        ref: ${{ github.event.workflow_run.head_sha }}
 
     - name: Set up JDK 21
       uses: actions/setup-java@v5
@@ -50,7 +57,12 @@ jobs:
         fi
 
     - name: Build with Maven
+      # The exact commit was already fully tested, including durability tests.
       run: mvn clean install -DskipTests
+
+    - name: Create executable checksum
+      working-directory: venue/target
+      run: sha256sum covia.jar > covia.jar.sha256
 
     - name: Get current date
       id: date
@@ -81,4 +93,5 @@ jobs:
         This release is automatically updated on every push to develop.
         For stable releases, see tagged versions." \
           --prerelease \
-          venue/target/covia.jar
+          venue/target/covia.jar \
+          venue/target/covia.jar.sha256

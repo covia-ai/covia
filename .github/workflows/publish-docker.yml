@@ -13,7 +13,9 @@ name: Publish Docker image
 #   :<sha>   — every published build, for pinning and rollback
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Test"]
+    types: [completed]
     branches: [ develop, master ]
   workflow_dispatch:
 
@@ -25,6 +27,7 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     outputs:
       image: ghcr.io/covia-ai/covia:${{ steps.sha.outputs.sha }}
     permissions:
@@ -33,6 +36,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v7
+      with:
+        # workflow_run itself uses the default branch as GITHUB_SHA. Always
+        # check out the commit that actually passed Test.
+        ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
     - name: Set up JDK 21
       uses: actions/setup-java@v5
@@ -64,8 +71,13 @@ jobs:
           echo "convex.version=$CONVEX_VERSION (released) — skipping source build"
         fi
 
-    - name: Build with Maven
+    - name: Build tested commit with Maven
+      if: github.event_name == 'workflow_run'
       run: mvn clean install -DskipTests
+
+    - name: Build and test manual dispatch
+      if: github.event_name == 'workflow_dispatch'
+      run: mvn clean install -Dcovia.excludedTestGroups=integration
 
     - name: Get short SHA
       id: sha
@@ -77,7 +89,8 @@ jobs:
       id: tags
       run: |
         tags="ghcr.io/covia-ai/covia:${{ steps.sha.outputs.sha }}"
-        if [ "${{ github.ref_name }}" = "master" ]; then
+        source_branch="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}"
+        if [ "$source_branch" = "master" ]; then
           tags="$tags,ghcr.io/covia-ai/covia:stable"
           version=$(mvn -q help:evaluate -Dexpression=project.version -DforceStdout)
           case "$version" in

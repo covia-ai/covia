@@ -96,8 +96,9 @@ jobs:
             --health-timeout=5s \
             --health-start-period=15s \
             --health-retries=3 \
+            -e JAVA_OPTS="-Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8" \
             ghcr.io/covia-ai/covia:stable \
-            java -Xmx2g -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom -Dfile.encoding=UTF-8 -jar covia.jar /data/config.json
+            /data/config.json
 
           # Wait for health check
           sleep 10
