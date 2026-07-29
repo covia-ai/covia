@@ -1,8 +1,12 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import org.junit.jupiter.api.Test;
 
@@ -18,6 +22,7 @@ import convex.etch.EtchStore;
 import convex.node.NodeConfig;
 import convex.node.NodeServer;
 import covia.lattice.Covia;
+import covia.venue.server.VenueServer;
 
 /**
  * Tests for the venue identity guard (#208): booting an existing store with a
@@ -34,6 +39,14 @@ public class VenueIdentityGuardTest {
 	@SuppressWarnings("unchecked")
 	private static AMap<AString, ACell> configFor(AKeyPair kp) {
 		return (AMap<AString, ACell>) (AMap<?, ?>) Maps.of(Config.DID, didFor(kp));
+	}
+
+	@SuppressWarnings("unchecked")
+	private static AMap<AString, ACell> serverConfig(Path storePath, AKeyPair kp) {
+		return (AMap<AString, ACell>) (AMap<?, ?>) Maps.of(
+			Config.PORT, 0,
+			Config.STORE, storePath.toString().replace('\\', '/'),
+			Config.SEED, kp.getSeed().toHexString());
 	}
 
 	@Test
@@ -77,6 +90,32 @@ public class VenueIdentityGuardTest {
 			assertEquals(didFor(kpA), engine.getDIDString().toString());
 			engine.close();
 			ns.close();
+		}
+	}
+
+	@Test
+	public void failedVenueServerIdentityGuardReleasesEtchFileLock() throws Exception {
+		Path dir = Files.createTempDirectory("venue-identity-rollback-");
+		Path storePath = dir.resolve("venue.etch");
+		dir.toFile().deleteOnExit();
+		storePath.toFile().deleteOnExit();
+		AKeyPair owner = AKeyPair.createSeeded(20801);
+		AKeyPair wrong = AKeyPair.createSeeded(20802);
+
+		VenueServer initial = VenueServer.launch(serverConfig(storePath, owner));
+		initial.close();
+
+		RuntimeException failure = assertThrows(RuntimeException.class,
+				() -> VenueServer.launch(serverConfig(storePath, wrong)));
+		assertTrue(String.valueOf(failure.getCause()).contains("Venue key mismatch"),
+			"identity guard diagnostic must survive constructor rollback: " + failure);
+
+		EtchStore reopened = EtchStore.create(storePath.toFile());
+		try {
+			assertNotNull(reopened,
+				"the failed constructor must release the Etch file for immediate reuse");
+		} finally {
+			reopened.close();
 		}
 	}
 }
