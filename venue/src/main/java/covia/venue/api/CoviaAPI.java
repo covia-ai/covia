@@ -1,5 +1,7 @@
 package covia.venue.api;
 
+import static covia.venue.server.VenueRouteFeature.COVIA_API;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -98,57 +100,57 @@ public class CoviaAPI extends ACoviaAPI {
 	}
 
 	public void addRoutes(RoutesConfig routes) {
-		routes.get(ROUTE+"status", this::getStatus);
+		routes.get(ROUTE+"status", this::getStatus, COVIA_API);
 		// <id> matches slashes, so the asset metadata route accepts any lattice
 		// address (a/<hash>, w/…, o/…, <DID>/…) as well as a bare hash. The more
 		// specific {id}/content route below is registered too; Javalin prefers
 		// the more specific match (covered by CoviaAssetRefTest).
-		routes.get(ROUTE+"assets/{id}/content", this::getContent);
-		routes.get(ROUTE+"assets/<id>", this::getAsset);
-		routes.put(ROUTE+"assets/{id}/content", this::putContent);
+		routes.get(ROUTE+"assets/{id}/content", this::getContent, COVIA_API);
+		routes.get(ROUTE+"assets/<id>", this::getAsset, COVIA_API);
+		routes.put(ROUTE+"assets/{id}/content", this::putContent, COVIA_API);
 
-		routes.get(ROUTE+"assets", this::getAssets);
-		routes.post(ROUTE+"assets", this::addAsset);
-		routes.post(ROUTE+"invoke", this::invokeOperation);
-		routes.get(ROUTE+"operations", this::getOperations);
-		routes.get(ROUTE+"operations/{name}", this::getOperation);
+		routes.get(ROUTE+"assets", this::getAssets, COVIA_API);
+		routes.post(ROUTE+"assets", this::addAsset, COVIA_API);
+		routes.post(ROUTE+"invoke", this::invokeOperation, COVIA_API);
+		routes.get(ROUTE+"operations", this::getOperations, COVIA_API);
+		routes.get(ROUTE+"operations/{name}", this::getOperation, COVIA_API);
 		// Job ids are single-segment hex strings, so the job routes use the
 		// segment matcher {id}: a greedy <id> on the GET route also matches
 		// "…/sse", shadowing the SSE route and making job streaming
 		// unreachable (#200).
-		routes.get(ROUTE+"jobs/{id}", this::getJobStatus);
-		routes.post(ROUTE+"jobs/{id}", this::sendMessage);
-		routes.put(ROUTE+"jobs/{id}/cancel", this::cancelJob);
-		routes.put(ROUTE+"jobs/{id}/pause", this::pauseJob);
-		routes.put(ROUTE+"jobs/{id}/resume", this::resumeJob);
-		routes.put(ROUTE+"jobs/{id}/delete", this::deleteJob);
+		routes.get(ROUTE+"jobs/{id}", this::getJobStatus, COVIA_API);
+		routes.post(ROUTE+"jobs/{id}", this::sendMessage, COVIA_API);
+		routes.put(ROUTE+"jobs/{id}/cancel", this::cancelJob, COVIA_API);
+		routes.put(ROUTE+"jobs/{id}/pause", this::pauseJob, COVIA_API);
+		routes.put(ROUTE+"jobs/{id}/resume", this::resumeJob, COVIA_API);
+		routes.put(ROUTE+"jobs/{id}/delete", this::deleteJob, COVIA_API);
 		// Registered as a plain GET (not routes.sse): Javalin's SseHandler
 		// silently no-ops into an empty 200 without an Accept:
 		// text/event-stream header — the worst failure mode for an
 		// integration surface (#222). The /sse path is unambiguous, so
 		// jobSse defaults to streaming and 406s loudly on an explicit
 		// non-SSE Accept.
-		routes.get(ROUTE+"jobs/{id}/sse", this::jobSse);
-		routes.get(ROUTE+"jobs", this::getJobs);
+		routes.get(ROUTE+"jobs/{id}/sse", this::jobSse, COVIA_API);
+		routes.get(ROUTE+"jobs", this::getJobs, COVIA_API);
 
 		// Job-free lattice value reads (#177) — synchronous, capability-checked,
 		// no Job persisted. Shares CoviaAdapter's read accessors with covia:* ops.
-		routes.get(ROUTE+"values/read", this::getValueRead);
-		routes.get(ROUTE+"values/list", this::getValueList);
-		routes.get(ROUTE+"values/slice", this::getValueSlice);
-		routes.get(ROUTE+"values/inspect", this::getValueInspect);
-		routes.get(ROUTE+"values/aggregate", this::getValueAggregate);
-		routes.get(ROUTE+"values/count", this::getValueCount);
+		routes.get(ROUTE+"values/read", this::getValueRead, COVIA_API);
+		routes.get(ROUTE+"values/list", this::getValueList, COVIA_API);
+		routes.get(ROUTE+"values/slice", this::getValueSlice, COVIA_API);
+		routes.get(ROUTE+"values/inspect", this::getValueInspect, COVIA_API);
+		routes.get(ROUTE+"values/aggregate", this::getValueAggregate, COVIA_API);
+		routes.get(ROUTE+"values/count", this::getValueCount, COVIA_API);
 
 		// Agents — job-free reads (#180), the caller's own agents. Mirrors how
 		// every other entity type is read via GET; no Job persisted.
-		routes.get(ROUTE+"agents", this::getAgents);
-		routes.get(ROUTE+"agents/{id}", this::getAgentInfo);
+		routes.get(ROUTE+"agents", this::getAgents, COVIA_API);
+		routes.get(ROUTE+"agents/{id}", this::getAgentInfo, COVIA_API);
 
 		// Secrets
-		routes.get(ROUTE+"secrets", this::listSecrets);
-		routes.put(ROUTE+"secrets/{name}", this::putSecret);
-		routes.delete(ROUTE+"secrets/{name}", this::deleteSecret);
+		routes.get(ROUTE+"secrets", this::listSecrets, COVIA_API);
+		routes.put(ROUTE+"secrets/{name}", this::putSecret, COVIA_API);
+		routes.delete(ROUTE+"secrets/{name}", this::deleteSecret, COVIA_API);
 
 		// DIDs
 		routes.get("/.well-known/did.json", this::getDIDDocument);

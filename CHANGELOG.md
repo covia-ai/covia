@@ -8,6 +8,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+- Per-route venue policy for embedded HTTP endpoints: contributed routes are
+  raw by default and can independently opt into verified identity, user
+  admission, rate limiting, and lattice sync (#309)
+
 ## [0.7.0] - 2026-07-30
 
 ### Added

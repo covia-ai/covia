@@ -167,10 +167,10 @@ public class MCPAuthTest {
 	}
 
 	@Test
-	void futureMcpSubRoutesAreFailClosed() throws Exception {
+	void unregisteredMcpSubRoutesDoNotInheritTransportPolicy() throws Exception {
 		HttpResponse<String> response = get("/mcp/future");
-		assertEquals(401, response.statusCode(),
-			"an unimplemented future MCP route must cross auth before returning 404");
+		assertEquals(404, response.statusCode(),
+			"Covia policy belongs to registered endpoints, not URL prefixes");
 	}
 
 	@Test

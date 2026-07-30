@@ -1,5 +1,7 @@
 package covia.venue.api;
 
+import static covia.venue.server.VenueRouteFeature.COVIA_MCP;
+
 import static convex.restapi.mcp.McpProtocol.*;
 
 import java.io.IOException;
@@ -258,14 +260,14 @@ public class MCP extends McpServer {
 		// Covia can publish its authentication policy. Well-known metadata is a
 		// public bootstrap surface; authentication applies only to /mcp.
 		routes.before("/mcp", this::validateMcpOrigin);
-		routes.post("/mcp", this::handlePost);
+		routes.post("/mcp", this::handlePost, COVIA_MCP);
 		routes.get("/.well-known/mcp", this::handleWellKnown);
 		routes.get("/.well-known/oauth-protected-resource/mcp",
 			this::handleProtectedResourceMetadata);
 
 		// SSE session routes
-		routes.get("/mcp", this::handleMcpGet);
-		routes.delete("/mcp", this::handleMcpDelete);
+		routes.get("/mcp", this::handleMcpGet, COVIA_MCP);
+		routes.delete("/mcp", this::handleMcpDelete, COVIA_MCP);
 	}
 
 	private void validateMcpOrigin(Context ctx) {

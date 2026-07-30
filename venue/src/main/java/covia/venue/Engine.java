@@ -508,8 +508,10 @@ public class Engine {
 	 *       configuration; Engine is agnostic.</li>
 	 * </ol>
 	 *
-	 * <p>Called by VenueServer's {@code app.after("/api/*")} handler, so all
-	 * writes within a single HTTP request are batched into one sign + persist.</p>
+	 * <p>Called by VenueServer's role-selected {@code afterMatched} handler, so
+	 * all writes within one native protocol request—or an embedder route carrying
+	 * {@code VenueRouteFeature.LATTICE_SYNC}—are batched into one sign and
+	 * persist.</p>
 	 */
 	public void syncState() {
 		refreshWriteClock();

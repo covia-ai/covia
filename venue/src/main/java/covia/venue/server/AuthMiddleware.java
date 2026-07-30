@@ -32,6 +32,7 @@ import covia.venue.auth.JWKSClient;
 import covia.venue.auth.OAuthConfig;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
+import io.javalin.security.RouteRole;
 
 /**
  * Middleware for extracting caller identity from JWT bearer tokens.
@@ -183,10 +184,11 @@ public class AuthMiddleware {
 	}
 
 	/**
-	 * Register auth middleware on API paths. Each call creates a fresh
-	 * {@link AuthMiddleware} instance bound to the supplied venue identity,
-	 * so multiple VenueServers in the same JVM (production multi-tenant or
-	 * parallel test classes) do not share state.
+	 * Register role-selected auth middleware. Each call creates a fresh
+	 * {@link AuthMiddleware} instance bound to the supplied venue identity.
+	 * Only endpoints carrying an authentication-related
+	 * {@link VenueRouteFeature} are inspected, so multiple VenueServers in the
+	 * same JVM do not share state and embedder routes stay independent.
 	 *
 	 * @param routes Javalin routes configuration
 	 * @param engine venue engine providing identity, authentication and user admission
@@ -195,19 +197,36 @@ public class AuthMiddleware {
 	 */
 	public static AuthMiddleware register(RoutesConfig routes, Engine engine) {
 		AuthMiddleware mw = new AuthMiddleware(engine);
-		routes.before("/api/*", mw::extractIdentity);
-		routes.before("/a2a", mw::extractIdentity);
-		routes.before("/a2a/*", mw::extractIdentity);  // per-agent A2A endpoints (COG-14)
-		Config config = engine.config();
-		if (config.hasMCP()) {
-			boolean required = config.isMCPAuthRequired();
-			Set<String> allowedDids = config.getMCPAllowedDids();
-			routes.before("/mcp", ctx -> mw.extractMCPIdentity(ctx, required, allowedDids));
-			// Fail closed for future transport sub-routes. Public discovery lives
-			// under /.well-known and is deliberately outside this filter.
-			routes.before("/mcp/*", ctx -> mw.extractMCPIdentity(ctx, required, allowedDids));
-		}
+		routes.beforeMatched(mw::extractMatchedIdentity);
 		return mw;
+	}
+
+	/**
+	 * Applies authentication only when the matched endpoint explicitly requests
+	 * a Covia route feature. An unmarked route is wholly extender-owned: bearer
+	 * headers are not inspected and no venue user is admitted.
+	 */
+	private void extractMatchedIdentity(Context ctx) {
+		Set<RouteRole> roles = ctx.routeRoles();
+		if (VenueRouteFeature.has(roles, VenueRouteFeature.COVIA_MCP)) {
+			Config config = engine.config();
+			extractMCPIdentity(ctx, config.isMCPAuthRequired(),
+				config.getMCPAllowedDids());
+			return;
+		}
+		if (VenueRouteFeature.has(roles, VenueRouteFeature.COVIA_API)
+				|| VenueRouteFeature.has(roles, VenueRouteFeature.COVIA_A2A)) {
+			extractIdentity(ctx, publicAccessEnabled, null, true);
+			return;
+		}
+		if (VenueRouteFeature.has(roles, VenueRouteFeature.ADMITTED_USER)) {
+			extractIdentity(ctx, false, null, true);
+			return;
+		}
+		if (VenueRouteFeature.has(roles,
+				VenueRouteFeature.AUTHENTICATED_IDENTITY)) {
+			extractIdentity(ctx, false, null, false);
+		}
 	}
 
 	/**
@@ -220,10 +239,14 @@ public class AuthMiddleware {
 		if (publicScope != null) ctx.attribute(CALLER_CAPS_ATTR, publicScope);
 	}
 
-	/** Records an authenticated identity only after the venue admits its DID. */
-	private boolean markAuthenticated(Context ctx, AString callerDID) {
+	/**
+	 * Records an authenticated identity, optionally after admitting its DID as a
+	 * Covia venue user.
+	 */
+	private boolean markAuthenticated(Context ctx, AString callerDID,
+			boolean admitUser) {
 		try {
-			engine.admitUser(callerDID);
+			if (admitUser) engine.admitUser(callerDID);
 			ctx.attribute(CALLER_DID_ATTR, callerDID);
 			return true;
 		} catch (AuthException e) {
@@ -233,14 +256,11 @@ public class AuthMiddleware {
 		}
 	}
 
-	void extractIdentity(Context ctx) {
-		extractIdentity(ctx, publicAccessEnabled, null);
-	}
-
 	private void extractMCPIdentity(Context ctx, boolean required, Set<String> allowedDids) {
 		String resourceMetadata = ACoviaAPI.getExternalBaseUrl(ctx, null)
 			+ "/.well-known/oauth-protected-resource/mcp";
-		extractIdentity(ctx, !required && publicAccessEnabled, resourceMetadata);
+		extractIdentity(ctx, !required && publicAccessEnabled, resourceMetadata,
+			true);
 		AString callerDID = ctx.attribute(CALLER_DID_ATTR);
 		if (callerDID == null) return; // authentication already rejected the request
 		if (!allowedDids.isEmpty() && !allowedDids.contains(callerDID.toString())) {
@@ -258,7 +278,8 @@ public class AuthMiddleware {
 		ctx.skipRemainingHandlers();
 	}
 
-	private void extractIdentity(Context ctx, boolean allowPublic, String resourceMetadata) {
+	private void extractIdentity(Context ctx, boolean allowPublic,
+			String resourceMetadata, boolean admitUser) {
 		String auth = ctx.header("Authorization");
 		if (auth == null || !auth.startsWith("Bearer ")) {
 			if (!allowPublic) {
@@ -298,7 +319,7 @@ public class AuthMiddleware {
 				callerDID = tryVerifyExternalProvider(jwt);
 			}
 			if (callerDID != null) {
-				if (!markAuthenticated(ctx, callerDID)) return;
+				if (!markAuthenticated(ctx, callerDID, admitUser)) return;
 			} else {
 				// A presented token that fails every verification path is a hard
 				// 401 — NEVER a silent downgrade to the public identity, even when

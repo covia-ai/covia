@@ -106,11 +106,10 @@ public class VenueServer {
 	/**
 	 * Extra Javalin route registrars contributed by an embedder — e.g. a service
 	 * that embeds this venue and exposes additional endpoints alongside the venue
-	 * API. Invoked from {@link #addAPIRoutes} (after {@link AuthMiddleware} is
-	 * registered and within the {@code /api/*} filters), so routes mounted under
-	 * {@code /api/...} inherit caller-identity extraction and post-request lattice
-	 * sync. Populated only by launch overloads that accept route registrars;
-	 * empty by default, so the standalone venue behaves exactly as before.
+	 * API. Contributed routes are raw Javalin routes by default, regardless of
+	 * path. An embedder may opt each endpoint into venue services with
+	 * {@link VenueRouteFeature}. Populated only by launch overloads that accept
+	 * route registrars; empty by default.
 	 */
 	protected final List<Consumer<RoutesConfig>> extraRouteRegistrars = new ArrayList<>();
 
@@ -465,9 +464,17 @@ public class VenueServer {
 	/**
 	 * Launch a Venue server, optionally with extra Javalin route registrars
 	 * contributed by an embedder. Each registrar is invoked at server-build time
-	 * (Javalin 7 requires routes at create time), after the auth middleware and
-	 * within the {@code /api/*} filters — so routes mounted under {@code /api/...}
-	 * inherit caller-identity extraction and post-request lattice sync.
+	 * (Javalin 7 requires routes at create time). Contributed routes receive no
+	 * implicit Covia policy based on their URL. Add {@link VenueRouteFeature}
+	 * roles to an endpoint to opt into verified identity, venue-user admission,
+	 * rate limiting, or post-request lattice sync.
+	 *
+	 * <pre>{@code
+	 * VenueServer.launch(config, List.of(routes ->
+	 *     routes.get("/api/product/me", handler,
+	 *         VenueRouteFeature.AUTHENTICATED_IDENTITY)));
+	 * }</pre>
+	 *
 	 * Adapter/module installation, catalog materialisation, secret provisioning,
 	 * and recovery all complete before the HTTP listener is published. Any
 	 * failure closes the partially assembled server in reverse ownership order.
@@ -640,10 +647,11 @@ public class VenueServer {
 			// the generic catch-all 404, so a developer knows the fix is a config
 			// addition, not a wrong URL (#179).
 			routes.get("/.well-known/agent-card.json", VenueServer::a2aNotConfigured);
-			routes.post("/a2a", VenueServer::a2aNotConfigured);
+			routes.post("/a2a", VenueServer::a2aNotConfigured,
+				VenueRouteFeature.COVIA_A2A);
 		}
-		// Embedder-contributed routes (see extraRouteRegistrars). Registered last,
-		// after the auth middleware, so /api/... routes inherit caller identity + sync.
+		// Embedder-contributed routes (see extraRouteRegistrars). Registered last;
+		// URL placement never opts a route into Covia middleware.
 		for (Consumer<RoutesConfig> r : extraRouteRegistrars) r.accept(routes);
 	}
 
@@ -826,30 +834,30 @@ public class VenueServer {
 		// lets the loopback sentinel match literal hosts on any port without DNS.
 		routes.before(ctx -> applyCorsPolicy(ctx, corsPolicy, allowPrivateNetwork));
 
-		// Sync lattice state after every mutation-capable request so writes
-		// are durable across restart. Covers REST (/api/*), MCP JSON-RPC
-		// (/mcp), and A2A endpoints. Without this, MCP-driven writes
-		// (agent_create, covia_write, asset_store, etc.) live only in
-		// memory and are lost on shutdown — silently.
-		routes.after("/api/*", ctx -> engine.syncState());
-		routes.after("/mcp",   ctx -> engine.syncState());
-		routes.after("/mcp/*", ctx -> engine.syncState());
-		routes.after("/a2a",   ctx -> engine.syncState());
-		routes.after("/a2a/*", ctx -> engine.syncState());
+		// Native protocol routes and explicitly opted-in embedder routes sync
+		// lattice state after handling. Matching by endpoint role prevents an
+		// unrelated /api/* route from acquiring Covia persistence semantics.
+		routes.afterMatched(ctx -> {
+			if (VenueRouteFeature.syncsLattice(ctx.routeRoles())) {
+				engine.syncState();
+			}
+		});
 
-		// Auth middleware: before-handlers extracting caller identity.
+		// Auth middleware: endpoint roles, not URL prefixes, select policy.
 		AuthMiddleware.register(routes, engine);
 
 		// Rate limiting: per-caller token bucket, keyed on the identity the auth
 		// middleware just resolved (all anonymous callers share the venue :public
-		// DID → one bucket). Registered AFTER auth so the caller DID is set. A
-		// denied request short-circuits with 429 + Retry-After before any handler
-		// runs — real backpressure at the edge. On by default except loopback.
+		// DID → one bucket). Raw opted-in routes fall back to the connection IP.
+		// Registered AFTER auth so the caller DID is set. A denied request
+		// short-circuits with 429 + Retry-After before any handler runs.
 		if (config.isRateLimitEnabled()) {
 			rateLimiter = new RateLimiter(config.getRateLimitBurst(), config.getRateLimitRps());
-			for (String p : new String[] { "/api/*", "/mcp", "/a2a", "/a2a/*" }) {
-				routes.before(p, this::enforceRateLimit);
-			}
+			routes.beforeMatched(ctx -> {
+				if (VenueRouteFeature.usesRateLimit(ctx.routeRoles())) {
+					enforceRateLimit(ctx);
+				}
+			});
 			log.info("Rate limiting enabled: {} req/s, burst {} per caller",
 				(long) config.getRateLimitRps(), (long) config.getRateLimitBurst());
 		}
@@ -913,15 +921,15 @@ public class VenueServer {
 	/**
 	 * Rate-limit {@code before} filter. Keys the token bucket on the caller
 	 * identity resolved by {@link AuthMiddleware} (authenticated DID, or the
-	 * shared {@code :public} DID for anonymous callers). A denied request is
+	 * shared {@code :public} DID for native anonymous callers). An opted-in raw
+	 * route without identity is keyed on the connection IP. A denied request is
 	 * answered 429 + {@code Retry-After} and short-circuits before any handler.
 	 * CORS preflight ({@code OPTIONS}) is never throttled.
 	 */
 	private void enforceRateLimit(Context ctx) {
 		if ("OPTIONS".equalsIgnoreCase(ctx.method().toString())) return;
 		Object did = ctx.attribute(AuthMiddleware.CALLER_DID_ATTR);
-		if (did == null) return; // no identity resolved — already handled upstream
-		String key = did.toString();
+		String key = (did != null) ? did.toString() : "ip:" + ctx.ip();
 		if (!rateLimiter.tryAcquire(key)) {
 			long retry = rateLimiter.retryAfterSeconds(key);
 			ctx.header("Retry-After", Long.toString(retry));

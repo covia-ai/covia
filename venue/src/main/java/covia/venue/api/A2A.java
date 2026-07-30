@@ -1,5 +1,7 @@
 package covia.venue.api;
 
+import static covia.venue.server.VenueRouteFeature.COVIA_A2A;
+
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -116,14 +118,14 @@ public class A2A extends ACoviaAPI {
 
 	public void addRoutes(RoutesConfig routes) {
 		routes.get(WELL_KNOWN_CARD_PATH, this::getAgentCard);
-		routes.post("/a2a", this::handleJsonRpc);
+		routes.post("/a2a", this::handleJsonRpc, COVIA_A2A);
 		// Per-agent card (COG-14): the standard A2A well-known path relative to the
 		// agent's base endpoint — GET /a2a/<ownerDID>/g/<agentId>/.well-known/agent-card.json.
 		// The greedy <addr> wildcard captures the base + suffix; getAgentCardFor
 		// strips the suffix and parses the base via A2ACodec.parseAgentEndpoint.
-		routes.get("/a2a/<addr>", this::getAgentCardFor);
+		routes.get("/a2a/<addr>", this::getAgentCardFor, COVIA_A2A);
 		// Per-agent JSON-RPC (COG-14 / #184): POST /a2a/<ownerDID>/g/<agentId>.
-		routes.post("/a2a/<addr>", this::handleAgentJsonRpc);
+		routes.post("/a2a/<addr>", this::handleAgentJsonRpc, COVIA_A2A);
 	}
 
 	// ==================== Agent Card ====================
