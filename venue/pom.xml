@@ -201,7 +201,7 @@
 		  <dependency>
  		   <groupId>com.google.genai</groupId>
 		    <artifactId>google-genai</artifactId>
-		    <version>1.63.0</version>
+		    <version>1.64.0</version>
  		 </dependency>
 		
 		<!-- Web / application server with Javalin -->
