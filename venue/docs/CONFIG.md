@@ -192,6 +192,102 @@ Strictly best-effort — headless JVMs (Docker, CI, servers) and unsupported
 desktops run without an icon, and a tray failure never takes a venue down.
 Set `COVIA_NO_TRAY=1` to suppress it explicitly. See `covia.venue.Tray`.
 
+## Embedded route policy
+
+`VenueServer.launch(config, routeContributors)` lets a Java application mount
+its own Javalin routes on the venue server. Covia 0.8 makes ownership explicit:
+**a contributed route is raw Javalin by default, regardless of its path**.
+Putting an application route under `/api/*` does not implicitly add Covia
+authentication, admission, rate limiting, or lattice persistence.
+
+This is a deliberate security boundary. An embedder controls its complete HTTP
+surface and opts into only the venue services that route needs:
+
+| `VenueRouteFeature` | Effect |
+|---|---|
+| `AUTHENTICATED_IDENTITY` | Require a venue-accepted bearer credential; expose both the authenticated credential identity and its mapped venue user; do not create/admit a venue user |
+| `ADMITTED_USER` | Require a venue-accepted credential and admit its mapped venue user; unknown users follow `users.autoCreate` |
+| `RATE_LIMITED` | Apply the configured per-venue-user HTTP token bucket (or per-IP when the route has no identity) |
+| `LATTICE_SYNC` | Sync venue lattice state after the matched handler completes |
+
+The features are independent and can coexist with application-owned
+`RouteRole` values. Covia ignores roles it does not recognise:
+
+```java
+import static covia.venue.server.VenueRouteFeature.*;
+
+VenueServer server = VenueServer.launch(config, List.of(routes -> {
+    // Deliberately public; no Covia policy is inferred from the path.
+    routes.get("/healthz", ctx -> ctx.result("ok"));
+
+    // Authenticated product identity, without venue-user admission.
+    routes.get("/api/product/me", product::me,
+        AUTHENTICATED_IDENTITY, RATE_LIMITED);
+
+    // Authenticated product mutation that writes lattice-backed state.
+    routes.post("/api/product/consent", product::recordConsent,
+        AUTHENTICATED_IDENTITY, RATE_LIMITED, LATTICE_SYNC);
+
+    // A native venue user performing an admitted operation.
+    routes.post("/api/operator/action", operator::act,
+        ADMITTED_USER, RATE_LIMITED, LATTICE_SYNC);
+}));
+```
+
+After Covia-managed authentication, extension handlers can read both sides of
+the mapping:
+
+```java
+AString credentialIdentity = AuthMiddleware.getAuthenticatedIdentity(ctx);
+AString venueUser = AuthMiddleware.getVenueUserDID(ctx);
+```
+
+They are equal for a self-sovereign `did:key` user. For a registered named-user
+key they differ: the authenticated identity is the key DID, while the venue
+user is the stable named DID used for admission, capabilities, job ownership,
+MCP allowlists, and rate limiting. `getCallerDID(ctx)` remains a compatibility
+alias for the venue user.
+
+An extender may instead own authentication end-to-end. Its own Javalin `before`
+handler verifies the credential and mapping, then publishes the result with
+`AuthMiddleware.setRequestIdentity(ctx, authenticatedIdentity, venueUserDID)`.
+That method only attributes the request: it does not verify credentials, admit
+a user, or persist anything.
+
+Native Covia REST, MCP, and A2A routes carry internal policy roles and retain
+their normal admission, rate-limit, and sync behavior. Application routes do
+not need—and generally should not use—the internal `COVIA_*` roles.
+
+Framework-level exception mapping is also policy-neutral. It logs the stack
+trace server-side and returns a bounded diagnostic response selected from the
+request's `Accept` preferences: `application/json`,
+`application/problem+json`, `text/plain`, or safely escaped `text/html`.
+Missing, wildcard-only, or unsupported preferences receive plain text. An
+extender can register a more-specific Javalin exception mapper in its route
+registrar; that mapper takes precedence over Covia's generic fallback.
+
+### Upgrading an embedded venue from 0.7 or earlier
+
+This route policy is a breaking security change for embedders that relied on
+an `/api/*` prefix to inherit venue middleware. Before changing the dependency:
+
+1. Inventory every contributed route; classify it as deliberately public,
+   Covia-authenticated, or authenticated entirely by the application.
+2. Add `AUTHENTICATED_IDENTITY` or `ADMITTED_USER` to every route using Covia
+   credentials. Do not use URL placement as policy.
+3. Add `RATE_LIMITED` where the venue limiter is part of the route's abuse or
+   cost protection. Enabling `rateLimit` in config alone does not select a raw
+   contributed route.
+4. Add `LATTICE_SYNC` to handlers that directly mutate lattice-backed state.
+5. Test missing, invalid, expired, and wrong-audience credentials; verify public
+   routes remain public and authenticated product identities are not silently
+   provisioned as venue users.
+6. Re-test native REST and MCP admission separately from product authorization.
+
+Treat a dependency-only upgrade with no route audit as unsafe: it can turn a
+previously protected contributed route into a raw route without changing its
+URL or handler.
+
 ## Rate limiting
 
 ```json
@@ -209,10 +305,11 @@ Set `COVIA_NO_TRAY=1` to suppress it explicitly. See `covia.venue.Tray`.
 Two independent backpressure controls, keyed per caller identity (all anonymous
 callers share the venue `:public` DID → one bucket).
 
-- **Request rate** (`rps`, `burst`) — a per-caller token bucket on `/api/*`,
-  `/mcp`, `/a2a*`. A denied request short-circuits with **429 + `Retry-After`**
-  before any handler runs. Deliberately coarse/high — it's a flood backstop, not
-  a normal-traffic gate; the job cap is the precise control.
+- **Request rate** (`rps`, `burst`) — a per-caller token bucket on native Covia
+  REST/MCP/A2A routes and contributed routes carrying `RATE_LIMITED`. A denied
+  request short-circuits with **429 + `Retry-After`** before any handler runs.
+  Deliberately coarse/high — it's a flood backstop, not a normal-traffic gate;
+  the job cap is the precise control.
 - **Concurrent jobs** (`maxConcurrentJobsPerUser`) — admission control on
   top-level invokes: a caller at the cap **blocks** up to `blockMs` for a slot
   to free (a job completing releases it), then sheds with **429 + `Retry-After`**.

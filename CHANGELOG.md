@@ -15,6 +15,17 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   is retained separately from its mapped venue user, including for
   extender-owned authentication (#309)
 
+### Changed
+- **Embedded venue migration:** contributed routes no longer inherit Covia
+  middleware from an `/api/*` path. Embedders must opt each protected route into
+  the required `VenueRouteFeature` roles; see the
+  [migration checklist](venue/docs/CONFIG.md#upgrading-an-embedded-venue-from-07-or-earlier)
+
+### Fixed
+- Global HTTP exception responses honour `Accept` preferences for JSON, problem
+  JSON, plain text, and safely escaped HTML while retaining diagnostic details
+  for API and agent clients
+
 ## [0.7.0] - 2026-07-30
 
 ### Added

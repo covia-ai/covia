@@ -245,6 +245,11 @@ java -jar venue/target/covia.jar
 | `venue` | The venue server runtime (produces `covia.jar`) |
 | `workbench` | A minimal Swing REPL for demos and testing |
 
+Embedding the venue server in a Java application? Read the
+[embedded route policy and 0.8 migration checklist](venue/docs/CONFIG.md#embedded-route-policy)
+before upgrading: contributed routes are raw by default and opt into venue
+authentication, rate limiting, and lattice sync explicitly.
+
 ---
 
 ## Roadmap & contributing
