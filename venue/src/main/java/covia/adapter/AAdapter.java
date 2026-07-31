@@ -131,6 +131,17 @@ public abstract class AAdapter {
 		return installAssetAt("v/ops/", catalogPath, resourcePath);
 	}
 
+	/** Installs constructed operation metadata at a catalog path. */
+	protected Hash installAsset(String catalogPath, AMap<AString, ACell> metadata) {
+		Hash hash = installAsset(metadata);
+		if (hash == null) return null;
+		if (!isValidCatalogPath(catalogPath)) {
+			throw new IllegalArgumentException("Invalid catalog path: " + catalogPath);
+		}
+		pendingCatalogEntries.put("v/ops/" + catalogPath, hash);
+		return hash;
+	}
+
 	/**
 	 * Installs a non-primitive example asset (e.g. a demo orchestration or a
 	 * pre-canned sample). The asset is stored in the venue CAS and remains

@@ -267,6 +267,53 @@ representation because Javalin's default mapper does not escape it. An extender
 can register a more-specific Javalin exception mapper in its route registrar;
 that mapper takes precedence over Covia's generic fallback.
 
+### Python operations
+
+The optional Python adapter exposes only operator-configured scripts. There is
+no caller-supplied `eval` operation: allowing arbitrary operation metadata to
+select source or a host path would turn ordinary venue invocation into host
+code execution.
+
+```json
+{
+  "adapters": {
+    "python": {
+      "enabled": true,
+      "library": "/usr/lib/libpython3.13.so",
+      "operations": {
+        "health/score": {
+          "script": "/opt/getmine/python/health_score.py",
+          "function": "main",
+          "name": "Calculate health score",
+          "description": "Calculates a score from a health record",
+          "input": { "type": "object" },
+          "output": { "type": "object" }
+        }
+      }
+    }
+  }
+}
+```
+
+This installs `v/ops/python/health/score`. Each function receives one Python
+value converted from the Covia input and its return value is converted back to
+a Convex value. Script globals persist for the venue lifetime and are released
+on shutdown. Script paths may be absolute or relative to the venue process;
+they are resolved at startup, loaded once, and a missing or invalid configured
+script fails startup.
+
+Python remains disabled unless `enabled` is true. It is also disabled with a
+warning when the stable FFM API (Java 22+), native access, or a compatible
+CPython 3.10–3.14 shared library is unavailable. Use
+`--enable-native-access=ALL-UNNAMED` in production. `library` is optional when
+normal discovery succeeds; it should be set explicitly for reproducible
+deployments.
+
+Python runs in the venue process and is not a sandbox. Configured scripts and
+native extensions have the venue process's filesystem, network, and memory
+authority; only the operator should control them. Use process or container
+isolation when code is not fully trusted.
+
 ### Upgrading an embedded venue from 0.7 or earlier
 
 This route policy is a breaking security change for embedders that relied on

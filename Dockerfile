@@ -47,6 +47,7 @@ ENV JAVA_OPTS="-XX:+UseContainerSupport \
                 -XX:MaxRAMPercentage=75.0 \
                 -XX:+UseG1GC \
                 -XX:+UseStringDeduplication \
+                --enable-native-access=ALL-UNNAMED \
                 -Djava.security.egd=file:/dev/./urandom \
                 -Dfile.encoding=UTF-8"
 

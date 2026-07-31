@@ -644,8 +644,18 @@ public class Engine {
 	private void closeStartedResources(boolean flush, Throwable startupFailure) {
 		jobManager.beginShutdown();
 
-		// Module loaders/adapters are installed after core Engine startup, so
-		// release their classloaders before unwinding the core resources.
+		// Release adapter-owned native/session resources before module classloaders.
+		for (AAdapter adapter : adapters.values()) {
+			if (!(adapter instanceof AutoCloseable closeable)) continue;
+			try {
+				closeable.close();
+			} catch (Exception e) {
+				recordCloseFailure(startupFailure,
+					"Failed to close adapter " + adapter.getName(), e);
+			}
+		}
+		// Module loaders are installed after core Engine startup, so release
+		// their classloaders before unwinding the core resources.
 		for (int i = moduleLoaders.size() - 1; i >= 0; i--) {
 			try {
 				moduleLoaders.get(i).close();
@@ -742,6 +752,8 @@ public class Engine {
 		venue.registerAdapter(new LLMAgentAdapter());
 		venue.registerAdapter(new covia.adapter.agent.GoalTreeAdapter());
 		venue.registerAdapter(new covia.adapter.HITLAdapter());
+		covia.adapter.PythonAdapter.create(venue.config())
+			.ifPresent(venue::registerAdapter);
 
 		// Load operator-declared venue modules (external adapter jars) BEFORE
 		// materialisation, so module ops enter the catalog with everyone

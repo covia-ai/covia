@@ -20,18 +20,28 @@ covia/
 ├── covia-core/             # Grid client library and shared abstractions
 │   ├── pom.xml            # Core module POM
 │   └── src/               # Client, auth strategies, core grid types
+├── covia-python/           # CPython FFM bridge (only runtime dep: Convex)
+│   ├── pom.xml            # Java 21 facade + Java 22+ FFM build profile
+│   └── src/               # Runtime, references, conversion, native bindings
 ├── venue/                  # Main application module
 │   ├── pom.xml            # Venue module POM
 │   └── src/
 │       ├── main/java/     # Main source code
 │       ├── main/resources/ # Resources and assets
 │       └── test/java/     # Test source code
-└── workbench/             # GUI workbench module
+├── workbench/             # GUI workbench module
     ├── pom.xml            # Workbench module POM
     └── src/
         ├── main/java/     # GUI source code
         └── main/resources/ # GUI resources
+└── covia-sql/              # Optional loadable SQL adapter module
 ```
+
+The Java 21 build deliberately omits the optional CPython FFM implementation
+because the stable Foreign Function & Memory API starts in Java 22. The public
+`covia-python` facade remains loadable and reports Python unavailable. CI keeps
+a Java 21 fallback job, while release, snapshot, Docker, and CodeQL builds use
+Java 25 so their artifacts include the FFM backend.
 
 ## Building the Project
 
@@ -265,8 +275,9 @@ To create a stable release:
 ### Publishing to Maven Central
 
 The library modules are published to Maven Central under the `ai.covia` groupId:
-`ai.covia:covia-core`, `ai.covia:venue`, and `ai.covia:workbench` (plus the
-`ai.covia:covia` parent POM). Consumers add them as ordinary dependencies; the
+`ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
+`ai.covia:workbench` (plus the `ai.covia:covia` parent POM). Consumers add them
+as ordinary dependencies; the
 executable `covia.jar` is an unattached assembly and is **not** published (it
 stays a GitHub-release download).
 
