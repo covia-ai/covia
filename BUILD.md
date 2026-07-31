@@ -23,6 +23,9 @@ covia/
 ├── covia-python/           # CPython FFM bridge (only runtime dep: Convex)
 │   ├── pom.xml            # Java 21 facade + Java 22+ FFM build profile
 │   └── src/               # Runtime, references, conversion, native bindings
+├── covia-python-adapter/   # Optional shaded venue module (not in covia.jar)
+│   ├── pom.xml            # Venue SPI provided; covia-python bundled
+│   └── src/               # Configured Python operation adapter
 ├── venue/                  # Main application module
 │   ├── pom.xml            # Venue module POM
 │   └── src/
@@ -37,11 +40,12 @@ covia/
 └── covia-sql/              # Optional loadable SQL adapter module
 ```
 
-The Java 21 build deliberately omits the optional CPython FFM implementation
-because the stable Foreign Function & Memory API starts in Java 22. The public
-`covia-python` facade remains loadable and reports Python unavailable. CI keeps
-a Java 21 fallback job, while release, snapshot, Docker, and CodeQL builds use
-Java 25 so their artifacts include the FFM backend.
+The standard venue does not depend on either Python module. A Java 21 reactor
+build deliberately omits the optional CPython FFM implementation because the
+stable Foreign Function & Memory API starts in Java 22; the public facade stays
+loadable, reports Python unavailable, and native tests skip. CI keeps a Java 21
+fallback job. Release builds use Java 25 and attach the independently loadable
+Python adapter module with its FFM backend.
 
 ## Building the Project
 

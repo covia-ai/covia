@@ -276,9 +276,10 @@ code execution.
 
 ```json
 {
-  "adapters": {
-    "python": {
-      "enabled": true,
+  "modules": [{
+    "path": "modules/covia-python-adapter-0.8.0-module.jar",
+    "sha256": "<optional 64-hex module digest>",
+    "config": {
       "library": "/usr/lib/libpython3.13.so",
       "operations": {
         "health/score": {
@@ -291,7 +292,7 @@ code execution.
         }
       }
     }
-  }
+  }]
 }
 ```
 
@@ -302,12 +303,14 @@ on shutdown. Script paths may be absolute or relative to the venue process;
 they are resolved at startup, loaded once, and a missing or invalid configured
 script fails startup.
 
-Python remains disabled unless `enabled` is true. It is also disabled with a
-warning when the stable FFM API (Java 22+), native access, or a compatible
-CPython 3.10–3.14 shared library is unavailable. Use
-`--enable-native-access=ALL-UNNAMED` in production. `library` is optional when
-normal discovery succeeds; it should be set explicitly for reproducible
-deployments.
+Python is a separate loadable module and is not present in `covia.jar` or the
+standard Docker image. Listing the module enables it by default; `enabled:
+false` leaves it inactive. It is also inactive with a warning when the stable
+FFM API (Java 22+), native access, or a compatible CPython 3.10–3.14 shared
+library is unavailable. Venue startup continues, and native tests skip when
+these prerequisites are absent. Use `--enable-native-access=ALL-UNNAMED` in
+production. `library` is optional when normal discovery succeeds; set it
+explicitly for reproducible deployments.
 
 Python runs in the venue process and is not a sandbox. Configured scripts and
 native extensions have the venue process's filesystem, network, and memory
@@ -641,7 +644,7 @@ Agent-side bounds: each level-3 LLM call is bounded by the agent's
 {
   "modules": [
     "modules/covia-sql-0.6.0-module.jar",
-    { "path": "modules/other.jar", "sha256": "9f2a..." }
+    { "path": "modules/other.jar", "sha256": "9f2a...", "config": { } }
   ]
 }
 ```
@@ -656,6 +659,10 @@ module gets a split-delegation classloader: parent-first for
 for everything else (dependency isolation). Loading is an OPERATOR act —
 no runtime module-load op exists, deliberately. `sha256` pins content;
 boot fails fast on any load error; no hot-unload (restart to remove).
+The optional `config` object is passed unchanged to every adapter discovered
+in that module before registration. An adapter may reject malformed settings
+or remain inactive when an optional runtime is unavailable. Module-specific
+unknown-field handling receives the venue's `strictConfig` mode.
 
 First module: **covia-sql** (#227) — `v/ops/sql/query` / `v/ops/sql/execute`
 over venue-local convex-db databases (per-user, lattice-backed, created on

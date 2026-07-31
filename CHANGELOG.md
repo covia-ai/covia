@@ -10,8 +10,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 - Dependency-light `covia-python` module with Java FFM access to embedded
-  CPython, owned/reference-counted Python values, Convex collection conversion,
-  and operator-configured Python venue operations
+  CPython, owned/reference-counted Python values, and Convex collection
+  conversion; operator-configured operations ship as a separate optional
+  `covia-python-adapter` venue module rather than entering `covia.jar`
 - Per-route venue policy for embedded HTTP endpoints: contributed routes are
   raw by default and can independently opt into verified identity, user
   admission, rate limiting, and lattice sync; authenticated credential identity

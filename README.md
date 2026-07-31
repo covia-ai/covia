@@ -243,15 +243,17 @@ java -jar venue/target/covia.jar
 |--------|---------|
 | `covia-core` | Grid client library and shared abstractions |
 | `covia-python` | Dependency-light CPython FFM bindings and Convex value conversion |
+| `covia-python-adapter` | Optional loadable venue module for configured Python operations |
 | `venue` | The venue server runtime (produces `covia.jar`) |
 | `workbench` | A minimal Swing REPL for demos and testing |
 | `covia-sql` | Optional loadable SQL adapter module |
 
-Java 21 builds the full platform and the Java-21-safe `covia-python` facade;
-Python execution reports unavailable. Java 22+ additionally compiles the stable
-FFM backend. Release artifacts and the published Docker image are built on Java
-25 and contain both layers; a CPython shared library is still required at
-runtime before the adapter can be enabled.
+The standard venue and Docker image have no Python dependency. Java 21 builds
+the Java-21-safe `covia-python` facade and the optional adapter module with
+native execution unavailable; its native tests skip. Java 22+ additionally
+compiles the stable FFM backend. Release builds use Java 25 and publish the
+shaded Python adapter module separately; a CPython shared library is still
+required where that module is loaded.
 
 Embedding the venue server in a Java application? Read the
 [embedded route policy and 0.8 migration checklist](venue/docs/CONFIG.md#embedded-route-policy)

@@ -64,6 +64,10 @@ jobs:
       working-directory: venue/target
       run: sha256sum covia.jar > covia.jar.sha256
 
+    - name: Create Python module checksum
+      working-directory: covia-python-adapter/target
+      run: for jar in *-module.jar; do sha256sum "$jar" > "$jar.sha256"; done
+
     - name: Get current date
       id: date
       run: echo "date=$(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
@@ -94,4 +98,6 @@ jobs:
         For stable releases, see tagged versions." \
           --prerelease \
           venue/target/covia.jar \
-          venue/target/covia.jar.sha256
+          venue/target/covia.jar.sha256 \
+          covia-python-adapter/target/*-module.jar \
+          covia-python-adapter/target/*-module.jar.sha256

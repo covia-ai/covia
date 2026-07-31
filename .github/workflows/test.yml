@@ -95,6 +95,6 @@ jobs:
 
     - name: Verify Java 21 fallback without FFM backend
       run: >-
-        mvn clean test -pl venue -am
+        mvn clean install -pl covia-python-adapter -am
         -Dtest=PythonRefTest,PythonRuntimeTest,PythonAdapterTest,EngineTest
         -Dsurefire.failIfNoSpecifiedTests=false
