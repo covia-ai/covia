@@ -154,18 +154,33 @@ public class HTTPTest {
 		assertNotNull(RT.getIn(result.getOutput(), "status"), "Should have status code");
 	}
 
-	@Test public void testHTTPMethodViaField() throws InterruptedException, ExecutionException, TimeoutException {
+	@Test public void testHTTPMethodViaField() throws Exception {
 		VenueHTTP covia = TestServer.COVIA;
 
-		// Use http:get but override method to POST via the method field
-		Job result = covia.invokeSync("v/ops/http/get", Maps.of(
-			"url", TestServer.BASE_URL + "/api/v1/status",
-			"method", "POST",
-			"body", Maps.of("test", "data")
-		), 10_000);
+		// Use http:get but override method to POST via the method field. A
+		// dedicated echo server keeps this assertion independent of contention,
+		// rate limiting, and route policy on the shared test venue.
+		HttpServer echo = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+		echo.createContext("/method", exchange -> {
+			byte[] body = exchange.getRequestMethod().getBytes(StandardCharsets.UTF_8);
+			exchange.sendResponseHeaders(200, body.length);
+			try (OutputStream os = exchange.getResponseBody()) { os.write(body); }
+		});
+		echo.start();
+		try {
+			Job result = covia.invokeSync("v/ops/http/get", Maps.of(
+				"url", "http://localhost:" + echo.getAddress().getPort() + "/method",
+				"method", "POST",
+				"body", Maps.of("test", "data")
+			), 10_000);
 
-		assertTrue(result.isComplete(), "Method override should work");
-		assertNotNull(RT.getIn(result.getOutput(), "status"), "Should have status code");
+			assertTrue(result.isComplete(), () -> "Method override failed: "
+				+ result.getErrorMessage());
+			assertEquals(200L, RT.ensureLong(RT.getIn(result.getOutput(), "status")).longValue());
+			assertEquals("POST", RT.getIn(result.getOutput(), "body").toString());
+		} finally {
+			echo.stop(0);
+		}
 	}
 
 	// ====================================================================
