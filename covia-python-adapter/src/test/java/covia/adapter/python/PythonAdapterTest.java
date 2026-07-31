@@ -1,4 +1,4 @@
-package covia.adapter;
+package covia.adapter.python;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -22,7 +22,6 @@ import convex.core.data.Strings;
 import convex.core.data.prim.CVMLong;
 import covia.grid.Asset;
 import covia.python.PythonRuntime;
-import covia.venue.Config;
 import covia.venue.Engine;
 
 class PythonAdapterTest {
@@ -30,9 +29,24 @@ class PythonAdapterTest {
 
 	@Test
 	void unavailableRuntimeDisablesAdapterCleanly() {
-		Config config = new Config(pythonConfig("missing.py",
-			"definitely-not-a-python-library"));
-		assertFalse(PythonAdapter.create(config).isPresent());
+		PythonAdapter adapter = new PythonAdapter();
+		assertFalse(adapter.configureModule(pythonConfig("missing.py",
+			"definitely-not-a-python-library"), false));
+	}
+
+	@Test
+	void malformedKnownConfigFailsEvenWithoutPython() {
+		PythonAdapter adapter = new PythonAdapter();
+		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+			() -> adapter.configureModule(Maps.of("enabled", "yes"), false));
+		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+			() -> adapter.configureModule(Maps.of("operations", Maps.of(
+				"bad_name", Maps.of("script", "x.py"))), false));
+		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+			() -> adapter.configureModule(Maps.of("operations", Maps.of(
+				"valid", Maps.of("function", "main"))), false));
+		org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+			() -> adapter.configureModule(Maps.of("typo", true), true));
 	}
 
 	@Test
@@ -48,11 +62,13 @@ class PythonAdapterTest {
 			    return {"value": value["value"] * 2, "calls": calls}
 			""");
 
-		Engine engine = Engine.createTemp(pythonConfig(script.toString(),
-			System.getProperty("covia.python.library")));
+		Engine engine = Engine.createTemp(Maps.empty());
 		try {
+			PythonAdapter adapter = new PythonAdapter();
+			org.junit.jupiter.api.Assertions.assertTrue(adapter.configureModule(
+				pythonConfig(script.toString(), System.getProperty("covia.python.library")), false));
+			engine.registerAdapter(adapter);
 			Engine.addDemoAssets(engine);
-			PythonAdapter adapter = (PythonAdapter) engine.getAdapter("python");
 			assertNotNull(adapter);
 			Asset asset = engine.resolveAsset(Strings.create("v/ops/python/double"),
 				engine.venueContext());
@@ -94,6 +110,6 @@ class PythonAdapterTest {
 					"description", "Doubles a value with configured CPython")));
 		if (library != null) python = python.assoc(Strings.create("library"),
 			Strings.create(library));
-		return Maps.of(Config.ADAPTERS, Maps.of("python", python));
+		return python;
 	}
 }

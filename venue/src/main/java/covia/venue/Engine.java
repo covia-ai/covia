@@ -752,9 +752,6 @@ public class Engine {
 		venue.registerAdapter(new LLMAgentAdapter());
 		venue.registerAdapter(new covia.adapter.agent.GoalTreeAdapter());
 		venue.registerAdapter(new covia.adapter.HITLAdapter());
-		covia.adapter.PythonAdapter.create(venue.config())
-			.ifPresent(venue::registerAdapter);
-
 		// Load operator-declared venue modules (external adapter jars) BEFORE
 		// materialisation, so module ops enter the catalog with everyone
 		// else's. Fail-fast on any load error — explicit config is explicit

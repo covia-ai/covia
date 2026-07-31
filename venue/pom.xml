@@ -33,7 +33,6 @@
 					     group explicitly with e.g. mvn test -Dgroups=durability
 					     -Dcovia.excludedTestGroups= -->
 					<excludedGroups>${covia.excludedTestGroups}</excludedGroups>
-					<argLine>--enable-native-access=ALL-UNNAMED</argLine>
 				</configuration>
 			</plugin>
 			<plugin>
@@ -98,11 +97,6 @@
 		<dependency>
 			<groupId>ai.covia</groupId>
 			<artifactId>covia-core</artifactId>
-			<version>${project.version}</version>
-		</dependency>
-		<dependency>
-			<groupId>ai.covia</groupId>
-			<artifactId>covia-python</artifactId>
 			<version>${project.version}</version>
 		</dependency>
 	

@@ -9,7 +9,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 
 import org.slf4j.Logger;
@@ -456,7 +455,6 @@ public class Config {
 		validateMcp(strict);
 		validateA2a(strict);
 		validateMapField(ADAPTERS, "adapters");
-		validatePythonAdapter(strict);
 		validateMapField(SECRETS, "secrets");
 		validateModules(strict);
 
@@ -706,48 +704,13 @@ public class Config {
 			}
 			@SuppressWarnings("unchecked")
 			AMap<AString, ACell> module = (AMap<AString, ACell>) entry;
-			validateUnknownFields(module, Set.of("path", "sha256"),
+			validateUnknownFields(module, Set.of("path", "sha256", "config"),
 				"modules[" + i + "]", strict);
 			if (optionalString(module, PATH, "modules[" + i + "].path") == null) {
 				throw malformed("modules[" + i + "].path", "is required");
 			}
 			optionalString(module, Strings.intern("sha256"), "modules[" + i + "].sha256");
-		}
-	}
-
-	@SuppressWarnings("unchecked")
-	private void validatePythonAdapter(boolean strict) {
-		AMap<AString, ACell> python = getAdapterConfig("python");
-		if (python.isEmpty()) return;
-		validateUnknownFields(python, Set.of("enabled", "library", "operations"),
-			"adapters.python", strict);
-		optionalBoolean(python, ENABLED, "adapters.python.enabled", false);
-		optionalString(python, Strings.intern("library"), "adapters.python.library");
-		AMap<AString, ACell> operations = optionalMap(python,
-			Strings.intern("operations"), "adapters.python.operations");
-		if (operations == null) return;
-		for (Map.Entry<AString, ACell> entry : operations.entrySet()) {
-			String id = entry.getKey().toString();
-			if (!id.matches("^[a-z][a-z0-9-]*(/[a-z][a-z0-9-]*)*$")) {
-				throw malformed("adapters.python.operations." + id,
-					"name must be a lowercase catalog path");
-			}
-			if (!(entry.getValue() instanceof AMap<?, ?>)) {
-				throw malformed("adapters.python.operations." + id, "must be an object");
-			}
-			AMap<AString, ACell> operation = (AMap<AString, ACell>) entry.getValue();
-			String path = "adapters.python.operations." + id;
-			validateUnknownFields(operation,
-				Set.of("script", "function", "name", "description", "input", "output"),
-				path, strict);
-			if (optionalString(operation, Strings.intern("script"), path + ".script") == null) {
-				throw malformed(path + ".script", "is required");
-			}
-			optionalString(operation, Strings.intern("function"), path + ".function");
-			optionalString(operation, NAME, path + ".name");
-			optionalString(operation, Strings.intern("description"), path + ".description");
-			optionalMap(operation, Strings.intern("input"), path + ".input");
-			optionalMap(operation, Strings.intern("output"), path + ".output");
+			optionalMap(module, Strings.intern("config"), "modules[" + i + "].config");
 		}
 	}
 
@@ -841,6 +804,11 @@ public class Config {
 	 */
 	public AMap<AString, ACell> getMap() {
 		return config;
+	}
+
+	/** Whether unknown configuration fields are rejected rather than warned. */
+	public boolean isStrictConfig() {
+		return RT.bool(config.get(STRICT_CONFIG));
 	}
 
 	/** Resolved venue root-page policy, or null for the built-in Covia page. */

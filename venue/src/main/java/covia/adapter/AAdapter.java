@@ -35,6 +35,25 @@ public abstract class AAdapter {
 	public Engine engine;
 
 	/**
+	 * Configures an adapter discovered from a venue module before it is
+	 * registered or installed.
+	 *
+	 * <p>The module loader passes the immutable {@code modules[].config} object
+	 * verbatim. Existing modules need not override this method. Optional modules
+	 * may return {@code false} when their runtime prerequisites are unavailable;
+	 * this skips registration without turning venue startup into a failure.
+	 * Malformed known settings should still throw. When {@code strict} is true,
+	 * implementations should also reject unknown settings.</p>
+	 *
+	 * @param config module-local configuration, empty when omitted
+	 * @param strict whether venue {@code strictConfig} is enabled
+	 * @return true to register this adapter; false to leave it inactive
+	 */
+	public boolean configureModule(AMap<AString, ACell> config, boolean strict) {
+		return true;
+	}
+
+	/**
 	 * Index of assets installed by this adapter.
 	 * Maps asset Hash to asset metadata (AString).
 	 */

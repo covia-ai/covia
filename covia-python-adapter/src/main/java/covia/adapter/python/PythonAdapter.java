@@ -1,11 +1,11 @@
-package covia.adapter;
+package covia.adapter.python;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -20,10 +20,10 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.lang.RT;
 import covia.api.Fields;
+import covia.adapter.AAdapter;
 import covia.python.PythonException;
 import covia.python.PythonRuntime;
 import covia.python.PythonScript;
-import covia.venue.Config;
 import covia.venue.RequestContext;
 
 /**
@@ -44,55 +44,109 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		String name, String description, ACell input, ACell output) {}
 	private record Operation(Definition definition, PythonScript script) {}
 
-	private final PythonRuntime runtime;
-	private final Map<String, Definition> definitions;
+	private PythonRuntime runtime;
+	private Map<String, Definition> definitions = Map.of();
 	private final Map<String, Operation> operations = new ConcurrentHashMap<>();
 	private final ReentrantReadWriteLock lifecycle = new ReentrantReadWriteLock();
 	private boolean closed;
 
-	private PythonAdapter(PythonRuntime runtime, Map<String, Definition> definitions) {
-		this.runtime = runtime;
-		this.definitions = definitions;
-	}
+	public PythonAdapter() {}
 
-	/** Creates the adapter only when explicitly enabled and runtime-capable. */
-	public static Optional<PythonAdapter> create(Config config) {
-		AMap<AString, ACell> settings = config.getAdapterConfig("python");
-		if (!Boolean.TRUE.equals(RT.jvm(settings.get(ENABLED)))) return Optional.empty();
-
-		AString libraryCell = RT.ensureString(settings.get(LIBRARY));
-		String library = libraryCell == null ? null : libraryCell.toString();
+	@Override
+	public boolean configureModule(AMap<AString, ACell> settings, boolean strict) {
+		validateUnknownFields(settings, Set.of("enabled", "library", "operations"),
+			"python module config", strict);
+		boolean enabled = optionalBoolean(settings, ENABLED, "python.enabled", true);
+		String library = optionalString(settings, LIBRARY, "python.library");
+		Map<String, Definition> parsed = parseDefinitions(settings, strict);
+		if (!enabled) return false;
 		try {
-			PythonRuntime runtime = PythonRuntime.open(library);
-			return Optional.of(new PythonAdapter(runtime, parseDefinitions(settings)));
+			runtime = PythonRuntime.open(library);
+			definitions = parsed;
+			return true;
 		} catch (PythonException e) {
 			log.warn("Python adapter disabled: {}", e.getMessage());
-			return Optional.empty();
+			return false;
 		}
 	}
 
 	@SuppressWarnings("unchecked")
-	private static Map<String, Definition> parseDefinitions(AMap<AString, ACell> settings) {
+	private static Map<String, Definition> parseDefinitions(
+			AMap<AString, ACell> settings, boolean strict) {
 		Map<String, Definition> result = new LinkedHashMap<>();
 		ACell raw = settings.get(OPERATIONS);
 		if (raw == null) return result;
+		if (!(raw instanceof AMap<?, ?>)) throw malformed("python.operations", "must be an object");
 		AMap<AString, ACell> configured = (AMap<AString, ACell>) raw;
 		for (long i = 0; i < configured.count(); i++) {
 			Map.Entry<AString, ACell> entry = configured.entryAt(i);
 			String id = entry.getKey().toString();
+			if (!id.matches("^[a-z][a-z0-9-]*(/[a-z][a-z0-9-]*)*$")) {
+				throw malformed("python.operations." + id,
+					"name must be a lowercase catalog path");
+			}
+			if (!(entry.getValue() instanceof AMap<?, ?>)) {
+				throw malformed("python.operations." + id, "must be an object");
+			}
 			AMap<AString, ACell> definition = (AMap<AString, ACell>) entry.getValue();
-			String script = RT.ensureString(definition.get(SCRIPT)).toString();
-			AString functionCell = RT.ensureString(definition.get(FUNCTION));
-			AString nameCell = RT.ensureString(definition.get(Fields.NAME));
-			AString descriptionCell = RT.ensureString(definition.get(Fields.DESCRIPTION));
+			String path = "python.operations." + id;
+			validateUnknownFields(definition,
+				Set.of("script", "function", "name", "description", "input", "output"),
+				path, strict);
+			String script = optionalString(definition, SCRIPT, path + ".script");
+			if (script == null) throw malformed(path + ".script", "is required");
+			String function = optionalString(definition, FUNCTION, path + ".function");
+			String name = optionalString(definition, Fields.NAME, path + ".name");
+			String description = optionalString(definition, Fields.DESCRIPTION,
+				path + ".description");
+			ACell input = optionalMap(definition, Fields.INPUT, path + ".input");
+			ACell output = optionalMap(definition, Fields.OUTPUT, path + ".output");
 			result.put(id, new Definition(id, Path.of(script).toAbsolutePath().normalize(),
-				functionCell == null ? "main" : functionCell.toString(),
-				nameCell == null ? "Python " + id : nameCell.toString(),
-				descriptionCell == null ? "Runs the configured Python operation " + id
-					: descriptionCell.toString(),
-				definition.get(Fields.INPUT), definition.get(Fields.OUTPUT)));
+				function == null ? "main" : function,
+				name == null ? "Python " + id : name,
+				description == null ? "Runs the configured Python operation " + id : description,
+				input, output));
 		}
 		return result;
+	}
+
+	private static void validateUnknownFields(AMap<AString, ACell> map,
+			Set<String> known, String path, boolean strict) {
+		for (AString key : map.keySet()) {
+			if (known.contains(key.toString())) continue;
+			String message = "Unknown configuration field " + path + "." + key;
+			if (strict) throw new IllegalArgumentException(message);
+			log.warn(message);
+		}
+	}
+
+	private static String optionalString(AMap<AString, ACell> map,
+			AString key, String path) {
+		ACell value = map.get(key);
+		if (value == null) return null;
+		if (!(value instanceof AString string)) throw malformed(path, "must be a string");
+		return string.toString();
+	}
+
+	private static boolean optionalBoolean(AMap<AString, ACell> map,
+			AString key, String path, boolean fallback) {
+		ACell value = map.get(key);
+		if (value == null) return fallback;
+		Object jvm = RT.jvm(value);
+		if (!(jvm instanceof Boolean bool)) throw malformed(path, "must be a boolean");
+		return bool;
+	}
+
+	private static AMap<?, ?> optionalMap(AMap<AString, ACell> map,
+			AString key, String path) {
+		ACell value = map.get(key);
+		if (value == null) return null;
+		if (!(value instanceof AMap<?, ?> nested)) throw malformed(path, "must be an object");
+		return nested;
+	}
+
+	private static IllegalArgumentException malformed(String path, String detail) {
+		return new IllegalArgumentException("Malformed configuration at " + path + ": " + detail);
 	}
 
 	@Override
@@ -109,6 +163,7 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 	@Override
 	protected void installAssets() {
 		try {
+			if (runtime == null) throw new IllegalStateException("Python module was not configured");
 			for (Definition definition : definitions.values()) {
 				if (!Files.isRegularFile(definition.script())) {
 					throw new IllegalStateException(

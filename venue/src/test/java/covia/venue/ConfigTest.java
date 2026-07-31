@@ -12,7 +12,6 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMBool;
-import convex.core.lang.RT;
 
 /**
  * Tests for venue {@link Config} default-resolution getters — in particular the
@@ -126,31 +125,17 @@ public class ConfigTest {
 	}
 
 	@Test
-	public void testPythonAdapterConfigValidation() {
-		Config valid = new Config(Maps.of(
+	public void testModuleConfigIsOpaqueButMustBeAnObject() {
+		Config config = new Config(Maps.of(
 			Config.STRICT_CONFIG, true,
-			Config.ADAPTERS, Maps.of("python", Maps.of(
-				"enabled", true,
-				"library", "/opt/python/libpython3.13.so",
-				"operations", Maps.of("health/score", Maps.of(
-					"script", "/opt/python/score.py",
-					"function", "main",
-					"input", Maps.of("type", "object")))))));
-		assertTrue(RT.bool(valid.getAdapterConfig("python").get(Config.ENABLED)));
+			Config.MODULES, Vectors.of(Maps.of(
+				"path", "modules/example.jar",
+				"config", Maps.of("vendorOption", "ok")))));
+		assertTrue(config.isStrictConfig());
 
 		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
-			Config.ADAPTERS, Maps.of("python", Maps.of(
-				"enabled", "yes")))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
-			Config.ADAPTERS, Maps.of("python", Maps.of(
-				"operations", Maps.of("bad_name", Maps.of("script", "x.py")))))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
-			Config.ADAPTERS, Maps.of("python", Maps.of(
-				"operations", Maps.of("valid", Maps.of("function", "main")))))));
-		assertThrows(IllegalArgumentException.class, () -> new Config(Maps.of(
-			Config.STRICT_CONFIG, true,
-			Config.ADAPTERS, Maps.of("python", Maps.of(
-				"enabled", true, "typo", true)))));
+			Config.MODULES, Vectors.of(Maps.of(
+				"path", "modules/example.jar", "config", "bad")))));
 	}
 
 	@Test

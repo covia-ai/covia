@@ -80,7 +80,9 @@ public class ModuleLoaderTest {
 	@Test
 	public void testModuleLoadsAndServes(@TempDir Path dir) throws Exception {
 		Path jar = buildModuleJar(dir);
-		Engine engine = bootWith(Strings.create(jar.toString()));
+		Engine engine = bootWith(Maps.of(
+			"path", jar.toString(),
+			"config", Maps.of("label", "configured")));
 		try {
 			// Registered, and defined by the module loader (child-first for
 			// the non-shared modtest.* package)
@@ -89,6 +91,8 @@ public class ModuleLoaderTest {
 			assertTrue(adapter.getClass().getClassLoader() instanceof ModuleClassLoader,
 				"module adapter must be defined by the module classloader, was: "
 					+ adapter.getClass().getClassLoader());
+			assertTrue(adapter.getDescription().contains("configured"),
+				"module-local config must be supplied before registration");
 
 			// Catalog materialised from a resource that exists ONLY in the jar
 			RequestContext ctx = RequestContext.of(Strings.create("did:test:moduleloader"));
@@ -101,6 +105,19 @@ public class ModuleLoaderTest {
 			ACell result = job.awaitResult(15000);
 			assertEquals(Status.COMPLETE, job.getStatus(), String.valueOf(job.getErrorMessage()));
 			assertEquals(Strings.create("vroom"), RT.getIn(result, "value"));
+		} finally {
+			engine.close();
+		}
+	}
+
+	@Test
+	public void testModuleAdapterMayRemainInactive(@TempDir Path dir) throws Exception {
+		Path jar = buildModuleJar(dir);
+		Engine engine = bootWith(Maps.of(
+			"path", jar.toString(),
+			"config", Maps.of("enabled", false)));
+		try {
+			assertNull(engine.getAdapter("modtest"));
 		} finally {
 			engine.close();
 		}

@@ -10,9 +10,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Blob;
+import convex.core.data.Maps;
 import convex.core.lang.RT;
 import covia.adapter.AAdapter;
 
@@ -31,7 +33,7 @@ import covia.adapter.AAdapter;
  * <pre>
  * { "modules": [
  *     "modules/covia-sql-module.jar",
- *     { "path": "modules/other.jar", "sha256": "9f2a..." }
+ *     { "path": "modules/other.jar", "sha256": "9f2a...", "config": { } }
  * ] }
  * </pre>
  *
@@ -71,6 +73,7 @@ public class Modules {
 	static void loadModule(Engine engine, ACell entry) {
 		String path;
 		String sha256 = null;
+		AMap<AString, ACell> config = Maps.empty();
 		if (entry instanceof AString s) {
 			path = s.toString();
 		} else {
@@ -80,6 +83,12 @@ public class Modules {
 			path = p.toString();
 			AString h = RT.ensureString(RT.getIn(entry, "sha256"));
 			if (h != null) sha256 = h.toString();
+			AMap<ACell, ACell> configured = RT.ensureMap(RT.getIn(entry, "config"));
+			if (configured != null) {
+				@SuppressWarnings({ "rawtypes", "unchecked" })
+				AMap<AString, ACell> typed = (AMap) configured;
+				config = typed;
+			}
 		}
 
 		File jar = new File(path);
@@ -92,13 +101,18 @@ public class Modules {
 			URL url = jar.toURI().toURL();
 			ModuleClassLoader loader = new ModuleClassLoader(name, url, Engine.class.getClassLoader());
 			engine.moduleLoaders.add(loader);
-			int count = 0;
+			int discovered = 0;
 			for (AAdapter adapter : ServiceLoader.load(AAdapter.class, loader)) {
+				discovered++;
+				if (!adapter.configureModule(config, engine.config().isStrictConfig())) {
+					log.info("Adapter '{}' from module {} is inactive",
+						adapter.getName(), jar.getName());
+					continue;
+				}
 				engine.registerAdapter(adapter);
-				count++;
 				log.info("Loaded adapter '{}' from module {}", adapter.getName(), jar.getName());
 			}
-			if (count == 0) throw new IllegalStateException(
+			if (discovered == 0) throw new IllegalStateException(
 				"Module declares no adapters (missing META-INF/services/covia.adapter.AAdapter?): " + path);
 		} catch (IllegalStateException e) {
 			throw e;
