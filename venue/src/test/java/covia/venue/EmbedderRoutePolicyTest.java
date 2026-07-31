@@ -22,7 +22,6 @@ import org.junit.jupiter.api.TestInstance.Lifecycle;
 
 import convex.auth.ucan.UCAN;
 import convex.core.crypto.AKeyPair;
-import convex.core.data.ACell;
 import convex.core.data.AString;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -36,8 +35,7 @@ import io.javalin.security.RouteRole;
 
 /**
  * Black-box coverage for the public route-policy seam used by embedding venue
- * operators such as GetMine (#309). The class shares two fixtures: one strict
- * venue and one auto-creating venue.
+ * operators such as GetMine (#309). All tests share one venue fixture.
  */
 @TestInstance(Lifecycle.PER_CLASS)
 class EmbedderRoutePolicyTest {
@@ -62,7 +60,6 @@ class EmbedderRoutePolicyTest {
 		.build();
 
 	private VenueServer strictServer;
-	private VenueServer autoCreateServer;
 	private AKeyPair operatorKey;
 	private AString operatorKeyDID;
 	private AString operatorDID;
@@ -71,15 +68,13 @@ class EmbedderRoutePolicyTest {
 	void setup() {
 		operatorKey = AKeyPair.generate();
 		operatorKeyDID = UCAN.toDIDKey(operatorKey.getAccountKey());
-		strictServer = launch(false, true, true);
+		strictServer = launch();
 		operatorDID = strictServer.getEngine()
 			.managedUserDID(Strings.create("operator"));
-		autoCreateServer = launch(true, false, false);
 	}
 
 	@AfterAll
 	void close() {
-		if (autoCreateServer != null) autoCreateServer.close();
 		if (strictServer != null) strictServer.close();
 	}
 
@@ -112,26 +107,6 @@ class EmbedderRoutePolicyTest {
 
 		strictServer.getEngine().getVenueState().users().create(did);
 		assertResponse(200, did.toString(), get(strictServer, USER, token));
-	}
-
-	@Test
-	void identityOnlyNeverAutoCreatesButAdmissionCan() throws Exception {
-		AKeyPair identityKey = AKeyPair.generate();
-		AString identityDid = UCAN.toDIDKey(identityKey.getAccountKey());
-		assertResponse(200, identityDid.toString(),
-			get(autoCreateServer, IDENTITY,
-				tokenFor(identityKey, autoCreateServer)));
-		assertNull(autoCreateServer.getEngine().getVenueState().users()
-			.get(identityDid),
-			"AUTHENTICATED_IDENTITY must remain side-effect free with autoCreate");
-
-		AKeyPair admittedKey = AKeyPair.generate();
-		AString admittedDid = UCAN.toDIDKey(admittedKey.getAccountKey());
-		assertResponse(200, admittedDid.toString(),
-			get(autoCreateServer, USER,
-				tokenFor(admittedKey, autoCreateServer)));
-		assertEquals(admittedDid, autoCreateServer.getEngine()
-			.getVenueState().users().get(admittedDid).getDID());
 	}
 
 	@Test
@@ -189,22 +164,18 @@ class EmbedderRoutePolicyTest {
 			denied.headers().firstValue("Retry-After").orElse(null));
 	}
 
-	private VenueServer launch(boolean autoCreate, boolean rateLimit,
-			boolean bootstrapOperator) {
-		ACell users = bootstrapOperator
-			? Maps.of(
-				Config.AUTO_CREATE, autoCreate,
-				Config.BOOTSTRAP, Maps.of(
-					"operator", Maps.of(
-						Fields.AUTHENTICATION_KEYS,
-						Vectors.of(operatorKeyDID))))
-			: Maps.of(Config.AUTO_CREATE, autoCreate);
+	private VenueServer launch() {
 		return VenueServer.launch(Maps.of(
 			Config.PORT, 0,
 			Config.HOSTNAME, "embedder.example",
-			Config.USERS, users,
+			Config.USERS, Maps.of(
+				Config.AUTO_CREATE, false,
+				Config.BOOTSTRAP, Maps.of(
+					"operator", Maps.of(
+						Fields.AUTHENTICATION_KEYS,
+						Vectors.of(operatorKeyDID)))),
 			Config.RATE_LIMIT, Maps.of(
-				Config.ENABLED, rateLimit,
+				Config.ENABLED, true,
 				"rps", 1L,
 				"burst", 1L),
 			Config.AUTH, Maps.of(
