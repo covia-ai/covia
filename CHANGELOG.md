@@ -22,9 +22,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   [migration checklist](venue/docs/CONFIG.md#upgrading-an-embedded-venue-from-07-or-earlier)
 
 ### Fixed
-- Global HTTP exception responses honour `Accept` preferences for JSON, problem
-  JSON, plain text, and safely escaped HTML while retaining diagnostic details
-  for API and agent clients
+- Embedded-route HTTP errors retain Javalin's standard representations,
+  structured details, and protocol headers, with safe HTML rendering;
+  unexpected errors remain diagnostic and extension-specific exception mappers
+  take precedence
 
 ## [0.7.0] - 2026-07-30
 

@@ -36,7 +36,6 @@ import convex.core.util.FileUtils;
 import convex.core.store.AStore;
 import convex.etch.EtchStore;
 import convex.core.data.prim.CVMLong;
-import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.lattice.LatticeContext;
 import convex.node.NodeConfig;
@@ -59,10 +58,12 @@ import io.javalin.config.JavalinConfig;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 import io.javalin.http.HttpResponseException;
+import io.javalin.http.InternalServerErrorResponse;
 import io.javalin.http.staticfiles.Location;
 import io.javalin.openapi.plugin.OpenApiPlugin;
 import io.javalin.openapi.plugin.redoc.ReDocPlugin;
 import io.javalin.openapi.plugin.swagger.SwaggerPlugin;
+import io.javalin.router.exception.HttpResponseExceptionMapper;
 
 /**
  * Covia Venue Server
@@ -818,9 +819,8 @@ public class VenueServer {
 		final Config.CorsPolicy corsPolicy = this.config.getCorsPolicy();
 		final boolean allowPrivateNetwork = this.config.isAllowPrivateNetwork();
 
-		routes.exception(HttpResponseException.class, (e, ctx) -> {
-			renderError(ctx, e.getStatus(), e.getMessage());
-		});
+		routes.exception(HttpResponseException.class,
+			(e, ctx) -> renderHttpError(e, ctx));
 
 		routes.exception(Exception.class, (e, ctx) -> {
 			log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
@@ -828,7 +828,7 @@ public class VenueServer {
 			if (e.getMessage() != null && !e.getMessage().isBlank()) {
 				message += ": " + e.getMessage();
 			}
-			renderError(ctx, 500, message);
+			renderHttpError(new InternalServerErrorResponse(message), ctx);
 		});
 
 		// One owner for CORS admission and response headers. The old combination
@@ -870,114 +870,42 @@ public class VenueServer {
 		mountDLFSWebDAV(routes);
 	}
 
-	private enum ErrorRepresentation {
-		JSON, PROBLEM_JSON, TEXT, HTML
-	}
-
-	private record AcceptedErrorMedia(
-			ErrorRepresentation representation,
-			double quality,
-			int specificity,
-			int order) {}
-
 	/**
-	 * Render framework-level failures without imposing a representation on
-	 * contributed routes. Explicit {@code Accept} preferences select JSON,
-	 * RFC 9457-style problem JSON, HTML or plain text. Missing, wildcard-only or
-	 * unsupported preferences fall back to plain text, preserving a useful
-	 * response for command-line clients. Stack traces remain server-side.
+	 * Delegate HTTP semantics to Javalin, replacing only its unsafe HTML body.
+	 * Javalin's mapper is responsible for status, media selection, structured
+	 * details, and protocol headers such as {@code Allow}. Its HTML branch emits
+	 * the unescaped plain-text result as {@code text/html}, so render that one
+	 * representation safely here.
 	 */
-	private static void renderError(Context ctx, int status, String detail) {
-		if (ctx.res().isCommitted()) return;
-		if (detail == null || detail.isBlank()) detail = "HTTP request failed";
+	private static void renderHttpError(HttpResponseException error, Context ctx) {
+		HttpResponseExceptionMapper.INSTANCE.handle(error, ctx);
+		if (!acceptsHtml(ctx)) return;
 
-		ErrorRepresentation representation =
-			selectErrorRepresentation(ctx.header("Accept"));
-		ctx.status(status);
-		ctx.res().addHeader("Vary", "Accept");
-		switch (representation) {
-			case JSON -> ctx.contentType("application/json")
-				.result("{\"error\":\"" + JSON.escape(detail)
-					+ "\",\"status\":" + status + "}");
-			case PROBLEM_JSON -> {
-				String title = status >= 500
-					? "Internal Server Error" : "Request Failed";
-				ctx.contentType("application/problem+json")
-					.result("{\"type\":\"about:blank\",\"title\":\""
-						+ title + "\",\"status\":" + status
-						+ ",\"detail\":\"" + JSON.escape(detail) + "\"}");
-			}
-			case HTML -> ctx.contentType("text/html; charset=utf-8")
-				.result("<!doctype html><html><head><meta charset=\"utf-8\">"
-					+ "<title>Error " + status + "</title></head><body><h1>Error "
-					+ status + "</h1><p>" + escapeHtml(detail)
-					+ "</p></body></html>");
-			case TEXT -> ctx.contentType("text/plain; charset=utf-8")
-				.result(detail);
+		StringBuilder body = new StringBuilder()
+			.append("<!doctype html><html><head><meta charset=\"utf-8\">")
+			.append("<title>Error ").append(error.getStatus())
+			.append("</title></head><body><h1>Error ")
+			.append(error.getStatus()).append("</h1><p>")
+			.append(escapeHtml(error.getMessage())).append("</p>");
+		if (!error.getDetails().isEmpty()) {
+			body.append("<dl>");
+			error.getDetails().forEach((name, value) -> body
+				.append("<dt>").append(escapeHtml(name)).append("</dt><dd>")
+				.append(escapeHtml(value)).append("</dd>"));
+			body.append("</dl>");
 		}
+		ctx.contentType("text/html; charset=utf-8")
+			.result(body.append("</body></html>").toString());
 	}
 
-	private static ErrorRepresentation selectErrorRepresentation(String accept) {
-		if (accept == null || accept.isBlank()) return ErrorRepresentation.TEXT;
-		AcceptedErrorMedia best = null;
-		int order = 0;
-		for (String entry : accept.split(",")) {
-			String[] parts = entry.trim().split(";");
-			String mediaRange = parts[0].trim().toLowerCase(java.util.Locale.ROOT);
-			double quality = 1.0;
-			for (int i = 1; i < parts.length; i++) {
-				String parameter = parts[i].trim();
-				int equals = parameter.indexOf('=');
-				if (equals < 0
-						|| !parameter.substring(0, equals).trim()
-							.equalsIgnoreCase("q")) continue;
-				try {
-					quality = Double.parseDouble(
-						parameter.substring(equals + 1).trim());
-					if (!Double.isFinite(quality)
-							|| quality < 0.0 || quality > 1.0) quality = 0.0;
-				} catch (NumberFormatException e) {
-					quality = 0.0;
-				}
-			}
-			ErrorRepresentation representation = representationFor(mediaRange);
-			if (representation == null || quality <= 0.0) {
-				order++;
-				continue;
-			}
-			int specificity = mediaRange.equals("*/*") ? 0
-				: mediaRange.contains("*") ? 1 : 2;
-			AcceptedErrorMedia candidate = new AcceptedErrorMedia(
-				representation, quality, specificity, order++);
-			int qualityOrder = best == null ? 1
-				: Double.compare(candidate.quality(), best.quality());
-			if (best == null
-					|| qualityOrder > 0
-					|| (qualityOrder == 0
-						&& candidate.specificity() > best.specificity())
-					|| (qualityOrder == 0
-						&& candidate.specificity() == best.specificity()
-						&& candidate.order() < best.order())) {
-				best = candidate;
-			}
-		}
-		return best == null ? ErrorRepresentation.TEXT : best.representation();
-	}
-
-	private static ErrorRepresentation representationFor(String mediaRange) {
-		return switch (mediaRange) {
-			case "application/problem+json" -> ErrorRepresentation.PROBLEM_JSON;
-			case "application/json", "application/*", "application/*+json" ->
-				ErrorRepresentation.JSON;
-			case "text/html", "application/xhtml+xml" -> ErrorRepresentation.HTML;
-			case "text/plain", "text/*", "*/*" -> ErrorRepresentation.TEXT;
-			default -> mediaRange.startsWith("application/")
-					&& mediaRange.endsWith("+json")
-					? ErrorRepresentation.JSON : null;
-		};
+	private static boolean acceptsHtml(Context ctx) {
+		String accept = ctx.header("Accept");
+		return (accept != null && accept.contains("text/html"))
+			|| "text/html".equals(ctx.res().getContentType());
 	}
 
 	private static String escapeHtml(String value) {
+		if (value == null) return "";
 		return value.replace("&", "&amp;")
 			.replace("<", "&lt;")
 			.replace(">", "&gt;")

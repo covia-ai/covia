@@ -258,13 +258,14 @@ Native Covia REST, MCP, and A2A routes carry internal policy roles and retain
 their normal admission, rate-limit, and sync behavior. Application routes do
 not need—and generally should not use—the internal `COVIA_*` roles.
 
-Framework-level exception mapping is also policy-neutral. It logs the stack
-trace server-side and returns a bounded diagnostic response selected from the
-request's `Accept` preferences: `application/json`,
-`application/problem+json`, `text/plain`, or safely escaped `text/html`.
-Missing, wildcard-only, or unsupported preferences receive plain text. An
-extender can register a more-specific Javalin exception mapper in its route
-registrar; that mapper takes precedence over Covia's generic fallback.
+Framework-level exception mapping is also policy-neutral. Standard Javalin
+HTTP exceptions retain Javalin's response formats, structured details, and
+protocol headers (such as `Allow` on a 405). Unexpected exceptions are logged
+with their stack trace server-side and returned through the same mapper with a
+bounded class-and-message diagnostic. Covia safely renders the selected HTML
+representation because Javalin's default mapper does not escape it. An extender
+can register a more-specific Javalin exception mapper in its route registrar;
+that mapper takes precedence over Covia's generic fallback.
 
 ### Upgrading an embedded venue from 0.7 or earlier
 

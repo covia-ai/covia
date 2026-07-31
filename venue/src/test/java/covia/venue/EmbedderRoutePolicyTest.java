@@ -15,6 +15,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -34,6 +35,7 @@ import covia.venue.server.AuthMiddleware;
 import covia.venue.server.VenueServer;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.BadRequestResponse;
+import io.javalin.http.MethodNotAllowedResponse;
 import io.javalin.security.RouteRole;
 
 /**
@@ -51,6 +53,7 @@ class EmbedderRoutePolicyTest {
 	private static final String LIMITED = "/api/getmine/limited";
 	private static final String FAILURE = "/api/getmine/failure";
 	private static final String BAD_REQUEST = "/api/getmine/bad-request";
+	private static final String METHOD_REJECTED = "/api/getmine/method-rejected";
 	private static final String CUSTOM_FAILURE = "/api/getmine/custom-failure";
 	private static final String CUSTOM_AUTH = "/api/getmine/custom-auth";
 	private static final String AUTHENTICATED_IDENTITY_HEADER =
@@ -179,38 +182,49 @@ class EmbedderRoutePolicyTest {
 	}
 
 	@Test
-	void extenderErrorsHonourAcceptedJsonTextAndHtml() throws Exception {
-		HttpResponse<String> json = getAccept(strictServer, FAILURE,
-			"text/html;q=0.5, application/json;q=0.9");
+	void unexpectedErrorsUseJavalinRepresentationsWithDiagnostics()
+			throws Exception {
+		HttpResponse<String> json = getAccept(
+			strictServer, FAILURE, "application/json");
 		assertEquals(500, json.statusCode(), json.body());
 		assertContentType("application/json", json);
-		assertTrue(json.body().contains("\"status\":500"), json.body());
+		assertTrue(json.body().contains("\"status\": 500"), json.body());
 		assertTrue(json.body().contains("IllegalStateException"), json.body());
 
-		HttpResponse<String> text = getAccept(
-			strictServer, BAD_REQUEST, "text/plain");
-		assertEquals(400, text.statusCode(), text.body());
-		assertContentType("text/plain", text);
-		assertEquals("bad extension <input> & diagnostic", text.body());
+		HttpResponse<String> html = getAccept(
+			strictServer, FAILURE, "text/html");
+		assertEquals(500, html.statusCode(), html.body());
+		assertContentType("text/html", html);
+		assertTrue(html.body().contains(
+			"extension &lt;failed&gt; &amp; diagnostic"), html.body());
+		assertFalse(html.body().contains("extension <failed>"), html.body());
+	}
+
+	@Test
+	void typedHttpErrorsRetainJavalinDetails() throws Exception {
+		HttpResponse<String> response = getAccept(
+			strictServer, BAD_REQUEST, "application/json");
+		assertEquals(400, response.statusCode(), response.body());
+		assertContentType("application/json", response);
+		assertTrue(response.body().contains("\"status\": 400"), response.body());
+		assertTrue(response.body().contains("\"field\":\"<consent>\""),
+			response.body());
 
 		HttpResponse<String> html = getAccept(
 			strictServer, BAD_REQUEST, "text/html");
 		assertEquals(400, html.statusCode(), html.body());
 		assertContentType("text/html", html);
-		assertTrue(html.body().contains(
-			"bad extension &lt;input&gt; &amp; diagnostic"), html.body());
-		assertFalse(html.body().contains("extension <input>"), html.body());
+		assertTrue(html.body().contains("&lt;input&gt;"), html.body());
+		assertTrue(html.body().contains("&lt;consent&gt;"), html.body());
+		assertFalse(html.body().contains("<input>"), html.body());
 	}
 
 	@Test
-	void extenderHttpErrorsCanUseProblemJson() throws Exception {
-		HttpResponse<String> response = getAccept(
-			strictServer, BAD_REQUEST, "application/problem+json");
-		assertEquals(400, response.statusCode(), response.body());
-		assertContentType("application/problem+json", response);
-		assertTrue(response.body().contains("\"status\":400"), response.body());
-		assertTrue(response.body().contains(
-			"bad extension <input> & diagnostic"), response.body());
+	void methodNotAllowedRetainsAllowHeader() throws Exception {
+		HttpResponse<String> response = get(strictServer, METHOD_REJECTED, null);
+		assertEquals(405, response.statusCode(), response.body());
+		assertTrue(response.headers().firstValue("Allow").orElse("")
+			.contains("GET"), response.headers()::toString);
 	}
 
 	@Test
@@ -264,7 +278,12 @@ class EmbedderRoutePolicyTest {
 			throw new IllegalStateException("extension <failed> & diagnostic");
 		});
 		routes.get(BAD_REQUEST, ctx -> {
-			throw new BadRequestResponse("bad extension <input> & diagnostic");
+			throw new BadRequestResponse("bad extension <input>",
+				Map.of("field", "<consent>"));
+		});
+		routes.get(METHOD_REJECTED, ctx -> {
+			throw new MethodNotAllowedResponse("method rejected",
+				Map.of("availableMethods", "GET"));
 		});
 		routes.get(CUSTOM_FAILURE, ctx -> {
 			throw new GetMineException("product-specific");
