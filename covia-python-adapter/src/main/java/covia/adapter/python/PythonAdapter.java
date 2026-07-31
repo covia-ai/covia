@@ -574,9 +574,11 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 		return new IllegalArgumentException("Python instance not found: " + id);
 	}
 
-	private static AString requireOwner(RequestContext ctx) {
+	private AString requireOwner(RequestContext ctx) {
 		AString owner = ctx == null ? null : ctx.getUserDID();
-		if (owner == null) throw new AuthException("Authentication required for Python instances");
+		if (owner == null || (engine != null && engine.isPublicPrincipal(owner))) {
+			throw new AuthException("Authenticated non-public identity required for Python instances");
+		}
 		return owner;
 	}
 

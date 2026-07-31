@@ -124,6 +124,8 @@ class PythonAdapterTest {
 				RequestContext.of(identities.alice), Maps.of("template", "worker")));
 			assertFutureCause(AuthException.class, () -> invoke(adapter, list,
 				RequestContext.ANONYMOUS, Maps.empty()));
+			assertFutureCause(AuthException.class, () -> invoke(adapter, list,
+				RequestContext.of(Strings.create(engine.getDIDString() + ":public")), Maps.empty()));
 
 			AMap<?, ?> closed = (AMap<?, ?>) invoke(adapter, close,
 				RequestContext.ofAgent(identities.alice, Strings.create("closer")),

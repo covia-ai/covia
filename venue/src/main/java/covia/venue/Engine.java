@@ -2450,6 +2450,21 @@ public class Engine {
 			|| value.startsWith(webValue + ":u:");
 	}
 
+	/**
+	 * Whether a principal is this venue's synthetic public user.
+	 *
+	 * <p>The public user is a shared authorization namespace, not an
+	 * authenticated identity. Stateful facilities must not use it as an owner,
+	 * even if an operator grants public invocation of their operations.</p>
+	 */
+	public boolean isPublicPrincipal(AString principal) {
+		if (principal == null) return false;
+		String value = principal.toString();
+		if (value.equals(getDIDString() + ":public")) return true;
+		AString web = config.getWebDID();
+		return web != null && value.equals(web + ":public");
+	}
+
 	/** True when {@code resource} is the caller's own: a bare/relative/scheme path,
 	 *  a resource-less check ({@code null}), or an explicit {@code did:<self>/…}. A
 	 *  {@code did:<other>/…} path is another principal's. Owner = the DID prefix

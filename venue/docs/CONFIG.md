@@ -326,9 +326,12 @@ Instance ownership follows the effective venue user (`RequestContext.getUserDID`
 while `createdBy` records the authenticated caller DID. This means an agent
 sub-principal and its owner share the owner's instance namespace without losing
 attribution. Other users receive the same not-found result whether an ID is
-absent or belongs to someone else. Instances are process-local, disappear on
-restart, and are closed automatically during venue shutdown. `maxPerUser`
-(default 8) and `maxTotal` (default 128) bound retained native state.
+absent or belongs to someone else. The venue's synthetic public principal is a
+shared authorization namespace, not an authenticated identity, and is always
+rejected for instance management even if public invocation is configured.
+Instances are process-local, disappear on restart, and are closed automatically
+during venue shutdown. `maxPerUser` (default 8) and `maxTotal` (default 128)
+bound retained native state.
 
 Callers never provide source, script paths, or unrestricted global names. The
 operator configures each template and must explicitly list its callable

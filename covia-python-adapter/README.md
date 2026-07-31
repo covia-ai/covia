@@ -61,7 +61,9 @@ Instances are process-local and ephemeral: venue restart closes them. Ownership
 uses `RequestContext.getUserDID()`, so an agent sub-principal works in its owning
 user's instance namespace while the creator's actual caller DID remains visible
 as `createdBy`. Other users cannot list, call, or close the instance, even if
-they learn its random ID. `maxPerUser` and `maxTotal` bound native resource use.
+they learn its random ID. The venue's shared synthetic public principal is never
+accepted as an instance owner, even if public invocation is configured.
+`maxPerUser` and `maxTotal` bound native resource use.
 
 Callers cannot submit Python source, host paths, or arbitrary global names. The
 operator selects every template path and explicitly allowlists its callable
