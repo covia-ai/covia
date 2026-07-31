@@ -196,14 +196,7 @@
 			<artifactId>langchain4j-anthropic</artifactId>
 			<version>${langchain.version}</version>
 		</dependency>
-		
-		<!-- Gemini -->
-		  <dependency>
- 		   <groupId>com.google.genai</groupId>
-		    <artifactId>google-genai</artifactId>
-		    <version>1.63.0</version>
- 		 </dependency>
-		
+
 		<!-- Web / application server with Javalin -->
 		<dependency>
 	        <groupId>io.javalin.community.openapi</groupId>
