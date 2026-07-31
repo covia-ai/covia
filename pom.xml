@@ -57,9 +57,10 @@
 	</properties>
 
 	<modules>
-		<module>workbench</module>
-		<module>venue</module>
 		<module>covia-core</module>
+		<module>covia-python</module>
+		<module>venue</module>
+		<module>workbench</module>
 		<module>covia-sql</module>
 	</modules>
 

@@ -1,0 +1,98 @@
+<project xmlns="https://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>ai.covia</groupId>
+		<artifactId>covia</artifactId>
+		<version>0.8.0-SNAPSHOT</version>
+	</parent>
+	<artifactId>covia-python</artifactId>
+	<name>Covia Python</name>
+	<description>Dependency-light CPython FFM bindings and Convex value conversion.</description>
+
+	<dependencies>
+		<!-- Deliberately the only runtime dependency. -->
+		<dependency>
+			<groupId>world.convex</groupId>
+			<artifactId>convex-core</artifactId>
+			<version>${convex.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-api</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-engine</artifactId>
+			<version>${junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-javadoc-plugin</artifactId>
+				<version>3.12.0</version>
+				<configuration>
+					<!-- The public facade is Java 21. The internal FFM package is
+					     compiled separately for 22+ and is not public API. -->
+					<excludePackageNames>covia.python.internal.ffm</excludePackageNames>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<version>3.5.6</version>
+				<configuration>
+					<argLine>--enable-native-access=ALL-UNNAMED</argLine>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.15.0</version>
+				<configuration>
+					<!-- Stable FFM starts in Java 22. Keep the public API and fallback
+					     Java-21-loadable; the profile below adds this package on 22+. -->
+					<excludes>
+						<exclude>covia/python/internal/ffm/**</exclude>
+					</excludes>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+	<profiles>
+		<profile>
+			<id>python-ffm</id>
+			<activation><jdk>[22,)</jdk></activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-compiler-plugin</artifactId>
+						<version>3.15.0</version>
+						<executions>
+							<execution>
+								<id>compile-python-ffm</id>
+								<phase>compile</phase>
+								<goals><goal>compile</goal></goals>
+								<configuration combine.self="override">
+									<release>22</release>
+									<includes>
+										<include>covia/python/internal/ffm/**</include>
+									</includes>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+</project>
