@@ -21,6 +21,11 @@ try (PythonScript script = runtime.load("""
 }
 ```
 
+`PythonScript.call(name, value)` is the convenient single-argument form.
+`call(name, List<ACell>)` supports normal zero-or-more positional Python
+arguments while retaining the same Convex conversion and deterministic native
+reference cleanup.
+
 `PythonRef` represents one owned `PyObject*` reference. `retain()` performs one
 `Py_IncRef`; each wrapper's idempotent `close()` performs one `Py_DecRef` under
 the GIL. A Cleaner is only a leak safety net. Scripts retain their isolated

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
+import java.util.List;
 
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -81,6 +82,23 @@ class PythonRuntimeTest {
 				"(lambda x: (x.append(x), x)[1])([])")) {
 			PythonException cyclic = assertThrows(PythonException.class, cycle::toConvex);
 			assertTrue(cyclic.getMessage().contains("Cyclic"), cyclic::getMessage);
+		}
+	}
+
+	@Test
+	void scriptCallsAcceptZeroOrMultipleArguments() {
+		Assumptions.assumeTrue(PythonRuntime.availability().available(),
+			PythonRuntime.availability().detail());
+		PythonRuntime runtime = PythonRuntime.open();
+		try (PythonScript script = runtime.load("""
+			def no_args():
+			    return 42
+			def combine(left, right):
+			    return {"sum": left + right}
+			""", "arguments.py")) {
+			assertEquals(CVMLong.create(42), script.call("no_args", List.of()));
+			assertEquals(Maps.of("sum", 12L), script.call("combine",
+				List.of(CVMLong.create(5), CVMLong.create(7))));
 		}
 	}
 }
