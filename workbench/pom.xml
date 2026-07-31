@@ -27,7 +27,7 @@
 		<dependency>
 			<groupId>ai.covia</groupId>
 			<artifactId>venue</artifactId>
-			<version>0.8.0-SNAPSHOT</version>
+			<version>${project.version}</version>
 		</dependency>
   </dependencies>
 </project>

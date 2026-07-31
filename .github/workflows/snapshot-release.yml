@@ -64,9 +64,11 @@ jobs:
       working-directory: venue/target
       run: sha256sum covia.jar > covia.jar.sha256
 
-    - name: Create Python module checksum
-      working-directory: covia-python-adapter/target
-      run: for jar in *-module.jar; do sha256sum "$jar" > "$jar.sha256"; done
+    - name: Create optional module checksums
+      run: |
+        for jar in covia-python-adapter/target/*-module.jar covia-sql/target/*-module.jar; do
+          sha256sum "$jar" > "$jar.sha256"
+        done
 
     - name: Get current date
       id: date
@@ -100,4 +102,6 @@ jobs:
           venue/target/covia.jar \
           venue/target/covia.jar.sha256 \
           covia-python-adapter/target/*-module.jar \
-          covia-python-adapter/target/*-module.jar.sha256
+          covia-python-adapter/target/*-module.jar.sha256 \
+          covia-sql/target/*-module.jar \
+          covia-sql/target/*-module.jar.sha256

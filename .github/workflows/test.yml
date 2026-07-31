@@ -71,6 +71,15 @@ jobs:
       # services: network/Ollama).
       run: mvn clean install -Dcovia.excludedTestGroups=integration
 
+    - name: Verify optional module boundaries
+      run: |
+        test -f covia-python-adapter/target/covia-python-adapter-*-module.jar
+        test -f covia-sql/target/covia-sql-*-module.jar
+        if jar tf venue/target/covia.jar | grep -Eq '^(covia/python/|covia/adapter/python/|covia/adapter/sql/)'; then
+          echo "::error::Optional Python or SQL module classes leaked into covia.jar"
+          exit 1
+        fi
+
   java21-fallback:
     runs-on: ubuntu-latest
 

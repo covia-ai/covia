@@ -12,7 +12,9 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Dependency-light `covia-python` module with Java FFM access to embedded
   CPython, owned/reference-counted Python values, and Convex collection
   conversion; operator-configured operations ship as a separate optional
-  `covia-python-adapter` venue module rather than entering `covia.jar`
+  `covia-python-adapter` venue module rather than entering `covia.jar`. Operators
+  can expose fixed script operations or bounded, per-user stateful instances
+  with template and function allowlists
 - Per-route venue policy for embedded HTTP endpoints: contributed routes are
   raw by default and can independently opt into verified identity, user
   admission, rate limiting, and lattice sync; authenticated credential identity
@@ -24,12 +26,17 @@ Covia is pre-1.0, so minor versions may include breaking changes.
   middleware from an `/api/*` path. Embedders must opt each protected route into
   the required `VenueRouteFeature` roles; see the
   [migration checklist](venue/docs/CONFIG.md#upgrading-an-embedded-venue-from-07-or-earlier)
+- Snapshot and stable GitHub releases publish checksummed Python and SQL venue
+  module jars alongside the dependency-free standard venue executable
 
 ### Fixed
 - Embedded-route HTTP errors retain Javalin's standard representations,
   structured details, and protocol headers, with safe HTML rendering;
   unexpected errors remain diagnostic and extension-specific exception mappers
   take precedence
+- Python instance management rejects the shared synthetic public principal,
+  preventing anonymous callers from sharing state even if an operator grants
+  public invocation of the management operations
 
 ## [0.7.0] - 2026-07-30
 

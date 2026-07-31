@@ -25,6 +25,17 @@ jobs:
         distribution: 'temurin'
         cache: 'maven'
 
+    - name: Set up CPython 3.13
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.13'
+
+    - name: Select CPython shared library
+      run: |
+        library=$(python -c 'import os,sysconfig; print(os.path.join(sysconfig.get_config_var("LIBDIR"), sysconfig.get_config_var("LDLIBRARY")))')
+        test -f "$library"
+        echo "COVIA_PYTHON_LIBRARY=$library" >> "$GITHUB_ENV"
+
     - name: Cache Maven packages
       uses: actions/cache@v6
       with:
@@ -47,6 +58,10 @@ jobs:
             exit 1
             ;;
         esac
+        if grep -R -n --include='pom.xml' -- '-SNAPSHOT' .; then
+          echo "::error::Stable release contains a snapshot version in a POM"
+          exit 1
+        fi
         if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
           echo "::error::Tagged commit $GITHUB_SHA is not reachable from origin/master"
           exit 1
@@ -57,13 +72,24 @@ jobs:
       # require external services remain excluded.
       run: mvn clean install -Dcovia.excludedTestGroups=integration
 
+    - name: Verify optional module boundaries
+      run: |
+        test -f covia-python-adapter/target/covia-python-adapter-*-module.jar
+        test -f covia-sql/target/covia-sql-*-module.jar
+        if jar tf venue/target/covia.jar | grep -Eq '^(covia/python/|covia/adapter/python/|covia/adapter/sql/)'; then
+          echo "::error::Optional Python or SQL module classes leaked into covia.jar"
+          exit 1
+        fi
+
     - name: Create executable checksum
       working-directory: venue/target
       run: sha256sum covia.jar > covia.jar.sha256
 
-    - name: Create Python module checksum
-      working-directory: covia-python-adapter/target
-      run: for jar in *-module.jar; do sha256sum "$jar" > "$jar.sha256"; done
+    - name: Create optional module checksums
+      run: |
+        for jar in covia-python-adapter/target/*-module.jar covia-sql/target/*-module.jar; do
+          sha256sum "$jar" > "$jar.sha256"
+        done
 
     - name: Get current date
       id: date
@@ -87,7 +113,9 @@ jobs:
           venue/target/covia.jar \
           venue/target/covia.jar.sha256 \
           covia-python-adapter/target/*-module.jar \
-          covia-python-adapter/target/*-module.jar.sha256
+          covia-python-adapter/target/*-module.jar.sha256 \
+          covia-sql/target/*-module.jar \
+          covia-sql/target/*-module.jar.sha256
 
     - name: Update latest release
       env:
@@ -109,4 +137,6 @@ jobs:
           venue/target/covia.jar \
           venue/target/covia.jar.sha256 \
           covia-python-adapter/target/*-module.jar \
-          covia-python-adapter/target/*-module.jar.sha256
+          covia-python-adapter/target/*-module.jar.sha256 \
+          covia-sql/target/*-module.jar \
+          covia-sql/target/*-module.jar.sha256

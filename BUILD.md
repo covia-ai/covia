@@ -283,7 +283,10 @@ The library modules are published to Maven Central under the `ai.covia` groupId:
 `ai.covia:workbench` (plus the `ai.covia:covia` parent POM). Consumers add them
 as ordinary dependencies; the
 executable `covia.jar` is an unattached assembly and is **not** published (it
-stays a GitHub-release download).
+stays a GitHub-release download). The operator-facing `covia-python-adapter`
+and `covia-sql` shaded module jars are likewise distributed through GitHub
+Releases, because they are loaded by venue configuration rather than used as
+ordinary Maven dependencies.
 
 Publishing uses the [Sonatype Central Publishing plugin](https://central.sonatype.org/publish/publish-portal-maven/)
 and mirrors the Convex setup: pom config lives in the root `pom.xml`
@@ -348,6 +351,10 @@ Both snapshot and stable releases include:
 
 - `covia.jar` - The executable venue server JAR with all dependencies
 - `covia.jar.sha256` - SHA-256 checksum for the executable JAR
+- `covia-python-adapter-<version>-module.jar` - Optional Python venue module
+- `covia-python-adapter-<version>-module.jar.sha256` - SHA-256 checksum
+- `covia-sql-<version>-module.jar` - Optional SQL venue module
+- `covia-sql-<version>-module.jar.sha256` - SHA-256 checksum
 
 ### Download Links
 
