@@ -278,15 +278,15 @@ To create a stable release:
 
 ### Publishing to Maven Central
 
-The library modules are published to Maven Central under the `ai.covia` groupId:
-`ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
-`ai.covia:workbench` (plus the `ai.covia:covia` parent POM). Consumers add them
-as ordinary dependencies; the
-executable `covia.jar` is an unattached assembly and is **not** published (it
-stays a GitHub-release download). The operator-facing `covia-python-adapter`
-and `covia-sql` shaded module jars are likewise distributed through GitHub
-Releases, because they are loaded by venue configuration rather than used as
-ordinary Maven dependencies.
+The reactor modules are published to Maven Central under the `ai.covia`
+groupId. `ai.covia:covia-core`, `ai.covia:covia-python`, `ai.covia:venue`, and
+`ai.covia:workbench` are ordinary library artifacts (along with the
+`ai.covia:covia` parent POM). The operator-facing `covia-python-adapter` and
+`covia-sql` artifacts are loadable venue modules rather than dependencies of
+the standard venue; their shaded `module` classifier jars are also published
+and signed. GitHub Releases remain the canonical operator download, pairing
+each module jar with its checksum. The executable `covia.jar` is an unattached
+assembly and is **not** published to Central.
 
 Publishing uses the [Sonatype Central Publishing plugin](https://central.sonatype.org/publish/publish-portal-maven/)
 and mirrors the Convex setup: pom config lives in the root `pom.xml`
@@ -340,9 +340,11 @@ mvn clean deploy    # -SNAPSHOT version → routes to the Central snapshot repo
 ```bash
 mvn clean deploy -Prelease
 ```
-`-Prelease` GPG-signs every artifact; the Central plugin bundles all modules
-(main + sources + javadoc + pom + signatures) and, with `autoPublish=true`,
-publishes them to Maven Central. Then verify at
+`-Prelease` GPG-signs every artifact; the Central plugin bundles all reactor
+modules (main + sources + javadoc + pom + signatures, including attached
+classifier artifacts) and, with `autoPublish=true`, publishes them to Maven
+Central. `maven.deploy.skip` only controls the standard Maven deploy plugin; it
+does not exclude a reactor module from the Central bundle. Then verify at
 `https://central.sonatype.com/artifact/ai.covia/covia-core`.
 
 ### Release Artifacts

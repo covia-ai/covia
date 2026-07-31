@@ -12,7 +12,9 @@
 	<description>Optional loadable venue module for operator-configured in-process Python operations.</description>
 
 	<properties>
-		<!-- Distributed as the shaded module jar, not as a Maven library. -->
+		<!-- Skip ordinary deploy-plugin publication. The Central publishing
+		     extension bundles reactor artifacts independently, including the
+		     signed shaded module classifier used by venue operators. -->
 		<maven.deploy.skip>true</maven.deploy.skip>
 	</properties>
 

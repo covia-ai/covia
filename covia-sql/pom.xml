@@ -13,9 +13,9 @@
 	<description>SQL adapter for Covia venues — query/execute over lattice-backed convex-db databases and operator-registered JDBC connections. Packaged as a loadable venue module (the shaded "module" classifier jar), not part of covia.jar.</description>
 
 	<properties>
-		<!-- A loadable venue module, not a consumer library — never published to
-		     Maven Central (the parent's central-publishing plugin would otherwise
-		     bundle it). Built and installed locally as part of the reactor. -->
+		<!-- Skip ordinary deploy-plugin publication. The Central publishing
+		     extension bundles reactor artifacts independently, including the
+		     signed shaded module classifier used by venue operators. -->
 		<maven.deploy.skip>true</maven.deploy.skip>
 	</properties>
 
