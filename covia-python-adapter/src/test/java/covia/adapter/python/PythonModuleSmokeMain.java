@@ -12,6 +12,7 @@ import covia.grid.Asset;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.ModuleClassLoader;
+import covia.venue.RequestContext;
 
 /** Child-process entry point for {@link PythonModuleIT}. */
 public final class PythonModuleSmokeMain {
@@ -19,7 +20,9 @@ public final class PythonModuleSmokeMain {
 
 	public static void main(String[] args) throws Exception {
 		AMap<AString, ACell> moduleConfig = Maps.of(
-			"operations", Maps.of("smoke", Maps.of("script", args[1])));
+			"operations", Maps.of("smoke", Maps.of("script", args[1])),
+			"instances", Maps.of("templates", Maps.of("smoke", Maps.of(
+				"script", args[1], "functions", Vectors.of("main")))));
 		AMap<AString, ACell> config = Maps.of(
 			Config.MODULES, Vectors.of(Maps.of(
 				"path", args[0], "config", moduleConfig)));
@@ -40,6 +43,23 @@ public final class PythonModuleSmokeMain {
 				engine.venueContext());
 			ACell result = adapter.invokeFuture(null, asset.meta(), Maps.of("x", 41L)).join();
 			if (!CVMLong.create(42).equals(result)) throw new AssertionError("Bad result: " + result);
+
+			RequestContext user = RequestContext.of(Strings.create("did:key:zSmoke"));
+			Asset create = engine.resolveAsset(
+				Strings.create("v/ops/python/instances/create"), engine.venueContext());
+			AMap<?, ?> instance = (AMap<?, ?>) adapter.invokeFuture(user, create.meta(),
+				Maps.of("template", "smoke")).join();
+			AString id = (AString) instance.get(Strings.create("id"));
+			Asset call = engine.resolveAsset(
+				Strings.create("v/ops/python/instances/call"), engine.venueContext());
+			ACell called = adapter.invokeFuture(user, call.meta(), Maps.of(
+				"id", id, "function", "main", "args", Vectors.of(Maps.of("x", 41L)))).join();
+			if (!CVMLong.create(42).equals(called)) {
+				throw new AssertionError("Bad instance result: " + called);
+			}
+			Asset close = engine.resolveAsset(
+				Strings.create("v/ops/python/instances/close"), engine.venueContext());
+			adapter.invokeFuture(user, close.meta(), Maps.of("id", id)).join();
 			System.out.println("PYTHON_MODULE_SMOKE_OK");
 		} finally {
 			engine.close();

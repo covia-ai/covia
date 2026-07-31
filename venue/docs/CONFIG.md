@@ -290,6 +290,16 @@ code execution.
           "input": { "type": "object" },
           "output": { "type": "object" }
         }
+      },
+      "instances": {
+        "maxPerUser": 8,
+        "maxTotal": 128,
+        "templates": {
+          "health-session": {
+            "script": "/opt/getmine/python/health_session.py",
+            "functions": ["add_reading", "summary", "reset"]
+          }
+        }
       }
     }
   }]
@@ -302,6 +312,29 @@ a Convex value. Script globals persist for the venue lifetime and are released
 on shutdown. Script paths may be absolute or relative to the venue process;
 they are resolved at startup, loaded once, and a missing or invalid configured
 script fails startup.
+
+The optional `instances` object separately opts the operator into stateful,
+caller-managed Python namespaces. It installs `create`, `list`, `call`, and
+`close` operations under `v/ops/python/instances/`. `create` accepts a configured
+template name; `call` accepts an instance `id`, an allowlisted `function`, and an
+optional `args` vector of positional Convex values. The create operation's JSON
+Schema advertises the configured template names, so MCP clients can discover
+them without a separate host-filesystem API. Create and list results include the
+instance's allowed `functions`, making the subsequent call surface discoverable.
+
+Instance ownership follows the effective venue user (`RequestContext.getUserDID`),
+while `createdBy` records the authenticated caller DID. This means an agent
+sub-principal and its owner share the owner's instance namespace without losing
+attribution. Other users receive the same not-found result whether an ID is
+absent or belongs to someone else. Instances are process-local, disappear on
+restart, and are closed automatically during venue shutdown. `maxPerUser`
+(default 8) and `maxTotal` (default 128) bound retained native state.
+
+Callers never provide source, script paths, or unrestricted global names. The
+operator configures each template and must explicitly list its callable
+functions. All four management operations also pass through ordinary,
+path-scoped `invoke` capability checks. Omit `instances` entirely to expose none
+of this management surface.
 
 Python is a separate loadable module and is not present in `covia.jar` or the
 standard Docker image. Listing the module enables it by default; `enabled:
