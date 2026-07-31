@@ -928,7 +928,7 @@ public class VenueServer {
 	 */
 	private void enforceRateLimit(Context ctx) {
 		if ("OPTIONS".equalsIgnoreCase(ctx.method().toString())) return;
-		Object did = ctx.attribute(AuthMiddleware.CALLER_DID_ATTR);
+		AString did = AuthMiddleware.getVenueUserDID(ctx);
 		String key = (did != null) ? did.toString() : "ip:" + ctx.ip();
 		if (!rateLimiter.tryAcquire(key)) {
 			long retry = rateLimiter.retryAfterSeconds(key);

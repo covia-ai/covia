@@ -54,6 +54,7 @@ public class AuthMiddleware {
 
 	private static final Logger log = LoggerFactory.getLogger(AuthMiddleware.class);
 
+	static final String AUTHENTICATED_IDENTITY_ATTR = "authenticatedIdentity";
 	static final String CALLER_DID_ATTR = "callerDID";
 	/**
 	 * Context attribute holding the capability grant scope for an unauthenticated
@@ -136,6 +137,15 @@ public class AuthMiddleware {
 		private static final long serialVersionUID = 1L;
 		AudienceRejected(String message) { super(message); }
 	}
+
+	/**
+	 * The principal proven by a credential and the local venue user it maps to.
+	 * They are normally equal for self-sovereign users, but differ for a named
+	 * venue user authenticated by one of its registered keys.
+	 */
+	private record VerifiedPrincipal(
+			AString authenticatedIdentity,
+			AString venueUserDID) {}
 
 	/**
 	 * Enforces RFC 7519 §4.1.3 audience restriction. {@code aud} may be a string
@@ -240,14 +250,15 @@ public class AuthMiddleware {
 	}
 
 	/**
-	 * Records an authenticated identity, optionally after admitting its DID as a
-	 * Covia venue user.
+	 * Records the credential identity and its mapped venue user, optionally
+	 * admitting the latter as a Covia venue user.
 	 */
-	private boolean markAuthenticated(Context ctx, AString callerDID,
+	private boolean markAuthenticated(Context ctx, VerifiedPrincipal principal,
 			boolean admitUser) {
 		try {
-			if (admitUser) engine.admitUser(callerDID);
-			ctx.attribute(CALLER_DID_ATTR, callerDID);
+			if (admitUser) engine.admitUser(principal.venueUserDID());
+			setRequestIdentity(ctx, principal.authenticatedIdentity(),
+				principal.venueUserDID());
 			return true;
 		} catch (AuthException e) {
 			ctx.status(403).result(e.getMessage());
@@ -261,9 +272,9 @@ public class AuthMiddleware {
 			+ "/.well-known/oauth-protected-resource/mcp";
 		extractIdentity(ctx, !required && publicAccessEnabled, resourceMetadata,
 			true);
-		AString callerDID = ctx.attribute(CALLER_DID_ATTR);
-		if (callerDID == null) return; // authentication already rejected the request
-		if (!allowedDids.isEmpty() && !allowedDids.contains(callerDID.toString())) {
+		AString venueUserDID = getVenueUserDID(ctx);
+		if (venueUserDID == null) return; // authentication already rejected the request
+		if (!allowedDids.isEmpty() && !allowedDids.contains(venueUserDID.toString())) {
 			ctx.status(403).result("Caller DID is not allowed to use MCP");
 			ctx.skipRemainingHandlers();
 		}
@@ -305,21 +316,21 @@ public class AuthMiddleware {
 			// Try UCAN first — if the bearer is a UCAN, iss is the caller DID
 			// and the token is also stashed as a capability proof for downstream
 			// handlers (IETF UCAN-HTTP bearer semantics).
-			AString callerDID = tryVerifyUCAN(jwt);
-			if (callerDID != null) {
+			VerifiedPrincipal principal = tryVerifyUCAN(jwt);
+			if (principal != null) {
 				ctx.attribute(UCAN_BEARER_ATTR, jwt);
 			}
-			if (callerDID == null) {
-				callerDID = tryVerifySelfIssued(jwt);
+			if (principal == null) {
+				principal = tryVerifySelfIssued(jwt);
 			}
-			if (callerDID == null && venueKey != null) {
-				callerDID = tryVerifyVenueSigned(jwt);
+			if (principal == null && venueKey != null) {
+				principal = tryVerifyVenueSigned(jwt);
 			}
-			if (callerDID == null && externalProviders != null) {
-				callerDID = tryVerifyExternalProvider(jwt);
+			if (principal == null && externalProviders != null) {
+				principal = tryVerifyExternalProvider(jwt);
 			}
-			if (callerDID != null) {
-				if (!markAuthenticated(ctx, callerDID, admitUser)) return;
+			if (principal != null) {
+				if (!markAuthenticated(ctx, principal, admitUser)) return;
 			} else {
 				// A presented token that fails every verification path is a hard
 				// 401 — NEVER a silent downgrade to the public identity, even when
@@ -354,10 +365,10 @@ public class AuthMiddleware {
 	 * the caller.
 	 *
 	 * @param jwt Bearer token
-	 * @return Issuer DID (did:key form) on success, null if the token is not
-	 *         a valid UCAN
+	 * @return issuer as both authenticated identity and venue user on success,
+	 *         or null if the token is not a valid UCAN
 	 */
-	private AString tryVerifyUCAN(AString jwt) {
+	private VerifiedPrincipal tryVerifyUCAN(AString jwt) {
 		UCAN token = UCAN.fromJWT(jwt);
 		if (token == null) return null;
 		// Classify by the presence of an `att` (capability) array — NOT `aud`.
@@ -383,7 +394,7 @@ public class AuthMiddleware {
 		// Audience restriction (RFC 7519 §4.1.3): the bearer must be intended for
 		// THIS venue, else a token minted for another venue could be replayed.
 		requireAudience(token.getAudience());
-		return issuer;
+		return new VerifiedPrincipal(issuer, issuer);
 	}
 
 	/**
@@ -391,7 +402,7 @@ public class AuthMiddleware {
 	 * header key; a local named-user subject is bound through the venue-owned
 	 * authentication-key registry.
 	 */
-	private AString tryVerifySelfIssued(AString jwt) {
+	private VerifiedPrincipal tryVerifySelfIssued(AString jwt) {
 		JWT parsed = JWT.parse(jwt);
 		if (parsed == null || !"EdDSA".equals(parsed.getAlgorithm())) return null;
 		AMap<AString, ACell> claims = parsed.getClaims();
@@ -422,14 +433,14 @@ public class AuthMiddleware {
 		// Audience restriction (RFC 7519 §4.1.3): a self-issued token minted for
 		// another venue must not authenticate here.
 		requireAudience(claims.get(AUD));
-		return sub;
+		return new VerifiedPrincipal(keyDID, sub);
 	}
 
 	/**
 	 * Verify a venue-signed JWT. The venue's key is the trusted signer.
 	 * The sub claim contains the user's DID.
 	 */
-	private AString tryVerifyVenueSigned(AString jwt) {
+	private VerifiedPrincipal tryVerifyVenueSigned(AString jwt) {
 		AMap<AString, ACell> claims = JWT.verifyPublic(jwt, venueKey);
 		if (claims == null) return null;
 
@@ -449,7 +460,7 @@ public class AuthMiddleware {
 		} catch (RuntimeException e) {
 			return null;
 		}
-		return sub;
+		return new VerifiedPrincipal(sub, sub);
 	}
 
 	/**
@@ -483,7 +494,7 @@ public class AuthMiddleware {
 	 * Verify an RS256 JWT from a configured external OAuth provider.
 	 * Tries each provider's JWKS endpoint to find a matching key.
 	 */
-	private AString tryVerifyExternalProvider(AString jwt) {
+	private VerifiedPrincipal tryVerifyExternalProvider(AString jwt) {
 		try {
 			JWT parsed = JWT.parse(jwt);
 			if (parsed == null) return null;
@@ -504,7 +515,13 @@ public class AuthMiddleware {
 				AMap<AString, ACell> claims = parsed.getClaims();
 				AString email = RT.ensureString(claims.get(EMAIL));
 				if (email == null) return null;
-				return findUserDIDByEmail(email);
+				AString venueUserDID = findUserDIDByEmail(email);
+				AString subject = RT.ensureString(claims.get(SUB));
+				if (venueUserDID == null) return null;
+				// Retain compatibility with providers that only supplied the
+				// email previously used for the local mapping.
+				if (subject == null) subject = email;
+				return new VerifiedPrincipal(subject, venueUserDID);
 			}
 		} catch (Exception e) {
 			log.debug("External provider JWT verification failed", e);
@@ -533,14 +550,66 @@ public class AuthMiddleware {
 	}
 
 	/**
-	 * Get the caller DID from the request context.
+	 * Set the two identities for a request authenticated by embedder-owned
+	 * middleware. This is an attribution seam, not an authentication or admission
+	 * operation: the extender must first verify the credential and decide which
+	 * existing venue user it maps to.
+	 *
+	 * <p>Covia-native authorization, job ownership, rate limiting and
+	 * {@link #callerContext} use {@code venueUserDID}. The separately retained
+	 * {@code authenticatedIdentity} is available to extension handlers and logs
+	 * without changing who acts inside the venue.</p>
+	 *
+	 * @param ctx Javalin request context
+	 * @param authenticatedIdentity principal proven by the credential
+	 * @param venueUserDID local venue user represented by that principal
+	 */
+	public static void setRequestIdentity(Context ctx,
+			AString authenticatedIdentity, AString venueUserDID) {
+		if (authenticatedIdentity == null) {
+			throw new IllegalArgumentException("authenticatedIdentity is required");
+		}
+		if (venueUserDID == null) {
+			throw new IllegalArgumentException("venueUserDID is required");
+		}
+		ctx.attribute(AUTHENTICATED_IDENTITY_ATTR, authenticatedIdentity);
+		ctx.attribute(CALLER_DID_ATTR, venueUserDID);
+	}
+
+	/**
+	 * Get the identity directly proven by the request credential. For a named
+	 * user key this is the key's {@code did:key}; it can differ from
+	 * {@link #getVenueUserDID(Context)}.
+	 *
+	 * @return authenticated identity, or null for public/unauthenticated routes
+	 */
+	public static AString getAuthenticatedIdentity(Context ctx) {
+		return ctx.attribute(AUTHENTICATED_IDENTITY_ATTR);
+	}
+
+	/**
+	 * Get the local venue user represented by this request. This is the identity
+	 * used for admission, authorization and job ownership.
+	 */
+	public static AString getVenueUserDID(Context ctx) {
+		return ctx.attribute(CALLER_DID_ATTR);
+	}
+
+	/**
+	 * Get the effective caller DID from the request context.
 	 * Always non-null for requests that pass through the middleware when
 	 * public access is enabled (anonymous requests get the venue's public DID).
+	 *
+	 * <p>This compatibility name returns the venue user, not necessarily the
+	 * identity that directly authenticated. New extension code should use
+	 * {@link #getAuthenticatedIdentity(Context)} and
+	 * {@link #getVenueUserDID(Context)} explicitly.</p>
+	 *
 	 * @param ctx Javalin context
 	 * @return Caller DID as AString, or null if auth was required and missing
 	 */
 	public static AString getCallerDID(Context ctx) {
-		return ctx.attribute(CALLER_DID_ATTR);
+		return getVenueUserDID(ctx);
 	}
 
 	/**

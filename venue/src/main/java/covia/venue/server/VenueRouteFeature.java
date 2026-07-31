@@ -10,10 +10,12 @@ import io.javalin.security.RouteRole;
  * <p>Embedder-contributed routes are raw Javalin routes by default, regardless
  * of their URL. Adding one of these roles asks the venue to apply the named
  * service to that endpoint. This keeps route ownership with the embedder while
- * making Covia's verified identity, user admission, rate limiting, and lattice
- * durability available when useful. These features can be combined with an
- * embedder's own {@link RouteRole} values; Covia ignores roles it does not
- * recognise.</p>
+ * making Covia's verified identity, mapped venue user, user admission, rate
+ * limiting, and lattice durability available when useful. These features can
+ * be combined with an embedder's own {@link RouteRole} values; Covia ignores
+ * roles it does not recognise. Extenders may instead own authentication
+ * end-to-end and publish its result with
+ * {@link AuthMiddleware#setRequestIdentity}.</p>
  *
  * <p>Example:</p>
  * <pre>{@code
@@ -36,14 +38,16 @@ public enum VenueRouteFeature implements RouteRole {
 
 	/**
 	 * Require a bearer credential accepted by the venue and expose its verified
-	 * DID through {@link AuthMiddleware#getCallerDID}. Does not admit or create a
-	 * Covia user, even when {@code users.autoCreate} is enabled.
+	 * identity and mapped venue user through
+	 * {@link AuthMiddleware#getAuthenticatedIdentity} and
+	 * {@link AuthMiddleware#getVenueUserDID}. Does not admit or create a Covia
+	 * user, even when {@code users.autoCreate} is enabled.
 	 */
 	AUTHENTICATED_IDENTITY,
 
 	/**
-	 * Require a venue-accepted bearer credential and admit the verified DID as a
-	 * Covia venue user. Unknown users follow {@code users.autoCreate}.
+	 * Require a venue-accepted bearer credential and admit its mapped venue user.
+	 * Unknown users follow {@code users.autoCreate}.
 	 */
 	ADMITTED_USER,
 
