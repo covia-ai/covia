@@ -8,6 +8,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-31
+
 ### Added
 - Dependency-light `covia-python` module with Java FFM access to embedded
   CPython, owned/reference-counted Python values, and Convex collection
@@ -321,7 +323,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.7.0...develop
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.8.0...develop
+[0.8.0]: https://github.com/covia-ai/covia/compare/0.7.0...0.8.0
 [0.7.0]: https://github.com/covia-ai/covia/compare/0.6.0...0.7.0
 [0.6.0]: https://github.com/covia-ai/covia/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/covia-ai/covia/compare/0.4.0...0.5.0
