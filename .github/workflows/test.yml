@@ -23,12 +23,23 @@ jobs:
     steps:
     - uses: actions/checkout@v7
 
-    - name: Set up JDK 21
+    - name: Set up JDK 25
       uses: actions/setup-java@v5
       with:
-        java-version: '21'
+        java-version: '25'
         distribution: 'temurin'
         cache: 'maven'
+
+    - name: Set up CPython 3.13
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.13'
+
+    - name: Select CPython shared library
+      run: |
+        library=$(python -c 'import os,sysconfig; print(os.path.join(sysconfig.get_config_var("LIBDIR"), sysconfig.get_config_var("LDLIBRARY")))')
+        test -f "$library"
+        echo "COVIA_PYTHON_LIBRARY=$library" >> "$GITHUB_ENV"
 
     - name: Cache Maven packages
       uses: actions/cache@v6
@@ -59,3 +70,31 @@ jobs:
       # for speed but must gate every push. `integration` stays excluded (external
       # services: network/Ollama).
       run: mvn clean install -Dcovia.excludedTestGroups=integration
+
+  java21-fallback:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v5
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+        cache: 'maven'
+
+    - name: Build Convex from source (snapshot pin only)
+      run: |
+        CONVEX_VERSION=$(sed -n 's/.*<convex.version>\(.*\)<\/convex.version>.*/\1/p' pom.xml | head -1)
+        if [[ "$CONVEX_VERSION" == *-SNAPSHOT ]]; then
+          git clone --depth 1 --branch develop https://github.com/Convex-Dev/convex.git /tmp/convex
+          mvn -f /tmp/convex/pom.xml install -DskipTests -q \
+            -pl convex-core,convex-peer,convex-dlfs,convex-java,convex-restapi -am
+        fi
+
+    - name: Verify Java 21 fallback without FFM backend
+      run: >-
+        mvn clean test -pl venue -am
+        -Dtest=PythonRefTest,PythonRuntimeTest,PythonAdapterTest,EngineTest
+        -Dsurefire.failIfNoSpecifiedTests=false
