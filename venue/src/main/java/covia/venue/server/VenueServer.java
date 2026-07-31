@@ -36,6 +36,7 @@ import convex.core.util.FileUtils;
 import convex.core.store.AStore;
 import convex.etch.EtchStore;
 import convex.core.data.prim.CVMLong;
+import convex.core.util.JSON;
 import convex.core.util.Utils;
 import convex.lattice.LatticeContext;
 import convex.node.NodeConfig;
@@ -818,14 +819,16 @@ public class VenueServer {
 		final boolean allowPrivateNetwork = this.config.isAllowPrivateNetwork();
 
 		routes.exception(HttpResponseException.class, (e, ctx) -> {
-			VenueServer.this.api.buildError(ctx,e.getStatus(),e.getMessage());
+			renderError(ctx, e.getStatus(), e.getMessage());
 		});
 
 		routes.exception(Exception.class, (e, ctx) -> {
 			log.error("Unhandled exception in {} {}", ctx.method(), ctx.path(), e);
-			String message = "Unexpected error: " + e;
-			ctx.result(message);
-			ctx.status(500);
+			String message = "Unexpected error: " + e.getClass().getSimpleName();
+			if (e.getMessage() != null && !e.getMessage().isBlank()) {
+				message += ": " + e.getMessage();
+			}
+			renderError(ctx, 500, message);
 		});
 
 		// One owner for CORS admission and response headers. The old combination
@@ -865,6 +868,121 @@ public class VenueServer {
 		addLoginRoutes(routes);
 		addAPIRoutes(routes);
 		mountDLFSWebDAV(routes);
+	}
+
+	private enum ErrorRepresentation {
+		JSON, PROBLEM_JSON, TEXT, HTML
+	}
+
+	private record AcceptedErrorMedia(
+			ErrorRepresentation representation,
+			double quality,
+			int specificity,
+			int order) {}
+
+	/**
+	 * Render framework-level failures without imposing a representation on
+	 * contributed routes. Explicit {@code Accept} preferences select JSON,
+	 * RFC 9457-style problem JSON, HTML or plain text. Missing, wildcard-only or
+	 * unsupported preferences fall back to plain text, preserving a useful
+	 * response for command-line clients. Stack traces remain server-side.
+	 */
+	private static void renderError(Context ctx, int status, String detail) {
+		if (ctx.res().isCommitted()) return;
+		if (detail == null || detail.isBlank()) detail = "HTTP request failed";
+
+		ErrorRepresentation representation =
+			selectErrorRepresentation(ctx.header("Accept"));
+		ctx.status(status);
+		ctx.res().addHeader("Vary", "Accept");
+		switch (representation) {
+			case JSON -> ctx.contentType("application/json")
+				.result("{\"error\":\"" + JSON.escape(detail)
+					+ "\",\"status\":" + status + "}");
+			case PROBLEM_JSON -> {
+				String title = status >= 500
+					? "Internal Server Error" : "Request Failed";
+				ctx.contentType("application/problem+json")
+					.result("{\"type\":\"about:blank\",\"title\":\""
+						+ title + "\",\"status\":" + status
+						+ ",\"detail\":\"" + JSON.escape(detail) + "\"}");
+			}
+			case HTML -> ctx.contentType("text/html; charset=utf-8")
+				.result("<!doctype html><html><head><meta charset=\"utf-8\">"
+					+ "<title>Error " + status + "</title></head><body><h1>Error "
+					+ status + "</h1><p>" + escapeHtml(detail)
+					+ "</p></body></html>");
+			case TEXT -> ctx.contentType("text/plain; charset=utf-8")
+				.result(detail);
+		}
+	}
+
+	private static ErrorRepresentation selectErrorRepresentation(String accept) {
+		if (accept == null || accept.isBlank()) return ErrorRepresentation.TEXT;
+		AcceptedErrorMedia best = null;
+		int order = 0;
+		for (String entry : accept.split(",")) {
+			String[] parts = entry.trim().split(";");
+			String mediaRange = parts[0].trim().toLowerCase(java.util.Locale.ROOT);
+			double quality = 1.0;
+			for (int i = 1; i < parts.length; i++) {
+				String parameter = parts[i].trim();
+				int equals = parameter.indexOf('=');
+				if (equals < 0
+						|| !parameter.substring(0, equals).trim()
+							.equalsIgnoreCase("q")) continue;
+				try {
+					quality = Double.parseDouble(
+						parameter.substring(equals + 1).trim());
+					if (!Double.isFinite(quality)
+							|| quality < 0.0 || quality > 1.0) quality = 0.0;
+				} catch (NumberFormatException e) {
+					quality = 0.0;
+				}
+			}
+			ErrorRepresentation representation = representationFor(mediaRange);
+			if (representation == null || quality <= 0.0) {
+				order++;
+				continue;
+			}
+			int specificity = mediaRange.equals("*/*") ? 0
+				: mediaRange.contains("*") ? 1 : 2;
+			AcceptedErrorMedia candidate = new AcceptedErrorMedia(
+				representation, quality, specificity, order++);
+			int qualityOrder = best == null ? 1
+				: Double.compare(candidate.quality(), best.quality());
+			if (best == null
+					|| qualityOrder > 0
+					|| (qualityOrder == 0
+						&& candidate.specificity() > best.specificity())
+					|| (qualityOrder == 0
+						&& candidate.specificity() == best.specificity()
+						&& candidate.order() < best.order())) {
+				best = candidate;
+			}
+		}
+		return best == null ? ErrorRepresentation.TEXT : best.representation();
+	}
+
+	private static ErrorRepresentation representationFor(String mediaRange) {
+		return switch (mediaRange) {
+			case "application/problem+json" -> ErrorRepresentation.PROBLEM_JSON;
+			case "application/json", "application/*", "application/*+json" ->
+				ErrorRepresentation.JSON;
+			case "text/html", "application/xhtml+xml" -> ErrorRepresentation.HTML;
+			case "text/plain", "text/*", "*/*" -> ErrorRepresentation.TEXT;
+			default -> mediaRange.startsWith("application/")
+					&& mediaRange.endsWith("+json")
+					? ErrorRepresentation.JSON : null;
+		};
+	}
+
+	private static String escapeHtml(String value) {
+		return value.replace("&", "&amp;")
+			.replace("<", "&lt;")
+			.replace(">", "&gt;")
+			.replace("\"", "&quot;")
+			.replace("'", "&#39;");
 	}
 
 	/** Applies CORS before routing so a denied origin cannot reach a handler. */

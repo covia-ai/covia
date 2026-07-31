@@ -4,8 +4,10 @@ import static covia.venue.server.VenueRouteFeature.ADMITTED_USER;
 import static covia.venue.server.VenueRouteFeature.AUTHENTICATED_IDENTITY;
 import static covia.venue.server.VenueRouteFeature.RATE_LIMITED;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -31,6 +33,7 @@ import covia.grid.auth.VenueAuth;
 import covia.venue.server.AuthMiddleware;
 import covia.venue.server.VenueServer;
 import io.javalin.config.RoutesConfig;
+import io.javalin.http.BadRequestResponse;
 import io.javalin.security.RouteRole;
 
 /**
@@ -46,6 +49,9 @@ class EmbedderRoutePolicyTest {
 	private static final String IDENTITIES = "/api/getmine/identities";
 	private static final String USER = "/api/getmine/user";
 	private static final String LIMITED = "/api/getmine/limited";
+	private static final String FAILURE = "/api/getmine/failure";
+	private static final String BAD_REQUEST = "/api/getmine/bad-request";
+	private static final String CUSTOM_FAILURE = "/api/getmine/custom-failure";
 	private static final String CUSTOM_AUTH = "/api/getmine/custom-auth";
 	private static final String AUTHENTICATED_IDENTITY_HEADER =
 		"X-GetMine-Authenticated-Identity";
@@ -53,6 +59,14 @@ class EmbedderRoutePolicyTest {
 
 	private enum GetMineRole implements RouteRole {
 		ADMIN
+	}
+
+	private static final class GetMineException extends RuntimeException {
+		private static final long serialVersionUID = 1L;
+
+		GetMineException(String message) {
+			super(message);
+		}
 	}
 
 	private final HttpClient http = HttpClient.newBuilder()
@@ -164,6 +178,48 @@ class EmbedderRoutePolicyTest {
 			denied.headers().firstValue("Retry-After").orElse(null));
 	}
 
+	@Test
+	void extenderErrorsHonourAcceptedJsonTextAndHtml() throws Exception {
+		HttpResponse<String> json = getAccept(strictServer, FAILURE,
+			"text/html;q=0.5, application/json;q=0.9");
+		assertEquals(500, json.statusCode(), json.body());
+		assertContentType("application/json", json);
+		assertTrue(json.body().contains("\"status\":500"), json.body());
+		assertTrue(json.body().contains("IllegalStateException"), json.body());
+
+		HttpResponse<String> text = getAccept(
+			strictServer, BAD_REQUEST, "text/plain");
+		assertEquals(400, text.statusCode(), text.body());
+		assertContentType("text/plain", text);
+		assertEquals("bad extension <input> & diagnostic", text.body());
+
+		HttpResponse<String> html = getAccept(
+			strictServer, BAD_REQUEST, "text/html");
+		assertEquals(400, html.statusCode(), html.body());
+		assertContentType("text/html", html);
+		assertTrue(html.body().contains(
+			"bad extension &lt;input&gt; &amp; diagnostic"), html.body());
+		assertFalse(html.body().contains("extension <input>"), html.body());
+	}
+
+	@Test
+	void extenderHttpErrorsCanUseProblemJson() throws Exception {
+		HttpResponse<String> response = getAccept(
+			strictServer, BAD_REQUEST, "application/problem+json");
+		assertEquals(400, response.statusCode(), response.body());
+		assertContentType("application/problem+json", response);
+		assertTrue(response.body().contains("\"status\":400"), response.body());
+		assertTrue(response.body().contains(
+			"bad extension <input> & diagnostic"), response.body());
+	}
+
+	@Test
+	void extenderSpecificExceptionMapperOverridesGenericFallback()
+			throws Exception {
+		assertResponse(418, "GetMine handled: product-specific",
+			get(strictServer, CUSTOM_FAILURE, null));
+	}
+
 	private VenueServer launch() {
 		return VenueServer.launch(Maps.of(
 			Config.PORT, 0,
@@ -204,6 +260,17 @@ class EmbedderRoutePolicyTest {
 			ctx.result(AuthMiddleware.getVenueUserDID(ctx).toString()),
 			ADMITTED_USER);
 		routes.get(LIMITED, ctx -> ctx.result("ok"), RATE_LIMITED);
+		routes.get(FAILURE, ctx -> {
+			throw new IllegalStateException("extension <failed> & diagnostic");
+		});
+		routes.get(BAD_REQUEST, ctx -> {
+			throw new BadRequestResponse("bad extension <input> & diagnostic");
+		});
+		routes.get(CUSTOM_FAILURE, ctx -> {
+			throw new GetMineException("product-specific");
+		});
+		routes.exception(GetMineException.class, (e, ctx) ->
+			ctx.status(418).result("GetMine handled: " + e.getMessage()));
 
 		routes.before(CUSTOM_AUTH, ctx -> {
 			String authenticated = ctx.header(AUTHENTICATED_IDENTITY_HEADER);
@@ -248,6 +315,17 @@ class EmbedderRoutePolicyTest {
 		return http.send(request, HttpResponse.BodyHandlers.ofString());
 	}
 
+	private HttpResponse<String> getAccept(VenueServer server, String path,
+			String accept) throws Exception {
+		HttpRequest request = HttpRequest.newBuilder(
+				URI.create(base(server) + path))
+			.timeout(Duration.ofSeconds(10))
+			.header("Accept", accept)
+			.GET()
+			.build();
+		return http.send(request, HttpResponse.BodyHandlers.ofString());
+	}
+
 	private HttpResponse<String> post(VenueServer server, String path,
 			String token, String body) throws Exception {
 		HttpRequest.Builder request = HttpRequest.newBuilder(
@@ -274,5 +352,11 @@ class EmbedderRoutePolicyTest {
 			HttpResponse<String> response) {
 		assertEquals(status, response.statusCode(), response::body);
 		assertEquals(body, response.body());
+	}
+
+	private static void assertContentType(String expected,
+			HttpResponse<String> response) {
+		assertTrue(response.headers().firstValue("Content-Type")
+			.orElse("").startsWith(expected), response.headers()::toString);
 	}
 }
