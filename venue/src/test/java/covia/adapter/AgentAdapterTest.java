@@ -311,7 +311,7 @@ public class AgentAdapterTest {
 	@Test
 	public void testAgentLifecycleOpsInvokableInternally() throws Exception {
 		// Regression (#85 fall-out, caught live by an agent calling agent_create
-		// as a tool): lifecycle ops reached via the zero-Job internal path must
+		// as a tool): lifecycle ops reached via the transient-Job internal path must
 		// delegate to the Job-aware dispatch — a real, owner-attributed Job —
 		// not throw UnsupportedOperationException.
 		ACell created = engine.jobs().invokeInternal("v/ops/agent/create",

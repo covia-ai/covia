@@ -67,7 +67,7 @@ class A2AAdapterTest {
 	void send_invokableInternally_delegatesToJob() throws Exception {
 		// Regression (#85 delegation pattern, caught live by an agent calling
 		// a2a_send as a tool): send is implemented only in the Job-aware
-		// dispatch, so the zero-Job internal path must delegate to a real,
+		// dispatch, so the transient-Job internal path must delegate to a real,
 		// owner-attributed Job — not throw "Unknown a2a sub-operation".
 		RequestContext ctx = RequestContext.of(Strings.create("did:test:a2a:internal"));
 		var engine = covia.venue.TestServer.ENGINE;

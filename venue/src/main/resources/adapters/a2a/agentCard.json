@@ -3,6 +3,7 @@
 	"description": "Fetch a remote agent's public Agent Card via the .well-known/agent-card.json endpoint",
 	"operation": {
 		"adapter": "a2a:getAgentCard",
+		"readOnly": true,
 		"input": {
 			"type": "object",
 			"properties": {

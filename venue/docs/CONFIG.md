@@ -562,7 +562,7 @@ Currently defined:
   orchestrator resolves inputs and issues child invocations serially; only
   waiting for the issued jobs is concurrent.
 
-## Private jobs
+## Legacy private invoke setting
 
 ```json
 {
@@ -570,23 +570,36 @@ Currently defined:
 }
 ```
 
-Off by default. When enabled, an invoke with `private: true` (body field)
-creates a **memory-only job** (#192): never persisted — no record in the
-caller's job index, no lattice write, no recovery, gone on venue restart.
-Use `wait` to collect the result; a completed private job is immediately
-forgotten. A private request against a venue without this flag is an error —
-never a silent downgrade to a persisted job. A private conversation is agent
-intake (`agent:chat` / `agent:request`) invoked private; the session record
-remains the (deletable, `agent:deleteSession`) conversation store.
+Deprecated compatibility setting; it no longer enables `private: true` on
+`/invoke`. Invoke now always creates a durable Job. Use `/api/v1/run` (or the
+SDK's `run`) when only the result is required. Whether run's internal Job is
+transient is controlled by operation metadata and
+`recordReadOnlyOperations`, not by a caller-selected privacy flag.
 
-**Operator telemetry is unaffected**: private controls the durable lattice
-record, not operational visibility. The venue still logs job events (ID,
-operation, status transitions, timings) per its logging config, live
-job-update listeners (SSE, MCP notifications) still fire to authorized
-subscribers, and stats counters still count. Note that log lines are
-ID-and-status shaped as a rule, but failure messages can quote content
-fragments — operators wanting content-clean logs address that via logging
-policy (levels, appender redaction), not the job system.
+## Result-oriented operation runs
+
+`POST /api/v1/run` waits for an operation and returns its output directly. It
+is distinct from `POST /api/v1/invoke`: invoke always creates a durable Job and
+returns that Job, even when `wait` is used. Run still executes through a Job
+internally, but does not expose the Job handle to the caller.
+
+Operations explicitly declaring `operation.readOnly: true` use a transient,
+non-persisted Job for `run` and `invokeInternal` by default. Mutating or
+unclassified operations invoked through `run` remain durable. An operation can
+declare `operation.internal: false` when its lifecycle itself must be recorded
+(for example, a human-in-the-loop request); this forces a durable Job on both
+result-oriented paths.
+
+Operators can force read-only runs and internal calls to be recorded:
+
+```json
+{
+  "recordReadOnlyOperations": true
+}
+```
+
+This option is off by default. It does not change `/invoke`, which is always
+recorded.
 
 ## DLFS WebDAV
 

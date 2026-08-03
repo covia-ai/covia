@@ -196,7 +196,8 @@ A venue exposes the same capabilities over multiple protocols:
 |----------|---------|
 | `GET  /api/v1/status` | Venue health and stats |
 | `GET  /api/v1/operations` | List available operations |
-| `POST /api/v1/invoke` | Execute an operation (optionally `?wait=true`) |
+| `POST /api/v1/invoke` | Create a durable operation Job (optionally `?wait=true`) |
+| `POST /api/v1/run` | Wait for an operation and return its result directly |
 | `GET  /api/v1/jobs/{id}` | Job status |
 | `GET  /api/v1/jobs/{id}/sse` | Live job event stream |
 | `POST /mcp` | Model Context Protocol (JSON-RPC) |

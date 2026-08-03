@@ -23,7 +23,6 @@ import org.slf4j.LoggerFactory;
 
 import convex.auth.did.DID;
 import convex.core.data.ACell;
-import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -91,11 +90,6 @@ public class VenueHTTP extends Venue {
 	 */
 	private volatile AVector<ACell> ucans = null;
 
-	/**
-	 * Connection-level private-jobs mode (#192) — see {@link #setPrivate(boolean)}.
-	 */
-	private volatile boolean privateJobs = false;
-
 	/** A single HTTP send attempt (may throw the checked exceptions {@code HttpClient.send} throws). */
 	@FunctionalInterface
 	interface HttpCall { HttpResponse<String> call() throws IOException, InterruptedException; }
@@ -133,20 +127,14 @@ public class VenueHTTP extends Venue {
 	}
 
 	/**
-	 * Puts this connection in <b>private-jobs mode</b> (#192): every subsequent
-	 * invoke executes as a memory-only job — never persisted to the venue's job
-	 * index, no durable record, gone on venue restart. Requires
-	 * {@code enablePrivateJobs} on the venue; a private request against a venue
-	 * without it fails, never silently downgrades to a persisted job.
-	 *
-	 * <p>Because a completed private job is immediately forgotten by the venue,
-	 * results are collected through the invoke {@code wait} window rather than
-	 * polling — so private mode works with the run-style entry points
-	 * ({@link #invokeAndWait(AString, ACell)}, {@link #invokeSync(String, ACell)});
-	 * the poll-style {@link #invoke(AString, ACell)} throws.</p>
+	 * Deprecated. Invoke now always means a durable Job. Use {@link #run(String,
+	 * ACell)} when the caller only wants the operation result; metadata and venue
+	 * policy decide whether run's internal Job is durable.
 	 */
+	@Deprecated
 	public void setPrivate(boolean enabled) {
-		this.privateJobs = enabled;
+		if (enabled) throw new UnsupportedOperationException(
+			"Private invoke mode was replaced by run(...): invoke always creates a durable Job");
 	}
 
 	// Package-private test seams (deterministic retry tests):
@@ -447,6 +435,38 @@ public class VenueHTTP extends Venue {
 	public CompletableFuture<Job> invoke(Hash assetID, ACell input)  {
 		return invoke(assetID.toCVMHexString(),input);
 	}
+
+	/**
+	 * Runs an operation through {@code POST /api/v1/run} and returns only its
+	 * output. Unlike {@link #invoke(String, ACell)}, this does not expose a Job
+	 * handle and never polls the jobs API.
+	 */
+	@Override
+	public CompletableFuture<ACell> run(String operation, ACell input) {
+		AMap<AString, ACell> reqBody = Maps.of(
+			Fields.OPERATION, Strings.create(operation),
+			Fields.INPUT, input);
+		AVector<ACell> proofTokens = this.ucans;
+		if (proofTokens != null) reqBody = reqBody.assoc(Fields.UCANS, proofTokens);
+
+		HttpRequest req = requestBuilder("run")
+			.header("Content-Type", "application/json")
+			.POST(HttpRequest.BodyPublishers.ofString(JSON.toString(reqBody)))
+			.build();
+
+		return dispatch(req, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+			if (response.statusCode() != 200) {
+				throw new ResponseException(
+					"Failed to run operation: " + response + " = " + response.body(), response);
+			}
+			return JSON.parseJSON5(response.body());
+		});
+	}
+
+	@Override
+	public CompletableFuture<ACell> run(Hash assetID, ACell input) {
+		return run(assetID.toCVMHexString().toString(), input);
+	}
 	
 	/**
 	 * Invokes an operation, returning a finished Job once complete
@@ -520,12 +540,6 @@ public class VenueHTTP extends Venue {
 	 * @return Future containing the submitted Job (likely PENDING)
 	 */
 	public CompletableFuture<Job> invoke(AString opID, ACell input)  {
-		if (privateJobs) {
-			throw new IllegalStateException(
-				"Private-jobs mode requires a run-style call (invokeAndWait / invokeSync): "
-				+ "a completed private job is immediately forgotten by the venue, so a "
-				+ "poll-style Job cannot collect its result.");
-		}
 		return startJobAsync(opID, input).thenApply(job -> {
 			startBackgroundPolling(job);
 			return job;
@@ -559,12 +573,10 @@ public class VenueHTTP extends Venue {
 	}
 
 	/**
-	 * How long a synchronous submit may block. Under private-jobs mode the
-	 * invoke response arrives only when the server-side wait window closes
-	 * (up to the venue's 120s cap), so the old 5s submit cap would misfire.
+	 * How long a synchronous submit may block.
 	 */
 	private long submitTimeoutSecs() {
-		return privateJobs ? 150 : 5;
+		return 5;
 	}
 	
 	/**
@@ -581,13 +593,6 @@ public class VenueHTTP extends Venue {
 		// unlike headers) — verified by the venue at ingress.
 		AVector<ACell> proofTokens = this.ucans;
 		if (proofTokens != null) reqBody = reqBody.assoc(Strings.intern("ucans"), proofTokens);
-		if (privateJobs) {
-			// Memory-only job (#192): the result is collected through the invoke
-			// wait window — a completed private job is immediately forgotten, so
-			// polling cannot be relied on. The venue clamps the wait to its cap.
-			reqBody = reqBody.assoc(Fields.PRIVATE, CVMBool.TRUE);
-			reqBody = reqBody.assoc(Fields.WAIT, CVMBool.TRUE);
-		}
 		HttpRequest req = requestBuilder("invoke")
 			.header("Content-Type", "application/json")
 			.POST(HttpRequest.BodyPublishers.ofString(JSON.toString(reqBody)))

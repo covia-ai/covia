@@ -64,6 +64,7 @@ public class CoviaAPI extends ACoviaAPI {
 	private static final String ROUTE = "/api/v1/";
 
 	public static final String INVOKE = "invokeOperation";
+	public static final String RUN = "runOperation";
 
 	public static final String GET_ASSET = "getAsset";
 	public static final String GET_ASSETS = "getAssets";
@@ -112,6 +113,7 @@ public class CoviaAPI extends ACoviaAPI {
 		routes.get(ROUTE+"assets", this::getAssets, COVIA_API);
 		routes.post(ROUTE+"assets", this::addAsset, COVIA_API);
 		routes.post(ROUTE+"invoke", this::invokeOperation, COVIA_API);
+		routes.post(ROUTE+"run", this::runOperation, COVIA_API);
 		routes.get(ROUTE+"operations", this::getOperations, COVIA_API);
 		routes.get(ROUTE+"operations/{name}", this::getOperation, COVIA_API);
 		// Job ids are single-segment hex strings, so the job routes use the
@@ -515,6 +517,71 @@ public class CoviaAPI extends ACoviaAPI {
 			this.buildError(ctx, 500,"Storage error trying to PUT asset content: "+e.getMessage());
 		}
 	}
+
+	@OpenApi(path = ROUTE + "run",
+			methods = HttpMethod.POST,
+			tags = { "Covia"},
+			summary = "Run a Covia operation and return its result",
+			description = "Runs an operation and waits for its result. Unlike /invoke, "
+					+ "this result-oriented API does not return a Job handle. Execution still "
+					+ "uses the normal Job lifecycle internally: mutating or unclassified "
+					+ "operations are recorded, while operation.readOnly=true may use a "
+					+ "transient Job unless operation.internal=false or venue policy forces "
+					+ "read-only recording. The Java API is asynchronous (CompletableFuture); "
+					+ "this HTTP request remains open until the operation completes.",
+			requestBody = @OpenApiRequestBody(
+				description = "Run request: operation reference and its input",
+				content = @OpenApiContent(type = "application/json", from = InvokeRequest.class)),
+			operationId = CoviaAPI.RUN,
+			responses = {
+				@OpenApiResponse(status = "200", description = "Operation output",
+					content = @OpenApiContent(type = "application/json", from = Object.class)),
+				@OpenApiResponse(status = "400", description = "Malformed request or operation"),
+				@OpenApiResponse(status = "403", description = "Operation not authorised")
+			})
+	protected void runOperation(Context ctx) {
+		ACell req;
+		try {
+			req = JSON.parseJSON5(ctx.body());
+		} catch (Exception e) {
+			buildError(ctx, 400, "Request body is not valid JSON: " + e.getMessage());
+			return;
+		}
+
+		AString op = RT.ensureString(RT.getIn(req, Fields.OPERATION));
+		if (op == null) {
+			buildError(ctx, 400, "Run request requires an 'operation' parameter as a String");
+			return;
+		}
+		ACell input = RT.getIn(req, Fields.INPUT);
+		RequestContext rctx = AuthMiddleware.callerContext(ctx);
+		AVector<ACell> ucans = RT.getIn(req, Fields.UCANS);
+		AString bearer = ctx.attribute(AuthMiddleware.UCAN_BEARER_ATTR);
+		rctx = AuthMiddleware.withTransportAuth(rctx, bearer, ucans, engine().getDIDString());
+
+		try {
+			ACell result = engine().jobs().runOperation(op, input, rctx).join();
+			buildResult(ctx, 200, result);
+		} catch (java.util.concurrent.CompletionException e) {
+			Throwable cause = (e.getCause() != null) ? e.getCause() : e;
+			if (cause instanceof AuthException) {
+				buildError(ctx, 403, cause.getMessage());
+			} else if (cause instanceof covia.exception.RemoteFetchException) {
+				buildError(ctx, 502, cause.getMessage());
+			} else if (cause instanceof covia.exception.RateLimitException rate) {
+				ctx.header("Retry-After", Long.toString(rate.getRetryAfterSeconds()));
+				buildError(ctx, 429, rate.getMessage());
+			} else if (cause instanceof IllegalArgumentException
+					|| cause instanceof IllegalStateException) {
+				buildError(ctx, 400, "Error running operation: " + cause.getMessage());
+			} else {
+				buildError(ctx, 500, "Operation failed: " + cause.getMessage());
+			}
+		} catch (Exception e) {
+			buildError(ctx, 500, "Unexpected failure running operation: " + e);
+			log.warn("Unexpected exception handling client run", e);
+		}
+	}
 	
 	@OpenApi(path = ROUTE + "invoke",
 			methods = HttpMethod.POST,
@@ -533,13 +600,8 @@ public class CoviaAPI extends ACoviaAPI {
 					+ "continues polling. This contract applies uniformly, including to "
 					+ "meta-operations: e.g. grid:job-result itself returns a local job that "
 					+ "completes with the remote job's result (it supports an op-level timeout "
-					+ "input for bounded waits). Pass private: true (body field) for a "
-					+ "PRIVATE memory-only job (#192): never persisted, absent from the "
-					+ "job index, no recovery, gone on venue restart — use wait to "
-					+ "collect the result, since a completed private job is immediately "
-					+ "forgotten. Requires enablePrivateJobs in the venue config; a "
-					+ "private request against a venue without it fails, never silently "
-					+ "downgrades to a persisted job.",
+					+ "input for bounded waits). Invoke always creates a durable Job; callers "
+					+ "that only want an operation result should use POST /api/v1/run.",
 			queryParams = {
 					@OpenApiParam(name = "wait", example = "true",
 							description = "Synchronous invoke: 'true' waits up to the 120s cap; a non-negative integer waits up to that many milliseconds (clamped). May also be passed as a body field; any other value is a 400.")
@@ -610,11 +672,12 @@ public class CoviaAPI extends ACoviaAPI {
 			// operation is invoked so a malformed value rejects with 400 without
 			// creating a job. See parseWaitMs.
 			long waitMs = parseWaitMs(ctx.queryParam("wait"), RT.getIn(req, "wait"));
-			// Private (memory-only) job (#192): never persisted; requires
-			// enablePrivateJobs on the venue (else the invoke fails loudly).
-			boolean privateJob = CVMBool.TRUE.equals(RT.getIn(req, "private"));
+			if (CVMBool.TRUE.equals(RT.getIn(req, Fields.PRIVATE))) {
+				buildError(ctx, 400, "invoke always creates a durable Job; use /api/v1/run when only the result is required");
+				return;
+			}
 
-			Job job=engine().jobs().invokeOperation(op,input,rctx,privateJob);
+			Job job=engine().jobs().invokeOperation(op,input,rctx);
 			if (job==null) {
 				buildError(ctx,404,"Operation does not exist");
 				return;

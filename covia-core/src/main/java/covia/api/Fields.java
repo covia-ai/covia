@@ -21,6 +21,12 @@ public class Fields {
 	public static final StringShort BYTES = Strings.intern("bytes");
 	public static final StringShort RESULT = Strings.intern("result");
 	public static final StringShort OPERATION = Strings.intern("operation");
+	/** Operation may execute through result-oriented/internal paths without a
+	 * durable Job record. Only an explicit true opts in. */
+	public static final StringShort READ_ONLY = Strings.intern("readOnly");
+	/** Whether an operation may use internal/result-only execution. An explicit
+	 * false forces a durable Job even when the caller uses run/invokeInternal. */
+	public static final StringShort INTERNAL = Strings.intern("internal");
 	public static final StringShort DEFAULT = Strings.intern("default");
 	public static final StringShort MESSAGE = Strings.intern("message");
 	public static final StringShort DELAY = Strings.intern("delay");

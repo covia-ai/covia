@@ -101,9 +101,9 @@ carries a stale `wakeTime` (from the wake just serviced), it clears it. Intake o
 (`agent:request` / `agent:chat` / `agent:message`) write `pending` / `tasks`, not
 `wakeTime` — new work runs ASAP via `hasWork`, not via the scheduler.
 
-**Firing.** The grid scheduler fires `agent:trigger` through the engine's zero-Job
-`invokeFuture` path (`AgentAdapter.doKick`), so it **mints no session and creates
-no Job** — it just calls `wakeAgent(force:false)`. The run loop processes every
+**Firing.** The grid scheduler fires `agent:trigger` through the engine's
+transient internal Job path (`AgentAdapter.doKick`), so it **mints no session and
+persists no Job** — it just calls `wakeAgent(force:false)`. The run loop processes every
 thread whose work is ready and, on merge, re-arms for the next earliest `wakeTime`
 (or clears the handle).
 
@@ -134,7 +134,7 @@ via `agent:request` (task Job) or `agent:chat` (chat Job) and await that Job.
   result-await. Cancelling the trigger Job ends only that caller's wait.
 
 User-facing calls go through the Job-aware `handleTrigger`; the scheduler's
-zero-Job fire goes through `invokeFuture` → `doKick`. Both share `wakeAgent`.
+transient-Job fire goes through `invokeFuture` → `doKick`. Both share `wakeAgent`.
 
 ---
 

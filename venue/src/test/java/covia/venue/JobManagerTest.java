@@ -22,16 +22,17 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.adapter.AAdapter;
+import covia.adapter.TestAdapter;
 import covia.exception.AuthException;
 import covia.grid.Job;
 import covia.grid.Status;
 
 /**
- * Unit tests for {@link JobManager#invokeInternal}. Covers the zero-Job
+ * Unit tests for {@link JobManager#invokeInternal}. Covers the transient-Job
  * internal dispatch path used by adapters (transitions, LLM sub-invocations,
  * tool calls) per issue #85.
  *
- * <p>Scenarios: happy path (ref + meta overloads), zero-Job invariant,
+	 * <p>Scenarios: happy path (ref + meta overloads), transient persistence policy,
  * null/unresolvable/non-op refs, capability denial, strict-mode schema
  * validation, and missing authentication.</p>
  *
@@ -77,12 +78,10 @@ public class JobManagerTest {
 		assertEquals(Strings.create("just-a-string"), result);
 	}
 
-	// ========== Zero-Job invariant ==========
+	// ========== Persistence policy ==========
 
 	/**
-	 * Core contract of invokeInternal: no Job is created. Guards against
-	 * regressions that accidentally route internal calls through the
-	 * Job-creating {@code invokeOperation} path.
+	 * Default internal execution uses a Job wrapper but creates no durable record.
 	 */
 	@Test
 	public void testInvokeInternalCreatesNoJobs() throws Exception {
@@ -95,7 +94,116 @@ public class JobManagerTest {
 
 		long after = engine.jobs().getJobs(ctx).count();
 		assertEquals(0, after - before,
-			"invokeInternal must not create a Job — the future is the only handle");
+			"invokeInternal must not persist its transient Job wrapper");
+	}
+
+	@Test
+	public void testReadOnlyRunCreatesNoDurableJob() throws Exception {
+		long before = engine.jobs().getJobs(ctx).count();
+		ACell result = engine.jobs().runOperation(readOnlyEchoMeta(),
+			Maps.of("mode", Strings.create("run")), ctx).get(5, TimeUnit.SECONDS);
+		assertEquals(Strings.create("run"), RT.getIn(result, "mode"));
+		assertEquals(before, engine.jobs().getJobs(ctx).count());
+	}
+
+	@Test
+	public void testRunRecordsUnclassifiedOperation() throws Exception {
+		long before = engine.jobs().getJobs(ctx).count();
+		engine.jobs().runOperation(echoMeta(), Maps.empty(), ctx)
+			.get(5, TimeUnit.SECONDS);
+		assertEquals(before + 1, engine.jobs().getJobs(ctx).count(),
+			"run must record operations that are not explicitly read-only");
+	}
+
+	@Test
+	public void testInvokeAlwaysRecordsReadOnlyOperation() throws Exception {
+		long before = engine.jobs().getJobs(ctx).count();
+		Job job = engine.jobs().invokeOperation(readOnlyEchoMeta(), Maps.empty(), ctx);
+		job.awaitResult(5000);
+		assertEquals(before + 1, engine.jobs().getJobs(ctx).count(),
+			"invoke always means a durable Job, including for read-only operations");
+	}
+
+	@Test
+	public void testInternalFalseForcesDurableJob() throws Exception {
+		long before = engine.jobs().getJobs(ctx).count();
+		engine.jobs().invokeInternal(internalFalseEchoMeta(), Maps.empty(), ctx)
+			.get(5, TimeUnit.SECONDS);
+		assertEquals(before + 1, engine.jobs().getJobs(ctx).count(),
+			"operation.internal=false must force recording on invokeInternal");
+	}
+
+	@Test
+	public void testTransientInvocationIsPresentOnExecutionContext() throws Exception {
+		TestAdapter.CAPTURED_CTX.remove(did);
+		engine.jobs().invokeInternal(captureContextMeta(true, null), Maps.empty(), ctx)
+			.get(5, TimeUnit.SECONDS);
+
+		RequestContext execution = TestAdapter.CAPTURED_CTX.get(did);
+		assertNotNull(execution);
+		assertNotNull(execution.getJob(), "adapter context must carry its Job wrapper");
+		assertFalse(execution.getJob().isRecorded());
+		assertNull(execution.getJobId(),
+			"a transient wrapper must not masquerade as a durable t/ scope");
+	}
+
+	@Test
+	public void testRecordedInvocationEstablishesJobScope() throws Exception {
+		TestAdapter.CAPTURED_CTX.remove(did);
+		engine.jobs().runOperation(captureContextMeta(false, null), Maps.empty(), ctx)
+			.get(5, TimeUnit.SECONDS);
+
+		RequestContext execution = TestAdapter.CAPTURED_CTX.get(did);
+		assertNotNull(execution);
+		assertTrue(execution.getJob().isRecorded());
+		assertEquals(execution.getJob().getID(), execution.getJobId());
+	}
+
+	@Test
+	public void testInternalInvocationPreservesParentJobScope() throws Exception {
+		Job parent = engine.jobs().invokeOperation(echoMeta(), Maps.empty(), ctx);
+		parent.awaitResult(5000);
+		TestAdapter.CAPTURED_CTX.remove(did);
+
+		engine.jobs().invokeInternal(captureContextMeta(true, null), Maps.empty(),
+			ctx.withJobId(parent.getID())).get(5, TimeUnit.SECONDS);
+
+		RequestContext execution = TestAdapter.CAPTURED_CTX.get(did);
+		assertNotNull(execution);
+		assertFalse(execution.getJob().isRecorded());
+		assertNotEquals(parent.getID(), execution.getJob().getID(),
+			"each invocation still gets its own Job wrapper");
+		assertEquals(parent.getID(), execution.getJobId(),
+			"durable parent temp scope passes through internal composition");
+	}
+
+	private static AMap<AString, ACell> echoMeta() {
+		return Maps.of(Fields.OPERATION,
+			Maps.of(Fields.ADAPTER, Strings.create("test:echo")));
+	}
+
+	private static AMap<AString, ACell> readOnlyEchoMeta() {
+		return Maps.of(Fields.OPERATION, Maps.of(
+			Fields.ADAPTER, Strings.create("test:echo"),
+			Fields.READ_ONLY, CVMBool.TRUE));
+	}
+
+	private static AMap<AString, ACell> internalFalseEchoMeta() {
+		return Maps.of(Fields.OPERATION, Maps.of(
+			Fields.ADAPTER, Strings.create("test:echo"),
+			Fields.READ_ONLY, CVMBool.TRUE,
+			Fields.INTERNAL, CVMBool.FALSE));
+	}
+
+	private static AMap<AString, ACell> captureContextMeta(boolean readOnly,
+			Boolean internal) {
+		AMap<AString, ACell> operation = Maps.of(
+			Fields.ADAPTER, Strings.create("test:capturectx"),
+			Fields.READ_ONLY, CVMBool.create(readOnly));
+		if (internal != null) {
+			operation = operation.assoc(Fields.INTERNAL, CVMBool.create(internal));
+		}
+		return Maps.of(Fields.OPERATION, operation);
 	}
 
 	// ========== Bad refs ==========

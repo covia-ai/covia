@@ -3,6 +3,7 @@
 	"description": "Retrieve the current state of a Task on a remote A2A agent via the GetTask JSON-RPC method",
 	"operation": {
 		"adapter": "a2a:getTask",
+		"readOnly": true,
 		"input": {
 			"type": "object",
 			"properties": {

@@ -2,8 +2,9 @@
   "name": "Get Asset Content",
   "description": "Retrieve the binary content payload of an asset by any resolvable address. Returned as hex-encoded Blob. Returns {truncated: true, size} if it exceeds maxSize (default 1MB). Use asset_get for metadata. Only assets stored with a content payload have content.",
   "dateCreated": "2026-03-31T00:00:00Z",
-  "operation": {
-    "adapter": "asset:content",
+	"operation": {
+		"adapter": "asset:content",
+		"readOnly": true,
     "toolName": "asset_content",
     "input": {
       "type": "object",

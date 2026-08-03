@@ -4,6 +4,7 @@
 	"dateCreated": "2026-03-25T00:00:00Z",
 	"operation": {
 		"adapter": "covia:slice",
+		"readOnly": true,
 		"toolName": "covia_slice",
 		"input": {
 			"type": "object",

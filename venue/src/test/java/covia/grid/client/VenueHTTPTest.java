@@ -92,6 +92,14 @@ public class VenueHTTPTest {
 		authBase = "http://localhost:" + authServer.port();
 	}
 
+	@Test
+	public void testRunReturnsResultWithoutJobPolling() throws Exception {
+		ACell input = Maps.of("sdk", Strings.create("run"));
+		ACell result = client.run(OP_ECHO.toString(), input)
+			.get(5, TimeUnit.SECONDS);
+		assertEquals(input, result);
+	}
+
 	@AfterAll
 	public void teardown() {
 		if (authServer != null) {

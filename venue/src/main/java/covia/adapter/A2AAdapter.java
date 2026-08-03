@@ -133,7 +133,7 @@ public class A2AAdapter extends AAdapter {
 				// Job-worthy (the #85 delegation pattern, caught live by an agent
 				// calling a2a_send as a tool): send exists only in the Job-aware
 				// dispatch — the mirror needs a real Job for status propagation,
-				// the cancel hook, and the remote task id. Delegate the zero-Job
+				// the cancel hook, and the remote task id. Delegate the transient-Job
 				// internal path to an owner-attributed Job rather than rejecting.
 				Job job = engine.jobs().invokeOperation(meta, input, ctx);
 				yield job.future().thenApply(x -> x);

@@ -299,6 +299,8 @@ public class Config {
 	/** Key for the Private Network Access opt-in (default: false). */
 	public static final AString ALLOW_PRIVATE_NETWORK = Strings.intern("allowPrivateNetwork");
 	public static final AString ENABLE_PRIVATE_JOBS = Strings.intern("enablePrivateJobs");
+	/** Force durable records for read-only run/internal invocations. */
+	public static final AString RECORD_READ_ONLY_OPERATIONS = Strings.intern("recordReadOnlyOperations");
 
 	// ========== MCP config keys ==========
 
@@ -358,7 +360,7 @@ public class Config {
 		"httpSelectors", "httpAcceptors", "mcp", "a2a", "adapters",
 		"modules", "users", "store", "seed", "keystore", "storage",
 		"maxContentSize", "auth", "webdav", "file", "corsOrigins",
-		"allowPrivateNetwork", "enablePrivateJobs", "fixMcpStrings",
+		"allowPrivateNetwork", "enablePrivateJobs", "recordReadOnlyOperations", "fixMcpStrings",
 		"outputValidation", "secrets", "strictAssets", "strictConfig");
 
 	/**
@@ -442,6 +444,7 @@ public class Config {
 		optionalBoolean(config, FIX_MCP_STRINGS, "fixMcpStrings", true);
 		optionalBoolean(config, ALLOW_PRIVATE_NETWORK, "allowPrivateNetwork", false);
 		optionalBoolean(config, ENABLE_PRIVATE_JOBS, "enablePrivateJobs", false);
+		optionalBoolean(config, RECORD_READ_ONLY_OPERATIONS, "recordReadOnlyOperations", false);
 
 		validateBaseUrl();
 		validateRootPage(strict);
@@ -1671,6 +1674,16 @@ public class Config {
 	 */
 	public boolean isPrivateJobsEnabled() {
 		ACell v = config.get(ENABLE_PRIVATE_JOBS);
+		return (v != null) && RT.bool(v);
+	}
+
+	/**
+	 * Whether read-only result-oriented invocations must still be recorded.
+	 * Defaults to false: a declared read-only operation may use a transient Job
+	 * for {@code run} and {@code invokeInternal}.
+	 */
+	public boolean isRecordReadOnlyOperations() {
+		ACell v = config.get(RECORD_READ_ONLY_OPERATIONS);
 		return (v != null) && RT.bool(v);
 	}
 

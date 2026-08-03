@@ -4,6 +4,7 @@
 	"dateCreated": "2026-04-01T00:00:00Z",
 	"operation": {
 		"adapter": "agent:info",
+		"readOnly": true,
 		"toolName": "agent_info",
 		"input": {
 			"type": "object",

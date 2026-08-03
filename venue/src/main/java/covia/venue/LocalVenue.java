@@ -103,6 +103,20 @@ public class LocalVenue extends Venue {
 	}
 
 	@Override
+	public CompletableFuture<ACell> run(Hash assetID, ACell input) {
+		return engine.jobs().runOperation(assetID.toCVMHexString(), input, context());
+	}
+
+	@Override
+	public CompletableFuture<ACell> run(String operation, ACell input) {
+		if (operation == null) {
+			return CompletableFuture.failedFuture(
+				new IllegalArgumentException("Operation must not be null"));
+		}
+		return engine.jobs().runOperation(Strings.create(operation), input, context());
+	}
+
+	@Override
 	public CompletableFuture<Job> getJob(Blob jobId) {
 		Job job = engine.jobs().getJob(jobId, context());
 		if (job == null) {

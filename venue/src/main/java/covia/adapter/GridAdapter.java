@@ -96,8 +96,7 @@ public class GridAdapter extends AAdapter {
 
         Venue venue = selectVenue(ctx, venueSpec, input);
 
-        CompletableFuture<Job> jobFuture = venue.invoke(targetOperation.toString(), operationInput);
-        return jobFuture.thenCompose(Job::future);
+		return venue.run(targetOperation.toString(), operationInput);
 	}
 
 	/**

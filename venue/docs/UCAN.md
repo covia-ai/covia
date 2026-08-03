@@ -190,7 +190,8 @@ Semantics (see `CapabilityChecker.allows` and `JobManager.evaluateGate`):
 - **Execution authority**: the gate runs under a constrained derivative of
   the caller: the caller's ordinary ungated scope plus a synthetic right to
   invoke the gate itself, but no presented UCAN proofs. Nested gated grants
-  are disabled structurally by the gate-evaluation flag. No Job is created.
+  are disabled structurally by the gate-evaluation flag. A transient Job wrapper
+  carries execution context but creates no durable Job record.
 - **Delegation paths**: every gate from root through leaf must pass. Distinct
   proof paths are alternatives; the first fully accepted path authorises.
   A repeated gate reference is evaluated once for the immutable

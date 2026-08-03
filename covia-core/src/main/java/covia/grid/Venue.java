@@ -111,6 +111,33 @@ public abstract class Venue {
 		return invoke(assetID, input);
 	}
 
+	/**
+	 * Runs an operation and returns its result without exposing a Job handle.
+	 * Implementations still execute through the venue's Job lifecycle; operation
+	 * metadata and venue policy decide whether that internal Job is durable.
+	 *
+	 * @param assetID operation asset ID
+	 * @param input operation input
+	 * @return future completing with the operation output
+	 */
+	public CompletableFuture<ACell> run(Hash assetID, ACell input) {
+		return invoke(assetID, input).thenCompose(Job::future);
+	}
+
+	/**
+	 * Runs an operation identified by an alias or asset ID and returns its result.
+	 * This is result-oriented, not synchronous: callers may compose or await the
+	 * returned future. Use {@link #invoke(String, ACell)} when a durable Job handle
+	 * is part of the desired API contract.
+	 */
+	public CompletableFuture<ACell> run(String operation, ACell input) {
+		Hash assetID = Hash.parse(operation);
+		if (assetID == null) {
+			throw new IllegalArgumentException("Operation must be an asset hash for this venue implementation: " + operation);
+		}
+		return run(assetID, input);
+	}
+
 	public CompletableFuture<Job> getJob(String jobId) {
 		return getJob(Job.parseID(jobId));
 	}

@@ -32,7 +32,6 @@ import convex.restapi.mcp.McpServer;
 import convex.restapi.mcp.McpSession;
 import convex.restapi.mcp.SseConnection;
 import covia.api.Fields;
-import covia.grid.Job;
 import covia.grid.Venue;
 import covia.venue.Engine;
 import covia.venue.LocalVenue;
@@ -110,7 +109,7 @@ public class MCP extends McpServer {
 	/**
 	 * Registry of MCP-exposed tools: sanitised MCP tool name → op reference path
 	 * (e.g. {@code "v/ops/json/merge"}). Listing walks this map; tool calls
-	 * route through it via {@code engine.jobs().invokeOperation(opRef, ...)}.
+	 * route through it via {@code engine.jobs().runOperation(opRef, ...)}.
 	 *
 	 * <p>Built lazily on first access — MCP is constructed before
 	 * {@code addDemoAssets} populates adapter catalogs, so eager construction
@@ -490,12 +489,8 @@ public class MCP extends McpServer {
 					arguments = coerceJsonStringArgs(arguments, opRef);
 				}
 
-				Job job = engine().jobs().invokeOperation(opRef, arguments, rctx);
-				ACell result = job.awaitResult(TOOL_CALL_TIMEOUT_MS);
-				if (result == null && !job.isComplete()) {
-					return toolError("Tool call timed out after " + (TOOL_CALL_TIMEOUT_MS / 1000)
-						+ "s. Job ID: " + job.getID().toHexString());
-				}
+				ACell result = engine().jobs().runOperation(opRef, arguments, rctx)
+					.get(TOOL_CALL_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
 				// Scalar (non-map) results render as an MCP text result in the
 				// protocol layer (Convex 0.8.9) — no covia-side wrapping needed.
 				return toolSuccess(result);

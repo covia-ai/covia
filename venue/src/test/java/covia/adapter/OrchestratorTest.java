@@ -46,7 +46,7 @@ public class OrchestratorTest {
 
 	@Test
 	public void testOrchestrationInvokableInternally() throws Exception {
-		// Regression (#85 fall-out): an orchestration reached via the zero-Job
+		// Regression (#85 fall-out): an orchestration reached via the transient-Job
 		// internal path (e.g. invoked as an LLM tool from a skills-bundled
 		// pipeline) must delegate to the Job-aware dispatch, not throw
 		// UnsupportedOperationException.

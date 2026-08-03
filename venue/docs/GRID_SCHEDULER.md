@@ -125,7 +125,7 @@ costs nothing — there is no scan of sleeping events.
    runs after (finds it gone). This gives **at-most-once** firing with no locking.
 3. Dispatch the claimed event's operation as the owner on a fresh virtual thread,
    **replaying the event's stapled `proofs`/`caps`** and nothing more (§5), via the
-   engine's internal, zero-Job dispatch — fire-and-forget; any error is logged.
+   engine's internal transient-Job dispatch — fire-and-forget; any error is logged.
    The vthread keeps the operation's I/O off the timer thread.
 4. Re-arm for the new head.
 
@@ -191,21 +191,18 @@ normal tool call.
 
 ---
 
-## 7. Relationship to Jobs — tracking is opt-in
+## 7. Relationship to durable Jobs — tracking is policy-driven
 
-Firing does **not** create a Job. The scheduler performs a lightweight,
-fire-and-forget invocation (the engine's zero-Job internal dispatch), so a wake
-or a periodic housekeeping op costs nothing more than the call itself. The
-scheduler stays orthogonal to the job lifecycle.
+Firing uses a lightweight, transient Job wrapper so adapters receive the normal
+execution context and lifecycle without automatically adding a durable record.
+An operation with `operation.internal:false` still forces recording.
 
-If you *want* a tracked, owned, observable invocation, **schedule an operation
-that creates one** — `grid:invoke` (async job, returns an id to poll) or
-`grid:run` (run-and-wait). The Job is then created by `grid:invoke` / `grid:run`,
-not by the scheduler, and is visible through the usual job APIs (status, SSE,
-cancel). Job semantics live in *what you schedule*, not in the firing path:
+If you *want* a tracked, owned, observable invocation regardless of operation
+metadata, schedule `grid:invoke` (async Job, returns an id to poll). Job semantics
+live in what you schedule and in the target operation's metadata:
 
 ```
-schedule(agent:trigger, {agentId}, T)          → lightweight wake, no Job
+schedule(agent:trigger, {agentId}, T)          → transient wrapper, no durable record
 schedule(grid:invoke,   {operation: X, …}, T)  → a tracked Job for X at T
 ```
 
@@ -228,8 +225,8 @@ agent is (the agent-side details are in [SCHEDULER.md](./SCHEDULER.md)):
   force:false, wait:false}`. Its handle is stored on the agent record
   (`wakeHandle`) so the next change can cancel-and-replace it — exactly one event
   per agent.
-- When it fires, `agent:trigger` (via the zero-Job `invokeFuture` path, so no
-  session is minted and no Job is created) calls `wakeAgent(force:false)`. The run
+- When it fires, `agent:trigger` (via the transient-Job `invokeFuture` path, so no
+  session is minted and no durable Job is recorded) calls `wakeAgent(force:false)`. The run
   loop runs iff there is work (`hasWork` = session pending or tasks); it processes
   what's due, and the post-cycle `setThreadWakeTime` re-arms for the next earliest
   or clears `wakeHandle` if none remain.
@@ -242,7 +239,7 @@ scheduler holds a single, operation-agnostic entry per agent. The retired
 `AgentScheduler`/`ThreadRef` and per-thread due-ness leave the scheduler entirely.
 Redundant wakes collapse safely because waking is idempotent — one run loop per
 agent via the `runningLoops` CAS (**at most one active computation per agent**).
-A scheduled `agent:trigger` is exactly as lightweight as a direct wake (zero-Job,
+A scheduled `agent:trigger` is exactly as lightweight as a direct wake (transient Job,
 §7).
 
 ---
@@ -251,8 +248,8 @@ A scheduled `agent:trigger` is exactly as lightweight as a direct wake (zero-Job
 
 **In scope (first cut):** per-venue `:schedule` index; `schedule` / `cancel` /
 `trigger` / `list`; one-shot events; **captured authority — stapled UCAN proofs
-replayed at fire time, no escalation (§5)**; lightweight (zero-Job) firing, with
-Job tracking opt-in via scheduling `grid:invoke` / `grid:run`; owner-scoped
+  replayed at fire time, no escalation (§5)**; lightweight transient-Job firing,
+with durable tracking via operation policy or `grid:invoke`; owner-scoped
 access; boot catch-up; claim-by-removal (at-most-once).
 
 **Deferred:**
@@ -270,9 +267,9 @@ access; boot catch-up; claim-by-removal (at-most-once).
 
 **Resolved (as built):**
 1. **Records per-venue** — single slot, single-writer (the timer thread).
-2. **Firing is zero-Job by default** — lightweight fire-and-forget; Job tracking
-   is opt-in by scheduling `grid:invoke` / `grid:run` rather than the target
-   operation directly.
+2. **Firing is transient-Job by default** — lightweight fire-and-forget; durable
+   tracking is forced by `operation.internal:false` or by scheduling
+   `grid:invoke` rather than the target operation directly.
 3. **Handle encoding** — the index key surfaced as an opaque hex string
    (`0x…`); `cancel`/`trigger` accept it as a hex string or blob.
 4. **`:schedule` is a plain `{updated, events}` field inside the venue `:value`**,

@@ -15,17 +15,13 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
-import covia.exception.JobFailedException;
 import covia.grid.Job;
 import covia.grid.auth.UcanTokens;
 import covia.venue.TestServer;
 
 /**
- * Tests for the client's connection-level private-jobs mode (#192) and the
- * ucan verify / job-free read conveniences, against a real VenueServer
- * (TestServer enables {@code enablePrivateJobs}). Each test uses its own
- * VenueHTTP so flipping private mode never affects the shared client used by
- * the parallel suite.
+ * Tests for migration from the legacy private-invoke mode to the result-only
+ * run API, plus UCAN verify / job-free read conveniences against a real venue.
  */
 public class PrivateJobsClientTest {
 
@@ -36,53 +32,34 @@ public class PrivateJobsClientTest {
 	}
 
 	@Test
-	public void testPrivateRunReturnsOutputAndPersistsNothing() throws Exception {
+	public void testRunReturnsOutput() throws Exception {
 		VenueHTTP client = freshClient();
-		client.setPrivate(true);
 
 		AMap<AString,ACell> input = Maps.of(Strings.create("greeting"), Strings.create("private-hello"));
-		Job job = client.invokeAndWait(Strings.create("v/test/ops/echo"), input);
-		assertTrue(job.isComplete(), "private run should return the finished record from the wait window");
-		assertEquals(input, job.getOutput());
-
-		// The completed private job is immediately forgotten — no persisted record.
-		client.setPrivate(false);
-		assertFalse(client.listJobs().contains(job.getID()),
-			"a private job must not appear in the venue's job index");
+		ACell result = client.run("v/test/ops/echo", input).get();
+		assertEquals(input, result);
 	}
 
 	@Test
-	public void testPrivateRunFailureSurfacesAsJobFailure() throws Exception {
+	public void testRunFailureSurfacesAsTransportFailure() {
 		VenueHTTP client = freshClient();
-		client.setPrivate(true);
-
-		Job job = client.invokeAndWait(Strings.create("v/test/ops/error"),
-			Maps.of(Strings.create("message"), Strings.create("deliberate")));
-		assertTrue(job.isFinished());
-		assertFalse(job.isComplete());
-		assertThrows(JobFailedException.class, job::getOutput);
+		assertThrows(Exception.class, () -> client.run("v/test/ops/error",
+			Maps.of(Strings.create("message"), Strings.create("deliberate"))).join());
 	}
 
 	@Test
-	public void testPrivateSyncEntryPointWorks() throws Exception {
+	public void testInvokeSyncRemainsDurableJobEntryPoint() throws Exception {
 		VenueHTTP client = freshClient();
-		client.setPrivate(true);
-
-		// invokeSync goes through startJob — the submit timeout must cover the
-		// server-side wait window under private mode.
 		Job job = client.invokeSync("v/test/ops/echo",
 			Maps.of(Strings.create("n"), Strings.create("42")));
 		assertTrue(job.isComplete());
+		assertTrue(client.listJobs().contains(job.getID()));
 	}
 
 	@Test
-	public void testPollStyleInvokeRefusedUnderPrivateMode() {
+	public void testLegacyPrivateModeDirectsCallerToRun() {
 		VenueHTTP client = freshClient();
-		client.setPrivate(true);
-		assertThrows(IllegalStateException.class,
-			() -> client.invoke("v/test/ops/echo", Maps.empty()),
-			"poll-style invoke cannot collect a private job's result and must fail loudly");
-		// ...and setPrivate(false) restores it.
+		assertThrows(UnsupportedOperationException.class, () -> client.setPrivate(true));
 		client.setPrivate(false);
 		assertDoesNotThrow(() -> client.invoke("v/test/ops/echo", Maps.empty()).join());
 	}

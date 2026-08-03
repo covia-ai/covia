@@ -226,7 +226,7 @@ public class AgentAdapter extends AAdapter {
 
 	@Override
 	public CompletableFuture<ACell> invokeFuture(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
-		// completeTask/failTask are zero-Job (framework invokes from transitions).
+		// completeTask/failTask use transient Jobs (framework invokes from transitions).
 		// request is reachable here from the LLM tool loop — delegates to the
 		// Job-aware path to create a task Job, then races completion against
 		// an optional timeout.
@@ -297,7 +297,7 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Invokes {@code agent:request} from a zero-Job context (LLM tool loop).
+	 * Invokes {@code agent:request} from a transient-Job context (LLM tool loop).
 	 *
 	 * <p>Creates a task Job via {@link #invoke(Job, RequestContext, AMap, ACell)}
 	 * and races its completion against {@code input.timeout} (ms). If the task
@@ -312,7 +312,21 @@ public class AgentAdapter extends AAdapter {
 	 */
 	private CompletableFuture<ACell> invokeRequestInternal(RequestContext ctx, AMap<AString, ACell> meta, ACell input) {
 		Job taskJob = engine.jobs().invokeOperation(meta, input, ctx);
+		return requestResultFuture(taskJob, input);
+	}
 
+	/** Preserve agent:request's best-effort wait/snapshot result contract when
+	 * JobManager supplies the Job wrapper for run/invokeInternal. */
+	@Override
+	public CompletableFuture<ACell> resultFuture(Job job,
+			AMap<AString, ACell> meta, ACell input) {
+		if ("request".equals(getSubOperation(meta))) {
+			return requestResultFuture(job, input);
+		}
+		return super.resultFuture(job, meta, input);
+	}
+
+	private CompletableFuture<ACell> requestResultFuture(Job taskJob, ACell input) {
 		long timeoutMs = parseRequestTimeoutMs(input);
 		AString sessionId = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
 		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));

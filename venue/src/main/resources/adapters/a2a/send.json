@@ -3,6 +3,7 @@
 	"description": "Send a message to a remote A2A agent. The local Covia Job mirrors the remote Task's lifecycle: status updates propagate, final artifacts become the Job's output. Pass `taskId` to continue an existing remote conversation.",
 	"operation": {
 		"adapter": "a2a:send",
+		"internal": false,
 		"input": {
 			"type": "object",
 			"properties": {
