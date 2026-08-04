@@ -179,6 +179,14 @@ in the test adapter: `v/test/ops/allowgate`, `v/test/ops/denygate`, and
 `v/test/ops/amountgate` (passes iff `input.amount <= 2000` — the canonical
 argument-conditional example).
 
+When a gate is an orchestration that relies on step output schemas, set
+`operation.strict: true` on the orchestration. Strict orchestration resolves
+each step's operation definition before invoking it and requires `asset/read`
+authority over that metadata in addition to `invoke`; an unreadable or
+unresolvable definition, or a schema violation, fails the orchestration and
+therefore the gate. Operations that declare no output schema impose no output
+constraint.
+
 Semantics (see `CapabilityChecker.allows` and `JobManager.evaluateGate`):
 
 - **Ungated alternatives win first**: a covering local grant without a gate,

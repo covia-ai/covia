@@ -26,6 +26,7 @@ Steps run in parallel by default. A step only waits if it references output from
   "description": "What this orchestration does",
   "operation": {
     "adapter": "orchestrator",
+    "strict": true,
     "steps": [
       {
         "op": "operation:name",
@@ -44,6 +45,19 @@ Steps run in parallel by default. A step only waits if it references output from
 | `op` | Yes | Operation to invoke (e.g. `"v/ops/agent/request"`, `"v/test/ops/echo"`, `"v/ops/covia/read"`) |
 | `input` | Yes | Input specification — can wire in constants, orchestration input, or previous step outputs |
 | `venue` | No | Remote venue DID or URL for federated execution |
+| `strict` | No | Validate this step's result against the invoked operation's declared output schema |
+
+At orchestration level, `operation.strict: true` enables validation for every
+step; a step-level `strict: true` enables it for just that step. The
+orchestration-level field also has the normal operation meaning: validate the
+orchestration input against its declared input schema.
+
+Strict validation resolves the operation metadata before submitting the child
+job, using the same local or remote venue selected for execution. The caller
+must therefore have `asset/read` authority over every strict step's operation
+definition. Missing, unreadable, or operationally unresolvable metadata fails
+the orchestration before that step runs. A definition with no output schema is
+valid but has no output constraint to enforce.
 
 ### Input Specification
 
@@ -285,6 +299,7 @@ The result contains all three stages in one response with full provenance.
 ## Error Handling
 
 - If any step fails, the entire orchestration fails — the job status shows which step caused it.
+- With strict validation enabled, unreadable operation metadata and output-schema violations fail the step before its output is released to dependants.
 - Step status is tracked in the job's `steps` array (inspect via `covia_read path=j/<job-id>/steps`).
 - Common failures: agent not found, operation timeout, LLM error.
 
@@ -301,6 +316,9 @@ Steps can execute on remote venues by adding a `venue` field:
 ```
 
 The orchestrator connects to the remote venue via Grid and routes the step there. Results flow back into the local dependency graph.
+Resolution and invocation use the same connected venue. Consequently, a strict
+remote step reads its operation definition from that remote venue rather than
+accidentally validating against a same-named local operation.
 
 ## Tips
 

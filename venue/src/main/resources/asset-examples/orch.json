@@ -5,6 +5,7 @@
 	"operation": {
 		"adapter": "orchestrator",
 		"internal": false,
+		"strict": true,
 		"input": {
 			"type": "object",
 			"properties": {

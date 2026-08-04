@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -26,6 +27,7 @@ import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
+import covia.venue.server.VenueServer;
 import org.junit.jupiter.api.TestInfo;
 
 /**
@@ -757,6 +759,149 @@ public class OrchestratorTest {
 			Maps.empty(), RequestContext.of(ALICE_DID));
 		ACell result = job.awaitResult(5000);
 		assertNotNull(result, "Non-strict should always pass");
+	}
+
+	@Test
+	public void testStrictRemoteStepUsesRemoteOperationSchema() {
+		VenueServer remote = VenueServer.launch(Maps.of(
+			Config.PORT, CVMLong.ZERO,
+			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
+			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(
+				Config.ENABLED, CVMBool.TRUE,
+				Config.CAPS, Strings.create("unrestricted")))));
+		try {
+			// Give the remote echo binding a schema that deliberately differs from
+			// the local venue's echo metadata. The remote still returns its input;
+			// outputValidation defaults off there, so the local orchestrator's
+			// strict check is what must reject the object result.
+			AMap<AString, ACell> remoteEcho = Maps.of(
+				Fields.NAME, Strings.create("Remote string-only echo"),
+				Fields.OPERATION, Maps.of(
+					Fields.ADAPTER, Strings.create("test:echo"),
+					Fields.OUTPUT, Maps.of("type", Strings.create("string"))));
+			remote.getEngine().jobs().invokeOperation("v/ops/covia/write",
+				Maps.of(Fields.PATH, Strings.create("v/test/ops/echo"),
+					Fields.VALUE, remoteEcho),
+				remote.getEngine().venueContext()).awaitResult(5000);
+
+			String hash = storeJsonOrchestration("""
+				{
+					"name": "Strict remote schema",
+					"operation": {
+						"adapter": "orchestrator",
+						"strict": true,
+						"steps": [{
+							"venue": "http://127.0.0.1:%d",
+							"op": "v/test/ops/echo",
+							"input": ["const", {"remote": true}]
+						}],
+						"result": [0]
+					}
+				}
+			""".formatted(remote.port()));
+
+			Job job = engine.jobs().invokeOperation(hash,
+				Maps.empty(), RequestContext.of(ALICE_DID));
+			assertThrows(RuntimeException.class, () -> job.awaitResult(10000));
+			assertEquals(Status.FAILED, job.getStatus());
+			assertTrue(job.getErrorMessage().contains("output schema violation"),
+				job.getErrorMessage());
+		} finally {
+			remote.close();
+		}
+	}
+
+	@Test
+	public void testStrictRemoteStepRequiresMetadataReadBeforeInvocation() {
+		VenueServer remote = VenueServer.launch(Maps.of(
+			Config.PORT, CVMLong.ZERO,
+			Config.BIND_ADDRESS, Strings.create("127.0.0.1"),
+			Config.AUTH, Maps.of(Config.PUBLIC, Maps.of(
+				Config.ENABLED, CVMBool.TRUE,
+				Config.CAPS, Vectors.of(Capability.create(
+					Strings.create("v/test/ops/echo"), Strings.create("invoke")))))));
+		try {
+			String remoteUrl = "http://127.0.0.1:" + remote.port();
+			String nonStrict = storeJsonOrchestration("""
+				{
+					"name": "Remote invoke without metadata read",
+					"operation": {
+						"adapter": "orchestrator",
+						"steps": [{
+							"venue": "%s",
+							"op": "v/test/ops/echo",
+							"input": ["const", {"allowed": true}]
+						}],
+						"result": [0]
+					}
+				}
+			""".formatted(remoteUrl));
+			ACell result = engine.jobs().invokeOperation(nonStrict,
+				Maps.empty(), RequestContext.of(ALICE_DID)).awaitResult(10000);
+			assertEquals(CVMBool.TRUE, RT.getIn(result, "allowed"),
+				"invoke authority alone is sufficient when strict validation is off");
+
+			long jobsBefore = RT.ensureLong(
+				RT.getIn(remote.getEngine().getStats(), "jobs")).longValue();
+			String strict = storeJsonOrchestration("""
+				{
+					"name": "Strict remote metadata read",
+					"operation": {
+						"adapter": "orchestrator",
+						"strict": true,
+						"steps": [{
+							"venue": "%s",
+							"op": "v/test/ops/echo",
+							"input": ["const", {"mustNotRun": true}]
+						}],
+						"result": [0]
+					}
+				}
+			""".formatted(remoteUrl));
+
+			Job job = engine.jobs().invokeOperation(strict,
+				Maps.empty(), RequestContext.of(ALICE_DID));
+			assertThrows(RuntimeException.class, () -> job.awaitResult(10000));
+			assertTrue(job.getErrorMessage().contains("requires readable operation metadata"),
+				job.getErrorMessage());
+			assertEquals(jobsBefore, RT.ensureLong(
+				RT.getIn(remote.getEngine().getStats(), "jobs")).longValue(),
+				"strict metadata resolution must fail before a remote child job is submitted");
+		} finally {
+			remote.close();
+		}
+	}
+
+	@Test
+	public void testStrictLocalStepRequiresAssetReadBeforeSideEffect() {
+		String path = "w/orchestrator-strict/no-read";
+		String hash = storeJsonOrchestration("""
+			{
+				"name": "Strict local metadata read",
+				"operation": {
+					"adapter": "orchestrator",
+					"strict": true,
+					"steps": [{
+						"op": "v/ops/covia/write",
+						"input": {
+							"path": ["const", "%s"],
+							"value": ["const", "must-not-be-written"]
+						}
+					}],
+					"result": [0]
+				}
+			}
+		""".formatted(path));
+		RequestContext invokeAndWriteOnly = RequestContext.of(ALICE_DID).withCaps(Vectors.of(
+			Capability.create(Strings.create(hash), Strings.create("invoke")),
+			Capability.create(Strings.create("v/ops/covia/write"), Strings.create("invoke")),
+			Capability.create(Strings.create(path), Strings.create("crud/write"))));
+
+		Job job = engine.jobs().invokeOperation(hash, Maps.empty(), invokeAndWriteOnly);
+		assertThrows(RuntimeException.class, () -> job.awaitResult(5000));
+		assertTrue(job.getErrorMessage().contains("asset/read"), job.getErrorMessage());
+		assertFalse(readExists(path),
+			"strict metadata denial must happen before the child write is invoked");
 	}
 
 	// ========== Array literals (#281) ==========
