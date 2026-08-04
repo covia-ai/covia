@@ -14,13 +14,10 @@ Set up a Covia venue for development, testing, or production.
 |-------------|---------|---------|
 | Java JDK | 21+ | Building and running |
 | Maven | 3.7+ | Build tool |
-| Convex | 0.8.4-SNAPSHOT | Lattice platform (must be in local Maven repo) |
 | Git | Any | Source control |
 
-**Install Convex first** (Covia depends on it):
-```bash
-cd ../convex && mvn clean install -DskipTests
-```
+Covia pins the released Convex dependency from Maven Central, so a separate
+Convex checkout or local Maven install is not required.
 
 ## Commands
 
@@ -59,12 +56,17 @@ For the persistent pattern, drop a config like this in `dev/local.json`:
       "name": "Local Covia Venue",
       "hostname": "localhost",
       "store": "dev/venue.etch",
+      "users": { "autoCreate": true },
       "mcp": {},
       "webdav": { "enabled": true }
     }
   ]
 }
 ```
+
+`users.autoCreate: true` lets a fresh browser or client device key register on
+first authenticated use. Enable it only for local or deliberately open test
+venues; keep the production default (`false`) for private and stable venues.
 
 The venue auto-creates `dev/venue.etch` and `dev/venue.key` on first launch. Delete both together for a clean reset; deleting only `venue.key` leaves the etch encrypted under a now-lost identity.
 
