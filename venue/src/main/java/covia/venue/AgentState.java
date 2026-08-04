@@ -562,6 +562,34 @@ public class AgentState extends ALatticeComponent<ACell> {
 	}
 
 	/**
+	 * Sets (or clears, when {@code title} is null) the free-form human-facing
+	 * title in a session's {@code meta} — the field documented but never
+	 * implemented in the "suggested" shape at AGENT_SESSIONS.md §4.3. A
+	 * no-op if the session doesn't exist (caller should check first if it
+	 * needs to distinguish "not found" from "renamed").
+	 *
+	 * @return true if the session existed and was updated, false otherwise
+	 */
+	@SuppressWarnings("unchecked")
+	public boolean setSessionTitle(Blob sid, AString title) {
+		boolean[] found = { false };
+		update(r -> {
+			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
+				? (Index<Blob, ACell>) idx : Index.none();
+			ACell sessionCell = sessions.get(sid);
+			if (!(sessionCell instanceof AMap)) return r;
+			found[0] = true;
+			AMap<AString, ACell> session = (AMap<AString, ACell>) sessionCell;
+			AMap<AString, ACell> meta = (session.get(K_META) instanceof AMap m)
+				? (AMap<AString, ACell>) m : Maps.empty();
+			meta = (title != null) ? meta.assoc(Fields.TITLE, title) : meta.dissoc(Fields.TITLE);
+			session = session.assoc(K_META, meta);
+			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
+		});
+		return found[0];
+	}
+
+	/**
 	 * Whether a session record represents outstanding work: it has pending
 	 * messages, or it is mid-cycle ({@code inCycle} present — a claimed cycle
 	 * whose merge has not run, i.e. live right now or interrupted by a crash;

@@ -210,6 +210,7 @@ public class AgentAdapter extends AAdapter {
 		installAsset("agent/complete-task", BASE + "completeTask.json");
 		installAsset("agent/fail-task",     BASE + "failTask.json");
 		installAsset("agent/delete-session", BASE + "deleteSession.json");
+		installAsset("agent/rename-session", BASE + "renameSession.json");
 
 		// Install standard agent templates at v/agents/templates/<name>.
 		// Discoverable via covia_list path=v/agents/templates and usable in
@@ -408,7 +409,7 @@ public class AgentAdapter extends AAdapter {
 			case "create", "fork" -> Abilities.AGENT_CREATE;
 			case "request"        -> Abilities.AGENT_REQUEST;
 			case "message", "chat" -> Abilities.AGENT_MESSAGE;
-			case "delete", "suspend", "resume", "update", "cancelTask", "deleteSession" -> Abilities.AGENT_WRITE;
+			case "delete", "suspend", "resume", "update", "cancelTask", "deleteSession", "renameSession" -> Abilities.AGENT_WRITE;
 			default -> null; // info/list/context (reads), trigger, completeTask/failTask
 		};
 		if (ability == null) return;
@@ -455,6 +456,7 @@ public class AgentAdapter extends AAdapter {
 				case "update"       -> handleUpdate(job, input, ctx);
 				case "cancelTask"   -> handleCancelTask(job, input, ctx);
 				case "deleteSession" -> handleDeleteSession(job, input, ctx);
+				case "renameSession" -> handleRenameSession(job, input, ctx);
 				case "completeTask" -> handleCompleteTask(job, input, ctx);
 				case "failTask"     -> handleFailTask(job, input, ctx);
 				default             -> job.fail("Unknown agent operation: " + getSubOperation(meta));
@@ -1652,6 +1654,47 @@ public class AgentAdapter extends AAdapter {
 			Fields.AGENT_ID,   agentId,
 			Fields.SESSION_ID, sidHex,
 			Fields.DELETED,    CVMBool.TRUE));
+	}
+
+	/**
+	 * Sets or clears a session's free-form {@code title} (docs/AGENT_SESSIONS.md
+	 * §4.3 — the field the "suggested" session meta shape always documented
+	 * but the framework never implemented). An absent or blank {@code title}
+	 * clears it back to unset — callers wanting the auto-derived
+	 * first-message label (client-side) just don't set one.
+	 */
+	private void handleRenameSession(Job job, ACell input, RequestContext ctx) {
+		AString agentId = RT.ensureString(RT.getIn(input, Fields.AGENT_ID));
+		if (agentId == null) { job.fail("agentId is required"); return; }
+
+		AString sidHex = RT.ensureString(RT.getIn(input, Fields.SESSION_ID));
+		if (sidHex == null) { job.fail("sessionId is required"); return; }
+
+		AgentState agent = lookupAgent(job, ctx.getUserDID(), agentId);
+		if (agent == null) return;
+
+		Blob sid;
+		try {
+			sid = Blob.fromHex(sidHex.toString());
+		} catch (Exception e) {
+			sid = null;
+		}
+		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
+
+		AString title = RT.ensureString(RT.getIn(input, Fields.TITLE));
+		if (title != null && title.toString().isBlank()) title = null;
+
+		if (!agent.setSessionTitle(sid, title)) {
+			job.fail("Session not found: " + sidHex);
+			return;
+		}
+
+		job.setStatus(Status.STARTED);
+		AMap<AString, ACell> result = Maps.of(
+			Fields.AGENT_ID,   agentId,
+			Fields.SESSION_ID, sidHex);
+		if (title != null) result = result.assoc(Fields.TITLE, title);
+		job.completeWith(result);
 	}
 
 	/**
