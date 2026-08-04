@@ -1681,7 +1681,12 @@ public class AgentAdapter extends AAdapter {
 		}
 		if (sid == null) { job.fail("Invalid sessionId format: " + sidHex); return; }
 
-		AString title = RT.ensureString(RT.getIn(input, Fields.TITLE));
+		ACell titleValue = RT.getIn(input, Fields.TITLE);
+		if (titleValue != null && !(titleValue instanceof AString)) {
+			job.fail("title must be a string");
+			return;
+		}
+		AString title = (AString) titleValue;
 		if (title != null && title.toString().isBlank()) title = null;
 
 		if (!agent.setSessionTitle(sid, title)) {

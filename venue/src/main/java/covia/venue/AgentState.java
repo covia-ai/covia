@@ -572,13 +572,17 @@ public class AgentState extends ALatticeComponent<ACell> {
 	 */
 	@SuppressWarnings("unchecked")
 	public boolean setSessionTitle(Blob sid, AString title) {
-		boolean[] found = { false };
+		java.util.concurrent.atomic.AtomicBoolean found =
+			new java.util.concurrent.atomic.AtomicBoolean(false);
 		update(r -> {
+			// updateAndGet may retry the callback after contention. Reset the
+			// side-channel so the return value describes the winning attempt.
+			found.set(false);
 			Index<Blob, ACell> sessions = (r.get(K_SESSIONS) instanceof Index idx)
 				? (Index<Blob, ACell>) idx : Index.none();
 			ACell sessionCell = sessions.get(sid);
 			if (!(sessionCell instanceof AMap)) return r;
-			found[0] = true;
+			found.set(true);
 			AMap<AString, ACell> session = (AMap<AString, ACell>) sessionCell;
 			AMap<AString, ACell> meta = (session.get(K_META) instanceof AMap m)
 				? (AMap<AString, ACell>) m : Maps.empty();
@@ -586,7 +590,7 @@ public class AgentState extends ALatticeComponent<ACell> {
 			session = session.assoc(K_META, meta);
 			return r.assoc(K_SESSIONS, sessions.assoc(sid, session));
 		});
-		return found[0];
+		return found.get();
 	}
 
 	/**

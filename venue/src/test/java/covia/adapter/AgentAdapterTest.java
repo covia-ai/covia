@@ -4865,6 +4865,43 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testRenameSessionRejectsNonStringWithoutClearingTitle() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "rename-type-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job msg = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, "rename-type-agent",
+				Fields.MESSAGE, Maps.of("content", "hello")),
+			RequestContext.of(ALICE_DID));
+		AString sidHex = RT.ensureString(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
+
+		engine.jobs().invokeOperation(
+			"v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, "rename-type-agent", Fields.SESSION_ID, sidHex,
+				Fields.TITLE, "Keep me"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job invalid = engine.jobs().invokeOperation(
+			"v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, "rename-type-agent", Fields.SESSION_ID, sidHex,
+				Fields.TITLE, CVMLong.create(42)),
+			RequestContext.of(ALICE_DID));
+		assertThrows(Exception.class, () -> invalid.awaitResult(5000));
+		assertEquals(Status.FAILED, invalid.getStatus());
+		assertTrue(String.valueOf(RT.getIn(invalid.getData(), Fields.ERROR))
+			.contains("title must be a string"));
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AMap<AString, ACell> session = user.agent("rename-type-agent")
+			.getSession(Blob.fromHex(sidHex.toString()));
+		assertEquals(Strings.create("Keep me"), RT.getIn(session, "meta", "title"),
+			"invalid input must not clear an existing title");
+	}
+
+	@Test
 	public void testRenameSessionUnknownSessionFails() {
 		engine.jobs().invokeOperation(
 			"v/ops/agent/create",

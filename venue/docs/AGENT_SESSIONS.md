@@ -151,6 +151,7 @@ Session ids are always venue-minted — callers never supply their own. Per-op r
 |----|---------|
 | `agent:sessionList` | List sessions for an agent (filter by type, counterparty, status) |
 | `agent:sessionInfo` | Get metadata + summary for a session |
+| `agent:renameSession` | Set or clear a session's human-facing title |
 | `agent:sessionArchive` | Mark a session archived (no longer active) |
 | `agent:sessionDelete` | Permanently remove (rare; audit-sensitive) |
 
