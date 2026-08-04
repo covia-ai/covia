@@ -1,0 +1,27 @@
+{
+	"name": "Rename Agent Session",
+	"description": "Sets or clears the free-form human-facing title on a session. Omitting title (or passing an empty string) clears it back to unset. Titled sessions are easier to pick out in a session list than the raw id/timestamp.",
+	"dateCreated": "2026-08-04T00:00:00Z",
+	"operation": {
+		"adapter": "agent:renameSession",
+		"internal": false,
+		"toolName": "agent_rename_session",
+		"input": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string", "description": "The agent that owns the session" },
+				"sessionId": { "type": "string", "description": "Hex ID of the session to rename" },
+				"title": { "type": "string", "description": "New title, or omitted/empty to clear it" }
+			},
+			"required": ["agentId", "sessionId"]
+		},
+		"output": {
+			"type": "object",
+			"properties": {
+				"agentId": { "type": "string" },
+				"sessionId": { "type": "string" },
+				"title": { "type": "string" }
+			}
+		}
+	}
+}

@@ -4821,6 +4821,121 @@ public class AgentAdapterTest {
 		}
 	}
 
+	// ========== agent:renameSession ==========
+
+	/**
+	 * Happy path: renaming a session sets {@code meta.title}; renaming again
+	 * with a blank title clears it back to unset.
+	 */
+	@Test
+	public void testRenameSessionSetsAndClearsTitle() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "rename-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job msg = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, "rename-agent",
+				Fields.MESSAGE, Maps.of("content", "hello")),
+			RequestContext.of(ALICE_DID));
+		AString sidHex = RT.ensureString(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
+
+		Job rename = engine.jobs().invokeOperation(
+			"v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, "rename-agent", Fields.SESSION_ID, sidHex,
+				Fields.TITLE, "Planning the launch"),
+			RequestContext.of(ALICE_DID));
+		ACell result = rename.awaitResult(5000);
+		assertEquals(Strings.create("Planning the launch"), RT.getIn(result, Fields.TITLE));
+
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AMap<AString, ACell> session = user.agent("rename-agent").getSession(Blob.fromHex(sidHex.toString()));
+		assertEquals(Strings.create("Planning the launch"), RT.getIn(session, "meta", "title"));
+
+		Job clear = engine.jobs().invokeOperation(
+			"v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, "rename-agent", Fields.SESSION_ID, sidHex, Fields.TITLE, ""),
+			RequestContext.of(ALICE_DID));
+		ACell clearResult = clear.awaitResult(5000);
+		assertNull(RT.getIn(clearResult, Fields.TITLE), "blank title should not round-trip in the result");
+
+		session = user.agent("rename-agent").getSession(Blob.fromHex(sidHex.toString()));
+		assertNull(RT.getIn(session, "meta", "title"), "title should be cleared, not left blank");
+	}
+
+	@Test
+	public void testRenameSessionUnknownSessionFails() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "rename-unknown-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job rename = engine.jobs().invokeOperation(
+			"v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, "rename-unknown-agent",
+				Fields.SESSION_ID, Strings.create("eeee0003eeee0003eeee0003eeee0003"),
+				Fields.TITLE, "x"),
+			RequestContext.of(ALICE_DID));
+		try {
+			rename.awaitResult(5000);
+			fail("renameSession should fail for an unknown session");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, rename.getStatus());
+			assertTrue(String.valueOf(RT.getIn(rename.getData(), Fields.ERROR)).contains("Session not found"));
+		}
+	}
+
+	@Test
+	public void testRenameSessionRequiresSessionId() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "rename-noarg-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		Job rename = engine.jobs().invokeOperation(
+			"v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, "rename-noarg-agent", Fields.TITLE, "x"),
+			RequestContext.of(ALICE_DID));
+		try {
+			rename.awaitResult(5000);
+			fail("renameSession should fail without a sessionId");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, rename.getStatus());
+		}
+	}
+
+	/** The read-only public scope denies renameSession (agent/write). */
+	@Test
+	public void testRenameSessionDeniedUnderReadOnlyScope() {
+		engine.jobs().invokeOperation(
+			"v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "rename-cap-agent"),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		Job msg = engine.jobs().invokeOperation(
+			"v/ops/agent/message",
+			Maps.of(Fields.AGENT_ID, "rename-cap-agent",
+				Fields.MESSAGE, Maps.of("content", "hi")),
+			RequestContext.of(ALICE_DID));
+		AString sidHex = RT.ensureString(RT.getIn(msg.awaitResult(5000), Fields.SESSION_ID));
+
+		RequestContext readOnly = RequestContext.of(ALICE_DID)
+			.withCaps(covia.lattice.CapabilityChecker.readOnlyScope(ALICE_DID));
+		Job rename = engine.jobs().invokeOperation(
+			"v/ops/agent/rename-session",
+			Maps.of(Fields.AGENT_ID, "rename-cap-agent", Fields.SESSION_ID, sidHex, Fields.TITLE, "nope"),
+			readOnly);
+		try {
+			rename.awaitResult(5000);
+			fail("read-only scope should deny renameSession");
+		} catch (Exception e) {
+			assertEquals(Status.FAILED, rename.getStatus());
+		}
+		User user = engine.getVenueState().users().get(ALICE_DID);
+		AMap<AString, ACell> session = user.agent("rename-cap-agent").getSession(Blob.fromHex(sidHex.toString()));
+		assertNull(RT.getIn(session, "meta", "title"), "title must not be set by a denied attempt");
+	}
+
 	/** Builds the L3 input via the same code path as agent:context and returns tool names. */
 	@SuppressWarnings("unchecked")
 	private java.util.Set<String> runtimeToolNames(String agentId) {
