@@ -26,6 +26,13 @@ try (PythonScript script = runtime.load("""
 arguments while retaining the same Convex conversion and deterministic native
 reference cleanup.
 
+`runtime.interruptCurrentCall()` is a best-effort recovery hook for a Python
+function that is taking too long. It schedules `KeyboardInterrupt` in the
+currently executing CPython call and returns whether a call was found. Python
+bytecode normally observes it quickly; a C extension observes it only after
+returning to the interpreter, and a wedged native call may never observe it.
+The method is not process isolation or a resource-governance boundary.
+
 `PythonRef` represents one owned `PyObject*` reference. `retain()` performs one
 `Py_IncRef`; each wrapper's idempotent `close()` performs one `Py_DecRef` under
 the GIL. A Cleaner is only a leak safety net. Scripts retain their isolated

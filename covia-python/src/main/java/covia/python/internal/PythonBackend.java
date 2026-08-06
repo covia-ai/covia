@@ -11,6 +11,7 @@ public interface PythonBackend {
 	Object evaluate(String expression, Object globals);
 	Object get(Object container, String name);
 	Object call(Object callable, List<Object> arguments);
+	boolean interruptCurrentCall();
 	Object fromConvex(ACell value);
 	ACell toConvex(Object value);
 	void retain(Object value);

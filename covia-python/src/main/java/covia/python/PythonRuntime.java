@@ -101,6 +101,21 @@ public final class PythonRuntime {
 		return owned(backend.call(requireOwn(callable), args));
 	}
 
+	/**
+	 * Best-effort interruption of the Python function call currently executing
+	 * through this runtime. A successful request schedules
+	 * {@code KeyboardInterrupt} in that call's CPython thread; it does not
+	 * guarantee prompt termination. Python bytecode normally observes the
+	 * interrupt quickly, while native extensions may observe it only after they
+	 * return to the interpreter and a wedged native call may never observe it.
+	 *
+	 * @return true if CPython accepted an interrupt for an active call, or false
+	 *         when no active call could be targeted
+	 */
+	public boolean interruptCurrentCall() {
+		return backend.interruptCurrentCall();
+	}
+
 	PythonRef get(PythonRef container, String name) {
 		return owned(backend.get(requireOwn(container), name));
 	}

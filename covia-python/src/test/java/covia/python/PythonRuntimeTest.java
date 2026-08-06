@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -100,5 +102,47 @@ class PythonRuntimeTest {
 			assertEquals(Maps.of("sum", 12L), script.call("combine",
 				List.of(CVMLong.create(5), CVMLong.create(7))));
 		}
+	}
+
+	@Test
+	void activePythonCallCanBeInterruptedBestEffort() throws Exception {
+		Assumptions.assumeTrue(PythonRuntime.availability().available(),
+			PythonRuntime.availability().detail());
+		PythonRuntime runtime = PythonRuntime.open();
+		assertFalse(runtime.interruptCurrentCall(), "idle runtime has no call to interrupt");
+
+		PythonScript script = runtime.load("""
+			def spin():
+			    while True:
+			        pass
+			def healthy():
+			    return 42
+			""", "interrupt.py");
+		CompletableFuture<Throwable> outcome = new CompletableFuture<>();
+		Thread.ofPlatform().daemon(true).name("covia-python-interrupt-test").start(() -> {
+			try {
+				script.call("spin", List.of());
+				outcome.complete(null);
+			} catch (Throwable t) {
+				outcome.complete(t);
+			}
+		});
+
+		boolean scheduled = false;
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+		while (!scheduled && System.nanoTime() < deadline) {
+			scheduled = runtime.interruptCurrentCall();
+			if (!scheduled) Thread.sleep(5);
+		}
+		assertTrue(scheduled, "CPython call never became interruptible");
+
+		Throwable interrupted = outcome.get(5, TimeUnit.SECONDS);
+		assertTrue(interrupted instanceof PythonException,
+			() -> "expected PythonException, got " + interrupted);
+		assertTrue(interrupted.getMessage().contains("KeyboardInterrupt"),
+			interrupted::getMessage);
+		assertEquals(CVMLong.create(42), script.call("healthy", List.of()),
+			"runtime must remain usable after a cooperative interrupt");
+		script.close();
 	}
 }
