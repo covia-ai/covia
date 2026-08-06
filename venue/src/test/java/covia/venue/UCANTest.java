@@ -134,6 +134,46 @@ public class UCANTest {
 	}
 
 	@Test
+	public void testIssueExplicitNullExpiryUsesTemporaryFarFutureEncoding() {
+		long before = System.currentTimeMillis() / 1000;
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(
+				UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CUSTODIAL_DID + "/w/"), Capability.CRUD_READ)),
+				UCAN.EXP, null),
+			CUSTODIAL);
+
+		AString jwt = RT.ensureString(RT.getIn(job.awaitResult(5000), "token"));
+		UCAN parsed = UCAN.fromJWT(jwt);
+		assertNotNull(parsed);
+		long lifetime = parsed.getExpiry() - before;
+		assertTrue(lifetime >= 98L * 365 * 24 * 60 * 60,
+			"exp:null must produce a practically non-expiring token during the Convex #678 workaround");
+		assertTrue(lifetime <= 100L * 365 * 24 * 60 * 60,
+			"the workaround must remain an intentional 99-year approximation, not an arbitrary sentinel");
+		assertNotNull(UCANValidator.validateJWT(jwt, before),
+			"the temporary encoding must remain usable by the current Convex validator");
+	}
+
+	@Test
+	public void testIssueMissingExpiryDefaultsToNoExpiry() {
+		long before = System.currentTimeMillis() / 1000;
+		Job job = engine.jobs().invokeOperation("v/ops/ucan/issue",
+			Maps.of(
+				UCAN.AUD, BOB_DID,
+				UCAN.ATT, Vectors.of(Capability.create(
+					Strings.create(CUSTODIAL_DID + "/w/"), Capability.CRUD_READ))),
+			CUSTODIAL);
+		AString jwt = RT.ensureString(RT.getIn(job.awaitResult(5000), "token"));
+		UCAN parsed = UCAN.fromJWT(jwt);
+		long lifetime = parsed.getExpiry() - before;
+		assertTrue(lifetime >= 98L * 365 * 24 * 60 * 60);
+		assertTrue(lifetime <= 100L * 365 * 24 * 60 * 60,
+			"omitted API input must emit the same strict 99-year compatibility expiry as null");
+	}
+
+	@Test
 	public void testIssueRejectsOtherUserNamespace() {
 		// Alice cannot issue a token for Bob's namespace
 		long exp = (System.currentTimeMillis() / 1000) + 3600;

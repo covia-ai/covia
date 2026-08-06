@@ -554,6 +554,11 @@ Currently defined:
 - `agent.sessionDelete` — whether `agent:deleteSession` is available
   (default `true`). Set `false` to disable user-initiated session deletion
   venue-wide; the op then fails with "disabled on this venue".
+- `hitl.maxGrantLifetimeSecs` — optional positive lifetime ceiling for grants
+  minted after HITL approval. It is absent by default, so the venue imposes no
+  maximum and permits an explicit `exp: null`. With a finite ceiling, null and
+  later expiries are rejected before the request reaches the approver. A grant
+  that omits `exp` uses the shorter of the seven-day default and this ceiling.
 - `orchestrator.maxItems` — maximum number of elements accepted by one
   `foreach` step (default `50`). The complete input is rejected before any
   iteration starts when this limit is exceeded. Set explicitly to `null` for no

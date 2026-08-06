@@ -34,6 +34,14 @@ public class UCANAdapter extends AAdapter {
 	private static final AString K_AUTHORISES = Strings.intern("authorises");
 	private static final AString K_AUDIENCE = Strings.intern("audience");
 
+	/**
+	 * Temporary representation of the UCAN {@code exp: null} (never expires)
+	 * form while convex-core cannot represent nullable expiry (Convex #678).
+	 * Keep this inside issuance so callers can use the spec-shaped API now and
+	 * the workaround can be removed without changing that API later.
+	 */
+	static final long NON_EXPIRING_COMPAT_LIFETIME_SECS = 99L * 365 * 24 * 60 * 60;
+
 	@Override
 	public String getName() {
 		return "ucan";
@@ -106,11 +114,24 @@ public class UCANAdapter extends AAdapter {
 			throw new RuntimeException("att (attenuations) is required and must not be empty");
 		}
 
-		CVMLong expCell = RT.ensureLong(RT.getIn(input, UCAN.EXP));
-		if (expCell == null) {
-			throw new RuntimeException("exp (expiry unix seconds) is required");
+		AMap<AString, ACell> inputMap = RT.castMap(input);
+		ACell expValue = inputMap.get(UCAN.EXP);
+		CVMLong expCell = RT.ensureLong(expValue);
+		long now = System.currentTimeMillis() / 1000;
+		long exp;
+		if (expValue == null) {
+			// UCAN v0.10.0 requires explicit null for a non-expiring token. Convex
+			// #678 will make that directly representable; accept omitted input as
+			// null, then mint a deliberately conspicuous far-future finite expiry.
+			exp = now + NON_EXPIRING_COMPAT_LIFETIME_SECS;
+		} else if (expCell != null) {
+			exp = expCell.longValue();
+		} else {
+			throw new RuntimeException("exp must be unix seconds or null for no expiry");
 		}
-		long exp = expCell.longValue();
+		if (exp <= now) {
+			throw new RuntimeException("exp must be in the future");
+		}
 
 		// Canonicalise + validate 'with' fields. A bare path names the ISSUER's
 		// own resource and is qualified with the caller's DID before signing, so
@@ -125,7 +146,6 @@ public class UCANAdapter extends AAdapter {
 		// operation input (input is persisted in job records).
 		AString callerDID = ctx.getCallerDID();
 		String callerPrefix = callerDID.toString() + "/";
-		long now = System.currentTimeMillis() / 1000;
 		AVector<ACell> canonAtt = Vectors.empty();
 		for (long i = 0; i < att.count(); i++) {
 			AMap<AString, ACell> cap = RT.castMap(att.get(i));

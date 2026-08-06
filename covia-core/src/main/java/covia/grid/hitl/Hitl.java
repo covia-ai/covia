@@ -140,6 +140,13 @@ public class Hitl {
 		return grant(with, can).assoc(EXP, CVMLong.create(exp));
 	}
 
+	/** A grant offer with an explicit nullable expiry. A null value means the
+	 *  grant is intended not to expire; it is distinct from omitting exp, which
+	 *  asks the venue to apply its default lifetime. */
+	public static AMap<AString, ACell> grant(String with, String can, Long exp) {
+		return grant(with, can).assoc(EXP, (exp == null) ? null : CVMLong.create(exp));
+	}
+
 	/** Starts an {@code answer} response for a request in the caller's inbox. */
 	public static ResponseBuilder answer(String requestId) {
 		return new ResponseBuilder(requestId, ANSWER);
@@ -220,6 +227,11 @@ public class Hitl {
 		/** Offers a grant conferred if this (approval) ask is approved. */
 		public AskBuilder grant(String with, String can) {
 			return grant(Hitl.grant(with, can));
+		}
+
+		/** Offers a grant with an explicit expiry, or null for no expiry. */
+		public AskBuilder grant(String with, String can, Long exp) {
+			return grant(Hitl.grant(with, can, exp));
 		}
 
 		public AskBuilder grant(AMap<AString, ACell> grant) {
