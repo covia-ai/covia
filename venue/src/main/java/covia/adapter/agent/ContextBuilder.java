@@ -6,11 +6,13 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Cells;
+import convex.core.data.Hash;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
@@ -18,6 +20,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.type.Types;
 import convex.core.data.util.CellExplorer;
 import convex.core.lang.RT;
+import covia.api.Abilities;
 import covia.api.Fields;
 import covia.grid.Asset;
 import covia.venue.AgentState;
@@ -174,6 +177,7 @@ public class ContextBuilder {
 	@SuppressWarnings("unchecked")
 	private AVector<ACell> messages = (AVector<ACell>) Vectors.empty();
 	private AVector<ACell> tools = Vectors.empty();
+	private AVector<ACell> unavailableTools = Vectors.empty();
 	private Map<String, AString> configToolMap = new HashMap<>();
 	private AVector<ACell> caps;
 	private AMap<AString, ACell> config;
@@ -861,6 +865,10 @@ public class ContextBuilder {
 	 */
 	@SuppressWarnings("unchecked")
 	public ContextBuilder withTools() {
+		this.caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
+		this.unavailableTools = Vectors.empty();
+		RequestContext resolutionCtx = (caps != null) ? ctx.withCaps(caps) : ctx;
+
 		// Strict allowlist by default (#92): an agent is advertised exactly the
 		// tools it declares, unless it explicitly opts into the default pack
 		// with defaultTools: true. This is fail-safe — a newly-authored agent
@@ -893,7 +901,8 @@ public class ContextBuilder {
 			ACell toolsCell = config.get(K_TOOLS);
 			if (toolsCell instanceof AVector<?> toolsVec) {
 				// Build config tools, skipping any already provided by defaults
-				AVector<ACell> configTools = buildConfigTools((AVector<ACell>) toolsVec, configToolMap);
+				AVector<ACell> configTools = buildConfigTools(
+					(AVector<ACell>) toolsVec, configToolMap, resolutionCtx, true);
 				// Deduplicate: configToolMap was populated by defaults first, so
 				// buildConfigTools only adds genuinely new entries. But the vector
 				// may still contain dups if the same operation resolved to an
@@ -926,7 +935,7 @@ public class ContextBuilder {
 		}
 
 		this.tools = baseTools;
-		this.caps = RT.ensureVector(config != null ? config.get(K_CAPS) : null);
+		appendUnavailableToolsMessage();
 		return this;
 	}
 
@@ -938,7 +947,7 @@ public class ContextBuilder {
 	public ContextResult build() {
 		RequestContext capsCtx = (caps != null) ? ctx.withCaps(caps) : ctx;
 		return new ContextResult(
-			messages, tools, configToolMap, caps, capsCtx, config,
+			messages, tools, unavailableTools, configToolMap, caps, capsCtx, config,
 			consumed, totalBudget - consumed);
 	}
 
@@ -1008,6 +1017,13 @@ public class ContextBuilder {
 	 */
 	@SuppressWarnings("unchecked")
 	public AVector<ACell> buildConfigTools(AVector<ACell> toolsVec, Map<String, AString> toolMap) {
+		return buildConfigTools(toolsVec, toolMap, ctx, false);
+	}
+
+	@SuppressWarnings("unchecked")
+	private AVector<ACell> buildConfigTools(AVector<ACell> toolsVec,
+			Map<String, AString> toolMap, RequestContext resolutionCtx,
+			boolean reportUnavailable) {
 		AVector<ACell> result = Vectors.empty();
 		for (long i = 0; i < toolsVec.count(); i++) {
 			ACell entry = toolsVec.get(i);
@@ -1024,16 +1040,27 @@ public class ContextBuilder {
 
 			Asset asset;
 			try {
-				asset = engine.resolveAsset(operation, ctx);
+				requireToolMetadataRead(engine, resolutionCtx, operation);
+				asset = engine.resolveAsset(operation, resolutionCtx);
 			} catch (covia.exception.RemoteFetchException e) {
 				// A tool whose definition lives on an unreachable remote venue
-				// must not fail the whole tool list (and the agent turn) — skip
-				// it visibly. Other resolution errors still propagate (#174).
+				// must not fail the whole tool list (and the agent turn). Live
+				// config assembly records the omission; standalone callers retain
+				// the historical skip behaviour.
 				log.warn("Config tool: skipping '{}' — remote fetch failed: {}", operation, e.getMessage());
+				if (reportUnavailable) recordUnavailable(operation,
+					"remote metadata fetch failed: " + safeMessage(e));
+				continue;
+			} catch (RuntimeException e) {
+				if (!reportUnavailable) throw e;
+				log.warn("Config tool: cannot read operation '{}': {}", operation, e.getMessage());
+				recordUnavailable(operation, "operation metadata is not readable: " + safeMessage(e));
 				continue;
 			}
 			if (asset == null) {
 				log.warn("Config tool: cannot resolve operation '{}'", operation);
+				if (reportUnavailable) recordUnavailable(operation,
+					"operation metadata was not found or is not an operation");
 				continue;
 			}
 
@@ -1066,38 +1093,99 @@ public class ContextBuilder {
 		return result;
 	}
 
+	private void recordUnavailable(AString operation, String reason) {
+		for (long i = 0; i < unavailableTools.count(); i++) {
+			if (operation.equals(RT.getIn(unavailableTools.get(i), Fields.OPERATION))) return;
+		}
+		unavailableTools = unavailableTools.conj(Maps.of(
+			Fields.OPERATION, operation,
+			Fields.REASON, Strings.create(reason)));
+	}
+
+	private void appendUnavailableToolsMessage() {
+		if (unavailableTools.isEmpty()) return;
+		StringBuilder sb = new StringBuilder(
+			"[Configured tools unavailable in this session. Do not claim that actions "
+			+ "through these tools succeeded:");
+		for (long i = 0; i < unavailableTools.count(); i++) {
+			ACell entry = unavailableTools.get(i);
+			sb.append("\n- ").append(String.valueOf(
+				RT.getIn(entry, Fields.OPERATION)))
+				.append(": ").append(String.valueOf(
+					RT.getIn(entry, Fields.REASON)));
+		}
+		sb.append(']');
+		ACell message = Maps.of(K_ROLE, ROLE_SYSTEM, K_CONTENT, Strings.create(sb.toString()));
+		messages = messages.conj(message);
+		trackMessage(message);
+	}
+
 	/**
-	 * Best-effort list of config {@code tools} operations that resolve to nothing
-	 * on this venue (#205). Mirrors {@link #buildConfigTools}'s resolution so the
-	 * check can't drift from actual behaviour: harness pseudo-tools are skipped,
-	 * and a tool whose definition lives on an unreachable remote venue is <b>not</b>
-	 * reported (transient, not a config error). Any other resolution error is also
-	 * skipped — this is an advisory, so it only reports the definitive
-	 * "resolves to null" case (the silent-drop that {@code buildConfigTools} logs).
-	 * Returns the unresolved operation strings in order; empty when all resolve.
-	 *
-	 * @param skipToolNames bare harness names to ignore (see
-	 *        {@link AbstractLLMAdapter#allHarnessToolNames()})
+	 * Resolves configured operation tools under the agent's effective capability
+	 * scope and returns every unavailable entry as
+	 * {@code {operation, reason}}. This is the shared diagnostic used by
+	 * author-time warnings and {@code agent:info}; live context assembly records
+	 * the same shape while building the actual provider tool list.
 	 */
-	public static java.util.List<String> unresolvableConfigTools(
-			Engine engine, RequestContext ctx, AVector<ACell> toolsVec,
+	public static AVector<ACell> unavailableConfigTools(
+			Engine engine, RequestContext ctx, AMap<AString, ACell> config,
 			java.util.Set<String> skipToolNames) {
-		java.util.List<String> unresolved = new java.util.ArrayList<>();
-		if (toolsVec == null) return unresolved;
+		AVector<ACell> unavailable = Vectors.empty();
+		if (config == null) return unavailable;
+		AVector<ACell> toolsVec = RT.ensureVector(config.get(K_TOOLS));
+		if (toolsVec == null) return unavailable;
+		AVector<ACell> configCaps = RT.ensureVector(config.get(K_CAPS));
+		RequestContext resolutionCtx = (configCaps != null) ? ctx.withCaps(configCaps) : ctx;
 		for (long i = 0; i < toolsVec.count(); i++) {
 			AString[] parsed = parseConfigToolEntry(toolsVec.get(i));
 			if (parsed == null) continue;
-			String operation = parsed[0].toString();
-			if (skipToolNames.contains(operation)) continue;   // harness pseudo-tool
+			AString operation = parsed[0];
+			if (skipToolNames.contains(operation.toString())) continue;
+			String reason = null;
 			Asset asset;
 			try {
-				asset = engine.resolveAsset(parsed[0], ctx);
+				requireToolMetadataRead(engine, resolutionCtx, operation);
+				asset = engine.resolveAsset(operation, resolutionCtx);
+				if (asset == null) reason = "operation metadata was not found or is not an operation";
+			} catch (covia.exception.RemoteFetchException e) {
+				reason = "remote metadata fetch failed: " + safeMessage(e);
 			} catch (RuntimeException e) {
-				continue;   // remote unreachable / ambiguous — don't over-warn at create
+				reason = "operation metadata is not readable: " + safeMessage(e);
 			}
-			if (asset == null) unresolved.add(operation);
+			if (reason != null) unavailable = unavailable.conj(Maps.of(
+				Fields.OPERATION, operation,
+				Fields.REASON, Strings.create(reason)));
 		}
-		return unresolved;
+		return unavailable;
+	}
+
+	/** Private user-scoped operation definitions are data: the agent must be
+	 * able to read their metadata as well as invoke them. Venue catalog entries
+	 * ({@code v/ops/...}) are shared public metadata; remote DID references apply
+	 * the publishing venue's asset-read policy during fetch. */
+	private static void requireToolMetadataRead(
+			Engine engine, RequestContext ctx, AString operation) {
+		String ref = operation.toString();
+		String normalised = ref.startsWith("/") ? ref.substring(1) : ref;
+		if (normalised.startsWith("v/")) return;
+
+		Hash hash = Hash.parse(operation);
+		if (hash != null || normalised.startsWith("a/")) {
+			engine.requireResourceAccess(ctx, operation, Abilities.ASSET_READ);
+			return;
+		}
+		if (normalised.startsWith("w/") || normalised.startsWith("o/")
+				|| normalised.startsWith("g/") || normalised.startsWith("j/")
+				|| normalised.startsWith("s/") || normalised.startsWith("h/")
+				|| normalised.startsWith("n/") || normalised.startsWith("c/")) {
+			engine.requireResourceAccess(ctx, operation, Capability.CRUD_READ);
+		}
+	}
+
+	private static String safeMessage(Throwable error) {
+		String message = error.getMessage();
+		return (message == null || message.isBlank())
+			? error.getClass().getSimpleName() : message;
 	}
 
 	/**
@@ -1175,6 +1263,7 @@ public class ContextBuilder {
 	public record ContextResult(
 		AVector<ACell> history,
 		AVector<ACell> tools,
+		AVector<ACell> unavailableTools,
 		Map<String, AString> configToolMap,
 		AVector<ACell> caps,
 		RequestContext capsCtx,

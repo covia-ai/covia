@@ -815,6 +815,14 @@ ability. Under a restricted `config.caps` scope:
   ]
   ```
 
+`invoke` authorises execution, not discovery of private operation metadata. If
+an agent declares a user-scoped operation path in `config.tools`, its scope must
+also include `crud/read` over that definition path so the runtime can obtain the
+tool description and input schema. Missing metadata-read authority is visible as
+an `unavailableTools` diagnostic; the operation is not silently advertised with
+an invented or incomplete schema. Venue catalog definitions under `v/ops/...`
+are shared public metadata and do not need an additional read grant.
+
 - **Scoped invoke** pins the grant to an op-path prefix, attenuating *which*
   operations the agent may invoke: `{"with": "v/ops/getmine", "can": "invoke"}`
   admits `v/ops/getmine/*` and denies every other invoke-classed op. The

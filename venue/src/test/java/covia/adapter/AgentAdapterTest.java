@@ -448,6 +448,90 @@ public class AgentAdapterTest {
 	}
 
 	@Test
+	public void testConfiguredToolWithoutMetadataReadIsVisibleEverywhere() {
+		String toolPath = "w/ops/risk/issue-limit";
+		AMap<AString, ACell> operation = Maps.of(
+			Fields.NAME, Strings.create("Issue risk limit"),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("test:echo"),
+				Fields.INPUT, Maps.of("type", "object")));
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, toolPath, Fields.VALUE, operation),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		AMap<AString, ACell> config = Maps.of(
+			Fields.OPERATION, Strings.create("v/ops/llmagent/chat"),
+			"llmOperation", Strings.create("v/ops/langchain/openai"),
+			Fields.TOOLS, Vectors.of(Strings.create(toolPath)),
+			"caps", Vectors.of(Capability.create(
+				Strings.create(toolPath), Strings.create("invoke"))));
+
+		ACell created = engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "metadata-blind", Fields.CONFIG, config),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		AVector<ACell> warnings = RT.ensureVector(RT.getIn(created, Fields.WARNINGS));
+		assertNotNull(warnings, "create must warn when configured caps cannot read tool metadata");
+		assertTrue(warnings.toString().contains(toolPath), warnings.toString());
+		assertTrue(warnings.toString().contains("crud/read"), warnings.toString());
+
+		ACell info = engine.jobs().invokeOperation("v/ops/agent/info",
+			Maps.of(Fields.AGENT_ID, "metadata-blind"), RequestContext.of(ALICE_DID))
+			.awaitResult(5000);
+		AVector<ACell> unavailable = RT.ensureVector(
+			RT.getIn(info, Fields.UNAVAILABLE_TOOLS));
+		assertNotNull(unavailable, "agent:info must expose configured tools omitted at runtime");
+		assertEquals(1, unavailable.count());
+		assertEquals(Strings.create(toolPath),
+			RT.getIn(unavailable.get(0), Fields.OPERATION));
+		assertTrue(RT.getIn(unavailable.get(0), Fields.REASON).toString().contains("crud/read"));
+
+		ACell context = engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "metadata-blind"), RequestContext.of(ALICE_DID))
+			.awaitResult(5000);
+		String rendered = context.toString();
+		assertTrue(rendered.contains("Configured tools unavailable"), rendered);
+		assertTrue(rendered.contains(toolPath), rendered);
+		assertTrue(rendered.contains("Do not claim"), rendered);
+	}
+
+	@Test
+	public void testConfiguredToolWithMetadataReadIsOffered() {
+		String toolPath = "w/ops/risk/readable-limit";
+		AMap<AString, ACell> operation = Maps.of(
+			Fields.NAME, Strings.create("Readable risk limit"),
+			Fields.OPERATION, Maps.of(
+				Fields.ADAPTER, Strings.create("test:echo"),
+				Fields.INPUT, Maps.of("type", "object")));
+		engine.jobs().invokeOperation("v/ops/covia/write",
+			Maps.of(Fields.PATH, toolPath, Fields.VALUE, operation),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+
+		AMap<AString, ACell> config = Maps.of(
+			Fields.OPERATION, Strings.create("v/ops/llmagent/chat"),
+			"llmOperation", Strings.create("v/ops/langchain/openai"),
+			Fields.TOOLS, Vectors.of(Strings.create(toolPath)),
+			"caps", Vectors.of(
+				Capability.create(Strings.create(toolPath), Strings.create("invoke")),
+				Capability.create(Strings.create(toolPath), Strings.create("crud/read"))));
+
+		ACell created = engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "metadata-reader", Fields.CONFIG, config),
+			RequestContext.of(ALICE_DID)).awaitResult(5000);
+		assertNull(RT.getIn(created, Fields.WARNINGS));
+
+		ACell info = engine.jobs().invokeOperation("v/ops/agent/info",
+			Maps.of(Fields.AGENT_ID, "metadata-reader"), RequestContext.of(ALICE_DID))
+			.awaitResult(5000);
+		assertNull(RT.getIn(info, Fields.UNAVAILABLE_TOOLS));
+
+		String context = engine.jobs().invokeOperation("v/ops/agent/context",
+			Maps.of(Fields.AGENT_ID, "metadata-reader"), RequestContext.of(ALICE_DID))
+			.awaitResult(5000).toString();
+		assertTrue(context.contains("Operation: " + toolPath), context);
+		assertFalse(context.contains("Configured tools unavailable"), context);
+	}
+
+	@Test
 	public void testCreateHarnessToolsNotFlagged() {
 		// Bare harness names (subgoal, complete, …) aren't operation paths — they
 		// must not be reported as unresolvable.

@@ -614,8 +614,8 @@ public class AgentAdapter extends AAdapter {
 		AVector<ACell> warnings = Vectors.empty();
 		AString toolWarn = toolCapabilityWarning(config, ctx);
 		if (toolWarn != null) warnings = warnings.conj(toolWarn);
-		AString unresolvedWarn = unresolvableToolsWarning(config, ctx);
-		if (unresolvedWarn != null) warnings = warnings.conj(unresolvedWarn);
+		AString unavailableWarn = unavailableToolsWarning(config, ctx);
+		if (unavailableWarn != null) warnings = warnings.conj(unavailableWarn);
 		AString skillsWarn = skillSourcesWarning(config, ctx);
 		if (skillsWarn != null) warnings = warnings.conj(skillsWarn);
 		AString keyWarn = rawApiKeyWarning(config);
@@ -682,30 +682,31 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Advisory for config {@code tools} that reference operations which don't
-	 * resolve on this venue right now (#205). Tools are resolved live at every
-	 * context assembly, so an unresolved one is simply omitted from the agent's
-	 * toolset that cycle (and a call to it fails loudly with a resolution error);
-	 * install the operation or fix the path and it becomes available on the next
-	 * cycle — no recreate. This create-time warning just surfaces the likely
-	 * config slip (usually adapter shorthand where a path is required) at the
-	 * moment it's fixable. Warning only. Returns null when every declared tool
-	 * resolves (or none are declared). Harness pseudo-tools ({@code subgoal},
-	 * {@code complete}, …) are not operations and are never flagged.
+	 * Advisory for configured operation tools whose metadata is missing,
+	 * unreachable, or unreadable under the agent's own {@code config.caps}
+	 * (#317). Resolution is live every turn, so fixing the path, remote venue, or
+	 * read grant makes the tool available without recreating the agent. Harness
+	 * pseudo-tools ({@code subgoal}, {@code complete}, …) are not operations and
+	 * are never flagged.
 	 */
-	private AString unresolvableToolsWarning(AMap<AString, ACell> config, RequestContext ctx) {
+	private AString unavailableToolsWarning(AMap<AString, ACell> config, RequestContext ctx) {
 		if (config == null) return null;
-		AVector<ACell> toolsVec = RT.ensureVector(config.get(Strings.intern("tools")));
-		if (toolsVec == null || toolsVec.isEmpty()) return null;
-		java.util.List<String> bad = ContextBuilder.unresolvableConfigTools(
-			engine, ctx, toolsVec, AbstractLLMAdapter.allHarnessToolNames());
-		if (bad.isEmpty()) return null;
-		return Strings.create("agent declares tool operation(s) that don't resolve on this venue: "
-			+ String.join(", ", bad) + ". Tools must be resolvable operation paths"
+		AVector<ACell> unavailable = ContextBuilder.unavailableConfigTools(
+			engine, ctx, config, AbstractLLMAdapter.allHarnessToolNames());
+		if (unavailable.isEmpty()) return null;
+		java.util.List<String> details = new java.util.ArrayList<>();
+		for (long i = 0; i < unavailable.count(); i++) {
+			ACell entry = unavailable.get(i);
+			details.add(RT.getIn(entry, Fields.OPERATION) + " ("
+				+ RT.getIn(entry, Fields.REASON) + ")");
+		}
+		return Strings.create("agent declares unavailable tool operation(s): "
+			+ String.join(", ", details) + ". Tools must be resolvable operation paths"
 			+ " (e.g. 'v/ops/covia/read'), not adapter shorthand (e.g. 'covia:read')."
-			+ " Until each resolves it is left out of the agent's toolset (a call to it"
-			+ " fails with a resolution error); install the operation or fix the path and"
-			+ " it becomes available on the next cycle — this is only a warning.");
+			+ " Private/user-scoped definitions also require metadata read authority in"
+			+ " addition to invoke authority. Until each resolves it is left out of the"
+			+ " agent's toolset; install it, fix the path, or grant metadata read access"
+			+ " and it becomes available on the next cycle — this is only a warning.");
 	}
 
 	/**
@@ -1168,7 +1169,7 @@ public class AgentAdapter extends AAdapter {
 		if (agent == null || agent.getRecord() == null) { job.fail("Agent not found: " + agentId); return; }
 
 		job.setStatus(Status.STARTED);
-		job.completeWith(buildAgentSummary(agentId, agent));
+		job.completeWith(buildAgentSummary(agentId, agent, ctx));
 	}
 
 	/**
@@ -1181,7 +1182,7 @@ public class AgentAdapter extends AAdapter {
 		if (user == null) return null;
 		AgentState agent = user.agent(agentId);
 		if (agent == null || agent.getRecord() == null) return null;
-		return buildAgentSummary(agentId, agent);
+		return buildAgentSummary(agentId, agent, ctx);
 	}
 
 	/**
@@ -1190,7 +1191,8 @@ public class AgentAdapter extends AAdapter {
 	 * {@code covia:read path=g/<agentId>/state} etc.
 	 */
 	@SuppressWarnings("unchecked")
-	private static AMap<AString, ACell> buildAgentSummary(AString agentId, AgentState agent) {
+	private AMap<AString, ACell> buildAgentSummary(
+			AString agentId, AgentState agent, RequestContext ctx) {
 		AMap<AString, ACell> record = agent.getRecord();
 		AVector<?> timeline = agent.getTimeline();
 		Index<Blob, ACell> tasks = agent.getTasks();
@@ -1204,6 +1206,14 @@ public class AgentAdapter extends AAdapter {
 		if (tasks != null) summary = summary.assoc(Strings.intern("tasks"), CVMLong.create(tasks.count()));
 		ACell error = record.get(AgentState.KEY_ERROR);
 		if (error != null) summary = summary.assoc(AgentState.KEY_ERROR, error);
+		@SuppressWarnings("unchecked")
+		AMap<AString, ACell> config = (record.get(AgentState.KEY_CONFIG) instanceof AMap<?, ?> m)
+			? (AMap<AString, ACell>) m : null;
+		AVector<ACell> unavailable = ContextBuilder.unavailableConfigTools(
+			engine, ctx, config, AbstractLLMAdapter.allHarnessToolNames());
+		if (!unavailable.isEmpty()) {
+			summary = summary.assoc(Fields.UNAVAILABLE_TOOLS, unavailable);
+		}
 		return summary;
 	}
 

@@ -13,6 +13,11 @@ public class Fields {
 	/** Non-fatal advisories attached to an operation result (a vector of message
 	 *  strings, e.g. config sanity warnings). Absent when there are none. */
 	public static final StringShort WARNINGS = Strings.intern("warnings");
+	/** Configured operation tools that could not be offered in the current
+	 *  capability context. Vector entries have {@code operation} and
+	 *  {@code reason} fields. */
+	public static final StringShort UNAVAILABLE_TOOLS = Strings.intern("unavailableTools");
+	public static final StringShort REASON = Strings.intern("reason");
 	public static final StringShort INPUT = Strings.intern("input");
 	public static final StringShort OUTPUT = Strings.intern("output");
 	/** Optional destination for structurally handing off an operation result. */
