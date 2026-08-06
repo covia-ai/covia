@@ -498,8 +498,11 @@ venue-managed `username`. A username requires a public `hostname` and derives
 `did:web:venue-1.covia.ai:u:alice`. `user:create` and `user:list` are
 venue-administrative operations: invoke directly as the venue, or present a
 venue-issued UCAN covering `<venueDID>/users` with `user/create` or
-`user/read`. OAuth callbacks are trusted venue provisioners and create the
-same did:web-managed account explicitly.
+`user/read`. Operator code can use `engine.venueContext()` to invoke the
+built-in adapter; the [deployment guide](../../deploy/README.md#admit-users-at-runtime)
+shows the recorded-job path. An operator-installed adapter may use the same
+mechanism. OAuth callbacks are trusted venue provisioners and create the same
+did:web-managed account explicitly.
 
 A venue-managed named user may authenticate with any active public key bound
 to its authentication-directory record. The self-issued JWT uses the stable

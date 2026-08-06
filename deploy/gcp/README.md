@@ -9,6 +9,11 @@ multi-venue `venues` array config — the same mechanism as `local-dev.json`.
 This exercises multi-venue hosting in production and keeps the memory
 footprint of three venues within one 2 GB heap.
 
+`venue-test.covia.ai` is intentionally open for authenticated first-use
+registration (`users.autoCreate: true`). Any caller that proves control of a
+valid DID is admitted on its first operation. `venue-1` and `venue-2` retain
+the default closed admission policy and require explicit provisioning.
+
 The container runs the `:stable` image, published by `publish-docker.yml`
 on every push to `master`, and is redeployed automatically by
 `deploy-gcp.yml`. The dev venues (`venue-3`, `venue-4`) track `develop` via
@@ -23,6 +28,8 @@ venues retired, Caddy moved under systemd):
   on ports 8080 (venue-test), 8081 (venue-1), 8082 (venue-2);
   `--restart unless-stopped` with a Docker health check
 - **Config:** `/srv/covia/config.json` (mounted at `/data/config.json`)
+  The deployment workflow enforces open first-use registration for
+  `venue-test` while preserving all other operator settings in this file.
 - **Data:** `/srv/covia/covia-{test,1,2}-data/` (owned by uid 1001) — each
   venue has its own directory because the identity key is always saved as
   `venue.key` next to the store file; separate directories = separate DIDs.

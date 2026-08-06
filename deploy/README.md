@@ -100,6 +100,39 @@ Check the server page (using your own venue's domain)
 ```
 curl https://venue.example.com/api/v1/status
 ```
+
+## Admit users at runtime
+
+The built-in `UserAdapter` is the canonical runtime provisioning surface. Its
+`v/ops/user/create` operation accepts either a complete external DID or a
+venue-managed `username`; see [venue configuration](../venue/docs/CONFIG.md#user-registration-users)
+for the identity and authentication-key details.
+
+Operator code running inside the venue process can submit the operation as the
+venue itself. Use the ordinary job path so that the administrative action has
+a durable job record:
+
+```java
+ACell admitted = engine.jobs().invokeOperation(
+    "v/ops/user/create",
+    Maps.of(Fields.DID, Strings.create("did:key:z6Mk...")),
+    engine.venueContext()).awaitResult(5_000);
+```
+
+An operator-installed adapter can use the same call. Code given
+`engine.venueContext()` acts with venue authority, so only trusted operator
+modules should receive it.
+
+A remote provisioning service does not need a separate administration API.
+Give it a venue-issued UCAN for `<venueDID>/users` with the `user/create`
+ability, then invoke `v/ops/user/create` through the normal REST, MCP, or client
+SDK surface. `UserAdapter` checks that delegation at the operation boundary.
+
+For fixed initial accounts, use `users.bootstrap` instead. For a public test
+venue where any successfully authenticated DID should be admitted on first
+use, set `users.autoCreate` to `true`. Admission policy is venue-specific;
+clients should not assume that another venue uses the same policy.
+
 ## Concurrent SSE Viewers (sizing)
 
 Job streaming (`GET /api/v1/jobs/{id}/sse`) holds one connection per viewer on
