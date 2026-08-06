@@ -518,6 +518,8 @@ Venue:
 | `covia:write` / `covia:delete` / `covia:append` (cross-user) | `{ with: "<path>", can: "crud/write" }` |
 | `file:read` / `file:list` / `file:stat` / `file:roots` | `{ with: "file://<root>/<path>", can: "crud/read" }` |
 | `file:write` / `file:append` / `file:mkdir` | `{ with: "file://<root>/<path>", can: "crud/write" }` |
+| `file:move` | `crud/write` on both resolved `file://<source-root>/<from>` and `file://<destination-root>/<to>` |
+| `file:copy` | `crud/read` on the resolved source and `crud/write` on the resolved destination |
 | `file:delete` | `{ with: "file://<root>/<path>", can: "crud/delete" }` |
 | `dlfs:read` / `dlfs:list` / `dlfs:stat` / `dlfs:listDrives` | `{ with: "dlfs/<drive>/<path>", can: "crud/read" }` |
 | `dlfs:write` / `dlfs:append` / `dlfs:mkdir` / `dlfs:createDrive` | `{ with: "dlfs/<drive>/<path>", can: "crud/write" }` |
