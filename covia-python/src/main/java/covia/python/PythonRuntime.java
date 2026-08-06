@@ -2,11 +2,16 @@ package covia.python;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.DoubleBuffer;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
+import convex.core.data.Blob;
 import covia.python.internal.PythonBackend;
 
 /**
@@ -71,6 +76,54 @@ public final class PythonRuntime {
 
 	public String description() {
 		return backend.description();
+	}
+
+	/** Packs IEEE-754 binary64 values as canonical little-endian bytes. The
+	 *  resulting Blob crosses the Python boundary as one {@code bytes} object
+	 *  and can be consumed with {@code numpy.frombuffer(blob, dtype="<f8")} or
+	 *  Python's {@code struct} module. */
+	public static Blob packFloat64(double[] values) {
+		if (values == null) throw new IllegalArgumentException("values are required");
+		return packFloat64(DoubleBuffer.wrap(values));
+	}
+
+	/** Packs the remaining values without changing the source buffer's position. */
+	public static Blob packFloat64(DoubleBuffer values) {
+		if (values == null) throw new IllegalArgumentException("values are required");
+		DoubleBuffer source = values.duplicate();
+		int count = source.remaining();
+		if (count > Integer.MAX_VALUE / Double.BYTES) {
+			throw new IllegalArgumentException("float64 payload is too large");
+		}
+		ByteBuffer bytes = ByteBuffer.allocate(count * Double.BYTES)
+			.order(ByteOrder.LITTLE_ENDIAN);
+		bytes.asDoubleBuffer().put(source);
+		return Blob.wrap(bytes.array());
+	}
+
+	/** Unpacks a canonical little-endian float64 Blob into a new array. */
+	public static double[] unpackFloat64(ABlob data) {
+		DoubleBuffer values = unpackFloat64Buffer(data);
+		double[] result = new double[values.remaining()];
+		values.get(result);
+		return result;
+	}
+
+	/** Returns a buffer over a private byte copy of a canonical float64 Blob.
+	 *  The returned buffer starts at position zero and is independent of the
+	 *  immutable source Blob. */
+	public static DoubleBuffer unpackFloat64Buffer(ABlob data) {
+		if (data == null) throw new IllegalArgumentException("data is required");
+		long size = data.count();
+		if ((size % Double.BYTES) != 0) {
+			throw new IllegalArgumentException(
+				"float64 payload length must be a multiple of " + Double.BYTES + " bytes");
+		}
+		if (size > Integer.MAX_VALUE) {
+			throw new IllegalArgumentException("float64 payload is too large");
+		}
+		return ByteBuffer.wrap(data.getBytes()).order(ByteOrder.LITTLE_ENDIAN)
+			.asDoubleBuffer();
 	}
 
 	public PythonScript load(String source, String filename) {

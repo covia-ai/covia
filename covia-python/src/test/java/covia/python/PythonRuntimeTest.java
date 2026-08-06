@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
+import java.nio.DoubleBuffer;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -13,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
+import convex.core.data.ABlob;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.Blob;
@@ -24,6 +27,44 @@ import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 
 class PythonRuntimeTest {
+	@Test
+	void float64BulkFormatIsCanonicalLittleEndian() {
+		Blob packed = PythonRuntime.packFloat64(new double[] { 1.0, -2.5 });
+		assertEquals(Blob.fromHex("000000000000f03f00000000000004c0"), packed);
+		assertEquals(List.of(1.0, -2.5), Arrays.stream(
+			PythonRuntime.unpackFloat64(packed)).boxed().toList());
+	}
+
+	@Test
+	void float64BufferPackingPreservesPositionAndRawValues() {
+		DoubleBuffer source = DoubleBuffer.wrap(new double[] {
+			99.0, -0.0, Double.POSITIVE_INFINITY,
+			Double.longBitsToDouble(0x7ff8000000000001L)
+		});
+		source.position(1);
+		Blob packed = PythonRuntime.packFloat64(source);
+		assertEquals(1, source.position());
+
+		double[] unpacked = PythonRuntime.unpackFloat64(packed);
+		assertEquals(3, unpacked.length);
+		assertEquals(Double.doubleToRawLongBits(-0.0),
+			Double.doubleToRawLongBits(unpacked[0]));
+		assertEquals(Double.POSITIVE_INFINITY, unpacked[1]);
+		assertEquals(0x7ff8000000000001L,
+			Double.doubleToRawLongBits(unpacked[2]));
+	}
+
+	@Test
+	void float64BulkFormatRejectsMalformedPayloads() {
+		assertThrows(IllegalArgumentException.class,
+			() -> PythonRuntime.packFloat64((double[]) null));
+		assertThrows(IllegalArgumentException.class,
+			() -> PythonRuntime.unpackFloat64(null));
+		IllegalArgumentException malformed = assertThrows(IllegalArgumentException.class,
+			() -> PythonRuntime.unpackFloat64(Blob.wrap(new byte[9])));
+		assertTrue(malformed.getMessage().contains("multiple of 8"));
+	}
+
 	@Test
 	void availabilityAlwaysExplainsItsResult() {
 		PythonAvailability availability = PythonRuntime.availability();
@@ -101,6 +142,24 @@ class PythonRuntimeTest {
 			assertEquals(CVMLong.create(42), script.call("no_args", List.of()));
 			assertEquals(Maps.of("sum", 12L), script.call("combine",
 				List.of(CVMLong.create(5), CVMLong.create(7))));
+		}
+	}
+
+	@Test
+	void nativePythonBufferProtocolRoundTripsCanonicalFloat64() {
+		Assumptions.assumeTrue(PythonRuntime.availability().available(),
+			PythonRuntime.availability().detail());
+		PythonRuntime runtime = PythonRuntime.open();
+		try (PythonScript script = runtime.load("""
+			import struct
+			def scale(payload):
+			    values = struct.unpack("<" + "d" * (len(payload) // 8), memoryview(payload))
+			    return struct.pack("<" + "d" * len(values), *(value * 2 for value in values))
+			""", "float64.py")) {
+			ABlob output = (ABlob) script.call("scale",
+				PythonRuntime.packFloat64(new double[] { 1.25, -3.0, 8.5 }));
+			assertEquals(List.of(2.5, -6.0, 17.0), Arrays.stream(
+				PythonRuntime.unpackFloat64(output)).boxed().toList());
 		}
 	}
 
