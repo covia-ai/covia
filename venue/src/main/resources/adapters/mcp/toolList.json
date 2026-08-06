@@ -12,8 +12,8 @@
 			"properties": {
 				"server": {
 					"type": "string",
-					"description": "URL or DID for the MCP server",
-					"examples":["https://venue-3.covia.ai/mcp","did:web:venue.example.com"]
+					"description": "HTTP(S) base URL or explicit /mcp endpoint for the MCP server; trailing slashes are accepted",
+					"examples":["https://venue-3.covia.ai","https://venue-3.covia.ai/mcp"]
 				},
 				"token": {
 					"type": "string",

@@ -2,6 +2,7 @@ package covia.adapter;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
@@ -30,6 +31,28 @@ public class McpClientSessionTest {
 		McpSyncHttpClientRequestCustomizer customizer = McpClientSession.bearerAuthCustomizer(token);
 		customizer.customize(builder, "POST", ENDPOINT, "{}", McpTransportContext.EMPTY);
 		return builder.build();
+	}
+
+	@Test
+	public void testNormalisesMcpEndpointUrls() {
+		assertEquals("http://venue.example/mcp",
+			McpClientSession.endpointUrl("http://venue.example"));
+		assertEquals("http://venue.example/mcp",
+			McpClientSession.endpointUrl("http://venue.example/"));
+		assertEquals("https://venue.example/mcp",
+			McpClientSession.endpointUrl("https://venue.example/mcp/"));
+		assertEquals("https://venue.example/api/mcp?tenant=alice",
+			McpClientSession.endpointUrl("https://venue.example/api/mcp/?tenant=alice"));
+		assertEquals("https://venue.example/gateway/mcp",
+			McpClientSession.endpointUrl("https://venue.example/gateway/"));
+	}
+
+	@Test
+	public void testRejectsNonHttpServerWithActionableError() {
+		IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+			() -> McpClientSession.endpointUrl("did:web:venue.example"));
+		assertTrue(error.getMessage().contains("HTTP(S) URL"), error.getMessage());
+		assertTrue(error.getMessage().contains("Resolve a venue DID"), error.getMessage());
 	}
 
 	@Test

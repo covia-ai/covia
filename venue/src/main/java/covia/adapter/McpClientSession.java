@@ -1,6 +1,9 @@
 package covia.adapter;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.slf4j.Logger;
@@ -25,6 +28,7 @@ public class McpClientSession implements AutoCloseable {
 	private static final Logger log = LoggerFactory.getLogger(McpClientSession.class);
 
 	private final String serverUrl;
+	private final String endpointUrl;
 	private final String accessToken;
 	private final ReentrantLock lock = new ReentrantLock();
 
@@ -34,7 +38,54 @@ public class McpClientSession implements AutoCloseable {
 
 	public McpClientSession(String serverUrl, String accessToken) {
 		this.serverUrl = serverUrl;
+		this.endpointUrl = endpointUrl(serverUrl);
 		this.accessToken = accessToken;
+	}
+
+	/**
+	 * Normalises a configured MCP server URL to its streamable-HTTP endpoint.
+	 * Base URLs imply {@code /mcp}; an explicit endpoint is retained. Trailing
+	 * slashes are ignored and query parameters are preserved.
+	 */
+	static String endpointUrl(String serverUrl) {
+		if (serverUrl == null || serverUrl.isBlank()) {
+			throw new IllegalArgumentException("MCP server URL is required");
+		}
+
+		final URI uri;
+		try {
+			uri = new URI(serverUrl.trim());
+		} catch (URISyntaxException e) {
+			throw new IllegalArgumentException("Invalid MCP server URL '" + serverUrl + "': "
+				+ e.getMessage(), e);
+		}
+
+		String scheme = uri.getScheme();
+		if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))
+				|| uri.getHost() == null) {
+			throw new IllegalArgumentException("MCP server must be an HTTP(S) URL, not '"
+				+ serverUrl + "'. Resolve a venue DID to its HTTP URL before calling this tool");
+		}
+		if (uri.getFragment() != null) {
+			throw new IllegalArgumentException("MCP server URL must not contain a fragment: " + serverUrl);
+		}
+
+		String path = uri.getPath();
+		if (path == null || path.isEmpty()) path = "/";
+		while (path.length() > 1 && path.endsWith("/")) {
+			path = path.substring(0, path.length() - 1);
+		}
+		if (!path.toLowerCase(Locale.ROOT).endsWith("/mcp")) {
+			path = path.equals("/") ? "/mcp" : path + "/mcp";
+		}
+
+		try {
+			return new URI(scheme.toLowerCase(Locale.ROOT), uri.getUserInfo(), uri.getHost(),
+				uri.getPort(), path, uri.getQuery(), null).toString();
+		} catch (URISyntaxException e) {
+			throw new IllegalArgumentException("Invalid MCP server URL '" + serverUrl + "': "
+				+ e.getMessage(), e);
+		}
 	}
 
 	/**
@@ -78,8 +129,7 @@ public class McpClientSession implements AutoCloseable {
 	}
 
 	private McpSyncClient doConnect() throws Exception {
-		String mcpUrl = serverUrl.endsWith("/mcp") ? serverUrl : serverUrl + "/mcp";
-		McpClientTransport transport = HttpClientStreamableHttpTransport.builder(mcpUrl)
+		McpClientTransport transport = HttpClientStreamableHttpTransport.builder(endpointUrl)
 				.httpRequestCustomizer(bearerAuthCustomizer(accessToken))
 				.build();
 		client = McpClient.sync(transport)
