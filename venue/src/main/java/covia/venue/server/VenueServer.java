@@ -934,7 +934,7 @@ public class VenueServer {
 
 		String allowed = policy.allowedOriginHeader(origin);
 		if (allowed == null) {
-			ctx.status(400).result("CORS origin denied");
+			ctx.status(403).result("CORS origin denied");
 			ctx.skipRemainingHandlers();
 			return;
 		}

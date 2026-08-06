@@ -152,7 +152,7 @@ Supported forms:
   but no `Access-Control-Allow-Origin` header is emitted.
 
 Specific-origin and loopback responses echo the accepted request origin and
-emit `Vary: Origin`; a denied browser origin receives HTTP 400 without an
+emit `Vary: Origin`; a denied browser origin receives HTTP 403 without an
 allow-origin header. Entries should be origins only (`scheme://host[:port]`),
 not URLs with paths. For compatibility with the previous Javalin setting, a
 bare configured host defaults to HTTPS. Invalid or ambiguous configuration

@@ -190,9 +190,12 @@ public class VenueServerTest {
 					.firstValue("access-control-allow-origin").orElse(null));
 			}
 
-			HttpResponse<String> denied = corsGet(server, "https://evil.example");
-			assertEquals(400, denied.statusCode());
-			assertTrue(denied.headers().firstValue("access-control-allow-origin").isEmpty());
+			for (String origin : new String[] {"https://evil.example", "null"}) {
+				HttpResponse<String> denied = corsGet(server, origin);
+				assertEquals(403, denied.statusCode(), origin);
+				assertEquals("CORS origin denied", denied.body());
+				assertTrue(denied.headers().firstValue("access-control-allow-origin").isEmpty());
+			}
 
 			HttpResponse<String> preflight = corsPreflight(server, "https://app.example");
 			assertEquals(204, preflight.statusCode());
@@ -227,7 +230,7 @@ public class VenueServerTest {
 			for (String origin : new String[] {
 					"http://localhost.evil:3000", "http://127.0.0.2:3000"}) {
 				HttpResponse<String> response = corsGet(server, origin);
-				assertEquals(400, response.statusCode(), origin);
+				assertEquals(403, response.statusCode(), origin);
 				assertTrue(response.headers().firstValue("access-control-allow-origin").isEmpty());
 			}
 		} finally {
