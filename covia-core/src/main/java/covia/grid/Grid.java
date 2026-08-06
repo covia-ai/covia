@@ -57,12 +57,20 @@ public class Grid {
 	 * @return Venue instance
 	 */
 	public static Venue connect(String conn, VenueAuth auth) {
+		if (conn == null || conn.isBlank()) {
+			throw new IllegalArgumentException("Venue reference is required");
+		}
 		conn=conn.trim();
 		if (conn.startsWith("http")) {
 			URI uri=URI.create(conn);
 			return VenueHTTP.create(uri, auth);
 		} else if (conn.startsWith("did")){
 			return connect(DID.fromString(conn), auth);
+		}
+		if (!conn.contains(":")) {
+			throw new IllegalArgumentException("Unqualified venue reference '" + conn
+				+ "'; use an absolute HTTP(S) URL or routable did:web DID. "
+				+ "Bare venue labels are caller-local and must be resolved before grid invocation.");
 		}
 		throw new IllegalArgumentException("Unrecognised connection string format: "+conn);
 	}
