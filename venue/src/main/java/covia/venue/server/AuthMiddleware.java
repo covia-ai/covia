@@ -3,33 +3,22 @@ package covia.venue.server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.security.interfaces.RSAPublicKey;
-import java.util.Map;
 import java.util.Set;
 
-import convex.core.crypto.util.Multikey;
-import convex.core.data.AccountKey;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Strings;
-import convex.core.data.prim.CVMLong;
-import convex.auth.did.DID;
-import convex.auth.jwt.JWT;
-import convex.auth.ucan.UCAN;
 import convex.auth.did.DIDVerifier;
 import convex.auth.ucan.UCANValidator;
-import convex.core.lang.RT;
-import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.venue.Auth;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.api.ACoviaAPI;
-import covia.venue.auth.JWKSClient;
-import covia.venue.auth.OAuthConfig;
+import covia.venue.auth.VenueAuthenticator;
 import io.javalin.config.RoutesConfig;
 import io.javalin.http.Context;
 import io.javalin.security.RouteRole;
@@ -71,126 +60,27 @@ public class AuthMiddleware {
 	 * request has no bearer token or the bearer is not a UCAN.
 	 */
 	public static final String UCAN_BEARER_ATTR = "ucanBearer";
-	private static final AString SUB = Fields.SUB;
-	private static final AString KID = Fields.KID;
-	private static final AString EMAIL = Fields.EMAIL;
-	private static final AString ISS = Strings.intern("iss");
-	private static final AString AUD = Strings.intern("aud");
-	private static final AString EXP = Strings.intern("exp");
-	private static final AString NBF = Strings.intern("nbf");
-
 	// Per-instance state. Was static, which made running multiple VenueServers
 	// in the same JVM (production multi-tenant, parallel test classes) racy:
 	// every register() call would trample the previous instance's fields,
 	// causing requests to be attributed to the wrong venue's public DID
 	// and 403'd by AccessControl on cross-venue job lookups.
-	private final AccountKey venueKey;
-	private final AString venueDID;
 	private final AString publicDID;
-	private final Auth venueAuth;
-	private final Map<String, OAuthConfig> externalProviders;
 	private final boolean publicAccessEnabled;
 	private final AVector<ACell> publicScope;
-	private final String audiencePolicy;                  // "verify" | "require"
-	private final java.util.Set<String> acceptedAudiences;
 	private final Engine engine;
+	private final VenueAuthenticator authenticator;
 
-	private AuthMiddleware(Engine engine) {
+	private AuthMiddleware(Engine engine, VenueAuthenticator authenticator) {
 		this.engine = engine;
-		this.venueKey = engine.getAccountKey();
-		this.venueDID = engine.getDIDString();
-		this.publicDID = Strings.create(venueDID + ":public");
+		this.authenticator = authenticator;
+		this.publicDID = Strings.create(engine.getDIDString() + ":public");
 		Auth auth = engine.getAuth();
-		this.venueAuth = auth;
 		this.publicAccessEnabled = auth.isPublicAccessEnabled();
-		this.externalProviders = auth.getLoginProviders().hasProviders()
-			? auth.getLoginProviders().getProviders() : null;
 		// Capability grant scope for public callers — secure read-only by default,
 		// operator-overridable via auth.public.caps. Only relevant when public
 		// access is enabled (otherwise every anonymous request is 401'd).
 		this.publicScope = publicAccessEnabled ? auth.getPublicScope(publicDID) : null;
-		// Accepted JWT audiences: the venue's own published DID (whatever its
-		// method — did:key, did:web, …) plus any operator allowlist. A bearer
-		// token's `aud` must name one of these (RFC 7519 §4.1.3), so a token
-		// minted for another venue cannot be replayed here. We do NOT assume the
-		// venue's identity is the did:key of its signing key — a did:web venue
-		// publishes did:web, and clients audience tokens to the DID resolved from
-		// did.json; operators add any additional forms via auth.acceptedAudiences.
-		this.audiencePolicy = auth.getAudiencePolicy();
-		java.util.Set<String> aud = new java.util.HashSet<>();
-		aud.add(venueDID.toString()); // the venue's canonical published DID
-		aud.addAll(auth.getConfiguredAudiences());
-		// The did:web alias (covia#167): strictly-resolving clients audience
-		// their tokens to the DID they resolved from /.well-known/did.json,
-		// which is the did:web form when a public hostname is configured.
-		// Accepting the alias string here does not change the venue's canonical
-		// did:key identity — validation still uses the venue's own key.
-		AString webDID = auth.getWebDID();
-		if (webDID != null) aud.add(webDID.toString());
-		this.acceptedAudiences = aud;
-	}
-
-	/** Thrown when a bearer token is otherwise valid (signature, temporal bounds)
-	 *  but its audience does not satisfy the audience policy — surfaced as a hard
-	 *  401, never a silent downgrade to the public identity. */
-	private static final class AudienceRejected extends RuntimeException {
-		private static final long serialVersionUID = 1L;
-		AudienceRejected(String message) { super(message); }
-	}
-
-	/**
-	 * The principal proven by a credential and the local venue user it maps to.
-	 * They are normally equal for self-sovereign users, but differ for a named
-	 * venue user authenticated by one of its registered keys.
-	 */
-	private record VerifiedPrincipal(
-			AString authenticatedIdentity,
-			AString venueUserDID) {}
-
-	/**
-	 * Enforces RFC 7519 §4.1.3 audience restriction. {@code aud} may be a string
-	 * or an array of strings (StringOrURI), compared case-sensitively. A present
-	 * {@code aud} must name an accepted audience; an absent {@code aud} is
-	 * governed by the policy ({@code require} rejects, {@code verify} accepts).
-	 *
-	 * @throws AudienceRejected when the audience is not accepted
-	 */
-	private void requireAudience(ACell aud) {
-		if (aud == null) {
-			if ("require".equals(audiencePolicy)) {
-				throw new AudienceRejected("audience (aud) is required but absent");
-			}
-			return; // verify: tolerate an absent aud (warn-then-enforce migration)
-		}
-		if (aud instanceof AString s) {
-			if (!acceptedAudiences.contains(s.toString())) {
-				throw new AudienceRejected("token audience is not this venue: " + s);
-			}
-			return;
-		}
-		if (aud instanceof AVector<?> arr) {
-			for (long i = 0; i < arr.count(); i++) {
-				AString m = RT.ensureString(arr.get(i));
-				if (m != null && acceptedAudiences.contains(m.toString())) return;
-			}
-			throw new AudienceRejected("token audience list does not include this venue");
-		}
-		throw new AudienceRejected("malformed audience (aud) claim");
-	}
-
-	/** Clock-skew leeway (seconds) applied to JWT temporal bounds — a small grace
-	 *  for clock drift between the signer and this venue (RFC 7519 permits it). */
-	private static final long CLOCK_SKEW_SECONDS = 60;
-
-	/** Checks JWT temporal bounds ({@code exp}/{@code nbf}) against {@code now}
-	 *  (epoch seconds), with {@link #CLOCK_SKEW_SECONDS} leeway: false if expired
-	 *  or not-yet-valid; a token with no bounds is temporally unbounded (true). */
-	private static boolean temporalValid(AMap<AString, ACell> claims, long now) {
-		CVMLong exp = RT.ensureLong(claims.get(EXP));
-		if (exp != null && now > exp.longValue() + CLOCK_SKEW_SECONDS) return false;
-		CVMLong nbf = RT.ensureLong(claims.get(NBF));
-		if (nbf != null && now < nbf.longValue() - CLOCK_SKEW_SECONDS) return false;
-		return true;
 	}
 
 	/**
@@ -206,7 +96,13 @@ public class AuthMiddleware {
 	 *         but useful for tests).
 	 */
 	public static AuthMiddleware register(RoutesConfig routes, Engine engine) {
-		AuthMiddleware mw = new AuthMiddleware(engine);
+		return register(routes, engine, new VenueAuthenticator(engine));
+	}
+
+	/** Registers middleware backed by the venue's shared authenticator. */
+	public static AuthMiddleware register(RoutesConfig routes, Engine engine,
+			VenueAuthenticator authenticator) {
+		AuthMiddleware mw = new AuthMiddleware(engine, authenticator);
 		routes.beforeMatched(mw::extractMatchedIdentity);
 		return mw;
 	}
@@ -253,12 +149,9 @@ public class AuthMiddleware {
 	 * Records the credential identity and its mapped venue user, optionally
 	 * admitting the latter as a Covia venue user.
 	 */
-	private boolean markAuthenticated(Context ctx, VerifiedPrincipal principal,
-			boolean admitUser) {
+	private boolean admitAuthenticated(Context ctx, AString venueUserDID) {
 		try {
-			if (admitUser) engine.admitUser(principal.venueUserDID());
-			setRequestIdentity(ctx, principal.authenticatedIdentity(),
-				principal.venueUserDID());
+			engine.admitUser(venueUserDID);
 			return true;
 		} catch (AuthException e) {
 			ctx.status(403).result(e.getMessage());
@@ -312,241 +205,12 @@ public class AuthMiddleware {
 		}
 
 		try {
-			AString jwt = Strings.create(token);
-			// Try UCAN first — if the bearer is a UCAN, iss is the caller DID
-			// and the token is also stashed as a capability proof for downstream
-			// handlers (IETF UCAN-HTTP bearer semantics).
-			VerifiedPrincipal principal = tryVerifyUCAN(jwt);
-			if (principal != null) {
-				ctx.attribute(UCAN_BEARER_ATTR, jwt);
-			}
-			if (principal == null) {
-				principal = tryVerifySelfIssued(jwt);
-			}
-			if (principal == null && venueKey != null) {
-				principal = tryVerifyVenueSigned(jwt);
-			}
-			if (principal == null && externalProviders != null) {
-				principal = tryVerifyExternalProvider(jwt);
-			}
-			if (principal != null) {
-				if (!markAuthenticated(ctx, principal, admitUser)) return;
-			} else {
-				// A presented token that fails every verification path is a hard
-				// 401 — NEVER a silent downgrade to the public identity, even when
-				// public access is enabled. Presenting credentials is an explicit
-				// identity claim; failing that claim must be visible to the caller
-				// (an anonymous request without a token still gets public access).
-				log.debug("JWT bearer token failed all verification paths");
-				rejectUnauthorized(ctx, "Invalid or expired token", resourceMetadata);
-			}
-		} catch (AudienceRejected e) {
-			// A presented token failed the audience policy — a hard 401, NOT a
-			// silent downgrade to the public identity (the replay defence).
-			log.debug("Bearer token audience rejected: {}", e.getMessage());
-			rejectUnauthorized(ctx, "Token audience not accepted by this venue",
-				resourceMetadata);
-		} catch (Exception e) {
-			// Same rule for unexpected failures while verifying a PRESENTED token
-			// (JWKS outage, parse bug, ...): fail the claim visibly. Warn-level —
-			// this path is abnormal and should be diagnosable, not debug-hidden.
-			log.warn("Error processing bearer token", e);
-			rejectUnauthorized(ctx, "Authentication failed", resourceMetadata);
+			AString venueUserDID = authenticator.authenticate(ctx, Strings.create(token));
+			if (admitUser && !admitAuthenticated(ctx, venueUserDID)) return;
+		} catch (AuthException e) {
+			log.debug("Bearer token rejected: {}", e.getMessage());
+			rejectUnauthorized(ctx, e.getMessage(), resourceMetadata);
 		}
-	}
-
-	/**
-	 * Verify a UCAN bearer token. A token is classified as a UCAN by the presence
-	 * of an {@code att} (capability) array — NOT by {@code aud}, since identity
-	 * tokens now legitimately carry {@code aud} too (#149). The EdDSA signature is
-	 * verified against the issuer key, temporal bounds and audience are checked.
-	 * On success, the issuer DID is returned as the caller identity — matching the
-	 * IETF UCAN-HTTP bearer convention that the invocation token's {@code iss} is
-	 * the caller.
-	 *
-	 * @param jwt Bearer token
-	 * @return issuer as both authenticated identity and venue user on success,
-	 *         or null if the token is not a valid UCAN
-	 */
-	private VerifiedPrincipal tryVerifyUCAN(AString jwt) {
-		UCAN token = UCAN.fromJWT(jwt);
-		if (token == null) return null;
-		// Classify by the presence of an `att` (capability) array — NOT `aud`.
-		// Identity tokens now legitimately carry `aud` (#149), so aud-presence
-		// would misroute them through the UCAN path. UCAN.getCapabilities()
-		// collapses absent→empty, so inspect the raw claims: UCAN.create always
-		// writes an `att` field (≥ empty); a plain identity JWT never does.
-		JWT parsed = JWT.parse(jwt);
-		AMap<AString, ACell> claims = (parsed != null) ? parsed.getClaims() : null;
-		if (claims == null || claims.get(UCAN.ATT) == null) return null;
-		// Bind the signature to the claimed issuer. Re-verify against the issuer's
-		// OWN key so identity is attributed only when the signature actually
-		// satisfies the iss key — regardless of how UCAN.fromJWT selects its
-		// verification key. Otherwise anyone could sign with their key, set `iss`
-		// to a victim DID, and be attributed that identity (issuer spoofing).
-		// Mirrors the kid==sub bind that tryVerifySelfIssued enforces.
-		AString issuer = token.getIssuer();
-		AccountKey issuerKey = UCAN.fromDIDKey(issuer);
-		if (issuerKey == null) return null;
-		if (JWT.verifyPublic(jwt, issuerKey) == null) return null;
-		long now = System.currentTimeMillis() / 1000;
-		if (!UCANValidator.checkTemporalBounds(token, now)) return null;
-		// Audience restriction (RFC 7519 §4.1.3): the bearer must be intended for
-		// THIS venue, else a token minted for another venue could be replayed.
-		requireAudience(token.getAudience());
-		return new VerifiedPrincipal(issuer, issuer);
-	}
-
-	/**
-	 * Verify a self-issued JWT. A did:key subject is bound directly to the
-	 * header key; a local named-user subject is bound through the venue-owned
-	 * authentication-key registry.
-	 */
-	private VerifiedPrincipal tryVerifySelfIssued(AString jwt) {
-		JWT parsed = JWT.parse(jwt);
-		if (parsed == null || !"EdDSA".equals(parsed.getAlgorithm())) return null;
-		AMap<AString, ACell> claims = parsed.getClaims();
-
-		AString sub = RT.ensureString(claims.get(SUB));
-		if (sub == null) return null;
-		AString keyDID = authenticationKeyDID(jwt, sub);
-		if (keyDID == null) return null;
-		AccountKey signingKey = Multikey.decodePublicKey(
-			keyDID.toString().substring("did:key:".length()));
-		if (signingKey == null || JWT.verifyPublic(jwt, signingKey) == null) return null;
-
-		String subStr = sub.toString();
-		if (subStr.startsWith("did:key:")) {
-			if (!sub.equals(keyDID)) return null;
-		} else {
-			AString userId = engine.managedUserName(sub);
-			if (userId == null) return null; // never resolve a foreign did:web
-			if (!sub.equals(RT.ensureString(claims.get(ISS)))) return null;
-			AMap<AString, ACell> record = venueAuth.getUser(userId);
-			if (record == null || !sub.equals(record.get(Fields.DID))) return null;
-			if (!venueAuth.isAuthenticationKeyActive(userId, keyDID)) return null;
-		}
-
-		// Temporal bounds — previously unchecked, so a self-issued token was
-		// accepted forever; reject expired / not-yet-valid tokens.
-		if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
-		// Audience restriction (RFC 7519 §4.1.3): a self-issued token minted for
-		// another venue must not authenticate here.
-		requireAudience(claims.get(AUD));
-		return new VerifiedPrincipal(keyDID, sub);
-	}
-
-	/**
-	 * Verify a venue-signed JWT. The venue's key is the trusted signer.
-	 * The sub claim contains the user's DID.
-	 */
-	private VerifiedPrincipal tryVerifyVenueSigned(AString jwt) {
-		AMap<AString, ACell> claims = JWT.verifyPublic(jwt, venueKey);
-		if (claims == null) return null;
-
-		// A venue session is an attestation BY this venue, not a bearer signed
-		// "as" the managed user. Bind the claims to that model explicitly: a
-		// token that verifies with the venue key must not claim another issuer, stale
-		// sessions must expire, and tokens intended for another venue must not be
-		// replayed here.
-		if (!venueDID.equals(RT.ensureString(claims.get(ISS)))) return null;
-		if (!temporalValid(claims, System.currentTimeMillis() / 1000)) return null;
-		requireAudience(claims.get(AUD));
-
-		AString sub = RT.ensureString(claims.get(SUB));
-		if (sub == null) return null;
-		try {
-			if (DID.fromString(sub.toString()) == null) return null;
-		} catch (RuntimeException e) {
-			return null;
-		}
-		return new VerifiedPrincipal(sub, sub);
-	}
-
-	/**
-	 * Resolve the header {@code kid} to a canonical did:key. Convex JWT
-	 * signers use the bare multikey; named-user-aware signers may use either
-	 * {@code did:key:<multikey>} or {@code <subject>#<multikey>}.
-	 */
-	private static AString authenticationKeyDID(AString jwt, AString subject) {
-		try {
-			JWT parsed = JWT.parse(jwt);
-			if (parsed == null) return null;
-			AString kid = RT.ensureString(parsed.getHeader().get(KID));
-			if (kid == null) return null;
-			String value = kid.toString();
-			String multikey;
-			if (value.startsWith("did:key:")) {
-				multikey = value.substring("did:key:".length());
-			} else {
-				String namedPrefix = subject + "#";
-				multikey = value.startsWith(namedPrefix)
-					? value.substring(namedPrefix.length()) : value;
-			}
-			if (Multikey.decodePublicKey(multikey) == null) return null;
-			return Strings.create("did:key:" + multikey);
-		} catch (Exception e) {
-			return null;
-		}
-	}
-
-	/**
-	 * Verify an RS256 JWT from a configured external OAuth provider.
-	 * Tries each provider's JWKS endpoint to find a matching key.
-	 */
-	private VerifiedPrincipal tryVerifyExternalProvider(AString jwt) {
-		try {
-			JWT parsed = JWT.parse(jwt);
-			if (parsed == null) return null;
-			if (!"RS256".equals(parsed.getAlgorithm())) return null;
-
-			String kid = parsed.getKeyID();
-			if (kid == null) return null;
-
-			for (OAuthConfig provider : externalProviders.values()) {
-				if (provider.jwksUri == null) continue;
-
-				RSAPublicKey key = JWKSClient.getKey(provider.jwksUri, kid);
-				if (key == null) continue;
-				if (!parsed.verifyRS256(key)) continue;
-				if (!parsed.validateClaims(provider.issuer, provider.clientId)) continue;
-
-				// Valid — look up existing user by email to get their DID
-				AMap<AString, ACell> claims = parsed.getClaims();
-				AString email = RT.ensureString(claims.get(EMAIL));
-				if (email == null) return null;
-				AString venueUserDID = findUserDIDByEmail(email);
-				AString subject = RT.ensureString(claims.get(SUB));
-				if (venueUserDID == null) return null;
-				// Retain compatibility with providers that only supplied the
-				// email previously used for the local mapping.
-				if (subject == null) subject = email;
-				return new VerifiedPrincipal(subject, venueUserDID);
-			}
-		} catch (Exception e) {
-			log.debug("External provider JWT verification failed", e);
-		}
-		return null;
-	}
-
-	/**
-	 * Look up an existing user by email in the venue's user database.
-	 * Returns the user's DID if found, null otherwise.
-	 */
-	private AString findUserDIDByEmail(AString email) {
-		if (venueAuth == null) return null;
-		AMap<AString, AMap<AString, ACell>> users = venueAuth.getUsers();
-		if (users == null) return null;
-
-		// Search user records for matching email
-		for (var entry : users.entrySet()) {
-			AMap<AString, ACell> record = entry.getValue();
-			if (email.equals(record.get(EMAIL))) {
-				AString did = RT.ensureString(record.get(Fields.DID));
-				if (did != null) return did;
-			}
-		}
-		return null;
 	}
 
 	/**

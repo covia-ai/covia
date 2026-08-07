@@ -1,6 +1,7 @@
 package covia.venue;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -23,6 +24,7 @@ import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
 import covia.grid.Job;
+import covia.exception.AuthException;
 import covia.grid.auth.VenueAuth;
 import covia.grid.client.VenueHTTP;
 import covia.venue.server.VenueServer;
@@ -235,6 +237,28 @@ public class AudiencePolicyTest {
 		// (and validation key) remains the did:key.
 		assertAccepted(client(requireServer,
 			selfIssued(AKeyPair.generate(), Strings.create("did:web:venue-req.example.com"))));
+	}
+
+	@Test
+	public void publicAuthenticatorUsesVenueAudiencePolicy() {
+		AKeyPair key = AKeyPair.generate();
+		AString did = UCAN.toDIDKey(key.getAccountKey());
+		AString webDID = Strings.create("did:web:venue-req.example.com");
+		AString token = Strings.create(selfIssued(key, webDID));
+
+		assertEquals(did, requireServer.authenticator().authenticate(token));
+		assertTrue(requireServer.authenticator().acceptedAudiences()
+			.contains(requireVenueDID));
+		assertTrue(requireServer.authenticator().acceptedAudiences()
+			.contains(webDID));
+		assertTrue(requireServer.authenticator().acceptedAudiences()
+			.contains(extraDID));
+
+		AString wrongAudience = Strings.create("did:web:other.example.com");
+		AuthException rejected = assertThrows(AuthException.class, () ->
+			requireServer.authenticator().authenticate(
+				Strings.create(selfIssued(AKeyPair.generate(), wrongAudience))));
+		assertTrue(rejected.getMessage().contains("audience"));
 	}
 
 	@Test

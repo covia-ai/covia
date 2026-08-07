@@ -53,6 +53,7 @@ import covia.venue.api.CoviaAPI;
 import covia.venue.api.MCP;
 import covia.venue.api.UserAPI;
 import covia.venue.auth.LoginProviders;
+import covia.venue.auth.VenueAuthenticator;
 import io.javalin.Javalin;
 import io.javalin.config.JavalinConfig;
 import io.javalin.config.RoutesConfig;
@@ -104,6 +105,7 @@ public class VenueServer {
 	protected A2A a2a;
 	protected UserAPI userApi;
 	protected LoginProviders loginProviders;
+	protected VenueAuthenticator authenticator;
 
 	/**
 	 * Extra Javalin route registrars contributed by an embedder — e.g. a service
@@ -219,6 +221,7 @@ public class VenueServer {
 		api=new CoviaAPI(localVenue);
 		userApi=new UserAPI(localVenue);
 		loginProviders=engine.getAuth().getLoginProviders();
+		authenticator=new VenueAuthenticator(engine);
 
 		AMap<AString,ACell> mcpConfig=this.config.getMCPConfig();
 		if (mcpConfig!=null) {
@@ -581,6 +584,15 @@ public class VenueServer {
 		return engine;
 	}
 
+	/**
+	 * Returns the venue's public credential authentication service. Embedders may
+	 * use it from contributed Javalin routes, including routes carrying tokens in
+	 * headers other than {@code Authorization}.
+	 */
+	public VenueAuthenticator authenticator() {
+		return authenticator;
+	}
+
 	public AStore getStore() {
 		return store;
 	}
@@ -847,7 +859,7 @@ public class VenueServer {
 		});
 
 		// Auth middleware: endpoint roles, not URL prefixes, select policy.
-		AuthMiddleware.register(routes, engine);
+		AuthMiddleware.register(routes, engine, authenticator);
 
 		// Rate limiting: per-caller token bucket, keyed on the identity the auth
 		// middleware just resolved (all anonymous callers share the venue :public
