@@ -43,10 +43,12 @@ import covia.venue.RequestContext;
  * Filesystem adapter — exposes the venue host's local filesystem to operations.
  *
  * <p>Access is restricted to a set of named roots configured by the venue
- * operator. Each root maps a name to an absolute host path; agents reference
- * files by {@code root} + relative {@code path}. Without configured roots the
- * adapter is inert — every operation fails with a clear error. This keeps
- * agents on a leash without making the adapter conditionally registered.
+ * operator. Each root maps a name to a host path, temp directory, or DLFS view;
+ * agents reference files by {@code root} + relative {@code path}. Without
+ * configured roots the adapter creates an ephemeral temp root. A DLFS root may
+ * select a relative {@code subpath}; this becomes the root's logical boundary,
+ * so callers never include the physical subtree in operation paths or
+ * capability resources.
  *
  * <h3>Configuration</h3>
  * <pre>
@@ -54,7 +56,8 @@ import covia.venue.RequestContext;
  *   "file": {
  *     "roots": {
  *       "workspace": "/srv/agent-workspace",
- *       "data":      { "path": "/srv/data", "readOnly": true }
+ *       "data":      { "path": "/srv/data", "readOnly": true },
+ *       "mina":      { "dlfs": "vault", "subpath": "Made by Mina" }
  *     }
  *   }
  * }
@@ -102,6 +105,7 @@ public class FileAdapter extends AAdapter {
 	private static final AString FIELD_TEMP = Strings.intern("temp");
 	private static final AString FIELD_PREFIX = Strings.intern("prefix");
 	private static final AString FIELD_DLFS = Strings.intern("dlfs");
+	private static final AString FIELD_SUBPATH = Strings.intern("subpath");
 	private static final AString FIELD_DESCRIPTION = Strings.intern("description");
 
 	/**
@@ -141,13 +145,16 @@ public class FileAdapter extends AAdapter {
 
 	private static final class DLFSRoot extends Root {
 		final String driveName;
+		final String subpath;
 		final Engine engine;
-		DLFSRoot(String driveName, boolean readOnly, Engine engine, AString description) {
+		DLFSRoot(String driveName, String subpath, boolean readOnly, Engine engine,
+				AString description) {
 			super(readOnly, description);
 			this.driveName = driveName;
+			this.subpath = subpath;
 			this.engine = engine;
 		}
-		@Override Path baseFor(RequestContext ctx) {
+		@Override Path baseFor(RequestContext ctx) throws IOException {
 			if (ctx == null || ctx.getCallerDID() == null) {
 				throw new IllegalArgumentException(
 					"DLFS-backed root '" + driveName + "' requires authenticated caller");
@@ -159,9 +166,35 @@ public class FileAdapter extends AAdapter {
 					"DLFS-backed root '" + driveName + "' requires the DLFS adapter to be registered");
 			}
 			// Drives auto-create on first connect; cheap cursor view per call.
-			return dlfs.getDrive(ctx, driveName).getRootDirectories().iterator().next();
+			Path driveRoot = dlfs.getDrive(ctx, driveName)
+				.getRootDirectories().iterator().next();
+			if (subpath == null) return driveRoot;
+
+			// Resolve against the provider itself, then re-check confinement before
+			// touching state. loadRoot performs the same lexical validation early,
+			// but this keeps the security boundary local to path materialisation.
+			Path relative = driveRoot.getFileSystem().getPath(subpath);
+			if (relative.isAbsolute() || relative.getRoot() != null) {
+				throw new IllegalArgumentException(
+					"DLFS root subpath must be relative: " + subpath);
+			}
+			Path base = driveRoot.resolve(relative).normalize();
+			if (!base.startsWith(driveRoot)) {
+				throw new IllegalArgumentException(
+					"DLFS root subpath escapes drive: " + subpath);
+			}
+			// The drive itself is lazy-created; its configured subtree follows the
+			// same rule. This setup is independent of the root's API-level readOnly
+			// policy, which still rejects caller-requested mutations.
+			Files.createDirectories(base);
+			if (!Files.isDirectory(base)) {
+				throw new IOException("DLFS root subpath is not a directory: " + subpath);
+			}
+			return base;
 		}
-		@Override String displayPath() { return "dlfs:" + driveName; }
+		@Override String displayPath() {
+			return "dlfs:" + driveName + (subpath == null ? "" : "/" + subpath);
+		}
 		@Override String kind() { return "dlfs"; }
 	}
 
@@ -238,8 +271,17 @@ public class FileAdapter extends AAdapter {
 				AMap<AString, ACell> rm = (AMap<AString, ACell>) m;
 				boolean isTemp = RT.bool(rm.get(FIELD_TEMP));
 				AString dlfsCell = RT.ensureString(rm.get(FIELD_DLFS));
+				ACell subpathRaw = rm.get(FIELD_SUBPATH);
+				AString subpathCell = RT.ensureString(subpathRaw);
 				boolean readOnly = RT.bool(rm.get(Config.READ_ONLY));
 				AString description = RT.ensureString(rm.get(FIELD_DESCRIPTION));
+				if (subpathRaw != null && subpathCell == null) {
+					throw new IllegalArgumentException("'subpath' must be a string");
+				}
+				if (subpathCell != null && dlfsCell == null) {
+					throw new IllegalArgumentException(
+						"'subpath' is only valid for a DLFS-backed root");
+				}
 				int variants = (isTemp ? 1 : 0) + (dlfsCell != null ? 1 : 0)
 					+ (rm.containsKey(FIELD_PATH) && !isTemp ? 1 : 0);
 				if (variants > 1) {
@@ -253,7 +295,9 @@ public class FileAdapter extends AAdapter {
 					String prefix = (prefixCell != null) ? prefixCell.toString() : null;
 					addTempRoot(name, prefix, parent, readOnly, description);
 				} else if (dlfsCell != null) {
-					addDLFSRoot(name, dlfsCell.toString(), readOnly, description);
+					String subpath = (subpathCell == null) ? null
+						: normaliseDLFSSubpath(subpathCell.toString());
+					addDLFSRoot(name, dlfsCell.toString(), subpath, readOnly, description);
 				} else {
 					AString p = RT.ensureString(rm.get(FIELD_PATH));
 					if (p == null) {
@@ -265,9 +309,33 @@ public class FileAdapter extends AAdapter {
 			} else {
 				log.warn("FileAdapter: root '{}' must be string or map — skipped", name);
 			}
-		} catch (IOException e) {
+		} catch (IOException | IllegalArgumentException e) {
 			log.warn("FileAdapter: root '{}' failed: {}", name, e.getMessage());
 		}
+	}
+
+	/** Normalises a portable provider-relative DLFS subtree path. */
+	private static String normaliseDLFSSubpath(String configured) {
+		if (configured == null || configured.isBlank()) {
+			throw new IllegalArgumentException("'subpath' must not be empty");
+		}
+		String portable = configured.replace('\\', '/');
+		if (portable.startsWith("/") || portable.matches("^[A-Za-z]:.*")) {
+			throw new IllegalArgumentException("'subpath' must be relative: " + configured);
+		}
+		java.util.ArrayList<String> segments = new java.util.ArrayList<>();
+		for (String segment : portable.split("/")) {
+			if (segment.isEmpty() || ".".equals(segment)) continue;
+			if ("..".equals(segment)) {
+				throw new IllegalArgumentException(
+					"'subpath' must not contain '..': " + configured);
+			}
+			segments.add(segment);
+		}
+		if (segments.isEmpty()) {
+			throw new IllegalArgumentException("'subpath' must name a directory");
+		}
+		return String.join("/", segments);
 	}
 
 	private void addPathRoot(String name, String pathStr, boolean readOnly, AString description) throws IOException {
@@ -307,10 +375,13 @@ public class FileAdapter extends AAdapter {
 			name, real, readOnly ? " (read-only)" : "");
 	}
 
-	private void addDLFSRoot(String name, String driveName, boolean readOnly, AString description) {
+	private void addDLFSRoot(String name, String driveName, String subpath,
+			boolean readOnly, AString description) {
 		// Lookup is deferred — DLFSAdapter may register after FileAdapter.
-		roots.put(name, new DLFSRoot(driveName, readOnly, engine, description));
-		log.info("FileAdapter: root '{}' -> dlfs:{}{}", name, driveName, readOnly ? " (read-only)" : "");
+		roots.put(name, new DLFSRoot(driveName, subpath, readOnly, engine, description));
+		log.info("FileAdapter: root '{}' -> dlfs:{}{}{}", name, driveName,
+			subpath == null ? "" : "/" + subpath,
+			readOnly ? " (read-only)" : "");
 	}
 
 	// ==================== Path resolution ====================

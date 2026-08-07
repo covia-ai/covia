@@ -534,6 +534,42 @@ own UCAN roots. For username-created
 controller and may issue venue sessions, while registered user-held keys
 provide direct self-sovereign authentication as the stable named DID.
 
+## File roots
+
+The `file` adapter exposes operator-configured logical roots. A root may be a
+host directory, an ephemeral temporary directory, or a caller-owned DLFS
+drive. DLFS roots may be clamped to a provider-relative subtree:
+
+```json
+{
+  "file": {
+    "roots": {
+      "workspace": "/srv/agent-workspace",
+      "reference": {
+        "path": "/srv/reference",
+        "readOnly": true
+      },
+      "mina": {
+        "dlfs": "vault",
+        "subpath": "Made by Mina",
+        "readOnly": false,
+        "description": "Files created and maintained by Mina"
+      }
+    }
+  }
+}
+```
+
+`subpath` is valid only with `dlfs`. It must be a non-empty relative path and
+cannot contain `..`; invalid roots are skipped rather than broadened to the
+whole drive. The subtree is created lazily on first file access. It is an
+implementation boundary, not part of the client path: callers use
+`{ "root": "mina", "path": "report.pdf" }`, and capabilities name
+`file://mina/report.pdf`, while the provider stores the file at
+`vault/Made by Mina/report.pdf`. Adding a subpath to an existing root therefore
+changes its logical capability addresses; issue replacement grants as part of
+that configuration migration.
+
 ## Adapter configuration
 
 ```json

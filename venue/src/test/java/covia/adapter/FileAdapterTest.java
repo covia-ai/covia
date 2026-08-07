@@ -17,9 +17,13 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import convex.auth.ucan.Capability;
 import convex.core.data.ACell;
+import convex.core.data.AString;
 import convex.core.data.AVector;
 import convex.core.data.Maps;
+import convex.core.data.Strings;
+import convex.core.data.Vectors;
 import convex.core.lang.RT;
 import covia.grid.Job;
 import covia.grid.Status;
@@ -891,6 +895,106 @@ public class FileAdapterTest {
 			RequestContext.of(did));
 		dlfsRead.awaitResult(2000);
 		assertEquals("via file", RT.ensureString(RT.getIn(dlfsRead.getOutput(), "content")).toString());
+	}
+
+	@Test
+	public void testDLFSSubpathRootConfinesPathsAndUsesLogicalCapabilities() {
+		Engine eng = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			"file", Maps.of("roots", Maps.of(
+				"mina", Maps.of(
+					"dlfs", "vault-drive",
+					"subpath", "Made by Mina")
+			))
+		));
+		Engine.addDemoAssets(eng);
+
+		AString did = Strings.create("did:key:z6Mk-test-FileAdapterTest-subpath");
+		RequestContext free = RequestContext.of(did);
+		try {
+			Job rootsJob = eng.jobs().invokeOperation(
+				"v/ops/file/roots", Maps.empty(), free);
+			rootsJob.awaitResult(2000);
+			AVector<?> roots = RT.ensureVector(RT.getIn(rootsJob.getOutput(), "roots"));
+			assertEquals(1, roots.count());
+			assertEquals("dlfs:vault-drive/Made by Mina",
+				RT.ensureString(RT.getIn(roots.get(0), "path")).toString());
+
+			// Logical paths are resolved underneath the configured physical subtree.
+			eng.jobs().invokeOperation("v/ops/file/mkdir", Maps.of(
+				"root", "mina", "path", "notes", "parents", true), free)
+				.awaitResult(2000);
+			eng.jobs().invokeOperation("v/ops/file/write", Maps.of(
+				"root", "mina", "path", "notes/hello.txt", "content", "scoped"), free)
+				.awaitResult(2000);
+			Job physicalRead = eng.jobs().invokeOperation("v/ops/dlfs/read", Maps.of(
+				"drive", "vault-drive",
+				"path", "/Made by Mina/notes/hello.txt"), free);
+			physicalRead.awaitResult(2000);
+			assertEquals("scoped",
+				RT.ensureString(RT.getIn(physicalRead.getOutput(), "content")).toString());
+
+			// The logical jail is applied before capability construction and dispatch.
+			Job escaped = eng.jobs().invokeOperation("v/ops/file/read", Maps.of(
+				"root", "mina", "path", "../outside.txt"), free);
+			try { escaped.awaitResult(2000); } catch (RuntimeException ignored) {}
+			assertEquals(Status.FAILED, escaped.getStatus());
+			assertTrue(escaped.getErrorMessage().contains("escapes root"),
+				escaped::getErrorMessage);
+
+			AVector<ACell> logicalCaps = Vectors.of(Capability.create(
+				Strings.create("file://mina/allowed/"), Capability.CRUD_WRITE));
+			RequestContext logical = RequestContext.of(did).withCaps(logicalCaps);
+			Job allowedDir = eng.jobs().invokeOperation("v/ops/file/mkdir", Maps.of(
+				"root", "mina", "path", "allowed", "parents", true), logical);
+			allowedDir.awaitResult(2000);
+			assertEquals(Status.COMPLETE, allowedDir.getStatus());
+			Job allowedWrite = eng.jobs().invokeOperation("v/ops/file/write", Maps.of(
+				"root", "mina", "path", "allowed/ok.txt", "content", "ok"), logical);
+			allowedWrite.awaitResult(2000);
+			assertEquals(Status.COMPLETE, allowedWrite.getStatus());
+
+			// A grant naming the physical prefix does not accidentally match the
+			// logical API namespace exposed by the configured root.
+			RequestContext physicalCap = RequestContext.of(did).withCaps(Vectors.of(
+				Capability.create(Strings.create("file://mina/Made by Mina/"),
+					Capability.CRUD_WRITE)));
+			String denied = capDenialOf(() -> eng.jobs().invokeOperation(
+				"v/ops/file/write", Maps.of(
+					"root", "mina", "path", "physical.txt", "content", "denied"),
+				physicalCap));
+			assertNotNull(denied);
+			assertTrue(denied.contains("file://mina/physical.txt"), denied);
+		} finally {
+			eng.close();
+		}
+	}
+
+	@Test
+	public void testInvalidDLFSSubpathRootsAreSkipped() {
+		Engine eng = Engine.createTemp(Maps.of(
+			Config.USERS, Maps.of(Config.AUTO_CREATE, true),
+			"file", Maps.of("roots", Maps.of(
+				"safe", Maps.of("dlfs", "drive", "subpath", "safe/nested"),
+				"escape", Maps.of("dlfs", "drive", "subpath", "../outside"),
+				"absolute", Maps.of("dlfs", "drive", "subpath", "/outside"),
+				"host", Maps.of(
+					"path", workspace.toAbsolutePath().toString(),
+					"subpath", "misleading")
+			))
+		));
+		Engine.addDemoAssets(eng);
+		try {
+			Job rootsJob = eng.jobs().invokeOperation("v/ops/file/roots", Maps.empty(),
+				RequestContext.of(Strings.create(DID)));
+			rootsJob.awaitResult(2000);
+			AVector<?> roots = RT.ensureVector(RT.getIn(rootsJob.getOutput(), "roots"));
+			assertEquals(1, roots.count());
+			assertEquals("safe",
+				RT.ensureString(RT.getIn(roots.get(0), "name")).toString());
+		} finally {
+			eng.close();
+		}
 	}
 
 	@Test

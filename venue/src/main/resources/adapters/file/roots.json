@@ -18,7 +18,7 @@
             "type": "object",
             "properties": {
               "name": { "type": "string" },
-              "path": { "type": "string", "description": "Host path for host/temp roots; 'dlfs:<drive>' for DLFS-backed roots" },
+              "path": { "type": "string", "description": "Host path for host/temp roots; 'dlfs:<drive>[/<subpath>]' for DLFS-backed roots. This is diagnostic backing-store information; file operations still use paths relative to the named logical root." },
               "kind": { "type": "string", "enum": ["host", "temp", "dlfs"] },
               "readOnly": { "type": "boolean" },
               "description": { "type": "string", "description": "Operator-supplied description (only present if configured)" }

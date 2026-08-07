@@ -1208,7 +1208,8 @@ public class Config {
 	 *   "file": {
 	 *     "roots": {
 	 *       "workspace": "/srv/agent-workspace",
-	 *       "data":      { "path": "/srv/data", "readOnly": true }
+	 *       "data":      { "path": "/srv/data", "readOnly": true },
+	 *       "mina":      { "dlfs": "vault", "subpath": "Made by Mina" }
 	 *     }
 	 *   }
 	 * }
@@ -1221,6 +1222,8 @@ public class Config {
 	 * <p>A per-root entry may also be {@code {"temp": true, "prefix": "...",
 	 * "path": "..."}} to materialise a fresh temp directory at startup
 	 * (with optional prefix and parent dir) that is cleaned up at exit.
+	 * A DLFS entry may specify a provider-relative {@code subpath}; that subtree
+	 * is created lazily and becomes the root's logical path and capability jail.
 	 *
 	 * @return File config map, or null if not configured
 	 */
