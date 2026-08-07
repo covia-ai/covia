@@ -3,8 +3,10 @@ package covia.venue.server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Set;
 
+import convex.api.ContentTypes;
 import convex.core.data.ACell;
 import convex.core.data.AMap;
 import convex.core.data.AString;
@@ -12,6 +14,7 @@ import convex.core.data.AVector;
 import convex.core.data.Strings;
 import convex.auth.did.DIDVerifier;
 import convex.auth.ucan.UCANValidator;
+import convex.core.util.JSON;
 import covia.exception.AuthException;
 import covia.venue.Auth;
 import covia.venue.Config;
@@ -154,8 +157,7 @@ public class AuthMiddleware {
 			engine.admitUser(venueUserDID);
 			return true;
 		} catch (AuthException e) {
-			ctx.status(403).result(e.getMessage());
-			ctx.skipRemainingHandlers();
+			reject(ctx, 403, e.getMessage());
 			return false;
 		}
 	}
@@ -168,9 +170,21 @@ public class AuthMiddleware {
 		AString venueUserDID = getVenueUserDID(ctx);
 		if (venueUserDID == null) return; // authentication already rejected the request
 		if (!allowedDids.isEmpty() && !allowedDids.contains(venueUserDID.toString())) {
-			ctx.status(403).result("Caller DID is not allowed to use MCP");
-			ctx.skipRemainingHandlers();
+			reject(ctx, 403, "Caller DID is not allowed to use MCP");
 		}
+	}
+
+	/**
+	 * Emit the same JSON error envelope used by Covia API handlers. Middleware
+	 * rejects before an endpoint handler (and often before a Job exists), so it
+	 * must render the response itself rather than relying on endpoint error handling.
+	 */
+	private void reject(Context ctx, int status, String message) {
+		String body = "{\"error\": \"" + JSON.escape(message) + "\"}";
+		ctx.status(status)
+			.header("Content-Type", ContentTypes.JSON + "; charset=utf-8")
+			.result(body.getBytes(StandardCharsets.UTF_8));
+		ctx.skipRemainingHandlers();
 	}
 
 	private void rejectUnauthorized(Context ctx, String message, String resourceMetadata) {
@@ -178,8 +192,7 @@ public class AuthMiddleware {
 			ctx.header("WWW-Authenticate",
 				"Bearer resource_metadata=\"" + resourceMetadata + "\"");
 		}
-		ctx.status(401).result(message);
-		ctx.skipRemainingHandlers();
+		reject(ctx, 401, message);
 	}
 
 	private void extractIdentity(Context ctx, boolean allowPublic,
