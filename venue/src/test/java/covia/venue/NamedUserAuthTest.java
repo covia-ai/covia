@@ -25,6 +25,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
 import convex.core.data.prim.CVMLong;
+import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.grid.Job;
@@ -91,10 +92,17 @@ public class NamedUserAuthTest {
 
 	@Test
 	void registeredKeyAuthenticatesAsStableNamedDid() throws Exception {
+		AString value = Strings.create("registered-key-access");
+		server.getEngine().jobs().invokeInternal("v/ops/covia/write",
+			Maps.of(Fields.PATH, "w/auth-subject-private", Fields.VALUE, value),
+			RequestContext.of(aliceDID)).get(5, TimeUnit.SECONDS);
 		VenueAuth auth = VenueAuth.namedKeyPair(
 			aliceKey, aliceDID.toString(), server.getEngine().getDIDString().toString());
 		assertEquals(aliceDID.toString(), auth.getDID());
-		assertAccepted(client(auth));
+		Job read = client(auth).invokeAndWait(Strings.create("v/ops/covia/read"),
+			Maps.of(Fields.PATH, "w/auth-subject-private"));
+		assertEquals(value, RT.getIn(read.awaitResult(5000), Fields.VALUE),
+			"a registered authentication key may access its mapped subject's workspace");
 	}
 
 	@Test

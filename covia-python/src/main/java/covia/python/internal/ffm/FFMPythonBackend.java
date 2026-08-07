@@ -50,6 +50,8 @@ public final class FFMPythonBackend implements PythonBackend {
 	private static final Object INIT_LOCK = new Object();
 	private static final boolean WINDOWS = System.getProperty("os.name", "")
 		.toLowerCase(Locale.ROOT).contains("win");
+	private static final boolean MACOS = System.getProperty("os.name", "")
+		.toLowerCase(Locale.ROOT).contains("mac");
 	private static final MemoryLayout C_UNSIGNED_LONG = WINDOWS ? JAVA_INT : JAVA_LONG;
 
 	private record Library(SymbolLookup symbols, String description) {}
@@ -705,7 +707,7 @@ public final class FFMPythonBackend implements PythonBackend {
 		for (Path candidate : candidatePaths()) {
 			if (!Files.isRegularFile(candidate)) continue;
 			try {
-				return new Library(SymbolLookup.libraryLookup(candidate, Arena.global()),
+				return new Library(loadLibrarySymbols(candidate),
 					candidate.toAbsolutePath().toString());
 			} catch (RuntimeException e) {
 				attempts.add(candidate + " (" + e.getMessage() + ")");
@@ -713,7 +715,7 @@ public final class FFMPythonBackend implements PythonBackend {
 		}
 		for (String name : libraryNames()) {
 			try {
-				return new Library(SymbolLookup.libraryLookup(name, Arena.global()), name);
+				return new Library(loadLibrarySymbols(name), name);
 			} catch (RuntimeException e) {
 				attempts.add(name);
 			}
@@ -727,14 +729,58 @@ public final class FFMPythonBackend implements PythonBackend {
 		Path path = Path.of(configured);
 		try {
 			if (Files.isRegularFile(path)) {
-				return new Library(SymbolLookup.libraryLookup(path.toAbsolutePath(), Arena.global()),
+				return new Library(loadLibrarySymbols(path),
 					path.toAbsolutePath().toString());
 			}
-			return new Library(SymbolLookup.libraryLookup(configured, Arena.global()), configured);
+			return new Library(loadLibrarySymbols(configured), configured);
 		} catch (RuntimeException e) {
 			attempts.add(configured);
 			throw new PythonException("Cannot load configured CPython library '"
 				+ configured + "': " + e.getMessage(), e);
+		}
+	}
+
+	/**
+	 * Load CPython for direct FFM calls. On POSIX, extension modules loaded later
+	 * by CPython resolve C-API symbols from the process-wide namespace. The FFM
+	 * library lookup itself uses local visibility, so promote the same library
+	 * with {@code dlopen(..., RTLD_GLOBAL)} first. Without this, imports of native
+	 * standard-library modules such as {@code _struct} fail with undefined Python
+	 * symbols even though direct calls through the lookup work.
+	 */
+	private static SymbolLookup loadLibrarySymbols(Path path) {
+		Path absolute = path.toAbsolutePath();
+		promoteLibrarySymbols(absolute.toString());
+		return SymbolLookup.libraryLookup(absolute, Arena.global());
+	}
+
+	private static SymbolLookup loadLibrarySymbols(String name) {
+		promoteLibrarySymbols(WINDOWS ? name : System.mapLibraryName(name));
+		return SymbolLookup.libraryLookup(name, Arena.global());
+	}
+
+	private static void promoteLibrarySymbols(String library) {
+		if (WINDOWS) return;
+		Linker linker = Linker.nativeLinker();
+		MemorySegment address = linker.defaultLookup().find("dlopen").orElseThrow(() ->
+			new PythonException("Cannot expose CPython symbols globally: dlopen is unavailable"));
+		MethodHandle dlopen = linker.downcallHandle(address,
+			FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
+		// RTLD_NOW is 0x2 on supported POSIX platforms. RTLD_GLOBAL is 0x8 on
+		// macOS and 0x100 on Linux/BSD/Solaris.
+		int flags = 0x2 | (MACOS ? 0x8 : 0x100);
+		try (Arena arena = Arena.ofConfined()) {
+			MemorySegment handle = (MemorySegment) dlopen.invokeWithArguments(
+				arena.allocateFrom(library), flags);
+			if (isNull(handle)) {
+				throw new PythonException("Cannot expose CPython symbols globally from '"
+					+ library + "'");
+			}
+		} catch (PythonException e) {
+			throw e;
+		} catch (Throwable e) {
+			throw new PythonException("Cannot expose CPython symbols globally from '"
+				+ library + "'", e);
 		}
 	}
 
