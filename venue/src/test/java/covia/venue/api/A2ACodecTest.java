@@ -82,8 +82,15 @@ public class A2ACodecTest {
 	}
 
 	@Test
-	public void taskStateMapping_unknownStatusIsUnrecognized() {
-		assertEquals(TaskState.UNRECOGNIZED, A2ACodec.toTaskState(Strings.create("BOGUS")));
+	public void taskStateMapping_unknownStatusIsUnspecified() {
+		assertEquals(TaskState.TASK_STATE_UNSPECIFIED,
+			A2ACodec.toTaskState(Strings.create("BOGUS")));
+	}
+
+	@Test
+	public void taskStateMapping_unspecifiedInboundFailsSafe() {
+		assertEquals(Status.FAILED,
+			A2ACodec.fromTaskState(TaskState.TASK_STATE_UNSPECIFIED));
 	}
 
 	// ======== Task construction ========

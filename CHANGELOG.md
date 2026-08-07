@@ -8,6 +8,11 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+- Updated JUnit to 6.1.3 and the A2A Java SDK to 1.2.0.Final; A2A streaming
+  responses use the SDK's declared union serializer and omitted cancel metadata
+  is normalised to the SDK's empty-map default
+
 ## [0.8.0] - 2026-07-31
 
 ### Added
