@@ -511,6 +511,57 @@ public class LLMAgentAdapterTest {
 		assertEquals("tool", RT.getIn(turns.get(1), "role").toString());
 	}
 
+	@Test
+	public void testNestedCoviaCollectionsReturnThroughToolLoop() throws Exception {
+		// #334: direct covia reads were fast, but the same tiny nested values
+		// stayed RUNNING indefinitely when returned as an agent tool result.
+		// Exercise the real read/list operations and the complete two-call L3
+		// loop with a deterministic provider. A wall-clock bound makes the
+		// original failure mode an explicit regression, not a suite hang.
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
+			Fields.PATH, "w/issue-334/signals",
+			Fields.VALUE, Vectors.of(
+				Maps.of("kind", "kyc", "score", 8L),
+				Maps.of("kind", "sanctions", "score", 3L))), ctx).awaitResult(5000);
+		engine.jobs().invokeOperation("v/ops/covia/write", Maps.of(
+			Fields.PATH, "w/issue-334/sources",
+			Fields.VALUE, Maps.of(
+				"kyc", Maps.of("status", "clear", "provider", "acme"),
+				"sanctions", Maps.of("status", "review", "provider", "globex"))),
+			ctx).awaitResult(5000);
+
+		LLMAgentAdapter adapter = (LLMAgentAdapter) engine.getAdapter("llmagent");
+		AMap<AString, ACell> config = Maps.of(
+			"llmOperation", "v/test/ops/toolllm",
+			"defaultTools", false,
+			"tools", Vectors.of("v/ops/covia/read", "v/ops/covia/list"));
+
+		for (String prompt : new String[] {"issue-334-read", "issue-334-list"}) {
+			ACell output = java.util.concurrent.CompletableFuture.supplyAsync(() ->
+				adapter.processChat(ctx, Maps.of(
+					Fields.AGENT_ID, "issue-334-agent",
+					AgentState.KEY_CONFIG, config,
+					Fields.MESSAGES, Vectors.of(Maps.of("content", prompt)))))
+				.get(10, java.util.concurrent.TimeUnit.SECONDS);
+
+			AString response = RT.ensureString(RT.getIn(output, Fields.RESPONSE));
+			assertNotNull(response);
+			assertTrue(response.toString().startsWith("Tool returned: {"),
+				"the provider must receive a JSON text tool result, not deferred structuredContent: "
+					+ response);
+			if (prompt.endsWith("read")) {
+				assertTrue(response.toString().contains("\"score\":8"),
+					"covia/read must preserve the vector's nested maps: " + response);
+			} else {
+				assertTrue(response.toString().contains("\"values\""),
+					"covia/list field projection must preserve its nested values map: " + response);
+				assertTrue(response.toString().contains("\"review\""),
+					"covia/list projected values must reach the provider intact: " + response);
+			}
+		}
+	}
+
 	// ========== Skills index (config.skills — SKILLS.md §4) ==========
 
 	@Test

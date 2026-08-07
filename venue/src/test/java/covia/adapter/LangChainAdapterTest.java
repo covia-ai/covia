@@ -310,6 +310,24 @@ public class LangChainAdapterTest {
 		assertInstanceOf(ToolExecutionResultMessage.class, result.get(0));
 	}
 
+	@Test
+	public void testToChatMessagesReadsLegacyStructuredToolResult() {
+		// New agent turns always carry JSON text in content (#334), but sessions
+		// persisted by an older venue may still contain structuredContent. Keep
+		// that read path lossless so an upgrade does not poison the next turn.
+		ACell nested = Maps.of("results", Vectors.of(
+			Maps.of("source", Maps.of("name", "kyc")),
+			Maps.of("source", Maps.of("name", "sanctions"))));
+		var messages = Vectors.of(
+			Maps.of("role", "tool", "id", "call_old", "name", "covia_read",
+				"structuredContent", nested));
+
+		List<ChatMessage> result = LangChainAdapter.toChatMessages(messages);
+		ToolExecutionResultMessage tool = assertInstanceOf(
+			ToolExecutionResultMessage.class, result.get(0));
+		assertEquals(JSON.toString(nested), tool.text());
+	}
+
 	// ========== Asset-referenced images (covia#198) ==========
 
 	@Test
